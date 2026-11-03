@@ -7,7 +7,10 @@
 //! [`SheetApp::logic`] and applied directly to the shared workbook via
 //! [`SheetApp::apply_remote_mutation`] without re-broadcasting.
 
+use std::collections::hash_map::RandomState;
+use std::hash::{BuildHasher, Hasher};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use gridcraft_engine::Selection;
 use gridcraft_engine::core::RangeRef;
@@ -16,6 +19,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
 use crate::{Notice, NoticeKind, SheetApp, clean_error, now_ms};
+
+static NEXT_ORIGIN_SEQ: AtomicU64 = AtomicU64::new(1);
+
+fn fresh_origin_tag(name: &str) -> String {
+    let seq = NEXT_ORIGIN_SEQ.fetch_add(1, Ordering::Relaxed);
+    let rand = RandomState::new().build_hasher().finish();
+    format!("{name}-{seq:08x}-{rand:016x}")
+}
 
 /// Collaboration session status, mirroring `simple_sync::ShareRole` across all targets.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,8 +55,22 @@ impl From<simple_sync::ShareRole> for ShareStatus {
 }
 
 /// Wire payload broadcast for every deterministic workbook/sheet mutation on the shared document.
+///
+/// Concurrent mutations authored by multiple peers are ordered into a single deterministic total
+/// order across all peers by [`SharedMutation::order_key`], which sorts by `(lamport, origin_tag,
+/// id, sheet_name, params_json)`. When an incoming remote mutation has an `order_key` that precedes
+/// an already-applied mutation in [`SyncState::mutation_log`], the shared workbook is rolled back
+/// to [`SyncState::base_wb`] and all logged mutations are replayed in canonical `order_key` order
+/// so every peer converges to the exact same [`Workbook`] state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SharedMutation {
+    /// Logical Lamport timestamp assigned when the mutation was authored (`0` for unclocked test payloads).
+    #[serde(default)]
+    pub lamport: u64,
+    /// Globally unique origin tag of the authoring peer, used as a deterministic tie-breaker when
+    /// two peers author concurrent mutations at the same `lamport` clock value.
+    #[serde(default)]
+    pub origin_tag: String,
     /// Active sheet name on the shared workbook immediately before the command ran.
     pub sheet_name: String,
     /// Cell selection on the shared workbook immediately before the command ran.
@@ -59,6 +84,11 @@ pub struct SharedMutation {
 }
 
 impl SharedMutation {
+    /// Canonical total-order key used by all peers to order concurrent mutations identically.
+    pub fn order_key(&self) -> (u64, &str, &str, &str, &str) {
+        (self.lamport, &self.origin_tag, &self.id, &self.sheet_name, &self.params_json)
+    }
+
     /// Serializes this mutation into a compact binary wire frame, enforcing `MAX_MUTATION_BYTES`.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn to_wire(&self) -> Result<Vec<u8>, String> {
@@ -100,6 +130,7 @@ pub const NOTICE_LOCAL_FILE: &str = "Local file imports stay on this device and 
 pub const NOTICE_UNSHARED_CLIPBOARD: &str = "Clipboard content copied from another workbook stays on this device and isn't shared with peers.";
 pub const NOTICE_UNDO_REDO: &str = "Undo and Redo are disabled on the shared workbook while live sharing is active.";
 pub const NOTICE_VIEW_ONLY: &str = "View-only session — edits are disabled.";
+pub const NOTICE_SHARE_BUSY: &str = "Share Mode is starting or stopping — please wait a moment before editing.";
 
 /// Maximum size in bytes accepted for an incoming shared base workbook snapshot (64 MiB).
 pub const MAX_BASE_DOCUMENT_BYTES: usize = 64 * 1024 * 1024;
@@ -329,6 +360,10 @@ pub struct SyncState {
     pub join_input: String,
     pub last_error: Option<String>,
     pub(crate) applying_remote: bool,
+    pub(crate) origin_tag: String,
+    pub(crate) lamport_clock: u64,
+    pub(crate) base_wb: Option<Arc<Workbook>>,
+    pub(crate) mutation_log: Vec<(String, SharedMutation)>,
     pub(crate) remote_clipboards: std::collections::HashMap<String, gridcraft_engine::Clipboard>,
     pub(crate) remote_format_painters: std::collections::HashMap<String, (Arc<Workbook>, usize, RangeRef, bool)>,
     pub(crate) local_staged_clipboard: Option<gridcraft_engine::Clipboard>,
@@ -350,6 +385,7 @@ impl std::fmt::Debug for SyncState {
             .field("status", &self.status())
             .field("connected_peers", &self.connected_peers())
             .field("shared_doc_uid", &self.shared_doc_uid)
+            .field("lamport_clock", &self.lamport_clock)
             .field("edit_ticket", &self.edit_ticket.as_ref().map(|_| "<redacted>"))
             .field("view_ticket", &self.view_ticket.as_ref().map(|_| "<redacted>"))
             .field("join_input", &if self.join_input.is_empty() { "" } else { "<redacted>" })
@@ -360,8 +396,6 @@ impl std::fmt::Debug for SyncState {
 
 impl SyncState {
     pub fn new(name: &str) -> Self {
-        #[cfg(target_arch = "wasm32")]
-        let _ = name;
         Self {
             #[cfg(not(target_arch = "wasm32"))]
             engine: None,
@@ -378,6 +412,10 @@ impl SyncState {
             join_input: String::new(),
             last_error: None,
             applying_remote: false,
+            origin_tag: fresh_origin_tag(name),
+            lamport_clock: 0,
+            base_wb: None,
+            mutation_log: Vec::new(),
             remote_clipboards: std::collections::HashMap::new(),
             remote_format_painters: std::collections::HashMap::new(),
             local_staged_clipboard: None,
@@ -385,6 +423,16 @@ impl SyncState {
             cached_status: ShareStatus::Offline,
             cached_peers: 0,
         }
+    }
+
+    pub(crate) fn clear_session_history(&mut self) {
+        self.lamport_clock = 0;
+        self.base_wb = None;
+        self.mutation_log.clear();
+        self.remote_clipboards.clear();
+        self.remote_format_painters.clear();
+        self.local_staged_clipboard = None;
+        self.local_staged_format_painter = None;
     }
 
     /// Creates a [`SyncState`] configured with a custom [`simple_sync::SyncConfig`] (e.g.
@@ -441,9 +489,9 @@ impl SyncState {
         }
     }
 
-    /// Returns `true` if `doc_uid` is the currently shared workbook in an active session.
+    /// Returns `true` if `doc_uid` is the currently shared workbook in an active or starting/stopping session.
     pub fn is_sharing_doc(&self, doc_uid: u64) -> bool {
-        self.status() != ShareStatus::Offline && self.shared_doc_uid == Some(doc_uid)
+        (self.is_busy() || self.status() != ShareStatus::Offline) && self.shared_doc_uid == Some(doc_uid)
     }
 
     /// Broadcasts a [`SharedMutation`] to all connected peers if the session allows editing.
@@ -477,18 +525,22 @@ impl SheetApp {
     /// Whether the local user is allowed to edit the currently active workbook.
     ///
     /// Returns `false` when the active workbook is the shared workbook and this peer joined
-    /// with a View-Only link (`ShareStatus::JoinedViewOnly`). Other open workbooks remain
-    /// editable even while viewing a shared workbook in View-Only mode.
+    /// with a View-Only link (`ShareStatus::JoinedViewOnly`), or while a Share Mode start/stop
+    /// transition is in flight on the shared workbook. Other open workbooks remain editable.
     pub fn local_editing_allowed(&self) -> bool {
         let Some(active_uid) = self.session.active().map(|d| d.uid) else {
             return true;
         };
-        !(self.sync.status() == ShareStatus::JoinedViewOnly && self.sync.shared_doc_uid == Some(active_uid))
+        if self.sync.shared_doc_uid == Some(active_uid) && (self.sync.status() == ShareStatus::JoinedViewOnly || self.sync.is_busy()) {
+            return false;
+        }
+        true
     }
 
     /// Shows the standard View-Only toast when an edit is refused on a View-Only shared workbook.
     pub(crate) fn notify_view_only_refused(&mut self) {
-        self.toast = Some((NOTICE_VIEW_ONLY.into(), now_ms()));
+        let msg = if self.sync.is_busy() { NOTICE_SHARE_BUSY } else { NOTICE_VIEW_ONLY };
+        self.toast = Some((msg.into(), now_ms()));
     }
 
     /// Starts hosting a live Share Mode session for the active workbook on a background thread.
@@ -503,7 +555,8 @@ impl SheetApp {
         };
         let doc_uid = d.uid;
         let filename = d.display_title();
-        let doc_bytes = match encode_workbook_for_share(&d.wb) {
+        let host_base_wb = d.wb.clone();
+        let doc_bytes = match encode_workbook_for_share(&host_base_wb) {
             Ok(bytes) => bytes,
             Err(e) => {
                 self.sync.last_error = Some(e.clone());
@@ -514,6 +567,8 @@ impl SheetApp {
         let Some(mut engine) = self.sync.ensure_engine() else {
             return Err("Share engine unavailable".into());
         };
+        self.sync.clear_session_history();
+        self.sync.base_wb = Some(host_base_wb);
         self.sync.shared_doc_uid = Some(doc_uid);
         self.sync.last_error = None;
         self.sync.pending_label = Some("Starting Share Mode…");
@@ -553,6 +608,7 @@ impl SheetApp {
         let Some(mut engine) = self.sync.ensure_engine() else {
             return Err("Share engine unavailable".into());
         };
+        self.sync.clear_session_history();
         self.sync.shared_doc_uid = doc_uid;
         self.sync.last_error = None;
         self.sync.pending_label = Some("Joining session…");
@@ -582,10 +638,7 @@ impl SheetApp {
             self.sync.shared_doc_uid = None;
             self.sync.edit_ticket = None;
             self.sync.view_ticket = None;
-            self.sync.remote_clipboards.clear();
-            self.sync.remote_format_painters.clear();
-            self.sync.local_staged_clipboard = None;
-            self.sync.local_staged_format_painter = None;
+            self.sync.clear_session_history();
             return;
         };
         self.sync.pending_label = Some("Stopping Share Mode…");
@@ -639,6 +692,7 @@ impl SheetApp {
                     }
                     Err(e) => {
                         self.sync.shared_doc_uid = None;
+                        self.sync.clear_session_history();
                         self.sync.last_error = Some(e.clone());
                         self.toast = Some((format!("Share failed: {e}"), now_ms()));
                     }
@@ -664,6 +718,7 @@ impl SheetApp {
                     }
                     Err(e) => {
                         self.sync.shared_doc_uid = None;
+                        self.sync.clear_session_history();
                         self.sync.last_error = Some(e.clone());
                         self.toast = Some((format!("Join failed: {e}"), now_ms()));
                     }
@@ -675,10 +730,7 @@ impl SheetApp {
                 self.sync.shared_doc_uid = None;
                 self.sync.edit_ticket = None;
                 self.sync.view_ticket = None;
-                self.sync.remote_clipboards.clear();
-                self.sync.remote_format_painters.clear();
-                self.sync.local_staged_clipboard = None;
-                self.sync.local_staged_format_painter = None;
+                self.sync.clear_session_history();
                 self.sync.engine = Some(engine);
                 if let Err(e) = res {
                     self.sync.last_error = Some(e.clone());
@@ -763,6 +815,9 @@ impl SheetApp {
         let wb_arc = Arc::new(wb);
         let sel = Selection::at(wb_arc.active().map(|s| s.view_active).unwrap_or_default());
 
+        self.sync.clear_session_history();
+        self.sync.base_wb = Some(wb_arc.clone());
+
         let prev_window = self.session.active_window();
         let target_idx = self.sync.shared_doc_uid.and_then(|uid| self.session.document_index(uid));
 
@@ -810,6 +865,11 @@ impl SheetApp {
     /// local file paths, passwords, or non-shared command ids. Staged clipboards and format
     /// painters are keyed by `author_peer_id` so interleaved copies by different editors never
     /// overwrite each other.
+    ///
+    /// Concurrent or out-of-order mutations are reconciled deterministically: if `mutation`'s
+    /// [`SharedMutation::order_key`] precedes the tail of [`SyncState::mutation_log`], the shared
+    /// workbook is reset to [`SyncState::base_wb`] and all logged mutations are replayed in
+    /// canonical `order_key` order so every peer converges to the exact same [`Workbook`].
     pub fn apply_remote_mutation_from_peer(&mut self, author_peer_id: &str, mutation: &SharedMutation) -> Result<(), String> {
         let Some(shared_uid) = self.sync.shared_doc_uid else {
             return Err("no shared document registered".into());
@@ -825,6 +885,30 @@ impl SheetApp {
         if json_contains_key(&params, "path") || json_contains_key(&params, "password") {
             return Err(format!("refused remote command `{}` with forbidden parameter", mutation.id));
         }
+        if !gridcraft_engine::command_specs().iter().any(|s| s.id == mutation.id) {
+            return Err(format!("unknown remote command `{}`", mutation.id));
+        }
+
+        if self.sync.base_wb.is_none() {
+            self.sync.base_wb = self.session.documents().get(shared_idx).map(|d| d.wb.clone());
+        }
+
+        // Normalize unclocked synthetic test payloads (`lamport == 0`) so they append in arrival order.
+        let mut normalized = mutation.clone();
+        if normalized.lamport == 0 {
+            normalized.lamport = self.sync.lamport_clock.saturating_add(1);
+            if normalized.origin_tag.is_empty() {
+                normalized.origin_tag = author_peer_id.to_string();
+            }
+        }
+
+        // Ignore exact duplicate frames if already present in the canonical log.
+        if self.sync.mutation_log.iter().any(|(_, m)| m.order_key() == normalized.order_key() && m.selection == normalized.selection) {
+            return Ok(());
+        }
+
+        self.sync.lamport_clock = self.sync.lamport_clock.max(normalized.lamport);
+        let in_order = self.sync.mutation_log.last().is_none_or(|(_, last)| last.order_key() <= normalized.order_key());
 
         let prev_window = self.session.active_window();
         let was_on_other_doc = self.session.active_index() != shared_idx;
@@ -835,45 +919,26 @@ impl SheetApp {
             None => return Err("shared document unavailable".into()),
         };
 
-        if let Some(d) = self.session.active_mut() {
-            if let Some(si) = d.wb.sheet_index(&mutation.sheet_name) {
-                d.wb.set_active_sheet(si);
+        let mut last_sheet_switched = false;
+        let exec_res = if in_order {
+            let (res, switched) = self.execute_logged_mutation(shared_uid, author_peer_id, &normalized, params);
+            if res.is_ok() {
+                self.sync.mutation_log.push((author_peer_id.to_string(), normalized));
+                last_sheet_switched = switched;
             }
-            d.selection = mutation.selection.clone();
-        }
-        let sheet_before_cmd = self.session.active().and_then(|d| d.wb.active().map(|s| s.name.clone()));
-
-        let local_clipboard = self.session.clipboard.take();
-        let local_format_painter = self.session.format_painter.take();
-        let mut peer_clipboard = self.sync.remote_clipboards.remove(author_peer_id);
-        if let Some(cb) = &mut peer_clipboard {
-            cb.doc_uid = shared_uid;
-        }
-        self.session.clipboard = peer_clipboard;
-        self.session.format_painter = self.sync.remote_format_painters.remove(author_peer_id);
-        let requests_before = self.session.ui_requests.len();
-
-        self.sync.applying_remote = true;
-        let exec_res = self.session.execute(&mutation.id, params).map_err(|e| e.to_string());
-        self.sync.applying_remote = false;
-
-        if let Some(cb) = self.session.clipboard.take() {
-            self.sync.remote_clipboards.insert(author_peer_id.to_string(), cb);
-        }
-        if let Some(fp) = self.session.format_painter.take() {
-            self.sync.remote_format_painters.insert(author_peer_id.to_string(), fp);
-        }
-        self.session.clipboard = local_clipboard;
-        self.session.format_painter = local_format_painter;
-        self.session.ui_requests.truncate(requests_before);
+            res
+        } else {
+            self.sync.mutation_log.push((author_peer_id.to_string(), normalized));
+            self.sync.mutation_log.sort_by(|a, b| a.1.order_key().cmp(&b.1.order_key()));
+            let (res, switched) = self.replay_canonical_mutation_log(shared_uid);
+            last_sheet_switched = switched;
+            res
+        };
 
         // Preserve the local user's sheet and cursor on the shared workbook when the remote
         // command did not intentionally switch sheets (e.g. `home.insertSheet` / `home.deleteSheet`).
         if let Some(d) = self.session.active_mut() {
-            let sheet_after_cmd = d.wb.active().map(|s| s.name.clone());
-            let cmd_switched_sheet = sheet_before_cmd != sheet_after_cmd
-                || matches!(mutation.id.as_str(), "home.insertSheet" | "home.deleteSheet" | "sheet.move" | "sheet.hide" | "sheet.unhide");
-            if !cmd_switched_sheet
+            if !last_sheet_switched
                 && let Some(local_name) = &local_sheet_name
                 && let Some(local_si) = d.wb.sheet_index(local_name)
             {
@@ -888,7 +953,83 @@ impl SheetApp {
             self.session.activate_window(w);
         }
         self.follow_open_draft();
-        exec_res.map(|_| ())
+        exec_res
+    }
+
+    fn execute_logged_mutation(&mut self, shared_uid: u64, author_key: &str, mutation: &SharedMutation, params: Json) -> (Result<(), String>, bool) {
+        if let Some(d) = self.session.active_mut() {
+            if let Some(si) = d.wb.sheet_index(&mutation.sheet_name) {
+                d.wb.set_active_sheet(si);
+            }
+            d.selection = mutation.selection.clone();
+        }
+        let sheet_before_cmd = self.session.active().and_then(|d| d.wb.active().map(|s| s.name.clone()));
+
+        let local_clipboard = self.session.clipboard.take();
+        let local_format_painter = self.session.format_painter.take();
+        let mut peer_clipboard = self.sync.remote_clipboards.remove(author_key);
+        if let Some(cb) = &mut peer_clipboard {
+            cb.doc_uid = shared_uid;
+        }
+        self.session.clipboard = peer_clipboard;
+        self.session.format_painter = self.sync.remote_format_painters.remove(author_key);
+        let requests_before = self.session.ui_requests.len();
+
+        self.sync.applying_remote = true;
+        let exec_res = self.session.execute(&mutation.id, params).map(|_| ()).map_err(|e| e.to_string());
+        self.sync.applying_remote = false;
+
+        if let Some(cb) = self.session.clipboard.take() {
+            self.sync.remote_clipboards.insert(author_key.to_string(), cb);
+        }
+        if let Some(fp) = self.session.format_painter.take() {
+            self.sync.remote_format_painters.insert(author_key.to_string(), fp);
+        }
+        self.session.clipboard = local_clipboard;
+        self.session.format_painter = local_format_painter;
+        self.session.ui_requests.truncate(requests_before);
+
+        let sheet_after_cmd = self.session.active().and_then(|d| d.wb.active().map(|s| s.name.clone()));
+        let cmd_switched_sheet = sheet_before_cmd != sheet_after_cmd
+            || matches!(mutation.id.as_str(), "home.insertSheet" | "home.deleteSheet" | "sheet.move" | "sheet.hide" | "sheet.unhide");
+        (exec_res, cmd_switched_sheet)
+    }
+
+    fn replay_canonical_mutation_log(&mut self, shared_uid: u64) -> (Result<(), String>, bool) {
+        let Some(base_wb) = self.sync.base_wb.clone() else {
+            return (Err("missing base workbook for sync reconciliation".into()), false);
+        };
+        let local_cb_was_staged = clipboard_matches_staged(&self.session.clipboard, &self.sync.local_staged_clipboard, shared_uid);
+        let local_fp_was_staged = format_painter_matches_staged(&self.session.format_painter, &self.sync.local_staged_format_painter);
+
+        if let Some(d) = self.session.active_mut() {
+            d.wb = base_wb.clone();
+            d.calc.rebuild(&d.wb);
+            d.undo.clear();
+            d.redo.clear();
+        }
+        self.sync.remote_clipboards.clear();
+        self.sync.remote_format_painters.clear();
+
+        let entries = self.sync.mutation_log.clone();
+        let mut any_sheet_switched = false;
+        for (author_key, logged) in &entries {
+            if let Ok(params) = serde_json::from_str::<Json>(&logged.params_json) {
+                let (_res, switched) = self.execute_logged_mutation(shared_uid, author_key, logged, params);
+                any_sheet_switched |= switched;
+            }
+        }
+
+        let origin_key = self.sync.origin_tag.clone();
+        self.sync.local_staged_clipboard = self.sync.remote_clipboards.get(&origin_key).cloned();
+        self.sync.local_staged_format_painter = self.sync.remote_format_painters.get(&origin_key).cloned();
+        if local_cb_was_staged {
+            self.session.clipboard = self.sync.local_staged_clipboard.clone();
+        }
+        if local_fp_was_staged {
+            self.session.format_painter = self.sync.local_staged_format_painter.clone();
+        }
+        (Ok(()), any_sheet_switched)
     }
 
     /// Runs an engine command initiated by the local user, enforcing View-Only permissions on the
@@ -905,6 +1046,10 @@ impl SheetApp {
         match policy {
             CommandSyncPolicy::LocalOnly => self.session.run(id, params),
             CommandSyncPolicy::UnsharedNotice(notice) => {
+                if self.sync.is_busy() {
+                    self.notify_view_only_refused();
+                    return Err(format!("command `{id}` is not available right now: {NOTICE_SHARE_BUSY}"));
+                }
                 if !self.local_editing_allowed() {
                     self.notify_view_only_refused();
                     return Err(format!("command `{id}` is not available right now: {NOTICE_VIEW_ONLY}"));
@@ -921,6 +1066,13 @@ impl SheetApp {
                 res
             }
             CommandSyncPolicy::Shared => {
+                if self.sync.is_busy() {
+                    if id == "edit.copy" {
+                        return self.session.run(id, params);
+                    }
+                    self.notify_view_only_refused();
+                    return Err(format!("command `{id}` is not available right now: {NOTICE_SHARE_BUSY}"));
+                }
                 // Allow `edit.copy` locally in View-Only mode without broadcasting it.
                 if !self.local_editing_allowed() {
                     if id == "edit.copy" {
@@ -933,8 +1085,8 @@ impl SheetApp {
                 // Refuse to broadcast a paste or format-painter apply whose source clipboard was
                 // not staged on the shared workbook (e.g. copied in an unshared workbook).
                 let shared_uid = active_uid.unwrap_or(0);
-                let uses_internal_clipboard =
-                    matches!(id, "edit.paste" | "edit.pasteSpecial" | "insert.copiedCells") && params.get("text").and_then(Json::as_str).is_none();
+                let uses_internal_clipboard = matches!(id, "edit.paste" | "edit.pasteSpecial" | "home.insertCopiedCells" | "insert.copiedCells")
+                    && params.get("text").and_then(Json::as_str).is_none();
                 let uses_format_painter_apply = id == "edit.formatPainter" && params.get("apply").is_some();
                 if (uses_internal_clipboard && !clipboard_matches_staged(&self.session.clipboard, &self.sync.local_staged_clipboard, shared_uid))
                     || (uses_format_painter_apply
@@ -961,11 +1113,34 @@ impl SheetApp {
                     if stages_clipboard || uses_internal_clipboard || uses_format_painter_apply {
                         self.sync.local_staged_clipboard = self.session.clipboard.clone();
                         self.sync.local_staged_format_painter = self.session.format_painter.clone();
+                        let origin_key = self.sync.origin_tag.clone();
+                        if let Some(cb) = &self.sync.local_staged_clipboard {
+                            self.sync.remote_clipboards.insert(origin_key.clone(), cb.clone());
+                        } else {
+                            self.sync.remote_clipboards.remove(&origin_key);
+                        }
+                        if let Some(fp) = &self.sync.local_staged_format_painter {
+                            self.sync.remote_format_painters.insert(origin_key, fp.clone());
+                        } else {
+                            self.sync.remote_format_painters.remove(&origin_key);
+                        }
                     }
                     if wb_changed || stages_clipboard {
+                        self.sync.base_wb.get_or_insert_with(|| wb_before.clone());
                         let enriched = enrich_params_with_result(id, params, result_json);
                         if let Ok(params_json) = serde_json::to_string(&enriched) {
-                            let mutation = SharedMutation { sheet_name, selection, selected_object, id: id.to_string(), params_json };
+                            self.sync.lamport_clock = self.sync.lamport_clock.saturating_add(1);
+                            let origin_tag = self.sync.origin_tag.clone();
+                            let mutation = SharedMutation {
+                                lamport: self.sync.lamport_clock,
+                                origin_tag: origin_tag.clone(),
+                                sheet_name,
+                                selection,
+                                selected_object,
+                                id: id.to_string(),
+                                params_json,
+                            };
+                            self.sync.mutation_log.push((origin_tag, mutation.clone()));
                             if let Err(err) = self.sync.broadcast(&mutation) {
                                 self.sync.last_error = Some(err.clone());
                                 self.toast = Some((format!("Sync broadcast error: {clean}", clean = clean_error(&err)), now_ms()));
@@ -1129,8 +1304,8 @@ mod tests {
     use simple_sync::SyncConfig;
 
     use super::{
-        CommandSyncPolicy, NOTICE_LOCAL_FILE, NOTICE_MACROS, NOTICE_PROTECTION, NOTICE_UNDO_REDO, NOTICE_UNSHARED_CLIPBOARD, NOTICE_VIEW_ONLY,
-        ShareStatus, SharedMutation, SyncState, classify_command,
+        CommandSyncPolicy, NOTICE_LOCAL_FILE, NOTICE_MACROS, NOTICE_PROTECTION, NOTICE_SHARE_BUSY, NOTICE_UNDO_REDO, NOTICE_UNSHARED_CLIPBOARD,
+        NOTICE_VIEW_ONLY, ShareStatus, SharedMutation, SyncState, classify_command,
     };
     use crate::{Services, SheetApp};
 
@@ -1162,6 +1337,8 @@ mod tests {
     fn shared_mutation_wire_round_trip_all_categories() {
         let samples = vec![
             SharedMutation {
+                lamport: 1,
+                origin_tag: "peer-a".into(),
                 sheet_name: "Sheet1".into(),
                 selection: gridcraft_engine::Selection::at(CellRef::new(0, 0)),
                 selected_object: None,
@@ -1169,6 +1346,8 @@ mod tests {
                 params_json: json!({"cell": "A1", "input": "=SUM(B1:B5)", "array": false}).to_string(),
             },
             SharedMutation {
+                lamport: 2,
+                origin_tag: "peer-b".into(),
                 sheet_name: "Revenue".into(),
                 selection: gridcraft_engine::Selection::range(RangeRef::new(CellRef::new(1, 1), CellRef::new(4, 3))),
                 selected_object: None,
@@ -1176,6 +1355,8 @@ mod tests {
                 params_json: json!({"on": true}).to_string(),
             },
             SharedMutation {
+                lamport: 3,
+                origin_tag: "peer-a".into(),
                 sheet_name: "Sheet1".into(),
                 selection: gridcraft_engine::Selection::at(CellRef::new(2, 2)),
                 selected_object: Some(("shape".into(), 7)),
@@ -1183,6 +1364,8 @@ mod tests {
                 params_json: json!({"id": 7, "text": "Hello P2P"}).to_string(),
             },
             SharedMutation {
+                lamport: 4,
+                origin_tag: "peer-b".into(),
                 sheet_name: "Sheet1".into(),
                 selection: gridcraft_engine::Selection::at(CellRef::new(0, 0)),
                 selected_object: Some(("chart".into(), 1)),
@@ -1199,6 +1382,8 @@ mod tests {
 
         // Verify MAX_MUTATION_BYTES enforcement.
         let oversized = SharedMutation {
+            lamport: 5,
+            origin_tag: "peer-a".into(),
             sheet_name: "Sheet1".into(),
             selection: gridcraft_engine::Selection::default(),
             selected_object: None,
@@ -1461,6 +1646,8 @@ mod tests {
 
         for (id, params) in hostile_payloads {
             let mutation = SharedMutation {
+                lamport: 0,
+                origin_tag: String::new(),
                 sheet_name: "Sheet1".into(),
                 selection: gridcraft_engine::Selection::default(),
                 selected_object: None,
@@ -1474,6 +1661,8 @@ mod tests {
         app.run("cell.set", json!({"cell": "A1", "input": "FromPeerA"})).expect("set A1");
         app.run("cell.set", json!({"cell": "B1", "input": "FromPeerB"})).expect("set B1");
         let copy_a = SharedMutation {
+            lamport: 0,
+            origin_tag: String::new(),
             sheet_name: "Sheet1".into(),
             selection: gridcraft_engine::Selection::at(CellRef::new(0, 0)),
             selected_object: None,
@@ -1481,6 +1670,8 @@ mod tests {
             params_json: json!({}).to_string(),
         };
         let copy_b = SharedMutation {
+            lamport: 0,
+            origin_tag: String::new(),
             sheet_name: "Sheet1".into(),
             selection: gridcraft_engine::Selection::at(CellRef::new(0, 1)),
             selected_object: None,
@@ -1488,6 +1679,8 @@ mod tests {
             params_json: json!({}).to_string(),
         };
         let paste_a = SharedMutation {
+            lamport: 0,
+            origin_tag: String::new(),
             sheet_name: "Sheet1".into(),
             selection: gridcraft_engine::Selection::at(CellRef::new(0, 2)),
             selected_object: None,
@@ -1511,5 +1704,70 @@ mod tests {
         assert!(!debug_str.contains("secret-view-capability-token"));
         assert!(!debug_str.contains("secret-join-input-token"));
         assert!(debug_str.contains("<redacted>"));
+    }
+
+    #[test]
+    fn concurrent_edits_on_same_data_converge_across_peers() {
+        let mut host = test_app("HostConcurrent");
+        let mut editor = test_app("EditorConcurrent");
+
+        host.run("cell.set", json!({"cell": "A1", "input": "10"})).expect("seed A1");
+        host.run("cell.set", json!({"cell": "A2", "input": "20"})).expect("seed A2");
+
+        // Start sharing; while `share.start` is still pending (`is_busy() == true`), local edits on
+        // the shared workbook are guarded so they cannot be dropped before the engine comes online.
+        host.run("share.start", json!({})).expect("share.start");
+        if host.sync.is_busy() {
+            assert!(host.active_doc_is_shared());
+            assert!(!host.local_editing_allowed());
+            let busy_err = host.run("cell.set", json!({"cell": "A1", "input": "DroppedIfAllowed"})).expect_err("edit while busy must be refused");
+            assert!(busy_err.contains(NOTICE_SHARE_BUSY));
+        }
+
+        spin_until(vec![&mut host], |apps| apps[0].sync.status() == ShareStatus::Hosting && apps[0].sync.edit_ticket.is_some());
+        let edit_link = host.sync.edit_ticket.clone().expect("edit ticket");
+
+        editor.run("share.join", json!({"ticket": edit_link})).expect("editor join");
+        spin_until(vec![&mut host, &mut editor], |apps| {
+            apps[1].sync.status() == ShareStatus::JoinedCanEdit
+                && apps[1].session.active().expect("editor").wb == apps[0].session.active().expect("host").wb
+        });
+
+        // Wave 1: Simultaneous conflicting edits to the exact same cell (`A1`) before either peer
+        // polls incoming network frames (identical Lamport timestamp = 1 on both peers).
+        host.run("cell.set", json!({"cell": "A1", "input": "HostValueAtT1"})).expect("host concurrent A1");
+        editor.run("cell.set", json!({"cell": "A1", "input": "EditorValueAtT1"})).expect("editor concurrent A1");
+
+        spin_until(vec![&mut host, &mut editor], |apps| {
+            apps[0].sync.mutation_log.len() == 2
+                && apps[1].sync.mutation_log.len() == 2
+                && apps[0].session.active().expect("host").wb == apps[1].session.active().expect("editor").wb
+        });
+        assert_eq!(host.session.active().expect("host").wb, editor.session.active().expect("editor").wb);
+
+        // Wave 2: Simultaneous order-dependent structural + value edits on the same range!
+        // Host inserts a row above row 1 (`home.insertRows`) while Editor concurrently writes
+        // a value to `A1`. Without canonical Lamport ordering + replay, applying
+        // (insertRows then set A1) vs (set A1 then insertRows) leaves `A1` and `A2` in different rows.
+        host.run("selection.set", json!({"range": "A1"})).expect("host select A1");
+        host.run("home.insertRows", json!({})).expect("host concurrent insert row at A1");
+        editor.run("cell.set", json!({"cell": "A1", "input": "999"})).expect("editor concurrent set A1=999");
+
+        spin_until(vec![&mut host, &mut editor], |apps| {
+            apps[0].sync.mutation_log.len() == 4
+                && apps[1].sync.mutation_log.len() == 4
+                && apps[0].session.active().expect("host").wb == apps[1].session.active().expect("editor").wb
+        });
+        assert_eq!(host.session.active().expect("host").wb, editor.session.active().expect("editor").wb);
+        assert_eq!(
+            host.sync.mutation_log.iter().map(|(_, m)| m.order_key()).collect::<Vec<_>>(),
+            editor.sync.mutation_log.iter().map(|(_, m)| m.order_key()).collect::<Vec<_>>()
+        );
+
+        host.stop_sharing();
+        editor.stop_sharing();
+        spin_until(vec![&mut host, &mut editor], |apps| {
+            apps[0].sync.status() == ShareStatus::Offline && apps[1].sync.status() == ShareStatus::Offline
+        });
     }
 }
