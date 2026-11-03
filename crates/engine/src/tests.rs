@@ -2744,6 +2744,78 @@ fn validation_formulas_are_relative_and_see_the_new_value() {
 }
 
 #[test]
+fn multi_area_rule_formulas_are_relative_to_the_top_left_cell_of_all_areas() {
+    // Issue #3152: Excel writes the formula for the top-left cell of all the areas (H26), whatever
+    // order they are listed in, not for the first area listed (H62).
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "F26:F27", "values": [[4], [5]]})).unwrap();
+    s.execute("data.validation", json!({"range": "H62:H68,H26:H27,H93:H95", "type": "custom", "formula1": "=MOD($H26,$F26)=0"})).unwrap();
+    let ok = |s: &mut Session, cell: &str, input: &str| s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == true;
+    assert!(ok(&mut s, "H26", "4"));
+    assert!(ok(&mut s, "H26", "8"));
+    assert!(!ok(&mut s, "H26", "3"));
+    assert!(ok(&mut s, "H27", "10"));
+    assert!(!ok(&mut s, "H27", "4"));
+
+    // Conditional formats anchor on the same cell: `=D2>0` on D5:D6,D2:D3 checks D2 at D2.
+    s.execute("range.setValues", json!({"range": "D2:D6", "values": [[1], [0], [0], [1], [0]]})).unwrap();
+    s.execute("home.conditionalFormat", json!({"range": "D5:D6,D2:D3", "rule": {"type": "expression", "formula": "=D2>0", "preset": "greenFill"}}))
+        .unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let mut cache = crate::cf::CfCache::new();
+    let mut styled = |c: &str| cache.look(&wb, 0, CellRef::parse(c).unwrap()).and_then(|l| l.style).is_some();
+    assert_eq!([styled("D2"), styled("D3"), styled("D5"), styled("D6")], [true, false, true, false]);
+}
+
+#[test]
+fn removing_a_rules_top_left_cell_rewrites_its_formulas_for_the_new_one() {
+    let mut s = s();
+    let ok = |s: &mut Session, cell: &str, input: &str| s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == true;
+    let f1 = |s: &Session| s.doc().unwrap().wb.active().unwrap().validations[0].f1.clone();
+
+    // One area: clearing A1 off A1:A9 leaves A2:A9, whose cells still check themselves.
+    s.execute("data.validation", json!({"range": "A1:A9", "type": "custom", "formula1": "=A1>10"})).unwrap();
+    s.execute("data.validation", json!({"range": "A1", "clear": true})).unwrap();
+    assert_eq!(f1(&s), "A2>10");
+    assert!(ok(&mut s, "A2", "20"));
+    assert!(!ok(&mut s, "A2", "5"));
+    s.execute("data.validation", json!({"range": "A1:A9", "clear": true})).unwrap();
+
+    // Several areas: clearing H26 moves the top-left cell to H27, where `$H27,$F27` is checked.
+    s.execute("range.setValues", json!({"range": "F26:F27", "values": [[4], [5]]})).unwrap();
+    s.execute("data.validation", json!({"range": "H62:H68,H26:H27", "type": "custom", "formula1": "=MOD($H26,$F26)=0"})).unwrap();
+    s.execute("data.validation", json!({"range": "H26", "clear": true})).unwrap();
+    assert_eq!(f1(&s), "MOD($H27,$F27)=0");
+    assert!(ok(&mut s, "H27", "10"));
+    assert!(!ok(&mut s, "H27", "4"));
+    // Absolute and literal formulas don't move.
+    s.execute("data.validation", json!({"range": "J1:J3", "type": "list", "formula1": "=$B$1:$B$2"})).unwrap();
+    s.execute("data.validation", json!({"range": "J1", "clear": true})).unwrap();
+    let dv = s.doc().unwrap().wb.active().unwrap().validations.iter().find(|d| d.ranges[0].a1() == "J2:J3").unwrap().f1.clone();
+    assert_eq!(dv, "$B$1:$B$2");
+
+    // Conditional formats: Clear Rules on D2 drops the D2:D3 area, and D5:D6 keeps reading itself.
+    s.execute("range.setValues", json!({"range": "D2:D6", "values": [[1], [0], [0], [0], [1]]})).unwrap();
+    s.execute("home.conditionalFormat", json!({"range": "D5:D6,D2:D3", "rule": {"type": "expression", "formula": "=D2>0", "preset": "greenFill"}}))
+        .unwrap();
+    s.execute("range.setValues", json!({"range": "E2:E6", "values": [[1], [0], [0], [0], [1]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "G2:G6", "values": [[0], [9], [9], [9], [0]]})).unwrap();
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "E5:E6,E2:E3", "rule": {"type": "cellIs", "operator": "greater", "value": "=G2", "preset": "lightRedFill"}}),
+    )
+    .unwrap();
+    s.execute("home.clearRules", json!({"range": "D2,E2"})).unwrap();
+    let rules: Vec<gridcraft_model::CfRule> = s.doc().unwrap().wb.active().unwrap().cond_formats.iter().map(|c| c.rule.clone()).collect();
+    assert!(rules.iter().any(|r| matches!(r, gridcraft_model::CfRule::Expression { formula, .. } if formula == "D5>0")), "{rules:?}");
+    assert!(rules.iter().any(|r| matches!(r, gridcraft_model::CfRule::CellIs { a, .. } if a == "G5")), "{rules:?}");
+    let wb = s.doc().unwrap().wb.clone();
+    let mut cache = crate::cf::CfCache::new();
+    let mut styled = |c: &str| cache.look(&wb, 0, CellRef::parse(c).unwrap()).and_then(|l| l.style).is_some();
+    assert_eq!([styled("D5"), styled("D6"), styled("E5"), styled("E6")], [false, true, false, true]);
+}
+
+#[test]
 fn samples_build() {
     for (name, _) in crate::sample::SAMPLES {
         let wb = crate::sample::build(name).unwrap_or_else(|| panic!("sample {name}"));
@@ -5226,6 +5298,42 @@ fn move_columns_checks_the_protection_of_the_named_sheet() {
 }
 
 #[test]
+fn move_columns_checks_the_protection_of_a_sheet_named_by_its_range() {
+    // A `Sheet!` range or cell picks the sheet the move modifies; the protection checks must
+    // authorize that sheet too, not the active one.
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "P"})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2, 3, 4]]})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    for key in ["range", "cell"] {
+        let err = s.execute("sheet.moveColumns", json!({key: "P!A1", "cols": "B:C", "before": 4})).expect_err("moving columns on a protected sheet");
+        assert!(err.to_string().contains("protected"), "{err}");
+    }
+    let d = s.doc().unwrap();
+    let sh = &d.wb.sheets[d.wb.sheet_index("P").unwrap()];
+    let pv: Vec<Value> = (0..4).map(|c| sh.value(CellRef::new(0, c))).collect();
+    assert_eq!(pv, vec![Value::number(1.0), Value::number(2.0), Value::number(3.0), Value::number(4.0)]);
+}
+
+#[test]
+fn sorting_cannot_unlock_a_locked_cell_by_moving_equal_content_onto_it() {
+    // An unlocked 2 sorted onto a locked 2 leaves the content as it was, but would make the cell
+    // editable; the sort is refused instead.
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[2], [2], [1]]})).unwrap();
+    s.execute("home.lockCell", json!({"range": "A1", "on": false})).unwrap();
+    s.execute("home.lockCell", json!({"range": "A3", "on": false})).unwrap();
+    s.execute("review.protectSheet", json!({"sort": true})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    let err =
+        s.execute("data.sort", json!({"range": "A1:A3", "header": false, "keys": [{"column": "A", "order": "asc"}]})).expect_err("sort unlocking A2");
+    assert!(err.to_string().contains("protected sheet"), "{err}");
+    assert_eq!(*s.doc().unwrap().wb, *before);
+    assert!(s.execute("cell.set", json!({"cell": "A2", "input": "9"})).is_err(), "A2 stays locked");
+}
+
+#[test]
 fn a_script_cannot_switch_windows() {
     // Stored scripts are scoped to their workbook: a step that activates another window would
     // point every later step at another open document, so it is refused before any step runs.
@@ -5243,7 +5351,12 @@ fn a_script_cannot_switch_windows() {
     assert_eq!(v(&s, "A1"), Value::number(2.0));
 }
 
+mod equation;
 mod macros;
+mod objects;
+mod python_cells;
+mod python_commands;
+mod python_files;
 mod seams;
 
 #[test]

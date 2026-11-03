@@ -110,6 +110,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "分列",
         "Link" => "链接",
         "Symbol" => "符号",
+        "Equation" => "公式",
+        "Insert New Equation..." => "插入新公式",
         "Sparklines" => "迷你图",
         "Checkbox" => "复选框",
         "Insert checkboxes in the selected cells" => "在所选单元格中插入复选框",
@@ -152,7 +154,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "删除箭头",
         "Show Formulas" => "显示公式",
         "Error Checking" => "错误检查",
+        "Trace Error" => "追踪错误",
         "Circular References" => "循环引用",
+        "Python Mode" => "Python 模式",
         "Evaluate Formula" => "公式求值",
         "Watch Window" => "监视窗口",
         "Calculation\nOptions" => "计算\n选项",
@@ -449,6 +453,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "停止",
         "New Macro" => "新建宏",
         "Show" => "显示",
+        "Collapse dialog" => "折叠对话框",
+        "Expand dialog" => "展开对话框",
         _ => return None,
     })
 }

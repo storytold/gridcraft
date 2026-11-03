@@ -109,6 +109,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Tekst naar\nkolommen",
         "Link" => "Link",
         "Symbol" => "Symbool",
+        "Equation" => "Vergelijking",
+        "Insert New Equation..." => "Nieuwe vergelijking invoegen",
         "Sparklines" => "Sparklines",
         "Checkbox" => "Checkbox",
         "Insert checkboxes in the selected cells" => "Checkboxes invoegen in de geselecteerde cellen",
@@ -151,7 +153,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Pijlen verwijderen",
         "Show Formulas" => "Formules weergeven",
         "Error Checking" => "Foutopsporing",
+        "Trace Error" => "Fout traceren",
         "Circular References" => "Kringverwijzingen",
+        "Python Mode" => "Python-modus",
         "Evaluate Formula" => "Formule evalueren",
         "Watch Window" => "Bewakingsvenster",
         "Calculation\nOptions" => "Berekenings-\nopties",
@@ -536,6 +540,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Stoppen",
         "New Macro" => "Nieuwe macro",
         "Show" => "Weergeven",
+        "Collapse dialog" => "Dialoogvenster samenvouwen",
+        "Expand dialog" => "Dialoogvenster uitvouwen",
         _ => return None,
     })
 }

@@ -110,6 +110,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "텍스트\n나누기",
         "Link" => "링크",
         "Symbol" => "기호",
+        "Equation" => "수식",
+        "Insert New Equation..." => "새 수식 삽입",
         "Sparklines" => "스파크라인",
         "Checkbox" => "확인란",
         "Insert checkboxes in the selected cells" => "선택한 셀에 확인란 삽입",
@@ -152,7 +154,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "화살표 제거",
         "Show Formulas" => "수식 표시",
         "Error Checking" => "오류 검사",
+        "Trace Error" => "오류 추적",
         "Circular References" => "순환 참조",
+        "Python Mode" => "Python 모드",
         "Evaluate Formula" => "수식 계산",
         "Watch Window" => "감시 창",
         "Calculation\nOptions" => "계산\n옵션",
@@ -457,6 +461,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "중지",
         "New Macro" => "새 매크로",
         "Show" => "표시",
+        "Collapse dialog" => "대화 상자 축소",
+        "Expand dialog" => "대화 상자 확장",
         _ => return None,
     })
 }

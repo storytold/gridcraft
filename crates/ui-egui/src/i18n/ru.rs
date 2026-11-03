@@ -110,6 +110,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Текст\nпо столбцам",
         "Link" => "Ссылка",
         "Symbol" => "Символ",
+        "Equation" => "Уравнение",
+        "Insert New Equation..." => "Вставить новое уравнение",
         "Sparklines" => "Спарклайны",
         "Checkbox" => "Флажок",
         "Insert checkboxes in the selected cells" => "Вставить флажки в выбранные ячейки",
@@ -152,7 +154,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Убрать стрелки",
         "Show Formulas" => "Показать формулы",
         "Error Checking" => "Проверка ошибок",
+        "Trace Error" => "Источник ошибки",
         "Circular References" => "Циклические ссылки",
+        "Python Mode" => "Режим Python",
         "Evaluate Formula" => "Вычислить формулу",
         "Watch Window" => "Окно контрольных значений",
         "Calculation\nOptions" => "Параметры\nвычислений",
@@ -459,6 +463,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Остановить",
         "New Macro" => "Новый макрос",
         "Show" => "Показать",
+        "Collapse dialog" => "Свернуть диалоговое окно",
+        "Expand dialog" => "Развернуть диалоговое окно",
         _ => return None,
     })
 }
