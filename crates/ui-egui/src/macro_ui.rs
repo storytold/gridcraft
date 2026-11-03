@@ -19,13 +19,11 @@ const RECENT: usize = 8;
 
 /// The yellow bar when a file still holds Excel macros. `.xlsm` stays in the sentence: saving as
 /// `.xlsx` drops them.
-pub(crate) const EXCEL_MACROS_NOTICE: &str =
-    "This file contains Excel macros. GridCraft keeps them when you save as .xlsm and does not run them.";
+pub(crate) const EXCEL_MACROS_NOTICE: &str = "This file contains Excel macros. GridCraft keeps them when you save as .xlsm and does not run them.";
 /// The empty Macros list. It does not claim the file has no macros: Excel's may still be in it.
 pub(crate) const NOTHING_GRIDCRAFT_CAN_RUN: &str = "Nothing here can be run in GridCraft.";
 /// Under the Macros list, only when the file holds Excel macros.
-pub(crate) const EXCEL_MACROS_FOOTER: &str =
-    "The Excel macros stay in the file. GridCraft does not run them. Excel still can.";
+pub(crate) const EXCEL_MACROS_FOOTER: &str = "The Excel macros stay in the file. GridCraft does not run them. Excel still can.";
 
 /// Macro state that belongs to the window, not the workbook.
 #[derive(Clone, Debug)]
