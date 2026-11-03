@@ -141,6 +141,8 @@ impl Desk {
             }
         });
         reply.expect("the request returns immediately")
+    }
+
     /// The user presses `key` in the root window.
     fn key(&mut self, key: egui::Key) -> Vec<(ViewportId, ViewportCommand)> {
         EVENTS.with(|e| {
@@ -544,6 +546,8 @@ fn control_input_reaches_the_active_window_of_one_workbook() {
     assert_eq!(d.wb.active_sheet(), 0, "window 1 stayed on Sheet1");
     assert_eq!(d.selection.active, CellRef::parse("F12").unwrap(), "window 1 kept its selection");
     assert_eq!(d.wb.active().unwrap().value(CellRef::parse("D5").unwrap()), Value::Empty);
+}
+
 #[test]
 fn quit_with_the_macro_editor_open_goes_on_once_the_editor_has_closed() {
     let mut desk = Desk::new(false);
