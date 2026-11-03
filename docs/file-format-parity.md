@@ -158,6 +158,7 @@ refresh. Get Data ▸ From Text/CSV opens an import dialog like Excel's (delimit
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | Text/CSV import preserves the password prompt when a protected workbook is chosen, through either the file picker or an explicit path |
 | 2026-11-03 | minor | SYLK (`.slk`) import: values, R1C1 formulas as A1 (shared formulas too) with cached results, number formats and column widths; import only (#1481) |
 | 2026-11-03 | minor | Opening a web page (HTML) reads its first table as a sheet, whatever the file is called: a web app's "Export to Excel" saved as `.xls` no longer opens as lines of markup. Values read as in a CSV (or as text with `csvAsText`), `<th>` cells are bold and centred, `<x:Name>` names the sheet, and a page not named `.htm`/`.html` opens with a warning (#3166) |
 | 2026-11-03 | minor | XLSX `<workbookPr filterPrivacy="1"/>` (Remove personal information from file properties on save) is read and written back, and while it is on GridCraft saves no author (`dc:creator`) and no company, as Excel leaves them empty (#3089, file part) |

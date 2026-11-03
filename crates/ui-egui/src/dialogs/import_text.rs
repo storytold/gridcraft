@@ -28,7 +28,12 @@ pub(super) fn open(app: &mut SheetApp, params: &Json) -> Option<Dialog> {
     d.command = Some("data.fromTextCsv");
     if let Err(e) = import_preview(app, &mut d) {
         match d.values.get("path").and_then(Json::as_str) {
-            Some(path) if e.contains(gridcraft_engine::cmd::text_import::WORKBOOK_NOT_TEXT) => app.open_path(path),
+            Some(path) if e.contains(gridcraft_engine::cmd::text_import::WORKBOOK_NOT_TEXT) => {
+                app.open_path(path);
+                // The caller assigns our return value to app.dialog; carry the password prompt
+                // opened by File > Open through that assignment instead of replacing it with None.
+                return app.dialog.take();
+            }
             _ => app.message = Some((d.title.clone(), crate::clean_error(&e))),
         }
         return None;
