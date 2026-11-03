@@ -125,7 +125,7 @@ callbacks are not replaced by a later dispatch error.
 A failed `saveDialog` or `openRequest` dispatch retires only its still-owned current-connection
 request and queues a correlated `saveFailed` or `openFailed`. Later events in the drained batch
 continue. A full command queue refuses a non-cancel chooser reply without consuming its owner.
-The ordinary command limit stays16. The separate failure inbox contains at most16 already
+The ordinary command limit stays 16. The separate failure inbox contains at most 16 already
 admitted captures and no file bytes or newly admitted requests. Terminal events remain bounded
 by their original owners and cannot be erased by account replacement while queued/in flight.
 The publisher requests repaint for failure consumption and work left after its bounded drains.
