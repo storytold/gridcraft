@@ -28,6 +28,7 @@ pub mod dnd;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod doc_windows;
 pub mod editor;
+pub mod equation;
 mod floating_pictures;
 pub mod fonts;
 pub mod formula_bar;
@@ -267,7 +268,7 @@ pub struct SheetApp {
     /// false (a bare test/embedder that never runs the hook) capture code falls back to egui's
     /// current input instead of reusing a stale recorded value.
     pub(crate) capture_geometry_from_raw: bool,
-    /// The floating object selected on the sheet (chart, picture, shape or slicer).
+    /// The floating object selected on the sheet (chart, picture, shape, equation or slicer).
     pub selected_object: Option<gridcraft_engine::model::ObjRef>,
     /// The system clipboard's text when GridCraft last copied without publishing to it (a
     /// control-channel or MCP `edit.copy`/`edit.cut`). While the system clipboard still holds this

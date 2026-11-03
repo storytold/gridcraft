@@ -16,6 +16,7 @@ struct Objects {
     image: ObjRef,
     shape: ObjRef,
     text_box: ObjRef,
+    equation: ObjRef,
     /// A slicer lying over the chart's right edge: slicers paint on top and take the click.
     slicer: ObjRef,
 }
@@ -41,12 +42,14 @@ fn fixture() -> (Harness, Objects) {
         id(&s.execute("insert.chart", json!({"range": "B1:B5", "type": "column", "at": "D8", "width": 220, "height": 140})).unwrap(), "chart");
     let shape = id(&s.execute("insert.shape", json!({"kind": "rectangle", "at": "C20", "width": 120, "height": 80})).unwrap(), "shape");
     let text_box = id(&s.execute("insert.textBox", json!({"at": "H20", "width": 140, "height": 60, "text": "Note"})).unwrap(), "shape");
+    let equation = id(&s.execute("insert.equation", json!({"latex": "a^2+b^2=c^2", "cell": "C26", "size": 16})).unwrap(), "equation");
     let image = id(&s.execute("insert.picture", json!({"base64": tiny_png(), "at": "M8", "width": 60, "height": 60})).unwrap(), "image");
     let objs = Objects {
         chart: ObjRef::new(ObjKind::Chart, chart),
         image: ObjRef::new(ObjKind::Image, image),
         shape: ObjRef::new(ObjKind::Shape, shape),
         text_box: ObjRef::new(ObjKind::Shape, text_box),
+        equation: ObjRef::new(ObjKind::Equation, equation),
         slicer: ObjRef::new(ObjKind::Slicer, slicer),
     };
     let mut h = egui_kittest::Harness::builder()
@@ -139,7 +142,7 @@ fn kept(h: &Harness) -> Value {
 #[test]
 fn a_click_selects_every_kind_and_slicers_win_over_charts() {
     let (mut h, o) = fixture();
-    for obj in [o.chart, o.image, o.shape, o.text_box, o.slicer] {
+    for obj in [o.chart, o.image, o.shape, o.text_box, o.equation, o.slicer] {
         let p = grab_point(&h, &o, obj);
         click(&mut h, p);
         assert_eq!(h.state().selected_object, Some(obj), "{obj:?}");
@@ -155,7 +158,7 @@ fn a_click_selects_every_kind_and_slicers_win_over_charts() {
 #[test]
 fn every_handle_resizes_only_its_own_edges() {
     let (mut h, o) = fixture();
-    for obj in [o.shape, o.image, o.slicer, o.chart] {
+    for obj in [o.shape, o.image, o.equation, o.slicer, o.chart] {
         let p = grab_point(&h, &o, obj);
         click(&mut h, p);
         for handle in Handle::ALL {
@@ -251,6 +254,7 @@ fn double_clicks_route_by_kind() {
         let sh = h.state().session.doc().unwrap().wb.active().unwrap();
         assert_eq!(open_action(sh, o.text_box), OpenAction::EditText(o.text_box.id));
         assert_eq!(open_action(sh, o.chart), OpenAction::FormatChart(o.chart.id));
+        assert_eq!(open_action(sh, o.equation), OpenAction::EditEquation(o.equation.id));
         for obj in [o.shape, o.image, o.slicer] {
             assert_eq!(open_action(sh, obj), OpenAction::Select, "{obj:?}");
         }
@@ -266,6 +270,12 @@ fn double_clicks_route_by_kind() {
     double_click(&mut h, p);
     assert_eq!(h.state().grid.pane.as_deref(), Some("formatChart"));
     assert_eq!(h.state().selected_object, Some(o.chart));
+
+    let p = grab_point(&h, &o, o.equation);
+    double_click(&mut h, p);
+    assert_eq!(h.state().selected_object, Some(o.equation));
+    assert_eq!(h.state().dialog.as_ref().map(|d| (d.name(), d.title.as_str())), Some(("equation", "Edit Equation")), "equations open the editor");
+    h.state_mut().dialog = None;
 
     for obj in [o.shape, o.image, o.slicer] {
         let p = grab_point(&h, &o, obj);

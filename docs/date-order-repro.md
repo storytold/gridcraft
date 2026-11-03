@@ -46,7 +46,7 @@ save/open/refresh cycles, MDY/DMY/YMD, pre-open cached formulas and both date sy
 runtime invalidation in several documents, undo/redo returning to the saved state,
 unchanged canonical API input and F2 editing of imported numeric dates.
 
-The branch integrates main at `488f9982`. File opening retains `csvAsText` while
+The branch integrates main at `7bb397a3`. File opening retains `csvAsText` while
 applying the selected formula region before recalculation. Text-only import keeps
 `00123` and `13/01/2026` as text. Automatic CSV import preserves main's per-column
 date-order inference from #3043: the identifier becomes 123 and the unambiguous
