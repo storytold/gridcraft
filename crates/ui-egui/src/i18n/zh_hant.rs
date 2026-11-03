@@ -1,6 +1,7 @@
 //! Traditional Chinese interface labels, using Taiwan spreadsheet terminology.
 //! 繁體中文介面翻譯，採用台灣試算表用語。
 
+/// Returns a Taiwan Traditional Chinese label, or `None` so the caller can show English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     let index = CATALOG.binary_search_by(|(key, _)| (*key).cmp(text)).ok()?;
     CATALOG.get(index).map(|(_, translated)| *translated)

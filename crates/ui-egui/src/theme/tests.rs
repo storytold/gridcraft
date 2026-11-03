@@ -117,6 +117,7 @@ fn interface_families_fall_back_to_the_cell_font() {
 }
 
 #[test]
+/// Each interface language selects its Han glyph region without reordering other scripts.
 fn language_reorders_only_the_han_faces() {
     let keys = |han| fallback_faces(han).into_iter().map(|(k, _)| k).collect::<Vec<_>>();
     assert_eq!(
@@ -136,6 +137,7 @@ fn language_reorders_only_the_han_faces() {
 }
 
 #[test]
+/// Flatpak font candidates retain the regional face indexes of the shared Noto collection.
 fn cjk_fallback_probes_flatpak_fonts_with_the_correct_locale_faces() {
     // Exercise the candidates the fallback loader actually consumes, not just the directory
     // constant. This must work on CI without an installed CJK font or a Flatpak runtime.
@@ -163,6 +165,7 @@ fn cjk_fallback_probes_flatpak_fonts_with_the_correct_locale_faces() {
 }
 
 #[test]
+/// An installed TC face must cover the catalog itself; other regional fallbacks cannot mask gaps.
 fn traditional_chinese_system_face_covers_the_catalog_when_installed() {
     use skrifa::MetadataProvider;
 

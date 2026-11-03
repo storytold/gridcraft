@@ -451,6 +451,7 @@ pub enum HanOrder {
 }
 
 impl HanOrder {
+    /// Selects the glyph region used to decide whether a language change rebuilds the fonts.
     pub fn of(language: crate::i18n::Language) -> Self {
         match language {
             crate::i18n::Language::Ja => Self::Japanese,

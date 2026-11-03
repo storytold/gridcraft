@@ -153,6 +153,7 @@ impl Language {
         Self::ALL.iter().map(|l| format!("\"{}\"", l.code())).collect::<Vec<_>>().join(separator)
     }
 
+    /// Resolves a locale tag; an explicit Chinese script takes precedence over its region.
     fn from_tag(tag: &str) -> Option<Self> {
         // Script subtags take precedence over the region. Keep legacy `zh` preferences
         // Simplified, while Taiwan, Hong Kong and Macao select the separate Hant catalog.
@@ -344,6 +345,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Chinese script selection and persisted preferences must distinguish Hant from legacy Hans.
     fn traditional_chinese_tags_keep_scripts_and_saved_preferences_separate() {
         for tag in ["zh-hant", "ZH_Hant_TW", "zh-TW", "zh_HK.UTF-8", "zh-MO", "zh-Hant-CN"] {
             assert_eq!(Language::parse(tag), Some(Language::ZhHant), "{tag}");
@@ -358,6 +360,7 @@ mod tests {
     }
 
     #[test]
+    /// Catalog entries preserve lookup order, formatting placeholders and label line breaks.
     fn traditional_chinese_catalog_preserves_lookup_and_formatting_contracts() {
         assert!(zh_hant::CATALOG.windows(2).all(|pair| pair[0].0 < pair[1].0), "catalog must be sorted and unique");
         for (english, translated) in zh_hant::CATALOG {
