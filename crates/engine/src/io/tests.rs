@@ -604,3 +604,26 @@ fn opening_google_sheets_export_unwraps_only_formulas_gridcraft_calculates() {
     assert_eq!(text("A2").as_deref(), Some("IFERROR(__XLUDF.DUMMYFUNCTION(\"GOOGLETRANSLATE(\"\"hi\"\",\"\"en\"\",\"\"fr\"\")\"),\"salut\")"));
     assert_eq!(opened.sheets[0].cells.get(CellRef::parse("A2").unwrap()).map(|c| c.value.clone()), Some(Value::text("salut")));
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_font_file_must_be_a_regular_file_within_the_limit() {
+    let limit = gridcraft_pdf::MAX_FONT_BYTES;
+    let dir = std::env::temp_dir().join(format!("gridcraft-font-read-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // A directory (like a FIFO or a device) is no font file, and a missing file is an error.
+    assert_eq!(read_font_file(&dir), Err("not a regular file".to_string()));
+    assert!(read_font_file(&dir.join("missing.ttf")).is_err());
+    let small = dir.join("small.ttf");
+    std::fs::write(&small, b"abc").unwrap();
+    assert_eq!(read_font_file(&small), Ok(b"abc".to_vec()));
+    // Exactly the limit is accepted; one byte more is refused after reading at most limit + 1.
+    let at_limit = dir.join("limit.ttf");
+    std::fs::write(&at_limit, vec![0u8; limit]).unwrap();
+    assert_eq!(read_font_file(&at_limit).map(|b| b.len()), Ok(limit));
+    let over = dir.join("over.ttf");
+    std::fs::write(&over, vec![0u8; limit + 1]).unwrap();
+    assert_eq!(read_font_file(&over), Err("the file is too large".to_string()));
+    let _ = std::fs::remove_dir_all(&dir);
+}

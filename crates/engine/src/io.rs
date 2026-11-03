@@ -869,6 +869,21 @@ pub fn has_pdf_font_face(bold: bool) -> bool {
     gridcraft_pdf::has_fallback_face(bold)
 }
 
+/// The bytes of a font file: a regular file only (a FIFO or device reports a size of 0, and
+/// reading it could block start-up or never end), and never more than the PDF crate accepts.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_font_file(path: &std::path::Path) -> std::result::Result<Vec<u8>, String> {
+    use std::io::Read;
+    let limit = gridcraft_pdf::MAX_FONT_BYTES as u64;
+    if !std::fs::metadata(path).map_err(|e| e.to_string())?.is_file() {
+        return Err("not a regular file".into());
+    }
+    let mut bytes = Vec::new();
+    // One byte past the limit tells a file that is too large from one of exactly the limit.
+    std::fs::File::open(path).and_then(|f| f.take(limit + 1).read_to_end(&mut bytes)).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > limit { Err("the file is too large".into()) } else { Ok(bytes) }
+}
+
 /// Registers the PDF fallback fonts named by [`PDF_FONT_ENV`] and [`PDF_BOLD_FONT_ENV`], once at
 /// start-up. Returns a warning for each font that can't be used; export then works as without it.
 #[cfg(not(target_arch = "wasm32"))]
@@ -876,11 +891,7 @@ pub fn load_pdf_fonts_from_env() -> Vec<String> {
     let mut warnings = Vec::new();
     for (var, bold) in [(PDF_FONT_ENV, false), (PDF_BOLD_FONT_ENV, true)] {
         let Some(path) = std::env::var_os(var) else { continue };
-        let loaded = std::fs::metadata(&path)
-            .map_err(|e| e.to_string())
-            .and_then(|m| if m.len() > gridcraft_pdf::MAX_FONT_BYTES as u64 { Err("the file is too large".into()) } else { Ok(()) })
-            .and_then(|()| std::fs::read(&path).map_err(|e| e.to_string()))
-            .and_then(|bytes| register_pdf_font(bytes, bold).map_err(|e| e.to_string()));
+        let loaded = read_font_file(std::path::Path::new(&path)).and_then(|bytes| register_pdf_font(bytes, bold).map_err(|e| e.to_string()));
         match loaded {
             Ok(name) => log::info!("PDF export embeds {name} for text the standard PDF fonts lack ({var})"),
             Err(e) => warnings.push(format!("{var}={}: {e}", std::path::Path::new(&path).display())),
