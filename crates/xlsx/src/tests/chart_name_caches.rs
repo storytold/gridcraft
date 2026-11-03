@@ -47,6 +47,7 @@ fn chart_xml(cats: &str, vals: &str, names: Vec<DefinedName>) -> String {
         }],
         legend: LegendPos::Bottom,
         data_labels: false,
+        data_table: None,
         gridlines: true,
         style: 2,
         x_title: None,
