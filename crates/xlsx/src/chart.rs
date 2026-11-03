@@ -353,7 +353,7 @@ fn expr_target(wb: &Workbook, sheet_idx: usize, e: &Expr, depth: u32) -> Option<
             Some((si, r.range()))
         }
         Expr::Name(n) => {
-            let (_, _, def) = chart_name(wb, sheet_idx, n)?;
+            let (_, _, def) = lookup_name(wb, sheet_idx, n)?;
             let def = def?;
             let body = gridcraft_formula::parse_name(&def.formula).ok()?;
             expr_target(wb, def.scope.unwrap_or(sheet_idx), &body, depth + 1)
@@ -415,17 +415,18 @@ fn is_ref(f: &str) -> bool {
 /// when it isn't a name, or names a sheet the workbook doesn't have.
 fn chart_name<'a>(wb: &'a Workbook, si: usize, f: &str) -> Option<(Option<usize>, String, Option<&'a DefinedName>)> {
     let Ok(Expr::Name(n)) = gridcraft_formula::parse(f.trim()) else { return None };
-    // The parser has already unquoted the sheet (`'Bob''s'!Name` → `Bob's!Name`, #2012): split
-    // at the last `!` (`'a!b'!Name`) and keep the name as is (`' Sales '` keeps its spaces).
+    lookup_name(wb, si, &n)
+}
+
+/// Looks up a name the formula parser has already unquoted (`'My Sheet'!Cats` → `My Sheet!Cats`).
+fn lookup_name<'a>(wb: &'a Workbook, si: usize, n: &str) -> Option<(Option<usize>, String, Option<&'a DefinedName>)> {
+    // Split at the last `!` (`'a!b'!Name`) and keep the name as is (`' Sales '` keeps its spaces).
     match n.rsplit_once('!') {
         Some((s, bare)) => {
             let i = wb.sheet_index(s)?;
             Some((Some(i), bare.to_string(), wb.name(bare, i)))
         }
-        None => {
-            let def = wb.name(&n, si);
-            Some((None, n, def))
-        }
+        None => Some((None, n.to_string(), wb.name(n, si))),
     }
 }
 

@@ -55,7 +55,13 @@ fn chart_xml(cats: &str, vals: &str, names: Vec<DefinedName>) -> String {
         by_rows: false,
         pivot: None,
     });
-    wb.sheets = vec![Arc::new(s)];
+    let mut named_sheet = Sheet::new("My Sheet");
+    for (i, value) in [10.0, 20.0, 30.0].iter().enumerate() {
+        let cell = CellRef::new(i as u32 + 1, 1);
+        named_sheet.set_value(cell, Value::Number(*value));
+        named_sheet.set_style(cell, money);
+    }
+    wb.sheets = vec![Arc::new(s), Arc::new(named_sheet)];
     wb.names = names;
     let bytes = write_xlsx(&wb).unwrap();
     let mut xml = String::new();
@@ -121,4 +127,11 @@ fn names_that_cannot_be_resolved_stay_without_a_cache() {
         assert!(!xml.contains("<c:numCache>") && !xml.contains("<c:strCache>"), "{n}: {xml}");
         assert!(xml.contains(&format!("<c:f>[0]!{n}</c:f>")), "{n}: {xml}");
     }
+}
+
+#[test]
+fn nested_name_through_quoted_sheet_gets_a_series_cache() {
+    let names = vec![name("Cats", "'My Sheet'!$B$2:$B$4"), name("Outer", "'My Sheet'!Cats")];
+    let xml = chart_xml("Sheet1!$A$2:$A$4", "Outer", names);
+    assert!(part(&xml, "val").contains(VAL_CACHE), "{xml}");
 }
