@@ -416,13 +416,17 @@ fn workday_core(a: &[Arg], c: &mut dyn Ctx, mask: [bool; 7], hol: Option<&Arg>) 
     if days == 0 {
         return num_val(start as f64);
     }
+    // The holidays on working days, still sorted (`holidays` sorts them), so each step counts
+    // the ones it passed with two binary searches rather than a scan of every holiday: a run of
+    // consecutive holidays takes one step per holiday.
+    let hs: Vec<i64> = hs.into_iter().filter(|&h| !mask[weekday0(sys, h)]).collect();
     let dir = days.signum();
     let mut cur = start;
     let mut rem = days.abs();
     while rem > 0 {
         let next = advance(sys, cur, rem, dir, &mask, per_week);
         let (lo, hi) = if dir > 0 { (cur + 1, next) } else { (next, cur - 1) };
-        rem = hs.iter().filter(|&&h| h >= lo && h <= hi && !mask[weekday0(sys, h)]).count() as i64;
+        rem = hs.partition_point(|&h| h <= hi).saturating_sub(hs.partition_point(|&h| h < lo)) as i64;
         cur = next;
         if !(0..=MAX_SERIAL as i64).contains(&cur) {
             return Err(CellError::Num);
@@ -753,6 +757,23 @@ mod tests {
         close(ev("TIMEVALUE", vec![t("6:00 PM")]), 0.75);
         close(ev("TIMEVALUE", vec![t("1/2/2020 12:00")]), 0.5);
         is_err(ev("TIMEVALUE", vec![t("x")]), CellError::Value);
+    }
+
+    /// Security: WORKDAY counts the holidays each step passes by binary search, so a long run of
+    /// consecutive holidays is linear work, not one scan of every holiday per holiday.
+    #[test]
+    fn workday_over_many_consecutive_holidays() {
+        let start = d(2000.0, 1.0, 3.0);
+        let hol: Vec<f64> = (1..=200_000).map(|i| start + f64::from(i)).collect();
+        let out = ev("WORKDAY.INTL", vec![n(start), n(1.0), n(11.0), av(col(&hol))]);
+        // Sundays are the only weekend (11): 200,000 days of holidays are skipped, landing on the
+        // first working day after them.
+        let after = start + 200_001.0;
+        let sunday = ev("WEEKDAY", vec![n(after), n(2.0)]) == nv(7.0);
+        close(out, if sunday { after + 1.0 } else { after });
+        // Holidays on a weekend don't push the result out.
+        let fri = d(2026.0, 10.0, 9.0);
+        close(ev("WORKDAY", vec![n(fri), n(1.0), av(col(&[fri + 1.0, fri + 3.0]))]), fri + 4.0);
     }
 
     #[test]
