@@ -159,3 +159,28 @@ fn app_open_over_the_control_channel_never_opens_a_dialog() {
     assert_eq!(h.state().ui.recent.first(), Some(&p));
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
+
+#[test]
+fn text_import_keeps_the_password_prompt_for_a_workbook() {
+    for picked in [false, true] {
+        let path = encrypted_file(if picked { "import-picker" } else { "import-path" });
+        let p = path.to_string_lossy().to_string();
+        let services = if picked {
+            let p = p.clone();
+            Services { pick_open: Some(Box::new(move || Some(p.clone()))), ..Services::default() }
+        } else {
+            Services::default()
+        };
+        let mut h = harness(services);
+        h.state_mut().open_dialog("importText", if picked { json!({}) } else { json!({"path": p}) });
+        h.run_steps(3);
+        assert_eq!(dialog(&h).as_deref(), Some("openPassword"));
+        assert!(h.state().message.is_none());
+        h.state_mut().dialog.as_mut().unwrap().values.insert("password".into(), json!(PW));
+        h.get_by_label("   OK   ").click();
+        h.run_steps(3);
+        assert_eq!(dialog(&h), None);
+        assert_eq!(a1(&h), Value::Number(42.0));
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+}
