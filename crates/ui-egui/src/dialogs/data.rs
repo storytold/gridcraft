@@ -218,7 +218,7 @@ pub(super) fn sort(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
             if columns.is_empty() {
                 ui.add(egui::TextEdit::singleline(&mut col).desired_width(50.0)).labelled_by(label.id);
             } else {
-                egui::ComboBox::from_id_salt(("sort_col", i))
+                craft_ui::ComboBox::from_id_salt(("sort_col", i))
                     .selected_text(col.clone())
                     .show_ui(ui, |ui| {
                         for (letter, label) in &columns {
@@ -230,7 +230,7 @@ pub(super) fn sort(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
             }
             lv["column"] = json!(col.to_ascii_uppercase());
             let mut by = lv["by"].as_str().unwrap_or("values").to_string();
-            egui::ComboBox::from_id_salt(("by", i))
+            craft_ui::ComboBox::from_id_salt(("by", i))
                 .selected_text(match by.as_str() {
                     "cellColor" => "Cell Color",
                     "fontColor" => "Font Color",

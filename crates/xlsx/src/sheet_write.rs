@@ -16,7 +16,7 @@ use crate::tables::{paper_id, px_to_col_width, px_to_pt};
 use crate::write::{
     CT_CHART, CT_COMMENTS, CT_DRAWING, CT_TABLE, CT_THREADED_COMMENTS, NS_MAIN, NS_REL, NS_THREADED, Out, REL_THREADED_COMMENT, Rels, XML_DECL,
 };
-use crate::xml::{encode_xstring, esc, esc_attr, num};
+use crate::xml::{encode_xstring, esc, esc_attr, num, push_a1, push_esc, push_num, push_u64};
 
 mod parts;
 mod rules;
@@ -253,24 +253,46 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     }
 
     // sheetData
-    let mut keys: BTreeSet<CellRef> = sheet.cells.iter().map(|(c, _)| c).collect();
-    keys.extend(sheet.cell_pictures.keys().copied());
-    keys.extend(extra.keys().copied());
-    keys.extend(overrides.keys().copied());
-    let mut rows: BTreeMap<u32, Vec<CellRef>> = BTreeMap::new();
-    for k in keys {
-        rows.entry(k.row).or_default().push(k);
+    // Every written cell in row-major order: the store already iterates that way, so only cells
+    // that exist outside it (pictures, cached spill values, table headers) need sorting in.
+    let mut keys: Vec<(CellRef, Option<&Cell>)> = Vec::with_capacity(sheet.cells.len());
+    keys.extend(sheet.cells.iter().map(|(c, cell)| (c, Some(cell))));
+    if !sheet.cell_pictures.is_empty() || !extra.is_empty() || !overrides.is_empty() || !keys.is_sorted_by_key(|(c, _)| *c) {
+        let mut all: BTreeSet<CellRef> = keys.iter().map(|(c, _)| *c).collect();
+        all.extend(sheet.cell_pictures.keys().copied());
+        all.extend(extra.keys().copied());
+        all.extend(overrides.keys().copied());
+        keys = all.into_iter().map(|c| (c, sheet.cells.get(c))).collect();
     }
-    for r in sheet.rows.keys() {
-        rows.entry(*r).or_default();
-    }
+    s.reserve(keys.len().saturating_mul(32));
     s.push_str("<sheetData>");
-    for (r, cells) in &rows {
-        let info = sheet.rows.get(r).copied().unwrap_or_default();
+    let mut row_infos = sheet.rows.iter().peekable();
+    let mut next = 0;
+    loop {
+        // The next row with cells or row settings, and its cells.
+        let cell_row = keys.get(next).map(|(c, _)| c.row);
+        let info_row = row_infos.peek().map(|(r, _)| **r);
+        let r = match (cell_row, info_row) {
+            (Some(a), Some(b)) => a.min(b),
+            (Some(a), None) => a,
+            (None, Some(b)) => b,
+            (None, None) => break,
+        };
+        let info = match row_infos.next_if(|(row, _)| **row == r) {
+            Some((_, info)) => *info,
+            None => LineInfo::default(),
+        };
+        let first = next;
+        while keys.get(next).is_some_and(|(c, _)| c.row == r) {
+            next += 1;
+        }
+        let cells = keys.get(first..next).unwrap_or_default();
         if cells.is_empty() && info == LineInfo::default() {
             continue;
         }
-        let _ = write!(s, "<row r=\"{}\"", r + 1);
+        s.push_str("<row r=\"");
+        push_u64(&mut s, u64::from(r) + 1);
+        s.push('"');
         if let Some(st) = info.style {
             let _ = write!(s, " s=\"{}\" customFormat=\"1\"", sid(st));
         }
@@ -291,15 +313,14 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             continue;
         }
         s.push('>');
-        for c in cells {
-            let cell = sheet.cells.get(*c);
-            let ov = overrides.get(c);
-            let ex = extra.get(c);
-            let array = dynamic.get(c).copied().or_else(|| {
+        for &(c, cell) in cells {
+            let ov = overrides.get(&c);
+            let ex = extra.get(&c);
+            let array = dynamic.get(&c).copied().or_else(|| {
                 let f = cell?.formula.as_ref()?;
-                (f.array.is_none() && crate::array_formula::needs_array(wb, si, *c, f)).then_some(RangeRef::cell(*c))
+                (f.array.is_none() && crate::array_formula::needs_array(wb, si, c, f)).then_some(RangeRef::cell(c))
             });
-            write_cell(&mut s, *c, cell, sheet.cell_pictures.get(c), ov, ex, array.as_ref(), &sid, out);
+            write_cell(&mut s, c, cell, sheet.cell_pictures.get(&c), ov, ex, array.as_ref(), &sid, out);
         }
         s.push_str("</row>");
     }
@@ -635,9 +656,13 @@ fn write_cell(
     out: &mut Out,
 ) {
     let style = cell.map(|x| sid(x.style)).unwrap_or(0);
-    let _ = write!(s, "<c r=\"{}\"", c.a1());
+    s.push_str("<c r=\"");
+    push_a1(s, c);
+    s.push('"');
     if style != 0 {
-        let _ = write!(s, " s=\"{style}\"");
+        s.push_str(" s=\"");
+        push_u64(s, u64::from(style));
+        s.push('"');
     }
     if let Some(picture) = picture {
         let vm = out.cell_pictures.index(picture);
@@ -679,21 +704,19 @@ fn write_cell(
         };
         s.push_str(t);
         s.push('>');
-        let text = esc(&crate::fmla::to_file(f));
-        match (f.array, dynamic) {
-            (Some(r), _) => {
-                let _ = write!(s, "<f t=\"array\" ref=\"{}\">{text}</f>", r.a1());
+        match f.array.or(dynamic.copied()) {
+            Some(r) => {
+                let _ = write!(s, "<f t=\"array\" ref=\"{}\">", r.a1());
             }
-            (None, Some(r)) => {
-                let _ = write!(s, "<f t=\"array\" ref=\"{}\">{text}</f>", r.a1());
-            }
-            _ => {
-                let _ = write!(s, "<f>{text}</f>");
-            }
+            None => s.push_str("<f>"),
         }
+        push_esc(s, &crate::fmla::to_file(f));
+        s.push_str("</f>");
         match &value {
             Value::Number(n) => {
-                let _ = write!(s, "<v>{}</v>", num(*n));
+                s.push_str("<v>");
+                push_num(s, *n);
+                s.push_str("</v>");
             }
             Value::Text(t) => {
                 let _ = write!(s, "<v>{}</v>", esc(&encode_xstring(t)));
@@ -712,11 +735,15 @@ fn write_cell(
     match &value {
         Value::Empty | Value::Array(_) => s.push_str("/>"),
         Value::Number(n) => {
-            let _ = write!(s, "><v>{}</v></c>", num(*n));
+            s.push_str("><v>");
+            push_num(s, *n);
+            s.push_str("</v></c>");
         }
         Value::Text(t) => {
             let i = out.sst.index(t);
-            let _ = write!(s, " t=\"s\"><v>{i}</v></c>");
+            s.push_str(" t=\"s\"><v>");
+            push_u64(s, u64::from(i));
+            s.push_str("</v></c>");
         }
         Value::Bool(b) => {
             let _ = write!(s, " t=\"b\"><v>{}</v></c>", *b as u8);
