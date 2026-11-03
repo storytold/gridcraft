@@ -83,18 +83,25 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                 Ok(r) => {
                     d.result = Some(r);
                     d.values.insert("notFound".into(), json!(false));
+                    d.values.remove("foundFor");
                 }
                 Err(_) => {
                     // Clear the stale list so the dialog reflects this search. Find All reports in
-                    // the dialog's own results area instead of a message box.
+                    // the dialog's own results area instead of a message box, and the line quotes
+                    // the query this search actually ran, not whatever the field holds later.
                     d.result = None;
                     d.values.insert("notFound".into(), json!(true));
+                    d.values.insert("foundFor".into(), json!(what.clone()));
                 }
             }
         }
         if ui.button(lang.tr("Find Next")).clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
-            if let Err(e) = app.run("edit.find", base.clone()) {
-                app.message = Some(("Find and Replace".into(), crate::clean_error(&e)));
+            match app.run("edit.find", base.clone()) {
+                Ok(_) => {
+                    d.values.insert("notFound".into(), json!(false));
+                    d.values.remove("foundFor");
+                }
+                Err(e) => app.message = Some(("Find and Replace".into(), crate::clean_error(&e))),
             }
             app.grid.ensure_visible = true;
         }
@@ -102,12 +109,12 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     let t = crate::theme::Tokens::get(ui.ctx());
     if d.values.get("notFound").and_then(Json::as_bool) == Some(true) {
         ui.separator();
-        ui.colored_label(t.danger, format!("{} “{}”", lang.tr("Nothing found for"), d.values.get("what").and_then(Json::as_str).unwrap_or("")));
+        ui.colored_label(t.danger, lang.tr("Nothing found for “{}”").replace("{}", d.values.get("foundFor").and_then(Json::as_str).unwrap_or("")));
     } else if let Some(r) = &d.result
         && let Some(list) = r["results"].as_array()
     {
         ui.separator();
-        ui.label(format!("{} {}", list.len(), lang.tr("cell(s) found")));
+        ui.label(lang.tr("{count} cell(s) found").replace("{count}", &list.len().to_string()));
         egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
             for item in list {
                 let label = format!(
