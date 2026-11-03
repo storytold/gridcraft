@@ -647,13 +647,6 @@ impl Host for PassHost<'_> {
         {
             self.spill_visits += _seen;
         }
-            }
-            true
-        });
-        #[cfg(test)]
-        {
-            self.spill_visits += _seen;
-        }
         for (i, c) in formulas {
             let v = self.cell_value(sheet, c);
             if let Some(slot) = out.get_mut(i) {
