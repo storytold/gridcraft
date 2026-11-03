@@ -100,6 +100,9 @@ pub const NOTICE_LOCAL_FILE: &str = "Local file imports stay on this device and 
 pub const NOTICE_UNDO_REDO: &str = "Undo and Redo are disabled on the shared workbook while live sharing is active.";
 pub const NOTICE_VIEW_ONLY: &str = "View-only session — edits are disabled.";
 
+/// Maximum size in bytes accepted for an incoming shared base workbook snapshot (64 MiB).
+pub const MAX_BASE_DOCUMENT_BYTES: usize = 64 * 1024 * 1024;
+
 /// Classifies an engine command id and its parameters into a [`CommandSyncPolicy`].
 pub fn classify_command(id: &str, params: &Json) -> CommandSyncPolicy {
     if matches!(id, "edit.undo" | "edit.redo") {
@@ -121,11 +124,25 @@ pub fn classify_command(id: &str, params: &Json) -> CommandSyncPolicy {
 }
 
 fn uses_local_file_path(id: &str, params: &Json) -> bool {
-    let has_path = params.get("path").and_then(Json::as_str).is_some_and(|s| !s.is_empty());
+    let has_path = json_contains_key(params, "path");
     match id {
         "insert.picture" => has_path && params.get("base64").and_then(Json::as_str).is_none_or(str::is_empty),
         "data.fromTextCsv" | "data.getData" => has_path && params.get("text").and_then(Json::as_str).is_none_or(str::is_empty),
         "pageLayout.background" => has_path && params.get("base64").and_then(Json::as_str).is_none_or(str::is_empty),
+        _ => has_path,
+    }
+}
+
+/// Recursively checks whether a JSON value contains a non-empty object property named `target_key`.
+fn json_contains_key(value: &Json, target_key: &str) -> bool {
+    match value {
+        Json::Object(map) => {
+            if map.get(target_key).is_some_and(|v| !v.is_null() && v.as_str() != Some("")) {
+                return true;
+            }
+            map.values().any(|v| json_contains_key(v, target_key))
+        }
+        Json::Array(items) => items.iter().any(|v| json_contains_key(v, target_key)),
         _ => false,
     }
 }
@@ -240,19 +257,25 @@ pub fn enrich_params_with_result(id: &str, params: Json, result: &Json) -> Json 
 }
 
 /// Sanitizes local-only workbook state (macros, VBA projects, protection password hashes, local
-/// paths) and encodes the workbook to `.xlsx` bytes for the base document snapshot.
-pub fn encode_workbook_for_share(wb: &Workbook) -> Result<Vec<u8>, String> {
-    let mut clean = wb.clone();
-    clean.vba_project = None;
-    clean.macros = gridcraft_engine::model::Macros::default();
-    clean.macros_read.clear();
-    clean.macros_unread = Arc::default();
-    clean.structure_password = None;
-    clean.source_dir = None;
-    clean.source_path = None;
-    for sheet_arc in &mut clean.sheets {
-        if sheet_arc.protection.as_ref().is_some_and(|p| p.password.is_some()) || !sheet_arc.edit_ranges.is_empty() {
+/// paths, preserved unmodelled XML) from a [`Workbook`].
+fn sanitize_workbook_for_sync(wb: &mut Workbook) {
+    wb.vba_project = None;
+    wb.macros = gridcraft_engine::model::Macros::default();
+    wb.macros_read.clear();
+    wb.macros_unread = Arc::default();
+    wb.structure_password = None;
+    wb.source_dir = None;
+    wb.source_path = None;
+    wb.preserved = None;
+    for sheet_arc in &mut wb.sheets {
+        if sheet_arc.file_id != 0
+            || sheet_arc.preserved.is_some()
+            || sheet_arc.protection.as_ref().is_some_and(|p| p.password.is_some())
+            || !sheet_arc.edit_ranges.is_empty()
+        {
             let sheet: &mut Sheet = Arc::make_mut(sheet_arc);
+            sheet.file_id = 0;
+            sheet.preserved = None;
             if let Some(prot) = &mut sheet.protection {
                 prot.password = None;
             }
@@ -261,22 +284,23 @@ pub fn encode_workbook_for_share(wb: &Workbook) -> Result<Vec<u8>, String> {
             }
         }
     }
+}
+
+/// Sanitizes local-only workbook state (macros, VBA projects, protection password hashes, local
+/// paths) and encodes the workbook to `.xlsx` bytes for the base document snapshot.
+pub fn encode_workbook_for_share(wb: &Workbook) -> Result<Vec<u8>, String> {
+    let mut clean = wb.clone();
+    sanitize_workbook_for_sync(&mut clean);
     gridcraft_engine::io::save_bytes_as(&clean, "Shared.xlsx", gridcraft_engine::io::FileKind::Xlsx).map_err(|e| e.to_string())
 }
 
-/// Decodes a shared base document snapshot from `.xlsx` bytes into a [`Workbook`].
+/// Decodes a shared base document snapshot from `.xlsx` bytes into a sanitized [`Workbook`].
 pub fn decode_workbook_from_share(bytes: &[u8]) -> Result<Workbook, String> {
-    let (mut wb, _) = gridcraft_engine::io::open_bytes("Shared.xlsx", bytes).map_err(|e| e.to_string())?;
-    wb.source_dir = None;
-    wb.source_path = None;
-    wb.preserved = None;
-    for sheet_arc in &mut wb.sheets {
-        if sheet_arc.file_id != 0 || sheet_arc.preserved.is_some() {
-            let sh = Arc::make_mut(sheet_arc);
-            sh.file_id = 0;
-            sh.preserved = None;
-        }
+    if bytes.len() > MAX_BASE_DOCUMENT_BYTES {
+        return Err(format!("shared workbook ({} bytes) exceeds maximum allowed size ({MAX_BASE_DOCUMENT_BYTES} bytes)", bytes.len()));
     }
+    let (mut wb, _) = gridcraft_engine::io::open_bytes("Shared.xlsx", bytes).map_err(|e| e.to_string())?;
+    sanitize_workbook_for_sync(&mut wb);
     Ok(wb)
 }
 
@@ -313,6 +337,21 @@ pub struct SyncState {
 impl Default for SyncState {
     fn default() -> Self {
         Self::new("gridcraft")
+    }
+}
+
+// Capability tickets (`ssync://...`) are bearer secrets; never expose them in Debug output.
+impl std::fmt::Debug for SyncState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SyncState")
+            .field("status", &self.status())
+            .field("connected_peers", &self.connected_peers())
+            .field("shared_doc_uid", &self.shared_doc_uid)
+            .field("edit_ticket", &self.edit_ticket.as_ref().map(|_| "<redacted>"))
+            .field("view_ticket", &self.view_ticket.as_ref().map(|_| "<redacted>"))
+            .field("join_input", &if self.join_input.is_empty() { "" } else { "<redacted>" })
+            .field("last_error", &self.last_error)
+            .finish()
     }
 }
 
@@ -735,6 +774,8 @@ impl SheetApp {
     ///
     /// Strictly separated from [`SheetApp::run_engine_synced`] so remote mutations never loop back
     /// into `broadcast_mutation` and never disturb another workbook the local user is viewing.
+    /// Validates incoming commands against [`classify_command`] and rejects any payload carrying
+    /// local file paths, passwords, or non-shared command ids.
     pub fn apply_remote_mutation(&mut self, mutation: &SharedMutation) -> Result<(), String> {
         let Some(shared_uid) = self.sync.shared_doc_uid else {
             return Err("no shared document registered".into());
@@ -743,6 +784,13 @@ impl SheetApp {
             return Err("shared document is no longer open".into());
         };
         let params: Json = serde_json::from_str(&mutation.params_json).map_err(|e| format!("invalid mutation JSON: {e}"))?;
+
+        if classify_command(&mutation.id, &params) != CommandSyncPolicy::Shared {
+            return Err(format!("refused non-shared remote command `{}`", mutation.id));
+        }
+        if json_contains_key(&params, "path") || json_contains_key(&params, "password") {
+            return Err(format!("refused remote command `{}` with forbidden parameter", mutation.id));
+        }
 
         let prev_window = self.session.active_window();
         let was_on_other_doc = self.session.active_index() != shared_idx;
@@ -1278,5 +1326,47 @@ mod tests {
         host.stop_sharing();
         peer.stop_sharing();
         spin_until(vec![&mut host, &mut peer], |apps| apps[0].sync.status() == ShareStatus::Offline && apps[1].sync.status() == ShareStatus::Offline);
+    }
+
+    #[test]
+    fn hostile_remote_mutations_and_secrets_are_rejected_and_redacted() {
+        let mut app = test_app("Defender");
+        let uid = app.session.active().expect("active doc").uid;
+        app.sync.shared_doc_uid = Some(uid);
+
+        // 1. Remote file I/O, macro execution, protection changes, and path/password parameters must be rejected.
+        let hostile_payloads = [
+            ("file.saveAs", json!({"path": "/tmp/pwned.xlsx"})),
+            ("file.open", json!({"path": "/etc/passwd"})),
+            ("file.exportCsv", json!({"path": "/tmp/leak.csv"})),
+            ("automate.runScript", json!({"name": "evil"})),
+            ("macro.run", json!({"name": "evil"})),
+            ("review.protectSheet", json!({"password": "secret"})),
+            ("data.fromTextCsv", json!({"path": "/etc/hosts"})),
+            ("insert.picture", json!({"path": "/tmp/secret.png"})),
+            ("cell.set", json!({"cell": "A1", "input": "x", "path": "/etc/passwd"})),
+            ("cell.set", json!({"cell": "A1", "input": "x", "password": "secret"})),
+        ];
+
+        for (id, params) in hostile_payloads {
+            let mutation = SharedMutation {
+                sheet_name: "Sheet1".into(),
+                selection: gridcraft_engine::Selection::default(),
+                selected_object: None,
+                id: id.into(),
+                params_json: params.to_string(),
+            };
+            assert!(app.apply_remote_mutation(&mutation).is_err(), "hostile remote command `{id}` with `{params}` must be rejected");
+        }
+
+        // 2. Capability tickets must be redacted in Debug formatting so they never leak into logs.
+        app.sync.edit_ticket = Some("ssync://secret-edit-capability-token".into());
+        app.sync.view_ticket = Some("ssync://secret-view-capability-token".into());
+        app.sync.join_input = "ssync://secret-join-input-token".into();
+        let debug_str = format!("{:?}", app.sync);
+        assert!(!debug_str.contains("secret-edit-capability-token"));
+        assert!(!debug_str.contains("secret-view-capability-token"));
+        assert!(!debug_str.contains("secret-join-input-token"));
+        assert!(debug_str.contains("<redacted>"));
     }
 }
