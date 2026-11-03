@@ -240,3 +240,31 @@ fn romanian_external_text_paste_and_programmatic_calls_are_distinct() {
     );
     h.run_steps(3);
 }
+
+/// Both Python entry paths retain the numeric region when the draft becomes ordinary input.
+#[test]
+fn python_drafts_keep_their_numeric_region_after_leaving_python() {
+    for existing_python_cell in [false, true] {
+        let mut h = harness(Some("ro-RO"));
+        let app = h.state_mut();
+        app.session.execute("selection.set", json!({"range":"A4"})).unwrap();
+        if existing_python_cell {
+            app.session.execute("python.set", json!({"cell":"A4","code":"1 + 1"})).unwrap();
+            app.begin_edit(None, false);
+        } else {
+            app.begin_python_edit();
+        }
+        assert!(app.editor.as_ref().unwrap().python);
+        // Changing the displayed region cannot reinterpret a draft already in progress.
+        app.session.display_locale = Locale::EN_US;
+        app.toggle_python_mode();
+        app.editor.as_mut().unwrap().text = "1,234".into();
+        assert!(app.commit_edit(0, 0, false, false));
+        let wb = &app.session.active().unwrap().wb;
+        let cell = gridcraft_engine::core::CellRef::new(3, 0);
+        assert_eq!(wb.sheet(0).unwrap().value(cell), gridcraft_engine::core::Value::Number(1.234));
+        let bytes = gridcraft_xlsx::write_xlsx(wb).unwrap();
+        let (back, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+        assert_eq!(back.sheet(0).unwrap().value(cell), gridcraft_engine::core::Value::Number(1.234));
+    }
+}

@@ -46,6 +46,7 @@ impl SheetApp {
             let mut ed = editor::EditState::python(d.uid, d.wb.active_sheet(), at, py.code.clone()).on_sheet(&d.wb);
             ed.py_cell = true;
             ed.window = self.session.active_window();
+            ed.number_locale = self.session.display_locale.clone();
             self.editor = Some(ed);
             self.session.mode = gridcraft_engine::Mode::Edit;
             return;
@@ -320,6 +321,7 @@ impl SheetApp {
         let mut ed = editor::EditState::python(d.uid, d.wb.active_sheet(), at, code).on_sheet(&d.wb);
         ed.py_cell = py.is_some();
         ed.window = self.session.active_window();
+        ed.number_locale = self.session.display_locale.clone();
         self.editor = Some(ed);
         self.session.mode = gridcraft_engine::Mode::Edit;
     }
