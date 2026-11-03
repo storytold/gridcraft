@@ -1781,6 +1781,22 @@ Macro",
         "The sheet this dialog was opened on was deleted. Cancel, then open the dialog again on the sheet it should use.",
         "حُذفت الورقة التي فُتح عليها مربع الحوار هذا. ألغِ ثم افتح مربع الحوار من جديد على الورقة المطلوبة.",
     ),
+    // From main (0.16 follow-up)
+    ("Highlight the active cell's row", "تمييز صف الخلية النشطة"),
+    ("Display options for this workbook", "خيارات العرض لهذا المصنف"),
+    ("Show horizontal scroll bar", "إظهار شريط التمرير الأفقي"),
+    ("Show vertical scroll bar", "إظهار شريط التمرير الرأسي"),
+    ("Show sheet tabs", "إظهار علامات تبويب الأوراق"),
+    ("Edit Hyperlink", "تحرير الارتباط التشعبي"),
+    ("Edit Hyperlink…", "تحرير الارتباط التشعبي…"),
+    ("Remove Hyperlink", "إزالة الارتباط التشعبي"),
+    ("Resize formula bar", "تغيير حجم شريط الصيغة"),
+    ("The picture on the clipboard can't be read.", "تعذّرت قراءة الصورة الموجودة في الحافظة."),
+    ("The picture on the clipboard is empty.", "الصورة الموجودة في الحافظة فارغة."),
+    ("The picture on the clipboard is too large to paste.", "الصورة الموجودة في الحافظة كبيرة جدًا للصق."),
+    ("The picture on the clipboard can't be pasted: {e}", "تعذّر لصق الصورة الموجودة في الحافظة: {e}"),
+    ("Next Corner of Selection", "الزاوية التالية في التحديد"),
+    ("Drag and Drop", "السحب والإفلات"),
 ];
 
 /// The Arabic for `text`, or `None` while it has no entry.

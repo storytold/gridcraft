@@ -48,7 +48,7 @@ fn drag_cursor(drag: &Drag, rtl: bool) -> Option<CursorIcon> {
     match drag {
         Drag::None => None,
         Drag::Select => Some(CursorIcon::Cell),
-        Drag::Rows(_) | Drag::Cols(_) => Some(CursorIcon::Default),
+        Drag::Rows(_) | Drag::Cols(_) | Drag::PointRows(_) | Drag::PointCols(_) => Some(CursorIcon::Default),
         Drag::Fill { .. } => Some(CursorIcon::Crosshair),
         Drag::Move { .. } | Drag::MoveCols { .. } | Drag::Object { handle: None, .. } => Some(CursorIcon::Move),
         Drag::ResizeCol { .. } => Some(CursorIcon::ResizeColumn),
