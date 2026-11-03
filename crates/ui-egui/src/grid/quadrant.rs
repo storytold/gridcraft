@@ -1,3 +1,4 @@
+use super::active_row::paint_active_row;
 use super::cell_paint::{
     Look, MergedArea, cell_text_y, center_across_end, col32, display_text, look, merged_edges, paint_border, paint_cf_icon, painted_halign,
     rotated_text_pos, shrink_font, wrapped_cell_text_y,
@@ -102,6 +103,8 @@ pub(crate) struct QuadrantPaint<'a> {
     pub(crate) cols: (u32, u32),
     pub(crate) cf: &'a mut CfCache,
     pub(crate) tokens: &'a Tokens,
+    /// The row to tint, when "Highlight the active cell's row" is on.
+    pub(crate) active_row: Option<u32>,
 }
 
 /// Paint a worksheet quadrant, including backgrounds, borders, and text.
@@ -118,6 +121,8 @@ pub(crate) fn paint_quadrant(mut quadrant: QuadrantPaint<'_>) {
     let cells = visible_cells(&quadrant);
     let looks = paint_backgrounds(&mut quadrant, &cells, &merges);
     let outside = outside_text_cells(&mut quadrant, &merges);
+    // Over the fills and under the text and borders.
+    paint_active_row(&quadrant, None);
     paint_cells(&mut quadrant, &looks, &outside, &merges);
     paint_borders(&mut quadrant, &looks, &merges);
     paint_sparklines(&quadrant, range);
@@ -478,9 +483,11 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
             let extra_r = Rect::from_min_max(pos2(rect.right() - 1.0, inner.top()), inner.max);
             if extra_l.width() > 0.0 {
                 p.rect_filled(extra_l, 0.0, t.grid_bg);
+                paint_active_row(q, Some(extra_l));
             }
             if extra_r.width() > 0.0 {
                 p.rect_filled(extra_r, 0.0, t.grid_bg);
+                paint_active_row(q, Some(extra_r));
             }
         }
     }
