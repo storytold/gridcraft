@@ -21,6 +21,14 @@ and reference unions, and backslashes between array columns (`{1\2;3\4}`). For e
 `=SI(VERDADERO;SUMA(1,5;2,25);0)` evaluates to 3.75. English mode retains comma arguments,
 decimal points and comma array columns; it does not silently translate Spanish aliases.
 
+**Polish** (`FormulaLocale::Pl`, selected by the Polish interface language) follows Polish Excel:
+434 Polish function names (`SUMA`, `JEŻELI`, `WYSZUKAJ.PIONOWO`, `X.WYSZUKAJ`…; the other
+functions keep their English names there too, e.g. `MAX`, `COS`, `LET`), `PRAWDA`/`FAŁSZ`, the
+same separators as Spanish, Polish error values (`#DZIEL/0!`, `#N/D`, `#ARG!`, `#ROZLANIE!`…) and
+table specifiers with `;` between parts (`Tabela1[[#Nagłówki];[Kwota]]`). English names and
+error values typed in Polish mode are accepted. Cell values (`TRUE`, `#DIV/0!` in the grid) are
+still shown in English, as in Spanish.
+
 The cell editor, formula bar, Show Formulas, autocomplete, the Formula ribbon, Insert Function, and argument hints
 use the selected formula language. Common Spanish function help is translated; functions
 without a Spanish entry retain their English names/help. General interface labels and errors
