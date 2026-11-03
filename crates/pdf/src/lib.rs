@@ -3,7 +3,8 @@
 //! - The 14 standard fonts (no embedding) with WinAnsiEncoding, plus approximate width tables
 //!   ([`text_width`]) so callers can measure, align and wrap text. Characters outside
 //!   WinAnsiEncoding (CJK and other scripts) are set in a predefined, non-embedded Adobe-GB1 CID
-//!   font with the `UniGB-UTF16-H` CMap instead of being replaced by `?`.
+//!   font with the `UniGB-UTF16-H` CMap instead of being replaced by `?`. Symbol uses its own
+//!   built-in encoding ([`symbol_code`]), for Greek letters and mathematical operators.
 //! - Vector drawing: rectangles, lines (solid or dashed), polygons, circles (Bézier), clipping.
 //! - RGBA images as RGB image XObjects with a soft mask for alpha (run-length encoded). The
 //!   decoded image bytes one document keeps across all its pages are capped
@@ -16,6 +17,9 @@
 #![forbid(unsafe_code)]
 
 mod metrics;
+mod symbol;
+
+pub use symbol::{symbol_code, symbol_width};
 
 use std::fmt::Write as _;
 
@@ -50,7 +54,7 @@ impl Rect {
     }
 }
 
-/// The standard 14 fonts minus Symbol and ZapfDingbats.
+/// The standard 14 fonts minus ZapfDingbats.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Font {
     #[default]
@@ -66,7 +70,12 @@ pub enum Font {
     CourierBold,
     CourierOblique,
     CourierBoldOblique,
+    /// Greek letters and mathematical symbols, in the font's own encoding.
+    Symbol,
 }
+
+/// How many fonts a document can use.
+const FONT_COUNT: usize = 13;
 
 /// A font family for [`Font::styled`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -78,7 +87,7 @@ pub enum Family {
 }
 
 impl Font {
-    pub const ALL: [Font; 12] = [
+    pub const ALL: [Font; FONT_COUNT] = [
         Font::Helvetica,
         Font::HelveticaBold,
         Font::HelveticaOblique,
@@ -91,6 +100,7 @@ impl Font {
         Font::CourierBold,
         Font::CourierOblique,
         Font::CourierBoldOblique,
+        Font::Symbol,
     ];
 
     /// PostScript base font name.
@@ -108,6 +118,7 @@ impl Font {
             Font::CourierBold => "Courier-Bold",
             Font::CourierOblique => "Courier-Oblique",
             Font::CourierBoldOblique => "Courier-BoldOblique",
+            Font::Symbol => "Symbol",
         }
     }
 
@@ -148,8 +159,20 @@ impl Font {
         }
     }
 
+    /// Whether this font can show `c` by itself (in its own encoding; for the text faces,
+    /// without the CID fallback).
+    pub fn can_encode(self, c: char) -> bool {
+        match self {
+            Font::Symbol => symbol_code(c).is_some(),
+            _ => c == '?' || win_ansi(c) != b'?',
+        }
+    }
+
     /// Advance width of a character in 1/1000 em.
     pub fn char_width(self, c: char) -> u16 {
+        if self == Font::Symbol {
+            return symbol_code(c).and_then(symbol_width).unwrap_or(500);
+        }
         let table: Option<&[u16; 95]> = match self {
             Font::Helvetica | Font::HelveticaOblique => Some(&metrics::HELVETICA),
             Font::HelveticaBold | Font::HelveticaBoldOblique => Some(&metrics::HELVETICA_BOLD),
@@ -251,10 +274,16 @@ fn pdf_utf16_string(text: &str) -> String {
 
 /// A PDF literal string `( … )` for `text` in WinAnsiEncoding.
 fn pdf_string(text: &str) -> String {
+    pdf_string_in(text, false)
+}
+
+/// A PDF literal string for `text` in WinAnsiEncoding, or in Symbol's encoding (where a
+/// character Symbol lacks becomes `?`).
+fn pdf_string_in(text: &str, symbol: bool) -> String {
     let mut s = String::with_capacity(text.len() + 2);
     s.push('(');
     for c in text.chars() {
-        let b = win_ansi(c);
+        let b = if symbol { symbol_code(c).unwrap_or(b'?') } else { win_ansi(c) };
         match b {
             b'(' | b')' | b'\\' => {
                 s.push('\\');
@@ -354,6 +383,8 @@ pub struct Page {
     /// Image bytes this page may still keep before the document's image budget is spent. Set by
     /// [`PdfDoc::add_page`] and [`PdfDoc::page_mut`], which hand out one page at a time.
     image_room: u64,
+    /// Bytes of image data this page keeps, counted as images are added.
+    image_kept: u64,
     links: Vec<LinkAnnotation>,
     depth: u32,
 }
@@ -392,7 +423,9 @@ impl Page {
         self.image_room
     }
 
-    /// Bytes of image data kept by this page.
+    /// Bytes of image data kept by this page, summed from its images (tests check the running
+    /// [`Page::image_kept`] count against it).
+    #[cfg(test)]
     fn image_bytes(&self) -> u64 {
         self.images.iter().fold(0u64, |acc, i| acc.saturating_add(i.rgb.len() as u64).saturating_add(i.alpha.as_ref().map_or(0, |a| a.len() as u64)))
     }
@@ -609,6 +642,16 @@ impl Page {
         let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
         // Clockwise in y-down = counter-clockwise negated in PDF's y-up space.
         let mut s = format!("BT\n{}\n{} {} {} {} {} {} Tm\n", rgb_op(color, false), n(cs), n(-sn), n(sn), n(cs), n(origin.x), n(self.y(origin.y)));
+        // Symbol text is one run in Symbol's own encoding (the CID font has no maths symbols).
+        if font == Font::Symbol {
+            if let Some(f) = self.fonts.get_mut(fi) {
+                *f = true;
+            }
+            let _ = writeln!(s, "/F{} {} Tf\n{} Tj", fi + 1, size, pdf_string_in(text, true));
+            s.push_str("ET");
+            self.op(&s);
+            return;
+        }
         // Runs of WinAnsi text use `font`; runs it cannot encode use the CID font. Each `Tj`
         // advances the text position, so the runs follow each other on the baseline.
         let mut rest = text;
@@ -652,6 +695,7 @@ impl Page {
         let alpha = if alpha.iter().all(|a| *a == 255) { None } else { Some(alpha) };
         let kept = (rgb.len() as u64).saturating_add(alpha.as_ref().map_or(0, |a| a.len() as u64));
         self.image_room = self.image_room.saturating_sub(kept);
+        self.image_kept = self.image_kept.saturating_add(kept);
         let idx = self.images.len();
         self.images.push(ImageData { width: pw, height: ph, rgb, alpha });
         let s = format!("q {} 0 0 {} {} {} cm /Im{} Do Q", n(w), n(h), n(x), n(self.y(y + h)), idx + 1);
@@ -674,6 +718,12 @@ pub struct PdfDoc {
     pub info: Info,
     /// Image budget lowered by [`PdfDoc::set_image_budget`]; `None` = [`MAX_DOC_IMAGE_BYTES`].
     image_budget: Option<u64>,
+    /// Image bytes kept by every page except [`PdfDoc::open_page`], kept up to date as pages are
+    /// handed out so the remaining room is found without scanning every page.
+    image_used: u64,
+    /// The page last handed out by [`PdfDoc::add_page`] or [`PdfDoc::page_mut`], whose images
+    /// may have grown since; its bytes are folded into `image_used` when another page is handed out.
+    open_page: Option<usize>,
 }
 
 /// PackBits-style run-length encoding (PDF `RunLengthDecode`).
@@ -741,7 +791,9 @@ impl PdfDoc {
     pub fn add_page(&mut self, width_pt: f32, height_pt: f32) -> &mut Page {
         let width = if width_pt.is_finite() { width_pt.clamp(3.0, 14_400.0) } else { 612.0 };
         let height = if height_pt.is_finite() { height_pt.clamp(3.0, 14_400.0) } else { 792.0 };
-        let image_room = self.image_room();
+        self.close_open_page();
+        let image_room = self.image_room(0);
+        self.open_page = Some(self.pages.len());
         self.pages.push(Page {
             width,
             height,
@@ -749,6 +801,7 @@ impl PdfDoc {
             fonts: [false; FONT_SLOTS],
             images: Vec::new(),
             image_room,
+            image_kept: 0,
             links: Vec::new(),
             depth: 0,
         });
@@ -762,10 +815,17 @@ impl PdfDoc {
         self.image_budget = Some(bytes.min(MAX_DOC_IMAGE_BYTES));
     }
 
-    /// Image bytes the document may still keep: its budget minus what every page holds.
-    fn image_room(&self) -> u64 {
-        let used = self.pages.iter().fold(0u64, |acc, p| acc.saturating_add(p.image_bytes()));
-        self.image_budget.unwrap_or(MAX_DOC_IMAGE_BYTES).saturating_sub(used)
+    /// Image bytes the document may still keep: its budget minus what every closed page holds
+    /// and the `open_kept` bytes of the page being handed out.
+    fn image_room(&self, open_kept: u64) -> u64 {
+        self.image_budget.unwrap_or(MAX_DOC_IMAGE_BYTES).saturating_sub(self.image_used.saturating_add(open_kept))
+    }
+
+    /// Folds the images the open page added since it was handed out into the document's count.
+    fn close_open_page(&mut self) {
+        if let Some(kept) = self.open_page.take().and_then(|i| self.pages.get(i)).map(|p| p.image_kept) {
+            self.image_used = self.image_used.saturating_add(kept);
+        }
     }
 
     pub fn page_count(&self) -> usize {
@@ -774,7 +834,15 @@ impl PdfDoc {
 
     /// The page at `i`, to keep drawing on it.
     pub fn page_mut(&mut self, i: usize) -> Option<&mut Page> {
-        let room = self.image_room();
+        if i >= self.pages.len() {
+            return None;
+        }
+        self.close_open_page();
+        let kept = self.pages.get(i)?.image_kept;
+        // Page `i` is open again: its bytes leave the closed count until the next hand-out.
+        self.image_used = self.image_used.saturating_sub(kept);
+        let room = self.image_room(kept);
+        self.open_page = Some(i);
         let page = self.pages.get_mut(i)?;
         page.image_room = room;
         Some(page)

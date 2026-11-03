@@ -115,6 +115,7 @@ pub(super) fn replace(s: &mut Session, p: &Json) -> Result<Json> {
     let all = bool_param(p, "all").unwrap_or(true);
     let workbook = str_param(p, "within") == Some("workbook");
     let active = s.doc()?.selection.active;
+    let mut skipped = 0usize;
     let n = edit(s, |cx| {
         let sheets: Vec<usize> = if workbook { (0..cx.wb.sheets.len()).collect() } else { vec![cx.wb.active_sheet()] };
         let mut n = 0;
@@ -135,6 +136,30 @@ pub(super) fn replace(s: &mut Session, p: &Json) -> Result<Json> {
                 } else {
                     replace_ci(&text, &what, &with)
                 };
+                // A Python cell's text is its code: the replacement edits the code and the cell
+                // stays a Python cell. Code that would no longer fit in a PY formula is left as it was.
+                let old_py = cx.wb.sheet(si).and_then(|sh| sh.cell(c)).and_then(|x| x.py.clone());
+                if let Some(old) = old_py {
+                    let py = gridcraft_model::PyCode { object: old.object, ..gridcraft_model::PyCode::new(&new) };
+                    if py.code == old.code {
+                        continue;
+                    }
+                    if !py.fits() {
+                        skipped += 1;
+                        continue;
+                    }
+                    // Its old spill is left to the recalculation, which removes it and
+                    // recalculates what read it.
+                    let sh = cx.sheet_mut(si)?;
+                    let style = sh.style_id(c);
+                    sh.set_cell(
+                        c,
+                        Cell { value: Value::Error(gridcraft_core::CellError::Blocked), formula: None, style, py: Some(std::sync::Arc::new(py)) },
+                    );
+                    cx.touch(si, c);
+                    n += 1;
+                    continue;
+                }
                 let cell = input_to_cell(&new, si, c, &mut cx.wb).unwrap_or_else(|_| Some(Cell::value(Value::text(new.as_str()))));
                 let sh = cx.sheet_mut(si)?;
                 match cell {
@@ -149,6 +174,9 @@ pub(super) fn replace(s: &mut Session, p: &Json) -> Result<Json> {
         }
         Ok(n)
     })?;
+    if skipped > 0 {
+        return Ok(json!({"replaced": n, "skipped": skipped}));
+    }
     Ok(json!({"replaced": n}))
 }
 

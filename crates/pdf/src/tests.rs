@@ -333,6 +333,8 @@ fn cjk_text_is_not_replaced_by_question_marks() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// A picture drawn on every page keeps only as many copies as the document-wide image budget
+/// holds, and the running byte counts stay in step as pages are added and reopened.
 #[test]
 fn image_bytes_are_bounded_across_pages() -> Result<(), Box<dyn Error>> {
     // Each page keeps its own copy of a picture it draws, so a picture repeated on every page of
@@ -361,8 +363,32 @@ fn image_bytes_are_bounded_across_pages() -> Result<(), Box<dyn Error>> {
     p.image_rgba(Rect::new(0.0, 0.0, 50.0, 50.0), &px, [32, 32]);
     p.image_rgba(Rect::new(0.0, 0.0, 10.0, 10.0), &[255; 4 * 4 * 4], [4, 4]);
     assert_eq!(d.pages[0].images.len(), 2, "the big copy is refused, the small one still fits");
+    // The running per-page counts match the images each page holds, and a page handed out next
+    // sees what the reopened page added.
+    assert!(d.pages.iter().all(|p| p.image_kept == p.image_bytes()));
+    assert_eq!(d.add_page(100.0, 100.0).image_room(), 10_000 - 2 * 3072 - 4 * 4 * 3);
+    assert!(d.page_mut(10_000).is_none());
+    assert_eq!(d.page_mut(1).map(|p| p.image_room()), Some(10_000 - 2 * 3072 - 4 * 4 * 3));
     let pdf = d.finish();
     check_xref(&pdf)?;
     assert_eq!(String::from_utf8_lossy(&pdf).matches("/Subtype /Image").count(), 3);
     Ok(())
+}
+
+#[test]
+fn symbol_font_draws_maths_in_its_own_encoding() {
+    let mut doc = PdfDoc::new();
+    let p = doc.add_page(200.0, 200.0);
+    p.text(10.0, 50.0, 12.0, Font::Symbol, [0, 0, 0], "\u{2211}\u{03B1}\u{2264}\u{221E}x");
+    p.text(10.0, 80.0, 12.0, Font::TimesItalic, [0, 0, 0], "x");
+    let pdf = doc.finish();
+    let s = String::from_utf8_lossy(&pdf);
+    assert!(s.contains("/BaseFont /Symbol >>"), "Symbol has no WinAnsi encoding");
+    assert!(s.contains("/BaseFont /Times-Italic /Encoding /WinAnsiEncoding"));
+    // The sum, alpha, less-or-equal and infinity codes; x is not in Symbol and becomes `?`.
+    assert!(s.contains("(\\345a\\243\\245?) Tj"), "{s}");
+    check_xref(&pdf).unwrap();
+    assert!(Font::Symbol.can_encode('\u{2211}') && !Font::Symbol.can_encode('x'));
+    assert!(Font::TimesRoman.can_encode('x') && !Font::TimesRoman.can_encode('\u{2211}'));
+    assert_eq!(text_width(Font::Symbol, 10.0, "\u{2211}"), 7.13);
 }
