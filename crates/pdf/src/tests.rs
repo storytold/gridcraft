@@ -834,3 +834,21 @@ fn faces_that_forbid_subsetting_or_fail_to_subset_are_embedded_whole() {
     assert_eq!(face.embedded_glyph_id(2), 2);
     assert!(objects.iter().any(|(_, body)| body.ends_with(&[[7u8; 64].as_slice(), b"\nendstream"].concat())));
 }
+
+#[test]
+fn symbol_font_draws_maths_in_its_own_encoding() {
+    let mut doc = PdfDoc::new();
+    let p = doc.add_page(200.0, 200.0);
+    p.text(10.0, 50.0, 12.0, Font::Symbol, [0, 0, 0], "\u{2211}\u{03B1}\u{2264}\u{221E}x");
+    p.text(10.0, 80.0, 12.0, Font::TimesItalic, [0, 0, 0], "x");
+    let pdf = doc.finish();
+    let s = String::from_utf8_lossy(&pdf);
+    assert!(s.contains("/BaseFont /Symbol >>"), "Symbol has no WinAnsi encoding");
+    assert!(s.contains("/BaseFont /Times-Italic /Encoding /WinAnsiEncoding"));
+    // The sum, alpha, less-or-equal and infinity codes; x is not in Symbol and becomes `?`.
+    assert!(s.contains("(\\345a\\243\\245?) Tj"), "{s}");
+    check_xref(&pdf).unwrap();
+    assert!(Font::Symbol.can_encode('\u{2211}') && !Font::Symbol.can_encode('x'));
+    assert!(Font::TimesRoman.can_encode('x') && !Font::TimesRoman.can_encode('\u{2211}'));
+    assert_eq!(text_width(Font::Symbol, 10.0, "\u{2211}"), 7.13);
+}

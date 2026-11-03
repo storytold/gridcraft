@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use gridcraft_core::{DateSystem, RangeRef};
-use gridcraft_model::{CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook};
+use gridcraft_model::{
+    CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook, WorkbookView,
+};
 
 use crate::package::{Package, Rel};
 use crate::styles::{StylesIn, read_styles};
@@ -32,6 +34,11 @@ pub struct Ctx<'a> {
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
+    /// Whether GridCraft calculates a function, when the caller says: cell formulas wrapped by
+    /// Google Sheets' export are then read as the formula inside (see [`crate::read_xlsx_with`]).
+    pub known_function: Option<&'a dyn Fn(&str) -> bool>,
+    /// The code of the workbook's Python cells, from its Python part.
+    pub python: crate::python_part::ScriptsIn,
 }
 
 impl Ctx<'_> {
@@ -221,7 +228,14 @@ fn read_workbook_properties(cx: &mut Ctx<'_>, wb: &mut Workbook, xml: &El) {
     }
 }
 
-pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
+/// The single window modelled by GridCraft: prefer the first visible window,
+/// including the format's default visibility, and otherwise retain the first one.
+fn selected_workbook_view(workbook: &El) -> Option<&El> {
+    let views = workbook.child("bookViews")?;
+    views.kids("workbookView").find(|view| view.attr("visibility").unwrap_or("visible") == "visible").or_else(|| views.child("workbookView"))
+}
+
+pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) -> bool>) -> Result<(Workbook, ReadReport), IoError> {
     let pkg = Package::open(bytes)?;
     let mut cx = Ctx {
         pkg,
@@ -238,6 +252,8 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         num_fmts: Default::default(),
         cell_pictures: vec![],
         cf_ext_ids: vec![],
+        known_function,
+        python: Default::default(),
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
@@ -251,6 +267,8 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             vec![]
         }
     };
+    // The code of Python cells, which their formulas name by index.
+    cx.python = crate::python_part::read(&mut cx, &wb_rels)?;
     let mut wb = Workbook::new();
     wb.sheets.clear();
 
@@ -268,7 +286,19 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     }
 
     read_workbook_properties(&mut cx, &mut wb, &wb_xml);
-    let active_tab = wb_xml.path(&["bookViews", "workbookView"]).and_then(|v| v.attr_u32("activeTab")).unwrap_or(0) as usize;
+    let view_el = selected_workbook_view(&wb_xml);
+    let active_tab = view_el.and_then(|v| v.attr_u32("activeTab")).unwrap_or(0) as usize;
+    if let Some(v) = view_el {
+        // The window's display settings (Excel's "Display options for this workbook").
+        // Absent attributes take the format's defaults, which is also what a workbook
+        // without a <workbookView> gets.
+        wb.view = WorkbookView {
+            show_sheet_tabs: v.flag("showSheetTabs", true),
+            show_horizontal_scroll: v.flag("showHorizontalScroll", true),
+            show_vertical_scroll: v.flag("showVerticalScroll", true),
+            tab_ratio: v.attr_u32("tabRatio").unwrap_or(600).min(WorkbookView::MAX_TAB_RATIO),
+        };
+    }
 
     // Sheets. `file_to_model[i]` maps the i-th <sheet> to a model sheet index.
     let mut file_to_model: Vec<Option<usize>> = vec![];
@@ -415,6 +445,9 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         }
     }
     wb.preserved = kept.workbook(&mut cx, &wb_part, &wb_xml, &file_to_model);
+    if let Some(w) = cx.python.warning() {
+        cx.warn(w);
+    }
     // Calls of LAMBDA names are spelled like the names (the parser upper-cases them).
     wb.apply_name_call_case();
     wb.styles = cx.styles;

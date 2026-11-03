@@ -92,7 +92,7 @@ fn slide_together(wb: &gridcraft_model::Workbook, sheet: usize, areas: &[RangeRe
         for c in cells {
             let Some(to) = c.offset(dr, dc) else { continue };
             let style = src.cell(c).map(|x| x.style).unwrap_or_default();
-            dst.set_cell(to, Cell { value: src.value(c), formula: None, style });
+            dst.set_cell(to, Cell { value: src.value(c), formula: None, style, py: None });
             if let Some(picture) = src.cell_pictures.get(&c) {
                 dst.cell_pictures.insert(to, picture.clone());
             }
