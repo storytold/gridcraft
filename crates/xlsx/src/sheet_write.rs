@@ -5,8 +5,8 @@ use std::fmt::Write as _;
 
 use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::{
-    Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, LineInfo, NoteBox, NoteCorner, Orientation, Sheet,
-    SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
+    Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, LineInfo, NoteBox, NoteCorner, Orientation, PageOrder,
+    Sheet, SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
 };
 
 use crate::drawing::{Obj, image_content_type, image_ext};
@@ -78,7 +78,9 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     let dynamic: BTreeMap<CellRef, RangeRef> = sheet
         .spill_ranges
         .iter()
-        .filter(|(a, r)| !r.is_single() && sheet.cells.get(**a).is_some_and(|c| c.formula.as_ref().is_some_and(|f| f.array.is_none())))
+        .filter(|(a, r)| {
+            !r.is_single() && sheet.cells.get(**a).is_some_and(|c| c.py.is_some() || c.formula.as_ref().is_some_and(|f| f.array.is_none()))
+        })
         .map(|(a, r)| (*a, *r))
         .collect();
     let mut extra: BTreeMap<CellRef, Value> = BTreeMap::new();
@@ -382,6 +384,10 @@ fn write_sheet_printing<'a>(s: &mut String, sheet: &'a Sheet, rels: &mut Rels, o
     }
     if let Some((w, h)) = p.fit_to {
         let _ = write!(s, " fitToWidth=\"{w}\" fitToHeight=\"{h}\"");
+    }
+    // Only "over, then down" is written, as Excel does: `downThenOver` is the schema default.
+    if p.page_order != PageOrder::DownThenOver {
+        let _ = write!(s, " pageOrder=\"{}\"", p.page_order.id());
     }
     let _ = write!(s, " orientation=\"{}\"", if p.orientation == Orientation::Landscape { "landscape" } else { "portrait" });
     if let Some(id) = kept.page_setup_id() {
@@ -717,6 +723,17 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
         return;
     }
     let formula = if ov.is_some() { None } else { cell.and_then(|x| x.formula.as_ref()) };
+    // A Python cell is saved as [MS-XLSX] 2.3.10 specifies, `_xlfn._xlws.PY(index,0|1)` with its
+    // code as script `index` of the Python part, and with its cached value; an application without
+    // Python shows the value (and #NAME? if it recalculates).
+    let py_text = if ov.is_some() || formula.is_some() {
+        None
+    } else {
+        cell.and_then(|x| x.py.as_ref()).map(|p| {
+            out.python_scripts.push(p.code.clone());
+            crate::python_part::file_formula(out.python_scripts.len().saturating_sub(1), p.object)
+        })
+    };
     let value: Value = match (ov, extra) {
         (Some(t), _) => Value::text(t.as_str()),
         (None, Some(v)) => v.clone(),
@@ -729,8 +746,10 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
     let value = match value {
         Value::Error(CellError::Circ) => Value::Number(0.0),
         // #SPILL! and #CALC! are not error codes of the file format (Excel refuses a file that
-        // caches them); Excel itself caches them as #VALUE!.
-        Value::Error(CellError::Spill | CellError::Calc) => Value::Error(CellError::Value),
+        // caches them); Excel itself caches them as #VALUE!. The Python errors are the same kind.
+        Value::Error(CellError::Spill | CellError::Calc | CellError::Python | CellError::Busy | CellError::Timeout | CellError::Blocked) => {
+            Value::Error(CellError::Value)
+        }
         v => v,
     };
     // A formula read with dynamic-array metadata keeps it, even where the shape analysis would
@@ -738,11 +757,12 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
     let own = formula.filter(|f| f.dynamic && f.array.is_none()).map(|_| RangeRef::cell(c));
     let dynamic = dynamic.or(own.as_ref());
     // A non-spilling formula may still need array evaluation to avoid implicit intersection.
-    if dynamic.is_some() && formula.is_some_and(|f| f.array.is_none()) {
+    if dynamic.is_some() && (formula.is_some_and(|f| f.array.is_none()) || py_text.is_some()) {
         s.push_str(" cm=\"1\"");
         out.dynamic_arrays = true;
     }
-    if let Some(f) = formula {
+    let text = formula.map(|f| esc(&crate::fmla::to_file(f))).or_else(|| py_text.map(|t| esc(&t)));
+    if let Some(text) = text {
         let t = match &value {
             Value::Text(_) => " t=\"str\"",
             Value::Bool(_) => " t=\"b\"",
@@ -751,8 +771,7 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
         };
         s.push_str(t);
         s.push('>');
-        let text = esc(&crate::fmla::to_file(f));
-        match (f.array, dynamic) {
+        match (formula.and_then(|f| f.array), dynamic) {
             (Some(r), _) => {
                 let _ = write!(s, "<f t=\"array\" ref=\"{}\">{text}</f>", r.a1());
             }
