@@ -125,6 +125,8 @@ pub(super) fn recommended_charts(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut 
 /// Draws chart range, series keep/remove and category-range controls and runs `chart.selectData` when something changed.
 pub(super) fn select_data(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     let text = |d: &Dialog, k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
+    // The dialog belongs to the chart's sheet, shown when it opens.
+    super::ref_edit::remember_home(app, d);
     // Reference boxes, as in Excel: a range selected on the grid fills the box (#2940).
     let edit = |app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &str, label: &str| {
         let label = ui.label(label);

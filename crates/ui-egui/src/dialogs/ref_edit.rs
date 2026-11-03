@@ -227,6 +227,18 @@ pub(super) fn window_shown(ctx: &egui::Context, d: &mut Dialog, collapsed: bool,
     }
 }
 
+/// Takes the sheet shown now as the dialog's own, for a dialog that belongs to that sheet from
+/// the moment it opens (Select Data Source, for its chart): showing another sheet before the
+/// first pick then doesn't make that one the dialog's. The selection to put back is still taken
+/// by the first pick on this sheet ([`begin_pick`]).
+pub(super) fn remember_home(app: &SheetApp, d: &mut Dialog) {
+    if d.refs.home.is_none()
+        && let Some(sheet) = app.session.active().and_then(|doc| doc.wb.active())
+    {
+        d.refs.home = Some(Home { uid: sheet.uid, selection: None });
+    }
+}
+
 /// Makes the reference box `key` the one grid selections fill. The first pick remembers the
 /// sheet and selection, which are put back when the dialog runs its command or closes.
 pub(super) fn begin_pick(app: &SheetApp, d: &mut Dialog, key: &str) {

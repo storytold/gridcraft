@@ -1663,3 +1663,35 @@ fn select_data_source_takes_its_ranges_from_the_grid() {
     let source = h.state().session.active().unwrap().wb.active().unwrap().charts.first().unwrap().source.clone();
     assert_eq!(source.as_deref().map(|s| s.trim_start_matches('=').replace("Sheet1!", "").replace('$', "")), Some("A1:B3".to_string()));
 }
+
+#[test]
+fn select_data_source_keeps_the_charts_sheet_when_another_sheet_is_shown_first() {
+    // Showing another sheet before the first click in a reference box made that sheet the
+    // dialog's own: OK went back to it and found no chart there.
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = json!([["Fruit", "Sold"], ["Kiwi", 4], ["Plum", 7], ["Fig", 2]]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    let chart = s.execute("insert.chart", json!({"range": "A1:B4", "type": "column"})).unwrap()["chart"].as_u64().unwrap();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("selectData", json!({"chart": chart}));
+    h.run_steps(4);
+    h.state_mut().run("sheet.activate", json!({"sheet": "Two"})).unwrap();
+    h.run_steps(4);
+    let window = h.get_by_role_and_label(egui::accesskit::Role::Window, "Select Data Source").rect();
+    let boxes: Vec<egui::Rect> =
+        h.get_all_by_role(egui::accesskit::Role::TextInput).map(|n| n.rect()).filter(|r| window.contains(r.center())).collect();
+    click_at(&mut h, boxes[0].center());
+    drag(&mut h, "A1", "B3");
+    assert_eq!(field(&h, "range"), "Two!$A$1:$B$3", "picked on another sheet than the chart's");
+    h.get_by_label("   OK   ").click();
+    h.run_steps(4);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    let wb = &h.state().session.active().unwrap().wb;
+    assert_eq!(wb.active().unwrap().name, "Sheet1", "the chart's sheet is shown again");
+    let source = wb.sheet(0).unwrap().charts.first().unwrap().source.clone();
+    assert_eq!(source.as_deref().map(|s| s.trim_start_matches('=').replace('$', "")), Some("Two!A1:B3".to_string()));
+}
