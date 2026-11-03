@@ -94,6 +94,9 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("gridcraft-cli: {e}");
+            if e.starts_with("unknown option ") {
+                eprintln!("{USAGE}");
+            }
             ExitCode::FAILURE
         }
     }

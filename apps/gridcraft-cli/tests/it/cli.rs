@@ -93,6 +93,19 @@ fn run_then_cat_and_info_on_sample() {
 }
 
 #[test]
+fn a_file_named_dash_h_opens_through_a_relative_path() {
+    let dir = tmpdir("dash-h-file");
+    let created = bin().args(["run", "--sample", "sales", "--out", "source.xlsx"]).current_dir(&dir).output().expect("create sample workbook");
+    assert!(created.status.success(), "{}", String::from_utf8_lossy(&created.stderr));
+    std::fs::rename(dir.join("source.xlsx"), dir.join("-h")).unwrap();
+
+    let opened = bin().args(["info", "./-h"]).current_dir(&dir).output().expect("open file named -h");
+    assert!(opened.status.success(), "{}", String::from_utf8_lossy(&opened.stderr));
+    assert!(String::from_utf8_lossy(&opened.stdout).contains("Sheet1"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn convert_xlsx_csv_roundtrip() {
     let dir = tmpdir("convert");
     let xlsx = dir.join("in.xlsx");
