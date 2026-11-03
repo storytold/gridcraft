@@ -28,11 +28,19 @@ pub(super) fn group(s: &mut Session, p: &Json, on: bool) -> Result<Json> {
         return Err(bad(if on { "data.group" } else { "data.ungroup" }, "missing `rows` or `cols`: the selection is on the active sheet"));
     }
     let (rows, a, b) = outline_lines(s, p)?;
+    let b = b.min(a.saturating_add(1_048_575));
+    // Ungroup with nothing grouped there changes nothing, so it adds no undo step.
+    if !on {
+        let sh = s.doc()?.wb.sheet(si).ok_or(EngineError::NoDocument)?;
+        let map = if rows { &sh.rows } else { &sh.cols };
+        if !map.range(a..=b).any(|(_, e)| e.outline > 0) {
+            return Ok(Json::Null);
+        }
+    }
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
         let before = outline::summary_before(sh, rows);
         let map = if rows { &mut sh.rows } else { &mut sh.cols };
-        let b = b.min(a.saturating_add(1_048_575));
         for i in a..=b {
             let e = map.entry(i).or_default();
             e.outline = if on { (e.outline + 1).min(outline::MAX_LEVEL) } else { e.outline.saturating_sub(1) };
@@ -40,13 +48,18 @@ pub(super) fn group(s: &mut Session, p: &Json, on: bool) -> Result<Json> {
                 e.hidden = false;
             }
         }
-        // A summary line whose group is gone has nothing left to collapse.
-        let summary = if before { a.checked_sub(1) } else { b.checked_add(1) };
-        if !on
-            && !outline::groups_with(map, before).iter().any(|g| if before { g.start == a } else { g.end == b })
-            && let Some(e) = summary.and_then(|i| map.get_mut(&i))
-        {
-            e.collapsed = false;
+        // A line that is no longer the summary of a group has nothing left to collapse: the
+        // summary next to the lines, and the lines themselves (a selection that ends on the
+        // summary row, as 4:9 around a group of 5:8).
+        if !on {
+            let summaries: std::collections::HashSet<u32> =
+                outline::groups_with(map, before).iter().filter(|g| g.has_summary()).map(|g| g.summary()).collect();
+            let (from, to) = (a.saturating_sub(1), b.saturating_add(1));
+            for (i, e) in map.range_mut(from..=to) {
+                if e.collapsed && !summaries.contains(i) {
+                    e.collapsed = false;
+                }
+            }
         }
         cx.structural = true; // ungrouping reveals hidden rows: SUBTOTAL(10x) depends on it
         Ok(Json::Null)
@@ -59,22 +72,28 @@ pub(super) fn group(s: &mut Session, p: &Json, on: bool) -> Result<Json> {
 pub(super) fn detail(s: &mut Session, p: &Json, hide: bool) -> Result<Json> {
     let (rows, a, b) = outline_lines(s, p)?;
     let want = p.get("level").and_then(Json::as_u64).map(|l| l.min(outline::MAX_LEVEL as u64) as u8);
+    let d = s.doc()?;
+    let si = d.wb.active_sheet();
+    let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
+    let before = outline::summary_before(sh, rows);
+    let all = outline::groups_with(if rows { &sh.rows } else { &sh.cols }, before);
+    let level_ok = |g: &outline::OutlineGroup| want.is_none_or(|l| g.level == l);
+    let pick = |hit: &dyn Fn(&outline::OutlineGroup) -> bool| -> Vec<outline::OutlineGroup> {
+        let hits: Vec<_> = all.iter().filter(|g| level_ok(g) && hit(g)).copied().collect();
+        let deepest = hits.iter().map(|g| g.level).max().unwrap_or(0);
+        hits.into_iter().filter(|g| g.level == deepest).collect()
+    };
+    let mut chosen = pick(&|g| g.start <= b && g.end >= a);
+    if chosen.is_empty() {
+        chosen = pick(&|g| g.has_summary() && g.summary() >= a && g.summary() <= b);
+    }
+    // No group at the selection: nothing to show or hide, and no undo step.
+    if chosen.is_empty() {
+        return Ok(Json::Null);
+    }
     edit(s, |cx| {
-        let si = cx.sheet_index();
         let sh = cx.sheet_mut(si)?;
-        let before = outline::summary_before(sh, rows);
         let map = if rows { &mut sh.rows } else { &mut sh.cols };
-        let all = outline::groups_with(map, before);
-        let level_ok = |g: &outline::OutlineGroup| want.is_none_or(|l| g.level == l);
-        let pick = |hit: &dyn Fn(&outline::OutlineGroup) -> bool| -> Vec<outline::OutlineGroup> {
-            let hits: Vec<_> = all.iter().filter(|g| level_ok(g) && hit(g)).copied().collect();
-            let deepest = hits.iter().map(|g| g.level).max().unwrap_or(0);
-            hits.into_iter().filter(|g| g.level == deepest).collect()
-        };
-        let mut chosen = pick(&|g| g.start <= b && g.end >= a);
-        if chosen.is_empty() {
-            chosen = pick(&|g| g.has_summary() && g.summary() >= a && g.summary() <= b);
-        }
         for g in chosen {
             // Inner groups collapsed on their own (their summary marked), before this one changes.
             let inner: Vec<outline::OutlineGroup> = all
