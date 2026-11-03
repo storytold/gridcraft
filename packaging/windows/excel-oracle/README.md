@@ -2,15 +2,17 @@
 
 Runs the function calls a pull request asserts through real Excel (COM) and writes what the PR expects next to what
 Excel returns. Windows with Excel only (Windows PowerShell 5.1 is enough). See `oracle.ps1` for the recognised
-assertions and the options.
+assertions and the options. Run it manually only on a maintainer-controlled Windows machine with licensed Excel;
+never run it in a hosted workflow on a fork pull request.
 
 ```powershell
 gh pr diff 2463 --repo storytold/gridcraft > pr.diff
 .\oracle.ps1 -Diff pr.diff -Out C:\oracle-out
 .\oracle.ps1 -CaseFile C:\oracle-out\cases.tsv -Out C:\oracle-out2   # rerun the same cases
+.\oracle.ps1 -SelfTest                                      # parser tests; no Excel required
 ```
 
-From WSL: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <path>\oracle.ps1 ...` (Excel cannot save to a
+From WSL: `powershell.exe -NoProfile -File <path>\oracle.ps1 ...` (Excel cannot save to a
 `\\wsl.localhost` path, so the script saves locally and copies).
 
 Output in `-Out`:

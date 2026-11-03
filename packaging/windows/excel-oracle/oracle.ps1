@@ -36,10 +36,11 @@ param(
     [string]$Diff,
     [string]$CaseFile,
     [string]$Out = (Join-Path ([IO.Path]::GetTempPath()) 'gridcraft-excel-oracle'),
-    [int]$TimeoutSec = 60
+    [int]$TimeoutSec = 60,
+    [switch]$SelfTest
 )
 $ErrorActionPreference = 'Stop'
-if (-not $Diff -and -not $CaseFile) { throw 'give -Diff <pr.diff> or -CaseFile <cases.tsv>' }
+if (-not $Diff -and -not $CaseFile -and -not $SelfTest) { throw 'give -Diff <pr.diff>, -CaseFile <cases.tsv>, or -SelfTest' }
 $inv = [Globalization.CultureInfo]::InvariantCulture
 $errText = @{ Null = '#NULL!'; Div0 = '#DIV/0!'; Value = '#VALUE!'; Ref = '#REF!'; Name = '#NAME?'; Num = '#NUM!'; NA = '#N/A'; Spill = '#SPILL!'; Calc = '#CALC!' }
 
@@ -89,9 +90,12 @@ function ConvertFrom-RustString([string]$lit) {
 
 # Worksheet functions that reach outside the workbook (network, code, files); a PR diff or cases file is untrusted
 # input and DisplayAlerts / AutomationSecurity do not stop worksheet functions, so these are never evaluated.
-$denied = '\b(WEBSERVICE|FILTERXML|CALL|REGISTER(\.ID)?|RTD|SQL\.REQUEST|HYPERLINK|EXEC|IMAGE|STOCKHISTORY|CUBE\w+)\s*\('
+$denied = '\b(WEBSERVICE|FILTERXML|CALL|REGISTER(\.ID)?|RTD|SQL\.REQUEST|HYPERLINK|EXEC|IMAGE|STOCKHISTORY|CUBE\w+|INFO|CELL)\s*\('
 function Get-DeniedReason([string]$formula) {
-    if ($formula -match $denied) { return "function not evaluated (external I/O): $($Matches[1])" }
+    if ($formula -match $denied) {
+        $why = if ($Matches[1] -in @('INFO', 'CELL')) { 'local machine metadata' } else { 'external I/O' }
+        return "function not evaluated ($why): $($Matches[1])"
+    }
     # A reference into another workbook or a path would read a file; text and error literals may hold '!' or '[' without naming one, so they go first.
     $outside = [regex]::Replace($formula, '"(?:[^"]|"")*"', '""')
     $outside = [regex]::Replace($outside, (($errText.Values | ForEach-Object { [regex]::Escape($_) }) -join '|'), '')
@@ -179,6 +183,7 @@ function Read-Diff([string]$path) {
         foreach ($m in [regex]::Matches($src, '\bev\(\s*"([A-Za-z_][\w.]*)"\s*,\s*vec!\s*\[')) {
             $script:why = $null
             $name = $m.Groups[1].Value
+            if ($name.ToUpperInvariant() -notmatch '^[A-Z][A-Z0-9.]*$') { $script:why = "function name is not Excel-safe: $name" }
             $argsOpen = $m.Index + $m.Length - 1
             $argsClose = Find-Close $src $argsOpen
             $callClose = Find-Close $src ($src.IndexOf('(', $m.Index))
@@ -218,6 +223,36 @@ function Read-Diff([string]$path) {
     $added = [Collections.Generic.HashSet[string]]::new()
     foreach ($line in [IO.File]::ReadLines($path)) { if ($line.StartsWith('+') -and -not $line.StartsWith('+++')) { [void]$added.Add($line.Substring(1).Trim()) } }
     $script:found | Where-Object { $call = ($_.Raw -split "`r?`n" | Select-Object -First 1).Trim(); $added | Where-Object { $_.Contains($call) } | Select-Object -First 1 }
+}
+
+# Parser tests run without Excel or COM.
+if ($SelfTest) {
+    $diffPath = Join-Path ([IO.Path]::GetTempPath()) ('gridcraft-oracle-selftest-' + [guid]::NewGuid().ToString('N') + '.diff')
+    try {
+        @'
+diff --git a/crates/functions/src/oracle_test.rs b/crates/functions/src/oracle_test.rs
+--- a/crates/functions/src/oracle_test.rs
++++ b/crates/functions/src/oracle_test.rs
+@@
++is_text(ev("CONCAT", vec![t("a,\"b"), n(1.0)]), "a,\"b1")
++is_err(ev("WEBSERVICE", vec![t("https://example.invalid")]), CellError::Value)
++is_text(ev("SUM", vec![vec![n(1.0)]]), "nested")
++is_text(ev("_BAD", vec![]), "odd")
+'@ | Set-Content -LiteralPath $diffPath -Encoding UTF8
+        $cases = @(Read-Diff $diffPath)
+        if ($cases.Count -ne 4) { throw "expected 4 parser cases, got $($cases.Count)" }
+        if ($cases[0].Skip -or $cases[0].Formula -notlike '*""*') { throw "quoted string was not converted: $($cases[0] | ConvertTo-Json -Compress)" }
+        if (-not $cases[1].Skip -or $cases[1].Skip -notmatch 'external I/O') { throw 'external I/O function was not skipped' }
+        if (-not $cases[2].Skip) { throw 'nested argument was not skipped' }
+        if (-not $cases[3].Skip -or $cases[3].Skip -notmatch 'function name') { throw 'odd function name was not rejected' }
+        if ((Get-DeniedReason '=CELL("filename",A1)') -notmatch 'local machine metadata') { throw 'CELL metadata was not denied' }
+        if (-not (Get-DeniedReason "='Other Sheet'!A1")) { throw 'sheet reference was not denied' }
+        if ((ConvertTo-ExcelNumber '-d(2026, 1, 1)') -ne '-DATE(2026,1,1)') { throw 'negative date sign was lost' }
+        'Oracle parser self-tests passed (quote, I/O, nested argument, function name, metadata, sheet reference).'
+    } finally {
+        Remove-Item -LiteralPath $diffPath -Force -ErrorAction SilentlyContinue
+    }
+    exit 0
 }
 
 # ---------------------------------------------------------------- cases
@@ -389,7 +424,11 @@ foreach ($c in $cases) {
     $rows += [pscustomobject]@{ Id = $c.Id; Formula = ConvertTo-Cell $c.Formula; Expected = $exp; Excel = $excel; Verdict = $verdict }
 }
 
-$tsv = @($rows | ForEach-Object { "$($_.Id)`t$($_.Formula)`t$($_.Expected)`t$($_.Excel)`t$($_.Verdict)" })
+$tsv = @($rows | ForEach-Object {
+    $excel = "$($_.Excel)"
+    if ($excel -match '^[=+@-]') { $excel = "'$excel" }
+    "$($_.Id)`t$($_.Formula)`t$($_.Expected)`t$excel`t$($_.Verdict)"
+})
 $utf8 = [Text.UTF8Encoding]::new($false) # no BOM: the files are meant for other tools
 [IO.File]::WriteAllLines((Join-Path $Out 'results.tsv'), [string[]](@("id`tformula`texpected`texcel`tverdict") + $tsv), $utf8)
 # cases.tsv is a rerun input; evaluated numbers replace expressions so it can run without the diff.
