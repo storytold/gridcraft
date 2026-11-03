@@ -631,6 +631,7 @@ fn linked_text_box_survives_an_unrelated_edit_and_roundtrip() {
         line: Color::Auto,
         text: String::new(),
         format: ShapeFormat { bold: true, font_size: Some(14.0), ..ShapeFormat::default() },
+        math: Default::default(),
     });
     let (mut loaded, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     loaded.sheet_mut(0).unwrap().set_value(at("B2"), Value::text("unrelated edit"));
