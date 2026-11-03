@@ -115,20 +115,13 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     }
     update_zoom_glide(app, ui, place, sh.zoom, now);
     view.scroll = view.scroll.max(egui::Vec2::ZERO);
-    let (mut max_x, mut max_y) = (sh.col_left(MAX_COLS - 20) as f32, sh.row_top(MAX_ROWS - 40) as f32);
-    if paper {
-        // Page layout units run past sheet units (margins and gaps); the end is known once the
-        // pages reach the last row / column.
-        let g = make_geo(app, view.scroll);
-        if let Some(pg) = &g.paper {
-            let (ex, ey) = pg.extent();
-            max_x = if pg.cols_complete { (ex as f32 - g.cells.width() / g.z).max(0.0) } else { 1.0e9 };
-            max_y = if pg.rows_complete { (ey as f32 - g.cells.height() / g.z).max(0.0) } else { 1.0e9 };
-        }
-    }
-    view.scroll.x = view.scroll.x.min(max_x);
-    view.scroll.y = view.scroll.y.min(max_y);
     let mut geo = make_geo(app, view.scroll);
+    let (max_x, max_y) = scroll_limits(sh, &geo);
+    let limited = view.scroll.min(vec2(max_x, max_y));
+    if limited != view.scroll {
+        view.scroll = limited;
+        geo = make_geo(app, view.scroll);
+    }
     // Keep the active cell (or the moving end of an extension) visible after keyboard moves.
     ActiveCellVisibility { app, wb: &wb, si, sh, selection: &sel, paper, make_geo: &make_geo }.update(&mut view, &mut geo);
     // Snap scrolling to whole rows/columns at rest like Excel? Keep smooth (better on trackpads).
@@ -211,6 +204,26 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     ui.painter().rect_filled(Rect::from_min_max(pos2(track_x.0, rect.top()), pos2(track_x.1, rect.bottom())), 0.0, t.tab_bar);
     vertical_scrollbar(app, ui, sh, &geo, track_x, max_y, &t);
     update_clipboard_repaint(app, ui, now);
+}
+
+/// The furthest the view scrolls. The sheet's end can always be reached whatever the window's size:
+/// the last column and row end at the grid's right and bottom edges. (A fixed limit of 40 rows and
+/// 20 columns would be more than a small window shows.)
+fn scroll_limits(sh: &Sheet, g: &Geo) -> (f32, f32) {
+    if let Some(pg) = &g.paper {
+        // Page layout units run past sheet units (margins and gaps); the end is known once the
+        // pages reach the last row / column.
+        let (ex, ey) = pg.extent();
+        return (
+            if pg.cols_complete { (ex as f32 - g.cells.width() / g.z).max(0.0) } else { 1.0e9 },
+            if pg.rows_complete { (ey as f32 - g.cells.height() / g.z).max(0.0) } else { 1.0e9 },
+        );
+    }
+    let shown = |size: f32, frozen: f32| (size - frozen) as f64 / g.z as f64;
+    (
+        (sh.col_left(MAX_COLS - 20) as f32).max((g.ci.start(MAX_COLS) - g.ci.start(g.fc) - shown(g.cells.width(), g.frozen_w)) as f32),
+        (sh.row_top(MAX_ROWS - 40) as f32).max((g.ri.start(MAX_ROWS) - g.ri.start(g.fr) - shown(g.cells.height(), g.frozen_h)) as f32),
+    )
 }
 
 fn vertical_scroll_track(available: Rect, grid: Rect, rtl: bool) -> (f32, f32) {
@@ -305,7 +318,7 @@ impl<F: Fn(&mut SheetApp, egui::Vec2) -> Geo> ActiveCellVisibility<'_, F> {
             if cr.left() < area.left() {
                 view.scroll.x -= (area.left() - cr.left()) / geo.z;
             } else if cr.right() > area.right() - 2.0 {
-                view.scroll.x += ((cr.right() - area.right() + 2.0) / geo.z).min(cr.left() - area.left());
+                view.scroll.x += ((cr.right() - area.right() + 2.0) / geo.z).min((cr.left() - area.left()) / geo.z);
             }
         } else if from.is_some_and(|f| f.col >= geo.fc) {
             view.scroll.x = 0.0;

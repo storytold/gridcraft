@@ -16,6 +16,10 @@ const CTRL_SHIFT: Modifiers = Modifiers { shift: true, ..CTRL };
 
 /// Column A filled down to A200 and row 1 filled across to CV1, far past one screen each way.
 fn harness() -> Harness {
+    harness_sized(egui::vec2(1200.0, 800.0))
+}
+
+fn harness_sized(size: egui::Vec2) -> Harness {
     let mut s = Session::new();
     s.new_workbook();
     let down: Vec<Vec<i64>> = (1..=200).map(|r| vec![r]).collect();
@@ -23,7 +27,7 @@ fn harness() -> Harness {
     let across: Vec<i64> = (1..=100).collect();
     s.execute("range.setValues", json!({"range": "A1", "values": [across]})).unwrap();
     s.execute("selection.set", json!({"cell": "A1"})).unwrap();
-    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(size).build_ui_state(
         |ui, app: &mut SheetApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -363,4 +367,51 @@ fn ctrl_shift_right_on_a_whole_column_follows_across_and_keeps_the_rows() {
     assert_eq!(h.state().session.active().unwrap().selection.current(), RangeRef::parse("A:XFD").unwrap());
     assert!(scroll(&h).x > 0.0, "the view follows the extension across");
     assert_eq!(scroll(&h).y, down, "the view stays on the rows it showed");
+}
+
+#[test]
+fn ctrl_right_to_the_last_column_shows_it_at_once() {
+    // From the end of the data, Ctrl+Right goes to XFD1. The view used to stop well short of it
+    // (the horizontal step was capped in screen pixels, not sheet units) and took more key presses.
+    let mut h = harness();
+    key(&mut h, Key::ArrowRight, CTRL);
+    assert!(visible(&h, "CV1"));
+    key(&mut h, Key::ArrowRight, CTRL);
+    assert_eq!(active(&h), CellRef::parse("XFD1").unwrap());
+    assert!(visible(&h, "XFD1"), "XFD1 is on screen after the one key press");
+}
+
+#[test]
+fn ctrl_down_to_the_last_row_shows_it_in_a_small_window() {
+    // The scroll limit left 40 rows at the end of the sheet, so a window showing fewer rows (one
+    // that isn't maximized) never reached the last one.
+    for size in [egui::vec2(1200.0, 300.0), egui::vec2(500.0, 800.0)] {
+        let mut h = harness_sized(size);
+        key(&mut h, Key::ArrowDown, CTRL);
+        assert_eq!(active(&h), CellRef::parse("A200").unwrap());
+        key(&mut h, Key::ArrowDown, CTRL);
+        assert_eq!(active(&h), CellRef::parse("A1048576").unwrap());
+        assert!(visible(&h, "A1048576"), "the last row is on screen in a {size:?} window");
+        key(&mut h, Key::ArrowRight, CTRL);
+        assert_eq!(active(&h), CellRef::parse("XFD1048576").unwrap());
+        assert!(visible(&h, "XFD1048576"), "the last cell is on screen in a {size:?} window");
+    }
+}
+
+#[test]
+fn ctrl_down_and_right_with_frozen_panes_show_the_last_cell_in_a_small_window() {
+    // The frozen rows and columns take room from what scrolls: the scroll limit leaves it to them,
+    // or the last row and column would end behind the grid's edges. (The windows leave room for a
+    // few rows and columns past the frozen ones, fewer than the old fixed limit of 40 and 20.)
+    for size in [egui::vec2(1200.0, 400.0), egui::vec2(500.0, 800.0)] {
+        let mut h = harness_sized(size);
+        h.state_mut().session.execute("view.freezePanes", json!({"cell": "C4"})).unwrap();
+        key(&mut h, Key::ArrowDown, CTRL);
+        key(&mut h, Key::ArrowDown, CTRL);
+        assert_eq!(active(&h), CellRef::parse("A1048576").unwrap());
+        assert!(visible(&h, "A1048576"), "the last row is on screen with frozen panes in a {size:?} window");
+        key(&mut h, Key::ArrowRight, CTRL);
+        assert_eq!(active(&h), CellRef::parse("XFD1048576").unwrap());
+        assert!(visible(&h, "XFD1048576"), "the last cell is on screen with frozen panes in a {size:?} window");
+    }
 }
