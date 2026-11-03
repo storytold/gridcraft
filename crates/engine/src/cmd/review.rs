@@ -423,11 +423,15 @@ struct SheetPerformance {
 /// style. Notes and comments live outside the cell and never make a cell optimizable, and neither
 /// does a dynamic-array spill: formatting a range over a spilled `=SEQUENCE(3)` stores empty cells
 /// under the spill, whose displayed values are the spilled results, so removing that formatting
-/// would change what the sheet shows.
+/// would change what the sheet shows. A cell a conditional format covers, or that sits inside a
+/// table, keeps its formatting too: the rule or the table style decides what is drawn, and the
+/// stored style is what it falls back to, so Optimize leaves the cell alone.
 fn optimizable(sh: &gridcraft_model::Sheet, at: CellRef, cell: &gridcraft_model::Cell) -> bool {
     sh.merge_at(at).is_none()
         && !sh.spill.contains_key(&at)
         && !sh.spill_ranges.values().any(|range| range.contains(at))
+        && !sh.cond_formats.iter().any(|cf| cf.ranges.iter().any(|range| range.contains(at)))
+        && !sh.tables.iter().any(|table| table.range.contains(at))
         && cell.value.is_empty()
         && cell.formula.is_none()
         && cell.style != StyleId::DEFAULT
@@ -1003,7 +1007,10 @@ mod tests {
         s.execute("review.newComment", json!({"cell": "A1", "text": "keep me"})).unwrap();
         s.execute("range.setValues", json!({"range": "B1", "values": [["keep"]]})).unwrap();
         assert_eq!(s.execute("review.checkPerformance", json!({})).unwrap()["optimizableCells"], 1);
+        let before = s.journal.len();
         s.execute("review.optimizePerformance", json!({})).unwrap();
+        assert_eq!(s.journal.len(), before + 1, "one Optimize is one undo step");
+        assert_eq!(s.journal.last().map(|(id, _)| id.as_str()), Some("review.optimizePerformance"));
         assert_eq!(s.execute("review.checkPerformance", json!({})).unwrap()["optimizableCells"], 0);
         {
             let sh = s.doc().unwrap().wb.active().unwrap();
@@ -1023,6 +1030,48 @@ mod tests {
         s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
         let r = s.execute("review.checkPerformance", json!({})).unwrap();
         assert_eq!(r["optimizableCells"], 0, "merged edge cells carry border/style state");
+    }
+
+    #[test]
+    fn check_performance_leaves_cells_a_conditional_format_covers() {
+        // A rule paints its range, and the cell's own style is what the rule falls back to: the
+        // stored fill or number format belongs to the formatting the sheet shows.
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("home.bold", json!({"range": "A1:A3"})).unwrap();
+        s.execute("home.conditionalFormat", json!({"range": "A2", "rule": {"type": "noBlanks", "preset": "redBorder"}})).unwrap();
+        let r = s.execute("review.checkPerformance", json!({})).unwrap();
+        assert_eq!(r["optimizableCells"], 2, "A1 and A3 are still removable, A2 is the rule's");
+        assert_eq!(r["cells"].as_array().map(Vec::len), Some(2));
+        assert!(!r["cells"].as_array().is_some_and(|cells| cells.iter().any(|cell| cell["cell"] == "A2")));
+        let optimized = s.execute("review.optimizePerformance", json!({})).unwrap();
+        assert_eq!(optimized["optimized"], 2);
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        assert!(sh.cell(CellRef::parse("A1").unwrap()).is_none());
+        assert!(sh.cell(CellRef::parse("A2").unwrap()).is_some_and(|c| c.style != StyleId::DEFAULT), "the cell the rule covers keeps its formatting");
+        assert_eq!(sh.cond_formats.len(), 1, "the rule itself stays");
+    }
+
+    #[test]
+    fn check_performance_leaves_cells_inside_a_table() {
+        // The table style paints its range; a stored fill or border there is the base the style
+        // starts from, so Optimize must not strip it.
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1:B2", "values": [["h1", "h2"], [1, 2]]})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:B3", "name": "Sales"})).unwrap();
+        s.execute("home.bold", json!({"range": "A3:B3"})).unwrap();
+        s.execute("home.bold", json!({"range": "C1"})).unwrap();
+        let r = s.execute("review.checkPerformance", json!({})).unwrap();
+        assert_eq!(r["optimizableCells"], 1, "only C1 lies outside the table");
+        let optimized = s.execute("review.optimizePerformance", json!({})).unwrap();
+        assert_eq!(optimized["optimized"], 1);
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        assert!(sh.cell(CellRef::parse("C1").unwrap()).is_none());
+        assert!(sh.cell(CellRef::parse("A3").unwrap()).is_some_and(|c| c.style != StyleId::DEFAULT), "a table cell keeps its stored formatting");
+        assert_eq!(sh.tables.len(), 1, "the table stays");
     }
 
     #[test]
