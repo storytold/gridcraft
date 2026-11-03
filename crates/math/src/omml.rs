@@ -311,6 +311,10 @@ impl Writer {
             ParseNode::Pmb { body, .. } => self.seq(body, &Style { sty: Some("b"), ..st.clone() }, depth)?,
             ParseNode::Color { color, body, .. } => {
                 let c = ratex_types::color::Color::parse(color).ok_or_else(|| unsupported(&format!("The colour {color}")))?;
+                // A run carries RGB only; `transparent` and alpha hex would be written opaque.
+                if c.a < 1.0 {
+                    return Err(unsupported(&format!("The translucent colour {color}")));
+                }
                 let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
                 let s = Style { color: Some([q(c.r), q(c.g), q(c.b)]), ..st.clone() };
                 self.seq(body, &s, depth)?;
@@ -711,6 +715,8 @@ mod tests {
             ("\\scriptstyle x", "script style"),
             ("\\href{https://example.org}{x}", "link"),
             ("\\color{nocolour}x", "colour"),
+            ("\\color{transparent}x", "translucent colour"),
+            ("\\textcolor{#ff000080}{x}", "translucent colour"),
         ] {
             let e = to_omml(s, 11.0, None).unwrap_err();
             assert!(e.message.contains(what), "{s}: {e}");
