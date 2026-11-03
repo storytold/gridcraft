@@ -207,13 +207,7 @@ fn category_table(
         })
         .collect();
     let Some((sheet_ref, r)) = src else {
-        let aligned = if hide {
-            alignment_ref
-                .map_or(texts.clone(), |(sh, r)| texts.into_iter().enumerate().filter(|(i, _)| is_visible(wb, sh, &r, *i)).map(|(_, t)| t).collect())
-        } else {
-            texts
-        };
-        return (aligned, vec![]);
+        return (texts, vec![]);
     };
     let visible_row = |row: usize| !(hide && sheet_ref.is_row_hidden(r.start.row.saturating_add(row as u32)));
     let visible_col = |col: usize| !(hide && sheet_ref.is_col_hidden(r.start.col.saturating_add(col as u32)));
@@ -312,7 +306,8 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
         let x = match (&s.categories, numeric_x || matches!(kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble)) {
             // X values with text in them (labels) are ignored: the points are numbered 1..n.
             (Some(f), true) => {
-                Some(eval_list_aligned(wb, sheet, f, hide, values_ref).into_iter().filter(|v| !v.is_text()).map(|v| to_num(&v)).collect())
+                let xs = eval_list_aligned(wb, sheet, f, hide, values_ref);
+                if xs.iter().any(Value::is_text) { None } else { Some(xs.iter().map(to_num).collect()) }
             }
             _ => None,
         };
