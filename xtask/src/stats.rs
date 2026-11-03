@@ -13,7 +13,10 @@ struct Counts {
     proptests: usize,
 }
 
-fn walk(dir: &Path, c: &mut Counts, seen: &mut std::collections::HashSet<u64>, budget: &mut usize) {
+/// Larger files (or devices behind a symlink) are not source files and are not read.
+const MAX_SOURCE_BYTES: u64 = 16 << 20;
+
+fn walk(dir: &Path, c: &mut Counts, seen: &mut std::collections::HashSet<(u64, u64)>, budget: &mut usize) {
     if *budget == 0 {
         // Hard stop for pathological trees: two directory symlinks pointing at each other
         // would otherwise be walked exponentially.
@@ -22,9 +25,9 @@ fn walk(dir: &Path, c: &mut Counts, seen: &mut std::collections::HashSet<u64>, b
     // Directory identities (dev+inode on unix) make a symlink to a visited directory a
     // no-op, not another exponential branch of the scan.
     #[cfg(unix)]
-    let id = std::fs::metadata(dir).ok().and_then(|m| m.dev().checked_mul(1 << 60).and_then(|d| d.checked_add(m.ino())));
+    let id = std::fs::metadata(dir).ok().map(|m| (m.dev(), m.ino()));
     #[cfg(not(unix))]
-    let id: Option<u64> = None;
+    let id: Option<(u64, u64)> = None;
     if let Some(id) = id
         && !seen.insert(id)
     {
@@ -45,6 +48,7 @@ fn walk(dir: &Path, c: &mut Counts, seen: &mut std::collections::HashSet<u64>, b
                 walk(&p, c, seen, budget);
             }
         } else if name.ends_with(".rs")
+            && p.metadata().is_ok_and(|m| m.is_file() && m.len() <= MAX_SOURCE_BYTES)
             && let Ok(s) = std::fs::read_to_string(&p)
         {
             c.files += 1;
