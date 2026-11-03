@@ -158,7 +158,7 @@ fn an_expanded_formula_bar_leaves_room_for_the_worksheet_in_a_short_window() {
     h.state_mut().run("view.expandFormulaBar", json!({"lines": 100})).unwrap();
     h.run_steps(60);
     let cells = h.state().grid.cells_rect.expect("the grid is drawn");
-    assert!(cells.height() >= 40.0, "a couple of rows stay visible under a {} pt bar: {cells:?}", bar(&h).height);
+    assert!(cells.height() >= two_rows_at(100.0) - 1.0, "two rows stay visible under a {} pt bar: {cells:?}", bar(&h).height);
     assert!(bar(&h).visible_lines > 1, "the bar is still expanded");
 }
 
