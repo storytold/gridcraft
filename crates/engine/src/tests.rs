@@ -5457,3 +5457,22 @@ fn a_view_kept_through_redo_doesnt_make_the_saved_workbook_dirty() {
     assert_eq!(d.wb.active().unwrap().view, gridcraft_model::SheetViewMode::PageBreakPreview);
     assert!(!d.is_dirty(), "back at the saved edits, the view alone isn't a change");
 }
+
+#[test]
+fn workbook_display_options_are_commands() {
+    // #3101: Show sheet tabs / horizontal / vertical scroll bar, toggling without `on`, saved with
+    // the workbook and undoable.
+    let mut s = Session::new();
+    s.new_workbook();
+    let view = |s: &Session| s.doc().unwrap().wb.view;
+    assert_eq!(s.execute("view.showSheetTabs", json!({})).unwrap()["on"], json!(false));
+    assert_eq!(s.execute("view.showHorizontalScrollBar", json!({"on": false})).unwrap()["on"], json!(false));
+    assert_eq!(s.execute("view.showVerticalScrollBar", json!({"on": false})).unwrap()["on"], json!(false));
+    let v = view(&s);
+    assert!(!v.show_sheet_tabs && !v.show_horizontal_scroll && !v.show_vertical_scroll);
+    let (back, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap()).unwrap();
+    assert_eq!(back.view, v, "saved with the workbook");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(view(&s).show_vertical_scroll);
+    assert_eq!(s.execute("view.showSheetTabs", json!({})).unwrap()["on"], json!(true), "toggles back");
+}
