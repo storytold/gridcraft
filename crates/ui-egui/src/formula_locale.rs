@@ -244,6 +244,10 @@ mod russian_help_tests {
         for language in Language::ALL.into_iter().filter(|language| *language != Language::En) {
             for (name, russian_name) in [("XLOOKUP", "ПРОСМОТРX"), ("COLUMN", "СТОЛБЕЦ"), ("RADIANS", "РАДИАНЫ")] {
                 let english = crate::formula_bar::function_description(name).unwrap();
+                if matches!(language, Language::Da | Language::Sv | Language::Ka | Language::Lt) {
+                    assert_eq!(description(name, FormulaLocale::Ru, language).as_deref(), Some(english.as_str()));
+                    continue;
+                }
                 let expected = language.function_description(&english).unwrap();
                 assert_ne!(expected, english);
                 assert_eq!(description(name, FormulaLocale::Ru, language).as_deref(), Some(expected));
@@ -283,14 +287,15 @@ mod russian_help_tests {
         assert_eq!(description("ЕСЛИ", FormulaLocale::Ru, Language::Ru).as_deref(), expected);
     }
 
-    /// SUM's reported hint is localized in every offered interface language.
+    /// SUM's hint follows each help catalog and falls back for interface-only languages.
     #[test]
     fn sum_hint_uses_each_language_catalog() {
         for language in Language::ALL {
             let locale = language.formula_locale();
             let hint = signature("SUM", locale, language).unwrap();
             let help = description("SUM", locale, language).unwrap();
-            let number = if language == Language::En { "number" } else { language.function_argument("number").unwrap() };
+            let fallback = matches!(language, Language::En | Language::Da | Language::Sv | Language::Ka | Language::Lt);
+            let number = if fallback { "number" } else { language.function_argument("number").unwrap() };
             let expected = match locale {
                 FormulaLocale::Ru => format!("СУММ({number}1; [{number}2]; ...)"),
                 FormulaLocale::Es | FormulaLocale::Pl => format!("SUMA({number}1; [{number}2]; ...)"),
@@ -302,7 +307,9 @@ mod russian_help_tests {
                 FormulaLocale::En => format!("SUM({number}1, [{number}2], ...)"),
             };
             assert_eq!(hint, expected, "{language:?}");
-            if language != Language::En {
+            if fallback {
+                assert_eq!(help, "Adds all the numbers in the arguments.", "{language:?}");
+            } else {
                 assert_ne!(help, "Adds all the numbers in the arguments.", "{language:?}");
             }
         }

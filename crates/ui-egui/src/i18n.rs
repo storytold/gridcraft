@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 mod cs;
 mod cs_functions;
+mod da;
 mod de;
 mod de_functions;
 mod el;
@@ -24,8 +25,10 @@ mod it;
 mod it_functions;
 mod ja;
 mod ja_functions;
+mod ka;
 mod ko;
 mod ko_functions;
+mod lt;
 mod nl;
 mod nl_functions;
 mod pl;
@@ -39,6 +42,7 @@ mod ru_formats;
 mod ru_functions;
 mod sr;
 mod sr_functions;
+mod sv;
 mod tr;
 mod tr_functions;
 mod uk;
@@ -76,6 +80,10 @@ pub enum Language {
     Vi,
     Nl,
     Ro,
+    Lt,
+    Ka,
+    Sv,
+    Da,
 }
 
 impl Language {
@@ -86,7 +94,7 @@ impl Language {
             _ => &crate::format_locale::EN,
         }
     }
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 24] = [
         Self::En,
         Self::Es,
         Self::El,
@@ -106,6 +114,10 @@ impl Language {
         Self::Vi,
         Self::Nl,
         Self::Ro,
+        Self::Lt,
+        Self::Ka,
+        Self::Sv,
+        Self::Da,
         Self::Tr,
     ];
 
@@ -122,6 +134,10 @@ impl Language {
     pub fn name(self) -> &'static str {
         match self {
             Self::En => "English",
+            Self::Lt => "Lietuvių",
+            Self::Ka => "ქართული",
+            Self::Sv => "Svenska",
+            Self::Da => "Dansk",
             Self::Es => "Español",
             Self::El => "Ελληνικά",
             Self::Zh => "简体中文",
@@ -148,6 +164,10 @@ impl Language {
     pub const fn code(self) -> &'static str {
         match self {
             Self::En => "en",
+            Self::Lt => "lt",
+            Self::Ka => "ka",
+            Self::Sv => "sv",
+            Self::Da => "da",
             Self::Es => "es",
             Self::El => "el",
             Self::Zh => "zh",
@@ -184,6 +204,10 @@ impl Language {
         let mut parts = tag.trim().split('.').next()?.split(['-', '_']);
         match parts.next()?.to_ascii_lowercase().as_str() {
             "en" => Some(Self::En),
+            "lt" => Some(Self::Lt),
+            "ka" => Some(Self::Ka),
+            "sv" => Some(Self::Sv),
+            "da" => Some(Self::Da),
             "es" => Some(Self::Es),
             "el" => Some(Self::El),
             "zh" => {
@@ -254,6 +278,10 @@ impl Language {
             Self::Ja => ja::translate(text),
             Self::Zh => zh::translate(text),
             Self::ZhTw => zh_tw::translate(text),
+            Self::Lt => lt::translate(text),
+            Self::Ka => ka::translate(text),
+            Self::Sv => sv::translate(text),
+            Self::Da => da::translate(text),
             Self::Ko => ko::translate(text),
             Self::Ru => ru::translate(text),
             Self::PtBr => pt::translate(text),
@@ -342,7 +370,7 @@ impl Language {
             Self::Zh => Some((zh_functions::DESCRIPTIONS, zh_functions::ARGUMENTS)),
             Self::ZhTw => Some((zh_tw_functions::DESCRIPTIONS, zh_tw_functions::ARGUMENTS)),
             Self::Ru => Some((ru_functions::DESCRIPTIONS, ru_functions::ARGUMENTS)),
-            Self::En => None,
+            Self::En | Self::Da | Self::Sv | Self::Ka | Self::Lt => None,
         }
     }
 }
