@@ -59,7 +59,7 @@ fn dragging_the_corner_handle_resizes_the_chart() {
     h.run_steps(2);
     button(&mut h, inside, true);
     button(&mut h, inside, false);
-    assert_eq!(h.state().selected_chart, Some(id));
+    assert_eq!(h.state().selected_chart(), Some(id));
 
     h.input_mut().events.push(Event::PointerMoved(start));
     h.run_steps(2);
@@ -76,7 +76,7 @@ fn dragging_the_corner_handle_resizes_the_chart() {
 
 /// Opens Format Chart Area for the chart and expands its Size section; returns the Width field's rect.
 fn open_size_fields(h: &mut Harness, id: u32) -> egui::Rect {
-    h.state_mut().selected_chart = Some(id);
+    h.state_mut().select_object_id(Some(id));
     h.state_mut().grid.pane = Some("formatChart".into());
     h.run_steps(2);
     h.get_by_role_and_label(Role::DisclosureTriangle, "Size").click();
@@ -118,6 +118,51 @@ fn dragging_the_size_field_resizes_the_chart() {
     assert!(w1 > w0 + 20.0, "width went from {w0} to {w1}");
 }
 
+/// Makes the chart 12,000 wide and reopens the workbook from its XLSX bytes, the way a file can
+/// carry a chart larger than the 4,000 points the Size fields otherwise reach; returns its id.
+fn imported_oversized_chart(h: &mut Harness, id: u32) -> u32 {
+    {
+        let wb = std::sync::Arc::make_mut(&mut h.state_mut().session.doc_mut().unwrap().wb);
+        wb.sheet_mut(0).unwrap().charts.iter_mut().find(|c| c.id == id).unwrap().anchor.width = 12_000.0;
+    }
+    let saved = h.state_mut().run("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    h.state_mut().run("file.open", json!({"name": "wide.xlsx", "base64": saved["base64"]})).unwrap();
+    h.run_steps(4);
+    let id = h.state().session.doc().unwrap().wb.active().unwrap().charts[0].id;
+    let (w, hh) = size(h, id);
+    assert_eq!((w.round(), hh.round()), (12_000.0, 200.0), "the reader keeps the file's size");
+    id
+}
+
+/// A chart a file made 12,000 wide shows that width in the Size fields, and a new height sends
+/// the height alone, so nothing shrinks the width to the fields' 4,000 reach on the way.
+#[test]
+fn the_size_fields_keep_an_oversized_imported_chart_width_when_the_height_changes() {
+    let (mut h, id) = fixture();
+    let id = imported_oversized_chart(&mut h, id);
+    open_size_fields(&mut h, id);
+    let (width_value, height_field) = {
+        let mut fields = h.get_all_by_role(Role::SpinButton);
+        let width = fields.next().unwrap();
+        let height = fields.next().unwrap();
+        (width.value(), height.rect())
+    };
+    assert!(width_value.as_deref().is_some_and(|v| v.contains("12000")), "the field shows the file's width: {width_value:?}");
+    h.input_mut().events.push(Event::PointerMoved(height_field.center()));
+    button(&mut h, height_field.center(), true);
+    button(&mut h, height_field.center(), false);
+    for digit in ["2", "0", "1"] {
+        h.input_mut().events.push(Event::Text(digit.into()));
+        h.run_steps(2);
+    }
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    let (w, hh) = size(&h, id);
+    assert_eq!((w.round(), hh), (12_000.0, 201.0), "the width stays and the height is the typed one");
+    let (_, p) = h.state().session.journal.iter().rev().find(|(cmd, _)| cmd == "chart.set").unwrap();
+    assert!(p.get("width").is_none(), "a height edit sends no width: {p}");
+}
+
 fn right_click(h: &mut Harness, pos: egui::Pos2, wobble: egui::Vec2) {
     h.input_mut().events.push(Event::PointerMoved(pos));
     h.run_steps(2);
@@ -141,7 +186,7 @@ fn right_clicking_a_chart_opens_its_menu_not_the_cells() {
         let (w0, h0) = size(&h, id);
         let inside = corner(&h, id) - vec2(100.0, 80.0);
         right_click(&mut h, inside, wobble);
-        assert_eq!(h.state().selected_chart, Some(id), "the right-clicked chart is selected ({wobble:?})");
+        assert_eq!(h.state().selected_chart(), Some(id), "the right-clicked chart is selected ({wobble:?})");
         assert!(matches!(h.state().grid.object_menu, Some((_, "chart", i)) if i == id), "the chart's menu opens ({wobble:?})");
         assert!(h.state().grid.context_menu.is_none(), "the cell menu stays closed ({wobble:?})");
         assert_eq!(size(&h, id), (w0, h0));
@@ -152,7 +197,11 @@ fn right_clicking_a_chart_opens_its_menu_not_the_cells() {
     let (mut h, id) = fixture();
     let inside = corner(&h, id) - vec2(100.0, 80.0);
     right_click(&mut h, inside, vec2(0.0, 0.0));
-    h.get_by_role_and_label(Role::Button, "Delete").click();
+    // Home › Cells has a Delete button too: take the one in the chart's menu, by the click.
+    h.query_all_by_label("Delete")
+        .min_by(|a, b| a.rect().center().distance(inside).total_cmp(&b.rect().center().distance(inside)))
+        .expect("the chart menu has Delete")
+        .click();
     h.run_steps(3);
     assert!(h.state().session.doc().unwrap().wb.active().unwrap().charts.is_empty());
     assert!(h.state().grid.object_menu.is_none());
