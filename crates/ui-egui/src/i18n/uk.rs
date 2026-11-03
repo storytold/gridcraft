@@ -3,6 +3,8 @@
 /// Returns the Ukrainian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Borders|None" => "None",
+        "Report Layout|Outline" => "Outline",
         "Page {page}" => "Сторінка {page}",
         "Paste" => "Вставити",
         "Paste Values" => "Вставити значення",

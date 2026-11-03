@@ -3,6 +3,9 @@
 /// Returns the French translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Macros preserved (not executed)" => "Macros conservées (non exécutées)",
+        "Preview" => "Aperçu",
+        "Table Name:" => "Nom du tableau :",
         "a linked (not embedded) picture was skipped" => "Une image liée (non incorporée) a été ignorée.",
         "missing picture {target}" => "Image manquante : {target}.",
         "chart {target} has no supported plot and was skipped" => {

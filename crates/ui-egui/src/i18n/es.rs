@@ -5,6 +5,7 @@
 /// Returns the Spanish translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Report Layout|Outline" => "Esquema",
         "a linked (not embedded) picture was skipped" => "Se omitió una imagen vinculada (no incrustada).",
         "missing picture {target}" => "Falta la imagen {target}.",
         "chart {target} has no supported plot and was skipped" => "El gráfico {target} no contiene ningún tipo de gráfico compatible y se omitió.",

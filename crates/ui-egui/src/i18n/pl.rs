@@ -1,6 +1,8 @@
 /// Returns the Polish translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Borders|None" => "Brak",
+        "Report Layout|Outline" => "Kontur",
         "Shapes|Line" => "Linia",
         "Cut (⌘X)" => "Wytnij (⌘X)",
         "Copy (⌘C)" => "Kopiuj (⌘C)",

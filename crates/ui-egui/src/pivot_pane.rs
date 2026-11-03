@@ -172,8 +172,8 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             craft_ui::ComboBox::from_id_salt("pv_layout")
                 .selected_text(lang.tr("Report Layout"))
                 .show_ui(ui, |ui| {
-                    for (l, v) in [("Compact", "compact"), ("Outline", "outline"), ("Tabular", "tabular")] {
-                        if ui.button(lang.tr(l)).clicked() {
+                    for (l, v) in [("Compact", "compact"), ("Report Layout|Outline", "outline"), ("Tabular", "tabular")] {
+                        if ui.button(lang.translation(l).unwrap_or_else(|| lang.tr(l.rsplit_once('|').map_or(l, |(_, plain)| plain)))).clicked() {
                             app.run_or_alert("pivot.layout", json!({"pivot": name, "layout": v}));
                         }
                     }
