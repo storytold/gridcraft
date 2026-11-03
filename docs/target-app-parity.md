@@ -13,7 +13,7 @@ generated ribbon checklist is [`parity-checklist.md`](parity-checklist.md).
 | Number | Value | Kind |
 |---|---|---|
 | Feature breadth (weighted by use) | **~75%** | estimated from the area table below; anchored on two measurements |
-| Ribbon and menu catalog | **275 / 291 (94.5%)** | measured: `cargo xtask parity` (`crates/engine/src/catalog.rs` ∩ registered command ids) |
+| Ribbon and menu catalog | **274 / 290 (94.5%)** | measured: `cargo xtask parity` (`crates/engine/src/catalog.rs` ∩ registered command ids) |
 | Worksheet functions, by name | **513 / 523 (98.1%)** | measured: registered functions vs Microsoft's published function list (method below) |
 | Worksheet functions that do real work | **504 / 523 (96.4%)** | measured: excludes 9 stubs (7 CUBE functions, WEBSERVICE, FILTERXML) |
 | **Ready for real work** | **~50%** | estimated; written weights below (51.6 computed) |
@@ -54,12 +54,12 @@ long `.xls` track, so about half parallelizes (≈30–50 wall-clock hours with 
   COPILOT and PY: **523 functions**. Ours: every `f!(…)` spec in `crates/functions/src/*.rs` plus
   `SPECIAL_FUNCTIONS` in `crates/calc/src/eval.rs` (evaluator special forms), minus the test-only
   `ADD2`: **505**, all of them Excel names.
-- **Ribbon catalog:** `crates/engine/src/catalog.rs` (291 unique ids across 15 tabs) against the
-  353 command ids registered in `crates/engine/src/cmd/*.rs`, recomputed from source by script and
+- **Ribbon catalog:** `crates/engine/src/catalog.rs` (290 unique ids across 15 tabs) against the
+  313 command ids registered in `crates/engine/src/cmd/*.rs`, recomputed from source by script and
   identical to the committed `parity-checklist.md`. The catalog is our own transcription of
   Excel's main ribbon tabs; it leaves out most contextual tabs (Picture Format, Shape Format,
   Header & Footer, Sparkline, Slicer, Timeline), the Developer and Help tabs and sub-menu items, so
-  94.5% of it is roughly **60–65% of Excel's full command surface** (estimated).
+  89% of it is roughly **60–65% of Excel's full command surface** (estimated).
 - **Depth and readiness:** source reading (the model types in `crates/model/src/features.rs`,
   readers and writers in `crates/xlsx/src`, the evaluator), 478 `#[test]` functions, and the
   issue tracker: 60 open issues and 50 open PRs on 2026-10-10, 82 issues filed in total.
