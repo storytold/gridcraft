@@ -51,6 +51,15 @@ fn is_line(f: Fam) -> bool {
     matches!(f, Fam::Line | Fam::LineStack)
 }
 
+/// Stroke widths for explicitly selected Excel chart styles.
+fn line_style_width(style: u32) -> f32 {
+    match style {
+        1 => 3.0,
+        9 => 5.0,
+        _ => 2.25,
+    }
+}
+
 fn series_spans(data: &ChartData, fams: &[Fam], sec: &[bool], ncat: usize) -> Vec<Vec<Option<(f64, f64)>>> {
     // Totals for 100% stacking, per axis and family (100% columns and 100% areas stack apart).
     let mut totals: Vec<((bool, Fam), Vec<f64>)> = Vec::new();
@@ -179,6 +188,12 @@ fn column_slots(fams: &[Fam], sec: &[bool]) -> (Vec<usize>, f32) {
     (slot_of, slot_keys.len().max(1) as f32)
 }
 
+/// Renders Cartesian column, bar, line, area, and combination charts.
+///
+/// Resolves series families and their axes, calculates stacking and
+/// category positions, and draws the corresponding primitives.
+/// Explicit chart style 9 adds white outlines to column and bar
+/// rectangles, including stacked and 100%-stacked variants.
 pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizontal: bool) {
     let ncat = data.categories.len().max(data.series.iter().map(|s| s.values.len()).max().unwrap_or(0)).min(MAX_CATS);
     if ncat == 0 {
@@ -286,10 +301,10 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                         let len = (pb - pt).abs();
                         if horizontal {
                             let y = c + nslots * bw / 2.0 - (k + 1.0) * bw;
-                            ctx.rect(lo, y, len, bw, s.color, None);
+                            ctx.rect(lo, y, len, bw, s.color, (chart.style == 9).then_some((WHITE, 1.0)));
                         } else {
                             let x = c - nslots * bw / 2.0 + k * bw;
-                            ctx.rect(x, lo, bw, len, s.color, None);
+                            ctx.rect(x, lo, bw, len, s.color, (chart.style == 9).then_some((WHITE, 1.0)));
                         }
                         if labels_on && let Some(v) = s.values.get(j).copied().flatten() {
                             let t = fmt.format(v, None);
@@ -319,7 +334,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 }
                 _ => {
                     let pts: Vec<Option<[f32; 2]>> = row.iter().enumerate().map(|(j, sp)| sp.map(|(_, t)| [center(j), vpos(t, &sc)])).collect();
-                    draw_runs(ctx, &pts, s.color, 2.25, s.smooth.then_some(plot));
+                    draw_runs(ctx, &pts, s.color, line_style_width(chart.style), s.smooth.then_some(plot));
                     let k = kinds.get(i).copied().unwrap_or(ChartKind::Line);
                     if k == ChartKind::LineMarkers && cw >= 3.0 {
                         draw_markers(ctx, pts.iter().flatten().copied(), 3.5, s.color);
