@@ -3,6 +3,38 @@
 /// Returns the French translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "A clean-room, open-source, Rust-native spreadsheet. Part of ArtCraft." => {
+            "Un tableur open source, natif Rust, développé en salle blanche. Fait partie d'ArtCraft."
+        }
+        "Add Watch (active cell)" => "Ajouter un espion (cellule active)",
+        "Bring Forward" => "Avancer",
+        "Can't Undo" => "Impossible d'annuler",
+        "GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:" => {
+            "GridCraft peut être entièrement piloté par des agents. Chaque élément de menu, bouton et geste est une commande :"
+        }
+        "No comments on this sheet yet. Select a cell and choose New Comment." => {
+            "Aucun commentaire sur cette feuille pour l'instant. Sélectionnez une cellule et choisissez Nouveau commentaire."
+        }
+        "No contributor data was built into this copy." => "Cette copie ne contient pas de données sur les contributeurs.",
+        "No macros in this workbook" => "Aucune macro dans ce classeur",
+        "No model credits were built into this copy." => "Cette copie ne contient pas de crédits de modèles.",
+        "Reply…" => "Répondre…",
+        "Reports:" => "Rapports :",
+        "Model Range:" => "Plage du modèle :",
+        "Needs an optimal or converged solution: Solver stopped before reaching one." => {
+            "Nécessite une solution optimale ou convergente : le Solveur s'est arrêté avant d'en atteindre une."
+        }
+        "Needs Simplex LP or GRG Nonlinear, a Max or Min objective and no integer constraints." => {
+            "Nécessite Simplex PL ou GRG non linéaire, un objectif Max ou Min et aucune contrainte de nombre entier."
+        }
+        "Resolved" => "Résolu",
+        "Reverse the order" => "Inverser l'ordre",
+        "Send" => "Envoyer",
+        "Send Backward" => "Reculer",
+        "Constraint Cell Reference" => "Référence de cellule de la contrainte",
+        "Constraint Value" => "Valeur de la contrainte",
+        "Constraint Operator" => "Opérateur de la contrainte",
+        "There are no shapes, pictures or charts on this sheet." => "Cette feuille ne contient aucune forme, image ni graphique.",
         "Macros preserved (not executed)" => "Macros conservées (non exécutées)",
         "Preview" => "Aperçu",
         "Table Name:" => "Nom du tableau :",
