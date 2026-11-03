@@ -656,3 +656,15 @@ fn a_web_page_table_keeps_its_characters_text_and_header_formats() {
     let (wb, _) = open_bytes_with("menu.xls", &page, None, true).unwrap();
     assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("B2").unwrap()), gridcraft_core::Value::text("4,50"));
 }
+
+#[test]
+fn a_web_page_table_opens_after_a_leading_comment_and_keeps_nonbreaking_spaces() {
+    // An exporter's comment before <html> still makes a web page; `&nbsp;` stays a non-breaking
+    // space, as Excel keeps it, while ordinary whitespace collapses.
+    let page = "<!-- exported by a web app -->\n<html><body><table><tr><td>New&nbsp;&nbsp;York</td><td>a \n b</td></tr></table></body></html>";
+    let (wb, warnings) = open_bytes("cities.xls", page.as_bytes()).unwrap();
+    assert!(warnings.first().is_some_and(|w| w.contains("is a web page (HTML)")), "{warnings:?}");
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::text("New\u{a0}\u{a0}York"));
+    assert_eq!(sh.value(CellRef::parse("B1").unwrap()), gridcraft_core::Value::text("a b"));
+}

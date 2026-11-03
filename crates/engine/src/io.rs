@@ -357,7 +357,15 @@ fn part_too_large_message(name: &str, part: &str, size: u64) -> String {
 fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text: bool) -> Option<Result<(Workbook, Vec<String>)>> {
     // Decoded as a CSV is (BOM, UTF-8, else Windows-1252/1256), so a legacy page keeps its letters.
     let text = gridcraft_xlsx::decode_text(bytes);
-    let head: String = text.trim_start_matches('\u{feff}').trim_start().chars().take(16).collect::<String>().to_ascii_lowercase();
+    // Comments an exporter writes before the page (`<!-- ... -->`) don't make it something else.
+    let mut rest = text.trim_start_matches('\u{feff}').trim_start();
+    while let Some(after) = rest.strip_prefix("<!--") {
+        match after.find("-->").and_then(|end| after.get(end + 3..)) {
+            Some(more) => rest = more.trim_start(),
+            None => break,
+        }
+    }
+    let head: String = rest.chars().take(16).collect::<String>().to_ascii_lowercase();
     if !["<!doctype html", "<html", "<table", "<head", "<body", "<meta"].iter().any(|t| head.starts_with(t)) {
         return None;
     }
@@ -375,7 +383,8 @@ fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text
                 // cell keeps the text it shows.
                 let field = match cell.num.filter(|_| !csv_as_text) {
                     Some(n) => gridcraft_core::number_to_text(n),
-                    None => cell.text.split_whitespace().collect::<Vec<_>>().join(" "),
+                    // Whitespace is already collapsed; non-breaking spaces stay, as in Excel.
+                    None => cell.text.clone(),
                 };
                 if field.contains(['\t', '\n', '\r', '"']) { format!("\"{}\"", field.replace('"', "\"\"")) } else { field }
             })
