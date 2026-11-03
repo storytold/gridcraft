@@ -466,13 +466,14 @@ pub(super) fn frequency(a: &[Arg], _: C) -> R<Value> {
     if bins.is_empty() {
         return col_value(vec![data.len() as f64]);
     }
-    let mut order: Vec<usize> = (0..bins.len()).collect();
+    // a NaN bin equals no value (and would break the ascending order searched below)
+    let mut order: Vec<usize> = (0..bins.len()).filter(|&i| bins.get(i).is_some_and(|b| !b.is_nan())).collect();
     order.sort_by(|&i, &j| bins.get(i).copied().unwrap_or(0.0).total_cmp(&bins.get(j).copied().unwrap_or(0.0)));
     let mut counts = vec![0.0; bins.len() + 1];
     for x in data {
         // `order` sorts the bins ascending, so the bins `x` exceeds come first: binary search for
         // the first bin at or above `x` (the first of equal bins, as a linear scan would find).
-        let pos = order.partition_point(|&i| bins.get(i).copied().unwrap_or(f64::INFINITY) < x);
+        let pos = if x.is_nan() { order.len() } else { order.partition_point(|&i| bins.get(i).copied().unwrap_or(f64::INFINITY) < x) };
         let slot = order.get(pos).copied().unwrap_or(bins.len());
         if let Some(c) = counts.get_mut(slot) {
             *c += 1.0;

@@ -626,6 +626,9 @@ fn aggregate_helper() {
 fn frequency_and_mode_scale_with_their_inputs() {
     let f = ev("FREQUENCY", vec![c(&[1.0, 2.0, 2.0, 3.0, 5.0, 9.0, -1.0]), c(&[3.0, 2.0, 2.0, 0.0])]);
     assert_eq!(rows_of(&f), vec![vec![nv(1.0)], vec![nv(3.0)], vec![nv(0.0)], vec![nv(1.0)], vec![nv(2.0)]]);
+    // NaN data goes to the overflow bin, and a NaN bin takes nothing
+    let f = ev("FREQUENCY", vec![c(&[f64::NAN, 0.5, 2.0]), c(&[f64::NAN, 1.0])]);
+    assert_eq!(rows_of(&f), vec![vec![nv(0.0)], vec![nv(1.0)], vec![nv(2.0)]]);
     let data: Vec<f64> = (0..200_000).map(|i| f64::from(i) + 1e6).collect();
     let bins: Vec<f64> = (0..200_000).map(f64::from).collect();
     let f = ev("FREQUENCY", vec![c(&data), c(&bins)]);
