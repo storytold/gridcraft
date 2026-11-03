@@ -3454,6 +3454,12 @@ fn resizing_an_ink_stroke_scales_its_points() {
     s.execute("edit.undo", json!({})).unwrap();
     let sh = &s.doc().unwrap().wb.active().unwrap().shapes[0];
     assert_eq!(crate::cmd::draw::ink_points(sh), vec![[0.0, 0.0], [40.0, 20.0], [80.0, 0.0]]);
+    // A zero height keeps a 1-point stroke, so a later resize can bring the shape back.
+    s.execute("object.move", json!({"kind": "shape", "id": id, "height": 0.0})).unwrap();
+    s.execute("object.move", json!({"kind": "shape", "id": id, "height": 20.0})).unwrap();
+    let sh = &s.doc().unwrap().wb.active().unwrap().shapes[0];
+    assert_eq!(sh.anchor.height, 20.0);
+    assert_eq!(crate::cmd::draw::ink_points(sh), vec![[0.0, 0.0], [40.0, 20.0], [80.0, 0.0]]);
 }
 
 #[test]
