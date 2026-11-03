@@ -93,7 +93,7 @@ impl SheetApp {
     ///
     /// [`logic`]: SheetApp::logic
     pub fn setup_context(ctx: &egui::Context, dark: bool) {
-        crate::fonts::start_scan();
+        crate::fonts::start_scan(ctx);
         Self::setup_context_for_language(ctx, dark, i18n::Language::En);
     }
 
@@ -102,7 +102,7 @@ impl SheetApp {
     /// workbook font is ever bound, and a cell set in Verdana or Segoe UI draws in the built-in
     /// cell face.
     pub fn setup_desktop_context(ctx: &egui::Context, dark: bool, language: i18n::Language) {
-        crate::fonts::start_scan();
+        crate::fonts::start_scan(ctx);
         Self::setup_context_for_language(ctx, dark, language);
     }
 
