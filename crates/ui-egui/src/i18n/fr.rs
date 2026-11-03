@@ -3,6 +3,12 @@
 /// Returns the French translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "New Formatting Rule" => "Nouvelle règle de mise en forme",
+        "and" => "et",
+        "Formula" => "Formule",
+        "Minimum" => "Minimum",
+        "Maximum" => "Maximum",
+        "Applies to" => "S'applique à",
         "A clean-room, open-source, Rust-native spreadsheet. Part of ArtCraft." => {
             "Un tableur open source, natif Rust, développé en salle blanche. Fait partie d'ArtCraft."
         }

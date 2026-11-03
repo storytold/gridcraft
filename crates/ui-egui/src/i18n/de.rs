@@ -4,6 +4,12 @@
 /// Returns the German translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Applies to" => "Wird angewendet auf",
+        "Formula" => "Formel",
+        "Maximum" => "Maximum",
+        "Minimum" => "Minimum",
+        "New Formatting Rule" => "Neue Formatierungsregel",
+        "and" => "und",
         "menu|Tools" => "Extras",
         "Window" => "Fenster",
         "Help" => "Hilfe",

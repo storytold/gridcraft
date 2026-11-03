@@ -4,6 +4,11 @@
 /// Returns `None` for unknown keys so the shared lookup can apply its English fallback.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Applies to" => "Применяется к",
+        "Formula" => "Формула",
+        "Maximum" => "Максимальное значение",
+        "Minimum" => "Минимальное значение",
+        "and" => "и",
         "Agent Control (MCP)…" => "Управление агентами (MCP)…",
         "Cells…" => "Ячейки…",
         "Collapse Ribbon" => "Свернуть ленту",

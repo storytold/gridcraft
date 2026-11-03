@@ -4,6 +4,22 @@
 /// Returns the Portuguese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "3 Arrows" => "3 setas",
+        "3 Symbols" => "3 símbolos",
+        "3 Traffic Lights" => "3 semáforos",
+        "4 Ratings" => "4 classificações",
+        "5 Arrows" => "5 setas",
+        "5 Quarters" => "5 quartos",
+        "Applies to" => "Aplica-se a",
+        "Apply" => "Aplicar",
+        "Formula" => "Fórmula",
+        "Maximum" => "Máximo",
+        "Minimum" => "Mínimo",
+        "New Formatting Rule" => "Nova regra de formatação",
+        "New Rule…" => "Nova regra…",
+        "No Border" => "Sem borda",
+        "Percent" => "Percentual",
+        "and" => "e",
         "Borders|None" => "Nenhum",
         "Report Layout|Outline" => "Contorno",
         "a linked (not embedded) picture was skipped" => "A imagem vinculada (não incorporada) foi ignorada.",

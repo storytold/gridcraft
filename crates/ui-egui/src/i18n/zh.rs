@@ -3,6 +3,12 @@
 /// Returns the Chinese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Applies to" => "应用于",
+        "Formula" => "公式",
+        "Maximum" => "最大值",
+        "Minimum" => "最小值",
+        "New Formatting Rule" => "新建格式规则",
+        "and" => "到",
         "a linked (not embedded) picture was skipped" => "已跳过链接图片（未嵌入）。",
         "missing picture {target}" => "缺少图片 {target}。",
         "chart {target} has no supported plot and was skipped" => "图表 {target} 不包含受支持的图表类型，已跳过。",
