@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arg, Array, CellError, Criterion, Ctx, R, Value, as_array, has, num_val};
 
 // ---------------------------------------------------------------------------------------------
 // Criteria aggregates

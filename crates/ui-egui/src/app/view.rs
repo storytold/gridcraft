@@ -1,4 +1,4 @@
-use super::*;
+use super::{CellRef, SheetApp, SheetView};
 
 impl SheetApp {
     /// The active workbook and sheet: what drafts, text boxes and picture targets belong to.
