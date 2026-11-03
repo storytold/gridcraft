@@ -284,6 +284,7 @@ mod russian_help_tests {
             let expected = match locale {
                 FormulaLocale::Ru => format!("СУММ({number}1; [{number}2]; ...)"),
                 FormulaLocale::Es | FormulaLocale::Pl => format!("SUMA({number}1; [{number}2]; ...)"),
+                FormulaLocale::Fr => format!("SOMME({number}1; [{number}2]; ...)"),
                 FormulaLocale::En => format!("SUM({number}1, [{number}2], ...)"),
             };
             assert_eq!(hint, expected, "{language:?}");
