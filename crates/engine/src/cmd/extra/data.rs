@@ -112,7 +112,7 @@ pub(super) fn from_table_range(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
     let r = if r.is_single() { crate::selection::current_region(sh, r.start) } else { r };
-    let text = crate::display::range_text(&d.wb, d.wb.active_sheet(), r);
+    let text = crate::display::range_text(&d.wb, d.wb.active_sheet(), r)?;
     from_csv(s, &json!({"text": text, "delimiter": "\t", "sheet": format!("{} (2)", sh.name).chars().take(31).collect::<String>()}))
 }
 

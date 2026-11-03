@@ -15,7 +15,7 @@ fn book(rtl: bool, cells: &[(&str, gridcraft_core::Value, gridcraft_model::HAlig
 
 fn copied(wb: &Workbook, range: &str) -> String {
     let r = RangeRef::parse(range).unwrap();
-    range_html(wb, 0, r, &crate::display::range_text(wb, 0, r)).unwrap()
+    range_html(wb, 0, r, &crate::display::range_text(wb, 0, r).unwrap()).unwrap()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
