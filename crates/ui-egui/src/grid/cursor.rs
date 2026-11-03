@@ -4,6 +4,12 @@ use super::geo::Geo;
 use super::interact::{col_edge, freeze_handles, hidden_col_edge, hidden_row_edge, on_border, row_edge};
 use super::{CellRef, Color32, CursorIcon, Drag, Pos2, RangeRef, Rect, Sheet, SheetApp, Stroke, pos2, vec2};
 
+/// Whether a menu, a dialog or another area is drawn above the sheet at `pos`: such a layer owns
+/// the pointer, so the grid must not paint its own cursor over it.
+pub(super) fn popup_over(ctx: &egui::Context, pos: Option<Pos2>) -> bool {
+    pos.and_then(|p| ctx.layer_id_at(p)).is_some_and(|layer| layer.order >= egui::Order::Foreground)
+}
+
 /// Decide after interaction so drag start and release use the new state in the same frame.
 pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
     if app.text_box_editor.is_some() || app.grid.hf_edit.is_some() {
@@ -24,8 +30,10 @@ pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Resp
         app.grid.hover_cell = in_cells.then(|| geo.cell_at(sh, p));
     }
     // Draw tools and Insert › Controls placement own the cursor over cells, including while
-    // recording a stroke or drawing the control.
-    if (!app.session.draw_tool.is_empty() || app.grid.placing.is_some()) && in_cells {
+    // recording a stroke or drawing the control — but not through a menu or a dialog drawn above
+    // the sheet: the pointer there belongs to the popup, and the crosshair it left behind stayed
+    // until the pointer crossed out of the grid.
+    if (!app.session.draw_tool.is_empty() || app.grid.placing.is_some()) && in_cells && !popup_over(ctx, pos) {
         ctx.set_cursor_icon(CursorIcon::Crosshair);
         return;
     }

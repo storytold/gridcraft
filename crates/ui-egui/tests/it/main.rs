@@ -69,6 +69,7 @@ mod keytips_generated;
 mod legacy_keytips;
 mod macro_editor;
 mod macros_ui;
+mod menu_cursor;
 mod menu_hover;
 mod merge_center_label;
 mod merged_cells;

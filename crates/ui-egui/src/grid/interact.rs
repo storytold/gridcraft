@@ -7,8 +7,7 @@ use super::menus::set_fill_tag;
 use super::selection::select_ranges;
 use super::tables::{is_filter_button, table_headings};
 use super::{
-    CellRef, Color32, CursorIcon, Drag, EditState, MAX_COLS, MAX_ROWS, Painter, Pos2, RangeRef, Rect, Sheet, SheetApp, Stroke, Tokens, Workbook,
-    json, pos2, vec2,
+    CellRef, Color32, Drag, EditState, MAX_COLS, MAX_ROWS, Painter, Pos2, RangeRef, Rect, Sheet, SheetApp, Stroke, Tokens, Workbook, json, pos2, vec2,
 };
 
 // ------------------------------------------------------------------ interaction
@@ -217,10 +216,14 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
         (input.in_cells, input.position, input.response, input.geo, input.sheet, input.primary_clicked);
     let ctx = input.context.clone();
     if !app.session.draw_tool.is_empty() && in_cells {
-        ctx.set_cursor_icon(CursorIcon::Crosshair);
+        // A menu or dialog above the sheet owns the pointer, so a stroke belongs to it and not to
+        // the cells underneath. egui already withholds the drag from a popup; this keeps the grid
+        // out of it on its own terms, as `update_cursor` does for the crosshair.
+        let over_popup = super::cursor::popup_over(&ctx, pos);
         if app.session.draw_tool == "pen" {
             if let Some(p) = pos
                 && resp.dragged()
+                && !over_popup
             {
                 // Through the cell under the pointer, so frozen panes and pages map right.
                 let c = geo.cell_at(sh, p);
