@@ -152,6 +152,30 @@ fn reads_independent_indices_reordered_keys_and_both_relationship_layouts() {
 }
 
 #[test]
+fn dynamic_array_metadata_is_spelled_the_same_with_and_without_pictures() {
+    // #2339: with an in-cell picture the XLDAPR extension URI was written in upper case, and
+    // Excel refused the workbook; the dynamic-array-only metadata, which Excel opens, is lower case.
+    let xldapr_uri = |pictures: bool| {
+        let mut wb = Workbook::new();
+        let sheet = wb.sheet_mut(0).unwrap();
+        if pictures {
+            sheet.set_picture(at("B2"), Arc::new(picture(png(), "image/png", "red")));
+        }
+        let mut f = Cell::formula(Formula::new("SEQUENCE(3)"));
+        f.value = Value::Number(1.0);
+        sheet.cells.set(at("D1"), f);
+        sheet.spill_ranges.insert(at("D1"), RangeRef::parse("D1:D3").unwrap());
+        let bytes = write_xlsx(&wb).unwrap();
+        let mut package = Package::open(&bytes).unwrap();
+        let metadata = package.read_xml("xl/metadata.xml").unwrap().unwrap();
+        let future = metadata.kids("futureMetadata").find(|m| m.attr("name") == Some("XLDAPR")).unwrap();
+        future.child("bk").unwrap().child("extLst").unwrap().child("ext").unwrap().attr("uri").unwrap().to_string()
+    };
+    assert_eq!(xldapr_uri(false), "{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}");
+    assert_eq!(xldapr_uri(true), xldapr_uri(false));
+}
+
+#[test]
 fn pictures_roundtrip_across_sheets_with_and_without_dynamic_arrays() {
     for dynamic in [false, true] {
         let mut wb = Workbook::new();
