@@ -4019,6 +4019,24 @@ fn sort_moves_identical_merged_blocks_and_refuses_anything_else() {
     assert_eq!(v(&s, "A3"), Value::text("d"));
     assert_eq!(merges(&s), ["A1:A2", "A3:A4"]);
 
+    // A separate key column sorts merged rows in descending order as units.
+    let mut s = self::s();
+    for (i, (block, key)) in [("d", 2), ("b", 4), ("c", 1), ("a", 3)].iter().enumerate() {
+        s.execute("cell.set", json!({"cell": format!("A{}", i + 1), "input": block})).unwrap();
+        s.execute("cell.set", json!({"cell": format!("C{}", i + 1), "input": key.to_string()})).unwrap();
+        s.execute("home.mergeCells", json!({"range": format!("A{0}:B{0}", i + 1)})).unwrap();
+    }
+    s.execute("data.sort", json!({"range": "A1:C4", "keys": [{"column": "C", "order": "desc"}]})).unwrap();
+    assert_eq!(["A1", "A2", "A3", "A4"].map(|c| v(&s, c)), ["b", "a", "d", "c"].map(Value::text));
+    assert_eq!(["C1", "C2", "C3", "C4"].map(|c| v(&s, c)), [4.0, 3.0, 2.0, 1.0].map(Value::Number));
+
+    // Different-sized merged blocks are refused even when their union covers the body.
+    let mut s = self::s();
+    s.execute("home.mergeCells", json!({"range": "A1:A2"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "B1:C2"})).unwrap();
+    let err = s.execute("data.sort", json!({"range": "A1:C2", "keys": [{"column": "A"}]})).unwrap_err();
+    assert!(err.to_string().contains("merged cells need to be the same size"), "different sizes: {err}");
+
     // Same-size merges that do not cover the whole range (column C is unmerged), one merged row
     // among unmerged ones, and a merge covering only part of the range are all refused, unchanged.
     for (range, merge, key) in [("A1:C4", "A1:B1", "C"), ("A1:A4", "A1:B1", "A"), ("A1:A4", "A2:A3", "A")] {
