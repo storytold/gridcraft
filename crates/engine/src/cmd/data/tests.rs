@@ -481,6 +481,25 @@ fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
 }
 
 #[test]
+fn a_relative_list_source_is_read_from_the_cell_being_checked() {
+    // As in Excel, `=$B1:$B2` on A3:A4,A1:A2 is written for A1 (the top-left cell of all the
+    // areas) and lists B4:B5 at A4. It used to list B1:B2 in every cell.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "B1:B5", "values": [["a"], ["b"], ["c"], ["d"], ["e"]]})).unwrap();
+    s.execute("data.validation", json!({"range": "A3:A4,A1:A2", "type": "list", "formula1": "=$B1:$B2"})).unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let dv = wb.active().unwrap().validations[0].clone();
+    for (cell, items) in [("A1", ["a", "b"]), ("A2", ["b", "c"]), ("A3", ["c", "d"]), ("A4", ["d", "e"])] {
+        let at = CellRef::parse(cell).unwrap();
+        assert_eq!(list_items(&wb, 0, at, &dv), items, "{cell}");
+        for v in ["a", "b", "c", "d", "e"] {
+            assert_eq!(check_validation(&wb, 0, at, v).is_none(), items.contains(&v), "{cell} with {v}");
+        }
+    }
+}
+
+#[test]
 fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     // A typo used to give a rule that validates nothing (`type="none"`) or the wrong check,
     // with no error.

@@ -152,8 +152,10 @@ fn list_source(f: &str) -> String {
     format!("\"{}\"", t.replace('"', "\"\""))
 }
 
-/// List entries of a list validation (literal or from a range).
-pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
+/// List entries of a list validation (literal or from a range) for the cell `at`. A relative
+/// source is written for the rule's top-left cell and read from `at`, as in Excel (`=$B1:$B3` on
+/// A1:A9 lists B5:B7 at A5).
+pub fn list_items(wb: &Workbook, sheet: usize, at: CellRef, dv: &Validation) -> Vec<String> {
     let f = dv.f1.trim();
     if is_literal_list(f) {
         // A quoted list is a string literal: `""` inside stands for one `"`.
@@ -163,8 +165,8 @@ pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
         };
         return items.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
     }
-    let at = RangeRef::top_left(&dv.ranges).unwrap_or_default();
-    match gridcraft_calc::evaluate(wb, sheet, at, f) {
+    let first = RangeRef::top_left(&dv.ranges).unwrap_or(at);
+    match gridcraft_calc::evaluate(wb, sheet, at, &formula_at(f, first, at)) {
         Value::Array(a) => a.data.iter().filter(|v| !v.is_empty()).map(Value::display).collect(),
         v if !v.is_empty() && !v.is_error() => vec![v.display()],
         _ => vec![],
@@ -200,7 +202,7 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
     let eval = |f: &str| gridcraft_calc::evaluate(wb, sheet, at, &formula_at(f, first, at));
     let num = |f: &str| eval(f).to_number().ok();
     let ok = match dv.kind {
-        ValidationKind::List => list_items(wb, sheet, dv).iter().any(|x| x.eq_ignore_ascii_case(input)),
+        ValidationKind::List => list_items(wb, sheet, at, dv).iter().any(|x| x.eq_ignore_ascii_case(input)),
         ValidationKind::Custom => eval(&dv.f1).to_bool().unwrap_or(false),
         ValidationKind::TextLength => {
             let n = input.chars().count() as f64;
