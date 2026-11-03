@@ -31,6 +31,7 @@ impl FieldIn {
 struct CacheIn {
     source: String,
     fields: Vec<FieldIn>,
+    refresh_on_load: bool,
 }
 
 /// Workbook-level pivot cache lookup, filled from `<pivotCaches>`; caches are parsed once.
@@ -130,7 +131,7 @@ fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn>
         cx.warn("a PivotTable's cache has no fields; kept as plain cells");
         return None;
     }
-    Some(CacheIn { source, fields })
+    Some(CacheIn { source, fields, refresh_on_load: x.flag("refreshOnLoad", false) })
 }
 
 /// Reads the PivotTables related to a worksheet part.
@@ -163,8 +164,9 @@ pub fn read_pivots(cx: &mut Ctx<'_>, caches: &mut CachesIn, sheet_part: &str, sh
             }
         };
         let Some(cache) = cache else { continue };
-        if let Some(pt) = read_table(cx, &x, &cache, caches.next_id) {
+        if let Some(mut pt) = read_table(cx, &x, &cache, caches.next_id) {
             caches.next_id = caches.next_id.saturating_add(1);
+            pt.refresh_on_load = cache.refresh_on_load;
             out.push(pt);
         }
     }

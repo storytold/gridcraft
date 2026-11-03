@@ -760,4 +760,25 @@ fn sylk_survives_huge_relative_offsets_and_width_floods() {
     flood.extend_from_slice(b"C;Y1;X1;K1\nE\n");
     let (wb, _) = open_bytes("widths.slk", &flood).unwrap();
     assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::Number(1.0));
+fn pivots_that_ask_for_a_refresh_on_open_are_rebuilt() {
+    // #2113: a file saved without its report cells (`saveData="0"`, `refreshOnLoad="1"`) opened
+    // with an empty report; Excel rebuilds it from the source.
+    let mut s = crate::Session::new();
+    s.new_workbook();
+    let rows = serde_json::json!([["Region", "Sales"], ["East", 10], ["West", 20], ["East", 5]]);
+    s.execute("range.setValues", serde_json::json!({"range": "A1", "values": rows})).unwrap();
+    let p = serde_json::json!({"source": "Sheet1!$A$1:$B$4", "destination": "Sheet1!D3", "rows": ["Region"], "values": ["Sales"]});
+    s.execute("insert.pivotTable", p).unwrap();
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    let sh = wb.sheet_mut(0).unwrap();
+    let report = sh.pivots.first().and_then(|pt| pt.last_range).unwrap();
+    sh.take_cells(report);
+    assert_eq!(sh.value(CellRef::parse("E6").unwrap()), gridcraft_core::Value::Empty);
+    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let (back, warnings) = open_bytes("report.xlsx", &bytes).unwrap();
+    assert!(warnings.iter().all(|w| !w.contains("PivotTable")), "{warnings:?}");
+    let sh = back.sheet(0).unwrap();
+    assert!(sh.pivots.first().is_some_and(|pt| pt.refresh_on_load));
+    let text = |a: &str| sh.value(CellRef::parse(a).unwrap()).display();
+    assert_eq!([text("D4"), text("E4"), text("D5"), text("E5"), text("D6"), text("E6")], ["East", "15", "West", "20", "Grand Total", "35"]);
 }

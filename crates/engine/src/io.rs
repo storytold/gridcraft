@@ -131,7 +131,26 @@ fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
     warnings.extend(crate::macros::load(&mut wb));
     warnings.extend(adopt_python(&mut wb));
     warnings.extend(enforce_python_limits(&mut wb));
+    warnings.extend(refresh_pivots_on_load(&mut wb));
     Ok((wb, warnings))
+}
+
+/// PivotTables whose file asks for a refresh on open (`refreshOnLoad`) are rebuilt from their
+/// source, as Excel does: a file saved without its report cells (`saveData="0"`) otherwise opens
+/// with an empty report. One that can't be rebuilt keeps the cells the file stored, with a warning.
+fn refresh_pivots_on_load(wb: &mut Workbook) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for si in 0..wb.sheets.len() {
+        let count = wb.sheets.get(si).map_or(0, |sh| sh.pivots.len());
+        for idx in 0..count {
+            let Some(pt) = wb.sheets.get(si).and_then(|sh| sh.pivots.get(idx)).filter(|pt| pt.refresh_on_load) else { continue };
+            let name = pt.name.clone();
+            if let Err(e) = crate::pivot::refresh(wb, si, idx, false) {
+                warnings.push(format!("PivotTable \"{name}\" couldn't be refreshed on open, so it shows the values saved in the file: {e}"));
+            }
+        }
+    }
+    warnings
 }
 
 /// The most result cells [`adopt_python`] rebuilds from a file's cached spills, over all its

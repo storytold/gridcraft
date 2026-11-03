@@ -118,6 +118,8 @@ fn workbook() -> Workbook {
         calculated_fields: vec![],
         values_on_rows: false,
         values_position: None,
+        // The writer always asks for a refresh on open, so the pivot reads back with it.
+        refresh_on_load: true,
     };
     // Pivot 2: table source, date grouping on two levels, show-values-as, multi-select page
     // filter and a hidden-items filter on a column field.
@@ -178,6 +180,8 @@ fn workbook() -> Workbook {
         calculated_fields: vec![],
         values_on_rows: false,
         values_position: None,
+        // The writer always asks for a refresh on open, so the pivot reads back with it.
+        refresh_on_load: true,
     };
     // Pivot 3: defaults, defined-name source, compact.
     let p3 = PivotTable {
@@ -189,6 +193,7 @@ fn workbook() -> Workbook {
         values: vec![PivotValue { source_col: "Units".into(), func: PivotFunc::Product, name: "Product of Units".into(), ..PivotValue::default() }],
         filters: vec![PivotFilter { source_col: "Channel".into(), selected: None }],
         last_range: Some(rr("AB1:AC6")),
+        refresh_on_load: true,
         ..PivotTable::default()
     };
     report.pivots = vec![p1, p2, p3];
