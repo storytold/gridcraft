@@ -88,6 +88,9 @@ pub struct UiState {
     pub ribbon_tab: String,
     pub ribbon_collapsed: bool,
     pub formula_bar_expanded: bool,
+    /// Lines the expanded formula bar shows: the height its bottom edge was last dragged to.
+    /// Expanding it again (the chevron, Ctrl+Shift+U) returns to that height.
+    pub formula_bar_lines: usize,
     pub status_bar: bool,
     /// Motion in the UI: the selection outline glides to a new selection (View ▸ Animations).
     pub animations: bool,
@@ -137,6 +140,7 @@ impl Default for UiState {
             ribbon_tab: "Home".into(),
             ribbon_collapsed: false,
             formula_bar_expanded: false,
+            formula_bar_lines: formula_bar::MAX_LINES,
             status_bar: true,
             animations: true,
             autocomplete: true,
