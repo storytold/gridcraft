@@ -853,6 +853,53 @@ pub fn write_file(path: &str, _bytes: &[u8]) -> Result<()> {
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
+/// Environment variables naming the font PDF export embeds for text the standard PDF fonts lack
+/// (Thai, for example TH Sarabun New), and its bold face.
+pub const PDF_FONT_ENV: &str = "GRIDCRAFT_PDF_THAI_FONT";
+pub const PDF_BOLD_FONT_ENV: &str = "GRIDCRAFT_PDF_THAI_FONT_BOLD";
+
+/// Registers the font PDF export embeds for text the standard PDF fonts lack (see
+/// [`gridcraft_pdf::register_fallback_font`]). Returns the font's name.
+pub fn register_pdf_font(bytes: Vec<u8>, bold: bool) -> Result<String> {
+    gridcraft_pdf::register_fallback_font(bytes, bold).map_err(|e| EngineError::Other(e.to_string()))
+}
+
+/// Whether PDF export has a fallback face of its own for regular or bold text.
+pub fn has_pdf_font_face(bold: bool) -> bool {
+    gridcraft_pdf::has_fallback_face(bold)
+}
+
+/// The bytes of a font file: a regular file only (a FIFO or device reports a size of 0, and
+/// reading it could block start-up or never end), and never more than the PDF crate accepts.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_font_file(path: &std::path::Path) -> std::result::Result<Vec<u8>, String> {
+    use std::io::Read;
+    let limit = gridcraft_pdf::MAX_FONT_BYTES as u64;
+    if !std::fs::metadata(path).map_err(|e| e.to_string())?.is_file() {
+        return Err("not a regular file".into());
+    }
+    let mut bytes = Vec::new();
+    // One byte past the limit tells a file that is too large from one of exactly the limit.
+    std::fs::File::open(path).and_then(|f| f.take(limit + 1).read_to_end(&mut bytes)).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > limit { Err("the file is too large".into()) } else { Ok(bytes) }
+}
+
+/// Registers the PDF fallback fonts named by [`PDF_FONT_ENV`] and [`PDF_BOLD_FONT_ENV`], once at
+/// start-up. Returns a warning for each font that can't be used; export then works as without it.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn load_pdf_fonts_from_env() -> Vec<String> {
+    let mut warnings = Vec::new();
+    for (var, bold) in [(PDF_FONT_ENV, false), (PDF_BOLD_FONT_ENV, true)] {
+        let Some(path) = std::env::var_os(var) else { continue };
+        let loaded = read_font_file(std::path::Path::new(&path)).and_then(|bytes| register_pdf_font(bytes, bold).map_err(|e| e.to_string()));
+        match loaded {
+            Ok(name) => log::info!("PDF export embeds {name} for text the standard PDF fonts lack ({var})"),
+            Err(e) => warnings.push(format!("{var}={}: {e}", std::path::Path::new(&path).display())),
+        }
+    }
+    warnings
+}
+
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 pub fn base64_encode(data: &[u8]) -> String {
