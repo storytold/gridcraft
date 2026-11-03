@@ -372,5 +372,48 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("FN", Entry::Finish(Action::Command("file.new"))),    // Excel: New page; New page
     ("FO", Entry::Finish(Action::Command("file.open"))),   // Excel: Open page; fires immediately in Excel; deeper aliases dropped as unreachable
     ("FP", Entry::Finish(Action::Command("file.print"))),  // Excel: Print page; containment(Print)
-    ("Q", Entry::Finish(Action::Pending("ui.search"))),    // pending; Excel: Search / Tell Me; Alt+Q search box does not exist yet (issue #49)
+    ("IR", Entry::Finish(Action::Command("home.insertRows"))), // Excel: Insert > Rows; Legacy Excel 2003 menu path (#941).
+    ("IC", Entry::Finish(Action::Command("home.insertColumns"))), // Excel: Insert > Columns; Legacy Excel 2003 menu path (#941).
+    ("IE", Entry::Finish(Action::Dialog("insertCells"))),  // Excel: Insert > Cells; Legacy Excel 2003 menu path (#941).
+    ("IW", Entry::Finish(Action::Command("home.insertSheet"))), // Excel: Insert > Worksheet; Legacy Excel 2003 menu path (#941).
+    ("IF", Entry::Finish(Action::Dialog("insertFunction"))), // Excel: Insert > Function; Legacy Excel 2003 menu path (#941).
+    ("IND", Entry::Finish(Action::Dialog("defineName"))),  // Excel: Insert > Name > Define; Legacy Excel 2003 menu path (#941).
+    ("IS", Entry::Finish(Action::Control("insert.symbol"))), // Excel: Insert > Symbol; Legacy Excel 2003 menu path (#941).
+    ("ED", Entry::Finish(Action::Dialog("deleteCells"))),  // Excel: Edit > Delete; Legacy Excel 2003 menu path (#941).
+    ("EM", Entry::Finish(Action::Dialog("moveSheet"))),    // Excel: Edit > Move or Copy Sheet; Legacy Excel 2003 menu path (#941).
+    ("EL", Entry::Finish(Action::Command("home.deleteSheet"))), // Excel: Edit > Delete Sheet; Legacy Excel 2003 menu path (#941).
+    ("EAA", Entry::Finish(Action::Command("edit.clearAll"))), // Excel: Edit > Clear > All; Legacy Excel 2003 menu path (#941).
+    ("EAC", Entry::Finish(Action::Command("edit.clearContents"))), // Excel: Edit > Clear > Contents; Legacy Excel 2003 menu path (#941).
+    ("EAM", Entry::Finish(Action::Command("edit.clearComments"))), // Excel: Edit > Clear > Comments; Legacy Excel 2003 menu path (#941).
+    ("EF", Entry::Finish(Action::Dialog("find"))),         // Excel: Edit > Find; Legacy Excel 2003 menu path (#941).
+    ("EG", Entry::Finish(Action::Dialog("goTo"))),         // Excel: Edit > Go To; Legacy Excel 2003 menu path (#941).
+    ("ORA", Entry::Finish(Action::Command("home.autofitRowHeight"))), // Excel: Format > Row > AutoFit; Legacy Excel 2003 menu path (#941).
+    ("ORE", Entry::Finish(Action::Dialog("rowHeight"))),   // Excel: Format > Row > Height; Legacy Excel 2003 menu path (#941).
+    ("ORH", Entry::Finish(Action::Command("home.hideRows"))), // Excel: Format > Row > Hide; Legacy Excel 2003 menu path (#941).
+    ("ORU", Entry::Finish(Action::Command("home.unhideRows"))), // Excel: Format > Row > Unhide; Legacy Excel 2003 menu path (#941).
+    ("OCW", Entry::Finish(Action::Dialog("columnWidth"))), // Excel: Format > Column > Width; Legacy Excel 2003 menu path (#941).
+    ("OCH", Entry::Finish(Action::Command("home.hideColumns"))), // Excel: Format > Column > Hide; Legacy Excel 2003 menu path (#941).
+    ("OCU", Entry::Finish(Action::Command("home.unhideColumns"))), // Excel: Format > Column > Unhide; Legacy Excel 2003 menu path (#941).
+    ("OHR", Entry::Finish(Action::Dialog("renameSheet"))), // Excel: Format > Sheet > Rename; Legacy Excel 2003 menu path (#941).
+    ("OHH", Entry::Finish(Action::Command("sheet.hide"))), // Excel: Format > Sheet > Hide; Legacy Excel 2003 menu path (#941).
+    ("OHU", Entry::Finish(Action::Command("sheet.unhide"))), // Excel: Format > Sheet > Unhide; Legacy Excel 2003 menu path (#941).
+    ("OE", Entry::Finish(Action::Command("home.formatCells"))), // Excel: Format > Cells; Legacy Excel 2003 menu path (#941).
+    ("OD", Entry::Finish(Action::Command("home.conditionalFormat"))), // Excel: Format > Conditional Formatting; Legacy Excel 2003 menu path (#941).
+    ("DFF", Entry::Finish(Action::Command("data.filter"))), // Excel: Data > Filter > AutoFilter; Legacy Excel 2003 menu path (#941).
+    ("DS", Entry::Finish(Action::Dialog("sort"))),         // Excel: Data > Sort; Legacy Excel 2003 menu path (#941).
+    ("DGG", Entry::Finish(Action::Command("data.group"))), // Excel: Data > Group and Outline > Group; Legacy Excel 2003 menu path (#941).
+    ("DGU", Entry::Finish(Action::Command("data.ungroup"))), // Excel: Data > Group and Outline > Ungroup; Legacy Excel 2003 menu path (#941).
+    ("DGS", Entry::Finish(Action::Command("data.showDetail"))), // Excel: Data > Group and Outline > Show Detail; Legacy Excel 2003 menu path (#941).
+    ("DGH", Entry::Finish(Action::Command("data.hideDetail"))), // Excel: Data > Group and Outline > Hide Detail; Legacy Excel 2003 menu path (#941).
+    ("DL", Entry::Finish(Action::Command("data.validation"))), // Excel: Data > Validation; Legacy Excel 2003 menu path (#941).
+    ("DT", Entry::Finish(Action::Command("data.dataTable"))), // Excel: Data > Table (what-if data table); Legacy Excel 2003 menu path (#941).
+    ("VN", Entry::Finish(Action::Command("view.normal"))), // Excel: View > Normal; Legacy Excel 2003 menu path (#941).
+    ("VP", Entry::Finish(Action::Command("view.pageBreakPreview"))), // Excel: View > Page Break Preview; Legacy Excel 2003 menu path (#941).
+    ("VZ", Entry::Finish(Action::Dialog("zoom"))),         // Excel: View > Zoom; Legacy Excel 2003 menu path (#941).
+    ("TO", Entry::Finish(Action::Dialog("options"))),      // Excel: Tools > Options; Legacy Excel 2003 menu path (#941).
+    ("TUA", Entry::Finish(Action::Command("formulas.removeArrows"))), // Excel: Tools > Formula Auditing > Remove All Arrows; Legacy Excel 2003 menu path (#941).
+    ("TUD", Entry::Finish(Action::Command("formulas.traceDependents"))), // Excel: Tools > Formula Auditing > Trace Dependents; Legacy Excel 2003 menu path (#941).
+    ("TUT", Entry::Finish(Action::Command("formulas.tracePrecedents"))), // Excel: Tools > Formula Auditing > Trace Precedents; Legacy Excel 2003 menu path (#941).
+    ("FU", Entry::Finish(Action::Dialog("pageSetup"))),                  // Excel: File > Page Setup; Legacy Excel 2003 menu path (#941).
+    ("Q", Entry::Finish(Action::Pending("ui.search"))), // pending; Excel: Search / Tell Me; Alt+Q search box does not exist yet (issue #49)
 ];
