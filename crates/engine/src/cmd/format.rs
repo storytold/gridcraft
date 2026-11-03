@@ -415,14 +415,23 @@ const BORDER_PRESETS: [&str; 18] = [
     "diagonalUp",
 ];
 
+/// A `home.borders` name parameter: missing or `null` takes `default`; anything but text is
+/// refused rather than read as missing.
+fn border_name<'a>(p: &'a Json, key: &str, default: &'a str) -> Result<&'a str> {
+    match p.get(key) {
+        None | Some(Json::Null) => Ok(default),
+        Some(v) => v.as_str().ok_or_else(|| bad("home.borders", format!("`{key}` must be text, not `{v}`"))),
+    }
+}
+
 fn borders(s: &mut Session, p: &Json) -> Result<Json> {
-    let preset = str_param(p, "preset").unwrap_or("bottom").to_string();
+    let preset = border_name(p, "preset", "bottom")?.to_string();
     if !BORDER_PRESETS.contains(&preset.as_str()) {
         return Err(bad("home.borders", format!("unknown `preset`: `{preset}` ({})", BORDER_PRESETS.join(", "))));
     }
     let color = color_param(p.get("color")).unwrap_or(Color::Auto);
     // An unknown style is refused, not drawn as some other line.
-    let style = str_param(p, "style").unwrap_or("thin");
+    let style = border_name(p, "style", "thin")?;
     let base = BorderStyle::from_name(style).ok_or_else(|| {
         let names: Vec<&str> = BorderStyle::NAMES.iter().map(|(_, name)| *name).collect();
         bad("home.borders", format!("unknown `style`: `{style}` ({})", names.join(", ")))
@@ -849,6 +858,21 @@ mod tests {
         assert_eq!(v(&mut s, "B1"), Json::Null);
         assert_eq!(v(&mut s, "B2"), Json::Null);
         assert_eq!(v(&mut s, "D1"), json!(4.0));
+    }
+
+    #[test]
+    fn borders_refuse_a_preset_or_style_that_is_not_text() {
+        // A number or `false` read as a missing key drew the default thin bottom border.
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let before = s.doc().unwrap().wb.active().unwrap().style_id(CellRef::new(1, 1));
+        for p in [json!({"range": "B2", "style": 5}), json!({"range": "B2", "preset": false}), json!({"range": "B2", "preset": ["bottom"]})] {
+            let e = s.execute("home.borders", p.clone()).unwrap_err().to_string();
+            assert!(e.contains("must be text"), "{p}: {e}");
+        }
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().style_id(CellRef::new(1, 1)), before, "nothing drawn");
+        // `null` is the same as leaving the key out.
+        s.execute("home.borders", json!({"range": "B2", "preset": null, "style": null})).unwrap();
     }
 
     #[test]
