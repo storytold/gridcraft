@@ -213,7 +213,9 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     });
     let sym = big_button(ui, Icon::Symbol, "Symbol", "Symbol", true);
     control_keytip(app, ui, &sym, "insert.symbol");
-    egui::Popup::menu(&sym).show(|ui| {
+    // Opened by its key tip too (Alt+I, S): the gallery picks the symbol, nothing is inserted before.
+    let forced = invoke(app, "insert.symbol");
+    egui::Popup::menu(&sym).open_memory(popup_command(forced, sym.clicked())).show(|ui| {
         ui.set_width(260.0);
         ui.horizontal_wrapped(|ui| {
             for ch in [

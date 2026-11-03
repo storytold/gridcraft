@@ -179,9 +179,10 @@ fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str) -> (
 /// Whether `t` names a defined name seen from `sheet` (`Name`, or `Sheet1!Name` looked up on
 /// that sheet), the way the evaluator looks names up.
 fn is_defined_name(wb: &Workbook, sheet: usize, t: &str) -> bool {
-    match t.split_once('!') {
-        Some((s, bare)) => wb.sheet_index(s.trim_matches('\'')).is_some_and(|i| wb.name(bare, i).is_some()),
-        None => wb.name(t, sheet).is_some(),
+    // `'Bob''s'!Name`: the sheet is unquoted as everywhere else (#2012).
+    match gridcraft_core::split_sheet(t) {
+        (Some(s), bare) => wb.sheet_index(&s).is_some_and(|i| wb.name(bare, i).is_some()),
+        (None, _) => wb.name(t, sheet).is_some(),
     }
 }
 
