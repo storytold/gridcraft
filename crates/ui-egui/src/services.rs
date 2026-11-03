@@ -32,8 +32,9 @@ pub struct Services {
     /// gets it from egui's `Event::Paste`). `None` from the host, or no service (web), pastes
     /// GridCraft's own clipboard.
     pub paste_text: Option<Box<dyn FnMut() -> Option<String>>>,
-    /// Desktop: read a clipboard image for chart duplication or ordinary image paste.
-    pub paste_image: Option<Box<dyn FnMut() -> Option<egui::ColorImage>>>,
+    /// Read a system clipboard picture for ribbon/menu paste or editable-chart duplication when
+    /// no text is available. Cmd/Ctrl+V also receives egui's `Event::PasteImage`.
+    pub paste_image: Option<Box<dyn FnMut() -> Option<image::RgbaImage>>>,
     /// Web: deliver a file to the user (name, bytes).
     pub download: Option<Download>,
     /// Web: start an asynchronous file pick; the bytes arrive later in `inbox`.

@@ -410,6 +410,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Options|Save" => "Salvataggio",
         "Options|Editing" => "Modifica",
         "Show formula bar" => "Mostra barra della formula",
+        "Highlight the active cell's row" => "Evidenzia la riga della cella attiva",
         "Enable AutoComplete for cell values" => "Abilita Completamento automatico per i valori delle celle",
         "Save .xlsx workbooks automatically after every change" => "Salva automaticamente le cartelle di lavoro .xlsx dopo ogni modifica",
         "Workbook calculation" => "Calcolo della cartella di lavoro",

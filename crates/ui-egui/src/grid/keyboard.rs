@@ -5,42 +5,13 @@ use super::{CellRef, Drag, Sheet, SheetApp, json};
 
 /// Grid keyboard handling when no text field has focus.
 pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
-    // Focus left on an editor that no longer exists goes back to the grid.
-    let stale = [egui::Id::unique("gridcraft.cell_editor"), egui::Id::unique("gridcraft.formula_bar"), crate::text_box::editor_id()];
-    let editing = app.editor.is_some() || app.text_box_editor.is_some();
-    if !editing && ctx.memory(|m| m.focused()).is_some_and(|f| stale.contains(&f)) {
-        resp.request_focus();
-    }
-    let other_focus = ctx.memory(|m| m.focused()).is_some_and(|f| f != resp.id && (editing || !stale.contains(&f)));
-    // An open filter menu owns the keyboard even when a click inside it left focus on nothing (#1516).
-    // So do the fill menu (its Esc closes it, not the copy) and the right-drag that opens it (an
-    // arrow key would move the selection the menu fills from), and a macro's question.
-    if editing
-        || app.dialog.is_some()
-        || other_focus
-        || app.message.is_some()
-        || app.grid.filter_menu.is_some()
-        || app.grid.fill_menu.is_some()
-        || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
-        || app.macros.question.is_some()
-    {
+    if !prepare_grid_keyboard(app, ctx, resp) {
         return;
     }
-    if ctx.memory(|m| m.focused()).is_none() {
-        resp.request_focus();
-    }
-    // The grid owns arrows, Tab and Escape (egui would otherwise move focus between widgets).
-    ctx.memory_mut(|m| {
-        m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
-    });
     let events = ctx.input(|i| i.events.clone());
     // egui-winit consumes Ctrl+V on press even when its text clipboard is empty.
     // The matching key release remains available for native image-only clipboard data.
-    if events.iter().any(|e| matches!(e,egui::Event::Key {key:egui::Key::V,pressed:false,modifiers,..} if modifiers.command))
-        && !events.iter().any(|e| matches!(e, egui::Event::Paste(_)))
-        && app.system_clipboard_text().is_none()
-        && app.paste_chart_image()
-    {
+    if paste_image_on_key_release(app, &events) {
         return;
     }
     // A shortcut key that also types a character (Shift+Space sends Text(" ")) must not start an edit.
@@ -61,11 +32,9 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                 app.copy_to_clipboard(ctx, "edit.cut");
             }
             egui::Event::Paste(text) => app.paste_external(text),
-            // GridCraft has no image-clipboard pipeline and no cell-picture insert-from-clipboard
-            // command. Choosing to ignore `PasteImage` is explicit: inserting the bytes as a
-            // floating picture without a chosen anchor/size would be a new feature, not parity.
-            // A text representation, when the clipboard has one, still arrives as `Paste` above.
-            egui::Event::PasteImage(_) => {}
+            // A picture with no text on the clipboard (a screenshot, a browser image) is pasted as
+            // a floating picture at the active cell, as Excel does.
+            egui::Event::PasteImage(image) => app.paste_color_image(&image),
             // PRIMARY middle-click paste belongs to egui's TextEdit; the grid has no caret to
             // insert text at, so a middle click on a cell is deliberately not a paste.
             egui::Event::MiddleClickPaste { .. } => {}
@@ -165,4 +134,45 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             _ => {}
         }
     }
+}
+
+/// Prepares grid focus and reports whether grid keyboard input is currently allowed.
+fn prepare_grid_keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response) -> bool {
+    // Focus left on an editor that no longer exists goes back to the grid.
+    let stale = [egui::Id::unique("gridcraft.cell_editor"), egui::Id::unique("gridcraft.formula_bar"), crate::text_box::editor_id()];
+    let editing = app.editor.is_some() || app.text_box_editor.is_some();
+    if !editing && ctx.memory(|m| m.focused()).is_some_and(|f| stale.contains(&f)) {
+        resp.request_focus();
+    }
+    let other_focus = ctx.memory(|m| m.focused()).is_some_and(|f| f != resp.id && (editing || !stale.contains(&f)));
+    // An open filter menu owns the keyboard even when a click inside it left focus on nothing (#1516).
+    // So do the fill menu (its Esc closes it, not the copy) and the right-drag that opens it (an
+    // arrow key would move the selection the menu fills from), and a macro's question.
+    if editing
+        || app.dialog.is_some()
+        || other_focus
+        || app.message.is_some()
+        || app.grid.filter_menu.is_some()
+        || app.grid.fill_menu.is_some()
+        || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
+        || app.macros.question.is_some()
+    {
+        return false;
+    }
+    if ctx.memory(|m| m.focused()).is_none() {
+        resp.request_focus();
+    }
+    // The grid owns arrows, Tab and Escape (egui would otherwise move focus between widgets).
+    ctx.memory_mut(|m| {
+        m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
+    });
+    true
+}
+
+/// Handles image-only native clipboard contents when egui reports Ctrl+V only on key release.
+fn paste_image_on_key_release(app: &mut SheetApp, events: &[egui::Event]) -> bool {
+    events.iter().any(|e| matches!(e,egui::Event::Key {key:egui::Key::V,pressed:false,modifiers,..} if modifiers.command))
+        && !events.iter().any(|e| matches!(e, egui::Event::Paste(_)))
+        && app.system_clipboard_text().is_none()
+        && app.paste_chart_image()
 }

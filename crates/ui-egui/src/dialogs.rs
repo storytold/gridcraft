@@ -564,6 +564,8 @@ impl Dialog {
                     d.values.insert("text".into(), json!(text));
                     d.values.insert("tooltip".into(), json!(link.tooltip));
                     d.original_link_text = Some(text);
+                    // As in Excel, the dialog on a linked cell edits that link.
+                    d.title = "Edit Hyperlink".into();
                 }
                 d
             }

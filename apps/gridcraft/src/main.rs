@@ -171,8 +171,7 @@ fn read_clipboard<T>(
 fn services() -> Services {
     // Keep the owner alive: X11/Wayland serve clipboard data from this handle.
     let clipboard: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
-    let (html_clipboard, text_clipboard) = (clipboard.clone(), clipboard.clone());
-    let image_clipboard = clipboard.clone();
+    let (html_clipboard, text_clipboard, image_clipboard) = (clipboard.clone(), clipboard.clone(), clipboard.clone());
     Services {
         copy_html: Some(Box::new(move |html, text| {
             let mut clipboard = clipboard.borrow_mut();
@@ -184,16 +183,20 @@ fn services() -> Services {
         paste_html: Some(Box::new(move || read_clipboard(&html_clipboard, |clipboard| clipboard.get().html()))),
         paste_text: Some(Box::new(move || read_clipboard(&text_clipboard, |clipboard| clipboard.get_text()))),
         paste_image: Some(Box::new(move || {
-            let image = read_clipboard(&image_clipboard, |clipboard| clipboard.get_image())?;
-            let pixels = image.width.checked_mul(image.height)?;
-            if pixels == 0 || pixels > 16_777_216 || pixels.checked_mul(4)? != image.bytes.len() {
+            let clipboard_image = read_clipboard(&image_clipboard, |clipboard| clipboard.get_image())?;
+            let width = u32::try_from(clipboard_image.width).ok()?;
+            let height = u32::try_from(clipboard_image.height).ok()?;
+            let pixels = u64::from(width).checked_mul(u64::from(height))?;
+            let byte_len = usize::try_from(pixels.checked_mul(4)?).ok()?;
+            if width == 0 || height == 0 || width > 16_384 || height > 16_384 || pixels > 64 * 1024 * 1024 || byte_len != clipboard_image.bytes.len()
+            {
                 return None;
             }
-            Some(egui::ColorImage::from_rgba_unmultiplied([image.width, image.height], &image.bytes))
+            image::RgbaImage::from_raw(width, height, clipboard_image.bytes.into_owned())
         })),
         pick_open: Some(Box::new(|| {
             rfd::FileDialog::new()
-                .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "json"])
+                .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "slk", "json"])
                 .add_filter("Excel Workbook", &["xlsx", "xlsm"])
                 .add_filter("Excel 97-2003 Workbook (import)", &["xls"])
                 .add_filter("Excel Binary Workbook (data import)", &["xlsb"])

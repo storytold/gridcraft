@@ -11,9 +11,15 @@ pub(crate) struct ChartClipboard {
 }
 
 pub(super) fn fingerprint(image: &egui::ColorImage) -> u64 {
+    fingerprint_rgba(image.size, image.pixels.iter().flat_map(|pixel| pixel.to_srgba_unmultiplied()))
+}
+
+fn fingerprint_rgba(size: [usize; 2], pixels: impl Iterator<Item = u8>) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    image.size.hash(&mut h);
-    image.pixels.hash(&mut h);
+    size.hash(&mut h);
+    for channel in pixels {
+        channel.hash(&mut h);
+    }
     h.finish()
 }
 
@@ -46,24 +52,27 @@ impl SheetApp {
     /// and the source workbook is still current. Otherwise paste the actual image.
     pub(crate) fn paste_chart_image(&mut self) -> bool {
         let Some(image) = self.services.paste_image.as_mut().and_then(|read| read()) else { return false };
+        let (width, height) = image.dimensions();
+        if let Err(e) = crate::app::check_picture_size(width, height) {
+            self.alert(e);
+            return true;
+        }
         let doc = self.session.active().map(|d| d.uid);
+        let fingerprint = fingerprint_rgba([width as usize, height as usize], image.as_raw().iter().copied());
         if let Some(copy) = &self.chart_clipboard
             && doc == Some(copy.document)
-            && fingerprint(&image) == copy.fingerprint
+            && fingerprint == copy.fingerprint
         {
             let snapshot = copy.snapshot.clone();
             self.run_or_alert("chart.paste", json!({"snapshot":snapshot}));
         } else {
             self.chart_clipboard = None;
             let mut bytes = Vec::new();
-            let rgba: Vec<u8> = image.pixels.iter().flat_map(|p| p.to_srgba_unmultiplied()).collect();
-            let img = image::RgbaImage::from_raw(image.size[0] as u32, image.size[1] as u32, rgba);
-            let Some(img) = img else { return false };
-            match image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png) {
+            match image::DynamicImage::ImageRgba8(image).write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png) {
                 Ok(()) => self.run_or_alert(
                     "insert.picture",
                     json!({"base64":gridcraft_engine::io::base64_encode(&bytes),"mime":"image/png",
-                    "width":image.size[0] as f32/2.0,"height":image.size[1] as f32/2.0}),
+                    "width":width as f32/2.0,"height":height as f32/2.0}),
                 ),
                 Err(e) => self.alert(e.to_string()),
             }

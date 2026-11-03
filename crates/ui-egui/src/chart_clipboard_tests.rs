@@ -18,14 +18,14 @@ fn fixture() -> SheetApp {
     app
 }
 
-fn clipboard(app: &mut SheetApp, as_picture: bool) -> egui::ColorImage {
-    let image = egui::ColorImage::filled([40, 40], egui::Color32::WHITE);
+fn clipboard(app: &mut SheetApp, as_picture: bool) -> image::RgbaImage {
+    let color_image = egui::ColorImage::filled([40, 40], egui::Color32::WHITE);
     app.chart_clipboard = (!as_picture).then(|| super::ChartClipboard {
         snapshot: app.selected_chart_snapshot().unwrap(),
         document: app.session.active().unwrap().uid,
-        fingerprint: super::fingerprint(&image),
+        fingerprint: super::fingerprint(&color_image),
     });
-    image
+    image::RgbaImage::from_pixel(40, 40, image::Rgba([255, 255, 255, 255]))
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn picture_copies_changed_clipboards_and_other_workbooks_paste_images() {
         let mut app = fixture();
         let mut image = clipboard(&mut app, mode == "picture");
         if mode == "changed" {
-            image.pixels[0] = egui::Color32::RED;
+            image.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
         }
         if mode == "other workbook" {
             app.session.new_workbook();

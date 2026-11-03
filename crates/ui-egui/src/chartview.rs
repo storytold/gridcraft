@@ -670,11 +670,12 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
                 p.add(PathShape::convex_polygon(vec![pos2(r.center().x, r.top()), r.right_bottom(), r.left_bottom()], fill, Stroke::new(1.0, line)));
             }
             ShapeKind::Ink => {
-                let w = gridcraft_engine::cmd::draw::ink_width(sp) * geo.z;
+                let pt = gridcraft_engine::cmd::draw::ink_width(sp);
+                let w = pt * geo.z;
                 let pts: Vec<Pos2> =
                     gridcraft_engine::cmd::draw::ink_points(sp).iter().map(|q| pos2(r.left() + q[0] * geo.z, r.top() + q[1] * geo.z)).collect();
                 if pts.len() >= 2 {
-                    let col = if w > 8.0 { line.gamma_multiply(0.45) } else { line };
+                    let col = ink_color(line, pt);
                     p.add(PathShape::line(pts, PathStroke::new(w, col)));
                 }
                 label = false;
@@ -731,24 +732,23 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         let m = EguiMeasure { painter: p, z: geo.z };
         let prims = gridcraft_chart::render(ch, &data, ch.anchor.width, ch.anchor.height, &m);
         paint_prims(&p.with_clip_rect(r.intersect(p.clip_rect())), r.min, &prims, geo.z);
-        if app.selected_chart() == Some(ch.id) {
-            if let Some((element, bounds)) =
+        if app.selected_chart() == Some(ch.id)
+            && let Some((element, bounds)) =
                 p.ctx().data_mut(|d| d.get_temp::<(ChartElement, Rect)>(egui::Id::unique(("chart_element_bounds", ch.id))))
-                && element == selected_element(p.ctx(), ch.id)
-                && bounds.is_finite()
-            {
-                let overlay = p.with_clip_rect(r);
-                if let ChartElement::Series(index) = element {
-                    let mut colors = data.series.get(index).map(|series| vec![series.color]).unwrap_or_default();
-                    if let Some(format) = ch.format.series.get(&index) {
-                        colors.extend([format.fill_color, format.line_color, format.marker_fill, format.marker_border_color].into_iter().flatten());
-                    }
-                    let marks = series_selection_marks(&prims, &colors);
-                    paint_series_selection(&overlay, &marks, r.min, geo.z);
-                } else {
-                    let bounds = Rect::from_min_max(r.min + bounds.min.to_vec2() * geo.z, r.min + bounds.max.to_vec2() * geo.z).expand(3.0);
-                    overlay.rect_stroke(bounds, 0.0, Stroke::new(1.5, crate::theme::Tokens::get(p.ctx()).accent), StrokeKind::Outside);
+            && element == selected_element(p.ctx(), ch.id)
+            && bounds.is_finite()
+        {
+            let overlay = p.with_clip_rect(r);
+            if let ChartElement::Series(index) = element {
+                let mut colors = data.series.get(index).map(|series| vec![series.color]).unwrap_or_default();
+                if let Some(format) = ch.format.series.get(&index) {
+                    colors.extend([format.fill_color, format.line_color, format.marker_fill, format.marker_border_color].into_iter().flatten());
                 }
+                let marks = series_selection_marks(&prims, &colors);
+                paint_series_selection(&overlay, &marks, r.min, geo.z);
+            } else {
+                let bounds = Rect::from_min_max(r.min + bounds.min.to_vec2() * geo.z, r.min + bounds.max.to_vec2() * geo.z).expand(3.0);
+                overlay.rect_stroke(bounds, 0.0, Stroke::new(1.5, crate::theme::Tokens::get(p.ctx()).accent), StrokeKind::Outside);
             }
         }
         // The source-data highlight below is in cell space: mirrored with the cells.
@@ -930,6 +930,12 @@ pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Re
         }
     }
     None
+}
+
+/// The colour ink is painted in: a highlighter (a stroke over 8 pt wide) is translucent, by its
+/// width in points, so the live pen stroke and the committed ink agree at every zoom.
+pub(crate) fn ink_color(line: Color32, width_pt: f32) -> Color32 {
+    if width_pt > 8.0 { line.gamma_multiply(0.45) } else { line }
 }
 
 #[cfg(test)]
