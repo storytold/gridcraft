@@ -131,8 +131,8 @@ pub(super) fn clear_outline(s: &mut Session, p: &Json) -> Result<Json> {
         _ => ranges.iter().map(|r| ((r.start.row, r.end.row), (r.start.col, r.end.col))).collect(),
     };
     let sh = s.doc()?.wb.sheet(si).ok_or(EngineError::NoDocument)?;
-    let rows = cleared(&sh.rows, spans.iter().map(|s| s.0), outline::summary_before(sh, true));
-    let cols = cleared(&sh.cols, spans.iter().map(|s| s.1), outline::summary_before(sh, false));
+    let rows = cleared(&sh.rows, spans.iter().map(|s| s.0), outline::summary_before(sh, true), |r| sh.is_row_filtered(r));
+    let cols = cleared(&sh.cols, spans.iter().map(|s| s.1), outline::summary_before(sh, false), |_| false);
     if rows == sh.rows && cols == sh.cols {
         return Ok(Json::Null);
     }
@@ -150,15 +150,25 @@ pub(super) fn clear_outline(s: &mut Session, p: &Json) -> Result<Json> {
 /// `lines` with the outline levels of `spans` removed: lines the outline had hidden are shown
 /// again, and a collapsed mark stays only on the summary line of a group that remains (on either
 /// side of the spans), so a group's mark goes with it and a surviving group keeps its own.
+///
+/// Hide Rows and filters set the same hidden flag, so a line counts as the outline's to show only
+/// inside a collapsed group (its summary line marked) or a group without a summary line (no mark
+/// to tell by); a line `filtered` says a filter hides stays hidden.
 fn cleared(
     lines: &std::collections::BTreeMap<u32, LineInfo>,
     spans: impl Iterator<Item = (u32, u32)>,
     summary_before: bool,
+    filtered: impl Fn(u32) -> bool,
 ) -> std::collections::BTreeMap<u32, LineInfo> {
+    let folded: Vec<(u32, u32)> = outline::groups_with(lines, summary_before)
+        .into_iter()
+        .filter(|g| !g.has_summary() || lines.get(&g.summary()).is_some_and(|e| e.collapsed))
+        .map(|g| (g.start, g.end))
+        .collect();
     let mut map = lines.clone();
     for (a, b) in spans {
-        for (_, e) in map.range_mut(a..=b) {
-            if e.outline > 0 && e.hidden {
+        for (line, e) in map.range_mut(a..=b) {
+            if e.outline > 0 && e.hidden && folded.iter().any(|(s, t)| (*s..=*t).contains(line)) && !filtered(*line) {
                 set_hidden(e, false);
             }
             e.outline = 0;

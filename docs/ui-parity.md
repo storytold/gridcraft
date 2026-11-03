@@ -241,7 +241,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-03 | minor | Data › Outline › Ungroup › Clear Outline (`data.clearOutline`, key tips Alt, A, U, C): removes every outline level of the selection's rows and columns, or of the whole sheet from one cell, and shows the hidden detail again, as Excel does; a collapsed mark left on a summary line outside the range goes with its group, and a protected sheet is refused (#3088) |
+| 2026-11-03 | minor | Data › Outline › Ungroup › Clear Outline (`data.clearOutline`, key tips Alt, A, U, C): removes every outline level of the selection's rows and columns, or of the whole sheet from one cell, and shows the detail a collapsed group hid again, as Excel does (a line hidden with Hide Rows or by a filter stays hidden); a collapsed mark left on a summary line outside the range goes with its group, and a protected sheet is refused (#3088) |
 | 2026-11-03 | minor | Highlight the active cell's row: a global preference that tints the whole row, off by default |
 | 2026-11-03 | minor | The formula bar's bottom edge is a resize handle: dragging it sets the bar's height in whole lines, up to half the window, and dragging it to one line collapses it; expanding (the chevron, Ctrl+Shift+U) returns to the dragged height, which is kept with the UI preferences. `view.expandFormulaBar {lines}` sets it (#1246) |
 | 2026-11-03 | minor | Cell context menu on a cell with a link: Edit Hyperlink… (the link dialog, titled Edit Hyperlink and filled with the link), Open Hyperlink and Remove Hyperlink, as in Excel, instead of Link… (#2120) |

@@ -684,3 +684,31 @@ fn clear_outline_keeps_the_mark_of_a_group_that_stays() {
     assert!(sh.rows.get(&1).is_some_and(|e| e.outline == 1 && e.hidden));
     assert_eq!(s.execute("history.list", json!({})).unwrap()["undo"].as_array().map_or(0, Vec::len), undo, "nothing changed");
 }
+
+#[test]
+fn clear_outline_keeps_lines_hidden_by_something_else() {
+    // Hide Rows and a filter set the same hidden flag as a collapsed group: only lines a collapsed
+    // group hid come back. A row hidden by hand inside an expanded group stays hidden.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("data.group", json!({"rows": "2:4"})).unwrap();
+    s.execute("home.hideRows", json!({"rows": "3"})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("data.clearOutline", json!({})).unwrap();
+    let sh = outline_sheet(&s, 0);
+    assert!(sh.rows.values().all(|e| e.outline == 0));
+    assert!(sh.rows.get(&2).is_some_and(|e| e.hidden), "row 3 was hidden by Hide Rows: {:?}", sh.rows);
+
+    // A row a filter hides stays hidden too.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["k"], ["a"], ["b"], ["a"], ["b"]]})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:A5"})).unwrap();
+    s.execute("data.group", json!({"rows": "2:5"})).unwrap();
+    s.execute("data.filterBy", json!({"column": 0, "values": ["a"]})).unwrap();
+    s.execute("selection.set", json!({"range": "C1"})).unwrap();
+    s.execute("data.clearOutline", json!({})).unwrap();
+    let sh = outline_sheet(&s, 0);
+    assert!(sh.rows.values().all(|e| e.outline == 0));
+    assert!(sh.rows.get(&2).is_some_and(|e| e.hidden) && sh.rows.get(&4).is_some_and(|e| e.hidden), "filtered rows: {:?}", sh.rows);
+}
