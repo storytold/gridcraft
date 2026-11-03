@@ -302,3 +302,19 @@ fn shift_arrow_after_a_header_drag_moves_the_dragged_end() {
     shift_arrow(&mut h, egui::Key::ArrowDown);
     assert_eq!(text(&h), "=SUM(1:4");
 }
+
+#[test]
+fn shift_arrow_pointing_on_another_sheet_keeps_the_qualifier() {
+    let mut h = harness();
+    h.state_mut().session.execute("home.insertSheet", json!({"name": "Other sheet"})).unwrap();
+    h.run_steps(2);
+    let (b, d) = (header_center(&h, false, 1), header_center(&h, false, 3));
+    press_and_drag(&mut h, b, d, Modifiers::NONE);
+    release(&mut h, d);
+    assert_eq!(text(&h), "=SUM('Other sheet'!B:D");
+    let app = h.state_mut();
+    let mut ed = app.editor.take().unwrap();
+    gridcraft_ui_egui::grid::point_move(app, &mut ed, 0, 1, true, false);
+    app.editor = Some(ed);
+    assert_eq!(text(&h), "=SUM('Other sheet'!B:E");
+}
