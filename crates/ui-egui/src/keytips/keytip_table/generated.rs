@@ -378,7 +378,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("IW", Entry::Finish(Action::Command("home.insertSheet"))), // Excel: Insert > Worksheet; Legacy Excel 2003 menu path (#941).
     ("IF", Entry::Finish(Action::Dialog("insertFunction"))), // Excel: Insert > Function; Legacy Excel 2003 menu path (#941).
     ("IND", Entry::Finish(Action::Dialog("defineName"))),  // Excel: Insert > Name > Define; Legacy Excel 2003 menu path (#941).
-    ("IS", Entry::Finish(Action::Command("insert.symbol"))), // Excel: Insert > Symbol; Legacy Excel 2003 menu path (#941).
+    ("IS", Entry::Finish(Action::Control("insert.symbol"))), // Excel: Insert > Symbol; Legacy Excel 2003 menu path (#941).
     ("ED", Entry::Finish(Action::Dialog("deleteCells"))),  // Excel: Edit > Delete; Legacy Excel 2003 menu path (#941).
     ("EM", Entry::Finish(Action::Dialog("moveSheet"))),    // Excel: Edit > Move or Copy Sheet; Legacy Excel 2003 menu path (#941).
     ("EL", Entry::Finish(Action::Command("home.deleteSheet"))), // Excel: Edit > Delete Sheet; Legacy Excel 2003 menu path (#941).

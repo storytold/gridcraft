@@ -2626,7 +2626,7 @@
   },
   {
    "seq": "IS",
-   "kind": "command",
+   "kind": "control",
    "target": "insert.symbol",
    "excel": "Insert > Symbol",
    "note": "Legacy Excel 2003 menu path (#941)."

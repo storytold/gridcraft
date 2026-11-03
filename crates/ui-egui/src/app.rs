@@ -107,8 +107,9 @@ impl SheetApp {
     pub fn logic(&mut self, ctx: &egui::Context) {
         self.ensure_text_width(ctx);
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
-        // anything that never reached a control (collapsed ribbon, tab switch) is dropped.
-        self.ui.keytip_invoke = None;
+        // anything that never reached a control (collapsed ribbon, tab switch) is dropped. One
+        // made with a switch to the control's tab waits for the frame that draws that tab.
+        self.ui.keytip_invoke = self.ui.keytip_invoke_next.take();
         // Floating pictures' textures go with their workbook, even when no sheet is painted.
         let open: Vec<u64> = self.session.documents().iter().map(|d| d.uid).collect();
         floating_pictures::forget_closed(ctx, &open);

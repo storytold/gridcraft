@@ -2800,7 +2800,8 @@ fn keytip_ind_() {
 fn keytip_is_() {
     let mut h = harness(blank());
     sequence(&mut h, "IS", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "insert.symbol"), "IS must journal insert.symbol");
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "IS must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
 }
 
 #[test]
