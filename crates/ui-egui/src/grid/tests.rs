@@ -144,7 +144,7 @@ fn conditional_number_format_reaches_the_cell_text() {
     let mut cf = CfCache::new();
     let text = |row: u32, cf: &mut CfCache| {
         let c = CellRef::new(row, 0);
-        let (lk, _) = look(&wb, 0, sh, c, cf);
+        let (lk, _) = look(&wb, 0, sh, c, cf, &Tokens::light());
         display_text(&wb, sh, c, &sh.value(c), &lk.style, 200.0, 7.0).0
     };
     assert_eq!(text(0, &mut cf), "1");
@@ -303,4 +303,33 @@ fn upward_text_with_middle_align_is_centred_in_a_merged_block() {
     let bb = rotated_box(rotated_text_pos(rect, size, angle, HAlign::Center, VAlign::Center, 2.5, 0.0), size, angle);
     assert!((bb.center().y - rect.center().y).abs() < 0.01, "{bb:?} not centred in {rect:?}");
     assert!((bb.center().x - rect.center().x).abs() < 0.01, "{bb:?} not centred in {rect:?}");
+}
+
+/// Automatic ink follows the theme and resolved fill while explicit workbook colours remain intact.
+#[test]
+fn automatic_cell_ink_follows_theme_and_fill_without_changing_explicit_colors() {
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    session.execute("home.fillColor", json!({"range": "B1", "color": "#FFFF00"})).unwrap();
+    session.execute("home.fillColor", json!({"range": "C1", "color": "#1F3864"})).unwrap();
+    session.execute("home.fontColor", json!({"range": "D1", "color": "#FF0000"})).unwrap();
+    session.execute("home.fillColor", json!({"range": "E1", "color": "#00FF00"})).unwrap();
+    let wb = &session.active().unwrap().wb;
+    let sh = wb.sheet(0).unwrap();
+    let mut cf = CfCache::new();
+    for t in [Tokens::light(), Tokens::dark()] {
+        let automatic = look(wb, 0, sh, CellRef::new(0, 0), &mut cf, &t).0;
+        assert_eq!(automatic.text_color, t.cell_text);
+        assert_eq!(automatic.fill, None);
+        let light_fill = look(wb, 0, sh, CellRef::new(0, 1), &mut cf, &t).0;
+        assert_eq!(light_fill.fill, Some(Color32::YELLOW));
+        assert_eq!(light_fill.text_color, Color32::BLACK);
+        let dark_fill = look(wb, 0, sh, CellRef::new(0, 2), &mut cf, &t).0;
+        assert_eq!(dark_fill.fill, Some(Color32::from_rgb(0x1F, 0x38, 0x64)));
+        assert_eq!(dark_fill.text_color, Color32::WHITE);
+        assert_eq!(look(wb, 0, sh, CellRef::new(0, 3), &mut cf, &t).0.text_color, Color32::RED);
+        let green_fill = look(wb, 0, sh, CellRef::new(0, 4), &mut cf, &t).0;
+        assert_eq!(green_fill.fill, Some(Color32::GREEN));
+        assert_eq!(green_fill.text_color, Color32::BLACK, "bright green needs black automatic text");
+    }
 }
