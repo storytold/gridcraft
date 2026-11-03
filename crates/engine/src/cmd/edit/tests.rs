@@ -307,6 +307,9 @@ fn tsv() {
     assert_eq!(parse_tsv("a\tb\n1\t2\n"), vec![vec!["a", "b"], vec!["1", "2"]]);
     assert_eq!(parse_tsv("\"x\ty\"\tz"), vec![vec!["x\ty", "z"]]);
     assert_eq!(parse_tsv("\"he said \"\"hi\"\"\""), vec![vec!["he said \"hi\""]]);
+    // #2225: a quote that doesn't close the field leaves it as written, as Excel pastes it.
+    assert_eq!(parse_tsv("\"hi\" there\tx\n"), vec![vec!["\"hi\" there", "x"]]);
+    assert_eq!(parse_tsv("say \"hi\"\n"), vec![vec!["say \"hi\""]]);
 }
 
 #[test]
@@ -370,4 +373,20 @@ fn replace_case_insensitive_keeps_text_when_folding_moves_boundaries() {
     s.execute("edit.replace", json!({"what": "k", "with": "x"})).unwrap();
     let sh = s.doc().unwrap().wb.active().unwrap();
     assert_eq!(sh.value(CellRef::new(0, 0)), Value::text(text));
+}
+
+#[test]
+fn copy_quotes_only_cells_with_tabs_or_line_breaks() {
+    // #2225: a cell holding a quote was wrapped in quotes on copy; Excel quotes only text with a
+    // tab or line break, and pastes the result back as the same cells.
+    let mut s = Session::new();
+    s.new_workbook();
+    for (cell, input) in [("A1", "say \"hi\""), ("A2", "plain"), ("A3", "\"hi\" there"), ("A4", "x \"q\"\ny"), ("A5", "tab\tinside")] {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+    }
+    let text = s.execute("edit.copy", json!({"range": "A1:A5"})).unwrap()["text"].as_str().unwrap().to_string();
+    assert_eq!(text, "say \"hi\"\nplain\n\"hi\" there\n\"x \"\"q\"\"\ny\"\n\"tab\tinside\"\n");
+    let rows = parse_tsv(&text);
+    let cells: Vec<&str> = rows.iter().map(|r| r[0].as_str()).collect();
+    assert_eq!(cells, ["say \"hi\"", "plain", "\"hi\" there", "x \"q\"\ny", "tab\tinside"]);
 }

@@ -228,14 +228,23 @@ pub(crate) fn parse_tsv(text: &str) -> Vec<Vec<String>> {
     let mut chars = text.chars().peekable();
     let mut quoted = false;
     let mut at_start = true;
+    // A quoted field's text as it stands in the input, for a field that turns out not to be one.
+    let mut raw = String::new();
     while let Some(c) = chars.next() {
         if quoted {
+            raw.push(c);
             if c == '"' {
                 if chars.peek() == Some(&'"') {
                     field.push('"');
+                    raw.push('"');
                     chars.next();
                 } else {
                     quoted = false;
+                    // A field is quoted only when its closing quote ends it, as Excel reads it:
+                    // `"hi" there` is that text, quotes included.
+                    if !matches!(chars.peek(), None | Some('\t' | '\n' | '\r')) {
+                        field = std::mem::take(&mut raw);
+                    }
                 }
             } else {
                 field.push(c);
@@ -246,6 +255,7 @@ pub(crate) fn parse_tsv(text: &str) -> Vec<Vec<String>> {
             '"' if at_start => {
                 quoted = true;
                 at_start = false;
+                raw = String::from('"');
             }
             '\t' => {
                 row.push(std::mem::take(&mut field));
