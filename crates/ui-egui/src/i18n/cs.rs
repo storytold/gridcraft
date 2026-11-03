@@ -3,6 +3,9 @@
 /// Returns the Czech translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Formula:" => "Vzorec:",
+        "OK" => "OK",
+        "There are no conditional formatting rules on this sheet." => "Na tomto listu nejsou žádná pravidla podmíněného formátování.",
         "a linked (not embedded) picture was skipped" => "Propojený (nevložený) obrázek byl přeskočen.",
         "missing picture {target}" => "Chybí obrázek {target}.",
         "chart {target} has no supported plot and was skipped" => "Graf {target} nemá podporovaný typ vykreslení a byl přeskočen.",

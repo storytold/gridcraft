@@ -3,6 +3,9 @@
 /// Returns the Serbian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Formula:" => "Formula:",
+        "OK" => "U redu",
+        "There are no conditional formatting rules on this sheet." => "Na ovom listu nema pravila uslovnog oblikovanja.",
         "a linked (not embedded) picture was skipped" => "Povezana (neugrađena) slika je preskočena.",
         "missing picture {target}" => "Nedostaje slika {target}.",
         "chart {target} has no supported plot and was skipped" => "Grafikon {target} nema podržan tip i preskočen je.",

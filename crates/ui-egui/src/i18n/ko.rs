@@ -3,6 +3,9 @@
 /// Returns the Korean translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Formula:" => "수식:",
+        "OK" => "확인",
+        "There are no conditional formatting rules on this sheet." => "이 시트에는 조건부 서식 규칙이 없습니다.",
         "a linked (not embedded) picture was skipped" => "연결된(포함되지 않은) 그림을 건너뛰었습니다.",
         "missing picture {target}" => "그림 {target}을(를) 찾을 수 없습니다.",
         "chart {target} has no supported plot and was skipped" => "차트 {target}에 지원되는 플롯이 없어 건너뛰었습니다.",
