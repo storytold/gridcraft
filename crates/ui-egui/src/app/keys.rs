@@ -63,8 +63,12 @@ impl SheetApp {
                 // A control on another tab (a legacy menu key such as Alt+I, S for the Symbol
                 // gallery) shows its tab first, so the control is drawn and takes the request.
                 keytips::Action::Control(id) => {
-                    if let Some(tab) = gridcraft_engine::find_command(id).and_then(|c| c.menu.first()).filter(|t| **t != self.ui.ribbon_tab) {
-                        self.run_or_alert("ui.ribbonTab", json!({"tab": tab}));
+                    // A collapsed ribbon draws no controls either: it is expanded the same way.
+                    let other_tab = gridcraft_engine::find_command(id).and_then(|c| c.menu.first()).filter(|t| **t != self.ui.ribbon_tab);
+                    if other_tab.is_some() || self.ui.ribbon_collapsed {
+                        if let Some(tab) = other_tab {
+                            self.run_or_alert("ui.ribbonTab", json!({"tab": tab}));
+                        }
                         self.ui.ribbon_collapsed = false;
                         self.ui.keytip_invoke_next = Some(id);
                     } else {

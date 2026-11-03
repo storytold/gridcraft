@@ -31,3 +31,22 @@ fn alt_i_s_opens_the_symbol_gallery_and_leaves_the_cell_alone() {
     assert_eq!(h.state().ui.ribbon_tab, "Insert");
     assert!(h.query_by_label("€").is_some(), "the Symbol gallery is open");
 }
+
+#[test]
+fn alt_i_s_expands_a_collapsed_ribbon_on_the_insert_tab() {
+    // With the Insert tab already chosen but the ribbon collapsed, the gallery's control isn't
+    // drawn: the keys expand the ribbon first.
+    let mut s = Session::new();
+    s.new_workbook();
+    let mut h = crate::common::os_harness(s, OperatingSystem::Nix);
+    h.state_mut().run("ui.ribbonTab", json!({"tab": "Insert"})).unwrap();
+    h.state_mut().ui.ribbon_collapsed = true;
+    h.run_steps(4);
+    for key in [Key::F10, Key::I, Key::S] {
+        press(&mut h, key);
+    }
+    h.run_steps(4);
+    assert!(!h.state().ui.ribbon_collapsed);
+    assert!(h.query_by_label("€").is_some(), "the Symbol gallery is open");
+    assert!(!h.state().session.journal.iter().any(|(id, _)| id == "insert.symbol"));
+}
