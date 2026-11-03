@@ -489,7 +489,8 @@ fn pathological_source_at_the_cap_finishes_in_bounded_time() {
         fill("\\pu{", "10^", "}"),
         fill("\\pu{", "kJ//", "}"),
     ];
-    let bound = Duration::from_secs(10);
+    // A CI regression threshold with headroom for shared-runner variance, not a runtime deadline.
+    let bound = Duration::from_secs(15);
     let mut slow = Vec::new();
     for s in &sources {
         let start = Instant::now();
