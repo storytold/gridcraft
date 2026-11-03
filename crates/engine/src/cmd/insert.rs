@@ -634,6 +634,23 @@ pub fn chart_kind(t: &str, sub: &str) -> ChartKind {
     }
 }
 
+/// Recognize a ToolPak histogram block, including Pareto's reordered bins. Its numeric Bin
+/// column contains category labels, and its optional third column is a cumulative percentage.
+fn histogram_report(sh: &Sheet, r: RangeRef) -> bool {
+    if r.height() < 3 || !matches!(r.width(), 2 | 3) {
+        return false;
+    }
+    let header = |col| sh.value(CellRef::new(r.start.row, col));
+    header(r.start.col).as_text() == Some("Bin")
+        && header(r.start.col + 1).as_text() == Some("Frequency")
+        && (r.width() == 2 || header(r.start.col + 2).as_text() == Some("Cumulative %"))
+        && (r.start.row + 1..=r.end.row).all(|row| {
+            let bin = sh.value(CellRef::new(row, r.start.col));
+            bin.as_f64().is_some() || bin.as_text() == Some("More")
+        })
+        && (r.start.row + 1..=r.end.row).any(|row| sh.value(CellRef::new(row, r.start.col)).as_text() == Some("More"))
+}
+
 /// Builds series from a block: first row/column as names/categories when they're text.
 pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> {
     let q = gridcraft_formula::quote_sheet(&sh.name);
@@ -655,8 +672,10 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
     // when it holds numbers (years, X values), the usual spreadsheet convention, so it isn't
     // plotted as a series of its own (#287).
     let blank_corner = header_row && sh.value(r.start).is_empty();
-    let label_col =
-        r.width() > 1 && (blank_corner || (r.start.row + header_row as u32..=r.end.row).all(|row| is_text(CellRef::new(row, r.start.col))));
+    let label_col = r.width() > 1
+        && (blank_corner
+            || histogram_report(sh, r)
+            || (r.start.row + header_row as u32..=r.end.row).all(|row| is_text(CellRef::new(row, r.start.col))));
     let data = RangeRef::new(CellRef::new(r.start.row + header_row as u32, r.start.col + label_col as u32), r.end);
     let mut out = Vec::new();
     if !by_rows {
@@ -998,7 +1017,15 @@ fn chart_switch(s: &mut Session, p: &Json) -> Result<Json> {
             return Err(bad("chart.switchRowColumn", "range too large for a chart"));
         }
         let by_rows = !by_rows;
-        let series = series_from_range(ssh, r, by_rows);
+        let mut series = series_from_range(ssh, r, by_rows);
+        // Returning to the ToolPak report's columns must also restore its combo layout;
+        // otherwise the cumulative percentages become another primary-axis series.
+        if !by_rows && matches!(c.kind, ChartKind::ColumnClustered | ChartKind::Combo) && histogram_report(ssh, r) {
+            for (i, se) in series.iter_mut().enumerate() {
+                se.kind = Some(if i == 0 { ChartKind::ColumnClustered } else { ChartKind::Line });
+                se.secondary = i != 0;
+            }
+        }
         if let Some(c) = cx.sheet_mut(si)?.charts.get_mut(ci) {
             c.source.get_or_insert(src);
             c.by_rows = by_rows;

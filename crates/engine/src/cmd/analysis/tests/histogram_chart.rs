@@ -100,6 +100,47 @@ fn histogram_chart_output_uses_labels_and_automatic_bins() {
     assert_eq!(data.series[0].values.iter().flatten().sum::<f64>(), 4.0);
 }
 
+#[test]
+fn histogram_chart_output_survives_repeated_row_column_switches() {
+    for pareto in [false, true] {
+        for cumulative in [false, true] {
+            for reopen in [false, true] {
+                let mut s = input();
+                s.execute(
+                    "data.analysisToolPak",
+                    json!({"tool": "histogram", "range": "A1:A7", "bins": "B1:B3", "newSheet": "Hist's results",
+                        "chartOutput": true, "pareto": pareto, "cumulative": cumulative}),
+                )
+                .unwrap();
+                if reopen {
+                    let bytes = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+                    s.execute("file.open", json!({"name": "histogram.xlsx", "base64": bytes["base64"]})).unwrap();
+                    s.execute("sheet.activate", json!({"sheet": "Hist's results"})).unwrap();
+                }
+                let mut chart = s.active().unwrap().wb.sheets[1].charts[0].clone();
+                // XLSX's ordinary column series inherit the chart kind rather than storing it.
+                for se in &mut chart.series {
+                    se.kind.get_or_insert(chart.kind);
+                }
+                let data = resolved(&s.active().unwrap().wb, 1);
+                for _ in 0..2 {
+                    s.execute("chart.switchRowColumn", json!({"chart": chart.id})).unwrap();
+                    let switched = &s.active().unwrap().wb.sheets[1].charts[0];
+                    assert!(switched.by_rows);
+                    assert_eq!(switched.series.len(), 4, "one series per bin including More");
+                    assert!(switched.series.iter().all(|se| se.name.is_some()));
+                    s.execute("chart.switchRowColumn", json!({"chart": chart.id})).unwrap();
+                    let restored = &s.active().unwrap().wb.sheets[1].charts[0];
+                    assert!(!restored.by_rows);
+                    assert_eq!(restored.kind, chart.kind);
+                    assert_eq!(restored.series, chart.series, "restore numeric categories, series kinds and secondary axis");
+                    assert_eq!(resolved(&s.active().unwrap().wb, 1), data);
+                }
+            }
+        }
+    }
+}
+
 fn refused(s: &mut crate::Session, params: Json) {
     let before = s.active().unwrap().wb.clone();
     let history = s.execute("history.list", json!({})).unwrap();
