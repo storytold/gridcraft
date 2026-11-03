@@ -1665,6 +1665,37 @@ fn select_data_source_takes_its_ranges_from_the_grid() {
 }
 
 #[test]
+fn select_data_source_takes_its_category_labels_from_the_grid() {
+    // The horizontal axis labels box is a reference box too: a range dragged on the grid goes in
+    // and becomes the series' categories.
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = json!([["Fruit", "Sold"], ["Kiwi", 4], ["Plum", 7], ["Fig", 2]]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    let chart = s.execute("insert.chart", json!({"range": "A1:B4", "type": "column"})).unwrap()["chart"].as_u64().unwrap();
+    s.execute("selection.set", json!({"range": "D10"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("selectData", json!({"chart": chart}));
+    h.run_steps(4);
+    let window = h.get_by_role_and_label(egui::accesskit::Role::Window, "Select Data Source").rect();
+    let boxes: Vec<egui::Rect> =
+        h.get_all_by_role(egui::accesskit::Role::TextInput).map(|n| n.rect()).filter(|r| window.contains(r.center())).collect();
+    assert_eq!(boxes.len(), 2, "the data range and the category labels are reference boxes");
+    click_at(&mut h, boxes[1].center());
+    drag(&mut h, "A2", "A3");
+    assert_eq!(field(&h, "categories"), "$A$2:$A$3");
+    h.get_by_label("   OK   ").click();
+    h.run_steps(4);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    let chart = h.state().session.active().unwrap().wb.active().unwrap().charts.first().unwrap().clone();
+    let categories: Vec<String> = chart.series.iter().filter_map(|x| x.categories.clone()).collect();
+    assert!(!categories.is_empty(), "{:?}", chart.series);
+    for c in categories {
+        assert_eq!(c.trim_start_matches('=').replace("Sheet1!", "").replace('$', ""), "A2:A3");
+    }
+}
+
+#[test]
 fn select_data_source_keeps_the_charts_sheet_when_another_sheet_is_shown_first() {
     // Showing another sheet before the first click in a reference box made that sheet the
     // dialog's own: OK went back to it and found no chart there.
