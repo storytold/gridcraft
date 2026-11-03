@@ -161,3 +161,35 @@ fn an_expanded_formula_bar_leaves_room_for_the_worksheet_in_a_short_window() {
     assert!(cells.height() >= 40.0, "a couple of rows stay visible under a {} pt bar: {cells:?}", bar(&h).height);
     assert!(bar(&h).visible_lines > 1, "the bar is still expanded");
 }
+
+/// Two default rows at `percent` zoom, as the grid draws them.
+fn two_rows_at(percent: f32) -> f32 {
+    2.0 * gridcraft_engine::model::DEFAULT_ROW_HEIGHT * percent / 100.0 * gridcraft_ui_egui::grid::DISPLAY_SCALE
+}
+
+#[test]
+fn an_expanded_formula_bar_leaves_room_for_the_worksheet_at_any_zoom() {
+    // At 400% the headings and rows are four times taller: the room kept under the bar grows too.
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("view.zoom", json!({"percent": 400})).unwrap();
+    let mut h = crate::common::harness_with(crate::common::builder().with_size(vec2(1200.0, 600.0)), crate::common::app(session), 4);
+    h.state_mut().run("view.expandFormulaBar", json!({"lines": 100})).unwrap();
+    h.run_steps(60);
+    let cells = h.state().grid.cells_rect.expect("the grid is drawn");
+    assert!(cells.height() >= two_rows_at(400.0) - 1.0, "two rows stay visible under a {} pt bar: {cells:?}", bar(&h).height);
+}
+
+#[test]
+fn a_growing_collapsed_formula_bar_leaves_room_for_the_worksheet_in_a_short_window() {
+    // A five-line cell grows the collapsed bar to five lines, but not past the room the window has.
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("cell.set", json!({"cell": "A1", "input": "a\nb\nc\nd\ne"})).unwrap();
+    session.execute("selection.set", json!({"range": "A1"})).unwrap();
+    let mut h = crate::common::harness_with(crate::common::builder().with_size(vec2(1200.0, 360.0)), crate::common::app(session), 4);
+    h.run_steps(60);
+    assert!(!expanded(&h));
+    let cells = h.state().grid.cells_rect.expect("the grid is drawn");
+    assert!(cells.height() >= two_rows_at(100.0) - 1.0, "two rows stay visible under a {} pt bar: {cells:?}", bar(&h).height);
+}

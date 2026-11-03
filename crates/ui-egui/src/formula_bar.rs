@@ -17,9 +17,9 @@ pub const MAX_LINES: usize = 5;
 pub const MAX_DRAG_LINES: usize = 100;
 /// How far the bar's bottom edge reaches up into the bar as a resize handle (its bottom margin).
 const HANDLE: f32 = 4.0;
-/// What an expanded bar leaves below it: the status bar (26) and sheet tabs (32), and the
-/// worksheet's column headings and two rows, so the grid never disappears in a short window.
-const KEEP_BELOW: f32 = 26.0 + 32.0 + crate::grid::COL_HEADER_H + 2.0 * gridcraft_engine::model::DEFAULT_ROW_HEIGHT;
+/// The status bar (26) and sheet tabs (32) under the grid: with the worksheet's headings and two
+/// rows ([`keep_below`]), what a tall bar leaves below it.
+const BOTTOM_BARS: f32 = 26.0 + 32.0;
 /// The bar's height at one line.
 const ONE_LINE: f32 = 30.0;
 /// What the bar adds around the field's rows: the panel's margins (3 + 3), the field's (3 + 3)
@@ -95,8 +95,8 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     // Height follows the content's line count (last frame's), 1 to MAX_LINES; expanded (the
     // chevron), it is the height the bottom edge was dragged to. It eases only when that target
     // changes.
-    let most = max_lines(ui.ctx().content_rect().height(), ui.available_rect_before_wrap().height(), row_h);
-    let lines = if app.ui.formula_bar_expanded { app.ui.formula_bar_lines.clamp(1, most) } else { last.lines.clamp(1, MAX_LINES) };
+    let most = max_lines(ui.ctx().content_rect().height(), ui.available_rect_before_wrap().height() - keep_below(app), row_h);
+    let lines = if app.ui.formula_bar_expanded { app.ui.formula_bar_lines.clamp(1, most) } else { last.lines.clamp(1, MAX_LINES.min(most)) };
     let target = one_line(row_h) + (lines - 1) as f32 * row_h;
     let h = ui.ctx().animate_value_with_time(egui::Id::unique("formula_bar.height"), target, EASE_SECONDS);
     let mut layout = BarLayout { height: h, ..Default::default() };
@@ -181,15 +181,23 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     ui.ctx().data_mut(|d| d.insert_temp(BarLayout::id(), layout));
 }
 
-/// The most lines the bar takes in a window `window_h` tall with `room` left under the ribbon:
-/// half the window, as in Excel (never fewer than the chevron's [`MAX_LINES`]), and no more than
-/// leaves [`KEEP_BELOW`] for the status bar, sheet tabs and a few rows of the grid.
+/// What a tall bar leaves below it: the status bar and sheet tabs, and the active sheet's column
+/// headings and two rows at its zoom, so the grid never disappears in a short window.
+fn keep_below(app: &SheetApp) -> f32 {
+    let sheet =
+        app.session.active().and_then(|d| d.wb.active()).map_or(0.0, |sh| crate::grid::header_height(sh) + crate::grid::default_rows_height(sh, 2.0));
+    BOTTOM_BARS + sheet
+}
+
+/// The most lines the bar takes in a window `window_h` tall with `room` for it (what is left under
+/// the ribbon after [`keep_below`]): half the window, as in Excel (never fewer than the chevron's
+/// [`MAX_LINES`]), and no more than `room`.
 fn max_lines(window_h: f32, room: f32, row_h: f32) -> usize {
     let lines_in = |h: f32| {
         let fit = ((h - one_line(row_h)) / row_h).floor();
         if fit.is_finite() && fit > 0.0 { fit as usize + 1 } else { 1 }
     };
-    lines_in(window_h * 0.5).clamp(MAX_LINES, MAX_DRAG_LINES).min(lines_in(room - KEEP_BELOW))
+    lines_in(window_h * 0.5).clamp(MAX_LINES, MAX_DRAG_LINES).min(lines_in(room))
 }
 
 /// The lines a bar whose top is at `top` shows with its bottom edge dragged to `y`, in whole lines.

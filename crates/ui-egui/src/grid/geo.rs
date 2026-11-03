@@ -31,11 +31,23 @@ pub struct Geo {
     pub paper: Option<Arc<gridcraft_engine::paper::PageGrid>>,
 }
 
+/// The column headings' height on `sh`, at its zoom (none when headings are hidden).
+pub(crate) fn header_height(sh: &Sheet) -> f32 {
+    let zoom = (sh.zoom as f32 / 100.0).clamp(0.1, 4.0);
+    if sh.show_headings { (COL_HEADER_H * zoom.max(0.75)).round() } else { 0.0 }
+}
+
+/// The height of `n` default rows on `sh`, at its zoom.
+pub(crate) fn default_rows_height(sh: &Sheet, n: f32) -> f32 {
+    let zoom = (sh.zoom as f32 / 100.0).clamp(0.1, 4.0);
+    n * sh.default_row_height * zoom * DISPLAY_SCALE
+}
+
 impl Geo {
     pub fn new(sh: &Sheet, rect: Rect, scroll: egui::Vec2) -> Geo {
         let zoom = (sh.zoom as f32 / 100.0).clamp(0.1, 4.0);
         let z = zoom * DISPLAY_SCALE;
-        let header_h = if sh.show_headings { (COL_HEADER_H * zoom.max(0.75)).round() } else { 0.0 };
+        let header_h = header_height(sh);
         let ri = std::sync::Arc::new(LineIndex::new(&sh.rows, sh.default_row_height, MAX_ROWS));
         let ci = std::sync::Arc::new(LineIndex::new(&sh.cols, sh.default_col_width, MAX_COLS));
         let last_row = ri.at((scroll.y + rect.height() / z) as f64 + 200.0) + 1;
