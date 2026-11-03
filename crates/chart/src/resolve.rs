@@ -300,7 +300,7 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
         let values_ref = parse_ref(wb, sheet, &s.values);
         let category_ref = s.categories.as_deref().and_then(|f| parse_ref(wb, sheet, f));
         let value_mask = if values_ref.is_none() { category_ref } else { None };
-        let values = eval_list_aligned(wb, sheet, &s.values, hide, value_mask).iter().map(to_num).collect();
+        let values: Vec<_> = eval_list_aligned(wb, sheet, &s.values, hide, value_mask).iter().map(to_num).collect();
         // A series whose cells are all hidden (its column hidden) leaves the chart, legend included.
         if hide && values.is_empty() && !nums(wb, sheet, &s.values, false).is_empty() {
             continue;
