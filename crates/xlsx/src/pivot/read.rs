@@ -32,6 +32,9 @@ struct CacheIn {
     source: String,
     fields: Vec<FieldIn>,
     refresh_on_load: bool,
+    /// Something in the cache couldn't be read (a source in another workbook, calculated items,
+    /// a kind of grouping): rebuilt from what was read, its reports would show other values.
+    lossy: bool,
 }
 
 /// Workbook-level pivot cache lookup, filled from `<pivotCaches>`; caches are parsed once.
@@ -70,6 +73,7 @@ fn item_label_el(e: &El, sys: DateSystem) -> String {
 }
 
 fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn> {
+    let warned = cx.warned;
     let x = cx.optional_xml(part).ok().flatten()?;
     if x.name != "pivotCacheDefinition" {
         cx.warn(format!("{part} is not a pivot cache definition; its PivotTable was kept as plain cells"));
@@ -131,7 +135,10 @@ fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn>
         cx.warn("a PivotTable's cache has no fields; kept as plain cells");
         return None;
     }
-    Some(CacheIn { source, fields, refresh_on_load: x.flag("refreshOnLoad", false) })
+    if x.child("calculatedItems").is_some() {
+        cx.warn("calculated items in a PivotTable are not supported");
+    }
+    Some(CacheIn { source, fields, refresh_on_load: x.flag("refreshOnLoad", false), lossy: cx.warned > warned })
 }
 
 /// Reads the PivotTables related to a worksheet part.
@@ -164,11 +171,13 @@ pub fn read_pivots(cx: &mut Ctx<'_>, caches: &mut CachesIn, sheet_part: &str, sh
             }
         };
         let Some(cache) = cache else { continue };
+        let warned = cx.warned;
         if let Some(mut pt) = read_table(cx, &x, &cache, caches.next_id) {
             caches.next_id = caches.next_id.saturating_add(1);
-            // Rebuilt without the label/value filters or calculated items it can't read, the
-            // report would show other totals than the file's, so it keeps the saved cells.
-            let lossy = x.child("calculatedItems").is_some() || x.path(&["filters", "filter"]).is_some();
+            // Rebuilt without what the reader left out (each a warning: label/value filters,
+            // calculated items, a Show Values As or function it doesn't have, …), the report would
+            // show other values than the file's, so it keeps the saved cells.
+            let lossy = cache.lossy || cx.warned > warned;
             if cache.refresh_on_load && lossy {
                 cx.warn(format!("PivotTable \"{}\" isn't refreshed on open, so it shows the values saved in the file", pt.name));
             }
@@ -302,7 +311,11 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
         let Some((name, _)) = field_ref(cx, cache, i) else { continue };
         let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
         let selected = if let Some(k) = p.attr_u32("item") {
-            labels.get(k as usize).map(|l| vec![l.clone()])
+            // An index into the pivot field's items, whose `x` names the cache item (the same
+            // number when the field lists no items).
+            let items = pf(i).map(items_of).unwrap_or_default();
+            let x = if items.is_empty() { Some(k) } else { items.get(k as usize).and_then(|it| it.attr_u32("x")) };
+            x.and_then(|x| labels.get(x as usize)).map(|l| vec![l.clone()])
         } else {
             pf(i).and_then(|e| {
                 let items = items_of(e);

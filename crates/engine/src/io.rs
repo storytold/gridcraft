@@ -145,8 +145,26 @@ fn refresh_pivots_on_load(wb: &mut Workbook) -> Vec<String> {
         for idx in 0..count {
             let Some(pt) = wb.sheets.get(si).and_then(|sh| sh.pivots.get(idx)).filter(|pt| pt.refresh_on_load) else { continue };
             let name = pt.name.clone();
-            if let Err(e) = crate::pivot::refresh(wb, si, idx, false) {
-                warnings.push(format!("PivotTable \"{name}\" couldn't be refreshed on open, so it shows the values saved in the file: {e}"));
+            // The saved range spans the report's width on its filter rows too, though only the
+            // filters' own cells are the report's: rebuilt on a copy first, a refresh that would
+            // empty a cell above the report (data beside a filter) is refused.
+            let filter_area =
+                pt.last_range.filter(|r| r.start.row < pt.anchor.row).map(|r| RangeRef::new(r.start, CellRef::new(pt.anchor.row - 1, r.end.col)));
+            let mut rebuilt = wb.clone();
+            let refreshed = crate::pivot::refresh(&mut rebuilt, si, idx, false).and_then(|_| {
+                let (Some(before), Some(after)) = (wb.sheet(si), rebuilt.sheet(si)) else { return Ok(()) };
+                match filter_area
+                    .and_then(|a| before.cells.iter_range(a).find(|(c, cell)| cell.has_content() && !after.cell(*c).is_some_and(|n| n.has_content())))
+                {
+                    Some((c, _)) => Err(format!("{} beside its filters isn't part of it", c.a1())),
+                    None => Ok(()),
+                }
+            });
+            match refreshed {
+                Ok(()) => *wb = rebuilt,
+                Err(e) => {
+                    warnings.push(format!("PivotTable \"{name}\" couldn't be refreshed on open, so it shows the values saved in the file: {e}"))
+                }
             }
         }
     }

@@ -853,3 +853,23 @@ fn refresh_on_open_skips_pivots_with_filters_it_cannot_read() {
     assert!(sh.pivots.first().is_some_and(|pt| !pt.refresh_on_load));
     assert!(warnings.iter().any(|w| w.contains("isn't refreshed on open")), "{warnings:?}");
 }
+
+#[test]
+fn refresh_on_open_keeps_cells_beside_a_report_filter() {
+    // The saved report range spans the report's width on the filter rows too, but only the
+    // filter's two cells are the report's: data beside a filter stays, and the report keeps the
+    // cells the file stored.
+    let mut s = crate::Session::new();
+    s.new_workbook();
+    let rows = serde_json::json!([["Region", "Channel", "Sales", "Units"], ["East", "Web", 10, 1], ["West", "Shop", 20, 2]]);
+    s.execute("range.setValues", serde_json::json!({"range": "A1", "values": rows})).unwrap();
+    let p = serde_json::json!({"source": "Sheet1!$A$1:$D$3", "destination": "Sheet1!F8", "rows": ["Region"], "values": ["Sales", "Units"], "filters": ["Channel"]});
+    s.execute("insert.pivotTable", p).unwrap();
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    let top = wb.sheet(0).and_then(|sh| sh.pivots.first()).and_then(|pt| pt.last_range).unwrap().start;
+    let beside = CellRef::new(top.row, top.col + 2);
+    wb.sheet_mut(0).unwrap().set_value(beside, gridcraft_core::Value::text("Keep"));
+    let (back, warnings) = open_bytes("report.xlsx", &gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.sheet(0).unwrap().value(beside).display(), "Keep");
+    assert!(warnings.iter().any(|w| w.contains("couldn't be refreshed on open")), "{warnings:?}");
+}
