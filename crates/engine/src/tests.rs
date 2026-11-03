@@ -5572,3 +5572,16 @@ fn clearing_links_and_notes_keeps_allow_edit_ranges() {
     let sh = s.doc().unwrap().wb.active().unwrap().clone();
     assert!(sh.hyperlinks.is_empty() && sh.comments.is_empty());
 }
+
+#[test]
+fn formulatext_does_not_reveal_a_hidden_formula() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=1+1"})).unwrap();
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"protection": {"locked": false, "hidden": true}}})).unwrap();
+    s.execute("home.formatCells", json!({"range": "B1", "style": {"protection": {"locked": false}}})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=FORMULATEXT(A1)"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::from("=1+1"), "not protected yet");
+    s.execute("review.protectSheet", json!({})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=FORMULATEXT(A1)"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Error(gridcraft_core::CellError::NA));
+}
