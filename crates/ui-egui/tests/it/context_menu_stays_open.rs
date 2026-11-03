@@ -5,6 +5,7 @@ use egui::{Event, Modifiers, PointerButton, Pos2};
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_engine::core::CellRef;
+use gridcraft_ui_egui::i18n::Language;
 use gridcraft_ui_egui::{SheetApp, grid};
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
@@ -15,9 +16,14 @@ fn harness() -> Harness {
 
 /// `ppp` physical pixels per point: 2 on a Retina display.
 fn harness_at(ppp: f32) -> Harness {
+    harness_sized(ppp, egui::vec2(1200.0, 800.0))
+}
+
+/// Builds a viewport whose width can constrain translated context menus.
+fn harness_sized(ppp: f32, size: egui::Vec2) -> Harness {
     let mut session = Session::new();
     session.new_workbook();
-    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).with_pixels_per_point(ppp).build_ui_state(
+    let mut h = crate::common::builder().with_size(size).with_pixels_per_point(ppp).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
@@ -38,6 +44,7 @@ fn button(h: &mut Harness, pos: Pos2, pressed: bool) {
     h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
 }
 
+/// Union of the rendered command rectangles, rather than the stored popup anchor.
 fn context_menu_content_bounds(h: &Harness) -> egui::Rect {
     [
         "Cut",
@@ -58,7 +65,12 @@ fn context_menu_content_bounds(h: &Harness) -> egui::Rect {
         "Link…",
     ]
     .into_iter()
-    .map(|label| h.query_all_by_label(label).max_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y)).expect("context item is rendered").rect())
+    .map(|label| {
+        h.query_all_by_label(h.state().ui.language.tr(label))
+            .max_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y))
+            .expect("context item is rendered")
+            .rect()
+    })
     .fold(egui::Rect::NOTHING, egui::Rect::union)
 }
 
@@ -143,4 +155,32 @@ fn hovering_a_long_context_item_does_not_resize_the_menu() {
     assert_eq!(context_menu_content_bounds(&h), rendered_menu, "hovering preserves the rendered menu bounds");
     let menu_after = h.state().grid.context_menu.unwrap();
     assert_eq!(menu_after, menu, "hovering does not move the menu anchor");
+}
+
+/// Long translations stay on-screen and hovering cannot resize the actual popup frame.
+#[test]
+fn translated_context_menus_fit_a_narrow_viewport_without_resizing_on_hover() {
+    for language in [Language::En, Language::De, Language::Pl, Language::Fr] {
+        for (width, font_size) in [(300.0, 24.0), (1200.0, 13.5)] {
+            let size = egui::vec2(width, 800.0);
+            let mut h = harness_sized(1.0, size);
+            h.ctx.all_styles_mut(|style| {
+                style.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(font_size));
+            });
+            h.state_mut().ui.language = language;
+            h.state_mut().grid.context_menu = Some(egui::pos2(width - 8.0, 120.0));
+            h.run_steps(4);
+            let popup = |h: &Harness| h.ctx.memory(|m| m.area_rect(egui::Id::unique("cell_context"))).unwrap();
+            let before = popup(&h);
+            let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+            assert!(viewport.expand(0.5).contains_rect(before), "{language:?} popup exceeds {width}pt viewport: {before:?}");
+            assert!(before.width() >= 200.0, "normal English-menu minimum is retained");
+            let item = h.get_by_label(language.tr("Filter by Selected Cell's Value")).rect();
+            let content = context_menu_content_bounds(&h);
+            h.input_mut().events.push(Event::PointerMoved(item.center()));
+            h.run_steps(3);
+            assert_eq!(popup(&h), before, "{language:?} popup frame stays fixed while hovering");
+            assert_eq!(context_menu_content_bounds(&h), content, "{language:?} commands stay fixed while hovering");
+        }
+    }
 }

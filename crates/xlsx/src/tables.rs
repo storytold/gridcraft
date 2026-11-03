@@ -151,6 +151,7 @@ const FUTURE_FUNCTIONS: &[&str] = &[
     "CSCH",
     "DAYS",
     "DECIMAL",
+    "DETECTLANGUAGE",
     "DROP",
     "ENCODEURL",
     "ERF.PRECISE",
@@ -243,6 +244,7 @@ const FUTURE_FUNCTIONS: &[&str] = &[
     "SORTBY",
     "STDEV.P",
     "STDEV.S",
+    "STOCKHISTORY",
     "SWITCH",
     "T.DIST",
     "T.DIST.2T",
@@ -257,6 +259,7 @@ const FUTURE_FUNCTIONS: &[&str] = &[
     "TEXTSPLIT",
     "TOCOL",
     "TOROW",
+    "TRANSLATE",
     "TRIMRANGE",
     "UNICHAR",
     "UNICODE",
@@ -352,6 +355,13 @@ mod tests {
         assert_eq!(file_function_name("FILTER").as_deref(), Some("_xlfn._xlws.FILTER"));
         assert_eq!(file_function_name("PERCENTOF").as_deref(), Some("_xlfn.PERCENTOF"));
         assert_eq!(file_function_name("TRIMRANGE").as_deref(), Some("_xlfn.TRIMRANGE"));
+        assert_eq!(file_function_name("stockhistory").as_deref(), Some("_xlfn.STOCKHISTORY"));
+        assert_eq!(file_function_name("TRANSLATE").as_deref(), Some("_xlfn.TRANSLATE"));
+        assert_eq!(file_function_name("DETECTLANGUAGE").as_deref(), Some("_xlfn.DETECTLANGUAGE"));
+        assert_eq!(file_function_name("NETWORKDAYS.INTL").as_deref(), Some("_xlfn.NETWORKDAYS.INTL"));
+        assert_eq!(file_function_name("WORKDAY.INTL").as_deref(), Some("_xlfn.WORKDAY.INTL"));
+        // Excel 16.0 build 20527 saves COPILOT as plain `COPILOT(...)` (it does not know the name yet).
+        assert_eq!(file_function_name("COPILOT"), None);
         assert_eq!(file_function_name("SUM"), None);
         assert_eq!(builtin_format(14), Some("m/d/yyyy"));
         assert_eq!(builtin_id("0.00%"), Some(10));

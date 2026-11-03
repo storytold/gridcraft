@@ -1,7 +1,7 @@
 use super::editor::popup_dismissed;
 use super::geo::Geo;
 use super::tables::filter_table_range;
-use super::*;
+use super::{Arc, Drag, FillTag, RangeRef, Rect, Sense, Sheet, SheetApp, Stroke, Tokens, col_to_letters, json, pos2, vec2};
 
 /// Draws the filter-header popup: sort, search/select-all, apply/clear, a lazily installed table autofilter, new-open search focus and dismissal.
 pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
@@ -126,7 +126,9 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     let Some(at) = app.grid.context_menu else { return };
     let mut close = false;
     let resp = egui::Area::new(egui::Id::unique("cell_context")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
-        egui::Frame::popup(ui.style()).show(ui, |ui| {
+        let frame = egui::Frame::popup(ui.style());
+        let available_width = (ui.ctx().content_rect().width() - frame.total_margin().sum().x).max(1.0);
+        frame.show(ui, |ui| {
             let insert_copied = insert_copied_item(app);
             let mut items: Vec<(&str, &str)> = vec![
                 ("Cut", "edit.cut"),
@@ -166,24 +168,23 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                 .iter()
                 .filter(|(label, _)| *label != "-")
                 .map(|(label, _)| {
-                    ui.painter()
-                        .layout_no_wrap(
-                            lang.tr(label).to_owned(),
-                            ui.style().text_styles[&egui::TextStyle::Button].clone(),
-                            ui.visuals().text_color(),
-                        )
+                    egui::WidgetText::from(lang.tr(label))
+                        .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button)
                         .size()
                         .x
                 })
                 .fold(190.0_f32, f32::max)
-                + 24.0;
-            ui.set_min_width(menu_width);
+                + ui.spacing().button_padding.x * 2.0;
+            // The frame also needs room inside the viewport. Truncate labels when the user's
+            // font size or translation cannot fit, rather than growing the popup past the screen.
+            let menu_width = menu_width.min(available_width);
+            ui.set_width(menu_width);
             for (label, id) in items {
                 if label == "-" {
                     ui.separator();
                     continue;
                 }
-                if ui.add(egui::Button::new(lang.tr(label)).frame_when_inactive(false).min_size(vec2(menu_width, 20.0))).clicked() {
+                if ui.add(egui::Button::new(lang.tr(label)).truncate().frame_when_inactive(false).min_size(vec2(menu_width, 20.0))).clicked() {
                     close = true;
                     match id {
                         "ui:pasteSpecial" => app.open_dialog("pasteSpecial", json!({})),
@@ -410,7 +411,7 @@ pub(super) fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                         "ui:formatChart" => app.grid.pane = Some("formatChart".into()),
                         _ => {
                             app.run_or_alert("object.delete", json!({"kind": kind, "id": id}));
-                            app.selected_chart = None;
+                            app.selected_object = None;
                         }
                     }
                 }
