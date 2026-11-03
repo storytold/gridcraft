@@ -138,11 +138,7 @@ impl Session {
         let r = self.recovery.as_mut().ok_or_else(disabled)?;
         let (info, bytes) = r.read(id).map_err(crate::EngineError::Other)?;
         let (wb, warnings) = crate::io::open_bytes("recovered.xlsx", &bytes)?;
-        if self.docs.len() == 1
-            && self
-                .active()
-                .is_some_and(|d| d.path.is_none() && !d.is_dirty() && d.undo.is_empty() && d.wb.sheets.iter().all(|sh| sh.cells.is_empty()))
-        {
+        if self.only_untouched_blank() {
             self.close_document(0);
         }
         let stem = std::path::Path::new(&info.name).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book");
@@ -215,7 +211,7 @@ pub(crate) mod desktop {
 
     enum Job {
         Scan,
-        Save { id: String, name: String, wb: Arc<Workbook> },
+        Save { uid: u64, id: String, name: String, wb: Arc<Workbook> },
         Discard(String),
     }
 
@@ -223,6 +219,8 @@ pub(crate) mod desktop {
         Scanned(Vec<RecoveryInfo>),
         Saved,
         Discarded,
+        /// Writing workbook `uid`'s copy failed: it is tried again at the next interval.
+        SaveFailed(u64, String),
         Failed(String),
     }
 
@@ -311,6 +309,15 @@ pub(crate) mod desktop {
                         self.ready = true;
                     }
                     Done::Saved | Done::Discarded => {}
+                    Done::SaveFailed(uid, e) => {
+                        // The copy on disk (if any) is older than the slot says: write it again
+                        // once the interval is up, even if the workbook doesn't change.
+                        if let Some(slot) = self.slots.get_mut(&uid) {
+                            slot.revision = None;
+                        }
+                        log::warn!("recovery: {e}");
+                        self.error = Some(e);
+                    }
                     Done::Failed(e) => {
                         log::warn!("recovery: {e}");
                         self.error = Some(e);
@@ -352,7 +359,7 @@ pub(crate) mod desktop {
                 let id = slot.id.get_or_insert_with(new_id).clone();
                 slot.revision = Some(d.revision);
                 slot.due = now + INTERVAL;
-                jobs.push(Job::Save { id, name: d.display_title(), wb: d.wb.clone() });
+                jobs.push(Job::Save { uid: d.uid, id, name: d.display_title(), wb: d.wb.clone() });
             }
             for job in jobs {
                 self.send(job);
@@ -453,9 +460,9 @@ pub(crate) mod desktop {
         for job in jobs {
             let answer = match job {
                 Job::Scan => Done::Scanned(store.scan()),
-                Job::Save { id, name, wb } => match store.save(&id, &name, &wb) {
+                Job::Save { uid, id, name, wb } => match store.save(&id, &name, &wb) {
                     Ok(()) => Done::Saved,
-                    Err(e) => Done::Failed(format!("could not keep a recovery copy of {name}: {e}")),
+                    Err(e) => Done::SaveFailed(uid, format!("could not keep a recovery copy of {name}: {e}")),
                 },
                 Job::Discard(id) => match store.discard(&id) {
                     Ok(()) => Done::Discarded,
@@ -766,6 +773,29 @@ mod tests {
         b.recovery_worker().unwrap().settle();
         assert_eq!(records(&dir), 0);
         assert!(b.execute("file.recover", json!({"restore": id})).is_err(), "a discarded copy is gone");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The bug this prevents: a copy that failed to write (disk full, a locked file) was not
+    /// written again until the workbook changed, so an idle workbook kept no current copy.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_copy_is_written_again_without_another_edit() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = folder("retry");
+        let mut a = app(&dir);
+        type_candy(&mut a);
+        // The folder refuses new records, as a full or locked disk would.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let t = Instant::now() + INTERVAL;
+        a.recovery_tick_at(t);
+        a.recovery_worker().unwrap().settle();
+        assert_eq!(records(&dir), 0);
+        assert!(a.execute("file.recover", json!({})).unwrap()["error"].is_string(), "the failure is reported");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        a.recovery_tick_at(t + INTERVAL);
+        a.recovery_worker().unwrap().settle();
+        assert_eq!(records(&dir), 1, "written again at the next interval");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

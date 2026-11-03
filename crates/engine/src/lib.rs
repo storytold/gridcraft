@@ -340,6 +340,10 @@ impl DocState {
     pub fn is_dirty(&self) -> bool {
         !Arc::ptr_eq(&self.wb, &self.saved)
     }
+    /// A new workbook nobody has touched: no file, no changes, no history, empty sheets.
+    pub fn is_untouched_blank(&self) -> bool {
+        self.path.is_none() && !self.is_dirty() && self.undo.is_empty() && self.wb.sheets.iter().all(|sh| sh.cells.is_empty())
+    }
     pub fn sheet_index(&self) -> usize {
         self.wb.active_sheet()
     }
@@ -545,6 +549,11 @@ impl Session {
     }
     pub fn documents(&self) -> &[DocState] {
         &self.docs
+    }
+    /// The only open workbook is an untouched blank Book1, which opening a file replaces (as
+    /// Excel does) and which nothing is lost by covering.
+    pub fn only_untouched_blank(&self) -> bool {
+        self.docs.len() == 1 && self.active().is_some_and(DocState::is_untouched_blank)
     }
     pub fn active_index(&self) -> usize {
         self.active
