@@ -390,3 +390,25 @@ fn copy_quotes_only_cells_with_tabs_or_line_breaks() {
     let cells: Vec<&str> = rows.iter().map(|r| r[0].as_str()).collect();
     assert_eq!(cells, ["say \"hi\"", "plain", "\"hi\" there", "x \"q\"\ny", "tab\tinside"]);
 }
+
+#[test]
+fn a_field_that_is_not_really_quoted_keeps_its_separators() {
+    // A field opening with a quote is quoted only if a closing quote ends it; when it doesn't (or
+    // never closes), the text is read as written, and the tabs and line breaks inside it still
+    // separate cells, as they would have without the leading quote.
+    assert_eq!(parse_tsv("\"a\tb\"x\tc"), vec![vec!["\"a", "b\"x", "c"]]);
+    assert_eq!(parse_tsv("\"a\tb\nc"), vec![vec!["\"a", "b"], vec!["c"]]);
+    assert_eq!(parse_tsv("\"a\tb\tc\n"), vec![vec!["\"a", "b", "c"]]);
+    // Cells copied without quotes (they hold no tab or line break) read back as the same cells.
+    let mut s = Session::new();
+    s.new_workbook();
+    for (cell, input) in [("A1", "'\"a"), ("B1", "b\"x"), ("C1", "c")] {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+    }
+    let text = s.execute("edit.copy", json!({"range": "A1:C1"})).unwrap()["text"].as_str().unwrap().to_string();
+    assert_eq!(parse_tsv(&text), vec![vec!["\"a", "b\"x", "c"]], "{text:?}");
+    // Many fields that only look quoted: each is replayed at most once (the replay budget is the
+    // input's length), and every one is still its own cell.
+    let hostile = "\"x\t".repeat(50_000);
+    assert_eq!(parse_tsv(&hostile).first().map(Vec::len), Some(50_001));
+}

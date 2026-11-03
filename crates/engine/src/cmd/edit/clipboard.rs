@@ -226,24 +226,54 @@ pub(crate) fn parse_tsv(text: &str) -> Vec<Vec<String>> {
     let mut row = Vec::new();
     let mut field = String::new();
     let mut chars = text.chars().peekable();
+    // Text read again as unquoted, ahead of the rest of the input: a field that opened with a
+    // quote but turned out not to be quoted.
+    let mut replay: std::collections::VecDeque<char> = std::collections::VecDeque::new();
+    // Text is replayed at most as much as the input is long; past that, quotes are text, so
+    // hostile input full of fields that only look quoted reads in linear time.
+    let mut replay_budget = text.len();
     let mut quoted = false;
     let mut at_start = true;
     // A quoted field's text as it stands in the input, for a field that turns out not to be one.
     let mut raw = String::new();
-    while let Some(c) = chars.next() {
+    loop {
+        let c = match replay.pop_front().or_else(|| chars.next()) {
+            Some(c) => c,
+            // A quote that never closes: the field is its text as written.
+            None if quoted => {
+                quoted = false;
+                field.clear();
+                field.push('"');
+                replay_budget = replay_budget.saturating_sub(raw.len());
+                replay.extend(raw.chars().skip(1));
+                raw.clear();
+                continue;
+            }
+            None => break,
+        };
         if quoted {
             raw.push(c);
             if c == '"' {
-                if chars.peek() == Some(&'"') {
+                let next = replay.front().copied().or_else(|| chars.peek().copied());
+                if next == Some('"') {
                     field.push('"');
                     raw.push('"');
-                    chars.next();
+                    if replay.pop_front().is_none() {
+                        chars.next();
+                    }
                 } else {
                     quoted = false;
                     // A field is quoted only when its closing quote ends it, as Excel reads it:
-                    // `"hi" there` is that text, quotes included.
-                    if !matches!(chars.peek(), None | Some('\t' | '\n' | '\r')) {
-                        field = std::mem::take(&mut raw);
+                    // `"hi" there` is that text, quotes included, and a tab or line break inside
+                    // it still ends the cell, as if the leading quote weren't there.
+                    if !matches!(next, None | Some('\t' | '\n' | '\r')) {
+                        field.clear();
+                        field.push('"');
+                        replay_budget = replay_budget.saturating_sub(raw.len());
+                        let rest: Vec<char> = std::mem::take(&mut raw).chars().skip(1).collect();
+                        for ch in rest.into_iter().rev() {
+                            replay.push_front(ch);
+                        }
                     }
                 }
             } else {
@@ -252,7 +282,7 @@ pub(crate) fn parse_tsv(text: &str) -> Vec<Vec<String>> {
             continue;
         }
         match c {
-            '"' if at_start => {
+            '"' if at_start && replay_budget > 0 => {
                 quoted = true;
                 at_start = false;
                 raw = String::from('"');
