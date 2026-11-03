@@ -54,12 +54,12 @@ fn read_anchor(a: &El, sheet: &Sheet) -> Option<Anchor> {
                 Some("oneCell") => AnchorMode::MoveOnly,
                 _ => AnchorMode::MoveAndSize,
             };
-            Some(Anchor { cell, dx, dy, width: (x2 - x1).max(0.0) as f32, height: (y2 - y1).max(0.0) as f32, mode })
+            Some(Anchor { cell, dx, dy, width: (x2 - x1).max(0.0) as f32, height: (y2 - y1).max(0.0) as f32, mode, hidden_end: None })
         }
         "oneCellAnchor" => {
             let (cell, dx, dy) = marker(a.child("from")?);
             let (width, height) = ext_px(a.child("ext"));
-            Some(Anchor { cell, dx, dy, width, height, mode: AnchorMode::MoveOnly })
+            Some(Anchor { cell, dx, dy, width, height, mode: AnchorMode::MoveOnly, hidden_end: None })
         }
         "absoluteAnchor" => {
             let pos = a.child("pos");
@@ -75,6 +75,7 @@ fn read_anchor(a: &El, sheet: &Sheet) -> Option<Anchor> {
                 width,
                 height,
                 mode: AnchorMode::Absolute,
+                hidden_end: None,
             })
         }
         _ => None,

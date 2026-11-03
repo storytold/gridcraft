@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
 use gridcraft_formula::adjust::{Axis, Edit};
-use gridcraft_model::{Anchor, AnchorMode, Sheet, Visibility, Workbook};
+use gridcraft_model::{Anchor, AnchorEnd, AnchorMode, Sheet, Visibility, Workbook};
 use serde_json::{Value as Json, json};
 
 use super::{
@@ -82,6 +82,9 @@ fn lines(s: &Session, p: &Json, axis: Axis) -> Result<(u32, u32)> {
 /// Bottom-right line of an anchor (the `to` marker of a two-cell anchor) and the offset of that
 /// corner inside it, in points. Measured against `sh`'s current geometry.
 fn anchor_corner(sh: &Sheet, a: &Anchor) -> (u32, u32, f32, f32) {
+    if let Some(end) = a.hidden_end {
+        return (end.cell.col, end.cell.row, end.dx, end.dy);
+    }
     let x2 = sh.col_left(a.cell.col) + a.dx as f64 + a.width.max(0.0) as f64;
     let y2 = sh.row_top(a.cell.row) + a.dy as f64 + a.height.max(0.0) as f64;
     let tc = sh.col_at(x2);
@@ -122,7 +125,21 @@ fn shift_anchor(sh: &Sheet, a: Anchor, corner: (u32, u32, f32, f32), axis: Axis,
     let y1 = sh.row_top(nr) + a.dy as f64;
     let xn = sh.col_left(nbc) + tdx as f64;
     let yn = sh.row_top(nbr) + tdy as f64;
-    Anchor { cell: CellRef::new(nr, nc), dx: a.dx, dy: a.dy, width: (xn - x1).max(0.0) as f32, height: (yn - y1).max(0.0) as f32, mode: a.mode }
+    let hidden_end = a.hidden_end.and_then(|end| {
+        let main = if axis == Axis::Rows { end.cell.row } else { end.cell.col };
+        let mapped = map_line(main)?;
+        let cell = if axis == Axis::Rows { CellRef::new(mapped, end.cell.col) } else { CellRef::new(end.cell.row, mapped) };
+        Some(AnchorEnd { cell, ..end })
+    });
+    Anchor {
+        cell: CellRef::new(nr, nc),
+        dx: a.dx,
+        dy: a.dy,
+        width: (xn - x1).max(0.0) as f32,
+        height: (yn - y1).max(0.0) as f32,
+        mode: a.mode,
+        hidden_end,
+    }
 }
 
 /// Where an object's anchor lands after a command changed row heights, column widths or hidden
@@ -152,12 +169,20 @@ fn refit_anchor(old: &Sheet, new: &Sheet, was: &Anchor, now: &Anchor) -> Anchor 
                 dy: (was.dy as f64).min(old.row_height(was.cell.row) as f64) as f32,
                 ..*was
             };
-            let (tc, tr, tdx, tdy) = anchor_corner(old, &at);
+            let end = now.hidden_end.unwrap_or_else(|| {
+                let (col, row, dx, dy) = anchor_corner(old, &at);
+                AnchorEnd { cell: CellRef::new(row, col), dx, dy }
+            });
+            let row_hidden = new.is_row_hidden(end.cell.row);
+            let col_hidden = new.is_col_hidden(end.cell.col);
+            let hidden_end = (row_hidden || col_hidden).then_some(end);
             let x1 = new.col_left(now.cell.col) + (now.dx as f64).min(new.col_width(now.cell.col) as f64);
             let y1 = new.row_top(now.cell.row) + (now.dy as f64).min(new.row_height(now.cell.row) as f64);
-            let width = (new.col_left(tc) + tdx as f64 - x1).max(0.0) as f32;
-            let height = (new.row_top(tr) + tdy as f64 - y1).max(0.0) as f32;
-            Anchor { width, height, ..*now }
+            let x2 = new.col_left(end.cell.col) + if col_hidden { 0.0 } else { end.dx as f64 };
+            let y2 = new.row_top(end.cell.row) + if row_hidden { 0.0 } else { end.dy as f64 };
+            let width = (x2 - x1).max(0.0) as f32;
+            let height = (y2 - y1).max(0.0) as f32;
+            Anchor { width, height, hidden_end, ..*now }
         }
     }
 }

@@ -76,6 +76,7 @@ pub(super) fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
             height: f64_param(p, "height").map(|v| v as f32).unwrap_or(h as f32 * scale),
             // Excel inserts pictures as "Move but don't size with cells" (`editAs="oneCell"`).
             mode: anchor_mode_param(p).unwrap_or(gridcraft_model::AnchorMode::MoveOnly),
+            hidden_end: None,
         },
         data: data.into(),
         mime,
@@ -148,6 +149,7 @@ pub(super) fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
             width: f64_param(p, "width").unwrap_or(144.0) as f32,
             height: f64_param(p, "height").unwrap_or(if kind == ShapeKind::Line { 0.0 } else { 96.0 }) as f32,
             mode: anchor_mode_param(p).unwrap_or_default(),
+            hidden_end: None,
         },
         fill,
         line,
@@ -224,6 +226,9 @@ pub(super) fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
             _ => None,
         };
         let Some(a) = anchor else { return Err(bad("object.move", "no such object")) };
+        if at.is_some() || ["dx", "dy", "width", "height"].iter().any(|key| p.get(*key).is_some()) {
+            a.hidden_end = None;
+        }
         if let Some(at) = at {
             a.cell = at;
         }
@@ -263,6 +268,7 @@ pub(super) fn set_anchor_mode(s: &mut Session, p: &Json) -> Result<Json> {
         };
         let Some(a) = anchor else { return Err(bad("object.setAnchorMode", "no such object")) };
         a.mode = mode;
+        a.hidden_end = None;
         Ok(json!({"mode": anchor_mode_name(mode)}))
     })
 }

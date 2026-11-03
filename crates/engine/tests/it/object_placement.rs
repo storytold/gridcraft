@@ -193,6 +193,26 @@ fn hiding_rows_and_columns() {
             HOME,
         );
     }
+    fixture().expect(
+        "hide and unhide row 9 at the far corner",
+        |s| {
+            rows(s, "home.hideRows", "9:9");
+            rows(s, "home.unhideRows", "9:9");
+        },
+        HOME,
+        HOME,
+        HOME,
+    );
+    fixture().expect(
+        "hide and unhide column F at the far corner",
+        |s| {
+            cols(s, "home.hideColumns", "F:F");
+            cols(s, "home.unhideColumns", "F:F");
+        },
+        HOME,
+        HOME,
+        HOME,
+    );
 }
 
 #[test]

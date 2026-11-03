@@ -346,7 +346,7 @@ fn sample() -> Workbook {
     s.images.push(Image {
         id: 10,
         // A non-default anchor mode, to prove it survives an xlsx round-trip.
-        anchor: Anchor { cell: at("C10"), dx: 5.0, dy: 4.0, width: 120.0, height: 80.0, mode: AnchorMode::MoveOnly },
+        anchor: Anchor { cell: at("C10"), dx: 5.0, dy: 4.0, width: 120.0, height: 80.0, mode: AnchorMode::MoveOnly, hidden_end: None },
         data: png.into(),
         mime: "image/png".into(),
         alt: "Logo \"x\"".into(),
@@ -355,7 +355,7 @@ fn sample() -> Workbook {
         math: Default::default(),
         id: 11,
         kind: ShapeKind::Ellipse,
-        anchor: Anchor { cell: at("E10"), dx: 0.0, dy: 0.0, width: 64.0, height: 40.0, mode: AnchorMode::Absolute },
+        anchor: Anchor { cell: at("E10"), dx: 0.0, dy: 0.0, width: 64.0, height: 40.0, mode: AnchorMode::Absolute, hidden_end: None },
         fill: Color::Rgb(0x4472C4),
         line: Color::Rgb(0x000000),
         text: "Hi\nthere".into(),

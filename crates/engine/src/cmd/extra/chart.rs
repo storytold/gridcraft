@@ -244,6 +244,7 @@ pub(super) fn move_chart(s: &mut Session, p: &Json) -> Result<Json> {
         let mut chart = cx.sheet_mut(si)?.charts.remove(ci);
         if let Some(a) = at {
             chart.anchor.cell = a;
+            chart.anchor.hidden_end = None;
         }
         let dest = target.unwrap_or(si);
         cx.sheet_mut(dest)?.charts.push(chart);

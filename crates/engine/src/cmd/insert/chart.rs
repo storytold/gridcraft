@@ -255,6 +255,7 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
             width: f64_param(p, "width").unwrap_or(480.0) as f32,
             height: f64_param(p, "height").unwrap_or(288.0) as f32,
             mode: anchor_mode_param(p).unwrap_or_default(),
+            hidden_end: None,
         },
         title,
         series,
@@ -343,18 +344,23 @@ pub(super) fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         }
         if let Some(at) = at {
             c.anchor.cell = at;
+            c.anchor.hidden_end = None;
         }
         if let Some(w) = f64_param(p, "width") {
             c.anchor.width = w.clamp(20.0, 10000.0) as f32;
+            c.anchor.hidden_end = None;
         }
         if let Some(h) = f64_param(p, "height") {
             c.anchor.height = h.clamp(20.0, 10000.0) as f32;
+            c.anchor.hidden_end = None;
         }
         if let Some(v) = f64_param(p, "dx") {
             c.anchor.dx = v as f32;
+            c.anchor.hidden_end = None;
         }
         if let Some(v) = f64_param(p, "dy") {
             c.anchor.dy = v as f32;
+            c.anchor.hidden_end = None;
         }
         Ok(Json::Null)
     })
