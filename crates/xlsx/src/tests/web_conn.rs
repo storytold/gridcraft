@@ -790,3 +790,30 @@ fn a_kept_connections_part_merge_rewrites_a_renumbered_tables_id() {
     assert_ne!(prices.id, 7, "the duplicate model id is renumbered: {}", prices.id);
     assert_eq!(back.web_queries[0].table_id, Some(prices.id), "the merged connection carries the new id");
 }
+
+#[test]
+/// XML allows whitespace before the `=` of an attribute too (`xmlns:x = "…"`): the declaration
+/// is kept whole (its name is the text before the whitespace, not the `=` itself), so a
+/// preserved prefixed connection block keeps its binding and the merged part stays well-formed.
+fn whitespace_before_the_equals_of_a_root_declaration_keeps_the_binding() {
+    use gridcraft_model::preserved::*;
+    let xml = br#"<?xml version="1.0"?><x:connections xmlns:x = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"><x:connection id="7" name="PQ" type="4"/></x:connections>"#;
+    let mut wb = Workbook::default();
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S")));
+    wb.preserved = Some(std::sync::Arc::new(Preserved {
+        package_rels: vec![],
+        rels: vec![PreservedRel { id: "rId9".into(), rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections".into(), target: "xl/connections.xml".into(), external: false }],
+        parts: vec![PreservedPart { name: "xl/connections.xml".into(), content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml".into(), data: xml.to_vec().into(), rels: vec![] }],
+        elements: vec![],
+        vml: None,
+        sheets: vec![],
+    }));
+    wb.web_queries.push(gridcraft_model::WebQuery { name: "prices".into(), table_id: None, url: "https://example.com/t.html".into(), table: "prices".into(), occurrence: 0, sheet: "S".into(), last_synced: None, refresh_on_open: false });
+    let bytes = write_xlsx(&wb).expect("saves");
+    let mut pkg = crate::package::Package::open(&bytes).expect("opens");
+    let part = pkg.read("xl/connections.xml").expect("read").expect("the part");
+    let text = String::from_utf8_lossy(&part);
+    assert!(text.contains("xmlns:x = \"http://schemas.openxmlformats.org/spreadsheetml/2006/main\""), "the declaration is kept whole, whitespace and all: {text}");
+    assert!(text.contains("<x:connection "), "the prefixed foreign connection is kept");
+    assert!(crate::xml::parse(&part).is_ok(), "the prefix stays bound: the part is well-formed");
+}

@@ -138,7 +138,7 @@ pub struct Out {
     pub table_ids: Vec<Vec<u32>>,
     /// (sheet, table name, old id, new id) for tables renumbered because a duplicate positive
     /// model id: the connection of a renumbered connected table is rewritten to the new id.
-    pub table_id_remap: Vec<(String, String, u32, u32)>,
+    pub table_id_remap: Vec<TableIdRemap>,
     pub dynamic_arrays: bool,
     pub needs_calc: bool,
     pub cell_pictures: crate::richdata::PicturesOut,
@@ -248,11 +248,15 @@ fn workbook_view_attrs(wb: &Workbook) -> String {
     attrs
 }
 
+/// (sheet, table name, old id, new id) of a table renumbered for a duplicate model id: the
+/// connection of a renumbered connected table is rewritten to the new id.
+pub(crate) type TableIdRemap = (String, String, u32, u32);
+
 /// The table part ids of the save, by sheet then table (see `Out::table_ids`), with the
 /// renumbering the assignment implies. Every positive model id is reserved before a fallback
 /// id is handed out, so a fallback never takes a model id a table still owns — one a saved
 /// From Web connection points at.
-fn assign_table_ids(wb: &Workbook) -> (Vec<Vec<u32>>, Vec<(String, String, u32, u32)>) {
+fn assign_table_ids(wb: &Workbook) -> (Vec<Vec<u32>>, Vec<TableIdRemap>) {
     let model: std::collections::HashSet<u32> = wb.sheets.iter().flat_map(|sh| sh.tables.iter().filter(|t| t.id > 0).map(|t| t.id)).collect();
     let mut used = std::collections::HashSet::new();
     let mut next = 0;
@@ -282,7 +286,7 @@ fn assign_table_ids(wb: &Workbook) -> (Vec<Vec<u32>>, Vec<(String, String, u32, 
 /// The table id a connection saves: the connected table's own, unless the save renumbered that
 /// table for a duplicate model id — then the new id, so the connection still finds the table
 /// after the reopen.
-pub(crate) fn connection_table_id(q: &gridcraft_model::WebQuery, remap: &[(String, String, u32, u32)]) -> u32 {
+pub(crate) fn connection_table_id(q: &gridcraft_model::WebQuery, remap: &[TableIdRemap]) -> u32 {
     match q.table_id {
         Some(id) => remap
             .iter()

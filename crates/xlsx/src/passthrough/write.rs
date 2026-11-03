@@ -309,7 +309,8 @@ fn raw_attributes(tag: &str) -> impl Iterator<Item = String> + '_ {
         let q = bytes[q_at];
         let vstart = q_at + 1;
         let Some(vend) = tag[vstart..].find(q as char).map(|v| vstart + v) else { break };
-        let name_start = tag[..eq].rfind([' ', '\t', '\r', '\n']).map(|w| w + 1).unwrap_or(0);
+        let name_end = tag[..eq].trim_end_matches([' ', '\t', '\r', '\n']).len();
+        let name_start = tag[..name_end].rfind([' ', '\t', '\r', '\n']).map(|w| w + 1).unwrap_or(0);
         let attribute = &tag[name_start..=vend];
         if !attribute.starts_with(char::is_whitespace) {
             out.push(attribute.to_string());
@@ -416,7 +417,7 @@ fn descendants<'a>(el: &'a crate::xml::El, name: &str) -> Vec<&'a crate::xml::El
     out
 }
 
-fn merge_connections(data: &[u8], wb: &Workbook, remap: &[(String, String, u32, u32)]) -> Result<Option<String>, IoError> {
+fn merge_connections(data: &[u8], wb: &Workbook, remap: &[crate::write::TableIdRemap]) -> Result<Option<String>, IoError> {
     // The encodings the XML reader supports (a BOM, UTF-16): a file Excel saved as UTF-16
     // still merges, rather than failing every open-and-save with the part in it.
     let decoded = crate::xml::to_utf8(data);
