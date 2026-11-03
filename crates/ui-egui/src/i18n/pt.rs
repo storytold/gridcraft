@@ -1013,6 +1013,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Checking for updates…" => "Verificando atualizações…",
         "Could not check for updates." => "Não foi possível verificar atualizações.",
         "Check Again" => "Verificar novamente",
+        "Collapse dialog" => "Recolher caixa de diálogo",
+        "Expand dialog" => "Expandir caixa de diálogo",
         _ => return None,
     })
 }

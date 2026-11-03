@@ -485,6 +485,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "e.g. lookup, average, date" => "npr. pretraga, prosek, datum",
         "Cancel" => "Otkaži",
         "All" => "Sve",
+        "Collapse dialog" => "Skupi dijalog",
+        "Expand dialog" => "Proširi dijalog",
         _ => return None,
     })
 }

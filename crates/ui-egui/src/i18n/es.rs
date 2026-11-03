@@ -518,6 +518,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "e.g. lookup, average, date" => "p. ej., búsqueda, promedio, fecha",
         "Cancel" => "Cancelar",
         "All" => "Todas",
+        "Collapse dialog" => "Contraer diálogo",
+        "Expand dialog" => "Expandir diálogo",
         _ => return None,
     })
 }

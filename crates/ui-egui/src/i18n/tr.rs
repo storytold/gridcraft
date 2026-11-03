@@ -455,6 +455,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "e.g. lookup, average, date" => "ör. arama, ortalama, tarih",
         "Cancel" => "İptal",
         "All" => "Tümü",
+        "Collapse dialog" => "İletişim kutusunu daralt",
+        "Expand dialog" => "İletişim kutusunu genişlet",
         _ => return None,
     })
 }

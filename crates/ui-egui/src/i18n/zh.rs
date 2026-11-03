@@ -478,6 +478,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "e.g. lookup, average, date" => "例如：查找、平均值、日期",
         "Cancel" => "取消",
         "All" => "全部",
+        "Collapse dialog" => "折叠对话框",
+        "Expand dialog" => "展开对话框",
         _ => return None,
     })
 }

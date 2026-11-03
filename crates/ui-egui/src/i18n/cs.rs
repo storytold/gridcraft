@@ -594,6 +594,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Search:" => "Hledat:",
         "e.g. lookup, average, date" => "např. hledání, průměr, datum",
         "All" => "Vše",
+        "Collapse dialog" => "Sbalit dialogové okno",
+        "Expand dialog" => "Rozbalit dialogové okno",
         _ => return None,
     })
 }

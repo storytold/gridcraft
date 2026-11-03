@@ -486,6 +486,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "e.g. lookup, average, date" => "예: 검색, 평균, 날짜",
         "Cancel" => "취소",
         "All" => "모두",
+        "Collapse dialog" => "대화 상자 축소",
+        "Expand dialog" => "대화 상자 확장",
         _ => return None,
     })
 }

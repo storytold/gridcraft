@@ -512,6 +512,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "e.g. lookup, average, date" => "z. B. suchen, Mittelwert, Datum",
         "Cancel" => "Abbrechen",
         "All" => "Alle",
+        "Collapse dialog" => "Dialogfeld reduzieren",
+        "Expand dialog" => "Dialogfeld erweitern",
         _ => return None,
     })
 }

@@ -563,6 +563,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Search:" => "Zoeken:",
         "e.g. lookup, average, date" => "bijv. zoeken, gemiddelde, datum",
         "All" => "Alle",
+        "Collapse dialog" => "Dialoogvenster samenvouwen",
+        "Expand dialog" => "Dialoogvenster uitvouwen",
         _ => return None,
     })
 }

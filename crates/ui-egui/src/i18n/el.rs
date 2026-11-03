@@ -1013,6 +1013,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Checking for updates…" => "Γίνεται έλεγχος ενημερώσεων…",
         "Could not check for updates." => "Δεν ήταν δυνατός ο έλεγχος ενημερώσεων.",
         "Check Again" => "Έλεγχος ξανά",
+        "Collapse dialog" => "Σύμπτυξη παραθύρου διαλόγου",
+        "Expand dialog" => "Ανάπτυξη παραθύρου διαλόγου",
         _ => return None,
     })
 }

@@ -1436,6 +1436,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Edited" => "Изменено",
         "Scope:" => "Область:",
         "Paste Name" => "Вставить имя",
+        "Collapse dialog" => "Свернуть диалоговое окно",
+        "Expand dialog" => "Развернуть диалоговое окно",
         _ => return None,
     })
 }

@@ -464,6 +464,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Cube" => "Khối",
         "Compatibility" => "Tương thích",
         "Add-in and Automation" => "Phần bổ trợ và Tự động hóa",
+        "Collapse dialog" => "Thu gọn hộp thoại",
+        "Expand dialog" => "Mở rộng hộp thoại",
         _ => return None,
     })
 }
