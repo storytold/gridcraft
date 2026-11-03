@@ -30,6 +30,7 @@ fn page_labels_follow_every_interface_language() {
         (Language::En, "Page 1"),
         (Language::Es, "Página 1"),
         (Language::Zh, "第 1 页"),
+        (Language::ZhTw, "第 1 頁"),
         (Language::Ja, "1 ページ"),
         (Language::Ko, "1 페이지"),
         (Language::Ru, "Страница 1"),

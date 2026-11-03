@@ -46,6 +46,8 @@ mod uk_functions;
 mod vi;
 mod vi_functions;
 mod zh;
+mod zh_tw;
+mod zh_tw_functions;
 mod zh_functions;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,6 +58,8 @@ pub enum Language {
     Es,
     El,
     Zh,
+    #[serde(rename = "zh-tw")]
+    ZhTw,
     Ja,
     Ko,
     Ru,
@@ -82,11 +86,12 @@ impl Language {
             _ => &crate::format_locale::EN,
         }
     }
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::En,
         Self::Es,
         Self::El,
         Self::Zh,
+        Self::ZhTw,
         Self::Ja,
         Self::Ko,
         Self::Ru,
@@ -120,6 +125,7 @@ impl Language {
             Self::Es => "Español",
             Self::El => "Ελληνικά",
             Self::Zh => "简体中文",
+            Self::ZhTw => "繁體中文",
             Self::Ja => "日本語",
             Self::Ko => "한국어",
             Self::Ru => "Русский",
@@ -145,6 +151,7 @@ impl Language {
             Self::Es => "es",
             Self::El => "el",
             Self::Zh => "zh",
+            Self::ZhTw => "zh-tw",
             Self::Ja => "ja",
             Self::Ko => "ko",
             Self::Ru => "ru",
@@ -174,11 +181,15 @@ impl Language {
     }
 
     fn from_tag(tag: &str) -> Option<Self> {
-        match tag.trim().split(['-', '_']).next()?.to_ascii_lowercase().as_str() {
+        let mut parts = tag.trim().split('.').next()?.split(['-', '_']);
+        match parts.next()?.to_ascii_lowercase().as_str() {
             "en" => Some(Self::En),
             "es" => Some(Self::Es),
             "el" => Some(Self::El),
-            "zh" => Some(Self::Zh),
+            "zh" => {
+                let traditional = parts.any(|part| matches!(part.to_ascii_lowercase().as_str(), "tw" | "hk" | "mo" | "hant"));
+                Some(if traditional { Self::ZhTw } else { Self::Zh })
+            }
             "ja" => Some(Self::Ja),
             "ko" => Some(Self::Ko),
             "ru" => Some(Self::Ru),
@@ -240,6 +251,7 @@ impl Language {
             Self::El => el::translate(text),
             Self::Ja => ja::translate(text),
             Self::Zh => zh::translate(text),
+            Self::ZhTw => zh_tw::translate(text),
             Self::Ko => ko::translate(text),
             Self::Ru => ru::translate(text),
             Self::PtBr => pt::translate(text),
@@ -326,6 +338,7 @@ impl Language {
             Self::Uk => Some((uk_functions::DESCRIPTIONS, uk_functions::ARGUMENTS)),
             Self::Vi => Some((vi_functions::DESCRIPTIONS, vi_functions::ARGUMENTS)),
             Self::Zh => Some((zh_functions::DESCRIPTIONS, zh_functions::ARGUMENTS)),
+            Self::ZhTw => Some((zh_tw_functions::DESCRIPTIONS, zh_tw_functions::ARGUMENTS)),
             Self::Ru => Some((ru_functions::DESCRIPTIONS, ru_functions::ARGUMENTS)),
             Self::En => None,
         }
@@ -588,6 +601,8 @@ mod tests {
         assert_eq!(Language::from_tag("el_GR.UTF-8"), Some(Language::El));
         assert_eq!(Language::parse("el"), Some(Language::El));
         assert_eq!(Language::from_tag("zh-Hans-CN"), Some(Language::Zh));
+        assert_eq!(Language::from_tag("zh-Hant-TW"), Some(Language::ZhTw));
+        assert_eq!(Language::from_tag("zh_HK.UTF-8"), Some(Language::ZhTw));
         assert_eq!(Language::from_tag("ko-KR"), Some(Language::Ko));
         assert_eq!(Language::from_tag("RU_ru"), Some(Language::Ru));
         assert_eq!(Language::from_tag("de-DE"), Some(Language::De));
