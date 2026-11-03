@@ -111,12 +111,31 @@ fn len(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(text(a, 0)?.chars().count() as f64)
 }
 
+fn lower_char(ch: char) -> char {
+    match ch.to_lowercase().next() {
+        Some(lower) => lower,
+        None => ch,
+    }
+}
+
+fn upper_char(ch: char) -> char {
+    let mut uppercase = ch.to_uppercase();
+    match uppercase.next() {
+        Some(upper) if uppercase.next().is_none() => upper,
+        _ => ch,
+    }
+}
+
+fn proper_upper_char(ch: char) -> char {
+    if ch == '\u{130}' { 'I' } else { upper_char(ch) }
+}
+
 fn lower(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    text_val(text(a, 0)?.to_lowercase())
+    text_val(text(a, 0)?.chars().map(lower_char).collect::<String>())
 }
 
 fn upper(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    text_val(text(a, 0)?.to_uppercase())
+    text_val(text(a, 0)?.chars().map(upper_char).collect::<String>())
 }
 
 fn proper(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
@@ -126,9 +145,9 @@ fn proper(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     for ch in s.chars() {
         if ch.is_alphabetic() {
             if prev_letter {
-                out.extend(ch.to_lowercase());
+                out.push(lower_char(ch));
             } else {
-                out.extend(ch.to_uppercase());
+                out.push(proper_upper_char(ch));
             }
             prev_letter = true;
         } else {
@@ -281,7 +300,11 @@ fn unichar(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     if !(1.0..=1_114_111.0).contains(&n) {
         return Err(CellError::Value);
     }
-    match char::from_u32(n as u32) {
+    let cp = n as u32;
+    if (0xFDD0..=0xFDEF).contains(&cp) || cp & 0xFFFE == 0xFFFE {
+        return Err(CellError::NA);
+    }
+    match char::from_u32(cp) {
         Some(c) => text_val(c.to_string()),
         None => Err(CellError::NA),
     }
@@ -350,10 +373,10 @@ fn numbervalue(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 /// Formats `x` (already rounded) with `decimals` places and optional thousands separators.
 fn format_fixed(x: f64, decimals: i64, commas: bool) -> String {
     let d = decimals.max(0) as usize;
-    let s = format!("{:.*}", d, x.abs());
+    let s = x.abs().to_string();
     let (int_part, frac) = match s.split_once('.') {
-        Some((i, f)) => (i.to_string(), Some(f.to_string())),
-        None => (s.clone(), None),
+        Some((i, f)) => (i, f),
+        None => (s.as_str(), ""),
     };
     let int_part = if commas {
         let b = int_part.as_bytes();
@@ -366,12 +389,14 @@ fn format_fixed(x: f64, decimals: i64, commas: bool) -> String {
         }
         o
     } else {
-        int_part
+        int_part.to_string()
     };
     let mut out = int_part;
-    if let Some(f) = frac {
+    if d > 0 {
+        let frac_len = frac.len().min(d);
         out.push('.');
-        out.push_str(&f);
+        out.push_str(&frac[..frac_len]);
+        out.extend(std::iter::repeat_n('0', d - frac_len));
     }
     out
 }
@@ -394,13 +419,21 @@ fn fixed(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let (r, d) = rounded(a, 2.0)?;
     let no_commas = opt_bool(a, 2, false)?;
     let body = format_fixed(r, d, !no_commas);
+    if body.len() + if r < 0.0 { 1 } else { 0 } > 255 {
+        return Err(CellError::Value);
+    }
     text_val(if r < 0.0 { format!("-{body}") } else { body })
 }
 
 fn dollar(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let (r, d) = rounded(a, 2.0)?;
+    let negative = r < 0.0 || (r == 0.0 && d >= 0 && num(a, 0)? < 0.0);
     let body = format_fixed(r, d, true);
-    text_val(if r < 0.0 { format!("(${body})") } else { format!("${body}") })
+    let out = if negative { format!("(${body})") } else { format!("${body}") };
+    if out.len() > 254 {
+        return Err(CellError::Value);
+    }
+    text_val(out)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1123,6 +1156,20 @@ mod tests {
     fn case_and_cleanup() {
         is_text(ev("UPPER", vec![t("abc")]), "ABC");
         is_text(ev("LOWER", vec![t("ABC")]), "abc");
+        is_text(ev("UPPER", vec![t("Straße")]), "STRAßE");
+        is_text(ev("LOWER", vec![t("İ")]), "i");
+        is_text(ev("PROPER", vec![t("İSTANBUL")]), "Istanbul");
+        is_text(ev("PROPER", vec![t("ß")]), "ß");
+        is_text(ev("PROPER", vec![t("ÉCOLE")]), "École");
+        let proper = ev("PROPER", vec![t("İSTANBUL Straße")]);
+        is_text(proper.clone(), "Istanbul Straße");
+        assert_eq!(
+            match proper {
+                Value::Text(s) => s.chars().count(),
+                _ => 0,
+            },
+            "Istanbul Straße".chars().count()
+        );
         is_text(ev("PROPER", vec![t("this is a TITLE")]), "This Is A Title");
         is_text(ev("PROPER", vec![t("2-way street's")]), "2-Way Street'S");
         is_text(ev("TRIM", vec![t("  a   b  c ")]), "a b c");
@@ -1181,8 +1228,15 @@ mod tests {
         close(ev("CODE", vec![t("€")]), 128.0);
         is_err(ev("CODE", vec![t("")]), CellError::Value);
         is_text(ev("UNICHAR", vec![n(9731.0)]), "☃");
+        for cp in [0xFDD0, 0xFDEF, 0xFFFE, 0xFFFF, 0x1FFFE, 0x1FFFF, 0x10FFFE, 0x10FFFF] {
+            is_err(ev("UNICHAR", vec![n(f64::from(cp))]), CellError::NA);
+        }
+        for (cp, expected) in [(0xFDCF, "\u{FDCF}"), (0xFDF0, "\u{FDF0}"), (0xFFFD, "\u{FFFD}"), (0x1FFFD, "\u{1FFFD}")] {
+            is_text(ev("UNICHAR", vec![n(f64::from(cp))]), expected);
+        }
         close(ev("UNICODE", vec![t("☃")]), 9731.0);
         is_err(ev("UNICHAR", vec![n(0.0)]), CellError::Value);
+        is_err(ev("UNICHAR", vec![n(1_114_112.0)]), CellError::Value);
         is_err(ev("UNICHAR", vec![n(55296.0)]), CellError::NA);
     }
 
@@ -1237,8 +1291,55 @@ mod tests {
         is_text(ev("DOLLAR", vec![n(0.5), n(0.0)]), "$1");
         is_text(ev("USDOLLAR", vec![n(1.0)]), "$1.00");
         is_text(ev("USDOLLAR", vec![n(-1234.567), n(1.0)]), "($1,234.6)");
+        let fixed_16 = format!("1.1{}", "0".repeat(15));
+        let dollar_16 = format!("$1.1{}", "0".repeat(15));
+        let fixed_20 = format!("1.005{}", "0".repeat(17));
+        let dollar_20 = format!("$1.005{}", "0".repeat(17));
+        let fixed_127 = format!("1.1{}", "0".repeat(126));
+        let dollar_127 = format!("$1.1{}", "0".repeat(126));
+        is_text(ev("FIXED", vec![n(1.1), n(16.0)]), &fixed_16);
+        is_text(ev("DOLLAR", vec![n(1.1), n(16.0)]), &dollar_16);
+        is_text(ev("FIXED", vec![n(1.005), n(20.0)]), &fixed_20);
+        is_text(ev("DOLLAR", vec![n(1.005), n(20.0)]), &dollar_20);
+        is_text(ev("FIXED", vec![n(1.1), n(127.0)]), &fixed_127);
+        is_text(ev("DOLLAR", vec![n(1.1), n(127.0)]), &dollar_127);
         is_text(ev("T", vec![t("x")]), "x");
         is_text(ev("T", vec![n(1.0)]), "");
+    }
+
+    #[test]
+    fn fixed_and_dollar_output_limits() {
+        assert!(matches!(ev("FIXED", vec![n(1e191), n(0.0)]), Value::Text(ref s) if s.len() == 255));
+        is_err(ev("FIXED", vec![n(1e192), n(0.0)]), CellError::Value);
+        assert!(matches!(ev("FIXED", vec![n(-1e253), n(0.0), b(true)]), Value::Text(ref s) if s.starts_with('-')));
+        is_err(ev("FIXED", vec![n(-1e191), n(0.0)]), CellError::Value);
+        assert!(matches!(ev("FIXED", vec![n(1e189), n(1.0)]), Value::Text(ref s) if s.len() == 255));
+        is_err(ev("FIXED", vec![n(1e190), n(1.0)]), CellError::Value);
+
+        assert!(matches!(ev("DOLLAR", vec![n(1e189), n(0.0)]), Value::Text(ref s) if s.len() == 254));
+        is_err(ev("DOLLAR", vec![n(1e190), n(0.0)]), CellError::Value);
+        assert!(matches!(ev("DOLLAR", vec![n(-1e188), n(0.0)]), Value::Text(ref s) if s.len() == 254));
+        is_err(ev("DOLLAR", vec![n(-1e189), n(0.0)]), CellError::Value);
+        assert!(matches!(ev("DOLLAR", vec![n(1.23456789e187), n(2.0)]), Value::Text(ref s) if s.len() == 254));
+        is_err(ev("DOLLAR", vec![n(1.23456789e188), n(2.0)]), CellError::Value);
+        is_err(ev("DOLLAR", vec![n(-1.23456789e186), n(2.0)]), CellError::Value);
+        assert!(matches!(ev("DOLLAR", vec![n(1e189), n(-1.0)]), Value::Text(ref s) if s.len() == 254));
+        is_err(ev("DOLLAR", vec![n(1e190), n(-1.0)]), CellError::Value);
+    }
+
+    #[test]
+    fn dollar_keeps_negative_sign_when_nonnegative_precision_rounds_to_zero() {
+        is_text(ev("DOLLAR", vec![n(-0.0001), n(0.0)]), "($0)");
+        is_text(ev("DOLLAR", vec![n(-0.0001), n(2.0)]), "($0.00)");
+        is_text(ev("DOLLAR", vec![n(0.0), n(0.0)]), "$0");
+        is_text(ev("DOLLAR", vec![n(-0.0), n(0.0)]), "$0");
+        is_text(ev("DOLLAR", vec![n(0.0001), n(0.0)]), "$0");
+        is_text(ev("DOLLAR", vec![n(-0.0001), n(-1.0)]), "$0");
+        is_text(ev("DOLLAR", vec![n(-4.0), n(-1.0)]), "$0");
+        is_text(ev("DOLLAR", vec![n(-5.0), n(-1.0)]), "($10)");
+        is_text(ev("DOLLAR", vec![n(-0.4), n(0.0)]), "($0)");
+        is_text(ev("DOLLAR", vec![n(-0.5), n(0.0)]), "($1)");
+        is_text(ev("FIXED", vec![n(-0.0001), n(0.0)]), "0");
     }
 
     #[test]
