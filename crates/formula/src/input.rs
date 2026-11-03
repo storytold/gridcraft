@@ -4,6 +4,7 @@ use gridcraft_core::CellError;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+mod de;
 mod en;
 mod es;
 mod fr;
@@ -20,6 +21,7 @@ use crate::{Expr, ParseError, parser};
 pub enum FormulaLocale {
     #[default]
     En,
+    De,
     Es,
     Pl,
     Fr,
@@ -59,6 +61,7 @@ impl FormulaLocale {
     fn data(self) -> &'static LocaleData {
         match self {
             Self::En => &en::DATA,
+            Self::De => &de::DATA,
             Self::Es => &es::DATA,
             Self::Pl => &pl::DATA,
             Self::Fr => &fr::DATA,

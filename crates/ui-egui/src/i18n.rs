@@ -226,6 +226,7 @@ impl Language {
     pub fn formula_locale(self) -> gridcraft_engine::formula::FormulaLocale {
         match self {
             Self::Es => gridcraft_engine::formula::FormulaLocale::Es,
+            Self::De => gridcraft_engine::formula::FormulaLocale::De,
             Self::Pl => gridcraft_engine::formula::FormulaLocale::Pl,
             Self::Fr => gridcraft_engine::formula::FormulaLocale::Fr,
             Self::It => gridcraft_engine::formula::FormulaLocale::It,
