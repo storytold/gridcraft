@@ -76,7 +76,14 @@ fn emit_craft_fonts() {
 
 /// One `CraftFont { .. }` initialiser per manifest row GridCraft may embed.
 fn craft_fonts(dir: &std::path::Path, wasm: bool, required: bool) -> Result<String, String> {
-    let manifest = dir.join("fonts/manifest.txt");
+    // Every file embedded comes from inside the checkout: a manifest row (or a symlink) naming a
+    // path outside it would put that file of the build machine into the binary.
+    let root = dir.canonicalize().map_err(|e| format!("{}: {e}", dir.display()))?;
+    let inside = |path: std::path::PathBuf| -> Result<std::path::PathBuf, String> {
+        let real = path.canonicalize().map_err(|e| format!("{}: {e}", path.display()))?;
+        if real.starts_with(&root) { Ok(real) } else { Err(format!("{} is outside the craft-fonts checkout {}", path.display(), root.display())) }
+    };
+    let manifest = inside(dir.join("fonts/manifest.txt"))?;
     println!("cargo::rerun-if-changed={}", manifest.display());
     let text = std::fs::read_to_string(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
     let rows = craft_fonts_policy::parse_manifest(&text)?;
@@ -84,7 +91,7 @@ fn craft_fonts(dir: &std::path::Path, wasm: bool, required: bool) -> Result<Stri
     if required {
         craft_fonts_policy::check_required(&rows)?;
     }
-    let chinese = if wasm { Vec::new() } else { chinese_font_rows(dir, required)? };
+    let chinese = if wasm { Vec::new() } else { chinese_font_rows(&root, required)? };
     for row in rows.iter().chain(&chinese) {
         if craft_fonts_policy::barred(&row.family) {
             println!("cargo::warning=craft-fonts: not embedding {} {} (repository asset policy)", row.family, row.style);
@@ -92,7 +99,7 @@ fn craft_fonts(dir: &std::path::Path, wasm: bool, required: bool) -> Result<Stri
     }
     let mut out = String::new();
     for row in craft_fonts_policy::embeddable(&rows, wasm).into_iter().chain(craft_fonts_policy::embeddable(&chinese, wasm)) {
-        let path = dir.join(&row.file).canonicalize().map_err(|e| format!("{}: {e}", row.file))?;
+        let path = inside(root.join(&row.file)).map_err(|e| format!("{}: {e}", row.file))?;
         println!("cargo::rerun-if-changed={}", path.display());
         let scripts: Vec<String> = row.scripts.iter().map(|s| format!("{s:?}")).collect();
         let family = &row.family;
@@ -112,6 +119,10 @@ fn craft_fonts(dir: &std::path::Path, wasm: bool, required: bool) -> Result<Stri
 fn chinese_font_rows(dir: &std::path::Path, required: bool) -> Result<Vec<craft_fonts_policy::ManifestRow>, String> {
     let manifest = dir.join("fonts/simplified-chinese-manifest.txt");
     println!("cargo::rerun-if-changed={}", manifest.display());
+    // `dir` is the canonical checkout: the manifest itself must not lead out of it either.
+    if manifest.canonicalize().is_ok_and(|real| !real.starts_with(dir)) {
+        return Err(format!("{} is outside the craft-fonts checkout", manifest.display()));
+    }
     let optional = |e: String| -> Result<Vec<craft_fonts_policy::ManifestRow>, String> {
         if required {
             Err(format!("{}: {e}", manifest.display()))
