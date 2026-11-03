@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use gridcraft_core::{Array, CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, compare};
-use gridcraft_formula::{BinOp, Expr, RefKind, Reference, SheetSel, StructItem, StructRef, UnOp};
+use gridcraft_formula::{BinOp, Expr, Reference, SheetSel, StructItem, StructRef, UnOp};
 use gridcraft_functions::{Arg, Ctx};
 use gridcraft_model::Workbook;
 

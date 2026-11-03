@@ -1,4 +1,6 @@
-use super::*;
+use super::{
+    Cell, CellRef, EngineError, HashMap, Json, RangeRef, Result, Session, StyleId, Value, bad, bool_param, edit, json, parse_range, str_param,
+};
 
 // ---------------------------------------------------------------- consolidate
 
@@ -183,7 +185,7 @@ pub(super) fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
             if v.is_empty() && style == StyleId::DEFAULT {
                 sh.remove_cell(c);
             } else {
-                sh.set_cell(c, Cell { value: v, formula: None, style });
+                sh.set_cell(c, Cell { value: v, formula: None, style, py: None });
             }
             cx.touch(dsi, c);
         }
