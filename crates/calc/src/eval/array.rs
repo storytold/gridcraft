@@ -86,6 +86,30 @@ pub fn zip2(a: &Value, b: &Value, f: impl Fn(&Value, &Value) -> Value) -> Value 
     }
 }
 
+/// [`zip2`] that stops at the first cell `f` refuses (`None`), before the rest is built: the
+/// result grows as cells are made rather than being reserved for the whole broadcast up front.
+fn try_zip2(a: &Value, b: &Value, mut f: impl FnMut(&Value, &Value) -> Option<Value>) -> Option<Value> {
+    Some(match (a, b) {
+        (Value::Array(x), Value::Array(y)) => {
+            let rows = broadcast_dim(x.rows, y.rows);
+            let cols = broadcast_dim(x.cols, y.cols);
+            if broadcast_len(rows, cols).is_none() {
+                return Some(Value::Error(CellError::Num));
+            }
+            let mut data = Vec::new();
+            for r in 0..rows {
+                for c in 0..cols {
+                    data.push(f(&x.get_broadcast(r, c), &y.get_broadcast(r, c))?);
+                }
+            }
+            Value::from(Array { rows, cols, data })
+        }
+        (Value::Array(x), s) => Value::from(Array { rows: x.rows, cols: x.cols, data: x.data.iter().map(|v| f(v, s)).collect::<Option<_>>()? }),
+        (s, Value::Array(y)) => Value::from(Array { rows: y.rows, cols: y.cols, data: y.data.iter().map(|v| f(s, v)).collect::<Option<_>>()? }),
+        (x, y) => f(x, y)?,
+    })
+}
+
 /// Cell count of a `rows`×`cols` broadcast result, or `None` when it would exceed [`MAX_CELLS`].
 /// Each operand passes its own size cap, but their broadcast product can be far larger
 /// (`SEQUENCE(1048576)*SEQUENCE(1,16384)` is 17 billion cells), so it is checked before allocating.
@@ -151,23 +175,18 @@ pub fn binary_values(op: BinOp, x: &Value, y: &Value, sys: gridcraft_core::DateS
 /// `x & y` with at least one array operand, giving `#NUM!` once the texts built so far pass `budget`
 /// bytes.
 fn concat_arrays(x: &Value, y: &Value, sys: gridcraft_core::DateSystem, budget: usize) -> Value {
-    let used = std::cell::Cell::new(0usize);
-    let over = std::cell::Cell::new(false);
-    let r = zip2(x, y, |a, b| {
-        if over.get() {
-            return Value::Empty;
-        }
+    let mut used = 0usize;
+    try_zip2(x, y, |a, b| {
         let v = binary_scalar(BinOp::Concat, a, b, sys);
         if let Value::Text(t) = &v {
-            used.set(used.get().saturating_add(t.len()));
-            if used.get() > budget {
-                over.set(true);
-                return Value::Empty;
+            used = used.saturating_add(t.len());
+            if used > budget {
+                return None;
             }
         }
-        v
-    });
-    if over.get() { Value::Error(CellError::Num) } else { r }
+        Some(v)
+    })
+    .unwrap_or(Value::Error(CellError::Num))
 }
 
 fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSystem) -> Value {
@@ -218,7 +237,20 @@ fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSyste
 
 #[cfg(test)]
 mod tests {
-    use super::{Array, BinOp, CellError, MAX_CELLS, Value, broadcast_len, concat_arrays};
+    use super::{Array, BinOp, CellError, MAX_CELLS, Value, broadcast_len, concat_arrays, try_zip2};
+
+    /// The broadcast stops at the first refused cell: nothing after it is visited.
+    #[test]
+    fn a_refused_cell_stops_the_broadcast() {
+        let col = Value::from(Array::column((0..4_000).map(|i| Value::number(i as f64)).collect()));
+        let row = Value::from(Array { rows: 1, cols: 4_000, data: (0..4_000).map(|i| Value::number(i as f64)).collect() });
+        let mut calls = 0;
+        let r = try_zip2(&col, &row, |a, _| {
+            calls += 1;
+            (calls <= 10).then(|| a.clone())
+        });
+        assert_eq!((r, calls), (None, 11));
+    }
 
     #[test]
     fn concatenating_arrays_stops_at_the_byte_budget() {
