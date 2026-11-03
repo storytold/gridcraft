@@ -22,13 +22,20 @@ pub(super) struct Win {
 /// The win metrics of the first face of `font`'s family (`None` when the face has no OS/2 table).
 pub(super) fn win_metrics(ctx: &egui::Context, font: &FontId) -> Option<Win> {
     thread_local! {
-        static PER_EM: RefCell<HashMap<FontFamily, Option<(f32, f32)>>> = RefCell::new(HashMap::new());
+        // By the face's key, not the family: a rebuilt font set may give a family other faces.
+        static PER_EM: RefCell<HashMap<String, Option<(f32, f32)>>> = RefCell::new(HashMap::new());
     }
-    let cached = PER_EM.with(|c| c.borrow().get(&font.family).copied());
-    let per_em = cached.unwrap_or_else(|| {
-        let v = ctx.fonts(|f| win_per_em(f.definitions(), &font.family));
-        PER_EM.with(|c| c.borrow_mut().insert(font.family.clone(), v));
-        v
+    let per_em = ctx.fonts(|f| {
+        let defs = f.definitions();
+        let key = defs.families.get(&font.family)?.first()?;
+        PER_EM.with(|c| {
+            let cached = c.borrow().get(key).copied();
+            cached.unwrap_or_else(|| {
+                let v = win_per_em(defs, &font.family);
+                c.borrow_mut().insert(key.clone(), v);
+                v
+            })
+        })
     });
     per_em.map(|(a, d)| Win { ascent: a * font.size, descent: d * font.size })
 }
@@ -117,6 +124,27 @@ mod tests {
         defs.families.insert(FontFamily::Name("c".into()), vec!["calibri".into()]);
         let (a, d) = win_per_em(&defs, &FontFamily::Name("c".into())).unwrap();
         assert!((a - 1950.0 / 2048.0).abs() < 1e-5 && (d - 550.0 / 2048.0).abs() < 1e-5, "{a} {d}");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn the_metrics_follow_the_faces_a_rebuilt_font_set_gives_the_family() {
+        let family = FontFamily::Name("c".into());
+        let font = FontId::new(10.0, family.clone());
+        let ctx = egui::Context::default();
+        let mut ascents = Vec::new();
+        for file in ["calibri.ttf", "arial.ttf"] {
+            let Ok(bytes) = std::fs::read(format!(r"C:\Windows\Fonts\{file}")) else { return };
+            let mut defs = FontDefinitions::default();
+            defs.font_data.insert(file.into(), Arc::new(FontData::from_owned(bytes)));
+            defs.families.insert(family.clone(), vec![file.into()]);
+            ctx.set_fonts(defs);
+            let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
+            out.textures_delta.clear();
+            ascents.push(win_metrics(&ctx, &font).unwrap().ascent);
+        }
+        // Calibri's win ascent is 1950/2048 of the size, Arial's 1854/2048.
+        assert!((ascents[0] - 9.521).abs() < 0.01 && (ascents[1] - 9.053).abs() < 0.01, "{ascents:?}");
     }
 
     #[test]
