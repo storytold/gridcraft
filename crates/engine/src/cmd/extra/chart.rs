@@ -147,13 +147,16 @@ pub(super) fn change_colors(s: &mut Session, p: &Json) -> Result<Json> {
     let palette = str_param(p, "palette").unwrap_or("colorful").to_string();
     with_chart(s, p, |c| {
         for (i, se) in c.series.iter_mut().enumerate() {
+            // Imported/pasted charts can have hundreds of series; saturate before narrowing
+            // to the model's tint so the palette command cannot overflow on those charts.
+            let tint_index = i32::try_from(i).unwrap_or(i32::MAX);
             se.color = match &explicit {
                 Some(cols) if !cols.is_empty() => cols.get(i % cols.len()).copied(),
                 _ => match palette.as_str() {
-                    "monochrome" => Some(Color::Theme(4, (-400 + (i as i16 * 200)).clamp(-800, 800))),
+                    "monochrome" => Some(Color::Theme(4, tint_index.saturating_mul(200).saturating_sub(400).clamp(-800, 800) as i16)),
                     p if p.starts_with("accent") => {
                         let k: u8 = p.trim_start_matches("accent").parse().unwrap_or(1);
-                        Some(Color::Theme(3 + k.clamp(1, 6), (-500 + i as i16 * 250).clamp(-800, 800)))
+                        Some(Color::Theme(3 + k.clamp(1, 6), tint_index.saturating_mul(250).saturating_sub(500).clamp(-800, 800) as i16))
                     }
                     _ => None,
                 },
@@ -215,6 +218,7 @@ pub(super) fn select_data(s: &mut Session, p: &Json) -> Result<Json> {
     with_chart(s, p, move |c| {
         if let Some((series, source, by_rows)) = rebuilt {
             c.series = series;
+            c.format.series.clear();
             crate::cmd::insert::scatter_x_from_first(c.kind, &mut c.series);
             c.source = Some(source);
             c.by_rows = by_rows;
@@ -222,6 +226,10 @@ pub(super) fn select_data(s: &mut Session, p: &Json) -> Result<Json> {
         for i in remove.iter().rev() {
             if *i < c.series.len() && c.series.len() > 1 {
                 c.series.remove(*i);
+                c.format.series = std::mem::take(&mut c.format.series)
+                    .into_iter()
+                    .filter_map(|(index, style)| if index == *i { None } else { Some((if index > *i { index - 1 } else { index }, style)) })
+                    .collect();
             }
         }
         if let Some(cats) = categories {

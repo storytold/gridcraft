@@ -1,5 +1,6 @@
 use super::frame::Bx;
-use super::{Ctx, MAX_LINE_PTS, MAX_MARKERS, Prim, Rgba, WHITE};
+use super::trend::clip_unit;
+use super::{Ctx, DARK_TEXT, MAX_LINE_PTS, MAX_MARKERS, PI, Prim, Rgba, WHITE};
 use std::collections::HashSet;
 
 // ---------------------------------------------------------------- helpers
@@ -208,6 +209,122 @@ pub(super) fn draw_markers(ctx: &mut Ctx, pts: impl Iterator<Item = [f32; 2]>, r
         if seen.insert(((p[0] * 0.5) as i32, (p[1] * 0.5) as i32)) {
             ctx.out.push(Prim::Circle { cx: p[0], cy: p[1], r, fill: Some(color), stroke: Some((WHITE, 0.75)) });
         }
+    }
+}
+
+/// Whether a marker lies within the inclusive plot bounds.
+pub(super) fn inside_plot(p: [f32; 2], plot: Bx) -> bool {
+    p[0] >= plot.x && p[0] <= plot.right() && p[1] >= plot.y && p[1] <= plot.bottom()
+}
+
+/// Clips disconnected runs to the plot before drawing or smoothing them.
+pub(super) fn draw_clipped_runs(ctx: &mut Ctx, pts: &[Option<[f32; 2]>], color: Rgba, plot: Bx, smooth: bool) {
+    let units: Vec<_> = pts.iter().map(|p| p.map(|p| (((p[0] - plot.x) / plot.w) as f64, ((p[1] - plot.y) / plot.h) as f64))).collect();
+    for run in clip_unit(&units) {
+        let pts: Vec<_> = run.into_iter().map(|(x, y)| Some([plot.x + x as f32 * plot.w, plot.y + y as f32 * plot.h])).collect();
+        draw_runs(ctx, &pts, color, 2.25, smooth.then_some(plot));
+    }
+}
+
+/// Applies series/marker overrides to the primitives emitted since `start`, including legend swatches.
+pub(super) fn style_series(ctx: &mut Ctx, start: usize, spec: Option<&gridcraft_model::ChartSeriesFormat>, color: Rgba) {
+    let Some(spec) = spec else { return };
+    let prims: Vec<_> = ctx.out.drain(start..).collect();
+    for mut prim in prims {
+        match &mut prim {
+            Prim::Line { color: c, width, dash, .. } if *c == color => {
+                if spec.no_line {
+                    continue;
+                }
+                *width = spec.line_width.unwrap_or(*width);
+                *dash = spec.dashed;
+                *c = spec.line_color.unwrap_or(color);
+            }
+            Prim::Rect { fill: Some(c), stroke, .. } | Prim::Polygon { fill: c, stroke, .. } if *c == color => {
+                *c = spec.fill_color.unwrap_or(color);
+                if let Some(w) = spec.border_width {
+                    *stroke = (w > 0.0).then_some((DARK_TEXT, w));
+                }
+            }
+            Prim::Circle { cx, cy, r, fill, stroke } if *fill == Some(color) => {
+                if spec.marker.as_deref() == Some("none") {
+                    continue;
+                }
+                *r = spec.marker_size.unwrap_or(*r * 2.0) / 2.0;
+                let marker_color = spec.marker_fill.unwrap_or(color);
+                *fill = if spec.marker_no_fill { None } else { Some(marker_color) };
+                let border_width = spec.marker_border_width.or(spec.border_width);
+                let border_color = spec.marker_border_color.unwrap_or(DARK_TEXT);
+                if let Some(w) = border_width {
+                    *stroke = (w > 0.0).then_some((border_color, w));
+                } else if spec.marker_border_color.is_some() || spec.marker_no_fill {
+                    *stroke = Some((border_color, 1.0));
+                }
+                let (x, y, r) = (*cx, *cy, *r);
+                let pts = match spec.marker.as_deref() {
+                    Some("square") => Some(vec![[x - r, y - r], [x + r, y - r], [x + r, y + r], [x - r, y + r]]),
+                    Some("diamond") => Some(vec![[x, y - r], [x + r, y], [x, y + r], [x - r, y]]),
+                    Some("triangle") => Some(vec![[x, y - r], [x + r, y + r], [x - r, y + r]]),
+                    Some("cross") => {
+                        ctx.line(vec![[x - r, y - r], [x + r, y + r]], spec.marker_border_color.unwrap_or(marker_color), border_width.unwrap_or(1.5));
+                        ctx.line(vec![[x - r, y + r], [x + r, y - r]], spec.marker_border_color.unwrap_or(marker_color), border_width.unwrap_or(1.5));
+                        continue;
+                    }
+                    Some("plus") | Some("dash") => {
+                        let c = spec.marker_border_color.unwrap_or(marker_color);
+                        ctx.line(vec![[x - r, y], [x + r, y]], c, border_width.unwrap_or(1.5));
+                        if spec.marker.as_deref() == Some("plus") {
+                            ctx.line(vec![[x, y - r], [x, y + r]], c, border_width.unwrap_or(1.5));
+                        }
+                        continue;
+                    }
+                    Some("star") => {
+                        let pts: Vec<_> = (0..10)
+                            .map(|i| {
+                                let a = -PI / 2.0 + i as f32 * PI / 5.0;
+                                let radius = if i % 2 == 0 { r } else { r * 0.4 };
+                                [x + radius * a.cos(), y + radius * a.sin()]
+                            })
+                            .collect();
+                        for i in 0..pts.len() {
+                            ctx.out.push(Prim::Polygon {
+                                pts: vec![[x, y], pts[i], pts[(i + 1) % pts.len()]],
+                                fill: fill.unwrap_or([0, 0, 0, 0]),
+                                stroke: None,
+                            });
+                        }
+                        if let Some((color, width)) = *stroke {
+                            let mut closed = pts;
+                            if let Some(first) = closed.first().copied() {
+                                closed.push(first);
+                            }
+                            ctx.line(closed, color, width);
+                        }
+                        continue;
+                    }
+                    _ => None,
+                };
+                if let Some(pts) = pts {
+                    prim = Prim::Polygon { pts, fill: fill.unwrap_or([0, 0, 0, 0]), stroke: *stroke };
+                }
+            }
+            _ => {}
+        }
+        ctx.out.push(prim);
+    }
+}
+
+pub(super) fn draw_area_run(ctx: &mut Ctx, mut top: Vec<[f32; 2]>, mut base: Vec<[f32; 2]>, cw: f32, color: Rgba) {
+    if top.len() == 1 {
+        // A single point: give it some width.
+        if let (Some(t), Some(b)) = (top.first().copied(), base.first().copied()) {
+            top = vec![[t[0] - cw * 0.3, t[1]], [t[0] + cw * 0.3, t[1]]];
+            base = vec![[b[0] - cw * 0.3, b[1]], [b[0] + cw * 0.3, b[1]]];
+        }
+    }
+    let poly = decimate_area(top, base, MAX_LINE_PTS * 2);
+    if poly.len() >= 3 {
+        ctx.out.push(Prim::Polygon { pts: poly, fill: color, stroke: None });
     }
 }
 

@@ -91,6 +91,12 @@ pub enum Prim {
     },
     /// Text anchored at `(x, y)` per `align`/`valign`, rotated by `rotation` radians about the anchor.
     Text {
+        /// Element used to select and format the text (title, legend, axes, data labels, trendline).
+        #[serde(default)]
+        role: String,
+        /// Effective text style after inheriting the whole-chart defaults.
+        #[serde(default)]
+        format: gridcraft_model::ChartTextFormat,
         x: f32,
         y: f32,
         text: String,

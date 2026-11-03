@@ -44,3 +44,28 @@ fn every_data_table_flag_combination_survives_xlsx_save_reopen() {
         assert_eq!(again.sheets[0].charts[0].data_table.as_ref(), Some(&settings));
     }
 }
+
+/// Formatting extensions and native data-table settings must coexist after integration.
+#[test]
+fn formatted_chart_preserves_native_data_table_on_repeated_save() {
+    let mut c = chart("");
+    c.id = 1;
+    let table = ChartDataTable { horizontal_border: false, ..Default::default() };
+    c.data_table = Some(table.clone());
+    c.format.y_axis.minimum = Some(-5.0);
+    c.format.y_axis.maximum = Some(25.0);
+    c.format.y_axis.major_unit = Some(5.0);
+    c.format.plot_area.fill = Some([240, 245, 250, 255]);
+    let mut wb = gridcraft_model::Workbook::new();
+    wb.sheet_mut(0).unwrap().charts.push(c);
+    for _ in 0..2 {
+        let bytes = write_xlsx(&wb).unwrap();
+        wb = read_xlsx(&bytes).unwrap().0;
+        let back = &wb.sheets[0].charts[0];
+        assert_eq!(back.data_table.as_ref(), Some(&table));
+        assert_eq!(back.format.y_axis.minimum, Some(-5.0));
+        assert_eq!(back.format.y_axis.maximum, Some(25.0));
+        assert_eq!(back.format.y_axis.major_unit, Some(5.0));
+        assert_eq!(back.format.plot_area.fill, Some([240, 245, 250, 255]));
+    }
+}

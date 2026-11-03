@@ -2,9 +2,9 @@
 
 use std::f32::consts::{PI, TAU};
 
-use gridcraft_model::{Chart, ChartKind, LineDash, QuartileMethod, Theme, TrendlineKind};
+use gridcraft_model::{Chart, ChartKind, LegendPos, LineDash, QuartileMethod, Theme, TrendlineKind};
 
-use crate::axis::{Fmt, Scale, clean, fixed_scale, nice_scale};
+use crate::axis::{Fmt, Scale, clean, configured_scale, fixed_scale, nice_scale};
 use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, series_color};
 use crate::trend::{auto_name, fit_trendline, moving_average};
 use crate::{ChartData, HAlign, Measure, Prim, Rgba, SeriesData, VAlign};
@@ -53,6 +53,9 @@ pub(crate) const MAX_WEDGES: usize = 2_048;
 struct Ctx<'a> {
     out: Vec<Prim>,
     m: &'a dyn Measure,
+    format: &'a gridcraft_model::ChartFormat,
+    size: [f32; 2],
+    plot: Option<Bx>,
 }
 
 impl Ctx<'_> {
@@ -79,13 +82,36 @@ impl Ctx<'_> {
         if s.is_empty() {
             return;
         }
-        self.out.push(Prim::Text { x, y, text: s.to_string(), size, color, bold: false, align, valign, rotation: 0.0 });
+        self.text_role("data_labels", x, y, s, size, color, align, valign);
+    }
+    fn font_size(&self, role: &str, default: f32) -> f32 {
+        self.format.text_style(role).size.unwrap_or(default)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn text_role(&mut self, role: &str, x: f32, y: f32, s: &str, size: f32, color: Rgba, align: HAlign, valign: VAlign) {
+        if s.is_empty() {
+            return;
+        }
+        let format = self.format.text_style(role);
+        self.out.push(Prim::Text {
+            x,
+            y,
+            text: s.to_string(),
+            size: format.size.unwrap_or(size),
+            color: format.color.unwrap_or(color),
+            bold: format.bold.unwrap_or(false),
+            align,
+            valign,
+            rotation: 0.0,
+            role: role.into(),
+            format,
+        });
     }
     fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, fill: Rgba, stroke: Option<(Rgba, f32)>) {
         self.out.push(Prim::Rect { x, y, w, h, fill: Some(fill), stroke, radius: 0.0 });
     }
     fn line(&mut self, pts: Vec<[f32; 2]>, color: Rgba, width: f32) {
-        if pts.len() >= 2 {
+        if pts.len() >= 2 && width > 0.0 {
             self.out.push(Prim::Line { pts, color, width, dash: false });
         }
     }
@@ -132,24 +158,41 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
         return vec![];
     }
     let data = sanitize(data);
-    let mut ctx = Ctx { out: Vec::new(), m };
-    ctx.out.push(Prim::Rect { x: 0.0, y: 0.0, w, h, fill: Some(WHITE), stroke: Some((GRID, 1.0)), radius: 0.0 });
+    let mut ctx = Ctx { out: Vec::new(), m, format: &chart.format, size: [w, h], plot: None };
+    let area_style = &chart.format.chart_area;
+    let border = area_style.border_width.or(chart.format.border_width).unwrap_or(1.0);
+    ctx.out.push(Prim::Rect {
+        x: 0.0,
+        y: 0.0,
+        w,
+        h,
+        fill: Some(area_style.fill.unwrap_or(WHITE)),
+        stroke: (border > 0.0).then_some((area_style.border.unwrap_or(GRID), border)),
+        radius: 0.0,
+    });
     let pad = (w.min(h) * 0.04).clamp(2.0, 10.0);
     let mut area = Bx { x: pad, y: pad, w: w - 2.0 * pad, h: h - 2.0 * pad };
     if let Some(t) = chart_title(chart, &data) {
-        let size = TITLE_SIZE.min(h * 0.12).max(4.0);
+        let size = ctx.font_size("title", TITLE_SIZE.min(h * 0.12)).max(4.0);
         let t = ctx.fit(&t, size, area.w);
-        ctx.text(w / 2.0, area.y, &t, size, TEXT, (HAlign::Center, VAlign::Top));
+        ctx.text_role("title", w / 2.0, area.y, &t, size, TEXT, HAlign::Center, VAlign::Top);
         let used = size * 1.3 + 4.0;
         area.y += used;
         area.h -= used;
     }
     let entries = legend_entries(chart, &data);
-    if !entries.is_empty() && area.ok() {
-        area = draw_legend(&mut ctx, &entries, chart.legend, area);
+    if !entries.is_empty() && area.ok() && !chart.format.legend_overlay {
+        area = draw_legend(&mut ctx, &entries, chart.legend, area, chart, data.series.len());
     }
     if area.ok() && !data.series.is_empty() {
         draw_kind(&mut ctx, chart, &data, area);
+    }
+    if chart.format.legend_overlay && !entries.is_empty() && area.ok() {
+        let plot = ctx.plot.unwrap_or(area);
+        let start = ctx.out.len();
+        draw_legend(&mut ctx, &entries, LegendPos::Right, plot, chart, data.series.len());
+        let position = chart.format.legend_position.unwrap_or([plot.right() / w, (plot.y + 4.0) / h]);
+        place_group(&mut ctx, start, position, plot);
     }
     finalize(ctx.out, w, h)
 }
@@ -248,12 +291,87 @@ pub(crate) fn finalize(prims: Vec<Prim>, w: f32, h: f32) -> Vec<Prim> {
                 }
                 Some(Prim::Circle { cx: x, cy: y, r, fill, stroke: clamp_stroke(stroke) })
             }
-            Prim::Text { x, y, text, size, color, bold, align, valign, rotation } => {
+            Prim::Text { x, y, text, size, color, bold, align, valign, rotation, role, format } => {
                 if !(fin(x) && fin(y) && fin(size) && fin(rotation)) || text.is_empty() {
                     return None;
                 }
-                Some(Prim::Text { x: cx(x), y: cy(y), text, size: size.clamp(1.0, 200.0), color, bold, align, valign, rotation })
+                Some(Prim::Text { x: cx(x), y: cy(y), text, size: size.clamp(1.0, 200.0), color, bold, align, valign, rotation, role, format })
             }
         })
         .collect()
+}
+
+/// Places a legend or equation group using an origin normalized to chart dimensions.
+/// The origin is clamped using the whole group's bounds, preserving its internal spacing.
+fn place_group(ctx: &mut Ctx, start: usize, position: [f32; 2], plot: Bx) {
+    let mut lo = [f32::INFINITY; 2];
+    let mut hi = [f32::NEG_INFINITY; 2];
+    let mut include = |x: f32, y: f32| {
+        lo[0] = lo[0].min(x);
+        lo[1] = lo[1].min(y);
+        hi[0] = hi[0].max(x);
+        hi[1] = hi[1].max(y);
+    };
+    for p in ctx.out.iter().skip(start) {
+        match p {
+            Prim::Text { x, y, text, size, bold, align, valign, .. } => {
+                let w = ctx.m.text_width(text, *size, *bold);
+                let h = *size * 1.3;
+                let x = *x
+                    - match align {
+                        HAlign::Left => 0.0,
+                        HAlign::Center => w / 2.0,
+                        HAlign::Right => w,
+                    };
+                let y = *y
+                    - match valign {
+                        VAlign::Top => 0.0,
+                        VAlign::Middle => h / 2.0,
+                        VAlign::Bottom => h,
+                    };
+                include(x, y);
+                include(x + w, y + h);
+            }
+            Prim::Rect { x, y, w, h, .. } => {
+                include(*x, *y);
+                include(x + w, y + h);
+            }
+            Prim::Circle { cx, cy, r, .. } => {
+                include(cx - r, cy - r);
+                include(cx + r, cy + r);
+            }
+            Prim::Line { pts, .. } | Prim::Polygon { pts, .. } => {
+                for p in pts {
+                    include(p[0], p[1]);
+                }
+            }
+            Prim::Wedge { cx, cy, r_outer, .. } => {
+                include(cx - r_outer, cy - r_outer);
+                include(cx + r_outer, cy + r_outer);
+            }
+        }
+    }
+    if !lo[0].is_finite() || !position.iter().all(|v| v.is_finite()) {
+        return;
+    }
+    let dx = (position[0] * ctx.size[0]).clamp(plot.x, (plot.right() - (hi[0] - lo[0])).max(plot.x)) - lo[0];
+    let dy = (position[1] * ctx.size[1]).clamp(plot.y, (plot.bottom() - (hi[1] - lo[1])).max(plot.y)) - lo[1];
+    for p in ctx.out.iter_mut().skip(start) {
+        match p {
+            Prim::Rect { x, y, .. } | Prim::Text { x, y, .. } => {
+                *x += dx;
+                *y += dy;
+            }
+            Prim::Circle { cx, cy, .. } | Prim::Wedge { cx, cy, .. } => {
+                *cx += dx;
+                *cy += dy;
+            }
+            Prim::Line { pts, .. } | Prim::Polygon { pts, .. } => {
+                for p in pts {
+                    p[0] += dx;
+                    p[1] += dy;
+                }
+            }
+        }
+    }
 }
