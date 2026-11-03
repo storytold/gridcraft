@@ -260,18 +260,24 @@ impl<'h> Evaluator<'h> {
         }
         // A reference keeps its size, so the array has its shape and its blanks count
         // (`=A1:A10`, `SUMPRODUCT(--(A1:A10=""))`).
-        let cells = u64::from(a.range.height()) * u64::from(a.range.width());
-        // `A:A`, `1:1` and `A2:A1048576` run to the edge of the sheet: they stand for "the rest of
-        // the column", not for a block of a chosen size.
-        let to_edge = a.range.end.row == MAX_ROWS - 1 || a.range.end.col == MAX_COLS - 1;
-        let full_size = cells <= FULL_SIZE_CELLS || (!to_edge && cells <= FULL_SIZE_BOUNDED_CELLS);
-        let range = if full_size { a.range } else { self.trim(a) };
+        let range = self.read_range(a);
         let (h, w) = (range.height() as usize, range.width() as usize);
         if (h as u64) * (w as u64) > MAX_CELLS {
             return Value::Error(CellError::Num);
         }
         let data = self.host.range_values(a.sheet, range);
         Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
+    }
+
+    /// The block that reading `a` gives: `a` itself, or when it is large (or runs to the sheet's
+    /// edge) the part inside the sheet's used range.
+    pub(crate) fn read_range(&mut self, a: &Area) -> RangeRef {
+        let cells = u64::from(a.range.height()) * u64::from(a.range.width());
+        // `A:A`, `1:1` and `A2:A1048576` run to the edge of the sheet: they stand for "the rest of
+        // the column", not for a block of a chosen size.
+        let to_edge = a.range.end.row == MAX_ROWS - 1 || a.range.end.col == MAX_COLS - 1;
+        let full_size = cells <= FULL_SIZE_CELLS || (!to_edge && cells <= FULL_SIZE_BOUNDED_CELLS);
+        if full_size { a.range } else { self.trim(a) }
     }
 
     /// Trims the bottom/right of an area to the sheet's used range (keeps the top-left so
