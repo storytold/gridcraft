@@ -220,7 +220,7 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
                 ("Radar", "radar", ""),
             ] {
                 let cur = chart.kind == gridcraft_engine::cmd::insert::chart_kind(k, s);
-                if ui.selectable_label(cur, l).clicked() {
+                if ui.selectable_label(cur, crate::i18n::current(ui.ctx()).tr(l)).clicked() {
                     app.run_or_alert("chart.set", json!({"chart": id, "type": k, "subtype": s}));
                 }
             }
@@ -244,7 +244,7 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
         ui.horizontal(|ui| {
             for (l, v) in [("None", "none"), ("Bottom", "bottom"), ("Top", "top"), ("Left", "left"), ("Right", "right")] {
                 let cur = format!("{:?}", chart.legend).eq_ignore_ascii_case(v);
-                if ui.selectable_label(cur, l).clicked() {
+                if ui.selectable_label(cur, crate::i18n::current(ui.ctx()).tr(l)).clicked() {
                     app.run_or_alert("chart.set", json!({"chart": id, "legend": v}));
                 }
             }
