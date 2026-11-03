@@ -33,8 +33,8 @@ fn parse_items(p: &Json, cmd: &str) -> Result<Vec<String>> {
     let mut out = Vec::with_capacity(items.len());
     for item in items {
         let raw_text = item.as_str().ok_or_else(|| bad(cmd, "list items must be text"))?;
-        if raw_text.contains('\n') || raw_text.contains('\r') {
-            return Err(bad(cmd, "list items may not contain line breaks"));
+        if raw_text.contains('\r') {
+            return Err(bad(cmd, "list items may not contain carriage returns"));
         }
         let text = raw_text.trim();
         if text.is_empty() || text.len() > MAX_ITEM_BYTES {
@@ -162,6 +162,9 @@ mod tests {
             assert!(s.execute("options.addCustomList", params).is_err());
         }
         assert!(s.execute("options.addCustomList", json!({"items": ["x".repeat(MAX_ITEM_BYTES + 1)]})).is_err());
+        assert!(s.execute("options.addCustomList", json!({"items": ["line one\rline two"]})).is_err());
+        s.execute("options.addCustomList", json!({"items": ["line one\nline two"]})).unwrap();
+        assert_eq!(s.prefs.custom_lists[0], ["line one\nline two"]);
     }
 
     #[test]

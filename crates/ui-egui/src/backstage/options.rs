@@ -145,17 +145,6 @@ fn custom_list_items_from_draft(draft: &str) -> Vec<String> {
         .collect()
 }
 
-#[cfg(test)]
-mod custom_list_editor_tests {
-    use super::{custom_list_items_from_draft, custom_list_to_draft};
-
-    #[test]
-    fn custom_list_editor_preserves_embedded_newlines_and_backslashes() {
-        let items = vec!["first\nsecond".to_owned(), r"literal \n sequence".to_owned(), "trailing\\".to_owned()];
-        assert_eq!(custom_list_items_from_draft(&custom_list_to_draft(&items)), items);
-    }
-}
-
 /// The display theme and interface language controls of the General section.
 fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
     egui::Grid::new("backstage_options_general").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
@@ -296,4 +285,15 @@ pub(super) fn platform() -> String {
         other => other,
     };
     format!("{os} ({})", std::env::consts::ARCH)
+}
+
+#[cfg(test)]
+mod custom_list_editor_tests {
+    use super::{custom_list_items_from_draft, custom_list_to_draft};
+
+    #[test]
+    fn custom_list_editor_preserves_embedded_newlines_and_backslashes() {
+        let items = vec!["first\nsecond".to_owned(), r"literal \n sequence".to_owned(), "trailing\\".to_owned()];
+        assert_eq!(custom_list_items_from_draft(&custom_list_to_draft(&items)), items);
+    }
 }

@@ -1451,6 +1451,15 @@ fn hidden_formulas_stay_hidden_on_protected_sheets() {
 }
 
 #[test]
+fn sort_null_custom_list_uses_cell_values() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Z"], ["A"]]})).unwrap();
+    s.execute("data.sort", json!({"range": "A1:A2", "header": false, "keys": [{"column": "A", "customList": null}]})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::from("A"));
+    assert_eq!(v(&s, "A2"), Value::from("Z"));
+}
+
+#[test]
 fn sort_uses_saved_custom_list_index() {
     let mut s = s();
     s.prefs.custom_lists.push(["Bronze", "Silver", "Gold"].map(str::to_string).to_vec());

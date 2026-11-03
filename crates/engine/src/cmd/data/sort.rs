@@ -63,6 +63,7 @@ pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
         let Some(col) = col else { continue };
         let list = match k.get("customList") {
             None => None,
+            Some(list) if list.is_null() => None,
             Some(list) if let Some(items) = list.as_array() => Some(items.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()),
             Some(value) => {
                 let index = value
