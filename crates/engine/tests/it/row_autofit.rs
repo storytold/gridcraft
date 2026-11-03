@@ -59,3 +59,31 @@ fn whole_row_format_keeps_hidden_rows_hidden() {
     assert!(info.size.unwrap_or(before) > before + 10.0, "hidden row still grows to its font: before={before}, size={:?}", info.size);
     assert!(info.hidden, "formatting a hidden row must not unhide it");
 }
+
+#[test]
+fn many_merges_fit_rows_the_same_and_skip_merged_cells() {
+    // Rows are fitted with one sweep over the sheet's merges; a merged cell still never grows
+    // its row, and rows next to thousands of merges still fit.
+    let mut s = gridcraft_engine::Session::new();
+    s.new_workbook();
+    let values: Vec<_> = (0..2_000).map(|i| json!([format!("v{i}")])).collect();
+    s.execute("range.setValues", json!({"range": "A1", "values": values})).unwrap();
+    {
+        let sh = sheet_mut(&mut s);
+        sh.merges.push(gridcraft_engine::core::RangeRef::parse("A3:B4").unwrap());
+        for i in 0..20_000u32 {
+            let row = 4 + i % 1_990;
+            sh.merges.push(gridcraft_engine::core::RangeRef::new(
+                gridcraft_engine::core::CellRef::new(row, 3 + (i % 7) * 2),
+                gridcraft_engine::core::CellRef::new(row + 3, 4 + (i % 7) * 2),
+            ));
+        }
+    }
+    s.execute("home.fontSize", json!({"range": "A:A", "size": 20})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let default = sh.default_row_height;
+    assert!(sh.row_height(0) > 30.0 && sh.row_height(1_999) > 30.0, "rows with big text grow");
+    assert_eq!(sh.row_height(2), default, "a merged cell does not grow its row");
+    assert_eq!(sh.row_height(3), default, "nor any row of the merge");
+    assert!(sh.row_height(4) > 30.0 && sh.row_height(1_000) > 30.0, "rows beside other merges grow");
+}

@@ -93,9 +93,11 @@ fn fit_imported_rows(wb: &mut Workbook) {
         let mut rows: Vec<u32> = sh.cells.iter().map(|(c, _)| c.row).collect();
         rows.sort_unstable();
         rows.dedup();
+        // One sweep over the sheet's merges for all of its rows, in ascending order.
+        let mut sweep = crate::cmd::MergeSweep::new(sh);
         for row in rows {
             let before = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
-            crate::cmd::auto_row_height(wb, si, row);
+            crate::cmd::fit_row_height(wb, si, row, &mut sweep);
             let Some(before) = before else { continue };
             let after = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
             if after.is_none_or(|a| before > a + 0.5)

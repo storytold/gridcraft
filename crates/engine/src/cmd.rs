@@ -440,8 +440,14 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     }
     fit_rows.sort_unstable();
     fit_rows.dedup();
+    let mut sweep: Option<(usize, MergeSweep)> = None;
     for (si, row) in fit_rows {
-        auto_row_height(&mut wb, si, row);
+        if sweep.as_ref().is_none_or(|(at, _)| *at != si) {
+            sweep = wb.sheet(si).map(|sh| (si, MergeSweep::new(sh)));
+        }
+        if let Some((_, sw)) = sweep.as_mut() {
+            fit_row_height(&mut wb, si, row, sw);
+        }
     }
     if let Some(t0) = t0 {
         eprintln!("commit: + rows {:?}", since(t0));
@@ -597,6 +603,65 @@ fn wrapped_line_count(line: &str, width: f32, size: f32, bold: bool) -> f32 {
 /// a multi-line value shows on one line and AutoFit gives a one-line row.
 pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
     let Some(sh) = wb.sheet(si) else { return };
+    let mut sweep = MergeSweep::new(sh);
+    fit_row_height(wb, si, row, &mut sweep);
+}
+
+/// Most merge comparisons one auto-fit pass (a commit, or opening a workbook) makes. Past it the
+/// remaining rows keep the heights they have rather than stall on a sheet whose merges overlap
+/// the fitted rows many times over.
+const MERGE_FIT_WORK: usize = 50_000_000;
+
+/// The merged areas of one sheet that touch a row, for rows visited in ascending order: the
+/// merges are sorted by first row once and swept, so fitting many rows never rescans every merge
+/// per row. All comparisons count against [`MERGE_FIT_WORK`].
+pub(crate) struct MergeSweep {
+    by_start: Vec<gridcraft_core::RangeRef>,
+    next: usize,
+    active: Vec<gridcraft_core::RangeRef>,
+    budget: usize,
+}
+
+impl MergeSweep {
+    pub(crate) fn new(sh: &gridcraft_model::Sheet) -> Self {
+        let mut by_start: Vec<gridcraft_core::RangeRef> = sh.merges.iter().copied().filter(|m| !m.is_single()).collect();
+        by_start.sort_unstable_by_key(|m| m.start.row);
+        let budget = MERGE_FIT_WORK.saturating_sub(by_start.len());
+        Self { by_start, next: 0, active: Vec::new(), budget }
+    }
+
+    /// Takes `n` comparisons from the budget; `false` once it is spent.
+    fn charge(&mut self, n: usize) -> bool {
+        match self.budget.checked_sub(n) {
+            Some(rest) => {
+                self.budget = rest;
+                true
+            }
+            None => {
+                self.budget = 0;
+                false
+            }
+        }
+    }
+
+    /// The merges covering `row`, or `None` when the budget is spent. Rows must not decrease
+    /// between calls (skipping rows is fine).
+    fn at(&mut self, row: u32) -> Option<Vec<gridcraft_core::RangeRef>> {
+        while let Some(m) = self.by_start.get(self.next).filter(|m| m.start.row <= row) {
+            self.active.push(*m);
+            self.next += 1;
+        }
+        if !self.charge(self.active.len()) {
+            return None;
+        }
+        self.active.retain(|m| m.end.row >= row);
+        Some(self.active.clone())
+    }
+}
+
+/// [`auto_row_height`] with the sheet's merges taken from `sweep`.
+pub(crate) fn fit_row_height(wb: &mut Workbook, si: usize, row: u32, sweep: &mut MergeSweep) {
+    let Some(sh) = wb.sheet(si) else { return };
     if sh.rows.get(&row).is_some_and(|i| i.custom) {
         return;
     }
@@ -625,9 +690,14 @@ pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
     // picked out once, and per cell the candidates are re-checked (normally none or a couple;
     // a sheet with many merges and many saved columns would otherwise scan all of them per
     // cell, rows × merges × columns).
-    let row_merges: Vec<gridcraft_core::RangeRef> =
-        sh.merges.iter().copied().filter(|m| !m.is_single() && m.start.row <= row && row <= m.end.row).collect();
+    // Rows are fitted in ascending order, so the merges touching this one come from a sweep over
+    // the sheet's merges sorted once, not from a scan of all of them. Out of budget: the row keeps
+    // the height it has.
+    let Some(row_merges) = sweep.at(row) else { return };
     for (c, cell) in sh.cells.row(row, 0, gridcraft_core::MAX_COLS - 1) {
+        if !sweep.charge(row_merges.len()) {
+            return;
+        }
         // Merged cells never auto-fit their rows, like Excel (column autofit skips them too).
         if row_merges.iter().any(|m| m.contains(CellRef::new(row, c))) {
             continue;
