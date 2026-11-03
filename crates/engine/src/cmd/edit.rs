@@ -20,7 +20,7 @@ mod paste_special;
 mod selection;
 
 use cell::{cell_set, range_fill, range_set_values};
-pub(crate) use cell::{check_arg_counts, input_to_cell, json_to_input, parse_typed_formula};
+pub(crate) use cell::{check_arg_counts, input_to_cell, is_formula_input, json_to_input, parse_typed_formula};
 #[cfg(test)]
 pub(crate) use clipboard::parse_tsv;
 use clipboard::{clear_clipboard, copy, cut, paste};
@@ -35,7 +35,7 @@ use go_to::go_to_special;
 #[cfg(test)]
 use go_to::{GO_TO_MAX_AREAS, GO_TO_RECENT, reference_parts};
 use paste_special::paste_special;
-pub(crate) use paste_special::rewrite_all_formulas;
+pub(crate) use paste_special::{rewrite_all_formulas, rewrite_cell_links, rewrite_python_refs};
 use selection::{select_all, select_col, select_region, select_row, selection_move, selection_next, selection_set};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -46,7 +46,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Values",
             [],
             None,
-            "{range?: \"A1\", values: [[...]] (rows of numbers/strings/bools/null; strings starting with = are formulas), parse?: bool (default true: a string goes through typed input, so \"05.04.2026\" becomes a date and \"2.500\" a number, by en-US rules; false stores every other string as the text it is, so a dd.mm.yyyy date or a thousands separator survives)}",
+            "{range?: \"A1\", values: [[...]] (rows of numbers/strings/bools/null; strings starting with = are formulas), parse?: bool (default true: a string goes through typed input, so \"05.04.2026\" becomes a date and \"2.500\" a number, by en-US rules; false stores every other string as the text it is, so a dd.mm.yyyy date or a thousands separator survives, a leading ' is kept and an empty string clears the cell)} → {cells, convertedCount, converted: [{cell, input, stored}] (up to 20 of the strings typed input read as a number, date, time, boolean or error, so a script can notice)}",
             has_doc,
             range_set_values
         ),
@@ -81,15 +81,18 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             paste
         ),
-        cmd!(
-            "edit.pasteSpecial",
-            "Paste Special…",
-            ["Home", "Clipboard"],
-            Some("Ctrl+Cmd+V"),
-            "{what: all|formulas|values|formats|comments|validation|allExceptBorders|columnWidths|formulasAndNumberFormats|valuesAndNumberFormats, operation?: none|add|subtract|multiply|divide, skipBlanks?, transpose?, link?}",
-            has_clipboard,
-            paste_special
-        ),
+        CommandSpec {
+            shortcut_mac: Some("Ctrl+Cmd+V"),
+            ..cmd!(
+                "edit.pasteSpecial",
+                "Paste Special…",
+                ["Home", "Clipboard"],
+                Some("Ctrl+Alt+V"),
+                "{what: all|formulas|values|formats|comments|validation|allExceptBorders|columnWidths|formulasAndNumberFormats|valuesAndNumberFormats, operation?: none|add|subtract|multiply|divide, skipBlanks?, transpose?, link?}",
+                has_clipboard,
+                paste_special
+            )
+        },
         cmd!(noundo "edit.clearClipboard", "Cancel Copy", [], Some("Escape"), "{}", has_doc, clear_clipboard),
         cmd!("edit.clearAll", "Clear All", ["Home", "Editing", "Clear"], None, "{range?}", has_doc, |s, p| clear(s, p, "all")),
         cmd!("edit.clearFormats", "Clear Formats", ["Home", "Editing", "Clear"], None, "{range?}", has_doc, |s, p| clear(s, p, "formats")),
@@ -129,7 +132,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Replace…",
             ["Home", "Editing", "Find & Select"],
             Some("Ctrl+H"),
-            "{what, with, matchCase?, wholeCell?, all?: true, within?: sheet|workbook}",
+            "{what, with, matchCase?, wholeCell?, all?: true, within?: sheet|workbook} → {replaced, skipped?} (in a Python cell the code is edited; skipped counts Python cells whose code would no longer fit)",
             has_doc,
             replace
         ),
@@ -183,6 +186,8 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
         label = e.label.clone();
         d.wb = e.wb;
         d.selection = e.selection;
+        // Step by step: a rename and a new sheet undone together match up only one step apart.
+        super::extra::keep_view_modes(d, &cur_wb);
         crate::push_history(&mut d.redo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
@@ -203,6 +208,7 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
         label = e.label.clone();
         d.wb = e.wb;
         d.selection = e.selection;
+        super::extra::keep_view_modes(d, &cur_wb);
         crate::push_history(&mut d.undo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
@@ -261,6 +267,7 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
                 for (_, cell) in cells.iter_mut() {
                     let checkbox = cx.wb.styles.get(cell.style).num_fmt.as_str() == "checkbox";
                     cell.formula = None;
+                    cell.py = None;
                     if checkbox && uncheck_only {
                         cell.value = Value::Bool(false);
                     } else {
