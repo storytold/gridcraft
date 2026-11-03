@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use super::*;
-use std::collections::HashMap;
 
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, Writer};
