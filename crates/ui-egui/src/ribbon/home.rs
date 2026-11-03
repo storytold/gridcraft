@@ -26,7 +26,20 @@ const ACCOUNTING_SYMBOLS: &[(&str, &str)] = &[
 /// Draws the Home tab: clipboard/paste menu, font, alignment, number, style, cell and editing commands with keytips.
 pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    let st = active_style(app);
+    let mut st = active_style(app);
+    if let Some(font) = app.selected_chart_font() {
+        if let Some(name) = font.name {
+            st.font.name = name;
+        }
+        if let Some(size) = font.size {
+            st.font.size = size;
+        }
+        st.font.bold = font.bold.unwrap_or(false);
+        st.font.italic = font.italic.unwrap_or(false);
+        if let Some(c) = font.color {
+            st.font.color = gridcraft_engine::model::Color::rgb(c[0], c[1], c[2]);
+        }
+    }
     // Clipboard
     let paste = big_button(ui, Icon::Paste, "Paste", "Paste", true);
     paste.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Paste"));

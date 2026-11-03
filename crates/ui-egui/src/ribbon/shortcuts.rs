@@ -43,7 +43,14 @@ pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
         Key::T => Some(("insert.table", json!({}))),
         Key::E => Some(("edit.flashFill", json!({}))),
         Key::Num1 => {
-            app.open_dialog("formatCells", json!({}));
+            let selected_chart = app
+                .selected_chart()
+                .is_some_and(|id| app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.charts.iter().any(|c| c.id == id)));
+            if selected_chart {
+                app.grid.pane = Some("formatChart".into());
+            } else {
+                app.open_dialog("formatCells", json!({}));
+            }
             None
         }
         Key::Num9 if shift => Some(("home.unhideRows", json!({}))),

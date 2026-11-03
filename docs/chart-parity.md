@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-05 · **Change:** minor (chart-format model, rendering and XLSX persistence; multi-ring doughnuts retain hole size and first-slice angle; editing/export/templates are separate changes) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-05 · **Change:** minor (chart-format model, rendering and XLSX persistence; element selection, formatting pane and chart-font routing) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -53,7 +53,7 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Error bars | fixed, %, standard deviation/error, custom | **missing** |
 | Up/down bars, high-low lines, drop lines, series lines | yes | **missing** |
 | Data table under the chart | yes | yes for column, bar, line, area and compatible combo charts: live formatted values, blank cells, grouped category headers, optional legend keys, horizontal/vertical borders and outline; native `c:dTable` XLSX round-trip; shared UI/print/PDF rendering |
-| Per-series / per-point fill, line, marker, effects | Format pane for every element | format-model series fills/strokes, markers and smoothing; full per-point styling and effects missing; element-oriented pane is a subsequent change |
+| Per-series / per-point fill, line, marker, effects | Format pane for every element | element-oriented pane for series fills/strokes, markers and smoothing; full per-point styling and effects missing |
 | Chart styles and colour palettes | ~16 styles × colour sets | style number stored, own palettes |
 | Chart sheets | yes | **kept, not editable**: not shown, and written back unchanged in their place on save (#727); left out when a sheet they plot is deleted or renamed. No F11 / Move Chart > New sheet |
 | Chart templates (`.crtx`) | yes | **missing** |
@@ -109,6 +109,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | Add chart-element group selection, marker/bar selection feedback, formatting pane controls, Home-tab chart-font routing and chart-specific menus; individual point editing and standalone export remain outside this part. |
 | 2026-11-05 | minor | Reconcile formatting with current main; preserve fractional logarithmic labels, stock close markers and native theme-color defaults. Keep doughnut geometry and data-table support; interactive editing and templates remain separate drafts. |
 | 2026-11-05 | trivial | Correct line-chart parity counts for the already supported 100% stacked variants with and without markers. |
 | 2026-11-03 | minor | Add chart-format model, shared rendering and validated native/extension XLSX persistence. Preserve hidden gridline styles and native pie/doughnut/stock defaults; editing controls, image export and templates remain separate parts. Excel verification pending. |
