@@ -22,6 +22,7 @@ pub mod pivot;
 pub mod pivot_calc;
 pub mod recent;
 pub mod record;
+pub mod recovery;
 pub mod sample;
 pub mod selection;
 pub mod tables;
@@ -224,6 +225,9 @@ pub struct DocState {
     /// The references `edit.goTo` with `record: true` went to in this document, newest first,
     /// without names, each area written with its sheet (`Sheet1!B14:C22,Sheet1!F19:G30`).
     pub go_to_recent: Vec<String>,
+    /// Opened from a password-protected file: it gets no recovery copy ([`recovery`]), which
+    /// would sit on disk without the password.
+    pub from_encrypted: bool,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -330,6 +334,7 @@ impl DocState {
             touched: None,
             edits: None,
             go_to_recent: vec![],
+            from_encrypted: false,
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -460,6 +465,10 @@ pub type TextWidth = Arc<dyn Fn(&str, &model::Font, bool) -> f32 + Send + Sync>;
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
+    /// Recovery copies of unsaved workbooks, when the desktop app turned them on
+    /// ([`Session::enable_recovery`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    recovery: Option<recovery::desktop::Recovery>,
     /// Index in `docs` of the active window's workbook.
     active: usize,
     /// Windows on the open workbooks ([`windows`]); every workbook has at least one.

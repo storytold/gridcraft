@@ -119,6 +119,22 @@ impl SheetApp {
         }
     }
 
+    /// Recovery copies of unsaved workbooks (the desktop app turns them on; see
+    /// `gridcraft_engine::recovery`): written from `logic`, so a hidden window still keeps them.
+    /// Once the copies an earlier run left are known, File › Open shows them, unless work has
+    /// already started.
+    pub(super) fn keep_recovery_copies(&mut self, ctx: &egui::Context) {
+        if let Some(wait) = self.session.recovery_tick() {
+            ctx.request_repaint_after(wait);
+        }
+        if !self.recovery_offered && self.session.recovery_ready() {
+            self.recovery_offered = true;
+            if !self.session.recovery_copies().is_empty() && !self.session.documents().iter().any(|d| d.is_dirty()) {
+                self.open_backstage(crate::backstage::Page::Open);
+            }
+        }
+    }
+
     /// Flip AutoSave (title-bar switch / Options ▸ Save). Persisted with the other UI
     /// preferences, so it stays as the user left it across restarts (#1901).
     pub fn toggle_autosave(&mut self) {

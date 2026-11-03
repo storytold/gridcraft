@@ -128,6 +128,8 @@ pub struct Backstage {
     pub save_format: &'static str,
     /// Home and Open: when the recent workbooks were last changed.
     recent: RecentFiles,
+    /// Open: the recovery copy whose Discard is waiting to be confirmed.
+    confirm_discard: Option<String>,
 }
 
 /// Save As file types: (extension, label). The first is the workbook itself; the others are
@@ -147,6 +149,7 @@ impl Backstage {
             preview: None,
             save_format: "xlsx",
             recent: RecentFiles::default(),
+            confirm_discard: None,
         }
     }
 }
@@ -582,8 +585,59 @@ fn open_page(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outc
         }
     }
     ui.add_space(22.0);
+    recovery_list(app, ui, bs, out);
     section(ui, lang, "Recent");
     recent_list(app, ui, bs, out, usize::MAX);
+}
+
+/// Open › Recover Unsaved Workbooks: the copies an earlier run left of workbooks it never saved
+/// (`file.recover`). Restore opens one as a new unsaved workbook; Discard asks once more, since a
+/// discarded copy is gone.
+fn recovery_list(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
+    let copies = app.session.recovery_copies();
+    if copies.is_empty() {
+        return;
+    }
+    let t = Tokens::get(ui.ctx());
+    let lang = app.ui.language;
+    section(ui, lang, "Recover Unsaved Workbooks");
+    dim(ui, lang.tr("GridCraft kept these workbooks when it closed without saving them. Restore opens a copy; save it to keep it."));
+    ui.add_space(8.0);
+    let now = crate::now_ms() / 1000.0;
+    for c in copies {
+        ui.horizontal(|ui| {
+            let (rect, _) = ui.allocate_exact_size(vec2(28.0, 36.0), Sense::hover());
+            icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(20.0, 20.0)), Icon::Book, t.text);
+            ui.vertical(|ui| {
+                ui.label(RichText::new(&c.name).font(theme::ui_font(13.5)).color(t.text));
+                let when = if c.saved_at > 0 { age(lang, now - c.saved_at as f64) } else { String::new() };
+                dim(ui, &when);
+            });
+            ui.add_space(16.0);
+            if bs.confirm_discard.as_deref() == Some(c.id.as_str()) {
+                dim(ui, lang.tr("Discard this copy? This can't be undone."));
+                if ui.button(lang.tr("Discard")).clicked() {
+                    bs.confirm_discard = None;
+                    app.run_or_alert("file.recover", json!({"discard": c.id}));
+                }
+                if ui.button(lang.tr("Cancel")).clicked() {
+                    bs.confirm_discard = None;
+                }
+            } else {
+                if ui.button(lang.tr("Restore")).clicked() {
+                    let before = app.session.active().map(|d| d.uid);
+                    app.run_or_alert("file.recover", json!({"restore": c.id}));
+                    if app.session.active().map(|d| d.uid) != before {
+                        out.close = true;
+                    }
+                }
+                if ui.button(lang.tr("Discard")).clicked() {
+                    bs.confirm_discard = Some(c.id.clone());
+                }
+            }
+        });
+    }
+    ui.add_space(22.0);
 }
 
 /// Review › Protect Workbook and File › Info › Protect Workbook: the protect dialog (with an
