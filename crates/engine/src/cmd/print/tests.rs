@@ -1110,3 +1110,178 @@ fn header_pictures_share_a_decoding_budget() {
     let (pdf, _) = pdf_of(&mut s, json!({}));
     assert_eq!(String::from_utf8_lossy(&pdf).matches("/Subtype /Image").count(), 3);
 }
+
+// ---------------------------------------------------------------- header/footer pictures from a real XLSX package
+
+/// A one-sheet XLSX package as Excel lays it out: `header`/`footer` text, a VML drawing named by
+/// `<legacyDrawingHF>` with one picture-frame shape per `(shape id, style, image part)`, and the
+/// image parts in `images` (a shape may name a part that isn't there).
+fn hf_package(header: &str, footer: &str, shapes: &[(&str, &str, &str)], images: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    use std::io::Write;
+    let esc = |t: &str| t.replace('&', "&amp;");
+    let ns = r#"xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
+    let rels = |items: &[(String, &str, String)]| {
+        let mut s = String::from(r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#);
+        for (id, kind, target) in items {
+            s.push_str(&format!(
+                r#"<Relationship Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{kind}" Target="{target}"/>"#
+            ));
+        }
+        s + "</Relationships>"
+    };
+    let mut vml = String::from(
+        r#"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="1"/></o:shapelayout>"#,
+    );
+    let mut vml_rels = vec![];
+    for (i, (id, style, part)) in shapes.iter().enumerate() {
+        vml.push_str(&format!(
+            r##"<v:shape id="{id}" o:spid="_x0000_s{}" type="#_x0000_t75" style="{style}"><v:imagedata o:relid="rId{}" o:title="{id}"/></v:shape>"##,
+            1025 + i,
+            i + 1
+        ));
+        vml_rels.push((format!("rId{}", i + 1), "image", format!("../media/{part}")));
+    }
+    vml.push_str("</xml>");
+    let sheet = format!(
+        r#"<?xml version="1.0"?><worksheet {ns}><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Quote</t></is></c></row></sheetData><pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><headerFooter><oddHeader>{}</oddHeader><oddFooter>{}</oddFooter></headerFooter><legacyDrawingHF r:id="rId1"/></worksheet>"#,
+        esc(header),
+        esc(footer)
+    );
+    let mut parts: Vec<(String, Vec<u8>)> = vec![
+        (
+            "[Content_Types].xml".into(),
+            br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#.to_vec(),
+        ),
+        ("_rels/.rels".into(), rels(&[("rId1".into(), "officeDocument", "xl/workbook.xml".into())]).into_bytes()),
+        ("xl/workbook.xml".into(), format!(r#"<?xml version="1.0"?><workbook {ns}><sheets><sheet name="Quote" sheetId="1" r:id="rId1"/></sheets></workbook>"#).into_bytes()),
+        ("xl/_rels/workbook.xml.rels".into(), rels(&[("rId1".into(), "worksheet", "worksheets/sheet1.xml".into())]).into_bytes()),
+        ("xl/worksheets/sheet1.xml".into(), sheet.into_bytes()),
+        ("xl/worksheets/_rels/sheet1.xml.rels".into(), rels(&[("rId1".into(), "vmlDrawing", "../drawings/vmlDrawing1.vml".into())]).into_bytes()),
+        ("xl/drawings/vmlDrawing1.vml".into(), vml.into_bytes()),
+        ("xl/drawings/_rels/vmlDrawing1.vml.rels".into(), rels(&vml_rels).into_bytes()),
+    ];
+    parts.extend(images.iter().map(|(name, data)| (format!("xl/media/{name}"), data.clone())));
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, data) in &parts {
+        z.start_file(name.as_str(), zip::write::SimpleFileOptions::default()).unwrap();
+        z.write_all(data).unwrap();
+    }
+    z.finish().unwrap().into_inner()
+}
+
+/// A session with `bytes` opened as an XLSX file.
+fn open_xlsx(bytes: &[u8]) -> Session {
+    let (wb, _) = gridcraft_xlsx::read_xlsx(bytes).unwrap();
+    let mut s = Session::new();
+    s.add_document(crate::DocState::new(wb, None, "Quote.xlsx".into(), crate::Trust::FromFile));
+    s
+}
+
+/// The `q w 0 0 h x y cm /…` placements of the images a PDF draws, as text.
+fn image_placements(pdf: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(pdf);
+    text.lines().filter(|l| l.starts_with("q ") && l.contains(" cm /")).map(|l| l.split(" cm ").next().unwrap_or("").to_string()).collect()
+}
+
+#[test]
+fn an_xlsx_letterhead_and_footer_picture_print_and_survive_a_save() {
+    // A logo in the left header and a different picture in the right footer, as Excel saves them.
+    let (logo, stamp) = (png(30, 10), png(6, 2));
+    let bytes = hf_package(
+        "&L&G&CQuote",
+        "&R&G",
+        &[("LH", "position:absolute;width:120pt;height:40pt;z-index:1", "image1.png"), ("RF", "width:60pt;height:20pt", "image2.png")],
+        &[("image1.png", logo.clone()), ("image2.png", stamp.clone())],
+    );
+    let mut s = open_xlsx(&bytes);
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    let text = String::from_utf8_lossy(&pdf);
+    // Two distinct pictures, each at its own size and place: the logo's top on the header margin
+    // at the left margin (Letter, 0.7 in sides, 0.3 in header), the stamp's bottom on the footer
+    // margin against the right margin.
+    assert_eq!(text.matches("/Subtype /Image").count(), 2, "{text}");
+    assert!(text.contains("/Width 30 /Height 10") && text.contains("/Width 6 /Height 2"), "{text}");
+    assert_eq!(image_placements(&pdf), ["q 120 0 0 40 50.4 730.4", "q 60 0 0 20 501.6 21.6"]);
+    assert!(text.contains("(Quote) Tj"));
+    // Saved and opened again, the same pictures print in the same places (twice: what one save
+    // wrote is what the next one keeps).
+    let wb = s.doc().unwrap().wb.clone();
+    let once = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let (again, _) = gridcraft_xlsx::read_xlsx(&once).unwrap();
+    let twice = gridcraft_xlsx::write_xlsx(&again).unwrap();
+    for saved in [once, twice] {
+        let mut t = open_xlsx(&saved);
+        let (pdf2, _) = pdf_of(&mut t, json!({}));
+        assert_eq!(image_placements(&pdf2), image_placements(&pdf));
+        assert_eq!(String::from_utf8_lossy(&pdf2).matches("/Subtype /Image").count(), 2);
+    }
+}
+
+#[test]
+fn a_picture_sits_between_the_text_around_its_g() {
+    let bytes = hf_package("&LBefore&Gafter", "", &[("LH", "width:20pt;height:10pt", "image1.png")], &[("image1.png", png(4, 2))]);
+    let mut s = open_xlsx(&bytes);
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    let text = String::from_utf8_lossy(&pdf);
+    // The x of a text run: the `… x y Tm` line of the text object that draws it.
+    let run_x = |run: &str| -> f32 {
+        let at = text.find(&format!("({run}) Tj")).unwrap_or_else(|| panic!("no {run} in {text}"));
+        let tm = text[..at].rfind(" Tm").unwrap();
+        let line = text[..tm].rsplit('\n').next().unwrap();
+        line.split(' ').nth(4).unwrap().parse().unwrap()
+    };
+    let placed = image_placements(&pdf);
+    assert_eq!(placed.len(), 1, "{text}");
+    let image_x: f32 = placed[0].split(' ').nth(5).unwrap().parse().unwrap();
+    let (before, after) = (run_x("Before"), run_x("after"));
+    // One line: "Before", the picture right after it, then "after" right after the picture.
+    let w = gridcraft_pdf::text_width(Font::styled(gridcraft_pdf::Family::Sans, false, false), 10.0, "Before");
+    assert!((before - 50.4).abs() < 0.01, "{before}");
+    assert!((image_x - (before + w)).abs() < 0.01, "picture at {image_x}, text ends at {}", before + w);
+    assert!((after - (image_x + 20.0)).abs() < 0.01, "after at {after}");
+}
+
+#[test]
+fn a_missing_picture_part_is_reported_and_the_rest_prints_and_saves() {
+    // The logo's relationship names a part the package doesn't have; the footer picture is fine.
+    let bytes = hf_package(
+        "&L&G&CQuote",
+        "&R&G",
+        &[("LH", "width:120pt;height:40pt", "missing.png"), ("RF", "width:60pt;height:20pt", "image2.png")],
+        &[("image2.png", png(6, 2))],
+    );
+    let (wb, report) = gridcraft_xlsx::read_xlsx(&bytes).expect("the workbook still opens");
+    assert_eq!(wb.sheet(0).unwrap().print.header, "&L&G&CQuote");
+    let mut s = Session::new();
+    s.add_document(crate::DocState::new(wb, None, "Quote.xlsx".into(), crate::Trust::FromFile));
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    let text = String::from_utf8_lossy(&pdf);
+    // The header and cell text print and nothing crashes. A drawing with a part missing isn't
+    // kept (writing it back would leave a dangling relationship Excel offers to repair), so no
+    // picture of it prints, and the report says so.
+    assert!(text.contains("(Quote) Tj"));
+    assert!(!text.contains("/Subtype /Image"), "{text}");
+    assert!(
+        report.warnings.iter().any(|w| w.contains("header and footer pictures were dropped") && w.contains("missing.png")),
+        "{:?}",
+        report.warnings
+    );
+    // Saving keeps the sheet and its header text, and opens again.
+    let saved = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+    let (back, _) = gridcraft_xlsx::read_xlsx(&saved).unwrap();
+    assert_eq!(back.sheet(0).unwrap().print.header, "&L&G&CQuote");
+    assert_eq!(back.sheet(0).unwrap().print.footer, "&R&G");
+    let mut t = Session::new();
+    t.add_document(crate::DocState::new(back, None, "Quote.xlsx".into(), crate::Trust::FromFile));
+    let (pdf2, _) = pdf_of(&mut t, json!({}));
+    assert!(!contains(&pdf2, "/Subtype /Image"));
+    // The saved package has no relationship to the missing part.
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(saved)).unwrap();
+    for i in 0..zip.len() {
+        let mut f = zip.by_index(i).unwrap();
+        let mut body = String::new();
+        if f.name().ends_with(".rels") && std::io::Read::read_to_string(&mut f, &mut body).is_ok() {
+            assert!(!body.contains("missing.png"), "{body}");
+        }
+    }
+}
