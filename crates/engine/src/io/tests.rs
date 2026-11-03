@@ -604,3 +604,57 @@ fn opening_google_sheets_export_unwraps_only_formulas_gridcraft_calculates() {
     assert_eq!(text("A2").as_deref(), Some("IFERROR(__XLUDF.DUMMYFUNCTION(\"GOOGLETRANSLATE(\"\"hi\"\",\"\"en\"\",\"\"fr\"\")\"),\"salut\")"));
     assert_eq!(opened.sheets[0].cells.get(CellRef::parse("A2").unwrap()).map(|c| c.value.clone()), Some(Value::text("salut")));
 }
+
+/// Merges far from what is copied or exported, in a hostile number, are indexed once instead of
+/// being scanned for every cell; a merge running past the table is clipped to it.
+#[test]
+fn html_merge_lookups_and_spans_stay_bounded() {
+    let mut wb = book_with_picture("A1", (0, 0));
+    let sh = wb.sheet_mut(0).unwrap();
+    for i in 0..200_000u32 {
+        sh.merges.push(RangeRef::new(CellRef::new(500_000 + i * 2, 5), CellRef::new(500_000 + i * 2, 6)));
+    }
+    sh.merges.push(RangeRef::new(CellRef::new(0, 0), CellRef::new(gridcraft_core::MAX_ROWS - 1, 1)));
+    sh.set_value(CellRef::new(2, 1), gridcraft_core::Value::Number(2.0));
+    let html = copied(&wb, "A1:C50");
+    assert!(html.contains("rowspan=\"50\" colspan=\"2\""), "{html}");
+    let page = to_html(&wb, 0).unwrap();
+    // The table is A1:B3 (the used range): the whole-height merge spans its three rows only.
+    assert!(page.contains("rowspan=\"3\" colspan=\"2\""), "{page}");
+    // Merges stacked over one another past a few per cell are refused, not walked.
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.merges = vec![RangeRef::new(CellRef::new(0, 0), CellRef::new(2, 1)); 100];
+    assert!(to_html(&wb, 0).is_err());
+    assert!(range_html(&wb, 0, RangeRef::parse("A1:B3").unwrap(), "").is_none());
+}
+
+/// Thousands of pictures over thousands of custom rows: each is placed through a row index.
+#[test]
+fn html_export_places_many_pictures_over_many_custom_rows() {
+    let mut wb = book_with_picture("A1", (0, 0));
+    let sh = wb.sheet_mut(0).unwrap();
+    for row in 0..50_000 {
+        sh.rows.insert(row, gridcraft_model::LineInfo { size: Some(30.0), ..Default::default() });
+    }
+    let image = sh.images[0].clone();
+    for i in 0..5_000u32 {
+        let mut im = image.clone();
+        im.anchor.cell = CellRef::new(40_000 + i, 0);
+        sh.images.push(im);
+    }
+    let page = to_html(&wb, 0).unwrap();
+    assert!(page.contains(&format!("top:{}px", 30 * 44_999)), "last picture placed by the index");
+}
+
+/// One long text shown by many cells: the page fails at its byte limit instead of growing on.
+#[test]
+fn html_export_refuses_a_page_past_its_byte_limit() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    let text = gridcraft_core::Value::text("x".repeat(32_000));
+    for row in 0..10_000 {
+        sh.set_value(CellRef::new(row, 0), text.clone());
+    }
+    let err = to_html(&wb, 0).unwrap_err();
+    assert!(err.to_string().contains("MiB"), "{err}");
+}
