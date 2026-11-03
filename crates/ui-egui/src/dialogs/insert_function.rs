@@ -106,8 +106,8 @@ pub(super) fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dia
     });
     if let Some(f) = hits.get(d.list_index) {
         ui.separator();
-        ui.label(egui::RichText::new(crate::formula_locale::signature(&f.name, locale, language).unwrap_or_default()).strong());
-        ui.label(crate::formula_locale::description(&f.name, locale, language).unwrap_or_default());
+        ui.label(egui::RichText::new(crate::formula_locale::canonical_signature(&f.name, locale, language).unwrap_or_default()).strong());
+        ui.label(crate::formula_locale::canonical_description(&f.name, language).unwrap_or_default());
     }
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);

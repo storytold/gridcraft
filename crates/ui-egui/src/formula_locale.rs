@@ -132,7 +132,12 @@ fn hide_udf_prefix(text: &str, locale: FormulaLocale) -> String {
 /// A function's argument hint. The name and separators follow the formula syntax; the argument
 /// names follow the interface language, all of them or none, so a hint never mixes two languages.
 pub(crate) fn signature(name: &str, locale: FormulaLocale, language: Language) -> Option<String> {
-    let english = crate::formula_bar::function_signature(locale.canonical_name(name))?;
+    canonical_signature(locale.canonical_name(name), locale, language)
+}
+
+/// Formats a hint for a function already identified by its engine name.
+pub(crate) fn canonical_signature(name: &str, locale: FormulaLocale, language: Language) -> Option<String> {
+    let english = crate::formula_bar::function_signature(name)?;
     let Some((head, args)) = split_signature(&english) else { return Some(english) };
     let separator = format!("{} ", locale.list_separator());
     let args = match args.iter().map(|arg| translate_argument(arg, language)).collect::<Option<Vec<_>>>() {
@@ -144,7 +149,12 @@ pub(crate) fn signature(name: &str, locale: FormulaLocale, language: Language) -
 
 /// A function's description in the interface language (English while untranslated).
 pub(crate) fn description(name: &str, locale: FormulaLocale, language: Language) -> Option<String> {
-    let english = crate::formula_bar::function_description(locale.canonical_name(name))?;
+    canonical_description(locale.canonical_name(name), language)
+}
+
+/// Translates the description of a function already identified by its engine name.
+pub(crate) fn canonical_description(name: &str, language: Language) -> Option<String> {
+    let english = crate::formula_bar::function_description(name)?;
     Some(language.function_description(&english).map_or(english, str::to_string))
 }
 
@@ -312,7 +322,7 @@ mod help_structure_tests {
             let (_, arguments) = split_signature(english).unwrap();
             for language in Language::ALL {
                 let locale = language.formula_locale();
-                let hint = signature(name, locale, language).unwrap();
+                let hint = canonical_signature(name, locale, language).unwrap();
                 let separators = arguments.len().saturating_sub(1);
                 assert_eq!(hint.matches(locale.list_separator()).count(), separators, "{language:?}: {name}: {hint}");
                 for punctuation in ['[', ']'] {
