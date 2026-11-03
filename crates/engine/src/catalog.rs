@@ -269,6 +269,7 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("view.unhideWindow", "View", "Window", "Unhide"),
     ("view.switchWindows", "View", "Window", "Switch Windows"),
     ("view.macros", "View", "Macros", "Macros"),
+    ("macro.record", "View", "Macros", "Record Macro"),
     // Automate
     ("automate.newScript", "Automate", "Scripting Tools", "New Script"),
     ("automate.allScripts", "Automate", "Scripting Tools", "All Scripts"),
@@ -277,10 +278,10 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     // Table Design
     ("table.rename", "Table Design", "Properties", "Table Name"),
     ("table.resize", "Table Design", "Properties", "Resize Table"),
+    ("table.unlink", "Table Design", "External Table Data", "Unlink"),
     ("table.summarizePivot", "Table Design", "Tools", "Summarize with PivotTable"),
     ("table.removeDuplicates", "Table Design", "Tools", "Remove Duplicates"),
     ("table.convertToRange", "Table Design", "Tools", "Convert to Range"),
-    ("table.unlink", "Table Design", "External Table Data", "Unlink"),
     ("table.insertSlicer", "Table Design", "Tools", "Insert Slicer"),
     ("table.headerRow", "Table Design", "Table Style Options", "Header Row"),
     ("table.totalRow", "Table Design", "Table Style Options", "Total Row"),

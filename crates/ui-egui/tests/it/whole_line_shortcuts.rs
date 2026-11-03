@@ -1,4 +1,4 @@
-//! Ctrl+Shift+= and Ctrl+- on whole rows or columns insert or delete them at once, as in Excel;
+//! Ctrl+Shift+= (or Ctrl with the numpad's +) and Ctrl+- on whole rows or columns insert or delete them at once, as in Excel;
 //! any other selection opens the Insert or Delete dialog.
 
 use egui::{Key, Modifiers};
@@ -14,13 +14,13 @@ fn harness(selection: &str) -> Harness {
     session.new_workbook();
     session.execute("range.setValues", json!({"range": "A1", "values": [["a1", "b1"], ["a2", "b2"], ["a3", "b3"]]})).unwrap();
     session.execute("selection.set", json!({"range": selection})).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     h.run_steps(4);
     h
@@ -55,6 +55,22 @@ fn whole_columns_are_inserted_and_deleted_at_once() {
     assert_eq!(value(&h, "B1"), Value::from("a1"));
     press(&mut h, Key::Minus, false);
     assert_eq!(value(&h, "A1"), Value::from("a1"));
+}
+
+#[test]
+fn numpad_plus_inserts_without_shift() {
+    let mut h = harness("2:2");
+    press(&mut h, Key::Plus, false);
+    assert!(h.state().dialog.is_none(), "no dialog for whole rows");
+    assert!(value(&h, "A2").is_empty(), "a row was inserted above row 2");
+    assert_eq!(value(&h, "A3"), Value::from("a2"));
+}
+
+#[test]
+fn unshifted_equals_inserts_nothing() {
+    let mut h = harness("2:2");
+    press(&mut h, Key::Equals, false);
+    assert_eq!(value(&h, "A2"), Value::from("a2"));
 }
 
 #[test]

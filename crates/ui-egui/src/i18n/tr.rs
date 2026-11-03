@@ -1,6 +1,7 @@
 //! Turkish translations for the interface strings in i18n.rs. Labels follow the wording Turkish
 //! spreadsheet users know; anything absent falls back to English.
 
+/// Returns the Turkish translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Yapıştır",
@@ -106,6 +107,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Metni Sütunlara\nDönüştür",
         "Link" => "Köprü",
         "Symbol" => "Simge",
+        "Equation" => "Denklem",
+        "Insert New Equation..." => "Yeni Denklem Ekle",
         "Sparklines" => "Mini Grafikler",
         "Header & Footer" => "Üstbilgi ve Altbilgi",
         "Draw with ink" => "Mürekkeple Çiz",
@@ -144,7 +147,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Okları Kaldır",
         "Show Formulas" => "Formülleri Göster",
         "Error Checking" => "Hata Denetimi",
+        "Trace Error" => "Hatayı İzle",
         "Circular References" => "Döngüsel Başvurular",
+        "Python Mode" => "Python Modu",
         "Evaluate Formula" => "Formülü Değerlendir",
         "Watch Window" => "Gözcü Penceresi",
         "Calculation\nOptions" => "Hesaplama\nSeçenekleri",
@@ -188,6 +193,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Sayfa Sonu\nÖnizleme",
         "Page\nLayout" => "Sayfa\nDüzeni",
         "Formula Bar" => "Formül Çubuğu",
+        "Name Box" => "Ad kutusu",
+        "Cell Editor" => "Hücre düzenleyici",
+        "Font Size" => "Yazı tipi boyutu",
         "Gridlines" => "Kılavuz Çizgileri",
         "Headings" => "Başlıklar",
         "Zoom" => "Yakınlaştır",
@@ -399,10 +407,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "More Number Formats…" => "Diğer Sayı Biçimleri…",
         "Financial" => "Finansal",
         "Logical" => "Mantıksal",
-        "Date &\nTime" => "Tarih ve\nSaat",
-        "Lookup &\nReference" => "Arama ve\nBaşvuru",
-        "Math &\nTrig" => "Matematik ve\nTrigonometri",
-        "More\nFunctions" => "Diğer\nİşlevler",
+        "Date & Time" => "Tarih ve Saat",
+        "Lookup & Reference" => "Arama ve Başvuru",
+        "Math & Trig" => "Matematik ve Trigonometri",
+        "More Functions" => "Diğer İşlevler",
         "Page Layout|Orientation" => "Sayfa Yönü",
         "Display theme" => "Görüntü teması",
         "System" => "Sistem",
@@ -410,6 +418,20 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Koyu",
         "Sheet Options|View" => "Görünüm",
         "Print" => "Yazdır",
+        "Print What" => "Yazdırılacaklar",
+        "Text Box" => "Metin Kutusu",
+        "Macros" => "Makrolar",
+        "Record Macro" => "Makro Kaydet",
+        "Stop Recording" => "Kaydı Durdur",
+        "Use Relative References" => "Göreli Başvuruları Kullan",
+        "Run\nMacro" => "Makro Çalıştır",
+        "Macros…" => "Makrolar…",
+        "Recording" => "Kaydediliyor",
+        "Stop" => "Durdur",
+        "New Macro" => "Yeni Makro",
+        "Show" => "Göster",
+        "Collapse dialog" => "İletişim kutusunu daralt",
+        "Expand dialog" => "İletişim kutusunu genişlet",
         _ => return None,
     })
 }

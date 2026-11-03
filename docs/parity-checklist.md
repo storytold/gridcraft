@@ -4,19 +4,19 @@
 
 Each entry is an Excel ribbon or menu command (feature names only). It counts as implemented when GridCraft registers a command with the same id. This measures breadth only; the overall assessment (depth, fidelity, effort) is in [target-app-parity.md](target-app-parity.md).
 
-**Overall: 276 / 292 commands implemented (94.5%).**
+**Overall: 278 / 293 commands implemented (94.9%).**
 
 | Tab | Implemented | Total | Parity |
 |---|---|---|---|
 | File | 11 | 11 | 100% |
 | Home | 94 | 94 | 100% |
-| Insert | 17 | 25 | 68% |
+| Insert | 18 | 25 | 72% |
 | Draw | 4 | 4 | 100% |
 | Page Layout | 23 | 23 | 100% |
 | Formulas | 23 | 23 | 100% |
 | Data | 23 | 28 | 82% |
 | Review | 15 | 18 | 83% |
-| View | 20 | 20 | 100% |
+| View | 21 | 21 | 100% |
 | Automate | 4 | 4 | 100% |
 | Table Design | 14 | 14 | 100% |
 | Chart Design | 8 | 8 | 100% |
@@ -139,7 +139,7 @@ Implemented:
 - `edit.goToSpecial` Go To Special (Editing)
 - `home.addIns` Add-ins (Add-ins)
 
-## Insert (17 / 25, 68%)
+## Insert (18 / 25, 72%)
 
 Implemented:
 
@@ -158,6 +158,7 @@ Implemented:
 - `review.newComment` Comment (Comments)
 - `insert.textBox` Text Box (Text)
 - `pageLayout.headerFooter` Header & Footer (Text)
+- `insert.equation` Equation (Symbols)
 - `insert.symbol` Symbol (Symbols)
 - `insert.checkbox` Checkbox (Cell Controls)
 
@@ -170,7 +171,6 @@ Missing:
 - `insert.wordArt` WordArt (Text)
 - `insert.signatureLine` Signature Line (Text)
 - `insert.object` Object (Text)
-- `insert.equation` Equation (Symbols)
 
 ## Draw (4 / 4, 100%)
 
@@ -299,7 +299,7 @@ Missing:
 - `review.translate` Translate (Language)
 - `review.showChanges` Show Changes (Changes)
 
-## View (20 / 20, 100%)
+## View (21 / 21, 100%)
 
 Implemented:
 
@@ -323,6 +323,7 @@ Implemented:
 - `view.unhideWindow` Unhide (Window)
 - `view.switchWindows` Switch Windows (Window)
 - `view.macros` Macros (Macros)
+- `macro.record` Record Macro (Macros)
 
 ## Automate (4 / 4, 100%)
 
@@ -339,10 +340,10 @@ Implemented:
 
 - `table.rename` Table Name (Properties)
 - `table.resize` Resize Table (Properties)
+- `table.unlink` Unlink (External Table Data)
 - `table.summarizePivot` Summarize with PivotTable (Tools)
 - `table.removeDuplicates` Remove Duplicates (Tools)
 - `table.convertToRange` Convert to Range (Tools)
-- `table.unlink` Unlink (External Table Data)
 - `table.insertSlicer` Insert Slicer (Tools)
 - `table.headerRow` Header Row (Table Style Options)
 - `table.totalRow` Total Row (Table Style Options)

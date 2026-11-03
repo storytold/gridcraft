@@ -1,6 +1,7 @@
 //! Vietnamese translations for the interface strings in i18n.rs. Labels follow the wording
 //! Vietnamese spreadsheet users know; anything absent falls back to English.
 
+/// Returns the Vietnamese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Dán",
@@ -111,6 +112,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Tách\ncột",
         "Link" => "Liên kết",
         "Symbol" => "Ký hiệu",
+        "Equation" => "Phương trình",
+        "Insert New Equation..." => "Chèn phương trình mới",
         "Sparklines" => "Biểu đồ thu nhỏ",
         "Checkbox" => "Hộp kiểm",
         "Insert checkboxes in the selected cells" => "Chèn hộp kiểm vào các ô đã chọn",
@@ -153,7 +156,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Bỏ mũi tên",
         "Show Formulas" => "Hiện công thức",
         "Error Checking" => "Kiểm tra lỗi",
+        "Trace Error" => "Truy tìm lỗi",
         "Circular References" => "Tham chiếu vòng",
+        "Python Mode" => "Chế độ Python",
         "Evaluate Formula" => "Đánh giá công thức",
         "Watch Window" => "Cửa sổ theo dõi",
         "Calculation\nOptions" => "Tùy chọn\ntính toán",
@@ -209,6 +214,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Xem trước\nngắt trang",
         "Page\nLayout" => "Bố trí\ntrang",
         "Formula Bar" => "Thanh công thức",
+        "Name Box" => "Hộp tên",
+        "Cell Editor" => "Trình soạn thảo ô",
+        "Font Size" => "Cỡ chữ",
         "Gridlines" => "Đường lưới",
         "Headings" => "Tiêu đề hàng/cột",
         "Zoom" => "Thu phóng",
@@ -299,12 +307,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "More Number Formats…" => "Định dạng số khác…",
         "Financial" => "Tài chính",
         "Logical" => "Logic",
-        "Date &\nTime" => "Ngày &\nGiờ",
-        "Lookup &\nReference" => "Tra cứu &\nTham chiếu",
-        "Math &\nTrig" => "Toán &\nLượng giác",
-        "More\nFunctions" => "Hàm\nkhác",
+        "Date & Time" => "Ngày & Giờ",
+        "Lookup & Reference" => "Tra cứu & Tham chiếu",
+        "Math & Trig" => "Toán & Lượng giác",
+        "More Functions" => "Hàm khác",
         "Sheet Options|View" => "Xem",
         "Print" => "In",
+        "Print What" => "Nội dung in",
         // Page Layout view and the Header & Footer tab.
         "Click to add data" => "Bấm để thêm dữ liệu",
         "Add header" => "Thêm đầu trang",
@@ -412,6 +421,19 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Tính toán sổ làm việc",
         "Enable iterative calculation" => "Bật tính toán lặp",
         "Calculation settings are saved with the workbook." => "Thiết lập tính toán được lưu cùng sổ làm việc.",
+        "Text Box" => "Hộp văn bản",
+        "Macros" => "Macro",
+        "Record Macro" => "Ghi Macro",
+        "Stop Recording" => "Dừng Ghi",
+        "Use Relative References" => "Dùng Tham chiếu Tương đối",
+        "Run\nMacro" => "Chạy Macro",
+        "Macros…" => "Macro…",
+        "Recording" => "Đang ghi",
+        "Stop" => "Dừng",
+        "New Macro" => "Macro Mới",
+        "Show" => "Hiện",
+        "Collapse dialog" => "Thu gọn hộp thoại",
+        "Expand dialog" => "Mở rộng hộp thoại",
         _ => return None,
     })
 }
