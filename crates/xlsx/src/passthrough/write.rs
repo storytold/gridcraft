@@ -417,6 +417,12 @@ fn descendants<'a>(el: &'a crate::xml::El, name: &str) -> Vec<&'a crate::xml::El
     out
 }
 
+/// An attribute's name: the text before its `=`, without the whitespace XML allows around it
+/// (`xmlns = "…"` has the name `xmlns`, not `= "…"`).
+fn attr_name(a: &str) -> &str {
+    a.split('=').next().unwrap_or(a).trim_matches([' ', '\t', '\r', '\n'])
+}
+
 fn merge_connections(data: &[u8], wb: &Workbook, remap: &[crate::write::TableIdRemap]) -> Result<Option<String>, IoError> {
     // The encodings the XML reader supports (a BOM, UTF-16): a file Excel saved as UTF-16
     // still merges, rather than failing every open-and-save with the part in it.
@@ -515,18 +521,22 @@ fn merge_connections(data: &[u8], wb: &Workbook, remap: &[crate::write::TableIdR
     // nonconflicting one locally on the elements it writes.
     let kept: Vec<String> = attrs
         .iter()
-        .filter(|a| a.starts_with("xmlns=") || a.starts_with("xmlns:"))
-        .filter(|a| a.trim_end_matches(['"', '>']) != "xmlns=\"https://gridcraft.app/ns/webquery\"")
+        .filter(|a| attr_name(a) == "xmlns" || attr_name(a).starts_with("xmlns:"))
+        .filter(|a| attr_name(a) != "xmlns" || a.split_once('=').map(|(_, v)| v.trim_start_matches([' ', '\t', '\r', '\n'])) != Some("\"https://gridcraft.app/ns/webquery\""))
         .cloned()
         // Markup-compatibility attributes (`mc:Ignorable`, whatever prefix binds the
         // Markup Compatibility namespace) are kept too: the foreign blocks below may rely
         // on them to tell an importer which namespaces it may safely ignore. The prefix is
         // resolved through the root's own declarations, so any spelling survives.
         .chain(attrs.iter().filter(|a| {
-            let Some((name, _)) = a.split_once('=') else { return false };
+            let name = attr_name(a);
+            // A declaration is not a use of its prefix (`xmlns:mc` is not an `mc:` attribute).
+            if name.starts_with("xmlns") {
+                return false;
+            }
             let Some((prefix, _)) = name.split_once(':') else { return false };
-            let binding = format!("xmlns:{prefix}=");
-            attrs.iter().any(|d| d.starts_with(&binding) && d.contains(crate::write::MC_NS))
+            let binding = format!("xmlns:{prefix}");
+            attrs.iter().any(|d| attr_name(d) == binding && d.contains(crate::write::MC_NS))
         }).cloned())
         .collect();
     let kept_decls: String = kept.iter().map(|a| format!(" {a}")).collect();
@@ -535,13 +545,13 @@ fn merge_connections(data: &[u8], wb: &Workbook, remap: &[crate::write::TableIdR
     // (`<x:connections>`) whose declarations are kept verbatim still has its prefix bound -
     // but a prefixed root with NO default namespace would leave the model's unprefixed
     // `<connection>` elements outside any namespace, so the default is emitted for it.
-    // Parsed attributes, not a quote-style search: a default namespace may be single-quoted
-    // (`xmlns='...'`) and a `contains("xmlns=\"")` check would miss it and add a second
-    // xmlns to the rebuilt root.
+    // Parsed names, not a raw-text search: a default namespace may be single-quoted
+    // (`xmlns='...'`) or carry whitespace around its `=` (`xmlns = "..."`), and a
+    // `contains("xmlns=\"")` check would miss both and add a second xmlns to the rebuilt root.
     // The check reads the declarations that are KEPT: a root whose default is GridCraft's
     // own namespace has it dropped from `kept`, and the rebuilt root must then gain the
     // SpreadsheetML default (checking the raw tag would see the dropped one and skip it).
-    let has_default_ns = kept.iter().any(|a| a.starts_with("xmlns=") || a.starts_with("xmlns='"));
+    let has_default_ns = kept.iter().any(|a| attr_name(a) == "xmlns");
     let default_ns = if has_default_ns { String::new() } else { format!(" xmlns=\"{}\"", crate::write::NS_MAIN) };
     // A kept DEFAULT namespace makes an unprefixed root foreign, so a prefixed root keeps
     // its prefix: `<x:connections xmlns="urn:foreign">` stays prefixed, and the generated

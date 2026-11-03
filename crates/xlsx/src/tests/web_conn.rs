@@ -817,3 +817,34 @@ fn whitespace_before_the_equals_of_a_root_declaration_keeps_the_binding() {
     assert!(text.contains("<x:connection "), "the prefixed foreign connection is kept");
     assert!(crate::xml::parse(&part).is_ok(), "the prefix stays bound: the part is well-formed");
 }
+
+#[test]
+/// The whitespace form of a foreign default (`xmlns = "urn:foreign"`): the declaration is
+/// kept (its name is `xmlns`, not the whitespace and `=` that follow it), so the root stays
+/// prefixed, a preserved unprefixed foreign connection keeps its namespace, and the generated
+/// connections bind the SpreadsheetML namespace inline instead of inheriting the foreign one.
+fn whitespace_before_the_equals_of_a_foreign_default_keeps_the_declaration() {
+    use gridcraft_model::preserved::*;
+    let xml = br#"<x:connections xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns = "urn:foreign"><connection id="4" name="Theirs" type="4"/></x:connections>"#;
+    let mut wb = Workbook::default();
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S")));
+    wb.preserved = Some(std::sync::Arc::new(Preserved {
+        package_rels: vec![],
+        rels: vec![PreservedRel { id: "rId9".into(), rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections".into(), target: "xl/connections.xml".into(), external: false }],
+        parts: vec![PreservedPart { name: "xl/connections.xml".into(), content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml".into(), data: xml.to_vec().into(), rels: vec![] }],
+        elements: vec![],
+        vml: None,
+        sheets: vec![],
+    }));
+    wb.web_queries.push(gridcraft_model::WebQuery { name: "prices".into(), table_id: None, url: "https://example.com/t.html".into(), table: "prices".into(), occurrence: 0, sheet: "S".into(), last_synced: None, refresh_on_open: false });
+    let bytes = write_xlsx(&wb).expect("saves");
+    let mut pkg = crate::package::Package::open(&bytes).expect("opens");
+    let part = pkg.read("xl/connections.xml").expect("read").expect("the part");
+    let text = String::from_utf8_lossy(&part);
+    assert!(text.contains("xmlns = \"urn:foreign\""), "the whitespace-form default is kept: {text}");
+    assert!(text.contains("<connection id=\"4\" name=\"Theirs\""), "the unprefixed foreign connection keeps its namespace");
+    assert!(text.contains("<connection xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "), "the generated connection binds SpreadsheetML inline");
+    assert!(crate::xml::parse(&part).is_ok(), "the part is well-formed");
+    let (back, _) = crate::read_xlsx(&bytes).expect("reopens");
+    assert!(back.web_queries.iter().any(|q| q.name == "prices"), "our connection reads back");
+}
