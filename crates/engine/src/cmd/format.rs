@@ -655,6 +655,8 @@ fn orientation(s: &mut Session, p: &Json) -> Result<Json> {
 fn merge(s: &mut Session, p: &Json, how: &str) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
+    // Merges aren't cell contents, so the cell check after the edit doesn't see them (#2516).
+    super::refuse_unless_allowed(s, sheet, "Formatting cells", |pr| pr.format_cells)?;
     let how =
         if how == "center" && s.doc()?.wb.sheet(sheet).is_some_and(|sh| ranges.iter().all(|r| sh.merges.contains(r))) { "unmerge" } else { how };
     edit(s, |cx| {
@@ -889,6 +891,32 @@ mod tests {
         assert!(d.wb.styles.get(sh.style_id(CellRef::new(0, 0))).font.bold, "Sheet2!A1 is bold");
         assert!(s.execute("home.bold", json!({"range": "A1"})).is_err(), "the protected sheet still refuses it");
         assert!(s.execute("home.bold", json!({})).is_err(), "and so does the active cell");
+    }
+
+    #[test]
+    fn merging_on_a_protected_sheet_is_refused_when_it_runs() {
+        // Merges aren't cell contents, so the cell comparison after a command doesn't see them:
+        // with the greying no longer refusing runs, the merge commands check the sheet themselves.
+        let merges = |s: &crate::Session, i: usize| s.doc().unwrap().wb.sheet(i).unwrap().merges.clone();
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("home.insertSheet", json!({"name": "Sheet2"})).unwrap();
+        s.execute("home.mergeCells", json!({"range": "Sheet2!A1:B2"})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+        s.execute("review.protectSheet", json!({})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        s.execute("home.mergeCells", json!({"range": "A1:B2"})).unwrap();
+        s.execute("review.protectSheet", json!({})).unwrap();
+        for (id, range) in
+            [("home.mergeCells", "C3:D4"), ("home.mergeAcross", "C3:D4"), ("home.mergeCenter", "C3:D4"), ("home.unmergeCells", "A1:B2")]
+        {
+            assert!(s.execute(id, json!({"range": range})).is_err(), "{id} {range} on the protected active sheet");
+        }
+        assert!(s.execute("home.unmergeCells", json!({"range": "Sheet2!A1:B2"})).is_err(), "on a protected other sheet");
+        assert!(s.execute("home.mergeCells", json!({"range": "Sheet2!C3:D4"})).is_err(), "on a protected other sheet");
+        assert!(s.execute("home.bold", json!({"range": "E5"})).is_err(), "an empty cell's style is refused too");
+        assert_eq!(merges(&s, 0).len(), 1);
+        assert_eq!(merges(&s, 1).len(), 1);
     }
 
     #[test]
