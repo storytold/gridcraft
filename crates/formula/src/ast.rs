@@ -197,6 +197,10 @@ pub enum Expr {
     /// Array constant `{1,2;3,4}` (rows of literal expressions).
     Array(Vec<Vec<Expr>>),
     Ref(Reference),
+    /// `Sheet1!#REF!`: a reference whose cells were deleted, which keeps the sheet it pointed
+    /// into. Excel writes and shows it that way, and renames the sheet here with the others; it
+    /// evaluates to `#REF!`. A bare `#REF!` is [`Expr::Error`].
+    SheetRefError(SheetSel),
     /// Defined name, table name or LET/LAMBDA parameter.
     Name(String),
     Struct(StructRef),
@@ -297,6 +301,7 @@ impl Clone for Expr {
             Expr::Error(e) => Expr::Error(*e),
             Expr::Array(rows) => Expr::Array(rows.clone()),
             Expr::Ref(r) => Expr::Ref(r.clone()),
+            Expr::SheetRefError(s) => Expr::SheetRefError(s.clone()),
             Expr::Name(n) => Expr::Name(n.clone()),
             Expr::Struct(s) => Expr::Struct(s.clone()),
             Expr::Unary(op, e) => Expr::Unary(*op, e.clone()),
@@ -336,6 +341,7 @@ impl PartialEq for Expr {
                 (Expr::Error(a), Expr::Error(b)) => break a == b,
                 (Expr::Array(a), Expr::Array(b)) => break a == b,
                 (Expr::Ref(a), Expr::Ref(b)) => break a == b,
+                (Expr::SheetRefError(a), Expr::SheetRefError(b)) => break a == b,
                 (Expr::Name(a), Expr::Name(b)) => break a == b,
                 (Expr::Struct(a), Expr::Struct(b)) => break a == b,
                 (Expr::Unary(o1, a), Expr::Unary(o2, b)) => break o1 == o2 && a == b,

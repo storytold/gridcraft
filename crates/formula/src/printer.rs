@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use gridcraft_core::{CellRef, number_to_text};
+use gridcraft_core::{CellError, CellRef, number_to_text};
 
 use crate::ast::{Anchor, BinOp, Expr, RefKind, Reference, SheetSel, StructItem, StructRef, UnOp};
 
@@ -239,6 +239,10 @@ fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
         }
         Expr::Bool(b) => s.push_str(if *b { "TRUE" } else { "FALSE" }),
         Expr::Error(err) => s.push_str(err.as_str()),
+        Expr::SheetRefError(sheet) => {
+            s.push_str(&sheet_prefix(sheet));
+            s.push_str(CellError::Ref.as_str());
+        }
         Expr::Array(rows) => {
             s.push('{');
             for (ri, row) in rows.iter().enumerate() {
