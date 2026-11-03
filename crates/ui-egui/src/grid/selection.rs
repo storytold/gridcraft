@@ -226,7 +226,13 @@ pub(super) fn add_mode_base(app: &SheetApp) -> Vec<String> {
     if app.grid.selection_mode != SelectionMode::Add {
         return Vec::new();
     }
-    app.session.active().map(|d| d.selection.ranges.iter().map(|x| x.a1()).collect()).unwrap_or_default()
+    let mut ranges = app.session.active().map(|d| d.selection.ranges.iter().map(|x| x.a1()).collect::<Vec<_>>()).unwrap_or_default();
+    if let Some(pending) = app.grid.add_pending
+        && ranges.last().is_some_and(|range| range == &pending.a1())
+    {
+        ranges.pop();
+    }
+    ranges
 }
 
 pub(super) fn select_ranges(app: &mut SheetApp, r: RangeRef, add: bool, active: CellRef) {
@@ -244,7 +250,7 @@ pub(super) fn select_ranges(app: &mut SheetApp, r: RangeRef, add: bool, active: 
     // A removed area takes the active cell with it; `selection.set` then puts it at the start of the last area.
     let params =
         if ranges.contains(&clicked) { json!({"range": ranges.join(","), "active": active.a1()}) } else { json!({"range": ranges.join(",")}) };
-    let _ = app.session.run("selection.set", params);
+    let _ = app.run("selection.set", params);
 }
 
 #[cfg(test)]

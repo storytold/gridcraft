@@ -242,6 +242,33 @@ fn add_mode_header_drag_keeps_the_earlier_areas() {
 }
 
 #[test]
+fn add_mode_header_drag_replaces_only_the_provisional_area() {
+    let mut h = harness(book("B2"));
+    key(&mut h, Key::F8, Modifiers::SHIFT);
+    key(&mut h, Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(selection_a1(&h), "B2,C2");
+    h.state_mut().grid.last_click = None;
+    let (from, to) = (column_header_point(&h, "H"), column_header_point(&h, "J"));
+    drag(&mut h, from, to);
+    assert_eq!(selection_a1(&h), "B2,H:J", "the header drag replaces the provisional area while retaining earlier areas");
+}
+
+#[test]
+fn add_mode_shift_home_and_end_keep_the_earlier_areas() {
+    let mut home = harness(book("B2"));
+    key(&mut home, Key::F8, Modifiers::SHIFT);
+    click(&mut home, "F6");
+    key(&mut home, Key::Home, Modifiers::SHIFT);
+    assert_eq!(selection_a1(&home), "B2,A6:F6", "Shift+Home extends the active area and keeps the earlier area");
+
+    let mut end = harness(book("B2"));
+    key(&mut end, Key::F8, Modifiers::SHIFT);
+    click(&mut end, "F6");
+    key(&mut end, Key::End, CTRL_SHIFT);
+    assert_eq!(selection_a1(&end), "B2,C3:F6", "Ctrl+Shift+End extends the active area and keeps the earlier area");
+}
+
+#[test]
 fn selection_mode_command_sets_and_reports_without_a_dialog() {
     let mut h = harness(book("A1"));
     assert_eq!(h.state_mut().run("ui.selectionMode", json!({})), Ok(json!({"mode": "off"})));
@@ -279,6 +306,11 @@ fn windows_and_mac_variants() {
     assert_eq!(lookup(Key::ArrowLeft, Some(Key::Num4), alt_shift, false), run("data.ungroup"));
     assert_eq!(lookup(Key::PageDown, Some(Key::Num3), Modifiers::ALT, false), Some(Shortcut::ScreenRight));
     assert_eq!(lookup(Key::PageDown, Some(Key::Num3), CTRL_SHIFT, false), None);
+    // Ctrl+. is Next Corner of Selection, with Control on a Mac too (#1442); Cmd+Shift+. stays
+    // Increase Font Size.
+    assert_eq!(lookup(Key::Period, Some(Key::Period), cmd, false), run("selection.nextCorner"));
+    assert_eq!(lookup(Key::Period, Some(Key::Period), ctrl, true), run("selection.nextCorner"));
+    assert_eq!(lookup(Key::Period, Some(Key::Period), Modifiers { shift: true, ..mac_cmd }, true), run("home.increaseFontSize"));
     // Plain keys stay with the grid (typing, navigation).
     assert_eq!(lookup(Key::A, Some(Key::A), Modifiers::NONE, false), None);
     assert_eq!(lookup(Key::F2, Some(Key::F2), Modifiers::NONE, false), None);
