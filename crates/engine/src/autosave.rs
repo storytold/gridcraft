@@ -53,7 +53,18 @@ impl Session {
         if d.path.as_deref() != Some(job.path.as_str()) {
             return false;
         }
-        d.saved = job.wb.clone();
+        let file = io::source_path(&job.path);
+        let unchanged = Arc::ptr_eq(&d.wb, &job.wb);
+        let mut saved = job.wb.clone();
+        if saved.source_path != file {
+            Arc::make_mut(&mut saved).source_path = file.clone();
+        }
+        if unchanged {
+            d.wb = saved.clone();
+        } else if d.wb.source_path != file {
+            Arc::make_mut(&mut d.wb).source_path = file;
+        }
+        d.saved = saved;
         true
     }
 }
@@ -105,6 +116,22 @@ mod tests {
         assert!(s.finish_save(&job));
         assert!(!s.active().unwrap().is_dirty());
         assert_eq!(saved_a1(&dir), gridcraft_core::Value::text("first"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn finished_save_updates_source_path_with_its_file() {
+        let (mut s, dir) = session_with_file("source-path");
+        let expected = crate::io::source_path(&dir.join("book.xlsx").to_string_lossy());
+        std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb).source_path = Some(dir.join("stale.xlsx"));
+        s.execute("cell.set", json!({"cell": "A1", "input": "saved"})).unwrap();
+        let job = s.autosave_job().unwrap();
+        job.run().unwrap();
+        assert!(s.finish_save(&job));
+        let doc = s.active().unwrap();
+        assert_eq!(doc.wb.source_path, expected);
+        assert_eq!(doc.saved.source_path, expected);
+        assert!(!doc.is_dirty());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
