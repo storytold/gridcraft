@@ -1,18 +1,17 @@
 //! PivotTables: pivot cache definitions and records (ECMA-376 Part 1 §18.10.1) and PivotTable
 //! definitions (§18.10.1.73), written from the model's [`PivotTable`]s and read back into them.
 //!
-//! Writing: one cache per PivotTable, with a records snapshot of the source list (omitted, with
-//! `saveData="0"`, for very large sources) and `refreshOnLoad="1"` so a reader recomputes the
-//! report from the source on open. Fields used on an axis get shared items (or, for date
-//! grouping, `fieldGroup` group items) so the table's `<items>` can refer to them. The report
-//! cells the engine wrote stay on the sheet as plain cells.
+//! Writing: one cache per PivotTable (the PivotTables a slicer connects share one), with a
+//! records snapshot of the source list (omitted, with `saveData="0"`, for very large sources) and
+//! `refreshOnLoad="1"` so a reader recomputes the report from the source on open. Fields used on
+//! an axis get shared items (or, for date grouping, `fieldGroup` group items) so the table's
+//! `<items>` can refer to them. The report cells the engine wrote stay on the sheet as plain cells.
 //!
 //! Reading: the cache's source and field names plus the table's areas, functions, show-values-as,
 //! layout flags, grand totals and style become a model [`PivotTable`]. Anything we don't model
 //! (OLAP sources, calculated fields, numeric grouping…) becomes a warning.
 
 use std::collections::HashMap;
-use std::fmt::Write as _;
 
 use gridcraft_core::date::datetime_from_serial;
 use gridcraft_core::{CellRef, DateSystem, RangeRef, Value, number_to_text};
@@ -29,9 +28,9 @@ use crate::xml::{El, esc_attr};
 mod read;
 mod write;
 
-pub use read::{CachesIn, read_pivots};
-pub use write::PivotWriter;
-
+pub use read::{CachesIn, NonSourceField, read_pivots};
+pub use write::{PivotSlicerInfo, PivotWriter};
+pub(crate) use write::{can_share, slicer_field_ok};
 pub const CT_PIVOT_TABLE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml";
 pub const CT_PIVOT_CACHE_DEF: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml";
 pub const CT_PIVOT_CACHE_REC: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml";
@@ -46,6 +45,8 @@ const MAX_ITEMS: usize = 1_048_576;
 const MAX_FIELDS: usize = 16_384;
 /// The `x14:dataField` extension (Excel 2010 show-values-as additions such as rank).
 const EXT_X14_DATA_FIELD: &str = "{E15A36E0-9728-4e99-A89B-3F7291B0FE68}";
+/// Extension carrying a cache's id for slicer caches.
+const EXT_X14_CACHE_ID: &str = "{725AE2AE-9491-48be-B2B4-4EB974FC3084}";
 const EXT_X14_PIVOT_TABLE: &str = "{962EF5D1-5CA2-4c93-8EF4-DBF5C05439D2}";
 const NS_X14: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
 

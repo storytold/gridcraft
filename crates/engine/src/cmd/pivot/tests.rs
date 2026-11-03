@@ -144,6 +144,34 @@ fn date_grouping_by_quarter_and_month() {
 }
 
 #[test]
+fn move_field_keeps_the_date_grouping() {
+    use gridcraft_model::PivotDateGroup;
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Date"], "values": ["Sales"]})).unwrap();
+    s.execute("pivot.group", json!({"field": "Date", "by": "months"})).unwrap();
+    // Columns → Filters: the report filter keeps the months.
+    s.execute("pivot.moveField", json!({"field": "Date", "from": "columns", "to": "filters"})).unwrap();
+    let p = pt(&s);
+    assert!(p.columns.is_empty());
+    let f = p.filters.iter().find(|f| f.source_col == "Date").unwrap();
+    assert_eq!(p.filter_group(f), PivotDateGroup::Months);
+    // Filters → Rows: Date on rows grouped by the filter's grouping.
+    s.execute("pivot.moveField", json!({"field": "Date", "from": "filters", "to": "rows"})).unwrap();
+    let p = pt(&s);
+    assert_eq!(p.rows.iter().find(|f| f.source_col == "Date").map(|f| f.date_group), Some(PivotDateGroup::Months));
+    assert!(p.filters.is_empty());
+    assert!(find_row(&s, "Jan").is_some());
+    // Undo brings back the report filter with its months.
+    s.execute("edit.undo", json!({})).unwrap();
+    let p = pt(&s);
+    assert!(p.rows.iter().all(|f| f.source_col != "Date"));
+    assert_eq!(p.filters.first().map(|f| p.filter_group(f)), Some(PivotDateGroup::Months));
+    // Rows → Values takes the field off Rows.
+    s.execute("pivot.moveField", json!({"field": "Region", "from": "rows", "to": "values"})).unwrap();
+    assert!(pt(&s).rows.is_empty());
+}
+
+#[test]
 fn filters_and_report_filter_rows() {
     let mut s = sales();
     s.execute("insert.pivotTable", json!({"rows": ["Product"], "values": ["Sales"], "filters": ["Region"]})).unwrap();
@@ -780,6 +808,293 @@ fn collapsed_column_items_count_as_one_column_group() {
     s.execute("pivot.addField", json!({"field": "Sub", "area": "columns"})).unwrap();
 }
 
+/// A slicer on `field` of the PivotTables `pivots` (names on the active sheet).
+fn add_pivot_slicer(s: &mut Session, id: u32, field: &str, pivots: &[&str]) {
+    use gridcraft_model::{Anchor, PivotSort, Slicer, SlicerCrossFilter, SlicerPivot, SlicerSource};
+    let d = s.doc_mut().unwrap();
+    let si = d.wb.active_sheet();
+    let sheet = d.wb.sheets[si].name.clone();
+    let sh = std::sync::Arc::make_mut(&mut d.wb).sheet_mut(si).unwrap();
+    sh.slicers.push(Slicer {
+        id,
+        source: SlicerSource::Pivot {
+            pivots: pivots.iter().map(|n| SlicerPivot { sheet: sheet.clone(), name: n.to_string() }).collect(),
+            field: field.into(),
+            sort: PivotSort::Asc,
+            cross_filter: SlicerCrossFilter::default(),
+            show_missing: true,
+        },
+        caption: field.into(),
+        anchor: Anchor { width: 150.0, height: 200.0, ..Anchor::default() },
+        columns: 1,
+        name: String::new(),
+        style: String::new(),
+        row_height: None,
+    });
+}
+
+/// The slicer's tiles as (label, selected).
+fn slicer_tiles(s: &Session, id: u32) -> Vec<(String, bool)> {
+    let d = s.doc().unwrap();
+    let sl = d.wb.active().unwrap().slicers.iter().find(|x| x.id == id).unwrap();
+    crate::cmd::slicer::slicer_items(&d.wb, d.wb.active_sheet(), sl).into_iter().map(|t| (t.label, t.selected)).collect()
+}
+
+#[test]
+fn pivot_slicer_selects_items_of_its_pivot_tables() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({})).unwrap();
+    s.execute("pivot.addField", json!({"field": "Region", "area": "rows"})).unwrap();
+    s.execute("pivot.addField", json!({"field": "Sales", "area": "values"})).unwrap();
+    add_pivot_slicer(&mut s, 1, "Region", &["PivotTable1"]);
+    add_pivot_slicer(&mut s, 2, "Product", &["PivotTable1"]);
+    // A slicer whose PivotTable is gone shows no tiles and ignores clicks.
+    add_pivot_slicer(&mut s, 3, "Region", &["Missing"]);
+    let tiles = slicer_tiles;
+    assert_eq!(tiles(&s, 1), vec![("East".into(), true), ("North".into(), true), ("West".into(), true)]);
+    assert!(tiles(&s, 3).is_empty());
+    assert!(s.execute("slicer.toggle", json!({"slicer": 3, "value": "East"})).is_err());
+
+    // A field on Rows: clicking a tile selects that item of the field and refreshes the table.
+    s.execute("slicer.toggle", json!({"slicer": 1, "value": "East"})).unwrap();
+    assert_eq!(tiles(&s, 1), vec![("East".into(), true), ("North".into(), false), ("West".into(), false)]);
+    let f = pt(&s).filters.into_iter().find(|f| f.source_col == "Region").unwrap();
+    assert_eq!((f.selected, f.hidden), (Some(vec!["East".to_string()]), false));
+    assert!(find_row(&s, "East").is_some());
+    assert!(find_row(&s, "North").is_none() && find_row(&s, "West").is_none());
+    s.execute("slicer.clear", json!({"slicer": 1})).unwrap();
+    assert!(pt(&s).filters.is_empty());
+    assert!(find_row(&s, "North").is_some());
+
+    // A field the table doesn't show: a hidden filter, with no report filter cell.
+    let anchor = pt(&s).anchor;
+    s.execute("slicer.toggle", json!({"slicer": 2, "value": "Apples"})).unwrap();
+    let f = pt(&s).filters.into_iter().find(|f| f.source_col == "Product").unwrap();
+    assert_eq!((f.selected, f.hidden), (Some(vec!["Apples".to_string()]), true));
+    assert_eq!(pt(&s).anchor, anchor, "a hidden filter adds no filter rows");
+    let total = find_row(&s, "Grand Total").map(|r| val(&s, &CellRef::new(r, anchor.col + 1).a1()).as_f64().unwrap()).unwrap();
+    assert!(total > 0.0 && total < TOTAL, "{total}");
+    s.execute("slicer.toggle", json!({"slicer": 2, "value": "Pears", "multi": true})).unwrap();
+    assert_eq!(tiles(&s, 2), vec![("Apples".into(), true), ("Pears".into(), true), ("Plums".into(), false)]);
+    s.execute("slicer.selectAll", json!({"slicer": 2})).unwrap();
+    assert!(pt(&s).filters.is_empty());
+}
+
+#[test]
+fn move_field_rejects_hidden_slicer_filter_as_filters_area() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    add_pivot_slicer(&mut s, 1, "Product", &["PivotTable1"]);
+    s.execute("slicer.toggle", json!({"slicer": 1, "value": "Apples"})).unwrap();
+    assert!(s.execute("pivot.moveField", json!({"field": "Product", "from": "filters", "to": "filters"})).is_err());
+    let p = pt(&s);
+    let f = p.filters.iter().find(|f| f.source_col == "Product").unwrap();
+    assert!(f.hidden);
+}
+
+#[test]
+fn move_axis_to_values_keeps_slicer_selection_and_grouping() {
+    use gridcraft_model::PivotDateGroup;
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Date"], "values": ["Sales"]})).unwrap();
+    s.execute("pivot.group", json!({"field": "Date", "by": "months"})).unwrap();
+    add_pivot_slicer(&mut s, 1, "Date", &["PivotTable1"]);
+    s.execute("slicer.toggle", json!({"slicer": 1, "value": "Jan"})).unwrap();
+    let d = s.doc().unwrap();
+    assert!(super::has_connected_slicer(&d.wb, d.wb.active_sheet(), &pt(&s), "Date"));
+    let before = pt(&s);
+    let bf = before.filters.iter().find(|f| f.source_col == "Date").unwrap();
+    assert_eq!(before.filter_group(bf), PivotDateGroup::Months);
+    s.execute("pivot.moveField", json!({"field": "Date", "from": "columns", "to": "values"})).unwrap();
+    let p = pt(&s);
+    let f = p.filters.iter().find(|f| f.source_col == "Date").unwrap();
+    assert_eq!(f.selected, Some(vec!["Jan".to_string()]));
+    assert!(f.hidden);
+    assert_eq!(p.filter_group(f), PivotDateGroup::Months);
+    assert_eq!(slicer_tiles(&s, 1), months_on(&["Jan"]));
+    let mut removed = sales();
+    removed.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Date"], "values": ["Sales"]})).unwrap();
+    removed.execute("pivot.group", json!({"field": "Date", "by": "months"})).unwrap();
+    add_pivot_slicer(&mut removed, 1, "Date", &["PivotTable1"]);
+    removed.execute("slicer.toggle", json!({"slicer": 1, "value": "Jan"})).unwrap();
+    removed.execute("pivot.removeField", json!({"field": "Date", "area": "columns"})).unwrap();
+    let rp = pt(&removed);
+    let rf = rp.filters.iter().find(|f| f.source_col == "Date").unwrap();
+    assert_eq!(rf.selected, Some(vec!["Jan".to_string()]));
+    assert!(rf.hidden);
+    assert_eq!(rp.filter_group(rf), PivotDateGroup::Months);
+}
+
+#[test]
+fn move_axis_to_values_drops_manual_axis_filter() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    s.execute("pivot.filter", json!({"field": "Region", "selected": ["East"]})).unwrap();
+    s.execute("pivot.moveField", json!({"field": "Region", "from": "rows", "to": "values"})).unwrap();
+    assert!(pt(&s).filters.iter().all(|f| f.source_col != "Region"));
+}
+#[test]
+fn pivot_slicer_on_grouped_dates_shows_the_groups() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({})).unwrap();
+    s.execute("pivot.addField", json!({"field": "Date", "area": "rows"})).unwrap();
+    s.execute("pivot.addField", json!({"field": "Sales", "area": "values"})).unwrap();
+    s.execute("pivot.group", json!({"field": "Date", "by": "quarters"})).unwrap();
+    add_pivot_slicer(&mut s, 1, "Date", &["PivotTable1"]);
+    let quarters = |on: [bool; 4]| ["Qtr1", "Qtr2", "Qtr3", "Qtr4"].into_iter().zip(on).map(|(q, o)| (q.to_string(), o)).collect::<Vec<_>>();
+    assert_eq!(slicer_tiles(&s, 1), quarters([true; 4]));
+    // The PivotTable's filter selects groups, and the tiles show it.
+    s.execute("pivot.filter", json!({"field": "Date", "selected": ["Qtr1"]})).unwrap();
+    assert_eq!(slicer_tiles(&s, 1), quarters([true, false, false, false]));
+    // Clicking a tile filters the PivotTable to that group.
+    s.execute("slicer.toggle", json!({"slicer": 1, "value": "Qtr3"})).unwrap();
+    assert_eq!(slicer_tiles(&s, 1), quarters([false, false, true, false]));
+    assert_eq!(text(&s, "A4"), "Qtr3");
+    assert_eq!(val(&s, "B4"), Value::Number(195.0));
+    assert_eq!(text(&s, "A5"), "Grand Total");
+}
+
+#[test]
+fn pivot_slicer_keeps_one_item_selected() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({})).unwrap();
+    s.execute("pivot.addField", json!({"field": "Region", "area": "rows"})).unwrap();
+    s.execute("pivot.addField", json!({"field": "Sales", "area": "values"})).unwrap();
+    add_pivot_slicer(&mut s, 1, "Region", &["PivotTable1"]);
+    for r in ["East", "North", "West"] {
+        s.execute("slicer.toggle", json!({"slicer": 1, "value": r, "multi": true})).unwrap();
+    }
+    // Ctrl-clicking the last selected item leaves it selected, as in Excel.
+    assert_eq!(slicer_tiles(&s, 1), vec![("East".into(), false), ("North".into(), false), ("West".into(), true)]);
+    let f = pt(&s).filters.into_iter().find(|f| f.source_col == "Region").unwrap();
+    assert_eq!(f.selected, Some(vec!["West".to_string()]));
+    assert!(find_row(&s, "West").is_some());
+}
+
+/// The package `bytes` with part `name` replaced by `edit` of it.
+fn edit_part(bytes: &[u8], name: &str, edit: impl Fn(&str) -> String) -> Vec<u8> {
+    use std::io::{Read, Write};
+    let mut zin = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut zout = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for i in 0..zin.len() {
+        let mut f = zin.by_index(i).unwrap();
+        let mut data = Vec::new();
+        f.read_to_end(&mut data).unwrap();
+        let part = f.name().to_string();
+        if part == name {
+            data = edit(&String::from_utf8(data).unwrap()).into_bytes();
+        }
+        zout.start_file(part, zip::write::SimpleFileOptions::default()).unwrap();
+        zout.write_all(&data).unwrap();
+    }
+    zout.finish().unwrap().into_inner()
+}
+fn save(s: &Session) -> Vec<u8> {
+    gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap()
+}
+/// Opens `bytes` on the PivotTable's sheet and refreshes.
+fn reopen(s: &mut Session, bytes: &[u8]) {
+    s.execute("file.open", json!({"name": "x.xlsx", "base64": crate::io::base64_encode(bytes)})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    s.execute("data.refreshAll", json!({})).unwrap();
+}
+/// The active sheet's first slicer.
+fn first_slicer(s: &Session) -> u32 {
+    s.doc().unwrap().wb.active().unwrap().slicers[0].id
+}
+/// The value next to row label `label` in the PivotTable.
+fn sum_of(s: &Session, label: &str) -> Option<Value> {
+    let col = pt(s).last_range.unwrap().start.col + 1;
+    find_row(s, label).map(|r| val(s, &CellRef::new(r, col).a1()))
+}
+const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+fn months_on(on: &[&str]) -> Vec<(String, bool)> {
+    MONTHS.iter().map(|m| (m.to_string(), on.contains(m))).collect()
+}
+
+/// Excel's usual dashboard: a slicer on Date grouped by months, and a PivotTable by Region
+/// with Date in no area. The grouping belongs to the cache field, so the PivotTable filters
+/// by month, the tiles are months, and both survive a save.
+#[test]
+fn pivot_slicer_on_grouped_date_in_no_area_keeps_the_grouping() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({})).unwrap();
+    s.execute("pivot.addField", json!({"field": "Region", "area": "rows"})).unwrap();
+    s.execute("pivot.addField", json!({"field": "Date", "area": "columns"})).unwrap();
+    s.execute("pivot.addField", json!({"field": "Sales", "area": "values"})).unwrap();
+    s.execute("pivot.group", json!({"field": "Date", "by": "months"})).unwrap();
+    add_pivot_slicer(&mut s, 1, "Date", &["PivotTable1"]);
+    s.execute("slicer.toggle", json!({"slicer": 1, "value": "Jan"})).unwrap();
+    s.execute("slicer.toggle", json!({"slicer": 1, "value": "Feb", "multi": true})).unwrap();
+    // Take Date out of the PivotTable's areas in the file, keeping the cache's grouping.
+    let bytes = edit_part(&save(&s), "xl/pivotTables/pivotTable1.xml", |x| {
+        let (a, b) = (x.find("<colFields").unwrap(), x.find("</colFields>").unwrap() + "</colFields>".len());
+        format!("{}{}", &x[..a], &x[b..]).replace(" axis=\"axisCol\"", "")
+    });
+    reopen(&mut s, &bytes);
+    assert!(pt(&s).columns.is_empty());
+    assert_eq!(slicer_tiles(&s, first_slicer(&s)), months_on(&["Jan", "Feb"]));
+    assert_eq!(sum_of(&s, "East"), Some(Value::Number(100.0)));
+    assert_eq!(sum_of(&s, "West"), Some(Value::Number(50.0)));
+    assert_eq!(sum_of(&s, "North"), None);
+    assert_eq!(sum_of(&s, "Grand Total"), Some(Value::Number(150.0)));
+
+    // A click filters by month, and the selection survives a save.
+    s.execute("slicer.toggle", json!({"slicer": first_slicer(&s), "value": "Mar", "multi": true})).unwrap();
+    assert_eq!(sum_of(&s, "East"), Some(Value::Number(220.0)));
+    let bytes = save(&s);
+    reopen(&mut s, &bytes);
+    assert_eq!(slicer_tiles(&s, first_slicer(&s)), months_on(&["Jan", "Feb", "Mar"]));
+    assert_eq!(sum_of(&s, "Grand Total"), Some(Value::Number(270.0)));
+    // Selecting everything keeps the months.
+    s.execute("slicer.selectAll", json!({"slicer": first_slicer(&s)})).unwrap();
+    assert_eq!(slicer_tiles(&s, first_slicer(&s)), months_on(&MONTHS));
+    assert_eq!(sum_of(&s, "Grand Total"), Some(Value::Number(TOTAL)));
+    let bytes = save(&s);
+    reopen(&mut s, &bytes);
+    assert_eq!(slicer_tiles(&s, first_slicer(&s)), months_on(&MONTHS));
+}
+
+/// With Date on Rows by quarters then months, the slicer lists the base cache field's months
+/// (as Excel's does), a click filters by month, and it's saved the same way in the slicer
+/// cache and the PivotTable.
+#[test]
+fn pivot_slicer_on_multi_level_dates_lists_the_base_level() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({})).unwrap();
+    s.execute("pivot.addField", json!({"field": "Date", "area": "rows"})).unwrap();
+    s.execute("pivot.addField", json!({"field": "Sales", "area": "values"})).unwrap();
+    s.execute("pivot.group", json!({"field": "Date", "by": "quarters"})).unwrap();
+    {
+        let d = s.doc_mut().unwrap();
+        let si = d.wb.active_sheet();
+        let p = std::sync::Arc::make_mut(&mut d.wb).sheet_mut(si).unwrap().pivots.last_mut().unwrap();
+        p.rows.push(gridcraft_model::PivotField {
+            source_col: "Date".into(),
+            date_group: gridcraft_model::PivotDateGroup::Months,
+            ..Default::default()
+        });
+    }
+    s.execute("pivot.refresh", json!({})).unwrap();
+    add_pivot_slicer(&mut s, 1, "Date", &["PivotTable1"]);
+    assert_eq!(slicer_tiles(&s, 1), months_on(&MONTHS));
+    s.execute("slicer.toggle", json!({"slicer": 1, "value": "Mar"})).unwrap();
+    assert_eq!(slicer_tiles(&s, 1), months_on(&["Mar"]));
+    assert_eq!(sum_of(&s, "Qtr1"), Some(Value::Number(120.0)));
+    assert_eq!(sum_of(&s, "Mar"), Some(Value::Number(120.0)));
+    assert_eq!(sum_of(&s, "Qtr2"), None);
+    assert_eq!(sum_of(&s, "Grand Total"), Some(Value::Number(120.0)));
+
+    // The slicer cache selects the base field's Mar item (after `<1/1/2026` and Jan, Feb).
+    let bytes = save(&s);
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut cache = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("xl/slicerCaches/slicerCache1.xml").unwrap(), &mut cache).unwrap();
+    assert!(cache.contains("<i x=\"3\" s=\"1\"/>") && cache.matches("s=\"1\"").count() == 1, "{cache}");
+    reopen(&mut s, &bytes);
+    assert_eq!(slicer_tiles(&s, first_slicer(&s)), months_on(&["Mar"]));
+    assert_eq!(sum_of(&s, "Grand Total"), Some(Value::Number(120.0)));
+}
 #[test]
 fn inserting_or_deleting_lines_moves_the_pivot_with_its_cells() {
     let mut s = sales();

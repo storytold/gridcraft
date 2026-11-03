@@ -1,5 +1,5 @@
 use super::create::source_param;
-use super::fields::{canonical, in_axes, shift_values, update};
+use super::fields::{canonical, shift_values, update};
 use super::params::{group_param, layout_name};
 use super::{
     Chart, Json, PivotDateGroup, PivotField, PivotFilter, PivotLayout, PivotSort, PivotTable, Result, Session, bad, bool_param, edit, find_pivot,
@@ -33,22 +33,17 @@ pub(super) fn filter(s: &mut Session, p: &Json) -> Result<Json> {
     };
     update(s, p, |pt, src, _| {
         let field = canonical(C, src, &field)?;
-        let i = pt.filters.iter().position(|f| f.source_col.eq_ignore_ascii_case(&field));
-        match (i, selected) {
-            (Some(i), None) => {
-                if in_axes(pt, &field) {
-                    pt.filters.remove(i);
-                } else if let Some(f) = pt.filters.get_mut(i) {
-                    f.selected = None;
+        match pt.filters.iter().find(|f| f.source_col.eq_ignore_ascii_case(&field)) {
+            Some(f) => {
+                let group = pt.filter_group(f);
+                pt.set_filter(&field, selected, group);
+            }
+            // A field in no area becomes a report filter.
+            None => {
+                if let Some(sel) = selected {
+                    pt.filters.push(PivotFilter { source_col: field.clone(), selected: Some(sel), ..PivotFilter::default() });
                 }
             }
-            (Some(i), Some(sel)) => {
-                if let Some(f) = pt.filters.get_mut(i) {
-                    f.selected = Some(sel);
-                }
-            }
-            (None, Some(sel)) => pt.filters.push(PivotFilter { source_col: field.clone(), selected: Some(sel) }),
-            (None, None) => {}
         }
         Ok(json!({"field": field}))
     })
@@ -269,7 +264,7 @@ pub(super) fn change_source(s: &mut Session, p: &Json) -> Result<Json> {
 pub(super) fn delete(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, pi) = find_pivot(s, p)?;
     edit(s, |cx| {
-        // Its PivotCharts become ordinary charts.
+        // Its PivotCharts become ordinary charts, and its slicers lose it.
         let link = cx.wb.sheet(si).and_then(|sh| sh.pivots.get(pi).map(|pt| (sh.name.clone(), pt.name.clone())));
         if let Some((sheet, name)) = link {
             for i in 0..cx.wb.sheets.len() {
@@ -280,6 +275,7 @@ pub(super) fn delete(s: &mut Session, p: &Json) -> Result<Json> {
                     }
                 }
             }
+            crate::cmd::slicer::drop_pivot(&mut cx.wb, &sheet, &name);
         }
         pv::clear_output(&mut cx.wb, si, pi);
         let sh = cx.sheet_mut(si)?;

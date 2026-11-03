@@ -31,6 +31,8 @@ impl FieldIn {
 struct CacheIn {
     source: String,
     fields: Vec<FieldIn>,
+    /// `x14:pivotCacheDefinition pivotCacheId`: how slicer caches name the cache.
+    slicer_id: Option<u32>,
 }
 
 /// Workbook-level pivot cache lookup, filled from `<pivotCaches>`; caches are parsed once.
@@ -55,6 +57,53 @@ impl CachesIn {
         }
         CachesIn { by_id, parsed: HashMap::new(), next_id: 1 }
     }
+
+    /// Whether a slicer cache id resolves to a parsed PivotTable cache.
+    pub fn has_slicer_cache(&self, cache_id: u32) -> bool {
+        self.parsed.values().flatten().any(|c| c.slicer_id == Some(cache_id))
+    }
+
+    /// Item captions of field `field` in the cache a slicer cache names by `pivotCacheId`, in
+    /// shared item order (what the slicer cache's `<i x>` indices refer to), and the field's date
+    /// grouping. `None` for a grouping GridCraft can't compute.
+    pub fn slicer_labels(&self, cache_id: u32, field: &str) -> Option<(&[String], PivotDateGroup)> {
+        let cache = self.parsed.values().flatten().find(|c| c.slicer_id == Some(cache_id))?;
+        let f = cache.fields.iter().find(|f| f.database && same(&f.name, field))?;
+        let group = match &f.group {
+            None => PivotDateGroup::None,
+            Some((_, by, _)) => (*by)?,
+        };
+        Some((f.labels(), group))
+    }
+
+    /// What `field` names in the cache a slicer cache names by `pivotCacheId`, when it is not a
+    /// source column. `None` when it is one, or the cache isn't known.
+    pub fn slicer_non_source(&self, cache_id: u32, field: &str) -> Option<NonSourceField<'_>> {
+        let cache = self.parsed.values().flatten().find(|c| c.slicer_id == Some(cache_id))?;
+        if cache.fields.iter().any(|f| f.database && same(&f.name, field)) {
+            return None;
+        }
+        let base = cache
+            .fields
+            .iter()
+            .find(|f| same(&f.name, field))
+            .and_then(|f| f.group.as_ref())
+            .and_then(|(base, by, _)| by.and((*base).and_then(|b| cache.fields.get(b))))
+            .filter(|b| b.database);
+        Some(match base {
+            Some(b) => NonSourceField::DateLevel { base: &b.name },
+            None => NonSourceField::Other,
+        })
+    }
+}
+
+/// A slicer cache's source field that is not a source column of its pivot cache.
+pub enum NonSourceField<'a> {
+    /// A coarser date level, which Excel keeps in a field of its own when a date is grouped at
+    /// several levels ("Years" over "Date" grouped by years and months), grouping column `base`.
+    DateLevel { base: &'a str },
+    /// Another field (calculated, grouped in a way GridCraft can't compute) or none of that name.
+    Other,
 }
 
 fn item_label_el(e: &El, sys: DateSystem) -> String {
@@ -130,7 +179,9 @@ fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn>
         cx.warn("a PivotTable's cache has no fields; kept as plain cells");
         return None;
     }
-    Some(CacheIn { source, fields })
+    let slicer_id =
+        x.child("extLst").and_then(|l| l.kids("ext").find_map(|e| e.child("pivotCacheDefinition"))).and_then(|d| d.attr_u32("pivotCacheId"));
+    Some(CacheIn { source, fields, slicer_id })
 }
 
 /// Reads the PivotTables related to a worksheet part.
@@ -280,7 +331,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 if items.iter().any(|it| it.flag("h", false)) {
                     let shown: Vec<String> = items.iter().filter(|it| !it.flag("h", false)).filter_map(|it| lab(it)).collect();
                     if !filters.iter().any(|ff| same(&ff.source_col, &name)) {
-                        filters.push(PivotFilter { source_col: name.clone(), selected: Some(shown) });
+                        filters.push(PivotFilter { source_col: name.clone(), selected: Some(shown), hidden: false, date_group: group });
                     }
                 }
             }
@@ -291,7 +342,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
     let mut page_filters = Vec::new();
     for p in &pages {
         let Some(i) = p.attr_i64("fld").filter(|i| *i >= 0).map(|i| i as usize) else { continue };
-        let Some((name, _)) = field_ref(cx, cache, i) else { continue };
+        let Some((name, group)) = field_ref(cx, cache, i) else { continue };
         let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
         let selected = if let Some(k) = p.attr_u32("item") {
             labels.get(k as usize).map(|l| vec![l.clone()])
@@ -307,7 +358,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 })
             })
         };
-        page_filters.push(PivotFilter { source_col: name, selected });
+        page_filters.push(PivotFilter { source_col: name, selected, hidden: false, date_group: group });
     }
     let mut axis_filters = Vec::new();
     let (rows, rows_values) = axis(cx, &row_x, &mut axis_filters);
@@ -321,7 +372,31 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
         if pt.values_on_rows { rows_values.or_else(|| x.attr_u32("dataPosition").map(|p| p as usize)).filter(|p| *p < pt.rows.len()) } else { None };
     filters.extend(page_filters);
     filters.extend(axis_filters);
+    // Hidden items of a field in no area: a slicer's selection on a field the table doesn't show.
+    // A date-grouped cache field keeps its grouping, so the items are its groups.
+    let page_x: Vec<i64> = pages.iter().filter_map(|p| p.attr_i64("fld")).collect();
+    for (i, e) in pfs.iter().enumerate() {
+        let placed = [&row_x, &col_x, &page_x].iter().any(|l| l.contains(&(i as i64)));
+        let items = items_of(e);
+        if placed || !items.iter().any(|it| it.flag("h", false)) {
+            continue;
+        }
+        // Items of a grouping GridCraft can't compute could never match a source value.
+        if let Some(f) = cache.fields.get(i).filter(|f| matches!(f.group, Some((_, None, _)))) {
+            cx.warn(format!("PivotTable \"{}\": the filter on grouped field \"{}\" is not supported and was ignored", pt.name, f.name));
+            continue;
+        }
+        let Some((name, group)) = field_ref(cx, cache, i) else { continue };
+        if filters.iter().any(|f| same(&f.source_col, &name)) {
+            continue;
+        }
+        let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
+        let shown =
+            items.iter().filter(|it| !it.flag("h", false)).filter_map(|it| it.attr_u32("x").and_then(|k| labels.get(k as usize)).cloned()).collect();
+        filters.push(PivotFilter { source_col: name, selected: Some(shown), hidden: true, date_group: group });
+    }
     pt.filters = filters;
+    pt.normalize_filter_groups();
 
     // Values.
     if let Some(df) = x.child("dataFields") {
