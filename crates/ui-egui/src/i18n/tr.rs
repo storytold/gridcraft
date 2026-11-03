@@ -432,6 +432,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Durdur",
         "New Macro" => "Yeni Makro",
         "Show" => "Göster",
+        "Collapse dialog" => "İletişim kutusunu daralt",
+        "Expand dialog" => "İletişim kutusunu genişlet",
         _ => return None,
     })
 }
