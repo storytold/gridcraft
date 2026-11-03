@@ -15,15 +15,7 @@ fn harness(setup: impl FnOnce(&mut Session)) -> Harness {
     let mut session = Session::new();
     session.new_workbook();
     setup(&mut session);
-    let mut h = egui_kittest::Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            app.logic(ui.ctx());
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
-    h
+    crate::support::stepped_harness(session)
 }
 
 /// B1:B2 holds 1, 2 and is selected.
