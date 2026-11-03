@@ -1297,7 +1297,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show sheet tabs" => "显示工作表标签",
         "Edit Hyperlink…" => "编辑超链接…",
         "Edit Hyperlink" => "编辑超链接",
-        "Open Hyperlink" => "打开超链接",
         "Remove Hyperlink" => "删除超链接",
         "Resize formula bar" => "调整编辑栏大小",
         "Enable AutoComplete for cell values" => "为单元格值启用记忆式键入",
