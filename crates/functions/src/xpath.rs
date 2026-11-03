@@ -52,7 +52,7 @@ struct Step {
 pub(crate) fn filterxml(args: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
     let xml = text(args, 0)?;
     let xpath = text(args, 1)?;
-    if xml.is_empty() || xpath.is_empty() || xml.chars().count() > MAX_TEXT {
+    if xml.is_empty() || xpath.is_empty() || xml.chars().count() > MAX_TEXT || xpath.len() > MAX_TEXT {
         return Err(CellError::Value);
     }
     let steps = parse_xpath(&xpath)?;
@@ -301,7 +301,7 @@ fn parse_xpath(xpath: &str) -> R<Vec<Step>> {
         return Err(CellError::Value);
     }
     while at < bytes.len() {
-        if bytes.get(at) != Some(&b'/') {
+        if steps.len() >= MAX_DEPTH || bytes.get(at) != Some(&b'/') {
             return Err(CellError::Value);
         }
         at += 1;
@@ -359,7 +359,7 @@ fn parse_xpath(xpath: &str) -> R<Vec<Step>> {
             return Err(CellError::Value);
         }
     }
-    if steps.is_empty() || steps.len() > MAX_DEPTH {
+    if steps.is_empty() {
         return Err(CellError::Value);
     }
     Ok(steps)
@@ -446,6 +446,14 @@ mod tests {
         ] {
             assert_eq!(evaluate(xml, xpath), Value::Error(CellError::Value));
         }
+    }
+
+    #[test]
+    fn filterxml_bounds_xpath_length_and_depth_before_accumulating_steps() {
+        let too_deep = "/a".repeat(MAX_DEPTH + 1);
+        let too_long = format!("/{}", "a".repeat(MAX_TEXT));
+        assert_eq!(evaluate("<r/>", &too_deep), Value::Error(CellError::Value));
+        assert_eq!(evaluate("<r/>", &too_long), Value::Error(CellError::Value));
     }
 
     #[test]
