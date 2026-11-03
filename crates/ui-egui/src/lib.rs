@@ -7,6 +7,15 @@
 #![forbid(unsafe_code)]
 
 mod autosave;
+/// GridCraft as craft-update knows it, with its 128 px icon and accent colour: the update
+/// prompt shows both, and an AppImage's menu entry gets the icon.
+#[cfg(not(target_arch = "wasm32"))]
+pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
+    icon_png: Some(include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/ai.storyteller.gridcraft.png")),
+    accent: Some([0x1f, 0x9d, 0x55]),
+    ..craft_update::suite::GRIDCRAFT
+};
+
 pub mod backstage;
 mod border_preview;
 mod cell_pictures;
@@ -20,10 +29,12 @@ pub mod dnd;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod doc_windows;
 pub mod editor;
+pub mod equation;
 mod floating_pictures;
 pub mod fonts;
 pub mod formula_bar;
 mod formula_locale;
+pub mod function_library;
 pub mod grid;
 pub mod i18n;
 pub mod icons;
@@ -31,6 +42,7 @@ pub mod keymap;
 pub mod keytips;
 pub mod macro_editor;
 pub mod macro_ui;
+pub mod objects;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
@@ -77,12 +89,18 @@ pub struct UiState {
     pub ribbon_tab: String,
     pub ribbon_collapsed: bool,
     pub formula_bar_expanded: bool,
+    /// Lines the expanded formula bar shows: the height its bottom edge was last dragged to.
+    /// Expanding it again (the chevron, Ctrl+Shift+U) returns to that height.
+    pub formula_bar_lines: usize,
     pub status_bar: bool,
     /// Motion in the UI: the selection outline glides to a new selection (View ▸ Animations).
     pub animations: bool,
     /// Enable AutoComplete for cell values (File ▸ Options ▸ Editing): typed text is completed
     /// from the one matching entry in the same column.
     pub autocomplete: bool,
+    /// Tint the active cell's whole row (File ▸ Options ▸ General), on every sheet and workbook, so
+    /// the eye keeps its place across a wide table. A preference: nothing goes into the file.
+    pub highlight_active_row: bool,
     /// AutoSave (the title-bar switch): save saved-to-file .xlsx workbooks shortly after every
     /// change. A preference like the rest of this struct — it stays on across restarts (#1901).
     pub autosave: bool,
@@ -91,6 +109,10 @@ pub struct UiState {
     /// [`keytips::Action::Control`], consumed (and cleared) by the control's render site.
     #[serde(skip)]
     pub keytip_invoke: Option<&'static str>,
+    /// A keytip control request for the next frame: its tab was switched to this frame, so its
+    /// control is drawn only then.
+    #[serde(skip)]
+    pub keytip_invoke_next: Option<&'static str>,
     /// Interface language. English by default (so tests and headless renders never depend on the
     /// host's locale); the desktop app starts from [`i18n::Language::system`] when `ui.json` has
     /// no usable language (see [`i18n::saved_language`]). An unknown saved value reads as English
@@ -126,12 +148,15 @@ impl Default for UiState {
             ribbon_tab: "Home".into(),
             ribbon_collapsed: false,
             formula_bar_expanded: false,
+            formula_bar_lines: formula_bar::MAX_LINES,
             status_bar: true,
             animations: true,
             autocomplete: true,
+            highlight_active_row: false,
             autosave: false,
             recent: vec![],
             keytip_invoke: None,
+            keytip_invoke_next: None,
             language: i18n::Language::En,
             interface_scale: 100,
         }
@@ -266,8 +291,8 @@ pub struct SheetApp {
     /// false (a bare test/embedder that never runs the hook) capture code falls back to egui's
     /// current input instead of reusing a stale recorded value.
     pub(crate) capture_geometry_from_raw: bool,
-    /// Chart selected on the sheet (id).
-    pub selected_chart: Option<u32>,
+    /// The floating object selected on the sheet (chart, picture, shape, equation or slicer).
+    pub selected_object: Option<gridcraft_engine::model::ObjRef>,
     /// The system clipboard's text when GridCraft last copied without publishing to it (a
     /// control-channel or MCP `edit.copy`/`edit.cut`). While the system clipboard still holds this
     /// text, GridCraft's copy is the newer one and Paste uses it.
@@ -285,6 +310,9 @@ pub struct SheetApp {
     /// Every unsaved workbook has been answered for quitting (or `app.quit` asked): the next
     /// window close goes through.
     pub allow_close: bool,
+    /// A quit question is waiting in the active window: [`doc_windows`] brings its native window
+    /// to the front, also when the app is hidden or the window minimized (a Dock quit).
+    pub bring_forward: bool,
     /// View › Switch Windows opens its list on the next frame the View tab draws (asked for by a
     /// key tip, the command search or a menu, possibly while another tab was showing).
     pub(crate) open_switch_windows: bool,
