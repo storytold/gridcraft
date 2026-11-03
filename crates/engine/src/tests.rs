@@ -193,7 +193,7 @@ fn chart_category_axis_from_blank_corner_and_select_data() {
     assert_eq!(series(&s), [(Some("Sheet1!$D$2:$D$4".to_string()), "Sheet1!$E$2:$E$4".to_string())]);
     let d = s.doc().unwrap();
     let sh = d.wb.active().unwrap();
-    let data = gridcraft_chart::resolve(&d.wb, d.wb.active_sheet, sh.charts.last().unwrap());
+    let data = gridcraft_chart::resolve(&d.wb, d.wb.active_sheet(), sh.charts.last().unwrap());
     assert_eq!(data.categories, ["2020", "2021", "2022"]);
     // The last series can't be removed; "" clears the labels.
     s.execute("chart.selectData", json!({"categories": "", "removeSeries": [0]})).unwrap();
@@ -1818,7 +1818,7 @@ fn slicer_finds_a_named_table_on_another_sheet() {
     s.execute("insert.table", json!({"range": "A1:B3", "name": "Sales"})).unwrap();
     s.execute("home.insertSheet", json!({"name": "Report"})).unwrap();
     let report = s.doc().unwrap().wb.sheet_index("Report").unwrap();
-    assert_eq!(s.doc().unwrap().wb.active_sheet, report);
+    assert_eq!(s.doc().unwrap().wb.active_sheet(), report);
 
     // With another sheet active, `table` still names the table, and the slicer goes on the table's sheet.
     let r = s.execute("insert.slicer", json!({"table": "Sales", "column": "Region", "at": "D2"})).unwrap();
@@ -1998,6 +1998,69 @@ fn autosum_over_whole_rows_is_one_undo_step_within_the_data() {
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(v(&s, "A6"), Value::Empty);
     assert_eq!(v(&s, "B6"), Value::Empty);
+}
+
+fn formula_at(s: &Session, a: &str) -> Option<String> {
+    s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse(a).unwrap()).and_then(|c| c.formula.as_ref().map(|f| f.text.clone()))
+}
+
+#[test]
+fn autosum_over_a_row_totals_it_to_the_right() {
+    // As in Excel: a row selected and AutoSum puts one total to its right, not a one-cell total
+    // under each of its cells.
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "B2", "values": [[1, 2, 3, 4]]})).unwrap();
+    s.execute("formulas.autoSum", json!({"range": "B2:E2"})).unwrap();
+    assert_eq!(formula_at(&s, "F2").as_deref(), Some("SUM(B2:E2)"));
+    assert_eq!(v(&s, "F2"), Value::Number(10.0));
+    assert!(gridcraft_core::RangeRef::parse("B3:F3").unwrap().iter().all(|c| v(&s, &c.a1()) == Value::Empty), "nothing under the row");
+    assert_eq!(s.doc().unwrap().undo.len(), 2, "one undo step");
+    // A row whose last cell is empty takes its total there.
+    s.execute("range.setValues", json!({"range": "B4", "values": [[5, 6, 7]]})).unwrap();
+    s.execute("formulas.autoSum", json!({"range": "B4:E4"})).unwrap();
+    assert_eq!(formula_at(&s, "E4").as_deref(), Some("SUM(B4:D4)"));
+    assert_eq!(v(&s, "F4"), Value::Empty);
+    // AVERAGE and the rest go the same way.
+    s.execute("formulas.autoSum", json!({"range": "B2:E2", "function": "average"})).unwrap();
+    assert_eq!(formula_at(&s, "F2").as_deref(), Some("AVERAGE(B2:E2)"));
+}
+
+#[test]
+fn autosum_over_a_whole_row_totals_it_after_the_data() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A2", "values": [[1, 2, 3]]})).unwrap();
+    s.execute("formulas.autoSum", json!({"range": "2:2"})).unwrap();
+    assert_eq!(formula_at(&s, "D2").as_deref(), Some("SUM(A2:C2)"));
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().cells.used_range().unwrap().a1(), "A2:D2", "not out to the last column");
+}
+
+#[test]
+fn autosum_fills_a_selections_empty_last_column_and_row() {
+    // As in Excel: an empty last column takes each row's total, an empty last row each column's,
+    // and with both the corner takes the total of the block.
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2], [3, 4]]})).unwrap();
+    s.execute("formulas.autoSum", json!({"range": "A1:C2"})).unwrap();
+    assert_eq!((formula_at(&s, "C1").as_deref(), formula_at(&s, "C2").as_deref()), (Some("SUM(A1:B1)"), Some("SUM(A2:B2)")));
+    assert_eq!((v(&s, "C1"), v(&s, "C2")), (Value::Number(3.0), Value::Number(7.0)));
+    assert!(gridcraft_core::RangeRef::parse("A3:C3").unwrap().iter().all(|c| v(&s, &c.a1()) == Value::Empty), "no totals under the rows");
+
+    s.execute("range.setValues", json!({"range": "E1", "values": [[1, 2], [3, 4]]})).unwrap();
+    let steps = s.doc().unwrap().undo.len();
+    s.execute("formulas.autoSum", json!({"range": "E1:G3"})).unwrap();
+    for (cell, formula, value) in
+        [("E3", "SUM(E1:E2)", 4.0), ("F3", "SUM(F1:F2)", 6.0), ("G1", "SUM(E1:F1)", 3.0), ("G2", "SUM(E2:F2)", 7.0), ("G3", "SUM(E1:F2)", 10.0)]
+    {
+        assert_eq!(formula_at(&s, cell).as_deref(), Some(formula), "{cell}");
+        assert_eq!(v(&s, cell), Value::Number(value), "{cell}");
+    }
+    assert_eq!(s.doc().unwrap().undo.len(), steps + 1, "one undo step");
+
+    // Neither empty: totals below each column, as before.
+    s.execute("range.setValues", json!({"range": "I1", "values": [[1, 2], [3, 4]]})).unwrap();
+    s.execute("formulas.autoSum", json!({"range": "I1:J2"})).unwrap();
+    assert_eq!((formula_at(&s, "I3").as_deref(), formula_at(&s, "J3").as_deref()), (Some("SUM(I1:I2)"), Some("SUM(J1:J2)")));
+    assert_eq!(v(&s, "K1"), Value::Empty);
 }
 
 #[test]
@@ -2711,7 +2774,10 @@ fn every_command_survives_empty_params() {
     let mut s = Session::new();
     s.execute("file.new", json!({"sample": "sales"})).unwrap();
     for spec in crate::command_specs() {
-        if matches!(spec.id, "file.close" | "file.open" | "file.save" | "file.saveAs" | "file.exportCsv" | "file.exportHtml" | "insert.picture") {
+        if matches!(
+            spec.id,
+            "file.close" | "window.close" | "file.open" | "file.save" | "file.saveAs" | "file.exportCsv" | "file.exportHtml" | "insert.picture"
+        ) {
             continue;
         }
         let _ = s.execute(spec.id, json!({}));
@@ -2878,7 +2944,7 @@ fn error_checking_quotes_sheet_names_in_circular_references() {
     assert_eq!(v(&s, "A1"), Value::Number(2.0));
     s.execute("edit.goTo", json!({"reference": reference})).unwrap();
     let d = s.doc().unwrap();
-    assert_eq!((d.wb.active_sheet, d.selection.active.a1()), (1, "B2".to_string()));
+    assert_eq!((d.wb.active_sheet(), d.selection.active.a1()), (1, "B2".to_string()));
 }
 
 /// Undo and redo put cells back without calculating them; the circular references listed are
@@ -3383,6 +3449,19 @@ fn absolute_objects_ignore_sort_and_structural_edits() {
     assert_eq!(image_cell(&s, pinned), Some(CellRef::parse("A3").unwrap()));
 }
 
+/// Deleting a row removes the sparkline located on it; later ones shift up.
+#[test]
+fn deleting_a_row_removes_its_sparklines() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2, 3], [4, 5, 6], [7, 8, 9]]})).unwrap();
+    s.execute("insert.sparkline", json!({"range": "A2:C2", "location": "E2"})).unwrap();
+    s.execute("insert.sparkline", json!({"range": "A3:C3", "location": "E3"})).unwrap();
+    s.execute("home.deleteRows", json!({"rows": "2:2"})).unwrap();
+    let got: Vec<(String, String)> =
+        s.doc().unwrap().wb.active().unwrap().sparklines.iter().map(|sp| (sp.cell.to_string(), sp.source.clone())).collect();
+    assert_eq!(got, vec![("E2".to_string(), "A2:C2".to_string())]);
+}
+
 /// A "move but don't size" object follows its row across a sort but keeps its size.
 #[test]
 fn move_only_objects_follow_but_do_not_resize() {
@@ -3775,6 +3854,35 @@ fn notes_comments_and_links_survive_a_json_save() {
     assert_eq!(after.cells, before.cells);
 }
 
+/// Writing a note or a comment on a cell that has one of the same kind edits its text: the
+/// replies, the resolved state, the dates and the note's box stay. `comment` replaced the whole
+/// thread, so editing a comment dropped its replies.
+#[test]
+fn editing_a_note_or_a_comment_keeps_its_thread() {
+    let mut s = s();
+    s.execute("review.newComment", json!({"cell": "B2", "text": "first", "author": "Ada"})).unwrap();
+    s.execute("review.replyComment", json!({"cell": "B2", "text": "reply", "author": "Bob"})).unwrap();
+    s.execute("review.resolveComment", json!({"cell": "B2", "resolved": true})).unwrap();
+    s.execute("review.newComment", json!({"cell": "B2", "text": "edited"})).unwrap();
+    s.execute("review.newNote", json!({"cell": "A1", "text": "note", "author": "Ada"})).unwrap();
+    s.execute("review.showNote", json!({"cell": "A1"})).unwrap();
+    s.execute("review.newNote", json!({"cell": "A1", "text": "changed"})).unwrap();
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    let thread = &sh.comments[&CellRef::parse("B2").unwrap()];
+    assert_eq!((thread.author.as_str(), thread.text.as_str()), ("Ada", "edited"));
+    assert_eq!(thread.replies, vec![("Bob".to_string(), "reply".to_string())]);
+    assert!(thread.resolved && thread.threaded);
+    let note = &sh.comments[&CellRef::parse("A1").unwrap()];
+    assert_eq!((note.author.as_str(), note.text.as_str()), ("Ada", "changed"));
+    assert!(note.visible && !note.threaded);
+    // A note written over a comment replaces it.
+    s.execute("review.newNote", json!({"cell": "B2", "text": "plain"})).unwrap();
+    let d = s.doc().unwrap();
+    let replaced = &d.wb.active().unwrap().comments[&CellRef::parse("B2").unwrap()];
+    assert!(!replaced.threaded && replaced.replies.is_empty());
+}
+
 /// A cut moves the block's notes, hyperlinks and merged areas with it. The source's cells and
 /// pictures were removed but the block's merges and notes were not, so one merged block became
 /// two (an empty one left at the old place) and a note ended up on both the old and the new
@@ -4101,7 +4209,7 @@ fn line_sizes_and_freeze_panes_take_a_sheet() {
     assert!(data.cols.get(&4).is_some_and(|c| c.hidden));
     assert_eq!(data.default_col_width, 80.0);
     assert_eq!(sheet(&s, 0), before, "the active sheet is untouched");
-    assert_eq!(s.doc().unwrap().wb.active_sheet, 0);
+    assert_eq!(s.doc().unwrap().wb.active_sheet(), 0);
 
     s.execute("view.freezePanes", json!({"cell": "Data!B3"})).unwrap();
     assert_eq!(sheet(&s, 1).freeze, Some((2, 1)));
@@ -4720,6 +4828,212 @@ fn html_export_without_pictures_or_charts_has_no_fixed_geometry() {
     let html = crate::io::to_html(&s.doc().unwrap().wb, 0).unwrap();
     assert!(!html.contains("<colgroup>") && !html.contains("table-layout") && !html.contains("<svg") && !html.contains("<img"), "{html}");
 }
+
+#[test]
+fn switch_windows_lists_workbooks_by_stable_id_and_switches_to_one() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "first"})).unwrap();
+    let book1 = s.doc().unwrap().uid;
+    s.execute("file.new", json!({})).unwrap();
+    s.execute("file.new", json!({})).unwrap();
+    let book3 = s.doc().unwrap().uid;
+    let list = s.execute("view.switchWindows", json!({})).unwrap();
+    let rows = list.as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!((rows[0]["doc"].as_u64(), rows[0]["title"].as_str(), rows[0]["dirty"].as_bool()), (Some(book1), Some("Book1"), Some(true)));
+    assert_eq!((rows[2]["dirty"].as_bool(), rows[2]["active"].as_bool()), (Some(false), Some(true)));
+
+    // Closing a workbook shifts the indexes but not the ids.
+    s.execute("window.activate", json!({"index": 1})).unwrap();
+    s.execute("file.close", json!({"force": true})).unwrap();
+    assert_eq!(s.document_index(book3), Some(1));
+    let list = s.execute("view.switchWindows", json!({"doc": book1})).unwrap();
+    assert_eq!(s.doc().unwrap().uid, book1);
+    assert_eq!(v(&s, "A1"), Value::text("first"));
+    assert_eq!(list[0]["active"].as_bool(), Some(true));
+    s.execute("file.save", json!({"path": std::env::temp_dir().join(format!("gridcraft-uid-{}.xlsx", std::process::id()))})).unwrap();
+    assert_eq!(s.doc().unwrap().uid, book1, "saving keeps the id");
+    let _ = std::fs::remove_file(std::env::temp_dir().join(format!("gridcraft-uid-{}.xlsx", std::process::id())));
+
+    assert!(s.execute("view.switchWindows", json!({"doc": book3 + 1000})).is_err());
+    assert!(s.execute("view.switchWindows", json!({"doc": "Book1"})).is_err());
+    assert_eq!(s.doc().unwrap().uid, book1, "a bad id leaves the active workbook alone");
+}
+
+#[test]
+fn new_window_shares_the_workbook_and_closes_window_by_window() {
+    let mut s = s();
+    let book = s.doc().unwrap().uid;
+    assert_eq!(s.windows().len(), 1, "a new workbook opens in one window");
+    let first = s.active_window().unwrap();
+    assert_eq!(s.window_title(first).as_deref(), Some("Book1"));
+
+    let r = s.execute("view.newWindow", json!({})).unwrap();
+    let second = r["window"].as_u64().unwrap();
+    assert_eq!(s.documents().len(), 1, "no copy of the workbook");
+    assert_eq!((s.windows().len(), s.active_window()), (2, Some(second)));
+    assert_eq!(s.window_title(first).as_deref(), Some("Book1:1"));
+    assert_eq!(s.window_title(second).as_deref(), Some("Book1:2"));
+    assert!(!s.doc().unwrap().is_dirty());
+
+    // An edit in window 2 is in window 1's workbook, and saving from window 2 saves it.
+    s.execute("cell.set", json!({"cell": "A1", "input": "shared"})).unwrap();
+    let path = std::env::temp_dir().join(format!("gridcraft-windows-{}.xlsx", std::process::id()));
+    s.execute("file.save", json!({"path": path})).unwrap();
+    s.execute("window.activate", json!({"window": first})).unwrap();
+    assert_eq!((s.doc().unwrap().uid, v(&s, "A1")), (book, Value::text("shared")));
+    assert!(!s.doc().unwrap().is_dirty(), "saved from the other window");
+    assert_eq!(s.doc().unwrap().path.as_deref(), path.to_str());
+    let _ = std::fs::remove_file(&path);
+
+    // Closing one window keeps the workbook and renumbers the titles; the last one closes it.
+    s.execute("cell.set", json!({"cell": "A2", "input": "unsaved"})).unwrap();
+    let r = s.execute("file.close", json!({})).unwrap();
+    assert_eq!((r["closed"].as_bool(), r["document"].as_bool()), (Some(true), Some(false)), "no prompt for one of two windows");
+    assert_eq!((s.windows().len(), s.active_window()), (1, Some(second)));
+    assert_eq!(s.window_title(second).as_deref(), Some(s.doc().unwrap().display_title().as_str()));
+    let r = s.execute("window.close", json!({})).unwrap();
+    assert_eq!(r["closed"].as_bool(), Some(false), "the last window asks about unsaved changes");
+    assert_eq!(s.documents().len(), 1);
+    s.execute("window.close", json!({"force": true})).unwrap();
+    assert!(s.documents().is_empty() && s.windows().is_empty() && s.active_window().is_none());
+}
+
+#[test]
+fn switching_windows_swaps_their_views_without_dirtying_the_workbook() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({})).unwrap();
+    let path = std::env::temp_dir().join(format!("gridcraft-window-views-{}.xlsx", std::process::id()));
+    s.execute("file.save", json!({"path": path})).unwrap();
+    let _ = std::fs::remove_file(&path);
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("selection.set", json!({"range": "B2:C3"})).unwrap();
+    let first = s.active_window().unwrap();
+    let second = s.execute("view.newWindow", json!({})).unwrap()["window"].as_u64().unwrap();
+    s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    s.execute("selection.set", json!({"range": "D4"})).unwrap();
+    assert!(!s.doc().unwrap().is_dirty());
+
+    s.execute("window.activate", json!({"window": first})).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!((d.wb.active_sheet(), d.selection.a1()), (0, "B2:C3".to_string()));
+    assert!(!d.is_dirty(), "a window's sheet and selection are not document changes");
+    s.execute("view.switchWindows", json!({"window": second})).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!((d.wb.active_sheet(), d.selection.a1()), (1, "D4".to_string()));
+    assert!(!d.is_dirty());
+
+    // A routed command acts in its window and leaves the active one showing.
+    s.execute_in(crate::Target::Window(first), "cell.set", json!({"cell": "A1", "input": "in window 1"})).unwrap();
+    assert_eq!(s.active_window(), Some(second));
+    assert_eq!(s.doc().unwrap().wb.sheets[0].value(CellRef::parse("A1").unwrap()), Value::text("in window 1"));
+    assert_eq!(s.doc().unwrap().selection.a1(), "D4");
+}
+
+#[test]
+fn window_swaps_share_the_workbook_and_save_records_the_latest_window_sheet() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({})).unwrap();
+    let path = std::env::temp_dir().join(format!("gridcraft-window-arc-{}.xlsx", std::process::id()));
+    s.execute("file.save", json!({"path": path})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("selection.set", json!({"range": "B2"})).unwrap();
+    let first = s.active_window().unwrap();
+    let second = s.execute("view.newWindow", json!({})).unwrap()["window"].as_u64().unwrap();
+    s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    s.execute("selection.set", json!({"range": "C3:D4"})).unwrap();
+
+    // Swapping windows, as the interface does before drawing each one, never copies the workbook.
+    let before = s.doc().unwrap().wb.clone();
+    for _ in 0..3 {
+        s.show_window(first);
+        assert_eq!((s.doc().unwrap().wb.active_sheet(), s.doc().unwrap().selection.a1()), (0, "B2".to_string()));
+        s.activate_window(second);
+        assert_eq!((s.doc().unwrap().wb.active_sheet(), s.doc().unwrap().selection.a1()), (1, "C3:D4".to_string()));
+        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    }
+    let d = s.doc().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&before, &d.wb), "a window swap or sheet switch copied the workbook");
+    assert!(!d.is_dirty());
+
+    // A command run in window 2 edits window 2's sheet at its selection.
+    s.execute("cell.set", json!({"input": "two"})).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!(d.wb.sheets[1].value(CellRef::parse("C3").unwrap()), Value::text("two"));
+    assert_eq!(d.wb.sheets[0].value(CellRef::parse("B2").unwrap()), Value::Empty);
+    s.show_window(first);
+    assert_eq!(s.doc().unwrap().wb.active_sheet(), 0);
+
+    // The most recently active window is window 2: the file records its sheet.
+    s.execute_in(crate::Target::Window(second), "file.save", json!({"path": path})).unwrap();
+    let mut t = Session::new();
+    t.execute("file.open", json!({"path": path})).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(t.doc().unwrap().wb.active_sheet(), 1);
+    s.activate_window(first);
+    s.execute("file.save", json!({"path": path})).unwrap();
+    let mut t = Session::new();
+    t.execute("file.open", json!({"path": path})).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(t.doc().unwrap().wb.active_sheet(), 0);
+}
+
+#[test]
+fn arrange_all_picks_the_visible_windows_active_first() {
+    let mut s = s();
+    let book1 = s.active_window().unwrap();
+    let book1b = s.execute("view.newWindow", json!({})).unwrap()["window"].as_u64().unwrap();
+    s.execute("file.new", json!({})).unwrap();
+    let book2 = s.active_window().unwrap();
+    let r = s.execute("view.arrangeAll", json!({})).unwrap();
+    assert_eq!(r, json!({"arrange": "tiled", "windows": [book2, book1, book1b]}));
+    s.execute("window.activate", json!({"window": book1b})).unwrap();
+    s.execute("view.hideWindow", json!({"window": book2})).unwrap();
+    let r = s.execute("view.arrangeAll", json!({"arrange": "cascade", "activeWorkbook": true})).unwrap();
+    assert_eq!(r, json!({"arrange": "cascade", "windows": [book1b, book1]}));
+    assert!(s.execute("view.arrangeAll", json!({"arrange": "diagonal"})).is_err());
+}
+
+#[test]
+fn hide_unhide_and_switch_by_window_id() {
+    let mut s = s();
+    let book1 = s.doc().unwrap().uid;
+    let w1 = s.active_window().unwrap();
+    let w2 = s.execute("view.newWindow", json!({})).unwrap()["window"].as_u64().unwrap();
+    s.execute("file.new", json!({})).unwrap();
+    let w3 = s.active_window().unwrap();
+    s.execute("view.hideWindow", json!({})).unwrap();
+    assert_eq!(s.active_window(), Some(w2), "the most recent visible window comes forward");
+    let list = s.execute("window.list", json!({})).unwrap();
+    let rows = list.as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!((rows[0]["window"].as_u64(), rows[0]["title"].as_str(), rows[0]["doc"].as_u64()), (Some(w1), Some("Book1:1"), Some(book1)));
+    assert_eq!((rows[2]["title"].as_str(), rows[2]["hidden"].as_bool()), (Some("Book2"), Some(true)));
+    assert_eq!(rows[1]["active"].as_bool(), Some(true));
+    s.execute("view.unhideWindow", json!({})).unwrap();
+    assert_eq!(s.active_window(), Some(w3));
+    assert!(!s.window(w3).unwrap().hidden);
+    // A workbook id goes to that workbook's most recent window.
+    s.execute("view.switchWindows", json!({"doc": book1})).unwrap();
+    assert_eq!(s.active_window(), Some(w2));
+    assert!(s.execute("window.activate", json!({"window": 999})).is_err());
+    assert_eq!(s.active_window(), Some(w2));
+}
+
+#[test]
+fn open_replaces_an_untouched_blank_workbook_and_its_windows() {
+    let mut s = s();
+    s.execute("view.newWindow", json!({})).unwrap();
+    let path = std::env::temp_dir().join(format!("gridcraft-open-blank-{}.csv", std::process::id()));
+    std::fs::write(&path, "a,b\n1,2\n").unwrap();
+    s.execute("file.open", json!({"path": path})).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(s.documents().len(), 1);
+    assert_eq!(s.windows().len(), 1, "the blank workbook's windows closed with it");
+    assert_eq!(s.windows()[0].doc_uid, s.doc().unwrap().uid);
+}
+
 #[test]
 fn format_cells_permission_on_a_protected_sheet_cannot_unlock_cells() {
     // Formatting may be allowed on a protected sheet; the permission can't serve as a key to
@@ -4770,6 +5084,9 @@ fn a_script_cannot_switch_windows() {
     s.execute("automate.trustScripts", json!({"trusted": true})).unwrap();
     let err = s.execute("automate.runScript", json!({"name": "t"})).expect_err("script switching windows");
     assert!(err.to_string().contains("window.activate"), "{err}");
+    s.execute("automate.newScript", json!({"name": "sw", "commands": [{"command": "view.switchWindows", "params": {"doc": 1}}]})).unwrap();
+    let err = s.execute("automate.runScript", json!({"name": "sw"})).expect_err("script switching windows from the View tab");
+    assert!(err.to_string().contains("view.switchWindows"), "{err}");
     // A benign script runs.
     s.execute("automate.newScript", json!({"name": "ok", "commands": [{"command": "cell.set", "params": {"cell": "A1", "input": "=1+1"}}]})).unwrap();
     s.execute("automate.runScript", json!({"name": "ok"})).unwrap();
@@ -4777,3 +5094,26 @@ fn a_script_cannot_switch_windows() {
 }
 
 mod seams;
+
+#[test]
+fn a_saved_workbook_keeps_its_values_until_an_edit_reaches_them() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=A1*2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C1", "input": "=10"})).unwrap();
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    // The values a file would have saved, not the ones the formulas give.
+    for (a, n) in [("B1", 99.0), ("C1", 7.0)] {
+        let sheet = std::sync::Arc::make_mut(&mut wb.sheets[0]);
+        let c = CellRef::parse(a).unwrap();
+        let mut cell = sheet.cells.get(c).unwrap().clone();
+        cell.value = Value::Number(n);
+        sheet.set_cell(c, cell);
+    }
+    let mut saved = Session::new();
+    saved.add_document(crate::DocState::from_saved(wb, None, "saved".into(), crate::Trust::FromFile));
+    assert_eq!(v(&saved, "B1"), Value::Number(99.0));
+    saved.execute("cell.set", json!({"cell": "A1", "input": "3"})).unwrap();
+    assert_eq!(v(&saved, "B1"), Value::Number(6.0));
+    assert_eq!(v(&saved, "C1"), Value::Number(7.0));
+}

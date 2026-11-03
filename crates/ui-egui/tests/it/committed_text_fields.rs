@@ -1,6 +1,6 @@
 //! Text fields over workbook values (chart titles, table name) keep what the user types until they commit it.
 
-use egui::{Event, Key, Modifiers, accesskit::Role, vec2};
+use egui::{Event, Key, Modifiers, accesskit::Role};
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
@@ -9,16 +9,7 @@ use serde_json::json;
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
 fn harness(session: Session) -> Harness {
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
-    h
+    crate::support::harness(session, 4)
 }
 
 fn session() -> Session {
@@ -46,6 +37,7 @@ fn retype(h: &mut Harness, field: egui::Rect, text: &str) {
 }
 
 #[test]
+/// Editing the Format Chart title field sets the chart title.
 fn typing_a_chart_title_in_format_chart_area_sets_it() {
     let mut session = session();
     session.execute("selection.set", json!({"range": "A1:B3"})).unwrap();
@@ -55,7 +47,7 @@ fn typing_a_chart_title_in_format_chart_area_sets_it() {
     h.state_mut().selected_chart = Some(id);
     h.state_mut().grid.pane = Some("formatChart".into());
     h.run_steps(2);
-    h.get_by_role_and_label(Role::Button, "Chart Title").click();
+    h.get_by_role_and_label(Role::DisclosureTriangle, "Chart Title").click();
     h.run_steps(2);
     // The pane sits on the right; the formula bar and name box are further left.
     let field = h.get_all_by_role(Role::TextInput).map(|n| n.rect()).find(|r| r.left() > 850.0).unwrap();

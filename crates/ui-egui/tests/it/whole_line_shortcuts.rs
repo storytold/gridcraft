@@ -14,13 +14,13 @@ fn harness(selection: &str) -> Harness {
     session.new_workbook();
     session.execute("range.setValues", json!({"range": "A1", "values": [["a1", "b1"], ["a2", "b2"], ["a3", "b3"]]})).unwrap();
     session.execute("selection.set", json!({"range": selection})).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     h.run_steps(4);
     h

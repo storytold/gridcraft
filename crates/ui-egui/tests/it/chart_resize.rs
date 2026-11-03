@@ -17,13 +17,13 @@ fn fixture() -> (Harness, u32) {
     session.execute("selection.set", json!({"range": "A1:A2"})).unwrap();
     let chart = session.execute("insert.chart", json!({"type": "column", "at": "D3", "width": 300, "height": 200})).unwrap();
     let id = chart["chart"].as_u64().unwrap() as u32;
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     h.run_steps(4);
     (h, id)
@@ -79,7 +79,7 @@ fn open_size_fields(h: &mut Harness, id: u32) -> egui::Rect {
     h.state_mut().selected_chart = Some(id);
     h.state_mut().grid.pane = Some("formatChart".into());
     h.run_steps(2);
-    h.get_by_role_and_label(Role::Button, "Size").click();
+    h.get_by_role_and_label(Role::DisclosureTriangle, "Size").click();
     h.run_steps(2);
     h.get_all_by_role(Role::SpinButton).next().unwrap().rect()
 }
@@ -133,6 +133,7 @@ fn right_click(h: &mut Harness, pos: egui::Pos2, wobble: egui::Vec2) {
 }
 
 #[test]
+/// A right-click selects the chart and opens its menu rather than the cell menu without moving the chart; Delete removes it, and an outside right-click still opens the cell menu.
 fn right_clicking_a_chart_opens_its_menu_not_the_cells() {
     // #2067: a right-click on a chart opened the menu of the cell under it, or nothing at all.
     for wobble in [vec2(0.0, 0.0), vec2(20.0, 10.0)] {
@@ -151,7 +152,7 @@ fn right_clicking_a_chart_opens_its_menu_not_the_cells() {
     let (mut h, id) = fixture();
     let inside = corner(&h, id) - vec2(100.0, 80.0);
     right_click(&mut h, inside, vec2(0.0, 0.0));
-    h.get_by_label("Delete").click();
+    h.get_by_role_and_label(Role::Button, "Delete").click();
     h.run_steps(3);
     assert!(h.state().session.doc().unwrap().wb.active().unwrap().charts.is_empty());
     assert!(h.state().grid.object_menu.is_none());

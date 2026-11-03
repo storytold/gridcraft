@@ -211,6 +211,17 @@ impl Palette {
     }
 }
 
+/// The code-drawn icon that stands in for a character the current fonts cannot draw (`✕` and
+/// `✓` have no bundled egui face). Interface chrome uses this instead of painting a tofu box; a
+/// workbook cell still needs a real glyph because its characters are user data.
+pub fn fallback_for_symbol(c: char) -> Option<Icon> {
+    match c {
+        '✕' => Some(Icon::Close),
+        '✓' => Some(Icon::Check),
+        _ => None,
+    }
+}
+
 /// Draws `icon` into `rect` (square-ish), in colour `c`, with the current theme's palette.
 pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
     paint_with(p, rect, icon, c, &Palette::of(&Tokens::get(p.ctx())));

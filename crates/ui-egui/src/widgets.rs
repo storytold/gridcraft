@@ -32,6 +32,9 @@ const TOOLTIP_SHORTCUTS: &[(&str, &str, &str)] = &[
     ("Insert Link", "⌘K", "Ctrl+K"),
     ("Filter", "⌘⇧F", "Ctrl+Shift+L"),
     ("Flash Fill", "⌘E", "Ctrl+E"),
+    // The Control key, written the way each platform names it. macOS's ⌃ is supplied by its
+    // system fonts; elsewhere the Windows spelling avoids a glyph no bundled face has.
+    ("Show Formulas", "⌃`", "Ctrl+`"),
 ];
 
 /// The shortcut a ribbon tooltip shows after `tip`, for this platform (`mac`).
@@ -44,10 +47,12 @@ pub fn tooltip_shortcut(tip: &str, mac: bool) -> Option<&'static str> {
 fn tip_text(ui: &Ui, tip: &str) -> String {
     // A name shared with a two-line ribbon label (Czech "Automatický\nsoučet") reads as one line.
     let name = tr(ui, tip).replace('\n', " ");
-    match tooltip_shortcut(tip, cfg!(target_os = "macos")) {
+    let text = match tooltip_shortcut(tip, cfg!(target_os = "macos")) {
         Some(keys) => format!("{name} ({keys})"),
-        None => name.to_string(),
-    }
+        None => name,
+    };
+    // A tooltip must not paint a tofu box on a host whose faces lack one of its symbols.
+    if text.chars().any(|c| theme::symbol_fallback(c).is_some()) { theme::available_text(ui, &text) } else { text }
 }
 
 /// A flat square icon button with hover highlight and tooltip.
@@ -61,6 +66,20 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, color: Color32, tip: &str, size: egu
     }
     icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, color);
     resp.on_hover_text(tip_text(ui, tip))
+}
+
+/// A button for a character the interface inserts (the Symbol gallery). When the current font set
+/// has no glyph for it, the code-drawn icon with the same meaning is painted instead of a tofu
+/// box. Only the button's appearance changes: clicking still inserts the exact requested character.
+pub fn glyph_button(ui: &mut Ui, ch: char, tip: &str) -> Response {
+    let font = theme::ui_font(13.0);
+    let has_glyph = ui.ctx().fonts_mut(|f| f.has_glyph(&font, ch));
+    if !has_glyph && let Some(icon) = icons::fallback_for_symbol(ch) {
+        return icon_button(ui, icon, Tokens::get(ui.ctx()).text, tip, vec2(24.0, 22.0));
+    }
+    // An unknown future character without a fallback icon still gets a readable label.
+    let label = if has_glyph { ch.to_string() } else { format!("U+{:04X}", ch as u32) };
+    ui.button(label).on_hover_text(tip_text(ui, tip))
 }
 
 /// A toggle-able small button (e.g. Bold) showing a checked state.
@@ -104,8 +123,8 @@ pub fn big_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> (Res
     let split = rect.top() + 38.0;
     let main_rect = Rect::from_min_max(rect.min, pos2(rect.right(), split));
     let arrow_rect = Rect::from_min_max(pos2(rect.left(), split), rect.max);
-    let main = ui.interact(main_rect, ui.id().with((label, "big-split-main")), Sense::click());
-    let arrow = ui.interact(arrow_rect, ui.id().with((label, "big-split-arrow")), Sense::click());
+    let main = ui.interact(main_rect, ui.scope_id().with((label, "big-split-main")), Sense::click());
+    let arrow = ui.interact(arrow_rect, ui.scope_id().with((label, "big-split-arrow")), Sense::click());
     if main.hovered() || arrow.hovered() {
         ui.painter().rect_filled(rect, 5.0, t.hover);
         ui.painter().line_segment([pos2(rect.left() + 4.0, split), pos2(rect.right() - 4.0, split)], Stroke::new(1.0, t.separator));
@@ -119,8 +138,8 @@ pub fn big_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> (Res
     paint_big_label(ui, rect, &lines, true);
     let name = label.replace('\n', " ");
     let enabled = ui.is_enabled();
-    main.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &name));
-    arrow.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, format!("{name} options")));
+    main.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, &name));
+    arrow.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, format!("{name} options")));
     let tip = tip_text(ui, tip);
     (main.on_hover_text(tip.clone()), arrow.on_hover_text(tip))
 }
@@ -194,8 +213,8 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
     let (rect, _) = ui.allocate_exact_size(vec2(38.0, 24.0), Sense::hover());
     let main = Rect::from_min_size(rect.min, vec2(25.0, 24.0));
     let arrow = Rect::from_min_max(pos2(main.right(), rect.top()), rect.max);
-    let m = ui.interact(main, ui.id().with((tip, "main")), Sense::click());
-    let a = ui.interact(arrow, ui.id().with((tip, "arrow")), Sense::click());
+    let m = ui.interact(main, ui.scope_id().with((tip, "main")), Sense::click());
+    let a = ui.interact(arrow, ui.scope_id().with((tip, "arrow")), Sense::click());
     if m.hovered() || a.hovered() {
         ui.painter().rect_filled(rect, 4.0, t.hover);
         ui.painter().line_segment([pos2(main.right(), rect.top() + 3.0), pos2(main.right(), rect.bottom() - 3.0)], Stroke::new(1.0, t.separator));
@@ -218,8 +237,12 @@ pub fn small_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> (R
     let (rect, _) = ui.allocate_exact_size(vec2(24.0 + tw + 14.0, 23.0), Sense::hover());
     let main = Rect::from_min_size(rect.min, vec2(24.0 + tw, rect.height()));
     let arrow = Rect::from_min_max(pos2(main.right(), rect.top()), rect.max);
-    let m = ui.interact(main, ui.id().with((tip, "main")), Sense::click());
-    let a = ui.interact(arrow, ui.id().with((tip, "arrow")), Sense::click());
+    let m = ui.interact(main, ui.scope_id().with((tip, "main")), Sense::click());
+    let a = ui.interact(arrow, ui.scope_id().with((tip, "arrow")), Sense::click());
+    let name = label.replace('\n', " ");
+    let enabled = ui.is_enabled();
+    m.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, &name));
+    a.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, format!("{name} options")));
     if m.hovered() || a.hovered() {
         ui.painter().rect_filled(rect, 4.0, t.hover);
         for (part, r) in [(&m, main), (&a, arrow)] {
@@ -284,8 +307,9 @@ pub fn remember_color(recent: &mut Vec<String>, hex: &str) {
     recent.truncate(RECENT_COLORS);
 }
 
+/// Returns the stable id for the recent-colors cache.
 fn recent_colors_id() -> egui::Id {
-    egui::Id::new("gridcraft.recent_colors")
+    egui::Id::unique("gridcraft.recent_colors")
 }
 
 /// The More Colors… picker's state while it is open in a palette.
@@ -315,12 +339,21 @@ pub fn color_palette_fixed(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &s
     palette(ui, theme_colors, none_label, false)
 }
 
+/// Shared body of [`color_palette`] and [`color_palette_fixed`]: a 7×10 palette (six tinted theme rows
+/// above ten standard colours), then Recent Colors; the separator and More Colors… button appear only
+/// when `more_colors` is true; an existing picker state renders while open. Arrow keys move a highlight
+/// through all 70 swatches (rows clamp, columns
+/// wrap), Enter picks it, and those key events are stripped so the grid behind does not react; while More
+/// Colors… is open its HSVA/hex widgets take the keys instead. The None label returns `Some("none")`;
+/// otherwise the result is the picked hex or `None`. Highlight, picker state and recent colours live in
+/// egui temp storage, and More Colors… OK falls back to the picker colour for an invalid typed hex and
+/// records the result as the newest recent colour (capped at `RECENT_COLORS`).
 fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors: bool) -> Option<String> {
     let t = Tokens::get(ui.ctx());
     let mut picked = None;
     const ROWS: usize = 7; // 6 tint rows + 1 standard row
     const COLS: usize = 10;
-    let pal_id = ui.id().with("__color_palette");
+    let pal_id = ui.scope_id().with("__color_palette");
     let mut cur: Option<(usize, usize)> = ui.data_mut(|d| d.get_temp(pal_id)).unwrap_or(None);
     let more_id = pal_id.with("more");
     let mut more: Option<MoreColors> = ui.data_mut(|d| d.get_temp(more_id)).unwrap_or(None);
@@ -401,7 +434,7 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
     ui.label(egui::RichText::new("Theme Colors").small());
     let order = [0usize, 1, 2, 3, 4, 5, 6, 7, 8, 9];
     let tints = [0.0f64, 0.8, 0.6, 0.4, -0.25, -0.5];
-    egui::Grid::new(ui.id().with("theme_grid")).spacing(vec2(2.0, 2.0)).show(ui, |ui| {
+    egui::Grid::new(ui.scope_id().with("theme_grid")).spacing(vec2(2.0, 2.0)).show(ui, |ui| {
         for (row, tint) in tints.iter().enumerate() {
             for (col, &i) in order.iter().enumerate() {
                 let base = theme_colors.get(i).copied().unwrap_or(0);
@@ -510,12 +543,13 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
     picked
 }
 
+/// Draws the modal warning/error message; OK, Enter or Esc clears it and restores editor focus when an edit exists.
 pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
     let Some((title, msg)) = app.message.clone() else { return };
     let title = app.ui.language.tr(&title).to_owned();
     let msg = app.ui.language.tr_error(&msg);
     let mut close = false;
-    egui::Modal::new(egui::Id::new("message_box")).show(ctx, |ui| {
+    egui::Modal::new(egui::Id::unique("message_box")).show(ctx, |ui| {
         ui.set_width(380.0);
         ui.horizontal(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
@@ -544,6 +578,7 @@ pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
     }
 }
 
+/// Shows a translated toast for 2.5 seconds and clears it after the deadline.
 pub fn toast(app: &mut SheetApp, ctx: &egui::Context) {
     let Some((msg, at)) = app.toast.clone() else { return };
     if crate::now_ms() - at > 2500.0 {
@@ -552,7 +587,7 @@ pub fn toast(app: &mut SheetApp, ctx: &egui::Context) {
     }
     let msg = app.ui.language.tr_error(&msg);
     let Some(rect) = app.grid.rect else { return };
-    egui::Area::new(egui::Id::new("toast")).fixed_pos(pos2(rect.center().x - 160.0, rect.bottom() - 48.0)).order(egui::Order::Tooltip).show(
+    egui::Area::new(egui::Id::unique("toast")).fixed_pos(pos2(rect.center().x - 160.0, rect.bottom() - 48.0)).order(egui::Order::Tooltip).show(
         ctx,
         |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
@@ -644,10 +679,32 @@ mod color_tests {
 }
 
 #[cfg(test)]
+mod glyph_button_tests {
+    use super::*;
+
+    #[test]
+    /// The `✓` gallery button paints vector paths instead of the missing character.
+    fn a_symbol_with_no_bundled_glyph_paints_a_code_icon() {
+        // ✓ has no bundled egui face. The gallery button must paint Icon::Check (vector paths),
+        // not the missing character, without weakening the font or accessibility policy.
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::default());
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let response = glyph_button(ui, '✓', "Insert check mark");
+            assert!(response.rect.width() > 0.0);
+        });
+        out.textures_delta.clear();
+        assert!(!out.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text.contains('✓'))));
+        assert!(out.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Path(_))), "the code-drawn check must paint vector paths");
+    }
+}
+
+#[cfg(test)]
 mod tooltip_shortcut_tests {
     use super::tooltip_shortcut;
 
     #[test]
+    /// Windows/Linux tooltips use Ctrl/Alt shortcuts and macOS uses Command glyphs; a command without a shortcut reports none.
     fn tooltips_show_each_platforms_own_shortcut() {
         // #1191: Windows and Linux show Excel for Windows' shortcuts, never the Mac ⌘ ones.
         assert_eq!(tooltip_shortcut("Bold", false), Some("Ctrl+B"));
@@ -659,7 +716,7 @@ mod tooltip_shortcut_tests {
         assert_eq!(tooltip_shortcut("Search commands", false), None);
         for (name, mac, other) in super::TOOLTIP_SHORTCUTS {
             assert!(!other.contains(['⌘', '⇧', '⌥']), "{name}: {other}");
-            assert!(mac.starts_with('⌘'), "{name}: {mac}");
+            assert!(mac.starts_with('⌘') || mac.starts_with('⌃'), "{name}: {mac}");
         }
     }
 }

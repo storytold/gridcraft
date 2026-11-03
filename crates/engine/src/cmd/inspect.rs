@@ -64,7 +64,7 @@ fn inspect(s: &mut Session, _: &Json) -> Result<Json> {
         "path": d.path,
         "dirty": d.is_dirty(),
         "trust": d.trust,
-        "activeSheet": wb.active_sheet,
+        "activeSheet": wb.active_sheet(),
         "sheets": sheets,
         "selection": d.selection.a1(),
         "activeCell": d.selection.active.a1(),

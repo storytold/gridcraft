@@ -206,7 +206,7 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
     }
     wb.calc.precision_as_displayed = g.precision_as_displayed;
     defined_names(&g, &model_index, &mut wb, &mut report);
-    wb.active_sheet = wb.sheets.iter().position(|s| s.visibility == Visibility::Visible).unwrap_or(0);
+    wb.set_active_sheet(wb.sheets.iter().position(|s| s.visibility == Visibility::Visible).unwrap_or(0));
     // The overview comes first.
     report.warnings.insert(
         0,

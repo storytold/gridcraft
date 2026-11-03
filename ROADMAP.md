@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (accounting negatives such as `$(1,234)` read as numbers; INDEX with one index on a 2-D reference is #REF! as in Excel; earlier: Page Setup paper sizes: JIS B4/B5/B6, the Japanese postcards and envelopes, and A6; long flat operator chains up to Excel's formula limit) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -135,6 +135,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-25 | AutoSum over a selection does what Excel does: a selected row gets one total to its right (in its last cell if that is empty), not a one-cell total under each cell; a block whose last column is empty gets each row's total there, one whose last row is empty each column's, and with both the corner gets the total of the block; otherwise totals go under each column as before |
 | 2026-10-24 | Go To lists the named ranges of every sheet (`Sheet2!Name` for a name scoped to another sheet; hidden names, constants and formulas left out) and the references entered before, a double-click goes to an entry, and the Reference box takes several names or references separated by commas (`Price, Type`, `B14:C22,F19:G30`) |
 | 2026-10-24 | Status bar: a right-click opens a menu that sets which selection statistics show (Average, Count and Sum by default; Numerical Count, Minimum and Maximum are new), kept with the preferences (`view.statusBar`) |
 | 2026-10-24 | Ctrl+Shift+U (Control+Shift+U on a Mac) expands and collapses the formula bar, on the grid and while editing (`view.expandFormulaBar`); on Windows and Linux it used to underline |
@@ -146,6 +147,10 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-23 | Accounting negatives in text: `$(1,234)`, `$ (5)` and `(5)%` read as negative numbers when typed, coerced by arithmetic or passed to VALUE, like Excel 365; `(-5)`, `((5))`, `$5%` and dates or times in parentheses stay text |
 | 2026-10-23 | Calc: `INDEX(A1:C3,2)` (one index on a reference of several rows and columns) is `#REF!` as in Excel, instead of the whole row; `INDEX(A1:C3,2,)` still gives the row |
 | 2026-10-22 | Formula hardening: digits too many for a finite number are text, so `"1 <400 digits>/<400 digits>"` no longer coerces to NaN; a NaN column index in VLOOKUP, HLOOKUP and the D-functions is `#VALUE!` instead of an index underflow; REGEXREPLACE stops building a result as soon as it can only be too long (a worst case went from 1 GB to 7 MB) (#2163, #2162) |
+| 2026-10-22 | View › New Window and Arrange All on the ribbon. Arrange All tiles, stacks side by side or top to bottom, or cascades the native windows over the main window's monitor, the active one first. Two windows on one workbook show different sheets without copying the workbook or marking it changed; Save records the sheet of the window used last. A dialog stays in the window it was opened in |
+| 2026-10-22 | On the desktop every workbook window is a native window of its own: New, Open and New Window open one, each keeps its own cell draft, dialog and ribbon, and the macOS menu bar acts on the window focused last. Closing one of several windows on a workbook doesn't ask; closing a workbook's last window, or quitting, asks about unsaved changes in that window. The last window closed quits on Windows and Linux; macOS keeps running with the menu bar. First craft-libs `craft-window` use (window list and viewport driver) |
+| 2026-10-22 | View › New Window opens a second window on the same workbook (it used to open a copy whose Save overwrote the original): each window has its own selection, active sheet and scroll, titles read "Book1:1" / "Book1:2", and Switch Windows, Hide, Unhide and Close act per window. The control channel, CLI `send` and MCP tools take an optional `window` or `doc` id and default to the active window; `window.list` (MCP `list_windows`) lists the windows |
+| 2026-10-22 | Typing in a cell and then choosing File › New no longer strands the first workbook: the entry is committed into its own workbook before any File or window command (a refused entry stays open and stops the command), View › Switch Windows and the macOS Window menu list the open workbooks with unsaved markers, `view.switchWindows {doc}` switches by a stable workbook id, and the macOS Quit item asks about unsaved workbooks |
 | 2026-10-21 | Page Setup paper sizes match Japanese Excel: `B4`/`B5`/`B6` are the JIS sizes (ISO B4/B5/B6 stay reachable by name), so a Japanese B5 worksheet prints at 182×257 mm; Japanese Postcard (100×148 mm), Double Postcard (148×200 mm), Envelope #3/#4 (120×235/90×205 mm), Kaku #2/#3 (240×332/216×277 mm) and A6 are added, both sizes reach the PDF page (`file.exportPdf`/`file.print` MediaBox) and the size survives an XLSX round-trip; the Page Layout Size menu lists them. `B4`/`B5` used to be the ISO sizes, which is changed here |
 | 2026-10-20 | Japanese interface catalog covers every key the Brazilian Portuguese catalog translates: the 398-label shared core plus 545 dialog, message, Backstage and menu strings (943 total, ~43% of ~2,200). A test parses `pt.rs`'s source, so the two catalogs stay in step |
 | 2026-10-20 | Interface translated into Dutch (518 labels: ribbon, context menus, File view, dialog titles, Options); `nl`, `nl-NL`, `nl-BE` locale tags resolve to Dutch |
@@ -155,6 +160,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-16 | Memory: floating pictures are decoded at about the size they are drawn, with limits, into a cache bounded by bytes and dropped with their workbook, instead of at full size into one that never let go; two open workbooks no longer show each other's picture. 12 large pictures scrolled through keep 40 MB of textures instead of 258 MB, and none once the workbook closes |
 | 2026-10-16 | The web app keeps its preferences between visits (#1562): theme (dark mode), interface size, language, editing options and the rest of what the desktop app saves in `ui.json` and `prefs.json` are kept in the browser's `localStorage`, written as soon as they change |
 | 2026-10-16 | Memory: the interface and script fallback fonts are read once per run and shared with egui instead of copied into it: an empty workbook settles at 158 MB instead of 258 MB on macOS |
+| 2026-10-15 | File › Options › Formulas: Maximum Iterations and Maximum Change fields for iterative calculation, disabled while it is off, with Excel's limits (1 to 32767, 0 or more) |
 | 2026-10-15 | Function help follows the interface language: argument hints, autocomplete, Insert Function (search and readable categories) and the Formulas-tab menus read per-language tables of descriptions and argument names; Spanish keeps its 10 functions in the new format |
 | 2026-10-15 | Row auto-fit counts a cell's line breaks only when the cell wraps, as Excel does: a file whose unwrapped cells hold multi-line text no longer opens with tall rows (typing a break still turns wrap on and grows the row) |
 | 2026-10-14 | Lookups (MATCH, XMATCH, VLOOKUP, HLOOKUP, XLOOKUP, LOOKUP) compare numbers exactly like Excel, so a computed key such as `=0.1+0.2` no longer finds 0.3; `=` and COUNTIF/SUMIF keep their 15-digit comparison |
@@ -173,6 +179,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-13 | XLSX: `[Content_Types].xml`, `_rels/.rels`, the workbook rels and `xl/workbook.xml` are the first zip entries (document properties last), so libmagic and PHP `finfo` detect the file type even with large properties (#1090) |
 | 2026-10-13 | Conditional formatting: a rule gathers range statistics only when it reads them (top/bottom, above average, duplicates, scales, bars, icons) and borrows them instead of copying them per cell, so the per-frame lookup of an expression or cell-value rule no longer visits its whole range (#1098, part 1) |
 | 2026-10-12 | Next/previous sheet navigation stops at the first/last visible worksheet instead of activating a hidden boundary sheet; the current selection is retained |
+| 2026-10-12 | Security: the `--control` server requires an auth token (random, kept in a 0600 file or chosen with `GRIDCRAFT_CONTROL_TOKEN`) on each connection's first line and closes bad connections (#777) |
 | 2026-10-12 | Rows auto-fit oversized fonts: opening a file and whole-row/column formatting grow non-custom rows to their tallest font (#833) |
 | 2026-10-12 | Number formats: parsing a format code is linear in its length (long runs of `[`, `,` or `/` no longer take quadratic time), and an unclosed `[` is a literal when splitting sections as well as when tokenizing (#810) |
 | 2026-10-12 | Number formats: a fraction denominator with 65,536 zeros no longer crashes; format codes are capped at 255 characters like Excel (longer codes display as General, `TEXT` gives `#VALUE!`) (#807) |
@@ -235,9 +242,14 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
 | 2026-10-23 | minor | Progress log: accounting negatives in number text |
 | 2026-10-23 | minor | Progress log: INDEX with one index on a 2-D reference is #REF! |
 | 2026-10-22 | trivial | Progress log: formula hardening (#2163, #2162) |
+| 2026-10-22 | minor | Progress log: Arrange All; two windows on one workbook without copying it |
+| 2026-10-22 | minor | Progress log: a native window per workbook window |
+| 2026-10-22 | minor | Progress log: New Window shares the workbook; window ids for scripts and MCP |
+| 2026-10-22 | minor | Progress log: drafts stay in their workbook, Switch Windows, macOS Quit asks to save |
 | 2026-10-21 | minor | Page Setup paper sizes: JIS B4/B5/B6 (ISO by name), Japanese postcards and envelopes, A6; PDF page size follows, XLSX round-trips |
 | 2026-10-20 | minor | Dutch (nl) listed under other shipped languages; progress log row |
 | 2026-10-19 | minor | Progress log: long flat operator chains (#916) |
@@ -256,6 +268,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-13 | trivial | Progress log: shared pictures written once on XLSX export (#985) |
 | 2026-10-13 | minor | Progress log: conditional-format lookups no longer scan the range for rules without statistics (#1098) |
 | 2026-10-12 | minor | Progress log: hidden-sheet navigation at workbook boundaries |
+| 2026-10-12 | minor | The control server requires an auth token and closes bad connections (#777); progress log row |
 | 2026-10-12 | minor | Rows auto-fit oversized fonts on open and whole-row/column formatting (#833); progress log row |
 | 2026-10-12 | minor | Progress log: multi-area row/column delete (#758) |
 | 2026-10-12 | trivial | Progress log: XLSX chart sheets kept on save (#727) |

@@ -1,6 +1,7 @@
 //! Brazilian Portuguese translations for the interface strings in i18n.rs. Labels follow Excel's
 //! pt-BR wording; anything absent falls back to English.
 
+/// Returns the Portuguese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Colar",
@@ -205,6 +206,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Visualização\nde Quebras de Página",
         "Page\nLayout" => "Layout\nde Página",
         "Formula Bar" => "Barra de Fórmulas",
+        "Name Box" => "Caixa de nome",
+        "Cell Editor" => "Editor de célula",
+        "Font Size" => "Tamanho da fonte",
         "Gridlines" => "Linhas de Grade",
         "Headings" => "Títulos",
         "Zoom" => "Zoom",
@@ -303,6 +307,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Escuro",
         "Sheet Options|View" => "Exibir",
         "Print" => "Imprimir",
+        "Print What" => "O que imprimir",
         // Page Layout view and the Header & Footer tab.
         "Click to add data" => "Clique para adicionar dados",
         "Add header" => "Adicionar cabeçalho",
@@ -413,6 +418,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save .xlsx workbooks automatically after every change" => "Salvar pastas de trabalho .xlsx automaticamente após cada alteração",
         "Workbook calculation" => "Cálculo da pasta de trabalho",
         "Enable iterative calculation" => "Habilitar cálculo iterativo",
+        "Maximum Iterations:" => "Número Máximo de Iterações:",
+        "Maximum Change:" => "Alteração Máxima:",
+        "Maximum Iterations must be a whole number from 1 to 32767." => "O número máximo de iterações deve ser um número inteiro de 1 a 32767.",
+        "Maximum Change must be a number of 0 or more." => "A alteração máxima deve ser um número maior ou igual a 0.",
         "Calculation settings are saved with the workbook." => "As configurações de cálculo são salvas com a pasta de trabalho.",
         "OK" => "OK",
         "Cancel" => "Cancelar",

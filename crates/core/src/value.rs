@@ -245,7 +245,7 @@ impl Value {
             Value::Bool(b) => Ok(if *b { "TRUE".into() } else { "FALSE".into() }),
             Value::Text(t) => Ok(t.to_string()),
             Value::Error(e) => Err(*e),
-            Value::Array(a) => a.data.first().map(|v| v.to_text()).unwrap_or(Ok(String::new())),
+            Value::Array(a) => a.data.first().map(Value::to_text).unwrap_or(Ok(String::new())),
         }
     }
     /// Coercion to a boolean as `IF` does it.
@@ -264,7 +264,7 @@ impl Value {
                 }
             }
             Value::Error(e) => Err(*e),
-            Value::Array(a) => a.data.first().map(|v| v.to_bool()).unwrap_or(Ok(false)),
+            Value::Array(a) => a.data.first().map(Value::to_bool).unwrap_or(Ok(false)),
         }
     }
     /// Display text with General formatting (for logs, CSV and tests).

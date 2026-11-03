@@ -16,58 +16,17 @@ use crate::tables::{paper_id, px_to_col_width, px_to_pt};
 use crate::write::{
     CT_CHART, CT_COMMENTS, CT_DRAWING, CT_TABLE, CT_THREADED_COMMENTS, NS_MAIN, NS_REL, NS_THREADED, Out, REL_THREADED_COMMENT, Rels, XML_DECL,
 };
-use crate::xml::{encode_xstring, esc, esc_attr, num};
+use crate::xml::{encode_xstring, esc, esc_attr, num, push_a1, push_esc, push_num, push_u64};
+
+mod parts;
+mod rules;
+
+pub(crate) use parts::password_attrs;
+use parts::{autofilter_xml, comments_xml, protected_ranges_xml, table_columns, table_name, table_xml, thread_ids, threaded_xml, vml_xml};
+use rules::{cf_rule_xml, solid_bar_id, validation_xml, x14_cfvo};
 
 fn sqref(ranges: &[RangeRef]) -> String {
     ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(" ")
-}
-
-fn cf_op_name(op: CfOperator) -> &'static str {
-    match op {
-        CfOperator::Between => "between",
-        CfOperator::NotBetween => "notBetween",
-        CfOperator::Equal => "equal",
-        CfOperator::NotEqual => "notEqual",
-        CfOperator::Greater => "greaterThan",
-        CfOperator::Less => "lessThan",
-        CfOperator::GreaterOrEqual => "greaterThanOrEqual",
-        CfOperator::LessOrEqual => "lessThanOrEqual",
-    }
-}
-
-/// Valid table name: letters, digits, `_` and `.`, starting with a letter, `_` or `\`
-/// (Microsoft "Names in formulas" rules).
-fn table_name(name: &str, used: &mut HashSet<String>, n: u32) -> String {
-    let mut s: String =
-        name.chars().enumerate().map(|(i, c)| if c.is_alphanumeric() || c == '_' || c == '.' || (i == 0 && c == '\\') { c } else { '_' }).collect();
-    if s.is_empty() || !s.starts_with(|c: char| c.is_alphabetic() || c == '_' || c == '\\') || gridcraft_core::CellRef::parse(&s).is_some() {
-        s = format!("Table{n}");
-    }
-    let mut out = s.clone();
-    let mut k = 2;
-    while !used.insert(out.to_ascii_lowercase()) {
-        out = format!("{s}{k}");
-        k += 1;
-    }
-    out
-}
-
-/// Column names for a table: one per column of its range, unique and non-empty.
-fn table_columns(t: &Table) -> Vec<String> {
-    let w = t.range.width() as usize;
-    let mut used = HashSet::new();
-    (0..w)
-        .map(|i| {
-            let base = t.columns.get(i).map(|c| c.name.clone()).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| format!("Column{}", i + 1));
-            let mut name = base.clone();
-            let mut k = 2;
-            while !used.insert(name.to_lowercase()) {
-                name = format!("{base}{k}");
-                k += 1;
-            }
-            name
-        })
-        .collect()
 }
 
 pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (String, Rels) {
@@ -294,24 +253,46 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     }
 
     // sheetData
-    let mut keys: BTreeSet<CellRef> = sheet.cells.iter().map(|(c, _)| c).collect();
-    keys.extend(sheet.cell_pictures.keys().copied());
-    keys.extend(extra.keys().copied());
-    keys.extend(overrides.keys().copied());
-    let mut rows: BTreeMap<u32, Vec<CellRef>> = BTreeMap::new();
-    for k in keys {
-        rows.entry(k.row).or_default().push(k);
+    // Every written cell in row-major order: the store already iterates that way, so only cells
+    // that exist outside it (pictures, cached spill values, table headers) need sorting in.
+    let mut keys: Vec<(CellRef, Option<&Cell>)> = Vec::with_capacity(sheet.cells.len());
+    keys.extend(sheet.cells.iter().map(|(c, cell)| (c, Some(cell))));
+    if !sheet.cell_pictures.is_empty() || !extra.is_empty() || !overrides.is_empty() || !keys.is_sorted_by_key(|(c, _)| *c) {
+        let mut all: BTreeSet<CellRef> = keys.iter().map(|(c, _)| *c).collect();
+        all.extend(sheet.cell_pictures.keys().copied());
+        all.extend(extra.keys().copied());
+        all.extend(overrides.keys().copied());
+        keys = all.into_iter().map(|c| (c, sheet.cells.get(c))).collect();
     }
-    for r in sheet.rows.keys() {
-        rows.entry(*r).or_default();
-    }
+    s.reserve(keys.len().saturating_mul(32));
     s.push_str("<sheetData>");
-    for (r, cells) in &rows {
-        let info = sheet.rows.get(r).copied().unwrap_or_default();
+    let mut row_infos = sheet.rows.iter().peekable();
+    let mut next = 0;
+    loop {
+        // The next row with cells or row settings, and its cells.
+        let cell_row = keys.get(next).map(|(c, _)| c.row);
+        let info_row = row_infos.peek().map(|(r, _)| **r);
+        let r = match (cell_row, info_row) {
+            (Some(a), Some(b)) => a.min(b),
+            (Some(a), None) => a,
+            (None, Some(b)) => b,
+            (None, None) => break,
+        };
+        let info = match row_infos.next_if(|(row, _)| **row == r) {
+            Some((_, info)) => *info,
+            None => LineInfo::default(),
+        };
+        let first = next;
+        while keys.get(next).is_some_and(|(c, _)| c.row == r) {
+            next += 1;
+        }
+        let cells = keys.get(first..next).unwrap_or_default();
         if cells.is_empty() && info == LineInfo::default() {
             continue;
         }
-        let _ = write!(s, "<row r=\"{}\"", r + 1);
+        s.push_str("<row r=\"");
+        push_u64(&mut s, u64::from(r) + 1);
+        s.push('"');
         if let Some(st) = info.style {
             let _ = write!(s, " s=\"{}\" customFormat=\"1\"", sid(st));
         }
@@ -332,15 +313,14 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             continue;
         }
         s.push('>');
-        for c in cells {
-            let cell = sheet.cells.get(*c);
-            let ov = overrides.get(c);
-            let ex = extra.get(c);
-            let array = dynamic.get(c).copied().or_else(|| {
+        for &(c, cell) in cells {
+            let ov = overrides.get(&c);
+            let ex = extra.get(&c);
+            let array = dynamic.get(&c).copied().or_else(|| {
                 let f = cell?.formula.as_ref()?;
-                (f.array.is_none() && crate::array_formula::needs_array(wb, si, *c, f)).then_some(RangeRef::cell(*c))
+                (f.array.is_none() && crate::array_formula::needs_array(wb, si, c, f)).then_some(RangeRef::cell(c))
             });
-            write_cell(&mut s, *c, cell, sheet.cell_pictures.get(c), ov, ex, array.as_ref(), &sid, out);
+            write_cell(&mut s, c, cell, sheet.cell_pictures.get(&c), ov, ex, array.as_ref(), &sid, out);
         }
         s.push_str("</row>");
     }
@@ -676,9 +656,13 @@ fn write_cell(
     out: &mut Out,
 ) {
     let style = cell.map(|x| sid(x.style)).unwrap_or(0);
-    let _ = write!(s, "<c r=\"{}\"", c.a1());
+    s.push_str("<c r=\"");
+    push_a1(s, c);
+    s.push('"');
     if style != 0 {
-        let _ = write!(s, " s=\"{style}\"");
+        s.push_str(" s=\"");
+        push_u64(s, u64::from(style));
+        s.push('"');
     }
     if let Some(picture) = picture {
         let vm = out.cell_pictures.index(picture);
@@ -720,21 +704,19 @@ fn write_cell(
         };
         s.push_str(t);
         s.push('>');
-        let text = esc(&crate::fmla::to_file(f));
-        match (f.array, dynamic) {
-            (Some(r), _) => {
-                let _ = write!(s, "<f t=\"array\" ref=\"{}\">{text}</f>", r.a1());
+        match f.array.or(dynamic.copied()) {
+            Some(r) => {
+                let _ = write!(s, "<f t=\"array\" ref=\"{}\">", r.a1());
             }
-            (None, Some(r)) => {
-                let _ = write!(s, "<f t=\"array\" ref=\"{}\">{text}</f>", r.a1());
-            }
-            _ => {
-                let _ = write!(s, "<f>{text}</f>");
-            }
+            None => s.push_str("<f>"),
         }
+        push_esc(s, &crate::fmla::to_file(f));
+        s.push_str("</f>");
         match &value {
             Value::Number(n) => {
-                let _ = write!(s, "<v>{}</v>", num(*n));
+                s.push_str("<v>");
+                push_num(s, *n);
+                s.push_str("</v>");
             }
             Value::Text(t) => {
                 let _ = write!(s, "<v>{}</v>", esc(&encode_xstring(t)));
@@ -753,11 +735,15 @@ fn write_cell(
     match &value {
         Value::Empty | Value::Array(_) => s.push_str("/>"),
         Value::Number(n) => {
-            let _ = write!(s, "><v>{}</v></c>", num(*n));
+            s.push_str("><v>");
+            push_num(s, *n);
+            s.push_str("</v></c>");
         }
         Value::Text(t) => {
             let i = out.sst.index(t);
-            let _ = write!(s, " t=\"s\"><v>{i}</v></c>");
+            s.push_str(" t=\"s\"><v>");
+            push_u64(s, u64::from(i));
+            s.push_str("</v></c>");
         }
         Value::Bool(b) => {
             let _ = write!(s, " t=\"b\"><v>{}</v></c>", *b as u8);
@@ -768,536 +754,8 @@ fn write_cell(
     }
 }
 
-fn cfvo_xml(v: &CfValueKind) -> String {
-    match v {
-        CfValueKind::Min => "<cfvo type=\"min\"/>".into(),
-        CfValueKind::Max => "<cfvo type=\"max\"/>".into(),
-        CfValueKind::Number(n) => format!("<cfvo type=\"num\" val=\"{}\"/>", num(*n)),
-        CfValueKind::Percent(n) => format!("<cfvo type=\"percent\" val=\"{}\"/>", num(*n)),
-        CfValueKind::Percentile(n) => format!("<cfvo type=\"percentile\" val=\"{}\"/>", num(*n)),
-        CfValueKind::Formula(f) => format!("<cfvo type=\"formula\" val=\"{}\"/>", esc_attr(&text_to_file(f))),
-    }
-}
-
-fn quote(t: &str) -> String {
-    format!("\"{}\"", t.replace('"', "\"\""))
-}
-
 const X14_NS: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
 const XM_NS: &str = "http://schemas.microsoft.com/office/excel/2006/main";
-
-/// The id linking a solid data bar's `cfRule` to its x14 extension; unique per sheet because priorities are.
-fn solid_bar_id(priority: u32) -> String {
-    format!("{{00000000-0000-0000-0000-{priority:012}}}")
-}
-
-/// The `cfRule` extension that points a solid data bar at its x14 rule.
-fn solid_bar_ext(priority: u32) -> String {
-    let id = solid_bar_id(priority);
-    format!("<extLst><ext uri=\"{{B025F937-C7B1-47D3-B67F-A62EFF666E3E}}\" xmlns:x14=\"{X14_NS}\"><x14:id>{id}</x14:id></ext></extLst>")
-}
-
-/// An x14 `cfvo`: unlike the 2006 one it has no `val` attribute, the value is an `xm:f` child.
-fn x14_cfvo(v: &CfValueKind) -> String {
-    let (ty, val) = match v {
-        CfValueKind::Min => return "<x14:cfvo type=\"min\"/>".into(),
-        CfValueKind::Max => return "<x14:cfvo type=\"max\"/>".into(),
-        CfValueKind::Number(n) => ("num", num(*n)),
-        CfValueKind::Percent(n) => ("percent", num(*n)),
-        CfValueKind::Percentile(n) => ("percentile", num(*n)),
-        CfValueKind::Formula(f) => ("formula", text_to_file(f)),
-    };
-    format!("<x14:cfvo type=\"{ty}\"><xm:f>{}</xm:f></x14:cfvo>", esc(&val))
-}
-
-fn cf_rule_xml(cf: &CondFormat, priority: u32, out: &mut Out) -> String {
-    let tl = cf.ranges.first().map(|r| r.start.a1()).unwrap_or_else(|| "A1".into());
-    let stop = if cf.stop_if_true { " stopIfTrue=\"1\"" } else { "" };
-    let mut dxf = |st: &Style| dxf_id(&mut out.dxfs, st);
-    let f = |x: &str| format!("<formula>{}</formula>", esc(&text_to_file(x)));
-    let simple = |ty: &str, st: &Style, extra: &str, body: String, dxf: &mut dyn FnMut(&Style) -> u32| {
-        format!("<cfRule type=\"{ty}\" dxfId=\"{}\" priority=\"{priority}\"{stop}{extra}>{body}</cfRule>", dxf(st))
-    };
-    match &cf.rule {
-        CfRule::CellIs { op, a, b, style } => {
-            let mut body = f(a);
-            if let Some(b) = b {
-                body.push_str(&f(b));
-            }
-            simple("cellIs", style, &format!(" operator=\"{}\"", cf_op_name(*op)), body, &mut dxf)
-        }
-        CfRule::Expression { formula, style } => simple("expression", style, "", f(formula), &mut dxf),
-        CfRule::ContainsText { text, style } => simple(
-            "containsText",
-            style,
-            &format!(" operator=\"containsText\" text=\"{}\"", esc_attr(text)),
-            f(&format!("NOT(ISERROR(SEARCH({},{tl})))", quote(text))),
-            &mut dxf,
-        ),
-        CfRule::NotContainsText { text, style } => simple(
-            "notContainsText",
-            style,
-            &format!(" operator=\"notContains\" text=\"{}\"", esc_attr(text)),
-            f(&format!("ISERROR(SEARCH({},{tl}))", quote(text))),
-            &mut dxf,
-        ),
-        CfRule::BeginsWith { text, style } => simple(
-            "beginsWith",
-            style,
-            &format!(" operator=\"beginsWith\" text=\"{}\"", esc_attr(text)),
-            f(&format!("LEFT({tl},LEN({0}))={0}", quote(text))),
-            &mut dxf,
-        ),
-        CfRule::EndsWith { text, style } => simple(
-            "endsWith",
-            style,
-            &format!(" operator=\"endsWith\" text=\"{}\"", esc_attr(text)),
-            f(&format!("RIGHT({tl},LEN({0}))={0}", quote(text))),
-            &mut dxf,
-        ),
-        CfRule::Blanks { style } => simple("containsBlanks", style, "", f(&format!("LEN(TRIM({tl}))=0")), &mut dxf),
-        CfRule::NoBlanks { style } => simple("notContainsBlanks", style, "", f(&format!("LEN(TRIM({tl}))>0")), &mut dxf),
-        CfRule::Errors { style } => simple("containsErrors", style, "", f(&format!("ISERROR({tl})")), &mut dxf),
-        CfRule::NoErrors { style } => simple("notContainsErrors", style, "", f(&format!("NOT(ISERROR({tl}))")), &mut dxf),
-        CfRule::Duplicate { style } => simple("duplicateValues", style, "", String::new(), &mut dxf),
-        CfRule::Unique { style } => simple("uniqueValues", style, "", String::new(), &mut dxf),
-        CfRule::Top10 { bottom, percent, rank, style } => {
-            let extra = format!("{}{} rank=\"{}\"", if *percent { " percent=\"1\"" } else { "" }, if *bottom { " bottom=\"1\"" } else { "" }, rank);
-            simple("top10", style, &extra, String::new(), &mut dxf)
-        }
-        CfRule::AboveAverage { below, equal, std_dev, style } => {
-            let mut extra = String::new();
-            if *below {
-                extra.push_str(" aboveAverage=\"0\"");
-            }
-            if *equal {
-                extra.push_str(" equalAverage=\"1\"");
-            }
-            if *std_dev > 0 {
-                let _ = write!(extra, " stdDev=\"{std_dev}\"");
-            }
-            simple("aboveAverage", style, &extra, String::new(), &mut dxf)
-        }
-        CfRule::TimePeriod { period, style } => {
-            let d = format!("FLOOR({tl},1)");
-            let body = match period.as_str() {
-                "yesterday" => format!("{d}=TODAY()-1"),
-                "tomorrow" => format!("{d}=TODAY()+1"),
-                "last7Days" => format!("AND(TODAY()-{d}<=6,{d}<=TODAY())"),
-                "thisMonth" => format!("AND(MONTH({tl})=MONTH(TODAY()),YEAR({tl})=YEAR(TODAY()))"),
-                "lastMonth" => format!("AND(MONTH({tl})=MONTH(EDATE(TODAY(),0-1)),YEAR({tl})=YEAR(EDATE(TODAY(),0-1)))"),
-                "nextMonth" => format!("AND(MONTH({tl})=MONTH(EDATE(TODAY(),0+1)),YEAR({tl})=YEAR(EDATE(TODAY(),0+1)))"),
-                "thisWeek" => format!("AND(TODAY()-ROUNDDOWN({tl},0)<=WEEKDAY(TODAY())-1,ROUNDDOWN({tl},0)-TODAY()<=7-WEEKDAY(TODAY()))"),
-                "lastWeek" => format!("AND(TODAY()-ROUNDDOWN({tl},0)>=(WEEKDAY(TODAY())),TODAY()-ROUNDDOWN({tl},0)<(WEEKDAY(TODAY())+7))"),
-                "nextWeek" => format!("AND(ROUNDDOWN({tl},0)-TODAY()>(7-WEEKDAY(TODAY())),ROUNDDOWN({tl},0)-TODAY()<(15-WEEKDAY(TODAY())))"),
-                _ => format!("{d}=TODAY()"),
-            };
-            simple("timePeriod", style, &format!(" timePeriod=\"{}\"", esc_attr(period)), f(&body), &mut dxf)
-        }
-        CfRule::ColorScale { stops } => {
-            let mut b = String::from("<colorScale>");
-            for (v, _) in stops {
-                b.push_str(&cfvo_xml(v));
-            }
-            for (_, c) in stops {
-                let _ = write!(b, "<color {}/>", color_attrs(c));
-            }
-            b.push_str("</colorScale>");
-            format!("<cfRule type=\"colorScale\" priority=\"{priority}\"{stop}>{b}</cfRule>")
-        }
-        CfRule::DataBar { min, max, color, show_value, gradient } => format!(
-            "<cfRule type=\"dataBar\" priority=\"{priority}\"{stop}><dataBar{}>{}{}<color {}/></dataBar>{}</cfRule>",
-            if *show_value { "" } else { " showValue=\"0\"" },
-            cfvo_xml(min),
-            cfvo_xml(max),
-            if *color == Color::Auto { "rgb=\"FF638EC6\"".to_string() } else { color_attrs(color) },
-            if *gradient { String::new() } else { solid_bar_ext(priority) }
-        ),
-        CfRule::IconSet { set, thresholds, reverse, show_value } => {
-            let mut b = format!("<iconSet iconSet=\"{}\"", esc_attr(set));
-            if *reverse {
-                b.push_str(" reverse=\"1\"");
-            }
-            if !*show_value {
-                b.push_str(" showValue=\"0\"");
-            }
-            b.push('>');
-            // CT_IconSet needs one cfvo per icon (minOccurs 2); the first is the lower bound.
-            let k = icon_count(set);
-            let defaults = default_icon_thresholds(set);
-            let cfvos: Vec<&CfValueKind> = match thresholds.len() {
-                n if n == k => thresholds.iter().collect(),
-                n if n + 1 == k => defaults.iter().take(1).chain(thresholds).collect(),
-                _ => defaults.iter().collect(),
-            };
-            for t in cfvos {
-                b.push_str(&cfvo_xml(t));
-            }
-            b.push_str("</iconSet>");
-            format!("<cfRule type=\"iconSet\" priority=\"{priority}\"{stop}>{b}</cfRule>")
-        }
-    }
-}
-
-fn validation_formula(f: &str) -> String {
-    let f = f.trim();
-    if f.starts_with('"') {
-        return esc(f);
-    }
-    esc(&text_to_file(f.strip_prefix('=').unwrap_or(f)))
-}
-
-fn validation_xml(v: &Validation) -> String {
-    let ty = match v.kind {
-        ValidationKind::Any => "none",
-        ValidationKind::Whole => "whole",
-        ValidationKind::Decimal => "decimal",
-        ValidationKind::List => "list",
-        ValidationKind::Date => "date",
-        ValidationKind::Time => "time",
-        ValidationKind::TextLength => "textLength",
-        ValidationKind::Custom => "custom",
-    };
-    let mut s = format!("<dataValidation type=\"{ty}\"");
-    match v.error_style {
-        ErrorStyle::Stop => {}
-        ErrorStyle::Warning => s.push_str(" errorStyle=\"warning\""),
-        ErrorStyle::Information => s.push_str(" errorStyle=\"information\""),
-    }
-    if v.op != CfOperator::Between && !matches!(v.kind, ValidationKind::List | ValidationKind::Custom | ValidationKind::Any) {
-        let _ = write!(s, " operator=\"{}\"", cf_op_name(v.op));
-    }
-    if v.allow_blank {
-        s.push_str(" allowBlank=\"1\"");
-    }
-    if !v.in_cell_dropdown {
-        s.push_str(" showDropDown=\"1\"");
-    }
-    if v.show_input {
-        s.push_str(" showInputMessage=\"1\"");
-    }
-    if v.show_error {
-        s.push_str(" showErrorMessage=\"1\"");
-    }
-    for (a, t) in [("errorTitle", &v.error_title), ("error", &v.error_message), ("promptTitle", &v.input_title), ("prompt", &v.input_message)] {
-        if !t.is_empty() {
-            let _ = write!(s, " {a}=\"{}\"", esc_attr(t));
-        }
-    }
-    let _ = write!(s, " sqref=\"{}\">", sqref(&v.ranges));
-    if !v.f1.is_empty() {
-        let _ = write!(s, "<formula1>{}</formula1>", validation_formula(&v.f1));
-    }
-    if let Some(f2) = v.f2.as_ref().filter(|f| !f.is_empty()) {
-        let _ = write!(s, "<formula2>{}</formula2>", validation_formula(f2));
-    }
-    s.push_str("</dataValidation>");
-    s
-}
-
-fn filter_operator(op: &str) -> &'static str {
-    match op.trim() {
-        "<" => " operator=\"lessThan\"",
-        "<=" => " operator=\"lessThanOrEqual\"",
-        "<>" => " operator=\"notEqual\"",
-        ">=" => " operator=\"greaterThanOrEqual\"",
-        ">" => " operator=\"greaterThan\"",
-        _ => "",
-    }
-}
-
-fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)], out: &mut Out) -> String {
-    let mut s = format!("<autoFilter ref=\"{}\"", range.a1());
-    if criteria.is_empty() {
-        s.push_str("/>");
-        return s;
-    }
-    s.push('>');
-    for (col, c) in criteria {
-        let _ = write!(s, "<filterColumn colId=\"{col}\">");
-        match c {
-            FilterCriterion::Values { values, blanks } => {
-                let _ = write!(s, "<filters{}>", if *blanks { " blank=\"1\"" } else { "" });
-                for v in values {
-                    let _ = write!(s, "<filter val=\"{}\"/>", esc_attr(v));
-                }
-                s.push_str("</filters>");
-            }
-            FilterCriterion::Custom { a, b, and } => {
-                let _ = write!(s, "<customFilters{}>", if *and { " and=\"1\"" } else { "" });
-                for (op, v) in std::iter::once(a).chain(b.iter()) {
-                    let _ = write!(s, "<customFilter{} val=\"{}\"/>", filter_operator(op), esc_attr(v));
-                }
-                s.push_str("</customFilters>");
-            }
-            FilterCriterion::Top10 { bottom, percent, count } => {
-                let _ =
-                    write!(s, "<top10{}{} val=\"{count}\"/>", if *bottom { " top=\"0\"" } else { "" }, if *percent { " percent=\"1\"" } else { "" });
-            }
-            FilterCriterion::AboveAverage(above) => {
-                let _ = write!(s, "<dynamicFilter type=\"{}\"/>", if *above { "aboveAverage" } else { "belowAverage" });
-            }
-            FilterCriterion::FillColor(c) => {
-                let st = Style { fill: gridcraft_model::Fill::solid(*c), ..Default::default() };
-                let _ = write!(s, "<colorFilter dxfId=\"{}\"/>", dxf_id(&mut out.dxfs, &st));
-            }
-            FilterCriterion::FontColor(c) => {
-                let mut st = Style::default();
-                st.font.color = *c;
-                let _ = write!(s, "<colorFilter dxfId=\"{}\" cellColor=\"0\"/>", dxf_id(&mut out.dxfs, &st));
-            }
-            FilterCriterion::Icon { set, id } => {
-                let _ = write!(s, "<iconFilter iconSet=\"{}\"", esc_attr(set));
-                if let Some(id) = id {
-                    let _ = write!(s, " iconId=\"{id}\"");
-                }
-                s.push_str("/>");
-            }
-        }
-        s.push_str("</filterColumn>");
-    }
-    s.push_str("</autoFilter>");
-    s
-}
-
-fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> String {
-    let mut s =
-        format!("{XML_DECL}<table xmlns=\"{NS_MAIN}\" id=\"{id}\" name=\"{0}\" displayName=\"{0}\" ref=\"{1}\"", esc_attr(name), t.range.a1());
-    if !t.header_row {
-        s.push_str(" headerRowCount=\"0\"");
-    }
-    if t.totals_row {
-        s.push_str(" totalsRowCount=\"1\"");
-    } else {
-        s.push_str(" totalsRowShown=\"0\"");
-    }
-    if let Some(ty) = &t.table_type {
-        let _ = write!(s, " tableType=\"{}\"", esc_attr(ty));
-    }
-    if let Some(c) = t.connection_id {
-        let _ = write!(s, " connectionId=\"{c}\"");
-    }
-    s.push('>');
-    if t.header_row && t.filter_button {
-        let end_row = if t.totals_row { t.range.end.row.saturating_sub(1).max(t.range.start.row) } else { t.range.end.row };
-        let r = RangeRef::new(t.range.start, CellRef::new(end_row, t.range.end.col));
-        s.push_str(&autofilter_xml(r, &t.filter, out));
-    }
-    let _ = write!(s, "<tableColumns count=\"{}\">", cols.len());
-    for (i, name) in cols.iter().enumerate() {
-        let col = t.columns.get(i);
-        let _ = write!(s, "<tableColumn id=\"{}\"", i + 1);
-        if let Some(u) = col.and_then(|c| c.unique_name.as_ref()) {
-            let _ = write!(s, " uniqueName=\"{}\"", esc_attr(u));
-        }
-        let _ = write!(s, " name=\"{}\"", esc_attr(&encode_xstring(name)));
-        let totals = col.map(|c| c.totals).unwrap_or_default();
-        if t.totals_row {
-            let f = match totals {
-                TotalsFn::None => None,
-                TotalsFn::Average => Some("average"),
-                TotalsFn::Count => Some("count"),
-                TotalsFn::CountNums => Some("countNums"),
-                TotalsFn::Max => Some("max"),
-                TotalsFn::Min => Some("min"),
-                TotalsFn::Sum => Some("sum"),
-                TotalsFn::StdDev => Some("stdDev"),
-                TotalsFn::Var => Some("var"),
-                TotalsFn::Custom => Some("custom"),
-            };
-            if let Some(f) = f {
-                let _ = write!(s, " totalsRowFunction=\"{f}\"");
-            } else if let Some(l) = col.and_then(|c| c.totals_label.as_ref()) {
-                let _ = write!(s, " totalsRowLabel=\"{}\"", esc_attr(l));
-            }
-        }
-        let calc = col.and_then(|c| c.formula.as_ref()).filter(|f| !f.is_empty());
-        let custom = if t.totals_row && totals == TotalsFn::Custom { col.and_then(|c| c.totals_label.as_ref()) } else { None };
-        let xml = col.and_then(|c| c.xml.as_ref());
-        if calc.is_none() && custom.is_none() && xml.is_none() {
-            s.push_str("/>");
-            continue;
-        }
-        s.push('>');
-        if let Some(f) = calc {
-            let _ = write!(s, "<calculatedColumnFormula>{}</calculatedColumnFormula>", esc(&text_to_file(f)));
-        }
-        if let Some(f) = custom {
-            let _ = write!(s, "<totalsRowFormula>{}</totalsRowFormula>", esc(&text_to_file(f)));
-        }
-        if let Some(x) = xml {
-            let _ = write!(s, "<xmlColumnPr mapId=\"{}\" xpath=\"{}\"", x.map_id, esc_attr(&x.xpath));
-            if x.denormalized {
-                s.push_str(" denormalized=\"1\"");
-            }
-            let _ = write!(s, " xmlDataType=\"{}\"/>", esc_attr(&x.data_type));
-        }
-        s.push_str("</tableColumn>");
-    }
-    s.push_str("</tableColumns>");
-    let style = if t.style.is_empty() { "TableStyleMedium2" } else { &t.style };
-    let _ = write!(
-        s,
-        "<tableStyleInfo name=\"{}\" showFirstColumn=\"{}\" showLastColumn=\"{}\" showRowStripes=\"{}\" showColumnStripes=\"{}\"/></table>",
-        esc_attr(style),
-        t.first_col as u8,
-        t.last_col as u8,
-        t.banded_rows as u8,
-        t.banded_cols as u8
-    );
-    s
-}
-
-/// Ids of the threaded comments of sheet `si`: the thread's id, then one per reply. GUID-shaped
-/// and deterministic; they only need to be unique within the file.
-fn thread_ids(sheet: &Sheet, si: usize) -> BTreeMap<CellRef, Vec<String>> {
-    let mut seq: u64 = 0;
-    let mut ids = BTreeMap::new();
-    for (cell, c) in sheet.comments.iter().filter(|(_, c)| c.threaded) {
-        let v: Vec<String> = (0..=c.replies.len())
-            .map(|_| {
-                seq += 1;
-                format!("{{{:08X}-0000-4000-8001-{:012X}}}", si as u64 & 0xFFFF_FFFF, seq & 0xFFFF_FFFF_FFFF)
-            })
-            .collect();
-        ids.insert(*cell, v);
-    }
-    ids
-}
-
-fn comments_xml(sheet: &Sheet, ids: &BTreeMap<CellRef, Vec<String>>) -> String {
-    // A threaded comment's legacy note is authored by `tc={thread id}`.
-    let author_of = |cell: &CellRef, c: &gridcraft_model::Comment| match ids.get(cell).and_then(|v| v.first()) {
-        Some(id) => format!("tc={id}"),
-        None => c.author.clone(),
-    };
-    let mut authors: Vec<String> = vec![];
-    for (cell, c) in &sheet.comments {
-        let a = author_of(cell, c);
-        if !authors.contains(&a) {
-            authors.push(a);
-        }
-    }
-    let mut s = if ids.is_empty() {
-        format!("{XML_DECL}<comments xmlns=\"{NS_MAIN}\"><authors>")
-    } else {
-        format!(
-            "{XML_DECL}<comments xmlns=\"{NS_MAIN}\" xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" mc:Ignorable=\"xr\" xmlns:xr=\"http://schemas.microsoft.com/office/spreadsheetml/2014/revision\"><authors>"
-        )
-    };
-    for a in &authors {
-        let _ = write!(s, "<author>{}</author>", esc(a));
-    }
-    s.push_str("</authors><commentList>");
-    for (cell, c) in &sheet.comments {
-        let a = author_of(cell, c);
-        let aid = authors.iter().position(|x| *x == a).unwrap_or(0);
-        let mut text = c.text.clone();
-        // Threaded replies are kept as text lines.
-        for (who, reply) in &c.replies {
-            let _ = write!(text, "\n{who}: {reply}");
-        }
-        let link = match ids.get(cell).and_then(|v| v.first()) {
-            Some(id) => format!(" shapeId=\"0\" xr:uid=\"{id}\""),
-            None => String::new(),
-        };
-        let _ = write!(s, "<comment ref=\"{}\" authorId=\"{aid}\"{link}><text><r>{}</r></text></comment>", cell.a1(), crate::xml::t_el(&text));
-    }
-    s.push_str("</commentList></comments>");
-    s
-}
-
-/// `2024-05-01T09:30:00` with optional fraction and zone: what `dT` (xsd:dateTime) accepts.
-/// Anything else is left out rather than written into the file.
-fn iso_datetime(d: &str) -> bool {
-    let b = d.as_bytes();
-    let digits = |r: std::ops::Range<usize>| b.get(r).is_some_and(|s| s.iter().all(u8::is_ascii_digit));
-    d.len() <= 40
-        && digits(0..4)
-        && b.get(4) == Some(&b'-')
-        && digits(5..7)
-        && b.get(7) == Some(&b'-')
-        && digits(8..10)
-        && b.get(10) == Some(&b'T')
-        && digits(11..13)
-        && b.get(13) == Some(&b':')
-        && digits(14..16)
-        && b.get(16) == Some(&b':')
-        && digits(17..19)
-        && b.get(19..).is_some_and(|rest| rest.iter().all(|c| c.is_ascii_digit() || b".:+-Z".contains(c)))
-}
-
-/// `xl/threadedComments/threadedCommentN.xml`: each thread, then its replies (`parentId`).
-fn threaded_xml(sheet: &Sheet, ids: &BTreeMap<CellRef, Vec<String>>, persons: &mut Vec<String>) -> String {
-    let mut person = |name: &str| {
-        let i = persons.iter().position(|p| p == name).unwrap_or_else(|| {
-            persons.push(name.to_string());
-            persons.len() - 1
-        });
-        crate::write::person_guid(i)
-    };
-    let mut s = format!("{XML_DECL}<ThreadedComments xmlns=\"{NS_THREADED}\" xmlns:x=\"{NS_MAIN}\">");
-    for (cell, id) in ids {
-        let Some(c) = sheet.comments.get(cell) else { continue };
-        let entries = std::iter::once((&c.author, &c.text)).chain(c.replies.iter().map(|(a, t)| (a, t)));
-        for (k, ((author, text), own)) in entries.zip(id).enumerate() {
-            let date = match c.dates.get(k).filter(|d| iso_datetime(d)) {
-                Some(d) => format!(" dT=\"{}\"", esc_attr(d)),
-                None => String::new(),
-            };
-            let tail = match (k, id.first()) {
-                (0, _) if c.resolved => " done=\"1\"".to_string(),
-                (0, _) | (_, None) => String::new(),
-                (_, Some(parent)) => format!(" parentId=\"{parent}\""),
-            };
-            let _ = write!(
-                s,
-                "<threadedComment ref=\"{}\"{date} personId=\"{}\" id=\"{own}\"{tail}><text>{}</text></threadedComment>",
-                cell.a1(),
-                person(author),
-                esc(text)
-            );
-        }
-    }
-    s.push_str("</ThreadedComments>");
-    s
-}
-
-/// A protection password hash as attributes, each name preceded by `prefix` (see
-/// [`crate::sheet_read::read_password`]).
-pub(crate) fn password_attrs(h: &gridcraft_model::PasswordHash, prefix: &str) -> String {
-    let name = |base: &str| crate::sheet_read::password_attr(prefix, base);
-    match h {
-        gridcraft_model::PasswordHash::Legacy(h) => format!(" {}=\"{h:04X}\"", name("password")),
-        gridcraft_model::PasswordHash::Iterated { algorithm, hash, salt, spin_count } => format!(
-            " {}=\"{}\" {}=\"{}\" {}=\"{}\" {}=\"{spin_count}\"",
-            name("algorithmName"),
-            esc_attr(algorithm),
-            name("hashValue"),
-            esc_attr(hash),
-            name("saltValue"),
-            esc_attr(salt),
-            name("spinCount")
-        ),
-    }
-}
-
-/// Allow Edit Ranges: `<protectedRanges>` (after `sheetProtection`).
-fn protected_ranges_xml(sheet: &Sheet) -> String {
-    let mut s = String::new();
-    for r in sheet.edit_ranges.iter().filter(|r| !r.ranges.is_empty()) {
-        let sqref: Vec<String> = r.ranges.iter().map(|x| x.a1()).collect();
-        let _ = write!(s, "<protectedRange name=\"{}\" sqref=\"{}\"", esc_attr(&r.title), sqref.join(" "));
-        if let Some(h) = &r.password {
-            s.push_str(&password_attrs(h, ""));
-        }
-        if let Some(sd) = &r.security_descriptor {
-            let _ = write!(s, " securityDescriptor=\"{}\"", esc_attr(sd));
-        }
-        s.push_str("/>");
-    }
-    if s.is_empty() { s } else { format!("<protectedRanges>{s}</protectedRanges>") }
-}
 
 /// The box a note made here gets: two columns right of its cell, four rows tall, 108 x 59.25 pt.
 /// A box read from a file that equals it is kept as `None`, so a note's model survives a save.
@@ -1307,36 +765,3 @@ pub(crate) const DEFAULT_NOTE_BOX: NoteBox = NoteBox {
     size_pt: Some(DEFAULT_NOTE_SIZE_PT),
 };
 const DEFAULT_NOTE_SIZE_PT: (f64, f64) = (108.0, 59.25);
-
-/// A note box's `<x:Anchor>` text and its width and height in points: the box read from the file
-/// or [`DEFAULT_NOTE_BOX`], its corners moved with the note's `cell` and kept on the sheet.
-fn note_anchor(cell: CellRef, b: Option<&NoteBox>) -> (String, (f64, f64)) {
-    let b = b.unwrap_or(&DEFAULT_NOTE_BOX);
-    let at = |base: u32, d: i64, max: u32| (i64::from(base) + d).clamp(0, i64::from(max) - 1);
-    let corner = |k: &NoteCorner| format!("{}, {}, {}, {}", at(cell.col, k.col, MAX_COLS), k.col_px, at(cell.row, k.row, MAX_ROWS), k.row_px);
-    (format!("{}, {}", corner(&b.from), corner(&b.to)), b.size_pt.unwrap_or(DEFAULT_NOTE_SIZE_PT))
-}
-
-/// Legacy VML shapes Excel uses to display notes.
-fn vml_xml(sheet: &Sheet, n: u32) -> String {
-    let mut s = format!(
-        "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><o:shapelayout v:ext=\"edit\"><o:idmap v:ext=\"edit\" data=\"{n}\"/></o:shapelayout><v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\" path=\"m,l,21600r21600,l21600,xe\"><v:stroke joinstyle=\"miter\"/><v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/></v:shapetype>"
-    );
-    for (i, (cell, c)) in sheet.comments.iter().enumerate() {
-        let id = n as u64 * 1024 + 1 + i as u64;
-        let vis = if c.visible { "visible" } else { "hidden" };
-        let (anchor, (w, h)) = note_anchor(*cell, c.note_box.as_ref());
-        let _ = write!(
-            s,
-            "<v:shape id=\"_x0000_s{id}\" type=\"#_x0000_t202\" style=\"position:absolute;margin-left:59.25pt;margin-top:1.5pt;width:{}pt;height:{}pt;z-index:{};visibility:{vis}\" fillcolor=\"#ffffe1\" o:insetmode=\"auto\"><v:fill color2=\"#ffffe1\"/><v:shadow on=\"t\" color=\"black\" obscured=\"t\"/><v:path o:connecttype=\"none\"/><v:textbox style=\"mso-direction-alt:auto\"><div style=\"text-align:left\"></div></v:textbox><x:ClientData ObjectType=\"Note\"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>{anchor}</x:Anchor><x:AutoFill>False</x:AutoFill><x:Row>{}</x:Row><x:Column>{}</x:Column>{}</x:ClientData></v:shape>",
-            num(w),
-            num(h),
-            i + 1,
-            cell.row,
-            cell.col,
-            if c.visible { "<x:Visible/>" } else { "" }
-        );
-    }
-    s.push_str("</xml>");
-    s
-}

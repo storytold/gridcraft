@@ -143,7 +143,13 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     let mut wb = Workbook::new();
     wb.sheets.clear();
 
-    // Styles and theme. Cell checkboxes live in the feature property bags, which styles refer to.
+    // Theme, then styles: a font's link to the theme's body font is read against it.
+    if let Some(r) = find_rel(&wb_rels, "theme").cloned()
+        && let Some(x) = cx.optional_xml(&r.target)?
+    {
+        wb.theme = crate::theme::read_theme(&x);
+    }
+    // Cell checkboxes live in the feature property bags, which styles refer to.
     let mut checkboxes = Vec::new();
     if let Some(r) = find_rel(&wb_rels, "FeaturePropertyBag").cloned()
         && let Some(x) = cx.optional_xml(&r.target)?
@@ -152,7 +158,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     }
     if let Some(r) = find_rel(&wb_rels, "styles").cloned() {
         if let Some(x) = cx.optional_xml(&r.target)? {
-            let StylesIn { xfs, dxfs, palette, named, num_fmts } = read_styles(&x, &checkboxes);
+            let StylesIn { xfs, dxfs, palette, named, num_fmts } = read_styles(&x, &checkboxes, &wb.theme.minor_font);
             cx.num_fmts = num_fmts;
             // Cell format 0 is the Normal cell format: everything on it (font, number format,
             // fill, borders, alignment, protection) is what a cell without its own format shows
@@ -167,11 +173,6 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         }
     } else {
         cx.warn("no styles part");
-    }
-    if let Some(r) = find_rel(&wb_rels, "theme").cloned()
-        && let Some(x) = cx.optional_xml(&r.target)?
-    {
-        wb.theme = crate::theme::read_theme(&x);
     }
     // Shared strings, streamed item by item. Phonetic (furigana) runs are kept next to the text
     // they annotate, so an open + save does not delete them.
@@ -285,6 +286,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             Err(e) => cx.warn(format!("PivotTables on sheet \"{name}\" could not be read: {e}")),
         }
         sheet.preserved = kept.sheet(&mut cx, &rel.target, &name);
+        sheet.file_id = se.attr_u32("sheetId").unwrap_or(0);
         sheet.visibility = match se.attr("state") {
             Some("hidden") => Visibility::Hidden,
             Some("veryHidden") => Visibility::VeryHidden,
@@ -297,7 +299,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         cx.warn("the workbook has no worksheets; added an empty sheet");
         wb.sheets.push(Arc::new(Sheet::new("Sheet1")));
     }
-    wb.active_sheet = file_to_model.get(active_tab).copied().flatten().unwrap_or(0);
+    wb.set_active_sheet(file_to_model.get(active_tab).copied().flatten().unwrap_or(0));
 
     // Defined names. Chartex parts refer to their data through hidden `_xlchart.*` names.
     let mut chart_names: Vec<(String, String)> = vec![];

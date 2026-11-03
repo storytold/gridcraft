@@ -3,6 +3,9 @@
 //! `header_autofit_fonts.rs` and `keytips.rs` stay separate binaries: they set process-wide state
 //! (the installed-font catalog, a registered test command) that would leak into these tests.
 
+#[path = "../common/mod.rs"]
+mod common;
+
 mod accounting_fill;
 mod advanced_filter;
 mod argument_names;
@@ -33,7 +36,9 @@ mod filter_list_scroll;
 mod filter_menu_enter;
 mod find_dialog_focus;
 mod floating_pictures;
+mod font_box_filter;
 mod font_size_box;
+mod format_chart_type;
 mod format_painter;
 mod formula_bar;
 mod formula_bar_expand;
@@ -85,6 +90,7 @@ mod show_objects;
 mod shrink_to_fit;
 mod sort_dialog_columns;
 mod status_bar_menu;
+mod support;
 mod symbol_glyphs;
 mod system_theme;
 mod tab_split;

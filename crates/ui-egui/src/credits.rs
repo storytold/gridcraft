@@ -212,7 +212,7 @@ impl Default for View {
 
 /// About ▸ Contributors: a name toggle, a sort, and the list as a grab bag or a table.
 pub fn contributors_ui(ui: &mut egui::Ui) {
-    let id = egui::Id::new("credits_view");
+    let id = egui::Id::unique("credits_view");
     let mut v = ui.data_mut(|d| d.get_temp::<View>(id)).unwrap_or_default();
     ui.horizontal_wrapped(|ui| {
         ui.label("Show");
@@ -223,7 +223,7 @@ pub fn contributors_ui(ui: &mut egui::Ui) {
         }
         ui.separator();
         ui.label("Sort");
-        egui::ComboBox::from_id_salt("credits_sort").selected_text(v.key.label().0).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("credits_sort").selected_text(v.key.label().0).show_ui(ui, |ui| {
             for k in SortKey::ALL {
                 if ui.selectable_label(v.key == k, k.label().0).clicked() {
                     v.key = k;

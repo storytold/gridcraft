@@ -244,8 +244,8 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
 
     // Which sheet is active (must be visible), and at least one visible sheet.
     let any_visible = wb.sheets.iter().any(|s| s.visibility == Visibility::Visible);
-    let active = if wb.sheets.get(wb.active_sheet).is_some_and(|s| s.visibility == Visibility::Visible) {
-        wb.active_sheet
+    let active = if wb.sheets.get(wb.active_sheet()).is_some_and(|s| s.visibility == Visibility::Visible) {
+        wb.active_sheet()
     } else {
         wb.sheets.iter().position(|s| s.visibility == Visibility::Visible).unwrap_or(0)
     };
@@ -255,11 +255,9 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     let kept = crate::passthrough::write_workbook(wb, &mut wb_rels, &mut out);
     let mut pivots = crate::pivot::PivotWriter::default();
     let mut sheets_xml = String::new();
-    let mut sheet_id = 1usize;
+    let mut ids = crate::passthrough::SheetIds::new(wb, &kept);
     for (i, sheet) in wb.sheets.iter().enumerate() {
-        let (before, next) = kept.sheet_entries(i, false, sheet_id);
-        sheets_xml.push_str(&before);
-        sheet_id = next;
+        sheets_xml.push_str(&kept.sheet_entries(i, false, &mut ids));
         let (xml, mut rels) = crate::sheet_write::write_sheet(wb, i, i == active, &mut out);
         pivots.add_sheet(wb, i, &mut out, &mut rels);
         let name = format!("xl/worksheets/sheet{}.xml", i + 1);
@@ -275,10 +273,10 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
             Visibility::VeryHidden => " state=\"veryHidden\"",
         };
         let name: String = sheet.name.chars().take(31).collect();
+        let sheet_id = ids.take(sheet.file_id);
         let _ = write!(sheets_xml, "<sheet name=\"{}\" sheetId=\"{sheet_id}\"{state} r:id=\"{rid}\"/>", esc_attr(&name));
-        sheet_id += 1;
     }
-    sheets_xml.push_str(&kept.sheet_entries(wb.sheets.len(), true, sheet_id).0);
+    sheets_xml.push_str(&kept.sheet_entries(wb.sheets.len(), true, &mut ids));
 
     // Defined names, then print areas and titles.
     let mut names = String::new();

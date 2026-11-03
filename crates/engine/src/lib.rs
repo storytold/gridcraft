@@ -23,6 +23,7 @@ pub mod record;
 pub mod sample;
 pub mod selection;
 pub mod tables;
+pub mod windows;
 
 use std::sync::Arc;
 
@@ -39,6 +40,7 @@ pub use gridcraft_formula as formula;
 pub use gridcraft_model as model;
 pub use gridcraft_numfmt as numfmt;
 pub use selection::Selection;
+pub use windows::{Target, TargetGuard, WindowState, WindowView};
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -180,6 +182,8 @@ pub struct DocState {
     pub path: Option<String>,
     pub saved: Arc<Workbook>,
     pub revision: u64,
+    /// Identifies this open workbook for the rest of the session: it never changes while the
+    /// workbook is open (saving, renaming, reordering) and is never reused for another one.
     pub uid: u64,
     pub title: String,
     /// Per-sheet selection memory.
@@ -269,6 +273,17 @@ impl DocState {
     pub fn new(mut wb: Workbook, path: Option<String>, title: String, trust: Trust) -> DocState {
         let mut calc = Calc::new();
         calc.recalc_all(&mut wb);
+        Self::with_calc(wb, calc, path, title, trust)
+    }
+    /// A workbook as its file saved it: the dependency graph is built but nothing is
+    /// evaluated, so every value is the one the file holds until an edit reaches it. `trust`
+    /// is as for [`DocState::new`].
+    pub fn from_saved(wb: Workbook, path: Option<String>, title: String, trust: Trust) -> DocState {
+        let mut calc = Calc::new();
+        calc.rebuild(&wb);
+        Self::with_calc(wb, calc, path, title, trust)
+    }
+    fn with_calc(wb: Workbook, calc: Calc, path: Option<String>, title: String, trust: Trust) -> DocState {
         let scripts_trusted = !cmd::extra::has_scripts(&wb);
         let wb = Arc::new(wb);
         let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
@@ -295,14 +310,14 @@ impl DocState {
         !Arc::ptr_eq(&self.wb, &self.saved)
     }
     pub fn sheet_index(&self) -> usize {
-        self.wb.active_sheet
+        self.wb.active_sheet()
     }
     /// Records the view state that is saved with the file (`sheetView topLeftCell`, the active
     /// cell): the first visible cell of the scrolling area per sheet index in `tops`, and the
     /// active sheet's active cell. View state never makes the workbook dirty.
     pub fn store_view(&mut self, tops: &[(usize, CellRef)]) {
         let active = self.selection.active;
-        let si = self.wb.active_sheet;
+        let si = self.wb.active_sheet();
         let changed = tops.iter().any(|(i, c)| self.wb.sheets.get(*i).is_some_and(|sh| sh.view_top_left != *c))
             || self.wb.sheets.get(si).is_some_and(|sh| sh.view_active != active);
         if !changed {
@@ -414,7 +429,15 @@ pub type TextWidth = Arc<dyn Fn(&str, &model::Font, bool) -> f32 + Send + Sync>;
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
+    /// Index in `docs` of the active window's workbook.
     active: usize,
+    /// Windows on the open workbooks ([`windows`]); every workbook has at least one.
+    windows: Vec<WindowState>,
+    active_window: Option<u64>,
+    /// Last window id handed out.
+    next_window: u64,
+    /// Window activation counter (most recently used order).
+    activation: u64,
     pub clipboard: Option<Clipboard>,
     pub prefs: Prefs,
     pub mode: Mode,
@@ -437,8 +460,6 @@ pub struct Session {
     pub recorder: Option<record::Recorder>,
     /// How many `execute` calls are running (0 between top-level commands).
     depth: u32,
-    /// Windows hidden with View › Hide.
-    pub hidden_windows: Vec<usize>,
     /// Draw tab tool: "" (select), "pen" or "eraser"; pen colour and width.
     pub draw_tool: String,
     pub draw_color: String,
@@ -474,13 +495,23 @@ impl Session {
     pub fn active_index(&self) -> usize {
         self.active
     }
+    /// Makes the workbook at `i` active, in its most recently active window (unless the active
+    /// window already shows it).
     pub fn set_active(&mut self, i: usize) {
-        if i < self.docs.len() {
-            self.active = i;
+        let Some(uid) = self.docs.get(i).map(|d| d.uid) else { return };
+        if self.active == i && self.active_window.and_then(|w| self.window(w)).is_some_and(|w| w.doc_uid == uid) {
+            return;
+        }
+        if let Some(w) = self.doc_window(uid) {
+            self.activate_window(w);
         }
     }
     pub fn active(&self) -> Option<&DocState> {
         self.docs.get(self.active)
+    }
+    /// Where the open workbook with this [`DocState::uid`] is in [`Session::documents`].
+    pub fn document_index(&self, uid: u64) -> Option<usize> {
+        self.docs.iter().position(|d| d.uid == uid)
     }
     pub fn active_mut(&mut self) -> Option<&mut DocState> {
         self.docs.get_mut(self.active)
@@ -491,17 +522,24 @@ impl Session {
     pub fn doc_mut(&mut self) -> Result<&mut DocState> {
         self.active_mut().ok_or(EngineError::NoDocument)
     }
+    /// Opens a workbook in a new window, which becomes the active one.
     pub fn add_document(&mut self, d: DocState) -> usize {
+        let uid = d.uid;
         self.docs.push(d);
-        self.active = self.docs.len() - 1;
-        self.active
+        let w = self.push_window(uid);
+        self.activate_window(w);
+        self.docs.len() - 1
     }
+    /// Closes a workbook and its windows; the most recently active remaining window comes forward.
     pub fn close_document(&mut self, i: usize) {
         if i < self.docs.len() {
             let d = self.docs.remove(i);
             self.groups.retain(|g| g.doc != d.uid);
-            if self.active >= self.docs.len() {
-                self.active = self.docs.len().saturating_sub(1);
+            self.windows.retain(|w| w.doc_uid != d.uid);
+            if self.active_window.is_some_and(|w| self.window(w).is_none()) {
+                self.activate_recent();
+            } else if let Some(di) = self.active_window.and_then(|w| self.window(w)).and_then(|w| self.document_index(w.doc_uid)) {
+                self.active = di;
             }
         }
     }
@@ -585,7 +623,7 @@ impl Session {
         };
         // The recorder keeps top-level calls with the place they ran in.
         let place = (self.depth == 0 && self.recorder.is_some()).then(|| match self.active() {
-            Some(d) => (d.uid, d.wb.active_sheet, d.wb.active().map(|sh| sh.name.clone()).unwrap_or_default(), d.selection.clone()),
+            Some(d) => (d.uid, d.wb.active_sheet(), d.wb.active().map(|sh| sh.name.clone()).unwrap_or_default(), d.selection.clone()),
             None => (0, 0, String::new(), Selection::default()),
         });
         let doc_uid = before.as_ref().map(|(uid, ..)| *uid);
@@ -601,8 +639,11 @@ impl Session {
         let result = match result {
             Ok(r) => r,
             Err(p) => {
-                let msg =
-                    p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into());
+                let msg = p
+                    .downcast_ref::<&str>()
+                    .map(ToString::to_string)
+                    .or_else(|| p.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "panic".into());
                 // Restore the workbook and its history as they were, and drop the undo groups the
                 // command opened.
                 self.groups.retain(|g| g.id < first_group);

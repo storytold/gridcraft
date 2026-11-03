@@ -2471,7 +2471,7 @@
   },
   {
    "seq": "WW",
-   "kind": "command",
+   "kind": "control",
    "target": "view.switchWindows",
    "excel": "Switch Windows",
    "note": ""

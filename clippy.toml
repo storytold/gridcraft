@@ -10,3 +10,7 @@ disallowed-methods = [
     { path = "std::time::Instant::now", reason = "traps on wasm; read the clock only off wasm" },
     { path = "std::time::SystemTime::now", reason = "traps on wasm; read the clock only off wasm" },
 ]
+
+disallowed-types = [
+    { path = "egui::ComboBox", reason = "use craft_ui::ComboBox: egui's combo box menu can't grow back while open (egui#5225)" },
+]

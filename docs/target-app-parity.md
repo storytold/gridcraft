@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-21 · **Change:** minor (Page Setup paper sizes match Japanese Excel: B4/B5/B6 are the JIS sizes, with ISO B4/B5/B6 by name and the Japanese postcards, envelopes and A6 added; no score change) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-22 · **Change:** minor (several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -102,11 +102,11 @@ performance 8, stability 8, localization 4, hardware 2, platforms 2, ecosystem 2
 |---|---|---|---|---|
 | Features | 45 | ~59% | 300–485 | Table above |
 | File formats | 15 | ~50% | 80–120 | XLSX read/write is broad but unproven on a real corpus and in Excel; XLSB and ODS are values-only import; no XLS, XML Spreadsheet 2003, SYLK, DIF, PRN; VBA dropped; 100 MB XLSX fails (#175). [file-format-parity.md](file-format-parity.md) |
-| UI/UX fidelity | 12 | ~55% | 50–80 | Excel-style ribbon, galleries, dialogs, formula bar, status bar; 59 commands with shortcuts vs Excel's 200+; key tips on part of the Home tab only; short context menu; single window. [ui-parity.md](ui-parity.md) |
+| UI/UX fidelity | 12 | ~55% | 50–80 | Excel-style ribbon, galleries, dialogs, formula bar, status bar; 59 commands with shortcuts vs Excel's 200+; key tips on part of the Home tab only; short context menu; a native window per workbook window on the desktop (one on the web). [ui-parity.md](ui-parity.md) |
 | Performance | 8 | ~35% | 35–55 | [Performance](#performance) |
 | Stability | 8 | ~60% | 15–25 | Never-crash rules enforced by lint, every command fuzzed with hostile params, random command sequences fuzzed against undo/redo, XLSX round-trip and full-recalc invariants, last-resort guard in `Session::execute`. Field reports: Windows Intel GPU crash (#120), error on close (#117), freeze opening from Finder (#166), screen flashing (#76) |
 | Localization | 4 | ~10% | 100–165 | Ribbon-only catalog in five languages (ja, zh, ko, pt-BR, ru; ~12% of strings each), CJK/Thai/Hebrew font fallback, no shaping or RTL. [localization-parity.md](localization-parity.md) |
-| Hardware | 2 | ~40% | 25–40 | GPU UI via wgpu; single-threaded calc; no pen pressure; one window. [hardware-parity.md](hardware-parity.md) |
+| Hardware | 2 | ~40% | 25–40 | GPU UI via wgpu; single-threaded calc; no pen pressure; a native window per workbook window, Arrange All on one monitor. [hardware-parity.md](hardware-parity.md) |
 | Platforms | 2 | ~80% | 30–60 | [Platforms](#platforms) |
 | Ecosystem / add-ins | 2 | ~10% | 25–40 | [Ecosystem and AI](#ecosystem-and-ai) |
 | AI features | 2 | ~15% | 30–50 | [Ecosystem and AI](#ecosystem-and-ai) |
@@ -144,7 +144,7 @@ Discounts for what still stops real work:
 
 | Discount | Factor | Evidence |
 |---|---|---|
-| Interaction fidelity | × 0.90 | 59 command shortcuts vs Excel's 200+; key tips only on part of the Home tab (#43); rectangular selection bug (#28); charts can't be resized (#190); one window (#162); missing horizontal scrollbar report (#176) |
+| Interaction fidelity | × 0.90 | 59 command shortcuts vs Excel's 200+; key tips only on part of the Home tab (#43); rectangular selection bug (#28); charts can't be resized (#190); missing horizontal scrollbar report (#176) |
 | Stability on real machines | × 0.92 | Never-crash lints, fuzzed commands and the `Session::execute` guard; but field reports of a startup crash on Intel UHD (#120), an error on close (#117), a freeze opening from Finder (#166) and screen flashing (#76) |
 | File exchange with Excel users | × 0.88 | Excel opening our output is unverified across features; unmodelled parts dropped on save; advanced chart kinds lose their type; 100 MB files fail (#175); `.xls` and encrypted files are refused with a clear message (#17) rather than opened. Harsher than a drawing app's discount because spreadsheets are exchanged constantly |
 
@@ -334,6 +334,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | Several windows on the desktop: a native window per workbook window, New Window on the same workbook, Switch Windows and Arrange All; "one window" removed from UI/UX fidelity, Hardware and the interaction-fidelity discount; no score change |
 | 2026-10-21 | minor | Page Setup paper sizes: `B4`/`B5`/`B6` are the JIS sizes Japanese Excel uses (ISO B4/B5/B6 by name), and Japanese Postcard, Japanese Double Postcard, the chou/kaku envelopes and A6 are added; PDF MediaBox and `file.print` follow, and the Size menu lists them |
 | 2026-10-18 | trivial | Stale chart notes: all chart kinds survive XLSX round-trip (PRs #158, #161) and trendlines landed |
 | 2026-10-16 | minor | Advanced Filter copy-to clears only its actual output and rejects overflow without changing cells (#1031) |

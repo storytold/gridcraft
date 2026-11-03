@@ -1,5 +1,6 @@
 //! Ukrainian translations for the interface strings in i18n.rs.
 
+/// Returns the Ukrainian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Вставити",
@@ -203,6 +204,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Попередній перегляд\nрозривів сторінок",
         "Page\nLayout" => "Розмітка\nсторінки",
         "Formula Bar" => "Рядок формул",
+        "Name Box" => "Поле імені",
+        "Cell Editor" => "Редактор клітинки",
+        "Font Size" => "Розмір шрифту",
         "Gridlines" => "Сітка",
         "Headings" => "Заголовки",
         "Zoom" => "Масштаб",
@@ -300,6 +304,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Темна",
         "Sheet Options|View" => "На екрані",
         "Print" => "Друк",
+        "Print What" => "Що друкувати",
         // Page Layout view and the Header & Footer tab.
         "Click to add data" => "Клацніть, щоб додати дані",
         "Add header" => "Додати верхній колонтитул",
@@ -421,7 +426,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Do you want to save the changes you made to {title}?" => "Do you want to save the changes you made to {title}?",
         "Save a copy as .{format}" => "Save a copy as .{format}",
         "Select a chart first." => "Select a chart first.",
-        "Text Box" => "Text Box",
+        "Text Box" => "Напис",
         "Select Data" => "Select Data",
         "Row Height" => "Row Height",
         "Column Width" => "Column Width",
