@@ -346,6 +346,26 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         }
                     });
                 }
+                "refusedDraft" => {
+                    let reason = d.values.get("reason").and_then(Json::as_str).unwrap_or_default().to_owned();
+                    let window = d.values.get("window").and_then(Json::as_u64);
+                    ui.add(egui::Label::new(app.ui.language.tr_error(&reason)).wrap());
+                    ui.add_space(4.0);
+                    ui.label("Edit the cell, or exit and leave it as it was.");
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Edit the Cell").clicked() {
+                            if let Some(ed) = &mut app.editor {
+                                ed.request_focus = true;
+                            }
+                            open = false;
+                        }
+                        if ui.button("Exit Anyway").clicked() {
+                            app.exit_anyway(window, ui.ctx());
+                            open = false;
+                        }
+                    });
+                }
                 "start" => {
                     ui.heading("Start a new workbook");
                     ui.horizontal_wrapped(|ui| {

@@ -240,7 +240,11 @@ impl DocWindows {
         }
         let window = *self.list.get(id)?;
         app.enter_window(window);
-        app.run_or_alert("window.close", json!({"window": window}));
+        if app.commit_edit(0, 0, false, false) {
+            app.run_or_alert("window.close", json!({"window": window}));
+        } else {
+            app.ask_about_refused_draft(Some(window));
+        }
         app.session.active_window()
     }
 }

@@ -715,3 +715,78 @@ fn control_requests_route_to_a_window_and_list_windows() {
     let r = call(&mut h, "engine.execute", serde_json::json!({"command": "cell.get", "params": {"cell": "A1"}, "window": 999}));
     assert_eq!(r["ok"], false, "{r}");
 }
+
+/// A draft that can't be entered holds the window open and asks.
+fn close_with_a_bad_formula(h: &mut egui_kittest::Harness<'static, SheetApp>) -> Vec<egui::ViewportCommand> {
+    h.state_mut().begin_edit(Some("=1*/2".into()), false);
+    h.run_steps(2);
+    let sent = request_window_close(h);
+    assert!(sent.contains(&egui::ViewportCommand::CancelClose), "{sent:?}");
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("refusedDraft"));
+    assert!(h.state().message.is_none(), "the reason is in the question, not in a second message");
+    sent
+}
+
+#[test]
+fn closing_with_a_bad_formula_can_go_back_to_the_cell() {
+    let mut h = harness(Services::default());
+    close_with_a_bad_formula(&mut h);
+    let sent = click_commands(&mut h, "Edit the Cell");
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().editor.as_ref().map(|e| e.text.as_str()), Some("=1*/2"), "the draft is still there to fix");
+}
+
+#[test]
+fn closing_with_a_bad_formula_can_exit_anyway() {
+    let mut h = harness(Services::default());
+    close_with_a_bad_formula(&mut h);
+    let sent = click_commands(&mut h, "Exit Anyway");
+    assert!(sent.contains(&egui::ViewportCommand::Close), "nothing unsaved: it closes: {sent:?}");
+    assert!(h.state().editor.is_none());
+}
+
+#[test]
+fn exit_anyway_keeps_the_cell_and_still_asks_about_unsaved_changes() {
+    let mut h = harness(Services::default());
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    h.state_mut().run("selection.set", serde_json::json!({"cell": "A1"})).unwrap();
+    h.run_steps(2);
+    close_with_a_bad_formula(&mut h);
+    let sent = click_commands(&mut h, "Exit Anyway");
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    let cell = CellRef::parse("A1").unwrap();
+    assert_eq!(
+        h.state().session.active().unwrap().wb.active().unwrap().cell(cell).map(|c| c.value.clone()),
+        Some(Value::Number(42.0)),
+        "the cell is as it was"
+    );
+    let sent = click_commands(&mut h, "Don't Save");
+    assert!(sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+}
+
+#[test]
+fn quit_with_a_bad_formula_asks_too() {
+    let mut h = harness(Services::default());
+    h.state_mut().begin_edit(Some("=1*/2".into()), false);
+    h.run_steps(2);
+    let ctx = h.ctx.clone();
+    h.state_mut().request_quit(&ctx);
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("refusedDraft"));
+    assert!(h.state().message.is_none());
+    let sent = click_commands(&mut h, "Exit Anyway");
+    assert!(sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+}
+
+#[test]
+fn a_formula_error_on_enter_still_shows_the_plain_message() {
+    let mut h = harness(Services::default());
+    h.state_mut().begin_edit(Some("=1*/2".into()), false);
+    h.run_steps(2);
+    assert!(!h.state_mut().commit_edit(0, 0, false, false));
+    assert!(h.state().message.is_some());
+    assert!(h.state().dialog.is_none(), "the question is only for closing");
+}

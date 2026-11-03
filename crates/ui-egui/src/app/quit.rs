@@ -10,6 +10,7 @@ impl SheetApp {
         // A cell still being edited is part of the workbook, as for File › Close.
         if !self.commit_edit(0, 0, false, false) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.ask_about_refused_draft(None);
             return;
         }
         // The macro step editor asks about its own unsaved steps and debug run first; once it has
@@ -29,6 +30,27 @@ impl SheetApp {
                 d.values.insert("quit".into(), json!(true));
             }
             _ => self.continue_quit(ctx),
+        }
+    }
+
+    /// The cell being edited can't be entered (a formula with an error, a validation alert) and it
+    /// holds up closing: the reason goes into a question instead, so a bad draft never keeps the
+    /// app from closing. `window` is the native window being closed; `None` is quitting.
+    pub(crate) fn ask_about_refused_draft(&mut self, window: Option<u64>) {
+        if self.editor.is_none() {
+            return;
+        }
+        let reason = self.message.take().map(|(_, reason)| reason).unwrap_or_default();
+        self.open_dialog("refusedDraft", json!({"reason": reason, "window": window}));
+    }
+
+    /// Exit Anyway: drops the draft, leaving its cell as it was, and goes on closing. Unsaved
+    /// workbooks are still asked about.
+    pub fn exit_anyway(&mut self, window: Option<u64>, ctx: &egui::Context) {
+        self.cancel_edit();
+        match window {
+            Some(window) => self.run_or_alert("window.close", json!({"window": window})),
+            None => self.request_quit(ctx),
         }
     }
 
@@ -83,16 +105,18 @@ impl SheetApp {
 
     /// Quit (the macOS app menu, ⌘Q): commits every window's cell draft as Enter would, lets the
     /// macro step editor ask about its unsaved steps, then asks about each unsaved workbook in its
-    /// window; Cancel on any of them stops the quit. A draft its
-    /// workbook refuses stops the quit too, with its window in front and the reason shown.
+    /// window; Cancel on any of them stops the quit. A draft its workbook refuses brings its window
+    /// to the front and asks whether to edit it or exit anyway.
     pub fn request_quit(&mut self, ctx: &egui::Context) {
         while let Some(window) = self.parked_window_with_draft() {
             self.enter_window(window);
             if self.settle_drafts().is_err() {
+                self.ask_about_refused_draft(None);
                 return;
             }
         }
         if self.settle_drafts().is_err() {
+            self.ask_about_refused_draft(None);
             return;
         }
         // The macro step editor asks about its own unsaved steps and debug run first, as for the

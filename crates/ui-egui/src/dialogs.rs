@@ -1091,6 +1091,7 @@ impl Dialog {
             "pickList" => Dialog::custom("pickList", "Pick From List", json!({})),
             "saveCopy" => Dialog::custom("saveCopy", "Save a Copy", json!({"format": p("format")})),
             "saveChanges" => Dialog::custom("saveChanges", "Save Changes?", json!({"title": p("title"), "quit": p("quit")})),
+            "refusedDraft" => Dialog::custom("refusedDraft", "GridCraft", json!({"reason": p("reason"), "window": p("window")})),
             "start" => Dialog::custom("start", "GridCraft", json!({})),
             "comments" => {
                 app.grid.pane = None;
