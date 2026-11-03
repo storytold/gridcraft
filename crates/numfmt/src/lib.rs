@@ -425,6 +425,9 @@ impl NumberFormat {
 /// The `TEXT()` worksheet function: formats a value with a format code. Numeric text is
 /// converted to a number first; other text and booleans (as `TRUE`/`FALSE`) go through the text
 /// section, or are returned as is.
+/// Longest text a cell holds, in characters (Excel's limit), and so the longest `TEXT` result.
+const MAX_CELL_TEXT_CHARS: usize = 32_767;
+
 pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, CellError> {
     if code.is_empty() {
         return Ok(String::new());
@@ -440,7 +443,15 @@ pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, C
         Value::Bool(b) => return Ok(fmt.format_text(if b { "TRUE" } else { "FALSE" }).text),
         Value::Text(t) => match gridcraft_core::parse::parse_number_text(&t) {
             Some(n) => n,
-            None => return Ok(fmt.format_text(&t).text),
+            // Every `@` repeats the text: a result past a cell's limit is `#VALUE!`, so nested
+            // TEXT calls can't multiply it further.
+            None => {
+                let out = fmt.format_text(&t).text;
+                if out.len() > MAX_CELL_TEXT_CHARS && out.chars().count() > MAX_CELL_TEXT_CHARS {
+                    return Err(CellError::Value);
+                }
+                return Ok(out);
+            }
         },
         Value::Array(_) => return Err(CellError::Value),
     };
