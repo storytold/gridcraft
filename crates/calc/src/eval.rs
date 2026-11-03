@@ -18,7 +18,7 @@ mod lambda;
 mod reference_fns;
 mod special;
 
-use array::map_unary;
+use array::{binary_scalar_snapped, map_unary};
 pub use array::{binary_values, zip2};
 pub use format::r1c1_to_a1;
 pub use special::{SPECIAL_FUNCTIONS, is_known_function, precedents, resized_sum_range};
@@ -219,6 +219,27 @@ impl<'h> Evaluator<'h> {
         self.deref(ev)
     }
 
+    /// Evaluates the root of a formula. Excel snaps a near-cancelling add or subtract to exactly 0
+    /// only here (and in the last addition of a `SUM`), never inside parentheses, unary signs,
+    /// `IF` branches or an inner step: `=A1-B1` is 0 over two numbers one ulp apart, `=(A1-B1)` is not.
+    pub fn value_root(&mut self, e: &Expr) -> Value {
+        match e {
+            Expr::Binary(op @ (BinOp::Add | BinOp::Sub), a, b) => {
+                // The root skips `eval`, so it must pass `eval`'s guards itself: a name that refers to
+                // itself (directly or through cells) is bounded only by them.
+                if let Err(x) = self.enter() {
+                    return Value::Error(x);
+                }
+                let x = self.value(a);
+                let y = self.value(b);
+                self.depth -= 1;
+                let sys = self.host.workbook().date_system;
+                zip2(&x, &y, |l, r| binary_scalar_snapped(*op, l, r, sys))
+            }
+            _ => self.value(e),
+        }
+    }
+
     fn resolve_sheet(&self, s: &SheetSel) -> Result<Vec<usize>, CellError> {
         let wb = self.host.workbook();
         match s {
@@ -296,22 +317,31 @@ impl<'h> Evaluator<'h> {
     }
 
     pub fn eval(&mut self, e: &Expr) -> Ev {
+        if let Err(x) = self.enter() {
+            return err(x);
+        }
+        let r = self.eval_inner(e);
+        self.depth -= 1;
+        r
+    }
+
+    /// `eval`'s guards, shared with [`Self::value_root`]: the stack budget and the nesting depth.
+    /// On `Ok` the depth is one level deeper, and the caller steps it back.
+    fn enter(&mut self) -> Result<(), CellError> {
         let here = stack_position();
         if self.depth == 0 {
             self.stack_top = self.host.stack_top().unwrap_or(here);
         }
         if self.stack_top.abs_diff(here) > STACK_BUDGET {
             self.host.stack_exhausted();
-            return err(CellError::Num);
+            return Err(CellError::Num);
         }
         self.depth += 1;
         if self.depth > MAX_DEPTH {
             self.depth -= 1;
-            return err(CellError::Num);
+            return Err(CellError::Num);
         }
-        let r = self.eval_inner(e);
-        self.depth -= 1;
-        r
+        Ok(())
     }
 
     fn eval_inner(&mut self, e: &Expr) -> Ev {
@@ -382,7 +412,13 @@ impl<'h> Evaluator<'h> {
                     let saved = self.sheet;
                     // Unqualified references in a name refer to the scope sheet.
                     self.sheet = scope;
-                    let r = self.eval(&expr);
+                    // A name's body is a formula of its own, so Excel snaps it by the root rule wherever
+                    // the name is used (name probe, observed on Windows Excel 16.0.20430). Only a
+                    // value-producing add or subtract needs it; any other body, a range included, stays as it is.
+                    let r = match &expr {
+                        Expr::Binary(BinOp::Add | BinOp::Sub, ..) => Ev::V(self.value_root(&expr)),
+                        _ => self.eval(&expr),
+                    };
                     self.sheet = saved;
                     r
                 }

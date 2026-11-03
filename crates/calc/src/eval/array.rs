@@ -22,17 +22,26 @@ impl Agg {
 /// What a folded aggregate carries from one value to the next.
 #[derive(Default)]
 pub(super) struct Acc {
-    pub(super) sum: f64,
+    /// The sum of every number but the last, left to right.
+    sum: f64,
+    /// The last number seen: `SUM` snaps only its last addition (see `gridcraft_core::arith::sum_snapped`).
+    last: Option<f64>,
     pub(super) count: u64,
 }
 
 impl Acc {
+    pub(super) fn add(&mut self, n: f64) {
+        if let Some(prev) = self.last.replace(n) {
+            self.sum += prev;
+        }
+    }
+
     /// Takes a value found inside a reference: only numbers count. `Err` is an error value that
     /// ends `SUM` and `AVERAGE`; `COUNT` skips errors.
     pub(super) fn add_cell(&mut self, kind: Agg, v: &Value) -> Result<(), CellError> {
         match v {
             Value::Number(n) => {
-                self.sum += n;
+                self.add(*n);
                 self.count = self.count.saturating_add(1);
                 Ok(())
             }
@@ -42,11 +51,12 @@ impl Acc {
     }
 
     pub(super) fn finish(&self, kind: Agg) -> Value {
+        let plain = self.sum + self.last.unwrap_or(0.0);
         match kind {
-            Agg::Sum => Value::number(self.sum),
+            Agg::Sum => Value::number(self.last.map_or(self.sum, |l| gridcraft_core::arith::snap_add(self.sum, l))),
             Agg::Count => Value::number(self.count as f64),
             Agg::Average if self.count == 0 => Value::Error(CellError::Div0),
-            Agg::Average => Value::number(self.sum / self.count as f64),
+            Agg::Average => Value::number(plain / self.count as f64),
         }
     }
 }
@@ -137,6 +147,17 @@ pub(super) fn single(v: Value) -> Option<Value> {
 
 pub fn binary_values(op: BinOp, x: &Value, y: &Value, sys: gridcraft_core::DateSystem) -> Value {
     zip2(x, y, |a, b| binary_scalar(op, a, b, sys))
+}
+
+/// `a + b` or `a - b` with Excel's snap to zero (see [`super::Evaluator::value_root`]).
+pub(super) fn binary_scalar_snapped(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSystem) -> Value {
+    match (a, b) {
+        (Value::Error(_), _) | (_, Value::Error(_)) => binary_scalar(op, a, b, sys),
+        _ => match (a.to_number_in(sys), b.to_number_in(sys)) {
+            (Ok(x), Ok(y)) => Value::number(gridcraft_core::arith::snap_add(x, if op == BinOp::Sub { -y } else { y })),
+            (Err(e), _) | (_, Err(e)) => Value::Error(e),
+        },
+    }
 }
 
 fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSystem) -> Value {
