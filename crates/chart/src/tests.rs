@@ -1319,6 +1319,7 @@ fn a_series_named_by_a_name_on_a_sheet_with_an_apostrophe_resolves() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        error_bars: Vec::new(),
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
@@ -1355,6 +1356,7 @@ fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        error_bars: Vec::new(),
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));

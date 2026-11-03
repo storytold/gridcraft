@@ -55,6 +55,7 @@ fn chart(id: u32, kind: ChartKind, error_bars: Vec<ErrorBars>) -> Chart {
         }],
         legend: LegendPos::Bottom,
         data_labels: false,
+        data_table: None,
         gridlines: true,
         style: 2,
         x_title: None,

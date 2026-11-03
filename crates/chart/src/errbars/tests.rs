@@ -95,6 +95,7 @@ fn chart(kind: ChartKind) -> Chart {
         series: vec![],
         legend: LegendPos::None,
         data_labels: false,
+        data_table: None,
         gridlines: false,
         style: 0,
         x_title: None,
