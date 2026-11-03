@@ -269,6 +269,7 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("view.unhideWindow", "View", "Window", "Unhide"),
     ("view.switchWindows", "View", "Window", "Switch Windows"),
     ("view.macros", "View", "Macros", "Macros"),
+    ("macro.record", "View", "Macros", "Record Macro"),
     // Automate
     ("automate.newScript", "Automate", "Scripting Tools", "New Script"),
     ("automate.allScripts", "Automate", "Scripting Tools", "All Scripts"),
