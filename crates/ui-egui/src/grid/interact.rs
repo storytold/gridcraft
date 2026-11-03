@@ -720,8 +720,6 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
             }
             // Whole rows or columns clicked or dragged over by their headers.
             Drag::Rows(_) | Drag::Cols(_) => format_painter_apply(app),
-            // A right-drag release offers fill modes instead of immediately applying the fill.
-            Drag::Fill { origin, target: Some(t), menu: true } => {
             // The release may be the first frame to report the pointer's last position.
             drag @ (Drag::PointRows(_) | Drag::PointCols(_)) => {
                 if resp.drag_stopped()
@@ -730,6 +728,8 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
                     point_header_to(app, geo, sh, wb, &drag, p);
                 }
             }
+            // A right-drag release offers fill modes instead of immediately applying the fill.
+            Drag::Fill { origin, target: Some(t), menu: true } => {
                 if let Some(p) = pos
                     && t != origin.source
                     && !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
