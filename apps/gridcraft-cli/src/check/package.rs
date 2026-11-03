@@ -133,13 +133,15 @@ fn read_zip_part_within(zip: &mut Zip<'_>, name: &str, budget: &mut u64) -> Resu
     // One byte past what is left shows that the part doesn't fit.
     let limit = MAX_XML_PART.min(budget.saturating_add(1));
     let mut buf = Vec::new();
-    f.take(limit).read_to_end(&mut buf).map_err(|_| PartError::Unreadable)?;
+    // Bytes read before a decompression error still count against the budget.
+    let res = f.take(limit).read_to_end(&mut buf);
     let read = buf.len() as u64;
     if read > *budget {
         *budget = 0;
         return Err(PartError::OverBudget);
     }
     *budget -= read;
+    res.map_err(|_| PartError::Unreadable)?;
     Ok(buf)
 }
 
