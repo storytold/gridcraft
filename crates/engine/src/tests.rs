@@ -5457,3 +5457,23 @@ fn a_view_kept_through_redo_doesnt_make_the_saved_workbook_dirty() {
     assert_eq!(d.wb.active().unwrap().view, gridcraft_model::SheetViewMode::PageBreakPreview);
     assert!(!d.is_dirty(), "back at the saved edits, the view alone isn't a change");
 }
+
+/// A link from a file can sit on a cell with nothing stored in it, past the used range (or on a
+/// sheet with no cells at all). Clear Hyperlinks, and Remove Hyperlink in the cell menu, must
+/// still remove it.
+#[test]
+fn clear_hyperlinks_removes_links_on_cells_with_nothing_stored() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    let link = || gridcraft_model::Hyperlink { target: "https://example.com".into(), tooltip: None, external: true };
+    let (a1, c5) = (CellRef::parse("A1").unwrap(), CellRef::parse("C5").unwrap());
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().hyperlinks.insert(c5, link());
+    s.execute("edit.clearHyperlinks", json!({"range": "C5"})).unwrap();
+    assert!(!s.doc().unwrap().wb.active().unwrap().hyperlinks.contains_key(&c5), "the link past the used range is removed");
+
+    // No cells at all.
+    s.execute("edit.clearAll", json!({"range": "A1"})).unwrap();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().hyperlinks.insert(a1, link());
+    s.execute("edit.clearHyperlinks", json!({"range": "A1"})).unwrap();
+    assert!(!s.doc().unwrap().wb.active().unwrap().hyperlinks.contains_key(&a1), "the link on an empty sheet is removed");
+}
