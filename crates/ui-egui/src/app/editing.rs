@@ -11,22 +11,7 @@ pub(crate) const DRAFT_CODE_HIDDEN: &str = "Sheet protection now hides the code 
 fn validate_literal_fill(doc: &gridcraft_engine::DocState, sheet: usize, text: &str) -> Option<(gridcraft_engine::model::Validation, String)> {
     let default_selection = gridcraft_engine::Selection::default();
     let selection = if doc.wb.active_sheet() == sheet { &doc.selection } else { doc.sheet_selections.get(sheet).unwrap_or(&default_selection) };
-    let mut warning = None;
-    for range in &selection.ranges {
-        // The fill command rejects an oversized range before writing it.
-        if range.count() > 2_000_000 {
-            return None;
-        }
-        for cell in range.iter() {
-            if let Some(issue) = gridcraft_engine::cmd::data::check_literal_validation(&doc.wb, sheet, cell, text) {
-                if issue.0.error_style == gridcraft_engine::model::ErrorStyle::Stop {
-                    return Some(issue);
-                }
-                warning = Some(issue);
-            }
-        }
-    }
-    warning
+    gridcraft_engine::cmd::data::check_literal_fill_validation(&doc.wb, sheet, &selection.ranges, text)
 }
 
 impl SheetApp {

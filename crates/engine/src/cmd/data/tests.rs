@@ -546,3 +546,21 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert_eq!(sh.validations.len(), 3);
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
+
+/// Each custom rule sees its own proposed value and the original values of other destinations.
+#[test]
+fn literal_fill_validation_restores_the_previous_candidate() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("range.setValues", json!({"range":"A1", "values":[["old","old"]]})).unwrap();
+    session.execute("data.validation", json!({"range":"A1", "type":"custom", "formula1":"=A1=\"new\""})).unwrap();
+    session.execute("data.validation", json!({"range":"B1", "type":"custom", "formula1":"=AND(A1=\"old\",B1=\"new\")"})).unwrap();
+    let range = RangeRef::parse("A1:B1").unwrap();
+    let wb = &session.doc().unwrap().wb;
+    assert!(super::check_literal_fill_validation(wb, 0, &[range], "new").is_none());
+    assert!(super::check_literal_fill_validation(wb, 0, &[range], "other").is_some());
+
+    // Direct command calls retain their existing behavior, independently of UI validation.
+    session.execute("range.fill", json!({"range":"A1:B1", "input":"other", "literal":true})).unwrap();
+    assert_eq!(session.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 1)), Value::text("other"));
+}
