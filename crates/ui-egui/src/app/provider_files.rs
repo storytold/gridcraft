@@ -398,4 +398,99 @@ mod tests {
         assert!(app.run("file.openProviderResource", json!({"resource":"recent-book"})).is_err());
         assert!(host.take_events().is_empty());
     }
+
+    #[test]
+    fn failed_capture_delivery_is_consumed_without_cleaning_newer_edits_and_retries_a_complete_workbook() {
+        use gridcraft_engine::model::{DefinedName, Preserved, PreservedPart, PreservedRel, Sheet};
+        use std::sync::Arc;
+
+        let (mut app, host) = app();
+        {
+            let wb = Arc::make_mut(&mut app.session.active_mut().unwrap().wb);
+            wb.sheets.push(Arc::new(Sheet::new("Second")));
+            wb.names.push(DefinedName {
+                name: "RecoveryValue".into(),
+                scope: None,
+                formula: "Sheet1!$A$1".into(),
+                comment: String::new(),
+                hidden: false,
+            });
+            wb.vba_project = Some(Arc::new(vec![7, 11, 23, 42]));
+            wb.preserved = Some(Arc::new(Preserved {
+                rels: vec![PreservedRel {
+                    id: "rIdRecovery".into(),
+                    rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml".into(),
+                    target: "customXml/recovery.xml".into(),
+                    external: false,
+                }],
+                parts: vec![PreservedPart {
+                    name: "customXml/recovery.xml".into(),
+                    content_type: "application/xml".into(),
+                    data: Arc::from(b"<recovery>original synthetic resource</recovery>".as_slice()),
+                    rels: Vec::new(),
+                }],
+                ..Default::default()
+            }));
+        }
+        app.session.run("cell.set", json!({"cell":"B1","input":"=2+3"})).unwrap();
+        let saved = app.session.active().unwrap().saved.clone();
+        let document = app.session.active().unwrap().uid;
+        assert!(app.choose_provider_save(false));
+        let dialog = host.take_events().remove(0);
+        let failed = dialog.metadata["requestId"].as_str().unwrap().to_owned();
+        host.resolve_dialog(&failed, "provider", "Recovery.xlsm").unwrap();
+        app.provider_tick();
+        let captured_revision = app.session.active().unwrap().revision;
+        app.session.run("cell.set", json!({"cell":"C1","input":"Newer edit survives"})).unwrap();
+        let newer = app.session.active().unwrap().wb.clone();
+        let newer_revision = app.session.active().unwrap().revision;
+        assert_ne!(captured_revision, newer_revision);
+        assert!(host.publish_events_with(
+            |metadata, _| {
+                assert_eq!(metadata["type"], "save");
+                Err("recoverable byte-copy failure")
+            },
+            |_| {}
+        ));
+        assert!(host.pending_for(document));
+        assert!(host.result(failed, "saved".into(), "late".into()).is_err());
+        app.provider_tick();
+        let state = app.session.active().unwrap();
+        assert_eq!(state.uid, document);
+        assert_eq!(state.revision, newer_revision);
+        assert!(Arc::ptr_eq(&state.wb, &newer));
+        assert!(Arc::ptr_eq(&state.saved, &saved));
+        assert!(state.is_dirty());
+        assert!(!host.pending_for(document));
+        assert_eq!(host.snapshot()["documents"][0]["provider"], false);
+        assert!(app.message.as_ref().is_some_and(|(_, message)| message.contains("Provider save failed")));
+
+        assert!(app.choose_provider_save(false));
+        let retry = host.take_events().remove(0).metadata["requestId"].as_str().unwrap().to_owned();
+        host.resolve_dialog(&retry, "provider", "Recovery.xlsm").unwrap();
+        app.provider_tick();
+        let mut captured = None;
+        host.publish_events_with(
+            |metadata, bytes| {
+                assert_eq!(metadata["requestId"], retry);
+                captured = bytes;
+                Ok::<_, ()>(())
+            },
+            |_| {},
+        );
+        let bytes = captured.unwrap();
+        let (round_trip, _) = gridcraft_engine::io::open_bytes("Recovery.xlsm", &bytes).unwrap();
+        assert_eq!(round_trip.sheets.len(), 2);
+        assert_eq!(round_trip.sheets[1].name, "Second");
+        assert_eq!(round_trip.sheets[0].cell(gridcraft_engine::core::CellRef::new(0, 1)).unwrap().input_text(), "=2+3");
+        assert_eq!(round_trip.sheets[0].cell(gridcraft_engine::core::CellRef::new(0, 2)).unwrap().input_text(), "Newer edit survives");
+        assert!(round_trip.names.iter().any(|name| name.name == "RecoveryValue"));
+        assert_eq!(round_trip.vba_project, newer.vba_project);
+        let kept = round_trip.preserved.as_ref().unwrap().parts.iter().find(|part| part.name == "customXml/recovery.xml").unwrap();
+        assert_eq!(kept.data.as_ref(), b"<recovery>original synthetic resource</recovery>");
+        assert!(app.session.active().unwrap().is_dirty(), "encoding and dispatch are not durable acknowledgement");
+        host.result(retry, "saved".into(), "recovered-workbook".into()).unwrap();
+        app.provider_tick();
+        assert!(!app.session.active().unwrap().is_dirty());
+    }
 }

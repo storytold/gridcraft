@@ -25,6 +25,8 @@ server authorization.
 `registerProvider(id, label, namespace)` returns a fresh connection ID. Re-registering the exact
 identity is idempotent. Changing account requires `unregisterProvider()` first, which refuses
 while a chooser, serialization, upload acknowledgement or read is unresolved. Unregistering
+also refuses while terminal events are queued or a publisher owns the current delivery batch,
+including its last event. Reentrant publication leaves that outer batch in charge. Unregistering
 clears resources and bindings without closing documents. `setEnabled(false)` stops new
 provider choices and hides provider Recents while allowing outstanding operations to settle;
 `setEnabled(true)` restores availability. There is no editor preference or end-user cloud switch.
@@ -112,8 +114,25 @@ document IDs/dirty state and outstanding work; `setResources` rejects stale conn
   arbitrary extra host object properties are not stringified or copied.
 
 The host should register listeners before requesting work and always settle each request.
-A failing event listener cannot silently acknowledge a save. The editor keeps authoritative
-captures pending until the host reports an explicit terminal outcome. This contract does not
+A failing event listener cannot silently acknowledge a save. Recoverable JavaScript byte-copy
+or event-dispatch errors are caught by the production publisher. A still-owned captured save
+is transferred into a bounded failure inbox and consumed by the ordinary `SheetApp` Result
+path on the next logic frame. It remains pending until that consumer runs. This is a failure,
+never a durable acknowledgement: newer edits, workbook resources, bindings and alias clean
+states are preserved, and the ordinary chooser can start a fresh retry. Accepted synchronous
+callbacks are not replaced by a later dispatch error.
+
+A failed `saveDialog` or `openRequest` dispatch retires only its still-owned current-connection
+request and queues a correlated `saveFailed` or `openFailed`. Later events in the drained batch
+continue. A full command queue refuses a non-cancel chooser reply without consuming its owner.
+The ordinary command limit stays16. The separate failure inbox contains at most16 already
+admitted captures and no file bytes or newly admitted requests. Terminal events remain bounded
+by their original owners and cannot be erased by account replacement while queued/in flight.
+The publisher requests repaint for failure consumption and work left after its bounded drains.
+
+Exceptions swallowed by the browser while invoking a DOM event listener are not observable at
+this boundary. Those saves still require an explicit host result. A process abort or fatal WASM
+allocation failure cannot be recovered by catching a JavaScript exception. This contract does not
 provide autosave, a background synchronization daemon, storage conflict resolution or remote
 session authentication. Those are host/backend decisions.
 
@@ -124,6 +143,16 @@ coalescing, choices, exact captures, cancellation, identity changes, aliases and
 reads. `crates/ui-egui/src/app/provider_files.rs` includes native package round-trip and
 late-edit/failure regressions. They are source fixtures; execution results belong in the PR's
 validation report after running the repository's checks.
+
+`apps/gridcraft-web/src/file_provider_browser_tests.rs` adds one real-window fixture using the
+production catch-enabled publisher and `SheetApp::logic`. Rust closures inject recoverable
+JavaScript copy and request-dispatch errors. The fixture catches the actual publisher call with
+`Function::call0` and restores each exact own-property descriptor (or removes its temporary
+shadow) before propagating the result. It checks later-event continuation, failure consumption,
+retry payload identity and native XLSM round-trip including
+two sheets, formulas, defined names, synthetic VBA and an opaque original workbook part.
+Native tests also cover a full command/event queue, accepted reentrant callbacks and the last
+in-flight terminal. These are regression sources, not execution or backend-durability results.
 
 Resolving a destination commits that workbook's cell and text-box drafts again, including
 drafts parked in another window. The previously active window and unrelated workbook drafts

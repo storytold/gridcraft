@@ -160,7 +160,7 @@ impl eframe::App for WebShell {
         }
         self.app.logic(ctx);
         if let Some(host) = &self.app.services.file_providers {
-            crate::file_providers::publish(host);
+            crate::file_providers::publish(host, ctx);
         }
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#1562).
         let changed = self.prefs.changed(&self.app);
@@ -186,7 +186,7 @@ impl eframe::App for WebShell {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.app.ui(ui);
         if let Some(host) = &self.app.services.file_providers {
-            crate::file_providers::publish(host);
+            crate::file_providers::publish(host, ui.ctx());
         }
         if let Some(bridge) = &self.bridge {
             bridge.sync(&mut self.app);

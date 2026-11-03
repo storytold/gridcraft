@@ -2,6 +2,9 @@
 //!
 //! The UI owns serialization and document state; the host only transports immutable captures.
 //! A resource ID is an opaque provider identity, never a path or permission to run a command.
+//!
+//! Delivery recovery adapts the sibling WordCraft protocol work (copyright 2026 ArtCraft Team
+//! and WordCraft contributors), under Apache-2.0; see the repository's LICENSE-APACHE.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -90,7 +93,11 @@ struct State {
     bindings: HashMap<u64, Binding>,
     resources: Vec<Resource>,
     commands: Vec<Command>,
+    // Failed delivery transfers only captures already admitted, even when commands is full.
+    // Together with captures this stays bounded by MAX_PENDING and carries no file bytes.
+    delivery_failures: Vec<Capture>,
     events: Vec<Event>,
+    publishing: bool,
     // Owners stay in opening/working until delivery can be queued: at most 16 of each.
     finished: VecDeque<Terminal>,
     documents: Value,
@@ -104,7 +111,10 @@ impl State {
             || !self.opening.is_empty()
             || !self.working.is_empty()
             || !self.commands.is_empty()
+            || !self.delivery_failures.is_empty()
             || !self.finished.is_empty()
+            || self.publishing
+            || self.events.iter().any(|event| matches!(event.metadata["type"].as_str(), Some("opened" | "openFailed" | "saveFailed")))
     }
 
     fn next(&mut self, kind: &str) -> Result<String, String> {
@@ -133,6 +143,7 @@ impl State {
         self.dialogs.values().any(|d| d.doc == doc)
             || self.captures.values().any(|c| c.doc == doc)
             || self.working.values().any(|d| *d == doc)
+            || self.delivery_failures.iter().any(|capture| capture.doc == doc)
             || self.commands.iter().any(|c| match c {
                 Command::Save { doc: d, .. } => *d == doc,
                 Command::Result { capture, .. } => capture.doc == doc,
@@ -161,6 +172,14 @@ impl State {
 /// One explicitly registered account namespace. Clones share the bounded transport state.
 #[derive(Clone, Default)]
 pub struct Host(Arc<Mutex<State>>);
+
+struct Publication(Host);
+
+impl Drop for Publication {
+    fn drop(&mut self) {
+        self.0.state().publishing = false;
+    }
+}
 
 impl Host {
     fn state(&self) -> MutexGuard<'_, State> {
@@ -253,7 +272,7 @@ impl Host {
         if s.pending(doc) {
             return Ok(());
         }
-        if s.dialogs.len() + s.captures.len() + s.commands.len() + s.working.len() >= MAX_PENDING {
+        if s.dialogs.len() + s.captures.len() + s.commands.len() + s.working.len() + s.delivery_failures.len() >= MAX_PENDING {
             return Err("too many pending file provider operations".into());
         }
         let request = s.next("dialog")?;
@@ -272,6 +291,9 @@ impl Host {
             return Err("invalid save destination or filename".into());
         }
         let mut s = self.state();
+        if destination != "cancel" && s.commands.len() >= MAX_PENDING {
+            return Err("file provider command queue is full".into());
+        }
         let dialog = s.dialogs.remove(request).ok_or("unknown or completed save dialog")?;
         if destination != "cancel" {
             s.commands.push(Command::Save {
@@ -291,7 +313,7 @@ impl Host {
             return Err("file exceeds the provider limit or has an invalid name".into());
         }
         let mut s = self.state();
-        if s.identity.is_none() || s.captures.len() >= MAX_PENDING || s.working.get(request) != Some(&capture.doc) {
+        if s.identity.is_none() || s.captures.len() + s.delivery_failures.len() >= MAX_PENDING || s.working.get(request) != Some(&capture.doc) {
             return Err("file provider is disconnected or busy".into());
         }
         let resource =
@@ -430,13 +452,92 @@ impl Host {
 
     pub(crate) fn take_commands(&self) -> Vec<Command> {
         let mut s = self.state();
-        let commands = std::mem::take(&mut s.commands);
+        let mut commands = std::mem::take(&mut s.commands);
+        commands.extend(std::mem::take(&mut s.delivery_failures).into_iter().map(|capture| Command::Result {
+            capture,
+            resource: String::new(),
+            status: "failed".into(),
+        }));
         for command in &commands {
             if let Command::Save { request, doc, .. } = command {
                 s.working.insert(request.clone(), *doc);
             }
         }
         commands
+    }
+
+    fn delivery_failed(&self, metadata: &Value) {
+        let mut s = self.state();
+        if s.identity.is_none() || metadata["connectionId"].as_str() != Some(s.connection.as_str()) {
+            return;
+        }
+        let Some(request) = metadata["requestId"].as_str() else { return };
+        match metadata["type"].as_str() {
+            Some("save") => {
+                // A synchronous accepted result already removed its capture. Never replace it.
+                if let Some(capture) = s.captures.remove(request) {
+                    s.delivery_failures.push(capture);
+                }
+            }
+            Some("saveDialog") => {
+                if let Some(dialog) = s.dialogs.remove(request) {
+                    s.working.insert(request.into(), dialog.doc);
+                    s.finished.push_back(Terminal {
+                        request: request.into(),
+                        metadata: json!({"type":"saveFailed", "requestId":request, "error":"Provider event delivery failed."}),
+                        owner: TerminalOwner::Save,
+                    });
+                }
+            }
+            Some("openRequest") => {
+                if let Some(resource) = s.reads.remove(request) {
+                    s.opening.insert(request.into(), resource.clone());
+                    s.finished.push_back(Terminal {
+                        request: request.into(),
+                        metadata: json!({"type":"openFailed", "requestId":request, "resourceId":resource,
+                            "error":"Provider event delivery failed."}),
+                        owner: TerminalOwner::Open,
+                    });
+                }
+            }
+            _ => {}
+        }
+        s.flush_finished();
+    }
+
+    /// Publishes bounded batches without holding the state lock across host callbacks.
+    /// Recovery consumes only a request still owned by this connection. Captured failures
+    /// remain pending until the application's ordinary Result consumer runs on a logic frame.
+    /// Returns whether another frame is needed. Listener exceptions swallowed by the browser
+    /// dispatcher are not observable errors at this boundary.
+    pub fn publish_events_with<E>(&self, mut dispatch: impl FnMut(&Value, Option<Vec<u8>>) -> Result<(), E>, mut on_error: impl FnMut(E)) -> bool {
+        {
+            let mut s = self.state();
+            if s.publishing {
+                return false;
+            }
+            s.publishing = true;
+        }
+        let _publication = Publication(self.clone());
+        let mut repaint = false;
+        // Account ownership spans both drains, including the last event already in flight.
+        for _ in 0..2 {
+            let events = self.take_events();
+            if events.is_empty() {
+                break;
+            }
+            for event in events {
+                if let Err(error) = dispatch(&event.metadata, event.bytes) {
+                    self.delivery_failed(&event.metadata);
+                    repaint = true;
+                    on_error(error);
+                }
+            }
+        }
+        repaint || {
+            let s = self.state();
+            !s.events.is_empty() || !s.finished.is_empty() || !s.commands.is_empty() || !s.delivery_failures.is_empty()
+        }
     }
 
     /// Release a device choice after the platform has taken its bytes. This never ACKs a provider.
