@@ -112,6 +112,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Tách\ncột",
         "Link" => "Liên kết",
         "Symbol" => "Ký hiệu",
+        "Equation" => "Phương trình",
+        "Insert New Equation..." => "Chèn phương trình mới",
         "Sparklines" => "Biểu đồ thu nhỏ",
         "Checkbox" => "Hộp kiểm",
         "Insert checkboxes in the selected cells" => "Chèn hộp kiểm vào các ô đã chọn",
@@ -154,7 +156,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Bỏ mũi tên",
         "Show Formulas" => "Hiện công thức",
         "Error Checking" => "Kiểm tra lỗi",
+        "Trace Error" => "Truy tìm lỗi",
         "Circular References" => "Tham chiếu vòng",
+        "Python Mode" => "Chế độ Python",
         "Evaluate Formula" => "Đánh giá công thức",
         "Watch Window" => "Cửa sổ theo dõi",
         "Calculation\nOptions" => "Tùy chọn\ntính toán",
@@ -428,6 +432,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Dừng",
         "New Macro" => "Macro Mới",
         "Show" => "Hiện",
+        "Collapse dialog" => "Thu gọn hộp thoại",
+        "Expand dialog" => "Mở rộng hộp thoại",
         _ => return None,
     })
 }

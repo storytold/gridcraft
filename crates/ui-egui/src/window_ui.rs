@@ -23,7 +23,7 @@ pub struct WindowUi {
     grid: grid::GridState,
     name_box: Option<String>,
     keytips: keytips::KeyTips,
-    selected_chart: Option<u32>,
+    selected_object: Option<gridcraft_engine::model::ObjRef>,
     tab_run: Option<(u64, usize, u32, CellRef)>,
     open_switch_windows: bool,
     /// The ribbon tab this window shows. A contextual tab depends on this window's selection, so
@@ -31,6 +31,8 @@ pub struct WindowUi {
     ribbon_tab: String,
     /// The status bar's Ready/Enter/Edit, which follows the window's cell draft.
     mode: gridcraft_engine::Mode,
+    /// A key tip's control request waiting for the frame that draws this window's ribbon.
+    keytip_invoke_next: Option<&'static str>,
 }
 
 impl WindowUi {
@@ -65,11 +67,12 @@ impl SheetApp {
             grid,
             name_box,
             keytips,
-            selected_chart,
+            selected_object,
             tab_run,
             open_switch_windows,
             ribbon_tab,
             mode,
+            keytip_invoke_next,
         } = w;
         std::mem::swap(&mut self.editor, editor);
         std::mem::swap(&mut self.text_box_editor, text_box_editor);
@@ -81,11 +84,12 @@ impl SheetApp {
         std::mem::swap(&mut self.grid, grid);
         std::mem::swap(&mut self.name_box, name_box);
         std::mem::swap(&mut self.keytips, keytips);
-        std::mem::swap(&mut self.selected_chart, selected_chart);
+        std::mem::swap(&mut self.selected_object, selected_object);
         std::mem::swap(&mut self.tab_run, tab_run);
         std::mem::swap(&mut self.open_switch_windows, open_switch_windows);
         std::mem::swap(&mut self.ui.ribbon_tab, ribbon_tab);
         std::mem::swap(&mut self.session.mode, mode);
+        std::mem::swap(&mut self.ui.keytip_invoke_next, keytip_invoke_next);
     }
 
     /// The window whose interface state is in the per-window fields.
@@ -98,6 +102,14 @@ impl SheetApp {
     /// in (a window never seen before starts fresh). A closed window's state is dropped.
     pub fn follow_active_window(&mut self) {
         let active = self.session.active_window();
+        // A window hidden while parked (from another window's View › Hide) isn't drawn either:
+        // its waiting key tip request goes, as it does for a window hidden as it is left.
+        let session = &self.session;
+        for (id, parked) in &mut self.parked {
+            if session.window(*id).is_some_and(|w| w.hidden) {
+                parked.keytip_invoke_next = None;
+            }
+        }
         if active == self.ui_window {
             return;
         }
@@ -108,7 +120,12 @@ impl SheetApp {
         };
         let mut outgoing = WindowUi::fresh(&self.grid, &self.ui.ribbon_tab);
         self.swap_window_ui(&mut outgoing);
-        if self.session.window(previous).is_some() {
+        if let Some(window) = self.session.window(previous) {
+            // A hidden window isn't drawn: a key tip request waiting for its next frame would
+            // fire whenever it is shown again, so it goes.
+            if window.hidden {
+                outgoing.keytip_invoke_next = None;
+            }
             self.parked.insert(previous, outgoing);
         }
         if let Some(mut incoming) = active.and_then(|w| self.parked.remove(&w)) {
@@ -143,6 +160,19 @@ impl SheetApp {
         {
             w.dialog = Some(d);
         }
+    }
+
+    /// The window that shows the dialog `name`: the current one or a parked one. A window that has
+    /// closed shows nothing, even while its parked state is still kept.
+    pub(crate) fn window_with_dialog(&self, name: &str) -> Option<u64> {
+        if self.dialog.as_ref().is_some_and(|d| d.name == name) {
+            return self.ui_window;
+        }
+        self.parked
+            .iter()
+            .filter(|(id, w)| w.dialog.as_ref().is_some_and(|d| d.name == name) && self.session.window(**id).is_some())
+            .map(|(id, _)| *id)
+            .min()
     }
 
     /// Whether a window other than the current one has a cell or text-box draft open.
