@@ -17,11 +17,13 @@ gridcraft-model = { workspace = true }
 gridcraft-calc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+web-time = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
 gridcraft-xlsx = { workspace = true }
 gridcraft-chart = { workspace = true }
 gridcraft-pdf = { workspace = true }
+gridcraft-math = { workspace = true }
 image = { workspace = true }
 
 [dev-dependencies]
