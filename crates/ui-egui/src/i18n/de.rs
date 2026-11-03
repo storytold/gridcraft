@@ -4,6 +4,7 @@
 /// Returns the German translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Row height (points):" => "Zeilenhöhe (Punkte):",
         " (password)" => " (Kennwort)",
         " (password, unlocked)" => " (Kennwort, entsperrt)",
         "$ English (United States)" => "$ Englisch (USA)",
