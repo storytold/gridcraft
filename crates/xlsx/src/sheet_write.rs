@@ -62,12 +62,13 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     };
     // Table header cells must hold the column names.
     let mut overrides: BTreeMap<CellRef, String> = BTreeMap::new();
-    let tables: Vec<(&Table, Vec<String>)> = folded
+    let tables: Vec<(usize, &Table, Vec<String>)> = folded
         .iter()
-        .filter(|t| t.range.height() > t.header_row as u32 + t.totals_row as u32 || (t.header_row && t.range.height() > t.totals_row as u32))
-        .map(|t| (t, table_columns(t)))
+        .enumerate()
+        .filter(|(_, t)| t.range.height() > t.header_row as u32 + t.totals_row as u32 || (t.header_row && t.range.height() > t.totals_row as u32))
+        .map(|(ti, t)| (ti, t, table_columns(t)))
         .collect();
-    for (t, cols) in &tables {
+    for (_, t, cols) in &tables {
         if t.header_row {
             for (i, name) in cols.iter().enumerate() {
                 overrides.insert(CellRef::new(t.range.start.row, t.range.start.col + i as u32), name.clone());
@@ -202,32 +203,16 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     if !tables.is_empty() {
         let mut parts = String::new();
         let mut used_names: HashSet<String> = HashSet::new();
-        for (t, cols) in &tables {
+        for (ti, t, cols) in &tables {
             out.tables += 1;
             let n = out.tables;
-            // The model's own Table.id is the part's id, so the id survives the save/reopen
-            // round trip: a saved From Web connection's table_id (the model's id) finds the
-            // same table after the file comes back, instead of a sequential number the
-            // reader would hand a different table. A model id is kept only the first time it
-            // appears (a duplicate, or an id of 0 from a workbook that never assigned one,
-            // gets the next unused value), so `table/@id` stays unique across the package.
-            // A fallback id never takes a positive model id any table still owns — all of them
-            // were reserved up front — and a connected table renumbered for a duplicate model
-            // id takes its connection along (the remap rewrites the saved table_id).
-            let id = if t.id > 0 && out.used_table_ids.insert(t.id) {
-                t.id
-            } else {
-                let new = loop {
-                    out.table_id += 1;
-                    if !out.model_table_ids.contains(&out.table_id) && out.used_table_ids.insert(out.table_id) {
-                        break out.table_id;
-                    }
-                };
-                if t.id > 0 {
-                    out.table_id_remap.push((sheet.name.clone(), t.name.clone(), t.id, new));
-                }
-                new
-            };
+            // The ids were decided before any part was written (see `Out::table_ids`): a
+            // positive model id is kept the first time it appears, a duplicate or an id of 0
+            // gets the next value no table owns, and the model's own id survives the
+            // save/reopen round trip — a saved From Web connection's table_id finds the same
+            // table after the file comes back, and the connection of a renumbered table was
+            // rewritten to the new id before the sheets were written.
+            let id = out.table_ids.get(si).and_then(|ids| ids.get(*ti)).copied().unwrap_or(0);
             let name = table_name(&t.name, &mut used_names, id);
             let xml = table_xml(t, cols, &name, id, out);
             out.part(&format!("xl/tables/table{n}.xml"), Some(CT_TABLE), xml.into_bytes());

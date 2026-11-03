@@ -130,14 +130,12 @@ pub struct Out {
     pub comments: u32,
     /// Authors of threaded comments, in first-use order; written to `xl/persons/person.xml`.
     pub persons: Vec<String>,
-    pub table_id: u32,
-    /// Table ids already emitted to the package: a model id is kept only the first time it
-    /// appears (a duplicate or zero id gets a fresh unused one), so `table/@id` stays unique.
-    pub used_table_ids: std::collections::HashSet<u32>,
-    /// Every positive model table id in the workbook, reserved before the first sheet is written,
-    /// so a fallback id handed to a table without one never takes a later table's model id (which
-    /// a saved From Web connection still points at).
-    pub model_table_ids: std::collections::HashSet<u32>,
+    /// The id of every table part, by sheet then table: a positive model id is kept the first
+    /// time it appears, a duplicate or an unassigned (0) id takes the next value no table owns.
+    /// Decided once, before any part is written, so the connection of a renumbered table
+    /// carries the new id in both connection paths — the kept part's merge, which runs before
+    /// the sheets, and the fresh part, written after them.
+    pub table_ids: Vec<Vec<u32>>,
     /// (sheet, table name, old id, new id) for tables renumbered because a duplicate positive
     /// model id: the connection of a renumbered connected table is rewritten to the new id.
     pub table_id_remap: Vec<(String, String, u32, u32)>,
@@ -250,6 +248,51 @@ fn workbook_view_attrs(wb: &Workbook) -> String {
     attrs
 }
 
+/// The table part ids of the save, by sheet then table (see `Out::table_ids`), with the
+/// renumbering the assignment implies. Every positive model id is reserved before a fallback
+/// id is handed out, so a fallback never takes a model id a table still owns — one a saved
+/// From Web connection points at.
+fn assign_table_ids(wb: &Workbook) -> (Vec<Vec<u32>>, Vec<(String, String, u32, u32)>) {
+    let model: std::collections::HashSet<u32> = wb.sheets.iter().flat_map(|sh| sh.tables.iter().filter(|t| t.id > 0).map(|t| t.id)).collect();
+    let mut used = std::collections::HashSet::new();
+    let mut next = 0;
+    let mut ids = vec![];
+    let mut remap = vec![];
+    for sh in &wb.sheets {
+        let mut sheet_ids = vec![];
+        for t in &sh.tables {
+            sheet_ids.push(if t.id > 0 && used.insert(t.id) {
+                t.id
+            } else {
+                next += 1;
+                while model.contains(&next) || !used.insert(next) {
+                    next += 1;
+                }
+                if t.id > 0 {
+                    remap.push((sh.name.clone(), t.name.clone(), t.id, next));
+                }
+                next
+            });
+        }
+        ids.push(sheet_ids);
+    }
+    (ids, remap)
+}
+
+/// The table id a connection saves: the connected table's own, unless the save renumbered that
+/// table for a duplicate model id — then the new id, so the connection still finds the table
+/// after the reopen.
+pub(crate) fn connection_table_id(q: &gridcraft_model::WebQuery, remap: &[(String, String, u32, u32)]) -> u32 {
+    match q.table_id {
+        Some(id) => remap
+            .iter()
+            .find(|(sheet, name, old, _)| *old == id && q.sheet == *sheet && q.name == *name)
+            .map(|(_, _, _, new)| *new)
+            .unwrap_or(id),
+        None => 0,
+    }
+}
+
 /// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
 /// PivotTable in Excel only when its link starts with the workbook in brackets.
 pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
@@ -274,9 +317,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         tables: 0,
         comments: 0,
         persons: vec![],
-        table_id: 0,
-        used_table_ids: Default::default(),
-        model_table_ids: wb.sheets.iter().flat_map(|sh| sh.tables.iter().filter(|t| t.id > 0).map(|t| t.id)).collect(),
+        table_ids: Default::default(),
         table_id_remap: vec![],
         dynamic_arrays: false,
         needs_calc: false,
@@ -285,6 +326,9 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         python_scripts: vec![],
     };
     out.kept.reserve_vml_blocks(wb);
+    let (table_ids, table_id_remap) = assign_table_ids(wb);
+    out.table_ids = table_ids;
+    out.table_id_remap = table_id_remap;
     out.default_type("rels", "application/vnd.openxmlformats-package.relationships+xml");
     out.default_type("xml", "application/xml");
 
@@ -375,17 +419,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         let mut c = format!("{XML_DECL}<connections xmlns=\"{NS_MAIN}\" xmlns:gc=\"{GC_NS}\">");
         for (i, q) in wb.web_queries.iter().enumerate() {
             let refresh = if q.refresh_on_open { " refreshOnLoad=\"1\"" } else { "" };
-            // A connected table renumbered for a duplicate model id takes its connection with it,
-            // so the saved `tableId` finds the same table after the reopen.
-            let id = match q.table_id {
-                Some(id) => out
-                    .table_id_remap
-                    .iter()
-                    .find(|(sheet, name, old, _)| *old == id && q.sheet == *sheet && q.name == *name)
-                    .map(|(_, _, _, new)| *new)
-                    .unwrap_or(id),
-                None => 0,
-            };
+            let id = connection_table_id(q, &out.table_id_remap);
             let synced = q.last_synced.unwrap_or(0);
             let _ = write!(c,
                 "<connection id=\"{}\" name=\"{}\" type=\"5\"{refresh} refreshedVersion=\"6\"><webPr url=\"{}\" xmlTables=\"1\"/><extLst><ext uri=\"{GC_URI}\"><gc:webQuery table=\"{}\" occurrence=\"{}\" sheet=\"{}\" tableId=\"{}\" lastSynced=\"{}\"/></ext></extLst></connection>",

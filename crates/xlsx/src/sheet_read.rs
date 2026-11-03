@@ -295,7 +295,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                 for tp in e.kids("tablePart") {
                     if let Some(rel) = tp.attr("id").and_then(|id| rels.iter().find(|r| r.id == id)) {
                         let target = rel.target.clone();
-                        if let Some(x) = cx.optional_xml(&target)?
+                        if let Some(x) = cx.table_part(&target)?
                             && let Some(mut t) = read_table(cx, &x)
                         {
                             // The part's id is kept when it is free, so a table's id — and a saved

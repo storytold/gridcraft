@@ -31,6 +31,12 @@ pub struct Ctx<'a> {
     /// Object ids already given out or kept from the file, so a fresh one never collides with
     /// an id a saved part still carries (a table's, which a saved From Web connection points at).
     pub object_ids: std::collections::HashSet<u32>,
+    /// The positive ids of the workbook's table parts, reserved before a sheet is read: no
+    /// drawing, chart or shape is given an id a table keeps from the file, which a saved From
+    /// Web connection finds the table by after the reopen.
+    pub table_ids: std::collections::HashSet<u32>,
+    /// Table parts parsed by the reserving scan, by part name, for the sheet read that follows.
+    pub table_parts: std::collections::HashMap<String, El>,
     /// Custom number formats from the styles part, by id.
     pub num_fmts: std::collections::HashMap<u32, String>,
     /// Value metadata blocks, indexed by the worksheet's one-based `vm` attribute.
@@ -81,6 +87,9 @@ impl Ctx<'_> {
         while self.next_id < u32::MAX {
             let id = self.next_id;
             self.next_id = self.next_id.saturating_add(1);
+            if self.table_ids.contains(&id) {
+                continue;
+            }
             if self.object_ids.insert(id) {
                 return id;
             }
@@ -95,6 +104,13 @@ impl Ctx<'_> {
         } else {
             self.next_object_id()
         }
+    }
+    /// A table part: parsed already by the scan that reserved the table ids, or read now.
+    pub fn table_part(&mut self, part: &str) -> Result<Option<El>, IoError> {
+        if let Some(x) = self.table_parts.remove(part) {
+            return Ok(Some(x));
+        }
+        self.optional_xml(part)
     }
     pub fn style(&self, xf: Option<u32>) -> StyleId {
         xf.and_then(|i| self.xf_map.get(i as usize).copied()).unwrap_or_default()
@@ -267,6 +283,8 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         persons: Default::default(),
         next_id: 1,
         object_ids: Default::default(),
+        table_ids: Default::default(),
+        table_parts: Default::default(),
         num_fmts: Default::default(),
         cell_pictures: vec![],
         cf_ext_ids: vec![],
@@ -354,6 +372,22 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
     let mut file_to_model: Vec<Option<usize>> = vec![];
     let mut pivot_caches = crate::pivot::CachesIn::new(&wb_xml, &wb_rels);
     let sheet_els: Vec<El> = wb_xml.child("sheets").map(|s| s.kids("sheet").cloned().collect()).unwrap_or_default();
+    // Every table part's id is reserved before a sheet is read, so the id a drawing, chart or
+    // shape is given on the way never collides with the id a table keeps from the file — a
+    // saved From Web connection finds its table by that id after the reopen. The parsed parts
+    // are kept for the sheet read that follows, which pays for one parse, not two.
+    for se in &sheet_els {
+        let Some(rel) = se.attr("id").and_then(|id| wb_rels.iter().find(|r| r.id == id)).filter(|r| r.kind == "worksheet") else { continue };
+        let Ok(sheet_rels) = cx.pkg.rels(&rel.target) else { continue };
+        for r in sheet_rels.iter().filter(|r| r.kind == "table") {
+            if let Ok(Some(x)) = cx.pkg.read_xml(&r.target) {
+                if let Some(id) = x.attr_u32("id").filter(|v| *v > 0) {
+                    cx.table_ids.insert(id);
+                }
+                cx.table_parts.insert(r.target.clone(), x);
+            }
+        }
+    }
     for (i, se) in sheet_els.iter().enumerate() {
         let name = se.attr("name").unwrap_or("").to_string();
         let rel = se.attr("id").and_then(|id| wb_rels.iter().find(|r| r.id == id)).cloned();

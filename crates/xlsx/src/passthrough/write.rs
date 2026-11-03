@@ -416,7 +416,7 @@ fn descendants<'a>(el: &'a crate::xml::El, name: &str) -> Vec<&'a crate::xml::El
     out
 }
 
-fn merge_connections(data: &[u8], wb: &Workbook) -> Result<Option<String>, IoError> {
+fn merge_connections(data: &[u8], wb: &Workbook, remap: &[(String, String, u32, u32)]) -> Result<Option<String>, IoError> {
     // The encodings the XML reader supports (a BOM, UTF-16): a file Excel saved as UTF-16
     // still merges, rather than failing every open-and-save with the part in it.
     let decoded = crate::xml::to_utf8(data);
@@ -574,7 +574,7 @@ fn merge_connections(data: &[u8], wb: &Workbook) -> Result<Option<String>, IoErr
         // None only when every id the format allows is taken by a preserved connection.
         let Some(id) = ids.next() else { return Err(IoError::Format("no connection id is left for a web query".into())) };
         let refresh = if q.refresh_on_open { " refreshOnLoad=\"1\"" } else { "" };
-        let tid = q.table_id.unwrap_or(0);
+        let tid = crate::write::connection_table_id(q, remap);
         let synced = q.last_synced.unwrap_or(0);
         let _ = write!(w,
             "<connection{sml_default} id=\"{}\" name=\"{}\" type=\"5\"{refresh} refreshedVersion=\"6\"><webPr url=\"{}\" xmlTables=\"1\"/><extLst><ext uri=\"{}\"{gc}><gc:webQuery table=\"{}\" occurrence=\"{}\" sheet=\"{}\" tableId=\"{}\" lastSynced=\"{}\"/></ext></extLst></connection>",
@@ -628,7 +628,7 @@ pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> Resul
         // stay whatever the model does. A merge that cannot run (malformed part, no ids
         // left) fails the save instead of writing the stale bytes: a save that silently
         // dropped the user's new connection would lose it on the next open.
-        if let Some(merged) = merge_connections(&q.data, wb)? {
+        if let Some(merged) = merge_connections(&q.data, wb, &out.table_id_remap)? {
             q.data = merged.into_bytes().into();
         }
     }
