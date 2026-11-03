@@ -222,6 +222,9 @@ impl Calc {
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
     pub fn cells_changed(&mut self, wb: &mut Workbook, changed: &[Key]) {
         let mut cleared: Vec<(usize, RangeRef)> = Vec::new();
+        // The ranges legacy arrays held and no longer do (deleted, or entered again over less),
+        // whether or not their results were laid out there.
+        let mut released: Vec<(usize, RangeRef)> = Vec::new();
         for &k in changed {
             let formula = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.clone());
             let py = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.py.as_ref());
@@ -232,15 +235,21 @@ impl Calc {
                 Some(e) => {
                     let (areas, dynamic) = precedents(wb, k.0, &e);
                     self.graph.insert(k, Node { areas, dynamic });
-                    match wb.sheet(k.0).and_then(|sh| legacy_range(sh, k.1)) {
+                    let now = wb.sheet(k.0).and_then(|sh| legacy_range(sh, k.1));
+                    let old = match now {
                         Some(r) => self.legacy.insert(k, r),
                         None => self.legacy.remove(&k),
                     };
+                    if let Some(o) = old
+                        && !now.is_some_and(|r| r.contains(o.start) && r.contains(o.end))
+                    {
+                        released.push((k.0, o));
+                    }
                 }
                 // See `rebuild`: its spill is laid out again from its result when it is calculated.
                 None if python => {
                     self.graph.insert(k, Node { areas: Vec::new(), dynamic: false });
-                    self.legacy.remove(&k);
+                    released.extend(self.legacy.remove(&k).map(|r| (k.0, r)));
                     // New code has no result yet: the spill the cell had (its old result's, or a
                     // formula's) goes, and what read it is recalculated, as for a formula
                     // replaced by a constant.
@@ -254,7 +263,7 @@ impl Calc {
                 }
                 None => {
                     self.graph.remove(k);
-                    self.legacy.remove(&k);
+                    released.extend(self.legacy.remove(&k).map(|r| (k.0, r)));
                     // A formula replaced by a constant (or cleared) takes its spilled values with it.
                     if let Some(sh) = wb.sheet_mut(k.0)
                         && let Some(r) = sh.spill_ranges.remove(&k.1)
@@ -305,8 +314,10 @@ impl Calc {
             }
         }
         // The area a cleared or overwritten array spilled over is emptied too, a legacy array's
-        // included, and can unblock an anchor as an emptied cell does (#2340).
-        for &(si, r) in &cleared {
+        // included, and can unblock an anchor as an emptied cell does (#2340). So is the range a
+        // legacy array no longer holds, even one too large to lay out (#NUM!), which spilled
+        // nothing: only its bounds count, its cells aren't seeded one by one (#2949).
+        for &(si, r) in cleared.iter().chain(&released) {
             match emptied.iter_mut().find(|x| x.0 == si) {
                 Some(x) => x.1 = CellRef::new(x.1.row.max(r.end.row), x.1.col.max(r.end.col)),
                 None => emptied.push((si, r.end)),
