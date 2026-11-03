@@ -171,7 +171,7 @@ pub fn editor(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &m
             ui.colored_label(t.danger, msg);
         }
         _ => {
-            ui.label(egui::RichText::new("Preview").color(t.text_dim));
+            ui.label(egui::RichText::new(crate::i18n::current(ui.ctx()).tr("Preview")).color(t.text_dim));
         }
     }
     // The preview card is the sheet's colour, with the sheet's ink, in both themes.

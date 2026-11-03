@@ -11,7 +11,7 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
                     let (r, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
                     ui.painter().rect_filled(r, 1.0, Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, *c as u8));
                 }
-                if ui.button(name).clicked() {
+                if ui.button(crate::i18n::current(ui.ctx()).tr(name)).clicked() {
                     act(app, "pageLayout.theme", json!({"name": name}));
                 }
             });
@@ -72,7 +72,7 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
             "B5 (ISO)",
             "B6 (ISO)",
         ] {
-            if ui.button(p).clicked() {
+            if ui.button(crate::i18n::current(ui.ctx()).tr(p)).clicked() {
                 act(app, "pageLayout.size", json!({"paper": p}));
             }
         }

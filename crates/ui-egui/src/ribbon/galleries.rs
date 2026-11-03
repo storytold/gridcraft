@@ -1,12 +1,26 @@
 use super::controls::act;
 use super::{Align2, Cat, Rect, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, json, pos2, theme, vec2};
 
+/// A hover label for a table style swatch: "TableStyleLight3" reads as "表样式 浅色 3" when the
+/// interface is translated. Falls back to the raw style name for unknown shapes.
+pub(super) fn table_style_hover(ui: &Ui, name: &str) -> String {
+    let lang = crate::i18n::current(ui.ctx());
+    if let Some(rest) = name.strip_prefix("TableStyle") {
+        for fam in ["Light", "Medium", "Dark"] {
+            if let Some(n) = rest.strip_prefix(fam) {
+                return format!("{}{} {}", lang.tr("Table Style"), lang.tr(fam), n);
+            }
+        }
+    }
+    name.to_string()
+}
+
 /// A gallery of table styles drawn as mini tables.
 pub(super) fn table_gallery(app: &mut SheetApp, ui: &mut Ui, cmd: &str) {
     ui.set_width(430.0);
     let Some(wb) = app.session.active().map(|d| d.wb.clone()) else { return };
     for (fam, n) in [("Light", 21u32), ("Medium", 28), ("Dark", 11)] {
-        ui.label(egui::RichText::new(fam).strong());
+        ui.label(egui::RichText::new(crate::i18n::current(ui.ctx()).tr(fam)).strong());
         egui::Grid::new(("tg", fam)).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
             for i in 1..=n {
                 let name = format!("TableStyle{fam}{i}");
@@ -15,7 +29,8 @@ pub(super) fn table_gallery(app: &mut SheetApp, ui: &mut Ui, cmd: &str) {
                 if resp.hovered() {
                     ui.painter().rect_stroke(r.expand(1.5), 2.0, Stroke::new(2.0, Tokens::get(ui.ctx()).cat(Cat::Orange)), StrokeKind::Outside);
                 }
-                if resp.on_hover_text(&name).clicked() {
+                let hover = table_style_hover(ui, &name);
+                if resp.on_hover_text(hover).clicked() {
                     act(app, cmd, json!({"style": name}));
                     ui.close();
                 }
@@ -99,7 +114,7 @@ pub(super) fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
         ("Number Format", &["Comma", "Comma [0]", "Currency", "Currency [0]", "Percent"]),
     ];
     for (g, names) in groups {
-        ui.label(egui::RichText::new(*g).strong());
+        ui.label(egui::RichText::new(crate::i18n::current(ui.ctx()).tr(g)).strong());
         egui::Grid::new(("csg", *g)).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
             for (i, n) in names.iter().enumerate() {
                 let st = gridcraft_engine::cmd::format::builtin_cell_style(n, &wb.theme).unwrap_or_default();
@@ -125,7 +140,7 @@ pub(super) fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
                 ui.painter().text(
                     r.left_center() + vec2(4.0, 0.0),
                     Align2::LEFT_CENTER,
-                    *n,
+                    crate::i18n::current(ui.ctx()).tr(n),
                     egui::FontId::new((st.font.size).clamp(10.0, 15.0), fam),
                     col,
                 );
