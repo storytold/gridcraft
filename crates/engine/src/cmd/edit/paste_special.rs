@@ -393,21 +393,38 @@ fn paste_validations(
             let (r, c) = if transpose { (c, r) } else { (r, c) };
             for tr in 0..tiles_r {
                 for tc in 0..tiles_c {
-                    if cells.len() > MAX_PASTE_VALIDATION_RANGES {
-                        return Err(EngineError::Other("Too many separate validation areas to paste at once.".into()));
-                    }
                     if let Some(d) = pasted.start.offset(i64::from(tr * h + r), i64::from(tc * w + c)) {
                         cells.push((d.row, d.col));
                     }
                 }
             }
         }
-        // Adjacent cells of a row become one cut, so a populated block is a few cuts.
+        // Coalesce populated cells into horizontal runs, then join identical runs in adjacent
+        // rows. The range limit applies to the cuts, not the number of populated cells.
         cells.sort_unstable();
-        for (row, col) in cells {
-            match cleared.last_mut() {
-                Some(last) if last.end.row == row && last.end.col.saturating_add(1) == col => last.end.col = col,
-                _ => cleared.push(RangeRef::new(CellRef::new(row, col), CellRef::new(row, col))),
+        let mut runs = Vec::new();
+        let mut i = 0;
+        while i < cells.len() {
+            let (row, start_col) = cells[i];
+            let mut end_col = start_col;
+            i += 1;
+            while i < cells.len() && cells[i].0 == row && cells[i].1 <= end_col.saturating_add(1) {
+                end_col = end_col.max(cells[i].1);
+                i += 1;
+            }
+            runs.push(RangeRef::new(CellRef::new(row, start_col), CellRef::new(row, end_col)));
+        }
+        let mut last_run_by_columns = std::collections::BTreeMap::new();
+        for run in runs {
+            let columns = (run.start.col, run.end.col);
+            if let Some(&index) = last_run_by_columns.get(&columns)
+                && cleared[index].end.row.saturating_add(1) == run.start.row
+            {
+                cleared[index].end.row = run.end.row;
+            } else {
+                let index = cleared.len();
+                cleared.push(run);
+                last_run_by_columns.insert(columns, index);
             }
         }
     }
@@ -448,6 +465,9 @@ fn paste_validations(
         rule.f2 = dv.f2.as_ref().map(|f| super::super::data::move_rule_formula(f, first, anchor));
         rule.ranges = ranges;
         rules.push(rule);
+    }
+    if cleared.len() > MAX_PASTE_VALIDATION_RANGES {
+        return Err(EngineError::Other("Too many separate validation areas to paste at once.".into()));
     }
     let sh = cx.sheet_mut(dest_sheet)?;
     if skip_blanks {

@@ -3913,6 +3913,10 @@ fn a_cut_moves_the_sources_notes_hyperlinks_and_merges() {
 fn a_cut_carries_a_link_only_cell() {
     let mut s = s();
     s.execute("insert.link", json!({"cell": "A1", "target": "https://example.com"})).unwrap();
+    let a1 = CellRef::parse("A1").unwrap();
+    let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+    sh.remove_cell(a1);
+    assert!(sh.cell(a1).is_none(), "A1 holds only the link");
     s.execute("edit.cut", json!({"range": "A1:B1"})).unwrap();
     s.execute("edit.paste", json!({"at": "D1"})).unwrap();
 
@@ -4706,7 +4710,7 @@ fn paste_validation_covers_the_pasted_area_as_ranges() {
     s.execute("data.validation", json!({"range": "C1:E10", "type": "list", "formula1": "\"p,q\""})).unwrap();
     s.execute("edit.copy", json!({"range": "A1:A4"})).unwrap();
     s.execute("edit.paste", json!({"at": "D4"})).unwrap();
-    assert_eq!(validation_areas(&s), ["A2:A3", "C1:E3 C8:E10 C4:C7 E4:E7", "D5:D6"]);
+    assert_eq!(validation_areas(&s), ["A2:A3", "C1:E3 C4:C7 E4:E7 C8:E10", "D5:D6"]);
     assert!(ok(&mut s, "D4", "anything"));
     assert!(!ok(&mut s, "D5", "-1"));
     assert!(!ok(&mut s, "D3", "z"));
@@ -4744,10 +4748,18 @@ fn paste_validation_skip_blanks_keeps_rules_under_blank_cells_without_one() {
 fn paste_validation_skip_blanks_large_populated_paste() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1:A100002", "values": (0..100_002).map(|i| vec![i]).collect::<Vec<_>>()})).unwrap();
-    s.execute("data.validation", json!({"range": "A1", "type": "list", "formula1": "\"x,y\""})).unwrap();
     s.execute("edit.copy", json!({"range": "A1:A100002"})).unwrap();
     s.execute("edit.pasteSpecial", json!({"what": "validation", "skipBlanks": true, "at": "C1"})).unwrap();
-    assert_eq!(validation_areas(&s), ["A1", "C1"]);
+    assert!(validation_areas(&s).is_empty());
+
+    // A destination rule is cleared under every populated source cell. Count the resulting
+    // coalesced ranges, not the 100,002 cells that were considered for clearing.
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:A100002", "values": (0..100_002).map(|i| vec![i]).collect::<Vec<_>>()})).unwrap();
+    s.execute("data.validation", json!({"range": "C1:C100002", "type": "list", "formula1": "\"x,y\""})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A100002"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "validation", "skipBlanks": true, "at": "C1"})).unwrap();
+    assert!(validation_areas(&s).is_empty());
 }
 
 /// Open a workbook by path, and `CELL("filename")` names the file it came from, as Excel does;
