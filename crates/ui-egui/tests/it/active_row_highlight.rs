@@ -122,3 +122,29 @@ fn a_hidden_row_or_a_row_outside_the_quadrant_has_no_band() {
     assert_eq!(active_row_band(&geo, sheet, 30, (0, 20), (0, 5)), None, "outside");
     assert!(active_row_band(&geo, sheet, 6, (0, 20), (0, 5)).is_some());
 }
+
+#[test]
+fn in_page_layout_the_band_shows_on_a_click_to_add_data_page_too() {
+    let mut h = harness(book("C5"));
+    h.state_mut().run("options.highlightActiveRow", json!({"on": true})).unwrap();
+    h.state_mut().session.execute("view.pageLayout", json!({})).unwrap();
+    h.run_steps(3);
+    let bands = tinted(&h);
+    // Each page paints its own part of the row; the faded page paints it again over the fade.
+    let repeated = bands.iter().filter(|b| bands.iter().filter(|o| o == b).count() == 2).count();
+    assert_eq!(repeated, 2, "{bands:?}");
+    assert!(bands.iter().all(|b| b.top() == bands[0].top()), "one row: {bands:?}");
+}
+
+#[test]
+fn with_frozen_panes_the_band_crosses_the_frozen_columns() {
+    let mut h = harness(book("C5"));
+    h.state_mut().session.execute("selection.set", json!({"range": "C3"})).unwrap();
+    h.state_mut().session.execute("view.freezePanes", json!({})).unwrap();
+    h.state_mut().session.execute("selection.set", json!({"range": "E7"})).unwrap();
+    h.state_mut().run("options.highlightActiveRow", json!({"on": true})).unwrap();
+    h.run_steps(2);
+    let bands = tinted(&h);
+    assert_eq!(bands.len(), 2, "the frozen columns' pane and the scrolling one: {bands:?}");
+    assert_eq!(bands[0].top(), bands[1].top());
+}
