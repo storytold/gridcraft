@@ -6,6 +6,10 @@
 //!
 //! `--refedit key=range` collapses the open dialog to its reference box `key`, then selects
 //! `range` on the grid, as a person picking a range for that box does.
+//!
+//! `GRIDCRAFT_I18N_TRACE=path` adds the labels this run fell back to English for to `path` (see
+//! `i18n::untranslated`): rendering a tab with `--language zh` then measures a localization pass
+//! against the real interface instead of against a grep.
 
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
@@ -154,4 +158,14 @@ fn main() {
     let img = harness.render().expect("render");
     img.save(&out).expect("save png");
     eprintln!("wrote {out} ({}x{})", img.width(), img.height());
+    // `GRIDCRAFT_I18N_TRACE=/tmp/…` collects the labels this run could not translate, so a
+    // localization pass can be measured instead of grepped.
+    if let Some(path) = std::env::var_os("GRIDCRAFT_I18N_TRACE") {
+        let mut merged: std::collections::BTreeSet<String> =
+            std::fs::read_to_string(&path).unwrap_or_default().lines().filter(|line| !line.is_empty()).map(str::to_string).collect();
+        merged.extend(gridcraft_ui_egui::i18n::untranslated());
+        let mut text = merged.into_iter().collect::<Vec<_>>().join("\n");
+        text.push('\n');
+        let _ = std::fs::write(&path, text);
+    }
 }
