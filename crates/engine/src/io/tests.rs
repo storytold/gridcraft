@@ -604,3 +604,67 @@ fn opening_google_sheets_export_unwraps_only_formulas_gridcraft_calculates() {
     assert_eq!(text("A2").as_deref(), Some("IFERROR(__XLUDF.DUMMYFUNCTION(\"GOOGLETRANSLATE(\"\"hi\"\",\"\"en\"\",\"\"fr\"\")\"),\"salut\")"));
     assert_eq!(opened.sheets[0].cells.get(CellRef::parse("A2").unwrap()).map(|c| c.value.clone()), Some(Value::text("salut")));
 }
+
+#[test]
+fn a_web_page_saved_as_xls_opens_its_table() {
+    // #3166: a web app's "Export to Excel" is an HTML table saved as .xls; it opened as lines of
+    // markup. Excel opens the table: values read as typed, <th> bold and centred, <x:Name> names
+    // the sheet.
+    let page = "\u{feff}<html xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><head><meta charset=\"UTF-8\">\
+        <!--[if gte mso 9]><xml><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Orders</x:Name></x:ExcelWorksheet></x:ExcelWorksheets></xml><![endif]-->\
+        </head><body><table><thead><tr><th>Item</th><th>Qty</th><th>Code</th></tr></thead><tbody>\
+        <tr><td>Kiwi &amp;\n Lime</td><td>12</td><td>007</td></tr><tr><td>Plum</td><td x:num=\"4.5\">4,50</td><td>042</td></tr>\
+        </tbody></table></body></html>";
+    let (wb, warnings) = open_bytes("orders.xls", page.as_bytes()).unwrap();
+    assert!(warnings.first().is_some_and(|w| w.contains("is a web page (HTML)")), "{warnings:?}");
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.name, "Orders");
+    let v = |a: &str| sh.value(CellRef::parse(a).unwrap());
+    assert_eq!(v("A1"), gridcraft_core::Value::text("Item"));
+    assert_eq!(v("A2"), gridcraft_core::Value::text("Kiwi & Lime"));
+    assert_eq!(v("B2"), gridcraft_core::Value::number(12.0));
+    assert_eq!(v("C2"), gridcraft_core::Value::number(7.0), "read like typed input, as Excel does");
+    assert_eq!(v("B3"), gridcraft_core::Value::number(4.5), "the number the page recorded");
+    let style = |a: &str| wb.styles.get(sh.style_id(CellRef::parse(a).unwrap())).clone();
+    assert!(style("A1").font.bold && style("A1").align.h == gridcraft_model::HAlign::Center);
+    assert!(!style("A2").font.bold);
+    // Opened as text, codes keep their zeros; a page named .html gets no warning.
+    let (wb, warnings) = open_bytes_with("orders.html", page.as_bytes(), None, true).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("C2").unwrap()), gridcraft_core::Value::text("007"));
+    // Plain text that merely starts with a tag-like word is still read as CSV.
+    let (wb, _) = open_bytes("notes.csv", b"<b>,1\nx,2\n").unwrap();
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("B2").unwrap()), gridcraft_core::Value::number(2.0));
+}
+
+#[test]
+fn a_web_page_table_keeps_its_characters_text_and_header_formats() {
+    // A page saved in Windows-1252 keeps its accented letters (it read as replacement characters).
+    let mut page = b"<html><body><table><tr><th>Caf".to_vec();
+    page.push(0xE9);
+    page.extend_from_slice(b"</th><th>2024-01-15</th></tr><tr><td>Plum</td><td x:num=\"4.5\">4,50</td></tr></table></body></html>");
+    let (wb, _) = open_bytes("menu.xls", &page).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::text("Café"));
+    // A date in a header cell stays a date, bold and centred (its format was replaced).
+    let b1 = wb.styles.get(sh.style_id(CellRef::parse("B1").unwrap()));
+    assert!(matches!(sh.value(CellRef::parse("B1").unwrap()), gridcraft_core::Value::Number(_)));
+    assert!(b1.font.bold && b1.align.h == gridcraft_model::HAlign::Center);
+    assert_ne!(b1.num_fmt.as_str(), "General", "the date keeps its date format");
+    assert_eq!(sh.value(CellRef::parse("B2").unwrap()), gridcraft_core::Value::number(4.5));
+    // Opened as text, a cell keeps the text it shows, not the number the page recorded for it.
+    let (wb, _) = open_bytes_with("menu.xls", &page, None, true).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("B2").unwrap()), gridcraft_core::Value::text("4,50"));
+}
+
+#[test]
+fn a_web_page_table_opens_after_a_leading_comment_and_keeps_nonbreaking_spaces() {
+    // An exporter's comment before <html> still makes a web page; `&nbsp;` stays a non-breaking
+    // space, as Excel keeps it, while ordinary whitespace collapses.
+    let page = "<!-- exported by a web app -->\n<html><body><table><tr><td>New&nbsp;&nbsp;York</td><td>a \n b</td></tr></table></body></html>";
+    let (wb, warnings) = open_bytes("cities.xls", page.as_bytes()).unwrap();
+    assert!(warnings.first().is_some_and(|w| w.contains("is a web page (HTML)")), "{warnings:?}");
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::text("New\u{a0}\u{a0}York"));
+    assert_eq!(sh.value(CellRef::parse("B1").unwrap()), gridcraft_core::Value::text("a b"));
+}
