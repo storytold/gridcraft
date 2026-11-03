@@ -23,6 +23,7 @@ fn chart(kind: ChartKind, series: Vec<Series>) -> Chart {
         series,
         legend: LegendPos::Right,
         data_labels: false,
+        data_table: None,
         gridlines: false,
         style: 2,
         x_title: None,
