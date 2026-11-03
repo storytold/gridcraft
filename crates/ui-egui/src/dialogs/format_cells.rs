@@ -1,6 +1,10 @@
 use super::show::ok_cancel;
 use super::{Dialog, SheetApp, json, theme};
 
+/// Height the Format Cells window needs around the Border tab's scrolling rows: title bar, tabs,
+/// the None and Outline buttons, and OK and Cancel.
+const BORDER_CHROME: f32 = 180.0;
+
 /// Draws the six-tab Format Cells editor (number, alignment, font, border, fill, protection); the Number tab shows a sample preview, and the style draft updates.
 pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     // `d.tab` stays the English name (it is what `open_dialog` and tests pass); only the drawn
@@ -156,31 +160,37 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                     st.borders.right = line;
                 }
             });
-            for (n, slot) in [
-                ("Top", &mut st.borders.top),
-                ("Bottom", &mut st.borders.bottom),
-                ("Left", &mut st.borders.left),
-                ("Right", &mut st.borders.right),
-                ("Diagonal ↘", &mut st.borders.diag_down),
-                ("Diagonal ↗", &mut st.borders.diag_up),
-            ] {
-                let n = lang.tr(n);
-                // Every line style Excel has (none and the 13 SpreadsheetML styles), wrapping.
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(format!("{n}:"));
-                    for (s, label) in BorderStyle::NAMES {
-                        let label = lang.tr(label);
-                        let response = ui.selectable_label(slot.style == s, label);
-                        let selected = slot.style == s;
-                        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), selected, format!("{n} {label}")));
-                        if response.clicked() {
-                            slot.style = s;
+            // Six rows of 14 styles: they scroll in a short window, so OK and Cancel stay in view. The
+            // area starts at its full height (not grown over frames), so the rows don't move after opening.
+            let room = (ui.ctx().content_rect().height() - BORDER_CHROME).max(120.0);
+            egui::ScrollArea::vertical().id_salt("formatCellsBorders").max_height(room).min_scrolled_height(room).show(ui, |ui| {
+                for (n, slot) in [
+                    ("Top", &mut st.borders.top),
+                    ("Bottom", &mut st.borders.bottom),
+                    ("Left", &mut st.borders.left),
+                    ("Right", &mut st.borders.right),
+                    ("Diagonal ↘", &mut st.borders.diag_down),
+                    ("Diagonal ↗", &mut st.borders.diag_up),
+                ] {
+                    let n = lang.tr(n);
+                    // Every line style Excel has (none and the 13 SpreadsheetML styles), wrapping.
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(format!("{n}:"));
+                        for (s, label) in BorderStyle::NAMES {
+                            let label = lang.tr(label);
+                            let response = ui.selectable_label(slot.style == s, label);
+                            let selected = slot.style == s;
+                            response
+                                .widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), selected, format!("{n} {label}")));
+                            if response.clicked() {
+                                slot.style = s;
+                            }
                         }
-                    }
-                });
-            }
-            let theme = app.session.active().map(|doc| &doc.wb.theme).cloned().unwrap_or_default();
-            crate::border_preview::sample(ui, &st.borders, &theme);
+                    });
+                }
+                let theme = app.session.active().map(|doc| &doc.wb.theme).cloned().unwrap_or_default();
+                crate::border_preview::sample(ui, &st.borders, &theme);
+            });
         }
         "Fill" => {
             let colors = app.session.active().map(|doc| doc.wb.theme.colors).unwrap_or_default();

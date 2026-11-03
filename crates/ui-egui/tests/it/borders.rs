@@ -197,3 +197,25 @@ fn frozen_merged_range_keeps_its_outline_when_scrolled() {
         "B's segments end at the freeze line: {right_ends:?} vs {freeze_x}"
     );
 }
+
+/// Format Cells › Border lists all 14 styles for six edges; in a short window the rows scroll and
+/// OK and Cancel stay on screen.
+#[test]
+fn border_tab_keeps_ok_and_cancel_on_a_short_screen() {
+    let mut session = Session::new();
+    session.new_workbook();
+    let mut h = crate::common::builder().with_size(vec2(1200.0, 420.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            app.logic(&ui.ctx().clone());
+            app.ui(ui);
+        },
+        crate::common::app(session),
+    );
+    h.run_steps(6);
+    h.state_mut().open_dialog("formatCells", json!({"tab": "Border"}));
+    h.run_steps(6);
+    for label in ["   OK   ", " Cancel "] {
+        let r = h.get_by_label(label).rect();
+        assert!(r.bottom() <= 420.0, "{label:?} ends at {} on a 420-point screen", r.bottom());
+    }
+}
