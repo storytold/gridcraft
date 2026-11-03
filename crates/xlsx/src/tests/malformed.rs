@@ -344,36 +344,30 @@ fn conditional_format_cap_admits_a_large_block_after_small_ones() {
     assert!(!rep.warnings.iter().any(|w| w.contains("kept range cells")), "{:?}", rep.warnings);
 }
 
-/// #2173: cell formats share one copy of each custom number format, codes longer than Excel's
-/// 255 characters are dropped (their cells show General) and font names are cut to 255 characters.
+/// #2173: cell formats share one copy of each custom number format (even an over-long one, which
+/// is kept as stored) and font names are cut to 255 characters.
 #[test]
 fn style_copies_are_bounded() {
-    let code = "0".repeat(255);
-    let long = "0".repeat(50_000);
+    let code = "0".repeat(50_000);
     let font = "F".repeat(100_000);
     let xfs = r#"<xf numFmtId="164" fontId="0"/>"#.repeat(10_000);
     let styles = format!(
-        r#"<styleSheet><numFmts><numFmt numFmtId="164" formatCode="{code}"/><numFmt numFmtId="165" formatCode="0.000&quot;x&quot;"/><numFmt numFmtId="167" formatCode="{long}"/></numFmts><fonts><font><name val="{font}"/></font></fonts><cellXfs>{xfs}<xf numFmtId="165"/><xf numFmtId="165"/><xf numFmtId="167"/></cellXfs><dxfs><dxf><numFmt numFmtId="166" formatCode="{long}"/></dxf><dxf><numFmt numFmtId="168" formatCode="{code}"/></dxf></dxfs></styleSheet>"#
+        r#"<styleSheet><numFmts><numFmt numFmtId="164" formatCode="{code}"/><numFmt numFmtId="165" formatCode="0.000&quot;x&quot;"/></numFmts><fonts><font><name val="{font}"/></font></fonts><cellXfs>{xfs}<xf numFmtId="165"/><xf numFmtId="165"/></cellXfs><dxfs><dxf><numFmt numFmtId="166" formatCode="{code}"/></dxf></dxfs></styleSheet>"#
     );
     let st = crate::styles::read_styles(&crate::xml::parse(styles.as_bytes()).unwrap(), &[], "");
-    assert_eq!(st.xfs.len(), 10_003);
+    assert_eq!(st.xfs.len(), 10_002);
     let first = &st.xfs[0].num_fmt.0;
-    assert_eq!(first.len(), 255);
+    assert_eq!(first.len(), 50_000);
     assert!(st.xfs[..10_000].iter().all(|s| std::sync::Arc::ptr_eq(&s.num_fmt.0, first) && s.font.name.chars().count() == 255));
     assert_eq!(st.xfs[10_000].num_fmt.as_str(), "0.000\"x\"");
     assert!(std::sync::Arc::ptr_eq(&st.xfs[10_000].num_fmt.0, &st.xfs[10_001].num_fmt.0));
-    assert_eq!(st.xfs[10_002].num_fmt.as_str(), "General", "the over-long code is dropped");
-    assert!(!st.num_fmts.contains_key(&167));
-    assert_eq!(st.dxfs[0].num_fmt.as_str(), "General", "an over-long inline code is dropped");
-    assert_eq!(st.dxfs[1].num_fmt.as_str(), code);
-    assert_eq!(st.dropped_num_fmts, 2);
+    assert_eq!(st.dxfs[0].num_fmt.as_str(), code);
 
     // The same styles part read through the package.
     let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
     let sheet = r#"<sheetData><row r="1"><c r="A1" s="1"><v>1</v></c></row></sheetData>"#;
-    let (wb, rep) = read_xlsx(&minimal(sheet, &[("xl/styles.xml", &styles)], rels, "")).unwrap();
+    let (wb, _) = read_xlsx(&minimal(sheet, &[("xl/styles.xml", &styles)], rels, "")).unwrap();
     assert_eq!(wb.sheets.len(), 1);
-    assert!(rep.warnings.iter().any(|w| w.contains("2 number formats longer than 255")), "{:?}", rep.warnings);
 }
 
 /// #2173: a shared formula's master is copied into every dependent; an over-long master keeps
