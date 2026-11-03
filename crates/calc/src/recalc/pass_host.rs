@@ -72,8 +72,9 @@ pub(super) struct PassHost<'a> {
     /// result is laid out (an array spills from the cell, as a formula's does). Each one is in
     /// `pending` until it is laid out, so a formula that reads it first gets its new value.
     python: HashMap<Key, Value>,
-    /// The ranges of the multi-cell legacy array formulas in the pass. Each takes its whole range,
-    /// so a dynamic array spilling over one is blocked, whichever of the two is evaluated first.
+    /// The sheet and range of every multi-cell legacy array formula in the workbook. Each takes
+    /// its whole range, so a dynamic array spilling over one is blocked, whichever of the two is
+    /// evaluated first and whether or not the legacy array's result could be laid out.
     legacy: Vec<(usize, RangeRef)>,
 }
 
@@ -110,7 +111,7 @@ impl<'a> PassHost<'a> {
             stack_top: 0,
             out_of_stack: false,
             python: HashMap::default(),
-            legacy: exprs.keys().filter_map(|&(sheet, at)| Some((sheet, legacy_range(wb.sheet(sheet)?, at)?))).collect(),
+            legacy: Vec::new(),
         }
     }
 
@@ -119,6 +120,12 @@ impl<'a> PassHost<'a> {
     pub(super) fn with_python(mut self, python: HashMap<Key, Value>) -> Self {
         self.pending.extend(python.keys().copied());
         self.python = python;
+        self
+    }
+
+    /// Adds the multi-cell legacy array formulas of the workbook (see `legacy`).
+    pub(super) fn with_legacy(mut self, legacy: Vec<(usize, RangeRef)>) -> Self {
+        self.legacy = legacy;
         self
     }
 }
@@ -132,7 +139,7 @@ pub(super) fn legacy_range(sh: &gridcraft_model::Sheet, at: CellRef) -> Option<R
 /// overlaps merged cells, holds other cells, or another formula's spill (unless that formula is
 /// recalculated in this pass, and so may spill elsewhere now). A legacy array takes its whole
 /// range as typed content does: another formula's spill never blocks it, and a dynamic array
-/// whose area overlaps one recalculated in this pass is blocked (#2949).
+/// whose area overlaps one is blocked (#2949).
 fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
     let Some(sh) = host.wb.sheet(sheet) else { return false };
     let legacy = legacy_range(sh, anchor).is_some();

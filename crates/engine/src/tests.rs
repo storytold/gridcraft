@@ -2317,6 +2317,52 @@ fn a_legacy_array_over_a_spill_area_takes_its_range_and_blocks_the_spill() {
 }
 
 #[test]
+fn a_dynamic_array_recalculated_later_stays_off_a_legacy_array() {
+    // #2949 review: the dynamic array is recalculated without the legacy array (only its
+    // precedent changed), when it was blocked and when it grows into the legacy array's range.
+    let spill = Value::Error(gridcraft_core::CellError::Spill);
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[5], [2]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=SEQUENCE(A1)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "G1", "input": "=SEQUENCE(A2)"})).unwrap();
+    s.execute("selection.set", json!({"range": "C3:E3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C3", "input": "=1", "array": true})).unwrap();
+    s.execute("selection.set", json!({"range": "F5:H5"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F5", "input": "=2", "array": true})).unwrap();
+    assert_eq!([v(&s, "D1"), v(&s, "G1"), v(&s, "G2")], [spill.clone(), Value::Number(1.0), Value::Number(2.0)]);
+    s.execute("range.setValues", json!({"range": "A1", "values": [[6], [8]]})).unwrap();
+    assert_eq!([v(&s, "D1"), v(&s, "G1"), v(&s, "G3")], [spill.clone(), spill.clone(), Value::Empty]);
+    assert_eq!([v(&s, "D3"), v(&s, "G5"), v(&s, "H5")], [Value::Number(1.0), Value::Number(2.0), Value::Number(2.0)]);
+    let d = s.doc().unwrap();
+    let ranges: Vec<_> = d.wb.sheet(0).unwrap().spill_ranges.values().map(|r| r.a1()).collect();
+    assert_eq!(ranges.len(), 2, "{ranges:?}");
+    assert!(ranges.contains(&"C3:E3".to_string()) && ranges.contains(&"F5:H5".to_string()), "{ranges:?}");
+    // Back within bounds, G1 spills again; D1's area still overlaps C3:E3.
+    s.execute("range.setValues", json!({"range": "A2", "values": [[3]]})).unwrap();
+    assert_eq!([v(&s, "D1"), v(&s, "G3")], [spill.clone(), Value::Number(3.0)]);
+}
+
+#[test]
+fn a_legacy_array_too_large_to_lay_out_still_blocks_a_spill() {
+    // #2949 review: a legacy array over more cells than a result may hold shows #NUM! and lays
+    // nothing out, but it still takes its range, so a dynamic array can't spill into it.
+    let mut s = s();
+    s.execute("selection.set", json!({"range": "B2:Q1048576"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "=1", "array": true})).unwrap();
+    assert_eq!(v(&s, "B2"), Value::Error(gridcraft_core::CellError::Num));
+    // C1:C3 overlaps the range below its anchor B2, which holds the only stored cell.
+    s.execute("cell.set", json!({"cell": "C1", "input": "=SEQUENCE(3)"})).unwrap();
+    assert_eq!(
+        [v(&s, "C1"), v(&s, "C2"), v(&s, "B2")],
+        [Value::Error(gridcraft_core::CellError::Spill), Value::Empty, Value::Error(gridcraft_core::CellError::Num)]
+    );
+    assert!(s.doc().unwrap().wb.sheet(0).unwrap().spill_ranges.is_empty());
+    // Outside its range, a dynamic array spills.
+    s.execute("cell.set", json!({"cell": "S1", "input": "=SEQUENCE(3)"})).unwrap();
+    assert_eq!(v(&s, "S3"), Value::Number(3.0));
+}
+
+#[test]
 fn clearing_or_overwriting_a_dynamic_array_unblocks_the_one_it_blocked() {
     // #2340: F13's area overlaps C14's spill, and stayed #SPILL! after C14 was cleared (or a value
     // typed over it) until Calculate Now, because F13 is to the right of C14.

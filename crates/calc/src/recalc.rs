@@ -37,11 +37,21 @@ pub struct Calc {
     /// Cells whose formulas have errors from cycles.
     pub circular: Vec<Key>,
     pub last_recalc_cells: usize,
+    /// The multi-cell legacy array formulas and their ranges, kept with the graph. Each one takes
+    /// its whole range, whether or not its result could be laid out there (#2949).
+    legacy: HashMap<Key, RangeRef>,
 }
 
 impl Default for Calc {
     fn default() -> Self {
-        Calc { graph: Graph::default(), rng: 0x9E37_79B9_7F4A_7C15, fixed_now: None, circular: vec![], last_recalc_cells: 0 }
+        Calc {
+            graph: Graph::default(),
+            rng: 0x9E37_79B9_7F4A_7C15,
+            fixed_now: None,
+            circular: vec![],
+            last_recalc_cells: 0,
+            legacy: HashMap::default(),
+        }
     }
 }
 
@@ -124,6 +134,7 @@ impl Calc {
     /// Rebuilds the graph from scratch.
     pub fn rebuild(&mut self, wb: &Workbook) {
         self.graph = Graph::default();
+        self.legacy.clear();
         let mut circ = Vec::new();
         for (si, sheet) in wb.sheets.iter().enumerate() {
             for (c, cell) in sheet.cells.iter() {
@@ -132,6 +143,9 @@ impl Calc {
                 {
                     let (areas, dynamic) = precedents(wb, si, &e);
                     self.graph.insert((si, c), Node { areas, dynamic });
+                    if let Some(r) = legacy_range(sheet, c) {
+                        self.legacy.insert((si, c), r);
+                    }
                     if cell.value == Value::Error(CellError::Circ) {
                         circ.push((si, c));
                     }
@@ -218,10 +232,15 @@ impl Calc {
                 Some(e) => {
                     let (areas, dynamic) = precedents(wb, k.0, &e);
                     self.graph.insert(k, Node { areas, dynamic });
+                    match wb.sheet(k.0).and_then(|sh| legacy_range(sh, k.1)) {
+                        Some(r) => self.legacy.insert(k, r),
+                        None => self.legacy.remove(&k),
+                    };
                 }
                 // See `rebuild`: its spill is laid out again from its result when it is calculated.
                 None if python => {
                     self.graph.insert(k, Node { areas: Vec::new(), dynamic: false });
+                    self.legacy.remove(&k);
                     // New code has no result yet: the spill the cell had (its old result's, or a
                     // formula's) goes, and what read it is recalculated, as for a formula
                     // replaced by a constant.
@@ -235,6 +254,7 @@ impl Calc {
                 }
                 None => {
                     self.graph.remove(k);
+                    self.legacy.remove(&k);
                     // A formula replaced by a constant (or cleared) takes its spilled values with it.
                     if let Some(sh) = wb.sheet_mut(k.0)
                         && let Some(r) = sh.spill_ranges.remove(&k.1)
@@ -284,8 +304,8 @@ impl Calc {
                 }
             }
         }
-        // So can the area a cleared or overwritten array spilled over (#2340), a legacy array's
-        // included (#2949).
+        // The area a cleared or overwritten array spilled over is emptied too, a legacy array's
+        // included, and can unblock an anchor as an emptied cell does (#2340).
         for &(si, r) in &cleared {
             match emptied.iter_mut().find(|x| x.0 == si) {
                 Some(x) => x.1 = CellRef::new(x.1.row.max(r.end.row), x.1.col.max(r.end.col)),
@@ -385,7 +405,8 @@ impl Calc {
             let mut rng = self.rng;
             let tp = prof_now();
             let (results, spills, cycles) = {
-                let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python);
+                let legacy = self.legacy.iter().map(|(k, r)| (k.0, *r)).collect();
+                let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python).with_legacy(legacy);
                 host.iterate = wb.calc.iterative;
                 for k in &dirty {
                     host.calculate(*k);
