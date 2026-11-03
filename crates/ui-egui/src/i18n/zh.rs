@@ -3,6 +3,8 @@
 /// Returns the Chinese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Paste Special|Add" => "加",
+        "Text to Columns|Comma" => "逗号",
         " (password)" => " （密码）",
         " (password, unlocked)" => " （密码，已解锁）",
         "$ English (United States)" => "$ 英语（美国）",
@@ -272,7 +274,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Group by Years" => "按年组合",
         "Grouped By:" => "分组方式：",
         "Growth" => "增长",
-        "Header (&L left, &C center, &R right; &P page, &N pages, &D date, &A sheet):" => "页眉（&L 左侧，&C 中间，&R 右侧；&P 页码，&N 总页数，&D 日期，&A 工作表名）：",
+        "Header (&L left, &C center, &R right; &P page, &N pages, &D date, &A sheet):" => {
+            "页眉（&L 左侧，&C 中间，&R 右侧；&P 页码，&N 总页数，&D 日期，&A 工作表名）："
+        }
         "Header (in):" => "页眉（英寸）：",
         "Heading 1" => "标题 1",
         "Heading 2" => "标题 2",
@@ -461,7 +465,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Protect Sheet" => "保护工作表",
         "Protect Structure and Windows" => "保护结构和窗口",
         "Protect Workbook structure" => "保护工作簿结构",
-        "Protect workbook for: Structure (sheets can't be added, moved, renamed, hidden or deleted)." => "保护工作簿：结构（不能添加、移动、重命名、隐藏或删除工作表）。",
+        "Protect workbook for: Structure (sheets can't be added, moved, renamed, hidden or deleted)." => {
+            "保护工作簿：结构（不能添加、移动、重命名、隐藏或删除工作表）。"
+        }
         "Protection" => "保护",
         "Purple" => "紫色",
         "Quarterly Sales Dashboard" => "季度销售仪表板",

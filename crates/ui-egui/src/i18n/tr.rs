@@ -4,6 +4,8 @@
 /// Returns the Turkish translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Paste Special|Add" => "Topla",
+        "Text to Columns|Comma" => "Virgül",
         " (password)" => " (parola)",
         " (password, unlocked)" => " (parola, kilidi açık)",
         "$ English (United States)" => "$ İngilizce (ABD)",
