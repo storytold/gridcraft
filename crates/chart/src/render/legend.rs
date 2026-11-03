@@ -113,7 +113,7 @@ pub(super) fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos
     let size = ctx.font_size("legend", LABEL_SIZE);
     // Category entries do not correspond to series indices.
     let series_count = match chart.kind {
-        ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst => 0,
+        ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Waterfall => 0,
         _ => series_count,
     };
     let marker_size = if series_count > 0 { chart.format.series.values().filter_map(|s| s.marker_size).fold(0.0f32, f32::max) } else { 0.0 };

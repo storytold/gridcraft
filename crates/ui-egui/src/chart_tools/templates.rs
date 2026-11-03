@@ -8,7 +8,7 @@ pub(crate) fn save_template(app: &mut SheetApp, chart_id: u32, name: &str) -> Re
     let chart =
         app.selected_chart_snapshot().filter(|chart| chart.id == chart_id).ok_or_else(|| "The selected chart is no longer available.".to_string())?;
     let name = name.trim();
-    if name.is_empty() || name.len() > 80 {
+    if name.is_empty() || name.chars().count() > 80 {
         return Err("Enter a template name between 1 and 80 characters.".into());
     }
     let theme = app.session.doc().map_err(|error| error.to_string())?.wb.theme.clone();

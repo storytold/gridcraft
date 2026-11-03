@@ -82,6 +82,34 @@ fn table_columns_align_with_plot_and_keep_missing_values_blank() {
 }
 
 #[test]
+fn reversed_category_order_keeps_data_table_labels_and_values_aligned() {
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.title = None;
+    c.x_title = None;
+    c.y_title = None;
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.format.x_axis.reversed = true;
+    c.data_table = Some(ChartDataTable::default());
+    let mut values = series("Values", &[11.0, 22.0, 33.0], [1, 2, 3, 255], c.kind);
+    values.number_format = "0".into();
+    let data = ChartData { categories: ["Alpha", "Beta", "Gamma"].map(String::from).to_vec(), series: vec![values], ..Default::default() };
+    let prims = render(&c, &data, 600.0, 400.0, &ApproxMeasure);
+    let x = |wanted: &str| {
+        prims
+            .iter()
+            .find_map(|primitive| match primitive {
+                Prim::Text { text, x, .. } if text == wanted => Some(*x),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing table text {wanted:?}"))
+    };
+    assert!((x("Gamma") - x("33")).abs() < 0.01);
+    assert!((x("Beta") - x("22")).abs() < 0.01);
+    assert!((x("Alpha") - x("11")).abs() < 0.01);
+}
+
+#[test]
 fn table_borders_are_independent_and_multilevel_headers_are_kept() {
     let mut c = chart(ChartKind::Line);
     c.legend = LegendPos::None;

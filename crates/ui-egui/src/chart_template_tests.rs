@@ -153,3 +153,18 @@ fn malformed_saved_chart_templates_do_not_discard_other_ui_preferences() {
     assert!(malformed.dark);
     assert!(malformed.chart_templates.is_empty());
 }
+
+#[test]
+fn template_name_limit_counts_unicode_characters_instead_of_utf8_bytes() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("cell.set", json!({"cell":"A1", "input":"1"})).unwrap();
+    let mut app = SheetApp::new(session, Default::default());
+    let chart = app.run("insert.chart", json!({"type":"column"})).unwrap()["chart"].as_u64().unwrap() as u32;
+
+    let eighty_characters = "é".repeat(80);
+    assert!(chart_tools::save_template(&mut app, chart, &eighty_characters).is_ok());
+    assert_eq!(app.ui.chart_templates[0].name, eighty_characters);
+    assert!(chart_tools::save_template(&mut app, chart, &"é".repeat(81)).is_err());
+    assert_eq!(app.ui.chart_templates.len(), 1);
+}

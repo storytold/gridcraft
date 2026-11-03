@@ -433,7 +433,11 @@ pub fn write_chartex(wb: &Workbook, si: usize, ch: &Chart, names: &mut Vec<Strin
             "<cx:spPr><a:solidFill><a:schemeClr val=\"bg1\"/></a:solidFill><a:ln w=\"9525\"><a:solidFill>{GREY}</a:solidFill></a:ln></cx:spPr>"
         );
     } else {
-        s.push_str(&crate::chart::surface_xml(&ch.format.chart_area, "cx"));
+        let mut chart_area = ch.format.chart_area.clone();
+        if chart_area.fill.is_none() {
+            chart_area.fill = Some([255, 255, 255, 255]);
+        }
+        s.push_str(&crate::chart::surface_xml(&chart_area, "cx"));
     }
     s.push_str(&crate::chart::format_extension(&ch.format, "cx"));
     s.push_str("</cx:chartSpace>");
@@ -455,6 +459,18 @@ fn gridline_xml(stroke: &gridcraft_model::ChartStroke) -> String {
 #[cfg(test)]
 mod quartile_tests {
     use super::*;
+
+    #[test]
+    fn default_white_chart_area_survives_repeated_chartex_saves() {
+        let xml = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="boxWhisker"/></cx:plotAreaRegion></cx:plotArea></cx:chart><cx:spPr><a:solidFill><a:schemeClr val="bg1"/></a:solidFill><a:ln w="9525"><a:solidFill><a:schemeClr val="lt1"/></a:solidFill></a:ln></cx:spPr></cx:chartSpace>"#;
+        let parsed = crate::xml::parse(xml.as_bytes()).unwrap();
+        let mut chart = read_chartex(&parsed).unwrap();
+        for _ in 0..2 {
+            let saved = write_chartex(&Workbook::default(), 0, &chart, &mut Vec::new());
+            assert!(saved.contains("<a:solidFill><a:srgbClr val=\"FFFFFF\""), "default white fill missing after save: {saved}");
+            chart = read_chartex(&crate::xml::parse(saved.as_bytes()).unwrap()).unwrap();
+        }
+    }
 
     #[test]
     fn native_chartex_strokes_follow_chart_format_validation_limits() {

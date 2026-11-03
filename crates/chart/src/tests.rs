@@ -108,6 +108,21 @@ fn chart_svg_export_preserves_text_and_escapes_xml() {
 }
 
 #[test]
+fn svg_custom_font_families_keep_a_generic_fallback_and_are_escaped() {
+    let mut c = chart(ChartKind::Line);
+    c.anchor.width = 320.0;
+    c.anchor.height = 200.0;
+    c.format.text.insert("chart".into(), gridcraft_model::ChartTextFormat { name: Some("A&B".into()), ..Default::default() });
+    let svg = export_svg(&c, &sample(c.kind), &ApproxMeasure, 1.0, false).unwrap();
+    assert!(svg.contains("font-family=\"A&amp;B, sans-serif\""));
+
+    c.format.text.clear();
+    let svg = export_svg(&c, &sample(c.kind), &ApproxMeasure, 1.0, false).unwrap();
+    assert!(svg.contains("font-family=\"sans-serif\""));
+    assert!(!svg.contains("font-family=\"sans-serif, sans-serif\""));
+}
+
+#[test]
 fn chart_png_export_quality_transparency_and_size_limits() {
     let mut c = chart(ChartKind::ScatterLines);
     c.anchor.width = 320.0;
@@ -255,7 +270,7 @@ fn chart_legend_uses_series_marker_style() {
 
 #[test]
 fn chart_category_legends_ignore_series_formatting() {
-    for kind in [ChartKind::Pie, ChartKind::Doughnut, ChartKind::Treemap, ChartKind::Sunburst] {
+    for kind in [ChartKind::Pie, ChartKind::Doughnut, ChartKind::Treemap, ChartKind::Sunburst, ChartKind::Waterfall] {
         for pos in [LegendPos::Top, LegendPos::Bottom, LegendPos::Left, LegendPos::Right] {
             let mut c = chart(kind);
             c.legend = pos;
@@ -268,7 +283,9 @@ fn chart_category_legends_ignore_series_formatting() {
                     _ => None,
                 })
                 .collect();
-            assert_eq!(swatches, legend_entries(&c, &data).iter().map(|e| e.1).collect::<Vec<_>>());
+            if kind != ChartKind::Waterfall {
+                assert_eq!(swatches, legend_entries(&c, &data).iter().map(|e| e.1).collect::<Vec<_>>());
+            }
             c.format.series.insert(
                 0,
                 gridcraft_model::ChartSeriesFormat {
@@ -280,6 +297,77 @@ fn chart_category_legends_ignore_series_formatting() {
             );
             assert_eq!(before, render(&c, &data, 640.0, 400.0, &ApproxMeasure), "{kind:?} {pos:?}");
         }
+    }
+}
+
+#[test]
+fn reversed_category_gridlines_follow_the_sampled_category_labels() {
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.format.x_axis.reversed = true;
+    c.format.vertical_gridlines = true;
+    let grid_color = [3, 7, 11, 255];
+    c.format.vertical_gridline.color = Some(grid_color);
+    let categories: Vec<String> = (0..12).map(|index| format!("Long category label {index}")).collect();
+    let values: Vec<f64> = (0..12).map(f64::from).collect();
+    let data = ChartData { categories, series: vec![series("Values", &values, [80, 90, 100, 255], c.kind)], ..Default::default() };
+    let prims = render(&c, &data, 640.0, 400.0, &ApproxMeasure);
+    let label_x: Vec<f32> = prims
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Prim::Text { role, x, .. } if role == "x_axis" => Some(*x),
+            _ => None,
+        })
+        .collect();
+    let grid_x: Vec<f32> = prims
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Prim::Line { pts, color, .. } if *color == grid_color && pts.len() == 2 && (pts[0][0] - pts[1][0]).abs() < 0.01 => Some(pts[0][0]),
+            _ => None,
+        })
+        .collect();
+    assert!(!label_x.is_empty(), "the long labels should exercise category thinning");
+    assert_eq!(grid_x.len(), label_x.len());
+    for x in label_x {
+        assert!(grid_x.iter().any(|line_x| (x - line_x).abs() < 0.01), "no category gridline at sampled label x={x}");
+    }
+}
+
+#[test]
+fn reversed_bar_category_gridlines_follow_the_sampled_category_labels() {
+    let mut c = chart(ChartKind::BarClustered);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.format.y_axis.reversed = true;
+    c.format.vertical_gridlines = true;
+    let grid_color = [3, 7, 11, 255];
+    c.format.horizontal_gridline.color = Some(grid_color);
+    let categories: Vec<String> = (0..36).map(|index| format!("Category {index}")).collect();
+    let category_count = categories.len();
+    let values: Vec<f64> = (0..36).map(f64::from).collect();
+    let data = ChartData { categories, series: vec![series("Values", &values, [80, 90, 100, 255], c.kind)], ..Default::default() };
+    let prims = render(&c, &data, 640.0, 400.0, &ApproxMeasure);
+    let label_y: Vec<f32> = prims
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Prim::Text { role, y, .. } if role == "y_axis" => Some(*y),
+            _ => None,
+        })
+        .collect();
+    let grid_y: Vec<f32> = prims
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Prim::Line { pts, color, .. } if *color == grid_color && pts.len() == 2 && (pts[0][1] - pts[1][1]).abs() < 0.01 => Some(pts[0][1]),
+            _ => None,
+        })
+        .collect();
+    assert!(label_y.len() < category_count, "the tall category list should exercise label thinning");
+    assert_eq!(grid_y.len(), label_y.len());
+    for y in label_y {
+        assert!(grid_y.iter().any(|line_y| (y - line_y).abs() < 0.01), "no category gridline at sampled label y={y}");
     }
 }
 

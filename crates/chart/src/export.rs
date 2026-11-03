@@ -130,10 +130,11 @@ pub fn export_svg(chart: &Chart, data: &ChartData, measure: &dyn Measure, scale:
                 let _ = write!(svg, "<path d=\"{path} Z\" {} {}/>", fill(Some(f)), stroke(s));
             }
             Prim::Text { x, y, text, size, color: c, bold, format, align, valign, rotation, .. } => {
+                let font_family = format.name.as_deref().map(|name| format!("{}, sans-serif", esc(name))).unwrap_or_else(|| "sans-serif".into());
                 let _ = write!(
                     svg,
                     "<text x=\"{x}\" y=\"{y}\" font-family=\"{}\" font-size=\"{size}\" font-weight=\"{}\" font-style=\"{}\" text-anchor=\"{}\" dominant-baseline=\"{}\" transform=\"rotate({} {x} {y})\" {}>{}</text>",
-                    esc(format.name.as_deref().unwrap_or("sans-serif")),
+                    font_family,
                     if bold { "bold" } else { "normal" },
                     if format.italic.unwrap_or(false) { "italic" } else { "normal" },
                     match align {

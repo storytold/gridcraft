@@ -488,7 +488,11 @@ fn read_format(root: &El, plot: &El, series: &[Series]) -> gridcraft_model::Char
     }
     let bar_chart = plot.children.iter().find(|g| g.name == "barChart");
     format.gap_width = bar_chart.and_then(|group| group.child_val("gapWidth")).and_then(|s| s.parse::<f32>().ok()).filter(|v| *v != 150.0);
-    format.overlap = bar_chart.and_then(|group| group.child_val("overlap")).and_then(|s| s.parse().ok());
+    format.overlap = bar_chart.and_then(|group| {
+        let overlap = group.child_val("overlap")?.parse::<f32>().ok()?;
+        let default_stacked_overlap = overlap == 100.0 && matches!(group.child_val("grouping"), Some("stacked" | "percentStacked"));
+        (!default_stacked_overlap).then_some(overlap)
+    });
     merge_native_surface(&mut format.plot_area, plot.child("spPr"));
     merge_native_surface(&mut format.chart_area, root.child("spPr"));
     sanitize_chart_format(&mut format);

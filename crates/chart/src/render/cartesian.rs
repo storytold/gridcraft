@@ -225,6 +225,14 @@ fn has_markers(chart: &Chart, series: usize, kind: ChartKind) -> bool {
         || chart.format.series.get(&series).is_some_and(|style| style.marker.is_some())
 }
 
+fn reversed_categories(chart: &Chart, horizontal: bool) -> bool {
+    if horizontal {
+        chart.format.y_axis.reversed
+    } else {
+        chart.format.x_axis.reversed && !matches!(chart.kind, ChartKind::Histogram | ChartKind::Waterfall | ChartKind::BoxWhisker | ChartKind::Stock)
+    }
+}
+
 pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizontal: bool) {
     let ncat = data.categories.len().max(data.series.iter().map(|s| s.values.len()).max().unwrap_or(0)).min(MAX_CATS);
     if ncat == 0 {
@@ -425,7 +433,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         draw_trendlines(ctx, s, &pts, &frac, &px, &mut trend_labels, (0.5, ncat_slots as f64 + 0.5));
     }
     draw_trend_labels(ctx, plot, &trend_labels);
-    super::table::draw(ctx, chart, data, plot, table.as_ref());
+    super::table::draw(ctx, chart, data, plot, table.as_ref(), reversed_categories(chart, horizontal));
 }
 
 // ---------------------------------------------------------------- scatter & bubble

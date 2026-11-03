@@ -509,6 +509,38 @@ fn cmd_v_with_a_picture_on_the_clipboard_inserts_it_at_the_active_cell() {
 }
 
 #[test]
+fn delayed_paste_image_event_is_not_duplicated_by_the_key_release_fallback() {
+    let image_reads = Rc::new(RefCell::new(0));
+    let read_count = image_reads.clone();
+    let image = image::RgbaImage::from_pixel(4, 3, image::Rgba([200, 30, 30, 255]));
+    let mut h = harness(Services {
+        paste_text: Some(Box::new(|| None)),
+        paste_image: Some(Box::new(move || {
+            *read_count.borrow_mut() += 1;
+            Some(image.clone())
+        })),
+        ..Default::default()
+    });
+    h.state_mut().run("selection.set", json!({"cell": "C5"})).unwrap();
+
+    // The native platform consumes Ctrl+V on key press. A release may arrive before the
+    // asynchronous egui-winit image decode is delivered on a later frame.
+    h.input_mut().events.push(Event::Key {
+        key: egui::Key::V,
+        physical_key: None,
+        pressed: false,
+        repeat: false,
+        modifiers: egui::Modifiers { ctrl: true, command: true, ..Default::default() },
+    });
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PasteImage(std::sync::Arc::new(egui::ColorImage::new([4, 3], vec![egui::Color32::from_rgb(200, 30, 30); 12]))));
+    h.run_steps(2);
+
+    assert_eq!(*image_reads.borrow(), 0, "the event-loop PasteImage event owns this paste");
+    assert_eq!(pictures(&h), vec![("C5".to_string(), 4.0, 3.0, "image/png".to_string())]);
+}
+
+#[test]
 fn a_malformed_clipboard_picture_is_refused_without_inserting() {
     let mut h = harness(Services::default());
     let mut image = egui::ColorImage::new([4, 3], vec![egui::Color32::WHITE; 12]);

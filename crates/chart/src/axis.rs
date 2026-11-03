@@ -29,10 +29,13 @@ impl Scale {
         if !(span.is_finite() && self.step.is_finite() && self.step > 0.0 && span > 0.0) {
             return vec![self.min];
         }
-        let n = ((span / self.step + 1e-9).floor() as i64).clamp(0, 50);
+        let intervals = (span / self.step + 1e-9).floor().max(0.0) as u64;
+        let stride = intervals.div_ceil(50).max(1);
+        let n = intervals.div_ceil(stride);
         (0..=n)
             .map(|i| {
-                let v = self.min + i as f64 * self.step;
+                let tick = i.saturating_mul(stride).min(intervals);
+                let v = self.min + tick as f64 * self.step;
                 // Snap away accumulated float error.
                 let snapped = v;
                 if snapped.abs() < self.step * 1e-9 { 0.0 } else { snapped }
@@ -151,9 +154,9 @@ pub(crate) fn fixed_scale(min: f64, max: f64, step: f64) -> Scale {
 pub(crate) fn configured_scale(lo: f64, hi: f64, zero: bool, options: &gridcraft_model::ChartAxis) -> Scale {
     let mut scale = nice_scale(lo, hi, zero);
     if options.logarithmic {
-        let hi = hi.max(1e-100);
-        let lo = if lo > 0.0 { lo } else { hi / 1000.0 };
-        scale.min = 10f64.powf(lo.log10().floor());
+        let hi = if hi > 0.0 { hi } else { 1e-100 };
+        let lo = if lo > 0.0 { lo } else { (hi / 1000.0).max(f64::from_bits(1)) };
+        scale.min = 10f64.powf(lo.log10().floor()).max(f64::from_bits(1));
         scale.max = 10f64.powf(hi.log10().ceil());
         if scale.max <= scale.min {
             scale.max = scale.min * 10.0;
@@ -262,5 +265,27 @@ mod override_tests {
         assert!((scale.frac(10.0) - 1.0 / 3.0).abs() < 1e-6);
         assert!(scale.frac(0.0).is_nan());
         assert!(scale.frac(-1.0).is_nan());
+    }
+
+    #[test]
+    fn manual_major_units_thin_ticks_across_the_full_axis() {
+        let scale = Scale { min: 0.0, max: 1000.0, step: 1.0, logarithmic: false, reversed: false };
+        let ticks = scale.ticks();
+        assert_eq!(ticks.len(), 51);
+        assert_eq!(ticks.first(), Some(&0.0));
+        assert_eq!(ticks.last(), Some(&1000.0));
+        assert!(ticks.windows(2).all(|pair| (pair[1] - pair[0] - 20.0).abs() < 1e-9));
+
+        let non_divisible = Scale { max: 101.0, ..scale };
+        assert_eq!(non_divisible.ticks().last(), Some(&101.0));
+    }
+
+    #[test]
+    fn logarithmic_scale_preserves_small_positive_data_maxima() {
+        let options = ChartAxis { logarithmic: true, ..Default::default() };
+        let scale = configured_scale(1e-200, 2e-200, false, &options);
+        assert!(scale.min > 0.0 && scale.min <= 1e-200, "minimum: {}", scale.min);
+        assert!(scale.max >= 2e-200 && scale.max < 1e-100, "maximum: {}", scale.max);
+        assert!(scale.ticks().iter().all(|tick| *tick > 0.0));
     }
 }

@@ -218,6 +218,7 @@ fn category_labels(ctx: &mut Ctx, chart: &Chart, plot: Bx, (l, outer): (&[String
     }
     if chart.format.vertical_gridlines {
         for j in (0..n).step_by(k) {
+            let j = if reverse_categories { n - 1 - j } else { j };
             ctx.vline(plot.x + (j as f32 + 0.5) * cw, plot.y, plot.bottom(), gx, gwx);
         }
     }
@@ -265,6 +266,7 @@ fn bar_category_labels(ctx: &mut Ctx, chart: &Chart, plot: Bx, labels: &[String]
     }
     if chart.format.vertical_gridlines {
         for j in (0..n).step_by(k) {
+            let j = if chart.format.y_axis.reversed { n - 1 - j } else { j };
             ctx.hline(plot.x, plot.right(), plot.bottom() - (j as f32 + 0.5) * ch, gy, gwy);
         }
     }

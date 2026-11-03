@@ -37,7 +37,9 @@ fn standard_and_stacked_lines_keep_their_kinds() {
 #[test]
 fn percent_stacked_chart_writer_defaults_round_trip_without_series_overrides() {
     let wb = Workbook::default();
-    for kind in [ChartKind::LineStacked100, ChartKind::LineStacked100Markers, ChartKind::AreaStacked100] {
+    for kind in
+        [ChartKind::LineStacked100, ChartKind::LineStacked100Markers, ChartKind::AreaStacked100, ChartKind::BarStacked, ChartKind::BarStacked100]
+    {
         let chart = Chart {
             id: 1,
             kind,
@@ -62,7 +64,18 @@ fn percent_stacked_chart_writer_defaults_round_trip_without_series_overrides() {
 
         assert_eq!(round_trip.kind, kind, "{kind:?}");
         assert!(round_trip.format.series.is_empty(), "writer defaults should not become explicit style overrides for {kind:?}");
+        if matches!(kind, ChartKind::BarStacked | ChartKind::BarStacked100) {
+            assert_eq!(round_trip.format.overlap, None, "the writer's default stacked overlap should remain implicit");
+        }
     }
+}
+
+#[test]
+fn native_default_stacked_bar_overlap_is_not_loaded_as_an_explicit_override() {
+    let xml = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="stacked"/><c:overlap val="100"/><c:ser><c:val><c:numRef><c:f>Data!$A$1:$A$3</c:f></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#;
+    let chart = crate::chart::read_chart(&crate::xml::parse(xml.as_bytes()).unwrap()).unwrap();
+    assert_eq!(chart.kind, ChartKind::ColumnStacked);
+    assert_eq!(chart.format.overlap, None);
 }
 
 #[test]

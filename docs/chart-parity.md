@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-03 · **Change:** pending chart-formatting integration preserving upstream object selection and data tables; validation not yet run · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-03 · **Change:** chart-formatting review fixes integrated with main `df137b8`; local CI completed, manual Excel open/save check pending · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -108,16 +108,16 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-03 | pending local integration | Preserve unified object selection, eight handles, data tables and paired area decimation while extending chart formatting; compilation/tests deferred |
+| 2026-11-03 | chart-formatting integration | Preserve unified selection, chart data tables and paired area decimation; fix tick thinning, reversed category/table alignment, Waterfall legend styling, stacked-bar defaults, ChartEx fills and SVG font fallback. Local CI completed; no new manual Excel open/save check yet. |
 | 2026-11-02 | minor | Charts move and resize from eight handles, each moving only its own edges (#190); resizing leaves the work list (1–2 h, within the 40–60 h rounding) |
 | 2026-11-01 | minor | Chart data tables for column, bar, line, area and compatible combo charts: command/UI controls, formatted source values, blanks, grouped category headers, legend keys, independent borders, shared print/PDF rendering and native c:dTable import/export. Dense tables show a space notice; no readiness score change. |
 | 2026-10-29 | minor | Selected charts highlight their source cells beneath floating objects, so the blue outline no longer crosses the chart; uncovered source cells remain highlighted (#2861) |
+| 2026-10-25 | minor | 100% Stacked Line and 100% Stacked Line with Markers: inserted from the ribbon and All Charts, drawn as shares of each category's total, read and written as `percentStacked` |
+| 2026-10-24 | minor | 100% Stacked Area: inserted from the ribbon and All Charts, drawn as shares of each category's total, read and written as `percentStacked` |
 | 2026-10-23 | follow-up review | Fractional-minimum minor-tick lattice, remapped combo-series formatting, fontless native test setup |
 | 2026-10-23 | review follow-up | Resolved-font text fitting, category legend colors, offset minor ticks, automatic series colors and native borders, combo/ChartEx axes, one-step template insertion and chart-specific translations |
 | 2026-10-23 | local contribution | Element formatting, primary axes, tick strokes, markers, text fonts, overlay legend placement, chart menus and PNG/SVG export |
 | 2026-10-23 | review fixes | Browser PNG fallback fonts, clipped line labels, stable category-label ordering for fixed-order renderers, and independent category/value gridlines in horizontal-bar XLSX round-trips |
-| 2026-10-25 | minor | 100% Stacked Line and 100% Stacked Line with Markers: inserted from the ribbon and All Charts, drawn as shares of each category's total, read and written as `percentStacked` |
-| 2026-10-24 | minor | 100% Stacked Area: inserted from the ribbon and All Charts, drawn as shares of each category's total, read and written as `percentStacked` |
 | 2026-10-18 | trivial | Stale notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip (PRs #158, #161) |
 | 2026-10-16 | trivial | Series that refer to defined names (`[0]!Name`, `Sheet!Name`) resolve instead of showing `#NAME?`, and are saved qualified, as Excel needs (#1686) |
 | 2026-10-16 | minor | Box & whisker quartiles default to exclusive, honor each series on draw and XLSX round-trip; `chart.set {quartiles}` changes the method (#1453) |

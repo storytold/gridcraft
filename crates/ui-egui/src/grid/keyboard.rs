@@ -9,11 +9,6 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
         return;
     }
     let events = ctx.input(|i| i.events.clone());
-    // egui-winit consumes Ctrl+V on press even when its text clipboard is empty.
-    // The matching key release remains available for native image-only clipboard data.
-    if paste_image_on_key_release(app, &events) {
-        return;
-    }
     // A shortcut key that also types a character (Shift+Space sends Text(" ")) must not start an edit.
     let shortcut_pressed = events.iter().any(|e| {
         matches!(e, egui::Event::Key { pressed: true, modifiers: m, key, .. }
@@ -167,12 +162,4 @@ fn prepare_grid_keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::R
         m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
     });
     true
-}
-
-/// Handles image-only native clipboard contents when egui reports Ctrl+V only on key release.
-fn paste_image_on_key_release(app: &mut SheetApp, events: &[egui::Event]) -> bool {
-    events.iter().any(|e| matches!(e,egui::Event::Key {key:egui::Key::V,pressed:false,modifiers,..} if modifiers.command))
-        && !events.iter().any(|e| matches!(e, egui::Event::Paste(_)))
-        && app.system_clipboard_text().is_none()
-        && app.paste_chart_image()
 }
