@@ -102,6 +102,10 @@ pub struct UiState {
     /// [`keytips::Action::Control`], consumed (and cleared) by the control's render site.
     #[serde(skip)]
     pub keytip_invoke: Option<&'static str>,
+    /// A keytip control request for the next frame: its tab was switched to this frame, so its
+    /// control is drawn only then.
+    #[serde(skip)]
+    pub keytip_invoke_next: Option<&'static str>,
     /// Interface language. English by default (so tests and headless renders never depend on the
     /// host's locale); the desktop app starts from [`i18n::Language::system`] when `ui.json` has
     /// no usable language (see [`i18n::saved_language`]). An unknown saved value reads as English
@@ -143,6 +147,7 @@ impl Default for UiState {
             autosave: false,
             recent: vec![],
             keytip_invoke: None,
+            keytip_invoke_next: None,
             language: i18n::Language::En,
             interface_scale: 100,
         }
