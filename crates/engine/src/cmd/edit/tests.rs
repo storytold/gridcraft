@@ -371,3 +371,31 @@ fn replace_case_insensitive_keeps_text_when_folding_moves_boundaries() {
     let sh = s.doc().unwrap().wb.active().unwrap();
     assert_eq!(sh.value(CellRef::new(0, 0)), Value::text(text));
 }
+
+/// `within: selection` searches only the selected cells, as Excel does with a range selected
+/// (#3224): Find All lists them, Find Next moves the active cell through them and keeps the range
+/// selected, and Replace changes only them.
+#[test]
+fn find_and_replace_within_the_selection() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1:B4", "values": [["pear", "pear"], ["plum", "pear"], ["pear", "fig"], ["pear", "pear"]]}))
+        .unwrap();
+    s.execute("selection.set", json!({"range": "B1:B4"})).unwrap();
+    let all = s.execute("edit.find", json!({"what": "pear", "all": true, "within": "selection"})).unwrap();
+    let cells: Vec<&str> = all["results"].as_array().unwrap().iter().filter_map(|r| r["cell"].as_str()).collect();
+    assert_eq!(cells, ["B1", "B2", "B4"], "only column B");
+    assert_eq!(s.execute("edit.find", json!({"what": "pear", "within": "selection"})).unwrap()["cell"], "B2");
+    assert_eq!(s.execute("edit.find", json!({"what": "pear", "within": "selection"})).unwrap()["cell"], "B4");
+    assert_eq!(s.execute("edit.find", json!({"what": "pear", "within": "selection"})).unwrap()["cell"], "B1", "wraps inside the range");
+    let sel = &s.doc().unwrap().selection;
+    assert_eq!((sel.a1(), sel.active.a1()), ("B1:B4".to_string(), "B1".to_string()), "the range stays selected");
+    assert!(s.execute("edit.find", json!({"what": "plum", "within": "selection"})).is_err(), "A2 is outside the range");
+    assert_eq!(s.execute("edit.replace", json!({"what": "pear", "with": "kiwi", "within": "selection"})).unwrap()["replaced"], 3);
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let at = |a: &str| sh.value(CellRef::parse(a).unwrap());
+    assert_eq!((at("A1"), at("B1"), at("B4"), at("A4")), (Value::text("pear"), Value::text("kiwi"), Value::text("kiwi"), Value::text("pear")));
+    // The sheet scope is unchanged.
+    let all = s.execute("edit.find", json!({"what": "pear", "all": true})).unwrap();
+    assert_eq!(all["count"], 3, "A1, A3 and A4 on the whole sheet");
+}
