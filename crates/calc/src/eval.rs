@@ -810,7 +810,11 @@ mod fuel_tests {
         sheet.cells.set(at("D1"), Cell::value(Value::text("Formula")));
         let host_wb = |criterion: &str| {
             let mut wb = wb.clone();
-            wb.sheet_mut(0).unwrap().cells.set(at("D2"), Cell::formula(Formula::new(criterion)));
+            // A criteria cell is read by its value first (a blank one matches everything): give it
+            // the value a recalculation would have stored.
+            let mut cell = Cell::formula(Formula::new(criterion));
+            cell.value = Value::Bool(true);
+            wb.sheet_mut(0).unwrap().cells.set(at("D2"), cell);
             wb
         };
         let run = |criterion: &str| {
