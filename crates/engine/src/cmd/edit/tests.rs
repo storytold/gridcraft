@@ -397,3 +397,30 @@ fn next_corner_of_selection_goes_clockwise_and_anchors_there() {
     s.execute("selection.set", json!({"range": "C5"})).unwrap();
     assert_eq!(s.execute("selection.nextCorner", json!({})).unwrap()["active"], "C5");
 }
+
+#[test]
+fn next_corner_skips_corners_the_sheet_protection_does_not_let_you_select() {
+    // With locked cells unselectable, Ctrl+. goes on to the next corner it may select.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("home.lockCell", json!({"range": "B2:C3", "on": false})).unwrap();
+    s.execute("selection.set", json!({"range": "B2:D3", "active": "B2"})).unwrap();
+    s.execute("review.protectSheet", json!({"selectLockedCells": false})).unwrap();
+    let r = s.execute("selection.nextCorner", json!({})).unwrap();
+    assert_eq!((r["active"].as_str(), r["selection"].as_str()), (Some("B3"), Some("B2:D3")), "D2 and D3 are locked");
+    assert_eq!(s.execute("selection.nextCorner", json!({})).unwrap()["active"], "B2");
+}
+
+#[test]
+fn next_corner_stops_once_on_a_merged_corner_at_its_top_left_cell() {
+    // A corner inside a merged cell is that merged cell, whose active cell is its top-left one.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("home.mergeCells", json!({"range": "C2:D2"})).unwrap();
+    s.execute("selection.set", json!({"range": "B2:D3", "active": "B2"})).unwrap();
+    let seen: Vec<String> = (0..4).map(|_| s.execute("selection.nextCorner", json!({})).unwrap()["active"].as_str().unwrap().to_string()).collect();
+    assert_eq!(seen, ["C2", "D3", "B3", "B2"]);
+    // A selection that is one merged cell has no other corner.
+    s.execute("selection.set", json!({"range": "C2:D2", "active": "C2"})).unwrap();
+    assert_eq!(s.execute("selection.nextCorner", json!({})).unwrap()["active"], "C2");
+}
