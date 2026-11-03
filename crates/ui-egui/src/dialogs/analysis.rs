@@ -461,7 +461,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
     ui.horizontal(|ui| {
         ui.label(crate::i18n::current(ui.ctx()).tr("To:"));
         for (g, label) in [("max", "Max"), ("min", "Min"), ("value", "Value Of:")] {
-            if ui.radio(goal == g, label).clicked() {
+            if ui.radio(goal == g, crate::i18n::current(ui.ctx()).tr(label)).clicked() {
                 d.values.insert("goal".into(), json!(g));
             }
         }
@@ -695,7 +695,8 @@ pub(super) fn solver_results(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         ui.label("Reports:");
         for (key, label) in [("answerReport", "Answer"), ("sensitivityReport", "Sensitivity"), ("limitsReport", "Limits")] {
             let mut on = offered(key) && d.values.get(key).and_then(Json::as_bool).unwrap_or(false);
-            let check = ui.add_enabled(offered(key), egui::Checkbox::new(&mut on, label)).on_disabled_hover_text(why_not);
+            let lang = crate::i18n::current(ui.ctx());
+            let check = ui.add_enabled(offered(key), egui::Checkbox::new(&mut on, lang.tr(label))).on_disabled_hover_text(lang.tr(why_not));
             if check.changed() {
                 d.values.insert(key.into(), json!(on));
             }
