@@ -1,6 +1,6 @@
 # Reproduce a missing January row with regional date text
 
-> **Last updated:** 2026-10-27
+> **Last updated:** 2026-11-03
 
 This fictional two-row workbook is generated entirely in Rust. It contains date text,
 `DATEVALUE`, a `YEAR`/`MONTH` label and amounts; a PivotTable sums amounts by month.
@@ -91,3 +91,6 @@ and history. A command that edits a cell, changes `app.region`, and then panics 
 restore formulas interpreted in the previous Region. A synthetic regression covers
 clean and modified documents, an existing redo branch, recalculated dates, and undo/redo
 returning to the original save point. The original region-only panic control is retained.
+
+
+Rollback graph work is conditional: restoring a different snapshot rebuilds the graph once, except when applying the effective Region already rebuilt it through full recalculation. An idle rollback leaves the graph alone. A fictional regression checks all four snapshot/Region combinations, exact rollback rebuild counts without timing assertions, restored formulas, dependencies, undo/redo lengths, dirty state and saved snapshot identity.

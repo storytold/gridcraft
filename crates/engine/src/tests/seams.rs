@@ -1246,3 +1246,43 @@ fn a_sheet_keeps_its_identity_until_it_is_copied_or_read_from_a_file() {
     let (read, _) = crate::io::open_bytes("book.xlsx", &bytes).unwrap();
     assert!(read.sheets.iter().all(|sh| !all.contains(&sh.uid.get())));
 }
+
+/// Idle rollback does no graph work; restoration rebuilds once unless Region recalculation did it.
+#[test]
+fn rollback_rebuilds_only_for_a_restored_snapshot_without_region_recalculation() {
+    for changed in [false, true] {
+        for region_changed in [false, true] {
+            let mut s = s();
+            set(&mut s, "A1", "2");
+            set(&mut s, "B1", "=A1*3");
+            set(&mut s, "Z1", "redo");
+            s.execute("edit.undo", json!({})).unwrap();
+            let original = s.doc().unwrap().wb.clone();
+            let saved = s.doc().unwrap().saved.clone();
+            let dirty = s.doc().unwrap().is_dirty();
+            let undo = s.doc().unwrap().undo.len();
+            let redo = s.doc().unwrap().redo.len();
+            let token = s.group_begin("Fictional rollback").unwrap();
+            if changed {
+                set(&mut s, "B1", "=A1*7");
+            }
+            if region_changed {
+                s.execute("app.region", json!({"region":"it-IT"})).unwrap();
+            }
+            crate::GROUP_ROLLBACK_REBUILDS.with(|count| count.set(0));
+            s.group_rollback(token).unwrap();
+            assert_eq!(crate::GROUP_ROLLBACK_REBUILDS.with(|count| count.get()), usize::from(changed && !region_changed));
+            assert_eq!(v(&s, "B1").display(), "6");
+            assert_eq!(s.doc().unwrap().undo.len(), undo);
+            assert_eq!(s.doc().unwrap().redo.len(), redo);
+            assert_eq!(s.doc().unwrap().is_dirty(), dirty);
+            assert!(std::sync::Arc::ptr_eq(&saved, &s.doc().unwrap().saved));
+            if !region_changed {
+                assert!(std::sync::Arc::ptr_eq(&original, &s.doc().unwrap().wb));
+            }
+            assert_eq!(s.execute("app.region", json!({})).unwrap()["region"], if region_changed { "it-IT" } else { "en-US" });
+            set(&mut s, "A1", "4");
+            assert_eq!(v(&s, "B1").display(), "12", "restored dependency graph follows the original formula");
+        }
+    }
+}
