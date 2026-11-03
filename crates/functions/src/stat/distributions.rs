@@ -647,12 +647,25 @@ pub(super) fn hypgeom_dist(a: &[Arg], _: C) -> R<Value> {
     if k < 0.0 || n < 0.0 || kk < 0.0 || nn <= 0.0 || n > nn || kk > nn {
         return Err(CellError::Num);
     }
+    if n == 0.0 || kk == 0.0 {
+        return num_val(if cum || k == 0.0 { 1.0 } else { 0.0 });
+    }
     let exact_lo = match (integer_count(n), integer_count(nn), integer_count(kk)) {
         (Some(n), Some(nn), Some(kk)) => Some(n.saturating_sub(nn.saturating_sub(kk))),
         _ => None,
     };
-    let lo = exact_lo.map_or_else(|| (n - (nn - kk)).max(0.0), |lo| lo as f64);
-    let below_lo = integer_count(k).zip(exact_lo).map_or(k < lo, |(k, lo)| k < lo);
+    let (lo, below_lo) = match exact_lo {
+        Some(exact) => {
+            let lo = exact as f64;
+            let below = integer_count(k).map_or(k < lo, |k| k < exact);
+            (lo, below)
+        }
+        None => {
+            let (lo, tail) = lower_support_fallback(n, nn, kk);
+            let below = k < lo || (k == lo && tail > 0.0);
+            (lo + tail, below)
+        }
+    };
     let hi = n.min(kk);
     let pmf = |i: f64| (ln_comb(kk, i) + ln_comb(nn - kk, n - i) - ln_comb(nn, n)).exp();
     if !cum {
@@ -673,6 +686,23 @@ pub(super) fn hypgeom_dist(a: &[Arg], _: C) -> R<Value> {
         s += pmf(lo + step as f64);
     }
     num_val(s.min(1.0))
+}
+
+fn lower_support_fallback(n: f64, nn: f64, kk: f64) -> (f64, f64) {
+    let (difference, difference_tail) = two_sum(n, -nn);
+    let (sum, sum_tail) = two_sum(difference, kk);
+    let (hi, tail) = two_sum(sum, difference_tail + sum_tail);
+    if hi < 0.0 || (hi == 0.0 && tail <= 0.0) { (0.0, 0.0) } else { (hi, tail) }
+}
+
+/// Returns the rounded sum and its rounding error, so cancellation does not discard small terms.
+fn two_sum(a: f64, b: f64) -> (f64, f64) {
+    let sum = a + b;
+    let b_virtual = sum - a;
+    let a_virtual = sum - b_virtual;
+    let b_roundoff = b - b_virtual;
+    let a_roundoff = a - a_virtual;
+    (sum, a_roundoff + b_roundoff)
 }
 
 fn integer_count(value: f64) -> Option<u128> {

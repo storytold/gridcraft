@@ -516,12 +516,16 @@ fn discrete() {
     close(ev("HYPGEOM.DIST", vec![n(3.0), n(2.0), n(2.0), n(4.0), b(false)]), 0.0);
     close(ev("HYPGEOM.DIST", vec![n(0.0), n(2.0), n(2.0), n(2.0), b(false)]), 0.0);
     close(ev("HYPGEOM.DIST", vec![n(1.0), n(2.0), n(2.0), n(2.0), b(true)]), 0.0);
+    close(ev("HYPGEOM.DIST", vec![n(0.0), n(0.0), n(0.0), n(1e308), b(false)]), 1.0);
+    close(ev("HYPGEOM.DIST", vec![n(0.0), n(0.0), n(0.0), n(1e308), b(true)]), 1.0);
     close(ev("HYPGEOM.DIST", vec![n(0.0), n(0.0), n(2.0), n(4.0), b(false)]), 1.0);
     close(ev("HYPGEOM.DIST", vec![n(0.0), n(2.0), n(0.0), n(4.0), b(false)]), 1.0);
     close(ev("HYPGEOM.DIST", vec![n(0.0), n(1.0), n(1e16), n(1e16), b(false)]), 0.0);
     close(ev("HYPGEOM.DIST", vec![n(0.0), n(1.0), n(1e16), n(1e16), b(true)]), 0.0);
     close(ev("HYPGEOM.DIST", vec![n(3.0), n(1e16), n(3.0), n(1e16), b(false)]), 1.0);
     close(ev("HYPGEOM.DIST", vec![n(3.0), n(1e16), n(3.0), n(1e16), b(true)]), 1.0);
+    close(ev("HYPGEOM.DIST", vec![n(0.0), n(1e40), n(3.0), n(1e40), b(false)]), 0.0);
+    close(ev("HYPGEOM.DIST", vec![n(0.0), n(1e40), n(3.0), n(1e40), b(true)]), 0.0);
     close(ev("HYPGEOM.DIST", vec![n(3.0), n(2.0), n(2.0), n(4.0), b(true)]), 1.0);
     close_tol(ev("HYPGEOMDIST", vec![n(1.0), n(4.0), n(8.0), n(20.0)]), 0.363261094, 1e-8);
     close(ev("HYPGEOMDIST", vec![n(5.0), n(4.0), n(8.0), n(20.0)]), 0.0);
