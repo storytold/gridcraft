@@ -112,7 +112,12 @@ impl SheetApp {
         };
         let mut outgoing = WindowUi::fresh(&self.grid, &self.ui.ribbon_tab);
         self.swap_window_ui(&mut outgoing);
-        if self.session.window(previous).is_some() {
+        if let Some(window) = self.session.window(previous) {
+            // A hidden window isn't drawn: a key tip request waiting for its next frame would
+            // fire whenever it is shown again, so it goes.
+            if window.hidden {
+                outgoing.keytip_invoke_next = None;
+            }
             self.parked.insert(previous, outgoing);
         }
         if let Some(mut incoming) = active.and_then(|w| self.parked.remove(&w)) {

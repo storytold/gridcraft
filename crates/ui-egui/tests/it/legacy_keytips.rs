@@ -69,3 +69,23 @@ fn a_waiting_key_tip_request_stays_with_its_window() {
     h.state_mut().show_window(second);
     assert_eq!(h.state().ui.keytip_invoke_next, Some("insert.symbol"));
 }
+
+#[test]
+fn a_hidden_window_drops_its_waiting_key_tip_request() {
+    // A hidden window isn't drawn, so its waiting request would fire when it was shown again,
+    // long after the keys: hiding the window drops it.
+    let mut s = Session::new();
+    s.new_workbook();
+    let mut h = crate::common::os_harness(s, OperatingSystem::Nix);
+    h.run_steps(2);
+    let first = h.state().session.active_window().unwrap();
+    h.state_mut().run("view.newWindow", json!({})).unwrap();
+    let second = h.state().session.active_window().unwrap();
+    h.state_mut().show_window(second);
+    h.state_mut().ui.keytip_invoke_next = Some("insert.symbol");
+    h.state_mut().run("view.hideWindow", json!({"window": second})).unwrap();
+    h.state_mut().show_window(first);
+    h.state_mut().run("view.unhideWindow", json!({"window": second})).unwrap();
+    h.state_mut().show_window(second);
+    assert_eq!(h.state().ui.keytip_invoke_next, None);
+}
