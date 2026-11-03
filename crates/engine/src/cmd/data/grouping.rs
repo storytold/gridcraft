@@ -132,6 +132,10 @@ pub(super) fn clear_outline(s: &mut Session, p: &Json) -> Result<Json> {
     };
     let wb = &s.doc()?.wb;
     let sh = wb.sheet(si).ok_or(EngineError::NoDocument)?;
+    // No outline at all: nothing to clear, and no reason to evaluate the AutoFilter below.
+    if !sh.rows.values().chain(sh.cols.values()).any(|e| e.outline > 0 || e.collapsed) {
+        return Ok(Json::Null);
+    }
     // A row a filter hides stays hidden: the sheet's AutoFilter is evaluated, since a row a collapsed
     // group hid inside its range is hidden too; a table's stored filter has no evaluator here, so
     // its hidden rows stay hidden.
