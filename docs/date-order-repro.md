@@ -95,7 +95,7 @@ and a generated XLSX round trip preserves the original padded text and its error
 Typed cell input and the separate `DATEVALUE`/`TIMEVALUE` paths retain their existing
 whitespace behavior; this fix is scoped to implicit date arguments.
 
-The branch integrates #1886 at `45ea3b95` and main at `488f9982`. File opening retains `csvAsText` while
+The branch integrates #1886 at `45ea3b95` and main at `7bb397a3`. File opening retains `csvAsText` while
 applying the selected formula region before recalculation. Text-only import keeps
 `00123` and `13/01/2026` as text. Automatic CSV import preserves main's per-column
 date-order inference from #3043: the identifier becomes 123 and the unambiguous
