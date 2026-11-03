@@ -622,10 +622,13 @@ fn size_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let arrow_rect = Rect::from_min_max(egui::pos2(frame.right() - 16.0, frame.top() + 1.0), egui::pos2(frame.right() - 1.0, frame.bottom() - 1.0));
     let mut field_ui =
         ui.new_child(egui::UiBuilder::new().max_rect(text_rect.shrink2(vec2(6.0, 0.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    // The text edit is `interact_size.y` tall and puts its text at the top of that unless told
+    // otherwise: center it, on the Font name's baseline (#3155).
     let out = egui::TextEdit::singleline(&mut text)
         .id(field)
         .font(theme::ui_font(12.5))
         .frame(egui::Frame::NONE)
+        .align(egui::Align2::LEFT_CENTER)
         .desired_width(text_rect.width() - 12.0)
         .show(&mut field_ui);
     let resp = out.response;
