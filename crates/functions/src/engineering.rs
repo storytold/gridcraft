@@ -25,7 +25,7 @@ fn base_source(a: &[Arg]) -> R<String> {
             Ok(number_to_text(n))
         }
         Value::Empty => Ok(String::new()),
-        v => Ok(v.to_text()?.trim().to_string()),
+        v => Ok(v.to_text()?.to_string()),
     }
 }
 
@@ -62,6 +62,15 @@ fn format_base(v: i64, radix: u32, places: Option<f64>) -> R<Value> {
     if v < min || v > max {
         return Err(CellError::Num);
     }
+    let places = places
+        .map(|p| {
+            let p = p.trunc();
+            if !(1.0..=10.0).contains(&p) {
+                return Err(CellError::Num);
+            }
+            Ok(p as usize)
+        })
+        .transpose()?;
     if v < 0 {
         let u = v + (1i64 << bits);
         return text_val(to_radix(u, radix));
@@ -70,11 +79,6 @@ fn format_base(v: i64, radix: u32, places: Option<f64>) -> R<Value> {
     match places {
         None => text_val(s),
         Some(p) => {
-            let p = p.trunc();
-            if !(1.0..=10.0).contains(&p) {
-                return Err(CellError::Num);
-            }
-            let p = p as usize;
             if s.len() > p {
                 return Err(CellError::Num);
             }
@@ -97,7 +101,13 @@ fn to_radix(mut v: i64, radix: u32) -> String {
 }
 
 fn places_arg(a: &[Arg]) -> R<Option<f64>> {
-    if has(a, 1) { Ok(Some(num(a, 1)?)) } else { Ok(None) }
+    if !has(a, 1) {
+        return Ok(None);
+    }
+    if matches!(a.get(1).map(scalar), Some(Value::Bool(_))) {
+        return Err(CellError::Value);
+    }
+    Ok(Some(num(a, 1)?))
 }
 
 fn convert_base(a: &[Arg], from: u32, to: u32) -> R<Value> {
@@ -175,6 +185,9 @@ fn bitxor(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 fn shift(a: &[Arg], left: bool) -> R<Value> {
     let n = bit_operand(a, 0)?;
     let s = num(a, 1)?.trunc();
+    if n == 0 {
+        return Ok(Value::Number(0.0));
+    }
     if s.abs() > 53.0 {
         return Err(CellError::Num);
     }
@@ -402,6 +415,12 @@ mod tests {
         is_text(ev("BIN2OCT", vec![n(1111111111.0)]), "7777777777");
         is_text(ev("DEC2BIN", vec![n(9.0), n(4.0)]), "1001");
         is_text(ev("DEC2BIN", vec![n(-100.0)]), "1110011100");
+        is_err(ev("DEC2BIN", vec![n(-1.0), n(0.0)]), CellError::Num);
+        is_err(ev("DEC2HEX", vec![n(-1.0), n(11.0)]), CellError::Num);
+        is_err(ev("DEC2OCT", vec![n(-1.0), n(-1.0)]), CellError::Num);
+        is_err(ev("DEC2BIN", vec![n(1.0), crate::Arg::val(Value::Bool(true))]), CellError::Value);
+        is_text(ev("DEC2BIN", vec![n(-1.0), n(1.0)]), "1111111111");
+        is_text(ev("DEC2HEX", vec![n(-1.0), n(10.0)]), "FFFFFFFFFF");
         is_err(ev("DEC2BIN", vec![n(512.0)]), CellError::Num);
         is_text(ev("DEC2HEX", vec![n(100.0), n(4.0)]), "0064");
         is_text(ev("DEC2HEX", vec![n(-54.0)]), "FFFFFFFFCA");
@@ -426,6 +445,21 @@ mod tests {
         is_text(ev("OCT2HEX", vec![n(100.0), n(4.0)]), "0040");
         is_text(ev("OCT2HEX", vec![n(7777777533.0)]), "FFFFFFFF5B");
         is_err(ev("BIN2DEC", vec![n(102.0)]), CellError::Num);
+        for (f, input) in [
+            ("BIN2DEC", " 10"),
+            ("BIN2DEC", "10 "),
+            ("BIN2DEC", "\t10"),
+            ("BIN2HEX", " 10"),
+            ("BIN2OCT", "10 "),
+            ("HEX2DEC", " 10"),
+            ("HEX2BIN", "10 "),
+            ("HEX2OCT", "\t10"),
+            ("OCT2DEC", " 10"),
+            ("OCT2BIN", "10 "),
+            ("OCT2HEX", "\t10"),
+        ] {
+            is_err(ev(f, vec![t(input)]), CellError::Num);
+        }
         is_err(ev("HEX2DEC", vec![t("GG")]), CellError::Num);
         is_err(ev("BIN2DEC", vec![t("11111111111")]), CellError::Num);
         is_err(ev("DEC2BIN", vec![t("abc")]), CellError::Value);
@@ -446,6 +480,21 @@ mod tests {
         is_err(ev("BITAND", vec![n(1.5), n(5.0)]), CellError::Num);
         is_err(ev("BITLSHIFT", vec![n(1.0), n(54.0)]), CellError::Num);
         is_err(ev("BITLSHIFT", vec![n(2f64.powi(47)), n(1.0)]), CellError::Num);
+        for f in ["BITLSHIFT", "BITRSHIFT"] {
+            for shift in [-100.0, -54.0, -53.0, 53.0, 54.0, 100.0] {
+                close(ev(f, vec![n(0.0), n(shift)]), 0.0);
+            }
+            for shift in [-100.0, -54.0, 54.0, 100.0] {
+                is_err(ev(f, vec![n(1.0), n(shift)]), CellError::Num);
+            }
+            if f == "BITLSHIFT" {
+                is_err(ev(f, vec![n(1.0), n(53.0)]), CellError::Num);
+            } else {
+                close(ev(f, vec![n(1.0), n(53.0)]), 0.0);
+            }
+            is_err(ev(f, vec![n(0.0), t("bad")]), CellError::Value);
+        }
+        is_err(ev("BITRSHIFT", vec![n(-1.0), n(100.0)]), CellError::Num);
     }
 
     #[test]
