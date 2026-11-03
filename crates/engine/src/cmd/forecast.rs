@@ -36,6 +36,20 @@ fn max_periods(history: usize) -> u32 {
     u32::try_from(MAX_WORK / h).unwrap_or(u32::MAX).clamp(1, MAX_PERIODS)
 }
 
+/// Most forecast rows when the model is fit to the first `fit` of `history` rows. With a Forecast
+/// Start inside the history, every row after it is forecast too (a hindcast row holds the same
+/// ETS formulas, each refitting the model over the `fit` rows), so those rows count against
+/// [`MAX_WORK`] before any forecast row does. `None` when the hindcast alone exceeds it.
+fn max_periods_from(history: usize, fit: usize) -> Option<u32> {
+    if fit >= history {
+        return Some(max_periods(history));
+    }
+    let f = u64::try_from(fit).unwrap_or(u64::MAX).max(1);
+    let hindcast = u64::try_from(history - fit).unwrap_or(u64::MAX);
+    let rest = (MAX_WORK / f).checked_sub(hindcast).filter(|r| *r >= 1)?;
+    Some(u32::try_from(rest).unwrap_or(u32::MAX).min(MAX_PERIODS))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![cmd!(
         "data.forecastSheet",
@@ -257,13 +271,15 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
     };
-    let cap = max_periods(rows.len());
+    let cap = max_periods_from(rows.len(), fit).ok_or_else(|| {
+        EngineError::Other("The forecast start is too early for this much history: choose a later forecast start or less history.".into())
+    })?;
     let periods = match end {
         Some(end) => steps_to(&timeline, end, cap)?,
         None => match number(p, "periods")? {
             Some(n) if n >= 1.0 && n.ceil() <= f64::from(cap) => n.ceil() as u32,
             Some(_) => return Err(bad(CMD, format!("`periods` is from 1 to {cap} for {} rows of history", rows.len()))),
-            None => default_periods(rows.len()),
+            None => default_periods(rows.len()).min(cap),
         },
     };
     let future: Vec<f64> =
@@ -528,6 +544,32 @@ mod tests {
         let sheets = s.doc().unwrap().wb.sheets.len();
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(s.doc().unwrap().wb.sheets.len(), sheets - 1);
+    }
+
+    #[test]
+    fn hindcast_rows_count_against_the_work_limit() {
+        use super::{MAX_WORK, max_periods, max_periods_from};
+        assert_eq!(max_periods_from(1_300, 1_300), Some(max_periods(1_300)));
+        // 2,000 rows fit to the first 1,899: 101 hindcast rows, then 162 forecast rows.
+        assert_eq!(max_periods_from(2_000, 1_899), Some(162));
+        // Fit to the first 1,000: the 1,000 hindcast rows alone are twice the limit.
+        assert_eq!(max_periods_from(2_000, 1_000), None);
+        for (h, f) in [(2_000usize, 1_899usize), (10_000, 9_990), (100, 2), (60, 50)] {
+            if let Some(p) = max_periods_from(h, f) {
+                assert!((u64::from(p) + (h - f) as u64) * f as u64 <= MAX_WORK, "{h} {f}");
+            }
+        }
+        let mut s = Session::new();
+        s.new_workbook();
+        let mut rows = vec![json!(["t", "y"])];
+        rows.extend((1..=2_000).map(|t| json!([t, (t % 7) as f64 + t as f64 * 0.5])));
+        s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+        let sheets = s.doc().unwrap().wb.sheets.len();
+        let err = s.execute("data.forecastSheet", json!({"range": "A1:B2001", "forecastStart": 1_001})).expect_err("hindcast too long");
+        assert!(err.to_string().contains("forecast start is too early"), "{err}");
+        let err = s.execute("data.forecastSheet", json!({"range": "A1:B2001", "forecastStart": 1_900, "periods": 163})).expect_err("past the cap");
+        assert!(err.to_string().contains("from 1 to 162"), "{err}");
+        assert_eq!(s.doc().unwrap().wb.sheets.len(), sheets);
     }
 
     #[test]
