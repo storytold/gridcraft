@@ -722,7 +722,9 @@ fn editor_other_shortcuts(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, e
 /// The formula bar in Python mode: the code editor (monospace, Python colours). Its keys are
 /// applied in input order with the typing: Enter starts a new line with the indentation, Tab and
 /// Shift+Tab indent, Ctrl+Enter (Cmd+Enter on macOS) commits through `python.set`, Esc cancels and
-/// Ctrl+Alt+Shift+P leaves Python mode.
+/// Ctrl+Alt+Shift+P leaves Python mode. Right after a click on the sheet inserted an `xl("…")`
+/// reference, the arrow keys move the pointed cell and Shift+arrows extend it, as in formula point
+/// mode; typing or moving the caret ends the pointing.
 fn python_editor(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, width: f32, max_height: f32) -> EditorInfo {
     let Some(mut ed) = app.editor.take() else { return EditorInfo::default() };
     // A message box (the code was refused) or a dialog over the edit has the keyboard; the
@@ -737,10 +739,14 @@ fn python_editor(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, width: f32
         if std::mem::take(&mut ed.request_focus) || ui.memory(|m| m.focused()).is_none() {
             ui.memory_mut(|m| m.request_focus(id));
         }
+        if ed.point_at_caret() && ui.memory(|m| m.has_focus(id)) {
+            python_point_keys(app, ui, &mut ed);
+        }
         if std::mem::take(&mut ed.sync_caret) {
             caret = Some(ed.caret);
         }
     }
+    let before = ed.point.is_some().then(|| ed.text.clone());
     let name = app.ui.language.tr("Formula Bar").to_string();
     let stop = |ev: &egui::Event| python_key(ev).is_some();
     let options = FieldOptions {
@@ -757,6 +763,10 @@ fn python_editor(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, width: f32
     if !blocked && caret.is_none() {
         (ed.caret, ed.anchor) = out.selection;
     }
+    // Typing, or moving the caret off the pointed reference, ends the pointing.
+    if before.is_some_and(|before| before != ed.text) || (ed.point.is_some() && caret.is_none() && !ed.point_at_caret()) {
+        ed.end_pointing();
+    }
     let info = EditorInfo { lines: out.lines, caret: out.caret };
     app.editor = Some(ed);
     match out.stop.as_ref().and_then(python_key) {
@@ -768,6 +778,37 @@ fn python_editor(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, width: f32
         None => {}
     }
     info
+}
+
+/// The arrow keys while a Python mode edit points at a cell: as in formula point mode, they move
+/// the pointed cell (Ctrl+arrow to the edge of the data) and with Shift extend the pointed range,
+/// instead of moving the caret in the code.
+fn python_point_keys(app: &mut SheetApp, ui: &mut egui::Ui, ed: &mut crate::editor::EditState) {
+    let step = |key: Key| match key {
+        Key::ArrowUp => Some((-1, 0)),
+        Key::ArrowDown => Some((1, 0)),
+        Key::ArrowLeft => Some((0, -1)),
+        Key::ArrowRight => Some((0, 1)),
+        _ => None,
+    };
+    // In input order; Alt+arrow, and Ctrl+arrow where Ctrl isn't the command key, stay with the code.
+    let mut moves = Vec::new();
+    ui.input_mut(|i| {
+        i.events.retain(|ev| match ev {
+            egui::Event::Key { key, pressed: true, modifiers: m, .. } if !m.alt && (m.command || !m.ctrl) => match step(*key) {
+                Some((dr, dc)) => {
+                    moves.push((dr, dc, m.shift, m.command));
+                    false
+                }
+                None => true,
+            },
+            _ => true,
+        });
+    });
+    let rtl = app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.right_to_left);
+    for (dr, dc, extend, jump) in moves {
+        crate::grid::point_move(app, ed, dr, if rtl { -dc } else { dc }, extend, jump);
+    }
 }
 
 fn cycle_anchor(ed: &mut crate::editor::EditState) {

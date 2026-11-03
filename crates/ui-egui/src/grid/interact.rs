@@ -757,9 +757,8 @@ fn point_header(app: &mut SheetApp, wb: &Workbook, sh: &Sheet, range: RangeRef, 
     let edit_sheet = ed.sheet;
     let active_sheet = wb.active_sheet();
     let range = if extend {
-        ed.point
-            .and_then(|point| crate::editor::formula_refs(&ed.text).into_iter().find(|(start, end, ..)| (*start, *end) == point))
-            .and_then(|(_, _, previous, previous_sheet, _)| {
+        ed.pointed_range()
+            .and_then(|(previous, previous_sheet)| {
                 let previous_sheet = previous_sheet.as_deref().map(|name| wb.sheet_index(name)).unwrap_or(Some(edit_sheet));
                 if previous_sheet != Some(active_sheet) {
                     return None;
@@ -1024,7 +1023,7 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
     let anchor = if extend {
         // The anchor is the corner opposite the moving end: the written range is normalized, so
         // after extending up or left its first cell is the moving end, not the anchor.
-        let pointed = ed.point.and_then(|(s, e)| ed.text.get(s..e)).and_then(RangeRef::parse);
+        let pointed = ed.pointed_text().as_deref().and_then(RangeRef::parse);
         let inferred_anchor = pointed
             .map(|r| {
                 CellRef::new(
@@ -1038,6 +1037,8 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
         to
     };
     let text = if extend { RangeRef::new(anchor, to).a1() } else { to.a1() };
+    // Pointing on another sheet than the edited cell's names the sheet, as a click there does.
+    let text = if ed.sheet != d.wb.active_sheet() { format!("{}!{text}", gridcraft_engine::formula::quote_sheet(&sheet.name)) } else { text };
     let sheet = d.wb.active_sheet();
     ed.insert_ref(&text);
     ed.point_cell = Some(to);
