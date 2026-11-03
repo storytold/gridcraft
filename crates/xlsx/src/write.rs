@@ -289,7 +289,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
 
     let names = write_defined_names(wb, &kept, &out.chart_names);
 
-    let w = write_workbook_xml(wb, active, &sheets_xml, &names, &kept, &mut pivots, &mut wb_rels, out.needs_calc);
+    let w = write_workbook_xml(WorkbookHeader { wb, active }, &sheets_xml, &names, &kept, &mut pivots, &mut wb_rels, out.needs_calc);
 
     // Workbook-level parts.
     let mut extra_fmts = pivots.number_formats(wb);
@@ -424,9 +424,13 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     zip.finish()
 }
 
-fn write_workbook_xml(
-    wb: &Workbook,
+struct WorkbookHeader<'a> {
+    wb: &'a Workbook,
     active: usize,
+}
+
+fn write_workbook_xml(
+    header: WorkbookHeader<'_>,
     sheets_xml: &str,
     names: &str,
     kept: &crate::passthrough::WorkbookKept,
@@ -434,6 +438,7 @@ fn write_workbook_xml(
     wb_rels: &mut Rels,
     needs_calc: bool,
 ) -> String {
+    let WorkbookHeader { wb, active } = header;
     let mut w = format!("{XML_DECL}<workbook xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\">");
     // A workbook read from a file keeps its <fileVersion> as it was: Excel trusts the saved values
     // only when appName is "xl" (#799). One without names GridCraft (#1699), and Excel recalculates it.
