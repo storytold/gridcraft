@@ -161,6 +161,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Python Mode", "Python モード"),
     ("Python Object", "Python オブジェクト"),
     ("Excel Value", "Excel の値"),
+    ("Convert to Normal Cell", "通常のセルに変換"),
     ("Show Card", "カードの表示"),
     (
         "This version of GridCraft stores Python code but does not run it.",

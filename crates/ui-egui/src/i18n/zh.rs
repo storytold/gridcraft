@@ -159,6 +159,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python Mode" => "Python 模式",
         "Python Object" => "Python 对象",
         "Excel Value" => "Excel 值",
+        "Convert to Normal Cell" => "转换为普通单元格",
         "Show Card" => "显示卡片",
         "This version of GridCraft stores Python code but does not run it." => "此版本的 GridCraft 会保存 Python 代码，但不会运行它。",
         "Insert\nPython" => "插入\nPython",

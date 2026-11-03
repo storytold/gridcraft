@@ -161,6 +161,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python Mode" => "Chế độ Python",
         "Python Object" => "Đối tượng Python",
         "Excel Value" => "Giá trị Excel",
+        "Convert to Normal Cell" => "Chuyển đổi thành ô thông thường",
         "Show Card" => "Hiển thị thẻ",
         "This version of GridCraft stores Python code but does not run it." => "Phiên bản GridCraft này lưu mã Python nhưng không chạy mã.",
         "Insert\nPython" => "Chèn\nPython",

@@ -154,6 +154,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Python Mode" => "Python režim",
         "Python Object" => "Python objekat",
         "Excel Value" => "Excel vrednost",
+        "Convert to Normal Cell" => "Konvertuj u običnu ćeliju",
         "Show Card" => "Prikaži karticu",
         "This version of GridCraft stores Python code but does not run it." => "Ova verzija programa GridCraft čuva Python kôd, ali ga ne pokreće.",
         "Insert\nPython" => "Umetni\nPython",
