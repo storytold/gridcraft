@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-02 · **Change:** minor (Python cells: Python mode in the formula bar; earlier: Insert › Equation and the equation editor; earlier: every floating object selects, resizes from eight handles and deletes with the keyboard; earlier: Formulas › Error Checking › Trace Error; trace arrows stay through a zoom (#3097); earlier: Page Setup sets the page order, Down, then over or Over, then down, which printing, the print preview, Page Break Preview and Page Layout view follow; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-02 · **Change:** minor (RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis use them, the arrow keys select while a dialog is collapsed and F4 cycles a reference's anchors; earlier: Python cells: Python mode in the formula bar; earlier: Insert › Equation and the equation editor; earlier: every floating object selects, resizes from eight handles and deletes with the keyboard; earlier: Formulas › Error Checking › Trace Error; trace arrows stay through a zoom (#3097); earlier: Page Setup sets the page order, Down, then over or Over, then down, which printing, the print preview, Page Break Preview and Page Layout view follow; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -173,7 +173,46 @@ the references entered before; a double-click goes to one. Its Reference box tak
 or references separated by commas (`Price, Type`, `B14:C22,F19:G30`) and selects them all.
 New Formatting Rule's formula box points like the formula bar: a click on the grid writes the
 cell's absolute reference at the caret (`=$B$2`) and a drag a range, leaving the selection the rule
-applies to as it is (#2348). Other dialogs' reference fields don't take clicks yet.
+applies to as it is (#2348).
+
+Reference boxes (RefEdit) take a range by selection on the grid: while a box is the one being
+picked into, clicking or dragging on the sheet writes the absolute reference into it (with the
+sheet name, quoted when it needs quotes, when the selection is on another sheet:
+`'Rates Table'!$A$2:$A$4`), and typing still edits it. The box's collapse button shrinks the
+dialog to the box while the person selects; Escape, Enter or the expand button restore it (Enter
+there does not press OK, which is not shown while collapsed). Cancel, Escape, a ribbon command
+that opens another dialog over it, and a scripted `ui.dialog.cancel` put the sheet and selection
+from before picking back; OK (and `ui.dialog.confirm`, for a dialog whose OK runs a command;
+Goal Seek presses its own OK and is scripted with `data.goalSeek`) puts them back before its
+command runs and then stays where the command leaves things, so a Data Analysis report written
+to a new sheet stays in view. Solver's Reset All, Load, Save and Replace go back the same way
+before they run, since they act on the dialog's sheet, and are refused like OK once that sheet
+was deleted. A text-box draft left open on the sheet picked on is saved before
+the sheet changes, as any sheet switch saves it; when it cannot be saved (a script showed
+another sheet meanwhile), OK does not run its command and the dialog stays open with the
+reason, while Cancel still closes the dialog, shows the reason and leaves the draft and the
+selection where they are (a scripted `ui.dialog.cancel` fails and keeps the dialog instead, so
+the script can act). While collapsed, the arrow keys move the selection on the grid,
+Shift+arrow extends it and Ctrl+arrow (Cmd on a Mac) jumps to the edge of the data, and the box
+follows; expanded, the arrows edit the box. F4 in a focused box cycles the anchors of its
+reference (`A1`, `$A$1`, `A$1`, `$A1`; a whole column or row between `A:A` and `$A:$A`). A click
+elsewhere (the Name Box, the ribbon) neither expands nor closes a collapsed dialog, and the box
+keeps picking, while the arrow keys and Escape belong to the Name Box as long as it has the
+keyboard; a command that moves the selection (Undo, Go To) moves the reference with it. A
+box the dialog stops showing (Solver's Options view, the Model Range of a hidden Load/Save area,
+the constraint value once the operator is int or bin) is no longer picked into: a selection
+made meanwhile does not land in it when it is shown again.
+The dialog follows the sheet it was opened on by the sheet's identity while the app runs
+(fresh for every sheet added, inserted, copied or read from a file; kept through renames,
+moves, undo and redo), wherever it is moved and whatever it is renamed to. A sheet deleted and
+another inserted in its place or given its own name, or a copy of it, even in one script batch
+or one undo step, is not taken for it: OK is refused and Cancel leaves the selection where it
+is; an undo that brings the sheet back makes it the dialog's again. The collapse button is
+reachable from the keyboard and named for screen readers. Goal Seek, Solver
+(objective, variable cells, both sides of a new constraint and the Model Range of Load/Save) and
+Data Analysis (input, variable, X and Y, bin and output ranges) use reference boxes; the other
+dialogs that take ranges (Forecast Sheet, Allow Edit Ranges, Define Name, Sparklines, Advanced
+Filter) still take typed references.
 
 ## Accessibility
 
@@ -198,6 +237,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | minor | RefEdit reference boxes in dialogs: pick a range on the grid, collapse the dialog while selecting; Goal Seek, Solver (with the Model Range of Load/Save) and Data Analysis use them; while collapsed the arrow keys move the selection and Shift+arrow extends it, F4 cycles a reference's anchors, a click elsewhere keeps the box picking, a dialog opened over a picking one puts the selection back, OK stays on the sheet its command showed, and scripted cancel and confirm end a pick like the buttons; the dialog's sheet is followed through the recorded undo steps, so a sheet deleted and recreated under its name is not taken for it and an undo of the deletion brings it back; a box the dialog stops showing is no longer picked into |
 | 2026-11-02 | minor | Python mode edits a cell's code in the formula bar's code editor (Ctrl+Alt+Shift+P, `=PY` then Tab, editing a Python cell), with the PY badge beside fx; its keys apply in input order, also several in one frame, and Ctrl+Enter commits through `python.set` (empty code clears the cell), keeping the code and showing the command's message when the code is refused |
 | 2026-11-02 | minor | Insert › Symbols: Equation split button (access keys N E), a gallery of examples, and an equation editor with quick-insert buttons, the error underlined at its position and a live preview; double-clicking an equation edits it |
 | 2026-11-02 | minor | Floating objects: one selection for charts, pictures, shapes and slicers, eight resize handles with matching cursors (right-to-left sheets included), Escape drops the selection |
