@@ -800,7 +800,11 @@ fn groupby(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     }
     if depth > 1 {
         let mut rows_of = |keys: &[Value]| groups.get(&row_key(keys)).cloned().unwrap_or_default();
-        lines = with_subtotals(lines, 0, depth, rf.cols, total < 0, &mut rows_of, &mut agg_row);
+        // The header and total lines count too, so the whole result is checked before it is built.
+        let around = usize::from(p.show_headers) + usize::from(total != 0);
+        let width = rf.cols.saturating_add(vals.cols);
+        let fits = |n: usize| check_output_size(n.saturating_add(around), width);
+        lines = with_subtotals(lines, depth, rf.cols, total < 0, &fits, &mut rows_of, &mut agg_row)?;
     }
     let mut out = Vec::new();
     if p.show_headers {
@@ -824,49 +828,82 @@ fn groupby(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     from_rows(out, &Value::Empty)
 }
 
-/// GROUPBY's subtotals: `lines` (`key_cols` keys, then values) with the lines of each group of the
-/// key at `level` kept together in the order the groups first appear, and for every key level above
+/// GROUPBY's subtotals: `lines` (`key_cols` keys, then values) with the lines of each group of a
+/// key level kept together in the order the groups first appear, and for every key level above
 /// `depth` a line after the group (before it when `before`): the group's keys, blanks for the deeper
 /// keys, and the values aggregated over the group's source rows (`rows_of` maps a line's keys to them).
+///
+/// No recursion, so a deep total depth can't exhaust the stack: each line gets the id of its key
+/// prefix at every level (ids count up as prefixes first appear), a stable sort by those ids brings
+/// each group together, and one walk adds a subtotal where a group starts or ends. `fits` gets the
+/// line count as the groups are found, so an oversized result is refused before it is built.
 fn with_subtotals(
-    lines: Vec<Vec<Value>>,
-    level: usize,
+    mut lines: Vec<Vec<Value>>,
     depth: usize,
     key_cols: usize,
     before: bool,
+    fits: &dyn Fn(usize) -> R<()>,
     rows_of: &mut dyn FnMut(&[Value]) -> Vec<usize>,
     agg: &mut dyn FnMut(&[usize]) -> Vec<Value>,
-) -> Vec<Vec<Value>> {
-    if level + 1 >= depth {
-        return lines;
+) -> R<Vec<Vec<Value>>> {
+    let levels = depth.saturating_sub(1);
+    if levels == 0 {
+        return Ok(lines);
     }
-    let mut order: Vec<String> = Vec::new();
-    let mut members: HashMap<String, Vec<Vec<Value>>> = HashMap::new();
-    for line in lines {
-        let key = row_key(line.get(level..=level).unwrap_or_default());
-        let group = members.entry(key.clone()).or_default();
-        if group.is_empty() {
-            order.push(key);
+    let mut ids: HashMap<(usize, String), usize> = HashMap::new();
+    let mut paths: Vec<Vec<usize>> = Vec::with_capacity(lines.len());
+    for line in &lines {
+        let mut parent = usize::MAX;
+        let mut path = Vec::with_capacity(levels);
+        for level in 0..levels {
+            let next = ids.len();
+            parent = *ids.entry((parent, row_key(line.get(level..=level).unwrap_or_default()))).or_insert(next);
+            path.push(parent);
         }
-        group.push(line);
+        fits(lines.len().saturating_add(ids.len()))?;
+        paths.push(path);
     }
-    let mut out = Vec::new();
-    for key in order {
-        let group = members.remove(&key).unwrap_or_default();
-        let mut subtotal: Vec<Value> = group.first().map(|line| line.iter().take(level + 1).cloned().collect()).unwrap_or_default();
-        subtotal.resize(key_cols, Value::Empty);
-        let rows: Vec<usize> = group.iter().flat_map(|line| rows_of(line.get(..key_cols).unwrap_or_default())).collect();
-        subtotal.extend(agg(&rows));
-        let inner = with_subtotals(group, level + 1, depth, key_cols, before, rows_of, agg);
+    let mut group_rows: Vec<Vec<usize>> = vec![Vec::new(); ids.len()];
+    for (line, path) in lines.iter().zip(&paths) {
+        let rows = rows_of(line.get(..key_cols).unwrap_or_default());
+        for &id in path {
+            if let Some(g) = group_rows.get_mut(id) {
+                g.extend_from_slice(&rows);
+            }
+        }
+    }
+    let mut subtotal = |keys: &[Value], level: usize, id: usize| -> Vec<Value> {
+        let mut line: Vec<Value> = keys.iter().take(level + 1).cloned().collect();
+        line.resize(key_cols, Value::Empty);
+        line.extend(agg(group_rows.get(id).map(Vec::as_slice).unwrap_or_default()));
+        line
+    };
+    let mut order: Vec<usize> = (0..lines.len()).collect();
+    order.sort_by(|&a, &b| paths.get(a).cmp(&paths.get(b)));
+    let mut out = Vec::with_capacity(lines.len().saturating_add(ids.len()));
+    let mut prev: Option<(Vec<Value>, &[usize])> = None;
+    for &i in &order {
+        let (Some(line), Some(path)) = (lines.get_mut(i).map(std::mem::take), paths.get(i)) else { continue };
+        // The first level at which this line leaves the previous line's groups.
+        let split = prev.as_ref().map_or(0, |(_, p)| p.iter().zip(path).take_while(|(a, b)| a == b).count());
         if before {
-            out.push(subtotal);
-            out.extend(inner);
-        } else {
-            out.extend(inner);
-            out.push(subtotal);
+            for (level, &id) in path.iter().enumerate().skip(split) {
+                out.push(subtotal(&line, level, id));
+            }
+        } else if let Some((keys, p)) = &prev {
+            for (level, &id) in p.iter().enumerate().skip(split).rev() {
+                out.push(subtotal(keys, level, id));
+            }
+        }
+        prev = Some((line.get(..key_cols).unwrap_or_default().to_vec(), path));
+        out.push(line);
+    }
+    if !before && let Some((keys, p)) = &prev {
+        for (level, &id) in p.iter().enumerate().rev() {
+            out.push(subtotal(keys, level, id));
         }
     }
-    out
+    Ok(out)
 }
 
 /// Height and width of a PIVOTBY grid: `header_rows` (one per column field, plus the value-name row) and
@@ -1320,6 +1357,15 @@ mod tests {
         assert_eq!(rows_of(&r), vec![vec![tv("East"), nv(7.5)], vec![tv("North"), nv(1.0)], vec![tv("West"), nv(7.0)]]);
         is_err(ev("GROUPBY", vec![rf(region.clone()), rf(amt.clone()), t("BOGUS")]), CellError::Value);
         is_err(ev("GROUPBY", vec![rf(region), av(col(&[1.0])), t("SUM")]), CellError::Value);
+    }
+
+    #[test]
+    fn groupby_subtotals_past_the_size_limit_are_refused_before_they_are_built() {
+        // One row with 4000 key columns at depth 4000 asks for 3999 subtotal lines, each 4001 cells
+        // wide: 16 million cells, over the limit. It is #NUM! before any subtotal line exists (it
+        // used to build them all, nesting 4000 levels deep, and refuse them afterwards).
+        let keys = av(arr(vec![(0..4000).map(|i| nv(f64::from(i))).collect()]));
+        is_err(ev("GROUPBY", vec![keys, av(col(&[1.0])), t("SUM"), empty(), n(4000.0)]), CellError::Num);
     }
 
     #[test]
