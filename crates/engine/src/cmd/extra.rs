@@ -239,6 +239,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Run Script",
             menu: &[],
             shortcut: None,
+            shortcut_mac: None,
             params: "{name, trusted?: bool (runs a script from an untrusted workbook this once)} — refuses scripts in a workbook opened from a file until it is trusted, and steps that reach outside the workbook (file.*, link.*, any `path` param)",
             enabled: has_doc,
             run: run_script,
