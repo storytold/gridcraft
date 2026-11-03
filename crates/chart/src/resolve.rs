@@ -11,6 +11,10 @@ use crate::{ChartData, Rgba, SeriesData, TrendlineData};
 pub(crate) const MAX_POINTS: usize = 100_000;
 /// Cap on series per chart.
 pub(crate) const MAX_SERIES: usize = 255;
+/// Cap on the points of all series of one chart together (values, X values and bubble sizes):
+/// [`MAX_SERIES`] × [`MAX_POINTS`] would let a few short whole-column references retain and
+/// draw tens of millions of points. Series past it get only what is left, or no points.
+pub(crate) const MAX_CHART_POINTS: usize = 1_000_000;
 /// Cap on trendlines drawn per series.
 pub(crate) const MAX_TRENDLINES: usize = 16;
 
@@ -77,10 +81,15 @@ fn union_parts(f: &str) -> Option<Vec<&str>> {
 /// Evaluates a series formula to a flat list of values (row-major), capped. A union of
 /// references (`(A1:A3,A5)`, as PivotCharts use) is read part by part.
 fn eval_list(wb: &Workbook, sheet: usize, formula: &str) -> Vec<Value> {
-    eval_list_in(wb, sheet, formula, 0)
+    eval_list_in(wb, sheet, formula, 0, MAX_POINTS)
 }
 
-fn eval_list_in(wb: &Workbook, sheet: usize, formula: &str, depth: u32) -> Vec<Value> {
+/// [`eval_list`] keeping at most `cap` values (and never more than [`MAX_POINTS`]).
+fn eval_list_capped(wb: &Workbook, sheet: usize, formula: &str, cap: usize) -> Vec<Value> {
+    eval_list_in(wb, sheet, formula, 0, cap.min(MAX_POINTS))
+}
+
+fn eval_list_in(wb: &Workbook, sheet: usize, formula: &str, depth: u32, cap: usize) -> Vec<Value> {
     let f = formula.trim();
     if f.is_empty() {
         return vec![];
@@ -90,16 +99,19 @@ fn eval_list_in(wb: &Workbook, sheet: usize, formula: &str, depth: u32) -> Vec<V
     {
         let mut out = Vec::new();
         for p in parts {
-            if out.len() >= MAX_POINTS {
+            if out.len() >= cap {
                 break;
             }
-            let rest = MAX_POINTS - out.len();
-            out.extend(eval_list_in(wb, sheet, p, depth + 1).into_iter().take(rest));
+            let rest = cap - out.len();
+            out.extend(eval_list_in(wb, sheet, p, depth + 1, rest).into_iter().take(rest));
         }
         return out;
     }
+    if cap == 0 {
+        return vec![];
+    }
     match evaluate(wb, sheet, CellRef::default(), f) {
-        Value::Array(a) => a.iter().take(MAX_POINTS).cloned().collect(),
+        Value::Array(a) => a.iter().take(cap).cloned().collect(),
         v => vec![v],
     }
 }
@@ -111,8 +123,11 @@ fn to_num(v: &Value) -> Option<f64> {
     }
 }
 
-fn nums(wb: &Workbook, sheet: usize, formula: &str) -> Vec<Option<f64>> {
-    eval_list(wb, sheet, formula).iter().map(to_num).collect()
+/// A series formula's numbers, at most `cap` of them; `cap` is reduced by what was taken.
+fn nums(wb: &Workbook, sheet: usize, formula: &str, cap: &mut usize) -> Vec<Option<f64>> {
+    let out: Vec<Option<f64>> = eval_list_capped(wb, sheet, formula, *cap).iter().map(to_num).collect();
+    *cap -= out.len().min(*cap);
+    out
 }
 
 /// Number format code of the first cell of a reference ("General" when not a reference).
@@ -228,15 +243,21 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     let mut series = Vec::new();
     let mut categories: Option<Vec<String>> = None;
     let mut category_levels = Vec::new();
+    // One point budget for the whole chart, not one per series.
+    let mut budget = MAX_CHART_POINTS;
     for (i, s) in chart.series.iter().take(MAX_SERIES).enumerate() {
-        let values = nums(wb, sheet, &s.values);
+        let values = nums(wb, sheet, &s.values, &mut budget);
         let name = s.name.as_deref().map(|n| series_name(wb, sheet, n)).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Series{}", i + 1));
         let color =
             s.color.as_ref().and_then(|c| c.resolve(&wb.theme)).map(|[r, g, b]| [r, g, b, 0xFF]).unwrap_or_else(|| series_color(&wb.theme, i));
         let kind = effective_kind(chart.kind, s.kind, i);
         let x = match (&s.categories, numeric_x || matches!(kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble)) {
             // X values with text in them (labels) are ignored: the points are numbered 1..n.
-            (Some(f), true) => Some(eval_list(wb, sheet, f)).filter(|xs| !xs.iter().any(Value::is_text)).map(|xs| xs.iter().map(to_num).collect()),
+            (Some(f), true) => {
+                let xs = eval_list_capped(wb, sheet, f, budget);
+                budget -= xs.len().min(budget);
+                Some(xs).filter(|xs| !xs.iter().any(Value::is_text)).map(|xs| xs.iter().map(to_num).collect())
+            }
             _ => None,
         };
         if categories.is_none()
@@ -248,7 +269,7 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
                 category_levels = outer;
             }
         }
-        let sizes = s.bubble_sizes.as_deref().map(|f| nums(wb, sheet, f));
+        let sizes = s.bubble_sizes.as_deref().map(|f| nums(wb, sheet, f, &mut budget));
         let trendlines = s
             .trendlines
             .iter()

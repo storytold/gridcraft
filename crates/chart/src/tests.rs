@@ -1258,3 +1258,21 @@ fn box_whisker_draws_each_series_quartile_method() {
     // The boxes span 3.5 and 2.5 data units on the same value axis.
     assert!((heights[0] / heights[1] - 1.4).abs() < 0.001);
 }
+
+#[test]
+fn series_share_one_point_budget() {
+    // Many series over the same long column each get a share of one chart-wide budget, not
+    // `MAX_POINTS` apiece.
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    s.set_value(CellRef::new(0, 0), Value::Number(1.0));
+    s.set_value(CellRef::new(59_999, 0), Value::Number(2.0));
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.series = (0..40).map(|_| Series { values: "Sheet1!$A$1:$A$60000".into(), ..Default::default() }).collect();
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series.len(), 40);
+    assert_eq!(d.series[0].values.len(), 60_000);
+    let total: usize = d.series.iter().map(|s| s.values.len()).sum();
+    assert_eq!(total, crate::resolve::MAX_CHART_POINTS);
+    assert!(d.series.last().is_some_and(|s| s.values.is_empty()));
+}
