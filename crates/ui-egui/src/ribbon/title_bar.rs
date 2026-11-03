@@ -147,8 +147,9 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                 // Quick light/dark switch (#194); right-click offers System as well. The same
                 // choice lives in File › Display theme and the View tab.
                 let lang = app.ui.language;
-                let theme = icon_button(ui, Icon::Appearance, t.text_dim, "Dark Mode", vec2(28.0, 26.0));
                 let dark = ui.ctx().theme() == egui::Theme::Dark;
+                let tip = if dark { "Light" } else { "Dark" };
+                let theme = icon_button(ui, Icon::Appearance, t.text_dim, tip, vec2(28.0, 26.0));
                 theme.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, dark, lang.tr("Dark Mode")));
                 if theme.clicked() {
                     act(app, "view.darkMode", json!({}));
