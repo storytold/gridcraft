@@ -146,13 +146,13 @@ pub fn specs() -> Vec<CommandSpec> {
             &with(p, "kind", json!("textBox"))
         )),
         cmd!("shape.setText", "Edit Text Box", [], None, "{id: textBox id, text: string}", has_doc, shape_set_text),
-        cmd!("object.delete", "Delete Object", [], None, "{kind: chart|image|shape|slicer, id}", has_doc, delete_object),
+        cmd!("object.delete", "Delete Object", [], None, "{kind: chart|image|shape|slicer|equation, id}", has_doc, delete_object),
         cmd!(
             "object.move",
             "Move Object",
             [],
             None,
-            "{kind: chart|image|shape|slicer, id, at?: \"C3\", dx?, dy?, width?, height? (each at most 10,000 points, or the object's current size when a file made it larger)}",
+            "{kind: chart|image|shape|slicer|equation, id, at?: \"C3\", dx?, dy?, width?, height? (each at most 10,000 points, or the object's current size when a file made it larger)}",
             has_doc,
             move_object
         ),
@@ -161,7 +161,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Object Properties",
             [],
             None,
-            "{kind: chart|image|shape|slicer, id, mode: moveAndSize|moveOnly|absolute}",
+            "{kind: chart|image|shape|slicer|equation, id, mode: moveAndSize|moveOnly|absolute}",
             has_doc,
             set_anchor_mode
         ),
@@ -316,7 +316,7 @@ fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
             let sh = cx.sheet_mut(sheet)?;
             // The header row pushes the data down one row: never off the end of the sheet.
             let last = RangeRef::new(CellRef::new(MAX_ROWS - 1, r.start.col), CellRef::new(MAX_ROWS - 1, r.end.col));
-            if sh.cells.iter_range(last).any(|(_, x)| x.formula.is_some() || !x.value.is_empty()) {
+            if sh.cells.iter_range(last).any(|(_, x)| x.has_content()) {
                 return Err(EngineError::Other("To prevent possible loss of data, cells can't be pushed off the end of the worksheet.".into()));
             }
             sh.cells.shift_rows_in_cols(r.start.col, r.end.col, r.start.row, 1);
@@ -325,7 +325,7 @@ fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
             let e = Edit::InsertCells { axis: Axis::Rows, range: RangeRef::new(r.start, CellRef::new(r.start.row, r.end.col)) };
             shift_cell_features(sh, &e);
             let name = sh.name.clone();
-            rewrite(cx, &name, &e);
+            rewrite(cx, &name, &e)?;
             let sh = cx.sheet_mut(sheet)?;
             for (i, c) in (r.start.col..=r.end.col).enumerate() {
                 sh.set_value(CellRef::new(r.start.row, c), gridcraft_core::Value::text(format!("Column{}", i + 1)));
@@ -476,7 +476,10 @@ fn write_totals(sh: &mut Sheet, ti: usize) {
         let c = CellRef::new(row, t.range.start.col + i as u32);
         if let Some(code) = col.totals.subtotal_code() {
             let f = format!("=SUBTOTAL({code},{}[{}])", t.name, col.name);
-            sh.set_cell(c, Cell { formula: Some(std::sync::Arc::new(Formula::new(&f))), value: gridcraft_core::Value::Empty, style: sh.style_id(c) });
+            sh.set_cell(
+                c,
+                Cell { formula: Some(std::sync::Arc::new(Formula::new(&f))), value: gridcraft_core::Value::Empty, style: sh.style_id(c), py: None },
+            );
         } else if let Some(l) = &col.totals_label {
             sh.set_value(c, gridcraft_core::Value::text(l.as_str()));
         } else {
@@ -1170,6 +1173,7 @@ fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
         Color::Theme(4, -250)
     });
     let shape = Shape {
+        math: Default::default(),
         id,
         kind,
         anchor: Anchor {
@@ -1227,7 +1231,7 @@ fn shape_set_text(s: &mut Session, p: &Json) -> Result<Json> {
 /// objects are errors, so a stale id never succeeds silently.
 fn object_param(s: &Session, p: &Json, cmd: &str) -> Result<(usize, ObjRef)> {
     let id = u32_param(p, "id").ok_or_else(|| bad(cmd, "missing `id`"))?;
-    let kind = str_param(p, "kind").and_then(ObjKind::parse).ok_or_else(|| bad(cmd, "kind must be chart, image, shape or slicer"))?;
+    let kind = str_param(p, "kind").and_then(ObjKind::parse).ok_or_else(|| bad(cmd, "kind must be chart, image, shape, slicer or equation"))?;
     let d = s.doc()?;
     let sheet = d.wb.active_sheet();
     let o = ObjRef::new(kind, id);
@@ -1322,7 +1326,7 @@ fn insert_link(s: &mut Session, p: &Json) -> Result<Json> {
         });
         let sh = cx.sheet_mut(sheet)?;
         if let Some(t) = text.clone().or_else(|| sh.value(at).is_empty().then(|| target.clone())) {
-            sh.set_cell(at, Cell { value: gridcraft_core::Value::text(t.as_str()), formula: None, style: link_style });
+            sh.set_cell(at, Cell { value: gridcraft_core::Value::text(t.as_str()), formula: None, style: link_style, py: None });
         } else {
             sh.set_style(at, link_style);
         }
@@ -1729,12 +1733,31 @@ fn clear_cf(s: &mut Session, p: &Json) -> Result<Json> {
             sh.cond_formats.clear();
         } else {
             for cf in sh.cond_formats.iter_mut() {
+                let before = RangeRef::top_left(&cf.ranges);
                 cf.ranges.retain(|r| !ranges.iter().any(|x| x.intersects(r)));
+                // The relative formulas are written for the top-left cell: when it goes, they're
+                // rewritten for the new one, so the areas left keep reading the same cells.
+                if let (Some(from), Some(to)) = (before, RangeRef::top_left(&cf.ranges)) {
+                    rebase_cf_formulas(&mut cf.rule, from, to);
+                }
             }
             sh.cond_formats.retain(|c| !c.ranges.is_empty());
         }
         Ok(Json::Null)
     })
+}
+
+/// Moves the relative references of a rule's per-cell formulas written for `from` to `to`.
+fn rebase_cf_formulas(rule: &mut CfRule, from: CellRef, to: CellRef) {
+    let mv = |f: &str| crate::cmd::data::move_rule_formula(f, from, to);
+    match rule {
+        CfRule::CellIs { a, b, .. } => {
+            *a = mv(a);
+            *b = b.as_deref().map(mv);
+        }
+        CfRule::Expression { formula, .. } => *formula = mv(formula),
+        _ => {}
+    }
 }
 
 fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
@@ -1784,6 +1807,7 @@ fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
     let at = cell_param(s, p, "at")?.unwrap_or(d.selection.active);
     let color = super::format::color_param(p.get("color")).unwrap_or(Color::Theme(1, 0));
     let shape = Shape {
+        math: Default::default(),
         id,
         kind: ShapeKind::Icon,
         anchor: Anchor { cell: at, dx: 4.0, dy: 4.0, width: size, height: size, mode: anchor_mode_param(p).unwrap_or_default() },

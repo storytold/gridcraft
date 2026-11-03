@@ -11,6 +11,13 @@ use crate::cell::Formula;
 use crate::sheet::Sheet;
 use crate::style::{StyleTable, Theme};
 
+/// Most equation source, in bytes, one [`Workbook::refresh_equations`] lays out: about 2,500
+/// typical equations, or a few seconds of the slowest 4 KB sources.
+pub const MAX_EQUATION_LAYOUT_BYTES: usize = 128 * 1024;
+
+/// Why an equation past [`MAX_EQUATION_LAYOUT_BYTES`] has no layout.
+pub const EQUATION_BUDGET_MESSAGE: &str = "This workbook has more equations than are laid out at once; edit this equation to lay it out.";
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CalcMode {
     #[default]
@@ -463,6 +470,30 @@ impl Workbook {
         }
         None
     }
+    /// Rebuilds the cached layout of every equation whose source changed (or was never laid
+    /// out, as after loading a file). One call lays out at most [`MAX_EQUATION_LAYOUT_BYTES`] of
+    /// source: one equation can take a tenth of a second to lay out, so a file with thousands of
+    /// them would otherwise hold the app for minutes. Equations past the budget get an error
+    /// instead (they show their source; editing one lays it out).
+    pub fn refresh_equations(&mut self) {
+        let stale = |s: &crate::Shape| s.kind == crate::ShapeKind::Equation && s.math.get(&s.text).is_none();
+        let mut budget = MAX_EQUATION_LAYOUT_BYTES;
+        // Only sheets with a stale equation are copied (sheets are shared with undo snapshots).
+        for sh in self.sheets.iter_mut().filter(|sh| sh.shapes.iter().any(stale)) {
+            for s in Arc::make_mut(sh).shapes.iter_mut().filter(|s| stale(s)) {
+                // A source over the length cap never gets here: the cache answers for it without
+                // a lookup. An empty source still costs a call.
+                let cost = s.text.len().max(1);
+                if cost > budget {
+                    s.math.refuse(&s.text, EQUATION_BUDGET_MESSAGE);
+                    continue;
+                }
+                budget -= cost;
+                s.math.refresh(&s.text);
+            }
+        }
+    }
+
     /// A free id for a new chart, picture, shape, table or slicer: one more than the largest in
     /// use, or, when that is `u32::MAX` (a file can carry any id), the lowest free one.
     pub fn next_object_id(&self) -> u32 {

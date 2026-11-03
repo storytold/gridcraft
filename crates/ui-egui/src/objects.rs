@@ -1,5 +1,5 @@
-//! Selecting, resizing, deleting and opening floating objects (charts, pictures, shapes and
-//! slicers). Painting and hit-testing live in `chartview`.
+//! Selecting, resizing, deleting and opening floating objects (charts, pictures, shapes,
+//! equations and slicers). Painting and hit-testing live in `chartview`.
 
 use egui::{CursorIcon, Pos2, Rect, Vec2};
 use gridcraft_engine::model::{ObjKind, ObjRef, ShapeKind, Sheet};
@@ -116,6 +116,8 @@ pub enum OpenAction {
     EditText(u32),
     /// The Format Chart pane.
     FormatChart(u32),
+    /// The equation editor.
+    EditEquation(u32),
     /// Nothing beyond selecting it.
     Select,
 }
@@ -123,13 +125,15 @@ pub enum OpenAction {
 pub fn open_action(sh: &Sheet, o: ObjRef) -> OpenAction {
     match o.kind {
         ObjKind::Chart => OpenAction::FormatChart(o.id),
+        ObjKind::Equation => OpenAction::EditEquation(o.id),
         ObjKind::Shape if sh.shapes.iter().any(|s| s.id == o.id && s.kind == ShapeKind::TextBox) => OpenAction::EditText(o.id),
         ObjKind::Shape | ObjKind::Image | ObjKind::Slicer => OpenAction::Select,
     }
 }
 
 impl SheetApp {
-    /// Double-click on an object: selects it and opens what edits it.
+    /// Double-click on an object: selects it and opens what edits it (a text box in place, the
+    /// Format Chart pane, the equation editor).
     pub fn open_object(&mut self, o: ObjRef) -> OpenAction {
         self.selected_object = Some(o);
         let action = self.session.active().and_then(|d| d.wb.active()).map_or(OpenAction::Select, |sh| open_action(sh, o));
@@ -138,6 +142,7 @@ impl SheetApp {
                 self.begin_text_box_edit(id);
             }
             OpenAction::FormatChart(_) => self.grid.pane = Some("formatChart".into()),
+            OpenAction::EditEquation(id) => self.open_dialog("equation", json!({"id": id})),
             OpenAction::Select => {}
         }
         action
