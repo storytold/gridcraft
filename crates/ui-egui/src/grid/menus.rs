@@ -130,6 +130,9 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
         let available_width = (ui.ctx().content_rect().width() - frame.total_margin().sum().x).max(1.0);
         frame.show(ui, |ui| {
             let insert_copied = insert_copied_item(app);
+            // On a cell with a link Excel offers to edit, open or remove it (#2120).
+            let link =
+                app.session.active().and_then(|d| d.wb.active().and_then(|sh| sh.hyperlinks.get(&d.selection.active)).map(|l| l.target.clone()));
             let mut items: Vec<(&str, &str)> = vec![
                 ("Cut", "edit.cut"),
                 ("Copy", "edit.copy"),
@@ -154,6 +157,14 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
             ];
             if let Some(item) = insert_copied {
                 items.insert(6, item);
+            }
+            if link.is_some()
+                && let Some(i) = items.iter().position(|(_, id)| *id == "ui:insertLink")
+            {
+                items.splice(
+                    i..=i,
+                    [("Edit Hyperlink…", "ui:insertLink"), ("Open Hyperlink", "ui:openLink"), ("Remove Hyperlink", "edit.clearHyperlinks")],
+                );
             }
             if show_details_offered(app)
                 && let Some(i) = items.iter().position(|(_, id)| *id == "data.sortDescending")
@@ -196,6 +207,11 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                         "ui:newNote" => app.open_dialog("comment", json!({"threaded": false})),
                         "ui:defineName" => app.open_dialog("defineName", json!({})),
                         "ui:insertLink" => app.open_dialog("insertLink", json!({})),
+                        "ui:openLink" => {
+                            if let Some(target) = &link {
+                                super::interact::follow_link(app, target);
+                            }
+                        }
                         "ui:pickList" => app.open_dialog("pickList", json!({})),
                         "ui:filterValue" => {
                             if let Some(d) = app.session.active() {
