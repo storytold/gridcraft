@@ -202,7 +202,8 @@ pub struct Workbook {
     pub show_objects: ShowObjects,
     /// Trust Center › Privacy Options › "Remove personal information from file properties on save"
     /// (`<workbookPr filterPrivacy="1"/>`): kept with the file, and while it is on the author and
-    /// company are left out of what GridCraft saves, as Excel leaves them empty.
+    /// company are left out of the XLSX files GridCraft writes, as Excel leaves them empty. Other
+    /// formats aren't filtered: the workbook's own serialization still holds them.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub remove_personal_info: bool,
     /// Read and set with [`Workbook::active_sheet`] and [`Workbook::set_active_sheet`].
