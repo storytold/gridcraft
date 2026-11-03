@@ -102,6 +102,14 @@ impl SheetApp {
     /// in (a window never seen before starts fresh). A closed window's state is dropped.
     pub fn follow_active_window(&mut self) {
         let active = self.session.active_window();
+        // A window hidden while parked (from another window's View › Hide) isn't drawn either:
+        // its waiting key tip request goes, as it does for a window hidden as it is left.
+        let session = &self.session;
+        for (id, parked) in &mut self.parked {
+            if session.window(*id).is_some_and(|w| w.hidden) {
+                parked.keytip_invoke_next = None;
+            }
+        }
         if active == self.ui_window {
             return;
         }
