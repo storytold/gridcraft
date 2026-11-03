@@ -447,7 +447,7 @@ fn paste_validations(
             }
             runs.push(RangeRef::new(CellRef::new(row, start_col), CellRef::new(row, end_col)));
         }
-        let mut last_run_by_columns = std::collections::BTreeMap::new();
+        let mut last_run_by_columns = std::collections::BTreeMap::<(u32, u32), usize>::new();
         for run in runs {
             let columns = (run.start.col, run.end.col);
             if let Some(&index) = last_run_by_columns.get(&columns)
