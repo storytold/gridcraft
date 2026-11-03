@@ -1,3 +1,4 @@
+use super::active_row::paint_active_row;
 use super::cell_paint::{
     Look, MergedArea, cell_text_y, cell_text_y_below_reading, center_across_end, col32, display_text, furigana_is_shown, layout_cell_furigana, look,
     merged_edges, paint_border, paint_cf_icon, painted_halign, rotated_text_pos, shrink_font, wrapped_cell_text_y,
@@ -104,6 +105,8 @@ pub(crate) struct QuadrantPaint<'a> {
     /// Phonetic (ふりがな) readings for the sheet, when the display is on.
     pub(crate) phonetics: Option<&'a gridcraft_engine::display::PhoneticIndex<'a>>,
     pub(crate) tokens: &'a Tokens,
+    /// The row to tint, when "Highlight the active cell's row" is on.
+    pub(crate) active_row: Option<u32>,
 }
 
 /// Paint a worksheet quadrant, including backgrounds, borders, and text.
@@ -120,6 +123,8 @@ pub(crate) fn paint_quadrant(mut quadrant: QuadrantPaint<'_>) {
     let cells = visible_cells(&quadrant);
     let looks = paint_backgrounds(&mut quadrant, &cells, &merges);
     let outside = outside_text_cells(&mut quadrant, &merges);
+    // Over the fills and under the text and borders.
+    paint_active_row(&quadrant, None);
     paint_cells(&mut quadrant, &looks, &outside, &merges);
     paint_borders(&mut quadrant, &looks, &merges);
     paint_sparklines(&quadrant, range);
@@ -144,21 +149,17 @@ fn paint_gridlines(q: &QuadrantPaint<'_>) {
     if sh.show_gridlines {
         let stroke = Stroke::new(1.0, t.gridline);
         let top = geo.y(sh, r0);
-        let bottom = geo.y(sh, r1 + 1);
+        let bottom = geo.y_end(sh, r1);
         let left = geo.x(sh, c0);
-        let right = geo.x(sh, c1 + 1);
-        for c in c0..=c1 + 1 {
-            if c <= c1 && sh.col_width(c) == 0.0 {
-                continue;
-            }
-            let x = geo.x(sh, c).round() - 0.5;
+        let right = geo.x_end(sh, c1);
+        let xs = (c0..=c1).filter(|&c| sh.col_width(c) > 0.0).map(|c| geo.x(sh, c)).chain([right]);
+        for x in xs {
+            let x = x.round() - 0.5;
             p.line_segment([pos2(x, top), pos2(x, bottom)], stroke);
         }
-        for r in r0..=r1 + 1 {
-            if r <= r1 && sh.row_height(r) == 0.0 {
-                continue;
-            }
-            let y = geo.y(sh, r).round() - 0.5;
+        let ys = (r0..=r1).filter(|&r| sh.row_height(r) > 0.0).map(|r| geo.y(sh, r)).chain([bottom]);
+        for y in ys {
+            let y = y.round() - 0.5;
             p.line_segment([pos2(left, y), pos2(right, y)], stroke);
         }
     }
@@ -226,7 +227,6 @@ fn outside_text_cells(q: &mut QuadrantPaint<'_>, merges: &[RangeRef]) -> Vec<(Ce
     // Text cells just outside the quadrant whose text may overflow into it: the nearest non-empty
     // cell left of `c0` and right of `c1` in each row (within the same frozen / scrolled pane).
     let mut outside: Vec<(CellRef, Rect, Look, Option<CfLook>)> = Vec::new();
-    let same_pane = |col: u32| (col < geo.fc) == (c0 < geo.fc);
     for r in r0..=r1 {
         if sh.row_height(r) == 0.0 {
             continue;
@@ -234,7 +234,7 @@ fn outside_text_cells(q: &mut QuadrantPaint<'_>, merges: &[RangeRef]) -> Vec<(Ce
         let left = (c0.saturating_sub(20)..c0).rev().map(|col| CellRef::new(r, col)).find(|&n| !empty_ok(n));
         let right = (c1.saturating_add(1)..=c1.saturating_add(20).min(MAX_COLS - 1)).map(|col| CellRef::new(r, col)).find(|&n| !empty_ok(n));
         for n in [left, right].into_iter().flatten() {
-            if same_pane(n.col) && sh.col_width(n.col) > 0.0 && in_merge(n).is_none() {
+            if geo.same_col_pane(n.col, c0) && sh.col_width(n.col) > 0.0 && in_merge(n).is_none() {
                 let (lk, cfl) = look(wb, si, sh, n, cf);
                 outside.push((n, geo.cell_rect(sh, n), lk, cfl));
             }
@@ -335,7 +335,9 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     let z = geo.z;
     let (c0, c1) = q.cols;
     let in_merge = |cell| merges.iter().find(|m| m.contains(cell)).copied();
-    let empty_ok = |cell| sh.value_ref(cell).is_none_or(Value::is_empty) && in_merge(cell).is_none();
+    // Text overflows only into empty cells of its own pane: the frozen and scrolled columns move
+    // apart when scrolling (#2544).
+    let empty_ok = |cell: CellRef| geo.same_col_pane(cell.col, c.col) && sh.value_ref(cell).is_none_or(Value::is_empty) && in_merge(cell).is_none();
     if paint_cell_decorations(q, c, *rect, lk, cfl.as_ref()) {
         return;
     }
@@ -467,12 +469,12 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         let mut right = rect.right();
         let mut left = rect.left();
         if across_end > c.col {
-            right = geo.x(sh, across_end + 1);
+            right = geo.x_end(sh, across_end);
         }
         if matches!(halign, HAlign::Left | HAlign::Center | HAlign::Justify) {
             let mut cc = c.col + 1;
             while right - rect.left() < w + 2.0 * pad && cc < MAX_COLS && empty_ok(CellRef::new(c.row, cc)) && cc <= c1 + 20 {
-                right = geo.x(sh, cc + 1);
+                right = geo.x_end(sh, cc);
                 cc += 1;
             }
         }
@@ -491,9 +493,11 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
             let extra_r = Rect::from_min_max(pos2(rect.right() - 1.0, inner.top()), inner.max);
             if extra_l.width() > 0.0 {
                 p.rect_filled(extra_l, 0.0, t.grid_bg);
+                paint_active_row(q, Some(extra_l));
             }
             if extra_r.width() > 0.0 {
                 p.rect_filled(extra_r, 0.0, t.grid_bg);
+                paint_active_row(q, Some(extra_r));
             }
         }
     }

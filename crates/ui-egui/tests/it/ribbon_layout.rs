@@ -104,7 +104,10 @@ struct Clicks {
 #[test]
 /// The main button clicks once and the arrow twice separately; the tooltip keeps the platform shortcut, and the icon sits above the full-width label.
 fn big_split_button_separates_the_default_action_from_the_menu() {
-    let mut h = crate::common::builder().with_size(vec2(300.0, 200.0)).build_ui_state(
+    // The ribbon picks the shortcut by the OS egui reports, which kittest pins to Nix unless told:
+    // pin macOS, so the check is the same on every host (the other platforms' text is in
+    // `widgets::tests`).
+    let mut h = crate::common::builder().with_size(vec2(300.0, 200.0)).with_os(egui::os::OperatingSystem::Mac).build_ui_state(
         |ui, c: &mut Clicks| {
             let (main, arrow) = widgets::big_split_button(ui, Icon::Sum, "Auto\nSum", "AutoSum");
             c.main += u32::from(main.clicked());
@@ -125,8 +128,7 @@ fn big_split_button_separates_the_default_action_from_the_menu() {
     h.ctx.all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
     h.get_by_label("Auto Sum").hover();
     h.run_steps(6);
-    let shortcut = if cfg!(target_os = "macos") { "AutoSum (\u{2318}\u{21e7}T)" } else { "AutoSum (Alt+=)" };
-    assert!(h.query_by_value(shortcut).is_some(), "tooltip with the shortcut");
+    assert!(h.query_by_value("AutoSum (\u{2318}\u{21e7}T)").is_some(), "tooltip with the macOS shortcut");
     // The icon part sits above the label part, across the full width.
     let main = h.get_by_label("Auto Sum").rect();
     let arrow = h.get_by_label("Auto Sum options").rect();
