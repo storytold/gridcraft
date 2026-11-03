@@ -285,7 +285,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     };
 
     let mut wb_rels = Rels::default();
-    let (sheets_xml, kept, pivots) = write_sheets(wb, &mut out, active, &mut wb_rels);
+    let (sheets_xml, kept, mut pivots) = write_sheets(wb, &mut out, active, &mut wb_rels);
 
     let names = write_defined_names(wb, &kept, &out.chart_names);
 
