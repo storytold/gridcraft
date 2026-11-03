@@ -1029,3 +1029,20 @@ fn rank_ties_are_dense_and_count_numbers_is_captioned_count_of() {
     s.execute("pivot.valueSettings", json!({"index": 0, "showAs": "normal", "func": "countNumbers"})).unwrap();
     assert_eq!(text(&s, "E3"), "Count of Val");
 }
+
+#[test]
+fn legacy_count_numbers_caption_follows_the_function() {
+    // Workbooks saved before Count Numbers was captioned "Count of" carry "Count Numbers of Val";
+    // that is still an automatic caption, so it follows a new function. A custom name stays.
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = json!([["Key", "Val"], ["A", 5], ["B", 4]]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("insert.pivotTable", json!({"source": "Sheet1!$A$1:$B$3", "destination": "Sheet1!D3", "rows": ["Key"], "values": ["Val"]})).unwrap();
+    for (legacy, after) in [("Count Numbers of Val", "Sum of Val"), ("Count Numbers of Val2", "Sum of Val"), ("Numbers counted", "Numbers counted")] {
+        s.execute("pivot.valueSettings", json!({"index": 0, "func": "countNumbers", "name": legacy})).unwrap();
+        assert_eq!(text(&s, "E3"), legacy);
+        s.execute("pivot.valueSettings", json!({"index": 0, "func": "sum"})).unwrap();
+        assert_eq!(text(&s, "E3"), after, "{legacy}");
+    }
+}
