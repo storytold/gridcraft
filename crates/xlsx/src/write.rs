@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 
 use gridcraft_core::RangeRef;
 use gridcraft_formula::quote_sheet;
-use gridcraft_model::{CalcMode, CalcSettings, PhoneticString, ShowObjects, Style, Visibility, Workbook};
+use gridcraft_model::{CalcMode, CalcSettings, PhoneticString, ShowObjects, Style, Visibility, Workbook, WorkbookView};
 
 use crate::package::ZipOut;
 use crate::xml::{esc, esc_attr};
@@ -128,6 +128,8 @@ pub struct Out {
     pub cell_pictures: crate::richdata::PicturesOut,
     /// Kept (pass-through) parts written so far.
     pub kept: crate::passthrough::KeptOut,
+    /// The code of the Python cells written so far, in order: script `i` of the Python part.
+    pub python_scripts: Vec<String>,
 }
 
 impl Out {
@@ -208,6 +210,28 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
     write_xlsx_named(wb, kind, None)
 }
 
+/// The `<workbookView>` attributes beyond `activeTab`: the window's display settings
+/// that differ from the format's defaults. An ordinary workbook gets none, so its file
+/// is unchanged; a workbook Excel saved with the sheet tabs or scroll bars hidden
+/// keeps them that way (#3057).
+fn workbook_view_attrs(wb: &Workbook) -> String {
+    let mut attrs = String::new();
+    if !wb.view.show_sheet_tabs {
+        attrs.push_str(" showSheetTabs=\"0\"");
+    }
+    if !wb.view.show_horizontal_scroll {
+        attrs.push_str(" showHorizontalScroll=\"0\"");
+    }
+    if !wb.view.show_vertical_scroll {
+        attrs.push_str(" showVerticalScroll=\"0\"");
+    }
+    let tab_ratio = wb.view.tab_ratio.min(WorkbookView::MAX_TAB_RATIO);
+    if tab_ratio != 600 {
+        let _ = write!(attrs, " tabRatio=\"{tab_ratio}\"");
+    }
+    attrs
+}
+
 /// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
 /// PivotTable in Excel only when its link starts with the workbook in brackets.
 pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
@@ -237,6 +261,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         needs_calc: false,
         cell_pictures: Default::default(),
         kept: Default::default(),
+        python_scripts: vec![],
     };
     out.kept.reserve_vml_blocks(wb);
     out.default_type("rels", "application/vnd.openxmlformats-package.relationships+xml");
@@ -273,7 +298,9 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         let pw = wb.structure_password.as_ref().map(|h| crate::sheet_write::password_attrs(h, "workbook")).unwrap_or_default();
         let _ = write!(w, "<workbookProtection{pw} lockStructure=\"1\"/>");
     }
-    let _ = write!(w, "<bookViews><workbookView activeTab=\"{}\"/></bookViews><sheets>{sheets_xml}</sheets>", kept.file_index(active));
+    let _ = write!(w, "<bookViews><workbookView activeTab=\"{}\"", kept.file_index(active));
+    w.push_str(&workbook_view_attrs(wb));
+    let _ = write!(w, "/></bookViews><sheets>{sheets_xml}</sheets>");
     w.push_str(&kept.elements);
     if !names.is_empty() {
         let _ = write!(w, "<definedNames>{names}</definedNames>");
@@ -315,6 +342,12 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     pivots.finish(wb, &mut out, &|code: &str| crate::tables::builtin_id(code).or_else(|| fmt_ids.get(code).copied()));
     out.part("xl/styles.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"), styles.into_bytes());
     wb_rels.add("styles", "styles.xml");
+    if !out.python_scripts.is_empty() {
+        use crate::python_part as py;
+        let part = py::write(&out.python_scripts);
+        out.part(py::PART, Some(py::CONTENT_TYPE), part.into_bytes());
+        wb_rels.add_uri(py::REL, "python.xml");
+    }
     if wb.styles.iter().any(|(_, st)| st.num_fmt.as_str() == "checkbox") {
         use crate::feature_bags as fpb;
         out.part(fpb::PART, Some(fpb::CONTENT_TYPE), fpb::checkbox_part().into_bytes());

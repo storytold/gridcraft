@@ -14,6 +14,8 @@ use super::{
 mod clipboard;
 mod commands;
 mod editing;
+#[cfg(test)]
+pub(crate) use editing::{DRAFT_CODE_HIDDEN, DRAFT_SHEET_GONE};
 mod files;
 mod fonts;
 mod input;
@@ -69,13 +71,14 @@ impl SheetApp {
             capture_epoch: 0,
             capture_geometry: None,
             capture_geometry_from_raw: false,
-            selected_chart: None,
+            selected_object: None,
             clipboard_text_at_copy: None,
             cut_text: None,
             tab_run: None,
             macros: macro_ui::MacroUi::default(),
             started: now_ms(),
             allow_close: false,
+            bring_forward: false,
             open_switch_windows: false,
             ui_window: None,
             parked: HashMap::new(),
@@ -222,7 +225,9 @@ impl SheetApp {
         } else {
             ribbon::show(self, ui);
             widgets::notice_bar(self, ui);
-            if self.session.prefs.formula_bar {
+            // Python mode edits only in the formula bar: it shows while a Python edit is open,
+            // also when the preference hides it.
+            if self.session.prefs.formula_bar || self.editor.as_ref().is_some_and(|e| e.python) {
                 formula_bar::show(self, ui);
             }
             if self.ui.status_bar {
