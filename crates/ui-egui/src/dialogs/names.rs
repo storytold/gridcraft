@@ -37,7 +37,10 @@ pub(super) fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
         if ui.add_enabled(selected.is_some(), egui::Button::new(crate::i18n::current(ui.ctx()).tr("Delete"))).clicked()
             && let Some(n) = &selected
         {
-            app.run_or_alert("formulas.deleteName", json!({"name": field(n, "name"), "scope": identity(n)}));
+            // The delete command treats an absent/null scope as every scope for legacy callers.
+            let scope = identity(n);
+            let scope = if scope.is_null() { json!("Workbook") } else { scope };
+            app.run_or_alert("formulas.deleteName", json!({"name": field(n, "name"), "scope": scope}));
         }
     });
     ui.add_space(4.0);

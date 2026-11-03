@@ -45,7 +45,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Delete Name",
             [],
             None,
-            "{name, scope?: null|\"Workbook\"|sheet name|{sheet: name}, force?: bool} (omitting scope selects every scope; null or Workbook selects only workbook scope. Hidden GridCraft data names are refused unless force is true)",
+            "{name, scope?: null|\"Workbook\"|sheet name|{sheet: name}, force?: bool} (missing or null scope selects every scope; Workbook selects only workbook scope. Hidden GridCraft data names are refused unless force is true)",
             has_doc,
             delete_name
         ),
@@ -496,7 +496,11 @@ fn defined_name_scope(wb: &Workbook, scope: Option<&Json>, command: &str) -> Res
 fn delete_name(s: &mut Session, p: &Json) -> Result<Json> {
     let name = str_param(p, "name").ok_or_else(|| bad("formulas.deleteName", "missing `name`"))?.to_string();
     refuse_stash_name(&s.doc()?.wb, p, &name)?;
-    let scope = p.get("scope").map(|value| defined_name_scope(&s.doc()?.wb, Some(value), "formulas.deleteName")).transpose()?;
+    let scope = p
+        .get("scope")
+        .filter(|value| !value.is_null())
+        .map(|value| defined_name_scope(&s.doc()?.wb, Some(value), "formulas.deleteName"))
+        .transpose()?;
     edit(s, |cx| {
         let before = cx.wb.names.len();
         cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(&name) && scope.is_none_or(|sc| n.scope == sc)));

@@ -193,7 +193,7 @@ fn filter_search_localizes_constants_without_translating_text() {
 /// Creates, edits and deletes a sheet-scoped name even when the sheet is called Workbook.
 #[test]
 fn name_manager_distinguishes_a_sheet_named_workbook() {
-    use egui::{Key, Modifiers};
+    use egui::accesskit::Role;
     let mut h = harness();
     h.state_mut().run("sheet.rename", json!({"name":"Workbook"})).unwrap();
     h.state_mut().run("home.insertSheet", json!({"name":"Other"})).unwrap();
@@ -202,14 +202,14 @@ fn name_manager_distinguishes_a_sheet_named_workbook() {
     h.run_steps(4);
     h.get_by_label(Language::Ru.tr("New…")).click();
     h.run_steps(3);
-    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, Language::Ru.tr("Scope:")).click();
-    h.run_steps(2);
-    h.get_by_label("Workbook (Лист)").click();
-    h.run_steps(2);
     let d = h.state_mut().dialog.as_mut().unwrap();
+    d.values.insert("scope".into(), json!({"sheet":"Workbook"}));
     d.values.insert("name".into(), json!("LocalRate"));
     d.values.insert("refersTo".into(), json!("=0.1"));
-    press(&mut h, Key::Enter, Modifiers::NONE);
+    h.run_steps(3);
+    assert_eq!(h.get_by_role_and_label(Role::ComboBox, Language::Ru.tr("Scope:")).value().as_deref(), Some("Workbook (Лист)"));
+    let ok = format!(" {} ", Language::Ru.tr("OK"));
+    h.get_by_role_and_label(Role::Button, &ok).click();
     h.run_steps(3);
     let wb = &h.state().session.active().unwrap().wb;
     let local = wb.sheet_index("Workbook").unwrap();
@@ -225,14 +225,15 @@ fn name_manager_distinguishes_a_sheet_named_workbook() {
     let d = h.state_mut().dialog.as_mut().unwrap();
     assert_eq!(d.values["oldScope"], json!({"sheet":"Workbook"}));
     d.values.insert("name".into(), json!("RenamedRate"));
-    press(&mut h, Key::Enter, Modifiers::NONE);
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::Button, &ok).click();
     h.run_steps(3);
     let wb = &h.state().session.active().unwrap().wb;
     assert!(wb.name("LocalRate", local).is_none());
     assert_eq!(wb.name("RenamedRate", local).unwrap().scope, Some(local));
     h.get_by_label("RenamedRate").click();
     h.run_steps(2);
-    h.get_by_label(Language::Ru.tr("Delete")).click();
+    h.get_all_by_label(Language::Ru.tr("Delete")).last().unwrap().click();
     h.run_steps(3);
     let wb = &h.state().session.active().unwrap().wb;
     assert!(wb.name("RenamedRate", local).is_none());
