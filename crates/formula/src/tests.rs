@@ -577,5 +577,9 @@ fn parse_errors_name_what_was_typed_and_not_the_tokens() -> Result<(), String> {
     assert_eq!(error("SUM(1 \"a\")")?, "expected `,` or `)`, found `\"a\"`");
     assert_eq!(error("SUM(1 2)")?, "expected `,` or `)`, found `2`");
     assert_eq!(error("{1,SUM(2)}")?, "array constants may only contain constants, found `SUM(`");
+    // Numbers and strings read as typed, not as their values.
+    assert_eq!(error("1.00 2.00")?, "unexpected `2.00`");
+    assert_eq!(error("SUM(1 2.50)")?, "expected `,` or `)`, found `2.50`");
+    assert_eq!(error("SUM(1 \"a\"\"b\")")?, "expected `,` or `)`, found `\"a\"\"b\"`");
     Ok(())
 }
