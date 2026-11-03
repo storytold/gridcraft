@@ -1895,6 +1895,9 @@ fn power_operator_takes_odd_roots_of_negative_numbers() {
     t.set("B5", "=A1^-(1/3)");
     t.set("B6", "=0^-1");
     t.set("B7", "=0^0");
+    t.set("B8", "=(-27)^(1/3)");
+    t.set("B9", "=(-32)^(1/5)");
+    t.set("B10", "=(-8)^0.333333");
     assert_eq!(t.num("B1"), -2.0);
     assert_eq!(t.num("B2"), -3.0);
     assert_eq!(t.get("B3"), Value::Error(CellError::Num));
@@ -1902,6 +1905,9 @@ fn power_operator_takes_odd_roots_of_negative_numbers() {
     assert_eq!(t.num("B5"), -0.5);
     assert_eq!(t.get("B6"), Value::Error(CellError::Div0));
     assert_eq!(t.get("B7"), Value::Error(CellError::Num));
+    assert_eq!(t.num("B8"), -3.0);
+    assert_eq!(t.num("B9"), -2.0);
+    assert_eq!(t.get("B10"), Value::Error(CellError::Num));
 }
 
 #[test]
