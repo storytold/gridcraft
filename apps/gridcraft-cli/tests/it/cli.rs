@@ -22,6 +22,14 @@ fn tmpdir(name: &str) -> PathBuf {
     d
 }
 
+struct RemoveOnDrop(PathBuf);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 fn version_and_usage() {
     assert_eq!(ok(&["--version"]).trim(), format!("gridcraft-cli {}", env!("CARGO_PKG_VERSION")));
@@ -95,6 +103,7 @@ fn run_then_cat_and_info_on_sample() {
 #[test]
 fn a_file_named_dash_h_opens_through_a_relative_path() {
     let dir = tmpdir("dash-h-file");
+    let _cleanup = RemoveOnDrop(dir.clone());
     let created = bin().args(["run", "--sample", "sales", "--out", "source.xlsx"]).current_dir(&dir).output().expect("create sample workbook");
     assert!(created.status.success(), "{}", String::from_utf8_lossy(&created.stderr));
     std::fs::rename(dir.join("source.xlsx"), dir.join("-h")).unwrap();
@@ -102,7 +111,6 @@ fn a_file_named_dash_h_opens_through_a_relative_path() {
     let opened = bin().args(["info", "./-h"]).current_dir(&dir).output().expect("open file named -h");
     assert!(opened.status.success(), "{}", String::from_utf8_lossy(&opened.stderr));
     assert!(String::from_utf8_lossy(&opened.stdout).contains("Sales"));
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
