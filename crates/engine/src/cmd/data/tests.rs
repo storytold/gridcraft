@@ -546,3 +546,36 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert_eq!(sh.validations.len(), 3);
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
+
+#[test]
+fn outline_commands_with_nothing_to_act_on_add_no_undo_step() {
+    // #1450: Show Detail, Hide Detail and Ungroup away from any group each added an undo step
+    // that undid nothing.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("data.group", json!({"rows": "5:8"})).unwrap();
+    s.execute("selection.set", json!({"range": "C20"})).unwrap();
+    for id in ["data.showDetail", "data.hideDetail", "data.ungroup"] {
+        s.execute(id, json!({})).unwrap();
+    }
+    let undo = s.execute("history.list", json!({})).unwrap()["undo"].clone();
+    assert_eq!(undo, json!(["Group"]));
+}
+
+#[test]
+fn ungrouping_around_the_summary_row_clears_its_collapsed_mark() {
+    // #1450: rows 5:8 grouped and collapsed, then Ungroup on 4:9 (which ends on the summary row
+    // 9) left row 9 marked collapsed, and grouping 5:8 again saved the open group as collapsed.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("data.group", json!({"rows": "5:8"})).unwrap();
+    s.execute("data.hideDetail", json!({"rows": "5:8"})).unwrap();
+    s.execute("selection.set", json!({"range": "4:9"})).unwrap();
+    s.execute("data.ungroup", json!({})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap().clone();
+    assert!((3..=9).all(|r| sh.rows.get(&r).is_none_or(|e| !e.collapsed && !e.hidden && e.outline == 0)), "{:?}", sh.rows);
+    // Grouped again, the group is open, and its summary row isn't marked collapsed.
+    s.execute("data.group", json!({"rows": "5:8"})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap().clone();
+    assert!(sh.rows.get(&8).is_none_or(|e| !e.collapsed));
+}
