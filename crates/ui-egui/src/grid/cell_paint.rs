@@ -1,5 +1,8 @@
 use super::geo::Geo;
-use super::*;
+use super::{
+    BorderLine, BorderStyle, CellRef, CfCache, CfLook, Color, Color32, FontId, HAlign, MAX_COLS, Painter, PatternType, Pos2, RangeRef, Rect, Sheet,
+    Stroke, Style, Underline, VAlign, Value, Workbook, pos2, theme, vec2,
+};
 
 /// Resolved look of a cell for painting.
 pub(super) struct Look {
@@ -171,28 +174,27 @@ pub(crate) fn rotated_text_pos(rect: Rect, size: egui::Vec2, angle: f32, h: HAli
     pos2(x, y) - turned.min.to_vec2()
 }
 
+/// A merged range, where it is drawn, and the visible rows and columns.
+#[derive(Clone, Copy)]
+pub(super) struct MergedArea {
+    pub(super) m: RangeRef,
+    pub(super) rect: Rect,
+    pub(super) rows: (u32, u32),
+    pub(super) cols: (u32, u32),
+}
+
 /// The outline segments of merged area `m` drawn at `rect`: the top and left edges come from the
 /// first row's and first column's cells, the bottom and right edges from the last row's and last
 /// column's cells, one segment per visible cell (limited to the visible `rows` × `cols`).
-#[allow(clippy::too_many_arguments)]
-pub(super) fn merged_edges(
-    wb: &Workbook,
-    si: usize,
-    sh: &Sheet,
-    geo: &Geo,
-    m: RangeRef,
-    rect: Rect,
-    rows: (u32, u32),
-    cols: (u32, u32),
-    cf: &mut CfCache,
-) -> Vec<(BorderLine, [Pos2; 2])> {
+pub(super) fn merged_edges(wb: &Workbook, si: usize, sh: &Sheet, geo: &Geo, area: MergedArea, cf: &mut CfCache) -> Vec<(BorderLine, [Pos2; 2])> {
+    let MergedArea { m, rect, rows, cols } = area;
     let mut out = Vec::new();
     let (cs, ce) = (m.start.col.max(cols.0), m.end.col.min(cols.1));
     for col in cs..=ce {
         if sh.col_width(col) == 0.0 {
             continue;
         }
-        let (x0, x1) = (geo.x(sh, col), geo.x(sh, col.saturating_add(1)));
+        let (x0, x1) = (geo.x(sh, col), geo.x_end(sh, col));
         let top = look(wb, si, sh, CellRef::new(m.start.row, col), cf).0.style.borders.top;
         let bottom = look(wb, si, sh, CellRef::new(m.end.row, col), cf).0.style.borders.bottom;
         out.push((top, [pos2(x0, rect.top()), pos2(x1, rect.top())]));
@@ -203,7 +205,7 @@ pub(super) fn merged_edges(
         if sh.row_height(row) == 0.0 {
             continue;
         }
-        let (y0, y1) = (geo.y(sh, row), geo.y(sh, row.saturating_add(1)));
+        let (y0, y1) = (geo.y(sh, row), geo.y_end(sh, row));
         let left = look(wb, si, sh, CellRef::new(row, m.start.col), cf).0.style.borders.left;
         let right = look(wb, si, sh, CellRef::new(row, m.end.col), cf).0.style.borders.right;
         out.push((left, [pos2(rect.left(), y0), pos2(rect.left(), y1)]));
