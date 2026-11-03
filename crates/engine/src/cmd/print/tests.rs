@@ -1337,3 +1337,23 @@ fn the_same_picture_on_several_sheets_is_one_image_object() {
     assert_eq!(text.matches("/Subtype /Image").count(), 1, "decoded and written once for both sheets");
     assert_eq!(text.matches(" cm /Sh1 Do").count(), 2, "drawn on both sheets' pages");
 }
+
+#[test]
+fn a_picture_over_the_budget_at_one_size_still_prints_smaller() {
+    use super::header_footer::HfImageCache;
+    let mut doc = PdfDoc::new();
+    let data: std::sync::Arc<[u8]> = png(200, 200).into();
+    // Room for 60 × 60 pixels: 200 × 200 doesn't fit, 50 × 50 does.
+    let mut cache = HfImageCache::with_budget(60 * 60 * 4);
+    assert!(cache.image(&mut doc, &data, (200, 200)).is_none(), "over the budget");
+    assert!(cache.image(&mut doc, &data, (300, 300)).is_none(), "larger still: not tried again");
+    assert_eq!(cache.tries(), 1);
+    let small = cache.image(&mut doc, &data, (50, 50)).expect("a smaller size fits what is left");
+    assert_eq!(cache.image(&mut doc, &data, (40, 40)), Some(small), "a smaller request reuses it");
+    assert_eq!(cache.tries(), 2);
+    // An image that can't be decoded is tried once, whatever the size.
+    let broken: std::sync::Arc<[u8]> = b"\x89PNG\r\n\x1a\nbroken".to_vec().into();
+    assert!(cache.image(&mut doc, &broken, (100, 100)).is_none());
+    assert!(cache.image(&mut doc, &broken, (10, 10)).is_none());
+    assert_eq!(cache.tries(), 3);
+}
