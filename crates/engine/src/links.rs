@@ -40,7 +40,7 @@ pub fn classify(target: &str) -> LinkKind {
         return LinkKind::Internal(t.to_string());
     }
     if let Some(path) = path_like(t) {
-        return local(path);
+        return local_escaped(path);
     }
     let Some((scheme, rest)) = t.split_once(':') else { return LinkKind::Internal(t.to_string()) };
     let scheme_like = scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
@@ -70,9 +70,20 @@ pub fn classify_link(target: &str, external: bool) -> LinkKind {
         LinkKind::Internal(t)
             if external && !t.trim().is_empty() && RangeRef::parse(&t).is_none() && !t.starts_with('#') && !(t.contains('!') && !t.contains('#')) =>
         {
-            local(t.split('#').next().unwrap_or_default())
+            local_escaped(t.split('#').next().unwrap_or_default())
         }
         other => other,
+    }
+}
+
+/// A path as a link stores it. Excel writes a file link as a URI reference, so a space is `%20`
+/// (`My%20Files/a.xlsx`); the escapes are decoded before the checks. A `%` that starts no escape
+/// (`100%.txt`) leaves the path as it is.
+fn local_escaped(path: &str) -> LinkKind {
+    match percent_decode(path) {
+        Some(p) if p.chars().any(char::is_control) => LinkKind::Refused("The link contains control characters.".into()),
+        Some(p) => local(&p),
+        None => local(path),
     }
 }
 
@@ -406,6 +417,10 @@ mod tests {
             ("~/Documents", "~/Documents"),
             ("Book.xlsx#Sheet1!A2", "Book.xlsx"),
             ("/tmp/Book.xlsx#Sheet1!A2", "/tmp/Book.xlsx"),
+            // Excel writes a file link's spaces as `%20`; a `%` that starts no escape stays.
+            ("My%20Files/Q1%20costs.xlsx", "My Files/Q1 costs.xlsx"),
+            ("C:\\Docs\\a%20b.pdf", "C:\\Docs\\a b.pdf"),
+            ("docs/100%.txt", "docs/100%.txt"),
         ] {
             let kind = classify(target);
             if target == "Book.xlsx#Sheet1!A2" {
@@ -417,6 +432,7 @@ mod tests {
             }
         }
         assert_eq!(classify_link("notes.txt", true), LinkKind::Local("notes.txt".into()));
+        assert_eq!(classify_link("Q1%20costs.xlsx", true), LinkKind::Local("Q1 costs.xlsx".into()));
         assert!(matches!(classify_link("notes.txt", false), LinkKind::Internal(_)));
         assert!(matches!(classify_link("Total", false), LinkKind::Internal(_)));
         assert!(matches!(classify_link("Sheet2!A1", true), LinkKind::Internal(_)));
@@ -448,6 +464,10 @@ mod tests {
             "docs/setup.jnlp",
             "docs/Snap.MSC",
             "docs/tool.settingcontent-ms",
+            // Decoding comes before the checks.
+            "docs/app%2Eexe",
+            "%5C%5Cserver/share/doc.txt",
+            "docs/%0A.txt",
         ] {
             assert!(matches!(classify(bad), LinkKind::Refused(_)), "{bad:?} -> {:?}", classify(bad));
         }
