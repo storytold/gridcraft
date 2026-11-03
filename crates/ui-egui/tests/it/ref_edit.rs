@@ -1637,3 +1637,29 @@ fn solver_load_model_after_a_cross_sheet_pick_reads_the_dialogs_sheet() {
     assert!(field(&h, "variables").contains("B2"), "{:?}", field(&h, "variables"));
     assert_eq!(selection(&h).0, 0, "back on the dialog's sheet");
 }
+
+#[test]
+fn select_data_source_takes_its_ranges_from_the_grid() {
+    // #2940: the chart data range only took typed text; selecting on the grid did nothing.
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = json!([["Fruit", "Sold"], ["Kiwi", 4], ["Plum", 7], ["Fig", 2]]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    let chart = s.execute("insert.chart", json!({"range": "A1:B4", "type": "column"})).unwrap()["chart"].as_u64().unwrap();
+    s.execute("selection.set", json!({"range": "D10"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("selectData", json!({"chart": chart}));
+    h.run_steps(4);
+    let window = h.get_by_role_and_label(egui::accesskit::Role::Window, "Select Data Source").rect();
+    let boxes: Vec<egui::Rect> =
+        h.get_all_by_role(egui::accesskit::Role::TextInput).map(|n| n.rect()).filter(|r| window.contains(r.center())).collect();
+    assert_eq!(boxes.len(), 2, "the data range and the category labels are reference boxes");
+    click_at(&mut h, boxes[0].center());
+    drag(&mut h, "A1", "B3");
+    assert_eq!(field(&h, "range"), "$A$1:$B$3");
+    h.get_by_label("   OK   ").click();
+    h.run_steps(4);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().message);
+    let source = h.state().session.active().unwrap().wb.active().unwrap().charts.first().unwrap().source.clone();
+    assert_eq!(source.as_deref().map(|s| s.trim_start_matches('=').replace("Sheet1!", "").replace('$', "")), Some("A1:B3".to_string()));
+}
