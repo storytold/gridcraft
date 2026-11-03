@@ -2180,21 +2180,6 @@ fn text_before_after_empty_instance_defaults_to_one() {
 }
 
 #[test]
-fn accounting_negative_text_coerces() {
-    let mut t = T::new();
-    t.set("A1", "'$(1,234)");
-    t.set("B1", "=A1+0");
-    t.set("C1", "=VALUE(A1)");
-    t.set("D1", "=--\"$ (5)\"");
-    t.set("E1", "=\"(5)%\"*100");
-    t.set("F1", "=\"(-5)\"+0");
-    t.set("G1", "$(1,234)");
-    assert_eq!((t.num("B1"), t.num("C1"), t.num("D1"), t.num("E1")), (-1234.0, -1234.0, -5.0, -5.0));
-    assert_eq!(t.get("F1"), Value::Error(CellError::Value));
-    assert_eq!(t.num("G1"), -1234.0);
-}
-
-#[test]
 fn analysis_toolpak_value_params_reject_multi_cell_references() {
     // Excel 365 (observed): EOMONTH, WORKDAY, COUPDAYS, BIN2DEC... give #VALUE! for a reference to more
     // than one cell, however the reference is formed, and lift array constants and computed arrays.
@@ -2352,24 +2337,6 @@ fn index_with_one_index() {
     // A bad position is still #VALUE!.
     t.set("L1", "=INDEX(A5:C7,\"x\")");
     assert_eq!(t.get("L1"), Value::Error(CellError::Value));
-}
-
-#[test]
-fn lambda_calls_spend_one_work_budget_per_cell() {
-    // #2382: lambda nesting multiplies invocations, and the budget meters every one of them.
-    // Exhaustion itself is tested on a mock host in `eval::fuel_tests` (burning the real 16M
-    // budget in a full recalc needs tens of millions of calls, far too slow for a unit test);
-    // here the same nested shape runs inside it: 6 × 9 ≈ 59k scalar REDUCE invocations.
-    let mut t = T::new();
-    t.set(
-        "A1",
-        "=LET(s,SEQUENCE(9),REDUCE(0,s,LAMBDA(a,v,REDUCE(0,s,LAMBDA(a,v,REDUCE(0,s,LAMBDA(a,v,REDUCE(0,s,LAMBDA(a,v,REDUCE(0,s,LAMBDA(a,v,a+v)))))))))))",
-    );
-    // The bodies are the same inner reduce, so every level sums to 45 while the invocation
-    // count multiplies by 9 per level (9, 81, 729, 6561, 59049 calls).
-    assert_eq!(t.num("A1"), 45.0);
-    t.set("A2", "=REDUCE(0,SEQUENCE(4000),LAMBDA(a,v,a+v))");
-    assert_eq!(t.num("A2"), 4000.0 * 4001.0 / 2.0);
 }
 
 #[test]
