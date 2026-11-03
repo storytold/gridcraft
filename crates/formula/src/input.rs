@@ -9,6 +9,7 @@ mod es;
 mod pl;
 mod fr;
 mod it;
+mod pt;
 mod ru;
 
 use crate::{Expr, ParseError, parser};
@@ -23,6 +24,7 @@ pub enum FormulaLocale {
     Pl,
     Fr,
     It,
+    PtBr,
     Ru,
 }
 
@@ -61,6 +63,7 @@ impl FormulaLocale {
             Self::Pl => &pl::DATA,
             Self::Fr => &fr::DATA,
             Self::It => &it::DATA,
+            Self::PtBr => &pt::DATA,
             Self::Ru => &ru::DATA,
         }
     }

@@ -286,6 +286,7 @@ mod russian_help_tests {
                 FormulaLocale::Es | FormulaLocale::Pl => format!("SUMA({number}1; [{number}2]; ...)"),
                 FormulaLocale::Fr => format!("SOMME({number}1; [{number}2]; ...)"),
                 FormulaLocale::It => format!("SOMMA({number}1; [{number}2]; ...)"),
+                FormulaLocale::PtBr => format!("SOMA({number}1; [{number}2]; ...)"),
                 FormulaLocale::En => format!("SUM({number}1, [{number}2], ...)"),
             };
             assert_eq!(hint, expected, "{language:?}");
