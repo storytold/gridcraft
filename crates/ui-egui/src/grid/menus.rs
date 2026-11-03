@@ -129,7 +129,7 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     let resp = egui::Area::new(egui::Id::unique("cell_context")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(200.0);
-            // On a Python cell: its return type.
+            // On a Python cell: its return type and Convert to Normal Cell.
             if crate::python_card::menu_items(app, ui) {
                 close = true;
             }

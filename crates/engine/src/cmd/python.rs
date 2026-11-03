@@ -1,10 +1,11 @@
-//! Python in cells: making and editing Python cells, and their return type. This build stores
+//! Python in cells: making and editing Python cells, their return type, and turning them back
+//! into normal cells. This build stores
 //! the code and the last result a file cached; it doesn't run Python, so a cell with new or
 //! changed code shows `#BLOCKED!`.
 
 use std::sync::Arc;
 
-use gridcraft_core::{CellRef, Value};
+use gridcraft_core::{CellError, CellRef, Value};
 use gridcraft_model::{Cell, PyCode, python::MAX_FORMULA_CHARS};
 use serde_json::{Value as Json, json};
 
@@ -30,6 +31,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{cell?, mode?: object|value} sets the return type of a Python cell (default: the active cell): `object` (a Python object) or `value` (an Excel value). Without `mode` it switches to the other one. The cell keeps its code; a cached result of the old return type goes, as with `python.set`, so the cell shows #BLOCKED! until it runs",
             has_doc,
             output
+        ),
+        cmd!(
+            "python.clear",
+            "Convert to Normal Cell",
+            [],
+            None,
+            "{cell?} turns a Python cell (default: the active cell) into a normal cell that keeps what it shows: the code goes, the cell keeps its value, and each cell its result spills over keeps its value as a plain value. A Python-only error (#BLOCKED!, #BUSY!, #PYTHON!, #TIMEOUT!) is no result and can't be an ordinary cell's value, so a cell showing one becomes empty. Formats stay, and what reads the cells is recalculated. One undo step brings the Python cell back with its code, return type and result",
+            has_doc,
+            clear
         ),
     ]
 }
@@ -77,6 +87,17 @@ fn set(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"cell": at.a1(), "value": crate::cmd::inspect::value_json(&shown)}))
 }
 
+/// A table header is the column's name, never a formula or code (as in Excel): the python.*
+/// commands leave a cell in a table's header row alone.
+fn refuse_table_header(s: &Session, sheet: usize, at: CellRef) -> Result<()> {
+    let header =
+        s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.tables.iter().any(|t| t.header_row && t.range.start.row == at.row && t.range.contains(at)));
+    if header {
+        return Err(EngineError::Other(format!("{} is a table header; Python cells can't go in a table's header row", at.a1())));
+    }
+    Ok(())
+}
+
 /// Writes `py` into the cell, which held `old`: what `python.set` and `python.output` share. The
 /// code must fit in one cell and a table header takes none; a locked cell on a protected sheet is
 /// refused by the edit itself.
@@ -87,12 +108,7 @@ fn store(s: &mut Session, cmd: &str, sheet: usize, at: CellRef, mut py: PyCode, 
             format!("the code doesn't fit in one cell: written as PY(…) it would be longer than Excel's {MAX_FORMULA_CHARS}-character formula limit"),
         ));
     }
-    // A table header is the column's name, never a formula or code (as in Excel).
-    let header =
-        s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.tables.iter().any(|t| t.header_row && t.range.start.row == at.row && t.range.contains(at)));
-    if header {
-        return Err(EngineError::Other(format!("{} is a table header; Python cells can't go in a table's header row", at.a1())));
-    }
+    refuse_table_header(s, sheet, at)?;
     // Unchanged code with the same return type keeps its result (and its value); new code, or a
     // new return type, has none until it runs: a result of the other type would show a value and
     // preview that don't belong to the cell.
@@ -134,4 +150,71 @@ fn output(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let shown = d.wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default();
     Ok(json!({"cell": at.a1(), "output": mode(object), "value": crate::cmd::inspect::value_json(&shown)}))
+}
+
+/// Why `python.clear` would refuse the cell `at` on `sheet`, or `None` when it would convert it:
+/// a cell without Python code, a table header, or a locked cell on a protected sheet (the cell, or
+/// a cell its result spills over). Front ends ask before offering Convert to Normal Cell. The
+/// message never holds the code.
+pub fn clear_refusal(s: &Session, sheet: usize, at: CellRef) -> Option<String> {
+    let Some(sh) = s.active().and_then(|d| d.wb.sheet(sheet)) else {
+        return Some("There is no such sheet.".into());
+    };
+    if sh.cell(at).is_none_or(|c| c.py.is_none()) {
+        return Some(format!("{} isn't a Python cell, so there is no Python code to remove", at.a1()));
+    }
+    if let Err(e) = refuse_table_header(s, sheet, at) {
+        return Some(e.to_string());
+    }
+    if let Some(m) = s.locked_cell_message(sheet, at) {
+        return Some(m);
+    }
+    let r = sh.spill_ranges.get(&at)?;
+    sh.spill.range(r.start..=r.end).filter(|(c, v)| **c != at && r.contains(**c) && !v.is_empty()).find_map(|(c, _)| s.locked_cell_message(sheet, *c))
+}
+
+/// Whether `v` is an error only a Python cell shows: not a result, and not something an ordinary
+/// cell can hold (a file keeps it as `#VALUE!`).
+fn python_only_error(v: &Value) -> bool {
+    matches!(v, Value::Error(CellError::Python | CellError::Busy | CellError::Timeout | CellError::Blocked))
+}
+
+/// `python.clear` (Convert to Normal Cell): the code goes and nothing shown is lost. The cell keeps
+/// its value and format, and the values its result spilled become plain values
+/// ([`gridcraft_model::Sheet::settle_spill`]), except a Python-only error, which leaves its cell
+/// empty (format kept); every cell that changed is touched, so what reads
+/// them is recalculated. A locked cell on a protected sheet (the cell, or a cell its result
+/// spills over) is refused by the edit itself, as with `python.set`. The result never holds the
+/// code, which sheet protection may hide.
+fn clear(s: &mut Session, p: &Json) -> Result<Json> {
+    let (sheet, at) = target_cell(s, p)?;
+    if let Some(why) = clear_refusal(s, sheet, at) {
+        return Err(EngineError::Other(why));
+    }
+    edit(s, |cx| {
+        let sh = cx.sheet_mut(sheet)?;
+        // The cells the result spills over (their values, not the whole range: a range a file
+        // claims can be far larger than what it holds).
+        let spilled: Vec<CellRef> = match sh.spill_ranges.get(&at) {
+            Some(r) => sh.spill.range(r.start..=r.end).map(|(c, _)| *c).filter(|c| *c != at && r.contains(*c)).collect(),
+            None => Vec::new(),
+        };
+        if let Some(cell) = sh.cells.get_mut(at) {
+            cell.py = None;
+        }
+        sh.settle_spill(at);
+        for c in std::iter::once(at).chain(spilled.iter().copied()) {
+            if let Some(cell) = sh.cells.get_mut(c).filter(|x| x.formula.is_none() && x.py.is_none() && python_only_error(&x.value)) {
+                cell.value = Value::Empty;
+            }
+        }
+        cx.touch(sheet, at);
+        for c in spilled {
+            cx.touch(sheet, c);
+        }
+        Ok(())
+    })?;
+    let d = s.doc()?;
+    let shown = d.wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default();
+    Ok(json!({"cell": at.a1(), "value": crate::cmd::inspect::value_json(&shown)}))
 }

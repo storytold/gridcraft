@@ -1,12 +1,13 @@
 //! Python cells on the sheet: the PY tag, the card (a cached result, or the reason a cell shows
-//! #BLOCKED!), its place on right-to-left sheets, and the return-type switch.
+//! #BLOCKED!), its place on right-to-left sheets, the return-type switch, and Convert to Normal
+//! Cell.
 
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, vec2};
-use egui_kittest::kittest::Queryable as _;
+use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
 use gridcraft_engine::model::PyOutput;
-use gridcraft_ui_egui::python_card::{self, Card, MAX_PREVIEW_CHARS, NOT_RUN};
+use gridcraft_ui_egui::python_card::{self, CONVERT, Card, MAX_PREVIEW_CHARS, NOT_RUN};
 use serde_json::json;
 
 use crate::common::Harness;
@@ -286,4 +287,58 @@ fn the_warning_button_says_python_did_not_run_only_for_blocked() {
     assert!(h.query_by_label("#PYTHON!").is_some(), "the menu names the error");
     assert!(h.query_by_label(NOT_RUN).is_none(), "the menu doesn't say the code didn't run");
     assert!(h.query_by_label("Show Card").is_some(), "the menu still opens the card");
+}
+
+fn is_python(h: &mut Harness, cell: &str) -> bool {
+    !h.state_mut().session.execute("cell.get", json!({"cell": cell})).unwrap()["python"].is_null()
+}
+
+fn value(h: &Harness, cell: &str) -> Value {
+    h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::parse(cell).unwrap())
+}
+
+#[test]
+fn the_cell_menu_converts_a_python_cell_to_a_normal_cell() {
+    let mut h = harness(session(false));
+    // On a spilled value the menu acts on its anchor, E2, whose list spills over E2:E4.
+    select(&mut h, "E3");
+    press(&mut h, Key::F10, Modifiers::SHIFT);
+    h.get_by_label(CONVERT).click();
+    h.run_steps(3);
+    assert!(h.state().grid.context_menu.is_none(), "the menu closes");
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    assert!(!is_python(&mut h, "E2"));
+    for (c, n) in [("E2", 1.0), ("E3", 2.0), ("E4", 3.0)] {
+        assert_eq!(value(&h, c), Value::Number(n), "{c} keeps what it showed");
+    }
+    // An ordinary cell's menu has no such item.
+    press(&mut h, Key::F10, Modifiers::SHIFT);
+    assert!(h.query_by_label(CONVERT).is_none());
+    press(&mut h, Key::Escape, Modifiers::NONE);
+    // A locked Python cell on a protected sheet has it, turned off.
+    h.state_mut().session.execute("review.protectSheet", json!({})).unwrap();
+    select(&mut h, "C4");
+    press(&mut h, Key::F10, Modifiers::SHIFT);
+    assert!(h.get_by_label(CONVERT).accesskit_node().is_disabled());
+    h.get_by_label(CONVERT).click();
+    h.run_steps(3);
+    assert!(is_python(&mut h, "C4"));
+}
+
+#[test]
+fn the_card_converts_its_python_cell_to_a_normal_cell() {
+    let mut h = harness(session(false));
+    select(&mut h, "C4");
+    press(&mut h, Key::F5, Modifiers::COMMAND | Modifiers::SHIFT);
+    assert_eq!(card(&h), Some(CellRef::parse("C4").unwrap()));
+    h.get_by_label(CONVERT).click();
+    h.run_steps(3);
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    assert!(!is_python(&mut h, "C4"));
+    assert_eq!(value(&h, "C4"), Value::text("DataFrame"), "the cell keeps what it showed");
+    assert_eq!(card(&h), None, "the card closes with its Python cell");
+    // One undo step brings the Python cell back, with its result.
+    h.state_mut().session.execute("edit.undo", json!({})).unwrap();
+    assert!(is_python(&mut h, "C4"));
+    assert_eq!(value(&h, "C4"), Value::text("DataFrame"));
 }

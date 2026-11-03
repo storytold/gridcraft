@@ -794,6 +794,7 @@ const CURATED: &[(&str, usize)] = &[
     ("edit.replace", 1),
     ("python.set", 3),
     ("python.output", 2),
+    ("python.clear", 1),
 ];
 
 fn generate(rng: &mut Rng, s: &Session) -> Step {
@@ -853,6 +854,14 @@ fn curated_params(rng: &mut Rng, wb: &Workbook, id: &str) -> Json {
                 p["mode"] = json!(if rng.chance(50) { "object" } else { "value" });
             }
             p
+        }
+        // Mostly the cells python.set writes to; sometimes the active cell.
+        "python.clear" => {
+            if rng.chance(20) {
+                json!({})
+            } else {
+                json!({"cell": near_cell(rng).a1()})
+            }
         }
         "range.fill" => json!({"range": near_range(rng).a1(), "input": input(rng, wb)}),
         "selection.set" => {

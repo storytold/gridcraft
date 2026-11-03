@@ -1,6 +1,7 @@
 //! Python cells on the sheet: the PY tag at the start of every Python cell, and the card that a
 //! click on the tag (or Ctrl+Shift+F5) opens, with the cell's cached result (its Python type and a
-//! preview) or the reason it shows `#BLOCKED!`.
+//! preview) or the reason it shows `#BLOCKED!`, and Convert to Normal Cell (`python.clear`) on the
+//! card and the cell menu.
 
 use egui::{Align2, FontId, Painter, Rect, pos2, vec2};
 use gridcraft_engine::core::{CellError, CellRef, Value};
@@ -24,6 +25,9 @@ pub const NOT_RUN: &str = "This version of GridCraft stores Python code but does
 /// The labels of a Python cell's return type, as Excel names them.
 pub const PYTHON_OBJECT: &str = "Python Object";
 pub const EXCEL_VALUE: &str = "Excel Value";
+
+/// The label of `python.clear`, on the card and the cell menu.
+pub const CONVERT: &str = "Convert to Normal Cell";
 
 /// The open card: the workbook, sheet and Python cell it belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,6 +166,8 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_op
     };
     let t = Tokens::get(ui.ctx());
     let lang = app.ui.language;
+    let refusal = gridcraft_engine::cmd::python::clear_refusal(&app.session, card.sheet, card.cell);
+    let mut convert = false;
     let (at, pivot) = if geo.rtl { (screen.right_bottom(), Align2::RIGHT_TOP) } else { (screen.left_bottom(), Align2::LEFT_TOP) };
     let mut close = false;
     let area = egui::Area::new(egui::Id::unique("python_card"))
@@ -194,9 +200,14 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_op
                     });
                 }
             }
+            ui.add_space(6.0);
+            convert = convert_button(ui, lang, refusal.as_deref(), true, vec2(0.0, 22.0));
         });
     });
-    if close || popup_dismissed(&resp.response, was_open) {
+    if convert {
+        app.run_or_alert("python.clear", json!({"sheet": card.sheet, "cell": card.cell.a1()}));
+    }
+    if convert || close || popup_dismissed(&resp.response, was_open) {
         app.grid.py_card = None;
     }
 }
@@ -206,8 +217,20 @@ fn popup_dismissed(response: &egui::Response, was_open: bool) -> bool {
     response.ctx.input(|i| !i.focused || i.key_pressed(egui::Key::Escape)) || (was_open && response.clicked_elsewhere())
 }
 
-/// The cell menu's return-type items on a Python cell: "Python Object" and "Excel Value", the
-/// current one marked. Returns whether one was picked (the menu then closes).
+/// Convert to Normal Cell: enabled where `python.clear` would convert the cell, else disabled
+/// with the reason (`refusal`) on hover. Returns whether it was clicked.
+fn convert_button(ui: &mut egui::Ui, lang: crate::i18n::Language, refusal: Option<&str>, framed: bool, min: egui::Vec2) -> bool {
+    let button = egui::Button::new(lang.tr(CONVERT)).frame_when_inactive(framed).min_size(min);
+    let r = ui.add_enabled(refusal.is_none(), button);
+    match refusal {
+        Some(why) => r.on_disabled_hover_text(lang.tr(why)).clicked(),
+        None => r.clicked(),
+    }
+}
+
+/// The cell menu's items on a Python cell: its return type ("Python Object" and "Excel Value",
+/// the current one marked) and Convert to Normal Cell. Returns whether one was picked (the menu
+/// then closes).
 pub fn menu_items(app: &mut SheetApp, ui: &mut egui::Ui) -> bool {
     let Some((_, sheet, cell, py)) = active_python_cell(app) else { return false };
     let lang = app.ui.language;
@@ -217,7 +240,13 @@ pub fn menu_items(app: &mut SheetApp, ui: &mut egui::Ui) -> bool {
             picked = Some(object);
         }
     }
+    let refusal = gridcraft_engine::cmd::python::clear_refusal(&app.session, sheet, cell);
+    let convert = convert_button(ui, lang, refusal.as_deref(), false, vec2(190.0, 20.0));
     ui.separator();
+    if convert {
+        app.run_or_alert("python.clear", json!({"sheet": sheet, "cell": cell.a1()}));
+        return true;
+    }
     let Some(object) = picked else { return false };
     if object != py.object {
         app.run_or_alert("python.output", json!({"sheet": sheet, "cell": cell.a1(), "mode": if object { "object" } else { "value" }}));

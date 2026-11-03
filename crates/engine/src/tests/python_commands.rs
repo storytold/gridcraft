@@ -243,3 +243,196 @@ fn a_recorded_switch_keeps_the_return_type_it_set() {
         assert_eq!(output_of(&mut s, "A1"), "value");
     }
 }
+
+fn is_python(s: &mut crate::Session, cell: &str) -> bool {
+    !s.execute("cell.get", json!({"cell": cell})).unwrap()["python"].is_null()
+}
+
+#[test]
+fn clear_keeps_what_the_cell_and_its_spill_show_as_plain_values() {
+    let mut s = cached_spill_with_a_reader();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=SUM(A1:A3)"})).unwrap();
+    s.execute("home.bold", json!({"range": "A1:A2"})).unwrap();
+    s.execute("selection.set", json!({"cell": "A1"})).unwrap();
+    let undo = undo_depth(&mut s);
+    // Empty params: the active cell.
+    let r = s.execute("python.clear", json!({})).unwrap();
+    assert_eq!(r["cell"], "A1");
+    assert_eq!(undo_depth(&mut s), undo.map(|n| n + 1), "one undo step");
+    assert!(!is_python(&mut s, "A1"), "the code goes");
+    for (c, n) in [("A1", 1.0), ("A2", 2.0), ("A3", 3.0)] {
+        assert_eq!(v(&s, c), Value::Number(n), "{c} keeps its value");
+        assert_eq!(s.execute("cell.get", json!({"cell": c})).unwrap()["input"], n.to_string(), "{c} holds it as a plain value");
+    }
+    let sh = s.doc().unwrap().wb.sheet(0).unwrap().clone();
+    assert!(sh.spill_ranges.is_empty() && sh.spill.is_empty(), "no spill is left");
+    let a2 = gridcraft_core::CellRef::parse("A2").unwrap();
+    assert!(s.doc().unwrap().wb.styles.get(sh.style_id(a2)).font.bold, "formats stay");
+    assert_eq!(v(&s, "B1"), Value::Number(6.0), "the reader keeps its value");
+    // The values are cells of their own now: editing one is no spill conflict, and the reader
+    // follows them.
+    s.execute("cell.set", json!({"cell": "A2", "input": "20"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(1.0), "no #SPILL!");
+    assert_eq!(v(&s, "B1"), Value::Number(24.0));
+}
+
+#[test]
+fn clear_recalculates_what_reads_the_cells() {
+    let mut s = cached_spill_with_a_reader();
+    s.execute("cell.set", json!({"cell": "B2", "input": "=ISFORMULA(A1)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B3", "input": "=ROWS(A1#)"})).unwrap();
+    assert_eq!(v(&s, "B3"), Value::Number(3.0));
+    s.execute("python.clear", json!({"cell": "A1"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Number(3.0), "a reader of a spilled cell keeps its value");
+    assert_eq!(v(&s, "B2"), Value::Bool(false), "a reader of the cell sees a plain value");
+    assert_eq!(v(&s, "B3"), Value::Error(CellError::Ref), "a spill reference finds no spill");
+}
+
+#[test]
+fn clear_is_undone_in_one_step_with_code_return_type_and_result() {
+    let mut s = cached_spill_with_a_reader();
+    s.execute("python.set", json!({"cell": "C1", "code": "x = 1", "output": "object"})).unwrap();
+    s.execute("python.clear", json!({"cell": "A1"})).unwrap();
+    s.execute("python.clear", json!({"cell": "C1"})).unwrap();
+    assert!(!is_python(&mut s, "C1"));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(output_of(&mut s, "C1"), "object");
+    s.execute("edit.undo", json!({})).unwrap();
+    let got = s.execute("cell.get", json!({"cell": "A1"})).unwrap();
+    assert_eq!(got["python"]["code"], "[1, 2, 3]");
+    assert_eq!(got["python"]["output"], "value");
+    let sh = s.doc().unwrap().wb.sheet(0).unwrap().clone();
+    let a1 = gridcraft_core::CellRef::new(0, 0);
+    assert!(sh.cell(a1).and_then(|c| c.py.as_ref()).is_some_and(|py| py.output.is_some()), "the cached result is back");
+    assert_eq!(sh.spill_ranges.get(&a1).map(|r| r.a1()), Some("A1:A3".to_string()), "and spills again");
+    assert_eq!(v(&s, "A3"), Value::Number(3.0));
+    assert!(sh.cell(gridcraft_core::CellRef::new(2, 0)).is_none_or(|c| !c.has_content()), "A3 holds nothing of its own");
+    assert_eq!(v(&s, "B1"), Value::Number(3.0));
+    s.execute("edit.redo", json!({})).unwrap();
+    assert!(!is_python(&mut s, "A1"));
+    assert_eq!(v(&s, "A3"), Value::Number(3.0));
+}
+
+#[test]
+fn clear_refuses_cells_without_python_headers_and_locked_cells() {
+    let mut s = s();
+    // Empty params: the active cell, which holds no Python code.
+    let e = s.execute("python.clear", json!({})).unwrap_err();
+    assert!(e.to_string().contains("isn't a Python cell"), "{e}");
+    s.execute("cell.set", json!({"cell": "B1", "input": "=1+1"})).unwrap();
+    assert!(s.execute("python.clear", json!({"cell": "B1"})).is_err());
+    assert_eq!(s.execute("cell.get", json!({"cell": "B1"})).unwrap()["input"], "=1+1");
+    assert!(s.execute("python.clear", json!({"cell": "nowhere"})).is_err());
+    // A Python cell in a table's header row (as a file could hold one) is left alone, as
+    // python.set and python.output leave it.
+    s.execute("range.setValues", json!({"range": "C1", "values": [["Name", "Score"], ["a", 1]]})).unwrap();
+    s.execute("insert.table", json!({"range": "C1:D2", "headers": true})).unwrap();
+    {
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        let cell = wb.sheet_mut(0).unwrap().cells.get_mut(gridcraft_core::CellRef::parse("D1").unwrap()).unwrap();
+        cell.py = Some(std::sync::Arc::new(gridcraft_model::PyCode::new("'Score'")));
+    }
+    let e = s.execute("python.clear", json!({"cell": "D1"})).unwrap_err();
+    assert!(e.to_string().contains("table header"), "{e}");
+    assert!(is_python(&mut s, "D1"));
+}
+
+#[test]
+fn clear_on_a_protected_sheet_needs_unlocked_cells_and_never_returns_hidden_code() {
+    let mut s = cached_spill_with_a_reader();
+    set(&mut s, "F1", "1");
+    set(&mut s, "G1", "'secret code'");
+    // G1 is unlocked and its code hidden; A1 is unlocked but its result spills over locked cells.
+    s.execute("home.formatCells", json!({"range": "G1", "style": {"protection": {"locked": false, "hidden": true}}})).unwrap();
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"protection": {"locked": false}}})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let undo = undo_depth(&mut s);
+    let e = s.execute("python.clear", json!({"cell": "F1"})).unwrap_err();
+    assert!(e.to_string().contains("protected"), "{e}");
+    assert!(is_python(&mut s, "F1"));
+    let e = s.execute("python.clear", json!({"cell": "A1"})).unwrap_err();
+    assert!(e.to_string().contains("protected"), "a spill over locked cells: {e}");
+    assert!(is_python(&mut s, "A1"));
+    assert_eq!(v(&s, "A3"), Value::Number(3.0));
+    assert_eq!(undo_depth(&mut s), undo, "a refusal changes nothing");
+    let r = s.execute("python.clear", json!({"cell": "G1"})).unwrap();
+    assert!(!r.to_string().contains("secret"), "{r}");
+    assert!(!is_python(&mut s, "G1"));
+}
+
+/// Sets what the Python cell at `cell` shows, as a file would have cached it: `value`, the cell's
+/// value, and `output`, its kept result (none for an error the code raised).
+fn cache_shown(s: &mut crate::Session, cell: &str, value: Value, output: Option<Value>) {
+    let at = gridcraft_core::CellRef::parse(cell).unwrap();
+    let d = s.doc_mut().unwrap();
+    let wb = std::sync::Arc::make_mut(&mut d.wb);
+    let c = wb.sheet_mut(0).unwrap().cells.get_mut(at).unwrap();
+    c.value = value;
+    std::sync::Arc::make_mut(c.py.as_mut().unwrap()).output =
+        output.map(|value| gridcraft_model::PyOutput { value, type_name: "object".into(), preview: String::new(), convertible: true });
+}
+
+fn bold(s: &mut crate::Session, cell: &str) -> bool {
+    let sh = s.doc().unwrap().wb.sheet(0).unwrap().clone();
+    s.doc().unwrap().wb.styles.get(sh.style_id(gridcraft_core::CellRef::parse(cell).unwrap())).font.bold
+}
+
+#[test]
+fn clear_leaves_a_never_run_cell_empty_with_its_format() {
+    let mut s = s();
+    set(&mut s, "B1", "x = 1");
+    s.execute("home.bold", json!({"range": "B1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C1", "input": "=ISBLANK(B1)"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Error(CellError::Blocked));
+    let r = s.execute("python.clear", json!({"cell": "B1"})).unwrap();
+    assert!(r["value"].is_null() || r["value"] == "", "{r}");
+    assert_eq!(v(&s, "B1"), Value::Empty, "#BLOCKED! is no result: the cell is empty");
+    assert!(!is_python(&mut s, "B1"));
+    assert!(bold(&mut s, "B1"), "the format stays");
+    assert_eq!(v(&s, "C1"), Value::Bool(true), "a reader sees an empty cell");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Error(CellError::Blocked));
+    assert!(is_python(&mut s, "B1"));
+}
+
+#[test]
+fn clear_empties_a_cached_python_error_and_keeps_an_ordinary_one() {
+    let mut s = s();
+    set(&mut s, "A1", "raise ValueError()");
+    cache_shown(&mut s, "A1", Value::Error(CellError::Python), None);
+    set(&mut s, "A2", "1 / 0 in Excel terms");
+    cache_shown(&mut s, "A2", Value::Error(CellError::Div0), Some(Value::Error(CellError::Div0)));
+    for c in ["A1", "A2"] {
+        s.execute("python.clear", json!({"cell": c})).unwrap();
+        assert!(!is_python(&mut s, c));
+    }
+    assert_eq!(v(&s, "A1"), Value::Empty, "#PYTHON! is no value an ordinary cell holds");
+    assert_eq!(v(&s, "A2"), Value::Error(CellError::Div0), "an ordinary error the result cached stays");
+    assert_eq!(s.execute("cell.get", json!({"cell": "A2"})).unwrap()["input"], "#DIV/0!");
+}
+
+#[test]
+fn clear_keeps_a_mixed_spill_and_empties_its_python_errors() {
+    let mut s = s();
+    set(&mut s, "A1", "mixed");
+    let mixed = vec![
+        Value::Number(1.0),
+        Value::text("a"),
+        Value::Bool(true),
+        Value::Error(CellError::Div0),
+        Value::Error(CellError::Timeout),
+        Value::Number(6.0),
+    ];
+    let arr = gridcraft_core::Array::new(6, 1, mixed.clone()).map(Value::from).unwrap();
+    cache_shown(&mut s, "A1", Value::Number(1.0), Some(arr));
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    assert_eq!(v(&s, "A5"), Value::Error(CellError::Timeout));
+    s.execute("python.clear", json!({"cell": "A1"})).unwrap();
+    for (i, want) in mixed.iter().enumerate() {
+        let c = format!("A{}", i + 1);
+        let want = if matches!(want, Value::Error(CellError::Timeout)) { Value::Empty } else { want.clone() };
+        assert_eq!(v(&s, &c), want, "{c}");
+    }
+    assert!(s.doc().unwrap().wb.sheet(0).unwrap().spill_ranges.is_empty());
+}
