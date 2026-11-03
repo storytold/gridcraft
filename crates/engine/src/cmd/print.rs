@@ -32,8 +32,26 @@ use header_footer::draw_header_footer;
 pub use header_footer::{
     HF_FIELDS, HfContext, HfSection, codes_to_fields, expand_header_footer, fields_to_codes, hf_date_time, join_header_footer, split_header_footer,
 };
-/// Decoded pictures (bytes, width, height) keyed by (sheet, picture); `None` = undecodable.
-type PicCache = std::collections::HashMap<(usize, usize), Option<(Vec<u8>, u32, u32)>>;
+type DecodedPicture = (Vec<u8>, u32, u32);
+
+/// What one PDF render shares across the pages an object spans.
+#[derive(Default)]
+struct PicCache {
+    /// Decoded pictures (bytes, width, height) keyed by (sheet, picture); `None` = undecodable.
+    decoded: std::collections::HashMap<(usize, usize), Option<DecodedPicture>>,
+    /// Laid-out charts keyed by (sheet, chart), rendered once however many pages they touch.
+    charts: std::collections::HashMap<(usize, usize), Vec<gridcraft_chart::Prim>>,
+    /// Bytes of picture pixels embedded so far, and chart primitives emitted so far. Each page an
+    /// object touches gets its own copy in the PDF, so a workbook-controlled anchor over thousands
+    /// of pages would multiply them without bound.
+    image_bytes: usize,
+    chart_prims: usize,
+}
+
+/// Most picture pixel bytes (RGBA, before PDF packing) one render embeds across all pages.
+const MAX_EMBEDDED_IMAGE_BYTES: usize = 512 * 1024 * 1024;
+/// Most chart primitives one render draws across all pages.
+const MAX_CHART_PRIMS: usize = 4_000_000;
 
 #[cfg(test)]
 use layout::bands;
@@ -102,7 +120,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
     let mut printed_blocks = Vec::new();
     // Decoded pictures are reused across the pages their anchor covers: a floating picture
     // spanning 40 pages was decoded (and pushed into the PDF) 40 times (#2389).
-    let mut pics = PicCache::new();
+    let mut pics = PicCache::default();
     for lay in layouts {
         let Some(sh) = wb.sheet(lay.sheet) else { continue };
         let mut cf = if sh.cond_formats.is_empty() { None } else { Some(crate::cf::CfCache::new()) };
