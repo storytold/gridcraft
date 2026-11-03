@@ -182,7 +182,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
 }
 
 /// What a tall bar leaves below it: the status bar and sheet tabs, and the active sheet's column
-/// headings and two rows at its zoom (in Page Layout view also the ruler, the page gap and top
+/// outline band, headings and two rows at its zoom (in Page Layout view also the ruler, the page gap and top
 /// margin, at the print scale), so the grid never disappears in a short window.
 fn keep_below(app: &SheetApp) -> f32 {
     let Some(d) = app.session.active() else { return BOTTOM_BARS };
@@ -196,9 +196,9 @@ fn keep_below(app: &SheetApp) -> f32 {
         let scale = pages.map_or(1.0, |g| g.scale.clamp(0.1, 4.0));
         let top = pages.map_or(0.0, |g| (g.gap + g.margins[2]) as f32);
         let z = (sh.zoom as f32 / 100.0).clamp(0.1, 4.0) * crate::grid::DISPLAY_SCALE * scale;
-        ruler + crate::grid::header_height(sh) + top * z + 2.0 * sh.default_row_height * z
+        ruler + crate::grid::top_of_cells(sh) + top * z + 2.0 * sh.default_row_height * z
     } else {
-        crate::grid::header_height(sh) + crate::grid::default_rows_height(sh, 2.0)
+        crate::grid::top_of_cells(sh) + crate::grid::default_rows_height(sh, 2.0)
     };
     BOTTOM_BARS + sheet
 }
