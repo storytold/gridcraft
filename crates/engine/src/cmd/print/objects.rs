@@ -1,6 +1,6 @@
 use super::draw::{Block, PdfMeasure, Xf, draw_prims, rgb_of};
 use super::text::wrap_lines;
-use super::*;
+use super::{Anchor, Font, Page, RangeRef, Rect, ShapeKind, Sheet, Value, Workbook};
 
 /// Cell pictures fit the current cell (or merged-cell) rectangle without changing aspect ratio.
 pub(super) fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32, f32), k: f32) {
@@ -25,10 +25,30 @@ pub(super) fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32
         image.thumbnail(((w / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32, ((h / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32).to_rgba8();
     let fit = (w / iw as f32).min(h / ih as f32);
     let (pw, ph) = (iw as f32 * fit, ih as f32 * fit);
-    pg.image_rgba(x + pad + (w - pw) / 2.0, y + pad + (h - ph) / 2.0, pw, ph, image.as_raw(), image.width(), image.height());
+    pg.image_rgba(Rect::new(x + pad + (w - pw) / 2.0, y + pad + (h - ph) / 2.0, pw, ph), image.as_raw(), [image.width(), image.height()]);
 }
 
 /// Sheet pixel rectangle of an anchor.
+/// Most source lines printed for an equation that has no layout.
+pub(super) const MAX_FALLBACK_LINES: usize = 500;
+
+/// The lines of `text` printed in place of an equation that has no layout: those of its first
+/// `MAX_SOURCE_BYTES` (a longer source never lays out, and a file can carry megabytes) that fit a
+/// frame `h` points tall at `line_h` points per line (at least the first), and never more than
+/// [`MAX_FALLBACK_LINES`]. A single `pg.text` call would print every newline as `?`.
+pub(super) fn fallback_lines(text: &str, h: f32, line_h: f32) -> impl Iterator<Item = &str> {
+    let text = crate::cmd::equation::source_excerpt(text);
+    let fit = h / line_h;
+    let n = if fit >= MAX_FALLBACK_LINES as f32 {
+        MAX_FALLBACK_LINES
+    } else if fit >= 1.0 {
+        fit as usize
+    } else {
+        1
+    };
+    text.lines().take(n)
+}
+
 fn anchor_rect(sh: &Sheet, a: &Anchor) -> (f64, f64, f64, f64) {
     (sh.col_left(a.cell.col) + a.dx as f64, sh.row_top(a.cell.row) + a.dy as f64, a.width.max(0.0) as f64, a.height.max(0.0) as f64)
 }
@@ -49,14 +69,7 @@ fn decode_image(data: &[u8], max_w: u32, max_h: u32) -> Option<(Vec<u8>, u32, u3
 /// Draws charts, pictures, shapes and sparklines overlapping the body block of a page.
 /// `pics` memoizes decoded pictures for the whole render (one page at a time draws each
 /// picture again, but the decode happens once).
-pub(super) fn draw_objects(
-    pg: &mut Page,
-    wb: &Workbook,
-    si: usize,
-    sh: &Sheet,
-    b: &Block,
-    pics: &mut std::collections::HashMap<(usize, usize), Option<(Vec<u8>, u32, u32)>>,
-) {
+pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block, pics: &mut super::PicCache) {
     let block = b.range();
     let (sx0, sy0) = (sh.col_left(block.start.col), sh.row_top(block.start.row));
     let (sx1, sy1) = (sh.col_left(block.end.col.saturating_add(1)), sh.row_top(block.end.row.saturating_add(1)));
@@ -77,7 +90,7 @@ pub(super) fn draw_objects(
         let (mw, mh) = (((w / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32, ((h / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32);
         let decoded = pics.entry((si, imi)).or_insert_with(|| decode_image(&im.data, mw, mh));
         if let Some((px, pw, ph)) = decoded.as_ref() {
-            pg.image_rgba(x, y, w, h, px, *pw, *ph);
+            pg.image_rgba(Rect::new(x, y, w, h), px, [*pw, *ph]);
         }
     }
     for shp in &sh.shapes {
@@ -86,6 +99,25 @@ pub(super) fn draw_objects(
             continue;
         }
         let (x, y, w, h) = place(r);
+        if shp.kind == ShapeKind::Equation {
+            let ink = rgb_of(shp.line, wb).unwrap_or([0, 0, 0]);
+            match shp.math.get(&shp.text) {
+                Some(Ok(list)) => crate::cmd::equation::draw_pdf(pg, list, (x, y, w, h), crate::cmd::equation::PADDING * b.k, ink),
+                _ => {
+                    // No layout (the source does not parse, or the file was past the layout
+                    // budget): the source, one text run per line, as many as the frame holds.
+                    let line_h = 12.0 * b.scale;
+                    // A long line stays inside the frame; this clip nests in the block's.
+                    pg.save();
+                    pg.clip_rect(x, y, w, h);
+                    for (i, line) in fallback_lines(&shp.text, h, line_h).enumerate() {
+                        pg.text(x + 2.0 * b.k, y + line_h * (i + 1) as f32, 10.0 * b.scale, Font::Courier, ink, line);
+                    }
+                    pg.restore();
+                }
+            }
+            continue;
+        }
         draw_shape(pg, wb, shp, b, (x, y, w, h));
     }
     for ch in &sh.charts {
