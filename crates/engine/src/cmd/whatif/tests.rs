@@ -297,3 +297,14 @@ fn consolidate_by_position_and_label() {
     assert!(s.execute("data.consolidate", json!({"sources": []})).is_err());
     assert!(s.execute("data.consolidate", json!({"sources": ["A1"], "function": "median"})).is_err());
 }
+
+#[test]
+fn scenario_summary_refuses_a_matrix_over_its_cell_limit() {
+    let mut s = s();
+    // 200 scenarios of 32 disjoint cells: 6,400 changing cells x 200 scenarios = 1.28 million cells.
+    for i in 0..200 {
+        let (a, b) = (i * 32 + 1, i * 32 + 32);
+        s.execute("data.scenarioAdd", json!({"name": format!("S{i}"), "changing": format!("A{a}:A{b}")})).unwrap();
+    }
+    assert!(s.execute("data.scenarioSummary", json!({})).is_err());
+}

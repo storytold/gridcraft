@@ -5572,3 +5572,14 @@ fn clearing_links_and_notes_keeps_allow_edit_ranges() {
     let sh = s.doc().unwrap().wb.active().unwrap().clone();
     assert!(sh.hyperlinks.is_empty() && sh.comments.is_empty());
 }
+
+#[test]
+fn history_charges_a_changed_sheets_comment_text() {
+    let mut s = s();
+    s.execute("review.newNote", json!({"cell": "A1", "text": "n".repeat(30_000), "author": "Example"})).unwrap();
+    let older = (*s.doc().unwrap().wb).clone();
+    s.execute("cell.set", json!({"cell": "B2", "input": "x"})).unwrap();
+    let newer = (*s.doc().unwrap().wb).clone();
+    // The older snapshot owns the comment text now that the sheet changed under it.
+    assert!(crate::history_retained_bytes(&older, &newer) >= 30_000);
+}
