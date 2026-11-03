@@ -108,6 +108,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Testo in\ncolonne",
         "Link" => "Collegamento",
         "Symbol" => "Simbolo",
+        "Equation" => "Equazione",
+        "Insert New Equation..." => "Inserisci nuova equazione",
         "Sparklines" => "Sparkline",
         "Checkbox" => "Casella di controllo",
         "Insert checkboxes in the selected cells" => "Inserisci caselle di controllo nelle celle selezionate",
@@ -152,6 +154,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Error Checking" => "Controllo errori",
         "Trace Error" => "Individua errore",
         "Circular References" => "Riferimenti circolari",
+        "Python Mode" => "Modalità Python",
         "Evaluate Formula" => "Valuta formula",
         "Watch Window" => "Finestra controlli",
         "Calculation\nOptions" => "Opzioni di\ncalcolo",
@@ -994,6 +997,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recording" => "Registrazione",
         "New Macro" => "Nuova macro",
         "Show" => "Mostra",
+        "Collapse dialog" => "Comprimi finestra di dialogo",
+        "Expand dialog" => "Espandi finestra di dialogo",
         _ => return None,
     })
 }
