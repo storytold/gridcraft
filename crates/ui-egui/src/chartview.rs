@@ -316,11 +316,12 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
                 p.add(PathShape::convex_polygon(vec![pos2(r.center().x, r.top()), r.right_bottom(), r.left_bottom()], fill, Stroke::new(1.0, line)));
             }
             ShapeKind::Ink => {
-                let w = gridcraft_engine::cmd::draw::ink_width(sp) * geo.z;
+                let pt = gridcraft_engine::cmd::draw::ink_width(sp);
+                let w = pt * geo.z;
                 let pts: Vec<Pos2> =
                     gridcraft_engine::cmd::draw::ink_points(sp).iter().map(|q| pos2(r.left() + q[0] * geo.z, r.top() + q[1] * geo.z)).collect();
                 if pts.len() >= 2 {
-                    let col = if w > 8.0 { line.gamma_multiply(0.45) } else { line };
+                    let col = ink_color(line, pt);
                     p.add(PathShape::line(pts, PathStroke::new(w, col)));
                 }
                 label = false;
@@ -555,4 +556,10 @@ pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Re
         }
     }
     None
+}
+
+/// The colour ink is painted in: a highlighter (a stroke over 8 pt wide) is translucent, by its
+/// width in points, so the live pen stroke and the committed ink agree at every zoom.
+pub(crate) fn ink_color(line: Color32, width_pt: f32) -> Color32 {
+    if width_pt > 8.0 { line.gamma_multiply(0.45) } else { line }
 }
