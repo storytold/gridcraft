@@ -130,7 +130,7 @@ fn eval_list_in(wb: &Workbook, sheet: usize, formula: &str, depth: u32, hide: bo
     }
 }
 
-fn filter_by_visibility(wb: &Workbook, sh: usize, r: &RangeRef, values: Vec<Value>) -> Vec<Value> {
+fn filter_by_visibility<T>(wb: &Workbook, sh: usize, r: &RangeRef, values: Vec<T>) -> Vec<T> {
     values.into_iter().enumerate().filter(|(i, _)| is_visible(wb, sh, r, *i)).map(|(_, v)| v).collect()
 }
 
