@@ -866,7 +866,7 @@ fn column_autocomplete_skips_ambiguous_prefixes_and_numbers() {
 #[test]
 fn column_autocomplete_folds_case_beyond_ascii() {
     // "ẞ" (U+1E9E) has no glyph in egui's bundled faces; without craft-fonts the strict harness would panic drawing it.
-    let fonts = gridcraft_ui_egui::theme::craft_fonts_cover("ẞ");
+    let fonts = gridcraft_ui_egui::theme::chinese_font_loaded() && gridcraft_ui_egui::theme::craft_fonts_cover("ẞ");
     if !fonts {
         eprintln!("skipping the \"ẞ\" case: no embedded craft face has the glyph");
     }
