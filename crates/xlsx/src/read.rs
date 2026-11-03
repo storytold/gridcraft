@@ -158,7 +158,13 @@ fn read_workbook_styles(cx: &mut Ctx<'_>, wb: &mut Workbook, wb_rels: &[Rel]) ->
     }
     if let Some(r) = find_rel(wb_rels, "styles").cloned() {
         if let Some(x) = cx.optional_xml(&r.target)? {
-            let StylesIn { xfs, dxfs, palette, named, num_fmts } = read_styles(&x, &checkboxes, &wb.theme.minor_font);
+            let StylesIn { xfs, dxfs, palette, named, num_fmts, dropped_num_fmts } = read_styles(&x, &checkboxes, &wb.theme.minor_font);
+            if dropped_num_fmts > 0 {
+                cx.warn(format!(
+                    "{dropped_num_fmts} number formats longer than {} characters were dropped; their cells show General",
+                    crate::styles::MAX_NUM_FMT_CHARS
+                ));
+            }
             cx.num_fmts = num_fmts;
             // Cell format 0 is the Normal cell format: everything on it (font, number format,
             // fill, borders, alignment, protection) is what a cell without its own format shows

@@ -199,6 +199,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
 
     let mut fit_to_page = false;
     let mut link_budget = LinkBudget::default();
+    let mut cf_kept_cells = 0u64;
     let mut column_assignments_left = MAX_COLUMN_ASSIGNMENTS;
     cx.cf_ext_ids.clear();
     for e in &root.children {
@@ -225,7 +226,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                     }
                 }
             }
-            "conditionalFormatting" => read_cf(cx, e, &mut sheet),
+            "conditionalFormatting" => read_cf(cx, e, &mut sheet, &mut cf_kept_cells),
             "dataValidations" => {
                 for v in e.kids("dataValidation") {
                     if let Some(v) = read_validation(v) {

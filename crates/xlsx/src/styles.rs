@@ -1,7 +1,7 @@
 //! `styles.xml`: reading cell formats and differential formats into model styles, and writing
 //! the workbook's style table.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 use gridcraft_model::style::{DxfStated, Protection};
@@ -16,6 +16,14 @@ use crate::xml::{El, esc_attr, num};
 
 /// Longest font name kept, in characters (Excel's own limit is 31).
 pub const MAX_FONT_NAME_CHARS: usize = 255;
+/// Longest number format code kept, in characters (Excel's own limit). A longer code is dropped,
+/// so the cells that use it show General.
+pub const MAX_NUM_FMT_CHARS: usize = 255;
+
+/// Whether a number format code fits [`MAX_NUM_FMT_CHARS`].
+fn num_fmt_fits(code: &str) -> bool {
+    code.chars().nth(MAX_NUM_FMT_CHARS).is_none()
+}
 
 /// Styles read from a file.
 #[derive(Debug, Default)]
@@ -29,6 +37,8 @@ pub struct StylesIn {
     pub named: Vec<(String, Style)>,
     /// Custom number formats (`numFmts`) by id.
     pub num_fmts: HashMap<u32, String>,
+    /// Number format codes dropped for being longer than [`MAX_NUM_FMT_CHARS`].
+    pub dropped_num_fmts: usize,
 }
 
 pub fn read_color(e: &El, palette: &[u32]) -> Color {
@@ -338,14 +348,32 @@ pub fn read_styles(root: &El, checkboxes: &[bool], minor_font: &str) -> StylesIn
         }
     }
     let mut fmts = HashMap::new();
+    let mut dropped_num_fmts = 0usize;
     if let Some(n) = root.child("numFmts") {
         for f in n.kids("numFmt") {
             if let (Some(id), Some(code)) = (f.attr_u32("numFmtId"), f.attr("formatCode")) {
-                fmts.insert(id, code.to_string());
+                if num_fmt_fits(code) {
+                    fmts.insert(id, code.to_string());
+                } else {
+                    dropped_num_fmts = dropped_num_fmts.saturating_add(1);
+                }
             }
         }
     }
-    let shared_fmts: HashMap<u32, NumFmt> = fmts.iter().map(|(&id, code)| (id, NumFmt::new(code))).collect();
+    // One shared `NumFmt` per custom id a cell format or differential format refers to (`NumFmt`
+    // is an `Arc`); declared but unused codes get no second copy.
+    let mut used: HashSet<u32> = HashSet::new();
+    for list in ["cellXfs", "cellStyleXfs"] {
+        if let Some(x) = root.child(list) {
+            used.extend(x.kids("xf").map(|xf| xf.attr_u32("numFmtId").unwrap_or(0)));
+        }
+    }
+    if let Some(d) = root.child("dxfs") {
+        used.extend(
+            d.kids("dxf").filter_map(|x| x.child("numFmt")).filter(|n| n.attr("formatCode").is_none()).filter_map(|n| n.attr_u32("numFmtId")),
+        );
+    }
+    let shared_fmts: HashMap<u32, NumFmt> = fmts.iter().filter(|(id, _)| used.contains(id)).map(|(&id, code)| (id, NumFmt::new(code))).collect();
     // The scheme link only means something on a font in the body face; elsewhere it stays as a new font has it.
     let body_font = |e: &El| {
         let mut f = read_font(e, &palette);
@@ -373,11 +401,18 @@ pub fn read_styles(root: &El, checkboxes: &[bool], minor_font: &str) -> StylesIn
             }
         }
     }
-    let dxfs = root.child("dxfs").map(|d| d.kids("dxf").map(|x| read_dxf(x, &palette, &shared_fmts)).collect()).unwrap_or_default();
-    StylesIn { xfs, dxfs, palette, named, num_fmts: fmts }
+    let dxfs: Vec<Style> = root.child("dxfs").map(|d| d.kids("dxf").map(|x| read_dxf(x, &palette, &shared_fmts)).collect()).unwrap_or_default();
+    // `read_dxf` skips an inline code that doesn't fit, as the custom formats above.
+    let long_inline = root
+        .child("dxfs")
+        .map(|d| d.kids("dxf").filter_map(|x| x.child("numFmt")?.attr("formatCode")).filter(|c| !num_fmt_fits(c)).count())
+        .unwrap_or(0);
+    dropped_num_fmts = dropped_num_fmts.saturating_add(long_inline);
+    StylesIn { xfs, dxfs, palette, named, num_fmts: fmts, dropped_num_fmts }
 }
 
-/// One differential format (`dxf`): the style it sets over a cell's own.
+/// One differential format (`dxf`): the style it sets over a cell's own. An inline number format
+/// code longer than [`MAX_NUM_FMT_CHARS`] is dropped (the format keeps General).
 fn read_dxf(x: &El, palette: &[u32], fmts: &HashMap<u32, NumFmt>) -> Style {
     let mut s = Style::default();
     if let Some(e) = x.child("font") {
@@ -401,7 +436,9 @@ fn read_dxf(x: &El, palette: &[u32], fmts: &HashMap<u32, NumFmt>) -> Style {
     }
     if let Some(n) = x.child("numFmt") {
         if let Some(code) = n.attr("formatCode") {
-            s.num_fmt = NumFmt::new(code);
+            if num_fmt_fits(code) {
+                s.num_fmt = NumFmt::new(code);
+            }
         } else if let Some(id) = n.attr_u32("numFmtId") {
             s.num_fmt = num_fmt_code(id, fmts);
         }
