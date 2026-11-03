@@ -1194,6 +1194,30 @@ mod tests {
         assert_eq!(opened.borrow().len(), 1);
     }
 
+    /// #2181: an OK that arrives with synthetic control-channel input (`ui.key` Enter, `ui.click`
+    /// on OK) opens nothing and keeps the prompt open; the same OK from the user opens the link.
+    #[test]
+    fn synthetic_input_cannot_confirm_open_hyperlink() {
+        use show::{SYNTHETIC_LINK_CONFIRM, confirm_open_link};
+        use std::{cell::RefCell, rc::Rc};
+        let opened = Rc::new(RefCell::new(Vec::<String>::new()));
+        let sink = opened.clone();
+        let services = crate::Services { open_url: Some(Box::new(move |u: &str| sink.borrow_mut().push(u.to_string()))), ..Default::default() };
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, services);
+        let d = Dialog::open(&mut app, "openLink", json!({"url": "https://example.org/a"})).unwrap();
+
+        app.synthetic_pending = true;
+        assert!(!confirm_open_link(&mut app, &d), "the prompt stays open");
+        assert!(opened.borrow().is_empty(), "synthetic input opens nothing");
+        assert_eq!(app.message.as_ref().map(|m| m.1.as_str()), Some(SYNTHETIC_LINK_CONFIRM));
+
+        app.synthetic_pending = false;
+        app.message = None;
+        assert!(confirm_open_link(&mut app, &d), "the user's OK closes the prompt");
+        assert_eq!(*opened.borrow(), vec!["https://example.org/a".to_string()]);
+    }
 
     #[test]
     fn data_validation_without_a_rule_opens_on_a_blank_list() {
