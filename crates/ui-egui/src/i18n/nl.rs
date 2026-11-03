@@ -555,6 +555,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "Yes" => "Ja",
         "No" => "Nee",
+        "Collapse dialog" => "Dialoogvenster samenvouwen",
+        "Expand dialog" => "Dialoogvenster uitvouwen",
         _ => return None,
     })
 }

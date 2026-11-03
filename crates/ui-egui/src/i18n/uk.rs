@@ -1007,6 +1007,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "Yes" => "Так",
         "No" => "Ні",
+        "Collapse dialog" => "Згорнути діалогове вікно",
+        "Expand dialog" => "Розгорнути діалогове вікно",
         _ => return None,
     })
 }

@@ -1017,6 +1017,8 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ),
     ("Yes", "はい"),
     ("No", "いいえ"),
+    ("Collapse dialog", "ダイアログを折りたたむ"),
+    ("Expand dialog", "ダイアログを展開する"),
 ];
 
 /// Labels of the ribbon menus, pop-ups and palettes that the reference catalog does not cover (the

@@ -444,6 +444,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "Yes" => "Evet",
         "No" => "Hayır",
+        "Collapse dialog" => "İletişim kutusunu daralt",
+        "Expand dialog" => "İletişim kutusunu genişlet",
         _ => return None,
     })
 }

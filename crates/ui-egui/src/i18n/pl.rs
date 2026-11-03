@@ -1003,6 +1003,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "Yes" => "Tak",
         "No" => "Nie",
+        "Collapse dialog" => "Zwiń okno dialogowe",
+        "Expand dialog" => "Rozwiń okno dialogowe",
         _ => return None,
     })
 }

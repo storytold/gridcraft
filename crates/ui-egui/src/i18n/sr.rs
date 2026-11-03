@@ -475,6 +475,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "Yes" => "Da",
         "No" => "Ne",
+        "Collapse dialog" => "Skupi dijalog",
+        "Expand dialog" => "Proširi dijalog",
         _ => return None,
     })
 }

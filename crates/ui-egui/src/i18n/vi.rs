@@ -447,6 +447,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "Yes" => "Có",
         "No" => "Không",
+        "Collapse dialog" => "Thu gọn hộp thoại",
+        "Expand dialog" => "Mở rộng hộp thoại",
         _ => return None,
     })
 }

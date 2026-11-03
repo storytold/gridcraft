@@ -1009,6 +1009,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "Yes" => "Ναι",
         "No" => "Όχι",
+        "Collapse dialog" => "Σύμπτυξη παραθύρου διαλόγου",
+        "Expand dialog" => "Ανάπτυξη παραθύρου διαλόγου",
         _ => return None,
     })
 }
