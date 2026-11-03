@@ -5298,6 +5298,42 @@ fn move_columns_checks_the_protection_of_the_named_sheet() {
 }
 
 #[test]
+fn move_columns_checks_the_protection_of_a_sheet_named_by_its_range() {
+    // A `Sheet!` range or cell picks the sheet the move modifies; the protection checks must
+    // authorize that sheet too, not the active one.
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "P"})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2, 3, 4]]})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    for key in ["range", "cell"] {
+        let err = s.execute("sheet.moveColumns", json!({key: "P!A1", "cols": "B:C", "before": 4})).expect_err("moving columns on a protected sheet");
+        assert!(err.to_string().contains("protected"), "{err}");
+    }
+    let d = s.doc().unwrap();
+    let sh = &d.wb.sheets[d.wb.sheet_index("P").unwrap()];
+    let pv: Vec<Value> = (0..4).map(|c| sh.value(CellRef::new(0, c))).collect();
+    assert_eq!(pv, vec![Value::number(1.0), Value::number(2.0), Value::number(3.0), Value::number(4.0)]);
+}
+
+#[test]
+fn sorting_cannot_unlock_a_locked_cell_by_moving_equal_content_onto_it() {
+    // An unlocked 2 sorted onto a locked 2 leaves the content as it was, but would make the cell
+    // editable; the sort is refused instead.
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[2], [2], [1]]})).unwrap();
+    s.execute("home.lockCell", json!({"range": "A1", "on": false})).unwrap();
+    s.execute("home.lockCell", json!({"range": "A3", "on": false})).unwrap();
+    s.execute("review.protectSheet", json!({"sort": true})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    let err =
+        s.execute("data.sort", json!({"range": "A1:A3", "header": false, "keys": [{"column": "A", "order": "asc"}]})).expect_err("sort unlocking A2");
+    assert!(err.to_string().contains("protected sheet"), "{err}");
+    assert_eq!(*s.doc().unwrap().wb, *before);
+    assert!(s.execute("cell.set", json!({"cell": "A2", "input": "9"})).is_err(), "A2 stays locked");
+}
+
+#[test]
 fn a_script_cannot_switch_windows() {
     // Stored scripts are scoped to their workbook: a step that activates another window would
     // point every later step at another open document, so it is refused before any step runs.
