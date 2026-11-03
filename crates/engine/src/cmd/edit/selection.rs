@@ -137,6 +137,23 @@ pub(super) fn selection_next(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"active": d.selection.active.a1()}))
 }
 
+pub(super) fn selection_next_corner(s: &mut Session, _: &Json) -> Result<Json> {
+    let d = s.doc_mut()?;
+    let Some(sheet) = d.wb.active() else { return Err(EngineError::NoDocument) };
+    // A corner in a merged cell lands on its top-left cell. One in a hidden row or column, one
+    // the sheet's protection doesn't let you select, and a merged cell that starts outside the
+    // selected area are skipped.
+    let area = d.selection.current();
+    let stop = |c: CellRef| {
+        Some(sheet.merge_at(c).map_or(c, |m| m.start))
+            .filter(|c| area.contains(*c) && !sheet.is_row_hidden(c.row) && !sheet.is_col_hidden(c.col) && cell_selectable(&d.wb, sheet, *c))
+    };
+    let mut next = d.selection.clone();
+    next.next_corner_by(stop);
+    d.selection = next;
+    Ok(json!({"active": d.selection.active.a1(), "selection": d.selection.a1()}))
+}
+
 pub(super) fn select_all(s: &mut Session, _: &Json) -> Result<Json> {
     let d = s.doc_mut()?;
     let Some(sheet) = d.wb.active() else { return Err(EngineError::NoDocument) };
