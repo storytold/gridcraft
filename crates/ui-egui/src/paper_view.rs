@@ -120,19 +120,20 @@ fn pages_iter(geo: &Geo, pg: &PageGrid) -> impl Iterator<Item = (usize, usize)> 
 }
 
 /// Paints the desk, the pages and their cells; returns the per-page quadrants for the headings.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn paint_pages(
-    app: &SheetApp,
-    p: &Painter,
-    geo: &Geo,
-    wb: &Workbook,
-    si: usize,
-    sh: &Sheet,
-    sel: &gridcraft_engine::Selection,
-    outline: Rect,
-    cf: &mut CfCache,
-    t: &Tokens,
-) -> Vec<((u32, u32), (u32, u32), Rect)> {
+pub(crate) struct PagePaintInput<'a> {
+    pub(crate) app: &'a SheetApp,
+    pub(crate) painter: &'a Painter,
+    pub(crate) geo: &'a Geo,
+    pub(crate) workbook: &'a Workbook,
+    pub(crate) sheet_index: usize,
+    pub(crate) sheet: &'a Sheet,
+    pub(crate) selection: &'a gridcraft_engine::Selection,
+    pub(crate) outline: Rect,
+    pub(crate) tokens: &'a Tokens,
+}
+
+pub(crate) fn paint_pages(input: PagePaintInput<'_>, cf: &mut CfCache) -> Vec<grid::PaneQuad> {
+    let PagePaintInput { app, painter: p, geo, workbook: wb, sheet_index: si, sheet: sh, selection: sel, outline, tokens: t } = input;
     let mut quads = Vec::new();
     let Some(pg) = geo.paper.clone() else { return quads };
     p.rect_filled(geo.cells, 0.0, t.desk);
@@ -161,16 +162,42 @@ pub(crate) fn paint_pages(
         }
         painted += 1;
         let pc = p.with_clip_rect(clip);
-        grid::paint_quadrant(&pc, geo, wb, si, sh, rows, cols, cf, t);
+        let active_row = app.ui.highlight_active_row.then_some(sel.active.row);
+        grid::paint_quadrant(grid::QuadrantPaint {
+            painter: &pc,
+            geo,
+            workbook: wb,
+            sheet_index: si,
+            sheet: sh,
+            rows,
+            cols,
+            cf,
+            tokens: t,
+            active_row,
+        });
         if !pg.is_data_page(i, j) {
             // "Click to add data" pages: faded until something is typed there.
             pc.rect_filled(clip, 0.0, t.grid_bg.gamma_multiply(0.75));
+            // The fade would all but hide the active row's band: it goes on again.
+            if let Some(band) = active_row.and_then(|row| grid::active_row_band(geo, sh, row, rows, cols)) {
+                pc.rect_filled(band, 0.0, t.active_row);
+            }
             let size = (14.0 * geo.z / DISPLAY_SCALE).clamp(8.0, 22.0);
             pc.text(clip.center(), Align2::CENTER_CENTER, tr(app, "Click to add data"), theme::ui_font(size), Color32::from_gray(150));
         }
         // The selection outline may straddle the margin edge (as at A1 in Normal view).
         let sel_clip = clip.expand(3.0).intersect(page).intersect(geo.cells);
-        grid::paint_selection(&p.with_clip_rect(sel_clip), geo, sh, sel, outline, t, app, rows, cols);
+        grid::paint_selection(grid::SelectionPaintInput {
+            painter: &p.with_clip_rect(sel_clip),
+            geo,
+            sheet: sh,
+            selection: sel,
+            outline,
+            tokens: t,
+            app,
+            rows,
+            cols,
+        });
     }
     quads
 }
