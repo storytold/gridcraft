@@ -31,6 +31,8 @@ pub struct WindowUi {
     ribbon_tab: String,
     /// The status bar's Ready/Enter/Edit, which follows the window's cell draft.
     mode: gridcraft_engine::Mode,
+    /// A key tip's control request waiting for the frame that draws this window's ribbon.
+    keytip_invoke_next: Option<&'static str>,
 }
 
 impl WindowUi {
@@ -70,6 +72,7 @@ impl SheetApp {
             open_switch_windows,
             ribbon_tab,
             mode,
+            keytip_invoke_next,
         } = w;
         std::mem::swap(&mut self.editor, editor);
         std::mem::swap(&mut self.text_box_editor, text_box_editor);
@@ -86,6 +89,7 @@ impl SheetApp {
         std::mem::swap(&mut self.open_switch_windows, open_switch_windows);
         std::mem::swap(&mut self.ui.ribbon_tab, ribbon_tab);
         std::mem::swap(&mut self.session.mode, mode);
+        std::mem::swap(&mut self.ui.keytip_invoke_next, keytip_invoke_next);
     }
 
     /// The window whose interface state is in the per-window fields.

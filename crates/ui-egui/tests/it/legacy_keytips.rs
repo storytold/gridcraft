@@ -50,3 +50,22 @@ fn alt_i_s_expands_a_collapsed_ribbon_on_the_insert_tab() {
     assert!(h.query_by_label("€").is_some(), "the Symbol gallery is open");
     assert!(!h.state().session.journal.iter().any(|(id, _)| id == "insert.symbol"));
 }
+
+#[test]
+fn a_waiting_key_tip_request_stays_with_its_window() {
+    // A request waiting for the frame that draws its control belongs to the window whose keys
+    // made it: another window drawn first must not take it.
+    let mut s = Session::new();
+    s.new_workbook();
+    let mut h = crate::common::os_harness(s, OperatingSystem::Nix);
+    h.run_steps(2);
+    let first = h.state().session.active_window().unwrap();
+    h.state_mut().run("view.newWindow", json!({})).unwrap();
+    let second = h.state().session.active_window().unwrap();
+    h.state_mut().show_window(second);
+    h.state_mut().ui.keytip_invoke_next = Some("insert.symbol");
+    h.state_mut().show_window(first);
+    assert_eq!(h.state().ui.keytip_invoke_next, None, "the first window doesn't see the second window's request");
+    h.state_mut().show_window(second);
+    assert_eq!(h.state().ui.keytip_invoke_next, Some("insert.symbol"));
+}

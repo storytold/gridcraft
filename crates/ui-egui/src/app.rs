@@ -108,8 +108,9 @@ impl SheetApp {
         self.ensure_text_width(ctx);
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped. One
-        // made with a switch to the control's tab waits for the frame that draws that tab.
-        self.ui.keytip_invoke = self.ui.keytip_invoke_next.take();
+        // made with a switch to the control's tab waits, with its window, for the next `ui` of
+        // that window.
+        self.ui.keytip_invoke = None;
         // Floating pictures' textures go with their workbook, even when no sheet is painted.
         let open: Vec<u64> = self.session.documents().iter().map(|d| d.uid).collect();
         floating_pictures::forget_closed(ctx, &open);
@@ -195,6 +196,9 @@ impl SheetApp {
         let t0 = now_ms();
         // A script may have switched windows since the last frame.
         self.follow_active_window();
+        // This window's key tip request that waited for this frame (its tab or ribbon was just
+        // shown); any other window's request was dropped before it.
+        self.ui.keytip_invoke = self.ui.keytip_invoke_next.take();
         text_box::before_ui(self, &ctx);
         // Another window came forward without going through a command (which settles drafts
         // first): the draft goes into its own window instead of floating over this one. If its
