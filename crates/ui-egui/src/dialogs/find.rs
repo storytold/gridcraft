@@ -3,9 +3,11 @@ use super::{Dialog, Json, Key, SheetApp, json};
 
 /// Draws the Find/Replace form with case, whole-cell and workbook options, requests field focus once, and runs find/replace with the current parameters.
 pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
+    let lang = app.ui.language;
     ui.horizontal(|ui| {
-        for tab in ["Find", "Replace"] {
-            if ui.selectable_label(d.tab == tab, tab).clicked() {
+        // d.tab keeps English values for the control channel; the interface language shows the label.
+        for (key, tab) in [("Find tab|Find", "Find"), ("Replace tab|Replace", "Replace")] {
+            if ui.selectable_label(d.tab == tab, lang.tr(key)).clicked() {
                 d.tab = tab.into();
             }
         }
@@ -13,7 +15,7 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     let mut what = d.values.get("what").and_then(Json::as_str).unwrap_or("").to_string();
     let mut with = d.values.get("with").and_then(Json::as_str).unwrap_or("").to_string();
     ui.horizontal(|ui| {
-        let label = ui.label("Find what:");
+        let label = ui.label(lang.tr("Find what:"));
         let r = ui.add(egui::TextEdit::singleline(&mut what).desired_width(260.0)).labelled_by(label.id);
         // Like Excel, the cursor starts in "Find what" - asked for once, so clicking another field still works.
         if !d.values.contains_key("focused") {
@@ -23,7 +25,7 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     });
     if d.tab == "Replace" {
         ui.horizontal(|ui| {
-            let label = ui.label("Replace with:");
+            let label = ui.label(lang.tr("Replace with:"));
             ui.add(egui::TextEdit::singleline(&mut with).desired_width(244.0)).labelled_by(label.id);
         });
     }
@@ -31,9 +33,9 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     let mut whole = d.values.get("wholeCell").and_then(Json::as_bool).unwrap_or(false);
     let mut wb = d.values.get("within").and_then(Json::as_str) == Some("workbook");
     ui.horizontal(|ui| {
-        ui.checkbox(&mut case, "Match case");
-        ui.checkbox(&mut whole, "Match entire cell contents");
-        ui.checkbox(&mut wb, "Within workbook");
+        ui.checkbox(&mut case, lang.tr("Match case"));
+        ui.checkbox(&mut whole, lang.tr("Match entire cell contents"));
+        ui.checkbox(&mut wb, lang.tr("Within workbook"));
     });
     d.values.insert("what".into(), json!(what));
     d.values.insert("with".into(), json!(with));
@@ -57,7 +59,7 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     let base = json!({"what": what, "matchCase": case, "wholeCell": whole, "within": within});
     ui.horizontal(|ui| {
         if d.tab == "Replace" {
-            if ui.button("Replace All").clicked() {
+            if ui.button(lang.tr("Replace All")).clicked() {
                 let mut p = base.clone();
                 p["with"] = json!(with);
                 p["all"] = json!(true);
@@ -66,7 +68,7 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                     Err(e) => app.message = Some(("Find and Replace".into(), crate::clean_error(&e))),
                 }
             }
-            if ui.button("Replace").clicked() {
+            if ui.button(lang.tr("Replace")).clicked() {
                 let mut p = base.clone();
                 p["with"] = json!(with);
                 p["all"] = json!(false);
@@ -74,23 +76,38 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                 let _ = app.run("edit.find", base.clone());
             }
         }
-        if ui.button("Find All").clicked() {
+        if ui.button(lang.tr("Find All")).clicked() {
             let mut p = base.clone();
             p["all"] = json!(true);
-            d.result = app.run("edit.find", p).ok();
+            match app.run("edit.find", p) {
+                Ok(r) => {
+                    d.result = Some(r);
+                    d.values.insert("notFound".into(), json!(false));
+                }
+                Err(_) => {
+                    // Clear the stale list so the dialog reflects this search. Find All reports in
+                    // the dialog's own results area instead of a message box.
+                    d.result = None;
+                    d.values.insert("notFound".into(), json!(true));
+                }
+            }
         }
-        if ui.button("Find Next").clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
+        if ui.button(lang.tr("Find Next")).clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
             if let Err(e) = app.run("edit.find", base.clone()) {
                 app.message = Some(("Find and Replace".into(), crate::clean_error(&e)));
             }
             app.grid.ensure_visible = true;
         }
     });
-    if let Some(r) = &d.result
+    let t = crate::theme::Tokens::get(ui.ctx());
+    if d.values.get("notFound").and_then(Json::as_bool) == Some(true) {
+        ui.separator();
+        ui.colored_label(t.danger, format!("{} “{}”", lang.tr("Nothing found for"), d.values.get("what").and_then(Json::as_str).unwrap_or("")));
+    } else if let Some(r) = &d.result
         && let Some(list) = r["results"].as_array()
     {
         ui.separator();
-        ui.label(format!("{} cell(s) found", list.len()));
+        ui.label(format!("{} {}", list.len(), lang.tr("cell(s) found")));
         egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
             for item in list {
                 let label = format!(
