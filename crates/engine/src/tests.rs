@@ -3238,6 +3238,15 @@ fn chart_plots_visible_cells_only() {
 }
 
 #[test]
+fn chart_select_data_rejects_show_hidden_for_chartex() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [3]]})).unwrap();
+    s.execute("insert.chart", json!({"type": "histogram", "range": "A1:A3", "at": "C1"})).unwrap();
+    assert!(s.execute("chart.selectData", json!({"showHiddenData": true})).is_err());
+    s.execute("chart.selectData", json!({"showHiddenData": false})).unwrap();
+}
+
+#[test]
 fn every_chart_kind_survives_xlsx() {
     use gridcraft_model::ChartKind;
     let kinds = [

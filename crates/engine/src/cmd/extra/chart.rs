@@ -226,6 +226,17 @@ pub(super) fn select_data(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         if let Some(v) = show_hidden {
+            if v && matches!(
+                c.kind,
+                gridcraft_model::ChartKind::Histogram
+                    | gridcraft_model::ChartKind::Waterfall
+                    | gridcraft_model::ChartKind::Funnel
+                    | gridcraft_model::ChartKind::Treemap
+                    | gridcraft_model::ChartKind::Sunburst
+                    | gridcraft_model::ChartKind::BoxWhisker
+            ) {
+                return Err(bad("chart.selectData", "`showHiddenData` is unsupported for this chart type"));
+            }
             c.show_hidden_data = v;
         }
         if let Some(cats) = categories {
