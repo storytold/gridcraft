@@ -438,6 +438,24 @@ fn linest_drops_collinear_columns() {
     assert_eq!(r[1][1], Some(0.0));
     rel_close(r[0][0], 0.6, 1e-12, "slope");
     rel_close(r[0][2], 2.2, 1e-12, "intercept");
+    // A constant column whose mean does not centre to exactly 0 (the mean of three 0.1 is
+    // 0.10000000000000002) is just as collinear with the intercept: dropped, not scaled up to a
+    // unit vector. Some length hits a rounding mean for each constant.
+    for c in [0.1, 1.1, 1e6 + 0.3] {
+        for n in 3..=12 {
+            let xs: Vec<f64> = (1..=n).map(|i| f64::from(i)).collect();
+            let ys: Vec<f64> = (1..=n).map(|i| f64::from(i * i % 7) + 0.5 * f64::from(i)).collect();
+            let r = linest_rows(&ys, &[vec![c; n as usize], xs], true);
+            assert_eq!(r[0][1], Some(0.0), "coefficient of the constant {c}, n={n}");
+            assert_eq!(r[1][1], Some(0.0), "standard error of the constant {c}, n={n}");
+            assert_eq!(r[3][1], Some(f64::from(n) - 2.0), "df with the constant {c}, n={n}");
+        }
+    }
+    // A column that merely sits far from zero is not noise and is kept.
+    let off: Vec<f64> = x1.iter().map(|v| 1e9 + v).collect();
+    let r = linest_rows(&y, &[off], true);
+    rel_close(r[0][0], 0.6, 1e-6, "slope on an offset column");
+    assert_eq!(r[3][1], Some(3.0));
     // More predictors than observations: the surplus columns drop, no panic.
     let r = linest_rows(&[1.0, 2.0], &[vec![1.0, 2.0], vec![2.0, 1.0], vec![0.0, 5.0]], true);
     assert_eq!(r[0].len(), 4);
