@@ -385,6 +385,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_desktop_setup_starts_the_font_scan() {
+        // The desktop app sets its context up with `setup_desktop_context`. Without
+        // the scan, `scan_done` never turns true, no workbook font is bound, and a cell set in
+        // Verdana or Segoe UI draws in the built-in cell face.
+        crate::SheetApp::setup_desktop_context(&egui::Context::default(), false, crate::i18n::Language::En);
+        // Up to a minute, in 20 ms steps (no clock: `Instant::now` is disallowed).
+        for _ in 0..3000 {
+            if scan_done() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(scan_done(), "the font scan never ran");
+    }
+
+    #[test]
     fn style_names_map_to_weight_and_slant() {
         assert_eq!(style_weight("Bold"), 700.0);
         assert_eq!(style_weight("SemiBold Italic"), 600.0);

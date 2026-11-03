@@ -97,6 +97,15 @@ impl SheetApp {
         Self::setup_context_for_language(ctx, dark, i18n::Language::En);
     }
 
+    /// The desktop app's setup for a persisted interface language: starts the font catalog, as
+    /// [`Self::setup_context`] does, then [`Self::setup_context_for_language`]. Without the scan no
+    /// workbook font is ever bound, and a cell set in Verdana or Segoe UI draws in the built-in
+    /// cell face.
+    pub fn setup_desktop_context(ctx: &egui::Context, dark: bool, language: i18n::Language) {
+        crate::fonts::start_scan();
+        Self::setup_context_for_language(ctx, dark, language);
+    }
+
     /// Sets up fonts and visuals for a specific persisted interface language.
     pub fn setup_context_for_language(ctx: &egui::Context, dark: bool, language: i18n::Language) {
         ctx.set_fonts(theme::font_definitions_for_language(language));
