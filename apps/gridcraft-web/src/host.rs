@@ -15,8 +15,17 @@
 //!   `{ id, requestId?, ok: false, error }` for every `gridcraft:cmd`, once it has run.
 //! - `gridcraft:failed` (to the parent): `{ error }` when the app couldn't start.
 //!
-//! Only the parent window on the page's own origin is heard or answered. In host mode the page
-//! starts with an empty workbook instead of a sample, and the parent guards leaving the page.
+//! **Origin rule (security).** Only the parent window on the page's own origin is heard or
+//! answered: an incoming message is dropped unless its `origin` equals the page's own origin
+//! (`window.location().origin()`) **and** its `source` is `window.parent` (compared with
+//! `Object.is`). A sandboxed frame has the opaque origin `"null"` (and `""`/`"*"` are refused
+//! too), so no sender can be vetted and the bridge stays off; outgoing messages target the
+//! page's own origin, never `*`. This is the same rule as the WordCraft and DeckCraft bridges.
+//! The command set reachable through `gridcraft:cmd` is the engine's full command set (the same
+//! commands the ribbon runs); the origin/source vetting above is the security boundary, since a
+//! host that can post a message to this window is trusted to drive the workbook it opened.
+//! In host mode the page starts with an empty workbook instead of a sample, and the parent
+//! guards leaving the page.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
