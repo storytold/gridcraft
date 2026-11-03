@@ -456,5 +456,24 @@ mod tests {
             assert_eq!(print(&expr), format!("{canonical}(1.25,2)"));
             assert_eq!(print_input(&expr, locale, |_| false).unwrap(), input);
         }
+        for &(error, spelling) in super::ERRORS {
+            let expr = parse_input(&spelling.to_lowercase(), locale, |_| false).unwrap();
+            assert_eq!(print(&expr), error.as_str());
+            assert_eq!(print_input(&expr, locale, |_| false).unwrap(), spelling);
+        }
     }
+}
+
+/// French uses a dot for array columns, distinct from its decimal comma.
+#[test]
+fn french_arrays_and_local_alias_collisions_preserve_canonical_syntax() {
+    use crate::{FormulaLocale, parse, parse_input, print, print_input};
+
+    let locale = FormulaLocale::Fr;
+    let input = "SOMME({1,5.2,25;3.4};0)";
+    let expr = parse_input(input, locale, |_| false).unwrap();
+    assert_eq!(print(&expr), "SUM({1.5,2.25;3,4},0)");
+    assert_eq!(print_input(&expr, locale, |_| false).unwrap(), input);
+    assert_eq!(print(&parse_input("TRIM(A1;0,1;0,2)", locale, |_| false).unwrap()), "MIRR(A1,0.1,0.2)");
+    assert_eq!(print(&parse("TRIM(A1)").unwrap()), "TRIM(A1)");
 }

@@ -520,5 +520,15 @@ mod tests {
             assert_eq!(print(&expr), format!("{canonical}(1.25,2)"));
             assert_eq!(print_input(&expr, locale, |_| false).unwrap(), input);
         }
+        for &(error, spelling) in super::ERRORS {
+            let expr = parse_input(&spelling.to_lowercase(), locale, |_| false).unwrap();
+            assert_eq!(print(&expr), error.as_str());
+            assert_eq!(print_input(&expr, locale, |_| false).unwrap(), spelling);
+        }
+
+        let array = r"SOMMA({1,5\2;3\4};0)";
+        let expr = parse_input(array, locale, |_| false).unwrap();
+        assert_eq!(print(&expr), "SUM({1.5,2;3,4},0)");
+        assert_eq!(print_input(&expr, locale, |_| false).unwrap(), array);
     }
 }

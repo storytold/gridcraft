@@ -331,17 +331,28 @@ fn canonical_engine_templates_enter_the_selected_formula_language() {
     }
 }
 
+/// Localized formula syntax is reversible through the canonical XLSX writer and reader.
 #[test]
-fn portuguese_interface_retains_its_canonical_formula_fallback() {
-    let mut app = app();
-    app.run("app.language.set", json!({"code":"pt-BR"})).unwrap();
-    assert_eq!(app.ui.language, Language::PtBr);
-    assert!(enter(&mut app, "=SUM(1.5,2.25)"));
-    app.begin_edit(None, true);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1.5,2.25)");
-    assert!(!enter(&mut app, "=SUMA(1;2)"));
-    let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
-    assert_eq!(restored.language, Language::PtBr);
+fn french_italian_and_portuguese_formulas_round_trip_through_xlsx() {
+    for (language, ui_language, localized) in [
+        ("fr", Language::Fr, "=SIERREUR(SOMME(1,5;2,25);#VALEUR!)"),
+        ("it", Language::It, "=SE.ERRORE(SOMMA(1,5;2,25);#VALORE!)"),
+        ("pt-BR", Language::PtBr, "=SEERRO(SOMA(1,5;2,25);#VALOR!)"),
+    ] {
+        let mut app = app();
+        app.run("app.language.set", json!({"code":language})).unwrap();
+        assert_eq!(app.ui.language, ui_language);
+        assert!(enter(&mut app, &localized.to_lowercase()), "{language}");
+        assert_eq!(formula(&app), "IFERROR(SUM(1.5,2.25),#VALUE!)");
+        let saved = app.run("file.save", json!({"format":"xlsx"})).unwrap();
+        app.run("file.open", json!({"name":"localized.xlsx","base64":saved["base64"]})).unwrap();
+        assert_eq!(formula(&app), "IFERROR(SUM(1.5,2.25),#VALUE!)");
+        app.begin_edit(None, false);
+        assert_eq!(app.editor.as_ref().unwrap().text, localized);
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(3.75));
+        let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
+        assert_eq!(restored.language, ui_language);
+    }
 }
 
 #[test]

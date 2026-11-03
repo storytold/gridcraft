@@ -6,9 +6,9 @@ use std::sync::OnceLock;
 
 mod en;
 mod es;
-mod pl;
 mod fr;
 mod it;
+mod pl;
 mod pt;
 mod ru;
 
