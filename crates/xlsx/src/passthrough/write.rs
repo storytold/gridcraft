@@ -254,27 +254,37 @@ pub(crate) fn sheet_names_in(formula: &str) -> Vec<String> {
 /// Whether a kept chart sheet can be written back: its chart's series must still refer to sheets
 /// that exist under the same names (the chart is kept as it was, so a series on a deleted or
 /// renamed sheet would be left pointing at nothing), and no worksheet may have taken its name.
-fn chart_sheet_usable(wb: &Workbook, p: &Preserved, s: &PreservedSheet) -> bool {
+///
+/// `refs` caches, by relationship id, the sheet names a chart sheet's graph refers to (`None`
+/// when the relationship is missing): entries sharing one graph are analysed once.
+fn chart_sheet_usable<'p>(wb: &Workbook, p: &'p Preserved, s: &'p PreservedSheet, refs: &mut HashMap<&'p str, Option<Vec<String>>>) -> bool {
     let same = |a: &str, b: &str| a.chars().take(31).collect::<String>().eq_ignore_ascii_case(&b.chars().take(31).collect::<String>());
     if wb.sheets.iter().any(|w| same(&w.name, &s.name)) {
         return false;
     }
-    let Some(root) = p.rels.iter().find(|r| r.id == s.rel_id) else { return false };
-    let parts = reachable(p, root);
-    let mut formulas = vec![];
-    for q in p.parts.iter().filter(|q| parts.contains(&normalize(&q.name)) && q.content_type.contains("chart")) {
-        if let Ok(x) = xml::parse(&q.data) {
-            chart_formulas(&x, &mut formulas);
+    let names = refs.entry(s.rel_id.as_str()).or_insert_with(|| {
+        let root = p.rels.iter().find(|r| r.id == s.rel_id)?;
+        let parts = reachable(p, root);
+        let mut formulas = vec![];
+        for q in p.parts.iter().filter(|q| parts.contains(&normalize(&q.name)) && q.content_type.contains("chart")) {
+            if let Ok(x) = xml::parse(&q.data) {
+                chart_formulas(&x, &mut formulas);
+            }
         }
-    }
-    formulas.iter().flat_map(|f| sheet_names_in(f)).all(|n| wb.sheets.iter().any(|w| same(&w.name, &n)))
+        Some(formulas.iter().flat_map(|f| sheet_names_in(f)).collect())
+    });
+    let Some(names) = names else { return false };
+    names.iter().all(|n| wb.sheets.iter().any(|w| same(&w.name, n)))
 }
 
 /// Writes the workbook's kept parts and relationships. Chart sheets that can't be written back
 /// (see [`chart_sheet_usable`]) are left out with the parts only they reach.
 pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> WorkbookKept {
     let Some(p) = wb.preserved.as_deref() else { return WorkbookKept::default() };
-    let (live, dropped): (Vec<&PreservedSheet>, Vec<&PreservedSheet>) = p.sheets.iter().partition(|s| chart_sheet_usable(wb, p, s));
+    let (live, dropped): (Vec<&PreservedSheet>, Vec<&PreservedSheet>) = {
+        let mut refs = HashMap::new();
+        p.sheets.iter().partition(|s| chart_sheet_usable(wb, p, s, &mut refs))
+    };
     let root_of = |s: &PreservedSheet| p.rels.iter().find(|r| r.id == s.rel_id);
     let dropped_ids: HashSet<&str> = dropped.iter().map(|s| s.rel_id.as_str()).collect();
     // Parts reached only by dropped chart sheets go with them.
