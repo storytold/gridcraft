@@ -355,7 +355,8 @@ fn part_too_large_message(name: &str, part: &str, size: u64) -> String {
 /// header cells (`<th>`) are bold and centred, and the sheet takes the name the page gives it
 /// (`<x:Name>`) or the file's. `None` when the bytes aren't such a page.
 fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text: bool) -> Option<Result<(Workbook, Vec<String>)>> {
-    let text = String::from_utf8_lossy(bytes);
+    // Decoded as a CSV is (BOM, UTF-8, else Windows-1252/1256), so a legacy page keeps its letters.
+    let text = gridcraft_xlsx::decode_text(bytes);
     let head: String = text.trim_start_matches('\u{feff}').trim_start().chars().take(16).collect::<String>().to_ascii_lowercase();
     if !["<!doctype html", "<html", "<table", "<head", "<body", "<meta"].iter().any(|t| head.starts_with(t)) {
         return None;
@@ -370,7 +371,9 @@ fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text
         let fields: Vec<String> = row
             .iter()
             .map(|cell| {
-                let field = match cell.num {
+                // The number the page recorded (`x:num`) only when values are read; as text, the
+                // cell keeps the text it shows.
+                let field = match cell.num.filter(|_| !csv_as_text) {
                     Some(n) => gridcraft_core::number_to_text(n),
                     None => cell.text.split_whitespace().collect::<Vec<_>>().join(" "),
                 };
@@ -384,17 +387,24 @@ fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text
     let read = gridcraft_xlsx::read_csv_with_report(tsv.as_bytes(), &opts).map_err(|e| EngineError::Other(e.to_string()));
     Some(read.map(|(mut wb, report)| {
         wb.csv_delimiter = None;
-        let header_style = wb.styles.derive(gridcraft_model::StyleId::DEFAULT, |st| {
-            st.font.bold = true;
-            st.align.h = gridcraft_model::HAlign::Center;
-        });
-        if let Some(sh) = wb.sheet_mut(0) {
-            for (r, row) in rows.iter().enumerate() {
-                for (c, cell) in row.iter().enumerate() {
-                    if cell.header && !cell.text.trim().is_empty() {
-                        sh.set_style(CellRef::new(r as u32, c as u32), header_style);
-                    }
-                }
+        // Header cells are bold and centred on top of the style the CSV reader gave them, so a
+        // date in a header keeps its date format.
+        let headers: Vec<CellRef> = rows
+            .iter()
+            .enumerate()
+            .flat_map(|(r, row)| row.iter().enumerate().filter(|(_, cell)| cell.header && !cell.text.trim().is_empty()).map(move |(c, _)| CellRef::new(r as u32, c as u32)))
+            .collect();
+        let mut bold: std::collections::HashMap<gridcraft_model::StyleId, gridcraft_model::StyleId> = std::collections::HashMap::new();
+        for at in headers {
+            let Some(base) = wb.sheet(0).map(|sh| sh.style_id(at)) else { continue };
+            let id = *bold.entry(base).or_insert_with(|| {
+                wb.styles.derive(base, |st| {
+                    st.font.bold = true;
+                    st.align.h = gridcraft_model::HAlign::Center;
+                })
+            });
+            if let Some(sh) = wb.sheet_mut(0) {
+                sh.set_style(at, id);
             }
         }
         let page_name = find_between(&text, "<x:Name>", "</x:Name>").map(|n| crate::clip_html::normalized(n.trim()));

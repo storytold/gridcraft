@@ -636,3 +636,23 @@ fn a_web_page_saved_as_xls_opens_its_table() {
     let (wb, _) = open_bytes("notes.csv", b"<b>,1\nx,2\n").unwrap();
     assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("B2").unwrap()), gridcraft_core::Value::number(2.0));
 }
+
+#[test]
+fn a_web_page_table_keeps_its_characters_text_and_header_formats() {
+    // A page saved in Windows-1252 keeps its accented letters (it read as replacement characters).
+    let mut page = b"<html><body><table><tr><th>Caf".to_vec();
+    page.push(0xE9);
+    page.extend_from_slice(b"</th><th>2024-01-15</th></tr><tr><td>Plum</td><td x:num=\"4.5\">4,50</td></tr></table></body></html>");
+    let (wb, _) = open_bytes("menu.xls", &page).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::text("Café"));
+    // A date in a header cell stays a date, bold and centred (its format was replaced).
+    let b1 = wb.styles.get(sh.style_id(CellRef::parse("B1").unwrap()));
+    assert!(matches!(sh.value(CellRef::parse("B1").unwrap()), gridcraft_core::Value::Number(_)));
+    assert!(b1.font.bold && b1.align.h == gridcraft_model::HAlign::Center);
+    assert_ne!(b1.num_fmt.as_str(), "General", "the date keeps its date format");
+    assert_eq!(sh.value(CellRef::parse("B2").unwrap()), gridcraft_core::Value::number(4.5));
+    // Opened as text, a cell keeps the text it shows, not the number the page recorded for it.
+    let (wb, _) = open_bytes_with("menu.xls", &page, None, true).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("B2").unwrap()), gridcraft_core::Value::text("4,50"));
+}
