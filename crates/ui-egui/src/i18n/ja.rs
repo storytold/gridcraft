@@ -112,6 +112,8 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Text to\nColumns", "区切り位置"),
     ("Link", "リンク"),
     ("Symbol", "記号"),
+    ("Equation", "数式"),
+    ("Insert New Equation...", "新しい数式の挿入"),
     ("Sparklines", "スパークライン"),
     ("Checkbox", "チェックボックス"),
     ("Insert checkboxes in the selected cells", "選択したセルにチェックボックスを挿入"),
@@ -156,6 +158,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Error Checking", "エラーチェック"),
     ("Trace Error", "エラーのトレース"),
     ("Circular References", "循環参照"),
+    ("Python Mode", "Python モード"),
     ("Evaluate Formula", "数式の検証"),
     ("Watch Window", "ウォッチ ウィンドウ"),
     ("Calculation\nOptions", "計算方法の設定"),
@@ -999,6 +1002,8 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Tab Color", "シートの見出しの色"),
     ("Unhide…", "再表示…"),
     ("Unprotect Sheet…", "シート保護の解除…"),
+    ("Collapse dialog", "ダイアログを折りたたむ"),
+    ("Expand dialog", "ダイアログを展開する"),
 ];
 
 /// Labels of the ribbon menus, pop-ups and palettes that the reference catalog does not cover (the

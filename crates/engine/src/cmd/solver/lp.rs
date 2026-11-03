@@ -1,9 +1,13 @@
+use super::model::Goal;
 use super::problem::Evaluator;
-use super::{CellRef, EPS};
+use super::{CellRef, EPS, LP_WORK};
 
 // ---------------------------------------------------------------- evaluation
 
 type BoundRow = (Vec<(usize, f64)>, Sense, f64);
+
+/// A row of an LP: coefficients, sense and right side.
+pub(super) type LpRow = (Vec<f64>, Sense, f64);
 
 /// Objective (gradient, constant) and per-row (gradient, constant).
 pub(super) type Linearized = ((Vec<f64>, f64), Vec<(Vec<f64>, f64)>);
@@ -34,15 +38,33 @@ pub(super) enum Outcome {
     Limit,
 }
 
-struct Map {
-    var: usize,
-    sign: f64,
+/// A column of the simplex tableau standing for a variable: `x_var = offset + Σ sign·y`.
+pub(super) struct Map {
+    pub(super) var: usize,
+    pub(super) sign: f64,
 }
 
 struct VariableMap {
     columns: Vec<Map>,
     offset: Vec<f64>,
     bound_rows: Vec<BoundRow>,
+}
+
+/// The final tableau of an optimal LP, for the Sensitivity report.
+pub(super) struct FinalTableau {
+    /// Rows `B⁻¹A | B⁻¹b`.
+    pub(super) t: Vec<Vec<f64>>,
+    pub(super) basis: Vec<usize>,
+    /// The phase-2 reduced costs.
+    pub(super) obj: Vec<f64>,
+    pub(super) width: usize,
+    /// The first artificial column.
+    pub(super) first_art: usize,
+    pub(super) cols: Vec<Map>,
+    /// Per input row: the column that started as its unit column, and whether the row was
+    /// negated to make its right side non-negative.
+    pub(super) ident: Vec<usize>,
+    pub(super) flipped: Vec<bool>,
 }
 
 struct Tableau {
@@ -82,7 +104,9 @@ fn map_variables(n: usize, lo: &[f64], hi: &[f64]) -> VariableMap {
     VariableMap { columns, offset, bound_rows }
 }
 
-fn normalize_rows(rows: &[(Vec<f64>, Sense, f64)], bound_rows: Vec<BoundRow>, columns: &[Map], offset: &[f64]) -> Vec<(Vec<f64>, Sense, f64)> {
+/// The rows over the tableau's columns, each with a non-negative right side, and per row
+/// whether it was negated to get there.
+fn normalize_rows(rows: &[(Vec<f64>, Sense, f64)], bound_rows: Vec<BoundRow>, columns: &[Map], offset: &[f64]) -> (Vec<LpRow>, Vec<bool>) {
     let width = columns.len();
     let mut transformed = Vec::with_capacity(rows.len() + bound_rows.len());
     for (coefficients, sense, rhs) in rows {
@@ -105,7 +129,8 @@ fn normalize_rows(rows: &[(Vec<f64>, Sense, f64)], bound_rows: Vec<BoundRow>, co
         transformed.push((row, sense, rhs));
     }
     // Rows with a negative right side are negated so every right side is >= 0.
-    transformed
+    let flipped = transformed.iter().map(|row| row.2 < 0.0).collect();
+    let normalized = transformed
         .into_iter()
         .map(|(row, sense, rhs)| {
             if rhs < 0.0 {
@@ -119,7 +144,8 @@ fn normalize_rows(rows: &[(Vec<f64>, Sense, f64)], bound_rows: Vec<BoundRow>, co
                 (row, sense, rhs)
             }
         })
-        .collect()
+        .collect();
+    (normalized, flipped)
 }
 
 fn build_tableau(normalized: &[(Vec<f64>, Sense, f64)], decision_cols: usize, slack_cols: usize, artificial_cols: usize) -> Tableau {
@@ -388,20 +414,33 @@ fn simplex(t: &mut [Vec<f64>], basis: &mut [usize], obj: &mut [f64], allowed: &[
 
 /// Minimises `c·x` subject to `rows` (coefficients, sense, rhs) and `lo ≤ x ≤ hi`.
 pub(super) fn solve_lp(c: &[f64], rows: &[(Vec<f64>, Sense, f64)], lo: &[f64], hi: &[f64], budget: &mut u64) -> Outcome {
+    solve_lp_tableau(c, rows, lo, hi, budget).0
+}
+
+/// [`solve_lp`], with the final tableau when it is optimal.
+pub(super) fn solve_lp_tableau(
+    c: &[f64],
+    rows: &[(Vec<f64>, Sense, f64)],
+    lo: &[f64],
+    hi: &[f64],
+    budget: &mut u64,
+) -> (Outcome, Option<FinalTableau>) {
     if lo.iter().zip(hi).any(|(l, h)| l > h) {
-        return Outcome::Infeasible;
+        return (Outcome::Infeasible, None);
     }
     // x_j = offset + Σ sign·y_k with y ≥ 0.
     let mapping = map_variables(c.len(), lo, hi);
     let VariableMap { columns: cols, offset, bound_rows: extra } = mapping;
     let ny = cols.len();
     // Rows over y: (coefficients, sense, rhs).
-    let normalized = normalize_rows(rows, extra, &cols, &offset);
+    let (normalized, flipped) = normalize_rows(rows, extra, &cols, &offset);
     let n_slack = normalized.iter().filter(|row| row.1 != Sense::Eq).count();
     let n_art = normalized.iter().filter(|row| row.1 != Sense::Le).count();
     let mut tableau = build_tableau(&normalized, ny, n_slack, n_art);
+    // Each row's starting basic column is its unit column.
+    let ident = tableau.basis.clone();
     if let Err(outcome) = phase_one(&mut tableau, &normalized, budget) {
-        return outcome;
+        return (outcome, None);
     }
     let Tableau { rows: mut t, mut basis, width, decision_cols: ny, slack_cols: n_slack, .. } = tableau;
     let is_art = |column: usize| column >= ny + n_slack && column < width;
@@ -423,8 +462,8 @@ pub(super) fn solve_lp(c: &[f64], rows: &[(Vec<f64>, Sense, f64)], lo: &[f64], h
     }
     let allowed: Vec<bool> = (0..width).map(|j| !is_art(j)).collect();
     match simplex(&mut t, &mut basis, &mut obj, &allowed, budget) {
-        Step::Limit => return Outcome::Limit,
-        Step::Unbounded => return Outcome::Unbounded,
+        Step::Limit => return (Outcome::Limit, None),
+        Step::Unbounded => return (Outcome::Unbounded, None),
         Step::Optimal => {}
     }
     let mut y = vec![0.0; width];
@@ -442,7 +481,43 @@ pub(super) fn solve_lp(c: &[f64], rows: &[(Vec<f64>, Sense, f64)], lo: &[f64], h
         }
     }
     let val: f64 = c.iter().zip(&x).map(|(a, b)| a * b).sum();
-    Outcome::Solved(x, val, true)
+    let tableau = FinalTableau { t, basis, obj, width, first_art: ny + n_slack, cols, ident, flipped };
+    (Outcome::Solved(x, val, true), Some(tableau))
+}
+
+/// The LP to minimise for `goal`, from the linearised model: the costs, and the rows
+/// (coefficients, sense, right side) in the order of `model_rows`.
+pub(super) fn linear_program(goal: Goal, cf: &[f64], f_const: f64, lin: &[(Vec<f64>, f64)], model_rows: &[Row]) -> (Vec<f64>, Vec<LpRow>) {
+    let mut rows: Vec<LpRow> = lin.iter().zip(model_rows).map(|((a, k), r)| (a.clone(), r.sense, -k)).collect();
+    let c = match goal {
+        Goal::Max => cf.iter().map(|v| -v).collect(),
+        Goal::Min => cf.to_vec(),
+        Goal::Value(v) => {
+            rows.push((cf.to_vec(), Sense::Eq, v - f_const));
+            vec![0.0; cf.len()]
+        }
+    };
+    (c, rows)
+}
+
+/// The linear program Simplex LP solves: the model linearised at `x0`, its objective
+/// coefficients, the costs and rows for the goal, and the work limit for its size.
+pub(super) struct SimplexProgram {
+    pub(super) cf: Vec<f64>,
+    pub(super) c: Vec<f64>,
+    pub(super) rows: Vec<LpRow>,
+    pub(super) work: u64,
+}
+
+/// Builds the [`SimplexProgram`] at `x0`. The solve and the Sensitivity report both build it
+/// here from the start values, so the report's solve repeats the solve's pivots and returns the
+/// same vertex: linearising at another point changes the coefficients in their last bits, and
+/// that can break a tie between pivots the other way.
+pub(super) fn simplex_program(ev: &mut Evaluator, goal: Goal, x0: &[f64]) -> std::result::Result<SimplexProgram, &'static str> {
+    let ((cf, f_const), lin) = linearize(ev, x0)?;
+    let (c, rows) = linear_program(goal, &cf, f_const, &lin, &ev.rows);
+    let size = (rows.len() as u64 + 2 * x0.len() as u64 + 1) * (4 * x0.len() as u64 + 2 * rows.len() as u64 + 1);
+    Ok(SimplexProgram { cf, c, rows, work: LP_WORK.max(size) })
 }
 
 /// Linearises the model at `x0` (n + 1 evaluations) and checks it at one more point. Returns the

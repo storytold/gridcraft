@@ -502,3 +502,36 @@ fn arabic_subsets_split_after_255_character_codes() -> Result<(), Box<dyn Error>
     assert!(find(&pdf, b"<100> Tj").is_none(), "Type3 codes are always one byte");
     Ok(())
 }
+
+#[test]
+fn symbol_font_draws_maths_in_its_own_encoding() -> Result<(), Box<dyn Error>> {
+    let mut doc = PdfDoc::new();
+    let p = doc.add_page(200.0, 200.0);
+    p.text(10.0, 50.0, 12.0, Font::Symbol, [0, 0, 0], "\u{2211}\u{03B1}\u{2264}\u{221E}x");
+    p.text(10.0, 80.0, 12.0, Font::TimesItalic, [0, 0, 0], "x");
+    let pdf = doc.finish()?;
+    let s = String::from_utf8_lossy(&pdf);
+    assert!(s.contains("/BaseFont /Symbol >>"), "Symbol has no WinAnsi encoding");
+    assert!(s.contains("/BaseFont /Times-Italic /Encoding /WinAnsiEncoding"));
+    // The sum, alpha, less-or-equal and infinity codes; x is not in Symbol and becomes `?`.
+    assert!(s.contains("(\\345a\\243\\245?) Tj"), "{s}");
+    check_xref(&pdf)?;
+    assert!(Font::Symbol.can_encode('\u{2211}') && !Font::Symbol.can_encode('x'));
+    assert!(Font::TimesRoman.can_encode('x') && !Font::TimesRoman.can_encode('\u{2211}'));
+    assert_eq!(text_width(Font::Symbol, 10.0, "\u{2211}"), 7.13);
+    Ok(())
+}
+
+#[test]
+fn symbol_text_is_never_shaped_as_arabic() -> Result<(), Box<dyn Error>> {
+    let mut doc = PdfDoc::new();
+    let page = doc.add_page(200.0, 200.0);
+    assert_eq!(page.text_vertical_extents(Font::Symbol, 12.0, "\u{03B1}ب"), None);
+    page.text(10.0, 50.0, 12.0, Font::Symbol, [0, 0, 0], "\u{03B1}ب");
+    let pdf = doc.finish()?;
+    check_xref(&pdf)?;
+    assert!(find(&pdf, b"(a?) Tj").is_some());
+    assert!(find(&pdf, b"/ActualText").is_none());
+    assert_eq!(text_width(Font::Symbol, 10.0, "\u{03B1}ب"), f32::from(Font::Symbol.char_width('\u{03B1}') + Font::Symbol.char_width('ب')) / 100.0);
+    Ok(())
+}
