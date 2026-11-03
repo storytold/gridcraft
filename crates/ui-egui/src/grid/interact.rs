@@ -1419,7 +1419,7 @@ pub fn follow_link(app: &mut SheetApp, target: &str) {
             app.grid.ensure_visible = true;
         }
         LinkKind::External(url) => app.open_dialog("openLink", json!({"url": url})),
-        LinkKind::Refused(why) => app.message = Some(("Hyperlink".into(), why)),
+        LinkKind::Refused(why) => app.message = Some((app.ui.language.tr("Hyperlink").to_string(), why)),
     }
 }
 
