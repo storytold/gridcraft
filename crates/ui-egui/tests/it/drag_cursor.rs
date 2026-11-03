@@ -173,6 +173,33 @@ fn moving_a_selection_keeps_move_and_still_moves_cells() {
 }
 
 #[test]
+fn moving_a_selection_onto_data_asks_before_replacing_it() {
+    // #3136: the drop replaced the cells there without asking.
+    let mut h = harness();
+    h.state_mut().session.execute("selection.set", json!({"range": "A2:B2"})).unwrap();
+    h.run_steps(2);
+    let r = selection_rect(&h);
+    press(&mut h, pos2(r.left() + 10.0, r.top() + 1.0));
+    let target = cell(&h, "A1").center();
+    move_with_cursor(&mut h, target, CursorIcon::Move);
+    button(&mut h, target, false);
+    h.run_steps(1);
+    let q = h.state().macros.question.clone().expect("a question before replacing A1:B1");
+    assert_eq!(q.text, "There's already data here. Do you want to replace it?");
+    let sh = h.state().session.active().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(CellRef::parse("A1").unwrap()), Value::text("A"));
+    assert_eq!(sh.value(CellRef::parse("A2").unwrap()), Value::Number(1.0));
+    // OK replaces them.
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().macros.question.is_none());
+    let sh = h.state().session.active().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(CellRef::parse("A1").unwrap()), Value::Number(1.0));
+    assert_eq!(sh.value(CellRef::parse("B1").unwrap()), Value::Number(2.0));
+    assert_eq!(sh.value(CellRef::parse("A2").unwrap()), Value::Empty);
+}
+
+#[test]
 fn resizing_headers_keeps_the_axis_cursor_when_leaving_the_header() {
     for cols in [true, false] {
         let mut h = harness();
