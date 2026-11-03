@@ -5,6 +5,9 @@ use super::{
 
 // ---------------------------------------------------------------- tools
 
+/// Most cells (rows times compared columns) one Remove Duplicates call reads.
+const MAX_COMPARED_CELLS: u64 = 50_000_000;
+
 pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
     let (sheet, r) = data_target(s, p, "data.removeDuplicates")?;
     let d = s.doc()?;
@@ -23,6 +26,10 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
     // user didn't select. Excel refuses both.
     if cols.is_empty() || cols.iter().any(|c| !(r.start.col..=r.end.col).contains(c)) {
         return Err(bad("data.removeDuplicates", "`columns` must name at least one column of the range"));
+    }
+    // Rows are compared one by one, so a sparse sheet's enclosing rectangle is bounded like a list.
+    if r.count() > MAX_COMPARED_CELLS {
+        return Err(bad("data.removeDuplicates", "the range is too large"));
     }
     let start = r.start.row + header as u32;
     let mut removed = 0;

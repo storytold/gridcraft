@@ -297,3 +297,12 @@ fn consolidate_by_position_and_label() {
     assert!(s.execute("data.consolidate", json!({"sources": []})).is_err());
     assert!(s.execute("data.consolidate", json!({"sources": ["A1"], "function": "median"})).is_err());
 }
+
+#[test]
+fn advanced_filter_refuses_a_list_times_criteria_product_over_the_work_limit() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name"], ["A"]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "H1", "values": [["Name"], ["A"]]})).unwrap();
+    // A sparse million-row list against 9,999 blank criteria rows would be ~10 billion tests.
+    assert!(s.execute("data.advancedFilter", json!({"range": "A2:A1048576", "criteria": "H1:H10000"})).is_err());
+}

@@ -140,46 +140,44 @@ pub(super) fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
     let measure = s.text_width.clone();
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(si) else { return Ok(Json::Null) };
-        let mut widths = Vec::new();
         let mut measured: std::collections::HashMap<StyleId, std::collections::HashMap<String, f32>> = Default::default();
         let mut distinct = 0usize;
-        let used = sh.used_range();
-        for (a, b) in lines {
-            for c in a..=b.min(a + 16383) {
-                let Some(u) = used else { continue };
-                let col = RangeRef::new(CellRef::new(u.start.row, c), CellRef::new(u.end.row, c));
-                let mut max: f32 = 0.0;
-                for (cell, _) in sh.cells.iter_range(col) {
-                    if sh.merge_at(cell).is_some_and(|m| !m.is_single()) {
-                        continue;
-                    }
-                    let id = sh.style_id(cell);
-                    let st = cx.wb.styles.get(id);
-                    let text = crate::display::cell_text(&cx.wb, sh, cell);
-                    for line in text.lines() {
-                        let w = match &measure {
-                            Some(m) => {
-                                let known = measured.entry(id).or_default();
-                                match known.get(line) {
-                                    Some(w) => *w,
-                                    None => {
-                                        let w = m(line, &st.font, distinct < EXACT_TEXT_WIDTHS);
-                                        known.insert(line.to_owned(), w);
-                                        distinct += 1;
-                                        w
-                                    }
+        // Selected columns, then one pass over the populated cells (the store is row-oriented, so a
+        // scan per column would revisit every row for each selected column, empty or not).
+        let cols: std::collections::BTreeSet<u32> = lines.iter().flat_map(|&(a, b)| a..=b.min(a + 16383)).collect();
+        let mut maxes: std::collections::BTreeMap<u32, f32> = Default::default();
+        if let (Some(u), Some(&first), Some(&last)) = (sh.used_range(), cols.first(), cols.last()) {
+            let span = RangeRef::new(CellRef::new(u.start.row, first), CellRef::new(u.end.row, last));
+            for (cell, _) in sh.cells.iter_range(span) {
+                if !cols.contains(&cell.col) || sh.merge_at(cell).is_some_and(|m| !m.is_single()) {
+                    continue;
+                }
+                let id = sh.style_id(cell);
+                let st = cx.wb.styles.get(id);
+                let text = crate::display::cell_text(&cx.wb, sh, cell);
+                for line in text.lines() {
+                    let w = match &measure {
+                        Some(m) => {
+                            let known = measured.entry(id).or_default();
+                            match known.get(line) {
+                                Some(w) => *w,
+                                None => {
+                                    let w = m(line, &st.font, distinct < EXACT_TEXT_WIDTHS);
+                                    known.insert(line.to_owned(), w);
+                                    distinct += 1;
+                                    w
                                 }
                             }
-                            None => approx_text_width(line, st.font.size, st.font.bold),
-                        };
-                        max = max.max(w + 6.0 + st.align.indent as f32 * 9.0 + sh.filter_button_space(cell));
-                    }
-                }
-                if max > 0.0 {
-                    widths.push((c, max.clamp(8.0, 1785.0)));
+                        }
+                        None => approx_text_width(line, st.font.size, st.font.bold),
+                    };
+                    let w = w + 6.0 + st.align.indent as f32 * 9.0 + sh.filter_button_space(cell);
+                    let max = maxes.entry(cell.col).or_insert(0.0);
+                    *max = max.max(w);
                 }
             }
         }
+        let widths: Vec<(u32, f32)> = maxes.into_iter().filter(|&(_, m)| m > 0.0).map(|(c, m)| (c, m.clamp(8.0, 1785.0))).collect();
         let sh = cx.sheet_mut(si)?;
         for (c, w) in widths {
             let e = sh.cols.entry(c).or_default();
