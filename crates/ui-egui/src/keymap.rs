@@ -84,6 +84,11 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         Semicolon if ctrl && s => Shortcut::Time,
         Quote if ctrl && s => Shortcut::ValueAbove,
         Quote if ctrl => Shortcut::FormulaAbove,
+        // Ctrl+[ / Ctrl+] (Excel): select precedent / dependent cells; Shift walks every level.
+        OpenBracket if ctrl && !s => run("formulas.selectPrecedents"),
+        OpenBracket if ctrl => Shortcut::Run("formulas.selectPrecedents", json!({"all": true})),
+        CloseBracket if ctrl && !s => run("formulas.selectDependents"),
+        CloseBracket if ctrl => Shortcut::Run("formulas.selectDependents", json!({"all": true})),
         // Windows Ctrl+; is in `ribbon::shortcut`; Excel for Mac uses Control+; and Command+;.
         Semicolon if mac && ctrl => Shortcut::Date,
         Semicolon if mac && cmd && !s => Shortcut::Time,
@@ -92,10 +97,14 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         Num3 if ctrl && !mac => run("home.italic"),
         Num4 if ctrl && !mac => run("home.underline"),
         Num5 if ctrl && !mac => run("home.strikethrough"),
+        // Ctrl+6 hides and shows objects (Windows, and Control+6 in Excel for Mac).
+        Num6 if ctrl && !s => run("view.showObjects"),
         // Letters that differ between Windows and Mac.
         L if (cmd || ctrl) && s => run("data.filter"),
         L if cmd && mac => run("home.alignLeft"),
         L if ctrl && mac => Shortcut::Dialog("defineName", json!({})),
+        // Ctrl+Shift+U (Control+Shift+U in Excel for Mac) expands or collapses the formula bar.
+        U if ctrl && s => run("view.expandFormulaBar"),
         U if ctrl && mac && !s => Shortcut::Edit,
         L if cmd => run("insert.table"),
         E if cmd && mac && !s => run("home.alignCenter"),
@@ -150,6 +159,7 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         F3 if cmd && mac => Shortcut::Dialog("defineName", json!({})),
         F3 if cmd => Shortcut::Dialog("nameManager", json!({})),
         F3 if plain && s => Shortcut::Dialog("insertFunction", json!({})),
+        F3 if plain => Shortcut::Dialog("pasteName", json!({"shortcut": true})),
         F4 if cmd && !s => run("file.close"),
         F5 if plain && s => Shortcut::Dialog("find", json!({})),
         F5 if plain => Shortcut::Dialog("goTo", json!({})),
@@ -162,12 +172,16 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
     })
 }
 
+/// AltGr arrives as Ctrl+Alt on Windows: a key that also typed a character (AltGr+= is `~` on a German
+/// layout; a user-defined Ctrl+Alt+A hotkey may type `ä`) is text, not a shortcut.
+pub(crate) fn altgr_text(ctx: &egui::Context, m: Modifiers, mac: bool) -> bool {
+    !mac && m.alt && m.ctrl && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_))))
+}
+
 /// Handles a key press in the grid. Returns whether it was a shortcut.
 pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physical: Option<Key>, m: Modifiers, geo: &Geo, sh: &Sheet) -> bool {
     let mac = ctx.os() == egui::os::OperatingSystem::Mac;
-    // AltGr arrives as Ctrl+Alt on Windows: a key that also typed a character (AltGr+= is `~`
-    // on a German layout) is text, not a shortcut.
-    if !mac && m.alt && m.ctrl && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_)))) {
+    if altgr_text(ctx, m, mac) {
         return false;
     }
     let Some(shortcut) = lookup(key, physical, m, mac) else { return false };
@@ -212,9 +226,11 @@ pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physic
             let width = ((geo.cells.width() - geo.frozen_w) / geo.z).max(1.0);
             let cols = (width / sh.default_col_width.max(1.0)).floor().max(1.0) as i64;
             let dc = if shortcut == Shortcut::ScreenRight { cols } else { -cols };
+            let from = app.session.active().map(|d| if m.shift { d.selection.moving_end() } else { d.selection.active });
             let _ = app.session.run("selection.move", json!({"dr": 0, "dc": dc, "extend": m.shift}));
             app.grid.ensure_visible = true;
             app.grid.reveal_moving_end = m.shift;
+            app.grid.reveal_from = from;
         }
         Shortcut::Edit => app.begin_edit(None, false),
         Shortcut::ContextMenu => app.grid.context_menu = Some(geo.cell_rect(sh, active).center()),

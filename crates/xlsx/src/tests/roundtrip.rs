@@ -217,11 +217,21 @@ fn sample() -> Workbook {
             resolved: false,
             visible: false,
             dates: vec![],
+            note_box: None,
         },
     );
     s.comments.insert(
         at("C3"),
-        Comment { author: "Bob".into(), text: "second".into(), replies: vec![], threaded: false, resolved: false, visible: true, dates: vec![] },
+        Comment {
+            author: "Bob".into(),
+            text: "second".into(),
+            replies: vec![],
+            threaded: false,
+            resolved: false,
+            visible: true,
+            dates: vec![],
+            note_box: None,
+        },
     );
     s.comments.insert(
         at("D4"),
@@ -233,11 +243,21 @@ fn sample() -> Workbook {
             resolved: true,
             visible: false,
             dates: vec!["2026-10-11T09:30:00.00".into(), String::new(), "2026-10-11T10:15:00.00".into()],
+            note_box: None,
         },
     );
     s.comments.insert(
         at("E5"),
-        Comment { author: "Cy".into(), text: "open thread".into(), replies: vec![], threaded: true, resolved: false, visible: false, dates: vec![] },
+        Comment {
+            author: "Cy".into(),
+            text: "open thread".into(),
+            replies: vec![],
+            threaded: true,
+            resolved: false,
+            visible: false,
+            dates: vec![],
+            note_box: None,
+        },
     );
     s.autofilter = Some(AutoFilter {
         range: rr("K1:N20"),
@@ -326,7 +346,7 @@ fn sample() -> Workbook {
         id: 10,
         // A non-default anchor mode, to prove it survives an xlsx round-trip.
         anchor: Anchor { cell: at("C10"), dx: 5.0, dy: 4.0, width: 120.0, height: 80.0, mode: AnchorMode::MoveOnly },
-        data: png,
+        data: png.into(),
         mime: "image/png".into(),
         alt: "Logo \"x\"".into(),
     });
@@ -365,6 +385,7 @@ fn sample() -> Workbook {
             text_outline: Some((Color::Rgb(0xFF0000), 1.5)),
             align: Some(ShapeTextAlign::Right),
             anchor: Some(ShapeTextAnchor::Bottom),
+            rtl: true,
         },
     });
     let base_chart = Chart {
@@ -380,6 +401,7 @@ fn sample() -> Workbook {
             color: Some(Color::Rgb(0xFF0000)),
             secondary: false,
             kind: None,
+            quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
         }],
@@ -407,6 +429,7 @@ fn sample() -> Workbook {
         ChartKind::Doughnut,
         ChartKind::Area,
         ChartKind::AreaStacked,
+        ChartKind::AreaStacked100,
         ChartKind::Scatter,
         ChartKind::ScatterLines,
         ChartKind::Bubble,
@@ -435,7 +458,16 @@ fn sample() -> Workbook {
     s3.visibility = Visibility::VeryHidden;
     s3.comments.insert(
         at("A1"),
-        Comment { author: "Bob".into(), text: "other sheet".into(), replies: vec![], threaded: true, resolved: false, visible: false, dates: vec![] },
+        Comment {
+            author: "Bob".into(),
+            text: "other sheet".into(),
+            replies: vec![],
+            threaded: true,
+            resolved: false,
+            visible: false,
+            dates: vec![],
+            note_box: None,
+        },
     );
     wb.sheets.push(Arc::new(s3));
     wb.names.push(DefinedName { name: "Rate".into(), scope: None, formula: "0.07".into(), comment: "c".into(), hidden: false });
@@ -680,6 +712,51 @@ fn iterative_calculation_settings_roundtrip() {
 }
 
 #[test]
+fn show_objects_roundtrip() {
+    let saved = |wb: &Workbook| {
+        let bytes = write_xlsx(wb).unwrap();
+        let mut pkg = Package::open(&bytes).unwrap();
+        let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
+        let attr = book.child("workbookPr").and_then(|p| p.attr("showObjects")).map(str::to_string);
+        (attr, read_xlsx(&bytes).unwrap().0.show_objects)
+    };
+    // Default: nothing written, All read back.
+    let mut wb = Workbook::new();
+    assert_eq!(saved(&wb), (None, ShowObjects::All));
+    // Beside date1904, which shares the element.
+    wb.date_system = DateSystem::D1904;
+    for (show, attr) in [(ShowObjects::None, "none"), (ShowObjects::Placeholders, "placeholders")] {
+        wb.show_objects = show;
+        assert_eq!(saved(&wb), (Some(attr.to_string()), show));
+        assert_eq!(read_xlsx(&write_xlsx(&wb).unwrap()).unwrap().0.date_system, DateSystem::D1904);
+    }
+    // A file written elsewhere: the attribute among the others Excel writes, or absent.
+    let book = |pr: &str| {
+        let wbx = format!(
+            r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">{pr}<sheets><sheet name="A" sheetId="1" r:id="rId1"/></sheets></workbook>"#
+        );
+        let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#;
+        let ws = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#;
+        let bytes = super::make_zip(&[
+            ("[Content_Types].xml", super::CT.as_bytes()),
+            ("_rels/.rels", super::ROOT_RELS.as_bytes()),
+            ("xl/workbook.xml", wbx.as_bytes()),
+            ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+            ("xl/worksheets/sheet1.xml", ws.as_bytes()),
+        ]);
+        read_xlsx(&bytes).unwrap().0
+    };
+    let hidden = book(r#"<workbookPr showObjects="none" defaultThemeVersion="166925"/>"#);
+    assert_eq!(hidden.show_objects, ShowObjects::None);
+    assert_eq!(saved(&hidden).0.as_deref(), Some("none"));
+    for pr in [r#"<workbookPr defaultThemeVersion="166925"/>"#, "", r#"<workbookPr showObjects="bogus"/>"#] {
+        let wb = book(pr);
+        assert_eq!(wb.show_objects, ShowObjects::All, "{pr}");
+        assert_eq!(saved(&wb).0, None, "{pr}: a file without the attribute stays without it");
+    }
+}
+
+#[test]
 fn empty_workbook_roundtrip() {
     let wb = Workbook::new();
     let bytes = write_xlsx(&wb).unwrap();
@@ -691,6 +768,48 @@ fn empty_workbook_roundtrip() {
     assert_eq!(back.sheets[0].default_col_width, 64.0);
     assert_eq!(back.sheets[0].default_row_height, 20.0);
     assert!(crate::sniff(&bytes) == crate::Format::Xlsx);
+}
+
+#[test]
+fn cell_text_carriage_returns_survive_xlsx_roundtrip() {
+    let mut wb = Workbook::new();
+    let values = [("A1", "Line 1\r\nLine 2"), ("A2", "Part A\rPart B"), ("A3", "Item 3\nItem 4"), ("A4", "literal _x000D_ marker")];
+    let sheet = wb.sheet_mut(0).unwrap();
+    for (address, text) in values {
+        sheet.set_value(at(address), Value::text(text));
+    }
+    let mut formula = Cell::formula(Formula::new("A1"));
+    formula.value = Value::text("Cached\r\ntext");
+    sheet.cells.set(at("B1"), formula);
+    sheet.comments.insert(
+        at("A1"),
+        Comment {
+            author: "Tester".into(),
+            text: "Note\r\ntext".into(),
+            replies: vec![],
+            threaded: false,
+            resolved: false,
+            visible: false,
+            dates: vec![],
+            note_box: None,
+        },
+    );
+
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut package = Package::open(&bytes).unwrap();
+    let shared_strings = String::from_utf8(package.read("xl/sharedStrings.xml").unwrap().unwrap()).unwrap();
+    assert!(shared_strings.contains("Line 1_x000D_\nLine 2"), "CR must be encoded before XML parsing");
+    assert!(shared_strings.contains("Part A_x000D_Part B"));
+    assert!(!shared_strings.contains('\r'), "raw CR is normalized to LF by XML parsers");
+    let sheet_xml = String::from_utf8(package.read("xl/worksheets/sheet1.xml").unwrap().unwrap()).unwrap();
+    assert!(sheet_xml.contains("Cached_x000D_\ntext"), "formula caches also use ST_Xstring");
+
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    for (address, text) in values {
+        assert_eq!(back.sheets[0].value(at(address)), Value::text(text), "{address} changed on save/reopen");
+    }
+    assert_eq!(back.sheets[0].value(at("B1")), Value::text("Cached\r\ntext"));
+    assert_eq!(back.sheets[0].comments.get(&at("A1")).map(|c| c.text.as_str()), Some("Note\r\ntext"));
 }
 
 #[test]
@@ -737,7 +856,7 @@ fn vba_project_roundtrip() {
     // carries the macro-enabled content type plus the vbaProject relationship.
     let vba = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1 fake OLE2 vbaProject".to_vec();
     let mut wb = Workbook::new();
-    wb.vba_project = Some(vba.clone());
+    wb.vba_project = Some(vba.clone().into());
     let bytes = write_xlsx(&wb).unwrap();
     assert_eq!(write_xlsx(&wb).unwrap(), bytes, "output is deterministic");
 
@@ -756,7 +875,7 @@ fn vba_project_roundtrip() {
     assert!(rels.contains("relationships/vbaProject"), "vbaProject relationship: {rels}");
 
     let (back, rep) = read_xlsx(&bytes).unwrap();
-    assert_eq!(back.vba_project.as_deref(), Some(vba.as_slice()), "vbaProject survives the read");
+    assert_eq!(back.vba_project.as_deref(), Some(&vba), "vbaProject survives the read");
     assert!(rep.warnings.iter().any(|w| w.contains("not executed")), "{:?}", rep.warnings);
 
     // A workbook without macros stays macro-free and free of VBA warnings.
@@ -917,6 +1036,7 @@ fn bad_comment_dates_are_left_out() {
         resolved: false,
         visible: false,
         dates: vec!["\"/><evil".into()],
+        note_box: None,
     };
     s.comments.insert(at("A1"), c);
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
@@ -1127,6 +1247,90 @@ fn default_font_survives_a_round_trip() {
     assert_eq!(font0(&saved), (Some("12".into()), Some("Calibri".into()), Some("2".into()), Some("minor".into())));
 }
 
+/// Every font that follows the theme's body font keeps `<scheme val="minor"/>`, not only font 0,
+/// and a body-face font without the scheme does not gain one (#2517).
+#[test]
+fn minor_scheme_survives_on_every_font() {
+    let styles = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="3"><font><sz val="11"/><color theme="1"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font><font><b/><sz val="11"/><color theme="1"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font><font><i/><sz val="11"/><color theme="1"/><name val="Calibri"/><family val="2"/></font></fonts>
+        <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+        <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+        <cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>
+        <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>"#;
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1" s="1"><v>1</v></c><c r="B1" s="2"><v>2</v></c></row></sheetData>"#;
+    let file = super::minimal(body, &[("xl/styles.xml", styles)], rels, "");
+    let saved = write_xlsx(&read_xlsx(&file).unwrap().0).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let st = pkg.read_xml("xl/styles.xml").unwrap().unwrap();
+    let fonts: Vec<(bool, bool, Option<String>)> = st
+        .child("fonts")
+        .unwrap()
+        .kids("font")
+        .map(|f| (f.child("b").is_some(), f.child("i").is_some(), f.child("scheme").and_then(|e| e.attr("val")).map(str::to_string)))
+        .collect();
+    let scheme = |b: bool, i: bool| fonts.iter().find(|f| f.0 == b && f.1 == i).map(|f| f.2.clone());
+    assert_eq!(scheme(true, false), Some(Some("minor".into())), "{fonts:?}");
+    assert_eq!(scheme(false, true), Some(None), "{fonts:?}");
+}
+
+fn one_font_workbook(font: &str) -> Vec<u8> {
+    let styles = format!(
+        r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font>{font}</font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>"#
+    );
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    super::minimal("<sheetData/>", &[("xl/styles.xml", &styles)], rels, "")
+}
+
+#[test]
+fn font_charset_and_family_roundtrip() {
+    let file = one_font_workbook(r#"<name val="Traditional Arabic"/><family val="1"/><charset val="178"/>"#);
+    let (wb, _) = read_xlsx(&file).unwrap();
+    let saved = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let xml = String::from_utf8(pkg.read("xl/styles.xml").unwrap().unwrap()).unwrap();
+    assert!(xml.contains("<name val=\"Traditional Arabic\"/><family val=\"1\"/><charset val=\"178\"/>"), "{xml}");
+
+    let (back, _) = read_xlsx(&saved).unwrap();
+    let font = &back.styles.get(StyleId::DEFAULT).font;
+    let back_saved = write_xlsx(&back).unwrap();
+    let mut pkg = Package::open(&back_saved).unwrap();
+    let xml = String::from_utf8(pkg.read("xl/styles.xml").unwrap().unwrap()).unwrap();
+    assert!(xml.contains("<name val=\"Traditional Arabic\"/><family val=\"1\"/><charset val=\"178\"/>"), "{xml}");
+    assert_eq!(font.name, "Traditional Arabic");
+    assert_eq!(font.family, Some(1));
+    assert_eq!(font.charset, Some(178));
+}
+
+#[test]
+fn fonts_without_charset_write_unchanged() {
+    let file = one_font_workbook(r#"<name val="Arial"/>"#);
+    let saved = write_xlsx(&read_xlsx(&file).unwrap().0).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let xml = String::from_utf8(pkg.read("xl/styles.xml").unwrap().unwrap()).unwrap();
+    assert!(xml.contains("<name val=\"Arial\"/><family val=\"2\"/>"), "{xml}");
+    assert!(!xml.contains("<charset"), "{xml}");
+}
+
+#[test]
+fn out_of_range_family_is_ignored() {
+    let file = one_font_workbook(r#"<name val="Arial"/><family val="15"/>"#);
+    let (wb, _) = read_xlsx(&file).unwrap();
+    assert_eq!(wb.styles.get(StyleId::DEFAULT).font.family, None);
+    let saved = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let xml = String::from_utf8(pkg.read("xl/styles.xml").unwrap().unwrap()).unwrap();
+    assert!(xml.contains("<name val=\"Arial\"/><family val=\"2\"/>"), "{xml}");
+
+    let mut set_directly = wb.clone();
+    let wide = set_directly.styles.derive(StyleId::DEFAULT, |st| st.font.family = Some(200));
+    set_directly.sheet_mut(0).unwrap().set_value(CellRef::new(0, 0), Value::text("x"));
+    set_directly.sheet_mut(0).unwrap().set_style(CellRef::new(0, 0), wide);
+    let saved = write_xlsx(&set_directly).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let xml = String::from_utf8(pkg.read("xl/styles.xml").unwrap().unwrap()).unwrap();
+    assert!(!xml.contains("<family val=\"200\"/>"), "{xml}");
+}
+
 #[test]
 fn solid_data_bar_survives_with_sparklines_and_gradient_neighbours() {
     let mut wb = Workbook::new();
@@ -1163,4 +1367,120 @@ fn doc_props_keep_boundary_whitespace() {
     };
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert_eq!(back.props, wb.props);
+}
+
+/// Japanese paper sizes survive an XLSX save and reopen. IDs 12/13 are the JIS B4/B5; the
+/// Japanese postcards and envelopes have their own IDs, and `B4 (ISO)` keeps ISO B4. The ISO B5/B6
+/// names only exist in the engine: ECMA-376 has no `paperSize` id for them (only ISO B4), so they
+/// are not part of the round-trip.
+#[test]
+fn japanese_paper_sizes_round_trip() {
+    for paper in [
+        "B4",
+        "B5",
+        "B6",
+        "B4 (ISO)",
+        "A6",
+        "Japanese Postcard",
+        "Japanese Double Postcard",
+        "Japanese Envelope #3",
+        "Japanese Envelope #4",
+        "Japanese Envelope Kaku #2",
+        "Japanese Envelope Kaku #3",
+    ] {
+        let mut wb = Workbook::new();
+        wb.sheet_mut(0).unwrap().print.paper = paper.into();
+        let (back, report) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+        assert!(report.warnings.is_empty(), "{paper}: {:?}", report.warnings);
+        assert_eq!(back.sheet(0).unwrap().print.paper, paper);
+    }
+    // An alias is written as the file's own name and read back as that name.
+    let mut wb = Workbook::new();
+    wb.sheet_mut(0).unwrap().print.paper = "B5 (JIS)".into();
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.sheet(0).unwrap().print.paper, "B5");
+}
+
+/// A table's dropdown filter lives in `sheet.autofilter` (the engine's only live filter state),
+/// not in `Table::filter`. Writing used to suppress the sheet `<autoFilter>` because a table
+/// intersects it and write the table part from `Table::filter`, which was empty: the criteria
+/// were lost on every save, leaving the rows hidden with no filter to clear on reopen.
+#[test]
+fn a_table_filter_criteria_survive_a_round_trip() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    for (r, v) in [(0u32, "Region"), (1, "East"), (2, "West"), (3, "East")] {
+        s.set_value(at(&format!("A{}", r + 1)), Value::text(v));
+    }
+    s.tables.push(Table {
+        id: 1,
+        name: "Sales".into(),
+        range: rr("A1:A4"),
+        header_row: true,
+        totals_row: false,
+        columns: vec![TableColumn { name: "Region".into(), totals: TotalsFn::None, totals_label: None, formula: None, unique_name: None, xml: None }],
+        style: "TableStyleMedium2".into(),
+        banded_rows: true,
+        banded_cols: false,
+        first_col: false,
+        last_col: false,
+        filter_button: true,
+        filter: vec![],
+        table_type: None,
+        connection_id: None,
+    });
+    // The dropdown of a table's header cell installs the sheet AutoFilter over the table's
+    // range, and `data.filterBy` stores its criteria there.
+    s.autofilter =
+        Some(AutoFilter { range: rr("A1:A4"), criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false })] });
+    s.rows.entry(1).or_default().hidden = true;
+
+    let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let b = back.sheet(0).unwrap();
+    let t = b.tables.first().expect("the table survived");
+    let (_, crit) = t.filter.first().expect("the table's filter criteria were kept on save");
+    assert!(matches!(crit, FilterCriterion::Values { values, .. } if values == &["East".to_string()]), "the criteria were dropped: {:?}", t.filter);
+    assert!(b.is_row_hidden(1), "the row the filter hid is still hidden");
+    assert!(b.autofilter.is_none(), "a table's filter belongs to the table part, not the sheet");
+}
+
+/// Stored `colId` offsets are relative to the filter range's first column, so criteria of a filter
+/// that starts right of the table's first column must not be folded into the table part, where
+/// they would apply to the wrong column.
+#[test]
+fn a_partial_sheet_filter_is_not_folded_into_a_table() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    for (a, v) in [("A1", "Id"), ("B1", "Region"), ("A2", "1"), ("B2", "East"), ("A3", "2"), ("B3", "West")] {
+        s.set_value(at(a), Value::text(v));
+    }
+    let column =
+        |name: &str| TableColumn { name: name.into(), totals: TotalsFn::None, totals_label: None, formula: None, unique_name: None, xml: None };
+    s.tables.push(Table {
+        id: 1,
+        name: "Sales".into(),
+        range: rr("A1:B3"),
+        header_row: true,
+        totals_row: false,
+        columns: vec![column("Id"), column("Region")],
+        style: "TableStyleMedium2".into(),
+        banded_rows: true,
+        banded_cols: false,
+        first_col: false,
+        last_col: false,
+        filter_button: true,
+        filter: vec![],
+        table_type: None,
+        connection_id: None,
+    });
+    s.autofilter =
+        Some(AutoFilter { range: rr("B1:B3"), criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false })] });
+
+    let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let b = back.sheet(0).unwrap();
+    let t = b.tables.first().expect("the table survived");
+    assert!(t.filter.is_empty(), "the criteria landed on the wrong table column: {:?}", t.filter);
+    assert!(b.autofilter.is_none(), "a sheet filter inside a table would be invalid");
 }

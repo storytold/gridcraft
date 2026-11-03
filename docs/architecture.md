@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (created from the code on main; supersedes the local-only plan/architecture.md for committed docs) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · ** Last updated:** 2026-10-24 · **Change:** minor (engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -33,8 +33,14 @@ including tests, 2026-10-10.
    `Session::execute(id, params)`. Commands are `CommandSpec { id, label, menu, shortcut, params,
    enabled, run, journal, undoable }`; ids follow Excel's ribbon (`home.bold`, `insert.chart`,
    `data.sortAscending`) plus primitives (`cell.set`, `selection.set`, `range.setValues`).
-   `Session::execute` catches escaped panics and restores the workbook (never-crash guard).
+   `Session::execute` catches escaped panics and restores the workbook, its selection and its
+   undo and redo history as they were before the command (never-crash guard); a group that was
+   open before the command and that the command ended or rolled back stays ended and keeps a
+   step from its start to the restored workbook, so Undo still returns to the state before it.
 2. **Edits** change the model through copy-on-write bands; undo keeps the previous snapshot.
+   Undo retains at most 100 steps and trims older steps when its estimated retained cell storage
+   exceeds 128 MiB. The newest step remains undoable even if that step alone exceeds the budget.
+   The estimate is a history policy, not a measure or hard cap of process memory.
 3. **Recalc** marks dependents of changed cells dirty through the dependency graph (with range
    nodes for range dependents), evaluates in topological order, spills dynamic arrays and reports
    `#SPILL!`/cycles. Volatile functions are always dirty.
@@ -42,6 +48,82 @@ including tests, 2026-10-10.
    for the visible window only; charts render through `crates/chart` primitives.
 5. **Files**: `engine/io.rs` sniffs content (XLSX, XLSB, ODS) before trusting the extension and
    dispatches to `crates/xlsx`; imports that lose data return warnings shown to the user.
+
+## UI building blocks
+
+The panels in `crates/ui-egui` share a few pieces, so a new feature reuses them instead of
+drawing its own:
+
+- **Colours**: `theme::Tokens`, each with a light and a dark value. The sheet stays white in both
+  themes, so colours drawn on it (`sheet_ref_colors`, `sheet_control_*`, icons through
+  `icons::paint_on_sheet`) keep their light values. `theme::contrast_tests` holds every
+  foreground/background pair to WCAG 2 (4.5:1 for text, 3:1 for glyphs) in both themes; a new
+  token pair is added there. Icons (`icons.rs`, drawn in code) take their paper and category
+  colours (`theme::Cat`) from the tokens.
+- **Ribbon widgets**: `widgets.rs` has the buttons every tab is built from (`big_button`,
+  `small_button`, `split_button`, `big_split_button`, `toggle_button`), translated through
+  `i18n` in one place. Split buttons return the main and arrow responses separately, with
+  accessible names (`AutoSum`, `AutoSum options`). The ribbon card scrolls a tab wider than the
+  window, with arrows at its edges; `ribbon::RibbonOverflow` records the groups' size each frame,
+  and a test keeps every tab within the card's three rows.
+- **Code editor**: `widgets::code_editor(ui, id, &mut text, Lang, max_lines)` (`code_editor.rs`)
+  edits code in the monospace font with `Tokens::syntax` colours: Python (keywords, strings
+  including triple-quoted ones, numbers, comments, builtins) and LaTeX (commands, scripts,
+  comments). Tab indents (every selected line, Shift+Tab dedents), Enter keeps the line's
+  indentation (one level more after a Python colon), both applied in input order with the typing
+  around them: a pass can carry several events, and the editor's keys that follow an event the
+  text field acts on (select all, an arrow) wait for the editor's next pass, which puts them
+  ahead of its input, so the field never gets a Tab or an Enter of a focused editor; and it
+  scrolls past `max_lines` with the caret in view. The tokenizer and the key edits are pure functions with tests, including
+  hostile input.
+- **Formula bar**: grows with its content from one line to `formula_bar::MAX_LINES` (five), then
+  scrolls; one line is Excel's 30 px unless the font's rows need more (`formula_bar::one_line`;
+  the Windows UI font's row is 17.28 px), so every counted line fits whatever the font;
+  `formula_bar::BarLayout` records where its parts went each frame, for tests.
+
+
+## Engine building blocks for multi-command actions
+
+Actions made of many commands (macros, a debugger that runs one step per call) use these parts of
+`Session` and the engine:
+
+- **Undo groups.** `Session::grouped(label, f)` runs `f` as one undo step and rolls every change
+  back if `f` fails; `group_begin`, `group_end` and `group_rollback` do the same across calls.
+  While a group is open on a document, its commands add no undo steps of their own and Undo and
+  Redo are disabled there. Groups nest; the outermost one makes the step. A command that opens and
+  closes its own groups still makes one undo step for itself, covering its edits inside and outside
+  the groups. A command that ends a group open before it leaves the group its step and makes one
+  of its own for what it changes after the end; a group a command opens and leaves open starts
+  where the command did, but only when the command succeeds: a command that fails rolls back
+  every group it opened, as `group_rollback` does. `Session::abort_groups(doc)`, and the command
+  `automate.stopAction` on the active workbook, roll back the groups left open on a document (a
+  debugger the person abandons, a caller that dropped its token), so Undo works there again. The
+  history limit is applied when the outermost command finishes; until then the steps made inside
+  it are bounded on their own.
+- **Recording buffer** (`record.rs`). `Session::start_recording` collects each successful
+  top-level command with the document, sheet and selection it ran in, without secret parameters.
+  Commands run by other commands are not recorded, nor is a menu-style call that only opened a
+  dialog (the dialog's confirming call is the step), and the buffer is independent of the journal
+  (Automate › Record Actions still records through the journal).
+- **Document trust.** `DocState::trust` is `Local` for workbooks made in the session and
+  `FromFile` for workbooks opened from a file. `Trust` has no default: `DocState::new` takes it,
+  so every way of making a document says where its content came from. It is also `FromFile` for
+  workbooks that received a paste from one that writes formulas or validation: Paste, Paste
+  Special › All, All Except Borders, Formulas, Formulas and Number Formats or Validation, and any
+  linked paste other than column widths or notes. Values, formats, column widths and notes carry
+  nothing active. Active content in a `FromFile` workbook asks before it runs. This is provenance,
+  which no decision changes; `DocState::scripts_trusted` is the separate per-session consent for
+  stored `automate.*` scripts (`automate.trustScripts`).
+- **Workbook data in hidden names** (`cmd/stash.rs`). An item is split over hidden
+  workbook-scope names `_gc_<key>_0`, `_gc_<key>_1`, … of string literals within Excel's 255- and
+  8,192-character limits, so it survives an xlsx round trip. Characters XML can't carry (controls
+  other than tab, line feed and carriage return, U+FFFE, U+FFFF) are stored as the noncharacter
+  U+FDD0 and four hex digits, as is U+FDD0 itself, and read back as they were. `stash::items`
+  and `stash::keys` list the items under a key prefix in one pass over the names, at most
+  10,000 of them (`stash::MAX_ITEMS`). The older single-name `_sc_<key>` items are read as well.
+  `formulas.defineName` and `formulas.deleteName` refuse a name the workbook holds such an item
+  under (a hidden workbook-scope name of either shape; a visible one is the person's own), and
+  `formulas.createFromSelection` skips such labels, unless `force: true` is passed.
 
 ## Agent control
 
@@ -68,4 +150,6 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
+| 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

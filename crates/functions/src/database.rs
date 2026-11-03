@@ -35,10 +35,11 @@ fn field_index(db: &Array, a: &[Arg]) -> R<Option<usize>> {
     match v {
         Value::Number(n) => {
             let i = n.trunc();
-            if i < 1.0 || i > db.cols as f64 {
+            // NaN too: it would pass both comparisons and become index 0 (#2163).
+            if i.is_nan() || i < 1.0 || i > db.cols as f64 {
                 return Err(CellError::Value);
             }
-            Ok(Some(i as usize - 1))
+            Ok(Some((i as usize).saturating_sub(1)))
         }
         Value::Text(t) => find_column(db, &t).map(Some).ok_or(CellError::Value),
         Value::Bool(_) => Err(CellError::Value),

@@ -106,8 +106,26 @@ const BORDER_PRESETS: &[&str] = &[
     "diagonalUp",
 ];
 
-/// All tools, in `tools/list` order.
+/// Tools that don't act on one workbook, so they take no `window`/`doc` target.
+const UNTARGETED: &[&str] = &["list_commands", "list_functions", "list_windows", "new_workbook", "open_workbook", "screenshot"];
+
+/// All tools, in `tools/list` order. Tools that act on a workbook take an optional `window` or
+/// `doc` id (from list_windows) and default to the active window.
 pub fn tool_definitions() -> Vec<Value> {
+    let mut tools = base_tool_definitions();
+    for t in &mut tools {
+        if UNTARGETED.iter().any(|n| t["name"] == *n) {
+            continue;
+        }
+        if let Some(props) = t["inputSchema"]["properties"].as_object_mut() {
+            props.insert("window".into(), int("Window id from list_windows (default: the active window)"));
+            props.insert("doc".into(), int("Workbook id from list_windows: its most recent window (default: the active window)"));
+        }
+    }
+    tools
+}
+
+fn base_tool_definitions() -> Vec<Value> {
     let empty = || obj(json!({}), &[]);
     vec![
         // ----- generic -----
@@ -124,6 +142,14 @@ pub fn tool_definitions() -> Vec<Value> {
                 &["command"],
             ),
             false,
+        ),
+        tool(
+            "list_windows",
+            "List windows",
+            "List the open windows: window id, workbook (`doc`) id, title (\"Book1\", or \"Book1:2\" for a workbook's second \
+             window), unsaved changes, active and hidden. Pass a `window` or `doc` id to other tools to act there.",
+            empty(),
+            true,
         ),
         tool(
             "list_commands",
@@ -196,7 +222,8 @@ pub fn tool_definitions() -> Vec<Value> {
             "evaluate_formula",
             "Evaluate formula",
             "Evaluate a formula against the active sheet WITHOUT changing any cell, e.g. \"=SUM(B2:B10)/COUNT(B2:B10)\" or \
-             \"=VLOOKUP(\\\"x\\\",A:B,2,FALSE)\". `cell` sets the formula's position for relative references and ROW()/COLUMN().",
+             \"=VLOOKUP(\\\"x\\\",A:B,2,FALSE)\". `cell` sets the formula's position for relative references and ROW()/COLUMN(). \
+             Use English function names and `,` between arguments; a formula that couldn't be entered in a cell is an error saying why.",
             obj(
                 json!({"formula": string("Formula text, with or without the leading ="), "cell": string("Evaluate as if in this cell (default: active cell)")}),
                 &["formula"],
@@ -607,6 +634,7 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Args) -> Result<Value, String> 
             exec(b, cmd, p)
         }
         "list_commands" => b.call("engine.commands", pick(a, &["search"])),
+        "list_windows" => exec(b, "window.list", json!({})),
         "inspect_workbook" => b.call("document.inspect", json!({})),
         "read_range" => b.call("sheet.read", pick(a, &["range", "sheet", "formulas", "formatted"])),
         "write_range" => exec(b, "range.setValues", pick(a, &["range", "values"])),
@@ -637,6 +665,35 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Args) -> Result<Value, String> 
     }
 }
 
+/// Sends every engine call of one tool to the window its `window`/`doc` argument names.
+struct Targeted<'a> {
+    inner: &'a mut dyn Backend,
+    target: Map<String, Value>,
+}
+
+impl Backend for Targeted<'_> {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let envelope = if method == "engine.execute" {
+            params
+        } else if gridcraft_engine::find_command(method).is_some() {
+            json!({"command": method, "params": params})
+        } else {
+            return self.inner.call(method, params);
+        };
+        let mut envelope = envelope;
+        if let Some(o) = envelope.as_object_mut() {
+            o.extend(self.target.clone());
+        }
+        self.inner.call("engine.execute", envelope)
+    }
+    fn has_ui(&self) -> bool {
+        self.inner.has_ui()
+    }
+    fn describe(&self) -> String {
+        self.inner.describe()
+    }
+}
+
 /// Runs one tool. Failures become `isError` results with a readable message.
 pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
     let empty = Map::new();
@@ -645,7 +702,11 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, args: &Value) -> ToolResult {
         Value::Null => &empty,
         _ => return ToolResult::error("tool arguments must be a JSON object"),
     };
-    match dispatch(b, name, a) {
+    let target: Map<String, Value> =
+        ["window", "doc"].iter().filter_map(|k| a.get(*k).filter(|v| !v.is_null()).map(|v| (k.to_string(), v.clone()))).collect();
+    let r =
+        if target.is_empty() || UNTARGETED.contains(&name) { dispatch(b, name, a) } else { dispatch(&mut Targeted { inner: b, target }, name, a) };
+    match r {
         Ok(v) => ToolResult::json(&v),
         Err(e) => ToolResult::error(format!("{name}: {e}")),
     }

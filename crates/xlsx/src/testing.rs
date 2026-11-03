@@ -9,8 +9,8 @@
 use aes::cipher::{BlockCipherEncrypt, KeyInit};
 
 use crate::crypto::{
-    BLOCK_KEY, BLOCK_VERIFIER_HASH, BLOCK_VERIFIER_INPUT, F_AES, F_CRYPTOAPI, Hash, PASSWORD_ENCRYPTOR, Params, SEGMENT, derive, iterated_hash,
-    standard_key,
+    BLOCK_HMAC_KEY, BLOCK_HMAC_VALUE, BLOCK_KEY, BLOCK_VERIFIER_HASH, BLOCK_VERIFIER_INPUT, F_AES, F_CRYPTOAPI, Hash, PASSWORD_ENCRYPTOR, Params,
+    SEGMENT, derive, hmac, iterated_hash, standard_key,
 };
 
 /// The spin count `encrypt_workbook` uses: Excel's default.
@@ -21,6 +21,7 @@ const KEY_DATA_SALT: [u8; 16] = [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
 const SECRET_KEY: [u8; 32] =
     [64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95];
 const VERIFIER: [u8; 16] = [32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47];
+const HMAC_SALT: [u8; 16] = [112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127];
 
 /// `package` (normally an `.xlsx` zip) as Excel stores it with a password: Agile encryption
 /// (AES-256, SHA-512) inside a compound file.
@@ -202,8 +203,9 @@ fn package(size: usize, body: Vec<u8>) -> Vec<u8> {
     p
 }
 
-/// The Agile XML descriptor: AES-256, SHA-512, a password encryptor salted with 0..16.
-pub(crate) fn agile_info(password: &str, spin: u32) -> String {
+/// The Agile XML descriptor: AES-256, SHA-512, a password encryptor salted with 0..16, and the
+/// dataIntegrity pair (`hmac_key_b64`/`hmac_value_b64`) a compliant file carries.
+pub(crate) fn agile_info(password: &str, spin: u32, hmac_key_b64: &str, hmac_value_b64: &str) -> String {
     let key = Params { hash: Hash::Sha512, salt: PASSWORD_SALT.to_vec(), key_len: 32 };
     let h = iterated_hash(Hash::Sha512, password, &key.salt, spin);
     let iv = key.iv(None);
@@ -217,9 +219,10 @@ pub(crate) fn agile_info(password: &str, spin: u32) -> String {
             base64_encode(salt)
         )
     };
+    // The dataIntegrity pair ([MS-OFFCRYPTO] 2.3.4.14), encrypted with the package key.
     format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<encryption xmlns=\"http://schemas.microsoft.com/office/2006/encryption\" xmlns:p=\"http://schemas.microsoft.com/office/2006/keyEncryptor/password\"><keyData {}/><keyEncryptors><keyEncryptor uri=\"{PASSWORD_ENCRYPTOR}\"><p:encryptedKey spinCount=\"{spin}\" {} encryptedVerifierHashInput=\"{input}\" encryptedVerifierHashValue=\"{value}\" encryptedKeyValue=\"{secret}\"/></keyEncryptor></keyEncryptors></encryption>",
-        params(&KEY_DATA_SALT),
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<encryption xmlns=\"http://schemas.microsoft.com/office/2006/encryption\" xmlns:p=\"http://schemas.microsoft.com/office/2006/keyEncryptor/password\"><keyData {}/><dataIntegrity encryptedHmacKey=\"{hmac_key_b64}\" encryptedHmacValue=\"{hmac_value_b64}\"/><keyEncryptors><keyEncryptor uri=\"{PASSWORD_ENCRYPTOR}\"><p:encryptedKey spinCount=\"{spin}\" {} encryptedVerifierHashInput=\"{input}\" encryptedVerifierHashValue=\"{value}\" encryptedKeyValue=\"{secret}\"/></keyEncryptor></keyEncryptors></encryption>",
+        params(KEY_DATA_SALT.as_slice()),
         params(&PASSWORD_SALT),
     )
 }
@@ -231,14 +234,20 @@ pub(crate) fn with_agile_header(xml: &str) -> Vec<u8> {
     info
 }
 
-/// `EncryptionInfo` and `EncryptedPackage` for `plain`, Agile (AES-256, SHA-512).
+/// `EncryptionInfo` and `EncryptedPackage` for `plain`, Agile (AES-256, SHA-512), with the
+/// dataIntegrity HMAC over the whole EncryptedPackage stream as Excel writes it.
 pub(crate) fn encrypt_agile(plain: &[u8], password: &str, spin: u32) -> (Vec<u8>, Vec<u8>) {
     let key_data = Params { hash: Hash::Sha512, salt: KEY_DATA_SALT.to_vec(), key_len: 32 };
     let mut body = vec![];
     for (i, segment) in plain.chunks(SEGMENT).enumerate() {
         body.extend(encrypt_cbc(&SECRET_KEY, &key_data.iv(Some(&(i as u32).to_le_bytes())), segment));
     }
-    (with_agile_header(&agile_info(password, spin)), package(plain.len(), body))
+    let stream = package(plain.len(), body);
+    let (hmac_key_b64, hmac_value_b64) = (
+        base64_encode(&encrypt_cbc(&SECRET_KEY, &key_data.iv(Some(&BLOCK_HMAC_KEY)), &HMAC_SALT)),
+        base64_encode(&encrypt_cbc(&SECRET_KEY, &key_data.iv(Some(&BLOCK_HMAC_VALUE)), &hmac(Hash::Sha512, &HMAC_SALT, &stream))),
+    );
+    (with_agile_header(&agile_info(password, spin, &hmac_key_b64, &hmac_value_b64)), stream)
 }
 
 /// `EncryptionInfo` and `EncryptedPackage` for `plain`, Standard (AES-128, SHA-1).

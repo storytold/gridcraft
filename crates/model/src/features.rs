@@ -6,6 +6,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::style::{Color, Style};
 
+mod pivot;
+mod print;
+
+pub use pivot::{PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue};
+pub use print::{EditRange, HfPage, LineInfo, Orientation, PrintSettings, SheetProtection, password_hash};
+
 // ---------------------------------------------------------------- tables
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -323,6 +329,34 @@ pub struct Comment {
     /// read from the file (`dT`); empty when unknown, e.g. for comments made here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dates: Vec<String>,
+    /// Where the note's box sits and how big it is, as read from the file; `None` (a note made
+    /// here, or a file without the shape) writes the default box next to the cell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note_box: Option<NoteBox>,
+}
+
+/// A note box's place and size, from the note's VML shape: Excel's `<x:Anchor>` with its corners
+/// stored relative to the note's cell, so the box moves with the note when rows or columns are
+/// inserted or deleted, and the shape's width and height.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NoteBox {
+    /// Top-left corner: columns and rows from the note's cell (negative = left of or above it),
+    /// then the pixel offset into that column and row.
+    pub from: NoteCorner,
+    /// Bottom-right corner, the same way.
+    pub to: NoteCorner,
+    /// The shape's width and height in points (the VML style's `width`/`height`), when given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_pt: Option<(f64, f64)>,
+}
+
+/// One corner of a [`NoteBox`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoteCorner {
+    pub col: i64,
+    pub col_px: u32,
+    pub row: i64,
+    pub row_px: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -382,6 +416,7 @@ pub enum ChartKind {
     Doughnut,
     Area,
     AreaStacked,
+    AreaStacked100,
     Scatter,
     ScatterLines,
     Bubble,
@@ -406,6 +441,14 @@ pub enum LegendPos {
     Right,
 }
 
+/// Quartile calculation for a box & whisker series.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QuartileMethod {
+    #[default]
+    Exclusive,
+    Inclusive,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Series {
     /// Formula text for the series name (`Sheet1!$B$1`) or a literal.
@@ -421,6 +464,9 @@ pub struct Series {
     /// Draw line segments as a smoothed (spline) curve.
     #[serde(default)]
     pub smooth: bool,
+    /// Box & whisker quartiles; Excel defaults to exclusive.
+    #[serde(default)]
+    pub quartiles: QuartileMethod,
     /// Trendlines fitted to this series (Excel allows several per series).
     #[serde(default)]
     pub trendlines: Vec<Trendline>,
@@ -482,6 +528,18 @@ pub struct Trendline {
     pub dash: Option<LineDash>,
 }
 
+impl Trendline {
+    /// Longest forward / backward forecast kept from a file or a command, in x units. Excel's own
+    /// limit is unconfirmed; the renderer additionally bounds the forecast by the plot's slot budget.
+    pub const MAX_FORECAST: f64 = 100_000.0;
+
+    /// A forecast distance as stored: finite, not negative (NaN and infinity become 0) and at most
+    /// [`Self::MAX_FORECAST`].
+    pub fn clamp_forecast(v: f64) -> f64 {
+        if v.is_finite() && v > 0.0 { v.min(Self::MAX_FORECAST) } else { 0.0 }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Chart {
     pub id: u32,
@@ -508,9 +566,10 @@ pub struct Chart {
 pub struct Image {
     pub id: u32,
     pub anchor: Anchor,
-    /// Encoded bytes (PNG/JPEG), base64 in JSON.
-    #[serde(with = "crate::b64")]
-    pub data: Vec<u8>,
+    /// Encoded bytes (PNG/JPEG), base64 in JSON. Shared, so a copy of the sheet (an undo step)
+    /// doesn't copy the picture.
+    #[serde(with = "crate::b64::shared")]
+    pub data: std::sync::Arc<Vec<u8>>,
     pub mime: String,
     pub alt: String,
 }
@@ -564,7 +623,7 @@ pub enum ShapeTextAnchor {
 }
 
 /// How a shape's outline and text look. The text properties apply to the whole text (the first
-/// run's properties when a file has several).
+/// paragraph's and first run's properties when a file has several).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ShapeFormat {
@@ -584,6 +643,8 @@ pub struct ShapeFormat {
     pub align: Option<ShapeTextAlign>,
     /// `None`: the shape's default (top for text boxes, middle for other shapes).
     pub anchor: Option<ShapeTextAnchor>,
+    /// Paragraphs run right to left (`a:pPr rtl`).
+    pub rtl: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -661,388 +722,18 @@ pub struct Slicer {
     pub columns: u32,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Orientation {
-    #[default]
-    Portrait,
-    Landscape,
-}
+#[cfg(test)]
+mod trendline_forecast_tests {
+    use super::Trendline;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct PrintSettings {
-    pub orientation: Orientation,
-    /// Paper size name (`Letter`, `A4`, `Legal`…).
-    pub paper: String,
-    /// Margins in inches: left, right, top, bottom, header, footer.
-    pub margins: [f32; 6],
-    pub print_area: Option<RangeRef>,
-    pub title_rows: Option<(u32, u32)>,
-    pub title_cols: Option<(u32, u32)>,
-    /// Percent scale, or fit to pages (wide, tall).
-    pub scale: u16,
-    pub fit_to: Option<(u16, u16)>,
-    pub gridlines: bool,
-    pub headings: bool,
-    pub center_h: bool,
-    pub center_v: bool,
-    /// The header and footer of odd pages, and of every page unless the variants below apply.
-    pub header: String,
-    pub footer: String,
-    pub row_breaks: Vec<u32>,
-    pub col_breaks: Vec<u32>,
-    /// Different First Page: the sheet's first printed page uses `first_header`/`first_footer`.
-    #[serde(default)]
-    pub different_first: bool,
-    /// Different Odd & Even Pages: even-numbered pages use `even_header`/`even_footer`.
-    #[serde(default)]
-    pub different_odd_even: bool,
-    #[serde(default)]
-    pub first_header: String,
-    #[serde(default)]
-    pub first_footer: String,
-    #[serde(default)]
-    pub even_header: String,
-    #[serde(default)]
-    pub even_footer: String,
-    /// Scale with Document / Align with Page Margins (both on unless a file turned them off).
-    #[serde(default = "yes")]
-    pub hf_scale_with_doc: bool,
-    #[serde(default = "yes")]
-    pub hf_align_with_margins: bool,
-}
-
-fn yes() -> bool {
-    true
-}
-
-/// Which header/footer pair a printed page uses.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HfPage {
-    Odd,
-    Even,
-    First,
-}
-
-impl HfPage {
-    pub fn id(self) -> &'static str {
-        match self {
-            HfPage::Odd => "odd",
-            HfPage::Even => "even",
-            HfPage::First => "first",
-        }
-    }
-    pub fn parse(id: &str) -> Option<HfPage> {
-        match id {
-            "odd" | "all" => Some(HfPage::Odd),
-            "even" => Some(HfPage::Even),
-            "first" => Some(HfPage::First),
-            _ => None,
-        }
-    }
-}
-
-impl PrintSettings {
-    /// The pair used by page `number` (1-based, as `&P` prints it); `first` is the sheet's first page.
-    pub fn hf_page(&self, first: bool, number: usize) -> HfPage {
-        if self.different_first && first {
-            HfPage::First
-        } else if self.different_odd_even && number.is_multiple_of(2) {
-            HfPage::Even
-        } else {
-            HfPage::Odd
-        }
-    }
-    /// The header (`footer` false) or footer of a page kind.
-    pub fn hf(&self, page: HfPage, footer: bool) -> &String {
-        match (page, footer) {
-            (HfPage::Odd, false) => &self.header,
-            (HfPage::Odd, true) => &self.footer,
-            (HfPage::Even, false) => &self.even_header,
-            (HfPage::Even, true) => &self.even_footer,
-            (HfPage::First, false) => &self.first_header,
-            (HfPage::First, true) => &self.first_footer,
-        }
-    }
-    pub fn hf_mut(&mut self, page: HfPage, footer: bool) -> &mut String {
-        match (page, footer) {
-            (HfPage::Odd, false) => &mut self.header,
-            (HfPage::Odd, true) => &mut self.footer,
-            (HfPage::Even, false) => &mut self.even_header,
-            (HfPage::Even, true) => &mut self.even_footer,
-            (HfPage::First, false) => &mut self.first_header,
-            (HfPage::First, true) => &mut self.first_footer,
-        }
-    }
-    /// Any header or footer text at all (on any kind of page).
-    pub fn has_header_footer(&self) -> bool {
-        [&self.header, &self.footer, &self.first_header, &self.first_footer, &self.even_header, &self.even_footer].iter().any(|t| !t.is_empty())
-    }
-}
-
-impl Default for PrintSettings {
-    fn default() -> Self {
-        PrintSettings {
-            orientation: Orientation::Portrait,
-            paper: "Letter".into(),
-            margins: [0.7, 0.7, 0.75, 0.75, 0.3, 0.3],
-            print_area: None,
-            title_rows: None,
-            title_cols: None,
-            scale: 100,
-            fit_to: None,
-            gridlines: false,
-            headings: false,
-            center_h: false,
-            center_v: false,
-            header: String::new(),
-            footer: String::new(),
-            row_breaks: vec![],
-            col_breaks: vec![],
-            different_first: false,
-            different_odd_even: false,
-            first_header: String::new(),
-            first_footer: String::new(),
-            even_header: String::new(),
-            even_footer: String::new(),
-            hf_scale_with_doc: true,
-            hf_align_with_margins: true,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct SheetProtection {
-    /// Hash of the password (Excel-compatible, written to XLSX `sheetProtection`; never the
-    /// password itself).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub password: Option<crate::PasswordHash>,
-    /// The internal hash older GridCraft JSON workbooks stored ([`password_hash`]); still
-    /// verified when unprotecting, never written for new passwords.
-    #[serde(rename = "password_hash", default, skip_serializing_if = "Option::is_none")]
-    pub legacy_password_hash: Option<u64>,
-    pub select_locked: bool,
-    pub select_unlocked: bool,
-    pub format_cells: bool,
-    pub format_columns: bool,
-    pub format_rows: bool,
-    pub insert_columns: bool,
-    pub insert_rows: bool,
-    pub delete_columns: bool,
-    pub delete_rows: bool,
-    pub sort: bool,
-    pub autofilter: bool,
-}
-
-/// Review › Allow Edit Ranges: cells that stay editable on a protected sheet, with or without a
-/// password (XLSX `<protectedRange>`).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct EditRange {
-    pub title: String,
-    pub ranges: Vec<RangeRef>,
-    pub password: Option<crate::PasswordHash>,
-    /// Windows permissions (`securityDescriptor`), kept as read from the file.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub security_descriptor: Option<String>,
-}
-
-impl EditRange {
-    pub fn contains(&self, c: CellRef) -> bool {
-        self.ranges.iter().any(|r| r.contains(c))
-    }
-}
-
-/// The non-cryptographic password hash older GridCraft versions stored for sheet protection
-/// (only verified now, see [`SheetProtection::legacy_password_hash`]).
-pub fn password_hash(pw: &str) -> u64 {
-    let mut h: u64 = 0xcbf29ce484222325 ^ 0x5348_4545_5443;
-    for b in pw.bytes() {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    h
-}
-
-/// Outline grouping info for a row or column.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct LineInfo {
-    /// Size in points; `None` = default (rows auto-fit to content).
-    pub size: Option<f32>,
-    pub hidden: bool,
-    pub outline: u8,
-    pub collapsed: bool,
-    pub style: Option<crate::style::StyleId>,
-    /// The size was set by the user (rows): automatic heights follow the content.
-    #[serde(default)]
-    pub custom: bool,
-}
-
-// ---------------------------------------------------------------- pivot tables
-
-/// How a PivotTable lays out its row fields.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PivotLayout {
-    /// All row fields in one column, inner items indented ("Row Labels" header).
-    #[default]
-    Compact,
-    /// One column per row field; each item on its own row.
-    Outline,
-    /// One column per row field; inner items start on their parent's row, totals below.
-    Tabular,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PivotSort {
-    #[default]
-    Asc,
-    Desc,
-    /// Source order (first appearance).
-    None,
-}
-
-/// Grouping of a date field (values are date serials).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PivotDateGroup {
-    #[default]
-    None,
-    Years,
-    Quarters,
-    Months,
-    Days,
-}
-
-/// A field placed in the Rows or Columns area.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct PivotField {
-    /// Source column header name.
-    pub source_col: String,
-    pub sort: PivotSort,
-    pub date_group: PivotDateGroup,
-    /// Item labels whose detail is hidden (collapsed).
-    pub collapsed_items: Vec<String>,
-}
-
-/// Summarize-values-by function.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PivotFunc {
-    #[default]
-    Sum,
-    Count,
-    Average,
-    Max,
-    Min,
-    Product,
-    CountNumbers,
-    StdDev,
-    StdDevP,
-    Var,
-    VarP,
-}
-
-/// Show-values-as transform.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PivotShowAs {
-    #[default]
-    Normal,
-    PercentOfGrandTotal,
-    PercentOfColumnTotal,
-    PercentOfRowTotal,
-    /// Running total in the first row field.
-    RunningTotal,
-    /// Rank largest to smallest among sibling row items.
-    Rank,
-}
-
-/// A field in the Values area.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct PivotValue {
-    pub source_col: String,
-    pub func: PivotFunc,
-    /// Caption, e.g. "Sum of Sales".
-    pub name: String,
-    pub show_as: PivotShowAs,
-    pub number_format: Option<String>,
-}
-
-/// A report filter (or, for a field also in Rows/Columns, its hidden-items filter).
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct PivotFilter {
-    pub source_col: String,
-    /// Item labels shown; `None` = all.
-    pub selected: Option<Vec<String>>,
-}
-
-/// A PivotTable: its definition plus where its output was last written. The output itself is
-/// static cell values and styles on the sheet, rewritten on every refresh.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct PivotTable {
-    pub id: u32,
-    pub name: String,
-    /// Source: range formula text (`Sheet1!$A$1:$E$200`), a table name or a defined name.
-    pub source: String,
-    /// Top-left of the output body on the pivot's sheet.
-    pub anchor: CellRef,
-    pub rows: Vec<PivotField>,
-    pub columns: Vec<PivotField>,
-    pub values: Vec<PivotValue>,
-    pub filters: Vec<PivotFilter>,
-    pub layout: PivotLayout,
-    /// Grand total for each row (the "Grand Total" column), like Excel's "On for Rows".
-    pub grand_totals_rows: bool,
-    /// Grand total for each column (the "Grand Total" row), like Excel's "On for Columns".
-    pub grand_totals_cols: bool,
-    pub subtotals: bool,
-    /// Subtotals at the top of each group (Compact/Outline); otherwise below it.
-    pub subtotals_top: bool,
-    pub style: String,
-    pub show_headers: bool,
-    /// Area written by the last refresh.
-    pub last_range: Option<RangeRef>,
-    /// Calculated fields, usable in the Values area by name.
-    pub calculated_fields: Vec<PivotCalcField>,
-    /// The Σ Values pseudo-field (it exists with two or more value fields) sits in Rows rather
-    /// than Columns (Excel's "values on rows").
-    pub values_on_rows: bool,
-    /// Position of Σ Values among the row fields (`None` = after the last). Only used with
-    /// `values_on_rows`: in Columns Σ Values always comes after the last column field.
-    pub values_position: Option<usize>,
-}
-
-/// A calculated field: a formula over other fields (`=Sales*0.1`, `='Unit Price'*Units`). As in
-/// Excel, it is evaluated on the sums of the fields it names for each report cell, not per record.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct PivotCalcField {
-    pub name: String,
-    /// Formula text, starting with `=`.
-    pub formula: String,
-}
-
-impl Default for PivotTable {
-    fn default() -> Self {
-        PivotTable {
-            id: 0,
-            name: "PivotTable1".into(),
-            source: String::new(),
-            anchor: CellRef::default(),
-            rows: vec![],
-            columns: vec![],
-            values: vec![],
-            filters: vec![],
-            layout: PivotLayout::Compact,
-            grand_totals_rows: true,
-            grand_totals_cols: true,
-            subtotals: true,
-            subtotals_top: true,
-            style: "PivotStyleLight16".into(),
-            show_headers: true,
-            last_range: None,
-            calculated_fields: vec![],
-            values_on_rows: false,
-            values_position: None,
-        }
+    #[test]
+    fn clamp_forecast_bounds_hostile_values() {
+        assert_eq!(Trendline::clamp_forecast(2.5), 2.5);
+        assert_eq!(Trendline::clamp_forecast(0.0), 0.0);
+        assert_eq!(Trendline::clamp_forecast(-4.0), 0.0);
+        assert_eq!(Trendline::clamp_forecast(f64::NAN), 0.0);
+        assert_eq!(Trendline::clamp_forecast(f64::INFINITY), 0.0);
+        assert_eq!(Trendline::clamp_forecast(f64::NEG_INFINITY), 0.0);
+        assert_eq!(Trendline::clamp_forecast(1e300), Trendline::MAX_FORECAST);
     }
 }

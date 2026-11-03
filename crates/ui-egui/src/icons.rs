@@ -1,8 +1,12 @@
 //! GridCraft's icon set, drawn in code on a 16×16 design grid (original artwork; see
 //! ATTRIBUTION.md). Large ribbon icons use the same drawings at 32×32 with accent colours.
+//! Accent and paper colours come from the theme tokens, so icons follow light and dark mode;
+//! icons placed on the sheet ([`paint_on_sheet`]) keep the light colours, as the sheet does.
 
 use egui::epaint::{CubicBezierShape, PathShape, PathStroke};
 use egui::{Color32, Painter, Pos2, Rect, Stroke, pos2, vec2};
+
+use crate::theme::{Cat, Tokens};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Icon {
@@ -184,25 +188,68 @@ impl G<'_> {
     }
 }
 
-/// Accent palette for icons (our own).
-pub const GREEN: Color32 = Color32::from_rgb(0x10, 0x7C, 0x41);
-pub const BLUE: Color32 = Color32::from_rgb(0x2B, 0x7C, 0xD3);
-pub const RED: Color32 = Color32::from_rgb(0xD1, 0x3B, 0x2F);
-pub const YELLOW: Color32 = Color32::from_rgb(0xF2, 0xC3, 0x2E);
-pub const ORANGE: Color32 = Color32::from_rgb(0xE8, 0x7D, 0x2B);
-pub const PURPLE: Color32 = Color32::from_rgb(0x88, 0x55, 0xC8);
+/// The colours an icon draws with besides its main colour: the paper inside documents and cells,
+/// and the category palette for its coloured parts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Palette {
+    paper: Color32,
+    cat: [Color32; 8],
+}
 
-/// Draws `icon` into `rect` (square-ish), in colour `c`.
+impl Palette {
+    fn of(t: &Tokens) -> Palette {
+        Palette { paper: t.paper, cat: t.cat }
+    }
+
+    fn cat(&self, c: Cat) -> Color32 {
+        self.cat.get(c as usize).copied().unwrap_or(Color32::GRAY)
+    }
+
+    /// A pale wash of a category colour over the paper (cell fills inside icons).
+    fn wash(&self, c: Cat) -> Color32 {
+        self.cat(c).gamma_multiply(0.3)
+    }
+}
+
+/// The code-drawn icon that stands in for a character the current fonts cannot draw (`✕` and
+/// `✓` have no bundled egui face). Interface chrome uses this instead of painting a tofu box; a
+/// workbook cell still needs a real glyph because its characters are user data.
+pub fn fallback_for_symbol(c: char) -> Option<Icon> {
+    match c {
+        '✕' => Some(Icon::Close),
+        '✓' => Some(Icon::Check),
+        _ => None,
+    }
+}
+
+/// Draws `icon` into `rect` (square-ish), in colour `c`, with the current theme's palette.
 pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
+    paint_with(p, rect, icon, c, &Palette::of(&Tokens::get(p.ctx())));
+}
+
+/// Draws `icon` on the sheet, which stays white in both themes, so with the light palette.
+pub fn paint_on_sheet(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
+    paint_with(p, rect, icon, c, &Palette::of(&Tokens::light()));
+}
+
+/// Draws `icon` into `rect` (square-ish), in colour `c`, with palette `pal`.
+fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
     let side = rect.width().min(rect.height());
     let r = Rect::from_center_size(rect.center(), vec2(side, side));
     let g = G { p, r, s: side / 16.0 };
     let light = c.gamma_multiply(0.45);
+    let paper = pal.paper;
+    let blue = pal.cat(Cat::Blue);
+    let green = pal.cat(Cat::Green);
+    let red = pal.cat(Cat::Red);
+    let orange = pal.cat(Cat::Orange);
+    let purple = pal.cat(Cat::Purple);
+    let yellow = pal.cat(Cat::Amber);
     match icon {
         Icon::Paste => {
-            g.rect(3.0, 2.5, 9.0, 12.0, Some(Color32::from_rgb(0xC8, 0x9B, 0x5C)), None);
-            g.rect(5.0, 1.5, 5.0, 2.5, Some(Color32::from_rgb(0x8A, 0x8A, 0x8A)), None);
-            g.rect(6.5, 6.0, 7.5, 9.0, Some(Color32::WHITE), Some(c));
+            g.rect(3.0, 2.5, 9.0, 12.0, Some(yellow), None);
+            g.rect(5.0, 1.5, 5.0, 2.5, Some(pal.cat(Cat::Slate)), None);
+            g.rect(6.5, 6.0, 7.5, 9.0, Some(paper), Some(c));
             for y in [8.5, 10.5, 12.5] {
                 g.stroke(&[(8.0, y), (12.5, y)], light);
             }
@@ -214,11 +261,11 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             g.stroke(&[(9.7, 10.6), (4.5, 2.0)], c);
         }
         Icon::Copy => {
-            g.rect(2.5, 2.5, 7.5, 9.0, Some(Color32::WHITE), Some(c));
-            g.rect(6.0, 5.5, 7.5, 9.0, Some(Color32::WHITE), Some(c));
+            g.rect(2.5, 2.5, 7.5, 9.0, Some(paper), Some(c));
+            g.rect(6.0, 5.5, 7.5, 9.0, Some(paper), Some(c));
         }
         Icon::Brush => {
-            g.rect(3.0, 2.0, 10.0, 4.0, Some(YELLOW), Some(c));
+            g.rect(3.0, 2.0, 10.0, 4.0, Some(yellow), Some(c));
             g.stroke(&[(8.0, 6.0), (8.0, 8.5), (5.0, 8.5), (5.0, 10.0)], c);
             g.rect(4.0, 10.0, 2.0, 4.5, Some(c), None);
         }
@@ -259,7 +306,7 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             g.line(&[(2.5, 2.5), (13.5, 2.5), (13.5, 13.5), (2.5, 13.5), (2.5, 2.5)], c, if icon == Icon::BorderThick { 2.2 } else { 1.2 });
         }
         Icon::Fill => {
-            g.poly(&[(3.0, 7.0), (8.0, 2.0), (13.0, 7.0), (8.0, 12.0)], Color32::WHITE);
+            g.poly(&[(3.0, 7.0), (8.0, 2.0), (13.0, 7.0), (8.0, 12.0)], paper);
             g.line(&[(3.0, 7.0), (8.0, 2.0), (13.0, 7.0), (8.0, 12.0), (3.0, 7.0)], c, 1.1);
             g.circle(13.5, 10.0, 1.2, Some(c), None);
         }
@@ -297,16 +344,16 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
                 g.stroke(&[(x0, *y), (x1, *y)], c);
             }
             if icon == Icon::IndentInc {
-                g.poly(&[(2.0, 6.0), (5.0, 8.0), (2.0, 10.0)], BLUE);
+                g.poly(&[(2.0, 6.0), (5.0, 8.0), (2.0, 10.0)], blue);
             }
             if icon == Icon::IndentDec {
-                g.poly(&[(5.0, 6.0), (2.0, 8.0), (5.0, 10.0)], BLUE);
+                g.poly(&[(5.0, 6.0), (2.0, 8.0), (5.0, 10.0)], blue);
             }
         }
         Icon::Orientation => {
             g.text(6.0, 9.0, "ab", 8.5, c, false, false);
-            g.stroke(&[(9.0, 13.0), (14.0, 3.0)], BLUE);
-            g.poly(&[(14.5, 2.0), (12.0, 4.0), (14.6, 5.2)], BLUE);
+            g.stroke(&[(9.0, 13.0), (14.0, 3.0)], blue);
+            g.poly(&[(14.5, 2.0), (12.0, 4.0), (14.6, 5.2)], blue);
         }
         Icon::Wrap => {
             g.stroke(&[(2.0, 4.0), (14.0, 4.0)], c);
@@ -315,16 +362,16 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
                 [g.pt(12.0, 8.0), g.pt(15.0, 8.0), g.pt(15.0, 12.0), g.pt(11.0, 12.0)],
                 false,
                 Color32::TRANSPARENT,
-                Stroke::new(1.1, BLUE),
+                Stroke::new(1.1, blue),
             ));
-            g.poly(&[(9.0, 12.0), (11.5, 10.5), (11.5, 13.5)], BLUE);
+            g.poly(&[(9.0, 12.0), (11.5, 10.5), (11.5, 13.5)], blue);
             g.stroke(&[(2.0, 12.0), (7.0, 12.0)], c);
         }
         Icon::Merge => {
             g.rect(1.5, 3.5, 13.0, 9.0, None, Some(c));
-            g.stroke(&[(4.0, 8.0), (12.0, 8.0)], BLUE);
-            g.poly(&[(3.0, 8.0), (5.5, 6.5), (5.5, 9.5)], BLUE);
-            g.poly(&[(13.0, 8.0), (10.5, 6.5), (10.5, 9.5)], BLUE);
+            g.stroke(&[(4.0, 8.0), (12.0, 8.0)], blue);
+            g.poly(&[(3.0, 8.0), (5.5, 6.5), (5.5, 9.5)], blue);
+            g.poly(&[(13.0, 8.0), (10.5, 6.5), (10.5, 9.5)], blue);
         }
         Icon::Currency => g.text(8.0, 8.5, "$", 12.0, c, false, false),
         Icon::Percent => g.text(8.0, 8.5, "%", 11.0, c, false, false),
@@ -332,69 +379,69 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
         Icon::DecInc => {
             g.text(5.0, 5.0, ".0", 6.5, c, false, false);
             g.text(10.0, 11.0, ".00", 6.5, c, false, false);
-            g.stroke(&[(2.0, 12.0), (5.0, 12.0)], BLUE);
-            g.poly(&[(1.0, 12.0), (2.8, 10.6), (2.8, 13.4)], BLUE);
+            g.stroke(&[(2.0, 12.0), (5.0, 12.0)], blue);
+            g.poly(&[(1.0, 12.0), (2.8, 10.6), (2.8, 13.4)], blue);
         }
         Icon::DecDec => {
             g.text(6.0, 5.0, ".00", 6.5, c, false, false);
             g.text(11.0, 11.0, ".0", 6.5, c, false, false);
-            g.stroke(&[(2.0, 12.0), (5.5, 12.0)], BLUE);
-            g.poly(&[(7.0, 12.0), (5.2, 10.6), (5.2, 13.4)], BLUE);
+            g.stroke(&[(2.0, 12.0), (5.5, 12.0)], blue);
+            g.poly(&[(7.0, 12.0), (5.2, 10.6), (5.2, 13.4)], blue);
         }
         Icon::CondFormat => {
-            g.rect(2.0, 2.0, 12.0, 12.0, Some(Color32::WHITE), Some(light));
-            g.rect(3.0, 3.5, 4.0, 2.5, Some(RED), None);
-            g.rect(3.0, 7.0, 7.0, 2.5, Some(YELLOW), None);
-            g.rect(3.0, 10.5, 10.0, 2.5, Some(BLUE), None);
+            g.rect(2.0, 2.0, 12.0, 12.0, Some(paper), Some(light));
+            g.rect(3.0, 3.5, 4.0, 2.5, Some(red), None);
+            g.rect(3.0, 7.0, 7.0, 2.5, Some(yellow), None);
+            g.rect(3.0, 10.5, 10.0, 2.5, Some(blue), None);
         }
         Icon::FormatTable => {
-            g.rect(2.0, 2.5, 12.0, 11.0, Some(Color32::WHITE), Some(light));
-            g.rect(2.0, 2.5, 12.0, 3.0, Some(BLUE), None);
-            g.rect(2.0, 8.0, 12.0, 2.5, Some(Color32::from_rgb(0xD6, 0xE6, 0xF7)), None);
+            g.rect(2.0, 2.5, 12.0, 11.0, Some(paper), Some(light));
+            g.rect(2.0, 2.5, 12.0, 3.0, Some(blue), None);
+            g.rect(2.0, 8.0, 12.0, 2.5, Some(pal.wash(Cat::Blue)), None);
             g.stroke(&[(6.0, 2.5), (6.0, 13.5)], light);
             g.stroke(&[(10.0, 2.5), (10.0, 13.5)], light);
         }
         Icon::CellStyles => {
-            g.rect(2.0, 3.0, 12.0, 4.5, Some(Color32::from_rgb(0xC6, 0xEF, 0xCE)), Some(light));
-            g.rect(2.0, 8.5, 12.0, 4.5, Some(Color32::from_rgb(0xFF, 0xC7, 0xCE)), Some(light));
-            g.stroke(&[(4.0, 5.2), (9.0, 5.2)], GREEN);
-            g.stroke(&[(4.0, 10.7), (9.0, 10.7)], RED);
+            g.rect(2.0, 3.0, 12.0, 4.5, Some(pal.wash(Cat::Green)), Some(light));
+            g.rect(2.0, 8.5, 12.0, 4.5, Some(pal.wash(Cat::Red)), Some(light));
+            g.stroke(&[(4.0, 5.2), (9.0, 5.2)], green);
+            g.stroke(&[(4.0, 10.7), (9.0, 10.7)], red);
         }
         Icon::Insert | Icon::Delete | Icon::Format => {
-            g.rect(2.0, 3.0, 12.0, 10.0, Some(Color32::WHITE), Some(light));
+            g.rect(2.0, 3.0, 12.0, 10.0, Some(paper), Some(light));
             g.stroke(&[(2.0, 6.5), (14.0, 6.5)], light);
             g.stroke(&[(2.0, 10.0), (14.0, 10.0)], light);
             g.stroke(&[(6.0, 3.0), (6.0, 13.0)], light);
             match icon {
                 Icon::Insert => {
-                    g.rect(6.0, 6.5, 8.0, 3.5, Some(Color32::from_rgb(0xD6, 0xE6, 0xF7)), Some(BLUE));
-                    g.line(&[(1.0, 8.2), (4.5, 8.2)], GREEN, 1.6);
-                    g.line(&[(2.75, 6.5), (2.75, 10.0)], GREEN, 1.6);
+                    g.rect(6.0, 6.5, 8.0, 3.5, Some(pal.wash(Cat::Blue)), Some(blue));
+                    g.line(&[(1.0, 8.2), (4.5, 8.2)], green, 1.6);
+                    g.line(&[(2.75, 6.5), (2.75, 10.0)], green, 1.6);
                 }
                 Icon::Delete => {
-                    g.line(&[(8.0, 6.0), (13.0, 11.0)], RED, 1.6);
-                    g.line(&[(13.0, 6.0), (8.0, 11.0)], RED, 1.6);
+                    g.line(&[(8.0, 6.0), (13.0, 11.0)], red, 1.6);
+                    g.line(&[(13.0, 6.0), (8.0, 11.0)], red, 1.6);
                 }
                 _ => {
-                    g.rect(6.0, 6.5, 8.0, 3.5, Some(Color32::from_rgb(0xD6, 0xE6, 0xF7)), None);
+                    g.rect(6.0, 6.5, 8.0, 3.5, Some(pal.wash(Cat::Blue)), None);
                 }
             }
         }
         Icon::Sum => g.text(8.0, 8.0, "Σ", 13.0, c, false, false),
         Icon::FillDown => {
-            g.rect(4.0, 2.0, 8.0, 12.0, Some(Color32::WHITE), Some(light));
-            g.stroke(&[(8.0, 4.0), (8.0, 11.0)], BLUE);
-            g.poly(&[(5.5, 9.5), (10.5, 9.5), (8.0, 13.0)], BLUE);
+            g.rect(4.0, 2.0, 8.0, 12.0, Some(paper), Some(light));
+            g.stroke(&[(8.0, 4.0), (8.0, 11.0)], blue);
+            g.poly(&[(5.5, 9.5), (10.5, 9.5), (8.0, 13.0)], blue);
         }
         Icon::Eraser => {
-            g.poly(&[(2.0, 10.0), (8.0, 4.0), (12.0, 8.0), (6.0, 14.0)], Color32::from_rgb(0xE9, 0x8A, 0xB8));
-            g.poly(&[(8.0, 4.0), (10.5, 1.5), (14.5, 5.5), (12.0, 8.0)], Color32::from_rgb(0xB6, 0x4E, 0x86));
+            g.poly(&[(2.0, 10.0), (8.0, 4.0), (12.0, 8.0), (6.0, 14.0)], red.gamma_multiply(0.55));
+            g.poly(&[(8.0, 4.0), (10.5, 1.5), (14.5, 5.5), (12.0, 8.0)], red);
         }
         Icon::SortFilter => {
             g.text(4.5, 4.5, "A", 6.0, c, false, false);
             g.text(4.5, 11.5, "Z", 6.0, c, false, false);
-            g.stroke(&[(8.0, 3.0), (8.0, 13.0)], BLUE);
-            g.poly(&[(6.5, 11.0), (9.5, 11.0), (8.0, 13.5)], BLUE);
+            g.stroke(&[(8.0, 3.0), (8.0, 13.0)], blue);
+            g.poly(&[(6.5, 11.0), (9.5, 11.0), (8.0, 13.5)], blue);
             g.poly(&[(10.0, 3.0), (15.0, 3.0), (13.0, 7.5), (13.0, 12.0), (12.0, 11.0), (12.0, 7.5)], light);
         }
         Icon::Find | Icon::Search | Icon::Zoom => {
@@ -466,45 +513,45 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
         }
         Icon::PageBreak => {
             g.rect(2.5, 2.0, 11.0, 12.0, None, Some(c));
-            g.line(&[(2.5, 8.0), (13.5, 8.0)], BLUE, 1.6);
+            g.line(&[(2.5, 8.0), (13.5, 8.0)], blue, 1.6);
         }
         Icon::Table | Icon::PivotTable => {
-            g.rect(2.0, 2.5, 12.0, 11.0, Some(Color32::WHITE), Some(c));
-            g.rect(2.0, 2.5, 12.0, 3.0, Some(if icon == Icon::Table { BLUE } else { GREEN }), None);
+            g.rect(2.0, 2.5, 12.0, 11.0, Some(paper), Some(c));
+            g.rect(2.0, 2.5, 12.0, 3.0, Some(if icon == Icon::Table { blue } else { green }), None);
             g.stroke(&[(6.0, 2.5), (6.0, 13.5)], light);
             g.stroke(&[(2.0, 9.5), (14.0, 9.5)], light);
             if icon == Icon::PivotTable {
-                g.poly(&[(9.0, 7.0), (12.5, 7.0), (12.5, 10.5)], ORANGE);
+                g.poly(&[(9.0, 7.0), (12.5, 7.0), (12.5, 10.5)], orange);
             }
         }
         Icon::Chart | Icon::ChartBar => {
             g.stroke(&[(2.0, 14.0), (14.0, 14.0)], c);
-            g.rect(3.0, 8.0, 2.5, 6.0, Some(BLUE), None);
-            g.rect(6.8, 4.0, 2.5, 10.0, Some(GREEN), None);
-            g.rect(10.6, 6.0, 2.5, 8.0, Some(ORANGE), None);
+            g.rect(3.0, 8.0, 2.5, 6.0, Some(blue), None);
+            g.rect(6.8, 4.0, 2.5, 10.0, Some(green), None);
+            g.rect(10.6, 6.0, 2.5, 8.0, Some(orange), None);
         }
         Icon::ChartLine | Icon::Sparkline => {
             g.stroke(&[(2.0, 14.0), (14.0, 14.0)], light);
-            g.line(&[(2.0, 11.0), (5.5, 7.0), (8.5, 9.5), (13.5, 3.5)], BLUE, 1.5);
+            g.line(&[(2.0, 11.0), (5.5, 7.0), (8.5, 9.5), (13.5, 3.5)], blue, 1.5);
         }
         Icon::ChartPie => {
-            g.circle(8.0, 8.0, 6.0, Some(BLUE), None);
-            g.poly(&[(8.0, 8.0), (8.0, 2.0), (12.0, 3.4), (14.0, 8.0)], ORANGE);
+            g.circle(8.0, 8.0, 6.0, Some(blue), None);
+            g.poly(&[(8.0, 8.0), (8.0, 2.0), (12.0, 3.4), (14.0, 8.0)], orange);
         }
         Icon::ChartScatter => {
             g.stroke(&[(2.0, 2.0), (2.0, 14.0), (14.0, 14.0)], c);
             for (x, y) in [(5.0, 11.0), (7.0, 8.0), (9.5, 9.5), (11.0, 5.0), (13.0, 4.0)] {
-                g.circle(x, y, 1.1, Some(BLUE), None);
+                g.circle(x, y, 1.1, Some(blue), None);
             }
         }
         Icon::Picture => {
-            g.rect(2.0, 3.0, 12.0, 10.0, Some(Color32::from_rgb(0xD6, 0xE6, 0xF7)), Some(c));
-            g.poly(&[(3.0, 12.0), (7.0, 7.0), (10.0, 10.0), (11.5, 8.5), (13.0, 12.0)], GREEN);
-            g.circle(11.0, 5.5, 1.2, Some(YELLOW), None);
+            g.rect(2.0, 3.0, 12.0, 10.0, Some(pal.wash(Cat::Blue)), Some(c));
+            g.poly(&[(3.0, 12.0), (7.0, 7.0), (10.0, 10.0), (11.5, 8.5), (13.0, 12.0)], green);
+            g.circle(11.0, 5.5, 1.2, Some(yellow), None);
         }
         Icon::Shapes => {
-            g.circle(5.5, 5.5, 3.5, Some(BLUE), None);
-            g.rect(7.0, 7.0, 7.0, 7.0, Some(ORANGE), None);
+            g.circle(5.5, 5.5, 3.5, Some(blue), None);
+            g.rect(7.0, 7.0, 7.0, 7.0, Some(orange), None);
         }
         Icon::Link => {
             g.line(&[(6.0, 10.0), (10.0, 6.0)], c, 1.2);
@@ -512,10 +559,7 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             g.rect(8.0, 4.0, 6.0, 4.0, None, Some(c));
         }
         Icon::Comment | Icon::Note => {
-            g.poly(
-                &[(2.0, 3.0), (14.0, 3.0), (14.0, 11.0), (2.0, 11.0)],
-                if icon == Icon::Note { Color32::from_rgb(0xFF, 0xF2, 0xA8) } else { Color32::WHITE },
-            );
+            g.poly(&[(2.0, 3.0), (14.0, 3.0), (14.0, 11.0), (2.0, 11.0)], if icon == Icon::Note { pal.wash(Cat::Amber) } else { paper });
             g.line(&[(2.0, 3.0), (14.0, 3.0), (14.0, 11.0), (7.0, 11.0), (4.0, 14.0), (4.0, 11.0), (2.0, 11.0), (2.0, 3.0)], c, 1.1);
         }
         Icon::TextBox => {
@@ -529,10 +573,10 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             g.text(8.0, 8.0, "ab", 8.0, c, false, false);
         }
         Icon::Trace => {
-            g.circle(4.0, 12.0, 1.6, Some(BLUE), None);
-            g.circle(12.0, 4.0, 1.6, Some(BLUE), None);
-            g.line(&[(5.0, 11.0), (11.0, 5.0)], BLUE, 1.2);
-            g.poly(&[(12.5, 3.5), (9.0, 4.5), (11.5, 7.0)], BLUE);
+            g.circle(4.0, 12.0, 1.6, Some(blue), None);
+            g.circle(12.0, 4.0, 1.6, Some(blue), None);
+            g.line(&[(5.0, 11.0), (11.0, 5.0)], blue, 1.2);
+            g.poly(&[(12.5, 3.5), (9.0, 4.5), (11.5, 7.0)], blue);
         }
         Icon::Calc => {
             g.rect(3.0, 1.5, 10.0, 13.0, None, Some(c));
@@ -546,23 +590,23 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             let (a, b) = if icon == Icon::SortAsc { ("A", "Z") } else { ("Z", "A") };
             g.text(5.0, 4.5, a, 6.5, c, false, false);
             g.text(5.0, 11.5, b, 6.5, c, false, false);
-            g.stroke(&[(11.0, 2.5), (11.0, 13.0)], BLUE);
-            g.poly(&[(9.0, 11.0), (13.0, 11.0), (11.0, 14.0)], BLUE);
+            g.stroke(&[(11.0, 2.5), (11.0, 13.0)], blue);
+            g.poly(&[(9.0, 11.0), (13.0, 11.0), (11.0, 14.0)], blue);
         }
         Icon::Duplicates => {
-            g.rect(2.0, 2.0, 9.0, 4.0, Some(Color32::WHITE), Some(c));
-            g.rect(5.0, 7.0, 9.0, 4.0, Some(Color32::WHITE), Some(c));
-            g.line(&[(9.0, 12.0), (14.0, 15.0)], RED, 1.4);
-            g.line(&[(14.0, 12.0), (9.0, 15.0)], RED, 1.4);
+            g.rect(2.0, 2.0, 9.0, 4.0, Some(paper), Some(c));
+            g.rect(5.0, 7.0, 9.0, 4.0, Some(paper), Some(c));
+            g.line(&[(9.0, 12.0), (14.0, 15.0)], red, 1.4);
+            g.line(&[(14.0, 12.0), (9.0, 15.0)], red, 1.4);
         }
         Icon::TextColumns => {
             g.rect(1.5, 3.0, 5.5, 10.0, None, Some(c));
             g.rect(9.0, 3.0, 5.5, 10.0, None, Some(c));
-            g.poly(&[(7.0, 6.0), (9.0, 8.0), (7.0, 10.0)], BLUE);
+            g.poly(&[(7.0, 6.0), (9.0, 8.0), (7.0, 10.0)], blue);
         }
         Icon::Validation => {
             g.rect(2.0, 3.0, 12.0, 10.0, None, Some(c));
-            g.line(&[(4.0, 8.0), (6.5, 10.5), (11.5, 5.5)], GREEN, 1.4);
+            g.line(&[(4.0, 8.0), (6.5, 10.5), (11.5, 5.5)], green, 1.4);
         }
         Icon::Group | Icon::Ungroup | Icon::Subtotal => {
             g.stroke(&[(3.0, 3.0), (3.0, 13.0), (6.0, 13.0)], c);
@@ -570,59 +614,59 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
                 g.stroke(&[(7.0, y), (14.0, y)], light);
             }
             match icon {
-                Icon::Group => g.text(3.0, 2.5, "+", 6.0, BLUE, true, false),
-                Icon::Ungroup => g.text(3.0, 2.5, "−", 6.0, BLUE, true, false),
-                _ => g.text(11.0, 13.0, "Σ", 6.0, BLUE, false, false),
+                Icon::Group => g.text(3.0, 2.5, "+", 6.0, blue, true, false),
+                Icon::Ungroup => g.text(3.0, 2.5, "−", 6.0, blue, true, false),
+                _ => g.text(11.0, 13.0, "Σ", 6.0, blue, false, false),
             }
         }
         Icon::Lock => {
-            g.rect(3.5, 7.0, 9.0, 7.0, Some(YELLOW), Some(c));
+            g.rect(3.5, 7.0, 9.0, 7.0, Some(yellow), Some(c));
             g.line(&[(5.5, 7.0), (5.5, 4.5), (8.0, 2.5), (10.5, 4.5), (10.5, 7.0)], c, 1.2);
         }
         Icon::Spell => {
             g.text(7.0, 6.0, "abc", 7.0, c, false, false);
-            g.line(&[(4.0, 11.0), (6.5, 13.5), (12.0, 8.5)], GREEN, 1.4);
+            g.line(&[(4.0, 11.0), (6.5, 13.5), (12.0, 8.5)], green, 1.4);
         }
         Icon::Freeze => {
             g.rect(2.0, 2.5, 12.0, 11.0, None, Some(c));
-            g.rect(2.0, 2.5, 12.0, 3.0, Some(Color32::from_rgb(0xD6, 0xE6, 0xF7)), None);
-            g.rect(2.0, 2.5, 3.5, 11.0, Some(Color32::from_rgb(0xD6, 0xE6, 0xF7)), None);
-            g.line(&[(2.0, 5.5), (14.0, 5.5)], BLUE, 1.2);
-            g.line(&[(5.5, 2.5), (5.5, 13.5)], BLUE, 1.2);
+            g.rect(2.0, 2.5, 12.0, 3.0, Some(pal.wash(Cat::Blue)), None);
+            g.rect(2.0, 2.5, 3.5, 11.0, Some(pal.wash(Cat::Blue)), None);
+            g.line(&[(2.0, 5.5), (14.0, 5.5)], blue, 1.2);
+            g.line(&[(5.5, 2.5), (5.5, 13.5)], blue, 1.2);
         }
         Icon::Theme => {
-            g.rect(2.0, 2.0, 5.5, 5.5, Some(BLUE), None);
-            g.rect(8.5, 2.0, 5.5, 5.5, Some(ORANGE), None);
-            g.rect(2.0, 8.5, 5.5, 5.5, Some(GREEN), None);
-            g.rect(8.5, 8.5, 5.5, 5.5, Some(PURPLE), None);
+            g.rect(2.0, 2.0, 5.5, 5.5, Some(blue), None);
+            g.rect(8.5, 2.0, 5.5, 5.5, Some(orange), None);
+            g.rect(2.0, 8.5, 5.5, 5.5, Some(green), None);
+            g.rect(8.5, 8.5, 5.5, 5.5, Some(purple), None);
         }
         Icon::Margins => {
             g.rect(3.0, 1.5, 10.0, 13.0, None, Some(c));
-            g.rect(5.0, 3.5, 6.0, 9.0, None, Some(BLUE));
+            g.rect(5.0, 3.5, 6.0, 9.0, None, Some(blue));
         }
         Icon::Orient => {
             g.rect(2.0, 4.0, 8.0, 10.0, None, Some(c));
-            g.rect(6.0, 2.0, 8.0, 6.0, Some(Color32::WHITE), Some(BLUE));
+            g.rect(6.0, 2.0, 8.0, 6.0, Some(paper), Some(blue));
         }
         Icon::SheetRtl => {
             // A sheet with an arrow running right to left.
             g.rect(2.0, 2.5, 12.0, 8.0, None, Some(c));
             g.stroke(&[(6.0, 2.5), (6.0, 10.5)], light);
             g.stroke(&[(10.0, 2.5), (10.0, 10.5)], light);
-            g.line(&[(13.5, 13.0), (4.5, 13.0)], BLUE, 1.4);
-            g.poly(&[(2.0, 13.0), (5.0, 10.5), (5.0, 15.5)], BLUE);
+            g.line(&[(13.5, 13.0), (4.5, 13.0)], blue, 1.4);
+            g.poly(&[(2.0, 13.0), (5.0, 10.5), (5.0, 15.5)], blue);
         }
         Icon::PrintArea => {
             g.rect(2.5, 2.5, 11.0, 11.0, None, Some(light));
-            g.line(&[(4.0, 4.0), (11.0, 4.0), (11.0, 10.0), (4.0, 10.0), (4.0, 4.0)], BLUE, 1.4);
+            g.line(&[(4.0, 4.0), (11.0, 4.0), (11.0, 10.0), (4.0, 10.0), (4.0, 4.0)], blue, 1.4);
         }
         Icon::Script => {
             g.rect(2.0, 2.0, 12.0, 12.0, None, Some(c));
-            g.line(&[(4.5, 6.0), (7.0, 8.0), (4.5, 10.0)], GREEN, 1.3);
+            g.line(&[(4.5, 6.0), (7.0, 8.0), (4.5, 10.0)], green, 1.3);
             g.stroke(&[(8.0, 10.5), (11.5, 10.5)], c);
         }
         Icon::Pen => {
-            g.poly(&[(3.0, 13.0), (4.0, 10.0), (11.0, 3.0), (13.0, 5.0), (6.0, 12.0)], BLUE);
+            g.poly(&[(3.0, 13.0), (4.0, 10.0), (11.0, 3.0), (13.0, 5.0), (6.0, 12.0)], blue);
             g.stroke(&[(3.0, 13.0), (4.0, 10.0)], c);
         }
         Icon::Share => {
@@ -645,18 +689,18 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             g.poly(&half, c);
         }
         Icon::Book => {
-            g.rect(2.0, 2.0, 12.0, 12.0, Some(GREEN), None);
-            g.rect(4.0, 4.0, 8.0, 8.0, Some(Color32::WHITE), None);
-            g.stroke(&[(8.0, 4.0), (8.0, 12.0)], GREEN);
-            g.stroke(&[(4.0, 8.0), (12.0, 8.0)], GREEN);
+            g.rect(2.0, 2.0, 12.0, 12.0, Some(green), None);
+            g.rect(4.0, 4.0, 8.0, 8.0, Some(paper), None);
+            g.stroke(&[(8.0, 4.0), (8.0, 12.0)], green);
+            g.stroke(&[(4.0, 8.0), (12.0, 8.0)], green);
         }
         Icon::Folder => {
-            g.poly(&[(1.5, 4.0), (6.0, 4.0), (7.5, 5.5), (14.5, 5.5), (14.5, 13.0), (1.5, 13.0)], YELLOW);
+            g.poly(&[(1.5, 4.0), (6.0, 4.0), (7.5, 5.5), (14.5, 5.5), (14.5, 13.0), (1.5, 13.0)], yellow);
         }
         Icon::Header | Icon::Footer => {
             g.rect(3.5, 1.5, 9.0, 13.0, None, Some(c));
             let y = if icon == Icon::Header { 2.5 } else { 11.0 };
-            g.rect(4.5, y, 7.0, 2.5, Some(BLUE), None);
+            g.rect(4.5, y, 7.0, 2.5, Some(blue), None);
             for yy in if icon == Icon::Header { [7.0, 9.5] } else { [4.5, 7.0] } {
                 g.stroke(&[(5.5, yy), (10.5, yy)], light);
             }
@@ -665,16 +709,16 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             if icon == Icon::PageCount {
                 g.rect(5.5, 1.0, 8.5, 11.5, None, Some(light));
             }
-            g.rect(2.5, 3.0, 8.5, 12.0, Some(Color32::WHITE), Some(c));
+            g.rect(2.5, 3.0, 8.5, 12.0, Some(paper), Some(c));
             // A "#" mark.
-            g.stroke(&[(5.3, 6.5), (4.8, 12.5)], BLUE);
-            g.stroke(&[(8.3, 6.5), (7.8, 12.5)], BLUE);
-            g.stroke(&[(4.0, 8.4), (9.6, 8.4)], BLUE);
-            g.stroke(&[(3.8, 10.8), (9.4, 10.8)], BLUE);
+            g.stroke(&[(5.3, 6.5), (4.8, 12.5)], blue);
+            g.stroke(&[(8.3, 6.5), (7.8, 12.5)], blue);
+            g.stroke(&[(4.0, 8.4), (9.6, 8.4)], blue);
+            g.stroke(&[(3.8, 10.8), (9.4, 10.8)], blue);
         }
         Icon::Calendar => {
-            g.rect(2.0, 3.0, 12.0, 11.0, Some(Color32::WHITE), Some(c));
-            g.rect(2.0, 3.0, 12.0, 3.0, Some(BLUE), None);
+            g.rect(2.0, 3.0, 12.0, 11.0, Some(paper), Some(c));
+            g.rect(2.0, 3.0, 12.0, 3.0, Some(blue), None);
             for (x, y) in [(4.5, 8.5), (7.5, 8.5), (10.5, 8.5), (4.5, 11.5), (7.5, 11.5)] {
                 g.rect(x - 0.6, y - 0.6, 1.4, 1.4, Some(c), None);
             }
@@ -682,13 +726,13 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
         Icon::Clock => {
             let center = g.pt(8.0, 8.0);
             g.p.circle_stroke(center, 6.0 * g.s, Stroke::new(1.15 * g.s.clamp(1.0, 2.0), c));
-            g.stroke(&[(8.0, 4.5), (8.0, 8.0), (10.8, 9.6)], BLUE);
+            g.stroke(&[(8.0, 4.5), (8.0, 8.0), (10.8, 9.6)], blue);
         }
         Icon::FileName => {
-            g.poly(&[(3.0, 1.5), (10.0, 1.5), (13.0, 4.5), (13.0, 14.5), (3.0, 14.5)], Color32::WHITE);
+            g.poly(&[(3.0, 1.5), (10.0, 1.5), (13.0, 4.5), (13.0, 14.5), (3.0, 14.5)], paper);
             g.line(&[(3.0, 1.5), (10.0, 1.5), (13.0, 4.5), (13.0, 14.5), (3.0, 14.5), (3.0, 1.5)], c, 1.15);
             g.stroke(&[(10.0, 1.5), (10.0, 4.5), (13.0, 4.5)], c);
-            g.line(&[(5.0, 9.0), (11.0, 9.0)], BLUE, 1.4);
+            g.line(&[(5.0, 9.0), (11.0, 9.0)], blue, 1.4);
             g.stroke(&[(5.0, 11.5), (9.0, 11.5)], light);
         }
         Icon::Back => {

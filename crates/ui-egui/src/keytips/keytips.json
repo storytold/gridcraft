@@ -8,9 +8,17 @@
   "    \"continue\" (an explicit group level with no deeper sequences yet).",
   "  - Intermediate levels need no entries: the matcher waits automatically when deeper sequences exist.",
   "  - pending: true = the command does not exist yet; the sequence stays reserved and silent until it lands.",
+  "  - params: an optional JSON object passed to a command or dialog, for menu items that share one id (the Borders presets: HBO {\"preset\": \"bottom\"}).",
   "  - Keep entries grouped by tab and sorted by sequence within a group; the FIRST entry for a tab is its canonical badge (legacy aliases come after it)."
  ],
  "sequences": [
+  {
+   "seq": "F",
+   "kind": "tab",
+   "target": "File",
+   "excel": "File tab (Backstage view)",
+   "note": "Opens the File view on Home; its letters below still run their commands."
+  },
   {
    "seq": "H",
    "kind": "tab",
@@ -196,36 +204,49 @@
    "seq": "HBA",
    "kind": "command",
    "target": "home.borders",
+   "params": {
+    "preset": "all"
+   },
    "excel": "All Borders",
-   "note": "containment(Borders)"
+   "note": "Borders menu item"
   },
   {
    "seq": "HBB",
    "kind": "command",
    "target": "home.borders",
+   "params": {
+    "preset": "doubleBottom"
+   },
    "excel": "Bottom Double Border",
-   "note": "border-side TBD"
+   "note": "Borders menu item"
   },
   {
    "seq": "HBC",
    "kind": "command",
    "target": "home.borders",
+   "params": {
+    "preset": "topThickBottom"
+   },
    "excel": "Top and Thick Bottom Border",
-   "note": "border-side TBD"
+   "note": "Borders menu item"
   },
   {
    "seq": "HBD",
    "kind": "command",
    "target": "home.borders",
+   "params": {
+    "preset": "topBottom"
+   },
    "excel": "Top and Bottom Border",
-   "note": "border-side TBD"
+   "note": "Borders menu item"
   },
   {
    "seq": "HBE",
    "kind": "command",
-   "target": "home.borders",
+   "target": "home.eraseBorder",
+   "pending": true,
    "excel": "Erase Border",
-   "note": "border-side TBD"
+   "note": "pending: Excel arms an eraser pen; GridCraft has no border pen mode yet"
   },
   {
    "seq": "HBG",
@@ -238,78 +259,109 @@
    "seq": "HBH",
    "kind": "command",
    "target": "home.borders",
+   "params": {
+    "preset": "thickBottom"
+   },
    "excel": "Thick Bottom Border",
-   "note": "border-side TBD"
+   "note": "Borders menu item"
   },
   {
    "seq": "HBI",
    "kind": "command",
-   "target": "home.borders",
+   "target": "home.borderLineColor",
+   "pending": true,
    "excel": "Line Color",
-   "note": "Line Color (submenu TBD)"
+   "note": "pending: Line Color submenu"
   },
   {
    "seq": "HBL",
    "kind": "command",
    "target": "home.borders",
+   "params": {
+    "preset": "left"
+   },
    "excel": "Left Border",
-   "note": "border-side TBD"
+   "note": "Borders menu item"
   },
   {
    "seq": "HBM",
-   "kind": "command",
-   "target": "home.borders",
+   "kind": "dialog",
+   "target": "formatCells",
+   "params": {
+    "tab": "Border"
+   },
    "excel": "More Borders",
-   "note": "containment(Borders)"
+   "note": "Format Cells on its Border tab"
   },
   {
    "seq": "HBN",
    "kind": "command",
    "target": "home.borders",
+   "params": {
+    "preset": "none"
+   },
    "excel": "No Border",
-   "note": "border-side TBD"
+   "note": "Borders menu item"
   },
   {
    "seq": "HBO",
    "kind": "command",
    "target": "home.borders",
+   "params": {
+    "preset": "bottom"
+   },
    "excel": "Bottom Border",
-   "note": "border-side TBD"
+   "note": "Borders menu item"
   },
   {
    "seq": "HBP",
    "kind": "command",
    "target": "home.borders",
+   "params": {
+    "preset": "top"
+   },
    "excel": "Top Border",
-   "note": "border-side TBD"
+   "note": "Borders menu item"
   },
   {
    "seq": "HBR",
    "kind": "command",
    "target": "home.borders",
+   "params": {
+    "preset": "right"
+   },
    "excel": "Right Border",
-   "note": "border-side TBD"
+   "note": "Borders menu item"
   },
   {
    "seq": "HBS",
    "kind": "command",
    "target": "home.borders",
+   "params": {
+    "preset": "outside"
+   },
    "excel": "Outside Borders",
-   "note": "containment(Borders)"
+   "note": "Borders menu item"
   },
   {
    "seq": "HBT",
    "kind": "command",
    "target": "home.borders",
+   "params": {
+    "preset": "thickOutside"
+   },
    "excel": "Thick Outside Borders",
-   "note": "border-side TBD"
+   "note": "Borders menu item"
   },
   {
    "seq": "HBU",
    "kind": "command",
    "target": "home.borders",
+   "params": {
+    "preset": "topDoubleBottom"
+   },
    "excel": "Top and Double Bottom Border",
-   "note": "border-side TBD"
+   "note": "Borders menu item"
   },
   {
    "seq": "HBW",
@@ -321,9 +373,10 @@
   {
    "seq": "HBY",
    "kind": "command",
-   "target": "home.borders",
+   "target": "home.borderLineStyle",
+   "pending": true,
    "excel": "Line Style",
-   "note": "Line Style (submenu TBD)"
+   "note": "pending: Line Style submenu"
   },
   {
    "seq": "HC",
@@ -1613,11 +1666,10 @@
   },
   {
    "seq": "MSP",
-   "kind": "command",
-   "target": "formulas.pasteName",
+   "kind": "dialog",
+   "target": "pasteName",
    "excel": "Paste Names",
-   "note": "reserved until the command lands",
-   "pending": true
+   "note": ""
   },
   {
    "seq": "MT",
@@ -1965,8 +2017,8 @@
   },
   {
    "seq": "AQ",
-   "kind": "command",
-   "target": "data.advancedFilter",
+   "kind": "dialog",
+   "target": "advancedFilter",
    "excel": "Advanced Filter",
    "note": ""
   },
@@ -2419,7 +2471,7 @@
   },
   {
    "seq": "WW",
-   "kind": "command",
+   "kind": "control",
    "target": "view.switchWindows",
    "excel": "Switch Windows",
    "note": ""

@@ -29,6 +29,12 @@ pub struct PageGrid {
     pub gap: f64,
     /// Print scale (1.0 = 100%): screen sizes of cells are `zoom × scale`.
     pub scale: f32,
+    /// Left and right margins of headers and footers in layout units (the side margins, or a
+    /// fixed 0.7 inch, at most a quarter of the page width, with Align with Page Margins off).
+    pub hf_sides: [f64; 2],
+    /// Layout units per sheet pixel of header and footer text: 1 with Scale with Document on,
+    /// otherwise `1 / scale`, so the text keeps its point size on paper.
+    pub hf_text_k: f32,
     /// Paper size in points (after orientation), for the rulers.
     pub paper_pt: (f32, f32),
     pub row_bands: Vec<(u32, u32)>,
@@ -65,6 +71,8 @@ impl PageGrid {
         let s = f64::from(lay.scale.clamp(0.1, 4.0));
         let to_layout = |pt: f32| f64::from(pt) / f64::from(PX_TO_PT) / s;
         let margins = lay.margins.map(to_layout);
+        let (hf_left, hf_right) = lay.hf_sides();
+        let hf_text_k = lay.hf_text_scale() / s as f32;
         let band_range = |bands: &[(u32, u32)], lo: u32, hi: u32| {
             let first = bands.iter().position(|b| b.1 >= lo).unwrap_or(0);
             let last = bands.iter().rposition(|b| b.0 <= hi).unwrap_or(first).max(first);
@@ -79,6 +87,8 @@ impl PageGrid {
             margins,
             gap: f64::from(PAGE_GAP) / s,
             scale: lay.scale,
+            hf_sides: [to_layout(hf_left), to_layout(hf_right)],
+            hf_text_k,
             paper_pt: (lay.page_w, lay.page_h),
             rows_complete: row_bands.last().is_some_and(|b| b.1 >= MAX_ROWS - 1),
             cols_complete: col_bands.last().is_some_and(|b| b.1 >= MAX_COLS - 1),
@@ -174,11 +184,12 @@ impl PageGrid {
     }
 
     /// The header or footer section under the point: the top or bottom margin of a page, split
-    /// into thirds between the side margins.
+    /// into thirds between the header and footer side margins.
     pub fn hf_zone_at(&self, x: f64, y: f64) -> Option<((usize, usize), HfZone)> {
         let (i, j) = self.page_at(x, y)?;
         let (px, py, _, _) = self.page_rect(i, j);
-        let [l, r, t, b, ..] = self.margins;
+        let [_, _, t, b, ..] = self.margins;
+        let [l, r] = self.hf_sides;
         let footer = if y < py + t {
             false
         } else if y >= py + self.page_h - b {
@@ -299,6 +310,31 @@ mod tests {
         assert_eq!(g.page_number(0, 0), Some((1, 1)));
         assert_eq!(g.page_number(0, 1), None);
         assert!(g.is_data_page(0, 0) && !g.is_data_page(1, 0));
+    }
+
+    #[test]
+    fn header_zones_and_text_follow_scale_with_document_and_align_with_page_margins() {
+        let mut wb = wb_with(10, 3);
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.print.scale = 50;
+            sh.print.margins = [2.0, 2.0, 0.75, 0.75, 0.3, 0.3];
+        }
+        let g = PageGrid::build(&wb, 0, 50, 20).unwrap();
+        let (px, py, _, _) = g.page_rect(0, 0);
+        // Both on: the sections sit between the 2-inch side margins and the text scales with the cells.
+        assert_eq!(g.hf_sides, [g.margins[0], g.margins[1]]);
+        assert!((g.hf_text_k - 1.0).abs() < 1e-6);
+        assert_eq!(g.hf_zone_at(px + 1000.0, py + 3.0).map(|z| z.1.section), Some(2));
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.print.hf_scale_with_doc = false;
+            sh.print.hf_align_with_margins = false;
+        }
+        let g = PageGrid::build(&wb, 0, 50, 20).unwrap();
+        // Both off: 0.7 inch (67.2 sheet pixels, 134.4 layout units at 50%) on each side, and the
+        // text keeps its point size on paper.
+        assert!(g.hf_sides.iter().all(|s| (s - 134.4).abs() < 1e-3), "{:?}", g.hf_sides);
+        assert!((g.hf_text_k - 2.0).abs() < 1e-6);
+        assert_eq!(g.hf_zone_at(px + 1000.0, py + 3.0).map(|z| z.1.section), Some(1));
     }
 
     #[test]

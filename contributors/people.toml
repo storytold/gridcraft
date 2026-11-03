@@ -60,8 +60,46 @@ sync_github_name = true
 [people.jsymes21-byte]
 real_name = "James Symes"
 sync_github_name = true
-
-
 [people.Silvertree2010]
 display_name = "Netter"
 sync_github_name = false
+
+[people.Shnrqpdr]
+sync_github_name = true
+
+[people.yeniufuklar-com]
+real_name = "Ufuk Efe"
+display_name = "Ufuk Efe"
+sync_github_name = true
+
+[people.pourie-he]
+sync_github_name = true
+
+[people.Stefanfra]
+real_name = "Stefan Fransen"
+sync_github_name = true
+
+[people.allenyllee]
+sync_github_name = true
+
+[people.marcoarnulfo]
+real_name = "Marco Arnulfo"
+display_name = "Marco Arnulfo"
+sync_github_name = false
+
+[people.Harrison-Booth]
+real_name = "Harrison Booth"
+sync_github_name = false
+
+[people.bilalmughal]
+sync_github_name = true
+
+[people.tyrel]
+real_name = "Tyrel Haveman"
+
+[people.helenkwok]
+real_name = "Helen Kwok"
+
+[people.dotCooCoo]
+real_name = "Robert Lee"
+sync_github_name = true

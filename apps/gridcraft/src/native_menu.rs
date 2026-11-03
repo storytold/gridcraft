@@ -4,7 +4,7 @@
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, channel};
 
-use gridcraft_ui_egui::SheetApp;
+use gridcraft_ui_egui::{OpenWindow, SheetApp};
 use muda::accelerator::Accelerator;
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use serde_json::{Value, json};
@@ -125,7 +125,7 @@ fn tree() -> Vec<(&'static str, Vec<Entry>)> {
                 ("Unhide Sheet…", "sheet.unhide", None),
                 ("-", "", None),
                 ("Conditional Formatting…", "dialog:manageRules", None),
-                ("Format as Table", "insert.table", None),
+                ("Format as Table", "home.formatAsTable", None),
             ],
         ),
         (
@@ -168,10 +168,20 @@ fn tree() -> Vec<(&'static str, Vec<Entry>)> {
                 ("Calculate Now", "formulas.calculateNow", None),
             ],
         ),
-        ("Window", vec![("New Window", "view.newWindow", None), ("Next Sheet", "sheet.next", None), ("Previous Sheet", "sheet.previous", None)]),
+        // The open workbooks follow the separator (`NativeMenu::sync_windows`).
+        (
+            "Window",
+            vec![
+                ("New Window", "view.newWindow", None),
+                ("Next Sheet", "sheet.next", None),
+                ("Previous Sheet", "sheet.previous", None),
+                ("-", "", None),
+            ],
+        ),
         (
             "Help",
             vec![
+                ("Check for Updates…", "app.checkForUpdates", None),
                 ("Agent Control (MCP)…", "dialog:agents", None),
                 ("Contributors…", "dialog:about:Contributors", None),
                 ("GridCraft on getartcraft.com", "url:https://getartcraft.com/apps/gridcraft", None),
@@ -185,7 +195,18 @@ pub struct NativeMenu {
     _menu: Menu,
     events: Receiver<MenuEvent>,
     theme_items: Vec<(&'static str, CheckMenuItem)>,
+    window_menu: Option<Submenu>,
+    /// The Window menu's window items and what they last showed.
+    window_items: Vec<CheckMenuItem>,
+    windows: Vec<OpenWindow>,
 }
+
+/// Menu id of the Window menu item that brings workbook `doc` forward.
+const WINDOW_ITEM: &str = "window:id:";
+
+/// The Quit item: asks about each unsaved workbook in its window first
+/// (`SheetApp::request_quit`), which AppKit's own Quit (terminate:) would skip.
+const QUIT: &str = "app.quit";
 
 fn select_theme(app: &mut SheetApp, id: &str) -> bool {
     let mode = match id {
@@ -212,7 +233,7 @@ impl NativeMenu {
             &PredefinedMenuItem::hide_others(None),
             &PredefinedMenuItem::show_all(None),
             &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::quit(None),
+            &MenuItem::with_id(QUIT, "Quit GridCraft", true, Accelerator::from_str("CMD+Q").ok()),
         ]);
         let _ = menu.append(&app_menu);
         let mut theme_items = Vec::new();
@@ -247,7 +268,7 @@ impl NativeMenu {
         // NSApp's windowsMenu is where macOS adds Move & Resize, Fill and Center, the targets of the
         // system tiling shortcuts (Fn+Ctrl+arrows, Fn+F). Only once the menu is NSApp's: muda looks
         // the submenu up in the installed main menu.
-        if let Some(window) = window_menu {
+        if let Some(window) = &window_menu {
             window.set_as_windows_menu_for_nsapp();
         }
         let (tx, rx) = channel();
@@ -256,12 +277,54 @@ impl NativeMenu {
             let _ = tx.send(e);
             ctx.request_repaint();
         }));
-        NativeMenu { _menu: menu, events: rx, theme_items }
+        NativeMenu { _menu: menu, events: rx, theme_items, window_menu, window_items: Vec::new(), windows: Vec::new() }
     }
 
-    pub fn poll(&self, app: &mut SheetApp, ctx: &egui::Context) {
+    /// Keeps the Window menu's list of open windows (title, unsaved bullet, active check) in
+    /// step with the session.
+    fn sync_windows(&mut self, app: &SheetApp) {
+        let windows = app.open_windows();
+        if windows != self.windows
+            && let Some(menu) = &self.window_menu
+        {
+            let same_windows = windows.len() == self.windows.len() && windows.iter().zip(&self.windows).all(|(a, b)| a.window == b.window);
+            if same_windows {
+                for (item, w) in self.window_items.iter().zip(&windows) {
+                    item.set_text(w.label());
+                }
+            } else {
+                for item in self.window_items.drain(..) {
+                    let _ = menu.remove(&item);
+                }
+                for w in &windows {
+                    let item = CheckMenuItem::with_id(format!("{WINDOW_ITEM}{}", w.window), w.label(), true, w.active, None);
+                    let _ = menu.append(&item);
+                    self.window_items.push(item);
+                }
+            }
+            self.windows = windows;
+        }
+        // AppKit flips a check item when it is chosen, so the active check is put back every poll.
+        for (item, w) in self.window_items.iter().zip(&self.windows) {
+            if item.is_checked() != w.active {
+                item.set_checked(w.active);
+            }
+        }
+    }
+
+    /// Runs the chosen menu items. Commands go to the active window, the most recently focused;
+    /// `viewport` is its egui viewport, for the items that act on its input.
+    pub fn poll(&mut self, app: &mut SheetApp, ctx: &egui::Context, viewport: egui::ViewportId) {
         while let Ok(ev) = self.events.try_recv() {
             let id = ev.id.as_ref().to_string();
+            if id == QUIT {
+                app.request_quit(ctx);
+                continue;
+            }
+            if let Some(window) = id.strip_prefix(WINDOW_ITEM).and_then(|w| w.parse::<u64>().ok()) {
+                app.run_or_alert("view.switchWindows", json!({"window": window}));
+                continue;
+            }
             // Text selection belongs to the inline editor, not the worksheet clipboard/undo.
             if app.text_box_editor.is_some() {
                 let clipboard = match id.as_str() {
@@ -271,11 +334,11 @@ impl NativeMenu {
                     _ => None,
                 };
                 if let Some(command) = clipboard {
-                    ctx.send_viewport_cmd(command);
+                    ctx.send_viewport_cmd_to(viewport, command);
                     continue;
                 }
                 if id == "edit.undo" || id == "edit.redo" {
-                    ctx.input_mut(|i| {
+                    ctx.input_mut_for(viewport, |i| {
                         i.events.push(egui::Event::Key {
                             key: egui::Key::Z,
                             physical_key: None,
@@ -321,6 +384,7 @@ impl NativeMenu {
                 item.set_checked(checked);
             }
         }
+        self.sync_windows(app);
     }
 }
 
@@ -335,6 +399,16 @@ mod tests {
         let item = file.iter().find(|e| e.0 == "Export as PDF…").expect("Export as PDF… in the File menu");
         assert_eq!(item.1, "file.exportPdf");
         assert!(gridcraft_engine::find_command("file.exportPdf").is_some());
+    }
+
+    #[test]
+    fn help_menu_checks_for_updates_through_the_registered_command() {
+        let tree = tree();
+        let (_, help) = tree.iter().find(|(title, _)| *title == "Help").expect("Help menu");
+        let item = help.iter().find(|e| e.0 == "Check for Updates…").expect("Check for Updates… in the Help menu");
+        assert_eq!(item.1, "app.checkForUpdates");
+        let mut app = SheetApp::new(gridcraft_engine::Session::new(), Default::default());
+        assert!(app.run(item.1, serde_json::json!({})).is_ok());
     }
 
     #[test]

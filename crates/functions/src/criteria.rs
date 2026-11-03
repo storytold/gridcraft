@@ -123,6 +123,60 @@ impl Criterion {
         Criterion { op, operand, bare_empty: false }
     }
 
+    fn matches_blank(&self, v: &Value) -> bool {
+        let blank = matches!(v, Value::Empty);
+        match self.op {
+            Op::Eq => blank,
+            Op::Ne => !blank,
+            // "<" / ">" with nothing: Excel compares against "" for text cells, but an
+            // empty string never matches ("<=" and ">=" count it in neither).
+            _ => match v {
+                Value::Text(t) if !t.is_empty() => cmp_op(self.op, compare_text(t, "")),
+                _ => false,
+            },
+        }
+    }
+
+    fn matches_number(&self, v: &Value, n: f64) -> bool {
+        let cell = match v {
+            Value::Number(x) => Some(*x),
+            // Numeric text matches only for equality (COUNTIF("1") counts text "1").
+            Value::Text(t) if matches!(self.op, Op::Eq | Op::Ne) => parse_number_text(t),
+            _ => None,
+        };
+        match cell {
+            Some(x) => cmp_op(self.op, compare_numbers(x, n)),
+            None => self.op == Op::Ne,
+        }
+    }
+
+    fn matches_text(&self, v: &Value, pat: &str) -> bool {
+        match self.op {
+            Op::Eq | Op::Ne => {
+                // Blank cells hold no text: `"*"` skips them and `"<>*"` counts them.
+                let cell_text = match v {
+                    Value::Text(t) => Some(t.to_string()),
+                    _ => None,
+                };
+                let m = cell_text.is_some_and(|t| wildcard_match(pat, &t));
+                if self.op == Op::Eq { m } else { !m }
+            }
+            _ => match v {
+                Value::Text(t) => cmp_op(self.op, compare_text(t, pat)),
+                _ => false,
+            },
+        }
+    }
+
+    fn matches_cut_text(&self, v: &Value, kept: &str) -> bool {
+        match self.op {
+            Op::Eq => false,
+            Op::Ne => true,
+            Op::Lt | Op::Le => matches!(v, Value::Text(t) if compare_text(t, kept) != Ordering::Greater),
+            Op::Gt | Op::Ge => matches!(v, Value::Text(t) if compare_text(t, kept) == Ordering::Greater),
+        }
+    }
+
     /// Whether a cell value satisfies the criterion.
     pub(crate) fn matches(&self, v: &Value) -> bool {
         let v = match v {
@@ -133,31 +187,8 @@ impl Criterion {
             return matches!(&v, Value::Empty) || matches!(&v, Value::Text(t) if t.is_empty());
         }
         match &self.operand {
-            Operand::Blank => {
-                let blank = matches!(v, Value::Empty);
-                match self.op {
-                    Op::Eq => blank,
-                    Op::Ne => !blank,
-                    // "<" / ">" with nothing: Excel compares against "" for text cells, but an
-                    // empty string never matches ("<=" and ">=" count it in neither).
-                    _ => match &v {
-                        Value::Text(t) if !t.is_empty() => cmp_op(self.op, compare_text(t, "")),
-                        _ => false,
-                    },
-                }
-            }
-            Operand::Number(n) => {
-                let cell = match &v {
-                    Value::Number(x) => Some(*x),
-                    // Numeric text matches only for equality (COUNTIF("1") counts text "1").
-                    Value::Text(t) if matches!(self.op, Op::Eq | Op::Ne) => parse_number_text(t),
-                    _ => None,
-                };
-                match cell {
-                    Some(x) => cmp_op(self.op, compare_numbers(x, *n)),
-                    None => self.op == Op::Ne,
-                }
-            }
+            Operand::Blank => self.matches_blank(&v),
+            Operand::Number(n) => self.matches_number(&v, *n),
             Operand::Bool(b) => match &v {
                 Value::Bool(x) => cmp_op(self.op, x.cmp(b)),
                 _ => self.op == Op::Ne,
@@ -166,27 +197,8 @@ impl Criterion {
                 Value::Error(x) => cmp_op(self.op, x.code().cmp(&e.code())),
                 _ => self.op == Op::Ne,
             },
-            Operand::Text(pat) => match self.op {
-                Op::Eq | Op::Ne => {
-                    // Blank cells hold no text: `"*"` skips them and `"<>*"` counts them.
-                    let cell_text = match &v {
-                        Value::Text(t) => Some(t.to_string()),
-                        _ => None,
-                    };
-                    let m = cell_text.is_some_and(|t| wildcard_match(pat, &t));
-                    if self.op == Op::Eq { m } else { !m }
-                }
-                _ => match &v {
-                    Value::Text(t) => cmp_op(self.op, compare_text(t, pat)),
-                    _ => false,
-                },
-            },
-            Operand::CutText(kept) => match self.op {
-                Op::Eq => false,
-                Op::Ne => true,
-                Op::Lt | Op::Le => matches!(&v, Value::Text(t) if compare_text(t, kept) != Ordering::Greater),
-                Op::Gt | Op::Ge => matches!(&v, Value::Text(t) if compare_text(t, kept) == Ordering::Greater),
-            },
+            Operand::Text(pat) => self.matches_text(&v, pat),
+            Operand::CutText(kept) => self.matches_cut_text(&v, kept),
         }
     }
 }
@@ -264,15 +276,27 @@ pub(crate) fn has_wildcards(pattern: &str) -> bool {
 pub(crate) fn wildcard_match(pattern: &str, text: &str) -> bool {
     let p = tokenize(pattern);
     let t = lower_chars(text);
-    match_from(&p, &t, true).is_some()
+    let mut budget = MAX_STEPS;
+    match_from(&p, &t, true, &mut budget).is_some()
 }
 
+/// Steps one `match_from` call may take. An honest match against Excel's 32,767-character
+/// cell ceiling costs a few hundred thousand; a hostile one (star churn) is capped instead
+/// of quadratic — a call that spends more gives up and reports no match, quiet degradation
+/// like the other work caps on far-past-realistic input.
+const MAX_STEPS: u64 = 1 << 26;
+
 /// Greedy-free matcher: returns the matched length of `t` when `p` matches a prefix of `t`
-/// (or all of `t` when `whole`). Iterative with backtracking on the last star (linear-ish).
-fn match_from(p: &[Tok], t: &[char], whole: bool) -> Option<usize> {
+/// (or all of `t` when `whole`). Iterative with backtracking on the last star (linear-ish,
+/// quadratic at worst). `(budget, whole)`: the budget is spent one per loop step; a call that
+/// would spend more than it has gives up and reports no match — quiet degradation, as with the
+/// other work caps on far-past-realistic input (an honest match against Excel's 32,767-char
+/// cell ceiling costs a few hundred thousand steps).
+fn match_from(p: &[Tok], t: &[char], whole: bool, budget: &mut u64) -> Option<usize> {
     let (mut pi, mut ti) = (0usize, 0usize);
     let mut star: Option<(usize, usize)> = None;
     loop {
+        *budget = budget.checked_sub(1)?;
         if pi == p.len() && (!whole || ti == t.len()) {
             return Some(ti);
         }
@@ -307,14 +331,38 @@ fn match_from(p: &[Tok], t: &[char], whole: bool) -> Option<usize> {
 pub(crate) fn wildcard_find(pattern: &str, text: &str, start: usize) -> Option<usize> {
     let p = tokenize(pattern);
     let t = lower_chars(text);
+    // A leading run of stars never matters for a prefix match (it consumes nothing), so
+    // dropping it lets the anchor below skip linearly through the text (#2382).
+    let skip = p.iter().take_while(|tk| matches!(tk, Tok::Star)).count();
+    let p = &p[skip.min(p.len())..];
     if p.is_empty() {
         return if start <= t.len() { Some(start) } else { None };
     }
-    (start..t.len()).find(|&i| t.get(i..).is_some_and(|rest| match_from(&p, rest, false).is_some()))
+    // The first token that consumes a character anchors the scan: a literal skips straight
+    // to its occurrences, and after leading `?`s each attempt only pays for the `?` run and
+    // one suffix try. Every attempt shares one budget, so the total work stays flat.
+    let anys = p.iter().take_while(|tk| matches!(tk, Tok::Any)).count();
+    let anchor = p.get(anys);
+    let mut budget = MAX_STEPS;
+    let mut i = start;
+    while i < t.len() {
+        let hit = match (anchor, t.get(i + anys)) {
+            (Some(Tok::Char(c)), Some(rest)) => *rest == *c && match_from(p, &t[i..], false, &mut budget).is_some(),
+            (Some(Tok::Char(_)), None) => break, // the anchor char no longer exists ahead
+            _ => match_from(p, &t[i..], false, &mut budget).is_some(),
+        };
+        if hit {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Exact-or-wildcard equality used by MATCH/VLOOKUP/XLOOKUP exact modes: text with wildcards
-/// matches by pattern (only when `wild`), otherwise values compare case-insensitively.
+/// matches by pattern (only when `wild`), otherwise values compare case-insensitively. Numbers
+/// compare exactly, not at the 15 digits of `=` and the criteria functions (Excel 365:
+/// `MATCH(0.1+0.2,{0.3},0)` is #N/A while `0.1+0.2=0.3` is TRUE).
 pub(crate) fn lookup_equal(needle: &Value, hay: &Value, wild: bool) -> bool {
     match (needle, hay) {
         (Value::Text(p), Value::Text(t)) => {
@@ -324,7 +372,7 @@ pub(crate) fn lookup_equal(needle: &Value, hay: &Value, wild: bool) -> bool {
                 compare_text(p, t) == Ordering::Equal
             }
         }
-        (Value::Number(a), Value::Number(b)) => compare_numbers(*a, *b) == Ordering::Equal,
+        (Value::Number(a), Value::Number(b)) => a == b,
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Error(a), Value::Error(b)) => a == b,
         (Value::Empty, Value::Empty) => true,
@@ -370,7 +418,8 @@ mod tests {
         assert!(m("#N/A", Value::Error(CellError::NA)));
         assert!(Criterion::parse(&Value::Number(3.0)).matches(&Value::Number(3.0)));
         assert!(Criterion::parse(&Value::Number(0.3)).matches(&Value::Number(0.1 + 0.2)));
-        assert!(lookup_equal(&Value::Number(0.3), &Value::Number(0.1 + 0.2), false));
+        assert!(!lookup_equal(&Value::Number(0.3), &Value::Number(0.1 + 0.2), false));
+        assert!(lookup_equal(&Value::Number(0.0), &Value::Number(-0.0), false));
         assert!(m("<>a*", Value::from("bcd")));
         assert!(m(">1/1/2020", Value::Number(44000.0)));
         // Text patterns never match blank cells, but an empty string is text.

@@ -6,6 +6,7 @@ use super::{Action, Entry};
 /// whenever a pressed letter starts a deeper sequence, so only terminal entries are
 /// listed here. See keytip_table.rs for the helpers that read this table.
 pub const SEQUENCES: &[(&str, Entry)] = &[
+    ("F", Entry::Tab("File")), // Excel: File tab (Backstage view); Opens the File view on Home; its letters below still run their commands.
     ("H", Entry::Tab("Home")),
     ("N", Entry::Tab("Insert")),
     ("JI", Entry::Tab("Draw")), // Two-letter unit. Deeper Draw letters differ between Excel and GridCraft; left blank for future contributors.
@@ -37,40 +38,40 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("HAN", Entry::Finish(Action::Command("home.accounting"))), // Excel: Accounting Format; fires immediately in Excel; deeper aliases dropped as unreachable
     ("HAS", Entry::Finish(Action::Command("home.addIns"))),     // Excel: Add-ins; containment(Add-ins)
     ("HB", Entry::Continue),                                    // Excel: Borders Menu; group level:
-    ("HBA", Entry::Finish(Action::Command("home.borders"))),    // Excel: All Borders; containment(Borders)
-    ("HBB", Entry::Finish(Action::Command("home.borders"))),    // Excel: Bottom Double Border; border-side TBD
-    ("HBC", Entry::Finish(Action::Command("home.borders"))),    // Excel: Top and Thick Bottom Border; border-side TBD
-    ("HBD", Entry::Finish(Action::Command("home.borders"))),    // Excel: Top and Bottom Border; border-side TBD
-    ("HBE", Entry::Finish(Action::Command("home.borders"))),    // Excel: Erase Border; border-side TBD
-    ("HBG", Entry::Finish(Action::Command("home.drawBorder"))), // Excel: Draw Border Grid; containment(Draw Border)
-    ("HBH", Entry::Finish(Action::Command("home.borders"))),    // Excel: Thick Bottom Border; border-side TBD
-    ("HBI", Entry::Finish(Action::Command("home.borders"))),    // Excel: Line Color; Line Color (submenu TBD)
-    ("HBL", Entry::Finish(Action::Command("home.borders"))),    // Excel: Left Border; border-side TBD
-    ("HBM", Entry::Finish(Action::Command("home.borders"))),    // Excel: More Borders; containment(Borders)
-    ("HBN", Entry::Finish(Action::Command("home.borders"))),    // Excel: No Border; border-side TBD
-    ("HBO", Entry::Finish(Action::Command("home.borders"))),    // Excel: Bottom Border; border-side TBD
-    ("HBP", Entry::Finish(Action::Command("home.borders"))),    // Excel: Top Border; border-side TBD
-    ("HBR", Entry::Finish(Action::Command("home.borders"))),    // Excel: Right Border; border-side TBD
-    ("HBS", Entry::Finish(Action::Command("home.borders"))),    // Excel: Outside Borders; containment(Borders)
-    ("HBT", Entry::Finish(Action::Command("home.borders"))),    // Excel: Thick Outside Borders; border-side TBD
-    ("HBU", Entry::Finish(Action::Command("home.borders"))),    // Excel: Top and Double Bottom Border; border-side TBD
-    ("HBW", Entry::Finish(Action::Command("home.drawBorder"))), // Excel: Draw Border
-    ("HBY", Entry::Finish(Action::Command("home.borders"))),    // Excel: Line Style; Line Style (submenu TBD)
-    ("HC", Entry::Finish(Action::Command("edit.copy"))),        // Excel: Copy; fires immediately in Excel; deeper aliases dropped as unreachable
-    ("HDC", Entry::Finish(Action::Command("home.deleteColumns"))), // Excel: Delete Columns; Delete Columns
-    ("HDD", Entry::Finish(Action::Dialog("deleteCells"))),      // Excel: Delete Cells
-    ("HDR", Entry::Finish(Action::Command("home.deleteRows"))), // Excel: Delete Rows; Delete Rows
-    ("HDS", Entry::Finish(Action::Command("home.deleteSheet"))), // Excel: Delete Sheet
-    ("HEA", Entry::Finish(Action::Command("edit.clearAll"))),   // Excel: Clear All
-    ("HEC", Entry::Finish(Action::Command("edit.clearContents"))), // Excel: Clear Contents
-    ("HEF", Entry::Finish(Action::Command("edit.clearFormats"))), // Excel: Clear Formats
+    ("HBA", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"all\"}"))), // Excel: All Borders; Borders menu item
+    ("HBB", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"doubleBottom\"}"))), // Excel: Bottom Double Border; Borders menu item
+    ("HBC", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"topThickBottom\"}"))), // Excel: Top and Thick Bottom Border; Borders menu item
+    ("HBD", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"topBottom\"}"))),      // Excel: Top and Bottom Border; Borders menu item
+    ("HBE", Entry::Finish(Action::Pending("home.eraseBorder"))), // pending; Excel: Erase Border; pending: Excel arms an eraser pen; GridCraft has no border pen mode yet
+    ("HBG", Entry::Finish(Action::Command("home.drawBorder"))),  // Excel: Draw Border Grid; containment(Draw Border)
+    ("HBH", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"thickBottom\"}"))), // Excel: Thick Bottom Border; Borders menu item
+    ("HBI", Entry::Finish(Action::Pending("home.borderLineColor"))), // pending; Excel: Line Color; pending: Line Color submenu
+    ("HBL", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"left\"}"))), // Excel: Left Border; Borders menu item
+    ("HBM", Entry::Finish(Action::DialogWith("formatCells", "{\"tab\":\"Border\"}"))), // Excel: More Borders; Format Cells on its Border tab
+    ("HBN", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"none\"}"))), // Excel: No Border; Borders menu item
+    ("HBO", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"bottom\"}"))), // Excel: Bottom Border; Borders menu item
+    ("HBP", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"top\"}"))), // Excel: Top Border; Borders menu item
+    ("HBR", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"right\"}"))), // Excel: Right Border; Borders menu item
+    ("HBS", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"outside\"}"))), // Excel: Outside Borders; Borders menu item
+    ("HBT", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"thickOutside\"}"))), // Excel: Thick Outside Borders; Borders menu item
+    ("HBU", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"topDoubleBottom\"}"))), // Excel: Top and Double Bottom Border; Borders menu item
+    ("HBW", Entry::Finish(Action::Command("home.drawBorder"))),                                      // Excel: Draw Border
+    ("HBY", Entry::Finish(Action::Pending("home.borderLineStyle"))), // pending; Excel: Line Style; pending: Line Style submenu
+    ("HC", Entry::Finish(Action::Command("edit.copy"))),             // Excel: Copy; fires immediately in Excel; deeper aliases dropped as unreachable
+    ("HDC", Entry::Finish(Action::Command("home.deleteColumns"))),   // Excel: Delete Columns; Delete Columns
+    ("HDD", Entry::Finish(Action::Dialog("deleteCells"))),           // Excel: Delete Cells
+    ("HDR", Entry::Finish(Action::Command("home.deleteRows"))),      // Excel: Delete Rows; Delete Rows
+    ("HDS", Entry::Finish(Action::Command("home.deleteSheet"))),     // Excel: Delete Sheet
+    ("HEA", Entry::Finish(Action::Command("edit.clearAll"))),        // Excel: Clear All
+    ("HEC", Entry::Finish(Action::Command("edit.clearContents"))),   // Excel: Clear Contents
+    ("HEF", Entry::Finish(Action::Command("edit.clearFormats"))),    // Excel: Clear Formats
     ("HEL", Entry::Finish(Action::Command("edit.clearHyperlinks"))), // Excel: Clear Hyperlinks
-    ("HEM", Entry::Finish(Action::Command("edit.clearComments"))), // Excel: Clear Comments and Notes; containment(Clear Comments and Notes)
-    ("HFC", Entry::Finish(Action::Control("home.fontColor"))),  // Excel: Font Color; opens the font-color palette
+    ("HEM", Entry::Finish(Action::Command("edit.clearComments"))),   // Excel: Clear Comments and Notes; containment(Clear Comments and Notes)
+    ("HFC", Entry::Finish(Action::Control("home.fontColor"))),       // Excel: Font Color; opens the font-color palette
     ("HFDC", Entry::Finish(Action::Command("home.conditionalFormat"))), // Excel: Find Conditional Formatting; containment(Conditional Formatting)
-    ("HFDF", Entry::Finish(Action::Dialog("find"))),            // Excel: Find
-    ("HFDG", Entry::Finish(Action::Dialog("goTo"))),            // Excel: Go To
-    ("HFDM", Entry::Finish(Action::Command("edit.find"))),      // Excel: Find Notes; containment(Find)
+    ("HFDF", Entry::Finish(Action::Dialog("find"))),                 // Excel: Find
+    ("HFDG", Entry::Finish(Action::Dialog("goTo"))),                 // Excel: Go To
+    ("HFDM", Entry::Finish(Action::Command("edit.find"))),           // Excel: Find Notes; containment(Find)
     ("HFDO", Entry::Finish(Action::Pending("home.selectObjects"))), // pending; Excel: Select Objects; Select Objects; reserved until the command lands
     ("HFDP", Entry::Finish(Action::Command("arrange.selectionPane"))), // Excel: Selection Pane
     ("HFDR", Entry::Finish(Action::Dialog("find"))),                // Excel: Replace; opens Find and Replace
@@ -242,7 +243,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("MP", Entry::Finish(Action::Command("formulas.tracePrecedents"))), // Excel: Trace Precedents
     ("MQ", Entry::Finish(Action::Control("formulas.moreFunctions"))), // Excel: More Functions Menu; group level: containment(More Functions)
     ("MS", Entry::Continue),                                   // Excel: Use in Formula Menu; group level: containment(Use in Formula)
-    ("MSP", Entry::Finish(Action::Pending("formulas.pasteName"))), // pending; Excel: Paste Names; reserved until the command lands
+    ("MSP", Entry::Finish(Action::Dialog("pasteName"))),       // Excel: Paste Names
     ("MT", Entry::Finish(Action::Control("formulas.text"))),   // Excel: Text Menu; group level: containment(Text)
     ("MU", Entry::Continue),                                   // Excel: AutoSum Menu; group level:
     ("MUA", Entry::Finish(Action::Command("formulas.autoSum"))), // Excel: Average; AutoSum: Average (variant TBD)
@@ -291,7 +292,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("APR", Entry::Finish(Action::Pending("data.recentSources"))),   // pending; Excel: Recent Sources; gap #12; reserved until the command lands
     ("APS", Entry::Finish(Action::Command("data.queriesConnections"))), // Excel: Show Queries
     ("APT", Entry::Finish(Action::Pending("data.fromTable"))),       // pending; Excel: From Table (query); gap #12; reserved until the command lands
-    ("AQ", Entry::Finish(Action::Command("data.advancedFilter"))),   // Excel: Advanced Filter
+    ("AQ", Entry::Finish(Action::Dialog("advancedFilter"))),         // Excel: Advanced Filter
     ("AR", Entry::Continue),                                         // group: group: Queries & Connections
     ("ARA", Entry::Finish(Action::Command("data.refreshAll"))),      // Excel: Refresh All
     ("ARC", Entry::Finish(Action::Pending("data.cancelRefresh"))),   // pending; Excel: Cancel Refresh; gap #12; reserved until the command lands
@@ -355,7 +356,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("WVH", Entry::Finish(Action::Command("view.headings"))),       // Excel: Toggle Headings; containment(Headings)
     ("WVN", Entry::Finish(Action::Pending("view.navigation"))),     // pending; Excel: Navigation; Navigation pane; reserved until the command lands
     ("WVR", Entry::Finish(Action::Command("view.ruler"))),          // Excel: Ruler
-    ("WW", Entry::Finish(Action::Command("view.switchWindows"))),   // Excel: Switch Windows
+    ("WW", Entry::Finish(Action::Control("view.switchWindows"))),   // Excel: Switch Windows
     ("JAM", Entry::Finish(Action::Command("chart.formatSelection"))), // Excel: Chart format: Format Selection pane; containment(Format Selection)
     ("JCA", Entry::Finish(Action::Command("chart.addElement"))),    // Excel: Chart: Add Chart Element; containment(Add Chart Element)
     ("JCC", Entry::Finish(Action::Command("chart.changeType"))),    // Excel: Chart: Change Chart Type; containment(Change Chart Type)

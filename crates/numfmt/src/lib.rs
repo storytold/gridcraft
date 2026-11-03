@@ -38,6 +38,24 @@ pub enum FormatColor {
     Indexed(u8),
 }
 
+impl FormatColor {
+    /// RGB value used to render this number-format color.
+    pub fn rgb(self) -> Option<[u8; 3]> {
+        use FormatColor as F;
+        Some(match self {
+            F::Black => [0, 0, 0],
+            F::Blue => [0, 0, 255],
+            F::Cyan => [0, 255, 255],
+            F::Green => [0, 255, 0],
+            F::Magenta => [255, 0, 255],
+            F::Red => [255, 0, 0],
+            F::White => [255, 255, 255],
+            F::Yellow => [255, 255, 0],
+            F::Indexed(index) => return gridcraft_core::color::indexed_color(index),
+        })
+    }
+}
+
 /// Best guess at the ribbon's number-format category.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FormatKind {

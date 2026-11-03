@@ -273,6 +273,7 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("automate.newScript", "Automate", "Scripting Tools", "New Script"),
     ("automate.allScripts", "Automate", "Scripting Tools", "All Scripts"),
     ("automate.recordActions", "Automate", "Scripting Tools", "Record Actions"),
+    ("automate.trustScripts", "Automate", "Scripting Tools", "Trust Scripts"),
     // Table Design
     ("table.rename", "Table Design", "Properties", "Table Name"),
     ("table.resize", "Table Design", "Properties", "Resize Table"),

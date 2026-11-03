@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use gridcraft_core::date::{MONTHS, WEEKDAYS, datetime_from_serial, days_in_month, serial_from_ymd};
 use gridcraft_core::{CellRef, RangeRef, Value};
-use gridcraft_model::{Cell, Formula};
+use gridcraft_model::{Cell, Formula, Workbook};
 use gridcraft_numfmt::{FormatKind, NumberFormat};
 
 use crate::Result;
@@ -19,7 +19,45 @@ pub enum FillMode {
     Alternate,
     Copy,
     Formats,
+    /// Fill Without Formatting: extends like a plain drag, the targets keep their formats.
     ValuesOnly,
+    /// Fill Series from the right-drag menu: extends like a plain drag, and a lone number counts up.
+    Extend,
+    /// Fill Days, Fill Weekdays, Fill Months or Fill Years: a source of dates steps by that unit.
+    /// A lone date steps by one unit; two or more step by the difference between the first two,
+    /// counted in that unit (one unit when they fall in the same one). A source that isn't dates
+    /// extends like a plain drag.
+    Dates(DateUnit),
+}
+
+/// The step of a [`FillMode::Dates`] fill.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DateUnit {
+    Day,
+    /// Monday to Friday: Saturday and Sunday are skipped.
+    Weekday,
+    Month,
+    Year,
+}
+
+impl FillMode {
+    /// The modes that continue the source's series rather than copy it.
+    fn extends_series(self) -> bool {
+        matches!(self, FillMode::Series | FillMode::Extend | FillMode::ValuesOnly | FillMode::Dates(_))
+    }
+}
+
+/// Whether a number format shows a calendar date (`YYYY-MM-DD` and `m/d/yyyy h:mm` do; `0 "days"`
+/// and `h:mm` don't).
+fn is_date_format(fmt: &str) -> bool {
+    NumberFormat::parse(fmt).kind() == FormatKind::Date
+}
+
+/// Whether the first cell of `src` holds a date, so a fill from it can step by days, weekdays,
+/// months or years: a number (not a formula) shown in a date format.
+pub fn starts_with_date(wb: &Workbook, sheet: usize, src: RangeRef) -> bool {
+    let Some(cell) = wb.sheet(sheet).and_then(|sh| sh.cell(src.start)) else { return false };
+    cell.formula.is_none() && cell.value.is_number() && is_date_format(wb.styles.get(cell.style).num_fmt.as_str())
 }
 
 /// Built-in custom lists.
@@ -35,6 +73,18 @@ fn lists() -> Vec<Vec<String>> {
     ]
 }
 
+/// The most cells one fill may write: the size cap the fill commands put on their ranges.
+pub const MAX_FILL_CELLS: u64 = 5_000_000;
+
+/// Whether `target` is a shape Excel's AutoFill accepts for `src`: it contains the source and the
+/// source sits in one of its corners. Excel refuses a target that doesn't contain the source
+/// (`2:3` into `A:A`, `H4:H9` into `D:F`) or holds it away from every corner (`H4:H9` into `H:H`).
+pub fn holds_source_in_corner(src: RangeRef, target: RangeRef) -> bool {
+    target.contains_range(&src)
+        && (target.start.row == src.start.row || target.end.row == src.end.row)
+        && (target.start.col == src.start.col || target.end.col == src.end.col)
+}
+
 /// Fills `target` (which contains `src` at one edge) from the pattern in `src`.
 pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: FillMode) -> Result<()> {
     let custom = cx.wb.custom_lists.clone();
@@ -46,6 +96,18 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
     } else {
         target.end.col > src.end.col || target.start.col == src.start.col
     };
+    // Every source lane writes one cell per step past the source: bound that product, not the
+    // source and target separately (whole rows into whole columns was ~17 billion writes).
+    let (lane_count, steps) = if vertical {
+        let steps = if forward { target.end.row.saturating_sub(src.end.row) } else { src.start.row.saturating_sub(target.start.row) };
+        (src.width(), steps)
+    } else {
+        let steps = if forward { target.end.col.saturating_sub(src.end.col) } else { src.start.col.saturating_sub(target.start.col) };
+        (src.height(), steps)
+    };
+    if u64::from(lane_count).saturating_mul(u64::from(steps)) > MAX_FILL_CELLS {
+        return Err(crate::EngineError::Other("The fill is too large.".into()));
+    }
     let lanes: Vec<u32> = if vertical { (src.start.col..=src.end.col).collect() } else { (src.start.row..=src.end.row).collect() };
     let src_len = if vertical { src.height() } else { src.width() };
     let mut writes: Vec<(CellRef, Option<Cell>)> = Vec::new();
@@ -67,15 +129,23 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
             cols.into_iter().map(|c| CellRef::new(lane, c)).collect()
         };
         let fmt = |c: &(CellRef, Option<Cell>)| cx.wb.styles.get(c.1.as_ref().map(|c| c.style).unwrap_or_default()).num_fmt.as_str();
-        let pattern = if matches!(mode, FillMode::Series | FillMode::Alternate) {
-            let detected = Pattern::detect(&src_cells, &custom, cx.wb.date_system, src_cells.first().map(fmt).unwrap_or_default());
-            if mode == FillMode::Alternate { detected.alternate(&src_cells) } else { detected }
+        let pattern = if mode.extends_series() || mode == FillMode::Alternate {
+            let first_fmt = src_cells.first().map(fmt).unwrap_or_default();
+            let dates = match mode {
+                FillMode::Dates(unit) => Pattern::dates(&src_cells, unit, cx.wb.date_system, first_fmt),
+                _ => None,
+            };
+            let detected = dates.unwrap_or_else(|| Pattern::detect(&src_cells, &custom, cx.wb.date_system, first_fmt));
+            match (mode, detected) {
+                (FillMode::Alternate, p) | (FillMode::Extend, p @ Pattern::Copy) => p.alternate(&src_cells),
+                (_, p) => p,
+            }
         } else {
             Pattern::Copy
         };
         // A source with no common pattern (`Product 1`, `On backorder`): each cell continues its
         // own series, one step per repeat of the source.
-        let per_cell: Vec<Pattern> = if mode == FillMode::Series && matches!(pattern, Pattern::Copy) && src_cells.len() > 1 {
+        let per_cell: Vec<Pattern> = if mode.extends_series() && matches!(pattern, Pattern::Copy) && src_cells.len() > 1 {
             src_cells.iter().map(|c| Pattern::detect(std::slice::from_ref(c), &custom, cx.wb.date_system, fmt(c))).collect()
         } else {
             Vec::new()
@@ -93,7 +163,7 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
                     writes.push((*t, Some(existing)));
                     continue;
                 }
-                FillMode::ValuesOnly | FillMode::Series | FillMode::Alternate | FillMode::Copy => {
+                FillMode::ValuesOnly | FillMode::Series | FillMode::Alternate | FillMode::Copy | FillMode::Extend | FillMode::Dates(_) => {
                     let style = if mode == FillMode::ValuesOnly { sh.cell(*t).map(|c| c.style).unwrap_or_default() } else { cell.style };
                     if let Some(f) = &cell.formula {
                         if let Some(e) = f.expr() {
@@ -165,10 +235,65 @@ enum Pattern {
         last: f64,
         first: f64,
         months: i64,
+        sys: gridcraft_core::DateSystem,
+    },
+    /// Dates stepping by weekdays, skipping Saturday and Sunday.
+    Weekdays {
+        last: f64,
+        first: f64,
+        step: i64,
+        sys: gridcraft_core::DateSystem,
     },
 }
 
 impl Pattern {
+    /// The pattern of Fill Days, Fill Weekdays, Fill Months or Fill Years, or `None` when the
+    /// source isn't all dates (numbers, not formulas, under a date format in its first cell).
+    fn dates(cells: &[(CellRef, Option<Cell>)], unit: DateUnit, sys: gridcraft_core::DateSystem, fmt: &str) -> Option<Pattern> {
+        if !is_date_format(fmt) {
+            return None;
+        }
+        let mut nums = Vec::with_capacity(cells.len());
+        for (_, cell) in cells {
+            let cell = cell.as_ref()?;
+            if cell.formula.is_some() || !cell.value.is_number() {
+                return None;
+            }
+            nums.push(cell.value.as_f64()?);
+        }
+        let first = *nums.first()?;
+        let last = *nums.last()?;
+        let second = nums.get(1).copied();
+        // The difference between the first two dates in the unit, and one unit when they fall in
+        // the same one.
+        let at_least_one = |n: i64| if n == 0 { 1 } else { n };
+        Some(match unit {
+            DateUnit::Day => {
+                let days = second.map_or(1.0, |b| b.floor() - first.floor());
+                Pattern::Linear { last, first, step: if days == 0.0 { 1.0 } else { days } }
+            }
+            DateUnit::Weekday => {
+                let step = match second {
+                    Some(b) => at_least_one(weekdays_between(sys, first, b)?),
+                    None => 1,
+                };
+                Pattern::Weekdays { last, first, step, sys }
+            }
+            DateUnit::Month | DateUnit::Year => {
+                let months = match second {
+                    Some(b) => {
+                        let (a, b) = (datetime_from_serial(sys, first)?, datetime_from_serial(sys, b)?);
+                        let years = b.year as i64 - a.year as i64;
+                        if unit == DateUnit::Year { at_least_one(years) * 12 } else { at_least_one(years * 12 + b.month as i64 - a.month as i64) }
+                    }
+                    None if unit == DateUnit::Year => 12,
+                    None => 1,
+                };
+                Pattern::Months { last, first, months, sys }
+            }
+        })
+    }
+
     fn detect(cells: &[(CellRef, Option<Cell>)], custom: &[Vec<String>], sys: gridcraft_core::DateSystem, fmt: &str) -> Pattern {
         let vals: Vec<Value> = cells.iter().map(|(_, c)| c.as_ref().map(|c| c.value.clone()).unwrap_or_default()).collect();
         if cells.iter().any(|(_, c)| c.as_ref().is_some_and(|c| c.formula.is_some())) {
@@ -199,7 +324,7 @@ impl Pattern {
                     && (a.month != b.month || a.year != b.year)
                 {
                     let months = (b.year as i64 - a.year as i64) * 12 + b.month as i64 - a.month as i64;
-                    return Pattern::Months { last, first, months };
+                    return Pattern::Months { last, first, months, sys };
                 }
             }
             // Least-squares step for 2+ values (Excel uses a linear trend).
@@ -273,12 +398,15 @@ impl Pattern {
             }
             Pattern::TextNum { prefix, suffix, last, first, step, width } => {
                 let base = if forward { *last } else { *first };
-                let n = base + step * k * sign;
+                // Text numbers come from input and can sit near i64::MAX (`X 9223372036854775807`):
+                // an overflowing series yields nothing — the cell keeps its source value — rather
+                // than wrapping in release or panicking in debug.
+                let n = step.checked_mul(k)?.checked_mul(sign)?.checked_add(base)?;
                 // `Qtr3`, `Quarter 3` wrap after 4 like `Q3`.
                 let quarter = suffix.is_empty()
                     && (1..=4).contains(&base)
                     && ["q", "qtr", "quarter"].contains(&prefix.trim_end().to_ascii_lowercase().as_str());
-                let n = if quarter { (n - 1).rem_euclid(4) + 1 } else { n.abs() };
+                let n = if quarter { n.checked_sub(1)?.rem_euclid(4) + 1 } else { n.checked_abs()? };
                 Some(Value::text(format!("{prefix}{n:0width$}{}", ordinal_suffix(n, suffix), width = *width)))
             }
             Pattern::List { list, last, first, step, upper, lower } => {
@@ -297,25 +425,77 @@ impl Pattern {
                     s
                 }))
             }
-            Pattern::Months { last, first, months } => {
+            Pattern::Months { last, first, months, sys } => {
                 let base = if forward { *last } else { *first };
-                let s = add_months_clamped(gridcraft_core::DateSystem::D1900, base, months.checked_mul(k * sign)?)?;
+                let s = add_months_clamped(*sys, base, months.checked_mul(k * sign)?)?;
                 Some(Value::number(s))
+            }
+            Pattern::Weekdays { last, first, step, sys } => {
+                let base = if forward { *last } else { *first };
+                Some(Value::number(add_weekdays(*sys, base, step.checked_mul(k)?.checked_mul(sign)?)?))
             }
         }
     }
 }
 
+/// Whether `serial` falls on Monday to Friday; `None` outside the supported date range.
+fn is_weekday(sys: gridcraft_core::DateSystem, serial: f64) -> Option<bool> {
+    datetime_from_serial(sys, serial).map(|d| d.weekday != 0 && d.weekday != 6)
+}
+
+/// `serial` moved by `n` weekdays (back when `n` is negative), keeping its time of day. A start on
+/// a Saturday or Sunday moves to the next (or previous) weekday for the first step.
+fn add_weekdays(sys: gridcraft_core::DateSystem, serial: f64, n: i64) -> Option<f64> {
+    if n == 0 {
+        return Some(serial);
+    }
+    let dir = n.signum() as f64;
+    let mut d = serial;
+    let next_weekday = |d: &mut f64| -> Option<()> {
+        loop {
+            *d += dir;
+            if is_weekday(sys, *d)? {
+                return Some(());
+            }
+        }
+    };
+    next_weekday(&mut d)?;
+    // From a weekday, every seven days hold five weekdays.
+    let rest = n.unsigned_abs() - 1;
+    d += dir * (rest / 5 * 7) as f64;
+    for _ in 0..rest % 5 {
+        next_weekday(&mut d)?;
+    }
+    datetime_from_serial(sys, d)?;
+    Some(d)
+}
+
+/// How many weekdays lie after `a` up to and including `b` (negative when `b` comes first),
+/// counting whole days; `None` outside the supported date range.
+fn weekdays_between(sys: gridcraft_core::DateSystem, a: f64, b: f64) -> Option<i64> {
+    let (lo, hi, sign) = if b >= a { (a.floor(), b.floor(), 1) } else { (b.floor(), a.floor(), -1) };
+    let days = (hi - lo) as i64;
+    let mut count = days / 7 * 5;
+    let mut d = lo + (days / 7 * 7) as f64;
+    for _ in 0..days % 7 {
+        d += 1.0;
+        if is_weekday(sys, d)? {
+            count += 1;
+        }
+    }
+    Some(count * sign)
+}
+
 /// `serial` shifted by `months` calendar months, keeping the day of month but clamping it to the
 /// target month's last day (Jan 31 + 1 month = Feb 28/29). Always measured from the original date,
-/// so a series does not drift: Jan 31, Feb 28, Mar 31, Apr 30.
+/// so a series does not drift: Jan 31, Feb 28, Mar 31, Apr 30. The time of day is kept.
 fn add_months_clamped(sys: gridcraft_core::DateSystem, serial: f64, months: i64) -> Option<f64> {
     let d = datetime_from_serial(sys, serial)?;
     let total = (d.year as i64).checked_mul(12)?.checked_add(d.month as i64 - 1)?.checked_add(months)?;
     let year = total.div_euclid(12);
     let month = total.rem_euclid(12) + 1;
     let last = days_in_month(i32::try_from(year).ok()?, month as u32);
-    serial_from_ymd(sys, year, month, (d.day as i64).min(last as i64))
+    serial_from_ymd(sys, year, month, (d.day as i64).min(last as i64)).map(|day| day + serial - serial.floor())
 }
 
 fn round15(x: f64) -> f64 {
@@ -347,9 +527,9 @@ fn ordinal_suffix(n: i64, suffix: &str) -> String {
 /// `Item 007` → ("Item ", 7, "", 3); `3rd` style leading numbers → ("", 3, "rd", 1).
 fn split_num(t: &str) -> Option<(String, i64, String, usize)> {
     let chars: Vec<char> = t.chars().collect();
-    let end = chars.iter().rposition(|c| c.is_ascii_digit())?;
+    let end = chars.iter().rposition(char::is_ascii_digit)?;
     let mut start = end;
-    while start > 0 && chars.get(start - 1).is_some_and(|c| c.is_ascii_digit()) {
+    while start > 0 && chars.get(start - 1).is_some_and(char::is_ascii_digit) {
         start -= 1;
     }
     let digits: String = chars.get(start..=end)?.iter().collect();
@@ -442,13 +622,13 @@ pub fn flash_fill(cx: &mut Ctx, sheet: usize, at: CellRef) -> Result<usize> {
     // Header row: skip a first row whose target is text and source looks like a header? Keep simple.
     let mut examples = Vec::new();
     let mut todo = Vec::new();
+    // Flash Fill works on the text cells show (a date as formatted, not its serial number).
     for r in top..=bottom {
-        let src = sh.value(CellRef::new(r, src_col)).display();
-        let dst = sh.value(CellRef::new(r, at.col));
-        if dst.is_empty() {
+        let src = crate::display::cell_text(&cx.wb, sh, CellRef::new(r, src_col));
+        if sh.value(CellRef::new(r, at.col)).is_empty() {
             todo.push((r, src));
         } else {
-            examples.push((src, dst.display()));
+            examples.push((src, crate::display::cell_text(&cx.wb, sh, CellRef::new(r, at.col))));
         }
     }
     if examples.is_empty() {
@@ -604,6 +784,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn flash_fill_reads_shown_text() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let values = serde_json::json!([["2024-01-15", "15/01/2024"], ["2023-12-03", null]]);
+        s.execute("range.setValues", serde_json::json!({"range": "A1", "values": values})).unwrap();
+        s.execute("selection.set", serde_json::json!({"cell": "B2"})).unwrap();
+        s.execute("data.flashFill", serde_json::json!({})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert_eq!(sh.value(CellRef::new(1, 1)), Value::from("03/12/2023"));
+    }
+
+    #[test]
     fn flash_programs() {
         let p = learn(&[("John Smith".into(), "Smith, John".into())]).unwrap();
         assert_eq!(p.apply("Ada Lovelace").as_deref(), Some("Lovelace, Ada"));
@@ -651,5 +843,57 @@ mod tests {
         let sh = d.wb.active().unwrap();
         let growth: Vec<String> = (1..6).map(|r| crate::display::cell_text(&d.wb, sh, CellRef::new(r, 0))).collect();
         assert_eq!(growth, ["2.5", "1.25", "", "", ""]);
+    }
+
+    #[test]
+    fn text_series_near_i64_max_neither_wraps_nor_panics() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("cell.set", serde_json::json!({"cell": "A1", "input": "X 0"})).unwrap();
+        s.execute("cell.set", serde_json::json!({"cell": "A2", "input": "X 9223372036854775807"})).unwrap();
+        // The detected step is i64::MAX, so the next value overflows i64. The cell keeps its
+        // source value instead of panicking in debug or wrapping in release.
+        s.execute("edit.autoFill", serde_json::json!({"source": "A1:A2", "target": "A1:A3"})).unwrap();
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        assert_eq!(crate::display::cell_text(&d.wb, sh, CellRef::new(2, 0)), "X 0");
+    }
+
+    #[test]
+    fn autofill_refuses_targets_that_do_not_extend_the_source() {
+        // Whole rows into whole columns once filled every source column down the whole sheet
+        // (~17 billion writes) and aborted the process on a 24-51 GB allocation (fuzz seeds 1064,
+        // 1114, 1775). Excel refuses every one of these shapes.
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", serde_json::json!({"range": "A2", "values": [[1, "Item 1"], [2, "Item 2"]]})).unwrap();
+        s.execute("range.setValues", serde_json::json!({"range": "H4", "values": [[10], [20]]})).unwrap();
+        let before = s.doc().unwrap().wb.active().unwrap().cells.len();
+        for (mode, source, target) in [
+            ("series", "2:3", "A:A"),
+            ("alternate", "2:3", "A:A"),
+            ("series", "8:10", "C:E"),
+            ("copy", "24:24", "B:D"),
+            ("values", "H4:H9", "D:F"),
+            ("series", "H4:H9", "H:H"),
+            ("series", "A2:A3", "A1:A5"),
+            ("series", "A2:A6", "A2:A4"),
+            ("series", "B2:B3", "A2:A3"),
+        ] {
+            let r = s.execute("edit.autoFill", serde_json::json!({"mode": mode, "source": source, "target": target}));
+            assert!(r.is_err(), "{source} -> {target} should be refused");
+        }
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().cells.len(), before, "a refused fill writes nothing");
+        // Targets holding the source in a corner still fill, whole rows and diagonal drags included.
+        s.execute("edit.autoFill", serde_json::json!({"source": "2:3", "target": "2:6"})).unwrap();
+        s.execute("edit.autoFill", serde_json::json!({"source": "A2:A3", "target": "A1:A3"})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        let text = |a: &str| crate::display::cell_text(&s.doc().unwrap().wb, sh, CellRef::parse(a).unwrap());
+        assert_eq!([text("A1"), text("A6"), text("B6")], ["0", "5", "Item 5"]);
+        assert!(holds_source_in_corner(RangeRef::parse("B5").unwrap(), RangeRef::parse("B3:B5").unwrap()));
+        assert!(holds_source_in_corner(RangeRef::parse("A:A").unwrap(), RangeRef::parse("A:C").unwrap()));
+        assert!(holds_source_in_corner(RangeRef::parse("B5:C9").unwrap(), RangeRef::parse("B5:D13").unwrap()));
+        assert!(holds_source_in_corner(RangeRef::parse("B1:B2").unwrap(), RangeRef::parse("A1:B4").unwrap()));
+        assert!(!holds_source_in_corner(RangeRef::parse("A:A").unwrap(), RangeRef::parse("1:1").unwrap()));
     }
 }
