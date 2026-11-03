@@ -57,8 +57,12 @@ pub struct Output {
     pub width: u32,
     /// Grid rows of the innermost (or collapsed) items: a PivotChart's categories.
     pub chart_rows: Vec<u32>,
-    /// Grid columns of item (not total) values with their series names: a PivotChart's series.
-    pub chart_cols: Vec<(u32, String)>,
+    /// Grid columns of item (not total) values with their items (column items, then the value
+    /// field when there are several): a PivotChart's series.
+    pub chart_cols: Vec<(u32, Vec<String>)>,
+    /// The last item of every `chart_cols` entry is a value field's name when several values are
+    /// shown in columns; Excel can show the values caption at any level of the column items.
+    pub chart_value_item: bool,
     /// Grid column holding the innermost row labels (`None` without row fields).
     pub label_col: Option<u32>,
 }
