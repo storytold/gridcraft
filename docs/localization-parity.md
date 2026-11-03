@@ -1,6 +1,18 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-03 · **Change:** minor (Traditional Chinese catalog and native TC font preference / 繁中翻譯與桌面版繁中字型優先順序) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+
+## Traditional Chinese update / 繁體中文更新（2026-11-03）
+
+Traditional Chinese (`zh-hant`) now has its own catalog using Taiwan terminology. Script-aware
+locale detection keeps Simplified Chinese preferences compatible. Native builds prefer an installed
+Noto Sans CJK TC face for this language; no font binaries are bundled. Missing strings still fall
+back to English; formula and number/date localization are unchanged. See
+[setup and scope / 設定與範圍](localization-zh-hant.md).
+
+繁體中文（`zh-hant`）新增獨立翻譯檔並採用台灣用語，依文字系統辨識語系，保留原有簡中設定。
+桌面版繁中介面優先使用已安裝的 Noto Sans CJK TC，不打包字型檔。未翻譯字串仍顯示英文，
+公式、數值與日期格式的在地化範圍維持原樣。
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -110,6 +122,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | Traditional Chinese: 1,175 lookup entries, script-aware locale selection, persistent preferences and native TC font fallback / 繁中：1,175 個查表項目、繁簡語系分流、設定保存與桌面繁中字型回退 |
 | 2026-10-23 | minor | Missing translations are reported, never a failure: `cargo xtask i18n-report` prints, per language, the strings other catalogs translate and it lacks (plus Spanish function help rows keyed by English the function catalog no longer has) and always passes; `cargo xtask ci` runs it first. Coverage and per-language parity tests and tests of one language's exact wording are gone; UI tests take the expected text from the catalog. Duplicate-key, placeholder, context-prefix and line-shape checks stay |
 | 2026-10-21 | minor | Romanian interface (`ro`, Română): 970 labels covering every key of the other catalogs (`crates/ui-egui/src/i18n/ro.rs`), `ro-*` system locales, the View-tab switcher and `app.language.set`; context keys show no prefix (File › Options test). English formulas and formats; AI-assisted draft pending native-speaker review |
 | 2026-10-20 | minor | Japanese: furigana (`rPh` phonetic runs and `<phoneticPr>` in `xl/sharedStrings.xml`) is no longer deleted by an open + save; it is kept on the workbook and written back (a `<phoneticPr>` without runs is kept too, while duplicate texts with different readings keep only the first, reported on open). Display of the readings is still missing (`crates/xlsx/src/tests/phonetic_tests.rs`) |

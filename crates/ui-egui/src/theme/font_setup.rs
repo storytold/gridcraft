@@ -437,20 +437,26 @@ pub fn font_definitions() -> FontDefinitions {
     font_definitions_for_language(crate::i18n::Language::En)
 }
 
-/// Which Han face leads the fallback chain. Both Han faces cover kana and most kanji, so this only
+/// Which Han face leads the fallback chain. The Han faces cover kana and most kanji, so this only
 /// decides glyph shapes (and which face catches a glyph the other lacks); switching between two
 /// languages with the same order needs no font rebuild.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HanOrder {
     /// Japanese glyph shapes first (the interface is Japanese).
     Japanese,
+    /// Taiwan-standard Traditional Chinese glyph shapes first.
+    TraditionalChinese,
     /// Simplified Chinese first: the widest Han coverage, for every other interface language.
     Chinese,
 }
 
 impl HanOrder {
     pub fn of(language: crate::i18n::Language) -> Self {
-        if language == crate::i18n::Language::Ja { Self::Japanese } else { Self::Chinese }
+        match language {
+            crate::i18n::Language::Ja => Self::Japanese,
+            crate::i18n::Language::ZhHant => Self::TraditionalChinese,
+            _ => Self::Chinese,
+        }
     }
 }
 
