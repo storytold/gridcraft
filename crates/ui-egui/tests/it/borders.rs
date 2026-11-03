@@ -197,3 +197,42 @@ fn frozen_merged_range_keeps_its_outline_when_scrolled() {
         "B's segments end at the freeze line: {right_ends:?} vs {freeze_x}"
     );
 }
+
+/// What is painted on the Borders button's main half (left of its arrow).
+fn button_shapes(h: &egui_kittest::Harness<'static, SheetApp>) -> Vec<String> {
+    let arrow = h.get_by_label("Border presets").rect();
+    let main = egui::Rect::from_min_max(egui::pos2(arrow.left() - 25.0, arrow.top()), egui::pos2(arrow.left(), arrow.bottom()));
+    h.output().shapes.iter().filter(|s| main.contains_rect(s.shape.visual_bounding_rect())).map(|s| format!("{:?}", s.shape)).collect()
+}
+
+#[test]
+fn the_borders_button_shows_the_last_preset_it_applies() {
+    // #2937: after Thick Outside Borders, a click on the button applies it again, but the
+    // button kept showing a bottom border.
+    let mut h = harness();
+    let bottom = button_shapes(&h);
+    h.get_by_label("Border presets").click();
+    h.run_steps(6);
+    h.get_by_label("Thick Outside Borders").click();
+    h.run_steps(6);
+    let thick = button_shapes(&h);
+    assert!(!thick.is_empty() && thick != bottom, "the button's picture follows the preset");
+    // The picture is the thick outside diagram: four edges drawn thicker than the thin ones.
+    let wide = thick.iter().filter(|s| s.contains("width: 2") || s.contains("width: 3")).count();
+    assert!(wide >= 4, "{thick:#?}");
+    // And a click applies what it shows.
+    h.state_mut().session.run("selection.set", json!({"range": "D4:E5"})).unwrap();
+    h.run_steps(2);
+    let arrow = h.get_by_label("Border presets").rect();
+    let at = egui::pos2(arrow.left() - 12.0, arrow.center().y);
+    for pressed in [true, false] {
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+    }
+    h.run_steps(4);
+    assert_eq!(borders(&h, "D4").top.style, BorderStyle::Thick);
+}

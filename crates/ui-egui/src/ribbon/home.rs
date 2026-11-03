@@ -152,7 +152,14 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             if __k.clicked() {
                 act(app, "home.strikethrough", json!({}));
             }
-            let (b, ba) = split_button(ui, Icon::Borders, None, "Borders");
+            // The button shows the preset a click applies: the last one picked (Excel's way).
+            let last = app.grid.last_border.clone();
+            let (b, ba) = if last == "bottom" {
+                split_button(ui, Icon::Borders, None, "Borders")
+            } else {
+                let t = crate::theme::Tokens::get(ui.ctx());
+                crate::widgets::split_button_with(ui, |p, r| crate::border_preview::paint_preset(p, r.shrink(1.5), &last, &t), None, "Borders")
+            };
             control_keytip(app, ui, &ba, "home.borders");
             if b {
                 act(app, "home.borders", json!({"preset": app.grid.last_border.clone()}));

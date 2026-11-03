@@ -13,6 +13,15 @@ pub(crate) fn preset_button(ui: &mut Ui, label: &str, preset: &str) -> Response 
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
     let t = Tokens::get(ui.ctx());
     let rect = Rect::from_center_size(pos2(response.rect.left() + 16.0, response.rect.center().y), vec2(20.0, 16.0));
+    paint_preset(ui.painter(), rect, preset, &t);
+    ui.painter().text(pos2(response.rect.left() + 36.0, response.rect.center().y), Align2::LEFT_CENTER, label, theme::ui_font(12.5), t.text);
+    response
+}
+
+/// The diagram of a Borders preset in `rect`: its edges drawn as the cells' borders are, the edges
+/// it leaves alone dotted. The Borders menu shows it beside each preset, and the Borders button
+/// shows the last one used, which a click applies (#2937).
+pub(crate) fn paint_preset(painter: &egui::Painter, rect: Rect, preset: &str, t: &Tokens) {
     let edges = [
         [rect.left_top(), rect.right_top()],
         [rect.left_bottom(), rect.right_bottom()],
@@ -40,13 +49,11 @@ pub(crate) fn preset_button(ui: &mut Ui, label: &str, preset: &str) -> Response 
     };
     for (points, style) in edges.into_iter().zip(styles) {
         if style == None {
-            ui.painter().extend(egui::Shape::dotted_line(&points, t.text_disabled, 3.0, 0.45));
+            painter.extend(egui::Shape::dotted_line(&points, t.text_disabled, 3.0, 0.45));
         } else {
-            paint_border(ui.painter(), points, style, t.text);
+            paint_border(painter, points, style, t.text);
         }
     }
-    ui.painter().text(pos2(response.rect.left() + 36.0, response.rect.center().y), Align2::LEFT_CENTER, label, theme::ui_font(12.5), t.text);
-    response
 }
 
 /// Preview only reads the dialog draft. A white worksheet surface keeps automatic
