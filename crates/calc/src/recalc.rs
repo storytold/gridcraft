@@ -751,6 +751,84 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn dirty_closure_matches_a_walk_of_every_cell() {
+        // Random formulas over single cells, narrow ranges and wide (over 64 columns) ranges, some
+        // removed or left unsettled: the closure equals the one found by listing every dependent
+        // of every changed cell, area cells included, as before `taken` and areas existed.
+        use super::{HashSet, Node};
+        use crate::eval::Area;
+        use std::collections::VecDeque;
+        let mut s = 0x2545_F491_4F6C_DD1D;
+        for case in 0..40 {
+            let mut wb = Workbook::new();
+            let mut calc = Calc::new();
+            let pick = |s: &mut u64, n: u64| (rng(s) % n) as u32;
+            let mut keys: Vec<Key> = Vec::new();
+            for _ in 0..300 {
+                let k = (0, CellRef::new(pick(&mut s, 120), pick(&mut s, 150)));
+                let mut areas = Vec::new();
+                for _ in 0..1 + pick(&mut s, 3) {
+                    let start = CellRef::new(pick(&mut s, 120), pick(&mut s, 150));
+                    let end = match pick(&mut s, 3) {
+                        0 => start,
+                        1 => CellRef::new(start.row + pick(&mut s, 40), start.col + pick(&mut s, 5)),
+                        _ => CellRef::new(start.row + pick(&mut s, 20), start.col + 65 + pick(&mut s, 30)),
+                    };
+                    areas.push(Area { sheet: 0, range: RangeRef::new(start, end) });
+                }
+                if let Some(sh) = wb.sheet_mut(0) {
+                    sh.cells.set(k.1, Cell::formula(Formula::new("=1")));
+                }
+                calc.graph.insert(k, Node { areas, dynamic: false });
+                keys.push(k);
+                if rng(&mut s).is_multiple_of(7) {
+                    calc.graph.settle();
+                }
+            }
+            for _ in 0..30 {
+                let k = keys[(rng(&mut s) % keys.len() as u64) as usize];
+                calc.graph.remove(k);
+                if let Some(sh) = wb.sheet_mut(0) {
+                    sh.cells.remove(k.1);
+                }
+            }
+            if case % 2 == 0 {
+                calc.graph.settle();
+            }
+            let seeds: Vec<Key> = (0..1 + pick(&mut s, 25)).map(|_| (0, CellRef::new(pick(&mut s, 140), pick(&mut s, 220)))).collect();
+            let areas: Vec<(usize, RangeRef)> = (0..pick(&mut s, 3))
+                .map(|_| {
+                    let start = CellRef::new(pick(&mut s, 120), pick(&mut s, 150));
+                    (0, RangeRef::new(start, CellRef::new(start.row + pick(&mut s, 30), start.col + pick(&mut s, 80))))
+                })
+                .collect();
+            let got: HashSet<Key> = calc.dirty_closure(&wb, &seeds, &areas).into_iter().collect();
+            // The walk before: every area cell is a seed, and every cell lists all its dependents.
+            let mut all = seeds.clone();
+            for (si, r) in &areas {
+                all.extend(r.iter().map(|c| (*si, c)));
+            }
+            let mut want: HashSet<Key> = HashSet::default();
+            let mut queue: VecDeque<Key> = VecDeque::new();
+            let mut deps = Vec::new();
+            for k in &all {
+                if calc.graph.nodes.contains_key(k) && want.insert(*k) {
+                    queue.push_back(*k);
+                }
+                deps.clear();
+                calc.graph.dependents(k.0, k.1, &mut deps);
+                queue.extend(deps.iter().copied().filter(|d| want.insert(*d)));
+            }
+            while let Some(k) = queue.pop_front() {
+                deps.clear();
+                calc.graph.dependents(k.0, k.1, &mut deps);
+                queue.extend(deps.iter().copied().filter(|d| want.insert(*d)));
+            }
+            assert_eq!(got, want, "case {case}");
+        }
+    }
+
+    #[test]
     fn clearing_a_spill_recalculates_formulas_reading_it_once_each() {
         // 300 formulas read the area an anchor spills into; clearing the anchor changes all of it
         // and every one of them is recalculated (they were listed once per spilled cell).
