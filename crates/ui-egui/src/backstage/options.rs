@@ -1,8 +1,9 @@
-use super::*;
+use super::{Key, Language, Modifiers, SheetApp, Ui, dim, i18n, json, section, vec2};
 
 /// Excel's File › Options page: General (display theme, interface language and Show formula bar),
 /// Editing (AutoComplete) and Save (the autosave checkbox toggling `app.ui.autosave`), plus Formulas
-/// (calculation mode and iterative calculation) when a document is active. Theme, language, formula
+/// (calculation mode and iterative calculation) and the display options for this workbook (sheet
+/// tabs and scroll bars) when a document is active. Theme, language, formula
 /// bar, AutoComplete and calculation changes run their commands through `run_or_alert`; calculation
 /// settings are saved with the workbook.
 pub(super) fn options(app: &mut SheetApp, ui: &mut Ui, bs: &mut super::Backstage) {
@@ -14,6 +15,10 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui, bs: &mut super::Backstage
     let mut formula_bar = app.session.prefs.formula_bar;
     if ui.checkbox(&mut formula_bar, lang.tr("Show formula bar")).changed() {
         app.run_or_alert("view.formulaBar", json!({"on": formula_bar}));
+    }
+    let mut highlight_row = app.ui.highlight_active_row;
+    if ui.checkbox(&mut highlight_row, lang.tr("Highlight the active cell's row")).changed() {
+        app.run_or_alert("options.highlightActiveRow", json!({"on": highlight_row}));
     }
     ui.add_space(18.0);
     section(ui, lang, "Options|Editing");
@@ -27,7 +32,20 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui, bs: &mut super::Backstage
     if ui.checkbox(&mut autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
         app.toggle_autosave();
     }
-    let Some(calc) = app.session.active().map(|d| d.wb.calc.clone()) else { return };
+    let Some((calc, view)) = app.session.active().map(|d| (d.wb.calc.clone(), d.wb.view)) else { return };
+    ui.add_space(18.0);
+    // Excel's Advanced › Display options for this workbook: saved with the workbook (#3101).
+    section(ui, lang, "Display options for this workbook");
+    for (on, label, id) in [
+        (view.show_horizontal_scroll, "Show horizontal scroll bar", "view.showHorizontalScrollBar"),
+        (view.show_vertical_scroll, "Show vertical scroll bar", "view.showVerticalScrollBar"),
+        (view.show_sheet_tabs, "Show sheet tabs", "view.showSheetTabs"),
+    ] {
+        let mut on = on;
+        if ui.checkbox(&mut on, lang.tr(label)).changed() {
+            app.run_or_alert(id, json!({"on": on}));
+        }
+    }
     ui.add_space(18.0);
     section(ui, lang, "Formulas");
     ui.label(lang.tr("Workbook calculation"));
@@ -50,23 +68,23 @@ fn custom_lists(app: &mut SheetApp, ui: &mut Ui, bs: &mut super::Backstage) {
                 for (i, items) in lists.iter().enumerate() {
                     if ui.selectable_label(bs.custom_list_index == i, items.first().map(String::as_str).unwrap_or("Custom List")).clicked() {
                         bs.custom_list_index = i;
-                        bs.custom_list_draft = items.join("\n");
+                        bs.custom_list_draft = custom_list_to_draft(items);
                         bs.custom_list_draft_initialized = true;
                     }
                 }
             },
         );
         if !bs.custom_list_draft_initialized {
-            bs.custom_list_draft = lists.get(bs.custom_list_index).map(|l| l.join("\n")).unwrap_or_default();
+            bs.custom_list_draft = lists.get(bs.custom_list_index).map(|l| custom_list_to_draft(l)).unwrap_or_default();
             bs.custom_list_draft_initialized = true;
         }
     }
-    let label = ui.label("Enter one item per line:");
+    let label = ui.label("Enter one item per line. Use \\n for a line break within an item:");
     ui.add(egui::TextEdit::multiline(&mut bs.custom_list_draft).desired_rows(6).desired_width(420.0)).labelled_by(label.id);
     ui.horizontal(|ui| {
         if ui.button("Add").clicked() {
             let before = app.session.prefs.custom_lists.len();
-            app.run_or_alert("options.addCustomList", json!({"items": bs.custom_list_draft.lines().collect::<Vec<_>>()}));
+            app.run_or_alert("options.addCustomList", json!({"items": custom_list_items_from_draft(&bs.custom_list_draft)}));
             if app.session.prefs.custom_lists.len() > before {
                 bs.custom_list_index = app.session.prefs.custom_lists.len() - 1;
             }
@@ -74,13 +92,13 @@ fn custom_lists(app: &mut SheetApp, ui: &mut Ui, bs: &mut super::Backstage) {
         if ui.add_enabled(!app.session.prefs.custom_lists.is_empty(), egui::Button::new("Replace")).clicked() {
             app.run_or_alert(
                 "options.replaceCustomList",
-                json!({"index": bs.custom_list_index + 1, "items": bs.custom_list_draft.lines().collect::<Vec<_>>()}),
+                json!({"index": bs.custom_list_index + 1, "items": custom_list_items_from_draft(&bs.custom_list_draft)}),
             );
         }
         if ui.add_enabled(!app.session.prefs.custom_lists.is_empty(), egui::Button::new("Delete")).clicked() {
             app.run_or_alert("options.deleteCustomList", json!({"index": bs.custom_list_index + 1}));
             bs.custom_list_index = bs.custom_list_index.min(app.session.prefs.custom_lists.len().saturating_sub(1));
-            bs.custom_list_draft = app.session.prefs.custom_lists.get(bs.custom_list_index).map(|l| l.join("\n")).unwrap_or_default();
+            bs.custom_list_draft = app.session.prefs.custom_lists.get(bs.custom_list_index).map(|l| custom_list_to_draft(l)).unwrap_or_default();
             bs.custom_list_draft_initialized = true;
         }
         if ui.add_enabled(app.session.active().is_some(), egui::Button::new("Import Selection")).clicked() {
@@ -88,11 +106,54 @@ fn custom_lists(app: &mut SheetApp, ui: &mut Ui, bs: &mut super::Backstage) {
             app.run_or_alert("options.importCustomList", json!({}));
             if app.session.prefs.custom_lists.len() > before {
                 bs.custom_list_index = app.session.prefs.custom_lists.len() - 1;
-                bs.custom_list_draft = app.session.prefs.custom_lists[bs.custom_list_index].join("\n");
+                bs.custom_list_draft = custom_list_to_draft(&app.session.prefs.custom_lists[bs.custom_list_index]);
                 bs.custom_list_draft_initialized = true;
             }
         }
     });
+}
+
+/// Encode item boundaries for the line-based Custom Lists editor without losing embedded newlines.
+fn custom_list_to_draft(items: &[String]) -> String {
+    items.iter().map(|item| item.replace('\\', "\\\\").replace('\n', "\\n")).collect::<Vec<_>>().join("\n")
+}
+
+/// Decode the editor's `\\n` and `\\\\` escapes while keeping other backslashes literal.
+fn custom_list_items_from_draft(draft: &str) -> Vec<String> {
+    draft
+        .lines()
+        .map(|line| {
+            let mut item = String::with_capacity(line.len());
+            let mut chars = line.chars();
+            while let Some(ch) = chars.next() {
+                if ch != '\\' {
+                    item.push(ch);
+                    continue;
+                }
+                match chars.next() {
+                    Some('n') => item.push('\n'),
+                    Some('\\') => item.push('\\'),
+                    Some(other) => {
+                        item.push('\\');
+                        item.push(other);
+                    }
+                    None => item.push('\\'),
+                }
+            }
+            item
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod custom_list_editor_tests {
+    use super::{custom_list_items_from_draft, custom_list_to_draft};
+
+    #[test]
+    fn custom_list_editor_preserves_embedded_newlines_and_backslashes() {
+        let items = vec!["first\nsecond".to_owned(), r"literal \n sequence".to_owned(), "trailing\\".to_owned()];
+        assert_eq!(custom_list_items_from_draft(&custom_list_to_draft(&items)), items);
+    }
 }
 
 /// The display theme and interface language controls of the General section.
