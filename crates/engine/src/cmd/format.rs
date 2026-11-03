@@ -411,13 +411,15 @@ fn border_style(name: &str) -> BorderStyle {
     }
 }
 
+type BorderLinePlan = (Vec<(CellRef, StyleId)>, Vec<StyleId>);
+
 fn border_line_plan(
     cx: &mut crate::cmd::Ctx<'_>,
     sheet: usize,
     r: &RangeRef,
     cols: bool,
     edges: &dyn Fn(&mut Style, bool, bool, bool, bool),
-) -> Result<(Vec<(CellRef, StyleId)>, Vec<StyleId>)> {
+) -> Result<BorderLinePlan> {
     let line_range = if cols { r.start.col..=r.end.col } else { r.start.row..=r.end.row };
     let first = *line_range.start();
     let mut line_new: Vec<StyleId> = Vec::new();
