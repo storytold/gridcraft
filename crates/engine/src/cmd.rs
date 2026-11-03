@@ -5,6 +5,7 @@ pub mod analysis;
 pub mod data;
 pub mod draw;
 pub mod edit;
+pub mod equation;
 pub mod extra;
 pub mod file;
 pub mod forecast;
@@ -12,8 +13,10 @@ pub mod format;
 pub mod formulas;
 pub mod insert;
 pub mod inspect;
+pub mod macros;
 pub mod pivot;
 pub mod print;
+pub mod python;
 pub mod review;
 pub mod sheet;
 pub mod slicer;
@@ -39,7 +42,11 @@ pub struct CommandSpec {
     pub label: &'static str,
     /// Ribbon/menu placement, e.g. `["Home", "Font"]`. Empty = not in menus.
     pub menu: &'static [&'static str],
+    /// Portable notation: `Cmd` is ⌘ on macOS and Ctrl elsewhere.
     pub shortcut: Option<&'static str>,
+    /// macOS override when its key differs. Equal to `shortcut` marks a Mac-only shortcut
+    /// (Align Left/Center): other platforms show none. See [`CommandInfo::shortcut_for_platform`].
+    pub shortcut_mac: Option<&'static str>,
     pub params: &'static str,
     pub enabled: Enabled,
     pub run: Run,
@@ -53,10 +60,30 @@ pub struct CommandInfo {
     pub label: &'static str,
     pub menu: Vec<&'static str>,
     pub shortcut: Option<&'static str>,
+    pub shortcut_mac: Option<&'static str>,
     pub params: &'static str,
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disabled_reason: Option<String>,
+}
+
+impl CommandInfo {
+    /// Format the portable shortcut notation for the runtime operating system.
+    pub fn shortcut_for_platform(&self, mac: bool) -> Option<String> {
+        let keys = if mac {
+            self.shortcut_mac.or(self.shortcut)
+        } else if self.shortcut_mac.is_some() && self.shortcut_mac == self.shortcut {
+            // An identical Mac override marks a Mac-only display shortcut.
+            // The portable field remains unchanged for legacy CLI consumers.
+            None
+        } else {
+            self.shortcut
+        }?;
+        if mac {
+            return Some(keys.to_owned());
+        }
+        Some(keys.split('+').map(|part| if part == "Cmd" { "Ctrl" } else { part }).collect::<Vec<_>>().join("+"))
+    }
 }
 
 impl CommandSpec {
@@ -67,6 +94,7 @@ impl CommandSpec {
             label: self.label,
             menu: self.menu.to_vec(),
             shortcut: self.shortcut,
+            shortcut_mac: self.shortcut_mac,
             params: self.params,
             enabled: e.is_ok(),
             disabled_reason: e.err(),
@@ -117,13 +145,13 @@ pub fn has_clipboard(s: &Session) -> std::result::Result<(), String> {
 
 macro_rules! cmd {
     ($id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: $en, run: $run, journal: true, undoable: true }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: true, undoable: true }
     };
     (query $id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: $en, run: $run, journal: false, undoable: false }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: false, undoable: false }
     };
     (noundo $id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: $en, run: $run, journal: true, undoable: false }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: true, undoable: false }
     };
 }
 pub(crate) use cmd;
@@ -137,16 +165,19 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(format::specs());
         v.extend(sheet::specs());
         v.extend(insert::specs());
+        v.extend(equation::specs());
         v.extend(data::specs());
         v.extend(formulas::specs());
         v.extend(review::specs());
         v.extend(view::specs());
         v.extend(inspect::specs());
         v.extend(extra::specs());
+        v.extend(macros::specs());
         v.extend(draw::specs());
         v.extend(spelling::specs());
         v.extend(solver::specs());
         v.extend(pivot::specs());
+        v.extend(python::specs());
         v.extend(slicer::specs());
         v.extend(whatif::specs());
         v.extend(forecast::specs());
@@ -178,6 +209,7 @@ pub fn register_test_command(id: &'static str, run: Run) {
         label: id,
         menu: &[],
         shortcut: None,
+        shortcut_mac: None,
         params: "",
         enabled: |_| Ok(()),
         run,
@@ -195,6 +227,7 @@ pub(crate) fn register_undoable_test_command(id: &'static str, run: Run) {
         label: id,
         menu: &[],
         shortcut: None,
+        shortcut_mac: None,
         params: "",
         enabled: |_| Ok(()),
         run,
@@ -337,6 +370,9 @@ pub struct Ctx<'a> {
     /// The command applied sheet protection itself (row/column inserts and deletes the
     /// protection allows), so cells it shifts aren't refused as edits of locked cells.
     pub protection_checked: bool,
+    /// The structural edits the command made, in order (the sheet's name, the edit), as
+    /// references were rewritten for them.
+    pub edits: Vec<(String, gridcraft_formula::adjust::Edit)>,
 }
 
 pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
@@ -358,14 +394,35 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     let t0 = if cfg!(target_arch = "wasm32") { None } else { std::env::var_os("GRIDCRAFT_PROFILE").map(|_| wall_clock()) };
     let since = |t0: std::time::Duration| wall_clock().saturating_sub(t0);
     let mut sel = d.selection.clone();
-    let mut ctx = Ctx { wb: (*d.wb).clone(), changed: Vec::new(), structural: false, sel: &mut sel, fit_rows: Vec::new(), protection_checked: false };
+    let mut ctx = Ctx {
+        wb: (*d.wb).clone(),
+        changed: Vec::new(),
+        structural: false,
+        sel: &mut sel,
+        fit_rows: Vec::new(),
+        protection_checked: false,
+        edits: Vec::new(),
+    };
     let r = f(&mut ctx)?;
-    let Ctx { mut wb, changed, structural, mut fit_rows, protection_checked, .. } = ctx;
+    let Ctx { mut wb, changed, structural, mut fit_rows, protection_checked, edits, .. } = ctx;
+    // Equations whose source changed (or that arrived without a layout, as from a paste) are
+    // laid out here, so painting only ever reads the cache.
+    wb.refresh_equations();
     if !protection_checked {
         check_protection(&d.wb, &wb, &d.unlocked_ranges)?;
     }
     if !structural {
         check_arrays(&d.wb, &wb)?;
+    }
+    if let Some(log) = d.touched.as_mut() {
+        for (si, c) in changed.iter().take(TOUCH_LOG_LIMIT.saturating_sub(log.len())) {
+            if let Some(sh) = wb.sheet(*si) {
+                log.push((sh.name.clone(), *c));
+            }
+        }
+    }
+    if let Some(log) = d.edits.as_mut() {
+        log.extend(edits);
     }
     if changed.len() <= 200_000 {
         fit_rows.extend(changed.iter().map(|(s, c)| (*s, c.row)));
@@ -393,6 +450,10 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     d.selection = sel;
     Ok(r)
 }
+
+/// The most cells a dry run's touch log keeps; a footprint whose log is full may be missing writes
+/// that kept a cell's value, so a shift is refused then.
+pub(crate) const TOUCH_LOG_LIMIT: usize = 1_000_000;
 
 /// Excel's message for an edit of a locked cell on a protected sheet.
 pub(crate) const PROTECTED: &str = "The cell or chart you're trying to change is on a protected sheet.";
@@ -463,7 +524,7 @@ fn check_arrays(old: &Workbook, new: &Workbook) -> Result<()> {
             continue;
         }
         for c in sh.cells.diff(&after.cells) {
-            let filled = after.cell(c).is_some_and(|x| x.formula.is_some() || !x.value.is_empty());
+            let filled = after.cell(c).is_some_and(gridcraft_model::Cell::has_content);
             if !filled || !sh.spill.contains_key(&c) || same_content(sh.cell(c), after.cell(c)) {
                 continue;
             }
@@ -479,13 +540,18 @@ fn check_arrays(old: &Workbook, new: &Workbook) -> Result<()> {
     Ok(())
 }
 
-/// Two cells hold the same value or formula (formats aside).
+/// Two cells hold the same value, formula or Python code (formats aside; a Python cell's result
+/// is not something the person edits).
 fn same_content(a: Option<&gridcraft_model::Cell>, b: Option<&gridcraft_model::Cell>) -> bool {
-    let empty = |c: Option<&gridcraft_model::Cell>| c.is_none_or(|c| c.formula.is_none() && c.value.is_empty());
+    let empty = |c: Option<&gridcraft_model::Cell>| c.is_none_or(|c| !c.has_content());
     match (a, b) {
         (Some(a), Some(b)) => match (&a.formula, &b.formula) {
             (Some(x), Some(y)) => x.text == y.text && x.array == y.array,
-            (None, None) => a.value == b.value,
+            (None, None) => match (&a.py, &b.py) {
+                (Some(x), Some(y)) => x.code == y.code && x.object == y.object,
+                (None, None) => a.value == b.value,
+                _ => false,
+            },
             _ => false,
         },
         _ => empty(a) && empty(b),
