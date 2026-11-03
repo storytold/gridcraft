@@ -262,21 +262,36 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
             })
         })
     };
+    // Notes and links aren't cell contents, so the cell comparison that guards a protected sheet
+    // doesn't see them go: a locked cell's are refused here, stored cell or not.
+    if matches!(what, "all" | "comments" | "hyperlinks") {
+        let d = s.doc()?;
+        if let Some(sh) = d.wb.sheet(sheet).filter(|sh| sh.is_protected()) {
+            for &whole in &ranges {
+                let skip = filtered_rows(sh, whole);
+                let notes = matches!(what, "all" | "comments").then(|| sh.comments.keys()).into_iter().flatten();
+                let links = matches!(what, "all" | "hyperlinks").then(|| sh.hyperlinks.keys()).into_iter().flatten();
+                for &c in notes.chain(links).filter(|c| whole.contains(**c) && !skip.contains(&c.row)) {
+                    if d.wb.styles.get(sh.style_id(c)).protection.locked
+                        && let Some(m) = locked_cell_error(sh, c, &d.unlocked_ranges)
+                    {
+                        return Err(EngineError::Other(m));
+                    }
+                }
+            }
+        }
+    }
     edit(s, |cx| {
-        for r in &ranges {
-            let r = match cx.wb.sheet(sheet).and_then(|sh| sh.used_range()) {
-                Some(u) => match r.intersection(&u) {
-                    Some(x) => x,
-                    None => continue,
-                },
-                None => continue,
+        for &whole in &ranges {
+            // Cells are only stored inside the used range. Notes and links are kept apart from
+            // them, so they are cleared over the whole range: one from a file can sit on a cell
+            // with nothing stored in it.
+            let used = cx.wb.sheet(sheet).and_then(|sh| sh.used_range()).and_then(|u| whole.intersection(&u));
+            let skip = cx.wb.sheet(sheet).map(|sh| filtered_rows(sh, whole)).unwrap_or_default();
+            let cells: Vec<(CellRef, Cell)> = match (cx.wb.sheet(sheet), used) {
+                (Some(sh), Some(r)) => sh.cells.iter_range(r).filter(|(c, _)| !skip.contains(&c.row)).map(|(c, x)| (c, x.clone())).collect(),
+                _ => Vec::new(),
             };
-            let skip = cx.wb.sheet(sheet).map(|sh| filtered_rows(sh, r)).unwrap_or_default();
-            let cells: Vec<(CellRef, Cell)> = cx
-                .wb
-                .sheet(sheet)
-                .map(|sh| sh.cells.iter_range(r).filter(|(c, _)| !skip.contains(&c.row)).map(|(c, x)| (c, x.clone())).collect())
-                .unwrap_or_default();
             // Report every stored cell we touch, even beyond a million coordinates in a sparse
             // selection. Removed formula anchors must also reach calc so their spills disappear.
             cx.changed.extend(cells.iter().map(|(c, _)| (sheet, *c)));
@@ -296,6 +311,18 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
                     }
                 }
             }
+            let cleared = |c: CellRef| whole.contains(c) && !skip.contains(&c.row);
+            // A removed note or link changes its cell even with nothing stored there.
+            let metadata: Vec<CellRef> = cx
+                .wb
+                .sheet(sheet)
+                .map(|sh| {
+                    let notes = matches!(what, "all" | "comments").then(|| sh.comments.keys()).into_iter().flatten();
+                    let links = matches!(what, "all" | "hyperlinks").then(|| sh.hyperlinks.keys()).into_iter().flatten();
+                    notes.chain(links).copied().filter(|c| cleared(*c)).collect()
+                })
+                .unwrap_or_default();
+            cx.changed.extend(metadata.into_iter().map(|c| (sheet, c)));
             let sh = cx.sheet_mut(sheet)?;
             for (c, mut cell) in cells {
                 match what {
@@ -312,14 +339,15 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
                     _ => {}
                 }
             }
-            let cleared = |c: CellRef| r.contains(c) && !skip.contains(&c.row);
             if matches!(what, "all" | "comments") {
                 sh.comments.retain(|c, _| !cleared(*c));
             }
             if matches!(what, "all" | "hyperlinks") {
                 sh.hyperlinks.retain(|c, _| !cleared(*c));
             }
-            if matches!(what, "all" | "formats") {
+            if let Some(r) = used
+                && matches!(what, "all" | "formats")
+            {
                 let mut unmerged = false;
                 sh.merges.retain(|m| {
                     let keep = !r.contains_range(m) || skip.range(m.start.row..=m.end.row).next().is_some();
