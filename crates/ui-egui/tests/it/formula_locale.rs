@@ -411,14 +411,14 @@ fn user_defined_prefix_is_hidden_while_editing_and_kept_on_commit() {
 }
 
 #[test]
-fn turkish_interface_retains_its_canonical_formula_fallback() {
+fn turkish_interface_localizes_formula_entry_and_display() {
     let mut app = app();
     app.run("app.language.set", json!({"code":"tr-TR"})).unwrap();
     assert_eq!(app.ui.language, Language::Tr);
-    assert!(enter(&mut app, "=SUM(1.5,2.25)"));
+    assert!(enter(&mut app, "=topla(1,5;2,25)"));
+    assert_eq!(formula(&app), "SUM(1.5,2.25)");
     app.begin_edit(None, true);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1.5,2.25)");
-    assert!(!enter(&mut app, "=TOPLA(1;2)"));
+    assert_eq!(app.editor.as_ref().unwrap().text, "=TOPLA(1,5;2,25)");
     let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
     assert_eq!(restored.language, Language::Tr);
 }
