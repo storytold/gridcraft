@@ -538,6 +538,103 @@ fn save_changes_escape_cancels_in_the_opening_frame() {
 }
 
 #[test]
+fn save_changes_drops_held_python_keys_and_preserves_the_covered_draft() {
+    for outcome in ["replay", "cancel", "discard"] {
+        check_python_draft_question(outcome);
+    }
+}
+
+/// A real Python field with pending ordered input, plus the clean workbook/window to close.
+fn python_draft_with_held_keys() -> (egui_kittest::Harness<'static, SheetApp>, u64, u64) {
+    use egui::{Event, Key, Modifiers};
+
+    let mut h = harness(Services::default());
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    let dirty_window = h.state().session.active_window().unwrap();
+    h.state_mut().run("file.new", serde_json::json!({})).unwrap();
+    let clean = h.state().session.doc().unwrap().uid;
+    let clean_window = h.state().session.active_window().unwrap();
+    h.state_mut().enter_window(dirty_window);
+    h.state_mut().run("selection.set", serde_json::json!({"cell": "B1"})).unwrap();
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers { alt: true, ctrl: true, shift: true, command: true, ..Modifiers::NONE }, Key::P);
+    h.run_steps(3);
+    let editor = h.state().editor.as_ref().unwrap();
+    assert!(editor.python);
+    assert!(editor.from_formula_bar);
+    assert_eq!(editor.cell, CellRef::new(0, 1));
+    h.input_mut().events.extend([
+        Event::Text("draft".into()),
+        Event::Key { key: Key::End, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
+        Event::Key { key: Key::End, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE },
+        Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
+        Event::Key { key: Key::Tab, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE },
+        Event::Key { key: Key::N, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
+        Event::Text("n".into()),
+        Event::Key { key: Key::N, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE },
+    ]);
+    h.step();
+    assert_eq!(h.state().editor.as_ref().unwrap().text, "draft", "the later events are held for the next pass");
+    (h, clean, clean_window)
+}
+
+fn check_python_draft_question(outcome: &str) {
+    use egui::{Event, Key, Modifiers, ViewportCommand};
+
+    let (mut h, clean, clean_window) = python_draft_with_held_keys();
+    let dirty = h.state().session.doc().unwrap().uid;
+    let dirty_window = h.state().session.active_window().unwrap();
+    if outcome == "replay" {
+        h.step();
+        assert_eq!(h.state().editor.as_ref().unwrap().text, "draft    n", "without a question the held events reach the same Python field");
+        return;
+    }
+    let before = h.state().session.doc().unwrap();
+    let (workbook, revision, undo) = (before.wb.clone(), before.revision, before.undo.len());
+    h.state_mut().enter_window(clean_window);
+    h.input_mut().events.extend([
+        Event::Key { key: Key::N, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
+        Event::Text("n".into()),
+        Event::Key { key: Key::N, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE },
+    ]);
+    let sent = request_window_close(&mut h);
+    assert!(sent.contains(&ViewportCommand::CancelClose));
+    assert!(!sent.contains(&ViewportCommand::Close));
+    assert_eq!(h.state().session.active_window(), Some(dirty_window));
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    assert_eq!(h.state().session.documents().len(), 2);
+    let doc = h.state().session.doc().unwrap();
+    assert_eq!(doc.uid, dirty);
+    assert!(doc.is_dirty() && Arc::ptr_eq(&workbook, &doc.wb));
+    assert_eq!((doc.revision, doc.undo.len()), (revision, undo));
+    assert_eq!(doc.wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(42.0));
+    assert!(doc.wb.active().unwrap().cell(CellRef::new(0, 1)).is_none_or(|c| c.py.is_none()));
+    assert!(h.state().editor.as_ref().is_some_and(|e| e.python && e.text == "draft"));
+    if outcome == "cancel" {
+        if let Ok(path) = std::env::var("GRIDCRAFT_SAVE_PYTHON_SNAPSHOT") {
+            h.render().unwrap().save(path).unwrap();
+        }
+        h.key_press(Key::Escape);
+        assert!(!step_commands(&mut h).contains(&ViewportCommand::Close));
+        assert!(h.state().dialog.is_none());
+        assert_eq!(h.state().session.documents().len(), 2);
+        assert_eq!(h.state().session.doc().unwrap().uid, dirty);
+        assert!(Arc::ptr_eq(&workbook, &h.state().session.doc().unwrap().wb));
+        assert_eq!(h.state().editor.as_ref().unwrap().text, "draft");
+        h.input_mut().events.push(Event::Text("!".into()));
+        h.run_steps(3);
+        assert_eq!(h.state().editor.as_ref().unwrap().text, "draft!", "fresh text still edits after Cancel");
+    } else {
+        h.key_press(Key::N);
+        assert!(step_commands(&mut h).contains(&ViewportCommand::Close), "a fresh N deliberately discards the requested workbook");
+        assert!(h.state().dialog.is_none());
+        assert_eq!(h.state().session.documents().len(), 1);
+        assert_eq!(h.state().session.doc().unwrap().uid, clean);
+        assert!(h.state().editor.is_none());
+    }
+}
+
+#[test]
 fn save_changes_shortcuts_ignore_modified_answers_and_held_n() {
     let mut h = harness(Services::default());
     for _ in 0..3 {
