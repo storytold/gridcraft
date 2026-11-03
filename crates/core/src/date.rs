@@ -47,13 +47,11 @@ pub fn days_from_civil(y: i32, m: u32, d: u32) -> i64 {
 }
 
 /// Milliseconds since the Unix epoch (UTC) from the system clock; `None` when the clock is unavailable.
-/// On wasm32 `std::time::SystemTime::now` traps, so the browser clock is read through `Date.now()`.
-#[allow(clippy::disallowed_methods)] // the std clock is read only off wasm
+/// Chrono uses the browser clock on wasm32, where the standard library clock methods trap.
 pub fn unix_now_ms() -> Option<f64> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?;
-        Some(d.as_secs_f64() * 1000.0)
+        Some(chrono::Utc::now().timestamp_millis() as f64)
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -323,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn fictitious_1900_02_29() {
+    fn fictitious_1900_02_29() -> Result<(), std::io::Error> {
         // Excel's 1900 calendar has a 29 February 1900 (serial 60); day and month overflow count
         // through it.
         let s = DateSystem::D1900;
@@ -345,7 +343,7 @@ mod tests {
         assert_eq!(serial_from_ymd(s, 1904, 2, 29), Some(1521.0));
         // Every serial up to 1900-12-31 comes back from its own year, month and day.
         for serial in 0..=366 {
-            let d = datetime_from_serial(s, serial as f64).unwrap();
+            let d = datetime_from_serial(s, serial as f64).ok_or_else(|| std::io::Error::other("serial should convert"))?;
             assert_eq!(serial_from_ymd(s, d.year as i64, d.month as i64, d.day as i64), Some(serial as f64), "{d:?}");
         }
         assert_eq!(days_in_month_in(s, 1900, 2), 29);
@@ -358,6 +356,7 @@ mod tests {
         assert_eq!(serial_from_ymd(s, 1904, 3, 1), Some(60.0));
         assert_eq!(serial_from_ymd(s, 1904, 1, 0), None);
         assert_eq!(serial_from_ymd(s, 1900, 2, 29), None);
+        Ok(())
     }
 
     #[test]
@@ -371,17 +370,18 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip() {
+    fn roundtrip() -> Result<(), std::io::Error> {
         let s = DateSystem::D1900;
         for serial in [1.0, 59.0, 60.0, 61.0, 36526.0, 46302.0, 2958465.0] {
-            let d = datetime_from_serial(s, serial).unwrap();
+            let d = datetime_from_serial(s, serial).ok_or_else(|| std::io::Error::other("serial should convert"))?;
             assert_eq!(serial_from_ymd(s, d.year as i64, d.month as i64, d.day as i64), Some(serial));
         }
-        let d = datetime_from_serial(s, 60.0).unwrap();
+        let d = datetime_from_serial(s, 60.0).ok_or_else(|| std::io::Error::other("leap-day serial should convert"))?;
         assert_eq!((d.year, d.month, d.day), (1900, 2, 29));
-        let d = datetime_from_serial(s, 46302.75).unwrap();
+        let d = datetime_from_serial(s, 46302.75).ok_or_else(|| std::io::Error::other("time serial should convert"))?;
         assert_eq!((d.hour, d.minute, d.weekday), (18, 0, 3)); // 2026-10-07 is a Wednesday
-        let d = datetime_from_serial(s, 1.0).unwrap();
+        let d = datetime_from_serial(s, 1.0).ok_or_else(|| std::io::Error::other("first serial should convert"))?;
         assert_eq!(d.weekday, 0); // 1900-01-01 was a Sunday in Excel's calendar
+        Ok(())
     }
 }

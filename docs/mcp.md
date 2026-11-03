@@ -41,9 +41,10 @@ with a file open.
 |---|---|---|
 | `execute_command` | `command`, `params?` | Runs **any** engine command (`cell.set`, `home.bold`, `data.removeDuplicates`, …). |
 | `list_commands` | `search?` | Command ids, labels, ribbon paths, shortcuts and parameter docs. |
+| `list_windows` | — | Open windows: window id, workbook (`doc`) id, title ("Book1", or "Book1:2" for a workbook's second window), unsaved changes, active, hidden. |
 | `inspect_workbook` | — | Sheets, used ranges, tables, charts, names, selection, history. |
 | `read_range` | `range?`, `sheet?`, `formulas?`, `formatted?` | Rows of values (default: the used range). |
-| `write_range` | `range`, `values` (2-D) | `range.setValues`; strings starting with `=` are formulas. |
+| `write_range` | `range`, `values` (2-D), `parse?` | `range.setValues`; strings starting with `=` are formulas, other strings are read like typed input unless `parse: false` stores them as text. `converted` in the result lists the strings read as a number, date, time, boolean or error. |
 | `set_cell` / `get_cell` | `cell`, `input` / `cell` | Enter one cell / read value, formula, display text, style. |
 | `evaluate_formula` | `formula`, `cell?` | Evaluates without changing the sheet. A formula that couldn't be entered in a cell (it doesn't parse, or a function gets the wrong number of arguments) is an error saying why. |
 | `select` | `range`, `active?` | Sets the selection. |
@@ -56,6 +57,10 @@ with a file open.
 | `undo` / `redo` | `steps?` | History. |
 | `screenshot` | `path` | PNG of the window (Remote only). |
 | `list_functions` | `search?`, `category?` | Worksheet functions with signatures. |
+
+Every tool that acts on a workbook (all but `list_commands`, `list_functions`, `list_windows`, `open_workbook`,
+`new_workbook` and `screenshot`) also takes `window` or `doc`, an id from `list_windows`, and acts in that window
+(for `doc`, the workbook's most recent window) without bringing it forward. Without them it acts in the active window.
 
 Results are one text block holding pretty JSON; failures set `isError: true` with a readable message. Unknown tools,
 missing required arguments and wrong argument types are JSON-RPC `-32602` errors; malformed JSON is `-32700`; unknown
