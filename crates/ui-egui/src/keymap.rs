@@ -115,6 +115,8 @@ fn lookup_number_formats(ctx: LookupContext) -> Option<Shortcut> {
         Num7 if ctrl && s => borders("outside"),
         Minus if ctrl && s => borders("none"),
         Num8 if ctrl && s => run("selection.currentRegion"),
+        // Ctrl+. (Control on a Mac too): Next Corner of Selection.
+        Period if ctrl && !s => run("selection.nextCorner"),
         Semicolon if ctrl && s => Shortcut::Time,
         Quote if ctrl && s => Shortcut::ValueAbove,
         Quote if ctrl => Shortcut::FormulaAbove,
