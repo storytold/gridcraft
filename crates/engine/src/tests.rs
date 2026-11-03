@@ -5124,6 +5124,8 @@ fn check_params_names_the_keys_a_command_does_not_take() {
         ("home.insertSheet", json!({"name": "R", "before": 0})),
         ("home.insertSheet", json!({})),
         ("cell.set", json!({"cell": "A1", "input": "1", "sheet": 0})),
+        // Validation checks the documented outer key and leaves nested payloads to the command.
+        ("cell.set", json!({"cell": "A1", "input": {"nested": "payload"}})),
         ("home.bold", json!({"range": "A1", "sheet": "Sheet1", "on": true})),
         ("home.alignLeft", json!({"range": "A1", "on": true})),
         ("home.insertRows", json!({"rows": "2:3", "count": 2})),
