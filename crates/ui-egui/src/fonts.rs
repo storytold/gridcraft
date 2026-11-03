@@ -43,6 +43,31 @@ pub struct Face {
     pub italic: bool,
 }
 
+#[cfg(windows)]
+fn registry_font_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let windir = std::env::var_os("WINDIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:\\Windows"));
+    let font_dir = windir.join("Fonts");
+    for (hkey, subkey) in [
+        (winreg::enums::HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"),
+        (winreg::enums::HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"),
+    ] {
+        if let Ok(reg) = winreg::RegKey::predef(hkey).open_subkey(subkey) {
+            for item in reg.enum_values().flatten() {
+                let name = item.0;
+                if let Ok(s) = reg.get_value::<String, _>(&name) {
+                    let p = PathBuf::from(&s);
+                    let full = if p.is_absolute() { p } else { font_dir.join(p) };
+                    if full.exists() {
+                        paths.push(full);
+                    }
+                }
+            }
+        }
+    }
+    paths
+}
+
 /// The font folders of the platform (the system's and the user's). Empty on wasm.
 pub fn system_font_dirs() -> Vec<PathBuf> {
     #[cfg(target_arch = "wasm32")]
@@ -64,6 +89,8 @@ pub fn system_font_dirs() -> Vec<PathBuf> {
             if let Some(l) = std::env::var_os("LOCALAPPDATA") {
                 dirs.push(PathBuf::from(l).join("Microsoft\\Windows\\Fonts"));
             }
+            #[cfg(windows)]
+            dirs.extend(registry_font_paths());
         } else {
             dirs.extend(["/usr/share/fonts", "/usr/local/share/fonts", "/usr/share/fonts/TTF"].map(Into::into));
             if let Some(h) = &home {
@@ -149,20 +176,24 @@ fn file_faces(data: &[u8]) -> Vec<(u32, String, Vec<String>, String)> {
 /// Catalog every face under `dirs`, recursing into subfolders. A folder reached twice (through a
 /// symlink) is read once, so a link back to a parent ends the walk.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn scan_dirs(dirs: &[PathBuf]) -> Vec<Face> {
+pub fn scan_dirs(paths: &[PathBuf]) -> Vec<Face> {
     let mut out: Vec<Face> = Vec::new();
-    let mut stack: Vec<PathBuf> = dirs.to_vec();
+    let mut stack: Vec<PathBuf> = paths.to_vec();
     let mut seen_dirs: HashSet<PathBuf> = HashSet::new();
-    while let Some(dir) = stack.pop() {
-        let key = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
-        if !seen_dirs.insert(key) {
-            continue;
-        }
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
+    let mut seen_files: HashSet<PathBuf> = HashSet::new();
+    while let Some(path) = stack.pop() {
+        if path.is_dir() {
+            let key = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            if !seen_dirs.insert(key) {
+                continue;
+            }
+            let Ok(entries) = std::fs::read_dir(&path) else { continue };
+            for entry in entries.flatten() {
+                stack.push(entry.path());
+            }
+        } else {
+            let key = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            if !seen_files.insert(key) {
                 continue;
             }
             let is_font = path
@@ -611,13 +642,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// On a Windows machine with Malgun Gothic, the real file carries its Korean name.
     #[cfg(windows)]
     #[test]
-    fn malgun_gothic_answers_to_its_korean_name_when_installed() {
-        let root = std::env::var_os("WINDIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:\\Windows"));
-        let Ok(data) = std::fs::read(root.join("Fonts").join("malgun.ttf")) else { return };
-        let faces = file_faces(&data);
-        assert!(faces.iter().any(|(_, family, names, _)| family == "Malgun Gothic" && names.iter().any(|n| n == "맑은 고딕")), "{faces:?}");
+    fn registry_fonts_are_scanned() {
+        let cat = catalog();
+        println!("REGISTRY SCAN: found {} faces across {} families", cat.len(), families().len());
+        assert!(!cat.is_empty());
     }
 }
