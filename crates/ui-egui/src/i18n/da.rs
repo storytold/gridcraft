@@ -1205,6 +1205,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page {page}" => "Side {page}",
         "Paste Special|Add" => "Læg til",
         "Text to Columns|Comma" => "Komma",
+        "Page order" => "Siderækkefølge",
+        "Down, then over" => "Nedad, derefter mod højre",
+        "Over, then down" => "Mod højre, derefter nedad",
         _ => return None,
     })
 }

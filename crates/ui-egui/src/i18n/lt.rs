@@ -999,6 +999,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Name Box" => "Vardo laukas",
         "Cell Editor" => "Langelio rengyklė",
         "Font Size" => "Šrifto dydis",
+        "Page order" => "Puslapių tvarka",
+        "Down, then over" => "Žemyn, tada į dešinę",
+        "Over, then down" => "Į dešinę, tada žemyn",
         _ => return None,
     })
 }

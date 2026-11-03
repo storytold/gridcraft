@@ -1193,6 +1193,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Name Box" => "Namnruta",
         "Cell Editor" => "Cellredigerare",
         "Font Size" => "Teckenstorlek",
+        "Page order" => "Sidordning",
+        "Down, then over" => "Nedåt, sedan åt höger",
+        "Over, then down" => "Åt höger, sedan nedåt",
         _ => return None,
     })
 }
