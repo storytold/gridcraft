@@ -371,3 +371,29 @@ fn replace_case_insensitive_keeps_text_when_folding_moves_boundaries() {
     let sh = s.doc().unwrap().wb.active().unwrap();
     assert_eq!(sh.value(CellRef::new(0, 0)), Value::text(text));
 }
+
+#[test]
+fn next_corner_of_selection_goes_clockwise_and_anchors_there() {
+    // #1442, as Excel does it: B2 → D2 → D4 → B4 → B2, the area stays selected, and Shift+arrows
+    // then move the corner opposite the new active cell.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("selection.set", json!({"range": "B2:D4", "active": "B2"})).unwrap();
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        let r = s.execute("selection.nextCorner", json!({})).unwrap();
+        assert_eq!(r["selection"], "B2:D4");
+        seen.push(r["active"].as_str().unwrap().to_string());
+    }
+    assert_eq!(seen, ["D2", "D4", "B4", "B2"]);
+    s.execute("selection.nextCorner", json!({})).unwrap();
+    s.execute("selection.nextCorner", json!({})).unwrap();
+    s.execute("selection.move", json!({"dr": 0, "dc": 1, "extend": true})).unwrap();
+    assert_eq!(s.doc().unwrap().selection.current().a1(), "C2:D4");
+    // One row goes end to end; a single cell stays.
+    s.execute("selection.set", json!({"range": "B2:D2", "active": "B2"})).unwrap();
+    assert_eq!(s.execute("selection.nextCorner", json!({})).unwrap()["active"], "D2");
+    assert_eq!(s.execute("selection.nextCorner", json!({})).unwrap()["active"], "B2");
+    s.execute("selection.set", json!({"range": "C5"})).unwrap();
+    assert_eq!(s.execute("selection.nextCorner", json!({})).unwrap()["active"], "C5");
+}
