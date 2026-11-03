@@ -1013,3 +1013,19 @@ fn detail_cells_are_the_cells_show_details_takes() {
     let pt = &d.wb.active().unwrap().pivots[0];
     assert!(crate::pivot::detail_cells(&d.wb, pt, d.wb.active_sheet()).unwrap_err().contains("out of date"));
 }
+
+#[test]
+fn rank_ties_are_dense_and_count_numbers_is_captioned_count_of() {
+    // #1448 items 10 and 12: Excel ranks 5, 4, 3, 3, 4 as 1, 2, 3, 3, 2 (GridCraft gave 1, 2, 4,
+    // 4, 2), and captions a Count Numbers field "Count of Val".
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = json!([["Key", "Val"], ["A", 5], ["B", 4], ["C", 3], ["D", 3], ["E", 4]]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("insert.pivotTable", json!({"source": "Sheet1!$A$1:$B$6", "destination": "Sheet1!D3", "rows": ["Key"], "values": ["Val"]})).unwrap();
+    s.execute("pivot.valueSettings", json!({"index": 0, "showAs": "rank"})).unwrap();
+    let ranks: Vec<Value> = ["E4", "E5", "E6", "E7", "E8"].iter().map(|a| val(&s, a)).collect();
+    assert_eq!(ranks, [1.0, 2.0, 3.0, 3.0, 2.0].map(Value::Number));
+    s.execute("pivot.valueSettings", json!({"index": 0, "showAs": "normal", "func": "countNumbers"})).unwrap();
+    assert_eq!(text(&s, "E3"), "Count of Val");
+}
