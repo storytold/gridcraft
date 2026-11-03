@@ -435,7 +435,7 @@ fn paste_validations(
         // Coalesce populated cells into horizontal runs, then join identical runs in adjacent
         // rows. The range limit applies to the cuts, not the number of populated cells.
         cells.sort_unstable();
-        let mut runs = Vec::new();
+        let mut runs: Vec<RangeRef> = Vec::new();
         let mut i = 0;
         while i < cells.len() {
             let (row, start_col) = cells[i];
