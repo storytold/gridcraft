@@ -12,8 +12,48 @@ use gridcraft_engine::model::{BorderLine, BorderStyle, Color, HAlign, LineIndex,
 use serde_json::json;
 
 use crate::SheetApp;
-use crate::editor::{EditState, REF_COLORS};
+use crate::editor::EditState;
 use crate::theme::{self, Tokens};
+
+/// A painted pane: its row span, column span and screen rectangle.
+pub(crate) type PaneQuad = ((u32, u32), (u32, u32), Rect);
+/// Cached Page Break Preview ranges, keyed by (doc uid, revision, sheet).
+type PagesCache = ((u64, u64, usize), Vec<(RangeRef, u32)>);
+/// Cached Show Details cells, keyed by (doc uid, revision, sheet, pivot).
+type DetailsCache = ((u64, u64, usize, usize), Option<std::collections::HashSet<(u32, u32)>>);
+
+mod active_row;
+pub use active_row::active_row_band;
+mod cell_paint;
+mod cursor;
+mod editor;
+mod geo;
+mod interact;
+mod keyboard;
+mod menus;
+mod quadrant;
+mod selection;
+mod show;
+mod tables;
+
+pub(crate) use cell_paint::paint_border;
+#[cfg(test)]
+pub(crate) use cell_paint::{cell_text_y, rotated_text_pos, wrapped_cell_text_y};
+#[cfg(test)]
+use cell_paint::{center_across_end, display_text, look, numfmt_color, painted_halign};
+pub use editor::validation_arrow;
+#[cfg(test)]
+use editor::{editor_slack, editor_width, list_picker_height};
+pub use geo::Geo;
+pub use interact::{follow_link, freeze_handles, point_move};
+pub(crate) use quadrant::{QuadrantPaint, paint_quadrant};
+pub use selection::selection_fill;
+pub(crate) use selection::{SelectionPaintInput, paint_selection};
+pub(crate) use show::horizontal_scrollbar;
+pub use show::show;
+#[cfg(test)]
+use tables::filter_table_range;
+pub use tables::{TableHeading, filter_button_rect, heading_table, table_headings};
 
 pub const COL_HEADER_H: f32 = 21.0;
 /// Sheet units are 96-dpi pixels (as in XLSX); on screen one unit is drawn at this many points,
@@ -63,6 +103,10 @@ pub enum Drag {
     Select,
     Rows(u32),
     Cols(u32),
+    /// Point mode over the row headers: the formula's reference runs from this row to the pointer.
+    PointRows(u32),
+    /// Point mode over the column headers: the formula's reference runs from this column to the pointer.
+    PointCols(u32),
     /// Reordering one contiguous whole-column selection by its header.
     MoveCols {
         source: RangeRef,
@@ -78,8 +122,10 @@ pub enum Drag {
         start: f32,
         orig: f32,
     },
+    /// Dragging the fill handle; `menu` when the right button drags it (the fill menu opens on release).
     Fill {
         target: Option<RangeRef>,
+        menu: bool,
     },
     /// Dragging a freeze handle: `cols` for the column bar, `to` the line count it would freeze.
     Freeze {
@@ -91,13 +137,100 @@ pub enum Drag {
         grab: CellRef,
         to: Option<CellRef>,
     },
+    /// Moving a floating object, or resizing it from one of its eight handles.
     Object {
-        kind: &'static str,
-        id: u32,
+        obj: gridcraft_engine::model::ObjRef,
         start: Pos2,
         orig: (CellRef, f32, f32, f32, f32),
-        resize: bool,
+        handle: Option<crate::objects::Handle>,
+        /// This drag has made its undo step; later frames merge into it, and never into the
+        /// step of an earlier drag.
+        stepped: bool,
     },
+}
+
+/// The fill a left-drag of the handle just made, which the Auto Fill Options button can redo
+/// another way. It only applies while nothing else changed the workbook (`revision`) and the
+/// filled cells are still selected.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FillTag {
+    pub src: RangeRef,
+    pub target: RangeRef,
+    pub uid: u64,
+    pub sheet: usize,
+    pub revision: u64,
+    pub undo_len: usize,
+}
+
+/// Trace Precedents, Trace Dependents and Trace Error arrows: they stay on the cells they were
+/// traced from while the selection moves. They go away when anything but a zoom changes the
+/// workbook (`revision`): Excel removes them on edits to the traced formula and on inserted,
+/// deleted or moved cells, this also on a new value in a precedent.
+pub struct Trace {
+    pub uid: u64,
+    pub revision: u64,
+    pub arrows: Vec<TraceArrow>,
+}
+
+/// One trace arrow, from a cell or range (boxed) to a cell, each on its sheet. An arrow is drawn
+/// on a sheet that holds both its ends.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TraceArrow {
+    pub from: (usize, RangeRef),
+    pub to: (usize, RangeRef),
+    /// A link between two cells showing the error Trace Error follows, drawn in the error colour.
+    pub error: bool,
+}
+
+impl Trace {
+    /// The arrows of a trace of the active cell, from the command's result: `{"sheet", "range"}`
+    /// precedents (Trace Precedents), `{"sheet", "cell"}` dependents (Trace Dependents), or
+    /// `{"arrows": [{"from", "to", "kind"}]}` (Trace Error). Ends on a sheet the workbook no
+    /// longer has are left out.
+    pub fn new(app: &SheetApp, result: serde_json::Value) -> Option<Trace> {
+        let d = app.session.active()?;
+        let traced = (d.wb.active_sheet(), RangeRef::new(d.selection.active, d.selection.active));
+        let end = |v: &serde_json::Value| {
+            let sheet = match v["sheet"].as_str() {
+                Some(name) => d.wb.sheet_index(name)?,
+                None => traced.0,
+            };
+            Some((sheet, RangeRef::parse(v["range"].as_str().or(v["cell"].as_str())?)?))
+        };
+        let arrows = match result.get("arrows").and_then(|a| a.as_array()) {
+            Some(list) => {
+                list.iter().filter_map(|a| Some(TraceArrow { from: end(&a["from"])?, to: end(&a["to"])?, error: a["kind"] == "error" })).collect()
+            }
+            None => result
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|it| {
+                    let (from, to) = if it.get("range").is_some() { (end(it)?, traced) } else { (traced, end(it)?) };
+                    Some(TraceArrow { from, to, error: false })
+                })
+                .collect(),
+        };
+        Some(Trace { uid: d.uid, revision: d.revision, arrows })
+    }
+
+    /// The active document's uid and revision, to hand [`Trace::keep_through_zoom`] after a zoom.
+    pub fn key(app: &SheetApp) -> Option<(u64, u64)> {
+        app.session.active().map(|d| (d.uid, d.revision))
+    }
+
+    /// Zooming changes the workbook (its revision) but moves no cell: arrows that were shown
+    /// before a zoom stay after it, as in Excel (#3097). `before` is [`Trace::key`] from then.
+    pub fn keep_through_zoom(app: &mut SheetApp, before: Option<(u64, u64)>) {
+        let now = Trace::key(app);
+        if let Some(t) = app.grid.trace.as_mut()
+            && before == Some((t.uid, t.revision))
+            && let Some((uid, revision)) = now
+            && uid == t.uid
+        {
+            t.revision = revision;
+        }
+    }
 }
 
 #[derive(Default)]
@@ -107,6 +240,10 @@ pub struct GridState {
     /// With `ensure_visible`: scroll to the moving end of the selection instead of the active cell
     /// (Shift/Ctrl+Shift+arrows keep the active cell on the anchor while the far corner moves).
     pub reveal_moving_end: bool,
+    /// With `ensure_visible`: the cell an arrow or paging key moved from (the moving end when
+    /// extending), set only by those keys. A move from the scrolled rows or columns into the
+    /// frozen ones scrolls them back to their top or left.
+    pub reveal_from: Option<CellRef>,
     pub last_title: Option<String>,
     pub drag_select: bool,
     pub rect: Option<Rect>,
@@ -114,17 +251,24 @@ pub struct GridState {
     /// Column and row of the clicked header cell, and where to open the menu.
     pub filter_menu: Option<(u32, u32, Pos2)>,
     pub context_menu: Option<Pos2>,
+    /// The frame a right-click opened `context_menu` in: that click's own press doesn't close it.
+    pub context_menu_frame: u64,
+    /// After a right-drag of the fill handle: the source, the dragged range and where to open the menu.
+    pub fill_menu: Option<(RangeRef, RangeRef, Pos2)>,
+    /// After a left-drag of the fill handle: the Auto Fill Options button beside the filled cells.
+    pub fill_tag: Option<FillTag>,
+    /// The right-clicked chart, picture, shape or slicer: where to open its menu, its kind and id.
+    pub object_menu: Option<(Pos2, &'static str, u32)>,
     pub marching_phase: f32,
     /// The selection outline on its way to a new selection.
     pub glide: crate::selection_glide::SelectionGlide,
     pub last_click: Option<(CellRef, f64)>,
     pub hover_cell: Option<CellRef>,
-    pub autosave: bool,
     pub last_autosave: f64,
     pub last_border: String,
     pub last_fill: String,
     pub last_font_color: String,
-    pub trace: Option<serde_json::Value>,
+    pub trace: Option<Trace>,
     pub renaming_tab: Option<usize>,
     pub rename_text: String,
     pub list_picker: Option<CellRef>,
@@ -133,7 +277,15 @@ pub struct GridState {
     /// Ink stroke being drawn (sheet points).
     pub ink: Vec<[f32; 2]>,
     /// Page ranges for Page Break Preview, cached per (doc uid, revision, sheet).
-    pub pages: Option<((u64, u64, usize), Vec<(RangeRef, u32)>)>,
+    pub pages: Option<PagesCache>,
+    /// The PivotTable Fields pane's `pivot.fields` answer, cached per (doc uid, revision, pivot):
+    /// it scans the whole source list, far too slow to repeat every frame (#2113).
+    pub pivot_fields: Option<((u64, u64, String), serde_json::Value)>,
+    /// The cells of a PivotTable report where the cell menu offers Show Details, relative to the
+    /// report's top-left and cached per (doc uid, revision, sheet, pivot): finding them computes
+    /// the whole report. `None` when the report can't be computed or is out of date: every cell
+    /// of it offers Show Details, and running it says why.
+    pub show_details_cells: Option<DetailsCache>,
     pub header_menu: Option<(Pos2, bool)>,
     /// Page Layout view pagination, cached per (doc uid, revision, sheet, rows, columns).
     pub paper: Option<crate::paper_view::PaperCache>,
@@ -147,8 +299,17 @@ pub struct GridState {
     pub geo: Option<Geo>,
     /// The horizontal scrollbar's track in the sheet tab bar (hit-testing for tests).
     pub hscroll: Option<Rect>,
+    /// The handle between the sheet tabs and the horizontal scrollbar (hit-testing for tests).
+    pub tab_split: Option<Rect>,
+    /// The share of the tab bar each workbook's tabs (and New sheet) take after the handle was
+    /// dragged, by document uid. A workbook without one gives its tabs up to 60%.
+    pub tab_shares: std::collections::HashMap<u64, f32>,
     /// Ctrl+wheel zoom in progress (see [`WheelZoom`]).
     pub wheel_zoom: Option<WheelZoom>,
+    /// A one-finger touch drag in progress: it pans the sheet instead of selecting.
+    pub touch_pan: bool,
+    /// What the macro step editor shows on the grid (Check, debugging).
+    pub macro_overlay: Option<crate::macro_editor::MacroOverlay>,
 }
 
 /// Ctrl+wheel zoom for one (doc uid, sheet). egui eases a notch in over several frames and
@@ -3532,99 +3693,4 @@ mod tests {
 }
 
 #[cfg(test)]
-mod pane_tests {
-    use super::*;
-
-    fn rng(r0: u32, c0: u32, r1: u32, c1: u32) -> RangeRef {
-        RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1))
-    }
-
-    #[test]
-    fn selection_in_scrolling_pane_is_not_drawn_in_frozen_pane() {
-        // Frozen: 2 rows and 2 columns; the scrolling pane shows rows 2..=20 and columns 2..=10.
-        let frozen_cols = ((2, 20), (0, 1));
-        let frozen_rows = ((0, 1), (2, 10));
-        let corner = ((0, 1), (0, 1));
-        let scrolled = ((2, 20), (2, 10));
-        let sel = rng(5, 4, 7, 6);
-        assert!(range_in_pane(sel, scrolled.0, scrolled.1));
-        assert!(!range_in_pane(sel, frozen_cols.0, frozen_cols.1));
-        assert!(!range_in_pane(sel, frozen_rows.0, frozen_rows.1));
-        assert!(!range_in_pane(sel, corner.0, corner.1));
-    }
-
-    #[test]
-    fn ctrl_click_on_a_selected_header_deselects_it() {
-        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-        assert_eq!(toggled_ranges(s(&["A:A", "C:C"]), "C:C".into(), true), s(&["A:A"]));
-        assert_eq!(toggled_ranges(s(&["A:A"]), "C:C".into(), true), s(&["A:A", "C:C"]));
-        assert_eq!(toggled_ranges(s(&["A:A"]), "A:A".into(), true), s(&["A:A"]));
-        assert_eq!(toggled_ranges(s(&["A1", "B2", "3:3"]), "B2".into(), true), s(&["A1", "3:3"]));
-        assert_eq!(toggled_ranges(s(&["A:A", "C:C"]), "C:C".into(), false), s(&["C:C"]));
-    }
-
-    #[test]
-    fn selection_across_the_freeze_line_is_drawn_in_both_panes() {
-        let sel = rng(5, 0, 7, 6);
-        assert!(range_in_pane(sel, (2, 20), (0, 1)));
-        assert!(range_in_pane(sel, (2, 20), (2, 10)));
-    }
-
-    /// Two frozen rows and columns, scrolled right so that columns C:E lie under the frozen columns.
-    fn frozen_geo(sh: &mut Sheet) -> Geo {
-        sh.freeze = Some((2, 2));
-        let scroll = vec2(3.0 * sh.default_col_width + 8.0, 0.0);
-        Geo::new(sh, Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0)), scroll)
-    }
-
-    #[test]
-    fn overlays_skip_cells_scrolled_under_the_frozen_columns() {
-        let mut sh = Sheet::new("S");
-        let geo = frozen_geo(&mut sh);
-        assert!(geo.hidden_under_frozen(&sh, CellRef::new(5, 2)));
-        assert!(geo.hidden_under_frozen(&sh, CellRef::new(5, 4)));
-        assert!(!geo.hidden_under_frozen(&sh, CellRef::new(5, 5)));
-        assert!(!geo.hidden_under_frozen(&sh, CellRef::new(5, 0)));
-        let unscrolled = Geo::new(&sh, geo.rect, vec2(0.0, 0.0));
-        assert!(!unscrolled.hidden_under_frozen(&sh, CellRef::new(5, 2)));
-    }
-
-    #[test]
-    fn ranges_are_clipped_to_the_panes_that_hold_them() {
-        let mut sh = Sheet::new("S");
-        let geo = frozen_geo(&mut sh);
-        let split = pos2(geo.cells.left() + geo.frozen_w, geo.cells.top() + geo.frozen_h);
-        assert_eq!(geo.range_panes(rng(5, 3, 7, 6)), [Rect::from_min_max(split, geo.cells.max)]);
-        assert_eq!(geo.range_panes(rng(5, 0, 7, 6)).len(), 2);
-        assert_eq!(geo.range_panes(rng(0, 0, 7, 6)).len(), 4);
-        assert_eq!(geo.range_panes(rng(0, 0, 1, 1)), [Rect::from_min_max(geo.cells.min, split)]);
-        // The fill handle of D6:E7 sits over the frozen columns, where nothing of it is shown.
-        let handle = geo.range_rect(&sh, rng(5, 3, 6, 4)).right_bottom();
-        assert!(handle.x < split.x);
-        assert!(!geo.range_panes(rng(6, 4, 6, 4)).iter().any(|r| r.contains(handle)));
-    }
-}
-
-#[cfg(test)]
-mod outline_band_tests {
-    use super::*;
-
-    #[test]
-    fn whole_column_outline_keeps_left_and_right_sides_near_viewport() {
-        let clip = Rect::from_min_max(pos2(0.0, 0.0), pos2(800.0, 600.0));
-        let col = Rect::from_min_max(pos2(100.0, 40.0), pos2(180.0, 20_971_540.0));
-        let sides = outline_bands(col, 2.0, clip);
-        // Left, right and top (in view); the bottom is 20 million points away.
-        assert_eq!(sides.len(), 3);
-        assert!(sides.iter().all(|s| s.bottom() <= clip.bottom() + 4.0 + f32::EPSILON));
-        assert!(sides.iter().any(|s| s.left() < 100.0 && s.right() > 100.0 && s.height() > 500.0));
-        assert!(sides.iter().any(|s| s.left() < 180.0 && s.right() > 180.0 && s.height() > 500.0));
-    }
-
-    #[test]
-    fn outline_outside_the_view_and_non_finite_draw_nothing() {
-        let clip = Rect::from_min_max(pos2(0.0, 0.0), pos2(800.0, 600.0));
-        assert!(outline_bands(Rect::from_min_max(pos2(900.0, 0.0), pos2(950.0, 20.0)), 2.0, clip).is_empty());
-        assert!(outline_bands(Rect::from_min_max(pos2(f32::NAN, 0.0), pos2(1.0, 1.0)), 2.0, clip).is_empty());
-    }
-}
+mod tests;

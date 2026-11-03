@@ -36,13 +36,15 @@ use serde_json::{Value, json};
 
 const USAGE: &str = "usage:
   gridcraft-cli info <file> [--json]                      sheets, used ranges, tables, charts, names
-  gridcraft-cli convert <in> <out> [--sheet NAME]         xlsx/csv/tsv/json/html by extension
+  gridcraft-cli convert <in> <out> [--sheet NAME]         xlsx/csv/tsv/json/html/pdf by extension
   gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json]
   gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv]
   gridcraft-cli check <file-or-dir>... [--json] [--tolerance 1e-9] [--max-report N]
                      cached-value calc oracle + XLSX round-trip fidelity (exit 1 on any difference)
   gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl]
                      [--out FILE] [--print RANGE] [--quiet]
+                     a script line is id={json} or {\"command\": \"id\", \"params\": {…}};
+                     blank lines and lines starting with # or // are skipped
   gridcraft-cli commands [--json] [--search X]
   gridcraft-cli functions [--json] [--search X] [--category C]
   gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
@@ -193,7 +195,18 @@ fn pretty(v: &Value) -> String {
 
 /// A number as a person would type it: `6`, `0.5`, `1e+300`.
 fn number_text(n: f64) -> String {
-    if n.fract() == 0.0 && n.abs() < 1e15 { format!("{}", n as i64) } else { format!("{n}") }
+    if n.fract() == 0.0 && n.abs() < 1e15 {
+        format!("{}", n as i64)
+    } else if n.is_finite() && (n.abs() >= 1e15 || n.abs() < 1e-5) {
+        // Rust's `Display` never uses exponent form; `{:e}` omits the `+` on positive exponents.
+        let s = format!("{n:e}");
+        match s.split_once('e') {
+            Some((m, e)) if !e.starts_with('-') => format!("{m}e+{e}"),
+            _ => s,
+        }
+    } else {
+        format!("{n}")
+    }
 }
 
 /// A computed value (as returned by `formulas.evaluate` / `sheet.read`) as plain text.
@@ -271,11 +284,17 @@ fn convert(args: &[String]) -> Result<(), String> {
     let input = a.pos(0, "<in>")?;
     let out = a.pos(1, "<out>")?;
     a.no_extra(2)?;
-    if gridcraft_engine::io::FileKind::from_path(out).is_none() {
-        return Err(format!("{out}: unknown output format (use .xlsx, .csv, .tsv, .json or .html)"));
+    let pdf = out.to_ascii_lowercase().ends_with(".pdf");
+    if !pdf && gridcraft_engine::io::FileKind::from_path(out).is_none() {
+        return Err(format!("{out}: unknown output format (use .xlsx, .csv, .tsv, .json, .html or .pdf)"));
     }
     let mut s = open(input)?;
     activate_sheet(&mut s, a.opt("sheet"))?;
+    if pdf {
+        let result = exec(&mut s, "file.exportPdf", json!({"path": out}))?;
+        eprintln!("wrote {out} ({} bytes, {} pages)", result["bytes"], result["pages"]);
+        return Ok(());
+    }
     let d = s.doc().map_err(|e| e.to_string())?;
     let bytes = gridcraft_engine::io::save_file_bytes(&d.wb, out).map_err(|e| e.to_string())?;
     gridcraft_engine::io::write_file(out, &bytes).map_err(|e| e.to_string())?;
@@ -369,6 +388,17 @@ fn parse_command(text: &str) -> Result<Option<(String, Value)>, String> {
     }
     if t.starts_with('{') {
         let v: Value = serde_json::from_str(t).map_err(|e| format!("bad JSON: {e}"))?;
+        // A key this does not read is a mistake, not a comment: `{"command": …, "args": {…}}` and
+        // `{"command": …, "name": "Report"}` ran the command with no parameters at all and the
+        // script still exited 0, so a typo made a valid, wrong workbook (#2256).
+        if let Some(o) = v.as_object() {
+            let mut unknown: Vec<&str> = o.keys().map(String::as_str).filter(|k| !matches!(*k, "command" | "id" | "params")).collect();
+            if !unknown.is_empty() {
+                unknown.sort_unstable();
+                let (plural, list) = (if unknown.len() == 1 { "key" } else { "keys" }, unknown.join("`, `"));
+                return Err(format!("unknown {plural} `{list}`: a line is {{\"command\": \"id\", \"params\": {{…}}}}"));
+            }
+        }
         let id = v.get("command").or_else(|| v.get("id")).and_then(Value::as_str).ok_or("JSON command needs a `command` field")?;
         return Ok(Some((id.to_string(), v.get("params").cloned().unwrap_or_else(|| json!({})))));
     }
@@ -561,12 +591,37 @@ mod tests {
         assert_eq!(parse_command("{\"command\":\"edit.redo\"}").unwrap(), Some(("edit.redo".into(), json!({}))));
         assert_eq!(parse_command("  # comment").unwrap(), None);
         assert!(parse_command("x={bad").is_err());
+        // A key this does not read is a mistake: the command used to run with no parameters and
+        // the script still exited 0, so a typo made a valid, wrong workbook (#2256).
+        for (line, named) in [
+            (r#"{"command":"home.insertSheet","args":{"name":"R"}}"#, "`args`"),
+            (r#"{"command":"home.insertSheet","name":"R"}"#, "`name`"),
+            (r#"{"command":"home.insertSheet","params":{},"note":"why"}"#, "`note`"),
+        ] {
+            let e = parse_command(line).expect_err("refused");
+            assert!(e.contains("unknown key") && e.contains(named), "{line}: {e}");
+            assert!(e.contains(r#"{"command": "id", "params": {…}}"#), "{line}: {e}");
+        }
+        // Several at once are listed in one message, sorted.
+        let e = parse_command(r#"{"command":"x","name":"R","args":{}}"#).expect_err("refused");
+        assert!(e.contains("unknown keys `args`, `name`"), "{e}");
+        // `id` is still the accepted alternative to `command`, and `params` still carries them.
+        assert_eq!(parse_command(r#"{"id":"edit.undo"}"#).unwrap(), Some(("edit.undo".into(), json!({}))));
+        assert_eq!(
+            parse_command(r#"{"command":"home.insertSheet","params":{"name":"R"}}"#).unwrap(),
+            Some(("home.insertSheet".into(), json!({"name": "R"})))
+        );
     }
 
     #[test]
     fn value_texts() {
         assert_eq!(value_text(&json!(6.0)), "6");
         assert_eq!(value_text(&json!(0.25)), "0.25");
+        assert_eq!(value_text(&json!(1e300)), "1e+300");
+        assert_eq!(value_text(&json!(-1.5e300)), "-1.5e+300");
+        assert_eq!(value_text(&json!(1e-20)), "1e-20");
+        assert_eq!(value_text(&json!(1e-300)), "1e-300");
+        assert_eq!(value_text(&json!(0.0001)), "0.0001");
         assert_eq!(value_text(&json!(true)), "TRUE");
         assert_eq!(value_text(&json!({"error": "#DIV/0!"})), "#DIV/0!");
         assert_eq!(value_text(&json!([[1.0, 2.0], [3.0, "x"]])), "1\t2\n3\tx");
@@ -582,5 +637,22 @@ mod tests {
         assert!(a.has("csv"));
         assert!(Args::parse(&["--nope".to_string()], &[], &[]).is_err());
         assert!(Args::parse(&["--range".to_string()], &["range"], &[]).is_err());
+    }
+
+    #[test]
+    fn convert_xlsx_to_pdf_keeps_links() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-cli-pdf-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("links.xlsx");
+        let output = dir.join("links.pdf");
+        let mut s = blank();
+        s.execute("insert.link", json!({"cell": "A1", "target": "https://example.org"})).unwrap();
+        let bytes = gridcraft_engine::io::save_file_bytes(&s.doc().unwrap().wb, input.to_str().unwrap()).unwrap();
+        gridcraft_engine::io::write_file(input.to_str().unwrap(), &bytes).unwrap();
+        convert(&[input.to_string_lossy().into_owned(), output.to_string_lossy().into_owned()]).unwrap();
+        let pdf = std::fs::read(&output).unwrap();
+        assert!(pdf.starts_with(b"%PDF-"));
+        assert!(pdf.windows(b"/URI (https://example.org)".len()).any(|w| w == b"/URI (https://example.org)"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
