@@ -902,7 +902,7 @@ fn freeze_boundary(geo: &Geo, sh: &Sheet, p: Pos2, cols: bool) -> u32 {
             return 0;
         }
         let c = geo.col_at(sh, p.x);
-        let (l, r) = (geo.x(sh, c), geo.x(sh, c.saturating_add(1).min(MAX_COLS - 1)));
+        let (l, r) = (geo.x(sh, c), geo.x_end(sh, c));
         let b = if p.x - l > r - p.x { c.saturating_add(1) } else { c };
         let room = geo.ci.at((((geo.cells.width() - 40.0) / geo.z).max(0.0)) as f64);
         b.min(room).min(MAX_COLS - 1)
@@ -911,7 +911,7 @@ fn freeze_boundary(geo: &Geo, sh: &Sheet, p: Pos2, cols: bool) -> u32 {
             return 0;
         }
         let rr = geo.row_at(sh, p.y);
-        let (t, b2) = (geo.y(sh, rr), geo.y(sh, rr.saturating_add(1).min(MAX_ROWS - 1)));
+        let (t, b2) = (geo.y(sh, rr), geo.y_end(sh, rr));
         let b = if p.y - t > b2 - p.y { rr.saturating_add(1) } else { rr };
         let room = geo.ri.at((((geo.cells.height() - 40.0) / geo.z).max(0.0)) as f64);
         b.min(room).min(MAX_ROWS - 1)
