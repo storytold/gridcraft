@@ -183,8 +183,14 @@ pub(super) fn range_move(s: &mut Session, p: &Json) -> Result<Json> {
         {
             return Err(EngineError::Confirm("There's already data here. Do you want to replace it?".into()));
         }
-        // On the range's sheet, which `paste` would leave to the active one.
-        paste_special(s, &json!({"what": "all", "at": to.a1(), "sheet": sheet}))
+        // On the range's sheet, which `paste` would leave to the active one. The selection
+        // belongs to the active sheet: it follows the moved cells only when they are on it.
+        let selection = s.doc()?.selection.clone();
+        let pasted = paste_special(s, &json!({"what": "all", "at": to.a1(), "sheet": sheet}))?;
+        if sheet != s.doc()?.wb.active_sheet() {
+            s.doc_mut()?.selection = selection;
+        }
+        Ok(pasted)
     });
     if moved.is_err() {
         s.clipboard = kept;

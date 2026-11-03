@@ -408,7 +408,11 @@ fn drag_and_drop_on_another_sheet_stays_on_that_sheet() {
     s.execute("range.setValues", json!({"range": "B1:B2", "values": [["Kiwi"], ["Plum"]]})).unwrap();
     s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
     s.execute("cell.set", json!({"cell": "A1", "input": "Keep"})).unwrap();
+    s.execute("selection.set", json!({"range": "C5"})).unwrap();
     s.execute("range.move", json!({"range": "Two!B1:B2", "to": "A1"})).unwrap();
+    // Sheet1 stays active with its own selection; the moved cells are on Two.
+    assert_eq!(s.doc().unwrap().wb.active_sheet(), 0);
+    assert_eq!(s.doc().unwrap().selection.a1(), "C5");
     let wb = &s.doc().unwrap().wb;
     let two = wb.sheet_index("Two").unwrap();
     assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::text("Keep"));
