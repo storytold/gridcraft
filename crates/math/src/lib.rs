@@ -390,16 +390,39 @@ fn check_caps(latex: &str) -> Result<(), MathError> {
 const MAX_ALIGNAT_PAIRS: usize = 50;
 
 /// N of `{alignat}{N}`, `{alignat*}{N}` or `{alignedat}{N}` at the start of `rest` (just after
-/// `\begin`); `usize::MAX` when the count is present but too long to read.
+/// `\begin`). `usize::MAX` when the count is present but is not a plain digit string RaTeX reads
+/// the same way (too long, or hidden by a comment, inner spaces or a macro): refused, not skipped.
+///
+/// RaTeX reads the environment name and the count through its lexer, which drops comments and
+/// spaces, so they are dropped here too before the two groups are compared.
 fn alignat_columns(rest: &str) -> Option<usize> {
-    let rest = rest.trim_start().strip_prefix('{')?;
-    let (name, after) = rest.split_once('}')?;
+    // Enough for the longest name and any count that fits `usize`; a longer count is refused.
+    const WINDOW: usize = 64;
+    let mut kept = String::new();
+    let mut chars = rest.chars();
+    while kept.len() < WINDOW {
+        match chars.next() {
+            None => break,
+            Some('%') => {
+                for n in chars.by_ref() {
+                    if n == '\n' {
+                        break;
+                    }
+                }
+            }
+            Some(c) if c.is_whitespace() => {}
+            Some(c) => kept.push(c),
+        }
+    }
+    let (name, after) = kept.strip_prefix('{')?.split_once('}')?;
     if !matches!(name, "alignat" | "alignat*" | "alignedat") {
         return None;
     }
-    let digits = after.trim_start().strip_prefix('{')?.split('}').next()?.trim();
+    let Some(digits) = after.strip_prefix('{').and_then(|a| a.split_once('}')).map(|(d, _)| d) else {
+        return Some(usize::MAX);
+    };
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
+        return Some(usize::MAX);
     }
     Some(digits.parse().unwrap_or(usize::MAX))
 }
@@ -721,6 +744,18 @@ mod tests {
         let r = "\\begin{alignedat}{99999999}a\\end{alignedat}";
         assert!(check_caps(r).is_err_and(|e| e.message.contains("matrix cells")));
         assert!(check_caps("\\begin{alignedat}{2}a&b&c&d\\end{alignedat}").is_ok());
+        // A comment, inner spaces or a macro in the count do not hide it from the cap.
+        for hidden in [
+            "\\begin{alignedat}%\n{99999999}a\\end{alignedat}",
+            "\\begin %c\n {alignedat}{99999999}a\\end{alignedat}",
+            "\\begin{alignedat}{9 9}a\\end{alignedat}",
+            "\\begin{alignedat}{9%x\n9}a\\end{alignedat}",
+            "\\begin{align%x\nedat}{99}a\\end{alignedat}",
+            "\\begin{alignedat}{9\\relax9}a\\end{alignedat}",
+        ] {
+            assert!(check_caps(hidden).is_err_and(|e| e.message.contains("matrix cells")), "{hidden}");
+        }
+        assert!(check_caps("\\begin{alignedat} {2} % two pairs\na&b&c&d\\end{alignedat}").is_ok());
         assert!(layout("\\begin{CD}A @>f>> B \\\\ @VVV @VVV \\\\ C @>>> D\\end{CD}").is_ok());
         assert!(check_caps("\\operatorname{curl} 50\\%").is_ok());
         let two = format!("{0}{0}", "\\begin{matrix}a&b\\\\c&d\\end{matrix}");
