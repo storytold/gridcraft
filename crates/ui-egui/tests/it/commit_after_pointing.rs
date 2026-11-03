@@ -34,7 +34,7 @@ fn commit_after_pointing_on_another_sheet_writes_to_the_origin_sheet() {
     assert!(h.state_mut().commit_edit(0, 0, false, false));
     let at = CellRef::parse("F8").unwrap();
     let wb = &h.state().session.active().unwrap().wb;
-    assert_eq!(wb.active_sheet, 0, "the origin sheet is shown again");
+    assert_eq!(wb.active_sheet(), 0, "the origin sheet is shown again");
     assert!(wb.sheet(0).unwrap().cell(at).is_some_and(|c| c.formula.is_some()), "formula written on the origin sheet");
     assert!(wb.sheet(1).unwrap().cell(at).is_none(), "the pointed-at sheet is untouched");
 }
@@ -44,7 +44,7 @@ fn ctrl_enter_after_pointing_on_another_sheet_fills_the_origin_selection() {
     let mut h = pointing_on_second_sheet("B2:C3");
     assert!(h.state_mut().commit_edit(0, 0, false, true));
     let wb = &h.state().session.active().unwrap().wb;
-    assert_eq!(wb.active_sheet, 0, "the origin sheet is shown again");
+    assert_eq!(wb.active_sheet(), 0, "the origin sheet is shown again");
     for a1 in ["B2", "C2", "B3", "C3"] {
         let at = CellRef::parse(a1).unwrap();
         assert!(wb.sheet(0).unwrap().cell(at).is_some_and(|c| c.formula.is_some()), "{a1} filled on the origin sheet");

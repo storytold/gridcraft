@@ -4,7 +4,10 @@ use gridcraft_core::{CellError, CellRef, RangeRef, Value};
 use gridcraft_model::{CalcMode, Cell, DefinedName, Formula, Workbook};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{
+    CommandSpec, EngineError, Result, Session, always, bad, bool_param, cell_param, cmd, edit, f64_param, has_doc, ok, stash, str_param,
+    target_range, target_ranges, target_sheet, u32_param,
+};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -66,6 +69,15 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!(query "formulas.tracePrecedents", "Trace Precedents", ["Formulas", "Formula Auditing"], None, "{cell?} → ranges", has_doc, trace_precedents),
         cmd!(query "formulas.traceDependents", "Trace Dependents", ["Formulas", "Formula Auditing"], None, "{cell?} → cells", has_doc, trace_dependents),
+        cmd!(
+            query "formulas.traceError",
+            "Trace Error",
+            ["Formulas", "Formula Auditing"],
+            None,
+            "{cell?} → {sheet, cell, error, source: {sheet, cell}, arrows: [{from: {sheet, range}, to: {sheet, cell}, kind: \"error\"|\"precedent\"}], truncated}: from the cell, follows the first reference that shows the same error (in a range, its first cell showing it) back to the cell the error starts in, `source`. `error` arrows link the cells on the way; `precedent` arrows lead from the source's own references into it. A cell without an error gives `error` and `source` null and no arrows. A chain longer than 10,000 links stops there with `truncated` true and `source` null.",
+            has_doc,
+            trace_error
+        ),
         cmd!(noundo "formulas.selectPrecedents", "Select Precedents", ["Formulas", "Formula Auditing"], Some("Ctrl+["), "{cell?, all?: true = every level (Ctrl+Shift+[)} → selects the precedent cells", has_doc, select_precedents),
         cmd!(noundo "formulas.selectDependents", "Select Dependents", ["Formulas", "Formula Auditing"], Some("Ctrl+]"), "{cell?, all?: true = every level (Ctrl+Shift+])}", has_doc, select_dependents),
         cmd!(noundo "formulas.removeArrows", "Remove Arrows", ["Formulas", "Formula Auditing"], None, "{}", has_doc, |_, _| ok()),
@@ -96,75 +108,73 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-fn auto_sum(s: &mut Session, p: &Json) -> Result<Json> {
-    let func = str_param(p, "function").unwrap_or("SUM").to_ascii_uppercase();
-    let d = s.doc()?;
-    let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
-    let sel = match str_param(p, "range") {
-        Some(_) => target_range(s, p)?,
-        None => d.selection.current(),
-    };
-    if !sel.is_single() {
-        // A selection: totals go in its empty last row or column, as Excel's do, and otherwise
-        // past it: to the right of a single row, below each column of anything taller. Columns
-        // past the sheet's data get no total (a whole-row selection doesn't write 16,384
-        // formulas), nor do rows past it, and all totals are one edit (one undo step).
-        let Some(used) = sh.cells.used_range() else { return ok() };
-        let empty = |row: u32, col: u32| sh.value(CellRef::new(row, col)).is_empty();
-        let sum = |from: CellRef, to: CellRef| format!("={func}({})", RangeRef::new(from, to).a1());
-        let last_col = used.end.col.min(sel.end.col);
-        let mut writes: Vec<(CellRef, String)> = Vec::new();
-        if sel.start.row == sel.end.row {
-            // One row: its total goes in its last cell when that is empty, else just after it.
-            let row = sel.start.row;
-            let end_col = if sel.is_full_rows() { last_col } else { sel.end.col };
-            let (data_end, out) = if end_col > sel.start.col && empty(row, end_col) { (end_col - 1, end_col) } else { (end_col, end_col + 1) };
-            if out >= gridcraft_core::MAX_COLS {
-                return Err(EngineError::Other("There's no room to the right of the selection for the total.".into()));
-            }
-            writes.push((CellRef::new(row, out), sum(CellRef::new(row, sel.start.col), CellRef::new(row, data_end))));
-        } else {
-            // An empty last column takes each row's total; rows past the data get none.
-            let rows_end = sel.end.row.min(used.end.row);
-            let right_blank = !sel.is_full_rows() && sel.end.col > sel.start.col && (sel.start.row..=rows_end).all(|r| empty(r, sel.end.col));
-            let data_end_col = if right_blank { sel.end.col - 1 } else { last_col };
-            let last_row_blank = (sel.start.col..=last_col).all(|c| empty(sel.end.row, c));
-            let (data_end_row, out_row) = if last_row_blank { (sel.end.row.saturating_sub(1), sel.end.row) } else { (sel.end.row, sel.end.row + 1) };
-            // Each column's total, below it: unless only the last column is there to take totals.
-            if last_row_blank || !right_blank {
-                if out_row >= gridcraft_core::MAX_ROWS {
-                    return Err(EngineError::Other("There's no room below the selection for the totals.".into()));
-                }
-                for c in sel.start.col..=data_end_col.min(last_col) {
-                    writes.push((CellRef::new(out_row, c), sum(CellRef::new(sel.start.row, c), CellRef::new(data_end_row, c))));
-                }
-            }
-            if right_blank {
-                for r in sel.start.row..=data_end_row.min(rows_end) {
-                    writes.push((CellRef::new(r, sel.end.col), sum(CellRef::new(r, sel.start.col), CellRef::new(r, data_end_col))));
-                }
-                // Both empty: the corner takes the total of the whole block.
-                if last_row_blank {
-                    writes.push((
-                        CellRef::new(sel.end.row, sel.end.col),
-                        sum(CellRef::new(sel.start.row, sel.start.col), CellRef::new(data_end_row, data_end_col)),
-                    ));
-                }
-            }
-        }
-        let sheet = d.wb.active_sheet;
-        edit(s, |cx| {
-            for (c, f) in &writes {
-                let cell = super::edit::input_to_cell(f, sheet, *c, &mut cx.wb)?.unwrap_or_default();
-                cx.sheet_mut(sheet)?.set_cell(*c, cell);
-                cx.touch(sheet, *c);
-            }
-            Ok(())
-        })?;
-        return ok();
+/// Whether a cell on the active sheet is empty.
+fn blank(sh: &gridcraft_model::sheet::Sheet, row: u32, col: u32) -> bool {
+    sh.value(CellRef::new(row, col)).is_empty()
+}
+
+fn sum_formula(func: &str, from: CellRef, to: CellRef) -> String {
+    format!("={func}({})", RangeRef::new(from, to).a1())
+}
+
+/// Totals for a multi-cell selection as `(cell, formula)` writes. `None` when the sheet has no data.
+fn selection_totals(sh: &gridcraft_model::sheet::Sheet, sel: RangeRef, func: &str) -> Result<Option<Vec<(CellRef, String)>>> {
+    // A selection: totals go in its empty last row or column, as Excel's do, and otherwise
+    // past it: to the right of a single row, below each column of anything taller. Columns
+    // past the sheet's data get no total (a whole-row selection doesn't write 16,384
+    // formulas), nor do rows past it, and all totals are one edit (one undo step).
+    let Some(used) = sh.cells.used_range() else { return Ok(None) };
+    if sel.start.row == sel.end.row { single_row_totals(sh, sel, used, func).map(Some) } else { block_totals(sh, sel, used, func).map(Some) }
+}
+
+/// One row: its total goes in its last cell when that is empty, else just after it.
+fn single_row_totals(sh: &gridcraft_model::sheet::Sheet, sel: RangeRef, used: RangeRef, func: &str) -> Result<Vec<(CellRef, String)>> {
+    let row = sel.start.row;
+    let last_col = used.end.col.min(sel.end.col);
+    let end_col = if sel.is_full_rows() { last_col } else { sel.end.col };
+    let (data_end, out) = if end_col > sel.start.col && blank(sh, row, end_col) { (end_col - 1, end_col) } else { (end_col, end_col + 1) };
+    if out >= gridcraft_core::MAX_COLS {
+        return Err(EngineError::Other("There's no room to the right of the selection for the total.".into()));
     }
-    // Single cell: guess the range above, else to the left.
-    let at = sel.start;
+    Ok(vec![(CellRef::new(row, out), sum_formula(func, CellRef::new(row, sel.start.col), CellRef::new(row, data_end)))])
+}
+
+/// A block of rows: each column's total below it, and each row's total in an empty last column.
+fn block_totals(sh: &gridcraft_model::sheet::Sheet, sel: RangeRef, used: RangeRef, func: &str) -> Result<Vec<(CellRef, String)>> {
+    let mut writes: Vec<(CellRef, String)> = Vec::new();
+    let last_col = used.end.col.min(sel.end.col);
+    // An empty last column takes each row's total; rows past the data get none.
+    let rows_end = sel.end.row.min(used.end.row);
+    let right_blank = !sel.is_full_rows() && sel.end.col > sel.start.col && (sel.start.row..=rows_end).all(|r| blank(sh, r, sel.end.col));
+    let data_end_col = if right_blank { sel.end.col - 1 } else { last_col };
+    let last_row_blank = (sel.start.col..=last_col).all(|c| blank(sh, sel.end.row, c));
+    let (data_end_row, out_row) = if last_row_blank { (sel.end.row.saturating_sub(1), sel.end.row) } else { (sel.end.row, sel.end.row + 1) };
+    // Each column's total, below it: unless only the last column is there to take totals.
+    if last_row_blank || !right_blank {
+        if out_row >= gridcraft_core::MAX_ROWS {
+            return Err(EngineError::Other("There's no room below the selection for the totals.".into()));
+        }
+        for c in sel.start.col..=data_end_col.min(last_col) {
+            writes.push((CellRef::new(out_row, c), sum_formula(func, CellRef::new(sel.start.row, c), CellRef::new(data_end_row, c))));
+        }
+    }
+    if right_blank {
+        for r in sel.start.row..=data_end_row.min(rows_end) {
+            writes.push((CellRef::new(r, sel.end.col), sum_formula(func, CellRef::new(r, sel.start.col), CellRef::new(r, data_end_col))));
+        }
+        // Both empty: the corner takes the total of the whole block.
+        if last_row_blank {
+            writes.push((
+                CellRef::new(sel.end.row, sel.end.col),
+                sum_formula(func, CellRef::new(sel.start.row, sel.start.col), CellRef::new(data_end_row, data_end_col)),
+            ));
+        }
+    }
+    Ok(writes)
+}
+
+/// The range a single cell's AutoSum guesses: the numbers above it, else the numbers to its left.
+fn guessed_range(sh: &gridcraft_model::sheet::Sheet, at: CellRef) -> Option<RangeRef> {
     let numeric = |c: CellRef| sh.value(c).is_number();
     let mut range = None;
     if at.row > 0 && (numeric(CellRef::new(at.row - 1, at.col)) || at.col == 0 || !numeric(CellRef::new(at.row, at.col - 1))) {
@@ -186,7 +196,33 @@ fn auto_sum(s: &mut Session, p: &Json) -> Result<Json> {
         }
         range = Some(RangeRef::new(CellRef::new(at.row, left), CellRef::new(at.row, at.col - 1)));
     }
-    let text = match range {
+    range
+}
+
+fn auto_sum(s: &mut Session, p: &Json) -> Result<Json> {
+    let func = str_param(p, "function").unwrap_or("SUM").to_ascii_uppercase();
+    let d = s.doc()?;
+    let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
+    let sel = match str_param(p, "range") {
+        Some(_) => target_range(s, p)?,
+        None => d.selection.current(),
+    };
+    if !sel.is_single() {
+        let Some(writes) = selection_totals(sh, sel, &func)? else { return ok() };
+        let sheet = d.wb.active_sheet();
+        edit(s, |cx| {
+            for (c, f) in &writes {
+                let cell = super::edit::input_to_cell(f, sheet, *c, &mut cx.wb)?.unwrap_or_default();
+                cx.sheet_mut(sheet)?.set_cell(*c, cell);
+                cx.touch(sheet, *c);
+            }
+            Ok(())
+        })?;
+        return ok();
+    }
+    // Single cell: guess the range above, else to the left.
+    let at = sel.start;
+    let text = match guessed_range(sh, at) {
         Some(r) => format!("={func}({})", r.a1()),
         None => {
             s.ui_requests.push(crate::UiRequest::EditCell(Some(format!("={func}()"))));
@@ -474,7 +510,7 @@ fn name_manager(s: &mut Session, _: &Json) -> Result<Json> {
         .iter()
         .filter(|n| !n.hidden)
         .map(|n| {
-            let sheet = n.scope.unwrap_or(d.wb.active_sheet);
+            let sheet = n.scope.unwrap_or(d.wb.active_sheet());
             // parse_name, not evaluate's parse: a name's top-level commas are unions.
             let v = gridcraft_formula::parse_name(&n.formula)
                 .map_or(Value::Error(CellError::Name), |e| gridcraft_calc::recalc::evaluate_expr(&d.wb, sheet, CellRef::default(), &e));
@@ -556,7 +592,7 @@ fn create_from_selection(s: &mut Session, p: &Json) -> Result<Json> {
 /// active sheet's own, without hidden names, in alphabetical order. A sheet's name hides the
 /// workbook name it shares.
 pub fn pasteable_names(wb: &Workbook) -> Vec<(String, String)> {
-    let sheet = wb.active_sheet;
+    let sheet = wb.active_sheet();
     let shown = |local: bool| wb.names.iter().filter(move |n| !n.hidden && n.scope.is_some() == local && n.scope.is_none_or(|i| i == sheet));
     let local: std::collections::HashSet<String> = shown(true).map(|n| gridcraft_formula::fold_name(&n.name)).collect();
     let mut out: Vec<(String, String)> = shown(true).map(|n| (n.name.clone(), format!("={}", n.formula))).collect();
@@ -590,7 +626,7 @@ fn paste_name(s: &mut Session, p: &Json) -> Result<Json> {
     if at.row.saturating_add(rows) > gridcraft_core::MAX_ROWS || at.col.saturating_add(2) > gridcraft_core::MAX_COLS {
         return Err(EngineError::Other("There isn't room on the sheet for the list of names.".into()));
     }
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     let range = RangeRef::new(at, CellRef::new(at.row + rows - 1, at.col + 1));
     edit(s, |cx| {
         for (row, (name, refers)) in (at.row..).zip(&names) {
@@ -599,7 +635,7 @@ fn paste_name(s: &mut Session, p: &Json) -> Result<Json> {
                 let sh = cx.sheet_mut(sheet)?;
                 let style = sh.style_id(c);
                 // The second column holds the refers-to text as a text value, with no formula.
-                sh.set_cell(c, Cell { value: Value::text(text.as_str()), formula: None, style });
+                sh.set_cell(c, Cell { value: Value::text(text.as_str()), formula: None, style, py: None });
                 cx.touch(sheet, c);
             }
         }
@@ -610,7 +646,7 @@ fn paste_name(s: &mut Session, p: &Json) -> Result<Json> {
 fn trace_precedents(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
-    let areas = d.calc.graph.precedents_of((d.wb.active_sheet, at));
+    let areas = d.calc.graph.precedents_of((d.wb.active_sheet(), at));
     let v: Vec<Json> = areas.iter().map(|a| json!({"sheet": d.wb.sheet(a.sheet).map(|s| s.name.clone()), "range": a.range.a1()})).collect();
     Ok(Json::Array(v))
 }
@@ -619,11 +655,84 @@ fn trace_dependents(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
     let mut deps = Vec::new();
-    d.calc.graph.dependents(d.wb.active_sheet, at, &mut deps);
+    d.calc.graph.dependents(d.wb.active_sheet(), at, &mut deps);
     deps.sort();
     deps.dedup();
     let v: Vec<Json> = deps.iter().map(|(si, c)| json!({"sheet": d.wb.sheet(*si).map(|s| s.name.clone()), "cell": c.a1()})).collect();
     Ok(Json::Array(v))
+}
+
+/// Trace Error goes back at most this many links; a longer chain stops there.
+const TRACE_ERROR_LINKS: usize = 10_000;
+
+/// Trace Error: from the cell, the first reference in its formula that shows the same error
+/// (in a range, the range's first cell showing it, row by row), then that cell's, and so on to the
+/// cell the error starts in: one none of whose references shows it, or one without references.
+/// Arrows link the cells on the way, and lead from the source's own references into it.
+fn trace_error(s: &mut Session, p: &Json) -> Result<Json> {
+    use std::collections::HashSet;
+    let d = s.doc()?;
+    let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
+    let sheet = d.wb.active_sheet();
+    let name = |si: usize| d.wb.sheet(si).map(|sh| sh.name.clone());
+    let cell = |(si, c): (usize, CellRef)| json!({"sheet": name(si), "cell": c.a1()});
+    let Some(error) = d.wb.sheet(sheet).and_then(|sh| sh.value(at).as_error()) else {
+        return Ok(json!({"sheet": name(sheet), "cell": at.a1(), "error": null, "source": null, "arrows": [], "truncated": false}));
+    };
+    // A value spilled by a dynamic array comes from its anchor's formula.
+    let precedents = |(si, c): (usize, CellRef)| {
+        let anchor = d.wb.sheet(si).filter(|sh| sh.cell(c).is_none_or(|x| x.formula.is_none())).and_then(|sh| sh.spill_anchor(c));
+        d.calc.graph.precedents_of((si, anchor.unwrap_or(c)))
+    };
+    // The walk keeps to cells it hasn't been to, so a circular reference ends it.
+    let mut chain = vec![(sheet, at)];
+    let mut seen: HashSet<(usize, CellRef)> = HashSet::from([(sheet, at)]);
+    let mut truncated = false;
+    let mut last = (sheet, at);
+    while let Some(next) = precedents(last).iter().find_map(|a| first_showing(&d.wb, a, error)) {
+        if !seen.insert(next) {
+            break;
+        }
+        if chain.len() > TRACE_ERROR_LINKS {
+            truncated = true;
+            break;
+        }
+        chain.push(next);
+        last = next;
+    }
+    let mut arrows = Vec::new();
+    // A chain cut short hasn't reached its source.
+    if !truncated {
+        let mut drawn = HashSet::new();
+        for a in precedents(last) {
+            if drawn.insert(a) {
+                arrows.push(json!({"from": {"sheet": name(a.sheet), "range": a.range.a1()}, "to": cell(last), "kind": "precedent"}));
+            }
+        }
+    }
+    // From the source outwards, as the error travels.
+    for pair in chain.windows(2).rev() {
+        if let [to, from] = pair {
+            arrows.push(json!({"from": {"sheet": name(from.0), "range": from.1.a1()}, "to": cell(*to), "kind": "error"}));
+        }
+    }
+    let source = if truncated { Json::Null } else { cell(last) };
+    Ok(json!({"sheet": name(sheet), "cell": at.a1(), "error": error.as_str(), "source": source, "arrows": arrows, "truncated": truncated}))
+}
+
+/// The first cell of an area, row by row, that shows `error`: a stored cell or a value spilled
+/// into the area by a dynamic array.
+fn first_showing(wb: &Workbook, a: &gridcraft_calc::Area, error: CellError) -> Option<(usize, CellRef)> {
+    let sh = wb.sheet(a.sheet)?;
+    let holds = |c: &Cell| !c.value.is_empty() || c.formula.is_some();
+    let stored = sh.cells.iter_range(a.range).find(|(_, c)| holds(c) && c.value.as_error() == Some(error)).map(|(at, _)| at);
+    let spilled = sh
+        .spill
+        .range(a.range.start..)
+        .take_while(|(at, _)| **at <= a.range.end)
+        .find(|(at, v)| a.range.contains(**at) && v.as_error() == Some(error) && !sh.cell(**at).is_some_and(holds))
+        .map(|(at, _)| *at);
+    stored.into_iter().chain(spilled).min().map(|c| (a.sheet, c))
 }
 
 /// Excel's Ctrl+[ / Ctrl+]: select the precedent (or dependent) cells. When they all live on
@@ -632,7 +741,7 @@ fn select_trace_cells(s: &mut Session, p: &Json, precedents: bool) -> Result<Jso
     use std::collections::BTreeSet;
     let d = s.doc()?;
     let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     let all = bool_param(p, "all").unwrap_or(false);
     // (sheet, a1) pairs to select; direct level keeps whole precedent ranges, transitive cells.
     let mut found: BTreeSet<(usize, String)> = BTreeSet::new();
@@ -703,7 +812,7 @@ fn select_dependents(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn show_formulas(s: &mut Session, p: &Json) -> Result<Json> {
-    let sheet = s.doc()?.wb.active_sheet;
+    let sheet = s.doc()?.wb.active_sheet();
     let cur = s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.show_formulas);
     let on = bool_param(p, "on").unwrap_or(!cur);
     edit(s, |cx| {
@@ -773,7 +882,7 @@ fn error_checking(s: &mut Session, _: &Json) -> Result<Json> {
 fn evaluate_formula(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     let text = match str_param(p, "formula") {
         Some(f) => f.trim_start_matches('=').to_string(),
         None => {
@@ -812,7 +921,7 @@ fn evaluate(s: &mut Session, p: &Json) -> Result<Json> {
     let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
     let expr = crate::cmd::edit::parse_typed_formula(f.strip_prefix('=').unwrap_or(f))?;
     crate::cmd::edit::check_arg_counts(&expr)?;
-    let v = gridcraft_calc::recalc::evaluate_expr(&d.wb, d.wb.active_sheet, at, &expr);
+    let v = gridcraft_calc::recalc::evaluate_expr(&d.wb, d.wb.active_sheet(), at, &expr);
     Ok(crate::cmd::inspect::value_json(&v))
 }
 

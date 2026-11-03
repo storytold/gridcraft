@@ -116,6 +116,55 @@ pub fn catalog_keys(source: &str) -> BTreeSet<String> {
     keys
 }
 
+/// The character a `\u{...}` escape stands for, if it names a valid code point.
+fn unicode_escape(chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>) -> Option<char> {
+    let mut hex = String::new();
+    for (_, c) in chars.by_ref() {
+        match c {
+            '}' => break,
+            '{' => {}
+            c => hex.push(c),
+        }
+    }
+    u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32)
+}
+
+/// The value of a string literal whose opening quote was just read, and the byte offset past
+/// its closing quote (`len`, the source's length, when it is never closed).
+fn string_literal(chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>, len: usize) -> (String, usize) {
+    let mut value = String::new();
+    let mut end = len;
+    while let Some((j, c)) = chars.next() {
+        match c {
+            '"' => {
+                end = j + 1;
+                break;
+            }
+            '\\' => match chars.next().map(|(_, c)| c) {
+                Some('n') => value.push('\n'),
+                Some('t') => value.push('\t'),
+                Some('r') => value.push('\r'),
+                Some('0') => value.push('\0'),
+                Some(c @ ('\\' | '"' | '\'')) => value.push(c),
+                Some('u') => {
+                    if let Some(c) = unicode_escape(chars) {
+                        value.push(c);
+                    }
+                }
+                // A line continuation skips the newline and the next line's indentation.
+                Some('\n') => {
+                    while chars.peek().is_some_and(|(_, c)| c.is_whitespace()) {
+                        chars.next();
+                    }
+                }
+                _ => {}
+            },
+            c => value.push(c),
+        }
+    }
+    (value, end)
+}
+
 /// Every string literal outside `//` comments: its decoded value, and the byte range from its
 /// opening quote to just past its closing one.
 fn literals(source: &str) -> Vec<(String, usize, usize)> {
@@ -133,44 +182,7 @@ fn literals(source: &str) -> Vec<(String, usize, usize)> {
         if c != '"' {
             continue;
         }
-        let mut value = String::new();
-        let mut end = source.len();
-        while let Some((j, c)) = chars.next() {
-            match c {
-                '"' => {
-                    end = j + 1;
-                    break;
-                }
-                '\\' => match chars.next().map(|(_, c)| c) {
-                    Some('n') => value.push('\n'),
-                    Some('t') => value.push('\t'),
-                    Some('r') => value.push('\r'),
-                    Some('0') => value.push('\0'),
-                    Some(c @ ('\\' | '"' | '\'')) => value.push(c),
-                    Some('u') => {
-                        let mut hex = String::new();
-                        for (_, c) in chars.by_ref() {
-                            match c {
-                                '}' => break,
-                                '{' => {}
-                                c => hex.push(c),
-                            }
-                        }
-                        if let Some(c) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
-                            value.push(c);
-                        }
-                    }
-                    // A line continuation skips the newline and the next line's indentation.
-                    Some('\n') => {
-                        while chars.peek().is_some_and(|(_, c)| c.is_whitespace()) {
-                            chars.next();
-                        }
-                    }
-                    _ => {}
-                },
-                c => value.push(c),
-            }
-        }
+        let (value, end) = string_literal(&mut chars, source.len());
         out.push((value, i, end));
     }
     out

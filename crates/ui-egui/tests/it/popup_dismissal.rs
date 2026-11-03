@@ -106,7 +106,7 @@ fn filter_closes_when_clicking_another_table_or_sheet() {
         click(&mut h, outside, PointerButton::Primary);
         assert!(!is_open(&h, Menu::Filter), "filter stayed open after switching table/sheet");
         if sheet {
-            assert_eq!(h.state().session.active().unwrap().wb.active_sheet, 1);
+            assert_eq!(h.state().session.active().unwrap().wb.active_sheet(), 1);
         } else {
             assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "H2");
         }

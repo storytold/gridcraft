@@ -6,7 +6,7 @@ use gridcraft_formula::{Expr, StructItem};
 use gridcraft_model::{EditRange, PasswordHash, SheetProtection, StyleId, Visibility, password_hash};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, DocState, EngineError, Result, Session, bad, bool_param, cmd, edit, has_doc, str_param, target_ranges, target_sheet};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -36,6 +36,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Allow Edit Ranges…",
             menu: &["Review", "Protect"],
             shortcut: None,
+            shortcut_mac: None,
             params: "{action?: list (default) | add | modify | delete | unlock, title?, range?, password?, newTitle?, sheet?} → ranges",
             enabled: has_doc,
             run: allow_edit_ranges,
@@ -120,7 +121,7 @@ fn has_comments(s: &Session) -> std::result::Result<(), String> {
 fn step_comment(s: &mut Session, forward: bool) -> Result<Json> {
     let list = comment_cells(s);
     let d = s.doc()?;
-    let here = (d.wb.active_sheet, d.selection.active);
+    let here = (d.wb.active_sheet(), d.selection.active);
     let target = if forward {
         list.iter().find(|c| **c > here).or_else(|| list.first())
     } else {
@@ -737,7 +738,7 @@ mod tests {
 
     fn at(s: &Session) -> (usize, String) {
         let d = s.doc().unwrap();
-        (d.wb.active_sheet, d.selection.active.a1())
+        (d.wb.active_sheet(), d.selection.active.a1())
     }
 
     #[test]
@@ -806,7 +807,7 @@ mod tests {
         );
         let prot: SheetProtection = serde_json::from_str(&old).unwrap();
         assert_eq!((prot.legacy_password_hash, prot.password.is_none()), (Some(password_hash("old")), true));
-        let i = s.doc().unwrap().wb.active_sheet;
+        let i = s.doc().unwrap().wb.active_sheet();
         let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
         std::sync::Arc::make_mut(&mut wb.sheets[i]).protection = Some(prot);
         assert!(s.execute("review.unprotectSheet", json!({"password": "new"})).is_err());
