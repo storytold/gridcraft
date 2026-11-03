@@ -386,6 +386,7 @@ pub struct Prefs {
     pub user_name: String,
     pub default_font: String,
     pub default_font_size: f32,
+    pub default_column_width: f32,
     pub sheets_in_new_workbook: usize,
     pub r1c1: bool,
     /// Words added with Add to Dictionary.
@@ -427,6 +428,7 @@ impl Default for Prefs {
             user_name: "GridCraft User".into(),
             default_font: gridcraft_model::DEFAULT_FONT.into(),
             default_font_size: gridcraft_model::DEFAULT_FONT_SIZE,
+            default_column_width: gridcraft_model::DEFAULT_COL_WIDTH,
             sheets_in_new_workbook: 1,
             r1c1: false,
             user_dictionary: vec![],
@@ -437,6 +439,14 @@ impl Default for Prefs {
     }
 }
 
+impl Prefs {
+    /// The width applied when a blank workbook is created, in 96-dpi pixels.
+    /// Invalid values from hand-edited preferences fall back to the default.
+    pub fn new_workbook_column_width(&self) -> f32 {
+        let width = self.default_column_width;
+        if width.is_finite() && (0.0..=1800.0).contains(&width) { width } else { gridcraft_model::DEFAULT_COL_WIDTH }
+    }
+}
 /// Requests from commands to the UI (open a dialog, show a message…).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum UiRequest {
@@ -608,9 +618,17 @@ impl Session {
         let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("Book{n}") && d.path.is_none())).unwrap_or(1);
         let mut wb = Workbook::new();
         wb.props.author = self.prefs.user_name.clone();
+        // A new workbook uses the application preference; existing workbooks
+        // retain the widths stored in their own sheets.
+        let width = self.prefs.new_workbook_column_width();
+        for sheet in &mut wb.sheets {
+            Arc::make_mut(sheet).default_col_width = width;
+        }
         for _ in 1..self.prefs.sheets_in_new_workbook.clamp(1, 255) {
             let name = wb.next_sheet_name();
-            wb.sheets.push(Arc::new(gridcraft_model::Sheet::new(name)));
+            let mut sheet = gridcraft_model::Sheet::new(name);
+            sheet.default_col_width = width;
+            wb.sheets.push(Arc::new(sheet));
         }
         self.add_document(DocState::new(wb, None, format!("Book{n}"), Trust::Local))
     }

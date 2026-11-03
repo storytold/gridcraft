@@ -14,6 +14,8 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut formula_bar, lang.tr("Show formula bar")).changed() {
         app.run_or_alert("view.formulaBar", json!({"on": formula_bar}));
     }
+    ui.add_space(14.0);
+    new_workbook_width_option(app, ui, lang);
     ui.add_space(18.0);
     section(ui, lang, "Options|Editing");
     let mut autocomplete = app.ui.autocomplete;
@@ -35,6 +37,31 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     dim(ui, lang.tr("Calculation settings are saved with the workbook."));
 }
 
+/// Set the column width for future blank workbooks without changing open files.
+fn new_workbook_width_option(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
+    let width = app.session.prefs.new_workbook_column_width();
+    let separator = lang.ui_decimal_separator();
+    let display_width = width.to_string().replace('.', &separator.to_string());
+    ui.horizontal(|ui| {
+        let label = ui.label(lang.tr("Default column width for new workbooks (pixels)"));
+        let id = ui.make_persistent_id("backstage_new_workbook_default_width");
+        let committed = crate::widgets::committed_text(ui, id, &display_width, Some(80.0));
+        if let Some(response) = ui.ctx().read_response(id) {
+            response.labelled_by(label.id);
+        }
+        if let Some(text) = committed {
+            let normalized = text.trim().replace(separator, ".");
+            let parsed = normalized.parse::<f32>().ok().filter(|w| w.is_finite() && (0.0..=1800.0).contains(w));
+            match parsed {
+                Some(w) if w != width => {
+                    app.run_or_alert("options.newWorkbookColumnWidth", json!({"width": w}));
+                }
+                Some(_) => {}
+                None => refuse(app, ui, "Default column width must be a number from 0 to 1800 pixels."),
+            }
+        }
+    });
+}
 /// The display theme and interface language controls of the General section.
 fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
     egui::Grid::new("backstage_options_general").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
