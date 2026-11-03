@@ -7,12 +7,14 @@ never run it in a hosted workflow on a fork pull request.
 
 ```powershell
 gh pr diff 2463 --repo storytold/gridcraft > pr.diff
-.\oracle.ps1 -Diff pr.diff -Out C:\oracle-out
-.\oracle.ps1 -CaseFile C:\oracle-out\cases.tsv -Out C:\oracle-out2   # rerun the same cases
-.\oracle.ps1 -SelfTest                                      # parser tests; no Excel required
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\oracle.ps1 -Diff pr.diff -Out C:\oracle-out
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\oracle.ps1 -CaseFile C:\oracle-out\cases.tsv -Out C:\oracle-out2   # rerun the same cases
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\oracle.ps1 -SelfTest                                      # parser tests; no Excel required
 ```
 
-From WSL: `powershell.exe -NoProfile -File <path>\oracle.ps1 ...` (Excel cannot save to a
+`-ExecutionPolicy Bypass` applies only to that PowerShell process; it does not change the machine policy.
+
+From WSL: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <path>\oracle.ps1 ...` (Excel cannot save to a
 `\\wsl.localhost` path, so the script saves locally and copies).
 
 Output in `-Out`:

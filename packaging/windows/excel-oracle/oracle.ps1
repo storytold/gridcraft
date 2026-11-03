@@ -105,6 +105,8 @@ function Get-DeniedReason([string]$formula) {
 
 # A tab or newline inside a case would break the TSV, so fields are escaped (\\ \t \r \n) and decoded when a cases file is read.
 function ConvertTo-Cell([string]$s) { ($s -replace '\\', '\\' -replace "`t", '\t' -replace "`r", '\r' -replace "`n", '\n') }
+function Protect-TsvText([string]$s) { if ($s -match '^[=+@-]') { "'$s" } else { $s } }
+function Format-TsvExcel([string]$s, [string]$type) { if ($type -eq 'text') { Protect-TsvText $s } else { $s } }
 function ConvertFrom-Cell([string]$s) {
     [regex]::Replace($s, '\\(.)', { switch ($args[0].Groups[1].Value) { 't' { "`t" } 'r' { "`r" } 'n' { "`n" } default { $args[0].Groups[1].Value } } })
 }
@@ -248,6 +250,9 @@ diff --git a/crates/functions/src/oracle_test.rs b/crates/functions/src/oracle_t
         if ((Get-DeniedReason '=CELL("filename",A1)') -notmatch 'local machine metadata') { throw 'CELL metadata was not denied' }
         if (-not (Get-DeniedReason "='Other Sheet'!A1")) { throw 'sheet reference was not denied' }
         if ((ConvertTo-ExcelNumber '-d(2026, 1, 1)') -ne '-DATE(2026,1,1)') { throw 'negative date sign was lost' }
+        if ((Protect-TsvText '=case') -ne "'=case") { throw 'formula-leading case id was not neutralized' }
+        if ((Format-TsvExcel '-2' 'num') -ne '-2') { throw 'negative numeric result was changed' }
+        if ((Format-TsvExcel '-2' 'text') -ne "'-2") { throw 'formula-leading text result was not neutralized' }
         'Oracle parser self-tests passed (quote, I/O, nested argument, function name, metadata, sheet reference).'
     } finally {
         Remove-Item -LiteralPath $diffPath -Force -ErrorAction SilentlyContinue
@@ -402,13 +407,14 @@ if ($todo.Count) {
 $excelRows = @(if ($state -eq 'OK' -and $todo.Count) { $parsed = ConvertFrom-Json (Get-Content -Raw -LiteralPath (Join-Path $Out 'excel.json')); foreach ($r in $parsed) { $r } })
 $rows = @(); $j = 0
 foreach ($c in $cases) {
-    $excel = ''; $verdict = 'SKIP'; $exp = ConvertTo-Cell "$($c.Kind):$($c.Expected)"
+    $excel = ''; $excelType = ''; $verdict = 'SKIP'; $exp = ConvertTo-Cell "$($c.Kind):$($c.Expected)"
     if ($c.Kind -eq 'none') { $exp = '-' }
     if ($c.Skip) { $excel = $c.Skip }
     elseif ($state -ne 'OK') { $excel = $state; $verdict = 'FAIL' }
     else {
         $r = $excelRows[$j++]
         $excel = ConvertTo-Cell $r.Excel
+        $excelType = $r.Type
         $verdict = switch ($c.Kind) {
             'none' { 'NOEXPECT' }
             'num' {
@@ -421,13 +427,14 @@ foreach ($c in $cases) {
         }
         if ($c.Kind -eq 'num' -and $null -ne $r.Expected) { $exp = 'num:' + ([double]$r.Expected).ToString('R', $inv) }
     }
-    $rows += [pscustomobject]@{ Id = $c.Id; Formula = ConvertTo-Cell $c.Formula; Expected = $exp; Excel = $excel; Verdict = $verdict }
+    $rows += [pscustomobject]@{ Id = ConvertTo-Cell $c.Id; Formula = ConvertTo-Cell $c.Formula; Expected = $exp; Excel = $excel; ExcelType = $excelType; Verdict = $verdict }
 }
 
 $tsv = @($rows | ForEach-Object {
-    $excel = "$($_.Excel)"
-    if ($excel -match '^[=+@-]') { $excel = "'$excel" }
-    "$($_.Id)`t$($_.Formula)`t$($_.Expected)`t$excel`t$($_.Verdict)"
+    $id = Protect-TsvText (ConvertFrom-Cell "$($_.Id)")
+    $formula = Protect-TsvText (ConvertFrom-Cell "$($_.Formula)")
+    $excel = Format-TsvExcel (ConvertFrom-Cell "$($_.Excel)") "$($_.ExcelType)"
+    "$id`t$formula`t$($_.Expected)`t$excel`t$($_.Verdict)"
 })
 $utf8 = [Text.UTF8Encoding]::new($false) # no BOM: the files are meant for other tools
 [IO.File]::WriteAllLines((Join-Path $Out 'results.tsv'), [string[]](@("id`tformula`texpected`texcel`tverdict") + $tsv), $utf8)
