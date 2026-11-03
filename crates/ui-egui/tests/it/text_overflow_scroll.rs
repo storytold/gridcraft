@@ -53,6 +53,18 @@ fn text_clips(h: &Harness, text: &str) -> Vec<Rect> {
         .collect()
 }
 
+/// Painted extents of the text shapes whose text is `text`, cut to their clip rects.
+fn text_visible_rects(h: &Harness, text: &str) -> Vec<Rect> {
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            Shape::Text(t) if t.galley.job.text == text => Some(t.visual_bounding_rect().intersect(s.clip_rect)),
+            _ => None,
+        })
+        .collect()
+}
+
 fn cell_rect(h: &Harness, cell: &str) -> Rect {
     let app = h.state();
     let sheet = app.session.active().unwrap().wb.active().unwrap();
@@ -408,6 +420,8 @@ fn frozen_column_text_keeps_its_cell_when_scrolled() {
             (clips[0].left() - a1.left()).abs() <= 0.5 && (clips[0].right() - a1.right()).abs() <= 0.5,
             "A1's text spans A1 at column {col}: {clips:?} vs {a1:?}"
         );
+        let visible = text_visible_rects(&h, LEFT);
+        assert!(visible.len() == 1 && visible[0].is_positive(), "A1's text shows inside its clip at column {col}: {visible:?}");
     }
 }
 
