@@ -695,6 +695,79 @@ fn bands_unit() {
     assert!(w.len() > 2);
 }
 
+/// The wrapper `wrap_lines` replaced, re-measuring strings, as the reference for its lines.
+fn wrap_lines_remeasuring(text: &str, font: Font, size: f32, width: f32) -> Vec<String> {
+    let mut out = Vec::new();
+    for para in text.split('\n') {
+        let mut line = String::new();
+        for word in para.split(' ') {
+            let cand = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+            if line.is_empty() || gridcraft_pdf::text_width(font, size, &cand) <= width {
+                line = cand;
+            } else {
+                out.push(std::mem::take(&mut line));
+                line = word.to_string();
+            }
+            while gridcraft_pdf::text_width(font, size, &line) > width && line.chars().count() > 1 {
+                let chars: Vec<char> = line.chars().collect();
+                let (mut lo, mut hi) = (1usize, chars.len());
+                while lo < hi {
+                    let mid = lo + (hi - lo).div_ceil(2);
+                    let cut: String = chars[..mid].iter().collect();
+                    if gridcraft_pdf::text_width(font, size, &cut) <= width {
+                        lo = mid;
+                    } else {
+                        hi = mid - 1;
+                    }
+                }
+                if lo == chars.len() {
+                    break;
+                }
+                out.push(chars[..lo].iter().collect());
+                line = chars[lo..].iter().collect();
+            }
+            if out.len() > 2000 {
+                return out;
+            }
+        }
+        out.push(line);
+    }
+    out
+}
+
+#[test]
+fn wrap_lines_matches_the_remeasuring_wrapper() {
+    let texts = [
+        "the quick brown fox jumps",
+        "Supercalifragilistic",
+        "a  b   c\n\nverylongwordthatneedsbreaking short\nend ",
+        "Wide WWWWWWWWWW words, iiiiiiii narrow ones; mixed MMMMiiiiMMMM",
+        "€ ü ß — unicode Ünïcödé text",
+        "",
+        " ",
+    ];
+    for text in texts {
+        for font in [Font::Helvetica, Font::HelveticaBold, Font::Courier] {
+            for (size, width) in [(10.0, 50.0), (10.0, 20.0), (11.0, 1.0), (8.0, 300.0), (12.0, 0.0)] {
+                assert_eq!(wrap_lines(text, font, size, width), wrap_lines_remeasuring(text, font, size, width), "{text:?} {font:?} {size} {width}");
+            }
+        }
+    }
+}
+
+#[test]
+fn wrapping_a_long_word_in_a_narrow_box_stops_at_the_line_limit() {
+    // One character per line: the old wrapper re-measured and copied the rest of the word for
+    // each of the 100,000 lines before checking the limit.
+    let word = "w".repeat(100_000);
+    let lines = wrap_lines(&word, Font::Helvetica, 10.0, 1.0);
+    assert!(lines.len() <= 2002, "{}", lines.len());
+    assert!(lines.iter().all(|l| l == "w"));
+    // A long paragraph in a very wide box is one line.
+    let para = vec!["word"; 50_000].join(" ");
+    assert_eq!(wrap_lines(&para, Font::Helvetica, 10.0, 1.0e9), vec![para.clone()]);
+}
+
 #[test]
 fn center_across_spans_following_empty_center_across_cells() {
     let mut styles = StyleTable::default();
