@@ -146,7 +146,7 @@ pub fn read(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     let mut styles = HashMap::new();
     for (at, index) in cell_formats {
         let Some(code) = formats.get(index).filter(|code| !code.is_empty() && *code != "General") else { continue };
-        let style = *styles.entry(index).or_insert_with(|| wb.styles.intern(Style { num_fmt: NumFmt(Arc::from(code.as_str())), ..Style::default() }));
+        let style = *styles.entry(index).or_insert_with(|| wb.styles.intern(Style { num_fmt: NumFmt::custom(code), ..Style::default() }));
         let mut cell = sheet.cell(at).cloned().unwrap_or_else(|| Cell::value(Value::Empty));
         cell.style = style;
         sheet.set_cell(at, cell);

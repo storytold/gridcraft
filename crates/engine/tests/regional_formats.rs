@@ -216,3 +216,28 @@ fn formatting_and_undo_preserve_an_imported_custom_date() {
     let (back, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
     assert_eq!(shown(&back, 2, &s.display_locale), "3/4/2026");
 }
+
+/// Explicit dates from a synthetic SYLK remain literal in a Romanian region and after XLSX saves.
+#[test]
+fn synthetic_sylk_keeps_literal_dates_after_xlsx_export() {
+    let date = gridcraft_engine::core::parse::parse_input("2026-03-04", DateSystem::D1900).value.as_f64().unwrap();
+    let loc = Locale::from_tag("ro-RO");
+    let at = CellRef::new(0, 0);
+    for (code, value, expected) in
+        [("m/d/yyyy", date, "3/4/2026"), ("m/d/yyyy h:mm", date + 0.5, "3/4/2026 12:00"), ("dd.mm.yyyy", date, "04.03.2026")]
+    {
+        let source = format!("ID;PSynthetic\nP;P{code}\nF;P0;Y1;X1\nC;Y1;X1;K{value}\nE\n");
+        let (mut wb, warnings) = gridcraft_engine::io::open_bytes("Synthetic.slk", source.as_bytes()).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        for _ in 0..3 {
+            let sh = wb.sheet(0).unwrap();
+            assert_eq!(cell_text_in(&wb, sh, at, &loc), expected, "{code}");
+            assert_eq!(sh.value(at), Value::Number(value));
+            assert_eq!(wb.styles.get(sh.style_id(at)).num_fmt.as_str(), code);
+            let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+            let (back, report) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+            assert!(report.warnings.is_empty());
+            wb = back;
+        }
+    }
+}
