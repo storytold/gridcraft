@@ -198,14 +198,16 @@ fn catalog_now() -> Option<&'static [Face]> {
     CATALOG.get().map(Vec::as_slice)
 }
 
+/// Set by the first [`start_scan`]: the scan was asked for, whoever filled [`CATALOG`].
+static SCAN_STARTED: OnceLock<()> = OnceLock::new();
+
 /// Start cataloging the installed fonts on a background thread, so the first frame doesn't wait for
 /// it. A no-op on wasm and after the scan has started. When it finishes it repaints `ctx`: the
 /// workbook fonts are bound in a frame, and an idle app runs none.
 pub fn start_scan(ctx: &egui::Context) {
-    static STARTED: OnceLock<()> = OnceLock::new();
     #[cfg(target_arch = "wasm32")]
     let _ = ctx;
-    STARTED.get_or_init(|| {
+    SCAN_STARTED.get_or_init(|| {
         #[cfg(not(target_arch = "wasm32"))]
         if CATALOG.get().is_none() {
             let ctx = ctx.clone();
@@ -399,6 +401,9 @@ mod tests {
             let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             crate::SheetApp::setup_desktop_context(&egui::Context::default(), false, crate::i18n::Language::En);
         }
+        // Another test may have filled the catalog already, so `scan_done` alone proves nothing: only
+        // this setup asks for the scan in this test binary.
+        assert!(SCAN_STARTED.get().is_some(), "the desktop setup never asked for the font scan");
         // Up to a minute, in 20 ms steps (no clock: `Instant::now` is disallowed).
         for _ in 0..3000 {
             if scan_done() {
