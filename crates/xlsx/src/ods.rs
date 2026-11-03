@@ -317,7 +317,7 @@ impl Import {
                     return Err(IoError::TooLarge("ODS contains more than 1024 sheets".into()));
                 }
                 let original = attr(reader, e, TABLE, b"name")?.unwrap_or_default();
-                let mut name = crate::read::unique_name(&self.wb, original.trim_matches('\''), self.wb.sheets.len());
+                let mut name = crate::read::SheetNames::of(&self.wb).unique(original.trim_matches('\''), self.wb.sheets.len());
                 if self.wb.check_sheet_name(&name, None).is_err() {
                     name = self.wb.next_sheet_name();
                 }
