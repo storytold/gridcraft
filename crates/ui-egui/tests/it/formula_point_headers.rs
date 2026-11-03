@@ -262,3 +262,43 @@ fn clicks_on_headers_replace_the_reference_after_a_drag_too() {
     click(&mut h, g);
     assert_eq!(text(&h), "=SUM(G:G");
 }
+
+fn shift_arrow(h: &mut egui_kittest::Harness<'_, SheetApp>, key: egui::Key) {
+    let modifiers = Modifiers { shift: true, ..Modifiers::NONE };
+    h.input_mut().events.push(Event::ModifiersChanged(modifiers));
+    h.step();
+    for pressed in [true, false] {
+        h.input_mut().events.push(Event::Key { key, physical_key: None, pressed, repeat: false, modifiers });
+        h.step();
+    }
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+}
+
+#[test]
+fn shift_arrow_after_a_header_drag_moves_the_dragged_end() {
+    let mut h = harness();
+    let (c, e) = (header_center(&h, false, 2), header_center(&h, false, 4));
+    press_and_drag(&mut h, c, e, Modifiers::NONE);
+    release(&mut h, e);
+    assert_eq!(text(&h), "=SUM(C:E");
+    shift_arrow(&mut h, egui::Key::ArrowRight);
+    assert_eq!(text(&h), "=SUM(C:F");
+
+    // Dragged leftwards, the dragged end is the first column.
+    let mut h = harness();
+    let (e, c) = (header_center(&h, false, 4), header_center(&h, false, 2));
+    press_and_drag(&mut h, e, c, Modifiers::NONE);
+    release(&mut h, c);
+    assert_eq!(text(&h), "=SUM(C:E");
+    shift_arrow(&mut h, egui::Key::ArrowLeft);
+    assert_eq!(text(&h), "=SUM(B:E");
+
+    let mut h = harness();
+    let (r1, r3) = (header_center(&h, true, 0), header_center(&h, true, 2));
+    press_and_drag(&mut h, r1, r3, Modifiers::NONE);
+    release(&mut h, r3);
+    assert_eq!(text(&h), "=SUM(1:3");
+    shift_arrow(&mut h, egui::Key::ArrowDown);
+    assert_eq!(text(&h), "=SUM(1:4");
+}

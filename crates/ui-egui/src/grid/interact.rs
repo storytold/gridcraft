@@ -827,21 +827,25 @@ fn point_header_first_move(app: &mut SheetApp, input: &InteractionInput<'_>) {
 
 /// Point mode dragged over the headers: the pointed reference runs from the anchor to the pointer.
 fn point_header_to(app: &mut SheetApp, geo: &Geo, sh: &Sheet, wb: &Workbook, drag: &Drag, p: Pos2) {
-    let range = match *drag {
+    // The pointer's end moves with Shift+arrow next; the opposite corner keeps it a whole column or row.
+    let (range, pointer, opposite) = match *drag {
         Drag::PointCols(anchor) => {
             let col = geo.col_at(sh, p.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0));
-            RangeRef::cols(anchor.min(col), anchor.max(col))
+            let range = RangeRef::cols(anchor.min(col), anchor.max(col));
+            (range, CellRef::new(range.start.row, col), CellRef::new(range.end.row, anchor))
         }
         Drag::PointRows(anchor) => {
             let row = geo.row_at(sh, p.y.clamp(geo.cells.top() + 1.0, geo.cells.bottom() - 1.0));
-            RangeRef::rows(anchor.min(row), anchor.max(row))
+            let range = RangeRef::rows(anchor.min(row), anchor.max(row));
+            (range, CellRef::new(row, range.start.col), CellRef::new(anchor, range.end.col))
         }
         _ => return,
     };
     let Some(ed) = app.editor.as_mut().filter(|ed| ed.point_at_caret()) else { return };
     let reference = header_reference(ed, wb, sh, range);
     ed.insert_ref(&reference);
-    ed.point_cell = Some(range.start);
+    ed.point_cell = Some(pointer);
+    ed.point_anchor = Some((wb.active_sheet(), opposite));
 }
 
 fn select_to_pointer(app: &mut SheetApp, geo: &Geo, sh: &Sheet, wb: &Workbook, p: Pos2) {
