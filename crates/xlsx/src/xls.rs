@@ -89,6 +89,11 @@ impl Budget {
     pub(crate) fn with_max_records(max_records: usize) -> Self {
         Budget { max_records, ..Budget::default() }
     }
+    /// A budget with only `left` bytes of text allowance (tests).
+    #[cfg(test)]
+    pub(crate) fn with_text_left(left: usize) -> Self {
+        Budget { text: MAX_TEXT.saturating_sub(left), ..Budget::default() }
+    }
     fn record(&mut self) -> Result<(), IoError> {
         self.records = self.records.saturating_add(1);
         if self.records > self.max_records {
@@ -102,6 +107,16 @@ impl Budget {
             return Err(IoError::TooLarge("XLS: more than 4 million cells".into()));
         }
         Ok(())
+    }
+    /// Charges `len` bytes of text if they fit the allowance, leaving it untouched otherwise:
+    /// for text the import can do without (expanded shared formulas keep their cached values).
+    fn try_text(&mut self, len: usize) -> bool {
+        let total = self.text.saturating_add(len);
+        let fits = total <= MAX_TEXT;
+        if fits {
+            self.text = total;
+        }
+        fits
     }
     fn text(&mut self, len: usize) -> Result<(), IoError> {
         self.text = self.text.saturating_add(len);
@@ -487,6 +502,7 @@ fn rk(v: u32) -> Value {
 /// keep their cached values).
 fn resolve_pending(
     st: &mut SheetState<'_>,
+    budget: &mut Budget,
     arrays: &HashMap<CellRef, (RangeRef, Parsed)>,
     shared: &HashMap<CellRef, Parsed>,
     pending: &[Pending],
@@ -504,6 +520,18 @@ fn resolve_pending(
             }
             shared_attaches += 1;
             st.attach(p.pos, f, Mode::Shared, None);
+            let len = st.sheet.cell(p.pos).and_then(|c| c.formula.as_ref()).map(|f| f.text.len());
+            // Every follower keeps its own text: charge it to the workbook's text allowance, and
+            // past it drop the formula again so the cell keeps its cached value.
+            if let Some(len) = len
+                && !budget.try_text(len)
+            {
+                if let Some(cell) = st.sheet.cells.get_mut(p.pos) {
+                    cell.formula = None;
+                }
+                st.unsupported("more shared-formula text than the import allows");
+                break;
+            }
             let imported = st.sheet.cell(p.pos).and_then(|c| c.formula.as_ref()).is_some_and(|f| f.text.chars().count() <= MAX_SHARED_TEMPLATE);
             if !imported {
                 failed.insert(p.anchor);
@@ -586,7 +614,7 @@ fn worksheet(
     // Shared and array formulas: their definitions follow the first cell that uses them.
     let (arrays, shared) = (std::mem::take(&mut st.arrays), std::mem::take(&mut st.shared));
     let pending = std::mem::take(&mut st.pending);
-    resolve_pending(&mut st, &arrays, &shared, &pending);
+    resolve_pending(&mut st, budget, &arrays, &shared, &pending);
     blank_array_followers(&mut st, &pending);
     if st.dropped > 0 {
         report.warn(format!("{} cells outside the grid were skipped.", st.dropped));
