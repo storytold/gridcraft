@@ -65,6 +65,11 @@ fn copy_merges(
         if let (Some(start), Some(end)) = (merge.start.offset(row_offset, col_offset), merge.end.offset(row_offset, col_offset)) {
             let moved = RangeRef::new(start, end);
             let sheet = cx.sheet_mut(dest_sheet)?;
+            // A table can't hold merged cells (Excel removes the table on open): the cells
+            // are pasted there unmerged.
+            if sheet.tables.iter().any(|t| t.range.intersects(&moved)) {
+                continue;
+            }
             sheet.merges.retain(|existing| !existing.intersects(&moved));
             sheet.merges.push(moved);
         }

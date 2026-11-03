@@ -12,7 +12,7 @@
 //!   and saving, reloading or recalculating never panics either;
 //! - a non-undoable command never changes cell content (it would be lost to undo);
 //! - the structure stays valid: active sheet in range, sheet and table names valid and unique,
-//!   merges and tables on the sheet and not overlapping, legacy arrays anchored at their
+//!   merges and tables on the sheet and not overlapping (nor a merge inside a table), legacy arrays anchored at their
 //!   top-left cell, the selection on the sheet;
 //! - a full recalculation from scratch gives the values the incremental recalculation left
 //!   (catches stale dependency graphs);
@@ -407,6 +407,10 @@ fn structure_problem(wb: &Workbook, sel: &gridcraft_engine::Selection) -> Option
             }
             if let Some(o) = sh.tables.iter().skip(k + 1).find(|o| overlaps(&t.range, &o.range)) {
                 return Some(format!("{}: tables `{}` ({}) and `{}` ({}) overlap", sh.name, t.name, t.range, o.name, o.range));
+            }
+            // Excel removes a table that holds a merged cell when it opens the file.
+            if let Some(m) = sh.merges.iter().find(|m| overlaps(&t.range, m)) {
+                return Some(format!("{}: table `{}` ({}) holds merged cells {m}", sh.name, t.name, t.range));
             }
         }
     }
