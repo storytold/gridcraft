@@ -67,7 +67,8 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
                 field.request_focus();
             }
             let needle = search.trim().to_lowercase();
-            let matches = |entry: &FilterValue| needle.is_empty() || filter_value_label(entry, lang).to_lowercase().contains(&needle);
+            let label_for = |entry: &FilterValue| filter_value_label(entry, lang, &wb, si);
+            let matches = |entry: &FilterValue| needle.is_empty() || label_for(entry).to_lowercase().contains(&needle);
             let all = checks.iter().filter(|entry| matches(entry)).all(|entry| entry.selected);
             let mut all_new = all;
             let label = if needle.is_empty() { "(Select All)" } else { "(Select All Search Results)" };
@@ -80,7 +81,7 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             // worked over the values themselves (#432).
             egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
                 for entry in checks.iter_mut().filter(|entry| matches(entry)) {
-                    let label = filter_value_label(entry, lang).to_string();
+                    let label = label_for(entry);
                     ui.checkbox(&mut entry.selected, label);
                 }
             });
@@ -128,15 +129,14 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
     }
 }
 
-/// Localizes typed constants and the blank caption while preserving literal text and canonical payloads.
-fn filter_value_label(entry: &FilterValue, language: crate::i18n::Language) -> &str {
+/// Localizes displayed formulas and constants while leaving the filter's command values canonical.
+fn filter_value_label(entry: &FilterValue, language: crate::i18n::Language, wb: &gridcraft_engine::model::Workbook, sheet: usize) -> String {
     if entry.value == gridcraft_engine::core::Value::Empty {
-        language.tr("(Blanks)")
-    } else if entry.label.starts_with('=') {
-        // Formula-view labels begin with '=' even when their computed value is Boolean or an error.
-        &entry.label
+        language.tr("(Blanks)").to_owned()
+    } else if entry.formula_shown {
+        crate::formula_locale::display(&entry.label, language.formula_locale(), wb, sheet)
     } else {
-        crate::formula_locale::localized_constant(&entry.value, language.formula_locale()).unwrap_or(&entry.label)
+        crate::formula_locale::localized_constant(&entry.value, language.formula_locale()).unwrap_or(&entry.label).to_owned()
     }
 }
 

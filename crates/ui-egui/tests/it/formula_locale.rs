@@ -84,7 +84,7 @@ fn fill_uses_the_text_captured_when_the_draft_opened() {
 fn numeric_validation_rejects_an_unchanged_text_fill() {
     let mut app = app();
     app.run("range.setValues", json!({"range":"A1", "values":[["123"]], "parse":false})).unwrap();
-    app.run("data.validation", json!({"range":"A1", "type":"decimal", "operator":"greater", "formula1":"0"})).unwrap();
+    app.run("data.validation", json!({"range":"B1", "type":"decimal", "operator":"greater", "formula1":"0"})).unwrap();
     app.run("selection.set", json!({"range":"A1:B1"})).unwrap();
     app.begin_edit(None, false);
     assert!(!app.commit_edit(0, 0, false, true));

@@ -6,6 +6,29 @@ pub(crate) const DRAFT_SHEET_GONE: &str = "The sheet of the cell being edited wa
 /// Why a draft of Python code that sheet protection hid while it was open is dropped.
 pub(crate) const DRAFT_CODE_HIDDEN: &str = "Sheet protection now hides the code of the cell being edited, so the entry was discarded.";
 
+/// Checks every destination of an unchanged text fill before the command writes any cell.
+/// A Stop rule takes precedence over warnings, which remain advisory.
+fn validate_literal_fill(doc: &gridcraft_engine::DocState, sheet: usize, text: &str) -> Option<(gridcraft_engine::model::Validation, String)> {
+    let default_selection = gridcraft_engine::Selection::default();
+    let selection = if doc.wb.active_sheet() == sheet { &doc.selection } else { doc.sheet_selections.get(sheet).unwrap_or(&default_selection) };
+    let mut warning = None;
+    for range in &selection.ranges {
+        // The fill command rejects an oversized range before writing it.
+        if range.count() > 2_000_000 {
+            return None;
+        }
+        for cell in range.iter() {
+            if let Some(issue) = gridcraft_engine::cmd::data::check_literal_validation(&doc.wb, sheet, cell, text) {
+                if issue.0.error_style == gridcraft_engine::model::ErrorStyle::Stop {
+                    return Some(issue);
+                }
+                warning = Some(issue);
+            }
+        }
+    }
+    warning
+}
+
 impl SheetApp {
     /// Starts editing the active cell. `text` replaces the content (typing) or pre-fills it.
     pub fn begin_edit(&mut self, text: Option<String>, from_formula_bar: bool) {
@@ -182,7 +205,11 @@ impl SheetApp {
         // Data validation.
         if let Some(d) = self.session.active()
             && let Some((dv, msg)) = if literal.is_some() {
-                gridcraft_engine::cmd::data::check_literal_validation(&d.wb, ed.sheet, ed.cell, &text)
+                if fill_selection {
+                    validate_literal_fill(d, ed.sheet, &text)
+                } else {
+                    gridcraft_engine::cmd::data::check_literal_validation(&d.wb, ed.sheet, ed.cell, &text)
+                }
             } else {
                 gridcraft_engine::cmd::data::check_validation(&d.wb, ed.sheet, ed.cell, &text)
             }
