@@ -354,6 +354,74 @@ fn cut_paste_that_overflows_the_grid_moves_nothing() {
 }
 
 #[test]
+fn drag_and_drop_asks_before_replacing_data() {
+    // #3136: dragging column B's border onto column A replaced A without asking.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1:B3", "values": [["Apple", "Kiwi"], ["Pear", "Plum"], ["Fig", "Lime"]]})).unwrap();
+    s.execute("edit.copy", json!({"range": "D9"})).unwrap();
+    let text = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap()["input"].clone();
+    let r = s.execute("range.move", json!({"range": "B:B", "to": "A1"}));
+    let Err(EngineError::Confirm(q)) = r else { panic!("{r:?}") };
+    assert_eq!(q, "There's already data here. Do you want to replace it?");
+    // Nothing moved, and the copy made before is still on the clipboard.
+    assert_eq!(text(&mut s, "A1"), json!("Apple"));
+    assert_eq!(text(&mut s, "B1"), json!("Kiwi"));
+    assert!(s.clipboard.as_ref().is_some_and(|c| !c.cut && c.range.a1() == "D9"));
+    // Confirmed, column B replaces column A.
+    s.execute("range.move", json!({"range": "B:B", "to": "A1", "overwrite": true})).unwrap();
+    assert_eq!(text(&mut s, "A1"), json!("Kiwi"));
+    assert_eq!(text(&mut s, "A3"), json!("Lime"));
+    assert_eq!(text(&mut s, "B1"), json!(""));
+    // Onto empty cells, or overlapping only the moved cells themselves, nothing is asked.
+    s.execute("range.move", json!({"range": "A1:A3", "to": "A2"})).unwrap();
+    assert_eq!(text(&mut s, "A4"), json!("Lime"));
+    s.execute("range.move", json!({"range": "A2:A4", "to": "C2"})).unwrap();
+    assert_eq!(text(&mut s, "C2"), json!("Kiwi"));
+    assert!(s.execute("range.move", json!({"range": "C2"})).is_err(), "`to` is required");
+}
+
+#[test]
+fn drag_and_drop_asks_before_replacing_spilled_values() {
+    // Cells showing a dynamic array's spilled values hold no cell of their own, but they are data.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(3)"})).unwrap();
+    s.execute("range.setValues", json!({"range": "C2:C3", "values": [["Kiwi"], ["Plum"]]})).unwrap();
+    let r = s.execute("range.move", json!({"range": "C2:C3", "to": "A2"}));
+    let Err(EngineError::Confirm(q)) = r else { panic!("{r:?}") };
+    assert_eq!(q, "There's already data here. Do you want to replace it?");
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(CellRef::new(2, 2)), Value::text("Plum"));
+    s.execute("range.move", json!({"range": "C2:C3", "to": "A2", "overwrite": true})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(CellRef::new(1, 0)), Value::text("Kiwi"));
+}
+
+#[test]
+fn drag_and_drop_on_another_sheet_stays_on_that_sheet() {
+    // The move was checked on the range's sheet but pasted on the active one, replacing its data
+    // without asking.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    s.execute("range.setValues", json!({"range": "B1:B2", "values": [["Kiwi"], ["Plum"]]})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "Keep"})).unwrap();
+    s.execute("selection.set", json!({"range": "C5"})).unwrap();
+    s.execute("range.move", json!({"range": "Two!B1:B2", "to": "A1"})).unwrap();
+    // Sheet1 stays active with its own selection; the moved cells are on Two.
+    assert_eq!(s.doc().unwrap().wb.active_sheet(), 0);
+    assert_eq!(s.doc().unwrap().selection.a1(), "C5");
+    let wb = &s.doc().unwrap().wb;
+    let two = wb.sheet_index("Two").unwrap();
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::text("Keep"));
+    assert_eq!(wb.sheet(two).unwrap().value(CellRef::new(0, 0)), Value::text("Kiwi"));
+    assert_eq!(wb.sheet(two).unwrap().value(CellRef::new(1, 0)), Value::text("Plum"));
+    assert_eq!(wb.sheet(two).unwrap().value(CellRef::new(0, 1)), Value::Empty);
+}
+
+#[test]
 fn replace_case_insensitive() {
     assert_eq!(replace_ci("Apple apple APPLE", "apple", "pear"), "pear pear pear");
 }

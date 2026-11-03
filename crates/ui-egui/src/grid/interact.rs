@@ -719,9 +719,9 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
             }
             Drag::Move { to: Some(to), .. } => {
                 let src = sel.current();
+                // Dropping on cells that hold data asks first, as in Excel.
                 if to != src.start {
-                    let _ = app.session.run("edit.cut", json!({"range": src.a1()}));
-                    let _ = app.run("edit.paste", json!({"at": to.a1()}));
+                    crate::macro_ui::call(app, "GridCraft", "range.move", json!({"range": src.a1(), "to": to.a1()}));
                 }
             }
             Drag::MoveCols { source, before: Some(before) } => {

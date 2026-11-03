@@ -1,7 +1,8 @@
 use super::cell::input_to_cell;
 use super::paste_special::paste_special;
 use super::{
-    Cell, Clipboard, EngineError, Json, RangeRef, Result, Session, Value, cell_param_on, edit, json, ok, str_param, target_ranges, target_sheet,
+    Cell, Clipboard, EngineError, Json, RangeRef, Result, Session, Value, bad, bool_param, cell_param_on, edit, json, ok, str_param, target_ranges,
+    target_sheet,
 };
 
 // ---------------------------------------------------------------- clipboard
@@ -161,6 +162,40 @@ pub(super) fn paste(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other("Nothing to paste.".into()));
     }
     paste_special(s, &json!({"what": "all", "at": p.get("at").cloned().unwrap_or(Json::Null)}))
+}
+
+/// Drag and drop (dragging the selection's border): moves `range` so its top-left cell lands on
+/// `to`, as Cut and Paste would. Like Excel, it asks before replacing cells that hold data or show a
+/// spilled value (other than the moved cells themselves); run it again with `overwrite: true` to replace them. A
+/// refused or failed move leaves the clipboard as it was.
+pub(super) fn range_move(s: &mut Session, p: &Json) -> Result<Json> {
+    let sheet = target_sheet(s, p)?;
+    let to = cell_param_on(s, p, "to", sheet)?.ok_or_else(|| bad("range.move", "missing `to`"))?;
+    let kept = s.clipboard.take();
+    let moved = cut(s, p).and_then(|_| {
+        let src = s.clipboard.as_ref().map(|c| c.range).unwrap_or_default();
+        let dest = to.offset(i64::from(src.height()) - 1, i64::from(src.width()) - 1).map(|end| RangeRef::new(to, end));
+        if bool_param(p, "overwrite") != Some(true)
+            && let Some(dest) = dest
+            && let Some(sh) = s.doc()?.wb.sheet(sheet)
+            && (sh.cells.iter_range(dest).any(|(c, cell)| !src.contains(c) && cell.has_content())
+                || sh.spill.range(dest.start..=dest.end).any(|(c, v)| dest.contains(*c) && !src.contains(*c) && *v != Value::Empty))
+        {
+            return Err(EngineError::Confirm("There's already data here. Do you want to replace it?".into()));
+        }
+        // On the range's sheet, which `paste` would leave to the active one. The selection
+        // belongs to the active sheet: it follows the moved cells only when they are on it.
+        let selection = s.doc()?.selection.clone();
+        let pasted = paste_special(s, &json!({"what": "all", "at": to.a1(), "sheet": sheet}))?;
+        if sheet != s.doc()?.wb.active_sheet() {
+            s.doc_mut()?.selection = selection;
+        }
+        Ok(pasted)
+    });
+    if moved.is_err() {
+        s.clipboard = kept;
+    }
+    moved
 }
 
 fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {

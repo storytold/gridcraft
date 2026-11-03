@@ -23,7 +23,7 @@ use cell::{cell_set, range_fill, range_set_values};
 pub(crate) use cell::{check_arg_counts, input_to_cell, is_formula_input, json_to_input, parse_typed_formula};
 #[cfg(test)]
 pub(crate) use clipboard::parse_tsv;
-use clipboard::{clear_clipboard, copy, cut, paste};
+use clipboard::{clear_clipboard, copy, cut, paste, range_move};
 use fill::{auto_fill, fill_dir, fill_series, flash_fill};
 #[cfg(test)]
 use find::replace_ci;
@@ -80,6 +80,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{at?: \"C3\", text?: \"tab-separated text from the system clipboard\", html?: \"the clipboard's HTML flavour; cells the source recorded as numbers (x:num, sdval) stay numbers\"}",
             has_doc,
             paste
+        ),
+        cmd!(
+            "range.move",
+            "Drag and Drop",
+            [],
+            None,
+            "{range?, to: \"C3\", overwrite?: bool} (drag the selection's border: a cut and paste that asks before replacing data unless overwrite)",
+            has_doc,
+            range_move
         ),
         CommandSpec {
             shortcut_mac: Some("Ctrl+Cmd+V"),
