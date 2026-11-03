@@ -217,6 +217,28 @@ fn print_settings_hold_the_page_range_that_print_submit_prints() {
 }
 
 #[test]
+/// Each window keeps its own page range: a range set in one window's Print view doesn't print
+/// from another window, and comes back when its window is active again.
+fn each_window_keeps_its_own_page_range() {
+    use gridcraft_ui_egui::printing::PageRange;
+    let mut app = SheetApp::new(five_pages(), Services::default());
+    // The first frame makes the window's interface state its own.
+    app.follow_active_window();
+    let first = app.session.active_window().unwrap();
+    app.run("ui.printSettings", json!({"from": 4})).unwrap();
+    app.run("view.newWindow", json!({})).unwrap();
+    let second = app.session.active_window().unwrap();
+    assert_ne!(first, second);
+    assert_eq!(app.print_pages, PageRange::default(), "a new window prints every page");
+    app.run("ui.printSettings", json!({"from": 2, "to": 3})).unwrap();
+    app.run("window.activate", json!({"window": first})).unwrap();
+    assert_eq!(app.print_pages, PageRange { from: Some(4), to: None });
+    assert_eq!(app.run("ui.printSettings", json!({})).unwrap()["from"], 4);
+    app.run("window.activate", json!({"window": second})).unwrap();
+    assert_eq!(app.print_pages, PageRange { from: Some(2), to: Some(3) });
+}
+
+#[test]
 /// File › Print's Pages … to … fields set the page range, the preview shows the pages that will
 /// print under their own numbers, and the fields follow `ui.printSettings`. In German too.
 fn the_print_views_page_fields_set_the_range_and_the_preview_follows() {

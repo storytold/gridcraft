@@ -8,7 +8,7 @@
 
 use gridcraft_engine::core::CellRef;
 
-use crate::{Notice, SheetApp, backstage, dialogs, editor, grid, keytips, text_box};
+use crate::{Notice, SheetApp, backstage, dialogs, editor, grid, keytips, printing, text_box};
 
 /// One window's parked interface state (see the module docs).
 #[derive(Default)]
@@ -17,6 +17,8 @@ pub struct WindowUi {
     text_box_editor: Option<text_box::EditState>,
     dialog: Option<dialogs::Dialog>,
     backstage: Option<backstage::Backstage>,
+    /// File › Print's page range: each window prints its own workbook's pages.
+    print_pages: printing::PageRange,
     message: Option<(String, String)>,
     toast: Option<(String, f64)>,
     notice: Option<Notice>,
@@ -61,6 +63,7 @@ impl SheetApp {
             text_box_editor,
             dialog,
             backstage,
+            print_pages,
             message,
             toast,
             notice,
@@ -78,6 +81,7 @@ impl SheetApp {
         std::mem::swap(&mut self.text_box_editor, text_box_editor);
         std::mem::swap(&mut self.dialog, dialog);
         std::mem::swap(&mut self.backstage, backstage);
+        std::mem::swap(&mut self.print_pages, print_pages);
         std::mem::swap(&mut self.message, message);
         std::mem::swap(&mut self.toast, toast);
         std::mem::swap(&mut self.notice, notice);
