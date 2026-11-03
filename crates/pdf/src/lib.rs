@@ -3,7 +3,8 @@
 //! - The 14 standard fonts (no embedding) with WinAnsiEncoding, plus approximate width tables
 //!   ([`text_width`]) so callers can measure, align and wrap text. Characters outside
 //!   WinAnsiEncoding (CJK and other scripts) are set in a predefined, non-embedded Adobe-GB1 CID
-//!   font with the `UniGB-UTF16-H` CMap instead of being replaced by `?`.
+//!   font with the `UniGB-UTF16-H` CMap instead of being replaced by `?`. Symbol uses its own
+//!   built-in encoding ([`symbol_code`]), for Greek letters and mathematical operators.
 //! - Vector drawing: rectangles, lines (solid or dashed), polygons, circles (Bézier), clipping.
 //! - RGBA images as RGB image XObjects with a soft mask for alpha (run-length encoded).
 //! - Coordinates are points with a **top-left origin** (y grows down); text `y` is the baseline.
@@ -14,13 +15,44 @@
 #![forbid(unsafe_code)]
 
 mod metrics;
+mod symbol;
+
+pub use symbol::{symbol_code, symbol_width};
 
 use std::fmt::Write as _;
 
 /// RGB colour, 0–255 per channel.
 pub type Rgb = [u8; 3];
 
-/// The standard 14 fonts minus Symbol and ZapfDingbats.
+/// A point in page coordinates, measured from the top-left corner.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Point {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Point {
+    pub const fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+}
+
+/// A page-space rectangle described by its top-left corner and extent.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl Rect {
+    pub const fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
+        Self { x, y, width, height }
+    }
+}
+
+/// The standard 14 fonts minus ZapfDingbats.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Font {
     #[default]
@@ -36,7 +68,12 @@ pub enum Font {
     CourierBold,
     CourierOblique,
     CourierBoldOblique,
+    /// Greek letters and mathematical symbols, in the font's own encoding.
+    Symbol,
 }
+
+/// How many fonts a document can use.
+const FONT_COUNT: usize = 13;
 
 /// A font family for [`Font::styled`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -48,7 +85,7 @@ pub enum Family {
 }
 
 impl Font {
-    pub const ALL: [Font; 12] = [
+    pub const ALL: [Font; FONT_COUNT] = [
         Font::Helvetica,
         Font::HelveticaBold,
         Font::HelveticaOblique,
@@ -61,6 +98,7 @@ impl Font {
         Font::CourierBold,
         Font::CourierOblique,
         Font::CourierBoldOblique,
+        Font::Symbol,
     ];
 
     /// PostScript base font name.
@@ -78,6 +116,7 @@ impl Font {
             Font::CourierBold => "Courier-Bold",
             Font::CourierOblique => "Courier-Oblique",
             Font::CourierBoldOblique => "Courier-BoldOblique",
+            Font::Symbol => "Symbol",
         }
     }
 
@@ -118,8 +157,20 @@ impl Font {
         }
     }
 
+    /// Whether this font can show `c` by itself (in its own encoding; for the text faces,
+    /// without the CID fallback).
+    pub fn can_encode(self, c: char) -> bool {
+        match self {
+            Font::Symbol => symbol_code(c).is_some(),
+            _ => c == '?' || win_ansi(c) != b'?',
+        }
+    }
+
     /// Advance width of a character in 1/1000 em.
     pub fn char_width(self, c: char) -> u16 {
+        if self == Font::Symbol {
+            return symbol_code(c).and_then(symbol_width).unwrap_or(500);
+        }
         let table: Option<&[u16; 95]> = match self {
             Font::Helvetica | Font::HelveticaOblique => Some(&metrics::HELVETICA),
             Font::HelveticaBold | Font::HelveticaBoldOblique => Some(&metrics::HELVETICA_BOLD),
@@ -221,10 +272,16 @@ fn pdf_utf16_string(text: &str) -> String {
 
 /// A PDF literal string `( … )` for `text` in WinAnsiEncoding.
 fn pdf_string(text: &str) -> String {
+    pdf_string_in(text, false)
+}
+
+/// A PDF literal string for `text` in WinAnsiEncoding, or in Symbol's encoding (where a
+/// character Symbol lacks becomes `?`).
+fn pdf_string_in(text: &str, symbol: bool) -> String {
     let mut s = String::with_capacity(text.len() + 2);
     s.push('(');
     for c in text.chars() {
-        let b = win_ansi(c);
+        let b = if symbol { symbol_code(c).unwrap_or(b'?') } else { win_ansi(c) };
         match b {
             b'(' | b')' | b'\\' => {
                 s.push('\\');
@@ -353,11 +410,12 @@ impl Page {
         }
     }
 
-    fn link_rect(&self, x: f32, y: f32, w: f32, h: f32) -> Option<[f32; 4]> {
-        if !finite(&[x, y, w, h]) || !extent(w) || !extent(h) || self.links.len() >= MAX_PAGE_LINKS {
+    fn link_rect(&self, rect: Rect) -> Option<[f32; 4]> {
+        let Rect { x, y, width, height } = rect;
+        if !finite(&[x, y, width, height]) || !extent(width) || !extent(height) || self.links.len() >= MAX_PAGE_LINKS {
             return None;
         }
-        let (right, bottom) = (x + w, y + h);
+        let (right, bottom) = (x + width, y + height);
         if !finite(&[right, bottom]) {
             return None;
         }
@@ -374,18 +432,18 @@ impl Page {
         if !allowed || uri.len() > MAX_LINK_URI_BYTES || uri.chars().any(char::is_control) {
             return;
         }
-        if let Some(rect) = self.link_rect(x, y, w, h) {
+        if let Some(rect) = self.link_rect(Rect::new(x, y, w, h)) {
             self.links.push(LinkAnnotation { rect, target: LinkTarget::Uri(uri.to_string()) });
         }
     }
 
     /// Adds a link to a location on another page of this document (zero-based page index).
-    pub fn link_page(&mut self, x: f32, y: f32, w: f32, h: f32, page: usize, target_x: f32, target_y: f32) {
-        if !finite(&[target_x, target_y]) {
+    pub fn link_page(&mut self, rect: Rect, page: usize, target: Point) {
+        if !finite(&[target.x, target.y]) {
             return;
         }
-        if let Some(rect) = self.link_rect(x, y, w, h) {
-            self.links.push(LinkAnnotation { rect, target: LinkTarget::Page { index: page, x: target_x, y: target_y } });
+        if let Some(rect) = self.link_rect(rect) {
+            self.links.push(LinkAnnotation { rect, target: LinkTarget::Page { index: page, x: target.x, y: target.y } });
         }
     }
 
@@ -424,12 +482,12 @@ impl Page {
     }
 
     pub fn stroke_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, width: f32, color: Rgb) {
-        self.stroke_line_dashed(x0, y0, x1, y1, width, color, &[]);
+        self.stroke_line_dashed(Point::new(x0, y0), Point::new(x1, y1), width, color, &[]);
     }
 
     /// A line with a dash pattern (`[on, off, …]` in points; empty = solid).
-    pub fn stroke_line_dashed(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, width: f32, color: Rgb, dash: &[f32]) {
-        if !finite(&[x0, y0, x1, y1]) {
+    pub fn stroke_line_dashed(&mut self, start: Point, end: Point, width: f32, color: Rgb, dash: &[f32]) {
+        if !finite(&[start.x, start.y, end.x, end.y]) {
             return;
         }
         let s = format!(
@@ -437,10 +495,10 @@ impl Page {
             rgb_op(color, true),
             n(stroke_width(width)),
             dash_values(dash),
-            n(x0),
-            n(self.y(y0)),
-            n(x1),
-            n(self.y(y1))
+            n(start.x),
+            n(self.y(start.y)),
+            n(end.x),
+            n(self.y(end.y))
         );
         self.op(&s);
     }
@@ -543,20 +601,30 @@ impl Page {
 
     /// Text with its baseline starting at `(x, y)`.
     pub fn text(&mut self, x: f32, y: f32, size: f32, font: Font, color: Rgb, text: &str) {
-        self.text_rotated(x, y, size, font, color, text, 0.0);
+        self.text_rotated(Point::new(x, y), size, font, color, text, 0.0);
     }
 
     /// Text rotated by `angle` radians (clockwise on the page, like the y-down coordinate
     /// system) about its baseline origin.
-    pub fn text_rotated(&mut self, x: f32, y: f32, size: f32, font: Font, color: Rgb, text: &str, angle: f32) {
-        if text.is_empty() || !extent(size) || !finite(&[x, y]) {
+    pub fn text_rotated(&mut self, origin: Point, size: f32, font: Font, color: Rgb, text: &str, angle: f32) {
+        if text.is_empty() || !extent(size) || !finite(&[origin.x, origin.y]) {
             return;
         }
         let fi = font.index();
         let size = n(size.min(10_000.0));
         let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
         // Clockwise in y-down = counter-clockwise negated in PDF's y-up space.
-        let mut s = format!("BT\n{}\n{} {} {} {} {} {} Tm\n", rgb_op(color, false), n(cs), n(-sn), n(sn), n(cs), n(x), n(self.y(y)));
+        let mut s = format!("BT\n{}\n{} {} {} {} {} {} Tm\n", rgb_op(color, false), n(cs), n(-sn), n(sn), n(cs), n(origin.x), n(self.y(origin.y)));
+        // Symbol text is one run in Symbol's own encoding (the CID font has no maths symbols).
+        if font == Font::Symbol {
+            if let Some(f) = self.fonts.get_mut(fi) {
+                *f = true;
+            }
+            let _ = writeln!(s, "/F{} {} Tf\n{} Tj", fi + 1, size, pdf_string_in(text, true));
+            s.push_str("ET");
+            self.op(&s);
+            return;
+        }
         // Runs of WinAnsi text use `font`; runs it cannot encode use the CID font. Each `Tj`
         // advances the text position, so the runs follow each other on the baseline.
         let mut rest = text;
@@ -577,7 +645,9 @@ impl Page {
 
     /// Draws an RGBA image (`pw`×`ph` pixels, row-major, straight alpha) into the box
     /// `(x, y, w, h)`. Malformed or oversized buffers are ignored.
-    pub fn image_rgba(&mut self, x: f32, y: f32, w: f32, h: f32, rgba: &[u8], pw: u32, ph: u32) {
+    pub fn image_rgba(&mut self, destination: Rect, rgba: &[u8], pixel_size: [u32; 2]) {
+        let Rect { x, y, width: w, height: h } = destination;
+        let [pw, ph] = pixel_size;
         let px = pw as u64 * ph as u64;
         if pw == 0 || ph == 0 || px > MAX_IMAGE_PIXELS || (rgba.len() as u64) < px * 4 || !(extent(w) && extent(h) && finite(&[x, y])) {
             return;
