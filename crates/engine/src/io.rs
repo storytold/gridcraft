@@ -907,6 +907,12 @@ const MAX_READ_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
     use std::io::Read;
     script_sandbox_check(path)?;
+    // Checked before opening: opening a FIFO nobody writes to blocks the calling (GUI) thread.
+    // shortcut: a FIFO swapped in between this check and the open still blocks; close that with
+    // O_NONBLOCK when the crate takes a libc dependency.
+    if !std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?.is_file() {
+        return Err(EngineError::Other(format!("{path}: only regular files can be opened")));
+    }
     let f = std::fs::File::open(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     // A symlink to an endless device reports length 0 but streams forever, so metadata
     // alone never bounds the read: require a real file and cap the bytes actually taken.
@@ -938,7 +944,8 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     // link's target; and it inherits the destination's access restrictions, so saving a
     // private workbook doesn't widen who can read it.
     let tmp = format!("{path}.sctmp");
-    let prior = std::fs::metadata(path).ok().map(|m| m.permissions());
+    let prior_meta = std::fs::metadata(path).ok();
+    let prior = prior_meta.as_ref().map(std::fs::Metadata::permissions);
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]
@@ -950,6 +957,15 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
     })?;
+    // The replacement belongs to the saving user's primary group: restore the old file's group, and
+    // when that isn't allowed, drop the group's access rather than hand it to a different group.
+    #[cfg(unix)]
+    if let Some(m) = &prior_meta {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if std::os::unix::fs::fchown(&f, None, Some(m.gid())).is_err() && f.metadata().is_ok_and(|now| now.gid() != m.gid()) {
+            let _ = f.set_permissions(std::fs::Permissions::from_mode(m.mode() & 0o7707));
+        }
+    }
     #[cfg(not(unix))]
     if let Some(p) = &prior {
         let _ = f.set_permissions(p.clone());

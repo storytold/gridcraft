@@ -761,3 +761,20 @@ fn sylk_survives_huge_relative_offsets_and_width_floods() {
     let (wb, _) = open_bytes("widths.slk", &flood).unwrap();
     assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::Number(1.0));
 }
+
+/// A FIFO with no writer would block an open forever: it is refused before it is opened.
+#[cfg(unix)]
+#[test]
+fn reading_a_fifo_is_refused_without_blocking() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-fifo-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let fifo = dir.join("pipe.xlsx");
+    if !std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|s| s.success()) {
+        let _ = std::fs::remove_dir_all(&dir);
+        return; // no mkfifo here
+    }
+    let err = read_file(fifo.to_str().unwrap()).unwrap_err().to_string();
+    assert!(err.contains("only regular files"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
