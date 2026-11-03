@@ -4984,7 +4984,7 @@ fn paste_validation_skip_blanks_large_populated_paste() {
 
     // A destination rule is cleared under every populated source cell. Count the resulting
     // coalesced ranges, not the 100,002 cells that were considered for clearing.
-    let mut s = s();
+    let mut s = self::s();
     s.execute("range.setValues", json!({"range": "A1:A100002", "values": (0..100_002).map(|i| vec![i]).collect::<Vec<_>>()})).unwrap();
     s.execute("data.validation", json!({"range": "C1:C100002", "type": "list", "formula1": "\"x,y\""})).unwrap();
     s.execute("edit.copy", json!({"range": "A1:A100002"})).unwrap();
