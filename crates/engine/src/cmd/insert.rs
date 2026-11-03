@@ -1175,6 +1175,8 @@ fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
     let shape = Shape {
         math: Default::default(),
         id,
+        name: None,
+        text_link: None,
         kind,
         anchor: Anchor {
             cell: at,
@@ -1809,6 +1811,8 @@ fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
     let shape = Shape {
         math: Default::default(),
         id,
+        name: None,
+        text_link: None,
         kind: ShapeKind::Icon,
         anchor: Anchor { cell: at, dx: 4.0, dy: 4.0, width: size, height: size, mode: anchor_mode_param(p).unwrap_or_default() },
         fill: color,

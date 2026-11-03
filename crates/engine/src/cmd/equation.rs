@@ -88,6 +88,8 @@ fn insert_equation(s: &mut Session, p: &Json) -> Result<Json> {
     let (width, height) = frame_for(&list, (size * PX_PER_PT) as f32);
     let mut shape = Shape {
         id,
+        name: None,
+        text_link: None,
         kind: ShapeKind::Equation,
         anchor: Anchor { cell: at, dx: 0.0, dy: 0.0, width, height, mode: AnchorMode::MoveOnly },
         fill: Color::Auto,
