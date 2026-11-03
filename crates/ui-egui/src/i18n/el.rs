@@ -104,6 +104,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text to\nColumns" => "Κείμενο σε\nστήλες",
         "Link" => "Σύνδεση",
         "Symbol" => "Σύμβολο",
+        "Equation" => "Εξίσωση",
+        "Insert New Equation..." => "Εισαγωγή νέας εξίσωσης",
         "Sparklines" => "Μικρογραφήματα",
         "Header & Footer" => "Κεφαλίδα και υποσέλιδο",
         "Draw with ink" => "Σχεδίαση με μελάνι",
@@ -144,6 +146,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Error Checking" => "Έλεγχος σφαλμάτων",
         "Trace Error" => "Εντοπισμός σφάλματος",
         "Circular References" => "Κυκλικές αναφορές",
+        "Python Mode" => "Λειτουργία Python",
         "Evaluate Formula" => "Αξιολόγηση τύπου",
         "Watch Window" => "Παράθυρο παρακολούθησης",
         "Calculation\nOptions" => "Επιλογές\nυπολογισμού",
@@ -991,6 +994,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recording" => "Καταγραφή",
         "New Macro" => "Νέα μακροεντολή",
         "Show" => "Εμφάνιση",
+        "Collapse dialog" => "Σύμπτυξη παραθύρου διαλόγου",
+        "Expand dialog" => "Ανάπτυξη παραθύρου διαλόγου",
         _ => return None,
     })
 }

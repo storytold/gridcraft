@@ -2312,3 +2312,63 @@ fn loan_schedule_residue_keeps_excels_sign() {
     }
     assert_eq!(t.get("P7"), Value::Text("".into()));
 }
+
+/// Makes `at` a Python cell showing `cached` (its value before this calculation), with `result`
+/// as its kept result, and returns the cell's key for `Calc::cells_changed`.
+fn plant_python(t: &mut T, at: &str, cached: Value, result: Value) -> (usize, CellRef) {
+    use gridcraft_model::python::{PyCode, PyOutput};
+    let output = PyOutput { value: result, type_name: "list".into(), preview: String::new(), convertible: true };
+    let py = PyCode { output: Some(output), ..PyCode::new("[5, 6]") };
+    let cell = Cell { value: cached, formula: None, style: gridcraft_model::StyleId::default(), py: Some(std::sync::Arc::new(py)) };
+    t.wb.sheet_mut(0).unwrap().cells.set(c(at), cell);
+    (0, c(at))
+}
+
+fn column(values: &[f64]) -> Value {
+    let data = values.iter().map(|v| Value::Number(*v)).collect();
+    Value::Array(std::sync::Arc::new(gridcraft_core::Array::new(values.len(), 1, data).unwrap()))
+}
+
+#[test]
+fn formulas_read_a_dirty_python_cell_after_it_is_laid_out() {
+    // B1's result can't spill (B2 holds a value), so it is #SPILL!. A1, A2 and A3 come before
+    // it in the pass; each must lay it out first rather than read its old value, 1.
+    let build = |t: &mut T| {
+        t.set("B2", "10");
+        t.set("B3", "100");
+        t.set("A1", "=B1");
+        t.set("A2", "=MAX(B1:B3)");
+        t.set("A3", "=SUM(B1:B3)");
+        t.set("A4", "=COUNTA(B1:B3)");
+        t.set("A5", "=SUMPRODUCT(--ISERROR(B1:B3))");
+    };
+    let check = |t: &T, how: &str| {
+        assert_eq!(t.get("B1"), Value::Error(CellError::Spill), "{how}");
+        assert_eq!(t.get("A1"), Value::Error(CellError::Spill), "{how}: a reference");
+        assert_eq!(t.get("A2"), Value::Error(CellError::Spill), "{how}: a range read");
+        assert_eq!(t.get("A3"), Value::Error(CellError::Spill), "{how}: a range walked cell by cell");
+        assert_eq!(t.num("A4"), 3.0, "{how}");
+        assert_eq!(t.num("A5"), 1.0, "{how}: the error is seen in the range");
+    };
+
+    // A full recalculation.
+    let mut t = T::new();
+    build(&mut t);
+    plant_python(&mut t, "B1", Value::Number(1.0), column(&[5.0, 6.0]));
+    t.calc.recalc_all(&mut t.wb);
+    check(&t, "full");
+
+    // An incremental one: B1 becomes a Python cell after its readers.
+    let mut t = T::new();
+    t.set("B1", "1");
+    build(&mut t);
+    assert_eq!((t.num("A1"), t.num("A3")), (1.0, 111.0));
+    let k = plant_python(&mut t, "B1", Value::Number(1.0), column(&[5.0, 6.0]));
+    t.calc.cells_changed(&mut t.wb, &[k]);
+    check(&t, "incremental");
+
+    // Unblocked, the readers see the new array.
+    t.set("B2", "");
+    assert_eq!((t.num("B1"), t.num("B2")), (5.0, 6.0));
+    assert_eq!((t.num("A1"), t.num("A2"), t.num("A3")), (5.0, 100.0, 111.0));
+}

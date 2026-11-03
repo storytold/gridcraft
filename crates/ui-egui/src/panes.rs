@@ -3,6 +3,8 @@
 use egui::{Color32, Ui, vec2};
 use serde_json::{Value as Json, json};
 
+use gridcraft_engine::model::{ObjKind, ObjRef};
+
 use crate::SheetApp;
 use crate::theme::{self, Tokens};
 
@@ -146,10 +148,11 @@ fn selection(app: &mut SheetApp, ui: &mut Ui) {
     for it in items.iter().rev() {
         let kind = it["kind"].as_str().unwrap_or("").to_string();
         let id = it["id"].as_u64().unwrap_or(0) as u32;
+        let obj = ObjKind::parse(&kind).map(|k| ObjRef::new(k, id));
         ui.horizontal(|ui| {
-            let sel = app.selected_chart == Some(id);
+            let sel = obj.is_some() && app.selected_object == obj;
             if ui.selectable_label(sel, it["name"].as_str().unwrap_or("")).clicked() {
-                app.selected_chart = Some(id);
+                app.selected_object = obj;
             }
             if ui.small_button("▲").on_hover_text("Bring Forward").clicked() {
                 app.run_or_alert("arrange.bringForward", json!({"kind": kind, "id": id}));
@@ -166,7 +169,7 @@ fn selection(app: &mut SheetApp, ui: &mut Ui) {
 
 /// Draws the chart format pane: title, type, legend, elements/axis titles, series colors, palettes/layouts and size.
 fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
-    let Some(id) = app.selected_chart else {
+    let Some(id) = app.selected_chart() else {
         ui.label(egui::RichText::new("Select a chart to format it.").italics());
         return;
     };
@@ -305,13 +308,29 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
     ui.collapsing("Size", |ui| {
         // Keep the value being typed or dragged between frames; reloading it from the chart every frame threw the edit away.
         let draft = egui::Id::unique(("gridcraft.chart_size_draft", id));
-        let (mut w, mut h) = ui.data_mut(|d| d.get_temp::<(f32, f32)>(draft)).unwrap_or((chart.anchor.width, chart.anchor.height));
-        let a = ui.add(egui::DragValue::new(&mut w).prefix("Width ").range(40.0..=4000.0));
-        let b = ui.add(egui::DragValue::new(&mut h).prefix("Height ").range(40.0..=4000.0));
+        let current = (chart.anchor.width, chart.anchor.height);
+        let (mut w, mut h) = ui.data_mut(|d| d.get_temp::<(f32, f32)>(draft)).unwrap_or(current);
+        // A file can make a chart larger than the 4,000 points a field otherwise reaches. The
+        // range keeps such a size, so the field shows it instead of clamping it to 4,000.
+        let range = |v: f32| 40.0..=v.max(4000.0);
+        let a = ui.add(egui::DragValue::new(&mut w).prefix("Width ").range(range(current.0)));
+        let b = ui.add(egui::DragValue::new(&mut h).prefix("Height ").range(range(current.1)));
         if a.drag_stopped() || a.lost_focus() || b.drag_stopped() || b.lost_focus() {
             ui.data_mut(|d| d.remove::<(f32, f32)>(draft));
             if !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                app.run_or_alert("chart.set", json!({"chart": id, "width": w, "height": h}));
+                // Only an edited dimension is sent: the other keeps what the chart has, however
+                // large a file made it.
+                let mut params = serde_json::Map::new();
+                params.insert("chart".into(), json!(id));
+                if w != current.0 {
+                    params.insert("width".into(), json!(w));
+                }
+                if h != current.1 {
+                    params.insert("height".into(), json!(h));
+                }
+                if params.len() > 1 {
+                    app.run_or_alert("chart.set", Json::Object(params));
+                }
             }
         } else if a.dragged() || a.has_focus() || b.dragged() || b.has_focus() {
             ui.data_mut(|d| d.insert_temp(draft, (w, h)));
