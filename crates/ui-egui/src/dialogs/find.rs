@@ -7,8 +7,8 @@ use super::{Dialog, Json, Key, SheetApp, json};
 pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     // The dialog stays open over the sheet, so Undo and Redo reach the workbook (a Replace All
     // is undone without closing it first); inside a text box they edit the typed text instead.
-    // The keys go through the grid's own shortcut table, so both keep the sheet's bindings.
-    if !ui.ctx().text_edit_focused() {
+    // A modal message blocks workbook shortcuts; otherwise use the grid's own shortcut table.
+    if app.message.is_none() && !ui.ctx().text_edit_focused() {
         let pressed = ui.input_mut(|i| {
             [(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z), (Modifiers::COMMAND, Key::Z), (Modifiers::COMMAND, Key::Y)]
                 .into_iter()
