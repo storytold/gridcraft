@@ -577,3 +577,20 @@ fn filtering_recalculates_only_what_hidden_rows_change() {
     s.execute("data.filter", json!({})).unwrap();
     assert_eq!(num(&s, "D1"), Value::Number(21.0), "turning the filter off shows every row");
 }
+
+#[test]
+fn filtering_in_manual_calculation_still_updates_what_depends_on_subtotals() {
+    // In manual calculation only the edited formulas are evaluated, so a filter that took that
+    // path left D2 = D1*10 stale; a filter recalculated the workbook before #661.
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = json!([["Fruit", "Sold"], ["Kiwi", 2], ["Plum", 3], ["Kiwi", 4]]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=SUBTOTAL(109,B2:B4)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D2", "input": "=D1*10"})).unwrap();
+    s.execute("formulas.calculationOptions", json!({"mode": "manual"})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:B4"})).unwrap();
+    s.execute("data.filterBy", json!({"column": "A", "values": ["Kiwi"]})).unwrap();
+    let num = |s: &Session, a: &str| s.doc().unwrap().wb.active().unwrap().value(CellRef::parse(a).unwrap());
+    assert_eq!((num(&s, "D1"), num(&s, "D2")), (Value::Number(6.0), Value::Number(60.0)));
+}

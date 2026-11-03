@@ -453,7 +453,10 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     if let Some(t0) = t0 {
         eprintln!("commit: edit {:?}, {} changed", since(t0), changed.len());
     }
-    if structural {
+    // In manual calculation only the edited formulas would be evaluated, not what depends on
+    // them, so a filter there recalculates the workbook as it did before (#661).
+    let manual = wb.calc.mode == gridcraft_model::CalcMode::Manual;
+    if structural || (rows_shown_or_hidden && manual) {
         d.calc.recalc_all(&mut wb);
     } else if rows_shown_or_hidden {
         let mut seeds = changed.clone();
