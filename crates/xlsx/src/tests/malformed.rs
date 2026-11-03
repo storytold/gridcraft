@@ -385,3 +385,22 @@ fn outline_summary_directions_round_trip() {
     let xml = String::from_utf8(crate::package::Package::open(&bytes).unwrap().read("xl/worksheets/sheet1.xml").unwrap().unwrap()).unwrap();
     assert!(!xml.contains("outlinePr"), "{xml}");
 }
+
+/// Many cell formats naming one long font and one long custom number format: the code is shared
+/// by every format and the font name is cut to Excel's 31 characters, so neither is copied per
+/// format.
+#[test]
+fn cell_formats_share_their_number_format_and_keep_short_font_names() {
+    let xml = format!(
+        r#"<styleSheet><numFmts><numFmt numFmtId="164" formatCode="{}"/></numFmts><fonts><font><name val="{}"/></font></fonts><cellXfs>{}</cellXfs></styleSheet>"#,
+        "0".repeat(100_000),
+        "F".repeat(100_000),
+        r#"<xf numFmtId="164" fontId="0"/>"#.repeat(20_000)
+    );
+    let root = crate::xml::parse(xml.as_bytes()).unwrap();
+    let st = crate::styles::read_styles(&root, &[], "Calibri");
+    assert_eq!(st.xfs.len(), 20_000);
+    assert!(st.xfs.iter().all(|s| std::sync::Arc::ptr_eq(&s.num_fmt.0, &st.xfs[0].num_fmt.0)));
+    assert_eq!(st.xfs[0].num_fmt.as_str().len(), 100_000);
+    assert!(st.xfs.iter().all(|s| s.font.name.chars().count() == 31));
+}
