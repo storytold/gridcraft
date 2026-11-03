@@ -634,8 +634,8 @@ pub fn chart_kind(t: &str, sub: &str) -> ChartKind {
     }
 }
 
-/// Recognize a ToolPak histogram block, including Pareto's reordered bins. Its numeric Bin
-/// column contains category labels, and its optional third column is a cumulative percentage.
+/// Recognize a ToolPak histogram block by its layout and numeric report columns. Bin labels
+/// are editable, including Pareto's reordered overflow bin, so their text isn't a marker.
 fn histogram_report(sh: &Sheet, r: RangeRef) -> bool {
     if r.height() < 3 || !matches!(r.width(), 2 | 3) {
         return false;
@@ -645,10 +645,10 @@ fn histogram_report(sh: &Sheet, r: RangeRef) -> bool {
         && header(r.start.col + 1).as_text() == Some("Frequency")
         && (r.width() == 2 || header(r.start.col + 2).as_text() == Some("Cumulative %"))
         && (r.start.row + 1..=r.end.row).all(|row| {
-            let bin = sh.value(CellRef::new(row, r.start.col));
-            bin.as_f64().is_some() || bin.as_text() == Some("More")
+            sh.value(CellRef::new(row, r.start.col + 1)).as_f64().is_some_and(|n| n.is_finite() && n >= 0.0)
+                && (r.width() == 2
+                    || sh.value(CellRef::new(row, r.start.col + 2)).as_f64().is_some_and(|n| n.is_finite() && (0.0..=1.0).contains(&n)))
         })
-        && (r.start.row + 1..=r.end.row).any(|row| sh.value(CellRef::new(row, r.start.col)).as_text() == Some("More"))
 }
 
 /// Builds series from a block: first row/column as names/categories when they're text.
@@ -756,6 +756,8 @@ pub fn scatter_x_from_first(kind: ChartKind, series: &mut Vec<Series>) {
 
 /// Most cells a chart's source block may span (bounds the series it builds).
 const MAX_CHART_CELLS: u64 = 1_000_000;
+/// Match the chart resolver's series limit rather than silently dropping excess series.
+const MAX_CHART_SERIES: usize = 255;
 
 /// Chart types that suit the shape of the data, best first, as `(type, subtype, label)` for
 /// `insert.chart`. Our own heuristic from the shape of the block (series count, points per
@@ -1018,19 +1020,24 @@ fn chart_switch(s: &mut Session, p: &Json) -> Result<Json> {
         }
         let by_rows = !by_rows;
         let mut series = series_from_range(ssh, r, by_rows);
+        scatter_x_from_first(c.kind, &mut series);
+        if series.len() > MAX_CHART_SERIES {
+            return Err(bad("chart.switchRowColumn", "a chart supports at most 255 series"));
+        }
         // Returning to the ToolPak report's columns must also restore its combo layout;
         // otherwise the cumulative percentages become another primary-axis series.
         if !by_rows && matches!(c.kind, ChartKind::ColumnClustered | ChartKind::Combo) && histogram_report(ssh, r) {
+            let cumulative = c.kind == ChartKind::Combo && series.len() == 2;
             for (i, se) in series.iter_mut().enumerate() {
-                se.kind = Some(if i == 0 { ChartKind::ColumnClustered } else { ChartKind::Line });
-                se.secondary = i != 0;
+                let line = cumulative && i == 1;
+                se.kind = Some(if line { ChartKind::Line } else { ChartKind::ColumnClustered });
+                se.secondary = line;
             }
         }
         if let Some(c) = cx.sheet_mut(si)?.charts.get_mut(ci) {
             c.source.get_or_insert(src);
             c.by_rows = by_rows;
             c.series = series;
-            scatter_x_from_first(c.kind, &mut c.series);
         }
         Ok(Json::Null)
     })

@@ -112,6 +112,9 @@ fn histogram_chart_output_survives_repeated_row_column_switches() {
                         "chartOutput": true, "pareto": pareto, "cumulative": cumulative}),
                 )
                 .unwrap();
+                // Category text is editable, including the overflow bin in the sorted block.
+                let bin_col = if pareto { if cumulative { "D" } else { "C" } } else { "A" };
+                s.execute("cell.set", json!({"cell": format!("{bin_col}5"), "input": "Overflow"})).unwrap();
                 if reopen {
                     let bytes = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
                     s.execute("file.open", json!({"name": "histogram.xlsx", "base64": bytes["base64"]})).unwrap();
@@ -138,6 +141,62 @@ fn histogram_chart_output_survives_repeated_row_column_switches() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn histogram_chart_switch_refuses_more_than_255_series_without_changes() {
+    for bins in [254, 255] {
+        let mut s = input();
+        s.execute("range.setValues", json!({"range": "B1", "values": (0..bins).map(|i| vec![i]).collect::<Vec<_>>()})).unwrap();
+        s.execute("data.analysisToolPak", json!({"tool": "histogram", "range": "A1:A7", "bins": format!("B1:B{bins}"), "chartOutput": true}))
+            .unwrap();
+        let before = s.active().unwrap().wb.clone();
+        let history = s.execute("history.list", json!({})).unwrap();
+        let out = s.execute("chart.switchRowColumn", json!({}));
+        if bins == 254 {
+            out.unwrap();
+            assert_eq!(s.active().unwrap().wb.sheets[1].charts[0].series.len(), 255);
+            assert_eq!(resolved(&s.active().unwrap().wb, 1).series.len(), 255);
+        } else {
+            assert!(out.unwrap_err().to_string().contains("255"));
+            assert_eq!(s.active().unwrap().wb, before);
+            assert_eq!(s.execute("history.list", json!({})).unwrap(), history);
+        }
+    }
+}
+
+#[test]
+fn histogram_report_column_chart_stays_columns_after_switching() {
+    let mut s = input();
+    s.execute("data.analysisToolPak", json!({"tool": "histogram", "range": "A1:A7", "bins": "B1:B3", "cumulative": true})).unwrap();
+    s.execute("insert.chart", json!({"type": "column", "range": "A1:C5"})).unwrap();
+    let before = resolved(&s.active().unwrap().wb, 1);
+    assert_eq!(before.series.len(), 2);
+    for _ in 0..2 {
+        s.execute("chart.switchRowColumn", json!({})).unwrap();
+        s.execute("chart.switchRowColumn", json!({})).unwrap();
+        let d = s.active().unwrap();
+        let c = &d.wb.sheets[1].charts[0];
+        assert_eq!(c.kind, ChartKind::ColumnClustered);
+        assert!(c.series.iter().all(|se| !se.secondary && se.kind.unwrap_or(c.kind) == ChartKind::ColumnClustered));
+        assert_eq!(resolved(&d.wb, 1), before);
+    }
+}
+
+#[test]
+fn histogram_report_recognition_keeps_unrelated_numeric_columns() {
+    for (values, range, series) in [
+        (json!([["Bin", "Amount"], [1, 10], [2, 20], ["Overflow", 1]]), "A1:B4", 2),
+        (json!([["Bin", "Frequency"], [1, "Pending"], [2, "Pending"], ["Overflow", "Pending"]]), "A1:B4", 2),
+        (json!([["Bin", "Frequency", "Cumulative %"], [1, 10, 10], [2, 20, 30], ["Overflow", 1, 31]]), "A1:C4", 3),
+    ] {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": values})).unwrap();
+        s.execute("insert.chart", json!({"type": "column", "range": range})).unwrap();
+        let data = resolved(&s.active().unwrap().wb, 0);
+        assert_eq!(data.series.len(), series, "unrelated data must retain its numeric Bin series");
+        assert_eq!(data.series[0].values, [Some(1.0), Some(2.0), None]);
     }
 }
 

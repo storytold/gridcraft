@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-03 · **Change:** minor (Histogram Switch Row/Column regression; earlier: Histogram Chart Output; earlier: charts resize from eight handles; earlier: chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-03 · **Change:** minor (Histogram editable labels and Switch Row/Column safeguards; earlier: Histogram Switch Row/Column regression; earlier: Histogram Chart Output; earlier: charts resize from eight handles; earlier: chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -82,7 +82,11 @@ The Analysis ToolPak's Histogram **Chart Output** (`data.analysisToolPak`, `tool
 percentages as a line on the secondary axis. Charts reference the static report cells, so later
 edits to the report update the chart; rerun the analysis to reflect changes to the original input.
 Switch Row/Column recognizes this report layout, including its numeric bin labels; switching
-twice restores the frequency columns and secondary cumulative line, including after XLSX reopen.
+twice restores the frequency columns and secondary cumulative line, including after XLSX reopen
+and after renaming bin labels. Recognition checks the report layout and numeric frequency/percentage
+columns, not the bin text. Regular column charts keep both report series on the primary axis; only
+combo charts restore a secondary cumulative line. A switch that would create more than 255 series
+is refused without changing the chart or undo history.
 The command returns the chart id. Chart Output accepts at most 20,000 categories including More;
 requests past that limit or without room beside/below the report are refused without writing the
 report or chart. Excel-side visual verification has not been performed.
@@ -117,6 +121,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | Histogram recognition accepts renamed bin labels while checking the report schema and numeric frequency/percentage columns; row/column switches refuse more than 255 series atomically and restore a secondary cumulative line only for combo charts. |
 | 2026-11-03 | minor | Switch Row/Column recognizes Histogram report bins as categories and restores the frequency columns and secondary cumulative line after repeated switches, including after XLSX reopen. |
 | 2026-11-02 | minor | Analysis ToolPak Histogram Chart Output creates ordinary frequency columns, optionally sorted by frequency, with a secondary cumulative percentage line; the generated chart references its static report and survives XLSX save/reopen. |
 | 2026-11-02 | minor | Charts move and resize from eight handles, each moving only its own edges (#190); resizing leaves the work list (1–2 h, within the 40–60 h rounding) |
