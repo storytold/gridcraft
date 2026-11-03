@@ -22,9 +22,9 @@ fn power_model_survives_shared_refedit_collapse_and_control_confirmation() {
     h.run_steps(4);
     h.state_mut().open_dialog("analysisToolPak", json!({"tool":"regression"}));
     h.run_steps(4);
-    h.get_by_label("Linear").click();
+    h.get_by_role(egui::accesskit::Role::ComboBox).click();
     h.run_steps(3);
-    h.get_by_label("Power / Geometric").click();
+    h.get_all_by_label("Power / Geometric").last().expect("power model option").click();
     h.run_steps(3);
     assert_eq!(h.state().dialog.as_ref().unwrap().values["model"], "power");
     assert!(h.query_by_label("Diagnostics and the intercept use ln(Y); a zero intercept fixes the amplitude to 1.").is_some());

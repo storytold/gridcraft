@@ -1,7 +1,8 @@
 # Analysis ToolPak regression models
 
-Last updated: 2026-11-03. Local reconciliation against main
-`178f3eb745a589c63b61ef97dd7b6b2d6fd48515`; merge pending, no commit created.
+Last updated: 2026-11-03. Reconciled with main
+`ed2347782d883ab458893d314c663e1a72579656`; `cargo xtask ci` passed all 10 gates,
+including 1,145 UI integration tests.
 
 `data.analysisToolPak` accepts `tool: "regression"` and an optional `model`:
 
@@ -16,12 +17,12 @@ For exponential and power models, the reported intercept is **ln(amplitude)**;
 the original amplitude is `exp(intercept)`. `constantZero: true` fixes that amplitude
 to 1. Linear/exponential fits retain the existing maximum of 16 X columns.
 
-Coefficients, standard errors, t tests, confidence intervals, R², adjusted R²,
+Coefficients, standard errors, t-tests, confidence intervals, R², adjusted R²,
 ANOVA, predictions, residuals, standardized residuals and probability output
 describe the fitted domain. Exponential/power response headings explicitly name
 ln(Y); logarithmic/power predictor headings name ln(X). Predictions are not
 exponentiated or bias-corrected. This is transformed ordinary least squares,
-not arbitrary nonlinear least squares on the original Y scale.
+not arbitrary nonlinear least-squares on the original Y scale.
 
 Reports remain static cell values with existing output-range/new-sheet,
 overwrite and undo/redo behavior. Linear report positions remain unchanged;
