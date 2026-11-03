@@ -52,7 +52,7 @@ fn numeric_date(text: &str, code: &str, sys: DateSystem) -> Option<String> {
     let canonical = if first.len() == 4 {
         format!("{first}-{second}-{third}")
     } else {
-        let order = NumberFormat::parse(code).calendar_order()?;
+        let order = NumberFormat::parse_cached(code).calendar_order()?;
         let mut day = "";
         let mut month = "";
         let mut year = "";
