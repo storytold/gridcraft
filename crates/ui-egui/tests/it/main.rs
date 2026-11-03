@@ -7,6 +7,7 @@
 mod common;
 
 mod accounting_fill;
+mod active_row_highlight;
 mod advanced_filter;
 mod argument_names;
 mod autosave_persist;
@@ -58,11 +59,13 @@ mod hyperlink_ctrl_click;
 mod hyperlink_dialog;
 mod in_cell_editor_size;
 mod in_cell_editor_wrap;
+mod ink_render;
 mod insert_copied_cells;
 mod interaction;
 mod interface_scale;
 mod keyboard_shortcuts;
 mod keytips_generated;
+mod legacy_keytips;
 mod macro_editor;
 mod macros_ui;
 mod menu_hover;
