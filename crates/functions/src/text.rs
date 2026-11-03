@@ -1409,10 +1409,10 @@ mod tests {
         let long: Vec<String> = (0..5_000).map(|i| format!("a{i}{}", "a".repeat(1_000))).collect();
         let long: Vec<&str> = long.iter().map(String::as_str).collect();
         is_err(ev("TEXTSPLIT", vec![t(&"a".repeat(30_000)), av(row_t(&long))]), CellError::Value);
-        is_err(ev("TEXTBEFORE", vec![t(&"a".repeat(30_000)), av(row_t(&long)), n(-1)]), CellError::Value);
+        is_err(ev("TEXTBEFORE", vec![t(&"a".repeat(30_000)), av(row_t(&long)), n(-1.0)]), CellError::Value);
         // Longest match wins at a position, from either end.
         is_text(ev("TEXTBEFORE", vec![t("x--y-z"), av(row_t(&["-", "--"]))]), "x");
-        is_text(ev("TEXTAFTER", vec![t("x--y-z"), av(row_t(&["-", "--"])), n(-1)]), "z");
+        is_text(ev("TEXTAFTER", vec![t("x--y-z"), av(row_t(&["-", "--"])), n(-1.0)]), "z");
     }
 
     #[test]
