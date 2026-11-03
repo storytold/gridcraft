@@ -760,9 +760,11 @@ impl Dialog {
                 let selection = app.session.active().and_then(|d| {
                     d.wb.active().map(|s| format!("={}!{}", gridcraft_engine::formula::quote_sheet(&s.name), abs(&d.selection.current())))
                 });
-                let mut defaults = json!({"scope": "Workbook", "refersTo": selection});
+                let mut defaults = json!({"scope": null, "refersTo": selection});
                 for key in ["name", "scope", "comment", "refersTo", "oldName", "oldScope"] {
-                    if let Some(v) = params.get(key).filter(|v| v.is_string()) {
+                    if let Some(v) =
+                        params.get(key).filter(|v| v.is_string() || matches!(key, "scope" | "oldScope") && (v.is_object() || v.is_null()))
+                    {
                         defaults[key] = v.clone();
                     }
                 }
@@ -987,7 +989,7 @@ impl Dialog {
                     let si = doc.wb.active_sheet();
                     let sh = doc.wb.sheet(si)?;
                     let ch = sh.charts.iter().find(|c| Some(u64::from(c.id)) == id)?;
-                    let data = gridcraft_chart::resolve(&doc.wb, si, ch);
+                    let data = crate::chartview::localized_chart_data(&doc.wb, si, ch, app.ui.language);
                     let names: Vec<String> = data.series.iter().map(|x| x.name.clone()).collect();
                     let cats = ch.series.first().and_then(|x| x.categories.clone()).unwrap_or_default();
                     Some((ch.source.clone().unwrap_or_default(), cats, names))

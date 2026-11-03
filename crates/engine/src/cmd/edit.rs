@@ -41,7 +41,15 @@ use selection::{select_all, select_col, select_region, select_row, selection_mov
 /// Registers cell-entry, selection, clipboard and fill commands with their canonical API parameter descriptions.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!("cell.set", "Enter Cell", [], None, "{cell?: \"B2\", input: \"text, number or =formula\", sheet?, array?: bool}", has_doc, cell_set),
+        cmd!(
+            "cell.set",
+            "Enter Cell",
+            [],
+            None,
+            "{cell?: \"B2\", input: \"text, number or =formula\", sheet?, array?: bool, literal?: bool (default false; stores input as text without parsing)}",
+            has_doc,
+            cell_set
+        ),
         cmd!(
             "range.setValues",
             "Set Values",

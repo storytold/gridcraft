@@ -45,6 +45,27 @@ fn localized_text_fills_without_adding_an_apostrophe() {
     }
 }
 
+/// Ctrl+Shift+Enter preserves stored text without adding a prefix, and still enters array formulas.
+#[test]
+fn localized_array_commit_preserves_unchanged_text() {
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"ru"})).unwrap();
+    app.run("range.setValues", json!({"range":"A1", "values":[["1,5"]], "parse":false})).unwrap();
+    app.begin_edit(None, false);
+    assert_eq!(app.editor.as_ref().unwrap().text, "1,5");
+    assert!(app.commit_edit(0, 0, true, false));
+    let at = CellRef::new(0, 0);
+    let sh = app.session.active().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(at), Value::text("1,5"));
+    assert!(sh.cell(at).unwrap().formula.is_none());
+
+    app.begin_edit(Some("=СУММ(1,5;2,5)".into()), false);
+    assert!(app.commit_edit(0, 0, true, false));
+    let sh = app.session.active().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(at), Value::Number(4.0));
+    assert!(sh.cell(at).unwrap().formula.as_ref().unwrap().array.is_some());
+}
+
 /// Freshly typed localized numbers still become numbers when filling a selection.
 #[test]
 fn fresh_localized_numbers_still_fill_as_numbers() {

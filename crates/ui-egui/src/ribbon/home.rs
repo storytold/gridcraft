@@ -371,7 +371,10 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     egui::Popup::menu(&ft).show(|ui| table_gallery(app, ui, "home.formatAsTable"));
     let cs = big_button(ui, Icon::CellStyles, "Cell\nStyles", "Cell Styles", true);
     anchor_keytip(app, ui, &cs, &["home.newCellStyle"]);
-    egui::Popup::menu(&cs).show(|ui| cell_style_gallery(app, ui));
+    egui::Popup::menu(&cs).show(|ui| {
+        let height = (ui.ctx().content_rect().height() * 0.65).clamp(80.0, 480.0);
+        egui::ScrollArea::vertical().max_height(height).show(ui, |ui| cell_style_gallery(app, ui));
+    });
     sep(ui);
     // Cells
     ui.vertical(|ui| {

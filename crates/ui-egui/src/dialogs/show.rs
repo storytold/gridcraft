@@ -7,7 +7,7 @@ use super::data::{advanced_filter_form, data_validation_form, sort};
 use super::find::{find, go_to};
 use super::format_cells::format_cells;
 use super::insert_function::insert_function;
-use super::names::{name_manager, paste_name};
+use super::names::{name_manager, paste_name, scope_caption};
 use super::paste::{paste_special, paste_special_shortcuts};
 use super::spelling::spelling;
 use super::zoom::zoom;
@@ -549,20 +549,25 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                     });
                 }
                 Field::NameScope { key, label, sheets } => {
-                    let mut scope = d.values.get(key).and_then(Json::as_str).unwrap_or("Workbook").to_owned();
+                    let mut scope = d.values.get(key).cloned().unwrap_or(Json::Null);
+                    if let Some(legacy) = scope.as_str() {
+                        scope = if legacy == "Workbook" { Json::Null } else { json!({"sheet":legacy}) };
+                    }
                     let label = ui.label(lang.tr(label));
-                    let shown = if scope == "Workbook" { lang.tr("Workbook") } else { scope.as_str() };
+                    let shown = scope_caption(&scope, lang);
                     craft_ui::ComboBox::from_id_salt(("name_scope", key))
                         .selected_text(shown)
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut scope, "Workbook".to_owned(), lang.tr("Workbook"));
+                            ui.selectable_value(&mut scope, Json::Null, lang.tr("Workbook"));
                             for sheet in &sheets {
-                                ui.selectable_value(&mut scope, sheet.clone(), sheet);
+                                let identity = json!({"sheet":sheet});
+                                let caption = scope_caption(&identity, lang);
+                                ui.selectable_value(&mut scope, identity, caption);
                             }
                         })
                         .response
                         .labelled_by(label.id);
-                    d.values.insert(key.into(), json!(scope));
+                    d.values.insert(key.into(), scope);
                 }
                 Field::Password { key, label } => {
                     // Masked as typed (Excel shows dots); "Show password" reveals it on purpose.

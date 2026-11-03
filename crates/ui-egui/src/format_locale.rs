@@ -31,11 +31,10 @@ impl FormatLocale {
         }
     }
 
-    /// Uses locale-specific short-date and time suggestions while retaining every custom pattern.
+    /// Uses locale-specific short-date suggestions while retaining every other pattern, including 12-hour time.
     pub fn suggestion<'a>(&self, code: &'a str) -> &'a str {
         match code {
             "m/d/yyyy" => self.short_date.unwrap_or(code),
-            "h:mm AM/PM" => self.time.unwrap_or(code),
             _ => code,
         }
     }
@@ -136,6 +135,8 @@ mod tests {
         assert_eq!(locale.canonical("dd.mm.yyyy"), "dd.mm.yyyy");
         assert_eq!(locale.display("General"), "Общий");
         assert_eq!(locale.canonical("Общий"), "General");
+        assert_eq!(locale.preset("Time"), "hh:mm:ss");
+        assert_eq!(locale.suggestion("h:mm AM/PM"), "h:mm AM/PM");
     }
 
     /// Format literals, escaped padding, currency tags and conditions must survive verbatim.

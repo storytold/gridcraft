@@ -161,3 +161,99 @@ fn blank_filter_search_uses_its_localized_label() {
     assert!(!sh.is_row_hidden(2));
     assert!(sh.is_row_hidden(3));
 }
+
+/// Searches typed Russian Boolean/error captions but sends the canonical values to the engine.
+#[test]
+fn filter_search_localizes_constants_without_translating_text() {
+    use egui::{Event, Key, Modifiers, accesskit::Role};
+    for (caption, visible_row) in [("ИСТИНА", 1), ("#ДЕЛ/0!", 4)] {
+        let mut h = harness();
+        h.state_mut().run("range.setValues", json!({"range":"A1", "values":[["Header"],[true],[false],["FALSE"]], "parse":false})).unwrap();
+        h.state_mut().run("cell.set", json!({"cell":"A5", "input":"=1/0"})).unwrap();
+        h.state_mut().run("data.filter", json!({"range":"A1:A5"})).unwrap();
+        h.state_mut().run("selection.set", json!({"cell":"A1"})).unwrap();
+        press(&mut h, Key::ArrowDown, Modifiers::ALT);
+        h.run_steps(4);
+        h.get_by_role_and_label(Role::CheckBox, "ЛОЖЬ");
+        h.get_by_role_and_label(Role::CheckBox, "FALSE");
+        h.get_by_role_and_label(Role::CheckBox, caption);
+        h.input_mut().events.push(Event::Text(caption.into()));
+        h.run_steps(3);
+        h.get_by_role_and_label(Role::CheckBox, caption);
+        assert!(h.query_by_label("FALSE").is_none());
+        press(&mut h, Key::Enter, Modifiers::NONE);
+        h.run_steps(3);
+        let sheet = h.state().session.active().unwrap().wb.active().unwrap();
+        for row in 1..=4 {
+            assert_eq!(sheet.is_row_hidden(row), row != visible_row, "{caption}: row {row}");
+        }
+    }
+}
+
+/// Creates, edits and deletes a sheet-scoped name even when the sheet is called Workbook.
+#[test]
+fn name_manager_distinguishes_a_sheet_named_workbook() {
+    use egui::{Key, Modifiers};
+    let mut h = harness();
+    h.state_mut().run("sheet.rename", json!({"name":"Workbook"})).unwrap();
+    h.state_mut().run("home.insertSheet", json!({"name":"Other"})).unwrap();
+    h.state_mut().run("formulas.defineName", json!({"name":"GlobalRate", "refersTo":"=0.2", "scope":"Workbook"})).unwrap();
+    h.state_mut().open_dialog("nameManager", json!({}));
+    h.run_steps(4);
+    h.get_by_label(Language::Ru.tr("New…")).click();
+    h.run_steps(3);
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, Language::Ru.tr("Scope:")).click();
+    h.run_steps(2);
+    h.get_by_label("Workbook (Лист)").click();
+    h.run_steps(2);
+    let d = h.state_mut().dialog.as_mut().unwrap();
+    d.values.insert("name".into(), json!("LocalRate"));
+    d.values.insert("refersTo".into(), json!("=0.1"));
+    press(&mut h, Key::Enter, Modifiers::NONE);
+    h.run_steps(3);
+    let wb = &h.state().session.active().unwrap().wb;
+    let local = wb.sheet_index("Workbook").unwrap();
+    let other = wb.sheet_index("Other").unwrap();
+    assert_eq!(wb.name("LocalRate", local).unwrap().scope, Some(local));
+    assert!(wb.name("LocalRate", other).is_none());
+    assert_eq!(wb.name("GlobalRate", other).unwrap().scope, None);
+
+    h.get_by_label("LocalRate").click();
+    h.run_steps(2);
+    h.get_by_label(Language::Ru.tr("Edit…")).click();
+    h.run_steps(3);
+    let d = h.state_mut().dialog.as_mut().unwrap();
+    assert_eq!(d.values["oldScope"], json!({"sheet":"Workbook"}));
+    d.values.insert("name".into(), json!("RenamedRate"));
+    press(&mut h, Key::Enter, Modifiers::NONE);
+    h.run_steps(3);
+    let wb = &h.state().session.active().unwrap().wb;
+    assert!(wb.name("LocalRate", local).is_none());
+    assert_eq!(wb.name("RenamedRate", local).unwrap().scope, Some(local));
+    h.get_by_label("RenamedRate").click();
+    h.run_steps(2);
+    h.get_by_label(Language::Ru.tr("Delete")).click();
+    h.run_steps(3);
+    let wb = &h.state().session.active().unwrap().wb;
+    assert!(wb.name("RenamedRate", local).is_none());
+    assert_eq!(wb.name("GlobalRate", other).unwrap().scope, None);
+}
+
+/// The Select Data dialog shares the chart's generated series captions.
+#[test]
+fn chart_select_data_localizes_generated_series() {
+    let mut h = harness();
+    h.state_mut().run("range.setValues", json!({"range":"A1", "values":[[1,2],[3,4],[5,6]]})).unwrap();
+    h.state_mut().run("insert.chart", json!({"range":"A1:B3", "type":"column"})).unwrap();
+    let id = h.state().session.active().unwrap().wb.active().unwrap().charts[0].id;
+    h.state_mut().open_dialog("selectData", json!({"chart":id}));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().unwrap().values["names"], json!(["Ряд1", "Ряд2"]));
+}
+
+/// Sends a complete key press to the harness, including any shortcut modifiers.
+fn press(h: &mut egui_kittest::Harness<'static, SheetApp>, key: egui::Key, modifiers: egui::Modifiers) {
+    for pressed in [true, false] {
+        h.input_mut().events.push(egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers });
+    }
+}

@@ -717,7 +717,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ("TRUE when the integer part of a number is odd.", "TRUE, wenn der ganzzahlige Teil einer Zahl ungerade ist."),
     ("TRUE when the value is TRUE or FALSE.", "TRUE, wenn der Wert TRUE oder FALSE ist."),
     ("TRUE when the value is a number.", "TRUE, wenn der Wert eine Zahl ist."),
-    ("TRUE when the value is any error other than #N/A.", "TRUE, wenn der Wert ein anderer Fehler als #N/A. ist"),
+    ("TRUE when the value is any error other than #N/A.", "TRUE, wenn der Wert ein anderer Fehler als #N/A ist."),
     ("TRUE when the value is any error.", "TRUE, wenn der Wert ein Fehler ist."),
     ("TRUE when the value is anything other than text.", "TRUE, wenn der Wert etwas anderes als Text ist."),
     ("TRUE when the value is text.", "TRUE, wenn der Wert Text ist."),

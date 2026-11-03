@@ -56,7 +56,7 @@ fn fill(message: &str, source: &str, translated: &str, language: super::Language
     let mut rendered = Vec::with_capacity(values.len());
     for (name, value) in &values {
         let value = match *name {
-            "token" => language.tr(value).to_string(),
+            "token" => language.translation(value).unwrap_or(value).to_string(),
             "function" => locale.function_name(value).to_string(),
             "signature" => {
                 let function = values.iter().find(|(key, _)| *key == "function")?.1;
@@ -89,6 +89,16 @@ mod tests {
         assert_eq!(format_message("prefix: bad number `abc`", super::super::Language::Ru), None);
         assert_eq!(format_message("bad number `abc` suffix", super::super::Language::Ru), None);
         assert_eq!(format_message("Printer Office: permission denied", super::super::Language::Ru), None);
+    }
+
+    /// A parser token containing a pipe keeps the entire captured text during localization.
+    #[test]
+    fn parser_tokens_do_not_use_context_fallback() {
+        let token = r#"Text("a|b")"#;
+        let message = format!("There's a problem with this formula: expected `,` or `)`, found {token}");
+        let localized = format_message(&message, super::super::Language::Ru).unwrap();
+        assert!(localized.ends_with(token), "{localized}");
+        assert_ne!(localized, message);
     }
 }
 

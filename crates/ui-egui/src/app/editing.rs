@@ -152,9 +152,9 @@ impl SheetApp {
             self.message = Some(("GridCraft".into(), m));
             return true;
         }
-        // Ctrl+Enter on an unchanged text draft copies its value, not a fresh typed entry.
+        // Ctrl+Enter and Ctrl+Shift+Enter preserve an unchanged text value, not a fresh typed entry.
         // Pass the type to the engine instead of adding a quote to the visible draft.
-        let literal = if fill_selection && ed.original.as_ref() == Some(&text) {
+        let literal = if (fill_selection || array) && ed.original.as_ref() == Some(&text) {
             self.session.active().and_then(|d| d.wb.sheet(ed.sheet)).and_then(|sh| sh.cell(ed.cell)).and_then(|cell| {
                 if cell.formula.is_none()
                     && let gridcraft_engine::core::Value::Text(value) = &cell.value
@@ -216,7 +216,7 @@ impl SheetApp {
         } else if fill_selection {
             self.session.run("range.fill", json!({"input": text, "literal": literal.is_some()}))
         } else {
-            self.session.run("cell.set", json!({"cell": ed.cell.a1(), "input": text, "array": array}))
+            self.session.run("cell.set", json!({"cell": ed.cell.a1(), "input": text, "array": array, "literal": literal.is_some()}))
         };
         match r {
             Ok(_) => {

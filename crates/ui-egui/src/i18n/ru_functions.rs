@@ -826,7 +826,7 @@ pub(super) const ARGUMENTS: &[(&str, &str)] = &[
     ("connection", "подключение"),
     ("const", "константа"),
     ("cost", "стоимость"),
-    ("coupon", "купон"),
+    ("coupon", "ставка_купона"),
     ("criteria", "условие"),
     ("criteria_range", "диапазон_условия"),
     ("cumulative", "интегральная"),

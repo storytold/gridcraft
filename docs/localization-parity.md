@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-02 · **Change:** minor (complete current function help in every offered interface language) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (fix localization review findings and preserve typed values) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -160,6 +160,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | Keep unchanged text typed on Ctrl+Shift+Enter, distinguish sheet and workbook name scopes, preserve parser tokens, localize typed filter labels and chart data choices, retain 12-hour suggestions, make style previews scrollable and correct help terminology |
 | 2026-11-02 | minor | Review translated help by language; correct mathematical/statistical/financial terminology, localize empty resolved chart names and blank-filter search, validate generated sheet prefixes and assert complete hint signatures |
 | 2026-11-02 | minor | Complete help for the current 515 functions in all 18 translated interface languages; retain existing wording, separate help from formula syntax and test optional/repeated-argument structure |
 | 2026-11-02 | minor | Extend Russian help to 479 distinct descriptions and 283 argument keys; preserve original translations and canonical formula syntax; cover reported XLOOKUP, COLUMN and RADIANS tooltips |

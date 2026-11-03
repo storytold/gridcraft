@@ -23,8 +23,9 @@ and reference unions, and backslashes between array columns (`{1\2;3\4}`). For e
 decimal points and comma array columns; it does not silently translate Spanish aliases.
 
 The cell editor, formula bar, Show Formulas, autocomplete, the Formula ribbon, Insert Function, and argument hints
-use the selected formula language. Common Spanish function help is translated; functions
-without a Spanish entry retain their English names/help. General interface labels and errors
+use the selected formula language. Spanish help covers the current 515-function catalog.
+Functions without a Spanish alias keep their English name, and missing help falls back to English.
+General interface labels and errors
 fall back to English where Spanish translations are not provided. An edit captures its language
 when it starts so switching the preference cannot reinterpret unfinished input.
 
@@ -35,7 +36,8 @@ would collide with a name, displayed formulas retain the canonical spelling to p
 Stored formulas, XLSX import/export, engine commands, control/API calls, CLI evaluation and
 clipboard exchange retain strict English syntax. This also applies to advanced dialogs such as
 Name Manager and conditional-format rules. Localization happens at the cell/formula-bar editor
-boundary, including filling the selected range with Ctrl+Enter; it does not change the workbook
+boundary, including filling the selected range with Ctrl+Enter and preserving unchanged text
+on Ctrl+Shift+Enter; it does not change the workbook
 format or teach the calculation engine ambiguous aliases.
 
 ## Russian
@@ -54,7 +56,7 @@ Russian formula literals include `#ДЕЛ/0!`, `#ЗНАЧ!`, `#ССЫЛКА!`, `
 The grid, formula bar and editor localize error values; the engine, API and XLSX retain canonical
 error values and formula syntax. The internal circular-reference marker remains `#CIRC!`.
 
-Function descriptions for 23 common functions and argument labels live in
+Function descriptions and argument labels for the current 515-function catalog live in
 `crates/ui-egui/src/i18n/ru_functions.rs`, keyed by the current English catalog. Signatures are
 assembled from the canonical metadata, preserving optional arguments. Missing help falls back
 to English. Regional number/date display and localized syntax in advanced dialogs remain

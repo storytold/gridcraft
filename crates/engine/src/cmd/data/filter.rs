@@ -292,6 +292,19 @@ pub(super) fn reapply(s: &mut Session, _: &Json) -> Result<Json> {
 
 /// Distinct display values of a filter column (for the dropdown list).
 pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool)> {
+    filter_entries(wb, sheet, col).into_iter().map(|entry| (entry.label, entry.selected)).collect()
+}
+
+/// A canonical filter label with its underlying type, so interfaces can localize constants without changing text.
+#[derive(Clone)]
+pub struct FilterValue {
+    pub label: String,
+    pub selected: bool,
+    pub value: Value,
+}
+
+/// Distinct filter choices retaining typed values; blanks use Empty while command labels stay canonical.
+pub fn filter_entries(wb: &Workbook, sheet: usize, col: u32) -> Vec<FilterValue> {
     let Some(sh) = wb.sheet(sheet) else { return vec![] };
     let Some(af) = &sh.autofilter else { return vec![] };
     let off = col.saturating_sub(af.range.start.col);
@@ -313,7 +326,7 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
             _ => true,
         };
         let key = if blank { sort_key(&Value::Empty) } else { sort_key(&v) };
-        seen.entry((key, t)).or_insert(on);
+        seen.entry((key, t)).or_insert((on, if blank { Value::Empty } else { v }));
     }
-    seen.into_iter().map(|((_, t), on)| (t, on)).collect()
+    seen.into_iter().map(|((_, label), (selected, value))| FilterValue { label, selected, value }).collect()
 }

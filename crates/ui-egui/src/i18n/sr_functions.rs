@@ -777,7 +777,7 @@ pub(super) const ARGUMENTS: &[(&str, &str)] = &[
     ("lookup_vector", "vektor_pretraživanja"),
     ("lower_limit", "donja_granica"),
     ("m", "m"),
-    ("match_end", "podudaranje_graničnika_od_kraja"),
+    ("match_end", "granica_teksta_kao_graničnik"),
     ("match_mode", "režim_poklapanja"),
     ("match_type", "metod_podudaranja"),
     ("maturity", "datum_dospeća"),

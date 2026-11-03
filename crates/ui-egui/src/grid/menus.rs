@@ -2,6 +2,7 @@ use super::editor::popup_dismissed;
 use super::geo::Geo;
 use super::tables::filter_table_range;
 use super::{Arc, Drag, FillTag, RangeRef, Rect, Sense, Sheet, SheetApp, Stroke, Tokens, col_to_letters, json, pos2, vec2};
+use gridcraft_engine::cmd::data::FilterValue;
 
 /// Draws the filter-header popup: sort, search/select-all, apply/clear, a lazily installed table autofilter, new-open search focus and dismissal.
 pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
@@ -32,7 +33,7 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
         }
     }
     let wb = app.session.active().map(|d| d.wb.clone()).unwrap_or(wb);
-    let values = gridcraft_engine::cmd::data::filter_values(&wb, si, col);
+    let values = gridcraft_engine::cmd::data::filter_entries(&wb, si, col);
     let key = egui::Id::unique(("filter_sel", col));
     let search_key = egui::Id::unique(("filter_search", col));
     let buttons_key = egui::Id::unique(("filter_buttons", col));
@@ -58,7 +59,7 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             }
             ui.separator();
             ui.label(egui::RichText::new(lang.tr("Filter")).strong());
-            let mut checks: Vec<(String, bool)> = ui.ctx().data_mut(|d| d.get_temp::<Vec<(String, bool)>>(key)).unwrap_or(values.clone());
+            let mut checks: Vec<FilterValue> = ui.ctx().data_mut(|d| d.get_temp::<Vec<FilterValue>>(key)).unwrap_or(values.clone());
             // A search narrows the list; Select All and Apply then only cover the matches.
             let mut search: String = ui.ctx().data_mut(|d| d.get_temp(search_key)).unwrap_or_default();
             let field = ui.add(egui::TextEdit::singleline(&mut search).hint_text(lang.tr("Search")).desired_width(f32::INFINITY));
@@ -66,27 +67,28 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
                 field.request_focus();
             }
             let needle = search.trim().to_lowercase();
-            let matches = |v: &str| needle.is_empty() || filter_value_label(v, lang).to_lowercase().contains(&needle);
-            let all = checks.iter().filter(|(v, _)| matches(v)).all(|(_, b)| *b);
+            let matches = |entry: &FilterValue| needle.is_empty() || filter_value_label(entry, lang).to_lowercase().contains(&needle);
+            let all = checks.iter().filter(|entry| matches(entry)).all(|entry| entry.selected);
             let mut all_new = all;
             let label = if needle.is_empty() { "(Select All)" } else { "(Select All Search Results)" };
             if ui.checkbox(&mut all_new, lang.tr(label)).changed() {
-                for c in checks.iter_mut().filter(|(v, _)| matches(v)) {
-                    c.1 = all_new;
+                for entry in checks.iter_mut().filter(|entry| matches(entry)) {
+                    entry.selected = all_new;
                 }
             }
             // Full width: shrunk to the longest value, the scroll bar sat mid-menu and the wheel only
             // worked over the values themselves (#432).
             egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
-                for (v, on) in checks.iter_mut().filter(|(v, _)| matches(v)) {
-                    ui.checkbox(on, filter_value_label(v, lang));
+                for entry in checks.iter_mut().filter(|entry| matches(entry)) {
+                    let label = filter_value_label(entry, lang).to_string();
+                    ui.checkbox(&mut entry.selected, label);
                 }
             });
             ui.ctx().data_mut(|d| {
                 d.insert_temp(key, checks.clone());
                 d.insert_temp(search_key, search.clone());
             });
-            let checks: Vec<(String, bool)> = checks.iter().map(|(v, on)| (v.clone(), *on && matches(v))).collect();
+            let selected = |entry: &FilterValue| entry.selected && matches(entry);
             ui.separator();
             ui.horizontal(|ui| {
                 let clear = ui.button(lang.tr("Clear Filter"));
@@ -95,13 +97,17 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
                     close = true;
                 }
                 // Nothing checked would hide every row, so Enter (unlike a click on Apply) does nothing then.
-                let any = checks.iter().any(|(_, on)| *on);
+                let any = checks.iter().any(selected);
                 let apply = ui.button(lang.tr("Apply"));
                 ui.ctx().data_mut(|d| d.insert_temp(buttons_key, vec![ascending.id, descending.id, clear.id, apply.id]));
                 if apply.clicked() || (enter && any) {
-                    let blanks = checks.iter().any(|(v, on)| v == "(Blanks)" && *on);
-                    let vals: Vec<String> = checks.iter().filter(|(v, on)| *on && v != "(Blanks)").map(|(v, _)| v.clone()).collect();
-                    let p = if checks.iter().all(|(_, b)| *b) {
+                    let blanks = checks.iter().any(|entry| entry.value == gridcraft_engine::core::Value::Empty && selected(entry));
+                    let vals: Vec<String> = checks
+                        .iter()
+                        .filter(|entry| selected(entry) && entry.value != gridcraft_engine::core::Value::Empty)
+                        .map(|entry| entry.label.clone())
+                        .collect();
+                    let p = if checks.iter().all(selected) {
                         json!({"column": col_to_letters(col), "clear": true})
                     } else {
                         json!({"column": col_to_letters(col), "values": vals, "blanks": blanks})
@@ -114,7 +120,7 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
     });
     if close || popup_dismissed(&response.response, was_open) {
         ui.ctx().data_mut(|d| {
-            d.remove::<Vec<(String, bool)>>(key);
+            d.remove::<Vec<FilterValue>>(key);
             d.remove::<String>(search_key);
             d.remove::<Vec<egui::Id>>(buttons_key);
         });
@@ -122,9 +128,13 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
     }
 }
 
-/// Localizes the reserved blank-value label without changing filter payload values.
-fn filter_value_label(value: &str, language: crate::i18n::Language) -> &str {
-    if value == "(Blanks)" { language.tr("(Blanks)") } else { value }
+/// Localizes typed constants and the blank caption while preserving literal text and canonical payloads.
+fn filter_value_label(entry: &FilterValue, language: crate::i18n::Language) -> &str {
+    if entry.value == gridcraft_engine::core::Value::Empty {
+        language.tr("(Blanks)")
+    } else {
+        crate::formula_locale::localized_constant(&entry.value, language.formula_locale()).unwrap_or(&entry.label)
+    }
 }
 
 /// Draws and dispatches the cell context menu, including Show Details when offered, clipboard and insert/format actions; closes on Esc or an outside press.

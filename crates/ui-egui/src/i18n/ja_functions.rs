@@ -567,7 +567,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ("TRUE when the integer part of a number is odd.", "TRUE 数値の整数部分が奇数の場合。"),
     ("TRUE when the value is TRUE or FALSE.", "TRUE (値が TRUE または FALSE の場合)。"),
     ("TRUE when the value is a number.", "TRUE 値が数値の場合。"),
-    ("TRUE when the value is any error other than #N/A.", "TRUE 値が #N/A. 以外のエラーの場合"),
+    ("TRUE when the value is any error other than #N/A.", "値が #N/A 以外のエラーの場合に TRUE。"),
     ("TRUE when the value is any error.", "TRUE 値がエラーの場合。"),
     ("TRUE when the value is anything other than text.", "TRUE 値がテキスト以外の場合。"),
     ("TRUE when the value is text.", "TRUE (値がテキストの場合)。"),

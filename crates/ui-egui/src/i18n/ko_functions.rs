@@ -158,7 +158,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ("Counts the columns in an array or range.", "배열 또는 범위의 열 수를 계산합니다."),
     ("Counts the items in a cube set (no cube connections; #N/A).", "큐브 세트의 항목 수를 계산합니다(큐브 연결 없음, #N/A)."),
     ("Counts the non-empty values.", "비어 있지 않은 값의 개수를 계산합니다."),
-    ("Counts the numbers.", "숫자를 센다."),
+    ("Counts the numbers.", "숫자의 개수를 계산합니다."),
     ("Counts the rows in an array or range.", "배열 또는 범위의 행 수를 계산합니다."),
     (
         "Counts whole years, months or days between two dates. unit: Y, M, D, MD, YM or YD.",
@@ -567,7 +567,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ("TRUE when two texts are identical, including case.", "두 텍스트가 대소문자까지 같으면 TRUE입니다."),
     ("Tangent of a complex number.", "복소수의 탄젠트입니다."),
     ("Tangent of an angle in radians.", "각도의 탄젠트(라디안 단위)입니다."),
-    ("The constant pi to 15 digits.", "상수 파이는 15자리입니다."),
+    ("The constant pi to 15 digits.", "15자리 정밀도의 상수 파이입니다."),
     ("The formula of a cell as text.", "셀의 수식을 텍스트로 표현한 것입니다."),
     ("The gamma function.", "감마 함수."),
     ("The k-th largest number in a data set.", "데이터 세트에서 k번째로 큰 숫자입니다."),
@@ -590,7 +590,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ("Yield of a security with an odd first period.", "첫 번째 이자 기간이 불규칙한 유가증권의 수익률입니다."),
     ("Yield of a security with an odd last period.", "최종 이자 기간이 불규칙한 유가증권의 수익률입니다."),
     ("Z-score of a value.", "값의 Z 점수입니다."),
-    ("e raised to the given power.", "e를 주어진 거듭제곱으로 올렸습니다."),
+    ("e raised to the given power.", "e를 주어진 거듭제곱으로 올린 값입니다."),
     ("k-th percentile, k from 0 to 1 inclusive.", "k번째 백분위수, k는 0부터 1까지입니다."),
     ("k-th percentile, k strictly between 0 and 1.", "k번째 백분위수, k는 엄격히 0과 1 사이입니다."),
 ];

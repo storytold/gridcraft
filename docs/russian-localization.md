@@ -63,7 +63,7 @@ The extra `е`/`ё` equivalence applies to aliases only. Current main's Unicode 
 iterative traversal of long flat formulas are retained. The table is tested in full for unique
 canonical names, unique folded aliases and parse/print round trips.
 
-Help for 23 common functions is migrated to `i18n/ru_functions.rs` using current English keys.
+Help for the current 515 functions is in `i18n/ru_functions.rs` using current English keys.
 For example, IF's optional arguments follow the engine rather than #1850's hand-written Russian
 signature. Functions without Russian help retain the English fallback.
 

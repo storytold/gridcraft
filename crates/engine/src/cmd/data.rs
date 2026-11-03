@@ -23,7 +23,7 @@ mod sort;
 mod tools;
 mod validation;
 
-pub use filter::filter_values;
+pub use filter::{FilterValue, filter_entries, filter_values};
 pub(crate) use filter::{apply_filter, grow_autofilter};
 use filter::{clear_filter, filter_by, reapply, toggle_filter};
 use grouping::{detail, group, outline_settings, show_levels, subtotal};
