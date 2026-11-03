@@ -775,7 +775,8 @@ const POISSON_REF: &[(f64, f64, f64, f64)] = &[
 ];
 
 fn rel_err(got: Value, want: f64) -> f64 {
-    let g = got.as_f64().unwrap_or(f64::NAN);
+    // An error or a non-finite result is the worst possible miss, not a skipped one.
+    let Some(g) = got.as_f64().filter(|g| g.is_finite()) else { return f64::INFINITY };
     if want == 0.0 { g.abs() } else { ((g - want) / want).abs() }
 }
 
@@ -784,6 +785,10 @@ fn rel_err(got: Value, want: f64) -> f64 {
 /// most 9e-14 on the grid (the n = 100,000 cumulative cases), 2e-14 for n <= 10,000 away from the
 /// far tails, 2e-15 on the Excel-sized central cases. The log-gamma code was off by 1.5e-11.
 fn allowed(want: f64) -> f64 {
+    // A reference that underflows to 0 must come back as (almost) 0, not as any finite value.
+    if want == 0.0 {
+        return 1e-300;
+    }
     1e-13 + 2e-16 * want.abs().ln().abs()
 }
 
