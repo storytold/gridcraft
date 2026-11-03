@@ -23,7 +23,7 @@ const DE_MONTHS_SHORT: [&str; 12] = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", 
 /// Full German weekday names, in the order of [`WEEKDAYS`] (index 0 = Sunday).
 const DE_WEEKDAYS: [&str; 7] = ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"];
 /// Three-letter German weekday names, the first three characters of [`DE_WEEKDAYS`].
-const DE_WEEKDAYS_SHORT: [&str; 7] = ["Son", "Mon", "Die", "Mit", "Don", "Fre", "Sam"];
+const DE_WEEKDAYS_SHORT: [&str; 7] = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
 /// Three-letter English weekday names, the first three characters of [`WEEKDAYS`].
 const EN_WEEKDAYS_SHORT: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -95,7 +95,7 @@ mod tests {
         // Short names are the ones `ddd`/`mmm` show.
         assert_eq!(Locale::De.month_name(3, true), "Mär");
         assert_eq!(Locale::De.month_name(10, true), "Okt");
-        assert_eq!(Locale::De.weekday_name(4, true), "Don");
+        assert_eq!(Locale::De.weekday_name(4, true), "Do");
         assert_eq!(Locale::En.month_name(10, true), "Oct");
         assert_eq!(Locale::En.weekday_name(4, true), WEEKDAYS[4].get(..3).unwrap_or_default());
         // Out of range names nothing.

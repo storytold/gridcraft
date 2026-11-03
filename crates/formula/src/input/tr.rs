@@ -449,3 +449,21 @@ const ERRORS: &[(CellError, &str)] = &[
     (CellError::Calc, "#HESAP!"),
     (CellError::Circ, "#DÖNGÜ!"),
 ];
+
+#[cfg(test)]
+mod tests {
+    use crate::{FormulaLocale, parse_input, print, print_input};
+
+    /// Checks that every Turkish alias is unique after folding and survives localized editing.
+    #[test]
+    fn every_turkish_alias_round_trips() {
+        let locale = FormulaLocale::Tr;
+        for &(canonical, local) in super::FUNCTIONS {
+            assert_eq!(locale.canonical_name(local), canonical, "{local}");
+            let input = format!("{local}(1,25;2)");
+            let expr = parse_input(&input, locale, |_| false).unwrap();
+            assert_eq!(print(&expr), format!("{canonical}(1.25,2)"), "{input}");
+            assert_eq!(print_input(&expr, locale, |_| false).unwrap(), input);
+        }
+    }
+}

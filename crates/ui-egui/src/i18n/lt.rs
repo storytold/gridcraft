@@ -86,7 +86,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Border" => "Kraštinė",
         "Borders" => "Kraštinės",
         "Bottom" => "Apačia",
-        "Bottom\nAlign" => "Lygiuoti\nviršuje",
+        "Bottom\nAlign" => "Lygiuoti\napačioje",
         "Bottom 10 Items" => "10 mažiausių reikšmių",
         "Bottom 10%" => "Mažiausi 10 %",
         "Bottom Align" => "Lygiuoti apačioje",
@@ -1035,6 +1035,7 @@ mod tests {
     #[test]
     fn ribbon_line_breaks_and_placeholders_survive() {
         assert_eq!(translate("Top\nAlign"), Some("Lygiuoti\nviršuje"));
+        assert_eq!(translate("Bottom\nAlign"), Some("Lygiuoti\napačioje"));
         assert_eq!(translate("Page {page} of {pages}").unwrap().replace("{page}", "3").replace("{pages}", "9"), "Puslapis 3 iš 9");
         assert_eq!(translate("Find…"), Some("Rasti…"));
         assert_eq!(translate(" (password)"), Some(" (slaptažodis)"));

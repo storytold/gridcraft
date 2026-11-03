@@ -24,12 +24,13 @@ messages use `tr_error`; selected dynamic parser/parameter messages preserve cap
 The Format Cells editor displays Russian date/time tokens while keeping canonical format
 codes in storage. Full regional number/date rendering remains outstanding.
 
-## Function help in every interface language (2026-11-02)
+## Function help coverage
 
-All 19 offered interface languages now have descriptions and argument labels for the current
+Twenty languages have descriptions and argument labels for the current
 515-function catalog: the English source plus Czech, German, Greek, Spanish, French, Italian,
 Japanese, Korean, Dutch, Polish, Brazilian Portuguese, Romanian, Russian, Serbian, Turkish,
-Ukrainian, Vietnamese and Simplified Chinese. Each translated table covers 479 distinct
+Ukrainian, Vietnamese, Simplified Chinese and Traditional Chinese. Danish, Swedish, Georgian
+and Lithuanian use English help. Each translated table covers 479 distinct
 descriptions and 283 argument keys. Existing Spanish/Russian help and the previously added
 translated hints are reviewed alongside the new rows, preserving their keys and correcting mistranslations. Mathematical variables such as `x`, `y` and `n`, and identifiers
 such as XML/XPath, intentionally stay recognizable.
@@ -44,8 +45,9 @@ catalog strings still fall back to English instead of blocking a new function.
 New non-Russian rows are machine-assisted translation drafts of GridCraft's own English text
 (Google Translate), with manual corrections for terminology, rounding direction/ties,
 forecast-statistic codes and untranslated rows. A separate agent reviews each translated package
-against the English catalog and argument contexts, including existing rows. Existing GridCraft translations take priority where correct;
-no Office help text, vendor assets or another open PR's dictionary is imported. The new rows
+against the English catalog and argument contexts, including existing rows. Existing GridCraft
+translations take priority where correct. The Traditional Chinese catalog comes from #3271.
+The new rows
 need native-speaker review, especially specialized financial/statistical terminology. Automated
 coverage and syntax checks establish completeness and structure, not linguistic certification.
 Serbian additions use the Latin script of the existing interface catalog.
@@ -71,9 +73,9 @@ the localized book, sheet and table-column prefix parameters.
 - **Function help** (the argument hint, autocomplete, Insert Function and the Formulas-tab
   menus) follows the interface language through per-language tables keyed by the catalog's
   English text (`i18n/<lang>_functions.rs`): descriptions, and argument names from which the
-  hint is assembled with the formula syntax's function name and separator. All 18 non-English
-  interface languages now cover the current 515-function catalog. English remains the fallback
-  for new catalog text not yet present in a language's table.
+  hint is assembled with the formula syntax's function name and separator. The current 515-function
+  catalog has help in 20 languages, including English and Traditional Chinese. Of the 24 interface
+  languages, Danish, Swedish, Georgian and Lithuanian currently use English help.
 - **A first catalog exists.** `crates/ui-egui/src/i18n.rs` (merged 10-10 in #31, #104, #82; German
   added 10-11) adds an interface-language preference that defaults to the system language (closes
   #20) and a View-tab switcher, with English-keyed lookup tables: Simplified Chinese, Korean,
@@ -88,9 +90,10 @@ the localized book, sheet and table-column prefix parameters.
   strings plus ~500 function descriptions), so the ribbon-only languages cover **~12%** and
   Japanese and Portuguese **~43%** (measured count / estimated total).
 - **Canonical file/API formulas, localized cell entry.** Files and APIs keep English names,
-  comma arguments and decimal points. Spanish and Russian cell/formula-bar entry use locale data
-  for aliases and separators. Number/date display still uses the canonical formats; regional
-  formats and other language tables are separate open work (including #163 and #2822).
+  comma arguments and decimal points. Cell and formula-bar entry support localized aliases and
+  separators for Spanish, Russian, Polish, French, German, Italian, Brazilian Portuguese and Turkish.
+  Spanish also localizes structured-reference specifiers. Russian date/time format editing and
+  German format previews retain canonical storage codes.
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
   #142 is still open pending confirmation). Native CJK fallback also probes Flatpak's read-only
   `/run/host/fonts`, `/run/host/local-fonts` and `/run/host/user-fonts` layouts, so installed
