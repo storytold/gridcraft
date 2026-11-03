@@ -752,6 +752,14 @@ mod tests {
     }
 
     #[test]
+    fn adjacent_function_names_are_still_recognised() {
+        let omml = gridcraft_math::to_omml("\\sin\\cos x", 11.0, None).unwrap();
+        let back =
+            to_latex(&crate::xml::parse(format!("<x xmlns:m=\"m\" xmlns:a=\"a\">{omml}</x>").as_bytes()).unwrap().children[0].clone()).unwrap();
+        assert!(back.contains("\\sin") && back.contains("\\cos"), "{back}");
+    }
+
+    #[test]
     fn a_space_in_text_mode_survives_the_round_trip() {
         let omml = gridcraft_math::to_omml("\\text{if } x", 11.0, None).unwrap();
         let back =
