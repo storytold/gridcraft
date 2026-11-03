@@ -6,7 +6,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Data Table" => "数据表",
         "Show Data Table" => "显示数据表",
         "Available for column, bar, line, area and compatible combo charts." => "可用于柱形图、条形图、折线图、面积图和兼容的组合图。",
-        "Show Legend Keys" => "显示图例项标示",
+        "Show Legend Keys" => "显示图例标记",
         "Horizontal Borders" => "水平边框",
         "Vertical Borders" => "垂直边框",
         "Elements" => "元素",
@@ -29,7 +29,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Reports:" => "报表:",
         "Answer" => "答案",
         "Sensitivity" => "敏感性",
-        "Limits" => "极限",
+        "Limits" => "极限值",
         "Needs an optimal or converged solution: Solver stopped before reaching one." => "需要最优解或收敛解：规划求解在到达之前已停止。",
         "Needs Simplex LP or GRG Nonlinear, a Max or Min objective and no integer constraints." => {
             "需要 Simplex LP 或 GRG Nonlinear、最大值或最小值目标，并且不含整数约束。"
@@ -39,8 +39,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Send Backward" => "下移一层",
         "The chart no longer exists." => "该图表已不存在。",
         "Trust Scripts" => "信任脚本",
-        "Banded Columns" => "镶边列",
-        "Banded Rows" => "镶边行",
+        "Banded Columns" => "交替着色列",
+        "Banded Rows" => "交替着色行",
         "Commits" => "提交数",
         "Copy Cells" => "复制单元格",
         "Data Labels" => "数据标签",
