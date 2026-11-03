@@ -20,7 +20,7 @@ fn rr(a: &str) -> RangeRef {
 fn sample() -> Workbook {
     let mut wb = Workbook::new();
     wb.date_system = DateSystem::D1904;
-    wb.calc = CalcSettings { mode: CalcMode::Manual, iterative: true, max_iterations: 42, max_change: 0.5, precision_as_displayed: true };
+    wb.calc = CalcSettings { mode: CalcMode::Manual, iterative: true, max_iterations: 42, max_change: 0.5, precision_as_displayed: true, r1c1: true };
     wb.protected_structure = true;
     wb.structure_password = Some(gridcraft_model::PasswordHash::new_sha512("s3cret", b"0123456789abcdef"));
     wb.props = DocProps {
@@ -1695,4 +1695,22 @@ fn generated_rule_formulas_use_the_top_left_cell_of_every_area() {
     let mut xml = String::new();
     z.by_name("xl/worksheets/sheet1.xml").unwrap().read_to_string(&mut xml).unwrap();
     assert!(xml.contains("<formula>NOT(ISERROR(SEARCH(\"x\",C2)))</formula>"), "{xml}");
+}
+
+#[test]
+fn r1c1_reference_style_is_kept() {
+    // #2809: `<calcPr refMode="R1C1"/>` was dropped on open, so a workbook saved by Excel in R1C1
+    // style came back in A1 style.
+    let bytes = super::minimal("<sheetData/>", &[], "", r#"<calcPr calcId="191029" refMode="R1C1"/>"#);
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    assert!(wb.calc.r1c1);
+    let saved = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
+    assert_eq!(book.child("calcPr").and_then(|c| c.attr("refMode")), Some("R1C1"));
+    // A1 is the default and isn't written.
+    let saved = write_xlsx(&Workbook::new()).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
+    assert_eq!(book.child("calcPr").and_then(|c| c.attr("refMode")), None);
 }
