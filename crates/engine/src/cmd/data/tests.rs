@@ -500,6 +500,26 @@ fn a_relative_list_source_is_read_from_the_cell_being_checked() {
 }
 
 #[test]
+fn a_list_source_that_takes_in_the_cell_does_not_list_the_value_being_typed() {
+    // `=$A1:$A2` on A2:A3 is A1:A2 at A2 and A2:A3 at A3. The list is the one before the entry, as
+    // in Excel; a new value used to land in its own source and pass.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1:A2", "values": [["x"], ["y"]]})).unwrap();
+    s.execute("data.validation", json!({"range": "A2:A3", "type": "list", "formula1": "=$A1:$A2"})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    for (cell, accepted, refused) in [("A2", &["x", "y"][..], &["new"][..]), ("A3", &["y"], &["x", "new"])] {
+        let at = CellRef::parse(cell).unwrap();
+        for v in accepted {
+            assert!(check_validation(wb, 0, at, v).is_none(), "{cell} refuses {v}");
+        }
+        for v in refused {
+            assert!(check_validation(wb, 0, at, v).is_some(), "{cell} accepts {v}");
+        }
+    }
+}
+
+#[test]
 fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     // A typo used to give a rule that validates nothing (`type="none"`) or the wrong check,
     // with no error.

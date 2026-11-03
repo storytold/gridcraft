@@ -187,6 +187,7 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
     // The formulas are written for the top-left cell of all the areas and see the value being entered,
     // as in Excel (a custom `=A1>10` on A1:A9 checks A5's new value at A5).
     let first = RangeRef::top_left(&dv.ranges).unwrap_or(at);
+    let original = wb;
     let entered;
     let wb = if sh.value(at) == v {
         wb
@@ -202,7 +203,9 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
     let eval = |f: &str| gridcraft_calc::evaluate(wb, sheet, at, &formula_at(f, first, at));
     let num = |f: &str| eval(f).to_number().ok();
     let ok = match dv.kind {
-        ValidationKind::List => list_items(wb, sheet, at, dv).iter().any(|x| x.eq_ignore_ascii_case(input)),
+        // The list is the one the dropdown showed before the entry, as in Excel: a source that takes
+        // in the cell itself (`=$A1:$A2` on A2:A3 is A2:A3 at A3) doesn't list the value being typed.
+        ValidationKind::List => list_items(original, sheet, at, dv).iter().any(|x| x.eq_ignore_ascii_case(input)),
         ValidationKind::Custom => eval(&dv.f1).to_bool().unwrap_or(false),
         ValidationKind::TextLength => {
             let n = input.chars().count() as f64;
