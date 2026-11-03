@@ -9,13 +9,19 @@ trap 'rm -rf "$tmp"' EXIT
 
 prefix='https://raw.githubusercontent.com/apache/poi/2c00b85/test-data/spreadsheet/'
 files=()
+declare -A seen_names=()
 count=0
 while IFS=$'\t' read -r name digest url || [[ -n ${name:-} ]]; do
     [[ -n ${name:-} ]] || continue
-    if [[ $name == */* || $name == *..* || ! $name == *.xlsx ]]; then
+    if [[ ! $name =~ ^[A-Za-z0-9_.-]+\.xlsx$ || $name == *..* ]]; then
         printf 'corpus: invalid filename: %s\n' "$name" >&2
         exit 2
     fi
+    if [[ -n ${seen_names[$name]+x} ]]; then
+        printf 'corpus: duplicate filename: %s\n' "$name" >&2
+        exit 2
+    fi
+    seen_names[$name]=1
     if [[ ! $digest =~ ^[[:xdigit:]]{64}$ || $url != "$prefix"* ]]; then
         printf 'corpus: invalid manifest row for %s\n' "$name" >&2
         exit 2
