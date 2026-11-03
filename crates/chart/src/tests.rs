@@ -1258,3 +1258,75 @@ fn box_whisker_draws_each_series_quartile_method() {
     // The boxes span 3.5 and 2.5 data units on the same value axis.
     assert!((heights[0] / heights[1] - 1.4).abs() < 0.001);
 }
+
+#[test]
+fn a_series_named_by_a_name_on_a_sheet_with_an_apostrophe_resolves() {
+    // #2012: `'Bob''s'!Title` kept the doubled quote, so the sheet wasn't found and the series
+    // was named by the literal text.
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        s.name = "Bob's".into();
+        s.set_value(CellRef::new(0, 0), Value::from("Takings"));
+        s.set_value(CellRef::new(1, 0), Value::Number(4.0));
+        s.set_value(CellRef::new(2, 0), Value::Number(9.0));
+    }
+    wb.names.push(gridcraft_model::DefinedName {
+        name: "Title".into(),
+        scope: Some(0),
+        formula: "'Bob''s'!$A$1".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.series = vec![Series {
+        name: Some("'Bob''s'!Title".into()),
+        categories: None,
+        values: "'Bob''s'!$A$2:$A$3".into(),
+        bubble_sizes: None,
+        color: None,
+        secondary: false,
+        kind: None,
+        quartiles: Default::default(),
+        smooth: false,
+        trendlines: Vec::new(),
+    }];
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
+}
+
+#[test]
+fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
+    // `'a!b'!Title`: the sheet name holds a `!`, so the evaluator must split the parsed name at
+    // the last one, not the first.
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        s.name = "a!b".into();
+        s.set_value(CellRef::new(0, 0), Value::from("Takings"));
+        s.set_value(CellRef::new(1, 0), Value::Number(4.0));
+        s.set_value(CellRef::new(2, 0), Value::Number(9.0));
+    }
+    wb.names.push(gridcraft_model::DefinedName {
+        name: "Title".into(),
+        scope: Some(0),
+        formula: "'a!b'!$A$1".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.series = vec![Series {
+        name: Some("'a!b'!Title".into()),
+        categories: None,
+        values: "'a!b'!$A$2:$A$3".into(),
+        bubble_sizes: None,
+        color: None,
+        secondary: false,
+        kind: None,
+        quartiles: Default::default(),
+        smooth: false,
+        trendlines: Vec::new(),
+    }];
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
+}
