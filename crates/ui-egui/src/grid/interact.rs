@@ -307,6 +307,7 @@ fn handle_column_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, 
             return;
         }
         if point_header(app, wb, sh, RangeRef::cols(c, c), mods.shift, mods.command) {
+            point_header_first_move(app, input);
             return;
         }
         // An armed Format Painter paints the columns dragged over instead of moving them.
@@ -337,6 +338,7 @@ fn handle_row_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, p: 
         }
         let r = geo.row_at(sh, p.y);
         if point_header(app, wb, sh, RangeRef::rows(r, r), mods.shift, mods.command) {
+            point_header_first_move(app, input);
             return;
         }
         let range = if mods.shift { RangeRef::rows(sel.anchor.row.min(r), sel.anchor.row.max(r)) } else { RangeRef::rows(r, r) };
@@ -612,6 +614,10 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
                     app.session.run("selection.set", json!({"range": RangeRef::cols(anchor.min(c), anchor.max(c)).a1(), "active": sel.active.a1()}));
                 scroll_by(app, vec2(auto.x, 0.0));
             }
+            drag @ (Drag::PointRows(_) | Drag::PointCols(_)) => {
+                point_header_to(app, geo, sh, wb, &drag, p);
+                scroll_by(app, if matches!(drag, Drag::PointRows(_)) { vec2(0.0, auto.y) } else { vec2(auto.x, 0.0) });
+            }
             Drag::MoveCols { source, .. } => {
                 let col = geo.col_at(sh, p.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0));
                 let midpoint = geo.x(sh, col) + sh.col_width(col) * geo.z * 0.5;
@@ -688,6 +694,14 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
             }
             // Whole rows or columns clicked or dragged over by their headers.
             Drag::Rows(_) | Drag::Cols(_) => format_painter_apply(app),
+            // The release may be the first frame to report the pointer's last position.
+            drag @ (Drag::PointRows(_) | Drag::PointCols(_)) => {
+                if resp.drag_stopped()
+                    && let Some(p) = pos
+                {
+                    point_header_to(app, geo, sh, wb, &drag, p);
+                }
+            }
             // Esc mid-drag lands here too (egui ends the drag on Esc): no menu, and the key is
             // spent on the drag so the grid's Esc doesn't also drop the copy.
             Drag::Fill { target: Some(t), menu: true } => {
@@ -751,11 +765,13 @@ fn format_painter_apply(app: &mut SheetApp) {
     }
 }
 
-/// Point mode on a header: inserts a whole-row or whole-column reference instead of selecting.
+/// Point mode on a header: inserts a whole-row or whole-column reference instead of selecting,
+/// and dragging on from there extends it.
 fn point_header(app: &mut SheetApp, wb: &Workbook, sh: &Sheet, range: RangeRef, extend: bool, add: bool) -> bool {
     let Some(ed) = app.editor.as_mut().filter(|ed| ed.can_point()) else { return false };
     let edit_sheet = ed.sheet;
     let active_sheet = wb.active_sheet();
+    let pressed = range;
     let range = if extend {
         ed.point
             .and_then(|point| crate::editor::formula_refs(&ed.text).into_iter().find(|(start, end, ..)| (*start, *end) == point))
@@ -776,9 +792,7 @@ fn point_header(app: &mut SheetApp, wb: &Workbook, sh: &Sheet, range: RangeRef, 
     } else {
         range
     };
-    let reference = range.a1();
-    let reference =
-        if ed.sheet != wb.active_sheet() { format!("{}!{reference}", gridcraft_engine::formula::quote_sheet(&sh.name)) } else { reference };
+    let reference = header_reference(ed, wb, sh, range);
     if add {
         ed.append_ref(&reference);
     } else {
@@ -787,7 +801,47 @@ fn point_header(app: &mut SheetApp, wb: &Workbook, sh: &Sheet, range: RangeRef, 
     ed.point_anchor = None;
     ed.point_cell = Some(range.start);
     ed.request_focus = true;
+    // The drag keeps the end of the reference the press didn't land on.
+    app.grid.drag = if range.is_full_cols() {
+        Drag::PointCols(if range.start.col == pressed.start.col { range.end.col } else { range.start.col })
+    } else {
+        Drag::PointRows(if range.start.row == pressed.start.row { range.end.row } else { range.start.row })
+    };
     true
+}
+
+fn header_reference(ed: &EditState, wb: &Workbook, sh: &Sheet, range: RangeRef) -> String {
+    let reference = range.a1();
+    if ed.sheet != wb.active_sheet() { format!("{}!{reference}", gridcraft_engine::formula::quote_sheet(&sh.name)) } else { reference }
+}
+
+/// The frame that starts a drag reports no `dragged()`, so its movement is applied here.
+fn point_header_first_move(app: &mut SheetApp, input: &InteractionInput<'_>) {
+    if input.response.drag_started()
+        && let Some(p) = input.position
+    {
+        let drag = app.grid.drag.clone();
+        point_header_to(app, input.geo, input.sheet, input.workbook, &drag, p);
+    }
+}
+
+/// Point mode dragged over the headers: the pointed reference runs from the anchor to the pointer.
+fn point_header_to(app: &mut SheetApp, geo: &Geo, sh: &Sheet, wb: &Workbook, drag: &Drag, p: Pos2) {
+    let range = match *drag {
+        Drag::PointCols(anchor) => {
+            let col = geo.col_at(sh, p.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0));
+            RangeRef::cols(anchor.min(col), anchor.max(col))
+        }
+        Drag::PointRows(anchor) => {
+            let row = geo.row_at(sh, p.y.clamp(geo.cells.top() + 1.0, geo.cells.bottom() - 1.0));
+            RangeRef::rows(anchor.min(row), anchor.max(row))
+        }
+        _ => return,
+    };
+    let Some(ed) = app.editor.as_mut().filter(|ed| ed.point_at_caret()) else { return };
+    let reference = header_reference(ed, wb, sh, range);
+    ed.insert_ref(&reference);
+    ed.point_cell = Some(range.start);
 }
 
 fn select_to_pointer(app: &mut SheetApp, geo: &Geo, sh: &Sheet, wb: &Workbook, p: Pos2) {

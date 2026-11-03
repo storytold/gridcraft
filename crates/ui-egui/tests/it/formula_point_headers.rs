@@ -173,3 +173,92 @@ fn shift_does_not_extend_a_row_reference_across_sheets() {
         [("6:6".into(), Some("Other sheet".into())),]
     );
 }
+
+fn press_and_drag(h: &mut egui_kittest::Harness<'_, SheetApp>, from: Pos2, to: Pos2, modifiers: Modifiers) {
+    h.input_mut().events.push(Event::ModifiersChanged(modifiers));
+    h.input_mut()
+        .events
+        .extend([Event::PointerMoved(from), Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers }]);
+    h.step();
+    drag_to(h, to);
+}
+
+fn drag_to(h: &mut egui_kittest::Harness<'_, SheetApp>, to: Pos2) {
+    h.input_mut().events.push(Event::PointerMoved(to));
+    h.step();
+}
+
+fn release(h: &mut egui_kittest::Harness<'_, SheetApp>, at: Pos2) {
+    h.input_mut().events.push(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+}
+
+fn text<'a>(h: &'a egui_kittest::Harness<'_, SheetApp>) -> &'a str {
+    h.state().editor.as_ref().map_or("", |ed| ed.text.as_str())
+}
+
+#[test]
+fn dragging_over_column_headers_extends_the_reference() {
+    let mut h = harness();
+    let (c, e, a, d) = (header_center(&h, false, 2), header_center(&h, false, 4), header_center(&h, false, 0), header_center(&h, false, 3));
+    press_and_drag(&mut h, c, e, Modifiers::NONE);
+    assert_eq!(text(&h), "=SUM(C:E");
+    // Back past the press: the reference follows the pointer instead of keeping E.
+    drag_to(&mut h, a);
+    assert_eq!(text(&h), "=SUM(A:C");
+    // The release position counts even without a movement frame before it.
+    release(&mut h, d);
+    assert_eq!(text(&h), "=SUM(C:D");
+    assert_eq!(h.state().session.active().unwrap().selection.current().a1(), "F8");
+}
+
+#[test]
+fn dragging_over_row_headers_extends_the_reference() {
+    let mut h = harness();
+    let (r3, r6, r2) = (header_center(&h, true, 2), header_center(&h, true, 5), header_center(&h, true, 1));
+    press_and_drag(&mut h, r3, r6, Modifiers::NONE);
+    assert_eq!(text(&h), "=SUM(3:6");
+    release(&mut h, r2);
+    assert_eq!(text(&h), "=SUM(2:3");
+    assert_eq!(h.state().session.active().unwrap().selection.current().a1(), "F8");
+}
+
+#[test]
+fn header_drag_on_another_sheet_keeps_the_qualifier() {
+    let mut h = harness();
+    h.state_mut().session.execute("home.insertSheet", json!({"name": "Other sheet"})).unwrap();
+    h.run_steps(2);
+    let (b, d) = (header_center(&h, false, 1), header_center(&h, false, 3));
+    press_and_drag(&mut h, b, d, Modifiers::NONE);
+    assert_eq!(text(&h), "=SUM('Other sheet'!B:D");
+}
+
+#[test]
+fn header_drag_with_command_keeps_the_earlier_argument() {
+    let mut h = harness();
+    let (a, e, f) = (header_center(&h, false, 0), header_center(&h, false, 4), header_center(&h, false, 5));
+    click(&mut h, a);
+    press_and_drag(&mut h, e, f, Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE });
+    assert_eq!(text(&h), "=SUM(A:A,E:F");
+}
+
+#[test]
+fn header_drag_with_shift_keeps_the_far_end_of_the_reference() {
+    let mut h = harness();
+    let (c, e, d) = (header_center(&h, false, 2), header_center(&h, false, 4), header_center(&h, false, 3));
+    click(&mut h, c);
+    press_and_drag(&mut h, e, d, Modifiers { shift: true, ..Modifiers::NONE });
+    assert_eq!(text(&h), "=SUM(C:D");
+}
+
+#[test]
+fn clicks_on_headers_replace_the_reference_after_a_drag_too() {
+    let mut h = harness();
+    let (c, e, g) = (header_center(&h, false, 2), header_center(&h, false, 4), header_center(&h, false, 6));
+    press_and_drag(&mut h, c, e, Modifiers::NONE);
+    release(&mut h, e);
+    assert_eq!(text(&h), "=SUM(C:E");
+    click(&mut h, g);
+    assert_eq!(text(&h), "=SUM(G:G");
+}
