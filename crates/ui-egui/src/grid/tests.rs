@@ -24,7 +24,7 @@ fn delete_chart_title_keeps_chart_and_axis_delete_is_guarded() {
     let result = session.execute("insert.chart", json!({"range":"A1","type":"column","title":"Title"})).unwrap();
     let id = result["chart"].as_u64().unwrap() as u32;
     let mut app = SheetApp::new(session, Default::default());
-    app.selected_chart = Some(id);
+    app.select_object_id(Some(id));
     let ctx = egui::Context::default();
     crate::chartview::select_element(&ctx, id, crate::chartview::ChartElement::Title);
     let sh = app.session.active().unwrap().wb.active().unwrap().clone();

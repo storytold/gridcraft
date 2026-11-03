@@ -24,6 +24,25 @@ fn last(s: &Session) -> &Chart {
     s.doc().unwrap().wb.active().unwrap().charts.last().unwrap()
 }
 
+/// A formatted chart keeps upstream data-table settings through duplication and undo.
+#[test]
+fn formatting_and_duplication_keep_data_table_settings() {
+    let mut s = fixture();
+    let id = last(&s).id;
+    s.execute("chart.set", json!({"chart":id,"dataTable":true,"dataTableKeys":false,"format":{"y_axis":{"minimum":-5.0,"maximum":25.0}}})).unwrap();
+    let original = last(&s).clone();
+    assert!(!original.data_table.as_ref().unwrap().show_keys);
+    s.execute("chart.duplicate", json!({"chart":id})).unwrap();
+    assert_eq!(last(&s).data_table, original.data_table);
+    assert_eq!(last(&s).format, original.format);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(last(&s), &original);
+    s.execute("chart.set", json!({"chart":id,"type":"pie"})).unwrap();
+    assert!(last(&s).data_table.is_none(), "unsupported chart kinds still remove data tables");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(last(&s), &original);
+}
+
 fn with_trends(s: &mut Session) -> Chart {
     let mut snapshot = last(s).clone();
     for (index, series) in snapshot.series.iter_mut().enumerate() {

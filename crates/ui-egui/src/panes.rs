@@ -4,6 +4,8 @@ use craft_ui::ComboBox;
 use egui::{Color32, Ui, vec2};
 use serde_json::{Value as Json, json};
 
+use gridcraft_engine::model::{ObjKind, ObjRef};
+
 use crate::SheetApp;
 use crate::theme::{self, Tokens};
 
@@ -294,10 +296,11 @@ fn selection(app: &mut SheetApp, ui: &mut Ui) {
     for it in items.iter().rev() {
         let kind = it["kind"].as_str().unwrap_or("").to_string();
         let id = it["id"].as_u64().unwrap_or(0) as u32;
+        let obj = ObjKind::parse(&kind).map(|k| ObjRef::new(k, id));
         ui.horizontal(|ui| {
-            let sel = app.selected_chart == Some(id);
+            let sel = obj.is_some() && app.selected_object == obj;
             if ui.selectable_label(sel, it["name"].as_str().unwrap_or("")).clicked() {
-                app.selected_chart = Some(id);
+                app.selected_object = obj;
             }
             if ui.small_button("▲").on_hover_text("Bring Forward").clicked() {
                 app.run_or_alert("arrange.bringForward", json!({"kind": kind, "id": id}));
@@ -314,7 +317,7 @@ fn selection(app: &mut SheetApp, ui: &mut Ui) {
 
 /// Draws the chart format pane: title, type, legend, elements/axis titles, series colors, palettes/layouts and size.
 fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
-    let Some(id) = app.selected_chart else {
+    let Some(id) = app.selected_chart() else {
         ui.label(egui::RichText::new("Select a chart to format it.").italics());
         return;
     };
@@ -369,6 +372,28 @@ fn chart_general_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_eng
                 }
             });
         });
+        ui.collapsing(crate::widgets::tr(ui, "Data Table"), |ui| {
+            let supported = chart.supports_data_table();
+            let mut on = chart.data_table.is_some();
+            if ui.add_enabled(supported, egui::Checkbox::new(&mut on, "Show Data Table")).changed() {
+                app.run_or_alert("chart.set", json!({"chart": id, "dataTable": on}));
+            }
+            if !supported {
+                ui.label("Available for column, bar, line, area and compatible combo charts.");
+            }
+            if let Some(table) = &chart.data_table {
+                for (label, key, mut value) in [
+                    ("Show Legend Keys", "dataTableKeys", table.show_keys),
+                    ("Horizontal Borders", "dataTableHorizontalBorder", table.horizontal_border),
+                    ("Vertical Borders", "dataTableVerticalBorder", table.vertical_border),
+                    ("Outline", "dataTableOutline", table.outline),
+                ] {
+                    if ui.checkbox(&mut value, label).changed() {
+                        app.run_or_alert("chart.set", json!({"chart": id, key: value}));
+                    }
+                }
+            }
+        });
         ui.collapsing(crate::widgets::tr(ui, "Chart|Series"), |ui| {
             let data = app.session.active().map(|d| gridcraft_chart::resolve(&d.wb, d.wb.active_sheet(), chart));
             for (i, s) in chart.series.iter().enumerate() {
@@ -415,13 +440,29 @@ fn chart_general_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_eng
     chart_section(ui, "Size", |ui| {
         // Keep the value being typed or dragged between frames; reloading it from the chart every frame threw the edit away.
         let draft = egui::Id::unique(("gridcraft.chart_size_draft", id));
-        let (mut w, mut h) = ui.data_mut(|d| d.get_temp::<(f32, f32)>(draft)).unwrap_or((chart.anchor.width, chart.anchor.height));
-        let a = ui.add(egui::DragValue::new(&mut w).prefix(format!("{} ", crate::widgets::tr(ui, "Width"))).range(40.0..=4000.0));
-        let b = ui.add(egui::DragValue::new(&mut h).prefix(format!("{} ", crate::widgets::tr(ui, "Height"))).range(40.0..=4000.0));
+        let current = (chart.anchor.width, chart.anchor.height);
+        let (mut w, mut h) = ui.data_mut(|d| d.get_temp::<(f32, f32)>(draft)).unwrap_or(current);
+        // A file can make a chart larger than the 4,000 points a field otherwise reaches. The
+        // range keeps such a size, so the field shows it instead of clamping it to 4,000.
+        let range = |v: f32| 40.0..=v.max(4000.0);
+        let a = ui.add(egui::DragValue::new(&mut w).prefix(format!("{} ", crate::widgets::tr(ui, "Width"))).range(range(current.0)));
+        let b = ui.add(egui::DragValue::new(&mut h).prefix(format!("{} ", crate::widgets::tr(ui, "Height"))).range(range(current.1)));
         if a.drag_stopped() || a.lost_focus() || b.drag_stopped() || b.lost_focus() {
             ui.data_mut(|d| d.remove::<(f32, f32)>(draft));
             if !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                app.run_or_alert("chart.set", json!({"chart": id, "width": w, "height": h}));
+                // Only an edited dimension is sent: the other keeps what the chart has, however
+                // large a file made it.
+                let mut params = serde_json::Map::new();
+                params.insert("chart".into(), json!(id));
+                if w != current.0 {
+                    params.insert("width".into(), json!(w));
+                }
+                if h != current.1 {
+                    params.insert("height".into(), json!(h));
+                }
+                if params.len() > 1 {
+                    app.run_or_alert("chart.set", Json::Object(params));
+                }
             }
         } else if a.dragged() || a.has_focus() || b.dragged() || b.has_focus() {
             ui.data_mut(|d| d.insert_temp(draft, (w, h)));
@@ -792,7 +833,7 @@ fn chart_trendline_controls(app: &mut SheetApp, ui: &mut Ui, chart: &gridcraft_e
 
 fn chart_pane_title(app: &SheetApp, ctx: &egui::Context) -> &'static str {
     use crate::chartview::ChartElement;
-    match app.selected_chart.map(|id| crate::chartview::selected_element(ctx, id)) {
+    match app.selected_chart().map(|id| crate::chartview::selected_element(ctx, id)) {
         Some(ChartElement::XAxis | ChartElement::YAxis) => "Format Axis",
         Some(ChartElement::Series(_)) => "Format Data Series",
         Some(ChartElement::Title) => "Format Chart Title",

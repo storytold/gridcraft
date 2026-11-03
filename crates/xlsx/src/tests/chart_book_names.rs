@@ -75,6 +75,7 @@ fn chart_names_are_written_qualified() {
         ],
         legend: LegendPos::Bottom,
         data_labels: false,
+        data_table: None,
         gridlines: true,
         style: 2,
         x_title: None,

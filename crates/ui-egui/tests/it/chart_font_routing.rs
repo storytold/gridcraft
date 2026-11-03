@@ -31,7 +31,7 @@ fn clicking_chart_title_routes_home_font_to_title_not_cells() {
         h.input_mut().events.push(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
         h.run_steps(2);
     }
-    assert_eq!(h.state().selected_chart, Some(id));
+    assert_eq!(h.state().selected_chart(), Some(id));
     h.state_mut().run("home.fontSize", json!({"size":24})).unwrap();
     h.run_steps(2);
     let sh = h.state().session.doc().unwrap().wb.active().unwrap();

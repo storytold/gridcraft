@@ -5,7 +5,7 @@ use super::{Json, SheetApp, json};
 impl SheetApp {
     fn chart_font_target(&self) -> Option<(u32, &'static str)> {
         use crate::chartview::ChartElement;
-        let id = self.selected_chart?;
+        let id = self.selected_chart()?;
         self.session.active()?.wb.active()?.charts.iter().find(|c| c.id == id)?;
         let element = self.chart_context.as_ref().map(|ctx| crate::chartview::selected_element(ctx, id)).unwrap_or_default();
         Some((

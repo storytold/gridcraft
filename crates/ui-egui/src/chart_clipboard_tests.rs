@@ -14,7 +14,7 @@ fn fixture() -> SheetApp {
         .execute("chart.addElement", json!({"chart":id,"element":"trendline","type":"exponential","displayEquation":true,"displayRSquared":true}))
         .unwrap();
     let mut app = SheetApp::new(session, Default::default());
-    app.selected_chart = Some(id);
+    app.select_object_id(Some(id));
     app
 }
 

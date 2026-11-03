@@ -53,6 +53,7 @@ fn percent_stacked_chart_writer_defaults_round_trip_without_series_overrides() {
             source: None,
             by_rows: false,
             pivot: None,
+            data_table: None,
             format: Default::default(),
         };
 

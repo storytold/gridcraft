@@ -128,10 +128,6 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     let resp = egui::Area::new(egui::Id::unique("cell_context")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(200.0);
-            if let Some(chart) = app.selected_chart_snapshot() {
-                close = crate::chart_tools::context_menu(app, ui, chart.id);
-                return;
-            }
             let insert_copied = insert_copied_item(app);
             let mut items: Vec<(&str, &str)> = vec![
                 ("Cut", "edit.cut"),
@@ -399,7 +395,7 @@ pub(super) fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                         "ui:formatChart" => app.grid.pane = Some("formatChart".into()),
                         _ => {
                             app.run_or_alert("object.delete", json!({"kind": kind, "id": id}));
-                            app.selected_chart = None;
+                            app.selected_object = None;
                         }
                     }
                 }

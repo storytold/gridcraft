@@ -1,6 +1,7 @@
 # Chart editing and export
 
-Last updated: 2026-10-28.
+Last updated: 2026-11-03. Current main integration is prepared locally; build and
+runtime validation for this state have not been run.
 
 ## Scope
 
@@ -58,21 +59,27 @@ colors and supports secondary scatter groups. Those features must be reconciled 
 the types and serialized fields are not interchangeable. This port additionally covers text fonts,
 log/reversed axes, line/marker widths and sizes, UI editing, templates, clipboard and image export.
 
-## Code layout after #2690
+## Code layout and current upstream integration
 
 Chart rendering follows the shared module split: axes and ticks live in `chart/src/render/frame.rs`,
 Cartesian series in `render/cartesian.rs`, markers and series styling in `render/lines.rs`,
 legend entries in `render/legend.rs`, and trendline labels in `render/trend.rs`. The root renderer
 retains dispatch and whole-group placement, and keeps its existing public re-exports.
 
-Chart command validation, export and duplication live in `engine/src/cmd/insert/chart.rs`;
+The active chart command definitions in the current main live in
+`engine/src/cmd/insert.rs`; validation, export and duplication are integrated there.
+The older `cmd/insert/chart.rs` still exists upstream but is not declared by that
+root module: editing it alone does not change the registered commands.
 series changes in `cmd/extra/chart.rs` retain formatting-index maintenance. Pivot charts and
 PDF text adaptation follow the corresponding `cmd/pivot/charts.rs` and `cmd/print/draw.rs` modules.
 
 The UI routes Home font commands through `ui-egui/src/app/chart_font.rs`, clipboard operations
 through `app/clipboard.rs`, and template defaults through `app/commands.rs`. Chart picking and
 label dragging live in `grid/interact.rs`, keyboard actions in `grid/keyboard.rs`, and menus
-in `grid/menus.rs`. Dialogs and ribbon controls use their existing `dialogs/` and `ribbon/`
+in `grid/menus.rs`. Object selection and eight-handle resizing remain owned by
+upstream `objects.rs`, using `selected_object`/`ObjRef`; chart-element selection
+extends it rather than keeping a separate selected-chart field.
+Dialogs and ribbon controls use their existing `dialogs/` and `ribbon/`
 modules. Host clipboard-image access is declared in `services.rs`.
 
 ## Validation and limits
@@ -83,6 +90,14 @@ Relevant cases also live in chart unit tests, XLSX `trendline_roundtrip`/`roundt
 UI chart template, font, numeric-control, resize and deletion tests. The new ScatterLines case
 checks implicit/explicit no-marker styles, explicit markers and a second save.
 
+The current integration retains upstream data tables in the model, renderer,
+Format pane and Add Chart Element menu, and preserves paired-index area decimation.
+New, not-yet-run regressions cover formatting/data-table coexistence across repeated
+XLSX saves and table preservation through chart duplication and undo. The dependency
+lock is based on current main plus the export dependency closure, without carrying
+the unrelated AccessKit version updates from the old branch. Cargo must validate
+the prepared lock in the next validation round.
+
 External desktop clipboard exchange and Excel interoperability still need manual verification.
 Unsupported XML, theme-based surface overrides, per-point formatting, secondary scatter axes,
 individual legend-entry deletion, error bars, `.crtx` files and embedded SVG fonts remain gaps.
@@ -92,6 +107,7 @@ Some extension-only properties can become stale after another editor changes a w
 
 | Date | Change |
 |---|---|
+| 2026-11-03 | Prepare integration with main 178f3eb7: unified objects, native data tables, paired area decimation and focused dependency lock; validation deferred |
 | 2026-10-28 | Integrate upstream 0.13 module/lint changes; preserve palette colors in templates and validate native ChartEx strokes |
 | 2026-10-27 | Adapt chart rendering, engine commands and UI behavior to the shared module layout; separate chart-font routing into app/chart_font.rs |
 | 2026-10-23 | Follow-up review: fractional minor ticks, combo series-index mapping and fontless native test hosts |

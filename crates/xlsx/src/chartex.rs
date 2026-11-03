@@ -181,6 +181,7 @@ pub fn read_chartex(root: &El) -> Option<Chart> {
         series,
         legend,
         data_labels,
+        data_table: None,
         gridlines: plot.kids("axis").find(|a| a.attr("id") == Some("1")).is_some_and(|a| a.child("majorGridlines").is_some()),
         style: 2,
         x_title: axis_title("0"),

@@ -12,7 +12,7 @@ fn chart_axis_title_font_steps_from_the_displayed_default_without_changing_cells
             let ctx = egui::Context::default();
             chartview::select_element(&ctx, id, element);
             app.chart_context = Some(ctx);
-            app.selected_chart = Some(id);
+            app.select_object_id(Some(id));
             let before = serde_json::to_value(&app.session.doc().unwrap().wb.active().unwrap().cells).unwrap();
             assert_eq!(app.selected_chart_font().unwrap().size, Some(10.0));
             app.run(command, json!({})).unwrap();
@@ -33,7 +33,7 @@ fn chart_home_font_targets_text_without_touching_source_cells_and_supports_undo(
     let ctx = egui::Context::default();
     chartview::select_element(&ctx, id, chartview::ChartElement::Title);
     app.chart_context = Some(ctx);
-    app.selected_chart = Some(id);
+    app.select_object_id(Some(id));
     let cells = serde_json::to_value(&app.session.doc().unwrap().wb.active().unwrap().cells).unwrap();
     for (command, params) in [
         ("home.fontName", json!({"name":"DejaVu Sans"})),
@@ -56,7 +56,7 @@ fn chart_home_font_targets_text_without_touching_source_cells_and_supports_undo(
     app.run("home.fontSize", json!({"size":1e300})).unwrap();
     assert_eq!(app.selected_chart_font().unwrap().size, Some(144.0));
     assert_eq!(serde_json::to_value(&app.session.doc().unwrap().wb.active().unwrap().cells).unwrap(), cells);
-    app.selected_chart = None;
+    app.selected_object = None;
     app.run("home.fontSize", json!({"size":18})).unwrap();
     assert_ne!(serde_json::to_value(&app.session.doc().unwrap().wb.active().unwrap().cells).unwrap(), cells);
 }
@@ -69,7 +69,7 @@ fn explicit_cell_font_target_stays_a_cell_command_when_chart_is_selected() {
     let result = session.execute("insert.chart", json!({"range":"A1", "type":"column", "title":"Sales"})).unwrap();
     let id = result["chart"].as_u64().unwrap() as u32;
     let mut app = SheetApp::new(session, Default::default());
-    app.selected_chart = Some(id);
+    app.select_object_id(Some(id));
     let before_cells = serde_json::to_value(&app.session.active().unwrap().wb.active().unwrap().cells).unwrap();
     let before_format = app.session.active().unwrap().wb.active().unwrap().charts[0].format.clone();
     app.run("home.bold", json!({"range":"B2", "on":true})).unwrap();

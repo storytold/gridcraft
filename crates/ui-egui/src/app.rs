@@ -8,13 +8,15 @@ use super::updates_ui;
 use super::{
     CellRef, HashMap, INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, Notice, Perf, RangeRef, Session, SheetApp, UiRequest, UiState, backstage,
     clamp_interface_scale, clean_error, control, desktop_theme, dialogs, editor, floating_pictures, formula_bar, formula_locale, grid, i18n, json,
-    keytips, panes, pivot_pane, printing, ribbon, tabs, text_box, theme, widgets,
+    keytips, macro_ui, panes, pivot_pane, printing, ribbon, tabs, text_box, theme, widgets,
 };
 
 mod chart_font;
 mod clipboard;
 mod commands;
 mod editing;
+#[cfg(test)]
+pub(crate) use editing::{DRAFT_CODE_HIDDEN, DRAFT_SHEET_GONE};
 mod files;
 mod fonts;
 mod input;
@@ -69,14 +71,16 @@ impl SheetApp {
             capture_epoch: 0,
             capture_geometry: None,
             capture_geometry_from_raw: false,
-            selected_chart: None,
+            selected_object: None,
             chart_context: None,
             chart_clipboard: None,
             clipboard_text_at_copy: None,
             cut_text: None,
             tab_run: None,
+            macros: macro_ui::MacroUi::default(),
             started: now_ms(),
             allow_close: false,
+            bring_forward: false,
             open_switch_windows: false,
             ui_window: None,
             parked: HashMap::new(),
@@ -223,7 +227,9 @@ impl SheetApp {
         } else {
             ribbon::show(self, ui);
             widgets::notice_bar(self, ui);
-            if self.session.prefs.formula_bar {
+            // Python mode edits only in the formula bar: it shows while a Python edit is open,
+            // also when the preference hides it.
+            if self.session.prefs.formula_bar || self.editor.as_ref().is_some_and(|e| e.python) {
                 formula_bar::show(self, ui);
             }
             if self.ui.status_bar {
@@ -239,6 +245,8 @@ impl SheetApp {
             });
         }
         dialogs::show(self, &ctx);
+        macro_ui::forget_closed_editor(self);
+        macro_ui::question_box(self, &ctx);
         widgets::message_box(self, &ctx);
         widgets::toast(self, &ctx);
         // Requests are admitted in `logic`, for the root viewport, so only its pass issues them.

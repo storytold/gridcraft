@@ -2,7 +2,6 @@ use super::{
     Anchor, CellRef, Chart, ChartKind, EngineError, Json, LegendPos, RangeRef, Result, Series, Session, Sheet, anchor_mode_param, bad, block,
     bool_param, cell_param_on, edit, f64_param, json, split_sheet, str_param, target_ranges, target_sheet, u32_param,
 };
-use gridcraft_model::ChartFormat;
 
 fn chart_areas(s: &Session, p: &Json) -> Result<Vec<RangeRef>> {
     if p.get("range").is_some() {
@@ -26,8 +25,6 @@ pub fn chart_kind(t: &str, sub: &str) -> ChartKind {
         ("bar", _) => ChartKind::BarClustered,
         ("line", "markers") => ChartKind::LineMarkers,
         ("line", "stacked") => ChartKind::LineStacked,
-        ("line", "stacked100") => ChartKind::LineStacked100,
-        ("line", "stacked100Markers") => ChartKind::LineStacked100Markers,
         ("line", _) => ChartKind::Line,
         ("pie", _) => ChartKind::Pie,
         ("doughnut", _) => ChartKind::Doughnut,
@@ -219,12 +216,6 @@ pub fn recommend_charts(s: &Session, p: &Json) -> Result<Vec<(&'static str, &'st
 /// The chart `insert.chart` would insert for these params, without inserting it: the sheet it
 /// goes on and the chart (previews in the Recommended Charts dialog).
 pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
-    let format = p
-        .get("format")
-        .map(|v| serde_json::from_value::<ChartFormat>(v.clone()).map_err(|_| bad("insert.chart", "invalid chart format")))
-        .transpose()?
-        .unwrap_or_default();
-    validate_chart_format(&format)?;
     let areas = chart_areas(s, p)?;
     if areas.iter().fold(0_u64, |count, area| count.saturating_add(area.count())) > MAX_CHART_CELLS {
         return Err(bad("insert.chart", "range too large for a chart"));
@@ -267,21 +258,16 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         },
         title,
         series,
-        legend: str_param(p, "legend").map(chart_legend).unwrap_or(if matches!(kind, ChartKind::Pie | ChartKind::Doughnut) {
-            LegendPos::Right
-        } else {
-            LegendPos::Bottom
-        }),
-        data_labels: bool_param(p, "dataLabels").unwrap_or(false),
-        gridlines: bool_param(p, "gridlines")
-            .unwrap_or(!matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel)),
-        style: u32_param(p, "style").map(|style| style.clamp(1, 16)).unwrap_or(1),
+        legend: if matches!(kind, ChartKind::Pie | ChartKind::Doughnut) { LegendPos::Right } else { LegendPos::Bottom },
+        data_labels: false,
+        data_table: None,
+        gridlines: !matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel),
+        style: 1,
         x_title: None,
         y_title: None,
         source: (areas.len() == 1).then(|| format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), bounds.a1())),
         by_rows,
         pivot: None,
-        format,
     };
     Ok((sheet, chart))
 }
@@ -306,80 +292,8 @@ fn find_chart(s: &Session, p: &Json) -> Result<(usize, usize)> {
     idx.map(|i| (sheet, i)).ok_or_else(|| bad("chart", "no such chart"))
 }
 
-fn validate_chart_format(f: &ChartFormat) -> Result<()> {
-    if [f.legend_position, f.trendline_label_position].into_iter().flatten().flatten().any(|n| !n.is_finite() || !(0.0..=1.0).contains(&n)) {
-        return Err(bad("chart.set", "Chart annotation positions must be between 0 and 1"));
-    }
-    if f.text.len() > 16
-        || f.text.iter().any(|(role, t)| {
-            !matches!(
-                role.as_str(),
-                "chart" | "title" | "legend" | "x_axis" | "y_axis" | "x_axis_title" | "y_axis_title" | "data_labels" | "trendline"
-            ) || t.size.is_some_and(|n| !n.is_finite() || !(1.0..=144.0).contains(&n))
-                || t.name.as_ref().is_some_and(|n| n.len() > 256)
-        })
-    {
-        return Err(bad("chart.set", "Invalid chart text format"));
-    }
-    for a in [&f.x_axis, &f.y_axis] {
-        if a.minimum.is_some_and(|v| !v.is_finite() || v.abs() > 1e100 || (a.logarithmic && v <= 0.0))
-            || a.maximum.is_some_and(|v| !v.is_finite() || v.abs() > 1e100 || (a.logarithmic && v <= 0.0))
-            || a.minimum.zip(a.maximum).is_some_and(|(lo, hi)| hi <= lo)
-            || a.major_unit.is_some_and(|v| !v.is_finite() || v <= 0.0 || v > 1e100)
-            || a.number_format.as_ref().is_some_and(|v| v.len() > 256)
-            || a.major_tick.as_deref().is_some_and(|v| !matches!(v, "none" | "in" | "out" | "cross"))
-            || a.minor_tick.as_deref().is_some_and(|v| !matches!(v, "none" | "in" | "out" | "cross"))
-            || a.minor_unit.is_some_and(|v| !v.is_finite() || v <= 0.0 || v > 1e100)
-        {
-            return Err(bad("chart.set", "Axis bounds must increase; logarithmic bounds and major units must be positive."));
-        }
-    }
-    let width_ok = |v: Option<f32>| v.is_none_or(|v| v.is_finite() && (0.0..=20.0).contains(&v));
-    if [&f.x_axis.line, &f.y_axis.line, &f.x_axis.tick_line, &f.y_axis.tick_line, &f.horizontal_gridline, &f.vertical_gridline]
-        .iter()
-        .any(|v| !width_ok(v.width))
-    {
-        return Err(bad("chart.set", "Invalid axis/grid line width"));
-    }
-    if !width_ok(f.border_width)
-        || [&f.chart_area, &f.plot_area].iter().any(|s| !width_ok(s.border_width))
-        || f.gap_width.is_some_and(|n| !n.is_finite() || !(0.0..=500.0).contains(&n))
-        || f.overlap.is_some_and(|n| !n.is_finite() || !(-100.0..=100.0).contains(&n))
-        || f.series.len() > 256
-        || f.series.values().any(|v| {
-            !width_ok(v.line_width)
-                || !width_ok(v.border_width)
-                || !width_ok(v.marker_border_width)
-                || v.marker_size.is_some_and(|n| !n.is_finite() || !(2.0..=72.0).contains(&n))
-                || v.marker
-                    .as_deref()
-                    .is_some_and(|m| !matches!(m, "none" | "circle" | "square" | "diamond" | "triangle" | "cross" | "plus" | "star" | "dash"))
-        })
-    {
-        return Err(bad("chart.set", "Invalid line width, marker size or marker type."));
-    }
-    Ok(())
-}
-
-fn chart_legend(legend: &str) -> LegendPos {
-    match legend {
-        "none" => LegendPos::None,
-        "top" => LegendPos::Top,
-        "left" => LegendPos::Left,
-        "right" => LegendPos::Right,
-        _ => LegendPos::Bottom,
-    }
-}
-
 pub(super) fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, ci) = find_chart(s, p)?;
-    let format = p
-        .get("format")
-        .map(|v| serde_json::from_value::<ChartFormat>(v.clone()).map_err(|_| bad("chart.set", "invalid chart format")))
-        .transpose()?;
-    if let Some(f) = &format {
-        validate_chart_format(f)?;
-    }
     let at = cell_param_on(s, p, "at", si)?;
     let quartiles = p
         .get("quartiles")
@@ -392,9 +306,6 @@ pub(super) fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
         let Some(c) = sh.charts.get_mut(ci) else { return Ok(Json::Null) };
-        if let Some(f) = &format {
-            c.format = f.clone();
-        }
         if let Some(t) = str_param(p, "type") {
             c.kind = chart_kind(t, str_param(p, "subtype").unwrap_or(""));
         }
@@ -407,7 +318,13 @@ pub(super) fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
             c.title = t.as_str().map(str::to_string);
         }
         if let Some(l) = str_param(p, "legend") {
-            c.legend = chart_legend(l);
+            c.legend = match l {
+                "none" => LegendPos::None,
+                "top" => LegendPos::Top,
+                "left" => LegendPos::Left,
+                "right" => LegendPos::Right,
+                _ => LegendPos::Bottom,
+            };
         }
         if let Some(v) = bool_param(p, "dataLabels") {
             c.data_labels = v;
@@ -469,7 +386,6 @@ pub(super) fn chart_switch(s: &mut Session, p: &Json) -> Result<Json> {
             c.source.get_or_insert(src);
             c.by_rows = by_rows;
             c.series = series;
-            c.format.series.clear();
             scatter_x_from_first(c.kind, &mut c.series);
         }
         Ok(Json::Null)
@@ -504,82 +420,5 @@ pub(super) fn chart_delete(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         cx.sheet_mut(si)?.charts.remove(ci);
         Ok(Json::Null)
-    })
-}
-
-/// Exports a chart as PNG/SVG without changing the workbook, returning a path or base64 bytes.
-pub(super) fn chart_export(s: &mut Session, p: &Json) -> Result<Json> {
-    let (si, ci) = find_chart(s, p)?;
-    let d = s.doc()?;
-    let chart = d.wb.sheet(si).and_then(|sh| sh.charts.get(ci)).ok_or_else(|| bad("chart.export", "no such chart"))?;
-    let data = gridcraft_chart::resolve(&d.wb, si, chart);
-    let scale = f64_param(p, "scale").unwrap_or(2.0) as f32;
-    let transparent = bool_param(p, "transparent").unwrap_or(false);
-    let format = str_param(p, "format").unwrap_or("png");
-    let bytes = match format {
-        "svg" => gridcraft_chart::export_svg(chart, &data, &gridcraft_chart::ApproxMeasure, scale, transparent).map(String::into_bytes),
-        "png" => gridcraft_chart::export_png(chart, &data, &gridcraft_chart::ApproxMeasure, scale, transparent),
-        _ => return Err(bad("chart.export", "Choose PNG or SVG")),
-    }
-    .map_err(|e| bad("chart.export", &e))?;
-    let mime = if format == "svg" { "image/svg+xml" } else { "image/png" };
-    if let Some(path) = str_param(p, "path").filter(|s| !s.is_empty()) {
-        crate::io::write_file(path, &bytes)?;
-        Ok(json!({"path":path,"bytes":bytes.len(),"mime":mime}))
-    } else {
-        Ok(json!({"base64":crate::io::base64_encode(&bytes),"bytes":bytes.len(),"mime":mime}))
-    }
-}
-
-/// Duplicates a chart through the same validated, undoable snapshot path used by paste.
-pub(super) fn chart_duplicate(s: &mut Session, p: &Json) -> Result<Json> {
-    let (si, ci) = find_chart(s, p)?;
-    let chart = s.doc()?.wb.sheet(si).and_then(|sh| sh.charts.get(ci)).ok_or_else(|| bad("chart.duplicate", "no such chart"))?;
-    chart_paste(s, &json!({"snapshot":chart,"at":p.get("at")}))
-}
-
-/// Validates an imported chart snapshot before inserting it with a fresh object ID.
-pub(super) fn chart_paste(s: &mut Session, p: &Json) -> Result<Json> {
-    let mut chart: Chart = serde_json::from_value(p.get("snapshot").cloned().ok_or_else(|| bad("chart.paste", "Missing chart"))?)
-        .map_err(|_| bad("chart.paste", "Invalid chart"))?;
-    chart.style = chart.style.clamp(1, 16);
-    for series in &mut chart.series {
-        for trendline in &mut series.trendlines {
-            trendline.forward = gridcraft_model::Trendline::clamp_forecast(trendline.forward);
-            trendline.backward = gridcraft_model::Trendline::clamp_forecast(trendline.backward);
-            if let gridcraft_model::TrendlineKind::Polynomial(order) = &mut trendline.kind {
-                *order = (*order).clamp(2, 6);
-            }
-        }
-    }
-    validate_chart_format(&chart.format)?;
-    if !chart.anchor.cell.is_valid()
-        || chart.series.len() > 256
-        || [chart.anchor.width, chart.anchor.height].iter().any(|n| !n.is_finite() || !(20.0..=10000.0).contains(n))
-        || [chart.anchor.dx, chart.anchor.dy].iter().any(|n| !n.is_finite() || n.abs() > 1e6)
-        || chart.series.iter().any(|s| {
-            s.values.len() > 4096
-                || s.name.as_ref().is_some_and(|s| s.len() > 4096)
-                || s.categories.as_ref().is_some_and(|s| s.len() > 4096)
-                || s.bubble_sizes.as_ref().is_some_and(|s| s.len() > 4096)
-        })
-    {
-        return Err(bad("chart.paste", "Invalid chart dimensions or too many series"));
-    }
-    let d = s.doc()?;
-    let si = d.wb.active_sheet();
-    chart.id = d.wb.next_object_id();
-    if let Some(at) = cell_param_on(s, p, "at", si)? {
-        chart.anchor.cell = at;
-        chart.anchor.dx = 0.0;
-        chart.anchor.dy = 0.0;
-    } else {
-        chart.anchor.dx += 24.0;
-        chart.anchor.dy += 24.0;
-    }
-    let id = chart.id;
-    edit(s, |cx| {
-        cx.sheet_mut(si)?.charts.push(chart);
-        Ok(json!({"chart":id}))
     })
 }

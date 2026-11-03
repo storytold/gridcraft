@@ -44,7 +44,7 @@ pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
         Key::E => Some(("edit.flashFill", json!({}))),
         Key::Num1 => {
             let selected_chart = app
-                .selected_chart
+                .selected_chart()
                 .is_some_and(|id| app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.charts.iter().any(|c| c.id == id)));
             if selected_chart {
                 app.grid.pane = Some("formatChart".into());
@@ -68,7 +68,8 @@ pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
             }
         },
         // Insert works on one area at a time, so several areas still go through the dialog.
-        Key::Plus | Key::Equals if shift => match whole_lines(app).filter(|_| single_area(app)) {
+        // The numpad's + arrives as Plus without Shift; Excel takes Ctrl with it as well.
+        Key::Plus | Key::Equals if shift || key == Key::Plus => match whole_lines(app).filter(|_| single_area(app)) {
             Some(true) => Some(("home.insertRows", json!({}))),
             Some(false) => Some(("home.insertColumns", json!({}))),
             None => {

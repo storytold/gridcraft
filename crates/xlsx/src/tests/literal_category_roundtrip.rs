@@ -41,6 +41,7 @@ fn literal_category_with_separators_survives_save() {
         series,
         legend: LegendPos::Bottom,
         data_labels: false,
+        data_table: None,
         gridlines: true,
         style: 2,
         x_title: None,

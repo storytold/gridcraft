@@ -137,6 +137,7 @@ fn combo_reordered_series_keep_their_own_formats_across_repeated_saves() {
         legend: Default::default(),
         data_labels: false,
         gridlines: false,
+        data_table: None,
         style: 2,
         x_title: None,
         y_title: None,
