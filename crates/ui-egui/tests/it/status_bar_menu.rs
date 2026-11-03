@@ -64,7 +64,7 @@ fn selection_statistics_use_the_interface_language() {
     for (language, labels, menu_labels) in [
         ("en", ["Average: 4", "Count: 3", "Numerical Count: 3", "Minimum: -1", "Maximum: 9", "Sum: 12"], ["Count", "Sum"]),
         ("tr", ["Ortalama: 4", "Sayı: 3", "Sayısal Sayı: 3", "En Küçük: -1", "En Büyük: 9", "Toplam: 12"], ["Sayı", "Toplam"]),
-        ("pt-BR", ["Média: 4", "Contagem: 3", "Numerical Count: 3", "Minimum: -1", "Maximum: 9", "Soma: 12"], ["Contagem", "Soma"]),
+        ("pt-BR", ["Média: 4", "Contagem: 3", "Numerical Count: 3", "Mínimo: -1", "Máximo: 9", "Soma: 12"], ["Contagem", "Soma"]),
     ] {
         let mut h = harness();
         h.state_mut().run("app.language.set", json!({"language": language})).unwrap();
