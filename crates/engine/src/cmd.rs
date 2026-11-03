@@ -373,6 +373,28 @@ pub struct Ctx<'a> {
     /// The structural edits the command made, in order (the sheet's name, the edit), as
     /// references were rewritten for them.
     pub edits: Vec<(String, gridcraft_formula::adjust::Edit)>,
+    /// The command only showed or hid rows (an AutoFilter): instead of a full recalculation, the
+    /// formulas whose result depends on which rows are hidden (SUBTOTAL, AGGREGATE) are
+    /// recalculated, with what depends on them and the volatile formulas (#661).
+    pub rows_shown_or_hidden: bool,
+}
+
+/// The formula cells whose result depends on which rows are hidden: those calling SUBTOTAL or
+/// AGGREGATE, which leave filtered (and, from 101 and option 5, hidden) rows out. Read from the
+/// formula text, which costs far less than recalculating every formula.
+fn hidden_row_readers(wb: &Workbook) -> Vec<Key> {
+    let mut out = Vec::new();
+    for (si, sh) in wb.sheets.iter().enumerate() {
+        for (c, cell) in sh.cells.iter() {
+            if let Some(f) = &cell.formula {
+                let text = f.text.to_ascii_uppercase();
+                if text.contains("SUBTOTAL(") || text.contains("AGGREGATE(") {
+                    out.push((si, c));
+                }
+            }
+        }
+    }
+    out
 }
 
 pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
@@ -402,9 +424,10 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         fit_rows: Vec::new(),
         protection_checked: false,
         edits: Vec::new(),
+        rows_shown_or_hidden: false,
     };
     let r = f(&mut ctx)?;
-    let Ctx { mut wb, changed, structural, mut fit_rows, protection_checked, edits, .. } = ctx;
+    let Ctx { mut wb, changed, structural, mut fit_rows, protection_checked, edits, rows_shown_or_hidden, .. } = ctx;
     // Equations whose source changed (or that arrived without a layout, as from a paste) are
     // laid out here, so painting only ever reads the cache.
     wb.refresh_equations();
@@ -432,6 +455,10 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     }
     if structural {
         d.calc.recalc_all(&mut wb);
+    } else if rows_shown_or_hidden {
+        let mut seeds = changed.clone();
+        seeds.extend(hidden_row_readers(&wb));
+        d.calc.cells_changed(&mut wb, &seeds);
     } else if !changed.is_empty() {
         d.calc.cells_changed(&mut wb, &changed);
     }
