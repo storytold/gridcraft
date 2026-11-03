@@ -153,9 +153,9 @@ printer, copies, duplex, grayscale, discovery/submission status and backend rece
 `{"refresh":true}` starts background discovery; poll the same command until `discovering` is
 false. Set `printer` to a discovered name, integer `copies` from 1 to 999, `duplex` to
 `printerDefault`, `off`, `longEdge` or `shortEdge`, and boolean `grayscale`. `from` and `to`
-are the Print view's page range (Pages … to …) of the active window, as each window keeps its
-own: whole page numbers from 1, counted over the whole print job in sheet order, or `null` to
-clear a bound; the result reports both. Invalid updates are rejected without changing earlier
+are the Print view's page range (Pages … to …) of the active window, or of the window named by
+`window` or `doc`, as each window keeps its own: whole page numbers from 1, counted over the
+whole print job in sheet order, or `null` to clear a bound; the result reports both. Invalid updates are rejected without changing earlier
 settings. `ui.printSubmit` explicitly submits the current print-ready PDF without opening a
 dialog; inspect `ui.printSettings` until `busy` becomes false and check `status`/`detail`. The
 browser keeps its own print hook. PDF export remains

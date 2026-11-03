@@ -239,6 +239,52 @@ fn each_window_keeps_its_own_page_range() {
 }
 
 #[test]
+/// `ui.printSettings` and `ui.printSubmit` sent to another window through the control channel
+/// read, change and print that window's page range, and leave the active window's alone.
+fn print_calls_for_another_window_use_its_page_range() {
+    use gridcraft_ui_egui::control::{Outcome, handle};
+    use gridcraft_ui_egui::printing::PageRange;
+    let mut app = SheetApp::new(five_pages(), Services::default());
+    app.printing.printers.push(Printer { name: "Queue".into(), label: String::new(), default: true });
+    let jobs = Rc::new(RefCell::new(Vec::new()));
+    let observed = jobs.clone();
+    app.services.print_native = Some(Box::new(move |bytes, _| {
+        observed.borrow_mut().push(bytes);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender.send(Ok("queued".into())).unwrap();
+        receiver
+    }));
+    app.follow_active_window();
+    let first = app.session.active_window().unwrap();
+    app.run("ui.printSettings", json!({"printer": "Queue", "from": 4})).unwrap();
+    app.run("view.newWindow", json!({})).unwrap();
+    let second = app.session.active_window().unwrap();
+    let ctx = egui::Context::default();
+    let call = |app: &mut SheetApp, command: &str, params: serde_json::Value| match handle(
+        app,
+        &ctx,
+        "engine.execute",
+        &json!({"command": command, "params": params, "window": first}),
+    ) {
+        Outcome::Done(v) => v,
+        Outcome::Screenshot { .. } => panic!("{command} took a screenshot"),
+    };
+    let read = call(&mut app, "ui.printSettings", json!({}));
+    assert_eq!(read["result"]["from"], 4, "{read}");
+    let set = call(&mut app, "ui.printSettings", json!({"to": 4}));
+    assert_eq!((&set["result"]["from"], &set["result"]["to"]), (&json!(4), &json!(4)), "{set}");
+    assert_eq!(app.session.active_window(), Some(second), "the active window stays active");
+    assert_eq!(app.print_pages, PageRange::default(), "the active window's range is untouched");
+    let printed = call(&mut app, "ui.printSubmit", json!({}));
+    assert_eq!(printed["ok"], true, "{printed}");
+    app.printing.poll(&ctx);
+    app.poll_printing(&ctx);
+    assert_eq!(footers(&jobs.borrow_mut().pop().unwrap()), ["Page 4 of 5"]);
+    app.run("window.activate", json!({"window": first})).unwrap();
+    assert_eq!(app.print_pages, PageRange { from: Some(4), to: Some(4) });
+}
+
+#[test]
 /// File › Print's Pages … to … fields set the page range, the preview shows the pages that will
 /// print under their own numbers, and the fields follow `ui.printSettings`. In German too.
 fn the_print_views_page_fields_set_the_range_and_the_preview_follows() {

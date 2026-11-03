@@ -110,8 +110,12 @@ fn run(app: &mut SheetApp, id: &str, params: Json) -> Result<Json, String> {
 /// window afterwards unless the command itself switched windows.
 fn run_in(app: &mut SheetApp, target: gridcraft_engine::Target, id: &str, params: Json) -> Result<Json, String> {
     let guard = app.session.enter_target(target).map_err(|e| e.to_string())?;
+    // A UI command reads and changes the target window's interface state (its page range…),
+    // and the active window's is back once the command is done.
+    app.follow_active_window();
     let r = run(app, id, params);
     app.session.leave_target(guard);
+    app.follow_active_window();
     r
 }
 
