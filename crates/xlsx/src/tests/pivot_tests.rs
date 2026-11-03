@@ -563,6 +563,21 @@ fn repeated_pivot_fields_are_used_once() {
     assert_eq!(pt.last_range, Some(rr("D3:F9")));
 }
 
+/// #2159: a field list cut at the 16,384-entry cap is reported, so an incomplete PivotTable can be
+/// told apart from a complete one.
+#[test]
+fn capped_pivot_field_lists_warn() {
+    let fields = r#"<pivotField/>"#.repeat(16_385);
+    let table = format!(
+        r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D5:F9"/><pivotFields count="16385">{fields}</pivotFields></pivotTableDefinition>"#
+    );
+    let (_, report) = read_xlsx(&with_pivot(&table, Some(GOOD_CACHE))).unwrap();
+    assert!(report.warnings.iter().any(|w| w.contains("field lists past 16384 entries")), "{:?}", report.warnings);
+    let table = r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D5:F9"/><pivotFields count="1"><pivotField/></pivotFields></pivotTableDefinition>"#;
+    let (_, report) = read_xlsx(&with_pivot(table, Some(GOOD_CACHE))).unwrap();
+    assert!(!report.warnings.iter().any(|w| w.contains("field lists past")), "{:?}", report.warnings);
+}
+
 #[test]
 fn cache_found_by_workbook_cache_id() {
     let rels_extra = r#"<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="pivotCache/pivotCacheDefinition1.xml"/>"#;

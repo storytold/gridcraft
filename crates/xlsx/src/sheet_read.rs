@@ -458,19 +458,30 @@ fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet, remaining: &mut u64) -> Re
     Ok(())
 }
 
+/// Charges `n` cell elements against the workbook's [`MAX_CELLS`].
+fn charge_cells(cx: &mut Ctx<'_>, n: u64) -> Result<(), IoError> {
+    cx.cells = cx.cells.saturating_add(n);
+    if cx.cells > MAX_CELLS {
+        return Err(IoError::TooLarge(format!("the workbook has more than {MAX_CELLS} cells")));
+    }
+    Ok(())
+}
+
+/// One `<row>`. Every `<c>` in it counts against [`MAX_CELLS`], also in a row that is dropped
+/// for a bad row number: one worksheet part read for many sheets can't parse cells uncounted.
 fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) -> Result<(), IoError> {
     st.rows += 1;
     let r = match row.attr_u32("r") {
         Some(r) if r >= 1 => r - 1,
         Some(_) => {
             st.dropped += 1;
-            return Ok(());
+            return charge_cells(cx, row.kids("c").count() as u64);
         }
         None => st.next_row,
     };
     if r >= MAX_ROWS {
         st.dropped += 1;
-        return Ok(());
+        return charge_cells(cx, row.kids("c").count() as u64);
     }
     st.next_row = r + 1;
     let mut info = LineInfo::default();
@@ -494,10 +505,7 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) ->
     }
     let mut next_col = 0u32;
     for c in row.kids("c") {
-        cx.cells += 1;
-        if cx.cells > MAX_CELLS {
-            return Err(IoError::TooLarge(format!("the workbook has more than {MAX_CELLS} cells")));
-        }
+        charge_cells(cx, 1)?;
         let pos = match c.attr("r") {
             Some(a) => match CellRef::parse(a.trim()) {
                 Some(p) => p,
@@ -804,6 +812,8 @@ mod tests {
             num_fmts: Default::default(),
             cell_pictures: vec![],
             cf_ext_ids: vec![],
+            known_function: None,
+            python: Default::default(),
             cells: 0,
         }
     }
@@ -817,6 +827,21 @@ mod tests {
         cx.cells = MAX_CELLS - 2;
         let sheet = read_sheet(&mut cx, "xl/worksheets/sheet1.xml", "Data").unwrap();
         assert_eq!(sheet.cells.len(), 2);
+        assert!(matches!(read_sheet(&mut cx, "xl/worksheets/sheet1.xml", "Data"), Err(IoError::TooLarge(_))));
+    }
+
+    /// #2159: the cells of a row dropped for its row number still count against the cap, so a
+    /// part read for many sheets can't parse cells uncounted.
+    #[test]
+    fn cells_of_dropped_rows_count_against_the_cap() {
+        let rows = r#"<sheetData><row r="0"><c><v>1</v></c><c><v>2</v></c></row><row r="2000000"><c><v>3</v></c></row></sheetData>"#;
+        let bytes = crate::tests::minimal(rows, &[], "", "");
+        let pkg = crate::package::Package::open(&bytes).unwrap();
+        let mut cx = ctx(pkg);
+        let sheet = read_sheet(&mut cx, "xl/worksheets/sheet1.xml", "Data").unwrap();
+        assert!(sheet.cells.is_empty(), "both rows are dropped");
+        assert_eq!(cx.cells, 3);
+        cx.cells = MAX_CELLS - 2;
         assert!(matches!(read_sheet(&mut cx, "xl/worksheets/sheet1.xml", "Data"), Err(IoError::TooLarge(_))));
     }
 

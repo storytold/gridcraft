@@ -407,6 +407,22 @@ fn fields_past_the_last_column_are_not_collected() {
     assert_eq!(wb.sheet(0).unwrap().cells.len(), 16_385);
 }
 
+/// #2159: a long field past the last column is skipped character by character, not collected
+/// and then thrown away; a quote inside it is a plain character, as in a kept field.
+#[test]
+fn a_long_field_past_the_last_column_is_not_stored() {
+    let src = format!("{}{}a\"b,{}\nnext,row\n", "x,".repeat(16_384), "y".repeat(1_000_000), "z".repeat(1_000));
+    let mut records = vec![];
+    parse_records(&src, ',', '"', |rec| {
+        records.push(rec);
+        true
+    });
+    assert_eq!(records.len(), 2, "the quote didn't open a quoted field across the line end");
+    assert_eq!(records[0].len(), 16_384);
+    assert!(records[0].iter().all(|f| f == "x"));
+    assert_eq!(records[1], vec!["next".to_string(), "row".to_string()]);
+}
+
 #[test]
 fn parser_stops_collecting_fields_at_max_cols() {
     let extra = 50;

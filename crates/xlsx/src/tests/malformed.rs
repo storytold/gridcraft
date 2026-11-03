@@ -348,6 +348,14 @@ fn sheet_count_is_capped_and_duplicate_names_are_renamed() {
     assert_eq!(got[2], "X (4)");
     assert_eq!(got.iter().map(|n| n.to_ascii_lowercase()).collect::<std::collections::HashSet<_>>().len(), 4096);
     assert_eq!(taken.unique("", 9), "Sheet10");
+    // A 25-character name repeated past ` (999)` shortens its prefix so every name fits 31.
+    let mut taken = crate::read::SheetNames::default();
+    let base = "N".repeat(25);
+    let got: Vec<String> = (0..4096).map(|i| taken.unique(&base, i)).collect();
+    assert!(got.iter().all(|n| n.chars().count() <= 31), "{:?}", got.iter().find(|n| n.chars().count() > 31));
+    assert_eq!(got[998], format!("{base} (999)"));
+    assert_eq!(got[999], format!("{} (1000)", "N".repeat(24)));
+    assert_eq!(got.iter().map(|n| n.to_ascii_lowercase()).collect::<std::collections::HashSet<_>>().len(), 4096);
 }
 
 /// #2159: the shared-string count is capped (each string is an allocation of its own).

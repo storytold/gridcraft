@@ -217,12 +217,14 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
     };
     // Field lists are capped, and a field is used once (Excel puts a field on one axis, once):
     // each use walks the field's items.
-    let pfs: Vec<&El> = x.child("pivotFields").map(|p| p.kids("pivotField").take(MAX_FIELDS).collect()).unwrap_or_default();
+    // A list cut at the cap is reported, so an incomplete PivotTable can be told apart.
+    let mut truncated = false;
+    let pfs: Vec<&El> = x.child("pivotFields").map(|p| capped(p.kids("pivotField"), &mut truncated)).unwrap_or_default();
     let pf = |i: usize| pfs.get(i).copied();
     let mut used_fields = std::collections::HashSet::new();
     let mut idx_list = |name: &str, attr: &str| -> Vec<i64> {
         x.child(name)
-            .map(|e| e.children.iter().filter_map(|f| f.attr_i64(attr)).filter(|&i| i < 0 || used_fields.insert(i)).take(MAX_FIELDS).collect())
+            .map(|e| capped(e.children.iter().filter_map(|f| f.attr_i64(attr)).filter(|&i| i < 0 || used_fields.insert(i)), &mut truncated))
             .unwrap_or_default()
     };
     let row_x = idx_list("rowFields", "x");
@@ -230,7 +232,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
     let mut page_fields = std::collections::HashSet::new();
     let pages: Vec<&El> = x
         .child("pageFields")
-        .map(|p| p.kids("pageField").filter(|f| f.attr_i64("fld").is_none_or(|i| page_fields.insert(i))).take(MAX_FIELDS).collect())
+        .map(|p| capped(p.kids("pageField").filter(|f| f.attr_i64("fld").is_none_or(|i| page_fields.insert(i))), &mut truncated))
         .unwrap_or_default();
 
     // Layout from the first axis field (pivotField defaults: compact and outline on).
@@ -334,6 +336,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
 
     // Values.
     if let Some(df) = x.child("dataFields") {
+        truncated |= df.kids("dataField").nth(MAX_FIELDS).is_some();
         for d in df.kids("dataField").take(MAX_FIELDS) {
             let Some(i) = d.attr_u32("fld").map(|i| i as usize) else { continue };
             let Some(f) = cache.fields.get(i) else { continue };
@@ -387,8 +390,21 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
         }
     }
 
+    if truncated {
+        cx.warn(format!("PivotTable \"{}\": field lists past {MAX_FIELDS} entries were dropped; the table is incomplete", pt.name));
+    }
     pt.anchor = loc.start;
     let above = if pages.is_empty() { 0 } else { pages.len() as u32 + 1 };
     pt.last_range = Some(RangeRef::new(CellRef::new(loc.start.row.saturating_sub(above), loc.start.col), loc.end));
     Some(pt)
+}
+
+/// The first [`MAX_FIELDS`] items; sets `truncated` when there were more.
+fn capped<T>(items: impl Iterator<Item = T>, truncated: &mut bool) -> Vec<T> {
+    let mut v: Vec<T> = items.take(MAX_FIELDS.saturating_add(1)).collect();
+    if v.len() > MAX_FIELDS {
+        v.truncate(MAX_FIELDS);
+        *truncated = true;
+    }
+    v
 }

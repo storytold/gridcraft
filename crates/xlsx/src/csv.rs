@@ -195,54 +195,68 @@ pub fn sniff_delimiter(text: &str, quote: char) -> u8 {
 }
 
 /// Splits CSV text into records of fields. A record keeps at most [`MAX_COLS`] fields; the rest are
-/// dropped as they are read, so a row of endless delimiters cannot allocate a string per field.
+/// dropped as they are read, so a row of endless delimiters cannot allocate a string per field,
+/// and the characters of a field past the last column are not stored at all (quotes, delimiters
+/// and line ends in it are still followed, so the next record starts where it should).
 pub(crate) fn parse_records(text: &str, delim: char, quote: char, mut on_record: impl FnMut(Vec<String>) -> bool) {
+    let max = MAX_COLS as usize;
     let mut field = String::new();
     let mut record: Vec<String> = vec![];
     let mut in_q = false;
     let mut chars = text.chars().peekable();
     let mut field_started_quoted = false;
+    // The current unquoted field has content, also when it is past the last column and isn't
+    // stored: a quote inside it is then a plain character, as in a stored field.
+    let mut field_seen = false;
     while let Some(c) = chars.next() {
+        let store = record.len() < max;
         if in_q {
             if c == quote {
                 if chars.peek() == Some(&quote) {
-                    field.push(quote);
+                    if store {
+                        field.push(quote);
+                    }
                     chars.next();
                 } else {
                     in_q = false;
                 }
-            } else {
+            } else if store {
                 field.push(c);
             }
             continue;
         }
-        if c == quote && field.is_empty() && !field_started_quoted {
+        if c == quote && !field_seen && !field_started_quoted {
             in_q = true;
             field_started_quoted = true;
         } else if c == delim {
             let f = std::mem::take(&mut field);
-            if record.len() < MAX_COLS as usize {
+            if store {
                 record.push(f);
             }
             field_started_quoted = false;
+            field_seen = false;
         } else if c == '\r' || c == '\n' {
             if c == '\r' && chars.peek() == Some(&'\n') {
                 chars.next();
             }
             let f = std::mem::take(&mut field);
-            if record.len() < MAX_COLS as usize {
+            if store {
                 record.push(f);
             }
             field_started_quoted = false;
+            field_seen = false;
             if !on_record(std::mem::take(&mut record)) {
                 return;
             }
         } else {
-            field.push(c);
+            field_seen = true;
+            if store {
+                field.push(c);
+            }
         }
     }
-    if !field.is_empty() || !record.is_empty() || field_started_quoted {
-        if record.len() < MAX_COLS as usize {
+    if field_seen || !field.is_empty() || !record.is_empty() || field_started_quoted {
+        if record.len() < max {
             record.push(field);
         }
         on_record(record);

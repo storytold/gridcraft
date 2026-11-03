@@ -72,11 +72,14 @@ impl SheetNames {
         if self.taken.insert(base.to_ascii_lowercase()) {
             return base;
         }
-        let short: String = base.chars().take(25).collect();
-        let key = short.to_ascii_lowercase();
+        let key: String = base.chars().take(25).collect::<String>().to_ascii_lowercase();
         let mut n = self.next_suffix.get(&key).copied().unwrap_or(2);
         loop {
-            let candidate = format!("{short} ({n})");
+            // 25 characters of the base, fewer once the suffix grows past ` (999)`, so the name
+            // stays within 31 characters however many duplicates there are.
+            let suffix = format!(" ({n})");
+            let short: String = base.chars().take(31usize.saturating_sub(suffix.len()).min(25)).collect();
+            let candidate = format!("{short}{suffix}");
             n = n.saturating_add(1);
             if self.taken.insert(candidate.to_ascii_lowercase()) {
                 self.next_suffix.insert(key, n);
