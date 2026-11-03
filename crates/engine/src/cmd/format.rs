@@ -411,16 +411,13 @@ fn border_style(name: &str) -> BorderStyle {
     }
 }
 
-fn apply_line_borders(
+fn border_line_plan(
     cx: &mut crate::cmd::Ctx<'_>,
     sheet: usize,
     r: &RangeRef,
     cols: bool,
-    clear_neighbors: bool,
     edges: &dyn Fn(&mut Style, bool, bool, bool, bool),
-    facing: &dyn Fn(&mut Style, i64, i64),
-) -> Result<()> {
-    let mut plan: Vec<(CellRef, StyleId)> = Vec::new();
+) -> Result<(Vec<(CellRef, StyleId)>, Vec<StyleId>)> {
     let line_range = if cols { r.start.col..=r.end.col } else { r.start.row..=r.end.row };
     let first = *line_range.start();
     let mut line_new: Vec<StyleId> = Vec::new();
@@ -435,6 +432,7 @@ fn apply_line_borders(
             }
         }));
     }
+
     let ends = if cols {
         [RangeRef::new(r.start, CellRef::new(r.start.row, r.end.col)), RangeRef::new(CellRef::new(r.end.row, r.start.col), r.end)]
     } else {
@@ -455,11 +453,12 @@ fn apply_line_borders(
     cells.extend(ends.iter().flat_map(|e| e.iter()));
     cells.sort_unstable();
     cells.dedup();
+
+    let mut plan: Vec<(CellRef, StyleId)> = Vec::new();
     for c in cells {
         let (top, bottom, left, right) = (c.row == r.start.row, c.row == r.end.row, c.col == r.start.col, c.col == r.end.col);
         let Some(sh) = cx.wb.sheet(sheet) else { continue };
         let (stored, st) = (sh.cells.get(c).is_some(), sh.style_id(c));
-        // What a blank cell shows once the line styles are written: its row, else its column.
         let inherited = if cols {
             sh.rows.get(&c.row).and_then(|i| i.style).or_else(|| line_new.get(usize::try_from(c.col - first).unwrap_or(usize::MAX)).copied())
         } else {
@@ -473,51 +472,107 @@ fn apply_line_borders(
             return Err(bad("home.borders", "selection too large"));
         }
     }
-    let sh = cx.sheet_mut(sheet)?;
-    let map = if cols { &mut sh.cols } else { &mut sh.rows };
-    for (line, new) in (first..).zip(line_new) {
-        map.entry(line).or_default().style = Some(new);
-    }
-    if clear_neighbors {
-        // Neighbouring lines can hold the shared edge on cells this path never visits.
-        for (dr, dc) in if cols { [(0, -1), (0, 1)] } else { [(-1, 0), (1, 0)] } {
-            let Some(n) = (if dr + dc < 0 { r.start } else { r.end }).offset(dr, dc) else { continue };
-            let strip = if cols {
-                RangeRef::new(CellRef::new(r.start.row, n.col), CellRef::new(r.end.row, n.col))
+    Ok((plan, line_new))
+}
+
+fn count_facing_neighbours(cx: &mut crate::cmd::Ctx<'_>, sheet: usize, r: &RangeRef, cols: bool, facing: &dyn Fn(&mut Style, i64, i64)) -> usize {
+    let mut changed = 0usize;
+    for (dr, dc) in if cols { [(0, -1), (0, 1)] } else { [(-1, 0), (1, 0)] } {
+        let Some(n) = (if dr + dc < 0 { r.start } else { r.end }).offset(dr, dc) else { continue };
+        let strip = if cols {
+            RangeRef::new(CellRef::new(r.start.row, n.col), CellRef::new(r.end.row, n.col))
+        } else {
+            RangeRef::new(CellRef::new(n.row, r.start.col), CellRef::new(n.row, r.end.col))
+        };
+        let mut cells: Vec<CellRef> = cx.wb.sheet(sheet).map(|sh| sh.cells.iter_range(strip).map(|(c, _)| c).collect()).unwrap_or_default();
+        if let Some(sh) = cx.wb.sheet(sheet) {
+            if cols {
+                cells.extend(sh.rows.iter().filter(|(_, i)| i.style.is_some()).filter_map(|(row, _)| {
+                    let c = CellRef::new(*row, n.col);
+                    sh.cells.get(c).is_none().then_some(c)
+                }));
             } else {
-                RangeRef::new(CellRef::new(n.row, r.start.col), CellRef::new(n.row, r.end.col))
-            };
-            let line = if cols { n.col } else { n.row };
-            let mut existing: Vec<CellRef> = cx.wb.sheet(sheet).map(|sh| sh.cells.iter_range(strip).map(|(c, _)| c).collect()).unwrap_or_default();
-            // Blank neighbours inherit their edges from a styled perpendicular line.
-            if let Some(sh) = cx.wb.sheet(sheet) {
-                if cols {
-                    existing.extend(sh.rows.iter().filter(|(_, i)| i.style.is_some()).map(|(row, _)| CellRef::new(*row, n.col)));
-                } else {
-                    existing.extend(sh.cols.iter().filter(|(_, i)| i.style.is_some()).map(|(col, _)| CellRef::new(n.row, *col)));
-                }
+                cells.extend(sh.cols.iter().filter(|(_, i)| i.style.is_some()).filter_map(|(col, _)| {
+                    let c = CellRef::new(n.row, *col);
+                    sh.cells.get(c).is_none().then_some(c)
+                }));
             }
-            existing.sort_unstable();
-            existing.dedup();
-            for c in existing {
-                let st = cx.wb.sheet(sheet).map(|sh| sh.style_id(c)).unwrap_or_default();
-                let new = cx.wb.styles.derive(st, |s| facing(s, dr, dc));
-                if new != st {
-                    cx.sheet_mut(sheet)?.set_style(c, new);
-                }
-            }
-            let cur = cx.wb.sheet(sheet).and_then(|sh| if cols { sh.cols.get(&line) } else { sh.rows.get(&line) }).and_then(|i| i.style);
-            if let Some(cur) = cur {
-                let new = cx.wb.styles.derive(cur, |s| facing(s, dr, dc));
-                let sh = cx.sheet_mut(sheet)?;
-                if let Some(info) = if cols { sh.cols.get_mut(&line) } else { sh.rows.get_mut(&line) } {
-                    info.style = Some(new);
-                }
+        }
+        for c in cells {
+            let st = cx.wb.sheet(sheet).map(|sh| sh.style_id(c)).unwrap_or_default();
+            let new = cx.wb.styles.derive(st, |s| facing(s, dr, dc));
+            if new != st {
+                changed = changed.saturating_add(1);
             }
         }
     }
-    for (c, new) in plan {
-        cx.sheet_mut(sheet)?.set_style(c, new);
+    changed
+}
+
+fn check_line_border_budget(plan_cells: usize, neighbour_cells: usize) -> Result<()> {
+    let cells = plan_cells.saturating_add(neighbour_cells);
+    if cells > 2_000_000 {
+        return Err(bad("home.borders", "selection too large"));
+    }
+    // Retained cell rows and cells are charged by CellStore for undo; include the row-map
+    // overhead per cell as a conservative bound, plus space for the workbook/sheet snapshots.
+    let cell_bytes =
+        std::mem::size_of::<u32>().saturating_add(std::mem::size_of::<gridcraft_model::Cell>()).saturating_add(3 * std::mem::size_of::<usize>());
+    let row_bytes = std::mem::size_of::<u32>().saturating_add(3 * std::mem::size_of::<usize>());
+    let projected = cells
+        .saturating_mul(cell_bytes.saturating_add(row_bytes).saturating_add(std::mem::size_of::<usize>()))
+        .saturating_add(std::mem::size_of::<gridcraft_model::Workbook>())
+        .saturating_add(std::mem::size_of::<gridcraft_model::Sheet>());
+    if projected > crate::UNDO_BYTES_LIMIT {
+        return Err(bad("home.borders", "selection exceeds undo memory budget"));
+    }
+    Ok(())
+}
+
+fn clear_facing_neighbours(
+    cx: &mut crate::cmd::Ctx<'_>,
+    sheet: usize,
+    r: &RangeRef,
+    cols: bool,
+    facing: &dyn Fn(&mut Style, i64, i64),
+) -> Result<()> {
+    for (dr, dc) in if cols { [(0, -1), (0, 1)] } else { [(-1, 0), (1, 0)] } {
+        let Some(n) = (if dr + dc < 0 { r.start } else { r.end }).offset(dr, dc) else { continue };
+        let strip = if cols {
+            RangeRef::new(CellRef::new(r.start.row, n.col), CellRef::new(r.end.row, n.col))
+        } else {
+            RangeRef::new(CellRef::new(n.row, r.start.col), CellRef::new(n.row, r.end.col))
+        };
+        let line = if cols { n.col } else { n.row };
+        let mut existing: Vec<CellRef> = cx.wb.sheet(sheet).map(|sh| sh.cells.iter_range(strip).map(|(c, _)| c).collect()).unwrap_or_default();
+        if let Some(sh) = cx.wb.sheet(sheet) {
+            if cols {
+                existing.extend(sh.rows.iter().filter(|(_, i)| i.style.is_some()).filter_map(|(row, _)| {
+                    let c = CellRef::new(*row, n.col);
+                    sh.cells.get(c).is_none().then_some(c)
+                }));
+            } else {
+                existing.extend(sh.cols.iter().filter(|(_, i)| i.style.is_some()).filter_map(|(col, _)| {
+                    let c = CellRef::new(n.row, *col);
+                    sh.cells.get(c).is_none().then_some(c)
+                }));
+            }
+        }
+        for c in existing {
+            let st = cx.wb.sheet(sheet).map(|sh| sh.style_id(c)).unwrap_or_default();
+            let new = cx.wb.styles.derive(st, |s| facing(s, dr, dc));
+            if new != st {
+                cx.sheet_mut(sheet)?.set_style(c, new);
+            }
+        }
+        let cur = cx.wb.sheet(sheet).and_then(|sh| if cols { sh.cols.get(&line) } else { sh.rows.get(&line) }).and_then(|i| i.style);
+        if let Some(cur) = cur {
+            let new = cx.wb.styles.derive(cur, |s| facing(s, dr, dc));
+            let sh = cx.sheet_mut(sheet)?;
+            if let Some(info) = if cols { sh.cols.get_mut(&line) } else { sh.rows.get_mut(&line) } {
+                info.style = Some(new);
+            }
+        }
     }
     Ok(())
 }
@@ -627,10 +682,23 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
             // the two end cells of each line and (for columns) the blank cells of styled rows,
             // which would otherwise hide the column's style. A cell per row would make a single
             // undo step hundreds of megabytes and push the older steps out of the history.
-            let lines = r.is_full_cols() != r.is_full_rows();
             let cols = r.is_full_cols();
-            if lines {
-                apply_line_borders(cx, sheet, r, cols, preset == "none", &edges, &facing)?;
+            if cols != r.is_full_rows() {
+                let (plan, line_new) = border_line_plan(cx, sheet, r, cols, &edges)?;
+                let neighbour_cells = if preset == "none" { count_facing_neighbours(cx, sheet, r, cols, &facing) } else { 0 };
+                check_line_border_budget(plan.len(), neighbour_cells)?;
+                let first = if cols { r.start.col } else { r.start.row };
+                let sh = cx.sheet_mut(sheet)?;
+                let map = if cols { &mut sh.cols } else { &mut sh.rows };
+                for (line, new) in (first..).zip(line_new) {
+                    map.entry(line).or_default().style = Some(new);
+                }
+                if preset == "none" {
+                    clear_facing_neighbours(cx, sheet, r, cols, &facing)?;
+                }
+                for (c, new) in plan {
+                    cx.sheet_mut(sheet)?.set_style(c, new);
+                }
                 continue;
             }
             if r.count() > 2_000_000 {
