@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-02 · **Change:** minor (Python cells in the interface; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-02 · **Change:** minor (`python.clear`, Convert to Normal Cell; earlier: Python cells in the interface; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -180,7 +180,13 @@ the code (`xlsx::python_part`, [MS-XLSX] 2.3.10); `io::adopt_python` and `io::en
 bound what a file can make the app hold (result size, spill ranges, total rebuilt cells, code
 size). This build runs no Python: `python.set` stores code, and new or changed code shows
 `#BLOCKED!`. `python.output` switches a cell's return type; as with a new return type through `python.set`,
-a cached result of the old type goes, so the cell shows `#BLOCKED!` until it runs.
+a cached result of the old type goes, so the cell shows `#BLOCKED!` until it runs. `python.clear`
+(Convert to Normal Cell) removes the code and keeps the cell's value; the values its result spilled
+become plain values (`Sheet::settle_spill`). A Python-only error (`#BLOCKED!`, `#BUSY!`,
+`#PYTHON!`, `#TIMEOUT!`) is no result and no ordinary cell's value, so a cell that shows one is left
+empty with its format. The cells that changed are touched so their readers recalculate. `cmd::python::clear_refusal` gives the reason the command would refuse (no Python
+code, a table header, a locked cell or a spill over locked cells on a protected sheet), so the card
+and the cell menu turn the action off where it would fail.
 
 In ui-egui, Python mode is a state of the shared cell editor (`EditState::python`) that edits in
 the formula bar only, through `code_editor::code_field`: the code editor's in-order key handling
@@ -240,6 +246,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | minor | `python.clear` (Convert to Normal Cell) and `cmd::python::clear_refusal` |
 | 2026-11-02 | minor | Python cells in the interface: `python_card.rs` (PY tags, the card, the return-type items) and `python.output` |
 | 2026-11-02 | minor | Python mode in the formula bar: Python mode on the shared editor, `code_field` and its stop keys; drafts follow their sheet by `model::SheetUid` |
 | 2026-11-02 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references; edits that would push code past the limit are refused |
