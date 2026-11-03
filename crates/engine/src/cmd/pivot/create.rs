@@ -47,7 +47,7 @@ fn source_text(sh: &Sheet, r: RangeRef) -> String {
 
 /// Whether `c` holds data, as `current_region` counts it.
 fn filled(sh: &Sheet, c: CellRef) -> bool {
-    sh.cell(c).is_some_and(|x| !x.value.is_empty() || x.formula.is_some()) || sh.spill.contains_key(&c)
+    sh.cell(c).is_some_and(Cell::has_content) || sh.spill.contains_key(&c)
 }
 
 /// Whether any cell of `r` holds data.
@@ -318,7 +318,10 @@ pub(super) fn show_details(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         for (c, h) in src.headers.iter().enumerate() {
-            sh.set_cell(CellRef::new(0, c as u32), Cell { value: gridcraft_core::Value::text(h.as_str()), formula: None, style: StyleId::default() });
+            sh.set_cell(
+                CellRef::new(0, c as u32),
+                Cell { value: gridcraft_core::Value::text(h.as_str()), formula: None, style: StyleId::default(), py: None },
+            );
         }
         for (r, i) in records.iter().enumerate() {
             let Some(rec) = src.rows.get(*i) else { continue };
@@ -327,7 +330,7 @@ pub(super) fn show_details(s: &mut Session, p: &Json) -> Result<Json> {
                 if v.is_empty() && style == StyleId::default() {
                     continue;
                 }
-                sh.set_cell(CellRef::new(r as u32 + 1, c as u32), Cell { value: v.clone(), formula: None, style });
+                sh.set_cell(CellRef::new(r as u32 + 1, c as u32), Cell { value: v.clone(), formula: None, style, py: None });
             }
         }
         let name = sh.name.clone();
