@@ -47,6 +47,8 @@ enum StatsNeed {
 fn stats_need(rule: &CfRule) -> Option<StatsNeed> {
     match rule {
         CfRule::Duplicate { .. } | CfRule::Unique { .. } => Some(StatsNeed::Counts),
+        // only two- and three-colour scales paint: no statistics for the others
+        CfRule::ColorScale { stops } if !matches!(stops.len(), 2 | 3) => None,
         CfRule::Top10 { .. } | CfRule::AboveAverage { .. } | CfRule::ColorScale { .. } | CfRule::DataBar { .. } | CfRule::IconSet { .. } => {
             Some(StatsNeed::Numbers)
         }
@@ -92,9 +94,16 @@ fn numbers_in(sh: &Sheet, ranges: &[RangeRef], need: StatsNeed) -> (Vec<f64>, Ha
         if !seen.insert(r) {
             continue;
         }
-        let cells = r.iter().take(budget);
-        for c in cells {
+        // Only stored and spilled cells hold values: blank cells of a sparse range cost nothing,
+        // so a value far down a huge range is still counted. Every cell looked at is charged.
+        let stored = sh.cells.iter_range(r).map(|(c, _)| (c, true));
+        let spilled = sh.spill.range(r.start..=r.end).map(|(c, _)| (*c, false));
+        for (c, is_stored) in stored.chain(spilled).take(budget) {
             budget -= 1;
+            // a spilled value under a stored cell was read with it; the spill range spans whole rows
+            if !r.contains(c) || (!is_stored && sh.cells.get(c).is_some()) {
+                continue;
+            }
             #[cfg(test)]
             SCANNED.with(|n| n.set(n.get() + 1));
             let v = sh.value(c);
@@ -597,6 +606,23 @@ mod tests {
         SCANNED.with(|n| n.set(0));
         RuleStats::build(sh, &shifted, StatsNeed::Numbers);
         assert!(SCANNED.with(|n| n.get()) <= STATS_SCAN_LIMIT);
+    }
+
+    /// Blank cells of a sparse range are not charged to the scan budget: a value at the end of two
+    /// million-row columns still counts, so duplicates are found.
+    #[test]
+    fn sparse_ranges_keep_their_values_under_the_scan_budget() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[7]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "B1048576", "values": [[7]]})).unwrap();
+        let d = s.doc().unwrap();
+        let sh = d.wb.sheet(0).unwrap();
+        let ranges = [RangeRef::parse("A1:A1048576").unwrap(), RangeRef::parse("B1:B1048576").unwrap()];
+        SCANNED.with(|n| n.set(0));
+        let st = RuleStats::build(sh, &ranges, StatsNeed::Counts);
+        assert_eq!(st.counts.get("7"), Some(&2));
+        assert_eq!(SCANNED.with(|n| n.get()), 2);
     }
 
     /// A colour scale with an unsupported number of stops paints nothing and evaluates none of them.
