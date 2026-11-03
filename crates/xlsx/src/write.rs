@@ -289,69 +289,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
 
     let names = write_defined_names(wb, &kept, &out.chart_names);
 
-    let mut w = format!("{XML_DECL}<workbook xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\">");
-    // A workbook read from a file keeps its <fileVersion> as it was: Excel trusts the saved values
-    // only when appName is "xl" (#799). One without names GridCraft (#1699), and Excel recalculates it.
-    let file_version = crate::passthrough::workbook_elements(wb, "fileVersion");
-    w.push_str(if file_version.is_empty() { "<fileVersion appName=\"gridcraft\"/>" } else { &file_version });
-    w.push_str("<workbookPr");
-    match wb.show_objects {
-        ShowObjects::All => {}
-        ShowObjects::Placeholders => w.push_str(" showObjects=\"placeholders\""),
-        ShowObjects::None => w.push_str(" showObjects=\"none\""),
-    }
-    if wb.date_system == gridcraft_core::DateSystem::D1904 {
-        w.push_str(" date1904=\"1\"");
-    }
-    if wb.remove_personal_info {
-        w.push_str(" filterPrivacy=\"1\"");
-    }
-    w.push_str("/>");
-    if wb.protected_structure {
-        let pw = wb.structure_password.as_ref().map(|h| crate::sheet_write::password_attrs(h, "workbook")).unwrap_or_default();
-        let _ = write!(w, "<workbookProtection{pw} lockStructure=\"1\"/>");
-    }
-    let _ = write!(w, "<bookViews><workbookView activeTab=\"{}\"", kept.file_index(active));
-    w.push_str(&workbook_view_attrs(wb));
-    let _ = write!(w, "/></bookViews><sheets>{sheets_xml}</sheets>");
-    w.push_str(&kept.elements);
-    if !names.is_empty() {
-        let _ = write!(w, "<definedNames>{names}</definedNames>");
-    }
-    w.push_str("<calcPr calcId=\"191029\"");
-    match wb.calc.mode {
-        CalcMode::Automatic => {}
-        CalcMode::Manual => w.push_str(" calcMode=\"manual\""),
-        CalcMode::AutomaticExceptTables => w.push_str(" calcMode=\"autoNoTable\""),
-    }
-    // CT_CalcPr defaults: iterate off, 100 iterations, 0.001 maximum change. The limits are kept
-    // while iteration is off, as Options keeps them.
-    let calc = &wb.calc;
-    if calc.iterative {
-        w.push_str(" iterate=\"1\"");
-    }
-    if calc.iterative || calc.max_iterations != CalcSettings::DEFAULT_ITERATIONS {
-        let _ = write!(w, " iterateCount=\"{}\"", calc.max_iterations);
-    }
-    if calc.iterative || calc.max_change != CalcSettings::DEFAULT_CHANGE {
-        let _ = write!(w, " iterateDelta=\"{}\"", crate::xml::num(calc.max_change));
-    }
-    if wb.calc.precision_as_displayed {
-        w.push_str(" fullPrecision=\"0\"");
-    }
-    if wb.calc.r1c1 {
-        w.push_str(" refMode=\"R1C1\"");
-    }
-    if out.needs_calc {
-        w.push_str(" fullCalcOnLoad=\"1\"");
-    }
-    w.push_str("/>");
-    w.push_str(&pivots.workbook_xml(&mut wb_rels));
-    let exts = crate::passthrough::workbook_elements(wb, "ext");
-    if !exts.is_empty() {
-        let _ = write!(w, "<extLst>{exts}</extLst>");
-    }
-    w.push_str("</workbook>");
+    let w = write_workbook_xml(wb, active, &sheets_xml, &names, &kept, &mut pivots, &mut wb_rels, out.needs_calc);
 
     // Workbook-level parts.
     let mut extra_fmts = pivots.number_formats(wb);
@@ -484,6 +422,82 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         zip.add(name, data)?;
     }
     zip.finish()
+}
+
+fn write_workbook_xml(
+    wb: &Workbook,
+    active: usize,
+    sheets_xml: &str,
+    names: &str,
+    kept: &crate::passthrough::WorkbookKept,
+    pivots: &mut crate::pivot::PivotWriter,
+    wb_rels: &mut Rels,
+    needs_calc: bool,
+) -> String {
+    let mut w = format!("{XML_DECL}<workbook xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\">");
+    // A workbook read from a file keeps its <fileVersion> as it was: Excel trusts the saved values
+    // only when appName is "xl" (#799). One without names GridCraft (#1699), and Excel recalculates it.
+    let file_version = crate::passthrough::workbook_elements(wb, "fileVersion");
+    w.push_str(if file_version.is_empty() { "<fileVersion appName=\"gridcraft\"/>" } else { &file_version });
+    w.push_str("<workbookPr");
+    match wb.show_objects {
+        ShowObjects::All => {}
+        ShowObjects::Placeholders => w.push_str(" showObjects=\"placeholders\""),
+        ShowObjects::None => w.push_str(" showObjects=\"none\""),
+    }
+    if wb.date_system == gridcraft_core::DateSystem::D1904 {
+        w.push_str(" date1904=\"1\"");
+    }
+    if wb.remove_personal_info {
+        w.push_str(" filterPrivacy=\"1\"");
+    }
+    w.push_str("/>");
+    if wb.protected_structure {
+        let pw = wb.structure_password.as_ref().map(|h| crate::sheet_write::password_attrs(h, "workbook")).unwrap_or_default();
+        let _ = write!(w, "<workbookProtection{pw} lockStructure=\"1\"/>");
+    }
+    let _ = write!(w, "<bookViews><workbookView activeTab=\"{}\"", kept.file_index(active));
+    w.push_str(&workbook_view_attrs(wb));
+    let _ = write!(w, "/></bookViews><sheets>{sheets_xml}</sheets>");
+    w.push_str(&kept.elements);
+    if !names.is_empty() {
+        let _ = write!(w, "<definedNames>{names}</definedNames>");
+    }
+    w.push_str("<calcPr calcId=\"191029\"");
+    match wb.calc.mode {
+        CalcMode::Automatic => {}
+        CalcMode::Manual => w.push_str(" calcMode=\"manual\""),
+        CalcMode::AutomaticExceptTables => w.push_str(" calcMode=\"autoNoTable\""),
+    }
+    // CT_CalcPr defaults: iterate off, 100 iterations, 0.001 maximum change. The limits are kept
+    // while iteration is off, as Options keeps them.
+    let calc = &wb.calc;
+    if calc.iterative {
+        w.push_str(" iterate=\"1\"");
+    }
+    if calc.iterative || calc.max_iterations != CalcSettings::DEFAULT_ITERATIONS {
+        let _ = write!(w, " iterateCount=\"{}\"", calc.max_iterations);
+    }
+    if calc.iterative || calc.max_change != CalcSettings::DEFAULT_CHANGE {
+        let _ = write!(w, " iterateDelta=\"{}\"", crate::xml::num(calc.max_change));
+    }
+    if wb.calc.precision_as_displayed {
+        w.push_str(" fullPrecision=\"0\"");
+    }
+    if wb.calc.r1c1 {
+        w.push_str(" refMode=\"R1C1\"");
+    }
+    if needs_calc {
+        w.push_str(" fullCalcOnLoad=\"1\"");
+    }
+    w.push_str("/>");
+    w.push_str(&pivots.workbook_xml(wb_rels));
+    let exts = crate::passthrough::workbook_elements(wb, "ext");
+    if !exts.is_empty() {
+        let _ = write!(w, "<extLst>{exts}</extLst>");
+    }
+    w.push_str("</workbook>");
+    w
 }
 
 fn write_sheets(
