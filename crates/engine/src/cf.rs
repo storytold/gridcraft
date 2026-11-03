@@ -76,6 +76,27 @@ thread_local! {
 /// the same range many times must not multiply the scan.
 const STATS_SCAN_LIMIT: usize = 2_000_000;
 
+/// Steps through the spilled cells inside `r`, row-major: `Some(cell)` for each, and `None` for a
+/// jump past the spills left or right of the columns on a row (one step per row, however many
+/// there are), so unrelated spills between a narrow range's corners cost little.
+fn spill_steps(sh: &Sheet, r: RangeRef) -> impl Iterator<Item = Option<CellRef>> + '_ {
+    let mut cur = Some(r.start);
+    std::iter::from_fn(move || {
+        let at = cur.filter(|at| *at <= r.end)?;
+        let (&c, _) = sh.spill.range(at..=r.end).next()?;
+        if c.col < r.start.col {
+            cur = Some(CellRef::new(c.row, r.start.col));
+            Some(None)
+        } else if c.col > r.end.col {
+            cur = c.row.checked_add(1).map(|row| CellRef::new(row, r.start.col));
+            Some(None)
+        } else {
+            cur = c.col.checked_add(1).map(|col| CellRef::new(c.row, col));
+            Some(Some(c))
+        }
+    })
+}
+
 fn numbers_in(sh: &Sheet, ranges: &[RangeRef], need: StatsNeed) -> (Vec<f64>, HashMap<String, usize>) {
     let mut nums = Vec::new();
     let mut counts = HashMap::new();
@@ -96,14 +117,13 @@ fn numbers_in(sh: &Sheet, ranges: &[RangeRef], need: StatsNeed) -> (Vec<f64>, Ha
         }
         // Only stored and spilled cells hold values: blank cells of a sparse range cost nothing,
         // so a value far down a huge range is still counted. Every cell looked at is charged.
-        let stored = sh.cells.iter_range(r).map(|(c, _)| (c, true));
-        let spilled = sh.spill.range(r.start..=r.end).map(|(c, _)| (*c, false));
+        let stored = sh.cells.iter_range(r).map(|(c, _)| (Some(c), true));
+        let spilled = spill_steps(sh, r).map(|c| (c, false));
         for (c, is_stored) in stored.chain(spilled).take(budget) {
             budget -= 1;
-            // a spilled value under a stored cell was read with it; the spill range spans whole rows
-            if !r.contains(c) || (!is_stored && sh.cells.get(c).is_some()) {
-                continue;
-            }
+            // a skip over spills outside the columns (charged, not read), or a spilled value
+            // under a stored cell, which was read with it
+            let Some(c) = c.filter(|c| is_stored || sh.cells.get(*c).is_none()) else { continue };
             #[cfg(test)]
             SCANNED.with(|n| n.set(n.get() + 1));
             let v = sh.value(c);
@@ -623,6 +643,28 @@ mod tests {
         let st = RuleStats::build(sh, &ranges, StatsNeed::Counts);
         assert_eq!(st.counts.get("7"), Some(&2));
         assert_eq!(SCANNED.with(|n| n.get()), 2);
+    }
+
+    /// Spills left and right of a narrow range, between its corners, are skipped a row at a time:
+    /// they do not use the budget that the in-range spills need.
+    #[test]
+    fn spills_outside_a_narrow_range_do_not_use_its_scan_budget() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let d = s.doc().unwrap();
+        let mut sh = d.wb.sheet(0).unwrap().clone();
+        for row in 0..1000 {
+            for col in [0u32, 5, 6, 7] {
+                sh.spill.insert(CellRef::new(row, col), Value::Number(1.0));
+            }
+        }
+        let r = RangeRef::parse("F1:G1000").unwrap();
+        let steps: Vec<_> = spill_steps(&sh, r).collect();
+        assert_eq!(steps.iter().flatten().count(), 2000);
+        // column A is skipped one step a row, never one per cell
+        assert!(steps.len() <= 2000 + 1000, "{}", steps.len());
+        let narrow = RangeRef::parse("C1:C1000").unwrap();
+        assert_eq!(spill_steps(&sh, narrow).flatten().count(), 0);
     }
 
     /// A colour scale with an unsupported number of stops paints nothing and evaluates none of them.
