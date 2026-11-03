@@ -680,7 +680,7 @@ impl Session {
         }
     }
 
-    pub fn execute(&mut self, id: &str, params: Json) -> Result<Json> {
+    fn prepare_command(&mut self, id: &str) -> Result<(&'static CommandSpec, bool)> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         self.ensure_command_enabled(id, spec)?;
         // A debugger whose undo group something else ended locks nothing any more (`macro.debug`
@@ -695,6 +695,11 @@ impl Session {
         // modes, stopping Record Actions, which saves a script), also when another command runs
         // it. Only the run's own steps go ahead. Other workbooks stay editable.
         self.ensure_command_unlocked(id, query)?;
+        Ok((spec, query))
+    }
+
+    pub fn execute(&mut self, id: &str, params: Json) -> Result<Json> {
+        let (spec, query) = self.prepare_command(id)?;
         let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
         // A dry run inside this command that a panic cuts short leaves journaling paused and its
         // touch log open; the panic branch puts both back.
