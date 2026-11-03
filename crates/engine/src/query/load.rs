@@ -101,7 +101,7 @@ fn clear_values(sh: &mut Sheet, r: RangeRef) {
         if style == StyleId::DEFAULT {
             sh.remove_cell(c);
         } else {
-            sh.set_cell(c, Cell { value: Value::Empty, formula: None, style });
+            sh.set_cell(c, Cell { value: Value::Empty, formula: None, style, py: None });
         }
     }
 }
@@ -184,7 +184,7 @@ pub fn write_load(cx: &mut Ctx<'_>, query: &str, load: &QueryLoad, t: &QTable) -
             if v.is_empty() && style == StyleId::DEFAULT {
                 continue;
             }
-            sh.set_cell(c, Cell { value: v, formula: None, style });
+            sh.set_cell(c, Cell { value: v, formula: None, style, py: None });
         }
     }
     for (k, (col, first)) in calc.iter().enumerate() {
@@ -197,12 +197,13 @@ pub fn write_load(cx: &mut Ctx<'_>, query: &str, load: &QueryLoad, t: &QTable) -
                     let formula = cell.formula.as_ref().and_then(|f| f.expr()).map(|e| {
                         Arc::new(Formula::from_expr(gridcraft_formula::adjust::shift_relative(e, i64::from(at.row) - i64::from(from.row), 0)))
                     });
-                    Cell { value: Value::Empty, formula, style: cell.style }
+                    Cell { value: Value::Empty, formula, style: cell.style, py: None }
                 }
                 None => Cell {
                     value: Value::Empty,
                     formula: col.formula.as_ref().map(|f| Arc::new(Formula::new(&format!("={f}")))),
                     style: StyleId::DEFAULT,
+                    py: None,
                 },
             };
             sh.set_cell(at, cell);

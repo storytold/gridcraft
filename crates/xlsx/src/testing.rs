@@ -21,7 +21,13 @@ const KEY_DATA_SALT: [u8; 16] = [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
 const SECRET_KEY: [u8; 32] =
     [64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95];
 const VERIFIER: [u8; 16] = [32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47];
-const HMAC_SALT: [u8; 16] = [112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127];
+/// The dataIntegrity HMAC key, as long as the hash: Excel writes 64 bytes for SHA-512, not the
+/// salt-size key [MS-OFFCRYPTO] 2.3.4.14 describes.
+const HMAC_KEY: [u8; 64] = [
+    112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140,
+    141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169,
+    170, 171, 172, 173, 174, 175,
+];
 
 /// `package` (normally an `.xlsx` zip) as Excel stores it with a password: Agile encryption
 /// (AES-256, SHA-512) inside a compound file.
@@ -237,6 +243,11 @@ pub(crate) fn with_agile_header(xml: &str) -> Vec<u8> {
 /// `EncryptionInfo` and `EncryptedPackage` for `plain`, Agile (AES-256, SHA-512), with the
 /// dataIntegrity HMAC over the whole EncryptedPackage stream as Excel writes it.
 pub(crate) fn encrypt_agile(plain: &[u8], password: &str, spin: u32) -> (Vec<u8>, Vec<u8>) {
+    encrypt_agile_with_hmac_key(plain, password, spin, &HMAC_KEY)
+}
+
+/// [`encrypt_agile`] with the dataIntegrity HMAC keyed by `hmac_key`.
+pub(crate) fn encrypt_agile_with_hmac_key(plain: &[u8], password: &str, spin: u32, hmac_key: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let key_data = Params { hash: Hash::Sha512, salt: KEY_DATA_SALT.to_vec(), key_len: 32 };
     let mut body = vec![];
     for (i, segment) in plain.chunks(SEGMENT).enumerate() {
@@ -244,8 +255,8 @@ pub(crate) fn encrypt_agile(plain: &[u8], password: &str, spin: u32) -> (Vec<u8>
     }
     let stream = package(plain.len(), body);
     let (hmac_key_b64, hmac_value_b64) = (
-        base64_encode(&encrypt_cbc(&SECRET_KEY, &key_data.iv(Some(&BLOCK_HMAC_KEY)), &HMAC_SALT)),
-        base64_encode(&encrypt_cbc(&SECRET_KEY, &key_data.iv(Some(&BLOCK_HMAC_VALUE)), &hmac(Hash::Sha512, &HMAC_SALT, &stream))),
+        base64_encode(&encrypt_cbc(&SECRET_KEY, &key_data.iv(Some(&BLOCK_HMAC_KEY)), hmac_key)),
+        base64_encode(&encrypt_cbc(&SECRET_KEY, &key_data.iv(Some(&BLOCK_HMAC_VALUE)), &hmac(Hash::Sha512, hmac_key, &stream))),
     );
     (with_agile_header(&agile_info(password, spin, &hmac_key_b64, &hmac_value_b64)), stream)
 }

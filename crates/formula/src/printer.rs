@@ -175,8 +175,8 @@ fn write_struct_ref(s: &StructRef, at_shorthand: bool) -> String {
             let _ = write!(out, "[{}]", s.specifiers.first().map(item).unwrap_or(""));
         }
         (Some(c), None) if s.specifiers.is_empty() => {
-            // Excel writes a name with spaces at its edges in the double-bracket form.
-            if c.trim() == c {
+            // Names with spaces at their edges, or starting with `@` (this-row shorthand), use the double-bracket form.
+            if c.trim() == c && !c.starts_with('@') {
                 let _ = write!(out, "[{}]", esc(c));
             } else {
                 let _ = write!(out, "[[{}]]", esc(c));

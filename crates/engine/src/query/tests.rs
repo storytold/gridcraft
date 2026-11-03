@@ -893,7 +893,12 @@ fn refresh_keeps_calculated_columns_and_the_tables_filter() {
     for r in [2u32, 3] {
         sh.set_cell(
             CellRef::new(r - 1, 2),
-            Cell { value: Value::Empty, formula: Some(Arc::new(Formula::new("=Sales[[#This Row],[Amount]]*2"))), style: Default::default() },
+            Cell {
+                value: Value::Empty,
+                formula: Some(Arc::new(Formula::new("=Sales[[#This Row],[Amount]]*2"))),
+                style: Default::default(),
+                py: None,
+            },
         );
     }
     let t = sh.tables.iter_mut().find(|t| t.name == "Sales").unwrap();
