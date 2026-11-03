@@ -116,6 +116,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Link" => "Lien",
         "Symbol" => "Symbole",
         "Sparklines" => "Graphiques sparkline",
+        "Equation" => "Équation",
+        "Insert New Equation..." => "Insérer une nouvelle équation",
         "Checkbox" => "Case à cocher",
         "Insert checkboxes in the selected cells" => "Insérer des cases à cocher dans les cellules sélectionnées",
         "Header & Footer" => "En-tête et pied de page",
@@ -159,6 +161,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Error Checking" => "Vérification des erreurs",
         "Trace Error" => "Repérer une erreur",
         "Circular References" => "Références circulaires",
+        "Python Mode" => "Mode Python",
         "Evaluate Formula" => "Évaluation de formule",
         "Watch Window" => "Fenêtre Espion",
         "Calculation\nOptions" => "Options de\ncalcul",
@@ -2233,12 +2236,46 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Macros…" => "Macros…",
         "Recording" => "Enregistrement",
         "New Macro" => "Nouvelle macro",
+        "Collapse dialog" => "Réduire la boîte de dialogue",
+        "Expand dialog" => "Développer la boîte de dialogue",
+        "Reset All" => "Réinitialiser tout",
+        "Load/Save" => "Charger/Enregistrer",
+        "Model Range:" => "Plage du modèle :",
+        "Load" => "Charger",
+        "{range} already holds data. Replace it with the model?" => "{range} contient déjà des données. Les remplacer par le modèle ?",
+        "Don't Replace" => "Ne pas remplacer",
+        "The model was loaded." => "Le modèle a été chargé.",
+        "Edit Equation" => "Modifier l'équation",
+        "Insert Equation" => "Insérer une équation",
+        "LaTeX:" => "LaTeX :",
+        "Error at character {p}: {message}" => "Erreur au caractère {p} : {message}",
+        "Type an equation in LaTeX, such as x^2 + y^2 = r^2" => "Tapez une équation en LaTeX, par exemple x^2 + y^2 = r^2",
+        "\u{2318}/Ctrl+Enter to apply" => "\u{2318}/Ctrl+Entrée pour appliquer",
+        "\u{2318}/Ctrl+Enter to insert" => "\u{2318}/Ctrl+Entrée pour insérer",
+        "Square root" => "Racine carrée",
+        "Summation" => "Somme",
+        "Integral" => "Intégrale",
+        "Limit" => "Limite",
+        "Brackets that grow" => "Parenthèses extensibles",
+        "Matrix" => "Matrice",
+        "Plus or minus" => "Plus ou moins",
+        "Times" => "Multiplié par",
+        "Divided by" => "Divisé par",
+        "Less than or equal to" => "Inférieur ou égal à",
+        "Greater than or equal to" => "Supérieur ou égal à",
+        "Not equal to" => "Différent de",
+        "Infinity" => "Infini",
+        "Tends to" => "Tend vers",
+        "The sheet this dialog was opened on was deleted. Cancel, then open the dialog again on the sheet it should use." => {
+            "La feuille sur laquelle cette boîte de dialogue a été ouverte a été supprimée. Annulez, puis rouvrez la boîte de dialogue sur la bonne feuille."
+        }
         _ => return None,
     })
 }
 
 /// Engine messages built with `format!`: English template and French, with matching `{name}` placeholders.
 pub(super) const ERROR_TEMPLATES: &[(&str, &str)] = &[
+    ("The model was saved to {range}.", "Le modèle a été enregistré dans {range}."),
     ("A PivotTable can have at most {max} calculated fields.", "Un tableau croisé dynamique peut contenir au maximum {max} champs calculés."),
     (
         "A PivotTable can have at most {MAX_AXIS_FIELDS} row and column fields.",
