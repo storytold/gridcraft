@@ -161,6 +161,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Error Checking" => "Fehlerüberprüfung",
         "Trace Error" => "Spur zum Fehler",
         "Circular References" => "Zirkelbezüge",
+        "Python Mode" => "Python-Modus",
         "Evaluate Formula" => "Formel auswerten",
         "Watch Window" => "Überwachungsfenster",
         "Calculation\nOptions" => "Berechnungs-\noptionen",
@@ -486,6 +487,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Beenden",
         "New Macro" => "Neues Makro",
         "Show" => "Anzeigen",
+        "Collapse dialog" => "Dialogfeld reduzieren",
+        "Expand dialog" => "Dialogfeld erweitern",
         _ => return None,
     })
 }

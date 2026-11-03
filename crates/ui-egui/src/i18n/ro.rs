@@ -157,6 +157,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Error Checking" => "Verificare erori",
         "Trace Error" => "Trasare eroare",
         "Circular References" => "Referințe circulare",
+        "Python Mode" => "Mod Python",
         "Evaluate Formula" => "Evaluare formulă",
         "Watch Window" => "Fereastră de urmărire",
         "Calculation\nOptions" => "Opțiuni de\ncalcul",
@@ -1049,6 +1050,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recording" => "Înregistrare",
         "New Macro" => "Macrocomandă nouă",
         "Show" => "Afișare",
+        "Collapse dialog" => "Restrângere casetă de dialog",
+        "Expand dialog" => "Extindere casetă de dialog",
         _ => return None,
     })
 }

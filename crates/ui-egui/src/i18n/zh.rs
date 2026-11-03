@@ -156,6 +156,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Error Checking" => "错误检查",
         "Trace Error" => "追踪错误",
         "Circular References" => "循环引用",
+        "Python Mode" => "Python 模式",
         "Evaluate Formula" => "公式求值",
         "Watch Window" => "监视窗口",
         "Calculation\nOptions" => "计算\n选项",
@@ -1645,6 +1646,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Macros…" => "宏…",
         "Recording" => "正在录制",
         "New Macro" => "新建宏",
+        "Collapse dialog" => "折叠对话框",
+        "Expand dialog" => "展开对话框",
         _ => return None,
     })
 }

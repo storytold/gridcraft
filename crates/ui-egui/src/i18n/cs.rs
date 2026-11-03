@@ -147,6 +147,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Error Checking" => "Kontrola chyb",
         "Trace Error" => "Sledovat chybu",
         "Circular References" => "Cyklické odkazy",
+        "Python Mode" => "Režim Pythonu",
         "Evaluate Formula" => "Vyhodnotit vzorec",
         "Watch Window" => "Okno sledování",
         "Calculation\nOptions" => "Možnosti\nvýpočtu",
@@ -570,6 +571,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Zastavit",
         "New Macro" => "Nové makro",
         "Show" => "Zobrazit",
+        "Collapse dialog" => "Sbalit dialogové okno",
+        "Expand dialog" => "Rozbalit dialogové okno",
         _ => return None,
     })
 }

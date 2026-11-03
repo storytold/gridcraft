@@ -152,6 +152,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Error Checking" => "Перевірка помилок",
         "Trace Error" => "Джерело помилки",
         "Circular References" => "Циклічні посилання",
+        "Python Mode" => "Режим Python",
         "Evaluate Formula" => "Обчислити формулу",
         "Watch Window" => "Окно контрольних значень",
         "Calculation\nOptions" => "Параметри\nобчислень",
@@ -991,6 +992,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recording" => "Запис",
         "New Macro" => "Новий макрос",
         "Show" => "Показати",
+        "Collapse dialog" => "Згорнути діалогове вікно",
+        "Expand dialog" => "Розгорнути діалогове вікно",
         _ => return None,
     })
 }

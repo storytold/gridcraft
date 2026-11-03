@@ -149,6 +149,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Error Checking" => "Hata Denetimi",
         "Trace Error" => "Hatayı İzle",
         "Circular References" => "Döngüsel Başvurular",
+        "Python Mode" => "Python Modu",
         "Evaluate Formula" => "Formülü Değerlendir",
         "Watch Window" => "Gözcü Penceresi",
         "Calculation\nOptions" => "Hesaplama\nSeçenekleri",
@@ -429,6 +430,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Durdur",
         "New Macro" => "Yeni Makro",
         "Show" => "Göster",
+        "Collapse dialog" => "İletişim kutusunu daralt",
+        "Expand dialog" => "İletişim kutusunu genişlet",
         _ => return None,
     })
 }

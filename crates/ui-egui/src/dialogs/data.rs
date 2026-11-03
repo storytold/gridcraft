@@ -150,15 +150,15 @@ pub(super) fn data_validation_fields(kind: &str, operator: &str) -> Vec<Field> {
     fields
 }
 
-pub(super) fn data_validation_form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+pub(super) fn data_validation_form(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     let kind = d.values.get("type").and_then(Json::as_str).unwrap_or("any");
     let operator = d.values.get("operator").and_then(Json::as_str).unwrap_or("between");
     d.fields = data_validation_fields(kind, operator);
-    form_fields(ui, d);
+    form_fields(app, ui, d);
     ok_cancel(ui, confirm, open);
 }
 
-pub(super) fn advanced_filter_form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+pub(super) fn advanced_filter_form(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     use Field::*;
     let copy = d.values.get("action").and_then(Json::as_str) == Some("copy");
     d.fields = vec![
@@ -174,7 +174,7 @@ pub(super) fn advanced_filter_form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &
         d.fields.push(Text { key: "copyTo", label: "Copy to:" });
     }
     d.fields.push(Check { key: "unique", label: "Unique rows only" });
-    form_fields(ui, d);
+    form_fields(app, ui, d);
     // Constrain the button row: the shared right-to-left layout otherwise
     // consumes the window's remaining height instead of fitting the buttons.
     ui.allocate_ui(vec2(ui.available_width(), ui.spacing().interact_size.y + 8.0), |ui| ok_cancel(ui, confirm, open));
