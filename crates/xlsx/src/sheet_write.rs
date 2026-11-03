@@ -370,7 +370,12 @@ fn write_sheet_printing<'a>(s: &mut String, sheet: &'a Sheet, rels: &mut Rels, o
     }
     // Unmodelled content kept from the source file (printer settings, controls, OLE objects…).
     let kept = crate::passthrough::SheetKept::write(sheet, rels, out);
-    let m = |i: usize| num(p.margins.get(i).copied().unwrap_or(0.75) as f64);
+    // Margins are kept as f32: widen each through its shortest decimal, so 0.3 is written as
+    // `0.3`, as Excel writes it, and not as `0.30000001192092896` (#1609).
+    let m = |i: usize| {
+        let inches = p.margins.get(i).copied().unwrap_or(0.75);
+        num(inches.to_string().parse::<f64>().unwrap_or(f64::from(inches)))
+    };
     let _ =
         write!(s, "<pageMargins left=\"{}\" right=\"{}\" top=\"{}\" bottom=\"{}\" header=\"{}\" footer=\"{}\"/>", m(0), m(1), m(2), m(3), m(4), m(5));
     s.push_str("<pageSetup");
