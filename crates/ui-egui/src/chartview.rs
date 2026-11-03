@@ -4,7 +4,7 @@
 use egui::epaint::{PathShape, PathStroke};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
 use gridcraft_chart::{HAlign, Prim, VAlign};
-use gridcraft_engine::model::{Anchor, ObjKind, ObjRef, ShapeKind, Sheet, Workbook};
+use gridcraft_engine::model::{Anchor, DrawingRef, ObjKind, ObjRef, ShapeKind, Sheet, Workbook};
 
 use crate::SheetApp;
 use crate::grid::Geo;
@@ -389,6 +389,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         selection_frame(p, r);
         done(start, r);
     }
+
     painted
 }
 
@@ -503,16 +504,12 @@ fn selection_frame(p: &Painter, r: Rect) {
         p.circle_stroke(c, 4.0, Stroke::new(1.0, t.sheet_control_border));
     }
 }
-
-/// Where object `o` sits on the sheet (logical coordinates), when it exists on `sh`.
+/// Screen rect of floating object `o` on `sh`.
 pub fn object_rect(geo: &Geo, sh: &Sheet, o: ObjRef) -> Option<Rect> {
     sh.object_anchor(o).map(|a| anchor_rect(geo, sh, &a))
 }
 
-/// The resize handle of the selected object under `p`, with the object and its rect. Handles
-/// reach a little outside their object, so they win over [`hit`], but like it only over the cell
-/// area: a handle that lies under the headers, the formula bar or a scroll bar leaves the press
-/// to them. Nothing while objects are hidden.
+/// Resize handle (0..8) of the selected floating object under `p`, or `None`.
 pub fn selected_handle(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect, crate::objects::Handle)> {
     if !geo.cells.contains(p) || app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
         return None;
@@ -522,10 +519,8 @@ pub fn selected_handle(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option
     crate::objects::handle_at(r, p).map(|h| (o, r, h))
 }
 
-/// The topmost object under `p` and its rect: slicers paint on top, so they are hit first, then
-/// charts, pictures and shapes (equations included), each from the top of its stack. Nothing is hit outside the cell
-/// area or while objects are hidden.
-pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect)> {
+/// The topmost leaf object under `p`, a grouped one as itself: (object, rect).
+pub fn hit_object(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect)> {
     if !geo.cells.contains(p) || app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
         return None;
     }
@@ -555,4 +550,19 @@ pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Re
         }
     }
     None
+}
+
+/// Returns the outermost group under `p`, so clicking a member selects its group like Excel.
+pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect)> {
+    let (obj, r) = hit_object(app, geo, sh, p)?;
+    let member = match obj.kind {
+        ObjKind::Chart => DrawingRef::Chart(obj.id),
+        ObjKind::Image => DrawingRef::Image(obj.id),
+        ObjKind::Shape | ObjKind::Equation => DrawingRef::Shape(obj.id),
+        ObjKind::Slicer | ObjKind::Group => return Some((obj, r)),
+    };
+    match sh.outer_group(member).and_then(|g| Some((g, sh.group_anchor(g)?))) {
+        Some((g, a)) => Some((ObjRef::new(ObjKind::Group, g), anchor_rect(geo, sh, &a))),
+        None => Some((obj, r)),
+    }
 }
