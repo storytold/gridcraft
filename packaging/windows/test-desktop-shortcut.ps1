@@ -16,7 +16,7 @@ if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows' -or $env:RUN
 }
 if (-not $WorkDir) { $WorkDir = Join-Path $env:RUNNER_TEMP 'gridcraft-shortcut-smoke' }
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$InstallDir = Join-Path $env:ProgramFiles 'GridCraft'
+$InstallDir = Join-Path $env:ProgramFiles 'ArtCraft\GridCraft'
 $DesktopLink = Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'GridCraft.lnk'
 $StartLink = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'GridCraft.lnk'
 $ChoiceKey = 'HKLM:\Software\GridCraft\Installer'
@@ -65,7 +65,8 @@ function Get-ProductCode([string] $Msi) {
 function Invoke-Msi([string] $Name, [string[]] $Arguments) {
   $log = Join-Path $WorkDir "$Name.log"
   # /norestart is unconditional. Each operation and the workflow have time limits.
-  $process = Start-Process msiexec.exe -ArgumentList ($Arguments + @('/qn', '/norestart', '/l*v', "`"$log`"")) -PassThru
+  # Keep this existing regression on the explicit all-users route, including cross-account removal.
+  $process = Start-Process msiexec.exe -ArgumentList ($Arguments + @('ALLUSERS=1', '/qn', '/norestart', '/l*v', "`"$log`"")) -PassThru
   try {
     if (-not $process.WaitForExit(120000)) {
       $process.Kill()
