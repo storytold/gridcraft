@@ -260,54 +260,76 @@ pub(super) struct HfImage {
 const HF_MAX_BYTES: usize = 16 * 1024 * 1024;
 const HF_MAX_SIDE_PX: u32 = 8192;
 /// Decoded header/footer pixels (RGBA bytes) one export may hold, all sheets together.
-pub(super) const HF_DECODE_BUDGET: usize = 128 * 1024 * 1024;
+const HF_DECODE_BUDGET: usize = 128 * 1024 * 1024;
 
-/// The header and footer pictures sheet `sh` prints (#1257), each distinct image decoded once
-/// and added once to `doc`, so every page draws the same image object. Only pictures a page
-/// prints are decoded: their section has `&G` in the header or footer of a page kind the sheet
-/// uses (odd pages always; the first page and even pages when their options are on). Pictures
-/// that can't be decoded within the limits, or past `budget` (decoded bytes left for the
-/// export), are left out, as if their `&G` weren't there.
-pub(super) fn hf_images(sh: &gridcraft_model::Sheet, scale: f32, doc: &mut PdfDoc, budget: &mut usize) -> Vec<HfImage> {
+/// Header and footer pictures decoded for one export (#1257): each distinct image is decoded
+/// once and added once to the PDF, so every page and every sheet that shows it draws the same
+/// image object, and all of them share one budget of decoded bytes.
+pub(super) struct HfImageCache {
+    /// Decoded bytes left for the export.
+    budget: usize,
+    /// Images decoded so far: their encoded bytes, the size they were decoded for, and their PDF
+    /// image (`None` when they couldn't be decoded within the limits or the budget).
+    decoded: Vec<Decoded>,
+}
+
+/// A decoded header/footer image: its encoded bytes, the size in pixels it was decoded for, and
+/// its PDF image.
+type Decoded = (std::sync::Arc<[u8]>, (u32, u32), Option<gridcraft_pdf::ImageId>);
+
+impl HfImageCache {
+    pub(super) fn new() -> HfImageCache {
+        HfImageCache { budget: HF_DECODE_BUDGET, decoded: vec![] }
+    }
+
+    /// The PDF image of `data` decoded for at least `size` pixels: one already decoded that
+    /// large (the same bytes, from this sheet or another), or a new decode within the budget.
+    fn image(&mut self, doc: &mut PdfDoc, data: &std::sync::Arc<[u8]>, size: (u32, u32)) -> Option<gridcraft_pdf::ImageId> {
+        let same = |d: &std::sync::Arc<[u8]>| std::sync::Arc::ptr_eq(d, data) || (d.len() == data.len() && d[..] == data[..]);
+        if let Some((_, _, id)) = self.decoded.iter().find(|(d, (w, h), _)| same(d) && *w >= size.0 && *h >= size.1) {
+            return *id;
+        }
+        let id = decode_limited(data, size.0, size.1).and_then(|(rgba, pw, ph)| {
+            self.budget = self.budget.checked_sub(rgba.len())?;
+            doc.add_image(&rgba, [pw, ph])
+        });
+        self.decoded.push((data.clone(), size, id));
+        id
+    }
+}
+
+/// The header and footer pictures sheet `sh` prints (#1257), from `cache`. Only pictures a page
+/// prints are decoded: their section has `&G` in the header or footer of a page kind one of the
+/// sheet's printed pages uses (`kinds`). An image several sections show is decoded once, at the
+/// largest size it prints. Pictures that can't be decoded within the limits, or past the
+/// export's budget, are left out, as if their `&G` weren't there.
+pub(super) fn hf_images(
+    sh: &gridcraft_model::Sheet,
+    scale: f32,
+    kinds: &[gridcraft_model::HfPage],
+    doc: &mut PdfDoc,
+    cache: &mut HfImageCache,
+) -> Vec<HfImage> {
     use gridcraft_model::HfPage;
     let Some(kept) = sh.preserved.as_deref() else { return vec![] };
     let pr = &sh.print;
-    let used = |page: HfPage| match page {
-        HfPage::Odd => true,
-        HfPage::First => pr.different_first,
-        HfPage::Even => pr.different_odd_even,
-    };
     let has_g = |page: HfPage, footer: bool, section: usize| {
         let spec = pr.hf(page, footer);
         !spec.is_empty() && expand_header_footer(spec, &HfContext::default()).get(section).is_some_and(|s| s.picture.is_some())
     };
     let pictures: Vec<_> =
-        gridcraft_xlsx::header_footer_pictures(kept).into_iter().filter(|p| used(p.page) && has_g(p.page, p.footer, p.section)).collect();
+        gridcraft_xlsx::header_footer_pictures(kept).into_iter().filter(|p| kinds.contains(&p.page) && has_g(p.page, p.footer, p.section)).collect();
     // About 150 dpi at the printed size is plenty.
     let px = |pt: f32| ((pt * scale.max(0.01) / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32;
-    let same = |a: &gridcraft_xlsx::HfPicture, b: &gridcraft_xlsx::HfPicture| std::sync::Arc::ptr_eq(&a.data, &b.data);
-    let mut ids: Vec<Option<gridcraft_pdf::ImageId>> = Vec::with_capacity(pictures.len());
-    for (i, p) in pictures.iter().enumerate() {
-        // An image several sections show is decoded once, at the largest size it prints.
-        if let Some(first) = pictures.iter().position(|q| same(p, q))
-            && first < i
-        {
-            ids.push(ids.get(first).copied().flatten());
-            continue;
+    let mut out = Vec::with_capacity(pictures.len());
+    for p in &pictures {
+        let users = pictures.iter().filter(|q| std::sync::Arc::ptr_eq(&q.data, &p.data));
+        let size = users.fold((1, 1), |(w, h), q| (w.max(px(q.width)), h.max(px(q.height))));
+        if let Some(id) = cache.image(doc, &p.data, size) {
+            out.push(HfImage { page: p.page, footer: p.footer, section: p.section, width: p.width, height: p.height, id });
         }
-        let users = pictures.iter().filter(|q| same(p, q));
-        let (w, h) = users.fold((1, 1), |(w, h), q| (w.max(px(q.width)), h.max(px(q.height))));
-        let id = decode_limited(&p.data, w, h).and_then(|(rgba, pw, ph)| {
-            *budget = budget.checked_sub(rgba.len())?;
-            doc.add_image(&rgba, [pw, ph])
-        });
-        ids.push(id);
     }
-    pictures
-        .iter()
-        .zip(ids)
-        .filter_map(|(p, id)| Some(HfImage { page: p.page, footer: p.footer, section: p.section, width: p.width, height: p.height, id: id? }))
-        .collect()
+    out
 }
 
 /// Decodes an encoded picture to RGBA within fixed limits, downscaled to at most `max_w`×`max_h`.
