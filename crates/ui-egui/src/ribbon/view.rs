@@ -1,5 +1,5 @@
 use super::controls::{act, checkbox_on, control_keytip, invoke, keytip, menu_items, popup_command, sep};
-use super::*;
+use super::{Icon, Rect, SheetApp, Tokens, Ui, big_button, json, keytip_table, pos2, theme, vec2};
 
 /// Draws the View tab: view modes, ruler/gridlines/formula-bar/headings toggles, zoom, freeze panes, theme, animations, interface size and language.
 pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
