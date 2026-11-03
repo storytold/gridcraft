@@ -1158,16 +1158,23 @@ impl Session {
         let g = self.take_group(&token)?;
         let region = self.region();
         let Some(d) = self.docs.iter_mut().find(|d| d.uid == g.doc) else { return Ok(()) };
-        if !Arc::ptr_eq(&d.wb, &g.wb) {
+        let restored = !Arc::ptr_eq(&d.wb, &g.wb);
+        if restored {
             d.wb = g.wb;
         }
         d.selection = g.selection;
         d.undo.truncate(g.start);
         d.redo = g.redo;
         let before = d.wb.clone();
+        let region_changed = *d.wb.region != *region;
         d.apply_region(region);
         Self::rebind_region_snapshots(&mut self.groups, &mut self.group_step, &mut self.region_frames, d.uid, &before, &d.wb);
-        d.calc.rebuild(&d.wb);
+        // Region recalculation already rebuilds; an unchanged snapshot needs no graph work.
+        if restored && !region_changed {
+            #[cfg(test)]
+            GROUP_ROLLBACK_REBUILDS.with(|count| count.set(count.get() + 1));
+            d.calc.rebuild(&d.wb);
+        }
         d.revision += 1;
         // The steps recorded while the group was open go with their edits (all of them when the
         // recording started inside the group).
@@ -1274,6 +1281,10 @@ pub fn active_sheet(s: &Session) -> Option<&gridcraft_model::Sheet> {
 pub fn cell(r: u32, c: u32) -> CellRef {
     CellRef::new(r, c)
 }
+
+// Observe real rollback rebuild calls without adding production state or timing assertions.
+#[cfg(test)]
+thread_local! { static GROUP_ROLLBACK_REBUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
 #[cfg(test)]
 mod tests;
