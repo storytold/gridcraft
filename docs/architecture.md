@@ -93,6 +93,11 @@ drawing its own:
 - **Thai cell line wrapping** (`thai_layout.rs`): ICU4X LSTM `LineSegmenter` supplies break opportunities for committed worksheet cells with Wrap Text enabled. The renderer measures candidate substrings with egui's active font, clips oversized first segments, preserves exact UTF-8 byte ranges without changing workbook text, and falls back when cell or frame work budgets are exhausted. Its global plan LRU is capped at 1,024 entries and an 8 MiB estimate of retained allocations, including HashMap table capacity, keys/strings and shared line slices; this estimate is not process RSS. Keys include Context identity, font family/size/generation, width, zoom, alignment and pixels-per-point. Installing fonts invalidates only that Context's plans, and final galleys reuse egui's per-Context layout cache. Cache hits use borrowed keys and share line plans. After bounded no-progress retries, an unchanged workload uses cached plans or legacy fallback without remeasuring misses; a changed complete pass workload restarts evaluation on the following pass. T1 row heights are explicit, so Thai AutoFit and in-cell editor wrapping remain separate work.
 
 
+The ICU4X 2.3.0 LSTM data is compiled into the application under Unicode-3.0 licensing; its
+`icu_segmenter_data` source archive is 3,433,531 bytes compressed, which is not the linked binary
+size. Cells over 32,767 Unicode scalar values go through egui's existing renderer. Thai AutoFit
+row-height calculation remains outside this wrapping feature.
+
 ## Engine building blocks for multi-command actions
 
 Actions made of many commands (macros, a debugger that runs one step per call) use these parts of

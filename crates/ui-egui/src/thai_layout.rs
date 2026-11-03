@@ -1513,6 +1513,19 @@ mod tests {
     }
 
     #[test]
+    fn thai_scalar_limit_accepts_boundary_and_rejects_next_scalar() {
+        let mut style = Style::default();
+        style.align.wrap = true;
+        let at_limit = "ก".repeat(MAX_THAI_SCALARS);
+        let over_limit = format!("{at_limit}ก");
+        assert_eq!(is_eligible(&at_limit, &style, &Value::from(at_limit.as_str()), false), Ok(()));
+        assert_eq!(
+            is_eligible(&over_limit, &style, &Value::from(over_limit.as_str()), false),
+            Err(FallbackReason::TextTooLong(MAX_THAI_SCALARS + 1))
+        );
+    }
+
+    #[test]
     fn frame_budget_stops_at_exact_measurement_and_byte_limits() {
         let mut by_count = FrameBudget::default();
         let limits = FrameBudgetLimits::default();
