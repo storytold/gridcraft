@@ -123,6 +123,13 @@ pub fn always(_: &Session) -> std::result::Result<(), String> {
 pub fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no workbook open".into())
 }
+/// Format commands on a protected sheet: like Excel, they're unavailable (greyed in the ribbon)
+/// unless the protection allows formatting cells, whether or not the cells are locked (#2516).
+pub fn can_format_cells(s: &Session) -> std::result::Result<(), String> {
+    has_doc(s)?;
+    let blocked = s.active().and_then(|d| d.wb.active()).and_then(|sh| sh.protection.as_ref()).is_some_and(|p| !p.format_cells);
+    if blocked { Err("The cell or chart you're trying to change is on a protected sheet.".into()) } else { Ok(()) }
+}
 pub fn can_undo(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
     not_grouping(s)?;
