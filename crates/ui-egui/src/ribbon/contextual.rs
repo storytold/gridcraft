@@ -270,6 +270,6 @@ pub(super) fn slicer_tools(app: &mut SheetApp, ui: &mut Ui) {
 /// Opens the Selection Pane without implying cross-type stacking order the renderer doesn't yet support.
 fn selection_pane_button(app: &mut SheetApp, ui: &mut Ui) {
     if big_button(ui, Icon::Settings, "Selection\nPane", "Open Selection Pane", false).clicked() {
-        app.grid.pane = Some("selection".into());
+        act(app, "ui.selectionPane", json!({}));
     }
 }

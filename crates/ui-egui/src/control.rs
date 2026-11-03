@@ -261,14 +261,20 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             let language_params = format!("{{language: {}}} (alias: code)", crate::i18n::Language::code_list("|"));
             for (id, label, params) in [
                 ("ui.ribbonTab", "Ribbon Tab", ""),
+                ("ui.selectionPane", "Open Selection Pane", ""),
                 ("app.checkForUpdates", "Check for Updates…", ""),
                 ("view.collapseRibbon", "Collapse Ribbon", ""),
-                ("view.expandFormulaBar", "Expand Formula Bar", "{on?: bool} (toggles without it) → {on}"),
+                (
+                    "view.expandFormulaBar",
+                    "Expand Formula Bar",
+                    "{on?: bool} (toggles without it) → {on}; {lines: int} sets the expanded height (1 collapses) → {on, lines}",
+                ),
                 ("ui.pythonMode", "Python Mode", "{on?: bool} (toggles without it) → {on}; a refused start is an error"),
                 ("view.darkMode", "Dark Mode", ""),
                 ("view.theme", "Display Theme", ""),
                 ("view.animations", "Animations", "{on?: bool} (toggles without it) → {on}"),
                 ("options.autoComplete", "Enable AutoComplete for cell values", "{on?: bool} (toggles without it) → {on}"),
+                ("options.highlightActiveRow", "Highlight the active cell's row", "{on?: bool} (toggles without it) → {on}"),
                 ("view.interfaceScale", "Interface Size", "{percent: 75–200 | \"auto\"} (100 = auto; clamped)"),
                 ("ui.dialog", "Open Dialog", ""),
                 ("ui.backstage", "File (Backstage view)", "{page?: home|new|open|info|saveAs|print|export|options|account|close}"),
