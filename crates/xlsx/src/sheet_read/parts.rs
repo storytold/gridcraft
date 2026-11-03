@@ -1,6 +1,7 @@
 use super::{
-    AutoFilter, CellRef, Comment, Ctx, El, FilterCriterion, HashMap, Hyperlink, MAX_COLS, MAX_HYPERLINK_BYTES, MAX_HYPERLINK_CELLS, MAX_ROWS,
-    NoteBox, NoteCorner, RangeRef, Rel, Sheet, Table, TableColumn, TotalsFn, XmlColumnPr, from_file, xml,
+    AutoFilter, CellRef, Comment, Ctx, El, FilterCriterion, HashMap, Hyperlink, LinkBudget, MAX_COLS, MAX_HYPERLINK_BYTES, MAX_HYPERLINK_CELLS,
+    MAX_HYPERLINK_TARGET, MAX_ROWS, MAX_TOOLTIP_CHARS, NoteBox, NoteCorner, RangeRef, Rel, Sheet, Table, TableColumn, TotalsFn, XmlColumnPr,
+    from_file, truncate_chars, xml,
 };
 
 /// `budget` counts the cells and bytes this sheet's hyperlinks have copied so far, across
