@@ -260,6 +260,7 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         series,
         legend: if matches!(kind, ChartKind::Pie | ChartKind::Doughnut) { LegendPos::Right } else { LegendPos::Bottom },
         data_labels: false,
+        data_table: None,
         gridlines: !matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel),
         style: 1,
         x_title: None,
@@ -267,8 +268,6 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         source: (areas.len() == 1).then(|| format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), bounds.a1())),
         by_rows,
         pivot: None,
-        cat_reverse: false,
-        val_reverse: false,
     };
     Ok((sheet, chart))
 }
@@ -332,13 +331,6 @@ pub(super) fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         }
         if let Some(v) = bool_param(p, "gridlines") {
             c.gridlines = v;
-        }
-        // Mirrored axes: `orientation="maxMin"` (#1687).
-        if let Some(v) = bool_param(p, "catReverse") {
-            c.cat_reverse = v;
-        }
-        if let Some(v) = bool_param(p, "valReverse") {
-            c.val_reverse = v;
         }
         if let Some(v) = u32_param(p, "style") {
             c.style = v.clamp(1, 16);
