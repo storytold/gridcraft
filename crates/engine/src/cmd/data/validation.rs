@@ -175,6 +175,16 @@ pub fn list_items(wb: &Workbook, sheet: usize, at: CellRef, dv: &Validation) -> 
 
 /// Checks typed input against the validation of a cell. `Ok(None)` = valid.
 pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -> Option<(Validation, String)> {
+    check_entry(wb, sheet, at, input, false)
+}
+
+/// Checks a text entry using the same literal value that the cell command will store.
+pub fn check_literal_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -> Option<(Validation, String)> {
+    check_entry(wb, sheet, at, input, true)
+}
+
+/// Applies the cell's validation rule to parsed input or explicit text.
+fn check_entry(wb: &Workbook, sheet: usize, at: CellRef, input: &str, literal: bool) -> Option<(Validation, String)> {
     let sh = wb.sheet(sheet)?;
     let dv = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(at)))?;
     if dv.kind == ValidationKind::Any || !dv.show_error {
@@ -183,7 +193,7 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
     if input.is_empty() && dv.allow_blank {
         return None;
     }
-    let v = gridcraft_core::parse::parse_input(input, wb.date_system).value;
+    let v = if literal { Value::text(input) } else { gridcraft_core::parse::parse_input(input, wb.date_system).value };
     // The formulas are written for the top-left cell of all the areas and see the value being entered,
     // as in Excel (a custom `=A1>10` on A1:A9 checks A5's new value at A5).
     let first = RangeRef::top_left(&dv.ranges).unwrap_or(at);

@@ -190,6 +190,29 @@ fn filter_search_localizes_constants_without_translating_text() {
     }
 }
 
+/// Formula view keeps distinct filter choices for formulas with the same Boolean result.
+#[test]
+fn filter_search_preserves_formula_view_labels() {
+    use egui::{Event, Key, Modifiers, accesskit::Role};
+    let mut h = harness();
+    h.state_mut().run("range.setValues", json!({"range":"A1", "values":[["Header"],["=1=1"],["=2=2"]]})).unwrap();
+    h.state_mut().run("formulas.showFormulas", json!({"on":true})).unwrap();
+    h.state_mut().run("data.filter", json!({"range":"A1:A3"})).unwrap();
+    h.state_mut().run("selection.set", json!({"range":"A1"})).unwrap();
+    press(&mut h, Key::ArrowDown, Modifiers::ALT);
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::CheckBox, "=1=1");
+    h.get_by_role_and_label(Role::CheckBox, "=2=2");
+    h.input_mut().events.push(Event::Text("2=2".into()));
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::CheckBox, "=2=2");
+    press(&mut h, Key::Enter, Modifiers::NONE);
+    h.run_steps(3);
+    let sheet = h.state().session.active().unwrap().wb.active().unwrap();
+    assert!(sheet.is_row_hidden(1));
+    assert!(!sheet.is_row_hidden(2));
+}
+
 /// Creates, edits and deletes a sheet-scoped name even when the sheet is called Workbook.
 #[test]
 fn name_manager_distinguishes_a_sheet_named_workbook() {

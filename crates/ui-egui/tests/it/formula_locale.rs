@@ -66,6 +66,32 @@ fn localized_array_commit_preserves_unchanged_text() {
     assert!(sh.cell(at).unwrap().formula.as_ref().unwrap().array.is_some());
 }
 
+/// Filling uses the text from the open draft even when a command changes the source cell.
+#[test]
+fn fill_uses_the_text_captured_when_the_draft_opened() {
+    let mut app = app();
+    app.run("range.setValues", json!({"range":"A1", "values":[["1,5"]], "parse":false})).unwrap();
+    app.run("selection.set", json!({"range":"A1:B1"})).unwrap();
+    app.begin_edit(None, false);
+    app.run("cell.set", json!({"cell":"A1", "input":"new text"})).unwrap();
+    assert!(app.commit_edit(0, 0, false, true));
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    assert_eq!(sheet.value(CellRef::new(0, 1)), Value::text("1,5"));
+}
+
+/// A decimal rule checks the type that the literal fill actually writes.
+#[test]
+fn numeric_validation_rejects_an_unchanged_text_fill() {
+    let mut app = app();
+    app.run("range.setValues", json!({"range":"A1", "values":[["123"]], "parse":false})).unwrap();
+    app.run("data.validation", json!({"range":"A1", "type":"decimal", "operator":"greater", "formula1":"0"})).unwrap();
+    app.run("selection.set", json!({"range":"A1:B1"})).unwrap();
+    app.begin_edit(None, false);
+    assert!(!app.commit_edit(0, 0, false, true));
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    assert_eq!(sheet.value(CellRef::new(0, 1)), Value::Empty);
+}
+
 /// Freshly typed localized numbers still become numbers when filling a selection.
 #[test]
 fn fresh_localized_numbers_still_fill_as_numbers() {

@@ -59,6 +59,8 @@ pub struct EditState {
     /// The cell's text when an F2-style edit began. Committing it unchanged leaves the cell alone
     /// (no undo step, the workbook stays clean). `None` for an edit started by typing.
     pub original: Option<String>,
+    /// The literal text stored when the edit opened, independent of later workbook changes.
+    pub(crate) original_literal: Option<std::sync::Arc<str>>,
     /// Python mode: the text is a Python cell's code, edited in the formula bar's code editor and
     /// committed with Ctrl+Enter (Cmd+Enter on macOS) through `python.set`.
     pub python: bool,
@@ -99,6 +101,7 @@ impl EditState {
             caret_to_end: true,
             completion: None,
             original,
+            original_literal: None,
             python: false,
         }
     }

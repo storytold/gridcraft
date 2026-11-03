@@ -1282,10 +1282,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Check for\nUpdates…" => "Проверить\nобновления…",
         "Check for Updates…" => "Проверить обновления…",
         "The reference isn't valid. Select a cell in a range with labeled columns, or pass `source`." => {
-            "Недопустимая ссылка. Выделите ячейку в диапазоне данных с заголовками столбцов."
+            "Недопустимая ссылка. Выделите ячейку в диапазоне данных с заголовками столбцов или укажите диапазон в параметре `source`."
         }
         "Select data for the chart first." => "Сначала выделите данные для диаграммы.",
-        "Select a cell inside a table first, or pass `table`." => "Выделите ячейку внутри таблицы.",
+        "Select a cell inside a table first, or pass `table`." => "Выделите ячейку внутри таблицы или укажите таблицу в параметре `table`.",
         "no ink stroke to convert" => "Нет рукописного штриха для преобразования",
         "A table can't overlap another table." => "Таблица не может перекрывать другую таблицу.",
         "The PivotTable field name is not valid. To create a PivotTable, you must use data that is organized as a list with labeled columns." => {

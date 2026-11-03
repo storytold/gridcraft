@@ -794,7 +794,7 @@ pub(super) const ARGUMENTS: &[(&str, &str)] = &[
     ("connection", "Datenverbindung"),
     ("const", "Konstante"),
     ("cost", "Anschaffungskosten"),
-    ("coupon", "Couponzahlung"),
+    ("coupon", "Kuponzinssatz"),
     ("criteria", "Kriterien"),
     ("criteria_range", "Kriterienbereich"),
     ("cumulative", "kumulative_Verteilung"),

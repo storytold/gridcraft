@@ -132,6 +132,9 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
 fn filter_value_label(entry: &FilterValue, language: crate::i18n::Language) -> &str {
     if entry.value == gridcraft_engine::core::Value::Empty {
         language.tr("(Blanks)")
+    } else if entry.label.starts_with('=') {
+        // Formula-view labels begin with '=' even when their computed value is Boolean or an error.
+        &entry.label
     } else {
         crate::formula_locale::localized_constant(&entry.value, language.formula_locale()).unwrap_or(&entry.label)
     }

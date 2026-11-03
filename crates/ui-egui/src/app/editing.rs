@@ -66,6 +66,12 @@ impl SheetApp {
         let mut ed = editor::EditState::new(d.uid, d.wb.active_sheet(), at, text, replace, from_formula_bar).on_sheet(&d.wb);
         ed.window = self.session.active_window();
         ed.locale = locale;
+        if !replace
+            && let Some(cell) = sh.cell(at).filter(|cell| cell.formula.is_none())
+            && let gridcraft_engine::core::Value::Text(value) = &cell.value
+        {
+            ed.original_literal = Some(value.clone());
+        }
         if replace && self.ui.autocomplete && !ed.is_formula() {
             ed.completion = editor::column_completion(sh, at, &ed.text);
         }
@@ -155,15 +161,7 @@ impl SheetApp {
         // Ctrl+Enter and Ctrl+Shift+Enter preserve an unchanged text value, not a fresh typed entry.
         // Pass the type to the engine instead of adding a quote to the visible draft.
         let literal = if (fill_selection || array) && ed.original.as_ref() == Some(&text) {
-            self.session.active().and_then(|d| d.wb.sheet(ed.sheet)).and_then(|sh| sh.cell(ed.cell)).and_then(|cell| {
-                if cell.formula.is_none()
-                    && let gridcraft_engine::core::Value::Text(value) = &cell.value
-                {
-                    Some(value.to_string())
-                } else {
-                    None
-                }
-            })
+            ed.original_literal.as_ref().map(ToString::to_string)
         } else {
             None
         };
@@ -183,7 +181,11 @@ impl SheetApp {
         };
         // Data validation.
         if let Some(d) = self.session.active()
-            && let Some((dv, msg)) = gridcraft_engine::cmd::data::check_validation(&d.wb, ed.sheet, ed.cell, &text)
+            && let Some((dv, msg)) = if literal.is_some() {
+                gridcraft_engine::cmd::data::check_literal_validation(&d.wb, ed.sheet, ed.cell, &text)
+            } else {
+                gridcraft_engine::cmd::data::check_validation(&d.wb, ed.sheet, ed.cell, &text)
+            }
         {
             if dv.error_style == gridcraft_engine::model::ErrorStyle::Stop {
                 let title = if dv.error_title.is_empty() { "GridCraft".to_string() } else { dv.error_title.clone() };
