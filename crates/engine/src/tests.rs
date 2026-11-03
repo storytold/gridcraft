@@ -421,6 +421,42 @@ fn a_script_is_one_undo_step_and_its_own_undo_takes_back_its_own_step() {
     assert_eq!(workbook(&s), start);
 }
 
+#[test]
+fn undo_after_a_script_replays_as_one_journal_step() {
+    fn with_script() -> Session {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute(
+            "automate.newScript",
+            json!({"name": "S", "commands": [
+                {"command": "cell.set", "params": {"cell": "A1", "input": "1"}},
+                {"command": "cell.set", "params": {"cell": "B1", "input": "2"}}
+            ]}),
+        )
+        .unwrap();
+        s
+    }
+
+    let mut s = with_script();
+    let journal_at = s.journal.len();
+    s.execute("automate.runScript", json!({"name": "S"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Empty);
+    assert_eq!(v(&s, "B1"), Value::Empty);
+    assert_eq!(s.journal[journal_at].0, "automate.runScript");
+    assert_eq!(s.journal[journal_at].1["commands"].as_array().map(Vec::len), Some(2));
+
+    // The journal carries the steps, so replay does not depend on the saved script still existing.
+    let mut replay = with_script();
+    replay.execute("automate.deleteScript", json!({"name": "S"})).unwrap();
+    replay.journal.clear();
+    for (id, params) in &s.journal[journal_at..] {
+        replay.execute(id, params.clone()).unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+    assert_eq!(v(&replay, "A1"), Value::Empty);
+    assert_eq!(v(&replay, "B1"), Value::Empty);
+}
+
 /// Records `act` as a script, then checks the recording and the journal hold `expect` (each step
 /// once, none of the commands a step ran for itself) and that both replay `act` on a fresh copy.
 /// `act` must add `undo_steps` undo steps.
@@ -433,20 +469,33 @@ fn record_and_replay(fresh: fn() -> Session, act: impl Fn(&mut Session), expect:
     // fix/subtotal-single-undo: each recorded action is still one undo step.
     assert_eq!(undo_depth(&s), depth + undo_steps);
     let r = s.execute("automate.recordActions", json!({"stop": true, "name": "Rec"})).unwrap();
-    let ids: Vec<&str> = s.journal[journal_at..].iter().map(|(id, _)| id.as_str()).filter(|id| !id.starts_with("automate.")).collect();
-    assert_eq!(ids, expect, "journal");
+    let mut ids = Vec::new();
+    for (id, params) in &s.journal[journal_at..] {
+        if id == "automate.runScript" {
+            ids.extend(params["commands"].as_array().into_iter().flatten().filter_map(|step| step["command"].as_str().map(str::to_string)));
+        } else if !id.starts_with("automate.") {
+            ids.push(id.clone());
+        }
+    }
+    assert_eq!(ids, expect.iter().map(|id| (*id).to_string()).collect::<Vec<_>>(), "journal");
     assert_eq!(r["steps"], expect.len());
     let sheets = s.doc().unwrap().wb.sheets.clone();
 
     // Replaying the journal on a fresh copy gives the same sheets...
     let mut j = fresh();
-    for (id, p) in s.journal[journal_at..].iter().filter(|(id, _)| !id.starts_with("automate.")) {
+    for (id, p) in s.journal[journal_at..].iter().filter(|(id, _)| !id.starts_with("automate.") || id == "automate.runScript") {
         j.execute(id, p.clone()).unwrap_or_else(|e| panic!("{id}: {e}"));
     }
     assert!(j.doc().unwrap().wb.sheets == sheets, "journal replay differs");
     // ...and so does running the recorded script there.
-    let steps: Vec<serde_json::Value> =
-        s.journal[journal_at..].iter().filter(|(id, _)| !id.starts_with("automate.")).map(|(id, p)| json!({"command": id, "params": p})).collect();
+    let mut steps = Vec::new();
+    for (id, params) in &s.journal[journal_at..] {
+        if id == "automate.runScript" {
+            steps.extend(params["commands"].as_array().into_iter().flatten().cloned());
+        } else if !id.starts_with("automate.") {
+            steps.push(json!({"command": id, "params": params}));
+        }
+    }
     let mut r = fresh();
     r.execute("automate.newScript", json!({"name": "Rec", "commands": steps})).unwrap();
     r.execute("automate.runScript", json!({"name": "Rec"})).unwrap();
@@ -493,7 +542,8 @@ fn a_recorded_run_script_replays_its_steps_once() {
     let depth = undo_depth(&s);
     s.execute("automate.runScript", json!({"name": "Sub"})).unwrap();
     assert_eq!(undo_depth(&s), depth + 1, "a script is one undo step");
-    assert!(!s.journal.iter().any(|(id, _)| id == "automate.runScript"));
+    let journaled_run = s.journal.iter().find(|(id, _)| id == "automate.runScript").map(|(_, params)| &params["commands"]);
+    assert!(journaled_run.is_some_and(|commands| commands.as_array().is_some_and(|commands| !commands.is_empty())));
 }
 
 #[test]

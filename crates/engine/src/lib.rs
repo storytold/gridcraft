@@ -494,8 +494,8 @@ pub struct Session {
     pub recorder: Option<record::Recorder>,
     /// How many `execute` calls are running (0 between top-level commands).
     depth: u32,
-    /// How many journaled commands are running. Only the outermost one is journaled, and the
-    /// recorder keeps the same calls: the steps a Run Script runs are, since it isn't journaled.
+    /// How many journaled commands are running. Only the outermost one is journaled; Run Script
+    /// stores its steps together so replay preserves its single undo boundary.
     journal_nesting: u32,
     /// The steps the last successful `automate.runScript` or `macro.run` ran while a recorder was
     /// on, for the recorder to keep with that step (see [`record::Recorder::ran`]); taken by the
@@ -737,6 +737,9 @@ impl Session {
         // Only the outermost command is journaled: the commands it runs for itself are part of it,
         // so replaying the journal or a recorded script doesn't run them and then the command again.
         let journals = spec.journal && self.journal_nesting == 0;
+        // Run Script writes its own composite journal entry, but remains one recorder step with
+        // the exact commands it ran attached for the macro recorder.
+        let records_script = id == "automate.runScript" && self.journal_nesting == 0;
         self.depth = self.depth.saturating_add(1);
         if spec.journal {
             self.journal_nesting = self.journal_nesting.saturating_add(1);
@@ -804,7 +807,7 @@ impl Session {
         if result.is_err() {
             self.rollback_groups_from(first_group);
         }
-        if journals && result.is_ok() {
+        if (journals || records_script) && result.is_ok() {
             // A command that started recording is not part of the recording; one that stopped it
             // finds no recorder. A menu-style call that only opened a dialog (`file.open` with no
             // file, `home.formatCells` with no style) is not recorded either: the dialog's own
@@ -833,7 +836,7 @@ impl Session {
                     rec.attach_ran(ran);
                 }
             }
-            if self.journal_paused == 0 {
+            if journals && self.journal_paused == 0 {
                 self.push_journal(id, cmd::journal_params(&params));
                 recent::note(&mut self.prefs.recent_functions, id, &params);
             }
