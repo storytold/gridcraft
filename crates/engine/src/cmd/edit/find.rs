@@ -14,8 +14,13 @@ fn matches(hay: &str, what: &str, case: bool, whole: bool) -> bool {
 }
 
 /// `*`/`?` wildcard match with `~` escapes.
+///
+/// The pattern runs as a bit-parallel automaton over the text: one pass, each character costing
+/// one step per 64 pattern positions. Backtracking to the last `*` after a mismatch rescans the
+/// text and costs text × pattern comparisons on a long, repetitive cell, for every cell a
+/// filter or Find visits.
 pub(crate) fn wildcard(text: &str, pat: &str) -> bool {
-    let t: Vec<char> = text.chars().collect();
+    // The pattern as (character, escaped) items, runs of `*` folded into one.
     let mut p: Vec<(char, bool)> = Vec::new();
     let mut it = pat.chars();
     while let Some(c) = it.next() {
@@ -23,32 +28,56 @@ pub(crate) fn wildcard(text: &str, pat: &str) -> bool {
             if let Some(n) = it.next() {
                 p.push((n, true));
             }
-        } else {
+        } else if c != '*' || p.last() != Some(&('*', false)) {
             p.push((c, false));
         }
     }
-    let (mut ti, mut pi) = (0usize, 0usize);
-    let (mut star, mut mark) = (None, 0usize);
-    while ti < t.len() {
-        if pi < p.len() && (p[pi] == ('?', false) || (p[pi].0 == t[ti] && p[pi] != ('*', false))) {
-            ti += 1;
-            pi += 1;
-        } else if pi < p.len() && p[pi] == ('*', false) {
-            star = Some(pi);
-            mark = ti;
-            pi += 1;
-        } else if let Some(sp) = star {
-            pi = sp + 1;
-            mark += 1;
-            ti = mark;
-        } else {
-            return false;
+    let words = (p.len() + 1).div_ceil(64);
+    let bit = |set: &mut [u64], i: usize| set[i / 64] |= 1 << (i % 64);
+    // Positions holding a `*`, a `?`, and each literal character.
+    let mut stars = vec![0u64; words];
+    let mut any = vec![0u64; words];
+    let mut lits: std::collections::HashMap<char, Vec<u64>> = std::collections::HashMap::new();
+    for (i, item) in p.iter().enumerate() {
+        match item {
+            ('*', false) => bit(&mut stars, i),
+            ('?', false) => bit(&mut any, i),
+            (c, _) => bit(lits.entry(*c).or_insert_with(|| vec![0u64; words]), i),
         }
     }
-    while pi < p.len() && p[pi] == ('*', false) {
-        pi += 1;
+    // A set bit i: the text read so far matches the first i pattern items. A `*` matches nothing
+    // as well, so a state at a `*` is also at the item after it.
+    let close = |set: &mut Vec<u64>| {
+        let mut carry = 0u64;
+        for w in 0..words {
+            let s = set[w] & stars[w];
+            let next = (s << 1) | carry;
+            carry = s >> 63;
+            set[w] |= next;
+        }
+    };
+    let mut state = vec![0u64; words];
+    bit(&mut state, 0);
+    close(&mut state);
+    let mut next = vec![0u64; words];
+    for ch in text.chars() {
+        let lit = lits.get(&ch);
+        let mut carry = 0u64;
+        let mut alive = 0u64;
+        for w in 0..words {
+            // Items that read `ch` advance; a `*` reads it and stays.
+            let m = state[w] & (any[w] | lit.map_or(0, |l| l[w]));
+            next[w] = (m << 1) | carry | (state[w] & stars[w]);
+            carry = m >> 63;
+            alive |= next[w];
+        }
+        if alive == 0 {
+            return false;
+        }
+        std::mem::swap(&mut state, &mut next);
+        close(&mut state);
     }
-    pi == p.len()
+    state[p.len() / 64] & (1 << (p.len() % 64)) != 0
 }
 
 pub(super) fn find(s: &mut Session, p: &Json) -> Result<Json> {
