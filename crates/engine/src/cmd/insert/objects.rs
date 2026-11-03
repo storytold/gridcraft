@@ -226,7 +226,10 @@ pub(super) fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
             _ => None,
         };
         let Some(a) = anchor else { return Err(bad("object.move", "no such object")) };
-        if at.is_some() || ["dx", "dy", "width", "height"].iter().any(|key| p.get(*key).is_some()) {
+        let moved_cell = at.is_some_and(|cell| cell != a.cell);
+        let horizontal = !moved_cell && (p.get("dx").is_some() || p.get("width").is_some());
+        let vertical = !moved_cell && (p.get("dy").is_some() || p.get("height").is_some());
+        if moved_cell {
             a.hidden_end = None;
         }
         if let Some(at) = at {
@@ -243,6 +246,18 @@ pub(super) fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
         }
         if let Some(v) = f64_param(p, "height") {
             a.height = v.clamp(0.0, 10000.0) as f32;
+        }
+        let (snapshot, end) = (*a, a.hidden_end);
+        if let Some(end) = end {
+            let end = crate::cmd::sheet::update_hidden_end(sh, &snapshot, end, horizontal, vertical);
+            let anchor = match kind.as_str() {
+                "chart" => sh.charts.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
+                "image" => sh.images.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
+                "slicer" => sh.slicers.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
+                "shape" => sh.shapes.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
+                _ => None,
+            };
+            if let Some(a) = anchor { a.hidden_end = end; }
         }
         Ok(Json::Null)
     })
@@ -267,8 +282,10 @@ pub(super) fn set_anchor_mode(s: &mut Session, p: &Json) -> Result<Json> {
             _ => sh.shapes.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
         };
         let Some(a) = anchor else { return Err(bad("object.setAnchorMode", "no such object")) };
-        a.mode = mode;
-        a.hidden_end = None;
+        if a.mode != mode {
+            a.mode = mode;
+            a.hidden_end = None;
+        }
         Ok(json!({"mode": anchor_mode_name(mode)}))
     })
 }

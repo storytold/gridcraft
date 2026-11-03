@@ -199,11 +199,15 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
         let descs: Vec<(u32, u32, f32, f32)> = objs
             .iter()
             .map(|a| {
-                let x2 = sh.col_left(a.cell.col) + a.dx as f64 + a.width.max(0.0) as f64;
-                let y2 = sh.row_top(a.cell.row) + a.dy as f64 + a.height.max(0.0) as f64;
-                let tc = sh.col_at(x2);
-                let tr = sh.row_at(y2);
-                (tc, tr, (x2 - sh.col_left(tc)) as f32, (y2 - sh.row_top(tr)) as f32)
+                if let Some(end) = a.hidden_end {
+                    (end.cell.col, end.cell.row, end.dx, end.dy)
+                } else {
+                    let x2 = sh.col_left(a.cell.col) + a.dx as f64 + a.width.max(0.0) as f64;
+                    let y2 = sh.row_top(a.cell.row) + a.dy as f64 + a.height.max(0.0) as f64;
+                    let tc = sh.col_at(x2);
+                    let tr = sh.row_at(y2);
+                    (tc, tr, (x2 - sh.col_left(tc)) as f32, (y2 - sh.row_top(tr)) as f32)
+                }
             })
             .collect();
         let shm = cx.sheet_mut(sheet)?;
@@ -290,8 +294,8 @@ fn sorted_anchor(sh: &Sheet, a: Anchor, bottom: (u32, u32, f32, f32), by_cols: b
         let (nbr, nbc) = if by_cols { (tr, map(tc)) } else { (map(tr), tc) };
         let x1 = sh.col_left(nc) + a.dx as f64;
         let y1 = sh.row_top(nr) + a.dy as f64;
-        let x2 = sh.col_left(nbc) + tdx as f64;
-        let y2 = sh.row_top(nbr) + tdy as f64;
+        let x2 = sh.col_left(nbc) + if sh.is_col_hidden(nbc) { 0.0 } else { tdx as f64 };
+        let y2 = sh.row_top(nbr) + if sh.is_row_hidden(nbr) { 0.0 } else { tdy as f64 };
         // An extent that is not positive means the sort put the bottom-right line before the
         // top-left one on that axis: the object keeps its old size there.
         let fit = |extent: f64, old: f32| if extent > 0.0 { extent as f32 } else { old.max(0.0) };

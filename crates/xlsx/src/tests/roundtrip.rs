@@ -1421,6 +1421,33 @@ fn japanese_paper_sizes_round_trip() {
     assert_eq!(back.sheet(0).unwrap().print.paper, "B5");
 }
 
+#[test]
+fn hidden_two_cell_anchor_survives_xlsx_round_trip() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.rows.insert(8, LineInfo { hidden: true, ..Default::default() });
+    sh.shapes.push(Shape {
+        math: Default::default(),
+        id: 1,
+        kind: ShapeKind::Rectangle,
+        anchor: Anchor {
+            cell: at("C5"),
+            dx: 3.0,
+            dy: 4.0,
+            width: 144.0,
+            height: 57.6,
+            mode: AnchorMode::MoveAndSize,
+            hidden_end: Some(AnchorEnd { cell: at("E9"), dx: 0.0, dy: 0.0 }),
+        },
+        fill: Color::Auto,
+        line: Color::Auto,
+        text: String::new(),
+        format: Default::default(),
+    });
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.sheets[0].shapes[0].anchor.hidden_end, wb.sheets[0].shapes[0].anchor.hidden_end);
+}
+
 /// A table's dropdown filter lives in `sheet.autofilter` (the engine's only live filter state),
 /// not in `Table::filter`. Writing used to suppress the sheet `<autoFilter>` because a table
 /// intersects it and write the table part from `Table::filter`, which was empty: the criteria

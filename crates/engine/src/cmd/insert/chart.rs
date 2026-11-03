@@ -307,6 +307,9 @@ pub(super) fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
         let Some(c) = sh.charts.get_mut(ci) else { return Ok(Json::Null) };
+        let moved_cell = at.is_some_and(|cell| cell != c.anchor.cell);
+        let horizontal = !moved_cell && (p.get("dx").is_some() || p.get("width").is_some());
+        let vertical = !moved_cell && (p.get("dy").is_some() || p.get("height").is_some());
         if let Some(t) = str_param(p, "type") {
             c.kind = chart_kind(t, str_param(p, "subtype").unwrap_or(""));
         }
@@ -344,23 +347,24 @@ pub(super) fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         }
         if let Some(at) = at {
             c.anchor.cell = at;
-            c.anchor.hidden_end = None;
+            if moved_cell { c.anchor.hidden_end = None; }
         }
         if let Some(w) = f64_param(p, "width") {
             c.anchor.width = w.clamp(20.0, 10000.0) as f32;
-            c.anchor.hidden_end = None;
         }
         if let Some(h) = f64_param(p, "height") {
             c.anchor.height = h.clamp(20.0, 10000.0) as f32;
-            c.anchor.hidden_end = None;
         }
         if let Some(v) = f64_param(p, "dx") {
             c.anchor.dx = v as f32;
-            c.anchor.hidden_end = None;
         }
         if let Some(v) = f64_param(p, "dy") {
             c.anchor.dy = v as f32;
-            c.anchor.hidden_end = None;
+        }
+        let (snapshot, end) = (c.anchor, c.anchor.hidden_end);
+        if let Some(end) = end {
+            let end = crate::cmd::sheet::update_hidden_end(sh, &snapshot, end, horizontal, vertical);
+            if let Some(c) = sh.charts.get_mut(ci) { c.anchor.hidden_end = end; }
         }
         Ok(Json::Null)
     })

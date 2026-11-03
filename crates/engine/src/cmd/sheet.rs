@@ -92,6 +92,21 @@ fn anchor_corner(sh: &Sheet, a: &Anchor) -> (u32, u32, f32, f32) {
     (tc, tr, (x2 - sh.col_left(tc)) as f32, (y2 - sh.row_top(tr)) as f32)
 }
 
+/// Recomputes only the changed component of a hidden far marker after an explicit object resize.
+pub(crate) fn update_hidden_end(sh: &Sheet, a: &Anchor, mut end: AnchorEnd, horizontal: bool, vertical: bool) -> Option<AnchorEnd> {
+    if horizontal {
+        let x2 = sh.col_left(a.cell.col) + a.dx as f64 + a.width.max(0.0) as f64;
+        end.cell.col = sh.col_at(x2);
+        end.dx = (x2 - sh.col_left(end.cell.col)) as f32;
+    }
+    if vertical {
+        let y2 = sh.row_top(a.cell.row) + a.dy as f64 + a.height.max(0.0) as f64;
+        end.cell.row = sh.row_at(y2);
+        end.dy = (y2 - sh.row_top(end.cell.row)) as f32;
+    }
+    (sh.is_row_hidden(end.cell.row) || sh.is_col_hidden(end.cell.col)).then_some(end)
+}
+
 /// Repositions one floating object's anchor for a structural insert/delete, honouring its
 /// [`AnchorMode`]: absolute objects ("Don't move or size with cells") stay put; "move but don't
 /// size" follows its cell and keeps its size; "move and size" is re-fitted to the lines it lands
@@ -123,8 +138,8 @@ fn shift_anchor(sh: &Sheet, a: Anchor, corner: (u32, u32, f32, f32), axis: Axis,
     let (nbr, nbc) = if axis == Axis::Rows { (nfar, tc) } else { (tr, nfar) };
     let x1 = sh.col_left(nc) + a.dx as f64;
     let y1 = sh.row_top(nr) + a.dy as f64;
-    let xn = sh.col_left(nbc) + tdx as f64;
-    let yn = sh.row_top(nbr) + tdy as f64;
+    let xn = sh.col_left(nbc) + if sh.is_col_hidden(nbc) { 0.0 } else { tdx as f64 };
+    let yn = sh.row_top(nbr) + if sh.is_row_hidden(nbr) { 0.0 } else { tdy as f64 };
     let hidden_end = a.hidden_end.and_then(|end| {
         let main = if axis == Axis::Rows { end.cell.row } else { end.cell.col };
         let mapped = map_line(main)?;

@@ -238,6 +238,21 @@ fn hiding_the_rows_an_object_spans() {
 }
 
 #[test]
+fn hidden_far_corner_survives_json_round_trip() {
+    let mut f = fixture();
+    rows(&mut f.s, "home.hideRows", "9:9");
+    let bytes = gridcraft_engine::io::save_bytes(&f.s.doc().unwrap().wb, "book.json").unwrap();
+    let (wb, _) = gridcraft_engine::io::open_bytes("book.json", &bytes).unwrap();
+    let mut s = Session::new();
+    s.new_workbook();
+    s.doc_mut().unwrap().wb = std::sync::Arc::new(wb);
+    rows(&mut s, "home.unhideRows", "9:9");
+    let sh = s.doc().unwrap().wb.sheet(0).unwrap();
+    let anchor = sh.images.first().unwrap().anchor;
+    assert!((anchor.height as f64 * PT - 57.6).abs() < 0.01);
+}
+
+#[test]
 /// An applied filter hides rows like hiding them.
 fn an_applied_filter_hides_rows_like_hiding_them() {
     // Rows 2 and 3 hold "x" and "y": keeping "y" hides row 2, above the object.
