@@ -106,7 +106,7 @@ fn system_custom_short_date_and_literal_custom_code_paint_differently() {
     let sh = wb.sheet_mut(0).unwrap();
     sh.cells.set(
         gridcraft_engine::core::CellRef::new(3, 0),
-        gridcraft_engine::model::Cell { value: gridcraft_engine::core::Value::Number(45292.0), formula: None, style },
+        gridcraft_engine::model::Cell::styled(gridcraft_engine::core::Value::Number(45292.0), style),
     );
     h.run_steps(4);
     assert!(painted(&h, "01.01.2024"));

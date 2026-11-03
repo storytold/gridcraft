@@ -153,10 +153,7 @@ fn custom_short_date_aliases_survive_style_serialization_and_xlsx() {
         assert_ne!(nf, NumFmt::new(code));
         let mut wb = Workbook::new();
         let id = wb.styles.derive(Default::default(), |st| st.num_fmt = nf.clone());
-        wb.sheet_mut(0)
-            .unwrap()
-            .cells
-            .set(CellRef::new(0, 0), gridcraft_engine::model::Cell { value: Value::Number(45292.0), formula: None, style: id });
+        wb.sheet_mut(0).unwrap().cells.set(CellRef::new(0, 0), gridcraft_engine::model::Cell::styled(Value::Number(45292.0), id));
         let (back, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
         assert_eq!(back.styles.get(back.sheet(0).unwrap().style_id(CellRef::new(0, 0))).num_fmt, nf);
     }
