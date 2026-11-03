@@ -34,6 +34,9 @@ fn invalid_cf_formulas_are_rejected() {
         json!({"type": "dataBar", "min": {"type": "num", "value": "="}}),
         json!({"type": "dataBar", "max": {"type": "percent", "value": "  "}}),
         json!({"type": "dataBar", "min": {"type": "percentile", "value": "=="}}),
+        // a typed stop's formula spelled with more than one '=' (#1885 review): trimming them all
+        // turned `==A1` into the valid formula `A1`, so the malformed value was accepted
+        json!({"type": "dataBar", "min": {"type": "percentile", "value": "==A1"}}),
     ] {
         let err = session()
             .execute("home.conditionalFormat", json!({"range": "A1:A5", "rule": rule.clone()}))

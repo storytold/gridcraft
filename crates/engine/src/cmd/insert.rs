@@ -1631,11 +1631,18 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
                 // the stop was given (#1885 review).
                 let formula = match o.get("value").and_then(Json::as_str).filter(|_| !matches!(t, "min" | "max" | "formula")) {
                     Some(s) => {
-                        let f = s.trim().trim_start_matches('=').to_string();
+                        // Strip exactly one leading '=', as `check_cf_formula` and the writer do:
+                        // `==A1` is malformed input, not a formula spelled with an extra '='
+                        // (#1885 review).
+                        let f = s.trim();
+                        let f = f.strip_prefix('=').unwrap_or(f);
                         if f.is_empty() {
                             return Err(bad("home.conditionalFormat", format!("the `{t}` stop's formula is empty")));
                         }
-                        Some(f)
+                        if f.starts_with('=') {
+                            return Err(bad("home.conditionalFormat", format!("the `{t}` stop's formula `{s}` starts with more than one `=`")));
+                        }
+                        Some(f.to_string())
                     }
                     None => None,
                 };
