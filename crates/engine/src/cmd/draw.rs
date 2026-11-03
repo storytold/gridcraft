@@ -115,6 +115,14 @@ pub fn ink_points(sh: &Shape) -> Vec<[f32; 2]> {
     parse_points(&sh.text)
 }
 
+/// Scales an ink stroke's points from the anchor size `old` to `new` (width, height). An axis
+/// that had no extent keeps its points: there is nothing to scale from.
+pub(crate) fn scale_ink(sh: &mut Shape, old: (f32, f32), new: (f32, f32)) {
+    let factor = |from: f32, to: f32| if from > 0.0 && from.is_finite() && to.is_finite() { to / from } else { 1.0 };
+    let (sx, sy) = (factor(old.0, new.0), factor(old.1, new.1));
+    sh.text = parse_points(&sh.text).iter().map(|q| format!("{},{}", q[0] * sx, q[1] * sy)).collect::<Vec<_>>().join(";");
+}
+
 fn ink_to_shape(s: &mut Session, p: &Json) -> Result<Json> {
     let si = s.doc()?.wb.active_sheet();
     let id = u32_param(p, "id");
