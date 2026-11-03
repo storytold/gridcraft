@@ -883,3 +883,29 @@ fn the_close_question_can_be_answered_by_command() {
     assert!(h.state().editor.is_none());
     assert!(h.state().dialog.is_none());
 }
+
+#[test]
+fn editing_after_exit_anyway_in_the_same_frame_keeps_the_draft() {
+    let mut h = harness(Services::default());
+    close_with_a_bad_formula(&mut h);
+    h.state_mut().run("ui.exitAnyway", serde_json::json!({})).unwrap();
+    h.state_mut().run("ui.editRefusedDraft", serde_json::json!({})).unwrap();
+    let sent = step_commands(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+    assert_eq!(h.state().editor.as_ref().map(|e| e.text.as_str()), Some("=1*/2"));
+}
+
+#[test]
+fn exit_anyway_on_the_quit_question_quits_whatever_window_it_is_given() {
+    let mut h = harness(Services::default());
+    h.state_mut().begin_edit(Some("=1*/2".into()), false);
+    h.run_steps(2);
+    let ctx = h.ctx.clone();
+    h.state_mut().request_quit(&ctx);
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("refusedDraft"));
+    h.state_mut().run("ui.exitAnyway", serde_json::json!({"window": 999_999})).unwrap();
+    let sent = step_commands(&mut h);
+    assert!(sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+}

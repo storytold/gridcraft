@@ -51,6 +51,8 @@ impl SheetApp {
     pub(super) fn edit_refused_draft(&mut self) -> Result<Json, String> {
         let Some(ed) = self.editor.as_mut() else { return Err(NO_DRAFT.into()) };
         ed.request_focus = true;
+        // The later answer wins over an Exit Anyway still waiting for its frame.
+        self.pending_exit_anyway = None;
         if self.dialog.as_ref().is_some_and(|d| d.name() == "refusedDraft") {
             self.dialog = None;
         }
@@ -63,11 +65,15 @@ impl SheetApp {
         if self.editor.is_none() {
             return Err(NO_DRAFT.into());
         }
-        let asked = self.dialog.as_ref().filter(|d| d.name() == "refusedDraft").and_then(|d| d.values.get("window")).and_then(Json::as_u64);
+        // An open question knows what it is closing, and no window there means quitting.
+        let window = match self.dialog.as_ref().filter(|d| d.name() == "refusedDraft") {
+            Some(question) => question.values.get("window").and_then(Json::as_u64),
+            None => p.get("window").and_then(Json::as_u64),
+        };
         if self.dialog.as_ref().is_some_and(|d| d.name() == "refusedDraft") {
             self.dialog = None;
         }
-        self.pending_exit_anyway = Some(asked.or_else(|| p.get("window").and_then(Json::as_u64)));
+        self.pending_exit_anyway = Some(window);
         Ok(Json::Null)
     }
 
