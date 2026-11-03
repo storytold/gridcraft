@@ -185,6 +185,28 @@ impl Language {
         }
     }
 
+    /// Decimal separator for numeric UI fields, independent of formula syntax.
+    pub const fn ui_decimal_separator(self) -> char {
+        match self {
+            Self::En | Self::Zh | Self::Ja | Self::Ko => '.',
+            Self::Es
+            | Self::El
+            | Self::Ru
+            | Self::PtBr
+            | Self::De
+            | Self::Cs
+            | Self::Fr
+            | Self::Sr
+            | Self::Tr
+            | Self::Pl
+            | Self::It
+            | Self::Uk
+            | Self::Vi
+            | Self::Nl
+            | Self::Ro => ',',
+        }
+    }
+
     pub fn formula_locale(self) -> gridcraft_engine::formula::FormulaLocale {
         if self == Self::Es { gridcraft_engine::formula::FormulaLocale::Es } else { gridcraft_engine::formula::FormulaLocale::En }
     }
@@ -320,6 +342,39 @@ fn name_sort_key(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ui_decimal_separator_matches_supported_languages() {
+        for language in [Language::En, Language::Zh, Language::Ja, Language::Ko] {
+            assert_eq!(language.ui_decimal_separator(), '.');
+        }
+
+        let comma_languages = [
+            Language::Es,
+            Language::El,
+            Language::Ru,
+            Language::PtBr,
+            Language::De,
+            Language::Cs,
+            Language::Fr,
+            Language::Sr,
+            Language::Tr,
+            Language::Pl,
+            Language::It,
+            Language::Uk,
+            Language::Vi,
+            Language::Nl,
+            Language::Ro,
+        ];
+
+        for language in comma_languages {
+            assert_eq!(language.ui_decimal_separator(), ',');
+        }
+
+        assert_eq!(Language::ALL.len(), 19);
+        assert_eq!(Language::De.formula_locale(), gridcraft_engine::formula::FormulaLocale::En);
+        assert_eq!(Language::Fr.formula_locale(), gridcraft_engine::formula::FormulaLocale::En);
+    }
 
     /// Help tables are sorted and unique: lookups binary-search them.
     #[test]

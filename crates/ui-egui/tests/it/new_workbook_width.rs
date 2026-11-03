@@ -16,6 +16,13 @@ fn options_width_field_accepts_spanish_decimal_separator() {
     check_options_width_input(Language::Es, "112,5");
 }
 
+#[test]
+fn options_width_field_accepts_german_and_french_decimal_separator() {
+    for language in [Language::De, Language::Fr] {
+        check_options_width_input(language, "112,5");
+    }
+}
+
 fn check_options_width_input(language: Language, input: &str) {
     let mut session = Session::new();
     let original = session.new_workbook();
@@ -54,6 +61,7 @@ fn check_options_width_input(language: Language, input: &str) {
     h.run_steps(3);
 
     assert_eq!(h.state().session.prefs.default_column_width, 112.5,);
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, label).value().as_deref(), Some(input));
 
     assert_eq!(h.state().session.documents()[original].wb.sheets[0].default_col_width, 64.0,);
 

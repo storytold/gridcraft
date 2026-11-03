@@ -40,15 +40,17 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
 /// Set the column width for future blank workbooks without changing open files.
 fn new_workbook_width_option(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
     let width = app.session.prefs.new_workbook_column_width();
+    let separator = lang.ui_decimal_separator();
+    let display_width = width.to_string().replace('.', &separator.to_string());
     ui.horizontal(|ui| {
         let label = ui.label(lang.tr("Default column width for new workbooks (pixels)"));
         let id = ui.make_persistent_id("backstage_new_workbook_default_width");
-        let committed = crate::widgets::committed_text(ui, id, &width.to_string(), Some(80.0));
+        let committed = crate::widgets::committed_text(ui, id, &display_width, Some(80.0));
         if let Some(response) = ui.ctx().read_response(id) {
             response.labelled_by(label.id);
         }
         if let Some(text) = committed {
-            let normalized = text.trim().replace(lang.formula_locale().decimal_separator(), ".");
+            let normalized = text.trim().replace(separator, ".");
             let parsed = normalized.parse::<f32>().ok().filter(|w| w.is_finite() && (0.0..=1800.0).contains(w));
             match parsed {
                 Some(w) if w != width => {
