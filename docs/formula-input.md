@@ -2,11 +2,11 @@
 
 View → Interface language is the existing, persisted language preference. Choose **Español**
 for Spanish formula entry and display. On first run the preference follows the system language.
-Choose **Русский**, **Polski**, **Français**, **Deutsch**, **Italiano**, or **Português (Brasil)** for formula
+Choose **Русский**, **Polski**, **Français**, **Deutsch**, **Italiano**, **Português (Brasil)**, or **Türkçe** for formula
 entry and display in those languages. Other interface languages use the English formula table and
 separators. For example, Polish `=SUMA(1,5;2,25)` is stored in XLSX as `SUM(1.5,2.25)`.
 French and German use dots between array columns, as in `{1.2;3.4}`. Italian and Brazilian Portuguese use
-backslashes between array columns.
+backslashes between array columns, as does Turkish.
 
 | Spanish | Canonical English |
 | --- | --- |
@@ -24,6 +24,10 @@ Names are case-insensitive. Spanish formulas use decimal commas (`1,5`), semicol
 and reference unions, and backslashes between array columns (`{1\2;3\4}`). For example,
 `=SI(VERDADERO;SUMA(1,5;2,25);0)` evaluates to 3.75. English mode retains comma arguments,
 decimal points and comma array columns; it does not silently translate Spanish aliases.
+
+Spanish structured references also display localized specifiers. For example, the editor
+shows `Ventas[[#Datos];[Importe]]` for the stored reference `Ventas[[#Data],[Importe]]`.
+Table and column names stay as entered.
 
 The cell editor, formula bar, Show Formulas, autocomplete, the Formula ribbon, Insert Function, and argument hints
 use the selected formula language. Spanish help covers the current 515-function catalog.
@@ -68,7 +72,8 @@ separate work.
 ## Adding another language
 
 Formula syntax is described by `LocaleData` in `crates/formula/src/input.rs`, with each locale's data in `input/<language>.rs`: function aliases,
-error spellings, the decimal/list/array-column/array-row separators, and the alias case-folding
+error spellings, the decimal/list/array-column/array-row separators, optional structured-reference
+specifiers, and the alias case-folding
 function. Add the locale's data and enum selection there, then connect the interface language
 in `Language::formula_locale`. The lexer, parser, printer, completion and value editor consume
 the shared methods; they must not gain per-language branches. Alias folding is separate from
