@@ -468,9 +468,10 @@ mod open_with_system_tests {
     use std::net::TcpListener;
     use std::time::Duration;
 
-    /// The target of the first request on `listener` other than the favicon's, waiting about 30
-    /// seconds. Connections that send nothing (a browser's preconnects) are skipped.
-    fn first_request_target(listener: &TcpListener) -> Option<String> {
+    /// The target of the next request on `listener` other than the favicon's, answered with the
+    /// HTML `page`, waiting about 30 seconds. Connections that send nothing (a browser's
+    /// preconnects) are skipped.
+    fn next_request_target(listener: &TcpListener, page: &str) -> Option<String> {
         listener.set_nonblocking(true).ok()?;
         for _ in 0..600 {
             let Ok((mut stream, _)) = listener.accept() else {
@@ -489,7 +490,8 @@ mod open_with_system_tests {
             }
             let line = String::from_utf8_lossy(&head);
             let Some(target) = line.lines().next().and_then(|l| l.split(' ').nth(1)) else { continue };
-            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+            let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}", page.len());
+            let _ = stream.write_all(response.as_bytes());
             if target != "/favicon.ico" {
                 return Some(target.to_string());
             }
@@ -497,15 +499,18 @@ mod open_with_system_tests {
         None
     }
 
-    /// A share link's shape: `=` and `&` in the query, a `,` in a value, and over 2,000
-    /// characters. explorer.exe opened the Documents folder for it instead of the browser.
+    /// A share link's shape: `=` and `&` in the query, a `,` in a value, over 2,000 characters,
+    /// and a fragment. explorer.exe opened the Documents folder for it instead of the browser.
+    /// A browser never sends the fragment, so the page it gets asks for `/fragment/<fragment>`.
     #[test]
     #[ignore = "opens the default browser; run by hand on Windows with --ignored"]
     fn a_long_address_with_a_query_reaches_the_browser_whole() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let path = format!("/:f:/g/personal/a1/EaB?resid=A1%21123&ithint=folder,oneup&redeem={}", "x".repeat(2048));
-        super::open_with_system(&format!("http://127.0.0.1:{port}{path}"));
-        assert_eq!(first_request_target(&listener).as_deref(), Some(path.as_str()));
+        super::open_with_system(&format!("http://127.0.0.1:{port}{path}#Sheet2-B7"));
+        let report = "<script>location.replace('/fragment/' + location.hash.slice(1))</script>";
+        assert_eq!(next_request_target(&listener, report).as_deref(), Some(path.as_str()));
+        assert_eq!(next_request_target(&listener, "ok").as_deref(), Some("/fragment/Sheet2-B7"));
     }
 }
