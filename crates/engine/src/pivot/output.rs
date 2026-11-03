@@ -137,11 +137,22 @@ pub(super) struct Ctx<'a> {
     pub(super) val_names: Vec<String>,
 }
 
+/// A label cell of a report line: (column, value, indent, number format).
+type Label = (usize, Value, u8, Option<String>);
+
+/// Whether an axis field shows subtotals (its own setting, else the table's).
+pub(super) fn shows_subtotals(pt: &PivotTable, f: Option<&&PivotField>) -> bool {
+    f.and_then(|f| f.subtotal).unwrap_or(pt.subtotals)
+}
+
 impl Ctx<'_> {
-    fn label_cell(&self, depth: usize, item: u32) -> (Value, Option<String>, String) {
-        let Some(it) = self.row_items.get(depth).and_then(|fi| fi.get(item)) else { return (Value::Empty, None, String::new()) };
-        let fmt = if it.formatted { self.row_fmts.get(depth).cloned() } else { None };
-        (it.value.clone(), fmt, it.label.clone())
+    /// (shown value, number format, item label, shown label) of a row item.
+    fn label_cell(&self, depth: usize, item: u32) -> (Value, Option<String>, String, String) {
+        let Some(it) = self.row_items.get(depth).and_then(|fi| fi.get(item)) else {
+            return (Value::Empty, None, String::new(), String::new());
+        };
+        let fmt = if it.formatted && it.caption.is_none() { self.row_fmts.get(depth).cloned() } else { None };
+        (it.shown_value(), fmt, it.label.clone(), it.shown_label().to_string())
     }
 
     /// (column, indent) of a row level (Σ Values counts as a level) in Compact/Outline form.
@@ -170,86 +181,87 @@ impl Ctx<'_> {
 
     /// The Σ Values level at row field depth `depth`: one item per value field, each followed by
     /// the row fields below it (`nodes`) or, innermost, holding that value.
-    fn flatten_values(&self, nodes: &[Node], depth: usize, prefix: &mut Vec<u32>, out: &mut Vec<Line>) {
+    fn flatten_values(&self, nodes: &[Node], depth: usize, prefix: &mut Vec<u32>, repeat: &mut Vec<Label>, out: &mut Vec<Line>) {
         let (col, indent) = self.level_cell(depth);
         for (vi, name) in self.val_names.iter().enumerate() {
-            let labels = vec![(col, Value::text(name.as_str()), indent, None)];
+            let mut labels = repeat.clone();
+            labels.push((col, Value::text(name.as_str()), indent, None));
             let leaf = nodes.is_empty();
             out.push(Line { kind: LineKind::Item(!leaf), leaf, path: prefix.clone(), values: leaf, labels, vi: Some(vi) });
             if !leaf {
-                self.flatten(nodes, depth, Some(vi), prefix, out);
+                self.flatten(nodes, depth, Some(vi), prefix, repeat, out);
             }
         }
     }
 
-    pub(super) fn flatten(&self, nodes: &[Node], depth: usize, vi: Option<usize>, prefix: &mut Vec<u32>, out: &mut Vec<Line>) {
+    /// Compact and Outline rows. `repeat` holds the labels of enclosing items repeated on each
+    /// row (Outline, Repeat Item Labels).
+    pub(super) fn flatten(
+        &self,
+        nodes: &[Node],
+        depth: usize,
+        vi: Option<usize>,
+        prefix: &mut Vec<u32>,
+        repeat: &mut Vec<Label>,
+        out: &mut Vec<Line>,
+    ) {
         if self.values_here(depth, vi) {
-            self.flatten_values(nodes, depth, prefix, out);
+            self.flatten_values(nodes, depth, prefix, repeat, out);
             return;
         }
         let n = self.rows.len();
+        let outline = self.pt.layout == PivotLayout::Outline;
+        let field = self.rows.get(depth);
+        let subtotals = shows_subtotals(self.pt, field);
         // Σ Values still to come below this level: totals need one line per value field.
         let values_below = vi.is_none() && self.vpos.is_some();
         let (col, indent) = self.level_cell(depth + usize::from(vi.is_some() && self.vpos.is_some()));
         for node in nodes {
             prefix.push(node.item);
-            let (v, fmt, label) = self.label_cell(depth, node.item);
-            let collapsed = depth + 1 < n && self.rows.get(depth).is_some_and(|f| is_collapsed(f, &label));
+            let (v, fmt, label, shown) = self.label_cell(depth, node.item);
+            let collapsed = depth + 1 < n && field.is_some_and(|f| is_collapsed(f, &label));
             let leaf = depth + 1 >= n || collapsed || node.children.is_empty();
+            let mut labels = repeat.clone();
+            labels.push((col, v.clone(), indent, fmt.clone()));
+            let pushed = !leaf && outline && field.is_some_and(|f| f.repeat_labels);
             if leaf && !values_below {
-                out.push(Line {
-                    kind: LineKind::Item(depth + 1 < n),
-                    leaf: true,
-                    path: prefix.clone(),
-                    values: true,
-                    labels: vec![(col, v, indent, fmt)],
-                    vi,
-                });
+                out.push(Line { kind: LineKind::Item(depth + 1 < n), leaf: true, path: prefix.clone(), values: true, labels, vi });
             } else if leaf {
-                out.push(Line {
-                    kind: LineKind::Item(true),
-                    leaf: false,
-                    path: prefix.clone(),
-                    values: false,
-                    labels: vec![(col, v, indent, fmt)],
-                    vi,
-                });
+                out.push(Line { kind: LineKind::Item(true), leaf: false, path: prefix.clone(), values: false, labels, vi });
                 // Outline gives each level its own column, so the captions go in the Values
                 // column even when the levels between are collapsed away.
-                let level = if self.pt.layout == PivotLayout::Outline { self.vpos.unwrap_or(depth + 1) } else { depth + 1 };
-                self.flatten_values(&[], level, prefix, out);
+                let level = if outline { self.vpos.unwrap_or(depth + 1) } else { depth + 1 };
+                self.flatten_values(&[], level, prefix, repeat, out);
             } else if values_below {
                 // Subtotals per value field, below the group (one line can't hold them all).
-                out.push(Line {
-                    kind: LineKind::Item(true),
-                    leaf: false,
-                    path: prefix.clone(),
-                    values: false,
-                    labels: vec![(col, v, indent, fmt)],
-                    vi,
-                });
-                self.flatten(&node.children, depth + 1, None, prefix, out);
-                if self.pt.subtotals {
-                    self.value_subtotals(col, indent, &label, prefix, out);
+                out.push(Line { kind: LineKind::Item(true), leaf: false, path: prefix.clone(), values: false, labels, vi });
+                if pushed {
+                    repeat.push((col, v, indent, fmt));
+                }
+                self.flatten(&node.children, depth + 1, None, prefix, repeat, out);
+                if pushed {
+                    repeat.pop();
+                }
+                if subtotals {
+                    self.value_subtotals(col, indent, &shown, prefix, out);
                 }
             } else {
-                let top = self.pt.subtotals && self.pt.subtotals_top;
-                out.push(Line {
-                    kind: LineKind::Item(true),
-                    leaf: false,
-                    path: prefix.clone(),
-                    values: top,
-                    labels: vec![(col, v, indent, fmt)],
-                    vi,
-                });
-                self.flatten(&node.children, depth + 1, vi, prefix, out);
-                if self.pt.subtotals && !self.pt.subtotals_top {
+                let top = subtotals && self.pt.subtotals_top;
+                out.push(Line { kind: LineKind::Item(true), leaf: false, path: prefix.clone(), values: top, labels, vi });
+                if pushed {
+                    repeat.push((col, v, indent, fmt));
+                }
+                self.flatten(&node.children, depth + 1, vi, prefix, repeat, out);
+                if pushed {
+                    repeat.pop();
+                }
+                if subtotals && !self.pt.subtotals_top {
                     out.push(Line {
                         kind: LineKind::Subtotal,
                         leaf: false,
                         path: prefix.clone(),
                         values: true,
-                        labels: vec![(col, Value::text(format!("{label} Total")), indent, None)],
+                        labels: vec![(col, Value::text(format!("{shown} Total")), indent, None)],
                         vi,
                     });
                 }
@@ -264,59 +276,73 @@ impl Ctx<'_> {
         nodes: &[Node],
         depth: usize,
         prefix: &mut Vec<u32>,
-        pending: &[(usize, Value, u8, Option<String>)],
+        pending: &[Label],
+        repeat: &mut Vec<Label>,
         out: &mut Vec<Line>,
     ) {
         for (vi, name) in self.val_names.iter().enumerate() {
-            let mut labels: Vec<(usize, Value, u8, Option<String>)> = if vi == 0 { pending.to_vec() } else { vec![] };
+            let mut labels: Vec<Label> = if vi == 0 { pending.to_vec() } else { repeat.clone() };
             labels.push((depth, Value::text(name.as_str()), 0, None));
             if nodes.is_empty() {
                 out.push(Line { kind: LineKind::Item(false), leaf: true, path: prefix.clone(), values: true, labels, vi: Some(vi) });
             } else {
-                self.flatten_tabular(nodes, depth, Some(vi), prefix, &labels, out);
+                self.flatten_tabular(nodes, depth, Some(vi), prefix, &labels, repeat, out);
             }
         }
     }
 
+    /// Tabular rows: an item's label sits on its first child's row (`pending`); `repeat` holds
+    /// the labels of enclosing items repeated on the other rows (Repeat Item Labels).
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn flatten_tabular(
         &self,
         nodes: &[Node],
         depth: usize,
         vi: Option<usize>,
         prefix: &mut Vec<u32>,
-        pending: &[(usize, Value, u8, Option<String>)],
+        pending: &[Label],
+        repeat: &mut Vec<Label>,
         out: &mut Vec<Line>,
     ) {
         if self.values_here(depth, vi) {
-            self.flatten_tabular_values(nodes, depth, prefix, pending, out);
+            self.flatten_tabular_values(nodes, depth, prefix, pending, repeat, out);
             return;
         }
         let n = self.rows.len();
+        let field = self.rows.get(depth);
         let values_below = vi.is_none() && self.vpos.is_some();
         let col = depth + usize::from(vi.is_some() && self.vpos.is_some());
         for (i, node) in nodes.iter().enumerate() {
             prefix.push(node.item);
-            let (v, fmt, label) = self.label_cell(depth, node.item);
-            let mut labels: Vec<(usize, Value, u8, Option<String>)> = if i == 0 { pending.to_vec() } else { vec![] };
-            labels.push((col, v, 0, fmt));
-            let collapsed = depth + 1 < n && self.rows.get(depth).is_some_and(|f| is_collapsed(f, &label));
+            let (v, fmt, label, shown) = self.label_cell(depth, node.item);
+            let mut labels: Vec<Label> = if i == 0 { pending.to_vec() } else { repeat.clone() };
+            labels.push((col, v.clone(), 0, fmt.clone()));
+            let collapsed = depth + 1 < n && field.is_some_and(|f| is_collapsed(f, &label));
             if depth + 1 >= n || collapsed || node.children.is_empty() {
                 if values_below {
-                    self.flatten_tabular_values(&[], self.vpos.unwrap_or(depth + 1), prefix, &labels, out);
+                    self.flatten_tabular_values(&[], self.vpos.unwrap_or(depth + 1), prefix, &labels, repeat, out);
                 } else {
                     out.push(Line { kind: LineKind::Item(false), leaf: true, path: prefix.clone(), values: true, labels, vi });
                 }
             } else {
-                self.flatten_tabular(&node.children, depth + 1, vi, prefix, &labels, out);
-                if self.pt.subtotals && values_below {
-                    self.value_subtotals(col, 0, &label, prefix, out);
-                } else if self.pt.subtotals {
+                let pushed = field.is_some_and(|f| f.repeat_labels);
+                if pushed {
+                    repeat.push((col, v, 0, fmt));
+                }
+                self.flatten_tabular(&node.children, depth + 1, vi, prefix, &labels, repeat, out);
+                if pushed {
+                    repeat.pop();
+                }
+                let subtotals = shows_subtotals(self.pt, field);
+                if subtotals && values_below {
+                    self.value_subtotals(col, 0, &shown, prefix, out);
+                } else if subtotals {
                     out.push(Line {
                         kind: LineKind::Subtotal,
                         leaf: false,
                         path: prefix.clone(),
                         values: true,
-                        labels: vec![(col, Value::text(format!("{label} Total")), 0, None)],
+                        labels: vec![(col, Value::text(format!("{shown} Total")), 0, None)],
                         vi,
                     });
                 }
@@ -331,20 +357,21 @@ pub(super) fn flatten_cols(
     depth: usize,
     fields: &[&PivotField],
     items: &[FieldItems],
-    subtotals: bool,
+    pt: &PivotTable,
     prefix: &mut Vec<u32>,
     out: &mut Vec<ColSpec>,
 ) {
     let n = fields.len();
+    let field = fields.get(depth);
     for node in nodes {
         prefix.push(node.item);
         let label = items.get(depth).map(|fi| fi.label(node.item)).unwrap_or_default();
-        let collapsed = depth + 1 < n && fields.get(depth).is_some_and(|f| is_collapsed(f, &label));
+        let collapsed = depth + 1 < n && field.is_some_and(|f| is_collapsed(f, &label));
         if depth + 1 >= n || collapsed || node.children.is_empty() {
             out.push(ColSpec { kind: ColKind::Leaf, path: prefix.clone() });
         } else {
-            flatten_cols(&node.children, depth + 1, fields, items, subtotals, prefix, out);
-            if subtotals {
+            flatten_cols(&node.children, depth + 1, fields, items, pt, prefix, out);
+            if shows_subtotals(pt, field) {
                 out.push(ColSpec { kind: ColKind::Subtotal, path: prefix.clone() });
             }
         }

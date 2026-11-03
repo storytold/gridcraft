@@ -537,6 +537,12 @@ pub(super) fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
             None => {}
         }
         let name = v.name.clone();
+        // Fields sorted by this value field follow its new caption.
+        for f in pt.rows.iter_mut().chain(pt.columns.iter_mut()) {
+            if f.sort_by.as_deref().is_some_and(|b| b.eq_ignore_ascii_case(&cur.name)) {
+                f.sort_by = Some(name.clone());
+            }
+        }
         if let Some(slot) = pt.values.get_mut(i) {
             *slot = v;
         }

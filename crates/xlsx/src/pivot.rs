@@ -14,11 +14,12 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use gridcraft_core::date::datetime_from_serial;
+use gridcraft_core::date::{datetime_from_serial, iso_ymd, serial_from_iso_ymd};
 use gridcraft_core::{CellRef, DateSystem, RangeRef, Value, number_to_text};
 use gridcraft_formula::quote_sheet;
 use gridcraft_model::{
-    PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue, Workbook,
+    PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotScopeItem, PivotShowAs, PivotSort, PivotTable, PivotValue,
+    Workbook,
 };
 
 use crate::IoError;
@@ -31,7 +32,6 @@ mod write;
 
 pub use read::{CachesIn, read_pivots};
 pub use write::PivotWriter;
-
 pub const CT_PIVOT_TABLE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml";
 pub const CT_PIVOT_CACHE_DEF: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml";
 pub const CT_PIVOT_CACHE_REC: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml";
@@ -46,7 +46,31 @@ const MAX_ITEMS: usize = 1_048_576;
 const MAX_FIELDS: usize = 16_384;
 /// The `x14:dataField` extension (Excel 2010 show-values-as additions such as rank).
 const EXT_X14_DATA_FIELD: &str = "{E15A36E0-9728-4e99-A89B-3F7291B0FE68}";
-const EXT_X14_PIVOT_TABLE: &str = "{962EF5D1-5CA2-4c93-8EF4-DBF5C05439D2}";
+/// The `x14:pivotField` extension (Repeat Item Labels: `fillDownLabels`).
+const EXT_X14_FIELD: &str = "{2946ED86-A175-432a-8AC1-64E0C546D7DE}";
+/// The `x14:pivotTableDefinition` extension (Show the Values row: `hideValuesRow`).
+const EXT_X14_TABLE: &str = "{962EF5D1-5CA2-4c93-8EF4-DBF5C05439D2}";
+/// The `xpdl:pivotTableDefinition16` extension: the table's default subtotal setting
+/// (`EnabledSubtotalsDefault`) when its fields override it.
+const EXT_XPDL_TABLE: &str = "{747A6164-185A-40DC-8AA5-F01512510D54}";
+const NS_XPDL: &str = "http://schemas.microsoft.com/office/spreadsheetml/2016/pivotdefaultlayout";
+/// The field index of the Values (data) field in pivot areas and `<colFields>` is -2, which
+/// `<reference field>` stores unsigned.
+const VALUES_FIELD: &str = "4294967294";
+/// `<pivotField>` attributes that turn on a custom subtotal function.
+const CUSTOM_SUBTOTALS: [&str; 11] = [
+    "sumSubtotal",
+    "countASubtotal",
+    "avgSubtotal",
+    "maxSubtotal",
+    "minSubtotal",
+    "productSubtotal",
+    "countSubtotal",
+    "stdDevSubtotal",
+    "stdDevPSubtotal",
+    "varSubtotal",
+    "varPSubtotal",
+];
 const NS_X14: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
 
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -138,10 +162,11 @@ fn group_caption(g: PivotDateGroup) -> &'static str {
     }
 }
 
-/// `2024-03-05T00:00:00` for a date serial.
+/// `2024-03-05T00:00:00` for a date serial; a time alone is on `1899-12-30` (see [`iso_ymd`]).
 fn iso(sys: DateSystem, serial: f64) -> Option<String> {
     let d = datetime_from_serial(sys, serial)?;
-    Some(format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}", d.year, d.month, d.day, d.hour, d.minute, d.second))
+    let (y, m, day) = iso_ymd(sys, d.year, d.month, d.day);
+    Some(format!("{y:04}-{m:02}-{day:02}T{:02}:{:02}:{:02}", d.hour, d.minute, d.second))
 }
 
 /// `3/5/2024` for a date serial (group boundary captions).
