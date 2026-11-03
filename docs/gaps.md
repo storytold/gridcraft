@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (§8: PivotTable Enable show details; earlier: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-03 · **Change:** minor (§9: key-tip coverage is limited to permanent ribbon tabs; contextual tabs remain unbound; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -44,7 +44,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 4. Charts lose options on round trip; shallow chart model (F, FF)
 - **Missing:** axis scaling, label options, error bars, per-point formatting.
-- **Evidence:** `Chart` and `Series` (`crates/model/src/features.rs`) have one data-label flag, one gridline flag, no axis bounds and limited per-series formatting, including colour, smoothing and trendlines. All 2-D kinds survive XLSX round trip (#158, #161, both merged). Smooth lines (#62), Switch Row/Column (#116), trendlines (six types, read, written, drawn) and multi-level category axes are in; charts resize from their corner handle.
+- **Added:** data tables beneath supported charts with live source values, legend keys, border controls, XLSX round-trip and print/PDF.
+- **Evidence:** `Chart` has a data-label flag, gridline flag, axis titles and no axis bounds; `Series` supports colour, smoothing and trendlines. All 2-D kinds survive XLSX round trip, charts resize from handles (#190), and smooth lines, Switch Row/Column, trendlines and multi-level category axes are in.
 - **Impact:** charts are in most business workbooks.
 - **Estimate:** 25–35 h for beta (40–60 h full). [chart-parity.md](chart-parity.md)
 
@@ -68,14 +69,14 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 7. Legacy `.xls` only partly read; encrypted workbooks can't be saved with a password (FF)
 - **Evidence:** #121: Excel 97-2003 (BIFF8) `.xls` files now open (values, formulas, number
-  formats, merges, sizes, names); fonts, fills, borders, charts, pictures, comments, conditional
+  formats, merges, sizes, names, and cell formatting: fonts, fills, borders, alignment); exact theme colours (XFExt), charts, pictures, comments, conditional
   formats, validation and BIFF5 files are not read, and `.xls` is never written. Password-encrypted
   `.xlsx` workbooks (Agile and Standard encryption) open with their password since #11, but are
   saved without it: GridCraft can't write an encrypted file yet. Encrypted `.xls` (FILEPASS) and
   RC4-encrypted files are still refused with a message.
 - **Impact:** common in finance, government and anything older than 2007; encrypted files are
   routine in business.
-- **Estimate:** 14–21 h (`.xls` styles and objects 10–15, encryption 4–6). [file-format-parity.md](file-format-parity.md)
+- **Estimate:** 14–21 h (`.xls` objects 10–15, encryption 4–6). [file-format-parity.md](file-format-parity.md)
 
 ### 8. PivotTables: no slicers, calculated items, PivotCharts; unverified in Excel (F)
 - **Evidence:** `parity-checklist.md` missing `insert.slicer`, `insert.timeline`,
@@ -90,7 +91,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 ### 9. Keyboard-first users: key tips, shortcuts, context menus (U)
 - Next/previous sheet navigation now skips Hidden and VeryHidden worksheets without activating a
   hidden sheet at the workbook boundary. Other keyboard gaps below remain.
-- **Evidence:** key tips cover every ribbon tab, with pending sequences for features not built yet (#33, #49; #43 was the first step); #110 audits shortcuts against Microsoft's lists (not all 200+ documented shortcuts are bound); #28 (selection).
+- **Evidence:** key tips cover permanent ribbon tabs; Table Design, Chart Design and Header & Footer have no tab sequences; pending bindings remain for features not built yet (#33, #49); #110 audits shortcuts against Microsoft's lists (not all 200+ documented shortcuts are bound); #28 (selection).
 - **Estimate:** 10–17 h (ui-parity's remaining key tips, shortcut and context-menu work). [ui-parity.md](ui-parity.md)
 
 ### 10. Crashes and freezes reported from the field (S)
@@ -112,16 +113,17 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   data model (`data.fromWeb`, `data.relationships` missing). **Estimate:** 60–100 h.
 
 ### 13. Analysis tools: Solver, Analysis ToolPak, Forecast Sheet (F)
-- `data.solver`, `data.analysisToolPak` missing. Forecast Sheet (`data.forecastSheet`) and the
-  FORECAST.ETS family are in, including Forecast Start (hindcast, #785). **Estimate:** 15–25 h.
+- Forecast Sheet (`data.forecastSheet`) and the FORECAST.ETS family are in, including Forecast
+  Start (hindcast, #785).
 - Solver (`data.solver`, #327) has Simplex LP with integer/binary branch and bound, a local
-  nonlinear method (augmented Lagrangian, not GRG), the Evolutionary method, and Answer and
-  Limits reports. Report refusal leaves the solution, saved model and history unchanged; a
-  successful solve and its reports share one Undo step (#1050). AllDifferent constraints,
-  the Solver Options dialog, the Sensitivity and Population reports and Load/Save Model remain.
-  The Analysis ToolPak
-  (`data.analysisToolPak`) has 13 of 19 tools. Forecast Sheet (`data.forecastSheet`) and the
-  FORECAST.ETS family are in; the sheet has no Forecast Start (hindcast) option yet. **Estimate:** 12–20 h.
+  nonlinear method (augmented Lagrangian, not GRG), the Evolutionary method, and Answer,
+  Sensitivity and Limits reports. Report refusal leaves the solution, saved model and history unchanged; a
+  successful solve and its reports share one Undo step (#1050). Load/Save Model writes the
+  model on cells of its sheet and reads it back; Reset All removes it. Solver Options sets the
+  evaluation limit, Integer Optimality and the Evolutionary options, which are saved with the
+  model. AllDifferent constraints and the Population report remain.
+- The Analysis ToolPak (`data.analysisToolPak`) has all 19 of Excel's tools; their chart output
+  remains. **Estimate:** 12–20 h.
 
 ### 14. Page Layout view and print polish (U, F)
 - Page Layout view landed (#329): paper view with rulers and in-place header/footer editing.
@@ -138,16 +140,16 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 ### 17. Insert objects (F)
 - Ink strokes now survive XLSX save/reopen as editable polylines. Inserted icons still lose their
   identity/artwork on save (#551); native Office InkML import is not implemented.
-- SmartArt, WordArt, equations, signature line, objects, 3-D models, screenshot; 8 shape kinds vs
-  ~170; pictures in cells (#61, PR #105). **Estimate:** 25–40 h.
+- SmartArt, WordArt, signature line, objects, 3-D models, screenshot; 8 shape kinds vs ~170;
+  pictures in cells (#61, PR #105). Equations exist (LaTeX source with a live preview, Office Math in xlsx); there is
+  no structured (WYSIWYG) equation editing and no ink equations. **Estimate:** 25–40 h.
 
 ### 18. Accessibility (U)
 - AccessKit on, but no accessible grid/ribbon tree, no high contrast, no checker. **Estimate:** 12–18 h.
   [ui-parity.md](ui-parity.md#accessibility)
 
 ### 19. XLSB/ODS beyond values; minor formats (FF)
-- XLSB and ODS import values only, no write; no `.prn`, `.dif`, `.slk`, XML Spreadsheet 2003;
-  `.xltx`/`.xltm` save with their template content types, but "new from template" is missing.
+- XLSB and ODS import values only, no write; no `.prn`, `.dif` or XML Spreadsheet 2003; `.slk` imports values, formulas, number formats and widths. CSV writes displayed values. `.xltx`/`.xltm` save with their template content types, but “new from template” is missing.
   **Estimate:** 15–23 h.
 
 ### 20. Multiple windows; pen pressure (H)
@@ -175,9 +177,17 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | §9: key-tip sequences cover permanent ribbon tabs; Table Design, Chart Design and Header & Footer remain unbound |
+| 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |
+| 2026-11-02 | minor | §13: Solver Sensitivity report: shadow prices, reduced costs and allowable ranges for Simplex LP; Lagrange multipliers and reduced gradients for GRG Nonlinear |
+| 2026-11-02 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |
+| 2026-11-01 | minor | §13: the Analysis ToolPak has all 19 of Excel's tools (two-factor Anova with and without replication, z-Test, Fourier Analysis, Random Number Generation, Sampling); its chart output remains. The stale "`data.solver`, `data.analysisToolPak` missing" and "no Forecast Start" sentences removed |
+| 2026-11-01 | minor | §4: chart data tables implemented for column, bar, line, area and compatible combo charts, with legend keys and border settings, live source values, XLSX round-trip and print/PDF; other chart gaps remain. |
+| 2026-10-31 | minor | §13: Solver Options (Max Evaluations, Integer Optimality and the Evolutionary options), saved with the model |
+| 2026-10-31 | minor | §13: Solver Load/Save Model (`data.solverSaveModel`, `data.solverLoadModel`) and Reset All (`data.solverReset`), with buttons in the Solver Parameters dialog |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-24 | trivial | Docs: review fixes: §4 says per-series formatting covers colour, smoothing and trendlines |
-| 2026-10-24 | trivial | Docs: §4 (chart PRs #158 and #161 are merged; charts resize from their corner handle, so that is no longer missing), §9 (key tips cover every ribbon tab; estimate from ui-parity's remaining work), §15 (one count, 18 missing and 9 stubs, as function-parity.md has it), §19 (`.xltx` saves with its template type) refreshed; duplicate text removed |
+| 2026-10-24 | trivial | Docs: §4 (chart PRs #158 and #161 are merged; charts resize from their corner handle, so that is no longer missing), §9 (key tips cover permanent ribbon tabs; contextual tabs remain unbound; estimate from ui-parity's remaining work), §15 (one count, 18 missing and 9 stubs, as function-parity.md has it), §19 (`.xltx` saves with its template type) refreshed; duplicate text removed |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-22 | minor | §20: a native window per workbook window, New Window on the same workbook and Arrange All on the desktop; left: Arrange All across monitors, the web's one window, pen pressure (estimate 10–14 h → 5–8 h) |
 | 2026-10-20 | minor | §11: the Japanese catalog covers the dialogs, messages and menus — 943 keys (~43%), matching the pt-BR coverage; a test keeps the two catalogs in step |

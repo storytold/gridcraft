@@ -1,4 +1,4 @@
-use super::*;
+use super::{CellError, HashMap, MONTHS, Ordering, PivotDateGroup, PivotField, PivotFunc, PivotSort, Source, Value, Workbook, datetime_from_serial};
 
 // ---------------------------------------------------------------- items
 
@@ -197,7 +197,8 @@ impl Acc {
     }
 }
 
-/// Excel's caption verb for a function ("Sum of Sales").
+/// Excel's caption verb for a function ("Sum of Sales"). Count Numbers is captioned "Count of
+/// Sales", as Excel names it and as the XLSX reader names a value field saved without a name.
 pub fn func_caption(f: PivotFunc) -> &'static str {
     match f {
         PivotFunc::Sum => "Sum",
@@ -206,7 +207,7 @@ pub fn func_caption(f: PivotFunc) -> &'static str {
         PivotFunc::Max => "Max",
         PivotFunc::Min => "Min",
         PivotFunc::Product => "Product",
-        PivotFunc::CountNumbers => "Count Numbers",
+        PivotFunc::CountNumbers => "Count",
         PivotFunc::StdDev => "StdDev",
         PivotFunc::StdDevP => "StdDevp",
         PivotFunc::Var => "Var",
