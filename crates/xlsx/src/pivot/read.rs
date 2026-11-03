@@ -138,7 +138,10 @@ fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn>
     if x.child("calculatedItems").is_some() {
         cx.warn("calculated items in a PivotTable are not supported");
     }
-    Some(CacheIn { source, fields, refresh_on_load: x.flag("refreshOnLoad", false), lossy: cx.warned > warned })
+    // GridCraft writes `refreshOnLoad` for other readers (its cache can omit the records) along
+    // with the report cells it just computed: reading its own file back, those cells are current.
+    let own = x.attr("refreshedBy") == Some(crate::pivot::REFRESHED_BY);
+    Some(CacheIn { source, fields, refresh_on_load: x.flag("refreshOnLoad", false) && !own, lossy: cx.warned > warned })
 }
 
 /// Reads the PivotTables related to a worksheet part.

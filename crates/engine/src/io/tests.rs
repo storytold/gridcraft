@@ -760,6 +760,9 @@ fn sylk_survives_huge_relative_offsets_and_width_floods() {
     flood.extend_from_slice(b"C;Y1;X1;K1\nE\n");
     let (wb, _) = open_bytes("widths.slk", &flood).unwrap();
     assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::Number(1.0));
+}
+
+#[test]
 fn pivots_that_ask_for_a_refresh_on_open_are_rebuilt() {
     // #2113: a file saved without its report cells (`saveData="0"`, `refreshOnLoad="1"`) opened
     // with an empty report; Excel rebuilds it from the source.
@@ -774,7 +777,7 @@ fn pivots_that_ask_for_a_refresh_on_open_are_rebuilt() {
     let report = sh.pivots.first().and_then(|pt| pt.last_range).unwrap();
     sh.take_cells(report);
     assert_eq!(sh.value(CellRef::parse("E6").unwrap()), gridcraft_core::Value::Empty);
-    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let bytes = from_another_app(&gridcraft_xlsx::write_xlsx(&wb).unwrap());
     let (back, warnings) = open_bytes("report.xlsx", &bytes).unwrap();
     assert!(warnings.iter().all(|w| !w.contains("PivotTable")), "{warnings:?}");
     let sh = back.sheet(0).unwrap();
@@ -785,6 +788,18 @@ fn pivots_that_ask_for_a_refresh_on_open_are_rebuilt() {
 
 /// `bytes` with every PivotTable definition part passed through `edit`.
 fn edit_pivot_tables(bytes: &[u8], edit: impl Fn(&str) -> String) -> Vec<u8> {
+    edit_parts(bytes, "xl/pivotTables/pivotTable", edit)
+}
+
+/// `bytes` as another app would have saved them: GridCraft doesn't rebuild the PivotTables of a
+/// file it refreshed itself (its report cells are current), so these tests mark the caches as
+/// refreshed elsewhere.
+fn from_another_app(bytes: &[u8]) -> Vec<u8> {
+    edit_parts(bytes, "xl/pivotCache/pivotCacheDefinition", |xml| xml.replace(r#"refreshedBy="GridCraft""#, r#"refreshedBy="Another app""#))
+}
+
+/// `bytes` with every part whose name starts with `prefix` passed through `edit`.
+fn edit_parts(bytes: &[u8], prefix: &str, edit: impl Fn(&str) -> String) -> Vec<u8> {
     use std::io::{Read, Write};
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
     let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -793,7 +808,7 @@ fn edit_pivot_tables(bytes: &[u8], edit: impl Fn(&str) -> String) -> Vec<u8> {
         let name = f.name().to_string();
         let mut data = Vec::new();
         f.read_to_end(&mut data).unwrap();
-        if name.starts_with("xl/pivotTables/pivotTable") {
+        if name.starts_with(prefix) {
             data = edit(&String::from_utf8(data).unwrap()).into_bytes();
         }
         out.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
@@ -826,9 +841,9 @@ fn refresh_on_open_keeps_cells_above_wrapped_report_filters() {
     for attr in [r#" pageOverThenDown="1""#, r#" pageWrap="1""#] {
         let mut wb = open_bytes("report.xlsx", &bytes).unwrap().0;
         wb.sheet_mut(0).unwrap().set_value(top, gridcraft_core::Value::text("Keep"));
-        let saved = edit_pivot_tables(&gridcraft_xlsx::write_xlsx(&wb).unwrap(), |xml| {
+        let saved = from_another_app(&edit_pivot_tables(&gridcraft_xlsx::write_xlsx(&wb).unwrap(), |xml| {
             xml.replacen("<pivotTableDefinition ", &format!("<pivotTableDefinition{attr} "), 1)
-        });
+        }));
         let (back, warnings) = open_bytes("report.xlsx", &saved).unwrap();
         assert_eq!(back.sheet(0).unwrap().value(top).display(), "Keep", "{attr}");
         assert!(warnings.iter().any(|w| w.contains("couldn't be refreshed on open")), "{attr}: {warnings:?}");
@@ -844,9 +859,9 @@ fn refresh_on_open_skips_pivots_with_filters_it_cannot_read() {
     let sales = wb.sheet(0).unwrap().pivots.first().and_then(|pt| pt.last_range).unwrap().end;
     wb.sheet_mut(0).unwrap().set_value(sales, gridcraft_core::Value::Number(99.0));
     let filter = r#"<filters count="1"><filter fld="0" type="captionEqual" evalOrder="-1" id="1"><autoFilter ref="A1"><filterColumn colId="0"><customFilters><customFilter val="East"/></customFilters></filterColumn></autoFilter></filter></filters>"#;
-    let saved = edit_pivot_tables(&gridcraft_xlsx::write_xlsx(&wb).unwrap(), |xml| {
+    let saved = from_another_app(&edit_pivot_tables(&gridcraft_xlsx::write_xlsx(&wb).unwrap(), |xml| {
         xml.replacen("</pivotTableDefinition>", &format!("{filter}</pivotTableDefinition>"), 1)
-    });
+    }));
     let (back, warnings) = open_bytes("report.xlsx", &saved).unwrap();
     let sh = back.sheet(0).unwrap();
     assert_eq!(sh.value(sales), gridcraft_core::Value::Number(99.0), "the saved report stays");
@@ -869,7 +884,63 @@ fn refresh_on_open_keeps_cells_beside_a_report_filter() {
     let top = wb.sheet(0).and_then(|sh| sh.pivots.first()).and_then(|pt| pt.last_range).unwrap().start;
     let beside = CellRef::new(top.row, top.col + 2);
     wb.sheet_mut(0).unwrap().set_value(beside, gridcraft_core::Value::text("Keep"));
-    let (back, warnings) = open_bytes("report.xlsx", &gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
+    let (back, warnings) = open_bytes("report.xlsx", &from_another_app(&gridcraft_xlsx::write_xlsx(&wb).unwrap())).unwrap();
     assert_eq!(back.sheet(0).unwrap().value(beside).display(), "Keep");
     assert!(warnings.iter().any(|w| w.contains("couldn't be refreshed on open")), "{warnings:?}");
+}
+
+#[test]
+fn pivots_gridcraft_refreshed_are_not_rebuilt_on_open() {
+    // GridCraft writes `refreshOnLoad="1"` for other readers, with the report cells it has just
+    // computed: reading its own file, it keeps them instead of rebuilding every PivotTable.
+    let mut s = crate::Session::new();
+    s.new_workbook();
+    let rows = serde_json::json!([["Region", "Sales"], ["East", 10], ["West", 20]]);
+    s.execute("range.setValues", serde_json::json!({"range": "A1", "values": rows})).unwrap();
+    let p = serde_json::json!({"source": "Sheet1!$A$1:$B$3", "destination": "Sheet1!D3", "rows": ["Region"], "values": ["Sales"]});
+    s.execute("insert.pivotTable", p).unwrap();
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    let report = wb.sheet(0).and_then(|sh| sh.pivots.first()).and_then(|pt| pt.last_range).unwrap();
+    // Cells that differ from what a rebuild would write show whether it ran.
+    wb.sheet_mut(0).unwrap().set_value(report.end, gridcraft_core::Value::Number(99.0));
+    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let (back, warnings) = open_bytes("report.xlsx", &bytes).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let sh = back.sheet(0).unwrap();
+    assert_eq!(sh.value(report.end), gridcraft_core::Value::Number(99.0), "not rebuilt");
+    assert!(sh.pivots.first().is_some_and(|pt| !pt.refresh_on_load));
+    // The same file from another app is rebuilt.
+    let (back, _) = open_bytes("report.xlsx", &from_another_app(&bytes)).unwrap();
+    assert_eq!(back.sheet(0).unwrap().value(report.end), gridcraft_core::Value::Number(30.0), "rebuilt");
+}
+
+#[test]
+fn refresh_on_open_stops_after_the_cap() {
+    // Each rebuild recomputes over its whole source: past the cap the rest keep their stored cells,
+    // with one warning for all of them.
+    let mut s = crate::Session::new();
+    s.new_workbook();
+    let rows = serde_json::json!([["Region", "Sales"], ["East", 10], ["West", 20]]);
+    s.execute("range.setValues", serde_json::json!({"range": "A1", "values": rows})).unwrap();
+    let n = MAX_PIVOT_REFRESHES_ON_OPEN + 2;
+    for i in 0..n {
+        let p = serde_json::json!({"source": "Sheet1!$A$1:$B$3", "destination": format!("Sheet1!D{}", 3 + i * 6), "rows": ["Region"], "values": ["Sales"]});
+        s.execute("insert.pivotTable", p).unwrap();
+    }
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    let sh = wb.sheet_mut(0).unwrap();
+    let reports: Vec<RangeRef> = sh.pivots.iter().filter_map(|pt| pt.last_range).collect();
+    assert_eq!(reports.len(), n);
+    for pt in &mut sh.pivots {
+        pt.refresh_on_load = true;
+    }
+    for r in &reports {
+        sh.take_cells(*r);
+    }
+    let warnings = refresh_pivots_on_load(&mut wb);
+    let sh = wb.sheet(0).unwrap();
+    let rebuilt = reports.iter().filter(|r| sh.cells.iter_range(**r).next().is_some()).count();
+    assert_eq!(rebuilt, MAX_PIVOT_REFRESHES_ON_OPEN);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].starts_with("2 more PivotTables"), "{warnings:?}");
 }
