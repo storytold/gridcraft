@@ -1348,6 +1348,23 @@ fn large_bounded_references_keep_their_shape() {
 }
 
 #[test]
+fn bounded_reference_size_limit_is_inclusive() {
+    // Excel reports the original shapes for both ranges. GridCraft preserves bounded references
+    // through 1,048,576 cells and trims larger ones to the used range to cap materialization.
+    // A1 holds the formula, so both references start at row 2 and trim to one cell when oversized.
+    for (formula, want) in [
+        ("=ROWS(A2:AMJ1025*1)", 1_024.0), // 1,024 × 1,024 = 1,048,576.
+        ("=COLUMNS(A2:AMJ1025*1)", 1_024.0),
+        ("=ROWS(A2:Q61682*1)", 1.0), // 61,681 × 17 = 1,048,577, trimmed to one row.
+        ("=COLUMNS(A2:Q61682*1)", 1.0),
+    ] {
+        let mut t = T::new();
+        t.set("A1", formula);
+        assert_eq!(t.num("A1"), want, "{formula}");
+    }
+}
+
+#[test]
 fn median_large_values_recalculate_dependents() {
     let mut t = T::new();
     t.set("A1", "1e308");
