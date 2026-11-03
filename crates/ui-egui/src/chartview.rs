@@ -4,7 +4,8 @@
 use egui::epaint::{PathShape, PathStroke};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
 use gridcraft_chart::{HAlign, Prim, VAlign};
-use gridcraft_engine::model::{Anchor, ObjKind, ObjRef, ShapeKind, Sheet, Workbook};
+use gridcraft_engine::core::{CellRef, RangeRef};
+use gridcraft_engine::model::{Anchor, Chart, ChartKind, ObjKind, ObjRef, ShapeKind, Sheet, Workbook};
 
 use crate::SheetApp;
 use crate::grid::Geo;
@@ -259,10 +260,106 @@ pub(crate) fn objects_hidden(wb: &Workbook) -> bool {
     wb.show_objects == gridcraft_engine::model::ShowObjects::None
 }
 
+/// What the pointer was over in a chart at the last paint: the chart id and its data points.
+/// A click on the chart reads it.
+fn hover_key() -> egui::Id {
+    egui::Id::unique("gridcraft.chart_hover")
+}
+
+/// The data points of chart `id` under the pointer at the last paint.
+pub(crate) fn hovered_points(ctx: &egui::Context, id: u32) -> Option<Vec<usize>> {
+    ctx.data(|d| d.get_temp::<(u32, Vec<usize>)>(hover_key())).filter(|(c, _)| *c == id).map(|(_, p)| p)
+}
+
+/// A chart reference on sheet `sh` → its range.
+fn ref_on(sh: &Sheet, f: &str) -> Option<RangeRef> {
+    match gridcraft_engine::formula::parse(f) {
+        Ok(gridcraft_engine::formula::Expr::Ref(rf)) if rf.sheet_name().is_none_or(|n| n.eq_ignore_ascii_case(&sh.name)) => Some(rf.range()),
+        _ => None,
+    }
+}
+
+/// The cells behind data point `j` of a Sankey chart: row `j` of its Source | Target | Value
+/// block, when that block is on `sh`.
+fn point_row(ch: &Chart, sh: &Sheet, j: usize) -> Option<RangeRef> {
+    let s = ch.series.first()?;
+    let vals = ref_on(sh, &s.values)?;
+    let cats = s.categories.as_deref().and_then(|c| ref_on(sh, c)).unwrap_or(vals);
+    let row = vals.start.row.checked_add(u32::try_from(j).ok()?)?;
+    (row <= vals.end.row)
+        .then(|| RangeRef::new(CellRef::new(row, cats.start.col.min(vals.start.col)), CellRef::new(row, cats.end.col.max(vals.end.col))))
+}
+
+/// A Sankey chart's live state for this frame: the points to emphasise (hovered, else
+/// clicked, else the row of the active cell) and what the pointer is over.
+struct ChartFocus {
+    id: u32,
+    points: Vec<usize>,
+    hit: Option<(gridcraft_chart::Hit, Pos2)>,
+}
+
+fn sankey_focus(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet, ch: &Chart) -> ChartFocus {
+    let r = anchor_rect(geo, sh, &ch.anchor);
+    let pointer =
+        p.ctx().pointer_hover_pos().filter(|pos| r.contains(*pos) && p.clip_rect().contains(*pos) && p.ctx().layer_id_at(*pos) == Some(p.layer_id()));
+    let hit = pointer.and_then(|pos| {
+        let data = gridcraft_chart::resolve(wb, si, ch);
+        let m = EguiMeasure { painter: p, z: geo.z };
+        let probe = [(pos.x - r.min.x) / geo.z, (pos.y - r.min.y) / geo.z];
+        gridcraft_chart::render_interactive(ch, &data, ch.anchor.width, ch.anchor.height, &m, &[], Some(probe)).1.map(|h| (h, pos))
+    });
+    let clicked = app.chart_focus.as_ref().filter(|(id, _)| *id == ch.id && app.selected_chart() == Some(ch.id)).map(|(_, pts)| pts.clone());
+    let from_cell = || {
+        let active = app.session.active().map(|d| d.selection.active)?;
+        let n = ch.series.first().and_then(|s| ref_on(sh, &s.values)).map_or(0, |v| v.height() as usize);
+        (0..n).find(|j| point_row(ch, sh, *j).is_some_and(|row| row.contains(active))).map(|j| vec![j])
+    };
+    let points = hit.as_ref().map(|(h, _)| h.points.clone()).or(clicked).or_else(from_cell).unwrap_or_default();
+    ChartFocus { id: ch.id, points, hit }
+}
+
+/// A small label box at the pointer.
+fn paint_tip(p: &Painter, at: Pos2, text: &str) {
+    let t = Tokens::get(p.ctx());
+    let galley = p.layout_no_wrap(text.to_string(), FontId::proportional(12.0), t.text);
+    let r = Rect::from_min_size(at + vec2(14.0, 18.0), galley.size() + vec2(12.0, 8.0));
+    p.rect_filled(r.translate(vec2(0.0, 1.0)), 4.0, t.shadow);
+    p.rect_filled(r, 4.0, t.menu_bg);
+    p.rect_stroke(r, 4.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
+    p.galley(r.min + vec2(6.0, 4.0), galley, t.text);
+}
+
 pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) -> Vec<PaintedObject> {
     let mut painted = Vec::new();
     if objects_hidden(wb) {
         return painted;
+    }
+    let focus: Vec<ChartFocus> = sh
+        .charts
+        .iter()
+        .filter(|ch| ch.kind == ChartKind::Sankey && anchor_rect(geo, sh, &ch.anchor).intersects(p.clip_rect()))
+        .map(|ch| sankey_focus(app, p, geo, wb, si, sh, ch))
+        .collect();
+    let hovered = focus.iter().find_map(|f| f.hit.as_ref().map(|(h, _)| (f.id, h.points.clone())));
+    p.ctx().data_mut(|d| {
+        if let Some(h) = hovered {
+            d.insert_temp(hover_key(), h);
+        } else {
+            d.remove::<(u32, Vec<usize>)>(hover_key());
+        }
+    });
+    // The source rows of emphasised Sankey flows light up, beneath every floating object.
+    let tint = Tokens::get(p.ctx()).ref_color(1, true);
+    for f in &focus {
+        let Some(ch) = sh.charts.iter().find(|c| c.id == f.id) else { continue };
+        for row in f.points.iter().filter_map(|j| point_row(ch, sh, *j)) {
+            let rr = geo.range_rect(sh, row);
+            for pane in geo.range_panes(row) {
+                let pp = p.with_clip_rect(pane.intersect(p.clip_rect()));
+                pp.rect_filled(rr, 0.0, tint.gamma_multiply(0.18));
+                pp.rect_stroke(rr, 0.0, Stroke::new(1.5, tint), StrokeKind::Inside);
+            }
+        }
     }
     // Source outlines stay in cell space beneath every floating object.
     if let Some(ch) = sh.charts.iter().find(|ch| app.selected_chart() == Some(ch.id))
@@ -375,8 +472,13 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         p.rect_filled(r, 0.0, Tokens::get(p.ctx()).grid_bg);
         let data = gridcraft_chart::resolve(wb, si, ch);
         let m = EguiMeasure { painter: p, z: geo.z };
-        let prims = gridcraft_chart::render(ch, &data, ch.anchor.width, ch.anchor.height, &m);
+        let f = focus.iter().find(|f| f.id == ch.id);
+        let points = f.map_or(&[][..], |f| f.points.as_slice());
+        let (prims, _) = gridcraft_chart::render_interactive(ch, &data, ch.anchor.width, ch.anchor.height, &m, points, None);
         paint_prims(&p.with_clip_rect(r.intersect(p.clip_rect())), r.min, &prims, geo.z);
+        if let Some((hit, at)) = f.and_then(|f| f.hit.as_ref()) {
+            paint_tip(p, *at, &hit.label);
+        }
         done(start, r);
     }
     paint_slicers(p, geo, wb, si, sh);

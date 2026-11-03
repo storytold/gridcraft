@@ -132,6 +132,10 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
             && let Some((obj, _)) = on_handle.map(|(o, r, _)| (o, r)).or_else(|| crate::chartview::hit(app, geo, sh, p))
         {
             app.selected_object = Some(obj);
+            // A click on a Sankey flow or node pins its emphasis; elsewhere on the chart clears it.
+            if primary_clicked && obj.kind == ObjKind::Chart {
+                app.chart_focus = crate::chartview::hovered_points(ui.ctx(), obj.id).map(|pts| (obj.id, pts));
+            }
             if resp.double_clicked() && app.open_object(obj) != crate::objects::OpenAction::Select {
                 return;
             }

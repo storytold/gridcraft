@@ -270,6 +270,9 @@ pub struct SheetApp {
     pub(crate) capture_geometry_from_raw: bool,
     /// The floating object selected on the sheet (chart, picture, shape, equation or slicer).
     pub selected_object: Option<gridcraft_engine::model::ObjRef>,
+    /// A clicked Sankey flow or node: the chart id and its data points, emphasised while that
+    /// chart stays selected.
+    pub chart_focus: Option<(u32, Vec<usize>)>,
     /// The system clipboard's text when GridCraft last copied without publishing to it (a
     /// control-channel or MCP `edit.copy`/`edit.cut`). While the system clipboard still holds this
     /// text, GridCraft's copy is the newer one and Paste uses it.

@@ -72,7 +72,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Insert Chart",
             ["Insert", "Charts"],
             None,
-            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers, title?, at?: \"H2\", width?, height?}",
+            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock|sankey, subtype?: clustered|stacked|stacked100|markers, title?, at?: \"H2\", width?, height?}",
             has_doc,
             insert_chart
         ),
@@ -630,6 +630,7 @@ pub fn chart_kind(t: &str, sub: &str) -> ChartKind {
         ("boxWhisker", _) => ChartKind::BoxWhisker,
         ("stock", _) => ChartKind::Stock,
         ("combo", _) => ChartKind::Combo,
+        ("sankey", _) => ChartKind::Sankey,
         _ => ChartKind::ColumnClustered,
     }
 }
@@ -692,6 +693,27 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
         }
     }
     out
+}
+
+/// The one series of a Sankey chart from a Source | Target | Value block: the first two
+/// columns are its two category levels, the last column its values. A text cell above the
+/// values marks a header row, which names the series.
+fn sankey_series(sh: &Sheet, r: RangeRef) -> Result<Series> {
+    if r.width() < 3 {
+        return Err(EngineError::Other("A Sankey chart needs Source, Target and Value columns.".into()));
+    }
+    let q = gridcraft_formula::quote_sheet(&sh.name);
+    let abs = |a: CellRef, b: CellRef| {
+        format!("{q}!${}${}:${}${}", gridcraft_core::col_to_letters(a.col), a.row + 1, gridcraft_core::col_to_letters(b.col), b.row + 1)
+    };
+    let header = r.height() > 1 && sh.value(CellRef::new(r.start.row, r.end.col)).is_text();
+    let top = r.start.row + header as u32;
+    Ok(Series {
+        name: header.then(|| format!("{q}!${}${}", gridcraft_core::col_to_letters(r.end.col), r.start.row + 1)),
+        categories: Some(abs(CellRef::new(top, r.start.col), CellRef::new(r.end.row, r.start.col + 1))),
+        values: abs(CellRef::new(top, r.end.col), r.end),
+        ..Default::default()
+    })
 }
 
 fn series_from_areas(sh: &Sheet, areas: &[RangeRef]) -> Result<(RangeRef, bool, Vec<Series>)> {
@@ -823,6 +845,9 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         return Err(EngineError::Other("Select data for the chart first.".into()));
     }
     scatter_x_from_first(kind, &mut series);
+    if kind == ChartKind::Sankey {
+        series = vec![sankey_series(sh, bounds)?];
+    }
     let id = d.wb.next_object_id();
     let at = cell_param_on(s, p, "at", sheet)?.unwrap_or_else(|| CellRef::new(bounds.start.row, bounds.end.col + 2));
     let title = str_param(p, "title").map(str::to_string).or_else(|| {
@@ -845,10 +870,17 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         },
         title,
         series,
-        legend: if matches!(kind, ChartKind::Pie | ChartKind::Doughnut) { LegendPos::Right } else { LegendPos::Bottom },
+        legend: match kind {
+            ChartKind::Pie | ChartKind::Doughnut => LegendPos::Right,
+            ChartKind::Sankey => LegendPos::None,
+            _ => LegendPos::Bottom,
+        },
         data_labels: false,
         data_table: None,
-        gridlines: !matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel),
+        gridlines: !matches!(
+            kind,
+            ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel | ChartKind::Sankey
+        ),
         style: 1,
         x_title: None,
         y_title: None,

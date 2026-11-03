@@ -131,6 +131,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
                         ("Sunburst", "sunburst", ""),
                         ("Waterfall", "waterfall", ""),
                         ("Funnel", "funnel", ""),
+                        ("Sankey", "sankey", ""),
                         ("Radar", "radar", ""),
                         ("Stock", "stock", ""),
                         ("Combo", "combo", ""),

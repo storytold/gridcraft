@@ -46,7 +46,7 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
             let n = first_len(data).min(MAX_CATS);
             (0..n).map(|j| (cat_label(data, j), point_color(data, j), Swatch::Box)).collect()
         }
-        ChartKind::Histogram | ChartKind::Funnel | ChartKind::Stock => vec![],
+        ChartKind::Histogram | ChartKind::Funnel | ChartKind::Stock | ChartKind::Sankey => vec![],
         ChartKind::Waterfall => {
             if data.series.is_empty() {
                 return vec![];

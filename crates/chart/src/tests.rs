@@ -7,7 +7,7 @@ use crate::*;
 
 mod data_table;
 
-const ALL_KINDS: [ChartKind; 26] = [
+const ALL_KINDS: [ChartKind; 27] = [
     ChartKind::ColumnClustered,
     ChartKind::ColumnStacked,
     ChartKind::ColumnStacked100,
@@ -34,6 +34,7 @@ const ALL_KINDS: [ChartKind; 26] = [
     ChartKind::BoxWhisker,
     ChartKind::Stock,
     ChartKind::Combo,
+    ChartKind::Sankey,
 ];
 
 fn chart(kind: ChartKind) -> Chart {
@@ -77,8 +78,10 @@ fn sample(kind: ChartKind) -> ChartData {
     let k1 = if kind == ChartKind::Combo { ChartKind::ColumnClustered } else { kind };
     let mut b = series("East", &[38000.0, 30000.0, 45000.0, 61870.0, 52000.0, 41000.0], [200, 80, 40, 255], k2);
     b.secondary = kind == ChartKind::Combo;
+    // A Sankey reads its flows' sources from the outer category level.
+    let sources = ["Plan", "Plan", "Q1", "Q2", "Q2", "Q3"];
     ChartData {
-        category_levels: vec![],
+        category_levels: if kind == ChartKind::Sankey { vec![sources.iter().map(ToString::to_string).collect()] } else { vec![] },
         palette: vec![],
         categories: cats.iter().map(ToString::to_string).collect(),
         series: vec![
@@ -1003,6 +1006,57 @@ fn box_and_stock_charts_honour_the_gridlines_flag() {
         assert!(grids(&on) > 0, "{kind:?}: gridlines on must draw lines");
         assert_eq!(grids(&off), 0, "{kind:?}: gridlines off must hide them");
     }
+}
+
+#[test]
+fn sankey_draws_a_band_per_flow_and_a_label_per_node() {
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        for (r, (from, to, v)) in
+            [("Solar", "Grid", 40.0), ("Wind", "Grid", 60.0), ("Grid", "Homes", 70.0), ("Grid", "Industry", 30.0), ("Grid", "Grid", 5.0)]
+                .iter()
+                .enumerate()
+        {
+            s.set_value(CellRef::new(r as u32, 0), Value::from(*from));
+            s.set_value(CellRef::new(r as u32, 1), Value::from(*to));
+            s.set_value(CellRef::new(r as u32, 2), Value::Number(*v));
+        }
+    }
+    let mut c = chart(ChartKind::Sankey);
+    c.series = vec![Series { categories: Some("Sheet1!$A$1:$B$5".into()), values: "Sheet1!$C$1:$C$5".into(), ..Default::default() }];
+    let d = resolve(&wb, 0, &c);
+    let prims = render(&c, &d, 500.0, 350.0, &ApproxMeasure);
+    let bands = prims.iter().filter(|p| matches!(p, Prim::Polygon { .. })).count();
+    assert_eq!(bands, 4, "the self-loop is skipped");
+    let t = texts(&prims);
+    for node in ["Solar 40", "Wind 60", "Grid 100", "Homes 70", "Industry 30"] {
+        assert!(t.contains(&node), "{node} missing from {t:?}");
+    }
+
+    // Probing the chart finds flows and nodes, each with the source rows behind it.
+    let mut hits = Vec::new();
+    for gx in 0..100 {
+        for gy in 0..70 {
+            let probe = Some([gx as f32 * 5.0, gy as f32 * 5.0]);
+            if let (_, Some(h)) = render_interactive(&c, &d, 500.0, 350.0, &ApproxMeasure, &[], probe)
+                && !hits.contains(&h)
+            {
+                hits.push(h);
+            }
+        }
+    }
+    let found = |label: &str| hits.iter().find(|h| h.label == label).map(|h| h.points.clone());
+    assert_eq!(found("Solar \u{2192} Grid: 40"), Some(vec![0]), "{hits:?}");
+    assert_eq!(found("Grid \u{2192} Industry: 30"), Some(vec![3]));
+    assert_eq!(found("Grid: 100"), Some(vec![0, 1, 2, 3]));
+    assert_eq!(found("Solar: 40"), Some(vec![0]));
+
+    // A focused flow stands out; the others fade.
+    let (prims, _) = render_interactive(&c, &d, 500.0, 350.0, &ApproxMeasure, &[1], None);
+    let alphas: Vec<u8> = prims.iter().filter_map(|p| if let Prim::Polygon { fill, .. } = p { Some(fill[3]) } else { None }).collect();
+    assert_eq!(alphas.iter().filter(|a| **a > 0x80).count(), 1, "{alphas:?}");
+    assert_eq!(alphas.last().map(|a| *a > 0x80), Some(true), "the focused band is drawn last");
 }
 
 #[test]
