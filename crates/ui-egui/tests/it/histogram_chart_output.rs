@@ -2,6 +2,7 @@ use egui_kittest::kittest::Queryable;
 use gridcraft_engine::model::ChartKind;
 use serde_json::json;
 
+/// Exercise the Histogram form from its opt-in default through a cumulative Pareto chart.
 #[test]
 fn histogram_chart_output_checkbox_creates_the_report_and_chart() {
     let mut s = crate::support::blank_session();

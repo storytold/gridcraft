@@ -635,8 +635,8 @@ pub fn chart_kind(t: &str, sub: &str) -> ChartKind {
 }
 
 /// Recognize a ToolPak histogram block by its layout and numeric report columns. Bin labels
-/// are editable, including Pareto's reordered overflow bin, so their text isn't a marker.
-fn histogram_report(sh: &Sheet, r: RangeRef) -> bool {
+/// are editable; blanks in value columns are allowed only for an already linked chart.
+fn histogram_report(sh: &Sheet, r: RangeRef, linked: bool) -> bool {
     if r.height() < 3 || !matches!(r.width(), 2 | 3) {
         return false;
     }
@@ -645,14 +645,56 @@ fn histogram_report(sh: &Sheet, r: RangeRef) -> bool {
         && header(r.start.col + 1).as_text() == Some("Frequency")
         && (r.width() == 2 || header(r.start.col + 2).as_text() == Some("Cumulative %"))
         && (r.start.row + 1..=r.end.row).all(|row| {
-            sh.value(CellRef::new(row, r.start.col + 1)).as_f64().is_some_and(|n| n.is_finite() && n >= 0.0)
+            let frequency = sh.value(CellRef::new(row, r.start.col + 1));
+            let cumulative = sh.value(CellRef::new(row, r.end.col));
+            ((linked && frequency.is_empty()) || frequency.as_f64().is_some_and(|n| n.is_finite() && n >= 0.0))
                 && (r.width() == 2
-                    || sh.value(CellRef::new(row, r.start.col + 2)).as_f64().is_some_and(|n| n.is_finite() && (0.0..=1.0).contains(&n)))
+                    || (linked && cumulative.is_empty())
+                    || cumulative.as_f64().is_some_and(|n| n.is_finite() && (0.0..=1.0).contains(&n)))
         })
+}
+
+/// Verify existing series reference precisely the report's header, category and value cells
+/// in their current orientation. A source rectangle alone is not evidence of this linkage.
+fn report_series_linked(sh: &Sheet, r: RangeRef, series: &[Series], by_rows: bool) -> bool {
+    if r.height() < 3 || !matches!(r.width(), 2 | 3) {
+        return false;
+    }
+    let indexes = if by_rows { r.start.row + 1..=r.end.row } else { r.start.col + 1..=r.end.col };
+    if series.len() != (if by_rows { r.height() - 1 } else { r.width() - 1 }) as usize {
+        return false;
+    }
+    let reference = |formula: Option<&str>, range: RangeRef| {
+        let Some(Ok(gridcraft_formula::Expr::Ref(rf))) = formula.map(gridcraft_formula::parse) else { return false };
+        matches!(&rf.sheet, gridcraft_formula::SheetSel::Named(name) if name.eq_ignore_ascii_case(&sh.name)) && rf.range() == range
+    };
+    indexes.zip(series).all(|(i, se)| {
+        let (name, categories, values) = if by_rows {
+            (
+                CellRef::new(i, r.start.col),
+                RangeRef::new(CellRef::new(r.start.row, r.start.col + 1), CellRef::new(r.start.row, r.end.col)),
+                RangeRef::new(CellRef::new(i, r.start.col + 1), CellRef::new(i, r.end.col)),
+            )
+        } else {
+            (
+                CellRef::new(r.start.row, i),
+                RangeRef::new(CellRef::new(r.start.row + 1, r.start.col), CellRef::new(r.end.row, r.start.col)),
+                RangeRef::new(CellRef::new(r.start.row + 1, i), CellRef::new(r.end.row, i)),
+            )
+        };
+        reference(se.name.as_deref(), RangeRef::new(name, name))
+            && reference(se.categories.as_deref(), categories)
+            && reference(Some(&se.values), values)
+    })
 }
 
 /// Builds series from a block: first row/column as names/categories when they're text.
 pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> {
+    series_from_range_with_labels(sh, r, by_rows, histogram_report(sh, r, false))
+}
+
+/// Rebuild series with an established category column even when report values are blank.
+fn series_from_range_with_labels(sh: &Sheet, r: RangeRef, by_rows: bool, category_column: bool) -> Vec<Series> {
     let q = gridcraft_formula::quote_sheet(&sh.name);
     let abs = |r: RangeRef| {
         format!(
@@ -673,9 +715,7 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
     // plotted as a series of its own (#287).
     let blank_corner = header_row && sh.value(r.start).is_empty();
     let label_col = r.width() > 1
-        && (blank_corner
-            || histogram_report(sh, r)
-            || (r.start.row + header_row as u32..=r.end.row).all(|row| is_text(CellRef::new(row, r.start.col))));
+        && (blank_corner || category_column || (r.start.row + header_row as u32..=r.end.row).all(|row| is_text(CellRef::new(row, r.start.col))));
     let data = RangeRef::new(CellRef::new(r.start.row + header_row as u32, r.start.col + label_col as u32), r.end);
     let mut out = Vec::new();
     if !by_rows {
@@ -998,6 +1038,7 @@ pub(super) fn update_data_table(c: &mut Chart, p: &Json, on: Option<bool>) -> Re
     Ok(())
 }
 
+/// Transpose linked chart data, retaining histogram categories and refusing unsupported series counts.
 fn chart_switch(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, ci) = find_chart(s, p)?;
     edit(s, |cx| {
@@ -1018,15 +1059,24 @@ fn chart_switch(s: &mut Session, p: &Json) -> Result<Json> {
         if r.count() > MAX_CHART_CELLS {
             return Err(bad("chart.switchRowColumn", "range too large for a chart"));
         }
+        let histogram = histogram_report(ssh, r, report_series_linked(ssh, r, &c.series, by_rows));
+        if !by_rows && c.kind == ChartKind::Combo && histogram {
+            let standard = matches!(c.series.as_slice(), [frequency, cumulative] if !frequency.secondary && cumulative.secondary)
+                && gridcraft_chart::series_plot_kind(c, 0) == ChartKind::ColumnClustered
+                && gridcraft_chart::series_plot_kind(c, 1) == ChartKind::Line;
+            if !standard {
+                return Err(bad("chart.switchRowColumn", "switching this histogram combo's custom series kinds or axes is not supported"));
+            }
+        }
         let by_rows = !by_rows;
-        let mut series = series_from_range(ssh, r, by_rows);
+        let mut series = series_from_range_with_labels(ssh, r, by_rows, histogram);
         scatter_x_from_first(c.kind, &mut series);
         if series.len() > MAX_CHART_SERIES {
             return Err(bad("chart.switchRowColumn", "a chart supports at most 255 series"));
         }
         // Returning to the ToolPak report's columns must also restore its combo layout;
         // otherwise the cumulative percentages become another primary-axis series.
-        if !by_rows && matches!(c.kind, ChartKind::ColumnClustered | ChartKind::Combo) && histogram_report(ssh, r) {
+        if !by_rows && matches!(c.kind, ChartKind::ColumnClustered | ChartKind::Combo) && histogram {
             let cumulative = c.kind == ChartKind::Combo && series.len() == 2;
             for (i, se) in series.iter_mut().enumerate() {
                 let line = cumulative && i == 1;

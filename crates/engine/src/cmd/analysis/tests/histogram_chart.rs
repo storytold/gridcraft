@@ -1,6 +1,7 @@
 use super::{Json, Value, json, s};
 use gridcraft_model::{ChartKind, Workbook};
 
+/// Seed a synthetic measurement column and explicit bins for histogram command tests.
 fn input() -> crate::Session {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [[1], [3], [3], [4], [5], [6], [8]]})).unwrap();
@@ -8,10 +9,12 @@ fn input() -> crate::Session {
     s
 }
 
+/// Resolve the first chart on a sheet, including linked cell values and axis settings.
 fn resolved(wb: &Workbook, si: usize) -> gridcraft_chart::ChartData {
     gridcraft_chart::resolve(wb, si, &wb.sheets[si].charts[0])
 }
 
+/// Verify opt-in output, exact counts, atomic Undo/Redo, and live links to static report cells.
 #[test]
 fn histogram_chart_output_is_opt_in_and_plots_counts_without_rebinning() {
     let mut s = input();
@@ -45,6 +48,7 @@ fn histogram_chart_output_is_opt_in_and_plots_counts_without_rebinning() {
     assert_eq!(resolved(&s.active().unwrap().wb, 0).series[0].values[0], Some(12.0));
 }
 
+/// Check all Pareto/cumulative combinations, quoted sheet names, XLSX fidelity and atomic Undo.
 #[test]
 fn histogram_chart_output_handles_pareto_and_cumulative_options_and_xlsx() {
     for pareto in [false, true] {
@@ -89,6 +93,7 @@ fn histogram_chart_output_handles_pareto_and_cumulative_options_and_xlsx() {
     }
 }
 
+/// Check header exclusion and automatic bins without dropping any input measurements.
 #[test]
 fn histogram_chart_output_uses_labels_and_automatic_bins() {
     let mut s = s();
@@ -100,6 +105,7 @@ fn histogram_chart_output_uses_labels_and_automatic_bins() {
     assert_eq!(data.series[0].values.iter().flatten().sum::<f64>(), 4.0);
 }
 
+/// Preserve report categories and combo axes across repeated switches, edited labels, blanks and XLSX.
 #[test]
 fn histogram_chart_output_survives_repeated_row_column_switches() {
     for pareto in [false, true] {
@@ -115,6 +121,12 @@ fn histogram_chart_output_survives_repeated_row_column_switches() {
                 // Category text is editable, including the overflow bin in the sorted block.
                 let bin_col = if pareto { if cumulative { "D" } else { "C" } } else { "A" };
                 s.execute("cell.set", json!({"cell": format!("{bin_col}5"), "input": "Overflow"})).unwrap();
+                let frequency_col = if pareto { if cumulative { "E" } else { "D" } } else { "B" };
+                s.execute("cell.set", json!({"cell": format!("{frequency_col}2"), "input": ""})).unwrap();
+                if cumulative {
+                    let cumulative_col = if pareto { "F" } else { "C" };
+                    s.execute("cell.set", json!({"cell": format!("{cumulative_col}3"), "input": ""})).unwrap();
+                }
                 if reopen {
                     let bytes = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
                     s.execute("file.open", json!({"name": "histogram.xlsx", "base64": bytes["base64"]})).unwrap();
@@ -144,6 +156,7 @@ fn histogram_chart_output_survives_repeated_row_column_switches() {
     }
 }
 
+/// Accept the renderer limit and refuse excess series without changing the workbook or history.
 #[test]
 fn histogram_chart_switch_refuses_more_than_255_series_without_changes() {
     for bins in [254, 255] {
@@ -166,6 +179,7 @@ fn histogram_chart_switch_refuses_more_than_255_series_without_changes() {
     }
 }
 
+/// Keep a manually inserted column chart on its primary axis after repeated switches.
 #[test]
 fn histogram_report_column_chart_stays_columns_after_switching() {
     let mut s = input();
@@ -184,11 +198,13 @@ fn histogram_report_column_chart_stays_columns_after_switching() {
     }
 }
 
+/// Retain numeric series in unrelated or incomplete ranges, even after switching twice.
 #[test]
 fn histogram_report_recognition_keeps_unrelated_numeric_columns() {
     for (values, range, series) in [
         (json!([["Bin", "Amount"], [1, 10], [2, 20], ["Overflow", 1]]), "A1:B4", 2),
         (json!([["Bin", "Frequency"], [1, "Pending"], [2, "Pending"], ["Overflow", "Pending"]]), "A1:B4", 2),
+        (json!([["Bin", "Frequency"], [1, 10], [2, null], ["Overflow", 1]]), "A1:B4", 2),
         (json!([["Bin", "Frequency", "Cumulative %"], [1, 10, 10], [2, 20, 30], ["Overflow", 1, 31]]), "A1:C4", 3),
     ] {
         let mut s = s();
@@ -197,9 +213,36 @@ fn histogram_report_recognition_keeps_unrelated_numeric_columns() {
         let data = resolved(&s.active().unwrap().wb, 0);
         assert_eq!(data.series.len(), series, "unrelated data must retain its numeric Bin series");
         assert_eq!(data.series[0].values, [Some(1.0), Some(2.0), None]);
+        s.execute("chart.switchRowColumn", json!({})).unwrap();
+        s.execute("chart.switchRowColumn", json!({})).unwrap();
+        assert_eq!(resolved(&s.active().unwrap().wb, 0), data, "a source range alone must not grant report linkage");
     }
 }
 
+/// Refuse imported histogram combos with custom axes before losing their layout.
+#[test]
+fn histogram_chart_switch_preserves_imported_custom_combo_layouts() {
+    for (kind, secondary) in [(ChartKind::Line, false), (ChartKind::ColumnClustered, true)] {
+        let mut s = input();
+        s.execute("data.analysisToolPak", json!({"tool": "histogram", "range": "A1:A7", "bins": "B1:B3", "cumulative": true, "chartOutput": true}))
+            .unwrap();
+        let series = &mut std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(1).unwrap().charts[0].series[1];
+        series.kind = Some(kind);
+        series.secondary = secondary;
+        let bytes = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+        s.execute("file.open", json!({"name": "custom.xlsx", "base64": bytes["base64"]})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+        let before = s.active().unwrap().wb.clone();
+        assert!(before.sheets[1].charts[0].source.is_none(), "exercise inference from imported series");
+        assert_eq!(resolved(&before, 1).series[1].secondary, secondary);
+        let history = s.execute("history.list", json!({})).unwrap();
+        assert!(s.execute("chart.switchRowColumn", json!({})).is_err());
+        assert_eq!(s.active().unwrap().wb, before);
+        assert_eq!(s.execute("history.list", json!({})).unwrap(), history);
+    }
+}
+
+/// Assert a refused analysis preserves both workbook contents and the undo/redo history.
 fn refused(s: &mut crate::Session, params: Json) {
     let before = s.active().unwrap().wb.clone();
     let history = s.execute("history.list", json!({})).unwrap();
@@ -208,6 +251,7 @@ fn refused(s: &mut crate::Session, params: Json) {
     assert_eq!(s.execute("history.list", json!({})).unwrap(), history);
 }
 
+/// Verify overwrite consent, undo restoration, placement bounds and sheet protection refusals.
 #[test]
 fn histogram_chart_output_refusals_preserve_report_charts_and_undo() {
     let mut s = input();
@@ -230,6 +274,7 @@ fn histogram_chart_output_refusals_preserve_report_charts_and_undo() {
     refused(&mut s, protected);
 }
 
+/// Use below-report placement near the right edge and refuse categories above the renderer cap.
 #[test]
 fn histogram_chart_output_places_near_edge_below_report_and_bounds_categories() {
     let mut s = input();
