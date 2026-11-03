@@ -1004,9 +1004,9 @@ fn selection_pane_ui_command_is_listed() {
         panic!("command discovery must return immediately");
     };
     let commands = reply["result"].as_array().cloned().unwrap_or_default();
-    assert!(commands.iter().any(|command| {
-        command["id"] == "ui.selectionPane" && command["ui"] == true && command["label"] == "Open Selection Pane"
-    }));
+    assert!(
+        commands.iter().any(|command| { command["id"] == "ui.selectionPane" && command["ui"] == true && command["label"] == "Open Selection Pane" })
+    );
 }
 
 /// Runs `command` through the control channel, as one line of a batch: no frame runs after it.
