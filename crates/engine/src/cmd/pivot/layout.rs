@@ -271,7 +271,9 @@ pub(super) fn change_source(s: &mut Session, p: &Json) -> Result<Json> {
         let calculated = validate_replacement_calculated_fields(pt, src)?;
         for value in &pt.values {
             if calculated.index(&value.source_col).is_some()
-                && previous_headers.as_ref().is_none_or(|headers| headers.iter().any(|h| h.eq_ignore_ascii_case(&value.source_col)))
+                && previous_headers
+                    .as_ref()
+                    .is_none_or(|headers| headers.iter().any(String::is_empty) || headers.iter().any(|h| h.eq_ignore_ascii_case(&value.source_col)))
             {
                 return Err(bad(C, format!("cannot identify calculated field `{}` separately from the previous source", value.source_col)));
             }

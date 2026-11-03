@@ -1,6 +1,6 @@
 # Repairing an invalid PivotTable source
 
-> **Last updated:** 2026-11-02
+> **Last updated:** 2026-11-03
 
 An existing PivotTable can outlive its source's validity in GridCraft: an unused column header
 may be deleted, or its defined source name may disappear. GridCraft's current refresh validation
@@ -73,13 +73,13 @@ reproduction uses the existing engine command through the CLI and requires no na
 cargo test -p gridcraft-engine --test it pivot_source_repair
 ```
 
-Ten tests generate their workbooks in Rust and cover four imported reports with blank
+Twelve tests generate their workbooks in Rust and cover four imported reports with blank
 unused headers, a deleted defined source name, invalid replacement rejection without changing
 the workbook or history, blank replacement rejection for both parameter names with a valid
 active selection and an existing redo branch, protection and occupied report cells, undo/redo,
 and repeated XLSX save/open/refresh. This repair is independent of date parsing and GETPIVOTDATA support.
 
-The branch is aligned with upstream `main` at `488f9982`. The ten regressions
+The branch is aligned with upstream `main` at `7bb397a3`. The twelve regressions
 run in the consolidated engine integration-test binary, without changing the repair
 contract. The desktop-theme compatibility fix is already supplied by upstream.
 
@@ -91,6 +91,7 @@ constructed, which failures must preserve history, and what each regression veri
 
 | Date | Change |
 |---|---|
+| 2026-11-03 | Reject selected calculated values when old headers are incomplete; cover renamed-then-cleared headers and preserve report/saved/redo state |
 | 2026-11-02 | Preserve valid calculated values during source repair; reject header collisions and broken calculated dependencies atomically |
 | 2026-10-28 | Distinguish GridCraft's blank-header validation from reported Excel COM behavior; preserve replacement protections |
 | 2026-10-27 | Adapt source repair to the upstream pivot command modules; preserve explicit-source validation and atomic edits |
@@ -103,7 +104,7 @@ constructed, which failures must preserve history, and what each regression veri
 ## Calculated fields during source repair
 
 A valid calculated value and its calculated-field dependencies remain in the report when
-its source is repaired. The replacement is rejected atomically if one of its headers
+its source is repaired and the old headers are complete. The replacement is rejected atomically if one of its headers
 collides with a calculated-field name (case-insensitive), or if a calculated formula
 loses a required field or becomes cyclic. This avoids replacing a formula result with
 an unrelated source column or silently deleting a still-valid value. Rejected edits
@@ -120,3 +121,17 @@ old source can no longer be resolved and a calculated value is selected, repair 
 without editing anything. Restore the old source reference/headers first so identity
 can be verified; the command never substitutes a formula for an absent source field.
 Reading the old headers does not read its records or relax normal header/work limits.
+
+
+An empty old header is also incomplete identity information. In particular, a source
+value added after a header was renamed to a calculated-field name must not turn into
+the calculated value when that header is cleared. Repair conservatively refuses selected
+calculated values whenever any old header is empty, even if that column appears unused.
+Restore the original headers before repairing such a report. Reports without selected
+calculated values can still repair blank unused headers and deleted source names.
+
+The two new generated tests cover the renamed-then-cleared case, duplicate-header
+suffixes, both replacement parameters, unchanged source totals, workbook identity,
+saved state and redo, plus the conservative incomplete-header boundary. They fail
+before this correction. A complete-header control retains calculated values and their
+chained dependencies across undo, save/open and refresh.

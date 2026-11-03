@@ -243,6 +243,8 @@ fn broken_report_with_calculated_values() -> Session {
 #[test]
 fn repair_preserves_calculated_values_and_their_dependencies() {
     let mut s = broken_report_with_calculated_values();
+    // Calculated identity is verifiable only once the old source's headers are complete.
+    s.execute("cell.set", json!({"cell":"D1","input":"Unused"})).unwrap();
     let repaired = s.execute("pivot.changeSource", json!({"pivot": "Repair1", "source": REPAIRED_SOURCE})).unwrap();
     assert_eq!(repaired["dropped"], json!([]));
     let pt = &s.doc().unwrap().wb.active().unwrap().pivots[0];
@@ -316,4 +318,54 @@ fn repair_does_not_guess_calculated_identity_after_source_name_is_deleted() {
     rejects_without_edit(&mut s, "pivot.changeSource", json!({"pivot":"Repair1","source":REPAIRED_SOURCE}), "cannot identify calculated field");
     assert_eq!(pivot_source(&s, "Repair1"), "SourceData");
     assert_eq!(value(&s, "H6"), Value::Number(20.0));
+}
+
+/// Clearing a renamed source header must not turn a retained source value into a calculation.
+#[test]
+fn repair_rejects_cleared_previous_header_with_calculated_name_collision() {
+    for duplicate in [false, true] {
+        for parameter in ["source", "range"] {
+            let mut s = source();
+            let old_source = if duplicate {
+                s.execute("range.setValues", json!({"range":"E1","values":[["Extra"],[10],[20]]})).unwrap();
+                "Sheet1!$A$1:$E$3"
+            } else {
+                OLD_SOURCE
+            };
+            add_report(&mut s, old_source, "Repair1", "G10");
+            let name = if duplicate { "Unused2" } else { "Margin" };
+            s.execute("pivot.calculatedField", json!({"pivot":"Repair1","name":name,"formula":"=Amount*0.5","values":false})).unwrap();
+            let header = if duplicate { "E1" } else { "D1" };
+            if duplicate {
+                s.execute("cell.set", json!({"cell":header,"input":"Unused"})).unwrap();
+            } else {
+                s.execute("range.setValues", json!({"range":"D1","values":[["Margin"],[10],[20]]})).unwrap();
+            }
+            s.execute("pivot.addField", json!({"pivot":"Repair1","field":name,"area":"values"})).unwrap();
+            assert_eq!(value(&s, "I13"), Value::Number(30.0));
+            s.execute("edit.clearContents", json!({"range":header})).unwrap();
+            s.execute("cell.set", json!({"cell":"Z20","input":"redo branch"})).unwrap();
+            s.execute("edit.undo", json!({})).unwrap();
+            let saved = s.doc().unwrap().saved.clone();
+            let dirty = s.doc().unwrap().is_dirty();
+            let mut params = json!({"pivot":"Repair1"});
+            params[parameter] = json!(REPAIRED_SOURCE);
+            rejects_without_edit(&mut s, "pivot.changeSource", params, "cannot identify calculated field");
+            assert_eq!(pivot_source(&s, "Repair1"), old_source);
+            assert_eq!(value(&s, "I13"), Value::Number(30.0), "source total must not become the calculated total of 20");
+            assert!(Arc::ptr_eq(&saved, &s.doc().unwrap().saved));
+            assert_eq!(s.doc().unwrap().is_dirty(), dirty);
+            assert_eq!(s.doc().unwrap().wb.active().unwrap().pivots[0].values.len(), 2);
+        }
+    }
+}
+
+/// Incomplete headers cannot prove calculated identity even when the cleared field looks unused.
+#[test]
+fn repair_refuses_incomplete_old_headers_with_selected_calculations() {
+    let mut s = broken_report_with_calculated_values();
+    rejects_without_edit(&mut s, "pivot.changeSource", json!({"pivot":"Repair1","source":REPAIRED_SOURCE}), "cannot identify calculated field");
+    assert_eq!(value(&s, "H6"), Value::Number(20.0));
+    assert_eq!(value(&s, "I6"), Value::Number(40.0));
+    assert_eq!(pivot_source(&s, "Repair1"), OLD_SOURCE);
 }
