@@ -288,6 +288,35 @@ pub enum BorderStyle {
 }
 
 impl BorderStyle {
+    /// Every style with its SpreadsheetML name (`<left style="…">`), the one name table the file
+    /// reader and writer and the commands share.
+    pub const NAMES: [(BorderStyle, &'static str); 14] = [
+        (BorderStyle::None, "none"),
+        (BorderStyle::Thin, "thin"),
+        (BorderStyle::Medium, "medium"),
+        (BorderStyle::Thick, "thick"),
+        (BorderStyle::Dashed, "dashed"),
+        (BorderStyle::Dotted, "dotted"),
+        (BorderStyle::Double, "double"),
+        (BorderStyle::Hair, "hair"),
+        (BorderStyle::MediumDashed, "mediumDashed"),
+        (BorderStyle::DashDot, "dashDot"),
+        (BorderStyle::MediumDashDot, "mediumDashDot"),
+        (BorderStyle::DashDotDot, "dashDotDot"),
+        (BorderStyle::MediumDashDotDot, "mediumDashDotDot"),
+        (BorderStyle::SlantDashDot, "slantDashDot"),
+    ];
+
+    /// The SpreadsheetML name.
+    pub fn name(self) -> &'static str {
+        Self::NAMES.iter().find(|(style, _)| *style == self).map_or("none", |(_, name)| name)
+    }
+
+    /// The style a SpreadsheetML name stands for (case-sensitive, as in the file format).
+    pub fn from_name(name: &str) -> Option<BorderStyle> {
+        Self::NAMES.iter().find(|(_, n)| *n == name).map(|(style, _)| *style)
+    }
+
     pub fn width(&self) -> f32 {
         match self {
             BorderStyle::None => 0.0,
@@ -487,6 +516,18 @@ static DEFAULT_STYLE: std::sync::LazyLock<Style> = std::sync::LazyLock::new(Styl
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn border_style_names_round_trip_and_unknown_names_are_none() {
+        for (style, name) in BorderStyle::NAMES {
+            assert_eq!(style.name(), name);
+            assert_eq!(BorderStyle::from_name(name), Some(style));
+        }
+        assert_eq!(BorderStyle::NAMES.len(), 14, "none and Excel's 13 line styles");
+        for unknown in ["wavy", "Thin", "", "medium-dashed"] {
+            assert_eq!(BorderStyle::from_name(unknown), None, "{unknown}");
+        }
+    }
 
     #[test]
     fn interning() {

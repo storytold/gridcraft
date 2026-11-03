@@ -165,17 +165,10 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                 ("Diagonal ↗", &mut st.borders.diag_up),
             ] {
                 let n = lang.tr(n);
-                ui.horizontal(|ui| {
+                // Every line style Excel has (none and the 13 SpreadsheetML styles), wrapping.
+                ui.horizontal_wrapped(|ui| {
                     ui.label(format!("{n}:"));
-                    for (s, label) in [
-                        (BorderStyle::None, "none"),
-                        (BorderStyle::Thin, "thin"),
-                        (BorderStyle::Medium, "medium"),
-                        (BorderStyle::Thick, "thick"),
-                        (BorderStyle::Dashed, "dashed"),
-                        (BorderStyle::Dotted, "dotted"),
-                        (BorderStyle::Double, "double"),
-                    ] {
+                    for (s, label) in BorderStyle::NAMES {
                         let label = lang.tr(label);
                         let response = ui.selectable_label(slot.style == s, label);
                         let selected = slot.style == s;

@@ -76,7 +76,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Borders",
             ["Home", "Font"],
             None,
-            "{range?, preset: bottom|top|left|right|none|all|outside|thickOutside|thickBottom|doubleBottom|topBottom|topThickBottom|topDoubleBottom|insideHorizontal|insideVertical|inside|diagonalDown|diagonalUp, style?: thin|medium|thick|dashed|dotted|double|hair…, color?}",
+            "{range?, preset: bottom|top|left|right|none|all|outside|thickOutside|thickBottom|doubleBottom|topBottom|topThickBottom|topDoubleBottom|insideHorizontal|insideVertical|inside|diagonalDown|diagonalUp, style?: thin|medium|thick|dashed|dotted|double|hair|mediumDashed|dashDot|mediumDashDot|dashDotDot|mediumDashDotDot|slantDashDot|none, color?} (an unknown preset or style is an error)",
             has_doc,
             borders
         ),
@@ -393,28 +393,40 @@ fn fill_color(s: &mut Session, p: &Json) -> Result<Json> {
     apply_style(s, p, |st| st.fill = if c == Color::Auto { Fill::default() } else { Fill::solid(c) })
 }
 
-fn border_style(name: &str) -> BorderStyle {
-    match name {
-        "medium" => BorderStyle::Medium,
-        "thick" => BorderStyle::Thick,
-        "dashed" => BorderStyle::Dashed,
-        "dotted" => BorderStyle::Dotted,
-        "double" => BorderStyle::Double,
-        "hair" => BorderStyle::Hair,
-        "mediumDashed" => BorderStyle::MediumDashed,
-        "dashDot" => BorderStyle::DashDot,
-        "mediumDashDot" => BorderStyle::MediumDashDot,
-        "dashDotDot" => BorderStyle::DashDotDot,
-        "slantDashDot" => BorderStyle::SlantDashDot,
-        "none" => BorderStyle::None,
-        _ => BorderStyle::Thin,
-    }
-}
+/// The presets `home.borders` draws (the Borders menu of Home › Font).
+const BORDER_PRESETS: [&str; 18] = [
+    "none",
+    "all",
+    "outside",
+    "thickOutside",
+    "inside",
+    "insideHorizontal",
+    "insideVertical",
+    "top",
+    "bottom",
+    "left",
+    "right",
+    "thickBottom",
+    "doubleBottom",
+    "topBottom",
+    "topThickBottom",
+    "topDoubleBottom",
+    "diagonalDown",
+    "diagonalUp",
+];
 
 fn borders(s: &mut Session, p: &Json) -> Result<Json> {
     let preset = str_param(p, "preset").unwrap_or("bottom").to_string();
+    if !BORDER_PRESETS.contains(&preset.as_str()) {
+        return Err(bad("home.borders", format!("unknown `preset`: `{preset}` ({})", BORDER_PRESETS.join(", "))));
+    }
     let color = color_param(p.get("color")).unwrap_or(Color::Auto);
-    let base = border_style(str_param(p, "style").unwrap_or("thin"));
+    // An unknown style is refused, not drawn as some other line.
+    let style = str_param(p, "style").unwrap_or("thin");
+    let base = BorderStyle::from_name(style).ok_or_else(|| {
+        let names: Vec<&str> = BorderStyle::NAMES.iter().map(|(_, name)| *name).collect();
+        bad("home.borders", format!("unknown `style`: `{style}` ({})", names.join(", ")))
+    })?;
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
     if s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.protection.as_ref().is_some_and(|pr| !pr.format_cells)) {
@@ -837,6 +849,36 @@ mod tests {
         assert_eq!(v(&mut s, "B1"), Json::Null);
         assert_eq!(v(&mut s, "B2"), Json::Null);
         assert_eq!(v(&mut s, "D1"), json!(4.0));
+    }
+
+    #[test]
+    fn borders_take_every_line_style_and_refuse_unknown_names() {
+        // #1454: mediumDashDotDot, a misspelt style or an unknown preset drew a thin line (or
+        // nothing) and reported success.
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        for (row, (style, name)) in BorderStyle::NAMES.iter().enumerate().skip(1) {
+            let range = CellRef::new(row as u32, 1).a1();
+            s.execute("home.borders", json!({"range": range, "preset": "bottom", "style": name})).unwrap();
+            let st = s.doc().unwrap().wb.active().unwrap().style_id(CellRef::new(row as u32, 1));
+            assert_eq!(s.doc().unwrap().wb.styles.get(st).borders.bottom.style, *style, "{name}");
+        }
+        let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+        let (reopened, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+        for (row, (style, name)) in BorderStyle::NAMES.iter().enumerate().skip(1) {
+            let st = reopened.sheet(0).unwrap().style_id(CellRef::new(row as u32, 1));
+            assert_eq!(reopened.styles.get(st).borders.bottom.style, *style, "{name} after save and reopen");
+        }
+        let before = s.doc().unwrap().wb.active().unwrap().style_id(CellRef::new(20, 1));
+        for p in [
+            json!({"range": "B21", "preset": "bottom", "style": "wavy"}),
+            json!({"range": "B21", "preset": "bottom", "style": "Thin"}),
+            json!({"range": "B21", "preset": "bogus"}),
+        ] {
+            let e = s.execute("home.borders", p.clone()).unwrap_err().to_string();
+            assert!(e.contains("unknown `style`") || e.contains("unknown `preset`"), "{p}: {e}");
+        }
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().style_id(CellRef::new(20, 1)), before, "a refused call changes nothing");
     }
 
     #[test]
