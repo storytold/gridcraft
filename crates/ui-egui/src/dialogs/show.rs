@@ -351,16 +351,13 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     let window = d.values.get("window").and_then(Json::as_u64);
                     ui.add(egui::Label::new(app.ui.language.tr_error(&reason)).wrap());
                     ui.add_space(4.0);
-                    ui.label("Edit the cell, or exit and leave it as it was.");
+                    ui.label(app.ui.language.tr("Edit the cell, or exit and leave it as it was."));
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Edit the Cell").clicked() {
-                            if let Some(ed) = &mut app.editor {
-                                ed.request_focus = true;
-                            }
+                        if ui.button(app.ui.language.tr("Edit the Cell")).clicked() {
                             open = false;
                         }
-                        if ui.button("Exit Anyway").clicked() {
+                        if ui.button(app.ui.language.tr("Exit Anyway")).clicked() {
                             app.exit_anyway(window, ui.ctx());
                             open = false;
                         }
@@ -464,6 +461,13 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         }
     } else if confirm {
         open = false;
+    }
+    // Back to the draft the question was about, by its button or its X, to fix from the keyboard.
+    if !open
+        && d.name == "refusedDraft"
+        && let Some(ed) = &mut app.editor
+    {
+        ed.request_focus = true;
     }
     if !open
         && !confirm

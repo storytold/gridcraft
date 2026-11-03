@@ -790,3 +790,61 @@ fn a_formula_error_on_enter_still_shows_the_plain_message() {
     assert!(h.state().message.is_some());
     assert!(h.state().dialog.is_none(), "the question is only for closing");
 }
+
+#[test]
+fn after_edit_the_cell_the_arrows_move_the_caret_instead_of_entering_the_formula() {
+    let mut h = harness(Services::default());
+    close_with_a_bad_formula(&mut h);
+    click_commands(&mut h, "Edit the Cell");
+    h.run_steps(3);
+    let caret = h.state().editor.as_ref().unwrap().caret;
+    h.key_press(egui::Key::ArrowLeft);
+    h.run_steps(3);
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let ed = h.state().editor.as_ref().unwrap();
+    assert_eq!(ed.text, "=1*/2");
+    assert_eq!(ed.caret + 1, caret, "the caret moved");
+}
+
+#[test]
+fn after_a_formula_error_on_enter_the_arrows_move_the_caret_too() {
+    let mut h = harness(Services::default());
+    h.state_mut().begin_edit(Some("=1*/2".into()), false);
+    h.run_steps(3);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().message.is_some());
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().message.is_none());
+    let caret = h.state().editor.as_ref().unwrap().caret;
+    h.key_press(egui::Key::ArrowLeft);
+    h.run_steps(3);
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let ed = h.state().editor.as_ref().unwrap();
+    assert_eq!(ed.text, "=1*/2");
+    assert_eq!(ed.caret + 1, caret, "the caret moved");
+}
+
+#[test]
+fn the_question_is_in_the_interface_language_and_says_what_is_wrong() {
+    let mut h = harness(Services::default());
+    h.state_mut().ui.language = Language::It;
+    h.run_steps(2);
+    close_with_a_bad_formula(&mut h);
+    let reason = h.state().dialog.as_ref().and_then(|d| d.values.get("reason")).and_then(|r| r.as_str()).unwrap().to_owned();
+    assert!(reason.contains("problem with this formula"), "{reason}");
+    let sent = click_commands(&mut h, "Modifica la cella");
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+    assert!(h.state().dialog.is_none());
+}
+
+#[test]
+fn a_refused_draft_stays_in_edit_mode_once_the_question_is_gone() {
+    let mut h = harness(Services::default());
+    close_with_a_bad_formula(&mut h);
+    h.state_mut().dialog = None;
+    h.run_steps(3);
+    assert_eq!(h.state().editor.as_ref().map(|e| e.text.as_str()), Some("=1*/2"));
+    assert!(h.state().editor.as_ref().is_some_and(|e| !e.enter_mode), "the arrows move the caret");
+}
