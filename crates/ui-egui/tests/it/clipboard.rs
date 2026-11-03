@@ -522,6 +522,15 @@ fn a_malformed_clipboard_picture_is_refused_without_inserting() {
     h.input_mut().events.push(Event::PasteImage(std::sync::Arc::new(egui::ColorImage::new([0, 0], Vec::new()))));
     h.run_steps(2);
     assert!(pictures(&h).is_empty());
+
+    // Wider than the 16384-pixel limit: refused before its pixels are copied.
+    dismiss(&mut h);
+    let wide = egui::ColorImage::new([20_000, 1], vec![egui::Color32::WHITE; 20_000]);
+    h.input_mut().events.push(Event::PasteImage(std::sync::Arc::new(wide)));
+    h.run_steps(2);
+    assert!(pictures(&h).is_empty());
+    let message = format!("{:?}", h.state().message);
+    assert!(message.contains("too large"), "{message}");
 }
 
 #[test]

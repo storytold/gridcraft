@@ -74,8 +74,13 @@ impl SheetApp {
     /// Cmd/Ctrl+V with a picture and no text on the clipboard (egui's `Event::PasteImage`).
     pub fn paste_color_image(&mut self, image: &egui::ColorImage) {
         let [w, h] = image.size;
+        // A side too large for u32 is too large to paste; check before copying the pixels.
+        let (w, h) = (u32::try_from(w).unwrap_or(u32::MAX), u32::try_from(h).unwrap_or(u32::MAX));
+        if let Err(e) = check_picture_size(w, h) {
+            return self.alert(e);
+        }
         let rgba = image.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
-        match u32::try_from(w).ok().zip(u32::try_from(h).ok()).and_then(|(w, h)| image::RgbaImage::from_raw(w, h, rgba)) {
+        match image::RgbaImage::from_raw(w, h, rgba) {
             Some(image) => self.paste_picture(image),
             None => self.alert("The picture on the clipboard can't be read.".into()),
         }
@@ -104,15 +109,21 @@ impl SheetApp {
 const MAX_PICTURE_SIDE: u32 = 16_384;
 const MAX_PICTURE_PIXELS: u64 = 64 * 1024 * 1024;
 
-/// PNG bytes of a clipboard picture, refusing sizes that would exhaust memory.
-fn encode_png(image: &image::RgbaImage) -> Result<Vec<u8>, String> {
-    let (w, h) = image.dimensions();
+/// Refuse empty clipboard pictures and sizes that would exhaust memory.
+fn check_picture_size(w: u32, h: u32) -> Result<(), String> {
     if w == 0 || h == 0 {
         return Err("The picture on the clipboard is empty.".into());
     }
     if w > MAX_PICTURE_SIDE || h > MAX_PICTURE_SIDE || u64::from(w) * u64::from(h) > MAX_PICTURE_PIXELS {
         return Err("The picture on the clipboard is too large to paste.".into());
     }
+    Ok(())
+}
+
+/// PNG bytes of a clipboard picture, refusing sizes that would exhaust memory.
+fn encode_png(image: &image::RgbaImage) -> Result<Vec<u8>, String> {
+    let (w, h) = image.dimensions();
+    check_picture_size(w, h)?;
     let mut png = Vec::new();
     image
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)

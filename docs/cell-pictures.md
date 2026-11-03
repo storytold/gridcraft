@@ -19,7 +19,8 @@ The command API accepts the same placement:
 
 This initial feature handles static pictures. A picture on the operating system's clipboard (a
 screenshot, an image copied in a browser) pastes with Cmd/Ctrl+V or Paste as a floating picture
-at the active cell, as in Excel. Pasting it into a cell, converting between floating and cell
+at the active cell, as in Excel (desktop builds only: the web build's paste receives clipboard
+text alone, so a picture with no text pastes nothing there). Pasting it into a cell, converting between floating and cell
 pictures, and the `IMAGE()` function remain separate work. Formula references and arithmetic do not carry pictures: the calculation
 engine uses a `#VALUE!` fallback, including when a picture is referenced from another cell.
 Text-only exports also use that fallback. The picture cell still counts as occupied and
