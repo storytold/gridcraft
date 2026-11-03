@@ -257,7 +257,7 @@ pub(crate) fn pen_ink(color: &str, width: f32, theme: &gridcraft_engine::model::
     let line = gridcraft_engine::model::Color::from_hex(color).unwrap_or(pen_blue);
     let width = if width <= 0.0 { 2.0 } else { width }.clamp(0.5, 40.0).round().max(1.0);
     let color = line.resolve(theme).map(crate::theme::color32).unwrap_or(Color32::from_rgb(0x1F, 0x5F, 0xC9));
-    (if width > 8.0 { color.gamma_multiply(0.45) } else { color }, width)
+    (crate::chartview::ink_color(color, width), width)
 }
 
 fn handle_header_autofit(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
