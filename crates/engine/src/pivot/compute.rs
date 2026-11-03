@@ -1,6 +1,9 @@
 use super::items::{Acc, FieldItems, build_tree, collect_siblings, is_collapsed, item_label};
 use super::output::{AggMap, CellKind, ColKind, ColSpec, Ctx, Grid, Line, LineKind, Output, RowKind, ValSrc, data_cols_exceed_sheet, flatten_cols};
-use super::*;
+use super::{
+    CalcSet, CellError, CellRef, HashMap, HashSet, MAX_AXIS_FIELDS, MAX_COLS, MAX_VALUE_FIELDS, PivotDateGroup, PivotField, PivotFilter, PivotFunc,
+    PivotLayout, PivotShowAs, PivotTable, PivotValue, Source, Value, Workbook, read_source,
+};
 
 /// Why Show Details turns a cell down when it isn't a value cell of a PivotTable (the front end
 /// edits that cell instead).
@@ -52,14 +55,386 @@ fn check_current(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize, out: &Outpu
     Ok(())
 }
 
+type ProbePath = (usize, Vec<u32>, Vec<u32>);
+
 /// What [`detail_records`] and [`detail_cells`] ask of a report computation: the row and column
 /// item paths of the value cell at `at`, the paths of every record the filters let through (when
 /// `paths` is set), and every value cell (when `cells` is set).
 pub(super) struct Probe {
     at: Option<(usize, usize)>,
     hit: Option<(Vec<u32>, Vec<u32>)>,
-    paths: Option<Vec<(usize, Vec<u32>, Vec<u32>)>>,
+    paths: Option<Vec<ProbePath>>,
     cells: Option<HashSet<(usize, usize)>>,
+}
+
+struct AggregateInput<'a> {
+    wb: &'a Workbook,
+    pt: &'a PivotTable,
+    src: &'a Source,
+    rows: &'a [(usize, &'a PivotField)],
+    cols: &'a [(usize, &'a PivotField)],
+    vals: &'a [(ValSrc, &'a PivotValue)],
+    extra: &'a [usize],
+    filters: &'a [(usize, &'a PivotFilter, PivotDateGroup, bool)],
+    filter_fmts: &'a [String],
+    row_fmts: &'a [String],
+    col_fmts: &'a [String],
+    empty: bool,
+}
+
+#[derive(Default)]
+struct AggregateData {
+    row_items: Vec<FieldItems>,
+    col_items: Vec<FieldItems>,
+    aggs: AggMap,
+    row_set: HashSet<Vec<u32>>,
+    col_set: HashSet<Vec<u32>>,
+    col_leaves: HashSet<Vec<u32>>,
+}
+
+fn aggregate_record(
+    input: &AggregateInput<'_>,
+    data: &mut AggregateData,
+    probe: &mut Option<&mut Probe>,
+    ri: usize,
+    rec: &[Value],
+) -> Result<(), String> {
+    for ((c, field, group, _), fmt) in input.filters.iter().zip(input.filter_fmts) {
+        if let Some(selected) = &field.selected {
+            let label = item_label(input.wb, rec.get(*c).unwrap_or(&Value::Empty), *group, fmt);
+            if !selected.iter().any(|value| value.eq_ignore_ascii_case(&label)) {
+                return Ok(());
+            }
+        }
+    }
+    if input.empty {
+        return Ok(());
+    }
+    let mut row_path = Vec::with_capacity(input.rows.len());
+    for (((column, field), items), fmt) in input.rows.iter().zip(data.row_items.iter_mut()).zip(input.row_fmts) {
+        row_path.push(items.intern(input.wb, rec.get(*column).unwrap_or(&Value::Empty), field.date_group, fmt, ri));
+    }
+    let mut col_path = Vec::with_capacity(input.cols.len());
+    for (((column, field), items), fmt) in input.cols.iter().zip(data.col_items.iter_mut()).zip(input.col_fmts) {
+        col_path.push(items.intern(input.wb, rec.get(*column).unwrap_or(&Value::Empty), field.date_group, fmt, ri));
+    }
+    for row_depth in 0..=row_path.len() {
+        for col_depth in 0..=col_path.len() {
+            let accs = data
+                .aggs
+                .entry((row_path[..row_depth].to_vec(), col_path[..col_depth].to_vec()))
+                .or_insert_with(|| vec![Acc::default(); input.vals.len() + input.extra.len()]);
+            for (acc, (source, _)) in accs.iter_mut().zip(input.vals) {
+                if let ValSrc::Col(column) = source {
+                    acc.add(rec.get(*column).unwrap_or(&Value::Empty));
+                }
+            }
+            for (acc, column) in accs.iter_mut().skip(input.vals.len()).zip(input.extra) {
+                acc.add(rec.get(*column).unwrap_or(&Value::Empty));
+            }
+        }
+    }
+    let shown_depth = input
+        .cols
+        .iter()
+        .zip(data.col_items.iter())
+        .zip(col_path.iter())
+        .position(|(((_, field), items), &item)| !field.collapsed_items.is_empty() && is_collapsed(field, &items.label(item)))
+        .map_or(col_path.len(), |depth| depth + 1);
+    data.col_leaves.insert(col_path[..shown_depth].to_vec());
+    if let Some(paths) = probe.as_deref_mut().and_then(|value| value.paths.as_mut()) {
+        paths.push((ri, row_path.clone(), col_path.clone()));
+    }
+    data.row_set.insert(row_path);
+    data.col_set.insert(col_path);
+    if !input.cols.is_empty() && data_cols_exceed_sheet(data.col_leaves.len(), input.pt.grand_totals_rows, input.vals.len()) {
+        return Err("The PivotTable report will not fit on the sheet.".into());
+    }
+    if data.aggs.len() > 5_000_000 {
+        return Err("The PivotTable report is too large.".into());
+    }
+    Ok(())
+}
+
+fn aggregate_source(input: AggregateInput<'_>, probe: &mut Option<&mut Probe>) -> Result<AggregateData, String> {
+    let mut data = AggregateData {
+        row_items: input.rows.iter().map(|_| FieldItems::default()).collect(),
+        col_items: input.cols.iter().map(|_| FieldItems::default()).collect(),
+        ..AggregateData::default()
+    };
+    for (ri, record) in input.src.rows.iter().enumerate() {
+        aggregate_record(&input, &mut data, probe, ri, record)?;
+    }
+    Ok(data)
+}
+
+struct HeaderInput<'a> {
+    vals: &'a [(ValSrc, &'a PivotValue)],
+    row_fields: &'a [&'a PivotField],
+    col_fields: &'a [&'a PivotField],
+    col_items: &'a [FieldItems],
+    col_fmts: &'a [String],
+    vpos: Option<usize>,
+    data_cols: &'a [(usize, Option<usize>)],
+    specs: &'a [ColSpec],
+    row_levels: usize,
+    compact: bool,
+    on_rows: bool,
+    k: usize,
+    l: usize,
+    headers_on: bool,
+}
+
+fn write_headers(g: &mut Grid, input: HeaderInput<'_>) -> Result<(), String> {
+    let HeaderInput { vals, row_fields, col_fields, col_items, col_fmts, vpos, data_cols, specs, row_levels, compact, on_rows, k, l, headers_on } =
+        input;
+    let val_name = |vi: usize| vals.get(vi).map(|(_, v)| v.name.clone()).unwrap_or_default();
+    let row_header = |g: &mut Grid, r: usize| {
+        if row_levels == 0 || !headers_on {
+            return;
+        }
+        if compact {
+            g.set(r, 0, Value::text("Row Labels"), CellKind::Header, 0, None);
+        } else {
+            // One column per row field, Σ Values ("Values") at its place.
+            let mut names: Vec<&str> = row_fields.iter().map(|f| f.source_col.as_str()).collect();
+            if let Some(p) = vpos {
+                names.insert(p.min(names.len()), "Values");
+            }
+            for (i, name) in names.into_iter().enumerate() {
+                g.set(r, i, Value::text(name), CellKind::Header, 0, None);
+            }
+        }
+    };
+
+    // ---- header rows
+    if col_fields.is_empty() {
+        let r = g.push_row(RowKind::Header)?;
+        row_header(g, r);
+        for (j, (_, vi)) in data_cols.iter().enumerate() {
+            match vi {
+                Some(vi) => g.set(r, l + j, Value::text(val_name(*vi)), CellKind::Header, 0, None),
+                // Values on rows, no column field: the one data column is the grand total.
+                None if on_rows => g.set(r, l + j, Value::text("Total"), CellKind::Header, 0, None),
+                None => {}
+            }
+        }
+    } else {
+        let cap = g.push_row(RowKind::Header)?;
+        if l > 0 && k == 1 {
+            g.set(cap, 0, Value::text(val_name(0)), CellKind::Header, 0, None);
+        }
+        if headers_on {
+            let caption = if compact { "Column Labels".to_string() } else { col_fields.first().map(|f| f.source_col.clone()).unwrap_or_default() };
+            g.set(cap, l, Value::text(caption), CellKind::Header, 0, None);
+        }
+        let levels = col_fields.len() + usize::from(k > 1 && !on_rows);
+        let first_level = g.rows.len();
+        for _ in 0..levels {
+            g.push_row(RowKind::Header)?;
+        }
+        let mut prev: Option<&ColSpec> = None;
+        for (j, (si, vi)) in data_cols.iter().enumerate() {
+            let Some(spec) = specs.get(*si) else { continue };
+            let c = l + j;
+            match spec.kind {
+                ColKind::Leaf => {
+                    for (lv, &it) in spec.path.iter().enumerate() {
+                        let same = prev.is_some_and(|p| p.kind != ColKind::Grand && p.path.get(..=lv) == spec.path.get(..=lv));
+                        if !same {
+                            let Some(item) = col_items.get(lv).and_then(|fi| fi.get(it)) else { continue };
+                            let fmt = if item.formatted { col_fmts.get(lv).cloned() } else { None };
+                            g.set(first_level + lv, c, item.value.clone(), CellKind::ColLabel, 0, fmt);
+                        }
+                    }
+                    if k > 1
+                        && let Some(vi) = vi
+                    {
+                        g.set(first_level + col_fields.len(), c, Value::text(val_name(*vi)), CellKind::ColLabel, 0, None);
+                    }
+                }
+                ColKind::Subtotal => {
+                    let lv = spec.path.len().saturating_sub(1);
+                    let label = spec.path.last().and_then(|it| col_items.get(lv).map(|fi| fi.label(*it))).unwrap_or_default();
+                    let text = match vi {
+                        Some(vi) if k > 1 => format!("{label} {}", val_name(*vi)),
+                        _ => format!("{label} Total"),
+                    };
+                    g.set(first_level + lv, c, Value::text(text), CellKind::ColLabel, 0, None);
+                }
+                ColKind::Grand => {
+                    let text = match vi {
+                        Some(vi) if k > 1 => format!("Total {}", val_name(*vi)),
+                        _ => "Grand Total".to_string(),
+                    };
+                    g.set(first_level, c, Value::text(text), CellKind::ColLabel, 0, None);
+                }
+            }
+            prev = Some(spec);
+        }
+        let last = g.rows.len() - 1;
+        row_header(g, last);
+    }
+
+    Ok(())
+}
+
+struct ValueLookup<'a> {
+    wb: &'a Workbook,
+    source: &'a Source,
+    calc: &'a CalcSet,
+    vals: &'a [(ValSrc, &'a PivotValue)],
+    extra: &'a [usize],
+    aggs: &'a AggMap,
+    value_count: usize,
+}
+
+impl ValueLookup<'_> {
+    fn get(&self, row_path: &[u32], col_path: &[u32], value_index: usize) -> Option<Value> {
+        let (source, definition) = self.vals.get(value_index)?;
+        let accumulators = self.aggs.get(&(row_path.to_vec(), col_path.to_vec()))?;
+        match source {
+            ValSrc::Col(_) => accumulators.get(value_index).map(|acc| acc.result(definition.func)),
+            ValSrc::Calc(index) => {
+                let sum = |name: &str| -> Value {
+                    self.source
+                        .col(name)
+                        .and_then(|column| self.extra.iter().position(|extra_column| *extra_column == column))
+                        .and_then(|index| accumulators.get(self.value_count + index))
+                        .map(|acc| acc.result(PivotFunc::Sum))
+                        .unwrap_or(Value::Number(0.0))
+                };
+                Some(self.calc.value(self.wb, *index, &sum))
+            }
+        }
+    }
+}
+
+struct ShowContext<'a> {
+    row_path: &'a [u32],
+    col_path: &'a [u32],
+    value_index: usize,
+    level0: &'a [u32],
+    siblings: &'a HashMap<Vec<u32>, Vec<u32>>,
+}
+
+fn number(value: &Option<Value>) -> Option<f64> {
+    value.as_ref().and_then(Value::as_f64)
+}
+
+fn ratio(a: Value, b: Option<Value>) -> Value {
+    match (a, b) {
+        (Value::Error(error), _) => Value::Error(error),
+        (_, Some(Value::Error(error))) => Value::Error(error),
+        (Value::Number(_), Some(Value::Number(0.0))) => Value::Error(CellError::Div0),
+        (Value::Number(x), Some(Value::Number(y))) => Value::number(x / y),
+        (value, _) => value,
+    }
+}
+
+fn running_total(raw: Value, lookup: &ValueLookup<'_>, context: &ShowContext<'_>) -> Value {
+    let Some((first, _)) = context.row_path.split_first() else { return raw };
+    if !matches!(raw, Value::Number(_)) {
+        return raw;
+    }
+    let mut total = 0.0;
+    for item in context.level0 {
+        let mut path = context.row_path.to_vec();
+        if let Some(first_item) = path.first_mut() {
+            *first_item = *item;
+        }
+        total += number(&lookup.get(&path, context.col_path, context.value_index)).unwrap_or(0.0);
+        if item == first {
+            break;
+        }
+    }
+    Value::number(total)
+}
+
+fn ranked_value(raw: Value, lookup: &ValueLookup<'_>, context: &ShowContext<'_>) -> Value {
+    let Some((_, parent)) = context.row_path.split_last() else { return Value::Empty };
+    let Some(me) = raw.as_f64() else { return raw };
+    let siblings = context.siblings.get(parent).cloned().unwrap_or_default();
+    let mut rank = 1u64;
+    for sibling in siblings {
+        let mut path = parent.to_vec();
+        path.push(sibling);
+        if number(&lookup.get(&path, context.col_path, context.value_index)).is_some_and(|value| value > me) {
+            rank += 1;
+        }
+    }
+    Value::number(rank as f64)
+}
+
+fn show_value(definition: &PivotValue, raw: Value, lookup: &ValueLookup<'_>, context: &ShowContext<'_>) -> Value {
+    match definition.show_as {
+        PivotShowAs::Normal => raw,
+        PivotShowAs::PercentOfGrandTotal => ratio(raw, lookup.get(&[], &[], context.value_index)),
+        PivotShowAs::PercentOfColumnTotal => ratio(raw, lookup.get(&[], context.col_path, context.value_index)),
+        PivotShowAs::PercentOfRowTotal => ratio(raw, lookup.get(context.row_path, &[], context.value_index)),
+        PivotShowAs::RunningTotal => running_total(raw, lookup, context),
+        PivotShowAs::Rank => ranked_value(raw, lookup, context),
+    }
+}
+
+type ReportFilter<'a> = (usize, &'a PivotFilter, PivotDateGroup, bool);
+
+fn report_filters<'a>(pt: &'a PivotTable, src: &Source) -> (Vec<ReportFilter<'a>>, Vec<ReportFilter<'a>>) {
+    let axis_group =
+        |name: &str| pt.rows.iter().chain(pt.columns.iter()).find(|field| field.source_col.eq_ignore_ascii_case(name)).map(|field| field.date_group);
+    let filters: Vec<_> = pt
+        .filters
+        .iter()
+        .filter_map(|filter| {
+            let column = src.col(&filter.source_col)?;
+            let group = axis_group(&filter.source_col);
+            Some((column, filter, group.unwrap_or_default(), group.is_none()))
+        })
+        .collect();
+    let shown = filters.iter().copied().filter(|filter| filter.3).collect();
+    (filters, shown)
+}
+
+fn values_position(pt: &PivotTable, src: &Source, value_count: usize) -> Option<usize> {
+    if !pt.values_on_rows || value_count <= 1 {
+        return None;
+    }
+    let position = pt.values_position.unwrap_or(pt.rows.len());
+    Some(pt.rows.iter().take(position).filter(|field| src.col(&field.source_col).is_some()).count())
+}
+
+fn calculated_source_columns(vals: &[(ValSrc, &PivotValue)], calc: &CalcSet, src: &Source) -> Vec<usize> {
+    let mut columns = Vec::new();
+    for (source, _) in vals {
+        let ValSrc::Calc(index) = source else { continue };
+        for name in calc.source_refs(*index) {
+            if let Some(column) = src.col(&name)
+                && !columns.contains(&column)
+            {
+                columns.push(column);
+            }
+        }
+    }
+    columns
+}
+
+fn data_columns(specs: &[ColSpec], has_column_fields: bool, on_rows: bool, value_count: usize) -> Result<Vec<(usize, Option<usize>)>, String> {
+    let mut columns = Vec::new();
+    for (spec_index, _) in specs.iter().enumerate() {
+        if on_rows {
+            columns.push((spec_index, None));
+        } else if value_count == 0 {
+            if has_column_fields {
+                columns.push((spec_index, None));
+            }
+        } else {
+            columns.extend((0..value_count).map(|value_index| (spec_index, Some(value_index))));
+        }
+        if columns.len() > MAX_COLS as usize {
+            return Err("The PivotTable report will not fit on the sheet.".into());
+        }
+    }
+    Ok(columns)
 }
 
 pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut probe: Option<&mut Probe>) -> Result<Output, String> {
@@ -77,116 +452,45 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
         })
         .collect();
     // Source columns summed for the calculated fields, accumulated after the value fields.
-    let mut extra: Vec<usize> = Vec::new();
-    for (vs, _) in &vals {
-        if let ValSrc::Calc(i) = vs {
-            for name in calc.source_refs(*i) {
-                if let Some(c) = src.col(&name)
-                    && !extra.contains(&c)
-                {
-                    extra.push(c);
-                }
-            }
-        }
-    }
+    let extra = calculated_source_columns(&vals, &calc, src);
     if rows.len() + cols.len() > MAX_AXIS_FIELDS {
         return Err(format!("A PivotTable can have at most {MAX_AXIS_FIELDS} row and column fields."));
     }
     if vals.len() > MAX_VALUE_FIELDS {
         return Err(format!("A PivotTable can have at most {MAX_VALUE_FIELDS} value fields."));
     }
-    let axis_group = |name: &str| -> Option<PivotDateGroup> {
-        pt.rows.iter().chain(pt.columns.iter()).find(|f| f.source_col.eq_ignore_ascii_case(name)).map(|f| f.date_group)
-    };
-    // (column, filter, grouping used for labels, shown as a report filter)
-    let filters: Vec<(usize, &PivotFilter, PivotDateGroup, bool)> = pt
-        .filters
-        .iter()
-        .filter_map(|f| {
-            let c = src.col(&f.source_col)?;
-            let g = axis_group(&f.source_col);
-            Some((c, f, g.unwrap_or_default(), g.is_none()))
-        })
-        .collect();
-    let shown_filters: Vec<&(usize, &PivotFilter, PivotDateGroup, bool)> = filters.iter().filter(|f| f.3).collect();
+    let (filters, shown_filters) = report_filters(pt, src);
 
     let k = vals.len();
     let empty = rows.is_empty() && cols.is_empty() && vals.is_empty();
     // Σ Values in Rows (it exists with two or more value fields): its depth among the row fields
     // found in the source.
-    let vpos: Option<usize> = (pt.values_on_rows && k > 1).then(|| {
-        let p = pt.values_position.unwrap_or(pt.rows.len());
-        pt.rows.iter().take(p).filter(|f| src.col(&f.source_col).is_some()).count()
-    });
+    let vpos = values_position(pt, src, k);
     let on_rows = vpos.is_some();
     let row_levels = rows.len() + usize::from(on_rows);
 
     // ---- aggregate
-    let mut row_items: Vec<FieldItems> = rows.iter().map(|_| FieldItems::default()).collect();
-    let mut col_items: Vec<FieldItems> = cols.iter().map(|_| FieldItems::default()).collect();
-    let mut aggs: AggMap = HashMap::new();
-    let mut row_set: HashSet<Vec<u32>> = HashSet::new();
-    let mut col_set: HashSet<Vec<u32>> = HashSet::new();
-    let mut col_leaves: HashSet<Vec<u32>> = HashSet::new();
     let filter_fmts: Vec<String> = filters.iter().map(|f| fmt_of(f.0)).collect();
     let row_fmts: Vec<String> = rows.iter().map(|(c, _)| fmt_of(*c)).collect();
     let col_fmts: Vec<String> = cols.iter().map(|(c, _)| fmt_of(*c)).collect();
-    'rec: for (ri, rec) in src.rows.iter().enumerate() {
-        for ((c, f, g, _), fmt) in filters.iter().zip(filter_fmts.iter()) {
-            if let Some(sel) = &f.selected {
-                let label = item_label(wb, rec.get(*c).unwrap_or(&Value::Empty), *g, fmt);
-                if !sel.iter().any(|s| s.eq_ignore_ascii_case(&label)) {
-                    continue 'rec;
-                }
-            }
-        }
-        if empty {
-            continue;
-        }
-        let mut rp = Vec::with_capacity(rows.len());
-        for (((c, f), fi), fmt) in rows.iter().zip(row_items.iter_mut()).zip(row_fmts.iter()) {
-            rp.push(fi.intern(wb, rec.get(*c).unwrap_or(&Value::Empty), f.date_group, fmt, ri));
-        }
-        let mut cp = Vec::with_capacity(cols.len());
-        for (((c, f), fi), fmt) in cols.iter().zip(col_items.iter_mut()).zip(col_fmts.iter()) {
-            cp.push(fi.intern(wb, rec.get(*c).unwrap_or(&Value::Empty), f.date_group, fmt, ri));
-        }
-        for a in 0..=rp.len() {
-            for b in 0..=cp.len() {
-                let e = aggs.entry((rp[..a].to_vec(), cp[..b].to_vec())).or_insert_with(|| vec![Acc::default(); k + extra.len()]);
-                for (acc, (vs, _)) in e.iter_mut().zip(vals.iter()) {
-                    if let ValSrc::Col(c) = vs {
-                        acc.add(rec.get(*c).unwrap_or(&Value::Empty));
-                    }
-                }
-                for (acc, c) in e.iter_mut().skip(k).zip(extra.iter()) {
-                    acc.add(rec.get(*c).unwrap_or(&Value::Empty));
-                }
-            }
-        }
-        // The column leaf this record lands in: its path cut after the first collapsed item (as in `flatten_cols`).
-        let shown = cols
-            .iter()
-            .zip(col_items.iter())
-            .zip(cp.iter())
-            .position(|(((_, f), fi), &it)| !f.collapsed_items.is_empty() && is_collapsed(f, &fi.label(it)))
-            .map_or(cp.len(), |d| d + 1);
-        if !col_leaves.contains(&cp[..shown]) {
-            col_leaves.insert(cp[..shown].to_vec());
-        }
-        if let Some(paths) = probe.as_deref_mut().and_then(|pr| pr.paths.as_mut()) {
-            paths.push((ri, rp.clone(), cp.clone()));
-        }
-        row_set.insert(rp);
-        col_set.insert(cp);
-        // Refuse a report that cannot fit before the accumulators for more column groups are allocated.
-        if !cols.is_empty() && data_cols_exceed_sheet(col_leaves.len(), pt.grand_totals_rows, k) {
-            return Err("The PivotTable report will not fit on the sheet.".into());
-        }
-        if aggs.len() > 5_000_000 {
-            return Err("The PivotTable report is too large.".into());
-        }
-    }
+    let aggregate = aggregate_source(
+        AggregateInput {
+            wb,
+            pt,
+            src,
+            rows: &rows,
+            cols: &cols,
+            vals: &vals,
+            extra: &extra,
+            filters: &filters,
+            filter_fmts: &filter_fmts,
+            row_fmts: &row_fmts,
+            col_fmts: &col_fmts,
+            empty,
+        },
+        &mut probe,
+    )?;
+    let AggregateData { row_items, col_items, aggs, row_set, col_set, col_leaves: _ } = aggregate;
 
     // ---- axes
     let row_fields: Vec<&PivotField> = rows.iter().map(|(_, f)| *f).collect();
@@ -236,24 +540,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             specs.push(ColSpec { kind: ColKind::Grand, path: vec![] });
         }
     }
-    let mut data_cols: Vec<(usize, Option<usize>)> = Vec::new();
-    for (si, _) in specs.iter().enumerate() {
-        if on_rows {
-            // Each line names its value field; one data column per column item.
-            data_cols.push((si, None));
-        } else if k == 0 {
-            if !cols.is_empty() {
-                data_cols.push((si, None));
-            }
-        } else {
-            for vi in 0..k {
-                data_cols.push((si, Some(vi)));
-            }
-        }
-        if data_cols.len() > MAX_COLS as usize {
-            return Err("The PivotTable report will not fit on the sheet.".into());
-        }
-    }
+    let data_cols = data_columns(&specs, !cols.is_empty(), on_rows, k)?;
 
     let compact = pt.layout == PivotLayout::Compact;
     let l = if row_levels == 0 && cols.is_empty() {
@@ -304,128 +591,28 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
         });
     }
 
-    let val_name = |vi: usize| vals.get(vi).map(|(_, v)| v.name.clone()).unwrap_or_default();
-    let headers_on = pt.show_headers;
-    let row_header = |g: &mut Grid, r: usize| {
-        if row_levels == 0 || !headers_on {
-            return;
-        }
-        if compact {
-            g.set(r, 0, Value::text("Row Labels"), CellKind::Header, 0, None);
-        } else {
-            // One column per row field, Σ Values ("Values") at its place.
-            let mut names: Vec<&str> = row_fields.iter().map(|f| f.source_col.as_str()).collect();
-            if let Some(p) = vpos {
-                names.insert(p.min(names.len()), "Values");
-            }
-            for (i, name) in names.into_iter().enumerate() {
-                g.set(r, i, Value::text(name), CellKind::Header, 0, None);
-            }
-        }
-    };
-
-    // ---- header rows
-    if cols.is_empty() {
-        let r = g.push_row(RowKind::Header)?;
-        row_header(&mut g, r);
-        for (j, (_, vi)) in data_cols.iter().enumerate() {
-            match vi {
-                Some(vi) => g.set(r, l + j, Value::text(val_name(*vi)), CellKind::Header, 0, None),
-                // Values on rows, no column field: the one data column is the grand total.
-                None if on_rows => g.set(r, l + j, Value::text("Total"), CellKind::Header, 0, None),
-                None => {}
-            }
-        }
-    } else {
-        let cap = g.push_row(RowKind::Header)?;
-        if l > 0 && k == 1 {
-            g.set(cap, 0, Value::text(val_name(0)), CellKind::Header, 0, None);
-        }
-        if headers_on {
-            let caption = if compact { "Column Labels".to_string() } else { col_fields.first().map(|f| f.source_col.clone()).unwrap_or_default() };
-            g.set(cap, l, Value::text(caption), CellKind::Header, 0, None);
-        }
-        let levels = cols.len() + usize::from(k > 1 && !on_rows);
-        let first_level = g.rows.len();
-        for _ in 0..levels {
-            g.push_row(RowKind::Header)?;
-        }
-        let mut prev: Option<&ColSpec> = None;
-        for (j, (si, vi)) in data_cols.iter().enumerate() {
-            let Some(spec) = specs.get(*si) else { continue };
-            let c = l + j;
-            match spec.kind {
-                ColKind::Leaf => {
-                    for (lv, &it) in spec.path.iter().enumerate() {
-                        let same = prev.is_some_and(|p| p.kind != ColKind::Grand && p.path.get(..=lv) == spec.path.get(..=lv));
-                        if !same {
-                            let Some(item) = col_items.get(lv).and_then(|fi| fi.get(it)) else { continue };
-                            let fmt = if item.formatted { cols.get(lv).map(|(cc, _)| fmt_of(*cc)) } else { None };
-                            g.set(first_level + lv, c, item.value.clone(), CellKind::ColLabel, 0, fmt);
-                        }
-                    }
-                    if k > 1
-                        && let Some(vi) = vi
-                    {
-                        g.set(first_level + cols.len(), c, Value::text(val_name(*vi)), CellKind::ColLabel, 0, None);
-                    }
-                }
-                ColKind::Subtotal => {
-                    let lv = spec.path.len().saturating_sub(1);
-                    let label = spec.path.last().and_then(|it| col_items.get(lv).map(|fi| fi.label(*it))).unwrap_or_default();
-                    let text = match vi {
-                        Some(vi) if k > 1 => format!("{label} {}", val_name(*vi)),
-                        _ => format!("{label} Total"),
-                    };
-                    g.set(first_level + lv, c, Value::text(text), CellKind::ColLabel, 0, None);
-                }
-                ColKind::Grand => {
-                    let text = match vi {
-                        Some(vi) if k > 1 => format!("Total {}", val_name(*vi)),
-                        _ => "Grand Total".to_string(),
-                    };
-                    g.set(first_level, c, Value::text(text), CellKind::ColLabel, 0, None);
-                }
-            }
-            prev = Some(spec);
-        }
-        let last = g.rows.len() - 1;
-        row_header(&mut g, last);
-    }
+    write_headers(
+        &mut g,
+        HeaderInput {
+            vals: &vals,
+            row_fields: &row_fields,
+            col_fields: &col_fields,
+            col_items: &col_items,
+            col_fmts: &col_fmts,
+            vpos,
+            data_cols: &data_cols,
+            specs: &specs,
+            row_levels,
+            compact,
+            on_rows,
+            k,
+            l,
+            headers_on: pt.show_headers,
+        },
+    )?;
+    let val_name = |vi: usize| vals.get(vi).map(|(_, value)| value.name.clone()).unwrap_or_default();
 
     // ---- body
-    let get = |rp: &[u32], cp: &[u32], vi: usize| -> Option<Value> {
-        let (vs, v) = vals.get(vi)?;
-        let accs = aggs.get(&(rp.to_vec(), cp.to_vec()))?;
-        match vs {
-            ValSrc::Col(_) => accs.get(vi).map(|a| a.result(v.func)),
-            ValSrc::Calc(i) => {
-                let sum = |name: &str| -> Value {
-                    src.col(name)
-                        .and_then(|c| extra.iter().position(|x| *x == c))
-                        .and_then(|j| accs.get(k + j))
-                        .map(|a| a.result(PivotFunc::Sum))
-                        .unwrap_or(Value::Number(0.0))
-                };
-                Some(calc.value(wb, *i, &sum))
-            }
-        }
-    };
-    let num = |v: &Option<Value>| v.as_ref().and_then(Value::as_f64);
-    let ratio = |a: Value, b: Option<Value>| -> Value {
-        match (a, b) {
-            (Value::Error(e), _) => Value::Error(e),
-            (_, Some(Value::Error(e))) => Value::Error(e),
-            (Value::Number(x), Some(Value::Number(y))) => {
-                if y == 0.0 {
-                    Value::Error(CellError::Div0)
-                } else {
-                    Value::number(x / y)
-                }
-            }
-            (v, _) => v,
-        }
-    };
     let data_fmt: Vec<Option<String>> = vals
         .iter()
         .map(|(vs, v)| match v.show_as {
@@ -445,6 +632,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             }),
         })
         .collect();
+    let lookup = ValueLookup { wb, source: src, calc: &calc, vals: &vals, extra: &extra, aggs: &aggs, value_count: k };
     let mut chart_rows: Vec<u32> = Vec::new();
     let chart_cols: Vec<(u32, String)> = data_cols
         .iter()
@@ -501,46 +689,9 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             let (Some(spec), Some(vi)) = (specs.get(*si), &line_vi) else { continue };
             let Some((_, vdef)) = vals.get(*vi) else { continue };
             let cp = spec.path.as_slice();
-            let Some(raw) = get(rp, cp, *vi) else { continue };
-            let shown = match vdef.show_as {
-                PivotShowAs::Normal => raw,
-                PivotShowAs::PercentOfGrandTotal => ratio(raw, get(&[], &[], *vi)),
-                PivotShowAs::PercentOfColumnTotal => ratio(raw, get(&[], cp, *vi)),
-                PivotShowAs::PercentOfRowTotal => ratio(raw, get(rp, &[], *vi)),
-                PivotShowAs::RunningTotal => match (rp.first(), &raw) {
-                    (Some(first), Value::Number(_)) => {
-                        let mut acc = 0.0;
-                        for it in &level0 {
-                            let mut p = rp.to_vec();
-                            if let Some(x) = p.first_mut() {
-                                *x = *it;
-                            }
-                            acc += num(&get(&p, cp, *vi)).unwrap_or(0.0);
-                            if it == first {
-                                break;
-                            }
-                        }
-                        Value::number(acc)
-                    }
-                    _ => raw,
-                },
-                PivotShowAs::Rank => match (rp.split_last(), raw.as_f64()) {
-                    (Some((_, parent)), Some(me)) => {
-                        let sibs = siblings.get(parent).cloned().unwrap_or_default();
-                        let mut rank = 1u64;
-                        for sib in sibs {
-                            let mut p = parent.to_vec();
-                            p.push(sib);
-                            if num(&get(&p, cp, *vi)).is_some_and(|x| x > me) {
-                                rank += 1;
-                            }
-                        }
-                        Value::number(rank as f64)
-                    }
-                    (None, _) => Value::Empty,
-                    _ => raw,
-                },
-            };
+            let Some(raw) = lookup.get(rp, cp, *vi) else { continue };
+            let context = ShowContext { row_path: rp, col_path: cp, value_index: *vi, level0: &level0, siblings: &siblings };
+            let shown = show_value(vdef, raw, &lookup, &context);
             if let Some(pr) = probe.as_deref_mut() {
                 if pr.at == Some((r, l + j)) {
                     pr.hit = Some((rp.to_vec(), cp.to_vec()));
