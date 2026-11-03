@@ -28,6 +28,9 @@ pub struct Ctx<'a> {
     /// Threaded-comment person id → display name.
     pub persons: std::collections::HashMap<String, String>,
     pub next_id: u32,
+    /// Object ids already given out or kept from the file, so a fresh one never collides with
+    /// an id a saved part still carries (a table's, which a saved From Web connection points at).
+    pub object_ids: std::collections::HashSet<u32>,
     /// Custom number formats from the styles part, by id.
     pub num_fmts: std::collections::HashMap<u32, String>,
     /// Value metadata blocks, indexed by the worksheet's one-based `vm` attribute.
@@ -75,9 +78,23 @@ impl Ctx<'_> {
     }
     /// A fresh id for a chart, picture, shape or table.
     pub fn next_object_id(&mut self) -> u32 {
-        let id = self.next_id;
-        self.next_id = self.next_id.saturating_add(1);
-        id
+        while self.next_id < u32::MAX {
+            let id = self.next_id;
+            self.next_id = self.next_id.saturating_add(1);
+            if self.object_ids.insert(id) {
+                return id;
+            }
+        }
+        u32::MAX
+    }
+    /// The file's own object id when it is usable, so the id survives the round trip; else a
+    /// fresh one (an id of 0 was never assigned, a duplicate was never valid).
+    pub fn keep_object_id(&mut self, id: u32) -> u32 {
+        if id > 0 && self.object_ids.insert(id) {
+            id
+        } else {
+            self.next_object_id()
+        }
     }
     pub fn style(&self, xf: Option<u32>) -> StyleId {
         xf.and_then(|i| self.xf_map.get(i as usize).copied()).unwrap_or_default()
@@ -249,6 +266,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         styles: StyleTable::default(),
         persons: Default::default(),
         next_id: 1,
+        object_ids: Default::default(),
         num_fmts: Default::default(),
         cell_pictures: vec![],
         cf_ext_ids: vec![],

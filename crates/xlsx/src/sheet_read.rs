@@ -298,7 +298,9 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                         if let Some(x) = cx.optional_xml(&target)?
                             && let Some(mut t) = read_table(cx, &x)
                         {
-                            t.id = cx.next_object_id();
+                            // The part's id is kept when it is free, so a table's id — and a saved
+                            // From Web connection's table_id with it — survives the reopen.
+                            t.id = cx.keep_object_id(t.id);
                             sheet.tables.push(t);
                         }
                     }

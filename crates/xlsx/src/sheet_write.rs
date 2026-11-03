@@ -211,15 +211,22 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             // reader would hand a different table. A model id is kept only the first time it
             // appears (a duplicate, or an id of 0 from a workbook that never assigned one,
             // gets the next unused value), so `table/@id` stays unique across the package.
+            // A fallback id never takes a positive model id any table still owns — all of them
+            // were reserved up front — and a connected table renumbered for a duplicate model
+            // id takes its connection along (the remap rewrites the saved table_id).
             let id = if t.id > 0 && out.used_table_ids.insert(t.id) {
                 t.id
             } else {
-                loop {
+                let new = loop {
                     out.table_id += 1;
-                    if out.used_table_ids.insert(out.table_id) {
+                    if !out.model_table_ids.contains(&out.table_id) && out.used_table_ids.insert(out.table_id) {
                         break out.table_id;
                     }
+                };
+                if t.id > 0 {
+                    out.table_id_remap.push((sheet.name.clone(), t.name.clone(), t.id, new));
                 }
+                new
             };
             let name = table_name(&t.name, &mut used_names, id);
             let xml = table_xml(t, cols, &name, id, out);

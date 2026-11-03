@@ -134,6 +134,13 @@ pub struct Out {
     /// Table ids already emitted to the package: a model id is kept only the first time it
     /// appears (a duplicate or zero id gets a fresh unused one), so `table/@id` stays unique.
     pub used_table_ids: std::collections::HashSet<u32>,
+    /// Every positive model table id in the workbook, reserved before the first sheet is written,
+    /// so a fallback id handed to a table without one never takes a later table's model id (which
+    /// a saved From Web connection still points at).
+    pub model_table_ids: std::collections::HashSet<u32>,
+    /// (sheet, table name, old id, new id) for tables renumbered because a duplicate positive
+    /// model id: the connection of a renumbered connected table is rewritten to the new id.
+    pub table_id_remap: Vec<(String, String, u32, u32)>,
     pub dynamic_arrays: bool,
     pub needs_calc: bool,
     pub cell_pictures: crate::richdata::PicturesOut,
@@ -269,6 +276,8 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         persons: vec![],
         table_id: 0,
         used_table_ids: Default::default(),
+        model_table_ids: wb.sheets.iter().flat_map(|sh| sh.tables.iter().filter(|t| t.id > 0).map(|t| t.id)).collect(),
+        table_id_remap: vec![],
         dynamic_arrays: false,
         needs_calc: false,
         cell_pictures: Default::default(),
@@ -366,7 +375,17 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         let mut c = format!("{XML_DECL}<connections xmlns=\"{NS_MAIN}\" xmlns:gc=\"{GC_NS}\">");
         for (i, q) in wb.web_queries.iter().enumerate() {
             let refresh = if q.refresh_on_open { " refreshOnLoad=\"1\"" } else { "" };
-            let id = q.table_id.unwrap_or(0);
+            // A connected table renumbered for a duplicate model id takes its connection with it,
+            // so the saved `tableId` finds the same table after the reopen.
+            let id = match q.table_id {
+                Some(id) => out
+                    .table_id_remap
+                    .iter()
+                    .find(|(sheet, name, old, _)| *old == id && q.sheet == *sheet && q.name == *name)
+                    .map(|(_, _, _, new)| *new)
+                    .unwrap_or(id),
+                None => 0,
+            };
             let synced = q.last_synced.unwrap_or(0);
             let _ = write!(c,
                 "<connection id=\"{}\" name=\"{}\" type=\"5\"{refresh} refreshedVersion=\"6\"><webPr url=\"{}\" xmlTables=\"1\"/><extLst><ext uri=\"{GC_URI}\"><gc:webQuery table=\"{}\" occurrence=\"{}\" sheet=\"{}\" tableId=\"{}\" lastSynced=\"{}\"/></ext></extLst></connection>",

@@ -701,3 +701,47 @@ fn duplicate_table_ids_never_collide_in_the_package() {
     seen.dedup();
     assert_eq!(seen.len(), 2, "the reopened model ids are unique: {seen:?}");
 }
+
+#[test]
+/// A table that never had a model id (0) must not take the model id of a later table a saved
+/// connection points at: all positive model ids are reserved first, so the fallback id skips
+/// them and the connection still finds its table after the reopen.
+fn a_fallback_table_id_never_takes_a_connected_tables_model_id() {
+    use gridcraft_model::*;
+    let mut wb = Workbook::default();
+    let mut sh = Sheet::new("S");
+    let table = |id: u32, name: &str| Table { id, name: name.into(), range: gridcraft_core::RangeRef::parse("A1:B2").unwrap(), header_row: true, totals_row: false, columns: vec![], style: String::new(), banded_rows: false, banded_cols: false, first_col: false, last_col: false, filter_button: false, filter: vec![], table_type: None, connection_id: None };
+    sh.tables.push(table(0, "Old"));
+    sh.tables.push(table(1, "prices"));
+    wb.sheets.push(std::sync::Arc::new(sh));
+    wb.web_queries.push(WebQuery { name: "prices".into(), table_id: Some(1), url: "https://example.com/t.html".into(), table: "prices".into(), occurrence: 0, sheet: "S".into(), last_synced: None, refresh_on_open: false });
+    let bytes = write_xlsx(&wb).expect("saves");
+    let (back, _) = read_xlsx(&bytes).expect("reopens");
+    let tables = &back.sheets.iter().find(|sh| sh.name == "S").expect("the sheet").tables;
+    let prices = tables.iter().find(|t| t.name == "prices").expect("the connected table");
+    let old = tables.iter().find(|t| t.name == "Old").expect("the other table");
+    assert_eq!(prices.id, 1, "the connected table keeps its model id");
+    assert_ne!(old.id, 1, "the fallback id skips the reserved model id: {}", old.id);
+    assert_eq!(back.web_queries[0].table_id, Some(prices.id), "the connection still finds the connected table");
+}
+
+#[test]
+/// A connected table renumbered for a duplicate positive model id takes its connection along:
+/// the saved `tableId` is the new id, so the refresh after the reopen rewrites the same table.
+fn a_renumbered_connected_table_takes_its_connection_along() {
+    use gridcraft_model::*;
+    let mut wb = Workbook::default();
+    let table = |id: u32, name: &str| Table { id, name: name.into(), range: gridcraft_core::RangeRef::parse("A1:B2").unwrap(), header_row: true, totals_row: false, columns: vec![], style: String::new(), banded_rows: false, banded_cols: false, first_col: false, last_col: false, filter_button: false, filter: vec![], table_type: None, connection_id: None };
+    let mut a = Sheet::new("A");
+    a.tables.push(table(7, "First"));
+    wb.sheets.push(std::sync::Arc::new(a));
+    let mut b = Sheet::new("B");
+    b.tables.push(table(7, "prices"));
+    wb.sheets.push(std::sync::Arc::new(b));
+    wb.web_queries.push(WebQuery { name: "prices".into(), table_id: Some(7), url: "https://example.com/t.html".into(), table: "prices".into(), occurrence: 0, sheet: "B".into(), last_synced: None, refresh_on_open: false });
+    let bytes = write_xlsx(&wb).expect("saves");
+    let (back, _) = read_xlsx(&bytes).expect("reopens");
+    let prices = back.sheets.iter().flat_map(|sh| sh.tables.iter()).find(|t| t.name == "prices").expect("the connected table");
+    assert_ne!(prices.id, 7, "the duplicate model id is renumbered: {}", prices.id);
+    assert_eq!(back.web_queries[0].table_id, Some(prices.id), "the connection follows the renumbered table");
+}
