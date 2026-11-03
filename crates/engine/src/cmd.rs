@@ -48,7 +48,12 @@ pub struct CommandSpec {
     /// (Align Left/Center): other platforms show none. See [`CommandInfo::shortcut_for_platform`].
     pub shortcut_mac: Option<&'static str>,
     pub params: &'static str,
+    /// Whether the command can run now; [`Session::execute`] refuses it otherwise.
     pub enabled: Enabled,
+    /// Whether it applies to the active sheet as it is, for greying it in menus and the
+    /// `enabled` that `engine.commands` reports. Runs aren't refused by it: a command aimed at
+    /// another sheet is judged by that sheet when it runs (#2516).
+    pub available: Option<Enabled>,
     pub run: Run,
     pub journal: bool,
     pub undoable: bool,
@@ -88,7 +93,7 @@ impl CommandInfo {
 
 impl CommandSpec {
     pub fn info(&self, s: &Session) -> CommandInfo {
-        let e = (self.enabled)(s);
+        let e = (self.enabled)(s).and_then(|()| self.available.map_or(Ok(()), |available| available(s)));
         CommandInfo {
             id: self.id,
             label: self.label,
@@ -152,13 +157,18 @@ pub fn has_clipboard(s: &Session) -> std::result::Result<(), String> {
 
 macro_rules! cmd {
     ($id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: true, undoable: true }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, available: None, run: $run, journal: true, undoable: true }
     };
     (query $id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: false, undoable: false }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, available: None, run: $run, journal: false, undoable: false }
+    };
+    // A cell-formatting command: it runs whenever a workbook is open (the format code refuses a
+    // protected target sheet) and is greyed while `$en` says the active sheet can't take it.
+    (format $id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $crate::cmd::has_doc, available: Some($en), run: $run, journal: true, undoable: true }
     };
     (noundo $id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: true, undoable: false }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, available: None, run: $run, journal: true, undoable: false }
     };
 }
 pub(crate) use cmd;
@@ -219,6 +229,7 @@ pub fn register_test_command(id: &'static str, run: Run) {
         shortcut_mac: None,
         params: "",
         enabled: |_| Ok(()),
+        available: None,
         run,
         journal: true,
         undoable: false,
@@ -237,6 +248,7 @@ pub(crate) fn register_undoable_test_command(id: &'static str, run: Run) {
         shortcut_mac: None,
         params: "",
         enabled: |_| Ok(()),
+        available: None,
         run,
         journal: false,
         undoable: true,

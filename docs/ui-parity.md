@@ -241,7 +241,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-03 | minor | The 38 cell-formatting commands (font, fill, borders, alignment, merge, number formats, cell styles, Format Cells) report themselves unavailable (greyed in the ribbon, `enabled: false` in `engine.commands`) on a sheet protected without Format cells, which refuses them, as Excel does (#2516) |
+| 2026-11-03 | minor | The 38 cell-formatting commands (font, fill, borders, alignment, merge, number formats, cell styles, Format Cells) report themselves unavailable (greyed in the ribbon, `enabled: false` in `engine.commands`) on a sheet protected without Format cells, which refuses them, as Excel does; a command aimed at another sheet (`range: "Sheet2!A1"`) still runs there (#2516) |
 | 2026-11-03 | minor | Highlight the active cell's row: a global preference that tints the whole row, off by default |
 | 2026-11-03 | minor | The formula bar's bottom edge is a resize handle: dragging it sets the bar's height in whole lines, up to half the window, and dragging it to one line collapses it; expanding (the chevron, Ctrl+Shift+U) returns to the dragged height, which is kept with the UI preferences. `view.expandFormulaBar {lines}` sets it (#1246) |
 | 2026-11-03 | minor | Cell context menu on a cell with a link: Edit Hyperlink… (the link dialog, titled Edit Hyperlink and filled with the link), Open Hyperlink and Remove Hyperlink, as in Excel, instead of Link… (#2120) |
