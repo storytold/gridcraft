@@ -348,10 +348,41 @@ fn undo_and_redo_reach_the_sheet_while_find_and_replace_is_open() {
     h.get_by_label("Find what:").focus();
     h.run_steps(2);
     assert!(h.ctx.text_edit_focused());
+    let before = h.state().dialog.as_ref().unwrap().values.get("what").cloned();
+    h.input_mut().events.push(Event::Text("extra".into()));
+    h.run_steps(2);
+    assert_ne!(h.state().dialog.as_ref().unwrap().values.get("what"), before.as_ref());
     key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert_eq!(h.state().dialog.as_ref().unwrap().values.get("what"), before.as_ref(), "Undo restores the Find field");
     assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("y1"), Value::from("y2")), "text-field Undo leaves the sheet alone");
 }
 
+#[test]
+fn find_message_blocks_workbook_undo_and_redo() {
+    let mut session = blank();
+    session.execute("cell.set", json!({"cell": "A1", "input": "first"})).unwrap();
+    session.execute("cell.set", json!({"cell": "A1", "input": "second"})).unwrap();
+    session.execute("edit.undo", json!({})).unwrap();
+    let mut h = harness(session);
+    h.state_mut().open_dialog("find", json!({"replace": true}));
+    h.run_steps(3);
+    // An empty search raises the real modal error over Find and Replace.
+    h.get_by_label("Replace All").click();
+    h.run_steps(3);
+    assert!(h.state().message.is_some());
+    assert!(!h.ctx.text_edit_focused());
+    for (key_code, modifiers) in [(Key::Z, Modifiers::COMMAND), (Key::Y, Modifiers::COMMAND), (Key::Z, Modifiers::COMMAND | Modifiers::SHIFT)] {
+        key(&mut h, key_code, modifiers);
+        assert_eq!(value(&h, "A1"), Value::from("first"), "the message blocks workbook shortcuts");
+        assert!(h.state().message.is_some());
+    }
+    h.state_mut().message = None;
+    h.run_steps(2);
+    h.get_by_label("Replace All").focus();
+    h.run_steps(2);
+    key(&mut h, Key::Y, Modifiers::COMMAND);
+    assert_eq!(value(&h, "A1"), Value::from("second"), "Redo works again after dismissing the message");
+}
 #[test]
 fn shift_arrows_in_point_mode_extend_from_the_pointed_cell() {
     let mut s = blank();
