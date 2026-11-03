@@ -193,7 +193,7 @@ fn filter_search_localizes_constants_without_translating_text() {
 /// Creates, edits and deletes a sheet-scoped name even when the sheet is called Workbook.
 #[test]
 fn name_manager_distinguishes_a_sheet_named_workbook() {
-    use egui::accesskit::Role;
+    use egui::{Key, Modifiers, accesskit::Role};
     let mut h = harness();
     h.state_mut().run("sheet.rename", json!({"name":"Workbook"})).unwrap();
     h.state_mut().run("home.insertSheet", json!({"name":"Other"})).unwrap();
@@ -208,8 +208,7 @@ fn name_manager_distinguishes_a_sheet_named_workbook() {
     d.values.insert("refersTo".into(), json!("=0.1"));
     h.run_steps(3);
     assert_eq!(h.get_by_role_and_label(Role::ComboBox, Language::Ru.tr("Scope:")).value().as_deref(), Some("Workbook (Лист)"));
-    let ok = format!(" {} ", Language::Ru.tr("OK"));
-    h.get_by_role_and_label(Role::Button, &ok).click();
+    press(&mut h, Key::Enter, Modifiers::NONE);
     h.run_steps(3);
     let wb = &h.state().session.active().unwrap().wb;
     let local = wb.sheet_index("Workbook").unwrap();
@@ -226,7 +225,7 @@ fn name_manager_distinguishes_a_sheet_named_workbook() {
     assert_eq!(d.values["oldScope"], json!({"sheet":"Workbook"}));
     d.values.insert("name".into(), json!("RenamedRate"));
     h.run_steps(2);
-    h.get_by_role_and_label(Role::Button, &ok).click();
+    press(&mut h, Key::Enter, Modifiers::NONE);
     h.run_steps(3);
     let wb = &h.state().session.active().unwrap().wb;
     assert!(wb.name("LocalRate", local).is_none());
