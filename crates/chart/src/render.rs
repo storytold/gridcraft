@@ -15,6 +15,7 @@ mod frame;
 mod kinds;
 mod legend;
 mod lines;
+mod table;
 mod trend;
 
 use cartesian::{cartesian, scatter};

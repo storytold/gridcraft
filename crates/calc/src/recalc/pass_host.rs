@@ -45,6 +45,10 @@ pub(super) struct PassHost<'a> {
     /// Suspensions so far (tests check that a wide read at the limit needs one, not one per cell).
     #[cfg(test)]
     pub(super) suspensions: usize,
+    /// Spilled values looked at by range reads (tests check that a read outside a large spill
+    /// looks at none of it).
+    #[cfg(test)]
+    pub(super) spill_visits: usize,
     /// The formulas in `cycles`.
     cycle_seen: HashSet<Key>,
     /// Iterative calculation: a circular reference reads the cell's previous value instead of
@@ -64,6 +68,10 @@ pub(super) struct PassHost<'a> {
     stack_top: usize,
     /// Whether an evaluation ran past the stack budget since the innermost formula started.
     out_of_stack: bool,
+    /// The kept results of the Python cells in the pass: a Python cell isn't evaluated, its
+    /// result is laid out (an array spills from the cell, as a formula's does). Each one is in
+    /// `pending` until it is laid out, so a formula that reads it first gets its new value.
+    python: HashMap<Key, Value>,
 }
 
 impl<'a> PassHost<'a> {
@@ -87,6 +95,8 @@ impl<'a> PassHost<'a> {
             also: Vec::new(),
             #[cfg(test)]
             suspensions: 0,
+            #[cfg(test)]
+            spill_visits: 0,
             cycle_seen: HashSet::default(),
             iterate: false,
             prev: HashMap::default(),
@@ -96,7 +106,16 @@ impl<'a> PassHost<'a> {
             taint: false,
             stack_top: 0,
             out_of_stack: false,
+            python: HashMap::default(),
         }
+    }
+
+    /// Adds the dirty Python cells of the pass and their kept results: like the formulas, they
+    /// are pending until laid out, so every read path calculates them before reading them.
+    pub(super) fn with_python(mut self, python: HashMap<Key, Value>) -> Self {
+        self.pending.extend(python.keys().copied());
+        self.python = python;
+        self
     }
 }
 
@@ -111,7 +130,10 @@ fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
     let own = sh.spill_ranges.get(&anchor);
     let spilled_over = |c: CellRef| {
         !own.is_some_and(|o| o.contains(c))
-            && sh.spill_ranges.iter().any(|(o, r)| *o != anchor && r.contains(c) && !host.exprs.contains_key(&(sheet, *o)))
+            && sh.spill_ranges.iter().any(|(o, r)| {
+                // A formula or Python cell recalculated in this pass lays its array out again.
+                *o != anchor && r.contains(c) && !host.exprs.contains_key(&(sheet, *o)) && !host.python.contains_key(&(sheet, *o))
+            })
     };
     end.row >= gridcraft_core::MAX_ROWS
         || end.col >= gridcraft_core::MAX_COLS
@@ -133,6 +155,42 @@ pub(super) fn spills_as_before(sheet: &gridcraft_model::Sheet, anchor: CellRef, 
             .iter()
             .enumerate()
             .all(|(i, c)| c == anchor || (!sheet.cells.has(c) && sheet.spill.get(&c) == Some(arr.data.get(i).unwrap_or(&Value::Empty))))
+}
+
+/// The area an array anchored at `anchor` covers.
+fn array_area(anchor: CellRef, a: &Array) -> RangeRef {
+    let end =
+        CellRef::new(anchor.row.saturating_add((a.rows as u32).saturating_sub(1)), anchor.col.saturating_add((a.cols as u32).saturating_sub(1)));
+    RangeRef::new(anchor, end)
+}
+
+/// The spilled values `sheet` stores inside `range`, passed to `f` until it returns false. Values
+/// outside the range are not walked: with fewer rows in the range than spilled values, each row
+/// is looked up on its own; otherwise one ordered scan visits each spilled value at most once.
+/// Returns how many values were looked at.
+fn stored_spill_in<'s>(sheet: &'s gridcraft_model::Sheet, range: RangeRef, f: &mut dyn FnMut(CellRef, &'s Value) -> bool) -> usize {
+    let mut seen = 0usize;
+    if sheet.spill.is_empty() {
+        return 0;
+    }
+    if (range.height() as usize) < sheet.spill.len() {
+        for row in range.start.row..=range.end.row {
+            for (c, v) in sheet.spill.range(CellRef::new(row, range.start.col)..=CellRef::new(row, range.end.col)) {
+                seen += 1;
+                if !f(*c, v) {
+                    return seen;
+                }
+            }
+        }
+    } else {
+        for (c, v) in sheet.spill.range(range.start..=range.end) {
+            seen += 1;
+            if range.contains(*c) && !f(*c, v) {
+                return seen;
+            }
+        }
+    }
+    seen
 }
 
 impl PassHost<'_> {
@@ -187,6 +245,9 @@ impl PassHost<'_> {
                 self.taint = true;
             }
             return v;
+        }
+        if let Some(result) = self.python.get(&k).cloned() {
+            return self.python_result(k, result);
         }
         let Some(expr) = self.exprs.get(&k) else {
             return self.wb.sheet(k.0).map(|s| s.value(k.1)).unwrap_or_default();
@@ -294,6 +355,36 @@ impl PassHost<'_> {
             v => v,
         };
         // An array that can't spill is #SPILL! for the formulas evaluated after it in this pass too.
+        let v = match self.spills.get(&k) {
+            Some(a) if spill_blocked(self, k, a) => {
+                self.spills.remove(&k);
+                Value::Error(CellError::Spill)
+            }
+            _ => v,
+        };
+        self.results.insert(k, v.clone());
+        v
+    }
+
+    /// A Python cell's kept result as its value: an array spills from the cell unless it is
+    /// blocked, malformed or larger than [`gridcraft_model::python::MAX_RESULT_CELLS`] (only a
+    /// crafted file holds one), which shows `#SPILL!`.
+    fn python_result(&mut self, k: Key, result: Value) -> Value {
+        self.pending.remove(&k);
+        let v = match result {
+            Value::Array(a) => {
+                let sane = a.rows >= 1
+                    && a.cols >= 1
+                    && a.rows.checked_mul(a.cols).is_some_and(|n| n == a.data.len() && n <= gridcraft_model::python::MAX_RESULT_CELLS);
+                if sane {
+                    self.spills.insert(k, a.clone());
+                    a.data.first().cloned().unwrap_or_default()
+                } else {
+                    Value::Error(CellError::Spill)
+                }
+            }
+            v => v,
+        };
         let v = match self.spills.get(&k) {
             Some(a) if spill_blocked(self, k, a) => {
                 self.spills.remove(&k);
@@ -445,26 +536,29 @@ impl Host for PassHost<'_> {
         let (h, w) = (range.height() as usize, range.width() as usize);
         let mut out = vec![Value::Empty; h * w];
         let Some(sh) = self.wb.sheet(sheet) else { return out };
-        // Sparse walk: only stored cells; formula cells that are (or were) dirty go through
-        // `compute`, constants are copied straight from the store.
+        // Sparse walk: only stored cells; formula and Python cells that are (or were) dirty go
+        // through `compute`, constants are copied straight from the store.
         let mut formulas: Vec<(usize, CellRef)> = Vec::new();
         for (c, cell) in sh.cells.iter_range(range) {
             let i = (c.row - range.start.row) as usize * w + (c.col - range.start.col) as usize;
-            if cell.formula.is_some() {
+            if cell.formula.is_some() || cell.py.is_some() {
                 formulas.push((i, c));
             } else if let Some(slot) = out.get_mut(i) {
                 *slot = cell.value.clone();
             }
         }
-        for (c, v) in sh.spill.range(range.start..=range.end) {
-            if range.contains(*c) {
-                let i = (c.row - range.start.row) as usize * w + (c.col - range.start.col) as usize;
-                if let Some(slot) = out.get_mut(i)
-                    && slot.is_empty()
-                {
-                    *slot = v.clone();
-                }
+        let _seen = stored_spill_in(sh, range, &mut |c, v| {
+            let i = (c.row - range.start.row) as usize * w + (c.col - range.start.col) as usize;
+            if let Some(slot) = out.get_mut(i)
+                && slot.is_empty()
+            {
+                *slot = v.clone();
             }
+            true
+        });
+        #[cfg(test)]
+        {
+            self.spill_visits += _seen;
         }
         for (i, c) in formulas {
             let v = self.cell_value(sheet, c);
@@ -473,26 +567,31 @@ impl Host for PassHost<'_> {
             }
         }
         if !self.spills.is_empty() {
-            let new: Vec<(usize, Value)> = self
-                .spills
-                .iter()
-                .filter(|(a, _)| a.0 == sheet)
-                .flat_map(|(a, arr)| {
-                    let mut v = Vec::new();
-                    for r in 0..arr.rows {
-                        for cc in 0..arr.cols {
-                            let c = CellRef::new(a.1.row.saturating_add(r as u32), a.1.col.saturating_add(cc as u32));
-                            if c != a.1 && range.contains(c) {
-                                v.push((
-                                    (c.row - range.start.row) as usize * w + (c.col - range.start.col) as usize,
-                                    arr.get(r, cc).cloned().unwrap_or_default(),
-                                ));
-                            }
+            // Only the part of each array inside the range is walked: a large array beside a small
+            // read costs nothing.
+            let mut new: Vec<(usize, Value)> = Vec::new();
+            for (a, arr) in self.spills.iter().filter(|(a, _)| a.0 == sheet) {
+                let area = array_area(a.1, arr);
+                if !area.intersects(&range) {
+                    continue;
+                }
+                let (r0, r1) = (area.start.row.max(range.start.row), area.end.row.min(range.end.row));
+                let (c0, c1) = (area.start.col.max(range.start.col), area.end.col.min(range.end.col));
+                for row in r0..=r1 {
+                    for col in c0..=c1 {
+                        let c = CellRef::new(row, col);
+                        if c == a.1 {
+                            continue;
                         }
+                        let v = arr.get((row - a.1.row) as usize, (col - a.1.col) as usize).cloned().unwrap_or_default();
+                        new.push(((row - range.start.row) as usize * w + (col - range.start.col) as usize, v));
                     }
-                    v
-                })
-                .collect();
+                }
+            }
+            #[cfg(test)]
+            {
+                self.spill_visits += new.len();
+            }
             // Iterating: an array spilled by a formula that read a previous value.
             if self.iterate
                 && self.spills.iter().any(|(a, arr)| {
@@ -516,21 +615,31 @@ impl Host for PassHost<'_> {
     fn visit_range(&mut self, sheet: usize, range: RangeRef, f: &mut dyn FnMut(&Value) -> bool) -> bool {
         let wb = self.wb;
         let Some(sh) = wb.sheet(sheet) else { return false };
-        // Formula cells first, in row-major order like `range_values`: reading one calculates it
-        // and the pass remembers the value, so the walk below gets the same value again without
-        // this method holding any.
+        // Formula and Python cells first, in row-major order like `range_values`: reading one
+        // calculates it (a Python cell lays out its result) and the pass remembers the value, so
+        // the walk below gets the same value again without this method holding any.
         for (c, cell) in sh.cells.iter_range(range) {
-            if cell.formula.is_some() {
+            if cell.formula.is_some() || cell.py.is_some() {
                 let _ = self.cell_value(sheet, c);
             }
         }
         // Spilled values sit between the stored cells (and the formulas just calculated may have
         // produced some): leave such blocks to `range_values`.
-        if self.spills.keys().any(|a| a.0 == sheet) || sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c)) {
+        let arrays = self.spills.iter().any(|(a, arr)| a.0 == sheet && array_area(a.1, arr).intersects(&range));
+        let mut stored = false;
+        let _seen = stored_spill_in(sh, range, &mut |_, _| {
+            stored = true;
+            false
+        });
+        #[cfg(test)]
+        {
+            self.spill_visits += _seen;
+        }
+        if arrays || stored {
             return false;
         }
         for (c, cell) in sh.cells.iter_range(range) {
-            let go = if cell.formula.is_some() { f(&self.cell_value(sheet, c)) } else { f(&cell.value) };
+            let go = if cell.formula.is_some() || cell.py.is_some() { f(&self.cell_value(sheet, c)) } else { f(&cell.value) };
             if !go {
                 break;
             }
