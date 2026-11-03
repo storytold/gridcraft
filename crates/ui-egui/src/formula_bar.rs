@@ -182,10 +182,15 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
 }
 
 /// What a tall bar leaves below it: the status bar and sheet tabs, and the active sheet's column
-/// headings and two rows at its zoom, so the grid never disappears in a short window.
+/// headings (under Page Layout view's ruler) and two rows at its zoom, so the grid never
+/// disappears in a short window.
 fn keep_below(app: &SheetApp) -> f32 {
-    let sheet =
-        app.session.active().and_then(|d| d.wb.active()).map_or(0.0, |sh| crate::grid::header_height(sh) + crate::grid::default_rows_height(sh, 2.0));
+    let sheet = app.session.active().and_then(|d| d.wb.active()).map_or(0.0, |sh| {
+        // Page Layout view puts its ruler above the headings, out of the grid's room.
+        let paper = sh.view == gridcraft_engine::model::SheetViewMode::PageLayout;
+        let ruler = if paper && !app.session.hide_ruler { crate::paper_view::RULER } else { 0.0 };
+        ruler + crate::grid::header_height(sh) + crate::grid::default_rows_height(sh, 2.0)
+    });
     BOTTOM_BARS + sheet
 }
 
