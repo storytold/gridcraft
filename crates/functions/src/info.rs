@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 
 use gridcraft_core::{Array, CellError, Value, compare_text};
 
-use crate::util::{A, MAX_CELLS, R, S, has, scalar, text, text_val};
+use crate::util::{A, MAX_CELLS, R, S, has, scalar, text};
 use crate::{Arg, Ctx, FnSpec, VAR};
 
 // ---------------------------------------------------------------------------------------------
