@@ -671,6 +671,15 @@ impl Session {
         (spec.enabled)(self).map_err(|why| EngineError::Disabled(id.to_string(), why))
     }
 
+    fn ensure_command_unlocked(&self, id: &str, query: bool) -> Result<()> {
+        let locked = self.active().is_some_and(|d| self.macro_debug.as_ref().is_some_and(|m| m.locks(d.uid) && !m.stepping()));
+        if locked && !macros::debug::runs_while_locked(id, query) {
+            Err(EngineError::Disabled(id.to_string(), macros::debug::BUSY.into()))
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn execute(&mut self, id: &str, params: Json) -> Result<Json> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         self.ensure_command_enabled(id, spec)?;
@@ -685,10 +694,7 @@ impl Session {
         // (`macros::debug::LOOKS_AROUND`). Anything else waits, undoable or not (saving, view
         // modes, stopping Record Actions, which saves a script), also when another command runs
         // it. Only the run's own steps go ahead. Other workbooks stay editable.
-        let locked = self.active().is_some_and(|d| self.macro_debug.as_ref().is_some_and(|m| m.locks(d.uid) && !m.stepping()));
-        if locked && !macros::debug::runs_while_locked(id, query) {
-            return Err(EngineError::Disabled(id.to_string(), macros::debug::BUSY.into()));
-        }
+        self.ensure_command_unlocked(id, query)?;
         let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
         // A dry run inside this command that a panic cuts short leaves journaling paused and its
         // touch log open; the panic branch puts both back.
