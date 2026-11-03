@@ -41,7 +41,8 @@ fn the_find_form_shows_in_the_interface_language() {
     h.state_mut().open_dialog("find", json!({}));
     h.run_steps(3);
     let ru = gridcraft_ui_egui::i18n::Language::Ru;
-    for english in ["Find what:", "Find All", "Match case", "Find tab|Find", "Replace tab|Replace", "Nothing found for", "cell(s) found"] {
+    for english in ["Find what:", "Find All", "Match case", "Find tab|Find", "Replace tab|Replace", "Nothing found for “{}”", "{count} cell(s) found"]
+    {
         assert_ne!(ru.tr(english), english, "{english} has no Russian entry");
     }
     assert!(h.query_by_label_contains("Поиск и замена").is_some(), "the window title translates");
