@@ -479,7 +479,15 @@ mod tests {
 
     #[test]
     fn repeated_headers_are_renamed_without_retrying_suffixes() {
-        let col = |n: &str| TableColumn { name: n.into(), totals: TotalsFn::None, totals_label: None, formula: None, unique_name: None, xml: None };
+        let col = |n: &str| TableColumn {
+            name: n.into(),
+            totals: TotalsFn::None,
+            totals_label: None,
+            formula: None,
+            query_field_id: None,
+            unique_name: None,
+            xml: None,
+        };
         let mut columns: Vec<TableColumn> = (0..10_000).map(|_| col("Total")).collect();
         columns[1] = col("total3");
         let t = Table {
@@ -498,6 +506,7 @@ mod tests {
             filter: vec![],
             table_type: None,
             connection_id: None,
+            query_table: None,
         };
         let names = table_columns(&t);
         assert_eq!(names.len(), 10_000);
