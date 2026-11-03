@@ -97,6 +97,7 @@ pub enum CommandSyncPolicy {
 pub const NOTICE_PROTECTION: &str = "Sheet and workbook protection changes stay on this device and aren't shared with peers.";
 pub const NOTICE_MACROS: &str = "Macros and automation scripts stay on this device and aren't shared with peers.";
 pub const NOTICE_LOCAL_FILE: &str = "Local file imports stay on this device and aren't shared with peers.";
+pub const NOTICE_UNSHARED_CLIPBOARD: &str = "Clipboard content copied from another workbook stays on this device and isn't shared with peers.";
 pub const NOTICE_UNDO_REDO: &str = "Undo and Redo are disabled on the shared workbook while live sharing is active.";
 pub const NOTICE_VIEW_ONLY: &str = "View-only session — edits are disabled.";
 
@@ -328,8 +329,10 @@ pub struct SyncState {
     pub join_input: String,
     pub last_error: Option<String>,
     pub(crate) applying_remote: bool,
-    pub(crate) remote_clipboard: Option<gridcraft_engine::Clipboard>,
-    pub(crate) remote_format_painter: Option<(Arc<Workbook>, usize, RangeRef, bool)>,
+    pub(crate) remote_clipboards: std::collections::HashMap<String, gridcraft_engine::Clipboard>,
+    pub(crate) remote_format_painters: std::collections::HashMap<String, (Arc<Workbook>, usize, RangeRef, bool)>,
+    pub(crate) local_staged_clipboard: Option<gridcraft_engine::Clipboard>,
+    pub(crate) local_staged_format_painter: Option<(Arc<Workbook>, usize, RangeRef, bool)>,
     cached_status: ShareStatus,
     cached_peers: usize,
 }
@@ -375,8 +378,10 @@ impl SyncState {
             join_input: String::new(),
             last_error: None,
             applying_remote: false,
-            remote_clipboard: None,
-            remote_format_painter: None,
+            remote_clipboards: std::collections::HashMap::new(),
+            remote_format_painters: std::collections::HashMap::new(),
+            local_staged_clipboard: None,
+            local_staged_format_painter: None,
             cached_status: ShareStatus::Offline,
             cached_peers: 0,
         }
@@ -464,6 +469,11 @@ impl SyncState {
 }
 
 impl SheetApp {
+    /// Whether the active workbook is currently being shared in a live Share Mode session.
+    pub fn active_doc_is_shared(&self) -> bool {
+        self.session.active().is_some_and(|d| self.sync.is_sharing_doc(d.uid))
+    }
+
     /// Whether the local user is allowed to edit the currently active workbook.
     ///
     /// Returns `false` when the active workbook is the shared workbook and this peer joined
@@ -483,15 +493,13 @@ impl SheetApp {
 
     /// Starts hosting a live Share Mode session for the active workbook on a background thread.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn start_sharing(&mut self) {
+    pub fn start_sharing(&mut self) -> Result<(), String> {
         if self.sync.is_busy() {
-            return;
+            return Err("Share Mode is busy".into());
         }
-        if self.settle_drafts().is_err() {
-            return;
-        }
+        self.settle_drafts()?;
         let Some(d) = self.session.active() else {
-            return;
+            return Err("No active workbook to share".into());
         };
         let doc_uid = d.uid;
         let filename = d.display_title();
@@ -500,11 +508,11 @@ impl SheetApp {
             Err(e) => {
                 self.sync.last_error = Some(e.clone());
                 self.toast = Some((format!("Failed to prepare workbook for sharing: {e}"), now_ms()));
-                return;
+                return Err(e);
             }
         };
         let Some(mut engine) = self.sync.ensure_engine() else {
-            return;
+            return Err("Share engine unavailable".into());
         };
         self.sync.shared_doc_uid = Some(doc_uid);
         self.sync.last_error = None;
@@ -515,32 +523,35 @@ impl SheetApp {
             let res = engine.enable_share_mode(&filename, doc_bytes).map_err(|e| e.to_string());
             let _ = tx.send(PendingOutcome::Hosted(engine, res));
         });
+        Ok(())
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub fn start_sharing(&mut self) {}
+    pub fn start_sharing(&mut self) -> Result<(), String> {
+        Err("Share Mode is not available in the browser".into())
+    }
 
     /// Joins an existing Share Mode session via a `gridcraft://...` or `ssync://...` ticket on a
-    /// background thread. The received base document will load into the active workbook slot.
+    /// background thread. The received base document opens into a new workbook so unsaved work in
+    /// any currently open workbook is preserved.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn start_joining(&mut self, ticket: String) {
+    pub fn start_joining(&mut self, ticket: String) -> Result<(), String> {
         if self.sync.is_busy() {
-            return;
+            return Err("Share Mode is busy".into());
         }
         let trimmed = ticket.trim().to_string();
         if trimmed.is_empty() {
             let msg = "Paste a Share link to join.".to_string();
             self.sync.last_error = Some(msg.clone());
-            self.toast = Some((msg, now_ms()));
-            return;
+            self.toast = Some((msg.clone(), now_ms()));
+            return Err(msg);
         }
         let _ = self.settle_drafts();
-        if self.session.active().is_none() {
-            self.session.new_workbook();
-        }
-        let doc_uid = self.session.active().map(|d| d.uid);
+        // The host's snapshot always opens as a new workbook (see `apply_remote_base_document`),
+        // so joining never overwrites the user's open work.
+        let doc_uid = None;
         let Some(mut engine) = self.sync.ensure_engine() else {
-            return;
+            return Err("Share engine unavailable".into());
         };
         self.sync.shared_doc_uid = doc_uid;
         self.sync.last_error = None;
@@ -551,10 +562,13 @@ impl SheetApp {
             let res = engine.join_via_ticket(&trimmed).map_err(|e| e.to_string());
             let _ = tx.send(PendingOutcome::Joined(engine, res));
         });
+        Ok(())
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub fn start_joining(&mut self, _ticket: String) {}
+    pub fn start_joining(&mut self, _ticket: String) -> Result<(), String> {
+        Err("Share Mode is not available in the browser".into())
+    }
 
     /// Stops hosting or leaves the current Share Mode session on a background thread.
     #[cfg(not(target_arch = "wasm32"))]
@@ -568,8 +582,10 @@ impl SheetApp {
             self.sync.shared_doc_uid = None;
             self.sync.edit_ticket = None;
             self.sync.view_ticket = None;
-            self.sync.remote_clipboard = None;
-            self.sync.remote_format_painter = None;
+            self.sync.remote_clipboards.clear();
+            self.sync.remote_format_painters.clear();
+            self.sync.local_staged_clipboard = None;
+            self.sync.local_staged_format_painter = None;
             return;
         };
         self.sync.pending_label = Some("Stopping Share Mode…");
@@ -659,8 +675,10 @@ impl SheetApp {
                 self.sync.shared_doc_uid = None;
                 self.sync.edit_ticket = None;
                 self.sync.view_ticket = None;
-                self.sync.remote_clipboard = None;
-                self.sync.remote_format_painter = None;
+                self.sync.remote_clipboards.clear();
+                self.sync.remote_format_painters.clear();
+                self.sync.local_staged_clipboard = None;
+                self.sync.local_staged_format_painter = None;
                 self.sync.engine = Some(engine);
                 if let Err(e) = res {
                     self.sync.last_error = Some(e.clone());
@@ -700,9 +718,9 @@ impl SheetApp {
                         self.toast = Some((format!("Failed to load shared workbook: {e}"), now_ms()));
                     }
                 }
-                simple_sync::SyncEvent::RemoteMutation { mutation_bytes, .. } => match SharedMutation::from_wire(&mutation_bytes) {
+                simple_sync::SyncEvent::RemoteMutation { author_peer_id, mutation_bytes } => match SharedMutation::from_wire(&mutation_bytes) {
                     Ok(mutation) => {
-                        if let Err(e) = self.apply_remote_mutation(&mutation) {
+                        if let Err(e) = self.apply_remote_mutation_from_peer(&author_peer_id, &mutation) {
                             self.sync.last_error = Some(e.clone());
                         }
                     }
@@ -711,7 +729,14 @@ impl SheetApp {
                     }
                 },
                 simple_sync::SyncEvent::CrdtUpdated { .. } => {}
-                simple_sync::SyncEvent::PeerJoined { .. } | simple_sync::SyncEvent::PeerLeft { .. } => {
+                simple_sync::SyncEvent::PeerJoined { .. } => {
+                    if let Some(engine) = &self.sync.engine {
+                        self.sync.cached_peers = engine.connected_peers_count();
+                    }
+                }
+                simple_sync::SyncEvent::PeerLeft { peer_id } => {
+                    self.sync.remote_clipboards.remove(&peer_id);
+                    self.sync.remote_format_painters.remove(&peer_id);
                     if let Some(engine) = &self.sync.engine {
                         self.sync.cached_peers = engine.connected_peers_count();
                     }
@@ -763,20 +788,29 @@ impl SheetApp {
         } else {
             let doc = gridcraft_engine::DocState::from_saved((*wb_arc).clone(), None, "Shared.xlsx".into(), gridcraft_engine::Trust::FromFile);
             let uid = doc.uid;
-            self.session.add_document(doc);
+            let idx = self.session.add_document(doc);
+            self.session.set_active(idx);
             self.sync.shared_doc_uid = Some(uid);
         }
         self.follow_open_draft();
         Ok(())
     }
 
-    /// Applies an incoming [`SharedMutation`] to the shared workbook without re-broadcasting.
+    /// Applies an incoming [`SharedMutation`] from `default` peer without re-broadcasting.
+    pub fn apply_remote_mutation(&mut self, mutation: &SharedMutation) -> Result<(), String> {
+        self.apply_remote_mutation_from_peer("default", mutation)
+    }
+
+    /// Applies an incoming [`SharedMutation`] authored by `author_peer_id` to the shared workbook
+    /// without re-broadcasting.
     ///
     /// Strictly separated from [`SheetApp::run_engine_synced`] so remote mutations never loop back
     /// into `broadcast_mutation` and never disturb another workbook the local user is viewing.
     /// Validates incoming commands against [`classify_command`] and rejects any payload carrying
-    /// local file paths, passwords, or non-shared command ids.
-    pub fn apply_remote_mutation(&mut self, mutation: &SharedMutation) -> Result<(), String> {
+    /// local file paths, passwords, or non-shared command ids. Staged clipboards and format
+    /// painters are keyed by `author_peer_id` so interleaved copies by different editors never
+    /// overwrite each other.
+    pub fn apply_remote_mutation_from_peer(&mut self, author_peer_id: &str, mutation: &SharedMutation) -> Result<(), String> {
         let Some(shared_uid) = self.sync.shared_doc_uid else {
             return Err("no shared document registered".into());
         };
@@ -811,16 +845,24 @@ impl SheetApp {
 
         let local_clipboard = self.session.clipboard.take();
         let local_format_painter = self.session.format_painter.take();
-        self.session.clipboard = self.sync.remote_clipboard.take();
-        self.session.format_painter = self.sync.remote_format_painter.take();
+        let mut peer_clipboard = self.sync.remote_clipboards.remove(author_peer_id);
+        if let Some(cb) = &mut peer_clipboard {
+            cb.doc_uid = shared_uid;
+        }
+        self.session.clipboard = peer_clipboard;
+        self.session.format_painter = self.sync.remote_format_painters.remove(author_peer_id);
         let requests_before = self.session.ui_requests.len();
 
         self.sync.applying_remote = true;
         let exec_res = self.session.execute(&mutation.id, params).map_err(|e| e.to_string());
         self.sync.applying_remote = false;
 
-        self.sync.remote_clipboard = self.session.clipboard.take();
-        self.sync.remote_format_painter = self.session.format_painter.take();
+        if let Some(cb) = self.session.clipboard.take() {
+            self.sync.remote_clipboards.insert(author_peer_id.to_string(), cb);
+        }
+        if let Some(fp) = self.session.format_painter.take() {
+            self.sync.remote_format_painters.insert(author_peer_id.to_string(), fp);
+        }
         self.session.clipboard = local_clipboard;
         self.session.format_painter = local_format_painter;
         self.session.ui_requests.truncate(requests_before);
@@ -888,6 +930,24 @@ impl SheetApp {
                     return Err(format!("command `{id}` is not available right now: {NOTICE_VIEW_ONLY}"));
                 }
 
+                // Refuse to broadcast a paste or format-painter apply whose source clipboard was
+                // not staged on the shared workbook (e.g. copied in an unshared workbook).
+                let shared_uid = active_uid.unwrap_or(0);
+                let uses_internal_clipboard =
+                    matches!(id, "edit.paste" | "edit.pasteSpecial" | "insert.copiedCells") && params.get("text").and_then(Json::as_str).is_none();
+                let uses_format_painter_apply = id == "edit.formatPainter" && params.get("apply").is_some();
+                if (uses_internal_clipboard && !clipboard_matches_staged(&self.session.clipboard, &self.sync.local_staged_clipboard, shared_uid))
+                    || (uses_format_painter_apply
+                        && !format_painter_matches_staged(&self.session.format_painter, &self.sync.local_staged_format_painter))
+                {
+                    let res = self.session.run(id, params);
+                    if res.is_ok() {
+                        self.notice = Some(Notice { text: NOTICE_UNSHARED_CLIPBOARD.into(), kind: NoticeKind::Info, action: None });
+                        self.toast = Some((NOTICE_UNSHARED_CLIPBOARD.into(), now_ms()));
+                    }
+                    return res;
+                }
+
                 let pre = self
                     .session
                     .active()
@@ -898,11 +958,11 @@ impl SheetApp {
                 if let (Ok(result_json), Some((doc_uid, wb_before, sheet_name, selection))) = (&res, pre) {
                     let wb_changed = self.session.documents().iter().find(|d| d.uid == doc_uid).is_some_and(|d| !Arc::ptr_eq(&d.wb, &wb_before));
                     let stages_clipboard = is_clipboard_staging_command(id);
+                    if stages_clipboard || uses_internal_clipboard || uses_format_painter_apply {
+                        self.sync.local_staged_clipboard = self.session.clipboard.clone();
+                        self.sync.local_staged_format_painter = self.session.format_painter.clone();
+                    }
                     if wb_changed || stages_clipboard {
-                        if stages_clipboard {
-                            self.sync.remote_clipboard = self.session.clipboard.clone();
-                            self.sync.remote_format_painter = self.session.format_painter.clone();
-                        }
                         let enriched = enrich_params_with_result(id, params, result_json);
                         if let Ok(params_json) = serde_json::to_string(&enriched) {
                             let mutation = SharedMutation { sheet_name, selection, selected_object, id: id.to_string(), params_json };
@@ -919,9 +979,34 @@ impl SheetApp {
     }
 }
 
+fn clipboard_matches_staged(current: &Option<gridcraft_engine::Clipboard>, staged: &Option<gridcraft_engine::Clipboard>, shared_uid: u64) -> bool {
+    let (Some(cur), Some(st)) = (current, staged) else {
+        return false;
+    };
+    cur.doc_uid == shared_uid
+        && st.doc_uid == shared_uid
+        && Arc::ptr_eq(&cur.wb, &st.wb)
+        && cur.sheet == st.sheet
+        && cur.range == st.range
+        && cur.selected == st.selected
+        && cur.cut == st.cut
+        && cur.areas == st.areas
+}
+
+fn format_painter_matches_staged(
+    current: &Option<(Arc<Workbook>, usize, RangeRef, bool)>,
+    staged: &Option<(Arc<Workbook>, usize, RangeRef, bool)>,
+) -> bool {
+    let (Some(cur), Some(st)) = (current, staged) else {
+        return false;
+    };
+    Arc::ptr_eq(&cur.0, &st.0) && cur.1 == st.1 && cur.2 == st.2 && cur.3 == st.3
+}
+
 /// Renders active Share Mode status and action buttons inline on the title bar when a session is
 /// live or starting/stopping.
 pub fn share_title_bar_inline(app: &mut SheetApp, ui: &mut egui::Ui) {
+    let t = crate::theme::Tokens::get(ui.ctx());
     if let Some(label) = app.sync.pending_label {
         ui.label(egui::RichText::new(label).size(12.0));
         ui.add(egui::Spinner::new().size(14.0));
@@ -932,7 +1017,7 @@ pub fn share_title_bar_inline(app: &mut SheetApp, ui: &mut egui::Ui) {
         ShareStatus::Offline => {}
         ShareStatus::Hosting => {
             if ui.small_button("Stop Sharing").on_hover_text("Disconnect all peers and end the live session").clicked() {
-                app.stop_sharing();
+                app.run_or_alert("share.stop", serde_json::json!({}));
             }
             if let Some(ticket) = app.sync.view_ticket.clone()
                 && ui.small_button("Copy View-Only Link").on_hover_text("Copy read-only invite link").clicked()
@@ -946,25 +1031,26 @@ pub fn share_title_bar_inline(app: &mut SheetApp, ui: &mut egui::Ui) {
                 ui.ctx().copy_text(ticket);
                 app.toast = Some(("Copied Edit link to clipboard.".into(), now_ms()));
             }
-            ui.colored_label(egui::Color32::from_rgb(40, 180, 99), format!("🟢 Live ({peers} Peers)"));
+            ui.colored_label(t.error_check_green, format!("🟢 Live ({peers} Peers)"));
         }
         ShareStatus::JoinedCanEdit => {
             if ui.small_button("Leave").on_hover_text("Disconnect from the shared session").clicked() {
-                app.stop_sharing();
+                app.run_or_alert("share.stop", serde_json::json!({}));
             }
-            ui.colored_label(egui::Color32::from_rgb(40, 180, 99), format!("🟢 Live ({peers} Peers)"));
+            ui.colored_label(t.error_check_green, format!("🟢 Live ({peers} Peers)"));
         }
         ShareStatus::JoinedViewOnly => {
             if ui.small_button("Leave").on_hover_text("Disconnect from the shared session").clicked() {
-                app.stop_sharing();
+                app.run_or_alert("share.stop", serde_json::json!({}));
             }
-            ui.colored_label(egui::Color32::from_rgb(230, 145, 56), "🔒 View Only");
+            ui.colored_label(t.cat[crate::theme::Cat::Orange as usize], "🔒 View Only");
         }
     }
 }
 
 /// Renders the collaboration controls inside the title bar's `Share` popup menu.
 pub fn share_popup_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
+    let t = crate::theme::Tokens::get(ui.ctx());
     ui.set_min_width(240.0);
     if let Some(label) = app.sync.pending_label {
         ui.horizontal(|ui| {
@@ -978,7 +1064,7 @@ pub fn share_popup_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     match app.sync.status() {
         ShareStatus::Offline => {
             if ui.button("Share Document").on_hover_text("Start a live end-to-end encrypted P2P session").clicked() {
-                app.start_sharing();
+                app.run_or_alert("share.start", serde_json::json!({}));
                 ui.close();
             }
             ui.add_space(4.0);
@@ -987,12 +1073,12 @@ pub fn share_popup_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
             let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if ui.button("Join").clicked() || enter {
                 let ticket = app.sync.join_input.clone();
-                app.start_joining(ticket);
+                app.run_or_alert("share.join", serde_json::json!({"ticket": ticket}));
                 ui.close();
             }
         }
         ShareStatus::Hosting => {
-            ui.colored_label(egui::Color32::from_rgb(40, 180, 99), format!("🟢 Live ({peers} Peers)"));
+            ui.colored_label(t.error_check_green, format!("🟢 Live ({peers} Peers)"));
             if let Some(ticket) = app.sync.edit_ticket.clone()
                 && ui.button("Copy Edit Link").clicked()
             {
@@ -1008,27 +1094,27 @@ pub fn share_popup_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                 ui.close();
             }
             if ui.button("Stop Sharing").clicked() {
-                app.stop_sharing();
+                app.run_or_alert("share.stop", serde_json::json!({}));
                 ui.close();
             }
         }
         ShareStatus::JoinedCanEdit => {
-            ui.colored_label(egui::Color32::from_rgb(40, 180, 99), format!("🟢 Live ({peers} Peers)"));
+            ui.colored_label(t.error_check_green, format!("🟢 Live ({peers} Peers)"));
             if ui.button("Leave Session").clicked() {
-                app.stop_sharing();
+                app.run_or_alert("share.stop", serde_json::json!({}));
                 ui.close();
             }
         }
         ShareStatus::JoinedViewOnly => {
-            ui.colored_label(egui::Color32::from_rgb(230, 145, 56), "🔒 View Only");
+            ui.colored_label(t.cat[crate::theme::Cat::Orange as usize], "🔒 View Only");
             if ui.button("Leave Session").clicked() {
-                app.stop_sharing();
+                app.run_or_alert("share.stop", serde_json::json!({}));
                 ui.close();
             }
         }
     }
     if let Some(err) = &app.sync.last_error {
-        ui.colored_label(egui::Color32::from_rgb(210, 60, 60), format!("⚠ {err}"));
+        ui.colored_label(t.danger, format!("⚠ {err}"));
     }
     ui.separator();
 }
@@ -1043,8 +1129,8 @@ mod tests {
     use simple_sync::SyncConfig;
 
     use super::{
-        CommandSyncPolicy, NOTICE_LOCAL_FILE, NOTICE_MACROS, NOTICE_PROTECTION, NOTICE_UNDO_REDO, NOTICE_VIEW_ONLY, ShareStatus, SharedMutation,
-        SyncState, classify_command,
+        CommandSyncPolicy, NOTICE_LOCAL_FILE, NOTICE_MACROS, NOTICE_PROTECTION, NOTICE_UNDO_REDO, NOTICE_UNSHARED_CLIPBOARD, NOTICE_VIEW_ONLY,
+        ShareStatus, SharedMutation, SyncState, classify_command,
     };
     use crate::{Services, SheetApp};
 
@@ -1148,21 +1234,31 @@ mod tests {
         let mut editor = test_app("Editor");
         let mut viewer = test_app("Viewer");
 
+        // Unsaved local work in Editor's initial workbook must be preserved when joining.
+        let editor_initial_uid = editor.session.active().expect("editor initial").uid;
+        editor.run("cell.set", json!({"cell": "A1", "input": "UnsavedLocalWork"})).expect("set editor local A1");
+
         // Initial content on Host before sharing.
         host.run("cell.set", json!({"cell": "A1", "input": "Initial"})).expect("set A1");
         host.run("cell.set", json!({"cell": "B1", "input": "10"})).expect("set B1");
 
-        // Host enables Share Mode.
-        host.start_sharing();
+        // `share.stop` is unavailable when Offline.
+        assert!(host.run("share.stop", json!({})).is_err());
+
+        // Host enables Share Mode via UI command `share.start`.
+        host.run("share.start", json!({})).expect("share.start");
         spin_until(vec![&mut host], |apps| apps[0].sync.status() == ShareStatus::Hosting && apps[0].sync.edit_ticket.is_some());
+        assert!(host.active_doc_is_shared());
+        // Calling `share.start` again while already hosting is refused.
+        assert!(host.run("share.start", json!({})).is_err());
 
         let edit_link = host.sync.edit_ticket.clone().expect("edit ticket");
         let view_link = host.sync.view_ticket.clone().expect("view ticket");
         assert_ne!(edit_link, view_link);
 
-        // Editor joins with edit link; Viewer joins with view-only link.
-        editor.start_joining(edit_link);
-        viewer.start_joining(view_link);
+        // Editor joins with edit link; Viewer joins with view-only link via `share.join`.
+        editor.run("share.join", json!({"ticket": edit_link})).expect("editor join");
+        viewer.run("share.join", json!({"ticket": view_link})).expect("viewer join");
         spin_until(vec![&mut host, &mut editor, &mut viewer], |apps| {
             let e_val = apps[1].session.active().and_then(|d| d.wb.active()).map(|s| s.value(CellRef::new(0, 0)));
             let v_val = apps[2].session.active().and_then(|d| d.wb.active()).map(|s| s.value(CellRef::new(0, 0)));
@@ -1171,6 +1267,14 @@ mod tests {
                 && e_val == Some(gridcraft_engine::core::Value::Text("Initial".into()))
                 && v_val == Some(gridcraft_engine::core::Value::Text("Initial".into()))
         });
+
+        // Verify Editor's pre-existing unsaved workbook was NOT overwritten by joining.
+        let editor_initial_idx = editor.session.document_index(editor_initial_uid).expect("initial doc still open");
+        assert_ne!(editor.sync.shared_doc_uid, Some(editor_initial_uid));
+        assert_eq!(
+            editor.session.documents()[editor_initial_idx].wb.active().expect("sheet").value(CellRef::new(0, 0)),
+            gridcraft_engine::core::Value::Text("UnsavedLocalWork".into())
+        );
 
         assert_eq!(host.session.active().expect("host doc").wb, editor.session.active().expect("editor doc").wb);
         assert_eq!(host.session.active().expect("host doc").wb, viewer.session.active().expect("viewer doc").wb);
@@ -1200,14 +1304,14 @@ mod tests {
         assert!(viewer.editor.is_none());
         assert_eq!(viewer.session.active().expect("viewer").wb, viewer_wb_before);
 
-        // Kill switch on Host returns Host to Offline.
-        host.stop_sharing();
+        // Kill switch on Host via `share.stop` returns Host to Offline.
+        host.run("share.stop", json!({})).expect("host share.stop");
         spin_until(vec![&mut host], |apps| apps[0].sync.status() == ShareStatus::Offline && !apps[0].sync.is_busy());
         assert!(host.sync.edit_ticket.is_none());
         assert!(host.sync.view_ticket.is_none());
 
-        editor.stop_sharing();
-        viewer.stop_sharing();
+        editor.run("share.stop", json!({})).expect("editor share.stop");
+        viewer.run("share.stop", json!({})).expect("viewer share.stop");
         spin_until(vec![&mut editor, &mut viewer], |apps| {
             apps[0].sync.status() == ShareStatus::Offline && apps[1].sync.status() == ShareStatus::Offline
         });
@@ -1216,7 +1320,7 @@ mod tests {
     #[test]
     fn late_joiner_and_command_categories_converge() {
         let mut host = test_app("HostLate");
-        host.start_sharing();
+        host.start_sharing().expect("start sharing");
         spin_until(vec![&mut host], |apps| apps[0].sync.status() == ShareStatus::Hosting && apps[0].sync.edit_ticket.is_some());
         let edit_link = host.sync.edit_ticket.clone().expect("edit ticket");
 
@@ -1249,7 +1353,7 @@ mod tests {
 
         // Now a late joiner connects and must converge to the exact same workbook!
         let mut late_joiner = test_app("LateJoiner");
-        late_joiner.start_joining(edit_link);
+        late_joiner.start_joining(edit_link).expect("join");
         spin_until(vec![&mut host, &mut late_joiner], |apps| {
             apps[1].sync.status() == ShareStatus::JoinedCanEdit
                 && apps[1].session.active().expect("late").wb == apps[0].session.active().expect("host").wb
@@ -1272,11 +1376,11 @@ mod tests {
         host.run("cell.set", json!({"cell": "A1", "input": "SharedDoc"})).expect("set shared A1");
         let shared_host_uid = host.session.active().expect("host active").uid;
 
-        host.start_sharing();
+        host.start_sharing().expect("start sharing");
         spin_until(vec![&mut host], |apps| apps[0].sync.status() == ShareStatus::Hosting && apps[0].sync.edit_ticket.is_some());
         let edit_link = host.sync.edit_ticket.clone().expect("edit ticket");
 
-        peer.start_joining(edit_link);
+        peer.start_joining(edit_link).expect("join");
         spin_until(vec![&mut host, &mut peer], |apps| {
             apps[1].sync.status() == ShareStatus::JoinedCanEdit
                 && apps[1].session.active().expect("peer").wb == apps[0].session.active().expect("host").wb
@@ -1292,8 +1396,10 @@ mod tests {
         let unshared_peer_uid = peer.session.active().expect("peer second").uid;
         assert_ne!(shared_peer_uid, unshared_peer_uid);
 
-        // Host edits its unshared workbook -> must NOT be sent to Peer's shared or unshared workbook.
+        // Host edits and copies in its unshared workbook -> must NOT be sent to Peer's shared or unshared workbook.
         host.run("cell.set", json!({"cell": "A1", "input": "PrivateHostNote"})).expect("edit unshared host");
+        host.run("selection.set", json!({"range": "A1"})).expect("select A1 on unshared");
+        host.run("edit.copy", json!({})).expect("copy on unshared");
 
         // Switch Host back to shared workbook and edit B1 while Peer is still viewing its unshared workbook.
         let host_shared_idx = host.session.document_index(shared_host_uid).expect("host shared idx");
@@ -1307,6 +1413,11 @@ mod tests {
             let host_shared_wb = &apps[0].session.documents()[host_shared_idx].wb;
             peer_shared_wb == host_shared_wb
         });
+
+        // Pasting clipboard content copied from the unshared workbook onto the shared workbook
+        // surfaces `NOTICE_UNSHARED_CLIPBOARD` instead of broadcasting an unmatched paste.
+        host.run("edit.paste", json!({"at": "C1"})).expect("paste unshared clipboard locally");
+        assert_eq!(host.notice.as_ref().map(|n| n.text.as_str()), Some(NOTICE_UNSHARED_CLIPBOARD));
 
         // Peer's active workbook is STILL its unshared second workbook, and its A1 is still empty!
         assert_eq!(peer.session.active().expect("peer active").uid, unshared_peer_uid);
@@ -1359,7 +1470,39 @@ mod tests {
             assert!(app.apply_remote_mutation(&mutation).is_err(), "hostile remote command `{id}` with `{params}` must be rejected");
         }
 
-        // 2. Capability tickets must be redacted in Debug formatting so they never leak into logs.
+        // 2. Interleaved remote copies from different peers are isolated by `author_peer_id`.
+        app.run("cell.set", json!({"cell": "A1", "input": "FromPeerA"})).expect("set A1");
+        app.run("cell.set", json!({"cell": "B1", "input": "FromPeerB"})).expect("set B1");
+        let copy_a = SharedMutation {
+            sheet_name: "Sheet1".into(),
+            selection: gridcraft_engine::Selection::at(CellRef::new(0, 0)),
+            selected_object: None,
+            id: "edit.copy".into(),
+            params_json: json!({}).to_string(),
+        };
+        let copy_b = SharedMutation {
+            sheet_name: "Sheet1".into(),
+            selection: gridcraft_engine::Selection::at(CellRef::new(0, 1)),
+            selected_object: None,
+            id: "edit.copy".into(),
+            params_json: json!({}).to_string(),
+        };
+        let paste_a = SharedMutation {
+            sheet_name: "Sheet1".into(),
+            selection: gridcraft_engine::Selection::at(CellRef::new(0, 2)),
+            selected_object: None,
+            id: "edit.paste".into(),
+            params_json: json!({"at": "C1"}).to_string(),
+        };
+        app.apply_remote_mutation_from_peer("peer-a", &copy_a).expect("peer-a copy A1");
+        app.apply_remote_mutation_from_peer("peer-b", &copy_b).expect("peer-b copy B1");
+        app.apply_remote_mutation_from_peer("peer-a", &paste_a).expect("peer-a paste at C1");
+        assert_eq!(
+            app.session.active().expect("doc").wb.active().expect("sheet").value(CellRef::new(0, 2)),
+            gridcraft_engine::core::Value::Text("FromPeerA".into())
+        );
+
+        // 3. Capability tickets must be redacted in Debug formatting so they never leak into logs.
         app.sync.edit_ticket = Some("ssync://secret-edit-capability-token".into());
         app.sync.view_ticket = Some("ssync://secret-view-capability-token".into());
         app.sync.join_input = "ssync://secret-join-input-token".into();
