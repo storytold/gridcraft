@@ -146,8 +146,17 @@ pub(super) fn validation(s: &mut Session, p: &Json) -> Result<Json> {
 /// than a reference or a name to evaluate.
 fn is_literal_list(f: &str) -> bool {
     f.starts_with('"')
-        || (!f.contains('!')
-            && gridcraft_formula::parse(f).map(|e| !matches!(e, gridcraft_formula::Expr::Ref(_) | gridcraft_formula::Expr::Name(_))).unwrap_or(true))
+        || gridcraft_formula::parse(f)
+            .map(|e| {
+                matches!(
+                    e,
+                    gridcraft_formula::Expr::Number(_)
+                        | gridcraft_formula::Expr::Text(_)
+                        | gridcraft_formula::Expr::Bool(_)
+                        | gridcraft_formula::Expr::Error(_)
+                )
+            })
+            .unwrap_or(true)
 }
 
 /// A list rule's source as a file stores it. A literal list typed without quotes, as in Excel's
