@@ -359,16 +359,23 @@ fn part_too_large_message(name: &str, part: &str, size: u64) -> String {
     )
 }
 
+/// How much of a text file is read to tell whether it is a web page.
+const HTML_SNIFF_BYTES: usize = 64 << 10;
+
 /// A web page that holds a table, whatever its extension: a web app's "Export to Excel" is often
 /// HTML saved as `.xls` (#3166). Excel opens its table as a sheet (after warning that the format
 /// and extension don't match): the cells read like typed input (or as text with `csv_as_text`),
 /// header cells (`<th>`) are bold and centred, and the sheet takes the name the page gives it
 /// (`<x:Name>`) or the file's. `None` when the bytes aren't such a page.
 fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text: bool) -> Option<Result<(Workbook, Vec<String>)>> {
-    // Decoded as a CSV is (BOM, UTF-8, else Windows-1252/1256), so a legacy page keeps its letters.
-    let text = gridcraft_xlsx::decode_text(bytes);
+    // Every other text file (CSV, TSV, JSON) passes through here: look at the start only, and decode
+    // the whole file once it is known to be a page within the size a text import takes.
+    if matches!(kind, Some(FileKind::Json)) || bytes.len() > gridcraft_xlsx::MAX_CSV_BYTES {
+        return None;
+    }
+    let start = gridcraft_xlsx::decode_text(bytes.get(..HTML_SNIFF_BYTES).unwrap_or(bytes));
     // Comments an exporter writes before the page (`<!-- ... -->`) don't make it something else.
-    let mut rest = text.trim_start_matches('\u{feff}').trim_start();
+    let mut rest = start.trim_start_matches('\u{feff}').trim_start();
     while let Some(after) = rest.strip_prefix("<!--") {
         match after.find("-->").and_then(|end| after.get(end + 3..)) {
             Some(more) => rest = more.trim_start(),
@@ -379,6 +386,8 @@ fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text
     if !["<!doctype html", "<html", "<table", "<head", "<body", "<meta"].iter().any(|t| head.starts_with(t)) {
         return None;
     }
+    // Decoded as a CSV is (BOM, UTF-8, else Windows-1252/1256), so a legacy page keeps its letters.
+    let text = gridcraft_xlsx::decode_text(bytes);
     let rows = crate::clip_html::table_cells(&text, gridcraft_core::MAX_ROWS as usize, gridcraft_core::MAX_COLS as usize);
     if rows.iter().all(Vec::is_empty) {
         return None;

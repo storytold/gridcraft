@@ -21,6 +21,8 @@ use crate::{EngineError, Result};
 
 /// The largest SYLK file read, as for other text imports: past it the file is refused.
 const MAX_BYTES: usize = 512 << 20;
+/// Column-width records kept from one file; each can cover every column.
+const MAX_WIDTH_RECORDS: usize = 1024;
 
 /// Reads a SYLK file into a one-sheet workbook. Returns the workbook and its warnings.
 pub fn read(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
@@ -110,6 +112,9 @@ pub fn read(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
                                     (position(first, MAX_COLS), position(last, MAX_COLS), width.parse::<f64>())
                                 && first <= last
                                 && (0.0..=255.0).contains(&width)
+                                // A file of width records can't make the import loop over every column
+                                // again and again.
+                                && widths.len() < MAX_WIDTH_RECORDS
                             {
                                 widths.push((first, last, width));
                             }
@@ -215,7 +220,7 @@ impl Part {
     fn resolve(self, base: u32, max: u32) -> Option<(u32, bool)> {
         match self {
             Part::Absolute(n) => (1..=max).contains(&n).then(|| (n - 1, true)),
-            Part::Relative(k) => u32::try_from(i64::from(base) + k).ok().filter(|v| *v < max).map(|v| (v, false)),
+            Part::Relative(k) => i64::from(base).checked_add(k).and_then(|v| u32::try_from(v).ok()).filter(|v| *v < max).map(|v| (v, false)),
         }
     }
 }

@@ -92,7 +92,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     // Height follows the content's line count (last frame's), 1 to MAX_LINES; expanded (the
     // chevron), it is the height the bottom edge was dragged to. It eases only when that target
     // changes.
-    let most = max_lines(ui.ctx().content_rect().height(), row_h);
+    let most = max_lines(ui.available_rect_before_wrap().height(), row_h);
     let lines = if app.ui.formula_bar_expanded { app.ui.formula_bar_lines.clamp(1, most) } else { last.lines.clamp(1, MAX_LINES) };
     let target = one_line(row_h) + (lines - 1) as f32 * row_h;
     let h = ui.ctx().animate_value_with_time(egui::Id::unique("formula_bar.height"), target, EASE_SECONDS);
@@ -178,8 +178,8 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     ui.ctx().data_mut(|d| d.insert_temp(BarLayout::id(), layout));
 }
 
-/// The most lines the bar takes in a window `window_h` tall: half the window, as in Excel, and
-/// never fewer than the chevron's [`MAX_LINES`].
+/// The most lines the bar takes when `window_h` is the room left below the ribbon: half of it,
+/// so the worksheet keeps the rest, and never fewer than the chevron's [`MAX_LINES`].
 fn max_lines(window_h: f32, row_h: f32) -> usize {
     let fit = ((window_h * 0.5 - one_line(row_h)) / row_h).floor();
     if fit.is_finite() && fit > 0.0 { (fit as usize + 1).clamp(MAX_LINES, MAX_DRAG_LINES) } else { MAX_LINES }

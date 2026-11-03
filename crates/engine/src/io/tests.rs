@@ -746,3 +746,18 @@ fn sylk_rejects_other_files_and_survives_damage() {
     assert_eq!(sh.value(CellRef::parse("A3").unwrap()), gridcraft_core::Value::Text("1e999".into()));
     assert_eq!(warnings.len(), 1, "skipped records are reported: {warnings:?}");
 }
+
+#[test]
+fn sylk_survives_huge_relative_offsets_and_width_floods() {
+    // Relative offsets at the edge of i64 fall off the sheet instead of overflowing.
+    let text = b"ID;P\nC;Y1;X1;K0;ER[9223372036854775807]C\nC;Y2;X1;K0;ER[-9223372036854775808]C[-9223372036854775808]\nE\n";
+    assert!(open_bytes("offsets.slk", text).is_ok());
+    // Width records over every column, many times over: the import keeps a bounded number.
+    let mut flood = b"ID;P\n".to_vec();
+    for _ in 0..5000 {
+        flood.extend_from_slice(b"F;W1 16384 12\n");
+    }
+    flood.extend_from_slice(b"C;Y1;X1;K1\nE\n");
+    let (wb, _) = open_bytes("widths.slk", &flood).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::Number(1.0));
+}
