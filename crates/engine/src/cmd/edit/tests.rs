@@ -143,6 +143,8 @@ fn cell_set_cuts_text_to_32767_characters() {
     }
     assert_eq!(get(&mut s, "A1").as_str().map(|t| t.chars().count()), Some(32_767));
     assert_eq!(get(&mut s, "A2"), json!(32767.0));
+    s.execute("cell.set", json!({"cell": "D1", "input": "😀".repeat(16_384)})).unwrap();
+    assert_eq!(get(&mut s, "D1").as_str().map(|t| t.encode_utf16().count()), Some(32_766));
 }
 
 #[test]
@@ -210,6 +212,10 @@ fn set_values_can_store_strings_as_the_text_they_are() {
     s.execute("range.setValues", json!({"range": "A10", "parse": false, "values": [[long]]})).unwrap();
     let len = s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("A10").unwrap()).map(|c| c.value.as_text().map(|t| t.chars().count()));
     assert_eq!(len.flatten(), Some(32_767));
+    s.execute("range.setValues", json!({"range": "B10", "parse": false, "values": [["😀".repeat(16_384)]]})).unwrap();
+    let emoji_len =
+        s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("B10").unwrap()).map(|c| c.value.as_text().map(|t| t.encode_utf16().count()));
+    assert_eq!(emoji_len.flatten(), Some(32_766));
     assert_eq!(get(&mut s, "A9")["value"], json!("one\ntwo"));
     let d = s.doc().unwrap();
     let sh = d.wb.active().unwrap();

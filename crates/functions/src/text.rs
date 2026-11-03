@@ -20,7 +20,7 @@ fn chars(s: &str) -> Vec<char> {
 }
 
 fn check_len(s: String) -> R<Value> {
-    if s.len() > MAX_TEXT && s.chars().count() > MAX_TEXT {
+    if s.len() > MAX_TEXT && s.encode_utf16().count() > MAX_TEXT {
         return Err(CellError::Value);
     }
     text_val(s)
@@ -49,7 +49,7 @@ fn concatenate(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 fn check_calc(s: String) -> R<Value> {
-    if s.len() > MAX_TEXT && s.chars().count() > MAX_TEXT {
+    if s.len() > MAX_TEXT && s.encode_utf16().count() > MAX_TEXT {
         return Err(CellError::Calc);
     }
     text_val(s)
@@ -234,7 +234,7 @@ fn rept(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         return Err(CellError::Value);
     }
     let n = n.trunc();
-    let total = s.chars().count() as f64 * n;
+    let total = s.encode_utf16().count() as f64 * n;
     if total > MAX_TEXT as f64 {
         return Err(CellError::Value);
     }
@@ -1149,6 +1149,12 @@ mod tests {
         // An error after the cut still propagates.
         let big = || t(&"x".repeat(32_767));
         is_err(ev("CONCATENATE", vec![big(), big(), big(), big(), big(), e(CellError::NA)]), CellError::NA);
+        let emoji = "😀";
+        is_err(ev("CONCAT", vec![t(&emoji.repeat(16_384))]), CellError::Calc);
+        is_err(ev("TEXTJOIN", vec![t(""), b(false), t(&emoji.repeat(16_384))]), CellError::Calc);
+        assert_eq!(ev("CONCATENATE", vec![t(&emoji.repeat(16_384))]), Value::text(emoji.repeat(16_383)));
+        is_err(ev("REPT", vec![t(emoji), n(16_384.0)]), CellError::Value);
+        assert_eq!(ev("REPT", vec![t(emoji), n(16_383.0)]), Value::text(emoji.repeat(16_383)));
         // Lifting: CONCATENATE over an array.
         assert_eq!(rows_of(&ev("CONCATENATE", vec![av(row_t(&["a", "b"])), t("x")])), vec![vec![tv("ax"), tv("bx")]]);
     }
