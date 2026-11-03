@@ -849,6 +849,7 @@ fn insert_paste_dialog_asks_before_unmerging_split_merges() {
     assert_eq!(merges(&h), ["F23:F24"], "OK unmerges rows 22:24 and shifts F19:F20 down");
 }
 
+#[test]
 fn data_analysis_dialog_opens_every_tool_form() {
     let mut s = blank();
     s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2], [2, 4], [3, 6]]})).unwrap();
