@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 
 mod en;
 mod es;
+mod pl;
 mod ru;
 
 use crate::{Expr, ParseError, parser};
@@ -17,6 +18,7 @@ pub enum FormulaLocale {
     #[default]
     En,
     Es,
+    Pl,
     Ru,
 }
 
@@ -52,6 +54,7 @@ impl FormulaLocale {
         match self {
             Self::En => &en::DATA,
             Self::Es => &es::DATA,
+            Self::Pl => &pl::DATA,
             Self::Ru => &ru::DATA,
         }
     }

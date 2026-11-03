@@ -465,3 +465,18 @@ fn localized_value_editing_respects_explicit_text_format_in_both_languages() {
         }
     }
 }
+
+/// Polish input stays canonical in XLSX and displays in Polish after reopening.
+#[test]
+fn polish_formula_round_trips_through_xlsx() {
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"pl"})).unwrap();
+    assert!(enter(&mut app, "=jeżeli.błąd(suma(1,5;2,25);#DZIEL/0!)"));
+    assert_eq!(formula(&app), "IFERROR(SUM(1.5,2.25),#DIV/0!)");
+    let saved = app.run("file.save", json!({"format":"xlsx"})).unwrap();
+    app.run("file.open", json!({"name":"polish.xlsx","base64":saved["base64"]})).unwrap();
+    assert_eq!(formula(&app), "IFERROR(SUM(1.5,2.25),#DIV/0!)");
+    app.begin_edit(None, false);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=JEŻELI.BŁĄD(SUMA(1,5;2,25);#DZIEL/0!)");
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(3.75));
+}

@@ -2,8 +2,9 @@
 
 View → Interface language is the existing, persisted language preference. Choose **Español**
 for Spanish formula entry and display. On first run the preference follows the system language.
-Choose **Русский** for Russian formula entry and display. English and the remaining interface
-languages currently use the English formula table and separators.
+Choose **Русский** for Russian or **Polski** for Polish formula entry and display. Other interface
+languages use the English formula table and separators. For example, Polish `=SUMA(1,5;2,25)`
+is stored in XLSX as `SUM(1.5,2.25)`.
 
 | Spanish | Canonical English |
 | --- | --- |
