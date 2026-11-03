@@ -182,15 +182,24 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
 }
 
 /// What a tall bar leaves below it: the status bar and sheet tabs, and the active sheet's column
-/// headings (under Page Layout view's ruler) and two rows at its zoom, so the grid never
-/// disappears in a short window.
+/// headings and two rows at its zoom (in Page Layout view also the ruler, the page gap and top
+/// margin, at the print scale), so the grid never disappears in a short window.
 fn keep_below(app: &SheetApp) -> f32 {
-    let sheet = app.session.active().and_then(|d| d.wb.active()).map_or(0.0, |sh| {
-        // Page Layout view puts its ruler above the headings, out of the grid's room.
-        let paper = sh.view == gridcraft_engine::model::SheetViewMode::PageLayout;
-        let ruler = if paper && !app.session.hide_ruler { crate::paper_view::RULER } else { 0.0 };
-        ruler + crate::grid::header_height(sh) + crate::grid::default_rows_height(sh, 2.0)
-    });
+    let Some(d) = app.session.active() else { return BOTTOM_BARS };
+    let Some(sh) = d.wb.active() else { return BOTTOM_BARS };
+    let sheet = if sh.view == gridcraft_engine::model::SheetViewMode::PageLayout {
+        // Page Layout view: the ruler above the headings, then the page gap and the page's top
+        // margin before the first row, with rows at the print scale too. The pages are last
+        // frame's (before the first one, a scale of 1 and no page top).
+        let ruler = if app.session.hide_ruler { 0.0 } else { crate::paper_view::RULER };
+        let pages = app.grid.paper.as_ref().filter(|(key, _)| key.0 == d.uid && key.2 == d.wb.active_sheet()).map(|(_, g)| g);
+        let scale = pages.map_or(1.0, |g| g.scale.clamp(0.1, 4.0));
+        let top = pages.map_or(0.0, |g| (g.gap + g.margins[2]) as f32);
+        let z = (sh.zoom as f32 / 100.0).clamp(0.1, 4.0) * crate::grid::DISPLAY_SCALE * scale;
+        ruler + crate::grid::header_height(sh) + top * z + 2.0 * sh.default_row_height * z
+    } else {
+        crate::grid::header_height(sh) + crate::grid::default_rows_height(sh, 2.0)
+    };
     BOTTOM_BARS + sheet
 }
 

@@ -205,6 +205,13 @@ fn an_expanded_formula_bar_leaves_room_for_the_page_layout_ruler() {
     h.state_mut().run("view.expandFormulaBar", json!({"lines": 100})).unwrap();
     h.run_steps(60);
     let grid = h.state().grid.rect.expect("the grid is drawn");
-    let need = gridcraft_ui_egui::paper_view::RULER + gridcraft_ui_egui::grid::COL_HEADER_H + two_rows_at(100.0);
-    assert!(grid.height() >= need - 1.0, "ruler, headings and two rows under a {} pt bar: {grid:?} < {need}", bar(&h).height);
+    // The first row starts below the page gap and the page's top margin, and rows are drawn at
+    // the print scale too.
+    let (_, pages) = h.state().grid.paper.clone().expect("Page Layout view paginated the sheet");
+    let z = gridcraft_ui_egui::grid::DISPLAY_SCALE * pages.scale;
+    let need = gridcraft_ui_egui::paper_view::RULER
+        + gridcraft_ui_egui::grid::COL_HEADER_H
+        + (pages.gap + pages.margins[2]) as f32 * z
+        + 2.0 * gridcraft_engine::model::DEFAULT_ROW_HEIGHT * z;
+    assert!(grid.height() >= need - 1.0, "ruler, headings, page top and two rows under a {} pt bar: {grid:?} < {need}", bar(&h).height);
 }
