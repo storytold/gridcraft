@@ -166,7 +166,9 @@ fn bd0(x: f64, np: f64) -> f64 {
 fn pow_one_minus(p: f64, e: f64) -> f64 {
     let hi = 1.0 - p;
     let lo = (1.0 - hi) - p;
-    hi.powf(e) * (e * (lo / hi).ln_1p()).exp()
+    let r = hi.powf(e) * (e * (lo / hi).ln_1p()).exp();
+    // An exponent so large that the two factors under- and overflow: the plain form is enough.
+    if r.is_nan() { (e * (-p).ln_1p()).exp() } else { r }
 }
 
 /// `C(n, k)` for a small `k` as a product of `k` ratios.
@@ -199,11 +201,15 @@ fn binom_pmf(k: f64, n: f64, p: f64) -> f64 {
         return p.powf(n);
     }
     // A few successes or a few failures: the product form has no large cancelling terms.
-    if k < 16.0 {
-        return choose_small(n, k) * p.powi(k as i32) * pow_one_minus(p, n - k);
-    }
-    if n - k < 16.0 {
-        return choose_small(n, n - k) * p.powf(k) * pow_one_minus(p, n - k);
+    // (Not for astronomically large n or a power of p near underflow: the saddle-point form
+    // below handles those through logs.)
+    if n < 1e30 && p.powf(k) > 1e-280 {
+        if k < 16.0 {
+            return choose_small(n, k) * p.powi(k as i32) * pow_one_minus(p, n - k);
+        }
+        if n - k < 16.0 {
+            return choose_small(n, n - k) * p.powf(k) * pow_one_minus(p, n - k);
+        }
     }
     let q = 1.0 - p;
     let lc = stirlerr(n) - stirlerr(k) - stirlerr(n - k) - bd0(k, n * p) - bd0(n - k, n * q);
