@@ -75,11 +75,13 @@ pub(crate) struct Budget {
     text: usize,
     records: usize,
     max_records: usize,
+    /// A shared formula's text was refused: no later shared formula, in any sheet, is expanded.
+    shared_text_spent: bool,
 }
 
 impl Default for Budget {
     fn default() -> Self {
-        Budget { cells: 0, text: 0, records: 0, max_records: MAX_RECORDS }
+        Budget { cells: 0, text: 0, records: 0, max_records: MAX_RECORDS, shared_text_spent: false }
     }
 }
 
@@ -117,6 +119,13 @@ impl Budget {
             self.text = total;
         }
         fits
+    }
+    /// [`try_text`](Self::try_text) for a shared formula's text. The first refusal ends shared
+    /// expansion for the whole workbook, so a shorter formula on a later sheet doesn't fit in the
+    /// room the refused one left, and refused formulas aren't decoded again on each sheet.
+    fn try_shared_text(&mut self, len: usize) -> bool {
+        self.shared_text_spent = self.shared_text_spent || !self.try_text(len);
+        !self.shared_text_spent
     }
     fn text(&mut self, len: usize) -> Result<(), IoError> {
         self.text = self.text.saturating_add(len);
@@ -509,15 +518,17 @@ fn resolve_pending(
 ) -> usize {
     let mut failed: HashSet<CellRef> = HashSet::new();
     let mut shared_attaches = 0usize;
-    // once the text allowance is spent no more shared formulas expand, but array anchors still do
-    let mut text_spent = false;
     for p in pending {
         if let Some((range, f)) = arrays.get(&p.anchor) {
             if p.pos == p.anchor {
                 st.attach(p.pos, f, Mode::Cell, Some(*range));
             }
         } else if let Some(f) = shared.get(&p.anchor) {
-            if text_spent || failed.contains(&p.anchor) || shared_attaches >= MAX_SHARED_ATTACHES {
+            if budget.shared_text_spent {
+                st.unsupported("more shared-formula text than the import allows");
+                continue;
+            }
+            if failed.contains(&p.anchor) || shared_attaches >= MAX_SHARED_ATTACHES {
                 continue;
             }
             shared_attaches += 1;
@@ -526,13 +537,12 @@ fn resolve_pending(
             // Every follower keeps its own text: charge it to the workbook's text allowance, and
             // past it drop the formula again so the cell keeps its cached value.
             if let Some(len) = len
-                && !budget.try_text(len)
+                && !budget.try_shared_text(len)
             {
                 if let Some(cell) = st.sheet.cells.get_mut(p.pos) {
                     cell.formula = None;
                 }
                 st.unsupported("more shared-formula text than the import allows");
-                text_spent = true;
                 continue;
             }
             let imported = st.sheet.cell(p.pos).and_then(|c| c.formula.as_ref()).is_some_and(|f| f.text.chars().count() <= MAX_SHARED_TEMPLATE);
@@ -907,5 +917,20 @@ fn defined_names(g: &Globals, model_index: &[Option<usize>], wb: &mut Workbook, 
             None if lbl.macro_name => report.warn("Macro names were skipped."),
             None => wb.names.push(DefinedName { name: lbl.name.clone(), scope, formula: text, comment: String::new(), hidden: lbl.hidden }),
         }
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn a_refused_shared_formula_ends_shared_expansion_for_later_sheets() {
+        let mut budget = Budget::with_text_left(10);
+        assert!(budget.try_shared_text(8));
+        assert!(!budget.try_shared_text(8), "over the allowance");
+        // a shorter formula would fit the 2 bytes left, but the cut-off holds
+        assert!(!budget.try_shared_text(1));
+        assert!(budget.try_text(1), "text the import needs is still charged normally");
     }
 }
