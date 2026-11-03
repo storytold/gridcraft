@@ -62,6 +62,74 @@ fn new_and_open_from_the_file_tab_keep_the_ribbon_as_it_was() {
     assert!(h.state().ui.ribbon_collapsed);
 }
 
+/// Esc first cancels the focused File-page field, then closes File on the next press.
+#[test]
+fn escape_leaves_file_fields_before_closing_the_view() {
+    use egui::accesskit::Role;
+
+    for (page_id, label) in [
+        ("info", "Title"),
+        ("info", "Subject"),
+        ("info", "Author"),
+        ("info", "Company"),
+        ("info", "Keywords"),
+        ("info", "Description"),
+        ("options", "Maximum Iterations:"),
+        ("options", "Maximum Change:"),
+        ("print", "Copies"),
+    ] {
+        let services = Services {
+            printers: Some(Box::new(|| {
+                let (tx, rx) = std::sync::mpsc::channel();
+                tx.send(Vec::new()).unwrap();
+                rx
+            })),
+            ..Default::default()
+        };
+        let mut session = Session::new();
+        session.new_workbook();
+        let mut h = crate::common::harness_with(
+            crate::common::builder().with_size(egui::vec2(1200.0, 1400.0)),
+            crate::common::prepare(SheetApp::new(session, services)),
+            4,
+        );
+        h.state_mut().run("formulas.calculationOptions", serde_json::json!({"iterative": true})).unwrap();
+        h.state_mut().run("ui.backstage", serde_json::json!({"page": page_id})).unwrap();
+        h.run_steps(3);
+        let role = if page_id == "print" { Role::SpinButton } else { Role::TextInput };
+        h.get_by_role_and_label(role, label).click();
+        h.run_steps(2);
+        assert!(h.ctx.text_edit_focused(), "{label} has the caret");
+        let original = h.get_by_role_and_label(role, label).value();
+        let revision = h.state().session.active().unwrap().revision;
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.run_steps(1);
+        h.input_mut().events.push(egui::Event::Text("7".into()));
+        h.run_steps(2);
+        if page_id == "print" {
+            assert_eq!(h.state().printing.settings.copies, 7, "Copies applies the entered value while editing");
+        } else {
+            assert_eq!(h.get_by_role_and_label(Role::TextInput, label).value().as_deref(), Some("7"));
+        }
+        let copies = h.state().printing.settings.copies;
+
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert_eq!(page(&h), Some(page_id), "Esc in {label} keeps File open");
+        assert!(!h.ctx.text_edit_focused(), "Esc leaves {label}");
+        assert_eq!(h.state().session.active().unwrap().revision, revision, "Esc does not commit {label}");
+        if page_id == "print" {
+            assert_eq!(h.state().printing.settings.copies, copies, "leaving Copies preserves its existing live value");
+        } else {
+            assert_eq!(h.get_by_role_and_label(Role::TextInput, label).value(), original, "Esc discards the {label} draft");
+        }
+
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert_eq!(page(&h), None, "the next Esc returns to the sheet");
+    }
+}
+
 #[test]
 fn save_actions_include_the_cell_draft_and_close_keeps_the_unsaved_prompt() {
     let downloads = Arc::new(Mutex::new(Vec::<(String, Vec<u8>)>::new()));
@@ -127,19 +195,23 @@ fn file_options_opens_the_options_page_and_pages_are_reachable_by_command() {
     assert!(h.state().backstage.is_none());
 }
 
+/// The heading aligns with the action's top edge and its description follows directly below it.
 #[test]
-/// The Protect Workbook text remains above the centerline of its tall action button.
 fn protect_workbook_info_text_is_aligned_with_its_button() {
     let mut h = harness(Services::default());
     h.state_mut().run("ui.backstage", serde_json::json!({"page": "info"})).unwrap();
     h.run_steps(3);
 
     let button = h.get_by_role_and_label(egui::accesskit::Role::Button, "Protect Workbook").rect();
+    let heading = h.get_by_role_and_label(egui::accesskit::Role::Label, "Protect Workbook").rect();
     let description = h.get_by_label("Lock the sheet structure so sheets can't be added, moved, renamed or deleted.").rect();
-    assert!(
-        description.center().y <= button.center().y - 10.0,
-        "Protect Workbook description should no longer sit low beside its button: button={button:?}, description={description:?}"
-    );
+    let tolerance = heading.height() * 0.1;
+    assert!((heading.top() - button.top()).abs() <= tolerance, "the heading starts beside the button: button={button:?}, heading={heading:?}");
+    assert!(description.top() >= heading.bottom(), "the description follows the heading");
+    assert!(description.top() - heading.bottom() <= heading.height(), "no extra blank row separates the text");
+    assert!((description.left() - heading.left()).abs() <= tolerance, "heading and description share a left edge");
+    assert!(heading.left() > button.right(), "the text is beside the button");
+    assert!(description.bottom() <= button.bottom(), "the text fits within the action row");
 }
 
 #[test]
