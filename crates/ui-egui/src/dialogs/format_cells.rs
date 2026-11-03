@@ -119,7 +119,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
         }
         "Font" => {
             craft_ui::ComboBox::from_label(lang.tr("Font")).selected_text(st.font.name.clone()).show_ui(ui, |ui| {
-                for f in crate::fonts::families() {
+                for f in crate::fonts::families_in(lang == crate::i18n::Language::Zh) {
                     ui.selectable_value(&mut st.font.name, f.clone(), f.clone());
                 }
             });
@@ -198,7 +198,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                 });
             }
             let theme = app.session.active().map(|doc| &doc.wb.theme).cloned().unwrap_or_default();
-            crate::border_preview::sample(ui, &st.borders, &theme);
+            crate::border_preview::sample(ui, &st.borders, &theme, crate::i18n::current(ui.ctx()));
         }
         "Fill" => {
             let colors = app.session.active().map(|doc| doc.wb.theme.colors).unwrap_or_default();

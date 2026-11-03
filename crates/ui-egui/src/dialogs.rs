@@ -359,7 +359,7 @@ impl Dialog {
                     vec![
                         Number { key: "to", label: "Before sheet (position, 0 = first):" },
                         Check { key: "copy", label: "Create a copy" },
-                        Note(format!("Sheets: {}", sheets.join(", "))),
+                        Note(app.ui.language.tr_fill("Sheets: {sheets}", &[("sheets", &sheets.join(", "))])),
                     ],
                     json!({"to": 0, "copy": false}),
                 );
@@ -391,14 +391,17 @@ impl Dialog {
             ),
             "allowEditRanges" => {
                 let list = app.session.run("review.allowEditRanges", json!({})).unwrap_or(Json::Null);
+                // The note is one rendered string, so its translatable parts go through `tr` here;
+                // the titles and ranges are user data and stay as they are.
+                let lang = app.ui.language;
                 let rows: Vec<String> = list
                     .as_array()
                     .map(|a| {
                         a.iter()
                             .map(|r| {
                                 let lock = match (r["password"].as_bool(), r["unlocked"].as_bool()) {
-                                    (Some(true), Some(true)) => " (password, unlocked)",
-                                    (Some(true), _) => " (password)",
+                                    (Some(true), Some(true)) => lang.tr(" (password, unlocked)"),
+                                    (Some(true), _) => lang.tr(" (password)"),
                                     _ => "",
                                 };
                                 format!("{}: {}{lock}", r["title"].as_str().unwrap_or(""), r["range"].as_str().unwrap_or(""))
@@ -406,13 +409,13 @@ impl Dialog {
                             .collect()
                     })
                     .unwrap_or_default();
-                let summary = if rows.is_empty() { "No ranges yet.".to_string() } else { rows.join("\n") };
+                let summary = if rows.is_empty() { lang.tr("No ranges yet.").to_string() } else { rows.join("\n") };
                 Dialog::form(
                     "allowEditRanges",
                     "Allow Edit Ranges",
                     "review.allowEditRanges",
                     vec![
-                        Note(format!("Ranges that stay editable when the sheet is protected:\n{summary}")),
+                        Note(format!("{}\n{summary}", lang.tr("Ranges that stay editable when the sheet is protected:"))),
                         Choice {
                             key: "action",
                             label: "Action",
@@ -457,7 +460,10 @@ impl Dialog {
                     "openPassword",
                     "Password",
                     "file.open",
-                    vec![Note(format!("'{file}' is protected.")), Password { key: "password", label: "Password:" }],
+                    vec![
+                        Note(app.ui.language.tr_fill("'{file}' is protected.", &[("file", &file)])),
+                        Password { key: "password", label: "Password:" },
+                    ],
                     values,
                 )
             }
@@ -476,7 +482,10 @@ impl Dialog {
                     "unhideSheet",
                     "Unhide",
                     "sheet.unhide",
-                    vec![Text { key: "sheet", label: "Unhide sheet:" }, Note(format!("Hidden: {}", opts.join(", ")))],
+                    vec![
+                        Text { key: "sheet", label: "Unhide sheet:" },
+                        Note(app.ui.language.tr_fill("Hidden: {sheets}", &[("sheets", &opts.join(", "))])),
+                    ],
                     json!({"sheet": first}),
                 );
                 d.values.insert("sheet".into(), json!(first));
@@ -543,7 +552,16 @@ impl Dialog {
                     if threaded { "New Comment" } else { "New Note" },
                     if threaded { "review.newComment" } else { "review.newNote" },
                     vec![Text { key: "text", label: if threaded { "Start a conversation:" } else { "Note:" } }],
-                    json!({"text": existing}),
+                    // The engine falls back to its built-in user name; hand it the localized one so
+                    // the stored author reads in the interface language (unless the user set their own).
+                    json!({
+                        "text": existing,
+                        "author": if app.session.prefs.user_name == "GridCraft User" {
+                            app.ui.language.tr("GridCraft User").to_owned()
+                        } else {
+                            app.session.prefs.user_name.clone()
+                        },
+                    }),
                 )
             }
             // Asks before a web or e-mail link leaves the workbook. OK opens it through
@@ -554,7 +572,8 @@ impl Dialog {
                 let url = params.get("url").and_then(Json::as_str).unwrap_or_default().to_string();
                 let mut d = Dialog::custom("openLink", "Open Hyperlink", json!({"url": url}));
                 d.fields = vec![Note(format!(
-                    "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook.\n\n{url}"
+                    "{}\n\n{url}",
+                    app.ui.language.tr("This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook.")
                 ))];
                 d.link = Some(url);
                 d

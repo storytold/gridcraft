@@ -15,9 +15,11 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 /// A font file is skipped by the scan past this size: a catalog only needs each face's name, and a
-/// damaged or enormous file must not turn startup into a long read.
+/// damaged or enormous file must not turn startup into a long read. The cap still has to admit the
+/// big CJK collections (the Source Han Mono `.ttc` is ~120 MB), so it is far above what Latin
+/// fonts ever reach.
 #[cfg(not(target_arch = "wasm32"))]
-const MAX_FONT_FILE: u64 = 64 << 20;
+const MAX_FONT_FILE: u64 = 256 << 20;
 
 /// Reads a font file of at most [`MAX_FONT_FILE`] bytes, even when it grows after it was found.
 #[cfg(not(target_arch = "wasm32"))]
@@ -51,6 +53,10 @@ pub struct Face {
     /// legacy family names (`"Malgun Gothic"`, `"맑은 고딕"`). A workbook may name the font by any of
     /// them: Korean Excel saves `맑은 고딕` (#1898).
     pub names: Vec<String>,
+    /// The family's Chinese name (`"思源黑体"`), from the `name` table's `zh` records. Empty when
+    /// the face carries none. What the font list shows when the interface language is Chinese,
+    /// matching how a localized Excel offers localized names.
+    pub zh: String,
     /// The file the face lives in.
     pub path: PathBuf,
     /// Face index within the file (collections hold several, e.g. a family's Regular and Bold).
@@ -129,10 +135,11 @@ fn style_italic(style: &str) -> bool {
     s.contains("italic") || s.contains("oblique")
 }
 
-/// Every face in `data` as `(index, family, names, style)`, where `names` holds every family name
-/// (see [`Face::names`]). Damaged data yields nothing, never a panic.
+/// Every face in `data` as `(index, family, names, style, zh)`, where `names` holds every family
+/// name (see [`Face::names`]) and `zh` is the Chinese family name (empty when absent). Damaged
+/// data yields nothing, never a panic.
 #[cfg(not(target_arch = "wasm32"))]
-fn file_faces(data: &[u8]) -> Vec<(u32, String, Vec<String>, String)> {
+fn file_faces(data: &[u8]) -> Vec<(u32, String, Vec<String>, String, String)> {
     use skrifa::raw::FileRef;
     use skrifa::{MetadataProvider, string::StringId};
     let count = match FileRef::new(data) {
@@ -142,6 +149,15 @@ fn file_faces(data: &[u8]) -> Vec<(u32, String, Vec<String>, String)> {
     };
     let name = |f: &skrifa::FontRef<'_>, ids: &[StringId]| -> Option<String> {
         ids.iter().find_map(|id| f.localized_strings(*id).english_or_first().map(|s| s.to_string()).filter(|s| !s.is_empty()))
+    };
+    // The Chinese family name: the first `zh` record (zh-Hans, zh-Hant, zh-CN, …) across the
+    // family-name ids. A font with no Chinese name gets none.
+    let zh_name = |f: &skrifa::FontRef<'_>, ids: &[StringId]| -> String {
+        ids.iter()
+            .flat_map(|id| f.localized_strings(*id))
+            .find(|s| s.language().is_some_and(|l| l.starts_with("zh")) && !s.to_string().is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_default()
     };
     let family_ids = [StringId::TYPOGRAPHIC_FAMILY_NAME, StringId::FAMILY_NAME];
     (0..count)
@@ -159,7 +175,7 @@ fn file_faces(data: &[u8]) -> Vec<(u32, String, Vec<String>, String)> {
                 }
             }
             let style = name(&f, &[StringId::TYPOGRAPHIC_SUBFAMILY_NAME, StringId::SUBFAMILY_NAME]).unwrap_or_else(|| "Regular".into());
-            Some((i, family, names, style))
+            Some((i, family, names, style, zh_name(&f, &family_ids)))
         })
         .collect()
 }
@@ -191,8 +207,8 @@ pub fn scan_dirs(dirs: &[PathBuf]) -> Vec<Face> {
                 continue;
             }
             let Some(data) = read_font(&path) else { continue };
-            for (index, family, names, style) in file_faces(&data) {
-                out.push(Face { family, names, path: path.clone(), index, weight: style_weight(&style), italic: style_italic(&style) });
+            for (index, family, names, style, zh) in file_faces(&data) {
+                out.push(Face { family, names, zh, path: path.clone(), index, weight: style_weight(&style), italic: style_italic(&style) });
             }
         }
     }
@@ -285,20 +301,41 @@ fn installed_in(cat: &[Face], names: &[String]) -> Vec<String> {
 
 /// The font list a combo box shows: the standard [`crate::ribbon::FONTS`] names first (what Excel
 /// offers, and what we substitute), then every other installed family A–Z. Never blocks: until the
-/// background scan finishes it returns just the standard names.
+/// background scan finishes it returns just the standard names. Family names stay in the catalog's
+/// (English) form; see [`families_in`] for the localized variant.
 pub fn families() -> Vec<String> {
+    families_in(false)
+}
+
+/// [`families`] with localized family names: when `zh_ui` the families that carry a Chinese name
+/// show it (`思源黑体` for `Source Han Sans SC`), like a localized Excel's font box. Names a
+/// workbook can still use either spelling — every alias stays in [`Face::names`].
+pub fn families_in(zh_ui: bool) -> Vec<String> {
     let mut out: Vec<String> = crate::ribbon::FONTS.iter().map(|s| s.to_string()).collect();
     let Some(cat) = catalog_now() else { return out };
     let mut seen: HashSet<String> = out.iter().map(|s| s.to_lowercase()).collect();
-    let mut installed: Vec<String> = cat.iter().map(|f| f.family.clone()).collect();
-    installed.sort_by_key(|a| a.to_lowercase());
-    installed.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
-    for f in installed {
-        if seen.insert(f.to_lowercase()) {
-            out.push(f);
+    // Each installed family once, with a flag for "this is the family's localized (Chinese) name".
+    let mut families: Vec<(String, bool)> = Vec::new();
+    for face in cat {
+        let name = display_name(face, zh_ui);
+        if seen.insert(name.to_lowercase()) {
+            families.push((name, zh_ui && !face.zh.is_empty()));
         }
     }
+    // On a Chinese interface the localized families (思源黑体, 文泉驿微米黑, …) come right after
+    // the standard set: burying them under two hundred Latin families at the bottom of the list
+    // (CJK code points sort last) makes them effectively invisible.
+    families.sort_by_key(|(name, localized)| (!*localized, name.to_lowercase()));
+    for (name, _) in families {
+        out.push(name);
+    }
     out
+}
+
+/// What the font list shows for one face: its Chinese name when the interface is Chinese and the
+/// face carries one, its (English) family name otherwise.
+fn display_name(face: &Face, zh_ui: bool) -> String {
+    if zh_ui && !face.zh.is_empty() { face.zh.clone() } else { face.family.clone() }
 }
 
 /// The egui family name for one role of one family: `fnt:{family}:{b|n}{i|n}`.
@@ -474,7 +511,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("Ubuntu-Light.ttf");
         std::fs::write(&path, epaint_default_fonts::UBUNTU_LIGHT).expect("write");
-        let face = Face { family: "Ubuntu".into(), names: vec!["Ubuntu".into()], path, index: 0, weight: 300.0, italic: false };
+        let face = Face { family: "Ubuntu".into(), names: vec!["Ubuntu".into()], zh: String::new(), path, index: 0, weight: 300.0, italic: false };
 
         let mut fonts = egui::FontDefinitions::default();
         let bound = bind_faces(&mut fonts, "Ubuntu", std::slice::from_ref(&face));
@@ -527,7 +564,15 @@ mod tests {
     const KO: u16 = 0x0412;
 
     fn face(family: &str, names: &[&str], path: &str, weight: f32) -> Face {
-        Face { family: family.into(), names: names.iter().map(|s| s.to_string()).collect(), path: path.into(), index: 0, weight, italic: false }
+        Face {
+            family: family.into(),
+            names: names.iter().map(|s| s.to_string()).collect(),
+            zh: String::new(),
+            path: path.into(),
+            index: 0,
+            weight,
+            italic: false,
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -537,16 +582,56 @@ mod tests {
         let font = font_with_names(&[(EN, 1, "Malgun Gothic"), (EN, 2, "Regular"), (KO, 1, "맑은 고딕"), (KO, 2, "보통")]);
         let faces = file_faces(&font);
         assert_eq!(faces.len(), 1);
-        let (_, family, names, style) = &faces[0];
+        let (_, family, names, style, zh) = &faces[0];
         assert_eq!(family, "Malgun Gothic", "the font list keeps the English name");
         assert_eq!(names, &["Malgun Gothic", "맑은 고딕"]);
         assert_eq!(style, "Regular");
+        assert!(zh.is_empty(), "a Korean name is not a Chinese one");
 
         // Both name IDs are kept: a legacy family name (ID 1) names a single face (#1606).
         let font = font_with_names(&[(EN, 1, "Noto Sans KR Medium"), (EN, 2, "Regular"), (EN, 16, "Noto Sans KR"), (EN, 17, "Medium")]);
-        let (_, family, names, _) = &file_faces(&font)[0];
+        let (_, family, names, _, zh) = &file_faces(&font)[0];
         assert_eq!(family, "Noto Sans KR");
         assert_eq!(names, &["Noto Sans KR", "Noto Sans KR Medium"]);
+        assert!(zh.is_empty());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_face_keeps_its_chinese_family_name() {
+        // The font list offers the localized name (思源黑体) when the interface is Chinese,
+        // next to the English one the workbook may spell either way.
+        const ZH_HANS: u16 = 0x0804;
+        let font = font_with_names(&[(EN, 1, "Source Han Sans SC"), (EN, 2, "Regular"), (ZH_HANS, 1, "思源黑体"), (ZH_HANS, 2, "常规")]);
+        let faces = file_faces(&font);
+        assert_eq!(faces.len(), 1);
+        assert_eq!(faces[0].1, "Source Han Sans SC");
+        assert_eq!(faces[0].2, &["Source Han Sans SC", "思源黑体"]);
+        assert_eq!(faces[0].4, "思源黑体");
+
+        // Display: the Chinese name wins only for a Chinese interface.
+        let cat = [Face {
+            family: faces[0].1.clone(),
+            names: faces[0].2.clone(),
+            zh: faces[0].4.clone(),
+            path: "shs.ttf".into(),
+            index: 0,
+            weight: 400.0,
+            italic: false,
+        }];
+        assert_eq!(display_name(&cat[0], true), "思源黑体");
+        assert_eq!(display_name(&cat[0], false), "Source Han Sans SC");
+        // A face with no Chinese name shows the family name either way.
+        let plain = Face {
+            family: "Ubuntu".into(),
+            names: vec!["Ubuntu".into()],
+            zh: String::new(),
+            path: "u.ttf".into(),
+            index: 0,
+            weight: 400.0,
+            italic: false,
+        };
+        assert_eq!(display_name(&plain, true), "Ubuntu");
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -554,7 +639,7 @@ mod tests {
     fn a_name_table_full_of_names_is_capped() {
         let texts: Vec<String> = (0..100).map(|i| format!("Family {i}")).collect();
         let records: Vec<(u16, u16, &str)> = texts.iter().enumerate().map(|(i, t)| (0x0400 + i as u16, 1, t.as_str())).collect();
-        let (_, _, names, _) = &file_faces(&font_with_names(&records))[0];
+        let (_, _, names, _, _) = &file_faces(&font_with_names(&records))[0];
         assert_eq!(names.len(), MAX_FAMILY_NAMES);
     }
 
@@ -614,7 +699,15 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("Ubuntu-Light.ttf");
         std::fs::write(&path, epaint_default_fonts::UBUNTU_LIGHT).expect("write");
-        let f = Face { family: "Ubuntu".into(), names: vec!["Ubuntu".into(), "우분투".into()], path, index: 0, weight: 300.0, italic: false };
+        let f = Face {
+            family: "Ubuntu".into(),
+            names: vec!["Ubuntu".into(), "우분투".into()],
+            zh: String::new(),
+            path,
+            index: 0,
+            weight: 300.0,
+            italic: false,
+        };
 
         let mut fonts = egui::FontDefinitions::default();
         let before = fonts.font_data.len();
@@ -633,6 +726,6 @@ mod tests {
         let root = std::env::var_os("WINDIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:\\Windows"));
         let Ok(data) = std::fs::read(root.join("Fonts").join("malgun.ttf")) else { return };
         let faces = file_faces(&data);
-        assert!(faces.iter().any(|(_, family, names, _)| family == "Malgun Gothic" && names.iter().any(|n| n == "맑은 고딕")), "{faces:?}");
+        assert!(faces.iter().any(|(_, family, names, _, _)| family == "Malgun Gothic" && names.iter().any(|n| n == "맑은 고딕")), "{faces:?}");
     }
 }
