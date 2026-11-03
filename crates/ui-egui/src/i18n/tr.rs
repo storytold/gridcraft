@@ -4,6 +4,16 @@
 /// Returns the Turkish translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "(Select All)" => "(Tümünü Seç)",
+        "(Select All Search Results)" => "(Tüm Arama Sonuçlarını Seç)",
+        "Status|Count" => "Sayı",
+        "Numerical Count" => "Sayısal Sayı",
+        "Minimum" => "En Küçük",
+        "Maximum" => "En Büyük",
+        "Status|Sum" => "Toplam",
+        "Page order" => "Sayfa sırası",
+        "Down, then over" => "Önce aşağı, sonra sağa",
+        "Over, then down" => "Önce sağa, sonra aşağı",
         "Paste Special|Add" => "Topla",
         "Text to Columns|Comma" => "Virgül",
         " (password)" => " (parola)",
