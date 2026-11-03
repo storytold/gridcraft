@@ -5525,3 +5525,31 @@ fn clearing_links_and_notes_records_their_cells() {
     let touched: Vec<String> = s.doc().unwrap().touched.clone().unwrap_or_default().into_iter().map(|(_, c)| c.a1()).collect();
     assert!(touched.contains(&"C5".to_string()) && touched.contains(&"D7".to_string()), "{touched:?}");
 }
+
+/// The locked-cell check for notes and links keeps Allow Edit Ranges: a range without a password
+/// allows them at once, one with a password once it's unlocked in this session.
+#[test]
+fn clearing_links_and_notes_keeps_allow_edit_ranges() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    let link = || gridcraft_model::Hyperlink { target: "https://example.com".into(), tooltip: None, external: true };
+    let (a1, c5) = (CellRef::parse("A1").unwrap(), CellRef::parse("C5").unwrap());
+    {
+        let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sh.hyperlinks.insert(a1, link());
+        sh.hyperlinks.insert(c5, link());
+    }
+    s.execute("review.newNote", json!({"cell": "C5", "text": "note", "author": "Example"})).unwrap();
+    // Ranges are added before protecting: a protected sheet refuses `add`.
+    s.execute("review.allowEditRanges", json!({"action": "add", "title": "Open", "range": "A1"})).unwrap();
+    s.execute("review.allowEditRanges", json!({"action": "add", "title": "Kept", "range": "C5", "password": "example"})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+
+    s.execute("edit.clearHyperlinks", json!({"range": "A1"})).unwrap();
+    assert!(s.execute("edit.clearComments", json!({"range": "C5"})).is_err(), "a password range stays locked until unlocked");
+    s.execute("review.allowEditRanges", json!({"action": "unlock", "title": "Kept", "password": "example"})).unwrap();
+    s.execute("edit.clearHyperlinks", json!({"range": "C5"})).unwrap();
+    s.execute("edit.clearComments", json!({"range": "C5"})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap().clone();
+    assert!(sh.hyperlinks.is_empty() && sh.comments.is_empty());
+}
