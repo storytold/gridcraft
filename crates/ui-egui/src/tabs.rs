@@ -477,7 +477,7 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                             ui.painter().rect_filled(r, 3.0, t.hover);
                         }
                         icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), icon, t.text_dim);
-                        if resp.on_hover_text(tip).clicked() {
+                        if resp.on_hover_text(app.ui.language.tr(tip)).clicked() {
                             app.run_or_alert(cmd, json!({}));
                         }
                     }

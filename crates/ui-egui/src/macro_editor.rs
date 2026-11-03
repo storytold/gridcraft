@@ -1856,8 +1856,8 @@ fn step_tab(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, ed: &mut Editor) {
     let mut enabled = st.enabled;
     let mut bp = st.breakpoint;
     ui.horizontal(|ui| {
-        let a = ui.checkbox(&mut enabled, "Enabled").changed();
-        let b = ui.checkbox(&mut bp, "Breakpoint").changed();
+        let a = ui.checkbox(&mut enabled, tr(ui, "Enabled")).changed();
+        let b = ui.checkbox(&mut bp, tr(ui, "Breakpoint")).changed();
         if (a || b)
             && let Some(s) = step_mut(&mut ed.draft.steps, &path)
         {
@@ -1885,7 +1885,7 @@ fn step_tab(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, ed: &mut Editor) {
             ui.horizontal(|ui| {
                 ui.label(tr(ui, "At most"));
                 ui.add(egui::DragValue::new(&mut max2).range(1..=100_000));
-                ui.label("times");
+                ui.label(tr(ui, "times"));
             });
             if (of2 != of || max2 != max)
                 && let Some(StepKind::Repeat { of, max, .. }) = step_mut(&mut ed.draft.steps, &path).map(|s| &mut s.kind)
