@@ -4,6 +4,7 @@
 /// Returns the Turkish translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Page {page}" => "Sayfa {page}",
         "Paste" => "Yapıştır",
         "Paste Values" => "Değerleri Yapıştır",
         "Paste Formulas" => "Formülleri Yapıştır",

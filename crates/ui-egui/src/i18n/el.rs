@@ -5,6 +5,7 @@
 /// Returns the Greek translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Page {page}" => "Σελίδα {page}",
         "Paste" => "Επικόλληση",
         "Paste Values" => "Επικόλληση τιμών",
         "Paste Formulas" => "Επικόλληση τύπων",
