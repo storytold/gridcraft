@@ -4,6 +4,59 @@
 /// Returns `None` for unknown keys so the shared lookup can apply its English fallback.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Agent Control (MCP)\u2026" => "Управление агентами (MCP)…",
+        "Cells\u2026" => "Ячейки…",
+        "Collapse Ribbon" => "Свернуть ленту",
+        "Command Palette\u2026" => "Палитра команд…",
+        "Conditional Formatting\u2026" => "Условное форматирование…",
+        "Contributors\u2026" => "Участники…",
+        "Display Theme" => "Тема оформления",
+        "Error Checking\u2026" => "Проверка ошибок…",
+        "Evaluate Formula\u2026" => "Вычислить формулу…",
+        "Fill Down" => "Заполнить вниз",
+        "Fill Right" => "Заполнить вправо",
+        "Function\u2026" => "Функция…",
+        "Help" => "Справка",
+        "Hide GridCraft" => "Скрыть GridCraft",
+        "Hide Others" => "Скрыть остальные",
+        "Name\u2026" => "Имя…",
+        "New from Sample\u2026" => "Создать из образца…",
+        "Next Sheet" => "Следующий лист",
+        "Picture\u2026" => "Изображение…",
+        "Previous Sheet" => "Предыдущий лист",
+        "Properties\u2026" => "Свойства…",
+        "Quit GridCraft" => "Выйти из GridCraft",
+        "Record Actions" => "Запись действий",
+        "Remove Duplicates\u2026" => "Удалить дубликаты…",
+        "Rename Sheet\u2026" => "Переименовать лист…",
+        "Save as Web Page\u2026" => "Сохранить как веб-страницу…",
+        "Services" => "Службы",
+        "Show All" => "Показать все",
+        "Sort\u2026" => "Сортировка…",
+        "Sparklines\u2026" => "Спарклайны…",
+        "Spelling\u2026" => "Орфография…",
+        "Subtotal\u2026" => "Промежуточные итоги…",
+        "Text to Columns\u2026" => "Текст по столбцам…",
+        "Window" => "Окно",
+        "menu|Tools" => "Инструменты",
+        "v{from} to {to}" => "С версии {from} до {to}",
+        "{app} {version} is available with the latest features and bug fixes." => "Доступен {app} {version} с новыми возможностями и исправлениями.",
+        "What's new" => "Что нового",
+        "Later" => "Позже",
+        "Update" => "Обновление",
+        "Update and Restart" => "Обновить и перезапустить",
+        "by {developer}" => "от {developer}",
+        "Downloading and installing update…" => "Загрузка и установка обновления…",
+        "The update is installed. Close {app} to finish; it restarts by itself." => {
+            "Обновление установлено. Закройте {app}, чтобы завершить установку. Программа перезапустится автоматически."
+        }
+        "Save or close your open work first; the update restarts the app." => {
+            "Сохраните или закройте открытые книги. Обновление перезапустит программу."
+        }
+        "Cannot auto-update this installation type. Please download manually." => {
+            "Этот тип установки нельзя обновить автоматически. Скачайте обновление вручную."
+        }
+        "Couldn't start the update ({error})" => "Не удалось запустить обновление ({error})",
         "a linked (not embedded) picture was skipped" => "Связанное (не встроенное) изображение пропущено.",
         "missing picture {target}" => "Изображение {target} отсутствует.",
         "chart {target} has no supported plot and was skipped" => "У диаграммы {target} нет поддерживаемого типа построения; она пропущена.",

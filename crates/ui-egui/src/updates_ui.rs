@@ -5,7 +5,16 @@
 use craft_update::CheckResultResponse;
 use craft_update::updater::{Action, Status, Updater};
 
-use crate::SheetApp;
+use crate::{SheetApp, i18n::Language};
+
+thread_local! {
+    static UPDATE_LANGUAGE: std::cell::Cell<Language> = const { std::cell::Cell::new(Language::En) };
+}
+
+/// Translates the shared updater UI using the language of the window drawing it.
+fn translate_update(text: &str, args: &[(&str, &str)]) -> String {
+    UPDATE_LANGUAGE.with(|language| craft_update::translate::fill(language.get().tr(text), args))
+}
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -21,7 +30,12 @@ pub(crate) struct Runtime {
 
 impl Default for Runtime {
     fn default() -> Self {
-        Self { updater: Updater::new(&crate::UPDATE_APP, VERSION), startup: false, manual: false, result_open: false }
+        Self {
+            updater: Updater::new(&crate::UPDATE_APP, VERSION).with_translator(translate_update),
+            startup: false,
+            manual: false,
+            result_open: false,
+        }
     }
 }
 
@@ -53,7 +67,10 @@ pub(crate) fn tick(app: &mut SheetApp, ctx: &egui::Context) {
 pub(crate) fn show(app: &mut SheetApp, ctx: &egui::Context) {
     // The restart helper is scheduled before the app closes, so no update starts over unsaved work.
     let clean = !app.session.documents().iter().any(|d| d.is_dirty());
-    match app.updates_rt.updater.show_if(ctx, clean) {
+    let previous_language = UPDATE_LANGUAGE.replace(app.ui.language);
+    let action = app.updates_rt.updater.show_if(ctx, clean);
+    UPDATE_LANGUAGE.set(previous_language);
+    match action {
         Action::OpenUrl(url) => {
             if let Some(open) = &app.services.open_url {
                 open(&url);
