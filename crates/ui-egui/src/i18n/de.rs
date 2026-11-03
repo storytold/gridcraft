@@ -4,6 +4,28 @@
 /// Returns the German translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "a linked (not embedded) picture was skipped" => "Ein verknüpftes (nicht eingebettetes) Bild wurde übersprungen.",
+        "missing picture {target}" => "Bild {target} fehlt.",
+        "chart {target} has no supported plot and was skipped" => {
+            "Diagramm {target} enthält keinen unterstützten Diagrammtyp und wurde übersprungen."
+        }
+        "a histogram, waterfall, treemap… chart without its chart part was skipped" => {
+            "Ein Histogramm-, Wasserfall- oder Treemap-Diagramm… ohne eigenes Diagrammteil wurde übersprungen."
+        }
+        "an embedded object (SmartArt, OLE…) was skipped" => "Ein eingebettetes Objekt (SmartArt, OLE…) wurde übersprungen.",
+        "grouped shapes are not supported and were skipped" => "Gruppierte Formen werden nicht unterstützt und wurden übersprungen.",
+        "XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported." => {
+            "XLSB-Datenimport: Formeln werden durch ihre gespeicherten Ergebnisse ersetzt und nicht neu berechnet. Formatierungen, Diagramme, Bilder, Makros und andere Funktionen werden nicht importiert; Datumsangaben, Währungen und Prozentsätze werden möglicherweise als Zahlen angezeigt. Speichern Sie eine neue .xlsx-Datei; das Speichern als XLSB wird nicht unterstützt."
+        }
+        "XLSB module sheets were skipped." => "XLSB-Modulblätter wurden übersprungen.",
+        "XLSB non-worksheet sheets were skipped." => "XLSB-Blätter, die keine Arbeitsblätter sind, wurden übersprungen.",
+        "Unsupported XLSB future-record and alternate-content blocks were skipped." => {
+            "Nicht unterstützte zukünftige XLSB-Datensätze und Alternate-Content-Blöcke wurden übersprungen."
+        }
+        "Invalid XLSB merged ranges were skipped." => "Ungültige XLSB-Zellverbünde wurden übersprungen.",
+        "{count} items in this file were handled differently. First: {warning}" => {
+            "{count} Elemente in dieser Datei wurden anders verarbeitet. Zuerst: {warning}"
+        }
         "Paste Special|Add" => "Addieren",
         "Text to Columns|Comma" => "Komma",
         "Row height (points):" => "Zeilenhöhe (Punkte):",

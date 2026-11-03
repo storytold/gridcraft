@@ -3,6 +3,20 @@
 /// Returns the Chinese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "a linked (not embedded) picture was skipped" => "已跳过链接图片（未嵌入）。",
+        "missing picture {target}" => "缺少图片 {target}。",
+        "chart {target} has no supported plot and was skipped" => "图表 {target} 不包含受支持的图表类型，已跳过。",
+        "a histogram, waterfall, treemap… chart without its chart part was skipped" => "没有对应图表部件的直方图、瀑布图、树状图…已跳过。",
+        "an embedded object (SmartArt, OLE…) was skipped" => "已跳过嵌入对象（SmartArt、OLE…）。",
+        "grouped shapes are not supported and were skipped" => "不支持组合形状，已跳过。",
+        "XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported." => {
+            "XLSB 仅导入数据：公式将变为已保存的结果，且不会重新计算。不导入格式、图表、图片、宏及其他功能；日期、货币和百分比可能显示为数字。请另存为新的 .xlsx 文件；不支持保存为 XLSB。"
+        }
+        "XLSB module sheets were skipped." => "已跳过 XLSB 模块工作表。",
+        "XLSB non-worksheet sheets were skipped." => "已跳过 XLSB 非工作表。",
+        "Unsupported XLSB future-record and alternate-content blocks were skipped." => "已跳过不受支持的 XLSB 未来记录和替代内容块。",
+        "Invalid XLSB merged ranges were skipped." => "已跳过无效的 XLSB 合并单元格区域。",
+        "{count} items in this file were handled differently. First: {warning}" => "此文件中的 {count} 个项目已按不同方式处理。首项：{warning}",
         "Paste Special|Add" => "加",
         "Text to Columns|Comma" => "逗号",
         " (password)" => " （密码）",

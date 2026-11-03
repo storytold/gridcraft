@@ -4,6 +4,26 @@
 /// Returns the Portuguese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "a linked (not embedded) picture was skipped" => "A imagem vinculada (não incorporada) foi ignorada.",
+        "missing picture {target}" => "Imagem ausente: {target}.",
+        "chart {target} has no supported plot and was skipped" => "O gráfico {target} não tem um tipo de gráfico compatível e foi ignorado.",
+        "a histogram, waterfall, treemap… chart without its chart part was skipped" => {
+            "O gráfico de histograma, cascata, mapa de árvore… sem a parte de gráfico foi ignorado."
+        }
+        "an embedded object (SmartArt, OLE…) was skipped" => "O objeto incorporado (SmartArt, OLE…) foi ignorado.",
+        "grouped shapes are not supported and were skipped" => "Formas agrupadas não têm suporte e foram ignoradas.",
+        "XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported." => {
+            "Importação XLSB somente dos dados: as fórmulas se tornam os resultados salvos e não serão recalculadas. A formatação, os gráficos, as imagens, as macros e outros recursos não são importados; datas, moeda e porcentagens podem ser exibidas como números. Salve um novo arquivo .xlsx; não há suporte para salvar como XLSB."
+        }
+        "XLSB module sheets were skipped." => "As planilhas de módulo XLSB foram ignoradas.",
+        "XLSB non-worksheet sheets were skipped." => "As planilhas XLSB que não são planilhas de cálculo foram ignoradas.",
+        "Unsupported XLSB future-record and alternate-content blocks were skipped." => {
+            "Os blocos de registros futuros e de conteúdo alternativo não compatíveis do XLSB foram ignorados."
+        }
+        "Invalid XLSB merged ranges were skipped." => "Os intervalos mesclados inválidos do XLSB foram ignorados.",
+        "{count} items in this file were handled differently. First: {warning}" => {
+            "{count} itens deste arquivo foram processados de forma diferente. Primeiro: {warning}"
+        }
         "Paste" => "Colar",
         "Paste Values" => "Colar Valores",
         "Paste Formulas" => "Colar Fórmulas",

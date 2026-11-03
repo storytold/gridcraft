@@ -253,6 +253,18 @@ impl Language {
         }
     }
 
+    /// Translates an import warning for display in the interface. The file-format and engine
+    /// layers keep returning canonical English text to the CLI, control channel, and MCP.
+    pub(crate) fn open_warning(self, warning: &str) -> String {
+        if let Some(target) = warning.strip_prefix("missing picture ") {
+            return self.tr("missing picture {target}").replace("{target}", target);
+        }
+        if let Some(target) = warning.strip_prefix("chart ").and_then(|s| s.strip_suffix(" has no supported plot and was skipped")) {
+            return self.tr("chart {target} has no supported plot and was skipped").replace("{target}", target);
+        }
+        self.tr(warning).to_owned()
+    }
+
     /// Ribbon tabs can be nouns while their corresponding commands are verbs.
     pub fn tr_tab(self, text: &str) -> &str {
         self.translation(&format!("Tab|{text}")).unwrap_or_else(|| self.tr(text))

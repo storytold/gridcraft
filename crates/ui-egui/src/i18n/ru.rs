@@ -4,6 +4,24 @@
 /// Returns `None` for unknown keys so the shared lookup can apply its English fallback.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "a linked (not embedded) picture was skipped" => "Связанное (не встроенное) изображение пропущено.",
+        "missing picture {target}" => "Изображение {target} отсутствует.",
+        "chart {target} has no supported plot and was skipped" => "У диаграммы {target} нет поддерживаемого типа построения; она пропущена.",
+        "a histogram, waterfall, treemap… chart without its chart part was skipped" => {
+            "Гистограмма, каскадная диаграмма, древовидная карта… без своей части диаграммы пропущена."
+        }
+        "an embedded object (SmartArt, OLE…) was skipped" => "Встроенный объект (SmartArt, OLE…) пропущен.",
+        "grouped shapes are not supported and were skipped" => "Группировка фигур не поддерживается; фигуры пропущены.",
+        "XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported." => {
+            "Импорт XLSB только с данными: формулы заменяются сохранёнными результатами и не пересчитываются. Форматирование, диаграммы, изображения, макросы и другие функции не импортируются; даты, денежные значения и проценты могут отображаться как числа. Сохраните новый файл .xlsx; сохранение в XLSB не поддерживается."
+        }
+        "XLSB module sheets were skipped." => "Листы модулей XLSB пропущены.",
+        "XLSB non-worksheet sheets were skipped." => "Листы XLSB, не являющиеся рабочими листами, пропущены.",
+        "Unsupported XLSB future-record and alternate-content blocks were skipped." => {
+            "Неподдерживаемые будущие записи и блоки альтернативного содержимого XLSB пропущены."
+        }
+        "Invalid XLSB merged ranges were skipped." => "Недопустимые объединённые диапазоны XLSB пропущены.",
+        "{count} items in this file were handled differently. First: {warning}" => "Элементов файла, обработанных иначе: {count}. Первый: {warning}",
         "Paste Special|Add" => "Сложить",
         "Text to Columns|Comma" => "Запятая",
         "Paste" => "Вставить",

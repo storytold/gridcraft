@@ -3,6 +3,28 @@
 /// Returns the French translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "a linked (not embedded) picture was skipped" => "Une image liée (non incorporée) a été ignorée.",
+        "missing picture {target}" => "Image manquante : {target}.",
+        "chart {target} has no supported plot and was skipped" => {
+            "Le graphique {target} ne contient aucun type de graphique pris en charge et a été ignoré."
+        }
+        "a histogram, waterfall, treemap… chart without its chart part was skipped" => {
+            "Un graphique histogramme, cascade, arborescence… sans sa partie graphique a été ignoré."
+        }
+        "an embedded object (SmartArt, OLE…) was skipped" => "Un objet incorporé (SmartArt, OLE…) a été ignoré.",
+        "grouped shapes are not supported and were skipped" => "Les formes groupées ne sont pas prises en charge et ont été ignorées.",
+        "XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported." => {
+            "Importation XLSB des données uniquement : les formules deviennent leurs résultats enregistrés et ne sont pas recalculées. La mise en forme, les graphiques, les images, les macros et les autres fonctionnalités ne sont pas importés ; les dates, les devises et les pourcentages peuvent s'afficher comme des nombres. Enregistrez un nouveau fichier .xlsx ; l'enregistrement au format XLSB n'est pas pris en charge."
+        }
+        "XLSB module sheets were skipped." => "Les feuilles de module XLSB ont été ignorées.",
+        "XLSB non-worksheet sheets were skipped." => "Les feuilles XLSB qui ne sont pas des feuilles de calcul ont été ignorées.",
+        "Unsupported XLSB future-record and alternate-content blocks were skipped." => {
+            "Les enregistrements futurs et blocs de contenu alternatif XLSB non pris en charge ont été ignorés."
+        }
+        "Invalid XLSB merged ranges were skipped." => "Les plages fusionnées XLSB non valides ont été ignorées.",
+        "{count} items in this file were handled differently. First: {warning}" => {
+            "{count} éléments de ce fichier ont été traités différemment. Premier élément : {warning}"
+        }
         "Paste Special|Add" => "Additionner",
         "Paste Special" => "Collage spécial",
         "Formulas (F)" => "Formules (F)",

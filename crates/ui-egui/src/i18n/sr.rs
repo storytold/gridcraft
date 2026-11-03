@@ -3,6 +3,26 @@
 /// Returns the Serbian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "a linked (not embedded) picture was skipped" => "Povezana (neugrađena) slika je preskočena.",
+        "missing picture {target}" => "Nedostaje slika {target}.",
+        "chart {target} has no supported plot and was skipped" => "Grafikon {target} nema podržan tip i preskočen je.",
+        "a histogram, waterfall, treemap… chart without its chart part was skipped" => {
+            "Histogram, vodopadni ili treemap grafikon… bez svog dela grafikona je preskočen."
+        }
+        "an embedded object (SmartArt, OLE…) was skipped" => "Ugrađeni objekat (SmartArt, OLE…) je preskočen.",
+        "grouped shapes are not supported and were skipped" => "Grupisani oblici nisu podržani i preskočeni su.",
+        "XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported." => {
+            "XLSB uvoz samo podataka: formule postaju sačuvani rezultati i neće se ponovo izračunavati. Formatiranje, grafikoni, slike, makroi i druge funkcije nisu uvezeni; datumi, valuta i procenti mogu biti prikazani kao brojevi. Sačuvajte novu .xlsx datoteku; čuvanje u XLSB formatu nije podržano."
+        }
+        "XLSB module sheets were skipped." => "XLSB listovi modula su preskočeni.",
+        "XLSB non-worksheet sheets were skipped." => "XLSB listovi koji nisu radni listovi su preskočeni.",
+        "Unsupported XLSB future-record and alternate-content blocks were skipped." => {
+            "Nepodržani budući XLSB zapisi i blokovi alternativnog sadržaja su preskočeni."
+        }
+        "Invalid XLSB merged ranges were skipped." => "Nevažeći spojeni opsezi XLSB-a su preskočeni.",
+        "{count} items in this file were handled differently. First: {warning}" => {
+            "{count} stavki u ovoj datoteci obrađeno je drugačije. Prvo: {warning}"
+        }
         "Paste" => "Nalepi",
         "Paste Values" => "Nalepi vrednosti",
         "Paste Formulas" => "Nalepi formule",
