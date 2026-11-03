@@ -453,6 +453,7 @@ fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
         ("F1", "Blue"),
         ("G1", "Red"),
         ("H1", "Green"),
+        ("I1", "Blue"),
     ];
     let check = |wb: &Workbook| {
         for (cell, input) in accepted {
@@ -478,6 +479,45 @@ fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
     let (reopened, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
     check(&reopened);
     assert_eq!(sheet_xml(&reopened), xml, "a second save writes the same rules");
+}
+
+#[test]
+fn a_relative_list_source_is_read_from_the_cell_being_checked() {
+    // As in Excel, `=$B1:$B2` on A3:A4,A1:A2 is written for A1 (the top-left cell of all the
+    // areas) and lists B4:B5 at A4. It used to list B1:B2 in every cell.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "B1:B5", "values": [["a"], ["b"], ["c"], ["d"], ["e"]]})).unwrap();
+    s.execute("data.validation", json!({"range": "A3:A4,A1:A2", "type": "list", "formula1": "=$B1:$B2"})).unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let dv = wb.active().unwrap().validations[0].clone();
+    for (cell, items) in [("A1", ["a", "b"]), ("A2", ["b", "c"]), ("A3", ["c", "d"]), ("A4", ["d", "e"])] {
+        let at = CellRef::parse(cell).unwrap();
+        assert_eq!(list_items(&wb, 0, at, &dv), items, "{cell}");
+        for v in ["a", "b", "c", "d", "e"] {
+            assert_eq!(check_validation(&wb, 0, at, v).is_none(), items.contains(&v), "{cell} with {v}");
+        }
+    }
+}
+
+#[test]
+fn a_list_source_that_takes_in_the_cell_does_not_list_the_value_being_typed() {
+    // `=$A1:$A2` on A2:A3 is A1:A2 at A2 and A2:A3 at A3. The list is the one before the entry, as
+    // in Excel; a new value used to land in its own source and pass.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1:A2", "values": [["x"], ["y"]]})).unwrap();
+    s.execute("data.validation", json!({"range": "A2:A3", "type": "list", "formula1": "=$A1:$A2"})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    for (cell, accepted, refused) in [("A2", &["x", "y"][..], &["new"][..]), ("A3", &["y"], &["x", "new"])] {
+        let at = CellRef::parse(cell).unwrap();
+        for v in accepted {
+            assert!(check_validation(wb, 0, at, v).is_none(), "{cell} refuses {v}");
+        }
+        for v in refused {
+            assert!(check_validation(wb, 0, at, v).is_some(), "{cell} accepts {v}");
+        }
+    }
 }
 
 #[test]

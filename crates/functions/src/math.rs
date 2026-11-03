@@ -314,6 +314,10 @@ fn modulo(x: f64, d: f64) -> R<f64> {
     if d == 0.0 {
         return Err(CellError::Div0);
     }
+    // Excel returns #NUM! once the quotient magnitude reaches 1.1259E12 (checked against Excel 16).
+    if (x / d).abs() >= 1.1259e12 {
+        return Err(CellError::Num);
+    }
     // `%` is an exact remainder (truncated), so |r| < |d| even for tiny divisors.
     let r = x % d;
     // Keep the sign of the divisor and avoid returning |d| from rounding.
@@ -694,6 +698,16 @@ pub(crate) fn specs() -> Vec<FnSpec> {
         f!("ROUNDDOWN", 2, 2, MathTrig, S, "ROUNDDOWN(number, num_digits)", "Rounds a number toward zero to a given number of digits.", rounddown),
         f!("MROUND", 2, 2, MathTrig, S, "MROUND(number, multiple)", "Rounds a number to the nearest multiple.", mround),
         f!("CEILING", 2, 2, Compatibility, S, "CEILING(number, significance)", "Rounds a number up to a multiple of significance.", ceiling),
+        f!(
+            "ECMA.CEILING",
+            2,
+            2,
+            Compatibility,
+            S,
+            "ECMA.CEILING(number, significance)",
+            "Rounds a number up to a multiple of significance.",
+            ceiling
+        ),
         f!(
             "CEILING.MATH",
             1,
