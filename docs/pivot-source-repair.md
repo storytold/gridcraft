@@ -91,6 +91,7 @@ constructed, which failures must preserve history, and what each regression veri
 
 | Date | Change |
 |---|---|
+| 2026-11-03 | Complete old headers and assert validator-specific errors in the calculated-field rejection test; retain separate incomplete-header identity regressions |
 | 2026-11-03 | Reject selected calculated values when old headers are incomplete; cover renamed-then-cleared headers and preserve report/saved/redo state |
 | 2026-11-02 | Preserve valid calculated values during source repair; reject header collisions and broken calculated dependencies atomically |
 | 2026-10-28 | Distinguish GridCraft's blank-header validation from reported Excel COM behavior; preserve replacement protections |

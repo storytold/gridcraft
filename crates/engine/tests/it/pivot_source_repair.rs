@@ -266,8 +266,14 @@ fn repair_preserves_calculated_values_and_their_dependencies() {
 /// Reject replacement headers that shadow calculated fields, or break their dependencies.
 #[test]
 fn repair_rejects_calculated_field_collisions_and_invalid_dependencies_atomically() {
-    for (header, message) in [("Margin", "calculated field"), ("mArGiN", "calculated field"), ("Other", "calculated field")] {
+    for (header, message) in [
+        ("Margin", "source header conflicts with calculated field"),
+        ("mArGiN", "source header conflicts with calculated field"),
+        ("Other", "is invalid with this source"),
+    ] {
         let mut s = broken_report_with_calculated_values();
+        // Complete the old headers so the identity guard cannot satisfy these assertions.
+        s.execute("cell.set", json!({"cell": "D1", "input": "Unused"})).unwrap();
         let headers = if header == "Other" { vec!["Month", "Status", "Other"] } else { vec!["Month", "Amount", header] };
         s.execute("range.setValues", json!({"range": "Q1", "values": [headers, vec!["2026-01", "17", "999"], vec!["2026-02", "23", "999"]]}))
             .unwrap();
