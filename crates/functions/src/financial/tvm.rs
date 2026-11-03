@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arg, CellError, Ctx, R, Value, array_numbers, as_array, flatten, num, num_val, numbers, opt_num, type_arg};
 
 // ---------------------------------------------------------------------------------------------
 // Time value of money
@@ -480,10 +480,11 @@ pub(super) fn xirr(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 fn irr_solve(v: &[f64], guess: f64) -> R<f64> {
     let mut x = 1.0 / (1.0 + guess);
     for _ in 0..100 {
-        let (mut s, mut ds) = (0.0, 0.0);
+        let (mut s, mut ds, mut scale) = (0.0, 0.0, 0.0);
         for c in v.iter().rev() {
             ds = ds * x + s;
             s = s * x + c;
+            scale = scale * x.abs() + c.abs();
         }
         if ds == 0.0 {
             // An exact root with a zero slope (a repeated root such as {1,-2,1} at guess 0) is
@@ -494,7 +495,7 @@ fn irr_solve(v: &[f64], guess: f64) -> R<f64> {
         if !next.is_finite() {
             return Err(CellError::Num);
         }
-        if (next - x).abs() < 1e-8 {
+        if (next - x).abs() < 1e-8 && scale.is_finite() && s.abs() <= 1e-12 * scale {
             return if next > 0.0 { Ok(1.0 / next - 1.0) } else { Err(CellError::Num) };
         }
         x = next;

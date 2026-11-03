@@ -117,6 +117,8 @@ fn irr_follows_excel() {
     close_tol(irr_of(&[-100.0, 300.0, -210.0], Some(0.9)), 0.887_298_334_620_741_5, 1e-12);
     is_err(irr_of(&[-100.0, 60.0, 60.0], Some(-1.0)), CellError::Value);
     close_tol(irr_of(&[-100.0, 60.0, 60.0], Some(-0.999_999)), 0.130_662_386_291_807_5, 1e-12);
+    // A small Newton step alone is not convergence when cancellation leaves a large scaled residual.
+    close_tol(irr_of(&[-1e-9, 1.0, -1e8], None), 112_701_664.379_258_29, 1e-8);
     // An exact repeated root at the starting guess (zero slope) is the answer, as in Excel.
     assert_eq!(irr_of(&[1.0, -2.0, 1.0], Some(0.0)), Value::Number(0.0));
     assert_eq!(irr_of(&[-1.0, 3.0, -3.0, 1.0], Some(0.0)), Value::Number(0.0));
