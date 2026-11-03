@@ -251,6 +251,8 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
         let ink = obj.child("txBody").and_then(|tb| first_run_color(tb, 0)).unwrap_or_default();
         return Some(Shape {
             id: 0,
+            name: None,
+            text_link: None,
             kind: ShapeKind::Equation,
             anchor,
             fill: Color::Auto,
