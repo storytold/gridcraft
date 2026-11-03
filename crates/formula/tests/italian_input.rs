@@ -23,6 +23,11 @@ fn italian_aliases_and_argument_separators() {
         ("=falso", "FALSE"),
         ("VERO()", "TRUE()"),
         ("FALSO()", "FALSE()"),
+        // English names that Italian Excel keeps in English (SUM, MAP, …) are accepted
+        // because canonical_name falls back to the input when no alias matches.
+        // Excel would give #NOME? for a name it *does* translate (e.g. AVERAGE) typed
+        // in English; we accept it as a convenience — it only ever adds input that
+        // used to fail, never changes what a name means.
         ("SOMMA(1;SUM(2;3);MEDIA(4;6))", "SUM(1,SUM(2,3),AVERAGE(4,6))"),
         ("SE(VERO;;)", "IF(TRUE,,)"),
         ("LAMBDA(x;x+1)(2)", "LAMBDA(x,x+1)(2)"),

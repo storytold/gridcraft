@@ -529,10 +529,10 @@ impl FormulaLocale {
 
 /// Folds a localized name for lookup: upper case, then the diacritics a Romance alias can carry
 /// reduced to their base letter. Distinct from `crate::fold_name`, the case fold used for
-/// LET/LAMBDA bindings: this one also strips the diacritics Italian aliases carry.
-/// Excel itself is not accent-insensitive, but a keyboard that
-/// cannot type `Ù` would otherwise turn `PIÙ.SE` into `#NAME?`, so the unaccented spelling is
-/// accepted as well. It only ever adds input that used to fail, never changes what a name means.
+/// LET/LAMBDA bindings: this one also strips the diacritics Italian aliases carry. Excel itself
+/// is not accent-insensitive, but a keyboard that cannot type `Ù` would otherwise turn `PIÙ.SE`
+/// into `#NAME?`, so the unaccented spelling is accepted as well. It only ever adds input that
+/// used to fail, never changes what a name means.
 fn fold_alias(name: &str) -> String {
     name.to_uppercase().chars().map(base_letter).collect()
 }
