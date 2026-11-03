@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-01 · **Change:** minor (Python cells are edited in the formula bar; earlier: the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-02 · **Change:** minor (Python cells are edited in the formula bar; earlier: the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; FILTERJSON documented as an extension of ours, not an Excel name; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -12,16 +12,17 @@ Excel's worksheet functions, category by category, against GridCraft's function 
   them), plus 14 text functions the page lists under combined entries (FIND/FINDB, LEFT/LEFTB,
   LEN/LENB, MID/MIDB, REPLACE/REPLACEB, RIGHT/RIGHTB, SEARCH/SEARCHB), BETA.INV, and COPILOT and
   PY (Microsoft 365 functions not on that page when fetched).
-- **Ours (505):** every function spec in `crates/functions/src/*.rs` (`f!("NAME", …)`) plus the
-- **Ours (503):** every function spec in `crates/functions/src/*.rs` (`f!("NAME", …)`) plus the
-- **Ours (502):** every function spec in `crates/functions/src/*.rs` (`f!("NAME", …)`) plus the
-- **Ours (502):** every function spec in `crates/functions/src/*.rs` (`f!("NAME", …)`) plus the
-- **Ours (505):** every function spec in `crates/functions/src/*.rs` (`f!("NAME", …)`) plus the
-  evaluator's special forms in `crates/calc/src/eval.rs` (`SPECIAL_FUNCTIONS`: IF, IFS, CHOOSE,
-  OFFSET, INDIRECT, INDEX, SUBTOTAL, AGGREGATE, TEXT, LET, LAMBDA, MAP, REDUCE, SCAN, BYROW, BYCOL,
-  MAKEARRAY…), excluding the test-only `ADD2`. Every one is an Excel name.
+- **Ours (505):** every function spec in `crates/functions/src/*.rs` (`f!("NAME", …)`), excluding
+  `USDOLLAR`, `ECMA.CEILING` and `FILTERJSON`, plus the evaluator's special forms in
+  `crates/calc/src/eval.rs` (`SPECIAL_FUNCTIONS`: IF, IFS, CHOOSE, OFFSET, INDIRECT, INDEX,
+  SUBTOTAL, AGGREGATE, TEXT, LET, LAMBDA, MAP, REDUCE, SCAN, BYROW, BYCOL, MAKEARRAY…), excluding
+  the test-only `ADD2`. Every counted entry is an Excel name.
 - **Not on Microsoft's list:** USDOLLAR and ECMA.CEILING, legacy functions Excel still evaluates (like DOLLAR),
   are in our library as Compatibility functions for files that use them. They are not counted above.
+- **Extensions (ours, not Excel's):** FILTERJSON (category Web) reads JSON text with a bounded
+  JSONPath subset, complementing FILTERXML for web APIs that only serve JSON. Excel has no such
+  function, so it is not counted above, and a workbook that uses it shows `#NAME?` when opened in
+  Excel.
 - **Working** excludes stubs that return an error by design: the 7 CUBE functions (`#N/A`, no
   cube connections) and WEBSERVICE and FILTERXML (`#VALUE!`). Excel for Mac also lacks
   WEBSERVICE and FILTERXML; Excel for Windows has them.
@@ -134,8 +135,9 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | minor | FILTERJSON (Web) added as an extension that is ours and not Excel's: JSON text read with a bounded JSONPath subset (`.name`, `['name']`, `[n]`, `[*]`, `..name`), one match as a scalar and several as a column; the counts do not change |
 | 2026-11-01 | minor | Python in cells row: Python mode in the formula bar |
-| 2026-11-01 | minor | Python in cells (stored, not run): `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!` done, with their `ERROR.TYPE` numbers; `PY` still counted as missing |
+| 2026-11-01 | minor | Python in cells (stored, not run): `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!` done, with their `ERROR.TYPE` numbers; `PY` still counted as missing
 | 2026-10-31 | minor | BIN2*, HEX2* and OCT2* reject surrounding spaces and tabs in source strings with `#NUM!`, matching Excel; plain unpadded values remain valid |
 | 2026-10-31 | minor | DEC2BIN, DEC2HEX and DEC2OCT validate `places` before returning negative two's-complement output, and Boolean places return `#VALUE!`, matching Excel |
 | 2026-10-31 | minor | BITLSHIFT and BITRSHIFT return `0` for zero operands shifted beyond 53 bits in either direction; nonzero operands retain the `#NUM!` limit, matching Excel |
