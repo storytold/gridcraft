@@ -1,5 +1,9 @@
 //! Localized aliases accepted at user-entry boundaries; file syntax stays English.
 
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
+use crate::spanish::SPANISH;
 use crate::{Expr, ParseError, parser};
 
 /// Formula-entry syntax selected by the interface language. Other interface languages
@@ -11,24 +15,22 @@ pub enum FormulaLocale {
     Es,
 }
 
-const SPANISH: &[(&str, &str)] = &[
-    ("SUM", "SUMA"),
-    ("AVERAGE", "PROMEDIO"),
-    ("IF", "SI"),
-    ("COUNT", "CONTAR"),
-    ("SUMIF", "SUMAR.SI"),
-    ("COUNTIF", "CONTAR.SI"),
-    ("VLOOKUP", "BUSCARV"),
-    ("TODAY", "HOY"),
-    // Financial block (#1986): the loan-schedule and investment staples.
-    ("NPV", "VNA"),
-    ("IRR", "TIR"),
-    ("PMT", "PAGO"),
-    ("PV", "VA"),
-    ("FV", "VF"),
-    ("TRUE", "VERDADERO"),
-    ("FALSE", "FALSO"),
-];
+/// Upper-case English name -> Spanish name, and upper-case Spanish name -> English name.
+/// Keys are upper-cased in full Unicode, so `año` finds `AÑO`.
+fn spanish_maps() -> &'static (HashMap<String, &'static str>, HashMap<String, &'static str>) {
+    static MAPS: OnceLock<(HashMap<String, &'static str>, HashMap<String, &'static str>)> = OnceLock::new();
+    MAPS.get_or_init(|| {
+        let to_es = SPANISH.iter().map(|&(en, es)| (en.to_uppercase(), es)).collect();
+        let to_en = SPANISH.iter().map(|&(en, es)| (es.to_uppercase(), en)).collect();
+        (to_es, to_en)
+    })
+}
+
+/// Every (English, Spanish) function-name pair. Names Spanish Excel keeps in English are listed
+/// with themselves.
+pub fn spanish_function_names() -> &'static [(&'static str, &'static str)] {
+    SPANISH
+}
 
 impl FormulaLocale {
     pub fn list_separator(self) -> char {
@@ -41,18 +43,10 @@ impl FormulaLocale {
         if self == Self::Es { '\\' } else { ',' }
     }
     pub fn function_name(self, canonical: &str) -> &str {
-        if self == Self::Es {
-            SPANISH.iter().find(|(en, _)| en.eq_ignore_ascii_case(canonical)).map(|(_, es)| *es).unwrap_or(canonical)
-        } else {
-            canonical
-        }
+        if self == Self::Es { spanish_maps().0.get(&canonical.to_uppercase()).copied().unwrap_or(canonical) } else { canonical }
     }
     pub fn canonical_name(self, localized: &str) -> &str {
-        if self == Self::Es {
-            SPANISH.iter().find(|(_, es)| es.eq_ignore_ascii_case(localized)).map(|(en, _)| *en).unwrap_or(localized)
-        } else {
-            localized
-        }
+        if self == Self::Es { spanish_maps().1.get(&localized.to_uppercase()).copied().unwrap_or(localized) } else { localized }
     }
 }
 
@@ -131,6 +125,56 @@ pub(crate) fn boolean_alias(name: &str) -> Option<bool> {
     }
 }
 
+/// The Spanish (`display`) or English spelling of a function name that no binding or defined
+/// name shadows. Shown in Spanish, a function whose Spanish name a binding shadows keeps its
+/// English name; when that English name is the Spanish name of another function (`DECIMAL`,
+/// which is FIXED in Spanish), no spelling would read back as the same function, so the
+/// formula cannot be shown in Spanish.
+fn translate_function(name: &str, display: bool, bound: &impl Fn(&str) -> bool) -> Result<String, ParseError> {
+    let es = FormulaLocale::Es;
+    if !display {
+        return Ok(es.canonical_name(name).to_string());
+    }
+    let alias = es.function_name(name);
+    if !bound(alias) {
+        return Ok(alias.to_string());
+    }
+    if !crate::same_name(es.canonical_name(name), name) {
+        return Err(ParseError { msg: format!("{name} cannot be shown in Spanish while {alias} names a local value"), pos: 0 });
+    }
+    Ok(name.to_string())
+}
+
+/// Whether argument `index` of `count` passed to the built-in `function` (English name) is a
+/// function, which may be given by name: the LAMBDA of the helpers and the aggregation of
+/// GROUPBY and PIVOTBY, as the evaluator reads them. Every other argument is a value, so a
+/// name there stays a name (`SUMA(RAIZ;1)` keeps the name `RAIZ`).
+fn takes_function(function: &str, index: usize, count: usize) -> bool {
+    let position = match function.to_ascii_uppercase().as_str() {
+        "MAP" => count.checked_sub(1),
+        "BYROW" | "BYCOL" => Some(1),
+        "REDUCE" | "SCAN" | "MAKEARRAY" | "GROUPBY" => Some(2),
+        "PIVOTBY" => Some(3),
+        _ => None,
+    };
+    position == Some(index)
+}
+
+/// A function given by name where a function is expected, as in `MAP({1;4};RAIZ)`, is
+/// translated like a call. Booleans, bound names and names that are no function's are left alone.
+fn function_argument(arg: &mut Expr, display: bool, bound: &impl Fn(&str) -> bool) -> Result<(), ParseError> {
+    let Expr::Name(name) = arg else { return Ok(()) };
+    if bound(name) || boolean_alias(name).is_some() {
+        return Ok(());
+    }
+    let es = FormulaLocale::Es;
+    let other = if display { es.function_name(name) } else { es.canonical_name(name) };
+    if !crate::same_name(other, name) {
+        *name = translate_function(name, display, bound)?;
+    }
+    Ok(())
+}
+
 fn normalize(expr: &mut Expr, known_name: &impl Fn(&str) -> bool, bindings: &mut Vec<String>, depth: usize, display: bool) -> Result<(), ParseError> {
     if depth > parser::MAX_DEPTH {
         return Err(ParseError { msg: "formula is nested too deeply".into(), pos: 0 });
@@ -177,11 +221,18 @@ fn normalize(expr: &mut Expr, known_name: &impl Fn(&str) -> bool, bindings: &mut
             bindings.truncate(saved);
         }
         Expr::Call(name, args) => {
-            let alias = if display { FormulaLocale::Es.function_name(name) } else { FormulaLocale::Es.canonical_name(name) };
-            if !bound(name, bindings) && (!display || !bound(alias, bindings)) {
-                *name = alias.to_string();
+            let mut canonical = name.clone();
+            if !bound(name, bindings) {
+                *name = translate_function(name, display, &|n| bound(n, bindings))?;
+                if !display {
+                    canonical.clone_from(name);
+                }
             }
-            for arg in args {
+            let count = args.len();
+            for (i, arg) in args.iter_mut().enumerate() {
+                if takes_function(&canonical, i, count) {
+                    function_argument(arg, display, &|n| bound(n, bindings))?;
+                }
                 normalize(arg, known_name, bindings, depth + 1, display)?;
             }
         }
