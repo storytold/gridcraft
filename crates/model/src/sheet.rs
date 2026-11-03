@@ -818,6 +818,8 @@ mod tests {
                 data_labels: false,
                 data_table: None,
                 gridlines: false,
+                cat_reverse: false,
+                val_reverse: false,
                 style: 0,
                 x_title: None,
                 y_title: None,
