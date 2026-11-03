@@ -673,7 +673,13 @@ pub(super) fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                             d.list_index = 0;
                             d.values.remove(key);
                         } else {
-                            d.list_index = d.list_index.min(matches.len() - 1);
+                            if let Some(selected) = d.values.get(key).and_then(Json::as_str)
+                                && let Some(index) = matches.iter().position(|name| name.as_str() == selected)
+                            {
+                                d.list_index = index;
+                            } else {
+                                d.list_index = d.list_index.min(matches.len() - 1);
+                            }
                             let up = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::ArrowUp));
                             let down = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::ArrowDown));
                             if up && d.list_index > 0 {
