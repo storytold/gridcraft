@@ -406,6 +406,9 @@ impl Writer {
             }
             ParseNode::Array { body, is_cd: None | Some(false), .. } => {
                 let cols = body.iter().map(Vec::len).max().unwrap_or(0).max(1);
+                if body.len().saturating_mul(cols) > crate::MAX_CELLS {
+                    return Err(MathError::new(format!("An equation can have at most {} matrix cells.", crate::MAX_CELLS), None));
+                }
                 self.out.push_str(&format!(
                     "<m:m><m:mPr><m:mcs><m:mc><m:mcPr><m:count m:val=\"{cols}\"/><m:mcJc m:val=\"center\"/></m:mcPr></m:mc></m:mcs></m:mPr>"
                 ));
