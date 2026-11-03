@@ -329,6 +329,11 @@ fn undo_and_redo_reach_the_sheet_while_find_and_replace_is_open() {
     h.get_by_label("Replace All").click();
     h.run_steps(3);
     assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("y1"), Value::from("y2")));
+    // Keyboard focus on a button must not reserve Undo/Redo for text editing.
+    h.get_by_label("Replace All").focus();
+    h.run_steps(2);
+    assert!(h.ctx.egui_wants_keyboard_input());
+    assert!(!h.ctx.text_edit_focused());
     key(&mut h, Key::Z, Modifiers::COMMAND);
     assert!(h.state().dialog.is_some(), "the dialog stays open");
     assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("x1"), Value::from("x2")), "one Undo takes back the whole Replace All");
@@ -340,6 +345,11 @@ fn undo_and_redo_reach_the_sheet_while_find_and_replace_is_open() {
     key(&mut h, Key::Z, Modifiers::COMMAND | Modifiers::SHIFT);
     assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("y1"), Value::from("y2")));
     assert!(h.state().dialog.is_some(), "the dialog is still open");
+    h.get_by_label("Find what:").focus();
+    h.run_steps(2);
+    assert!(h.ctx.text_edit_focused());
+    key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("y1"), Value::from("y2")), "text-field Undo leaves the sheet alone");
 }
 
 #[test]
