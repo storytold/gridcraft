@@ -200,6 +200,7 @@ fn read_workbook_properties(cx: &mut Ctx<'_>, wb: &mut Workbook, xml: &El) {
         if p.flag("date1904", false) {
             cx.date_system = DateSystem::D1904;
         }
+        wb.remove_personal_info = p.flag("filterPrivacy", false);
         wb.show_objects = match p.attr("showObjects") {
             Some("none") => ShowObjects::None,
             Some("placeholders") => ShowObjects::Placeholders,

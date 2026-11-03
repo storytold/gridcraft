@@ -1696,3 +1696,30 @@ fn generated_rule_formulas_use_the_top_left_cell_of_every_area() {
     z.by_name("xl/worksheets/sheet1.xml").unwrap().read_to_string(&mut xml).unwrap();
     assert!(xml.contains("<formula>NOT(ISERROR(SEARCH(\"x\",C2)))</formula>"), "{xml}");
 }
+
+#[test]
+fn remove_personal_information_is_kept_and_honoured() {
+    // #3089: `<workbookPr filterPrivacy="1"/>` was dropped, so a workbook cleaned of personal
+    // information came back with it switched off, and GridCraft wrote the author and company back.
+    let bytes = super::minimal("<sheetData/>", &[], "", r#"<workbookPr filterPrivacy="1"/>"#);
+    let (mut wb, _) = read_xlsx(&bytes).unwrap();
+    assert!(wb.remove_personal_info);
+    wb.props.author = "Jane Example".into();
+    wb.props.company = "Example Co".into();
+    wb.props.title = "Budget".into();
+    let saved = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
+    assert_eq!(book.child("workbookPr").and_then(|p| p.attr("filterPrivacy")), Some("1"));
+    let core = String::from_utf8(pkg.read("docProps/core.xml").unwrap().unwrap()).unwrap();
+    let app = String::from_utf8(pkg.read("docProps/app.xml").unwrap().unwrap()).unwrap();
+    assert!(!core.contains("Jane Example") && !app.contains("Example Co"), "{core}\n{app}");
+    assert!(core.contains("<dc:title>Budget</dc:title>"), "other properties stay: {core}");
+    // Off (the default), nothing changes.
+    wb.remove_personal_info = false;
+    let saved = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
+    assert_eq!(book.child("workbookPr").and_then(|p| p.attr("filterPrivacy")), None);
+    assert!(String::from_utf8(pkg.read("docProps/core.xml").unwrap().unwrap()).unwrap().contains("Jane Example"));
+}
