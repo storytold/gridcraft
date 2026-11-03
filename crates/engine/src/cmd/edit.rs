@@ -244,6 +244,25 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
             })
         })
     };
+    // Notes and links aren't cell contents, so the cell comparison that guards a protected sheet
+    // doesn't see them go: a locked cell's are refused here, stored cell or not.
+    if matches!(what, "all" | "comments" | "hyperlinks") {
+        let d = s.doc()?;
+        if let Some(sh) = d.wb.sheet(sheet).filter(|sh| sh.is_protected()) {
+            for &whole in &ranges {
+                let skip = filtered_rows(sh, whole);
+                let notes = matches!(what, "all" | "comments").then(|| sh.comments.keys()).into_iter().flatten();
+                let links = matches!(what, "all" | "hyperlinks").then(|| sh.hyperlinks.keys()).into_iter().flatten();
+                for &c in notes.chain(links).filter(|c| whole.contains(**c) && !skip.contains(&c.row)) {
+                    if d.wb.styles.get(sh.style_id(c)).protection.locked
+                        && let Some(m) = locked_cell_error(sh, c, &d.unlocked_ranges)
+                    {
+                        return Err(EngineError::Other(m));
+                    }
+                }
+            }
+        }
+    }
     edit(s, |cx| {
         for &whole in &ranges {
             // Cells are only stored inside the used range. Notes and links are kept apart from
@@ -274,6 +293,18 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
                     }
                 }
             }
+            let cleared = |c: CellRef| whole.contains(c) && !skip.contains(&c.row);
+            // A removed note or link changes its cell even with nothing stored there.
+            let metadata: Vec<CellRef> = cx
+                .wb
+                .sheet(sheet)
+                .map(|sh| {
+                    let notes = matches!(what, "all" | "comments").then(|| sh.comments.keys()).into_iter().flatten();
+                    let links = matches!(what, "all" | "hyperlinks").then(|| sh.hyperlinks.keys()).into_iter().flatten();
+                    notes.chain(links).copied().filter(|c| cleared(*c)).collect()
+                })
+                .unwrap_or_default();
+            cx.changed.extend(metadata.into_iter().map(|c| (sheet, c)));
             let sh = cx.sheet_mut(sheet)?;
             for (c, mut cell) in cells {
                 match what {
@@ -290,7 +321,6 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
                     _ => {}
                 }
             }
-            let cleared = |c: CellRef| whole.contains(c) && !skip.contains(&c.row);
             if matches!(what, "all" | "comments") {
                 sh.comments.retain(|c, _| !cleared(*c));
             }

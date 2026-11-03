@@ -5477,3 +5477,51 @@ fn clear_hyperlinks_removes_links_on_cells_with_nothing_stored() {
     s.execute("edit.clearHyperlinks", json!({"range": "A1"})).unwrap();
     assert!(!s.doc().unwrap().wb.active().unwrap().hyperlinks.contains_key(&a1), "the link on an empty sheet is removed");
 }
+
+/// Notes and links aren't cell contents, so the cell comparison that guards a protected sheet
+/// doesn't see them go: Clear Hyperlinks and Clear Comments refuse locked cells themselves,
+/// stored or not.
+#[test]
+fn clearing_links_and_notes_respects_sheet_protection() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    let link = || gridcraft_model::Hyperlink { target: "https://example.com".into(), tooltip: None, external: true };
+    let (a1, c5) = (CellRef::parse("A1").unwrap(), CellRef::parse("C5").unwrap());
+    {
+        let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sh.hyperlinks.insert(a1, link());
+        sh.hyperlinks.insert(c5, link());
+    }
+    s.execute("review.newNote", json!({"cell": "C5", "text": "note", "author": "Example"})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    for (cmd, range) in [("edit.clearHyperlinks", "A1"), ("edit.clearHyperlinks", "C5"), ("edit.clearComments", "C5")] {
+        assert!(s.execute(cmd, json!({"range": range})).is_err(), "{cmd} on locked {range}");
+    }
+    let sh = s.doc().unwrap().wb.active().unwrap().clone();
+    assert!(sh.hyperlinks.contains_key(&a1) && sh.hyperlinks.contains_key(&c5) && sh.comments.contains_key(&c5), "nothing removed");
+
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    s.execute("edit.clearHyperlinks", json!({"range": "A1:C5"})).unwrap();
+    s.execute("edit.clearComments", json!({"range": "C5"})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap().clone();
+    assert!(sh.hyperlinks.is_empty() && sh.comments.is_empty());
+}
+
+/// A removed link or note is a change to its cell even when nothing is stored there, so a
+/// recorded macro's footprint lists it.
+#[test]
+fn clearing_links_and_notes_records_their_cells() {
+    let mut s = s();
+    let c5 = CellRef::parse("C5").unwrap();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb)
+        .sheet_mut(0)
+        .unwrap()
+        .hyperlinks
+        .insert(c5, gridcraft_model::Hyperlink { target: "https://example.com".into(), tooltip: None, external: true });
+    s.execute("review.newNote", json!({"cell": "D7", "text": "note", "author": "Example"})).unwrap();
+    s.doc_mut().unwrap().touched = Some(Vec::new());
+    s.execute("edit.clearHyperlinks", json!({"range": "C5"})).unwrap();
+    s.execute("edit.clearComments", json!({"range": "D7"})).unwrap();
+    let touched: Vec<String> = s.doc().unwrap().touched.clone().unwrap_or_default().into_iter().map(|(_, c)| c.a1()).collect();
+    assert!(touched.contains(&"C5".to_string()) && touched.contains(&"D7".to_string()), "{touched:?}");
+}
