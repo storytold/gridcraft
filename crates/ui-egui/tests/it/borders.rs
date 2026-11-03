@@ -160,3 +160,40 @@ fn merged_range_draws_the_outline_from_its_edge_cells() {
     assert_eq!(ys.iter().filter(|y| (**y - max_y).abs() < 0.5).count(), 4, "bottom edge");
     assert!(max_x - min_x > 100.0 && max_y - min_y > 40.0, "the outline spans the whole merged area");
 }
+
+/// #2544: a merged range in frozen columns keeps its whole outline while the others scroll: the
+/// bottom edge under its last column ends at that column's own right edge, the freeze line.
+#[test]
+fn frozen_merged_range_keeps_its_outline_when_scrolled() {
+    let mut h = harness();
+    h.state_mut().run("home.borders", json!({"range": "A2:B3", "preset": "thickOutside", "color": "#C81E1E"})).unwrap();
+    h.state_mut().run("home.mergeCells", json!({"range": "A2:B3"})).unwrap();
+    h.state_mut().run("view.freezePanes", json!({"cell": "C1"})).unwrap();
+    h.state_mut().run("selection.set", json!({"range": "H10"})).unwrap();
+    h.state_mut().view_mut().unwrap().scroll.x = 300.0;
+    h.run_steps(6);
+    let freeze_x = {
+        let app = h.state();
+        let sheet = app.session.active().unwrap().wb.active().unwrap();
+        let geo = gridcraft_ui_egui::grid::Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+        geo.cells.left() + geo.frozen_w
+    };
+    let red = Color32::from_rgb(0xC8, 0x1E, 0x1E);
+    let right_ends: Vec<f32> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            Shape::LineSegment { points, stroke } if stroke.color == red && (points[0].y - points[1].y).abs() < 0.5 => {
+                Some(points[0].x.max(points[1].x))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(right_ends.len(), 4, "top and bottom edges, one segment per column: {right_ends:?}");
+    assert_eq!(
+        right_ends.iter().filter(|x| (**x - freeze_x).abs() < 1.0).count(),
+        2,
+        "B's segments end at the freeze line: {right_ends:?} vs {freeze_x}"
+    );
+}
