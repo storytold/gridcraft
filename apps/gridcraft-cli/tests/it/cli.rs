@@ -110,7 +110,7 @@ fn a_file_named_dash_h_opens_through_a_relative_path() {
 
     let opened = bin().args(["info", "./-h"]).current_dir(&dir).output().expect("open file named -h");
     assert!(opened.status.success(), "{}", String::from_utf8_lossy(&opened.stderr));
-    assert!(String::from_utf8_lossy(&opened.stdout).contains("Sales"));
+    assert!(String::from_utf8_lossy(&opened.stdout).contains("Sales: used"));
 }
 
 #[test]
