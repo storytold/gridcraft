@@ -197,3 +197,24 @@ fn display_options_hide_the_sheet_tabs_and_the_horizontal_scroll_bar() {
     h.run_steps(5);
     assert!(!shows_tab_name(&h) && h.state().grid.hscroll.is_none() && h.state().grid.tab_split.is_none(), "no bar at all");
 }
+
+#[test]
+fn hiding_the_controls_clears_their_cached_rectangles() {
+    // Turned off on a live window, the controls drop the rectangles of the frame that drew them.
+    let mut h = harness(900.0, 1);
+    assert!(h.state().grid.tab_split.is_some() && h.state().grid.hscroll.is_some(), "both controls drawn first");
+
+    h.state_mut().run("view.showSheetTabs", json!({"on": false})).unwrap();
+    h.run_steps(5);
+    assert!(h.state().grid.tab_split.is_none(), "no split handle once the tabs are hidden");
+    assert!(h.state().grid.hscroll.is_some(), "the scroll bar stays");
+
+    h.state_mut().run("view.showSheetTabs", json!({"on": true})).unwrap();
+    h.state_mut().run("view.showHorizontalScrollBar", json!({"on": false})).unwrap();
+    h.run_steps(5);
+    assert!(h.state().grid.hscroll.is_none() && h.state().grid.tab_split.is_none(), "no scroll bar and no split handle");
+
+    h.state_mut().run("view.showSheetTabs", json!({"on": false})).unwrap();
+    h.run_steps(5);
+    assert!(h.state().grid.hscroll.is_none() && h.state().grid.tab_split.is_none(), "no bar at all");
+}

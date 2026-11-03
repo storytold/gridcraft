@@ -100,6 +100,9 @@ fn tab_split_handle(app: &mut SheetApp, ui: &mut Ui, split: Rect, bar: (f32, f32
 /// Draws the worksheet tab strip: navigation, scroll/reveal, rename/drag/move with optional copy, context menu, new-sheet button, split handle and grid scrollbar.
 pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    // Only the controls drawn this frame have a rectangle: a hidden one keeps no stale geometry.
+    app.grid.hscroll = None;
+    app.grid.tab_split = None;
     // File › Options › Advanced › Display options for this workbook (#3101): with neither the
     // sheet tabs nor the horizontal scroll bar, the bar isn't there at all.
     let view = app.session.active().map(|d| d.wb.view).unwrap_or_default();
