@@ -197,11 +197,13 @@ fn a_growing_collapsed_formula_bar_leaves_room_for_the_worksheet_in_a_short_wind
 #[test]
 fn an_expanded_formula_bar_leaves_room_for_the_page_layout_ruler() {
     // Page Layout view takes the ruler above the headings out of the grid: the room kept under
-    // the bar holds it as well as the headings and two rows.
+    // the bar holds it as well as the headings and two rows. 480 pt leaves that room under a bar
+    // of a few lines whatever the UI font (at 400 pt only a one-line bar fits, on Linux not even
+    // that).
     let mut session = Session::new();
     session.new_workbook();
     session.execute("view.pageLayout", json!({})).unwrap();
-    let mut h = crate::common::harness_with(crate::common::builder().with_size(vec2(1200.0, 400.0)), crate::common::app(session), 4);
+    let mut h = crate::common::harness_with(crate::common::builder().with_size(vec2(1200.0, 480.0)), crate::common::app(session), 4);
     h.state_mut().run("view.expandFormulaBar", json!({"lines": 100})).unwrap();
     h.run_steps(60);
     let grid = h.state().grid.rect.expect("the grid is drawn");
@@ -214,20 +216,22 @@ fn an_expanded_formula_bar_leaves_room_for_the_page_layout_ruler() {
         + (pages.gap + pages.margins[2]) as f32 * z
         + 2.0 * gridcraft_engine::model::DEFAULT_ROW_HEIGHT * z;
     assert!(grid.height() >= need - 1.0, "ruler, headings, page top and two rows under a {} pt bar: {grid:?} < {need}", bar(&h).height);
+    assert!(bar(&h).visible_lines > 1, "the bar is still expanded");
 }
 
 #[test]
 fn an_expanded_formula_bar_leaves_room_for_the_column_outline() {
     // A column outline puts its band of level buttons above the headings: the room kept under
-    // the bar holds the band as well as the headings and two rows.
+    // the bar holds the band as well as the headings and two rows, under a bar of a few lines.
     let mut session = Session::new();
     session.new_workbook();
     for cols in ["B:G", "C:F", "D:E"] {
         session.execute("data.group", json!({"cols": cols})).unwrap();
     }
-    let mut h = crate::common::harness_with(crate::common::builder().with_size(vec2(1200.0, 400.0)), crate::common::app(session), 4);
+    let mut h = crate::common::harness_with(crate::common::builder().with_size(vec2(1200.0, 480.0)), crate::common::app(session), 4);
     h.state_mut().run("view.expandFormulaBar", json!({"lines": 100})).unwrap();
     h.run_steps(60);
     let cells = h.state().grid.cells_rect.expect("the grid is drawn");
     assert!(cells.height() >= two_rows_at(100.0) - 1.0, "two rows stay visible under a {} pt bar: {cells:?}", bar(&h).height);
+    assert!(bar(&h).visible_lines > 1, "the bar is still expanded");
 }
