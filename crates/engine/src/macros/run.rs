@@ -1237,26 +1237,39 @@ pub(crate) fn pair_sheets(before: &Workbook, after: &Workbook) -> (Vec<(usize, O
     (pairs, spare.collect())
 }
 
-/// Only a formula's cached value changed (a recalculation, not a write).
+/// Only a formula's (or a Python cell's) cached value changed (a recalculation, not a write): a
+/// Python cell whose spill a step blocked shows #SPILL! with its code untouched.
 fn recalculated_only(b: Option<&Cell>, a: Option<&Cell>) -> bool {
     match (b, a) {
         (Some(b), Some(a)) => match (&b.formula, &a.formula) {
             (Some(x), Some(y)) => x.text == y.text && x.array == y.array && b.style == a.style,
+            (None, None) => match (&b.py, &a.py) {
+                (Some(x), Some(y)) => x.code == y.code && x.object == y.object && b.style == a.style,
+                _ => false,
+            },
             _ => false,
         },
         _ => false,
     }
 }
 
+/// Python code is content, as a formula is, whatever the cell shows.
 fn has_content(c: &Cell) -> bool {
-    c.formula.is_some() || !(c.value.is_empty() || c.value.as_text() == Some(""))
+    c.formula.is_some() || c.py.is_some() || !(c.value.is_empty() || c.value.as_text() == Some(""))
 }
 
+/// Whether a write changed what the person entered: the formula, the Python code and its return
+/// type, or the value. A Python cell replaced by its own cached value, or by other code that
+/// shows the same `#BLOCKED!`, has changed.
 fn content_differs(b: Option<&Cell>, a: Option<&Cell>) -> bool {
     match (b, a) {
         (Some(b), Some(a)) => match (&b.formula, &a.formula) {
             (Some(x), Some(y)) => x.text != y.text,
-            (None, None) => b.value != a.value,
+            (None, None) => match (&b.py, &a.py) {
+                (Some(x), Some(y)) => x.code != y.code || x.object != y.object,
+                (None, None) => b.value != a.value,
+                _ => true,
+            },
             _ => true,
         },
         (Some(b), None) => has_content(b),
