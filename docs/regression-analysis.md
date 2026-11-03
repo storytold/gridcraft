@@ -1,8 +1,8 @@
 # Analysis ToolPak regression models
 
 Last updated: 2026-11-03. Reconciled with main
-`ed2347782d883ab458893d314c663e1a72579656`; `cargo xtask ci` passed all 10 gates,
-including 1,145 UI integration tests.
+`df137b8ee8cd68503681f759f59b4e30b2e0b048`. For validation status, see
+"Validation status and pending work".
 
 `data.analysisToolPak` accepts `tool: "regression"` and an optional `model`:
 
@@ -99,8 +99,16 @@ amplitude-one constraint for exponential/power.
 
 ## Validation status and pending work
 
-No Cargo command, build, test, clippy or screenshot was run during this
-reconciliation. Tests below are authored/preserved, not passing claims.
+Targeted checks on the reconciled branch:
+
+- `cargo test -p gridcraft-engine regression_`: 8 passed.
+- `cargo test -p gridcraft-ui-egui --test it power_model_survives_shared_refedit_collapse_and_control_confirmation`: passed with the branch's isolated Cargo target and pinned `craft-fonts` inputs.
+
+The first UI run used a target shared with a different worktree and linked a
+stale engine artifact; its failure was not reproducible after rebuilding in
+this branch's own target. Full `cargo xtask ci`, WASM and screenshot checks have
+not been run on this PR head. Tests below are authored/preserved, not passing
+claims unless listed above.
 Only direct rustfmt, git diff checks and static reading are used in this round.
 
 Existing noisy LINEST comparisons remain as internal consistency checks, not
@@ -114,7 +122,7 @@ focus, cross-sheet quoting, home-sheet deletion/recreation/rename/undo,
 selection restoration and scripted confirmation/cancellation coverage.
 All of it still requires execution on the final reconciled state.
 
-Commands proposed for a separately authorized validation round:
+Additional validation still recommended:
 
 ```sh
 cargo test -p gridcraft-engine --lib cmd::analysis::tests
