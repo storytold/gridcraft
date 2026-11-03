@@ -21,6 +21,7 @@ mod ko;
 mod nl;
 mod pl;
 mod pt;
+mod pt_functions;
 mod ro;
 mod ru;
 mod sr;
@@ -186,7 +187,12 @@ impl Language {
     }
 
     pub fn formula_locale(self) -> gridcraft_engine::formula::FormulaLocale {
-        if self == Self::Es { gridcraft_engine::formula::FormulaLocale::Es } else { gridcraft_engine::formula::FormulaLocale::En }
+        use gridcraft_engine::formula::FormulaLocale;
+        match self {
+            Self::Es => FormulaLocale::Es,
+            Self::PtBr => FormulaLocale::PtBr,
+            _ => FormulaLocale::En,
+        }
     }
 
     /// Translates an interface label; untranslated labels fall back to English.
@@ -243,6 +249,7 @@ impl Language {
     fn function_help(self) -> Option<(HelpTable, HelpTable)> {
         match self {
             Self::Es => Some((es_functions::DESCRIPTIONS, es_functions::ARGUMENTS)),
+            Self::PtBr => Some((pt_functions::DESCRIPTIONS, pt_functions::ARGUMENTS)),
             _ => None,
         }
     }
