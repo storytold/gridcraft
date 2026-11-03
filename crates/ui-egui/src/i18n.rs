@@ -217,6 +217,7 @@ impl Language {
             Self::Es => gridcraft_engine::formula::FormulaLocale::Es,
             Self::Pl => gridcraft_engine::formula::FormulaLocale::Pl,
             Self::Fr => gridcraft_engine::formula::FormulaLocale::Fr,
+            Self::It => gridcraft_engine::formula::FormulaLocale::It,
             Self::Ru => gridcraft_engine::formula::FormulaLocale::Ru,
             _ => gridcraft_engine::formula::FormulaLocale::En,
         }
