@@ -1,6 +1,6 @@
 use super::frame::{Bx, CatAxis, ValAxis, frame, on, value_range};
 use super::legend::{cat_label, plot_kind};
-use super::lines::{decimate, draw_markers, draw_runs};
+use super::lines::{decimate_area, draw_markers, draw_runs};
 use super::trend::{draw_trend_labels, draw_trendlines, max_backward, max_forward, max_forward_slots, supports_trendline};
 use super::{
     Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_LINE_PTS, MAX_MARKERS, Prim, Scale, SeriesData, TEXT,
@@ -208,7 +208,9 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     // Outer levels padded to the slots (forecast slots stay in the last group).
     let outer: Vec<Vec<String>> =
         data.category_levels.iter().map(|l| (0..ncat_slots).map(|j| l.get(j).cloned().unwrap_or_default()).collect()).collect();
-    let plot = frame(ctx, area, CatAxis::Labels(&labels, &outer), &y1, y2.as_ref(), horizontal, chart.gridlines);
+    let (area, table) = super::table::reserve(ctx, chart, data, area, ncat_slots);
+    let category_axis = super::table::category_axis(&table, &labels, &outer);
+    let plot = frame(ctx, area, category_axis, &y1, y2.as_ref(), horizontal, chart.gridlines);
     if !plot.ok() {
         return;
     }
@@ -266,10 +268,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                             base = vec![[b[0] - cw * 0.3, b[1]], [b[0] + cw * 0.3, b[1]]];
                         }
                     }
-                    let top = decimate(top, MAX_LINE_PTS * 2);
-                    let base = decimate(base, MAX_LINE_PTS * 2);
-                    let mut poly = top;
-                    poly.extend(base.into_iter().rev());
+                    let poly = decimate_area(top, base, MAX_LINE_PTS * 2);
                     if poly.len() >= 3 {
                         ctx.out.push(Prim::Polygon { pts: poly, fill: s.color, stroke: None });
                     }
@@ -355,6 +354,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         draw_trendlines(ctx, s, &pts, &frac, &px, &mut trend_labels, (0.5, ncat_slots as f64 + 0.5));
     }
     draw_trend_labels(ctx, plot, &trend_labels);
+    super::table::draw(ctx, chart, data, plot, table.as_ref());
 }
 
 // ---------------------------------------------------------------- scatter & bubble
