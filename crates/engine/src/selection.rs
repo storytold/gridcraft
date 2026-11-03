@@ -249,9 +249,7 @@ pub fn current_region_outside_tables(sheet: &Sheet, c: CellRef) -> RangeRef {
 
 /// The current region around `c`, counting only filled cells that `counts` accepts.
 fn region_where(sheet: &Sheet, c: CellRef, counts: impl Fn(CellRef) -> bool) -> RangeRef {
-    let filled = |c: CellRef| {
-        (sheet.cell(c).is_some_and(gridcraft_model::Cell::has_content) || sheet.spill.contains_key(&c)) && counts(c)
-    };
+    let filled = |c: CellRef| (sheet.cell(c).is_some_and(gridcraft_model::Cell::has_content) || sheet.spill.contains_key(&c)) && counts(c);
     // Whether a row (or column) has a filled cell between two columns (rows), inclusive.
     let row_has = |row: u32, a: u32, b: u32| (a..=b).any(|col| filled(CellRef::new(row, col)));
     let col_has = |col: u32, a: u32, b: u32| (a..=b).any(|row| filled(CellRef::new(row, col)));
