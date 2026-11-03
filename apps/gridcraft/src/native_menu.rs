@@ -6,8 +6,8 @@ use std::cell::Cell;
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, channel};
 
-use gridcraft_ui_egui::{OpenWindow, SheetApp};
 use gridcraft_ui_egui::i18n::Language;
+use gridcraft_ui_egui::{OpenWindow, SheetApp};
 use muda::accelerator::Accelerator;
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use serde_json::{Value, json};
@@ -271,9 +271,7 @@ impl NativeMenu {
         ]);
         titled.push((Titled::Item(about), "About GridCraft"));
         titled.push((Titled::Item(quit), "Quit GridCraft"));
-        for (item, key) in
-            [(services, "Services"), (hide, "Hide GridCraft"), (hide_others, "Hide Others"), (show_all, "Show All")]
-        {
+        for (item, key) in [(services, "Services"), (hide, "Hide GridCraft"), (hide_others, "Hide Others"), (show_all, "Show All")] {
             titled.push((Titled::Predefined(item), key));
         }
         let _ = menu.append(&app_menu);
@@ -322,7 +320,16 @@ impl NativeMenu {
             let _ = tx.send(e);
             ctx.request_repaint();
         }));
-        NativeMenu { _menu: menu, events: rx, theme_items, window_menu, window_items: Vec::new(), windows: Vec::new(), titled, language: Cell::new(language) }
+        NativeMenu {
+            _menu: menu,
+            events: rx,
+            theme_items,
+            window_menu,
+            window_items: Vec::new(),
+            windows: Vec::new(),
+            titled,
+            language: Cell::new(language),
+        }
     }
 
     /// Keeps the Window menu's list of open windows (title, unsaved bullet, active check) in
