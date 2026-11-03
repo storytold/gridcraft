@@ -1219,12 +1219,13 @@ fn shape_set_text(s: &mut Session, p: &Json) -> Result<Json> {
     if sh.is_protected() {
         return Err(EngineError::Other(PROTECTED.into()));
     }
-    if shape.text == text {
+    if shape.text == text && shape.text_link.is_none() {
         return ok();
     }
     edit(s, |cx| {
         let shape = cx.sheet_mut(sheet)?.shapes.iter_mut().find(|shape| shape.id == id).ok_or_else(|| bad("shape.setText", "no such text box"))?;
         shape.text = text.into();
+        shape.text_link = None;
         Ok(Json::Null)
     })
 }
