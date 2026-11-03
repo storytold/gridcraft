@@ -238,6 +238,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | Find and Replace with a range selected searches only that range, as in Excel: Find Next moves the active cell through it and keeps it selected, Find All lists its matches, Replace and Replace All change only them; one selected cell still searches the sheet. `edit.find` / `edit.replace` take `within: selection` (#3224) |
 | 2026-11-03 | minor | Point mode: dragging over row or column headers extends the whole-row or whole-column reference, as it does over cells |
 | 2026-11-03 | minor | Frozen panes: text in frozen columns overflows only into its own pane and keeps its whole width while the sheet scrolls; frozen gridlines and merged-cell borders reach the freeze line, and the freeze handle measures the last frozen column itself (#2544). Page Layout view gridlines stop at each page's last column |
 | 2026-11-03 | minor | Excel 2003 menu access keys: 43 legacy sequences (Insert, Edit, Format, Data, View, Tools and File ▸ Page Setup, e.g. Alt+I, R inserts rows, Alt+E, A, A clears all, Alt+D, S sorts, Alt+T, O opens Options) run the existing commands and dialogs; Alt+I, D, V and T paint no badges, as in Excel (#941, #2311) |

@@ -40,7 +40,16 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     d.values.insert("matchCase".into(), json!(case));
     d.values.insert("wholeCell".into(), json!(whole));
     d.values.insert("within".into(), json!(if wb { "workbook" } else { "sheet" }));
-    let base = json!({"what": what, "matchCase": case, "wholeCell": whole, "within": if wb { "workbook" } else { "sheet" }});
+    // As in Excel, a selected range (more than one cell) limits the search on the sheet to it.
+    let range_selected = app.session.active().is_some_and(|doc| !doc.selection.is_single_cell());
+    let within = if wb {
+        "workbook"
+    } else if range_selected {
+        "selection"
+    } else {
+        "sheet"
+    };
+    let base = json!({"what": what, "matchCase": case, "wholeCell": whole, "within": within});
     ui.horizontal(|ui| {
         if d.tab == "Replace" {
             if ui.button("Replace All").clicked() {
