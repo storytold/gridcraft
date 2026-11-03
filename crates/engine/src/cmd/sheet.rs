@@ -167,7 +167,9 @@ fn refit_anchor(old: &Sheet, new: &Sheet, was: &Anchor, now: &Anchor) -> Anchor 
 /// are matched by position and name, and objects by id. Does nothing, and copies nothing, when no
 /// object's anchor changes.
 pub(crate) fn refit_objects(before: &Workbook, after: &mut Arc<Workbook>) {
-    let mut fixes: Vec<(usize, Vec<Anchor>, Vec<Anchor>, Vec<Anchor>)> = Vec::new();
+    /// A sheet index with its new chart, image and shape anchors, in that order.
+    type SheetFix = (usize, Vec<Anchor>, Vec<Anchor>, Vec<Anchor>);
+    let mut fixes: Vec<SheetFix> = Vec::new();
     for (i, (old, new)) in before.sheets.iter().zip(after.sheets.iter()).enumerate() {
         // Most commands leave most sheets alone, and most sheets have no objects.
         if Arc::ptr_eq(old, new) || (old.charts.is_empty() && old.images.is_empty() && old.shapes.is_empty()) {
