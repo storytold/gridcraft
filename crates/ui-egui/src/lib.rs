@@ -97,6 +97,9 @@ pub struct UiState {
     /// Enable AutoComplete for cell values (File ▸ Options ▸ Editing): typed text is completed
     /// from the one matching entry in the same column.
     pub autocomplete: bool,
+    /// Tint the active cell's whole row (File ▸ Options ▸ General), on every sheet and workbook, so
+    /// the eye keeps its place across a wide table. A preference: nothing goes into the file.
+    pub highlight_active_row: bool,
     /// AutoSave (the title-bar switch): save saved-to-file .xlsx workbooks shortly after every
     /// change. A preference like the rest of this struct — it stays on across restarts (#1901).
     pub autosave: bool,
@@ -148,6 +151,7 @@ impl Default for UiState {
             status_bar: true,
             animations: true,
             autocomplete: true,
+            highlight_active_row: false,
             autosave: false,
             recent: vec![],
             keytip_invoke: None,

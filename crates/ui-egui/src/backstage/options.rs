@@ -15,6 +15,10 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut formula_bar, lang.tr("Show formula bar")).changed() {
         app.run_or_alert("view.formulaBar", json!({"on": formula_bar}));
     }
+    let mut highlight_row = app.ui.highlight_active_row;
+    if ui.checkbox(&mut highlight_row, lang.tr("Highlight the active cell's row")).changed() {
+        app.run_or_alert("options.highlightActiveRow", json!({"on": highlight_row}));
+    }
     ui.add_space(18.0);
     section(ui, lang, "Options|Editing");
     let mut autocomplete = app.ui.autocomplete;
