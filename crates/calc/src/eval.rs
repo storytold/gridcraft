@@ -151,6 +151,10 @@ pub struct Evaluator<'h> {
     /// Work this cell still has left (see [`EVAL_WORK`]), shared by every branch of the formula
     /// and by the formulas it computes on the way (names, computed criteria).
     work: u64,
+    /// A spend found too little work left. A spend that leaves exactly nothing is fine, so this
+    /// can't be told from `work` alone; a database function checks it after its computed
+    /// criteria ran, whose failures it can't otherwise see.
+    exhausted: bool,
     /// Computed criteria being evaluated, outermost first: one that is reached again from inside
     /// itself counts as not met instead of repeating its work at every level.
     active_criteria: Vec<(usize, CellRef)>,
@@ -206,6 +210,7 @@ impl Ctx for FnCtx<'_, '_> {
             stack_top: self.ev.stack_top,
             fuel: self.ev.fuel,
             work: self.ev.work,
+            exhausted: false,
             active_criteria: std::mem::take(&mut self.ev.active_criteria),
         };
         ev.active_criteria.push((area.sheet, at));
@@ -213,6 +218,7 @@ impl Ctx for FnCtx<'_, '_> {
         // The child's spend counts against this cell's budget.
         self.ev.fuel = ev.fuel;
         self.ev.work = ev.work;
+        self.ev.exhausted |= ev.exhausted;
         let mut active = std::mem::take(&mut ev.active_criteria);
         active.pop();
         self.ev.active_criteria = active;
@@ -245,6 +251,7 @@ impl<'h> Evaluator<'h> {
             stack_top: 0,
             fuel: LAMBDA_FUEL,
             work: EVAL_WORK,
+            exhausted: false,
             active_criteria: Vec::new(),
         }
     }
@@ -258,6 +265,7 @@ impl<'h> Evaluator<'h> {
             }
             None => {
                 self.work = 0;
+                self.exhausted = true;
                 false
             }
         }
@@ -761,6 +769,58 @@ mod fuel_tests {
 
     fn is_calc(v: &Value) -> bool {
         matches!(v, Value::Error(CellError::Calc))
+    }
+
+    /// Serves the workbook's stored values, for database functions to read.
+    struct Stored {
+        wb: Workbook,
+    }
+    impl Host for Stored {
+        fn workbook(&self) -> &Workbook {
+            &self.wb
+        }
+        fn cell_value(&mut self, sheet: usize, c: CellRef) -> Value {
+            self.wb.sheet(sheet).and_then(|s| s.cell(c)).map_or(Value::Empty, |cell| cell.value.clone())
+        }
+        fn now_serial(&self) -> f64 {
+            0.0
+        }
+        fn random(&mut self) -> f64 {
+            0.0
+        }
+    }
+
+    /// A computed criterion that runs out of work counts as not met for its record, which the
+    /// database function can't see: it must answer #CALC!, not a count that leaves records out.
+    #[test]
+    fn a_computed_criterion_out_of_work_makes_the_database_function_calc() {
+        use gridcraft_model::{Cell, Formula};
+        let mut wb = Workbook::new();
+        let name = |name: String, formula: String| gridcraft_model::DefinedName { name, scope: None, formula, comment: String::new(), hidden: false };
+        wb.names.push(name("Step0".into(), "1".into()));
+        for i in 1..=60 {
+            wb.names.push(name(format!("Step{i}"), format!("Step{}+Step{}", i - 1, i - 1)));
+        }
+        let at = |s: &str| CellRef::parse(s).unwrap();
+        let sheet = wb.sheet_mut(0).unwrap();
+        for (r, (n, age)) in [("name", Value::text("age")), ("a", Value::number(1.0)), ("b", Value::number(2.0))].into_iter().enumerate() {
+            sheet.cells.set(at(&format!("A{}", r + 1)), Cell::value(Value::text(n)));
+            sheet.cells.set(at(&format!("B{}", r + 1)), Cell::value(age));
+        }
+        sheet.cells.set(at("D1"), Cell::value(Value::text("Formula")));
+        let host_wb = |criterion: &str| {
+            let mut wb = wb.clone();
+            wb.sheet_mut(0).unwrap().cells.set(at("D2"), Cell::formula(Formula::new(criterion)));
+            wb
+        };
+        let run = |criterion: &str| {
+            let mut host = Stored { wb: host_wb(criterion) };
+            let mut ev = Evaluator::new(&mut host, 0, CellRef::new(9, 9));
+            ev.work = 100_000;
+            ev.value(&gridcraft_formula::parser::parse("=DCOUNT(A1:B3,\"age\",D1:D2)").unwrap())
+        };
+        assert_eq!(run("=B2>0"), Value::number(2.0), "a cheap criterion counts every record");
+        assert!(is_calc(&run("=Step60>0")), "{:?}", run("=Step60>0"));
     }
 
     #[test]

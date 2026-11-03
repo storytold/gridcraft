@@ -359,8 +359,15 @@ impl<'h> Evaluator<'h> {
         if !self.spend(values) {
             return err(CellError::Calc);
         }
+        let database = criteria.is_some();
         let mut ctx = FnCtx { ev: self, criteria, lambda };
-        gridcraft_functions::call(spec, &evaluated, &mut ctx).pipe(Ev::V)
+        let v = gridcraft_functions::call(spec, &evaluated, &mut ctx);
+        // A computed criterion that ran out of work counted as not met: the result leaves
+        // records out.
+        if database && self.exhausted {
+            return err(CellError::Calc);
+        }
+        Ev::V(v)
     }
 
     /// Performs aggregation operations without copying its ranges: blocks are folded over the stored
