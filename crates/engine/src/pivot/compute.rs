@@ -355,15 +355,19 @@ fn ranked_value(raw: Value, lookup: &ValueLookup<'_>, context: &ShowContext<'_>)
     let Some((_, parent)) = context.row_path.split_last() else { return Value::Empty };
     let Some(me) = raw.as_f64() else { return raw };
     let siblings = context.siblings.get(parent).cloned().unwrap_or_default();
-    let mut rank = 1u64;
-    for sibling in siblings {
-        let mut path = parent.to_vec();
-        path.push(sibling);
-        if number(&lookup.get(&path, context.col_path, context.value_index)).is_some_and(|value| value > me) {
-            rank += 1;
-        }
-    }
-    Value::number(rank as f64)
+    // Excel's ranks are dense: ties share a rank and the next value takes the next one
+    // (5, 4, 3, 3, 4 rank 1, 2, 3, 3, 2), so count the distinct larger values.
+    let mut larger: Vec<f64> = siblings
+        .into_iter()
+        .filter_map(|sibling| {
+            let mut path = parent.to_vec();
+            path.push(sibling);
+            number(&lookup.get(&path, context.col_path, context.value_index)).filter(|value| *value > me)
+        })
+        .collect();
+    larger.sort_by(f64::total_cmp);
+    larger.dedup();
+    Value::number(larger.len() as f64 + 1.0)
 }
 
 fn show_value(definition: &PivotValue, raw: Value, lookup: &ValueLookup<'_>, context: &ShowContext<'_>) -> Value {
