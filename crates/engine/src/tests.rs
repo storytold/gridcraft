@@ -19,6 +19,44 @@ fn v(s: &Session, a: &str) -> Value {
 }
 
 #[test]
+fn format_cells_reading_order_survives_undo_and_xlsx() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "مرحبا 123 ABC"})).unwrap();
+    s.execute("home.bold", json!({"range": "A1"})).unwrap();
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"align": {"reading_order": "RightToLeft"}}})).unwrap();
+    let alignment = |s: &Session| {
+        let d = s.doc().unwrap();
+        let style = d.wb.styles.get(d.wb.active().unwrap().style_id(CellRef::new(0, 0)));
+        assert!(style.font.bold);
+        serde_json::to_value(style.align).unwrap()
+    };
+    assert_eq!(alignment(&s)["reading_order"], "RightToLeft");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(alignment(&s)["reading_order"].is_null());
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(alignment(&s)["reading_order"], "RightToLeft");
+    for order in [json!("invalid"), json!(2)] {
+        assert!(s.execute("home.formatCells", json!({"range": "A1", "style": {"align": {"reading_order": order}}})).is_err());
+        assert_eq!(alignment(&s)["reading_order"], "RightToLeft");
+    }
+    let wb = &s.doc().unwrap().wb;
+    let (reopened, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(wb).unwrap()).unwrap();
+    let cell = CellRef::new(0, 0);
+    assert_eq!(reopened.styles.get(reopened.active().unwrap().style_id(cell)), wb.styles.get(wb.active().unwrap().style_id(cell)));
+    assert_eq!(reopened.active().unwrap().value(cell), Value::text("مرحبا 123 ABC"));
+    for order in ["LeftToRight", "Context"] {
+        s.execute("home.formatCells", json!({"range": "A1", "style": {"align": {"reading_order": order}}})).unwrap();
+        assert_eq!(alignment(&s)["reading_order"], order);
+    }
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"align": {"reading_order": null}}})).unwrap();
+    assert!(alignment(&s)["reading_order"].is_null());
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(alignment(&s)["reading_order"], "Context");
+    s.execute("edit.redo", json!({})).unwrap();
+    assert!(alignment(&s)["reading_order"].is_null());
+}
+
+#[test]
 fn entering_empty_cells_preserves_whole_sheet_formatting() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "existing"})).unwrap();
