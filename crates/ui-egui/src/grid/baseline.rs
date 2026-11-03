@@ -8,6 +8,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use egui::epaint::text::{FallbackAlign, Glyph};
 use egui::{FontDefinitions, FontFamily, FontId, Galley, Rect};
 use gridcraft_engine::model::VAlign;
 
@@ -46,25 +47,40 @@ pub(super) fn win_per_em(defs: &FontDefinitions, family: &FontFamily) -> Option<
     Some((os2.us_win_ascent() as f32 * k, os2.us_win_descent() as f32 * k))
 }
 
-/// How far below its top a galley's first baseline sits.
+/// How far below its top a galley's first baseline sits: the font's own baseline, which a centered
+/// fallback face (an emoji, a script the font lacks) is not on.
 pub(super) fn first_baseline(galley: &Galley) -> Option<f32> {
     let row = galley.rows.first()?;
-    row.row.glyphs.first().map(|g| row.pos.y + g.pos.y)
+    let glyphs = &row.row.glyphs;
+    let g = glyphs.iter().find(|g| below_baseline(g) == 0.0).or(glyphs.first())?;
+    Some(row.pos.y + g.pos.y - below_baseline(g))
 }
 
-/// The top of `galley` (the cell text in `font`) placed by [`text_y`], or `None` when the font has
-/// no win metrics or the galley no glyph, for the caller's own placement.
-pub(super) fn gdi_text_y(ctx: &egui::Context, font: &FontId, galley: &Galley, valign: VAlign, rect: Rect, z: f32) -> Option<f32> {
+/// How far below its font's baseline egui puts `g`: a centered fallback face sits by its own ascent,
+/// centered in the font's line (epaint's `galley_from_rows`).
+fn below_baseline(g: &Glyph) -> f32 {
+    match g.font_face_align {
+        FallbackAlign::Center => g.font_face_ascent + 0.5 * (g.font_height - g.font_face_height) - g.font_ascent,
+        FallbackAlign::Baseline => 0.0,
+    }
+}
+
+/// The top of `galley` (the cell text in `font`) placed by [`text_y`], and how far below its row's
+/// top each line's text ends (its baseline and the win descent), or `None` when the font has no win
+/// metrics or the galley no glyph, for the caller's own placement.
+pub(super) fn gdi_text_y(ctx: &egui::Context, font: &FontId, galley: &Galley, valign: VAlign, rect: Rect, z: f32) -> Option<(f32, f32)> {
     let win = win_metrics(ctx, font)?;
     let ascent = first_baseline(galley)?;
-    Some(text_y(valign, rect, galley.rows.len(), ascent, win, z))
+    let span = galley.rows.last()?.pos.y - galley.rows.first()?.pos.y;
+    Some((text_y(valign, rect, span, ascent, win, z), ascent + win.descent))
 }
 
-/// The top of a galley of `lines` lines, whose first baseline is `ascent` below its top, put where
-/// GDI puts the same text in `rect`: a block of `lines` win lines at the top, the middle, or half
-/// a pixel above the bottom.
-pub(super) fn text_y(valign: VAlign, rect: Rect, lines: usize, ascent: f32, win: Win, z: f32) -> f32 {
-    let block = lines.max(1) as f32 * (win.ascent + win.descent);
+/// The top of a galley whose first baseline is `ascent` below its top and whose last row's top is
+/// `span` below its first's, put where GDI puts the same text in `rect`: the lines, from the first
+/// win ascent to the last win descent, at the top, the middle, or half a pixel above the bottom.
+/// The rows keep egui's spacing, so the block is measured on them, not as so many win lines.
+pub(super) fn text_y(valign: VAlign, rect: Rect, span: f32, ascent: f32, win: Win, z: f32) -> f32 {
+    let block = span + win.ascent + win.descent;
     let top = match valign {
         VAlign::Top => rect.top(),
         VAlign::Center | VAlign::Justify | VAlign::Distributed => rect.center().y - block / 2.0,
@@ -84,7 +100,7 @@ mod tests {
     const ASCENT: f32 = 11.0;
 
     fn baseline(v: VAlign, rect: Rect) -> f32 {
-        text_y(v, rect, 1, ASCENT, WIN, 1.0) + ASCENT
+        text_y(v, rect, 0.0, ASCENT, WIN, 1.0) + ASCENT
     }
 
     #[test]
@@ -117,10 +133,31 @@ mod tests {
     }
 
     #[test]
-    fn wrapped_lines_center_as_one_block() {
+    fn wrapped_lines_center_as_one_block_by_their_drawn_spacing() {
         let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 60.0));
-        let one = text_y(VAlign::Center, rect, 1, ASCENT, WIN, 1.0);
-        let two = text_y(VAlign::Center, rect, 2, ASCENT, WIN, 1.0);
-        assert!((one - two - (WIN.ascent + WIN.descent) / 2.0).abs() < 1e-4);
+        let one = text_y(VAlign::Center, rect, 0.0, ASCENT, WIN, 1.0);
+        // The second row 20 px below the first, as egui spaced it (the win line is 17.9 px).
+        let two = text_y(VAlign::Center, rect, 20.0, ASCENT, WIN, 1.0);
+        assert!((one - two - 10.0).abs() < 1e-4, "{one} {two}");
+    }
+
+    #[test]
+    fn a_leading_centered_fallback_glyph_keeps_the_font_baseline() {
+        let ctx = egui::Context::default();
+        let layout = |text: &str| {
+            let mut galley = None;
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                galley = Some(ui.fonts_mut(|f| f.layout_no_wrap(text.into(), FontId::proportional(20.0), egui::Color32::WHITE)));
+            });
+            out.textures_delta.clear();
+            galley.unwrap()
+        };
+        let mixed = layout("\u{1F600}x");
+        let glyphs = &mixed.rows[0].row.glyphs;
+        assert_ne!(below_baseline(&glyphs[0]), 0.0, "the emoji is a centered fallback off the baseline");
+        assert_eq!(first_baseline(&mixed), first_baseline(&layout("x")));
+        // Without a glyph on the baseline the centering is taken back out, to the pixel egui rounds to.
+        let alone = first_baseline(&layout("\u{1F600}")).unwrap();
+        assert!((alone - first_baseline(&layout("x")).unwrap()).abs() <= 0.5, "{alone}");
     }
 }

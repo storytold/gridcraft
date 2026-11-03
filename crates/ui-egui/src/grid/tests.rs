@@ -223,6 +223,25 @@ fn wrapped_cell_text_y_positions_correctly_and_safeguards_overflow() {
 }
 
 #[test]
+fn a_wrapped_line_fits_by_its_text_not_by_the_line_gap_under_it() {
+    use super::quadrant::wrapped_text_clip;
+    let ctx = egui::Context::default();
+    let mut galley = None;
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        galley = Some(ui.fonts_mut(|f| f.layout_no_wrap("x".into(), egui::FontId::proportional(14.0), Color32::WHITE)));
+    });
+    out.textures_delta.clear();
+    let galley = galley.unwrap();
+    let h = galley.rows[0].rect().height();
+    let p = egui::Painter::new(ctx, egui::LayerId::background(), Rect::EVERYTHING);
+    // Placed by the win metrics 3 px below the top of a cell 1 px taller than egui's line: the
+    // line's box runs 2 px past the cell, its text ends 1 px inside it.
+    let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(50.0, h + 1.0));
+    assert_eq!(wrapped_text_clip(&p, rect, &galley, 3.0, None, VAlign::Top).height(), 0.0, "by its box it does not fit");
+    assert_eq!(wrapped_text_clip(&p, rect, &galley, 3.0, Some(h - 3.0), VAlign::Top), rect, "by its text it does");
+}
+
+#[test]
 fn wrapped_cell_text_y_keeps_vertical_alignment_when_text_is_taller_than_the_row() {
     // A default-height row holding three wrapped lines.
     let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 20.0));

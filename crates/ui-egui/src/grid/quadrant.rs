@@ -73,7 +73,9 @@ fn mirror_shape(shape: &mut egui::Shape, axis: f32) {
 ///
 /// Preserve the cell and viewport clip when every line fits. Otherwise,
 /// exclude overflowing lines while retaining the visible fitting lines.
-fn wrapped_text_clip(p: &Painter, rect: Rect, galley: &egui::Galley, y: f32, valign: VAlign) -> Rect {
+/// A line fits once its text, `line_bottom` below its row's top, does: the
+/// line gap egui leaves under it may run past the cell (the row's height when `None`).
+pub(super) fn wrapped_text_clip(p: &Painter, rect: Rect, galley: &egui::Galley, y: f32, line_bottom: Option<f32>, valign: VAlign) -> Rect {
     let mut clip = rect.intersect(p.clip_rect());
     if valign != VAlign::Top {
         return clip;
@@ -83,11 +85,13 @@ fn wrapped_text_clip(p: &Painter, rect: Rect, galley: &egui::Galley, y: f32, val
         return clip;
     };
 
-    if y + last_row.rect().bottom() <= rect.bottom() + 0.01 {
+    let fits = |row: &egui::epaint::text::PlacedRow| y + line_bottom.map_or(row.rect().bottom(), |b| row.rect().top() + b) <= rect.bottom() + 0.01;
+
+    if fits(last_row) {
         return clip;
     }
 
-    let last_full_bottom = galley.rows.iter().map(|row| y + row.rect().bottom()).rfind(|bottom| *bottom <= rect.bottom() + 0.01);
+    let last_full_bottom = galley.rows.iter().rfind(|row| fits(row)).map(|row| y + row.rect().bottom());
 
     clip.max.y = last_full_bottom.map(|bottom| clip.bottom().min(bottom)).unwrap_or(clip.top()).max(clip.top());
 
@@ -397,9 +401,9 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
             _ => text_left + pad + indent,
         };
         // The first baseline where Excel puts it, by the font's win metrics (grid/baseline.rs).
-        let y = baseline::gdi_text_y(p.ctx(), &font, &galley, st.align.v, *rect, z)
-            .unwrap_or_else(|| wrapped_cell_text_y(st.align.v, *rect, galley.size().y, z));
-        let text_clip = wrapped_text_clip(p, *rect, &galley, y, st.align.v);
+        let gdi = baseline::gdi_text_y(p.ctx(), &font, &galley, st.align.v, *rect, z);
+        let y = gdi.map_or_else(|| wrapped_cell_text_y(st.align.v, *rect, galley.size().y, z), |(y, _)| y);
+        let text_clip = wrapped_text_clip(p, *rect, &galley, y, gdi.map(|(_, b)| b), st.align.v);
         p.with_clip_rect(text_clip).galley(pos2(x, y), galley, color);
         return;
     }
@@ -495,7 +499,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     };
     let gh = galley.size().y;
     // The baseline where Excel puts it, by the font's win metrics (grid/baseline.rs).
-    let y = baseline::gdi_text_y(p.ctx(), &font, &galley, st.align.v, *rect, z).unwrap_or_else(|| cell_text_y(st.align.v, *rect, gh, z));
+    let y = baseline::gdi_text_y(p.ctx(), &font, &galley, st.align.v, *rect, z).map_or_else(|| cell_text_y(st.align.v, *rect, gh, z), |(y, _)| y);
     let cp = p.with_clip_rect(clip.intersect(p.clip_rect()));
     if rotated {
         let angle = -(st.align.rotation as f32).to_radians();
