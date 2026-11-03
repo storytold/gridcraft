@@ -443,7 +443,7 @@ fn linest_drops_collinear_columns() {
     // unit vector. Some length hits a rounding mean for each constant.
     for c in [0.1, 1.1, 1e6 + 0.3] {
         for n in 3..=12 {
-            let xs: Vec<f64> = (1..=n).map(|i| f64::from(i)).collect();
+            let xs: Vec<f64> = (1..=n).map(f64::from).collect();
             let ys: Vec<f64> = (1..=n).map(|i| f64::from(i * i % 7) + 0.5 * f64::from(i)).collect();
             let r = linest_rows(&ys, &[vec![c; n as usize], xs], true);
             assert_eq!(r[0][1], Some(0.0), "coefficient of the constant {c}, n={n}");
