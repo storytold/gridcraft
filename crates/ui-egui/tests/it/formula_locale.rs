@@ -356,6 +356,26 @@ fn french_german_italian_and_portuguese_formulas_round_trip_through_xlsx() {
     }
 }
 
+/// Structured-reference keywords are local in the editor and canonical on disk.
+#[test]
+fn spanish_structured_references_round_trip_through_xlsx() {
+    let mut app = app();
+    app.run("cell.set", json!({"cell":"D1","input":"Importe"})).unwrap();
+    app.run("cell.set", json!({"cell":"D2","input":"7"})).unwrap();
+    app.run("insert.table", json!({"range":"D1:D2","header":true,"name":"Ventas"})).unwrap();
+    app.run("app.language.set", json!({"code":"es"})).unwrap();
+    let localized = "=SUMA(Ventas[[#Datos];[Importe]])";
+    let canonical = "SUM(Ventas[[#Data],[Importe]])";
+    assert!(enter(&mut app, localized));
+    assert_eq!(formula(&app), canonical);
+    let saved = app.run("file.save", json!({"format":"xlsx"})).unwrap();
+    app.run("file.open", json!({"name":"table.xlsx","base64":saved["base64"]})).unwrap();
+    assert_eq!(formula(&app), canonical);
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(7.0));
+    app.begin_edit(None, false);
+    assert_eq!(app.editor.as_ref().unwrap().text, localized);
+}
+
 #[test]
 fn czech_interface_retains_its_canonical_formula_fallback() {
     // The Czech table translates interface labels only: formulas keep canonical English names,

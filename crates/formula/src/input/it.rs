@@ -4,6 +4,7 @@ use gridcraft_core::CellError;
 pub(super) static DATA: super::LocaleData = super::LocaleData {
     functions: FUNCTIONS,
     errors: ERRORS,
+    table_items: None,
     separators: super::COMMA_DECIMAL_SEPARATORS,
     fold_alias: fold_name,
     aliases: std::sync::OnceLock::new(),

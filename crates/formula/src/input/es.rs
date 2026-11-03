@@ -3,6 +3,7 @@
 pub(super) static DATA: super::LocaleData = super::LocaleData {
     functions: FUNCTIONS,
     errors: &[],
+    table_items: Some(["#Todo", "#Datos", "#Encabezados", "#Totales", "#Esta fila"]),
     separators: super::COMMA_DECIMAL_SEPARATORS,
     fold_alias: str::to_lowercase,
     aliases: std::sync::OnceLock::new(),

@@ -35,6 +35,7 @@ struct LocaleData {
     functions: &'static [(&'static str, &'static str)],
     errors: &'static [(CellError, &'static str)],
     separators: Separators,
+    table_items: Option<[&'static str; 5]>,
     fold_alias: fn(&str) -> String,
     aliases: OnceLock<HashMap<String, &'static str>>,
 }
@@ -135,6 +136,70 @@ impl FormulaLocale {
     }
 }
 
+const TABLE_ITEMS: [&str; 5] = ["#All", "#Data", "#Headers", "#Totals", "#This Row"];
+
+impl FormulaLocale {
+    /// Converts localized structured-reference specifiers to canonical parser input.
+    pub(crate) fn canonical_struct_body(self, body: &str) -> std::borrow::Cow<'_, str> {
+        match self.data().table_items.as_ref() {
+            Some(items) => translate_struct(body, items, &TABLE_ITEMS, self.list_separator(), ',').into(),
+            None => body.into(),
+        }
+    }
+}
+
+/// Rewrites specifiers (`#Headers` <-> `#Kopfzeilen`) and the separator between bracketed
+/// items, leaving column names and `'` escapes alone.
+fn translate_struct(inner: &str, from: &[&'static str; 5], to: &[&'static str; 5], from_sep: char, to_sep: char) -> String {
+    let item = |text: &str| -> Option<&'static str> { from.iter().position(|f| crate::same_name(text.trim(), f)).and_then(|i| to.get(i).copied()) };
+    // Excel allows spaces around bracketed items (`Tabla1[ [#Datos]; [Col1] ]`).
+    if !inner.trim_start().starts_with('[') {
+        return item(inner).map_or_else(|| inner.to_string(), str::to_string);
+    }
+    let mut out = String::with_capacity(inner.len());
+    let mut group = String::new();
+    let mut depth = 0usize;
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => {
+                let target = if depth > 0 { &mut group } else { &mut out };
+                target.push(c);
+                if let Some(escaped) = chars.next() {
+                    target.push(escaped);
+                }
+            }
+            '[' => {
+                if depth == 0 {
+                    group.clear();
+                } else {
+                    group.push(c);
+                }
+                depth += 1;
+            }
+            ']' if depth > 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    out.push('[');
+                    out.push_str(item(&group).unwrap_or(&group));
+                    out.push(']');
+                } else {
+                    group.push(c);
+                }
+            }
+            c if depth == 0 && c == from_sep => out.push(to_sep),
+            c if depth > 0 => group.push(c),
+            c => out.push(c),
+        }
+    }
+    if depth > 0 {
+        // Unbalanced input: keep what was read so the parser reports the error.
+        out.push('[');
+        out.push_str(&group);
+    }
+    out
+}
+
 /// Parses UI input using the selected function table and separators. Existing names and
 /// LET/LAMBDA bindings take precedence over aliases. File and API syntax uses [`crate::parse`].
 pub fn parse_input(src: &str, locale: FormulaLocale, known_name: impl Fn(&str) -> bool) -> Result<Expr, ParseError> {
@@ -191,6 +256,15 @@ pub fn print_input(expr: &Expr, locale: FormulaLocale, known_name: impl Fn(&str)
             Tok::RBrace => {
                 array_depth = array_depth.saturating_sub(1);
                 out.push_str(text);
+            }
+            Tok::Struct(body) => {
+                if let Some(items) = locale.data().table_items.as_ref() {
+                    out.push('[');
+                    out.push_str(&translate_struct(&body, &TABLE_ITEMS, items, ',', locale.list_separator()));
+                    out.push(']');
+                } else {
+                    out.push_str(text);
+                }
             }
             Tok::Error(error) => out.push_str(locale.error_name(error)),
             Tok::Semicolon if array_depth > 0 => out.push(locale.array_row_separator()),
