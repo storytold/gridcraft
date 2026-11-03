@@ -47,6 +47,10 @@ fn page_labels_follow_every_interface_language() {
         (Language::Vi, "Trang 1"),
         (Language::Nl, "Pagina 1"),
         (Language::Ro, "Pagina 1"),
+        (Language::Da, "Side 1"),
+        (Language::Sv, "Sida 1"),
+        (Language::Ka, "გვერდი 1"),
+        (Language::Lt, "Puslapis 1"),
     ];
     assert_eq!(translations.len(), Language::ALL.len());
     for (language, label) in translations {
