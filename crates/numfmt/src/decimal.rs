@@ -4,6 +4,8 @@
 //! digits and then rounded half away from zero on that decimal string. That makes 2.675 with
 //! "0.00" show 2.68 and 1.005 show 1.01, as in Excel, even though neither is exact in binary.
 
+use gridcraft_core::Locale;
+
 /// Most decimals we ever compute; placeholders beyond this are padded with zeros.
 pub(crate) const MAX_DECIMALS: usize = 400;
 
@@ -133,9 +135,10 @@ pub(crate) fn fixed(a: f64, decimals: usize) -> (String, String) {
     fixed_from_digits(&d, e, decimals)
 }
 
-/// General format squeezed into `max_chars` characters. Excel shows fewer decimals, then
-/// scientific notation, then "####" when a column is narrow; `None` means the caller paints "####".
-pub fn format_general_fit(n: f64, max_chars: usize) -> Option<String> {
+/// General format squeezed into `max_chars` characters, written in `loc`'s conventions. Excel
+/// shows fewer decimals, then scientific notation, then "####" when a column is narrow; `None`
+/// means the caller paints "####".
+pub fn format_general_fit(n: f64, max_chars: usize, loc: Locale) -> Option<String> {
     if !n.is_finite() {
         return None;
     }
@@ -158,7 +161,7 @@ pub fn format_general_fit(n: f64, max_chars: usize) -> Option<String> {
             let mut s = String::from(sign);
             s.push_str(if i.is_empty() { "0" } else { &i });
             if !f.is_empty() {
-                s.push('.');
+                s.push(loc.decimal());
                 s.push_str(f);
             }
             if s.chars().count() <= max_chars {
@@ -181,7 +184,7 @@ pub fn format_general_fit(n: f64, max_chars: usize) -> Option<String> {
         let mut s = String::from(sign);
         s.push_str(if mi.is_empty() { "0" } else { &mi });
         if !mf.is_empty() {
-            s.push('.');
+            s.push(loc.decimal());
             s.push_str(mf);
         }
         s.push_str(&format!("E{}{:02}", if e < 0 { '-' } else { '+' }, e.unsigned_abs()));
@@ -195,6 +198,12 @@ pub fn format_general_fit(n: f64, max_chars: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The rounding tests below are en-US; the shim keeps their call sites as they were while
+    /// `format_general_fit` takes a locale. The German test calls the function directly.
+    fn format_general_fit(n: f64, max_chars: usize) -> Option<String> {
+        super::format_general_fit(n, max_chars, Locale::En)
+    }
 
     #[test]
     fn rounding() {
@@ -230,5 +239,15 @@ mod tests {
         assert_eq!(format_general_fit(9.99999999999, 5).as_deref(), Some("10"));
         assert_eq!(format_general_fit(f64::NAN, 11), None);
         assert_eq!(format_general_fit(1.7976931348623157e308, 11).as_deref(), Some("1.7977E+308"));
+    }
+
+    #[test]
+    fn general_fit_writes_the_locale_decimal_separator() {
+        assert_eq!(super::format_general_fit(1234.5, 11, Locale::De).as_deref(), Some("1234,5"));
+        assert_eq!(super::format_general_fit(0.3, 11, Locale::De).as_deref(), Some("0,3"));
+        assert_eq!(super::format_general_fit(123456.789012, 11, Locale::De).as_deref(), Some("123456,789"));
+        // Scientific notation too.
+        assert_eq!(super::format_general_fit(123456789012.0, 11, Locale::De).as_deref(), Some("1,23457E+11"));
+        assert_eq!(super::format_general_fit(1234.5, 11, Locale::En).as_deref(), Some("1234.5"));
     }
 }

@@ -38,7 +38,16 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                     }
                 }
                 cols[1].label(egui::RichText::new(lang.tr("Sample")).strong());
-                let preview = app.session.active().map(|doc| gridcraft_engine::display::format(&sample, &code, &doc.wb).text).unwrap_or_default();
+                let preview = app
+                    .session
+                    .active()
+                    .map(|doc| {
+                        let locale =
+                            if lang == crate::i18n::Language::De { gridcraft_engine::core::Locale::De } else { gridcraft_engine::core::Locale::En };
+                        let format = gridcraft_engine::display::number_format(&code);
+                        gridcraft_engine::numfmt::format_value_with_locale(&sample, &format, doc.wb.date_system, locale).text
+                    })
+                    .unwrap_or_default();
                 cols[1].label(egui::RichText::new(preview).font(theme::ui_font(15.0)));
                 cols[1].add_space(8.0);
                 let label = cols[1].label(lang.tr("Type (custom format code):"));

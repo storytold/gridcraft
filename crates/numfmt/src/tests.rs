@@ -673,7 +673,7 @@ fn text_uncached(v: &Value, code: &str, sys: DateSystem) -> Result<String, CellE
     if !n.is_finite() {
         return Err(CellError::Num);
     }
-    let (f, overflow) = fmt.format_number(n, sys);
+    let (f, overflow) = fmt.format_number(n, sys, Locale::En);
     if overflow { Err(CellError::Value) } else { Ok(f.text) }
 }
 
@@ -900,4 +900,14 @@ fn closed_brackets_still_hold_their_semicolons() {
     assert_eq!(parse::parse_sections("[unknown;x]0;0").len(), 2);
     assert_eq!(f("0\\[0", 5.0), "0[5");
     assert_eq!(f("\"[\"0;0", 5.0), "[5");
+}
+
+/// Regional output changes separators and names while preserving explicit currency literals.
+#[test]
+fn explicit_locale_renders_numbers_dates_and_currency_without_rewriting_codes() {
+    let render = |n, code| format_value_with_locale(&Value::Number(n), &NumberFormat::parse(code), DateSystem::D1900, Locale::De).text;
+    assert_eq!(render(1234.56, "#,##0.00"), "1.234,56");
+    assert_eq!(render(46310.0, "dddd, d. mmmm yyyy"), "Donnerstag, 15. Oktober 2026");
+    assert_eq!(render(1234.56, r##""$"#,##0.00"##), "$1.234,56");
+    assert_eq!(render(1234.56, r#"#,##0.00 "€""#), "1.234,56 €");
 }
