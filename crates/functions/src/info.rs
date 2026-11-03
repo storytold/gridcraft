@@ -316,7 +316,8 @@ fn hyperlink(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         return Err(e);
     }
     // Excel returns the link as text, so HYPERLINK(1) is "1" and ISTEXT is TRUE.
-    Ok(Value::Text(empty_to_zero(link).to_text()?.into()))
+    let display = if matches!(&link, Value::Empty) { String::new() } else { empty_to_zero(link).to_text()? };
+    Ok(Value::Text(display.into()))
 }
 
 fn encodeurl(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
