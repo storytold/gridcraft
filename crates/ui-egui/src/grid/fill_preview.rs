@@ -1,4 +1,5 @@
-use super::*;
+use gridcraft_engine::core::{CellRef, RangeRef, Value};
+use gridcraft_engine::model::{Sheet, Workbook};
 
 /// Maximum source length to scan on each drag frame for a fill-handle preview.
 const MAX_FILL_PREVIEW_SOURCE_CELLS: u64 = 1_000;
@@ -7,7 +8,11 @@ const MAX_FILL_PREVIEW_SOURCE_CELLS: u64 = 1_000;
 ///
 /// Preview modes follow the engine's fill operation, including Ctrl/Cmd alternation and source
 /// number formats. Oversized selections, formulas and calendar-dependent series omit the tooltip.
+/// Protected sheets also omit previews conservatively, without scanning destination permissions.
 pub(super) fn fill_preview_text(wb: &Workbook, sh: &Sheet, src: RangeRef, target: RangeRef, alternate: bool) -> Option<String> {
+    if sh.is_protected() {
+        return None;
+    }
     // A single-cell source has no intrinsic direction; infer it from the expanded target.
     let vertical = if src.height() > 1 {
         true
@@ -105,7 +110,9 @@ pub(super) fn fill_preview_text(wb: &Workbook, sh: &Sheet, src: RangeRef, target
 
 #[cfg(test)]
 mod fill_preview_tests {
-    use super::*;
+    use super::fill_preview_text;
+    use gridcraft_engine::core::{CellRef, RangeRef, Value};
+    use gridcraft_engine::model::{Sheet, Style, Workbook};
 
     fn preview(values: &[f64], target_end: u32, alternate: bool) -> Option<String> {
         let wb = Workbook::default();
@@ -156,5 +163,20 @@ mod fill_preview_tests {
         let sh = Sheet::new("Sheet1");
         let whole_column = RangeRef::cols(0, 0);
         assert!(fill_preview_text(&wb, &sh, whole_column, whole_column, false).is_none());
+    }
+
+    /// A protected sheet never promises a fill result that destination permissions could reject.
+    #[test]
+    fn protected_sheets_omit_numeric_previews() {
+        let wb = Workbook::default();
+        let mut sh = Sheet::new("Sheet1");
+        sh.set_value(CellRef::new(0, 0), Value::number(1.0));
+        sh.set_value(CellRef::new(1, 0), Value::number(2.0));
+        let src = RangeRef::new(CellRef::new(0, 0), CellRef::new(1, 0));
+        let target = RangeRef::new(CellRef::new(0, 0), CellRef::new(3, 0));
+        assert_eq!(fill_preview_text(&wb, &sh, src, target, false).as_deref(), Some("3\n4"));
+        sh.protection = Some(Default::default());
+        assert!(fill_preview_text(&wb, &sh, src, target, false).is_none());
+        assert!(fill_preview_text(&wb, &sh, src, target, true).is_none());
     }
 }

@@ -182,6 +182,69 @@ fn fill_handle_shows_numeric_values_while_dragging_without_committing_them() {
     assert_eq!(preview, committed, "the displayed preview matches the fill result");
 }
 
+/// Escape removes the preview and cancels the fill, including the eventual pointer release.
+#[test]
+fn escape_cancels_the_numeric_fill_preview_without_committing() {
+    let mut h = harness(one_two);
+    let (start, end) = (corner(&h, "B2"), center(&h, "B5"));
+    press(&mut h, start, PointerButton::Primary);
+    move_to(&mut h, start, end);
+    assert!(h.query_by_label("3\n4\n5").is_some());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.query_by_label("3\n4\n5").is_none(), "Escape hides the cancelled preview");
+    assert_eq!(values(&h, &["B3", "B4", "B5"]), [Value::Empty, Value::Empty, Value::Empty]);
+    release(&mut h, end, PointerButton::Primary);
+    assert_eq!(values(&h, &["B3", "B4", "B5"]), [Value::Empty, Value::Empty, Value::Empty]);
+    assert!(h.state().grid.fill_tag.is_none(), "a cancelled fill has no Auto Fill Options action");
+}
+
+/// Navigation or an edit during a gesture cannot retarget the fill to a new source or sheet.
+#[test]
+fn changing_the_fill_origin_cancels_preview_and_release() {
+    for change in ["selection", "content", "sheet", "replacement"] {
+        let mut h = harness(|s| {
+            one_two(s);
+            s.execute("home.insertSheet", json!({"name": "Other", "before": 1})).unwrap();
+            s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+            s.execute("selection.set", json!({"range": "B1:B2"})).unwrap();
+        });
+        let (start, end) = (corner(&h, "B2"), center(&h, "B5"));
+        press(&mut h, start, PointerButton::Primary);
+        move_to(&mut h, start, end);
+        assert!(h.query_by_label("3\n4\n5").is_some());
+        // Exercise engine callers too: cancellation must not rely only on UI command routing.
+        let s = &mut h.state_mut().session;
+        match change {
+            "selection" => {
+                s.execute("selection.set", json!({"range": "D1:D2"})).unwrap();
+            }
+            "content" => {
+                s.execute("range.setValues", json!({"range": "B1", "values": [[10], [20]]})).unwrap();
+            }
+            "sheet" => {
+                s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+            }
+            "replacement" => {
+                s.execute("home.deleteSheet", json!({"sheet": 0})).unwrap();
+                s.execute("home.insertSheet", json!({"name": "Replacement", "before": 0})).unwrap();
+                s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let before = h.state().session.active().unwrap().wb.clone();
+        let undo_before = h.state().session.active().unwrap().undo.len();
+        h.run_steps(3);
+        assert!(matches!(h.state().grid.drag, gridcraft_ui_egui::grid::Drag::None), "{change} cancels the gesture");
+        assert!(h.query_by_label("3\n4\n5").is_none(), "{change} hides the preview");
+        release(&mut h, end, PointerButton::Primary);
+        assert_eq!(h.state().session.active().unwrap().wb.as_ref(), before.as_ref(), "{change} release cannot change either sheet");
+        assert_eq!(h.state().session.active().unwrap().undo.len(), undo_before, "{change} adds no fill undo step");
+        assert!(h.state().grid.fill_tag.is_none());
+        assert!(h.state().grid.fill_menu.is_none());
+    }
+}
+
 #[test]
 /// A horizontal fill from one numeric cell uses the target's direction to calculate the preview.
 fn one_cell_horizontal_fill_shows_a_preview() {

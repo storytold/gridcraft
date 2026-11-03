@@ -4,7 +4,7 @@ use super::geo::Geo;
 use super::interact::{hidden_col_edge, hidden_row_edge};
 #[cfg(test)]
 use super::show::hidden_around;
-use super::*;
+use super::{CellRef, Color32, Painter, RangeRef, Rect, Sheet, SheetApp, Stroke, StrokeKind, Tokens, json, pos2, vec2};
 
 /// Where the active cell is on screen: the whole merged cell when it is part of one.
 fn active_rect(geo: &Geo, sh: &Sheet, sel: &gridcraft_engine::Selection) -> Rect {
@@ -79,18 +79,20 @@ pub(crate) fn outline_bands(rect: Rect, width: f32, clip: Rect) -> Vec<Rect> {
 }
 
 /// `outline` is where the current area's border is drawn this frame (see `selection_glide`).
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn paint_selection(
-    p: &Painter,
-    geo: &Geo,
-    sh: &Sheet,
-    sel: &gridcraft_engine::Selection,
-    outline: Rect,
-    t: &Tokens,
-    app: &SheetApp,
-    rows: (u32, u32),
-    cols: (u32, u32),
-) {
+pub(crate) struct SelectionPaintInput<'a> {
+    pub(crate) painter: &'a Painter,
+    pub(crate) geo: &'a Geo,
+    pub(crate) sheet: &'a Sheet,
+    pub(crate) selection: &'a gridcraft_engine::Selection,
+    pub(crate) outline: Rect,
+    pub(crate) tokens: &'a Tokens,
+    pub(crate) app: &'a SheetApp,
+    pub(crate) rows: (u32, u32),
+    pub(crate) cols: (u32, u32),
+}
+
+pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
+    let SelectionPaintInput { painter: p, geo, sheet: sh, selection: sel, outline, tokens: t, app, rows, cols } = input;
     // Fill all areas except the active cell.
     for rect in selection_fill_where(geo, sh, sel, outline, |r| range_in_pane(*r, rows, cols)) {
         p.rect_filled(rect, 0.0, t.sel_fill);
@@ -136,7 +138,8 @@ pub(crate) fn paint_selection(
         p.rect_filled(h, 0.0, t.sel_border);
     }
     // Fill-handle drag preview.
-    if let crate::grid::Drag::Fill { target: Some(tr), .. } = &app.grid.drag
+    if let crate::grid::Drag::Fill { origin, target: Some(tr), .. } = &app.grid.drag
+        && origin.is_current(app)
         && range_in_pane(*tr, rows, cols)
     {
         let rr = geo.range_rect(sh, *tr);
@@ -150,7 +153,7 @@ pub(crate) fn paint_selection(
             && let Some(pointer) = p.ctx().pointer_hover_pos()
             && p.clip_rect().contains(pointer)
             && let Some(document) = app.session.active()
-            && let Some(preview) = fill_preview_text(&document.wb, sh, sel.current(), *tr, p.ctx().input(|i| i.modifiers.command))
+            && let Some(preview) = fill_preview_text(&document.wb, sh, origin.source, *tr, p.ctx().input(|i| i.modifiers.command))
         {
             egui::Area::new(egui::Id::unique("fill_preview_tooltip")).order(egui::Order::Tooltip).fixed_pos(pointer + vec2(14.0, 18.0)).show(
                 p.ctx(),
