@@ -116,7 +116,11 @@ cargo run --release -p gridcraft -- --sample sales --control 7979   # + JSON con
 cargo xtask ci                                                 # fmt, clippy, tests, assets, layering, wasm
 ```
 
-Choose Español under View → Interface language for [Spanish formula names, decimal commas, and semicolon arguments](docs/formula-input.md).
+Choose Magyar or Español under View → Interface language for localized formula names,
+decimal commas, and semicolon arguments ([Hungarian coverage](docs/localization-parity.md#hungarian-interface-2026-10-18),
+[formula input](docs/formula-input.md)). Hungarian has 980 interface catalog entries;
+strings that bypass translation lookup (for example, some chart-pane labels and engine errors)
+remain English. Catalog coverage does not mean the entire interface is translated.
 Workbooks, clipboard exchange, and programmatic APIs retain canonical English syntax.
 
 ### Web

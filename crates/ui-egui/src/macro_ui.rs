@@ -407,6 +407,8 @@ pub fn macros_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
     let (list, vba) = entries(app, d);
     let mut name = d.values.get("name").and_then(Json::as_str).unwrap_or("").to_string();
     let mut kind = if d.values.get("kind").and_then(Json::as_str) == Some("script") { Kind::Script } else { Kind::Macro };
+    let lang = app.ui.language;
+    ui.label(lang.tr("Automation in this workbook. GridCraft runs its own scripts; a file's VBA project is preserved but not executed."));
     let t = Tokens::get(ui.ctx());
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
@@ -419,13 +421,20 @@ pub fn macros_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
                 ui.set_min_size(vec2(326.0, 200.0));
                 egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
                     if list.is_empty() {
-                        ui.label(egui::RichText::new("This workbook has no scripts or macros.").italics().color(t.text_dim));
+                        ui.label(egui::RichText::new(lang.tr("This workbook has no scripts or macros.")).italics().color(t.text_dim));
                     }
                     for e in &list {
                         let label = match (e.kind, &e.shortcut) {
                             (Kind::Macro, Some(k)) => format!("{}    {k}", e.name),
                             (Kind::Macro, None) => e.name.clone(),
-                            (Kind::Script, _) => format!("{}    (script, {} step{})", e.name, e.steps, if e.steps == 1 { "" } else { "s" }),
+                            (Kind::Script, _) => {
+                                let steps = if e.steps == 1 {
+                                    lang.tr("(script, 1 step)").to_string()
+                                } else {
+                                    lang.tr("(script, {steps} steps)").replace("{steps}", &e.steps.to_string())
+                                };
+                                format!("{}    {steps}", e.name)
+                            }
                         };
                         let selected = e.kind == kind && e.name.eq_ignore_ascii_case(name.trim());
                         let r = ui.add(egui::Button::selectable(selected, label).min_size(vec2(322.0, 20.0)));
@@ -507,7 +516,8 @@ pub fn macros_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
     if vba {
         ui.add_space(6.0);
         ui.label(
-            egui::RichText::new("This workbook also has a VBA project. GridCraft keeps it when you save but does not run it.").color(t.text_dim),
+            egui::RichText::new(lang.tr("This workbook also has a VBA project. GridCraft keeps it when you save but does not run it."))
+                .color(t.text_dim),
         );
     }
     d.values.insert("name".into(), json!(name));
@@ -672,6 +682,29 @@ pub fn record_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hungarian_macros_dialog_translates_steps_but_preserves_script_names() {
+        use egui_kittest::kittest::Queryable;
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.ui.language = crate::i18n::Language::Hu;
+        let revision = app.session.active().unwrap().revision;
+        let mut dialog = Dialog::custom("macros", "Macros", json!({"revision": revision}));
+        dialog.result = Some(json!([
+            {"name": "Home", "kind": "script", "steps": 2},
+            {"name": "Saját szkript", "kind": "script", "steps": 1},
+            {"name": "(VBA)", "kind": "vba"}
+        ]));
+        let mut harness =
+            egui_kittest::Harness::builder().build_ui_state(|ui, (app, dialog)| macros_dialog(app, ui, dialog, &mut true), (app, dialog));
+        harness.run();
+        let language = crate::i18n::Language::Hu;
+        harness.get_by_label(&format!("Home    {}", language.tr("(script, {steps} steps)").replace("{steps}", "2")));
+        harness.get_by_label(&format!("Saját szkript    {}", language.tr("(script, 1 step)")));
+        harness.get_by_label(language.tr("This workbook also has a VBA project. GridCraft keeps it when you save but does not run it."));
+    }
 
     #[test]
     fn questions_are_read_from_the_error() {

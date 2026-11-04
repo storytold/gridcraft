@@ -128,10 +128,11 @@ the View ▸ Animations checkbox, saved with the other UI preferences and on by 
 
 `{command: "app.language.set", params: {language: "ja"}}` switches the interface language
 (`code` is accepted as an alias for `language`); `app.language.english` and
-`app.language.japanese` are shortcuts. `engine.commands` lists every code it takes (`en`, `es`,
-`zh`, `ja`, `ko`, `ru`, `pt`, `de`, `cs`, `fr`, `sr`), as does the error for an unknown one. Only
+`app.language.japanese` are shortcuts. `engine.commands` lists every supported language code (including `hu`), as does the error for an unknown one. Only
 interface chrome is translated, never command ids or document text. The choice is saved in `ui.json`; with nothing saved the desktop app follows the
 system language.
+
+Hungarian (`hu`, **Magyar**) changes both interface text and formula entry/display, including decimal commas and semicolon argument separators. Stored XLSX and engine/API formulas retain English syntax.
 
 `{command: "file.open", params: {path: "Secret.xlsx", password: "…"}}` opens a password-protected
 workbook (Agile or Standard encryption). Without `password` it returns an error containing

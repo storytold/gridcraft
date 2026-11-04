@@ -61,7 +61,7 @@ pub(super) fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dia
     let matches = |f: &lib::FnEntry| {
         q.is_empty()
             || locale.function_name(&f.name).to_lowercase().contains(&q)
-            || language.function_description(&f.description).unwrap_or(&f.description).to_lowercase().contains(&q)
+            || crate::formula_locale::canonical_description(&f.name, language).unwrap_or_else(|| f.description.clone()).to_lowercase().contains(&q)
     };
     let hits: Vec<&lib::FnEntry> = if category == MOST_RECENTLY_USED {
         lib::recent(app).iter().filter_map(|n| lib::find(n)).filter(|f| matches(f)).collect()
@@ -103,8 +103,8 @@ pub(super) fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dia
     });
     if let Some(f) = hits.get(d.list_index) {
         ui.separator();
-        ui.label(egui::RichText::new(crate::formula_locale::signature(&f.name, locale, language).unwrap_or_default()).strong());
-        ui.label(crate::formula_locale::description(&f.name, locale, language).unwrap_or_default());
+        ui.label(egui::RichText::new(crate::formula_locale::canonical_signature(&f.name, locale, language).unwrap_or_default()).strong());
+        ui.label(crate::formula_locale::canonical_description(&f.name, language).unwrap_or_default());
     }
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);

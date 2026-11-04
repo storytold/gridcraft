@@ -15,6 +15,7 @@ mod el;
 mod es;
 mod es_functions;
 mod fr;
+mod hu;
 mod it;
 mod ja;
 mod ko;
@@ -34,6 +35,7 @@ mod zh;
 pub enum Language {
     #[default]
     En,
+    Hu,
     Es,
     El,
     Zh,
@@ -56,8 +58,9 @@ pub enum Language {
 }
 
 impl Language {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::En,
+        Self::Hu,
         Self::Es,
         Self::El,
         Self::Zh,
@@ -91,6 +94,7 @@ impl Language {
     pub fn name(self) -> &'static str {
         match self {
             Self::En => "English",
+            Self::Hu => "Magyar",
             Self::Es => "Español",
             Self::El => "Ελληνικά",
             Self::Zh => "简体中文",
@@ -116,6 +120,7 @@ impl Language {
     pub const fn code(self) -> &'static str {
         match self {
             Self::En => "en",
+            Self::Hu => "hu",
             Self::Es => "es",
             Self::El => "el",
             Self::Zh => "zh",
@@ -150,6 +155,7 @@ impl Language {
     fn from_tag(tag: &str) -> Option<Self> {
         match tag.trim().split(['-', '_']).next()?.to_ascii_lowercase().as_str() {
             "en" => Some(Self::En),
+            "hu" => Some(Self::Hu),
             "es" => Some(Self::Es),
             "el" => Some(Self::El),
             "zh" => Some(Self::Zh),
@@ -186,7 +192,11 @@ impl Language {
     }
 
     pub fn formula_locale(self) -> gridcraft_engine::formula::FormulaLocale {
-        if self == Self::Es { gridcraft_engine::formula::FormulaLocale::Es } else { gridcraft_engine::formula::FormulaLocale::En }
+        match self {
+            Self::Es => gridcraft_engine::formula::FormulaLocale::Es,
+            Self::Hu => gridcraft_engine::formula::FormulaLocale::Hu,
+            _ => gridcraft_engine::formula::FormulaLocale::En,
+        }
     }
 
     /// Translates an interface label; untranslated labels fall back to English.
@@ -196,6 +206,7 @@ impl Language {
     pub fn tr(self, text: &str) -> &str {
         let translated = match self {
             Self::En => None,
+            Self::Hu => hu::translate(text),
             Self::Es => es::translate(text),
             Self::El => el::translate(text),
             Self::Ja => ja::translate(text),
@@ -419,6 +430,8 @@ mod tests {
 
     #[test]
     fn tags_reduce_to_supported_languages() {
+        assert_eq!(Language::from_tag("hu-HU"), Some(Language::Hu));
+        assert_eq!(Language::from_tag("hu_HU.UTF-8"), Some(Language::Hu));
         assert_eq!(Language::from_tag("ja-JP"), Some(Language::Ja));
         assert_eq!(Language::from_tag("en_US"), Some(Language::En));
         assert_eq!(Language::from_tag("es_MX"), Some(Language::Es));
@@ -515,5 +528,43 @@ mod tests {
         let keys: Vec<String> = order[1..].iter().map(|l| name_sort_key(l.name())).collect();
         assert!(keys.windows(2).all(|w| w[0] <= w[1]), "{keys:?}");
         assert_eq!(name_sort_key("Čeština"), "cestina");
+    }
+    #[test]
+    fn hungarian_translates_interface_and_selects_formula_locale() {
+        let lang = Language::Hu;
+        assert_eq!(lang.name(), "Magyar");
+        assert_eq!(lang.tr("Home"), "Kezdőlap");
+        assert_eq!(lang.tr("Save As"), "Mentés másként");
+        assert_eq!(lang.tr("Format Cells|Fill"), "Kitöltés");
+        assert_eq!(lang.tr("Orientation"), "Szövegirány");
+        assert_eq!(lang.tr("Page Layout|Orientation"), "Tájolás");
+        assert_eq!(lang.tr("{n} days ago").replace("{n}", "3"), "3 napja");
+        assert_eq!(lang.tr("Unknown context|Unknown label"), "Unknown label");
+        for text in ["Ági!A1", "=SUM(A1,1.5)", "file.save", "Saját munkafüzet"] {
+            assert_eq!(lang.tr(text), text);
+        }
+        assert_eq!(lang.formula_locale(), gridcraft_engine::formula::FormulaLocale::Hu);
+        assert_eq!(saved_language(&serde_json::json!({"language": "hu"})), Some(lang));
+    }
+    #[test]
+    fn hungarian_catalog_has_980_unique_nonempty_entries_and_preserves_placeholders() {
+        let mut keys = std::collections::BTreeSet::new();
+        for line in include_str!("i18n/hu.rs").lines() {
+            let Some((key, _)) = line.trim().strip_prefix('"').and_then(|line| line.split_once("\" =>")) else {
+                continue;
+            };
+            let key: String = serde_json::from_str(&format!("\"{key}\"")).unwrap();
+            assert!(keys.insert(key.clone()), "duplicate Hungarian key: {key}");
+            let translated = hu::translate(&key).unwrap();
+            assert!(!translated.trim().is_empty(), "empty Hungarian translation: {key}");
+            let placeholders = |text: &str| {
+                let mut fields: Vec<String> = text.split('{').skip(1).map(|part| part.split_once('}').unwrap().0.to_string()).collect();
+                fields.sort();
+                fields
+            };
+            assert_eq!(placeholders(&key), placeholders(translated), "placeholder mismatch: {key}");
+        }
+        assert_eq!(keys.len(), 980, "update the documented catalog count when adding/removing entries");
+        assert_eq!(Language::Hu.tr("An untranslated interface label"), "An untranslated interface label");
     }
 }
