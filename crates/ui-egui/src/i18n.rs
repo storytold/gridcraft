@@ -11,11 +11,22 @@ use serde::{Deserialize, Serialize};
 
 mod cs;
 mod de;
+mod el;
 mod es;
+mod es_functions;
 mod fr;
+mod it;
+mod ja;
 mod ko;
+mod nl;
+mod pl;
 mod pt;
+mod ro;
 mod ru;
+mod sr;
+mod tr;
+mod uk;
+mod vi;
 mod zh;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +35,7 @@ pub enum Language {
     #[default]
     En,
     Es,
+    El,
     Zh,
     Ja,
     Ko,
@@ -33,16 +45,54 @@ pub enum Language {
     De,
     Cs,
     Fr,
+    Sr,
+    Tr,
+    Pl,
+    It,
+    Uk,
+    Vi,
+    Nl,
+    Ro,
 }
 
 impl Language {
-    pub const ALL: [Self; 10] = [Self::En, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr];
+    pub const ALL: [Self; 19] = [
+        Self::En,
+        Self::Es,
+        Self::El,
+        Self::Zh,
+        Self::Ja,
+        Self::Ko,
+        Self::Ru,
+        Self::PtBr,
+        Self::De,
+        Self::Cs,
+        Self::Fr,
+        Self::Sr,
+        Self::Pl,
+        Self::It,
+        Self::Uk,
+        Self::Vi,
+        Self::Nl,
+        Self::Ro,
+        Self::Tr,
+    ];
+
+    /// Every language in the order the switcher lists them: English first (the source language),
+    /// then the rest by their own name with accents folded, so Čeština sits under C. Names in
+    /// other scripts follow the Latin ones in code point order: Cyrillic, then the CJK languages.
+    pub fn for_picker() -> Vec<Self> {
+        let mut rest: Vec<Self> = Self::ALL.into_iter().filter(|l| *l != Self::En).collect();
+        rest.sort_by_cached_key(|l| name_sort_key(l.name()));
+        std::iter::once(Self::En).chain(rest).collect()
+    }
 
     /// The language's own name, shown in the switcher.
     pub fn name(self) -> &'static str {
         match self {
             Self::En => "English",
             Self::Es => "Español",
+            Self::El => "Ελληνικά",
             Self::Zh => "简体中文",
             Self::Ja => "日本語",
             Self::Ko => "한국어",
@@ -51,6 +101,14 @@ impl Language {
             Self::De => "Deutsch",
             Self::Cs => "Čeština",
             Self::Fr => "Français",
+            Self::Sr => "Srpski",
+            Self::Tr => "Türkçe",
+            Self::Pl => "Polski",
+            Self::It => "Italiano",
+            Self::Uk => "Українська",
+            Self::Vi => "Tiếng Việt",
+            Self::Nl => "Nederlands",
+            Self::Ro => "Română",
         }
     }
 
@@ -59,6 +117,7 @@ impl Language {
         match self {
             Self::En => "en",
             Self::Es => "es",
+            Self::El => "el",
             Self::Zh => "zh",
             Self::Ja => "ja",
             Self::Ko => "ko",
@@ -67,6 +126,14 @@ impl Language {
             Self::De => "de",
             Self::Cs => "cs",
             Self::Fr => "fr",
+            Self::Sr => "sr",
+            Self::Tr => "tr",
+            Self::Pl => "pl",
+            Self::It => "it",
+            Self::Uk => "uk",
+            Self::Vi => "vi",
+            Self::Nl => "nl",
+            Self::Ro => "ro",
         }
     }
 
@@ -74,10 +141,17 @@ impl Language {
         Self::from_tag(code)
     }
 
+    /// Every code `app.language.set` takes, quoted and joined (`"en"|"es"|…`), for command docs
+    /// and errors.
+    pub fn code_list(separator: &str) -> String {
+        Self::ALL.iter().map(|l| format!("\"{}\"", l.code())).collect::<Vec<_>>().join(separator)
+    }
+
     fn from_tag(tag: &str) -> Option<Self> {
         match tag.trim().split(['-', '_']).next()?.to_ascii_lowercase().as_str() {
             "en" => Some(Self::En),
             "es" => Some(Self::Es),
+            "el" => Some(Self::El),
             "zh" => Some(Self::Zh),
             "ja" => Some(Self::Ja),
             "ko" => Some(Self::Ko),
@@ -86,6 +160,14 @@ impl Language {
             "de" => Some(Self::De),
             "cs" => Some(Self::Cs),
             "fr" => Some(Self::Fr),
+            "sr" => Some(Self::Sr),
+            "tr" => Some(Self::Tr),
+            "pl" => Some(Self::Pl),
+            "it" => Some(Self::It),
+            "uk" => Some(Self::Uk),
+            "vi" => Some(Self::Vi),
+            "nl" => Some(Self::Nl),
+            "ro" => Some(Self::Ro),
             _ => None,
         }
     }
@@ -115,7 +197,8 @@ impl Language {
         let translated = match self {
             Self::En => None,
             Self::Es => es::translate(text),
-            Self::Ja => JAPANESE.iter().find(|(english, _)| *english == text).map(|(_, translated)| *translated),
+            Self::El => el::translate(text),
+            Self::Ja => ja::translate(text),
             Self::Zh => zh::translate(text),
             Self::Ko => ko::translate(text),
             Self::Ru => ru::translate(text),
@@ -123,9 +206,55 @@ impl Language {
             Self::De => de::translate(text),
             Self::Cs => cs::translate(text),
             Self::Fr => fr::translate(text),
+            Self::Sr => sr::translate(text),
+            Self::Tr => tr::translate(text),
+            Self::Pl => pl::translate(text),
+            Self::It => it::translate(text),
+            Self::Uk => uk::translate(text),
+            Self::Vi => vi::translate(text),
+            Self::Nl => nl::translate(text),
+            Self::Ro => ro::translate(text),
         };
         translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
     }
+
+    pub(crate) fn tr_error(self, message: &str) -> String {
+        let message = if message.starts_with("command `") { crate::clean_error(message) } else { message.to_owned() };
+
+        let translated = self.tr(&message);
+        let fallback = message.rsplit_once('|').map_or(message.as_str(), |(_, label)| label);
+
+        if translated == fallback { message } else { translated.to_owned() }
+    }
+
+    /// A worksheet function's description in this language, looked up by the English text of the
+    /// function catalog; `None` when untranslated, and the help shows the English.
+    pub fn function_description(self, english: &str) -> Option<&'static str> {
+        lookup(self.function_help()?.0, english)
+    }
+
+    /// A function argument name in this language, given as the catalog spells it without
+    /// brackets or index (`number`, `logical_test`).
+    pub fn function_argument(self, english: &str) -> Option<&'static str> {
+        lookup(self.function_help()?.1, english)
+    }
+
+    /// The function help tables (descriptions, argument names) of the languages that have them.
+    fn function_help(self) -> Option<(HelpTable, HelpTable)> {
+        match self {
+            Self::Es => Some((es_functions::DESCRIPTIONS, es_functions::ARGUMENTS)),
+            _ => None,
+        }
+    }
+}
+
+/// English text and its translation, sorted by the English.
+type HelpTable = &'static [(&'static str, &'static str)];
+
+/// The translation of `english` in a help table (binary search, so the table must stay sorted).
+fn lookup(table: HelpTable, english: &str) -> Option<&'static str> {
+    let i = table.binary_search_by(|(key, _)| (*key).cmp(english)).ok()?;
+    table.get(i).map(|(_, translated)| *translated)
 }
 
 /// Deserializes a saved language leniently: an unknown or malformed value (a language removed in a
@@ -154,7 +283,7 @@ pub fn saved_language(ui_json: &serde_json::Value) -> Option<Language> {
 /// egui context-data key holding the language of the frame being drawn. Widgets that only get a
 /// `Ui` (not the app) read it to translate their labels; [`set_current`] writes it once per frame.
 fn lang_key() -> egui::Id {
-    egui::Id::new("gridcraft.language")
+    egui::Id::unique("gridcraft.language")
 }
 
 /// The language the current frame is drawing in. `En` when unset.
@@ -167,456 +296,110 @@ pub fn set_current(ctx: &egui::Context, language: Language) {
     ctx.data_mut(|d| d.insert_temp(lang_key(), language));
 }
 
-/// English label → Japanese. Keys are the exact interface strings (command ids, file names and
-/// document text are never translated); anything absent falls back to English.
-const JAPANESE: &[(&str, &str)] = &[
-    ("Paste", "貼り付け"),
-    ("Paste Values", "値の貼り付け"),
-    ("Paste Formulas", "数式の貼り付け"),
-    ("Paste Formatting", "書式の貼り付け"),
-    ("Transpose", "行列を入れ替え"),
-    ("Paste Link", "リンクの貼り付け"),
-    ("Paste Special…", "形式を選択して貼り付け…"),
-    ("Insert Copied Cells", "コピーしたセルの挿入"),
-    ("Insert Copied Cells…", "コピーしたセルの挿入…"),
-    ("Insert Cut Cells", "切り取ったセルの挿入"),
-    ("Insert Paste", "挿入貼り付け"),
-    ("Cut (⌘X)", "切り取り (⌘X)"),
-    ("Copy (⌘C)", "コピー (⌘C)"),
-    ("Format Painter (double-click to keep it on)", "書式のコピー/貼り付け (ダブルクリックで固定)"),
-    ("Bold (⌘B)", "太字 (⌘B)"),
-    ("Italic (⌘I)", "斜体 (⌘I)"),
-    ("Underline (⌘U)", "下線 (⌘U)"),
-    ("Double Underline", "二重下線"),
-    ("Strikethrough", "取り消し線"),
-    ("Underline", "下線"),
-    ("Increase Font Size", "フォントの拡大"),
-    ("Decrease Font Size", "フォントの縮小"),
-    ("Wrap Text", "折り返して全体を表示"),
-    ("Merge & Center", "セルを結合して中央揃え"),
-    ("Merge Cells", "セルの結合"),
-    ("Merge Across", "横方向に結合"),
-    ("Unmerge Cells", "セル結合の解除"),
-    ("Fill Color", "塗りつぶしの色"),
-    ("Font Color", "フォントの色"),
-    ("Borders", "罫線"),
-    ("Top\nAlign", "上揃え"),
-    ("Middle\nAlign", "中央揃え (縦)"),
-    ("Bottom\nAlign", "下揃え"),
-    ("Left", "左"),
-    ("Right", "右"),
-    ("Center", "中央"),
-    ("Horizontal", "水平"),
-    ("Vertical Text", "縦書き"),
-    ("Decrease Indent", "インデントを減らす"),
-    ("Increase Indent", "インデントを増やす"),
-    ("Orientation", "方向"),
-    ("Page Layout|Orientation", "印刷の向き"),
-    ("Angle Counterclockwise", "左回りに回転"),
-    ("Angle Clockwise", "右回りに回転"),
-    ("Rotate Text Up", "文字列を上に回転"),
-    ("Rotate Text Down", "文字列を下に回転"),
-    ("Accounting Number Format", "通貨表示形式"),
-    ("Percent Style", "パーセント表示"),
-    ("Comma Style", "桁区切りスタイル"),
-    ("Increase Decimal", "小数点以下の桁数を増やす"),
-    ("Decrease Decimal", "小数点以下の桁数を減らす"),
-    ("More Accounting Formats…", "その他の通貨表示形式…"),
-    ("Conditional\nFormatting", "条件付き書式"),
-    ("Conditional Formatting", "条件付き書式"),
-    ("Format\nas Table", "テーブルとして書式設定"),
-    ("Cell\nStyles", "セルのスタイル"),
-    ("Format Cells…", "セルの書式設定…"),
-    ("Format Cell Alignment…", "セルの配置…"),
-    ("Format\nPane", "書式ウィンドウ"),
-    ("Format", "書式"),
-    ("Insert", "挿入"),
-    ("Insert Cells…", "セルの挿入…"),
-    ("Delete", "削除"),
-    ("Delete Cells…", "セルの削除…"),
-    ("Insert Sheet Rows", "シートの行を挿入"),
-    ("Insert Sheet Columns", "シートの列を挿入"),
-    ("Delete Sheet Rows", "シートの行を削除"),
-    ("Delete Sheet Columns", "シートの列を削除"),
-    ("Row Height…", "行の高さ…"),
-    ("AutoFit Row Height", "行の高さを自動調整"),
-    ("Column Width…", "列の幅…"),
-    ("AutoFit Column Width", "列の幅を自動調整"),
-    ("Default Width…", "標準の幅…"),
-    ("Hide Rows", "行を表示しない"),
-    ("Unhide Rows", "再表示"),
-    ("Hide Columns", "列の表示/非表示"),
-    ("Unhide Columns", "再表示"),
-    ("Lock Cell", "セルのロック"),
-    ("Clear", "クリア"),
-    ("Clear All", "すべてクリア"),
-    ("Clear Formats", "書式のクリア"),
-    ("Clear Contents", "数式と値のクリア"),
-    ("Clear Comments and Notes", "コメントとメモのクリア"),
-    ("Clear Hyperlinks", "ハイパーリンクのクリア"),
-    ("AutoSum", "オート SUM"),
-    ("AutoSum (⌘⇧T)", "オート SUM (⌘⇧T)"),
-    ("Flash\nFill", "フラッシュ フィル"),
-    ("Flash Fill", "フラッシュ フィル"),
-    ("Fill", "フィル"),
-    ("Clear Print Area", "印刷範囲のクリア"),
-    ("Find &\nSelect", "検索と選択"),
-    ("Find…", "検索…"),
-    ("Replace…", "置換…"),
-    ("Go To…", "ジャンプ…"),
-    ("Go To Special…", "セルを選択…"),
-    ("PivotTable", "ピボットテーブル"),
-    ("Recommended\nCharts", "推奨グラフ"),
-    ("Table", "テーブル"),
-    ("Pictures", "画像"),
-    ("Shapes", "図形"),
-    ("Icons", "アイコン"),
-    ("Text\nBox", "テキスト ボックス"),
-    ("Comment", "コメント"),
-    ("New\nComment", "新しいコメント"),
-    ("New Note", "新しいメモ"),
-    ("Show/Hide Note", "メモの表示/非表示"),
-    ("Header &\nFooter", "ヘッダーとフッター"),
-    ("Text to\nColumns", "区切り位置"),
-    ("Link", "リンク"),
-    ("Symbol", "記号"),
-    ("Sparklines", "スパークライン"),
-    ("Checkbox", "チェックボックス"),
-    ("Insert checkboxes in the selected cells", "選択したセルにチェックボックスを挿入"),
-    ("Header & Footer", "ヘッダーとフッター"),
-    ("Draw with ink", "インクで描画"),
-    ("Eraser", "消しゴム"),
-    ("Ink to\nShape", "インクを図形に変換"),
-    ("Select\nObjects", "オブジェクトの選択"),
-    ("Themes", "テーマ"),
-    ("Margins", "余白"),
-    ("Size", "サイズ"),
-    ("Print\nArea", "印刷範囲"),
-    ("Set Print Area", "印刷範囲の設定"),
-    ("Breaks", "改ページ"),
-    ("Insert Page Break", "改ページの挿入"),
-    ("Remove Page Break", "改ページの解除"),
-    ("Reset All Page Breaks", "すべての改ページを解除"),
-    ("Print\nTitles", "印刷タイトル"),
-    ("Sheet\nRight-to-Left", "シートを右から左へ"),
-    ("Sheet Right-to-Left", "シートを右から左へ"),
-    ("Narrow", "狭い"),
-    ("Wide", "広い"),
-    ("Normal", "標準"),
-    ("Portrait", "縦"),
-    ("Landscape", "横"),
-    ("Custom Margins…", "ユーザー設定の余白…"),
-    ("Insert\nFunction", "関数の挿入"),
-    ("Name\nManager", "名前の管理"),
-    ("Define Name", "名前の定義"),
-    ("Use in Formula", "数式で使用"),
-    ("Create from Selection", "選択範囲から作成"),
-    ("Trace Precedents", "参照元のトレース"),
-    ("Trace Dependents", "参照先のトレース"),
-    ("Remove Arrows", "矢印の解除"),
-    ("Show Formulas", "数式の表示"),
-    ("Error Checking", "エラーチェック"),
-    ("Evaluate Formula", "数式の検証"),
-    ("Watch Window", "ウォッチ ウィンドウ"),
-    ("Calculation\nOptions", "計算方法の設定"),
-    ("Calculate Now", "再計算実行"),
-    ("Calculate Sheet", "シートの再計算"),
-    ("Automatic", "自動"),
-    ("Automatic Except for Data Tables", "データ テーブル以外は自動"),
-    ("Manual", "手動"),
-    ("Sort &\nFilter", "並べ替えとフィルター"),
-    ("Sort", "並べ替え"),
-    ("Sort A to Z", "昇順"),
-    ("Sort Z to A", "降順"),
-    ("Custom Sort…", "ユーザー設定の並べ替え…"),
-    ("Filter", "フィルター"),
-    ("Reapply", "再適用"),
-    ("Get Data\n(Text/CSV)", "データの取得 (テキスト/CSV)"),
-    ("Remove\nDuplicates", "重複の削除"),
-    ("Data\nValidation", "データの入力規則"),
-    ("Data Validation", "データの入力規則"),
-    ("Data Validation…", "データの入力規則…"),
-    ("Circle Invalid Data", "無効なデータをマーク"),
-    ("Clear Validation", "入力規則のクリア"),
-    ("Group", "グループ化"),
-    ("Ungroup", "グループ解除"),
-    ("Show Detail", "詳細データの表示"),
-    ("Hide Detail", "詳細を表示しない"),
-    ("Subtotal", "小計"),
-    ("Data\nAnalysis", "データ分析"),
-    ("Data Analysis", "データ分析"),
-    ("Solver", "ソルバー"),
-    ("What-If\nAnalysis", "What-If 分析"),
-    ("Data Table…", "データ テーブル…"),
-    ("Scenario Manager…", "シナリオ マネージャー…"),
-    ("Goal Seek…", "ゴール シーク…"),
-    ("Forecast\nSheet", "予測シート"),
-    ("Spelling", "スペルチェック"),
-    ("Check\nAccessibility", "アクセシビリティ チェック"),
-    ("Threaded Comments", "スレッド化されたコメント"),
-    ("Show\nComments", "コメントの表示"),
-    ("Previous", "前へ"),
-    ("Next", "次へ"),
-    ("Previous Comment", "前のコメント"),
-    ("Next Comment", "次のコメント"),
-    ("Show All Notes", "すべてのメモを表示"),
-    ("Convert to Comments", "コメントに変換"),
-    ("Protect\nWorkbook", "ブックの保護"),
-    ("Allow Edit\nRanges", "範囲の編集を許可"),
-    ("Allow Edit Ranges", "範囲の編集を許可"),
-    ("Unprotect\nSheet", "シート保護の解除"),
-    ("Protect Sheet…", "シートの保護…"),
-    ("Comments", "コメント"),
-    ("Notes", "メモ"),
-    ("Page Break\nPreview", "改ページ プレビュー"),
-    ("Page\nLayout", "ページ レイアウト"),
-    ("Formula Bar", "数式バー"),
-    ("Gridlines", "目盛線"),
-    ("Headings", "見出し"),
-    ("Zoom", "ズーム"),
-    ("100%", "100%"),
-    ("Zoom to\nSelection", "選択範囲を拡大"),
-    ("Freeze\nPanes", "ウィンドウ枠の固定"),
-    ("Freeze Panes", "ウィンドウ枠の固定"),
-    ("Freeze Top Row", "最上行の固定"),
-    ("Freeze First Column", "最左列の固定"),
-    ("Unfreeze Panes", "ウィンドウ枠固定の解除"),
-    ("Dark Mode", "ダーク モード"),
-    ("Display theme", "表示テーマ"),
-    ("Animations", "アニメーション"),
-    (
-        "Glide the selection outline to the cell you move to instead of jumping there",
-        "選択範囲の枠を、移動先のセルまで滑らかに動かします（瞬時には切り替えません）",
-    ),
-    ("System", "システム"),
-    ("Light", "ライト"),
-    ("Dark", "ダーク"),
-    ("Interface language", "表示言語"),
-    ("Interface size", "表示サイズ"),
-    ("Auto", "自動"),
-    ("Drag to freeze columns", "ドラッグして列を固定"),
-    ("Drag to freeze rows", "ドラッグして行を固定"),
-    ("Command\nPalette", "コマンド パレット"),
-    ("Agent\nControl", "エージェント制御"),
-    ("Action\nJournal", "操作ジャーナル"),
-    ("About\nGridCraft", "GridCraft について"),
-    ("Share", "共有"),
-    ("Add Chart\nElement", "グラフ要素を追加"),
-    ("Change\nChart Type", "グラフの種類の変更"),
-    ("Switch\nRow/Column", "行/列の切り替え"),
-    ("Select\nData", "データの選択"),
-    ("Data Labels: None", "データ ラベル: なし"),
-    ("Data Labels: Show", "データ ラベル: 表示"),
-    ("Legend: None", "凡例: なし"),
-    ("Legend: Bottom", "凡例: 下"),
-    ("Legend: Top", "凡例: 上"),
-    ("Legend: Right", "凡例: 右"),
-    ("Gridlines: None", "目盛線: なし"),
-    ("Gridlines: Show", "目盛線: 表示"),
-    ("Chart\nTitle", "グラフ タイトル"),
-    ("Delete\nChart", "グラフの削除"),
-    ("Convert\nto Range", "範囲に変換"),
-    ("Table\nStyles", "テーブル スタイル"),
-    ("Top 10 Items", "上位 10 項目"),
-    ("Top 10%", "上位 10%"),
-    ("Bottom 10 Items", "下位 10 項目"),
-    ("Bottom 10%", "下位 10%"),
-    ("Above Average", "平均より上"),
-    ("Below Average", "平均より下"),
-    ("Clear Rules from Entire Sheet", "シート全体からルールをクリア"),
-    ("Clear Rules from Selected Cells", "選択したセルからルールをクリア"),
-    ("Constants", "定数"),
-    ("Data Bars", "データ バー"),
-    ("Color Scales", "カラー スケール"),
-    ("Icon Sets", "アイコン セット"),
-    ("Home", "ホーム"),
-    ("Draw", "描画"),
-    ("Page Layout", "ページ レイアウト"),
-    ("Formulas", "数式"),
-    ("Data", "データ"),
-    ("Review", "レビュー"),
-    ("View", "表示"),
-    ("Automate", "自動化"),
-    ("Table Design", "テーブル デザイン"),
-    ("Chart Design", "グラフ デザイン"),
-    ("Ready", "準備完了"),
-    ("Enter", "入力"),
-    ("Edit", "編集"),
-    ("Point", "ポイント"),
-    ("Calculate", "計算"),
-    ("Select destination and press Enter or choose Paste", "貼り付け先を選び、Enter キーを押すか [貼り付け] を選びます"),
-    ("General", "標準"),
-    ("Number", "数値"),
-    ("Currency", "通貨"),
-    ("Accounting", "会計"),
-    ("Date", "日付"),
-    ("Time", "時刻"),
-    ("Percentage", "パーセンテージ"),
-    ("Fraction", "分数"),
-    ("Scientific", "指数"),
-    ("Text", "文字列"),
-    ("Special", "特殊"),
-    ("Custom", "ユーザー設定"),
-    ("Short Date", "日付"),
-    ("Long Date", "長い日付"),
-    ("More Number Formats…", "その他の表示形式…"),
-    ("Financial", "財務"),
-    ("Logical", "論理"),
-    ("Date &\nTime", "日付/時刻"),
-    ("Lookup &\nReference", "検索/行列"),
-    ("Math &\nTrig", "数学/三角"),
-    ("More\nFunctions", "その他の関数"),
-    ("Sheet Options|View", "画面"),
-    ("Print", "印刷"),
-    // Page Layout view and the Header & Footer tab.
-    ("Click to add data", "クリックしてデータを追加"),
-    ("Add header", "ヘッダーの追加"),
-    ("Add footer", "フッターの追加"),
-    ("(none)", "(なし)"),
-    ("Header", "ヘッダー"),
-    ("Footer", "フッター"),
-    ("Page\nNumber", "ページ\n番号"),
-    ("Number\nof Pages", "ページ数"),
-    ("Current\nDate", "現在の\n日付"),
-    ("Current\nTime", "現在の\n時刻"),
-    ("File\nPath", "ファイルの\nパス"),
-    ("File\nName", "ファイル名"),
-    ("Sheet\nName", "シート名"),
-    ("Go to\nHeader", "ヘッダーに\n移動"),
-    ("Go to\nFooter", "フッターに\n移動"),
-    ("Page Number", "ページ番号"),
-    ("Number of Pages", "ページ数"),
-    ("Current Date", "現在の日付"),
-    ("Current Time", "現在の時刻"),
-    ("File Path", "ファイルのパス"),
-    ("File Name", "ファイル名"),
-    ("Sheet Name", "シート名"),
-    ("Go to Header", "ヘッダーに移動"),
-    ("Different First Page", "先頭ページのみ別指定"),
-    ("Different Odd & Even Pages", "奇数/偶数ページ別指定"),
-    ("Go to Footer", "フッターに移動"),
-    ("Ruler", "ルーラー"),
-    // File › Backstage view.
-    ("File", "ファイル"),
-    ("Back", "戻る"),
-    ("New", "新規"),
-    ("Open", "開く"),
-    ("Info", "情報"),
-    ("Save", "上書き保存"),
-    ("Save As", "名前を付けて保存"),
-    ("Export", "エクスポート"),
-    ("Close", "閉じる"),
-    ("Options", "オプション"),
-    ("Blank workbook", "空白のブック"),
-    ("Recent", "最近使ったアイテム"),
-    ("No recent workbooks yet.", "最近使ったブックはまだありません。"),
-    ("More workbooks", "その他のブック"),
-    ("Browse…", "参照…"),
-    ("Not saved yet", "まだ保存されていません"),
-    ("Location", "場所"),
-    ("Sheets", "シート"),
-    ("Protect Workbook", "ブックの保護"),
-    (
-        "Sheet structure is locked: sheets can't be added, moved, renamed or deleted.",
-        "シートの構成はロックされています。シートの追加、移動、名前の変更、削除はできません。",
-    ),
-    (
-        "Lock the sheet structure so sheets can't be added, moved, renamed or deleted.",
-        "シートの構成をロックして、シートの追加、移動、名前の変更、削除をできないようにします。",
-    ),
-    ("Properties", "プロパティ"),
-    ("Title", "タイトル"),
-    ("Subject", "件名"),
-    ("Author", "作成者"),
-    ("Company", "会社名"),
-    ("Keywords", "キーワード"),
-    ("Description", "説明"),
-    ("No workbook is open.", "ブックが開かれていません。"),
-    ("Save as type", "ファイルの種類"),
-    ("Excel Workbook (*.xlsx)", "Excel ブック (*.xlsx)"),
-    ("CSV UTF-8 (Comma delimited) (*.csv)", "CSV UTF-8 (コンマ区切り) (*.csv)"),
-    ("Web Page (*.html)", "Web ページ (*.html)"),
-    ("PDF (*.pdf)", "PDF ファイル (*.pdf)"),
-    ("Download", "ダウンロード"),
-    (
-        "A CSV file, web page or PDF is a copy: the workbook keeps its own file.",
-        "CSV ファイル、Web ページ、PDF はコピーです。ブックは元のファイルのままです。",
-    ),
-    ("Save the workbook under another name or in another folder.", "ブックを別の名前または別のフォルダーに保存します。"),
-    ("Print Active Sheets", "作業中のシートを印刷"),
-    ("Print Entire Workbook", "ブック全体を印刷"),
-    ("Fit Sheet on One Page", "シートを 1 ページに印刷"),
-    ("Page Setup…", "ページ設定…"),
-    ("Page {page} of {pages}", "{page} / {pages} ページ"),
-    ("Nothing to print.", "印刷する内容がありません。"),
-    ("Previous page", "前のページ"),
-    ("Next page", "次のページ"),
-    ("Create PDF", "PDF の作成"),
-    ("Save the sheet as a PDF document that keeps its page layout.", "ページ レイアウトを保ったまま、シートを PDF ドキュメントとして保存します。"),
-    ("Change File Type", "ファイルの種類の変更"),
-    ("CSV (Comma delimited)", "CSV (コンマ区切り)"),
-    ("Save the active sheet as comma-separated text.", "作業中のシートをコンマ区切りのテキストとして保存します。"),
-    ("Web Page (.html)", "Web ページ (.html)"),
-    ("Save the workbook as a web page.", "ブックを Web ページとして保存します。"),
-    ("Options|General", "全般"),
-    ("Options|Save", "保存"),
-    ("Show formula bar", "数式バーを表示する"),
-    ("Save .xlsx workbooks automatically after every change", "変更のたびに .xlsx ブックを自動的に保存する"),
-    ("Workbook calculation", "ブックの計算"),
-    ("Enable iterative calculation", "反復計算を行う"),
-    ("Calculation settings are saved with the workbook.", "計算の設定はブックと共に保存されます。"),
-];
+/// `name` lowercased with the Latin accents that occur in language names folded away, so a
+/// byte-wise sort reads alphabetically. Other scripts are left as they are.
+fn name_sort_key(name: &str) -> String {
+    name.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            'à'..='å' | 'ā' | 'ă' | 'ą' => 'a',
+            'ç' | 'ć' | 'č' => 'c',
+            'è'..='ë' | 'ē' | 'ě' | 'ę' | 'ế' | 'ệ' => 'e',
+            'ì'..='ï' | 'ī' => 'i',
+            'ñ' | 'ń' | 'ň' => 'n',
+            'ò'..='ö' | 'ø' | 'ő' => 'o',
+            'ś' | 'š' => 's',
+            'ù'..='ü' | 'ū' | 'ů' | 'ű' => 'u',
+            'ý' | 'ÿ' => 'y',
+            'ź' | 'ż' | 'ž' => 'z',
+            c => c,
+        })
+        .collect()
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Help tables are sorted and unique: lookups binary-search them.
     #[test]
-    fn translations_are_unique_and_preserve_unknown_text() {
-        for (i, (en, ja)) in JAPANESE.iter().enumerate() {
-            assert!(!ja.is_empty());
-            assert!(JAPANESE.iter().take(i).all(|(other, _)| en != other));
-            assert_eq!(Language::En.tr(en), en.rsplit_once('|').map_or(*en, |(_, label)| label));
+    fn function_help_tables_are_sorted_and_unique() {
+        for language in Language::ALL {
+            let Some((description_table, argument_table)) = language.function_help() else { continue };
+            for table in [description_table, argument_table] {
+                assert!(table.windows(2).all(|pair| pair[0].0 < pair[1].0), "{language:?} function help is not sorted and unique");
+                for (english, translated) in table {
+                    assert!(!translated.is_empty(), "{language:?}: empty translation of {english:?}");
+                }
+            }
         }
-        for (english, _) in JAPANESE {
-            assert!(zh::translate(english).is_some_and(|text| !text.is_empty()), "missing Simplified Chinese: {english}");
-            assert!(ko::translate(english).is_some_and(|text| !text.is_empty()), "missing Korean: {english}");
-            assert!(ru::translate(english).is_some_and(|text| !text.is_empty()), "missing Russian: {english}");
-            assert!(pt::translate(english).is_some_and(|text| !text.is_empty()), "missing Portuguese: {english}");
-            assert!(es::translate(english).is_some_and(|text| !text.is_empty()), "missing Spanish: {english}");
-            assert!(de::translate(english).is_some_and(|text| !text.is_empty()), "missing German: {english}");
-            assert!(cs::translate(english).is_some_and(|text| !text.is_empty()), "missing Czech: {english}");
-            assert!(fr::translate(english).is_some_and(|text| !text.is_empty()), "missing French: {english}");
+    }
+
+    #[test]
+    fn untranslated_text_falls_back_to_english() {
+        let label = |key: &'static str| key.rsplit_once('|').map_or(key, |(_, label)| label);
+        for (english, _) in ja::CORE {
+            assert_eq!(Language::En.tr(english), label(english));
         }
-        assert_eq!(Language::Ja.tr("Data"), "データ");
-        assert_eq!(Language::Zh.tr("Data"), "数据");
-        assert_eq!(Language::Ko.tr("Data"), "데이터");
-        assert_eq!(Language::Ru.tr("Data"), "Данные");
-        assert_eq!(Language::PtBr.tr("Data"), "Dados");
-        assert_eq!(Language::Es.tr("Data"), "Datos");
-        assert_eq!(Language::Es.tr("Freeze Panes"), "Inmovilizar paneles");
-        assert_eq!(Language::Es.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::De.tr("Data"), "Daten");
-        assert_eq!(Language::De.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Fr.tr("Data"), "Données");
-        assert_eq!(Language::Fr.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::PtBr.tr("Date"), "Data");
-        assert_eq!(Language::PtBr.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Ja.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Zh.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Ko.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Ru.tr("Sheet1!A1"), "Sheet1!A1");
-        // Czech "Data" is spelled as in English, so probe it with a label that differs.
-        assert_eq!(Language::Cs.tr("Data"), "Data");
-        assert_eq!(Language::Cs.tr("Formulas"), "Vzorce");
-        assert_eq!(Language::Cs.tr("Sheet1!A1"), "Sheet1!A1");
-        // A `context|label` key shows only its label in English and splits the translation.
+        for language in Language::ALL {
+            assert_eq!(language.tr("Sheet1!A1"), "Sheet1!A1");
+            assert_eq!(language.tr("Not in any catalog|Untranslated"), "Untranslated");
+        }
+        // A `context|label` key shows only its label in English.
         assert_eq!(Language::En.tr("Page Layout|Orientation"), "Orientation");
-        assert_eq!(Language::Ja.tr("Page Layout|Orientation"), "印刷の向き");
-        assert_eq!(Language::Ja.tr("Orientation"), "方向");
-        assert_eq!(Language::Cs.tr("Page Layout|Orientation"), "Orientace");
-        assert_eq!(Language::Cs.tr("Orientation"), "Orientace textu");
+        // Errors drop the `command `id`:` prefix before translating; an untranslated one stays whole.
+        assert_eq!(Language::PtBr.tr_error("command `chart`: Select a chart first."), Language::PtBr.tr("Select a chart first."));
+        assert_eq!(Language::PtBr.tr_error("Sheet|Unknown failure"), "Sheet|Unknown failure");
+        assert_eq!(Language::PtBr.tr_error("Printer Office: permission denied"), "Printer Office: permission denied");
         assert_eq!(Language::parse("xx"), None);
+    }
+
+    /// A catalog whose translations slip onto their neighbours' keys still covers every key, so
+    /// check the shape of each translation against its English: placeholders survive, and a
+    /// one-line label (a menu item, a tooltip) doesn't turn into a two-line ribbon label.
+    #[test]
+    fn translations_keep_the_shape_of_their_english() {
+        let placeholders =
+            |s: &str| s.split('{').skip(1).filter_map(|rest| rest.split_once('}').map(|(name, _)| name.to_string())).collect::<Vec<_>>();
+        for language in Language::ALL {
+            for (english, _) in ja::CORE {
+                let label = english.rsplit_once('|').map_or(*english, |(_, label)| label);
+                let text = language.tr(english);
+                assert_eq!(placeholders(text), placeholders(label), "{language:?}: {english:?} => {text:?}");
+                // Big ribbon buttons whose English fits on one line may still need two.
+                if !label.contains('\n') && !["AutoSum", "PivotTable"].contains(english) {
+                    assert!(!text.contains('\n'), "{language:?}: one-line {english:?} => {text:?}");
+                }
+            }
+        }
+    }
+
+    /// The screen-reader names for the formula-bar controls must be translated in every catalog
+    /// (no silent English fallback) and stay single-line labels.
+    #[test]
+    fn accessible_control_names_are_translated_in_every_catalog() {
+        for key in ["Name Box", "Cell Editor", "Font Size", "Sheet Name", "Text Box"] {
+            for language in Language::ALL {
+                let shown = language.tr(key);
+                assert!(!shown.contains('\n'), "{}: {key:?} is not a single-line label: {shown:?}", language.code());
+                if language != Language::En {
+                    assert_ne!(shown, key, "{} falls back to English for {key:?}", language.code());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn translations_never_show_the_context_prefix() {
+        // `tr` returns a found translation as it is, so a catalog that keeps `context|` in its
+        // value shows it on screen (File › Options read "Options|Général" in French).
+        let keys = ja::CORE.iter().map(|(english, _)| *english).chain(["Options|General", "Options|Save", "Sheet Options|View"]);
+        for english in keys {
+            for language in Language::ALL {
+                let shown = language.tr(english);
+                assert!(!shown.contains('|'), "{} shows a context prefix for {english}: {shown}", language.code());
+            }
+        }
     }
 
     #[test]
@@ -635,15 +418,22 @@ mod tests {
     }
 
     #[test]
-    fn tags_reduce_to_a_supported_language() {
+    fn tags_reduce_to_supported_languages() {
         assert_eq!(Language::from_tag("ja-JP"), Some(Language::Ja));
         assert_eq!(Language::from_tag("en_US"), Some(Language::En));
         assert_eq!(Language::from_tag("es_MX"), Some(Language::Es));
+        assert_eq!(Language::from_tag("el-GR"), Some(Language::El));
+        assert_eq!(Language::from_tag("el_GR.UTF-8"), Some(Language::El));
+        assert_eq!(Language::parse("el"), Some(Language::El));
         assert_eq!(Language::from_tag("zh-Hans-CN"), Some(Language::Zh));
         assert_eq!(Language::from_tag("ko-KR"), Some(Language::Ko));
         assert_eq!(Language::from_tag("RU_ru"), Some(Language::Ru));
         assert_eq!(Language::from_tag("de-DE"), Some(Language::De));
         assert_eq!(Language::from_tag("de_AT"), Some(Language::De));
+    }
+
+    #[test]
+    fn tags_reduce_to_supported_languages_with_locale_suffixes() {
         assert_eq!(Language::from_tag("de-CH"), Some(Language::De));
         assert_eq!(Language::from_tag("pt-BR"), Some(Language::PtBr));
         assert_eq!(Language::parse("pt"), Some(Language::PtBr));
@@ -654,8 +444,37 @@ mod tests {
         assert_eq!(Language::from_tag("fr-FR"), Some(Language::Fr));
         assert_eq!(Language::from_tag("fr_CA"), Some(Language::Fr));
         assert_eq!(Language::parse("fr"), Some(Language::Fr));
+        assert_eq!(Language::from_tag("sr-Latn-RS"), Some(Language::Sr));
     }
 
+    #[test]
+    fn tags_reduce_to_other_supported_languages() {
+        assert_eq!(Language::from_tag("sr-RS"), Some(Language::Sr));
+        assert_eq!(Language::parse("sr"), Some(Language::Sr));
+        assert_eq!(Language::from_tag("tr-TR"), Some(Language::Tr));
+        assert_eq!(Language::from_tag("tr_TR.UTF-8"), Some(Language::Tr));
+        assert_eq!(Language::parse("tr"), Some(Language::Tr));
+        assert_eq!(Language::from_tag("pl-PL"), Some(Language::Pl));
+        assert_eq!(Language::from_tag("pl_PL.UTF-8"), Some(Language::Pl));
+        assert_eq!(Language::parse("pl"), Some(Language::Pl));
+        assert_eq!(Language::from_tag("it-IT"), Some(Language::It));
+        assert_eq!(Language::from_tag("it_CH.UTF-8"), Some(Language::It));
+        assert_eq!(Language::parse("it"), Some(Language::It));
+    }
+
+    #[test]
+    fn tags_reduce_to_remaining_supported_languages() {
+        assert_eq!(Language::from_tag("uk-XX"), Some(Language::Uk));
+        assert_eq!(Language::parse("uk"), Some(Language::Uk));
+        assert_eq!(Language::from_tag("vi-VN"), Some(Language::Vi));
+        assert_eq!(Language::parse("vi"), Some(Language::Vi));
+        assert_eq!(Language::from_tag("nl-NL"), Some(Language::Nl));
+        assert_eq!(Language::from_tag("nl_BE"), Some(Language::Nl));
+        assert_eq!(Language::parse("nl"), Some(Language::Nl));
+        assert_eq!(Language::from_tag("ro-RO"), Some(Language::Ro));
+        assert_eq!(Language::from_tag("ro_MD.UTF-8"), Some(Language::Ro));
+        assert_eq!(Language::parse("ro"), Some(Language::Ro));
+    }
     #[test]
     fn an_unset_language_preference_is_english_until_the_app_applies_the_system_one() {
         // Deserializing never reads the host locale (tests stay deterministic); the desktop app
@@ -677,10 +496,24 @@ mod tests {
         app.run("app.language.set", serde_json::json!({"code": "ja"})).unwrap();
         assert_eq!(app.ui.language, Language::Ja, "`code` is an alias for `language`");
         assert!(app.run("app.language.set", serde_json::json!({})).is_err(), "no language is an error, not a dialog");
+        let unknown = app.run("app.language.set", serde_json::json!({"language": "xx"})).unwrap_err().to_string();
+        for l in Language::ALL {
+            assert!(unknown.contains(&format!("\"{}\"", l.code())), "the error lists {:?}: {unknown}", l.code());
+        }
         app.run("app.language.english", serde_json::json!({})).unwrap();
         assert_eq!(app.ui.language, Language::En);
         for l in Language::ALL {
             assert_eq!(Language::parse(l.code()), Some(l));
         }
+    }
+
+    #[test]
+    fn picker_lists_english_first_then_names_alphabetically() {
+        let order = Language::for_picker();
+        assert_eq!(order.first(), Some(&Language::En));
+        assert_eq!(order.len(), Language::ALL.len());
+        let keys: Vec<String> = order[1..].iter().map(|l| name_sort_key(l.name())).collect();
+        assert!(keys.windows(2).all(|w| w[0] <= w[1]), "{keys:?}");
+        assert_eq!(name_sort_key("Čeština"), "cestina");
     }
 }

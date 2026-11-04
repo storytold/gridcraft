@@ -136,6 +136,9 @@ pub(crate) fn fixed(a: f64, decimals: usize) -> (String, String) {
 /// General format squeezed into `max_chars` characters. Excel shows fewer decimals, then
 /// scientific notation, then "####" when a column is narrow; `None` means the caller paints "####".
 pub fn format_general_fit(n: f64, max_chars: usize) -> Option<String> {
+    // The widest fixed rendering of a double is about 330 characters; a larger request only
+    // pads zero decimals the trim below throws away.
+    let max_chars = max_chars.min(1024);
     if !n.is_finite() {
         return None;
     }
@@ -214,6 +217,8 @@ mod tests {
     fn general_fit() {
         assert_eq!(format_general_fit(1e11, 11).as_deref(), Some("1E+11"));
         assert_eq!(format_general_fit(12345678901.0, 11).as_deref(), Some("12345678901"));
+        // A huge width neither allocates width-sized padding nor changes the text.
+        assert_eq!(format_general_fit(1.5, usize::MAX).as_deref(), Some("1.5"));
         assert_eq!(format_general_fit(123456789012.0, 11).as_deref(), Some("1.23457E+11"));
         assert_eq!(format_general_fit(0.1 + 0.2, 11).as_deref(), Some("0.3"));
         assert_eq!(format_general_fit(1.0 / 3.0, 11).as_deref(), Some("0.333333333"));

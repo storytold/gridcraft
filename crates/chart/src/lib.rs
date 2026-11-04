@@ -123,7 +123,15 @@ impl Measure for ApproxMeasure {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChartData {
     pub categories: Vec<String>,
+    /// Outer levels of a multi-level category axis (a category range two columns wide beside a
+    /// column of values: year beside month), nearest the labels first. One entry per category,
+    /// non-empty where a group starts: `["2023", "", "", "2024", "", ""]`.
+    #[serde(default)]
+    pub category_levels: Vec<Vec<String>>,
     pub series: Vec<SeriesData>,
+    /// Workbook-theme colours for the points of pie-like charts, repeating (point `j` uses entry `j % len`); empty uses the default theme.
+    #[serde(default)]
+    pub palette: Vec<Rgba>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

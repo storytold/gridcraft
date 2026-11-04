@@ -22,7 +22,9 @@ impl Shape {
 
 pub(crate) fn needs_array(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula) -> bool {
     let Some(expr) = formula.expr_arc() else { return false };
-    let mut scan = Scan { wb, at, remaining: 4096, locals: Vec::new() };
+    // The budget covers every node of a formula as long as Excel allows (8,192 characters make
+    // at most about 8,200 nodes), so only names that expand a lot fall back to array evaluation.
+    let mut scan = Scan { wb, at, remaining: 16_384, locals: Vec::new() };
     let shape = scan.expr(&expr, sheet, false, 0);
     // An explicit `@` is written as `_xlfn.SINGLE`, which only dynamic-array formulas carry.
     let mut at = false;
@@ -53,11 +55,11 @@ impl Scan<'_> {
                     return *shape;
                 }
                 let (scope, bare) = match n.rsplit_once('!') {
-                    Some((s, name)) => (self.wb.sheet_index(&s.trim_matches('\'').replace("''", "'")).unwrap_or(sheet), name),
+                    Some((s, name)) => (self.wb.sheet_index(&gridcraft_core::unquote_sheet(s)).unwrap_or(sheet), name),
                     None => (sheet, n.as_str()),
                 };
                 if let Some(def) = self.wb.name(bare, scope) {
-                    return match gridcraft_formula::parse(def.formula.trim_start_matches('=')) {
+                    return match gridcraft_formula::parse_name(def.formula.trim_start_matches('=')) {
                         Ok(expr) => self.expr(&expr, def.scope.unwrap_or(scope), array_context, depth + 1),
                         Err(_) => Shape::array(),
                     };
@@ -89,11 +91,27 @@ impl Scan<'_> {
                 }
             }
             Expr::Binary(op, a, b) => {
-                let a = self.expr(a, sheet, array_context, depth + 1);
-                let b = self.expr(b, sheet, array_context, depth + 1);
-                let reference = matches!(op, BinOp::Range | BinOp::Union | BinOp::Intersect);
-                let array = reference || a.array || b.array;
-                Shape { array, affected: a.affected || b.affected || (!reference && array && !array_context) }
+                // A flat chain such as A1+A2+… nests one level per operator on its left: follow
+                // it in a loop, so a long chain is neither deep recursion nor past the depth
+                // limit (which would write a plain sum as an array formula).
+                let mut spine = vec![(*op, b.as_ref())];
+                let mut left = a.as_ref();
+                while let Expr::Binary(op, a, b) = left {
+                    if self.remaining == 0 {
+                        return Shape { array: true, affected: true };
+                    }
+                    self.remaining -= 1;
+                    spine.push((*op, b.as_ref()));
+                    left = a.as_ref();
+                }
+                let mut acc = self.expr(left, sheet, array_context, depth + 1);
+                while let Some((op, b)) = spine.pop() {
+                    let b = self.expr(b, sheet, array_context, depth + 1);
+                    let reference = matches!(op, BinOp::Range | BinOp::Union | BinOp::Intersect);
+                    let array = reference || acc.array || b.array;
+                    acc = Shape { array, affected: acc.affected || b.affected || (!reference && array && !array_context) };
+                }
+                acc
             }
             Expr::Call(name, args) => self.call(name, args, sheet, array_context, depth + 1),
             Expr::Invoke(_, _) => Shape { array: true, affected: false },
@@ -154,7 +172,9 @@ impl Scan<'_> {
             "INDEX" => {
                 let row = args.get(1);
                 let col = args.get(2);
-                !row.is_some_and(positive) || col.is_some_and(|e| !positive(e)) || (col.is_none() && !args.first().is_some_and(single_column))
+                let row_positive = row.is_some_and(|e| positive_index(e, shapes.get(1).copied()));
+                let col_positive = col.is_some_and(|e| positive_index(e, shapes.get(2).copied()));
+                !row_positive || col.is_some_and(|_| !col_positive) || (col.is_none() && !args.first().is_some_and(single_column))
             }
             "ROW" | "COLUMN" => {
                 affected |= first_array && !array_context;
@@ -185,6 +205,11 @@ impl Scan<'_> {
 
 fn positive(e: &Expr) -> bool {
     matches!(e, Expr::Number(n) if *n >= 1.0)
+}
+
+fn positive_index(e: &Expr, shape: Option<Shape>) -> bool {
+    // MATCH returns a one-based position or an error, never INDEX's zero "whole row" selector.
+    positive(e) || (matches!(e, Expr::Call(name, _) if matches!(name.as_str(), "MATCH" | "XMATCH")) && shape.is_some_and(|s| !s.array))
 }
 
 fn one(e: &Expr) -> bool {
