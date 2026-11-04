@@ -126,7 +126,7 @@ fn eval(args: &[String]) -> Result<(), String> {
     if let Some(name) = parsed.opt("measure") {
         // A measure result is a scalar: a formula or a table request alongside it would be silently
         // ignored, so the same conflicts `dax bind` rejects are rejected here.
-        if parsed.has("file") {
+        if parsed.opt("file").is_some() || !parsed.positional.is_empty() {
             return Err("dax eval takes either --measure or a formula, not both".into());
         }
         if parsed.has("table") {

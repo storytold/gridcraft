@@ -70,7 +70,7 @@ fn maxa_and_mina_count_logical_values() {
     assert_eq!(value("MAXA(Sales[Flag])"), Scalar::Decimal(1.0));
     // Text is not rankable, so every text value coerces to 0 before the comparison.
     assert_eq!(value("MINA(Sales[Note])"), Scalar::Decimal(0.0));
-    assert_eq!(value("MAXA(Sales[Note])"), Scalar::Decimal(7.0));
+    assert_eq!(value("MAXA(Sales[Note])"), Scalar::Decimal(0.0));
     assert_eq!(value("MAXA(Sales[Amount])"), Scalar::Decimal(40.0));
     assert_eq!(value("MINA(Sales[Amount])"), Scalar::Decimal(10.0));
 }

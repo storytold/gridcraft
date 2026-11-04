@@ -147,9 +147,14 @@ fn window_table(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Re
     if args.len() < 2 {
         return Err(EvalError::new("WINDOW needs a start and an end boundary"));
     }
-    // The 2-argument form is `WINDOW(<start>, <end>)`; every longer form names both boundary
-    // types, so arity decides the layout.
-    let typed = args.len() >= 3;
+    // Two layouts exist: `WINDOW(<start>, <end>, <relation>…)` and the typed
+    // `WINDOW(<start>, <type>, <end>, <type>, <relation>…)`. The typed form is the one whose
+    // second argument is an `ABS`/`REL` keyword, or whose third argument cannot be a relation;
+    // a non-keyword in a type position is then rejected with the documented error.
+    let is_relation = |expr: &BoundExpr| matches!(expr, BoundExpr::Table(_) | BoundExpr::Call { .. });
+    let typed = args.len() >= 3
+        && (matches!(args.get(1), Some(BoundExpr::Keyword(word)) if word.eq_ignore_ascii_case("ABS") || word.eq_ignore_ascii_case("REL"))
+            || !args.get(2).is_some_and(is_relation));
     if typed && args.len() < 4 {
         return Err(EvalError::new("WINDOW needs an end boundary after its start type"));
     }

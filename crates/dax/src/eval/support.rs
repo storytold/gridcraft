@@ -321,7 +321,7 @@ pub(crate) fn aggregate_values(name: &str, values: &[Scalar]) -> Result<Scalar, 
             .iter()
             .filter(|value| !value.is_blank())
             .map(|value| match value {
-                Scalar::String(text) => text.trim().parse().unwrap_or(0.0),
+                Scalar::String(_) => 0.0,
                 Scalar::Boolean(value) => f64::from(u8::from(*value)),
                 other => other.to_number().unwrap_or(0.0),
             })
@@ -332,7 +332,7 @@ pub(crate) fn aggregate_values(name: &str, values: &[Scalar]) -> Result<Scalar, 
             .iter()
             .filter(|value| !value.is_blank())
             .map(|value| match value {
-                Scalar::String(text) => text.trim().parse().unwrap_or(0.0),
+                Scalar::String(_) => 0.0,
                 Scalar::Boolean(value) => f64::from(u8::from(*value)),
                 other => other.to_number().unwrap_or(0.0),
             })

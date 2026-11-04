@@ -524,8 +524,20 @@ impl<'a> Plan<'a> {
     /// propagation restricts the source table exactly as a slicer on that dimension would.
     fn filter_context(&self, row_key: &[ScalarKey], column_key: &[ScalarKey]) -> FilterContext {
         let mut context = FilterContext::default();
+        // Several filters on one column intersect, the same way `passes` ANDs them for the groups:
+        // the last one must not silently win in the cells while the groups use all of them.
+        let mut merged: BTreeMap<(usize, usize), BTreeSet<ScalarKey>> = BTreeMap::new();
         for (field, allowed) in &self.filters {
-            context.set(field.field.table, field.field.column, allowed.iter().cloned());
+            let key = (field.field.table, field.field.column);
+            match merged.get_mut(&key) {
+                Some(existing) => *existing = existing.intersection(allowed).cloned().collect(),
+                None => {
+                    merged.insert(key, allowed.clone());
+                }
+            }
+        }
+        for ((table, column), allowed) in merged {
+            context.set(table, column, allowed);
         }
         for (field, key) in self.row_fields.iter().zip(row_key) {
             context.set(field.field.table, field.field.column, [key.clone()]);

@@ -1159,6 +1159,11 @@ fn slicer_cards(ui: &mut Ui, t: &Tokens, lang: &i18n::Language, draft: &mut Draf
                         if multi {
                             if on {
                                 allowed.retain(|kept| kept != value);
+                                // Deselecting the last member is `(All)`, like clicking it alone:
+                                // an empty list keeps no rows and the writer rejects it.
+                                if allowed.is_empty() {
+                                    clear = true;
+                                }
                             } else {
                                 allowed.push(value.clone());
                             }
