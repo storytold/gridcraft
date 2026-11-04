@@ -167,3 +167,28 @@ fn convert_data_types() {
     assert!(eval_result("CONVERT(\"abc\", INTEGER)").is_err());
     assert!(eval_result("CONVERT(1, NONSENSE)").is_err());
 }
+
+#[test]
+fn ceiling_floor_and_trunc_use_their_second_argument() {
+    // The catalog's documented semantics: CEILING/FLOOR take a required Significance, TRUNC an
+    // optional NumberOfDigits.
+    assert_close(eval("CEILING(4.42, 0.05)"), 4.45);
+    assert_close(eval("CEILING(10.2, 1)"), 11.0);
+    assert_close(eval("CEILING(10.7, 0.5)"), 11.0);
+    // A negative number with a negative significance rounds away from zero.
+    assert_close(eval("CEILING(-2.5, -2)"), -4.0);
+    // ISO.CEILING takes the significance's magnitude and always rounds up.
+    assert_close(eval("ISO.CEILING(-2.5, 2)"), -2.0);
+    assert!(eval_result("CEILING(2.5, -2)").is_err());
+
+    assert_close(eval("FLOOR(27, 5)"), 25.0);
+    assert_close(eval("FLOOR(2.7, 1)"), 2.0);
+    assert_close(eval("FLOOR(-2.7, -1)"), -2.0);
+    assert!(eval_result("FLOOR(-2.7, 1)").is_err());
+    assert!(eval_result("FLOOR(1, 0)").is_err());
+
+    assert_close(eval("TRUNC(1.239, 2)"), 1.23);
+    assert_close(eval("TRUNC(2.71828)"), 2.0);
+    assert_close(eval("TRUNC(-2.71828, 2)"), -2.71);
+    assert_close(eval("TRUNC(1234.5, -2)"), 1200.0);
+}

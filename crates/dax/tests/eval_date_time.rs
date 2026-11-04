@@ -8,20 +8,12 @@ use gridcraft_dax::{Binder, Evaluator, parse_expression};
 // Fixtures
 // ---------------------------------------------------------------------------------------------
 
-/// Days from 1970-01-01 (Howard Hinnant's civil-days algorithm), used to build Excel serials
-/// independently of the evaluator under test.
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let year = year - i64::from(month <= 2);
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let year_of_era = year - era * 400;
-    let month_prime = (month + 9) % 12;
-    let day_of_year = (153 * month_prime + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
-}
-
-fn serial(year: i64, month: i64, day: i64) -> f64 {
-    (days_from_civil(year, month, day) + 25_569) as f64
+/// The OLE Automation serial of a date, built with `chrono` (a normal dependency of the crate,
+/// independent of the evaluator under test) from the 1899-12-30 epoch.
+fn serial(year: i32, month: u32, day: u32) -> f64 {
+    let epoch = chrono::NaiveDate::from_ymd_opt(1899, 12, 30).expect("the Excel epoch is a valid date");
+    let date = chrono::NaiveDate::from_ymd_opt(year, month, day).expect("the fixture date is valid");
+    (date - epoch).num_days() as f64
 }
 
 fn model() -> DataModel {

@@ -955,14 +955,15 @@ fn page_rows(spec: &ModelPivotSpec) -> Vec<Vec<String>> {
     rows
 }
 
-/// The item a page field shows: its only allowed value, or `(All)` / `(Multiple Items)`.
+/// The item a page field shows: its only allowed value, `(All)`, `(Multiple Items)`, or
+/// `(No Items)` for an explicitly empty list — an exact empty member set, which keeps no rows.
 fn page_item(filter: &ModelPivotFilter) -> String {
     if filter.all {
         return "(All)".to_string();
     }
     match filter.allowed.as_slice() {
         [value] => value.label(),
-        [] => "(All)".to_string(),
+        [] => "(No Items)".to_string(),
         _ => "(Multiple Items)".to_string(),
     }
 }
@@ -1181,5 +1182,22 @@ fn model_scalar(value: &Scalar) -> ModelPivotScalar {
         Scalar::Decimal(value) => ModelPivotScalar::Number(*value),
         Scalar::DateTime(value) => ModelPivotScalar::Number(*value),
         Scalar::String(value) => ModelPivotScalar::Text(value.clone()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn filter(all: bool, allowed: Vec<ModelPivotScalar>) -> ModelPivotFilter {
+        ModelPivotFilter { field: ModelPivotFieldRef { table: "Sales".into(), column: "Channel".into() }, allowed, include_blank: false, all }
+    }
+
+    #[test]
+    fn a_page_field_captions_all_and_an_empty_member_set_differently() {
+        assert_eq!(page_item(&filter(true, Vec::new())), "(All)", "an absent allowed list keeps every value");
+        assert_eq!(page_item(&filter(false, Vec::new())), "(No Items)", "an explicit empty list keeps nothing");
+        assert_eq!(page_item(&filter(false, vec![ModelPivotScalar::Text("Web".into())])), "Web");
+        assert_eq!(page_item(&filter(false, vec![ModelPivotScalar::Text("Web".into()), ModelPivotScalar::Text("Store".into())])), "(Multiple Items)");
     }
 }

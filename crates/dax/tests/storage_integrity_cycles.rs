@@ -131,3 +131,17 @@ fn cycles_are_capped() {
         assert_eq!(finding.cycle.first(), finding.cycle.last());
     }
 }
+
+#[test]
+fn an_inactive_relationship_cannot_close_a_chain() {
+    // One active and one inactive relationship between the same pair of tables: the inactive one
+    // is not part of the default filter propagation, so there is no cycle.
+    let mut inactive = link("B", "A");
+    inactive.inactive = true;
+    let report = validate_model(&model(vec![link_table("A", 1), link_table("B", 1)], vec![link("A", "B"), inactive]));
+    assert!(cycles(&report).is_empty(), "findings: {:?}", report.findings);
+
+    // Two active relationships between the same pair still are a cycle.
+    let report = validate_model(&model(vec![link_table("A", 1), link_table("B", 1)], vec![link("A", "B"), link("B", "A")]));
+    assert_eq!(cycles(&report).len(), 1, "findings: {:?}", report.findings);
+}

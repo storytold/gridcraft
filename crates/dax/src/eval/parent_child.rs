@@ -1,16 +1,18 @@
 //! Parent-child functions.
 //!
-//! `PATH`, `PATHCONTAINS`, `PATHITEM` and `PATHLENGTH` are plain path-string operations handled
-//! by the core evaluator's scalar switch. `PATHITEMREVERSE` is the mirror image of `PATHITEM`:
-//! it indexes the delimited path from the last item, so position 1 is the current item and
-//! position 2 its immediate parent. A position below 1 or past the end of the path is BLANK,
-//! exactly like an out-of-range `PATHITEM`.
+//! `PATH` walks a parent-child hierarchy: starting at the current row's ID it follows the parent
+//! column to the top and returns the IDs joined with `|`, top first. `PATHLENGTH`, `PATHCONTAINS`
+//! and `PATHITEM` are plain path-string operations handled by the core evaluator's scalar switch.
+//! `PATHITEMREVERSE` is the mirror image of `PATHITEM`: it indexes the delimited path from the
+//! last item, so position 1 is the current item and position 2 its immediate parent. A position
+//! below 1 or past the end of the path is BLANK, exactly like an out-of-range `PATHITEM`.
 #![allow(unused_imports)]
 
 use super::*;
 
 pub(crate) fn call(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Option<Result<Scalar, EvalError>> {
     match name.to_ascii_uppercase().as_str() {
+        "PATH" => Some(path(ev, name, args, ctx)),
         "PATHITEMREVERSE" => Some(item_reverse(ev, name, args, ctx)),
         _ => None,
     }
@@ -18,6 +20,88 @@ pub(crate) fn call(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut
 
 pub(crate) fn call_table(_ev: &Evaluator<'_>, _name: &str, _args: &[BoundExpr], _ctx: &mut Context) -> Option<Result<TableValue, EvalError>> {
     None
+}
+
+/// The hierarchy separator of the parent-child functions.
+const SEPARATOR: char = '|';
+
+/// `PATH ( <ID_ColumnName>, <Parent_ColumnName> )`.
+///
+/// The two arguments are column references of one table. Starting from the current row's ID, the
+/// parent column is followed to the top of the hierarchy and the IDs are joined with `|`, top
+/// first. A blank ID is BLANK and a blank parent ends the chain. Following the catalog contract,
+/// an ID containing the separator, an ID with two different parents, a parent that is not an ID,
+/// and a cycle are all errors.
+fn path(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
+    let (id_table, id_column) = column_argument(name, args, 0)?;
+    let (parent_table, parent_column) = column_argument(name, args, 1)?;
+    if id_table != parent_table {
+        return Err(EvalError::new(format!("{name} needs two columns of the same table")));
+    }
+    let id = ev.column_value(id_table, id_column, ctx)?;
+    if id.is_blank() {
+        return Ok(Scalar::Blank);
+    }
+    if id.to_text().contains(SEPARATOR) {
+        return Err(EvalError::new(format!("{name} ID `{}` contains the hierarchy separator", id.to_text())));
+    }
+    let table = ev.model().tables.get(id_table).ok_or_else(|| EvalError::new(format!("{name} table is out of range")))?;
+
+    // One parent per ID. The same ID with the same parent twice is Excel's common-parent case; a
+    // second, different parent makes the hierarchy ambiguous.
+    let mut parents: BTreeMap<ScalarKey, ScalarKey> = BTreeMap::new();
+    for row in &table.rows {
+        let Some(key) = row.get(id_column) else { continue };
+        if key.is_blank() {
+            continue;
+        }
+        if key.to_text().contains(SEPARATOR) {
+            return Err(EvalError::new(format!("{name} ID `{}` contains the hierarchy separator", key.to_text())));
+        }
+        let parent = ScalarKey::from(row.get(parent_column).unwrap_or(&Scalar::Blank));
+        let key = ScalarKey::from(key);
+        match parents.get(&key) {
+            Some(existing) if *existing != parent => {
+                return Err(EvalError::new(format!("{name} ID `{}` has more than one parent", key.to_scalar().to_text())));
+            }
+            Some(_) => {}
+            None => {
+                parents.insert(key, parent);
+            }
+        }
+    }
+    for parent in parents.values() {
+        if !matches!(parent, ScalarKey::Blank) && !parents.contains_key(parent) {
+            return Err(EvalError::new(format!("{name} parent `{}` is not an ID of the hierarchy", parent.to_scalar().to_text())));
+        }
+    }
+
+    let mut chain = vec![ScalarKey::from(&id)];
+    let mut seen: BTreeSet<ScalarKey> = chain.iter().cloned().collect();
+    let mut current = ScalarKey::from(&id);
+    loop {
+        let Some(parent) = parents.get(&current).cloned() else {
+            return Err(EvalError::new(format!("{name} ID `{}` is not part of the hierarchy", current.to_scalar().to_text())));
+        };
+        if matches!(parent, ScalarKey::Blank) {
+            break;
+        }
+        if !seen.insert(parent.clone()) {
+            return Err(EvalError::new(format!("{name} hierarchy has a cycle at `{}`", parent.to_scalar().to_text())));
+        }
+        chain.push(parent.clone());
+        current = parent;
+    }
+    chain.reverse();
+    Ok(Scalar::String(chain.iter().map(|key| key.to_scalar().to_text()).collect::<Vec<_>>().join(&SEPARATOR.to_string())))
+}
+
+/// The table and column a `PATH` argument names; anything else is an error, as the catalog says.
+fn column_argument(name: &str, args: &[BoundExpr], index: usize) -> Result<(usize, usize), EvalError> {
+    match args.get(index) {
+        Some(BoundExpr::Column { table, column }) => Ok((*table, *column)),
+        _ => Err(EvalError::new(format!("{name} arguments must be column references"))),
+    }
 }
 
 /// `PATHITEMREVERSE ( <Path>, <Position> [, <Type> ] )`.

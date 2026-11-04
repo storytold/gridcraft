@@ -1143,6 +1143,7 @@ fn slicer_cards(ui: &mut Ui, t: &Tokens, lang: &i18n::Language, draft: &mut Draf
             // A filter with no `allowed` key is `(All)`: every member is on.
             let mut all_on = filter.get("allowed").is_none();
             let mut card_changed = false;
+            let mut clear = false;
             let mut allowed: Vec<Json> = filter["allowed"].as_array().cloned().unwrap_or_else(|| values.clone());
             // Excel's slicer click: a plain click selects exactly that tile (the rest turn off) and
             // clicking the only selected tile clears the filter, while Ctrl/Cmd-click toggles one
@@ -1162,7 +1163,7 @@ fn slicer_cards(ui: &mut Ui, t: &Tokens, lang: &i18n::Language, draft: &mut Draf
                                 allowed.push(value.clone());
                             }
                         } else if only {
-                            allowed = values.clone();
+                            clear = true;
                         } else {
                             allowed = vec![value.clone()];
                         }
@@ -1170,9 +1171,15 @@ fn slicer_cards(ui: &mut Ui, t: &Tokens, lang: &i18n::Language, draft: &mut Draf
                     }
                 }
             });
-            if card_changed {
-                // Only an explicit selection narrows the page field: leaving the key absent keeps
-                // `(All)`, which is what an untouched filter means.
+            // Only an explicit selection narrows the page field: clicking the last selected tile
+            // clears the key again, which is `(All)` — the same state the Clear Slicer Filter
+            // button writes, and one that picks up members added to the model later.
+            if clear {
+                if let Some(map) = filter.as_object_mut() {
+                    map.remove("allowed");
+                }
+                changed = true;
+            } else if card_changed {
                 if let Some(map) = filter.as_object_mut() {
                     map.insert("allowed".to_string(), Json::Array(allowed));
                 }

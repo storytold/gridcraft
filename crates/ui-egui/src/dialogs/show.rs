@@ -157,7 +157,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "solver" => 460.0,
         "zoom" => 220.0,
         "pasteSpecial" => 480.0,
-        "powerPivot" => 1320.0,
+        // The field list is wide, but it must fit the host window: the minimum content width
+        // derives from this value, so an unclamped 1320 would not shrink on a narrow screen.
+        "powerPivot" => (ctx.content_rect().width() - 40.0).clamp(380.0, 1320.0),
         _ => 380.0,
     };
     let window_id = egui::Id::unique("dialog").with(&d.name);

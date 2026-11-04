@@ -250,3 +250,19 @@ fn strict_equality_matches_a_decimal_column_against_an_integer_literal() {
     assert_eq!(eval_in_sales("COUNTROWS(FILTER(Sales, Sales[Amount] == 10))"), Scalar::Integer(1));
     assert_eq!(eval_in_sales("COUNTROWS(FILTER(Sales, Sales[Region] == \"east\"))"), Scalar::Integer(2));
 }
+
+#[test]
+fn datediff_counts_boundaries_for_sub_day_and_week_intervals() {
+    // 10:59:59 to 11:00:01 crosses the 11:00 hour boundary even though two seconds passed.
+    assert_eq!(eval("DATEDIFF(TIME(10, 59, 59), TIME(11, 0, 1), HOUR)"), Scalar::Integer(1));
+    assert_eq!(eval("DATEDIFF(TIME(10, 59, 58), TIME(10, 59, 59), SECOND)"), Scalar::Integer(1));
+    assert_eq!(eval("DATEDIFF(TIME(10, 59, 59), TIME(11, 0, 0), MINUTE)"), Scalar::Integer(1));
+    // Exactly one elapsed hour is still one boundary; 59 minutes is none.
+    assert_eq!(eval("DATEDIFF(TIME(10, 0, 0), TIME(11, 0, 0), HOUR)"), Scalar::Integer(1));
+    assert_eq!(eval("DATEDIFF(TIME(10, 0, 0), TIME(10, 59, 59), HOUR)"), Scalar::Integer(0));
+    // Weeks are Sunday-based: 2024-01-01 is a Monday, so the week boundary is the Sunday before it.
+    assert_eq!(eval("DATEDIFF(DATE(2024, 1, 1), DATE(2024, 1, 6), WEEK)"), Scalar::Integer(0));
+    assert_eq!(eval("DATEDIFF(DATE(2024, 1, 1), DATE(2024, 1, 7), WEEK)"), Scalar::Integer(1));
+    // The sign follows Date2 - Date1.
+    assert_eq!(eval("DATEDIFF(TIME(11, 0, 1), TIME(10, 59, 59), HOUR)"), Scalar::Integer(-1));
+}

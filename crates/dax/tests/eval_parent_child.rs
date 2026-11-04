@@ -89,3 +89,71 @@ fn resolves_a_path_column_in_row_context() {
     assert_eq!(value("MAXX(Account, PATHITEMREVERSE(Account[AccountPath], 1, 1))"), Scalar::Decimal(7.0));
     assert_eq!(value("SUMX(Account, PATHITEMREVERSE(Account[AccountPath], 1, 1))"), Scalar::Decimal(15.0));
 }
+
+/// A hierarchy table: id / parent, with the root's parent blank. Rows are appended by each test.
+fn hierarchy(rows: Vec<Vec<Scalar>>) -> DataModel {
+    let mut model = DataModel {
+        tables: vec![ModelTable {
+            name: "Account".into(),
+            columns: vec![
+                ModelColumn { name: "AccountKey".into(), data_type: Some("Int64".into()) },
+                ModelColumn { name: "ParentAccountKey".into(), data_type: Some("Int64".into()) },
+            ],
+            rows,
+        }],
+        relationships: Vec::new(),
+        measures: Vec::new(),
+    };
+    model.parse_formulas().expect("model parses");
+    model
+}
+
+/// Evaluates `src` with `Account[AccountKey] = key`, which gives the row context `PATH` needs.
+fn path_of(rows: Vec<Vec<Scalar>>, key: Scalar) -> Result<Scalar, String> {
+    let model = hierarchy(rows);
+    let evaluator = Evaluator::new(&model).map_err(|error| error.to_string())?;
+    let expr = parse_expression("PATH(Account[AccountKey], Account[ParentAccountKey])").map_err(|error| error.to_string())?;
+    let bound = Binder::new(&model).bind_expression(&expr).map_err(|error| error.to_string())?;
+    let mut filters = gridcraft_dax::FilterContext::default();
+    filters.set(0, 0, [gridcraft_dax::ScalarKey::from(&key)]);
+    evaluator.evaluate_with(&bound, filters).map_err(|error| error.to_string())
+}
+
+/// 1 (root) -> 2 -> 3.
+fn chain() -> Vec<Vec<Scalar>> {
+    vec![vec![Scalar::Integer(1), Scalar::Blank], vec![Scalar::Integer(2), Scalar::Integer(1)], vec![Scalar::Integer(3), Scalar::Integer(2)]]
+}
+
+#[test]
+fn path_walks_the_parent_column_from_the_root_down() {
+    assert_eq!(path_of(chain(), Scalar::Integer(3)), Ok(Scalar::String("1|2|3".into())));
+    assert_eq!(path_of(chain(), Scalar::Integer(2)), Ok(Scalar::String("1|2".into())));
+    // A blank parent ends the chain: the root's path is its own ID.
+    assert_eq!(path_of(chain(), Scalar::Integer(1)), Ok(Scalar::String("1".into())));
+    // A blank ID is BLANK.
+    assert_eq!(path_of(chain(), Scalar::Blank), Ok(Scalar::Blank));
+}
+
+#[test]
+fn path_rejects_broken_hierarchies() {
+    // A cycle: 5 -> 6 -> 5.
+    let cycle = vec![vec![Scalar::Integer(5), Scalar::Integer(6)], vec![Scalar::Integer(6), Scalar::Integer(5)]];
+    assert!(path_of(cycle, Scalar::Integer(5)).expect_err("a cycle is an error").contains("cycle"));
+
+    // A parent that is not an ID of the column.
+    let orphan = vec![vec![Scalar::Integer(5), Scalar::Integer(9)]];
+    assert!(path_of(orphan, Scalar::Integer(5)).expect_err("an unknown parent is an error").contains("not an ID"));
+
+    // An ID containing the separator cannot be represented in a path.
+    let separated = vec![vec![Scalar::String("a|b".into()), Scalar::Blank]];
+    assert!(path_of(separated, Scalar::String("a|b".into())).expect_err("a separator in an ID is an error").contains("separator"));
+
+    // One ID with two different parents is ambiguous.
+    let duplicate = vec![
+        vec![Scalar::Integer(5), Scalar::Integer(6)],
+        vec![Scalar::Integer(5), Scalar::Integer(7)],
+        vec![Scalar::Integer(6), Scalar::Blank],
+        vec![Scalar::Integer(7), Scalar::Blank],
+    ];
+    assert!(path_of(duplicate, Scalar::Integer(5)).expect_err("two parents is an error").contains("more than one parent"));
+}

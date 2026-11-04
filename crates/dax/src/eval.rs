@@ -1746,6 +1746,40 @@ fn find_text(haystack: &str, needle: &str, start: usize, insensitive: bool) -> O
         .map(|position| folded[position].0)
 }
 
+/// `CEILING`/`ISO.CEILING`: the closest multiple of `significance` at or above `value`.
+///
+/// `ISO.CEILING` takes the magnitude of the significance and always rounds up; plain `CEILING`
+/// rejects a positive value with a negative significance and rounds a negative value with a
+/// negative significance away from zero (`CEILING ( -2.5, -2 )` is -4).
+fn ceiling_multiple(value: f64, significance: f64, iso: bool) -> Result<Scalar, EvalError> {
+    if value == 0.0 || significance == 0.0 {
+        return Ok(Scalar::Decimal(0.0));
+    }
+    if iso {
+        let step = significance.abs();
+        return Ok(Scalar::Decimal(round_to((value / step).ceil() * step, 10)));
+    }
+    if value > 0.0 && significance < 0.0 {
+        return Err(EvalError::new("CEILING significance must have the same sign as the number"));
+    }
+    Ok(Scalar::Decimal(round_to((value / significance).ceil() * significance, 10)))
+}
+
+/// `FLOOR`: the closest multiple of `significance` at or below `value`, toward zero, so both
+/// arguments must share a sign (`FLOOR ( 27, 5 )` is 25 and `FLOOR ( -2.7, -1 )` is -2).
+fn floor_multiple(value: f64, significance: f64) -> Result<Scalar, EvalError> {
+    if significance == 0.0 {
+        return Err(EvalError::new("FLOOR significance must not be zero"));
+    }
+    if value == 0.0 {
+        return Ok(Scalar::Decimal(0.0));
+    }
+    if (value > 0.0) != (significance > 0.0) {
+        return Err(EvalError::new("FLOOR number and significance must have the same sign"));
+    }
+    Ok(Scalar::Decimal(round_to((value / significance).floor() * significance, 10)))
+}
+
 fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
     let arg = |index: usize| args.get(index).ok_or_else(|| EvalError::new(format!("{name} is missing argument {}", index + 1)));
     let number = |index: usize| arg(index)?.to_number().ok_or_else(|| EvalError::new(format!("{name} argument {} must be numeric", index + 1)));
@@ -1755,7 +1789,10 @@ fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
         "ROUND" => Ok(Scalar::Decimal(round_to(number(0)?, number(1)? as i32))),
         "ROUNDUP" => Ok(Scalar::Decimal(round_direction(number(0)?, number(1)? as i32, true))),
         "INT" => Ok(Scalar::Integer(number(0)?.floor() as i64)),
-        "TRUNC" => Ok(Scalar::Decimal(number(0)?.trunc())),
+        "TRUNC" => {
+            let digits = if args.len() > 1 { number(1)? as i32 } else { 0 };
+            Ok(Scalar::Decimal(round_direction(number(0)?, digits, false)))
+        }
         "POWER" => Ok(Scalar::Decimal(number(0)?.powf(number(1)?))),
         "SQRT" => Ok(Scalar::Decimal(number(0)?.sqrt())),
         "EXP" => Ok(Scalar::Decimal(number(0)?.exp())),
@@ -1763,8 +1800,16 @@ fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
         "LOG10" => Ok(Scalar::Decimal(number(0)?.log10())),
         "LOG" => Ok(Scalar::Decimal(if args.len() > 1 { number(0)?.log(number(1)?) } else { number(0)?.log10() })),
         "SIGN" => Ok(Scalar::Integer(number(0)?.signum() as i64)),
-        "CEILING" | "ISO.CEILING" => Ok(Scalar::Decimal(number(0)?.ceil())),
-        "FLOOR" => Ok(Scalar::Decimal(number(0)?.floor())),
+        "CEILING" | "ISO.CEILING" => {
+            let value = number(0)?;
+            let significance = if args.len() > 1 { number(1)? } else { 1.0 };
+            ceiling_multiple(value, significance, name.eq_ignore_ascii_case("ISO.CEILING"))
+        }
+        "FLOOR" => {
+            let value = number(0)?;
+            let significance = if args.len() > 1 { number(1)? } else { 1.0 };
+            floor_multiple(value, significance)
+        }
         "DIVIDE" => {
             let (a, b) = (number(0)?, number(1)?);
             if b == 0.0 { Ok(args.get(2).cloned().unwrap_or(Scalar::Blank)) } else { Ok(Scalar::Decimal(a / b)) }
@@ -1850,7 +1895,6 @@ fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
         "SECOND" => Ok(Scalar::Integer((((number(0)?.fract() * 24.0).fract() * 60.0).fract() * 60.0).round() as i64)),
         "EOMONTH" => Ok(Scalar::DateTime(eomonth(number(0)?, number(1)? as i64))),
         "EDATE" => Ok(Scalar::DateTime(edate(number(0)?, number(1)? as i64))),
-        "PATH" => Ok(Scalar::String(format!("{}{}", text(0)?, text(1)?))),
         "PATHLENGTH" => Ok(Scalar::Integer(text(0)?.split('|').count() as i64)),
         "PATHCONTAINS" => {
             let path = text(0)?;

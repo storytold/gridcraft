@@ -390,12 +390,13 @@ cycles. `Evaluator::new` pre-binds the measures and evaluates scalar or table ex
 `FilterContext`; `pivot::pivot` groups a measure by row fields. `dax eval`, `dax bind` and
 `dax pivot` expose the same surfaces through the CLI.
 
-The evaluator implements every catalogued function (484). `storage` is a simple columnar store
-(typed columns, dictionary strings, null bitmaps, relationship indexes), not VertiPaq: the
-evaluator still scans `DataModel` rows and is not wired to `ModelStorage` yet. `model_file` reads
-and writes measures in `xl/model/item.data` (ABF container, plain-LZ77 xpress8 chunks); it does
-not read the VertiPaq table/column segments. Visual-calculation functions use the innermost row
-frame as the visual row and model order as the axis; there is no visual-shape metadata yet.
+The evaluator implements every catalogued function (484). `storage` is a columnar store (typed
+columns, dictionary strings, null bitmaps, relationship indexes). `Evaluator::new` materializes
+it once and uses it for filters, aggregates, `VALUES`/`DISTINCT`, `COUNTROWS` and `RELATED*`
+when `ModelStorage::is_faithful` holds; other models keep the row scan. `model_file` reads and
+writes measures in `xl/model/item.data` (ABF container, xpress8 chunks) and reads/writes the
+supported VertiPaq segment encodings. Visual-calculation functions use the innermost row frame
+as the visual row and model order as the axis; there is no visual-shape metadata yet.
 
 ## Extending in later PRs
 

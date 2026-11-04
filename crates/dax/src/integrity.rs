@@ -378,6 +378,12 @@ impl Occurrence {
 }
 
 fn add_edges(adjacency: &mut BTreeMap<usize, Vec<(usize, usize)>>, facts: &RelationshipFacts) {
+    // An inactive relationship takes no part in the default filter-propagation graph, so it cannot
+    // close a chain: `USERELATIONSHIP` deactivates the other link between the same two tables.
+    // Its own checks (keys, cardinality) still cover it.
+    if facts.inactive {
+        return;
+    }
     // A relationship is one undirected edge, identified by its index. Direction does not matter for
     // a chain: `A -> B` and `B -> A` used together loop exactly like `A -> B -> C -> A`, while a
     // single bidirectional relationship must not be its own cycle, which the edge id handles.
@@ -743,7 +749,9 @@ fn display_key(key: &ScalarKey) -> String {
 
 /// Finds circular relationship chains with an explicit-stack depth-first search.
 ///
-/// Each relationship is one undirected edge carrying its model index, so a chain is a set of
+/// Only active relationships form chains: an inactive one is not part of the default filter
+/// propagation, so an active and an inactive link between the same tables is not a cycle. Each
+/// active relationship is one undirected edge carrying its model index, so a chain is a set of
 /// relationships that leads back to an already-visited table without reusing the edge it arrived
 /// on. That models the two real cases exactly: `A -> B -> C -> A` (three links), two relationships
 /// between the same pair of tables, and a self relationship `T -> T` are chains; a single

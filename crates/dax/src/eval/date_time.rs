@@ -208,14 +208,18 @@ fn datediff(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result
     let interval = values.get(2).ok_or_else(|| EvalError::new("DATEDIFF is missing argument 3"))?.to_text();
     let (start_year, start_month, _) = support::date_parts(start);
     let (end_year, end_month, _) = support::date_parts(end);
-    let elapsed_days = end.floor() - start.floor();
+    // Sub-day intervals count boundaries, not elapsed time: floor each serial to the unit and
+    // subtract, so `10:59:59` to `11:00:01` is one HOUR even though only two seconds passed.
+    let boundaries = |serial: f64, per_day: f64| (serial * per_day).floor();
+    // A week starts on Sunday; serial 1 (1900-01-01) is Excel's first Sunday, so week 0 starts
+    // there and every seven days is another boundary.
+    let week = |serial: f64| (serial.floor() - 1.0).div_euclid(7.0);
     let count = match interval.trim().to_ascii_uppercase().as_str() {
-        "SECOND" => ((end - start) * 86_400.0).trunc(),
-        "MINUTE" => ((end - start) * 1_440.0).trunc(),
-        "HOUR" => ((end - start) * 24.0).trunc(),
-        "DAY" => elapsed_days,
-        // Whole weeks crossed, truncated toward zero so the sign follows Date2 - Date1.
-        "WEEK" => (elapsed_days / 7.0).trunc(),
+        "SECOND" => boundaries(end, 86_400.0) - boundaries(start, 86_400.0),
+        "MINUTE" => boundaries(end, 1_440.0) - boundaries(start, 1_440.0),
+        "HOUR" => boundaries(end, 24.0) - boundaries(start, 24.0),
+        "DAY" => end.floor() - start.floor(),
+        "WEEK" => week(end) - week(start),
         "MONTH" => ((end_year - start_year) * 12 + (end_month - start_month)) as f64,
         "QUARTER" => ((end_year - start_year) * 4 + (end_month - 1) / 3 - (start_month - 1) / 3) as f64,
         "YEAR" => (end_year - start_year) as f64,
