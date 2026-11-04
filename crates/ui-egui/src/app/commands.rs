@@ -17,6 +17,14 @@ impl SheetApp {
     }
 
     pub(super) fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        if id == "ui.accountingFormat" {
+            let code = params.get("code").and_then(Json::as_str).ok_or("accounting format code is required")?;
+            if code.len() > 512 || !(code.starts_with("_(\"") || code.starts_with("_-[")) || code.chars().any(char::is_control) {
+                return Err("unknown accounting format".into());
+            }
+            self.ui.accounting_format = code.to_owned();
+            return self.run_command("home.numberFormat", json!({"code": code}));
+        }
         let switches_window = id.starts_with("window.")
             || matches!(id, "view.newWindow" | "view.hideWindow" | "view.unhideWindow")
             || (id == "view.switchWindows" && ["window", "doc"].iter().any(|k| params.get(*k).is_some_and(|d| !d.is_null())));

@@ -5,7 +5,7 @@ use super::controls::{
 use super::galleries::{cell_style_gallery, table_gallery};
 use super::{
     HAlign, Icon, Key, Modifiers, Rect, SheetApp, Style, Tokens, Ui, VAlign, big_button, color_palette, icon_button, json, keytip_table,
-    small_button, small_split_button, split_button, theme, toggle_button, vec2,
+    small_button, small_split_button, split_button, split_button_symbol, theme, toggle_button, vec2,
 };
 
 /// The Accounting Number Format dropdown: label and the code Excel applies for that symbol.
@@ -328,13 +328,19 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     ui.vertical(|ui| {
         number_combo(app, ui, &st);
         ui.horizontal(|ui| {
-            let (c, ca) = split_button(ui, Icon::Currency, None, "Accounting Number Format");
+            let symbol = ACCOUNTING_SYMBOLS
+                .iter()
+                .find(|(_, code)| *code == app.ui.accounting_format)
+                .and_then(|(label, _)| label.chars().next())
+                .unwrap_or('$');
+            let (c, ca) = split_button_symbol(ui, &symbol.to_string(), "Accounting Number Format");
             control_keytip(app, ui, &ca, "home.accounting");
             if c {
-                act(app, "home.accounting", json!({}));
+                act(app, "home.numberFormat", json!({"code": app.ui.accounting_format.clone()}));
             }
             egui::Popup::menu(&ca).show(|ui| {
-                let mut items: Vec<_> = ACCOUNTING_SYMBOLS.iter().map(|(label, code)| (*label, "home.numberFormat", json!({"code": code}))).collect();
+                let mut items: Vec<_> =
+                    ACCOUNTING_SYMBOLS.iter().map(|(label, code)| (*label, "ui.accountingFormat", json!({"code": code}))).collect();
                 items.push(("-", "", json!(null)));
                 items.push(("More Accounting Formats…", "dialog:formatCells", json!({"tab": "Number"})));
                 menu_items(app, ui, &items);
