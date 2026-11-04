@@ -1471,7 +1471,9 @@ pub fn make_way(s: &mut Session, b: &Begun) -> Result<(Machine, bool)> {
 pub fn run(s: &mut Session, name: &str, p: &Json) -> Result<Json> {
     let b = begin(s, name, p)?;
     let label = format!("Run Macro: {}", b.mac.name);
-    s.grouped(&label, |s| {
+    // Undo groups restore the workbook, but not application preferences.
+    let prefs = s.prefs.clone();
+    let result = s.grouped(&label, |s| {
         let (mut machine, shifted) = make_way(s, &b)?;
         let name = &b.mac.name;
         // `ran` counts the run's own steps; the budget also holds the dry runs'.
@@ -1490,7 +1492,11 @@ pub fn run(s: &mut Session, name: &str, p: &Json) -> Result<Json> {
                 Ok(out)
             }
         }
-    })
+    });
+    if result.is_err() {
+        s.prefs = prefs;
+    }
+    result
 }
 
 /// Refuses run parameters that would otherwise be ignored: an input the macro doesn't have, an
