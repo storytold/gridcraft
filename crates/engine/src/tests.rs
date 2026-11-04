@@ -331,6 +331,41 @@ fn undo_redo() {
 }
 
 #[test]
+fn identical_cell_entry_keeps_history_and_redo() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    let undo_len = s.doc().unwrap().undo.len();
+    let revision = s.doc().unwrap().revision;
+    let wb = s.doc().unwrap().wb.clone();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    // The workbook is the same `Arc`, so a saved workbook stays clean (`is_dirty` compares pointers).
+    assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &wb));
+    assert_eq!(s.doc().unwrap().undo.len(), undo_len);
+    assert_eq!(s.doc().unwrap().redo.len(), 1);
+    assert_eq!(s.doc().unwrap().revision, revision);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(2.0));
+}
+
+#[test]
+fn identical_text_entry_is_a_noop_but_a_formula_is_not() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "B1", "input": "hello"})).unwrap();
+    let undo_len = s.doc().unwrap().undo.len();
+    let wb = s.doc().unwrap().wb.clone();
+    s.execute("cell.set", json!({"cell": "B1", "input": "hello"})).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &wb));
+    assert_eq!(s.doc().unwrap().undo.len(), undo_len);
+    // A formula is always re-entered, so volatile functions recalculate.
+    s.execute("cell.set", json!({"cell": "B2", "input": "=1+1"})).unwrap();
+    let undo_len = s.doc().unwrap().undo.len();
+    s.execute("cell.set", json!({"cell": "B2", "input": "=1+1"})).unwrap();
+    assert_eq!(s.doc().unwrap().undo.len(), undo_len + 1);
+}
+
+#[test]
 fn redo_selects_the_redone_cell() {
     // #1855: type into A1..A3, click A1, undo, redo: the selection follows the edit to A3.
     let mut s = s();
