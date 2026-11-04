@@ -224,10 +224,7 @@ pub fn catalog() -> &'static [Face] {
     CATALOG.get_or_init(|| scan_dirs(&system_font_dirs()))
 }
 
-/// The catalog if the scan has finished, else `None` — never blocks, for use while painting.
-fn catalog_now() -> Option<&'static [Face]> {
-    CATALOG.get().map(Vec::as_slice)
-}
+
 
 /// Start cataloging the installed fonts on a background thread, so the first frame doesn't wait for
 /// it. A no-op on wasm and after the scan has started.
@@ -252,7 +249,7 @@ pub fn scan_done() -> bool {
 /// The faces of one installed family, by any of its names, regular-weight first (the order roles
 /// pick from).
 pub fn faces_of(family: &str) -> Vec<Face> {
-    catalog_now().map(|cat| faces_named(cat, family)).unwrap_or_default()
+    faces_named(catalog(), family)
 }
 
 /// The faces in `cat` that go by `wanted`. When two families claim one name the winner is fixed,
@@ -278,7 +275,7 @@ fn faces_named(cat: &[Face], wanted: &str) -> Vec<Face> {
 /// [`cell_family`](crate::theme::cell_family) looks up, so `맑은 고딕` binds as `맑은 고딕`, not as
 /// the catalog's `Malgun Gothic`.
 pub fn installed_among(names: &[String]) -> Vec<String> {
-    catalog_now().map(|cat| installed_in(cat, names)).unwrap_or_default()
+    installed_in(catalog(), names)
 }
 
 /// [`installed_among`] over a given catalog. Names dedupe exactly, not case-folded: a role key is
@@ -301,7 +298,7 @@ fn installed_in(cat: &[Face], names: &[String]) -> Vec<String> {
 /// background scan finishes it returns just the standard names.
 pub fn families() -> Vec<String> {
     let mut out: Vec<String> = crate::ribbon::FONTS.iter().map(|s| s.to_string()).collect();
-    let Some(cat) = catalog_now() else { return out };
+    let cat = catalog();
     let mut seen: HashSet<String> = out.iter().map(|s| s.to_lowercase()).collect();
     let mut installed: Vec<String> = cat.iter().map(|f| f.family.clone()).collect();
     installed.sort_by_key(|a| a.to_lowercase());
@@ -646,7 +643,8 @@ mod tests {
     #[test]
     fn registry_fonts_are_scanned() {
         let cat = catalog();
-        println!("REGISTRY SCAN: found {} faces across {} families", cat.len(), families().len());
+        let fams = families();
+        println!("REGISTRY SCAN: found {} faces across {} families: {fams:?}", cat.len(), fams.len());
         assert!(!cat.is_empty());
     }
 }
