@@ -124,10 +124,8 @@ fn contains(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result
             .and_then(|model_table| model_table.columns.get(column_index))
             .map(|column| column.name.clone())
             .ok_or_else(|| EvalError::new("CONTAINS column is out of range"))?;
-        let position = match table.lineage {
-            Some(lineage) if lineage == table_index => column_index,
-            _ => table.column_index(&column_name).ok_or_else(|| EvalError::new(format!("CONTAINS table has no column `{column_name}`")))?,
-        };
+        // A projection keeps the lineage but not the model layout: resolve by name, always.
+        let position = table.column_index(&column_name).ok_or_else(|| EvalError::new(format!("CONTAINS table has no column `{column_name}`")))?;
         let expected = ev.eval(&pair[1], ctx)?;
         conditions.push((position, expected));
     }

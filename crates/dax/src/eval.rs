@@ -1077,7 +1077,14 @@ impl<'a> Evaluator<'a> {
                         Some(BoundExpr::Keyword(word)) if word.eq_ignore_ascii_case("ASC") => false,
                         Some(BoundExpr::Keyword(word)) if word.eq_ignore_ascii_case("DESC") => true,
                         None => true,
-                        Some(_) => return Err(EvalError::new("TOPN order must be ASC or DESC")),
+                        // The catalog also accepts 0/FALSE (descending) and 1/TRUE (ascending).
+                        Some(expr) => match self.eval(expr, ctx)? {
+                            Scalar::Boolean(flag) => !flag,
+                            other => match other.to_number() {
+                                Some(number) => number == 0.0,
+                                None => return Err(EvalError::new("TOPN order must be ASC, DESC, 0 or 1")),
+                            },
+                        },
                     };
                     pairs.push((expr, descending));
                     index += 2;

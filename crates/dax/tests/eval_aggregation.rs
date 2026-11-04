@@ -51,8 +51,8 @@ fn averagea_counts_text_booleans_and_blanks() {
     assert_eq!(value("AVERAGEA(Sales[Amount])"), Scalar::Decimal(17.5));
     // TRUE = 1, FALSE = 0: (1 + 0 + 1 + 0) / 4.
     assert_eq!(value("AVERAGEA(Sales[Flag])"), Scalar::Decimal(0.5));
-    // "5" = 5, "" = 0, "abc" = 0, "7" = 7.
-    assert_eq!(value("AVERAGEA(Sales[Note])"), Scalar::Decimal(3.0));
+    // Any text counts as 0, numeric or not: "5", "", "abc" and "7" all contribute 0.
+    assert_eq!(value("AVERAGEA(Sales[Note])"), Scalar::Decimal(0.0));
     // A column with rows but only BLANK cells averages 0, not BLANK.
     assert_eq!(value("AVERAGEA(Sales[Empty])"), Scalar::Decimal(0.0));
 }

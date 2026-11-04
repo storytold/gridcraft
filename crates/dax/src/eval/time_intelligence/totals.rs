@@ -127,12 +127,16 @@ fn non_blank_value(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut
     if args.len() != 2 {
         return Err(EvalError::new(format!("{name} expects 2 arguments")));
     }
+    // CALCULATE sugar, like `TOTAL*`: the row context transitions to filters first, and the
+    // expression runs with no row frames so a measure argument cannot re-transition the candidate
+    // filter away.
+    let base = ev.transitioned_filters(ctx);
     let (table, column) = column_reference(ev, &args[0])?;
-    let source = ev.table(table, &ctx.filters);
+    let source = ev.table(table, &base);
     let values = source.column(column);
     let keys: BTreeSet<ScalarKey> = values.iter().filter(|value| !value.is_blank()).map(ScalarKey::from).collect();
     let ordered: Vec<ScalarKey> = if first { keys.into_iter().collect() } else { keys.into_iter().rev().collect() };
-    let mut inner = Context { filters: ctx.filters.clone(), rows: ctx.rows.clone(), vars: ctx.vars.clone() };
+    let mut inner = Context { filters: base, rows: Vec::new(), vars: ctx.vars.clone() };
     for key in ordered {
         inner.filters.set(table, column, [key]);
         let value = ev.eval(&args[1], &mut inner)?;

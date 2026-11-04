@@ -170,10 +170,12 @@ pub fn decode_bitpacked(payload: &[u8], first: usize, count: usize, width: u32, 
         let shift = (value_index % per_word) * usize::try_from(width).map_err(|_| ModelFileError::Corrupt("bit width".into()))?;
         let packed = (word >> shift) & mask;
         let value = i64::try_from(packed).map_err(|_| ModelFileError::TooLarge)? + i64::from(min);
-        if !(-MAX_ID..=MAX_ID).contains(&value) {
+        // The decoder yields `u32` ids, so a negative value (a `min` below zero) is corrupt rather
+        // than something to wrap with an `as` cast.
+        if !(0..=MAX_ID).contains(&value) {
             return Err(ModelFileError::Corrupt("packed id overflows".into()));
         }
-        values.push(value as u32);
+        values.push(u32::try_from(value).map_err(|_| ModelFileError::Corrupt("packed id overflows".into()))?);
     }
     Ok(values)
 }

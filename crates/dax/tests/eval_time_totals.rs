@@ -4,36 +4,17 @@ use gridcraft_dax::model::{DataModel, Measure, ModelColumn, ModelTable, Relation
 use gridcraft_dax::value::{Scalar, ScalarKey};
 use gridcraft_dax::{BoundExpr, Evaluator, FilterContext, Literal, lookup};
 
-/// Excel/OLE date serial for a whole day (the same algorithm the evaluator uses).
-fn serial(year: i64, month: i64, day: i64) -> f64 {
-    let mut y = year;
-    let mut m = month;
-    y += (m - 1).div_euclid(12);
-    m = (m - 1).rem_euclid(12) + 1;
-    if m <= 2 {
-        y -= 1;
-        m += 12;
-    }
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let mp = (m + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    (era * 146097 + doe - 719468 + 25569) as f64
+/// The calendar date of a whole-day Excel/OLE serial, via `chrono`.
+fn date_of(value: f64) -> chrono::NaiveDate {
+    let epoch = chrono::NaiveDate::from_ymd_opt(1899, 12, 30).expect("the Excel epoch is a valid date");
+    epoch + chrono::Duration::days(value.floor() as i64)
 }
 
-fn parts(value: f64) -> (i64, i64, i64) {
-    let days = value.floor() as i64;
-    let z = days - 25569 + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (y + i64::from(m <= 2), m, d)
+/// Excel/OLE date serial for a whole day, computed with `chrono`.
+fn serial(year: i64, month: i64, day: i64) -> f64 {
+    let epoch = chrono::NaiveDate::from_ymd_opt(1899, 12, 30).expect("the Excel epoch is a valid date");
+    let date = chrono::NaiveDate::from_ymd_opt(year as i32, month as u32, day as u32).expect("the fixture date is valid");
+    (date - epoch).num_days() as f64
 }
 
 fn date(year: i64, month: i64, day: i64) -> Scalar {
@@ -43,22 +24,24 @@ fn date(year: i64, month: i64, day: i64) -> Scalar {
 /// The fixture shared with the worksheet/measure cases: Sales facts for 2023-2024 and a
 /// contiguous Date table covering both years.
 fn model() -> DataModel {
-    let mut date_rows = Vec::new();
-    let mut day = serial(2023, 1, 1);
-    let end = serial(2024, 12, 31);
-    while day <= end {
-        let (year, month, _) = parts(day);
-        let weekday = (day.floor() as i64).rem_euclid(7);
-        let weekday = if weekday == 0 { 7 } else { weekday };
-        date_rows.push(vec![
-            Scalar::DateTime(day),
-            Scalar::Integer(year),
-            Scalar::Integer((month - 1) / 3 + 1),
-            Scalar::Integer(month),
-            Scalar::Integer(weekday),
-        ]);
-        day += 1.0;
-    }
+    use chrono::Datelike;
+    let start = date_of(serial(2023, 1, 1));
+    let end = date_of(serial(2024, 12, 31));
+    let date_rows: Vec<Vec<Scalar>> = start
+        .iter_days()
+        .take_while(|date| *date <= end)
+        .map(|date| {
+            // Excel's weekday numbering is 1 = Sunday, matching the evaluator's WEEKDAY default.
+            let (year, month) = (i64::from(date.year()), i64::from(date.month()));
+            vec![
+                Scalar::DateTime(serial(year, month, i64::from(date.day()))),
+                Scalar::Integer(year),
+                Scalar::Integer((month - 1) / 3 + 1),
+                Scalar::Integer(month),
+                Scalar::Integer(i64::from(date.weekday().num_days_from_sunday()) + 1),
+            ]
+        })
+        .collect();
 
     let mut model = DataModel {
         tables: vec![

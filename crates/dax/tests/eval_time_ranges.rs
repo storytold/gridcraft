@@ -14,45 +14,30 @@ const YEAR_COLUMN: usize = 1;
 const SALES_TABLE: usize = 1;
 const AMOUNT_COLUMN: usize = 1;
 
-fn days_in_month(year: i64, month: i64) -> i64 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 => 29,
-        2 => 28,
-        _ => 30,
-    }
-}
-
-/// Excel/OLE date serial, computed independently of the evaluator.
+/// Excel/OLE date serial, computed with `chrono` independently of the evaluator.
 fn serial(year: i64, month: i64, day: i64) -> f64 {
-    let mut y = year;
-    if month <= 2 {
-        y -= 1;
-    }
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let mp = if month > 2 { month - 3 } else { month + 9 };
-    let doy = (153 * mp + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    (era * 146097 + doe - 719468 + 25569) as f64
+    let epoch = chrono::NaiveDate::from_ymd_opt(1899, 12, 30).expect("the Excel epoch is a valid date");
+    let date = chrono::NaiveDate::from_ymd_opt(year as i32, month as u32, day as u32).expect("the fixture date is valid");
+    (date - epoch).num_days() as f64
 }
 
 fn date_rows() -> Vec<Vec<Scalar>> {
-    let mut rows = Vec::new();
-    for year in 2022..=2025 {
-        for month in 1..=12 {
-            for day in 1..=days_in_month(year, month) {
-                rows.push(vec![
-                    Scalar::DateTime(serial(year, month, day)),
-                    Scalar::Integer(year),
-                    Scalar::Integer((month - 1) / 3 + 1),
-                    Scalar::Integer(month),
-                ]);
-            }
-        }
-    }
-    rows
+    use chrono::Datelike;
+    let start = chrono::NaiveDate::from_ymd_opt(2022, 1, 1).expect("the fixture start is a valid date");
+    let end = chrono::NaiveDate::from_ymd_opt(2025, 12, 31).expect("the fixture end is a valid date");
+    start
+        .iter_days()
+        .take_while(|date| *date <= end)
+        .map(|date| {
+            let (year, month) = (i64::from(date.year()), i64::from(date.month()));
+            vec![
+                Scalar::DateTime(serial(year, month, i64::from(date.day()))),
+                Scalar::Integer(year),
+                Scalar::Integer((month - 1) / 3 + 1),
+                Scalar::Integer(month),
+            ]
+        })
+        .collect()
 }
 
 /// (year, month, day, amount) for every sales row.
