@@ -293,6 +293,15 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             ] {
                 v.push(json!({"id": id, "label": label, "params": params, "enabled": true, "ui": true}));
             }
+            let can_start_or_join = !app.sync.is_busy() && app.sync.status() == crate::sync::ShareStatus::Offline;
+            let can_stop = !app.sync.is_busy() && app.sync.status() != crate::sync::ShareStatus::Offline;
+            for (id, label, params, enabled) in [
+                ("share.start", "Share Document", "", can_start_or_join),
+                ("share.join", "Join Shared Session", "{ticket: string}", can_start_or_join),
+                ("share.stop", "Stop Sharing / Leave Session", "", can_stop),
+            ] {
+                v.push(json!({"id": id, "label": label, "params": params, "enabled": enabled, "ui": true}));
+            }
             ok(Json::Array(filter_commands(v, s("search"))))
         }
         "engine.journal" => ok(json!(app.session.journal.iter().map(|(id, p)| json!({"command": id, "params": p})).collect::<Vec<_>>())),

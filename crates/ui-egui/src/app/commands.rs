@@ -56,7 +56,7 @@ impl SheetApp {
         }
         let before = self.session.active_window();
         let zoom_from = matches!(id, "view.zoom" | "view.zoom100" | "view.zoomToSelection").then(|| crate::grid::Trace::key(self));
-        let r = self.session.run(id, params);
+        let r = self.run_engine_synced(id, params);
         if let Some(from) = zoom_from {
             crate::grid::Trace::keep_through_zoom(self, from);
         }
@@ -291,6 +291,26 @@ impl SheetApp {
             "ui.notice.dismiss" => {
                 self.notice = None;
                 Ok(Json::Null)
+            }
+            "share.start" => {
+                if self.sync.is_busy() || self.sync.status() != crate::sync::ShareStatus::Offline {
+                    return Some(Err("command `share.start` is not available right now".into()));
+                }
+                self.start_sharing().map(|()| json!({"status": "starting"}))
+            }
+            "share.join" => {
+                if self.sync.is_busy() || self.sync.status() != crate::sync::ShareStatus::Offline {
+                    return Some(Err("command `share.join` is not available right now".into()));
+                }
+                let ticket = p.get("ticket").and_then(Json::as_str).map(str::to_string).unwrap_or_else(|| self.sync.join_input.clone());
+                self.start_joining(ticket).map(|()| json!({"status": "joining"}))
+            }
+            "share.stop" => {
+                if self.sync.is_busy() || self.sync.status() == crate::sync::ShareStatus::Offline {
+                    return Some(Err("command `share.stop` is not available right now".into()));
+                }
+                self.stop_sharing();
+                Ok(json!({"status": "stopping"}))
             }
             _ => return None,
         };

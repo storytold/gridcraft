@@ -24,6 +24,10 @@ pub(crate) fn editor_id() -> egui::Id {
 
 impl SheetApp {
     pub fn begin_text_box_edit(&mut self, id: u32) -> bool {
+        if !self.local_editing_allowed() {
+            self.notify_view_only_refused();
+            return false;
+        }
         if !self.commit_edit(0, 0, false, false) {
             return false;
         }
@@ -65,7 +69,7 @@ impl SheetApp {
             Ok(())
         } else {
             // Call the engine directly: app.run flushes this draft before saving/switching.
-            self.session.run("shape.setText", json!({"id": ed.id, "text": ed.text})).map(|_| ())
+            self.run_engine_synced("shape.setText", json!({"id": ed.id, "text": ed.text})).map(|_| ())
         };
         match result {
             Ok(()) => {

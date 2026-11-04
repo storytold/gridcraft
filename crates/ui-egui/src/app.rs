@@ -85,6 +85,7 @@ impl SheetApp {
             arrange_windows: None,
             #[cfg(not(target_arch = "wasm32"))]
             updates_rt: Default::default(),
+            sync: Default::default(),
         }
     }
 
@@ -138,6 +139,7 @@ impl SheetApp {
         self.guard_window_close(ctx);
         #[cfg(not(target_arch = "wasm32"))]
         updates_ui::tick(self, ctx);
+        self.poll_sync(ctx);
         // Files read asynchronously (web file picker, dropped files).
         self.poll_async_opens();
         self.autosave(ctx);

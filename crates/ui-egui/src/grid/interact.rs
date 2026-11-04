@@ -648,7 +648,7 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 } else {
                     RangeRef::cols(col, col).a1()
                 };
-                let _ = app.session.run("home.columnWidth", json!({"cols": cols, "width": w.round()}));
+                let _ = app.run_engine_synced("home.columnWidth", json!({"cols": cols, "width": w.round()}));
                 coalesce_last_undo(app);
             }
             Drag::ResizeRow { row, start, orig } => {
@@ -664,7 +664,7 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 } else {
                     format!("{}:{}", row + 1, row + 1)
                 };
-                let _ = app.session.run("home.rowHeight", json!({"rows": rows, "height": h.round()}));
+                let _ = app.run_engine_synced("home.rowHeight", json!({"rows": rows, "height": h.round()}));
                 coalesce_last_undo(app);
             }
             Drag::Freeze { cols, .. } => {
@@ -1057,7 +1057,7 @@ fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
         p.insert("height".into(), json!(y1 - y0));
     }
     let revision = app.session.active().map(|d| d.revision);
-    let _ = app.session.run("object.move", params);
+    let _ = app.run_engine_synced("object.move", params);
     if stepped {
         coalesce_last_undo(app);
     } else if app.session.active().map(|d| d.revision) != revision

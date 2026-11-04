@@ -49,6 +49,7 @@ pub mod pivot_pane;
 pub mod printing;
 pub mod ribbon;
 pub mod selection_glide;
+pub mod sync;
 pub mod tabs;
 pub mod text_box;
 pub mod theme;
@@ -320,6 +321,8 @@ pub struct SheetApp {
     /// The update check, the startup prompt and a running self-update (desktop only).
     #[cfg(not(target_arch = "wasm32"))]
     updates_rt: updates_ui::Runtime,
+    /// Zero-server P2P collaboration ("Share Mode") state.
+    pub sync: sync::SyncState,
 }
 
 /// Strips the engine's error prefixes for message boxes.
