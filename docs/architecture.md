@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-02 · **Change:** minor (Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros; earlier: recorded scripts restore the Ink to Shape mode they were recorded with, on or off) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-04 · **Change:** trivial (the saved Ink to Shape mode is a first step for recordings that contain strokes; earlier: minor (Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros; earlier: recorded scripts restore the Ink to Shape mode they were recorded with, on or off)) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -127,8 +127,9 @@ Actions made of many commands (macros, a debugger that runs one step per call) u
   of it opened a dialog is recorded), and the buffer is independent of the journal
   (Automate › Record Actions still records through the journal). Because Draw ▸ Ink to Shape is
   state rather than a step, Record Actions saves the mode it started with as the script's first
-  step, on or off, so the recorded strokes are converted — or left as ink — the same way when the
-  script is played back.
+  step, on or off, when the recording contains strokes, so the recorded strokes are converted — or
+  left as ink — the same way when the script is played back; a recording with no stroke saves no
+  mode step, since the mode alone would only change the session.
 - **Document trust.** `DocState::trust` is `Local` for workbooks made in the session and
   `FromFile` for workbooks opened from a file. `Trust` has no default: `DocState::new` takes it,
   so every way of making a document says where its content came from. It is also `FromFile` for
@@ -239,6 +240,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | trivial | The saved Ink to Shape mode is stated as a step for recordings that contain strokes; a recording without a stroke saves no mode step |
 
 | 2026-11-02 | minor | Python mode in the formula bar: Python mode on the shared editor, `code_field` and its stop keys; drafts follow their sheet by `model::SheetUid` |
 | 2026-11-02 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references; edits that would push code past the limit are refused |
