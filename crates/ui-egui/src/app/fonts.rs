@@ -50,27 +50,30 @@ impl SheetApp {
     }
 
     /// Applies the font gates: a language Han-order change, startup/prepared fonts and workbook
-    /// font binding. Every branch keeps its one-frame paint gate.
-    pub(super) fn apply_font_state(&mut self, ctx: &egui::Context) {
-        // A pending synthetic step owns the next real `ui` pass: `ui` returns at the font gate
-        // before it handles input, so a font change requested now would consume the step without
-        // applying it. Delay the change one frame; the hidden-paint request keeps it coming.
-        let defer_font_change = self.synthetic_pending || !self.synthetic.is_empty();
-        if !defer_font_change && self.fonts_han.is_some_and(|han| han != theme::HanOrder::of(self.ui.language)) {
-            self.fonts_ready = false;
-            self.fonts_set = false;
+        /// font binding. Every branch keeps its one-frame paint gate.
+        pub(super) fn apply_font_state(&mut self, ctx: &egui::Context) {
+            // A pending synthetic step owns the next real `ui` pass: `ui` returns at the font gate
+            // before it handles input, so a font change requested now would consume the step without
+            // applying it. Delay the change one frame; the hidden-paint request keeps it coming.
+            let defer_font_change = self.synthetic_pending || !self.synthetic.is_empty();
+            if !defer_font_change && self.fonts_han.is_some_and(|han| han != theme::HanOrder::of(self.ui.language)) {
+                self.fonts_ready = false;
+                self.fonts_set = false;
+            }
+            if !self.fonts_ready {
+                self.start_font_setup(ctx);
+            } else if self.fonts_rebind {
+                // A font-set change made last frame is active now.
+                self.fonts_rebind = false;
+            } else if !defer_font_change && !self.prepared_fonts && fonts::scan_done() {
+                self.rebind_workbook_fonts(ctx);
+                // Ensure a repaint so the font dropdown updates with newly scanned families
+                // even when no workbook fonts need rebinding.
+                ctx.request_repaint();
+            }
         }
-        if !self.fonts_ready {
-            self.start_font_setup(ctx);
-        } else if self.fonts_rebind {
-            // A font-set change made last frame is active now.
-            self.fonts_rebind = false;
-        } else if !defer_font_change && !self.prepared_fonts && fonts::scan_done() {
-            self.rebind_workbook_fonts(ctx);
-        }
-    }
 
-    /// Applies the pending font set. New fonts apply from the next frame on: paint nothing until
+        /// Applies the pending font set. New fonts apply from the next frame on: paint nothing until
     /// then. Startup always proceeds: without it a queued step would be re-offered forever.
     fn start_font_setup(&mut self, ctx: &egui::Context) {
         if self.fonts_set {
