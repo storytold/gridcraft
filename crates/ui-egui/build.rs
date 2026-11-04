@@ -83,7 +83,14 @@ fn craft_fonts(dir: &std::path::Path, wasm: bool, required: bool) -> Result<Stri
         let real = path.canonicalize().map_err(|e| format!("{}: {e}", path.display()))?;
         if real.starts_with(&root) { Ok(real) } else { Err(format!("{} is outside the craft-fonts checkout {}", path.display(), root.display())) }
     };
-    let manifest = inside(dir.join("fonts/manifest.txt"))?;
+    // Registered before validation, by the path as given (and its folder, to see the manifest appear
+    // or a symlink replaced): a build that skipped the fonts must rebuild once they are there.
+    let manifest_path = dir.join("fonts/manifest.txt");
+    println!("cargo::rerun-if-changed={}", manifest_path.display());
+    if let Some(parent) = manifest_path.parent() {
+        println!("cargo::rerun-if-changed={}", parent.display());
+    }
+    let manifest = inside(manifest_path)?;
     println!("cargo::rerun-if-changed={}", manifest.display());
     let text = std::fs::read_to_string(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
     let rows = craft_fonts_policy::parse_manifest(&text)?;
@@ -119,10 +126,6 @@ fn craft_fonts(dir: &std::path::Path, wasm: bool, required: bool) -> Result<Stri
 fn chinese_font_rows(dir: &std::path::Path, required: bool) -> Result<Vec<craft_fonts_policy::ManifestRow>, String> {
     let manifest = dir.join("fonts/simplified-chinese-manifest.txt");
     println!("cargo::rerun-if-changed={}", manifest.display());
-    // `dir` is the canonical checkout: the manifest itself must not lead out of it either.
-    if manifest.canonicalize().is_ok_and(|real| !real.starts_with(dir)) {
-        return Err(format!("{} is outside the craft-fonts checkout", manifest.display()));
-    }
     let optional = |e: String| -> Result<Vec<craft_fonts_policy::ManifestRow>, String> {
         if required {
             Err(format!("{}: {e}", manifest.display()))
@@ -131,6 +134,10 @@ fn chinese_font_rows(dir: &std::path::Path, required: bool) -> Result<Vec<craft_
             Ok(Vec::new())
         }
     };
+    // `dir` is the canonical checkout: the manifest itself must not lead out of it either.
+    if manifest.canonicalize().is_ok_and(|real| !real.starts_with(dir)) {
+        return optional(format!("{} is outside the craft-fonts checkout", manifest.display()));
+    }
     match std::fs::read_to_string(&manifest) {
         Ok(text) => match craft_fonts_policy::parse_manifest(&text).and_then(|rows| {
             craft_fonts_policy::check_declared_scripts(&rows)?;
