@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-02 · **Change:** minor (insert objects: equations; earlier: what-if and analysis: Solver Sensitivity report; no score change; earlier: chart resizing no longer listed as missing; no score change; earlier: what-if and analysis: Analysis ToolPak has all 19 tools; earlier: page layout and print: Page Setup's page order; no score change; earlier: charts: data tables with XLSX round-trip and print/PDF; no score change; earlier: what-if and analysis: Solver Options; the Insert Function dialog is named as in Excel; no score change; earlier: Solver Load/Save Model and Reset All; automation: macro interface; catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-03 · **Change:** minor (Review › Check Performance, Excel's Workbook Performance pane: cells used and optimizable blank formatted cells per sheet, Optimize all/sheet; earlier: insert objects: equations; earlier: what-if and analysis: Solver Sensitivity report; no score change; earlier: chart resizing no longer listed as missing; no score change; earlier: what-if and analysis: Analysis ToolPak has all 19 tools; earlier: page layout and print: Page Setup's page order; no score change; earlier: charts: data tables with XLSX round-trip and print/PDF; no score change; earlier: what-if and analysis: Solver Options; the Insert Function dialog is named as in Excel; no score change; earlier: Solver Load/Save Model and Reset All; automation: macro interface; catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -13,7 +13,7 @@ generated ribbon checklist is [`parity-checklist.md`](parity-checklist.md).
 | Number | Value | Kind |
 |---|---|---|
 | Feature breadth (weighted by use) | **~75%** | estimated from the area table below; anchored on two measurements |
-| Ribbon and menu catalog | **277 / 292 (94.9%)** | measured: `cargo xtask parity` (`crates/engine/src/catalog.rs` ∩ registered command ids) |
+| Ribbon and menu catalog | **278 / 293 (94.9%)** | measured: `cargo xtask parity` (`crates/engine/src/catalog.rs` ∩ registered command ids) |
 | Worksheet functions, by name | **513 / 523 (98.1%)** | measured: registered functions vs Microsoft's published function list (method below) |
 | Worksheet functions that do real work | **504 / 523 (96.4%)** | measured: excludes 9 stubs (7 CUBE functions, WEBSERVICE, FILTERXML) |
 | **Ready for real work** | **~50%** | estimated; written weights below (51.6 computed) |
@@ -54,7 +54,7 @@ long `.xls` track, so about half parallelizes (≈30–50 wall-clock hours with 
   COPILOT and PY: **523 functions**. Ours: every `f!(…)` spec in `crates/functions/src/*.rs` plus
   `SPECIAL_FUNCTIONS` in `crates/calc/src/eval.rs` (evaluator special forms), minus the test-only
   `ADD2`: **505**, all of them Excel names.
-- **Ribbon catalog:** `crates/engine/src/catalog.rs` (292 unique ids across 15 tabs) against the
+- **Ribbon catalog:** `crates/engine/src/catalog.rs` (293 unique ids across 15 tabs) against the
   313 command ids registered in `crates/engine/src/cmd/*.rs`, recomputed from source by script and
   identical to the committed `parity-checklist.md`. The catalog is our own transcription of
   Excel's main ribbon tabs; it leaves out most contextual tabs (Picture Format, Shape Format,
@@ -92,7 +92,7 @@ performance 8, stability 8, localization 4, hardware 2, platforms 2, ecosystem 2
 | What-if and analysis | 4 | ~50% | ~40% | 22–35 | Goal Seek, Scenario Manager, data tables, Analysis ToolPak (all 19 tools, no charts), Solver (Simplex LP, a local nonlinear method and Evolutionary; Answer, Sensitivity and Limits reports; Load/Save Model, Reset All and Solver Options; no Population report), Forecast Sheet. Missing: Analyze Data |
 | Get & Transform, external data, data model | 5 | ~15% | ~10% | 60–100 | Import of CSV/TSV, JSON, HTML. No Power Query editor, no From Web, database or folder sources, no connections or refresh, no relationships or data model, no external workbook links (dropped with a warning) |
 | Insert objects | 3 | ~55% | ~45% | 25–40 | Pictures, 8 shape kinds (Excel has ~170), text boxes, own icon set, ink with Ink to Shape, hyperlinks, checkboxes, equations (LaTeX with a live preview, Office Math in xlsx, Symbol font in PDF). Missing: SmartArt, WordArt, signature line, objects, 3-D models, screenshot, pictures in cells (PR #105) |
-| Review, comments, protection, collaboration | 4 | ~55% | ~40% | 35–55 | Threaded comments, notes, spelling (system dictionary), thesaurus, sheet and workbook protection, Allow Edit Ranges with Excel-compatible password hashes (#307). Missing: comment navigation, Show Changes, notes-to-comments conversion, accessibility checker, co-authoring, opening password-encrypted files (refused with a message since #17) |
+| Review, comments, protection, collaboration | 4 | ~55% | ~40% | 35–55 | Threaded comments and notes with navigation, Show Comments/Show All Notes, Convert to Comments, spelling (system dictionary), thesaurus, sheet and workbook protection, Allow Edit Ranges with Excel-compatible password hashes (#307), Check Accessibility and Check Performance (Workbook Performance: used and optimizable cells per sheet, Optimize all/sheet, without clearing cells covered by conditional formatting or tables; an opt-in `review.auditCalculation` extension reports volatile, full column/row, whole-table and oversized references). Missing: Show Changes, co-authoring, real-time collaboration |
 | Automation | 4 | ~30% | ~20% | 12–20 | Recorded, editable GridCraft scripts (Automate tab). Typed macros in the engine (`macro.*`: recorder, runner with input checks and a footprint dry run, debugger; [macros.md](macros.md)), recorded from Automate › Macros, edited and debugged in a step editor, and run from the Macros dialog or a Ctrl+Shift shortcut. VBA is out of scope by owner decision: an `.xlsm` keeps its VBA project unchanged on save and never runs it. No Office Scripts compatibility |
 | **Weighted** | 100 | **~75%** | **~59%** | **300–485** | |
 
@@ -346,6 +346,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 | 2026-10-25 | minor | Automation: macro interface (Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts) (no score change) |
 | 2026-10-25 | trivial | Catalog count 276 / 292 in the summary table and the method, as `cargo xtask parity` measures (no score change) |
 | 2026-10-22 | minor | Several windows on the desktop: a native window per workbook window, New Window on the same workbook, Switch Windows and Arrange All; "one window" removed from UI/UX fidelity, Hardware and the interaction-fidelity discount; no score change |
+| 2026-10-21 | minor | Review › Check Performance (Workbook Performance cleanup pane, plus opt-in calculation-audit extension); catalog 277 → 278 / 292 → 293, no score change |
 | 2026-10-21 | minor | Page Setup paper sizes: `B4`/`B5`/`B6` are the JIS sizes Japanese Excel uses (ISO B4/B5/B6 by name), and Japanese Postcard, Japanese Double Postcard, the chou/kaku envelopes and A6 are added; PDF MediaBox and `file.print` follow, and the Size menu lists them |
 | 2026-10-18 | trivial | Stale chart notes: all chart kinds survive XLSX round-trip (PRs #158, #161) and trendlines landed |
 | 2026-10-16 | minor | Advanced Filter copy-to clears only its actual output and rejects overflow without changing cells (#1031) |
