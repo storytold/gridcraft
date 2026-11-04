@@ -63,6 +63,8 @@ pub struct Tokens {
     pub header_sel_text: Color32,
     pub header_all_bg: Color32,
     pub sel_fill: Color32,
+    /// The tint over the active cell's row (File ▸ Options ▸ General).
+    pub active_row: Color32,
     pub sel_border: Color32,
     pub input_bg: Color32,
     pub input_border: Color32,
@@ -114,6 +116,13 @@ pub struct Tokens {
     pub sheet_macro_footprint: Color32,
     pub sheet_macro_conflict: Color32,
     pub sheet_macro_target: Color32,
+    /// The PY badge in the formula bar (Python mode) and its text.
+    pub badge_py: Color32,
+    pub on_badge: Color32,
+    /// The PY tag on a Python cell and its text. They follow the sheet, so they are the same in
+    /// both themes.
+    pub sheet_py_tag: Color32,
+    pub on_sheet_py_tag: Color32,
     /// Trace arrows on the sheet: precedents and dependents, and the links Trace Error follows
     /// between cells showing an error. Sheet colours.
     pub sheet_trace_arrow: Color32,
@@ -172,6 +181,8 @@ const SHEET_CONTROL_BG: Color32 = rgb(0xF3F3F3);
 const SHEET_CONTROL_BORDER: Color32 = rgb(0x8A8A8A);
 const SHEET_CONTROL_TEXT: Color32 = rgb(0x1F1F1F);
 const SHEET_TRACK: Color32 = rgb(0xD6D6D6);
+/// The PY tag on Python cells: a deep green, white text on it.
+const SHEET_PY_TAG: Color32 = rgb(0x1E6E4E);
 
 impl Tokens {
     pub fn light() -> Tokens {
@@ -208,6 +219,7 @@ impl Tokens {
             header_sel_text: pick(dark, Color32::from_rgb(0x0B, 0x5E, 0x31), Color32::from_rgb(0x6F, 0xD3, 0x9A)),
             header_all_bg: pick(dark, Color32::from_rgb(0xC8, 0xE6, 0xD3), Color32::from_rgb(0x2E, 0x55, 0x3E)),
             sel_fill: pick(dark, Color32::from_rgba_unmultiplied(0x10, 0x7C, 0x41, 0x1C), Color32::from_rgba_unmultiplied(0x10, 0x7C, 0x41, 0x24)),
+            active_row: pick(dark, Color32::from_rgba_unmultiplied(0x10, 0x7C, 0x41, 0x2C), Color32::from_rgba_unmultiplied(0x6F, 0xD3, 0x9A, 0x30)),
             sel_border: Color32::from_rgb(0x10, 0x7C, 0x41),
             input_bg: pick(dark, Color32::WHITE, Color32::from_rgb(0x1F, 0x1F, 0x1F)),
             input_border: pick(dark, Color32::from_rgb(0xD1, 0xD1, 0xD1), Color32::from_rgb(0x50, 0x50, 0x50)),
@@ -251,6 +263,10 @@ impl Tokens {
             sheet_macro_footprint: SHEET_MACRO_FOOTPRINT,
             sheet_macro_conflict: SHEET_MACRO_CONFLICT,
             sheet_macro_target: SHEET_MACRO_TARGET,
+            badge_py: pick(dark, SHEET_PY_TAG, rgb(0x5CBF94)),
+            on_badge: pick(dark, Color32::WHITE, rgb(0x0B1F17)),
+            sheet_py_tag: SHEET_PY_TAG,
+            on_sheet_py_tag: Color32::WHITE,
             sheet_trace_arrow: SHEET_TRACE_ARROW,
             sheet_trace_error: SHEET_TRACE_ERROR,
         }
@@ -412,6 +428,11 @@ mod contrast_tests {
         add("text on current step", t.text, t.accent_soft, TEXT);
         add("current step arrow", t.accent, t.accent_soft, GLYPH);
         add("error marker on window", t.danger, t.window, GLYPH);
+        add("PY badge text", t.on_badge, t.badge_py, TEXT);
+        add("PY badge on window", t.badge_py, t.window, GLYPH);
+        add("PY badge on input", t.badge_py, t.input_bg, GLYPH);
+        add("PY tag text", t.on_sheet_py_tag, t.sheet_py_tag, TEXT);
+        add("PY tag on sheet", t.sheet_py_tag, t.grid_bg, GLYPH);
         v
     }
 

@@ -54,3 +54,50 @@ fn paste_link_pastes_references_at_once() {
     assert_eq!(c1["value"], json!(2.0));
     assert!(c1["formula"].as_str().is_some_and(|f| f.contains("A1")), "{c1}");
 }
+
+fn press(h: &mut Harness, key: egui::Key) {
+    for pressed in [true, false] {
+        h.input_mut().events.push(egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: egui::Modifiers::NONE });
+    }
+    h.run_steps(2);
+}
+
+fn value(h: &Harness, field: &str) -> serde_json::Value {
+    h.state().dialog.as_ref().and_then(|d| d.values.get(field).cloned()).unwrap_or_default()
+}
+
+#[test]
+fn every_option_has_its_excel_access_key() {
+    // #1482: only F, V, T, C and E worked.
+    let mut h = harness();
+    for (key, field, want) in [
+        (egui::Key::N, "what", json!("validation")),
+        (egui::Key::X, "what", json!("allExceptBorders")),
+        (egui::Key::W, "what", json!("columnWidths")),
+        (egui::Key::R, "what", json!("formulasAndNumberFormats")),
+        (egui::Key::U, "what", json!("valuesAndNumberFormats")),
+        (egui::Key::A, "what", json!("all")),
+        (egui::Key::D, "operation", json!("add")),
+        (egui::Key::S, "operation", json!("subtract")),
+        (egui::Key::I, "operation", json!("divide")),
+        (egui::Key::O, "operation", json!("none")),
+        (egui::Key::M, "operation", json!("multiply")),
+        (egui::Key::B, "skipBlanks", json!(true)),
+    ] {
+        press(&mut h, key);
+        assert_eq!(value(&h, field), want, "{key:?}");
+    }
+    press(&mut h, egui::Key::B);
+    assert_eq!(value(&h, "skipBlanks"), json!(false), "B flips Skip blanks back");
+    // V then Enter: values multiplied, as with the mouse.
+    press(&mut h, egui::Key::V);
+    press(&mut h, egui::Key::Enter);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(cell(&mut h, "C1")["value"], json!(20.0));
+    // L is the Paste Link button: it pastes at once.
+    let mut h = harness();
+    press(&mut h, egui::Key::L);
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none());
+    assert!(cell(&mut h, "C1")["formula"].as_str().is_some_and(|f| f.contains("A1")));
+}
