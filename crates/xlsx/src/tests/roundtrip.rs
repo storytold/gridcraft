@@ -1412,6 +1412,32 @@ fn gradient_fill_roundtrips_type_stops_and_colors() {
     assert_eq!(back.styles.get(sh.style_id(at("A2"))), wb.styles.get(path));
 }
 
+/// SpreadsheetML gives each path-gradient edge its own coordinate, so `left="0.8" right="0.2"` is
+/// a valid focus rectangle: read, it must not be reordered and saved back as `0.2`/`0.8`.
+#[test]
+fn crossed_path_gradient_edges_round_trip() {
+    let mut wb = Workbook::new();
+    let id = wb.styles.derive(StyleId::DEFAULT, |s| {
+        s.fill = Fill::gradient(
+            GradientKind::Path { left: 0.8, right: 0.2, top: 0.9, bottom: 0.1 },
+            vec![GradientStop { position: 0.0, color: Color::Rgb(0xFF0000) }, GradientStop { position: 1.0, color: Color::Rgb(0xFFFFFF) }],
+        );
+    });
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(at("A1"), Value::Number(1.0));
+    sh.set_style(at("A1"), id);
+
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&bytes).unwrap();
+    let xml = String::from_utf8(pkg.read("xl/styles.xml").unwrap().unwrap()).unwrap();
+    assert!(xml.contains("<gradientFill type=\"path\" left=\"0.8\" right=\"0.2\" top=\"0.9\" bottom=\"0.1\">"), "{xml}");
+
+    let (back, rep) = read_xlsx(&bytes).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let sh = back.sheet(0).unwrap();
+    assert_eq!(back.styles.get(sh.style_id(at("A1"))), wb.styles.get(id));
+}
+
 /// A file may hold a `<gradientFill>` with a single stop; it must not gain a synthetic second
 /// stop on read or save.
 #[test]

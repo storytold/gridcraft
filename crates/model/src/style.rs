@@ -314,16 +314,14 @@ impl GradientKind {
             }
             GradientKind::Path { mut left, mut right, mut top, mut bottom } => {
                 let clamp = |v: f64| if v.is_finite() { v.clamp(0.0, 1.0) + 0.0 } else { 0.5 };
+                // Each edge is an inner-rectangle coordinate of its own: SpreadsheetML allows
+                // `left="0.8" right="0.2"`, so the pair must not be reordered or the file would
+                // be saved with different convergence values than it was read with. Sampling
+                // takes the two edges as a span (`position`).
                 left = clamp(left);
                 right = clamp(right);
                 top = clamp(top);
                 bottom = clamp(bottom);
-                if left > right {
-                    std::mem::swap(&mut left, &mut right);
-                }
-                if top > bottom {
-                    std::mem::swap(&mut top, &mut bottom);
-                }
                 GradientKind::Path { left, right, top, bottom }
             }
         }
@@ -447,7 +445,9 @@ impl GradientFill {
                         0.0
                     }
                 };
-                edge(u, left, right).max(edge(v, top, bottom)).clamp(0.0, 1.0)
+                // Crossed edges (`left > right`) still name the inner rectangle's two sides, so
+                // the span between them is the focus area either way.
+                edge(u, left.min(right), left.max(right)).max(edge(v, top.min(bottom), top.max(bottom))).clamp(0.0, 1.0)
             }
         }
     }
@@ -872,5 +872,21 @@ mod tests {
         let stops = (0..100).map(|i| GradientStop { position: i as f64 / 99.0, color: Color::Rgb(0x010000 + i) }).collect();
         let g = GradientFill::new(GradientKind::Linear { degree: 0.0 }, stops);
         assert_eq!(g.stops.len(), 100);
+    }
+
+    #[test]
+    fn path_gradient_keeps_crossed_convergence_coordinates() {
+        let stop = |p: f64| GradientStop { position: p, color: Color::Rgb(0xFF0000) };
+        // SpreadsheetML allows each edge independently: `left="0.8" right="0.2"` is a valid
+        // focus rectangle, not an upside-down one, so the pair must survive normalisation.
+        let g = GradientFill::path(0.8, 0.2, 0.9, 0.3, vec![stop(0.0), stop(1.0)]);
+        assert_eq!(g.kind, GradientKind::Path { left: 0.8, right: 0.2, top: 0.9, bottom: 0.3 });
+        // The two edges still bracket the focus area: its middle is the start colour, the cell
+        // edge the end colour.
+        assert_eq!(g.position(0.5, 0.6), 0.0);
+        assert_eq!(g.position(0.0, 0.0), 1.0);
+
+        let clamped = GradientFill::path(2.0, -1.0, 0.5, f64::NAN, vec![stop(0.0), stop(1.0)]);
+        assert_eq!(clamped.kind, GradientKind::Path { left: 1.0, right: 0.0, top: 0.5, bottom: 0.5 });
     }
 }
