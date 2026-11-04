@@ -1,6 +1,13 @@
 use super::{SaveAnswer, SheetApp, json};
 use serde_json::Value as Json;
 
+/// What tells one cell draft from another: its workbook, window, sheet and cell.
+pub(crate) type DraftId = (u64, Option<u64>, u64, gridcraft_engine::core::CellRef);
+
+fn draft_id(ed: &crate::editor::EditState) -> DraftId {
+    (ed.doc, ed.window, ed.sheet_uid, ed.cell)
+}
+
 const NO_DRAFT: &str = "No cell is being edited.";
 const NO_WINDOW: &str = "That window is closed, or isn't the one editing the cell.";
 
@@ -63,9 +70,7 @@ impl SheetApp {
     /// `ui.exitAnyway`: answers the question for its window (`window` when it isn't open, as while
     /// its own button is drawn). Closing needs the frame's context, so the next `logic` goes on.
     pub(super) fn request_exit_anyway(&mut self, p: &Json) -> Result<Json, String> {
-        if self.editor.is_none() {
-            return Err(NO_DRAFT.into());
-        }
+        let Some(draft) = self.editor.as_ref().map(draft_id) else { return Err(NO_DRAFT.into()) };
         // An open question knows what it is closing, and no window there means quitting.
         let window = match self.dialog.as_ref().filter(|d| d.name() == "refusedDraft") {
             Some(question) => question.values.get("window").and_then(Json::as_u64),
@@ -77,7 +82,7 @@ impl SheetApp {
         if self.dialog.as_ref().is_some_and(|d| d.name() == "refusedDraft") {
             self.dialog = None;
         }
-        self.pending_exit_anyway = Some(window);
+        self.pending_exit_anyway = Some((window, draft));
         Ok(Json::Null)
     }
 
@@ -90,7 +95,9 @@ impl SheetApp {
 
     /// Goes on with an Exit Anyway asked since the last frame.
     pub(super) fn run_pending_exit_anyway(&mut self, ctx: &egui::Context) {
-        if let Some(window) = self.pending_exit_anyway.take() {
+        let Some((window, draft)) = self.pending_exit_anyway.take() else { return };
+        // A window switch since may have brought another window's draft forward: that one stays.
+        if self.editor.as_ref().map(draft_id) == Some(draft) {
             self.exit_anyway(window, ctx);
         }
     }

@@ -610,3 +610,25 @@ fn exit_anyway_on_a_window_with_other_changes_still_asks_about_them() {
     assert_eq!(desk.app.dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
     assert_eq!(desk.app.session.documents().len(), 1);
 }
+
+#[test]
+fn exit_anyway_followed_by_a_window_switch_keeps_the_other_windows_draft() {
+    let mut desk = Desk::new(true);
+    desk.app.run("file.new", json!({})).unwrap();
+    desk.frames(3);
+    let (w1, w2) = (desk.window_of(0), desk.window_of(1));
+    desk.app.enter_window(w2);
+    desk.app.begin_edit(Some("keep".into()), false);
+    desk.frames(2);
+    desk.app.enter_window(w1);
+    desk.app.begin_edit(Some("=1*/2".into()), false);
+    desk.frames(2);
+
+    // Quitting's answer and a switch to the other window arrive together.
+    desk.app.run("ui.exitAnyway", json!({})).unwrap();
+    desk.app.enter_window(w2);
+    let sent = desk.frames(2);
+    assert!(!sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close), "{sent:?}");
+    desk.app.enter_window(w2);
+    assert_eq!(desk.app.editor.as_ref().map(|ed| ed.text.as_str()), Some("keep"));
+}

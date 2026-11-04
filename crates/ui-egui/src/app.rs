@@ -23,6 +23,7 @@ mod keys;
 mod prefs;
 mod print;
 mod quit;
+pub(crate) use quit::DraftId;
 mod view;
 
 impl SheetApp {
