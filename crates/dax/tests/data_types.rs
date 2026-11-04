@@ -554,3 +554,16 @@ fn unary_and_binary_type_helpers_reject_non_scalars() {
     assert_eq!(binary_type(BinaryOp::In, data(DataType::Integer), InferredType::Table), Ok(data(DataType::Boolean)));
     assert_eq!(binary_type(BinaryOp::Eq, data(DataType::Boolean), data(DataType::Boolean)), Ok(data(DataType::Boolean)));
 }
+
+#[test]
+fn table_calls_are_unknown_in_scalar_operand_positions() {
+    // A table-valued call may resolve to one row/column at evaluation time, so scalar operators
+    // accept it as unknown rather than rejecting a valid formula.
+    for src in ["LASTDATE('Date'[Date]) - 1", "FIRSTDATE('Date'[Order Date]) < TODAY()", "-VALUES(Sales[Amount])"] {
+        assert!(infer(src).is_ok(), "{src} should infer: {:?}", infer(src));
+    }
+    assert_eq!(infer("LASTDATE('Date'[Date]) - 1"), Ok(InferredType::Unknown));
+    // `IN` keeps its operands typed: the left must not be a table.
+    let error = infer("VALUES(Sales[Amount]) IN { 1 }").expect_err("a table on the left of IN");
+    assert!(matches!(error, TypeError::IncompatibleOperands { .. }), "{error:?}");
+}

@@ -571,3 +571,23 @@ fn dragging_a_column_onto_filters_makes_it_a_page_filter() {
     assert_eq!(entries[0]["field"], json!("Sales[Region]"));
     assert!(entries[0].get("allowed").is_none(), "the drop makes the page field (All), like the menu does: {entries:?}");
 }
+
+#[test]
+fn opening_the_pane_outside_every_report_starts_a_new_one() {
+    let mut h = harness(true);
+    with_pivot(&mut h, Some("Mine"));
+    // Move the active cell outside the report: the pane closes to its strip.
+    h.state_mut().run("selection.set", json!({"cell": "H20"})).expect("select outside");
+    h.run_steps(2);
+    assert!(!pane_open(&h), "the pane hides outside its report");
+    assert!(shown(&h, "Show PivotTable Fields"));
+    // One click opens it, unbound: Apply must create a report, not rewrite the existing one.
+    click(&mut h, "Show PivotTable Fields");
+    h.run_steps(1);
+    assert!(pane_open(&h), "a single click opens the pane");
+    click(&mut h, "Category");
+    click(&mut h, "Apply");
+    let params = last_command(&h, "dataModel.createPivot");
+    assert!(params.get("name").is_none(), "an unbound pane sends no name: {params:?}");
+    assert_eq!(params["replace"], json!(false), "a new report does not replace anything");
+}

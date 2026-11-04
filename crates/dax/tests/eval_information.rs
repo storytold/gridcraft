@@ -211,10 +211,12 @@ fn contains_and_containsrow() {
 
     assert!(boolean("CONTAINSROW({1, 2}, 2)"));
     assert!(!boolean("CONTAINSROW({1, 2}, 3)"));
-    assert!(boolean("CONTAINSROW(Sales, \"East\", 10.0)"));
-    assert!(boolean("CONTAINSROW(Sales, \"East\")"));
-    assert!(!boolean("CONTAINSROW(Sales, \"West\", 10.0)"));
-    assert!(error_message("CONTAINSROW({1}, 1, 2)").contains("more values"));
+    // One value per table column: `Sales` is (Region, Amount, Quantity, ProductKey).
+    assert!(boolean("CONTAINSROW(Sales, \"East\", 10.0, 2, 1)"));
+    assert!(!boolean("CONTAINSROW(Sales, \"West\", 10.0, 2, 1)"));
+    // A value count that is not the column count is an error, never a prefix match.
+    assert!(error_message("CONTAINSROW(Sales, \"East\")").contains("one value"));
+    assert!(error_message("CONTAINSROW({1}, 1, 2)").contains("one value"));
 }
 
 #[test]
@@ -475,4 +477,12 @@ fn text_similarity_scores_matches() {
     assert_eq!(number("MAXX(Product, TEXTSIMILARITY(Product[Name], \"cancel noise\", \"PHRASEMATCHING\"))"), 0.0);
     let blank = number("MAXX(Product, TEXTSIMILARITY(Product[Name], BLANK()))");
     assert_eq!(blank, 0.0);
+}
+
+#[test]
+fn contains_row_needs_one_value_per_column() {
+    // `Sales` has four columns: a short value list is an error, not a leading-prefix match.
+    assert!(eval("CONTAINSROW(Sales, \"East\")").is_err());
+    assert!(eval("CONTAINSROW(Sales, \"East\", 10.0, 2, 1)").is_ok());
+    assert!(!boolean("CONTAINSROW(Sales, \"East\", 20.0, 2, 1)"));
 }

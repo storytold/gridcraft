@@ -279,6 +279,10 @@ struct State {
     one: Option<(NamedKey, Result<Json, String>)>,
     /// The PivotTable the draft belongs to; a different report starts from its own fields.
     bound: Option<String>,
+    /// The PivotTable this pane wrote last. It keeps the pane on that report for the frame after
+    /// Apply, when the selection has not moved into it yet; opening the pane outside every report
+    /// does not use it, so it starts a new report instead of rewriting the last one.
+    written: Option<String>,
     draft: Option<Draft>,
     /// The last command error, shown in the pane (no toast).
     error: Option<String>,
@@ -374,12 +378,13 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         let model = info.and_then(|info| info.get("model")).cloned().unwrap_or(Json::Null);
         let fields = catalog(&model);
         let active = active_pivot(app, &pivots);
+        // Bound to the active report, or to the one this pane just wrote; outside every report the
+        // pane starts a new one (a `pivots.first()` fallback would silently rewrite that report).
         let name = active
             .as_ref()
             .and_then(|pivot| pivot["name"].as_str())
             .map(str::to_string)
-            .or_else(|| state.bound.clone().filter(|bound| pivots.iter().any(|pivot| pivot["name"].as_str() == Some(bound))))
-            .or_else(|| pivots.first().and_then(|pivot| pivot["name"].as_str()).map(str::to_string));
+            .or_else(|| state.written.clone().filter(|written| pivots.iter().any(|pivot| pivot["name"].as_str() == Some(written))));
         if state.bound != name {
             // Another report: its own fields, a fresh error, and the pane follows it again.
             state.bound = name.clone();
@@ -793,6 +798,7 @@ fn draw(app: &mut SheetApp, ui: &mut Ui, state: &mut State, draft: &Draft, view:
                 state.closed = false;
                 if let Some(name) = reply["name"].as_str() {
                     state.bound = Some(name.to_string());
+                    state.written = Some(name.to_string());
                 }
             }
             Err(message) => error = Some(crate::clean_error(&message)),

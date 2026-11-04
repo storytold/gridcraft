@@ -317,6 +317,13 @@ pub const fn literal_type(literal: &Literal) -> DataType {
     }
 }
 
+/// A scalar operand's type: a table-valued call may still resolve to a single row/column at
+/// evaluation time (`LASTDATE('Date'[Date]) - 1`), so it is unknown here rather than a table.
+fn scalar_operand(expr: &Expr) -> Result<InferredType, TypeError> {
+    let inferred = infer_type(expr)?;
+    Ok(if inferred == InferredType::Table && matches!(&expr.kind, ExprKind::Call(_)) { InferredType::Unknown } else { inferred })
+}
+
 /// Infers the static type of an expression.
 ///
 /// Name references are [`InferredType::Unknown`] (they need the model). Catalogued calls take
@@ -335,7 +342,7 @@ pub fn infer_type(expr: &Expr) -> Result<InferredType, TypeError> {
             Ok(call_type(call))
         }
         ExprKind::Unary { op, expr } => {
-            let operand = infer_type(expr)?;
+            let operand = scalar_operand(expr)?;
             unary_type(*op, operand)
         }
         ExprKind::Binary { op, left, right } => {
@@ -349,9 +356,10 @@ pub fn infer_type(expr: &Expr) -> Result<InferredType, TypeError> {
                     }
                     InferredType::Unknown
                 }
-                _ => infer_type(left)?,
+                _ if *op == BinaryOp::In => infer_type(left)?,
+                _ => scalar_operand(left)?,
             };
-            let right = infer_type(right)?;
+            let right = if *op == BinaryOp::In { infer_type(right)? } else { scalar_operand(right)? };
             binary_type(*op, left, right)
         }
         ExprKind::Table(items) | ExprKind::Tuple(items) => {

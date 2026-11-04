@@ -142,8 +142,9 @@ fn contains_row(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Re
     if values.is_empty() {
         return Err(EvalError::new("CONTAINSROW needs at least one value"));
     }
-    if table.columns.len() < values.len() {
-        return Err(EvalError::new("CONTAINSROW has more values than the table has columns"));
+    // DAX needs exactly one value per column; fewer would compare only a row's leading columns.
+    if table.columns.len() != values.len() {
+        return Err(EvalError::new("CONTAINSROW needs one value for each table column"));
     }
     let found = table.rows.iter().any(|row| row.len() >= values.len() && row.iter().zip(&values).all(|(left, right)| left.strict_eq(right)));
     Ok(Scalar::Boolean(found))
