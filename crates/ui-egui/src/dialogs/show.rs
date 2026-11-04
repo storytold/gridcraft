@@ -213,7 +213,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "about" => about(ui, &mut d),
                 "failedLink" => {
                     let url = d.values.get("url").and_then(Json::as_str).unwrap_or_default();
-                    ui.label("Open this address in a browser to report the issue:");
+                    ui.label("If the issue form did not open, copy this address and open it in a browser:");
                     // Read-only: a `&str` can be selected but not edited, so Copy always copies the address shown.
                     let mut shown = url;
                     ui.add(egui::TextEdit::multiline(&mut shown).desired_width(f32::INFINITY).desired_rows(4));

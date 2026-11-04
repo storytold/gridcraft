@@ -229,12 +229,9 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
             if let Some(w) = web_sys::window()
                 && let gridcraft_engine::links::LinkKind::External(url) = gridcraft_engine::links::classify(url)
             {
-                // `None` means a pop-up blocker stopped it. The opener is cut at once so the new
-                // browsing context can't navigate the editor window while the user reads the page.
-                if let Ok(Some(opened)) = w.open_with_url_and_target(&url, "_blank") {
-                    let _ = opened.set_opener(&JsValue::NULL);
-                    return true;
-                }
+                // `noopener` is a window feature, so the new context cannot navigate the editor.
+                // With that feature, `open` returns no WindowProxy even when it succeeds.
+                return w.open_with_url_and_target_and_features(&url, "_blank", "noopener").is_ok();
             }
             false
         })),

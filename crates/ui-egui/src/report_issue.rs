@@ -22,8 +22,7 @@ pub(crate) fn issue_url(version: &str, os: &str, document_ext: Option<&str>) -> 
     format!("https://github.com/storytold/gridcraft/issues/new?template=bug_report.yml&version={v}&environment={e}&os={e}&body={b}")
 }
 
-/// `help.reportIssue`: opens the issue form. Returns `{url, opened}` and never opens a dialog;
-/// [`run_menu`] shows the address when no browser opened.
+/// `help.reportIssue`: returns a prefilled address without opening a browser or dialog.
 pub(crate) fn run(app: &mut SheetApp) -> serde_json::Value {
     // Only a format GridCraft opens is named: an odd extension could be private text.
     let ext = app
@@ -33,16 +32,19 @@ pub(crate) fn run(app: &mut SheetApp) -> serde_json::Value {
         .filter(|p| FileKind::from_path(p).is_some())
         .and_then(|p| std::path::Path::new(p).extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase));
     let url = issue_url(env!("CARGO_PKG_VERSION"), &crate::backstage::platform(), ext.as_deref());
-    let opened = app.services.open_url.as_ref().is_some_and(|open| open(&url));
-    json!({"url": url, "opened": opened})
+    json!({"url": url, "opened": false})
 }
 
-/// The menu, ribbon and Account entries: like [`run`], plus the address to copy when no browser opened.
+/// The menu, ribbon and Account entries open the address and keep a copyable fallback available.
 pub(crate) fn run_menu(app: &mut SheetApp) {
     let result = run(app);
-    if result["opened"] != true {
-        app.open_dialog("failedLink", json!({"url": result["url"]}));
+    let url = result["url"].as_str().unwrap_or_default().to_string();
+    if let Some(open) = &app.services.open_url {
+        open(&url);
     }
+    // `noopener` intentionally returns no WindowProxy, so a browser callback cannot reliably
+    // distinguish a successful open from a blocked pop-up. Keep the address available either way.
+    app.open_dialog("failedLink", json!({"url": url}));
 }
 
 #[cfg(test)]
