@@ -1,12 +1,13 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-02 · **Change:** minor (§17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-11-04 · **Last updated:** 2026-11-04 · **Change:** minor (entries checked against the code: large sheets cut off, calculation bugs, slicers not saved, CLI and MCP gaps; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
-PRs first (50 open on 2026-10-10; several already address entries here), and update the entry
+PRs first (several already address entries here), and update the entry
 when you land work. Estimates are Opus 5.5 agent-hours. Area detail lives in the linked parity
-docs; the summary is in [target-app-parity.md](target-app-parity.md).
+docs; the summary is in [target-app-parity.md](target-app-parity.md). Entry numbers are stable ids,
+because other docs link to them; [roadmap.md](roadmap.md#whats-next) gives the working order.
 
 Kinds: **F** feature · **U** UI/UX · **FF** file format · **H** hardware · **L** localization ·
 **P** performance · **S** stability.
@@ -16,37 +17,45 @@ Kinds: **F** feature · **U** UI/UX · **FF** file format · **H** hardware · *
 No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-gate).
 
 
-### 1. XLSX output not proven in Excel or on real files (FF)
-- **Missing:** a run over a real-world XLSX corpus, and confirmation that Excel opens what we save
-  with no repair prompt (PivotTables, charts, CF, validation, dynamic arrays, tables).
-- **Evidence:** round-trip tests cover our own files only (`crates/xlsx/src/tests/`); PivotTable
-  round-trip noted as "unverified in real Excel" since 10-07; #64 (dynamic-array flag) shows the
-  class of bug.
+### 1. Some saved XLSX files don't open in Excel (FF)
+- **Missing:** no repair prompt on every saved file. A contributor's repeated corpus run (#891, real
+  files, Excel 365) shows 21 of 397 saved files failing to open without an error or repair at v0.16.0, unchanged since v0.13.
+  The failures still need sorting by cause.
+- **Evidence:** named causes: #2947, #2009, #1663, #2339, #2949, #2635, and PivotTables (#1447, fixes
+  in PRs #1680, #1681, #1682, #1684). `gridcraft-cli check` compares less than a save can lose: it
+  reports "all equal" after rich text and chart options are dropped.
 - **Impact:** the main format; a repair prompt or silent loss destroys trust.
 - **Estimate:** 15–25 h, plus owner time in Excel. [file-format-parity.md](file-format-parity.md)
 
-### 2. Large workbooks don't open; recalc is single-threaded (P, H)
-- **Missing:** streaming read for ~100 MB XLSX; multi-threaded recalc; 100k-dependent edit under
-  100 ms (was ~0.4 s); whole-sheet operations bounded.
-- **Evidence:** #175; no threading in `crates/calc`; PR #152 (whole-sheet Fill/Remove Duplicates
-  out of memory), PR #151 (current region past 10,000 rows).
-- **Impact:** finance and data users routinely have big workbooks.
+### 2. Large sheets are cut off on open; some recalculation is slow (P, H)
+- **Missing:** a worksheet over about 500k cells opens cut off, and saving writes the shorter file.
+  `MAX_XML_NODES` counts the cells of streamed rows (a regression from #2413): a 1M-row sheet of five
+  columns keeps 100,000 rows. Fixes are in PRs #2925, #3210 and #3317. Files around 100 MB (#175,
+  #3286) are limited by this first.
+- **Recalculation:** single-threaded, but an edit updating a chain of 80,000 formulas took about
+  0.1 s (2026-11-04, CLI). Targeted cases come first: running COUNTIFS (#2813), clearing a cell
+  (#2684), hangs on open (#2751, #2183). 10 edits on that workbook used 729 MB against 215 MB for
+  one; the cause isn't known yet.
+- **Impact:** finance and data users routinely have big workbooks; a shortened file is data loss.
 - **Estimate:** 25–40 h. [target-app-parity.md](target-app-parity.md#performance), [hardware-parity.md](hardware-parity.md)
 
 ### 3. Some unmodelled XLSX content is dropped on save (FF)
-- **Missing:** slicers and their caches, timelines, the data model, query tables attached to
-  tables, unmodelled `extLst` entries, chart details. Pass-through (#330) keeps custom XML,
-  external links, connections, sheet query tables, printer settings, form and ActiveX controls,
-  OLE objects and sheet backgrounds; never checked in Excel (repair prompts unknown).
+- **Missing:** slicers and their caches (including slicers made in GridCraft, which aren't written),
+  timelines, the data model, query tables attached to tables, unmodelled `extLst` entries, chart
+  details, and rich text in cells (flattened to plain text on open, #774; PR #2268). Pass-through
+  (#330) keeps custom XML, external links, connections, sheet query tables, printer settings, form
+  and ActiveX controls, OLE objects and sheet backgrounds.
 - **Evidence:** `crates/xlsx/src/passthrough.rs` (what is kept, and why the rest isn't).
 - **Impact:** open-edit-save still simplifies workbooks with slicers, timelines or Power Pivot.
 - **Estimate:** 6–10 h. [file-format-parity.md](file-format-parity.md)
 
 ### 4. Charts lose options on round trip; shallow chart model (F, FF)
-- **Missing:** axis scaling, label options, error bars, per-point formatting.
+- **Missing:** axis scaling and reversal, axis number formats, label options, error bars, per-point
+  formatting, and chart text sizes (#3117). All are dropped on save, even on charts nobody edited
+  (#1668). PRs #1290, #1895, #1219.
 - **Added:** data tables beneath column, bar, line, area and compatible combo charts, with legend keys, border controls, live source values, native XLSX round-trip and print/PDF.
-- **Evidence:** `Chart` holds only title, legend position, two flags and axis titles
-  (`crates/model/src/features.rs`); all 2-D kinds survive XLSX round trip (#158, #161); charts
+- **Evidence:** `Chart` has no axis or per-point options (`crates/model/src/features.rs`); all 2-D
+  kinds survive XLSX round trip (#158, #161); charts
   resize from eight handles (#190). Smooth lines (#62), Switch Row/Column (#116) and trendlines
   (read, written, drawn) landed. Multi-level category axes (year beside month) are read, drawn
   and written back.
@@ -62,14 +71,16 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Estimate:** 12–20 h. [localization-parity.md](localization-parity.md)
 
 ### 6. Calculation correctness bugs (F)
-- **Missing:** nothing known. The four this entry tracked have landed: 15-significant-digit
-  equality (#57, so `=0.1+0.2=0.3` is TRUE and MATCH and COUNTIF agree), spill updates after
-  structural edits and cleared blockers (#133, #139; PRs #148, #157), 3-D span deletion (#140),
-  and qualified names after a sheet rename (#134). Iterative calculation for circular references
-  landed too, with its settings in File › Options › Formulas.
+- **Missing:** implicit intersection for formulas saved without the dynamic-array flag: `=ISBLANK(B:B)`
+  shows `#SPILL!` and `=A:A*2` spills, where Excel gives one value per row (#410; PRs #2677, #3067).
+  Stale dynamic arrays (#2053, #2340, #2320). Text coerced with en-US separators, which gives silent
+  1000× values in regional files (#889), and SORT in code-point order (#890).
+- **Landed:** 15-significant-digit equality (#57), spill updates after structural edits and cleared
+  blockers (#133, #139), 3-D span deletion (#140), qualified names after a sheet rename (#134), and
+  iterative calculation.
 - **Impact:** wrong numbers are worse than missing features, so this entry is kept until the
-  oracle suite of §15 can say the category is clear rather than only these five reports being so.
-- **Estimate:** — [function-parity.md](function-parity.md#formula-language)
+  oracle suite of §15 can say the category is clear.
+- **Estimate:** 10–15 h. [function-parity.md](function-parity.md#formula-language)
 
 ### 7. Legacy `.xls` only partly read; encrypted workbooks can't be saved with a password (FF)
 - **Evidence:** #121: Excel 97-2003 (BIFF8) `.xls` files now open (values, formulas, number
@@ -82,13 +93,13 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   routine in business.
 - **Estimate:** 14–21 h (`.xls` objects 10–15, encryption 4–6). [file-format-parity.md](file-format-parity.md)
 
-### 8. PivotTables: no slicers, calculated items, PivotCharts; unverified in Excel (F)
-- **Evidence:** `parity-checklist.md` missing `insert.slicer`, `insert.timeline`,
-  `insert.pivotChart`, `table.insertSlicer`; calculated items and GETPIVOTDATA missing (calculated fields
-  and values on rows done). Show Details (double-click a value, subtotal or grand total cell) lists
-  its source records on a new sheet. The "Enable show details" option (`pivot.options`
-  `enableShowDetails`, saved as `enableDrill`) turns it off; it has no PivotTable Options dialog
-  yet (command only).
+### 8. PivotTables: fixes after a save, slicers not saved, calculated items (F)
+- **Missing:** slicers work in the open workbook but aren't saved; `insert.timeline`, calculated
+  items and `GETPIVOTDATA` (`#NAME?`; PR #3317) are missing. There is no PivotTable Options dialog
+  for Enable show details (command only).
+- **Bugs:** a TRUE/FALSE column in the source makes a file Excel can't open, and fields and layouts
+  change after a save (#1447; PRs #1680, #1681, #1682, #1684, #3222).
+- **Landed:** calculated fields, values on rows, PivotCharts, Show Details.
 - **Impact:** pivots are the analyst's main tool.
 - **Estimate:** 20–30 h for beta (25–40 h full).
 
@@ -100,13 +111,27 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Estimate:** 12–20 h. [ui-parity.md](ui-parity.md)
 
 ### 10. Crashes and freezes reported from the field (S)
-- **Evidence:** #120 (Intel UHD crash on Windows), #117 (error on close, macOS), #166 (freeze opening
-  from Finder; PRs #164, #167), #76 (flashing on Windows 11), #130 (caught panic in table styles).
+- **Missing:** crash recovery: nothing keeps a copy of unsaved work (PRs #3326, #2973). AutoSave is off
+  by default and ignores a failed save.
+- **Evidence:** #2906, #2464, #2042 (native save dialog), #120 (Intel UHD crash on Windows), #76
+  (flashing on Windows 11).
 - **Estimate:** 8–12 h plus an autosave/recovery soak.
+
+### 25. CLI and MCP servers (F)
+- **Bugs:** a sheet that was cut off gives only a warning (`run` exits 0, MCP `open_workbook` returns
+  `isError: false`, see §2). The MCP stdio server reads a line into an unbounded buffer (#2164).
+  `execute_command` returns a bare `null` for layout commands (#1291). With two windows, input and
+  screenshots go to the wrong one (#3036; PR #3045), and MCP can take over a window it opened (#3069).
+- **Missing:** a strict mode that fails on lost data; confinement to chosen folders (#445; PRs #2857,
+  #2739); PNG rendering from the headless server (#2246); attaching to a running app without a
+  restart (#2280); push events (#3060); a report of hidden information before sharing (#1829); CLI
+  and MCP setup for desktop users (#220).
+- **Impact:** agent control is where GridCraft is meant to be ahead.
+- **Estimate:** not yet estimated. [mcp.md](mcp.md), [cli.md](cli.md)
 
 ## After beta
 
-### 11. No localization at all (L)
+### 11. Localization is partial (L)
 - Catalog: ribbon-only in five languages (#31, #104, #82; ~12% of strings each), and 943 strings
   (~43%) in Japanese (10-17) and Brazilian Portuguese, including the dialog labels, messages, File
   view and menus. The remaining dialogs, menus and messages are English; en-US function names and
@@ -135,15 +160,11 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   Margins are dragged on the rulers (#792). Remaining: pictures in headers/footers, Different First Page / Odd & Even pages. Desktop now submits directly through craft-print with printer choice, copies, duplex and grayscale; browser printing stays available. Print ranges and driver tray/options UI remain. **Estimate:** 5–10 h.
 
 ### 15. Remaining functions and an oracle suite (F)
-- 18 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 16–26 h.
-- 20 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 17–29 h.
-- 21 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 18–30 h.
-- 18 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 18–30 h.
+- 10 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 16–26 h.
   [function-parity.md](function-parity.md)
 
 ### 16. Collaboration and review (F)
-- No co-authoring, Show Changes, comment navigation, notes ↔ comments
-  conversion; cloud storage requested (#86). **Estimate:** 35–55 h (co-authoring scope needs the owner).
+- No co-authoring, Show Changes or notes ↔ comments conversion; cloud storage requested (#86). **Estimate:** 35–55 h (co-authoring scope needs the owner).
 
 ### 17. Insert objects (F)
 - Ink strokes now survive XLSX save/reopen as editable polylines. Inserted icons still lose their
@@ -157,8 +178,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   [ui-parity.md](ui-parity.md#accessibility)
 
 ### 19. XLSB/ODS beyond values; minor formats (FF)
-- XLSB and ODS import values only, no write; no `.prn`, `.dif`, XML Spreadsheet 2003 (`.slk` imports values, formulas, number formats and widths); CSV
-  writes raw instead of displayed values; templates saved with the workbook content type.
+- XLSB and ODS import values only, no write; no `.prn`, `.dif`, XML Spreadsheet 2003 (`.slk` imports values, formulas, number formats and widths); templates saved with the workbook content type.
   **Estimate:** 15–23 h.
 
 ### 20. Multiple windows; pen pressure (H)
@@ -168,7 +188,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   [hardware-parity.md](hardware-parity.md)
 
 ### 21. Automation and add-ins (F)
-- VBA out of scope (dropped on open, #6); no Office Scripts compatibility; no plugin or custom
+- VBA isn't run (kept byte-for-byte on save, #6); no Office Scripts compatibility; no plugin or custom
   function API. **Estimate:** 25–40 h plus an owner decision.
 
 ### 22. AI features (F)
@@ -186,6 +206,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | Checked against the code: §1 corpus runs exist; §2 sheets over 500k cells are cut off; §3 and §8 slicers exist but aren't saved; §6 open calculation bugs; §10 no crash recovery; §15 one count; §16 comment navigation done; §19 CSV writes displayed values; §21 VBA is kept; new §25 CLI and MCP |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |
 | 2026-11-02 | minor | §13: Solver Sensitivity report: shadow prices, reduced costs and allowable ranges for Simplex LP; Lagrange multipliers and reduced gradients for GRG Nonlinear |
 | 2026-11-02 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |

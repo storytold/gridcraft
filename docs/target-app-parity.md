@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-02 · **Change:** minor (insert objects: equations; earlier: what-if and analysis: Solver Sensitivity report; no score change; earlier: chart resizing no longer listed as missing; no score change; earlier: what-if and analysis: Analysis ToolPak has all 19 tools; earlier: page layout and print: Page Setup's page order; no score change; earlier: charts: data tables with XLSX round-trip and print/PDF; no score change; earlier: what-if and analysis: Solver Options; the Insert Function dialog is named as in Excel; no score change; earlier: Solver Load/Save Model and Reset All; automation: macro interface; catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-11-04 · **Last updated:** 2026-11-04 · **Change:** minor (performance and PivotTable rows checked against the code; readiness estimates unchanged; earlier: insert objects: equations; earlier: what-if and analysis: Solver Sensitivity report; no score change; earlier: chart resizing no longer listed as missing; no score change; earlier: what-if and analysis: Analysis ToolPak has all 19 tools; earlier: page layout and print: Page Setup's page order; no score change; earlier: charts: data tables with XLSX round-trip and print/PDF; no score change; earlier: what-if and analysis: Solver Options; the Insert Function dialog is named as in Excel; no score change; earlier: Solver Load/Save Model and Reset All; automation: macro interface; catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -84,7 +84,7 @@ performance 8, stability 8, localization 4, hardware 2, platforms 2, ecosystem 2
 | Editing, navigation, clipboard, fill | 12 | ~90% | ~70% | 15–25 | Point mode, F4, AutoComplete, Paste Special, AutoFill, Flash Fill, Find/Replace, Go To Special. Bugs: rectangular drag-select (#28), monthly fill (#132), cut across sheets (#128), Insert Copied Cells missing (#21), key tips only on part of the Home tab (#43; #33, #49). [ui-parity.md](ui-parity.md) |
 | Cell formatting, styles, conditional formatting | 10 | ~95% | ~80% | 8–14 | Full number-format language, borders, 47 cell styles, 60 table styles, all CF rule kinds including data bars, colour scales and icon sets. Gaps: font weights beyond regular/bold (#168), system fonts list (#4), themes |
 | Sort, filter, tables, validation, outline | 8 | ~82% | ~70% | 10–16 | Multi-level sort, AutoFilter, Advanced Filter, tables with totals, validation, outline, subtotals, consolidate. Advanced Filter copy-to preserves cells outside its result and rejects worksheet overflow (#1031). Bugs: subtotal header (#131), validation edits (#129), table style panic caught (#130); no slicers on tables |
-| PivotTables | 7 | ~65% | ~45% | 25–40 | Insert/Recommended, field list, three layouts, values on rows or columns, date grouping, show-values-as, refresh, calculated fields, XLSX round-trip. Missing: slicers, timelines, calculated items, PivotCharts, value/label filters, number grouping, GETPIVOTDATA, data-model pivots. Round-trip never checked in Excel |
+| PivotTables | 7 | ~65% | ~45% | 25–40 | Insert/Recommended, field list, three layouts, values on rows or columns, date grouping, show-values-as, refresh, calculated fields, XLSX round-trip. Missing: saving slicers, timelines, calculated items, value/label filters, number grouping, GETPIVOTDATA, data-model pivots. PivotCharts and slicers exist. Saved pivots have known faults in Excel (#1447) |
 | Charts and sparklines | 8 | ~50% | ~30% | 40–60 | 25 chart kinds, all 2-D. The chart model holds title, legend position, a data-labels flag, gridlines flag, axis titles and chart data tables (legend keys, borders, XLSX round-trip and print/PDF); no axis scaling, trendlines, error bars, per-point formatting, chart sheets, 3-D, surface, map, Pareto. Several kinds don't survive XLSX round trip (open PRs #158, #161). [chart-parity.md](chart-parity.md) |
 | Page layout, print, PDF | 5 | ~80% | ~55% | 12–20 | Page setup, print titles, breaks, page order, Page Break Preview, headers/footers, PDF export and printing. Paper sizes match Japanese Excel: B4/B5/B6 are the JIS sizes, ISO B4/B5/B6 stay reachable by name, and Japanese Postcard (はがき), Japanese Double Postcard (往復はがき), the chou/kaku envelopes and A6 are available. No true Page Layout view; the PDF writer uses only the 14 standard fonts without embedding (no CJK or other non-Latin text in PDF); web print only exports (#141, #143) |
 | Charts and sparklines | 8 | ~50% | ~30% | 40–60 | 25 chart kinds, all 2-D. The chart model holds title, legend position, a data-labels flag, gridlines flag, axis titles and chart data tables (legend keys, borders, XLSX round-trip and print/PDF); no axis scaling, error bars, per-point formatting, chart sheets, 3-D, surface, map, Pareto. Kinds survive XLSX round trip (#158, #161). [chart-parity.md](chart-parity.md) |
@@ -204,10 +204,10 @@ Excel recalculates on every core (multi-threaded recalculation), streams large f
 |---|---|---|---|
 | Sheet size limits | 1,048,576 × 16,384 | same | measured (`crates/core/src/addr.rs`) |
 | Recalc threads | 1 | all cores | measured (no threading in `crates/calc`) |
-| Edit → recalc, 100k dependents | ~0.4 s (2026-10-07), target < 100 ms | tens of ms | measured on the owner's machine; #66 since made range-formula recalc linear, not re-timed |
+| Edit → recalc | ~0.1 s for a chain of 80,000 formulas (2026-11-04, CLI: open and edit minus open) | tens of ms | measured on one machine; running COUNTIFS is quadratic (#2813) |
 | Grid scrolling | virtualised, O(log n) geometry with custom row heights | smooth | measured in code |
-| Open a ~100 MB XLSX | fails (#175) | opens | user report |
-| Whole-sheet operations | Fill and Remove Duplicates on a whole-sheet selection run out of memory or time (fix in PR #152) | fine | open PR |
+| Open a sheet over about 500k cells | cut off: a 1M-row, five-column sheet keeps 100,000 rows and saving writes the shorter file (#2526; PRs #2925, #3210, #3317) | opens | measured 2026-11-04 |
+| Whole-sheet operations | Fill and Remove Duplicates on a whole-sheet selection are bounded (PR #152) | fine | merged, not re-timed |
 
 Work: streaming XLSX reader with shared-string and style dedup, multi-threaded recalc of
 independent chains (native only; WASM stays single-threaded), whole-column reference
@@ -328,12 +328,13 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 - Pixel comparison against Excel screenshots (planned; screenshots stay in `plan/excel/`).
 - Function results against Excel-computed oracles (a corpus repo is the planned home).
 - Recalc and open-time benchmarks on fixed workbooks (no `cargo xtask bench` yet).
-- Whether Excel opens our XLSX output without repair, across features.
+- Excel opening our XLSX output: repeated on real files by a contributor (#891), not yet per feature.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | Performance: sheets over 500k cells are cut off; recalculation re-timed; PivotTable row updated. Readiness estimates unchanged |
 | 2026-11-02 | minor | Insert objects: equations; catalog count 277 / 292 (no score change) |
 | 2026-11-02 | minor | What-if and analysis: Solver Sensitivity report (no score change) |
 | 2026-11-02 | minor | Charts move and resize from eight handles like every floating object (#190): the Essentials chart work is polish only (5–8 h), and the chart rows and the interaction discount no longer list resizing as missing; the Mainstream chart row no longer lists trendlines as missing (no score change) |

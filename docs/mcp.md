@@ -66,6 +66,9 @@ Results are one text block holding pretty JSON; failures set `isError: true` wit
 missing required arguments and wrong argument types are JSON-RPC `-32602` errors; malformed JSON is `-32700`; unknown
 methods `-32601`.
 
+`open_workbook` returns import problems in `warnings`, not as an error. Read them: a worksheet over about 500k cells
+is cut off on open (#2526) and `save_workbook` then saves the shorter sheet.
+
 ## Resources
 
 - `gridcraft://workbook` — `document.inspect` of the active workbook.

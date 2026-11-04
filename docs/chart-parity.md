@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-02 · **Change:** minor (charts resize from eight handles; earlier: chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-11-04 · **Last updated:** 2026-11-04 · **Change:** minor (duplicate rows removed; Waterfall and Funnel keep their kind; the options a save drops, as tested; earlier: charts resize from eight handles; earlier: chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -26,8 +26,6 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Treemap, Sunburst | 1 each | 2 of 2 | |
 | Histogram, Pareto | 2 | 1 of 2 | no Pareto |
 | Box & Whisker | 1 | 1 of 1 | exclusive (default) and inclusive quartiles per series; XLSX round-trip; `chart.set {quartiles}` changes all series |
-| Waterfall, Funnel | 2 | 2 of 2 | lose their kind in XLSX (PR #161) |
-| Box & Whisker | 1 | 1 of 1 | |
 | Waterfall, Funnel | 2 | 2 of 2 | |
 | Filled map | 1 | 0 | needs geographic boundary data (licensing decision) |
 | Combo | custom combinations, secondary axis | yes (line on secondary axis) | |
@@ -55,8 +53,6 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Chart sheets | yes | **kept, not editable**: not shown, and written back unchanged in their place on save (#727); left out when a sheet they plot is deleted or renamed. No F11 / Move Chart > New sheet |
 | Chart templates (`.crtx`) | yes | **missing** |
 | Recommended Charts | yes | dialog with recommendations from the data's shape (own heuristic) and an All Charts list, live previews (#215) |
-| Switch Row/Column, Select Data | yes | yes (Switch on charts read from files landed in #116) |
-| Recommended Charts | yes | partial (Insert ▸ Recommended) |
 | Switch Row/Column, Select Data | yes | yes (Switch on charts read from files landed in #116); Select Data dialog: data range, remove series, Horizontal (Category) Axis Labels (#287). No series add/edit or hidden/empty cell options |
 | Sparklines (line, column, win/loss, markers, axis) | yes | line, column, win/loss |
 | PivotCharts | yes | Insert ▸ PivotChart (`insert.pivotChart`): bound to a PivotTable's report, rebuilt on refresh and layout changes, `c:pivotSource` round trip; no field buttons, innermost category level only |
@@ -79,8 +75,9 @@ Format reference: [Microsoft's DrawingML data table documentation](https://learn
 ## XLSX round-trip
 
 Charts are read from and written to DrawingML chart parts, but only the fields the model holds
-survive: anything else (axis scaling, label options, error bars, per-point formats, chartex
-extensions) is lost when GridCraft saves a workbook it opened. That is the main reason charts are
+survive: anything else (axis scaling, reversed axes, axis number formats, label options, error bars,
+per-point formats) is lost when GridCraft saves a workbook it opened, even a chart nobody edited
+(#1668; checked 2026-11-04). That is the main reason charts are
 **~30% ready**: a user who opens an Excel workbook with charts and saves it gets simpler charts
 back.
 
@@ -104,6 +101,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | Removed duplicate rows that disagreed; Waterfall and Funnel keep their kind; listed the options a save drops, as tested |
 | 2026-11-02 | minor | Charts move and resize from eight handles, each moving only its own edges (#190); resizing leaves the work list (1–2 h, within the 40–60 h rounding) |
 | 2026-11-01 | minor | Chart data tables for column, bar, line, area and compatible combo charts: command/UI controls, formatted source values, blanks, grouped category headers, legend keys, independent borders, shared print/PDF rendering and native c:dTable import/export. Dense tables show a space notice; no readiness score change. |
 | 2026-10-29 | minor | Selected charts highlight their source cells beneath floating objects, so the blue outline no longer crosses the chart; uncovered source cells remain highlighted (#2861) |
