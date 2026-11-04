@@ -4,6 +4,9 @@
 //! fractions (`1 1/2`), dates (`3/4/2026`, `2026-03-04`, `4-Mar-2026`, `Mar 4, 2026`), times
 //! (`10:30`, `10:30:15 PM`) and date-times. Locale: en-US.
 
+use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::date::{DateSystem, MONTHS, serial_from_ymd, time_fraction};
 use crate::value::{CellError, Value};
 
@@ -37,6 +40,91 @@ pub fn parse_input(s: &str, sys: DateSystem) -> Parsed {
         return Parsed { value: Value::number(n), format: f };
     }
     Parsed { value: Value::text(s), format: None }
+}
+
+/// The system's regional settings write decimals with a comma (see [`coerce_number_text_in`]). Set
+/// once by the desktop app; off everywhere else, so files and commands calculate the same anywhere.
+static SYSTEM_DECIMAL_COMMA: AtomicBool = AtomicBool::new(false);
+
+thread_local! {
+    /// [`with_decimal_comma`] on this thread, in place of the system's setting.
+    static DECIMAL_COMMA: Cell<Option<bool>> = const { Cell::new(None) };
+}
+
+/// Sets whether text in formulas reads as numbers with a decimal comma.
+pub fn set_system_decimal_comma(on: bool) {
+    SYSTEM_DECIMAL_COMMA.store(on, Ordering::Relaxed);
+}
+
+/// Runs `f` with a decimal comma on or off on this thread, whatever the system's setting.
+pub fn with_decimal_comma<R>(on: bool, f: impl FnOnce() -> R) -> R {
+    let before = DECIMAL_COMMA.replace(Some(on));
+    let result = f();
+    DECIMAL_COMMA.set(before);
+    result
+}
+
+fn decimal_comma() -> bool {
+    DECIMAL_COMMA.get().unwrap_or_else(|| SYSTEM_DECIMAL_COMMA.load(Ordering::Relaxed))
+}
+
+/// Text as a formula reads it as a number (arithmetic, VALUE, criteria), which follows the regional
+/// settings as in Excel. [`parse_number_text_in`] is the same without them, for text that isn't
+/// the person's own formula result (commands, normalized text).
+pub fn coerce_number_text_in(s: &str, sys: DateSystem) -> Option<f64> {
+    if decimal_comma() { parse_decimal_comma_text(s.trim(), sys) } else { parse_number_text_in(s, sys) }
+}
+
+/// [`coerce_number_text_in`] in the 1900 date system.
+pub fn coerce_number_text(s: &str) -> Option<f64> {
+    coerce_number_text_in(s, DateSystem::D1900)
+}
+
+/// Numeric text with a decimal comma and `.` between thousands, as observed in Excel with Italian
+/// regional settings: `1,5`, `,5`, `1,`, `1.000`, `1.000,5`, `1,5e3`, `(1.000,5)`, `1,5%`, `€ 1,5`.
+/// Groups after the first need at least three digits (`1.0000` is 10000, `1.00` is no number, nor
+/// is `1.5`), only one comma counts, and `$` isn't this region's currency. Dates and times read as
+/// they do without it.
+fn parse_decimal_comma_text(t: &str, sys: DateSystem) -> Option<f64> {
+    if t.contains(['/', ':']) {
+        return parse_numeric(t, sys).map(|(n, _)| n);
+    }
+    if t.contains('$') {
+        return None;
+    }
+    let t = t.strip_prefix('€').map_or_else(|| t.strip_suffix('€').unwrap_or(t), |rest| rest).trim();
+    let is_core = |c: char| c.is_ascii_digit() || matches!(c, '.' | ',');
+    let start = t.find(is_core)?;
+    let (head, rest) = t.split_at(start);
+    let end = rest.find(|c: char| !is_core(c)).unwrap_or(rest.len());
+    let (core, tail) = rest.split_at(end);
+    // What surrounds the number is a sign, parentheses, a percent sign or an exponent: anything
+    // else (a date with a month's name) reads as it does without the setting.
+    let exponent = tail.strip_prefix(['e', 'E']).is_some_and(|e| {
+        let e = e.trim_end_matches([')', '%', ' ']);
+        let digits = e.strip_prefix(['+', '-']).unwrap_or(e);
+        !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+    });
+    let plain = |s: &str| s.chars().all(|c| matches!(c, '+' | '-' | '(' | ')' | '%' | ' '));
+    if !plain(head) || !(exponent || plain(tail)) {
+        return parse_numeric(t, sys).map(|(n, _)| n);
+    }
+    let (whole, fraction) = core.split_once(',').map_or((core, None), |(w, f)| (w, Some(f)));
+    if fraction.is_some_and(|f| f.contains([',', '.'])) || (whole.is_empty() && fraction.is_none_or(str::is_empty)) {
+        return None;
+    }
+    let mut groups = whole.split('.');
+    let first = groups.next().unwrap_or("");
+    if groups.any(|g| g.len() < 3) || (whole.contains('.') && first.is_empty()) {
+        return None;
+    }
+    let digits: String = whole.chars().filter(|c| *c != '.').collect();
+    let digits = if digits.is_empty() { "0" } else { &digits };
+    let number = match fraction {
+        Some(f) if !f.is_empty() => format!("{digits}.{f}"),
+        _ => digits.to_string(),
+    };
+    parse_numeric(&format!("{head}{number}{tail}"), sys).map(|(n, _)| n)
 }
 
 /// Numeric text as arithmetic coerces it ("1,000", "50%", "$3", "1/2/2020", "10:00").
@@ -632,5 +720,90 @@ mod tests {
         for text in ["3/4/2026", "10:30", "1 1/2", "abc", "12abc", "", "  ", "TRUE", "#N/A", "((1))", "(-5)", "$(5)%", "(1/2)"] {
             assert_eq!(number_stored_as_text(text), None, "{text}");
         }
+    }
+}
+
+#[cfg(test)]
+mod decimal_comma_tests {
+    use super::*;
+
+    /// Observed in Excel with Italian regional settings, by `="..."*1` and `=VALORE("...")`.
+    #[test]
+    fn text_reads_as_excel_reads_it_with_a_decimal_comma() {
+        let number = [
+            ("1,5", 1.5),
+            ("-1,5", -1.5),
+            ("+1,5", 1.5),
+            ("(1,5)", -1.5),
+            ("1,5%", 0.015),
+            ("1.000,5%", 10.005),
+            ("1.000", 1000.0),
+            ("1.000.000", 1_000_000.0),
+            ("1.000.000,25", 1_000_000.25),
+            ("1.0000", 10_000.0),
+            ("1,000", 1.0),
+            ("1,0000", 1.0),
+            ("1,", 1.0),
+            (",5", 0.5),
+            ("1,5e3", 1500.0),
+            ("1,5E3", 1500.0),
+            ("1e3", 1000.0),
+            ("\u{20ac} 1,5", 1.5),
+            ("1,5 \u{20ac}", 1.5),
+            (" 1,5 ", 1.5),
+            ("1.000 ", 1000.0),
+            ("0,1", 0.1),
+            ("00,5", 0.5),
+            ("1234.567", 1_234_567.0),
+            ("-1.000,5", -1000.5),
+            ("(1.000,5)", -1000.5),
+            ("1:30", 0.0625),
+        ];
+        let not_number = [
+            "1.00",
+            "12.34",
+            "1,5,5",
+            "1.000,5,5",
+            ".5",
+            "1.",
+            "1 000,5",
+            "$1,5",
+            "$ 1.000,5",
+            "1.5",
+            "31.1",
+            "31.13",
+            "1.13",
+            "1.5.2021",
+            "1,5:30",
+            "TRUE",
+            "1.000.00",
+            "10.00.000",
+            "1,5-",
+        ];
+        with_decimal_comma(true, || {
+            for (text, n) in number {
+                let got = coerce_number_text(text).unwrap_or(f64::NAN);
+                assert!((got - n).abs() < 1e-9, "{text}: {got}");
+            }
+            for text in not_number {
+                assert_eq!(coerce_number_text(text), None, "{text}");
+            }
+        });
+    }
+
+    #[test]
+    fn without_it_text_reads_as_before() {
+        with_decimal_comma(false, || {
+            assert_eq!(coerce_number_text("1.5"), Some(1.5));
+            assert_eq!(coerce_number_text("1,000"), Some(1000.0));
+            assert_eq!(coerce_number_text("1,0000"), None);
+            assert_eq!(coerce_number_text("$3"), Some(3.0));
+        });
+    }
+
+    /// Commands and normalized text don't follow the setting.
+    #[test]
+    fn the_plain_parser_never_follows_it() {
+        with_decimal_comma(true, || assert_eq!(parse_number_text("1.5"), Some(1.5)));
     }
 }

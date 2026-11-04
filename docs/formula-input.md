@@ -36,3 +36,13 @@ clipboard exchange retain strict English syntax. This also applies to advanced d
 Name Manager and conditional-format rules. Localization happens at the cell/formula-bar editor
 boundary, including filling the selected range with Ctrl+Enter; it does not change the workbook
 format or teach the calculation engine ambiguous aliases.
+
+## Text read as a number
+
+Arithmetic on text, `VALUE` and criteria read numbers the way the system's region writes them, as
+Excel does. The desktop app takes this from the system's language and region tag; a separator
+changed by hand in the Windows settings isn't seen. In a region with a decimal comma `"1,5"*1` is
+1.5, `"1.000,5"*1` is 1000.5, `"1,0000"*1` is 1, and `"1.5"*1` and `"$1,5"*1` are `#VALUE!`. So a
+workbook relying on such text can calculate differently on another system, also as in Excel.
+The CLI and the engine's commands always read a decimal point, as do `NUMBERVALUE`, filters and
+typed entry. Dates in text aren't affected: they still read month first.

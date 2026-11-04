@@ -55,6 +55,66 @@ pub enum Language {
     Ro,
 }
 
+/// Whether the system's region writes decimals with a comma, by its language tag. A tag is what
+/// the system tells us, so a separator changed by hand in the Windows settings isn't seen.
+pub fn system_uses_decimal_comma() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        sys_locale::get_locale().is_some_and(|tag| tag_uses_decimal_comma(&tag))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+}
+
+/// By region where it decides, otherwise by language.
+pub fn tag_uses_decimal_comma(tag: &str) -> bool {
+    let mut parts = tag.split(['-', '_', '.']);
+    let language = parts.next().unwrap_or("").to_ascii_lowercase();
+    let region = parts.find(|p| p.len() == 2 || p.len() == 3).map(str::to_ascii_uppercase).unwrap_or_default();
+    // Switzerland and Liechtenstein write a decimal point in most of their languages; Mexico and
+    // Central America write one in Spanish, while South Africa writes a comma in English.
+    match region.as_str() {
+        "CH" | "LI" | "MX" | "GT" | "HN" | "NI" | "PA" | "PE" | "PR" | "SV" | "DO" => return false,
+        "ZA" => return true,
+        _ => {}
+    }
+    matches!(
+        language.as_str(),
+        "it" | "de"
+            | "fr"
+            | "es"
+            | "pt"
+            | "nl"
+            | "ru"
+            | "pl"
+            | "cs"
+            | "sk"
+            | "uk"
+            | "ro"
+            | "tr"
+            | "sv"
+            | "da"
+            | "nb"
+            | "nn"
+            | "no"
+            | "fi"
+            | "el"
+            | "hu"
+            | "hr"
+            | "sl"
+            | "sr"
+            | "bg"
+            | "lt"
+            | "lv"
+            | "et"
+            | "ca"
+            | "id"
+            | "vi"
+    )
+}
+
 impl Language {
     pub const ALL: [Self; 19] = [
         Self::En,
@@ -515,5 +575,20 @@ mod tests {
         let keys: Vec<String> = order[1..].iter().map(|l| name_sort_key(l.name())).collect();
         assert!(keys.windows(2).all(|w| w[0] <= w[1]), "{keys:?}");
         assert_eq!(name_sort_key("Čeština"), "cestina");
+    }
+}
+
+#[cfg(test)]
+mod decimal_comma_region_tests {
+    use super::tag_uses_decimal_comma;
+
+    #[test]
+    fn regions_and_languages_decide_the_separator() {
+        for tag in ["it-IT", "it_IT.UTF-8", "de-DE", "fr-FR", "es-ES", "pt-BR", "en-ZA", "ru"] {
+            assert!(tag_uses_decimal_comma(tag), "{tag}");
+        }
+        for tag in ["en-US", "en-GB", "it-CH", "de-CH", "es-MX", "ja-JP", "zh-CN", "", "en"] {
+            assert!(!tag_uses_decimal_comma(tag), "{tag}");
+        }
     }
 }
