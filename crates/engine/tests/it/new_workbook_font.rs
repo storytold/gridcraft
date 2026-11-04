@@ -4,7 +4,7 @@
 use std::io::Read;
 
 use gridcraft_engine::core::{CellRef, RangeRef};
-use gridcraft_engine::model::{Font, Style, StyleId, StyleTable, Workbook};
+use gridcraft_engine::model::{Font, NumFmt, Style, StyleId, StyleTable, Workbook};
 use gridcraft_engine::{Prefs, Session, io};
 use serde_json::json;
 
@@ -214,5 +214,27 @@ fn a_pivot_table_report_uses_the_workbooks_normal_font() {
     assert!(report.len() >= 4, "{report:?}");
     for (at, cell) in report {
         assert_eq!(name_and_size(&wb.styles.get(cell.style).font), ("Arial", 10.0), "{}", at.a1());
+    }
+}
+
+#[test]
+fn a_pivot_table_report_takes_only_the_font_from_the_normal_style() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let normal = Style { font: Font { name: "Arial".into(), size: 10.0, ..Font::default() }, num_fmt: NumFmt::new("0%"), ..Style::default() };
+    std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb).styles = StyleTable::with_default(normal);
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Region", "Sales"], ["East", "10"], ["West", "4"]]})).unwrap();
+    // A sum takes its source's number format, so the source values are General.
+    s.execute("home.numberFormat", json!({"range": "B2:B3", "code": "General"})).unwrap();
+    s.execute("insert.pivotTable", json!({"source": "Sheet1!A1:B3", "destination": "Sheet1!F1", "rows": ["Region"], "values": ["Sales"]})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let sh = wb.active().unwrap();
+    let report: Vec<_> = sh.cells.iter_range(RangeRef::parse("F1:H10").unwrap()).filter(|(_, c)| !c.value.is_empty()).collect();
+    assert!(report.iter().any(|(_, c)| c.value.is_number()), "{report:?}");
+    for (at, cell) in report {
+        let st = wb.styles.get(cell.style);
+        assert_eq!(name_and_size(&st.font), ("Arial", 10.0), "{}", at.a1());
+        // The sums 10, 4 and 14 show as numbers, not as 1000%, 400% and 1400%, and the labels as text.
+        assert_eq!(st.num_fmt, NumFmt::default(), "{}", at.a1());
     }
 }
