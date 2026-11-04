@@ -26,7 +26,7 @@ mod validation;
 pub use filter::filter_values;
 pub(crate) use filter::{apply_filter, grow_autofilter};
 use filter::{clear_filter, filter_by, reapply, toggle_filter};
-use grouping::{detail, group, outline_settings, show_levels, subtotal};
+use grouping::{clear_outline, detail, group, outline_settings, show_levels, subtotal};
 use sort::{quick_sort, sort};
 #[cfg(test)]
 use tools::split_delimited;
@@ -123,6 +123,15 @@ pub fn specs() -> Vec<CommandSpec> {
                 |s, p| { group(s, p, false) }
             )
         },
+        cmd!(
+            "data.clearOutline",
+            "Clear Outline",
+            ["Data", "Outline", "Ungroup"],
+            None,
+            "{range?, sheet?} (every outline level of the range's rows and columns, or of the whole sheet when the range is one cell; hidden detail is shown again)",
+            has_doc,
+            clear_outline
+        ),
         cmd!(
             "data.hideDetail",
             "Hide Detail",

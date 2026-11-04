@@ -2119,9 +2119,7 @@
    "seq": "AUC",
    "kind": "command",
    "target": "data.clearOutline",
-   "pending": true,
-   "excel": "Clear Outline",
-   "note": "feature gap; reserved until the command lands"
+   "excel": "Clear Outline"
   },
   {
    "seq": "AUU",

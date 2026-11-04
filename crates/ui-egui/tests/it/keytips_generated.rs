@@ -2266,10 +2266,7 @@ fn keytip_au_() {
 fn keytip_auc_() {
     let mut h = harness(blank());
     sequence(&mut h, "AUC", false);
-    assert!(h.state().dialog.is_none(), "AUC must not open a dialog");
-    assert!(h.state().message.is_none(), "AUC must not open a message box");
-    assert!(h.state().toast.is_none(), "AUC must not raise a toast");
-    assert!(h.state().session.journal.is_empty(), "AUC must not journal");
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "data.clearOutline"), "AUC must journal data.clearOutline");
 }
 
 #[test]

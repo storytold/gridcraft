@@ -2,6 +2,7 @@ use super::{
     CellRef, EngineError, Json, LineInfo, RangeRef, Result, Session, bad, bool_param, col_param, data_target, edit, json, outline, parse_lines,
     str_param, target_sheet,
 };
+use gridcraft_core::{MAX_COLS, MAX_ROWS};
 
 // ---------------------------------------------------------------- outline
 
@@ -111,6 +112,110 @@ pub(super) fn detail(s: &mut Session, p: &Json, hide: bool) -> Result<Json> {
         cx.structural = true;
         Ok(Json::Null)
     })
+}
+
+/// Data › Outline › Ungroup › Clear Outline: removes every outline level from the rows and the
+/// columns of `range` (the selection, every area of it), or from the whole sheet when that is one
+/// cell. Lines the outline had hidden are shown again (a zero size gets its default back) and
+/// collapsed marks go, also on a summary line just outside the range whose group is gone; a line
+/// hidden on its own, outside any group, stays hidden. Nothing to clear is no error and no undo
+/// step. A protected sheet is refused: the outline isn't cell contents, so the check after an
+/// edit wouldn't see it change.
+pub(super) fn clear_outline(s: &mut Session, p: &Json) -> Result<Json> {
+    const CMD: &str = "data.clearOutline";
+    let si = target_sheet(s, p)?;
+    {
+        let d = s.doc()?;
+        if let Some(t) = str_param(p, "range")
+            && let (Some(name), _) = super::split_sheet(t)
+            && d.wb.sheet_index(&name) != Some(si)
+        {
+            return Err(bad(CMD, format!("`{t}` names a sheet other than `sheet`")));
+        }
+        if si != d.wb.active_sheet() && str_param(p, "range").is_none() {
+            return Err(bad(CMD, "missing `range`: the selection is on the active sheet"));
+        }
+    }
+    let ranges = super::target_ranges(s, p)?;
+    let spans: Vec<((u32, u32), (u32, u32))> = match ranges.as_slice() {
+        [one] if one.is_single() => vec![((0, MAX_ROWS - 1), (0, MAX_COLS - 1))],
+        _ => ranges.iter().map(|r| ((r.start.row, r.end.row), (r.start.col, r.end.col))).collect(),
+    };
+    let wb = &s.doc()?.wb;
+    let sh = wb.sheet(si).ok_or(EngineError::NoDocument)?;
+    // No outline at all: nothing to clear, and no reason to evaluate the AutoFilter below.
+    if !sh.rows.values().chain(sh.cols.values()).any(|e| e.outline > 0 || e.collapsed) {
+        return Ok(Json::Null);
+    }
+    // A row a filter hides stays hidden: the sheet's AutoFilter is evaluated, since a row a collapsed
+    // group hid inside its range is hidden too; a table's stored filter has no evaluator here, so
+    // its hidden rows stay hidden.
+    let failing: std::collections::BTreeSet<u32> =
+        super::filter::autofilter_rows(wb, si).into_iter().filter(|(_, hidden)| *hidden).map(|(r, _)| r).collect();
+    let in_table_filter =
+        |r: u32| sh.tables.iter().any(|t| !t.filter.is_empty() && t.data_range().is_some_and(|d| r >= d.start.row && r <= d.end.row));
+    let rows = cleared(&sh.rows, spans.iter().map(|s| s.0), outline::summary_before(sh, true), |r| failing.contains(&r) || in_table_filter(r));
+    let cols = cleared(&sh.cols, spans.iter().map(|s| s.1), outline::summary_before(sh, false), |_| false);
+    if rows == sh.rows && cols == sh.cols {
+        return Ok(Json::Null);
+    }
+    if sh.is_protected() {
+        return Err(EngineError::Other("The cell or chart you're trying to change is on a protected sheet.".into()));
+    }
+    edit(s, |cx| {
+        let sh = cx.sheet_mut(si)?;
+        (sh.rows, sh.cols) = (rows, cols);
+        cx.structural = true; // shown rows count again in SUBTOTAL(10x)
+        Ok(Json::Null)
+    })
+}
+
+/// `lines` with the outline levels of `spans` removed: lines the outline had hidden are shown
+/// again, and a collapsed mark stays only on the summary line of a group that remains (on either
+/// side of the spans), so a group's mark goes with it and a surviving group keeps its own.
+///
+/// Hide Rows and filters set the same hidden flag, so a line counts as the outline's to show only
+/// inside a collapsed group (its summary line marked) or a group without a summary line (no mark
+/// to tell by); a line `filtered` says a filter hides stays hidden.
+fn cleared(
+    lines: &std::collections::BTreeMap<u32, LineInfo>,
+    spans: impl Iterator<Item = (u32, u32)>,
+    summary_before: bool,
+    filtered: impl Fn(u32) -> bool,
+) -> std::collections::BTreeMap<u32, LineInfo> {
+    // The folded groups' lines as sorted, merged intervals, so each line is one binary search.
+    let mut folded: Vec<(u32, u32)> = outline::groups_with(lines, summary_before)
+        .into_iter()
+        .filter(|g| !g.has_summary() || lines.get(&g.summary()).is_some_and(|e| e.collapsed))
+        .map(|g| (g.start, g.end))
+        .collect();
+    folded.sort_unstable();
+    let mut merged: Vec<(u32, u32)> = Vec::with_capacity(folded.len());
+    for (a, b) in folded {
+        match merged.last_mut() {
+            Some(last) if a <= last.1.saturating_add(1) => last.1 = last.1.max(b),
+            _ => merged.push((a, b)),
+        }
+    }
+    let in_folded =
+        |line: u32| merged.partition_point(|(a, _)| *a <= line).checked_sub(1).and_then(|i| merged.get(i)).is_some_and(|(_, b)| line <= *b);
+    let mut map = lines.clone();
+    for (a, b) in spans {
+        for (line, e) in map.range_mut(a..=b) {
+            if e.outline > 0 && e.hidden && in_folded(*line) && !filtered(*line) {
+                set_hidden(e, false);
+            }
+            e.outline = 0;
+        }
+    }
+    let summaries: std::collections::BTreeSet<u32> =
+        outline::groups_with(&map, summary_before).into_iter().filter(|g| g.has_summary()).map(|g| g.summary()).collect();
+    for (line, e) in map.iter_mut() {
+        if e.collapsed && !summaries.contains(line) {
+            e.collapsed = false;
+        }
+    }
+    map
 }
 
 /// Hides or shows an outline line. A line shown with a zero size (files that hide columns as

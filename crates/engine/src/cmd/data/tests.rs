@@ -546,3 +546,188 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert_eq!(sh.validations.len(), 3);
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
+
+#[test]
+fn clear_outline_removes_every_level_and_shows_the_detail_again() {
+    // #3088: Data › Outline › Ungroup › Clear Outline, as Excel measured: one cell clears the
+    // sheet, a range clears its rows' and columns' levels, hidden detail is shown again.
+    let outlined = || {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("data.group", json!({"rows": "2:4"})).unwrap();
+        s.execute("data.group", json!({"rows": "6:8"})).unwrap();
+        s.execute("data.group", json!({"rows": "2:9"})).unwrap();
+        s.execute("data.group", json!({"cols": "B:D"})).unwrap();
+        s.execute("data.showLevels", json!({"rows": 1, "cols": 1})).unwrap();
+        s
+    };
+    let sheet = |s: &Session| s.doc().unwrap().wb.active().unwrap().clone();
+    let mut s = outlined();
+    assert!(sheet(&s).rows.get(&2).is_some_and(|e| e.hidden && e.outline == 2));
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("data.clearOutline", json!({})).unwrap();
+    let sh = sheet(&s);
+    assert!(
+        sh.rows.values().chain(sh.cols.values()).all(|e| e.outline == 0 && !e.collapsed && !e.hidden && e.size != Some(0.0)),
+        "{:?} {:?}",
+        sh.rows,
+        sh.cols
+    );
+    // One undo step brings the collapsed outline back; a second call has nothing to clear.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(sheet(&s).rows.get(&2).is_some_and(|e| e.hidden && e.outline == 2));
+    s.execute("edit.redo", json!({})).unwrap();
+    s.execute("data.clearOutline", json!({})).unwrap();
+    assert_eq!(s.execute("history.list", json!({})).unwrap()["undo"][0], "Clear Outline");
+    assert_eq!(s.execute("history.list", json!({})).unwrap()["undo"][1], "Show Outline Levels");
+    // A range: A3:E3 clears row 3 and columns A:E, rows 2 and 4 keep their levels.
+    let mut s = outlined();
+    s.execute("data.clearOutline", json!({"range": "A3:E3"})).unwrap();
+    let sh = sheet(&s);
+    assert_eq!(sh.rows.get(&2).map(|e| e.outline), Some(0));
+    assert_eq!(sh.rows.get(&1).map(|e| e.outline), Some(2));
+    assert_eq!(sh.rows.get(&3).map(|e| e.outline), Some(2));
+    assert!(sh.cols.values().all(|e| e.outline == 0));
+    // No outline: no error, no undo step.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("data.clearOutline", json!({})).unwrap();
+    assert_eq!(s.execute("history.list", json!({})).unwrap()["undo"], json!([]));
+}
+
+fn outline_sheet(s: &Session, i: usize) -> crate::model::Sheet {
+    s.doc().unwrap().wb.sheet(i).unwrap().clone()
+}
+
+#[test]
+fn clear_outline_refuses_a_range_on_another_sheet() {
+    // A sheet that isn't the active one needs its range, and a range naming another sheet than
+    // `sheet` is refused: neither may clear the wrong sheet's outline.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("home.insertSheet", json!({"name": "Sheet2"})).unwrap();
+    s.execute("data.group", json!({"rows": "2:4", "sheet": 1})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    assert!(s.execute("data.clearOutline", json!({"sheet": 1})).is_err(), "no range on another sheet");
+    assert!(s.execute("data.clearOutline", json!({"sheet": 1, "range": "Sheet1!A1"})).is_err(), "range on another sheet");
+    assert_eq!(outline_sheet(&s, 1).rows.get(&1).map(|e| e.outline), Some(1), "Sheet2 keeps its outline");
+    s.execute("data.clearOutline", json!({"sheet": 1, "range": "Sheet2!A1"})).unwrap();
+    assert!(outline_sheet(&s, 1).rows.values().all(|e| e.outline == 0));
+}
+
+#[test]
+fn clear_outline_treats_several_areas_as_a_range() {
+    // A selection of several areas is not "one cell", even when its first area is.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("data.group", json!({"rows": "2:4"})).unwrap();
+    s.execute("data.group", json!({"rows": "8:10"})).unwrap();
+    s.execute("selection.set", json!({"range": "A1,A2:A4"})).unwrap();
+    s.execute("data.clearOutline", json!({})).unwrap();
+    let sh = outline_sheet(&s, 0);
+    assert_eq!(sh.rows.get(&2).map(|e| e.outline), Some(0), "the selected rows are cleared");
+    assert_eq!(sh.rows.get(&8).map(|e| e.outline), Some(1), "rows outside the selection keep theirs");
+}
+
+#[test]
+fn clear_outline_refuses_a_protected_sheet() {
+    // A protected sheet keeps its outline.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("data.group", json!({"rows": "2:4"})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    assert!(s.execute("data.clearOutline", json!({})).is_err());
+    assert_eq!(outline_sheet(&s, 0).rows.get(&1).map(|e| e.outline), Some(1));
+}
+
+#[test]
+fn clear_outline_clears_the_mark_on_a_summary_line_outside_the_range() {
+    // Clearing a collapsed group's lines also clears the mark on its summary line just outside
+    // the range, so nothing is left for a later Clear Outline to undo.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("data.group", json!({"rows": "2:4"})).unwrap();
+    s.execute("data.showLevels", json!({"rows": 1})).unwrap();
+    assert!(outline_sheet(&s, 0).rows.get(&4).is_some_and(|e| e.collapsed), "row 5 summarises rows 2:4");
+    s.execute("data.clearOutline", json!({"range": "A2:B4"})).unwrap();
+    assert!(outline_sheet(&s, 0).rows.values().all(|e| e.outline == 0 && !e.collapsed), "{:?}", outline_sheet(&s, 0).rows);
+    let undo = s.execute("history.list", json!({})).unwrap()["undo"].as_array().map_or(0, Vec::len);
+    s.execute("data.clearOutline", json!({})).unwrap();
+    assert_eq!(s.execute("history.list", json!({})).unwrap()["undo"].as_array().map_or(0, Vec::len), undo, "nothing left to clear");
+}
+
+#[test]
+fn clear_outline_needs_a_text_range_on_another_sheet() {
+    // `"range": null` is no range: the active sheet's one-cell selection must not clear Sheet2.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("home.insertSheet", json!({"name": "Sheet2"})).unwrap();
+    s.execute("data.group", json!({"rows": "2:4", "sheet": 1})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    assert!(s.execute("data.clearOutline", json!({"sheet": 1, "range": null})).is_err());
+    assert_eq!(outline_sheet(&s, 1).rows.get(&1).map(|e| e.outline), Some(1), "Sheet2 keeps its outline");
+}
+
+#[test]
+fn clear_outline_keeps_the_mark_of_a_group_that_stays() {
+    // Rows 2:4 collapsed, their summary mark on row 5: clearing A5:B6 leaves the group, so the mark
+    // stays, and with nothing else to clear there is no undo step.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("data.group", json!({"rows": "2:4"})).unwrap();
+    s.execute("data.showLevels", json!({"rows": 1})).unwrap();
+    let undo = s.execute("history.list", json!({})).unwrap()["undo"].as_array().map_or(0, Vec::len);
+    s.execute("data.clearOutline", json!({"range": "A5:B6"})).unwrap();
+    let sh = outline_sheet(&s, 0);
+    assert!(sh.rows.get(&4).is_some_and(|e| e.collapsed), "{:?}", sh.rows);
+    assert!(sh.rows.get(&1).is_some_and(|e| e.outline == 1 && e.hidden));
+    assert_eq!(s.execute("history.list", json!({})).unwrap()["undo"].as_array().map_or(0, Vec::len), undo, "nothing changed");
+}
+
+#[test]
+fn clear_outline_keeps_lines_hidden_by_something_else() {
+    // Hide Rows and a filter set the same hidden flag as a collapsed group: only lines a collapsed
+    // group hid come back. A row hidden by hand inside an expanded group stays hidden.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("data.group", json!({"rows": "2:4"})).unwrap();
+    s.execute("home.hideRows", json!({"rows": "3"})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("data.clearOutline", json!({})).unwrap();
+    let sh = outline_sheet(&s, 0);
+    assert!(sh.rows.values().all(|e| e.outline == 0));
+    assert!(sh.rows.get(&2).is_some_and(|e| e.hidden), "row 3 was hidden by Hide Rows: {:?}", sh.rows);
+
+    // A row a filter hides stays hidden too.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["k"], ["a"], ["b"], ["a"], ["b"]]})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:A5"})).unwrap();
+    s.execute("data.group", json!({"rows": "2:5"})).unwrap();
+    s.execute("data.filterBy", json!({"column": 0, "values": ["a"]})).unwrap();
+    s.execute("selection.set", json!({"range": "C1"})).unwrap();
+    s.execute("data.clearOutline", json!({})).unwrap();
+    let sh = outline_sheet(&s, 0);
+    assert!(sh.rows.values().all(|e| e.outline == 0));
+    assert!(sh.rows.get(&2).is_some_and(|e| e.hidden) && sh.rows.get(&4).is_some_and(|e| e.hidden), "filtered rows: {:?}", sh.rows);
+}
+
+#[test]
+fn clear_outline_shows_rows_a_collapsed_group_hid_inside_a_filter() {
+    // Filtered for "a", then the group collapsed: every row is hidden, but only the "b" rows fail
+    // the filter. Clearing the outline shows the "a" rows again and keeps the "b" rows hidden.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["k"], ["a"], ["b"], ["a"], ["b"]]})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:A5"})).unwrap();
+    s.execute("data.group", json!({"rows": "2:5"})).unwrap();
+    s.execute("data.filterBy", json!({"column": 0, "values": ["a"]})).unwrap();
+    s.execute("data.showLevels", json!({"rows": 1})).unwrap();
+    assert!((1..=4).all(|r| outline_sheet(&s, 0).rows.get(&r).is_some_and(|e| e.hidden)), "collapsed");
+    s.execute("selection.set", json!({"range": "C1"})).unwrap();
+    s.execute("data.clearOutline", json!({})).unwrap();
+    let sh = outline_sheet(&s, 0);
+    let hidden: Vec<u32> = (1..=4).filter(|r| sh.rows.get(r).is_some_and(|e| e.hidden)).collect();
+    assert_eq!(hidden, vec![2, 4], "only the rows the filter hides: {:?}", sh.rows);
+}
