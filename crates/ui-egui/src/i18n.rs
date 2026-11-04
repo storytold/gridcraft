@@ -339,10 +339,10 @@ mod tests {
     fn fill_tab_labels_are_in_every_catalog() {
         // Source-driven: every literal label in `fill_tab` must exist in every non-English
         // language, so a new control cannot ship as English-only.
-        let src = include_str!("dialogs.rs");
+        let src = include_str!("dialogs/format_cells.rs");
         let start = src.find("fn fill_tab(").expect("fill_tab");
         let body = &src[start..];
-        let end = body.find("\nfn ").unwrap_or(body.len());
+        let end = body.find("\n/// Draws the six-tab Format Cells editor").unwrap_or(body.len());
         let body = &body[..end];
         let mut keys: Vec<&str> = body
             .match_indices("lang.tr(\"")
@@ -356,7 +356,8 @@ mod tests {
         keys.sort_unstable();
         keys.dedup();
         assert!(keys.contains(&"Gradient") && keys.contains(&"Add Stop"));
-        let catalogs: [(&str, fn(&str) -> Option<&'static str>); 18] = [
+        type Translate = fn(&str) -> Option<&'static str>;
+        let catalogs: [(&str, Translate); 18] = [
             ("Spanish", es::translate),
             ("Greek", el::translate),
             ("Simplified Chinese", zh::translate),
@@ -466,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn tags_reduce_to_a_supported_language() {
+    fn tags_reduce_to_supported_languages() {
         assert_eq!(Language::from_tag("ja-JP"), Some(Language::Ja));
         assert_eq!(Language::from_tag("en_US"), Some(Language::En));
         assert_eq!(Language::from_tag("es_MX"), Some(Language::Es));
@@ -478,6 +479,10 @@ mod tests {
         assert_eq!(Language::from_tag("RU_ru"), Some(Language::Ru));
         assert_eq!(Language::from_tag("de-DE"), Some(Language::De));
         assert_eq!(Language::from_tag("de_AT"), Some(Language::De));
+    }
+
+    #[test]
+    fn tags_reduce_to_supported_languages_with_locale_suffixes() {
         assert_eq!(Language::from_tag("de-CH"), Some(Language::De));
         assert_eq!(Language::from_tag("pt-BR"), Some(Language::PtBr));
         assert_eq!(Language::parse("pt"), Some(Language::PtBr));
@@ -489,6 +494,10 @@ mod tests {
         assert_eq!(Language::from_tag("fr_CA"), Some(Language::Fr));
         assert_eq!(Language::parse("fr"), Some(Language::Fr));
         assert_eq!(Language::from_tag("sr-Latn-RS"), Some(Language::Sr));
+    }
+
+    #[test]
+    fn tags_reduce_to_other_supported_languages() {
         assert_eq!(Language::from_tag("sr-RS"), Some(Language::Sr));
         assert_eq!(Language::parse("sr"), Some(Language::Sr));
         assert_eq!(Language::from_tag("tr-TR"), Some(Language::Tr));
@@ -500,6 +509,10 @@ mod tests {
         assert_eq!(Language::from_tag("it-IT"), Some(Language::It));
         assert_eq!(Language::from_tag("it_CH.UTF-8"), Some(Language::It));
         assert_eq!(Language::parse("it"), Some(Language::It));
+    }
+
+    #[test]
+    fn tags_reduce_to_remaining_supported_languages() {
         assert_eq!(Language::from_tag("uk-XX"), Some(Language::Uk));
         assert_eq!(Language::parse("uk"), Some(Language::Uk));
         assert_eq!(Language::from_tag("vi-VN"), Some(Language::Vi));
@@ -511,7 +524,6 @@ mod tests {
         assert_eq!(Language::from_tag("ro_MD.UTF-8"), Some(Language::Ro));
         assert_eq!(Language::parse("ro"), Some(Language::Ro));
     }
-
     #[test]
     fn an_unset_language_preference_is_english_until_the_app_applies_the_system_one() {
         // Deserializing never reads the host locale (tests stay deterministic); the desktop app
