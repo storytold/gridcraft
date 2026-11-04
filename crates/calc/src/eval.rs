@@ -325,6 +325,11 @@ impl<'h> Evaluator<'h> {
             Expr::Array(rows) => {
                 let h = rows.len();
                 let w = rows.first().map_or(0, Vec::len);
+                // A ragged literal is an error either way; one wide row and many empty ones must
+                // not reserve their rows-times-width product first.
+                if rows.iter().any(|row| row.len() != w) {
+                    return err(CellError::Value);
+                }
                 let mut data = Vec::with_capacity(h * w);
                 for row in rows {
                     for el in row {

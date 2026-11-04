@@ -377,7 +377,7 @@ pub fn formula_refs(text: &str, locale: gridcraft_engine::formula::FormulaLocale
     let offset = text.len() - body.len();
     let Ok(toks) = gridcraft_engine::formula::lexer::tokenize_locale(body, locale) else { return vec![] };
     let mut out: Vec<(usize, usize, RangeRef, Option<String>, usize)> = Vec::new();
-    let mut seen: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut i = 0;
     while i < toks.len() {
         use gridcraft_engine::formula::lexer::Tok;
@@ -409,13 +409,8 @@ pub fn formula_refs(text: &str, locale: gridcraft_engine::formula::FormulaLocale
                 continue;
             };
             let key = body.get(start..end).unwrap_or("").replace('$', "").to_ascii_uppercase();
-            let idx = match seen.iter().position(|k| *k == key) {
-                Some(k) => k,
-                None => {
-                    seen.push(key);
-                    seen.len() - 1
-                }
-            };
+            let next = seen.len();
+            let idx = *seen.entry(key).or_insert(next);
             out.push((start + offset, end + offset, range, sheet, idx % REF_COLOR_COUNT));
             continue;
         }

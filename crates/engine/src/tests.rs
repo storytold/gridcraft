@@ -3975,6 +3975,24 @@ fn fill_series_weekday_out_of_range_step_errors() {
     assert_eq!(v(&s, "A2"), Value::Empty);
 }
 
+/// A step of a million weekdays moves whole weeks at a time instead of visiting every day, and
+/// lands where counting day by day would.
+#[test]
+fn fill_series_weekday_large_step_is_arithmetic() {
+    let mut s = s();
+    // 45005 is Monday 20 March 2023; five weekdays on from a Monday is the next Monday.
+    s.execute("cell.set", json!({"cell": "A1", "input": "45005"})).unwrap();
+    s.execute("edit.fillSeries", json!({"range": "A1:A3", "direction": "columns", "type": "date", "dateUnit": "weekday", "step": 1_000_000}))
+        .unwrap();
+    assert_eq!(v(&s, "A2"), Value::Number(45005.0 + 1_400_000.0));
+    assert_eq!(v(&s, "A3"), Value::Number(45005.0 + 2_800_000.0));
+    s.execute("cell.set", json!({"cell": "B1", "input": "45009"})).unwrap();
+    s.execute("edit.fillSeries", json!({"range": "B1:B3", "direction": "columns", "type": "date", "dateUnit": "weekday", "step": -1})).unwrap();
+    // Friday 24 March 2023 back one weekday at a time: Thursday, Wednesday.
+    assert_eq!(v(&s, "B2"), Value::Number(45008.0));
+    assert_eq!(v(&s, "B3"), Value::Number(45007.0));
+}
+
 #[test]
 fn fill_series_month_leap_year() {
     let s = series_date("2028-01-31", "A1:A3", "month");
@@ -5571,4 +5589,63 @@ fn clearing_links_and_notes_keeps_allow_edit_ranges() {
     s.execute("edit.clearComments", json!({"range": "C5"})).unwrap();
     let sh = s.doc().unwrap().wb.active().unwrap().clone();
     assert!(sh.hyperlinks.is_empty() && sh.comments.is_empty());
+}
+
+#[test]
+fn protected_sheet_refuses_layout_commands_its_permissions_do_not_allow() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["h"], [1], [2]]})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:A3"})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    for (id, params) in [
+        ("home.rowHeight", json!({"rows": "1:1", "height": 40})),
+        ("home.columnWidth", json!({"cols": "A:A", "width": 80})),
+        ("data.group", json!({"rows": "2:3"})),
+        ("data.showLevels", json!({"rows": 1})),
+        ("data.clearFilter", json!({})),
+        ("data.reapply", json!({})),
+        ("insert.picture", json!({"base64": "iVBORw0KGgo="})),
+    ] {
+        let err = s.execute(id, params).expect_err(id).to_string();
+        assert!(err.contains("protected"), "{id}: {err}");
+    }
+    // With the permissions ticked the same layout commands run.
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    s.execute("review.protectSheet", json!({"formatRows": true, "formatColumns": true, "autofilter": true})).unwrap();
+    for (id, params) in [
+        ("home.rowHeight", json!({"rows": "1:1", "height": 40})),
+        ("home.columnWidth", json!({"cols": "A:A", "width": 80})),
+        ("data.reapply", json!({})),
+    ] {
+        s.execute(id, params).unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+}
+
+#[test]
+fn an_edit_range_limited_to_windows_users_stays_locked() {
+    use gridcraft_model::EditRange;
+    let mut s = s();
+    let a1 = CellRef::parse("A1").unwrap();
+    let range = |sd: Option<&str>| EditRange {
+        title: "T".into(),
+        ranges: vec![gridcraft_core::RangeRef::cell(a1)],
+        password: None,
+        security_descriptor: sd.map(str::to_string),
+    };
+    let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+    sh.edit_ranges.push(range(None));
+    assert!(crate::cmd::locked_cell_error(sh, a1, &[]).is_none(), "an open range");
+    sh.edit_ranges = vec![range(Some("D:(A;;GA;;;WD)"))];
+    assert!(crate::cmd::locked_cell_error(sh, a1, &[]).is_some(), "a user-limited range");
+}
+
+#[test]
+fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Region", "Sales"], ["N", 1], ["S", 2]]})).unwrap();
+    s.execute("review.protectWorkbook", json!({"on": true})).unwrap();
+    for dest in ["new", "NEW", " new ", ""] {
+        assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "destination": dest})).is_err(), "destination {dest:?}");
+    }
+    assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
 }
