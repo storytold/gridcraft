@@ -125,14 +125,14 @@ pub(super) fn recommended_charts(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut 
 /// Draws chart range, series keep/remove and category-range controls and runs `chart.selectData` when something changed.
 pub(super) fn select_data(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     let text = |d: &Dialog, k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
-    let edit = |ui: &mut egui::Ui, d: &mut Dialog, key: &str, label: &str| {
+    // The dialog belongs to the chart's sheet, shown when it opens.
+    super::ref_edit::remember_home(app, d);
+    // Reference boxes, as in Excel: a range selected on the grid fills the box (#2940).
+    let edit = |app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &str, label: &str| {
         let label = ui.label(label);
-        let mut v = text(d, key);
-        if ui.add(egui::TextEdit::singleline(&mut v).desired_width(420.0)).labelled_by(label.id).changed() {
-            d.values.insert(key.into(), json!(v));
-        }
+        super::ref_edit::ref_edit(app, ui, d, key, super::ref_edit::RefLabel::By(label.id), 450.0);
     };
-    edit(ui, d, "range", "Chart data range:");
+    edit(app, ui, d, "range", "Chart data range:");
     ui.add_space(6.0);
     ui.strong("Legend Entries (Series)");
     let names: Vec<String> =
@@ -159,8 +159,17 @@ pub(super) fn select_data(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog,
     });
     d.values.insert("remove".into(), json!(remove));
     ui.add_space(6.0);
-    edit(ui, d, "categories", "Horizontal (Category) Axis Labels:");
+    edit(app, ui, d, "categories", "Horizontal (Category) Axis Labels:");
     ok_cancel(ui, confirm, open);
+    if *confirm && super::ref_edit::home_sheet_deleted(app, d) {
+        app.message = Some((d.title.clone(), super::ref_edit::SHEET_DELETED.into()));
+        *confirm = false;
+    }
+    // The chart's sheet is shown again before its ranges are read.
+    if *confirm && let Err(e) = super::ref_edit::end_pick(app, d) {
+        app.message = Some((d.title.clone(), crate::clean_error(&e)));
+        *confirm = false;
+    }
     if *confirm {
         *confirm = false;
         let mut params = serde_json::Map::new();
