@@ -13,6 +13,9 @@ const MAX_NESTED: usize = 64;
 /// evaluated again), however high Maximum Iterations is.
 const MAX_ITERATION_WORK: usize = 10_000_000;
 
+/// How often a block was read, and its values once they are final.
+type SharedBlock = (u32, Option<std::sync::Arc<Array>>);
+
 pub(super) struct PassHost<'a> {
     wb: &'a Workbook,
     exprs: &'a HashMap<Key, std::sync::Arc<Expr>>,
@@ -21,6 +24,10 @@ pub(super) struct PassHost<'a> {
     in_progress: HashSet<Key>,
     /// New spills found during the pass: anchor → array.
     pub(super) spills: HashMap<Key, std::sync::Arc<Array>>,
+    /// Large blocks read more than once, and how often each was asked for.
+    blocks: HashMap<(usize, RangeRef), SharedBlock>,
+    /// The cells held in `blocks`.
+    block_cells: u64,
     /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
     /// every row, so once per sheet rather than once per range read.
     used: HashMap<usize, Option<RangeRef>>,
@@ -77,6 +84,8 @@ pub(super) struct PassHost<'a> {
 impl<'a> PassHost<'a> {
     pub(super) fn new(wb: &'a Workbook, exprs: &'a HashMap<Key, std::sync::Arc<Expr>>, rng: &'a mut u64, now: f64) -> Self {
         PassHost {
+            blocks: HashMap::default(),
+            block_cells: 0,
             wb,
             exprs,
             results: HashMap::with_capacity_and_hasher(exprs.len(), Default::default()),
@@ -483,7 +492,51 @@ fn fit_to_range(v: Value, range: RangeRef) -> Value {
     Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
 }
 
+/// The most cells a pass remembers in shared blocks: past it, blocks are read each time.
+const MAX_SHARED_CELLS: u64 = 16_000_000;
+
+impl PassHost<'_> {
+    /// Whether a block just read keeps those values for the rest of the pass: nothing in it is
+    /// still being calculated or waiting (those read as #CIRC!, or are thrown away when unwinding),
+    /// and no array can spill over it. A formula still to come can only spill down and to the
+    /// right, so one above or to the left of the block's end rules it out, as does any spill on
+    /// the sheet already.
+    fn values_are_final(&self, sheet: usize, range: RangeRef) -> bool {
+        if self.suspend.is_some() || self.spills.keys().any(|anchor| anchor.0 == sheet) {
+            return false;
+        }
+        let Some(sh) = self.wb.sheet(sheet) else { return false };
+        if !sh.spill_ranges.is_empty() || !sh.spill.is_empty() {
+            return false;
+        }
+        let before_end = |k: &Key| k.0 == sheet && k.1.row <= range.end.row && k.1.col <= range.end.col;
+        !self.pending.iter().any(before_end) && !self.in_progress.iter().any(before_end) && !self.waiting.iter().any(before_end)
+    }
+}
+
 impl Host for PassHost<'_> {
+    /// From the second read of a block whose values are final, everyone shares one copy. A block
+    /// that isn't final yet is tried again at the next power of two of reads, so waiting on the
+    /// rest of the pass doesn't cost a look at it for each read.
+    fn shared_block(&mut self, sheet: usize, range: RangeRef) -> Option<std::sync::Arc<Array>> {
+        let entry = self.blocks.entry((sheet, range)).or_insert((0, None));
+        entry.0 = entry.0.saturating_add(1);
+        if let Some(block) = &entry.1 {
+            return Some(std::sync::Arc::clone(block));
+        }
+        let cells = u64::from(range.height()) * u64::from(range.width());
+        if entry.0 < 2 || !entry.0.is_power_of_two() || self.iterate || self.block_cells.saturating_add(cells) > MAX_SHARED_CELLS {
+            return None;
+        }
+        let values = self.range_values(sheet, range);
+        if !self.values_are_final(sheet, range) {
+            return None;
+        }
+        let block = std::sync::Arc::new(Array::new(range.height() as usize, range.width() as usize, values)?);
+        self.block_cells += cells;
+        self.blocks.insert((sheet, range), (u32::MAX, Some(std::sync::Arc::clone(&block))));
+        Some(block)
+    }
     fn workbook(&self) -> &Workbook {
         self.wb
     }

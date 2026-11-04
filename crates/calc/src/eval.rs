@@ -27,6 +27,8 @@ pub use special::{SPECIAL_FUNCTIONS, is_known_function, precedents, resized_sum_
 pub const MAX_CELLS: u64 = 16_000_000;
 /// References up to this many cells (one whole row) are always read at their full size.
 const FULL_SIZE_CELLS: u64 = 16_384;
+/// Smaller blocks are read each time: they cost little, and aren't worth remembering.
+const MIN_SHARED_BLOCK_CELLS: u64 = 1_024;
 /// Bounded references up to this many cells (one column's worth) are read at their full size too, as
 /// Excel does, so their shape lines up with the arrays next to them (`D3:AZ400*B3:B400` is 398 by
 /// 49 even when the data ends at column F) and their blanks count. References that run to the edge
@@ -104,6 +106,11 @@ pub trait Host {
     /// Values of a block, row-major. Hosts can override with a sparse fast path.
     fn range_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
         range.iter().map(|c| self.cell_value(sheet, c)).collect()
+    }
+    /// A block's values shared by everything that reads it, once they can't change any more.
+    /// `None`: read the block.
+    fn shared_block(&mut self, _sheet: usize, _range: RangeRef) -> Option<Arc<Array>> {
+        None
     }
     /// The sheet's used range (`Sheet::used_range`, which walks every stored row). Hosts that
     /// keep the workbook unchanged while evaluating can remember it.
@@ -269,6 +276,11 @@ impl<'h> Evaluator<'h> {
         let (h, w) = (range.height() as usize, range.width() as usize);
         if (h as u64) * (w as u64) > MAX_CELLS {
             return Value::Error(CellError::Num);
+        }
+        if (h as u64) * (w as u64) >= MIN_SHARED_BLOCK_CELLS
+            && let Some(block) = self.host.shared_block(a.sheet, range)
+        {
+            return Value::Array(block);
         }
         let data = self.host.range_values(a.sheet, range);
         Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
