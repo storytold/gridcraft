@@ -570,6 +570,51 @@ fn xml_maps_and_their_bindings_survive_a_round_trip() {
     );
 }
 
+/// A table backed by a query table carries no `uniqueName` or `xmlColumnPr` of its own: its binding
+/// is `tableType="queryTable"` plus the `connectionId`. Both have to survive the read, or
+/// `Table::is_external` would call it plain and Unlink would refuse a table Excel calls external.
+#[test]
+fn a_query_table_keeps_its_type_and_connection() {
+    let types = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/connections.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml"/><Override PartName="/xl/queryTables/queryTable1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.queryTable+xml"/><Override PartName="/xl/tables/table1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/></Types>"#;
+    let workbook = format!(
+        r#"<?xml version="1.0"?><workbook xmlns="{NS_MAIN}" xmlns:r="{NS_R}"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>"#
+    );
+    let sheet = format!(
+        r#"<?xml version="1.0"?><worksheet xmlns="{NS_MAIN}" xmlns:r="{NS_R}"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Item</t></is></c><c r="B1" t="inlineStr"><is><t>Qty</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>widget</t></is></c><c r="B2"><v>2</v></c></row></sheetData><tableParts count="1"><tablePart r:id="rId2"/></tableParts></worksheet>"#
+    );
+    let table = format!(
+        r#"<?xml version="1.0"?><table xmlns="{NS_MAIN}" id="1" name="Table1" displayName="Table1" ref="A1:B2" tableType="queryTable" connectionId="1" totalsRowShown="0"><autoFilter ref="A1:B2"/><tableColumns count="2"><tableColumn id="1" name="Item"/><tableColumn id="2" name="Qty"/></tableColumns><tableStyleInfo name="TableStyleMedium2" showRowStripes="1"/></table>"#
+    );
+    let root_rels = rels(&[("rId1", "officeDocument", "xl/workbook.xml")]);
+    let wb_rels = rels(&[("rId1", "worksheet", "worksheets/sheet1.xml"), ("rId2", "connections", "connections.xml")]);
+    let sheet_rels = rels(&[("rId1", "queryTable", "../queryTables/queryTable1.xml"), ("rId2", "table", "../tables/table1.xml")]);
+    let package = make_zip(&[
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", root_rels.as_bytes()),
+        ("xl/workbook.xml", workbook.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", wb_rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
+        ("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels.as_bytes()),
+        ("xl/tables/table1.xml", table.as_bytes()),
+        ("xl/queryTables/queryTable1.xml", QUERY_TABLE.as_bytes()),
+        ("xl/connections.xml", CONNECTIONS.as_bytes()),
+    ]);
+    let (wb, rep) = read_xlsx(&package).unwrap();
+    assert!(!rep.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep.warnings);
+    let t = &wb.sheet(0).unwrap().tables[0];
+    assert_eq!((t.table_type.as_deref(), t.connection_id), (Some("queryTable"), Some(1)), "the binding survives the read");
+    assert!(t.is_external(), "a query-table-backed table is external data");
+
+    let out = write_xlsx(&wb).unwrap();
+    let u = Unpacked::new(&out);
+    u.assert_valid();
+    let out_sheet = sheet_part(&u, "Data");
+    assert!(u.rels(&out_sheet).iter().any(|r| r.1.ends_with("/queryTable") && u.parts.get(&r.2).is_some_and(|b| b == QUERY_TABLE.as_bytes())));
+    let (_, table_part) = u.rels(&out_sheet).into_iter().map(|r| (r.1, r.2)).find(|(ty, _)| ty.ends_with("/table")).unwrap();
+    let written = xml::parse(u.text(&table_part).as_bytes()).unwrap();
+    assert_eq!((written.attr("tableType"), written.attr("connectionId")), (Some("queryTable"), Some("1")), "the binding is written back");
+}
+
 /// Where a link with `target`, in a workbook read from `from`, points once saved into `to`.
 #[cfg(unix)]
 fn rebased(target: &str, from: &str, to: &str) -> String {
