@@ -1100,6 +1100,10 @@ fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
         .unwrap_or_else(|| if data.starts_with(&[0x89, b'P', b'N', b'G']) { "image/png".into() } else { "image/jpeg".into() });
     let (w, h) = crate::io::image_size(&data).unwrap_or((320, 240));
     let d = s.doc()?;
+    // Sheet protection locks drawing objects, as for a text box's text.
+    if d.wb.active().is_some_and(|sh| sh.is_protected()) {
+        return Err(EngineError::Other(PROTECTED.into()));
+    }
     let id = d.wb.next_object_id();
     let at = cell_param(s, p, "at")?.unwrap_or(d.selection.active);
     let scale = (640.0 / w.max(1) as f32).min(1.0);
@@ -1733,12 +1737,31 @@ fn clear_cf(s: &mut Session, p: &Json) -> Result<Json> {
             sh.cond_formats.clear();
         } else {
             for cf in sh.cond_formats.iter_mut() {
+                let before = RangeRef::top_left(&cf.ranges);
                 cf.ranges.retain(|r| !ranges.iter().any(|x| x.intersects(r)));
+                // The relative formulas are written for the top-left cell: when it goes, they're
+                // rewritten for the new one, so the areas left keep reading the same cells.
+                if let (Some(from), Some(to)) = (before, RangeRef::top_left(&cf.ranges)) {
+                    rebase_cf_formulas(&mut cf.rule, from, to);
+                }
             }
             sh.cond_formats.retain(|c| !c.ranges.is_empty());
         }
         Ok(Json::Null)
     })
+}
+
+/// Moves the relative references of a rule's per-cell formulas written for `from` to `to`.
+fn rebase_cf_formulas(rule: &mut CfRule, from: CellRef, to: CellRef) {
+    let mv = |f: &str| crate::cmd::data::move_rule_formula(f, from, to);
+    match rule {
+        CfRule::CellIs { a, b, .. } => {
+            *a = mv(a);
+            *b = b.as_deref().map(mv);
+        }
+        CfRule::Expression { formula, .. } => *formula = mv(formula),
+        _ => {}
+    }
 }
 
 fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
