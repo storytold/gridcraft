@@ -313,6 +313,77 @@ fn arrows_escape_and_undo() {
 }
 
 #[test]
+fn undo_and_redo_reach_the_sheet_while_find_and_replace_is_open() {
+    let mut h = harness(blank());
+    for t in ["x1", "x2"] {
+        text(&mut h, t);
+        key(&mut h, Key::Enter, Modifiers::NONE);
+    }
+    h.state_mut().open_dialog("find", json!({"replace": true}));
+    h.run_steps(3);
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.values.insert("what".into(), json!("x"));
+        d.values.insert("with".into(), json!("y"));
+    }
+    h.run_steps(2);
+    h.get_by_label("Replace All").click();
+    h.run_steps(3);
+    assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("y1"), Value::from("y2")));
+    // Keyboard focus on a button must not reserve Undo/Redo for text editing.
+    h.get_by_label("Replace All").focus();
+    h.run_steps(2);
+    assert!(h.ctx.egui_wants_keyboard_input());
+    assert!(!h.ctx.text_edit_focused());
+    key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert!(h.state().dialog.is_some(), "the dialog stays open");
+    assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("x1"), Value::from("x2")), "one Undo takes back the whole Replace All");
+    key(&mut h, Key::Y, Modifiers::COMMAND);
+    assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("y1"), Value::from("y2")));
+    // The Mac Redo shortcut works too, as it does on the sheet.
+    key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert_eq!(value(&h, "A1"), Value::from("x1"));
+    key(&mut h, Key::Z, Modifiers::COMMAND | Modifiers::SHIFT);
+    assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("y1"), Value::from("y2")));
+    assert!(h.state().dialog.is_some(), "the dialog is still open");
+    h.get_by_label("Find what:").focus();
+    h.run_steps(2);
+    assert!(h.ctx.text_edit_focused());
+    let before = h.state().dialog.as_ref().unwrap().values.get("what").cloned();
+    h.input_mut().events.push(Event::Text("extra".into()));
+    h.run_steps(2);
+    assert_ne!(h.state().dialog.as_ref().unwrap().values.get("what"), before.as_ref());
+    key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert_eq!(h.state().dialog.as_ref().unwrap().values.get("what"), before.as_ref(), "Undo restores the Find field");
+    assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("y1"), Value::from("y2")), "text-field Undo leaves the sheet alone");
+}
+
+#[test]
+fn find_message_blocks_workbook_undo_and_redo() {
+    let mut session = blank();
+    session.execute("cell.set", json!({"cell": "A1", "input": "first"})).unwrap();
+    session.execute("cell.set", json!({"cell": "A1", "input": "second"})).unwrap();
+    session.execute("edit.undo", json!({})).unwrap();
+    let mut h = harness(session);
+    h.state_mut().open_dialog("find", json!({"replace": true}));
+    h.run_steps(3);
+    // An empty search raises the real modal error over Find and Replace.
+    h.get_by_label("Replace All").click();
+    h.run_steps(3);
+    assert!(h.state().message.is_some());
+    assert!(!h.ctx.text_edit_focused());
+    for (key_code, modifiers) in [(Key::Z, Modifiers::COMMAND), (Key::Y, Modifiers::COMMAND), (Key::Z, Modifiers::COMMAND | Modifiers::SHIFT)] {
+        key(&mut h, key_code, modifiers);
+        assert_eq!(value(&h, "A1"), Value::from("first"), "the message blocks workbook shortcuts");
+        assert!(h.state().message.is_some());
+    }
+    h.state_mut().message = None;
+    h.run_steps(2);
+    h.get_by_label("Replace All").focus();
+    h.run_steps(2);
+    key(&mut h, Key::Y, Modifiers::COMMAND);
+    assert_eq!(value(&h, "A1"), Value::from("second"), "Redo works again after dismissing the message");
+}
+#[test]
 fn shift_arrows_in_point_mode_extend_from_the_pointed_cell() {
     let mut s = blank();
     s.execute("selection.set", json!({"cell": "A11"})).unwrap();
