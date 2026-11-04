@@ -110,3 +110,27 @@ fn nh_opens_the_text_menu_so_the_item_letters_show() {
     assert!(h.query_by_label("Header & Footer").is_some(), "NH opens the drop-down, so Header & Footer shows its letter");
     assert!(h.query_by_label("Text Box").is_some(), "the Text Box item is listed too");
 }
+
+#[test]
+fn nz_then_h_edits_the_header() {
+    let mut h = harness();
+    key(&mut h, Key::F10);
+    for ch in "NZH".chars() {
+        letter(&mut h, Key::from_name(&ch.to_string()).expect("sequence letters map to keys"));
+    }
+    h.run_steps(6);
+    let view = h.state().session.active().unwrap().wb.active().unwrap().view;
+    assert_eq!(view, SheetViewMode::PageLayout, "the Header & Footer item is reachable under NZ");
+    assert!(h.state().grid.hf_edit.is_some(), "it starts the in-place header edit");
+}
+
+#[test]
+fn nh_then_t_inserts_a_text_box() {
+    let mut h = harness();
+    key(&mut h, Key::F10);
+    for ch in "NHT".chars() {
+        letter(&mut h, Key::from_name(&ch.to_string()).expect("sequence letters map to keys"));
+    }
+    h.run_steps(6);
+    assert!(journal_has(&h, "insert.textBox"), "the Text Box item is reachable under NH");
+}
