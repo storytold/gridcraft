@@ -77,6 +77,8 @@ impl SheetApp {
             macros: macro_ui::MacroUi::default(),
             started: now_ms(),
             allow_close: false,
+            window_controls: false,
+            viewport_commands: Vec::new(),
             bring_forward: false,
             open_switch_windows: false,
             ui_window: None,
@@ -250,6 +252,9 @@ impl SheetApp {
         macro_ui::question_box(self, &ctx);
         widgets::message_box(self, &ctx);
         widgets::toast(self, &ctx);
+        // Last, so its resize cursors win over the widgets under the window edges.
+        ribbon::window_frame(self, &ctx);
+        self.flush_viewport_commands(&ctx);
         // Requests are admitted in `logic`, for the root viewport, so only its pass issues them.
         if ctx.viewport_id() == egui::ViewportId::ROOT {
             control::issue_screenshots(self, &ctx);
@@ -301,6 +306,12 @@ impl SheetApp {
             return format!("{}R x {}C", cur.height(), cur.width());
         }
         sel.active.a1()
+    }
+
+    pub(crate) fn flush_viewport_commands(&mut self, ctx: &egui::Context) {
+        for command in self.viewport_commands.drain(..) {
+            ctx.send_viewport_cmd(command);
+        }
     }
 }
 
