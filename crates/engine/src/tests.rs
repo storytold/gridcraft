@@ -3975,6 +3975,24 @@ fn fill_series_weekday_out_of_range_step_errors() {
     assert_eq!(v(&s, "A2"), Value::Empty);
 }
 
+/// A step of a million weekdays moves whole weeks at a time instead of visiting every day, and
+/// lands where counting day by day would.
+#[test]
+fn fill_series_weekday_large_step_is_arithmetic() {
+    let mut s = s();
+    // 45005 is Monday 20 March 2023; five weekdays on from a Monday is the next Monday.
+    s.execute("cell.set", json!({"cell": "A1", "input": "45005"})).unwrap();
+    s.execute("edit.fillSeries", json!({"range": "A1:A3", "direction": "columns", "type": "date", "dateUnit": "weekday", "step": 1_000_000}))
+        .unwrap();
+    assert_eq!(v(&s, "A2"), Value::Number(45005.0 + 1_400_000.0));
+    assert_eq!(v(&s, "A3"), Value::Number(45005.0 + 2_800_000.0));
+    s.execute("cell.set", json!({"cell": "B1", "input": "45009"})).unwrap();
+    s.execute("edit.fillSeries", json!({"range": "B1:B3", "direction": "columns", "type": "date", "dateUnit": "weekday", "step": -1})).unwrap();
+    // Friday 24 March 2023 back one weekday at a time: Thursday, Wednesday.
+    assert_eq!(v(&s, "B2"), Value::Number(45008.0));
+    assert_eq!(v(&s, "B3"), Value::Number(45007.0));
+}
+
 #[test]
 fn fill_series_month_leap_year() {
     let s = series_date("2028-01-31", "A1:A3", "month");
@@ -5456,4 +5474,178 @@ fn a_view_kept_through_redo_doesnt_make_the_saved_workbook_dirty() {
     let d = s.doc().unwrap();
     assert_eq!(d.wb.active().unwrap().view, gridcraft_model::SheetViewMode::PageBreakPreview);
     assert!(!d.is_dirty(), "back at the saved edits, the view alone isn't a change");
+}
+
+#[test]
+fn workbook_display_options_are_commands() {
+    // #3101: Show sheet tabs / horizontal / vertical scroll bar, toggling without `on`, saved with
+    // the workbook and undoable.
+    let mut s = Session::new();
+    s.new_workbook();
+    let view = |s: &Session| s.doc().unwrap().wb.view;
+    assert_eq!(s.execute("view.showSheetTabs", json!({})).unwrap()["on"], json!(false));
+    assert_eq!(s.execute("view.showHorizontalScrollBar", json!({"on": false})).unwrap()["on"], json!(false));
+    assert_eq!(s.execute("view.showVerticalScrollBar", json!({"on": false})).unwrap()["on"], json!(false));
+    let v = view(&s);
+    assert!(!v.show_sheet_tabs && !v.show_horizontal_scroll && !v.show_vertical_scroll);
+    let (back, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap()).unwrap();
+    assert_eq!(back.view, v, "saved with the workbook");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(view(&s).show_vertical_scroll);
+    assert_eq!(s.execute("view.showSheetTabs", json!({})).unwrap()["on"], json!(true), "toggles back");
+}
+
+/// A link from a file can sit on a cell with nothing stored in it, past the used range (or on a
+/// sheet with no cells at all). Clear Hyperlinks, and Remove Hyperlink in the cell menu, must
+/// still remove it.
+#[test]
+fn clear_hyperlinks_removes_links_on_cells_with_nothing_stored() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    let link = || gridcraft_model::Hyperlink { target: "https://example.com".into(), tooltip: None, external: true };
+    let (a1, c5) = (CellRef::parse("A1").unwrap(), CellRef::parse("C5").unwrap());
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().hyperlinks.insert(c5, link());
+    s.execute("edit.clearHyperlinks", json!({"range": "C5"})).unwrap();
+    assert!(!s.doc().unwrap().wb.active().unwrap().hyperlinks.contains_key(&c5), "the link past the used range is removed");
+
+    // No cells at all.
+    s.execute("edit.clearAll", json!({"range": "A1"})).unwrap();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().hyperlinks.insert(a1, link());
+    s.execute("edit.clearHyperlinks", json!({"range": "A1"})).unwrap();
+    assert!(!s.doc().unwrap().wb.active().unwrap().hyperlinks.contains_key(&a1), "the link on an empty sheet is removed");
+}
+
+/// Notes and links aren't cell contents, so the cell comparison that guards a protected sheet
+/// doesn't see them go: Clear Hyperlinks and Clear Comments refuse locked cells themselves,
+/// stored or not.
+#[test]
+fn clearing_links_and_notes_respects_sheet_protection() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    let link = || gridcraft_model::Hyperlink { target: "https://example.com".into(), tooltip: None, external: true };
+    let (a1, c5) = (CellRef::parse("A1").unwrap(), CellRef::parse("C5").unwrap());
+    {
+        let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sh.hyperlinks.insert(a1, link());
+        sh.hyperlinks.insert(c5, link());
+    }
+    s.execute("review.newNote", json!({"cell": "C5", "text": "note", "author": "Example"})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    for (cmd, range) in [("edit.clearHyperlinks", "A1"), ("edit.clearHyperlinks", "C5"), ("edit.clearComments", "C5")] {
+        assert!(s.execute(cmd, json!({"range": range})).is_err(), "{cmd} on locked {range}");
+    }
+    let sh = s.doc().unwrap().wb.active().unwrap().clone();
+    assert!(sh.hyperlinks.contains_key(&a1) && sh.hyperlinks.contains_key(&c5) && sh.comments.contains_key(&c5), "nothing removed");
+
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    s.execute("edit.clearHyperlinks", json!({"range": "A1:C5"})).unwrap();
+    s.execute("edit.clearComments", json!({"range": "C5"})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap().clone();
+    assert!(sh.hyperlinks.is_empty() && sh.comments.is_empty());
+}
+
+/// A removed link or note is a change to its cell even when nothing is stored there, so a
+/// recorded macro's footprint lists it.
+#[test]
+fn clearing_links_and_notes_records_their_cells() {
+    let mut s = s();
+    let c5 = CellRef::parse("C5").unwrap();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb)
+        .sheet_mut(0)
+        .unwrap()
+        .hyperlinks
+        .insert(c5, gridcraft_model::Hyperlink { target: "https://example.com".into(), tooltip: None, external: true });
+    s.execute("review.newNote", json!({"cell": "D7", "text": "note", "author": "Example"})).unwrap();
+    s.doc_mut().unwrap().touched = Some(Vec::new());
+    s.execute("edit.clearHyperlinks", json!({"range": "C5"})).unwrap();
+    s.execute("edit.clearComments", json!({"range": "D7"})).unwrap();
+    let touched: Vec<String> = s.doc().unwrap().touched.clone().unwrap_or_default().into_iter().map(|(_, c)| c.a1()).collect();
+    assert!(touched.contains(&"C5".to_string()) && touched.contains(&"D7".to_string()), "{touched:?}");
+}
+
+/// The locked-cell check for notes and links keeps Allow Edit Ranges: a range without a password
+/// allows them at once, one with a password once it's unlocked in this session.
+#[test]
+fn clearing_links_and_notes_keeps_allow_edit_ranges() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    let link = || gridcraft_model::Hyperlink { target: "https://example.com".into(), tooltip: None, external: true };
+    let (a1, c5) = (CellRef::parse("A1").unwrap(), CellRef::parse("C5").unwrap());
+    {
+        let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sh.hyperlinks.insert(a1, link());
+        sh.hyperlinks.insert(c5, link());
+    }
+    s.execute("review.newNote", json!({"cell": "C5", "text": "note", "author": "Example"})).unwrap();
+    // Ranges are added before protecting: a protected sheet refuses `add`.
+    s.execute("review.allowEditRanges", json!({"action": "add", "title": "Open", "range": "A1"})).unwrap();
+    s.execute("review.allowEditRanges", json!({"action": "add", "title": "Kept", "range": "C5", "password": "example"})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+
+    s.execute("edit.clearHyperlinks", json!({"range": "A1"})).unwrap();
+    assert!(s.execute("edit.clearComments", json!({"range": "C5"})).is_err(), "a password range stays locked until unlocked");
+    s.execute("review.allowEditRanges", json!({"action": "unlock", "title": "Kept", "password": "example"})).unwrap();
+    s.execute("edit.clearHyperlinks", json!({"range": "C5"})).unwrap();
+    s.execute("edit.clearComments", json!({"range": "C5"})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap().clone();
+    assert!(sh.hyperlinks.is_empty() && sh.comments.is_empty());
+}
+
+#[test]
+fn protected_sheet_refuses_layout_commands_its_permissions_do_not_allow() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["h"], [1], [2]]})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:A3"})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    for (id, params) in [
+        ("home.rowHeight", json!({"rows": "1:1", "height": 40})),
+        ("home.columnWidth", json!({"cols": "A:A", "width": 80})),
+        ("data.group", json!({"rows": "2:3"})),
+        ("data.showLevels", json!({"rows": 1})),
+        ("data.clearFilter", json!({})),
+        ("data.reapply", json!({})),
+        ("insert.picture", json!({"base64": "iVBORw0KGgo="})),
+    ] {
+        let err = s.execute(id, params).expect_err(id).to_string();
+        assert!(err.contains("protected"), "{id}: {err}");
+    }
+    // With the permissions ticked the same layout commands run.
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    s.execute("review.protectSheet", json!({"formatRows": true, "formatColumns": true, "autofilter": true})).unwrap();
+    for (id, params) in [
+        ("home.rowHeight", json!({"rows": "1:1", "height": 40})),
+        ("home.columnWidth", json!({"cols": "A:A", "width": 80})),
+        ("data.reapply", json!({})),
+    ] {
+        s.execute(id, params).unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+}
+
+#[test]
+fn an_edit_range_limited_to_windows_users_stays_locked() {
+    use gridcraft_model::EditRange;
+    let mut s = s();
+    let a1 = CellRef::parse("A1").unwrap();
+    let range = |sd: Option<&str>| EditRange {
+        title: "T".into(),
+        ranges: vec![gridcraft_core::RangeRef::cell(a1)],
+        password: None,
+        security_descriptor: sd.map(str::to_string),
+    };
+    let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+    sh.edit_ranges.push(range(None));
+    assert!(crate::cmd::locked_cell_error(sh, a1, &[]).is_none(), "an open range");
+    sh.edit_ranges = vec![range(Some("D:(A;;GA;;;WD)"))];
+    assert!(crate::cmd::locked_cell_error(sh, a1, &[]).is_some(), "a user-limited range");
+}
+
+#[test]
+fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Region", "Sales"], ["N", 1], ["S", 2]]})).unwrap();
+    s.execute("review.protectWorkbook", json!({"on": true})).unwrap();
+    for dest in ["new", "NEW", " new ", ""] {
+        assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "destination": dest})).is_err(), "destination {dest:?}");
+    }
+    assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
 }
