@@ -492,7 +492,8 @@ pub fn decode_string_dictionary(data: &[u8], hash_information: bool) -> Result<V
     if count > 16 * 1024 * 1024 || pages > 16 * 1024 * 1024 {
         return Err(ModelFileError::TooLarge);
     }
-    if pages > usize::try_from(count).unwrap_or(usize::MAX) as u64 {
+    // The encoder writes one (empty) page for an empty dictionary, so a zero-string page is valid.
+    if pages > count.max(1) {
         return Err(ModelFileError::Corrupt("string dictionary has more pages than strings".into()));
     }
     let mut page_buffers: Vec<Vec<u8>> = Vec::new();
@@ -870,6 +871,17 @@ mod tests {
             Err(ModelFileError::Unsupported(message)) => assert!(message.contains("hash"), "{message}"),
             other => panic!("expected a rejected chain, got {other:?}"),
         }
+        Ok(())
+    }
+
+    #[test]
+    fn empty_string_dictionary_round_trips() -> Result<()> {
+        // A text column with only blanks has no strings, but the encoder still writes one page.
+        let strings: Vec<String> = Vec::new();
+        let bytes = encode_string_dictionary(&strings, true)?;
+        assert_eq!(decode_string_dictionary(&bytes, true)?, strings);
+        let bytes = encode_string_dictionary(&strings, false)?;
+        assert_eq!(decode_string_dictionary(&bytes, true)?, strings);
         Ok(())
     }
 

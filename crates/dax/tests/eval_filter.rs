@@ -439,6 +439,20 @@ fn filtercluster_correlates_scans_with_groups() {
 }
 
 #[test]
+fn apply_functions_reject_cross_joins_above_the_row_limit() {
+    // Three 101-row scans cross-join to 1,030,301 rows, above the 1,000,000-row ceiling every
+    // row-generating table function enforces, so the scan is rejected instead of allocated.
+    let cross_apply = "GROUPCROSSAPPLYTABLE(Sales[Region], ALL(Sales), \"\", GENERATESERIES(1, 101), \"\", \
+                       GENERATESERIES(1, 101), \"\", GENERATESERIES(1, 101))";
+    let filter_cluster = "FILTERCLUSTER(Sales[Region], ALL(Sales), \"\", GENERATESERIES(1, 101), \
+                          GENERATESERIES(1, 101), GENERATESERIES(1, 101))";
+    for (function, expression) in [("GROUPCROSSAPPLYTABLE", cross_apply), ("FILTERCLUSTER", filter_cluster)] {
+        let error = eval_table(expression).expect_err("oversized cross join");
+        assert!(error.contains("too large"), "{function}: {error}");
+    }
+}
+
+#[test]
 fn apply_functions_reject_missing_group_columns() {
     // Argument kinds are validated at bind time; a non-column group argument never reaches the
     // evaluator.

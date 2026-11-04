@@ -199,6 +199,10 @@ fn window_table(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Re
     Ok(TableValue::new(relation.columns, rows).with_lineage_if(relation.lineage))
 }
 
+/// Ceiling for the cross-joined scan rows of `GROUPCROSSAPPLYTABLE`/`FILTERCLUSTER`, the same one
+/// the other row-generating table functions use: an input-derived product must not exhaust memory.
+const MAX_APPLY_ROWS: usize = 1_000_000;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BoundaryType {
     Abs,
@@ -894,7 +898,11 @@ fn group_cross_apply(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, 
                 if scan_columns.len() < scans.len() {
                     scan_columns.push(table.columns.clone());
                 }
-                let mut next = Vec::with_capacity(combinations.len().saturating_mul(table.rows.len()));
+                let size = combinations.len().saturating_mul(table.rows.len());
+                if size > MAX_APPLY_ROWS || rows.len().saturating_add(size) > MAX_APPLY_ROWS {
+                    return Err(EvalError::new(format!("{name} result is too large")));
+                }
+                let mut next = Vec::with_capacity(size);
                 for prefix in &combinations {
                     for row in &table.rows {
                         let mut combined = prefix.clone();
@@ -1014,7 +1022,11 @@ fn filter_cluster(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> 
             if scan_columns.len() < scans.len() {
                 scan_columns.push(table.columns.clone());
             }
-            let mut next = Vec::with_capacity(combinations.len().saturating_mul(table.rows.len()));
+            let size = combinations.len().saturating_mul(table.rows.len());
+            if size > MAX_APPLY_ROWS || rows.len().saturating_add(size) > MAX_APPLY_ROWS {
+                return Err(EvalError::new("FILTERCLUSTER result is too large"));
+            }
+            let mut next = Vec::with_capacity(size);
             for prefix in &combinations {
                 for row in &table.rows {
                     let mut combined = prefix.clone();
