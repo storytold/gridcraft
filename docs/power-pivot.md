@@ -6,7 +6,8 @@ commands, so the UI, agents and the control channel see the same model.
 
 The model is **session state**: `dataModel.load` reads a JSON model file, and measure and
 relationship edits update the engine session only. They are not written to the workbook and are
-not undoable.
+not undoable — the one exception is `dataModel.createPivot`, which writes the session model's
+measures into the workbook's `xl/model/item.data` before attaching the PivotTable's cache.
 
 ## Window layout
 
@@ -34,7 +35,7 @@ explanatory tooltip.
 | Formatting | **Data Type** (selected column's type), **Format** for the selected measure (`dataModel.setFormat`), currency/percent/comma/increase/decrease decimals applied to the measure's format | — |
 | Sort and Filter | **Sort A to Z**, **Sort Z to A**, **Clear Sort**, **Filter** by value, **Clear All Filters**, **Sort by Column** (through a relationship) — all session view state | — |
 | Find | **Find** (`dataModel.find`): table/column scope, case, returns `{table, column, row, value}` matches | — |
-| Calculations | — | AutoSum, Create KPI |
+| Calculations | **AutoSum** — adds a `SUM` measure for the selected numeric column (`dataModel.addMeasure`) | Create KPI |
 | View | Data View, Diagram View, Calculation Area, Show Hidden (now changes the grid) | — |
 
 - Data View / Diagram View and Calculation Area take effect immediately.
@@ -51,8 +52,9 @@ explanatory tooltip.
 Groups: Columns, Calculations, Relationships, Table Properties, Mark as Date Table, Date Table,
 Edit. The Data View/Diagram canvas stays visible below this ribbon.
 
-- **Columns — Add** opens Add Measure for the selected table. Delete, Freeze and Width are
-  disabled: model columns cannot be deleted, frozen or resized.
+- **Columns — Add** opens Add Measure for the selected table; **Hide/Unhide** works
+  (`dataModel.setColumnHidden`). Delete, Freeze and Width stay disabled: model columns cannot be
+  deleted, frozen or resized.
 - **Calculations — Insert Function** opens the Function Picker; **Calculation Options** opens the
   Automatic/Manual dialog. The Picker searches Excel-style categories and inserts a filled
   template into the formula bar (or the Add Measure formula field) using the first loaded table's
@@ -63,8 +65,6 @@ Edit. The Data View/Diagram canvas stays visible below this ribbon.
 - **Mark as Date Table** works (`dataModel.markDateTable`, `dataModel.unmarkDateTable`): it validates
   that the chosen column holds contiguous, unique dates before it stores the mark on the model.
   **Date Table**, **Undo** and **Redo** stay disabled; model edits commit immediately.
-- **Columns — Hide/Unhide** works (`dataModel.setColumnHidden`). Delete, Freeze and Width remain
-  disabled: model columns cannot be deleted, frozen or resized.
 
 ## Advanced ribbon
 
@@ -213,7 +213,7 @@ All overlays are reported through `overlay` = `""` | `openModel` | `existingConn
 | Sort, filter and format model rows | Partial: sort/filter/find work on the window's view state (`sortTable`, `setFilter`, `sortByColumn`, `find`); they do not reorder model storage |
 | Mark as Date Table / Date Table metadata | Partial: **Mark as Date Table** / **Unmark** validate and store the mark; the automatic Date Table command is missing |
 | Perspectives, KPIs, hierarchies, Summarize By, reporting properties | Partial: **Summarize By** works (`setSummarizeBy`) and feeds implicit measures; perspectives, KPIs, hierarchies and reporting properties are missing |
-| Undo/Redo, Find, AutoSum | Find works (`dataModel.find`); undo/redo and AutoSum are missing; edits commit immediately |
+| Undo/Redo, Find, AutoSum | Find works (`dataModel.find`) and AutoSum adds a `SUM` measure for the selected numeric column (`dataModel.addMeasure`); undo/redo are missing, so edits commit immediately |
 | Calculation Options Manual mode | Window state only; commands still commit immediately |
 | Show Hidden / Show Implicit Measures | Both work: hidden columns are model metadata, implicit measures are generated from each column's default summarization |
 | Worksheet PivotTable field list and cache | Partial: `dataModel.createPivot` writes the report cells plus `pivotTable*.xml` / `pivotCacheDefinition*.xml` / `xl/connections.xml`, keeps them on save, and the result **opens, refreshes and survives save/reopen in Excel**. The **PivotTable Fields pane** covers model pivots (`dataModel.pivotFields`): a searchable field tree with drag-and-drop between Rows/Columns/Filters/Values, tick boxes, a Summarize by menu on column values (Sum/Average/Count/Min/Max as an implicit measure), slicer cards that drive page filters, layout and grand totals, and Apply updates the pivot in place. A real on-sheet slicer object and a timeline are not there: the slicer model resolves columns against worksheet tables only, and `slicer`/`slicercache`/`timeline` parts are not preserved — see the limits below |
