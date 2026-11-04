@@ -102,6 +102,24 @@ fn switching_an_automatic_first_stop_to_solid_keeps_a_visible_colour() {
     assert_ne!(solid.fg, Color::Auto, "an automatic first stop must not become an invisible solid fill");
 }
 
+#[test]
+fn every_gradient_stop_control_names_the_stop_it_edits() {
+    let mut h = harness();
+    h.state_mut().open_dialog("formatCells", json!({"tab": "Fill"}));
+    h.run_steps(6);
+    h.get_by_label("Gradient").click();
+    h.run_steps(6);
+    h.get_by_label("Add Stop").click();
+    h.run_steps(6);
+
+    let slider_labels: Vec<String> = h.get_all_by_role(Role::Slider).filter_map(|n| n.accesskit_node().label()).collect();
+    for i in 1..=3 {
+        assert!(slider_labels.iter().any(|l| l == &format!("Stop{i}")), "stop {i}'s slider is named for it: {slider_labels:?}");
+        assert_eq!(h.get_all_by_label(&format!("Stop{i} Fill Color")).count(), 1, "stop {i}'s colour button is named for it");
+        assert_eq!(h.get_all_by_label(&format!("Delete Stop{i}")).count(), 1, "stop {i}'s remove button is named for it");
+    }
+}
+
 fn drag(h: &mut egui_kittest::Harness<'static, SheetApp>, from: Pos2, to: Pos2) {
     let press = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
     h.input_mut().events.extend([Event::PointerMoved(from), press(from, true)]);

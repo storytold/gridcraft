@@ -4,9 +4,11 @@ use gridcraft_engine::model::{Color as CellColor, Fill, GradientFill, GradientKi
 use super::show::ok_cancel;
 use super::{Dialog, SheetApp, json, theme};
 
-fn gradient_color_button(ui: &mut egui::Ui, color: &mut CellColor, theme: &Theme) {
+fn gradient_color_button(ui: &mut egui::Ui, color: &mut CellColor, theme: &Theme, name: &str) {
     let mut rgb = color.resolve(theme).unwrap_or([0, 0, 0]);
-    if ui.color_edit_button_srgb(&mut rgb).changed() {
+    let resp = ui.color_edit_button_srgb(&mut rgb);
+    ui.ctx().accesskit_node_builder(resp.id, |node| node.set_label(name.to_string()));
+    if resp.changed() {
         *color = CellColor::rgb(rgb[0], rgb[1], rgb[2]);
     }
 }
@@ -109,18 +111,25 @@ fn fill_tab(ui: &mut egui::Ui, fill: &mut Fill, theme: &Theme, lang: crate::i18n
             let mut editing = false;
             for i in 0..count {
                 ui.horizontal(|ui| {
-                    ui.label(format!("{}{}", lang.tr("Gradient|Stop"), i + 1));
-                    gradient_color_button(ui, &mut g.stops[i].color, theme);
+                    // Each control names the stop it edits: "×" alone says nothing in a row of stops.
+                    let stop_name = format!("{}{}", lang.tr("Gradient|Stop"), i + 1);
+                    ui.label(stop_name.as_str());
+                    gradient_color_button(ui, &mut g.stops[i].color, theme, &format!("{} {}", stop_name, lang.tr("Fill Color")));
                     let mut pct = g.stops[i].position * 100.0;
                     let resp = ui.add(egui::Slider::new(&mut pct, 0.0..=100.0).suffix("%"));
+                    ui.ctx().accesskit_node_builder(resp.id, |node| node.set_label(stop_name.clone()));
                     if resp.changed() {
                         g.stops[i].position = pct / 100.0;
                     }
                     // Keyboard changes set `changed` but not `dragged`; keep the row bound to
                     // the same stop while its slider still owns focus as well.
                     editing |= resp.dragged() || resp.has_focus();
-                    if count > 2 && ui.small_button("×").clicked() {
-                        remove = Some(i);
+                    if count > 2 {
+                        let remove_stop = ui.small_button("×");
+                        ui.ctx().accesskit_node_builder(remove_stop.id, |node| node.set_label(format!("{} {stop_name}", lang.tr("Delete"))));
+                        if remove_stop.clicked() {
+                            remove = Some(i);
+                        }
                     }
                 });
             }
