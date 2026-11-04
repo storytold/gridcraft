@@ -1212,6 +1212,19 @@ fn apply_params(view: &View<'_>, draft: &Draft) -> Json {
         .find_map(ValueField::measure_name)
         .map(str::to_string)
         .or_else(|| view.selected.and_then(|selected| selected["measure"].as_str().or(selected["source"].as_str())).map(str::to_string))
+        .or_else(|| {
+            // A summarized column supplies the grouping table, so no measure is needed there; with
+            // no value field at all the report still needs one to group by.
+            if draft.values.is_empty() {
+                view.model["measures"]
+                    .as_array()
+                    .and_then(|measures| measures.first())
+                    .and_then(|measure| measure["name"].as_str())
+                    .map(str::to_string)
+            } else {
+                None
+            }
+        })
         .unwrap_or_default();
     let mut params = json!({
         "measure": measure,

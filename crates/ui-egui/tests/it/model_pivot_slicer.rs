@@ -133,13 +133,13 @@ fn clearing_the_slicer_restores_every_row() {
     click(&mut h, "Clear Slicer Filter");
     click(&mut h, "Apply");
     let params = last_command(&h, "dataModel.createPivot");
-    let mut allowed = filters_of(&params).into_iter().next().map(|(_, allowed)| allowed).unwrap_or_default();
-    allowed.sort();
-    assert_eq!(allowed, ["East", "North", "West"], "every member is allowed again");
+    let filter = params["filters"][0].clone();
+    assert_eq!(filter["field"], json!("Sales[Region]"));
+    assert!(filter.get("allowed").is_none(), "clearing the filter restores the page field's (All), not a member list");
 
     h.run_steps(2);
     assert_eq!(cell(&h, 2, 0), "Region");
-    assert_eq!(cell(&h, 3, 0), "(Multiple Items)", "several members are on");
+    assert_eq!(cell(&h, 3, 0), "(All)", "the page field is back to (All)");
     assert_eq!(cell(&h, 5, 0), "A", "the body lists every category again");
     assert_eq!(cell(&h, 6, 0), "B");
     assert_eq!(cell(&h, 7, 0), "C");
