@@ -368,3 +368,13 @@ fn week_functions_accept_a_table_reference() {
     let error = eval_error("DATESWTD('Date'[Date])", FilterContext::default());
     assert!(error.contains("table"), "{error}");
 }
+
+#[test]
+fn dateadd_and_sameperiodlastyear_keep_the_leap_day_of_a_full_month() {
+    // A full February shifted back a year reaches 29 February 2024, not 28.
+    let february = dates((2025, 2, 1), (2025, 2, 28));
+    assert_eq!(bounds("DATEADD('Date'[Date], -1, \"YEAR\")", february.clone()), (serial(2024, 2, 1), serial(2024, 2, 29)));
+    assert_eq!(bounds("SAMEPERIODLASTYEAR('Date'[Date])", february), (serial(2024, 2, 1), serial(2024, 2, 29)));
+    // A selection ending mid-month keeps its day span.
+    assert_eq!(bounds("DATEADD('Date'[Date], -1, \"YEAR\")", dates((2025, 2, 1), (2025, 2, 15))), (serial(2024, 2, 1), serial(2024, 2, 15)));
+}

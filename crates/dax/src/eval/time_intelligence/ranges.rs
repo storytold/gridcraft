@@ -503,11 +503,18 @@ fn compute_table(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut C
             };
             let start = shift(min, count, interval);
             let mut end = shift(max, count, interval);
-            // A selection that ends on the last day of its period selects the whole target period:
+            // A selection that ends on the last (or second-to-last) day of its month selects the
+            // whole target period, so a full February shifted by a year still reaches February 29:
             // "if the Dates argument includes all the days in April (30 rows), the result for the
             // previous month includes all the days in March (31 days)" (dax.guide/DATEADD).
+            let month_edge = month_end(max) - max <= 1.0;
             if align_end(max, interval).floor() == max {
+                // The selection covers a whole period: the shift covers the whole target period.
                 end = align_end(end, interval);
+            } else if month_edge && matches!(interval, Interval::Month | Interval::Quarter | Interval::Year) {
+                // It runs to the end of its month instead: the shift reaches the end of the
+                // target month (a full February shifted by a year keeps February 29).
+                end = month_end(end);
             }
             Ok(axis.table(start.min(end), start.max(end)))
         }
@@ -678,7 +685,12 @@ fn compute_table(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut C
                 return Ok(axis.empty());
             };
             let start = edate(min, -12);
-            let end = edate(max, -12);
+            let mut end = edate(max, -12);
+            // It is `DATEADD(Dates, -1, YEAR)`: a selection ending on the last days of its month
+            // reaches the end of the shifted month, leap day included.
+            if month_end(max) - max <= 1.0 {
+                end = month_end(end);
+            }
             Ok(axis.table(start.min(end), start.max(end)))
         }
         "STARTOFMONTH" => match axis.max {

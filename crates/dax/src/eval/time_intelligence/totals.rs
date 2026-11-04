@@ -87,7 +87,14 @@ fn total(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context, 
     // The window only keeps dates that exist in the date column, exactly like DATESMTD/YTD; the
     // keys use the column's own values so an untyped date column still matches its rows.
     let window = dates_between(ev, dates, start, last);
-    filters.set(dates.table, dates.column, window.iter().map(|(_, value)| ScalarKey::from(value)));
+    // `TOTALYTD` is `CALCULATE(expr, DATESYTD(dates), filter)`: a filter argument on the date
+    // column intersects the window instead of being replaced by it.
+    let window: BTreeSet<ScalarKey> = window.iter().map(|(_, value)| ScalarKey::from(value)).collect();
+    let keys = match filters.filters.get(&(dates.table, dates.column)) {
+        Some(existing) => existing.intersection(&window).cloned().collect(),
+        None => window,
+    };
+    filters.set(dates.table, dates.column, keys);
     let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone() };
     ev.eval(&args[0], &mut inner)
 }
@@ -130,7 +137,11 @@ fn balance(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context
     if let Some(filter) = args.get(2) {
         apply_filter_arg(ev, filter, &mut filters, ctx)?;
     }
-    filters.set(dates.table, dates.column, [ScalarKey::from(&boundary)]);
+    let keys = match filters.filters.get(&(dates.table, dates.column)) {
+        Some(existing) if !existing.contains(&ScalarKey::from(&boundary)) => BTreeSet::new(),
+        _ => BTreeSet::from([ScalarKey::from(&boundary)]),
+    };
+    filters.set(dates.table, dates.column, keys);
     let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone() };
     ev.eval(&args[0], &mut inner)
 }
@@ -331,16 +342,22 @@ fn parse_year_end(value: &Scalar) -> Option<f64> {
             let first: i64 = first.trim().parse().ok()?;
             let second: i64 = second.trim().parse().ok()?;
             let third: i64 = third.trim().parse().ok()?;
-            if first > 31 {
-                Some(date_serial(first, second, third, 0, 0, 0))
+            let (year, month, day) = if first > 31 {
+                (first, second, third)
             } else if third > 31 {
-                Some(date_serial(third, first, second, 0, 0, 0))
-            } else if (1..=12).contains(&first) && (1..=31).contains(&second) && (0..=99).contains(&third) {
+                (third, first, second)
+            } else if (0..=99).contains(&third) {
                 // `M/D/YY`: the year is ignored, as only the month and day matter.
-                Some(date_serial(2000, first, second, 0, 0, 0))
+                (2000, first, second)
             } else {
-                None
+                return None;
+            };
+            // The three-part forms reject an impossible month or day too, instead of letting
+            // `date_serial` roll them into another fiscal year.
+            if !(1..=12).contains(&month) || day < 1 || day > days_in_month(year, month) {
+                return None;
             }
+            Some(date_serial(year, month, day, 0, 0, 0))
         }
         other => date_value(other),
     }
@@ -355,19 +372,17 @@ fn apply_filter_arg(ev: &Evaluator<'_>, expr: &BoundExpr, filters: &mut FilterCo
                 return Err(EvalError::new("a filter must compare a column"));
             };
             let value = ev.eval(right, ctx)?;
-            if *op == BinaryOp::Eq {
-                filters.set(table, column, [ScalarKey::from(&value)]);
-            } else {
-                // `col <> v` is FILTER(ALL(col), col <> v): the candidates come from the whole
-                // column, not from the outer date-table filters.
-                let keys = ev
-                    .table(table, &FilterContext::default())
-                    .column(column)
-                    .into_iter()
-                    .filter(|candidate| !candidate.strict_eq(&value))
-                    .map(|candidate| ScalarKey::from(&candidate));
-                filters.set(table, column, keys);
-            }
+            // `col = v` / `col <> v` is FILTER(ALL(col), …): the candidates come from the whole
+            // column and compare with DAX `=` semantics (numeric across types, text ignoring case).
+            let equal = |candidate: &Scalar| candidate.compare(&value) == Some(std::cmp::Ordering::Equal);
+            let keep_equal = *op == BinaryOp::Eq;
+            let keys = ev
+                .table(table, &FilterContext::default())
+                .column(column)
+                .into_iter()
+                .filter(|candidate| equal(candidate) == keep_equal)
+                .map(|candidate| ScalarKey::from(&candidate));
+            filters.set(table, column, keys);
             Ok(())
         }
         BoundExpr::Call { spec, args } if spec.name.eq_ignore_ascii_case("ALL") || spec.name.eq_ignore_ascii_case("REMOVEFILTERS") => {

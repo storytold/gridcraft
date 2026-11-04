@@ -132,7 +132,8 @@ All overlays are reported through `overlay` = `""` | `openModel` | `existingConn
   measure and relationship commands still commit immediately.
 - **Open Model / Existing Connections**: **Browse…** picks the model JSON (the browser has no
   filesystem, so the picker's bytes go straight to `dataModel.load` as `json`; native hosts pass
-  the chosen path), or type a path / paste the JSON and press **Load**. Errors stay in the dialog.
+  the chosen path), or paste the JSON and press **Load**. A typed filesystem path is treated as
+  JSON text, so use **Browse…** for a file. Errors stay in the dialog.
 
 ## Engine command contract
 

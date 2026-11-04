@@ -889,7 +889,7 @@ fn model_data(s: &Session) -> Result<Option<Arc<[u8]>>> {
     };
     let bytes = Arc::clone(&part.data);
     let Some(model) = s.dax_model.as_ref() else { return Ok(Some(bytes)) };
-    let measures: Vec<gridcraft_dax::model_file::ModelMeasure> = model
+    let mut measures: Vec<gridcraft_dax::model_file::ModelMeasure> = model
         .measures
         .iter()
         .filter_map(|measure| {
@@ -903,6 +903,21 @@ fn model_data(s: &Session) -> Result<Option<Arc<[u8]>>> {
             })
         })
         .collect();
+    // A rewritten script replaces every measure, so keep the ones the workbook's kept model
+    // PivotTables still reference (an implicit measure written by an earlier call lives only in
+    // the cache). A session measure of the same name wins.
+    let (parts, _) = gridcraft_xlsx::read_kept_model_pivots(&d.wb).unwrap_or_default();
+    let referenced: std::collections::BTreeSet<String> =
+        parts.iter().flat_map(|part| part.spec.values.iter().map(|value| value.measure.clone())).collect();
+    let current = gridcraft_dax::model_file::read_measures(&bytes).unwrap_or_default();
+    for name in referenced {
+        if measures.iter().any(|measure| measure.name.eq_ignore_ascii_case(&name)) {
+            continue;
+        }
+        if let Some(existing) = current.iter().find(|measure| measure.name.eq_ignore_ascii_case(&name)) {
+            measures.push(existing.clone());
+        }
+    }
     if measures.is_empty() {
         return Ok(Some(bytes));
     }
