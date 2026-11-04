@@ -31,6 +31,10 @@ impl FieldIn {
 struct CacheIn {
     source: String,
     fields: Vec<FieldIn>,
+    refresh_on_load: bool,
+    /// Something in the cache couldn't be read (a source in another workbook, calculated items,
+    /// a kind of grouping): rebuilt from what was read, its reports would show other values.
+    lossy: bool,
 }
 
 /// Workbook-level pivot cache lookup, filled from `<pivotCaches>`; caches are parsed once.
@@ -69,6 +73,7 @@ fn item_label_el(e: &El, sys: DateSystem) -> String {
 }
 
 fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn> {
+    let warned = cx.warned;
     let x = cx.optional_xml(part).ok().flatten()?;
     if x.name != "pivotCacheDefinition" {
         cx.warn(format!("{part} is not a pivot cache definition; its PivotTable was kept as plain cells"));
@@ -130,7 +135,13 @@ fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn>
         cx.warn("a PivotTable's cache has no fields; kept as plain cells");
         return None;
     }
-    Some(CacheIn { source, fields })
+    if x.child("calculatedItems").is_some() {
+        cx.warn("calculated items in a PivotTable are not supported");
+    }
+    // GridCraft writes `refreshOnLoad` for other readers (its cache can omit the records) along
+    // with the report cells it just computed: reading its own file back, those cells are current.
+    let own = x.attr("refreshedBy") == Some(crate::pivot::REFRESHED_BY);
+    Some(CacheIn { source, fields, refresh_on_load: x.flag("refreshOnLoad", false) && !own, lossy: cx.warned > warned })
 }
 
 /// Reads the PivotTables related to a worksheet part.
@@ -163,8 +174,17 @@ pub fn read_pivots(cx: &mut Ctx<'_>, caches: &mut CachesIn, sheet_part: &str, sh
             }
         };
         let Some(cache) = cache else { continue };
-        if let Some(pt) = read_table(cx, &x, &cache, caches.next_id) {
+        let warned = cx.warned;
+        if let Some(mut pt) = read_table(cx, &x, &cache, caches.next_id) {
             caches.next_id = caches.next_id.saturating_add(1);
+            // Rebuilt without what the reader left out (each a warning: label/value filters,
+            // calculated items, a Show Values As or function it doesn't have, …), the report would
+            // show other values than the file's, so it keeps the saved cells.
+            let lossy = cache.lossy || cx.warned > warned;
+            if cache.refresh_on_load && lossy {
+                cx.warn(format!("PivotTable \"{}\" isn't refreshed on open, so it shows the values saved in the file", pt.name));
+            }
+            pt.refresh_on_load = cache.refresh_on_load && !lossy;
             out.push(pt);
         }
     }
@@ -294,7 +314,15 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
         let Some((name, _)) = field_ref(cx, cache, i) else { continue };
         let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
         let selected = if let Some(k) = p.attr_u32("item") {
-            labels.get(k as usize).map(|l| vec![l.clone()])
+            // An index into every item the pivot field lists, whose `x` names the cache item (the
+            // same number when the field lists no items).
+            let items: Vec<&El> = pf(i).and_then(|e| e.child("items")).map(|it| it.kids("item").collect()).unwrap_or_default();
+            let x = if items.is_empty() { Some(k) } else { items.get(k as usize).and_then(|it| it.attr_u32("x")) };
+            let label = x.and_then(|x| labels.get(x as usize));
+            if label.is_none() {
+                cx.warn(format!("PivotTable \"{}\": the item selected in the {name} filter isn't one of its values", pt.name));
+            }
+            label.map(|l| vec![l.clone()])
         } else {
             pf(i).and_then(|e| {
                 let items = items_of(e);
@@ -379,7 +407,17 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
     }
 
     pt.anchor = loc.start;
-    let above = if pages.is_empty() { 0 } else { pages.len() as u32 + 1 };
+    // The report filters above the report, then a blank row. Excel stacks them one per row, or
+    // (`pageOverThenDown`) across a row, starting a new column or row after `pageWrap` of them.
+    let n = pages.len() as u32;
+    let wrap = x.attr_u32("pageWrap").unwrap_or(0);
+    let filter_rows = match (x.flag("pageOverThenDown", false), wrap) {
+        (false, 0) => n,
+        (false, w) => n.min(w),
+        (true, 0) => n.min(1),
+        (true, w) => n.div_ceil(w),
+    };
+    let above = if pages.is_empty() { 0 } else { filter_rows + 1 };
     pt.last_range = Some(RangeRef::new(CellRef::new(loc.start.row.saturating_sub(above), loc.start.col), loc.end));
     Some(pt)
 }

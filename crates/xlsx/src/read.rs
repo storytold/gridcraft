@@ -40,10 +40,14 @@ pub struct Ctx<'a> {
     pub known_function: Option<&'a dyn Fn(&str) -> bool>,
     /// The code of the workbook's Python cells, from its Python part.
     pub python: crate::python_part::ScriptsIn,
+    /// How many warnings were issued, repeats included (the report keeps each message once): a
+    /// reader compares it before and after a part to tell whether that part was read in full.
+    pub warned: u64,
 }
 
 impl Ctx<'_> {
     pub fn warn(&mut self, m: impl Into<String>) {
+        self.warned = self.warned.saturating_add(1);
         self.report.warn(m);
     }
     /// Stores the phonetic data read from `xl/sharedStrings.xml`.
@@ -257,6 +261,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         cf_ext_ids: vec![],
         known_function,
         python: Default::default(),
+        warned: 0,
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());

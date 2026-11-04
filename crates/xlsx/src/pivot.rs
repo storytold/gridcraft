@@ -29,6 +29,10 @@ use crate::xml::{El, esc_attr};
 mod read;
 mod write;
 
+/// The cache's `refreshedBy` GridCraft writes: on reading, a cache it refreshed holds report
+/// cells that are already current, so it isn't rebuilt on open.
+pub(crate) const REFRESHED_BY: &str = "GridCraft";
+
 pub use read::{CachesIn, read_pivots};
 pub use write::PivotWriter;
 

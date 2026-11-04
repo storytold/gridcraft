@@ -137,6 +137,9 @@ pub struct PivotTable {
     /// Position of Σ Values among the row fields (`None` = after the last). Only used with
     /// `values_on_rows`: in Columns Σ Values always comes after the last column field.
     pub values_position: Option<usize>,
+    /// PivotTable Options › Data › Refresh data when opening the file (`refreshOnLoad` on the
+    /// cache): opening the workbook rebuilds the report from its source, as Excel does.
+    pub refresh_on_load: bool,
 }
 
 /// A calculated field: a formula over other fields (`=Sales*0.1`, `='Unit Price'*Units`). As in
@@ -172,6 +175,7 @@ impl Default for PivotTable {
             calculated_fields: vec![],
             values_on_rows: false,
             values_position: None,
+            refresh_on_load: false,
         }
     }
 }

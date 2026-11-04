@@ -118,6 +118,9 @@ fn workbook() -> Workbook {
         calculated_fields: vec![],
         values_on_rows: false,
         values_position: None,
+        // The writer asks other readers for a refresh on open; GridCraft reading its own file
+        // back keeps the report it wrote, so the pivot reads back without it.
+        refresh_on_load: false,
     };
     // Pivot 2: table source, date grouping on two levels, show-values-as, multi-select page
     // filter and a hidden-items filter on a column field.
@@ -178,6 +181,9 @@ fn workbook() -> Workbook {
         calculated_fields: vec![],
         values_on_rows: false,
         values_position: None,
+        // The writer asks other readers for a refresh on open; GridCraft reading its own file
+        // back keeps the report it wrote, so the pivot reads back without it.
+        refresh_on_load: false,
     };
     // Pivot 3: defaults, defined-name source, compact.
     let p3 = PivotTable {
@@ -759,4 +765,68 @@ fn two_value_fields_without_columns_hide_the_values_row() {
     let t = &one["xl/pivotTables/pivotTable1.xml"];
     assert!(t.contains("firstHeaderRow=\"1\""), "{t}");
     assert!(!t.contains("hideValuesRow"), "{t}");
+}
+
+const KV_CACHE: &str = r#"<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" refreshOnLoad="1"><cacheSource type="worksheet"><worksheetSource ref="A1:B3"/></cacheSource><cacheFields count="2"><cacheField name="K"><sharedItems><s v="a"/><s v="b"/></sharedItems></cacheField><cacheField name="V"><sharedItems/></cacheField></cacheFields></pivotCacheDefinition>"#;
+
+fn kv_table(page_items: &str, page: &str, data_field: &str) -> String {
+    format!(
+        r#"<pivotTableDefinition name="Kv" cacheId="1"><location ref="C3:D5"/><pivotFields count="2"><pivotField axis="axisPage">{page_items}</pivotField><pivotField dataField="1"/></pivotFields><pageFields count="1">{page}</pageFields><dataFields>{data_field}</dataFields></pivotTableDefinition>"#
+    )
+}
+
+#[test]
+fn page_filter_item_is_an_index_into_the_fields_items() {
+    // `pageField@item` counts the pivot field's items, whose `x` then names the cache item: with
+    // the items listed b, a, item 0 is "b".
+    let table = kv_table(
+        r#"<items count="3"><item x="1"/><item x="0"/><item t="default"/></items>"#,
+        r#"<pageField fld="0" item="0"/>"#,
+        r#"<dataField name="Sum of V" fld="1"/>"#,
+    );
+    let (wb, report) = read_xlsx(&with_pivot(&table, Some(KV_CACHE))).unwrap();
+    let pt = wb.sheet(0).unwrap().pivots.first().cloned().unwrap_or_else(|| panic!("{:?}", report.warnings));
+    assert_eq!(pt.filters[0].selected, Some(vec!["b".to_string()]));
+    // The index counts every item the field lists, not only its data items.
+    let table = kv_table(
+        r#"<items count="3"><item t="default"/><item x="1"/><item x="0"/></items>"#,
+        r#"<pageField fld="0" item="1"/>"#,
+        r#"<dataField name="Sum of V" fld="1"/>"#,
+    );
+    let (wb, report) = read_xlsx(&with_pivot(&table, Some(KV_CACHE))).unwrap();
+    let pt = wb.sheet(0).unwrap().pivots.first().cloned().unwrap_or_else(|| panic!("{:?}", report.warnings));
+    assert_eq!(pt.filters[0].selected, Some(vec!["b".to_string()]));
+    // An index on an item that isn't a data item names no value: read as no selection, with a
+    // warning, so the pivot isn't rebuilt on open.
+    let table = kv_table(
+        r#"<items count="3"><item t="default"/><item x="1"/><item x="0"/></items>"#,
+        r#"<pageField fld="0" item="0"/>"#,
+        r#"<dataField name="Sum of V" fld="1"/>"#,
+    );
+    let (wb, report) = read_xlsx(&with_pivot(&table, Some(KV_CACHE))).unwrap();
+    let pt = wb.sheet(0).unwrap().pivots.first().cloned().unwrap_or_else(|| panic!("{:?}", report.warnings));
+    assert!(!pt.refresh_on_load, "{:?}", report.warnings);
+}
+
+#[test]
+fn pivots_read_with_something_left_out_are_not_refreshed_on_open() {
+    let items = r#"<items count="3"><item x="0"/><item x="1"/><item t="default"/></items>"#;
+    let page = r#"<pageField fld="0"/>"#;
+    let plain = r#"<dataField name="Sum of V" fld="1"/>"#;
+    let open = |table: &str, cache: &str| {
+        let (wb, report) = read_xlsx(&with_pivot(table, Some(cache))).unwrap();
+        wb.sheet(0).unwrap().pivots.first().map(|pt| pt.refresh_on_load).unwrap_or_else(|| panic!("{:?}", report.warnings))
+    };
+    assert!(open(&kv_table(items, page, plain), KV_CACHE), "a pivot read in full asks for its refresh");
+    // Show Values As "Difference From", which the reader reads as plain values.
+    assert!(!open(&kv_table(items, page, r#"<dataField name="V" fld="1" showDataAs="difference" baseField="0" baseItem="0"/>"#), KV_CACHE));
+    // Calculated items, which live on the cache.
+    let calc = KV_CACHE.replace("</cacheFields>", r#"</cacheFields><calculatedItems count="1"><calculatedItem formula="K[a]*2"/></calculatedItems>"#);
+    assert!(!open(&kv_table(items, page, plain), &calc));
+    // A source in another workbook, which a local sheet of the same name would stand in for.
+    let external = KV_CACHE.replace(
+        r#"<worksheetSource ref="A1:B3"/>"#,
+        r#"<worksheetSource ref="A1:B3" sheet="Sheet1" r:id="rId1" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/>"#,
+    );
+    assert!(!open(&kv_table(items, page, plain), &external));
 }

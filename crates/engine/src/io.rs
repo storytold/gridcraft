@@ -131,7 +131,69 @@ fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
     warnings.extend(crate::macros::load(&mut wb));
     warnings.extend(adopt_python(&mut wb));
     warnings.extend(enforce_python_limits(&mut wb));
+    warnings.extend(refresh_pivots_on_load(&mut wb));
     Ok((wb, warnings))
+}
+
+/// The most PivotTables rebuilt when a file opens: each recomputes over its whole source, so a
+/// file with thousands of them would stall the open. The rest keep their stored cells.
+pub const MAX_PIVOT_REFRESHES_ON_OPEN: usize = 256;
+
+/// PivotTables whose file asks for a refresh on open (`refreshOnLoad`) are rebuilt from their
+/// source, as Excel does: a file saved without its report cells (`saveData="0"`) otherwise opens
+/// with an empty report. One that can't be rebuilt keeps the cells the file stored, with a warning;
+/// past [`MAX_PIVOT_REFRESHES_ON_OPEN`] they all do, with one warning.
+fn refresh_pivots_on_load(wb: &mut Workbook) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let (mut refreshed, mut left) = (0usize, 0usize);
+    for si in 0..wb.sheets.len() {
+        let count = wb.sheets.get(si).map_or(0, |sh| sh.pivots.len());
+        for idx in 0..count {
+            let Some(pt) = wb.sheets.get(si).and_then(|sh| sh.pivots.get(idx)).filter(|pt| pt.refresh_on_load) else { continue };
+            if refreshed == MAX_PIVOT_REFRESHES_ON_OPEN {
+                left += 1;
+                continue;
+            }
+            refreshed += 1;
+            let name = pt.name.clone();
+            // The saved range spans the report's width on its filter rows too, though only the
+            // filters' own cells are the report's: a refresh that would empty a cell there (data
+            // beside a filter) is refused, so with anything in those rows it runs on a copy first.
+            let filter_area =
+                pt.last_range.filter(|r| r.start.row < pt.anchor.row).map(|r| RangeRef::new(r.start, CellRef::new(pt.anchor.row - 1, r.end.col)));
+            let occupied = filter_area.filter(|a| wb.sheet(si).is_some_and(|sh| sh.cells.iter_range(*a).any(|(_, cell)| cell.has_content())));
+            let result = match occupied {
+                // `pivot::refresh` returns its errors before it writes, so in place it either
+                // rebuilds the report or leaves the stored cells.
+                None => crate::pivot::refresh(wb, si, idx, false).map(|_| ()),
+                Some(area) => {
+                    let mut rebuilt = wb.clone();
+                    crate::pivot::refresh(&mut rebuilt, si, idx, false)
+                        .and_then(|_| {
+                            let (Some(before), Some(after)) = (wb.sheet(si), rebuilt.sheet(si)) else { return Ok(()) };
+                            match before
+                                .cells
+                                .iter_range(area)
+                                .find(|(c, cell)| cell.has_content() && !after.cell(*c).is_some_and(|n| n.has_content()))
+                            {
+                                Some((c, _)) => Err(format!("{} beside its filters isn't part of it", c.a1())),
+                                None => Ok(()),
+                            }
+                        })
+                        .map(|()| *wb = rebuilt)
+                }
+            };
+            if let Err(e) = result {
+                warnings.push(format!("PivotTable \"{name}\" couldn't be refreshed on open, so it shows the values saved in the file: {e}"));
+            }
+        }
+    }
+    if left > 0 {
+        warnings.push(format!(
+            "{left} more PivotTables ask for a refresh on open; the first {MAX_PIVOT_REFRESHES_ON_OPEN} were refreshed and these show the values saved in the file (Data › Refresh All updates them)."
+        ));
+    }
+    warnings
 }
 
 /// The most result cells [`adopt_python`] rebuilds from a file's cached spills, over all its
