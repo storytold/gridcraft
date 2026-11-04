@@ -24,6 +24,8 @@ type DetailsCache = ((u64, u64, usize, usize), Option<std::collections::HashSet<
 /// Cached fill-menu trend entries (label, mode), keyed by (doc uid, revision, sheet, source, dragged range).
 pub type FillTrendsCache = ((u64, u64, usize, RangeRef, RangeRef), Vec<(&'static str, &'static str)>);
 
+mod active_row;
+pub use active_row::active_row_band;
 mod cell_paint;
 mod cursor;
 mod editor;
@@ -103,6 +105,10 @@ pub enum Drag {
     Select,
     Rows(u32),
     Cols(u32),
+    /// Point mode over the row headers: the formula's reference runs from this row to the pointer.
+    PointRows(u32),
+    /// Point mode over the column headers: the formula's reference runs from this column to the pointer.
+    PointCols(u32),
     /// Reordering one contiguous whole-column selection by its header.
     MoveCols {
         source: RangeRef,
