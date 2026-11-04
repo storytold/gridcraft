@@ -606,6 +606,12 @@ fn html_cell_css(wb: &Workbook, sh: &Sheet, c: CellRef, dir: CellDir) -> String 
     }
     if let Some([r, g, b]) = st.fill.preview_color(&wb.theme) {
         let _ = write!(css, "background:#{r:02X}{g:02X}{b:02X};");
+        // An automatic first gradient stop previews as black, and automatic text has no colour
+        // of its own: print it in white instead of the browser's black on black.
+        let auto_stop = st.fill.gradient.as_ref().and_then(|g| g.stops.first()).is_some_and(|s| s.color == gridcraft_model::Color::Auto);
+        if auto_stop && st.font.color.hex(&wb.theme).is_none() {
+            css.push_str("color:#FFFFFF;");
+        }
     }
     let v = sh.value(c);
     let align = match st.align.h {

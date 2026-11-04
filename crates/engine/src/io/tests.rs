@@ -781,3 +781,24 @@ fn html_and_clipboard_use_the_first_gradient_stop() {
     let clip = range_html(&wb, 0, RangeRef::parse("A1").unwrap(), "x").unwrap();
     assert!(clip.contains("background:#FF0000;"), "{clip}");
 }
+
+#[test]
+fn html_and_clipboard_make_text_white_on_an_automatic_gradient() {
+    use gridcraft_model::{Color, Fill, GradientKind, GradientStop, StyleId};
+    let mut wb = Workbook::new();
+    let id = wb.styles.derive(StyleId::DEFAULT, |s| {
+        s.fill = Fill::gradient(
+            GradientKind::Linear { degree: 0.0 },
+            vec![GradientStop { position: 0.0, color: Color::Auto }, GradientStop { position: 1.0, color: Color::Rgb(0xFFFFFF) }],
+        );
+    });
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(0, 0), gridcraft_core::Value::text("x"));
+    sh.set_style(CellRef::new(0, 0), id);
+
+    // The automatic stop previews as black, and automatic text would be black on black.
+    let html = to_html(&wb, 0).unwrap();
+    assert!(html.contains("background:#000000;color:#FFFFFF;"), "{html}");
+    let clip = range_html(&wb, 0, RangeRef::parse("A1").unwrap(), "x").unwrap();
+    assert!(clip.contains("background:#000000;color:#FFFFFF;"), "{clip}");
+}
