@@ -142,6 +142,14 @@ pub(crate) fn wrapped_cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -
     }
 }
 
+/// Bounds of the primary font's line boxes, excluding extra row height added only for fallbacks.
+pub(crate) fn galley_baseline_bounds(galley: &egui::Galley) -> (f32, f32) {
+    let first = galley.rows.iter().find_map(|row| row.glyphs.first().map(|glyph| row.pos.y + glyph.pos.y - glyph.font_ascent));
+    let last =
+        galley.rows.iter().rev().find_map(|row| row.glyphs.first().map(|glyph| row.pos.y + glyph.pos.y - glyph.font_ascent + glyph.font_height));
+    first.zip(last).unwrap_or((0.0, galley.size().y))
+}
+
 pub(crate) fn cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
     let top_inset = 1.0 * z;
     let y_top = rect.top() - top_inset;
