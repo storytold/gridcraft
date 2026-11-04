@@ -14,16 +14,7 @@ fn harness() -> Harness {
     session.execute("range.setValues", json!({"range": "A1", "values": [["first", 2], [3, "fourth"]]})).unwrap();
     session.execute("view.rightToLeft", json!({"on": true})).unwrap();
     session.execute("selection.set", json!({"cell": "B2"})).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
-    h
+    crate::support::harness(session, 4)
 }
 
 fn geo(h: &Harness) -> Geo {

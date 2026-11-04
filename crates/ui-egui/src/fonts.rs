@@ -78,7 +78,7 @@ pub fn system_font_dirs() -> Vec<PathBuf> {
 /// Weight implied by a style name (`"Bold"` → 700, `"Light"` → 300).
 #[cfg(not(target_arch = "wasm32"))]
 fn style_weight(style: &str) -> f32 {
-    let s: String = style.chars().filter(|c| c.is_alphanumeric()).flat_map(|c| c.to_lowercase()).collect();
+    let s: String = style.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect();
     const TABLE: &[(&str, f32)] = &[
         ("hairline", 100.0),
         ("thin", 100.0),
@@ -107,7 +107,7 @@ impl Face {
 /// Whether a style name reads as italic or oblique.
 #[cfg(not(target_arch = "wasm32"))]
 fn style_italic(style: &str) -> bool {
-    let s: String = style.chars().filter(|c| c.is_alphanumeric()).flat_map(|c| c.to_lowercase()).collect();
+    let s: String = style.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect();
     s.contains("italic") || s.contains("oblique")
 }
 
@@ -165,8 +165,10 @@ pub fn scan_dirs(dirs: &[PathBuf]) -> Vec<Face> {
                 stack.push(path);
                 continue;
             }
-            let is_font =
-                path.extension().and_then(|e| e.to_str()).is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc" | "otc"));
+            let is_font = path
+                .extension()
+                .and_then(std::ffi::OsStr::to_str)
+                .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc" | "otc"));
             if !is_font || std::fs::metadata(&path).map(|m| m.len() > MAX_FONT_FILE).unwrap_or(true) {
                 continue;
             }
@@ -366,12 +368,12 @@ fn bound() -> &'static std::sync::RwLock<HashSet<String>> {
 
 /// Record the role families a freshly built [`egui::FontDefinitions`] bound.
 pub fn set_bound(keys: impl IntoIterator<Item = String>) {
-    *bound().write().unwrap_or_else(|e| e.into_inner()) = keys.into_iter().collect();
+    *bound().write().unwrap_or_else(std::sync::PoisonError::into_inner) = keys.into_iter().collect();
 }
 
 /// Is this exact role family bound to font data?
 pub fn is_bound(role: &str) -> bool {
-    bound().read().unwrap_or_else(|e| e.into_inner()).contains(role)
+    bound().read().unwrap_or_else(std::sync::PoisonError::into_inner).contains(role)
 }
 
 /// Serializes tests that mutate the process-wide bound-family registry.

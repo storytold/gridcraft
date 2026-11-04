@@ -1,11 +1,11 @@
 //! Draw tab: pen and eraser tools, ink strokes, Ink to Shape.
 
 use gridcraft_core::CellRef;
-use gridcraft_model::*;
+use gridcraft_model::{Anchor, Color, Shape, ShapeKind, Sheet};
 use serde_json::{Value as Json, json};
 
 use super::ink_shape::{InkShape, recognise};
-use super::*;
+use super::{CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, ok, str_param};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -73,7 +73,7 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
         str_param(p, "color").map(str::to_string).unwrap_or_else(|| if s.draw_color.is_empty() { "#1F5FC9".into() } else { s.draw_color.clone() });
     let width = f64_param(p, "width").map(|w| w as f32).unwrap_or(if s.draw_width <= 0.0 { 2.0 } else { s.draw_width }).clamp(0.5, 40.0);
     let d = s.doc()?;
-    let si = d.wb.active_sheet;
+    let si = d.wb.active_sheet();
     let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
     let cell = CellRef::new(sh.row_at(miny), sh.col_at(minx));
     let dx = (minx - sh.col_left(cell.col)) as f32;
@@ -81,6 +81,7 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
     let text = pts.iter().map(|q| format!("{:.1},{:.1}", q[0] - minx, q[1] - miny)).collect::<Vec<_>>().join(";");
     let id = d.wb.next_object_id();
     let shape = Shape {
+        math: Default::default(),
         id,
         kind: ShapeKind::Ink,
         anchor: Anchor {
@@ -143,7 +144,7 @@ fn ink_to_shape(s: &mut Session, p: &Json) -> Result<Json> {
 
 /// Convert one ink stroke (by id, or the last one) to the nearest shape; returns the kind.
 fn convert_ink(s: &mut Session, id: Option<u32>) -> Result<ShapeKind> {
-    let si = s.doc()?.wb.active_sheet;
+    let si = s.doc()?.wb.active_sheet();
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
         let idx = match id {

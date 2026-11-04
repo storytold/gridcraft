@@ -1,8 +1,4 @@
 //! Draw › Ink to Shape: a small geometric recogniser that tells whether a hand-drawn stroke is a
-//!
-//! Ported from WordCraft (`crates/engine/src/cmd/ink_shape.rs`, storytold/wordcraft#408 and
-//! #1520; same MIT/Apache-2.0 licences). The recogniser is unchanged; GridCraft maps its results
-//! onto `ShapeKind` in `cmd::draw`.
 //! straight line, a rectangle (or square), an ellipse (or circle), a triangle or another polygon
 //! of up to eight corners. Our own fit: an open stroke is a line when it stays close to the chord
 //! between its ends; a closed one is an ellipse when its points sit on the ellipse inscribed in
@@ -10,6 +6,12 @@
 //! path simplified with Ramer–Douglas–Peucker, near-straight and crowded corners merged) when
 //! that polygon stays close to every point. An arrow is a line-like shaft plus a head of two barbs
 //! drawn in the same stroke (shaft first or head first). Anything else (scribbles, curves, letters) stays ink.
+//!
+//! Ported from WordCraft, `crates/engine/src/cmd/ink_shape.rs` at commit `4ca58d67e1e8` ("Draw:
+//! Lasso Select, Add Pen, Ink to Shape and Ink Replay (#395) (#408)"), extended there by
+//! `666b9afc5a0e` (#1520) and `1f0aeb4626f9` (#1778); same MIT OR Apache-2.0 licences. The
+//! recogniser itself is unchanged, so the two copies stay in step: GridCraft maps its results
+//! onto `ShapeKind` in `cmd::draw`. Nothing here reaches the network.
 
 /// The most points the recogniser looks at (same bound as WordCraft's freeform ink): a longer
 /// stroke is not classified at all, rather than from a prefix of its points.
