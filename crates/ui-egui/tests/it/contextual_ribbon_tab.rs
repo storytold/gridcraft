@@ -146,6 +146,8 @@ fn table_design_draws_the_external_table_data_group() {
     h.run_steps(2);
     assert!(!disabled(&h, "Unlink"), "Unlink enables for a table with external data");
     assert!(disabled(&h, "Refresh"), "Refresh still waits for the connection model");
+    assert!(disabled(&h, "Properties"), "Properties still waits for the connection model");
+    assert!(disabled(&h, "Open in Browser"), "Open in Browser still waits for a server URL");
 
     h.get_by_label("Unlink").click();
     h.run_steps(2);
