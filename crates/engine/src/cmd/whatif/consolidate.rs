@@ -61,6 +61,24 @@ enum Key {
 
 const MAX_CONSOLIDATE_CELLS: u64 = 5_000_000;
 
+/// The cells a consolidated table writes: every row key meets every column key, plus a label for
+/// each key on the sides that have labels.
+fn output_cells(rows: usize, cols: usize, top: bool, left: bool) -> u64 {
+    let (r, c) = (rows as u64, cols as u64);
+    r.saturating_mul(c).saturating_add(if top { c } else { 0 }).saturating_add(if left { r } else { 0 })
+}
+
+#[cfg(test)]
+#[test]
+fn the_output_limit_counts_label_cells() {
+    // A million row keys and four column keys are 4 million cells, 5 million with the row labels.
+    assert_eq!(output_cells(1_000_000, 4, false, false), 4_000_000);
+    assert_eq!(output_cells(1_000_000, 4, false, true), 5_000_000);
+    assert!(output_cells(1_000_000, 5, false, true) > MAX_CONSOLIDATE_CELLS);
+    assert_eq!(output_cells(3, 2, true, true), 6 + 2 + 3);
+    assert_eq!(output_cells(usize::MAX, usize::MAX, true, true), u64::MAX);
+}
+
 pub(super) fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "data.consolidate";
     let func = str_param(p, "function").unwrap_or("sum").to_string();
@@ -157,8 +175,7 @@ pub(super) fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
     {
         return Err(EngineError::Other("The consolidated data doesn't fit below and right of the destination.".into()));
     }
-    // Every row key meets every column key in the output, so the product is what gets written.
-    if (row_keys.len() as u64).saturating_mul(col_keys.len() as u64) > MAX_CONSOLIDATE_CELLS {
+    if output_cells(row_keys.len(), col_keys.len(), top, left) > MAX_CONSOLIDATE_CELLS {
         return Err(bad(CMD, "the consolidated table would be too large"));
     }
     let mut cells: Vec<(CellRef, Value)> = Vec::new();
