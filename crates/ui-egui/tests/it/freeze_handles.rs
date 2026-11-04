@@ -1,6 +1,6 @@
 //! Freezing panes by dragging the freeze handles on the header edges (#195).
 
-use egui::{Event, Modifiers, PointerButton, Pos2, pos2, vec2};
+use egui::{Event, Modifiers, PointerButton, Pos2, pos2};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::CellRef;
 use gridcraft_ui_egui::SheetApp;
@@ -11,15 +11,7 @@ type Harness = egui_kittest::Harness<'static, SheetApp>;
 fn harness() -> Harness {
     let mut session = Session::new();
     session.new_workbook();
-    let mut h = egui_kittest::Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            app.logic(ui.ctx());
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
-    h
+    crate::support::stepped_harness(session)
 }
 
 fn geo(h: &Harness) -> Geo {
@@ -73,4 +65,37 @@ fn dragging_the_handles_freezes_moves_and_unfreezes() {
     let (_, rows) = freeze_handles(&g);
     drag(&mut h, rows.center(), pos2(rows.center().x, g.cells.top() - 5.0));
     assert_eq!(freeze(&h), None);
+}
+
+/// The last frozen column ends at the freeze line however far the other columns scroll, while
+/// the next column's left edge moves with the scroll (#2544).
+#[test]
+fn last_frozen_column_ends_at_the_freeze_line_when_scrolled() {
+    let mut h = harness();
+    h.state_mut().run("view.freezePanes", serde_json::json!({"cell": "C3"})).unwrap();
+    h.state_mut().view_mut().unwrap().scroll = egui::vec2(300.0, 200.0);
+    h.run_steps(2);
+    let g = geo(&h);
+    let sh = h.state().session.active().unwrap().wb.active().unwrap().clone();
+    let split = g.cells.min + egui::vec2(g.frozen_w, g.frozen_h);
+    assert!((g.x_end(&sh, 1) - split.x).abs() < 0.01 && (g.y_end(&sh, 1) - split.y).abs() < 0.01);
+    assert!(g.x(&sh, 2) < split.x && g.y(&sh, 2) < split.y, "C and row 3 are scrolled under the frozen panes");
+    assert!(g.same_col_pane(0, 1) && g.same_col_pane(2, 9) && !g.same_col_pane(1, 2));
+}
+
+/// Dropping the column handle on the left part of the last frozen column while scrolled freezes
+/// up to its left edge: the column's right edge is the freeze line, not the next column's
+/// scrolled position (#2544).
+#[test]
+fn dragging_the_column_handle_when_scrolled_measures_the_last_frozen_column() {
+    let mut h = harness();
+    h.state_mut().run("view.freezePanes", serde_json::json!({"cell": "C1"})).unwrap();
+    h.state_mut().view_mut().unwrap().scroll = egui::vec2(300.0, 0.0);
+    h.run_steps(2);
+    let g = geo(&h);
+    let sh = h.state().session.active().unwrap().wb.active().unwrap().clone();
+    let (cols, _) = freeze_handles(&g);
+    assert!(g.x(&sh, 2) < g.x(&sh, 1), "C is scrolled left of B");
+    drag(&mut h, cols.center(), pos2(g.x(&sh, 1) + 10.0, g.cells.top() + 40.0));
+    assert_eq!(freeze(&h), Some((0, 1)));
 }
