@@ -68,6 +68,11 @@ pub const WHEEL_ZOOM_LADDER: [u16; 22] = [10, 12, 15, 18, 21, 25, 30, 35, 42, 50
 /// Seconds without Ctrl+wheel input after which part of a notch turned so far is forgotten.
 const WHEEL_ZOOM_IDLE: f64 = 0.75;
 
+/// Seconds without zoom input that separate two gestures. Fingers on a trackpad send input every
+/// frame while they move, and egui doesn't say when they lift, so this is short enough for lifting
+/// them and pinching again.
+const ZOOM_GESTURE_GAP: f64 = 0.15;
+
 /// The zoom one Ctrl+wheel notch goes to from `zoom`: the next step on [`WHEEL_ZOOM_LADDER`] in
 /// that direction, skipping a step less than 5% away (121% out goes to 100%, not 120%), but never
 /// 100% or the 10% / 400% limits (99% or 101% towards 100% goes to 100%).
@@ -306,6 +311,8 @@ pub struct GridState {
     pub tab_shares: std::collections::HashMap<u64, f32>,
     /// Ctrl+wheel zoom in progress (see [`WheelZoom`]).
     pub wheel_zoom: Option<WheelZoom>,
+    /// The zoom gesture in progress.
+    pub zoom_gesture: Option<ZoomGesture>,
     /// A one-finger touch drag in progress: it pans the sheet instead of selecting.
     pub touch_pan: bool,
     /// What the macro step editor shows on the grid (Check, debugging).
@@ -324,17 +331,50 @@ pub struct WheelZoom {
     pub time: f64,
     /// The step the zoom is gliding to, and the percentage set last on the way.
     pub glide: Option<(u16, u16)>,
+    /// A pinch began or ended since the last input, so the next input is a new gesture.
+    pub pinch_edge: bool,
 }
 
 impl WheelZoom {
     /// The state for `place` showing `zoom` percent: fresh for another document or sheet, and
     /// without its glide if the zoom was changed some other way since the glide set it.
     fn at(app: &SheetApp, place: (u64, usize), zoom: u16, now: f64) -> WheelZoom {
-        let mut w = app.grid.wheel_zoom.filter(|w| w.place == place).unwrap_or(WheelZoom { place, notches: 0.0, time: now, glide: None });
+        let mut w =
+            app.grid.wheel_zoom.filter(|w| w.place == place).unwrap_or(WheelZoom { place, notches: 0.0, time: now, glide: None, pinch_edge: false });
         if w.glide.is_some_and(|(_, shown)| shown != zoom) {
             w.glide = None;
         }
         w
+    }
+}
+
+/// The undo step of a zoom gesture in progress (one trackpad pinch, one turn of the wheel, one drag
+/// of the status bar's slider): each makes one step, as in Excel (#3347). It holds the document, its
+/// revision and the sheet when the gesture last set the zoom, so anything else that changes the
+/// revision ends it too.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ZoomGesture((u64, u64, usize));
+
+impl ZoomGesture {
+    fn now(app: &SheetApp) -> Option<ZoomGesture> {
+        app.session.active().map(|d| ZoomGesture((d.uid, d.revision, d.wb.active_sheet())))
+    }
+
+    /// Sets the zoom, in the undo step of the gesture in progress if there is one.
+    pub(crate) fn set(app: &mut SheetApp, percent: f32) {
+        let continues = app.grid.zoom_gesture.is_some() && app.grid.zoom_gesture == Self::now(app);
+        let from = Trace::key(app);
+        let params = json!({"percent": percent});
+        if !continues || app.session.run("view.zoomContinue", params.clone()).is_err() {
+            let _ = app.session.run("view.zoom", params);
+        }
+        Trace::keep_through_zoom(app, from);
+        app.grid.zoom_gesture = Self::now(app);
+    }
+
+    /// The next zoom makes an undo step of its own.
+    pub(crate) fn end(app: &mut SheetApp) {
+        app.grid.zoom_gesture = None;
     }
 }
 

@@ -1,4 +1,3 @@
-use super::Trace;
 use super::cursor::update_cursor;
 use super::editor::{in_cell_editor, list_picker, validation_arrow};
 use super::geo::Geo;
@@ -9,8 +8,8 @@ use super::selection::{SelectionPaintInput, paint_selection};
 use super::tables::{TableHeading, paint_filter_button, table_headings};
 use super::{
     Align2, Arc, CfCache, Color32, DISPLAY_SCALE, Drag, MAX_COLS, MAX_ROWS, Painter, PaneQuad, RangeRef, Rect, Sense, Sheet, SheetApp, Stroke,
-    StrokeKind, Tokens, WHEEL_ZOOM_IDLE, WheelZoom, Workbook, col_to_letters, heading_font_size, json, pos2, theme, vec2, wheel_zoom_step,
-    zoom_glide_step,
+    StrokeKind, Tokens, WHEEL_ZOOM_IDLE, WheelZoom, Workbook, ZOOM_GESTURE_GAP, ZoomGesture, col_to_letters, heading_font_size, json, pos2, theme,
+    vec2, wheel_zoom_step, zoom_glide_step,
 };
 #[cfg(test)]
 use super::{CellRef, Pos2};
@@ -56,36 +55,11 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     };
     // Scrolling.
     let (scroll_delta, zoom_delta, modifiers, now) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers, i.time));
+    // The zoom now: a gesture that lands below moves it on from the `sh.zoom` of this frame.
+    let mut shown = sh.zoom;
     if (resp.hovered() || resp.contains_pointer()) && !crate::text_box::contains_pointer(app, ui.ctx()) {
         if zoom_delta != 1.0 {
-            // egui's zoom factor is e^(speed × points); one notch is `line_scroll_speed` points.
-            let notch = ui.ctx().options(|o| o.input_options.scroll_zoom_speed * o.input_options.line_scroll_speed);
-            let turned = zoom_delta.ln() / notch;
-            let mut zooming = WheelZoom::at(app, place, sh.zoom, now);
-            if now - zooming.time > WHEEL_ZOOM_IDLE {
-                zooming.notches = 0.0;
-            }
-            if turned.is_finite() {
-                zooming.notches = (zooming.notches + turned).clamp(-32.0, 32.0);
-            }
-            zooming.time = now;
-            // A notch steps once 60% of it has turned, and the rest of it brings `notches` back to
-            // about 0. (Past half, so what's left after a step can't step back.) Steps count from
-            // where a glide is going, not from where it has got to.
-            let from = zooming.glide.map_or(sh.zoom, |(to, _)| to);
-            let mut z = from;
-            while zooming.notches >= 0.6 {
-                z = wheel_zoom_step(z, true);
-                zooming.notches -= 1.0;
-            }
-            while zooming.notches <= -0.6 {
-                z = wheel_zoom_step(z, false);
-                zooming.notches += 1.0;
-            }
-            if z != from {
-                zooming.glide = Some((z, sh.zoom));
-            }
-            app.grid.wheel_zoom = Some(zooming);
+            shown = wheel_zoom_input(app, ui, place, shown, zoom_delta, now);
         } else if scroll_delta != egui::Vec2::ZERO {
             let z = if paper { make_geo(app, view.scroll).z } else { sh.zoom as f32 / 100.0 * DISPLAY_SCALE };
             let mut d = scroll_delta;
@@ -113,7 +87,13 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         }
         view.scroll -= d / z;
     }
-    update_zoom_glide(app, ui, place, sh.zoom, now);
+    update_zoom_glide(app, ui, place, shown, now);
+    // The start and end of a pinch come through as a factor of exactly 1, with no movement in them.
+    if ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Zoom(f) if *f == 1.0)))
+        && let Some(w) = app.grid.wheel_zoom.as_mut()
+    {
+        w.pinch_edge = true;
+    }
     view.scroll = view.scroll.max(egui::Vec2::ZERO);
     let (mut max_x, mut max_y) = (sh.col_left(MAX_COLS - 20) as f32, sh.row_top(MAX_ROWS - 40) as f32);
     if paper {
@@ -357,15 +337,57 @@ fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Re
     error_check_tag(app, ui, geo, sh);
 }
 
+/// One frame of Ctrl+wheel or pinch input: counts the notches and sets where the zoom glides to.
+/// Returns the zoom now, which a gesture that lands here has moved on from `shown`.
+fn wheel_zoom_input(app: &mut SheetApp, ui: &egui::Ui, place: (u64, usize), mut shown: u16, zoom_delta: f32, now: f64) -> u16 {
+    // egui's zoom factor is e^(speed × points); one notch is `line_scroll_speed` points.
+    let notch = ui.ctx().options(|o| o.input_options.scroll_zoom_speed * o.input_options.line_scroll_speed);
+    let turned = zoom_delta.ln() / notch;
+    let mut zooming = WheelZoom::at(app, place, shown, now);
+    // A new gesture. If the last one is still gliding it lands first, so its undo step
+    // ends on the zoom it was going to.
+    if zooming.pinch_edge || now - zooming.time > ZOOM_GESTURE_GAP {
+        zooming.pinch_edge = false;
+        if let Some((to, _)) = zooming.glide.take() {
+            ZoomGesture::set(app, f32::from(to));
+            shown = to;
+        }
+        ZoomGesture::end(app);
+    }
+    if now - zooming.time > WHEEL_ZOOM_IDLE {
+        zooming.notches = 0.0;
+    }
+    if turned.is_finite() {
+        zooming.notches = (zooming.notches + turned).clamp(-32.0, 32.0);
+    }
+    zooming.time = now;
+    // A notch steps once 60% of it has turned, and the rest of it brings `notches` back to
+    // about 0. (Past half, so what's left after a step can't step back.) Steps count from
+    // where a glide is going, not from where it has got to.
+    let from = zooming.glide.map_or(shown, |(to, _)| to);
+    let mut z = from;
+    while zooming.notches >= 0.6 {
+        z = wheel_zoom_step(z, true);
+        zooming.notches -= 1.0;
+    }
+    while zooming.notches <= -0.6 {
+        z = wheel_zoom_step(z, false);
+        zooming.notches += 1.0;
+    }
+    if z != from {
+        zooming.glide = Some((z, shown));
+    }
+    app.grid.wheel_zoom = Some(zooming);
+    shown
+}
+
 fn update_zoom_glide(app: &mut SheetApp, ui: &egui::Ui, place: (u64, usize), zoom: u16, now: f64) {
     let mut zooming = WheelZoom::at(app, place, zoom, now);
     if let Some((to, shown)) = zooming.glide {
         let glides = app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight();
         let share = egui::emath::exponential_smooth_factor(0.9, 0.1, ui.input(|i| i.stable_dt).min(0.1));
         let z = if glides { zoom_glide_step(shown, to, share) } else { to };
-        let from = Trace::key(app);
-        let _ = app.session.run("view.zoom", json!({"percent": z}));
-        Trace::keep_through_zoom(app, from);
+        ZoomGesture::set(app, f32::from(z));
         zooming.glide = (z != to).then_some((to, z));
         ui.ctx().request_repaint();
     }
@@ -847,6 +869,7 @@ fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
 #[cfg(test)]
 mod trace_arrow_tests {
     use super::*;
+    use crate::grid::Trace;
 
     fn app() -> SheetApp {
         let mut s = gridcraft_engine::Session::new();

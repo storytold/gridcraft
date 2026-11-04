@@ -63,6 +63,7 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!("view.rightToLeft", "Sheet Right-to-Left", ["Page Layout", "Sheet Options"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "rtl")),
         cmd!("view.zoom", "Zoom", ["View", "Zoom"], None, "{percent: 10..400}", has_doc, zoom),
+        cmd!(noundo "view.zoomContinue", "Continue Zoom", [], None, "{percent: 10..400} (after `view.zoom`: part of its undo step, so one gesture undoes at once)", has_doc, zoom_continue),
         cmd!("view.zoom100", "100%", ["View", "Zoom"], None, "{}", has_doc, |s, _| zoom(s, &json!({"percent": 100}))),
         cmd!(query "view.formulaBar", "Formula Bar", ["View", "Show"], None, "{on?: bool}", always, |s, p| {
             s.prefs.formula_bar = bool_param(p, "on").unwrap_or(!s.prefs.formula_bar);
@@ -272,6 +273,19 @@ fn zoom(s: &mut Session, p: &Json) -> Result<Json> {
         d.saved = d.wb.clone();
     }
     Ok(json!({"zoom": z}))
+}
+
+/// Moves the zoom on inside the Zoom step just made. Undo restores the snapshot from before that
+/// step, so the whole gesture goes back at once (#3347). Refused after anything else, so zoom never
+/// changes outside an undo step.
+fn zoom_continue(s: &mut Session, p: &Json) -> Result<Json> {
+    if s.doc()?.undo.last().is_none_or(|e| e.label != "Zoom") {
+        return Err(bad("view.zoomContinue", "the last undo step isn't a zoom"));
+    }
+    let r = zoom(s, p)?;
+    // The workbook changed, and no undo step made the runner say so.
+    s.doc_mut()?.revision += 1;
+    Ok(r)
 }
 
 fn zoom_selection(s: &mut Session, p: &Json) -> Result<Json> {
@@ -535,6 +549,28 @@ fn theme(s: &mut Session, p: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn continuing_a_zoom_stays_in_its_undo_step() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let zoom = |s: &Session| s.doc().unwrap().wb.active().unwrap().zoom;
+        let continued = |s: &mut Session, percent| s.execute("view.zoomContinue", json!({"percent": percent}));
+        assert!(continued(&mut s, 150).is_err(), "no zoom step to continue");
+        s.execute("view.zoom", json!({"percent": 110})).unwrap();
+        let revision = s.doc().unwrap().revision;
+        continued(&mut s, 150).unwrap();
+        continued(&mut s, 200).unwrap();
+        assert_eq!((zoom(&s), s.doc().unwrap().undo.len()), (200, 1));
+        assert!(s.doc().unwrap().revision > revision, "views follow the workbook's revision");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(zoom(&s), 100, "one Undo goes back to before the first step");
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(zoom(&s), 200, "one Redo goes on to the last");
+        s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+        assert!(continued(&mut s, 150).is_err(), "not after an edit");
+        assert_eq!(zoom(&s), 200);
+    }
 
     #[test]
     fn zoom_100_resets_the_active_sheet_zoom() {
