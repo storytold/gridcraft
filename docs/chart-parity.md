@@ -98,7 +98,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 2. Axis options, label options, gridlines per axis, legend formatting: 10–15 h.
 3. Error bars; Format Trendline pane (trendlines landed): 4–6 h.
 4. Per-element Format pane parity, smoothed lines, exploded pie, pie/bar of pie, 100% variants: 8–12 h.
-5. 3-D column/bar/pie/area, surface and contour, Pareto: 8–12 h.
+5. 3-D column/bar/pie/area, surface and contour: 8–12 h.
 6. Chart sheets, templates and PivotChart field buttons: 5–8 h. Filled map: owner decision on boundary data.
 
 ## Revision history
