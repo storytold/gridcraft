@@ -285,10 +285,16 @@ fn walk(dir: &Path, depth: usize, out: &mut Discovery, seen: &mut std::collectio
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-        if let Ok(m) = std::fs::metadata(dir)
-            && !seen.insert((m.dev(), m.ino()))
-        {
-            return true;
+        if let Ok(m) = std::fs::metadata(dir) {
+            let identity = (m.dev(), m.ino());
+            // Already scanned: an alias. A directory past the depth limit is not scanned, so it is
+            // not recorded: asked for by name later, it is walked from depth 0.
+            if seen.contains(&identity) {
+                return true;
+            }
+            if depth <= MAX_DEPTH {
+                seen.insert(identity);
+            }
         }
     }
     if depth > MAX_DEPTH {

@@ -48,8 +48,9 @@ fn walk(dir: &Path, c: &mut Counts, seen: &mut std::collections::HashSet<(u64, u
                 walk(&p, c, seen, budget);
             }
         } else if name.ends_with(".rs")
-            && p.metadata().is_ok_and(|m| m.is_file() && m.len() <= MAX_SOURCE_BYTES)
-            && let Ok(s) = std::fs::read_to_string(&p)
+            // The entry's own metadata does not follow a symlink: only regular files are sources.
+            && e.metadata().is_ok_and(|m| m.is_file() && m.len() <= MAX_SOURCE_BYTES)
+            && let Some(s) = read_source(&p)
         {
             c.files += 1;
             c.lines += s.lines().count();
@@ -58,6 +59,15 @@ fn walk(dir: &Path, c: &mut Counts, seen: &mut std::collections::HashSet<(u64, u
             c.proptests += pt;
         }
     }
+}
+
+/// A source file's text, read up to [`MAX_SOURCE_BYTES`]: one that grew or was replaced since its
+/// size was checked is skipped, not read whole.
+fn read_source(p: &Path) -> Option<String> {
+    use std::io::Read as _;
+    let mut s = String::new();
+    std::fs::File::open(p).ok()?.take(MAX_SOURCE_BYTES + 1).read_to_string(&mut s).ok()?;
+    (s.len() as u64 <= MAX_SOURCE_BYTES).then_some(s)
 }
 
 /// `#[test]` attributes and `proptest!` blocks (each block may hold many
@@ -133,11 +143,25 @@ pub fn run(_root: &Path, exact: bool) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::count_tests;
+    use super::{MAX_SOURCE_BYTES, count_tests, read_source};
 
     #[test]
     fn counts_attributes_and_proptest_blocks() {
         let src = "#[test]\nfn a() {}\n// #[test] commented\n    #[test]\nfn b() {}\nproptest! {\n}\n";
         assert_eq!(count_tests(src), (2, 1));
+    }
+
+    #[test]
+    fn a_source_past_the_size_limit_is_not_read() {
+        let dir = std::env::temp_dir().join(format!("xtask-stats-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (small, big) = (dir.join("a.rs"), dir.join("b.rs"));
+        std::fs::write(&small, "fn a() {}\n").unwrap();
+        let file = std::fs::File::create(&big).unwrap();
+        file.set_len(MAX_SOURCE_BYTES + 1).unwrap(); // sparse: nothing is written
+        drop(file);
+        assert_eq!(read_source(&small).as_deref(), Some("fn a() {}\n"));
+        assert_eq!(read_source(&big), None);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
