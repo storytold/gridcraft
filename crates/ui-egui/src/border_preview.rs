@@ -42,6 +42,12 @@ fn paint_preset_diagram(painter: &egui::Painter, rect: Rect, preset: &str, color
             paint_border(painter, points, style, color);
         }
     }
+
+    // Diagonal presets use the same stroke painter as worksheet borders.
+    // Unselected diagonals are left blank rather than shown as dotted guides.
+    if let Some(points) = preset_diagonal_points(rect, preset) {
+        paint_border(painter, points, BorderStyle::Thin, color);
+    }
 }
 
 /// Border styles in top, bottom, left, right, horizontal and vertical order.
@@ -61,7 +67,18 @@ fn preset_styles(preset: &str) -> [BorderStyle; 6] {
         "topThickBottom" => [Thin, Thick, None, None, None, None],
         "topDoubleBottom" => [Thin, Double, None, None, None, None],
         "inside" => [None, None, None, None, Thin, Thin],
+        "insideHorizontal" => [None, None, None, None, Thin, None],
+        "insideVertical" => [None, None, None, None, None, Thin],
         _ => [None; 6],
+    }
+}
+
+/// Returns the diagonal matching a Borders command preset, if present.
+fn preset_diagonal_points(rect: Rect, preset: &str) -> Option<[egui::Pos2; 2]> {
+    match preset {
+        "diagonalDown" => Some([rect.left_top(), rect.right_bottom()]),
+        "diagonalUp" => Some([rect.left_bottom(), rect.right_top()]),
+        _ => None,
     }
 }
 
@@ -121,10 +138,25 @@ mod tests {
             ("topThickBottom", [Thin, Thick, Empty, Empty, Empty, Empty]),
             ("topDoubleBottom", [Thin, Double, Empty, Empty, Empty, Empty]),
             ("inside", [Empty, Empty, Empty, Empty, Thin, Thin]),
+            ("insideHorizontal", [Empty, Empty, Empty, Empty, Thin, Empty]),
+            ("insideVertical", [Empty, Empty, Empty, Empty, Empty, Thin]),
         ];
 
         for (preset, expected) in cases {
             assert_eq!(preset_styles(preset), expected, "{preset}");
         }
+    }
+
+    /// Both diagonal presets follow the engine's down/up directions.
+    #[test]
+    fn ribbon_border_diagonal_presets_have_correct_endpoints() {
+        let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(20.0, 16.0));
+
+        assert_eq!(preset_diagonal_points(rect, "diagonalDown"), Some([rect.left_top(), rect.right_bottom()]));
+        assert_eq!(preset_diagonal_points(rect, "diagonalUp"), Some([rect.left_bottom(), rect.right_top()]));
+
+        // Other presets must not gain an unexpected diagonal stroke.
+        assert_eq!(preset_diagonal_points(rect, "none"), None);
+        assert_eq!(preset_diagonal_points(rect, "inside"), None);
     }
 }
