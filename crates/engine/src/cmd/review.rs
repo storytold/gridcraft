@@ -427,14 +427,16 @@ struct SheetPerformance {
 /// table, keeps its formatting too: the rule or the table style decides what is drawn, and the
 /// stored style is what it falls back to, so Optimize leaves the cell alone.
 fn optimizable(sh: &gridcraft_model::Sheet, at: CellRef, cell: &gridcraft_model::Cell) -> bool {
-    sh.merge_at(at).is_none()
+    // The constant-time tests come first: most stored cells are not blank, so the range scans
+    // below only run for the few that could be optimized at all.
+    cell.value.is_empty()
+        && cell.formula.is_none()
+        && cell.style != StyleId::DEFAULT
+        && sh.merge_at(at).is_none()
         && !sh.spill.contains_key(&at)
         && !sh.spill_ranges.values().any(|range| range.contains(at))
         && !sh.cond_formats.iter().any(|cf| cf.ranges.iter().any(|range| range.contains(at)))
         && !sh.tables.iter().any(|table| table.range.contains(at))
-        && cell.value.is_empty()
-        && cell.formula.is_none()
-        && cell.style != StyleId::DEFAULT
 }
 
 /// Excel's volatile functions. `OFFSET`, `INDIRECT`, `CELL` and `INFO` are volatile in Excel but
@@ -1020,6 +1022,32 @@ mod tests {
         assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::parse("B1").unwrap()).display(), "keep");
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(s.execute("review.checkPerformance", json!({})).unwrap()["optimizableCells"], 1);
+    }
+
+    #[test]
+    fn check_performance_optimize_survives_an_xlsx_round_trip() {
+        // What Optimize kept, and what content it never touched, has to come back from the file:
+        // the removed cell is not written, the comment beside it and a cell a rule covers are.
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["keep"]]})).unwrap();
+        s.execute("home.bold", json!({"range": "B2"})).unwrap();
+        s.execute("review.newComment", json!({"cell": "B2", "text": "keep me"})).unwrap();
+        s.execute("home.bold", json!({"range": "D2"})).unwrap();
+        s.execute("home.conditionalFormat", json!({"range": "D2", "rule": {"type": "noBlanks", "preset": "redBorder"}})).unwrap();
+        assert_eq!(s.execute("review.checkPerformance", json!({})).unwrap()["optimizableCells"], 1);
+        assert_eq!(s.execute("review.optimizePerformance", json!({})).unwrap()["optimized"], 1);
+
+        let wb = s.doc().unwrap().wb.clone();
+        let (reopened, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
+        let sh = reopened.active().unwrap();
+        let b2 = CellRef::parse("B2").unwrap();
+        let d2 = CellRef::parse("D2").unwrap();
+        assert!(sh.cell(b2).is_none(), "the optimized blank cell is not saved");
+        assert_eq!(sh.value(CellRef::parse("A1").unwrap()).display(), "keep");
+        assert!(sh.comments.contains_key(&b2), "the comment beside the optimized cell survives");
+        assert!(reopened.styles.get(sh.style_id(d2)).font.bold, "formatting a rule covers survives");
+        assert_eq!(sh.cond_formats.len(), 1, "the rule survives");
     }
 
     #[test]

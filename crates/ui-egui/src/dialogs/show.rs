@@ -576,9 +576,11 @@ fn check_performance(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open
     } else {
         ui.add_space(4.0);
         ui.label(egui::RichText::new(lang.tr("Cells to optimize")).strong());
-        let cells = report.get("cells").and_then(Json::as_array).cloned().unwrap_or_default();
-        egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
-            for cell in &cells {
+        let cells: &[Json] = report.get("cells").and_then(Json::as_array).map_or(&[], Vec::as_slice);
+        // A workbook can list thousands of optimizable cells: only the rows in view are laid out.
+        let row_height = ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y;
+        egui::ScrollArea::vertical().max_height(340.0).auto_shrink([false, true]).show_rows(ui, row_height, cells.len(), |ui, rows| {
+            for cell in cells.get(rows).unwrap_or_default() {
                 ui.horizontal(|ui| {
                     let sheet = cell.get("sheet").and_then(Json::as_str).unwrap_or("");
                     let at = cell.get("cell").and_then(Json::as_str).unwrap_or("");
