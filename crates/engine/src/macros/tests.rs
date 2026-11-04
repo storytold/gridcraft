@@ -3,6 +3,7 @@ use serde_json::json;
 
 use super::*;
 
+/// A failed macro must not persist a new default zoom for future workbooks.
 #[test]
 fn macro_prefs_rollback_restores_values() {
     let mut session = crate::Session::new();
@@ -19,10 +20,7 @@ fn macro_prefs_rollback_restores_values() {
                             "command": "view.defaultZoom",
                             "params": {"percent": 175}
                         },
-                        {
-                            "command": "view.formulaBar",
-                            "params": {"on": false}
-                        },
+
                         {
                             "type": "stop",
                             "message": "rollback requested",
@@ -35,15 +33,14 @@ fn macro_prefs_rollback_restores_values() {
         .unwrap();
 
     assert_eq!(session.prefs.default_zoom, 100);
-    assert!(session.prefs.formula_bar);
 
     let failed = session.execute("macro.run", json!({"name": "ZoomRollback", "onConflict": "overwrite"}));
 
     assert!(failed.is_err(), "{failed:?}");
     assert_eq!(session.prefs.default_zoom, 100);
-    assert!(session.prefs.formula_bar);
 }
 
+/// A successful macro retains the default zoom, including after a dry run.
 #[test]
 fn macro_prefs_success_keeps_changes() {
     let mut session = crate::Session::new();

@@ -575,6 +575,7 @@ mod tests {
         assert!(old.formula_bar);
     }
 
+    /// New workbooks use the configured default without changing open workbooks.
     #[test]
     fn default_zoom_applies_only_to_new_workbooks() {
         let mut s = Session::new();
@@ -605,6 +606,7 @@ mod tests {
         assert!(s.doc().unwrap().wb.sheets.iter().all(|sh| sh.zoom == 175));
     }
 
+    /// Validate the supported zoom range and compatibility with older preferences.
     #[test]
     fn default_zoom_validates_values_and_persists_with_old_prefs_compatibility() {
         let mut s = Session::new();

@@ -1468,6 +1468,9 @@ pub fn make_way(s: &mut Session, b: &Begun) -> Result<(Machine, bool)> {
 
 /// Runs macro `name` on the active workbook: `{inputs?, onConflict?, overwrite?, approve?,
 /// timeLimit?}` (see `macro.run`).
+///
+/// Failed runs also restore application preferences: workbook undo groups do not
+/// cover `Session::prefs`, including the default zoom used by future workbooks.
 pub fn run(s: &mut Session, name: &str, p: &Json) -> Result<Json> {
     let b = begin(s, name, p)?;
     let label = format!("Run Macro: {}", b.mac.name);
