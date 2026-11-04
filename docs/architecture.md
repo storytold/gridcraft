@@ -249,7 +249,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 | 2026-10-31 | minor | Recently used functions (`recent.rs`, `Prefs::recent_functions`) behind `formulas.recentlyUsed` |
 | 2026-10-31 | minor | Function Library module (`function_library.rs`); accent icons (`icons::paint_accent`, `widgets::small_button_accent`) |
 | 2026-10-25 | trivial | The hidden names that hold macros are `_gc_macro_<n>_<k>` |
-| 2026-10-25 | trivial | Recorded scripts restore the Ink to Shape mode they were recorded with, on or off, so a replay never converts a stroke that was drawn as ink |
+| 2026-10-25 | trivial | Recorded scripts that contain strokes restore the Ink to Shape mode they were recorded with, on or off, so a replay never converts a stroke that was drawn as ink; a stroke-free recording saves no mode step |
 | 2026-10-24 | minor | Macro engine on the building blocks (`macros/`, `cmd/macros.rs`) |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
