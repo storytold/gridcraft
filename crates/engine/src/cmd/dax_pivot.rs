@@ -751,8 +751,10 @@ fn filters_param(p: &Json) -> Result<Vec<PivotFilter>> {
         let mut allowed = match requested {
             None | Some(Json::Null) => Vec::new(),
             Some(Json::Array(values)) => {
-                if values.len() > MAX_AXIS_FIELDS {
-                    return Err(bad(CMD, format!("a filter accepts at most {MAX_AXIS_FIELDS} values")));
+                // This bounds the members of one page filter, not the number of fields on an axis:
+                // a pivot read back from a file can select more than an axis may hold.
+                if values.len() > MAX_AXIS_MEMBERS {
+                    return Err(bad(CMD, format!("a filter accepts at most {MAX_AXIS_MEMBERS} values")));
                 }
                 values.iter().map(filter_scalar).collect::<Result<Vec<_>>>()?
             }

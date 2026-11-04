@@ -367,7 +367,20 @@ fn apply_filter_arg(ev: &Evaluator<'_>, expr: &BoundExpr, filters: &mut FilterCo
             }
             Ok(())
         }
-        BoundExpr::Call { spec, .. } if spec.name.eq_ignore_ascii_case("KEEPFILTERS") => Ok(()),
+        BoundExpr::Call { spec, args } if spec.name.eq_ignore_ascii_case("KEEPFILTERS") => {
+            // KEEPFILTERS applies its inner filter and intersects it with what is already there.
+            let inner = args.first().ok_or_else(|| EvalError::new("KEEPFILTERS needs a filter"))?;
+            let mut applied = filters.clone();
+            apply_filter_arg(ev, inner, &mut applied, ctx)?;
+            for (key, values) in applied.filters {
+                let merged = match filters.filters.get(&key) {
+                    Some(existing) => existing.intersection(&values).cloned().collect(),
+                    None => values,
+                };
+                filters.filters.insert(key, merged);
+            }
+            Ok(())
+        }
         _ => {
             let table = ev.eval_table(expr, ctx)?;
             let Some(index) = table.lineage else {

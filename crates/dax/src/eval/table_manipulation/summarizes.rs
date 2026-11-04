@@ -665,9 +665,13 @@ fn apply_filter_arg(ev: &Evaluator<'_>, expr: &BoundExpr, filters: &mut FilterCo
             }
             "TREATAS" => {
                 let table = ev.eval_table(args.first().ok_or_else(|| EvalError::new("TREATAS needs a table"))?, ctx)?;
+                // One target column per source column; more targets would silently reuse the last.
+                if table.columns.len() != args.len().saturating_sub(1) {
+                    return Err(EvalError::new("TREATAS needs one target column per table column"));
+                }
                 for (index, column_expr) in args[1..].iter().enumerate() {
                     let column = resolve_column(ev, column_expr)?;
-                    let position = index.min(table.columns.len().saturating_sub(1));
+                    let position = index;
                     let keys: BTreeSet<ScalarKey> = table.rows.iter().filter_map(|row| row.get(position)).map(ScalarKey::from).collect();
                     filters.set(column.table, column.column, keys);
                 }

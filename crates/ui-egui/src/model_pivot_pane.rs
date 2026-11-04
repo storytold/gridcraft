@@ -408,8 +408,9 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         } else {
             reopen_tab(ui, &mut state);
         }
-    } else if fingerprint.is_some() || kept {
-        // Nothing read: the closed pane's strip is all there is to paint.
+    } else if fingerprint.is_some() {
+        // Nothing read: the closed pane's strip is all there is to paint. Without a model the
+        // strip would open a pane that can never load, so it is not shown at all.
         reopen_tab(ui, &mut state);
     }
     store(ui.ctx(), &state);

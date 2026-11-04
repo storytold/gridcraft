@@ -1408,11 +1408,14 @@ impl<'a> Evaluator<'a> {
                 if targets.is_empty() {
                     return Err(EvalError::new("TREATAS needs at least one target column"));
                 }
+                if table.columns.len() != targets.len() {
+                    return Err(EvalError::new("TREATAS needs one target column per table column"));
+                }
                 for (index, column_expr) in targets.iter().enumerate() {
                     let Some((target_table, target_column)) = self.resolve_column(column_expr) else {
                         return Err(EvalError::new("TREATAS needs column references"));
                     };
-                    let position = index.min(table.columns.len().saturating_sub(1));
+                    let position = index;
                     let keys: BTreeSet<ScalarKey> = table.rows.iter().filter_map(|row| row.get(position)).map(ScalarKey::from).collect();
                     filters.set(target_table, target_column, keys);
                 }
