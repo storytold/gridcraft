@@ -142,7 +142,15 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             number_format
         ),
-        cmd!("home.accounting", "Accounting Number Format", ["Home", "Number"], None, "{range?, symbol?: \"$\"}", has_doc, accounting),
+        cmd!(
+            "home.accounting",
+            "Accounting Number Format",
+            ["Home", "Number"],
+            None,
+            "{range?, symbol?: string (defaults to preferred currency)}",
+            has_doc,
+            accounting
+        ),
         cmd!("home.percent", "Percent Style", ["Home", "Number"], Some("Ctrl+Shift+%"), "{range?}", has_doc, |s, p| set_fmt(s, p, "0%")),
         cmd!("home.comma", "Comma Style", ["Home", "Number"], None, "{range?}", has_doc, |s, p| set_fmt(s, p, COMMA)),
         cmd!("home.increaseDecimal", "Increase Decimal", ["Home", "Number"], None, "{range?}", has_doc, |s, p| decimals(s, p, 1)),
@@ -218,18 +226,43 @@ const COMMA: &str = "_(* #,##0.00_);_(* \\(#,##0.00\\);_(* \"-\"??_);_(@_)";
 /// Accounting Number Format with the currency symbol to use (Excel's own button takes the system
 /// currency; `symbol` is how the control channel picks another one, e.g. `"L"` for lempiras).
 fn accounting(s: &mut Session, p: &Json) -> Result<Json> {
-    let symbol = str_param(p, "symbol").unwrap_or("$");
-    // The symbol goes into a quoted literal: a quote or a backslash would end it, and a control
-    // character would reach the format's text as-is.
+    // An explicit symbol keeps the command's historical prefix behavior.
+    // With no symbol, the ribbon and keytips use the saved preference.
+    let (symbol, suffix) = match str_param(p, "symbol") {
+        Some(symbol) => (symbol, false),
+        None => {
+            let (symbol, auto_suffix) = match s.prefs.default_accounting_currency.as_str() {
+                "EUR" => ("€", true),
+                "GBP" => ("£", false),
+                "CHF" => ("CHF", false),
+                _ => ("$", false),
+            };
+            let suffix = match s.prefs.accounting_symbol_position.as_str() {
+                "before" => false,
+                "after" => true,
+                _ => auto_suffix,
+            };
+            (symbol, suffix)
+        }
+    };
+
+    // Symbols are written as quoted number-format literals.
     if symbol.contains(['"', '\\']) || symbol.chars().any(char::is_control) {
         return Err(bad("home.accounting", "the symbol can't contain a quote, a backslash or a control character"));
     }
-    set_fmt(s, p, &accounting_format(symbol))
+
+    let code = if suffix { accounting_format_suffix(symbol) } else { accounting_format(symbol) };
+    set_fmt(s, p, &code)
 }
 
 fn accounting_format(symbol: &str) -> String {
     let symbol = format!("\"{symbol}\"");
     format!("_({symbol}* #,##0.00_);_({symbol}* \\(#,##0.00\\);_({symbol}* \"-\"??_);_(@_)")
+}
+
+/// Accounting format with the currency written after the amount.
+fn accounting_format_suffix(symbol: &str) -> String {
+    format!(r#"_-* #,##0.00\ "{symbol}"_-;\-* #,##0.00\ "{symbol}"_-;_-* "-"??\ "{symbol}"_-;_-@_-"#)
 }
 
 fn with(p: &Json, key: &str, v: Json) -> Json {

@@ -1369,6 +1369,29 @@ fn column_autocomplete_folds_case_beyond_ascii() {
 }
 
 #[test]
+fn accounting_currency_option_validates_and_persists() {
+    let mut h = harness(blank());
+    let app = h.state_mut();
+
+    assert_eq!(app.run("options.defaultAccounting", json!({})).unwrap(), json!({"currency": "USD", "position": "auto"}));
+
+    assert_eq!(
+        app.run("options.defaultAccounting", json!({"currency": "EUR", "position": "after"})).unwrap(),
+        json!({"currency": "EUR", "position": "after"})
+    );
+
+    assert!(app.run("options.defaultAccounting", json!({"currency": "JPY"})).is_err());
+    assert!(app.run("options.defaultAccounting", json!({"position": "wrong"})).is_err());
+    assert_eq!(app.session.prefs.default_accounting_currency, "EUR");
+    assert_eq!(app.session.prefs.accounting_symbol_position, "after");
+
+    let saved = serde_json::to_string(&app.session.prefs).unwrap();
+    let restored: gridcraft_engine::Prefs = serde_json::from_str(&saved).unwrap();
+    assert_eq!(restored.default_accounting_currency, "EUR");
+    assert_eq!(restored.accounting_symbol_position, "after");
+}
+
+#[test]
 fn column_autocomplete_can_be_turned_off() {
     assert!(gridcraft_ui_egui::UiState::default().autocomplete);
     let old: gridcraft_ui_egui::UiState = serde_json::from_str(r#"{"dark": true}"#).unwrap();
