@@ -1,7 +1,19 @@
 use super::{Json, Notice, NoticeKind, OpenWindow, SheetApp, clean_error, json};
 
 impl SheetApp {
+    /// Whether a file is being opened in the background (never on the web, which has no threads).
+    pub fn is_opening(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.opening.is_some();
+        #[cfg(target_arch = "wasm32")]
+        false
+    }
+
     pub fn open_path(&mut self, path: &str) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.open_in_background(path) {
+            return;
+        }
         match self.run("file.open", json!({"path": path})) {
             Ok(r) => self.after_open(Some(path), &r),
             // A password-protected workbook: ask for the password; the dialog opens it.
