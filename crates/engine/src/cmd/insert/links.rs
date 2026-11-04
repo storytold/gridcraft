@@ -3,6 +3,11 @@ use super::{
     split_sheet, str_param, target_ranges, target_sheet,
 };
 
+#[cfg(test)]
+pub(super) fn compiled() -> bool {
+    true
+}
+
 // ---------------------------------------------------------------- links & comments
 
 pub(super) fn insert_link(s: &mut Session, p: &Json) -> Result<Json> {
@@ -27,8 +32,10 @@ pub(super) fn insert_link(s: &mut Session, p: &Json) -> Result<Json> {
             st.font.underline = Underline::Single;
         });
         let sh = cx.sheet_mut(sheet)?;
-        if let Some(t) = text.clone().or_else(|| sh.value(at).is_empty().then(|| target.clone())) {
-            sh.set_cell(at, Cell { value: gridcraft_core::Value::text(t.as_str()), formula: None, style: link_style });
+        if let Some(t) = text.clone().or_else(|| {
+            (sh.spill_anchor(at).is_none() && sh.value(at).is_empty() && sh.cell(at).is_none_or(|cell| !cell.has_content())).then(|| target.clone())
+        }) {
+            sh.set_cell(at, Cell { value: gridcraft_core::Value::text(t.as_str()), formula: None, style: link_style, py: None });
         } else {
             sh.set_style(at, link_style);
         }

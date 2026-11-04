@@ -1,17 +1,38 @@
 use super::{
-    Anchor, CellRef, Chart, ChartKind, EngineError, Json, LegendPos, RangeRef, Result, Series, Session, Sheet, anchor_mode_param, bad, block,
-    bool_param, cell_param_on, edit, f64_param, json, split_sheet, str_param, target_ranges, target_sheet, u32_param,
+    Anchor, CellRef, Chart, ChartKind, EngineError, Json, LegendPos, MAX_COLS, MAX_ROWS, RangeRef, Result, Series, Session, Sheet, anchor_mode_param,
+    bad, block, bool_param, cell_param_on, edit, f64_param, json, size_cap, split_sheet, str_param, target_ranges, target_sheet, u32_param,
 };
 
+#[cfg(test)]
+pub(super) fn compiled() -> bool {
+    true
+}
+
 fn chart_areas(s: &Session, p: &Json) -> Result<Vec<RangeRef>> {
-    if p.get("range").is_some() {
-        return target_ranges(s, p);
+    let mut areas = if p.get("range").is_some() {
+        target_ranges(s, p)?
+    } else if s.doc()?.selection.ranges.len() > 1 {
+        s.doc()?.selection.ranges.clone()
+    } else {
+        vec![block(s, p)?]
+    };
+    // Whole columns/rows span a million cells: clip their far edges to the cells in use, so only
+    // a block that really is too large gets refused. Bounded areas keep their extent as given.
+    let sheet = target_sheet(s, p)?;
+    if let Some(used) = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.used_range()) {
+        // Areas that start outside the used range keep their extent as given.
+        for r in &mut areas {
+            let whole_cols = r.start.row == 0 && r.end.row >= MAX_ROWS - 1;
+            let whole_rows = r.start.col == 0 && r.end.col >= MAX_COLS - 1;
+            if whole_cols && r.start.row <= used.end.row {
+                r.end.row = r.end.row.min(used.end.row);
+            }
+            if whole_rows && r.start.col <= used.end.col {
+                r.end.col = r.end.col.min(used.end.col);
+            }
+        }
     }
-    let d = s.doc()?;
-    if d.selection.ranges.len() > 1 {
-        return Ok(d.selection.ranges.clone());
-    }
-    Ok(vec![block(s, p)?])
+    Ok(areas)
 }
 
 // ---------------------------------------------------------------- charts
@@ -308,7 +329,11 @@ pub(super) fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         let Some(c) = sh.charts.get_mut(ci) else { return Ok(Json::Null) };
         if let Some(t) = str_param(p, "type") {
             c.kind = chart_kind(t, str_param(p, "subtype").unwrap_or(""));
+            if !c.supports_data_table() {
+                c.data_table = None;
+            }
         }
+        update_data_table(c, p, bool_param(p, "dataTable"))?;
         if let Some(method) = quartiles {
             for series in &mut c.series {
                 series.quartiles = method;
@@ -345,10 +370,10 @@ pub(super) fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
             c.anchor.cell = at;
         }
         if let Some(w) = f64_param(p, "width") {
-            c.anchor.width = w.clamp(20.0, 10000.0) as f32;
+            c.anchor.width = w.clamp(20.0, size_cap(c.anchor.width)) as f32;
         }
         if let Some(h) = f64_param(p, "height") {
-            c.anchor.height = h.clamp(20.0, 10000.0) as f32;
+            c.anchor.height = h.clamp(20.0, size_cap(c.anchor.height)) as f32;
         }
         if let Some(v) = f64_param(p, "dx") {
             c.anchor.dx = v as f32;
@@ -358,6 +383,32 @@ pub(super) fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         }
         Ok(Json::Null)
     })
+}
+
+/// Shared by Chart Properties and Add Chart Element; no separate UI state.
+pub(crate) fn update_data_table(c: &mut Chart, p: &Json, on: Option<bool>) -> Result<()> {
+    if p.get("dataTable").is_some_and(|v| !v.is_boolean()) {
+        return Err(bad("chart", "`dataTable` must be a boolean"));
+    }
+    if on == Some(false) {
+        c.data_table = None;
+        return Ok(());
+    }
+    let fields = ["dataTableKeys", "dataTableHorizontalBorder", "dataTableVerticalBorder", "dataTableOutline"];
+    if on == Some(true) || fields.iter().any(|k| p.get(k).is_some()) {
+        if !c.supports_data_table() {
+            return Err(bad("chart", "data tables need a column, bar, line, area or compatible combo chart"));
+        }
+        let table = c.data_table.get_or_insert_with(Default::default);
+        for (key, value) in
+            fields.into_iter().zip([&mut table.show_keys, &mut table.horizontal_border, &mut table.vertical_border, &mut table.outline])
+        {
+            if let Some(v) = p.get(key) {
+                *value = v.as_bool().ok_or_else(|| bad("chart", format!("`{key}` must be a boolean")))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn chart_switch(s: &mut Session, p: &Json) -> Result<Json> {
