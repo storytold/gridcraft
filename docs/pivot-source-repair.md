@@ -1,6 +1,6 @@
 # Repairing an invalid PivotTable source
 
-> **Last updated:** 2026-11-03
+> **Last updated:** 2026-11-04
 
 An existing PivotTable can outlive its source's validity in GridCraft: an unused column header
 may be deleted, or its defined source name may disappear. GridCraft's current refresh validation
@@ -73,13 +73,13 @@ reproduction uses the existing engine command through the CLI and requires no na
 cargo test -p gridcraft-engine --test it pivot_source_repair
 ```
 
-Twelve tests generate their workbooks in Rust and cover four imported reports with blank
+Thirteen tests generate their workbooks in Rust and cover four imported reports with blank
 unused headers, a deleted defined source name, invalid replacement rejection without changing
 the workbook or history, blank replacement rejection for both parameter names with a valid
 active selection and an existing redo branch, protection and occupied report cells, undo/redo,
 and repeated XLSX save/open/refresh. This repair is independent of date parsing and GETPIVOTDATA support.
 
-The branch is aligned with upstream `main` at `7bb397a3`. The twelve regressions
+The branch is aligned with upstream `main` at `7bb397a3`. The thirteen regressions
 run in the consolidated engine integration-test binary, without changing the repair
 contract. The desktop-theme compatibility fix is already supplied by upstream.
 
@@ -91,6 +91,7 @@ constructed, which failures must preserve history, and what each regression veri
 
 | Date | Change |
 |---|---|
+| 2026-11-04 | Generate XLSX imports with direct and indirect calculated-field cycles; assert cycle-specific rejection, cached/source data, saved identity and usable undo/redo for both source parameters and clean/dirty workbooks |
 | 2026-11-03 | Complete old headers and assert validator-specific errors in the calculated-field rejection test; retain separate incomplete-header identity regressions |
 | 2026-11-03 | Reject selected calculated values when old headers are incomplete; cover renamed-then-cleared headers and preserve report/saved/redo state |
 | 2026-11-02 | Preserve valid calculated values during source repair; reject header collisions and broken calculated dependencies atomically |
@@ -136,3 +137,11 @@ suffixes, both replacement parameters, unchanged source totals, workbook identit
 saved state and redo, plus the conservative incomplete-header boundary. They fail
 before this correction. A complete-header control retains calculated values and their
 chained dependencies across undo, save/open and refresh.
+
+
+A separate generated-XLSX regression imports direct and two-field cycles while retaining
+cached report values. With complete old headers and a valid replacement, both `source`
+and `range` must reach the cycle-specific rejection. It checks source records, rendered
+values, calculation metadata, workbook/saved identity and dirty state, plus an existing
+redo branch and usable undo/redo entries in clean and modified documents. The production
+cycle guard is unchanged; these are synthetic GridCraft-written imports, not Excel tests.

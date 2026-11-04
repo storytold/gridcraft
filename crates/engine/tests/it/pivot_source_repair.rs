@@ -375,3 +375,80 @@ fn repair_refuses_incomplete_old_headers_with_selected_calculations() {
     assert_eq!(value(&s, "I6"), Value::Number(40.0));
     assert_eq!(pivot_source(&s, "Repair1"), OLD_SOURCE);
 }
+
+/// Exercise the pre-existing redo edit and, for modified imports, the retained undo edit.
+fn assert_repair_history_still_works(s: &mut Session, dirty: bool) {
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(value(s, "Z20"), Value::text("redo branch"));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(value(s, "Z20"), Value::Empty);
+    if dirty {
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(value(s, "Z19"), Value::Empty);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(value(s, "Z19"), Value::text("retained edit"));
+    }
+}
+
+/// Imported cyclic calculations reject source replacement without altering data or either history branch.
+#[test]
+fn repair_rejects_imported_cyclic_calculated_fields_without_changing_data_or_history() {
+    for (direct_cycle, parameter, dirty) in [
+        (false, "source", false),
+        (false, "source", true),
+        (false, "range", false),
+        (false, "range", true),
+        (true, "source", false),
+        (true, "source", true),
+        (true, "range", false),
+        (true, "range", true),
+    ] {
+        let mut original = broken_report_with_calculated_values();
+        original.execute("cell.set", json!({"cell": "D1", "input": "Unused"})).unwrap();
+        // Build hostile but entirely fictional import metadata. The command API rejects
+        // cycles at creation time; XLSX can supply them directly while retaining cached cells.
+        let wb = Arc::make_mut(&mut original.doc_mut().unwrap().wb);
+        let pt = &mut wb.sheet_mut(0).unwrap().pivots[0];
+        pt.calculated_fields[0].formula = if direct_cycle { "=Margin*2" } else { "=DoubleMargin" }.into();
+        pt.calculated_fields[1].formula = "=Margin*2".into();
+        let expected_fields = pt.calculated_fields.clone();
+        let mut s = reopen(&mut original);
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().pivots[0].calculated_fields, expected_fields);
+        assert!(!s.doc().unwrap().is_dirty(), "the generated XLSX starts as a saved workbook");
+        assert_report(&s, "G6");
+        assert_eq!(value(&s, "H6"), Value::Number(20.0));
+        assert_eq!(value(&s, "I6"), Value::Number(40.0));
+        if dirty {
+            s.execute("cell.set", json!({"cell": "Z19", "input": "retained edit"})).unwrap();
+        }
+        s.execute("cell.set", json!({"cell": "Z20", "input": "redo branch"})).unwrap();
+        s.execute("edit.undo", json!({})).unwrap();
+        let saved = s.doc().unwrap().saved.clone();
+        assert_eq!(s.doc().unwrap().is_dirty(), dirty);
+        assert!(!s.doc().unwrap().redo.is_empty());
+        if dirty {
+            assert!(!s.doc().unwrap().undo.is_empty());
+        }
+        let mut params = json!({"pivot": "Repair1"});
+        params[parameter] = json!(REPAIRED_SOURCE);
+        rejects_without_edit(&mut s, "pivot.changeSource", params, "calculated field `Margin` refers to itself through its formula");
+        assert_eq!(pivot_source(&s, "Repair1"), OLD_SOURCE);
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().pivots[0].calculated_fields, expected_fields);
+        assert_report(&s, "G6");
+        assert_eq!(value(&s, "H6"), Value::Number(20.0));
+        assert_eq!(value(&s, "I6"), Value::Number(40.0));
+        assert_eq!(value(&s, "C2"), Value::Number(17.0));
+        assert_eq!(value(&s, "C3"), Value::Number(23.0));
+        assert_eq!(value(&s, "Z19"), if dirty { Value::text("retained edit") } else { Value::Empty });
+        assert_eq!(value(&s, "Z20"), Value::Empty);
+        assert!(Arc::ptr_eq(&saved, &s.doc().unwrap().saved));
+        assert_eq!(s.doc().unwrap().is_dirty(), dirty);
+        assert_repair_history_still_works(&mut s, dirty);
+        assert_eq!(pivot_source(&s, "Repair1"), OLD_SOURCE);
+        assert_report(&s, "G6");
+        assert_eq!(value(&s, "H6"), Value::Number(20.0));
+        assert_eq!(value(&s, "I6"), Value::Number(40.0));
+        assert!(Arc::ptr_eq(&saved, &s.doc().unwrap().saved));
+        assert_eq!(s.doc().unwrap().is_dirty(), dirty);
+    }
+}
