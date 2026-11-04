@@ -28,6 +28,8 @@ pub(super) struct PassHost<'a> {
     blocks: HashMap<(usize, RangeRef), SharedBlock>,
     /// The cells held in `blocks`.
     block_cells: u64,
+    /// What looking at unfinished formulas may still cost: the cells of the large blocks read so far.
+    block_look_budget: u64,
     /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
     /// every row, so once per sheet rather than once per range read.
     used: HashMap<usize, Option<RangeRef>>,
@@ -86,6 +88,7 @@ impl<'a> PassHost<'a> {
         PassHost {
             blocks: HashMap::default(),
             block_cells: 0,
+            block_look_budget: 0,
             wb,
             exprs,
             results: HashMap::with_capacity_and_hasher(exprs.len(), Default::default()),
@@ -532,9 +535,17 @@ impl Host for PassHost<'_> {
             return Some(std::sync::Arc::clone(block));
         }
         let cells = u64::from(range.height()) * u64::from(range.width());
+        self.block_look_budget = self.block_look_budget.saturating_add(cells);
         if entry.0 < 2 || !entry.0.is_power_of_two() || self.iterate || self.block_cells.saturating_add(cells) > MAX_SHARED_CELLS {
             return None;
         }
+        // Deciding looks through the unfinished formulas twice. Reads pay for those looks, so with
+        // many of them and many blocks the looks can't cost more than the reads they try to save.
+        let look = 2 * (self.pending.len() + self.in_progress.len() + self.waiting.len()) as u64;
+        if look > self.block_look_budget {
+            return None;
+        }
+        self.block_look_budget -= look;
         if self.a_spill_could_reach(sheet, range) {
             return None;
         }
