@@ -158,6 +158,35 @@ fn overflowing_text_keeps_the_tint_under_it() {
 }
 
 #[test]
+fn overflowing_text_keeps_both_tints_with_the_active_row_option_on() {
+    // Focus Cell and File > Options > "Highlight the active cell's row" share the cleared area.
+    let mut s = session();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["A long label that runs across many empty columns of the sheet"]]})).unwrap();
+    s.execute("selection.set", json!({"cell": "F1"})).unwrap();
+    s.execute("view.focusCell", json!({"on": true})).unwrap();
+    s.execute("view.focusCellColor", json!({"color": "#C00000"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            app.logic(&ui.ctx().clone());
+            app.ui(ui);
+        },
+        SheetApp::new(s, Default::default()),
+    );
+    h.state_mut().run("options.highlightActiveRow", json!({"on": true})).unwrap();
+    h.run_steps(4);
+    let app = h.state();
+    let sheet = active(&h);
+    let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+    let d1 = geo.cell_rect(sheet, CellRef::parse("D1").unwrap());
+    let probe = pos2(d1.center().x, d1.top() + 3.0);
+    let found: Vec<_> =
+        fills(&h.output().shapes).into_iter().filter(|(r, c)| r.contains(probe) && *c != egui::Color32::TRANSPARENT).map(|(_, c)| c).collect();
+    let focus = egui::Color32::from_rgba_unmultiplied(0xC0, 0x00, 0x00, 0x24);
+    let row = gridcraft_ui_egui::theme::Tokens::light().active_row;
+    assert!(found.ends_with(&[focus, row]), "both tints sit over the cleared area in D1: {found:?}");
+}
+
+#[test]
 fn the_view_ribbon_focus_cell_button_toggles_the_setting() {
     let mut h = view_harness();
     assert!(!active(&h).focus_cell, "off to start with");
