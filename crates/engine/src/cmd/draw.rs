@@ -235,8 +235,9 @@ fn box_anchor(sheet: &Sheet, idx: usize, x: f32, y: f32, w: f32, h: f32) -> Opti
 /// stroke's bounds (which include a line's stray points and an arrow's barbs). The flips say
 /// which diagonal of the box the segment takes, so the renderer keeps its slope and direction.
 fn segment_anchor(sheet: &Sheet, idx: usize, tail: [f32; 2], tip: [f32; 2]) -> Option<(Anchor, bool, bool)> {
-    let anchor =
-        box_anchor(sheet, idx, tail[0].min(tip[0]), tail[1].min(tip[1]), (tip[0] - tail[0]).abs().max(1.0), (tip[1] - tail[1]).abs().max(1.0))?;
+    // The raw extents: a zero-extent box is what keeps a horizontal stroke horizontal and a
+    // vertical one vertical (`insert.shape` makes a line the same way).
+    let anchor = box_anchor(sheet, idx, tail[0].min(tip[0]), tail[1].min(tip[1]), (tip[0] - tail[0]).abs(), (tip[1] - tail[1]).abs())?;
     Some((anchor, tip[0] < tail[0], tip[1] < tail[1]))
 }
 

@@ -3498,7 +3498,7 @@ fn ink_to_shape_keeps_an_arrow_pointing_the_way_it_was_drawn() {
     assert!(!sh.format.flip_v);
     // The box is the shaft's, not the barbs': a horizontal stroke stays horizontal.
     assert!((sh.anchor.width - 100.0).abs() < 0.5, "{:?}", sh.anchor);
-    assert!(sh.anchor.height <= 1.0, "{:?}", sh.anchor);
+    assert_eq!(sh.anchor.height, 0.0, "a horizontal shaft has a flat box, so the arrow cannot slope: {:?}", sh.anchor);
     // Drawn left to right, the same stroke points right.
     let r = s.execute("draw.stroke", json!({"points": [[100, 100], [140, 100], [180, 100], [200, 100], [180, 108], [199, 100], [180, 92]]})).unwrap();
     assert_eq!(r["kind"], "Arrow");
@@ -3506,6 +3506,21 @@ fn ink_to_shape_keeps_an_arrow_pointing_the_way_it_was_drawn() {
     assert_eq!(sh.kind, gridcraft_model::ShapeKind::Arrow);
     assert!(!sh.format.flip_h);
     assert!(!sh.format.flip_v);
+}
+
+#[test]
+fn ink_to_shape_keeps_a_flat_line_flat() {
+    let mut s = s();
+    s.execute("draw.inkToShape", json!({"on": true})).unwrap();
+    // The line preset runs from one corner of its box to the other, so a minimum height would
+    // tilt a horizontal line by that much over its length (and a vertical one across its width).
+    s.execute("draw.stroke", json!({"points": [[100, 100], [140, 100], [180, 100], [200, 100]]})).unwrap();
+    s.execute("draw.stroke", json!({"points": [[300, 100], [300, 140], [300, 200]]})).unwrap();
+    let doc = s.doc().unwrap().wb.active().unwrap().clone();
+    assert_eq!(doc.shapes[0].kind, gridcraft_model::ShapeKind::Line);
+    assert_eq!(doc.shapes[0].anchor.height, 0.0, "a horizontal line has a flat box: {:?}", doc.shapes[0].anchor);
+    assert_eq!(doc.shapes[1].kind, gridcraft_model::ShapeKind::Line);
+    assert_eq!(doc.shapes[1].anchor.width, 0.0, "a vertical line has a flat box: {:?}", doc.shapes[1].anchor);
 }
 
 #[test]
