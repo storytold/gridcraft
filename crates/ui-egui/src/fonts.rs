@@ -307,7 +307,7 @@ fn installed_in(cat: &[Face], names: &[String]) -> Vec<String> {
 /// background scan finishes it returns just the standard names.
 pub fn families() -> Vec<String> {
     let mut out: Vec<String> = crate::ribbon::FONTS.iter().map(|s| s.to_string()).collect();
-    let cat = catalog_now().unwrap_or_default();
+    let cat = catalog();
     let mut seen: HashSet<String> = out.iter().map(|s| s.to_lowercase()).collect();
     let mut installed: Vec<String> = cat.iter().map(|f| f.family.clone()).collect();
     installed.sort_by_key(|a| a.to_lowercase());
