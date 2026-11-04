@@ -255,8 +255,13 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
             // X values with text in them (labels) are ignored: the points are numbered 1..n.
             (Some(f), true) => {
                 let xs = eval_list_capped(wb, sheet, f, budget);
-                budget -= xs.len().min(budget);
-                Some(xs).filter(|xs| !xs.iter().any(Value::is_text)).map(|xs| xs.iter().map(to_num).collect())
+                // Only X values that are kept are charged to the budget.
+                if xs.iter().any(Value::is_text) {
+                    None
+                } else {
+                    budget -= xs.len().min(budget);
+                    Some(xs.iter().map(to_num).collect())
+                }
             }
             _ => None,
         };

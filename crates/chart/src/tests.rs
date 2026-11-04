@@ -1276,3 +1276,23 @@ fn series_share_one_point_budget() {
     assert_eq!(total, crate::resolve::MAX_CHART_POINTS);
     assert!(d.series.last().is_some_and(|s| s.values.is_empty()));
 }
+
+#[test]
+fn rejected_text_x_values_are_not_charged_to_the_point_budget() {
+    // A text X range is ignored (the points are numbered), so repeating it in many series must not
+    // use up the chart's budget and leave the later series without values.
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    for r in 0..100 {
+        s.set_value(CellRef::new(r, 0), Value::Number(f64::from(r)));
+    }
+    s.set_value(CellRef::new(0, 1), Value::text("label"));
+    s.set_value(CellRef::new(59_999, 1), Value::Number(2.0));
+    let mut c = chart(ChartKind::Scatter);
+    c.series = (0..40)
+        .map(|_| Series { values: "Sheet1!$A$1:$A$100".into(), categories: Some("Sheet1!$B$1:$B$60000".into()), ..Default::default() })
+        .collect();
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series.len(), 40);
+    assert!(d.series.iter().all(|s| s.values.len() == 100 && s.x.is_none()));
+}
