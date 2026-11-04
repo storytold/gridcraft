@@ -16,7 +16,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui, viewport: f32) {
     if compact {
         ui.spacing_mut().item_spacing.x = 0.0;
     }
-    let break_width = if compact { 5.0 } else { 13.0 };
+    let break_width = if compact { 3.0 } else { 13.0 };
     let theme_w = if compact { 76.0 } else { 88.0 };
     let scale_w = if compact { 76.0 } else { 88.0 };
     let language_w = if compact { 88.0 } else { 100.0 };

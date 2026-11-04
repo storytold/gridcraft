@@ -279,7 +279,10 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     // not offer Flip Vertical/Horizontal (the command refuses them). Align and Group are not
     // drawn: they need two or more selected objects and the grid selects one at a time, so the
     // engine would accept the call and change nothing.
-    ui.add_enabled_ui(picked.is_some(), |ui| {
+    // `arrange.rotate` turns a shape; for a chart, image or slicer it reports an error, so the
+    // button is enabled only for a shape.
+    let shape = picked.is_some_and(|o| o.kind == gridcraft_engine::model::ObjKind::Shape);
+    ui.add_enabled_ui(shape, |ui| {
         let __k = small_button(ui, Icon::Orientation, "Rotate", "Rotate 90°", false);
         control_keytip(app, ui, &__k, "arrange.rotate");
         if __k.clicked() {
