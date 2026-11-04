@@ -164,7 +164,7 @@ All overlays are reported through `overlay` = `""` | `openModel` | `existingConn
 | `dataModel.unmarkDateTable` | `{table}` | status |
 | `dataModel.validate` | `{}` | `{tables, rows, relationships, findings}` — referential integrity, cardinality, blank keys, cycles |
 | `dataModel.createPivot` | `{measure?, values?: [measure or {column, aggregate}], row_fields?, column_fields?, filters?, name?, sheet?, at?, layout?, row_subtotals?, column_subtotals?, grand_totals?, replace?}` | `{name, sheet, at, rows, columns, values, cached}`; a string value is a measure, `{column, aggregate: Sum\|Average\|Count\|Min\|Max}` is Excel's implicit measure for that column (built for the call only, not added to the model); `measure` may be omitted when `values` names a field; `replace` clears the previous report of that name and re-applies the kept PivotTable |
-| `dataModel.pivotFields` | `{name?}` | `{pivots: [{name, sheet, at}], model: {tables, measures, relationships}, selected}` — what the field-list pane reads |
+| `dataModel.pivotFields` | `{name?}` | `{pivots: [{name, sheet, at, range}], model: {tables, measures, relationships}, selected}` — what the field-list pane reads; `at` is the report body (below the page fields), `range` is the whole report including its page-field rows |
 | `insert.modelPivotTable` | same as `dataModel.createPivot` | same (Insert › Tables entry point) |
 
 `status` is:

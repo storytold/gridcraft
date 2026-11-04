@@ -112,11 +112,16 @@ fn balance(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context
     let year_end = if period == Period::Year && args.len() >= 4 { Some(year_end_serial(ev, &args[3], ctx)?) } else { None };
     let (start, end) = period_bounds(period, last, year_end);
     let boundary = if opening {
-        start.floor() - 1.0
+        // PREVIOUSDAY(STARTOF...): the stored value of the day before the period, when it exists.
+        let day = start.floor() - 1.0;
+        match dates_between(ev, dates, day, day).into_iter().next() {
+            Some((_, value)) => value,
+            None => return Ok(Scalar::Blank),
+        }
     } else {
         // `ENDOF*` is the last date that exists in the column, not the calendar end of the period.
-        match dates_between(ev, dates, start, end).last() {
-            Some((serial, _)) => *serial,
+        match dates_between(ev, dates, start, end).pop() {
+            Some((_, value)) => value,
             None => return Ok(Scalar::Blank),
         }
     };
@@ -125,7 +130,7 @@ fn balance(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context
     if let Some(filter) = args.get(2) {
         apply_filter_arg(ev, filter, &mut filters, ctx)?;
     }
-    filters.set(dates.table, dates.column, [ScalarKey::from(&Scalar::DateTime(boundary))]);
+    filters.set(dates.table, dates.column, [ScalarKey::from(&boundary)]);
     let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone() };
     ev.eval(&args[0], &mut inner)
 }

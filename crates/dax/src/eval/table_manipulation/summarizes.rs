@@ -611,8 +611,12 @@ fn parse_summarize_columns<'a>(ev: &Evaluator<'_>, args: &'a [BoundExpr]) -> Res
                     continue;
                 }
                 "KEEPFILTERS" => {
-                    let inner = inner.first().ok_or_else(|| EvalError::new("KEEPFILTERS needs a filter"))?;
-                    filters.push((inner, false));
+                    if inner.is_empty() {
+                        return Err(EvalError::new("KEEPFILTERS needs a filter"));
+                    }
+                    // Keep the wrapper: `apply_filter_arg` intersects a KEEPFILTERS filter with
+                    // the filters already in context instead of replacing them.
+                    filters.push((arg, false));
                     index += 1;
                     continue;
                 }
