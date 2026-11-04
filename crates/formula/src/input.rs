@@ -286,14 +286,14 @@ impl Bindings {
 
 fn tr_fold_name(s: &str) -> String {
     s.chars()
-        .flat_map(|c| match c {
-            'i' | 'İ' | 'ı' | 'I' => ['i', 'i'].into_iter().take(1),
-            'ç' | 'Ç' => ['ç', 'ç'].into_iter().take(1),
-            'ğ' | 'Ğ' => ['ğ', 'ğ'].into_iter().take(1),
-            'ö' | 'Ö' => ['ö', 'ö'].into_iter().take(1),
-            'ş' | 'Ş' => ['ş', 'ş'].into_iter().take(1),
-            'ü' | 'Ü' => ['ü', 'ü'].into_iter().take(1),
-            c => [c, c].into_iter().take(1),
+        .map(|c| match c {
+            'i' | 'İ' | 'ı' | 'I' => 'i',
+            'Ç' => 'ç',
+            'Ğ' => 'ğ',
+            'Ö' => 'ö',
+            'Ş' => 'ş',
+            'Ü' => 'ü',
+            c => c,
         })
         .flat_map(char::to_lowercase)
         .flat_map(|c| match c {
