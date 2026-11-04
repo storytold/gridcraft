@@ -218,10 +218,12 @@ pub(crate) mod desktop {
     enum Done {
         Scanned(Vec<RecoveryInfo>),
         Saved,
-        Discarded,
+        /// Record `id` is gone.
+        Discarded(String),
         /// Writing workbook `uid`'s copy failed: it is tried again at the next interval.
         SaveFailed(u64, String),
-        Failed(String),
+        /// Deleting record `id` failed: it stays tracked and is tried again (see `discarding`).
+        DiscardFailed(String, String),
     }
 
     /// One open workbook's copy: its record (once one is written), the revision it holds, and
@@ -241,6 +243,9 @@ pub(crate) mod desktop {
         /// Jobs sent and not answered yet.
         pending: usize,
         slots: HashMap<u64, Slot>,
+        /// Records being deleted, until the worker confirms it: `None` while queued, or when
+        /// to try again after a failed delete, so a copy nobody needs never stays on disk.
+        discarding: HashMap<String, Option<Instant>>,
         copies: Vec<RecoveryInfo>,
         ready: bool,
         error: Option<String>,
@@ -263,6 +268,7 @@ pub(crate) mod desktop {
                 worker: Some(worker),
                 pending: 0,
                 slots: HashMap::new(),
+                discarding: HashMap::new(),
                 copies: Vec::new(),
                 ready: false,
                 error: None,
@@ -279,6 +285,11 @@ pub(crate) mod desktop {
         }
         pub(crate) fn error(&self) -> Option<&str> {
             self.error.as_deref()
+        }
+
+        fn queue_discard(&mut self, id: String) {
+            self.discarding.insert(id.clone(), None);
+            self.send(Job::Discard(id));
         }
 
         fn send(&mut self, job: Job) {
@@ -308,17 +319,23 @@ pub(crate) mod desktop {
                         self.copies = found;
                         self.ready = true;
                     }
-                    Done::Saved | Done::Discarded => {}
+                    Done::Saved => {}
+                    Done::Discarded(id) => {
+                        self.discarding.remove(&id);
+                    }
+                    Done::DiscardFailed(id, e) => {
+                        if let Some(retry) = self.discarding.get_mut(&id) {
+                            *retry = Some(Instant::now() + INTERVAL);
+                        }
+                        log::warn!("recovery: {e}");
+                        self.error = Some(e);
+                    }
                     Done::SaveFailed(uid, e) => {
                         // The copy on disk (if any) is older than the slot says: write it again
                         // once the interval is up, even if the workbook doesn't change.
                         if let Some(slot) = self.slots.get_mut(&uid) {
                             slot.revision = None;
                         }
-                        log::warn!("recovery: {e}");
-                        self.error = Some(e);
-                    }
-                    Done::Failed(e) => {
                         log::warn!("recovery: {e}");
                         self.error = Some(e);
                     }
@@ -330,21 +347,30 @@ pub(crate) mod desktop {
         pub(crate) fn tick(&mut self, docs: &[DocState], now: Instant) -> Option<Duration> {
             self.receive(None);
             let mut jobs = Vec::new();
+            let mut drop = Vec::new();
             // Workbooks closed since the last tick (saved, or Don't Save): their copies go.
             self.slots.retain(|uid, slot| {
                 let open = docs.iter().any(|d| d.uid == *uid);
                 if !open && let Some(id) = slot.id.take() {
-                    jobs.push(Job::Discard(id));
+                    drop.push(id);
                 }
                 open
             });
             let mut next: Option<Duration> = None;
+            // Deletes that failed are tried again once their interval is up.
+            for (id, retry) in &self.discarding {
+                match retry {
+                    Some(at) if now >= *at => drop.push(id.clone()),
+                    Some(at) => next = Some(next.map_or(*at - now, |n| n.min(*at - now))),
+                    None => {}
+                }
+            }
             for d in docs {
                 let slot = self.slots.entry(d.uid).or_insert_with(|| Slot { id: None, revision: None, due: now + INTERVAL });
                 if !wants_copy(d) {
                     // Saved, or undone back to the saved state: nothing to recover.
                     if let Some(id) = slot.id.take() {
-                        jobs.push(Job::Discard(id));
+                        drop.push(id);
                     }
                     slot.revision = None;
                     continue;
@@ -360,6 +386,9 @@ pub(crate) mod desktop {
                 slot.revision = Some(d.revision);
                 slot.due = now + INTERVAL;
                 jobs.push(Job::Save { uid: d.uid, id, name: d.display_title(), wb: d.wb.clone() });
+            }
+            for id in drop {
+                self.queue_discard(id);
             }
             for job in jobs {
                 self.send(job);
@@ -378,6 +407,12 @@ pub(crate) mod desktop {
             let now = Instant::now();
             for d in docs {
                 self.slots.entry(d.uid).or_insert_with(|| Slot { id: None, revision: None, due: now }).due = now;
+            }
+            // ...and one more try at every delete that failed.
+            for retry in self.discarding.values_mut() {
+                if retry.is_some() {
+                    *retry = Some(now);
+                }
             }
             self.tick(docs, now);
             self.jobs = None;
@@ -418,14 +453,20 @@ pub(crate) mod desktop {
             self.slots.insert(uid, Slot { id: Some(id.to_string()), revision: None, due: Instant::now() + INTERVAL });
         }
 
-        /// Deletes a listed copy.
+        /// Deletes a listed copy, as the person asked: waits for the worker (a few seconds at
+        /// most) and reports a delete that failed, leaving the copy listed to try again.
         pub(crate) fn discard(&mut self, id: &str) -> Result<(), String> {
-            if !self.copies.iter().any(|c| c.id == id) {
-                return Err("no such recovery copy".into());
+            let at = self.copies.iter().position(|c| c.id == id).ok_or("no such recovery copy")?;
+            let info = self.copies.remove(at);
+            self.queue_discard(id.to_string());
+            self.receive(Some(Instant::now() + FINISH_WAIT));
+            // Still queued after the wait: from here on a failure is retried like any other.
+            if !matches!(self.discarding.get(id), Some(Some(_))) {
+                return Ok(());
             }
-            self.copies.retain(|c| c.id != id);
-            self.send(Job::Discard(id.to_string()));
-            Ok(())
+            self.discarding.remove(id);
+            self.copies.insert(at.min(self.copies.len()), info);
+            Err(self.error.clone().unwrap_or_else(|| "the recovery copy could not be removed".into()))
         }
     }
 
@@ -465,8 +506,8 @@ pub(crate) mod desktop {
                     Err(e) => Done::SaveFailed(uid, format!("could not keep a recovery copy of {name}: {e}")),
                 },
                 Job::Discard(id) => match store.discard(&id) {
-                    Ok(()) => Done::Discarded,
-                    Err(e) => Done::Failed(format!("could not remove a recovery copy: {e}")),
+                    Ok(()) => Done::Discarded(id),
+                    Err(e) => Done::DiscardFailed(id, format!("could not remove a recovery copy: {e}")),
                 },
             };
             if done.send(answer).is_err() {
@@ -778,24 +819,79 @@ mod tests {
 
     /// The bug this prevents: a copy that failed to write (disk full, a locked file) was not
     /// written again until the workbook changed, so an idle workbook kept no current copy.
-    #[cfg(unix)]
     #[test]
     fn a_failed_copy_is_written_again_without_another_edit() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = folder("retry");
         let mut a = app(&dir);
         type_candy(&mut a);
-        // The folder refuses new records, as a full or locked disk would.
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+        // A file where the recovery folder should be: no record can be made, whoever runs this.
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::write(&dir, b"not a folder").unwrap();
         let t = Instant::now() + INTERVAL;
         a.recovery_tick_at(t);
         a.recovery_worker().unwrap().settle();
-        assert_eq!(records(&dir), 0);
         assert!(a.execute("file.recover", json!({})).unwrap()["error"].is_string(), "the failure is reported");
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::remove_file(&dir).unwrap();
+        std::fs::create_dir(&dir).unwrap();
         a.recovery_tick_at(t + INTERVAL);
         a.recovery_worker().unwrap().settle();
         assert_eq!(records(&dir), 1, "written again at the next interval");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Makes record `id`'s copy undeletable (a folder where the file was), or deletable again.
+    fn jam(dir: &Path, on: bool) {
+        let rec = std::fs::read_dir(dir).unwrap().flatten().find(|e| e.path().is_dir()).unwrap().path();
+        let copy = rec.join("copy.xlsx");
+        if on {
+            std::fs::remove_file(&copy).unwrap();
+            std::fs::create_dir_all(copy.join("held")).unwrap();
+        } else {
+            std::fs::remove_dir_all(&copy).unwrap();
+            std::fs::write(&copy, b"").unwrap();
+        }
+    }
+
+    /// The bug this prevents: a copy whose delete failed was forgotten, stayed on disk and was
+    /// offered again at the next start although nobody needed it.
+    #[test]
+    fn a_failed_delete_is_tried_again() {
+        let dir = folder("delete-retry");
+        let mut a = app(&dir);
+        type_candy(&mut a);
+        let t = Instant::now() + INTERVAL;
+        a.recovery_tick_at(t);
+        a.recovery_worker().unwrap().settle();
+        jam(&dir, true);
+        a.execute("edit.undo", json!({})).unwrap();
+        a.execute("edit.undo", json!({})).unwrap();
+        a.recovery_tick_at(t);
+        a.recovery_worker().unwrap().settle();
+        assert_eq!(records(&dir), 1, "the delete failed");
+        jam(&dir, false);
+        a.recovery_tick_at(t + INTERVAL);
+        a.recovery_worker().unwrap().settle();
+        assert_eq!(records(&dir), 0, "tried again at the next interval");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Discard reports a delete that failed instead of pretending it worked.
+    #[test]
+    fn a_failed_discard_is_reported_and_the_copy_stays_listed() {
+        let dir = folder("discard-fails");
+        let mut a = app(&dir);
+        type_candy(&mut a);
+        a.recovery_tick_at(Instant::now() + INTERVAL);
+        a.recovery_worker().unwrap().crash();
+        let mut b = app(&dir);
+        let id = b.recovery_copies()[0].id.clone();
+        jam(&dir, true);
+        assert!(b.execute("file.recover", json!({"discard": id.clone()})).is_err());
+        assert_eq!(b.recovery_copies().len(), 1, "still listed, to try again");
+        jam(&dir, false);
+        b.execute("file.recover", json!({"discard": id})).unwrap();
+        assert!(b.recovery_copies().is_empty());
+        assert_eq!(records(&dir), 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
