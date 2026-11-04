@@ -332,6 +332,10 @@ fn descriptive(s: &Session, p: &Json) -> Result<Grid> {
     }
     let mut g = Grid::default();
     for (i, v) in vars.iter().enumerate() {
+        // The report is refused once the grid is too large: the rest would only build discarded labels.
+        if g.too_large {
+            break;
+        }
         let x = numbers(&v.vals, true)?;
         let c = idx(i).saturating_mul(2);
         g.txt(0, c, &v.name);
