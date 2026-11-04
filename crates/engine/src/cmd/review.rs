@@ -38,6 +38,7 @@ pub fn specs() -> Vec<CommandSpec> {
             shortcut_mac: None,
             params: "{action?: list (default) | add | modify | delete | unlock, title?, range?, password?, newTitle?, sheet?} → ranges",
             enabled: has_doc,
+            available: None,
             run: allow_edit_ranges,
             journal: false,
             undoable: true,

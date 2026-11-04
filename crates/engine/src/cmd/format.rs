@@ -5,156 +5,176 @@ use gridcraft_model::{BorderLine, BorderStyle, Borders, Color, Fill, HAlign, Num
 use serde_json::{Value as Json, json};
 
 use super::{
-    CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, ok, parse_lines, split_sheet, str_param,
-    target_ranges, target_sheet,
+    CommandSpec, EngineError, Result, Session, bad, bool_param, can_format_cells, cmd, edit, f64_param, has_doc, ok, parse_lines, split_sheet,
+    str_param, target_ranges, target_sheet,
 };
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         // Font
-        cmd!("home.bold", "Bold", ["Home", "Font"], Some("Cmd+B"), "{range?, on?: bool}", has_doc, |s, p| toggle(
+        cmd!(format "home.bold", "Bold", ["Home", "Font"], Some("Cmd+B"), "{range?, on?: bool}", can_format_cells, |s, p| toggle(
             s,
             p,
             |st| st.font.bold,
             |st, v| st.font.bold = v
         )),
-        cmd!("home.italic", "Italic", ["Home", "Font"], Some("Cmd+I"), "{range?, on?}", has_doc, |s, p| toggle(
+        cmd!(format "home.italic", "Italic", ["Home", "Font"], Some("Cmd+I"), "{range?, on?}", can_format_cells, |s, p| toggle(
             s,
             p,
             |st| st.font.italic,
             |st, v| st.font.italic = v
         )),
-        cmd!(
+        cmd!(format
             "home.underline",
             "Underline",
             ["Home", "Font"],
             Some("Cmd+U"),
             "{range?, on?, style?: single|double|singleAccounting|doubleAccounting}",
-            has_doc,
+            can_format_cells,
             underline
         ),
-        cmd!("home.doubleUnderline", "Double Underline", ["Home", "Font"], None, "{range?}", has_doc, |s, p| underline(
+        cmd!(format "home.doubleUnderline", "Double Underline", ["Home", "Font"], None, "{range?}", can_format_cells, |s, p| underline(
             s,
             &with(p, "style", json!("double"))
         )),
-        cmd!("home.strikethrough", "Strikethrough", ["Home", "Font"], Some("Cmd+Shift+X"), "{range?, on?}", has_doc, |s, p| toggle(
+        cmd!(format "home.strikethrough", "Strikethrough", ["Home", "Font"], Some("Cmd+Shift+X"), "{range?, on?}", can_format_cells, |s, p| toggle(
             s,
             p,
             |st| st.font.strike,
             |st, v| st.font.strike = v
         )),
-        cmd!("home.superscript", "Superscript", ["Home", "Font"], None, "{range?, on?}", has_doc, |s, p| toggle(
+        cmd!(format "home.superscript", "Superscript", ["Home", "Font"], None, "{range?, on?}", can_format_cells, |s, p| toggle(
             s,
             p,
             |st| st.font.vert == VertAlign::Superscript,
             |st, v| st.font.vert = if v { VertAlign::Superscript } else { VertAlign::Baseline }
         )),
-        cmd!("home.subscript", "Subscript", ["Home", "Font"], None, "{range?, on?}", has_doc, |s, p| toggle(
+        cmd!(format "home.subscript", "Subscript", ["Home", "Font"], None, "{range?, on?}", can_format_cells, |s, p| toggle(
             s,
             p,
             |st| st.font.vert == VertAlign::Subscript,
             |st, v| st.font.vert = if v { VertAlign::Subscript } else { VertAlign::Baseline }
         )),
-        cmd!("home.fontName", "Font", ["Home", "Font"], None, "{range?, name: \"Calibri\"}", has_doc, font_name),
-        cmd!("home.fontSize", "Font Size", ["Home", "Font"], None, "{range?, size: 11}", has_doc, font_size),
-        cmd!("home.increaseFontSize", "Increase Font Size", ["Home", "Font"], Some("Cmd+Shift+>"), "{range?}", has_doc, |s, p| step_font(s, p, true)),
-        cmd!("home.decreaseFontSize", "Decrease Font Size", ["Home", "Font"], Some("Cmd+Shift+<"), "{range?}", has_doc, |s, p| step_font(
+        cmd!(format "home.fontName", "Font", ["Home", "Font"], None, "{range?, name: \"Calibri\"}", can_format_cells, font_name),
+        cmd!(format "home.fontSize", "Font Size", ["Home", "Font"], None, "{range?, size: 11}", can_format_cells, font_size),
+        cmd!(format "home.increaseFontSize", "Increase Font Size", ["Home", "Font"], Some("Cmd+Shift+>"), "{range?}", can_format_cells, |s, p| step_font(
+            s, p, true
+        )),
+        cmd!(format "home.decreaseFontSize", "Decrease Font Size", ["Home", "Font"], Some("Cmd+Shift+<"), "{range?}", can_format_cells, |s, p| step_font(
             s, p, false
         )),
-        cmd!(
+        cmd!(format
             "home.fontColor",
             "Font Color",
             ["Home", "Font"],
             None,
             "{range?, color: \"#C00000\" | \"auto\" | {theme: 4, tint: -0.25}}",
-            has_doc,
+            can_format_cells,
             font_color
         ),
-        cmd!("home.fillColor", "Fill Color", ["Home", "Font"], None, "{range?, color: \"#FFFF00\" | \"none\" | {theme, tint}}", has_doc, fill_color),
-        cmd!(
+        cmd!(format
+            "home.fillColor",
+            "Fill Color",
+            ["Home", "Font"],
+            None,
+            "{range?, color: \"#FFFF00\" | \"none\" | {theme, tint}}",
+            can_format_cells,
+            fill_color
+        ),
+        cmd!(format
             "home.borders",
             "Borders",
             ["Home", "Font"],
             None,
             "{range?, preset: bottom|top|left|right|none|all|outside|thickOutside|thickBottom|doubleBottom|topBottom|topThickBottom|topDoubleBottom|insideHorizontal|insideVertical|inside|diagonalDown|diagonalUp, style?: thin|medium|thick|dashed|dotted|double|hair…, color?}",
-            has_doc,
+            can_format_cells,
             borders
         ),
-        cmd!(
+        cmd!(format
             "home.formatCells",
             "Format Cells…",
             ["Home", "Cells", "Format"],
             Some("Cmd+1"),
             "{range?, style: {font?, fill?, borders?, align?, numFmt?, protection?}} (partial Style JSON merged in)",
-            has_doc,
+            can_format_cells,
             format_cells
         ),
         // Alignment
         CommandSpec {
             shortcut_mac: Some("Cmd+L"),
-            ..cmd!("home.alignLeft", "Align Left", ["Home", "Alignment"], Some("Cmd+L"), "{range?}", has_doc, |s, p| halign(s, p, HAlign::Left))
+            ..cmd!(format "home.alignLeft", "Align Left", ["Home", "Alignment"], Some("Cmd+L"), "{range?}", can_format_cells, |s, p| halign(
+                s,
+                p,
+                HAlign::Left
+            ))
         },
         CommandSpec {
             shortcut_mac: Some("Cmd+E"),
-            ..cmd!("home.alignCenter", "Center", ["Home", "Alignment"], Some("Cmd+E"), "{range?}", has_doc, |s, p| halign(s, p, HAlign::Center))
+            ..cmd!(format "home.alignCenter", "Center", ["Home", "Alignment"], Some("Cmd+E"), "{range?}", can_format_cells, |s, p| halign(
+                s,
+                p,
+                HAlign::Center
+            ))
         },
-        cmd!("home.alignRight", "Align Right", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| halign(s, p, HAlign::Right)),
-        cmd!("home.justify", "Justify", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| halign(s, p, HAlign::Justify)),
-        cmd!("home.alignTop", "Top Align", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| valign(s, p, VAlign::Top)),
-        cmd!("home.alignMiddle", "Middle Align", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| valign(s, p, VAlign::Center)),
-        cmd!("home.alignBottom", "Bottom Align", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| valign(s, p, VAlign::Bottom)),
-        cmd!("home.wrapText", "Wrap Text", ["Home", "Alignment"], None, "{range?, on?}", has_doc, |s, p| toggle(
+        cmd!(format "home.alignRight", "Align Right", ["Home", "Alignment"], None, "{range?}", can_format_cells, |s, p| halign(s, p, HAlign::Right)),
+        cmd!(format "home.justify", "Justify", ["Home", "Alignment"], None, "{range?}", can_format_cells, |s, p| halign(s, p, HAlign::Justify)),
+        cmd!(format "home.alignTop", "Top Align", ["Home", "Alignment"], None, "{range?}", can_format_cells, |s, p| valign(s, p, VAlign::Top)),
+        cmd!(format "home.alignMiddle", "Middle Align", ["Home", "Alignment"], None, "{range?}", can_format_cells, |s, p| valign(s, p, VAlign::Center)),
+        cmd!(format "home.alignBottom", "Bottom Align", ["Home", "Alignment"], None, "{range?}", can_format_cells, |s, p| valign(s, p, VAlign::Bottom)),
+        cmd!(format "home.wrapText", "Wrap Text", ["Home", "Alignment"], None, "{range?, on?}", can_format_cells, |s, p| toggle(
             s,
             p,
             |st| st.align.wrap,
             |st, v| st.align.wrap = v
         )),
-        cmd!("home.shrinkToFit", "Shrink to Fit", [], None, "{range?, on?}", has_doc, |s, p| toggle(
+        cmd!(format "home.shrinkToFit", "Shrink to Fit", [], None, "{range?, on?}", can_format_cells, |s, p| toggle(
             s,
             p,
             |st| st.align.shrink,
             |st, v| st.align.shrink = v
         )),
-        cmd!("home.increaseIndent", "Increase Indent", ["Home", "Alignment"], Some("Ctrl+Alt+Tab"), "{range?}", has_doc, |s, p| indent(s, p, 1)),
-        cmd!("home.decreaseIndent", "Decrease Indent", ["Home", "Alignment"], Some("Ctrl+Alt+Shift+Tab"), "{range?}", has_doc, |s, p| indent(
-            s, p, -1
+        cmd!(format "home.increaseIndent", "Increase Indent", ["Home", "Alignment"], Some("Ctrl+Alt+Tab"), "{range?}", can_format_cells, |s, p| indent(
+            s, p, 1
         )),
-        cmd!(
+        cmd!(format "home.decreaseIndent", "Decrease Indent", ["Home", "Alignment"], Some("Ctrl+Alt+Shift+Tab"), "{range?}", can_format_cells, |s, p| {
+            indent(s, p, -1)
+        }),
+        cmd!(format
             "home.orientation",
             "Orientation",
             ["Home", "Alignment"],
             None,
             "{range?, angle: -90..90 | \"vertical\" | \"counterclockwise\" | \"clockwise\" | \"up\" | \"down\" | 0}",
-            has_doc,
+            can_format_cells,
             orientation
         ),
-        cmd!("home.mergeCenter", "Merge & Center", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| merge(s, p, "center")),
-        cmd!("home.mergeAcross", "Merge Across", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| merge(s, p, "across")),
-        cmd!("home.mergeCells", "Merge Cells", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| merge(s, p, "cells")),
-        cmd!("home.unmergeCells", "Unmerge Cells", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| merge(s, p, "unmerge")),
+        cmd!(format "home.mergeCenter", "Merge & Center", ["Home", "Alignment"], None, "{range?}", can_format_cells, |s, p| merge(s, p, "center")),
+        cmd!(format "home.mergeAcross", "Merge Across", ["Home", "Alignment"], None, "{range?}", can_format_cells, |s, p| merge(s, p, "across")),
+        cmd!(format "home.mergeCells", "Merge Cells", ["Home", "Alignment"], None, "{range?}", can_format_cells, |s, p| merge(s, p, "cells")),
+        cmd!(format "home.unmergeCells", "Unmerge Cells", ["Home", "Alignment"], None, "{range?}", can_format_cells, |s, p| merge(s, p, "unmerge")),
         // Number
-        cmd!(
+        cmd!(format
             "home.numberFormat",
             "Number Format",
             ["Home", "Number"],
             None,
             "{range?, format: \"General\"|\"Number\"|\"Currency\"|\"Accounting\"|\"Short Date\"|\"Long Date\"|\"Time\"|\"Percentage\"|\"Fraction\"|\"Scientific\"|\"Text\" | code: \"0.00\"}",
-            has_doc,
+            can_format_cells,
             number_format
         ),
-        cmd!("home.accounting", "Accounting Number Format", ["Home", "Number"], None, "{range?, symbol?: \"$\"}", has_doc, accounting),
-        cmd!("home.percent", "Percent Style", ["Home", "Number"], Some("Ctrl+Shift+%"), "{range?}", has_doc, |s, p| set_fmt(s, p, "0%")),
-        cmd!("home.comma", "Comma Style", ["Home", "Number"], None, "{range?}", has_doc, |s, p| set_fmt(s, p, COMMA)),
-        cmd!("home.increaseDecimal", "Increase Decimal", ["Home", "Number"], None, "{range?}", has_doc, |s, p| decimals(s, p, 1)),
-        cmd!("home.decreaseDecimal", "Decrease Decimal", ["Home", "Number"], None, "{range?}", has_doc, |s, p| decimals(s, p, -1)),
+        cmd!(format "home.accounting", "Accounting Number Format", ["Home", "Number"], None, "{range?, symbol?: \"$\"}", can_format_cells, accounting),
+        cmd!(format "home.percent", "Percent Style", ["Home", "Number"], Some("Ctrl+Shift+%"), "{range?}", can_format_cells, |s, p| set_fmt(s, p, "0%")),
+        cmd!(format "home.comma", "Comma Style", ["Home", "Number"], None, "{range?}", can_format_cells, |s, p| set_fmt(s, p, COMMA)),
+        cmd!(format "home.increaseDecimal", "Increase Decimal", ["Home", "Number"], None, "{range?}", can_format_cells, |s, p| decimals(s, p, 1)),
+        cmd!(format "home.decreaseDecimal", "Decrease Decimal", ["Home", "Number"], None, "{range?}", can_format_cells, |s, p| decimals(s, p, -1)),
         // Styles
-        cmd!(
+        cmd!(format
             "home.cellStyle",
             "Cell Styles",
             ["Home", "Styles"],
             None,
             "{range?, name: \"Good\"|\"Bad\"|\"Neutral\"|\"Heading 1\"|\"Title\"|\"Total\"|\"Accent1\"…|\"Normal\"}",
-            has_doc,
+            can_format_cells,
             cell_style
         ),
         // Cells › Format
@@ -635,6 +655,8 @@ fn orientation(s: &mut Session, p: &Json) -> Result<Json> {
 fn merge(s: &mut Session, p: &Json, how: &str) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
+    // Merges aren't cell contents, so the cell check after the edit doesn't see them (#2516).
+    super::refuse_unless_allowed(s, sheet, "Formatting cells", |pr| pr.format_cells)?;
     let how =
         if how == "center" && s.doc()?.wb.sheet(sheet).is_some_and(|sh| ranges.iter().all(|r| sh.merges.contains(r))) { "unmerge" } else { how };
     edit(s, |cx| {
@@ -825,6 +847,77 @@ use sizes::{autofit_cols, autofit_rows, col_width, default_width, hide, row_heig
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn format_commands_are_unavailable_on_a_protected_sheet() {
+        // #2516: home.bold said it was enabled on a protected sheet, then failed when run.
+        let enabled = |s: &crate::Session, id: &str| crate::cmd::find_command(id).unwrap().info(s).enabled;
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("home.lockCell", json!({"range": "A1", "on": false})).unwrap();
+        assert!(enabled(&s, "home.bold"), "unprotected");
+        s.execute("review.protectSheet", json!({})).unwrap();
+        s.execute("selection.set", json!({"range": "B2"})).unwrap();
+        for id in ["home.bold", "home.fillColor", "home.borders", "home.numberFormat", "home.formatCells", "home.mergeCenter"] {
+            assert!(!enabled(&s, id), "{id} on a locked cell");
+        }
+        assert!(enabled(&s, "home.columnWidth"), "sizing has its own allowance and check");
+        // An unlocked cell can't be formatted either, as Excel refuses it (and running refuses it).
+        s.execute("selection.set", json!({"range": "A1"})).unwrap();
+        assert!(!enabled(&s, "home.bold"));
+        assert!(s.execute("home.bold", json!({})).is_err());
+        // Protection that allows formatting cells keeps them available everywhere.
+        s.execute("review.unprotectSheet", json!({})).unwrap();
+        s.execute("review.protectSheet", json!({"formatCells": true})).unwrap();
+        s.execute("selection.set", json!({"range": "B2"})).unwrap();
+        assert!(enabled(&s, "home.bold"));
+    }
+
+    #[test]
+    fn format_commands_still_run_on_another_sheet_while_the_active_one_is_protected() {
+        // The greying is about the active sheet; a command aimed at another sheet (scripts, MCP,
+        // macros) is judged by the sheet it formats.
+        let enabled = |s: &crate::Session, id: &str| crate::cmd::find_command(id).unwrap().info(s).enabled;
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("home.insertSheet", json!({"name": "Sheet2"})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        s.execute("review.protectSheet", json!({})).unwrap();
+        assert!(!enabled(&s, "home.bold"), "still greyed for the protected active sheet");
+        s.execute("home.bold", json!({"range": "Sheet2!A1"})).unwrap();
+        s.execute("home.fillColor", json!({"range": "Sheet2!B2", "color": "#FFFF00"})).unwrap();
+        let d = s.doc().unwrap();
+        let sh = d.wb.sheet(1).unwrap();
+        assert!(d.wb.styles.get(sh.style_id(CellRef::new(0, 0))).font.bold, "Sheet2!A1 is bold");
+        assert!(s.execute("home.bold", json!({"range": "A1"})).is_err(), "the protected sheet still refuses it");
+        assert!(s.execute("home.bold", json!({})).is_err(), "and so does the active cell");
+    }
+
+    #[test]
+    fn merging_on_a_protected_sheet_is_refused_when_it_runs() {
+        // Merges aren't cell contents, so the cell comparison after a command doesn't see them:
+        // with the greying no longer refusing runs, the merge commands check the sheet themselves.
+        let merges = |s: &crate::Session, i: usize| s.doc().unwrap().wb.sheet(i).unwrap().merges.clone();
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("home.insertSheet", json!({"name": "Sheet2"})).unwrap();
+        s.execute("home.mergeCells", json!({"range": "Sheet2!A1:B2"})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+        s.execute("review.protectSheet", json!({})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        s.execute("home.mergeCells", json!({"range": "A1:B2"})).unwrap();
+        s.execute("review.protectSheet", json!({})).unwrap();
+        for (id, range) in
+            [("home.mergeCells", "C3:D4"), ("home.mergeAcross", "C3:D4"), ("home.mergeCenter", "C3:D4"), ("home.unmergeCells", "A1:B2")]
+        {
+            assert!(s.execute(id, json!({"range": range})).is_err(), "{id} {range} on the protected active sheet");
+        }
+        assert!(s.execute("home.unmergeCells", json!({"range": "Sheet2!A1:B2"})).is_err(), "on a protected other sheet");
+        assert!(s.execute("home.mergeCells", json!({"range": "Sheet2!C3:D4"})).is_err(), "on a protected other sheet");
+        assert!(s.execute("home.bold", json!({"range": "E5"})).is_err(), "an empty cell's style is refused too");
+        assert_eq!(merges(&s, 0).len(), 1);
+        assert_eq!(merges(&s, 1).len(), 1);
+    }
 
     #[test]
     fn merge_across_keeps_the_first_value_of_each_row() {
