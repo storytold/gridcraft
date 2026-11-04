@@ -20,7 +20,7 @@ The hardware Excel uses, per platform, against GridCraft. Part of
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-17 | minor | Draw ▸ Ink to Shape is a before-drawing mode that converts each stroke to Excel's preset shapes (rectangles/squares, ellipse/circle, diamond, parallelogram, trapezoid, pentagon, hexagon, triangle/right triangle, block and double arrows, lines) |
+| 2026-10-17 | minor | Draw ▸ Ink to Shape is a before-drawing mode that converts each stroke to Excel's preset shapes (rectangles/squares, ellipse/circle, diamond, parallelogram, trapezoid, pentagon, hexagon, triangle/right triangle, single, block and double arrows, lines) |
 
 | 2026-10-31 | trivial | macOS: Intel Macs skip wgpu's indirect-call validation shaders, so they no longer exit on Metal's compiler error there (#2812). Macs run with OpenCore Legacy Patcher on macOS 15 can still fail earlier, on the MSL version (#1116). |
 | 2026-10-22 | minor | View › Arrange All over the main window's monitor. |
