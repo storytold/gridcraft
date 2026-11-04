@@ -102,6 +102,8 @@ fn model() -> DataModel {
             measure("YTD All", "TOTALYTD([Total Amount], 'Date'[Date], ALL ())"),
             measure("QTD Remove All", "TOTALQTD([Total Amount], 'Date'[Date], REMOVEFILTERS ())"),
             measure("YTD Region All", "TOTALYTD([Total Amount], 'Date'[Date], ALL([Region]))"),
+            measure("YTD Over Ten", "TOTALYTD(SUM(Sales[Amount]), 'Date'[Date], Sales[Amount] > 10)"),
+            measure("YTD Unqualified", "TOTALYTD([Total Amount], 'Date'[Date], [Region] = \"East\")"),
             measure("OB Month", "OPENINGBALANCEMONTH([Total Amount], 'Date'[Date])"),
             measure("CB Month", "CLOSINGBALANCEMONTH([Total Amount], 'Date'[Date])"),
             measure("OB Quarter", "OPENINGBALANCEQUARTER([Total Amount], 'Date'[Date])"),
@@ -314,4 +316,17 @@ fn empty_window_and_invalid_arguments() {
     let expr = BoundExpr::Call { spec, args: vec![BoundExpr::Literal(Literal::Integer(1)), BoundExpr::Measure(measure_index)] };
     let error = evaluator.evaluate(&expr).expect_err("non-column argument");
     assert!(error.message.contains("column reference"), "{}", error.message);
+}
+
+#[test]
+fn comparison_and_unqualified_column_filters_are_applied() {
+    // `TOTALYTD(expr, dates, filter)` is CALCULATE sugar: a comparison and an unqualified column
+    // are filter arguments too, not table expressions.
+    let model = model();
+    let february = date_filter(&model, &[Scalar::DateTime(serial(2024, 2, 1)), Scalar::DateTime(serial(2024, 2, 29))]);
+    let plain = eval_measure(&model, "YTD", february.clone()).expect("YTD");
+    let filtered = eval_measure(&model, "YTD Over Ten", february).expect("YTD Over Ten");
+    assert!(filtered.to_number().unwrap_or(0.0) <= plain.to_number().unwrap_or(0.0));
+    let east = eval_measure(&model, "YTD Unqualified", FilterContext::default()).expect("YTD Unqualified");
+    assert!(east.to_number().is_some());
 }

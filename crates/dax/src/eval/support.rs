@@ -262,8 +262,20 @@ pub(crate) fn utc_today_serial() -> f64 {
 }
 
 pub(crate) fn round_to(value: f64, digits: i32) -> f64 {
+    // The scale factor overflows or underflows outside f64's exponent range: past +308 digits the
+    // value cannot change, past -308 every digit is rounded away.
+    if digits > 308 {
+        return value;
+    }
+    if digits < -308 {
+        return 0.0;
+    }
     let factor = 10f64.powi(digits);
-    (value * factor).round() / factor
+    let scaled = value * factor;
+    if !scaled.is_finite() {
+        return value;
+    }
+    scaled.round() / factor
 }
 
 /// ROUNDUP/ROUNDDOWN: `up` rounds away from zero, otherwise toward zero. Excel and DAX define

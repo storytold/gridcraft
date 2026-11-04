@@ -369,20 +369,31 @@ fn parse_year_end(value: &Scalar) -> Option<f64> {
 /// lands even when the modifier cleared the date table's own filters.
 fn apply_filter_arg(ev: &Evaluator<'_>, expr: &BoundExpr, filters: &mut FilterContext, ctx: &mut Context) -> Result<(), EvalError> {
     match expr {
-        BoundExpr::Binary { op, left, right } if matches!(op, BinaryOp::Eq | BinaryOp::Ne) => {
-            let BoundExpr::Column { table, column } = **left else {
-                return Err(EvalError::new("a filter must compare a column"));
-            };
+        BoundExpr::Binary { op, left, right }
+            if matches!(op, BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge)
+                && matches!(**left, BoundExpr::Column { .. } | BoundExpr::UnqualifiedColumn { .. }) =>
+        {
+            let (table, column) = column_reference(ev, left)?;
             let value = ev.eval(right, ctx)?;
-            // `col = v` / `col <> v` is FILTER(ALL(col), …): the candidates come from the whole
-            // column and compare with DAX `=` semantics (numeric across types, text ignoring case).
-            let equal = |candidate: &Scalar| candidate.compare(&value) == Some(std::cmp::Ordering::Equal);
-            let keep_equal = *op == BinaryOp::Eq;
+            // `col <op> v` is FILTER(ALL(col), …): the candidates come from the whole column and
+            // compare with DAX semantics (numeric across types, text ignoring case).
+            use std::cmp::Ordering::{Equal, Greater, Less};
+            let keep = |candidate: &Scalar| {
+                let order = candidate.compare(&value);
+                match op {
+                    BinaryOp::Eq => order == Some(Equal),
+                    BinaryOp::Ne => order != Some(Equal),
+                    BinaryOp::Lt => order == Some(Less),
+                    BinaryOp::Le => matches!(order, Some(Less | Equal)),
+                    BinaryOp::Gt => order == Some(Greater),
+                    _ => matches!(order, Some(Greater | Equal)),
+                }
+            };
             let keys = ev
                 .table(table, &FilterContext::default())
                 .column(column)
                 .into_iter()
-                .filter(|candidate| equal(candidate) == keep_equal)
+                .filter(|candidate| keep(candidate))
                 .map(|candidate| ScalarKey::from(&candidate));
             filters.set(table, column, keys);
             Ok(())

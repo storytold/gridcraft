@@ -101,6 +101,8 @@ fn mround_sign_and_multiples() {
     // dax.guide documents the binary floating-point midpoints 6.0 and 7.1.
     assert_close(eval("MROUND(6.05, 0.1)"), 6.0);
     assert_close(eval("MROUND(7.05, 0.1)"), 7.1);
+    // A digit count whose scale factor would overflow leaves the value unchanged.
+    assert_close(eval("ROUND(1.5, 400)"), 1.5);
     assert_close(eval("MROUND(10, 0)"), 0.0);
     assert!(eval_result("MROUND(7, -2)").is_err());
     assert!(eval_result("MROUND(-7, 2)").is_err());
