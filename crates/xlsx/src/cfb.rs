@@ -120,10 +120,25 @@ struct DirEntry {
     size: u64,
 }
 
+/// Whether two directory entry names are the same name. [MS-CFB] 2.6.4 compares names as UTF-16
+/// code units after mapping each one to upper case with the simple (one-to-one) Unicode mapping,
+/// so `ä` and `Ä` are the same name and `ß` (whose upper case is two letters) only matches itself.
+/// Code units with no single-unit upper case, and surrogates, are compared as they are.
+fn names_match(a: &str, b: &str) -> bool {
+    fn upper(u: u16) -> u16 {
+        let Some(c) = char::from_u32(u32::from(u)) else { return u };
+        let mut up = c.to_uppercase();
+        match (up.next(), up.next()) {
+            (Some(x), None) => u16::try_from(u32::from(x)).unwrap_or(u),
+            _ => u,
+        }
+    }
+    a.encode_utf16().map(upper).eq(b.encode_utf16().map(upper))
+}
 /// A read-only reader for a Compound File Binary (CFB/OLE2) container: the FAT, the mini FAT
 /// and the directory, all bounds-checked. Streams are found by path through nested storages
 /// ([`Compound::stream_at_path`]) and storages can be listed ([`Compound::children_at_path`]).
-/// Name matching is ASCII case-insensitive, as CFB names compare case-insensitively.
+/// Names match case-insensitively with [MS-CFB] 2.6.4 simple upper-casing, so accented names match across case.
 /// Every chain and tree walk is bounded, so hostile files end in an error, never a hang.
 /// Implemented from Microsoft's public [MS-CFB] specification.
 pub struct Compound<'a> {
@@ -308,9 +323,10 @@ impl<'a> Compound<'a> {
         }
         Ok(None)
     }
-    /// The entry of kind `want` called `name` (case-insensitive) directly under `parent`.
+    /// The entry of kind `want` called `name` (case-insensitive, as [`names_match`] compares) directly
+    /// under `parent`.
     fn child_entry(&self, parent: &DirEntry, name: &str, want: u8) -> Result<Option<&DirEntry>, String> {
-        self.walk_children(parent, |e| e.kind == want && e.name.eq_ignore_ascii_case(name))
+        self.walk_children(parent, |e| e.kind == want && names_match(&e.name, name))
     }
     /// Checks a path's depth against [`MAX_PATH_DEPTH`].
     fn check_depth(path: &[&str]) -> Result<(), String> {
@@ -738,5 +754,19 @@ pub(crate) mod tests {
         file[1024 + 2 * 128 + 120..1024 + 2 * 128 + 124].copy_from_slice(&1064u32.to_le_bytes());
         let cf = Compound::open(&file).unwrap();
         assert!(cf.root_stream("Workbook").is_err());
+    }
+
+    #[test]
+    fn names_match_with_unicode_upper_case() {
+        use crate::testing::{Node, build_tree};
+        let bin = build_tree(&[Node::Storage("Ärger", vec![Node::Stream("Café", b"x".to_vec())])]);
+        let cf = Compound::open(&bin).expect("valid file");
+        for path in [["Ärger", "Café"], ["ärger", "CAFÉ"], ["ÄRGER", "café"]] {
+            assert_eq!(cf.stream_at_path(&path).expect("reads"), Some(b"x".to_vec()), "{path:?}");
+        }
+        assert_eq!(cf.children_at_path(&["ärger"]).expect("lists"), vec!["Café".to_string()]);
+        assert_eq!(cf.stream_at_path(&["Arger", "Cafe"]).expect("reads"), None);
+        assert!(names_match("Straße", "STRAßE"));
+        assert!(!names_match("Straße", "STRASSE"));
     }
 }
