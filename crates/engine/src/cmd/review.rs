@@ -426,12 +426,15 @@ struct SheetPerformance {
 /// would change what the sheet shows. A cell a conditional format covers, or that sits inside a
 /// table, keeps its formatting too: the rule or the table style decides what is drawn, and the
 /// stored style is what it falls back to, so Optimize leaves the cell alone.
-fn optimizable(sh: &gridcraft_model::Sheet, at: CellRef, cell: &gridcraft_model::Cell) -> bool {
+fn optimizable(wb: &gridcraft_model::Workbook, sh: &gridcraft_model::Sheet, at: CellRef, cell: &gridcraft_model::Cell) -> bool {
     // The constant-time tests come first: most stored cells are not blank, so the range scans
     // below only run for the few that could be optimized at all. `has_content` counts Python
     // code too: an imported Python cell can cache no value while its code still has to run.
+    // An explicitly unlocked cell is an input cell a protected template relies on: removing it
+    // would lock it, so it stays.
     !cell.has_content()
         && cell.style != StyleId::DEFAULT
+        && wb.styles.get(cell.style).protection.locked
         && sh.merge_at(at).is_none()
         && !sh.spill.contains_key(&at)
         && !sh.spill_ranges.values().any(|range| range.contains(at))
@@ -471,7 +474,7 @@ fn check_performance(s: &mut Session, p: &Json) -> Result<Json> {
         let used = sh.cells.len() as u64;
         let mut sheet_optimizable = 0u64;
         for (at, cell) in sh.cells.iter() {
-            if !optimizable(sh, at, cell) {
+            if !optimizable(&d.wb, sh, at, cell) {
                 continue;
             }
             sheet_optimizable += 1;
@@ -694,7 +697,7 @@ fn optimize_performance(s: &mut Session, p: &Json) -> Result<Json> {
         }
         let mut cells = Vec::new();
         for (at, cell) in sh.cells.iter() {
-            if optimizable(sh, at, cell) {
+            if optimizable(&d.wb, sh, at, cell) {
                 if selected >= OPTIMIZE_LIMIT {
                     truncated = true;
                     break;
@@ -1047,6 +1050,25 @@ mod tests {
         assert_eq!(s.execute("review.optimizePerformance", json!({})).unwrap()["optimized"], 1);
         let sh = s.doc().unwrap().wb.active().unwrap();
         assert!(sh.cell(CellRef::parse("A1").unwrap()).is_some_and(|c| c.py.is_some()), "the Python code stays");
+    }
+
+    #[test]
+    fn check_performance_leaves_explicitly_unlocked_cells_alone() {
+        // An unlocked blank cell is an input cell a protected template relies on: removing it
+        // would lock it the moment the sheet is protected.
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("home.bold", json!({"range": "A1:B1"})).unwrap();
+        s.execute("home.lockCell", json!({"range": "A1", "on": false})).unwrap();
+        let r = s.execute("review.checkPerformance", json!({})).unwrap();
+        assert_eq!(r["optimizableCells"], 1, "only the still-locked B1 can go");
+        assert_eq!(s.execute("review.optimizePerformance", json!({})).unwrap()["optimized"], 1);
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        let a1 = CellRef::parse("A1").unwrap();
+        assert!(sh.cell(a1).is_some(), "the unlocked input cell stays");
+        assert!(!d.wb.styles.get(sh.style_id(a1)).protection.locked, "and it is still unlocked");
+        assert!(sh.cell(CellRef::parse("B1").unwrap()).is_none());
     }
 
     #[test]
