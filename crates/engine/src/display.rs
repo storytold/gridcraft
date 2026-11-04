@@ -8,7 +8,7 @@ use gridcraft_model::{Sheet, Workbook};
 use gridcraft_numfmt::{Formatted, NumberFormat, format_value};
 
 /// Parsed number formats are cached by code.
-fn parsed(code: &str) -> NumberFormat {
+pub(crate) fn parsed(code: &str) -> NumberFormat {
     static CACHE: std::sync::LazyLock<Mutex<HashMap<String, NumberFormat>>> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
     // A code of more bytes than 4 × the character limit can't be within it: it shows as General
     // without being hashed or scanned again for every cell that shares it.
@@ -29,7 +29,12 @@ fn parsed(code: &str) -> NumberFormat {
     f
 }
 
+/// The parsed format of `code`; one longer than the character limit is a General format that keeps
+/// the code it was made from. The engine itself formats through `parsed`, which doesn't copy it.
 pub fn number_format(code: &str) -> NumberFormat {
+    if code.len() > 4 * gridcraft_numfmt::MAX_FORMAT_CODE_CHARS {
+        return NumberFormat::parse(code);
+    }
     parsed(code)
 }
 
@@ -246,5 +251,16 @@ mod tests {
             assert_eq!(format(&Value::Number(1.5), &code, &wb).text, "1.5");
         }
         assert_eq!(format(&Value::Number(1.5), "0.00", &wb).text, "1.50");
+    }
+
+    /// The public `number_format` keeps the code of an overlong format; it is General, but not the
+    /// same format as a real `General`.
+    #[test]
+    fn number_format_keeps_an_overlong_code() {
+        let code = format!("0.00{}", "\"x\"".repeat(2_000));
+        let f = number_format(&code);
+        assert!(f.is_general());
+        assert_eq!(f.code(), code);
+        assert_ne!(f, number_format("General"));
     }
 }
