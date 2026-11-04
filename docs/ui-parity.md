@@ -10,6 +10,9 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 `crates/engine/src/cmd` (shortcuts in command specs), the owner's black-box notes
 (`plan/excel/observed-ui.md`, local only) and user issues.
 
+Accounting Number Format remembers the selected currency, shows its symbol on the ribbon button,
+and the `Alt+H, A, N` keytip reapplies that selection.
+
 ## Window and chrome
 
 | Element | Excel | GridCraft | Status |

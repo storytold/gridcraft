@@ -185,7 +185,7 @@
    "kind": "command",
    "excel": "Accounting Format",
    "note": "fires immediately in Excel; deeper aliases dropped as unreachable",
-   "target": "home.accounting"
+   "target": "ui.applyAccountingFormat"
   },
   {
    "seq": "HAS",

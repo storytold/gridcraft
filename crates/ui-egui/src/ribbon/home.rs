@@ -23,6 +23,26 @@ const ACCOUNTING_SYMBOLS: &[(&str, &str)] = &[
     ("₽ Russian", "_-[$₽-419]* #,##0.00_-;-[$₽-419]* #,##0.00_-;_-[$₽-419]* \"-\"??_-;_-@_-"),
 ];
 
+fn accounting_button_symbol(code: &str) -> &str {
+    ACCOUNTING_SYMBOLS
+        .iter()
+        .find(|(_, candidate)| *candidate == code)
+        .map(|(label, _)| match *label {
+            "$ English (United States)" => "$",
+            "£ English (United Kingdom)" => "£",
+            "€ Euro" => "€",
+            "¥ Japanese" | "¥ Chinese (PRC)" => "¥",
+            "₹ English (India)" => "₹",
+            "CHF German (Switzerland)" => "CHF",
+            "Rp Indonesian" => "Rp",
+            "₩ Korean" => "₩",
+            "R$ Portuguese (Brazil)" => "R$",
+            "₽ Russian" => "₽",
+            _ => "¤",
+        })
+        .unwrap_or("¤")
+}
+
 /// Draws the Home tab: clipboard/paste menu, font, alignment, number, style, cell and editing commands with keytips.
 pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
@@ -328,11 +348,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     ui.vertical(|ui| {
         number_combo(app, ui, &st);
         ui.horizontal(|ui| {
-            let symbol = ACCOUNTING_SYMBOLS
-                .iter()
-                .find(|(_, code)| *code == app.ui.accounting_format)
-                .and_then(|(label, _)| label.chars().next())
-                .unwrap_or('$');
+            let symbol = accounting_button_symbol(&app.ui.accounting_format);
             let (c, ca) = split_button_symbol(ui, &symbol.to_string(), "Accounting Number Format");
             control_keytip(app, ui, &ca, "home.accounting");
             if c {
@@ -798,6 +814,15 @@ mod accounting_symbol_tests {
     use super::*;
     use gridcraft_engine::core::{DateSystem, Value};
     use gridcraft_engine::numfmt::{NumberFormat, format_value};
+
+    #[test]
+    fn accounting_button_uses_currency_symbols_not_label_initials() {
+        for (label, symbol) in [("CHF German (Switzerland)", "CHF"), ("Rp Indonesian", "Rp"), ("R$ Portuguese (Brazil)", "R$")] {
+            let code = ACCOUNTING_SYMBOLS.iter().find(|(name, _)| *name == label).map(|(_, code)| *code).unwrap_or_default();
+            assert_eq!(accounting_button_symbol(code), symbol);
+        }
+        assert_eq!(accounting_button_symbol("unknown"), "¤");
+    }
 
     #[test]
     fn accounting_dropdown_offers_the_issue_currencies_with_excel_codes() {
