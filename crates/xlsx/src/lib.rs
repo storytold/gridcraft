@@ -177,11 +177,14 @@ pub struct CsvOptions {
     pub date_system: DateSystem,
     /// Interpret fields like typed input (numbers, dates, booleans…); otherwise keep text.
     pub parse_values: bool,
+    /// A column whose dates all read both ways (`03/11/2026`) reads them day first, when the
+    /// source's own convention says so; otherwise month first, as typed input does.
+    pub ambiguous_dates_day_first: bool,
 }
 
 impl Default for CsvOptions {
     fn default() -> Self {
-        CsvOptions { delimiter: b',', quote: b'"', date_system: DateSystem::D1900, parse_values: true }
+        CsvOptions { delimiter: b',', quote: b'"', date_system: DateSystem::D1900, parse_values: true, ambiguous_dates_day_first: false }
     }
 }
 
