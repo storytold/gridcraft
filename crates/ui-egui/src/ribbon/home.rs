@@ -186,7 +186,6 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
                         keytip(app, ui, sequence, egui::pos2(item.rect.right() - 10.0, item.rect.center().y));
                     }
                     if item.clicked() {
-                        app.grid.last_border = preset.to_string();
                         act(app, "home.borders", json!({"preset": preset}));
                     }
                 }
