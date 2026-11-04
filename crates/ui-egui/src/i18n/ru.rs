@@ -501,6 +501,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format values where this formula is true:" => "Форматировать значения, для которых следующая формула является истинной:",
         "with" => "с форматом",
         "More Rules…" => "Другие правила…",
+        // Conditional formatting: the formatting presets the rule editor offers.
+        "Light Red Fill with Dark Red Text" => "Светло-красная заливка с темно-красным текстом",
+        "Yellow Fill with Dark Yellow Text" => "Желтая заливка с темно-желтым текстом",
+        "Green Fill with Dark Green Text" => "Зеленая заливка с темно-зеленым текстом",
+        "Light Red Fill" => "Светло-красная заливка",
+        "Red Text" => "Красный текст",
+        "Red Border" => "Красная рамка",
         _ => return None,
     })
 }

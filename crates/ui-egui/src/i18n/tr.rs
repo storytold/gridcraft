@@ -458,6 +458,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format values where this formula is true:" => "Bu formülün doğru olduğu değerleri biçimlendir:",
         "with" => "ile",
         "More Rules…" => "Diğer Kurallar…",
+        // Conditional formatting: the formatting presets the rule editor offers.
+        "Light Red Fill with Dark Red Text" => "Açık Kırmızı Dolgu ve Koyu Kırmızı Metin",
+        "Yellow Fill with Dark Yellow Text" => "Sarı Dolgu ve Koyu Sarı Metin",
+        "Green Fill with Dark Green Text" => "Yeşil Dolgu ve Koyu Yeşil Metin",
+        "Light Red Fill" => "Açık Kırmızı Dolgu",
+        "Red Text" => "Kırmızı Metin",
+        "Red Border" => "Kırmızı Kenarlık",
         _ => return None,
     })
 }

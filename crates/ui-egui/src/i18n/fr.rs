@@ -493,6 +493,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format values where this formula is true:" => "Mettre en forme les valeurs pour lesquelles cette formule est vraie :",
         "with" => "avec",
         "More Rules…" => "Autres règles…",
+        // Conditional formatting: the formatting presets the rule editor offers.
+        "Light Red Fill with Dark Red Text" => "Remplissage rouge clair avec texte rouge foncé",
+        "Yellow Fill with Dark Yellow Text" => "Remplissage jaune avec texte jaune foncé",
+        "Green Fill with Dark Green Text" => "Remplissage vert avec texte vert foncé",
+        "Light Red Fill" => "Remplissage rouge clair",
+        "Red Text" => "Texte rouge",
+        "Red Border" => "Bordure rouge",
         _ => return None,
     })
 }

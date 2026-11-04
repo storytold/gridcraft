@@ -488,6 +488,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format values where this formula is true:" => "Oblikuj vrednosti za koje je ova formula tačna:",
         "with" => "sa",
         "More Rules…" => "Druga pravila…",
+        // Conditional formatting: the formatting presets the rule editor offers.
+        "Light Red Fill with Dark Red Text" => "Svetlo crvena ispuna sa tamno crvenim tekstom",
+        "Yellow Fill with Dark Yellow Text" => "Žuta ispuna sa tamno žutim tekstom",
+        "Green Fill with Dark Green Text" => "Zelena ispuna sa tamno zelenim tekstom",
+        "Light Red Fill" => "Svetlo crvena ispuna",
+        "Red Text" => "Crveni tekst",
+        "Red Border" => "Crveni okvir",
         _ => return None,
     })
 }

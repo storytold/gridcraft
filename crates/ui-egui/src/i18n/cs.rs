@@ -609,6 +609,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Zobrazit",
         "Collapse dialog" => "Sbalit dialogové okno",
         "Expand dialog" => "Rozbalit dialogové okno",
+        // Conditional formatting: the formatting presets the rule editor offers.
+        "Light Red Fill with Dark Red Text" => "Světle červená výplň s tmavě červeným textem",
+        "Yellow Fill with Dark Yellow Text" => "Žlutá výplň s tmavě žlutým textem",
+        "Green Fill with Dark Green Text" => "Zelená výplň s tmavě zeleným textem",
+        "Light Red Fill" => "Světle červená výplň",
+        "Red Text" => "Červený text",
+        "Red Border" => "Červený rámeček",
         _ => return None,
     })
 }

@@ -499,6 +499,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format values where this formula is true:" => "다음 수식을 만족하는 값에 서식 지정:",
         "with" => "서식:",
         "More Rules…" => "기타 규칙…",
+        // Conditional formatting: the formatting presets the rule editor offers.
+        "Light Red Fill with Dark Red Text" => "연한 빨강 채우기 및 진한 빨강 텍스트",
+        "Yellow Fill with Dark Yellow Text" => "노랑 채우기 및 진한 노랑 텍스트",
+        "Green Fill with Dark Green Text" => "연한 초록 채우기 및 진한 초록 텍스트",
+        "Light Red Fill" => "연한 빨강 채우기",
+        "Red Text" => "빨강 텍스트",
+        "Red Border" => "빨강 테두리",
         _ => return None,
     })
 }

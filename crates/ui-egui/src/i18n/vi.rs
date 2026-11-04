@@ -460,6 +460,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format values where this formula is true:" => "Định dạng các giá trị mà công thức này đúng:",
         "with" => "với",
         "More Rules…" => "Thêm quy tắc…",
+        // Conditional formatting: the formatting presets the rule editor offers.
+        "Light Red Fill with Dark Red Text" => "Tô đỏ nhạt với chữ đỏ đậm",
+        "Yellow Fill with Dark Yellow Text" => "Tô vàng với chữ vàng đậm",
+        "Green Fill with Dark Green Text" => "Tô xanh lá nhạt với chữ xanh lá đậm",
+        "Light Red Fill" => "Tô đỏ nhạt",
+        "Red Text" => "Chữ đỏ",
+        "Red Border" => "Viền đỏ",
         _ => return None,
     })
 }

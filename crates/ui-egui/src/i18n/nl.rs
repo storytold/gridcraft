@@ -568,6 +568,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format values where this formula is true:" => "Waarden opmaken waarop deze formule waar is:",
         "with" => "met",
         "More Rules…" => "Meer regels…",
+        // Conditional formatting: the formatting presets the rule editor offers.
+        "Light Red Fill with Dark Red Text" => "Lichte rode opvulling met donkerrode tekst",
+        "Yellow Fill with Dark Yellow Text" => "Gele opvulling met donkergele tekst",
+        "Green Fill with Dark Green Text" => "Groene opvulling met donkergroene tekst",
+        "Light Red Fill" => "Lichte rode opvulling",
+        "Red Text" => "Rode tekst",
+        "Red Border" => "Rode rand",
         _ => return None,
     })
 }

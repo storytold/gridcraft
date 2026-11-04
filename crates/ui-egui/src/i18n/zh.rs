@@ -491,6 +491,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format values where this formula is true:" => "为符合此公式的值设置格式:",
         "with" => "格式:",
         "More Rules…" => "其他规则…",
+        // Conditional formatting: the formatting presets the rule editor offers.
+        "Light Red Fill with Dark Red Text" => "浅红填充色深红色文本",
+        "Yellow Fill with Dark Yellow Text" => "黄填充色深黄色文本",
+        "Green Fill with Dark Green Text" => "绿填充色深绿色文本",
+        "Light Red Fill" => "浅红色填充",
+        "Red Text" => "红色文本",
+        "Red Border" => "红色边框",
         _ => return None,
     })
 }
