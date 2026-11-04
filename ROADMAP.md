@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-02 · **Change:** minor (RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis take ranges by selection on the grid; earlier: Python mode in the formula bar; earlier: Python cells stored and kept in files; earlier: equations: Insert › Equation, editor, gridcraft-math; earlier: What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear; earlier: floating objects: one selection, eight resize handles, keyboard delete; earlier: Chart data tables: live source values beneath column, bar, line, area and compatible combo charts; legend keys and borders; XLSX round-trip and print/PDF; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-11-04 · **Last updated:** 2026-11-04 · **Change:** minor (what works today and what comes next moved into docs/roadmap.md and checked against the code; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis take ranges by selection on the grid; earlier: Python mode in the formula bar; earlier: Python cells stored and kept in files; earlier: equations: Insert › Equation, editor, gridcraft-math; earlier: What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear; earlier: floating objects: one selection, eight resize handles, keyboard delete; earlier: Chart data tables: live source values beneath column, bar, line, area and compatible combo charts; legend keys and borders; XLSX round-trip and print/PDF; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -21,7 +21,6 @@ This page is the summary. The detail is in:
 
 | Number | Value | Kind |
 |---|---|---|
-| 2026-10-14 | Editing a cell with text that would read back as a number, boolean, date or formula (entered with a leading apostrophe) shows the apostrophe in the editor and formula bar, so Enter unchanged keeps it text (#1362) |
 | **Feature breadth** (weighted) | **~75%** | estimated, anchored on two measurements: ribbon catalog 277 / 292 (94.9%), worksheet functions 513 / 523 (98.1%; 504 working, 96.4%) |
 | **Ready for real work** | **~50%** | estimated from written weights (51.6); [target-app-parity.md](docs/target-app-parity.md) |
 | **Mainstream practitioner** | **~50%** | estimated: typical analyst/finance user, weekly features, × 0.90 interaction × 0.92 stability × 0.88 file exchange; [method](docs/target-app-parity.md#mainstream-practitioner) |
@@ -43,10 +42,9 @@ long `.xls` track, so about half parallelizes (≈30–50 wall-clock hours with 
 
 Why alpha: all six core workflows in the [alpha gate](docs/roadmap.md#alpha-gate) pass end to end on macOS with save and reopen, and the core workflow works end to end (open an XLSX, enter formulas and data, format, sort
 and filter, chart, pivot, print to PDF, save XLSX), but users still hit blocking gaps on real
-files: 100 MB workbooks don't open (#175), there's no `.xls` (#121), Arabic and Devanagari text
-isn't shaped (Chinese text still reported in #142), charts lose their type and options on round trip, and
-nobody has yet confirmed that Excel opens our output without a repair prompt across a real
-corpus. Beta needs those closed (see [beta gates](docs/roadmap.md#beta-gates)).
+files: a worksheet over about 500k cells is cut off on open (#2526), some saved files don't open cleanly in
+Excel (#891), charts lose their options on round trip, there's no crash recovery, and Arabic and
+Devanagari text isn't shaped. Beta needs those closed (see [beta gates](docs/roadmap.md#beta-gates)).
 
 The 2026-10-07 numbers (catalog 89%, "feature depth ~65%", "~215 h to full parity") were
 re-measured. Catalog and function counts held or rose; the depth and hours moved because of new
@@ -118,18 +116,14 @@ Other shipped languages: 3 (Russian and German, menus only, ~12%; Dutch, menus, 
 
 ## Upcoming
 
-Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
-[docs/roadmap.md](docs/roadmap.md).
+[What works today](docs/roadmap.md#what-works-today) lists what is achieved. [What's
+next](docs/roadmap.md#whats-next) lists the remaining bugs and features in order:
 
-1. **Land the open PR queue** (50 open PRs on 2026-10-10, many fixing listed gaps: recalc and spill
-   correctness, chart kind round-trip, CJK font fallback, macOS Finder open, German and Chinese
-   UI). Review and merge: 8–15 h.
-2. **XLSX fidelity on a real-world corpus**, with Excel opening our output without repair: 25–35 h.
-3. **Large workbooks and recalc speed**: 100 MB XLSX, 1M rows, multi-threaded recalc: 40–60 h.
-4. **Charts depth**: kinds and options round-trip, axes, trendlines, error bars: 25–35 h.
-5. **Text in every script** (CJK, Thai, Arabic, Devanagari) in cells and PDF: 12–20 h.
-6. **Legacy `.xls` import and password-protected workbooks**: 20–30 h.
-7. **Localization**: extend the catalog past the ribbon, then the twelve languages: 100–165 h.
+1. **Never lose or change data:** large sheets cut off on open, crash recovery, legacy formulas that spill.
+2. **Exchange files with Excel users:** files Excel refuses, PivotTables after a save, chart options, rich text, slicers, saving with a password, regional files, CSV IDs.
+3. **CLI and MCP servers:** failing loudly on lost data, a bounded stdio read, confinement to folders, headless rendering, push events.
+4. **Speed:** targeted recalculation fixes before threading.
+5. **Larger features:** every script in PDF, Power Query and the data model, running Python, remaining chart kinds, then localization, collaboration, accessibility and mobile.
 
 ## Progress log
 
@@ -176,6 +170,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-15 | File › Options › Formulas: Maximum Iterations and Maximum Change fields for iterative calculation, disabled while it is off, with Excel's limits (1 to 32767, 0 or more) |
 | 2026-10-15 | Function help follows the interface language: argument hints, autocomplete, Insert Function (search and readable categories) and the Formulas-tab menus read per-language tables of descriptions and argument names; Spanish keeps its 10 functions in the new format |
 | 2026-10-15 | Row auto-fit counts a cell's line breaks only when the cell wraps, as Excel does: a file whose unwrapped cells hold multi-line text no longer opens with tall rows (typing a break still turns wrap on and grows the row) |
+| 2026-10-14 | Editing a cell with text that would read back as a number, boolean, date or formula (entered with a leading apostrophe) shows the apostrophe in the editor and formula bar, so Enter unchanged keeps it text (#1362) |
 | 2026-10-14 | Lookups (MATCH, XMATCH, VLOOKUP, HLOOKUP, XLOOKUP, LOOKUP) compare numbers exactly like Excel, so a computed key such as `=0.1+0.2` no longer finds 0.3; `=` and COUNTIF/SUMIF keep their 15-digit comparison |
 | 2026-10-14 | Functions: EOMONTH, EDATE, WORKDAY, NETWORKDAYS, YEARFRAC, WEEKNUM, the bond and coupon functions, DISC, BIN2DEC, IM* and the other Analysis ToolPak functions give `#VALUE!` for a reference to more than one cell in a value argument, as Excel 365 does, instead of spilling; array constants and computed arrays still lift |
 | 2026-10-14 | Protect Sheet on a protected sheet: Home › Format, its keytips (HOP, RPS) and the tab menu now read Unprotect Sheet… and unprotect (straight away without a password); a protected sheet that forbids selecting locked (or unlocked) cells is enforced for clicks, arrows and Go To, and the Protect Sheet dialog has the select options (#1346) |
@@ -257,6 +252,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | Why alpha and Upcoming checked against the code; next work points at docs/roadmap.md; a stray progress row left the headline table |
 | 2026-11-02 | minor | Progress log: RefEdit reference boxes in dialogs |
 | 2026-11-02 | minor | Progress log: Python mode in the formula bar |
 | 2026-11-02 | minor | Progress log: Python cells as data |

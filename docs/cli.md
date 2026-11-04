@@ -3,9 +3,13 @@
 Headless GridCraft: inspect, convert, evaluate, script and serve MCP without a window. Errors go to stderr with a
 non-zero exit code.
 
+**Check the warnings on large files.** A worksheet over about 500k cells is cut off on open (#2526), with a warning
+on stderr and exit code 0, and `run --out` then saves the shorter sheet. `check` doesn't compare rich text or chart
+options, so "round trip: all equal" doesn't mean those survived.
+
 `.xls` (Excel 97-2003, BIFF8) files are imported with values, formulas, number formats, merges,
-column widths, row heights and defined names; fonts, fills, borders, charts and other objects are
-not imported yet. Import warnings go to stderr. Convert to `.xlsx` to save; `.xls` output is not
+column widths, row heights, defined names and cell formatting (fonts, fills, borders, alignment);
+charts and other objects are not imported yet. Import warnings go to stderr. Convert to `.xlsx` to save; `.xls` output is not
 supported.
 
 `.xlsb` files support [worksheet data import](xlsb-import.md). Formula cells use their last saved
