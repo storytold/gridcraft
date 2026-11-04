@@ -353,7 +353,7 @@ fn previous_report(s: &Session, name: &str) -> Result<Option<(String, RangeRef)>
 fn kept_location_ref(s: &Session, name: &str) -> Option<RangeRef> {
     let d = s.doc().ok()?;
     for part in &d.wb.preserved.as_deref()?.parts {
-        if part_number(&part.name, "xl/pivottables/pivottable", ".xml").is_none() {
+        if !is_pivot_table_part(&part.name) {
             continue;
         }
         let Ok(xml) = std::str::from_utf8(&part.data) else { continue };
@@ -365,6 +365,15 @@ fn kept_location_ref(s: &Session, name: &str) -> Option<RangeRef> {
         return attribute_value(xml, "location ref=\"").and_then(|reference| RangeRef::parse(&reference));
     }
     None
+}
+
+/// Whether `name` is a kept PivotTable definition part (`xl/pivotTables/*.xml`, not its rels).
+///
+/// A kept part whose name collided when it was written is renamed `pivotTable1_2.xml`, so the
+/// stem's numeric suffix cannot identify a definition part.
+fn is_pivot_table_part(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.starts_with("xl/pivottables/") && !lower.contains("/_rels/") && lower.ends_with(".xml")
 }
 
 /// The value of the first `key="value"` pair in `xml`, where `key` ends at its opening quote.
@@ -930,7 +939,7 @@ fn kept_pivot_names(wb: &Workbook) -> Vec<String> {
     preserved
         .parts
         .iter()
-        .filter(|part| part_number(&part.name, "xl/pivottables/pivottable", ".xml").is_some())
+        .filter(|part| is_pivot_table_part(&part.name))
         .filter_map(|part| std::str::from_utf8(&part.data).ok())
         .filter_map(|xml| attribute_value(xml, "name=\""))
         .collect()

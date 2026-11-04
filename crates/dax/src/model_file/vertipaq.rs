@@ -107,16 +107,24 @@ fn i32_at(payload: &[u8], index: usize) -> Result<i32> {
 /// Upper bound on the rows one column segment may declare: larger than any model this evaluator
 /// materializes, and small enough that an eager expansion cannot exhaust memory first.
 const MAX_SEGMENT_RECORDS: usize = 64 * 1024 * 1024;
+/// Column-wide bound on decoded ids: one column may span several segments, and `output` grows for
+/// all of them before the caller compares the length with its row count.
+const MAX_COLUMN_RECORDS: usize = 128 * 1024 * 1024;
 
 /// Decodes one column-data `.idf` into exactly `segments[i].records` ids per segment.
 pub fn decode_column_ids(data: &[u8], segments: &[SegmentInfo]) -> Result<Vec<u32>> {
     let mut position = 0usize;
     let mut output = Vec::new();
+    let mut total = 0usize;
     for segment in segments {
         // `records` comes from the file's metadata; an absurd count must not drive an eager
         // expansion before the caller can compare the decoded length with its row count.
         if segment.records > MAX_SEGMENT_RECORDS {
             return Err(ModelFileError::Corrupt("segment declares too many records".into()));
+        }
+        total = total.checked_add(segment.records).ok_or(ModelFileError::TooLarge)?;
+        if total > MAX_COLUMN_RECORDS {
+            return Err(ModelFileError::Corrupt("column declares too many records".into()));
         }
         let primary = read_record(data, &mut position)?;
         let subsegment = read_record(data, &mut position)?;

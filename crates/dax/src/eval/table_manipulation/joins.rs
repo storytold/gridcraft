@@ -185,7 +185,10 @@ fn generate_series(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) ->
     if end < start {
         return Ok(TableValue::new(columns, Vec::new()));
     }
-    let steps = ((end - start) / increment).floor();
+    // `0.3 / 0.1` is 2.9999999999999996; a relative tolerance keeps an end value the series
+    // actually reaches.
+    let raw = (end - start) / increment;
+    let steps = (raw + raw.abs().max(1.0) * 1e-12).floor();
     if !steps.is_finite() || steps < 0.0 || steps > MAX_GENERATED_ROWS as f64 {
         return Err(EvalError::new("GENERATESERIES result is too large"));
     }

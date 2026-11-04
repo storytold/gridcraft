@@ -148,20 +148,32 @@ impl<'a> Binder<'a> {
     }
 
     fn visit(&self, name: &str, graph: &BTreeMap<String, BTreeSet<String>>, state: &mut BTreeMap<String, u8>) -> Result<(), BindError> {
-        match state.get(name).copied() {
-            Some(2) => return Ok(()),
-            Some(1) => {
-                return Err(BindError::new(format!("circular measure dependency involving `{name}`"), crate::Span::empty()));
-            }
-            _ => {}
+        // Iterative: a measure chain comes from the model JSON, so its length must not grow the
+        // call stack (a long chain would otherwise abort the process instead of returning an error).
+        if state.get(name).copied() == Some(2) {
+            return Ok(());
         }
+        let empty = BTreeSet::new();
         state.insert(name.to_string(), 1);
-        if let Some(dependencies) = graph.get(name) {
-            for dependency in dependencies {
-                self.visit(dependency, graph, state)?;
+        let mut stack: Vec<(&str, std::collections::btree_set::Iter<'_, String>)> = vec![(name, graph.get(name).unwrap_or(&empty).iter())];
+        while let Some((current, dependencies)) = stack.last_mut() {
+            match dependencies.next() {
+                Some(dependency) => match state.get(dependency.as_str()).copied() {
+                    Some(2) => {}
+                    Some(1) => {
+                        return Err(BindError::new(format!("circular measure dependency involving `{dependency}`"), crate::Span::empty()));
+                    }
+                    _ => {
+                        state.insert(dependency.clone(), 1);
+                        stack.push((dependency.as_str(), graph.get(dependency).unwrap_or(&empty).iter()));
+                    }
+                },
+                None => {
+                    state.insert((*current).to_string(), 2);
+                    stack.pop();
+                }
             }
         }
-        state.insert(name.to_string(), 2);
         Ok(())
     }
 

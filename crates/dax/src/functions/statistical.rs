@@ -101,7 +101,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number, ParamKind::Number])],
         ReturnType::Decimal,
         standard(false),
-        "Inverse of the right-tailed chi-squared probability: returns x such that CHISQ.DIST.RT ( x, Deg_freedom ) equals Probability. Probability must be at least 0 and less than 1; a non-integer Deg_freedom is rounded and the iterative search reports an error if it does not converge.",
+        "Inverse of the right-tailed chi-squared probability: returns x such that CHISQ.DIST.RT ( x, Deg_freedom ) equals Probability. Probability must be greater than 0 and at most 1; a non-integer Deg_freedom is rounded and the iterative search reports an error if it does not converge.",
         &["CHISQ.INV.RT ( 0.05, 10 )"],
     ),
     spec(
@@ -370,7 +370,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number, ParamKind::Number, ParamKind::Logical])],
         ReturnType::Decimal,
         standard(false),
-        "Poisson distribution with the given Mean. Cumulative TRUE returns the probability of at most X events, FALSE the probability mass of exactly X events; a non-integer X is rounded and X must be non-negative.",
+        "Poisson distribution with the given Mean. Cumulative TRUE returns the probability of at most X events, FALSE the probability mass of exactly X events; a non-integer X is truncated and X must be non-negative.",
         &["POISSON.DIST ( 2, 5, TRUE )", "POISSON.DIST ( 2, 5, FALSE )"],
     ),
     spec(

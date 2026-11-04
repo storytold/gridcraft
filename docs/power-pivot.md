@@ -115,7 +115,7 @@ view offers **Fit**, **Refresh** and **Data View**; with no relationships it sho
 
 All overlays are reported through `overlay` = `""` | `openModel` | `existingConnections` |
 `manageRelationships` | `createRelationship` | `tableProperties` | `calculationOptions` |
-`addMeasure`.
+`addMeasure` | `find` | `sortByColumn`.
 
 - **Add Measure** / **Update Measure** (`measureDialogMode` = `Add` | `Update`): name, home table,
   formula and format. Add calls `dataModel.addMeasure`; Update calls
@@ -147,8 +147,8 @@ All overlays are reported through `overlay` = `""` | `openModel` | `existingConn
 | `dataModel.deleteMeasure` | `{name}` | status |
 | `dataModel.addRelationship` | `{from_table, from_column, to_table, to_column, bidirectional?, inactive?}` | status |
 | `dataModel.deleteRelationship` | `{from_table, from_column, to_table, to_column}` | status |
-| `dataModel.view` | `{table, show_hidden?}` | `{columns, rows, text_rows, row_numbers, hidden, sort, filters}` (view state) |
-| `dataModel.find` | `{query, table?, column?, case?}` | `{matches: [{table, column, row, value}]}` |
+| `dataModel.view` | `{table, show_hidden?}` | `{columns, rows, text_rows, row_numbers, hidden, sort, filters, truncated}` (view state; at most 5,000 rows, `truncated` says more exist) |
+| `dataModel.find` | `{query, table?, column?, case?}` | `{matches: [{table, column, row, value}], truncated}` (at most 500 matches; `truncated` says more exist) |
 | `dataModel.sortTable` | `{table, column, descending?}` | view state (session only) |
 | `dataModel.clearSort` | `{table}` | view state (session only) |
 | `dataModel.setFilter` | `{table, column, values: [text]}` (empty clears) | view state (session only) |
@@ -221,7 +221,7 @@ All overlays are reported through `overlay` = `""` | `openModel` | `existingConn
 | Show Hidden / Show Implicit Measures | Both work: hidden columns are model metadata, implicit measures are generated from each column's default summarization |
 | Worksheet PivotTable field list and cache | Partial: `dataModel.createPivot` writes the report cells plus `pivotTable*.xml` / `pivotCacheDefinition*.xml` / `xl/connections.xml`, keeps them on save, and the parts survive save/reopen. Excel does not yet accept the generated PivotTable cache definition, so the file opens but the PivotTable itself does not refresh. The **PivotTable Fields pane** covers model pivots (`dataModel.pivotFields`): a searchable field tree with drag-and-drop between Rows/Columns/Filters/Values, tick boxes, a Summarize by menu on column values (Sum/Average/Count/Min/Max as an implicit measure), slicer cards that drive page filters, layout and grand totals, and Apply updates the pivot in place. A real on-sheet slicer object and a timeline are not there: the slicer model resolves columns against worksheet tables only, and `slicer`/`slicercache`/`timeline` parts are not preserved — see the limits below |
 | Pivot Preview | Not present: the window has no separate preview surface |
-| Model persistence and refresh from a source | Partial: `xl/model/item.data` is kept through read and save, and `dataModel.createPivot` writes the session model's measures into it before attaching the cache, so the measures are there for an Excel build that reads them. Excel does not yet apply written changes to `xl/model/item.data`; the verified Excel round trip covers measures read through `CUBEVALUE`, not a refreshed PivotTable. The model's *tables* still come from the workbook's own model, not from the session JSON, and a model created from JSON alone has no database part to write |
+| Model persistence and refresh from a source | Partial: `xl/model/item.data` is kept through read and save, and `dataModel.createPivot` writes the session model's measures into it before attaching the cache. Excel reopened a written package and listed and evaluated the written measures (through `CUBEVALUE`); modified VertiPaq column *values* are not applied by Excel, so a refreshed PivotTable is not supported. The model's *tables* still come from the workbook's own model, not from the session JSON, and a model created from JSON alone has no database part to write |
 
 DAX support is partial: the catalog parses 484 functions and every one of them is evaluated. See
 [DAX functions](dax-functions.md) for the per-category breakdown.

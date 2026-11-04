@@ -467,13 +467,11 @@ impl SortOrder {
 }
 
 fn rank_of(value: f64, values: &[f64], order: SortOrder, dense: bool) -> i64 {
-    let mut better = Vec::new();
-    for candidate in values {
-        if order.better(*candidate, value) && !better.contains(candidate) {
-            better.push(*candidate);
-        }
-    }
     if dense {
+        // Count distinct better values in an ordered set: the `Vec::contains` scan was quadratic,
+        // and `RANKX(..., Dense)` runs once per row in the usual calculated-column pattern.
+        let better: std::collections::BTreeSet<u64> =
+            values.iter().filter(|candidate| order.better(**candidate, value)).map(|candidate| (*candidate + 0.0).to_bits()).collect();
         1 + better.len() as i64
     } else {
         let count = values.iter().filter(|candidate| order.better(**candidate, value)).count();
