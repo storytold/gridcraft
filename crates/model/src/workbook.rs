@@ -11,6 +11,13 @@ use crate::cell::Formula;
 use crate::sheet::Sheet;
 use crate::style::{StyleTable, Theme};
 
+/// Most equation source, in bytes, one [`Workbook::refresh_equations`] lays out: about 2,500
+/// typical equations, or a few seconds of the slowest 4 KB sources.
+pub const MAX_EQUATION_LAYOUT_BYTES: usize = 128 * 1024;
+
+/// Why an equation past [`MAX_EQUATION_LAYOUT_BYTES`] has no layout.
+pub const EQUATION_BUDGET_MESSAGE: &str = "This workbook has more equations than are laid out at once; edit this equation to lay it out.";
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CalcMode {
     #[default]
@@ -88,6 +95,10 @@ pub struct CalcSettings {
     pub max_change: f64,
     /// Use precision as displayed.
     pub precision_as_displayed: bool,
+    /// R1C1 reference style (`<calcPr refMode="R1C1"/>`): kept with the file and written back;
+    /// GridCraft itself shows and takes A1 references.
+    #[serde(default)]
+    pub r1c1: bool,
 }
 
 impl Default for CalcSettings {
@@ -98,6 +109,7 @@ impl Default for CalcSettings {
             max_iterations: Self::DEFAULT_ITERATIONS,
             max_change: Self::DEFAULT_CHANGE,
             precision_as_displayed: false,
+            r1c1: false,
         }
     }
 }
@@ -193,6 +205,12 @@ pub struct Workbook {
     pub calc: CalcSettings,
     #[serde(default, skip_serializing_if = "is_all")]
     pub show_objects: ShowObjects,
+    /// Trust Center › Privacy Options › "Remove personal information from file properties on save"
+    /// (`<workbookPr filterPrivacy="1"/>`): kept with the file, and while it is on the author and
+    /// company are left out of the XLSX files GridCraft writes, as Excel leaves them empty. Other
+    /// formats aren't filtered: the workbook's own serialization still holds them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remove_personal_info: bool,
     /// Read and set with [`Workbook::active_sheet`] and [`Workbook::set_active_sheet`].
     pub active_sheet: ActiveSheet,
     /// The workbook window's display settings (`<workbookView>`), kept across an open + save.
@@ -331,6 +349,7 @@ impl Workbook {
             date_system: DateSystem::D1900,
             calc: CalcSettings::default(),
             show_objects: ShowObjects::All,
+            remove_personal_info: false,
             active_sheet: ActiveSheet::default(),
             view: WorkbookView::default(),
             props: DocProps::default(),
@@ -463,6 +482,30 @@ impl Workbook {
         }
         None
     }
+    /// Rebuilds the cached layout of every equation whose source changed (or was never laid
+    /// out, as after loading a file). One call lays out at most [`MAX_EQUATION_LAYOUT_BYTES`] of
+    /// source: one equation can take a tenth of a second to lay out, so a file with thousands of
+    /// them would otherwise hold the app for minutes. Equations past the budget get an error
+    /// instead (they show their source; editing one lays it out).
+    pub fn refresh_equations(&mut self) {
+        let stale = |s: &crate::Shape| s.kind == crate::ShapeKind::Equation && s.math.get(&s.text).is_none();
+        let mut budget = MAX_EQUATION_LAYOUT_BYTES;
+        // Only sheets with a stale equation are copied (sheets are shared with undo snapshots).
+        for sh in self.sheets.iter_mut().filter(|sh| sh.shapes.iter().any(stale)) {
+            for s in Arc::make_mut(sh).shapes.iter_mut().filter(|s| stale(s)) {
+                // A source over the length cap never gets here: the cache answers for it without
+                // a lookup. An empty source still costs a call.
+                let cost = s.text.len().max(1);
+                if cost > budget {
+                    s.math.refuse(&s.text, EQUATION_BUDGET_MESSAGE);
+                    continue;
+                }
+                budget -= cost;
+                s.math.refresh(&s.text);
+            }
+        }
+    }
+
     /// A free id for a new chart, picture, shape, table or slicer: one more than the largest in
     /// use, or, when that is `u32::MAX` (a file can carry any id), the lowest free one.
     pub fn next_object_id(&self) -> u32 {
