@@ -55,8 +55,9 @@ long `.xls` track, so about half parallelizes (≈30–50 wall-clock hours with 
   `SPECIAL_FUNCTIONS` in `crates/calc/src/eval.rs` (evaluator special forms), minus the test-only
   `ADD2`: **505**, all of them Excel names.
 - **Ribbon catalog:** `crates/engine/src/catalog.rs` (292 unique ids across 15 tabs) against the
-  377 command ids registered in `crates/engine/src/cmd/*.rs`, recomputed from source by script and
-  identical to the committed `parity-checklist.md`. The catalog is our own transcription of
+  377 command ids registered in `crates/engine/src/cmd/*.rs`, recomputed from source by script (the
+  generated `parity-checklist.md` reports the catalog coverage, 277 / 292, not this registry
+  total). The catalog is our own transcription of
   Excel's main ribbon tabs; it leaves out most contextual tabs (Picture Format, Shape Format,
   Header & Footer, Sparkline, Slicer, Timeline), the Developer and Help tabs and sub-menu items, so
   94.9% of it is roughly **60–65% of Excel's full command surface** (estimated).
@@ -346,7 +347,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 | 2026-10-31 | minor | What-if and analysis: Solver Load/Save Model and Reset All; Forecast Sheet moved from Missing to the list of tools, as gaps.md §13 records (no score change) |
 | 2026-10-25 | minor | Automation: macro interface (Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts) (no score change) |
 | 2026-10-25 | trivial | Catalog count 276 / 292 in the summary table and the method, as `cargo xtask parity` measures (no score change) |
-| 2026-10-25 | minor | Insert objects: Ink to Shape converts Excel's preset shapes (15 insertable shape kinds, was 8), and the catalog count is 277 / 292; no score change |
+| 2026-10-25 | minor | Insert objects: Ink to Shape converts recognised strokes to Excel's preset shapes (15 insertable shape kinds, was 8), and the catalog count is 277 / 292; no score change |
 | 2026-10-22 | minor | Several windows on the desktop: a native window per workbook window, New Window on the same workbook, Switch Windows and Arrange All; "one window" removed from UI/UX fidelity, Hardware and the interaction-fidelity discount; no score change |
 | 2026-10-21 | minor | Page Setup paper sizes: `B4`/`B5`/`B6` are the JIS sizes Japanese Excel uses (ISO B4/B5/B6 by name), and Japanese Postcard, Japanese Double Postcard, the chou/kaku envelopes and A6 are added; PDF MediaBox and `file.print` follow, and the Size menu lists them |
 | 2026-10-18 | trivial | Stale chart notes: all chart kinds survive XLSX round-trip (PRs #158, #161) and trendlines landed |
