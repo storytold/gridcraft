@@ -250,7 +250,12 @@ impl SheetApp {
                 // is a UI command; `arrange.selectionPane` only lists the sheet's objects.
                 let shown = self.grid.pane.as_deref() == Some("selection");
                 let on = p.get("on").and_then(Json::as_bool).unwrap_or(!shown);
-                self.grid.pane = on.then(|| "selection".to_string());
+                if on {
+                    self.grid.pane = Some("selection".to_string());
+                } else if shown {
+                    // Only the Selection Pane closes: another pane (Watch, Format Chart) stays open.
+                    self.grid.pane = None;
+                }
                 Ok(json!({"on": on}))
             }
             "options.autoComplete" => {

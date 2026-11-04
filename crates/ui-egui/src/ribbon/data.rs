@@ -8,11 +8,7 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
         app.open_dialog("open", json!({}));
     }
     ui.vertical(|ui| {
-        let __k = small_button(ui, Icon::TextColumns, "From Text/CSV", "From Text/CSV", false);
-        control_keytip(app, ui, &__k, "data.fromTextCsv");
-        if __k.clicked() {
-            app.open_dialog("open", json!({}));
-        }
+        // Get Data above already imports a text/CSV file; From Table/Range is the other source.
         let __k = small_button(ui, Icon::Table, "From Table/Range", "From Table/Range", false);
         control_keytip(app, ui, &__k, "data.fromTableRange");
         if __k.clicked() {

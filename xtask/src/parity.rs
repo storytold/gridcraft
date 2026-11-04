@@ -126,7 +126,7 @@ fn sync_docs(root: &Path, check: bool) -> Result<Vec<String>, String> {
     let (done, total, registered) = figures();
     let pct = format!("{:.1}", pct(done, total));
     let ratio = format!("{done} / {total}");
-    let edits: [(&str, Vec<Edit>); 4] = [
+    let edits: [(&str, Vec<Edit>); 5] = [
         ("README.md", vec![("It covers ".into(), " of standard ribbon commands".into(), format!("{pct}%"))]),
         (
             "ROADMAP.md",
@@ -142,6 +142,7 @@ fn sync_docs(root: &Path, check: bool) -> Result<Vec<String>, String> {
             ],
         ),
         ("docs/ui-parity.md", vec![("[parity-checklist.md](parity-checklist.md) (".into(), ")".into(), ratio.clone())]),
+        ("docs/architecture.md", vec![("(`cmd/*`, ".into(), " commands)".into(), registered.to_string())]),
     ];
     let mut stale = Vec::new();
     for (name, file_edits) in edits {
@@ -166,21 +167,28 @@ fn sync_docs(root: &Path, check: bool) -> Result<Vec<String>, String> {
 pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
     let mut check = false;
     let mut out: PathBuf = root.join("docs/parity-checklist.md");
+    let mut custom_out = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match *a {
             "--check" => check = true,
-            "--out" => out = PathBuf::from(it.next().ok_or("--out needs a path")?),
+            "--out" => {
+                out = PathBuf::from(it.next().ok_or("--out needs a path")?);
+                custom_out = true;
+            }
             other => return Err(format!("parity: unknown argument `{other}` (usage: cargo xtask parity [--check] [--out PATH])")),
         }
     }
+    // The docs' figures belong to the repository's checklist: a run that writes somewhere else
+    // (`--out`) leaves the working tree alone.
+    let sync = !custom_out;
     let text = render(&entries());
     if check {
         let current = std::fs::read_to_string(&out).map_err(|e| format!("{}: {e}", out.display()))?;
         if current != text {
             return Err(format!("{} is out of date; run `cargo xtask parity`", out.display()));
         }
-        let stale = sync_docs(root, true)?;
+        let stale = if sync { sync_docs(root, true)? } else { Vec::new() };
         if !stale.is_empty() {
             return Err(format!("{} quote an out-of-date catalog figure; run `cargo xtask parity`", stale.join(", ")));
         }
@@ -191,7 +199,7 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
         std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     }
     std::fs::write(&out, text).map_err(|e| format!("write {}: {e}", out.display()))?;
-    let updated = sync_docs(root, false)?;
+    let updated = if sync { sync_docs(root, false)? } else { Vec::new() };
     println!(
         "{} -> {}{}",
         summary_line(),

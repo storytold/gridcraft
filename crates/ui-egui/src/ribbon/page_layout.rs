@@ -275,43 +275,16 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
             act(app, "view.selectionPane", json!({}));
         }
     });
+    // Rotate turns the selected shape 90°; `arrange.rotate` has no flip state, so the button does
+    // not offer Flip Vertical/Horizontal (the command refuses them). Align and Group are not
+    // drawn: they need two or more selected objects and the grid selects one at a time, so the
+    // engine would accept the call and change nothing.
     ui.add_enabled_ui(picked.is_some(), |ui| {
-        ui.vertical(|ui| {
-            let al = small_button(ui, Icon::AlignCenter, "Align", "Align", true);
-            egui::Popup::menu(&al).show(|ui| {
-                for (label, a) in [
-                    ("Align Left", "left"),
-                    ("Align Center", "center"),
-                    ("Align Right", "right"),
-                    ("Align Top", "top"),
-                    ("Align Middle", "middle"),
-                    ("Align Bottom", "bottom"),
-                ] {
-                    if ui.button(lang.tr(label)).clicked() {
-                        let mut p = object.clone();
-                        p["align"] = json!(a);
-                        act(app, "arrange.align", p);
-                        ui.close();
-                    }
-                }
-            });
-            let __k = small_button(ui, Icon::Group, "Group", "Group", false);
-            control_keytip(app, ui, &__k, "arrange.group");
-            if __k.clicked() {
-                let mut p = object.clone();
-                if let Some(o) = picked {
-                    p["ids"] = json!([o.id]);
-                }
-                act(app, "arrange.group", p);
-            }
-            // `arrange.rotate` turns a shape 90°; it has no flip state, so the button does not
-            // offer Flip Vertical/Horizontal (the command refuses them).
-            let __k = small_button(ui, Icon::Orientation, "Rotate", "Rotate 90°", false);
-            control_keytip(app, ui, &__k, "arrange.rotate");
-            if __k.clicked() {
-                act(app, "arrange.rotate", object.clone());
-            }
-        });
+        let __k = small_button(ui, Icon::Orientation, "Rotate", "Rotate 90°", false);
+        control_keytip(app, ui, &__k, "arrange.rotate");
+        if __k.clicked() {
+            act(app, "arrange.rotate", object.clone());
+        }
     });
     let rtl = app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.right_to_left);
     let r = big_button(ui, Icon::SheetRtl, "Sheet\nRight-to-Left", "Sheet Right-to-Left", false);
