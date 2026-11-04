@@ -110,7 +110,8 @@ impl Language {
 
     pub fn formula_locale(self, decimal_separator: crate::DecimalSeparator) -> gridcraft_engine::formula::FormulaLocale {
         match (self, decimal_separator) {
-            (Self::Es, _) => gridcraft_engine::formula::FormulaLocale::Es,
+            (Self::Es, crate::DecimalSeparator::Comma) => gridcraft_engine::formula::FormulaLocale::Es,
+            (Self::Es, crate::DecimalSeparator::Dot) => gridcraft_engine::formula::FormulaLocale::En,
             (_, crate::DecimalSeparator::Comma) => gridcraft_engine::formula::FormulaLocale::Es,
             _ => gridcraft_engine::formula::FormulaLocale::En,
         }
