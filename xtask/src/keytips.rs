@@ -22,12 +22,14 @@ const ENV_SENSITIVE: &[&str] = &["review.spelling"];
 /// command itself errors without them). Never probed; their tests assert the dialog opens.
 const UI_DIALOG_COMMANDS: &[(&str, &str)] = &[
     ("insert.recommendedCharts", "recommendedCharts"),
+    ("insert.recommendedPivotTables", "recommendedPivotTables"),
     ("insert.pivotChart", "pivotChart"),
     ("data.consolidate", "consolidate"),
     ("home.addIns", "addIns"),
     ("data.queriesConnections", "queriesConnections"),
     ("review.thesaurus", "thesaurus"),
     ("view.customViews", "customViews"),
+    ("pageLayout.background", "insertPicture"),
 ];
 
 /// Commands the UI implements itself, so invoking them never reaches the engine catalog.

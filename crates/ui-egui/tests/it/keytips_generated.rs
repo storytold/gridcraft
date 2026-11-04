@@ -1350,11 +1350,15 @@ fn keytip_nsh_() {
 #[test]
 fn keytip_nsp_() {
     let mut h = harness(blank());
+    // Some of these dialogs preview the selection, so the sheet has a small table.
+    h.state_mut()
+        .session
+        .execute("range.setValues", serde_json::json!({"range": "A1", "values": [["Fruit", "Sales"], ["Apples", 5], ["Pears", 3]]}))
+        .unwrap();
+    h.state_mut().session.execute("selection.set", serde_json::json!({"range": "A1:B3"})).unwrap();
+    h.run_steps(2);
     sequence(&mut h, "NSP", false);
-    assert!(
-        h.state().message.is_some() || h.state().toast.is_some(),
-        "NSP must invoke insert.recommendedPivotTables and surface its missing-params error"
-    );
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("recommendedPivotTables"), "NSP must open the recommendedPivotTables dialog");
 }
 
 #[test]
@@ -1506,8 +1510,15 @@ fn keytip_pbr_() {
 #[test]
 fn keytip_pgb_() {
     let mut h = harness(blank());
+    // Some of these dialogs preview the selection, so the sheet has a small table.
+    h.state_mut()
+        .session
+        .execute("range.setValues", serde_json::json!({"range": "A1", "values": [["Fruit", "Sales"], ["Apples", 5], ["Pears", 3]]}))
+        .unwrap();
+    h.state_mut().session.execute("selection.set", serde_json::json!({"range": "A1:B3"})).unwrap();
+    h.run_steps(2);
     sequence(&mut h, "PGB", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "pageLayout.background"), "PGB must journal pageLayout.background");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("insertPicture"), "PGB must open the insertPicture dialog");
 }
 
 #[test]

@@ -10,7 +10,7 @@ use super::insert_function::insert_function;
 use super::names::{name_manager, paste_name};
 use super::paste::{paste_special, paste_special_shortcuts};
 use super::ref_edit::{RefLabel, SHEET_DELETED, end_pick, home_sheet_deleted, place_window, ref_edit, window_shown};
-use super::reports::{add_ins, custom_views, pivot_chart, result_rows, thesaurus};
+use super::reports::{add_ins, custom_views, pivot_chart, recommended_pivot_tables, result_rows, thesaurus};
 use super::spelling::spelling;
 use super::zoom::zoom;
 use super::{Dialog, Field, Json, Key, Map, RefPick, SheetApp, json, vec2};
@@ -217,6 +217,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "thesaurus" => thesaurus(app, ui, &mut d, &mut open),
                 "customViews" => custom_views(app, ui, &mut d, &mut open),
                 "pivotChart" => pivot_chart(app, ui, &mut d, &mut confirm, &mut open),
+                "recommendedPivotTables" => recommended_pivot_tables(ui, &mut d, &mut confirm, &mut open),
                 "agents" => {
                     ui.label("GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:");
                     ui.add_space(4.0);

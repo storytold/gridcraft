@@ -345,3 +345,52 @@ fn every_ribbon_control_points_at_a_registered_command() {
     assert!(checked > 100, "the scan found only {checked} control ids; the source layout changed");
     assert!(missing.is_empty(), "ribbon controls with no registered command: {missing:#?}");
 }
+
+/// Insert › PivotTable › Recommended PivotTables asks which suggestion to apply instead of
+/// throwing the list away: the dialog lists them, and OK inserts the picked one.
+#[test]
+fn recommended_pivot_tables_list_their_suggestions_and_apply_the_pick() {
+    let mut h = harness();
+    run(&mut h, "range.setValues", json!({"range": "A1", "values": [["Region", "Sales"], ["East", 10], ["West", 20]]}));
+    run(&mut h, "selection.set", json!({"range": "A1:B3"}));
+    tab(&mut h, "Insert");
+    click(&mut h, "PivotTable options");
+    click(&mut h, "Recommended PivotTables");
+    assert_eq!(dialog_name(&h).as_deref(), Some("recommendedPivotTables"), "the menu item asks which suggestion to insert");
+    assert!(h.state().message.is_none(), "no missing-`apply` error: {:?}", h.state().message);
+    let d = h.state().dialog.as_ref().expect("Recommended PivotTables opens its dialog");
+    assert_eq!(d.values.get("apply").and_then(Json::as_u64), Some(0), "the first suggestion is preselected");
+    assert!(
+        d.result.as_ref().and_then(|r| r.get("suggestions")).and_then(Json::as_array).is_some_and(|a| a.len() > 1),
+        "the dialog lists the suggestions: {:?}",
+        d.result
+    );
+    control(&mut h, "ui.dialog.set", json!({"field": "apply", "value": 1}));
+    control(&mut h, "ui.dialog.confirm", json!({}));
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "OK closes the dialog");
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    assert_eq!(h.state().session.active().and_then(|d| d.wb.active().map(|sh| sh.pivots.len())), Some(1));
+}
+
+/// Page Layout › Background asks for its picture through the picture dialog, but confirms through
+/// `pageLayout.background`: the picture is stored as the sheet's background (marked, at A1), not
+/// as a floating picture that Background › Clear could not remove.
+#[test]
+fn background_confirms_through_the_background_command() {
+    let mut h = harness();
+    tab(&mut h, "Page Layout");
+    click(&mut h, "Background");
+    let d = h.state().dialog.as_ref().expect("Background asks for the picture");
+    assert_eq!(d.name, "insertPicture");
+    assert_eq!(d.command, Some("pageLayout.background"), "the dialog must not insert an unmarked floating picture");
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    control(&mut h, "ui.dialog.set", json!({"field": "base64", "value": "bm90IGEgcGljdHVyZQ=="}));
+    control(&mut h, "ui.dialog.confirm", json!({}));
+    h.run_steps(3);
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let sh = h.state().session.active().and_then(|d| d.wb.active().cloned()).expect("active sheet");
+    assert_eq!(sh.images.len(), 1);
+    assert_eq!(sh.images[0].alt, "Sheet background");
+    assert_eq!(sh.images[0].anchor.cell, CellRef::parse("A1").unwrap());
+}

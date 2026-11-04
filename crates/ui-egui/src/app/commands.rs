@@ -143,6 +143,11 @@ impl SheetApp {
         if id == "insert.recommendedCharts" && params.get("type").is_none() {
             return self.open_dialog("recommendedCharts", json!({}));
         }
+        // Recommended PivotTables with no suggestion applied (ribbon menu, keytip, command search)
+        // lists its suggestions to choose from; programmatic callers of `run` still get the list.
+        if id == "insert.recommendedPivotTables" && params.get("apply").is_none() {
+            return self.open_dialog("recommendedPivotTables", json!({}));
+        }
         // The Insert tab's PivotChart: with no PivotTable at the active cell the report has to be
         // chosen first (Excel's Create PivotChart); the command alone needs one to be named.
         if id == "insert.pivotChart" && params.get("pivot").is_none() && crate::pivot_pane::active_pivot(self).is_none() {

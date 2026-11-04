@@ -236,3 +236,30 @@ pub(super) fn pivot_chart(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, con
     });
     ok_cancel(ui, confirm, open);
 }
+
+/// Insert › Recommended PivotTables: the suggestions the engine found for the selected data, picked
+/// by index. OK applies the pick (`{"apply": i}`), which builds that PivotTable.
+pub(super) fn recommended_pivot_tables(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    let suggestions = d.result.as_ref().and_then(|r| r.get("suggestions")).and_then(Json::as_array).cloned().unwrap_or_default();
+    if suggestions.is_empty() {
+        ui.label("No PivotTable suggestion for the selected data.");
+        ui.label(
+            egui::RichText::new("Select a range with a header row and at least one category or number column; Excel's suggestions use them.").small(),
+        );
+        if ui.button("Close").clicked() {
+            *open = false;
+        }
+        return;
+    }
+    ui.label("PivotTable suggestions for the selected data:");
+    let title = |s: &Json| s.get("title").and_then(Json::as_str).unwrap_or("PivotTable").to_string();
+    egui::ScrollArea::vertical().max_height(220.0).id_salt("recommended_pivots").show(ui, |ui| {
+        for (i, s) in suggestions.iter().enumerate() {
+            if ui.selectable_label(d.list_index == i, title(s)).clicked() {
+                d.list_index = i;
+                d.values.insert("apply".into(), json!(i));
+            }
+        }
+    });
+    ok_cancel(ui, confirm, open);
+}
