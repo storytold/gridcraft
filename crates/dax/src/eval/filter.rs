@@ -871,7 +871,7 @@ fn group_cross_apply(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, 
     let groups = distinct_group_values(ev, group_table, &split.groups)?;
 
     let mut columns = group_columns;
-    let mut scan_columns: Vec<TableColumn> = Vec::new();
+    let mut scan_columns: Vec<Vec<TableColumn>> = Vec::new();
     let mut rows: Vec<Vec<Scalar>> = Vec::new();
     for group in &groups {
         let mut filters = ctx.filters.clone();
@@ -888,10 +888,9 @@ fn group_cross_apply(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, 
             let mut combinations: Vec<Vec<Scalar>> = vec![Vec::new()];
             for expression in &scans {
                 let table = eval_table_with(ev, expression, ctx, &filters)?;
-                // The first evaluated table defines the scan columns; later tables must line up.
-                if scan_columns.is_empty() {
-                    scan_columns = table.columns.clone();
-                }
+                // Every scan table is cross-joined into the row, so every scan contributes its
+                // columns to the header (not just the first one).
+                scan_columns.push(table.columns.clone());
                 let mut next = Vec::with_capacity(combinations.len().saturating_mul(table.rows.len()));
                 for prefix in &combinations {
                     for row in &table.rows {
@@ -926,7 +925,9 @@ fn group_cross_apply(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, 
         }
     }
     if table_mode {
-        columns.extend(scan_columns);
+        for group in scan_columns {
+            columns.extend(group);
+        }
     } else {
         columns.extend(expressions.iter().map(|(name, _)| TableColumn { name: name.clone() }));
     }
@@ -989,7 +990,7 @@ fn filter_cluster(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> 
     let groups = distinct_group_values(ev, group_table, &split.groups)?;
 
     let mut columns = group_columns;
-    let mut scan_columns: Vec<TableColumn> = Vec::new();
+    let mut scan_columns: Vec<Vec<TableColumn>> = Vec::new();
     let mut rows = Vec::new();
     for group in &groups {
         let mut filters = ctx.filters.clone();
@@ -1002,11 +1003,12 @@ fn filter_cluster(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> 
         let mut combinations: Vec<Vec<Scalar>> = vec![Vec::new()];
         for scan in &scans {
             let table = eval_table_with(ev, scan, ctx, &filters)?;
-            if scan_columns.is_empty() {
-                scan_columns = table.columns.clone();
-            } else if scan_columns != table.columns {
+            if let Some(first) = scan_columns.first()
+                && *first != table.columns
+            {
                 return Err(EvalError::new("FILTERCLUSTER table scans must have the same columns"));
             }
+            scan_columns.push(table.columns.clone());
             let mut next = Vec::with_capacity(combinations.len().saturating_mul(table.rows.len()));
             for prefix in &combinations {
                 for row in &table.rows {
@@ -1023,7 +1025,9 @@ fn filter_cluster(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> 
             rows.push(row);
         }
     }
-    columns.extend(scan_columns);
+    for group in scan_columns {
+        columns.extend(group);
+    }
     Ok(TableValue::new(columns, rows))
 }
 

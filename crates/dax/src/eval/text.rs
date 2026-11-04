@@ -70,7 +70,7 @@ fn combine_values(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> 
             push_checked(&mut out, &delimiter)?;
         }
         let value = ev.eval(arg, ctx)?;
-        push_checked(&mut out, &value.to_text())?;
+        push_checked(&mut out, &value.to_dax_text())?;
     }
     Ok(Scalar::String(out))
 }

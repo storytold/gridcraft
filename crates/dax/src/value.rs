@@ -97,6 +97,17 @@ impl Scalar {
         }
     }
 
+    /// DAX's implicit text conversion, used by `&` and the text functions: a whole-valued number
+    /// prints without a decimal point (`10`, not `10.0`) and a date prints as its calendar text.
+    /// [`Scalar::to_text`] stays the storage/debug spelling other callers rely on.
+    pub fn to_dax_text(&self) -> String {
+        match self {
+            Scalar::Decimal(value) if value.is_finite() && value.fract() == 0.0 => format!("{value:.0}"),
+            Scalar::DateTime(serial) => datetime_text(*serial),
+            other => other.to_text(),
+        }
+    }
+
     pub fn to_text(&self) -> String {
         match self {
             Scalar::Blank => String::new(),
@@ -206,6 +217,26 @@ impl ScalarKey {
             ScalarKey::String(value) => Scalar::String(value.clone()),
         }
     }
+}
+
+/// A `DateTime` serial as DAX prints it: `M/D/YYYY H:MM:SS AM/PM`.
+fn datetime_text(serial: f64) -> String {
+    use chrono::Datelike;
+    let epoch = chrono::NaiveDate::from_ymd_opt(1899, 12, 30);
+    let Some(epoch) = epoch else { return serial.to_string() };
+    let mut seconds = ((serial - serial.floor()) * 86_400.0).round() as i64;
+    let mut days = serial.floor() as i64;
+    if seconds >= 86_400 {
+        seconds -= 86_400;
+        days = days.saturating_add(1);
+    }
+    let Some(date) = chrono::Duration::try_days(days).and_then(|offset| epoch.checked_add_signed(offset)) else {
+        return serial.to_string();
+    };
+    let (hour, minute, second) = (seconds / 3600, (seconds / 60) % 60, seconds % 60);
+    let hour12 = if hour % 12 == 0 { 12 } else { hour % 12 };
+    let meridiem = if hour < 12 { "AM" } else { "PM" };
+    format!("{}/{}/{} {}:{minute:02}:{second:02} {meridiem}", date.month(), date.day(), date.year(), hour12)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

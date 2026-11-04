@@ -326,29 +326,29 @@ fn calendarauto_validates_arguments_and_model() {
 // The test runs natively and needs an independent clock reference for the date serials.
 #[allow(clippy::disallowed_methods)]
 fn clock_functions_track_the_system_clock() {
-    let today = match value("TODAY()") {
-        Scalar::DateTime(serial) => serial,
-        other => panic!("TODAY produced {other:?}"),
+    let clock = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs_f64() / 86_400.0 + 25_569.0)
+            .expect("system clock")
     };
-    let now = match value("NOW()") {
+    let serial_of = |src: &str| match value(src) {
         Scalar::DateTime(serial) => serial,
-        other => panic!("NOW produced {other:?}"),
+        other => panic!("{src} produced {other:?}"),
     };
-    let utc_today = match value("UTCTODAY()") {
-        Scalar::DateTime(serial) => serial,
-        other => panic!("UTCTODAY produced {other:?}"),
+    // Each function is a separate evaluation; retry if a local or UTC day boundary falls inside
+    // the sampling window, so the floor comparisons cannot race midnight.
+    let (today, now, utc_today, utc_now) = loop {
+        let before = clock();
+        let (today, now) = (serial_of("TODAY()"), serial_of("NOW()"));
+        let (utc_today, utc_now) = (serial_of("UTCTODAY()"), serial_of("UTCNOW()"));
+        let after = clock();
+        if before.floor() == after.floor() && today == now.floor() && utc_today == utc_now.floor() {
+            break (today, now, utc_today, utc_now);
+        }
     };
-    let utc_now = match value("UTCNOW()") {
-        Scalar::DateTime(serial) => serial,
-        other => panic!("UTCNOW produced {other:?}"),
-    };
-    let expected = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_secs_f64() / 86_400.0 + 25_569.0)
-        .expect("system clock");
+    let expected = clock();
     assert!((utc_now - expected).abs() < 1.0 / 86_400.0, "UTCNOW follows the system clock");
-    assert_eq!(utc_today, utc_now.floor());
-    assert_eq!(today, now.floor());
     assert!((0.0..1.0).contains(&now.fract()));
     // The host supplies one wall clock, so the local and UTC variants never differ by a day.
     assert!((now - utc_now).abs() < 1.0);

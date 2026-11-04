@@ -1794,7 +1794,7 @@ fn binary(op: BinaryOp, left: Scalar, right: Scalar) -> Result<Scalar, EvalError
             }
             Ok(Scalar::Decimal(value))
         }
-        BinaryOp::Concat => Ok(Scalar::String(format!("{}{}", left.to_text(), right.to_text()))),
+        BinaryOp::Concat => Ok(Scalar::String(format!("{}{}", left.to_dax_text(), right.to_dax_text()))),
         BinaryOp::Eq | BinaryOp::StrictEq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge => {
             let ordering = if op == BinaryOp::StrictEq {
                 // `==` is strict about BLANK only: BLANK equals BLANK and nothing else. Every

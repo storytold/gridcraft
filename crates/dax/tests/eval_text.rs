@@ -321,3 +321,14 @@ fn to_json_serializes_with_stable_order_and_escaping() {
     // The engine produces no result for an empty table.
     assert_eq!(eval("TOJSON(FILTER(Items, Items[Qty] > 99))"), Scalar::Blank);
 }
+
+#[test]
+fn concatenation_uses_dax_text_conversion() {
+    assert_eq!(text("1 & 2"), "12");
+    // A whole-valued number has no trailing `.0`; a fractional one keeps its digits.
+    assert_eq!(text("10.0 & \"x\""), "10x");
+    assert_eq!(text("1.5 & \"x\""), "1.5x");
+    // A date prints as calendar text, not as its serial.
+    assert_eq!(text("DATE(2019, 3, 28) & \"\""), "3/28/2019 12:00:00 AM");
+    assert_eq!(text("COMBINEVALUES(\"-\", 10.0, \"Q1\")"), "10-Q1");
+}

@@ -26,7 +26,7 @@
 
 use std::collections::BTreeSet;
 
-use super::super::support::{date_parts, date_serial, date_value, date_weekday, days_in_month, edate, model_row_frame};
+use super::super::support::{date_parts, date_serial, date_value, date_weekday, days_in_month, derived_row_frame, edate};
 use super::*;
 
 /// Every function that this module answers for.
@@ -705,13 +705,13 @@ fn nonblank(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, first: bo
     let (table, column, column_name) = column_target(ev, target, name)?;
 
     let visible = visible_rows(ev, table, ctx);
-    let mut entries: Vec<(ScalarKey, Scalar, usize)> = Vec::new();
+    let mut entries: Vec<(ScalarKey, Scalar)> = Vec::new();
     let mut seen: BTreeSet<ScalarKey> = BTreeSet::new();
-    for (index, row) in visible.iter().enumerate() {
+    for row in &visible {
         if let Some(value) = row.get(column) {
             let key = ScalarKey::from(value);
             if seen.insert(key.clone()) {
-                entries.push((key, value.clone(), index));
+                entries.push((key, value.clone()));
             }
         }
     }
@@ -720,10 +720,11 @@ fn nonblank(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, first: bo
         entries.reverse();
     }
 
-    for (key, value, index) in entries {
+    for (key, value) in entries {
         let previous = ctx.filters.filters.insert((table, column), BTreeSet::from([key]));
-        let row = visible.get(index).cloned().unwrap_or_default();
-        ctx.rows.push(model_row_frame(ev, table, row));
+        // The row context is `VALUES(column)`, not one model row: a measure's context transition
+        // must keep every row that shares the candidate value.
+        ctx.rows.push(derived_row_frame(Some(table), vec![column_name.clone()], vec![value.clone()], vec![Some(column)]));
         let evaluated = ev.eval(expression, ctx);
         ctx.rows.pop();
         match previous {

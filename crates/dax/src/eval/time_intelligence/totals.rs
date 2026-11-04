@@ -297,16 +297,29 @@ fn parse_year_end(value: &Scalar) -> Option<f64> {
         Scalar::String(text) => {
             let text = text.trim();
             let parts: Vec<&str> = text.split(['-', '/']).collect();
+            // `TOTALYTD(..., "6/30")` names the month and day only; a leap year keeps `2/29`
+            // valid and the year is never read back.
+            if let [month, day] = parts.as_slice() {
+                let month: i64 = month.trim().parse().ok()?;
+                let day: i64 = day.trim().parse().ok()?;
+                if !(1..=12).contains(&month) || !(1..=31).contains(&day) || day > days_in_month(2000, month) {
+                    return None;
+                }
+                return Some(date_serial(2000, month, day, 0, 0, 0));
+            }
             let [first, second, third] = parts.as_slice() else {
                 return date_value(value);
             };
-            let first: i64 = first.parse().ok()?;
-            let second: i64 = second.parse().ok()?;
-            let third: i64 = third.parse().ok()?;
+            let first: i64 = first.trim().parse().ok()?;
+            let second: i64 = second.trim().parse().ok()?;
+            let third: i64 = third.trim().parse().ok()?;
             if first > 31 {
                 Some(date_serial(first, second, third, 0, 0, 0))
             } else if third > 31 {
                 Some(date_serial(third, first, second, 0, 0, 0))
+            } else if (1..=12).contains(&first) && (1..=31).contains(&second) && (0..=99).contains(&third) {
+                // `M/D/YY`: the year is ignored, as only the month and day matter.
+                Some(date_serial(2000, first, second, 0, 0, 0))
             } else {
                 None
             }

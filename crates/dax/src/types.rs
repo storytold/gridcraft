@@ -319,8 +319,9 @@ pub const fn literal_type(literal: &Literal) -> DataType {
 
 /// Infers the static type of an expression.
 ///
-/// Name references are [`InferredType::Unknown`] (they need the model), as are calls other than
-/// `TRUE()`, `FALSE()` and `BLANK()`. Incompatible known operands produce a [`TypeError`].
+/// Name references are [`InferredType::Unknown`] (they need the model). Catalogued calls take
+/// their documented [`crate::functions::ReturnType`]; unknown functions and `Any`/`Numeric`
+/// return types stay unknown. Incompatible known operands produce a [`TypeError`].
 pub fn infer_type(expr: &Expr) -> Result<InferredType, TypeError> {
     match &expr.kind {
         ExprKind::Literal(literal) => Ok(InferredType::Data(literal_type(literal))),
@@ -374,8 +375,8 @@ pub fn infer_type(expr: &Expr) -> Result<InferredType, TypeError> {
 
 /// The documented return type of a catalogued function, mapped onto the static type model.
 ///
-/// `Numeric` is mapped to Decimal because DAX has no separate "numeric" storage type and most
-/// numeric functions produce a double; `Any`/unknown signatures stay [`InferredType::Unknown`].
+/// `Numeric` stays [`InferredType::Unknown`] because its concrete type (Integer, Currency or
+/// Decimal) follows the inputs; `Any`/unknown signatures stay unknown as well.
 fn call_type(call: &Call) -> InferredType {
     if call.args.is_empty() {
         if call.name.text.eq_ignore_ascii_case("TRUE") || call.name.text.eq_ignore_ascii_case("FALSE") {
