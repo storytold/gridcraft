@@ -1805,6 +1805,34 @@ fn a_click_on_the_cell_already_selected_picks_it() {
 }
 
 #[test]
+fn ctrl_click_following_a_link_to_the_selected_cell_is_no_pick() {
+    let mut s = workbook();
+    s.execute("cell.set", json!({"cell": "C3", "input": "back"})).unwrap();
+    s.execute("insert.link", json!({"cell": "C3", "target": "Sheet1!B5"})).unwrap();
+    let mut h = harness(s);
+    open_goal_seek(&mut h);
+    let boxes = dialog_boxes(&h);
+    click_at(&mut h, boxes[2].center());
+    // Ctrl+click on the link's text follows it back to B5, the cell already selected.
+    let app = h.state();
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    let r = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll).cell_rect(sheet, CellRef::parse("C3").unwrap());
+    let pos = egui::pos2(r.left() + r.width() * 0.3, r.center().y);
+    h.state_mut().grid.last_click = None;
+    h.input_mut().events.extend([
+        Event::ModifiersChanged(Modifiers::COMMAND),
+        Event::PointerMoved(pos),
+        Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::COMMAND },
+        Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::COMMAND },
+    ]);
+    h.run_steps(3);
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    assert_eq!(selection(&h), (0, "B5".into()), "the link was followed");
+    assert_eq!(field(&h, "changing"), "", "following a link selects no cell, so the box keeps its text");
+}
+
+#[test]
 fn a_click_on_the_selected_cell_picks_into_a_collapsed_box_on_another_sheet() {
     let mut h = harness(two_sheets());
     open_goal_seek(&mut h);

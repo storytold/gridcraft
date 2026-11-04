@@ -476,8 +476,8 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         return;
     }
     app.grid.last_click = Some((c, now));
-    note_selecting_press(app);
     if mods.shift {
+        note_selecting_press(app);
         let _ = app.session.run("selection.set", json!({"range": RangeRef::new(sel.anchor, c).a1(), "active": sel.active.a1()}));
         if let Some(d) = app.session.active_mut() {
             d.selection.anchor = sel.anchor;
@@ -489,11 +489,14 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
             && !mods.alt
             && p.x < geo.cell_rect(sh, c).left() + geo.cell_rect(sh, c).width() * 0.8
         {
+            // Following a link selects nothing, so it is no pick of the cell already selected.
             follow_link(app, &h.target);
         } else {
+            note_selecting_press(app);
             select_ranges(app, RangeRef::cell(c), true, c);
         }
     } else {
+        note_selecting_press(app);
         let _ = app.session.run("selection.set", json!({"cell": c.a1()}));
         if primary_clicked && wb.styles.get(sh.style_id(c)).num_fmt.as_str() == "checkbox" {
             let _ = app.run("cell.toggleCheckbox", json!({"cell": c.a1()}));
