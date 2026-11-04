@@ -252,8 +252,9 @@ impl<'a> Binder<'a> {
                 // LOOKUP associated-columns behaviour (`INFERRED`).
                 "ORDERBY" if index % 2 == 1 => clause_keyword(arg, &["ASC", "DESC"]),
                 "INDEX" | "OFFSET" if index >= 2 => clause_keyword(arg, WINDOW_KEYWORDS),
-                "WINDOW" if matches!(index, 1 | 3) => clause_keyword(arg, &["ABS", "REL"]),
-                "WINDOW" if matches!(index, 6 | 9) => clause_keyword(arg, WINDOW_KEYWORDS),
+                // FromType/ToType are optional, so the blanks/reset slots move with the layout;
+                // `window_table` identifies each slot by its value.
+                "WINDOW" if index >= 1 => clause_keyword(arg, WINDOW_KEYWORDS),
                 "LOOKUP" | "LOOKUPWITHTOTALS" if index % 2 == 1 && index + 1 == call.args.len() => {
                     clause_keyword(arg, &["EXPLICIT", "INFERRED", "DEFAULT"])
                 }

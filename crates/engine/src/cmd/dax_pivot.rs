@@ -201,9 +201,15 @@ fn create_with(s: &mut Session, p: &Json, value_fields: &[String], package: bool
         if area.end.row >= gridcraft_core::MAX_ROWS || area.end.col >= gridcraft_core::MAX_COLS {
             return Err(other("The PivotTable report will not fit on the sheet. Choose a different location."));
         }
-        if !replace {
+        {
             let existing = cx.wb.sheet(sheet_index).ok_or_else(|| bad(CMD, format!("no sheet named `{sheet}`")))?;
-            if let Some((cell, _)) = existing.cells.iter_range(area).find(|(_, cell)| !cell.value.is_empty() || cell.formula.is_some()) {
+            // A replacement may overwrite the cells of its own previous report and no others; with
+            // nothing to replace, the whole area must be free.
+            let own =
+                |at: CellRef| replace && previous.as_ref().is_some_and(|(old_sheet, old)| old_sheet.eq_ignore_ascii_case(&sheet) && old.contains(at));
+            if let Some((cell, _)) =
+                existing.cells.iter_range(area).find(|(at, cell)| !own(*at) && (!cell.value.is_empty() || cell.formula.is_some()))
+            {
                 return Err(other(format!(
                     "There's already data in {}!{}. Do you want to replace it? (Run again with replace: true to overwrite.)",
                     crate::pivot::quote_sheet(&sheet),

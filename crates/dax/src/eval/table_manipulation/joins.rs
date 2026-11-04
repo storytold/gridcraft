@@ -527,15 +527,16 @@ fn substitute_with_index(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Conte
     let mut order_specs: Vec<(&BoundExpr, bool)> = Vec::new();
     let mut index = 3;
     while index < args.len() {
-        let ascending = match args.get(index + 1) {
-            Some(expr) => {
-                let value = ev.eval(expr, ctx)?;
-                value.to_bool().ok_or_else(|| EvalError::new("SUBSTITUTEWITHINDEX order must be Boolean"))?
-            }
-            None => true,
+        // Only a literal flag is an `Order`; anything else is the next order expression, so
+        // `SUBSTITUTEWITHINDEX(T, "Idx", I, I[A], I[B])` sorts by both columns.
+        let flag = match args.get(index + 1) {
+            Some(BoundExpr::Literal(Literal::Boolean(value))) => Some(*value),
+            Some(BoundExpr::Literal(Literal::Integer(value))) => Some(*value != 0),
+            Some(BoundExpr::Literal(Literal::Decimal(value))) => Some(*value != 0.0),
+            _ => None,
         };
-        order_specs.push((&args[index], ascending));
-        index += 2;
+        order_specs.push((&args[index], flag.unwrap_or(true)));
+        index += if flag.is_some() { 2 } else { 1 };
     }
 
     let mut order: Vec<usize> = (0..index_table.rows.len()).collect();

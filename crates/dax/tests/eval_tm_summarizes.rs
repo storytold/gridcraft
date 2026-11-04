@@ -520,3 +520,26 @@ fn topnperlevel_validates_its_arguments() {
     assert!(error("TOPNPERLEVEL(2, Items, Levels, Nodes, Bounds, \"Rank\")").contains("already exists"));
     assert!(error("TOPNPERLEVEL(2, Items, Items, Nodes, Bounds, \"Restart\")").contains("level number"));
 }
+
+#[test]
+fn summarize_evaluates_expressions_over_the_table_arguments_rows() {
+    // `FILTER` narrows the table argument; East's 5 and 10 rows survive (Amount > 5 removes only
+    // the 5), so East sums 10 + 30 = 40. Without the table rows in the group context the removed
+    // row would be counted too.
+    let table = eval_table("SUMMARIZE(FILTER(Sales, Sales[Amount] > 5), Sales[Region], \"Amount\", SUM(Sales[Amount]))").expect("summarize");
+    assert_eq!(
+        table.rows,
+        vec![vec![text("East"), money(40.0)], vec![text("North"), money(50.0)], vec![text("West"), money(20.0)], vec![Scalar::Blank, money(7.0)]]
+    );
+}
+
+#[test]
+fn summarize_columns_without_expressions_keeps_only_existing_combinations() {
+    // East never sells Hardware? Products map Widget -> Hardware; East sells Widget and Gadget, so
+    // East × Hardware exists, West × Devices does not: only real Region/Product pairs survive.
+    let table = eval_table("SUMMARIZECOLUMNS(Sales[Region], Sales[Product])").expect("summarize columns");
+    assert_columns(&table, &["Region", "Product"]);
+    assert!(!table.rows.iter().any(|row| row == &vec![text("West"), text("Gadget")]), "no invented pair: {:?}", table.rows);
+    assert!(table.rows.iter().any(|row| row == &vec![text("East"), text("Widget")]));
+    assert_eq!(table.rows.len(), 5, "one row per existing pair: {:?}", table.rows);
+}

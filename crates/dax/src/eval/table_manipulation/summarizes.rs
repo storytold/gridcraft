@@ -396,9 +396,9 @@ fn group_details(ev: &Evaluator<'_>, table: &TableValue, columns: &[ColumnRef]) 
 
 /// The subtotal rows of a rollup: for each level boundary from the finest to the coarsest, the
 /// rolled-up columns are blank and excluded from the measure filter context.
-fn subtotal_rows(details: &[(Vec<Scalar>, Vec<Vec<Scalar>>)], layout: &GroupLayout) -> Vec<(Vec<Scalar>, Vec<bool>)> {
+fn subtotal_rows(details: &[(Vec<Scalar>, Vec<Vec<Scalar>>)], layout: &GroupLayout) -> Vec<SummaryRow> {
     let count = layout.levels.len();
-    let mut rows: Vec<(Vec<Scalar>, Vec<bool>)> = Vec::new();
+    let mut rows: Vec<SummaryRow> = Vec::new();
     let mut seen: BTreeSet<(Vec<ScalarKey>, Vec<bool>)> = BTreeSet::new();
     for depth in 1..=count {
         let rolled: BTreeSet<usize> = layout.levels[count - depth..].iter().flat_map(|(start, len)| *start..start + len).collect();
@@ -421,23 +421,43 @@ fn subtotal_rows(details: &[(Vec<Scalar>, Vec<Vec<Scalar>>)], layout: &GroupLayo
             }
             let key = (subtotal.iter().map(ScalarKey::from).collect::<Vec<_>>(), active.clone());
             if seen.insert(key) {
-                rows.push((subtotal, active));
+                // A subtotal covers the union of its groups' source rows.
+                let covered: Vec<Vec<Scalar>> = details
+                    .iter()
+                    .filter(|(values, _)| active.iter().enumerate().all(|(index, on)| !on || values.get(index) == subtotal.get(index)))
+                    .flat_map(|(_, rows)| rows.iter().cloned())
+                    .collect();
+                rows.push((subtotal, active, covered));
             }
         }
     }
     rows
 }
 
-fn eval_in_group(
-    ev: &Evaluator<'_>,
-    ctx: &Context,
-    expression: &BoundExpr,
-    columns: &[ColumnRef],
-    values: &[Scalar],
-    active: &[bool],
-) -> Result<Scalar, EvalError> {
+/// One summarised row: its group values, which columns stay active, and the table-argument rows
+/// the group covers (a rollup subtotal covers the union of its groups).
+type SummaryRow = (Vec<Scalar>, Vec<bool>, Vec<Vec<Scalar>>);
+
+struct GroupContext<'a> {
+    columns: &'a [ColumnRef],
+    values: &'a [Scalar],
+    active: &'a [bool],
+    source: &'a TableValue,
+    rows: &'a [Vec<Scalar>],
+}
+
+fn eval_in_group(ev: &Evaluator<'_>, ctx: &Context, expression: &BoundExpr, group: &GroupContext<'_>) -> Result<Scalar, EvalError> {
     let mut filters = ctx.filters.clone();
-    for ((column, value), active) in columns.iter().zip(values).zip(active) {
+    // The table argument's own rows bound the group: `SUMMARIZE(FILTER(...), ...)` must not see
+    // rows the filter removed. Applying the group's rows as column filters keeps the lineage
+    // contract the evaluator already relies on.
+    if let Some(lineage) = group.source.lineage
+        && !group.rows.is_empty()
+    {
+        let rows = TableValue::new(group.source.columns.clone(), group.rows.to_vec()).with_lineage(lineage);
+        apply_table_values(ev, &rows, &mut filters);
+    }
+    for ((column, value), active) in group.columns.iter().zip(group.values).zip(group.active) {
         if *active {
             filters.set(column.table, column.column, [ScalarKey::from(value)]);
         }
@@ -457,20 +477,21 @@ fn summarize(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Resul
         return Ok(table.distinct_rows());
     }
     let details = group_details(ev, &table, &layout.columns)?;
-    let mut rows: Vec<(Vec<Scalar>, Vec<bool>)> = details.iter().map(|(values, _)| (values.clone(), vec![true; layout.columns.len()])).collect();
+    let mut rows: Vec<SummaryRow> =
+        details.iter().map(|(values, group_rows)| (values.clone(), vec![true; layout.columns.len()], group_rows.clone())).collect();
     if !layout.levels.is_empty() {
         rows.extend(subtotal_rows(&details, &layout));
     }
     rows.sort_by(|left, right| compare_values(&left.0, &right.0));
     let mut seen: BTreeSet<(Vec<ScalarKey>, Vec<bool>)> = BTreeSet::new();
-    rows.retain(|(values, active)| seen.insert((values.iter().map(ScalarKey::from).collect(), active.clone())));
+    rows.retain(|(values, active, _)| seen.insert((values.iter().map(ScalarKey::from).collect(), active.clone())));
 
     let mut columns: Vec<TableColumn> = layout.columns.iter().map(|column| TableColumn { name: column.name.clone() }).collect();
     for (name, _) in &parsed.expressions {
         columns.push(TableColumn { name: name.clone() });
     }
     let mut output = Vec::with_capacity(rows.len());
-    for (values, active) in rows {
+    for (values, active, group_rows) in rows {
         let mut row = values.clone();
         // Detail rows have every column active; a ROLLUP row deactivates the rolled-up columns.
         let rolled_up: Vec<(usize, usize)> =
@@ -478,7 +499,12 @@ fn summarize(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Resul
         {
             let _guard = SubtotalGuard::push(rolled_up);
             for (_, expression) in &parsed.expressions {
-                row.push(eval_in_group(ev, ctx, expression, &layout.columns, &values, &active)?);
+                row.push(eval_in_group(
+                    ev,
+                    ctx,
+                    expression,
+                    &GroupContext { columns: &layout.columns, values: &values, active: &active, source: &table, rows: &group_rows },
+                )?);
             }
         }
         output.push(row);
@@ -521,7 +547,12 @@ fn group_by(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result
         {
             let _guard = CurrentGroupGuard::push(current);
             for (_, expression) in &parsed.expressions {
-                row.push(eval_in_group(ev, ctx, expression, &columns, values, &active)?);
+                row.push(eval_in_group(
+                    ev,
+                    ctx,
+                    expression,
+                    &GroupContext { columns: &columns, values, active: &active, source: &table, rows: group_rows },
+                )?);
             }
         }
         rows.push(row);
@@ -830,7 +861,14 @@ fn summarize_columns(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) 
             }
             let judged: Vec<&Scalar> =
                 parsed.expressions.iter().zip(&expression_values).filter(|((_, _, ignore), _)| !*ignore).map(|(_, value)| value).collect();
-            if !judged.is_empty() && judged.iter().all(|value| value.is_blank()) {
+            if judged.is_empty() {
+                // No measure decides visibility: keep only combinations that exist in the data,
+                // which is the auto-exist rule for columns of one table.
+                let tables: BTreeSet<usize> = parsed.columns.iter().map(|column| column.table).collect();
+                if tables.iter().any(|table| ev.table(*table, &inner.filters).rows.is_empty()) {
+                    continue;
+                }
+            } else if judged.iter().all(|value| value.is_blank()) {
                 continue;
             }
             let mut row = Vec::with_capacity(columns.len());

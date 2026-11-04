@@ -338,6 +338,7 @@ fn clock_functions_track_the_system_clock() {
     };
     // Each function is a separate evaluation; retry if a local or UTC day boundary falls inside
     // the sampling window, so the floor comparisons cannot race midnight.
+    let mut attempts = 0;
     let (today, now, utc_today, utc_now) = loop {
         let before = clock();
         let (today, now) = (serial_of("TODAY()"), serial_of("NOW()"));
@@ -346,6 +347,8 @@ fn clock_functions_track_the_system_clock() {
         if before.floor() == after.floor() && today == now.floor() && utc_today == utc_now.floor() {
             break (today, now, utc_today, utc_now);
         }
+        attempts += 1;
+        assert!(attempts < 5, "clock functions disagree: TODAY {today}, NOW {now}, UTCTODAY {utc_today}, UTCNOW {utc_now}");
     };
     let expected = clock();
     assert!((utc_now - expected).abs() < 1.0 / 86_400.0, "UTCNOW follows the system clock");

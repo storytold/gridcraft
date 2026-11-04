@@ -210,7 +210,12 @@ fn datediff(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result
     let (end_year, end_month, _) = support::date_parts(end);
     // Sub-day intervals count boundaries, not elapsed time: floor each serial to the unit and
     // subtract, so `10:59:59` to `11:00:01` is one HOUR even though only two seconds passed.
-    let boundaries = |serial: f64, per_day: f64| (serial * per_day).floor();
+    // Snap to whole seconds first: serial construction can land a hair below an exact second,
+    // and flooring that would count one boundary too few.
+    let boundaries = |serial: f64, per_day: f64| {
+        let seconds = (serial * 86_400.0).round();
+        (seconds / (86_400.0 / per_day)).floor()
+    };
     // A week starts on Sunday; serial 1 (1900-01-01) is Excel's first Sunday, so week 0 starts
     // there and every seven days is another boundary.
     let week = |serial: f64| (serial.floor() - 1.0).div_euclid(7.0);
