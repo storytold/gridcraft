@@ -110,8 +110,12 @@ fn run(app: &mut SheetApp, id: &str, params: Json) -> Result<Json, String> {
 /// window afterwards unless the command itself switched windows.
 fn run_in(app: &mut SheetApp, target: gridcraft_engine::Target, id: &str, params: Json) -> Result<Json, String> {
     let guard = app.session.enter_target(target).map_err(|e| e.to_string())?;
+    // The engine window is the target now, so the per-window UI state has to follow it: UI
+    // commands such as `view.selectionPane` act on the displayed pane, not the originating one.
+    app.follow_active_window();
     let r = run(app, id, params);
     app.session.leave_target(guard);
+    app.follow_active_window();
     r
 }
 
@@ -272,6 +276,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("view.darkMode", "Dark Mode", ""),
                 ("view.theme", "Display Theme", ""),
                 ("view.animations", "Animations", "{on?: bool} (toggles without it) → {on}"),
+                ("view.selectionPane", "Selection Pane", "{on?: bool} (toggles without it) → {on}"),
                 ("options.autoComplete", "Enable AutoComplete for cell values", "{on?: bool} (toggles without it) → {on}"),
                 ("options.highlightActiveRow", "Highlight the active cell's row", "{on?: bool} (toggles without it) → {on}"),
                 ("view.interfaceScale", "Interface Size", "{percent: 75–200 | \"auto\"} (100 = auto; clamped)"),

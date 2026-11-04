@@ -7,6 +7,12 @@ pub(super) fn review(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.open_dialog("spelling", json!({}));
     }
+    let __k = big_button(ui, Icon::Book, "Thesaurus", "Thesaurus", false);
+    __k.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Thesaurus"));
+    control_keytip(app, ui, &__k, "review.thesaurus");
+    if __k.clicked() {
+        act(app, "review.thesaurus", json!({}));
+    }
     let __k = big_button(ui, Icon::Calc, "Workbook\nStatistics", "Workbook Statistics", false);
     control_keytip(app, ui, &__k, "statistics");
     if __k.clicked() {

@@ -94,6 +94,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go To Special…" => "Özel Git…",
         "PivotTable" => "Özet Tablo",
         "Recommended\nCharts" => "Önerilen\nGrafikler",
+        "Hierarchy" => "Hiyerarşi",
         "Table" => "Tablo",
         "Pictures" => "Resimler",
         "Shapes" => "Şekiller",

@@ -55,11 +55,11 @@ long `.xls` track, so about half parallelizes (≈30–50 wall-clock hours with 
   `SPECIAL_FUNCTIONS` in `crates/calc/src/eval.rs` (evaluator special forms), minus the test-only
   `ADD2`: **505**, all of them Excel names.
 - **Ribbon catalog:** `crates/engine/src/catalog.rs` (292 unique ids across 15 tabs) against the
-  313 command ids registered in `crates/engine/src/cmd/*.rs`, recomputed from source by script and
+  377 command ids registered in `crates/engine/src/cmd/*.rs`, recomputed from source by script and
   identical to the committed `parity-checklist.md`. The catalog is our own transcription of
   Excel's main ribbon tabs; it leaves out most contextual tabs (Picture Format, Shape Format,
   Header & Footer, Sparkline, Slicer, Timeline), the Developer and Help tabs and sub-menu items, so
-  89% of it is roughly **60–65% of Excel's full command surface** (estimated).
+  94.9% of it is roughly **60–65% of Excel's full command surface** (estimated).
 - **Depth and readiness:** source reading (the model types in `crates/model/src/features.rs`,
   readers and writers in `crates/xlsx/src`, the evaluator), 478 `#[test]` functions, and the
   issue tracker: 60 open issues and 50 open PRs on 2026-10-10, 82 issues filed in total.
