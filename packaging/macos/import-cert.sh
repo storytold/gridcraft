@@ -17,12 +17,18 @@ if [[ -z "${APPLE_CERTIFICATE:-}" ]]; then
   exit 0
 fi
 
-TMP="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
-KEYCHAIN="$TMP/gridcraft-signing.keychain-db"
-CERT="$TMP/gridcraft-signing.p12"
+BASE="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+# A private directory created exclusively, not predictable names in a possibly shared temp
+# root: another local user's symlink at `gridcraft-signing.p12` would otherwise select the
+# write target and capture the decoded certificate.
+WORK="$(mktemp -d "$BASE/gridcraft-signing.XXXXXXXX")"
+KEYCHAIN="$WORK/gridcraft-signing.keychain-db"
+CERT="$WORK/gridcraft-signing.p12"
 KC_PASS="${KEYCHAIN_PASSWORD:-$(openssl rand -hex 24)}"
 
-trap 'rm -f "$CERT"' EXIT
+# Remove only the decoded certificate: the keychain lives in the same directory and codesign
+# needs it until the workflow's "Remove temporary keychain" step deletes it.
+trap 'rm -f "${CERT:-}"' EXIT
 printf '%s' "$APPLE_CERTIFICATE" | base64 --decode >"$CERT"
 security create-keychain -p "$KC_PASS" "$KEYCHAIN"
 security set-keychain-settings -lut 21600 "$KEYCHAIN"

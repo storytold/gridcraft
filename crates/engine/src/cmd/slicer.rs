@@ -6,10 +6,12 @@
 //! `table.insertSlicer`) selects everything, i.e. applies no filter.
 
 use gridcraft_core::CellRef;
-use gridcraft_model::*;
+use gridcraft_model::{Anchor, AnchorMode, AutoFilter, FilterCriterion, Slicer, Workbook};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{
+    CommandSpec, EngineError, Result, Session, bad, bool_param, cell_param_on, cmd, edit, f64_param, has_doc, str_param, target_sheet, u32_param,
+};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -165,7 +167,7 @@ fn slicer_toggle(s: &mut Session, p: &Json) -> Result<Json> {
     let (idx, id) = find_slicer(s, p)?;
     let value = str_param(p, "value").ok_or_else(|| bad("slicer.toggle", "missing `value`"))?.to_string();
     let multi = bool_param(p, "multi").unwrap_or(false);
-    let sheet = s.doc()?.wb.active_sheet;
+    let sheet = s.doc()?.wb.active_sheet();
     let (table, column, current) = {
         let d = s.doc()?;
         let sl = d.wb.active().and_then(|sh| sh.slicers.get(idx)).ok_or_else(|| bad("slicer.toggle", "no slicer"))?;
@@ -204,7 +206,7 @@ fn slicer_toggle(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn slicer_select_all(s: &mut Session, p: &Json) -> Result<Json> {
     let (idx, id) = find_slicer(s, p)?;
-    let sheet = s.doc()?.wb.active_sheet;
+    let sheet = s.doc()?.wb.active_sheet();
     edit(s, |cx| {
         if let Some(sl) = cx.sheet_mut(sheet)?.slicers.get_mut(idx) {
             sl.selected = None;
@@ -217,7 +219,7 @@ fn slicer_select_all(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn slicer_delete(s: &mut Session, p: &Json) -> Result<Json> {
     let (idx, id) = find_slicer(s, p)?;
-    let sheet = s.doc()?.wb.active_sheet;
+    let sheet = s.doc()?.wb.active_sheet();
     // Absolute column of the slicer, so its filter criterion can be removed too.
     let abs_col = s.doc().ok().and_then(|d| {
         let sh = d.wb.active()?;
