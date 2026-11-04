@@ -339,11 +339,11 @@ fn numbervalue(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     if body.is_empty() {
         return num_val(0.0);
     }
-    let mut pct = 0;
-    while let Some(b) = body.strip_suffix('%') {
-        body = b.to_string();
-        pct += 1;
-    }
+    // Count the trailing percent signs and cut them off in place: copying the rest once per sign
+    // made a long run of them quadratic.
+    let kept = body.trim_end_matches('%').len();
+    let pct = body.len() - kept;
+    body.truncate(kept);
     let mut seen_dec = false;
     let mut out = String::new();
     for c in body.chars() {
@@ -1083,6 +1083,15 @@ mod tests {
     }
 
     use crate::util::testutil::*;
+
+    /// Trailing percent signs each divide by 100, and a long run of them is cut off in one pass.
+    #[test]
+    fn numbervalue_percent_signs() {
+        close(ev("NUMBERVALUE", vec![t("5%%")]), 0.0005);
+        close(ev("NUMBERVALUE", vec![t("1,5%"), t(","), t(".")]), 0.015);
+        let many = format!("1{}", "%".repeat(32_000));
+        close(ev("NUMBERVALUE", vec![t(&many)]), 0.0);
+    }
 
     #[test]
     fn bahttext() {
