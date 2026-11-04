@@ -117,6 +117,13 @@ fn turkish_input_preserves_defined_and_local_names() {
         ("LAMBDA(TOPLA;TOPLA(2))(LAMBDA(x;x+1))", "LAMBDA(TOPLA,TOPLA(2))(LAMBDA(x,x+1))"),
         ("LET(YANLIŞ;7;YANLIŞ)+YANLIŞ", "LET(YANLIŞ,7,YANLIŞ)+FALSE"),
         ("LET(YANLIŞ;7;LAMBDA(x;YANLIŞ+x)(1))", "LET(YANLIŞ,7,LAMBDA(x,YANLIŞ+x)(1))"),
+        ("LET(doğru;1;doğru+DOĞRU)", "LET(doğru,1,doğru+DOĞRU)"),
+        ("LET(DOĞRU;1;doğru)", "LET(DOĞRU,1,doğru)"),
+        ("LET(indis;LAMBDA(x;x+1);İNDİS(2))", "LET(indis,LAMBDA(x,x+1),İNDİS(2))"),
+        ("LET(ındıs;LAMBDA(x;x+1);indis(2))", "LET(ındıs,LAMBDA(x,x+1),INDIS(2))"),
+        ("LAMBDA(ı;I+1)(2)", "LAMBDA(ı,I+1)(2)"),
+        ("LET(DOĞRU;1;LET(DOĞRU;2;DOĞRU))+DOĞRU", "LET(DOĞRU,1,LET(DOĞRU,2,DOĞRU))+TRUE"),
+        ("LET(İ;10;i)", "LET(İ,10,i)"),
     ] {
         assert_eq!(input(src), expected, "{src}");
     }
