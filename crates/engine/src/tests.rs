@@ -1826,6 +1826,54 @@ fn table_header_row_toggles_and_restores_filter_arrows() {
 }
 
 #[test]
+fn the_header_row_toggle_is_one_undo_step() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["H"], ["a"], ["b"]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:A3", "header": true, "name": "T"})).unwrap();
+    s.execute("selection.set", json!({"cell": "A1"})).unwrap();
+
+    // Header Row off, then on over a taken row: Excel inserts the header's cells, one command.
+    s.execute("table.headerRow", json!({"table": "T", "on": false})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().tables[0].range.a1(), "A2:A3");
+    s.execute("cell.set", json!({"cell": "A1", "input": "keep me"})).unwrap();
+    s.execute("table.headerRow", json!({"table": "T", "on": true})).unwrap();
+    {
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        let t = &sh.tables[0];
+        assert!(t.header_row);
+        assert!(t.filter_button, "the header brings the filter buttons back");
+        assert_eq!(t.range.a1(), "A2:A4", "the header's cells are inserted over the taken row");
+        assert_eq!(sh.value(CellRef::new(0, 0)), Value::text("keep me"));
+        assert_eq!(sh.value(CellRef::new(1, 0)), Value::text("H"), "the column name is written back");
+    }
+
+    // One undo takes the inserted cells back out and turns the header off again.
+    s.execute("edit.undo", json!({})).unwrap();
+    {
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        assert!(!sh.tables[0].header_row);
+        assert_eq!(sh.tables[0].range.a1(), "A2:A3");
+        assert_eq!(sh.value(CellRef::new(0, 0)), Value::text("keep me"));
+    }
+
+    // The value typed above is a step of its own, and the header toggle before it one more.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)).is_empty());
+    s.execute("edit.undo", json!({})).unwrap();
+    {
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        let t = &sh.tables[0];
+        assert!(t.header_row);
+        assert!(t.filter_button);
+        assert_eq!(t.range.a1(), "A1:A3");
+        assert_eq!(sh.value(CellRef::new(0, 0)), Value::text("H"));
+    }
+}
+
+#[test]
 fn table_header_off_on_another_sheet_keeps_the_active_sheets_selection() {
     let mut s = s();
     s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
