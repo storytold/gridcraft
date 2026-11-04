@@ -517,14 +517,6 @@ fn form(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, o
 /// and deliberately absent here.
 fn check_performance(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mut bool) {
     let lang = crate::i18n::current(ui.ctx());
-    // The pane outlives `window.activate`: when another workbook comes to the front, re-run the
-    // check so the report and both Optimize actions describe the workbook they would act on, not
-    // the one now behind it. This is one scan per switch, the same work opening the pane does.
-    let active = app.session.active().map(|w| w.uid);
-    if d.document != active {
-        d.result = Some(app.run("review.checkPerformance", json!({})).unwrap_or_else(|e| json!({"error": crate::clean_error(&e)})));
-        d.document = active;
-    }
     let report = d.result.clone().unwrap_or(Json::Null);
     if let Some(error) = report.get("error").and_then(Json::as_str) {
         ui.label(error);

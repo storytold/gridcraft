@@ -720,9 +720,9 @@ fn check_performance_dialog_reports_optimizable_cells_and_goes_to_one() {
 }
 
 #[test]
-/// The pane outlives `window.activate`: when another workbook comes to the front its report, Go To
-/// and Optimize actions must describe that workbook, never the one that went behind.
-fn check_performance_follows_the_active_workbook() {
+/// A pane belongs to the window it was opened in: switching to another workbook's window leaves
+/// it there, reporting and optimizing its own workbook, never the one in front.
+fn check_performance_stays_with_its_workbook_window() {
     let mut s = blank();
     s.execute("home.bold", json!({"range": "B2"})).unwrap();
     let mut h = harness(s);
@@ -733,8 +733,12 @@ fn check_performance_follows_the_active_workbook() {
     h.state_mut().run("file.new", json!({})).unwrap();
     h.state_mut().run("home.bold", json!({"range": "C3"})).unwrap();
     h.run_steps(2);
-    let report = h.state().dialog.as_ref().expect("the pane stays open across window switches").result.clone().unwrap();
-    assert_eq!(report["cells"][0]["cell"], "C3", "the report describes the workbook now in front");
+    assert!(h.state().dialog.is_none(), "another window starts without the pane");
+
+    h.state_mut().run("window.activate", json!({"index": 0})).unwrap();
+    h.run_steps(2);
+    let report = h.state().dialog.as_ref().expect("the pane stayed in its window").result.clone().unwrap();
+    assert_eq!(report["cells"][0]["cell"], "B2", "the report describes its own workbook");
     assert_eq!(report["optimizableCells"].as_u64(), Some(1));
 
     h.get_by_label("Optimize all").click();
@@ -744,8 +748,8 @@ fn check_performance_follows_the_active_workbook() {
         h.state_mut().run("window.activate", json!({"index": doc})).unwrap();
         h.state_mut().run("cell.get", json!({"cell": cell})).unwrap()["style"]["font"]["bold"].clone()
     };
-    assert_eq!(bold(&mut h, 1, "C3"), json!(false), "the workbook in front was optimized");
-    assert_eq!(bold(&mut h, 0, "B2"), json!(true), "the workbook behind it keeps its formatting");
+    assert_eq!(bold(&mut h, 0, "B2"), json!(false), "the workbook the pane belongs to was optimized");
+    assert_eq!(bold(&mut h, 1, "C3"), json!(true), "the other workbook keeps its formatting");
 }
 
 #[test]

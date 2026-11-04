@@ -65,10 +65,6 @@ pub struct Dialog {
     pub search: String,
     pub list_index: usize,
     pub result: Option<Json>,
-    /// The workbook (`Session::active().uid`) `result` describes, when the pane's buttons run
-    /// commands against the active workbook. `window.activate` can put another workbook in front
-    /// while the dialog stays open, so the pane compares this with the active one before acting.
-    pub document: Option<u64>,
     /// "Show password" is ticked: password fields show their text.
     pub show_password: bool,
     /// The first text or number field still has to take keyboard focus (set when a form opens,
@@ -223,7 +219,6 @@ impl Dialog {
             search: String::new(),
             list_index: 0,
             result: None,
-            document: None,
             show_password: false,
             focus_first_field: true,
             picture_inbox: None,
@@ -248,7 +243,6 @@ impl Dialog {
             search: String::new(),
             list_index: 0,
             result: None,
-            document: None,
             show_password: false,
             focus_first_field: false,
             picture_inbox: None,
@@ -1061,7 +1055,6 @@ impl Dialog {
             "checkPerformance" => {
                 let mut d = Dialog::custom("checkPerformance", "Workbook Performance", json!({}));
                 d.result = Some(app.session.run("review.checkPerformance", json!({})).unwrap_or_else(|e| json!({"error": crate::clean_error(&e)})));
-                d.document = app.session.active().map(|w| w.uid);
                 d
             }
             "errorChecking" => {
