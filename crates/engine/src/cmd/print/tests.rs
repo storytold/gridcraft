@@ -35,6 +35,17 @@ fn flipped_presets_are_mirrored_when_printed() {
 }
 
 #[test]
+fn a_converted_flat_line_reaches_the_printer() {
+    use super::objects::overlaps_page;
+    // Ink to Shape gives a horizontal stroke a zero-height box and a vertical one a zero-width
+    // box; the block from (0, 0) to (100, 100) holds both, so neither is skipped as invisible.
+    assert!(overlaps_page((10.0, 50.0, 80.0, 0.0), (0.0, 0.0, 100.0, 100.0)), "a horizontal line has no height but is on the page");
+    assert!(overlaps_page((50.0, 10.0, 0.0, 80.0), (0.0, 0.0, 100.0, 100.0)), "a vertical line has no width but is on the page");
+    // A box clear of the block is still skipped.
+    assert!(!overlaps_page((200.0, 50.0, 80.0, 0.0), (0.0, 0.0, 100.0, 100.0)));
+}
+
+#[test]
 fn the_pentagon_preset_fills_its_box() {
     use super::objects::preset_outline;
     // Ink to Shape anchors a converted pentagon to the recognised corners' box, so the preset has

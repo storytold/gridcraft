@@ -66,6 +66,14 @@ fn decode_image(data: &[u8], max_w: u32, max_h: u32) -> Option<(Vec<u8>, u32, u3
     Some((rgba.into_raw(), pw, ph))
 }
 
+/// Whether a box can touch the printed block `(x0, y0, x1, y1)`. A line or an arrow has no
+/// extent on the axis it runs along, so a zero width or height is drawn rather than skipped; the
+/// bounds only have to touch.
+pub(super) fn overlaps_page(r: (f64, f64, f64, f64), page: (f64, f64, f64, f64)) -> bool {
+    let (x0, y0, x1, y1) = page;
+    r.2 >= 0.0 && r.3 >= 0.0 && r.0 <= x1 && r.0 + r.2 >= x0 && r.1 <= y1 && r.1 + r.3 >= y0
+}
+
 /// Draws charts, pictures, shapes and sparklines overlapping the body block of a page.
 /// `pics` memoizes decoded pictures for the whole render (one page at a time draws each
 /// picture again, but the decode happens once).
@@ -75,7 +83,7 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
     let (sx1, sy1) = (sh.col_left(block.end.col.saturating_add(1)), sh.row_top(block.end.row.saturating_add(1)));
     let (bx, by) = (b.xs.first().copied().unwrap_or(0.0), b.ys.first().copied().unwrap_or(0.0));
     let (bw, bh) = (b.xs.last().copied().unwrap_or(bx) - bx, b.ys.last().copied().unwrap_or(by) - by);
-    let visible = |r: (f64, f64, f64, f64)| r.2 > 0.0 && r.3 > 0.0 && r.0 < sx1 && r.0 + r.2 > sx0 && r.1 < sy1 && r.1 + r.3 > sy0;
+    let visible = |r: (f64, f64, f64, f64)| overlaps_page(r, (sx0, sy0, sx1, sy1));
     let place = |r: (f64, f64, f64, f64)| (bx + ((r.0 - sx0) as f32) * b.k, by + ((r.1 - sy0) as f32) * b.k, r.2 as f32 * b.k, r.3 as f32 * b.k);
     pg.save();
     pg.clip_rect(bx, by, bw, bh);
