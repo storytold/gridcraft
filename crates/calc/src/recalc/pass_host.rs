@@ -541,7 +541,8 @@ impl Host for PassHost<'_> {
         }
         // Deciding looks through the unfinished formulas twice. Reads pay for those looks, so with
         // many of them and many blocks the looks can't cost more than the reads they try to save.
-        let look = 2 * (self.pending.len() + self.in_progress.len() + self.waiting.len()) as u64;
+        // A `HashSet` is walked by its capacity, which doesn't shrink as formulas finish.
+        let look = 2 * (self.pending.capacity() + self.in_progress.capacity() + self.waiting.capacity()) as u64;
         if look > self.block_look_budget {
             return None;
         }
