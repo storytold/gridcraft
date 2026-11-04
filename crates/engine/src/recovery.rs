@@ -118,6 +118,7 @@ impl Session {
         }
     }
 
+    /// `file.recover`'s answer: whether recovery is on, the listed copies and the last error.
     fn recovery_state(&self) -> Json {
         #[cfg(not(target_arch = "wasm32"))]
         let (enabled, error) = match &self.recovery {
@@ -154,22 +155,26 @@ impl Session {
         let d = self.doc()?;
         Ok(json!({"index": i, "title": d.display_title(), "warnings": warnings}))
     }
+    /// The web build keeps no recovery copies.
     #[cfg(target_arch = "wasm32")]
     fn restore_copy(&mut self, _id: &str) -> Result<Json> {
         Err(disabled())
     }
 
+    /// `file.recover {discard}`: deletes a listed copy (see `desktop::Recovery::discard`).
     #[cfg(not(target_arch = "wasm32"))]
     fn discard_copy(&mut self, id: &str) -> Result<()> {
         let r = self.recovery.as_mut().ok_or_else(disabled)?;
         r.discard(id).map_err(crate::EngineError::Other)
     }
+    /// The web build keeps no recovery copies.
     #[cfg(target_arch = "wasm32")]
     fn discard_copy(&mut self, _id: &str) -> Result<()> {
         Err(disabled())
     }
 }
 
+/// The error `file.recover` gives where recovery is off (headless sessions, the web build).
 fn disabled() -> crate::EngineError {
     crate::EngineError::Disabled("file.recover".into(), "recovery copies are kept by the desktop app only".into())
 }
@@ -262,6 +267,7 @@ pub(crate) mod desktop {
     }
 
     impl Recovery {
+        /// Creates the recovery folder, starts the worker and asks it for the copies an earlier run left.
         pub(crate) fn start(root: PathBuf) -> Result<Recovery, String> {
             private_dir(&root).map_err(|e| format!("recovery folder {}: {e}", root.display()))?;
             let (jobs, rx) = mpsc::channel();
@@ -288,21 +294,26 @@ pub(crate) mod desktop {
             Ok(r)
         }
 
+        /// Copies an earlier run left, newest first.
         pub(crate) fn copies(&self) -> &[RecoveryInfo] {
             &self.copies
         }
+        /// Whether the first scan of the recovery folder has finished.
         pub(crate) fn ready(&self) -> bool {
             self.ready
         }
+        /// The last thing that went wrong, for `file.recover`.
         pub(crate) fn error(&self) -> Option<&str> {
             self.error.as_deref()
         }
 
+        /// Asks the worker to delete record `id` and tracks it until the worker confirms.
         fn queue_discard(&mut self, id: String) {
             self.discarding.insert(id.clone(), None);
             self.send(Job::Discard(id));
         }
 
+        /// Hands a job to the worker and counts it until its answer arrives.
         fn send(&mut self, job: Job) {
             match self.jobs.as_ref().map(|j| j.send(job)) {
                 Some(Ok(())) => self.pending += 1,
@@ -522,10 +533,12 @@ pub(crate) mod desktop {
         d.is_dirty() && !d.from_encrypted
     }
 
+    /// Whether a folder name is a record id this module made (so nothing else is touched).
     fn id_ok(id: &str) -> bool {
         id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
     }
 
+    /// Seconds since 1970, for a copy's `savedAt`.
     fn now_secs() -> u64 {
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
     }
@@ -669,6 +682,7 @@ pub(crate) mod desktop {
         Ok(())
     }
 
+    /// Reads a recovery file, refusing one larger than `cap` (recovery files are input like any other).
     fn read_capped(path: &Path, cap: u64) -> Result<Vec<u8>, String> {
         let f = File::open(path).map_err(|e| e.to_string())?;
         if f.metadata().map_err(|e| e.to_string())?.len() > cap {
@@ -691,6 +705,7 @@ pub(crate) mod desktop {
         b.create(path)
     }
 
+    /// Creates (or empties) a file only this user can read.
     fn private_file(path: &Path) -> std::io::Result<File> {
         let mut o = fs::OpenOptions::new();
         o.create(true).truncate(true).write(true);
@@ -744,6 +759,7 @@ mod tests {
         s
     }
 
+    /// Two unsaved edits in the active workbook.
     fn type_candy(s: &mut Session) {
         s.execute("cell.set", json!({"cell": "A1", "input": "Peanut butter cups"})).unwrap();
         s.execute("cell.set", json!({"cell": "B1", "input": "12"})).unwrap();
