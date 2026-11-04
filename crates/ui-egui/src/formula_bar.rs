@@ -770,7 +770,7 @@ fn editor_arrow_keys(
     };
     let rtl = app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.right_to_left);
     let dc = if rtl { -dc } else { dc };
-    if ed.can_point() && app.session.prefs.formula_bar {
+    if ed.can_point() {
         // Ctrl+arrow (⌘arrow) jumps the pointed cell to the edge of its data, Ctrl+Shift+arrow
         // extends the pointed range there, as the same keys do on the selection.
         ui.input_mut(|i| {

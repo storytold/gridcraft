@@ -1090,7 +1090,7 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
     let Some(sheet) = d.wb.active() else { return };
     let active_sheet = d.wb.active_sheet();
     // After switching sheets in point mode, start from that sheet's selected cell.
-    let from = ed.point_cell.unwrap_or_else(|| if ed.sheet == active_sheet { ed.cell } else { d.selection.active });
+    let from = ed.point_cell.unwrap_or(if ed.sheet == active_sheet { ed.cell } else { d.selection.active });
     let to = if jump { gridcraft_engine::selection::jump(sheet, from, dr.signum(), dc.signum()) } else { from.offset_clamped(dr, dc) };
     let anchor = if extend {
         // The anchor is the corner opposite the moving end: the written range is normalized, so
