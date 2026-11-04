@@ -267,13 +267,13 @@ pub(crate) fn aggregate_values(name: &str, values: &[Scalar]) -> Result<Scalar, 
         "SUM" => Ok(if numbers.is_empty() { Scalar::Blank } else { Scalar::Decimal(numbers.iter().sum()) }),
         "AVERAGE" => Ok(if numbers.is_empty() { Scalar::Blank } else { Scalar::Decimal(numbers.iter().sum::<f64>() / numbers.len() as f64) }),
         "AVERAGEA" => {
-            // Blank cells are empty cells, not zeroes: DAX (and Excel) exclude them from the
-            // denominator. Non-numeric text and logical values count as 0.
-            let present: Vec<&Scalar> = values.iter().filter(|value| !value.is_blank()).collect();
-            if present.is_empty() {
+            // Every row counts: text (numeric or not) counts as 0, TRUE/FALSE as 1/0, and a BLANK
+            // cell as 0, so it stays in the denominator — Microsoft's example averages 1, 20,
+            // "n/a", BLANK and TRUE as 22/5. A column with no rows at all is BLANK.
+            if values.is_empty() {
                 return Ok(Scalar::Blank);
             }
-            let sum: f64 = present
+            let sum: f64 = values
                 .iter()
                 .map(|value| match value {
                     Scalar::String(text) => text.trim().parse().unwrap_or(0.0),
@@ -281,7 +281,7 @@ pub(crate) fn aggregate_values(name: &str, values: &[Scalar]) -> Result<Scalar, 
                     other => other.to_number().unwrap_or(0.0),
                 })
                 .sum();
-            Ok(Scalar::Decimal(sum / present.len() as f64))
+            Ok(Scalar::Decimal(sum / values.len() as f64))
         }
         "PRODUCT" => Ok(if numbers.is_empty() { Scalar::Blank } else { Scalar::Decimal(numbers.iter().product()) }),
         "MIN" => Ok(numbers.iter().copied().reduce(f64::min).map(Scalar::Decimal).unwrap_or(Scalar::Blank)),

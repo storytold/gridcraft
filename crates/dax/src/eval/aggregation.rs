@@ -7,8 +7,9 @@
 //!
 //! All four read a column under the current filter context and delegate the arithmetic to
 //! [`support::aggregate_values`]. `AVERAGEA` uses every row in the denominator and coerces
-//! BLANK to 0 (Microsoft's DAX example averages 1, 20, "n/a", BLANK, TRUE as 22/5), while
-//! `DISTINCTCOUNTNOBLANK` drops BLANK before counting distinct values.
+//! BLANK to 0 (Microsoft's DAX example averages 1, 20, "n/a", BLANK, TRUE as 22/5), so only a
+//! column with no rows at all is BLANK; `DISTINCTCOUNTNOBLANK` drops BLANK before counting
+//! distinct values.
 #![allow(unused_imports)]
 
 use super::*;

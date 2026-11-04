@@ -226,6 +226,54 @@ fn relatedtable_returns_rows_from_the_many_side() {
 }
 
 #[test]
+fn calculate_performs_context_transition() {
+    let mut model = DataModel {
+        tables: vec![
+            ModelTable {
+                name: "Sales".into(),
+                columns: vec![
+                    ModelColumn { name: "Amount".into(), data_type: Some("Double".into()) },
+                    ModelColumn { name: "Product".into(), data_type: Some("String".into()) },
+                ],
+                rows: vec![
+                    vec![Scalar::Integer(10), Scalar::String("A".into())],
+                    vec![Scalar::Integer(20), Scalar::String("A".into())],
+                    vec![Scalar::Integer(30), Scalar::String("B".into())],
+                ],
+            },
+            ModelTable {
+                name: "Products".into(),
+                columns: vec![ModelColumn { name: "Product".into(), data_type: Some("String".into()) }],
+                rows: vec![vec![Scalar::String("A".into())], vec![Scalar::String("B".into())]],
+            },
+        ],
+        relationships: vec![Relationship {
+            from_table: "Sales".into(),
+            from_column: "Product".into(),
+            to_table: "Products".into(),
+            to_column: "Product".into(),
+            bidirectional: false,
+            inactive: false,
+        }],
+        measures: Vec::new(),
+    };
+    model.parse_formulas().expect("model parses");
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    // An explicit `CALCULATE` in a row context transitions that row, the way a measure
+    // reference does: A reports its own 30 and B its 30, not the 60 grand total.
+    for (formula, expected) in [("SUMX(Products, CALCULATE(SUM(Sales[Amount])))", 60.0), ("SUMX(Sales, CALCULATE(SUM(Sales[Amount])))", 60.0)] {
+        let expr = parse_expression(formula).expect("parse");
+        let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+        assert_eq!(evaluator.evaluate(&bound).expect("calculate"), Scalar::Decimal(expected), "{formula}");
+    }
+    let expr = parse_expression("ADDCOLUMNS(Products, \"Total\", CALCULATE(SUM(Sales[Amount])))").expect("parse");
+    let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+    let table = evaluator.evaluate_table(&bound).expect("addcolumns");
+    let totals: Vec<Scalar> = table.rows.iter().map(|row| row[1].clone()).collect();
+    assert_eq!(totals, vec![Scalar::Decimal(30.0), Scalar::Decimal(30.0)], "each row reports its own product, not the total");
+}
+
+#[test]
 fn filters_propagate_across_several_relationships() {
     let mut model = DataModel {
         tables: vec![

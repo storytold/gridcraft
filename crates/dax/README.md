@@ -315,7 +315,7 @@ returns, what its arguments mean and which edge case it handles, in the project'
 | --- | --- | --- | --- | --- | --- | --- |
 | `APPROXIMATEDISTINCTCOUNT` | 1 | no | — | BLANK | no | HyperLogLog / DirectQuery pushdown; column reference only. |
 | `AVERAGE` | 1 | no | `AVERAGEX` | unspecified | yes | Ignores blanks, includes zero; sources disagree on the empty/all-blank result. |
-| `AVERAGEA` | 1 | no | — | unspecified | yes | Booleans are 1/0 and any text is 0; dax.guide marks it not recommended. |
+| `AVERAGEA` | 1 | no | — | unspecified | yes | Booleans are 1/0, any text is 0 and a BLANK cell is 0 in the denominator (Microsoft's 22/5 example); dax.guide marks it not recommended. |
 | `AVERAGEX` | 2 | yes | — | BLANK | yes | Row context; blanks ignored, zeros included; empty set observed BLANK. |
 | `COUNT` | 1 | no | `COUNTX` | BLANK | yes | Counts numbers, dates and strings; empty strings count, booleans do not. |
 | `COUNTA` | 1 | no | `COUNTAX` | BLANK | yes | Counts non-blank values including booleans. |

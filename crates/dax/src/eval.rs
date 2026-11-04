@@ -340,22 +340,30 @@ impl<'a> Evaluator<'a> {
         }
     }
 
-    pub(crate) fn eval_measure(&self, index: usize, ctx: &mut Context) -> Result<Scalar, EvalError> {
-        let expr = self.measures.get(index).ok_or_else(|| EvalError::new(format!("measure index {index} is out of range")))?;
+    /// DAX context transition: the current row context becomes an equivalent filter context.
+    ///
+    /// `CALCULATE`/`CALCULATETABLE` and measure references both start from this context: the
+    /// innermost row frame's model columns become single-value filters and the caller then
+    /// evaluates with the row frames cleared. Computed columns (`ADDCOLUMNS`/`SELECTCOLUMNS`)
+    /// carry no model column, so they contribute no filter.
+    pub(crate) fn transitioned_filters(&self, ctx: &Context) -> FilterContext {
         let mut filters = ctx.filters.clone();
         if let Some(frame) = ctx.rows.last()
             && let Some(table) = frame.lineage
             && self.model.tables.get(table).is_some()
         {
-            // Context transition: the current row becomes an equivalent filter over the model
-            // columns it carries. Computed columns (ADDCOLUMNS/SELECTCOLUMNS) have no model
-            // column and are skipped.
             for (index, column) in frame.model_columns.iter().enumerate() {
                 if let (Some(column), Some(value)) = (column, frame.values.get(index)) {
                     filters.set(table, *column, [ScalarKey::from(value)]);
                 }
             }
         }
+        filters
+    }
+
+    pub(crate) fn eval_measure(&self, index: usize, ctx: &mut Context) -> Result<Scalar, EvalError> {
+        let expr = self.measures.get(index).ok_or_else(|| EvalError::new(format!("measure index {index} is out of range")))?;
+        let filters = self.transitioned_filters(ctx);
         let mut inner = Context { filters, rows: Vec::new(), vars: Vec::new() };
         self.eval(expr, &mut inner)
     }
@@ -693,11 +701,14 @@ impl<'a> Evaluator<'a> {
                 return Ok(Scalar::Boolean(!value.to_bool().unwrap_or(false)));
             }
             "CALCULATE" => {
-                let mut filters = ctx.filters.clone();
+                // Context transition comes first: an explicit `CALCULATE` inside a row context
+                // reports that row, the way a measure reference does; the filter arguments then
+                // override the transitioned filters, and the row frames are gone.
+                let mut filters = self.transitioned_filters(ctx);
                 for arg in &args[1..] {
                     self.apply_filter(arg, &mut filters, ctx)?;
                 }
-                let mut inner = Context { filters, rows: ctx.rows.clone(), vars: ctx.vars.clone() };
+                let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone() };
                 return self.eval(&args[0], &mut inner);
             }
             "CALCULATETABLE" => return Err(EvalError::new("CALCULATETABLE returns a table and cannot be used as a scalar")),
@@ -814,11 +825,11 @@ impl<'a> Evaluator<'a> {
                 Ok(TableValue::new(table.columns, rows).with_lineage_if(table.lineage))
             }
             "CALCULATETABLE" => {
-                let mut filters = ctx.filters.clone();
+                let mut filters = self.transitioned_filters(ctx);
                 for arg in &args[1..] {
                     self.apply_filter(arg, &mut filters, ctx)?;
                 }
-                let mut inner = Context { filters, rows: ctx.rows.clone(), vars: ctx.vars.clone() };
+                let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone() };
                 self.eval_table(&args[0], &mut inner)
             }
             "RELATEDTABLE" => {
@@ -1632,6 +1643,38 @@ fn binary(op: BinaryOp, left: Scalar, right: Scalar) -> Result<Scalar, EvalError
     }
 }
 
+/// Locates `needle` in `haystack` from character position `start` (0-based), returning a 0-based
+/// character index.
+///
+/// DAX positions count characters, not bytes, so a byte offset would be wrong for any non-ASCII
+/// text. `SEARCH` ignores case; folding can expand one character into several (`İ`), so the match
+/// maps back to the index of the character it started in.
+fn find_text(haystack: &str, needle: &str, start: usize, insensitive: bool) -> Option<usize> {
+    let chars: Vec<char> = haystack.chars().collect();
+    if start > chars.len() {
+        return None;
+    }
+    if !insensitive {
+        let needle: Vec<char> = needle.chars().collect();
+        if needle.is_empty() {
+            return Some(start);
+        }
+        return chars[start..].windows(needle.len()).position(|window| window == needle.as_slice()).map(|position| position + start);
+    }
+    let folded: Vec<(usize, char)> = chars.iter().enumerate().flat_map(|(index, c)| c.to_lowercase().map(move |lower| (index, lower))).collect();
+    let target: Vec<char> = needle.chars().flat_map(char::to_lowercase).collect();
+    if target.is_empty() {
+        return Some(start);
+    }
+    let span = target.len();
+    if span > folded.len() {
+        return None;
+    }
+    (0..=folded.len() - span)
+        .find(|&position| folded[position].0 >= start && folded[position..position + span].iter().map(|(_, lower)| *lower).eq(target.iter().copied()))
+        .map(|position| folded[position].0)
+}
+
 fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
     let arg = |index: usize| args.get(index).ok_or_else(|| EvalError::new(format!("{name} is missing argument {}", index + 1)));
     let number = |index: usize| arg(index)?.to_number().ok_or_else(|| EvalError::new(format!("{name} argument {} must be numeric", index + 1)));
@@ -1659,9 +1702,8 @@ fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
             let needle = text(0)?;
             let haystack = text(1)?;
             let start = if args.len() > 2 { number(2)?.max(1.0) as usize - 1 } else { 0 };
-            let found =
-                if name.eq_ignore_ascii_case("SEARCH") { haystack.to_lowercase().find(&needle.to_lowercase()) } else { haystack.find(&needle) };
-            Ok(found.filter(|index| *index >= start).map(|index| Scalar::Integer((index + 1) as i64)).unwrap_or(Scalar::Blank))
+            let insensitive = name.eq_ignore_ascii_case("SEARCH");
+            Ok(find_text(&haystack, &needle, start, insensitive).map(|index| Scalar::Integer((index + 1) as i64)).unwrap_or(Scalar::Blank))
         }
         "UNICHAR" => Ok(char::from_u32(number(0)?.max(0.0) as u32).map(|c| Scalar::String(c.to_string())).unwrap_or(Scalar::Blank)),
         "GCD" => Ok(Scalar::Integer(gcd(number(0)? as i64, number(1)? as i64))),

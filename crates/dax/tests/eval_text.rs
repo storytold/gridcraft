@@ -240,6 +240,22 @@ fn format_text_and_blank_values() {
 }
 
 #[test]
+fn find_and_search_count_characters_and_honour_the_start() {
+    // Positions are 1-based character indices, not byte offsets: `é` is one character.
+    assert_eq!(eval("FIND(\"b\", \"éb\")"), Scalar::Integer(2));
+    assert_eq!(eval("FIND(\"b\", \"abcb\")"), Scalar::Integer(2));
+    // A later match after `start` is found: the first `a` is at 1, the one at or after 2 is at 3.
+    assert_eq!(eval("FIND(\"a\", \"aXa\", 2)"), Scalar::Integer(3));
+    assert_eq!(eval("FIND(\"X\", \"aXa\", 2)"), Scalar::Integer(2));
+    assert_eq!(eval("FIND(\"a\", \"aXa\", 3)"), Scalar::Integer(3));
+    assert_eq!(eval("FIND(\"z\", \"aXa\")"), Scalar::Blank);
+    // `SEARCH` ignores case, including for a character whose lowercase is longer than the byte
+    // it came from.
+    assert_eq!(eval("SEARCH(\"x\", \"aXa\")"), Scalar::Integer(2));
+    assert_eq!(eval("SEARCH(\"ÉTÉ\", \"un été chaud\")"), Scalar::Integer(4));
+}
+
+#[test]
 fn replace_uses_character_positions() {
     assert_eq!(text(r##"REPLACE("DAX is so cool!", 11, 4, "fantastic")"##), "DAX is so fantastic!");
     assert_eq!(text(r##"REPLACE("123-45-6789", 1, 3, "XXX")"##), "XXX-45-6789");

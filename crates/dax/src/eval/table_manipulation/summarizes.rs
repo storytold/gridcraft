@@ -654,20 +654,6 @@ fn parse_rollup_dimension<'a>(
     Ok(dimension)
 }
 
-fn transitioned_filters(ctx: &Context) -> FilterContext {
-    let mut filters = ctx.filters.clone();
-    if let Some(frame) = ctx.rows.last()
-        && let Some(table) = frame.lineage
-    {
-        for (index, column) in frame.model_columns.iter().enumerate() {
-            if let (Some(column), Some(value)) = (column, frame.values.get(index)) {
-                filters.set(table, *column, [ScalarKey::from(value)]);
-            }
-        }
-    }
-    filters
-}
-
 fn apply_filter_arg(ev: &Evaluator<'_>, expr: &BoundExpr, filters: &mut FilterContext, ctx: &mut Context) -> Result<(), EvalError> {
     if let BoundExpr::Call { spec, args } = expr {
         match spec.name {
@@ -766,7 +752,7 @@ fn summarize_columns(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) 
     if parsed.columns.is_empty() {
         return Err(EvalError::new("SUMMARIZECOLUMNS needs at least one group-by column"));
     }
-    let mut group_filters = transitioned_filters(ctx);
+    let mut group_filters = ev.transitioned_filters(ctx);
     let mut measure_filters = group_filters.clone();
     for (expr, non_visual) in &parsed.filters {
         apply_filter_arg(ev, expr, &mut group_filters, ctx)?;
