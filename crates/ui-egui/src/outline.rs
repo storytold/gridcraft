@@ -164,7 +164,6 @@ impl Dir<'_> {
     }
 }
 
-/// The band's buttons and brackets for this frame.
 /// The bracket for one group's detail, and its tick, on the lane `across`; `button` is the group's
 /// summary button when it is on screen.
 fn group_bracket(out: &mut Layout, dir: &Dir, grp: &OutlineGroup, button: Option<f32>, across: f32, side: f32) {
@@ -194,6 +193,7 @@ fn group_bracket(out: &mut Layout, dir: &Dir, grp: &OutlineGroup, button: Option
     out.brackets.push(Bracket { line: [dir.point(a0 + 0.5, across), dir.point(a1, across)], tick });
 }
 
+/// The band's buttons and brackets for this frame.
 pub fn layout(geo: &Geo, sh: &Sheet) -> Layout {
     let mut out = Layout::default();
     let zoom = (geo.z / DISPLAY_SCALE).max(0.1);

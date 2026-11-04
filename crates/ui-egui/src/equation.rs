@@ -155,9 +155,9 @@ pub fn editor(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &m
     // lives on the dialog, so every way of closing it (OK, Cancel, Escape, the close button)
     // leaves the next one to focus its source again.
     let refocus = ui.ctx().data_mut(|m| m.remove_temp::<bool>(edit_id.with("refocus")).unwrap_or(false));
-    if refocus || !d.focus_initialized {
+    let initial_focus = d.take_initial_focus();
+    if refocus || initial_focus {
         r.request_focus();
-        d.focus_initialized = true;
     }
     let pv = preview(ui.ctx(), ui.scope_id().with("equation-preview"), &text);
     d.values.insert("latex".into(), json!(text));

@@ -415,5 +415,5 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("TUD", Entry::Finish(Action::Command("formulas.traceDependents"))), // Excel: Tools > Formula Auditing > Trace Dependents; Legacy Excel 2003 menu path (#941).
     ("TUT", Entry::Finish(Action::Command("formulas.tracePrecedents"))), // Excel: Tools > Formula Auditing > Trace Precedents; Legacy Excel 2003 menu path (#941).
     ("FU", Entry::Finish(Action::Dialog("pageSetup"))),                  // Excel: File > Page Setup; Legacy Excel 2003 menu path (#941).
-    ("Q", Entry::Finish(Action::Pending("ui.search"))), // pending; Excel: Search / Tell Me; Alt+Q search box does not exist yet (issue #49)
+    ("Q", Entry::Finish(Action::Dialog("commandSearch"))), // Excel: Search / Tell Me; the search box; Alt+Q held as a chord opens it too (keymap)
 ];

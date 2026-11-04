@@ -175,6 +175,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     };
     let (window, collapsed) = place_window(app, ctx, &mut d, window, window_id);
     let shown = window.show(ctx, |ui| {
+
             if let Some(key) = &collapsed {
                 let title = d.title.clone();
                 ref_edit(app, ui, &mut d, key, RefLabel::Named(&title), (width - 40.0).min(380.0));
@@ -376,6 +377,11 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 _ => form(app, ui, &mut d, &mut confirm, &mut open),
             }
         });
+    // The search box closes on a click outside it, as Excel's does.
+    if d.name == "commandSearch" && d.shown && shown.as_ref().is_some_and(|r| r.response.clicked_elsewhere()) {
+        open = false;
+    }
+    d.shown = true;
     window_shown(ctx, &mut d, collapsed.is_some(), shown.map(|r| r.response.rect));
     // Hyperlinks inside dialogs (About ▸ Contributors) open through the host's `open_url`, since
     // the native shell has no browser integration of its own.

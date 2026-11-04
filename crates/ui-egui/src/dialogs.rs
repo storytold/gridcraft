@@ -74,6 +74,9 @@ pub struct Dialog {
     picture_target: Option<(u64, usize)>,
     /// The dialog this one was opened from (Name Manager › New…): it comes back when this closes.
     back: Option<Box<Dialog>>,
+    /// Drawn at least once. The click that opened a dialog ends in its first frame, so a click
+    /// outside only closes a dialog (the search box) from its second frame on.
+    shown: bool,
     /// Open Hyperlink: the address the prompt shows, which OK opens. Private, unlike `values`, so
     /// `ui.dialog.set` can't swap it behind the text the user reads (#2181).
     link: Option<String>,
@@ -84,6 +87,12 @@ pub struct Dialog {
     original_link_text: Option<String>,
     /// The state of the dialog's reference boxes (RefEdit).
     refs: ref_edit::RefBoxes,
+}
+
+impl Dialog {
+    pub(crate) fn take_initial_focus(&mut self) -> bool {
+        !std::mem::replace(&mut self.focus_initialized, true)
+    }
 }
 
 /// A formula box in point mode, as in Excel: a click on the grid writes the cell's absolute
@@ -227,6 +236,7 @@ impl Dialog {
             picture_inbox: None,
             picture_target: None,
             back: None,
+            shown: false,
             link: None,
             focus_initialized: false,
             pick: None,
@@ -252,6 +262,7 @@ impl Dialog {
             picture_inbox: None,
             picture_target: None,
             back: None,
+            shown: false,
             link: None,
             focus_initialized: false,
             pick: None,

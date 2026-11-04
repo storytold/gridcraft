@@ -71,7 +71,7 @@ pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui);
     let __k = big_button(ui, Icon::Script, "Command\nPalette", "Search and run any command", false);
-    control_keytip(app, ui, &__k, "commandSearch");
+    control_keytip(app, ui, &__k, "dialog:commandSearch");
     if __k.clicked() {
         app.open_dialog("commandSearch", json!({}));
     }

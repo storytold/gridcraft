@@ -4,6 +4,8 @@
 /// Returns the Vietnamese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Search commands (Alt+Q)" => "Tìm lệnh (Alt+Q)",
+        "Search for a command, e.g. freeze, chart, bold…" => "Tìm một lệnh, ví dụ: cố định, biểu đồ, in đậm…",
         "Paste" => "Dán",
         "Paste Values" => "Dán giá trị",
         "Paste Formulas" => "Dán công thức",

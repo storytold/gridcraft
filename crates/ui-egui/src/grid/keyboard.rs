@@ -67,9 +67,13 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             }
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
                 use egui::Key;
-                if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
-                    shortcut_ran = true;
-                    continue;
+                match dispatch_shortcut(app, ctx, key, physical_key, m, geo, sh) {
+                    Some(true) => return,
+                    Some(false) => {
+                        shortcut_ran = true;
+                        continue;
+                    }
+                    None => {}
                 }
                 let cmd = m.command;
                 let shift = m.shift;
@@ -154,4 +158,21 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             _ => {}
         }
     }
+}
+
+fn dispatch_shortcut(
+    app: &mut SheetApp,
+    ctx: &egui::Context,
+    key: egui::Key,
+    physical_key: Option<egui::Key>,
+    modifiers: egui::Modifiers,
+    geo: &Geo,
+    sh: &Sheet,
+) -> Option<bool> {
+    if !crate::keymap::dispatch(app, ctx, key, physical_key, modifiers, geo, sh) {
+        return None;
+    }
+    // A shortcut that opened a dialog hands it the rest of this frame's input: the text some
+    // hosts send with Alt+Q must not start a cell edit.
+    Some(app.dialog.is_some())
 }
