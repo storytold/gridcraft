@@ -883,7 +883,8 @@ fn regexreplace(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         out.push_str(s.get(last..).unwrap_or_default());
         return check_len(out);
     }
-    let k = occ.unsigned_abs() as usize;
+    // An occurrence past what `usize` holds (32-bit targets) names no match: the text is returned as it was.
+    let Ok(k) = usize::try_from(occ.unsigned_abs()) else { return text_val(s) };
     // Keeps only the wanted match's captures: the nth from the front, or a window of the last `k`.
     let cap = if occ > 0 {
         re.captures_iter(&s).nth(k - 1)
