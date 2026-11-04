@@ -428,9 +428,9 @@ struct SheetPerformance {
 /// stored style is what it falls back to, so Optimize leaves the cell alone.
 fn optimizable(sh: &gridcraft_model::Sheet, at: CellRef, cell: &gridcraft_model::Cell) -> bool {
     // The constant-time tests come first: most stored cells are not blank, so the range scans
-    // below only run for the few that could be optimized at all.
-    cell.value.is_empty()
-        && cell.formula.is_none()
+    // below only run for the few that could be optimized at all. `has_content` counts Python
+    // code too: an imported Python cell can cache no value while its code still has to run.
+    !cell.has_content()
         && cell.style != StyleId::DEFAULT
         && sh.merge_at(at).is_none()
         && !sh.spill.contains_key(&at)
@@ -1022,6 +1022,29 @@ mod tests {
         assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::parse("B1").unwrap()).display(), "keep");
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(s.execute("review.checkPerformance", json!({})).unwrap()["optimizableCells"], 1);
+    }
+
+    #[test]
+    fn check_performance_leaves_python_cells_alone() {
+        // An imported Python cell can cache no value while its code still has to run; removing
+        // the cell would drop the code, so the check must not call it blank.
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("python.set", json!({"cell": "A1", "code": "1 + 1"})).unwrap();
+        s.execute("home.bold", json!({"range": "A2"})).unwrap();
+        {
+            let d = s.doc_mut().unwrap();
+            let sh = std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap();
+            let at = CellRef::parse("A1").unwrap();
+            let mut cell = sh.cell(at).cloned().unwrap();
+            cell.value = gridcraft_core::Value::Empty;
+            sh.set_cell(at, cell);
+        }
+        let r = s.execute("review.checkPerformance", json!({})).unwrap();
+        assert_eq!(r["optimizableCells"], 1, "only the blank bold A2 can go");
+        assert_eq!(s.execute("review.optimizePerformance", json!({})).unwrap()["optimized"], 1);
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert!(sh.cell(CellRef::parse("A1").unwrap()).is_some_and(|c| c.py.is_some()), "the Python code stays");
     }
 
     #[test]
