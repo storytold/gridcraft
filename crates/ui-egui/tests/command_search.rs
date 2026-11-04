@@ -200,6 +200,24 @@ fn a_command_that_asks_for_its_dialog_opens_it_as_from_the_ribbon() {
 }
 
 #[test]
+fn dialog_backed_search_results_open_their_dialogs() {
+    let mut h = harness();
+    for (id, name) in [
+        ("edit.fillSeries", "series"),
+        ("edit.pasteSpecial", "pasteSpecial"),
+        ("edit.find", "find"),
+        ("edit.goTo", "goTo"),
+        ("data.goalSeek", "goalSeek"),
+    ] {
+        let hits = ui_search(&mut h, id);
+        let index = hits.iter().position(|c| c["id"] == id).unwrap();
+        run_from_search(&mut h, id, index);
+        assert_eq!(dialog(&h), Some(name), "{id} must open {name}");
+        key(&mut h, Key::Escape);
+    }
+}
+
+#[test]
 fn plain_alt_still_shows_key_tips_and_alt_then_q_opens_the_search() {
     let mut h = harness();
     events(&mut h, [Event::ModifiersChanged(Modifiers::ALT), key_event(Key::AltLeft, true, Modifiers::ALT)]);

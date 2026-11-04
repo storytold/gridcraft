@@ -50,7 +50,7 @@ fn rank(c: &CommandInfo, query: &str) -> Option<u8> {
     }
     // Short queries would match nearly everything as a subsequence.
     let letters: Vec<char> = q.chars().filter(|ch| !ch.is_whitespace()).collect();
-    let mut chars = label.chars();
+    let mut chars = hay.chars();
     (letters.len() >= 3 && letters.iter().all(|ch| chars.any(|l| l == *ch))).then_some(5)
 }
 
@@ -100,6 +100,7 @@ mod tests {
         let hits = search(&s, "bold");
         assert_eq!(hits.first().map(|c| c.id), Some("home.bold"));
         assert!(search(&s, "freeze").iter().any(|c| c.id.contains("freeze")));
+        assert!(search(&s, "vwp").iter().any(|c| c.id == "view.freezePanes"));
         assert!(search(&s, "frzpn").iter().any(|c| c.label.to_lowercase().contains("freeze")));
         assert!(search(&s, "").is_empty());
         assert!(search(&s, "zzzzqqqq").is_empty());
