@@ -686,20 +686,27 @@ pub fn record_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
         ui.label(egui::RichText::new(crate::i18n::tr(ui, p)).color(Tokens::get(ui.ctx()).danger));
     }
     ui.add_space(6.0);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if ui.button(crate::i18n::tr(ui, "Cancel")).clicked() {
-            *open = false;
-        }
-        if ui.add_enabled(problem.is_none(), egui::Button::new(crate::i18n::tr(ui, "OK"))).clicked() {
-            let mut p = json!({"name": name.trim(), "description": desc, "relative": app.macros.relative});
-            if !key.trim().is_empty() {
-                p["shortcut"] = json!(key.trim());
+    // The same row as every other dialog's OK / Cancel: at the far end, and mirrored with the window.
+    // A row as tall as the buttons, because a right-to-left layout straight in the window takes all
+    // the height it is offered.
+    ui.horizontal(|ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
+            let t = Tokens::get(ui.ctx());
+            let ok = egui::Button::new(egui::RichText::new(crate::i18n::tr(ui, "OK")).color(t.on_accent)).fill(t.accent);
+            if ui.add_enabled(problem.is_none(), ok).clicked() {
+                let mut p = json!({"name": name.trim(), "description": desc, "relative": app.macros.relative});
+                if !key.trim().is_empty() {
+                    p["shortcut"] = json!(key.trim());
+                }
+                match app.run("macro.record", p) {
+                    Ok(_) => *open = false,
+                    Err(e) => app.message = Some(("Record Macro".into(), crate::clean_error(&e))),
+                }
             }
-            match app.run("macro.record", p) {
-                Ok(_) => *open = false,
-                Err(e) => app.message = Some(("Record Macro".into(), crate::clean_error(&e))),
+            if ui.button(crate::i18n::tr(ui, "Cancel")).clicked() {
+                *open = false;
             }
-        }
+        });
     });
     d.values.insert("name".into(), json!(name));
     d.values.insert("shortcut".into(), json!(key));

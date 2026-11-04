@@ -175,6 +175,12 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         _ => window,
     };
     let (window, collapsed) = place_window(app, ctx, &mut d, window, window_id);
+    // A mirrored interface puts the window's close button on the left, as egui does when its style
+    // runs right to left. Only for this window: the rest of the interface is laid out by `rtl`.
+    let mirrored = crate::rtl::on(ctx);
+    if mirrored {
+        ctx.all_styles_mut(|s| s.right_to_left = true);
+    }
     let shown = window.show(ctx, |ui| crate::rtl::root(ui, |ui| {
             if let Some(key) = &collapsed {
                 let title = d.title.clone();
@@ -381,6 +387,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 _ => form(app, ui, &mut d, &mut confirm, &mut open),
             }
         }));
+    if mirrored {
+        ctx.all_styles_mut(|s| s.right_to_left = false);
+    }
     window_shown(ctx, &mut d, collapsed.is_some(), shown.map(|r| r.response.rect));
     // Hyperlinks inside dialogs (About ▸ Contributors) open through the host's `open_url`, since
     // the native shell has no browser integration of its own.
@@ -642,7 +651,13 @@ pub(super) fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                                     }
                                 }
                             };
-                            if key == "pageOrder" {
+                            if key == "pageOrder" && crate::rtl::flows(ui) {
+                                // Mirrored, a row of the choices and the picture would run right to left across
+                                // the whole window (and past its left edge); a column keeps them on the right.
+                                radios(ui, d);
+                                ui.add_space(6.0);
+                                page_order_preview(ui, PageOrder::parse(&cur).unwrap_or_default());
+                            } else if key == "pageOrder" {
                                 // Page Setup pictures the order beside its choices.
                                 ui.horizontal(|ui| {
                                     ui.vertical(|ui| radios(ui, d));
