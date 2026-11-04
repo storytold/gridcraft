@@ -102,9 +102,39 @@ fn header_font_runs_capture_styles_fields_and_bounded_expansion() {
     assert_eq!(sections[0].runs[0].text, "Left");
     let huge = HfContext { sheet: "Ω".repeat(100_000), ..Default::default() };
     let expanded = expand_header_footer("&A&A&A", &huge);
-    assert_eq!(expanded[1].text.len(), 40_000);
-    assert_eq!(expanded[1].runs.len(), 1);
-    assert_eq!(expanded[1].runs[0].text, expanded[1].text);
+    assert!(expanded[1].text.is_empty(), "an oversized field is omitted whole");
+    assert!(expanded[1].runs.is_empty());
+}
+
+#[test]
+fn header_section_cap_keeps_fields_literals_and_style_runs_consistent() {
+    let cap = 64 * 1024;
+    let cx = HfContext { sheet: "Ω".repeat(cap / 2 - 1), file: "終".into(), path: "ok".into(), ..Default::default() };
+    let sections = expand_header_footer("&L&\"Greek,Bold\"&A&\"Other,Italic\"&F&Z&CCentre&RRight", &cx);
+    let left = &sections[0];
+    assert_eq!(left.text.len(), cap);
+    assert_eq!(left.text, format!("{}ok", cx.sheet), "an oversized field is skipped; a later field can still fit");
+    assert_eq!(left.runs.len(), 2);
+    assert_eq!(left.runs[0].font.as_deref(), Some("Greek"));
+    assert!(left.runs[0].bold && !left.runs[0].italic);
+    assert_eq!(left.runs[1].font.as_deref(), Some("Other"));
+    assert!(!left.runs[1].bold && left.runs[1].italic);
+    assert_eq!(left.runs[1].text, "ok");
+    assert_eq!(sections[1].text, "Centre");
+    assert_eq!(sections[2].text, "Right");
+    for section in &sections {
+        assert!(section.text.len() <= cap);
+        assert_eq!(section.runs.iter().map(|r| r.text.as_str()).collect::<String>(), section.text);
+    }
+    let cx = HfContext { sheet: "S".repeat(cap - 1), ..Default::default() };
+    let section = &expand_header_footer("&A&\"Edge,Italic\"終&BX終Y&&", &cx)[1];
+    assert_eq!(section.text.len(), cap, "literals and escaped ampersands respect the same byte cap");
+    assert!(section.text.ends_with('X'));
+    assert_eq!(section.runs.len(), 2);
+    assert_eq!(section.runs[1].text, "X");
+    assert_eq!(section.runs[1].font.as_deref(), Some("Edge"));
+    assert!(section.runs[1].bold && section.runs[1].italic);
+    assert_eq!(section.runs.iter().map(|r| r.text.as_str()).collect::<String>(), section.text);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -487,6 +517,12 @@ fn pdf_contains_text_and_header_codes_expand() {
     assert_eq!(r.text, "P4/9 9:00 AM");
     assert_eq!(expand_header_footer("plain", &cx)[1].text, "plain");
     assert_eq!(expand_header_footer("&", &cx)[1].text, "");
+    // A megabyte sheet name repeated by 5,000 `&A` codes stops at the section's 64 KiB.
+    let long = HfContext { sheet: "S".repeat(1024 * 1024), ..cx };
+    let [_, c, _] = expand_header_footer(&"&A".repeat(5_000), &long);
+    assert!(c.text.is_empty(), "the name alone is over the limit");
+    let short = HfContext { sheet: "S".repeat(1000), ..Default::default() };
+    assert_eq!(expand_header_footer(&"&A".repeat(5_000), &short)[1].text.len(), 65_000);
 }
 
 #[test]

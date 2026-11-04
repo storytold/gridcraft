@@ -168,11 +168,9 @@ pub struct HfSection {
 
 impl HfSection {
     fn push_text(&mut self, text: &str) {
-        // The input parser accepts 10,000 characters. Also bound expanded file/sheet fields.
-        let remaining = 40_000usize.saturating_sub(self.text.len());
-        let end = text.char_indices().map(|(i, c)| i + c.len_utf8()).take_while(|end| *end <= remaining).last().unwrap_or(0);
-        let text = text.get(..end).unwrap_or_default();
-        if text.is_empty() {
+        // Skip an entire field if it does not fit, before copying it into text or runs.
+        // Literal characters use this path too, so they cannot push a full section over the cap.
+        if text.is_empty() || self.text.len().saturating_add(text.len()) > MAX_SECTION_BYTES {
             return;
         }
         self.text.push_str(text);
@@ -188,6 +186,10 @@ impl HfSection {
         }
     }
 }
+
+/// Most bytes one section's expanded text may hold. A code like `&A` adds the whole sheet name
+/// (or file path) each time it appears, and a JSON workbook's names have no length limit.
+const MAX_SECTION_BYTES: usize = 64 * 1024;
 
 /// Expands a header/footer string into its left, centre and right sections.
 pub fn expand_header_footer(spec: &str, cx: &HfContext) -> [HfSection; 3] {
