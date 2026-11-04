@@ -54,6 +54,17 @@ fn sequence(h: &mut Harness, letters: &[Key], text_first: bool) {
     }
 }
 
+#[test]
+fn accounting_keytip_reapplies_the_selected_currency() {
+    let mut h = harness(blank());
+    let code = "_-[$£-809]* #,##0.00_-";
+    h.state_mut().ui.accounting_format = code.into();
+    sequence(&mut h, &[Key::H, Key::A, Key::N], false);
+    let doc = h.state().session.active().unwrap();
+    let sheet = doc.wb.active().unwrap();
+    assert_eq!(doc.wb.styles.get(sheet.style_id(CellRef::new(0, 0))).num_fmt.as_str(), code);
+}
+
 fn value(h: &Harness, cell: &str) -> Value {
     h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::parse(cell).unwrap())
 }

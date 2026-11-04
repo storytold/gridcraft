@@ -35,9 +35,9 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("H5", Entry::Finish(Action::Command("home.decreaseIndent"))),  // Excel: Decrease Indent
     ("H6", Entry::Finish(Action::Command("home.increaseIndent"))),  // Excel: Increase Indent
     ("H9", Entry::Finish(Action::Command("home.decreaseDecimal"))), // Excel: Decrease Decimals; containment(Decrease Decimal)
-    ("HAN", Entry::Finish(Action::Command("ui.applyAccountingFormat"))), // Excel: Accounting Format; fires immediately in Excel; deeper aliases dropped as unreachable
-    ("HAS", Entry::Finish(Action::Command("home.addIns"))),              // Excel: Add-ins; containment(Add-ins)
-    ("HB", Entry::Continue),                                             // Excel: Borders Menu; group level:
+    ("HAN", Entry::Finish(Action::Control("home.accounting"))), // Excel: Accounting Format; fires immediately in Excel; deeper aliases dropped as unreachable
+    ("HAS", Entry::Finish(Action::Command("home.addIns"))),     // Excel: Add-ins; containment(Add-ins)
+    ("HB", Entry::Continue),                                    // Excel: Borders Menu; group level:
     ("HBA", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"all\"}"))), // Excel: All Borders; Borders menu item
     ("HBB", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"doubleBottom\"}"))), // Excel: Bottom Double Border; Borders menu item
     ("HBC", Entry::Finish(Action::CommandWith("home.borders", "{\"preset\":\"topThickBottom\"}"))), // Excel: Top and Thick Bottom Border; Borders menu item

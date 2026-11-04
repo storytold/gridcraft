@@ -18,16 +18,14 @@ impl SheetApp {
 
     /// Routes UI-only commands before forwarding workbook commands to the engine.
     pub(super) fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
-        if id == "ui.applyAccountingFormat" {
-            return self.run_command("home.numberFormat", json!({"code": self.ui.accounting_format.clone()}));
-        }
         if id == "ui.accountingFormat" {
-            let code = params.get("code").and_then(Json::as_str).ok_or("accounting format code is required")?;
+            let code = params.get("code").and_then(Json::as_str).ok_or("accounting format code is required")?.to_owned();
             if code.len() > 512 || !(code.starts_with("_(\"") || code.starts_with("_-[")) || code.chars().any(char::is_control) {
                 return Err("unknown accounting format".into());
             }
-            self.ui.accounting_format = code.to_owned();
-            return self.run_command("home.numberFormat", json!({"code": code}));
+            let result = self.run_command("home.numberFormat", params)?;
+            self.ui.accounting_format = code;
+            return Ok(result);
         }
         let switches_window = id.starts_with("window.")
             || matches!(id, "view.newWindow" | "view.hideWindow" | "view.unhideWindow")

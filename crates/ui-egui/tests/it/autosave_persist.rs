@@ -24,3 +24,12 @@ fn an_old_ui_json_without_autosave_still_loads() {
     assert!(!restored.autosave);
     assert!(restored.dark, "the rest of the old file still applies");
 }
+
+#[test]
+fn accounting_format_survives_a_restart() {
+    let mut app = crate::common::app(Session::new());
+    app.ui.accounting_format = "_-[$£-809]* #,##0.00_-".into();
+    let saved = serde_json::to_string(&app.ui).unwrap();
+    let restored: gridcraft_ui_egui::UiState = serde_json::from_str(&saved).unwrap();
+    assert_eq!(restored.accounting_format, app.ui.accounting_format);
+}

@@ -265,8 +265,9 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
 /// A split button whose main glyph is a short text symbol, such as the active currency.
 pub fn split_button_symbol(ui: &mut Ui, symbol: &str, tip: &str) -> (bool, Response) {
     let t = Tokens::get(ui.ctx());
-    let (rect, _) = ui.allocate_exact_size(vec2(38.0, 24.0), Sense::hover());
-    let main = Rect::from_min_size(rect.min, vec2(25.0, 24.0));
+    let main_width = (16.0 + symbol.chars().count() as f32 * 7.0).max(25.0);
+    let (rect, _) = ui.allocate_exact_size(vec2(main_width + 13.0, 24.0), Sense::hover());
+    let main = Rect::from_min_size(rect.min, vec2(main_width, 24.0));
     let arrow = Rect::from_min_max(pos2(main.right(), rect.top()), rect.max);
     let m = ui.interact(main, ui.scope_id().with((tip, "main")), Sense::click());
     let a = ui.interact(arrow, ui.scope_id().with((tip, "arrow")), Sense::click());

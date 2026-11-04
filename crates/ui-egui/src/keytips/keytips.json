@@ -182,10 +182,10 @@
   },
   {
    "seq": "HAN",
-   "kind": "command",
+   "kind": "control",
    "excel": "Accounting Format",
    "note": "fires immediately in Excel; deeper aliases dropped as unreachable",
-   "target": "ui.applyAccountingFormat"
+   "target": "home.accounting"
   },
   {
    "seq": "HAS",

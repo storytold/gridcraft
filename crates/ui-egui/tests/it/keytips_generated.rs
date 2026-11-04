@@ -259,7 +259,8 @@ fn keytip_h9_() {
 fn keytip_han_() {
     let mut h = harness(blank());
     sequence(&mut h, "HAN", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "home.numberFormat"), "HAN must journal home.numberFormat");
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "HAN must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
 }
 
 #[test]
