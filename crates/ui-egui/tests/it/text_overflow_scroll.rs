@@ -3,7 +3,7 @@
 use egui::{Rect, Shape};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::CellRef;
-use gridcraft_ui_egui::{SheetApp, grid::Geo};
+use gridcraft_ui_egui::{SheetApp, grid::Geo, theme::Tokens};
 use serde_json::json;
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
@@ -469,4 +469,43 @@ fn frozen_column_gridlines_stay_put_when_scrolled() {
     let verticals: Vec<f32> = segments.iter().filter(|p| p[0].x == p[1].x && p[0].y < b5.bottom()).map(|p| p[0].x).collect();
     let expected = [a5.left(), a5.right(), b5.right()].map(|x| x.round() - 0.5);
     assert!(verticals.iter().all(|x| expected.iter().any(|e| (x - e).abs() <= 0.5)), "only A and B's edges: {verticals:?} vs {expected:?}");
+}
+
+/// Overflow stops at the freeze line, so the gradient scan must cover only the frozen columns the
+/// text reaches: the first scrolled column is laid out there, and its gradient is not under the text.
+#[test]
+fn overflowing_text_ignores_the_gradient_of_a_column_beyond_the_freeze_line() {
+    let h = harness(|s| {
+        s.execute("cell.set", json!({"cell": "A1", "input": LEFT})).unwrap();
+        s.execute("view.freezePanes", json!({"cell": "C2"})).unwrap();
+        // 125% makes the zoom 1.0, so the freeze line falls exactly on B's right edge.
+        s.execute("view.zoom", json!({"percent": 125})).unwrap();
+        s.execute(
+            "home.formatCells",
+            json!({"range": "C1", "style": {"fill": {"gradient": {
+                "kind": {"Linear": {"degree": 90.0}},
+                "stops": [{"position": 0.0, "color": {"Rgb": 16711680}}, {"position": 1.0, "color": {"Rgb": 16777215}}]
+            }}}}),
+        )
+        .unwrap();
+    });
+    let (a1, b1) = (cell_rect(&h, "A1"), cell_rect(&h, "B1"));
+    let grid_bg = Tokens::get(&h.ctx).grid_bg;
+    // The overflow paints its cell background over the gridlines it crosses in B1: exact width of
+    // the patched stretch, so the sheet's own background rect cannot stand in for it.
+    let patches: Vec<Rect> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            Shape::Rect(r) if r.fill == grid_bg => Some(r.rect),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        patches
+            .iter()
+            .any(|r| r.intersects(b1.shrink(2.0)) && (r.left() - (a1.right() - 1.0)).abs() <= 0.01 && (r.width() - b1.width()).abs() <= 0.01),
+        "C1's gradient is past the freeze line, so A1's overflow still covers B1's gridline: {patches:?} vs {a1:?} {b1:?}"
+    );
 }

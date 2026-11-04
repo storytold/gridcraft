@@ -79,3 +79,65 @@ fn left_and_right_arrows_follow_the_screen() {
     h.run_steps(1);
     assert_eq!(h.state().session.active().unwrap().selection.active, CellRef::parse("A2").unwrap());
 }
+
+fn gradient_harness(rtl: bool) -> Harness {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("range.setValues", json!({"range": "A1", "values": [[1]]})).unwrap();
+    session
+        .execute(
+            "home.formatCells",
+            json!({"range": "A1", "style": {"fill": {"gradient": {
+                "kind": {"Linear": {"degree": 0.0}},
+                "stops": [
+                    {"position": 0.0, "color": {"Rgb": 16711680}},
+                    {"position": 1.0, "color": {"Rgb": 255}}
+                ]
+            }}}}),
+        )
+        .unwrap();
+    session.execute("view.rightToLeft", json!({"on": rtl})).unwrap();
+    session.execute("selection.set", json!({"cell": "C4"})).unwrap();
+    crate::support::harness(session, 4)
+}
+
+/// The gradient mesh painted over `cell`, as its colour at the left and right edge.
+fn gradient_ends(h: &Harness, cell: &str) -> (egui::Color32, egui::Color32) {
+    let app = h.state();
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    let screen = geo(h).screen_cell_rect(sheet, CellRef::parse(cell).unwrap());
+    let mut vertices = Vec::new();
+    collect_mesh_vertices(h.output().shapes.iter().map(|s| &s.shape), screen.expand(1.0), &mut vertices);
+    assert!(!vertices.is_empty(), "no gradient mesh over {cell}");
+    let min = vertices.iter().map(|v| v.pos.x).fold(f32::INFINITY, f32::min);
+    let max = vertices.iter().map(|v| v.pos.x).fold(f32::NEG_INFINITY, f32::max);
+    let at = |x: f32| vertices.iter().find(|v| (v.pos.x - x).abs() < 0.01).unwrap().color;
+    (at(min), at(max))
+}
+
+fn collect_mesh_vertices<'a>(shapes: impl Iterator<Item = &'a egui::Shape>, within: egui::Rect, out: &mut Vec<egui::epaint::Vertex>) {
+    for shape in shapes {
+        match shape {
+            egui::Shape::Mesh(mesh) if mesh.texture_id == egui::TextureId::default() => {
+                if mesh.vertices.iter().all(|v| within.contains(v.pos)) {
+                    out.extend(mesh.vertices.iter().copied());
+                }
+            }
+            egui::Shape::Vec(v) => collect_mesh_vertices(v.iter(), within, out),
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn a_cell_gradient_mirrors_with_the_sheet() {
+    let ltr = gradient_harness(false);
+    let rtl = gradient_harness(true);
+    let (ltr_left, ltr_right) = gradient_ends(&ltr, "A1");
+    let (rtl_left, rtl_right) = gradient_ends(&rtl, "A1");
+    eprintln!("ltr: {ltr_left:?} .. {ltr_right:?}  rtl: {rtl_left:?} .. {rtl_right:?}");
+    assert_eq!(ltr_left, egui::Color32::from_rgb(255, 0, 0));
+    assert_eq!(ltr_right, egui::Color32::from_rgb(0, 0, 255));
+    assert_eq!(rtl_left, ltr_right);
+    assert_eq!(rtl_right, ltr_left);
+}

@@ -1,6 +1,6 @@
-use super::cell_paint::ink_on;
+use super::cell_paint::{ink_on, look};
 use super::geo::Geo;
-use super::{Align2, CellRef, Color32, FontId, PatternType, Rect, Sheet, SheetApp, Stroke, StrokeKind, Tokens, Workbook, json, pos2, theme, vec2};
+use super::{Align2, CellRef, CfCache, Color32, FontId, Rect, Sheet, SheetApp, Stroke, StrokeKind, Tokens, Workbook, json, pos2, theme, vec2};
 
 /// Room the in-cell editor keeps right of its text. It is sized from the text of the last frame, so
 /// the next typed character must still fit: a fixed 14 px was less than one glyph at high zoom,
@@ -16,7 +16,7 @@ pub(super) fn editor_width(text_w: f32, cell_w: f32, size: f32) -> f32 {
 }
 
 /// Draws the in-cell editor, growing and wrapping with its text, mirroring for right-to-left sheets, choosing contrasting caret ink and clipping cells hidden under frozen panes.
-pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, wb: &Workbook) {
+pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, wb: &Workbook, cf: &mut CfCache) {
     let Some(ed) = app.editor.as_ref() else { return };
     if app.view_key() != Some((ed.doc, ed.sheet)) {
         return;
@@ -26,7 +26,7 @@ pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, s
         Some(m) => geo.range_rect(sh, m),
         None => geo.cell_rect(sh, cell),
     };
-    let st = wb.styles.get(sh.style_id(cell)).clone();
+    let st = wb.styles.get(sh.style_id(cell));
     let size = st.font.size * 96.0 / 72.0 * geo.z;
     let font = FontId::new(size, theme::cell_family(&st.font.name, st.font.bold, st.font.italic));
     let lines = ed.text.lines().count().max(1) as f32 + if ed.text.ends_with('\n') { 1.0 } else { 0.0 };
@@ -49,10 +49,11 @@ pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, s
     };
     // Grows to the left on a right-to-left sheet.
     let erect = geo.mirror_rect(Rect::from_min_size(rect.min, vec2(w, h)));
-    let fill = match st.fill.pattern {
-        PatternType::Solid => st.fill.fg.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::WHITE),
-        _ => Color32::WHITE,
-    };
+    // The editor paints the cell's effective fill, conditional formats and table styles included,
+    // and the caret contrasts with that same gradient rather than the raw style.
+    let lk = look(wb, ed.sheet, sh, cell, cf).0;
+    let fill = lk.fill.unwrap_or(Color32::WHITE);
+    let gradient = lk.gradient;
     let split = pos2(geo.cells.left() + geo.frozen_w, geo.cells.top() + geo.frozen_h);
     let quadrant = Rect::from_min_max(
         pos2(if cell.col >= geo.fc { split.x } else { geo.cells.left() }, if cell.row >= geo.fr { split.y } else { geo.cells.top() }),
@@ -71,14 +72,28 @@ pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, s
     let on_screen = cell_visible && erect.intersect(screen_quadrant).is_positive() && !geo.hidden_under_frozen(sh, cell);
     let clip = if on_screen { ui.clip_rect().intersect(screen_quadrant) } else { Rect::NOTHING };
     let painter = ui.painter().with_clip_rect(clip);
-    painter.rect_filled(erect, 0.0, fill);
+    if let Some(g) = &gradient {
+        crate::gradient::paint_rect(&painter, erect, g, &wb.theme, geo.rtl);
+    } else {
+        painter.rect_filled(erect, 0.0, fill);
+    }
     painter.rect_stroke(erect.expand(1.0), 0.0, Stroke::new(2.0, Tokens::get(ui.ctx()).sel_border), StrokeKind::Middle);
     let id = egui::Id::unique("gridcraft.cell_editor");
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(erect.shrink2(vec2(2.0, 1.0))));
     child.set_clip_rect(clip);
     // The theme's caret is meant for the UI chrome and vanishes on some fills (and, in the dark
-    // theme, on the white paper): pick black or white against the fill, like Excel.
-    child.visuals_mut().text_cursor.stroke.color = ink_on(fill);
+    // theme, on the white paper): pick black or white against what is under the caret, like Excel.
+    let caret_byte = ed.text.char_indices().nth(ed.caret).map_or(ed.text.len(), |(i, _)| i);
+    let before_caret = &ed.text[..caret_byte];
+    let caret_line = before_caret.matches('\n').count();
+    let caret_x = ui.painter().layout_no_wrap(before_caret.rsplit('\n').next().unwrap_or("").to_string(), font.clone(), Color32::BLACK).size().x;
+    let u = ((caret_x + 2.0) / erect.width().max(1.0)).clamp(0.0, 1.0) as f64;
+    // The editor paints the gradient with its colours mirrored on a right-to-left sheet, so the
+    // caret samples the same reflected colour axis.
+    let u = if geo.rtl { 1.0 - u } else { u };
+    let v = if wrap { ((caret_line as f32 + 0.5) / lines.max(1.0)).clamp(0.0, 1.0) as f64 } else { 0.5 };
+    let caret_bg = gradient.as_ref().and_then(|g| g.sample(u, v, &wb.theme)).map_or(fill, |rgb| Color32::from_rgb(rgb[0], rgb[1], rgb[2]));
+    child.visuals_mut().text_cursor.stroke.color = ink_on(caret_bg);
     crate::formula_bar::editor_widget(app, &mut child, id, font, wrap, erect.width() - 4.0, erect.height() - 2.0);
     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("gridcraft.cell_editor.rect"), erect));
 }

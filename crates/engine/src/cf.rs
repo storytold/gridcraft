@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use gridcraft_core::{CellRef, RangeRef, Value, compare};
-use gridcraft_model::{CfOperator, CfRule, CfValueKind, Color, CondFormat, PatternType, Sheet, Style, Underline, Workbook, default_icon_thresholds};
+use gridcraft_model::{CfOperator, CfRule, CfValueKind, Color, CondFormat, Sheet, Style, Underline, Workbook, default_icon_thresholds};
 
 /// The conditional look of one cell.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -368,8 +368,8 @@ impl CfCache {
 /// Adds the parts `lower` sets that `style` leaves unset (differential styles: default parts
 /// are unset).
 fn layer_under(style: &mut Style, lower: &Style) {
-    if style.fill.pattern == PatternType::None {
-        style.fill = lower.fill;
+    if !style.fill.is_set() {
+        style.fill = lower.fill.clone();
     }
     if style.font.color == Color::Auto {
         style.font.color = lower.font.color;
@@ -416,6 +416,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use gridcraft_model::PatternType;
 
     #[test]
     fn every_matching_rule_applies() {

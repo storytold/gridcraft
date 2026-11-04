@@ -34,6 +34,7 @@ pub mod fonts;
 pub mod formula_bar;
 mod formula_locale;
 pub mod function_library;
+mod gradient;
 pub mod grid;
 pub mod i18n;
 pub mod icons;
