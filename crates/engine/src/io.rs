@@ -790,11 +790,17 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
         for ch in &sh.charts {
             if let Some(svg) = crate::chart_svg::chart_svg(wb, sheet, ch, &place(&ch.anchor)) {
                 out.push_str(&svg);
+                if out.len() > HTML_EXPORT_MAX_BYTES {
+                    return Err(html_too_big());
+                }
             }
         }
         out.push_str("</div>");
     }
     out.push_str("</body></html>");
+    if out.len() > HTML_EXPORT_MAX_BYTES {
+        return Err(html_too_big());
+    }
     Ok(out)
 }
 
