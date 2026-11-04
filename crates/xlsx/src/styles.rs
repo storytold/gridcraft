@@ -368,12 +368,14 @@ pub fn read_styles(root: &El, checkboxes: &[bool], minor_font: &str) -> StylesIn
             }
         }
     }
-    let dxfs = root.child("dxfs").map(|d| d.kids("dxf").map(|x| read_dxf(x, &palette, &shared_fmts)).collect()).unwrap_or_default();
+    // Inline dxf format codes are interned: a code repeated by many dxfs is one allocation.
+    let mut inline_fmts = HashMap::new();
+    let dxfs = root.child("dxfs").map(|d| d.kids("dxf").map(|x| read_dxf(x, &palette, &shared_fmts, &mut inline_fmts)).collect()).unwrap_or_default();
     StylesIn { xfs, dxfs, palette, named, num_fmts: fmts }
 }
 
 /// One differential format (`dxf`): the style it sets over a cell's own.
-fn read_dxf(x: &El, palette: &[u32], fmts: &HashMap<u32, NumFmt>) -> Style {
+fn read_dxf<'a>(x: &'a El, palette: &[u32], fmts: &HashMap<u32, NumFmt>, inline_fmts: &mut HashMap<&'a str, NumFmt>) -> Style {
     let mut s = Style::default();
     if let Some(e) = x.child("font") {
         let f = read_font(e, palette);
@@ -396,7 +398,7 @@ fn read_dxf(x: &El, palette: &[u32], fmts: &HashMap<u32, NumFmt>) -> Style {
     }
     if let Some(n) = x.child("numFmt") {
         if let Some(code) = n.attr("formatCode") {
-            s.num_fmt = NumFmt::new(code);
+            s.num_fmt = inline_fmts.entry(code).or_insert_with(|| NumFmt::new(code)).clone();
         } else if let Some(id) = n.attr_u32("numFmtId") {
             s.num_fmt = num_fmt_code(id, fmts);
         }
@@ -766,10 +768,12 @@ pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String]) -> (St
         s.push_str("</numFmts>");
     }
     let _ = write!(s, "<fonts count=\"{}\">", fonts.len());
+    // Font names are cut to `MAX_FONT_NAME` on reading: so is the theme's, to compare with them.
+    let theme_minor: String = wb.theme.minor_font.chars().take(MAX_FONT_NAME).collect();
     for (i, f) in fonts.iter().enumerate() {
         // A Normal font in the theme's body face follows the theme, as Excel writes it (#805); so
         // does every other body-face font that kept the scheme link (#2517).
-        s.push_str(&font_xml(f, None, (i == 0 || f.minor) && f.name == wb.theme.minor_font));
+        s.push_str(&font_xml(f, None, (i == 0 || f.minor) && f.name == theme_minor));
     }
     let _ = write!(s, "</fonts><fills count=\"{}\">", fills.len());
     for f in &fills {
