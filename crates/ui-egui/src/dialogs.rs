@@ -173,6 +173,12 @@ impl Dialog {
         ref_edit::note_selecting_press(self);
     }
 
+    /// Whether a reference box is the one grid selections fill: a click on the grid is then a
+    /// pick, and a second click on the same cell does not edit the cell.
+    pub(crate) fn ref_box_picks(&self) -> bool {
+        ref_edit::picks(self)
+    }
+
     /// Whether a click on the grid goes to a formula box of this dialog rather than the selection.
     pub fn picks_references(&self) -> bool {
         self.pick.is_some()

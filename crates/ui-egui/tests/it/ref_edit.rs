@@ -1833,6 +1833,22 @@ fn ctrl_click_following_a_link_to_the_selected_cell_is_no_pick() {
 }
 
 #[test]
+fn a_second_quick_click_on_a_cell_picks_it_instead_of_editing() {
+    let mut h = harness(workbook());
+    open_goal_seek(&mut h);
+    let boxes = dialog_boxes(&h);
+    click_at(&mut h, boxes[2].center());
+    // The last click on the grid was on B5 a moment ago (before the box was clicked into), so
+    // this click would be a double-click.
+    let now = gridcraft_engine::core::date::unix_now_ms().unwrap();
+    h.state_mut().grid.last_click = Some((CellRef::parse("B5").unwrap(), now));
+    let pos = cell_pos(&h, "B5");
+    click_at(&mut h, pos);
+    assert!(h.state().editor.is_none(), "the click does not start editing the cell");
+    assert_eq!(field(&h, "changing"), "$B$5", "the click picks the cell");
+}
+
+#[test]
 fn a_click_on_the_selected_cell_picks_into_a_collapsed_box_on_another_sheet() {
     let mut h = harness(two_sheets());
     open_goal_seek(&mut h);

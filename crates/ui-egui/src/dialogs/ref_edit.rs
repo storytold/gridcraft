@@ -283,6 +283,11 @@ pub(super) fn note_selecting_press(d: &mut Dialog) {
     d.refs.pressed = true;
 }
 
+/// Whether a reference box is being picked into (see [`Dialog::ref_box_picks`]).
+pub(super) fn picks(d: &Dialog) -> bool {
+    d.refs.target.is_some()
+}
+
 /// Makes the reference box `key` the one grid selections fill. The first pick (and the first
 /// after an OK that failed) remembers the selection on the dialog's own sheet, which is put back
 /// when the dialog runs its command or closes. A dialog opened without [`record_home`] takes the

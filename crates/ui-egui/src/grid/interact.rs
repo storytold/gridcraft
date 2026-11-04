@@ -472,7 +472,9 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         return;
     }
     let now = crate::now_ms();
-    if handle_cell_double_click(app, input, c, now) {
+    // While a reference box picks, a second click on a cell picks it again rather than editing it.
+    let ref_box_picks = app.dialog.as_ref().is_some_and(|d| d.ref_box_picks());
+    if !ref_box_picks && handle_cell_double_click(app, input, c, now) {
         return;
     }
     app.grid.last_click = Some((c, now));
