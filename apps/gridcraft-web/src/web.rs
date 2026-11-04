@@ -457,7 +457,8 @@ fn download(name: &str, bytes: &[u8], delivered: &Delivered, ctx: &egui::Context
         return Ok(());
     }
 
-    // Fallback for browsers without showSaveFilePicker (e.g. Firefox, Safari):
+    // Fallback for browsers without showSaveFilePicker (e.g. Firefox, Safari). The page gets no
+    // signal when an anchor download finishes, so handing the bytes to the browser counts as saved.
     trigger_anchor_download(&window, name, bytes)?;
     delivered.finish(id);
     ctx.request_repaint();
