@@ -175,11 +175,13 @@ fn exec(s: &mut Session, id: &str, params: Value) -> Result<Value, String> {
 fn open(path: &str) -> Result<(Session, usize), String> {
     let mut s = Session::new();
     let r = exec(&mut s, "file.open", json!({"path": path}))?;
-    let lossy = r
-        .get("warnings")
-        .and_then(Value::as_array)
-        .map_or(0, |w| w.iter().filter(|w| w.as_str() != Some(gridcraft_engine::io::DECRYPTED_NOTICE)).count());
-    Ok((s, lossy))
+    Ok((s, lossy_warnings(&r)))
+}
+
+/// The lossy warnings in a `file.open` result: all of them except the informational
+/// [`gridcraft_engine::io::DECRYPTED_NOTICE`].
+fn lossy_warnings(r: &Value) -> usize {
+    r.get("warnings").and_then(Value::as_array).map_or(0, |w| w.iter().filter(|w| w.as_str() != Some(gridcraft_engine::io::DECRYPTED_NOTICE)).count())
 }
 
 /// A lossy import fails the command unless `--allow-lossy` accepts it. The output is already
@@ -436,7 +438,7 @@ fn parse_command(text: &str) -> Result<Option<(String, Value)>, String> {
 fn run(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &["in", "sample", "cmd", "script", "out", "print", "sheet"], &["quiet", "csv", "formulas", "allow-lossy"])?;
     a.no_extra(0)?;
-    let (mut s, lossy) = match (a.opt("in"), a.opt("sample")) {
+    let (mut s, mut lossy) = match (a.opt("in"), a.opt("sample")) {
         (Some(_), Some(_)) => return Err("give --in or --sample, not both".into()),
         (Some(p), None) => open(p)?,
         (None, Some(name)) => {
@@ -446,6 +448,7 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         (None, None) => (blank(), 0),
     };
+    let mut lossy_from = a.opt("in").unwrap_or_default().to_string();
     let quiet = a.has("quiet");
     let mut step = 0usize;
     for (name, value) in &a.opts {
@@ -465,7 +468,14 @@ fn run(args: &[String]) -> Result<(), String> {
         };
         for (id, p, origin) in cmds {
             step += 1;
+            let open_path = if id == "file.open" { p.get("path").and_then(Value::as_str).map(str::to_string) } else { None };
             let r = exec(&mut s, &id, p).map_err(|e| format!("step {step} ({origin}, {id}): {e}"))?;
+            if open_path.is_some() || id == "file.open" {
+                lossy += lossy_warnings(&r);
+                if let Some(path) = open_path {
+                    lossy_from = path;
+                }
+            }
             if !quiet && !r.is_null() {
                 outln!("{}", serde_json::to_string(&json!({"command": id, "result": r})).unwrap_or_default());
             }
@@ -477,7 +487,7 @@ fn run(args: &[String]) -> Result<(), String> {
     if let Some(out) = a.opt("out") {
         let r = exec(&mut s, "file.save", json!({"path": out}))?;
         eprintln!("wrote {out} ({} bytes)", r["bytes"]);
-        lossy_out = lossy_check(a.opt("in").unwrap_or_default(), lossy, a.has("allow-lossy"));
+        lossy_out = lossy_check(&lossy_from, lossy, a.has("allow-lossy"));
     }
     for (name, range) in &a.opts {
         if name == "print" {
@@ -742,6 +752,21 @@ mod tests {
         let (mut s, lossy) = open(&path(&output)).unwrap();
         assert_eq!(lossy, 0);
         assert_eq!(value_text(&exec(&mut s, "sheet.read", json!({"range": "A1"})).unwrap()["values"]), "42");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn run_fails_when_a_command_opens_a_warned_import() {
+        // A file.open issued as a command replaces the workbook; its warnings count too, or
+        // the save that follows ships the lossy content with a success status.
+        let (dir, input) = warned_csv("run-cmd-open");
+        let output = dir.join("dates.xlsx");
+        let open_cmd = format!(r#"file.open={{"path":"{}"}}"#, input);
+        let e = run(&vec!["--quiet".into(), "--cmd".into(), open_cmd.clone(), "--out".into(), path(&output)])
+            .expect_err("a warned import opened by a command fails the run");
+        assert!(e.contains("--allow-lossy"), "{e}");
+        assert!(std::fs::read(&output).unwrap().starts_with(b"PK"));
+        run(&vec!["--quiet".into(), "--cmd".into(), open_cmd, "--out".into(), path(&output), "--allow-lossy".into()]).unwrap();
         std::fs::remove_dir_all(dir).unwrap();
     }
 
