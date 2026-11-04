@@ -4,12 +4,14 @@ The Data tab's **Power Pivot** button opens the data-model window (`powerPivot`)
 Excel's Power Pivot layout, but every model operation runs through the `dataModel.*` engine
 commands, so the UI, agents and the control channel see the same model.
 
-The model is **session state**: `dataModel.load` reads a JSON model file, and measure and
-relationship edits update the engine session only. They are not written to the workbook and are
-not undoable — the one exception is `dataModel.createPivot`. When the workbook already has
-`xl/model/item.data`, it writes the session model's measures that have a home table into that
-part before attaching the PivotTable's cache. Measures without a home table are not written, and
-nothing is written when the workbook has no such part.
+The model is **session state**: `dataModel.load` takes a JSON model as `path` (a file the native
+host reads), `json` (the JSON text) or `model` (an already-parsed model object) — browser hosts
+use `json` or `model`, since wasm has no filesystem. Measure and relationship edits update the
+engine session only. They are not written to the workbook and are not undoable — the one
+exception is `dataModel.createPivot`. When the workbook already has `xl/model/item.data`, it
+writes the session model's measures that have a home table into that part before attaching the
+PivotTable's cache. Measures without a home table are not written, and nothing is written when
+the workbook has no such part.
 
 ## Window layout
 
@@ -221,7 +223,7 @@ All overlays are reported through `overlay` = `""` | `openModel` | `existingConn
 | Create/Manage/Delete Relationship | Matches, wired to `dataModel.addRelationship` / `deleteRelationship` |
 | Table Properties showing column types | Matches (read-only), from the status `type` field |
 | Diagram cards and relationship lines | Matches, with a 60-table/12-column display cap |
-| Get External Data / database and service imports | Missing: `dataModel.load` reads a JSON model file only |
+| Get External Data / database and service imports | Missing: `dataModel.load` takes a JSON model only (no database or service importers) |
 | Paste, copy, Import, existing worksheet connections | Missing in this window; worksheet commands are separate |
 | Add/delete/rename model columns, data-type editing, freeze, width | Partial: **Hide/Unhide** and **Data Type** work (`setColumnHidden`, `setColumnType`); delete, rename, freeze and width are missing |
 | Sort, filter and format model rows | Partial: sort/filter/find work on the window's view state (`sortTable`, `setFilter`, `sortByColumn`, `find`); they do not reorder model storage |

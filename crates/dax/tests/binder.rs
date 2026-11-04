@@ -141,6 +141,23 @@ fn bracketed_names_bind_measures_before_variables() {
 }
 
 #[test]
+fn pathitem_type_names_bind_as_keywords() {
+    let model = sample_model();
+    for (formula, function, expected) in
+        [("PATHITEM ( \"1|2\", 1, TEXT )", "PATHITEM", "TEXT"), ("PATHITEMREVERSE ( \"1|2\", 1, INTEGER )", "PATHITEMREVERSE", "INTEGER")]
+    {
+        match bind(&model, formula) {
+            BoundExpr::Call { spec, args } => {
+                assert_eq!(spec.name, function);
+                assert_eq!(args.len(), 3);
+                assert!(matches!(&args[2], BoundExpr::Keyword(keyword) if keyword == expected), "expected `{expected}` keyword, got {:?}", args[2]);
+            }
+            other => panic!("expected call, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn measures_and_dependencies_are_bound() {
     let model = sample_model();
     let binder = Binder::new(&model);

@@ -236,32 +236,53 @@ fn compare_values(left: &[Scalar], right: &[Scalar]) -> Ordering {
     left.len().cmp(&right.len())
 }
 
-/// The value of `column` for a row of `table`: the row itself when the column belongs to the
-/// table, a related-table value when the column is on a table reachable through a relationship,
-/// otherwise a column with the same name (SUMMARIZE accepts columns of the summarized table and
-/// of its related tables; derived tables keep their columns by name).
-fn group_value(ev: &Evaluator<'_>, table: &TableValue, row: &[Scalar], column: &ColumnRef) -> Result<Scalar, EvalError> {
-    // Only a table with the full model layout can be read at the model index; a projection
-    // (`VALUES(Sales[Region])`, `ALL(Sales[Region])`) is read by column name instead.
-    if table.lineage == Some(column.table) && table.column_index(&column.name) == Some(column.column) {
-        return row.get(column.column).cloned().ok_or_else(|| EvalError::new("row is out of range"));
-    }
-    if table.lineage.is_some()
-        && let Some(value) = related_value(ev, table, row, column.table, column.column)
-    {
-        return Ok(value);
-    }
-    if let Some(index) = table.column_index(&column.name) {
-        return row.get(index).cloned().ok_or_else(|| EvalError::new("row is out of range"));
-    }
-    Err(EvalError::new(format!("column [{}] is not available in this table", column.name)))
+/// A related table's key column indexed by [`ScalarKey`]. Each bucket keeps the row positions in
+/// table order, so a lookup can still apply `strict_eq` and take the first matching row.
+type RelatedKeyMap = BTreeMap<ScalarKey, Vec<usize>>;
+
+/// One active relationship that can carry a projected column from the summarized table to the
+/// related table, with its key column indices resolved once up front.
+struct RelatedLink {
+    /// Index of the relationship in the model; it identifies its key map in the cache.
+    relationship: usize,
+    /// Index of the base key column in the summarized table.
+    base_key: usize,
+    target_table: usize,
+    target_key: usize,
+    target_column: usize,
 }
 
-/// Follows an active relationship from `base` to `target` for one row.
-fn related_value(ev: &Evaluator<'_>, table: &TableValue, row: &[Scalar], target: usize, target_column: usize) -> Option<Scalar> {
-    let base = table.lineage?;
+/// A group-by column resolved against the summarized table: where a row's value comes from.
+struct ColumnAccess {
+    name: String,
+    /// The model column index when the table has the full model layout for this column.
+    direct: Option<usize>,
+    /// Active relationships that can reach the column's table, in model order.
+    related: Vec<RelatedLink>,
+    /// Index of a column of the table with the same name, tried last.
+    by_name: Option<usize>,
+}
+
+/// Resolves how to read `column` for every row of `table`: the direct model index, the active
+/// relationships that reach a related table, and the same-named fallback.
+fn column_access(ev: &Evaluator<'_>, table: &TableValue, column: &ColumnRef) -> ColumnAccess {
+    // Only a table with the full model layout can be read at the model index; a projection
+    // (`VALUES(Sales[Region])`, `ALL(Sales[Region])`) is read by column name instead.
+    let direct = (table.lineage == Some(column.table) && table.column_index(&column.name) == Some(column.column)).then_some(column.column);
+    ColumnAccess {
+        name: column.name.clone(),
+        direct,
+        related: related_links(ev, table, column.table, column.column),
+        by_name: table.column_index(&column.name),
+    }
+}
+
+/// The active relationships that can supply `target_column` of `target` from a row of `table`.
+fn related_links(ev: &Evaluator<'_>, table: &TableValue, target: usize, target_column: usize) -> Vec<RelatedLink> {
+    let Some(base) = table.lineage else { return Vec::new() };
     let model = ev.model();
-    for relationship in &model.relationships {
+    let mut links = Vec::new();
+    for (index, relationship) in model.relationships.iter().enumerate() {
         if relationship.inactive {
             continue;
         }
@@ -278,11 +299,55 @@ fn related_value(ev: &Evaluator<'_>, table: &TableValue, row: &[Scalar], target:
         // key is read by name; a projection without the key skips the relationship.
         let Some(base_column) = table.column_index(base_key) else { continue };
         let Some(target_key_column) = model.column_index(target, target_key) else { continue };
-        let Some(key) = row.get(base_column) else { continue };
-        let Some(target_table) = model.tables.get(target) else { continue };
-        for target_row in &target_table.rows {
-            if target_row.get(target_key_column).is_some_and(|value| value.strict_eq(key)) {
-                return target_row.get(target_column).cloned();
+        links.push(RelatedLink { relationship: index, base_key: base_column, target_table: target, target_key: target_key_column, target_column });
+    }
+    links
+}
+
+/// The target key column of a relationship indexed by [`ScalarKey`]. The map is built once per
+/// relationship and reused for every source row and every projected column of the same table.
+fn related_key_map(model: &crate::model::DataModel, link: &RelatedLink) -> RelatedKeyMap {
+    let mut map: RelatedKeyMap = BTreeMap::new();
+    let Some(target_table) = model.tables.get(link.target_table) else { return map };
+    for (index, target_row) in target_table.rows.iter().enumerate() {
+        if let Some(value) = target_row.get(link.target_key) {
+            map.entry(ScalarKey::from(value)).or_default().push(index);
+        }
+    }
+    map
+}
+
+/// The value of a group-by column for one row: the row itself when the column belongs to the
+/// table, a related-table value when the column is on a table reachable through a relationship,
+/// otherwise a column with the same name (SUMMARIZE accepts columns of the summarized table and
+/// of its related tables; derived tables keep their columns by name).
+fn group_value(ev: &Evaluator<'_>, row: &[Scalar], access: &ColumnAccess, cache: &mut BTreeMap<usize, RelatedKeyMap>) -> Result<Scalar, EvalError> {
+    if let Some(index) = access.direct {
+        return row.get(index).cloned().ok_or_else(|| EvalError::new("row is out of range"));
+    }
+    if let Some(value) = related_value(ev, row, &access.related, cache) {
+        return Ok(value);
+    }
+    if let Some(index) = access.by_name {
+        return row.get(index).cloned().ok_or_else(|| EvalError::new("row is out of range"));
+    }
+    Err(EvalError::new(format!("column [{}] is not available in this table", access.name)))
+}
+
+/// Follows the resolved active relationships for one row, reusing the key map each relationship
+/// built on first use. The relationships are tried in model order and the map's bucket is
+/// re-checked with `strict_eq`, matching the original row-by-row linear scan.
+fn related_value(ev: &Evaluator<'_>, row: &[Scalar], links: &[RelatedLink], cache: &mut BTreeMap<usize, RelatedKeyMap>) -> Option<Scalar> {
+    let model = ev.model();
+    for link in links {
+        let Some(key) = row.get(link.base_key) else { continue };
+        let map = cache.entry(link.relationship).or_insert_with(|| related_key_map(model, link));
+        let Some(indices) = map.get(&ScalarKey::from(key)) else { continue };
+        let Some(target_table) = model.tables.get(link.target_table) else { continue };
+        for index in indices {
+            let Some(target_row) = target_table.rows.get(*index) else { continue };
+            if target_row.get(link.target_key).is_some_and(|value| value.strict_eq(key)) {
+                return target_row.get(link.target_column).cloned();
             }
         }
     }
@@ -382,11 +447,15 @@ fn group_layout(group: &[GroupArg]) -> Result<GroupLayout, EvalError> {
 #[allow(clippy::type_complexity)]
 // Each entry pairs the group's key values with the rows that fall in it.
 fn group_details(ev: &Evaluator<'_>, table: &TableValue, columns: &[ColumnRef]) -> Result<Vec<(Vec<Scalar>, Vec<Vec<Scalar>>)>, EvalError> {
+    // Resolve every column and the related-table key maps once, then read them per row instead of
+    // re-resolving relationships and scanning the related table for each row.
+    let accesses: Vec<ColumnAccess> = columns.iter().map(|column| column_access(ev, table, column)).collect();
+    let mut related_keys: BTreeMap<usize, RelatedKeyMap> = BTreeMap::new();
     let mut groups: BTreeMap<Vec<ScalarKey>, (Vec<Scalar>, Vec<Vec<Scalar>>)> = BTreeMap::new();
     for row in &table.rows {
-        let mut values = Vec::with_capacity(columns.len());
-        for column in columns {
-            values.push(group_value(ev, table, row, column)?);
+        let mut values = Vec::with_capacity(accesses.len());
+        for access in &accesses {
+            values.push(group_value(ev, row, access, &mut related_keys)?);
         }
         let key: Vec<ScalarKey> = values.iter().map(ScalarKey::from).collect();
         groups.entry(key).or_insert_with(|| (values, Vec::new())).1.push(row.clone());

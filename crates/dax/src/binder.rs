@@ -273,6 +273,9 @@ impl<'a> Binder<'a> {
                 "LOOKUP" | "LOOKUPWITHTOTALS" if index % 2 == 1 && index + 1 == call.args.len() => {
                     clause_keyword(arg, &["EXPLICIT", "INFERRED", "DEFAULT"])
                 }
+                // PATHITEM's optional Type is documented as `TEXT`/`INTEGER` but catalogued as
+                // `Any` so that the numeric `0`/`1` spellings still bind.
+                "PATHITEM" | "PATHITEMREVERSE" if index == 2 => clause_keyword(arg, &["TEXT", "INTEGER"]),
                 _ if matches!(expected, Some(ParamKind::Text)) => keyword_name(arg),
                 _ => visual_keyword_name(spec.name, index, arg),
             }

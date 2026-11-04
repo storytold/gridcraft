@@ -238,6 +238,15 @@ fn summarize_accepts_related_table_columns() {
 }
 
 #[test]
+fn summarize_related_columns_share_one_relationship_lookup() {
+    // Both group columns hop through Sales -> Products for every source row; repeated and
+    // out-of-order keys must still land in their single (Category, Product) group.
+    let table = eval_table("SUMMARIZE(Sales, Products[Category], Products[Product], \"Amount\", SUM(Sales[Amount]))").expect("related columns");
+    assert_columns(&table, &["Category", "Product", "Amount"]);
+    assert_eq!(table.rows, vec![vec![text("Devices"), text("Gadget"), money(87.0)], vec![text("Hardware"), text("Widget"), money(35.0)]]);
+}
+
+#[test]
 fn summarize_rejects_malformed_argument_lists() {
     assert!(error("SUMMARIZE(Sales, Sales[Region], \"Amount\")").contains("needs an expression"));
     assert!(error("SUMMARIZE(Sales, \"Amount\", SUM(Sales[Amount]), Sales[Region])").contains("must come before"));
