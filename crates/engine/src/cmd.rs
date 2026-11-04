@@ -503,10 +503,14 @@ pub(crate) fn refuse_unless_allowed(s: &Session, sheet: usize, what: &str, pick:
 pub(crate) fn locked_cell_error(sh: &gridcraft_model::Sheet, c: CellRef, unlocked: &[(String, String)]) -> Option<String> {
     let mut needs_password = None;
     for r in sh.edit_ranges.iter().filter(|r| r.contains(c)) {
-        if r.password.is_none() || unlocked.iter().any(|(s, t)| *s == sh.name && *t == r.title) {
+        // A range limited to Windows users or groups (a security descriptor) can't be checked
+        // here, so without a password it stays locked rather than opening to every editor.
+        if (r.password.is_none() && r.security_descriptor.is_none()) || unlocked.iter().any(|(s, t)| *s == sh.name && *t == r.title) {
             return None;
         }
-        needs_password.get_or_insert(r.title.as_str());
+        if r.password.is_some() {
+            needs_password.get_or_insert(r.title.as_str());
+        }
     }
     Some(match needs_password {
         Some(t) => format!("The range \"{t}\" needs its password before it can be changed (Review › Allow Edit Ranges)."),
