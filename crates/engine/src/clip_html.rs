@@ -26,12 +26,14 @@ const MAX_ROW_SPAN: usize = gridcraft_core::MAX_ROWS as usize;
 /// table is ignored: the HTML only refines cells of the tab-separated text, which stays the source.
 const MAX_HTML_CELLS: usize = 1_000_000;
 
-/// One table cell: its visible text and the number the source recorded for it, if any. The other
-/// fields are filled only for cells of a Google Sheets table.
+/// One table cell: its visible text, the number the source recorded for it, if any, and whether
+/// it is a header cell (`<th>`). The other fields are filled only for cells of a Google Sheets table.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct HtmlCell {
     pub text: String,
     pub num: Option<f64>,
+    /// A header cell (`<th>`).
+    pub header: bool,
     /// `num` is the cell's typed value (`data-sheets-value`), not just a hint to match against the
     /// text: it replaces whatever the text parsed to, so "01/02/2026" stays the day Sheets meant.
     pub typed: bool,
@@ -131,7 +133,7 @@ pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<V
                 let num = attr(attrs, "x:num").or_else(|| attr(attrs, "sdval")).and_then(|v| v.trim().parse::<f64>().ok()).filter(|n| n.is_finite());
                 let colspan = span(attrs, "colspan", MAX_SPAN);
                 let rowspan = span(attrs, "rowspan", MAX_ROW_SPAN);
-                let mut html_cell = HtmlCell { num, ..HtmlCell::default() };
+                let mut html_cell = HtmlCell { num, header: name == "th", ..HtmlCell::default() };
                 if document_is_sheets || table_is_sheets {
                     read_sheets_cell(&mut html_cell, attrs);
                 }
