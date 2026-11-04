@@ -73,6 +73,7 @@ pub fn warning(root: &Path) -> Result<Option<String>, String> {
     Ok(stale(n, MAX_BEHIND, &head))
 }
 
+/// Checks whether the credits snapshot exceeds the requested commit limit.
 pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
     let max = match args {
         [] => MAX_BEHIND,
@@ -93,6 +94,7 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// Accepts a valid snapshot commit and rejects malformed metadata.
     #[test]
     fn reads_the_snapshot_head() {
         assert_eq!(snapshot_head(r#"{"head":"90b3c41e","contributors":[]}"#).unwrap(), "90b3c41e");
@@ -101,6 +103,7 @@ mod tests {
         }
     }
 
+    /// Accepts a valid fallback date and rejects malformed metadata.
     #[test]
     fn reads_the_snapshot_date() {
         assert_eq!(snapshot_date(r#"{"head_date":"2026-10-27T22:47:04Z"}"#).as_deref(), Some("2026-10-27T22:47:04Z"));
@@ -109,6 +112,7 @@ mod tests {
         }
     }
 
+    /// Treats the configured limit as inclusive and reports older snapshots.
     #[test]
     fn warns_only_past_the_limit() {
         assert!(stale(100, 100, "90b3c41eec69").is_none());

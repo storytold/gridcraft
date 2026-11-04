@@ -44,6 +44,7 @@ commands:
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
 ";
 
+/// Runs the xtask command-line interface.
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
