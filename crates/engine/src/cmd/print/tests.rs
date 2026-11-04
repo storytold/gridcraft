@@ -951,6 +951,29 @@ fn gradient_cells_are_tessellated_into_the_pdf() {
     assert_eq!(text.matches(" re f").count(), 4 * 6 * 2, "the gradient was not tessellated");
 }
 
+/// A stop inside the cell keeps a band of its own: a white → black → white gradient sampled only
+/// at the two tile centres (1/4 and 3/4) is the same grey at both, so the cell would print flat.
+#[test]
+fn gradient_stop_inside_the_cell_keeps_its_colour_in_the_pdf() {
+    use gridcraft_model::{Fill, GradientKind, GradientStop};
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1]]})).unwrap();
+    let fill = Fill::gradient(
+        GradientKind::Linear { degree: 90.0 },
+        vec![
+            GradientStop { position: 0.0, color: Color::Rgb(0xFFFFFF) },
+            GradientStop { position: 0.5, color: Color::Rgb(0x000000) },
+            GradientStop { position: 1.0, color: Color::Rgb(0xFFFFFF) },
+        ],
+    );
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"fill": fill}})).unwrap();
+    let (pdf, _) = pdf_of(&mut s, json!({"range": "A1"}));
+    let text = String::from_utf8_lossy(&pdf);
+    // Six tiles across, two down, plus the band the middle stop adds.
+    assert_eq!(text.matches(" re f").count(), 6 * 3, "the middle stop was not given a band: {text}");
+    assert!(text.contains("0 0 0 rg"), "the black midpoint is painted, not averaged away: {text}");
+}
+
 /// Tiles follow the cell's size, as the grid renderer's mesh does: a small cell must not pay for a
 /// 16×16 grid, and a large one still reaches the cap.
 #[test]

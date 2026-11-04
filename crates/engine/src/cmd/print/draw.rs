@@ -1,7 +1,7 @@
 use super::layout::{DENSE_BLOCK, SheetLayout};
 use super::objects::draw_cell_picture;
 use super::text::{TextPlacement, draw_text};
-use gridcraft_model::{GradientFill, Theme};
+use gridcraft_model::{GradientFill, GradientKind, GradientStop, Theme};
 
 use super::{
     BorderLine, BorderStyle, Borders, CellRef, Color, Font, Page, PatternType, Point, RangeRef, Rgb, Sheet, Style, StyleId, Underline, Value,
@@ -251,21 +251,70 @@ fn fill_gradient(pg: &mut Page, x: f32, y: f32, w: f32, h: f32, g: &GradientFill
     if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
         return;
     }
-    let (cols, rows) = (gradient_tiles(w), gradient_tiles(h));
-    let cw = w / cols as f32;
-    let ch = h / rows as f32;
     // Resolve theme colours once per cell, not once per tile (`sample` would allocate per tile).
     let stops = g.resolved_stops(theme);
-    for iy in 0..rows {
-        for ix in 0..cols {
-            let u = (ix as f32 + 0.5) / cols as f32;
-            let v = (iy as f32 + 0.5) / rows as f32;
-            if let Some(rgb) = g.sample_resolved(&stops, u as f64, v as f64) {
+    let along = gradient_axis(g);
+    let knots = |axis: GradientAxis| if along == Some(axis) { g.stops.as_slice() } else { &[] };
+    let us = gradient_axis_samples(gradient_tiles(w), knots(GradientAxis::Horizontal));
+    let vs = gradient_axis_samples(gradient_tiles(h), knots(GradientAxis::Vertical));
+    for (iy, &v) in vs.iter().enumerate() {
+        let (y0, y1) = gradient_band(&vs, iy);
+        for (ix, &u) in us.iter().enumerate() {
+            let (x0, x1) = gradient_band(&us, ix);
+            if let Some(rgb) = g.sample_resolved(&stops, u, v) {
                 // A hair of overlap hides seams between the rectangles.
-                pg.fill_rect(x + ix as f32 * cw, y + iy as f32 * ch, cw + 0.05, ch + 0.05, rgb);
+                pg.fill_rect(x + x0 as f32 * w, y + y0 as f32 * h, (x1 - x0) as f32 * w + 0.05, (y1 - y0) as f32 * h + 0.05, rgb);
             }
         }
     }
+}
+
+/// The axis of the cell that a linear gradient's stop positions measure distance along. A path
+/// gradient's stops run outwards from the focus rectangle, not along one axis.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GradientAxis {
+    Horizontal,
+    Vertical,
+}
+
+fn gradient_axis(g: &GradientFill) -> Option<GradientAxis> {
+    let GradientKind::Linear { degree } = g.kind else { return None };
+    let angle = degree.to_radians();
+    let (dx, dy) = (angle.cos().abs(), angle.sin().abs());
+    // A diagonal gradient moves along both axes: neither one carries the stops alone.
+    if dx > dy * (1.0 + 1e-9) {
+        Some(GradientAxis::Horizontal)
+    } else if dy > dx * (1.0 + 1e-9) {
+        Some(GradientAxis::Vertical)
+    } else {
+        None
+    }
+}
+
+/// Positions along one axis (0..1) to sample the gradient at: the tile centres, plus every stop
+/// strictly inside the cell that no centre already sits near. A white → black → white gradient
+/// sampled only at 1/4 and 3/4 is one flat grey; the middle stop gets its own band instead. Stops
+/// at 0 or 1 need none, and a stop within half a tile of a centre is already sampled faithfully,
+/// which bounds the samples at twice the tile count.
+fn gradient_axis_samples(tiles: usize, knots: &[GradientStop]) -> Vec<f64> {
+    let band = 1.0 / tiles as f64;
+    let mut samples: Vec<f64> = (0..tiles).map(|i| (i as f64 + 0.5) * band).collect();
+    for stop in knots {
+        let knot = stop.position;
+        if knot > 0.0 && knot < 1.0 && samples.iter().all(|s| (s - knot).abs() >= band * 0.5) {
+            samples.push(knot);
+        }
+    }
+    samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    samples
+}
+
+/// The stretch of one axis a sample stands for: half way to each neighbour, so the tile centres
+/// reproduce the uniform grid exactly and a stop keeps the band around it.
+fn gradient_band(samples: &[f64], i: usize) -> (f64, f64) {
+    let lo = if i == 0 { 0.0 } else { (samples[i - 1] + samples[i]) / 2.0 };
+    let hi = if i + 1 == samples.len() { 1.0 } else { (samples[i] + samples[i + 1]) / 2.0 };
+    (lo, hi)
 }
 
 /// Draws the cells of a block: fills, gridlines, data bars, borders and text.
