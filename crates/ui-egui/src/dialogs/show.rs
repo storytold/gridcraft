@@ -584,7 +584,9 @@ fn check_performance(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open
                 ui.horizontal(|ui| {
                     let sheet = cell.get("sheet").and_then(Json::as_str).unwrap_or("");
                     let at = cell.get("cell").and_then(Json::as_str).unwrap_or("");
-                    ui.label(format!("{sheet}!{at}"));
+                    // A sheet name may contain a newline; keep every row one line tall so the
+                    // fixed row height `show_rows` uses cannot clip or jump.
+                    ui.label(format!("{}!{at}", sheet.replace(['\n', '\r'], " ")));
                     if let Some(reason) = cell.get("reason").and_then(Json::as_str) {
                         ui.label(egui::RichText::new(reason).small());
                     }
