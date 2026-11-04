@@ -948,22 +948,32 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     let prior = prior_meta.as_ref().map(std::fs::Metadata::permissions);
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
+    // Over an existing file the replacement starts owner-only, whatever the umask: its group is
+    // still the saving user's primary one until it is changed below, and a member of that group
+    // must not be able to open it (and keep the descriptor) before then.
     #[cfg(unix)]
-    if let Some(p) = &prior {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        opts.mode(p.mode());
+    if prior.is_some() {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
     }
     let mut f = opts.open(&tmp).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
     })?;
-    // The replacement belongs to the saving user's primary group: restore the old file's group, and
-    // when that isn't allowed, drop the group's access rather than hand it to a different group.
+    // The replacement belongs to the saving user's primary group: restore the old file's group and
+    // then its mode. When the group can't be restored it stays owner-only (the group's access is
+    // dropped rather than handed to a different group); failing to read that back is a failed save.
     #[cfg(unix)]
     if let Some(m) = &prior_meta {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        if std::os::unix::fs::fchown(&f, None, Some(m.gid())).is_err() && f.metadata().is_ok_and(|now| now.gid() != m.gid()) {
-            let _ = f.set_permissions(std::fs::Permissions::from_mode(m.mode() & 0o7707));
+        let _ = std::os::unix::fs::fchown(&f, None, Some(m.gid()));
+        let group_kept = f.metadata().map(|now| now.gid() == m.gid()).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            EngineError::Other(format!("{path}: {e}"))
+        })?;
+        if group_kept {
+            // Best effort: a file system that can't change modes keeps the owner-only one.
+            let _ = f.set_permissions(std::fs::Permissions::from_mode(m.mode() & 0o7777));
         }
     }
     #[cfg(not(unix))]

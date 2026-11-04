@@ -51,6 +51,14 @@ fn save_keeps_the_destination_access_restrictions() {
     write_file(dest.to_str().unwrap(), b"v2").unwrap();
     let mode = std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
+    // The mode is set outright from the old file's, not through the umask: group and other access
+    // it had stay as they were.
+    for old in [0o640, 0o664] {
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(old)).unwrap();
+        write_file(dest.to_str().unwrap(), b"v3").unwrap();
+        assert_eq!(std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777, old);
+    }
+    assert!(!dir.join("private.xlsx.sctmp").exists());
     // And a brand-new file is created with the restrictive, not permissive, default.
     let fresh = dir.join("new.xlsx");
     write_file(fresh.to_str().unwrap(), b"v").unwrap();
