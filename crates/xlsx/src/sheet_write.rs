@@ -47,12 +47,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             .iter()
             .cloned()
             .map(|mut t| {
-                if t.header_row
-                    && t.filter_button
-                    && t.filter.is_empty()
-                    && t.range.contains_range(&af.range)
-                    && t.range.start.col == af.range.start.col
-                {
+                if t.header_row && t.filter.is_empty() && t.range.contains_range(&af.range) && t.range.start.col == af.range.start.col {
                     t.filter = af.criteria.clone();
                 }
                 t
@@ -476,7 +471,7 @@ fn write_sheet_rules(s: &mut String, sheet: &Sheet, rels: &mut Rels, out: &mut O
     if let Some(af) = &sheet.autofilter
         && !sheet.tables.iter().any(|t| t.range.intersects(&af.range))
     {
-        s.push_str(&autofilter_xml(af.range, &af.criteria, out));
+        s.push_str(&autofilter_xml(af.range, &af.criteria, false, out));
     }
     if !sheet.merges.is_empty() {
         let merges: Vec<&RangeRef> = sheet.merges.iter().filter(|m| !m.is_single()).collect();
