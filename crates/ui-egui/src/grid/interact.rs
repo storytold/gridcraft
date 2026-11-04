@@ -1068,17 +1068,19 @@ fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
     }
 }
 
-/// A click on a hyperlink. References select; web and e-mail addresses ask first (the dialog's
+/// A click on a hyperlink. References select; web and e-mail addresses and documents on this
+/// computer (PDFs, pictures, office files next to the workbook) ask first (the dialog's
 /// OK runs `link.open`); every other kind is refused with a message. The decision is the
 /// engine's ([`gridcraft_engine::links::classify`]), the same one `link.open` applies.
 pub fn follow_link(app: &mut SheetApp, target: &str) {
-    use gridcraft_engine::links::{LinkKind, classify};
-    match classify(target) {
+    use gridcraft_engine::links::{LinkKind, classify_in};
+    let workbook_path = app.session.active().and_then(|d| d.path.clone());
+    match classify_in(target, workbook_path.as_deref()) {
         LinkKind::Internal(r) => {
             let _ = app.session.run("edit.goTo", json!({"reference": r.trim_start_matches('#')}));
             app.grid.ensure_visible = true;
         }
-        LinkKind::External(url) => app.open_dialog("openLink", json!({"url": url})),
+        LinkKind::External(url) | LinkKind::LocalFile(url) => app.open_dialog("openLink", json!({"url": url})),
         LinkKind::Refused(why) => app.message = Some(("Hyperlink".into(), why)),
     }
 }
