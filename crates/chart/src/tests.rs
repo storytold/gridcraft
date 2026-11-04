@@ -267,10 +267,14 @@ fn pareto_skips_cumulative_line_for_signed_categories() {
         series: vec![series("Count", &[10.0, -5.0], [20, 96, 130, 255], ChartKind::Pareto)],
     };
     let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
-    let line_color = d.palette.get(1).copied().unwrap_or(d.series[0].color);
     // A negative category makes the cumulative percentage meaningless, so no line or markers.
+    // The cumulative line is the only 1.5 px polyline a Pareto draws (bars are rects, axes 0.75).
+    let line = |prims: &[Prim]| prims.iter().any(|p| matches!(p, Prim::Line { pts, width, .. } if *width == 1.5 && pts.len() >= 2));
     assert_eq!(prims.iter().filter(|p| matches!(p, Prim::Circle { r, .. } if *r == 2.0)).count(), 0);
-    assert!(!prims.iter().any(|p| matches!(p, Prim::Line { pts, color, .. } if *color == line_color && pts.len() > 2)));
+    assert!(!line(&prims), "signed categories draw no cumulative line");
+    // The same chart with nonnegative values does draw it, so the check above can fail.
+    let d = ChartData { series: vec![series("Count", &[10.0, 5.0], [20, 96, 130, 255], ChartKind::Pareto)], ..d };
+    assert!(line(&render(&c, &d, 640.0, 400.0, &ApproxMeasure)), "nonnegative categories draw the cumulative line");
 }
 
 #[test]
