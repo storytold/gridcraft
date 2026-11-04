@@ -373,6 +373,20 @@ fn replace_refuses_text_that_would_grow_past_a_cell() {
 }
 
 #[test]
+fn replace_refuses_a_result_past_the_character_limit_though_it_fits_the_byte_limit() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["z"]]})).unwrap();
+    for whole in [false, true] {
+        let err = s.execute("edit.replace", json!({"what": "z", "with": "x".repeat(32_768), "wholeCell": whole})).expect_err("32,768 characters");
+        assert!(err.to_string().contains("too long"), "{err}");
+        assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["value"], json!("z"));
+    }
+    s.execute("edit.replace", json!({"what": "z", "with": "x".repeat(32_767)})).unwrap();
+    assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["value"], json!("x".repeat(32_767)));
+}
+
+#[test]
 fn bounded_replace_stops_at_its_limit() {
     use super::find::{replace_ci_within, replace_cs_within};
     assert_eq!(replace_cs_within("abab", "a", "xy", 6).as_deref(), Some("xybxyb"));

@@ -104,16 +104,19 @@ pub(super) fn find(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"cell": c.a1(), "sheet": si, "value": t, "count": hits.len()}))
 }
 
-/// Longest text one replacement may give a cell, in bytes: Excel's 32,767 characters, each up to
-/// four bytes. Every occurrence copies the replacement text, so a short cell full of matches and a
-/// long replacement would otherwise expand to gigabytes.
-const REPLACE_CELL_MAX_BYTES: usize = 32_767 * 4;
+/// Most characters a cell holds (Excel's limit).
+const REPLACE_CELL_MAX_CHARS: usize = 32_767;
+/// Longest text one replacement may give a cell, in bytes: the character limit, each up to four
+/// bytes. Every occurrence copies the replacement text, so a short cell full of matches and a
+/// long replacement would otherwise expand to gigabytes. The character limit is checked on what
+/// fits in this.
+const REPLACE_CELL_MAX_BYTES: usize = REPLACE_CELL_MAX_CHARS * 4;
 /// Most bytes of replaced text one Replace All builds across all its cells.
 const REPLACE_TOTAL_MAX_BYTES: usize = 256 * 1024 * 1024;
 
 pub(super) fn replace(s: &mut Session, p: &Json) -> Result<Json> {
     let what = str_param(p, "what").unwrap_or("").to_string();
-    let with = str_param(p, "with").unwrap_or("").to_string();
+    let with = str_param(p, "with").unwrap_or("");
     if what.is_empty() {
         return Err(bad("edit.replace", "missing `what`"));
     }
@@ -138,12 +141,13 @@ pub(super) fn replace(s: &mut Session, p: &Json) -> Result<Json> {
                     continue;
                 }
                 let new = if whole {
-                    Some(with.clone()).filter(|w| w.len() <= REPLACE_CELL_MAX_BYTES)
+                    (with.len() <= REPLACE_CELL_MAX_BYTES).then(|| with.to_string())
                 } else if case {
-                    replace_cs_within(&text, &what, &with, REPLACE_CELL_MAX_BYTES)
+                    replace_cs_within(&text, &what, with, REPLACE_CELL_MAX_BYTES)
                 } else {
-                    replace_ci_within(&text, &what, &with, REPLACE_CELL_MAX_BYTES)
+                    replace_ci_within(&text, &what, with, REPLACE_CELL_MAX_BYTES)
                 };
+                let new = new.filter(|n| n.chars().count() <= REPLACE_CELL_MAX_CHARS);
                 let Some(new) = new else {
                     return Err(EngineError::Other(format!("The replacement makes the text of {} too long.", c.a1())));
                 };
