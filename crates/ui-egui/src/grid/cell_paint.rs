@@ -142,13 +142,22 @@ pub(crate) fn wrapped_cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -
 }
 
 /// Bounds of the primary font's line boxes, excluding extra row height added only for fallbacks.
-/// Empty edge rows keep their layout bounds so explicit blank lines still occupy space.
+/// Centered fallbacks do not identify that baseline; empty or centered-only rows use their layout bounds.
 pub(crate) fn galley_baseline_bounds(galley: &egui::Galley) -> (f32, f32) {
-    let first = galley.rows.first().map(|row| row.glyphs.first().map_or(row.rect().top(), |glyph| row.pos.y + glyph.pos.y - glyph.font_ascent));
-    let last = galley
-        .rows
-        .last()
-        .map(|row| row.glyphs.first().map_or(row.rect().bottom(), |glyph| row.pos.y + glyph.pos.y - glyph.font_ascent + glyph.font_height));
+    let row_bounds = |row: &egui::epaint::text::PlacedRow| {
+        row.glyphs
+            .iter()
+            .find(|glyph| {
+                glyph.font_face_align == egui::epaint::text::FallbackAlign::Baseline
+                    || (glyph.font_face_ascent == glyph.font_ascent && glyph.font_face_height == glyph.font_height)
+            })
+            .map_or((row.rect().top(), row.rect().bottom()), |glyph| {
+                let top = row.pos.y + glyph.pos.y - glyph.font_ascent;
+                (top, top + glyph.font_height)
+            })
+    };
+    let first = galley.rows.first().map(|row| row_bounds(row).0);
+    let last = galley.rows.last().map(|row| row_bounds(row).1);
     first.zip(last).unwrap_or((0.0, galley.size().y))
 }
 

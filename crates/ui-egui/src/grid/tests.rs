@@ -201,6 +201,39 @@ fn galley_baseline_bounds_preserves_empty_edge_rows() {
 }
 
 #[test]
+fn galley_baseline_bounds_ignores_centered_fallback_glyphs() {
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |_| {});
+    output.textures_delta.clear();
+    for text in ["\u{e618}Hello", "Hello\n\u{e618}Hello", "\u{e618}Hello\nHello", "😀Hello", "Hello\n😀Hello", "😀Hello\nHello"] {
+        let galley = ctx.fonts_mut(|fonts| fonts.layout(text.to_string(), egui::FontId::monospace(16.0), Color32::BLACK, 200.0));
+        let fallback =
+            galley.rows.iter().flat_map(|row| &row.glyphs).find(|glyph| matches!(glyph.chr, '\u{e618}' | '😀')).expect("fallback is laid out");
+        assert_eq!(fallback.font_face_align, egui::epaint::text::FallbackAlign::Center);
+        assert_ne!(fallback.font_face_ascent, fallback.font_ascent, "test must exercise a fallback with different metrics");
+        let (top, bottom) = super::cell_paint::galley_baseline_bounds(&galley);
+        for (row, bound, lower) in [(galley.rows.first().unwrap(), top, false), (galley.rows.last().unwrap(), bottom, true)] {
+            let primary = row.glyphs.iter().find(|glyph| glyph.chr == 'H').expect("primary-font text is present");
+            let expected = row.pos.y + primary.pos.y - primary.font_ascent + if lower { primary.font_height } else { 0.0 };
+            assert_eq!(bound, expected, "a centered fallback must not shift the primary text: {text:?}");
+        }
+    }
+}
+
+#[test]
+fn galley_baseline_bounds_keeps_centered_only_rows() {
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |_| {});
+    output.textures_delta.clear();
+    for text in ["\u{e618}", "\u{e618}\n\u{e618}", "😀", "😀\n😀"] {
+        let galley = ctx.fonts_mut(|fonts| fonts.layout(text.to_string(), egui::FontId::monospace(16.0), Color32::BLACK, 200.0));
+        let (top, bottom) = super::cell_paint::galley_baseline_bounds(&galley);
+        assert_eq!(top, galley.rows.first().unwrap().rect().top(), "centered-only rows keep their logical top");
+        assert_eq!(bottom, galley.rows.last().unwrap().rect().bottom(), "centered-only rows keep their logical bottom");
+    }
+}
+
+#[test]
 fn cell_text_y_moves_monotonically_when_the_text_fits() {
     let rect_std = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 20.0));
     let gh = 16.0;
