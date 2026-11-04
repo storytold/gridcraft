@@ -131,7 +131,8 @@ fn preview_reports_margins_and_where_the_table_sits() {
     let page = s.execute("file.printPreview", json!({"page": 1})).unwrap()["page"].clone();
     assert_eq!(page["margins"]["left"], 1.0);
     assert_eq!(page["margins"]["top"], 2.0);
-    assert_eq!(page["margins"]["header"], 0.4);
+    let inch = |key: &str| page["margins"][key].as_f64().unwrap();
+    assert!((inch("header") - 0.4).abs() < 1e-6);
     assert_eq!(page["content"]["x"], 72.0);
     assert_eq!(page["content"]["y"], 144.0);
     // Two 64px columns and two 20px rows at 0.75pt per pixel.
@@ -144,6 +145,11 @@ fn preview_reports_margins_and_where_the_table_sits() {
     assert_eq!(page["centerH"], true);
     assert_eq!(page["content"]["x"], 72.0 + 204.0);
     assert_eq!(page["content"]["y"], 144.0);
+    // Margins finer than a thousandth of an inch come back as they were set, so the Print page
+    // can save an untouched margin without changing it.
+    s.execute("pageLayout.pageSetup", json!({"margins": {"left": 0.700_787}})).unwrap();
+    let page = s.execute("file.printPreview", json!({"page": 1})).unwrap()["page"].clone();
+    assert!((page["margins"]["left"].as_f64().unwrap() - 0.700_787).abs() < 1e-6);
 }
 
 #[test]

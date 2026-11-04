@@ -218,7 +218,8 @@ fn print_preview(s: &mut Session, p: &Json) -> Result<Json> {
     for lay in &lays {
         let Some(sh) = d.wb.sheet(lay.sheet) else { continue };
         let name = sh.name.clone();
-        let inches = |pt: f32| (f64::from(pt) / 72.0 * 1000.0).round() / 1000.0;
+        // Exact, not rounded: the Print page saves untouched margins back as it got them.
+        let inches = |pt: f32| f64::from(pt) / 72.0;
         let [ml, mr, mt, mb, mh, mf] = lay.margins.map(inches);
         for (ri, ci) in &lay.pages {
             n += 1;
