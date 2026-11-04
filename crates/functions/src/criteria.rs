@@ -24,8 +24,8 @@ enum Operand {
     Number(f64),
     Bool(bool),
     Error(CellError),
-    /// Text (lower-cased chars kept for wildcard matching).
-    Text(String),
+    /// Text, with its pattern worked out once for all the cells it is compared with.
+    Text(String, Vec<Tok>),
     /// A criterion cut to its first 255 UTF-16 units in the middle of a surrogate pair: the
     /// complete characters before the cut, followed (in Excel) by a lone high surrogate.
     ///
@@ -118,7 +118,7 @@ impl Criterion {
         } else if let Some(e) = CellError::parse(rest) {
             Operand::Error(e)
         } else {
-            Operand::Text(rest.to_string())
+            Operand::Text(rest.to_string(), tokenize(rest))
         };
         Criterion { op, operand, bare_empty: false }
     }
@@ -150,15 +150,11 @@ impl Criterion {
         }
     }
 
-    fn matches_text(&self, v: &Value, pat: &str) -> bool {
+    fn matches_text(&self, v: &Value, pat: &str, tokens: &[Tok]) -> bool {
         match self.op {
             Op::Eq | Op::Ne => {
                 // Blank cells hold no text: `"*"` skips them and `"<>*"` counts them.
-                let cell_text = match v {
-                    Value::Text(t) => Some(t.to_string()),
-                    _ => None,
-                };
-                let m = cell_text.is_some_and(|t| wildcard_match(pat, &t));
+                let m = matches!(v, Value::Text(t) if tokens_match(tokens, t));
                 if self.op == Op::Eq { m } else { !m }
             }
             _ => match v {
@@ -180,25 +176,25 @@ impl Criterion {
     /// Whether a cell value satisfies the criterion.
     pub(crate) fn matches(&self, v: &Value) -> bool {
         let v = match v {
-            Value::Array(a) => a.data.first().cloned().unwrap_or(Value::Empty),
-            other => other.clone(),
+            Value::Array(a) => a.data.first().unwrap_or(&Value::Empty),
+            other => other,
         };
         if self.bare_empty {
-            return matches!(&v, Value::Empty) || matches!(&v, Value::Text(t) if t.is_empty());
+            return matches!(v, Value::Empty) || matches!(v, Value::Text(t) if t.is_empty());
         }
         match &self.operand {
-            Operand::Blank => self.matches_blank(&v),
-            Operand::Number(n) => self.matches_number(&v, *n),
-            Operand::Bool(b) => match &v {
+            Operand::Blank => self.matches_blank(v),
+            Operand::Number(n) => self.matches_number(v, *n),
+            Operand::Bool(b) => match v {
                 Value::Bool(x) => cmp_op(self.op, x.cmp(b)),
                 _ => self.op == Op::Ne,
             },
-            Operand::Error(e) => match &v {
+            Operand::Error(e) => match v {
                 Value::Error(x) => cmp_op(self.op, x.code().cmp(&e.code())),
                 _ => self.op == Op::Ne,
             },
-            Operand::Text(pat) => self.matches_text(&v, pat),
-            Operand::CutText(kept) => self.matches_cut_text(&v, kept),
+            Operand::Text(pat, tokens) => self.matches_text(v, pat, tokens),
+            Operand::CutText(kept) => self.matches_cut_text(v, kept),
         }
     }
 }
@@ -274,10 +270,19 @@ pub(crate) fn has_wildcards(pattern: &str) -> bool {
 
 /// Case-insensitive whole-text match with `*`, `?` and `~` escapes.
 pub(crate) fn wildcard_match(pattern: &str, text: &str) -> bool {
-    let p = tokenize(pattern);
+    tokens_match(&tokenize(pattern), text)
+}
+
+/// [`wildcard_match`] of a pattern already tokenized. A pattern without wildcards needs no copy of
+/// the text: criteria compare one with every cell of a column.
+fn tokens_match(tokens: &[Tok], text: &str) -> bool {
+    if tokens.iter().all(|t| matches!(t, Tok::Char(_))) {
+        let mut chars = text.chars().map(lower_char);
+        return tokens.iter().all(|t| matches!(t, Tok::Char(c) if chars.next() == Some(*c))) && chars.next().is_none();
+    }
     let t = lower_chars(text);
     let mut budget = MAX_STEPS;
-    match_from(&p, &t, true, &mut budget).is_some()
+    match_from(tokens, &t, true, &mut budget).is_some()
 }
 
 /// Steps one `match_from` call may take. An honest match against Excel's 32,767-character
@@ -383,6 +388,22 @@ pub(crate) fn lookup_equal(needle: &Value, hay: &Value, wild: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shortcut for a pattern without wildcards answers as the general match does.
+    #[test]
+    fn a_pattern_without_wildcards_matches_as_the_general_match_does() {
+        let texts = ["", "a", "A", "ab", "AB", "abc", "\u{130}", "i", "I", "i\u{307}", "stra\u{df}e", "STRASSE", "~", "*", "?", "a*b"];
+        let patterns = ["a", "AB", "abc", "\u{130}", "i", "stra\u{df}e", "~~", "~*", "~?", "a~*b", "x"];
+        for pattern in patterns {
+            let tokens = tokenize(pattern);
+            assert!(tokens.iter().all(|t| matches!(t, Tok::Char(_))), "{pattern}");
+            for text in texts {
+                let mut budget = MAX_STEPS;
+                let general = match_from(&tokens, &lower_chars(text), true, &mut budget).is_some();
+                assert_eq!(tokens_match(&tokens, text), general, "{pattern} against {text}");
+            }
+        }
+    }
 
     fn m(c: &str, v: Value) -> bool {
         Criterion::parse(&Value::from(c)).matches(&v)
