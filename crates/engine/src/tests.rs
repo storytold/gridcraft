@@ -3532,6 +3532,57 @@ fn ink_to_shape_anchors_polygon_presets_to_the_recognised_corners() {
 }
 
 #[test]
+fn ink_to_shape_flips_trapezoids_and_parallelograms_to_the_way_they_were_drawn() {
+    let mut s = s();
+    s.execute("draw.inkToShape", json!({"on": true})).unwrap();
+    // A trapezoid with its wide side on top: the preset draws the wide side at the bottom, so it
+    // is mirrored down instead of turning into an upright trapezoid with the wrong way up.
+    s.execute("draw.stroke", json!({"points": [[0, 0], [100, 0], [80, 60], [20, 60], [0, 0]]})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap().shapes[0].clone();
+    assert_eq!(sh.kind, gridcraft_model::ShapeKind::Trapezoid);
+    assert!(sh.format.flip_v, "the wide side belongs on top: {:?}", sh.format);
+    assert!(!sh.format.flip_h);
+    // A parallelogram leaning the other way is the same preset mirrored across.
+    s.execute("draw.stroke", json!({"points": [[0, 0], [75, 0], [100, 60], [25, 60], [0, 0]]})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap().shapes[1].clone();
+    assert_eq!(sh.kind, gridcraft_model::ShapeKind::Parallelogram);
+    assert!(sh.format.flip_h, "the top edge leans the other way: {:?}", sh.format);
+    assert!(!sh.format.flip_v);
+}
+
+#[test]
+fn ink_to_shape_leaves_a_polygon_its_preset_cannot_place_as_ink() {
+    let mut s = s();
+    s.execute("draw.inkToShape", json!({"on": true})).unwrap();
+    // A stroke sampled along its edges, as a pen draws it (corner points alone would read as a
+    // circle: every point would sit at one radius).
+    fn sampled(corners: &[[f64; 2]]) -> Vec<[f64; 2]> {
+        let mut out = Vec::new();
+        for i in 0..corners.len() {
+            let (a, b) = (corners[i], corners[(i + 1) % corners.len()]);
+            for k in 0..5 {
+                let t = k as f64 / 5.0;
+                out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+            }
+        }
+        out.push(corners[0]);
+        out
+    }
+    // A regular pentagon, point up, is the preset: it converts.
+    let pentagon: Vec<[f64; 2]> = (0..5)
+        .map(|i| {
+            let a = -std::f64::consts::FRAC_PI_2 + i as f64 * std::f64::consts::TAU / 5.0;
+            [100.0 + 50.0 * a.cos(), 100.0 + 50.0 * a.sin()]
+        })
+        .collect();
+    assert_eq!(s.execute("draw.stroke", json!({"points": sampled(&pentagon)})).unwrap()["kind"], "Pentagon");
+    // A six-corner polygon whose top-right corner is a quarter of the box to the left of where
+    // the preset puts it stays ink instead of being drawn with a corner it never had.
+    let lopsided: Vec<[f64; 2]> = vec![[0.0, 0.0], [40.0, 0.0], [100.0, 50.0], [60.0, 100.0], [0.0, 100.0], [-40.0, 50.0]];
+    assert_eq!(s.execute("draw.stroke", json!({"points": sampled(&lopsided)})).unwrap()["kind"], "Ink");
+}
+
+#[test]
 fn ink_to_shape_keeps_only_triangles_the_preset_can_draw() {
     let mut s = s();
     s.execute("draw.inkToShape", json!({"on": true})).unwrap();
@@ -5211,8 +5262,8 @@ fn recording_keeps_its_steps_when_the_journal_is_trimmed() {
         s.execute("cell.set", json!({"cell": "B1", "input": format!("step{i}")})).unwrap();
     }
     let r = s.execute("automate.recordActions", json!({"stop": true, "name": "Steps"})).unwrap();
-    // The twenty typed steps plus the Ink to Shape mode the script opens with.
-    assert_eq!(r["steps"], 21, "{r}");
+    // The twenty typed steps; no stroke was drawn, so no Ink to Shape step is added.
+    assert_eq!(r["steps"], 20, "{r}");
     let script = s.doc().unwrap().wb.names.iter().find(|n| n.name == "_sc_scripts").map(|n| n.formula.clone()).unwrap();
     assert!(script.contains("step0") && script.contains("step19") && !script.contains("selection.set"), "{script}");
 }

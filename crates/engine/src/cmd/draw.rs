@@ -238,15 +238,16 @@ fn segment_anchor(sheet: &Sheet, idx: usize, tail: [f32; 2], tip: [f32; 2]) -> O
 }
 
 /// Map a recognised polygon onto GridCraft's preset shapes, with the flips that place it: a
-/// triangle is a right or an upright isosceles one, quads use the diamond/parallelogram/trapezoid
-/// tests, and 5 and 6 sides are the pentagon/hexagon presets. Seven or eight corners have no
-/// preset, and neither has a polygon whose corners do not fit the preset's own.
+/// triangle is a right or an upright isosceles one, a quad is a diamond, parallelogram or
+/// trapezoid, and 5 and 6 sides are the pentagon/hexagon presets. Seven or eight corners have no
+/// preset, and neither has a polygon whose corners do not sit where the preset draws them: the
+/// stroke stays ink rather than being drawn at corners it did not have.
 fn polygon_kind(c: &[[f32; 2]]) -> Option<(ShapeKind, bool, bool)> {
     match c.len() {
         3 => triangle_kind(c),
-        4 => quad_kind(c).map(|kind| (kind, false, false)),
-        5 => Some((ShapeKind::Pentagon, false, false)),
-        6 => Some((ShapeKind::Hexagon, false, false)),
+        4 => preset_flips(c, &[ShapeKind::Diamond, ShapeKind::Parallelogram, ShapeKind::Trapezoid]),
+        5 => preset_flips(c, &[ShapeKind::Pentagon]),
+        6 => preset_flips(c, &[ShapeKind::Hexagon]),
         _ => None,
     }
 }
@@ -327,37 +328,68 @@ fn right_triangle_flips(p: &[[f32; 2]]) -> Option<(bool, bool)> {
     Some((v[0] > (x0 + x1) / 2.0, v[1] < (y0 + y1) / 2.0))
 }
 
-fn quad_kind(p: &[[f32; 2]]) -> Option<ShapeKind> {
-    if p.len() != 4 {
-        return None;
-    }
-    let edge = |i: usize| sub(p[(i + 1) % 4], p[i]);
-    let e = [edge(0), edge(1), edge(2), edge(3)];
-    let parallel = |a: [f32; 2], b: [f32; 2]| {
-        let (na, nb) = (norm(a), norm(b));
-        na > 0.0 && nb > 0.0 && (a[0] * b[0] + a[1] * b[1]).abs() / (na * nb) > 0.94
-    };
-    let (p02, p13) = (parallel(e[0], e[2]), parallel(e[1], e[3]));
-    if p02 && p13 {
-        // A parallelogram with four equal sides is a diamond, including a square standing on its
-        // corner (the recogniser returns upright squares as rectangles, so they never get here).
-        let sides = [norm(e[0]), norm(e[1]), norm(e[2]), norm(e[3])];
-        let mean = sides.iter().sum::<f32>() / 4.0;
-        return Some(if mean > 0.0 && sides.iter().all(|s| (s - mean).abs() < 0.08 * mean) { ShapeKind::Diamond } else { ShapeKind::Parallelogram });
-    }
-    // One pair of parallel sides is a trapezoid; an irregular quadrilateral has no preset and
-    // stays ink rather than becoming an upright rectangle that drops its corners.
-    if p02 || p13 { Some(ShapeKind::Trapezoid) } else { None }
+/// The first of `kinds` whose preset outline `p`'s corners are, with the flips that put them
+/// there. `None` when none fits: the axis-aligned preset would move the corners.
+fn preset_flips(p: &[[f32; 2]], kinds: &[ShapeKind]) -> Option<(ShapeKind, bool, bool)> {
+    kinds.iter().find_map(|&kind| {
+        let unit = unit_outline(kind)?;
+        let (x0, y0, x1, y1) = bounds_of(p);
+        let (w, h) = (x1 - x0, y1 - y0);
+        if p.len() != unit.len() || w <= 0.0 || h <= 0.0 {
+            return None;
+        }
+        // Hand wobble, as for the triangles: a share of the shorter side.
+        let tol = 0.15 * w.min(h).max(1.0);
+        [(false, false), (true, false), (false, true), (true, true)].into_iter().find_map(|(flip_h, flip_v)| {
+            let want: Vec<[f32; 2]> = unit
+                .iter()
+                .map(|q| {
+                    let u = if flip_h { 1.0 - q[0] } else { q[0] };
+                    let v = if flip_v { 1.0 - q[1] } else { q[1] };
+                    [x0 + u * w, y0 + v * h]
+                })
+                .collect();
+            corners_match(p, &want, tol).then_some((kind, flip_h, flip_v))
+        })
+    })
+}
+
+/// Whether every corner of `p` has a corner of `want` of its own within `tol` (the presets are
+/// convex and few-cornered, so matching the nearest free corner is enough).
+fn corners_match(p: &[[f32; 2]], want: &[[f32; 2]], tol: f32) -> bool {
+    let mut used = vec![false; want.len()];
+    p.iter().all(|q| {
+        let near = (0..want.len()).filter(|&i| !used[i]).find(|&i| dist(*q, want[i]) <= tol);
+        near.is_some_and(|i| {
+            used[i] = true;
+            true
+        })
+    })
+}
+
+/// A preset polygon's outline in the unit box, as fractions of its width and height. The same
+/// geometry the renderers and the PDF writer draw (`chartview::preset_geometry`,
+/// `print::objects::preset_outline`).
+fn unit_outline(kind: ShapeKind) -> Option<&'static [[f32; 2]]> {
+    Some(match kind {
+        ShapeKind::Diamond => &[[0.5, 0.0], [1.0, 0.5], [0.5, 1.0], [0.0, 0.5]],
+        ShapeKind::Parallelogram => &[[0.25, 0.0], [1.0, 0.0], [0.75, 1.0], [0.0, 1.0]],
+        ShapeKind::Trapezoid => &[[0.2, 0.0], [0.8, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        ShapeKind::Pentagon => {
+            &[[0.5, 0.0], [0.975_528_3, 0.345_491_5], [0.793_892_6, 0.904_508_5], [0.206_107_4, 0.904_508_5], [0.024_471_7, 0.345_491_5]]
+        }
+        ShapeKind::Hexagon => &[[0.25, 0.0], [0.75, 0.0], [1.0, 0.5], [0.75, 1.0], [0.25, 1.0], [0.0, 0.5]],
+        _ => return None,
+    })
+}
+
+/// The corners' box as `(x0, y0, x1, y1)`.
+fn bounds_of(p: &[[f32; 2]]) -> (f32, f32, f32, f32) {
+    p.iter().fold((f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY), |(x0, y0, x1, y1), q| {
+        (x0.min(q[0]), y0.min(q[1]), x1.max(q[0]), y1.max(q[1]))
+    })
 }
 
 fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
-}
-
-fn sub(a: [f32; 2], b: [f32; 2]) -> [f32; 2] {
-    [a[0] - b[0], a[1] - b[1]]
-}
-
-fn norm(a: [f32; 2]) -> f32 {
-    (a[0] * a[0] + a[1] * a[1]).sqrt()
 }
