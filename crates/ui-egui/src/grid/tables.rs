@@ -45,7 +45,10 @@ pub fn heading_table<'a>(geo: &Geo, sh: &'a Sheet, active: CellRef) -> Option<&'
 /// The headings of `heading_table`'s visible columns.
 pub fn table_headings(geo: &Geo, sh: &Sheet, active: CellRef) -> Vec<TableHeading> {
     let Some(tb) = heading_table(geo, sh, active) else { return Vec::new() };
-    let af = sh.autofilter.as_ref().filter(|af| af.range == tb.range);
+    // A table's filter menu installs its AutoFilter over `filter_range()`, which leaves out the
+    // totals row; a table without one has the two ranges equal.
+    let fr = tb.filter_range();
+    let af = sh.autofilter.as_ref().filter(|af| af.range == tb.range || Some(af.range) == fr);
     let mut out = Vec::new();
     for col in tb.range.start.col..=tb.range.end.col {
         let w = sh.col_width(col) * geo.z;

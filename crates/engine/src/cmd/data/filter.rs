@@ -176,7 +176,13 @@ pub(crate) fn grow_autofilter(sh: &mut Sheet, at: CellRef) {
     }
     let Some(af) = sh.autofilter.as_ref() else { return };
     let r = af.range;
-    if r.end.row.checked_add(1) != Some(at.row) || at.col < r.start.col || at.col > r.end.col || sh.tables.iter().any(|t| t.range == r) {
+    // A table's own filter covers its `filter_range()` (the header and the data rows), so a table
+    // with a totals row stores that shorter range; a cell in the totals row must not grow it.
+    if r.end.row.checked_add(1) != Some(at.row)
+        || at.col < r.start.col
+        || at.col > r.end.col
+        || sh.tables.iter().any(|t| t.range == r || t.filter_range() == Some(r))
+    {
         return;
     }
     let grown = RangeRef::new(r.start, CellRef::new(at.row, r.end.col));
