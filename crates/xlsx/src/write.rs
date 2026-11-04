@@ -486,6 +486,19 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     zip.finish()
 }
 
+/// One past the highest `cacheId` the workbook's kept `<pivotCaches>` element uses.
+fn next_kept_cache_id(kept: &crate::passthrough::WorkbookKept, wb: &Workbook) -> u32 {
+    let xml = kept.element(wb, "pivotCaches");
+    let mut next = 1;
+    for (index, _) in xml.match_indices("cacheId=\"") {
+        let digits: String = xml.get(index + "cacheId=\"".len()..).unwrap_or_default().chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(id) = digits.parse::<u32>() {
+            next = next.max(id.saturating_add(1));
+        }
+    }
+    next
+}
+
 fn write_sheets(
     wb: &Workbook,
     out: &mut Out,
@@ -494,7 +507,9 @@ fn write_sheets(
 ) -> (String, crate::passthrough::WorkbookKept, crate::pivot::PivotWriter) {
     // Kept content first: the chart sheets among the worksheets need their relationship ids.
     let kept = crate::passthrough::write_workbook(wb, wb_rels, out);
-    let mut pivots = crate::pivot::PivotWriter::default();
+    // Kept data-model caches and the range PivotTables written below share the workbook's
+    // `<pivotCaches>` element, so the generated ids start above the kept ones.
+    let mut pivots = crate::pivot::PivotWriter::new(next_kept_cache_id(&kept, wb));
     let mut sheets_xml = String::new();
     let any_visible = wb.sheets.iter().any(|s| s.visibility == Visibility::Visible);
     let mut ids = crate::passthrough::SheetIds::new(wb, &kept);

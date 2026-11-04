@@ -6,7 +6,7 @@ use std::io::Read;
 use std::sync::Arc;
 
 use gridcraft_core::{CellRef, Value};
-use gridcraft_model::{Sheet, Workbook};
+use gridcraft_model::{Cell, PivotField, PivotFunc, PivotTable, PivotValue, Sheet, Workbook};
 
 use super::minimal;
 use crate::{
@@ -99,6 +99,7 @@ fn spec() -> ModelPivotSpec {
             field: field("Customers", "Segment"),
             allowed: vec![ModelPivotScalar::Text("Consumer".into()), ModelPivotScalar::Text("SMB".into())],
             include_blank: false,
+            all: false,
         }],
         values: vec![ModelPivotValue { measure: "Total Amount".into(), caption: "Amount".into(), number_format: None }],
         layout: ModelPivotLayout::Tabular,
@@ -130,6 +131,12 @@ fn workbook() -> Workbook {
 
 fn written() -> Vec<u8> {
     write_model_pivot(&mut workbook(), "Pivot", at("A3"), &spec(), &report(), None).unwrap()
+}
+
+/// Every part name in the package, in written order and duplicates included.
+fn part_names(bytes: &[u8]) -> Vec<String> {
+    let z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    z.file_names().map(str::to_string).collect()
 }
 
 fn entries(bytes: &[u8]) -> HashMap<String, Vec<u8>> {
@@ -346,6 +353,51 @@ fn two_pivots_share_one_pivot_caches_element() {
     assert!(text(&parts, "xl/connections.xml").contains("name=\"ThisWorkbookDataModel\""));
     let (pivots, _) = read_model_pivots(&bytes).unwrap();
     assert_eq!(pivots.len(), 2);
+}
+
+#[test]
+fn a_kept_model_pivot_and_a_range_pivot_do_not_collide() {
+    let mut wb = workbook();
+    {
+        let data = wb.sheet_mut(0).expect("the Data sheet");
+        for (c, header) in ["Region", "Sales"].iter().enumerate() {
+            data.cells.set(CellRef::new(0, c as u32), Cell::value(Value::text(*header)));
+        }
+        data.cells.set(CellRef::new(1, 0), Cell::value(Value::text("East")));
+        data.cells.set(CellRef::new(1, 1), Cell::value(Value::number(10.0)));
+    }
+    // The kept data-model PivotTable claims part 1 in both pivot folders and cache id 1.
+    attach_model_pivot(&mut wb, "Pivot", at("A3"), &spec(), &report(), None).unwrap();
+    let range = PivotTable {
+        id: 1,
+        name: "Range".into(),
+        source: "Data!$A$1:$B$2".into(),
+        anchor: at("H3"),
+        rows: vec![PivotField { source_col: "Region".into(), ..PivotField::default() }],
+        values: vec![PivotValue { source_col: "Sales".into(), func: PivotFunc::Sum, name: "Sum of Sales".into(), ..PivotValue::default() }],
+        ..PivotTable::default()
+    };
+    wb.sheet_mut(1).expect("the Pivot sheet").pivots.push(range);
+
+    let bytes = write_xlsx(&wb).unwrap();
+    let names = part_names(&bytes);
+    let mut unique = names.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), names.len(), "a part name was written twice: {names:?}");
+    let caches = names.iter().filter(|name| name.starts_with("xl/pivotCache/pivotCacheDefinition")).count();
+    let tables = names.iter().filter(|name| name.starts_with("xl/pivotTables/pivotTable")).count();
+    assert_eq!(caches, 2, "one cache per PivotTable: {names:?}");
+    assert_eq!(tables, 2, "one definition per PivotTable: {names:?}");
+
+    // The generated cache takes an id above the kept model cache's, so `<pivotCaches>` names two
+    // distinct caches and each PivotTable points at its own.
+    let parts = entries(&bytes);
+    let wb_xml = text(&parts, "xl/workbook.xml");
+    assert_eq!(wb_xml.matches("cacheId=\"1\"").count(), 1, "the kept model cache keeps id 1: {wb_xml}");
+    assert_eq!(wb_xml.matches("cacheId=\"2\"").count(), 1, "the range cache takes the next id: {wb_xml}");
+    let (pivots, _) = read_model_pivots(&bytes).unwrap();
+    assert_eq!(pivots.len(), 1, "the data-model PivotTable is still readable next to the range one");
 }
 
 #[test]

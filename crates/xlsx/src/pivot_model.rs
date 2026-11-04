@@ -239,10 +239,13 @@ pub struct ModelPivotFieldRef {
 pub struct ModelPivotFilter {
     /// The column filtered.
     pub field: ModelPivotFieldRef,
-    /// The allowed values; empty keeps nothing.
+    /// The allowed values; empty keeps nothing unless [`ModelPivotFilter::all`] is set.
     pub allowed: Vec<ModelPivotScalar>,
     /// Whether blank passes as well.
     pub include_blank: bool,
+    /// Excel's `(All)`: the page field names the column and keeps every value, so `allowed` is
+    /// empty and nothing is excluded.
+    pub all: bool,
 }
 
 /// One measure of the values area.
@@ -424,7 +427,7 @@ fn validate_spec(spec: &ModelPivotSpec) -> Result<(), IoError> {
                 f.field.table, f.field.column
             )));
         }
-        if f.allowed.is_empty() && !f.include_blank {
+        if f.allowed.is_empty() && !f.include_blank && !f.all {
             return Err(IoError::Format(format!(
                 "the page filter on {}[{}] keeps no values; a filter needs at least one member",
                 f.field.table, f.field.column
@@ -826,7 +829,9 @@ fn build_table_xml(spec: &ModelPivotSpec, anchor: CellRef, rows: usize, cols: us
         if !spec.subtotal_top {
             s.push_str(" subtotalTop=\"0\"");
         }
-        if page && f.allowed.as_ref().is_some_and(|a| a.len() != 1) {
+        // `(All)` is a single page field too: it selects no item explicitly, so only a list with
+        // two or more members is a multi-select field.
+        if page && f.allowed.as_ref().is_some_and(|a| a.len() > 1) {
             s.push_str(" multipleItemSelectionAllowed=\"1\"");
         }
         // An axis field lists its members here (Excel indexes `<rowItems>`/`<colItems>` into this
@@ -1826,6 +1831,8 @@ fn read_table(
             spec.filters.push(ModelPivotFilter {
                 field,
                 include_blank: allowed.iter().any(|v| matches!(v, ModelPivotScalar::Blank)),
+                // A page field with no item and no named member is Excel's `(All)`.
+                all: allowed.is_empty() && named.is_empty(),
                 allowed: allowed.into_iter().filter(|v| !matches!(v, ModelPivotScalar::Blank)).collect(),
             });
         }
