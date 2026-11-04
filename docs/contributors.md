@@ -1,16 +1,14 @@
 # Contributors in the About window
 
 **About ▸ Contributors** credits everyone who contributed to GridCraft, and **About ▸ Models** credits
-the AI models named in `Co-Authored-By` trailers. This follows the shared craftrules standard
-[`standards/contributors.md`](https://github.com/storytold/craftrules/blob/main/standards/contributors.md);
-this page is the local copy of the decision.
+the AI models named in `Co-Authored-By` trailers.
 
 ## Decision
 
 - Two files, both **compiled into the binary** by the UI crate's `build.rs` (nothing is read from
   disk or the network at run time; the web build has them too):
   - [`contributors/contributors.json`](../contributors/contributors.json): commit stats per GitHub
-    username. **Generated** by `craftrules/scripts/contributors.py`; never hand-edit.
+    username. Never hand-edit.
   - [`contributors/people.toml`](../contributors/people.toml): the names people chose for
     themselves. **Each contributor adds only their own entry**, in their own PR.
 - Each contributor gets one line: GitHub username (always), display name (opt-in, or their synced
