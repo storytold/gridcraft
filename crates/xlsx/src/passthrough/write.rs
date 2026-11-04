@@ -255,15 +255,16 @@ pub(crate) fn sheet_names_in(formula: &str) -> Vec<String> {
 /// that exist under the same names (the chart is kept as it was, so a series on a deleted or
 /// renamed sheet would be left pointing at nothing), and no worksheet may have taken its name.
 ///
-/// `refs` caches, by relationship id, the sheet names a chart sheet's graph refers to (`None`
-/// when the relationship is missing): entries sharing one graph are analysed once.
-fn chart_sheet_usable<'p>(wb: &Workbook, p: &'p Preserved, s: &'p PreservedSheet, refs: &mut HashMap<&'p str, Option<Vec<String>>>) -> bool {
+/// `usable` caches, by relationship id, whether that chart sheet's graph refers only to sheets
+/// that exist (`false` when the relationship is missing): entries sharing one graph are analysed
+/// once, and only the verdict is kept, not the references it came from.
+fn chart_sheet_usable<'p>(wb: &Workbook, p: &'p Preserved, s: &'p PreservedSheet, usable: &mut HashMap<&'p str, bool>) -> bool {
     let same = |a: &str, b: &str| a.chars().take(31).collect::<String>().eq_ignore_ascii_case(&b.chars().take(31).collect::<String>());
     if wb.sheets.iter().any(|w| same(&w.name, &s.name)) {
         return false;
     }
-    let names = refs.entry(s.rel_id.as_str()).or_insert_with(|| {
-        let root = p.rels.iter().find(|r| r.id == s.rel_id)?;
+    *usable.entry(s.rel_id.as_str()).or_insert_with(|| {
+        let Some(root) = p.rels.iter().find(|r| r.id == s.rel_id) else { return false };
         let parts = reachable(p, root);
         let mut formulas = vec![];
         for q in p.parts.iter().filter(|q| parts.contains(&normalize(&q.name)) && q.content_type.contains("chart")) {
@@ -271,10 +272,8 @@ fn chart_sheet_usable<'p>(wb: &Workbook, p: &'p Preserved, s: &'p PreservedSheet
                 chart_formulas(&x, &mut formulas);
             }
         }
-        Some(formulas.iter().flat_map(|f| sheet_names_in(f)).collect())
-    });
-    let Some(names) = names else { return false };
-    names.iter().all(|n| wb.sheets.iter().any(|w| same(&w.name, n)))
+        formulas.iter().flat_map(|f| sheet_names_in(f)).all(|n| wb.sheets.iter().any(|w| same(&w.name, &n)))
+    })
 }
 
 /// Writes the workbook's kept parts and relationships. Chart sheets that can't be written back
