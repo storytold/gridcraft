@@ -384,14 +384,20 @@ fn add_edges(adjacency: &mut BTreeMap<usize, Vec<(usize, usize)>>, facts: &Relat
     if facts.inactive {
         return;
     }
-    // A relationship is one undirected edge, identified by its index. Direction does not matter for
-    // a chain: `A -> B` and `B -> A` used together loop exactly like `A -> B -> C -> A`, while a
-    // single bidirectional relationship must not be its own cycle, which the edge id handles.
-    if facts.from_table_index == facts.to_table_index {
+    // Filters flow from the `to` side to the `from` side (many-to-one), so the graph is directed:
+    // a star or a two-fact snowflake with shared dimensions has no chain, which an undirected graph
+    // would invent (`Sales – Product – Returns – Date – Sales`). A bidirectional relationship also
+    // propagates filters the other way; its reverse traversal carries the same edge id, which
+    // `detect_cycles` refuses to reuse, so one bidirectional link is not its own cycle.
+    //
+    // A second active relationship between the same pair of tables is a filter path of its own,
+    // in either direction, so it adds both edges and the pair closes a chain.
+    let duplicate =
+        adjacency.get(&facts.to_table_index).is_some_and(|neighbours| neighbours.iter().any(|(other, _)| *other == facts.from_table_index))
+            || adjacency.get(&facts.from_table_index).is_some_and(|neighbours| neighbours.iter().any(|(other, _)| *other == facts.to_table_index));
+    adjacency.entry(facts.to_table_index).or_default().push((facts.from_table_index, facts.index));
+    if facts.bidirectional || duplicate {
         adjacency.entry(facts.from_table_index).or_default().push((facts.to_table_index, facts.index));
-    } else {
-        adjacency.entry(facts.from_table_index).or_default().push((facts.to_table_index, facts.index));
-        adjacency.entry(facts.to_table_index).or_default().push((facts.from_table_index, facts.index));
     }
 }
 
@@ -787,12 +793,11 @@ fn cycle_findings<'a>(
     findings
 }
 
-/// Depth-first cycle detection over undirected relationship edges, iterative and bounded.
+/// Depth-first cycle detection over the directed filter graph, iterative and bounded.
 ///
-/// The stack entry keeps the edge the walk arrived on so the walk never counts that edge as the
-/// second half of a cycle. Grey marks the current path (a grey neighbour closes a chain), black
-/// marks a finished table; in an undirected depth-first walk every non-tree edge reaches a grey
-/// ancestor, so black pruning loses nothing.
+/// The stack entry keeps the edge the walk arrived on so a bidirectional relationship's own
+/// reverse edge never counts as the second half of a cycle. Grey marks the current path (a grey
+/// neighbour closes a chain) and black a finished table.
 fn detect_cycles(adjacency: &BTreeMap<usize, Vec<(usize, usize)>>, table_count: usize) -> Vec<Vec<usize>> {
     const WHITE: u8 = 0;
     const GREY: u8 = 1;
@@ -850,18 +855,30 @@ fn detect_cycles(adjacency: &BTreeMap<usize, Vec<(usize, usize)>>, table_count: 
     cycles.into_iter().collect()
 }
 
-/// Rotates a cycle so it starts at its smallest table id and closes the loop explicitly.
+/// Canonicalises a cycle: it starts at its smallest table id, is traversed in the direction whose
+/// id sequence is smaller, and closes the loop explicitly, so the reported chain is the same
+/// whichever relationship the walk started from.
 fn canonical_cycle(nodes: &[usize]) -> Vec<usize> {
     if nodes.is_empty() {
         return Vec::new();
     }
-    let Some(position) = nodes.iter().enumerate().min_by_key(|(_, table)| **table).map(|(position, _)| position) else {
-        return Vec::new();
-    };
-    let mut cycle: Vec<usize> = nodes.get(position..).unwrap_or_default().to_vec();
-    cycle.extend_from_slice(nodes.get(..position).unwrap_or_default());
+    let forward = rotate_to_smallest(nodes);
+    let mut reversed: Vec<usize> = nodes.to_vec();
+    reversed.reverse();
+    let backward = rotate_to_smallest(&reversed);
+    let mut cycle = if backward < forward { backward } else { forward };
     if let Some(first) = cycle.first().copied() {
         cycle.push(first);
     }
     cycle
+}
+
+/// Rotates `nodes` so the smallest table id comes first.
+fn rotate_to_smallest(nodes: &[usize]) -> Vec<usize> {
+    let Some(position) = nodes.iter().enumerate().min_by_key(|(_, table)| **table).map(|(position, _)| position) else {
+        return Vec::new();
+    };
+    let mut rotated: Vec<usize> = nodes.get(position..).unwrap_or_default().to_vec();
+    rotated.extend_from_slice(nodes.get(..position).unwrap_or_default());
+    rotated
 }

@@ -230,6 +230,9 @@ fn date_axis(ev: &Evaluator<'_>, expr: &BoundExpr, ctx: &Context, name: &str) ->
 /// The model rows of a table that survive the filters currently set on that table.
 fn visible_rows(ev: &Evaluator<'_>, table: usize, ctx: &Context) -> Vec<Vec<Scalar>> {
     let model = ev.model();
+    // A range function's column argument takes the current row: the row context transitions to
+    // filters, exactly as `CALCULATE` does, instead of the whole date column being visible.
+    let filters = ev.transitioned_filters(ctx);
     let Some(model_table) = model.tables.get(table) else {
         return Vec::new();
     };
@@ -237,7 +240,7 @@ fn visible_rows(ev: &Evaluator<'_>, table: usize, ctx: &Context) -> Vec<Vec<Scal
         .rows
         .iter()
         .filter(|row| {
-            model_table.columns.iter().enumerate().all(|(index, _)| match ctx.filters.filters.get(&(table, index)) {
+            model_table.columns.iter().enumerate().all(|(index, _)| match filters.filters.get(&(table, index)) {
                 Some(values) => row.get(index).is_none_or(|value| values.contains(&ScalarKey::from(value))),
                 None => true,
             })

@@ -7,7 +7,7 @@
 //!
 //! - string construction (`COMBINEVALUES`, `CONCATENATE`, `CONCATENATEX`, `LEFT`, `MID`,
 //!   `REPLACE`, `REPT`, `RIGHT`, `SUBSTITUTE`, `TRIM`), which return text and whose result
-//!   length is measured in UTF-16 code units;
+//!   length is measured in Unicode code points;
 //! - classification and conversion (`EXACT`, `FIND`, `LEN`, `LOWER`, `SEARCH`, `UNICHAR`,
 //!   `UNICODE`, `UPPER`), which are case- or accent-sensitive to different degrees;
 //! - formatting and serialization (`FIXED`, `FORMAT`, `TOCSV`, `TOJSON`, `VALUE`), whose output
@@ -171,8 +171,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ReturnType::String,
         STANDARD,
         "Returns the first NumberOfCharacters characters of a text value; the count defaults to 1. \
-         It is intended for fixed-position extraction. Characters are counted as UTF-16 code \
-         units, and no case or locale conversion is applied to the result.",
+         It is intended for fixed-position extraction. Characters are counted as Unicode code \
+         points, and no case or locale conversion is applied to the result.",
         &["LEFT ( \"DAX is so cool!\", 3 )", "LEFT ( Customer[Customer Name] )"],
     ),
     spec(
@@ -184,8 +184,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Text])],
         ReturnType::Integer,
         STANDARD,
-        "Character count of a text value, spaces included. Characters are UTF-16 code units, so \
-         a character outside the Basic Multilingual Plane counts as two.",
+        "Character count of a text value, spaces included. Characters are Unicode code points, \
+         so a character outside the Basic Multilingual Plane counts as one.",
         &["LEN ( \"DAX is so cool!\" )", "LEN ( Customer[Customer Name] )"],
     ),
     spec(
@@ -213,8 +213,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         STANDARD,
         "Returns NumberOfCharacters characters from a text value starting at the 1-based \
          StartPosition. If the requested length extends past the end of the text only the \
-         remaining characters are returned. Positions and lengths are counted in UTF-16 code \
-         units, and no case conversion is applied.",
+         remaining characters are returned. Positions and lengths are counted in Unicode code \
+         points, and no case conversion is applied.",
         &["MID ( \"DAX is so cool!\", 11, 4 )", "MID ( \"123-45-6789\", 8, 3 )"],
     ),
     spec(
@@ -234,7 +234,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         "Replaces a fixed run of characters: NumberOfCharacters characters starting at the \
          1-based StartPosition are replaced by NewText, whose length need not match the removed \
          text. Because the position is explicit there is no searching, so case and locale do not \
-         affect the match; positions are counted in UTF-16 code units.",
+         affect the match; positions are counted in Unicode code points.",
         &["REPLACE ( \"DAX is so cool!\", 11, 4, \"fantastic\" )", "REPLACE ( \"123-45-6789\", 1, 3, \"XXX\" )"],
     ),
     spec(
@@ -247,7 +247,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ReturnType::String,
         STANDARD,
         "Repeats a text value NumberOfTimes times and returns the concatenation. A count of zero \
-         returns an empty string, a fractional count is rounded to the nearest integer, and the \
+         returns an empty string, a fractional count is truncated to an integer, and the \
          result may not exceed 32,767 characters or the function raises an error. The text is \
          repeated verbatim, without case or locale conversion.",
         &["REPT ( \"?\", 3 )", "REPT ( \"0\", 5 )"],
@@ -263,7 +263,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         STANDARD,
         "Returns the last NumberOfCharacters characters of a text value; the count defaults to 1. \
          It is intended for fixed-position extraction from the end of the text. Counting is by \
-         UTF-16 code unit, and no case conversion is applied.",
+         Unicode code point, and no case conversion is applied.",
         &["RIGHT ( \"DAX is so cool!\", 5 )", "RIGHT ( Customer[Customer Code], 4 )"],
     ),
     spec(
@@ -380,9 +380,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number])],
         ReturnType::String,
         STANDARD,
-        "Returns the Unicode character for a numeric code point. The engine uses UTF-16, so a \
-         supplementary character is represented by a surrogate pair. Code point 0 and values \
-         outside the allowable Unicode range raise an error.",
+        "Returns the Unicode character for a numeric code point. A supplementary character is \
+         one code point value. Code point 0 and values outside the allowable Unicode range \
+         raise an error.",
         &["UNICHAR ( 9473 )", "UNICHAR ( 65 )"],
     ),
     spec(
@@ -395,8 +395,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ReturnType::Integer,
         STANDARD,
         "Returns the numeric Unicode value of the first character of a text value; an empty \
-         string raises an error. The engine encodes text as UTF-16, so a character outside the \
-         Basic Multilingual Plane is seen as two code units. Use UNICHAR for the inverse \
+         string raises an error. The engine counts Unicode code points, so a character outside \
+         the Basic Multilingual Plane is returned as one value. Use UNICHAR for the inverse \
          conversion.",
         &["UNICODE ( \"A\" )", "UNICODE ( Customer[CountryRegion] )"],
     ),

@@ -145,3 +145,15 @@ fn an_inactive_relationship_cannot_close_a_chain() {
     let report = validate_model(&model(vec![link_table("A", 1), link_table("B", 1)], vec![link("A", "B"), link("B", "A")]));
     assert_eq!(cycles(&report).len(), 1, "findings: {:?}", report.findings);
 }
+
+#[test]
+fn a_two_fact_model_with_shared_dimensions_has_no_cycle() {
+    // Sales and Returns both point at Product and Date, the usual star: filters flow from the
+    // dimensions to the facts, so there is no chain through the two facts.
+    let report = validate_model(&model(
+        vec![link_table("Sales", 1), link_table("Returns", 1), link_table("Product", 1), link_table("Date", 1)],
+        vec![link("Sales", "Product"), link("Returns", "Product"), link("Sales", "Date"), link("Returns", "Date")],
+    ));
+    assert!(cycles(&report).is_empty(), "findings: {:?}", report.findings);
+    assert!(!report.has_errors(), "findings: {:?}", report.findings);
+}

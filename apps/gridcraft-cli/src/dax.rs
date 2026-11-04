@@ -124,6 +124,14 @@ fn eval(args: &[String]) -> Result<(), String> {
     let evaluator = Evaluator::new(&model).map_err(|e| e.to_string())?;
 
     if let Some(name) = parsed.opt("measure") {
+        // A measure result is a scalar: a formula or a table request alongside it would be silently
+        // ignored, so the same conflicts `dax bind` rejects are rejected here.
+        if parsed.has("file") {
+            return Err("dax eval takes either --measure or a formula, not both".into());
+        }
+        if parsed.has("table") {
+            return Err("dax eval --measure returns a scalar; drop --table".into());
+        }
         let value = evaluator.evaluate_measure(name, Default::default()).map_err(|e| e.to_string())?;
         outln!("{}", scalar_json(&value));
         return Ok(());
@@ -161,9 +169,25 @@ fn measures(args: &[String]) -> Result<(), String> {
     let measures: Vec<ModelMeasure> = serde_json::from_str(&json).map_err(|e| format!("invalid measures JSON: {e}"))?;
     let updated = write_measures(&item_data, &measures).map_err(|e| e.to_string())?;
     let package = replace_zip_entry(&bytes, "xl/model/item.data", &updated)?;
-    std::fs::write(out, package).map_err(|e| format!("can't write {out}: {e}"))?;
+    write_atomically(out, &package)?;
     outln!("{}", serde_json::to_string_pretty(&measures).map_err(|e| e.to_string())?);
     Ok(())
+}
+
+/// Writes `bytes` to a temporary file beside `path`, then renames it over `path`.
+///
+/// `--out` may name the workbook `--file` read, and an interrupted or full-disk `fs::write`
+/// would then leave no complete copy: the rename only happens once the new bytes are on disk.
+fn write_atomically(path: &str, bytes: &[u8]) -> Result<(), String> {
+    let target = std::path::Path::new(path);
+    let directory = target.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
+    let file_name = target.file_name().ok_or_else(|| format!("can't write {path}: no file name"))?;
+    let temporary = directory.join(format!(".{}.{}.tmp", file_name.to_string_lossy(), std::process::id()));
+    std::fs::write(&temporary, bytes).map_err(|e| format!("can't write {path}: {e}"))?;
+    std::fs::rename(&temporary, target).map_err(|e| {
+        let _ = std::fs::remove_file(&temporary);
+        format!("can't write {path}: {e}")
+    })
 }
 
 fn read_zip_entry(bytes: &[u8], name: &str) -> Result<Vec<u8>, String> {

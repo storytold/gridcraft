@@ -241,10 +241,7 @@ fn compare_values(left: &[Scalar], right: &[Scalar]) -> Ordering {
 fn group_value(ev: &Evaluator<'_>, table: &TableValue, row: &[Scalar], column: &ColumnRef) -> Result<Scalar, EvalError> {
     // Only a table with the full model layout can be read at the model index; a projection
     // (`VALUES(Sales[Region])`, `ALL(Sales[Region])`) is read by column name instead.
-    if table.lineage == Some(column.table)
-        && table.columns.len() > column.column
-        && table.column_index(&column.name).is_none_or(|index| index == column.column)
-    {
+    if table.lineage == Some(column.table) && table.column_index(&column.name) == Some(column.column) {
         return row.get(column.column).cloned().ok_or_else(|| EvalError::new("row is out of range"));
     }
     if let Some(lineage) = table.lineage
