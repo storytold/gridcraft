@@ -3206,6 +3206,7 @@ fn every_chart_kind_survives_xlsx() {
         ("combo", ChartKind::Combo),
         ("stock", ChartKind::Stock),
         ("histogram", ChartKind::Histogram),
+        ("pareto", ChartKind::Pareto),
         ("boxWhisker", ChartKind::BoxWhisker),
         ("waterfall", ChartKind::Waterfall),
         ("funnel", ChartKind::Funnel),
@@ -3235,6 +3236,16 @@ fn every_chart_kind_survives_xlsx() {
             }
         }
     }
+}
+
+#[test]
+fn pareto_chart_has_no_legend() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Item", "Count"], ["A", 3], ["B", 2], ["C", 1]]})).unwrap();
+    s.execute("insert.chart", json!({"type": "pareto", "range": "A1:B4"})).unwrap();
+    let c = &s.doc().unwrap().wb.active().unwrap().charts[0];
+    assert_eq!(c.kind, gridcraft_model::ChartKind::Pareto);
+    assert_eq!(c.legend, gridcraft_model::LegendPos::None);
 }
 
 #[test]

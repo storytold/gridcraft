@@ -160,6 +160,7 @@ pub(super) fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
             ("Doughnut", "doughnut", ""),
             ("Scatter", "scatter", ""),
             ("Radar", "radar", ""),
+            ("Pareto", "pareto", ""),
             ("Waterfall", "waterfall", ""),
             ("Funnel", "funnel", ""),
             ("Treemap", "treemap", ""),
