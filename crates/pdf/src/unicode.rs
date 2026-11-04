@@ -4,9 +4,14 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex, OnceLock};
 
+/// Owned, embeddable TrueType data with a bounded cache of glyph metrics.
 pub(super) struct UnicodeFont {
     bytes: Vec<u8>,
+    glyphs: Mutex<BTreeMap<char, Option<(u16, u16)>>>,
 }
+
+/// Limit process-wide cache growth even for input containing many distinct characters.
+const GLYPH_CACHE_LIMIT: usize = 4096;
 
 static FONTS: OnceLock<[Option<Arc<UnicodeFont>>; 4]> = OnceLock::new();
 
@@ -14,11 +19,20 @@ pub(super) const FONT_LIMIT: usize = 36;
 type NamedFace = (String, bool, bool, Arc<UnicodeFont>);
 static NAMED: Mutex<Vec<NamedFace>> = Mutex::new(Vec::new());
 
+/// Return an installed fallback face (slots 0..4) or a resolved named face.
 pub(super) fn font(style: usize) -> Option<Arc<UnicodeFont>> {
     if style < 4 {
         return FONTS.get_or_init(load).get(style)?.clone();
     }
     NAMED.lock().ok()?.get(style - 4).map(|entry| Arc::clone(&entry.3))
+}
+
+/// Fallback slot matching the actual weight and slant, independent of allocation order.
+pub(super) fn style(index: usize) -> usize {
+    if index < 4 {
+        return index;
+    }
+    NAMED.lock().ok().and_then(|fonts| fonts.get(index - 4).map(|e| usize::from(e.1) | (usize::from(e.2) << 1))).unwrap_or(0)
 }
 
 /// Resolve by the font's internal family name, never by an input-derived path.
@@ -36,64 +50,74 @@ pub(super) fn named(name: &str, bold: bool, italic: bool) -> Option<usize> {
     Some(index)
 }
 
+/// Native system-font discovery is unavailable on the web.
 #[cfg(target_arch = "wasm32")]
 fn load_named(_: &str, _: bool, _: bool) -> Option<UnicodeFont> {
     None
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+type CatalogFace = (Vec<String>, bool, bool, std::path::PathBuf);
+
+/// Load the first eligible family/style match in directory priority order.
+#[cfg(not(target_arch = "wasm32"))]
 fn load_named(name: &str, bold: bool, italic: bool) -> Option<UnicodeFont> {
-    type CatalogFace = (Vec<String>, bool, bool, std::path::PathBuf);
     static CATALOG: OnceLock<Vec<CatalogFace>> = OnceLock::new();
-    let catalog = CATALOG.get_or_init(|| {
-        let mut pending = font_dirs().into_iter().map(|p| (p, 0)).collect::<Vec<_>>();
-        let mut catalog = Vec::new();
-        let mut visited = 0usize;
-        while let Some((dir, depth)) = pending.pop() {
-            let Ok(entries) = std::fs::read_dir(dir) else { continue };
-            for entry in entries.flatten() {
-                visited += 1;
-                if visited > 20_000 {
-                    return catalog;
-                }
-                let path = entry.path();
-                let Ok(kind) = entry.file_type() else { continue };
-                if kind.is_dir() && depth < 8 {
-                    pending.push((path, depth + 1));
-                    continue;
-                }
-                if !kind.is_file() || !path.extension().is_some_and(|x| x.eq_ignore_ascii_case("ttf")) {
-                    continue;
-                }
-                let Some(bytes) = read_font(&path) else { continue };
-                let Ok(face) = ttf_parser::Face::parse(&bytes, 0) else { continue };
-                if !embeddable(&face) {
-                    continue;
-                }
-                let names = face
-                    .names()
-                    .into_iter()
-                    .filter(|n| n.name_id == ttf_parser::name_id::FAMILY || n.name_id == ttf_parser::name_id::TYPOGRAPHIC_FAMILY)
-                    .filter_map(|n| n.to_string())
-                    .take(16)
-                    .collect();
-                catalog.push((names, face.is_bold(), face.is_italic(), path));
-            }
-        }
-        catalog
-    });
+    let catalog = CATALOG.get_or_init(|| scan_fonts(font_dirs()));
     for (names, b, i, path) in catalog {
         if *b == bold && *i == italic && names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
             let bytes = read_font(path)?;
             let face = ttf_parser::Face::parse(&bytes, 0).ok()?;
             if embeddable(&face) {
-                return Some(UnicodeFont { bytes });
+                return Some(UnicodeFont::new(bytes));
             }
         }
     }
     None
 }
 
+/// Scan bounded directory trees, keeping earlier roots ahead of later roots.
+#[cfg(not(target_arch = "wasm32"))]
+fn scan_fonts(dirs: Vec<std::path::PathBuf>) -> Vec<CatalogFace> {
+    // The pending list is a stack, so push roots in reverse priority order.
+    let mut pending = dirs.into_iter().rev().map(|p| (p, 0)).collect::<Vec<_>>();
+    let mut catalog = Vec::new();
+    let mut visited = 0usize;
+    while let Some((dir, depth)) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(dir) else { continue };
+        for entry in entries.flatten() {
+            visited += 1;
+            if visited > 20_000 {
+                return catalog;
+            }
+            let path = entry.path();
+            let Ok(kind) = entry.file_type() else { continue };
+            if kind.is_dir() && depth < 8 {
+                pending.push((path, depth + 1));
+                continue;
+            }
+            if !kind.is_file() || !path.extension().is_some_and(|x| x.eq_ignore_ascii_case("ttf")) {
+                continue;
+            }
+            let Some(bytes) = read_font(&path) else { continue };
+            let Ok(face) = ttf_parser::Face::parse(&bytes, 0) else { continue };
+            if !embeddable(&face) {
+                continue;
+            }
+            let names = face
+                .names()
+                .into_iter()
+                .filter(|n| n.name_id == ttf_parser::name_id::FAMILY || n.name_id == ttf_parser::name_id::TYPOGRAPHIC_FAMILY)
+                .filter_map(|n| n.to_string())
+                .take(16)
+                .collect();
+            catalog.push((names, face.is_bold(), face.is_italic(), path));
+        }
+    }
+    catalog
+}
+
+/// Reject oversized font files before allocating their contents.
 #[cfg(not(target_arch = "wasm32"))]
 fn read_font(path: &std::path::Path) -> Option<Vec<u8>> {
     if !std::fs::metadata(path).is_ok_and(|m| m.len() <= 16 * 1024 * 1024) {
@@ -102,6 +126,7 @@ fn read_font(path: &std::path::Path) -> Option<Vec<u8>> {
     std::fs::read(path).ok()
 }
 
+/// Require TrueType outlines and permission to embed them in printable documents.
 #[cfg(not(target_arch = "wasm32"))]
 fn embeddable(face: &ttf_parser::Face<'_>) -> bool {
     face.tables().glyf.is_some()
@@ -112,6 +137,7 @@ fn embeddable(face: &ttf_parser::Face<'_>) -> bool {
         )
 }
 
+/// Ordered font roots, with the explicit override ahead of system and user directories.
 #[cfg(not(target_arch = "wasm32"))]
 fn font_dirs() -> Vec<std::path::PathBuf> {
     let mut dirs = Vec::new();
@@ -132,11 +158,13 @@ fn font_dirs() -> Vec<std::path::PathBuf> {
     dirs
 }
 
+/// Web exports keep the existing standard-font/CID path.
 #[cfg(target_arch = "wasm32")]
 fn load() -> [Option<Arc<UnicodeFont>>; 4] {
     [None, None, None, None]
 }
 
+/// Find a permitted Unicode fallback for each weight/slant combination.
 #[cfg(not(target_arch = "wasm32"))]
 fn load() -> [Option<Arc<UnicodeFont>>; 4] {
     let configured = std::env::var_os("GRIDCRAFT_PDF_FONT_DIR").map(std::path::PathBuf::from);
@@ -173,7 +201,7 @@ fn load() -> [Option<Arc<UnicodeFont>>; 4] {
                         Some(ttf_parser::Permissions::Installable | ttf_parser::Permissions::PreviewAndPrint | ttf_parser::Permissions::Editable)
                     )
                 {
-                    return Some(Arc::new(UnicodeFont { bytes }));
+                    return Some(Arc::new(UnicodeFont::new(bytes)));
                 }
             }
         }
@@ -182,11 +210,35 @@ fn load() -> [Option<Arc<UnicodeFont>>; 4] {
 }
 
 impl UnicodeFont {
+    /// Keep parsed metrics separate from the immutable font bytes.
+    #[cfg(any(test, not(target_arch = "wasm32")))]
+    fn new(bytes: Vec<u8>) -> Self {
+        Self { bytes, glyphs: Mutex::new(BTreeMap::new()) }
+    }
+
+    /// Parse a borrowed view without copying the font data.
     fn face(&self) -> Option<ttf_parser::Face<'_>> {
         ttf_parser::Face::parse(&self.bytes, 0).ok()
     }
 
+    /// Cache present and absent glyphs; widths use the PDF's 1000-unit em scale.
     pub(super) fn glyph(&self, c: char) -> Option<(u16, u16)> {
+        if let Ok(cache) = self.glyphs.lock()
+            && let Some(value) = cache.get(&c)
+        {
+            return *value;
+        }
+        let value = self.uncached_glyph(c);
+        if let Ok(mut cache) = self.glyphs.lock()
+            && cache.len() < GLYPH_CACHE_LIMIT
+        {
+            cache.insert(c, value);
+        }
+        value
+    }
+
+    /// Read a glyph and its horizontal advance when it is not already cached.
+    fn uncached_glyph(&self, c: char) -> Option<(u16, u16)> {
         let face = self.face()?;
         let glyph = face.glyph_index(c)?;
         let advance = u32::from(face.glyph_hor_advance(glyph)?);
@@ -242,9 +294,60 @@ impl UnicodeFont {
     }
 }
 
+/// Serialize a PDF stream with byte-accurate length and optional dictionary entries.
 fn stream(bytes: &[u8], extra: &str) -> Vec<u8> {
     let mut out = format!("<< /Length {}{extra} >>\nstream\n", bytes.len()).into_bytes();
     out.extend_from_slice(bytes);
     out.extend_from_slice(b"\nendstream");
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Both successful metrics and missing glyphs are cached without unbounded growth.
+    #[test]
+    fn glyph_cache_reuses_metrics_and_caps_missing_entries() {
+        let Some(installed) = font(0) else { return };
+        let mut local = UnicodeFont::new(installed.bytes.clone());
+        let expected = local.uncached_glyph('A');
+        assert!(expected.is_some());
+        assert_eq!(local.glyph('A'), expected);
+        assert_eq!(local.glyph('\u{10ffff}'), None);
+        assert_eq!(local.glyphs.lock().unwrap().get(&'\u{10ffff}'), Some(&None));
+        // Destroy only this private test copy: a cached hit must not parse it again.
+        local.bytes.clear();
+        assert_eq!(local.glyph('A'), expected);
+        for c in (0..5000).filter_map(char::from_u32) {
+            assert_eq!(local.glyph(c), if c == 'A' { expected } else { None });
+        }
+        assert_eq!(local.glyphs.lock().unwrap().len(), GLYPH_CACHE_LIMIT);
+    }
+
+    /// Earlier directory roots retain priority even when their font is nested.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn catalog_visits_override_before_other_roots() -> std::io::Result<()> {
+        let Some(installed) = font(0) else { return Ok(()) };
+        let root = std::env::temp_dir().join(format!("gridcraft-font-priority-{}", std::process::id()));
+        let first = root.join("override").join("nested");
+        let second = root.join("system");
+        std::fs::create_dir_all(&first)?;
+        std::fs::create_dir_all(&second)?;
+        let preferred = first.join("face.ttf");
+        let other = second.join("face.ttf");
+        std::fs::write(&preferred, &installed.bytes)?;
+        std::fs::write(&other, &installed.bytes)?;
+        let catalog = scan_fonts(vec![root.join("override"), second]);
+        let paths: Vec<_> = catalog.iter().map(|e| &e.3).collect();
+        assert_eq!(paths, vec![&preferred, &other]);
+        std::fs::remove_file(preferred)?;
+        std::fs::remove_file(other)?;
+        std::fs::remove_dir(first)?;
+        std::fs::remove_dir(root.join("override"))?;
+        std::fs::remove_dir(root.join("system"))?;
+        std::fs::remove_dir(root)?;
+        Ok(())
+    }
 }

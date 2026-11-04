@@ -2,9 +2,11 @@ use super::*;
 use std::error::Error;
 use std::io;
 
+/// Find the first byte sequence in a PDF.
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
+/// Find the last byte sequence in a PDF.
 fn rfind(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).rposition(|w| w == needle)
 }
@@ -351,6 +353,7 @@ fn symbol_font_draws_maths_in_its_own_encoding() {
     assert_eq!(text_width(Font::Symbol, 10.0, "\u{2211}"), 7.13);
 }
 
+/// Verify Romanian fallback text embeds outlines and Unicode mappings.
 #[test]
 fn romanian_glyphs_embed_outlines_and_unicode_maps() -> Result<(), Box<dyn Error>> {
     if super::unicode::font(0).is_none() || super::unicode::font(1).is_none() {
@@ -373,6 +376,7 @@ fn romanian_glyphs_embed_outlines_and_unicode_maps() -> Result<(), Box<dyn Error
     Ok(())
 }
 
+/// Verify an installed workbook face supplies both ASCII and Unicode glyphs.
 #[test]
 fn named_installed_font_embeds_ascii_and_unicode() {
     let font = Font::named("Calibri", false, false);
@@ -395,4 +399,27 @@ fn named_installed_font_embeds_ascii_and_unicode() {
     assert!(!pdf.contains("/BaseFont /Helvetica"));
     assert!(!pdf.contains("STSong-Light"));
     assert!(pdf.contains("<0219>"));
+}
+
+/// Installed faces use their real bold/italic flags when choosing a missing-glyph fallback.
+#[test]
+fn named_fallback_style_is_independent_of_font_slot() {
+    for (bold, italic, style) in [(false, false, 0), (true, false, 1), (false, true, 2), (true, true, 3)] {
+        let selected = Font::named("Calibri", bold, italic);
+        if !matches!(selected, Font::Embedded(_)) {
+            continue;
+        }
+        assert_eq!(selected.fallback_style(), style);
+        let Some(fallback) = unicode::font(style) else { continue };
+        // Find a character present in the fallback but absent from the selected font.
+        let missing = (0x100..0x3000).filter_map(char::from_u32).find(|&c| !selected.can_encode(c) && fallback.glyph(c).is_some());
+        let Some(c) = missing else { continue };
+        assert_eq!(selected.char_width(c), fallback.glyph(c).unwrap().1);
+        let mut doc = PdfDoc::new();
+        doc.add_page(200.0, 100.0).text(10.0, 30.0, 12.0, selected, [0, 0, 0], &c.to_string());
+        assert!(page_content(&doc).contains(&format!("/F{} 12 Tf", UNICODE_FONT + style + 1)));
+    }
+    for (font, style) in [(Font::Helvetica, 0), (Font::TimesBold, 1), (Font::CourierOblique, 2), (Font::HelveticaBoldOblique, 3)] {
+        assert_eq!(font.fallback_style(), style);
+    }
 }

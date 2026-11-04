@@ -124,10 +124,19 @@ impl Font {
         }
     }
 
+    /// Resource slot for a standard or installed font.
     fn index(self) -> usize {
         match self {
             Font::Embedded(i) if usize::from(i) < unicode::FONT_LIMIT => UNICODE_FONT + usize::from(i),
             _ => Font::ALL.iter().position(|f| *f == self).unwrap_or(0),
+        }
+    }
+
+    /// Match fallback weight/slant to the selected face, not its resource slot.
+    fn fallback_style(self) -> usize {
+        match self {
+            Font::Embedded(i) => unicode::style(usize::from(i)),
+            _ => self.index() % 4,
         }
     }
 
@@ -198,7 +207,7 @@ impl Font {
             _ => None,
         };
         if needs_cid(c) {
-            if let Some((_, width)) = unicode::font(self.index() % 4).and_then(|f| f.glyph(c)) {
+            if let Some((_, width)) = unicode::font(self.fallback_style()).and_then(|f| f.glyph(c)) {
                 return width;
             }
             return CID_WIDTH;
@@ -272,6 +281,7 @@ const CID_FONT: usize = Font::ALL.len();
 /// Number of font resources a page can use.
 const UNICODE_FONT: usize = CID_FONT + 1;
 
+/// Embedded faces need six objects; standard and legacy CID faces use their fixed counts.
 fn font_object_count(slot: usize) -> u32 {
     if slot >= UNICODE_FONT {
         6
@@ -671,8 +681,8 @@ impl Page {
                     UNICODE_FONT + usize::from(i)
                 } else if !needs_cid(c) {
                     if fi >= UNICODE_FONT { Font::Helvetica.index() } else { fi }
-                } else if unicode::font(fi % 4).and_then(|f| f.glyph(c)).is_some() {
-                    UNICODE_FONT + fi % 4
+                } else if unicode::font(font.fallback_style()).and_then(|f| f.glyph(c)).is_some() {
+                    UNICODE_FONT + font.fallback_style()
                 } else {
                     CID_FONT
                 }
@@ -835,6 +845,7 @@ impl PdfDoc {
         self.pages.get_mut(i)
     }
 
+    /// Merge glyph usage across pages and serialize one embedded face.
     fn unicode_objects(&self, style: usize, id: u32) -> Vec<(u32, Vec<u8>)> {
         let mut glyphs = std::collections::BTreeMap::new();
         for page in &self.pages {

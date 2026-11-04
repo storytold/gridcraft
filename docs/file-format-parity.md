@@ -158,6 +158,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | PDF named-font fallback preserves weight/slant; explicit font directories take priority; bounded glyph metrics cache avoids repeated parsing |
 | 2026-11-04 | minor | Native PDF export embeds matching installed TrueType faces and Unicode fallbacks, preserving Romanian diacritics and measuring text with the selected font |
 | 2026-11-03 | minor | SYLK (`.slk`) import: values, R1C1 formulas as A1 (shared formulas too) with cached results, number formats and column widths; import only (#1481) |
 | 2026-11-03 | minor | Opening a web page (HTML) reads its first table as a sheet, whatever the file is called: a web app's "Export to Excel" saved as `.xls` no longer opens as lines of markup. Values read as in a CSV (or as text with `csvAsText`), `<th>` cells are bold and centred, `<x:Name>` names the sheet, and a page not named `.htm`/`.html` opens with a warning (#3166) |

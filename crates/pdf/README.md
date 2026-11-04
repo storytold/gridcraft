@@ -16,6 +16,9 @@ Native spreadsheet printing resolves the workbook's family name and bold/italic 
 installed standalone TrueType files. Supported faces are embedded for all characters, and
 layout uses their advance widths. The lookup reads internal family names from system/user
 font folders and `GRIDCRAFT_PDF_FONT_DIR`; it does not construct paths from workbook names.
+The explicit directory override is searched before system/user roots. Missing Unicode glyphs
+use a fallback matching the selected face's bold/italic style. Glyph metrics and missing-glyph
+results are cached per face, capped at 4096 characters to bound memory usage.
 No installed font bytes are added to this repository. Faces must permit outline embedding.
 The native resolver currently supports at most 32 named faces per process, up to 16 MiB per
 file. TrueType collections, CFF outlines and variable-font instance selection are not yet

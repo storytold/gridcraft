@@ -2,6 +2,7 @@ use serde_json::json;
 
 use super::*;
 
+/// Create a workbook using standard PDF fonts for portable stream assertions.
 fn s() -> Session {
     let mut s = Session::new();
     s.new_workbook();
@@ -487,6 +488,7 @@ fn save_as_pdf_writes_a_pdf_and_keeps_the_workbook_file() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Exercise combined sheet features through the standard-font PDF path.
 #[test]
 fn rich_sheet_renders() {
     let mut s = Session::new();
@@ -872,6 +874,7 @@ fn an_equation_without_a_layout_prints_its_source_one_line_per_line() {
     assert_eq!(fallback_lines("a\nb", f32::NAN, 12.0).count(), 1);
 }
 
+/// Verify equation fallback text cannot escape its frame.
 #[test]
 fn the_fallback_text_is_clipped_to_the_equation_frame() {
     // A long line of a source that does not lay out, in a narrow frame (40 by 100 px, 30 by
@@ -948,6 +951,7 @@ fn equations_print_with_the_symbol_font() {
     assert!(contains(&pdf, "(?) Tj"));
 }
 
+/// Verify the exporter retains an installed workbook family and Unicode glyphs.
 #[test]
 fn pdf_export_embeds_the_installed_workbook_family() {
     if !matches!(Font::named("Calibri", false, false), Font::Embedded(_)) {

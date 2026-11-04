@@ -62,6 +62,7 @@ pub(super) fn wrap_lines(text: &str, font: Font, size: f32, width: f32) -> Vec<S
     out
 }
 
+/// Resolve the workbook family and style for native PDF output.
 fn font_for(style: &Style) -> Font {
     Font::named(&style.font.name, style.font.bold, style.font.italic)
 }
