@@ -13,7 +13,9 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         )
     });
     let width = ui.available_width();
-    let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(width).hint_text("Type a command, e.g. freeze, chart, bold…"));
+    let r = ui.add(
+        egui::TextEdit::singleline(&mut d.search).desired_width(width).hint_text(app.ui.language.tr("Type a command, e.g. freeze, chart, bold…")),
+    );
 
     if !d.focus_initialized {
         r.request_focus();
@@ -21,13 +23,18 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     }
 
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
+    // Use translated labels for searching, falling back to English
     let q = d.search.to_ascii_lowercase();
     let cmds: Vec<(String, String, String, Option<String>)> = app
         .session
         .commands()
         .into_iter()
         .filter(|c| c.enabled)
-        .filter(|c| q.is_empty() || c.label.to_ascii_lowercase().contains(&q) || c.id.to_ascii_lowercase().contains(&q))
+        .filter(|c| {
+            let label = app.ui.language.tr(c.label);
+            let translated_q = q.trim().to_ascii_lowercase();
+            translated_q.is_empty() || label.to_ascii_lowercase().contains(&translated_q) || c.id.to_ascii_lowercase().contains(&translated_q)
+        })
         .map(|c| (c.id.to_string(), c.label.to_string(), c.menu.join(" › "), c.shortcut_for_platform(mac)))
         .take(40)
         .collect();
