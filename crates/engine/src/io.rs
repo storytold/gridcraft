@@ -961,8 +961,8 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
         EngineError::Other(format!("{path}: {e}"))
     })?;
     // The replacement belongs to the saving user's primary group: restore the old file's group and
-    // then its mode. When the group can't be restored it stays owner-only (the group's access is
-    // dropped rather than handed to a different group); failing to read that back is a failed save.
+    // then its mode. When the group can't be restored its access is dropped rather than handed to a
+    // different group; failing to read that back is a failed save.
     #[cfg(unix)]
     if let Some(m) = &prior_meta {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -971,10 +971,9 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
             let _ = std::fs::remove_file(&tmp);
             EngineError::Other(format!("{path}: {e}"))
         })?;
-        if group_kept {
-            // Best effort: a file system that can't change modes keeps the owner-only one.
-            let _ = f.set_permissions(std::fs::Permissions::from_mode(m.mode() & 0o7777));
-        }
+        // Best effort: a file system that can't change modes keeps the owner-only one. Without the
+        // group, the old owner and other bits are kept and the group, setuid and setgid bits dropped.
+        let _ = f.set_permissions(std::fs::Permissions::from_mode(restored_mode(m.mode(), group_kept)));
     }
     #[cfg(not(unix))]
     if let Some(p) = &prior {
@@ -990,6 +989,13 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
     })
+}
+
+/// The mode a saved file gets from the file it replaces (`old`): all of it when its group was
+/// restored; without the group, the owner and other bits only.
+#[cfg(unix)]
+fn restored_mode(old: u32, group_kept: bool) -> u32 {
+    if group_kept { old & 0o7777 } else { old & 0o707 }
 }
 
 #[cfg(target_arch = "wasm32")]

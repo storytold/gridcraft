@@ -67,6 +67,17 @@ fn save_keeps_the_destination_access_restrictions() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Without the old group, a saved file keeps the old owner and other bits and nothing for a group.
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(unix)]
+#[test]
+fn restored_mode_drops_the_group_and_special_bits_when_the_group_is_lost() {
+    assert_eq!(super::restored_mode(0o100_664, true), 0o664);
+    assert_eq!(super::restored_mode(0o100_664, false), 0o604);
+    assert_eq!(super::restored_mode(0o102_444, false), 0o404, "an original read-only file stays read-only, setgid is dropped");
+    assert_eq!(super::restored_mode(0o104_755, false), 0o705, "setuid is dropped");
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn open_refuses_directories_and_unknowable_lengths() {
