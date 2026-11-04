@@ -133,7 +133,10 @@ fn ink_to_shape(s: &mut Session, p: &Json) -> Result<Json> {
         let kind = convert_ink(s, Some(id))?;
         return Ok(json!({"kind": format!("{kind:?}"), "on": s.ink_to_shape}));
     }
-    if let Some(on) = bool_param(p, "on") {
+    // A present `on` that is not a boolean is a bad parameter, as an invalid `id` is: a caller that
+    // mistypes the mode must not have the last stroke converted instead.
+    if let Some(on) = p.get("on") {
+        let on = on.as_bool().ok_or_else(|| bad("draw.inkToShape", "`on` must be true or false"))?;
         s.ink_to_shape = on;
         return Ok(json!({"on": on}));
     }

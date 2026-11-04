@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-02 · **Change:** minor (insert objects: equations; earlier: what-if and analysis: Solver Sensitivity report; no score change; earlier: chart resizing no longer listed as missing; no score change; earlier: what-if and analysis: Analysis ToolPak has all 19 tools; earlier: page layout and print: Page Setup's page order; no score change; earlier: charts: data tables with XLSX round-trip and print/PDF; no score change; earlier: what-if and analysis: Solver Options; the Insert Function dialog is named as in Excel; no score change; earlier: Solver Load/Save Model and Reset All; automation: macro interface; catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-03 · **Change:** trivial (command registry count 377 in the method and in `docs/architecture.md`; earlier: insert objects: equations; earlier: what-if and analysis: Solver Sensitivity report; no score change; earlier: chart resizing no longer listed as missing; no score change; earlier: what-if and analysis: Analysis ToolPak has all 19 tools; earlier: page layout and print: Page Setup's page order; no score change; earlier: charts: data tables with XLSX round-trip and print/PDF; no score change; earlier: what-if and analysis: Solver Options; the Insert Function dialog is named as in Excel; no score change; earlier: Solver Load/Save Model and Reset All; automation: macro interface; catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -55,7 +55,7 @@ long `.xls` track, so about half parallelizes (≈30–50 wall-clock hours with 
   `SPECIAL_FUNCTIONS` in `crates/calc/src/eval.rs` (evaluator special forms), minus the test-only
   `ADD2`: **505**, all of them Excel names.
 - **Ribbon catalog:** `crates/engine/src/catalog.rs` (292 unique ids across 15 tabs) against the
-  313 command ids registered in `crates/engine/src/cmd/*.rs`, recomputed from source by script and
+  377 command ids registered in `crates/engine/src/cmd/*.rs`, recomputed from source by script and
   identical to the committed `parity-checklist.md`. The catalog is our own transcription of
   Excel's main ribbon tabs; it leaves out most contextual tabs (Picture Format, Shape Format,
   Header & Footer, Sparkline, Slicer, Timeline), the Developer and Help tabs and sub-menu items, so
@@ -334,6 +334,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | trivial | Command registry count 313 → 377 in the method and 353 → 377 in `docs/architecture.md`; catalog count 277 / 292 unchanged |
 | 2026-11-02 | minor | Insert objects: equations; catalog count 277 / 292 (no score change) |
 | 2026-11-02 | minor | What-if and analysis: Solver Sensitivity report (no score change) |
 | 2026-11-02 | minor | Charts move and resize from eight handles like every floating object (#190): the Essentials chart work is polish only (5–8 h), and the chart rows and the interaction discount no longer list resizing as missing; the Mainstream chart row no longer lists trendlines as missing (no score change) |

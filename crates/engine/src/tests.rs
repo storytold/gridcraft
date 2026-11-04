@@ -3454,6 +3454,21 @@ fn ink_to_shape_rejects_an_invalid_id_instead_of_converting_the_last_stroke() {
 }
 
 #[test]
+fn ink_to_shape_rejects_a_non_boolean_mode_instead_of_converting_the_last_stroke() {
+    let mut s = s();
+    s.execute("draw.stroke", json!({"points": [[100.0, 100.0], [200.0, 102.0], [201.0, 180.0], [99.0, 181.0], [101.0, 104.0]]})).unwrap();
+    // A present `on` that is not true or false is a bad parameter, as an invalid `id` is: a caller
+    // that mistypes the mode gets an error, not an unrequested conversion of the last stroke.
+    for on in [json!("true"), json!(1), json!(null), json!("off")] {
+        assert!(matches!(s.execute("draw.inkToShape", json!({"on": on})), Err(crate::EngineError::BadParams { .. })), "on {on} must be rejected");
+    }
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].kind, gridcraft_model::ShapeKind::Ink, "the stroke stays ink");
+    assert!(!s.ink_to_shape, "the mode did not change");
+    // No `on` key still converts the last stroke.
+    assert_eq!(s.execute("draw.inkToShape", json!({})).unwrap()["kind"], "Rectangle");
+}
+
+#[test]
 fn ink_to_shape_mode_converts_every_stroke_and_snaps_squares() {
     let mut s = s();
     assert_eq!(s.execute("draw.inkToShape", json!({"on": true})).unwrap()["on"], true);
