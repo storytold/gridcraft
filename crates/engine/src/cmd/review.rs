@@ -163,6 +163,8 @@ fn protect_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     let what = d.wb.sheet(sheet).map(|sh| sh.name.clone()).unwrap_or_default();
     let prot = SheetProtection { password: str_param(p, "password").filter(|x| !x.is_empty()).map(|pw| new_password_hash(d, &what, pw)), ..prot };
     edit(s, |cx| {
+        // FORMULATEXT reads a sheet's protection: its results are recalculated.
+        cx.structural = true;
         cx.sheet_mut(sheet)?.protection = Some(prot.clone());
         Ok(Json::Null)
     })
@@ -182,6 +184,7 @@ fn unprotect_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         }
     }
     edit(s, |cx| {
+        cx.structural = true;
         cx.sheet_mut(sheet)?.protection = None;
         Ok(Json::Null)
     })
