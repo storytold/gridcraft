@@ -2269,6 +2269,36 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "The sheet this dialog was opened on was deleted. Cancel, then open the dialog again on the sheet it should use." => {
             "La feuille sur laquelle cette boîte de dialogue a été ouverte a été supprimée. Annulez, puis rouvrez la boîte de dialogue sur la bonne feuille."
         }
+        "Next Corner of Selection" => "Coin suivant de la sélection",
+        "Drag and Drop" => "Glisser-déplacer",
+        "There's already data here. Do you want to replace it?" => "Il y a déjà des données ici. Voulez-vous les remplacer ?",
+        "Show Sheet Tabs" => "Afficher les onglets de feuille",
+        "Show Horizontal Scroll Bar" => "Afficher la barre de défilement horizontale",
+        "Show Vertical Scroll Bar" => "Afficher la barre de défilement verticale",
+        "Show sheet tabs" => "Afficher les onglets de feuille",
+        "Show horizontal scroll bar" => "Afficher la barre de défilement horizontale",
+        "Show vertical scroll bar" => "Afficher la barre de défilement verticale",
+        "The picture on the clipboard can't be read." => "L'image du Presse-papiers ne peut pas être lue.",
+        "The picture on the clipboard is empty." => "L'image du Presse-papiers est vide.",
+        "The picture on the clipboard is too large to paste." => "L'image du Presse-papiers est trop grande pour être collée.",
+        "Highlight the active cell's row" => "Mettre en surbrillance la ligne de la cellule active",
+        "Display options for this workbook" => "Options d'affichage de ce classeur",
+        "Edit Hyperlink" => "Modifier le lien hypertexte",
+        "Edit Hyperlink…" => "Modifier le lien hypertexte…",
+        "Remove Hyperlink" => "Supprimer le lien hypertexte",
+        "Resize formula bar" => "Redimensionner la barre de formule",
+        "Filtering isn't allowed on this protected sheet (Review › Unprotect Sheet)." => {
+            "Le filtrage n'est pas autorisé sur cette feuille protégée (Révision › Ôter la protection de la feuille)."
+        }
+        "Sorting isn't allowed on this protected sheet (Review › Unprotect Sheet)." => {
+            "Le tri n'est pas autorisé sur cette feuille protégée (Révision › Ôter la protection de la feuille)."
+        }
+        "Formatting rows isn't allowed on this protected sheet (Review › Unprotect Sheet)." => {
+            "La mise en forme des lignes n'est pas autorisée sur cette feuille protégée (Révision › Ôter la protection de la feuille)."
+        }
+        "Formatting columns isn't allowed on this protected sheet (Review › Unprotect Sheet)." => {
+            "La mise en forme des colonnes n'est pas autorisée sur cette feuille protégée (Révision › Ôter la protection de la feuille)."
+        }
         _ => return None,
     })
 }
@@ -2676,5 +2706,6 @@ pub(super) const ERROR_TEMPLATES: &[(&str, &str)] = &[
         "{name}: {n} cells outside the 1,048,576 × 16,384 grid were dropped",
         "{name} : {n} cellules hors de la grille de 1 048 576 × 16 384 ont été supprimées",
     ),
+    ("The picture on the clipboard can't be pasted: {e}", "L'image du Presse-papiers ne peut pas être collée : {e}"),
     ("{n} additional import warnings.", "{n} autres avertissements d'import."),
 ];
