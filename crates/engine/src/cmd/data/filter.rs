@@ -120,6 +120,11 @@ pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"hiddenRows": hidden}))
 }
 
+/// Match value-list entries using the same Unicode case rules as custom filters.
+fn matches_filter_value(a: &str, b: &str) -> bool {
+    gridcraft_core::compare_text(a, b) == Ordering::Equal
+}
+
 /// Does a value pass a custom comparison (`>`, `=*abc*`, `<>x`…)?
 fn custom_ok(v: &Value, text: &str, op: &str, crit: &str) -> bool {
     let num = gridcraft_core::parse::parse_number_text(crit);
@@ -216,7 +221,7 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
                     if filter_blank(&v) {
                         *blanks
                     } else {
-                        values.iter().any(|x| x.eq_ignore_ascii_case(&text) || x.eq_ignore_ascii_case(&v.display()))
+                        values.iter().any(|x| matches_filter_value(x, &text) || matches_filter_value(x, &v.display()))
                     }
                 }
                 FilterCriterion::Custom { a, b, and } => {
@@ -309,7 +314,7 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
                 if blank {
                     *blanks
                 } else {
-                    values.iter().any(|x| x.eq_ignore_ascii_case(&t))
+                    values.iter().any(|x| matches_filter_value(x, &t))
                 }
             }
             _ => true,
@@ -318,4 +323,128 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
         seen.entry((key, t)).or_insert(on);
     }
     seen.into_iter().map(|((_, t), on)| (t, on)).collect()
+}
+
+#[cfg(test)]
+mod unicode_filter_tests {
+    use super::*;
+
+    fn is_hidden(s: &Session, row: u32) -> bool {
+        s.doc().unwrap().wb.active().unwrap().rows.get(&row).is_some_and(|info| info.hidden)
+    }
+
+    /// Unicode-equivalent labels stay visible and checked in value-list filters.
+    #[test]
+    fn unicode_value_filter_keeps_rows_and_dropdown_in_sync() {
+        let mut s = Session::new();
+        s.new_workbook();
+
+        s.execute(
+            "range.setValues",
+            json!({
+                "range": "A1",
+                "values": [
+                    ["Name"],
+                    ["ÁRBOL"],
+                    ["árbol"],
+                    ["ÉCOLE"],
+                    ["école"],
+                    ["Pino"]
+                ]
+            }),
+        )
+        .unwrap();
+
+        s.execute("data.filter", json!({"range": "A1:A6"})).unwrap();
+
+        s.execute("data.filterBy", json!({"column": "A", "values": ["árbol"]})).unwrap();
+
+        // Both uppercase and lowercase forms must match.
+        for row in [1, 2] {
+            assert!(!is_hidden(&s, row), "row {row} must remain visible");
+        }
+        for row in [3, 4, 5] {
+            assert!(is_hidden(&s, row), "row {row} must be hidden");
+        }
+
+        // Both displayed variants must show as selected in the dropdown.
+        let options = filter_values(&s.doc().unwrap().wb, 0, 0);
+        for (label, expected) in [("ÁRBOL", true), ("árbol", true), ("ÉCOLE", false), ("école", false), ("Pino", false)] {
+            let selected = options.iter().find(|(text, _)| text == label).map(|(_, on)| *on);
+
+            assert_eq!(selected, Some(expected), "{label}");
+        }
+
+        // Another accented word uses the same comparison.
+        s.execute("data.filterBy", json!({"column": "A", "values": ["école"]})).unwrap();
+
+        for row in [1, 2, 5] {
+            assert!(is_hidden(&s, row), "row {row} must be hidden");
+        }
+        for row in [3, 4] {
+            assert!(!is_hidden(&s, row), "row {row} must remain visible");
+        }
+
+        // Custom filters and value-list filters must agree.
+        s.execute(
+            "data.filterBy",
+            json!({
+                "column": "A",
+                "custom": {"op": "=", "value": "árbol"}
+            }),
+        )
+        .unwrap();
+
+        for row in [1, 2] {
+            assert!(!is_hidden(&s, row));
+        }
+        for row in [3, 4, 5] {
+            assert!(is_hidden(&s, row));
+        }
+    }
+
+    /// Numeric values and the special Blanks group keep their existing behavior.
+    #[test]
+    fn unicode_value_filter_preserves_numbers_and_blanks() {
+        let mut s = Session::new();
+        s.new_workbook();
+
+        s.execute(
+            "range.setValues",
+            json!({
+                "range": "A1",
+                "values": [
+                    ["Value"],
+                    [42],
+                    [""],
+                    ["Other"]
+                ]
+            }),
+        )
+        .unwrap();
+
+        s.execute("data.filter", json!({"range": "A1:A4"})).unwrap();
+
+        s.execute(
+            "data.filterBy",
+            json!({
+                "column": "A",
+                "values": ["42"],
+                "blanks": true
+            }),
+        )
+        .unwrap();
+
+        assert!(!is_hidden(&s, 1), "numeric value must match");
+        assert!(!is_hidden(&s, 2), "blank must remain visible");
+        assert!(is_hidden(&s, 3), "unselected text must be hidden");
+
+        let options = filter_values(&s.doc().unwrap().wb, 0, 0);
+
+        for (label, expected) in [("42", true), ("(Blanks)", true), ("Other", false)] {
+            let selected = options.iter().find(|(text, _)| text == label).map(|(_, on)| *on);
+
+            assert_eq!(selected, Some(expected), "{label}");
+        }
+    }
 }
