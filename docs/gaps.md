@@ -168,8 +168,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   [hardware-parity.md](hardware-parity.md)
 
 ### 21. Automation and add-ins (F)
-- VBA out of scope: the VBA project is kept on open, written back unchanged only into `.xlsm`
-  and `.xltm`, left out of other formats and never run (#6); no Office Scripts compatibility; no
+- VBA out of scope: the VBA project is kept on open when its part can be read (a missing or
+  unreadable part is dropped with a warning; an oversized one stops the open), written back
+  unchanged only into `.xlsm` and `.xltm`, left out of other formats and never run (#6); no Office Scripts compatibility; no
   plugin or custom function API. **Estimate:** 25–40 h plus an owner decision.
 
 ### 22. AI features (F)
