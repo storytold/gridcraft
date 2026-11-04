@@ -296,6 +296,21 @@ fn calendar_rejects_reversed_bounds() {
 }
 
 #[test]
+fn calendar_rejects_oversized_spans() {
+    // The whole in-range span is 2,958,466 days, above the 1,000,000-row generation ceiling, so
+    // it must fail instead of allocating the table.
+    let error = eval_table("CALENDAR(DATE(1899,12,30), DATE(9999,12,31))").expect_err("oversized calendar");
+    assert!(error.contains("too large"), "{error}");
+    // 1900-01-01 is serial 2, so exactly 1,000,000 days end on 4637-11-27; the cap is inclusive
+    // there and one day further fails.
+    let largest = eval_table("CALENDAR(DATE(1900,1,1), DATE(4637,11,27))").expect("largest calendar");
+    assert_eq!(largest.rows.len(), 1_000_000);
+    assert_eq!(largest.rows.last().map(|row| row[0].clone()), Some(Scalar::DateTime(serial(4637, 11, 27))));
+    let error = eval_table("CALENDAR(DATE(1900,1,1), DATE(4637,11,28))").expect_err("one day over the cap");
+    assert!(error.contains("too large"), "{error}");
+}
+
+#[test]
 fn calendarauto_covers_whole_fiscal_years() {
     // Sales spans 2023-06-15 .. 2024-03-10 and Date spans 2023-01-01 .. 2024-12-31.
     let table = eval_table("CALENDARAUTO()").expect("calendar auto");

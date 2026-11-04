@@ -407,7 +407,13 @@ pub fn encode_numeric_dictionary(values: &[i64], real: bool, element_bytes: usiz
             // header declares, so a reader decoding 4-byte chunks gets the value back.
             let number = f64::from_bits(*value as u64);
             if element_bytes == 4 {
-                out.extend_from_slice(&(number as f32).to_le_bytes());
+                let narrowed = number as f32;
+                // A value that does not survive the f64 -> f32 -> f64 round trip would be silently
+                // changed by the 4-byte slot; reject it instead of corrupting the dictionary.
+                if !number.is_nan() && f64::from(narrowed) != number {
+                    return Err(ModelFileError::InvalidModel("real value does not fit a 4-byte dictionary".into()));
+                }
+                out.extend_from_slice(&narrowed.to_le_bytes());
             } else {
                 out.extend_from_slice(&number.to_le_bytes());
             }
@@ -903,6 +909,29 @@ mod tests {
         assert!(real);
         assert_eq!(element_bytes, 8);
         assert_eq!(decoded, values);
+        Ok(())
+    }
+
+    #[test]
+    fn four_byte_real_dictionary_rejects_inexact_values() -> Result<()> {
+        // Exactly representable values narrow without changing, so they still round-trip.
+        let exact: Vec<i64> = [0.0f64, 1.5, -2.25, 3.0].iter().map(|number| number.to_bits() as i64).collect();
+        let bytes = encode_numeric_dictionary(&exact, true, 4)?;
+        let (_, element_bytes, decoded) = decode_numeric_dictionary(&bytes)?;
+        assert_eq!(element_bytes, 4);
+        let expected: Vec<i64> = [0.0f64, 1.5, -2.25, 3.0].iter().map(|number| f64::from(*number as f32).to_bits() as i64).collect();
+        assert_eq!(decoded, expected);
+
+        // `0.1` has no exact f32 representation; narrowing would silently change the value.
+        let error = encode_numeric_dictionary(&[0.1f64.to_bits() as i64], true, 4).expect_err("inexact value must be rejected");
+        assert!(matches!(
+            error,
+            ModelFileError::InvalidModel(message) if message == "real value does not fit a 4-byte dictionary"
+        ));
+        // `123456789.0` exceeds f32 precision even though it is integral.
+        assert!(encode_numeric_dictionary(&[123456789.0f64.to_bits() as i64], true, 4).is_err());
+        // The same values remain exact in an 8-byte dictionary.
+        assert!(encode_numeric_dictionary(&[0.1f64.to_bits() as i64], true, 8).is_ok());
         Ok(())
     }
 

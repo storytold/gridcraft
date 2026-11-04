@@ -63,8 +63,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         "Interest accrued on a periodically paying security, from issue or from the first coupon \
          date to settlement. Basis selects the day-count method; Calc_method chooses interest \
          from issue (TRUE, the default) or from first_interest (FALSE) when settlement is after \
-         the first coupon date. Frequency must be 1, 2 or 4 and settlement must precede \
-         maturity.",
+         the first coupon date. Frequency must be 1, 2 or 4 and issue must precede \
+         settlement.",
         &[
             "ACCRINT ( DATE ( 2021, 4, 1 ), DATE ( 2021, 10, 1 ), DATE ( 2022, 3, 15 ), 0.045, 5000, 2, 1 )",
             "ACCRINT ( DATE ( 2021, 4, 1 ), DATE ( 2021, 10, 1 ), DATE ( 2022, 3, 15 ), 0.045, 5000, 2, 1, FALSE )",

@@ -14,6 +14,12 @@ use super::*;
 /// Last serial Excel/DAX accepts as a date: 9999-12-31.
 const MAX_DATE_SERIAL: f64 = 2_958_465.0;
 
+/// Hard ceiling for date tables built row-by-row by `CALENDAR`/`CALENDARAUTO`. It mirrors the
+/// `MAX_GENERATED_ROWS` limit in `eval::table_manipulation` (which is private to that module),
+/// so a pathological date span fails like every other oversized generated table instead of
+/// exhausting memory.
+const MAX_GENERATED_ROWS: i64 = 1_000_000;
+
 pub(crate) fn call(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Option<Result<Scalar, EvalError>> {
     let upper = name.to_ascii_uppercase();
     let result = match upper.as_str() {
@@ -594,6 +600,9 @@ fn date_table(start: f64, end: f64, name: &str) -> Result<TableValue, EvalError>
         return Err(EvalError::new(format!("{name} dates must be between 1899-12-30 and 9999-12-31")));
     }
     let count = (end - start) as i64 + 1;
+    if count > MAX_GENERATED_ROWS {
+        return Err(EvalError::new(format!("{name} result is too large")));
+    }
     let rows = (0..count).map(|offset| vec![Scalar::DateTime(start + offset as f64)]).collect();
     Ok(TableValue::new(vec![TableColumn { name: "Date".into() }], rows))
 }

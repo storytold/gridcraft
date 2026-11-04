@@ -1,6 +1,6 @@
 //! Integration tests for the model-backed `PivotTable` object.
 
-use gridcraft_dax::model::{DataModel, Measure, ModelColumn, ModelTable};
+use gridcraft_dax::model::{DataModel, Measure, ModelColumn, ModelTable, Relationship};
 use gridcraft_dax::pivot::{PivotError, pivot_cross, pivot_fields};
 use gridcraft_dax::pivot_table::{DEFAULT_MAX_CELLS, PivotFilter, PivotLayout, PivotTable, PivotTableError};
 use gridcraft_dax::value::{Scalar, TableValue};
@@ -364,4 +364,49 @@ fn pivot_cross_is_bounded_by_max_cells() {
     let row_fields = pivot_fields(&model, &["Sales[RowKey]".to_string()]).expect("row fields");
     let narrow = pivot_cross(&model, "Total Sales", &row_fields, &[]).expect("single-axis pivot stays within budget");
     assert_eq!(narrow.rows.len(), 1025);
+}
+
+#[test]
+fn a_dense_relationship_graph_reports_ambiguity_instead_of_searching_forever() {
+    // Fourteen tables with a forward lookup relationship between every pair, plus a table no
+    // relationship reaches. Enumerating every simple path to `Nowhere` would take hundreds of
+    // thousands of steps, so the path search spends its budget and the field is rejected as
+    // ambiguous instead of being bound to a partial (or empty) chain.
+    const TABLES: usize = 14;
+    let mut tables = (0..TABLES)
+        .map(|index| ModelTable {
+            name: format!("T{index}"),
+            columns: vec![ModelColumn { name: "Key".into(), data_type: Some("Int64".into()) }],
+            rows: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    tables.push(ModelTable {
+        name: "Nowhere".into(),
+        columns: vec![ModelColumn { name: "Key".into(), data_type: Some("Int64".into()) }],
+        rows: Vec::new(),
+    });
+    let relationships = (0..TABLES)
+        .flat_map(|from| {
+            ((from + 1)..TABLES).map(move |to| Relationship {
+                from_table: format!("T{from}"),
+                from_column: "Key".into(),
+                to_table: format!("T{to}"),
+                to_column: "Key".into(),
+                bidirectional: false,
+                inactive: false,
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut model = DataModel {
+        tables,
+        relationships,
+        measures: vec![Measure { name: "Rows".into(), formula: "COUNTROWS(T0)".into(), table: Some("T0".into()), format: None, expr: None }],
+    };
+    model.parse_formulas().expect("model parses");
+
+    let error = PivotTable::new("p", "Rows").with_row_fields(vec!["Nowhere[Key]".into()]).render(&model).expect_err("exhausted path search");
+    assert!(
+        matches!(&error, PivotTableError::AmbiguousFieldPath { field, table, source_table, .. } if field == "Key" && table == "Nowhere" && source_table == "T0"),
+        "{error:?}"
+    );
 }

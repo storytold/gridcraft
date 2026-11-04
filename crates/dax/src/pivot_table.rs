@@ -37,7 +37,9 @@
 //! * The path must be unique. Two active relationships between the same pair of tables, or a
 //!   second chain to the same table (what a cycle in the relationship graph offers), are rejected
 //!   ([`PivotTableError::AmbiguousFieldPath`]) because a pivot field names a table and a column,
-//!   not a relationship. A field reachable only through an inactive relationship is rejected
+//!   not a relationship. The search is bounded, so a relationship graph dense enough to exhaust its
+//!   path budget is rejected the same way rather than searched forever. A field reachable only
+//!   through an inactive relationship is rejected
 //!   ([`PivotTableError::InactiveRelationship`]): `USERELATIONSHIP` is not supported in pivots, so
 //!   the model has to mark the relationship active. A field on a table no relationship connects is
 //!   rejected ([`PivotTableError::ForeignField`]).
@@ -102,6 +104,12 @@ const INDENT: &str = "  ";
 /// one hop per dimension level; the bound only exists so a cyclic relationship graph cannot make
 /// the path search unbounded.
 const MAX_RELATIONSHIP_HOPS: usize = 8;
+
+/// Maximum number of search steps one field-path lookup may spend: one per table state popped from
+/// the work stack and one per relationship examined for it. A search that spends the budget cannot
+/// prove a field's path is unique, so the field is rejected as ambiguous instead of being bound to
+/// a partial or empty chain: a dense relationship graph then cannot stall a pivot.
+const MAX_PATH_SEARCH_STEPS: usize = 100_000;
 
 /// The row-label layout of a rendered pivot.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -799,12 +807,19 @@ fn bind_field(model: &DataModel, source: usize, source_name: &str, field: PivotF
         return Ok(BoundField { field, hops: Vec::new(), label });
     }
     let table_name = model.tables.get(field.table).map(|table| table.name.clone()).unwrap_or_else(|| field.table.to_string());
-    let chains = lookup_chains(model, source, field.table, 2, false);
+    let chains = match lookup_chains(model, source, field.table, 2, false) {
+        ChainSearch::Complete(chains) => chains,
+        ChainSearch::Exhausted => return Err(ambiguous_field_path(&field.name, &table_name, source_name)),
+    };
     let chain = match chains.as_slice() {
         [chain] => chain,
         [] => {
             // Distinguish the three ways a foreign field can be out of reach; the fix differs.
-            if !lookup_chains(model, source, field.table, 1, true).is_empty() {
+            let inactive = match lookup_chains(model, source, field.table, 1, true) {
+                ChainSearch::Complete(chains) => chains,
+                ChainSearch::Exhausted => return Err(ambiguous_field_path(&field.name, &table_name, source_name)),
+            };
+            if !inactive.is_empty() {
                 return Err(PivotTableError::InactiveRelationship { field: field.name, table: table_name, source_table: source_name.to_string() });
             }
             if reachable(model, source, field.table) {
@@ -841,6 +856,22 @@ fn bind_field(model: &DataModel, source: usize, source_name: &str, field: PivotF
     Ok(BoundField { field, hops, label })
 }
 
+/// The error for a related field whose lookup path cannot be proven unique because the path search
+/// exhausted [`MAX_PATH_SEARCH_STEPS`]. An exhausted search cannot count the chains, so report the
+/// two-chain threshold the uniqueness probe was looking for rather than a misleading partial count.
+fn ambiguous_field_path(field: &str, table: &str, source: &str) -> PivotTableError {
+    PivotTableError::AmbiguousFieldPath { field: field.to_string(), table: table.to_string(), source_table: source.to_string(), paths: 2 }
+}
+
+/// The outcome of a bounded [`lookup_chains`] search.
+enum ChainSearch {
+    /// The search finished: every chain up to `limit`, or every chain that exists.
+    Complete(Vec<Vec<usize>>),
+    /// The search spent [`MAX_PATH_SEARCH_STEPS`] steps before it could prove how many chains
+    /// exist, so the field's lookup path cannot be treated as unique.
+    Exhausted,
+}
+
 /// Every simple chain of at most [`MAX_RELATIONSHIP_HOPS`] many-to-one lookups from `source` to
 /// `target`, in model relationship order, stopping after `limit` chains.
 ///
@@ -848,14 +879,24 @@ fn bind_field(model: &DataModel, source: usize, source_name: &str, field: PivotF
 /// a single related row) and a table is never entered twice on one chain, so a cyclic relationship
 /// graph yields finitely many chains instead of looping: a cycle shows up as a second chain to the
 /// same table, which [`bind_field`] rejects as ambiguous.
-fn lookup_chains(model: &DataModel, source: usize, target: usize, limit: usize, include_inactive: bool) -> Vec<Vec<usize>> {
+///
+/// The search is bounded by [`MAX_PATH_SEARCH_STEPS`]: a dense graph whose path count explodes
+/// returns [`ChainSearch::Exhausted`] instead of enumerating paths, and never a partial chain list.
+fn lookup_chains(model: &DataModel, source: usize, target: usize, limit: usize, include_inactive: bool) -> ChainSearch {
+    let mut steps = 0usize;
     let mut chains = Vec::new();
     let mut stack: Vec<(usize, Vec<usize>, Vec<usize>)> = vec![(source, Vec::new(), vec![source])];
     while let Some((table, chain, visited)) = stack.pop() {
+        if !spend_step(&mut steps) {
+            return ChainSearch::Exhausted;
+        }
         if chain.len() >= MAX_RELATIONSHIP_HOPS {
             continue;
         }
         for (index, relationship) in model.relationships.iter().enumerate() {
+            if !spend_step(&mut steps) {
+                return ChainSearch::Exhausted;
+            }
             if relationship.inactive && !include_inactive {
                 continue;
             }
@@ -869,7 +910,7 @@ fn lookup_chains(model: &DataModel, source: usize, target: usize, limit: usize, 
             if to == target {
                 chains.push(next_chain);
                 if chains.len() >= limit {
-                    return chains;
+                    return ChainSearch::Complete(chains);
                 }
                 continue;
             }
@@ -878,7 +919,16 @@ fn lookup_chains(model: &DataModel, source: usize, target: usize, limit: usize, 
             stack.push((to, next_chain, next_visited));
         }
     }
-    chains
+    ChainSearch::Complete(chains)
+}
+
+/// Charges one step to `steps`, returning `false` once [`MAX_PATH_SEARCH_STEPS`] is spent.
+fn spend_step(steps: &mut usize) -> bool {
+    if *steps >= MAX_PATH_SEARCH_STEPS {
+        return false;
+    }
+    *steps += 1;
+    true
 }
 
 /// Whether `table` is in `visited`. Table ids are dense, but a `Vec` keeps the search allocation
