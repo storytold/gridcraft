@@ -1031,7 +1031,9 @@ mod tests {
         let mut s = Session::new();
         s.new_workbook();
         s.execute("python.set", json!({"cell": "A1", "code": "1 + 1"})).unwrap();
-        s.execute("home.bold", json!({"range": "A2"})).unwrap();
+        // Both cells carry formatting, so the test would fail if Python code did not count as
+        // content: A1 would then be optimizable alongside the blank bold A2.
+        s.execute("home.bold", json!({"range": "A1:A2"})).unwrap();
         {
             let d = s.doc_mut().unwrap();
             let sh = std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap();
