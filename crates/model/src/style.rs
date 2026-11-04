@@ -482,10 +482,11 @@ impl Fill {
     }
 
     /// The colour a swatch or non-gradient fallback (HTML export) should show: the first stop for
-    /// a gradient, the foreground for a pattern/solid, and `None` for no fill.
+    /// a gradient, the foreground for a pattern/solid, and `None` for no fill. An automatic stop
+    /// previews as the black `resolved_stops` renders it, so a swatch never disagrees with the grid.
     pub fn preview_color(&self, theme: &Theme) -> Option<[u8; 3]> {
         if let Some(g) = &self.gradient {
-            g.stops.first().and_then(|s| s.color.resolve(theme))
+            g.stops.first().map(|s| s.color.resolve(theme).unwrap_or([0, 0, 0]))
         } else if self.pattern != PatternType::None {
             self.fg.resolve(theme)
         } else {
@@ -821,6 +822,10 @@ mod tests {
         assert_eq!(preview.preview_color(&th), Some([255, 0, 0]));
         assert_eq!(Fill::solid(Color::Rgb(0x00FF00)).preview_color(&th), Some([0, 255, 0]));
         assert_eq!(Fill::default().preview_color(&th), None);
+        // An automatic first stop previews as the black the renderer draws, not as no fill.
+        let auto = Fill::gradient(GradientKind::Linear { degree: 0.0 }, vec![GradientStop { position: 0.0, color: Color::Auto }]);
+        assert_eq!(auto.preview_color(&th), Some([0, 0, 0]));
+        assert_eq!(auto.gradient.as_ref().unwrap().resolved_stops(&th), vec![(0.0, [0, 0, 0])]);
 
         let center = GradientFill::path(0.5, 0.5, 0.5, 0.5, stops);
         assert_eq!(center.position(0.5, 0.5), 0.0);

@@ -342,7 +342,7 @@ mod tests {
         let src = include_str!("dialogs/format_cells.rs");
         let start = src.find("fn fill_tab(").expect("fill_tab");
         let body = &src[start..];
-        let end = body.find("\n/// Draws the six-tab Format Cells editor").unwrap_or(body.len());
+        let end = body.find("\n/// Draws the six-tab Format Cells editor").expect("end marker after fill_tab");
         let body = &body[..end];
         let mut keys: Vec<&str> = body
             .match_indices("lang.tr(\"")
