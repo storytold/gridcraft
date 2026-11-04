@@ -761,7 +761,7 @@ mod tests {
         // the save that follows ships the lossy content with a success status.
         let (dir, input) = warned_csv("run-cmd-open");
         let output = dir.join("dates.xlsx");
-        let open_cmd = format!(r#"file.open={{"path":"{}"}}"#, input);
+        let open_cmd = format!("file.open={}", json!({"path": input}));
         let e = run(&vec!["--quiet".into(), "--cmd".into(), open_cmd.clone(), "--out".into(), path(&output)])
             .expect_err("a warned import opened by a command fails the run");
         assert!(e.contains("--allow-lossy"), "{e}");
