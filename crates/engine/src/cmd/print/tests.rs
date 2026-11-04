@@ -17,6 +17,50 @@ fn contains(hay: &[u8], needle: &str) -> bool {
 }
 
 #[test]
+fn flipped_presets_are_mirrored_when_printed() {
+    use super::objects::{mirror_outline, preset_outline};
+    use gridcraft_model::ShapeFormat;
+    // Right triangle: (left, bottom), (right, bottom), (left, top).
+    let mut pts = preset_outline(ShapeKind::RightTriangle, 0.0, 0.0, 100.0, 60.0).unwrap();
+    assert_eq!(pts, [[0.0, 60.0], [100.0, 60.0], [0.0, 0.0]]);
+    let flip_h = ShapeFormat { flip_h: true, ..Default::default() };
+    mirror_outline(&flip_h, 0.0, 0.0, 100.0, 60.0, &mut pts);
+    assert_eq!(pts, [[100.0, 60.0], [0.0, 60.0], [100.0, 0.0]], "flipH moves the right angle to the right");
+    // The concave block arrow's head flips over a horizontal axis.
+    let mut arrow = preset_outline(ShapeKind::BlockArrow, 0.0, 0.0, 100.0, 50.0).unwrap();
+    let flip_v = ShapeFormat { flip_v: true, ..Default::default() };
+    mirror_outline(&flip_v, 0.0, 0.0, 100.0, 50.0, &mut arrow);
+    assert_eq!(arrow[1], [62.0, 50.0 - 14.0], "the upper shaft edge moves to the lower one");
+    assert_eq!(arrow[2], [62.0, 50.0], "the head's top corner moves to the bottom");
+}
+
+#[test]
+fn a_converted_flat_line_reaches_the_printer() {
+    use super::objects::overlaps_page;
+    // Ink to Shape gives a horizontal stroke a zero-height box and a vertical one a zero-width
+    // box; the block from (0, 0) to (100, 100) holds both, so neither is skipped as invisible.
+    assert!(overlaps_page((10.0, 50.0, 80.0, 0.0), (0.0, 0.0, 100.0, 100.0)), "a horizontal line has no height but is on the page");
+    assert!(overlaps_page((50.0, 10.0, 0.0, 80.0), (0.0, 0.0, 100.0, 100.0)), "a vertical line has no width but is on the page");
+    // A box clear of the block is still skipped.
+    assert!(!overlaps_page((200.0, 50.0, 80.0, 0.0), (0.0, 0.0, 100.0, 100.0)));
+}
+
+#[test]
+fn the_pentagon_preset_fills_its_box() {
+    use super::objects::preset_outline;
+    // Ink to Shape anchors a converted pentagon to the recognised corners' box, so the preset has
+    // to fill that box: a pentagon inscribed in the box's ellipse would sit inside it and draw
+    // every corner short of the ink.
+    let pts = preset_outline(ShapeKind::Pentagon, 10.0, 20.0, 100.0, 60.0).expect("pentagon outline");
+    let x0 = pts.iter().map(|q| q[0]).fold(f32::INFINITY, f32::min);
+    let x1 = pts.iter().map(|q| q[0]).fold(f32::NEG_INFINITY, f32::max);
+    let y0 = pts.iter().map(|q| q[1]).fold(f32::INFINITY, f32::min);
+    let y1 = pts.iter().map(|q| q[1]).fold(f32::NEG_INFINITY, f32::max);
+    assert!((x0 - 10.0).abs() < 1e-3 && (x1 - 110.0).abs() < 1e-3, "x {x0}..{x1}");
+    assert!((y0 - 20.0).abs() < 1e-3 && (y1 - 80.0).abs() < 1e-3, "y {y0}..{y1}");
+}
+
+#[test]
 fn chart_data_table_prints_formatted_values_and_follows_recalculation() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["Quarter", "Sales"], ["Q1", 1234], ["Q2", 5678]]})).unwrap();

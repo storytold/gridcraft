@@ -11,6 +11,7 @@ pub mod file;
 pub mod forecast;
 pub mod format;
 pub mod formulas;
+pub mod ink_shape;
 pub mod insert;
 pub mod inspect;
 pub mod macros;

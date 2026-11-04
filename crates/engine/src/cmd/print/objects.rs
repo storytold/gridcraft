@@ -66,6 +66,14 @@ fn decode_image(data: &[u8], max_w: u32, max_h: u32) -> Option<(Vec<u8>, u32, u3
     Some((rgba.into_raw(), pw, ph))
 }
 
+/// Whether a box can touch the printed block `(x0, y0, x1, y1)`. A line or an arrow has no
+/// extent on the axis it runs along, so a zero width or height is drawn rather than skipped; the
+/// bounds only have to touch.
+pub(super) fn overlaps_page(r: (f64, f64, f64, f64), page: (f64, f64, f64, f64)) -> bool {
+    let (x0, y0, x1, y1) = page;
+    r.2 >= 0.0 && r.3 >= 0.0 && r.0 <= x1 && r.0 + r.2 >= x0 && r.1 <= y1 && r.1 + r.3 >= y0
+}
+
 /// Draws charts, pictures, shapes and sparklines overlapping the body block of a page.
 /// `pics` memoizes decoded pictures for the whole render (one page at a time draws each
 /// picture again, but the decode happens once).
@@ -75,7 +83,7 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
     let (sx1, sy1) = (sh.col_left(block.end.col.saturating_add(1)), sh.row_top(block.end.row.saturating_add(1)));
     let (bx, by) = (b.xs.first().copied().unwrap_or(0.0), b.ys.first().copied().unwrap_or(0.0));
     let (bw, bh) = (b.xs.last().copied().unwrap_or(bx) - bx, b.ys.last().copied().unwrap_or(by) - by);
-    let visible = |r: (f64, f64, f64, f64)| r.2 > 0.0 && r.3 > 0.0 && r.0 < sx1 && r.0 + r.2 > sx0 && r.1 < sy1 && r.1 + r.3 > sy0;
+    let visible = |r: (f64, f64, f64, f64)| overlaps_page(r, (sx0, sy0, sx1, sy1));
     let place = |r: (f64, f64, f64, f64)| (bx + ((r.0 - sx0) as f32) * b.k, by + ((r.1 - sy0) as f32) * b.k, r.2 as f32 * b.k, r.3 as f32 * b.k);
     pg.save();
     pg.clip_rect(bx, by, bw, bh);
@@ -154,28 +162,27 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
     let fill = rgb_of(shp.fill, wb);
     let line = rgb_of(shp.line, wb).filter(|_| !shp.format.no_line).map(|c| (c, (0.75 * b.k).max(0.25)));
     match shp.kind {
-        ShapeKind::Ellipse => {
-            let pts: Vec<[f32; 2]> = (0..72)
-                .map(|i| {
-                    let a = i as f32 / 72.0 * std::f32::consts::TAU;
-                    [x + w / 2.0 + w / 2.0 * a.cos(), y + h / 2.0 + h / 2.0 * a.sin()]
-                })
-                .collect();
-            pg.polygon(&pts, fill, line);
-        }
-        ShapeKind::Triangle => pg.polygon(&[[x + w / 2.0, y], [x + w, y + h], [x, y + h]], fill, line),
         ShapeKind::Line | ShapeKind::Arrow => {
             let c = line.map(|l| l.0).or(fill).unwrap_or([0, 0, 0]);
-            pg.stroke_line(x, y, x + w, y + h, (1.0 * b.k).max(0.3), c);
+            // Flips mirror the preset inside its box, so the arrow points the way it was drawn.
+            let [x0, y0] = shp.format.mirror_point(x, y, w, h, [x, y]);
+            let [x1, y1] = shp.format.mirror_point(x, y, w, h, [x + w, y + h]);
+            pg.stroke_line(x0, y0, x1, y1, (1.0 * b.k).max(0.3), c);
             if shp.kind == ShapeKind::Arrow {
-                let ang = h.atan2(w);
+                let ang = (y1 - y0).atan2(x1 - x0);
                 let al = 8.0 * b.k;
-                let p = |da: f32| [x + w - al * (ang + da).cos(), y + h - al * (ang + da).sin()];
-                pg.polygon(&[[x + w, y + h], p(0.4), p(-0.4)], Some(c), None);
+                let p = |da: f32| [x1 - al * (ang + da).cos(), y1 - al * (ang + da).sin()];
+                pg.polygon(&[[x1, y1], p(0.4), p(-0.4)], Some(c), None);
             }
         }
         _ => {
-            pg.polygon(&[[x, y], [x + w, y], [x + w, y + h], [x, y + h]], fill, line);
+            if let Some(mut pts) = preset_outline(shp.kind, x, y, w, h) {
+                // An imported flipped shape draws its mirrored vertices, like Excel.
+                mirror_outline(&shp.format, x, y, w, h, &mut pts);
+                pg.polygon(&pts, fill, line);
+            } else {
+                pg.polygon(&[[x, y], [x + w, y], [x + w, y + h], [x, y + h]], fill, line);
+            }
         }
     }
     if shp.text.is_empty() {
@@ -205,5 +212,60 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
         };
         pg.text(lx, yy, size, font, color, l);
         yy += size * 1.2;
+    }
+}
+
+/// A preset shape's outline in the box (`x`, `y`, `w`, `h`), before the shape's flips are
+/// applied. `None` for the presets drawn as a plain rectangle.
+pub(super) fn preset_outline(kind: ShapeKind, x: f32, y: f32, w: f32, h: f32) -> Option<Vec<[f32; 2]>> {
+    Some(match kind {
+        ShapeKind::Ellipse => (0..72)
+            .map(|i| {
+                let a = i as f32 / 72.0 * std::f32::consts::TAU;
+                [x + w / 2.0 + w / 2.0 * a.cos(), y + h / 2.0 + h / 2.0 * a.sin()]
+            })
+            .collect(),
+        ShapeKind::Triangle => vec![[x + w / 2.0, y], [x + w, y + h], [x, y + h]],
+        ShapeKind::RightTriangle => vec![[x, y + h], [x + w, y + h], [x, y]],
+        ShapeKind::Diamond => vec![[x + w / 2.0, y], [x + w, y + h / 2.0], [x + w / 2.0, y + h], [x, y + h / 2.0]],
+        ShapeKind::Parallelogram => vec![[x + w / 4.0, y], [x + w, y], [x + 3.0 * w / 4.0, y + h], [x, y + h]],
+        ShapeKind::Trapezoid => vec![[x + w / 5.0, y], [x + 4.0 * w / 5.0, y], [x + w, y + h], [x, y + h]],
+        // The regular pentagon scaled to its box, as Excel's `pentagon` preset is.
+        ShapeKind::Pentagon => [[0.5, 0.0], [1.0, 0.381_966], [0.809_017, 1.0], [0.190_983, 1.0], [0.0, 0.381_966]]
+            .iter()
+            .map(|q| [x + w * q[0], y + h * q[1]])
+            .collect(),
+        ShapeKind::Hexagon => {
+            vec![[x + w / 4.0, y], [x + 3.0 * w / 4.0, y], [x + w, y + h / 2.0], [x + 3.0 * w / 4.0, y + h], [x + w / 4.0, y + h], [x, y + h / 2.0]]
+        }
+        ShapeKind::BlockArrow => vec![
+            [x, y + 0.28 * h],
+            [x + 0.62 * w, y + 0.28 * h],
+            [x + 0.62 * w, y],
+            [x + w, y + h / 2.0],
+            [x + 0.62 * w, y + h],
+            [x + 0.62 * w, y + 0.72 * h],
+            [x, y + 0.72 * h],
+        ],
+        ShapeKind::ArrowDouble => vec![
+            [x, y + h / 2.0],
+            [x + 0.22 * w, y + 0.18 * h],
+            [x + 0.22 * w, y + 0.39 * h],
+            [x + 0.78 * w, y + 0.39 * h],
+            [x + 0.78 * w, y + 0.18 * h],
+            [x + w, y + h / 2.0],
+            [x + 0.78 * w, y + 0.82 * h],
+            [x + 0.78 * w, y + 0.61 * h],
+            [x + 0.22 * w, y + 0.61 * h],
+            [x + 0.22 * w, y + 0.82 * h],
+        ],
+        _ => return None,
+    })
+}
+
+/// Applies a shape's flips to an outline in the box (`x`, `y`, `w`, `h`).
+pub(super) fn mirror_outline(f: &gridcraft_model::ShapeFormat, x: f32, y: f32, w: f32, h: f32, pts: &mut [[f32; 2]]) {
+    for q in pts {
+        *q = f.mirror_point(x, y, w, h, *q);
     }
 }
