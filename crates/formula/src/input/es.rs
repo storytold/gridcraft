@@ -5,13 +5,14 @@
 //! `FALSO()` are the TRUE and FALSE functions) plus the financial block added upstream in #2000
 //! (`VNA`, `TIR`, `PAGO`, `VA`, `VF`). Functions not listed keep their English name.
 //!
-//! Sources for the other words:
-//! - bool: https://support.microsoft.com/es-es/excel/functions/true-function | https://raw.githubusercontent.com/PHPOffice/PhpSpreadsheet/master/src/PhpSpreadsheet/Calculation/locale/es/functions | https://raw.githubusercontent.com/handsontable/hyperformula/master/src/i18n/languages/esES.ts
-//! - table_items: https://github.com/GrapeCity/spreadjs-resources (SpreadJS v18 ES resource: #Todo,#Datos,#Encabezados,#Totales,#Esta Fila) | https://support.microsoft.com/es-es/excel/using-structured-references-with-excel-tables (lists #Todas for #All; same #Datos,#Encabezados,#Totales,#Esta Fila)
-//! - errors.numeric: https://support.microsoft.com/es-es/excel/functions/error-type-function | https://raw.githubusercontent.com/PHPOffice/PhpSpreadsheet/master/src/PhpSpreadsheet/Calculation/locale/es/config | https://github.com/LibreOffice/translations/blob/master/source/es/formula/messages.po
-//! - errors.#N/A: https://support.microsoft.com/es-es/excel/functions/na-function (#N/D) | https://raw.githubusercontent.com/handsontable/hyperformula/master/src/i18n/languages/esES.ts (#N/D) | https://github.com/LibreOffice/translations/blob/master/source/es/formula/messages.po (#N/D) | https://es.stackoverflow.com/questions/538707 (cell value #N/D); error-type page table says #N/A
-//! - errors.#SPILL!: https://raw.githubusercontent.com/handsontable/hyperformula/master/src/i18n/languages/esES.ts | https://github.com/LibreOffice/translations/blob/master/source/es/formula/messages.po (#¡DESBORDAMIENTO!) | https://support.microsoft.com/es-es/excel/how-to-correct-a-spill-error (drops the ¡)
-//! - errors.#CALC!: https://github.com/ibarrasuarez22-ux/MC_regiduria (real Spanish Excel CSV exports contain #¡CALC!) | https://github.com/Carlos1200/gridcalc/blob/main/src/i18n/es.ts
+//! Sources for the other words (Microsoft's pages, permissively licensed references and files
+//! exported by Spanish Excel; no copyleft project is used):
+//! - bool: https://support.microsoft.com/es-es/excel/functions/true-function | https://raw.githubusercontent.com/PHPOffice/PhpSpreadsheet/master/src/PhpSpreadsheet/Calculation/locale/es/functions (MIT)
+//! - table_items: https://github.com/GrapeCity/spreadjs-resources (MIT; SpreadJS v18 ES resource: #Todo,#Datos,#Encabezados,#Totales,#Esta Fila) | https://support.microsoft.com/es-es/excel/using-structured-references-with-excel-tables (lists #Todas for #All; same #Datos,#Encabezados,#Totales,#Esta Fila)
+//! - errors.numeric: https://support.microsoft.com/es-es/excel/functions/error-type-function | https://raw.githubusercontent.com/PHPOffice/PhpSpreadsheet/master/src/PhpSpreadsheet/Calculation/locale/es/config (MIT)
+//! - errors.#N/A: https://support.microsoft.com/es-es/excel/functions/na-function (#N/D) | https://es.stackoverflow.com/questions/538707 (cell value #N/D); error-type page table says #N/A
+//! - errors.#SPILL!: unconfirmed. https://support.microsoft.com/es-es/excel/how-to-correct-a-spill-error writes #DESBORDAMIENTO!; the ¡ follows every other Spanish error (#¡VALOR!, #¡REF!) until Spanish Excel is observed
+//! - errors.#CALC!: https://github.com/ibarrasuarez22-ux/MC_regiduria (real Spanish Excel CSV exports contain #¡CALC!)
 //! - errors.#GETTING_DATA: https://support.microsoft.com/es-es/excel/functions/error-type-function
 
 use super::Dialect;
