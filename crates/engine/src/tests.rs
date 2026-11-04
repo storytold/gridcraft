@@ -3604,6 +3604,7 @@ fn add_image(s: &mut Session, cell: &str, mode: gridcraft_model::AnchorMode) -> 
         data: tiny_png().into(),
         mime: "image/png".into(),
         alt: String::new(),
+        crop: [0.0; 4],
     });
     id
 }
@@ -5693,4 +5694,31 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
         assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "destination": dest})).is_err(), "destination {dest:?}");
     }
     assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
+}
+
+/// Picture Format › Crop: `picture.crop` sets the crop and the frame a crop handle left in one
+/// undo step, keeps something visible each way, and Reset shows the whole picture again at the
+/// scale its visible part had.
+#[test]
+fn picture_crop_sets_crop_and_frame_and_resets() {
+    let mut s = s();
+    let r = s.execute("insert.picture", json!({"base64": crate::io::base64_encode(&tiny_png()), "at": "C3", "width": 200, "height": 100})).unwrap();
+    let id = r.get("image").and_then(serde_json::Value::as_u64).unwrap();
+    let pic = |s: &Session| s.doc().unwrap().wb.active().unwrap().images.iter().find(|i| u64::from(i.id) == id).unwrap().clone();
+    let undo = s.doc().unwrap().undo.len();
+    s.execute("picture.crop", json!({"id": id, "right": 0.25, "width": 150, "at": "C3", "dx": 0, "dy": 0})).unwrap();
+    let im = pic(&s);
+    assert_eq!(im.crop, [0.0, 0.0, 0.25, 0.0]);
+    assert_eq!(im.anchor.width, 150.0);
+    assert_eq!(s.doc().unwrap().undo.len(), undo + 1, "one undo step");
+    // Left and right together never cut everything away.
+    s.execute("picture.crop", json!({"id": id, "left": 0.9})).unwrap();
+    let c = pic(&s).crop;
+    assert!(c[0] + c[2] <= 0.99 + 1e-6, "{c:?}");
+    s.execute("picture.crop", json!({"id": id, "left": 0.0, "right": 0.25})).unwrap();
+    s.execute("picture.crop", json!({"id": id, "reset": true})).unwrap();
+    let im = pic(&s);
+    assert_eq!(im.crop, [0.0; 4]);
+    assert!((im.anchor.width - 200.0).abs() < 0.01, "{}", im.anchor.width);
+    assert!(s.execute("picture.crop", json!({"id": 999_999, "left": 0.1})).is_err());
 }

@@ -27,7 +27,7 @@ pub use active_row::active_row_band;
 mod cell_paint;
 mod cursor;
 mod editor;
-mod geo;
+pub(crate) mod geo;
 mod interact;
 mod keyboard;
 mod menus;
@@ -146,6 +146,14 @@ pub enum Drag {
         /// This drag has made its undo step; later frames merge into it, and never into the
         /// step of an earlier drag.
         stepped: bool,
+    },
+    /// A crop handle of a picture in crop mode (`picture_crop`), or the picture inside its frame.
+    Crop {
+        id: u32,
+        handle: u8,
+        start: Pos2,
+        frame: crate::picture_crop::Frame,
+        crop: [f32; 4],
     },
 }
 

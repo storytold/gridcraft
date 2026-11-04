@@ -55,11 +55,19 @@ fn drag_cursor(drag: &Drag, rtl: bool) -> Option<CursorIcon> {
         Drag::ResizeRow { .. } => Some(CursorIcon::ResizeRow),
         Drag::Freeze { cols, .. } => Some(if *cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical }),
         Drag::Object { handle: Some(h), .. } => Some(h.cursor(rtl)),
+        Drag::Crop { handle, .. } => Some(crate::picture_crop::cursor(*handle)),
     }
 }
 
 /// The cursor over the grid when no drag owns it: freeze bars, header edges, the fill handle, cells.
 fn hover_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, pointer: &egui::PointerState, geo: &Geo, sh: &Sheet, p: Pos2) {
+    // Crop mode: the crop handles and the picture inside the frame.
+    if let Some(im) = crate::picture_crop::cropping(app, sh)
+        && let Some(h) = crate::picture_crop::handle_at(crate::chartview::anchor_rect(geo, sh, &im.anchor), p)
+    {
+        ctx.set_cursor_icon(crate::picture_crop::cursor(h));
+        return;
+    }
     let (freeze_cols, freeze_rows) = freeze_handles(geo);
     if freeze_cols.contains(p) || freeze_rows.contains(p) {
         freeze_cursor(app, ctx, resp, pointer, freeze_cols.contains(p));

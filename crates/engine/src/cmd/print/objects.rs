@@ -66,6 +66,26 @@ fn decode_image(data: &[u8], max_w: u32, max_h: u32) -> Option<(Vec<u8>, u32, u3
     Some((rgba.into_raw(), pw, ph))
 }
 
+/// The part `(l, t)`..`(r, b)` (fractions, [`Image::visible_uv`]) of a `pw`×`ph` RGBA picture.
+fn crop_rgba(px: &[u8], pw: u32, ph: u32, (lt, rb): ([f32; 2], [f32; 2])) -> Option<(Vec<u8>, u32, u32)> {
+    if pw == 0 || ph == 0 {
+        return None;
+    }
+    // At least one pixel each way, inside the picture.
+    let span = |a: f32, b: f32, n: u32| {
+        let lo = ((a * n as f32).round() as u32).min(n - 1);
+        let hi = ((b * n as f32).round() as u32).clamp(lo + 1, n);
+        (lo, hi - lo)
+    };
+    let ((x0, w), (y0, h)) = (span(lt[0], rb[0], pw), span(lt[1], rb[1], ph));
+    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    for y in y0..y0 + h {
+        let start = ((y * pw + x0) * 4) as usize;
+        out.extend_from_slice(px.get(start..start + (w * 4) as usize)?);
+    }
+    Some((out, w, h))
+}
+
 /// Draws charts, pictures, shapes and sparklines overlapping the body block of a page.
 /// `pics` memoizes decoded pictures for the whole render (one page at a time draws each
 /// picture again, but the decode happens once).
@@ -87,8 +107,15 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
         }
         let (x, y, w, h) = place(r);
         // About 150 dpi is plenty for print.
-        let (mw, mh) = (((w / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32, ((h / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32);
-        let decoded = pics.entry((si, imi)).or_insert_with(|| decode_image(&im.data, mw, mh));
+        // A cropped picture is decoded whole at the scale its visible part prints, then cut.
+        let uv = im.visible_uv();
+        let (fw, fh) = (w / (uv.1[0] - uv.0[0]).max(0.01), h / (uv.1[1] - uv.0[1]).max(0.01));
+        let (mw, mh) = (((fw / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32, ((fh / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32);
+        let cropped = im.crop.iter().any(|c| *c != 0.0);
+        let decoded = pics.entry((si, imi)).or_insert_with(|| {
+            let full = decode_image(&im.data, mw, mh)?;
+            if cropped { crop_rgba(&full.0, full.1, full.2, uv) } else { Some(full) }
+        });
         if let Some((px, pw, ph)) = decoded.as_ref() {
             pg.image_rgba(Rect::new(x, y, w, h), px, [*pw, *ph]);
         }

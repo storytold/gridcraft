@@ -153,6 +153,11 @@ impl SheetApp {
         self.selected_object.filter(|o| o.kind == ObjKind::Chart).map(|o| o.id)
     }
 
+    /// The selected object's id when it is a picture (Picture Format, Crop).
+    pub fn selected_image(&self) -> Option<u32> {
+        self.selected_object.filter(|o| o.kind == ObjKind::Image).map(|o| o.id)
+    }
+
     /// Selects the object with id `id` on the active sheet, whatever its kind; `None` (or an id
     /// that is not there) clears the selection.
     pub fn select_object_id(&mut self, id: Option<u32>) {

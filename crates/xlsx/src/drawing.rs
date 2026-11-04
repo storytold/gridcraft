@@ -110,6 +110,22 @@ pub fn dml_color(e: &El) -> Option<Color> {
     None
 }
 
+/// A picture's `a:srcRect` as fractions cut off (left, top, right, bottom); its attributes are in
+/// thousandths of a percent (100000 = all of it). Out-of-range values are kept within -10..1.
+fn src_rect(e: Option<&El>) -> [f32; 4] {
+    let Some(e) = e else { return [0.0; 4] };
+    ["l", "t", "r", "b"].map(|k| e.attr(k).and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite()).map_or(0.0, |v| (v / 100_000.0).clamp(-10.0, 1.0) as f32))
+}
+
+/// `a:srcRect` for a crop (empty when nothing is cut off).
+fn src_rect_xml(crop: &[f32; 4]) -> String {
+    if crop.iter().all(|v| *v == 0.0) {
+        return String::new();
+    }
+    let v = |c: f32| (f64::from(c) * 100_000.0).round() as i64;
+    format!("<a:srcRect l=\"{}\" t=\"{}\" r=\"{}\" b=\"{}\"/>", v(crop[0]), v(crop[1]), v(crop[2]), v(crop[3]))
+}
+
 fn mime_for(name: &str) -> &'static str {
     let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
     match ext.as_str() {
@@ -168,7 +184,8 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                     };
                     let alt = obj.path(&["nvPicPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("").to_string();
                     let id = cx.next_object_id();
-                    sheet.images.push(Image { id, anchor, data: data.into(), mime: mime_for(&target).to_string(), alt });
+                    let crop = src_rect(obj.path(&["blipFill", "srcRect"]));
+                    sheet.images.push(Image { id, anchor, data: data.into(), mime: mime_for(&target).to_string(), alt, crop });
                 }
                 "graphicFrame" => {
                     let Some(gd) = obj.path(&["graphic", "graphicData"]) else { continue };
@@ -466,9 +483,10 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                 s.push_str(&open);
                 let _ = write!(
                     s,
-                    "<xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"{id}\" name=\"Picture {}\" descr=\"{}\"/><xdr:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed=\"{rid}\"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>{}<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>",
+                    "<xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"{id}\" name=\"Picture {}\" descr=\"{}\"/><xdr:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed=\"{rid}\"/>{}<a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>{}<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>",
                     id - 1,
                     esc_attr(&img.alt),
+                    src_rect_xml(&img.crop),
                     xfrm(&img.anchor, "a:xfrm")
                 );
             }

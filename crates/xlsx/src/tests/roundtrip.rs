@@ -350,6 +350,8 @@ fn sample() -> Workbook {
         data: png.into(),
         mime: "image/png".into(),
         alt: "Logo \"x\"".into(),
+        // A crop (`a:srcRect`), to prove it survives an xlsx round-trip.
+        crop: [0.1, 0.0, 0.25, 0.05],
     });
     s.shapes.push(Shape {
         math: Default::default(),
@@ -573,6 +575,7 @@ fn assert_drawing_and_chart_roundtrip(a: &Sheet, b: &Sheet) {
     // Drawings.
     assert_eq!(b.images.len(), 1);
     assert_eq!(b.images[0].data, a.images[0].data);
+    assert_eq!(b.images[0].crop, a.images[0].crop, "the crop (a:srcRect) survives");
     assert_eq!(b.images[0].alt, a.images[0].alt);
     let close = |x: f32, y: f32| (x - y).abs() < 0.01;
     let (ia, ib) = (a.images[0].anchor, b.images[0].anchor);

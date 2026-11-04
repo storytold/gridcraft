@@ -73,6 +73,7 @@ impl SheetApp {
             selected_object: None,
             clipboard_text_at_copy: None,
             cut_text: None,
+            crop: None,
             tab_run: None,
             macros: macro_ui::MacroUi::default(),
             started: now_ms(),

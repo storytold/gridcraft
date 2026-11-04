@@ -358,10 +358,18 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
             continue;
         }
         let start = p.add(egui::Shape::Noop);
-        if let Some(tex) = crate::floating_pictures::texture(p.ctx(), doc, im, r) {
-            p.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        let tex = crate::floating_pictures::texture(p.ctx(), doc, im, r);
+        if let Some(tex) = &tex {
+            // The part the crop leaves, stretched over the frame.
+            let (lt, rb) = im.visible_uv();
+            p.image(tex.id(), r, Rect::from_min_max(pos2(lt[0], lt[1]), pos2(rb[0], rb[1])), Color32::WHITE);
         } else {
             p.rect_filled(r, 0.0, Tokens::get(p.ctx()).sheet_track);
+        }
+        // Crop mode draws the crop frame (the selection frame and its handles are drawn for every
+        // kind of object elsewhere).
+        if crate::picture_crop::cropping(app, sh).is_some_and(|c| c.id == im.id) {
+            crate::picture_crop::paint(p, r, im, tex.as_ref());
         }
         done(start, r);
     }

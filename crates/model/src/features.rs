@@ -614,6 +614,25 @@ pub struct Image {
     pub data: std::sync::Arc<Vec<u8>>,
     pub mime: String,
     pub alt: String,
+    /// What is cut off each side of the picture (left, top, right, bottom), as fractions of its
+    /// width and height: DrawingML's `a:srcRect`. Zero: the whole picture shows in the frame.
+    #[serde(default, skip_serializing_if = "is_uncropped")]
+    pub crop: [f32; 4],
+}
+
+fn is_uncropped(c: &[f32; 4]) -> bool {
+    c.iter().all(|v| *v == 0.0)
+}
+
+impl Image {
+    /// The part of the picture that shows, as texture coordinates (left, top) and (right, bottom)
+    /// within 0..1: the crop, kept to a visible part of at least 1 % each way.
+    pub fn visible_uv(&self) -> ([f32; 2], [f32; 2]) {
+        let c = self.crop.map(|v| if v.is_finite() { v.clamp(0.0, 0.99) } else { 0.0 });
+        let (l, r) = (c[0], c[2].min(0.99 - c[0]));
+        let (t, b) = (c[1], c[3].min(0.99 - c[1]));
+        ([l, t], [1.0 - r, 1.0 - b])
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -30,6 +30,7 @@ pub mod doc_windows;
 pub mod editor;
 pub mod equation;
 mod floating_pictures;
+mod picture_crop;
 pub mod fonts;
 pub mod formula_bar;
 mod formula_locale;
@@ -291,6 +292,8 @@ pub struct SheetApp {
     /// text noted for an unpublished cut); `None` after a copy, or once the clipboard is seen
     /// holding other text. Once the cut has been pasted, Paste leaves this text alone.
     cut_text: Option<String>,
+    /// The picture in crop mode (Picture Format › Crop), by id.
+    pub(crate) crop: Option<u32>,
     /// A run of Tabs: (doc uid, sheet, column it started in, cell the last Tab landed on).
     /// Enter on that cell goes to the next row in the starting column, as in Excel (#911).
     tab_run: Option<(u64, usize, u32, CellRef)>,
