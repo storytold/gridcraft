@@ -5590,3 +5590,62 @@ fn clearing_links_and_notes_keeps_allow_edit_ranges() {
     let sh = s.doc().unwrap().wb.active().unwrap().clone();
     assert!(sh.hyperlinks.is_empty() && sh.comments.is_empty());
 }
+
+#[test]
+fn protected_sheet_refuses_layout_commands_its_permissions_do_not_allow() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["h"], [1], [2]]})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:A3"})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    for (id, params) in [
+        ("home.rowHeight", json!({"rows": "1:1", "height": 40})),
+        ("home.columnWidth", json!({"cols": "A:A", "width": 80})),
+        ("data.group", json!({"rows": "2:3"})),
+        ("data.showLevels", json!({"rows": 1})),
+        ("data.clearFilter", json!({})),
+        ("data.reapply", json!({})),
+        ("insert.picture", json!({"base64": "iVBORw0KGgo="})),
+    ] {
+        let err = s.execute(id, params).expect_err(id).to_string();
+        assert!(err.contains("protected"), "{id}: {err}");
+    }
+    // With the permissions ticked the same layout commands run.
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    s.execute("review.protectSheet", json!({"formatRows": true, "formatColumns": true, "autofilter": true})).unwrap();
+    for (id, params) in [
+        ("home.rowHeight", json!({"rows": "1:1", "height": 40})),
+        ("home.columnWidth", json!({"cols": "A:A", "width": 80})),
+        ("data.reapply", json!({})),
+    ] {
+        s.execute(id, params).unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+}
+
+#[test]
+fn an_edit_range_limited_to_windows_users_stays_locked() {
+    use gridcraft_model::EditRange;
+    let mut s = s();
+    let a1 = CellRef::parse("A1").unwrap();
+    let range = |sd: Option<&str>| EditRange {
+        title: "T".into(),
+        ranges: vec![gridcraft_core::RangeRef::cell(a1)],
+        password: None,
+        security_descriptor: sd.map(str::to_string),
+    };
+    let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+    sh.edit_ranges.push(range(None));
+    assert!(crate::cmd::locked_cell_error(sh, a1, &[]).is_none(), "an open range");
+    sh.edit_ranges = vec![range(Some("D:(A;;GA;;;WD)"))];
+    assert!(crate::cmd::locked_cell_error(sh, a1, &[]).is_some(), "a user-limited range");
+}
+
+#[test]
+fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Region", "Sales"], ["N", 1], ["S", 2]]})).unwrap();
+    s.execute("review.protectWorkbook", json!({"on": true})).unwrap();
+    for dest in ["new", "NEW", " new ", ""] {
+        assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "destination": dest})).is_err(), "destination {dest:?}");
+    }
+    assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
+}
