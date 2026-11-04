@@ -5689,3 +5689,25 @@ fn clearing_links_and_notes_keeps_allow_edit_ranges() {
     let sh = s.doc().unwrap().wb.active().unwrap().clone();
     assert!(sh.hyperlinks.is_empty() && sh.comments.is_empty());
 }
+
+/// `tableType="worksheet"` declares an ordinary table, so it is not external data: Unlink stays
+/// disabled and refuses, where any other type (an XML map's `xml`) keeps the table external.
+#[test]
+fn a_worksheet_table_type_is_not_external() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Item", "Qty"], ["x", 2]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B2", "header": true, "name": "Data"})).unwrap();
+    {
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        wb.sheet_mut(0).unwrap().tables[0].table_type = Some("worksheet".into());
+    }
+    assert!(!s.doc().unwrap().wb.active().unwrap().tables[0].is_external(), "a worksheet table is plain");
+    let e = s.execute("table.unlink", json!({"table": "Data"})).unwrap_err();
+    assert!(e.to_string().contains("no external data"), "{e}");
+
+    {
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        wb.sheet_mut(0).unwrap().tables[0].table_type = Some("xml".into());
+    }
+    assert!(s.doc().unwrap().wb.active().unwrap().tables[0].is_external(), "xml still counts");
+}

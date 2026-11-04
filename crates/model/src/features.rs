@@ -104,9 +104,12 @@ pub struct Table {
 impl Table {
     /// Whether the table is bound to data outside the sheet: an XML map or a connection. A column's
     /// `uniqueName` is part of that binding too, and a file can carry it without `tableType`,
-    /// `connectionId` or `xmlColumnPr`, so it counts.
+    /// `connectionId` or `xmlColumnPr`, so it counts. `tableType="worksheet"` is what an ordinary
+    /// table may declare in the file, so the type alone marks nothing.
     pub fn is_external(&self) -> bool {
-        self.table_type.is_some() || self.connection_id.is_some() || self.columns.iter().any(|c| c.xml.is_some() || c.unique_name.is_some())
+        self.table_type.as_deref().is_some_and(|ty| !ty.eq_ignore_ascii_case("worksheet"))
+            || self.connection_id.is_some()
+            || self.columns.iter().any(|c| c.xml.is_some() || c.unique_name.is_some())
     }
     pub fn data_range(&self) -> Option<RangeRef> {
         let r0 = self.range.start.row + self.header_row as u32;
