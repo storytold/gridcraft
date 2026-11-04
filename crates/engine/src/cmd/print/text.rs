@@ -63,7 +63,7 @@ pub(super) fn wrap_lines(text: &str, font: Font, size: f32, width: f32) -> Vec<S
 }
 
 fn font_for(style: &Style) -> Font {
-    Font::styled(Font::family_for(&style.font.name), style.font.bold, style.font.italic)
+    Font::named(&style.font.name, style.font.bold, style.font.italic)
 }
 
 fn text_align(align: HAlign, value: &Value) -> HAlign {

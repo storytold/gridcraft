@@ -10,3 +10,4 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
+ttf-parser = "0.25"

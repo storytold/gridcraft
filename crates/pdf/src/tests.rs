@@ -350,3 +350,49 @@ fn symbol_font_draws_maths_in_its_own_encoding() {
     assert!(Font::TimesRoman.can_encode('x') && !Font::TimesRoman.can_encode('\u{2211}'));
     assert_eq!(text_width(Font::Symbol, 10.0, "\u{2211}"), 7.13);
 }
+
+#[test]
+fn romanian_glyphs_embed_outlines_and_unicode_maps() -> Result<(), Box<dyn Error>> {
+    if super::unicode::font(0).is_none() || super::unicode::font(1).is_none() {
+        eprintln!("Romanian embedding test needs Arial or Liberation Sans installed");
+        return Ok(());
+    }
+    let mut doc = PdfDoc::new();
+    for font in [Font::Helvetica, Font::HelveticaBold] {
+        doc.add_page(300.0, 100.0).text(10.0, 30.0, 12.0, font, [0, 0, 0], "ĂăȘșȚț ÂâÎî");
+        assert!(text_width(font, 10.0, "ă") < 10.0);
+    }
+    let pdf = doc.finish();
+    check_xref(&pdf)?;
+    assert!(find(&pdf, b"/FontFile2 ").is_some());
+    assert!(find(&pdf, b"/Encoding /Identity-H").is_some());
+    assert!(find(&pdf, b"/BaseFont /STSong-Light").is_none());
+    for code in ["0102", "0103", "0218", "0219", "021A", "021B"] {
+        assert!(find(&pdf, format!("> <{code}>").as_bytes()).is_some());
+    }
+    Ok(())
+}
+
+#[test]
+fn named_installed_font_embeds_ascii_and_unicode() {
+    let font = Font::named("Calibri", false, false);
+    if !matches!(font, Font::Embedded(_)) {
+        return;
+    }
+    let bold = Font::named("Calibri", true, false);
+    assert!(matches!(bold, Font::Embedded(_)));
+    assert_ne!(font, bold);
+    assert_eq!(font, Font::named("calibri", false, false));
+    assert!(font.can_encode('\u{0103}'));
+    assert_ne!(font.char_width('0'), Font::Helvetica.char_width('0'));
+    let mut doc = PdfDoc::new();
+    let page = doc.add_page(200.0, 100.0);
+    page.text(10.0, 30.0, 12.0, font, [0, 0, 0], "Calibri 0123456789 \u{0102}\u{0103}\u{0218}\u{0219}\u{021A}\u{021B}");
+    let bytes = doc.finish();
+    let pdf = String::from_utf8_lossy(&bytes);
+    assert!(pdf.contains("/BaseFont /Calibri"));
+    assert!(pdf.contains("/FontFile2"));
+    assert!(!pdf.contains("/BaseFont /Helvetica"));
+    assert!(!pdf.contains("STSong-Light"));
+    assert!(pdf.contains("<0219>"));
+}
