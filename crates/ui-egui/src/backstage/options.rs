@@ -2,7 +2,8 @@ use super::{Key, Language, Modifiers, SheetApp, Ui, dim, i18n, json, section, ve
 
 /// Excel's File › Options page: General (display theme, interface language and Show formula bar),
 /// Editing (AutoComplete) and Save (the autosave checkbox toggling `app.ui.autosave`), plus Formulas
-/// (calculation mode and iterative calculation) when a document is active. Theme, language, formula
+/// (calculation mode and iterative calculation) and the display options for this workbook (sheet
+/// tabs and scroll bars) when a document is active. Theme, language, formula
 /// bar, AutoComplete and calculation changes run their commands through `run_or_alert`; calculation
 /// settings are saved with the workbook.
 pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
@@ -13,6 +14,10 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     let mut formula_bar = app.session.prefs.formula_bar;
     if ui.checkbox(&mut formula_bar, lang.tr("Show formula bar")).changed() {
         app.run_or_alert("view.formulaBar", json!({"on": formula_bar}));
+    }
+    let mut highlight_row = app.ui.highlight_active_row;
+    if ui.checkbox(&mut highlight_row, lang.tr("Highlight the active cell's row")).changed() {
+        app.run_or_alert("options.highlightActiveRow", json!({"on": highlight_row}));
     }
     ui.add_space(18.0);
     section(ui, lang, "Options|Editing");
@@ -26,7 +31,20 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
         app.toggle_autosave();
     }
-    let Some(calc) = app.session.active().map(|d| d.wb.calc.clone()) else { return };
+    let Some((calc, view)) = app.session.active().map(|d| (d.wb.calc.clone(), d.wb.view)) else { return };
+    ui.add_space(18.0);
+    // Excel's Advanced › Display options for this workbook: saved with the workbook (#3101).
+    section(ui, lang, "Display options for this workbook");
+    for (on, label, id) in [
+        (view.show_horizontal_scroll, "Show horizontal scroll bar", "view.showHorizontalScrollBar"),
+        (view.show_vertical_scroll, "Show vertical scroll bar", "view.showVerticalScrollBar"),
+        (view.show_sheet_tabs, "Show sheet tabs", "view.showSheetTabs"),
+    ] {
+        let mut on = on;
+        if ui.checkbox(&mut on, lang.tr(label)).changed() {
+            app.run_or_alert(id, json!({"on": on}));
+        }
+    }
     ui.add_space(18.0);
     section(ui, lang, "Formulas");
     ui.label(lang.tr("Workbook calculation"));
@@ -66,6 +84,47 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
                 for l in i18n::Language::for_picker() {
                     if ui.selectable_label(l == lang, l.name()).clicked() {
                         app.run_or_alert("app.language.set", json!({"language": l.code()}));
+                    }
+                }
+            })
+            .response
+            .labelled_by(label.id);
+        ui.end_row();
+
+        let currency = app.session.prefs.default_accounting_currency.clone();
+        let label = ui.label(lang.tr("Default currency"));
+        craft_ui::ComboBox::from_id_salt("backstage_default_accounting_currency")
+            .width(160.0)
+            .selected_text(match currency.as_str() {
+                "EUR" => "EUR (€)",
+                "GBP" => "GBP (£)",
+                "CHF" => "CHF",
+                _ => "USD ($)",
+            })
+            .show_ui(ui, |ui| {
+                for (code, name) in [("USD", "USD ($)"), ("EUR", "EUR (€)"), ("GBP", "GBP (£)"), ("CHF", "CHF")] {
+                    if ui.selectable_label(currency.as_str() == code, name).clicked() {
+                        app.run_or_alert("options.defaultAccounting", json!({"currency": code}));
+                    }
+                }
+            })
+            .response
+            .labelled_by(label.id);
+        ui.end_row();
+
+        let position = app.session.prefs.accounting_symbol_position.clone();
+        let label = ui.label(lang.tr("Currency position"));
+        craft_ui::ComboBox::from_id_salt("backstage_accounting_position")
+            .width(160.0)
+            .selected_text(match position.as_str() {
+                "before" => "Before number",
+                "after" => "After number",
+                _ => "Automatic",
+            })
+            .show_ui(ui, |ui| {
+                for (value, name) in [("auto", "Automatic"), ("before", "Before number"), ("after", "After number")] {
+                    if ui.selectable_label(position.as_str() == value, lang.tr(name)).clicked() {
+                        app.run_or_alert("options.defaultAccounting", json!({"position": value}));
                     }
                 }
             })

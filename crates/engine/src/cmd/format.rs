@@ -226,32 +226,16 @@ const COMMA: &str = "_(* #,##0.00_);_(* \\(#,##0.00\\);_(* \"-\"??_);_(@_)";
 /// Accounting Number Format with the currency symbol to use (Excel's own button takes the system
 /// currency; `symbol` is how the control channel picks another one, e.g. `"L"` for lempiras).
 fn accounting(s: &mut Session, p: &Json) -> Result<Json> {
-    // An explicit symbol keeps the command's historical prefix behavior.
-    // With no symbol, the ribbon and keytips use the saved preference.
-    let (symbol, suffix) = match str_param(p, "symbol") {
-        Some(symbol) => (symbol, false),
-        None => {
-            let (symbol, auto_suffix) = match s.prefs.default_accounting_currency.as_str() {
-                "EUR" => ("€", true),
-                "GBP" => ("£", false),
-                "CHF" => ("CHF", false),
-                _ => ("$", false),
-            };
-            let suffix = match s.prefs.accounting_symbol_position.as_str() {
-                "before" => false,
-                "after" => true,
-                _ => auto_suffix,
-            };
-            (symbol, suffix)
+    let code = match str_param(p, "symbol") {
+        Some(symbol) => {
+            // Explicit symbols keep their historical prefix behavior.
+            if symbol.contains(['"', '\\']) || symbol.chars().any(char::is_control) {
+                return Err(bad("home.accounting", "the symbol can't contain a quote, a backslash or a control character"));
+            }
+            accounting_format(symbol)
         }
+        None => preferred_accounting_format(&s.prefs),
     };
-
-    // Symbols are written as quoted number-format literals.
-    if symbol.contains(['"', '\\']) || symbol.chars().any(char::is_control) {
-        return Err(bad("home.accounting", "the symbol can't contain a quote, a backslash or a control character"));
-    }
-
-    let code = if suffix { accounting_format_suffix(symbol) } else { accounting_format(symbol) };
     set_fmt(s, p, &code)
 }
 
@@ -263,6 +247,22 @@ fn accounting_format(symbol: &str) -> String {
 /// Accounting format with the currency written after the amount.
 fn accounting_format_suffix(symbol: &str) -> String {
     format!(r#"_-* #,##0.00\ "{symbol}"_-;\-* #,##0.00\ "{symbol}"_-;_-* "-"??\ "{symbol}"_-;_-@_-"#)
+}
+
+/// The format used by the Accounting button and Number Format dropdown.
+pub fn preferred_accounting_format(prefs: &crate::Prefs) -> String {
+    let (symbol, auto_suffix) = match prefs.default_accounting_currency.as_str() {
+        "EUR" => ("€", true),
+        "GBP" => ("£", false),
+        "CHF" => ("CHF", false),
+        _ => ("$", false),
+    };
+    let suffix = match prefs.accounting_symbol_position.as_str() {
+        "before" => false,
+        "after" => true,
+        _ => auto_suffix,
+    };
+    if suffix { accounting_format_suffix(symbol) } else { accounting_format(symbol) }
 }
 
 fn with(p: &Json, key: &str, v: Json) -> Json {
@@ -760,7 +760,10 @@ pub fn format_code_for(name: &str) -> &str {
 fn number_format(s: &mut Session, p: &Json) -> Result<Json> {
     let code = str_param(p, "code")
         .map(str::to_string)
-        .or_else(|| str_param(p, "format").map(|f| format_code_for(f).to_string()))
+        .or_else(|| {
+            str_param(p, "format")
+                .map(|format| if format == "Accounting" { preferred_accounting_format(&s.prefs) } else { format_code_for(format).to_string() })
+        })
         .ok_or_else(|| bad("home.numberFormat", "missing `format` or `code`"))?;
     set_fmt(s, p, &code)
 }

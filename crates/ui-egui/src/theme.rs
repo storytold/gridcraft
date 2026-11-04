@@ -63,6 +63,8 @@ pub struct Tokens {
     pub header_sel_text: Color32,
     pub header_all_bg: Color32,
     pub sel_fill: Color32,
+    /// The tint over the active cell's row (File ▸ Options ▸ General).
+    pub active_row: Color32,
     pub sel_border: Color32,
     pub input_bg: Color32,
     pub input_border: Color32,
@@ -217,6 +219,7 @@ impl Tokens {
             header_sel_text: pick(dark, Color32::from_rgb(0x0B, 0x5E, 0x31), Color32::from_rgb(0x6F, 0xD3, 0x9A)),
             header_all_bg: pick(dark, Color32::from_rgb(0xC8, 0xE6, 0xD3), Color32::from_rgb(0x2E, 0x55, 0x3E)),
             sel_fill: pick(dark, Color32::from_rgba_unmultiplied(0x10, 0x7C, 0x41, 0x1C), Color32::from_rgba_unmultiplied(0x10, 0x7C, 0x41, 0x24)),
+            active_row: pick(dark, Color32::from_rgba_unmultiplied(0x10, 0x7C, 0x41, 0x2C), Color32::from_rgba_unmultiplied(0x6F, 0xD3, 0x9A, 0x30)),
             sel_border: Color32::from_rgb(0x10, 0x7C, 0x41),
             input_bg: pick(dark, Color32::WHITE, Color32::from_rgb(0x1F, 0x1F, 0x1F)),
             input_border: pick(dark, Color32::from_rgb(0xD1, 0xD1, 0xD1), Color32::from_rgb(0x50, 0x50, 0x50)),
