@@ -99,6 +99,9 @@ fn model() -> DataModel {
             measure("WTD", "TOTALWTD([Total Amount], Date)"),
             measure("YTD", "TOTALYTD([Total Amount], 'Date'[Date])"),
             measure("YTD June", "TOTALYTD([Total Amount], 'Date'[Date], ALL(Sales), \"6/30/2024\")"),
+            measure("YTD All", "TOTALYTD([Total Amount], 'Date'[Date], ALL ())"),
+            measure("QTD Remove All", "TOTALQTD([Total Amount], 'Date'[Date], REMOVEFILTERS ())"),
+            measure("YTD Region All", "TOTALYTD([Total Amount], 'Date'[Date], ALL([Region]))"),
             measure("OB Month", "OPENINGBALANCEMONTH([Total Amount], 'Date'[Date])"),
             measure("CB Month", "CLOSINGBALANCEMONTH([Total Amount], 'Date'[Date])"),
             measure("OB Quarter", "OPENINGBALANCEQUARTER([Total Amount], 'Date'[Date])"),
@@ -258,6 +261,28 @@ fn first_and_last_non_blank_values() {
     let march = filters(&model, &[("Date", "Year", Scalar::Integer(2024)), ("Date", "Month", Scalar::Integer(3))]);
     assert_eq!(eval_measure(&model, "First Non Blank", march.clone()), Ok(Scalar::Blank));
     assert_eq!(eval_measure(&model, "Last Non Blank", march), Ok(Scalar::Blank));
+}
+
+#[test]
+fn all_clears_the_outer_filter_context() {
+    let model = model();
+    // February 2024 restricted to the East region: the outer filter sits on the fact table, the
+    // date filters only anchor the window.
+    let east_february = filters(
+        &model,
+        &[("Sales", "Region", Scalar::String("East".into())), ("Date", "Year", Scalar::Integer(2024)), ("Date", "Month", Scalar::Integer(2))],
+    );
+    // Without a filter argument the region filter still applies: East only, January + February.
+    assert_number(eval_measure(&model, "YTD", east_february.clone()), 140.0);
+    assert_number(eval_measure(&model, "QTD", east_february.clone()), 140.0);
+
+    // `ALL ()` clears the whole filter context, so every region is visible again over the same
+    // year-to-date window (40 + 100 + 250 + 75 + 400 = 865).
+    assert_number(eval_measure(&model, "YTD All", east_february.clone()), 865.0);
+    // `REMOVEFILTERS ()` is the same modifier.
+    assert_number(eval_measure(&model, "QTD Remove All", east_february.clone()), 865.0);
+    // An unqualified column argument clears just that column: `[Region]` resolves to Sales[Region].
+    assert_number(eval_measure(&model, "YTD Region All", east_february), 865.0);
 }
 
 #[test]

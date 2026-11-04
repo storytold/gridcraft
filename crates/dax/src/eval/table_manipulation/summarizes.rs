@@ -738,7 +738,16 @@ fn apply_filter_arg(ev: &Evaluator<'_>, expr: &BoundExpr, filters: &mut FilterCo
         && let BoundExpr::Column { table, column } = **left
     {
         let value = ev.eval(right, ctx)?;
-        filters.set(table, column, [ScalarKey::from(&value)]);
+        // A column predicate follows DAX `=` semantics (numeric across types, text ignoring
+        // case), so every stored value that compares equal is a candidate key; one key would miss
+        // a Decimal column holding `10.0` for `= 10` and an `"East"` value for `= "east"`.
+        let keys = ev
+            .table(table, &FilterContext::default())
+            .column(column)
+            .into_iter()
+            .filter(|candidate| candidate.compare(&value) == Some(Ordering::Equal))
+            .map(|candidate| ScalarKey::from(&candidate));
+        filters.set(table, column, keys);
         return Ok(());
     }
     let table = ev.eval_table(expr, ctx)?;

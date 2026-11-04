@@ -103,11 +103,17 @@ fn generate(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, keep_empt
     let second = args.get(1).ok_or_else(|| EvalError::new("GENERATE needs two table arguments"))?;
     let left = ev.eval_table(first, ctx)?;
     let mut evaluated = Vec::with_capacity(left.rows.len());
+    let mut output_rows = 0usize;
     for row in &left.rows {
         ctx.rows.push(frame_for(ev, &left, row));
         let right = ev.eval_table(second, ctx);
         ctx.rows.pop();
-        evaluated.push((row.clone(), right?));
+        let right = right?;
+        output_rows = output_rows.saturating_add(if right.rows.is_empty() && keep_empty { 1 } else { right.rows.len() });
+        if output_rows > MAX_GENERATED_ROWS {
+            return Err(EvalError::new("GENERATE result is too large"));
+        }
+        evaluated.push((row.clone(), right));
     }
 
     // The second table's schema is the same for every row. Take it from the first evaluation that
@@ -136,14 +142,6 @@ fn generate(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, keep_empt
     }
 
     let fill = schema.as_ref().map_or(0, Vec::len);
-    let mut output_rows = 0usize;
-    for (_, right) in &evaluated {
-        output_rows = output_rows.saturating_add(if right.rows.is_empty() && keep_empty { 1 } else { right.rows.len() });
-    }
-    if output_rows > MAX_GENERATED_ROWS {
-        return Err(EvalError::new("GENERATE result is too large"));
-    }
-
     let mut columns = left.columns.clone();
     if let Some(schema) = &schema {
         columns.extend(schema.iter().cloned());

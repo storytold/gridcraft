@@ -1,6 +1,7 @@
 //! Integration tests for the model-backed `PivotTable` object.
 
 use gridcraft_dax::model::{DataModel, Measure, ModelColumn, ModelTable};
+use gridcraft_dax::pivot::{PivotError, pivot_cross, pivot_fields};
 use gridcraft_dax::pivot_table::{DEFAULT_MAX_CELLS, PivotFilter, PivotLayout, PivotTable, PivotTableError};
 use gridcraft_dax::value::{Scalar, TableValue};
 
@@ -323,4 +324,44 @@ fn rendering_is_bounded_by_max_cells() {
     let default_pivot = sales_pivot().with_row_fields(vec!["Sales[Region]".into()]);
     assert_eq!(default_pivot.max_cells, DEFAULT_MAX_CELLS);
     assert!(default_pivot.render(&model()).is_ok());
+}
+
+#[test]
+fn pivot_cross_is_bounded_by_max_cells() {
+    // 1025 distinct values on each axis ask for 1,050,625 cells, over the default budget.
+    let rows = (0..1025).map(|index| vec![Scalar::Integer(index), Scalar::Integer(index), Scalar::Integer(1)]).collect::<Vec<_>>();
+    let mut model = DataModel {
+        tables: vec![ModelTable {
+            name: "Sales".into(),
+            columns: vec![
+                ModelColumn { name: "RowKey".into(), data_type: Some("Int64".into()) },
+                ModelColumn { name: "ColumnKey".into(), data_type: Some("Int64".into()) },
+                ModelColumn { name: "Amount".into(), data_type: Some("Double".into()) },
+            ],
+            rows,
+        }],
+        relationships: Vec::new(),
+        measures: vec![Measure {
+            name: "Total Sales".into(),
+            formula: "SUM(Sales[Amount])".into(),
+            table: Some("Sales".into()),
+            format: None,
+            expr: None,
+        }],
+    };
+    model.parse_formulas().expect("model parses");
+
+    let row_fields = pivot_fields(&model, &["Sales[RowKey]".to_string()]).expect("row fields");
+    let column_fields = pivot_fields(&model, &["Sales[ColumnKey]".to_string()]).expect("column fields");
+    let error = pivot_cross(&model, "Total Sales", &row_fields, &column_fields).expect_err("over the limit");
+    let PivotError::Eval(error) = &error else {
+        panic!("expected an evaluation error, got {error:?}");
+    };
+    assert!(error.message.contains("1025 rows x 1025 columns"), "{error}");
+    assert!(error.message.contains(&DEFAULT_MAX_CELLS.to_string()), "{error}");
+
+    // Under the budget, the same axes evaluate normally.
+    let row_fields = pivot_fields(&model, &["Sales[RowKey]".to_string()]).expect("row fields");
+    let narrow = pivot_cross(&model, "Total Sales", &row_fields, &[]).expect("single-axis pivot stays within budget");
+    assert_eq!(narrow.rows.len(), 1025);
 }

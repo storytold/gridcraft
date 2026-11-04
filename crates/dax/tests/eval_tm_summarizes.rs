@@ -313,6 +313,19 @@ fn summarize_columns_table_filter_restricts_the_group_column_domain() {
 }
 
 #[test]
+fn summarize_columns_filter_matches_with_dax_equality_semantics() {
+    // `Amount` is stored as Decimal; the integer literal must still select the 10.0 rows.
+    let numeric = eval_table("SUMMARIZECOLUMNS(Sales[Region], Sales[Amount] = 10, \"Amount\", SUM(Sales[Amount]))").expect("numeric filter");
+    assert_columns(&numeric, &["Region", "Amount"]);
+    assert_eq!(numeric.rows, vec![vec![text("East"), money(10.0)]]);
+
+    // Text compares ignoring case: `"east"` selects the stored `"East"` value.
+    let textual = eval_table("SUMMARIZECOLUMNS(Sales[Region], Sales[Region] = \"east\", \"Amount\", SUM(Sales[Amount]))").expect("text filter");
+    assert_columns(&textual, &["Region", "Amount"]);
+    assert_eq!(textual.rows, vec![vec![text("East"), money(45.0)]]);
+}
+
+#[test]
 fn summarize_columns_accepts_treatas_and_multi_filter_forms() {
     let table =
         eval_table("SUMMARIZECOLUMNS(Sales[Region], TREATAS({\"East\", \"West\"}, Sales[Region]), \"Amount\", SUM(Sales[Amount]))").expect("treatas");

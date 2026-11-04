@@ -142,8 +142,8 @@ All overlays are reported through `overlay` = `""` | `openModel` | `existingConn
 | --- | --- | --- |
 | `dataModel.load` | `{path}` on native hosts, or `{json}` / `{model}` (browser picker, agents) | status |
 | `dataModel.status` | `{}` | status |
-| `dataModel.evaluate` | `{formula}` or `{measure}`, `table?: bool` | `{value}` or `{columns, rows}` |
-| `dataModel.pivot` | `{measure, rows, columns?}` | `{columns, rows}` |
+| `dataModel.evaluate` | `{formula}` or `{measure}`, `table?: bool` | `{value, display}` — plus `format` when called with `measure` — or `{columns, rows}` |
+| `dataModel.pivot` | `{measure, rows, columns?}` | `{columns, rows}` plus `display_rows` and `format` |
 | `dataModel.addMeasure` | `{name, formula, table?, format?}` | status |
 | `dataModel.updateMeasure` | `{name, formula?, format?, new_name?}` | status |
 | `dataModel.deleteMeasure` | `{name}` | status |
@@ -201,8 +201,13 @@ All overlays are reported through `overlay` = `""` | `openModel` | `existingConn
   decimal places (−10 to 10), not an absolute count, applied to the measure's current format
   (`0.00` when it has none); apply a preset and then adjust `decimals` in a separate call.
 - `evaluate` accepts a formula or a measure name; `table: true` asks for a table result. A bare
-  table name evaluates to its rows. `pivot` groups one measure by row fields and optional column
-  fields; it returns a table, not a worksheet PivotTable.
+  table name evaluates to its rows. The measure's format reaches `display` only on the `measure`
+  path: `{measure}` returns `{value, display, format}` with `display` formatted, while `{formula}`
+  returns `{value, display}` and `display` is the plain value text (no `format` field, no measure
+  format applied). `pivot` groups one measure by row fields and optional column fields; it returns
+  a table, not a worksheet PivotTable, and it carries both grids: `rows` stays unformatted and
+  exact for agents, while the parallel `display_rows` holds formatted text strings and `format`
+  reports the format code used.
 
 ## Parity and limits
 

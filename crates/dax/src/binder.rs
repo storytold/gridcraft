@@ -216,16 +216,19 @@ impl<'a> Binder<'a> {
             return Ok(BoundExpr::Column { table: table_index, column: column_index });
         }
 
-        if let Some(index) = vars.iter().rposition(|var| var.eq_ignore_ascii_case(&name.name.text)) {
-            return Ok(BoundExpr::Variable { index, name: name.name.text.clone() });
-        }
-
+        // A bracketed name is always a model object reference (`[Measure]`, `[Column]`), never a
+        // variable: DAX requires bare identifiers for variables, so `VAR Total = 1 ... [Total]`
+        // refers to the measure, not the variable.
         if name.name.style == crate::NameStyle::Bracketed {
             if let Some(index) = self.model.measure_index(&name.name.text) {
                 return Ok(BoundExpr::Measure(index));
             }
             // A bracketed name may be a row-context column; the evaluator resolves it.
             return Ok(BoundExpr::UnqualifiedColumn { name: name.name.text.clone() });
+        }
+
+        if let Some(index) = vars.iter().rposition(|var| var.eq_ignore_ascii_case(&name.name.text)) {
+            return Ok(BoundExpr::Variable { index, name: name.name.text.clone() });
         }
 
         if let Some(index) = self.model.table_index(&name.name.text) {

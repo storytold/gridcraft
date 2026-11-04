@@ -108,6 +108,10 @@ fn datevalue_reads_the_common_text_dates() {
     assert_eq!(value("DATEVALUE(\"1/8/2009\")"), Scalar::DateTime(39_821.0));
     // A time portion is ignored: DATEVALUE returns the date.
     assert_eq!(value("DATEVALUE(\"2024-01-15 16:48:23\")"), Scalar::DateTime(45_306.0));
+    // A 12-hour clock suffix is accepted in both date orders.
+    let expected = Scalar::DateTime(serial(2024, 1, 15));
+    assert_eq!(value("DATEVALUE(\"2024-01-15 4:48 PM\")"), expected);
+    assert_eq!(value("DATEVALUE(\"1/15/2024 4:48 PM\")"), expected);
     assert_eq!(value("DATEVALUE(DATE(2024,1,15))"), Scalar::DateTime(45_306.0));
     assert_eq!(value("DATEVALUE(\"2024-02-29\")"), Scalar::DateTime(45_351.0));
 }

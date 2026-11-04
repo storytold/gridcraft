@@ -364,7 +364,9 @@ fn parse_year_end(value: &Scalar) -> Option<f64> {
 }
 
 /// Applies one CALCULATE-style filter argument to `filters`, the way the core CALCULATE does:
-/// column predicate, `ALL`/`REMOVEFILTERS`, or a table expression over a model table.
+/// column predicate, `ALL`/`REMOVEFILTERS` (no argument, column or table), or a table expression
+/// over a model table. Removal runs before the period window is applied, so the window still
+/// lands even when the modifier cleared the date table's own filters.
 fn apply_filter_arg(ev: &Evaluator<'_>, expr: &BoundExpr, filters: &mut FilterContext, ctx: &mut Context) -> Result<(), EvalError> {
     match expr {
         BoundExpr::Binary { op, left, right } if matches!(op, BinaryOp::Eq | BinaryOp::Ne) => {
@@ -387,16 +389,18 @@ fn apply_filter_arg(ev: &Evaluator<'_>, expr: &BoundExpr, filters: &mut FilterCo
         }
         BoundExpr::Call { spec, args } if spec.name.eq_ignore_ascii_case("ALL") || spec.name.eq_ignore_ascii_case("REMOVEFILTERS") => {
             match args.first() {
+                // No argument removes every filter: `ALL ()` is `ALL(<every table>)`.
+                None => filters.clear(),
                 // A column argument clears only that column; a table argument clears the table.
-                Some(BoundExpr::Column { .. }) => {
+                // Unqualified columns resolve to the single model column with that name.
+                Some(BoundExpr::Column { .. } | BoundExpr::UnqualifiedColumn { .. }) => {
                     for arg in args {
-                        if let BoundExpr::Column { table, column } = arg {
-                            filters.filters.remove(&(*table, *column));
-                        }
+                        let (table, column) = column_reference(ev, arg)?;
+                        filters.filters.remove(&(table, column));
                     }
                 }
                 Some(BoundExpr::Table(table)) => filters.remove_table(*table),
-                _ => {}
+                Some(_) => {}
             }
             Ok(())
         }

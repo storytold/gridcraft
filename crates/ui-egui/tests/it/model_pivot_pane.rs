@@ -590,4 +590,20 @@ fn opening_the_pane_outside_every_report_starts_a_new_one() {
     let params = last_command(&h, "dataModel.createPivot");
     assert!(params.get("name").is_none(), "an unbound pane sends no name: {params:?}");
     assert_eq!(params["replace"], json!(false), "a new report does not replace anything");
+
+    // That Apply wrote a report at the active cell; the binding must not outlive the selection.
+    // Close the pane, leave every report (the first Apply wrote one at H20), reopen from the
+    // strip, Apply: a new report, not a rewrite.
+    click(&mut h, "Close");
+    h.state_mut().run("selection.set", json!({"cell": "K50"})).expect("select outside");
+    h.run_steps(2);
+    assert!(!pane_open(&h), "the closed pane hides behind its strip");
+    assert!(shown(&h, "Show PivotTable Fields"));
+    click(&mut h, "Show PivotTable Fields");
+    assert!(pane_open(&h), "the strip brings the pane back");
+    click(&mut h, "Category");
+    click(&mut h, "Apply");
+    let params = last_command(&h, "dataModel.createPivot");
+    assert!(params.get("name").is_none(), "a reopened pane sends no name: {params:?}");
+    assert_eq!(params["replace"], json!(false), "the reopened pane does not rewrite the report it wrote before");
 }

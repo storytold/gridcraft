@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use crate::binder::{BindError, Binder, BoundExpr};
 use crate::eval::{Evaluator, FilterContext};
 use crate::model::DataModel;
+use crate::pivot_table::DEFAULT_MAX_CELLS;
 use crate::value::{EvalError, Scalar, ScalarKey, TableColumn, TableValue};
 use crate::{Expr, parse_expression};
 
@@ -54,6 +55,14 @@ pub fn pivot_cross(model: &DataModel, measure: &str, row_fields: &[PivotField], 
     }
     if column_fields.is_empty() {
         column_groups.insert(Vec::new(), Vec::new());
+    }
+    if row_groups.len().checked_mul(column_groups.len()).is_none_or(|cells| cells > DEFAULT_MAX_CELLS) {
+        return Err(PivotError::Eval(EvalError::new(format!(
+            "pivot would materialize {} rows x {} columns, over the limit of {} cells",
+            row_groups.len(),
+            column_groups.len(),
+            DEFAULT_MAX_CELLS
+        ))));
     }
 
     let mut columns = row_fields.iter().map(|field| TableColumn { name: field.name.clone() }).collect::<Vec<_>>();

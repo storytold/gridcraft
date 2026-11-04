@@ -104,6 +104,43 @@ fn binds_var_return_with_sequential_scopes() {
 }
 
 #[test]
+fn bracketed_names_bind_measures_before_variables() {
+    let mut model = DataModel {
+        tables: vec![ModelTable {
+            name: "Sales".into(),
+            columns: vec![ModelColumn { name: "Amount".into(), data_type: Some("Double".into()) }],
+            rows: vec![],
+        }],
+        relationships: vec![],
+        measures: vec![Measure {
+            name: "Total".into(),
+            formula: "SUM ( Sales[Amount] )".into(),
+            table: Some("Sales".into()),
+            format: None,
+            expr: None,
+        }],
+    };
+    model.parse_formulas().expect("model parses");
+
+    // `[Total]` is a bracketed model reference, so it binds to the measure even though a
+    // variable of the same name is in scope.
+    match bind(&model, "VAR Total = 1 RETURN [Total]") {
+        BoundExpr::VarReturn { vars, body } => {
+            assert_eq!(vars.len(), 1);
+            assert_eq!(vars[0].name, "Total");
+            assert!(matches!(*body, BoundExpr::Measure(0)), "expected measure, got {body:?}");
+        }
+        other => panic!("expected VAR block, got {other:?}"),
+    }
+
+    // A bare name still resolves to the variable.
+    assert!(matches!(
+        bind(&model, "VAR Total = 1 RETURN Total"),
+        BoundExpr::VarReturn { body, .. } if matches!(*body, BoundExpr::Variable { index: 0, .. })
+    ));
+}
+
+#[test]
 fn measures_and_dependencies_are_bound() {
     let model = sample_model();
     let binder = Binder::new(&model);

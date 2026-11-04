@@ -110,6 +110,14 @@ fn generate_rejects_duplicate_column_names() {
 }
 
 #[test]
+fn generate_fails_while_accumulating_past_the_row_limit() {
+    // Two left rows evaluated against a 600,000-row second table exceed the 1,000,000-row cap,
+    // so the second table's rows are never materialised into a result.
+    let message = error("GENERATE ( UNION ( ROW ( \"K\", 1 ), ROW ( \"K\", 2 ) ), GENERATESERIES ( 1, 600000 ) )");
+    assert!(message.contains("too large"), "{message}");
+}
+
+#[test]
 fn natural_inner_join_matches_common_columns() {
     let result = table(&format!("NATURALINNERJOIN ( {LEFT}, {RIGHT} )"));
     assert_eq!(names(&result), vec!["K", "A", "B"]);

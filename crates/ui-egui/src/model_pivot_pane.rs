@@ -378,6 +378,11 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         let model = info.and_then(|info| info.get("model")).cloned().unwrap_or(Json::Null);
         let fields = catalog(&model);
         let active = active_pivot(app, &pivots);
+        if active.is_some() {
+            // Inside a report the active cell alone says which one: a leftover `written` must not
+            // outlive the selection and later rewrite that report from outside it.
+            state.written = None;
+        }
         // Bound to the active report, or to the one this pane just wrote; outside every report the
         // pane starts a new one (a `pivots.first()` fallback would silently rewrite that report).
         let name = active
@@ -669,6 +674,10 @@ fn reopen_tab(ui: &mut Ui, state: &mut State) {
         if response.clicked() {
             state.opened = true;
             state.closed = false;
+            // The strip is the way back to the field list, not to the last report it wrote: a
+            // reopened pane outside every report starts a new one.
+            state.written = None;
+            state.bound = None;
         }
     });
 }

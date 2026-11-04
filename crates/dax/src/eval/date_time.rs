@@ -114,7 +114,7 @@ fn parse_date_serial(text: &str) -> Option<f64> {
     if leading_year {
         // ISO order. The shared parser already knows this shape; re-reading the parts rejects
         // impossible dates (2024-02-30) that its serial rollover would silently accept.
-        let serial = support::parse_date_text(text)?;
+        let serial = support::parse_date_text(date_part)?;
         if support::date_parts(serial) != (numbers[0], numbers[1], numbers[2]) || !(0.0..=MAX_DATE_SERIAL).contains(&serial) {
             return None;
         }
