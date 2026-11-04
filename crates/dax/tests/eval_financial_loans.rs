@@ -174,9 +174,12 @@ fn french_accounting_depreciation() {
 
 #[test]
 fn amordegrc_huge_period_terminates() {
-    // Once the rounded depreciation reaches zero the loop must stop rather than run `period`
-    // times; a user-supplied 10^15 period used to hang the evaluator.
-    let value = number("AMORDEGRC(2400, DATE(2008,8,19), DATE(2008,12,31), 0, 1000000000000000, 0.15, 1)");
+    // A period past the supported bound is rejected before the loop (a user-supplied 10^15 period
+    // used to hang the evaluator).
+    assert_error("AMORDEGRC(2400, DATE(2008,8,19), DATE(2008,12,31), 0, 1000000000000000, 0.15, 1)");
+    // Within the bound, the loop still stops once the rounded depreciation reaches zero (0.15 of
+    // 2400 is exhausted long before period 500,000).
+    let value = number("AMORDEGRC(2400, DATE(2008,8,19), DATE(2008,12,31), 0, 500000, 0.15, 1)");
     assert_eq!(value, 0.0);
 }
 

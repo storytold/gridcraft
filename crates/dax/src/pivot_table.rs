@@ -990,7 +990,7 @@ fn value_label(values: &[Scalar]) -> String {
 
 /// The label of one scalar; BLANK renders as `(Blank)`.
 fn display_value(value: &Scalar) -> String {
-    if value.is_blank() { BLANK_LABEL.to_string() } else { value.to_text() }
+    if value.is_blank() { BLANK_LABEL.to_string() } else { value.to_dax_text() }
 }
 
 /// A pivot definition or rendering error.

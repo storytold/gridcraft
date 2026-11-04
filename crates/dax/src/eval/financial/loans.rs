@@ -629,6 +629,11 @@ fn amordegrc(name: &str, values: &[Scalar]) -> Result<Scalar, EvalError> {
     let rate = a.number(5)?;
     let basis = a.optional_number(6, 0.0)? as i64;
     validate_amor(name, cost, salvage, period, rate, (purchased, first_period), basis)?;
+    // A tiny rate can make the depreciation round to zero only after hundreds of billions of
+    // iterations, so the period is bounded like the depreciation loops.
+    if period as f64 > MAX_DEPRECIATION_PERIODS {
+        return Err(invalid(name, "period is out of range"));
+    }
     if rate <= 0.0 {
         return Err(invalid(name, "rate must be positive"));
     }
