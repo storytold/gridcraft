@@ -22,7 +22,14 @@ fn t_cdf(t: f64, v: f64) -> f64 {
 }
 
 fn t_pdf(t: f64, v: f64) -> f64 {
-    (ln_gamma((v + 1.0) / 2.0) - ln_gamma(v / 2.0) - 0.5 * (v * std::f64::consts::PI).ln() - (v + 1.0) / 2.0 * (1.0 + t * t / v).ln()).exp()
+    let z = v / 2.0;
+    let log_gamma_ratio = if z >= 16.0 {
+        let inv_z = 1.0 / z;
+        0.5 * z.ln() - inv_z / 8.0 + inv_z.powi(3) / 192.0 - inv_z.powi(5) / 640.0 + 17.0 * inv_z.powi(7) / 14_336.0
+    } else {
+        ln_gamma(z + 0.5) - ln_gamma(z)
+    };
+    (log_gamma_ratio - 0.5 * (v.ln() + std::f64::consts::PI.ln()) - (v + 1.0) / 2.0 * (t * t / v).ln_1p()).exp()
 }
 
 /// t ≥ 0 with P(T > t) = q, q in (0, 0.5].
@@ -51,12 +58,22 @@ fn f_cdf(x: f64, d1: f64, d2: f64) -> f64 {
     if x <= 0.0 {
         return 0.0;
     }
+    if x == 1.0 && d1 == d2 {
+        return 0.5;
+    }
+    if d1 >= 1e8 && d2 / d1 <= 1e-8 {
+        return reg_gamma_q(d2 / 2.0, d2 / (2.0 * (x + d2 / d1)));
+    }
     reg_inc_beta(d1 * x / (d1 * x + d2), d1 / 2.0, d2 / 2.0)
 }
 
 fn f_upper(x: f64, d1: f64, d2: f64) -> f64 {
     if x <= 0.0 {
         return 1.0;
+    }
+    if d1 >= 1e8 && d2 / d1 <= 1e-8 {
+        // With a much larger numerator degree, the scaled beta tail converges to a gamma tail.
+        return reg_gamma_p(d2 / 2.0, d2 / (2.0 * (x + d2 / d1)));
     }
     reg_inc_beta(d2 / (d2 + d1 * x), d2 / 2.0, d1 / 2.0)
 }
@@ -73,6 +90,8 @@ fn f_pdf(x: f64, d1: f64, d2: f64) -> f64 {
     }
     ((d1 / 2.0) * (d1 / d2).ln() + (d1 / 2.0 - 1.0) * x.ln() - ((d1 + d2) / 2.0) * (1.0 + d1 * x / d2).ln() - ln_beta(d1 / 2.0, d2 / 2.0)).exp()
 }
+
+const MAX_BINOM_TRIALS: f64 = 2_147_483_646.0;
 
 fn binom_pmf(k: f64, n: f64, p: f64) -> f64 {
     if k < 0.0 || k > n {
@@ -176,8 +195,14 @@ fn df_arg(a: &[Arg], i: usize) -> R<f64> {
 
 pub(super) fn t_dist(a: &[Arg], _: C) -> R<Value> {
     let x = num(a, 0)?;
-    let v = df_arg(a, 1)?;
+    let v = num(a, 1)?.trunc();
     let cum = boolean(a, 2)?;
+    if v == 0.0 {
+        return Err(if cum { CellError::Num } else { CellError::Div0 });
+    }
+    if v < 0.0 {
+        return Err(CellError::Num);
+    }
     num_val(if cum { t_cdf(x, v) } else { t_pdf(x, v) })
 }
 
@@ -209,6 +234,9 @@ pub(super) fn tdist_legacy(a: &[Arg], _: C) -> R<Value> {
 pub(super) fn t_inv(a: &[Arg], _: C) -> R<Value> {
     let p = num(a, 0)?;
     let v = df_arg(a, 1)?;
+    if p == 0.0 {
+        return Err(CellError::Div0);
+    }
     if !(p > 0.0 && p < 1.0) {
         return Err(CellError::Num);
     }
@@ -347,7 +375,7 @@ fn f_args(a: &[Arg]) -> R<(f64, f64, f64)> {
     let x = num(a, 0)?;
     let d1 = num(a, 1)?.trunc();
     let d2 = num(a, 2)?.trunc();
-    if d1 < 1.0 || d2 < 1.0 || d1 >= 1e10 || d2 >= 1e10 {
+    if d1 < 1.0 || d2 < 1.0 || d1 > 1e10 || d2 > 1e10 {
         return Err(CellError::Num);
     }
     Ok((x, d1, d2))
@@ -378,7 +406,8 @@ pub(super) fn f_inv(a: &[Arg], _: C) -> R<Value> {
     if p == 0.0 {
         return num_val(0.0);
     }
-    num_val(invert(|x| f_cdf(x, d1, d2), p, 0.0, 1.0, 1e60))
+    let value = if p < 0.5 { invert(|x| f_cdf(x, d1, d2), p, 0.0, 1.0, 1e60) } else { invert(|x| f_upper(x, d1, d2), 1.0 - p, 0.0, 1.0, 1e60) };
+    num_val(value)
 }
 
 pub(super) fn f_inv_rt(a: &[Arg], _: C) -> R<Value> {
@@ -410,7 +439,7 @@ pub(super) fn binom_dist(a: &[Arg], _: C) -> R<Value> {
     let n = num(a, 1)?.trunc();
     let p = num(a, 2)?;
     let cum = boolean(a, 3)?;
-    if k < 0.0 || k > n || !(0.0..=1.0).contains(&p) {
+    if k < 0.0 || n > MAX_BINOM_TRIALS || k > n || !(0.0..=1.0).contains(&p) {
         return Err(CellError::Num);
     }
     num_val(if cum { binom_cdf(k, n, p) } else { binom_pmf(k, n, p) })
@@ -421,7 +450,7 @@ pub(super) fn binom_dist_range(a: &[Arg], _: C) -> R<Value> {
     let p = num(a, 1)?;
     let s1 = num(a, 2)?.trunc();
     let s2 = if has(a, 3) { num(a, 3)?.trunc() } else { s1 };
-    if !(0.0..=1e15).contains(&n) || !(0.0..=1.0).contains(&p) || s1 < 0.0 || s1 > n || s2 < s1 || s2 > n {
+    if !(0.0..=MAX_BINOM_TRIALS).contains(&n) || !(0.0..=1.0).contains(&p) || s1 < 0.0 || s1 > n || s2 < s1 || s2 > n {
         return Err(CellError::Num);
     }
     if s2 - s1 > 10_000.0 {
@@ -499,13 +528,7 @@ pub(super) fn gamma_dist(a: &[Arg], _: C) -> R<Value> {
         return num_val(reg_gamma_p(al, x / be));
     }
     if x == 0.0 {
-        return if al < 1.0 {
-            Err(CellError::Num)
-        } else if al == 1.0 {
-            num_val(1.0 / be)
-        } else {
-            num_val(0.0)
-        };
+        return if al <= 1.0 { Err(CellError::Num) } else { num_val(0.0) };
     }
     num_val(((al - 1.0) * x.ln() - x / be - al * be.ln() - ln_gamma(al)).exp())
 }
@@ -548,7 +571,7 @@ pub(super) fn beta_dist(a: &[Arg], _: C) -> R<Value> {
     if cum {
         return num_val(reg_inc_beta(z, al, be));
     }
-    if (z == 0.0 && al < 1.0) || (z == 1.0 && be < 1.0) {
+    if (z == 0.0 && al <= 1.0) || (z == 1.0 && be <= 1.0) {
         return Err(CellError::Num);
     }
     let lp = if z == 0.0 || z == 1.0 {
@@ -607,6 +630,9 @@ pub(super) fn weibull_dist(a: &[Arg], _: C) -> R<Value> {
     let (x, al, be, cum) = (num(a, 0)?, num(a, 1)?, num(a, 2)?, boolean(a, 3)?);
     if x < 0.0 || al <= 0.0 || be <= 0.0 {
         return Err(CellError::Num);
+    }
+    if x == 0.0 {
+        return num_val(0.0);
     }
     let t = (x / be).powf(al);
     num_val(if cum { -(-t).exp_m1() } else { al / be.powf(al) * x.powf(al - 1.0) * (-t).exp() })
