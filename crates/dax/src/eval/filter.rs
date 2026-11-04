@@ -151,7 +151,8 @@ fn window_table(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Re
     // `WINDOW(<start>, <type>, <end>, <type>, <relation>…)`. The typed form is the one whose
     // second argument is an `ABS`/`REL` keyword, or whose third argument cannot be a relation;
     // a non-keyword in a type position is then rejected with the documented error.
-    let is_relation = |expr: &BoundExpr| matches!(expr, BoundExpr::Table(_) | BoundExpr::Call { .. });
+    let is_relation =
+        |expr: &BoundExpr| matches!(expr, BoundExpr::Table(_) | BoundExpr::Call { .. } | BoundExpr::Variable { .. } | BoundExpr::TableConstructor(_));
     let typed = args.len() >= 3
         && (matches!(args.get(1), Some(BoundExpr::Keyword(word)) if word.eq_ignore_ascii_case("ABS") || word.eq_ignore_ascii_case("REL"))
             || !args.get(2).is_some_and(is_relation));

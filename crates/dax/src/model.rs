@@ -241,7 +241,13 @@ impl DataModel {
             self.require_column(&relationship.to_table, &relationship.to_column)?;
         }
 
+        let mut names = BTreeMap::new();
         for measure in &mut self.measures {
+            // Measure names are compared case-insensitively everywhere else, so a duplicate would
+            // silently hide the second formula.
+            if names.insert(measure.name.to_ascii_lowercase(), ()).is_some() {
+                return Err(ModelError::new(format!("duplicate measure `{}`", measure.name)));
+            }
             let expr = parse_expression(&measure.formula).map_err(|error| ModelError::new(format!("measure `{}`: {error}", measure.name)))?;
             measure.expr = Some(expr);
         }

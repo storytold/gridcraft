@@ -143,6 +143,21 @@ impl DateAxis {
         self.table(date, date)
     }
 
+    /// The first date that exists in `[start, end]`, as a one-row table.
+    fn first_in(&self, start: f64, end: f64) -> TableValue {
+        let mut table = self.table(start, end);
+        table.rows.truncate(1);
+        table
+    }
+
+    /// The last date that exists in `[start, end]`, as a one-row table.
+    fn last_in(&self, start: f64, end: f64) -> TableValue {
+        let mut table = self.table(start, end);
+        let last = table.rows.pop();
+        table.rows = last.into_iter().collect();
+        table
+    }
+
     fn first(&self) -> TableValue {
         match self.min {
             Some(min) => self.single(min),
@@ -555,23 +570,23 @@ fn compute_table(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut C
             }
         }
         "ENDOFMONTH" => match axis.max {
-            Some(max) => Ok(axis.single(month_end(max))),
+            Some(max) => Ok(axis.last_in(month_start(max), month_end(max))),
             None => Ok(axis.empty()),
         },
         "ENDOFQUARTER" => match axis.max {
-            Some(max) => Ok(axis.single(quarter_end(max))),
+            Some(max) => Ok(axis.last_in(quarter_start(max), quarter_end(max))),
             None => Ok(axis.empty()),
         },
         "ENDOFWEEK" => match axis.max {
-            Some(max) => Ok(axis.single(week_end(max))),
+            Some(max) => Ok(axis.last_in(week_start(max), week_end(max))),
             None => Ok(axis.empty()),
         },
         "ENDOFYEAR" => {
             let year_end = year_end_arg(ev, args, 1, ctx, name)?;
             match axis.max {
                 Some(max) => {
-                    let (_, end) = fiscal_bounds(max, year_end);
-                    Ok(axis.single(end))
+                    let (start, end) = fiscal_bounds(max, year_end);
+                    Ok(axis.last_in(start, end))
                 }
                 None => Ok(axis.empty()),
             }
@@ -667,23 +682,23 @@ fn compute_table(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut C
             Ok(axis.table(start.min(end), start.max(end)))
         }
         "STARTOFMONTH" => match axis.max {
-            Some(max) => Ok(axis.single(month_start(max))),
+            Some(max) => Ok(axis.first_in(month_start(max), month_end(max))),
             None => Ok(axis.empty()),
         },
         "STARTOFQUARTER" => match axis.max {
-            Some(max) => Ok(axis.single(quarter_start(max))),
+            Some(max) => Ok(axis.first_in(quarter_start(max), quarter_end(max))),
             None => Ok(axis.empty()),
         },
         "STARTOFWEEK" => match axis.max {
-            Some(max) => Ok(axis.single(week_start(max))),
+            Some(max) => Ok(axis.first_in(week_start(max), week_end(max))),
             None => Ok(axis.empty()),
         },
         "STARTOFYEAR" => {
             let year_end = year_end_arg(ev, args, 1, ctx, name)?;
             match axis.max {
                 Some(max) => {
-                    let (start, _) = fiscal_bounds(max, year_end);
-                    Ok(axis.single(start))
+                    let (start, end) = fiscal_bounds(max, year_end);
+                    Ok(axis.first_in(start, end))
                 }
                 None => Ok(axis.empty()),
             }

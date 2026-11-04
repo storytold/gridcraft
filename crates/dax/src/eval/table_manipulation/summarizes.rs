@@ -44,18 +44,20 @@ pub(crate) fn subtotal_columns() -> Option<Vec<(usize, usize)>> {
     SUBTOTAL_COLUMNS.with(|columns| columns.borrow().clone())
 }
 
-struct SubtotalGuard;
+struct SubtotalGuard(Option<Vec<(usize, usize)>>);
 
 impl SubtotalGuard {
     fn push(columns: Vec<(usize, usize)>) -> Self {
-        SUBTOTAL_COLUMNS.with(|current| *current.borrow_mut() = Some(columns));
-        SubtotalGuard
+        let previous = SUBTOTAL_COLUMNS.with(|current| current.borrow_mut().replace(columns));
+        SubtotalGuard(previous)
     }
 }
 
 impl Drop for SubtotalGuard {
     fn drop(&mut self) {
-        SUBTOTAL_COLUMNS.with(|current| *current.borrow_mut() = None);
+        // A nested SUMMARIZE must leave the outer row's subtotal state as it found it.
+        let previous = self.0.take();
+        SUBTOTAL_COLUMNS.with(|current| *current.borrow_mut() = previous);
     }
 }
 
@@ -244,8 +246,8 @@ fn group_value(ev: &Evaluator<'_>, table: &TableValue, row: &[Scalar], column: &
     if table.lineage == Some(column.table) && table.column_index(&column.name) == Some(column.column) {
         return row.get(column.column).cloned().ok_or_else(|| EvalError::new("row is out of range"));
     }
-    if let Some(lineage) = table.lineage
-        && let Some(value) = related_value(ev, lineage, row, column.table, column.column)
+    if table.lineage.is_some()
+        && let Some(value) = related_value(ev, table, row, column.table, column.column)
     {
         return Ok(value);
     }
@@ -256,7 +258,8 @@ fn group_value(ev: &Evaluator<'_>, table: &TableValue, row: &[Scalar], column: &
 }
 
 /// Follows an active relationship from `base` to `target` for one row.
-fn related_value(ev: &Evaluator<'_>, base: usize, row: &[Scalar], target: usize, target_column: usize) -> Option<Scalar> {
+fn related_value(ev: &Evaluator<'_>, table: &TableValue, row: &[Scalar], target: usize, target_column: usize) -> Option<Scalar> {
+    let base = table.lineage?;
     let model = ev.model();
     for relationship in &model.relationships {
         if relationship.inactive {
@@ -271,7 +274,9 @@ fn related_value(ev: &Evaluator<'_>, base: usize, row: &[Scalar], target: usize,
         } else {
             continue;
         };
-        let Some(base_column) = model.column_index(base, base_key) else { continue };
+        // The table may be a projection that keeps the lineage but not the model layout, so the
+        // key is read by name; a projection without the key skips the relationship.
+        let Some(base_column) = table.column_index(base_key) else { continue };
         let Some(target_key_column) = model.column_index(target, target_key) else { continue };
         let Some(key) = row.get(base_column) else { continue };
         let Some(target_table) = model.tables.get(target) else { continue };
@@ -690,9 +695,23 @@ fn parse_rollup_dimension<'a>(
 fn apply_filter_arg(ev: &Evaluator<'_>, expr: &BoundExpr, filters: &mut FilterContext, ctx: &mut Context) -> Result<(), EvalError> {
     if let BoundExpr::Call { spec, args } = expr {
         match spec.name {
-            "KEEPFILTERS" | "NONVISUAL" => {
+            "NONVISUAL" => {
                 let inner = args.first().ok_or_else(|| EvalError::new(format!("{} needs a table filter", spec.name)))?;
                 return apply_filter_arg(ev, inner, filters, ctx);
+            }
+            "KEEPFILTERS" => {
+                // KEEPFILTERS intersects its inner filter with the filters already in context.
+                let inner = args.first().ok_or_else(|| EvalError::new("KEEPFILTERS needs a table filter"))?;
+                let mut applied = filters.clone();
+                apply_filter_arg(ev, inner, &mut applied, ctx)?;
+                for (key, values) in applied.filters {
+                    let merged = match filters.filters.get(&key) {
+                        Some(existing) => existing.intersection(&values).cloned().collect(),
+                        None => values,
+                    };
+                    filters.filters.insert(key, merged);
+                }
+                return Ok(());
             }
             "TREATAS" => {
                 let table = ev.eval_table(args.first().ok_or_else(|| EvalError::new("TREATAS needs a table"))?, ctx)?;

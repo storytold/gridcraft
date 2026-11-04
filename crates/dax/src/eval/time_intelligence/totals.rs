@@ -84,9 +84,10 @@ fn total(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context, 
     if let Some(filter) = args.get(2) {
         apply_filter_arg(ev, filter, &mut filters, ctx)?;
     }
-    // The window only keeps dates that exist in the date column, exactly like DATESMTD/YTD.
+    // The window only keeps dates that exist in the date column, exactly like DATESMTD/YTD; the
+    // keys use the column's own values so an untyped date column still matches its rows.
     let window = dates_between(ev, dates, start, last);
-    filters.set(dates.table, dates.column, window.iter().map(|date| ScalarKey::from(&Scalar::DateTime(*date))));
+    filters.set(dates.table, dates.column, window.iter().map(|(_, value)| ScalarKey::from(value)));
     let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone() };
     ev.eval(&args[0], &mut inner)
 }
@@ -110,7 +111,15 @@ fn balance(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context
     };
     let year_end = if period == Period::Year && args.len() >= 4 { Some(year_end_serial(ev, &args[3], ctx)?) } else { None };
     let (start, end) = period_bounds(period, last, year_end);
-    let boundary = if opening { start.floor() - 1.0 } else { end };
+    let boundary = if opening {
+        start.floor() - 1.0
+    } else {
+        // `ENDOF*` is the last date that exists in the column, not the calendar end of the period.
+        match dates_between(ev, dates, start, end).last() {
+            Some((serial, _)) => *serial,
+            None => return Ok(Scalar::Blank),
+        }
+    };
 
     let mut filters = date_table_filters(&base, dates);
     if let Some(filter) = args.get(2) {
@@ -219,18 +228,22 @@ fn visible_dates(ev: &Evaluator<'_>, dates: DateColumn, filters: &FilterContext)
 }
 
 /// The dates of the date column that exist in the model and fall inside `[start, end]`.
-fn dates_between(ev: &Evaluator<'_>, dates: DateColumn, start: f64, end: f64) -> Vec<f64> {
+/// The dates of the column in `[start, end]`, each with the column's own value so a filter built
+/// from them matches the stored cells even when the column has no declared date type.
+fn dates_between(ev: &Evaluator<'_>, dates: DateColumn, start: f64, end: f64) -> Vec<(f64, Scalar)> {
     let Some(model_table) = ev.model().tables.get(dates.table) else {
         return Vec::new();
     };
-    let values: Vec<f64> = model_table
+    let mut values: Vec<(f64, Scalar)> = model_table
         .rows
         .iter()
-        .filter_map(|row| row.get(dates.column))
-        .filter_map(date_value)
-        .filter(|date| *date >= start - 1e-9 && *date <= end + 1e-9)
+        .filter_map(|row| row.get(dates.column).map(|value| (value, date_value(value))))
+        .filter_map(|(value, serial)| serial.map(|serial| (serial, value.clone())))
+        .filter(|(date, _)| *date >= start - 1e-9 && *date <= end + 1e-9)
         .collect();
-    normalized(values)
+    values.sort_by(|left, right| left.0.total_cmp(&right.0));
+    values.dedup_by(|left, right| left.0 == right.0);
+    values
 }
 
 /// Sorts ascending and drops duplicate days.

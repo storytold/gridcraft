@@ -42,12 +42,12 @@ assert!(gridcraft_dax::print_query(&query).starts_with("DEFINE\n    MEASURE Sale
 | `types::{literal_type, infer_type, unary_type, binary_type, arithmetic_type, comparison_coercion, comparison_compatible, comparison_type}` | Literal classification, static inference and the documented operator/coercion tables. |
 | `model::{DataModel, ModelTable, ModelColumn, Measure, Relationship, parse_measure}` | Metadata + inline-row model, formula parsing and name validation. |
 | `binder::{Binder, BoundExpr, BoundMeasure, bind_formula}` | Name/measure/column resolution, dependency graph and cycle rejection. |
-| `eval::{Evaluator, FilterContext}` | Partial expression/measure evaluator over `DataModel`. |
+| `eval::{Evaluator, FilterContext}` | Expression/measure evaluator over `DataModel` (every catalogued function). |
 | `pivot::{pivot, pivot_cross, pivot_fields}` | Row/column grouping helpers. |
 | `pivot_table::PivotTable` | Power Pivot-style row/column/filter/value layout with subtotals and grand totals. |
 | `storage::{ModelStorage, TableStorage, ColumnStorage, ColumnData}` | Columnar, dictionary-encoded model store with filter/aggregate/relationship indexes. |
 | `model_file::{read_measures, write_measures, ModelMeasure}` | Read/write Power Pivot measures in `xl/model/item.data` (ABF container). |
-| `MAX_INPUT_LEN` (8192 bytes) / `MAX_DEPTH` (256) | Limits enforced with errors. |
+| `MAX_INPUT_LEN` (8192 bytes, expressions) / `MAX_QUERY_LEN` (1 MiB, queries) / `MAX_DEPTH` (256) | Limits enforced with errors. |
 
 ### Syntax tree
 
@@ -259,8 +259,8 @@ and `dt` literal engine support) instead of hiding them behind one total order.
 
 ## Limits, errors and printing
 
-Input is capped at 8192 bytes and expression nesting at 256 levels; both produce an error, never a
-stack overflow. The printer and `Expr::walk` use explicit stacks, and the parser's binary loop is
+Expressions are capped at 8192 bytes, queries at 1 MiB, and expression nesting at 256 levels; each
+limit produces an error, never a stack overflow. The printer and `Expr::walk` use explicit stacks, and the parser's binary loop is
 iterative for left-associated chains.
 
 Numeric literal overflow (an integer outside `i64`, or a decimal outside finite `f64`) and invalid

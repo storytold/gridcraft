@@ -671,6 +671,7 @@ impl Parser {
     fn expr(&mut self, min_bp: u8) -> Result<Expr, ParseError> {
         self.enter()?;
         let mut lhs = self.prefix()?;
+        let mut lhs_depth = lhs.depth();
         while let Some(op) = self.binary_op() {
             let bp = op.precedence();
             if bp < min_bp {
@@ -682,9 +683,11 @@ impl Parser {
             let rhs = self.expr(next_min)?;
             // Grouped expressions return their inner tree without a parenthesis node, so the
             // depth must come from the AST itself, not from the parser's recursion frames.
-            if lhs.depth().max(rhs.depth()) >= MAX_DEPTH {
+            let depth = lhs_depth.max(rhs.depth());
+            if depth >= MAX_DEPTH {
                 return Err(self.error_here(format!("expression is nested too deeply (limit {MAX_DEPTH})")));
             }
+            lhs_depth = depth + 1;
             let span = lhs.span.to(rhs.span);
             lhs = Expr::new(ExprKind::Binary { op, left: Box::new(lhs), right: Box::new(rhs) }, span);
         }
