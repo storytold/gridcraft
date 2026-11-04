@@ -109,3 +109,13 @@ fn generated_trim_calls_do_not_steal_imported_namespaces() {
         }
     }
 }
+
+/// OOXML length bounds are characters; multibyte literals must not discard namespaces.
+#[test]
+fn unicode_literals_within_character_limit_keep_future_namespaces() {
+    let text = "ț".repeat(gridcraft_formula::MAX_FORMULA_LEN / 2);
+    let formula = format!("_xlfn.SYNTHETICUNICODE(\"{text}\")");
+    assert!(formula.len() > gridcraft_formula::MAX_FORMULA_LEN);
+    assert!(formula.chars().count() < gridcraft_formula::MAX_FORMULA_LEN);
+    roundtrip_formula(&formula);
+}

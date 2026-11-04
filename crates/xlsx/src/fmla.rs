@@ -205,11 +205,13 @@ fn imported_call_names(e: &Expr, prefixes: &BTreeMap<String, Vec<Option<FileFunc
 
 /// Read a cell formula and retain explicit namespaces the known-function table cannot recreate.
 pub(crate) fn cell_from_file(text: &str) -> Formula {
+    let text = text.strip_prefix('=').unwrap_or(text);
     let source = parse_model_expr(text);
     let model_text = source.as_ref().map_or_else(|| text.strip_prefix('=').unwrap_or(text).to_string(), gridcraft_formula::print);
     let mut formula = Formula::new(&model_text);
     if formula.expr.is_none()
-        || text.len() > gridcraft_formula::MAX_FORMULA_LEN
+        || (text.len() > gridcraft_formula::MAX_FORMULA_LEN
+            && text.chars().take(gridcraft_formula::MAX_FORMULA_LEN + 1).count() > gridcraft_formula::MAX_FORMULA_LEN)
         || !text.as_bytes().windows(b"_xlfn.".len()).any(|part| part.eq_ignore_ascii_case(b"_xlfn."))
     {
         return formula;

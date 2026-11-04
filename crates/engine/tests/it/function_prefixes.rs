@@ -276,3 +276,15 @@ fn other_functions_keep_canonical_namespaces_when_one_prefix_is_explicit() {
     let xml = saved_xml(&mut s);
     assert!(xml.contains("_xlfn.SYNTHETICFUTURE(A1)+_xlfn.XLOOKUP(A1,A2,A3)"), "{xml}");
 }
+
+/// Typed formulas use the parser's character limit, including multibyte literals.
+#[test]
+fn typed_multibyte_formula_keeps_its_explicit_namespace() {
+    let text = "ț".repeat(gridcraft_formula::MAX_FORMULA_LEN / 2);
+    let formula = format!("=_xlfn.SYNTHETICUNICODE(\"{text}\")");
+    let mut s = Session::new();
+    s.execute("file.new", json!({})).unwrap();
+    s.execute("cell.set", json!({"cell":"A1", "input":formula})).unwrap();
+    let xml = saved_xml(&mut s);
+    assert!(xml.contains("_xlfn.SYNTHETICUNICODE"));
+}

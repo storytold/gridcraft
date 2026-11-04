@@ -119,7 +119,10 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
 /// count: namespace-looking strings, references and local declaration names are ordinary data.
 /// `None` lets unprefixed argument edits inherit the imported occurrence metadata as before.
 fn explicit_function_prefixes(body: &str) -> Option<BTreeMap<String, Vec<Option<FileFunctionPrefix>>>> {
-    if body.len() > gridcraft_formula::MAX_FORMULA_LEN || !body.as_bytes().windows(6).any(|part| part.eq_ignore_ascii_case(b"_xlfn.")) {
+    if (body.len() > gridcraft_formula::MAX_FORMULA_LEN
+        && body.chars().take(gridcraft_formula::MAX_FORMULA_LEN + 1).count() > gridcraft_formula::MAX_FORMULA_LEN)
+        || !body.as_bytes().windows(6).any(|part| part.eq_ignore_ascii_case(b"_xlfn."))
+    {
         return None;
     }
     let tokens = gridcraft_formula::lexer::tokenize(body).ok()?;
