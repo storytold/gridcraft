@@ -47,6 +47,9 @@ struct RowState {
     /// Bytes of unparsable shared-master text copied into follower cells so far: each follower
     /// keeps its own copy, so a long master and many followers must stay bounded together.
     shared_fallback_bytes: u64,
+    /// The cell being read lost its shared formula to the copy limit above: its cached value is
+    /// kept, even inside an array range (where a formula's cached values otherwise give way to it).
+    shared_copy_refused: bool,
     dropped: u64,
     rows: u64,
 }
@@ -575,6 +578,7 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
         return;
     }
     let dynamic = c.attr("cm").is_some();
+    st.shared_copy_refused = false;
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
     // A `PY(index,0|1)` formula is a Python cell whose code is a script of the Python part. The
     // older `PY("…",0|1)` form is read from the formula's own text: the formula parser would fold
@@ -595,7 +599,7 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     if py.is_some() {
         record_python_spill(st, sheet, pos);
     }
-    let spilled_from = if formula.is_none() && py.is_none() { dynamic_range(st, pos) } else { None };
+    let spilled_from = if formula.is_none() && py.is_none() && !st.shared_copy_refused { dynamic_range(st, pos) } else { None };
     let python_anchor = spilled_from.is_some_and(|r| sheet.cells.get(r.start).is_some_and(|a| a.py.is_some()));
     let value = match spilled_from {
         // A Python cell's spilled values are kept: they are its result until it runs again.
@@ -652,6 +656,7 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
                         let total = st.shared_fallback_bytes.saturating_add(sh.text.len() as u64);
                         if total > MAX_SHARED_FALLBACK_BYTES {
                             cx.warn("some shared formulas could not be parsed and exceed the copy limit; those cells kept their cached values");
+                            st.shared_copy_refused = true;
                             return None;
                         }
                         st.shared_fallback_bytes = total;

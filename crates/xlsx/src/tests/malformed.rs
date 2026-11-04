@@ -274,6 +274,24 @@ fn unparsable_shared_master_copies_stay_bounded() {
     assert!(rep.warnings.iter().any(|w| w.contains("exceed the copy limit")), "{:?}", rep.warnings);
 }
 
+/// A follower dropped for the copy limit keeps its cached value even where an array range covers it.
+#[test]
+fn followers_past_the_copy_limit_keep_their_values_inside_array_ranges() {
+    let master = format!("1{}", "+1".repeat(40_000));
+    let mut rows = format!(
+        r#"<row r="1"><c r="B1"><f t="array" ref="B1:C2000">1</f><v>1</v></c><c r="C1"><f t="shared" ref="C1:C2000" si="0">{master}</f><v>1</v></c></row>"#
+    );
+    for r in 2..=2000 {
+        rows.push_str(&format!(r#"<row r="{r}"><c r="C{r}"><f t="shared" si="0"/><v>{r}</v></c></row>"#));
+    }
+    let (wb, rep) = read_xlsx(&minimal(&format!("<sheetData>{rows}</sheetData>"), &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    let last = gridcraft_core::CellRef::new(1999, 2);
+    assert!(s.cell(last).is_some_and(|c| c.formula.is_none()), "the limit was reached");
+    assert_eq!(s.value(last), gridcraft_core::Value::Number(2000.0));
+    assert!(rep.warnings.iter().any(|w| w.contains("exceed the copy limit")), "{:?}", rep.warnings);
+}
+
 /// Formula text built to overflow a recursive parser or tree walk (a million `%`, a 200,000-term
 /// sum): the cells keep their formula text and cached value, nothing overflows the stack.
 #[test]
