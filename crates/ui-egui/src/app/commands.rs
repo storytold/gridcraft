@@ -163,8 +163,19 @@ impl SheetApp {
                 Ok(Json::Null)
             }
             "view.expandFormulaBar" => {
-                self.ui.formula_bar_expanded = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.formula_bar_expanded);
-                Ok(json!({"on": self.ui.formula_bar_expanded}))
+                // `lines` is where a drag of the bar's bottom edge left it: one line collapses it,
+                // more expands it to that height, which expanding returns to afterwards.
+                if let Some(lines) = p.get("lines").and_then(Json::as_u64) {
+                    let lines = usize::try_from(lines).unwrap_or(usize::MAX).clamp(1, crate::formula_bar::MAX_DRAG_LINES);
+                    self.ui.formula_bar_expanded = lines > 1;
+                    if lines > 1 {
+                        self.ui.formula_bar_lines = lines;
+                    }
+                    Ok(json!({"on": self.ui.formula_bar_expanded, "lines": self.ui.formula_bar_lines}))
+                } else {
+                    self.ui.formula_bar_expanded = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.formula_bar_expanded);
+                    Ok(json!({"on": self.ui.formula_bar_expanded}))
+                }
             }
             "view.darkMode" => {
                 let current = if self.ui.system_theme { self.effective_dark } else { self.ui.dark };
@@ -190,6 +201,10 @@ impl SheetApp {
             "options.autoComplete" => {
                 self.ui.autocomplete = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.autocomplete);
                 Ok(json!({"on": self.ui.autocomplete}))
+            }
+            "options.highlightActiveRow" => {
+                self.ui.highlight_active_row = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.highlight_active_row);
+                Ok(json!({"on": self.ui.highlight_active_row}))
             }
             "view.interfaceScale" => {
                 // `{"percent": 125}` or `{"percent": "auto"}`; out-of-range values are clamped.
