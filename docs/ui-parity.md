@@ -184,7 +184,8 @@ picked into, clicking or dragging on the sheet writes the absolute reference int
 sheet name, quoted when it needs quotes, when the selection is on another sheet:
 `'Rates Table'!$A$2:$A$4`), and typing still edits it. A click on the cell already selected
 writes it too, and so does a second quick click (it does not edit the cell), while clicking into
-the box alone, or a Ctrl+click that follows a link, keeps the box's text. The box's collapse button shrinks the
+the box alone keeps the box's text. While a box picks, a click on a link or a checkbox picks its
+cell, without following the link or toggling the checkbox. The box's collapse button shrinks the
 dialog to the box while the person selects; Escape, Enter or the expand button restore it (Enter
 there does not press OK, which is not shown while collapsed). Cancel, Escape, a ribbon command
 that opens another dialog over it, and a scripted `ui.dialog.cancel` put the sheet and selection

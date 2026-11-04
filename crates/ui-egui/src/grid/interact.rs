@@ -472,8 +472,10 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         return;
     }
     let now = crate::now_ms();
-    // While a reference box picks, a second click on a cell picks it again rather than editing it.
+    // While a reference box picks, a click only picks: a second click on a cell does not edit it,
+    // and a link is not followed nor a checkbox toggled.
     let ref_box_picks = app.dialog.as_ref().is_some_and(|d| d.ref_box_picks());
+    let acts = primary_clicked && !ref_box_picks;
     if !ref_box_picks && handle_cell_double_click(app, input, c, now) {
         return;
     }
@@ -487,11 +489,10 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
     } else if mods.command {
         // Ctrl+click (without Alt) on a hyperlink's text follows it instead of adding the cell to the selection.
         if let Some(h) = sh.hyperlinks.get(&c).cloned()
-            && primary_clicked
+            && acts
             && !mods.alt
             && p.x < geo.cell_rect(sh, c).left() + geo.cell_rect(sh, c).width() * 0.8
         {
-            // Following a link selects nothing, so it is no pick of the cell already selected.
             follow_link(app, &h.target);
         } else {
             note_selecting_press(app);
@@ -500,12 +501,12 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
     } else {
         note_selecting_press(app);
         let _ = app.session.run("selection.set", json!({"cell": c.a1()}));
-        if primary_clicked && wb.styles.get(sh.style_id(c)).num_fmt.as_str() == "checkbox" {
+        if acts && wb.styles.get(sh.style_id(c)).num_fmt.as_str() == "checkbox" {
             let _ = app.run("cell.toggleCheckbox", json!({"cell": c.a1()}));
         }
         // A click on a hyperlink's text follows it (like Excel); elsewhere in the cell selects.
         if let Some(h) = sh.hyperlinks.get(&c).cloned()
-            && primary_clicked
+            && acts
             && !mods.any()
         {
             let r = geo.cell_rect(sh, c);

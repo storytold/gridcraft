@@ -1804,32 +1804,56 @@ fn a_click_on_the_cell_already_selected_picks_it() {
     assert!(h.state().editor.is_none(), "no cell is being edited");
 }
 
-#[test]
-fn ctrl_click_following_a_link_to_the_selected_cell_is_no_pick() {
-    let mut s = workbook();
-    s.execute("cell.set", json!({"cell": "C3", "input": "back"})).unwrap();
-    s.execute("insert.link", json!({"cell": "C3", "target": "Sheet1!B5"})).unwrap();
-    let mut h = harness(s);
-    open_goal_seek(&mut h);
-    let boxes = dialog_boxes(&h);
-    click_at(&mut h, boxes[2].center());
-    // Ctrl+click on the link's text follows it back to B5, the cell already selected.
+/// A click on `cell` at a fraction of its width (a link's text sits in its first 80%), with
+/// `modifiers` held.
+fn click_cell_with(h: &mut H, cell: &str, modifiers: Modifiers) {
     let app = h.state();
     let sheet = app.session.active().unwrap().wb.active().unwrap();
-    let r = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll).cell_rect(sheet, CellRef::parse("C3").unwrap());
+    let r = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll).cell_rect(sheet, CellRef::parse(cell).unwrap());
     let pos = egui::pos2(r.left() + r.width() * 0.3, r.center().y);
     h.state_mut().grid.last_click = None;
     h.input_mut().events.extend([
-        Event::ModifiersChanged(Modifiers::COMMAND),
+        Event::ModifiersChanged(modifiers),
         Event::PointerMoved(pos),
-        Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::COMMAND },
-        Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::COMMAND },
+        Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers },
+        Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers },
     ]);
     h.run_steps(3);
     h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
     h.run_steps(2);
-    assert_eq!(selection(&h), (0, "B5".into()), "the link was followed");
-    assert_eq!(field(&h, "changing"), "", "following a link selects no cell, so the box keeps its text");
+}
+
+#[test]
+fn while_picking_a_click_on_a_link_or_checkbox_picks_its_cell_only() {
+    let mut s = workbook();
+    for (cell, target) in [("C3", "Sheet1!B5"), ("C4", "Sheet1!F9"), ("C5", "https://example.org/a")] {
+        s.execute("cell.set", json!({"cell": cell, "input": "link"})).unwrap();
+        s.execute("insert.link", json!({"cell": cell, "target": target})).unwrap();
+    }
+    s.execute("insert.checkbox", json!({"range": "C6"})).unwrap();
+    let mut h = harness(s);
+    open_goal_seek(&mut h);
+    let boxes = dialog_boxes(&h);
+    click_at(&mut h, boxes[2].center());
+    // Ctrl+click on a link back to the cell already selected: the cell clicked is the pick.
+    click_cell_with(&mut h, "C3", Modifiers::COMMAND);
+    assert_eq!(field(&h, "changing"), "$C$3", "the link is not followed back to B5");
+    // A link to another cell on the same sheet, with and without Ctrl: no Go To, the cell picks.
+    click_cell_with(&mut h, "C4", Modifiers::COMMAND);
+    assert_eq!(field(&h, "changing"), "$C$4");
+    click_cell_with(&mut h, "C4", Modifiers::NONE);
+    assert_eq!(field(&h, "changing"), "$C$4");
+    assert_eq!(selection(&h), (0, "C4".into()), "the link to F9 was not followed");
+    // A web link asks nothing, so the dialog being filled stays.
+    click_cell_with(&mut h, "C5", Modifiers::NONE);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("goalSeek"));
+    assert_eq!(field(&h, "changing"), "$C$5");
+    // A checkbox cell is picked, not toggled.
+    let checked = |h: &H| h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::parse("C6").unwrap());
+    let before = checked(&h);
+    click_cell_with(&mut h, "C6", Modifiers::NONE);
+    assert_eq!(field(&h, "changing"), "$C$6");
+    assert_eq!(checked(&h), before, "the checkbox was not toggled");
 }
 
 #[test]
