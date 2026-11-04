@@ -150,7 +150,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   identity/artwork on save (#551); native Office InkML import is not implemented.
 - SmartArt, WordArt, signature line, objects, 3-D models, screenshot; 15 insertable shape kinds —
   14 geometric presets plus `textBox`, as `insert.shape` lists them — against Excel's ~170 (Ink to
-  Shape now converts Excel's preset set: rectangles/squares, ellipse/circle, diamond,
+  Shape now converts recognised strokes to Excel's preset set: rectangles/squares, ellipse/circle, diamond,
   parallelogram, trapezoid, pentagon, hexagon, triangle/right triangle, single, block and double
   arrows, lines); pictures in cells (#61, PR #105). Equations exist (LaTeX source with a live preview, Office Math in xlsx); there is
   no structured (WYSIWYG) equation editing and no ink equations. **Estimate:** 25–40 h.
