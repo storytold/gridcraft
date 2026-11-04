@@ -1,6 +1,6 @@
 # Macros
 
-> **Last updated:** 2026-11-01 · **Change:** minor (a close that waits on the step editor's question runs in the editor's window, and a further close asked meanwhile waits for the answer or is refused; earlier: closing a workbook or quitting asks about the step editor's unsaved draft first; recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
+> **Last updated:** 2026-11-03 · **Change:** minor (`macro.save` checks a new or changed shortcut as Record Macro does; earlier: a close that waits on the step editor's question runs in the editor's window, and a further close asked meanwhile waits for the answer or is refused; earlier: closing a workbook or quitting asks about the step editor's unsaved draft first; recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
 
 GridCraft macros are typed, declarative lists of commands, not VBA. Every step runs a GridCraft
 command (the same ids the ribbon, CLI and MCP use) or one of three bounded control steps. A macro
@@ -245,7 +245,10 @@ kept but does not run the macro.
 `macro.list`, `macro.get`, `macro.save {macro, replace?}`, `macro.delete` and `macro.rename
 {name, to}`. Saving under a name a macro has is refused unless `replace: true` is passed, and
 renaming to one is refused; names compare ignoring the case of the letters A to Z. A renamed macro is checked
-against every limit again, its size included. Saving, renaming and deleting are undoable.
+against every limit again, its size included. A new or changed shortcut is checked as Record Macro
+checks it: one letter from A to Z that neither GridCraft nor another macro uses, so a saved
+shortcut always runs its macro; a shortcut the macro already has is kept as it is. Saving,
+renaming and deleting are undoable.
 
 Macros are saved in the workbook: as a field in GridCraft's JSON format, and in xlsx as hidden
 defined names (`_gc_macro_<n>_<k>`, the macro's JSON split into string literals within Excel's
