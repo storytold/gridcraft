@@ -308,3 +308,14 @@ fn scenario_summary_refuses_a_matrix_over_its_cell_limit() {
     }
     assert!(s.execute("data.scenarioSummary", json!({})).is_err());
 }
+
+#[test]
+fn scenario_summary_counts_result_rows_in_its_cell_limit() {
+    let mut s = s();
+    // 900 scenarios of one distinct cell each are 810,000 cells; 255 result rows take it past the limit.
+    for i in 0..900 {
+        s.execute("data.scenarioAdd", json!({"name": format!("S{i}"), "changing": format!("A{}", i + 1)})).unwrap();
+    }
+    let err = s.execute("data.scenarioSummary", json!({"resultCells": "C1:C255"})).unwrap_err().to_string();
+    assert!(err.contains("too many cells"), "{err}");
+}

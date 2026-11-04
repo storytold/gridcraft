@@ -228,7 +228,8 @@ pub(super) fn scenario_summary(s: &mut Session, p: &Json) -> Result<Json> {
     }
     // The summary has a cell for every changing cell in every scenario, filled from the current
     // value where a scenario doesn't set it, so small disjoint scenarios multiply.
-    if changing.len().saturating_mul(per.len()) > MAX_SUMMARY_CELLS {
+    // Each result cell is a row of the summary too, with a cell per scenario.
+    if changing.len().saturating_add(results.len()).saturating_mul(per.len()) > MAX_SUMMARY_CELLS {
         return Err(bad(CMD, "the scenarios together change too many cells for a summary"));
     }
     let current: Vec<Value> = changing.iter().map(|c| sh.value(*c)).collect();
