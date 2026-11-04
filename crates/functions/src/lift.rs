@@ -3,7 +3,7 @@
 
 use gridcraft_core::{Array, CellError, Value};
 
-use crate::util::MAX_CELLS;
+use crate::util::{MAX_CELLS, num};
 use crate::{Arg, Ctx, FnSpec};
 
 /// Value-parameter masks (see [`FnSpec::value_args`]), observed in Excel 365: a reference to more
@@ -102,10 +102,8 @@ fn call_cost(spec: &FnSpec, cell_args: &[Arg]) -> usize {
     if !PERIOD_LOOPS.contains(&spec.name) {
         return 0;
     }
-    let period = |i: usize| match cell_args.get(i).map(|a| &a.value) {
-        Some(Value::Number(n)) if n.is_finite() => Some(n.trunc()),
-        _ => None,
-    };
+    // The function's own coercion (text like "10000000" counts), so no loop goes uncharged.
+    let period = |i: usize| num(cell_args, i).ok().filter(|n| n.is_finite()).map(f64::trunc);
     match (period(3), period(4)) {
         // The function itself refuses spans past 1e7 periods; anything larger costs the cap.
         (Some(start), Some(end)) if end >= start => ((end - start) + 1.0).min(1e8) as usize,
@@ -298,6 +296,9 @@ mod tests {
         // 51 elements of 1e7 periods each is past 5e8.
         is_err(ev("CUMIPMT", args(51, 1e7)), CellError::Num);
         is_err(ev("CUMPRINC", args(51, 1e7)), CellError::Num);
+        // Numeric text is coerced by the function, so its periods are charged the same.
+        let text_ends = av(Array::filled(51, 1, Value::text("10000000")).into());
+        is_err(ev("CUMIPMT", vec![n(0.01), n(1e7), n(1000.0), n(1.0), text_ends, n(0.0)]), CellError::Num);
         let out = ev("CUMIPMT", args(2, 12.0));
         assert_eq!(rows_of(&out).len(), 2);
         assert!(matches!(rows_of(&out).first().and_then(|r| r.first()), Some(Value::Number(x)) if *x < 0.0));
