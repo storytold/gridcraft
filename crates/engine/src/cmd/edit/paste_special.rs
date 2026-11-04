@@ -49,12 +49,17 @@ fn operation_symbol(op: &str) -> Option<char> {
     }
 }
 
+/// Copies the merged areas inside the copied block to each of the `tiles_r` by `tiles_c` tiles of
+/// the paste, which start at `at` and are `h` rows by `w` columns apart.
+#[allow(clippy::too_many_arguments)]
 fn copy_merges(
     cx: &mut crate::cmd::Ctx,
     dest_sheet: usize,
     src_sheet: &gridcraft_model::Sheet,
     src: RangeRef,
     at: CellRef,
+    (tiles_r, tiles_c): (u32, u32),
+    (h, w): (u32, u32),
     what: What,
     transpose: bool,
 ) -> Result<()> {
@@ -62,17 +67,48 @@ fn copy_merges(
         return Ok(());
     }
     let merges: Vec<RangeRef> = src_sheet.merges.iter().filter(|merge| src.contains_range(merge)).copied().collect();
-    for merge in merges {
-        let row_offset = at.row as i64 - src.start.row as i64;
-        let col_offset = at.col as i64 - src.start.col as i64;
-        if let (Some(start), Some(end)) = (merge.start.offset(row_offset, col_offset), merge.end.offset(row_offset, col_offset)) {
-            let moved = RangeRef::new(start, end);
-            let sheet = cx.sheet_mut(dest_sheet)?;
-            sheet.merges.retain(|existing| !existing.intersects(&moved));
-            sheet.merges.push(moved);
+    if merges.is_empty() {
+        return Ok(());
+    }
+    let mut moved = Vec::new();
+    for (tr, tc) in (0..tiles_r).flat_map(|tr| (0..tiles_c).map(move |tc| (tr, tc))) {
+        let Some(origin) = at.offset(i64::from(tr) * i64::from(h), i64::from(tc) * i64::from(w)) else { continue };
+        let row_offset = origin.row as i64 - src.start.row as i64;
+        let col_offset = origin.col as i64 - src.start.col as i64;
+        for merge in &merges {
+            if let (Some(start), Some(end)) = (merge.start.offset(row_offset, col_offset), merge.end.offset(row_offset, col_offset)) {
+                moved.push(RangeRef::new(start, end));
+            }
         }
     }
+    // The copied areas never overlap one another, so only the merges already in the paste area
+    // need checking against them.
+    let footprint = RangeRef::new(at, at.offset_clamped(i64::from(tiles_r) * i64::from(h) - 1, i64::from(tiles_c) * i64::from(w) - 1));
+    let sheet = cx.sheet_mut(dest_sheet)?;
+    sheet.merges.retain(|existing| !(existing.intersects(&footprint) && moved.iter().any(|m| existing.intersects(m))));
+    sheet.merges.extend(moved);
     Ok(())
+}
+
+/// The validation rule of the copied cell `sc`, moved to `dest` alone. Relative references move
+/// with the rule, as pasted formulas do. When blanks are skipped the paste area wasn't cleared of
+/// its rules beforehand, so `dest`'s old rule is removed here.
+fn moved_rule(
+    dest_sheet: &mut gridcraft_model::Sheet,
+    src_sheet: &gridcraft_model::Sheet,
+    sc: CellRef,
+    dest: CellRef,
+    skip_blanks: bool,
+) -> Option<gridcraft_model::Validation> {
+    if skip_blanks {
+        crate::cmd::data::remove_validation_cells(&mut dest_sheet.validations, &[RangeRef::new(dest, dest)]);
+    }
+    let mut dv = src_sheet.validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(sc))).cloned()?;
+    let first = RangeRef::top_left(&dv.ranges).unwrap_or(sc);
+    dv.f1 = crate::cmd::data::move_rule_formula(&dv.f1, first, dest);
+    dv.f2 = dv.f2.map(|f| crate::cmd::data::move_rule_formula(&f, first, dest));
+    dv.ranges = vec![RangeRef::new(dest, dest)];
+    Some(dv)
 }
 
 pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
@@ -153,6 +189,15 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             moved_formulas = taken.into_iter().collect();
         }
         let dest_name = cx.wb.sheet(dest_sheet).map(|sh| sh.name.clone()).unwrap_or_default();
+        // The copied cells' validation rules replace whatever rules the paste area had. They are
+        // added after the loop, so each cell doesn't rescan the rules pasted before it; without
+        // skipped blanks every cell of the area is written, so the old rules go in one pass.
+        let pastes_validation = !link && matches!(what, What::All | What::AllExceptBorders | What::Validation);
+        let mut pasted_rules = Vec::new();
+        if pastes_validation && !skip_blanks {
+            let area = RangeRef::new(at, at.offset_clamped(i64::from(tiles_r) * i64::from(h) - 1, i64::from(tiles_c) * i64::from(w) - 1));
+            crate::cmd::data::remove_validation_cells(&mut cx.sheet_mut(dest_sheet)?.validations, &[area]);
+        }
         for (tr, tc, r, c) in tiled_cells(src.height(), src.width(), tiles_r, tiles_c) {
             let sc = CellRef::new(src.start.row + r, src.start.col + c);
             let (dr, dc) = if transpose { (c, r) } else { (r, c) };
@@ -285,18 +330,8 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
             // The copied cell's validation rule replaces whatever rule the destination had.
-            if !link && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
-                let rule = src_sheet.validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(sc))).cloned();
-                let sh = cx.sheet_mut(dest_sheet)?;
-                crate::cmd::data::remove_validation_cells(&mut sh.validations, &[RangeRef::new(dest, dest)]);
-                if let Some(mut dv) = rule {
-                    // Relative references move with the rule, as pasted formulas do.
-                    let first = RangeRef::top_left(&dv.ranges).unwrap_or(sc);
-                    dv.f1 = crate::cmd::data::move_rule_formula(&dv.f1, first, dest);
-                    dv.f2 = dv.f2.map(|f| crate::cmd::data::move_rule_formula(&f, first, dest));
-                    dv.ranges = vec![RangeRef::new(dest, dest)];
-                    sh.validations.push(dv);
-                }
+            if pastes_validation {
+                pasted_rules.extend(moved_rule(cx.sheet_mut(dest_sheet)?, src_sheet, sc, dest, skip_blanks));
             }
             match what {
                 What::Comments => {
@@ -325,8 +360,9 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             }
             cx.touch(dest_sheet, dest);
         }
+        cx.sheet_mut(dest_sheet)?.validations.extend(pasted_rules);
         // Merged areas inside the copied block travel with it.
-        copy_merges(cx, dest_sheet, src_sheet, src, at, what, transpose)?;
+        copy_merges(cx, dest_sheet, src_sheet, src, at, (tiles_r, tiles_c), (h, w), what, transpose)?;
         if cut_move {
             // References elsewhere to the moved block now point to its new place.
             let dest_name = cx.wb.sheet(dest_sheet).map(|s| s.name.clone()).unwrap_or_default();

@@ -613,3 +613,47 @@ fn paste_tiles_a_column_across_whole_columns_and_large_ranges() {
     assert!(s.execute("edit.paste", json!({})).is_err());
     assert_eq!(at(&s, "G1"), Value::Empty);
 }
+
+/// A merged area in the copy is merged again in every tile of a repeated paste, not only the first.
+#[test]
+fn paste_tiles_merged_areas_into_every_tile() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1:A3", "values": [[1], [2], [3]]})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:A2"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A:A"})).unwrap();
+    s.execute("selection.set", json!({"range": "B:D"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    let merges: Vec<String> = s.doc().unwrap().wb.active().unwrap().merges.iter().map(|m| m.a1()).collect();
+    assert_eq!(merges, ["A1:A2", "B1:B2", "C1:C2", "D1:D2"]);
+
+    s.execute("edit.copy", json!({"range": "A1:A2"})).unwrap();
+    s.execute("selection.set", json!({"range": "F1:G4"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    let merges: Vec<String> = s.doc().unwrap().wb.active().unwrap().merges.iter().map(|m| m.a1()).collect();
+    assert_eq!(merges, ["A1:A2", "B1:B2", "C1:C2", "D1:D2", "F1:F2", "G1:G2", "F3:F4", "G3:G4"]);
+}
+
+/// A repeated paste gives every cell the copied cell's rule, moved to it, in place of the old one.
+#[test]
+fn paste_tiles_validation_rules_over_the_old_ones() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("data.validation", json!({"range": "A1", "type": "custom", "formula1": "=A1>10"})).unwrap();
+    s.execute("data.validation", json!({"range": "B1:C3", "type": "whole", "operator": "greater", "formula1": "0"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+    s.execute("selection.set", json!({"range": "B1:C2"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    let rules: Vec<(String, String)> = s
+        .doc()
+        .unwrap()
+        .wb
+        .active()
+        .unwrap()
+        .validations
+        .iter()
+        .map(|dv| (dv.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(","), dv.f1.clone()))
+        .collect();
+    let rule = |r: &str, f: &str| (r.to_string(), f.to_string());
+    assert_eq!(rules, [rule("A1", "A1>10"), rule("B3:C3", "0"), rule("B1", "B1>10"), rule("C1", "C1>10"), rule("B2", "B2>10"), rule("C2", "C2>10")]);
+}
