@@ -181,6 +181,26 @@ fn filter_menu_uses_the_table_whose_header_was_clicked() {
 }
 
 #[test]
+fn galley_baseline_bounds_preserves_empty_edge_rows() {
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |_| {});
+    output.textures_delta.clear();
+    for text in ["\nHello", "Hello\n", "\n\nHello\n\n", "\n\n"] {
+        let galley = ctx.fonts_mut(|fonts| fonts.layout(text.to_string(), egui::FontId::proportional(16.0), Color32::BLACK, 200.0));
+        assert_eq!(galley.rows.len(), text.matches('\n').count() + 1);
+        let (top, bottom) = super::cell_paint::galley_baseline_bounds(&galley);
+        let first = galley.rows.first().expect("layout has a first row");
+        let last = galley.rows.last().expect("layout has a last row");
+        if first.glyphs.is_empty() {
+            assert_eq!(top, first.rect().top(), "leading blank rows contribute to the top bound: {text:?}");
+        }
+        if last.glyphs.is_empty() {
+            assert_eq!(bottom, last.rect().bottom(), "trailing blank rows contribute to the bottom bound: {text:?}");
+        }
+    }
+}
+
+#[test]
 fn cell_text_y_moves_monotonically_when_the_text_fits() {
     let rect_std = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 20.0));
     let gh = 16.0;
