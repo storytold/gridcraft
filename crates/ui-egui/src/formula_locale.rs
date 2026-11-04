@@ -1,4 +1,5 @@
 //! UI formula syntax boundary. Engine commands, control/API callers and XLSX keep English.
+use crate::i18n::Language;
 use gridcraft_engine::formula::{self, FormulaLocale, ParseError};
 use gridcraft_engine::model::Workbook;
 
@@ -27,15 +28,7 @@ pub(crate) fn canonical(
     {
         let known = |name: &str| wb.name(name, sheet).is_some() || wb.table(name).is_some();
         // Match the engine's existing convenience for missing closing parentheses.
-        let mut body = body.to_string();
-        let mut expr = formula::parse_input(&body, locale, known);
-        for _ in 0..8 {
-            if expr.is_ok() {
-                break;
-            }
-            body.push(')');
-            expr = formula::parse_input(&body, locale, known);
-        }
+        let expr = formula::parse_closing_parens(body, |text| formula::parse_input(text, locale, known));
         return Ok(format!("={}", formula::print(&expr?)));
     }
     // Decimal-comma number entry follows the same preference, without rewriting text or dates.
@@ -85,21 +78,6 @@ fn hide_udf_prefix(text: &str, locale: FormulaLocale) -> String {
     out.push_str(body.get(from..).unwrap_or(""));
     out
 }
-
-// Descriptions/signatures for the supported Spanish function table; untranslated functions
-// retain their English help. Parameter punctuation follows the same locale as entry.
-const SPANISH_HELP: &[(&str, &str, &str)] = &[
-    ("SUM", "SUMA(número1; [número2]; ...)", "Suma los números."),
-    ("AVERAGE", "PROMEDIO(número1; [número2]; ...)", "Devuelve el promedio de los números."),
-    ("IF", "SI(prueba_lógica; valor_si_verdadero; [valor_si_falso])", "Devuelve un valor según una condición."),
-    ("COUNT", "CONTAR(valor1; [valor2]; ...)", "Cuenta las celdas que contienen números."),
-    ("SUMIF", "SUMAR.SI(rango; criterio; [rango_suma])", "Suma las celdas que cumplen un criterio."),
-    ("COUNTIF", "CONTAR.SI(rango; criterio)", "Cuenta las celdas que cumplen un criterio."),
-    ("VLOOKUP", "BUSCARV(valor_buscado; matriz; indicador_columnas; [ordenado])", "Busca un valor en la primera columna de una tabla."),
-    ("TODAY", "HOY()", "Devuelve la fecha actual."),
-    ("TRUE", "VERDADERO()", "Devuelve el valor lógico VERDADERO."),
-    ("FALSE", "FALSO()", "Devuelve el valor lógico FALSO."),
-];
 
 /// Original Hungarian help for common functions; other functions keep English help.
 const HUNGARIAN_HELP: &[(&str, &str, &str)] = &[
@@ -152,42 +130,69 @@ const HUNGARIAN_HELP: &[(&str, &str, &str)] = &[
     ("VAR.P", "VAR.S(szám1; [szám2]; ...)", "Kiszámítja a teljes sokaság varianciáját."),
 ];
 
-/// Select help by UI locale without changing the canonical function identity.
-fn localized_help(locale: FormulaLocale) -> &'static [(&'static str, &'static str, &'static str)] {
-    match locale {
-        FormulaLocale::Es => SPANISH_HELP,
-        FormulaLocale::Hu => HUNGARIAN_HELP,
-        _ => &[],
-    }
-}
-
-/// Signature for a name typed in the selected formula language.
-pub(crate) fn signature(name: &str, locale: FormulaLocale) -> Option<String> {
-    canonical_signature(locale.canonical_name(name), locale)
+/// A function's argument hint. The name and separators follow the formula syntax; the argument
+/// names follow the interface language, all of them or none, so a hint never mixes two languages.
+pub(crate) fn signature(name: &str, locale: FormulaLocale, language: Language) -> Option<String> {
+    canonical_signature(locale.canonical_name(name), locale, language)
 }
 
 /// Help for a canonical catalog name, without interpreting it as a localized alias.
-pub(crate) fn canonical_signature(canonical: &str, locale: FormulaLocale) -> Option<String> {
-    if let Some((_, signature, _)) = localized_help(locale).iter().find(|(name, ..)| *name == canonical) {
-        return Some((*signature).into());
+pub(crate) fn canonical_signature(canonical: &str, locale: FormulaLocale, language: Language) -> Option<String> {
+    if language == Language::Hu
+        && let Some((_, signature, _)) = HUNGARIAN_HELP.iter().find(|(name, ..)| *name == canonical)
+        && let Some((_, args)) = signature.split_once('(')
+    {
+        return Some(format!("{}({}", locale.function_name(canonical), args.replace(';', &locale.list_separator().to_string())));
     }
-    crate::formula_bar::function_signature(canonical).map(|s| {
-        let localized = s.strip_prefix(canonical).map(|tail| format!("{}{tail}", locale.function_name(canonical))).unwrap_or(s);
-        localized.replace(',', &locale.list_separator().to_string())
-    })
+    let english = crate::formula_bar::function_signature(canonical)?;
+    let Some((head, args)) = split_signature(&english) else { return Some(english) };
+    let separator = format!("{} ", locale.list_separator());
+    let args = match args.iter().map(|arg| translate_argument(arg, language)).collect::<Option<Vec<_>>>() {
+        Some(translated) => translated.join(&separator),
+        None => args.join(&separator),
+    };
+    Some(format!("{}({args})", locale.function_name(head)))
 }
 
-/// Description for a name typed in the selected formula language.
-pub(crate) fn description(name: &str, locale: FormulaLocale) -> Option<String> {
-    canonical_description(locale.canonical_name(name), locale)
+/// A function's description in the interface language (English while untranslated).
+pub(crate) fn description(name: &str, locale: FormulaLocale, language: Language) -> Option<String> {
+    canonical_description(locale.canonical_name(name), language)
 }
 
-/// Description for a canonical catalog name, with an English fallback.
-pub(crate) fn canonical_description(canonical: &str, locale: FormulaLocale) -> Option<String> {
-    if let Some((_, _, description)) = localized_help(locale).iter().find(|(name, ..)| *name == canonical) {
+/// A description for a canonical catalog name in the selected interface language.
+pub(crate) fn canonical_description(canonical: &str, language: Language) -> Option<String> {
+    if language == Language::Hu
+        && let Some((_, _, description)) = HUNGARIAN_HELP.iter().find(|(name, ..)| *name == canonical)
+    {
         return Some((*description).into());
     }
-    crate::formula_bar::function_description(canonical)
+    let english = crate::formula_bar::function_description(canonical)?;
+    Some(language.function_description(&english).map_or(english, str::to_string))
+}
+
+/// `SUM(number1, [number2], ...)` -> `SUM` and its arguments as written.
+fn split_signature(signature: &str) -> Option<(&str, Vec<&str>)> {
+    let (head, rest) = signature.split_once('(')?;
+    let inner = rest.strip_suffix(')')?;
+    Some((head, if inner.is_empty() { Vec::new() } else { inner.split(", ").collect() }))
+}
+
+/// `[number2]` -> `number`. A bracket can open or close on its own (SWITCH's
+/// `[default_or_value2, result2]`, LAMBDA's `[parameter1, ...]`).
+fn argument_name(arg: &str) -> &str {
+    let arg = arg.strip_prefix('[').unwrap_or(arg);
+    let arg = arg.strip_suffix(']').unwrap_or(arg);
+    arg.trim_end_matches(|c: char| c.is_ascii_digit())
+}
+
+/// `[number2]` -> `[número2]`: brackets, index and `...` stay.
+fn translate_argument(arg: &str, language: Language) -> Option<String> {
+    let name = argument_name(arg);
+    if name == "..." {
+        return Some(arg.to_string());
+    }
+    // `arg` is `[`? + `name` + index + `]`?, so the first match is the name itself.
+    Some(arg.replacen(name, language.function_argument(name)?, 1))
 }
 
 /// Avoid suggesting an alias that would call a workbook/table name instead of the function.
@@ -212,28 +217,53 @@ pub(crate) fn display_template(text: &str, locale: FormulaLocale, wb: &Workbook,
 mod tests {
     use super::*;
 
+    /// The hint for `name`, empty when there is none.
+    fn sig(name: &str, locale: FormulaLocale, language: Language) -> String {
+        signature(name, locale, language).unwrap_or_default()
+    }
+
+    /// Hints keep the formula syntax's name and separators and translate the argument names
+    /// only when the interface language has them all.
+    #[test]
+    fn function_help_follows_the_interface_language_and_the_formula_syntax() {
+        use FormulaLocale::{En, Es};
+        // Spanish help over English formulas: the name and `,` stay as typed; brackets, indexes
+        // and `...` survive.
+        assert_eq!(sig("IF", En, Language::Es), "IF(prueba_lógica, [valor_si_verdadero], [valor_si_falso])");
+        assert_eq!(sig("SUM", En, Language::Es), "SUM(número1, [número2], ...)");
+        assert_eq!(description("IF", En, Language::Es).as_deref(), Some("Devuelve un valor según una condición."));
+        // Spanish names and separators, from a localized name.
+        assert_eq!(sig("suma", Es, Language::Es), "SUMA(número1; [número2]; ...)");
+        assert_eq!(description("SUMA", Es, Language::Es).as_deref(), Some("Suma los números."));
+        // An argument list Spanish covers only in part stays English instead of mixing (the name
+        // is whatever the Spanish formula table calls SUMIFS).
+        let sumifs = sig("SUMIFS", Es, Language::Es);
+        assert!(sumifs.ends_with("(sum_range; criteria_range1; criteria1; ...)"), "{sumifs}");
+        assert_eq!(description("SUMIFS", Es, Language::Es).as_deref(), Some("Adds the cells that meet every condition."));
+        assert_eq!(sig("IF", En, Language::En), "IF(logical_test, [value_if_true], [value_if_false])");
+    }
     #[test]
     fn hungarian_help_covers_registered_functions_and_preserves_fallbacks() {
         for (name, signature, description) in HUNGARIAN_HELP {
             assert!(crate::formula_bar::function_signature(name).is_some(), "{name}");
             assert!(signature.starts_with(&format!("{}(", FormulaLocale::Hu.function_name(name))));
             assert!(!description.is_empty());
-            assert_eq!(canonical_signature(name, FormulaLocale::Hu).as_deref(), Some(*signature));
-            assert_eq!(canonical_description(name, FormulaLocale::Hu).as_deref(), Some(*description));
-            assert_eq!(canonical_description(name, FormulaLocale::En), crate::formula_bar::function_description(name));
+            assert_eq!(canonical_signature(name, FormulaLocale::Hu, Language::Hu).as_deref(), Some(*signature));
+            assert_eq!(canonical_description(name, Language::Hu).as_deref(), Some(*description));
+            assert_eq!(canonical_description(name, Language::En), crate::formula_bar::function_description(name));
         }
-        assert_eq!(canonical_description("SIN", FormulaLocale::Hu), crate::formula_bar::function_description("SIN"));
-        assert_eq!(canonical_signature("NOT_A_FUNCTION", FormulaLocale::Hu), None);
+        assert_eq!(canonical_description("SIN", Language::Hu), crate::formula_bar::function_description("SIN"));
+        assert_eq!(canonical_signature("NOT_A_FUNCTION", FormulaLocale::Hu, Language::Hu), None);
     }
 
     #[test]
     fn hungarian_help_distinguishes_catalog_names_from_typed_aliases() {
         let locale = FormulaLocale::Hu;
-        assert_eq!(signature("VAR.S", locale), canonical_signature("VAR.P", locale));
-        assert_eq!(description("VAR.S", locale), canonical_description("VAR.P", locale));
-        assert!(canonical_signature("VAR.S", locale).unwrap().starts_with("VAR.M("));
-        assert!(canonical_signature("VAR.P", locale).unwrap().starts_with("VAR.S("));
-        assert!(canonical_description("VAR.S", locale).unwrap().starts_with("Minta"));
-        assert!(description("VAR.S", locale).unwrap().contains("teljes sokaság"));
+        assert_eq!(signature("VAR.S", locale, Language::Hu), canonical_signature("VAR.P", locale, Language::Hu));
+        assert_eq!(description("VAR.S", locale, Language::Hu), canonical_description("VAR.P", Language::Hu));
+        assert!(canonical_signature("VAR.S", locale, Language::Hu).unwrap().starts_with("VAR.M("));
+        assert!(canonical_signature("VAR.P", locale, Language::Hu).unwrap().starts_with("VAR.S("));
+        assert!(canonical_description("VAR.S", Language::Hu).unwrap().starts_with("Minta"));
+        assert!(description("VAR.S", locale, Language::Hu).unwrap().contains("teljes sokaság"));
     }
 }

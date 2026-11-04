@@ -2,6 +2,17 @@
 
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Page order" => "Oldalsorrend",
+        "Down, then over" => "Lefelé, majd jobbra",
+        "Over, then down" => "Jobbra, majd lefelé",
+        "(script, 1 step)" => "(szkript, 1 lépés)",
+        "(script, {steps} steps)" => "(szkript, {steps} lépés)",
+        "This workbook also has a VBA project. GridCraft keeps it when you save but does not run it." => {
+            "A munkafüzet VBA-projektet is tartalmaz. A GridCraft mentéskor megőrzi, de nem futtatja."
+        }
+        "Name Box" => "Névmező",
+        "Cell Editor" => "Cellaszerkesztő",
+        "Font Size" => "Betűméret",
         "Paste" => "Beillesztés",
         "Paste Values" => "Értékek beillesztése",
         "Paste Formulas" => "Képletek beillesztése",

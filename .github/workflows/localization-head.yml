@@ -1,0 +1,66 @@
+name: Localization head
+
+# Keep the shared merge gate; this additional job records native localization evidence for
+# the exact reviewed PR commit, rather than GitHub's synthetic merge commit.
+on:
+  push:
+    branches-ignore: [main, release]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: localization-head-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    if: ${{ github.event_name != 'push' || github.event.repository.fork }}
+    name: Native localization on PR head
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/.work/craft-fonts
+      CRAFT_FONTS_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify reviewed revision
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          echo "Native localization tests for commit: $EXPECTED_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - name: Check out pinned font input
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+          path: .work/craft-fonts
+          persist-credentials: false
+      - name: Verify font revision
+        run: test "$(git -C .work/craft-fonts rev-parse HEAD)" = "b076417b5880bd4154bd22f00695b1d28c6bea83"
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev \
+            libxi-dev libgtk-3-dev libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: false
+      - name: Native catalog and formula regressions
+        run: |
+          cargo test --locked -p gridcraft-formula
+          cargo test --locked -p gridcraft-ui-egui --lib
+          cargo test --locked -p gridcraft-ui-egui --test it formula_locale::
