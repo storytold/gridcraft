@@ -20,7 +20,8 @@ pub(crate) fn preset_button(ui: &mut Ui, label: &str, preset: &str) -> Response 
 
 /// Paints the remembered border preset as a compact Home ribbon icon.
 pub(crate) fn paint_preset_icon(painter: &egui::Painter, rect: Rect, preset: &str, color: Color32) {
-    paint_preset_diagram(painter, rect.shrink(2.0), preset, color, color.gamma_multiply(0.45));
+    let muted = Tokens::get(painter.ctx()).text_dim;
+    paint_preset_diagram(painter, rect.shrink(2.0), preset, color, muted);
 }
 
 /// Uses the same edge styles for the Borders menu and its main button icon.
