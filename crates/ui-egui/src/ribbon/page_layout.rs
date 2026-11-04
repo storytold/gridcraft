@@ -1,6 +1,6 @@
 use super::controls::{act, anchor_keytip, checkbox_on, control_keytip, invoke, keytip, menu_items, popup_command, sep};
 use super::home::FONTS;
-use super::{Color32, Icon, Sense, SheetApp, Tokens, Ui, big_button, json, keytip_table, small_button, vec2};
+use super::{Color32, Icon, Sense, SheetApp, Tokens, Ui, big_button, big_split_button, json, keytip_table, small_button, vec2};
 
 /// Whether the Scale box reads "Automatic": a fit pair only counts when one dimension is positive.
 /// Choosing Automatic for both Width and Height stores `Some((0, 0))`, which print layout treats as
@@ -146,11 +146,23 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    let __k = big_button(ui, Icon::Picture, "Background", "Sheet Background", false);
-    control_keytip(app, ui, &__k, "pageLayout.background");
-    if __k.clicked() {
+    let (bg, bg_menu) = big_split_button(ui, Icon::Picture, "Background", "Sheet Background");
+    control_keytip(app, ui, &bg, "pageLayout.background");
+    if bg.clicked() {
         act(app, "pageLayout.background", json!({}));
     }
+    // Excel removes a saved background from the same control; its command only clears with
+    // `{"clear": true}`, so the arrow offers it instead of opening the picture chooser again.
+    egui::Popup::menu(&bg_menu).show(|ui| {
+        if ui.button(app.ui.language.tr("Background…")).clicked() {
+            act(app, "pageLayout.background", json!({}));
+            ui.close();
+        }
+        if ui.button(app.ui.language.tr("Clear Background")).clicked() {
+            act(app, "pageLayout.background", json!({"clear": true}));
+            ui.close();
+        }
+    });
     let __k = big_button(ui, Icon::Sheet, "Print\nTitles", "Print Titles", false);
     control_keytip(app, ui, &__k, "pageLayout.printTitles");
     if __k.clicked() {

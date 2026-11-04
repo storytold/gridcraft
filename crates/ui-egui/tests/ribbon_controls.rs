@@ -394,3 +394,21 @@ fn background_confirms_through_the_background_command() {
     assert_eq!(sh.images[0].alt, "Sheet background");
     assert_eq!(sh.images[0].anchor.cell, CellRef::parse("A1").unwrap());
 }
+
+/// Page Layout › Background also offers Clear Background: the command removes a saved background
+/// only with `{"clear": true}`.
+#[test]
+fn background_menu_clears_the_saved_background() {
+    let mut h = harness();
+    run(&mut h, "pageLayout.background", json!({"base64": "bm90IGEgcGljdHVyZQ=="}));
+    assert_eq!(h.state().session.active().and_then(|d| d.wb.active().map(|sh| sh.images.len())), Some(1));
+    tab(&mut h, "Page Layout");
+    click(&mut h, "Background options");
+    click(&mut h, "Clear Background");
+    assert_eq!(
+        h.state().session.active().and_then(|d| d.wb.active().map(|sh| sh.images.len())),
+        Some(0),
+        "the menu action clears the saved background"
+    );
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+}
