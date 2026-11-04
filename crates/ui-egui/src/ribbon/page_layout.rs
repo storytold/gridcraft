@@ -2,6 +2,13 @@ use super::controls::{act, anchor_keytip, checkbox_on, control_keytip, invoke, k
 use super::home::FONTS;
 use super::{Color32, Icon, Sense, SheetApp, Tokens, Ui, big_button, json, keytip_table, small_button, vec2};
 
+/// Whether the Scale box reads "Automatic": a fit pair only counts when one dimension is positive.
+/// Choosing Automatic for both Width and Height stores `Some((0, 0))`, which print layout treats as
+/// no fit and prints at the stored scale, so the percentage is shown instead.
+fn fits_automatic(fit: Option<(u16, u16)>) -> bool {
+    fit.is_some_and(|(w, h)| w > 0 || h > 0)
+}
+
 pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     let lang = app.ui.language;
     let th = big_button(ui, Icon::Theme, "Themes", "Themes", true);
@@ -193,6 +200,7 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     // Scale to Fit
     let (scale, fit) = app.session.active().and_then(|d| d.wb.active().map(|s| (s.print.scale, s.print.fit_to))).unwrap_or((100, None));
     let (fit_w, fit_h) = fit.unwrap_or((0, 0));
+    let auto = fits_automatic(fit);
     let t = Tokens::get(ui.ctx());
     let pages = |n: u16| if n == 0 { lang.tr("Automatic").to_string() } else { format!("{n} {}", lang.tr("pages")) };
     ui.vertical(|ui| {
@@ -218,13 +226,13 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
         }
         ui.horizontal(|ui| {
             let label = ui.label(egui::RichText::new(lang.tr("Scale")).font(crate::theme::ui_font(11.5)).color(t.text_dim));
-            let text = if fit.is_some() { lang.tr("Automatic").to_string() } else { format!("{scale}%") };
+            let text = if auto { lang.tr("Automatic").to_string() } else { format!("{scale}%") };
             craft_ui::ComboBox::from_id_salt("scale_to_fit_scale")
                 .width(96.0)
                 .selected_text(egui::RichText::new(text).font(crate::theme::ui_font(12.5)))
                 .show_ui(ui, |ui| {
                     for v in [10u16, 25, 50, 75, 80, 90, 100, 125, 150, 200, 400] {
-                        if ui.selectable_label(fit.is_none() && scale == v, format!("{v}%")).clicked() {
+                        if ui.selectable_label(!auto && scale == v, format!("{v}%")).clicked() {
                             act(app, "pageLayout.scaleToFit", json!({"scale": v}));
                         }
                     }
@@ -297,5 +305,18 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     }
     if r.clicked() {
         act(app, "view.rightToLeft", json!({"on": !rtl}));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fits_automatic;
+
+    #[test]
+    fn automatic_only_when_a_fit_dimension_is_positive() {
+        assert!(!fits_automatic(None));
+        assert!(!fits_automatic(Some((0, 0))), "both Automatic stores (0, 0): the stored scale applies");
+        assert!(fits_automatic(Some((1, 0))));
+        assert!(fits_automatic(Some((0, 2))));
     }
 }

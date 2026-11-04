@@ -1125,7 +1125,7 @@ impl Dialog {
                 d
             }
             "consolidate" => {
-                let cell = app.session.active().map(|d| d.selection.a1()).unwrap_or_else(|| "A1".into());
+                let cell = app.session.active().map(|d| d.selection.active.a1()).unwrap_or_else(|| "A1".into());
                 Dialog::form(
                     "consolidate",
                     "Consolidate",
