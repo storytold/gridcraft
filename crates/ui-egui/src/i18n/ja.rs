@@ -1015,6 +1015,9 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("No performance issues found.", "パフォーマンスの問題は見つかりませんでした。"),
     ("Showing the first {shown} of {total} cells.", "最初の {shown} / {total} セルを表示しています。"),
     ("Optimized {count} cells.", "{count} 個のセルを最適化しました。"),
+    ("Workbook Performance", "ブックのパフォーマンス"),
+    ("Check\nPerformance", "パフォーマンス\nチェック"),
+    ("Check Performance", "パフォーマンス チェック"),
     ("Collapse dialog", "ダイアログを折りたたむ"),
     ("Expand dialog", "ダイアログを展開する"),
 ];
