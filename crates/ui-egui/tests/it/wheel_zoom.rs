@@ -129,6 +129,148 @@ fn with_view_animations_off_a_notch_steps_at_once() {
     assert_eq!(seen.last(), Some(&120));
 }
 
+/// Runs Undo or Redo and lets a glide, if one were left, play out.
+fn run_history(h: &mut Harness, id: &str) {
+    h.state_mut().run(id, json!({})).unwrap();
+    h.run_steps(60);
+}
+
+#[test]
+fn one_zoom_gesture_is_one_undo_step() {
+    let mut h = animated();
+    turn_and_watch(&mut h, 1.0, 6);
+    turn_and_watch(&mut h, 1.0, 6);
+    turn_and_watch(&mut h, 1.0, 60);
+    assert_eq!(zoom(&h), 170);
+    assert_eq!(h.state().session.active().unwrap().undo.len(), 1);
+    run_history(&mut h, "edit.undo");
+    assert_eq!(zoom(&h), 100);
+    run_history(&mut h, "edit.redo");
+    assert_eq!(zoom(&h), 170);
+}
+
+#[test]
+fn one_trackpad_pinch_is_one_undo_step() {
+    let mut h = animated();
+    // macOS sends a pinch as many small zoom factors, with no end to it.
+    for _ in 0..30 {
+        h.input_mut().events.push(Event::Zoom(1.05));
+        h.step();
+    }
+    h.run_steps(60);
+    let pinched = zoom(&h);
+    assert!(pinched > 150, "{pinched}");
+    assert_eq!(h.state().session.active().unwrap().undo.len(), 1);
+    run_history(&mut h, "edit.undo");
+    assert_eq!(zoom(&h), 100);
+    run_history(&mut h, "edit.redo");
+    assert_eq!(zoom(&h), pinched);
+}
+
+#[test]
+fn one_drag_of_the_zoom_slider_is_one_undo_step() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness();
+    let r = h.get_by_label("Zoom").rect();
+    let (start, y) = (r.left() as f32 + 40.0, r.center().y as f32);
+    h.input_mut().events.push(Event::PointerMoved(egui::pos2(start, y)));
+    h.step();
+    h.input_mut().events.push(Event::PointerButton {
+        pos: egui::pos2(start, y),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Modifiers::NONE,
+    });
+    h.step();
+    let pressed_at = zoom(&h);
+    for dx in 1..=20 {
+        h.input_mut().events.push(Event::PointerMoved(egui::pos2(start + dx as f32 * 2.0, y)));
+        h.step();
+    }
+    h.input_mut().events.push(Event::PointerButton {
+        pos: egui::pos2(start + 40.0, y),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.step();
+    assert!(zoom(&h) > pressed_at, "{} after {pressed_at}", zoom(&h));
+    assert_eq!(h.state().session.active().unwrap().undo.len(), 1);
+    run_history(&mut h, "edit.undo");
+    assert_eq!(zoom(&h), 100);
+}
+
+/// Pinches in `frames` small factors, one a frame, from the fingers landing to their lifting.
+fn pinch(h: &mut Harness, frames: usize) {
+    for _ in 0..frames {
+        h.input_mut().events.push(Event::Zoom(1.05));
+        h.step();
+    }
+}
+
+/// Asks Undo until the zoom has been through `zooms`, each one press away.
+fn assert_undoes_through(h: &mut Harness, zooms: &[u16]) {
+    for &z in zooms {
+        run_history(h, "edit.undo");
+        assert_eq!(zoom(h), z);
+    }
+}
+
+#[test]
+fn quick_pinches_are_separate_undo_steps() {
+    let mut h = animated();
+    pinch(&mut h, 8);
+    h.run_steps(15);
+    let first = zoom(&h);
+    pinch(&mut h, 8);
+    h.run_steps(15);
+    let second = zoom(&h);
+    pinch(&mut h, 8);
+    h.run_steps(60);
+    assert!(100 < first && first < second && second < zoom(&h), "{first} {second} {}", zoom(&h));
+    assert_eq!(h.state().session.active().unwrap().undo.len(), 3);
+    assert_undoes_through(&mut h, &[second, first, 100]);
+}
+
+#[test]
+fn a_new_pinch_lands_the_glide_of_the_last_one_first() {
+    let mut h = animated();
+    pinch(&mut h, 4);
+    h.input_mut().events.push(Event::Zoom(1.0));
+    h.step();
+    assert!(zoom(&h) > 100 && zoom(&h) < 120, "still gliding: {}", zoom(&h));
+    pinch(&mut h, 4);
+    h.run_steps(60);
+    assert_eq!(zoom(&h), 140);
+    assert_undoes_through(&mut h, &[120, 100]);
+}
+
+#[test]
+fn zoom_gestures_a_pause_apart_are_separate_undo_steps() {
+    let mut h = animated();
+    turn_and_watch(&mut h, 1.0, 120);
+    turn_and_watch(&mut h, 1.0, 120);
+    assert_eq!(zoom(&h), 140);
+    run_history(&mut h, "edit.undo");
+    assert_eq!(zoom(&h), 120);
+    run_history(&mut h, "edit.undo");
+    assert_eq!(zoom(&h), 100);
+}
+
+#[test]
+fn an_undo_during_a_gesture_ends_it() {
+    let mut h = animated();
+    turn_and_watch(&mut h, 1.0, 6);
+    run_history(&mut h, "edit.undo");
+    assert_eq!(zoom(&h), 100, "the glide doesn't carry on");
+    h.state_mut().run("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    turn_and_watch(&mut h, 1.0, 40);
+    assert_eq!(zoom(&h), 120);
+    run_history(&mut h, "edit.undo");
+    assert_eq!(zoom(&h), 100, "the zoom is a step of its own, after the edit");
+    assert_eq!(h.state().session.active().unwrap().undo.len(), 1, "and the edit's step is still there");
+}
+
 #[test]
 fn a_notch_out_returns_to_the_zoom_before_the_notch_in() {
     let mut h = harness();
