@@ -386,6 +386,9 @@ pub struct Prefs {
     pub user_name: String,
     pub default_font: String,
     pub default_font_size: f32,
+    /// Zoom percentage for sheets in a newly created blank workbook.
+    /// This application preference is not applied to workbooks opened from files.
+    pub default_zoom: u16,
     pub sheets_in_new_workbook: usize,
     pub r1c1: bool,
     /// Words added with Add to Dictionary.
@@ -427,6 +430,7 @@ impl Default for Prefs {
             user_name: "GridCraft User".into(),
             default_font: gridcraft_model::DEFAULT_FONT.into(),
             default_font_size: gridcraft_model::DEFAULT_FONT_SIZE,
+            default_zoom: 100,
             sheets_in_new_workbook: 1,
             r1c1: false,
             user_dictionary: vec![],
@@ -611,6 +615,12 @@ impl Session {
         for _ in 1..self.prefs.sheets_in_new_workbook.clamp(1, 255) {
             let name = wb.next_sheet_name();
             wb.sheets.push(Arc::new(gridcraft_model::Sheet::new(name)));
+        }
+        // Apply the preference only when creating a blank workbook.
+        // Opening an existing workbook must preserve its saved sheet zooms.
+        let zoom = self.prefs.default_zoom.clamp(10, 400);
+        for sheet in &mut wb.sheets {
+            Arc::make_mut(sheet).zoom = zoom;
         }
         self.add_document(DocState::new(wb, None, format!("Book{n}"), Trust::Local))
     }
