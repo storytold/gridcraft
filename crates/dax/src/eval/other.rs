@@ -640,6 +640,19 @@ fn current_row_index(
     if wanted.is_empty() {
         return Err(EvalError::new("RANK/ROWNUMBER requires a row context or a single-value filter context"));
     }
+    // `wanted` holds model column indexes; the relation may be a projection of the model table
+    // (`ALL(Sales[Region])`), so translate each to its position in the relation by name.
+    let names = ev.model().tables.get(relation_table).map(|table| &table.columns);
+    let wanted: Vec<(usize, Scalar)> = wanted
+        .into_iter()
+        .filter_map(|(column, value)| {
+            let name = names?.get(column)?.name.as_str();
+            table.column_index(name).map(|position| (position, value))
+        })
+        .collect();
+    if wanted.is_empty() {
+        return Err(EvalError::new("RANK/ROWNUMBER requires a row context or a single-value filter context"));
+    }
     table
         .rows
         .iter()

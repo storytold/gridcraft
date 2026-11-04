@@ -477,3 +477,28 @@ fn allexcept_keeps_only_the_named_columns_filters_in_calculate() {
     // ALLEXCEPT keeps the region filter and drops the amount one: two East rows remain.
     assert_eq!(eval_with("CALCULATE(COUNTROWS(Sales), ALLEXCEPT(Sales, Sales[Region]))").expect("ALLEXCEPT"), Scalar::Integer(2));
 }
+
+#[test]
+fn selectcolumns_projects_only_the_named_columns() {
+    let table = eval_table("SELECTCOLUMNS(Sales, \"R\", Sales[Region])").expect("SELECTCOLUMNS");
+    assert_eq!(table.columns.iter().map(|column| column.name.as_str()).collect::<Vec<_>>(), vec!["R"]);
+    assert_eq!(
+        column(&table, "R"),
+        vec![Scalar::String("East".into()), Scalar::String("West".into()), Scalar::String("East".into()), Scalar::String("West".into())]
+    );
+    // ADDCOLUMNS still keeps the source columns and appends to them.
+    let added = eval_table("ADDCOLUMNS(Sales, \"Double\", Sales[Amount] * 2)").expect("ADDCOLUMNS");
+    assert_eq!(added.columns.len(), 6);
+    assert_eq!(column(&added, "Double"), vec![Scalar::Integer(200), Scalar::Integer(400), Scalar::Integer(600), Scalar::Integer(800)]);
+}
+
+#[test]
+fn topn_applies_each_order_pair_and_keeps_ties() {
+    let ascending = eval_table("TOPN(2, Sales, Sales[Amount], ASC)").expect("TOPN asc");
+    assert_eq!(column(&ascending, "Amount"), vec![Scalar::Integer(100), Scalar::Integer(200)]);
+    let descending = eval_table("TOPN(2, Sales, Sales[Amount], DESC)").expect("TOPN desc");
+    assert_eq!(column(&descending, "Amount"), vec![Scalar::Integer(400), Scalar::Integer(300)]);
+    // The second pair breaks the ties of the first: East rows first, larger amount first.
+    let two_keys = eval_table("TOPN(2, Sales, Sales[Region], ASC, Sales[Amount], DESC)").expect("TOPN two keys");
+    assert_eq!(column(&two_keys, "Amount"), vec![Scalar::Integer(300), Scalar::Integer(100)]);
+}

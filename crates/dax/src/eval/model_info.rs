@@ -10,8 +10,8 @@
 //! - `INFO.EXPRESSIONS` lists measure formulas, because [`DataModel`] has no Power Query
 //!   expressions; `Kind` is the model-expression value `1`.
 //!
-//! Restriction name/value pairs are accepted (the catalog types them as an open argument list)
-//! but not applied: the evaluator has a single complete model and no DMV restriction engine.
+//! Restriction name/value pairs keep the rows whose named column equals the value, as the DMV
+//! syntax means them; an unknown column name is an error.
 
 use crate::functions::catalog;
 use crate::model::{DataModel, Relationship};
@@ -819,19 +819,19 @@ pub(crate) fn call(_ev: &Evaluator<'_>, _name: &str, _args: &[BoundExpr], _ctx: 
     None
 }
 
-pub(crate) fn call_table(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], _ctx: &mut Context) -> Option<Result<TableValue, EvalError>> {
+pub(crate) fn call_table(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Option<Result<TableValue, EvalError>> {
     let upper = name.to_ascii_uppercase();
     // `INFO.STORAGETABLES` belongs to the `other` module; leave it (and non-INFO names) alone.
     if !upper.starts_with("INFO.") || upper == "INFO.STORAGETABLES" {
         return None;
     }
-    // Restrictions arrive as name/value pairs. They are accepted but not applied; a dangling
-    // name without a value is the one form the documented syntax rejects.
+    // Restrictions arrive as name/value pairs; a dangling name without a value is the one form
+    // the documented syntax rejects.
     if !args.len().is_multiple_of(2) {
         return Some(Err(EvalError::new("INFO function restrictions need a name and a value")));
     }
     let model = ev.model();
-    let result = match upper.as_str() {
+    let mut result = match upper.as_str() {
         "INFO.TABLES" => tables(model),
         "INFO.COLUMNS" => columns(model),
         "INFO.MEASURES" => measures(model),
@@ -1177,5 +1177,21 @@ pub(crate) fn call_table(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], _ct
         }
         _ => return None,
     };
+    // Keep the rows whose named column equals the restricted value (`INFO.TABLES("Name",
+    // "Sales")` is the Sales row); a name the rowset does not have is an error.
+    for pair in args.chunks(2) {
+        let column_name = match ev.eval(&pair[0], ctx) {
+            Ok(value) => value.to_text(),
+            Err(error) => return Some(Err(error)),
+        };
+        let wanted = match ev.eval(&pair[1], ctx) {
+            Ok(value) => value,
+            Err(error) => return Some(Err(error)),
+        };
+        let Some(position) = result.columns.iter().position(|column| column.name.eq_ignore_ascii_case(&column_name)) else {
+            return Some(Err(EvalError::new(format!("INFO restriction column `{column_name}` does not exist"))));
+        };
+        result.rows.retain(|row| row.get(position).is_some_and(|value| value.compare(&wanted) == Some(std::cmp::Ordering::Equal)));
+    }
     Some(Ok(result))
 }

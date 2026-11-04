@@ -239,7 +239,12 @@ fn compare_values(left: &[Scalar], right: &[Scalar]) -> Ordering {
 /// otherwise a column with the same name (SUMMARIZE accepts columns of the summarized table and
 /// of its related tables; derived tables keep their columns by name).
 fn group_value(ev: &Evaluator<'_>, table: &TableValue, row: &[Scalar], column: &ColumnRef) -> Result<Scalar, EvalError> {
-    if table.lineage == Some(column.table) {
+    // Only a table with the full model layout can be read at the model index; a projection
+    // (`VALUES(Sales[Region])`, `ALL(Sales[Region])`) is read by column name instead.
+    if table.lineage == Some(column.table)
+        && table.columns.len() > column.column
+        && table.column_index(&column.name).is_none_or(|index| index == column.column)
+    {
         return row.get(column.column).cloned().ok_or_else(|| EvalError::new("row is out of range"));
     }
     if let Some(lineage) = table.lineage

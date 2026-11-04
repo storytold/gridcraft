@@ -68,22 +68,26 @@ fn total(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context, 
     if args.len() < 2 || args.len() > max {
         return Err(EvalError::new(format!("{name} expects between 2 and {max} arguments")));
     }
+    // These functions are CALCULATE sugar: the row context transitions to filters first, and the
+    // expression then runs without row frames, so a measure argument cannot re-transition the
+    // window away.
+    let base = ev.transitioned_filters(ctx);
     let dates = date_column(ev, &args[1])?;
-    let visible = visible_dates(ev, dates, &ctx.filters);
+    let visible = visible_dates(ev, dates, &base);
     let Some(last) = visible.last().copied() else {
         return Ok(Scalar::Blank);
     };
     let year_end = if period == Period::Year && args.len() >= 4 { Some(year_end_serial(ev, &args[3], ctx)?) } else { None };
     let (start, _) = period_bounds(period, last, year_end);
 
-    let mut filters = date_table_filters(&ctx.filters, dates);
+    let mut filters = date_table_filters(&base, dates);
     if let Some(filter) = args.get(2) {
         apply_filter_arg(ev, filter, &mut filters, ctx)?;
     }
     // The window only keeps dates that exist in the date column, exactly like DATESMTD/YTD.
     let window = dates_between(ev, dates, start, last);
     filters.set(dates.table, dates.column, window.iter().map(|date| ScalarKey::from(&Scalar::DateTime(*date))));
-    let mut inner = Context { filters, rows: ctx.rows.clone(), vars: ctx.vars.clone() };
+    let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone() };
     ev.eval(&args[0], &mut inner)
 }
 
@@ -98,8 +102,9 @@ fn balance(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context
     if args.len() < 2 || args.len() > max {
         return Err(EvalError::new(format!("{name} expects between 2 and {max} arguments")));
     }
+    let base = ev.transitioned_filters(ctx);
     let dates = date_column(ev, &args[1])?;
-    let visible = visible_dates(ev, dates, &ctx.filters);
+    let visible = visible_dates(ev, dates, &base);
     let Some(last) = visible.last().copied() else {
         return Ok(Scalar::Blank);
     };
@@ -107,12 +112,12 @@ fn balance(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context
     let (start, end) = period_bounds(period, last, year_end);
     let boundary = if opening { start.floor() - 1.0 } else { end };
 
-    let mut filters = date_table_filters(&ctx.filters, dates);
+    let mut filters = date_table_filters(&base, dates);
     if let Some(filter) = args.get(2) {
         apply_filter_arg(ev, filter, &mut filters, ctx)?;
     }
     filters.set(dates.table, dates.column, [ScalarKey::from(&Scalar::DateTime(boundary))]);
-    let mut inner = Context { filters, rows: ctx.rows.clone(), vars: ctx.vars.clone() };
+    let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone() };
     ev.eval(&args[0], &mut inner)
 }
 
@@ -332,7 +337,15 @@ fn apply_filter_arg(ev: &Evaluator<'_>, expr: &BoundExpr, filters: &mut FilterCo
         }
         BoundExpr::Call { spec, args } if spec.name.eq_ignore_ascii_case("ALL") || spec.name.eq_ignore_ascii_case("REMOVEFILTERS") => {
             match args.first() {
-                Some(BoundExpr::Column { table, .. }) | Some(BoundExpr::Table(table)) => filters.remove_table(*table),
+                // A column argument clears only that column; a table argument clears the table.
+                Some(BoundExpr::Column { .. }) => {
+                    for arg in args {
+                        if let BoundExpr::Column { table, column } = arg {
+                            filters.filters.remove(&(*table, *column));
+                        }
+                    }
+                }
+                Some(BoundExpr::Table(table)) => filters.remove_table(*table),
                 _ => {}
             }
             Ok(())

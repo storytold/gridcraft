@@ -15,6 +15,9 @@ pub struct KeptOut {
     /// Written name of every kept part claimed so far, package-wide: a part's relationships may
     /// point at a part another owner holds (a sheet's PivotTable points at the workbook's cache).
     names: NameMap,
+    /// Written names already emitted, package-wide: a shared part can be kept by several sheets,
+    /// and the ZIP entry (and its `Override`) must appear once.
+    written: HashSet<String>,
 }
 
 impl KeptOut {
@@ -90,16 +93,18 @@ pub(super) fn write_parts(out: &mut Out, parts: &[PreservedPart]) -> NameMap {
         }
     }
     let names = out.kept.names.clone();
-    let mut written = HashSet::new();
     for p in parts {
         let Some(new) = names.get(&normalize(&p.name)).cloned() else { continue };
-        if !written.insert(new.clone()) {
+        if !out.kept.written.insert(new.clone()) {
             continue;
         }
         // The model database is found by extension, as Excel writes it (`Default
         // Extension="data"`). Another `.data` part with a different content type keeps its own
         // `Override`, because only one default per extension exists.
-        if p.content_type.eq_ignore_ascii_case(crate::pivot_model::CT_MODEL_DATA) && out.default_type("data", &p.content_type) {
+        if p.content_type.eq_ignore_ascii_case(crate::pivot_model::CT_MODEL_DATA)
+            && new.to_ascii_lowercase().ends_with(".data")
+            && out.default_type("data", &p.content_type)
+        {
             out.part(&new, None, p.data.to_vec());
         } else {
             out.part(&new, Some(&p.content_type), p.data.to_vec());

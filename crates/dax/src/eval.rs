@@ -705,8 +705,17 @@ impl<'a> Evaluator<'a> {
                 // reports that row, the way a measure reference does; the filter arguments then
                 // override the transitioned filters, and the row frames are gone.
                 let mut filters = self.transitioned_filters(ctx);
+                // DAX applies the removal modifiers to the outer context before it intersects the
+                // other filters, so the answer never depends on the order of the arguments.
                 for arg in &args[1..] {
-                    self.apply_filter(arg, &mut filters, ctx)?;
+                    if is_removal_modifier(arg) {
+                        self.apply_filter(arg, &mut filters, ctx)?;
+                    }
+                }
+                for arg in &args[1..] {
+                    if !is_removal_modifier(arg) {
+                        self.apply_filter(arg, &mut filters, ctx)?;
+                    }
                 }
                 let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone() };
                 return self.eval(&args[0], &mut inner);
@@ -837,8 +846,17 @@ impl<'a> Evaluator<'a> {
             }
             "CALCULATETABLE" => {
                 let mut filters = self.transitioned_filters(ctx);
+                // DAX applies the removal modifiers to the outer context before it intersects the
+                // other filters, so the answer never depends on the order of the arguments.
                 for arg in &args[1..] {
-                    self.apply_filter(arg, &mut filters, ctx)?;
+                    if is_removal_modifier(arg) {
+                        self.apply_filter(arg, &mut filters, ctx)?;
+                    }
+                }
+                for arg in &args[1..] {
+                    if !is_removal_modifier(arg) {
+                        self.apply_filter(arg, &mut filters, ctx)?;
+                    }
                 }
                 let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone() };
                 self.eval_table(&args[0], &mut inner)
@@ -979,7 +997,10 @@ impl<'a> Evaluator<'a> {
             }
             "ADDCOLUMNS" | "SELECTCOLUMNS" => {
                 let table = self.eval_table(args.first().ok_or_else(|| EvalError::new("table function needs a table"))?, ctx)?;
-                let mut columns = table.columns.clone();
+                // SELECTCOLUMNS projects: only the named expressions become columns, while
+                // ADDCOLUMNS keeps the source columns and appends to them.
+                let select = name.eq_ignore_ascii_case("SELECTCOLUMNS");
+                let mut columns = if select { Vec::new() } else { table.columns.clone() };
                 let mut expressions = Vec::new();
                 for pair in args[1..].chunks(2) {
                     let name = match pair.first() {
@@ -993,14 +1014,16 @@ impl<'a> Evaluator<'a> {
                 let mut rows = Vec::new();
                 for row in &table.rows {
                     ctx.rows.push(frame_for(self, &table, row));
-                    let mut out = row.clone();
+                    let mut out = if select { Vec::new() } else { row.clone() };
                     for expr in &expressions {
                         out.push(self.eval(expr, ctx)?);
                     }
                     ctx.rows.pop();
                     rows.push(out);
                 }
-                Ok(TableValue::new(columns, rows).with_lineage_if(table.lineage))
+                // A projected table's columns are new names, so it loses the source lineage; the
+                // added-columns form keeps it.
+                Ok(TableValue::new(columns, rows).with_lineage_if(if select { None } else { table.lineage }))
             }
             "UNION" => {
                 let tables = args.iter().map(|arg| self.eval_table(arg, ctx)).collect::<Result<Vec<_>, _>>()?;
@@ -1043,18 +1066,46 @@ impl<'a> Evaluator<'a> {
                 Ok(TableValue::new(columns, rows))
             }
             "TOPN" => {
-                let n = self.eval(args.first().ok_or_else(|| EvalError::new("TOPN needs N"))?, ctx)?.to_number().unwrap_or(0.0) as usize;
+                let n = self.eval(args.first().ok_or_else(|| EvalError::new("TOPN needs N"))?, ctx)?.to_number().unwrap_or(0.0).max(0.0) as usize;
                 let table = self.eval_table(args.get(1).ok_or_else(|| EvalError::new("TOPN needs a table"))?, ctx)?;
-                let order = args.get(2).ok_or_else(|| EvalError::new("TOPN needs an order expression"))?;
-                let mut scored = Vec::with_capacity(table.rows.len());
+                // `(expression, Order)` pairs; a missing Order word is DESC, as DAX documents.
+                let mut pairs: Vec<(&BoundExpr, bool)> = Vec::new();
+                let mut index = 2;
+                while index < args.len() {
+                    let expr = args.get(index).ok_or_else(|| EvalError::new("TOPN needs an order expression"))?;
+                    let descending = match args.get(index + 1) {
+                        Some(BoundExpr::Keyword(word)) if word.eq_ignore_ascii_case("ASC") => false,
+                        Some(BoundExpr::Keyword(word)) if word.eq_ignore_ascii_case("DESC") => true,
+                        None => true,
+                        Some(_) => return Err(EvalError::new("TOPN order must be ASC or DESC")),
+                    };
+                    pairs.push((expr, descending));
+                    index += 2;
+                }
+                if pairs.is_empty() {
+                    return Err(EvalError::new("TOPN needs an order expression"));
+                }
+                let descending: Vec<bool> = pairs.iter().map(|(_, desc)| *desc).collect();
+                let mut scored: Vec<(Vec<Scalar>, Vec<Scalar>)> = Vec::with_capacity(table.rows.len());
                 for row in &table.rows {
                     ctx.rows.push(frame_for(self, &table, row));
-                    let score = self.eval(order, ctx)?.to_number().unwrap_or(0.0);
+                    let mut keys = Vec::with_capacity(pairs.len());
+                    for (expr, _) in &pairs {
+                        keys.push(self.eval(expr, ctx)?);
+                    }
                     ctx.rows.pop();
-                    scored.push((score, row.clone()));
+                    scored.push((keys, row.clone()));
                 }
-                scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
-                Ok(TableValue::new(table.columns, scored.into_iter().take(n).map(|(_, row)| row).collect()).with_lineage_if(table.lineage))
+                scored.sort_by(|(left, _), (right, _)| compare_order_keys(left, right, &descending));
+                // DAX keeps every row tied with the Nth row, not exactly N rows.
+                let limit = n.min(scored.len());
+                let mut rows = Vec::with_capacity(limit);
+                for (position, (keys, row)) in scored.iter().enumerate() {
+                    if position < limit || (limit > 0 && compare_order_keys(keys, &scored[limit - 1].0, &descending) == Ordering::Equal) {
+                        rows.push(row.clone());
+                    }
+                }
+                Ok(TableValue::new(table.columns, rows).with_lineage_if(table.lineage))
             }
             "DATATABLE" => {
                 // The final argument is a table constructor of rows; earlier pairs describe columns.
@@ -1285,6 +1336,8 @@ impl<'a> Evaluator<'a> {
         }
     }
 
+    /// Whether a `CALCULATE` argument is a removal modifier (`ALL`, `REMOVEFILTERS`, `ALLEXCEPT`):
+    /// those narrow the outer context first, whatever their position in the call.
     fn apply_filter(&self, expr: &BoundExpr, filters: &mut FilterContext, ctx: &mut Context) -> Result<(), EvalError> {
         match expr {
             BoundExpr::Binary { op, left, right }
@@ -1301,10 +1354,10 @@ impl<'a> Evaluator<'a> {
                 // Build candidates without the target column's current filter: a CALCULATE filter
                 // replaces that column's filter, so the outer `Region = "West"` must not hide the
                 // rows that `Region = "East"` is meant to select.
-                let mut candidate_filters = ctx.filters.clone();
-                candidate_filters.filters.remove(&(table, column));
+                // Every filter argument is independent of the others: the candidates come from
+                // the column's whole domain, never from the filters another argument set.
                 let keys: BTreeSet<ScalarKey> = self
-                    .table(table, &candidate_filters)
+                    .table(table, &FilterContext::default())
                     .column(column)
                     .into_iter()
                     .filter(|candidate| {
@@ -1326,10 +1379,8 @@ impl<'a> Evaluator<'a> {
                 if members.columns.len() != 1 {
                     return Err(EvalError::new("CALCULATE filter IN needs a single-column table"));
                 }
-                let mut candidate_filters = ctx.filters.clone();
-                candidate_filters.filters.remove(&(*table, *column));
                 let keys: BTreeSet<ScalarKey> = self
-                    .table(*table, &candidate_filters)
+                    .table(*table, &FilterContext::default())
                     .column(*column)
                     .into_iter()
                     .filter(|candidate| members.rows.iter().any(|row| row.first().is_some_and(|member| member.strict_eq(candidate))))
@@ -1342,9 +1393,32 @@ impl<'a> Evaluator<'a> {
                 self.apply_relationship_modifier(spec.name, args, filters)?;
                 Ok(())
             }
+            BoundExpr::Call { spec, args } if spec.name == "TREATAS" => {
+                // TREATAS maps its source columns onto the target columns it names; the filter
+                // must land on the target, not on the table the values came from.
+                let table = self.eval_table(args.first().ok_or_else(|| EvalError::new("TREATAS needs a table"))?, ctx)?;
+                let targets = &args[1..];
+                if targets.is_empty() {
+                    return Err(EvalError::new("TREATAS needs at least one target column"));
+                }
+                for (index, column_expr) in targets.iter().enumerate() {
+                    let Some((target_table, target_column)) = self.resolve_column(column_expr) else {
+                        return Err(EvalError::new("TREATAS needs column references"));
+                    };
+                    let position = index.min(table.columns.len().saturating_sub(1));
+                    let keys: BTreeSet<ScalarKey> = table.rows.iter().filter_map(|row| row.get(position)).map(ScalarKey::from).collect();
+                    filters.set(target_table, target_column, keys);
+                }
+                Ok(())
+            }
             BoundExpr::Call { spec, args } if spec.name == "ALL" || spec.name == "REMOVEFILTERS" => {
-                if let Some(BoundExpr::Column { table, .. }) = args.first() {
-                    filters.remove_table(*table);
+                if args.first().is_some_and(|arg| matches!(arg, BoundExpr::Column { .. })) {
+                    // ALL(column)/REMOVEFILTERS(column) clears only the named columns' filters.
+                    for arg in args {
+                        if let BoundExpr::Column { table, column } = arg {
+                            filters.filters.remove(&(*table, *column));
+                        }
+                    }
                 } else if let Some(BoundExpr::Table(table)) = args.first() {
                     filters.remove_table(*table);
                 }
@@ -1624,6 +1698,26 @@ fn intersect_rows(rows: Vec<usize>, keep: &[usize]) -> Vec<usize> {
     rows.into_iter().filter(|row| keep.binary_search(row).is_ok()).collect()
 }
 
+/// Orders two `TOPN` key lists: the first differing key decides, in the direction its pair names.
+fn compare_order_keys(left: &[Scalar], right: &[Scalar], descending: &[bool]) -> Ordering {
+    for ((a, b), desc) in left.iter().zip(right).zip(descending) {
+        let ordering = a.compare(b).unwrap_or(Ordering::Equal);
+        let ordering = if *desc { ordering.reverse() } else { ordering };
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+    }
+    Ordering::Equal
+}
+
+/// Whether a `CALCULATE`/`CALCULATETABLE` argument is a removal modifier.
+fn is_removal_modifier(expr: &BoundExpr) -> bool {
+    matches!(expr, BoundExpr::Call { spec, .. }
+        if spec.name.eq_ignore_ascii_case("ALL")
+            || spec.name.eq_ignore_ascii_case("REMOVEFILTERS")
+            || spec.name.eq_ignore_ascii_case("ALLEXCEPT"))
+}
+
 /// Whether a scalar is a NaN number. [`ScalarKey`] folds NaNs into one key while `strict_eq`
 /// never matches them, so relationship lookups fall back for this value.
 fn is_nan_key(value: &Scalar) -> bool {
@@ -1659,13 +1753,23 @@ fn unary(op: UnaryOp, value: Scalar) -> Result<Scalar, EvalError> {
 fn binary(op: BinaryOp, left: Scalar, right: Scalar) -> Result<Scalar, EvalError> {
     match op {
         BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Pow => {
+            // BLANK propagates: BLANK * x is BLANK, and so is BLANK + BLANK / BLANK - BLANK /
+            // BLANK / BLANK. A single BLANK still coerces to 0 in the other operands.
             if op == BinaryOp::Mul && (left.is_blank() || right.is_blank()) {
+                return Ok(Scalar::Blank);
+            }
+            if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Div) && left.is_blank() && right.is_blank() {
                 return Ok(Scalar::Blank);
             }
             let a = left.to_number().ok_or_else(|| EvalError::new("arithmetic needs numbers"))?;
             let b = right.to_number().ok_or_else(|| EvalError::new("arithmetic needs numbers"))?;
             if op == BinaryOp::Div && b == 0.0 {
-                return Err(EvalError::new("division by zero"));
+                // DAX (the model engine, unlike the worksheet) yields BLANK for 0/0 and ±Infinity
+                // for x/0 — including x/BLANK, which coerces to 0 — instead of an error.
+                if a == 0.0 {
+                    return Ok(Scalar::Blank);
+                }
+                return Ok(Scalar::Decimal(if a.is_sign_negative() { f64::NEG_INFINITY } else { f64::INFINITY }));
             }
             let value = match op {
                 BinaryOp::Add => a + b,

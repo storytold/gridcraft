@@ -51,12 +51,13 @@ fn if_eager_selects_a_branch() {
 
 #[test]
 fn if_eager_evaluates_both_branches() {
-    // The unselected branch is still evaluated, so its error propagates.
-    assert!(eval_result("IF.EAGER(TRUE, 1, 1 / 0)").is_err());
-    assert!(eval_result("IF.EAGER(FALSE, 1 / 0, 2)").is_err());
-    assert!(eval_result("IF.EAGER(FALSE, 1 / 0)").is_err());
+    // The unselected branch is still evaluated, so its error propagates. (`1 / 0` is not an
+    // error in DAX — it is Infinity — so the fixture raises a real one.)
+    assert!(eval_result("IF.EAGER(TRUE, 1, ERROR(\"boom\"))").is_err());
+    assert!(eval_result("IF.EAGER(FALSE, ERROR(\"boom\"), 2)").is_err());
+    assert!(eval_result("IF.EAGER(FALSE, ERROR(\"boom\"))").is_err());
     // The condition itself is also evaluated eagerly.
-    assert!(eval_result("IF.EAGER(1 / 0, 1, 2)").is_err());
+    assert!(eval_result("IF.EAGER(ERROR(\"boom\"), 1, 2)").is_err());
     // A non-boolean condition is rejected rather than silently treated as FALSE.
     assert!(eval_result("IF.EAGER(\"maybe\", 1, 2)").is_err());
 }

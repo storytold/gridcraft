@@ -624,8 +624,12 @@ impl<'a> Plan<'a> {
                 match row.kind {
                     RowKind::Leaf => {
                         let deepest = row.values.len().saturating_sub(1);
+                        // Blank a label only while every level up to it repeats the previous leaf:
+                        // a new ancestor starts a new group, so its inner labels show again.
+                        let mut same_prefix = previous_leaf.is_some();
                         for (level, (cell, value)) in cells.iter_mut().zip(&row.values).enumerate() {
-                            let repeats = level < deepest && previous_leaf.is_some_and(|previous| previous.get(level) == Some(value));
+                            same_prefix = same_prefix && previous_leaf.is_some_and(|previous| previous.get(level) == Some(value));
+                            let repeats = level < deepest && same_prefix;
                             *cell = if repeats { Scalar::Blank } else { value.clone() };
                         }
                     }

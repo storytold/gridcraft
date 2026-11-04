@@ -350,9 +350,13 @@ fn kept_location_ref(s: &Session, name: &str) -> Option<RangeRef> {
 }
 
 /// The value of the first `key="value"` pair in `xml`, where `key` ends at its opening quote.
+///
+/// The standard XML entities are decoded, so a PivotTable named `R&D` (written `R&amp;D`) matches
+/// the name the caller asked for. `&amp;` is decoded last so `&amp;lt;` stays `&lt;`.
 fn attribute_value(xml: &str, key: &str) -> Option<String> {
     let rest = xml.get(xml.find(key)?.saturating_add(key.len())..)?;
-    rest.get(..rest.find('"')?).map(str::to_string)
+    let raw = rest.get(..rest.find('"')?)?;
+    Some(raw.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&"))
 }
 
 /// The model as the field list shows it: tables with their columns and data types, the measures with

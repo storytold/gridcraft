@@ -244,6 +244,8 @@ impl<'a> Binder<'a> {
                 // RANKX's Ties argument is documented as `Dense` but catalogued as a Scalar.
                 "RANKX" if index == 4 => keyword_name(arg),
                 "DATEDIFF" if index == 2 => keyword_name(arg),
+                // TOPN's `(expression, Order)` pairs: ASC/DESC sit at every odd index from 3.
+                "TOPN" if index >= 3 && index % 2 == 1 => clause_keyword(arg, &["ASC", "DESC"]),
                 "CROSSFILTER" if index == 2 => clause_keyword(arg, &["ONE", "ONEWAY", "BOTH", "TWOWAY", "NONE"]),
                 // Window/relation clauses take bare enum words: `ORDERBY(x, DESC)`,
                 // `WINDOW(1, ABS, 1, ABS, ...)`, `INDEX(..., KEEP, PARTITIONBY(...))`, and the

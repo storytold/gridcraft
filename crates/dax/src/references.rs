@@ -4,11 +4,17 @@
 //! summarizes a column the same way. Both spell the column the same way so the evaluator reads
 //! them identically: this module owns the one spelling.
 
-/// A DAX table reference for a model name, quoted when the name is not a plain identifier.
+/// Reserved words the lexer or parser turns into operators and statement keywords: a table with
+/// one of these names must be quoted, or `SUM(In[Amount])` would not parse.
+const RESERVED: [&str; 5] = ["NOT", "IN", "EVALUATE", "VAR", "RETURN"];
+
+/// A DAX table reference for a model name, quoted when the name is not a plain identifier or is a
+/// reserved word.
 pub fn table_ref(name: &str) -> String {
     let plain = !name.is_empty()
         && name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
-        && name.chars().all(|c| c.is_alphanumeric() || c == '_');
+        && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+        && !RESERVED.iter().any(|word| word.eq_ignore_ascii_case(name));
     if plain { name.to_string() } else { format!("'{}'", name.replace('\'', "''")) }
 }
 
@@ -43,6 +49,8 @@ mod tests {
         assert_eq!(table_ref("Sales"), "Sales");
         assert_eq!(table_ref("Sales Data"), "'Sales Data'");
         assert_eq!(table_ref("O'Brien"), "'O''Brien'");
+        assert_eq!(table_ref("In"), "'In'");
+        assert_eq!(table_ref("VAR"), "'VAR'");
         assert_eq!(column_ref("Amount"), "[Amount]");
         assert_eq!(column_ref("a]b"), "[a]]b]");
     }

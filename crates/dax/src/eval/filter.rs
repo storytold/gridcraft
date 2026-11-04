@@ -559,9 +559,8 @@ fn current_entry(
 }
 
 fn relation_position(ev: &Evaluator<'_>, relation: &TableValue, table: usize, column: usize) -> Result<usize, EvalError> {
-    if relation.lineage == Some(table) {
-        return Ok(column);
-    }
+    // A relation can be a projection (`ALL(Sales[Region])`) that keeps the lineage but holds fewer
+    // columns, so the model index is not a position: resolve by name, always.
     let name = ev
         .model()
         .tables

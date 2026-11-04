@@ -163,9 +163,10 @@ const BIG_ARROW: f32 = 10.0;
 
 /// A big button's label lines, laid out, and the width the button needs for them.
 fn big_label(ui: &Ui, label: &str, dropdown: bool) -> (Vec<std::sync::Arc<egui::Galley>>, f32) {
-    let t = Tokens::get(ui.ctx());
     let font = theme::ui_font(11.5);
-    let lines: Vec<_> = label.split('\n').map(|line| ui.painter().layout_no_wrap(line.to_string(), font.clone(), t.text)).collect();
+    // PLACEHOLDER lets the galley's fallback colour paint the text, so `paint_big_label` can dim a
+    // disabled button's label the way it dims the icon and chevron.
+    let lines: Vec<_> = label.split('\n').map(|line| ui.painter().layout_no_wrap(line.to_string(), font.clone(), Color32::PLACEHOLDER)).collect();
     let arrow_space = if dropdown { 4.0 + BIG_ARROW } else { 0.0 };
     let text_w = lines.iter().enumerate().map(|(i, line)| line.size().x + if i + 1 == lines.len() { arrow_space } else { 0.0 }).fold(0.0, f32::max);
     (lines, (text_w + 12.0).max(44.0))

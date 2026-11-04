@@ -171,10 +171,21 @@ fn blank_boolean_and_error_propagation() {
     assert_eq!(eval("ISBLANK(BLANK())"), Scalar::Boolean(true));
     // Booleans are 1/0 in arithmetic.
     assert_eq!(number("TRUE() + 1"), 2.0);
-    // Errors stay errors unless a handler catches them.
-    assert_eq!(eval("ISERROR(1/0)"), Scalar::Boolean(true));
+    // The model engine divides by zero without an error: BLANK for 0/0 and the numerator's sign
+    // of infinity otherwise (Excel's worksheet gives #DIV/0!, DAX does not).
+    assert_eq!(eval("ISERROR(1/0)"), Scalar::Boolean(false));
+    assert_eq!(eval("5 / 0"), Scalar::Decimal(f64::INFINITY));
+    assert_eq!(eval("-5 / 0"), Scalar::Decimal(f64::NEG_INFINITY));
+    assert_eq!(eval("0 / 0"), Scalar::Blank);
+    assert_eq!(eval("BLANK() / BLANK()"), Scalar::Blank);
+    assert_eq!(eval("5 / BLANK()"), Scalar::Decimal(f64::INFINITY));
+    assert_eq!(eval("BLANK() + BLANK()"), Scalar::Blank);
+    assert_eq!(eval("BLANK() - BLANK()"), Scalar::Blank);
+    // Errors still stay errors unless a handler catches them.
     assert_eq!(eval("ISERROR(1)"), Scalar::Boolean(false));
-    assert_eq!(eval("IFERROR(1/0, 42)"), Scalar::Integer(42));
+    assert!(error("ERROR(\"boom\")").contains("boom"));
+    assert_eq!(number("IFERROR(1/0, 42)"), f64::INFINITY);
+    assert_eq!(eval("IFERROR(ERROR(\"boom\"), 42)"), Scalar::Integer(42));
     assert_eq!(eval("DIVIDE(1, 0)"), Scalar::Blank);
     assert_eq!(eval("DIVIDE(1, 0, 99)"), Scalar::Integer(99));
     assert_eq!(number("DIVIDE(1, 2)"), 0.5);
@@ -265,4 +276,14 @@ fn datediff_counts_boundaries_for_sub_day_and_week_intervals() {
     assert_eq!(eval("DATEDIFF(DATE(2024, 1, 1), DATE(2024, 1, 7), WEEK)"), Scalar::Integer(1));
     // The sign follows Date2 - Date1.
     assert_eq!(eval("DATEDIFF(TIME(11, 0, 1), TIME(10, 59, 59), HOUR)"), Scalar::Integer(-1));
+}
+
+#[test]
+fn calculate_applies_removal_modifiers_before_its_filters() {
+    // `ALL(Sales)` clears the outer context first, whatever its position, and the explicit filters
+    // then apply: both argument orders leave the Region filter in force.
+    assert_eq!(eval_in_sales("CALCULATE(COUNTROWS(Sales), Sales[Region] = \"East\", ALL(Sales))"), Scalar::Integer(2));
+    assert_eq!(eval_in_sales("CALCULATE(COUNTROWS(Sales), ALL(Sales), Sales[Region] = \"East\")"), Scalar::Integer(2));
+    // ALL on a column clears only that column, so the Amount filter survives.
+    assert_eq!(eval_in_sales("CALCULATE(COUNTROWS(Sales), Sales[Amount] = 10, ALL(Sales[Region]))"), Scalar::Integer(1));
 }

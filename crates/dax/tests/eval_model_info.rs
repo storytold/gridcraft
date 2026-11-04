@@ -939,7 +939,9 @@ fn unrepresentable_objects_keep_their_columns_without_rows() {
 #[test]
 fn restrictions_are_accepted_as_pairs() {
     let table = eval_table("INFO.TABLES(\"Name\", \"Sales\")");
-    assert_eq!(table.rows.len(), 2);
+    // The restriction pair keeps only the row whose `Name` is `Sales`.
+    assert_eq!(table.rows.len(), 1);
+    assert_eq!(cell(&table, 0, "Name"), Scalar::String("Sales".into()));
     let error = try_eval_table("INFO.TABLES(\"Name\")").expect_err("dangling restriction");
     assert!(error.contains("restriction"), "unexpected error: {error}");
 }
