@@ -1357,3 +1357,36 @@ fn a_picture_over_the_budget_at_one_size_still_prints_smaller() {
     assert!(cache.image(&mut doc, &broken, (10, 10)).is_none());
     assert_eq!(cache.tries(), 3);
 }
+
+#[test]
+fn a_picture_over_the_budget_is_refused_before_decoding() {
+    use super::header_footer::{Outcome, decode_limited};
+    // Only the PNG header: its size is known, but decoding it would fail.
+    let mut head = png(4000, 3000);
+    head.truncate(33);
+    let pixels = 4000 * 3000 * 4;
+    assert_eq!(decode_limited(&head, 4000, 3000, pixels - 1).err(), Some(Outcome::OverBudget), "refused from the header alone");
+    assert_eq!(decode_limited(&head, 4000, 3000, pixels).err(), Some(Outcome::Unreadable), "within the budget it is decoded, and fails");
+    // The budget counts the size it prints at, not the source's.
+    assert_eq!(decode_limited(&head, 400, 400, 400 * 300 * 4).err(), Some(Outcome::Unreadable));
+    assert_eq!(decode_limited(&head, 400, 400, 400 * 300 * 4 - 1).err(), Some(Outcome::OverBudget));
+    // A whole image right at the budget decodes.
+    let (rgba, w, h) = decode_limited(&png(300, 200), 150, 150, 150 * 100 * 4).expect("fits exactly");
+    assert_eq!((rgba.len(), w, h), (150 * 100 * 4, 150, 100));
+}
+
+#[test]
+fn the_size_checked_against_the_budget_is_the_size_decoding_gives() {
+    use super::header_footer::thumbnail_size;
+    for (src, max) in [
+        ((300, 200), (150, 150)),
+        ((1001, 333), (97, 500)),
+        ((7, 4000), (3, 101)),
+        ((2049, 1365), (640, 427)),
+        ((5, 5), (1, 1)),
+        ((8192, 3), (100, 100)),
+    ] {
+        let img = image::DynamicImage::new_rgba8(src.0, src.1).thumbnail(max.0, max.1);
+        assert_eq!(thumbnail_size(src, max), (img.width(), img.height()), "{src:?} into {max:?}");
+    }
+}

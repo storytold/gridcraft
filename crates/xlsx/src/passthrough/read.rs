@@ -313,6 +313,9 @@ impl KeptReader {
         (!p.is_empty()).then(|| Arc::new(p))
     }
 
+    /// Keeps, in `p`, the parts sheet `name`'s XML points at that the model doesn't read: printer
+    /// settings, the header/footer picture drawing, and the controls and embedded objects not in
+    /// `controls.modelled`. What can't be kept is dropped with a warning.
     #[allow(clippy::too_many_arguments)]
     fn sheet_elements(
         &mut self,
