@@ -3,13 +3,13 @@
 use gridcraft_core::{CellRef, RangeRef, Value};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, EngineError, Result, Session, always, bad, bool_param, cell_param_on, cmd, has_doc, str_param, target_range, target_sheet};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "document.inspect", "Inspect Workbook", [], None, "{} → sheets, selection, names, tables, charts, dirty, trust (local|fromFile), history", has_doc, inspect),
         cmd!(query "sheet.read", "Read Range", [], None, "{range?: \"A1:D10\" (default: used range), sheet?, formulas?: bool, formatted?: bool} → rows of values", has_doc, read),
-        cmd!(query "cell.get", "Get Cell", [], None, "{cell?, sheet?} → value, formula, display text, style, comment, link", has_doc, cell_get),
+        cmd!(query "cell.get", "Get Cell", [], None, "{cell?, sheet?} → value, formula, display text, style, comment, link, python {code, output, typeName, preview, stale}", has_doc, cell_get),
         cmd!(query "selection.stats", "Selection Statistics", [], None, "{} → count, sum, average, min, max", has_doc, sel_stats),
         cmd!(query "history.list", "Undo History", [], None, "{} → undo/redo labels, grouping (an undo group is open)", has_doc, history),
         cmd!(query "app.commands", "List Commands", [], None, "{search?} → ids, labels, params", always, list_commands),
@@ -46,7 +46,7 @@ fn inspect(s: &mut Session, _: &Json) -> Result<Json> {
                 "freeze": sh.freeze,
                 "merges": sh.merges.iter().map(|m| m.a1()).collect::<Vec<_>>(),
                 "tables": sh.tables.iter().map(|t| json!({"name": t.name, "range": t.range.a1(), "style": t.style, "totals": t.totals_row, "columns": t.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>()})).collect::<Vec<_>>(),
-                "charts": sh.charts.iter().map(|c| json!({"id": c.id, "kind": format!("{:?}", c.kind), "title": c.title, "at": c.anchor.cell.a1(), "series": c.series.len(), "trendlines": c.series.iter().flat_map(|s| s.trendlines.iter().map(|t| format!("{:?}", t.kind))).collect::<Vec<_>>()})).collect::<Vec<_>>(),
+                "charts": sh.charts.iter().map(|c| json!({"id": c.id, "kind": format!("{:?}", c.kind), "title": c.title, "at": c.anchor.cell.a1(), "series": c.series.len(), "dataTable": c.data_table.as_ref().map(|t| json!({"showKeys": t.show_keys, "horizontalBorder": t.horizontal_border, "verticalBorder": t.vertical_border, "outline": t.outline})), "trendlines": c.series.iter().flat_map(|s| s.trendlines.iter().map(|t| format!("{:?}", t.kind))).collect::<Vec<_>>()})).collect::<Vec<_>>(),
                 "images": sh.images.len(),
                 "shapes": sh.shapes.len(),
                 "conditionalFormats": sh.cond_formats.len(),
@@ -64,7 +64,7 @@ fn inspect(s: &mut Session, _: &Json) -> Result<Json> {
         "path": d.path,
         "dirty": d.is_dirty(),
         "trust": d.trust,
-        "activeSheet": wb.active_sheet,
+        "activeSheet": wb.active_sheet(),
         "sheets": sheets,
         "selection": d.selection.a1(),
         "activeCell": d.selection.active.a1(),
@@ -137,6 +137,13 @@ fn cell_get(s: &mut Session, p: &Json) -> Result<Json> {
         "merge": sh.merge_at(c).map(|m| m.a1()),
         "comment": sh.comments.get(&c),
         "hyperlink": sh.hyperlinks.get(&c),
+        "python": cell.and_then(|x| x.py.as_deref()).map(|py| json!({
+            "code": py.code,
+            "output": if py.object { "object" } else { "value" },
+            "typeName": py.output.as_ref().map(|o| o.type_name.as_str()),
+            "preview": py.output.as_ref().map(|o| o.preview.as_str()),
+            "stale": py.stale,
+        })),
     }))
 }
 

@@ -384,6 +384,32 @@ fn circular_references_without_iterative_calculation() {
     assert_eq!(t.get("A1"), Value::Error(CellError::Circ));
 }
 
+/// The list of circular references keeps the loops that a recalculation of other cells does not
+/// reach, and drops a loop once a constant is typed over one of its cells.
+#[test]
+fn circular_references_stay_listed_until_the_loop_is_removed() {
+    let mut t = T::new();
+    t.set("A1", "=A1+1");
+    t.set("B1", "=B2");
+    t.set("B2", "=B1");
+    assert!(t.calc.circular.contains(&(0, c("A1"))), "{:?}", t.calc.circular);
+    t.set("D4", "7");
+    t.set("D5", "=D4*2");
+    assert!(t.calc.circular.contains(&(0, c("A1"))), "{:?}", t.calc.circular);
+    assert!(t.calc.circular.iter().any(|k| *k == (0, c("B1")) || *k == (0, c("B2"))), "{:?}", t.calc.circular);
+    t.set("A1", "5");
+    assert!(!t.calc.circular.contains(&(0, c("A1"))), "{:?}", t.calc.circular);
+    assert!(t.calc.circular.iter().any(|k| *k == (0, c("B1")) || *k == (0, c("B2"))), "{:?}", t.calc.circular);
+    t.set("B2", "3");
+    assert!(t.calc.circular.is_empty(), "{:?}", t.calc.circular);
+    // In manual calculation only the edited formulas are evaluated; a constant typed over the listed cell removes it.
+    t.wb.calc.mode = gridcraft_model::CalcMode::Manual;
+    t.set("C1", "=C1+1");
+    assert_eq!(t.calc.circular, vec![(0, c("C1"))]);
+    t.set("C1", "1");
+    assert!(t.calc.circular.is_empty(), "{:?}", t.calc.circular);
+}
+
 #[test]
 fn date_text_coerces_in_the_workbook_date_system() {
     for (sys, serial) in [(gridcraft_core::DateSystem::D1900, 1462.0), (gridcraft_core::DateSystem::D1904, 0.0)] {
@@ -586,6 +612,25 @@ fn lambda_calls_spend_one_work_budget_per_cell() {
     assert_eq!(t.num("A1"), 45.0);
     t.set("A2", "=REDUCE(0,SEQUENCE(4000),LAMBDA(a,v,a+v))");
     assert_eq!(t.num("A2"), 4000.0 * 4001.0 / 2.0);
+}
+
+#[test]
+fn lifted_lookups_stop_past_their_work_budget() {
+    // Security: each needle searched the whole lookup vector, so this one cell ran for hours
+    // (about 1.1e12 compares) and hung opening the file that held it. It is #NUM! at once now.
+    let mut t = T::new();
+    t.set("A1", "=ROWS(XMATCH(SEQUENCE(1048576),-SEQUENCE(1048576)))");
+    assert_eq!(t.get("A1"), Value::Error(CellError::Num));
+    // Ordinary lifted lookups are unaffected.
+    for (i, k) in [10, 20, 30, 40, 50].into_iter().enumerate() {
+        t.set(&format!("B{}", i + 1), &k.to_string());
+        t.set(&format!("C{}", i + 1), &(i + 1).to_string());
+    }
+    t.set("D1", "=SUM(XMATCH({30;50;10},B1:B5))");
+    t.set("D2", "=SUM(XLOOKUP({20;40},B1:B5,C1:C5))");
+    t.set("D3", "=SUM(VLOOKUP({30,10},B1:C5,2,FALSE))");
+    t.set("D4", "=SUM(MATCH({25,50},B1:B5))");
+    assert_eq!([t.num("D1"), t.num("D2"), t.num("D3"), t.num("D4")], [9.0, 6.0, 4.0, 7.0]);
 }
 
 #[test]
@@ -1026,6 +1071,100 @@ fn lambda_argument_count() {
 }
 
 #[test]
+fn a_lambda_that_calls_itself_without_end_is_num_on_a_small_stack() {
+    // 1 MiB is the main thread's stack on Windows, where commands, recalculation and file open run.
+    let handle = std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(|| {
+            let mut t = T::new();
+            t.wb.names.push(gridcraft_model::DefinedName {
+                name: "LOOP".into(),
+                scope: None,
+                formula: "LAMBDA(n,LOOP(n))".into(),
+                comment: String::new(),
+                hidden: false,
+            });
+            t.calc.rebuild(&t.wb);
+            let endless = "=LET(f,LAMBDA(g,x,g(g,x)),f(f,1))";
+            t.set("A1", endless);
+            t.set("A2", "=LOOP(1)");
+            t.set("A3", "=LET(F,LAMBDA(me,n,IF(n<=0,0,1+SUM(MAP({1},LAMBDA(v,me(me,n-1)))))),F(F,100000))");
+            t.set("A4", "=LET(F,LAMBDA(me,n,IF(n<=0,0,1+me(me,n-1))),F(F,131))");
+            let evaluated = crate::evaluate(&t.wb, 0, c("B1"), endless);
+            [t.get("A1"), t.get("A2"), t.get("A3"), evaluated, t.get("A4")]
+        })
+        .expect("spawn");
+    let [endless, endless_name, through_map, evaluated, countdown] = handle.join().expect("recursion must not overflow the stack");
+    assert_eq!(endless, Value::Error(CellError::Num));
+    assert_eq!(endless_name, Value::Error(CellError::Num));
+    assert_eq!(through_map, Value::Error(CellError::Num));
+    assert_eq!(evaluated, Value::Error(CellError::Num));
+    assert_eq!(countdown, Value::Number(131.0));
+}
+
+#[test]
+fn a_recursive_lambda_stops_at_the_same_call_on_any_stack_size() {
+    let run = |stack: usize| {
+        std::thread::Builder::new()
+            .stack_size(stack)
+            .spawn(|| {
+                let mut wb = Workbook::new();
+                wb.names.push(gridcraft_model::DefinedName {
+                    name: "CNT".into(),
+                    scope: None,
+                    formula: "LAMBDA(n,IF(n=0,0,1+CNT(n-1)))".into(),
+                    comment: String::new(),
+                    hidden: false,
+                });
+                // F(F,n) has n + 1 calls in progress at its deepest; W adds one more call per step.
+                let tail = |n: u32| format!("=LET(F,LAMBDA(me,n,IF(n=0,0,me(me,n-1))),F(F,{n}))");
+                let wrapped = |n: u32| format!("=LET(W,LAMBDA(f,k,f(f,k)),F,LAMBDA(me,n,IF(n<=0,0,1+W(me,n-1))),F(F,{n}))");
+                [tail(139), tail(140), wrapped(69), wrapped(70), "=CNT(131)".to_string()].map(|f| crate::evaluate(&wb, 0, c("B1"), &f))
+            })
+            .expect("spawn")
+            .join()
+            .expect("recursion must not overflow the stack")
+    };
+    let small = run(1 << 20);
+    assert_eq!(small, [Value::Number(0.0), Value::Error(CellError::Num), Value::Number(69.0), Value::Error(CellError::Num), Value::Number(131.0)]);
+    assert_eq!(run(64 << 20), small);
+}
+
+#[test]
+fn a_recursive_lambda_that_reads_another_cells_recursive_lambda_shares_the_stack() {
+    let run = |stack: usize| {
+        std::thread::Builder::new()
+            .stack_size(stack)
+            .spawn(|| {
+                // Row-major order calculates A1 first, so each cell below is calculated on demand
+                // at the deepest call of the one above it.
+                let countdown = |then: &str| format!("=LET(F,LAMBDA(me,n,IF(n<=0,{then},1+me(me,n-1))),F(F,131))");
+                let mut wb = Workbook::new();
+                let sheet = wb.sheet_mut(0).expect("sheet");
+                for (at, f) in [
+                    ("A1", countdown("A2")),
+                    ("A2", countdown("A3")),
+                    ("A3", countdown("0")),
+                    ("B1", countdown("B2")),
+                    ("B2", "=LET(f,LAMBDA(g,x,g(g,x)),f(f,1))".to_string()),
+                ] {
+                    sheet.cells.set(c(at), Cell::formula(Formula::new(&f)));
+                }
+                let mut calc = Calc::new();
+                calc.recalc_all(&mut wb);
+                ["A1", "A2", "A3", "B1", "B2"].map(|at| wb.sheet(0).map(|s| s.value(c(at))).unwrap_or_default())
+            })
+            .expect("spawn")
+            .join()
+            .expect("recursion must not overflow the stack")
+    };
+    let small = run(1 << 20);
+    let num = Value::Error(CellError::Num);
+    assert_eq!(small, [Value::Number(393.0), Value::Number(262.0), Value::Number(131.0), num.clone(), num]);
+    assert_eq!(run(64 << 20), small);
+}
+
+#[test]
 fn names_and_sheets() {
     let mut t = T::new();
     t.wb.names.push(gridcraft_model::DefinedName { name: "Rate".into(), scope: None, formula: "0.5".into(), comment: String::new(), hidden: false });
@@ -1110,6 +1249,25 @@ fn array_broadcast_result_is_capped() {
     assert_eq!(t.num("C2"), 6.0);
     t.set("C3", "=COLUMNS(TEXT(SEQUENCE(2),SEQUENCE(1,5)))");
     assert_eq!(t.num("C3"), 5.0);
+}
+
+/// MAP refuses a result past `MAX_CELLS` by its checked product, before allocating it (the
+/// 2^32-cell wrap that a 32-bit `usize` product would turn into 0 is pinned in
+/// `broadcast_len_rejects_a_product_that_wraps_to_zero_on_32_bits`; `SEQUENCE` tops out at
+/// 16384 columns, so the widest product it can build is 16384 squared).
+#[test]
+fn map_caps_its_result_size() {
+    let mut t = T::new();
+    for (at, formula) in
+        [("A1", "=MAP(SEQUENCE(4001),SEQUENCE(1,4000),LAMBDA(a,b,a))"), ("A2", "=MAP(SEQUENCE(16384),SEQUENCE(1,16384),LAMBDA(a,b,a))")]
+    {
+        t.set(at, formula);
+        assert_eq!(t.get(at), Value::Error(CellError::Num), "{formula}");
+    }
+    // Within the cap the broadcast shape is unchanged.
+    t.set("A3", "=ROWS(MAP(SEQUENCE(3),SEQUENCE(1,2),LAMBDA(a,b,a+b)))");
+    t.set("A4", "=COLUMNS(MAP(SEQUENCE(3),SEQUENCE(1,2),LAMBDA(a,b,a+b)))");
+    assert_eq!((t.num("A3"), t.num("A4")), (3.0, 2.0));
 }
 
 #[test]
@@ -2153,4 +2311,64 @@ fn loan_schedule_residue_keeps_excels_sign() {
         other => panic!("O7: expected a number, got {other:?}"),
     }
     assert_eq!(t.get("P7"), Value::Text("".into()));
+}
+
+/// Makes `at` a Python cell showing `cached` (its value before this calculation), with `result`
+/// as its kept result, and returns the cell's key for `Calc::cells_changed`.
+fn plant_python(t: &mut T, at: &str, cached: Value, result: Value) -> (usize, CellRef) {
+    use gridcraft_model::python::{PyCode, PyOutput};
+    let output = PyOutput { value: result, type_name: "list".into(), preview: String::new(), convertible: true };
+    let py = PyCode { output: Some(output), ..PyCode::new("[5, 6]") };
+    let cell = Cell { value: cached, formula: None, style: gridcraft_model::StyleId::default(), py: Some(std::sync::Arc::new(py)) };
+    t.wb.sheet_mut(0).unwrap().cells.set(c(at), cell);
+    (0, c(at))
+}
+
+fn column(values: &[f64]) -> Value {
+    let data = values.iter().map(|v| Value::Number(*v)).collect();
+    Value::Array(std::sync::Arc::new(gridcraft_core::Array::new(values.len(), 1, data).unwrap()))
+}
+
+#[test]
+fn formulas_read_a_dirty_python_cell_after_it_is_laid_out() {
+    // B1's result can't spill (B2 holds a value), so it is #SPILL!. A1, A2 and A3 come before
+    // it in the pass; each must lay it out first rather than read its old value, 1.
+    let build = |t: &mut T| {
+        t.set("B2", "10");
+        t.set("B3", "100");
+        t.set("A1", "=B1");
+        t.set("A2", "=MAX(B1:B3)");
+        t.set("A3", "=SUM(B1:B3)");
+        t.set("A4", "=COUNTA(B1:B3)");
+        t.set("A5", "=SUMPRODUCT(--ISERROR(B1:B3))");
+    };
+    let check = |t: &T, how: &str| {
+        assert_eq!(t.get("B1"), Value::Error(CellError::Spill), "{how}");
+        assert_eq!(t.get("A1"), Value::Error(CellError::Spill), "{how}: a reference");
+        assert_eq!(t.get("A2"), Value::Error(CellError::Spill), "{how}: a range read");
+        assert_eq!(t.get("A3"), Value::Error(CellError::Spill), "{how}: a range walked cell by cell");
+        assert_eq!(t.num("A4"), 3.0, "{how}");
+        assert_eq!(t.num("A5"), 1.0, "{how}: the error is seen in the range");
+    };
+
+    // A full recalculation.
+    let mut t = T::new();
+    build(&mut t);
+    plant_python(&mut t, "B1", Value::Number(1.0), column(&[5.0, 6.0]));
+    t.calc.recalc_all(&mut t.wb);
+    check(&t, "full");
+
+    // An incremental one: B1 becomes a Python cell after its readers.
+    let mut t = T::new();
+    t.set("B1", "1");
+    build(&mut t);
+    assert_eq!((t.num("A1"), t.num("A3")), (1.0, 111.0));
+    let k = plant_python(&mut t, "B1", Value::Number(1.0), column(&[5.0, 6.0]));
+    t.calc.cells_changed(&mut t.wb, &[k]);
+    check(&t, "incremental");
+
+    // Unblocked, the readers see the new array.
+    t.set("B2", "");
+    assert_eq!((t.num("B1"), t.num("B2")), (5.0, 6.0));
+    assert_eq!((t.num("A1"), t.num("A2"), t.num("A3")), (5.0, 100.0, 111.0));
 }

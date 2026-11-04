@@ -525,7 +525,7 @@ fn render_fraction(sec: &Section, x: f64, pieces: &mut [String], lits: &mut [Opt
             let s = if k + 1 == count {
                 dc.get(k..).map(|r| r.iter().collect::<String>()).unwrap_or_default()
             } else {
-                dc.get(k).map(|c| c.to_string()).unwrap_or_default()
+                dc.get(k).map(ToString::to_string).unwrap_or_default()
             };
             let s = if s.is_empty() {
                 match toks.get(ti) {
