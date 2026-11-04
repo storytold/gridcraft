@@ -93,7 +93,7 @@ fn path(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -
         current = parent;
     }
     chain.reverse();
-    Ok(Scalar::String(chain.iter().map(|key| key.to_scalar().to_text()).collect::<Vec<_>>().join(&SEPARATOR.to_string())))
+    Ok(Scalar::String(chain.iter().map(|key| key.to_scalar().to_dax_text()).collect::<Vec<_>>().join(&SEPARATOR.to_string())))
 }
 
 /// The table and column a `PATH` argument names; anything else is an error, as the catalog says.

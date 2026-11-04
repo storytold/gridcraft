@@ -340,10 +340,10 @@ fn apply_filter_arg(ev: &Evaluator<'_>, expr: &BoundExpr, filters: &mut FilterCo
             if *op == BinaryOp::Eq {
                 filters.set(table, column, [ScalarKey::from(&value)]);
             } else {
-                let mut candidate_filters = ctx.filters.clone();
-                candidate_filters.filters.remove(&(table, column));
+                // `col <> v` is FILTER(ALL(col), col <> v): the candidates come from the whole
+                // column, not from the outer date-table filters.
                 let keys = ev
-                    .table(table, &candidate_filters)
+                    .table(table, &FilterContext::default())
                     .column(column)
                     .into_iter()
                     .filter(|candidate| !candidate.strict_eq(&value))

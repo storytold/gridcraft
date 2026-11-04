@@ -270,8 +270,19 @@ pub(crate) fn round_to(value: f64, digits: i32) -> f64 {
 /// both in terms of the sign, not the floor/ceiling, so `ROUNDDOWN ( -2.9, 0 )` is -2 and
 /// `ROUNDUP ( -2.1, 0 )` is -3.
 pub(crate) fn round_direction(value: f64, digits: i32, up: bool) -> f64 {
+    // `10^digits` overflows or underflows outside f64's exponent range; the result is the value
+    // itself when rounding cannot move any digit, and zero when every digit is rounded away.
+    if digits > 308 {
+        return value;
+    }
+    if digits < -308 {
+        return if up && value != 0.0 { f64::INFINITY.copysign(value) } else { 0.0 };
+    }
     let factor = 10f64.powi(digits);
     let scaled = value * factor;
+    if !scaled.is_finite() {
+        return value;
+    }
     let rounded = if up { scaled.abs().ceil().copysign(scaled) } else { scaled.trunc() };
     rounded / factor
 }
@@ -399,15 +410,21 @@ pub(crate) fn parse_date_text(text: &str) -> Option<f64> {
         }
         _ => return None,
     };
-    let (hour, minute, second) = time
-        .and_then(|time| {
+    let (hour, minute, second) = match time.map(str::trim).filter(|time| !time.is_empty()) {
+        None => (0, 0, 0),
+        Some(time) => {
+            // A present time must parse and be in range: `25:00:00` is rejected rather than
+            // rolled into the next day, like an impossible date.
             let parts: Vec<&str> = time.split(':').collect();
-            let hour: i64 = parts.first()?.parse().ok()?;
-            let minute: i64 = parts.get(1).unwrap_or(&"0").parse().ok()?;
-            let second: i64 = parts.get(2).unwrap_or(&"0").parse().ok()?;
-            Some((hour, minute, second))
-        })
-        .unwrap_or_default();
+            let hour: i64 = parts.first()?.trim().parse().ok()?;
+            let minute: i64 = parts.get(1).unwrap_or(&"0").trim().parse().ok()?;
+            let second: i64 = parts.get(2).unwrap_or(&"0").trim().parse().ok()?;
+            if !(0..24).contains(&hour) || !(0..60).contains(&minute) || !(0..60).contains(&second) {
+                return None;
+            }
+            (hour, minute, second)
+        }
+    };
     Some(date_serial(year, month, day, hour, minute, second))
 }
 

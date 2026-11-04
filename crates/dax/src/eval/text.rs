@@ -126,7 +126,7 @@ fn concatenate_x(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> R
             Some(key) => Some(key?),
             None => None,
         };
-        items.push((key, value.to_text()));
+        items.push((key, value.to_dax_text()));
     }
     if order_by.is_some() {
         items.sort_by(|left, right| {

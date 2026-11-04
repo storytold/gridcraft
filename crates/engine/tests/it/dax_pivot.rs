@@ -379,8 +379,9 @@ fn the_field_list_reports_the_created_pivot() {
     let reply = fields(&mut s, json!({"name": "ModelPivot1"}));
     assert_eq!(s.doc().expect("doc").undo.len(), undo, "the field list records no undo step");
     // One page field takes two rows above the body, so the body starts at A5 while the command's
-    // `at` (the pivot's top-left, page fields included) was A3.
-    assert_eq!(reply["pivots"], json!([{"name": "ModelPivot1", "sheet": "Sheet1", "at": "A5"}]));
+    // `at` (the pivot's top-left, page fields included) was A3. The range covers the whole report,
+    // page rows included, so the pane can tell whether the active cell is inside it.
+    assert_eq!(reply["pivots"], json!([{"name": "ModelPivot1", "sheet": "Sheet1", "at": "A5", "range": "A3:D7"}]));
     assert_eq!(
         reply["selected"],
         json!({

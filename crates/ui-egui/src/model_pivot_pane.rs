@@ -456,8 +456,8 @@ fn named_selected(app: &mut SheetApp, state: &mut State, key: CacheKey, name: Op
     answer.ok().and_then(|answer| answer.get("selected").cloned()).filter(|selected| !selected.is_null())
 }
 
-/// The model PivotTable the active cell is in: same sheet, at or below its report's top-left
-/// cell, the nearest one when several qualify.
+/// The model PivotTable the active cell is in: same sheet, inside the report's full range (its
+/// page-field rows included), the nearest one when several qualify.
 fn active_pivot(app: &SheetApp, pivots: &[Json]) -> Option<Json> {
     let doc = app.session.active()?;
     let sheet = doc.wb.active()?;
@@ -467,12 +467,13 @@ fn active_pivot(app: &SheetApp, pivots: &[Json]) -> Option<Json> {
         if pivot["sheet"].as_str() != Some(sheet.name.as_str()) {
             continue;
         }
-        let Some(at) = pivot["at"].as_str().and_then(gridcraft_engine::core::RangeRef::parse).map(|range| range.start) else {
+        let Some(area) = pivot["range"].as_str().or(pivot["at"].as_str()).and_then(gridcraft_engine::core::RangeRef::parse) else {
             continue;
         };
-        if cell.row < at.row || cell.col < at.col {
+        if !area.contains(cell) {
             continue;
         }
+        let at = area.start;
         if found.as_ref().is_none_or(|(row, col, _)| (at.row, at.col) > (*row, *col)) {
             found = Some((at.row, at.col, pivot.clone()));
         }

@@ -293,7 +293,17 @@ fn field_list_cmd(s: &mut Session, p: &Json) -> Result<Json> {
     let data_model = model;
     let model = model_json(data_model);
     let parts = read_pivots(s)?;
-    let pivots: Vec<Json> = parts.iter().map(|part| json!({"name": part.spec.name, "sheet": part.sheet, "at": part.location.a1()})).collect();
+    let pivots: Vec<Json> = parts
+        .iter()
+        .map(|part| {
+            // `at` is the body's top-left; the pane also needs the whole report (page-field rows
+            // included) to know whether the active cell is inside the pivot.
+            let body = kept_location_ref(s, &part.spec.name).unwrap_or_else(|| RangeRef::cell(part.location));
+            let page_rows = u32::try_from(part.spec.filters.len().saturating_mul(PAGE_ROWS)).unwrap_or(u32::MAX);
+            let area = RangeRef::new(CellRef::new(body.start.row.saturating_sub(page_rows), body.start.col), body.end);
+            json!({"name": part.spec.name, "sheet": part.sheet, "at": part.location.a1(), "range": area.a1()})
+        })
+        .collect();
     // Names are unique case-insensitively (the command refuses a duplicate), so the first match is
     // the one asked for; a name that is not there is `null`, not an error: the pane polls.
     let selected =

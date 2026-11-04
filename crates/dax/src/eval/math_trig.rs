@@ -307,7 +307,7 @@ fn convert_type(value: &Scalar, target: &Scalar) -> Result<Scalar, EvalError> {
             let number = value.to_number().ok_or_else(|| EvalError::new("CONVERT cannot convert the value to INTEGER"))?;
             Ok(Scalar::Integer(truncate_i64(number)?))
         }
-        "STRING" | "TEXT" => Ok(Scalar::String(value.to_text())),
+        "STRING" | "TEXT" => Ok(Scalar::String(value.to_dax_text())),
         other => Err(EvalError::new(format!("CONVERT does not recognize the data type `{other}`"))),
     }
 }
