@@ -2,11 +2,11 @@
 //!
 //! ```text
 //! gridcraft-cli info <file> [--json]
-//! gridcraft-cli convert <in> <out> [--sheet NAME]
+//! gridcraft-cli convert <in> <out> [--sheet NAME] [--allow-lossy]
 //! gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json]
 //! gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv]
 //! gridcraft-cli check <file-or-dir>... [--json] [--tolerance 1e-9] [--max-report N]
-//! gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl] [--out FILE] [--print RANGE] [--quiet]
+//! gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl] [--out FILE] [--print RANGE] [--quiet] [--allow-lossy]
 //! gridcraft-cli commands [--json] [--search X]
 //! gridcraft-cli functions [--json] [--search X] [--category C]
 //! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
@@ -36,13 +36,17 @@ use serde_json::{Value, json};
 
 const USAGE: &str = "usage:
   gridcraft-cli info <file> [--json]                      sheets, used ranges, tables, charts, names
-  gridcraft-cli convert <in> <out> [--sheet NAME]         xlsx/csv/tsv/json/html/pdf by extension
+  gridcraft-cli convert <in> <out> [--sheet NAME] [--allow-lossy]
+                     xlsx/csv/tsv/json/html/pdf by extension; exit 1 if the import
+                     dropped or altered content, unless --allow-lossy
   gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json]
   gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv]
   gridcraft-cli check <file-or-dir>... [--json] [--tolerance 1e-9] [--max-report N]
                      cached-value calc oracle + XLSX round-trip fidelity (exit 1 on any difference)
   gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl]
-                     [--out FILE] [--print RANGE] [--quiet]
+                     [--out FILE] [--print RANGE] [--quiet] [--allow-lossy]
+                     with --in and --out, exit 1 if the import dropped or altered
+                     content, unless --allow-lossy
                      a script line is id={json} or {\"command\": \"id\", \"params\": {…}};
                      blank lines and lines starting with # or // are skipped
   gridcraft-cli commands [--json] [--search X]
@@ -165,10 +169,28 @@ fn exec(s: &mut Session, id: &str, params: Value) -> Result<Value, String> {
     r
 }
 
-fn open(path: &str) -> Result<Session, String> {
+/// Opens `path` and returns the session with the number of import warnings that report lost or
+/// altered content: every `file.open` warning except the purely informational
+/// [`gridcraft_engine::io::DECRYPTED_NOTICE`] (the rule `file.open` shows warnings by).
+fn open(path: &str) -> Result<(Session, usize), String> {
     let mut s = Session::new();
-    exec(&mut s, "file.open", json!({"path": path}))?;
-    Ok(s)
+    let r = exec(&mut s, "file.open", json!({"path": path}))?;
+    let lossy = r
+        .get("warnings")
+        .and_then(Value::as_array)
+        .map_or(0, |w| w.iter().filter(|w| w.as_str() != Some(gridcraft_engine::io::DECRYPTED_NOTICE)).count());
+    Ok((s, lossy))
+}
+
+/// A lossy import fails the command unless `--allow-lossy` accepts it. The output is already
+/// written; only the exit status says it may be incomplete (#3353).
+fn lossy_check(input: &str, lossy: usize, allow: bool) -> Result<(), String> {
+    if lossy > 0 && !allow {
+        return Err(format!(
+            "{input}: the import dropped or altered content ({lossy} import warning(s) above); the output may be incomplete — re-run with --allow-lossy to accept it"
+        ));
+    }
+    Ok(())
 }
 
 fn blank() -> Session {
@@ -242,7 +264,7 @@ fn info(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &[], &["json"])?;
     let path = a.pos(0, "<file>")?;
     a.no_extra(1)?;
-    let mut s = open(path)?;
+    let (mut s, _) = open(path)?;
     let v = exec(&mut s, "document.inspect", json!({}))?;
     if a.has("json") {
         outln!("{}", pretty(&v));
@@ -280,7 +302,7 @@ fn info(args: &[String]) -> Result<(), String> {
 }
 
 fn convert(args: &[String]) -> Result<(), String> {
-    let a = Args::parse(args, &["sheet"], &[])?;
+    let a = Args::parse(args, &["sheet"], &["allow-lossy"])?;
     let input = a.pos(0, "<in>")?;
     let out = a.pos(1, "<out>")?;
     a.no_extra(2)?;
@@ -288,18 +310,18 @@ fn convert(args: &[String]) -> Result<(), String> {
     if !pdf && gridcraft_engine::io::FileKind::from_path(out).is_none() {
         return Err(format!("{out}: unknown output format (use .xlsx, .csv, .tsv, .json, .html or .pdf)"));
     }
-    let mut s = open(input)?;
+    let (mut s, lossy) = open(input)?;
     activate_sheet(&mut s, a.opt("sheet"))?;
     if pdf {
         let result = exec(&mut s, "file.exportPdf", json!({"path": out}))?;
         eprintln!("wrote {out} ({} bytes, {} pages)", result["bytes"], result["pages"]);
-        return Ok(());
+    } else {
+        let d = s.doc().map_err(|e| e.to_string())?;
+        let bytes = gridcraft_engine::io::save_file_bytes(&d.wb, out).map_err(|e| e.to_string())?;
+        gridcraft_engine::io::write_file(out, &bytes).map_err(|e| e.to_string())?;
+        eprintln!("wrote {out} ({} bytes)", bytes.len());
     }
-    let d = s.doc().map_err(|e| e.to_string())?;
-    let bytes = gridcraft_engine::io::save_file_bytes(&d.wb, out).map_err(|e| e.to_string())?;
-    gridcraft_engine::io::write_file(out, &bytes).map_err(|e| e.to_string())?;
-    eprintln!("wrote {out} ({} bytes)", bytes.len());
-    Ok(())
+    lossy_check(input, lossy, a.has("allow-lossy"))
 }
 
 fn eval(args: &[String]) -> Result<(), String> {
@@ -307,7 +329,7 @@ fn eval(args: &[String]) -> Result<(), String> {
     let formula = a.pos(0, "<formula>")?;
     a.no_extra(1)?;
     let mut s = match a.opt("in") {
-        Some(p) => open(p)?,
+        Some(p) => open(p)?.0,
         None => blank(),
     };
     activate_sheet(&mut s, a.opt("sheet"))?;
@@ -376,7 +398,7 @@ fn cat(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &["range", "sheet"], &["formulas", "csv"])?;
     let path = a.pos(0, "<file>")?;
     a.no_extra(1)?;
-    let mut s = open(path)?;
+    let (mut s, _) = open(path)?;
     print_range(&mut s, a.opt("range"), a.opt("sheet"), a.has("formulas"), a.has("csv"))
 }
 
@@ -412,17 +434,17 @@ fn parse_command(text: &str) -> Result<Option<(String, Value)>, String> {
 }
 
 fn run(args: &[String]) -> Result<(), String> {
-    let a = Args::parse(args, &["in", "sample", "cmd", "script", "out", "print", "sheet"], &["quiet", "csv", "formulas"])?;
+    let a = Args::parse(args, &["in", "sample", "cmd", "script", "out", "print", "sheet"], &["quiet", "csv", "formulas", "allow-lossy"])?;
     a.no_extra(0)?;
-    let mut s = match (a.opt("in"), a.opt("sample")) {
+    let (mut s, lossy) = match (a.opt("in"), a.opt("sample")) {
         (Some(_), Some(_)) => return Err("give --in or --sample, not both".into()),
         (Some(p), None) => open(p)?,
         (None, Some(name)) => {
             let mut s = Session::new();
             exec(&mut s, "file.new", json!({"sample": name}))?;
-            s
+            (s, 0)
         }
-        (None, None) => blank(),
+        (None, None) => (blank(), 0),
     };
     let quiet = a.has("quiet");
     let mut step = 0usize;
@@ -449,9 +471,13 @@ fn run(args: &[String]) -> Result<(), String> {
             }
         }
     }
+    // A saved workbook from a lossy import fails the run; the `--print`s still run first, so the
+    // failure only changes the exit status.
+    let mut lossy_out = Ok(());
     if let Some(out) = a.opt("out") {
         let r = exec(&mut s, "file.save", json!({"path": out}))?;
         eprintln!("wrote {out} ({} bytes)", r["bytes"]);
+        lossy_out = lossy_check(a.opt("in").unwrap_or_default(), lossy, a.has("allow-lossy"));
     }
     for (name, range) in &a.opts {
         if name == "print" {
@@ -459,7 +485,7 @@ fn run(args: &[String]) -> Result<(), String> {
             print_range(&mut s, range, a.opt("sheet"), a.has("formulas"), a.has("csv"))?;
         }
     }
-    Ok(())
+    lossy_out
 }
 
 fn commands(args: &[String]) -> Result<(), String> {
@@ -538,7 +564,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
         }
         None => {
             let session = match (a.opt("in"), a.opt("sample")) {
-                (Some(p), _) => open(p)?,
+                (Some(p), _) => open(p)?.0,
                 (None, Some(name)) => {
                     let mut s = Session::new();
                     exec(&mut s, "file.new", json!({"sample": name}))?;
@@ -653,6 +679,87 @@ mod tests {
         let pdf = std::fs::read(&output).unwrap();
         assert!(pdf.starts_with(b"%PDF-"));
         assert!(pdf.windows(b"/URI (https://example.org)".len()).any(|w| w == b"/URI (https://example.org)"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A fresh per-test temp dir holding a CSV whose every date is ambiguous (day or month
+    /// first), so the import guesses the order and warns about it.
+    fn warned_csv(test: &str) -> (std::path::PathBuf, String) {
+        let dir = std::env::temp_dir().join(format!("gridcraft-cli-{test}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("dates.csv");
+        std::fs::write(&input, "when,amount\n03/04/2026,1\n05/06/2026,2\n07/08/2026,3\n").unwrap();
+        let input = input.to_string_lossy().into_owned();
+        (dir, input)
+    }
+
+    fn path(p: &std::path::Path) -> String {
+        p.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn convert_fails_when_the_import_warns() {
+        // A lossy import used to write the output and exit 0, so a script shipped a cut-off
+        // workbook as a success (#3353).
+        let (dir, input) = warned_csv("lossy");
+        let (_, lossy) = open(&input).unwrap();
+        assert!(lossy > 0, "the fixture must produce an import warning");
+        let output = dir.join("dates.xlsx");
+        let e = convert(&[input.clone(), path(&output)]).expect_err("a lossy import fails");
+        assert!(e.contains(&input) && e.contains("--allow-lossy") && e.contains(&format!("({lossy} import warning(s) above)")), "{e}");
+        // The output is still written; only the exit status changes.
+        assert!(std::fs::read(&output).unwrap().starts_with(b"PK"));
+        // The PDF path, which returns separately, is covered too.
+        let pdf = dir.join("dates.pdf");
+        assert!(convert(&[input.clone(), path(&pdf)]).is_err());
+        assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF-"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn convert_allow_lossy_accepts_a_warned_import() {
+        let (dir, input) = warned_csv("allow-lossy");
+        let output = dir.join("dates.xlsx");
+        convert(&[input.clone(), path(&output), "--allow-lossy".into()]).unwrap();
+        assert!(std::fs::read(&output).unwrap().starts_with(b"PK"));
+        let pdf = dir.join("dates.pdf");
+        convert(&[input, path(&pdf), "--allow-lossy".into()]).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn convert_succeeds_on_a_clean_import() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-cli-clean-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("clean.xlsx");
+        let output = dir.join("copy.xlsx");
+        let mut s = blank();
+        s.execute("cell.set", json!({"cell": "A1", "input": "42"})).unwrap();
+        let bytes = gridcraft_engine::io::save_file_bytes(&s.doc().unwrap().wb, &path(&input)).unwrap();
+        gridcraft_engine::io::write_file(&path(&input), &bytes).unwrap();
+        assert_eq!(open(&path(&input)).unwrap().1, 0);
+        convert(&[path(&input), path(&output)]).unwrap();
+        let (mut s, lossy) = open(&path(&output)).unwrap();
+        assert_eq!(lossy, 0);
+        assert_eq!(value_text(&exec(&mut s, "sheet.read", json!({"range": "A1"})).unwrap()["values"]), "42");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn run_fails_when_the_import_warns_and_writes_out() {
+        let (dir, input) = warned_csv("run-lossy");
+        let output = dir.join("dates.xlsx");
+        let args = |extra: &[&str]| -> Vec<String> {
+            let mut v: Vec<String> = vec!["--in".into(), input.clone(), "--quiet".into()];
+            v.extend(extra.iter().map(|s| s.to_string()));
+            v
+        };
+        let e = run(&args(&["--out", &path(&output)])).expect_err("a lossy import saved fails");
+        assert!(e.contains("--allow-lossy"), "{e}");
+        assert!(std::fs::read(&output).unwrap().starts_with(b"PK"));
+        run(&args(&["--out", &path(&output), "--allow-lossy"])).unwrap();
+        // Without --out nothing is shipped, so the run does not fail for the warning.
+        run(&args(&["--cmd", r#"cell.set={"cell":"C1","input":"1"}"#])).unwrap();
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
