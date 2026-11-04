@@ -45,7 +45,8 @@ const USAGE: &str = "usage:
                      cached-value calc oracle + XLSX round-trip fidelity (exit 1 on any difference)
   gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl]
                      [--out FILE] [--print RANGE] [--quiet] [--allow-lossy]
-                     with --in and --out, exit 1 if the import dropped or altered
+                     with --out, exit 1 if any counted import (the --in file, or
+                     one opened by a file.open command) dropped or altered
                      content, unless --allow-lossy
                      a script line is id={json} or {\"command\": \"id\", \"params\": {…}};
                      blank lines and lines starting with # or // are skipped
