@@ -367,6 +367,18 @@ fn wildcard_agrees_with_backtracking() {
 }
 
 #[test]
+fn wildcard_with_many_distinct_literals_agrees_with_backtracking() {
+    // 600 distinct characters in the pattern: more than the masks kept, so the rest are rebuilt.
+    let chars: Vec<char> = (0x4E00u32..0x4E00 + 600).filter_map(char::from_u32).collect();
+    let word: String = chars.iter().collect();
+    let pat = format!("*{word}?{}", chars[3]);
+    for text in [format!("x{word}yq{}", chars[3]), word.clone(), format!("{word}{word}"), chars.iter().rev().collect::<String>()] {
+        assert_eq!(wildcard(&text, &pat), wildcard_backtracking(&text, &pat), "{} chars", text.chars().count());
+    }
+    assert!(wildcard(&format!("{word}zz{}", chars[3]).replace("zz", "z"), &pat));
+}
+
+#[test]
 fn wildcard_on_long_repetitive_text_is_linear() {
     // The backtracking matcher compared about text × pattern characters here (10^8).
     let text = "a".repeat(20_000);

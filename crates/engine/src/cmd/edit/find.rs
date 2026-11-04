@@ -34,17 +34,24 @@ pub(crate) fn wildcard(text: &str, pat: &str) -> bool {
     }
     let words = (p.len() + 1).div_ceil(64);
     let bit = |set: &mut [u64], i: usize| set[i / 64] |= 1 << (i % 64);
-    // Positions holding a `*`, a `?`, and each literal character.
+    // Positions holding a `*` and a `?`, and where each literal character sits in the pattern.
     let mut stars = vec![0u64; words];
     let mut any = vec![0u64; words];
-    let mut lits: std::collections::HashMap<char, Vec<u64>> = std::collections::HashMap::new();
+    let mut at: std::collections::HashMap<char, Vec<usize>> = std::collections::HashMap::new();
     for (i, item) in p.iter().enumerate() {
         match item {
             ('*', false) => bit(&mut stars, i),
             ('?', false) => bit(&mut any, i),
-            (c, _) => bit(lits.entry(*c).or_insert_with(|| vec![0u64; words]), i),
+            (c, _) => at.entry(*c).or_default().push(i),
         }
     }
+    // A literal's bit mask is built when the text first reads it, and kept for the first
+    // `MAX_CACHED_MASKS` literals: a long pattern of mostly distinct characters would otherwise
+    // allocate a mask of the pattern's width for each one up front. Past the cap the mask is
+    // rebuilt in `scratch` from the character's positions, which costs about one step of the scan.
+    const MAX_CACHED_MASKS: usize = 256;
+    let mut masks: std::collections::HashMap<char, Vec<u64>> = std::collections::HashMap::new();
+    let mut scratch = vec![0u64; words];
     // A set bit i: the text read so far matches the first i pattern items. A `*` matches nothing
     // as well, so a state at a `*` is also at the item after it.
     let close = |set: &mut Vec<u64>| {
@@ -61,7 +68,22 @@ pub(crate) fn wildcard(text: &str, pat: &str) -> bool {
     close(&mut state);
     let mut next = vec![0u64; words];
     for ch in text.chars() {
-        let lit = lits.get(&ch);
+        let lit: Option<&[u64]> = match at.get(&ch) {
+            None => None,
+            Some(positions) if masks.contains_key(&ch) || masks.len() < MAX_CACHED_MASKS => {
+                let mask = masks.entry(ch).or_insert_with(|| {
+                    let mut m = vec![0u64; words];
+                    positions.iter().for_each(|&i| bit(&mut m, i));
+                    m
+                });
+                Some(mask)
+            }
+            Some(positions) => {
+                scratch.fill(0);
+                positions.iter().for_each(|&i| bit(&mut scratch, i));
+                Some(&scratch)
+            }
+        };
         let mut carry = 0u64;
         let mut alive = 0u64;
         for w in 0..words {
