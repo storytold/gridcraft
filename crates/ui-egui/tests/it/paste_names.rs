@@ -18,12 +18,12 @@ fn harness(names: bool) -> Harness {
         session.execute("formulas.defineName", json!({"name": "Sales", "refersTo": "=Sheet1!$A$1:$A$3"})).unwrap();
         session.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=0.07"})).unwrap();
     }
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(&ui.ctx().clone());
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     h.run_steps(6);
     h
