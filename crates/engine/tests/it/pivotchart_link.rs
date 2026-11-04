@@ -30,6 +30,7 @@ fn pivot_chart_link_names_the_workbook_in_brackets() {
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
     let mut chart = String::new();
     zip.by_name("xl/charts/chart1.xml").unwrap().read_to_string(&mut chart).unwrap();
+    assert!(chart.contains(r#"<c:style val="2"/>"#), "PivotChart should use Excel's default style: {chart}");
     assert!(chart.contains("<c:name>[Q1 Report.xlsx]Sheet2!PivotTable1</c:name>"), "{chart}");
 
     // Without a file name, a placeholder workbook is named; reading drops the brackets again.

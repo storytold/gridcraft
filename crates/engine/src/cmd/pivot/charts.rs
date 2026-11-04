@@ -26,6 +26,10 @@ fn chart_pivot(s: &Session, p: &Json) -> Result<(usize, usize)> {
     find_pivot(s, p)
 }
 
+/// Inserts a PivotChart linked to the selected PivotTable.
+///
+/// Resolves the source PivotTable and creates its chart series.
+/// The new chart uses Excel-compatible style 2 by default.
 pub(super) fn insert_pivot_chart(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, pi) = chart_pivot(s, p)?;
     let d = s.doc()?;
@@ -67,7 +71,7 @@ pub(super) fn insert_pivot_chart(s: &mut Session, p: &Json) -> Result<Json> {
         data_labels: false,
         data_table: None,
         gridlines: !matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel),
-        style: 1,
+        style: 2,
         x_title: None,
         y_title: None,
         source: None,

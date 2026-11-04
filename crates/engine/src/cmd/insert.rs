@@ -849,7 +849,7 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         data_labels: false,
         data_table: None,
         gridlines: !matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel),
-        style: 1,
+        style: 2,
         x_title: None,
         y_title: None,
         source: (areas.len() == 1).then(|| format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), bounds.a1())),
