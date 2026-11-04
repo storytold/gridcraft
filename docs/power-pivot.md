@@ -33,7 +33,7 @@ explanatory tooltip.
 | Clipboard | — | Paste, Paste Append, Paste Replace, Copy |
 | Get External Data | **Existing Connections** (connection overlay) | From Database, From Data Service, From Other Sources |
 | Refresh | **Refresh** (`dataModel.status` plus the selected table's rows) | — |
-| PivotTable | **PivotTable** — creates a worksheet PivotTable over the model (`dataModel.createPivot`) in the same window's workbook | — |
+| PivotTable | — | PivotTable (Excel's button is disabled here; the worksheet command `dataModel.createPivot` creates the report instead) |
 | Formatting | **Data Type** (selected column's type), **Format** for the selected measure (`dataModel.setFormat`), currency/percent/comma/increase/decrease decimals applied to the measure's format | — |
 | Sort and Filter | **Sort A to Z**, **Sort Z to A**, **Clear Sort**, **Filter** by value, **Clear All Filters**, **Sort by Column** (through a relationship) — all session view state | — |
 | Find | **Find** (`dataModel.find`): table/column scope, case, returns `{table, column, row, value}` matches | — |
@@ -46,8 +46,9 @@ explanatory tooltip.
 - Sort and filter commands mutate the window's view state (`Session::dax_view`), never the model:
   they change which rows the Data View shows and in what order; clearing restores model order.
 - The Formatting group edits the selected measure through `dataModel.setFormat`: a preset (General,
-  Number, Currency, Percent, Date) or a literal format, with optional decimals. Currency, percent,
-  comma and the decimal buttons apply the corresponding preset.
+  Number, Currency, Percent, Comma) or a literal format, with optional decimals. There is no date
+  preset; pass a literal date format code instead. Currency, percent, comma and the decimal buttons
+  apply the corresponding preset.
 
 ## Design ribbon
 
@@ -157,7 +158,7 @@ All overlays are reported through `overlay` = `""` | `openModel` | `existingConn
 | `dataModel.sortByColumn` | `{table, by_table, by_column, column?, descending?}` | view state (session only) |
 | `dataModel.setShowHidden` | `{show}` | status |
 | `dataModel.setShowImplicitMeasures` | `{show}` | status |
-| `dataModel.setFormat` | `{name, format?, preset?, decimals?}` | status (also applies to `evaluate`/`pivot` output) |
+| `dataModel.setFormat` | `{name, format?, preset?, decimals?}` (`decimals` is a delta; ignored when `format` or `preset` is given) | status (also applies to `evaluate`/`pivot` output) |
 | `dataModel.setColumnHidden` | `{table, column, hidden?}` | status |
 | `dataModel.setColumnType` | `{table, column, data_type}` | status (rejects a value the new type cannot hold) |
 | `dataModel.setSummarizeBy` | `{table, column, summarize_by: Sum\|Average\|Count\|Min\|Max\|None}` | status |
@@ -195,6 +196,10 @@ All overlays are reported through `overlay` = `""` | `openModel` | `existingConn
 - `addMeasure` requires `name` and a non-blank `formula`. `updateMeasure` requires `name`; an
   absent `format` leaves it unchanged, while `format: null` clears it. `deleteMeasure` requires
   `name`. `deleteRelationship` identifies a relationship by its four endpoints.
+- `setFormat` applies at most one of `format`, `preset` and `decimals`, in that precedence order:
+  `decimals` is ignored when the same call supplies `format` or `preset`. `decimals` is a change in
+  decimal places (−10 to 10), not an absolute count, applied to the measure's current format
+  (`0.00` when it has none); apply a preset and then adjust `decimals` in a separate call.
 - `evaluate` accepts a formula or a measure name; `table: true` asks for a table result. A bare
   table name evaluates to its rows. `pivot` groups one measure by row fields and optional column
   fields; it returns a table, not a worksheet PivotTable.

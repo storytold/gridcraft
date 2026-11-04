@@ -9,7 +9,7 @@ use gridcraft_dax::value::Scalar;
 
 fn fixture() -> Option<Vec<u8>> {
     let path = std::env::var("GRIDCRAFT_VERTIPAQ_FIXTURE").ok()?;
-    std::fs::read(path).ok()
+    Some(std::fs::read(&path).unwrap_or_else(|error| panic!("GRIDCRAFT_VERTIPAQ_FIXTURE={path} is unreadable: {error}")))
 }
 
 fn table<'a>(model: &'a ModelData, name: &str) -> &'a gridcraft_dax::model_file::ModelTableData {

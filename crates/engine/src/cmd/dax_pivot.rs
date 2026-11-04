@@ -148,7 +148,13 @@ pub fn write_pivot(s: &mut Session, p: &Json) -> Result<(Json, Option<Vec<u8>>)>
 fn create(s: &mut Session, p: &Json, package: bool) -> Result<(Json, Option<Vec<u8>>)> {
     let area = {
         let model = s.dax_model.as_ref().ok_or_else(|| bad(CMD, "no data model loaded"))?;
-        values_area(model, p)?
+        // The measures earlier pivots declared live only in their kept cache definitions, so their
+        // names are read from there: a second pivot over a different table must not pick the same
+        // implicit name, or it would rewrite the first pivot's measure in `xl/model/item.data`.
+        // Only `{column, aggregate}` values make implicit measures, so a measure-only values area
+        // skips the parse.
+        let kept = if has_column_value(p) { kept_pivot_measures(s) } else { Vec::new() };
+        values_area(model, p, &kept)?
     };
     let base = s.dax_model.as_ref().map_or(0, |model| model.measures.len());
     if let Some(model) = s.dax_model.as_mut() {
@@ -322,6 +328,21 @@ fn read_pivots(s: &Session) -> Result<Vec<ModelPivotPartInfo>> {
     let (parts, _report) = gridcraft_xlsx::read_kept_model_pivots(&d.wb)
         .map_err(|error| other(format!("the workbook's PivotTable definitions could not be read: {error}")))?;
     Ok(parts)
+}
+
+/// The `(name, table)` of every measure the workbook's kept model PivotTables declare.
+///
+/// A pivot's cache definition carries the whole measure set it was written with, implicit measures
+/// included, so this is how a later call learns the names earlier calls took. A workbook whose
+/// parts cannot be read contributes none: the check is a guard against a collision, not a
+/// prerequisite for writing the pivot.
+fn kept_pivot_measures(s: &Session) -> Vec<(String, String)> {
+    let Ok(d) = s.doc() else { return Vec::new() };
+    gridcraft_xlsx::read_kept_model_pivots(&d.wb)
+        .map(|(parts, _report)| {
+            parts.into_iter().flat_map(|part| part.spec.measures.into_iter().map(|measure| (measure.name, measure.table))).collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The rectangle the named model PivotTable's previous report occupies — its page-field rows
@@ -649,6 +670,13 @@ fn values_param(p: &Json) -> Result<Vec<ValueEntry>> {
     }
 }
 
+/// Whether `values` holds a `{column, aggregate}` entry — the only kind that makes an implicit
+/// measure, and so the only kind that needs the measure names the kept PivotTables declare. A
+/// malformed `values` answers `false` and is left for [`values_param`] to refuse.
+fn has_column_value(p: &Json) -> bool {
+    p.get("values").and_then(Json::as_array).is_some_and(|items| items.iter().any(Json::is_object))
+}
+
 /// One `values` entry: a measure name, or `{column, aggregate?}`.
 fn value_entry(item: &Json) -> Result<ValueEntry> {
     if let Some(measure) = item.as_str() {
@@ -675,7 +703,7 @@ fn value_entry(item: &Json) -> Result<ValueEntry> {
 ///
 /// The column is checked before anything renders: it must exist, and `Sum`, `Average`, `Min` and
 /// `Max` need a numeric column (`Count` takes any type).
-fn values_area(model: &DataModel, p: &Json) -> Result<ValuesArea> {
+fn values_area(model: &DataModel, p: &Json, kept: &[(String, String)]) -> Result<ValuesArea> {
     let entries = values_param(p)?;
     let mut names: Vec<String> = Vec::with_capacity(entries.len());
     let mut implicit: Vec<Measure> = Vec::new();
@@ -683,7 +711,7 @@ fn values_area(model: &DataModel, p: &Json) -> Result<ValuesArea> {
         match entry {
             ValueEntry::Measure(name) => names.push(resolve_measure(model, &name)?),
             ValueEntry::Column { field, aggregate } => {
-                let measure = implicit_measure(model, &field, aggregate.as_deref(), &implicit)?;
+                let measure = implicit_measure(model, &field, aggregate.as_deref(), &implicit, kept)?;
                 names.push(measure.name.clone());
                 implicit.push(measure);
             }
@@ -694,10 +722,11 @@ fn values_area(model: &DataModel, p: &Json) -> Result<ValuesArea> {
 
 /// The implicit measure a `{column, aggregate}` value is.
 ///
-/// The name is Excel's `Sum of Amount`, with a number appended when the model (or an earlier value
-/// of the same call) already carries it; the formula is the one Excel's implicit measure evaluates,
-/// parsed here because [`gridcraft_dax::Evaluator`] takes only prepared measures.
-fn implicit_measure(model: &DataModel, field: &str, aggregate: Option<&str>, taken: &[Measure]) -> Result<Measure> {
+/// The name is Excel's `Sum of Amount`, with a number appended when the model, an earlier value of
+/// the same call, or a measure a kept PivotTable declares over another table already carries it;
+/// the formula is the one Excel's implicit measure evaluates, parsed here because
+/// [`gridcraft_dax::Evaluator`] takes only prepared measures.
+fn implicit_measure(model: &DataModel, field: &str, aggregate: Option<&str>, taken: &[Measure], kept: &[(String, String)]) -> Result<Measure> {
     let reference = field_ref(model, field)?;
     let column = model
         .tables
@@ -716,7 +745,10 @@ fn implicit_measure(model: &DataModel, field: &str, aggregate: Option<&str>, tak
     let base = format!("{} of {}", aggregate.label(), reference.column);
     let mut name = base.clone();
     let mut suffix = 1u32;
-    while model.measure_index(&name).is_some() || taken.iter().any(|measure| measure.name.eq_ignore_ascii_case(&name)) {
+    while model.measure_index(&name).is_some()
+        || taken.iter().any(|measure| measure.name.eq_ignore_ascii_case(&name))
+        || kept.iter().any(|(kept_name, kept_table)| kept_name.eq_ignore_ascii_case(&name) && !kept_table.eq_ignore_ascii_case(&reference.table))
+    {
         // A bound, not a search: the model and the values area both hold a bounded number of
         // measures, so a name collides only that many times.
         suffix = suffix.saturating_add(1);

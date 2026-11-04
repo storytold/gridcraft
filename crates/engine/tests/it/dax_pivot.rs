@@ -626,6 +626,19 @@ const SPARSE_TEXT: &str = r##"{
     "measures": []
 }"##;
 
+/// Two tables that both have an `Amount` column: the implicit measure name `Sum of Amount` would
+/// be the same for either, which is the collision the kept-name check prevents.
+const TWO_TABLES: &str = r##"{
+    "tables": [{"name":"Sales",
+                "columns":[{"name":"Region","data_type":"String"},{"name":"Amount","data_type":"Double"}],
+                "rows":[["East",10],["West",30]]},
+               {"name":"Returns",
+                "columns":[{"name":"Region","data_type":"String"},{"name":"Amount","data_type":"Double"}],
+                "rows":[["East",5],["West",7]]}],
+    "relationships": [],
+    "measures": []
+}"##;
+
 #[test]
 fn a_numeric_column_in_values_sums_averages_and_takes_extremes() {
     for (aggregate, east, west) in [("Sum", "30", "70"), ("Average", "15", "35"), ("Min", "10", "30"), ("Max", "20", "40")] {
@@ -785,6 +798,51 @@ fn an_implicit_value_does_not_collide_with_an_existing_measure() {
         vec!["West".to_string(), "70".to_string()],
     ];
     assert_eq!(grid(&s, 2, 0, 3, 2), expected);
+}
+
+#[test]
+fn an_implicit_value_over_another_table_does_not_take_a_kept_pivots_name() {
+    // Two tables with a same-named column: Excel names both implicit measures `Sum of Amount`, so
+    // the second pivot must not reuse the name the first pivot's cache already declares.
+    let mut s = load_json(TWO_TABLES);
+    let first = create(
+        &mut s,
+        json!({
+            "values": [{"column": "Sales[Amount]", "aggregate": "Sum"}],
+            "row_fields": ["Sales[Region]"],
+            "name": "Sales by Region",
+        }),
+    );
+    assert_eq!(first["values"], json!(["Sum of Amount"]));
+    let second = create(
+        &mut s,
+        json!({
+            "values": [{"column": "Returns[Amount]", "aggregate": "Sum"}],
+            "row_fields": ["Returns[Region]"],
+            "name": "Returns by Region",
+            "at": "H1",
+        }),
+    );
+    // A same-named measure over another table is taken, so the new pivot gets a free name: had it
+    // reused `Sum of Amount`, `xl/model/item.data` would be rewritten with Returns' formula and the
+    // first pivot would evaluate the wrong table.
+    assert_eq!(second["values"], json!(["Sum of Amount2"]));
+    assert_ne!(second["values"], first["values"]);
+    // The first pivot's kept definition still names its own measure, over its own table.
+    let (parts, _) = gridcraft_xlsx::read_kept_model_pivots(&s.doc().expect("doc").wb).expect("read kept pivots");
+    let part = |name: &str| parts.iter().find(|part| part.spec.name == name).unwrap_or_else(|| panic!("no pivot `{name}`"));
+    let sales = part("Sales by Region");
+    assert_eq!(sales.spec.values.iter().map(|value| value.measure.as_str()).collect::<Vec<_>>(), ["Sum of Amount"]);
+    let kept = sales
+        .spec
+        .measures
+        .iter()
+        .find(|measure| measure.name == "Sum of Amount")
+        .unwrap_or_else(|| panic!("the first pivot's implicit measure is still declared"));
+    assert_eq!(kept.table, "Sales");
+    let returns = part("Returns by Region");
+    assert_eq!(returns.spec.values.iter().map(|value| value.measure.as_str()).collect::<Vec<_>>(), ["Sum of Amount2"]);
+    assert!(returns.spec.measures.iter().all(|measure| measure.name != "Sum of Amount"));
 }
 
 #[test]

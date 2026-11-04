@@ -120,6 +120,9 @@ struct DateAxis {
     /// First and last visible date, absent when the filter context selects no date.
     min: Option<f64>,
     max: Option<f64>,
+    /// The distinct visible dates, ascending. Used to tell a selection that actually contains the
+    /// month's last two days from one that merely ends near its boundary.
+    visible_dates: Vec<f64>,
 }
 
 impl DateAxis {
@@ -174,6 +177,16 @@ impl DateAxis {
 
     fn visible(&self) -> Option<(f64, f64)> {
         Some((self.min?, self.max?))
+    }
+
+    /// Whether the selection contains both of the last two days of `max`'s month. `max` is the
+    /// selection's last visible date; the two days have to be on the axis itself, so a selection
+    /// that stops on the month-end date alone (or on its penultimate day) does not qualify.
+    fn includes_last_two_days(&self, max: f64) -> bool {
+        let last = month_end(max);
+        let penultimate = last - 1.0;
+        let contains = |date: f64| self.visible_dates.binary_search_by(|visible| visible.total_cmp(&date)).is_ok();
+        contains(penultimate) && contains(last)
     }
 }
 
@@ -231,15 +244,19 @@ fn date_axis(ev: &Evaluator<'_>, expr: &BoundExpr, ctx: &Context, name: &str) ->
     // a filter on a fact table does not restrict the dimension it points at.
     let mut min: Option<f64> = None;
     let mut max: Option<f64> = None;
+    let mut visible_dates: Vec<f64> = Vec::new();
     for row in visible_rows(ev, table, ctx) {
         if let Some(serial) = row.get(column).and_then(Scalar::to_number) {
             let serial = serial.floor();
             min = Some(min.map_or(serial, |value| value.min(serial)));
             max = Some(max.map_or(serial, |value| value.max(serial)));
+            visible_dates.push(serial);
         }
     }
+    visible_dates.sort_by(|left, right| left.total_cmp(right));
+    visible_dates.dedup_by(|left, right| left.total_cmp(right).is_eq());
 
-    Ok(DateAxis { table, name: model_column.name.clone(), dates, min, max })
+    Ok(DateAxis { table, name: model_column.name.clone(), dates, min, max, visible_dates })
 }
 
 /// The model rows of a table that survive the filters currently set on that table.
@@ -503,12 +520,14 @@ fn compute_table(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut C
             };
             let start = shift(min, count, interval);
             let mut end = shift(max, count, interval);
-            // A selection that ends on the last (or second-to-last) day of its month selects the
-            // whole target period, so a full February shifted by a year still reaches February 29:
-            // "if the Dates argument includes all the days in April (30 rows), the result for the
-            // previous month includes all the days in March (31 days)" (dax.guide/DATEADD).
-            let month_edge = month_end(max) - max <= 1.0;
-            if align_end(max, interval).floor() == max {
+            // A selection that covers a whole period selects the whole target period. A selection
+            // that contains both of the last two days of its month (but not the whole period)
+            // still reaches the end of the shifted month, so a full February shifted by a year
+            // keeps February 29: "if the Dates argument includes all the days in April (30 rows),
+            // the result for the previous month includes all the days in March (31 days)"
+            // (dax.guide/DATEADD).
+            let month_edge = axis.includes_last_two_days(max);
+            if align_start(min, interval) == min && align_end(max, interval).floor() == max {
                 // The selection covers a whole period: the shift covers the whole target period.
                 end = align_end(end, interval);
             } else if month_edge && matches!(interval, Interval::Month | Interval::Quarter | Interval::Year) {
@@ -686,9 +705,9 @@ fn compute_table(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut C
             };
             let start = edate(min, -12);
             let mut end = edate(max, -12);
-            // It is `DATEADD(Dates, -1, YEAR)`: a selection ending on the last days of its month
-            // reaches the end of the shifted month, leap day included.
-            if month_end(max) - max <= 1.0 {
+            // It is `DATEADD(Dates, -1, YEAR)`: a selection containing the last two days of its
+            // month reaches the end of the shifted month, leap day included.
+            if axis.includes_last_two_days(max) {
                 end = month_end(end);
             }
             Ok(axis.table(start.min(end), start.max(end)))

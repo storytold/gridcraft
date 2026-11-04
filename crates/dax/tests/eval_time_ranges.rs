@@ -378,3 +378,30 @@ fn dateadd_and_sameperiodlastyear_keep_the_leap_day_of_a_full_month() {
     // A selection ending mid-month keeps its day span.
     assert_eq!(bounds("DATEADD('Date'[Date], -1, \"YEAR\")", dates((2025, 2, 1), (2025, 2, 15))), (serial(2024, 2, 1), serial(2024, 2, 15)));
 }
+
+#[test]
+fn dateadd_does_not_extend_a_selection_ending_on_the_penultimate_day() {
+    // 29 April is its month's penultimate day, but the selection does not contain 30 April, so
+    // the shifted window keeps its day span instead of reaching 31 March.
+    let selection = dates((2024, 4, 1), (2024, 4, 29));
+    assert_eq!(bounds("DATEADD('Date'[Date], -1, \"MONTH\")", selection.clone()), (serial(2024, 3, 1), serial(2024, 3, 29)));
+    assert_eq!(row_count("DATEADD('Date'[Date], -1, \"MONTH\")", selection), 29);
+}
+
+#[test]
+fn dateadd_does_not_extend_a_selection_ending_on_day_30_of_a_31_day_month() {
+    // 30 July is one day before its month end, but 31 July is not visible, so the shifted window
+    // stops on 30 August instead of extending to 31 August.
+    let selection = dates((2024, 7, 1), (2024, 7, 30));
+    assert_eq!(bounds("DATEADD('Date'[Date], 1, \"MONTH\")", selection.clone()), (serial(2024, 8, 1), serial(2024, 8, 30)));
+    assert_eq!(row_count("DATEADD('Date'[Date], 1, \"MONTH\")", selection), 30);
+}
+
+#[test]
+fn dateadd_does_not_expand_a_single_month_end_date_to_the_target_period() {
+    // Only 30 April 2024 is visible: the date shifts to 30 May and stays a single date instead of
+    // expanding to the end of May (or the whole target period).
+    let selection = dates((2024, 4, 30), (2024, 4, 30));
+    assert_eq!(bounds("DATEADD('Date'[Date], 1, \"MONTH\")", selection.clone()), (serial(2024, 5, 30), serial(2024, 5, 30)));
+    assert_eq!(row_count("DATEADD('Date'[Date], 1, \"MONTH\")", selection), 1);
+}
