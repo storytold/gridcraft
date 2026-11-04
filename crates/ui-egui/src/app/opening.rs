@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::Duration;
 
-use gridcraft_engine::cmd::file::{OpenProgress, PreparedOpen, finish_open, prepare_open};
+use gridcraft_engine::cmd::file::{OpenProgress, PreparedOpen, prepare_open};
 
 use super::{SheetApp, clean_error, json};
 
@@ -26,6 +26,12 @@ impl SheetApp {
     pub(super) fn open_in_background(&mut self, path: &str) -> bool {
         if !self.background_open || self.session.documents().iter().any(|d| d.path.as_deref() == Some(path)) {
             return false;
+        }
+        // As `file.open` does: what is being typed belongs to the workbook showing, which the file
+        // may replace if it looks untouched. A draft that can't be entered stays, with the reason.
+        if let Err(e) = self.settle_drafts() {
+            self.message.get_or_insert_with(|| ("GridCraft".into(), clean_error(&e)));
+            return true;
         }
         if self.opening.is_some() {
             self.open_queue.push_back(path.to_string());
@@ -59,7 +65,11 @@ impl SheetApp {
         };
         let path = opening.path.clone();
         self.opening = None;
-        match outcome.and_then(|prepared| finish_open(&mut self.session, prepared).map_err(|e| e.to_string())) {
+        let opened = outcome.and_then(|prepared| {
+            self.session.offer_prepared_open(path.clone(), prepared);
+            self.run("file.open", json!({"path": path}))
+        });
+        match opened {
             Ok(r) => self.after_open(Some(&path), &r),
             // A password-protected workbook: ask for the password; the dialog opens it.
             Err(e) if e.contains(gridcraft_engine::io::PASSWORD_REQUIRED) => self.open_dialog("openPassword", json!({"path": path})),

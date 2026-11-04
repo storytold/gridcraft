@@ -50,10 +50,15 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     let (name, bytes) = if let Some(b) = str_param(p, "base64") {
         (str_param(p, "name").unwrap_or("Book.xlsx").to_string(), crate::io::base64_decode(b).ok_or_else(|| bad("file.open", "invalid base64"))?)
     } else if let Some(path) = str_param(p, "path") {
+        let prepared = s.prepared_open.take().filter(|(for_path, _)| for_path == path);
         // Already open? Switch to it.
         if let Some(i) = s.documents().iter().position(|d| d.path.as_deref() == Some(path)) {
             s.set_active(i);
             return Ok(json!({"index": i, "alreadyOpen": true}));
+        }
+        // Read and calculated on another thread already: see `Session::offer_prepared_open`.
+        if let Some((_, prepared)) = prepared {
+            return finish_open(s, prepared);
         }
         (path.to_string(), crate::io::read_file(path)?)
     } else {
@@ -93,7 +98,8 @@ pub struct PreparedOpen {
 }
 
 /// `file.open`'s reading and calculating, for `{path}` or `{name, base64}`: it needs no session,
-/// so it can run on another thread while the window stays alive. [`finish_open`] adds the result.
+/// so it can run on another thread while the window stays alive. Hand the result to
+/// `Session::offer_prepared_open`, and `file.open` on that path adds it.
 pub fn prepare_open(p: &Json, progress: &OpenProgress) -> Result<PreparedOpen> {
     let (name, bytes) = if let Some(b) = str_param(p, "base64") {
         (str_param(p, "name").unwrap_or("Book.xlsx").to_string(), crate::io::base64_decode(b).ok_or_else(|| bad("file.open", "invalid base64"))?)
@@ -137,8 +143,8 @@ fn prepare(name: String, bytes: Vec<u8>, p: &Json, progress: &OpenProgress) -> R
     Ok(PreparedOpen { wb, calc, warnings, path, title, content_is_xlsx })
 }
 
-/// Adds a prepared workbook to the session, as `file.open` does: its result is that command's.
-pub fn finish_open(s: &mut Session, prepared: PreparedOpen) -> Result<Json> {
+/// Adds a prepared workbook to the session: the rest of `file.open`, and its result.
+fn finish_open(s: &mut Session, prepared: PreparedOpen) -> Result<Json> {
     let PreparedOpen { wb, calc, warnings, path, title, content_is_xlsx } = prepared;
     // Replace an untouched blank Book1 like Excel does.
     if s.documents().len() == 1

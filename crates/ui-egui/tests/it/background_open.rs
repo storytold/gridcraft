@@ -151,3 +151,62 @@ fn without_background_opening_it_is_synchronous() {
     assert!(!h.state().is_opening());
     assert_eq!(a1(&h), Value::Number(4.0));
 }
+
+#[test]
+fn a_cell_being_typed_is_entered_before_the_blank_workbook_makes_way() {
+    let mut h = harness();
+    let path = file("draft.xlsx", "=1");
+    h.state_mut().begin_edit(Some("typed".into()), false);
+    h.run_steps(2);
+    h.state_mut().open_path(&path);
+    assert!(h.state().editor.is_none());
+    wait(&mut h);
+    assert_eq!(h.state().session.documents().len(), 2, "the workbook has an entry now: it stays");
+    let typed = h.state().session.documents()[0].wb.active().unwrap().value(CellRef::parse("A1").unwrap());
+    assert_eq!(typed, Value::text("typed"));
+}
+
+#[test]
+fn a_draft_that_cant_be_entered_stays_and_nothing_opens() {
+    let mut h = harness();
+    let path = file("refused.xlsx", "=1");
+    h.state_mut().begin_edit(Some("=1*/2".into()), false);
+    h.run_steps(2);
+    h.state_mut().open_path(&path);
+    assert!(!h.state().is_opening());
+    assert!(h.state().message.is_some());
+    assert_eq!(h.state().editor.as_ref().map(|e| e.text.as_str()), Some("=1*/2"));
+    assert_eq!(h.state().session.documents().len(), 1);
+}
+
+#[test]
+fn the_open_is_in_the_journal_as_the_command_it_is() {
+    let mut h = harness();
+    let path = file("journal.xlsx", "=1");
+    h.state_mut().open_path(&path);
+    wait(&mut h);
+    let journal = &h.state().session.journal;
+    assert!(journal.iter().any(|(id, p)| id == "file.open" && p["path"] == json!(path)), "{journal:?}");
+}
+
+#[test]
+fn a_file_opened_another_way_meanwhile_isnt_added_twice() {
+    let mut h = harness_without_logic();
+    let path = file("twice-meanwhile.xlsx", "=5");
+    h.state_mut().open_path(&path);
+    assert!(h.state().is_opening());
+    // Another entry point (a command, the control channel) opens it first.
+    h.state_mut().run("file.open", json!({"path": path})).unwrap();
+    assert_eq!(h.state().session.documents().len(), 1);
+    let ctx = h.ctx.clone();
+    for _ in 0..2000 {
+        h.state_mut().logic(&ctx);
+        if !h.state().is_opening() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!h.state().is_opening());
+    let same = h.state().session.documents().iter().filter(|d| d.path.as_deref() == Some(path.as_str())).count();
+    assert_eq!(same, 1);
+}
