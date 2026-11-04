@@ -359,57 +359,53 @@ pub fn read_styles(root: &El, checkboxes: &[bool], minor_font: &str) -> StylesIn
             }
         }
     }
-    let dxfs = root
-        .child("dxfs")
-        .map(|d| {
-            d.kids("dxf")
-                .map(|x| {
-                    let mut s = Style::default();
-                    if let Some(e) = x.child("font") {
-                        let f = read_font(e, &palette);
-                        // Differential fonts rarely name a face; unless stated, keep the default face and size.
-                        let has_size = e.child("sz").and_then(|n| n.attr_f64("val")).is_some();
-                        let has_name = e.child("name").and_then(|n| n.attr("val")).is_some();
-                        let name = if has_name { f.name.clone() } else { s.font.name.clone() };
-                        let size = if has_size { f.size } else { s.font.size };
-                        let def = Font::default();
-                        let st = &mut s.dxf_stated;
-                        st.bold = e.child("b").is_some() && !f.bold;
-                        st.italic = e.child("i").is_some() && !f.italic;
-                        st.strike = e.child("strike").is_some() && !f.strike;
-                        st.underline = e.child("u").is_some() && f.underline == Underline::None;
-                        st.size = has_size && size == def.size;
-                        st.name = has_name && name == def.name;
-                        st.scheme = e.child_val("scheme").map(str::to_string);
-                        // A differential font's scheme is in `dxf_stated`.
-                        s.font = Font { name, size, minor: s.font.minor, ..f };
-                    }
-                    if let Some(n) = x.child("numFmt") {
-                        if let Some(code) = n.attr("formatCode") {
-                            s.num_fmt = NumFmt::new(code);
-                        } else if let Some(id) = n.attr_u32("numFmtId") {
-                            s.num_fmt = num_fmt_code(id, &fmts);
-                        }
-                    }
-                    if let Some(f) = x.child("fill") {
-                        s.fill = read_fill(f, &palette, true);
-                    }
-                    if let Some(b) = x.child("border") {
-                        s.borders = read_border(b, &palette);
-                    }
-                    if let Some(a) = x.child("alignment") {
-                        s.align = read_alignment(a);
-                    }
-                    if let Some(p) = x.child("protection") {
-                        s.protection = read_protection(p);
-                        s.dxf_stated.protection = s.protection == Protection::default();
-                    }
-                    s
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let dxfs = root.child("dxfs").map(|d| d.kids("dxf").map(|x| read_dxf(x, &palette, &fmts)).collect()).unwrap_or_default();
     StylesIn { xfs, dxfs, palette, named, num_fmts: fmts }
+}
+
+/// One differential format (`dxf`): the style it sets over a cell's own.
+fn read_dxf(x: &El, palette: &[u32], fmts: &HashMap<u32, String>) -> Style {
+    let mut s = Style::default();
+    if let Some(e) = x.child("font") {
+        let f = read_font(e, palette);
+        // Differential fonts rarely name a face; unless stated, keep the default face and size.
+        let has_size = e.child("sz").and_then(|n| n.attr_f64("val")).is_some();
+        let has_name = e.child("name").and_then(|n| n.attr("val")).is_some();
+        let name = if has_name { f.name.clone() } else { s.font.name.clone() };
+        let size = if has_size { f.size } else { s.font.size };
+        let def = Font::default();
+        let st = &mut s.dxf_stated;
+        st.bold = e.child("b").is_some() && !f.bold;
+        st.italic = e.child("i").is_some() && !f.italic;
+        st.strike = e.child("strike").is_some() && !f.strike;
+        st.underline = e.child("u").is_some() && f.underline == Underline::None;
+        st.size = has_size && size == def.size;
+        st.name = has_name && name == def.name;
+        st.scheme = e.child_val("scheme").map(str::to_string);
+        // A differential font's scheme is in `dxf_stated`.
+        s.font = Font { name, size, minor: s.font.minor, ..f };
+    }
+    if let Some(n) = x.child("numFmt") {
+        if let Some(code) = n.attr("formatCode") {
+            s.num_fmt = NumFmt::new(code);
+        } else if let Some(id) = n.attr_u32("numFmtId") {
+            s.num_fmt = num_fmt_code(id, fmts);
+        }
+    }
+    if let Some(f) = x.child("fill") {
+        s.fill = read_fill(f, palette, true);
+    }
+    if let Some(b) = x.child("border") {
+        s.borders = read_border(b, palette);
+    }
+    if let Some(a) = x.child("alignment") {
+        s.align = read_alignment(a);
+    }
+    if let Some(p) = x.child("protection") {
+        s.protection = read_protection(p);
+        s.dxf_stated.protection = s.protection == Protection::default();
+    }
+    s
 }
 
 // ---------------------------------------------------------------- writing

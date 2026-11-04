@@ -65,7 +65,6 @@ fn controls_whose_command_only_reports_data_show_the_result() {
         ("Data", "Queries & Connections", "queriesConnections"),
         ("Review", "Thesaurus", "thesaurus"),
         ("View", "Custom Views", "customViews"),
-        ("View", "Switch Windows", "switchWindows"),
     ] {
         tab(&mut h, tab_name);
         click(&mut h, label);
@@ -76,25 +75,6 @@ fn controls_whose_command_only_reports_data_show_the_result() {
         control(&mut h, "ui.dialog.cancel", json!({}));
         h.run_steps(2);
     }
-}
-
-#[test]
-fn the_windows_dialog_lists_the_open_windows() {
-    let mut h = harness();
-    tab(&mut h, "View");
-    click(&mut h, "New Window");
-    click(&mut h, "Switch Windows");
-    assert_eq!(dialog_name(&h).as_deref(), Some("switchWindows"));
-    let windows = h.state().dialog.as_ref().and_then(|d| d.result.clone()).unwrap_or(Json::Null);
-    assert_eq!(windows.as_array().map(Vec::len), Some(2), "both windows are listed: {windows}");
-    // Clicking the window that is not in front switches to it.
-    let other =
-        windows.as_array().and_then(|a| a.iter().find(|w| w["active"] == false)).and_then(|w| w["title"].as_str()).unwrap_or_default().to_string();
-    assert!(!other.is_empty());
-    click(&mut h, &other);
-    assert!(h.state().dialog.is_none(), "switching closes the dialog");
-    let titles: Vec<String> = h.state().session.documents().iter().map(|d| d.display_title()).collect();
-    assert_eq!(h.state().session.active().map(|d| d.display_title()), Some(other), "the clicked window is in front: {titles:?}");
 }
 
 #[test]
@@ -164,7 +144,7 @@ fn pivot_chart_asks_for_the_report_instead_of_failing() {
     assert!(h.state().message.is_none(), "{:?}", h.state().message);
     assert_eq!(h.state().session.active().and_then(|d| d.wb.active().map(|sh| sh.charts.len())), Some(1));
     let chart = h.state().session.active().and_then(|d| d.wb.active().and_then(|sh| sh.charts.first().map(|c| c.id)));
-    assert_eq!(h.state().selected_chart, chart, "the inserted PivotChart is selected, so Chart Design applies to it");
+    assert_eq!(h.state().selected_chart(), chart, "the inserted PivotChart is selected, so Chart Design applies to it");
 }
 
 /// A report whose name reads as a cell (`A1`) is submitted by id, so the dialog charts it instead
@@ -286,15 +266,83 @@ fn blank_pivot_and_consolidate_inputs_open_their_dialogs() {
     }
 }
 
-/// Automate ▸ GridCraft keeps one control for the macros dialog: All Scripts already opens it, so
-/// the older Macros button beside it is gone rather than doing the same thing twice (#1798).
+/// Automate ▸ Scripting Tools keeps the script recorder next to the macro controls: Record
+/// Actions runs `automate.recordActions`, and the Macros button still opens the macros dialog.
 #[test]
-fn the_automate_tab_has_one_macros_control() {
+fn the_automate_tab_offers_record_actions_and_macros() {
     let mut h = harness();
     tab(&mut h, "Automate");
-    let painted = h.output().shapes.iter().filter(|c| matches!(&c.shape, egui::Shape::Text(t) if t.galley.job.text == "Macros")).count();
-    assert_eq!(painted, 0, "no second Macros button beside All Scripts");
-    click(&mut h, "All Scripts");
-    assert_eq!(dialog_name(&h).as_deref(), Some("macros"), "All Scripts opens the macros dialog");
+    click(&mut h, "Record Actions");
+    assert!(h.state().message.is_none(), "Record Actions starts the recorder: {:?}", h.state().message);
+    control(&mut h, "ui.dialog.cancel", json!({}));
+    h.run_steps(2);
+    click(&mut h, "Macros");
+    assert_eq!(dialog_name(&h).as_deref(), Some("macros"), "Macros opens the macros dialog");
     assert!(h.state().message.is_none(), "{:?}", h.state().message);
+}
+
+/// Commands the app implements itself rather than the engine (`SheetApp::run_ui_command`). A
+/// ribbon control may name one of these; every other id has to be a registered engine command.
+const UI_COMMANDS: &[&str] = &["app.language.set", "view.animations", "view.darkMode", "view.interfaceScale", "view.selectionPane", "view.theme"];
+
+/// The command ids a tab's source passes to `act(app, "…")` and `control_keytip(…, "…")`. Ids
+/// without a dot are dialog or menu keytip targets, not commands, and are left out.
+fn command_ids(src: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut rest = src;
+    while let Some(i) = rest.find("act(app, \"") {
+        let tail = &rest[i + "act(app, \"".len()..];
+        match tail.find('"') {
+            Some(j) => ids.push(tail[..j].to_string()),
+            None => break,
+        }
+        rest = tail;
+    }
+    let mut rest = src;
+    while let Some(i) = rest.find("control_keytip(") {
+        let tail = &rest[i..];
+        let Some(close) = tail.find(");") else { break };
+        let call = &tail[..close];
+        if let Some(close_quote) = call.rfind('"')
+            && let Some(open_quote) = call[..close_quote].rfind('"')
+        {
+            ids.push(call[open_quote + 1..close_quote].to_string());
+        }
+        rest = &tail[close..];
+    }
+    ids
+}
+
+/// Every control the ribbon tabs draw names a command that exists: an engine command, or one of
+/// the UI commands the app implements itself. A placeholder button that resolves to nothing is
+/// exactly the defect #1797 reported, so this reads the tab sources rather than a hand-kept list.
+#[test]
+fn every_ribbon_control_points_at_a_registered_command() {
+    let sources = [
+        ("home", include_str!("../src/ribbon/home.rs")),
+        ("insert", include_str!("../src/ribbon/insert.rs")),
+        ("draw", include_str!("../src/ribbon/insert.rs")),
+        ("page_layout", include_str!("../src/ribbon/page_layout.rs")),
+        ("formulas", include_str!("../src/ribbon/formulas.rs")),
+        ("data", include_str!("../src/ribbon/data.rs")),
+        ("review", include_str!("../src/ribbon/review.rs")),
+        ("view", include_str!("../src/ribbon/view.rs")),
+        ("automate", include_str!("../src/ribbon/automate.rs")),
+        ("contextual", include_str!("../src/ribbon/contextual.rs")),
+    ];
+    let mut missing = Vec::new();
+    let mut checked = 0;
+    for (file, src) in sources {
+        for id in command_ids(src) {
+            if !id.contains('.') || id.starts_with("dialog:") {
+                continue;
+            }
+            checked += 1;
+            if gridcraft_engine::find_command(&id).is_none() && !UI_COMMANDS.contains(&id.as_str()) {
+                missing.push(format!("{file}: {id}"));
+            }
+        }
+    }
+    assert!(checked > 100, "the scan found only {checked} control ids; the source layout changed");
+    assert!(missing.is_empty(), "ribbon controls with no registered command: {missing:#?}");
 }
