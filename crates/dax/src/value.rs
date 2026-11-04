@@ -127,6 +127,12 @@ impl Scalar {
                 if fraction == 0 { format!("{sign}{whole}") } else { format!("{sign}{whole}.{}", format!("{fraction:04}").trim_end_matches('0')) }
             }
             Scalar::DateTime(serial) => datetime_text(*serial),
+            // DAX prints at most 15 significant digits; Rust's shortest round-trip form can show
+            // 17 (`0.30000000000000004`), so fractional decimals are rounded first.
+            Scalar::Decimal(value) if value.is_finite() => {
+                let rounded: f64 = format!("{value:.14e}").parse().unwrap_or(*value);
+                rounded.to_string()
+            }
             other => other.to_text(),
         }
     }

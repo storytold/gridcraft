@@ -351,4 +351,6 @@ fn currency_and_large_numbers_concatenate_in_dax_form() {
     assert_eq!(text("CONVERT(1, CURRENCY) & \"\""), "1");
     // Very large whole numbers use Excel's exponent text with the explicit sign.
     assert_eq!(text("1e15 & \"\""), "1E+15");
+    // DAX prints 15 significant digits, so a floating-point residue does not surface.
+    assert_eq!(text("0.1 + 0.2 & \"\""), "0.3");
 }

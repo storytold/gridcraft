@@ -366,7 +366,7 @@ fn split_sections(format: &str) -> Vec<String> {
 }
 
 /// Formats a text value with the optional fourth (text) section of a custom format.
-fn apply_text_section(section: &str, text: &str) -> String {
+fn apply_text_section(section: &str, text: &str) -> Result<String, EvalError> {
     let chars: Vec<char> = section.chars().collect();
     let mut out = String::new();
     let mut index = 0;
@@ -391,16 +391,18 @@ fn apply_text_section(section: &str, text: &str) -> String {
                 }
             }
             '@' => {
-                out.push_str(text);
+                // Bounded while building: a text pattern of thousands of `@` over a 1 MiB value
+                // would otherwise allocate gigabytes before the length check ran.
+                push_checked(&mut out, text)?;
                 index += 1;
             }
             other => {
-                out.push(other);
+                push_checked(&mut out, &other.to_string())?;
                 index += 1;
             }
         }
     }
-    out
+    Ok(out)
 }
 
 fn general_number(value: f64) -> String {
@@ -463,11 +465,7 @@ fn format_value(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Re
     if let Scalar::String(text) = value {
         let sections = split_sections(&format);
         if sections.len() >= 4 && !sections[3].is_empty() {
-            let formatted = apply_text_section(&sections[3], text);
-            if formatted.len() > MAX_TEXT_LEN {
-                return Err(EvalError::new("FORMAT result exceeds the maximum supported length"));
-            }
-            return Ok(Scalar::String(formatted));
+            return Ok(Scalar::String(apply_text_section(&sections[3], text)?));
         }
         return Ok(Scalar::String(text.clone()));
     }
