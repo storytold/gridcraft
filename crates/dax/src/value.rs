@@ -93,7 +93,9 @@ impl Scalar {
             Scalar::Integer(value) => Some(*value as f64),
             Scalar::Currency(value) => Some(*value as f64 / 10_000.0),
             Scalar::Decimal(value) | Scalar::DateTime(value) => Some(*value),
-            Scalar::String(value) => value.trim().parse().ok(),
+            // `f64::from_str` accepts "nan"/"inf"; DAX has no text form for those, so they are
+            // not numbers here.
+            Scalar::String(value) => value.trim().parse::<f64>().ok().filter(|number| number.is_finite()),
         }
     }
 

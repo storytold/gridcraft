@@ -210,7 +210,7 @@ fn blank_compares_as_empty_text_and_as_zero() {
 
 #[test]
 fn calculate_filter_accepts_an_in_list() {
-    // Excel returns 1010 for the equivalent fixture query.
+    // East (10 + 30) plus West (20).
     assert_eq!(eval_in_sales(r#"CALCULATE(SUM(Sales[Amount]), Sales[Region] IN { "East", "West" })"#), Scalar::Decimal(60.0));
     // A list of one.
     assert_eq!(eval_in_sales(r#"CALCULATE(SUM(Sales[Amount]), Sales[Region] IN { "North" })"#), Scalar::Decimal(40.0));
