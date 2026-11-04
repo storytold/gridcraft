@@ -140,6 +140,12 @@ impl Font {
         }
     }
 
+    /// WinAnsi fallback uses the same face for measurement and drawing.
+    fn win_ansi_fallback(self) -> Font {
+        let style = self.fallback_style();
+        Self::styled(Family::Sans, style & 1 != 0, style & 2 != 0)
+    }
+
     /// The face of `family` with the given weight and slant.
     pub fn styled(family: Family, bold: bool, italic: bool) -> Font {
         match (family, bold, italic) {
@@ -198,6 +204,9 @@ impl Font {
             && let Some((_, width)) = unicode::font(usize::from(i)).and_then(|f| f.glyph(c))
         {
             return width;
+        }
+        if matches!(self, Font::Embedded(_)) && !needs_cid(c) {
+            return self.win_ansi_fallback().char_width(c);
         }
         let table: Option<&[u16; 95]> = match self {
             Font::Helvetica | Font::HelveticaOblique => Some(&metrics::HELVETICA),
@@ -281,10 +290,10 @@ const CID_FONT: usize = Font::ALL.len();
 /// Number of font resources a page can use.
 const UNICODE_FONT: usize = CID_FONT + 1;
 
-/// Embedded faces need six objects; standard and legacy CID faces use their fixed counts.
+/// Embedded faces need seven objects; standard and legacy CID faces use their fixed counts.
 fn font_object_count(slot: usize) -> u32 {
     if slot >= UNICODE_FONT {
-        6
+        7
     } else if slot == CID_FONT {
         3
     } else {
@@ -424,6 +433,7 @@ pub struct Page {
     links: Vec<LinkAnnotation>,
     depth: u32,
     unicode_glyphs: [std::collections::BTreeMap<u16, char>; unicode::FONT_LIMIT],
+    unicode_codes: UnicodeCodes,
 }
 
 /// Most bytes of content per page before further drawing is dropped (keeps hostile inputs from
@@ -434,7 +444,25 @@ const MAX_IMAGE_PIXELS: u64 = 40_000_000;
 const MAX_PAGE_LINKS: usize = 4096;
 const MAX_LINK_URI_BYTES: usize = 4096;
 
+/// Document-local character codes, capped at 65535 distinct characters per face.
+type UnicodeCodes = std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<usize, std::collections::BTreeMap<char, u16>>>>;
+
 impl Page {
+    /// Allocate a distinct CID for each character; exhausted faces use the existing fallback.
+    fn unicode_code(&self, slot: usize, c: char) -> Option<u16> {
+        if slot >= unicode::FONT_LIMIT {
+            return None;
+        }
+        let mut codes = self.unicode_codes.lock().ok()?;
+        let face = codes.entry(slot).or_default();
+        if let Some(code) = face.get(&c) {
+            return Some(*code);
+        }
+        let code = u16::try_from(face.len() + 1).ok()?;
+        face.insert(c, code);
+        Some(code)
+    }
+
     pub fn width(&self) -> f32 {
         self.width
     }
@@ -677,11 +705,14 @@ impl Page {
             let slot_for = |c| {
                 if let Font::Embedded(i) = font
                     && unicode::font(usize::from(i)).and_then(|f| f.glyph(c)).is_some()
+                    && self.unicode_code(usize::from(i), c).is_some()
                 {
                     UNICODE_FONT + usize::from(i)
                 } else if !needs_cid(c) {
-                    if fi >= UNICODE_FONT { Font::Helvetica.index() } else { fi }
-                } else if unicode::font(font.fallback_style()).and_then(|f| f.glyph(c)).is_some() {
+                    if fi >= UNICODE_FONT { font.win_ansi_fallback().index() } else { fi }
+                } else if unicode::font(font.fallback_style()).and_then(|f| f.glyph(c)).is_some()
+                    && self.unicode_code(font.fallback_style(), c).is_some()
+                {
                     UNICODE_FONT + font.fallback_style()
                 } else {
                     CID_FONT
@@ -694,10 +725,10 @@ impl Page {
                 let style = slot - UNICODE_FONT;
                 let mut hex = String::from("<");
                 for c in run.chars() {
-                    if let Some((gid, _)) = unicode::font(style).and_then(|f| f.glyph(c)) {
-                        let _ = write!(hex, "{gid:04X}");
+                    if let Some(code) = self.unicode_code(style, c) {
+                        let _ = write!(hex, "{code:04X}");
                         if let Some(glyphs) = self.unicode_glyphs.get_mut(style) {
-                            glyphs.entry(gid).or_insert(c);
+                            glyphs.insert(code, c);
                         }
                     }
                 }
@@ -754,6 +785,7 @@ pub struct Info {
 #[derive(Default)]
 pub struct PdfDoc {
     pages: Vec<Page>,
+    unicode_codes: UnicodeCodes,
     pub info: Info,
 }
 
@@ -831,6 +863,7 @@ impl PdfDoc {
             links: Vec::new(),
             depth: 0,
             unicode_glyphs: std::array::from_fn(|_| std::collections::BTreeMap::new()),
+            unicode_codes: std::sync::Arc::clone(&self.unicode_codes),
         });
         let i = self.pages.len() - 1;
         &mut self.pages[i]

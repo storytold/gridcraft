@@ -19,6 +19,11 @@ font folders and `GRIDCRAFT_PDF_FONT_DIR`; it does not construct paths from work
 The explicit directory override is searched before system/user roots. Missing Unicode glyphs
 use a fallback matching the selected face's bold/italic style. Glyph metrics and missing-glyph
 results are cached per face, capped at 4096 characters to bound memory usage.
+Missing WinAnsi characters draw and measure the same styled Helvetica fallback.
+Embedded text uses document-local character codes and an explicit CID-to-glyph map.
+ToUnicode maps each original character independently, including supplementary-plane characters
+and characters sharing one glyph across pages. Each face can encode 65535 distinct characters
+per document; further characters use the existing fallback path.
 No installed font bytes are added to this repository. Faces must permit outline embedding.
 The native resolver currently supports at most 32 named faces per process, up to 16 MiB per
 file. TrueType collections, CFF outlines and variable-font instance selection are not yet

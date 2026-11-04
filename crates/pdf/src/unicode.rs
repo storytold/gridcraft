@@ -246,7 +246,7 @@ impl UnicodeFont {
         Some((glyph.0, width))
     }
 
-    /// Six consecutive PDF objects: Type0, descendant, descriptor, file, widths, ToUnicode.
+    /// Seven consecutive objects: Type0, descendant, descriptor, file, widths, ToUnicode, CID-to-glyph map.
     pub(super) fn objects(&self, id: u32, glyphs: &BTreeMap<u16, char>) -> Vec<(u32, Vec<u8>)> {
         let Some(face) = self.face() else { return Vec::new() };
         let name = face
@@ -261,19 +261,23 @@ impl UnicodeFont {
         let bbox = face.global_bounding_box();
         let metric = |v: i16| (f32::from(v) * scale).round() as i32;
         let (cid, desc, file, widths, unicode) = (id + 1, id + 2, id + 3, id + 4, id + 5);
+        let gid_map = id + 6;
         let mut w = String::from("[");
+        let mut gids = vec![0u8; (usize::from(glyphs.keys().next_back().copied().unwrap_or(0)) + 1) * 2];
         let mut cmap = String::from(
             "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /GridCraftUnicode def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n",
         );
         let entries: Vec<_> = glyphs.iter().collect();
         for chunk in entries.chunks(100) {
             let _ = writeln!(cmap, "{} beginbfchar", chunk.len());
-            for &(gid, c) in chunk {
-                let width = self.glyph(*c).map_or(0, |(_, w)| w);
-                let _ = write!(w, "{gid} [{width}] ");
+            for &(code, c) in chunk {
+                let (gid, width) = self.glyph(*c).unwrap_or((0, 0));
+                let _ = write!(w, "{code} [{width}] ");
+                let offset = usize::from(*code) * 2;
+                gids[offset..offset + 2].copy_from_slice(&gid.to_be_bytes());
                 let mut utf16 = [0u16; 2];
                 let encoded = c.encode_utf16(&mut utf16);
-                let _ = write!(cmap, "<{gid:04X}> <");
+                let _ = write!(cmap, "<{code:04X}> <");
                 for unit in encoded {
                     let _ = write!(cmap, "{unit:04X}");
                 }
@@ -285,11 +289,12 @@ impl UnicodeFont {
         cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
         vec![
             (id, format!("<< /Type /Font /Subtype /Type0 /BaseFont /{name} /Encoding /Identity-H /DescendantFonts [{cid} 0 R] /ToUnicode {unicode} 0 R >>").into_bytes()),
-            (cid, format!("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{name} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor {desc} 0 R /CIDToGIDMap /Identity /W {widths} 0 R >>").into_bytes()),
+            (cid, format!("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{name} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor {desc} 0 R /CIDToGIDMap {gid_map} 0 R /W {widths} 0 R >>").into_bytes()),
             (desc, format!("<< /Type /FontDescriptor /FontName /{name} /Flags 32 /FontBBox [{} {} {} {}] /ItalicAngle {} /Ascent {} /Descent {} /CapHeight {} /StemV 80 /FontFile2 {file} 0 R >>",metric(bbox.x_min),metric(bbox.y_min),metric(bbox.x_max),metric(bbox.y_max),face.italic_angle(),metric(face.ascender()),metric(face.descender()),metric(face.capital_height().unwrap_or(face.ascender()))).into_bytes()),
             (file, stream(&self.bytes, &format!(" /Length1 {}",self.bytes.len()))),
             (widths, w.into_bytes()),
             (unicode, stream(cmap.as_bytes(), "")),
+            (gid_map, stream(&gids, "")),
         ]
     }
 }
@@ -300,6 +305,48 @@ fn stream(bytes: &[u8], extra: &str) -> Vec<u8> {
     out.extend_from_slice(bytes);
     out.extend_from_slice(b"\nendstream");
     out
+}
+
+#[cfg(test)]
+/// Build a small original metrics-only face: space, NBSP and an astral character share glyph 1.
+/// No installed fonts or redistributed font fixtures are needed for the mapping regressions.
+pub(super) fn test_font(bold: bool, italic: bool) -> super::Font {
+    let mut head = vec![0; 54];
+    head[18..20].copy_from_slice(&1000u16.to_be_bytes());
+    let mut hhea = vec![0; 36];
+    hhea[4..6].copy_from_slice(&800i16.to_be_bytes());
+    hhea[6..8].copy_from_slice(&(-200i16).to_be_bytes());
+    hhea[34..36].copy_from_slice(&2u16.to_be_bytes());
+    let maxp = vec![0, 0, 0x50, 0, 0, 2];
+    let mut cmap = vec![0, 0, 0, 1, 0, 3, 0, 10, 0, 0, 0, 12];
+    cmap.extend_from_slice(&[0, 12, 0, 0]);
+    for n in [52u32, 0, 3, 32, 32, 1, 160, 160, 1, 0x1f600, 0x1f600, 1] {
+        cmap.extend_from_slice(&n.to_be_bytes());
+    }
+    let tables = [(b"cmap", cmap), (b"head", head), (b"hhea", hhea), (b"hmtx", vec![0, 0, 0, 0, 1, 244, 0, 0]), (b"maxp", maxp)];
+    let mut bytes = vec![0; 12 + tables.len() * 16];
+    bytes[..4].copy_from_slice(&0x00010000u32.to_be_bytes());
+    bytes[4..6].copy_from_slice(&(tables.len() as u16).to_be_bytes());
+    for (i, (tag, data)) in tables.into_iter().enumerate() {
+        let start = 12 + i * 16;
+        bytes[start..start + 4].copy_from_slice(tag);
+        let offset = bytes.len() as u32;
+        bytes[start + 8..start + 12].copy_from_slice(&offset.to_be_bytes());
+        bytes[start + 12..start + 16].copy_from_slice(&(data.len() as u32).to_be_bytes());
+        bytes.extend(data);
+        while !bytes.len().is_multiple_of(4) {
+            bytes.push(0);
+        }
+    }
+    let face = Arc::new(UnicodeFont::new(bytes));
+    assert_eq!(face.glyph(' '), Some((1, 500)));
+    assert_eq!(face.glyph('\u{a0}'), Some((1, 500)));
+    assert_eq!(face.glyph('\u{1f600}'), Some((1, 500)));
+    let mut fonts = NAMED.lock().unwrap();
+    let index = fonts.len() + 4;
+    assert!(index < FONT_LIMIT);
+    fonts.push((format!("GridCraft synthetic {index}"), bold, italic, face));
+    super::Font::Embedded(index as u8)
 }
 
 #[cfg(test)]

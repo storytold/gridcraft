@@ -423,3 +423,61 @@ fn named_fallback_style_is_independent_of_font_slot() {
         assert_eq!(font.fallback_style(), style);
     }
 }
+
+/// Distinct characters sharing one glyph retain their text, including across pages and beyond BMP.
+#[test]
+fn shared_glyph_preserves_each_character_code() -> Result<(), Box<dyn Error>> {
+    let selected = unicode::test_font(false, false);
+    let mut doc = PdfDoc::new();
+    doc.add_page(200.0, 100.0).text(10.0, 30.0, 12.0, selected, [0, 0, 0], " \u{a0}\u{1f600} ");
+    doc.add_page(200.0, 100.0).text(10.0, 30.0, 12.0, selected, [0, 0, 0], "\u{1f600}\u{a0} ");
+    assert!(doc.pages[0].content.contains("<0001000200030001> Tj"));
+    assert!(doc.pages[1].content.contains("<000300020001> Tj"));
+    let pdf = doc.finish();
+    check_xref(&pdf)?;
+    let s = String::from_utf8_lossy(&pdf);
+    for mapping in ["<0001> <0020>", "<0002> <00A0>", "<0003> <D83DDE00>"] {
+        assert_eq!(s.matches(mapping).count(), 1, "{mapping}");
+    }
+    assert!(s.contains("/CIDToGIDMap "));
+    assert!(!s.contains("/CIDToGIDMap /Identity"));
+    assert!(find(&pdf, b"stream\n\x00\x00\x00\x01\x00\x01\x00\x01\nendstream").is_some());
+    assert!(s.contains("[1 [500] 2 [500] 3 [500] ]"));
+    Ok(())
+}
+
+/// Character codes are bounded per face, reused at capacity, and isolated per document.
+#[test]
+fn character_codes_are_bounded_and_document_local() {
+    let mut doc = PdfDoc::new();
+    let page = doc.add_page(100.0, 100.0);
+    for (i, c) in (0..).filter_map(char::from_u32).take(65535).enumerate() {
+        assert_eq!(page.unicode_code(0, c), Some((i + 1) as u16));
+    }
+    assert_eq!(page.unicode_code(0, '\0'), Some(1));
+    assert_eq!(page.unicode_code(0, '\u{10ffff}'), None);
+    assert_eq!(page.unicode_code(unicode::FONT_LIMIT, 'a'), None);
+    assert_eq!(page.unicode_code(1, 'a'), Some(1));
+    let mut other = PdfDoc::new();
+    assert_eq!(other.add_page(100.0, 100.0).unicode_code(0, '\u{10ffff}'), Some(1));
+}
+
+/// Missing WinAnsi glyphs draw and measure the same styled standard face in mixed runs.
+#[test]
+fn missing_win_ansi_glyphs_keep_style_and_width() -> Result<(), Box<dyn Error>> {
+    for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
+        let selected = unicode::test_font(bold, italic);
+        let fallback = Font::styled(Family::Sans, bold, italic);
+        assert!(!selected.can_encode('A') && !selected.can_encode('\u{e9}'));
+        assert_eq!(selected.char_width('A'), fallback.char_width('A'));
+        assert_eq!(selected.char_width('\u{e9}'), fallback.char_width('\u{e9}'));
+        assert!((text_width(selected, 10.0, "A\u{e9} ") - text_width(fallback, 10.0, "A\u{e9}") - 5.0).abs() < 0.0001);
+        let mut doc = PdfDoc::new();
+        doc.add_page(200.0, 100.0).text(10.0, 30.0, 12.0, selected, [0, 0, 0], " A\u{e9} ");
+        assert!(page_content(&doc).contains(&format!("/F{} 12 Tf\n(A\\351) Tj", fallback.index() + 1)));
+        let pdf = doc.finish();
+        check_xref(&pdf)?;
+        assert!(String::from_utf8_lossy(&pdf).contains(&format!("/BaseFont /{} /Encoding /WinAnsiEncoding", fallback.base_name())));
+    }
+    Ok(())
+}
