@@ -284,7 +284,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                 crate::cmd::data::remove_validation_cells(&mut sh.validations, &[RangeRef::new(dest, dest)]);
                 if let Some(mut dv) = rule {
                     // Relative references move with the rule, as pasted formulas do.
-                    let first = dv.ranges.first().map_or(sc, |r| r.start);
+                    let first = RangeRef::top_left(&dv.ranges).unwrap_or(sc);
                     dv.f1 = crate::cmd::data::move_rule_formula(&dv.f1, first, dest);
                     dv.f2 = dv.f2.map(|f| crate::cmd::data::move_rule_formula(&f, first, dest));
                     dv.ranges = vec![RangeRef::new(dest, dest)];

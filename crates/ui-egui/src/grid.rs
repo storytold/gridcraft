@@ -22,6 +22,8 @@ type PagesCache = ((u64, u64, usize), Vec<(RangeRef, u32)>);
 /// Cached Show Details cells, keyed by (doc uid, revision, sheet, pivot).
 type DetailsCache = ((u64, u64, usize, usize), Option<std::collections::HashSet<(u32, u32)>>);
 
+mod active_row;
+pub use active_row::active_row_band;
 mod cell_paint;
 mod cursor;
 mod editor;
@@ -101,6 +103,10 @@ pub enum Drag {
     Select,
     Rows(u32),
     Cols(u32),
+    /// Point mode over the row headers: the formula's reference runs from this row to the pointer.
+    PointRows(u32),
+    /// Point mode over the column headers: the formula's reference runs from this column to the pointer.
+    PointCols(u32),
     /// Reordering one contiguous whole-column selection by its header.
     MoveCols {
         source: RangeRef,
