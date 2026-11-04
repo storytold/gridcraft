@@ -472,8 +472,13 @@ fn run(args: &[String]) -> Result<(), String> {
             let open_path = if id == "file.open" { p.get("path").and_then(Value::as_str).map(str::to_string) } else { None };
             let r = exec(&mut s, &id, p).map_err(|e| format!("step {step} ({origin}, {id}): {e}"))?;
             if open_path.is_some() || id == "file.open" {
-                lossy += lossy_warnings(&r);
-                if let Some(path) = open_path {
+                let counted = lossy_warnings(&r);
+                lossy += counted;
+                // Only a counted warning moves the blame: a later clean open must not be
+                // named as the import that dropped content.
+                if counted > 0
+                    && let Some(path) = open_path
+                {
                     lossy_from = path;
                 }
             }
@@ -768,6 +773,26 @@ mod tests {
         assert!(e.contains("--allow-lossy"), "{e}");
         assert!(std::fs::read(&output).unwrap().starts_with(b"PK"));
         run(&vec!["--quiet".into(), "--cmd".into(), open_cmd, "--out".into(), path(&output), "--allow-lossy".into()]).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn run_blames_the_lossy_import_not_a_later_clean_open() {
+        // A clean file.open after a lossy import must not take the blame: the failure
+        // names the import that actually dropped content.
+        let (dir, input) = warned_csv("run-blame");
+        let clean = dir.join("clean.xlsx");
+        let mut s = blank();
+        s.execute("cell.set", json!({"cell": "A1", "input": "42"})).unwrap();
+        let bytes = gridcraft_engine::io::save_file_bytes(&s.doc().unwrap().wb, &path(&clean)).unwrap();
+        gridcraft_engine::io::write_file(&path(&clean), &bytes).unwrap();
+        assert_eq!(open(&path(&clean)).unwrap().1, 0, "the second open must be clean");
+        let output = dir.join("dates.xlsx");
+        let open_cmd = format!("file.open={}", json!({"path": path(&clean)}));
+        let e = run(&vec!["--in".into(), input.clone(), "--quiet".into(), "--cmd".into(), open_cmd, "--out".into(), path(&output)])
+            .expect_err("the lossy --in import still fails the run");
+        assert!(e.contains(&input), "{e}");
+        assert!(!e.contains(&path(&clean)), "{e}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
