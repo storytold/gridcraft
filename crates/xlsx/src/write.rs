@@ -345,16 +345,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         w.push_str(" fullCalcOnLoad=\"1\"");
     }
     w.push_str("/>");
-    // `<pivotCaches>` holds the caches of the range PivotTables GridCraft models and those of the
-    // data-model PivotTables kept as pass-through content; one element holds both, so take the
-    // children of each and write a single wrapper.
-    let mut caches = String::new();
-    for xml in [pivots.workbook_xml(&mut wb_rels), kept.element(wb, "pivotCaches")] {
-        caches.push_str(pivot_caches_children(&xml));
-    }
-    if !caches.is_empty() {
-        let _ = write!(w, "<pivotCaches>{caches}</pivotCaches>");
-    }
+    w.push_str(&pivot_caches_element(&pivots, &kept, wb, &mut wb_rels));
     let exts = crate::passthrough::workbook_elements(wb, "ext");
     if !exts.is_empty() {
         let _ = write!(w, "<extLst>{exts}</extLst>");
@@ -484,6 +475,19 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         zip.add(name, data)?;
     }
     zip.finish()
+}
+
+/// The workbook's `<pivotCaches>` element, or an empty string when the workbook has no caches.
+///
+/// It holds the caches of the range PivotTables GridCraft models and those of the data-model
+/// PivotTables kept as pass-through content; one element holds both, so the children of each are
+/// written inside a single wrapper.
+fn pivot_caches_element(pivots: &crate::pivot::PivotWriter, kept: &crate::passthrough::WorkbookKept, wb: &Workbook, wb_rels: &mut Rels) -> String {
+    let mut caches = String::new();
+    for xml in [pivots.workbook_xml(wb_rels), kept.element(wb, "pivotCaches")] {
+        caches.push_str(pivot_caches_children(&xml));
+    }
+    if caches.is_empty() { String::new() } else { format!("<pivotCaches>{caches}</pivotCaches>") }
 }
 
 /// One past the highest `cacheId` the workbook's kept `<pivotCaches>` element uses.
