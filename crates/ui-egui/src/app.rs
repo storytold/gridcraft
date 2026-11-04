@@ -56,6 +56,7 @@ impl SheetApp {
             perf: Perf::default(),
             fonts_ready: false,
             fonts_set: false,
+            fonts_catalog_ready: false,
             prepared_fonts: false,
             fonts_bound: Vec::new(),
             fonts_seen: (0, 0),

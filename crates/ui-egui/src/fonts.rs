@@ -11,6 +11,8 @@
 //! font list is the standard [`crate::ribbon::FONTS`] set.
 
 use std::collections::HashSet;
+#[cfg(any(windows, test))]
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -22,6 +24,36 @@ const MAX_FONT_FILE: u64 = 64 << 20;
 /// A face keeps at most this many family names, so a hostile `name` table can't grow the catalog.
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_FAMILY_NAMES: usize = 16;
+
+#[cfg(any(windows, test))]
+fn expand_environment_references(value: &str, mut lookup: impl FnMut(&str) -> Option<String>) -> String {
+    let mut expanded = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(open) = rest.find('%') {
+        expanded.push_str(&rest[..open]);
+        let after_open = &rest[open + 1..];
+        let Some(close) = after_open.find('%') else {
+            expanded.push_str(&rest[open..]);
+            return expanded;
+        };
+        let name = &after_open[..close];
+        if let Some(replacement) = lookup(name) {
+            expanded.push_str(&replacement);
+        } else {
+            expanded.push_str(&rest[open..open + close + 2]);
+        }
+        rest = &after_open[close + 1..];
+    }
+    expanded.push_str(rest);
+    expanded
+}
+
+#[cfg(any(windows, test))]
+fn registry_font_path(value: &str, font_dir: &Path, lookup: impl FnMut(&str) -> Option<String>) -> PathBuf {
+    let expanded = expand_environment_references(value, lookup);
+    let path = PathBuf::from(expanded);
+    if path.is_absolute() { path } else { font_dir.join(path) }
+}
 
 /// One face of one installed font file.
 #[derive(Clone, Debug)]
@@ -54,16 +86,14 @@ fn registry_font_paths() -> Vec<PathBuf> {
     ] {
         if let Ok(reg) = winreg::RegKey::predef(hkey).open_subkey(subkey) {
             for item in reg.enum_values().flatten() {
-                            let name = item.0;
-                            if let Ok(s) = reg.get_value::<String, _>(&name) {
-                                let expanded = std::env::var(&s).unwrap_or_else(|_| s.clone());
-                                let p = PathBuf::from(&expanded);
-                                let full = if p.is_absolute() { p } else { font_dir.join(p) };
-                                if full.exists() {
-                                    paths.push(full);
-                                }
-                            }
-                        }
+                let name = item.0;
+                if let Ok(value) = reg.get_value::<String, _>(&name) {
+                    let full = registry_font_path(&value, &font_dir, |name| std::env::var(name).ok());
+                    if full.exists() {
+                        paths.push(full);
+                    }
+                }
+            }
         }
     }
     paths
@@ -225,8 +255,6 @@ pub fn catalog() -> &'static [Face] {
     CATALOG.get_or_init(|| scan_dirs(&system_font_dirs()))
 }
 
-
-
 /// The catalog if the scan has finished, else `None` — never blocks, for use while painting.
 pub fn catalog_now() -> Option<&'static [Face]> {
     CATALOG.get().map(Vec::as_slice)
@@ -302,12 +330,17 @@ fn installed_in(cat: &[Face], names: &[String]) -> Vec<String> {
     out
 }
 
-/// The font list a combo box shows: the standard [`crate::ribbon::FONTS`] names first (what Excel
-/// offers, and what we substitute), then every other installed family A–Z. Never blocks: until the
-/// background scan finishes it returns just the standard names.
+/// The full font list: the standard [`crate::ribbon::FONTS`] names first, then every other installed
+/// family A–Z. Blocks until the background scan finishes.
 pub fn families() -> Vec<String> {
+    families_from_catalog(Some(catalog()))
+}
+
+/// The catalog-backed font list, or the standard names if the background scan is still running.
+/// Passing `None` keeps the ribbon's paint path nonblocking.
+pub fn families_from_catalog(cat: Option<&[Face]>) -> Vec<String> {
     let mut out: Vec<String> = crate::ribbon::FONTS.iter().map(|s| s.to_string()).collect();
-    let cat = catalog();
+    let Some(cat) = cat else { return out };
     let mut seen: HashSet<String> = out.iter().map(|s| s.to_lowercase()).collect();
     let mut installed: Vec<String> = cat.iter().map(|f| f.family.clone()).collect();
     installed.sort_by_key(|a| a.to_lowercase());
@@ -420,6 +453,46 @@ pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registry_paths_expand_each_environment_reference() {
+        let font_dir = std::env::temp_dir().join("gridcraft-registry-fonts");
+        let absolute_dir = std::env::temp_dir().join("gridcraft-registry-root");
+        let expand = |name: &str| match name {
+            "ROOT" => Some(absolute_dir.to_string_lossy().into_owned()),
+            "FOLDER" => Some("Private".into()),
+            _ => None,
+        };
+
+        assert_eq!(
+            registry_font_path("%ROOT%/Fonts/%FILE%", &font_dir, |name| {
+                if name == "ROOT" { Some(absolute_dir.to_string_lossy().into_owned()) } else { None }
+            }),
+            absolute_dir.join("Fonts/%FILE%"),
+            "unresolved variables remain literal in an absolute path"
+        );
+        assert_eq!(
+            registry_font_path("%FOLDER%/Example.ttf", &font_dir, expand),
+            font_dir.join("Private/Example.ttf"),
+            "relative paths resolve against the Windows font directory"
+        );
+        assert_eq!(
+            registry_font_path("%MISSING%/Example.ttf", &font_dir, |_| None),
+            font_dir.join("%MISSING%/Example.ttf"),
+            "unresolved references remain a safe relative path"
+        );
+    }
+
+    #[test]
+    fn font_families_fall_back_to_standard_names_until_catalog_is_ready() {
+        let expected: Vec<String> = crate::ribbon::FONTS.iter().map(|name| name.to_string()).collect();
+        assert_eq!(families_from_catalog(None), expected);
+
+        let cat = [face("Ubuntu", &["Ubuntu"], "ubuntu.ttf", 400.0)];
+        let families = families_from_catalog(Some(&cat));
+        assert!(families.starts_with(&expected));
+        assert_eq!(families.last().map(String::as_str), Some("Ubuntu"));
+    }
 
     #[test]
     fn style_names_map_to_weight_and_slant() {
