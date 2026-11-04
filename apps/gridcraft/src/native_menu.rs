@@ -194,7 +194,10 @@ fn tree() -> Vec<(&'static str, Vec<Entry>)> {
 pub struct NativeMenu {
     _menu: Menu,
     events: Receiver<MenuEvent>,
-    theme_items: Vec<(&'static str, CheckMenuItem)>,
+    language: gridcraft_ui_egui::i18n::Language,
+    submenus: Vec<(&'static str, Submenu)>,
+    labeled_items: Vec<(&'static str, MenuItem)>,
+    theme_items: Vec<(&'static str, &'static str, CheckMenuItem)>,
     window_menu: Option<Submenu>,
     /// The Window menu's window items and what they last showed.
     window_items: Vec<CheckMenuItem>,
@@ -220,10 +223,13 @@ fn select_theme(app: &mut SheetApp, id: &str) -> bool {
 }
 
 impl NativeMenu {
+    /// Installs the macOS native menu bar and wires its menu events to `ctx`.
     pub fn install(ctx: &egui::Context) -> NativeMenu {
+        let lang = gridcraft_ui_egui::i18n::current(ctx);
         let menu = Menu::new();
         let app_menu = Submenu::new("GridCraft", true);
-        let about = MenuItem::with_id("dialog:about", "About GridCraft", true, None);
+        let about = MenuItem::with_id("dialog:about", lang.tr("About GridCraft"), true, None);
+        let quit = MenuItem::with_id(QUIT, lang.tr("Quit GridCraft"), true, Accelerator::from_str("CMD+Q").ok());
         let _ = app_menu.append_items(&[
             &about,
             &PredefinedMenuItem::separator(),
@@ -233,36 +239,41 @@ impl NativeMenu {
             &PredefinedMenuItem::hide_others(None),
             &PredefinedMenuItem::show_all(None),
             &PredefinedMenuItem::separator(),
-            &MenuItem::with_id(QUIT, "Quit GridCraft", true, Accelerator::from_str("CMD+Q").ok()),
+            &quit,
         ]);
         let _ = menu.append(&app_menu);
+        let mut submenus = Vec::new();
+        let mut labeled_items = vec![("About GridCraft", about), ("Quit GridCraft", quit)];
         let mut theme_items = Vec::new();
         let mut window_menu = None;
         for (title, entries) in tree() {
-            let sub = Submenu::new(title, true);
+            let sub = Submenu::new(lang.tr(title), true);
             for (label, id, acc) in entries {
                 if label == "-" {
                     let _ = sub.append(&PredefinedMenuItem::separator());
                     continue;
                 }
                 if id == "view.theme" {
-                    let themes = Submenu::new(label, true);
-                    for (mode, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
-                        let item = CheckMenuItem::with_id(format!("theme:{mode}"), label, true, false, None);
+                    let themes = Submenu::new(lang.tr(label), true);
+                    for (mode, theme_label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
+                        let item = CheckMenuItem::with_id(format!("theme:{mode}"), lang.tr(theme_label), true, false, None);
                         let _ = themes.append(&item);
-                        theme_items.push((mode, item));
+                        theme_items.push((mode, theme_label, item));
                     }
                     let _ = sub.append(&themes);
+                    submenus.push((label, themes));
                     continue;
                 }
                 let accel = acc.and_then(|a| Accelerator::from_str(a).ok());
-                let item = MenuItem::with_id(id, label, true, accel);
+                let item = MenuItem::with_id(id, lang.tr(label), true, accel);
                 let _ = sub.append(&item);
+                labeled_items.push((label, item));
             }
             let _ = menu.append(&sub);
             if title == "Window" {
-                window_menu = Some(sub);
+                window_menu = Some(sub.clone());
             }
+            submenus.push((title, sub));
         }
         menu.init_for_nsapp();
         // NSApp's windowsMenu is where macOS adds Move & Resize, Fill and Center, the targets of the
@@ -277,7 +288,34 @@ impl NativeMenu {
             let _ = tx.send(e);
             ctx.request_repaint();
         }));
-        NativeMenu { _menu: menu, events: rx, theme_items, window_menu, window_items: Vec::new(), windows: Vec::new() }
+        NativeMenu {
+            _menu: menu,
+            events: rx,
+            language: lang,
+            submenus,
+            labeled_items,
+            theme_items,
+            window_menu,
+            window_items: Vec::new(),
+            windows: Vec::new(),
+        }
+    }
+
+    /// Updates all submenu and menu-item labels when the interface language changes.
+    fn sync_language(&mut self, lang: gridcraft_ui_egui::i18n::Language) {
+        if self.language == lang {
+            return;
+        }
+        self.language = lang;
+        for (title, sub) in &self.submenus {
+            sub.set_text(lang.tr(title));
+        }
+        for (label, item) in &self.labeled_items {
+            item.set_text(lang.tr(label));
+        }
+        for (_, label, item) in &self.theme_items {
+            item.set_text(lang.tr(label));
+        }
     }
 
     /// Keeps the Window menu's list of open windows (title, unsaved bullet, active check) in
@@ -378,7 +416,8 @@ impl NativeMenu {
                 app.run_or_alert(&id, json!({}));
             }
         }
-        for (mode, item) in &self.theme_items {
+        self.sync_language(app.ui.language);
+        for (mode, _, item) in &self.theme_items {
             let checked = app.ui.theme_mode() == *mode;
             if item.is_checked() != checked {
                 item.set_checked(checked);
