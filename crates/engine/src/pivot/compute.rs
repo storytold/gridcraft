@@ -368,7 +368,9 @@ fn running_total(raw: Value, lookup: &ValueLookup<'_>, context: &ShowContext<'_>
             let mut path = Vec::with_capacity(rest.len() + 1);
             path.push(*item);
             path.extend_from_slice(rest);
-            total += number(&lookup.get(&path, context.col_path, context.value_index)).unwrap_or(0.0);
+            // An item with no number here adds nothing and is not stored (the shown cell always has one).
+            let Some(value) = number(&lookup.get(&path, context.col_path, context.value_index)) else { continue };
+            total += value;
             by_item.entry(*item).or_insert(total);
         }
         (by_item, total)
