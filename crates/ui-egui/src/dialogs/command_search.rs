@@ -1,4 +1,6 @@
 use super::{Dialog, Key, SheetApp, json, vec2};
+use unicode_casefold::{Locale, UnicodeCaseFold, Variant};
+use unicode_normalization::UnicodeNormalization;
 
 /// Shows enabled commands and their shortcuts from engine metadata.
 pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
@@ -13,7 +15,9 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         )
     });
     let width = ui.available_width();
-    let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(width).hint_text("Type a command, e.g. freeze, chart, bold…"));
+    let r = ui.add(
+        egui::TextEdit::singleline(&mut d.search).desired_width(width).hint_text(app.ui.language.tr("Type a command, e.g. freeze, chart, bold…")),
+    );
 
     if !d.focus_initialized {
         r.request_focus();
@@ -21,14 +25,22 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     }
 
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
-    let q = d.search.to_ascii_lowercase();
+    // Use translated labels for searching, falling back to English
+    let q = search_fold(d.search.trim());
     let cmds: Vec<(String, String, String, Option<String>)> = app
         .session
         .commands()
         .into_iter()
         .filter(|c| c.enabled)
-        .filter(|c| q.is_empty() || c.label.to_ascii_lowercase().contains(&q) || c.id.to_ascii_lowercase().contains(&q))
-        .map(|c| (c.id.to_string(), c.label.to_string(), c.menu.join(" › "), c.shortcut_for_platform(mac)))
+        .filter(|c| {
+            let label = app.ui.language.tr(c.label);
+            q.is_empty() || search_fold(label).contains(&q) || search_fold(c.label).contains(&q) || c.id.to_ascii_lowercase().contains(&q)
+        })
+        .map(|c| {
+            let display_label = app.ui.language.tr(c.label).to_string();
+            let menu = c.menu.iter().map(|segment| app.ui.language.tr(segment)).collect::<Vec<_>>().join(" › ");
+            (c.id.to_string(), display_label, menu, c.shortcut_for_platform(mac))
+        })
         .take(40)
         .collect();
 
@@ -90,5 +102,64 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         let id = id.clone();
         app.dialog = None;
         app.run_or_alert(&id, json!({}));
+    }
+}
+
+/// Folds text for searching with full Unicode case folding, so expansions match (`ß` and `ẞ` both
+/// fold to `ss`, so `strasse` finds `Straße`). Text is normalized to NFC before and after folding,
+/// so a composed accent and a base letter plus its combining mark compare equal.
+///
+/// The fold uses the Turkic locale, which maps `İ` to `i` and `I` to `ı` (mapped back to `i`
+/// below), so `I`, `İ`, `i` and `ı` all match one another without dropping a combining dot. Dots
+/// that belong to other letters — a decomposed Polish `ż`, for one — are left untouched.
+fn search_fold(text: &str) -> String {
+    text.nfc().case_fold_with(Variant::Full, Locale::Turkic).map(|c| if c == 'ı' { 'i' } else { c }).collect::<String>().nfc().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::search_fold;
+
+    #[test]
+    fn search_fold_treats_turkish_i_forms_alike() {
+        for text in ["I", "İ", "i", "ı"] {
+            assert_eq!(search_fold(text), "i", "{text:?}");
+        }
+        // A query typed with plain `i` still finds labels written with dotted `İ` or dotless `ı`.
+        assert!(search_fold("İtalik").contains(&search_fold("italik")));
+        assert!(search_fold("Yapıştır").contains(&search_fold("yapıştır")));
+    }
+
+    #[test]
+    fn search_fold_lowercases_ordinary_text() {
+        assert_eq!(search_fold("Bold"), "bold");
+        assert_eq!(search_fold("ÇĞÖŞÜ"), "çğöşü");
+    }
+
+    #[test]
+    fn search_fold_expands_full_case_folding() {
+        assert_eq!(search_fold("Straße"), "strasse");
+        assert_eq!(search_fold("STRAẞE"), "strasse");
+        assert_eq!(search_fold("strasse"), search_fold("Straße"));
+        // Greek final sigma folds to the ordinary sigma.
+        assert_eq!(search_fold("ΟΔΟΣ"), search_fold("οδος"));
+    }
+
+    #[test]
+    fn search_fold_matches_composed_and_decomposed_accents() {
+        // "Gráfico" with a precomposed U+00E1 and with "a" + U+0301 must fold the same.
+        assert_eq!(search_fold("Gráfico"), "gráfico");
+        assert_eq!(search_fold("Gra\u{301}fico"), "gráfico");
+        assert_eq!(search_fold("GRA\u{301}FICO"), "gráfico");
+    }
+
+    #[test]
+    fn search_fold_keeps_dots_that_do_not_come_from_turkish_i() {
+        // Polish `ż` is `z` + U+0307 when decomposed; its dot must survive.
+        assert_eq!(search_fold("Pokaż formuły"), "pokaż formuły");
+        assert_eq!(search_fold("Pokaz\u{307} formuły"), "pokaż formuły");
+        assert_eq!(search_fold("POKAZ\u{307} FORMUŁY"), "pokaż formuły");
+        // A decomposed `İ` still folds to the plain `i`.
+        assert_eq!(search_fold("I\u{307}"), "i");
     }
 }

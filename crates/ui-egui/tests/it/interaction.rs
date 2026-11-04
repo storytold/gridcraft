@@ -962,6 +962,34 @@ fn solver_results_offer_sensitivity_only_after_an_optimum() {
     assert!(!h.get_by_label("Sensitivity").accesskit_node().is_disabled());
 }
 
+/// The report checkboxes are interface text, so they follow the interface language; the kinds sent
+/// to `data.solverReport` are the command's identifiers and stay `answer`, `sensitivity` and
+/// `limits`, or it refuses them and writes no report.
+#[test]
+fn solver_results_translate_the_report_labels_but_keep_the_kinds() {
+    let mut s = blank();
+    for (c, v) in [("A1", "0"), ("B1", "=3*A1")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    let r = s.execute("data.solver", json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 4.5"], "method": "simplex"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().run("app.language.set", json!({"language": "pt"})).unwrap();
+    h.state_mut().open_dialog("solverResults", r);
+    h.run_steps(2);
+    for label in ["Resposta", "Sensibilidade", "Limites"] {
+        assert!(h.query_by_label(label).is_some(), "the {label} report checkbox is untranslated");
+    }
+    for key in ["answerReport", "sensitivityReport", "limitsReport"] {
+        h.state_mut().dialog.as_mut().unwrap().values.insert(key.into(), json!(true));
+    }
+    h.run_steps(2);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let names: Vec<String> = h.state().session.active().unwrap().wb.sheets.iter().map(|s| s.name.clone()).collect();
+    assert_eq!(names, ["Answer Report 1", "Sensitivity Report 1", "Limits Report 1", "Sheet1"]);
+}
+
 #[test]
 fn solver_dialog_saves_loads_and_resets_the_model() {
     let mut s = blank();
