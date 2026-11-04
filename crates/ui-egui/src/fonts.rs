@@ -54,15 +54,16 @@ fn registry_font_paths() -> Vec<PathBuf> {
     ] {
         if let Ok(reg) = winreg::RegKey::predef(hkey).open_subkey(subkey) {
             for item in reg.enum_values().flatten() {
-                let name = item.0;
-                if let Ok(s) = reg.get_value::<String, _>(&name) {
-                    let p = PathBuf::from(&s);
-                    let full = if p.is_absolute() { p } else { font_dir.join(p) };
-                    if full.exists() {
-                        paths.push(full);
-                    }
-                }
-            }
+                            let name = item.0;
+                            if let Ok(s) = reg.get_value::<String, _>(&name) {
+                                let expanded = std::env::var(&s).unwrap_or_else(|_| s.clone());
+                                let p = PathBuf::from(&expanded);
+                                let full = if p.is_absolute() { p } else { font_dir.join(p) };
+                                if full.exists() {
+                                    paths.push(full);
+                                }
+                            }
+                        }
         }
     }
     paths
@@ -226,6 +227,11 @@ pub fn catalog() -> &'static [Face] {
 
 
 
+/// The catalog if the scan has finished, else `None` — never blocks, for use while painting.
+pub fn catalog_now() -> Option<&'static [Face]> {
+    CATALOG.get().map(Vec::as_slice)
+}
+
 /// Start cataloging the installed fonts on a background thread, so the first frame doesn't wait for
 /// it. A no-op on wasm and after the scan has started.
 pub fn start_scan() {
@@ -275,6 +281,9 @@ fn faces_named(cat: &[Face], wanted: &str) -> Vec<Face> {
 /// [`cell_family`](crate::theme::cell_family) looks up, so `맑은 고딕` binds as `맑은 고딕`, not as
 /// the catalog's `Malgun Gothic`.
 pub fn installed_among(names: &[String]) -> Vec<String> {
+    if names.is_empty() {
+        return Vec::new();
+    }
     installed_in(catalog(), names)
 }
 
@@ -298,7 +307,7 @@ fn installed_in(cat: &[Face], names: &[String]) -> Vec<String> {
 /// background scan finishes it returns just the standard names.
 pub fn families() -> Vec<String> {
     let mut out: Vec<String> = crate::ribbon::FONTS.iter().map(|s| s.to_string()).collect();
-    let cat = catalog();
+    let cat = catalog_now().unwrap_or_default();
     let mut seen: HashSet<String> = out.iter().map(|s| s.to_lowercase()).collect();
     let mut installed: Vec<String> = cat.iter().map(|f| f.family.clone()).collect();
     installed.sort_by_key(|a| a.to_lowercase());
