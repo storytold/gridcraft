@@ -458,12 +458,15 @@ fn value_json(model: &DataModel, spec: &ModelPivotSpec, value: &ModelPivotValue)
         .find(|measure| measure.name.eq_ignore_ascii_case(&value.measure))
         .and_then(|measure| model.tables.iter().find(|table| table.name.eq_ignore_ascii_case(&measure.table)));
     let Some(table) = table else { return Json::String(value.measure.clone()) };
-    // `implicit_measure` appends a numeric suffix when the name is taken, so try the exact column
-    // first and then the name without that suffix.
+    // `implicit_measure` appends one numeric suffix (2, 3, …) when the name is taken, so try the
+    // exact column first and then every split that leaves such a suffix — shortest suffix first.
     let mut candidates = vec![rest.to_string()];
-    let trimmed = rest.trim_end_matches(|character: char| character.is_ascii_digit());
-    if trimmed != rest {
-        candidates.push(trimmed.to_string());
+    let digits = rest.len() - rest.trim_end_matches(|character: char| character.is_ascii_digit()).len();
+    for cut in 1..=digits {
+        let (column, suffix) = rest.split_at(rest.len() - cut);
+        if !suffix.starts_with('0') && suffix.parse::<u32>().is_ok_and(|number| number >= 2) {
+            candidates.push(column.to_string());
+        }
     }
     let Some(column) = candidates.iter().find_map(|candidate| table.columns.iter().find(|column| column.name.eq_ignore_ascii_case(candidate))) else {
         return Json::String(value.measure.clone());

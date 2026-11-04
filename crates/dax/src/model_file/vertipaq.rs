@@ -555,7 +555,10 @@ pub fn value_encoded_ids(column: &ModelColumnData, magnitude: f64) -> Result<(Ve
         let raw = match value {
             crate::value::Scalar::Blank => None,
             crate::value::Scalar::Boolean(flag) => Some(i64::from(*flag)),
-            crate::value::Scalar::Integer(number) => Some(*number),
+            // Value-encoded columns store `value / magnitude`; an Integer cell must scale too,
+            // or a Real column with magnitude 0.01 stores 10 and decodes as 0.1.
+            crate::value::Scalar::Integer(number) if (magnitude - 1.0).abs() < 1.0e-9 => Some(*number),
+            crate::value::Scalar::Integer(number) => Some(round_scaled(*number as f64 / magnitude)?),
             crate::value::Scalar::Currency(scaled) => Some(round_scaled(*scaled as f64 / 10_000.0 / magnitude)?),
             crate::value::Scalar::Decimal(number) => Some(round_scaled(*number / magnitude)?),
             crate::value::Scalar::DateTime(serial) => Some(round_scaled(*serial / magnitude)?),

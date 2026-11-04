@@ -108,8 +108,12 @@ impl Scalar {
                 if value.abs() >= 1.0e15 { format!("{value:E}") } else { format!("{value:.0}") }
             }
             Scalar::Currency(value) => {
-                let text = format!("{:.4}", *value as f64 / 10_000.0);
-                text.trim_end_matches('0').trim_end_matches('.').to_string()
+                // Integer arithmetic keeps every digit of the scaled range (about 19 significant
+                // digits); an f64 round trip would lose the low ones.
+                let sign = if *value < 0 { "-" } else { "" };
+                let magnitude = value.unsigned_abs();
+                let (whole, fraction) = (magnitude / 10_000, magnitude % 10_000);
+                if fraction == 0 { format!("{sign}{whole}") } else { format!("{sign}{whole}.{}", format!("{fraction:04}").trim_end_matches('0')) }
             }
             Scalar::DateTime(serial) => datetime_text(*serial),
             other => other.to_text(),

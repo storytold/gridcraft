@@ -262,7 +262,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Number, ParamKind::Number, ParamKind::Number, ParamKind::Logical])],
         ReturnType::Decimal,
         standard(false),
-        "Normal distribution for the given Mean and Standard_dev. Cumulative TRUE returns the cumulative distribution function, FALSE the probability mass function; Standard_dev must be positive.",
+        "Normal distribution for the given Mean and Standard_dev. Cumulative TRUE returns the cumulative distribution function, FALSE the probability density function; Standard_dev must be positive.",
         &["NORM.DIST ( 45, 40, 2, TRUE )", "NORM.DIST ( 45, 40, 2, FALSE )"],
     ),
     spec(

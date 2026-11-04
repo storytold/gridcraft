@@ -338,7 +338,24 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         return;
     }
     let Some((uid, revision)) = app.session.active().map(|doc| (doc.uid, doc.revision)) else { return };
-    let fingerprint = app.session.dax_model.as_ref().map(|model| (model.tables.len(), model.measures.len()));
+    // Model edits are session state and do not bump the document revision, so the key hashes the
+    // model's contents: names, column types and measure names.
+    let fingerprint = app.session.dax_model.as_ref().map(|model| {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for table in &model.tables {
+            table.name.hash(&mut hasher);
+            for column in &table.columns {
+                column.name.hash(&mut hasher);
+                column.data_type.hash(&mut hasher);
+            }
+        }
+        for measure in &model.measures {
+            measure.name.hash(&mut hasher);
+            measure.table.hash(&mut hasher);
+        }
+        (model.tables.len(), hasher.finish() as usize)
+    });
     let mut state = load(ui.ctx());
     if fingerprint.is_none() {
         // Without a model there is nothing to read, and no model PivotTable to describe.
