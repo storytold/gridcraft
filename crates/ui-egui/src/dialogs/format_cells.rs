@@ -34,6 +34,9 @@ fn fill_tab(ui: &mut egui::Ui, fill: &mut Fill, theme: &Theme, lang: crate::i18n
                     .as_ref()
                     .and_then(|g| g.stops.first())
                     .map(|s| s.color)
+                    // An automatic stop leaves the solid fill invisible: fall back to the
+                    // gradient mode's start colour (Accent 1) instead.
+                    .filter(|c| *c != CellColor::Auto)
                     .unwrap_or_else(|| if fill.fg == CellColor::Auto { CellColor::Theme(4, 0) } else { fill.fg });
                 *fill = Fill::solid(c);
             }

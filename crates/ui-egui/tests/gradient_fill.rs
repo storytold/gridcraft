@@ -74,6 +74,34 @@ fn gradient_can_be_created_cancelled_and_replaced_by_solid() {
     assert!(solid.gradient.is_none());
 }
 
+#[test]
+fn switching_an_automatic_first_stop_to_solid_keeps_a_visible_colour() {
+    let mut h = harness();
+    h.state_mut()
+        .run(
+            "home.formatCells",
+            json!({"range": "A1", "style": {"fill": {"gradient": {
+                "kind": {"Linear": {"degree": 90.0}},
+                "stops": [{"position": 0.0, "color": "Auto"}, {"position": 1.0, "color": {"Rgb": 16777215}}]
+            }}}}),
+        )
+        .unwrap();
+    assert_eq!(fill(&h, "A1").gradient.as_ref().and_then(|g| g.stops.first()).map(|s| s.color), Some(Color::Auto));
+
+    h.state_mut().open_dialog("formatCells", json!({"tab": "Fill"}));
+    h.run_steps(6);
+    h.get_by_label("Solid").click();
+    h.run_steps(6);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(6);
+
+    // An automatic stop would be no light at all: Solid must keep a colour that shows.
+    let solid = fill(&h, "A1");
+    assert_eq!(solid.pattern, PatternType::Solid);
+    assert!(solid.gradient.is_none());
+    assert_ne!(solid.fg, Color::Auto, "an automatic first stop must not become an invisible solid fill");
+}
+
 fn drag(h: &mut egui_kittest::Harness<'static, SheetApp>, from: Pos2, to: Pos2) {
     let press = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
     h.input_mut().events.extend([Event::PointerMoved(from), press(from, true)]);
