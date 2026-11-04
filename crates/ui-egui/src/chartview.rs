@@ -414,6 +414,10 @@ struct PresetGeometry {
     outline: Vec<Pos2>,
 }
 
+/// A regular pentagon in the unit box: the same geometry as `cmd::draw::unit_outline` and
+/// `cmd::print::objects::preset_outline`.
+const PENTAGON: [[f32; 2]; 5] = [[0.5, 0.0], [1.0, 0.381_966], [0.809_017, 1.0], [0.190_983, 1.0], [0.0, 0.381_966]];
+
 /// The geometry of a polygon preset inside `r`, with every vertex mirrored by the shape's flips
 /// so an imported flipped preset draws as the file says. `None` for presets painted as their own
 /// primitives (rectangles, text boxes, lines, arrows, ink and icons).
@@ -447,12 +451,9 @@ fn preset_geometry(kind: ShapeKind, r: Rect, f: &ShapeFormat) -> Option<PresetGe
             pos2(r.right(), r.bottom()),
             pos2(r.left(), r.bottom()),
         ],
-        ShapeKind::Pentagon => (0..5)
-            .map(|i| {
-                let a = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::TAU / 5.0;
-                pos2(r.center().x + r.width() / 2.0 * a.cos(), r.center().y + r.height() / 2.0 * a.sin())
-            })
-            .collect(),
+        // The regular pentagon scaled to its box, as Excel's `pentagon` preset is, so the anchor
+        // (the recognised corners' box) is what the shape fills.
+        ShapeKind::Pentagon => PENTAGON.iter().map(|q| pos2(r.left() + r.width() * q[0], r.top() + r.height() * q[1])).collect(),
         ShapeKind::Hexagon => vec![
             pos2(r.left() + r.width() * 0.25, r.top()),
             pos2(r.right() - r.width() * 0.25, r.top()),

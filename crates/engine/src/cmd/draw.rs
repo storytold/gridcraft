@@ -354,15 +354,20 @@ fn preset_flips(p: &[[f32; 2]], kinds: &[ShapeKind]) -> Option<(ShapeKind, bool,
     })
 }
 
-/// Whether every corner of `p` has a corner of `want` of its own within `tol` (the presets are
-/// convex and few-cornered, so matching the nearest free corner is enough).
+/// Whether `p`'s corners are `want`'s, in the same order around the loop (either way round), each
+/// within `tol`. Order matters: a stroke that visits a pentagon's corners in star order is a
+/// pentagram, and filling it as the preset would draw edges it never had.
 fn corners_match(p: &[[f32; 2]], want: &[[f32; 2]], tol: f32) -> bool {
-    let mut used = vec![false; want.len()];
-    p.iter().all(|q| {
-        let near = (0..want.len()).filter(|&i| !used[i]).find(|&i| dist(*q, want[i]) <= tol);
-        near.is_some_and(|i| {
-            used[i] = true;
-            true
+    let n = want.len();
+    if p.len() != n {
+        return false;
+    }
+    (0..n).any(|offset| {
+        [1isize, -1].iter().any(|&dir| {
+            (0..n).all(|i| {
+                let j = (offset as isize + dir * i as isize).rem_euclid(n as isize) as usize;
+                dist(p[i], want[j]) <= tol
+            })
         })
     })
 }
@@ -375,9 +380,7 @@ fn unit_outline(kind: ShapeKind) -> Option<&'static [[f32; 2]]> {
         ShapeKind::Diamond => &[[0.5, 0.0], [1.0, 0.5], [0.5, 1.0], [0.0, 0.5]],
         ShapeKind::Parallelogram => &[[0.25, 0.0], [1.0, 0.0], [0.75, 1.0], [0.0, 1.0]],
         ShapeKind::Trapezoid => &[[0.2, 0.0], [0.8, 0.0], [1.0, 1.0], [0.0, 1.0]],
-        ShapeKind::Pentagon => {
-            &[[0.5, 0.0], [0.975_528_3, 0.345_491_5], [0.793_892_6, 0.904_508_5], [0.206_107_4, 0.904_508_5], [0.024_471_7, 0.345_491_5]]
-        }
+        ShapeKind::Pentagon => &[[0.5, 0.0], [1.0, 0.381_966], [0.809_017, 1.0], [0.190_983, 1.0], [0.0, 0.381_966]],
         ShapeKind::Hexagon => &[[0.25, 0.0], [0.75, 0.0], [1.0, 0.5], [0.75, 1.0], [0.25, 1.0], [0.0, 0.5]],
         _ => return None,
     })

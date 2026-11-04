@@ -3580,6 +3580,10 @@ fn ink_to_shape_leaves_a_polygon_its_preset_cannot_place_as_ink() {
     // the preset puts it stays ink instead of being drawn with a corner it never had.
     let lopsided: Vec<[f64; 2]> = vec![[0.0, 0.0], [40.0, 0.0], [100.0, 50.0], [60.0, 100.0], [0.0, 100.0], [-40.0, 50.0]];
     assert_eq!(s.execute("draw.stroke", json!({"points": sampled(&lopsided)})).unwrap()["kind"], "Ink");
+    // The same five corners visited in star order are a pentagram, not the pentagon: the corners
+    // are the preset's, but in an order that draws edges the preset never had, so it stays ink.
+    let star: Vec<[f64; 2]> = (0..5).map(|i| pentagon[(i * 2) % 5]).collect();
+    assert_eq!(s.execute("draw.stroke", json!({"points": sampled(&star)})).unwrap()["kind"], "Ink");
 }
 
 #[test]

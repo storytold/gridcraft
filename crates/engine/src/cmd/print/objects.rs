@@ -222,11 +222,10 @@ pub(super) fn preset_outline(kind: ShapeKind, x: f32, y: f32, w: f32, h: f32) ->
         ShapeKind::Diamond => vec![[x + w / 2.0, y], [x + w, y + h / 2.0], [x + w / 2.0, y + h], [x, y + h / 2.0]],
         ShapeKind::Parallelogram => vec![[x + w / 4.0, y], [x + w, y], [x + 3.0 * w / 4.0, y + h], [x, y + h]],
         ShapeKind::Trapezoid => vec![[x + w / 5.0, y], [x + 4.0 * w / 5.0, y], [x + w, y + h], [x, y + h]],
-        ShapeKind::Pentagon => (0..5)
-            .map(|i| {
-                let a = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::TAU / 5.0;
-                [x + w / 2.0 + w / 2.0 * a.cos(), y + h / 2.0 + h / 2.0 * a.sin()]
-            })
+        // The regular pentagon scaled to its box, as Excel's `pentagon` preset is.
+        ShapeKind::Pentagon => [[0.5, 0.0], [1.0, 0.381_966], [0.809_017, 1.0], [0.190_983, 1.0], [0.0, 0.381_966]]
+            .iter()
+            .map(|q| [x + w * q[0], y + h * q[1]])
             .collect(),
         ShapeKind::Hexagon => {
             vec![[x + w / 4.0, y], [x + 3.0 * w / 4.0, y], [x + w, y + h / 2.0], [x + 3.0 * w / 4.0, y + h], [x + w / 4.0, y + h], [x, y + h / 2.0]]
