@@ -13,7 +13,8 @@ use crate::IoError;
 /// Maximum element nesting accepted in any part.
 pub const MAX_DEPTH: usize = 256;
 
-/// Most elements kept in one part's parsed XML tree: an emptied `El` costs well over a hundred
+/// Most elements held in memory at once while parsing one part (rows and strings handed to the
+/// streaming callback are released and no longer count): an emptied `El` costs well over a hundred
 /// bytes, so a highly-compressible part of endless empty elements could fit the package byte
 /// limit and still take gigabytes of tree before any semantic check ran. Parts whose big runs
 /// matter (worksheet rows, shared strings) are streamed instead and never hold this tree.
@@ -208,6 +209,11 @@ fn named_entity(name: &str) -> Option<char> {
     })
 }
 
+/// How many elements sit below `el`, which is how many of them were added to the live count.
+fn descendants(el: &El) -> usize {
+    el.children.iter().fold(el.children.len(), |n, c| n.saturating_add(descendants(c)))
+}
+
 /// Parses a whole part into a tree.
 pub fn parse(xml: &[u8]) -> Result<El, IoError> {
     parse_streaming(xml, &[], &mut |_| Ok(()))
@@ -244,7 +250,12 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
         match stack.last_mut() {
             Some(parent) => {
                 if split.contains(&el.name.as_str()) {
+                    // The streamed element and its descendants are dropped after the callback, so
+                    // they stop counting: a sheet with millions of cells is fine, as long as no
+                    // single row holds more than the limit.
+                    let released = descendants(&el);
                     cb(el)?;
+                    *kept = kept.saturating_sub(released);
                 } else {
                     *kept = kept.saturating_add(1);
                     if *kept > MAX_XML_NODES {
@@ -564,6 +575,25 @@ mod tests {
         assert!(parse(b"<r><x/><y t=\"1\"/><x/></r>").is_ok());
         let xml = format!("<r>{}<y/></r>", "<x/>".repeat(MAX_XML_NODES + 1));
         let err = parse(xml.as_bytes()).unwrap_err();
+        assert!(err.to_string().contains("elements"), "{err}");
+    }
+
+    #[test]
+    /// Streamed rows are released as they go: 1.2 million cell elements over many rows parse, while one
+    /// row that alone holds more than the limit is still refused.
+    fn streamed_rows_do_not_count_against_the_element_limit() {
+        let row = format!("<row>{}</row>", "<c><v>1</v></c>".repeat(500));
+        let xml = format!("<sheetData>{}</sheetData>", row.repeat(1200));
+        let mut rows = 0;
+        let root = parse_streaming(xml.as_bytes(), &["row"], &mut |_| {
+            rows += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(rows, 1200);
+        assert!(root.children.is_empty());
+        let one = format!("<sheetData><row>{}</row></sheetData>", "<c/>".repeat(MAX_XML_NODES + 1));
+        let err = parse_streaming(one.as_bytes(), &["row"], &mut |_| Ok(())).unwrap_err();
         assert!(err.to_string().contains("elements"), "{err}");
     }
 
