@@ -4,6 +4,9 @@ use super::{
     target_sheet,
 };
 
+/// The most cells one paste may write when it repeats the copy over a larger selection.
+const MAX_TILED_CELLS: u64 = 10_000_000;
+
 fn tiled_cells(rows: u32, cols: u32, tiles_r: u32, tiles_c: u32) -> impl Iterator<Item = (u32, u32, u32, u32)> + Clone {
     (0..tiles_r).flat_map(move |tr| (0..tiles_c).flat_map(move |tc| (0..rows).flat_map(move |r| (0..cols).map(move |c| (tr, tc, r, c)))))
 }
@@ -99,15 +102,19 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let at = cell_param_on(s, p, "at", dest_sheet)?.unwrap_or(sel.start);
     let src = clip.range;
     let (h, w) = if transpose { (src.width(), src.height()) } else { (src.height(), src.width()) };
-    // Tile the copy over a larger destination that is a multiple of its size.
-    let tile = sel.height() % h == 0
-        && sel.width() % w == 0
+    // Tile the copy over a larger destination that is a multiple of its size. Whole columns get
+    // the copy once in each column (blank below it), not repeated down the sheet; whole rows
+    // likewise once in each row.
+    let (full_cols, full_rows) = (sel.is_full_cols() && !sel.is_full_rows(), sel.is_full_rows() && !sel.is_full_cols());
+    let tile = (full_cols || sel.height() % h == 0)
+        && (full_rows || sel.width() % w == 0)
         && !sel.is_single()
         && cell_param_on(s, p, "at", dest_sheet)?.is_none()
-        && !sel.is_full_cols()
-        && !sel.is_full_rows()
-        && sel.count() <= 4_000_000;
-    let (tiles_r, tiles_c) = if tile { (sel.height() / h, sel.width() / w) } else { (1, 1) };
+        && !(sel.is_full_cols() && sel.is_full_rows());
+    let (tiles_r, tiles_c) = if tile { (if full_cols { 1 } else { sel.height() / h }, if full_rows { 1 } else { sel.width() / w }) } else { (1, 1) };
+    if tiles_r.saturating_mul(tiles_c) > 1 && src.count().saturating_mul(u64::from(tiles_r) * u64::from(tiles_c)) > MAX_TILED_CELLS {
+        return Err(EngineError::Other("The paste area is too large to fill; select a smaller area.".into()));
+    }
     let same_doc = s.doc()?.uid == clip.doc_uid;
     let cut_move = clip.cut && same_doc && what == What::All;
     let src_wb = clip.wb.clone();
@@ -126,7 +133,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             }
             *style_map.entry(id).or_insert_with(|| wb.styles.intern(src_wb.styles.get(id).clone()))
         };
-        let mut moved_formulas = Vec::new();
+        let mut moved_formulas = std::collections::HashMap::new();
         let mut moved_pictures = std::collections::BTreeMap::new();
         if cut_move {
             // Remove the source first (contents and formats), and fix references to it.
@@ -143,14 +150,14 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             for (c, _) in &taken {
                 cx.touch(clip.sheet, *c);
             }
-            moved_formulas = taken;
+            moved_formulas = taken.into_iter().collect();
         }
         let dest_name = cx.wb.sheet(dest_sheet).map(|sh| sh.name.clone()).unwrap_or_default();
         for (tr, tc, r, c) in tiled_cells(src.height(), src.width(), tiles_r, tiles_c) {
             let sc = CellRef::new(src.start.row + r, src.start.col + c);
             let (dr, dc) = if transpose { (c, r) } else { (r, c) };
             let Some(dest) = at.offset((tr * h + dr) as i64, (tc * w + dc) as i64) else { continue };
-            let src_cell = if cut_move { moved_formulas.iter().find(|(k, _)| *k == sc).map(|(_, v)| v.clone()) } else { src_sheet.cell(sc).cloned() };
+            let src_cell = if cut_move { moved_formulas.get(&sc).cloned() } else { src_sheet.cell(sc).cloned() };
             let src_val = src_sheet.value(sc);
             let src_picture = if cut_move { moved_pictures.get(&sc) } else { src_sheet.cell_pictures.get(&sc) }.cloned();
             if skip_blanks && src_picture.is_none() && src_val.is_empty() && src_cell.as_ref().is_none_or(|x| x.formula.is_none() && x.py.is_none()) {

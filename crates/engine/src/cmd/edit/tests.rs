@@ -580,3 +580,36 @@ fn find_and_replace_within_the_selection() {
     let all = s.execute("edit.find", json!({"what": "pear", "all": true})).unwrap();
     assert_eq!(all["count"], 3, "A1, A3 and A4 on the whole sheet");
 }
+
+/// A copied column goes into every selected column: whole columns get it once (blank below the
+/// copied cells, not repeated down the sheet), and a range over 4,000,000 cells is tiled too.
+#[test]
+fn paste_tiles_a_column_across_whole_columns_and_large_ranges() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1:A4", "values": [[1], [2], [3], [4]]})).unwrap();
+    s.execute("edit.copy", json!({"range": "A:A"})).unwrap();
+    s.execute("selection.set", json!({"range": "B:F"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    let at = |s: &Session, a: &str| s.doc().unwrap().wb.active().unwrap().value(CellRef::parse(a).unwrap());
+    assert_eq!(
+        (at(&s, "B1"), at(&s, "C1"), at(&s, "F1"), at(&s, "F4")),
+        (Value::number(1.0), Value::number(1.0), Value::number(1.0), Value::number(4.0))
+    );
+    assert_eq!((at(&s, "B5"), at(&s, "F5"), at(&s, "F1048576")), (Value::Empty, Value::Empty, Value::Empty), "pasted once per column");
+
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "7"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1000000", "input": "7"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A1000000"})).unwrap();
+    s.execute("selection.set", json!({"range": "B1:F1000000"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!((at(&s, "C1"), at(&s, "F1"), at(&s, "F1000000")), (Value::number(7.0), Value::number(7.0), Value::number(7.0)), "5,000,000 cells");
+
+    // A paste too large to tile is refused, not pasted once without a word.
+    s.execute("edit.copy", json!({"range": "A1:A1048576"})).unwrap();
+    s.execute("selection.set", json!({"range": "G:Z"})).unwrap();
+    assert!(s.execute("edit.paste", json!({})).is_err());
+    assert_eq!(at(&s, "G1"), Value::Empty);
+}
