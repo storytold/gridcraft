@@ -118,8 +118,9 @@ pub enum PivotLayout {
 
 /// A filter over one field: only rows whose value is in `allowed` pass.
 ///
-/// An empty `allowed` list keeps nothing (the pivot renders no rows). Values compare exactly;
-/// string values are case-sensitive.
+/// An empty `allowed` list keeps nothing (the pivot renders no rows), unless [`PivotFilter::all`]
+/// is set: that is the page field's `(All)` — a filter that names its field but keeps every value.
+/// Values compare exactly; string values are case-sensitive.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PivotFilter {
     /// A field reference in `Table[Column]` form, resolved with [`crate::pivot::pivot_fields`].
@@ -127,12 +128,21 @@ pub struct PivotFilter {
     /// The allowed values. Membership is exact scalar equality.
     #[serde(default)]
     pub allowed: Vec<Scalar>,
+    /// Keep every value (`(All)` in Excel): the filter is shown but restricts nothing. `allowed`
+    /// is then empty; a filter with neither members nor this flag keeps nothing.
+    #[serde(default)]
+    pub all: bool,
 }
 
 impl PivotFilter {
     /// A filter allowing the supplied values.
     pub fn new(field: impl Into<String>, allowed: impl IntoIterator<Item = Scalar>) -> Self {
-        PivotFilter { field: field.into(), allowed: allowed.into_iter().collect() }
+        PivotFilter { field: field.into(), allowed: allowed.into_iter().collect(), all: false }
+    }
+
+    /// The page field's `(All)`: names the field and keeps every value.
+    pub fn all(field: impl Into<String>) -> Self {
+        PivotFilter { field: field.into(), allowed: Vec::new(), all: true }
     }
 }
 
@@ -354,6 +364,13 @@ impl<'a> Plan<'a> {
 
         let mut filters = Vec::with_capacity(pivot.filters.len());
         for filter in &pivot.filters {
+            // `(All)` names the field but restricts nothing, so it contributes no filter and no
+            // filter context.
+            if filter.all {
+                // Still resolve the field: a filter over an unknown column is an error either way.
+                pivot_fields(model, std::slice::from_ref(&filter.field))?;
+                continue;
+            }
             let resolved = pivot_fields(model, std::slice::from_ref(&filter.field))?;
             let field =
                 resolved.into_iter().next().ok_or_else(|| PivotTableError::UnknownField { pivot: name.clone(), field: filter.field.clone() })?;

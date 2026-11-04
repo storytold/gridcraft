@@ -283,7 +283,7 @@ fn a_model_without_measures_still_carries_a_pivot() {
 }
 
 #[test]
-fn moving_a_field_to_filters_fills_its_allowed_values() {
+fn moving_a_field_to_filters_keeps_every_value() {
     let mut h = harness(true);
     with_pivot(&mut h, Some("Mine"));
     click(&mut h, "Region ▾");
@@ -293,10 +293,9 @@ fn moving_a_field_to_filters_fills_its_allowed_values() {
     let filters = params["filters"].as_array().cloned().unwrap_or_default();
     assert_eq!(filters.len(), 1, "the field moved to Filters reports one filter");
     assert_eq!(filters[0]["field"], json!("Sales[Region]"));
-    let mut allowed: Vec<String> =
-        filters[0]["allowed"].as_array().into_iter().flatten().filter_map(|value| value.as_str().map(str::to_string)).collect();
-    allowed.sort();
-    assert_eq!(allowed, ["East", "West"], "the filter's members come from the model");
+    // Excel moves a field to Filters as `(All)`: the page field names the column and keeps every
+    // value, so no member list is sent and no row is dropped before the user picks anything.
+    assert!(filters[0].get("allowed").is_none(), "an untouched filter is (All), not a member list: {filters:?}");
 
     // A filtered report writes its page rows above the body, and the pane asks for the PivotTable's
     // top-left again, so a second Apply does not walk the report down the sheet.
@@ -570,8 +569,5 @@ fn dragging_a_column_onto_filters_makes_it_a_page_filter() {
     let entries = params["filters"].as_array().cloned().unwrap_or_default();
     assert_eq!(entries.len(), 1, "a dropped filter field reports one filter");
     assert_eq!(entries[0]["field"], json!("Sales[Region]"));
-    let mut allowed: Vec<String> =
-        entries[0]["allowed"].as_array().into_iter().flatten().filter_map(|value| value.as_str().map(str::to_string)).collect();
-    allowed.sort();
-    assert_eq!(allowed, ["East", "West"], "the drop fills the filter's members like the menu does");
+    assert!(entries[0].get("allowed").is_none(), "the drop makes the page field (All), like the menu does: {entries:?}");
 }

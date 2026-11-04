@@ -28,8 +28,6 @@ const PANE: &str = "model_pivot_pane";
 const TAB: &str = "model_pivot_fields_tab";
 /// The pane's bottom strip: Apply and Refresh stay visible while the field list scrolls.
 const ACTIONS: &str = "model_pivot_actions";
-/// Values one filter may keep: `dataModel.createPivot` accepts 64 per filter.
-const MAX_FILTER_VALUES: usize = 64;
 /// Characters the field search box keeps: a pasted novel must not be scanned on every frame.
 const MAX_SEARCH_CHARS: usize = 80;
 /// The aggregations `dataModel.createPivot` accepts for a column in Σ Values, in Excel's order.
@@ -251,8 +249,8 @@ impl Draft {
         self.filters.retain(|filter| filter["field"].as_str() != Some(reference));
     }
 
-    /// Moves a placed field to another area (Filters is handled by the caller, which also needs
-    /// the field's members for the filter's `allowed` list). A field entering Σ Values keeps its
+    /// Moves a placed field to another area (Filters is handled by the caller, which adds the
+    /// page field's `(All)` filter). A field entering Σ Values keeps its
     /// kind: a measure stays a measure, a model column is summarized (`Sum`, or `Count` for text).
     fn move_to(&mut self, reference: &str, area: Area, fields: &[TableFields]) {
         self.remove(reference);
@@ -743,14 +741,12 @@ fn draw(app: &mut SheetApp, ui: &mut Ui, state: &mut State, draft: &Draft, view:
         error = None;
     }
     if let Some(reference) = place_filter {
-        match members(app, state, key, &reference) {
-            Ok(allowed) => {
-                draft.remove(&reference);
-                draft.filters.push(json!({"field": reference, "allowed": allowed}));
-                changed = true;
-            }
-            Err(message) => error = Some(message),
-        }
+        // A field moved to Filters starts as Excel's `(All)`: the page field names the column and
+        // keeps every value. Sending the member list instead would drop the rows whose value is
+        // blank or past the command's cap before the user has selected anything.
+        draft.remove(&reference);
+        draft.filters.push(json!({"field": reference}));
+        changed = true;
     }
     if let Some(reference) = add_slicer {
         match slicer_card(app, state, key, &reference, view) {
@@ -864,7 +860,7 @@ fn tick(ui: &mut Ui, field: &Field, icon: Icon, draft: &mut Draft) -> bool {
 /// What the area lists asked for.
 struct Outcome {
     changed: bool,
-    /// A field moved to Filters: its members fill the filter's `allowed` list.
+    /// A field moved to Filters: it becomes the page field's `(All)` filter.
     place_filter: Option<String>,
     /// A filter field asked for a slicer: the pane adds a card that drives its page filter.
     add_slicer: Option<String>,
@@ -876,7 +872,7 @@ enum DropAction {
     Nothing,
     /// The draft changed.
     Moved,
-    /// The field moved to Filters: its members fill the `allowed` list outside the frame.
+    /// The field moved to Filters: the caller adds the `(All)` filter outside the frame.
     Filter(String),
 }
 
@@ -1096,7 +1092,7 @@ fn glyph(ui: &mut Ui, icon: Icon, color: Color32) {
 ///
 /// A date field has no slicer: a timeline needs the field's date grouping — a date axis over the
 /// members with a from/to range — and a model PivotTable's page filter carries plain member values
-/// only (`PivotFilter { field, allowed }`), so the pane reports the limitation instead of offering
+/// only (`PivotFilter { field, allowed, all }`), so the pane reports the limitation instead of offering
 /// tiles that could not filter. Everything else (text, numbers) lists its `VALUES()` members.
 fn slicer_card(app: &mut SheetApp, state: &mut State, key: CacheKey, reference: &str, view: &View<'_>) -> Result<SlicerCard, String> {
     let date = view.fields.iter().flat_map(|table| &table.columns).any(|field| field.reference == reference && field.date);
@@ -1113,7 +1109,8 @@ fn slicer_card(app: &mut SheetApp, state: &mut State, key: CacheKey, reference: 
 ///
 /// A tile click edits the filter's `allowed` list in the pending draft, so Apply writes the
 /// PivotTable's page filter with exactly the tiles that are on — the grid shrinks to those
-/// members, and "Clear Slicer Filter" turns every tile back on and restores every row.
+/// members, and "Clear Slicer Filter" removes the list again, which is the page field's `(All)`:
+/// every tile on, every row back.
 fn slicer_cards(ui: &mut Ui, t: &Tokens, lang: &i18n::Language, draft: &mut Draft, cards: &mut Vec<SlicerCard>) -> bool {
     // A card whose filter left the draft has nothing to drive: drop it.
     cards.retain(|card| draft.filters.iter().any(|filter| filter["field"].as_str() == Some(card.field.as_str())));
@@ -1143,15 +1140,20 @@ fn slicer_cards(ui: &mut Ui, t: &Tokens, lang: &i18n::Language, draft: &mut Draf
                 });
             });
             let Some(filter) = draft.filters.iter_mut().find(|filter| filter["field"].as_str() == Some(field.as_str())) else { return };
-            let mut allowed: Vec<Json> = filter["allowed"].as_array().cloned().unwrap_or_default();
+            // A filter with no `allowed` key is `(All)`: every member is on.
+            let mut all_on = filter.get("allowed").is_none();
+            let mut card_changed = false;
+            let mut allowed: Vec<Json> = filter["allowed"].as_array().cloned().unwrap_or_else(|| values.clone());
             // Excel's slicer click: a plain click selects exactly that tile (the rest turn off) and
             // clicking the only selected tile clears the filter, while Ctrl/Cmd-click toggles one
             // tile at a time.
             let multi = ui.input(|input| input.modifiers.command || input.modifiers.ctrl);
             ui.horizontal_wrapped(|ui| {
                 for value in &values {
-                    let on = allowed.iter().any(|kept| kept == value);
+                    let on = all_on || allowed.iter().any(|kept| kept == value);
                     if ui.selectable_label(on, egui::RichText::new(tile_text(value)).font(theme::ui_font(12.0))).clicked() {
+                        all_on = false;
+                        card_changed = true;
                         let only = allowed.len() == 1 && allowed.first() == Some(value);
                         if multi {
                             if on {
@@ -1168,9 +1170,19 @@ fn slicer_cards(ui: &mut Ui, t: &Tokens, lang: &i18n::Language, draft: &mut Draf
                     }
                 }
             });
-            filter["allowed"] = Json::Array(allowed);
+            if card_changed {
+                // Only an explicit selection narrows the page field: leaving the key absent keeps
+                // `(All)`, which is what an untouched filter means.
+                if let Some(map) = filter.as_object_mut() {
+                    map.insert("allowed".to_string(), Json::Array(allowed));
+                }
+                changed = true;
+            }
             if ui.button(lang.tr("Clear Slicer Filter")).clicked() {
-                filter["allowed"] = Json::Array(values.clone());
+                // Excel's Clear Slicer Filter restores `(All)` — every member, blanks included.
+                if let Some(map) = filter.as_object_mut() {
+                    map.remove("allowed");
+                }
                 changed = true;
             }
         });
@@ -1192,15 +1204,14 @@ fn tile_text(value: &Json) -> String {
 fn apply_params(view: &View<'_>, draft: &Draft) -> Json {
     // The source measure only supplies the grouping table: a values area of summarized columns
     // lets the command take the first column's table (an empty `measure` is that request).
+    // Falling back to the model's first measure would group from another table whenever the
+    // values area holds only summarized columns.
     let measure = draft
         .values
         .iter()
         .find_map(ValueField::measure_name)
         .map(str::to_string)
         .or_else(|| view.selected.and_then(|selected| selected["measure"].as_str().or(selected["source"].as_str())).map(str::to_string))
-        .or_else(|| {
-            view.model["measures"].as_array().and_then(|measures| measures.first()).and_then(|measure| measure["name"].as_str()).map(str::to_string)
-        })
         .unwrap_or_default();
     let mut params = json!({
         "measure": measure,
@@ -1232,18 +1243,12 @@ fn members(app: &mut SheetApp, state: &mut State, key: CacheKey, reference: &str
         return Ok(values.clone());
     }
     let answer = app.session.run("dataModel.evaluate", json!({"formula": format!("VALUES({reference})"), "table": true}))?;
-    let mut values: Vec<Json> = answer["rows"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|row| row.as_array().and_then(|values| values.first()).cloned())
-        .filter(|value| !value.is_null())
-        .collect();
+    // Every member, blanks included: a blank is a member the user can tick, and dropping any of
+    // them here would silently exclude those rows once a selection is written.
+    let values: Vec<Json> =
+        answer["rows"].as_array().into_iter().flatten().filter_map(|row| row.as_array().and_then(|values| values.first()).cloned()).collect();
     if values.is_empty() {
         return Err(format!("`{reference}` has no values to filter on."));
-    }
-    if values.len() > MAX_FILTER_VALUES {
-        values.truncate(MAX_FILTER_VALUES);
     }
     state.members = Some((named, values.clone()));
     Ok(values)

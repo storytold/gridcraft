@@ -492,8 +492,14 @@ fn a_taken_name_and_a_busy_area_are_refused_without_replace() {
     assert!(error.to_string().contains("already exists"), "{error}");
     let error = s.execute("dataModel.createPivot", json!({"measure": "Total Sales", "at": "H1"})).expect_err("busy area");
     assert!(error.to_string().contains("There's already data in Sheet1!H1"), "{error}");
-    let reply = create(&mut s, json!({"measure": "Total Sales", "at": "H1", "replace": true}));
+    // `replace` names the PivotTable it rewrites: `attach_model_pivot` finds the part by name, so
+    // an unnamed replacement would add a second PivotTable on the same cells.
+    let error = s.execute("dataModel.createPivot", json!({"measure": "Total Sales", "at": "H1", "replace": true})).expect_err("unnamed replace");
+    assert!(error.to_string().contains("`name` is required when `replace` is true"), "{error}");
+    let reply = create(&mut s, json!({"measure": "Total Sales", "at": "H1", "replace": true, "name": "Mine"}));
     assert_eq!(reply["at"], json!("H1"));
+    let listing = fields(&mut s, json!({}));
+    assert_eq!(listing["pivots"].as_array().map(Vec::len), Some(1), "one PivotTable at H1, not two");
 }
 
 #[test]

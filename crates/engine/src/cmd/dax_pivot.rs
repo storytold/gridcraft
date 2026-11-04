@@ -94,7 +94,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Create PivotTable",
             ["Data", "Data Model"],
             None,
-            "{measure?, values?: [measure | {column: \"Sales[Amount]\", aggregate?: Sum|Average|Count|Min|Max}, ..], row_fields?: [\"Sales[Region]\"], column_fields?: [..], filters?: [{field, allowed: [value, ..], include_blank?}], name?, sheet? (default: the active sheet), at? (default: A3), layout?: compact|outline|tabular, row_subtotals?, column_subtotals?, grand_totals?, replace?} writes a PivotTable backed by the data model: `measure` groups the rows (optional when `values` names a field; the first value then supplies its table), `values` (default `[measure]`) fills the values area with one measure column each — a measure name, or a column with the aggregation that summarizes it, which the command evaluates as Excel's implicit measure (`Sum of Amount`) without adding a measure to the model — and the reply's report cells plus the pivot cache and PivotTable definitions carry it; `replace` overwrites the report area — clearing the cells the previous report of `name` occupied — and re-applies that kept PivotTable → {name, sheet, at, rows, columns, values, cached}; `cached` says the workbook now carries the pivot parts, so a save keeps them (Excel still needs the model database part to refresh)",
+            "{measure?, values?: [measure | {column: \"Sales[Amount]\", aggregate?: Sum|Average|Count|Min|Max}, ..], row_fields?: [\"Sales[Region]\"], column_fields?: [..], filters?: [{field, allowed?: [value, ..], include_blank?} (an absent `allowed` is the page field's (All))], name?, sheet? (default: the active sheet), at? (default: A3), layout?: compact|outline|tabular, row_subtotals?, column_subtotals?, grand_totals?, replace?} writes a PivotTable backed by the data model: `measure` groups the rows (optional when `values` names a field; the first value then supplies its table), `values` (default `[measure]`) fills the values area with one measure column each — a measure name, or a column with the aggregation that summarizes it, which the command evaluates as Excel's implicit measure (`Sum of Amount`) without adding a measure to the model — and the reply's report cells plus the pivot cache and PivotTable definitions carry it; `replace` overwrites the report area — clearing the cells the previous report of `name` occupied — and re-applies that kept PivotTable → {name, sheet, at, rows, columns, values, cached}; `cached` says the workbook now carries the pivot parts, so a save keeps them (Excel still needs the model database part to refresh)",
             has_model,
             create_pivot
         ),
@@ -174,9 +174,16 @@ fn create_with(s: &mut Session, p: &Json, value_fields: &[String], package: bool
     let replace = optional_bool(p, "replace")?.unwrap_or(false);
     let requested_name = optional_str(p, "name")?;
     let (sheet, at) = destination(s, p)?;
+    let name = requested_name.map(str::trim).filter(|name| !name.is_empty());
+    // Only a named PivotTable can be replaced: `attach_model_pivot` updates the part with that name
+    // and otherwise adds one, so an unnamed `replace` would leave the old PivotTable attached and
+    // stack a second one on the same cells.
+    if replace && name.is_none() {
+        return Err(other("`name` is required when `replace` is true."));
+    }
     // A named `replace` re-applies the pivot the workbook keeps under that name: find what its
     // previous report occupied so the edit can clear it before writing a report of another shape.
-    let previous = match (replace, requested_name.map(str::trim).filter(|name| !name.is_empty())) {
+    let previous = match (replace, name) {
         (true, Some(name)) => previous_report(s, name)?,
         _ => None,
     };
@@ -226,7 +233,7 @@ fn create_with(s: &mut Session, p: &Json, value_fields: &[String], package: bool
             for (i, row) in pages.iter().enumerate() {
                 for (j, text) in row.iter().enumerate() {
                     let cell = CellRef::new(at.row.saturating_add(i as u32), at.col.saturating_add(j as u32));
-                    sh.set_cell(cell, Cell { value: CoreValue::text(text.as_str()), formula: None, style: StyleId::default() });
+                    sh.set_cell(cell, Cell::value(CoreValue::text(text.as_str())));
                 }
             }
             let labels = label_column_count(spec.layout, spec.row_fields.len());
@@ -402,13 +409,19 @@ fn selected_json(part: &ModelPivotPartInfo) -> Json {
             .filters
             .iter()
             .map(|filter| {
+                let field = field_text(&filter.field);
+                // `(All)` is the field with no `allowed` key, the shape `createPivot` reads back as
+                // a filter that keeps every value.
+                if filter.all {
+                    return json!({"field": field});
+                }
                 let mut allowed: Vec<Json> = filter.allowed.iter().map(pivot_scalar_json).collect();
                 // The reader reports blank as a flag on the filter; the pane lists it as a member
                 // like any other, which is the shape `createPivot` accepts back.
                 if filter.include_blank {
                     allowed.push(Json::Null);
                 }
-                json!({"field": field_text(&filter.field), "allowed": allowed})
+                json!({"field": field, "allowed": allowed})
             })
             .collect::<Vec<_>>(),
         "values": spec.values.iter().map(|value| value.measure.clone()).collect::<Vec<_>>(),
@@ -686,8 +699,12 @@ fn filter_scalar(value: &Json) -> Result<Scalar> {
     })
 }
 
-/// The `filters` parameter: `[{field, allowed: [..], include_blank?}]`. An empty `allowed` list
-/// keeps nothing, as in `gridcraft_dax::PivotFilter`.
+/// The `filters` parameter: `[{field, allowed: [..], include_blank?}]`.
+///
+/// An absent `allowed` key is Excel's `(All)`: the field becomes a page field that keeps every
+/// value (`PivotFilter::all`). An `allowed` list that is present, even empty, is an exact member
+/// set — an empty one keeps nothing, as in `gridcraft_dax::PivotFilter` — so the two cases stay
+/// distinguishable.
 fn filters_param(p: &Json) -> Result<Vec<PivotFilter>> {
     let items = match p.get("filters") {
         None | Some(Json::Null) => return Ok(Vec::new()),
@@ -705,7 +722,9 @@ fn filters_param(p: &Json) -> Result<Vec<PivotFilter>> {
             .map(str::trim)
             .filter(|field| !field.is_empty())
             .ok_or_else(|| bad(CMD, "a filter needs `field`"))?;
-        let mut allowed = match item.get("allowed").or_else(|| item.get("values")) {
+        let requested = item.get("allowed").or_else(|| item.get("values"));
+        let all = requested.is_none();
+        let mut allowed = match requested {
             None | Some(Json::Null) => Vec::new(),
             Some(Json::Array(values)) => {
                 if values.len() > MAX_AXIS_FIELDS {
@@ -723,7 +742,7 @@ fn filters_param(p: &Json) -> Result<Vec<PivotFilter>> {
         if include_blank && !allowed.iter().any(|value| matches!(value, Scalar::Blank)) {
             allowed.push(Scalar::Blank);
         }
-        out.push(PivotFilter { field: field.to_string(), allowed });
+        out.push(PivotFilter { field: field.to_string(), allowed, all });
     }
     Ok(out)
 }
@@ -957,6 +976,9 @@ fn page_rows(spec: &ModelPivotSpec) -> Vec<Vec<String>> {
 
 /// The item a page field shows: its only allowed value, or `(All)` / `(Multiple Items)`.
 fn page_item(filter: &ModelPivotFilter) -> String {
+    if filter.all {
+        return "(All)".to_string();
+    }
     match filter.allowed.as_slice() {
         [value] => value.label(),
         [] => "(All)".to_string(),
@@ -1135,7 +1157,7 @@ fn spec_from_model(model: &DataModel, pivot: &PivotTable, values: &[ModelPivotVa
             let field = field_ref(model, &filter.field)?;
             let allowed = filter.allowed.iter().map(model_scalar).collect();
             let include_blank = filter.allowed.iter().any(|value| matches!(value, Scalar::Blank));
-            Ok(ModelPivotFilter { field, allowed, include_blank })
+            Ok(ModelPivotFilter { field, allowed, include_blank, all: filter.all })
         })
         .collect::<Result<Vec<_>>>()?;
     let row_members = axis_members(model, &row_fields);
