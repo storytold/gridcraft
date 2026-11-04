@@ -29,7 +29,8 @@ decimal points and comma array columns; it does not silently translate Spanish a
 
 The cell editor, formula bar, Show Formulas, autocomplete, the Formula ribbon, Insert Function, and argument hints
 use the selected formula language. Common Spanish and Hungarian function help is translated;
-functions without a localized entry retain their English names/help. General interface labels
+functions without a localized entry retain their English names/help. Ctrl+Shift+A inserts
+argument names after accented names too: `=ÁTLAG(` becomes `=ÁTLAG(szám1;szám2;...)`. General interface labels
 and errors fall back to English where translations are not provided. An edit captures its language
 when it starts so switching the preference cannot reinterpret unfinished input.
 

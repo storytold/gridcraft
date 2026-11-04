@@ -2,7 +2,7 @@
 //! in Excel.
 use egui::{Context, Event, Key, Modifiers, RawInput, Rect, pos2, vec2};
 use gridcraft_engine::Session;
-use gridcraft_ui_egui::SheetApp;
+use gridcraft_ui_egui::{SheetApp, i18n::Language};
 
 fn frame(ctx: &Context, app: &mut SheetApp, time: f64, events: Vec<Event>) {
     let mut output = ctx.run_ui(
@@ -26,10 +26,15 @@ fn ctrl_shift_a() -> Event {
 
 /// A cell editor holding `text`, caret at the end.
 fn editing(text: &str) -> (Context, SheetApp) {
+    editing_in_language(text, Language::En)
+}
+
+fn editing_in_language(text: &str, language: Language) -> (Context, SheetApp) {
     let ctx = Context::default();
     let mut session = Session::new();
     session.new_workbook();
     let mut app = crate::common::app(session);
+    app.ui.language = language;
     for t in 0..4 {
         frame(&ctx, &mut app, f64::from(t) * 0.01, vec![]);
     }
@@ -87,4 +92,14 @@ fn one_undo_takes_back_the_inserted_names_only() {
     frame(&ctx, &mut app, 0.14, vec![key(Key::Z, Modifiers::COMMAND)]);
     frame(&ctx, &mut app, 0.15, vec![]);
     assert_eq!(text(&app), "=SUMIF(");
+}
+
+#[test]
+fn hungarian_accented_function_accepts_argument_shortcut() {
+    for typed in ["=ÁTLAG(", "=ÁTLAG"] {
+        let (ctx, mut app) = editing_in_language(typed, Language::Hu);
+        frame(&ctx, &mut app, 0.1, vec![ctrl_shift_a()]);
+        frame(&ctx, &mut app, 0.11, vec![]);
+        assert_eq!(text(&app), "=ÁTLAG(szám1;szám2;...)", "after {typed}");
+    }
 }

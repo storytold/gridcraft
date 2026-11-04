@@ -300,7 +300,7 @@ impl EditState {
         }
         let head = before.strip_suffix('(').unwrap_or(before);
         let name: String =
-            head.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').collect::<String>().chars().rev().collect();
+            head.chars().rev().take_while(|c| c.is_alphanumeric() || *c == '.' || *c == '_').collect::<String>().chars().rev().collect();
         if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
             return false;
         }

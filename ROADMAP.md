@@ -268,6 +268,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | Fix Ctrl+Shift+A argument insertion after accented Hungarian names; retain the existing shared CI workflow |
 | 2026-11-04 | minor | Integrate Hungarian locale with current main; native catalog and serialized-XLSX/API validation, source audit and accessibility, page-order and Macros labels; move a misplaced progress row out of Headline numbers |
 | 2026-11-02 | minor | Progress log: RefEdit reference boxes in dialogs |
 | 2026-11-02 | minor | Progress log: Python mode in the formula bar |
