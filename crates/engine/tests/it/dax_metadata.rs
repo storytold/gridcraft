@@ -86,7 +86,7 @@ fn implicit_measures_follow_the_toggle_type_and_summarization() {
     assert_eq!(value["formula"], json!("SUM(Sales[Amount])"));
     let value = s.execute("dataModel.evaluate", json!({"measure": "Count of Region"})).expect("evaluate count");
     assert_eq!(value["value"].as_f64(), Some(3.0));
-    assert_eq!(value["formula"], json!("COUNTROWS(Sales)"));
+    assert_eq!(value["formula"], json!("COUNT(Sales[Region])"), "Excel counts the column's non-blank values");
 
     // The model's own Summarize By overrides the type default.
     s.execute("dataModel.setSummarizeBy", json!({"table": "Sales", "column": "Amount", "summarize_by": "average"})).expect("summarize");

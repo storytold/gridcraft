@@ -1504,6 +1504,63 @@ pub fn read_model_pivots(bytes: &[u8]) -> Result<(Vec<ModelPivotPartInfo>, ReadR
     Ok((out, report))
 }
 
+/// Reads the data-model PivotTables the workbook keeps as pass-through parts, without writing the
+/// package first.
+///
+/// [`read_model_pivots`] needs a serialized file because it maps workbook sheet relationships to
+/// PivotTable parts. The session's workbook already holds those parts ([`attach_model_pivot`] puts
+/// them there), so a caller that only wants what the workbook carries parses them in place
+/// instead of zipping every sheet. Columns and measures come from the cache hierarchies, exactly
+/// as when the package is read back; the `x15:dataModel` extension's table metadata is not among
+/// the kept parts, so a spec built here lists the tables the caches name.
+pub fn read_kept_model_pivots(wb: &Workbook) -> Result<(Vec<ModelPivotPartInfo>, ReadReport), IoError> {
+    let mut report = ReadReport::default();
+    let Some(preserved) = wb.preserved.as_deref() else { return Ok((Vec::new(), report)) };
+    // The sheet that owns each PivotTable part, from the sheets' own kept relationships.
+    let mut owners: HashMap<String, String> = HashMap::new();
+    for sheet in &wb.sheets {
+        for rel in sheet.preserved.as_deref().map(|preserved| preserved.rels.as_slice()).unwrap_or_default() {
+            if rel.rel_type == rel_uri(REL_PIVOT_TABLE) && !rel.external {
+                owners.insert(rel.target.trim_start_matches('/').to_ascii_lowercase(), sheet.name.clone());
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for part in &preserved.parts {
+        let lower = part.name.to_ascii_lowercase();
+        if !lower.starts_with("xl/pivottables/") || !lower.ends_with(".xml") {
+            continue;
+        }
+        let Some(sheet) = owners.get(&lower).cloned() else {
+            report.warn(format!("PivotTable {} is not related from a sheet; skipped", part.name));
+            continue;
+        };
+        let table_xml = crate::xml::parse(&part.data)?;
+        if table_xml.name != "pivotTableDefinition" {
+            report.warn(format!("{} is not a PivotTable definition; skipped", part.name));
+            continue;
+        }
+        let cache_part = part
+            .rels
+            .iter()
+            .find(|rel| !rel.external && rel.rel_type == rel_uri(REL_PIVOT_CACHE))
+            .map(|rel| rel.target.trim_start_matches('/').to_string());
+        let Some(cache_part) = cache_part else {
+            report.warn(format!("PivotTable {} has no cache; skipped", part.name));
+            continue;
+        };
+        let Some(cache_bytes) = preserved.parts.iter().find(|kept| kept.name.eq_ignore_ascii_case(&cache_part)) else {
+            report.warn(format!("missing part {cache_part}"));
+            continue;
+        };
+        let cache_xml = crate::xml::parse(&cache_bytes.data)?;
+        let Some(cache) = read_cache_xml(&cache_xml, &cache_part, &mut report) else { continue };
+        let Some(info) = read_table(&table_xml, &cache, &[], &[], &mut report) else { continue };
+        out.push(ModelPivotPartInfo { sheet, location: info.0, spec: info.1 });
+    }
+    Ok((out, report))
+}
+
 struct CacheRead {
     connection_id: u32,
     fields: Vec<CacheFieldRead>,
@@ -1531,13 +1588,18 @@ fn read_cache(pkg: &mut Package<'_>, part: &str, report: &mut ReadReport) -> Res
         report.warn(format!("missing part {part}"));
         return Ok(None);
     };
+    Ok(read_cache_xml(&x, part, report))
+}
+
+/// [`read_cache`] for an already parsed `pivotCacheDefinition` part.
+fn read_cache_xml(x: &El, part: &str, report: &mut ReadReport) -> Option<CacheRead> {
     if x.name != "pivotCacheDefinition" {
         report.warn(format!("{part} is not a pivot cache definition; its PivotTable was skipped"));
-        return Ok(None);
+        return None;
     }
     let Some(source) = x.child("cacheSource") else {
         report.warn(format!("PivotTable cache {part} has no source; skipped"));
-        return Ok(None);
+        return None;
     };
     if source.attr("type") != Some("external") {
         report.warn(format!(
@@ -1545,7 +1607,7 @@ fn read_cache(pkg: &mut Package<'_>, part: &str, report: &mut ReadReport) -> Res
             part,
             source.attr("type").unwrap_or("unknown")
         ));
-        return Ok(None);
+        return None;
     }
     let connection_id = source.attr_u32("connectionId").unwrap_or(0);
     let mut hierarchies = Vec::new();
@@ -1604,7 +1666,7 @@ fn read_cache(pkg: &mut Package<'_>, part: &str, report: &mut ReadReport) -> Res
             fields.push(CacheFieldRead { caption, hierarchy, items });
         }
     }
-    Ok(Some(CacheRead { connection_id, fields, hierarchies }))
+    Some(CacheRead { connection_id, fields, hierarchies })
 }
 
 fn parse_unique_name(name: &str) -> Option<(String, String)> {

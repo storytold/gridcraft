@@ -999,3 +999,48 @@ fn a_save_after_two_applies_is_deterministic() {
         assert_eq!(a_parts.get(name), b_parts.get(name), "{name} differs between two writes");
     }
 }
+
+#[test]
+fn kept_parts_read_the_same_pivots_as_the_written_package() {
+    use crate::read_kept_model_pivots;
+
+    let mut wb = workbook();
+    attach_model_pivot(&mut wb, "Pivot", at("A3"), &spec(), &report(), None).unwrap();
+    let package = write_xlsx(&wb).unwrap();
+    let (written_parts, _) = read_model_pivots(&package).unwrap();
+    let (kept_parts, _) = read_kept_model_pivots(&wb).unwrap();
+    // Reading the kept parts never serializes the workbook, so it must answer exactly what the
+    // package reader answers: same pivot, same sheet, same anchor, same axes and filters.
+    assert_eq!(kept_parts.len(), written_parts.len());
+    for (kept, written) in kept_parts.iter().zip(&written_parts) {
+        assert_eq!(kept.sheet, written.sheet);
+        assert_eq!(kept.location, written.location);
+        assert_eq!(kept.spec.name, written.spec.name);
+        assert_eq!(kept.spec.row_fields, written.spec.row_fields);
+        assert_eq!(kept.spec.column_fields, written.spec.column_fields);
+        assert_eq!(kept.spec.filters, written.spec.filters);
+        assert_eq!(kept.spec.values, written.spec.values);
+        assert_eq!(kept.spec.layout, written.spec.layout);
+        assert_eq!(kept.spec.grand_totals, written.spec.grand_totals);
+    }
+}
+
+#[test]
+fn kept_parts_without_a_sheet_owner_or_cache_are_skipped() {
+    use crate::read_kept_model_pivots;
+
+    let mut wb = workbook();
+    // A PivotTable part no sheet relates to: the field list must not invent one.
+    wb.preserved = Some(Arc::new(Preserved {
+        parts: vec![PreservedPart {
+            name: "xl/pivotTables/pivotTable9.xml".into(),
+            content_type: crate::pivot_model::CT_PIVOT_TABLE.into(),
+            data: Arc::from(br#"<pivotTableDefinition name="Orphan" cacheId="9"><location ref="A1:B2"/></pivotTableDefinition>"#.as_slice()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+    let (parts, report) = read_kept_model_pivots(&wb).unwrap();
+    assert!(parts.is_empty());
+    assert!(report.warnings.iter().any(|warning| warning.contains("not related from a sheet")), "{:?}", report.warnings);
+}

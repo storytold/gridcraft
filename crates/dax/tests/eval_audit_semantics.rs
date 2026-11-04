@@ -228,3 +228,25 @@ fn if_requires_a_boolean_condition() {
     assert_eq!(eval("IF(BLANK(), 1, 2)"), Scalar::Integer(2));
     assert_eq!(eval("IF(1 > 0, 1, 2)"), Scalar::Integer(1));
 }
+
+#[test]
+fn strict_equality_compares_values_and_keeps_blank_strict() {
+    // `==` is strict only about BLANK; every other pair follows DAX comparison, so a number
+    // compares by value and text ignores case.
+    assert_eq!(eval("2 == 2.0"), Scalar::Boolean(true));
+    assert_eq!(eval("1 == 2"), Scalar::Boolean(false));
+    assert_eq!(eval("\"a\" == \"A\""), Scalar::Boolean(true));
+    assert_eq!(eval("BLANK() == BLANK()"), Scalar::Boolean(true));
+    assert_eq!(eval("BLANK() == 0"), Scalar::Boolean(false));
+    assert_eq!(eval("BLANK() == \"\""), Scalar::Boolean(false));
+    // `=` keeps coercing BLANK, as before.
+    assert_eq!(eval("BLANK() = 0"), Scalar::Boolean(true));
+}
+
+#[test]
+fn strict_equality_matches_a_decimal_column_against_an_integer_literal() {
+    // A Decimal column compared with an integer literal compares numerically: `Sales[Amount]` is
+    // `Scalar::Decimal`, the literal `Scalar::Integer`.
+    assert_eq!(eval_in_sales("COUNTROWS(FILTER(Sales, Sales[Amount] == 10))"), Scalar::Integer(1));
+    assert_eq!(eval_in_sales("COUNTROWS(FILTER(Sales, Sales[Region] == \"east\"))"), Scalar::Integer(2));
+}

@@ -783,3 +783,23 @@ fn an_implicit_value_does_not_collide_with_an_existing_measure() {
     ];
     assert_eq!(grid(&s, 2, 0, 3, 2), expected);
 }
+
+#[test]
+fn an_explicit_null_allowed_list_is_the_all_page_field() {
+    // JSON `null` means "absent" for every other parameter, so it must mean `(All)` here too: the
+    // page field keeps every row instead of hiding all of them.
+    let mut s = load();
+    let plain = create(&mut s, json!({"measure": "Total Sales", "grand_totals": true, "at": "H1"}));
+    let reply = create(
+        &mut s,
+        json!({
+            "measure": "Total Sales",
+            "filters": [{"field": "Sales[Channel]", "allowed": null}],
+            "grand_totals": true,
+        }),
+    );
+    assert_eq!(reply["rows"], plain["rows"], "the report keeps every row, exactly as with no page filter");
+    assert_eq!(reply["columns"], plain["columns"]);
+    let listing = fields(&mut s, json!({"name": reply["name"].as_str().unwrap_or_default()}));
+    assert_eq!(listing["selected"]["filters"], json!([{"field": "Sales[Channel]"}]), "the all page field has no `allowed` list");
+}

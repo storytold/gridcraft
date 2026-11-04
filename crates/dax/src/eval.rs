@@ -749,6 +749,17 @@ impl<'a> Evaluator<'a> {
             "USERELATIONSHIP" | "CROSSFILTER" => {
                 return Err(EvalError::new(format!("{name} is only valid as a CALCULATE modifier")));
             }
+            "MAX" | "MIN" if args.len() == 2 => {
+                // The catalog's two-scalar overload (`MAX ( 10000, [Sales Amount] )`): the
+                // larger/smaller value, not an aggregation over a column.
+                let left = self.eval(&args[0], ctx)?;
+                let right = self.eval(&args[1], ctx)?;
+                let Some(ordering) = left.compare(&right) else {
+                    return Err(EvalError::new(format!("{name} cannot compare {} with {}", left.type_name(), right.type_name())));
+                };
+                let keep_left = if name.eq_ignore_ascii_case("MAX") { ordering != Ordering::Less } else { ordering != Ordering::Greater };
+                return Ok(if keep_left { left } else { right });
+            }
             "SUM" | "AVERAGE" | "COUNT" | "COUNTA" | "COUNTBLANK" | "MIN" | "MAX" | "PRODUCT" | "DISTINCTCOUNT" | "APPROXIMATEDISTINCTCOUNT" => {
                 return self.aggregate(name, args, ctx);
             }
@@ -882,13 +893,51 @@ impl<'a> Evaluator<'a> {
                 }
                 Err(EvalError::new("no active relationship for RELATEDTABLE"))
             }
-            "ALL" | "ALLNOBLANKROW" | "ALLSELECTED" => {
-                let table = self.eval_table(args.first().ok_or_else(|| EvalError::new("ALL needs a table"))?, ctx)?;
+            "ALL" | "ALLNOBLANKROW" => {
+                // ALL removes the target's filters from the context it reads the table in; the
+                // outer filters on other tables (and the relationships they propagate through)
+                // stay, as DAX defines. ALLSELECTED is different by design: it keeps them.
+                let arg = args.first().ok_or_else(|| EvalError::new(format!("{name} needs a table or column")))?;
+                let drop_blanks = name.eq_ignore_ascii_case("ALLNOBLANKROW");
+                let mut filters = ctx.filters.clone();
+                match arg {
+                    BoundExpr::Column { table, column } => {
+                        filters.filters.remove(&(*table, *column));
+                        let source = self.table(*table, &filters);
+                        let column_name = source.columns.get(*column).map(|column| column.name.clone()).unwrap_or_default();
+                        let rows =
+                            source.column(*column).into_iter().map(|value| vec![value]).filter(|row| !drop_blanks || !row[0].is_blank()).collect();
+                        Ok(TableValue::new(vec![TableColumn { name: column_name }], rows).distinct_rows().with_lineage(*table))
+                    }
+                    BoundExpr::Table(table) => {
+                        filters.remove_table(*table);
+                        // ALLNOBLANKROW drops the blank row a relationship adds; this model stores
+                        // real rows only, so both return every row of the table.
+                        Ok(self.table(*table, &filters))
+                    }
+                    _ => Err(EvalError::new(format!("{name} needs a table or column reference"))),
+                }
+            }
+            "ALLSELECTED" => {
+                let table = self.eval_table(args.first().ok_or_else(|| EvalError::new("ALLSELECTED needs a table"))?, ctx)?;
                 Ok(table)
             }
             "ALLEXCEPT" => {
-                let table = self.eval_table(args.first().ok_or_else(|| EvalError::new("ALLEXCEPT needs a table"))?, ctx)?;
-                Ok(table)
+                // ALLEXCEPT keeps only the filters on the columns it names and drops every other
+                // filter on the table, including the ones relationships propagated into it.
+                let Some(BoundExpr::Table(table)) = args.first() else {
+                    return Err(EvalError::new("ALLEXCEPT needs a table"));
+                };
+                let keep: BTreeSet<usize> = args[1..]
+                    .iter()
+                    .filter_map(|arg| match arg {
+                        BoundExpr::Column { table: column_table, column } if column_table == table => Some(*column),
+                        _ => None,
+                    })
+                    .collect();
+                let mut filters = ctx.filters.clone();
+                filters.filters.retain(|(filter_table, column), _| filter_table != table || keep.contains(column));
+                Ok(self.table(*table, &filters))
             }
             "VALUES" | "DISTINCT" => {
                 let arg = args.first().ok_or_else(|| EvalError::new("VALUES needs a table or column"))?;
@@ -1301,6 +1350,22 @@ impl<'a> Evaluator<'a> {
                 }
                 Ok(())
             }
+            BoundExpr::Call { spec, args } if spec.name == "ALLEXCEPT" => {
+                // ALLEXCEPT(T, T[Keep]) removes every filter on T except the ones on the columns it
+                // names, which is what CALCULATE's filter argument has to do.
+                let Some(BoundExpr::Table(table)) = args.first() else {
+                    return Err(EvalError::new("ALLEXCEPT needs a table"));
+                };
+                let keep: BTreeSet<usize> = args[1..]
+                    .iter()
+                    .filter_map(|arg| match arg {
+                        BoundExpr::Column { table: column_table, column } if column_table == table => Some(*column),
+                        _ => None,
+                    })
+                    .collect();
+                filters.filters.retain(|(filter_table, column), _| filter_table != table || keep.contains(column));
+                Ok(())
+            }
             BoundExpr::Call { spec, args } if spec.name == "KEEPFILTERS" => {
                 // KEEPFILTERS intersects its filter with the filters already in context instead of
                 // replacing them; dropping the argument silently would ignore the filter.
@@ -1621,7 +1686,13 @@ fn binary(op: BinaryOp, left: Scalar, right: Scalar) -> Result<Scalar, EvalError
         BinaryOp::Concat => Ok(Scalar::String(format!("{}{}", left.to_text(), right.to_text()))),
         BinaryOp::Eq | BinaryOp::StrictEq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge => {
             let ordering = if op == BinaryOp::StrictEq {
-                if left.strict_eq(&right) { Some(Ordering::Equal) } else { Some(Ordering::Less) }
+                // `==` is strict about BLANK only: BLANK equals BLANK and nothing else. Every
+                // other pair follows DAX comparison (numbers compare by value, text ignores case).
+                match (&left, &right) {
+                    (Scalar::Blank, Scalar::Blank) => Some(Ordering::Equal),
+                    (Scalar::Blank, _) | (_, Scalar::Blank) => None,
+                    _ => left.compare(&right),
+                }
             } else {
                 left.compare(&right)
             };
@@ -1703,7 +1774,14 @@ fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
             let haystack = text(1)?;
             let start = if args.len() > 2 { number(2)?.max(1.0) as usize - 1 } else { 0 };
             let insensitive = name.eq_ignore_ascii_case("SEARCH");
-            Ok(find_text(&haystack, &needle, start, insensitive).map(|index| Scalar::Integer((index + 1) as i64)).unwrap_or(Scalar::Blank))
+            match find_text(&haystack, &needle, start, insensitive) {
+                Some(index) => Ok(Scalar::Integer((index + 1) as i64)),
+                // DAX raises an error for absent text unless a `NotFoundValue` was supplied.
+                None => match args.get(3) {
+                    Some(not_found) => Ok(not_found.clone()),
+                    None => Err(EvalError::new(format!("{name} did not find the text"))),
+                },
+            }
         }
         "UNICHAR" => Ok(char::from_u32(number(0)?.max(0.0) as u32).map(|c| Scalar::String(c.to_string())).unwrap_or(Scalar::Blank)),
         "GCD" => Ok(Scalar::Integer(gcd(number(0)? as i64, number(1)? as i64))),

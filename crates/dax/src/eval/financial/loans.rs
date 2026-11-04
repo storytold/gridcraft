@@ -7,7 +7,7 @@
 //! rather than NaN.
 #![allow(unused_imports)]
 
-use super::support::{args, date_parts, date_serial, date_value, days_in_month, eval_all, eval_table, frame_for};
+use super::support::{args, date_parts, date_serial, date_value, days_in_month, eval_all, eval_table, frame_for, is_leap_year};
 use super::*;
 
 /// Upper bound for depreciation loops: keeps hostile `Life` values from stalling evaluation.
@@ -709,10 +709,6 @@ fn validate_amor(name: &str, cost: f64, salvage: f64, period: i64, rate: f64, da
         return Err(invalid(name, "date_purchased must be earlier than first_period"));
     }
     Ok(())
-}
-
-fn is_leap_year(year: i64) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
 /// Excel `YEARFRAC` restricted to the bases AMORDEGRC/AMORLINC accept (0, 1, 3, 4).

@@ -34,6 +34,7 @@ pub mod parser;
 pub mod pivot;
 pub mod pivot_table;
 pub mod printer;
+pub mod references;
 pub mod storage;
 pub mod types;
 pub mod validate;
@@ -57,6 +58,7 @@ pub use model_file::{ModelFileError, ModelMeasure, read_measures, write_measures
 pub use parser::{MAX_DEPTH, ParseError, parse_expression, parse_query};
 pub use pivot::{PivotError, PivotField, pivot, pivot_cross, pivot_fields};
 pub use printer::{print_expression, print_query};
+pub use references::{column_ref, implicit_measure_formula, table_ref};
 pub use storage::{ColumnFootprint, MIN_ENCODING_SAVING, PackedCodes, SCAN_BATCH_ROWS, StorageFootprint, TableFootprint, ValueRef};
 pub use validate::{ValidationError, ValidationErrorKind, validate_call, validate_expression};
 pub use value::{EvalError, Scalar, ScalarKey, TableColumn, TableValue};

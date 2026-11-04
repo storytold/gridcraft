@@ -445,3 +445,35 @@ fn apply_functions_reject_missing_group_columns() {
     assert!(eval_table("GROUPCROSSAPPLY(1, ALL(Sales))").is_err());
     assert!(eval_table("FILTERCLUSTER(1, ALL(Sales), \"\", VALUES(Sales[ProductKey]))").is_err());
 }
+
+#[test]
+fn all_removes_the_tables_own_filters_for_table_expressions() {
+    // The cell's own filter hides two of the four rows.
+    assert_eq!(eval_east("COUNTROWS(Sales)").expect("COUNTROWS"), Scalar::Integer(2));
+    // `ALL(Sales)` is the whole table, so an aggregate over it ignores the cell's filter.
+    assert_eq!(eval_east("COUNTROWS(ALL(Sales))").expect("ALL"), Scalar::Integer(4));
+    assert_eq!(eval_east("SUMX(ALL(Sales), Sales[Amount])").expect("SUMX"), Scalar::Decimal(1000.0));
+    // `ALL` on a column drops that column's filter but keeps the others.
+    assert_eq!(eval_east("COUNTROWS(ALL(Sales[Region]))").expect("ALL(column)"), Scalar::Integer(2));
+}
+
+#[test]
+fn allexcept_keeps_only_the_named_columns_filters_in_calculate() {
+    let model = model();
+    let evaluator = evaluator(&model);
+    let sales = model.table_index("Sales").expect("Sales");
+    let region = model.column_index(sales, "Region").expect("Region");
+    let amount = model.column_index(sales, "Amount").expect("Amount");
+    let mut filters = FilterContext::default();
+    filters.set(sales, region, [ScalarKey::from(&Scalar::String("East".into()))]);
+    filters.set(sales, amount, [ScalarKey::from(&Scalar::Integer(100))]);
+    let eval_with = |src: &str| {
+        let expr = parse_expression(src).map_err(|error| error.to_string()).expect("parse");
+        let bound = Binder::new(&model).bind_expression(&expr).map_err(|error| error.to_string()).expect("bind");
+        evaluator.evaluate_with(&bound, filters.clone()).map_err(|error| error.to_string())
+    };
+    // Both filters together keep one row.
+    assert_eq!(eval_with("COUNTROWS(Sales)").expect("COUNTROWS"), Scalar::Integer(1));
+    // ALLEXCEPT keeps the region filter and drops the amount one: two East rows remain.
+    assert_eq!(eval_with("CALCULATE(COUNTROWS(Sales), ALLEXCEPT(Sales, Sales[Region]))").expect("ALLEXCEPT"), Scalar::Integer(2));
+}

@@ -191,7 +191,9 @@ pub fn encode_bitpacked(values: &[u32], width: u32, min: i32) -> Result<Vec<u8>>
     let mut output = vec![0u8; words.checked_mul(8).ok_or(ModelFileError::TooLarge)?];
     for (index, value) in values.iter().enumerate() {
         let shifted = i64::from(*value) - i64::from(min);
-        if shifted < 0 || shifted > i64::from(u32::MAX) {
+        // The id has to fit the declared width as well as a word: high bits past `width` would
+        // spill into the next slot of the word and corrupt neighbouring ids.
+        if shifted < 0 || shifted > i64::from(u32::MAX) || (width < 32 && (shifted as u64) >> width != 0) {
             return Err(ModelFileError::Corrupt("id is outside the packed range".into()));
         }
         let word_index = index / per_word;
@@ -376,7 +378,14 @@ pub fn encode_numeric_dictionary(values: &[i64], real: bool, element_bytes: usiz
     out.extend_from_slice(&u32::try_from(element_bytes).map_err(|_| ModelFileError::TooLarge)?.to_le_bytes());
     for value in values {
         if real {
-            out.extend_from_slice(&(f64::from_bits(*value as u64)).to_le_bytes());
+            // A 4-byte real dictionary stores `f32` values, matching the `element_bytes` the
+            // header declares, so a reader decoding 4-byte chunks gets the value back.
+            let number = f64::from_bits(*value as u64);
+            if element_bytes == 4 {
+                out.extend_from_slice(&(number as f32).to_le_bytes());
+            } else {
+                out.extend_from_slice(&number.to_le_bytes());
+            }
         } else if element_bytes == 4 {
             out.extend_from_slice(
                 &i32::try_from(*value).map_err(|_| ModelFileError::InvalidModel("integer does not fit the dictionary".into()))?.to_le_bytes(),
@@ -411,10 +420,13 @@ pub fn decode_numeric_dictionary(data: &[u8]) -> Result<(bool, usize, Vec<i64>)>
         let offset = 40 + index * element_bytes;
         let bytes = read(offset, element_bytes)?;
         if real {
+            // 4-byte reals widen to the `f64` bit pattern every caller of the decoded values
+            // expects; 8-byte reals already hold it.
             let bits = if element_bytes == 8 {
                 u64::from_le_bytes(bytes.try_into().map_err(|_| ModelFileError::Corrupt("dictionary value".into()))?)
             } else {
-                u64::from(u32::from_le_bytes(bytes.try_into().map_err(|_| ModelFileError::Corrupt("dictionary value".into()))?))
+                let bits = u32::from_le_bytes(bytes.try_into().map_err(|_| ModelFileError::Corrupt("dictionary value".into()))?);
+                f64::from(f32::from_bits(bits)).to_bits()
             };
             values.push(bits as i64);
         } else if element_bytes == 4 {
@@ -839,6 +851,36 @@ mod tests {
         assert_eq!(element_bytes, 8);
         assert_eq!(decoded, values);
         Ok(())
+    }
+
+    #[test]
+    fn four_byte_real_dictionary_round_trips_as_f32() -> Result<()> {
+        // A 4-byte `real` dictionary stores `f32` values; the decoder widens them to the `f64`
+        // bit pattern callers read, so both element sizes agree.
+        let values: Vec<i64> = [1.5f64, -2.25, 3.0].iter().map(|number| number.to_bits() as i64).collect();
+        let bytes = encode_numeric_dictionary(&values, true, 4)?;
+        let (real, element_bytes, decoded) = decode_numeric_dictionary(&bytes)?;
+        assert!(real);
+        assert_eq!(element_bytes, 4);
+        let expected: Vec<i64> = [1.5f64, -2.25, 3.0].iter().map(|number| f64::from(*number as f32).to_bits() as i64).collect();
+        assert_eq!(decoded, expected);
+        // An 8-byte real dictionary keeps the exact `f64` values.
+        let bytes = encode_numeric_dictionary(&values, true, 8)?;
+        let (real, element_bytes, decoded) = decode_numeric_dictionary(&bytes)?;
+        assert!(real);
+        assert_eq!(element_bytes, 8);
+        assert_eq!(decoded, values);
+        Ok(())
+    }
+
+    #[test]
+    fn bitpacked_ids_must_fit_the_declared_width() {
+        // Shifted by the minimum, 8 and above do not fit a 3-bit id; without the width check the
+        // high bit would land in the next slot of the same word.
+        assert!(encode_bitpacked(&[10], 3, 3).is_ok());
+        assert!(encode_bitpacked(&[11], 3, 3).is_err());
+        // A 32-bit width accepts every id the u32 range allows.
+        assert!(encode_bitpacked(&[u32::MAX], 32, 0).is_ok());
     }
 
     #[test]

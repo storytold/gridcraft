@@ -153,8 +153,11 @@ impl Out {
         self.part(&format!("xl/media/{file}"), None, data.to_vec());
         file
     }
-    pub fn default_type(&mut self, ext: &str, ct: &str) {
-        self.defaults.entry(ext.to_string()).or_insert_with(|| ct.to_string());
+    /// Declares `ct` as the content type a `.ext` part gets by default. Returns whether the
+    /// default for `ext` is that type: the first registration wins, so a part whose own type
+    /// differs must still carry an `Override`.
+    pub fn default_type(&mut self, ext: &str, ct: &str) -> bool {
+        self.defaults.entry(ext.to_string()).or_insert_with(|| ct.to_string()).eq_ignore_ascii_case(ct)
     }
 }
 

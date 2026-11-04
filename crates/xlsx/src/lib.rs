@@ -54,8 +54,8 @@ pub use package::MAX_PART;
 pub use passthrough::rebase_links;
 pub use pivot_model::{
     ModelPivotColumn, ModelPivotDataType, ModelPivotFieldRef, ModelPivotFilter, ModelPivotLayout, ModelPivotMeasure, ModelPivotPartInfo,
-    ModelPivotRelationship, ModelPivotScalar, ModelPivotSpec, ModelPivotTable, ModelPivotValue, attach_model_pivot, read_model_pivots,
-    write_model_pivot,
+    ModelPivotRelationship, ModelPivotScalar, ModelPivotSpec, ModelPivotTable, ModelPivotValue, attach_model_pivot, read_kept_model_pivots,
+    read_model_pivots, write_model_pivot,
 };
 pub use xls::read_xls;
 pub use xlsb::read_xlsb;

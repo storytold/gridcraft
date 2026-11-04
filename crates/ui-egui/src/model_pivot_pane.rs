@@ -1247,6 +1247,16 @@ fn apply_params(view: &View<'_>, draft: &Draft) -> Json {
     params
 }
 
+/// `VALUES(...)` for a filter field. `reference` is the plain `Table[Column]` spelling
+/// `createPivot` takes, so the parts are quoted (and `]` escaped) for DAX here.
+fn values_formula(reference: &str) -> String {
+    match reference.split_once('[').and_then(|(table, rest)| rest.strip_suffix(']').map(|column| (table, column))) {
+        Some((table, column)) => format!("VALUES({}{})", gridcraft_dax::table_ref(table), gridcraft_dax::column_ref(column)),
+        // A measure is a bare name: it is already the reference DAX wants.
+        None => format!("VALUES({reference})"),
+    }
+}
+
 /// A filter field's members, for its `allowed` list: `VALUES(Table[Column])` over the model.
 fn members(app: &mut SheetApp, state: &mut State, key: CacheKey, reference: &str) -> Result<Vec<Json>, String> {
     let named = (key.0, key.1, key.2, reference.to_string());
@@ -1255,7 +1265,7 @@ fn members(app: &mut SheetApp, state: &mut State, key: CacheKey, reference: &str
     {
         return Ok(values.clone());
     }
-    let answer = app.session.run("dataModel.evaluate", json!({"formula": format!("VALUES({reference})"), "table": true}))?;
+    let answer = app.session.run("dataModel.evaluate", json!({"formula": values_formula(reference), "table": true}))?;
     // Every member, blanks included: a blank is a member the user can tick, and dropping any of
     // them here would silently exclude those rows once a selection is written.
     let values: Vec<Json> =

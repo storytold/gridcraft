@@ -16,6 +16,8 @@
 //! are matched case-insensitively by the parser, so they remain available as identifier text
 //! wherever the grammar does not reserve them.
 
+use chrono::NaiveDate;
+
 use crate::ast::{DateTimeLiteral, Span};
 
 /// Longest expression accepted by [`crate::parse_expression`], in bytes. Mirrors DAX's
@@ -512,7 +514,9 @@ fn parse_date(text: &str) -> Result<(u32, u32, u32), String> {
     if !(1..=12).contains(&month) {
         return Err("invalid date/time literal: the month must be between 1 and 12".into());
     }
-    if day == 0 || day > days_in_month(year, month) {
+    // A date exists exactly when chrono can build it: that rejects day 0, 31 April and 29 February
+    // of a common year without hand-written month lengths or leap-year math (AGENTS.md).
+    if NaiveDate::from_ymd_opt(year as i32, month, day).is_none() {
         return Err("invalid date/time literal: the date is not a valid calendar date".into());
     }
     Ok((year, month, day))
@@ -546,18 +550,4 @@ fn parse_component(text: &str, unit: &str) -> Result<u32, String> {
         return Err(format!("invalid date/time literal: the {unit} must be digits"));
     }
     text.parse::<u32>().map_err(|_| format!("invalid date/time literal: the {unit} is out of range"))
-}
-
-const fn is_leap_year(year: u32) -> bool {
-    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
-}
-
-const fn days_in_month(year: u32, month: u32) -> u32 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if is_leap_year(year) => 29,
-        2 => 28,
-        _ => 0,
-    }
 }

@@ -248,7 +248,10 @@ fn find_and_search_count_characters_and_honour_the_start() {
     assert_eq!(eval("FIND(\"a\", \"aXa\", 2)"), Scalar::Integer(3));
     assert_eq!(eval("FIND(\"X\", \"aXa\", 2)"), Scalar::Integer(2));
     assert_eq!(eval("FIND(\"a\", \"aXa\", 3)"), Scalar::Integer(3));
-    assert_eq!(eval("FIND(\"z\", \"aXa\")"), Scalar::Blank);
+    // DAX raises an error for text that is not there unless `NotFoundValue` supplies the answer.
+    assert!(eval_error("FIND(\"z\", \"aXa\")").contains("did not find"));
+    assert_eq!(eval("FIND(\"z\", \"aXa\", 1, BLANK())"), Scalar::Blank);
+    assert_eq!(eval("FIND(\"z\", \"aXa\", 1, -1)"), Scalar::Integer(-1));
     // `SEARCH` ignores case, including for a character whose lowercase is longer than the byte
     // it came from.
     assert_eq!(eval("SEARCH(\"x\", \"aXa\")"), Scalar::Integer(2));

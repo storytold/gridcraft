@@ -179,10 +179,6 @@ fn finite(name: &str, value: f64) -> Result<f64, EvalError> {
 // Calendar arithmetic
 // ---------------------------------------------------------------------------------------------
 
-fn is_leap_year(year: i64) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
-}
-
 fn year_of(serial: f64) -> i64 {
     support::date_parts(serial).0
 }
@@ -232,7 +228,7 @@ fn days_360(start: f64, end: f64, us: bool) -> i64 {
     let (mut year2, mut month2, mut day2) = support::date_parts(end);
     if day1 == 31 {
         day1 -= 1;
-    } else if us && month1 == 2 && (day1 == 29 || (day1 == 28 && !is_leap_year(year1))) {
+    } else if us && month1 == 2 && (day1 == 29 || (day1 == 28 && !support::is_leap_year(year1))) {
         day1 = 30;
     }
     if day2 == 31 {
@@ -266,7 +262,7 @@ fn basis_days(start: f64, end: f64, basis: i64) -> f64 {
             let mut days = ((year2 - year1) * 12 + (month2 - month1)) * 30 + (day2 - day1);
             // Excel's 30/360 US counts a February start in the same year as a 30-day month.
             if basis == 0 && month1 == 2 && month2 != 2 && year1 == year2 {
-                days -= if is_leap_year(year1) { 1 } else { 2 };
+                days -= if support::is_leap_year(year1) { 1 } else { 2 };
             }
             days as f64
         }
@@ -295,16 +291,16 @@ fn year_frac(start: f64, end: f64, basis: i64) -> f64 {
                 let mut total = 0.0;
                 let mut year = year1;
                 while year <= year2 {
-                    total += if is_leap_year(year) { 366.0 } else { 365.0 };
+                    total += if support::is_leap_year(year) { 366.0 } else { 365.0 };
                     year += 1;
                 }
                 total / ((year2 - year1 + 1) as f64)
-            } else if year1 == year2 && is_leap_year(year1) {
+            } else if year1 == year2 && support::is_leap_year(year1) {
                 366.0
             } else {
                 let leap_day = year1 != year2
-                    && ((is_leap_year(year1) && (month1 < 2 || (month1 == 2 && day1 <= 29)))
-                        || (is_leap_year(year2) && (month2 > 2 || (month2 == 2 && day2 == 29))));
+                    && ((support::is_leap_year(year1) && (month1 < 2 || (month1 == 2 && day1 <= 29)))
+                        || (support::is_leap_year(year2) && (month2 > 2 || (month2 == 2 && day2 == 29))));
                 if leap_day { 366.0 } else { 365.0 }
             }
         }
@@ -329,9 +325,9 @@ fn year_frac_days(start: f64, end: f64, basis: i64) -> f64 {
             }
             if day1 == 30 && day2 == 31 {
                 day2 -= 1;
-            } else if month1 == 2 && day1 == if is_leap_year(year1) { 29 } else { 28 } {
+            } else if month1 == 2 && day1 == if support::is_leap_year(year1) { 29 } else { 28 } {
                 day1 = 30;
-                if month2 == 2 && day2 == if is_leap_year(year2) { 29 } else { 28 } {
+                if month2 == 2 && day2 == if support::is_leap_year(year2) { 29 } else { 28 } {
                     day2 = 30;
                 }
             }
@@ -356,7 +352,7 @@ fn year_diff(start: f64, end: f64, basis: i64) -> f64 {
     let days = basis_days(start, end, basis);
     let days_in_year = match basis {
         1 => {
-            if is_leap_year(year_of(start)) {
+            if support::is_leap_year(year_of(start)) {
                 366.0
             } else {
                 365.0

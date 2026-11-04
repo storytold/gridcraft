@@ -96,9 +96,10 @@ pub(super) fn write_parts(out: &mut Out, parts: &[PreservedPart]) -> NameMap {
         if !written.insert(new.clone()) {
             continue;
         }
-        // The model database is found by extension, as Excel writes it (`Default Extension="data"`).
-        if new.to_ascii_lowercase().ends_with(".data") {
-            out.default_type("data", &p.content_type);
+        // The model database is found by extension, as Excel writes it (`Default
+        // Extension="data"`). Another `.data` part with a different content type keeps its own
+        // `Override`, because only one default per extension exists.
+        if p.content_type.eq_ignore_ascii_case(crate::pivot_model::CT_MODEL_DATA) && out.default_type("data", &p.content_type) {
             out.part(&new, None, p.data.to_vec());
         } else {
             out.part(&new, Some(&p.content_type), p.data.to_vec());

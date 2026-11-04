@@ -106,3 +106,18 @@ fn the_a_variants_still_require_a_column() {
     assert!(eval("MAXA(\"text\")").is_err());
     assert!(eval("DISTINCTCOUNTNOBLANK()").is_err());
 }
+
+#[test]
+fn max_and_min_with_two_scalars_return_the_larger_or_smaller_value() {
+    // The catalog's two-scalar overload, `MAX ( 10000, [Sales Amount] )`.
+    assert_eq!(value("MAX(3, 5)"), Scalar::Integer(5));
+    assert_eq!(value("MIN(3, 5)"), Scalar::Integer(3));
+    assert_eq!(value("MAX(10000, SUM(Sales[Amount]))"), Scalar::Integer(10000));
+    assert_eq!(value("MIN(1, SUM(Sales[Amount]))"), Scalar::Integer(1));
+    // Text compares case-insensitively, like every DAX comparison.
+    assert_eq!(value("MAX(\"a\", \"B\")"), Scalar::String("B".into()));
+    assert_eq!(value("MIN(\"a\", \"B\")"), Scalar::String("a".into()));
+    // One argument still aggregates the column, not the first cell.
+    assert_eq!(value("MAX(Sales[Amount])"), Scalar::Decimal(40.0));
+    assert_eq!(value("MIN(Sales[Amount])"), Scalar::Decimal(10.0));
+}

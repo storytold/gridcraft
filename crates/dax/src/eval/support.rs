@@ -8,6 +8,7 @@
 #![allow(dead_code)] // helpers are consumed by the per-family modules as they land
 
 use super::*;
+use chrono::{Datelike, NaiveDate};
 
 /// The evaluated arguments of a scalar function call.
 pub(crate) struct Args<'a> {
@@ -106,48 +107,78 @@ pub(crate) fn args<'a>(name: &'a str, values: &'a [Scalar]) -> Args<'a> {
     Args { name, values }
 }
 
+/// 400 Gregorian years, after which the calendar (and every month length) repeats.
+const GREGORIAN_CYCLE_DAYS: i64 = 146_097;
+/// chrono counts days from 0001-01-01; 1970-01-01 is the 719,163rd of them.
+const UNIX_EPOCH_CE_DAYS: i64 = 719_163;
+/// Excel/OLE serial 0 is 1899-12-30, which is 25,569 days before 1970-01-01.
+const UNIX_EPOCH_SERIAL: i64 = 25_569;
+/// The CE day of Excel/OLE serial 0 (1899-12-30): `UNIX_EPOCH_CE_DAYS - UNIX_EPOCH_SERIAL`.
+const EXCEL_EPOCH_CE_DAYS: i64 = 693_594;
+
 /// Excel/OLE date serial for a calendar date and time. Dates before 1900-03-01 ignore the
 /// 1900 leap-year compatibility bug; DAX/Excel only differ there.
 pub(crate) fn date_serial(year: i64, month: i64, day: i64, hour: i64, minute: i64, second: i64) -> f64 {
-    let mut y = year;
-    let mut m = month;
-    // Normalize out-of-range months and days the way Excel does (DATE(2024, 13, 1) is 2025-01-01).
-    y += (m - 1).div_euclid(12);
-    m = (m - 1).rem_euclid(12) + 1;
-    if m <= 2 {
-        y -= 1;
-        m += 12;
-    }
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let mp = (m + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146097 + doe - 719468 + 25569;
+    // Normalize out-of-range months the way Excel does (DATE(2024, 13, 1) is 2025-01-01). The day
+    // counts on from the first of that month, so day 0 is the last day of the month before.
+    let months = month - 1;
+    let year = year.saturating_add(months.div_euclid(12));
+    let month = u32::try_from(months.rem_euclid(12) + 1).unwrap_or(1);
+    let days = month_start_ce_days(year, month) - i128::from(EXCEL_EPOCH_CE_DAYS) + i128::from(day) - 1;
     days as f64 + (hour as f64 * 3600.0 + minute as f64 * 60.0 + second as f64) / 86400.0
 }
 
+/// Calendar date of an Excel/OLE date serial's whole days.
 pub(crate) fn date_parts(serial: f64) -> (i64, i64, i64) {
-    let days = serial.floor() as i64;
-    let z = days - 25569 + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (y + i64::from(m <= 2), m, d)
+    let unix = (serial.floor() as i64).saturating_sub(UNIX_EPOCH_SERIAL);
+    // The calendar repeats every 400 years (146,097 days), so chrono converts the day within its
+    // cycle and the whole cycles go back into the year (AGENTS.md).
+    let (cycles, rest) = (unix.div_euclid(GREGORIAN_CYCLE_DAYS), unix.rem_euclid(GREGORIAN_CYCLE_DAYS));
+    match i32::try_from(rest + UNIX_EPOCH_CE_DAYS).ok().and_then(NaiveDate::from_num_days_from_ce_opt) {
+        Some(date) => {
+            let year = i128::from(date.year()) + i128::from(cycles) * 400;
+            let year = i64::try_from(year).unwrap_or(if year < 0 { i64::MIN } else { i64::MAX });
+            (year, i64::from(date.month()), i64::from(date.day()))
+        }
+        // Unreachable: `rest + 719_163` is always a valid CE day.
+        None => (1970, 1, 1),
+    }
 }
 
+/// Number of days in a calendar month, `30` for a month outside 1–12 (the value the caller expects
+/// for a month the evaluator has already normalized).
 pub(crate) fn days_in_month(year: i64, month: i64) -> i64 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 => 29,
-        2 => 28,
+    if !(1..=12).contains(&month) {
+        return 30;
+    }
+    // The month's length repeats with the 400-year cycle, so the year within it answers and always
+    // fits `NaiveDate`.
+    let year = year.rem_euclid(400) as i32;
+    let month = month as u32;
+    let first = |year: i32, month: u32| NaiveDate::from_ymd_opt(year, month, 1);
+    match (first(year, month), if month == 12 { first(year + 1, 1) } else { first(year, month + 1) }) {
+        (Some(start), Some(next)) => (next - start).num_days(),
+        // Unreachable: the year is in 0..=399 and the month is 1..=12.
         _ => 30,
+    }
+}
+
+/// Whether a year is a Gregorian leap year, for every `i64` year.
+pub(crate) fn is_leap_year(year: i64) -> bool {
+    // Leap years repeat every 400 years, so the year within its cycle decides and always fits
+    // `NaiveDate`: 29 February exists exactly in a leap year.
+    NaiveDate::from_ymd_opt(year.rem_euclid(400) as i32, 2, 29).is_some()
+}
+
+/// Days since 0001-01-01 (chrono's `num_days_from_ce`) of the first day of a calendar month, for
+/// every `i64` year. Whole 400-year Gregorian cycles are added back as days.
+fn month_start_ce_days(year: i64, month: u32) -> i128 {
+    let cycles = i128::from(year.div_euclid(400));
+    let year = year.rem_euclid(400) as i32;
+    match NaiveDate::from_ymd_opt(year, month, 1) {
+        Some(first) => i128::from(first.num_days_from_ce()) + cycles * i128::from(GREGORIAN_CYCLE_DAYS),
+        // Unreachable: the year within its cycle is in 0..=399 and the month is 1..=12.
+        None => i128::from(NaiveDate::MIN.num_days_from_ce()),
     }
 }
 
@@ -341,6 +372,7 @@ pub(crate) fn date_value(value: &Scalar) -> Option<f64> {
 
 /// Parses the common textual date forms Excel accepts (`YYYY-MM-DD`, `MM/DD/YYYY`,
 /// `YYYY-MM-DDTHH:MM:SS`). Locale-specific `DD/MM/YYYY` is deliberately ambiguous and rejected.
+/// A component outside the calendar (month 13, 30 February) is rejected rather than rolled over.
 pub(crate) fn parse_date_text(text: &str) -> Option<f64> {
     let text = text.trim();
     if text.is_empty() {
@@ -352,11 +384,18 @@ pub(crate) fn parse_date_text(text: &str) -> Option<f64> {
     };
     let parts: Vec<&str> = date.split(['-', '/']).collect();
     let (year, month, day) = match parts.as_slice() {
-        [year, month, day] => {
-            let year: i64 = year.parse().ok()?;
-            let month: i64 = month.parse().ok()?;
-            let day: i64 = day.parse().ok()?;
-            if year < 100 { (year + if year < 30 { 2000 } else { 1900 }, month, day) } else { (year, month, day) }
+        [first, second, third] => {
+            let first_value: i64 = first.parse().ok()?;
+            let second_value: i64 = second.parse().ok()?;
+            let third_value: i64 = third.parse().ok()?;
+            // A four-digit leading part is `YYYY-MM-DD`; anything else is `MM/DD/YYYY`.
+            let (year, month, day) =
+                if first.len() >= 4 { (first_value, second_value, third_value) } else { (third_value, first_value, second_value) };
+            let year = if year < 100 { year + if year < 30 { 2000 } else { 1900 } } else { year };
+            if !(1..=12).contains(&month) || day < 1 || day > days_in_month(year, month) {
+                return None;
+            }
+            (year, month, day)
         }
         _ => return None,
     };
@@ -375,4 +414,67 @@ pub(crate) fn parse_date_text(text: &str) -> Option<f64> {
 /// Current evaluation frame's innermost row frame, if any.
 pub(crate) fn current_frame(ctx: &Context) -> Option<&RowFrame> {
     ctx.rows.last()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serials_round_trip_through_chrono() {
+        // Serial 0 is 1899-12-30 and 25,569 is 1970-01-01.
+        assert_eq!(date_serial(1899, 12, 30, 0, 0, 0), 0.0);
+        assert_eq!(date_serial(1970, 1, 1, 0, 0, 0), 25_569.0);
+        assert_eq!(date_parts(0.0), (1899, 12, 30));
+        assert_eq!(date_parts(25_569.0), (1970, 1, 1));
+        // Leap days exist exactly in leap years.
+        assert_eq!(date_serial(2024, 2, 29, 0, 0, 0), 45_351.0);
+        assert_eq!(date_parts(45_351.0), (2024, 2, 29));
+        assert_eq!(date_serial(2000, 2, 29, 0, 0, 0), date_serial(2000, 3, 1, 0, 0, 0) - 1.0);
+        // A time of day is a fraction of the serial.
+        assert_eq!(date_serial(1970, 1, 1, 12, 0, 0), 25_569.5);
+        assert_eq!(date_parts(25_569.75), (1970, 1, 1));
+    }
+
+    #[test]
+    fn serial_helpers_extend_past_chronos_year_range() {
+        // 400 Gregorian years are 146,097 days, so year 400,000 is 999 cycles after year 400.
+        let cycles = 999.0 * 146_097.0;
+        assert_eq!(date_serial(400_000, 1, 1, 0, 0, 0) - cycles, date_serial(400, 1, 1, 0, 0, 0));
+        assert_eq!(date_parts(date_serial(400_000, 2, 29, 0, 0, 0)), (400_000, 2, 29));
+        // The cycle repeats leap-year and month-length rules too.
+        assert!(is_leap_year(400_000));
+        assert!(!is_leap_year(300_100));
+        assert_eq!(days_in_month(400_000, 2), 29);
+        assert_eq!(days_in_month(300_100, 2), 28);
+    }
+
+    #[test]
+    fn out_of_range_months_and_days_roll_over_like_date() {
+        // DATE(2024, 13, 1) is 2025-01-01 and day 0 is the last day of the previous month.
+        assert_eq!(date_serial(2024, 13, 1, 0, 0, 0), date_serial(2025, 1, 1, 0, 0, 0));
+        assert_eq!(date_serial(2024, 0, 1, 0, 0, 0), date_serial(2023, 12, 1, 0, 0, 0));
+        assert_eq!(date_serial(2024, 3, 0, 0, 0, 0), date_serial(2024, 2, 29, 0, 0, 0));
+        assert_eq!(days_in_month(2024, 2), 29);
+        assert_eq!(days_in_month(2023, 2), 28);
+        assert_eq!(days_in_month(1900, 2), 28);
+        assert_eq!(days_in_month(2000, 2), 29);
+    }
+
+    #[test]
+    fn date_text_parses_month_first_and_rejects_impossible_dates() {
+        // `MM/DD/YYYY`: the leading part is the month, not the year.
+        assert_eq!(parse_date_text("1/8/2009"), Some(39_821.0));
+        assert_eq!(parse_date_text("1/8/09"), Some(39_821.0));
+        // ISO order, and a trailing time is kept.
+        assert_eq!(parse_date_text("2024-01-15"), Some(45_306.0));
+        assert_eq!(parse_date_text("2024-01-15T06:00:00"), Some(45_306.25));
+        // Out-of-range components are rejected instead of rolling over.
+        assert_eq!(parse_date_text("2024-02-30"), None);
+        assert_eq!(parse_date_text("13/1/2024"), None);
+        assert_eq!(parse_date_text("2024-00-10"), None);
+        assert_eq!(parse_date_text("2023-02-29"), None);
+        assert_eq!(parse_date_text("1/8"), None);
+        assert_eq!(parse_date_text(""), None);
+    }
 }

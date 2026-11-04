@@ -586,19 +586,6 @@ struct ImplicitMeasure {
     formula: String,
 }
 
-/// A DAX table reference for a model name, quoted when the name is not a plain identifier.
-fn dax_table_ref(name: &str) -> String {
-    let plain = !name.is_empty()
-        && name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
-        && name.chars().all(|c| c.is_alphanumeric() || c == '_');
-    if plain { name.to_string() } else { format!("'{}'", name.replace('\'', "''")) }
-}
-
-/// A DAX column reference for a model name.
-fn dax_column_ref(name: &str) -> String {
-    format!("[{}]", name.replace(']', "]]"))
-}
-
 /// The aggregate Excel summarises a column by when the model does not say: numbers sum,
 /// everything else counts.
 fn default_summarize(column: &gridcraft_dax::ModelColumn, metadata: Option<&ColumnMetadata>) -> &'static str {
@@ -627,14 +614,10 @@ fn implicit_measure_list(model: &DataModel, metadata: &ModelMetadata) -> Vec<Imp
             if aggregate == "None" {
                 continue;
             }
-            let table_ref = dax_table_ref(&table.name);
-            let column_ref = dax_column_ref(&column.name);
-            let formula = match aggregate {
-                "Sum" => format!("SUM({table_ref}{column_ref})"),
-                "Average" => format!("AVERAGE({table_ref}{column_ref})"),
-                "Min" => format!("MIN({table_ref}{column_ref})"),
-                "Max" => format!("MAX({table_ref}{column_ref})"),
-                _ => format!("COUNTROWS({table_ref})"),
+            // The same formula a model PivotTable shows under this caption (`Count` is COUNT,
+            // so both count the column's non-blank values).
+            let Some(formula) = gridcraft_dax::implicit_measure_formula(aggregate, &table.name, &column.name) else {
+                continue;
             };
             out.push(ImplicitMeasure {
                 name: format!("{aggregate} of {}", column.name),

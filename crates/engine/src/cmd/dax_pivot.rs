@@ -40,8 +40,9 @@
 //! `dataModel.pivotFields` is the read side of the same data: the model's tables, columns, measures
 //! and relationships, every model PivotTable the workbook carries, and the settings of the one the
 //! pane is showing. The PivotTables are not kept in the session — they live in the workbook's kept
-//! pivot parts — so the command writes the workbook to a package in memory and reads the parts
-//! back with [`gridcraft_xlsx::read_model_pivots`], exactly the way a save would.
+//! pivot parts — and the command reads those parts in place
+//! ([`gridcraft_xlsx::read_kept_model_pivots`]), so a field-list refresh never serializes the
+//! workbook.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -292,17 +293,15 @@ fn field_list_cmd(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"pivots": pivots, "model": model, "selected": selected}))
 }
 
-/// Every model PivotTable the workbook carries, read back from the package its content writes.
+/// Every model PivotTable the workbook carries, read from its kept (pass-through) pivot parts.
 ///
-/// The pivot parts live in the workbook's kept (pass-through) content, so the only way to see them
-/// is the way a save does: serialize the workbook and read the parts back. No open document carries
-/// none; a package that cannot be written or read is an engine error, so a broken workbook is
-/// reported instead of the pane silently showing an empty list.
+/// The parts a save would write are already in the workbook ([`gridcraft_xlsx::attach_model_pivot`]
+/// puts them there), so parsing them directly answers the field list without zipping every sheet
+/// on each workbook edit. No open document carries none; a part that cannot be parsed is an engine
+/// error, so a broken workbook is reported instead of the pane silently showing an empty list.
 fn read_pivots(s: &Session) -> Result<Vec<ModelPivotPartInfo>> {
     let Ok(d) = s.doc() else { return Ok(Vec::new()) };
-    let package =
-        gridcraft_xlsx::write_xlsx(&d.wb).map_err(|error| other(format!("the workbook could not be written to read its PivotTables: {error}")))?;
-    let (parts, _report) = gridcraft_xlsx::read_model_pivots(&package)
+    let (parts, _report) = gridcraft_xlsx::read_kept_model_pivots(&d.wb)
         .map_err(|error| other(format!("the workbook's PivotTable definitions could not be read: {error}")))?;
     Ok(parts)
 }
@@ -535,34 +534,12 @@ impl Aggregate {
         !matches!(self, Aggregate::Count)
     }
 
-    /// The formula Excel's implicit measure for `table[column]` evaluates. `Count` is `COUNT` and
-    /// not `COUNTROWS`: Excel counts the column's non-blank values.
-    fn formula(self, table: &str, column: &str) -> String {
-        let field = format!("{}{}", dax_table_ref(table), dax_column_ref(column));
-        match self {
-            Aggregate::Sum => format!("SUM({field})"),
-            Aggregate::Average => format!("AVERAGE({field})"),
-            Aggregate::Count => format!("COUNT({field})"),
-            Aggregate::Min => format!("MIN({field})"),
-            Aggregate::Max => format!("MAX({field})"),
-        }
+    /// The formula Excel's implicit measure for `table[column]` evaluates, spelled by the same
+    /// builder the model window uses. `Count` is `COUNT` and not `COUNTROWS`: Excel counts the
+    /// column's non-blank values.
+    fn formula(self, table: &str, column: &str) -> Option<String> {
+        gridcraft_dax::implicit_measure_formula(self.label(), table, column)
     }
-}
-
-/// A DAX table reference for a model name, quoted when the name is not a plain identifier.
-///
-/// The same text `cmd/dax.rs` builds for its implicit measures; kept here so this command's
-/// synthetic measures are spelled identically.
-fn dax_table_ref(name: &str) -> String {
-    let plain = !name.is_empty()
-        && name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
-        && name.chars().all(|c| c.is_alphanumeric() || c == '_');
-    if plain { name.to_string() } else { format!("'{}'", name.replace('\'', "''")) }
-}
-
-/// A DAX column reference for a model name.
-fn dax_column_ref(name: &str) -> String {
-    format!("[{}]", name.replace(']', "]]"))
 }
 
 /// The aggregate a column gets when its `values` entry names none: numbers sum, everything else
@@ -680,7 +657,9 @@ fn implicit_measure(model: &DataModel, field: &str, aggregate: Option<&str>, tak
         }
         name = format!("{base}{suffix}");
     }
-    let formula = aggregate.formula(&reference.table, &reference.column);
+    let formula = aggregate
+        .formula(&reference.table, &reference.column)
+        .ok_or_else(|| other(format!("the implicit measure for `{field}` could not be built")))?;
     let expr = parse_expression(&formula).map_err(|error| other(format!("the implicit measure for `{field}` could not be built: {error}")))?;
     Ok(Measure { name, formula, table: Some(reference.table), format: None, expr: Some(expr) })
 }
@@ -723,7 +702,9 @@ fn filters_param(p: &Json) -> Result<Vec<PivotFilter>> {
             .filter(|field| !field.is_empty())
             .ok_or_else(|| bad(CMD, "a filter needs `field`"))?;
         let requested = item.get("allowed").or_else(|| item.get("values"));
-        let all = requested.is_none();
+        // JSON `null` means absent, as it does for every other parameter: the field is a page
+        // field that keeps every value.
+        let all = matches!(requested, None | Some(Json::Null));
         let mut allowed = match requested {
             None | Some(Json::Null) => Vec::new(),
             Some(Json::Array(values)) => {

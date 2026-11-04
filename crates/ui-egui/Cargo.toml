@@ -14,6 +14,9 @@ workspace = true
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
 gridcraft-engine = { workspace = true }
 gridcraft-chart = { workspace = true }
+# DAX reference spelling (`Table[Column]`, quoted when a name needs it) for the field list's
+# `VALUES(...)` calls.
+gridcraft-dax = { workspace = true }
 # `monochrome_emoji_fonts` restores the Noto Emoji and emoji-icon faces that 0.37 moved behind
 # this feature. The UI draws ✕, ◀, ↘ and 📋 as text; without these faces the strict kittest
 # harness (and a host with no symbol font) renders them as tofu.

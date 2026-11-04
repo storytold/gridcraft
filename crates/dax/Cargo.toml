@@ -15,11 +15,11 @@ quick-xml = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-
-# NOW/TODAY need the host's local offset. The web build has no clock and uses the fixed fallback
-# in `eval/support.rs`, so the dependency is native-only.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# Calendar arithmetic (date serials, month lengths, leap years) goes through chrono on every
+# target, as AGENTS.md requires. The web build has no clock and uses the fixed fallback in
+# `eval/support.rs`, but the date types it needs build for wasm too (`gridcraft-core` does the
+# same with the same workspace dependency).
+chrono = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
