@@ -246,6 +246,7 @@ mod tests {
         assert!(render(&[]).contains("0 / 0 commands implemented (0.0%)"));
     }
 
+    #[cfg(feature = "engine")]
     #[test]
     fn replace_between_swaps_the_figure() {
         let mut text = "figures in [parity-checklist.md](parity-checklist.md) (275 / 291).".to_string();
@@ -253,6 +254,7 @@ mod tests {
         assert_eq!(text, "figures in [parity-checklist.md](parity-checklist.md) (277 / 292).");
     }
 
+    #[cfg(feature = "engine")]
     #[test]
     fn replace_between_rejects_a_closing_marker_on_another_line() {
         let mut text = "the figures (275 / 291\n\nSources: the catalog (see above).".to_string();
@@ -261,6 +263,7 @@ mod tests {
         assert_eq!(text, before);
     }
 
+    #[cfg(feature = "engine")]
     #[test]
     fn replace_between_rejects_repeated_markers() {
         let mut text = "figure (275 / 291) and again figure (275 / 291)".to_string();
