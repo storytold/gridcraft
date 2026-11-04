@@ -5,7 +5,9 @@ use gridcraft_model::{Anchor, Chart, ChartKind, Color, LegendPos, Series, Sparkl
 
 use crate::*;
 
-const ALL_KINDS: [ChartKind; 25] = [
+mod data_table;
+
+const ALL_KINDS: [ChartKind; 26] = [
     ChartKind::ColumnClustered,
     ChartKind::ColumnStacked,
     ChartKind::ColumnStacked100,
@@ -19,6 +21,7 @@ const ALL_KINDS: [ChartKind; 25] = [
     ChartKind::Doughnut,
     ChartKind::Area,
     ChartKind::AreaStacked,
+    ChartKind::AreaStacked100,
     ChartKind::Scatter,
     ChartKind::ScatterLines,
     ChartKind::Bubble,
@@ -42,6 +45,7 @@ fn chart(kind: ChartKind) -> Chart {
         series: vec![],
         legend: LegendPos::Bottom,
         data_labels: true,
+        data_table: None,
         gridlines: true,
         style: 0,
         x_title: Some("Quarter".into()),
@@ -76,7 +80,7 @@ fn sample(kind: ChartKind) -> ChartData {
     ChartData {
         category_levels: vec![],
         palette: vec![],
-        categories: cats.iter().map(|s| s.to_string()).collect(),
+        categories: cats.iter().map(ToString::to_string).collect(),
         series: vec![
             series("North", &[12000.0, -4000.0, 23000.0, 31000.0, 18000.0, 27000.0], [20, 96, 130, 255], k1),
             b,
@@ -1073,7 +1077,7 @@ fn pie_points_follow_workbook_theme() {
 
 #[test]
 fn area_charts_draw_source_value_labels_only_when_enabled() {
-    for kind in [ChartKind::Area, ChartKind::AreaStacked] {
+    for kind in [ChartKind::Area, ChartKind::AreaStacked, ChartKind::AreaStacked100] {
         let d = sample(kind);
         let mut c = chart(kind);
         c.data_labels = false;
@@ -1095,6 +1099,45 @@ fn area_charts_draw_source_value_labels_only_when_enabled() {
         let first_label = on.iter().position(|p| matches!(p, Prim::Text { text, .. } if text == "$12,000"));
         assert!(first_label > last_poly, "{kind:?}: label drawn under a later area");
     }
+}
+
+#[test]
+fn hundred_percent_stacked_areas_fill_each_category_to_its_total() {
+    let d = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        categories: ["Q1", "Q2", "Q3", "Q4"].iter().map(|s| s.to_string()).collect(),
+        series: vec![
+            series("North", &[10.0, 30.0, 0.0, 5.0], [20, 96, 130, 255], ChartKind::AreaStacked100),
+            series("South", &[30.0, 10.0, 0.0, 15.0], [25, 107, 36, 255], ChartKind::AreaStacked100),
+        ],
+    };
+    let mut c = chart(ChartKind::AreaStacked100);
+    c.data_labels = false;
+    let p = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let t = texts(&p);
+    assert!(t.contains(&"100%") && t.contains(&"0%"), "{t:?}");
+    assert!(!t.contains(&"40"), "{t:?}");
+    let polys: Vec<&Vec<[f32; 2]>> = p
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Polygon { pts, .. } => Some(pts),
+            _ => None,
+        })
+        .collect();
+    let (Some(north), Some(south)) = (polys.first(), polys.get(1)) else { panic!("two areas expected: {polys:?}") };
+    // Each polygon is its top edge left to right, then its base right to left.
+    let top = |poly: &[[f32; 2]], j: usize| poly.get(j).map(|p| p[1]).unwrap_or(f32::NAN);
+    let base = |poly: &[[f32; 2]], j: usize| poly.get(poly.len() - 1 - j).map(|p| p[1]).unwrap_or(f32::NAN);
+    let (y0, y100) = (base(north, 0), top(south, 0));
+    assert!(y0 > y100, "{y0} {y100}");
+    let frac = |y: f32| (y0 - y) / (y0 - y100);
+    for (j, share) in [(0, 0.25), (1, 0.75), (3, 0.25)] {
+        assert!((frac(top(north, j)) - share).abs() < 1e-3, "Q{}: North reaches {}", j + 1, frac(top(north, j)));
+        assert!((frac(top(south, j)) - 1.0).abs() < 1e-3, "Q{}: South reaches {}", j + 1, frac(top(south, j)));
+    }
+    // A category whose total is zero stays on the baseline.
+    assert!(frac(top(south, 2)).abs() < 1e-3, "Q3: South reaches {}", frac(top(south, 2)));
 }
 
 #[test]
@@ -1214,4 +1257,76 @@ fn box_whisker_draws_each_series_quartile_method() {
     assert_eq!(heights.len(), 2);
     // The boxes span 3.5 and 2.5 data units on the same value axis.
     assert!((heights[0] / heights[1] - 1.4).abs() < 0.001);
+}
+
+#[test]
+fn a_series_named_by_a_name_on_a_sheet_with_an_apostrophe_resolves() {
+    // #2012: `'Bob''s'!Title` kept the doubled quote, so the sheet wasn't found and the series
+    // was named by the literal text.
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        s.name = "Bob's".into();
+        s.set_value(CellRef::new(0, 0), Value::from("Takings"));
+        s.set_value(CellRef::new(1, 0), Value::Number(4.0));
+        s.set_value(CellRef::new(2, 0), Value::Number(9.0));
+    }
+    wb.names.push(gridcraft_model::DefinedName {
+        name: "Title".into(),
+        scope: Some(0),
+        formula: "'Bob''s'!$A$1".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.series = vec![Series {
+        name: Some("'Bob''s'!Title".into()),
+        categories: None,
+        values: "'Bob''s'!$A$2:$A$3".into(),
+        bubble_sizes: None,
+        color: None,
+        secondary: false,
+        kind: None,
+        quartiles: Default::default(),
+        smooth: false,
+        trendlines: Vec::new(),
+    }];
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
+}
+
+#[test]
+fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
+    // `'a!b'!Title`: the sheet name holds a `!`, so the evaluator must split the parsed name at
+    // the last one, not the first.
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        s.name = "a!b".into();
+        s.set_value(CellRef::new(0, 0), Value::from("Takings"));
+        s.set_value(CellRef::new(1, 0), Value::Number(4.0));
+        s.set_value(CellRef::new(2, 0), Value::Number(9.0));
+    }
+    wb.names.push(gridcraft_model::DefinedName {
+        name: "Title".into(),
+        scope: Some(0),
+        formula: "'a!b'!$A$1".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.series = vec![Series {
+        name: Some("'a!b'!Title".into()),
+        categories: None,
+        values: "'a!b'!$A$2:$A$3".into(),
+        bubble_sizes: None,
+        color: None,
+        secondary: false,
+        kind: None,
+        quartiles: Default::default(),
+        smooth: false,
+        trendlines: Vec::new(),
+    }];
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
 }
