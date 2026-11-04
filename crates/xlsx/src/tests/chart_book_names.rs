@@ -83,6 +83,8 @@ fn chart_names_are_written_qualified() {
         source: None,
         by_rows: false,
         pivot: None,
+        cat_reverse: false,
+        val_reverse: false,
     });
     wb.sheets = vec![Arc::new(s), Arc::new(Sheet::new("My Data"))];
     wb.names = vec![
@@ -162,6 +164,8 @@ fn chart_names_keep_spaces_around_a_quoted_sheet_name() {
         source: None,
         by_rows: false,
         pivot: None,
+        cat_reverse: false,
+        val_reverse: false,
     });
     wb.sheets = vec![Arc::new(s), Arc::new(Sheet::new(" Sales "))];
     wb.names = vec![
