@@ -769,6 +769,29 @@ fn a_decimal_comma_page_reads_ambiguous_dates_day_first() {
 }
 
 #[test]
+fn a_decimal_comma_page_keeps_month_first_columns_and_reads_late_dates_day_first() {
+    // A column with "12/31/2026" in it reads month first even on a decimal-comma page, and shows
+    // so: "03/11/2026" below it is 11 March, shown 3/11/2026 (it showed 11/03/2026).
+    let page = "<table><tr><th>Data</th><th>Total</th></tr>\
+        <tr><td>12/31/2026</td><td>R$ 1,50</td></tr><tr><td>03/11/2026</td><td>R$ 2,50</td></tr></table>";
+    let (wb, _) = open_bytes("export.xls", page.as_bytes()).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.value(CellRef::parse("A3").unwrap()), gridcraft_core::Value::number(46092.0));
+    assert_eq!(crate::display::cell_text(&wb, sh, CellRef::parse("A3").unwrap()), "3/11/2026");
+    // Dates that start past the rows the reader samples for date order still read day first.
+    let mut page = String::from("<table><tr><th>Data</th><th>Total</th></tr>");
+    for _ in 0..300 {
+        page.push_str("<tr><td>-</td><td>R$ 1,50</td></tr>");
+    }
+    page.push_str("<tr><td>03/11/2026</td><td>R$ 2,50</td></tr></table>");
+    let (wb, _) = open_bytes("export.xls", page.as_bytes()).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    let late = CellRef::parse("A302").unwrap();
+    assert_eq!(sh.value(late), gridcraft_core::Value::number(46329.0), "3 November, not 11 March");
+    assert_eq!(crate::display::cell_text(&wb, sh, late), "03/11/2026");
+}
+
+#[test]
 fn a_web_page_table_written_with_a_decimal_point_is_unchanged() {
     // An en-US page keeps reading as typed input: "1,330" is grouping and "R$" is not a symbol
     // the reader knows, so it stays text, as before.

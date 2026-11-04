@@ -437,9 +437,9 @@ fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text
         tsv.push_str(&fields.join("\t"));
         tsv.push('\n');
     }
-    // Pages written with a decimal comma write dates day first, so "03/11/2026" is 3 November.
-    let opts =
-        gridcraft_xlsx::CsvOptions { delimiter: b'\t', parse_values: !csv_as_text, ambiguous_dates_day_first: decimal_comma, ..Default::default() };
+    // Pages written with a decimal comma write dates day first: "03/11/2026" is 3 November and
+    // shows as 03/11/2026 (a column with "12/31/2026" in it still reads month first).
+    let opts = gridcraft_xlsx::CsvOptions { delimiter: b'\t', parse_values: !csv_as_text, dates_day_first: decimal_comma, ..Default::default() };
     let read = gridcraft_xlsx::read_csv_with_report(tsv.as_bytes(), &opts).map_err(|e| EngineError::Other(e.to_string()));
     Some(read.map(|(mut wb, report)| {
         wb.csv_delimiter = None;
@@ -451,26 +451,6 @@ fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text
             });
             if let Some(sh) = wb.sheet_mut(0) {
                 sh.set_style(at, id);
-            }
-        }
-        // Its dates show day first too, as the page wrote them: 3 November shows as 03/11/2026, not 11/3/2026.
-        if decimal_comma {
-            let mut day_first: std::collections::HashMap<gridcraft_model::StyleId, gridcraft_model::StyleId> = std::collections::HashMap::new();
-            let dates: Vec<(CellRef, gridcraft_model::StyleId)> = wb
-                .sheet(0)
-                .map(|sh| sh.cells.iter().map(|(at, cell)| (at, cell.style)).filter(|(_, id)| month_first_date_format(wb.styles.get(*id).num_fmt.as_str()).is_some()).collect())
-                .unwrap_or_default();
-            for (at, base) in dates {
-                let id = *day_first.entry(base).or_insert_with(|| {
-                    wb.styles.derive(base, |st| {
-                        if let Some(format) = month_first_date_format(st.num_fmt.as_str()) {
-                            st.num_fmt = gridcraft_model::NumFmt::new(format);
-                        }
-                    })
-                });
-                if let Some(sh) = wb.sheet_mut(0) {
-                    sh.set_style(at, id);
-                }
             }
         }
         // Header cells are bold and centred on top of the style the CSV reader gave them, so a
@@ -505,15 +485,6 @@ fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text
         }
         (wb, warnings)
     }))
-}
-
-/// The day-first date format for a month-first one the CSV reader gives a date (`m/d/yyyy`).
-fn month_first_date_format(format: &str) -> Option<&'static str> {
-    match format {
-        "m/d/yyyy" => Some("dd/mm/yyyy"),
-        "m/d/yyyy h:mm" => Some("dd/mm/yyyy h:mm"),
-        _ => None,
-    }
 }
 
 /// Widest column [`widen_columns_to_values`] makes, in points.

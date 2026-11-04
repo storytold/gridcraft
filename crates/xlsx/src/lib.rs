@@ -234,14 +234,17 @@ pub struct CsvOptions {
     /// Refuse (with [`IoError::TooLarge`], while reading) a file whose used range, from its first to
     /// its last non-empty cell, would pass this many cells; `None` for no limit.
     pub max_used_cells: Option<u64>,
-    /// A column whose dates all read both ways (`03/11/2026`) reads them day first, when the
-    /// source's own convention says so; otherwise month first, as typed input does.
-    pub ambiguous_dates_day_first: bool,
+    /// The source writes dates day first (its own convention says so): a column whose dates all
+    /// read both ways (`03/11/2026`), or whose dates start past the sample, reads them day first,
+    /// and dates read day first show as `dd/mm/yyyy`. A column with month-first dates
+    /// (`12/31/2026`) still reads month first. Off, ambiguous dates read month first, as typed
+    /// input does.
+    pub dates_day_first: bool,
 }
 
 impl Default for CsvOptions {
     fn default() -> Self {
-        CsvOptions { delimiter: b',', quote: b'"', date_system: DateSystem::D1900, parse_values: true, max_used_cells: None, ambiguous_dates_day_first: false }
+        CsvOptions { delimiter: b',', quote: b'"', date_system: DateSystem::D1900, parse_values: true, max_used_cells: None, dates_day_first: false }
     }
 }
 
