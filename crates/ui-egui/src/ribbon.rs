@@ -143,7 +143,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
                         match app.ui.ribbon_tab.as_str() {
                             "Home" => home(app, ui),
-                            "Insert" => insert(app, ui),
+                            "Insert" => insert(app, ui, inner.width()),
                             "Draw" => draw(app, ui),
                             "Page Layout" => page_layout(app, ui),
                             "Formulas" => formulas(app, ui),
