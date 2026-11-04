@@ -1502,9 +1502,9 @@ fn is_string_literal(v: &str) -> bool {
 /// written as `format_range` takes it (`"#RRGGBB"`, `{theme, tint}`, `"auto"`) and `fill` may be a
 /// colour alone (a solid fill) or `"none"` (no fill). An unknown key is an error rather than
 /// dropped: dropped, it left a rule with an empty format that matches and shows nothing.
-fn cf_style_json(st: &Json) -> Result<Json> {
+fn cf_style_json(st: &Json, cmd: &str) -> Result<Json> {
     const KEYS: [&str; 6] = ["font", "fill", "borders", "align", "num_fmt", "protection"];
-    let err = |m: String| bad("home.conditionalFormat", m);
+    let err = |m: String| bad(cmd, m);
     let Some(obj) = st.as_object() else { return Err(err("`style` must be an object, e.g. {\"fill\": \"#FFC7CE\"}".into())) };
     let mut st = obj.clone();
     if let Some(k) = st.keys().find(|k| !KEYS.contains(&k.as_str())) {
@@ -1604,7 +1604,7 @@ fn cf_style(rule: &Json, cmd: &str) -> Result<Style> {
     let g = |k: &str| rule.get(k).and_then(Json::as_str).map(str::to_string);
     match rule.get("style") {
         Some(st) if !st.is_null() => {
-            let st = cf_style_json(st)?;
+            let st = cf_style_json(st, cmd)?;
             let base = serde_json::to_value(Style::default()).map_err(|e| EngineError::Other(e.to_string()))?;
             Ok(serde_json::from_value(super::format::merge_json(base, &st)).map_err(|e| bad(cmd, e.to_string()))?)
         }
@@ -2171,6 +2171,20 @@ mod tests {
         let rule: CfRule = serde_json::from_value(s.execute("home.manageRules", json!({})).unwrap()["rules"][0]["rule"].clone()).unwrap();
         let CfRule::Expression { formula, .. } = rule else { panic!("expected a formula rule, got {rule:?}") };
         assert_eq!(formula, "A1>2", "the failed edit leaves the rule alone");
+    }
+
+    #[test]
+    fn manage_rules_names_itself_in_a_style_error() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "colorScale", "colors": ["#112233", "#778899"]}})).unwrap();
+        // A style shared by both commands must name the one that was called.
+        let rule = json!({"type": "cellIs", "operator": "greater", "value": 1, "style": {"nope": 1}});
+        let err = s.execute("home.manageRules", json!({"edit": 0, "rule": rule.clone()})).unwrap_err().to_string();
+        assert!(err.contains("home.manageRules"), "{err}");
+        assert!(!err.contains("home.conditionalFormat"), "{err}");
+        let err = s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": rule})).unwrap_err().to_string();
+        assert!(err.contains("home.conditionalFormat"), "{err}");
     }
 
     #[test]

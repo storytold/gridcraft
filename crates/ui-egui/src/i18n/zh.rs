@@ -467,6 +467,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Expand dialog" => "展开对话框",
         // Conditional formatting: colour scales.
         "New Formatting Rule" => "新建格式规则",
+        "Edit Formatting Rule" => "编辑格式规则",
         "Select a Rule Type" => "选择规则类型",
         "Edit the Rule Description" => "编辑规则说明",
         "Format all cells based on their values" => "基于各自值设置所有单元格的格式",

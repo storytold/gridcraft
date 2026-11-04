@@ -464,6 +464,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Expand dialog" => "Proširi dijalog",
         // Conditional formatting: colour scales.
         "New Formatting Rule" => "Novo pravilo oblikovanja",
+        "Edit Formatting Rule" => "Izmeni pravilo oblikovanja",
         "Select a Rule Type" => "Izaberi tip pravila",
         "Edit the Rule Description" => "Uredi opis pravila",
         "Format all cells based on their values" => "Oblikuj sve ćelije na osnovu njihovih vrednosti",

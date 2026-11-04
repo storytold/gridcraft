@@ -477,6 +477,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Expand dialog" => "Развернуть диалоговое окно",
         // Conditional formatting: colour scales.
         "New Formatting Rule" => "Новое правило форматирования",
+        "Edit Formatting Rule" => "Изменение правила форматирования",
         "Select a Rule Type" => "Выбор типа правила",
         "Edit the Rule Description" => "Изменение описания правила",
         "Format all cells based on their values" => "Форматировать все ячейки на основе их значений",

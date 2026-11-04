@@ -436,6 +436,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Expand dialog" => "Mở rộng hộp thoại",
         // Conditional formatting: colour scales.
         "New Formatting Rule" => "Quy tắc định dạng mới",
+        "Edit Formatting Rule" => "Chỉnh sửa quy tắc định dạng",
         "Select a Rule Type" => "Chọn loại quy tắc",
         "Edit the Rule Description" => "Sửa mô tả quy tắc",
         "Format all cells based on their values" => "Định dạng tất cả ô dựa trên giá trị của chúng",

@@ -562,6 +562,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Zoom Out" => "Oddálit",
         // Conditional formatting: colour scales.
         "New Formatting Rule" => "Nové pravidlo formátování",
+        "Edit Formatting Rule" => "Upravit pravidlo formátování",
         "Format all cells based on their values" => "Formátovat všechny buňky podle jejich hodnot",
         "Format Style:" => "Styl formátu:",
         "2-Color Scale" => "Dvoubarevná škála",

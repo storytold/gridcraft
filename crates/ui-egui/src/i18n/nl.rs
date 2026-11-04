@@ -544,6 +544,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Expand dialog" => "Dialoogvenster uitvouwen",
         // Conditional formatting: colour scales.
         "New Formatting Rule" => "Nieuwe opmaakregel",
+        "Edit Formatting Rule" => "Opmaakregel bewerken",
         "Select a Rule Type" => "Een regeltype selecteren",
         "Edit the Rule Description" => "De beschrijving van de regel bewerken",
         "Format all cells based on their values" => "Alle cellen opmaken op basis van hun waarden",

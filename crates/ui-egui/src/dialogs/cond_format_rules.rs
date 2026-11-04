@@ -42,8 +42,12 @@ pub(super) fn manage_rules(app: &mut SheetApp, ui: &mut egui::Ui) {
 /// scale (`edit` and `rule` in the params).
 pub(super) fn new_rule_dialog(app: &mut SheetApp, params: &Json) -> Dialog {
     let theme = app.session.active().map(|d| d.wb.theme.clone()).unwrap_or_default();
-    let mut d = Dialog::custom("newFormattingRule", "New Formatting Rule", new_rule_defaults(params, &theme));
-    d.command = Some(if params.get("edit").is_some() { "home.manageRules" } else { "home.conditionalFormat" });
+    // Excel titles the Manage Rules path "Edit Formatting Rule": OK replaces the rule rather than
+    // adding one, and the window should say so.
+    let editing = params.get("edit").is_some();
+    let title = if editing { "Edit Formatting Rule" } else { "New Formatting Rule" };
+    let mut d = Dialog::custom("newFormattingRule", title, new_rule_defaults(params, &theme));
+    d.command = Some(if editing { "home.manageRules" } else { "home.conditionalFormat" });
     // The sheet and selection the rule was opened on: Excel's "Applies to" stays put
     // even if the selection moves or another sheet is shown before OK.
     let (sheet, applies_to) = app

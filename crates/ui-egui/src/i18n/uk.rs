@@ -996,6 +996,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Expand dialog" => "Розгорнути діалогове вікно",
         // Conditional formatting: colour scales.
         "New Formatting Rule" => "Нове правило форматування",
+        "Edit Formatting Rule" => "Змінити правило форматування",
         "Select a Rule Type" => "Виберіть тип правила",
         "Edit the Rule Description" => "Редагувати опис правила",
         "Format all cells based on their values" => "Форматувати всі клітинки за їхніми значеннями",

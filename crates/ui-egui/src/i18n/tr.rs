@@ -434,6 +434,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Expand dialog" => "İletişim kutusunu genişlet",
         // Conditional formatting: colour scales.
         "New Formatting Rule" => "Yeni Biçimlendirme Kuralı",
+        "Edit Formatting Rule" => "Biçimlendirme Kuralını Düzenle",
         "Select a Rule Type" => "Kural Türü Seçin",
         "Edit the Rule Description" => "Kural Açıklamasını Düzenle",
         "Format all cells based on their values" => "Tüm hücreleri değerlerine göre biçimlendir",

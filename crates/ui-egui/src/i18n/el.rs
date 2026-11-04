@@ -998,6 +998,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Expand dialog" => "Ανάπτυξη παραθύρου διαλόγου",
         // Conditional formatting: colour scales.
         "New Formatting Rule" => "Νέος κανόνας μορφοποίησης",
+        "Edit Formatting Rule" => "Επεξεργασία κανόνα μορφοποίησης",
         "Select a Rule Type" => "Επιλογή τύπου κανόνα",
         "Edit the Rule Description" => "Επεξεργασία περιγραφής κανόνα",
         "Format all cells based on their values" => "Μορφοποίηση όλων των κελιών με βάση τις τιμές τους",

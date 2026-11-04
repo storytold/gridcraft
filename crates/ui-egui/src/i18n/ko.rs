@@ -475,6 +475,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Expand dialog" => "대화 상자 확장",
         // Conditional formatting: colour scales.
         "New Formatting Rule" => "새 서식 규칙",
+        "Edit Formatting Rule" => "서식 규칙 편집",
         "Select a Rule Type" => "규칙 유형 선택",
         "Edit the Rule Description" => "규칙 설명 편집",
         "Format all cells based on their values" => "해당 값에 따라 모든 셀의 서식 지정",

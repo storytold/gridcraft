@@ -1054,6 +1054,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Expand dialog" => "Extindere casetă de dialog",
         // Conditional formatting: colour scales.
         "New Formatting Rule" => "Regulă de formatare nouă",
+        "Edit Formatting Rule" => "Editați regula de formatare",
         "Select a Rule Type" => "Selectați un tip de regulă",
         "Edit the Rule Description" => "Editați descrierea regulii",
         "Format all cells based on their values" => "Formatați toate celulele în funcție de valorile lor",

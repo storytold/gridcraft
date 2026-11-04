@@ -469,6 +469,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Expand dialog" => "Développer la boîte de dialogue",
         // Conditional formatting: colour scales.
         "New Formatting Rule" => "Nouvelle règle de mise en forme",
+        "Edit Formatting Rule" => "Modifier la règle de mise en forme",
         "Select a Rule Type" => "Sélectionner un type de règle",
         "Edit the Rule Description" => "Modifier la description de la règle",
         "Format all cells based on their values" => "Mettre en forme toutes les cellules en fonction de leurs valeurs",

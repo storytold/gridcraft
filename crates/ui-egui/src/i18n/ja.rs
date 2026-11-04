@@ -1005,6 +1005,7 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Collapse dialog", "ダイアログを折りたたむ"),
     ("Expand dialog", "ダイアログを展開する"),
     ("New Formatting Rule", "新しい書式ルール"),
+    ("Edit Formatting Rule", "書式ルールの編集"),
     ("Select a Rule Type", "ルールの種類を選択"),
     ("Edit the Rule Description", "ルールの説明を編集"),
     ("Format all cells based on their values", "値に基づいてすべてのセルを書式設定"),
