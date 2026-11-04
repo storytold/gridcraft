@@ -36,7 +36,7 @@ pub(super) fn toggle_filter(s: &mut Session, p: &Json) -> Result<Json> {
                     info.hidden = false;
                 }
             }
-            cx.structural = true;
+            cx.rows_shown_or_hidden = true;
             Ok(json!({"filter": false}))
         });
     }
@@ -113,7 +113,7 @@ pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         apply_filter(&mut cx.wb, sheet);
-        cx.structural = true;
+        cx.rows_shown_or_hidden = true;
         Ok(Json::Null)
     })?;
     let hidden = s.doc()?.wb.sheet(sheet).map(|sh| sh.rows.values().filter(|r| r.hidden).count()).unwrap_or(0);
@@ -277,7 +277,7 @@ pub(super) fn clear_filter(s: &mut Session, _: &Json) -> Result<Json> {
             a.criteria.clear();
         }
         apply_filter(&mut cx.wb, sheet);
-        cx.structural = true;
+        cx.rows_shown_or_hidden = true;
         Ok(Json::Null)
     })
 }
@@ -287,7 +287,7 @@ pub(super) fn reapply(s: &mut Session, _: &Json) -> Result<Json> {
     crate::cmd::refuse_unless_allowed(s, sheet, "Filtering", |p| p.autofilter)?;
     edit(s, |cx| {
         apply_filter(&mut cx.wb, sheet);
-        cx.structural = true;
+        cx.rows_shown_or_hidden = true;
         Ok(Json::Null)
     })
 }

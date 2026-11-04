@@ -546,3 +546,51 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert_eq!(sh.validations.len(), 3);
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
+
+#[test]
+fn filtering_recalculates_only_what_hidden_rows_change() {
+    // #661: applying or clearing an AutoFilter recalculated every formula in the workbook. Only
+    // SUBTOTAL/AGGREGATE (and what depends on them, and volatile formulas) can change.
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows: Vec<Json> =
+        std::iter::once(json!(["Fruit", "Sold"])).chain((1..=6).map(|i| json!([if i % 2 == 0 { "Kiwi" } else { "Plum" }, i]))).collect();
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=SUBTOTAL(109,B2:B7)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D2", "input": "=D1*10"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D3", "input": "=AGGREGATE(9,5,B2:B7)"})).unwrap();
+    for r in 1..=300 {
+        s.execute("cell.set", json!({"cell": format!("F{r}"), "input": format!("=SUM(B2:B7)+{r}")})).unwrap();
+    }
+    let num = |s: &Session, a: &str| s.doc().unwrap().wb.active().unwrap().value(CellRef::parse(a).unwrap());
+    assert_eq!(num(&s, "D1"), Value::Number(21.0));
+    s.execute("data.filter", json!({"range": "A1:B7"})).unwrap();
+    s.execute("data.filterBy", json!({"column": "A", "values": ["Kiwi"]})).unwrap();
+    assert_eq!(num(&s, "D1"), Value::Number(12.0), "2 + 4 + 6");
+    assert_eq!(num(&s, "D2"), Value::Number(120.0), "and what depends on it");
+    assert_eq!(num(&s, "D3"), Value::Number(12.0));
+    assert_eq!(num(&s, "F1"), Value::Number(22.0), "SUM counts hidden rows, unchanged");
+    let evaluated = s.doc().unwrap().calc.last_recalc_cells;
+    assert!(evaluated <= 5, "{evaluated} formulas evaluated for a filter, not the 303 in the workbook");
+    s.execute("data.filterBy", json!({"column": "A", "clear": true})).unwrap();
+    assert_eq!((num(&s, "D1"), num(&s, "D2")), (Value::Number(21.0), Value::Number(210.0)));
+    s.execute("data.filter", json!({})).unwrap();
+    assert_eq!(num(&s, "D1"), Value::Number(21.0), "turning the filter off shows every row");
+}
+
+#[test]
+fn filtering_in_manual_calculation_still_updates_what_depends_on_subtotals() {
+    // In manual calculation only the edited formulas are evaluated, so a filter that took that
+    // path left D2 = D1*10 stale; a filter recalculated the workbook before #661.
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = json!([["Fruit", "Sold"], ["Kiwi", 2], ["Plum", 3], ["Kiwi", 4]]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=SUBTOTAL(109,B2:B4)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D2", "input": "=D1*10"})).unwrap();
+    s.execute("formulas.calculationOptions", json!({"mode": "manual"})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:B4"})).unwrap();
+    s.execute("data.filterBy", json!({"column": "A", "values": ["Kiwi"]})).unwrap();
+    let num = |s: &Session, a: &str| s.doc().unwrap().wb.active().unwrap().value(CellRef::parse(a).unwrap());
+    assert_eq!((num(&s, "D1"), num(&s, "D2")), (Value::Number(6.0), Value::Number(60.0)));
+}
