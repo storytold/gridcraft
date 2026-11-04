@@ -615,6 +615,25 @@ fn lambda_calls_spend_one_work_budget_per_cell() {
 }
 
 #[test]
+fn lifted_lookups_stop_past_their_work_budget() {
+    // Security: each needle searched the whole lookup vector, so this one cell ran for hours
+    // (about 1.1e12 compares) and hung opening the file that held it. It is #NUM! at once now.
+    let mut t = T::new();
+    t.set("A1", "=ROWS(XMATCH(SEQUENCE(1048576),-SEQUENCE(1048576)))");
+    assert_eq!(t.get("A1"), Value::Error(CellError::Num));
+    // Ordinary lifted lookups are unaffected.
+    for (i, k) in [10, 20, 30, 40, 50].into_iter().enumerate() {
+        t.set(&format!("B{}", i + 1), &k.to_string());
+        t.set(&format!("C{}", i + 1), &(i + 1).to_string());
+    }
+    t.set("D1", "=SUM(XMATCH({30;50;10},B1:B5))");
+    t.set("D2", "=SUM(XLOOKUP({20;40},B1:B5,C1:C5))");
+    t.set("D3", "=SUM(VLOOKUP({30,10},B1:C5,2,FALSE))");
+    t.set("D4", "=SUM(MATCH({25,50},B1:B5))");
+    assert_eq!([t.num("D1"), t.num("D2"), t.num("D3"), t.num("D4")], [9.0, 6.0, 4.0, 7.0]);
+}
+
+#[test]
 fn accounting_negative_text_coerces() {
     let mut t = T::new();
     t.set("A1", "'$(1,234)");
@@ -1230,6 +1249,25 @@ fn array_broadcast_result_is_capped() {
     assert_eq!(t.num("C2"), 6.0);
     t.set("C3", "=COLUMNS(TEXT(SEQUENCE(2),SEQUENCE(1,5)))");
     assert_eq!(t.num("C3"), 5.0);
+}
+
+/// MAP refuses a result past `MAX_CELLS` by its checked product, before allocating it (the
+/// 2^32-cell wrap that a 32-bit `usize` product would turn into 0 is pinned in
+/// `broadcast_len_rejects_a_product_that_wraps_to_zero_on_32_bits`; `SEQUENCE` tops out at
+/// 16384 columns, so the widest product it can build is 16384 squared).
+#[test]
+fn map_caps_its_result_size() {
+    let mut t = T::new();
+    for (at, formula) in
+        [("A1", "=MAP(SEQUENCE(4001),SEQUENCE(1,4000),LAMBDA(a,b,a))"), ("A2", "=MAP(SEQUENCE(16384),SEQUENCE(1,16384),LAMBDA(a,b,a))")]
+    {
+        t.set(at, formula);
+        assert_eq!(t.get(at), Value::Error(CellError::Num), "{formula}");
+    }
+    // Within the cap the broadcast shape is unchanged.
+    t.set("A3", "=ROWS(MAP(SEQUENCE(3),SEQUENCE(1,2),LAMBDA(a,b,a+b)))");
+    t.set("A4", "=COLUMNS(MAP(SEQUENCE(3),SEQUENCE(1,2),LAMBDA(a,b,a+b)))");
+    assert_eq!((t.num("A3"), t.num("A4")), (3.0, 2.0));
 }
 
 #[test]
@@ -2273,4 +2311,64 @@ fn loan_schedule_residue_keeps_excels_sign() {
         other => panic!("O7: expected a number, got {other:?}"),
     }
     assert_eq!(t.get("P7"), Value::Text("".into()));
+}
+
+/// Makes `at` a Python cell showing `cached` (its value before this calculation), with `result`
+/// as its kept result, and returns the cell's key for `Calc::cells_changed`.
+fn plant_python(t: &mut T, at: &str, cached: Value, result: Value) -> (usize, CellRef) {
+    use gridcraft_model::python::{PyCode, PyOutput};
+    let output = PyOutput { value: result, type_name: "list".into(), preview: String::new(), convertible: true };
+    let py = PyCode { output: Some(output), ..PyCode::new("[5, 6]") };
+    let cell = Cell { value: cached, formula: None, style: gridcraft_model::StyleId::default(), py: Some(std::sync::Arc::new(py)) };
+    t.wb.sheet_mut(0).unwrap().cells.set(c(at), cell);
+    (0, c(at))
+}
+
+fn column(values: &[f64]) -> Value {
+    let data = values.iter().map(|v| Value::Number(*v)).collect();
+    Value::Array(std::sync::Arc::new(gridcraft_core::Array::new(values.len(), 1, data).unwrap()))
+}
+
+#[test]
+fn formulas_read_a_dirty_python_cell_after_it_is_laid_out() {
+    // B1's result can't spill (B2 holds a value), so it is #SPILL!. A1, A2 and A3 come before
+    // it in the pass; each must lay it out first rather than read its old value, 1.
+    let build = |t: &mut T| {
+        t.set("B2", "10");
+        t.set("B3", "100");
+        t.set("A1", "=B1");
+        t.set("A2", "=MAX(B1:B3)");
+        t.set("A3", "=SUM(B1:B3)");
+        t.set("A4", "=COUNTA(B1:B3)");
+        t.set("A5", "=SUMPRODUCT(--ISERROR(B1:B3))");
+    };
+    let check = |t: &T, how: &str| {
+        assert_eq!(t.get("B1"), Value::Error(CellError::Spill), "{how}");
+        assert_eq!(t.get("A1"), Value::Error(CellError::Spill), "{how}: a reference");
+        assert_eq!(t.get("A2"), Value::Error(CellError::Spill), "{how}: a range read");
+        assert_eq!(t.get("A3"), Value::Error(CellError::Spill), "{how}: a range walked cell by cell");
+        assert_eq!(t.num("A4"), 3.0, "{how}");
+        assert_eq!(t.num("A5"), 1.0, "{how}: the error is seen in the range");
+    };
+
+    // A full recalculation.
+    let mut t = T::new();
+    build(&mut t);
+    plant_python(&mut t, "B1", Value::Number(1.0), column(&[5.0, 6.0]));
+    t.calc.recalc_all(&mut t.wb);
+    check(&t, "full");
+
+    // An incremental one: B1 becomes a Python cell after its readers.
+    let mut t = T::new();
+    t.set("B1", "1");
+    build(&mut t);
+    assert_eq!((t.num("A1"), t.num("A3")), (1.0, 111.0));
+    let k = plant_python(&mut t, "B1", Value::Number(1.0), column(&[5.0, 6.0]));
+    t.calc.cells_changed(&mut t.wb, &[k]);
+    check(&t, "incremental");
+
+    // Unblocked, the readers see the new array.
+    t.set("B2", "");
+    assert_eq!((t.num("B1"), t.num("B2")), (5.0, 6.0));
+    assert_eq!((t.num("A1"), t.num("A2"), t.num("A3")), (5.0, 100.0, 111.0));
 }
