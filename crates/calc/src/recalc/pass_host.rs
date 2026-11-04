@@ -496,17 +496,24 @@ fn fit_to_range(v: Value, range: RangeRef) -> Value {
 const MAX_SHARED_CELLS: u64 = 16_000_000;
 
 impl PassHost<'_> {
-    /// Whether a block just read keeps those values for the rest of the pass: nothing in it is
-    /// still being calculated or waiting (those read as #CIRC!, or are thrown away when unwinding),
-    /// and no array can spill over it. A formula still to come can only spill down and to the
-    /// right, so one above or to the left of the block's end rules it out, as does any spill on
-    /// the sheet already.
-    fn values_are_final(&self, sheet: usize, range: RangeRef) -> bool {
-        if self.suspend.is_some() || self.spills.keys().any(|anchor| anchor.0 == sheet) {
-            return false;
+    /// Whether an array could still lay itself over a block: any spill on the sheet, or a formula
+    /// outside the block still to come, above or to the left of its end (spills go down and right).
+    /// Reading the block doesn't change that, so a read isn't worth it while it holds.
+    fn a_spill_could_reach(&self, sheet: usize, range: RangeRef) -> bool {
+        if self.spills.keys().any(|anchor| anchor.0 == sheet) {
+            return true;
         }
-        let Some(sh) = self.wb.sheet(sheet) else { return false };
-        if !sh.spill_ranges.is_empty() || !sh.spill.is_empty() {
+        let Some(sh) = self.wb.sheet(sheet) else { return true };
+        !sh.spill_ranges.is_empty()
+            || !sh.spill.is_empty()
+            || self.pending.iter().any(|k| k.0 == sheet && k.1.row <= range.end.row && k.1.col <= range.end.col && !range.contains(k.1))
+    }
+
+    /// Whether a block just read keeps those values for the rest of the pass: nothing in it is
+    /// still to come, being calculated or waiting (those read as #CIRC!, or are thrown away when
+    /// unwinding), and no array can spill over it.
+    fn values_are_final(&self, sheet: usize, range: RangeRef) -> bool {
+        if self.suspend.is_some() || self.a_spill_could_reach(sheet, range) {
             return false;
         }
         let before_end = |k: &Key| k.0 == sheet && k.1.row <= range.end.row && k.1.col <= range.end.col;
@@ -526,6 +533,9 @@ impl Host for PassHost<'_> {
         }
         let cells = u64::from(range.height()) * u64::from(range.width());
         if entry.0 < 2 || !entry.0.is_power_of_two() || self.iterate || self.block_cells.saturating_add(cells) > MAX_SHARED_CELLS {
+            return None;
+        }
+        if self.a_spill_could_reach(sheet, range) {
             return None;
         }
         let values = self.range_values(sheet, range);
