@@ -135,7 +135,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
-| 2026-11-03 | VBA-1.1: a new `gridcraft-vba` crate (L2, depends on `core` only) reads [MS-OVBA] compressed streams, with typed errors, a 16 MiB output cap and no partial output on failure; read-only, and nothing runs VBA |
+| 2026-11-03 | VBA-1.1: a new `gridcraft-vba` crate (L2, depends on `core` only) reads [MS-OVBA] compressed streams, with typed errors, a 16 MiB output cap and no partial output on failure; read-only, and nothing runs VBA (#3333) |
 | 2026-11-02 | Dialogs take ranges by selection on the grid: reference boxes (RefEdit) with a collapse button that shrinks the dialog while the person selects, in Goal Seek, Solver (including the Model Range of Load/Save) and Data Analysis; while collapsed, the arrow keys move the selection and Shift+arrow extends it, and F4 cycles a reference's anchors |
 | 2026-11-02 | Python mode in the formula bar: Ctrl+Alt+Shift+P, `=PY` then Tab, or editing a Python cell edits its code in the formula bar, with Enter for a new line, Tab to indent and Ctrl+Enter to commit through `python.set`. The code still doesn't run |
 | 2026-11-02 | Python cells as data: `python.set` stores code in a cell, Python cells copy, move, fill and undo like formulas, and `.xlsx` reads and writes Python cells as [MS-XLSX] specifies (`_xlfn._xlws.PY(index,0 or 1)`, the code in the workbook's Python part) with cached values and spills, so such workbooks open with their results; nothing runs Python (new code shows `#BLOCKED!`), and opening a file limits code size, result size and spill ranges |
@@ -258,7 +258,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-03 | minor | Progress log: VBA-1.1, the `gridcraft-vba` crate and [MS-OVBA] decompression |
+| 2026-11-03 | minor | Progress log: VBA-1.1, the `gridcraft-vba` crate and [MS-OVBA] decompression (#3333) |
 | 2026-11-02 | minor | Progress log: RefEdit reference boxes in dialogs |
 | 2026-11-02 | minor | Progress log: Python mode in the formula bar |
 | 2026-11-02 | minor | Progress log: Python cells as data |
