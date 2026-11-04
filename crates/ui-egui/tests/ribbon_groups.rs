@@ -60,3 +60,21 @@ fn a_launcher_is_named_and_opens_its_groups_dialog() {
     let dialog = h.state().dialog.as_ref().expect("a dialog launcher in the caption band opens a dialog");
     assert_eq!((dialog.name.as_str(), dialog.tab.as_str()), ("formatCells", "Font"), "the Font launcher opens Format Cells on Font");
 }
+
+#[test]
+fn a_long_caption_sets_a_floor_on_a_content_sized_group() {
+    // A group is as wide as its controls, or as wide as its caption needs — whichever is larger.
+    // In a narrow window that floor is what keeps the caption whole instead of clipping it: on the
+    // Data tab "Get & Transform Data" is far wider than its one button, so the caption is centred
+    // in a band wider than the control and sticks out on both sides of it.
+    let mut s = Session::new();
+    s.new_workbook();
+    let mut h = harness(s);
+    h.state_mut().ui.ribbon_tab = "Data".into();
+    h.run_steps(3);
+
+    let group = caption(&h, "Get & Transform Data").expect("the Get & Transform Data caption");
+    let button = caption(&h, "Get Data").expect("the Get Data button's label");
+    assert!(group.width() > button.width(), "the caption widens the group: caption {group:?}, button {button:?}");
+    assert!(group.left() < button.left() && group.right() > button.right(), "the controls stay packed left in the wider band");
+}

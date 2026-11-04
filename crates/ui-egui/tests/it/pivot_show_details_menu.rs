@@ -113,7 +113,7 @@ fn the_cell_menu_computes_the_report_once_for_all_its_cells() {
     // West goes away behind the session's back, so the revision stays the same. A menu that
     // computed the report again for D4 would find it out of date and offer Show Details there.
     let doc = h.state_mut().session.active_mut().unwrap();
-    let si = doc.wb.active_sheet;
+    let si = doc.wb.active_sheet();
     std::sync::Arc::make_mut(&mut doc.wb).sheet_mut(si).unwrap().set_value(CellRef::parse("A3").unwrap(), Value::text("East"));
     right_click(&mut h, "D4");
     assert!(h.query_by_label("Show Details").is_none(), "D4 is a label of the report computed for E4");
