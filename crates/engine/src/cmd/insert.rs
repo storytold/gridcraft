@@ -598,8 +598,30 @@ fn table_unlink(s: &mut Session, p: &Json) -> Result<Json> {
             c.xml = None;
             c.unique_name = None;
         }
+        // A query-table-backed table also leaves a kept `queryTable` part behind: its definition
+        // hangs off a sheet relationship, not the table part the writer rewrites. With the table
+        // plain that part would still name the connection, so drop it once no table on the sheet is
+        // external any more.
+        if sh.tables.iter().all(|t| !t.is_external()) {
+            drop_kept_query_tables(sh);
+        }
         Ok(Json::Null)
     })
+}
+
+/// Drops a sheet's kept query tables: their relationships and the parts those point at. They are
+/// kept because their definition does not belong to the table part GridCraft rewrites, so nothing
+/// else removes them when their table is unlinked.
+fn drop_kept_query_tables(sh: &mut Sheet) {
+    let Some(p) = sh.preserved.as_deref() else { return };
+    let bound: Vec<&str> = p.rels.iter().filter(|r| r.rel_type.ends_with("/queryTable")).map(|r| r.target.as_str()).collect();
+    if bound.is_empty() {
+        return;
+    }
+    let mut kept = p.clone();
+    kept.rels.retain(|r| !r.rel_type.ends_with("/queryTable"));
+    kept.parts.retain(|part| !bound.contains(&part.name.as_str()));
+    sh.preserved = (!kept.is_empty()).then(|| std::sync::Arc::new(kept));
 }
 
 fn table_convert(s: &mut Session, p: &Json) -> Result<Json> {
