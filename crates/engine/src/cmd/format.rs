@@ -757,6 +757,8 @@ pub fn format_code_for(name: &str) -> &str {
     }
 }
 
+/// Applies a named number format or an explicit format code.
+/// The Accounting preset follows the saved currency preferences unless an explicit code is supplied.
 fn number_format(s: &mut Session, p: &Json) -> Result<Json> {
     let code = str_param(p, "code")
         .map(str::to_string)

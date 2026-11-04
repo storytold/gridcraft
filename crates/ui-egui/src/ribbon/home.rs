@@ -673,6 +673,8 @@ fn size_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     }
 }
 
+/// Shows the Home ribbon's number-format choices with previews.
+/// Accounting previews use the saved currency and symbol position to match the applied format.
 fn number_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let code = st.num_fmt.as_str().to_string();
     let kind = gridcraft_engine::display::number_format(&code).kind();
