@@ -165,6 +165,35 @@ impl Dir<'_> {
 }
 
 /// The band's buttons and brackets for this frame.
+/// The bracket for one group's detail, and its tick, on the lane `across`; `button` is the group's
+/// summary button when it is on screen.
+fn group_bracket(out: &mut Layout, dir: &Dir, grp: &OutlineGroup, button: Option<f32>, across: f32, side: f32) {
+    let first = dir.first_visible(grp.start, grp.end);
+    let Some((first_line, (a0, _))) = first else { return };
+    if grp.summary_before {
+        // From the button down (or across) to the last detail line, with the tick there.
+        let a0 = button.map_or(a0, |mid| mid + side / 2.0);
+        let end = dir.start(grp.end) + dir.size(grp.end);
+        let a1 = end.min(dir.hi);
+        if a1 <= a0 {
+            return;
+        }
+        let tick = (end <= dir.hi).then(|| [dir.point(a1 - 0.5, across), dir.point(a1 - 0.5, across + side / 2.0)]);
+        out.brackets.push(Bracket { line: [dir.point(a0, across), dir.point(a1 - 0.5, across)], tick });
+        return;
+    }
+    let a1 = match button {
+        Some(mid) => mid - side / 2.0,
+        None => dir.start(grp.summary()).min(dir.hi),
+    };
+    if a1 <= a0 {
+        return;
+    }
+    let start_shown = first_line == grp.start && (a0 - dir.start(grp.start)).abs() < 0.5;
+    let tick = start_shown.then(|| [dir.point(a0 + 0.5, across), dir.point(a0 + 0.5, across + side / 2.0)]);
+    out.brackets.push(Bracket { line: [dir.point(a0 + 0.5, across), dir.point(a1, across)], tick });
+}
+
 pub fn layout(geo: &Geo, sh: &Sheet) -> Layout {
     let mut out = Layout::default();
     let zoom = (geo.z / DISPLAY_SCALE).max(0.1);
@@ -212,30 +241,7 @@ pub fn layout(geo: &Geo, sh: &Sheet) -> Layout {
                 continue;
             }
             // The bracket, over the part of the detail that is on screen.
-            let first = dir.first_visible(grp.start, grp.end);
-            let Some((first_line, (a0, _))) = first else { continue };
-            if grp.summary_before {
-                // From the button down (or across) to the last detail line, with the tick there.
-                let a0 = button.map_or(a0, |mid| mid + side / 2.0);
-                let end = dir.start(grp.end) + dir.size(grp.end);
-                let a1 = end.min(dir.hi);
-                if a1 <= a0 {
-                    continue;
-                }
-                let tick = (end <= dir.hi).then(|| [dir.point(a1 - 0.5, across), dir.point(a1 - 0.5, across + side / 2.0)]);
-                out.brackets.push(Bracket { line: [dir.point(a0, across), dir.point(a1 - 0.5, across)], tick });
-                continue;
-            }
-            let a1 = match button {
-                Some(mid) => mid - side / 2.0,
-                None => dir.start(grp.summary()).min(dir.hi),
-            };
-            if a1 <= a0 {
-                continue;
-            }
-            let start_shown = first_line == grp.start && (a0 - dir.start(grp.start)).abs() < 0.5;
-            let tick = start_shown.then(|| [dir.point(a0 + 0.5, across), dir.point(a0 + 0.5, across + side / 2.0)]);
-            out.brackets.push(Bracket { line: [dir.point(a0 + 0.5, across), dir.point(a1, across)], tick });
+            group_bracket(&mut out, dir, grp, button, across, side);
         }
     }
     out

@@ -81,7 +81,7 @@ fn navigation_arrows_reveal_the_selected_tab() {
     for _ in 0..29 {
         click(&mut h, next);
     }
-    assert_eq!(h.state().session.doc().unwrap().wb.active_sheet, 29);
+    assert_eq!(h.state().session.doc().unwrap().wb.active_sheet(), 29);
     assert_visible(&h, "Tab29");
 }
 
@@ -146,7 +146,7 @@ fn hidden_sheets_long_names_and_window_resize_keep_active_tab_visible() {
     h.set_size(vec2(1000.0, 120.0));
     h.run_steps(20);
     assert_visible(&h, name);
-    assert_eq!(h.state().session.doc().unwrap().wb.active_sheet, 29);
+    assert_eq!(h.state().session.doc().unwrap().wb.active_sheet(), 29);
 }
 
 #[test]
@@ -190,7 +190,7 @@ fn right_clicking_a_tab_activates_its_sheet_so_the_menu_acts_on_it() {
     h.step();
     h.input_mut().events.push(Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(20);
-    assert_eq!(h.state().session.doc().unwrap().wb.active_sheet, 3, "right-clicking Tab03 should activate it");
+    assert_eq!(h.state().session.doc().unwrap().wb.active_sheet(), 3, "right-clicking Tab03 should activate it");
     // The menu now offers Unprotect for the protected sheet that was clicked, not Protect for the one that was active.
     let texts: Vec<String> = h
         .output()
