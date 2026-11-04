@@ -108,7 +108,7 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui);
-    group(app, ui, "Outline", None, |app, ui| {
+    group(app, ui, "Outline", Some(("outlineSettings", json!({}))), |app, ui| {
         ui.vertical(|ui| {
             let __k = small_button(ui, Icon::Group, "Group", "Group", false);
             control_keytip(app, ui, &__k, "data.group");
