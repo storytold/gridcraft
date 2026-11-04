@@ -245,6 +245,13 @@ pub fn small_toggle_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, on: 
 /// Returns (main clicked, arrow response).
 pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str) -> (bool, Response) {
     let t = Tokens::get(ui.ctx());
+    split_button_with(ui, |painter, r| icons::paint(painter, r, icon, t.text), accent, tip)
+}
+
+/// A [`split_button`] whose icon `paint` draws into its 16-point square (the Borders button shows
+/// the last preset used).
+pub fn split_button_with(ui: &mut Ui, paint: impl FnOnce(&egui::Painter, Rect), accent: Option<Color32>, tip: &str) -> (bool, Response) {
+    let t = Tokens::get(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(vec2(38.0, 24.0), Sense::hover());
     let main = Rect::from_min_size(rect.min, vec2(25.0, 24.0));
     let arrow = Rect::from_min_max(pos2(main.right(), rect.top()), rect.max);
@@ -254,7 +261,7 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
         ui.painter().rect_filled(rect, 4.0, t.hover);
         ui.painter().line_segment([pos2(main.right(), rect.top() + 3.0), pos2(main.right(), rect.bottom() - 3.0)], Stroke::new(1.0, t.separator));
     }
-    icons::paint(ui.painter(), Rect::from_center_size(main.center() - vec2(0.0, 2.0), vec2(16.0, 16.0)), icon, t.text);
+    paint(ui.painter(), Rect::from_center_size(main.center() - vec2(0.0, 2.0), vec2(16.0, 16.0)));
     if let Some(c) = accent {
         ui.painter().rect_filled(Rect::from_min_size(pos2(main.left() + 4.0, main.bottom() - 5.0), vec2(17.0, 3.0)), 0.0, c);
     }
