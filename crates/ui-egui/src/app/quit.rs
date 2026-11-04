@@ -2,6 +2,7 @@ use super::{SaveAnswer, SheetApp, json};
 use serde_json::Value as Json;
 
 const NO_DRAFT: &str = "No cell is being edited.";
+const NO_WINDOW: &str = "That window is closed, or isn't the one editing the cell.";
 
 impl SheetApp {
     /// Holds back a window close (the close button, Alt+F4, the OS quitting the app) while a
@@ -70,11 +71,21 @@ impl SheetApp {
             Some(question) => question.values.get("window").and_then(Json::as_u64),
             None => p.get("window").and_then(Json::as_u64),
         };
+        if !self.can_exit_anyway(window) {
+            return Err(NO_WINDOW.into());
+        }
         if self.dialog.as_ref().is_some_and(|d| d.name() == "refusedDraft") {
             self.dialog = None;
         }
         self.pending_exit_anyway = Some(window);
         Ok(Json::Null)
+    }
+
+    /// Whether Exit Anyway may drop the draft: its target window is still open and holds that draft.
+    fn can_exit_anyway(&self, window: Option<u64>) -> bool {
+        window.is_none_or(|window| {
+            self.session.window(window).is_some() && self.editor.as_ref().is_none_or(|ed| ed.window.is_none_or(|owner| owner == window))
+        })
     }
 
     /// Goes on with an Exit Anyway asked since the last frame.
@@ -87,6 +98,10 @@ impl SheetApp {
     /// Exit Anyway: drops the draft, leaving its cell as it was, and goes on closing. Unsaved
     /// workbooks are still asked about.
     pub(crate) fn exit_anyway(&mut self, window: Option<u64>, ctx: &egui::Context) {
+        // Asked a frame ago: the window may have closed since.
+        if !self.can_exit_anyway(window) {
+            return;
+        }
         self.cancel_edit();
         match window {
             Some(window) => self.run_or_alert("window.close", json!({"window": window})),

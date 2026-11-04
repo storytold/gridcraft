@@ -9,6 +9,8 @@ pub(crate) const DRAFT_CODE_HIDDEN: &str = "Sheet protection now hides the code 
 impl SheetApp {
     /// Starts editing the active cell. `text` replaces the content (typing) or pre-fills it.
     pub fn begin_edit(&mut self, text: Option<String>, from_formula_bar: bool) {
+        // A new draft is not the one an Exit Anyway still waiting for its frame was about.
+        self.pending_exit_anyway = None;
         // The source formula is display-only on spill children. Grid replacement keeps its
         // existing behavior, but no formula-bar entry path may edit that displayed formula.
         if from_formula_bar && formula_bar::active_spill_anchor(self).is_some() {
