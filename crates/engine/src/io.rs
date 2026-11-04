@@ -88,13 +88,15 @@ pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>, csv_as_
 /// line-height estimate can differ from Excel's, and shrinking files that already look
 /// right would be a visible regression. Custom-height rows are left alone entirely.
 fn fit_imported_rows(wb: &mut Workbook) {
+    // The whole pass shares one budget of merge comparisons: later sheets keep their heights once it is spent.
+    let mut left = crate::cmd::MERGE_FIT_WORK;
     for si in 0..wb.sheets.len() {
         let Some(sh) = wb.sheet(si) else { continue };
         let mut rows: Vec<u32> = sh.cells.iter().map(|(c, _)| c.row).collect();
         rows.sort_unstable();
         rows.dedup();
         // One sweep over the sheet's merges for all of its rows, in ascending order.
-        let mut sweep = crate::cmd::MergeSweep::new(sh);
+        let mut sweep = crate::cmd::MergeSweep::new(sh, left);
         for row in rows {
             let before = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
             crate::cmd::fit_row_height(wb, si, row, &mut sweep);
@@ -106,6 +108,7 @@ fn fit_imported_rows(wb: &mut Workbook) {
                 sh.rows.entry(row).or_default().size = Some(before);
             }
         }
+        left = sweep.left();
     }
 }
 

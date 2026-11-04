@@ -441,9 +441,13 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     fit_rows.sort_unstable();
     fit_rows.dedup();
     let mut sweep: Option<(usize, MergeSweep)> = None;
+    let mut left = MERGE_FIT_WORK;
     for (si, row) in fit_rows {
         if sweep.as_ref().is_none_or(|(at, _)| *at != si) {
-            sweep = wb.sheet(si).map(|sh| (si, MergeSweep::new(sh)));
+            if let Some((_, old)) = &sweep {
+                left = old.left();
+            }
+            sweep = wb.sheet(si).map(|sh| (si, MergeSweep::new(sh, left)));
         }
         if let Some((_, sw)) = sweep.as_mut() {
             fit_row_height(&mut wb, si, row, sw);
@@ -603,14 +607,14 @@ fn wrapped_line_count(line: &str, width: f32, size: f32, bold: bool) -> f32 {
 /// a multi-line value shows on one line and AutoFit gives a one-line row.
 pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
     let Some(sh) = wb.sheet(si) else { return };
-    let mut sweep = MergeSweep::new(sh);
+    let mut sweep = MergeSweep::new(sh, MERGE_FIT_WORK);
     fit_row_height(wb, si, row, &mut sweep);
 }
 
 /// Most merge comparisons one auto-fit pass (a commit, or opening a workbook) makes. Past it the
 /// remaining rows keep the heights they have rather than stall on a sheet whose merges overlap
 /// the fitted rows many times over.
-const MERGE_FIT_WORK: usize = 50_000_000;
+pub(crate) const MERGE_FIT_WORK: usize = 50_000_000;
 
 /// The merged areas of one sheet that touch a row, for rows visited in ascending order: the
 /// merges are sorted by first row once and swept, so fitting many rows never rescans every merge
@@ -623,11 +627,18 @@ pub(crate) struct MergeSweep {
 }
 
 impl MergeSweep {
-    pub(crate) fn new(sh: &gridcraft_model::Sheet) -> Self {
+    /// A sweep over `sh`'s merges with `budget` comparisons left for the pass (carry
+    /// [`MergeSweep::left`] of the previous sheet's sweep into the next).
+    pub(crate) fn new(sh: &gridcraft_model::Sheet, budget: usize) -> Self {
         let mut by_start: Vec<gridcraft_core::RangeRef> = sh.merges.iter().copied().filter(|m| !m.is_single()).collect();
         by_start.sort_unstable_by_key(|m| m.start.row);
-        let budget = MERGE_FIT_WORK.saturating_sub(by_start.len());
+        let budget = budget.saturating_sub(by_start.len());
         Self { by_start, next: 0, active: Vec::new(), budget }
+    }
+
+    /// Comparisons left for the rest of the pass.
+    pub(crate) fn left(&self) -> usize {
+        self.budget
     }
 
     /// Takes `n` comparisons from the budget; `false` once it is spent.
@@ -739,5 +750,25 @@ impl Ctx<'_> {
     }
     pub fn touch(&mut self, sheet: usize, c: CellRef) {
         self.changed.push((sheet, c));
+    }
+}
+
+#[cfg(test)]
+mod merge_sweep_tests {
+    use super::*;
+
+    #[test]
+    fn the_budget_carries_from_one_sheets_sweep_to_the_next() {
+        let mut sheet = gridcraft_model::Sheet::new("S");
+        for r in ["A1:B2", "C1:D2", "E1:F2"] {
+            sheet.merges.push(gridcraft_core::RangeRef::parse(r).unwrap());
+        }
+        let mut first = MergeSweep::new(&sheet, 5);
+        assert!(first.at(0).is_none(), "three merges cost three comparisons, two are left");
+        assert_eq!(first.left(), 0);
+        // The next sheet starts with what is left: nothing, so it fits nothing.
+        let mut second = MergeSweep::new(&sheet, first.left());
+        assert!(second.at(0).is_none());
+        assert!(MergeSweep::new(&sheet, MERGE_FIT_WORK).at(0).is_some());
     }
 }
