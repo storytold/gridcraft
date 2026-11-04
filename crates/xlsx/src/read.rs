@@ -35,6 +35,11 @@ pub struct Ctx<'a> {
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
+    /// PivotCharts (by chart id) and their series' cached points, checked against the cells once
+    /// every sheet is read.
+    pub pivot_charts: Vec<(u32, Vec<crate::chart::PivotSeriesCache>)>,
+    /// Shared point-expansion budget across all charts in the workbook.
+    pub chart_budget: crate::chart::ChartReadBudget,
     /// Whether GridCraft calculates a function, when the caller says: cell formulas wrapped by
     /// Google Sheets' export are then read as the formula inside (see [`crate::read_xlsx_with`]).
     pub known_function: Option<&'a dyn Fn(&str) -> bool>,
@@ -255,6 +260,8 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         num_fmts: Default::default(),
         cell_pictures: vec![],
         cf_ext_ids: vec![],
+        pivot_charts: vec![],
+        chart_budget: crate::chart::ChartReadBudget::new(),
         known_function,
         python: Default::default(),
     };
@@ -355,6 +362,8 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         wb.sheets.push(Arc::new(Sheet::new("Sheet1")));
     }
     wb.set_active_sheet(file_to_model.get(active_tab).copied().flatten().unwrap_or(0));
+    // PivotChart series whose references don't hold their cached points plot the cache.
+    crate::chart::plot_pivot_caches(&mut wb, &cx.pivot_charts);
 
     // Defined names. Chartex parts refer to their data through hidden `_xlchart.*` names.
     let mut chart_names: Vec<(String, String)> = vec![];
