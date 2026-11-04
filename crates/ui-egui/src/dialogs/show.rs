@@ -558,7 +558,9 @@ fn check_performance(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open
             let sheet_used = sheet.get("usedCells").and_then(Json::as_u64).unwrap_or(0);
             let sheet_optimizable = sheet.get("optimizableCells").and_then(Json::as_u64).unwrap_or(0);
             let protected = sheet.get("protected").and_then(Json::as_bool).unwrap_or(false);
-            ui.horizontal(|ui| {
+            // Wrapped: a long sheet name and its counts move the button to a second line rather
+            // than pushing it past the pane's right edge, where the vertical scroll cannot reach.
+            ui.horizontal_wrapped(|ui| {
                 let label = if protected { format!("{name} {}", lang.tr("(protected)")) } else { name.to_string() };
                 ui.label(egui::RichText::new(label).strong());
                 ui.label(
