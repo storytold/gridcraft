@@ -3975,6 +3975,24 @@ fn fill_series_weekday_out_of_range_step_errors() {
     assert_eq!(v(&s, "A2"), Value::Empty);
 }
 
+/// A step of a million weekdays moves whole weeks at a time instead of visiting every day, and
+/// lands where counting day by day would.
+#[test]
+fn fill_series_weekday_large_step_is_arithmetic() {
+    let mut s = s();
+    // 45005 is Monday 20 March 2023; five weekdays on from a Monday is the next Monday.
+    s.execute("cell.set", json!({"cell": "A1", "input": "45005"})).unwrap();
+    s.execute("edit.fillSeries", json!({"range": "A1:A3", "direction": "columns", "type": "date", "dateUnit": "weekday", "step": 1_000_000}))
+        .unwrap();
+    assert_eq!(v(&s, "A2"), Value::Number(45005.0 + 1_400_000.0));
+    assert_eq!(v(&s, "A3"), Value::Number(45005.0 + 2_800_000.0));
+    s.execute("cell.set", json!({"cell": "B1", "input": "45009"})).unwrap();
+    s.execute("edit.fillSeries", json!({"range": "B1:B3", "direction": "columns", "type": "date", "dateUnit": "weekday", "step": -1})).unwrap();
+    // Friday 24 March 2023 back one weekday at a time: Thursday, Wednesday.
+    assert_eq!(v(&s, "B2"), Value::Number(45008.0));
+    assert_eq!(v(&s, "B3"), Value::Number(45007.0));
+}
+
 #[test]
 fn fill_series_month_leap_year() {
     let s = series_date("2028-01-31", "A1:A3", "month");
