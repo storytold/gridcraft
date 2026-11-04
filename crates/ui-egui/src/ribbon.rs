@@ -34,6 +34,7 @@ use data::data;
 use formulas::formulas;
 pub use home::FONTS;
 use home::home;
+pub(crate) use home::is_accounting_format_code;
 use insert::{draw, insert};
 use page_layout::page_layout;
 use review::review;

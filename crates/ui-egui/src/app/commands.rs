@@ -20,7 +20,7 @@ impl SheetApp {
     pub(super) fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
         if id == "ui.accountingFormat" {
             let code = params.get("code").and_then(Json::as_str).ok_or("accounting format code is required")?.to_owned();
-            if code.len() > 512 || !(code.starts_with("_(\"") || code.starts_with("_-[")) || code.chars().any(char::is_control) {
+            if !crate::ribbon::is_accounting_format_code(&code) {
                 return Err("unknown accounting format".into());
             }
             let result = self.run_command("home.numberFormat", params)?;

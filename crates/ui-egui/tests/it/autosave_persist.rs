@@ -33,3 +33,11 @@ fn accounting_format_survives_a_restart() {
     let restored: gridcraft_ui_egui::UiState = serde_json::from_str(&saved).unwrap();
     assert_eq!(restored.accounting_format, app.ui.accounting_format);
 }
+
+#[test]
+fn invalid_accounting_format_does_not_change_the_preference() {
+    let mut app = crate::common::app(Session::new());
+    let original = app.ui.accounting_format.clone();
+    assert!(app.run("ui.accountingFormat", serde_json::json!({"code": "_-[$£-809]* 0.00"})).is_err());
+    assert_eq!(app.ui.accounting_format, original);
+}

@@ -27,6 +27,10 @@ fn accounting_button_symbol(code: &str) -> &str {
     ACCOUNTING_SYMBOLS.iter().find(|(_, _, candidate)| *candidate == code).map_or("¤", |(symbol, _, _)| *symbol)
 }
 
+pub(crate) fn is_accounting_format_code(code: &str) -> bool {
+    ACCOUNTING_SYMBOLS.iter().any(|(_, _, candidate)| *candidate == code)
+}
+
 /// Draws the Home tab: clipboard/paste menu, font, alignment, number, style, cell and editing commands with keytips.
 pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
@@ -337,7 +341,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             control_keytip(app, ui, &ca, "home.accounting");
             let forced = invoke(app, "home.accounting");
             if c || forced {
-                act(app, "home.numberFormat", json!({"code": app.ui.accounting_format.clone()}));
+                act(app, "ui.accountingFormat", json!({"code": app.ui.accounting_format.clone()}));
             }
             egui::Popup::menu(&ca).show(|ui| {
                 let mut items: Vec<_> =
