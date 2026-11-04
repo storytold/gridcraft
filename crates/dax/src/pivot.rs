@@ -71,7 +71,8 @@ pub fn pivot_cross(model: &DataModel, measure: &str, row_fields: &[PivotField], 
         columns.push(TableColumn { name: measure.to_string() });
     } else {
         for (_, values) in &column_headers {
-            columns.push(TableColumn { name: values.iter().map(|value| value.to_text()).collect::<Vec<_>>().join(" | ") });
+            // Headers show calendar text for dates and whole numbers without `.0`, as Excel does.
+            columns.push(TableColumn { name: values.iter().map(|value| value.to_dax_text()).collect::<Vec<_>>().join(" | ") });
         }
     }
 

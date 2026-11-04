@@ -107,7 +107,16 @@ impl Scalar {
             Scalar::Decimal(value) if value.is_finite() && value.fract() == 0.0 => {
                 // DAX switches to exponent form for very large whole numbers instead of printing
                 // every digit.
-                if value.abs() >= 1.0e15 { format!("{value:E}") } else { format!("{value:.0}") }
+                if value.abs() >= 1.0e15 {
+                    // Excel writes the exponent's sign: `1E+15`, not Rust's `1E15`.
+                    let text = format!("{value:E}");
+                    match text.split_once('E') {
+                        Some((mantissa, exponent)) if !exponent.starts_with('-') => format!("{mantissa}E+{exponent}"),
+                        _ => text,
+                    }
+                } else {
+                    format!("{value:.0}")
+                }
             }
             Scalar::Currency(value) => {
                 // Integer arithmetic keeps every digit of the scaled range (about 19 significant
