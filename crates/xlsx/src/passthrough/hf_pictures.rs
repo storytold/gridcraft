@@ -64,6 +64,7 @@ fn hf_drawing(kept: &Preserved) -> Option<&PreservedPart> {
     part(kept, &rel.target)
 }
 
+/// The kept part named `name` (part names compare without case, as in OPC).
 fn part<'a>(kept: &'a Preserved, name: &str) -> Option<&'a PreservedPart> {
     kept.parts.iter().find(|p| p.name.eq_ignore_ascii_case(name))
 }

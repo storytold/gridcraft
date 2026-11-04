@@ -278,20 +278,23 @@ type Decoded = (std::sync::Arc<[u8]>, (u32, u32), Outcome);
 
 /// What decoding a header/footer image for a size gave.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Outcome {
+pub(super) enum Outcome {
     /// Decoded and added to the PDF.
     Image(gridcraft_pdf::ImageId),
     /// It can't be decoded within the limits at any size: not tried again.
     Unreadable,
-    /// Decoded, but it didn't fit the budget left: a smaller size may still fit.
+    /// Its decoded pixels wouldn't fit the budget left (checked before decoding): a smaller
+    /// size may still fit.
     OverBudget,
 }
 
 impl HfImageCache {
+    /// A cache for one export, with the whole decode budget.
     pub(super) fn new() -> HfImageCache {
         HfImageCache::with_budget(HF_DECODE_BUDGET)
     }
 
+    /// A cache with `budget` decoded bytes to spend.
     pub(super) fn with_budget(budget: usize) -> HfImageCache {
         HfImageCache { budget, decoded: vec![] }
     }
@@ -315,9 +318,9 @@ impl HfImageCache {
                 _ => {}
             }
         }
-        let outcome = match decode_limited(data, size.0, size.1) {
-            None => Outcome::Unreadable,
-            Some((rgba, pw, ph)) => match self.budget.checked_sub(rgba.len()) {
+        let outcome = match decode_limited(data, size.0, size.1, self.budget) {
+            Err(failed) => failed,
+            Ok((rgba, pw, ph)) => match self.budget.checked_sub(rgba.len()) {
                 None => Outcome::OverBudget,
                 Some(left) => match doc.add_image(&rgba, [pw, ph]) {
                     Some(id) => {
@@ -376,26 +379,43 @@ pub(super) fn hf_images(
     out
 }
 
-/// Decodes an encoded picture to RGBA within fixed limits, downscaled to at most `max_w`×`max_h`.
-fn decode_limited(data: &[u8], max_w: u32, max_h: u32) -> Option<(Vec<u8>, u32, u32)> {
+/// The decoded pixels of `data`, shrunk to fit `max_w` × `max_h`, within the decode limits and
+/// `budget` bytes. `Unreadable` when it can't be decoded within the limits; `OverBudget`, before
+/// any decoding, when its pixels at that size wouldn't fit `budget`.
+pub(super) fn decode_limited(data: &[u8], max_w: u32, max_h: u32, budget: usize) -> Result<(Vec<u8>, u32, u32), Outcome> {
     if data.len() > HF_MAX_BYTES {
-        return None;
+        return Err(Outcome::Unreadable);
     }
-    let (iw, ih) = crate::io::image_size(data)?;
+    let (iw, ih) = crate::io::image_size(data).ok_or(Outcome::Unreadable)?;
     if iw == 0 || ih == 0 || iw > HF_MAX_SIDE_PX || ih > HF_MAX_SIDE_PX || u64::from(iw) * u64::from(ih) > 16_000_000 {
-        return None;
+        return Err(Outcome::Unreadable);
     }
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format().ok()?;
+    let (max_w, max_h) = (max_w.max(1), max_h.max(1));
+    let (ow, oh) = if iw > max_w || ih > max_h { thumbnail_size((iw, ih), (max_w, max_h)) } else { (iw, ih) };
+    let bytes = u64::from(ow).checked_mul(u64::from(oh)).and_then(|p| p.checked_mul(4));
+    if bytes.is_none_or(|b| usize::try_from(b).map_or(true, |b| b > budget)) {
+        return Err(Outcome::OverBudget);
+    }
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format().map_err(|_| Outcome::Unreadable)?;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(HF_MAX_SIDE_PX);
     limits.max_image_height = Some(HF_MAX_SIDE_PX);
     limits.max_alloc = Some(64 * 1024 * 1024);
     reader.limits(limits);
-    let img = reader.decode().ok()?;
-    let img = if img.width() > max_w.max(1) || img.height() > max_h.max(1) { img.thumbnail(max_w.max(1), max_h.max(1)) } else { img };
+    let img = reader.decode().map_err(|_| Outcome::Unreadable)?;
+    let img = if img.width() > max_w || img.height() > max_h { img.thumbnail(max_w, max_h) } else { img };
     let rgba = img.to_rgba8();
     let (w, h) = (rgba.width(), rgba.height());
-    Some((rgba.into_raw(), w, h))
+    Ok((rgba.into_raw(), w, h))
+}
+
+/// The size `image`'s `thumbnail` gives an `iw` × `ih` image shrunk to fit `max_w` × `max_h`:
+/// the aspect ratio kept, each side rounded to the nearest pixel and at least 1.
+pub(super) fn thumbnail_size((iw, ih): (u32, u32), (max_w, max_h): (u32, u32)) -> (u32, u32) {
+    let ratio = (f64::from(max_w) / f64::from(iw.max(1))).min(f64::from(max_h) / f64::from(ih.max(1)));
+    // Both sides are at most HF_MAX_SIDE_PX here, so the rounded values fit u32.
+    let side = |v: u32| ((f64::from(v) * ratio).round().clamp(1.0, f64::from(u32::MAX))) as u32;
+    (side(iw), side(ih))
 }
 
 /// One line of a section: its text around the picture (all of it in `before` when the line has
@@ -406,6 +426,8 @@ struct HfLine<'a> {
     picture: Option<(&'a HfImage, f32, f32)>,
 }
 
+/// Draws the header and footer of page kind `which` on `pg`: each section's text and, at its
+/// `&G`, the picture from `images` for that section, scaled with the document when asked.
 pub(super) fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcraft_model::HfPage, cx: &HfContext, images: &[HfImage]) {
     let [_, _, _, _, hm, fm] = lay.margins;
     let (l, r) = lay.hf_sides();

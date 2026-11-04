@@ -350,6 +350,7 @@ fn dash_values(dash: &[f32]) -> String {
     d.iter().map(|v| n(*v)).collect::<Vec<_>>().join(" ")
 }
 
+/// The operator setting the stroke (`RG`) or fill (`rg`) colour to `c`.
 fn rgb_op(c: Rgb, stroke: bool) -> String {
     let f = |v: u8| n(v as f32 / 255.0);
     format!("{} {} {} {}", f(c[0]), f(c[1]), f(c[2]), if stroke { "RG" } else { "rg" })
@@ -840,6 +841,8 @@ impl PdfDoc {
         PdfDoc::default()
     }
 
+    /// This document's id, given on first use; images added to it carry it so a page of
+    /// another document can't draw them.
     fn id(&mut self) -> u64 {
         if self.id == 0 {
             self.id = NEXT_DOC.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -886,7 +889,6 @@ impl PdfDoc {
         self.pages.get_mut(i)
     }
 
-    /// Serializes the document. A document without pages gets one blank Letter page.
     /// Writes the shared images some page draws, once each; returns their object numbers by
     /// index (0 for one no page draws, which is left out).
     fn write_shared_images(&self, next: &mut u32, objects: &mut Vec<(u32, Vec<u8>)>) -> Vec<u32> {
@@ -897,6 +899,7 @@ impl PdfDoc {
             .collect()
     }
 
+    /// Serializes the document. A document without pages gets one blank Letter page.
     pub fn finish(mut self) -> Vec<u8> {
         if self.pages.is_empty() {
             self.add_page(612.0, 792.0);
