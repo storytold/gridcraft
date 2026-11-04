@@ -6,6 +6,78 @@ pub(super) fn sep(ui: &mut Ui) {
     ui.painter().line_segment([pos2(r.center().x, r.top() + 6.0), pos2(r.center().x, r.bottom() - 6.0)], Stroke::new(1.0, t.separator));
 }
 
+/// Height of a ribbon group's control area and of the caption band under it; together they fill
+/// the ribbon card so every group's caption lines up along the bottom, as in Excel.
+pub(super) const GROUP_CONTROLS_H: f32 = 72.0;
+pub(super) const GROUP_CAPTION_H: f32 = 16.0;
+/// Width of the dialog launcher's box in the caption band's bottom-right corner.
+pub(super) const GROUP_LAUNCHER_W: f32 = 15.0;
+/// Padding a caption band keeps on each side when the group has no launcher.
+const GROUP_CAPTION_PAD: f32 = 12.0;
+
+/// A group's width: its controls' width, or its caption's plus the padding the caption band
+/// needs. A launcher sits over the band's right-hand corner, and the caption is centred, so with
+/// one the caption needs the launcher's width clear on each side too (#1795). The caption always
+/// fits, so a group never shrinks below what its name needs in a narrow window.
+pub(super) fn group_width(controls_w: f32, caption_w: f32, launcher: bool) -> f32 {
+    let pad = if launcher { 2.0 * GROUP_LAUNCHER_W } else { GROUP_CAPTION_PAD };
+    controls_w.max(caption_w + pad)
+}
+
+/// An Excel-style ribbon group: the controls packed top-left over a caption band carrying the
+/// group's name, with Excel's dialog launcher in the bottom-right corner where Excel has one.
+/// Every group is the same height, so the captions line up. A missing feature takes no space at
+/// all: the cluster is simply narrower and everything after it moves left (#1655, #1764).
+pub(super) fn group(
+    app: &mut SheetApp,
+    ui: &mut Ui,
+    title: &str,
+    launcher: Option<(&str, serde_json::Value)>,
+    add: impl FnOnce(&mut SheetApp, &mut Ui),
+) {
+    let t = Tokens::get(ui.ctx());
+    ui.vertical(|ui| {
+        let row = ui.horizontal(|ui| add(app, ui));
+        if row.response.rect.height() < GROUP_CONTROLS_H {
+            ui.add_space(GROUP_CONTROLS_H - row.response.rect.height());
+        }
+        // The caption sits centred under the controls; a caption wider than them widens the group,
+        // leaving the launcher's corner clear.
+        let label = app.ui.language.tr(title).to_string();
+        let galley = ui.painter().layout_no_wrap(label, theme::ui_font(11.0), t.text_dim);
+        let w = group_width(row.response.rect.width(), galley.size().x, launcher.is_some());
+        let (cap, _) = ui.allocate_exact_size(vec2(w, GROUP_CAPTION_H), Sense::hover());
+        ui.painter().galley(cap.center() - galley.size() / 2.0, galley, t.text_dim);
+        if let Some((dialog, params)) = launcher {
+            // Excel's dialog launcher: a small box with an arrow, in the group's bottom-right.
+            let lr = Rect::from_min_size(pos2(cap.right() - GROUP_LAUNCHER_W, cap.center().y - 7.5), vec2(GROUP_LAUNCHER_W, GROUP_LAUNCHER_W));
+            let resp = ui.interact(lr, ui.scope_id().with(("group_launcher", title)), Sense::click());
+            // A painted box carries no label of its own, so name it for screen readers.
+            let name = format!("{} dialog launcher", app.ui.language.tr(title));
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), name.as_str()));
+            if resp.hovered() {
+                ui.painter().rect_filled(lr.shrink(1.0), 3.0, t.hover);
+            }
+            let box_r = lr.shrink(3.5);
+            let p = ui.painter();
+            p.rect_stroke(box_r, 1.0, Stroke::new(1.0, t.text_dim), StrokeKind::Inside);
+            p.line_segment([box_r.right_top(), box_r.left_bottom()], Stroke::new(1.0, t.text_dim));
+            p.line_segment([box_r.left_bottom(), box_r.left_bottom() + vec2(3.5, 0.0)], Stroke::new(1.0, t.text_dim));
+            p.line_segment([box_r.left_bottom(), box_r.left_bottom() + vec2(0.0, -3.5)], Stroke::new(1.0, t.text_dim));
+            if resp.on_hover_text(app.ui.language.tr("Dialog launcher")).clicked() {
+                app.open_dialog(dialog, params.clone());
+            }
+        }
+    });
+}
+
+/// A short divider between the clusters inside one group, as Excel draws in Font and Number.
+pub(super) fn inner_sep(ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let (r, _) = ui.allocate_exact_size(vec2(9.0, 24.0), Sense::hover());
+    ui.painter().line_segment([pos2(r.center().x, r.top() + 2.0), pos2(r.center().x, r.bottom() - 2.0)], Stroke::new(1.0, t.separator));
+}
+
 pub(super) fn active_style(app: &SheetApp) -> Style {
     app.session
         .active()
@@ -308,5 +380,26 @@ mod checkbox_on_tests {
         // Key tip: the bool still holds the current setting, so toggle it.
         assert!(checkbox_on(false, false));
         assert!(!checkbox_on(false, true));
+    }
+}
+
+#[cfg(test)]
+mod group_width_tests {
+    use super::*;
+
+    #[test]
+    fn a_launcher_leaves_its_corner_clear_of_the_caption() {
+        // A caption wider than the controls is centred, so the launcher's width must stay free on
+        // each side of it; otherwise the box covers the text (#1795).
+        let w = group_width(40.0, 100.0, true);
+        assert_eq!(w, 100.0 + 2.0 * GROUP_LAUNCHER_W);
+        assert_eq!((w - 100.0) / 2.0, GROUP_LAUNCHER_W, "the caption clears the launcher");
+        // Without a launcher the band keeps its smaller padding.
+        assert_eq!(group_width(40.0, 100.0, false), 112.0);
+        // Controls wider than the caption still set the width, and the centred caption clears
+        // the launcher's corner there too.
+        let w = group_width(200.0, 100.0, true);
+        assert_eq!(w, 200.0);
+        assert!(w / 2.0 + 50.0 <= w - GROUP_LAUNCHER_W);
     }
 }
