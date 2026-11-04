@@ -146,7 +146,7 @@ pub fn editor(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &m
         }
     });
     ui.add_space(6.0);
-    ui.label("LaTeX:");
+    ui.label(app.ui.language.tr("LaTeX:"));
     let pv = preview(ui.ctx(), ui.scope_id().with("equation-preview"), &text);
     let mark = pv.result.as_ref().err().and_then(|e| e.span.clone()).or_else(|| pv.result.as_ref().err().map(|_| text.len()..text.len()));
     let mark = mark.filter(|_| !text.trim().is_empty());

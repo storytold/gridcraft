@@ -354,6 +354,29 @@ mod tests {
         assert_eq!(Language::parse("xx"), None);
     }
 
+    /// The title-bar menu and popup labels (the ones beside the Save button) must be translated in
+    /// Portuguese instead of falling back to English: the widgets drew them through the translator,
+    /// but the catalogs held no Portuguese entry for the ones introduced later.
+    #[test]
+    fn portuguese_translates_the_title_bar_menu_labels() {
+        for (english, portuguese) in [
+            ("New Workbook", "Nova Pasta de Trabalho"),
+            ("Save As…", "Salvar como…"),
+            ("Print…", "Imprimir…"),
+            ("Export as PDF…", "Exportar como PDF…"),
+            ("Save a Copy as Excel Workbook (.xlsx)…", "Salvar uma cópia como Pasta de Trabalho do Excel (*.xlsx)…"),
+            ("Export as CSV…", "Exportar como CSV…"),
+            ("Export as Web Page (.html)…", "Exportar como Página da Web (.html)…"),
+            ("Start a new workbook", "Criar uma pasta de trabalho"),
+            ("Blank workbook", "Pasta de trabalho em branco"),
+            ("Recent", "Recentes"),
+            ("Open…", "Abrir…"),
+            ("Can't Undo", "Não há nada para desfazer"),
+        ] {
+            assert_eq!(Language::PtBr.tr(english), portuguese, "{english:?} must not fall back to English");
+        }
+    }
+
     /// A catalog whose translations slip onto their neighbours' keys still covers every key, so
     /// check the shape of each translation against its English: placeholders survive, and a
     /// one-line label (a menu item, a tooltip) doesn't turn into a two-line ribbon label.
