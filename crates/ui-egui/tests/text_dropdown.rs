@@ -86,3 +86,27 @@ fn nh1_starts_editing_the_page_header() {
     assert!(h.state().grid.hf_edit.is_some(), "NH1 begins an in-place header edit");
     assert!(h.state().dialog.is_none(), "NH1 no longer opens the Page Setup dialog");
 }
+
+#[test]
+fn nz_opens_the_text_menu_so_the_item_letters_show() {
+    let mut h = harness();
+    key(&mut h, Key::F10);
+    for ch in "NZ".chars() {
+        letter(&mut h, Key::from_name(&ch.to_string()).expect("sequence letters map to keys"));
+    }
+    h.run_steps(6);
+    assert!(h.query_by_label("Text Box").is_some(), "NZ opens the drop-down, so Text Box shows its letter");
+    assert!(h.query_by_label("Header & Footer").is_some(), "the Header & Footer item is listed too");
+}
+
+#[test]
+fn nh_opens_the_text_menu_so_the_item_letters_show() {
+    let mut h = harness();
+    key(&mut h, Key::F10);
+    for ch in "NH".chars() {
+        letter(&mut h, Key::from_name(&ch.to_string()).expect("sequence letters map to keys"));
+    }
+    h.run_steps(6);
+    assert!(h.query_by_label("Header & Footer").is_some(), "NH opens the drop-down, so Header & Footer shows its letter");
+    assert!(h.query_by_label("Text Box").is_some(), "the Text Box item is listed too");
+}

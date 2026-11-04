@@ -187,11 +187,11 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     // box, the arrow opens the drop-down.
     let (text_body, text_arrow) = big_split_button(ui, Icon::TextBox, "Text", "Text Box");
     let text_rect = text_body.rect.union(text_arrow.rect);
-    let prefix = app.keytips.prefix().unwrap_or_default();
-    let mut badges = keytip_table::group_extension(prefix, &["insert.textBox", "pageLayout.headerFooter"]);
+    let prefix = app.keytips.prefix().unwrap_or_default().to_owned();
+    let mut badges = keytip_table::group_extension(&prefix, &["insert.textBox", "pageLayout.headerFooter"]);
     // One key deeper, the control's own badge (e.g. NZ -> T, NH -> 1) sits beside the group badges.
     if let Some(final_badge) =
-        keytip_table::control_badge(prefix, "insert.textBox").or_else(|| keytip_table::item_letter(prefix, "pageLayout.headerFooter"))
+        keytip_table::control_badge(&prefix, "insert.textBox").or_else(|| keytip_table::item_letter(&prefix, "pageLayout.headerFooter"))
     {
         badges.push(final_badge);
     }
@@ -204,10 +204,13 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     if invoke(app, "pageLayout.headerFooter") {
         crate::paper_view::start_editing(app);
     }
-    egui::Popup::menu(&text_arrow).show(|ui| {
+    // Alt, I, Z (Text Box) and Alt, I, H (Header & Footer) open the menu with each item's letter,
+    // as Excel's does; a letter or Esc changes the prefix, which closes it again (`ribbon_keys`).
+    let keyed = keytip_table::opens_menu(&prefix, "insert.textBox") || keytip_table::opens_menu(&prefix, "pageLayout.headerFooter");
+    egui::Popup::menu(&text_arrow).open_memory(popup_command(keyed, text_arrow.clicked())).show(|ui| {
         for (label, id) in [("Text Box", "insert.textBox"), ("Header & Footer", "pageLayout.headerFooter")] {
             let response = ui.add(egui::Button::new(app.ui.language.tr(label)).frame_when_inactive(false).min_size(vec2(220.0, 22.0)));
-            if let Some(sequence) = keytip_table::item_letter(app.keytips.prefix().unwrap_or_default(), id) {
+            if let Some(sequence) = keytip_table::item_letter(&prefix, id) {
                 keytip(app, ui, sequence, pos2(response.rect.right() - 10.0, response.rect.center().y));
             }
             if response.clicked() {
