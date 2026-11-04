@@ -64,10 +64,10 @@ fn turning_the_file_tab_off_closes_an_open_backstage() {
     assert!(h.state().backstage.is_none(), "and closes when the host turns the File tab off");
 }
 
-/// #2546 (macOS): AppKit moved, and on a double-click zoomed, the window for presses on the title
-/// bar's own buttons. The window may move only from the bar's empty area: not while the pointer
-/// is on Undo, Redo, Home or the other controls. A double-click on a button is two clicks on it,
-/// never a maximize; one on the empty area still does what the system's setting says.
+/// #3342: a drag that started on one of the title bar's buttons moved the window. The window may
+/// move only from the bar's empty area: not while the pointer is on Undo, Redo, Home or the other
+/// controls. A double-click on a button is two clicks on it, never a maximize (#2546); one on the
+/// empty area still does what the system's setting says.
 #[test]
 fn title_bar_buttons_keep_their_clicks_from_the_window() {
     let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
@@ -152,7 +152,7 @@ fn title_bar_buttons_keep_their_clicks_from_the_window() {
     assert!(!moved && !maximized(&h), "a drag from Redo moved the window");
 }
 
-/// #2546: a host that hides the title bar while the pointer is on Undo must not leave the window
+/// #3342: a host that hides the title bar while the pointer is on Undo must not leave the window
 /// unmovable. The macOS sync runs after the whole UI, not only when the title bar is drawn.
 #[test]
 fn hiding_the_title_bar_makes_the_window_movable_again() {

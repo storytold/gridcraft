@@ -37,9 +37,9 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
     egui::Panel::top("title_bar").exact_size(TITLE_BAR_H).frame(egui::Frame::NONE.fill(t.window)).show(ui, |ui| {
         let rect = ui.max_rect();
         // The empty title area moves the window when dragged and follows the system's title-bar
-        // double-click setting. Its controls keep their own clicks: on macOS AppKit moved and
-        // zoomed the window for presses on them (a double-click on Undo or Redo zoomed it,
-        // #2546), so the window is not movable while the pointer is on one (`sync_movable`).
+        // double-click setting. Its controls keep their own presses: a drag that starts on one
+        // doesn't move the window (#3342). On macOS AppKit would move it too, so the window is not
+        // movable while the pointer is on one (`sync_movable`).
         // In the browser there is no window to move or maximize.
         #[cfg(not(target_arch = "wasm32"))]
         craft_window::title_bar::empty_area(ui, rect);
@@ -169,7 +169,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
 /// craft-window keeps one movable value for all the windows, and `sync_movable` sets the flag on
 /// every app window. Each workbook window draws its title bar in the same frame, and one the
 /// pointer isn't over says "movable": were it to set the flag after the window whose Undo is
-/// under the pointer, that window could move and zoom again (#2546). Only the window the pointer
+/// under the pointer, that window could move again (#3342). Only the window the pointer
 /// is in decides; it reads the value its own title bar has just left.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn movable_to_sync(ctx: &egui::Context) -> Option<bool> {
@@ -188,7 +188,7 @@ pub fn wanted_movable(ctx: &egui::Context) -> Option<bool> {
     ctx.data(|d| d.get_temp::<bool>(wanted_id()))
 }
 
-/// macOS: AppKit may move (and on a double-click, zoom) the window only from the title bar's empty
+/// macOS: AppKit may move the window only from the title bar's empty
 /// area. Call once per frame, after the window's UI has run, whether or not it drew a title bar: a
 /// host that hides the bar while the pointer is on a control must not leave the window unmovable.
 #[cfg(not(target_arch = "wasm32"))]
@@ -373,7 +373,7 @@ mod title_bar_tests {
         }
     }
 
-    /// #2546 with several workbook windows: they share one context and draw their title bars in
+    /// #3342 with several workbook windows: they share one context and draw their title bars in
     /// the same frame, and one the pointer isn't over must not make the windows movable again
     /// after the window whose Undo is under the pointer made them unmovable.
     #[test]
