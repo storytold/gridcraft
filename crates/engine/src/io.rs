@@ -559,24 +559,38 @@ fn written_number(text: &str) -> Option<WrittenNumber<'_>> {
 }
 
 /// The decimal separator a number's digits show, when they settle it: the last of `.` and `,`
-/// when both appear, or a lone one not followed by exactly three digits ("1,5", "0.69"). "1.330"
-/// could be either, so it says nothing.
+/// when both appear, or a lone one not followed by exactly three digits ("1,5", "0.69"), and only
+/// when the whole number is written that way ("1.23,45" settles nothing). "1.330" could be
+/// either, so it says nothing.
 fn shown_decimal_separator(digits: &str) -> Option<char> {
     let last = digits.rfind(['.', ','])?;
     let sep = if digits.get(last..)?.starts_with(',') { ',' } else { '.' };
     let other = if sep == ',' { '.' } else { ',' };
-    if digits.get(..last)?.contains(other) {
-        return Some(sep);
-    }
     let after = digits.len().saturating_sub(last + 1);
-    (digits.matches(sep).count() == 1 && after != 3).then_some(sep)
+    let settles = digits.get(..last)?.contains(other) || after != 3;
+    (settles && written_with_decimal(digits, sep)).then_some(sep)
+}
+
+/// Whether digits read as a number with `decimal` as its decimal separator: one fraction after
+/// it, and the other separator only between groups of three ("1.234,56", "1234,5", "0.69").
+fn written_with_decimal(digits: &str, decimal: char) -> bool {
+    let grouping = if decimal == ',' { '.' } else { ',' };
+    let Some((int, frac)) = digits.rsplit_once(decimal) else { return false };
+    if frac.is_empty() || !frac.bytes().all(|b| b.is_ascii_digit()) || int.contains(decimal) {
+        return false;
+    }
+    let mut groups = int.split(grouping);
+    let first = groups.next().unwrap_or_default();
+    let first_ok = !first.is_empty() && first.bytes().all(|b| b.is_ascii_digit()) && (first.len() <= 3 || !int.contains(grouping));
+    first_ok && groups.all(|g| g.len() == 3 && g.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Whether a table's numbers are written with a decimal comma: more of its body cells settle on
 /// `,` than on `.`. A stray "0.69 %" in a totals row doesn't change a table written "1.234,56".
+/// A cell with a recorded number (`x:num`) still shows how the page writes numbers, so it votes.
 fn uses_decimal_comma(rows: &[Vec<crate::clip_html::HtmlCell>]) -> bool {
     let (mut comma, mut dot) = (0usize, 0usize);
-    for cell in rows.iter().flatten().filter(|c| !c.header && c.num.is_none()) {
+    for cell in rows.iter().flatten().filter(|c| !c.header) {
         match written_number(&cell.text).and_then(|w| shown_decimal_separator(w.digits)) {
             Some(',') => comma += 1,
             Some(_) => dot += 1,

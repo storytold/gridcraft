@@ -827,6 +827,33 @@ fn decimal_comma_numbers_parse_strictly() {
     }
 }
 
+#[test]
+fn decimal_comma_detection_counts_recorded_cells_and_only_well_formed_numbers() {
+    let read = |page: &str, at: &str| open_bytes("export.xls", page.as_bytes()).unwrap().0.sheet(0).unwrap().value(CellRef::parse(at).unwrap());
+    // The only "1,5" carries its number (x:num): it still shows the page's decimal comma, so
+    // "1.330" is 1330 (it read 1.33); the recorded number stays the cell's value.
+    let page = "<table><tr><td x:num=\"1.5\">1,5</td><td>1.330</td></tr></table>";
+    assert_eq!(read(page, "A1"), gridcraft_core::Value::number(1.5));
+    assert_eq!(read(page, "B1"), gridcraft_core::Value::number(1330.0));
+    // "1.23,45" is no number (its grouping is broken), so it doesn't make "1.234" read 1234.
+    let page = "<table><tr><td>1.23,45</td><td>1.234</td></tr></table>";
+    assert_eq!(read(page, "A1"), gridcraft_core::Value::text("1.23,45"));
+    assert_eq!(read(page, "B1"), gridcraft_core::Value::number(1.234));
+    for (digits, want) in [
+        ("1,5", Some(',')),
+        ("1.234,56", Some(',')),
+        ("1234,5", Some(',')),
+        ("0.69", Some('.')),
+        ("1,234.5", Some('.')),
+        ("1.330", None),
+        ("1.23,45", None),
+        ("12.34.5", None),
+        ("1,2,3", None),
+    ] {
+        assert_eq!(super::shown_decimal_separator(digits), want, "{digits:?}");
+    }
+}
+
 /// A small SYLK file written the way spreadsheets export one: a header, number formats, column
 /// widths, cells that carry on from the last row or column, formulas in R1C1 and a shared formula.
 const SYLK: &str = "ID;PTEST;N;E\r\nP;PGeneral\r\nP;P0.00\r\nP;Pyyyy\\-mm\\-dd\r\nF;W1 1 18\r\nF;W2 3 9\r\nB;Y5;X7\r\n\
