@@ -102,7 +102,15 @@ impl Scalar {
     /// [`Scalar::to_text`] stays the storage/debug spelling other callers rely on.
     pub fn to_dax_text(&self) -> String {
         match self {
-            Scalar::Decimal(value) if value.is_finite() && value.fract() == 0.0 => format!("{value:.0}"),
+            Scalar::Decimal(value) if value.is_finite() && value.fract() == 0.0 => {
+                // DAX switches to exponent form for very large whole numbers instead of printing
+                // every digit.
+                if value.abs() >= 1.0e15 { format!("{value:E}") } else { format!("{value:.0}") }
+            }
+            Scalar::Currency(value) => {
+                let text = format!("{:.4}", *value as f64 / 10_000.0);
+                text.trim_end_matches('0').trim_end_matches('.').to_string()
+            }
             Scalar::DateTime(serial) => datetime_text(*serial),
             other => other.to_text(),
         }

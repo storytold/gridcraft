@@ -648,7 +648,9 @@ fn a_numeric_column_in_values_sums_averages_and_takes_extremes() {
         // The implicit measure is not added to the model the pane shows.
         let listing = fields(&mut s, json!({"name": reply["name"].as_str().unwrap_or_default()}));
         assert_eq!(listing["model"]["measures"].as_array().map(Vec::len), Some(1), "{aggregate} left the model alone");
-        assert_eq!(listing["selected"]["values"], json!([caption]), "{aggregate} is the pivot's value");
+        // The implicit measure lives only in the cache; the field list reports the column and its
+        // aggregation so the pivot can be re-applied from the pane.
+        assert_eq!(listing["selected"]["values"], json!([{"column": "Sales[Amount]", "aggregate": aggregate}]), "{aggregate} is the pivot's value");
     }
 }
 
@@ -802,4 +804,26 @@ fn an_explicit_null_allowed_list_is_the_all_page_field() {
     assert_eq!(reply["columns"], plain["columns"]);
     let listing = fields(&mut s, json!({"name": reply["name"].as_str().unwrap_or_default()}));
     assert_eq!(listing["selected"]["filters"], json!([{"field": "Sales[Channel]"}]), "the all page field has no `allowed` list");
+}
+
+#[test]
+fn a_column_value_round_trips_through_the_field_list() {
+    let mut s = load();
+    let first = create(&mut s, json!({"values": [{"column": "Sales[Amount]", "aggregate": "Sum"}], "row_fields": ["Sales[Region]"], "name": "Mine"}));
+    assert_eq!(first["values"], json!(["Sum of Amount"]));
+    let listing = fields(&mut s, json!({"name": "Mine"}));
+    // The implicit measure lives only in the pivot cache, so the field list reports the column and
+    // its aggregation, which is what `createPivot.values` takes back.
+    assert_eq!(listing["selected"]["values"], json!([{"column": "Sales[Amount]", "aggregate": "Sum"}]));
+    let again = create(
+        &mut s,
+        json!({
+            "measure": "Total Sales",
+            "values": listing["selected"]["values"].clone(),
+            "row_fields": ["Sales[Region]"],
+            "name": "Mine",
+            "replace": true,
+        }),
+    );
+    assert_eq!(again["values"], json!(["Sum of Amount"]));
 }

@@ -284,12 +284,14 @@ fn field_list_cmd(s: &mut Session, p: &Json) -> Result<Json> {
         Some(Json::String(name)) => Some(name.trim()).filter(|name| !name.is_empty()),
         Some(_) => return Err(bad(CMD_FIELDS, "`name` must be a string")),
     };
-    let model = model_json(model);
+    let data_model = model;
+    let model = model_json(data_model);
     let parts = read_pivots(s)?;
     let pivots: Vec<Json> = parts.iter().map(|part| json!({"name": part.spec.name, "sheet": part.sheet, "at": part.location.a1()})).collect();
     // Names are unique case-insensitively (the command refuses a duplicate), so the first match is
     // the one asked for; a name that is not there is `null`, not an error: the pane polls.
-    let selected = name.and_then(|name| parts.iter().find(|part| part.spec.name.eq_ignore_ascii_case(name))).map(selected_json);
+    let selected =
+        name.and_then(|name| parts.iter().find(|part| part.spec.name.eq_ignore_ascii_case(name))).map(|part| selected_json(data_model, part));
     Ok(json!({"pivots": pivots, "model": model, "selected": selected}))
 }
 
@@ -400,7 +402,7 @@ fn model_json(model: &DataModel) -> Json {
 /// One model PivotTable's settings as the pane shows them: the axes as `Table[Column]` references,
 /// the filters with their allowed values (a blank as JSON `null`), the value measures, the layout
 /// and the three totals flags.
-fn selected_json(part: &ModelPivotPartInfo) -> Json {
+fn selected_json(model: &DataModel, part: &ModelPivotPartInfo) -> Json {
     let spec = &part.spec;
     json!({
         "name": spec.name,
@@ -427,12 +429,46 @@ fn selected_json(part: &ModelPivotPartInfo) -> Json {
                 json!({"field": field, "allowed": allowed})
             })
             .collect::<Vec<_>>(),
-        "values": spec.values.iter().map(|value| value.measure.clone()).collect::<Vec<_>>(),
+        "values": spec.values.iter().map(|value| value_json(model, spec, value)).collect::<Vec<_>>(),
         "layout": layout_name(spec.layout),
         "row_subtotals": spec.row_subtotals,
         "column_subtotals": spec.column_subtotals,
         "grand_totals": spec.grand_totals,
     })
+}
+
+/// One Σ Values entry as the pane (and `createPivot.values`) takes it back.
+///
+/// A measure the session model declares is its name. A column put in Σ Values becomes an implicit
+/// measure that lives only in the pivot cache; reporting it as `{column, aggregate}` is what lets
+/// the field list re-apply the pivot, because the session model has no measure to name.
+fn value_json(model: &DataModel, spec: &ModelPivotSpec, value: &ModelPivotValue) -> Json {
+    if model.measure_index(&value.measure).is_some() {
+        return Json::String(value.measure.clone());
+    }
+    let Some((aggregate, rest)) = value.measure.split_once(" of ") else {
+        return Json::String(value.measure.clone());
+    };
+    if !matches!(aggregate, "Sum" | "Average" | "Count" | "Min" | "Max") {
+        return Json::String(value.measure.clone());
+    }
+    let table = spec
+        .measures
+        .iter()
+        .find(|measure| measure.name.eq_ignore_ascii_case(&value.measure))
+        .and_then(|measure| model.tables.iter().find(|table| table.name.eq_ignore_ascii_case(&measure.table)));
+    let Some(table) = table else { return Json::String(value.measure.clone()) };
+    // `implicit_measure` appends a numeric suffix when the name is taken, so try the exact column
+    // first and then the name without that suffix.
+    let mut candidates = vec![rest.to_string()];
+    let trimmed = rest.trim_end_matches(|character: char| character.is_ascii_digit());
+    if trimmed != rest {
+        candidates.push(trimmed.to_string());
+    }
+    let Some(column) = candidates.iter().find_map(|candidate| table.columns.iter().find(|column| column.name.eq_ignore_ascii_case(candidate))) else {
+        return Json::String(value.measure.clone());
+    };
+    json!({"column": format!("{}[{}]", table.name, column.name), "aggregate": aggregate})
 }
 
 /// A field reference as the model's `Table[Column]` text.

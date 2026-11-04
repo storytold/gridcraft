@@ -104,11 +104,20 @@ fn i32_at(payload: &[u8], index: usize) -> Result<i32> {
     Ok(u32_at(payload, index)? as i32)
 }
 
+/// Upper bound on the rows one column segment may declare: larger than any model this evaluator
+/// materializes, and small enough that an eager expansion cannot exhaust memory first.
+const MAX_SEGMENT_RECORDS: usize = 64 * 1024 * 1024;
+
 /// Decodes one column-data `.idf` into exactly `segments[i].records` ids per segment.
 pub fn decode_column_ids(data: &[u8], segments: &[SegmentInfo]) -> Result<Vec<u32>> {
     let mut position = 0usize;
     let mut output = Vec::new();
     for segment in segments {
+        // `records` comes from the file's metadata; an absurd count must not drive an eager
+        // expansion before the caller can compare the decoded length with its row count.
+        if segment.records > MAX_SEGMENT_RECORDS {
+            return Err(ModelFileError::Corrupt("segment declares too many records".into()));
+        }
         let primary = read_record(data, &mut position)?;
         let subsegment = read_record(data, &mut position)?;
         if primary.len() % 8 != 0 || subsegment.len() % 8 != 0 {
@@ -159,6 +168,12 @@ pub fn decode_bitpacked(payload: &[u8], first: usize, count: usize, width: u32, 
         return Err(ModelFileError::Corrupt("bit width exceeds a word".into()));
     }
     let mask = (1u64 << width) - 1;
+    // The payload must be able to supply the requested ids: without this a crafted `count` would
+    // reserve (and then fail to fill) gigabytes before the per-word check runs.
+    let available = (payload.len() / 8).saturating_mul(per_word);
+    if first.checked_add(count).is_none_or(|end| end > available) {
+        return Err(ModelFileError::Corrupt("truncated bit-packed subsegment".into()));
+    }
     let mut values = Vec::with_capacity(count);
     for index in 0..count {
         let value_index = first.checked_add(index).ok_or(ModelFileError::TooLarge)?;
@@ -516,9 +531,14 @@ pub fn decode_string_dictionary(data: &[u8], hash_information: bool) -> Result<V
         // specification calls it a byte offset; the observed files are character based).
         let byte_offset = offset.checked_mul(2).ok_or(ModelFileError::TooLarge)?;
         let rest = buffer.get(byte_offset..).ok_or_else(|| ModelFileError::Corrupt("string handle is outside its page".into()))?;
-        let units: Vec<u16> = rest.as_chunks::<2>().0.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
-        let length = units.iter().position(|unit| *unit == 0).ok_or_else(|| ModelFileError::Corrupt("unterminated dictionary string".into()))?;
-        strings.push(String::from_utf16(&units[..length]).map_err(|_| ModelFileError::Corrupt("invalid UTF-16 dictionary string".into()))?);
+        // Stop at the NUL instead of copying the rest of the page for every string: a page can
+        // hold millions of them, and the copy would be quadratic in the page size.
+        let units: Vec<u16> = rest.as_chunks::<2>().0.iter().map(|pair| u16::from_le_bytes(*pair)).take_while(|unit| *unit != 0).collect();
+        let terminated = units.len().checked_mul(2).and_then(|bytes| rest.get(bytes..bytes + 2)).is_some();
+        if !terminated {
+            return Err(ModelFileError::Corrupt("unterminated dictionary string".into()));
+        }
+        strings.push(String::from_utf16(&units).map_err(|_| ModelFileError::Corrupt("invalid UTF-16 dictionary string".into()))?);
     }
     Ok(strings)
 }

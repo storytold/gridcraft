@@ -160,7 +160,9 @@ fn fixed_rounds_and_groups() {
     assert_eq!(text("FIXED(2.5, BLANK())"), "2.50");
     assert_eq!(text("FIXED(-1234.5678, 2, TRUE)"), "-1234.57");
     assert_eq!(text("FIXED(150, -2)"), "200");
-    assert_eq!(text("FIXED(99, -2)"), "0");
+    // Half away from zero: 99 rounds up to one hundred, and 49 stays zero.
+    assert_eq!(text("FIXED(99, -2)"), "100");
+    assert_eq!(text("FIXED(49, -2)"), "0");
     // Excel rounds half away from zero on the decimal digits the user supplied.
     assert_eq!(text("FIXED(2.675, 2)"), "2.68");
     assert_eq!(text("FIXED(-2.675, 2)"), "-2.68");
@@ -331,4 +333,20 @@ fn concatenation_uses_dax_text_conversion() {
     // A date prints as calendar text, not as its serial.
     assert_eq!(text("DATE(2019, 3, 28) & \"\""), "3/28/2019 12:00:00 AM");
     assert_eq!(text("COMBINEVALUES(\"-\", 10.0, \"Q1\")"), "10-Q1");
+}
+
+#[test]
+fn fixed_rounds_half_away_from_zero_at_negative_precision() {
+    assert_eq!(text("FIXED(50, -2)"), "100");
+    assert_eq!(text("FIXED(6, -1)"), "10");
+    // Below half rounds down, and a number shorter than the precision stays 0.
+    assert_eq!(text("FIXED(49, -2)"), "0");
+    assert_eq!(text("FIXED(4, -1)"), "0");
+}
+
+#[test]
+fn currency_and_large_numbers_concatenate_in_dax_form() {
+    assert_eq!(text("CURRENCY(10) & \"\""), "10");
+    assert_eq!(text("CURRENCY(10.5) & \"\""), "10.5");
+    assert_eq!(text("CONVERT(1, CURRENCY) & \"\""), "1");
 }

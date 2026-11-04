@@ -6,8 +6,10 @@ commands, so the UI, agents and the control channel see the same model.
 
 The model is **session state**: `dataModel.load` reads a JSON model file, and measure and
 relationship edits update the engine session only. They are not written to the workbook and are
-not undoable — the one exception is `dataModel.createPivot`, which writes the session model's
-measures into the workbook's `xl/model/item.data` before attaching the PivotTable's cache.
+not undoable — the one exception is `dataModel.createPivot`. When the workbook already has
+`xl/model/item.data`, it writes the session model's measures that have a home table into that
+part before attaching the PivotTable's cache. Measures without a home table are not written, and
+nothing is written when the workbook has no such part.
 
 ## Window layout
 
@@ -72,7 +74,8 @@ Groups: Perspectives, Show Implicit Measures, Summarize By, Reporting Properties
 
 - **Show Implicit Measures** is a real toggle (`dataModel.setShowImplicitMeasures`): with it on, the
   Calculation Area lists an implicit measure per numeric column (its default aggregation) and per
-  non-numeric column (`COUNTROWS`), matching Excel's default summarization.
+  non-numeric column (`COUNT(column)`, the column's non-blank values), matching Excel's default
+  summarization. Hidden columns and columns summarized by `None` get no implicit measure.
 - **Summarize By** works (`dataModel.setSummarizeBy`): Sum, Average, Count, Min, Max or None on the
   selected column, which is what the implicit measure uses.
 - Perspectives, Table Detail, Table Behavior and Image URL are disabled: the model engine has no

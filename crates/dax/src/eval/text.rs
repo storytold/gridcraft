@@ -247,6 +247,9 @@ fn round_decimal(integer: &str, fraction: &str, decimals: i32) -> (String, Strin
         (rounded_integer, rounded_fraction)
     } else {
         let places = decimals.unsigned_abs() as usize;
+        // A leading zero lets the most significant digit act as the rounding digit: `FIXED(50, -2)`
+        // is 100 and `FIXED(6, -1)` is 10.
+        let integer = format!("0{integer}");
         if integer.len() <= places {
             return ("0".to_string(), String::new());
         }
@@ -255,6 +258,10 @@ fn round_decimal(integer: &str, fraction: &str, decimals: i32) -> (String, Strin
         let mut digits: Vec<u8> = integer.bytes().take(split).filter(u8::is_ascii_digit).map(|digit| digit - b'0').collect();
         if round_up {
             increment_digits(&mut digits);
+        }
+        // A value that rounds to zero keeps the single "0", without `places` trailing zeros.
+        if digits.iter().all(|digit| *digit == 0) {
+            return ("0".to_string(), String::new());
         }
         let mut result = normalize_integer(&digits_to_string(&digits));
         result.push_str(&"0".repeat(places));

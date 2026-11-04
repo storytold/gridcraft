@@ -890,7 +890,9 @@ fn group_cross_apply(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, 
                 let table = eval_table_with(ev, expression, ctx, &filters)?;
                 // Every scan table is cross-joined into the row, so every scan contributes its
                 // columns to the header (not just the first one).
-                scan_columns.push(table.columns.clone());
+                if scan_columns.len() < scans.len() {
+                    scan_columns.push(table.columns.clone());
+                }
                 let mut next = Vec::with_capacity(combinations.len().saturating_mul(table.rows.len()));
                 for prefix in &combinations {
                     for row in &table.rows {
@@ -1008,7 +1010,9 @@ fn filter_cluster(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> 
             {
                 return Err(EvalError::new("FILTERCLUSTER table scans must have the same columns"));
             }
-            scan_columns.push(table.columns.clone());
+            if scan_columns.len() < scans.len() {
+                scan_columns.push(table.columns.clone());
+            }
             let mut next = Vec::with_capacity(combinations.len().saturating_mul(table.rows.len()));
             for prefix in &combinations {
                 for row in &table.rows {

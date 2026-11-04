@@ -183,7 +183,10 @@ fn write_atomically(path: &str, bytes: &[u8]) -> Result<(), String> {
     let directory = target.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
     let file_name = target.file_name().ok_or_else(|| format!("can't write {path}: no file name"))?;
     let temporary = directory.join(format!(".{}.{}.tmp", file_name.to_string_lossy(), std::process::id()));
-    std::fs::write(&temporary, bytes).map_err(|e| format!("can't write {path}: {e}"))?;
+    std::fs::write(&temporary, bytes).map_err(|e| {
+        let _ = std::fs::remove_file(&temporary);
+        format!("can't write {path}: {e}")
+    })?;
     std::fs::rename(&temporary, target).map_err(|e| {
         let _ = std::fs::remove_file(&temporary);
         format!("can't write {path}: {e}")
