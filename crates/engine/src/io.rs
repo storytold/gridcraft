@@ -407,18 +407,29 @@ fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text
     if rows.iter().all(Vec::is_empty) {
         return None;
     }
+    // A page written with a decimal comma ("R$ 1.234,56", "-1,09 %") reads its numbers that way
+    // (#3166 follow-up): read as en-US input they stayed text, and "1.330" became 1.33.
+    let decimal_comma = !csv_as_text && uses_decimal_comma(&rows);
+    let mut formats: Vec<(CellRef, String)> = Vec::new();
     // The cells go through the CSV reader, so numbers, dates and text read exactly as they do there.
     let mut tsv = String::new();
-    for row in &rows {
+    for (r, row) in rows.iter().enumerate() {
         let fields: Vec<String> = row
             .iter()
-            .map(|cell| {
+            .enumerate()
+            .map(|(c, cell)| {
                 // The number the page recorded (`x:num`) only when values are read; as text, the
                 // cell keeps the text it shows.
                 let field = match cell.num.filter(|_| !csv_as_text) {
                     Some(n) => gridcraft_core::number_to_text(n),
-                    // Whitespace is already collapsed; non-breaking spaces stay, as in Excel.
-                    None => cell.text.clone(),
+                    None => match (decimal_comma && !cell.header).then(|| decimal_comma_number(&cell.text)).flatten() {
+                        Some((n, format)) => {
+                            formats.push((CellRef::new(r as u32, c as u32), format));
+                            gridcraft_core::number_to_text(n)
+                        }
+                        // Whitespace is already collapsed; non-breaking spaces stay, as in Excel.
+                        None => cell.text.clone(),
+                    },
                 };
                 if field.contains(['\t', '\n', '\r', '"']) { format!("\"{}\"", field.replace('"', "\"\"")) } else { field }
             })
@@ -426,10 +437,42 @@ fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text
         tsv.push_str(&fields.join("\t"));
         tsv.push('\n');
     }
-    let opts = gridcraft_xlsx::CsvOptions { delimiter: b'\t', parse_values: !csv_as_text, ..Default::default() };
+    // Pages written with a decimal comma write dates day first, so "03/11/2026" is 3 November.
+    let opts =
+        gridcraft_xlsx::CsvOptions { delimiter: b'\t', parse_values: !csv_as_text, ambiguous_dates_day_first: decimal_comma, ..Default::default() };
     let read = gridcraft_xlsx::read_csv_with_report(tsv.as_bytes(), &opts).map_err(|e| EngineError::Other(e.to_string()));
     Some(read.map(|(mut wb, report)| {
         wb.csv_delimiter = None;
+        // Numbers read with a decimal comma show as the page showed them: currency, percent, grouping.
+        let mut formatted: std::collections::HashMap<String, gridcraft_model::StyleId> = std::collections::HashMap::new();
+        for (at, format) in formats {
+            let id = *formatted.entry(format).or_insert_with_key(|format| {
+                wb.styles.derive(gridcraft_model::StyleId::DEFAULT, |st| st.num_fmt = gridcraft_model::NumFmt::new(format))
+            });
+            if let Some(sh) = wb.sheet_mut(0) {
+                sh.set_style(at, id);
+            }
+        }
+        // Its dates show day first too, as the page wrote them: 3 November shows as 03/11/2026, not 11/3/2026.
+        if decimal_comma {
+            let mut day_first: std::collections::HashMap<gridcraft_model::StyleId, gridcraft_model::StyleId> = std::collections::HashMap::new();
+            let dates: Vec<(CellRef, gridcraft_model::StyleId)> = wb
+                .sheet(0)
+                .map(|sh| sh.cells.iter().map(|(at, cell)| (at, cell.style)).filter(|(_, id)| month_first_date_format(wb.styles.get(*id).num_fmt.as_str()).is_some()).collect())
+                .unwrap_or_default();
+            for (at, base) in dates {
+                let id = *day_first.entry(base).or_insert_with(|| {
+                    wb.styles.derive(base, |st| {
+                        if let Some(format) = month_first_date_format(st.num_fmt.as_str()) {
+                            st.num_fmt = gridcraft_model::NumFmt::new(format);
+                        }
+                    })
+                });
+                if let Some(sh) = wb.sheet_mut(0) {
+                    sh.set_style(at, id);
+                }
+            }
+        }
         // Header cells are bold and centred on top of the style the CSV reader gave them, so a
         // date in a header keeps its date format.
         let headers: Vec<CellRef> = rows
@@ -450,6 +493,7 @@ fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text
                 sh.set_style(at, id);
             }
         }
+        widen_columns_to_values(&mut wb);
         let page_name = find_between(&text, "<x:Name>", "</x:Name>").map(|n| crate::clip_html::normalized(n.trim()));
         match page_name.filter(|n| !n.is_empty()) {
             Some(sheet) => set_first_sheet_name(&mut wb, &sheet),
@@ -461,6 +505,157 @@ fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text
         }
         (wb, warnings)
     }))
+}
+
+/// The day-first date format for a month-first one the CSV reader gives a date (`m/d/yyyy`).
+fn month_first_date_format(format: &str) -> Option<&'static str> {
+    match format {
+        "m/d/yyyy" => Some("dd/mm/yyyy"),
+        "m/d/yyyy h:mm" => Some("dd/mm/yyyy h:mm"),
+        _ => None,
+    }
+}
+
+/// Widest column [`widen_columns_to_values`] makes, in points.
+const MAX_FITTED_WIDTH: f32 = 320.0;
+
+/// A page's table has no column widths: like Excel opening one, columns widen to fit what their
+/// cells show, so amounts don't show as `#####`. Columns are never made narrower than the default.
+fn widen_columns_to_values(wb: &mut Workbook) {
+    let Some(sh) = wb.sheet(0) else { return };
+    let mut widths: std::collections::HashMap<u32, f32> = std::collections::HashMap::new();
+    for (at, cell) in sh.cells.iter() {
+        if cell.value.is_empty() {
+            continue;
+        }
+        let st = wb.styles.get(cell.style);
+        let text = crate::display::format(&cell.value, st.num_fmt.as_str(), wb).text;
+        let width = crate::cmd::format::approx_text_width(&text, st.font.size, st.font.bold) + 14.0;
+        let e = widths.entry(at.col).or_insert(0.0);
+        *e = e.max(width.min(MAX_FITTED_WIDTH));
+    }
+    let Some(sh) = wb.sheet_mut(0) else { return };
+    for (col, width) in widths {
+        if width > sh.col_width(col) {
+            sh.cols.entry(col).or_default().size = Some(width.ceil());
+        }
+    }
+}
+
+/// A number as a page writes it: a sign, a currency symbol before it or a percent sign after it,
+/// and its digits with their separators ("-R$ 1.234,56" → `-`, `R$`, `1.234,56`).
+struct WrittenNumber<'a> {
+    negative: bool,
+    symbol: &'a str,
+    percent: bool,
+    digits: &'a str,
+}
+
+/// Longest currency symbol read before a number ("US$").
+const MAX_SYMBOL_CHARS: usize = 3;
+
+fn written_number(text: &str) -> Option<WrittenNumber<'_>> {
+    let mut t = text.trim();
+    let mut negative = false;
+    if let Some(rest) = t.strip_prefix(['-', '\u{2212}']) {
+        negative = true;
+        t = rest.trim_start();
+    }
+    let percent = t.ends_with('%');
+    t = t.trim_end_matches('%').trim_end();
+    let end = t.find(|c: char| c.is_ascii_digit() || c == '-' || c.is_whitespace()).unwrap_or(t.len());
+    let symbol = t.get(..end)?;
+    // Only a currency symbol: "R$", "US$", "€". A word before a number keeps the cell text.
+    let is_currency = |c: char| matches!(c, '$' | '€' | '£' | '¥' | '₹' | '₩' | '₽' | '₺');
+    if !symbol.is_empty()
+        && (percent
+            || symbol.chars().count() > MAX_SYMBOL_CHARS
+            || !symbol.chars().any(is_currency)
+            || !symbol.chars().all(|c| c.is_alphabetic() || is_currency(c)))
+    {
+        return None;
+    }
+    t = t.get(end..)?.trim_start();
+    if !negative && let Some(rest) = t.strip_prefix('-') {
+        negative = true;
+        t = rest;
+    }
+    let digit_ends = t.starts_with(|c: char| c.is_ascii_digit()) && t.ends_with(|c: char| c.is_ascii_digit());
+    if !digit_ends || !t.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ',') {
+        return None;
+    }
+    Some(WrittenNumber { negative, symbol, percent, digits: t })
+}
+
+/// The decimal separator a number's digits show, when they settle it: the last of `.` and `,`
+/// when both appear, or a lone one not followed by exactly three digits ("1,5", "0.69"). "1.330"
+/// could be either, so it says nothing.
+fn shown_decimal_separator(digits: &str) -> Option<char> {
+    let last = digits.rfind(['.', ','])?;
+    let sep = if digits.get(last..)?.starts_with(',') { ',' } else { '.' };
+    let other = if sep == ',' { '.' } else { ',' };
+    if digits.get(..last)?.contains(other) {
+        return Some(sep);
+    }
+    let after = digits.len().saturating_sub(last + 1);
+    (digits.matches(sep).count() == 1 && after != 3).then_some(sep)
+}
+
+/// Whether a table's numbers are written with a decimal comma: more of its body cells settle on
+/// `,` than on `.`. A stray "0.69 %" in a totals row doesn't change a table written "1.234,56".
+fn uses_decimal_comma(rows: &[Vec<crate::clip_html::HtmlCell>]) -> bool {
+    let (mut comma, mut dot) = (0usize, 0usize);
+    for cell in rows.iter().flatten().filter(|c| !c.header && c.num.is_none()) {
+        match written_number(&cell.text).and_then(|w| shown_decimal_separator(w.digits)) {
+            Some(',') => comma += 1,
+            Some(_) => dot += 1,
+            None => {}
+        }
+    }
+    comma > dot
+}
+
+/// Most decimal places a number format takes from a page's number.
+const MAX_SHOWN_DECIMALS: usize = 15;
+
+/// A number written with a decimal comma and `.` grouping ("1.330", "R$ 129,01", "-1,09 %"): its
+/// value and the number format that shows it the same way. `None` for plain digits, which the CSV
+/// reader reads as before, and for text that isn't such a number.
+fn decimal_comma_number(text: &str) -> Option<(f64, String)> {
+    let w = written_number(text)?;
+    if w.symbol.is_empty() && !w.percent && w.digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let (int, frac) = match w.digits.split_once(',') {
+        Some((int, frac)) => (int, frac),
+        None => (w.digits, ""),
+    };
+    if !frac.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let grouped = int.contains('.');
+    let mut groups = int.split('.');
+    let first_ok = groups.next().is_some_and(|g| (1..=3).contains(&g.len()) || !grouped && !g.is_empty());
+    if !first_ok || !groups.all(|g| g.len() == 3) {
+        return None;
+    }
+    let plain = if frac.is_empty() { int.replace('.', "") } else { format!("{}.{frac}", int.replace('.', "")) };
+    let mut value = plain.parse::<f64>().ok().filter(|n| n.is_finite())?;
+    if w.negative {
+        value = -value;
+    }
+    let decimals = if frac.is_empty() { String::new() } else { format!(".{}", "0".repeat(frac.len().min(MAX_SHOWN_DECIMALS))) };
+    let format = if w.percent {
+        value /= 100.0;
+        format!("0{decimals}%")
+    } else if !w.symbol.is_empty() {
+        format!("\"{}\" #,##0{decimals}", w.symbol)
+    } else if grouped {
+        format!("#,##0{decimals}")
+    } else {
+        format!("0{decimals}")
+    };
+    Some((value, format))
 }
 
 /// The text between the first `open` and the `close` after it, matched case-insensitively.

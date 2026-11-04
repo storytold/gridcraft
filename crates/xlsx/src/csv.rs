@@ -486,7 +486,14 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
     if delim == quote {
         return Err(IoError::Format("the delimiter and quote character must differ".into()));
     }
-    let date_columns = if opts.parse_values { infer_date_rules(&sample_records(&text, delim, quote), opts.date_system) } else { vec![] };
+    let mut date_columns = if opts.parse_values { infer_date_rules(&sample_records(&text, delim, quote), opts.date_system) } else { vec![] };
+    if opts.ambiguous_dates_day_first {
+        for (rule, _) in &mut date_columns {
+            if *rule == DateRule::Ambiguous {
+                *rule = DateRule::DayFirst;
+            }
+        }
+    }
     let mut report = ReadReport::default();
     date_warnings(&date_columns, &mut report);
     let mut wb = Workbook::new();
