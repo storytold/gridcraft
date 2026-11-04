@@ -305,11 +305,11 @@ impl NumberFormat {
                 Some(render::render_general(sec, n.abs(), width))
             }
             SecKind::Date => {
-                if minus {
-                    None
-                } else {
-                    render::render_date(sec, n.abs(), sys)
-                }
+                // Excel shows a negative time (no calendar parts) in the 1904 system as the
+                // magnitude with a minus sign (-1.5 in `[h]:mm` is "-36:00"); the 1900 system and
+                // calendar sections overflow to hashes.
+                let calendar = || sec.toks.iter().any(|t| matches!(t, Tok::Date(d) if d.is_calendar()));
+                if minus && (sys == DateSystem::D1900 || calendar()) { None } else { render::render_date(sec, n.abs(), sys) }
             }
             SecKind::Number => Some(render::render_number(sec, n.abs())),
         };
