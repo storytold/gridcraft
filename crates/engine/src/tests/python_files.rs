@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::sync::Arc;
 
 use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
-use gridcraft_model::{Cell, PyCode, PyOutput, Workbook};
+use gridcraft_model::{Cell, Formula, PyCode, PyOutput, Workbook};
 use serde_json::json;
 
 use super::{s, v};
@@ -303,7 +303,7 @@ fn a_python_cell_without_its_code_keeps_its_whole_cached_result_as_values() {
     let damaged = with_damaged_part(&excel_shaped(data, Some(&["[1, 2, 3]"])), "xl/python/python1.xml", "<pythonScripts>");
     for (name, bytes) in [("missing.xlsx", missing), ("damaged.xlsx", damaged)] {
         let mut s = s();
-        open(&mut s, name, &bytes);
+        s.execute("file.open", json!({"name":name,"base64":crate::io::base64_encode(&bytes)})).unwrap();
         assert_eq!((v(&s, "A1"), v(&s, "A2"), v(&s, "A3")), (Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)), "{name}");
         let sh = s.doc().unwrap().wb.active().unwrap();
         for a in ["A1", "A2", "A3"] {
@@ -311,9 +311,14 @@ fn a_python_cell_without_its_code_keeps_its_whole_cached_result_as_values() {
             assert!(cell.py.is_none() && cell.formula.is_none(), "{name}: {a} is a plain value");
         }
         assert!(!sh.spill_ranges.contains_key(&CellRef::new(0, 0)), "{name}: no live spill");
-        // The ordinary formula fills its spill again, over the stale cached values.
-        assert_eq!((v(&s, "C2"), v(&s, "C3")), (Value::Number(2.0), Value::Number(3.0)), "{name}");
+        // Cached open preserves the unrelated ordinary array as it was saved too.
+        assert_eq!((v(&s, "C2"), v(&s, "C3")), (Value::Number(9.0), Value::Number(9.0)), "{name}: cached open");
         assert!(sh.cell(CellRef::parse("C2").unwrap()).is_none(), "{name}: C2 is the formula's spill, not a cell");
+        // An explicit calculation replaces that cache, without changing the missing Python
+        // script's plain fallback values.
+        s.execute("formulas.calculateNow", json!({})).unwrap();
+        assert_eq!((v(&s, "C2"), v(&s, "C3")), (Value::Number(2.0), Value::Number(3.0)), "{name}: explicit recalculation");
+        assert_eq!((v(&s, "A1"), v(&s, "A2"), v(&s, "A3")), (Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)), "{name}");
     }
 }
 
@@ -541,6 +546,11 @@ fn code_too_long_for_a_cell_keeps_its_whole_cached_result_as_values() {
 #[test]
 fn native_json_keeps_python_cells_and_their_results() {
     let (mut s, long) = build();
+    // A cached ordinary formula must stay cached while Python's kept output is laid out.
+    Arc::make_mut(&mut s.doc_mut().unwrap().wb)
+        .sheet_mut(0)
+        .unwrap()
+        .set_cell(CellRef::parse("H10").unwrap(), Cell { formula: Some(Arc::new(Formula::new("=B1+1"))), ..Cell::value(Value::Number(999.0)) });
     let bytes = save(&mut s, "json");
     open(&mut s, "book.json", &bytes);
     assert_eq!(s.doc().unwrap().trust, Trust::FromFile);
@@ -551,6 +561,10 @@ fn native_json_keeps_python_cells_and_their_results() {
     let e1 = code(&s, "E1").unwrap();
     assert!(e1.object);
     assert_eq!(e1.output.unwrap().type_name, "list");
+    assert_eq!(v(&s, "H10"), Value::Number(999.0), "opening preserves an ordinary formula's cached value");
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    assert_eq!(v(&s, "H10"), Value::Number(43.0));
+    assert_eq!(v(&s, "D2"), Value::text("four"));
 }
 
 #[test]

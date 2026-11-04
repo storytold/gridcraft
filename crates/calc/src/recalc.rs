@@ -240,7 +240,11 @@ impl Calc {
         let mut unparsed = Vec::new();
         for (si, sheet) in wb.sheets.iter().enumerate() {
             for (c, cell) in sheet.cells.iter() {
-                if cell.value.is_empty()
+                if cell.py.is_some() {
+                    // Lay out the kept Python output without running Python. Native JSON stores
+                    // that output but not its spill cells; cached ordinary formulas stay excluded.
+                    self.graph.insert((si, c), Node { areas: Vec::new(), dynamic: false });
+                } else if cell.value.is_empty()
                     && let Some(f) = &cell.formula
                 {
                     if let Some(e) = f.expr() {
@@ -314,9 +318,7 @@ impl Calc {
                     if let Some(sh) = wb.sheet_mut(k.0)
                         && let Some(r) = sh.spill_ranges.remove(&k.1)
                     {
-                        for c in r.iter() {
-                            sh.spill.remove(&c);
-                        }
+                        sh.clear_spill(r);
                         cleared.push((k.0, r));
                     }
                     // A formula that doesn't parse evaluates to #NAME?.
@@ -566,9 +568,7 @@ impl Calc {
                 continue;
             }
             if let Some(range) = old {
-                for cell in range.iter() {
-                    sheet.spill.remove(&cell);
-                }
+                sheet.clear_spill(range);
                 sheet.spill_ranges.remove(&key.1);
             }
             let mut changed_range = old;
