@@ -321,7 +321,6 @@ fn every_ribbon_control_points_at_a_registered_command() {
     let sources = [
         ("home", include_str!("../src/ribbon/home.rs")),
         ("insert", include_str!("../src/ribbon/insert.rs")),
-        ("draw", include_str!("../src/ribbon/insert.rs")),
         ("page_layout", include_str!("../src/ribbon/page_layout.rs")),
         ("formulas", include_str!("../src/ribbon/formulas.rs")),
         ("data", include_str!("../src/ribbon/data.rs")),

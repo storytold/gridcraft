@@ -176,6 +176,10 @@ pub(super) fn custom_views(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
     }
     if refresh {
         d.result = Some(app.session.run("view.customViews", json!({})).unwrap_or_else(|e| json!({"error": e})));
+        // The refreshed list can reorder or grow (a new view may sort before the selected one), so
+        // select the row by name; Show keeps targeting the view that was selected.
+        let after: Vec<String> = d.result.as_ref().and_then(Json::as_object).map(|m| m.keys().cloned().collect()).unwrap_or_default();
+        d.list_index = picked.as_ref().and_then(|name| after.iter().position(|n| n == name)).unwrap_or(0);
     }
 }
 
