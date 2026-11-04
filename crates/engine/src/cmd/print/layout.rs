@@ -99,15 +99,84 @@ impl SheetLayout {
     }
 }
 
+/// A print-job override; PageSetup preserves each sheet's stored settings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PrintScaling {
+    #[default]
+    PageSetup,
+    NoScaling,
+    Sheet,
+    Columns,
+    Rows,
+}
+
+impl PrintScaling {
+    /// Stable command parameter used by preview, PDF export and print submission.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::PageSetup => "pageSetup",
+            Self::NoScaling => "none",
+            Self::Sheet => "sheet",
+            Self::Columns => "columns",
+            Self::Rows => "rows",
+        }
+    }
+
+    /// Parse a job override without changing the workbook or accepting ambiguous legacy input.
+    fn from_params(p: &Json, cmd: &str) -> Result<Self> {
+        let Some(value) = p.get("scaling") else { return Ok(Self::PageSetup) };
+        if p.get("fitToPage").is_some() {
+            return Err(bad(cmd, "use either `scaling` or legacy `fitToPage`, not both"));
+        }
+        match value.as_str() {
+            Some("pageSetup") => Ok(Self::PageSetup),
+            Some("none") => Ok(Self::NoScaling),
+            Some("sheet") => Ok(Self::Sheet),
+            Some("columns") => Ok(Self::Columns),
+            Some("rows") => Ok(Self::Rows),
+            _ => Err(bad(cmd, "`scaling` must be pageSetup, none, sheet, columns or rows")),
+        }
+    }
+
+    /// Override only the layout's cloned settings; manual page breaks remain active at 100%.
+    fn apply(self, settings: &mut PrintSettings) {
+        match self {
+            Self::PageSetup => {}
+            Self::NoScaling => {
+                settings.scale = 100;
+                settings.fit_to = None;
+            }
+            Self::Sheet => settings.fit_to = Some((1, 1)),
+            Self::Columns => settings.fit_to = Some((1, 0)),
+            Self::Rows => settings.fit_to = Some((0, 1)),
+        }
+    }
+}
+
 /// Options shared by the print commands.
 #[derive(Clone, Debug, Default)]
 pub struct PrintOptions {
     pub all_sheets: bool,
     pub range: Option<RangeRef>,
     pub fit_to_page: Option<bool>,
+    /// Per-job scaling; the default honours the workbook.
+    pub scaling: PrintScaling,
 }
 
 impl PrintOptions {
+    /// A new explicit mode takes precedence for typed callers; otherwise retain legacy fitting.
+    fn fit(&self, settings: &PrintSettings) -> Option<(u16, u16)> {
+        if self.scaling != PrintScaling::PageSetup {
+            return settings.fit_to;
+        }
+        match self.fit_to_page {
+            Some(true) => Some((1, 1)),
+            Some(false) => None,
+            None => settings.fit_to.filter(|(w, h)| *w > 0 || *h > 0),
+        }
+    }
+
+    /// Validate command scope and job-only scaling before any layout or workbook access.
     pub(super) fn from_params(p: &Json, cmd: &str) -> Result<PrintOptions> {
         let all_sheets = match str_param(p, "sheets") {
             None | Some("active") => false,
@@ -118,7 +187,7 @@ impl PrintOptions {
             Some(r) => Some(RangeRef::parse(split_sheet(r).1).ok_or_else(|| bad(cmd, format!("not a range: `{r}`")))?),
             None => None,
         };
-        Ok(PrintOptions { all_sheets, range, fit_to_page: bool_param(p, "fitToPage") })
+        Ok(PrintOptions { all_sheets, range, fit_to_page: bool_param(p, "fitToPage"), scaling: PrintScaling::from_params(p, cmd)? })
     }
 }
 
@@ -204,7 +273,8 @@ fn title_span(t: Option<(u32, u32)>, max: u32) -> Option<(u32, u32)> {
 /// Paginates one sheet.
 pub fn layout_sheet(wb: &Workbook, si: usize, opts: &PrintOptions, range_override: Option<RangeRef>) -> Option<SheetLayout> {
     let sh = wb.sheet(si)?;
-    let st = sh.print.clone();
+    let mut st = sh.print.clone();
+    opts.scaling.apply(&mut st);
     let (mut pw, mut ph) = paper_size(&st.paper);
     if st.orientation == Orientation::Landscape {
         std::mem::swap(&mut pw, &mut ph);
@@ -228,11 +298,7 @@ pub fn layout_sheet(wb: &Workbook, si: usize, opts: &PrintOptions, range_overrid
     let title_cols = title_span(st.title_cols, MAX_COLS);
     let digits = format!("{}", area.end.row + 1).len() as f32;
     let (heading_w, heading_h) = if st.headings { (10.0 + 7.0 * digits, sh.default_row_height.clamp(10.0, 60.0)) } else { (0.0, 0.0) };
-    let fit = match opts.fit_to_page {
-        Some(true) => Some((1u16, 1u16)),
-        Some(false) => None,
-        None => st.fit_to.filter(|(w, h)| *w > 0 || *h > 0),
-    };
+    let fit = opts.fit(&st);
     let mut lay = SheetLayout {
         sheet: si,
         settings: st.clone(),
