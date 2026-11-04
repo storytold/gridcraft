@@ -152,7 +152,9 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             if __k.clicked() {
                 act(app, "home.strikethrough", json!({}));
             }
-            let (b, ba) = split_button(ui, Icon::Borders, None, "Borders");
+            let (b, ba) = crate::widgets::split_button_with_icon(ui, None, "Borders", |painter, rect, color| {
+                crate::border_preview::paint_preset_icon(painter, rect, &app.grid.last_border, color);
+            });
             control_keytip(app, ui, &ba, "home.borders");
             if b {
                 act(app, "home.borders", json!({"preset": app.grid.last_border.clone()}));
