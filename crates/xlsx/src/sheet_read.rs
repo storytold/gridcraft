@@ -12,7 +12,7 @@ use gridcraft_model::{
 };
 
 use crate::IoError;
-use crate::fmla::unwrap_google_sheets;
+use crate::fmla::{from_file, unwrap_google_sheets};
 use crate::package::Rel;
 use crate::read::Ctx;
 use crate::styles::read_color;
