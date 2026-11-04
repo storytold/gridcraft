@@ -181,9 +181,9 @@ fn filter_menu_uses_the_table_whose_header_was_clicked() {
 }
 
 #[test]
-fn cell_text_y_moves_monotonically_in_standard_and_tall_rows() {
+fn cell_text_y_moves_monotonically_when_the_text_fits() {
     let rect_std = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 20.0));
-    let gh = 18.5;
+    let gh = 16.0;
     let z = 1.0;
 
     let y_top_std = cell_text_y(VAlign::Top, rect_std, gh, z);
@@ -216,10 +216,10 @@ fn wrapped_cell_text_y_positions_correctly_and_safeguards_overflow() {
     assert!(y_top < y_center);
     assert!(y_center < y_bottom);
 
-    // Overflow case: gh exceeds rect height; Top still starts inside the cell.
+    // Overflow keeps the same top inset as fitting text; the cell clips the excess.
     let gh_overflow = 60.0;
     let y_top_ovf = wrapped_cell_text_y(VAlign::Top, rect, gh_overflow, z);
-    assert!(y_top_ovf >= rect.top());
+    assert_eq!(y_top_ovf, y_top);
 }
 
 #[test]
@@ -231,9 +231,9 @@ fn wrapped_cell_text_y_keeps_vertical_alignment_when_text_is_taller_than_the_row
     let y_center = wrapped_cell_text_y(VAlign::Center, rect, gh, z);
     let y_bottom = wrapped_cell_text_y(VAlign::Bottom, rect, gh, z);
     // Taller text overflows upward for Bottom and both ways for Center (the cell clips it).
-    assert!((y_top - 1.5).abs() < 0.01, "Top starts at the top edge, got {y_top}");
-    assert!((y_center + gh / 2.0 - rect.center().y).abs() < 0.01, "Center is centred, got {y_center}");
-    assert!((y_bottom + gh - (rect.bottom() - 1.5)).abs() < 0.01, "Bottom ends at the bottom edge, got {y_bottom}");
+    assert!((y_top - 1.5 * z).abs() < 0.01, "Top leaves space inside the cell, got {y_top}");
+    assert!((y_center + gh / 2.0 - (rect.center().y + 0.5 * z)).abs() < 0.01, "Center follows the shared insets, got {y_center}");
+    assert!((y_bottom + gh - (rect.bottom() - 0.5 * z)).abs() < 0.01, "Bottom keeps the single-line inset, got {y_bottom}");
 }
 
 /// The screen box of a galley of `size` drawn at `pos` turned by `angle` about `pos`, as egui

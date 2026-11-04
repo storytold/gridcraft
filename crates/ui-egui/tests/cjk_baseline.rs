@@ -112,8 +112,8 @@ fn mixed_script_wrapping_keeps_fixed_row_clips_alignment_and_editor_height() {
             let (text_top, text_bottom) = primary_text_bounds(&shape.galley);
             let expected_top = match col {
                 0 => rect.top() + 1.5 * geo.z,
-                1 => rect.center().y - (text_bottom - text_top) / 2.0,
-                _ => rect.bottom() - (text_bottom - text_top) - 1.5 * geo.z,
+                1 => rect.center().y - (text_bottom - text_top) / 2.0 + 0.5 * geo.z,
+                _ => rect.bottom() - (text_bottom - text_top) - 0.5 * geo.z,
             };
             assert!((shape.pos.y + text_top - expected_top).abs() < 1.0, "vertical alignment stays effective at {zoom}%");
         }
@@ -135,16 +135,19 @@ fn mixed_script_wrapping_keeps_fixed_row_clips_alignment_and_editor_height() {
 
 #[test]
 fn same_row_cells_keep_their_baseline_with_baseline_aligned_fallbacks() {
-    for wrap in [false, true] {
+    for wraps in [[false, false], [true, true], [false, true], [true, false]] {
         for valign in ["Top", "Bottom", "Center"] {
+            let mixed = if wraps[1] && valign == "Top" { "Hello\n中文" } else { "Hello 中文" };
             let ctx = Context::default();
             ctx.set_pixels_per_point(2.0);
             activate(&ctx, theme::font_definitions_for_language(Language::Zh));
             let mut session = Session::new();
             session.new_workbook();
-            session.execute("range.setValues", json!({"range":"A1:B1", "values":[["Hello", "Hello 中文"]]})).unwrap();
+            session.execute("range.setValues", json!({"range":"A1:B1", "values":[[1, mixed]]})).unwrap();
             session.execute("home.columnWidth", json!({"cols":"A:B", "width":180})).unwrap();
-            session.execute("home.formatCells", json!({"range":"A1:B1", "style":{"align":{"wrap":wrap, "v":valign}}})).unwrap();
+            for (cell, wrap) in ["A1", "B1"].into_iter().zip(wraps) {
+                session.execute("home.formatCells", json!({"range":cell, "style":{"align":{"wrap":wrap, "v":valign}}})).unwrap();
+            }
             let font = {
                 let doc = session.active().unwrap();
                 doc.wb.styles.get(doc.wb.active().unwrap().style_id(CellRef::new(0, 0))).font.clone()
@@ -159,28 +162,41 @@ fn same_row_cells_keep_their_baseline_with_baseline_aligned_fallbacks() {
             let sheet = app.session.active().unwrap().wb.active().unwrap();
             let geo = gridcraft_ui_egui::grid::Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
             let mut baselines = Vec::new();
-            for (col, text) in ["Hello", "Hello 中文"].iter().enumerate() {
+            for (col, text) in ["1", mixed].iter().enumerate() {
                 let rect = geo.cell_rect(sheet, CellRef::new(0, col as u32));
                 let shape = out
                     .shapes
                     .iter()
                     .find_map(|s| match &s.shape {
-                        egui::Shape::Text(t) if t.galley.text() == *text && (t.pos.x - rect.left()).abs() < 5.0 * geo.z => Some(t),
+                        egui::Shape::Text(t) if t.galley.text() == *text && rect.contains(t.pos + egui::vec2(0.0, 2.0 * geo.z)) => Some(t),
                         _ => None,
                     })
                     .expect("cell text is painted");
                 assert_shared_baselines(&shape.galley);
+                if valign == "Top" {
+                    let (text_top, _) = primary_text_bounds(&shape.galley);
+                    assert!(shape.pos.y + text_top > rect.top(), "top-aligned text keeps space inside the cell above its primary line box");
+                }
                 let row = shape.galley.rows.first().expect("cell text has a row");
-                let glyph = row.glyphs.iter().find(|glyph| glyph.chr == 'H').expect("Latin baseline is present");
+                let glyph = row.glyphs.first().expect("first-line baseline is present");
                 if text.contains('中') {
+                    assert_eq!(shape.galley.rows.len(), if mixed.contains('\n') { 2 } else { 1 });
                     assert!(
-                        row.glyphs.iter().any(|glyph| glyph.chr == '中' && glyph.font_face_align == egui::epaint::text::FallbackAlign::Baseline),
+                        shape
+                            .galley
+                            .rows
+                            .iter()
+                            .flat_map(|row| &row.glyphs)
+                            .any(|glyph| { glyph.chr == '中' && glyph.font_face_align == egui::epaint::text::FallbackAlign::Baseline }),
                         "CJK fallback must use baseline alignment"
                     );
                 }
                 baselines.push(shape.pos.y + row.pos.y + glyph.pos.y);
             }
-            assert!((baselines[0] - baselines[1]).abs() < 1.0, "same-row cells with wrap={wrap}, {valign} alignment share a baseline: {baselines:?}");
+            assert!(
+                (baselines[0] - baselines[1]).abs() < 0.6,
+                "same-row cells with wraps={wraps:?}, {valign} alignment share a baseline: {baselines:?}"
+            );
         }
     }
 }
