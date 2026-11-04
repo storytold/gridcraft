@@ -74,12 +74,18 @@ fn probe_live_commands(calls: &[(String, String)]) -> Probe {
         if ENV_SENSITIVE.contains(&id.as_str()) || UI_DIALOG_COMMANDS.iter().any(|(c, _)| c == id) {
             continue;
         }
-        let params = if params.is_empty() { serde_json::json!({}) } else { serde_json::from_str(params).unwrap_or_default() };
+        // This UI command applies the persisted accounting code through the engine's
+        // number-format command. Model that dispatch here because the probe has no UI state.
+        let (probe_id, params) = if id == "ui.applyAccountingFormat" {
+            ("home.numberFormat", serde_json::json!({"code": "0.00"}))
+        } else {
+            (id.as_str(), if params.is_empty() { serde_json::json!({}) } else { serde_json::from_str(params).unwrap_or_default() })
+        };
         let mut s = Session::new();
         s.new_workbook();
-        let status = match s.execute(id, params.clone()) {
+        let status = match s.execute(probe_id, params.clone()) {
             Ok(_) => {
-                if s.journal.iter().any(|(jid, _)| jid == id) {
+                if s.journal.iter().any(|(jid, _)| jid == probe_id) {
                     0
                 } else {
                     1
@@ -87,7 +93,13 @@ fn probe_live_commands(calls: &[(String, String)]) -> Probe {
             }
             Err(_) => 2,
         };
-        let key = if params.as_object().is_some_and(|o| !o.is_empty()) { format!("{id} {params}") } else { id.clone() };
+        let key = if id == "ui.applyAccountingFormat" {
+            id.clone()
+        } else if params.as_object().is_some_and(|o| !o.is_empty()) {
+            format!("{id} {params}")
+        } else {
+            id.clone()
+        };
         map.insert(key, status);
     }
     map
@@ -310,7 +322,7 @@ fn render_tests(entries: &[Entry], probe: &Probe) -> String {
                 0 => format!(
                     "sequence(&mut h, {seq:?}, false);\n    assert!(h.state().session.journal.iter().any(|(id, _)| id == {id:?}), \"{seq} must journal {id}\");",
                     seq = e.seq,
-                    id = e.target,
+                    id = if e.target == "ui.applyAccountingFormat" { "home.numberFormat" } else { &e.target },
                 ),
                 1 => format!(
                     "sequence(&mut h, {seq:?}, false);\n    assert!(h.state().message.is_none() && h.state().toast.is_none(), \"{seq} must run {id} cleanly\");",

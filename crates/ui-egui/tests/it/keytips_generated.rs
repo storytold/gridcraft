@@ -259,10 +259,7 @@ fn keytip_h9_() {
 fn keytip_han_() {
     let mut h = harness(blank());
     sequence(&mut h, "HAN", false);
-    assert!(
-        h.state().message.is_some() || h.state().toast.is_some(),
-        "HAN must invoke ui.applyAccountingFormat and surface its missing-params error"
-    );
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "home.numberFormat"), "HAN must journal home.numberFormat");
 }
 
 #[test]

@@ -350,7 +350,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
         ui.horizontal(|ui| {
             let symbol = accounting_button_symbol(&app.ui.accounting_format);
             let (c, ca) = split_button_symbol(ui, &symbol.to_string(), "Accounting Number Format");
-            control_keytip(app, ui, &ca, "home.accounting");
+            control_keytip(app, ui, &ca, "ui.applyAccountingFormat");
             if c {
                 act(app, "home.numberFormat", json!({"code": app.ui.accounting_format.clone()}));
             }
