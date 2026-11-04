@@ -634,6 +634,27 @@ fn paste_tiles_merged_areas_into_every_tile() {
     assert_eq!(merges, ["A1:A2", "B1:B2", "C1:C2", "D1:D2", "F1:F2", "G1:G2", "F3:F4", "G3:G4"]);
 }
 
+/// A repeated paste removes the merged areas it lands on, and only those: one that misses every
+/// copied merge stays, and so does one under a copied merge that falls off the sheet.
+#[test]
+fn paste_tiles_merged_areas_replace_only_the_ones_they_overlap() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("home.mergeCells", json!({"range": "A1:A2"})).unwrap();
+    for range in ["C2:D2", "E1:E2", "C3:C4", "F3:F4", "H6:I6", "A1048576:B1048576"] {
+        s.execute("home.mergeCells", json!({"range": range})).unwrap();
+    }
+    // A1:B2 holds the A1:A2 merge in its first column, so the tiles over C1:F4 merge C1:C2,
+    // E1:E2, C3:C4 and E3:E4; D and F stay unmerged.
+    s.execute("edit.copy", json!({"range": "A1:B2"})).unwrap();
+    s.execute("selection.set", json!({"range": "C1:F4"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A2"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"at": "A1048576"})).unwrap();
+    let merges: Vec<String> = s.doc().unwrap().wb.active().unwrap().merges.iter().map(|m| m.a1()).collect();
+    assert_eq!(merges, ["A1:A2", "F3:F4", "H6:I6", "A1048576:B1048576", "C1:C2", "E1:E2", "C3:C4", "E3:E4"]);
+}
+
 /// A repeated paste gives every cell the copied cell's rule, moved to it, in place of the old one.
 #[test]
 fn paste_tiles_validation_rules_over_the_old_ones() {

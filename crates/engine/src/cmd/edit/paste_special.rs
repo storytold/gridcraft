@@ -82,12 +82,35 @@ fn copy_merges(
         }
     }
     // The copied areas never overlap one another, so only the merges already in the paste area
-    // need checking against them.
+    // need checking against them. Each is checked against the copied merges once, not once per
+    // tile: the tiles that put a copied merge over it are worked out row-wise and column-wise.
     let footprint = RangeRef::new(at, at.offset_clamped(i64::from(tiles_r) * i64::from(h) - 1, i64::from(tiles_c) * i64::from(w) - 1));
+    let hits = |existing: &RangeRef| {
+        merges.iter().any(|m| {
+            let rows = (m.start.row - src.start.row, m.end.row - src.start.row);
+            let cols = (m.start.col - src.start.col, m.end.col - src.start.col);
+            tile_overlaps((existing.start.row, existing.end.row), rows, at.row, h, tiles_r, gridcraft_core::MAX_ROWS)
+                && tile_overlaps((existing.start.col, existing.end.col), cols, at.col, w, tiles_c, gridcraft_core::MAX_COLS)
+        })
+    };
     let sheet = cx.sheet_mut(dest_sheet)?;
-    sheet.merges.retain(|existing| !(existing.intersects(&footprint) && moved.iter().any(|m| existing.intersects(m))));
+    sheet.merges.retain(|existing| !(existing.intersects(&footprint) && hits(existing)));
     sheet.merges.extend(moved);
     Ok(())
+}
+
+/// Whether some tile `t` in `0..tiles`, starting at `at + t * step`, puts the copied span
+/// `m0..=m1` (relative to the tile's start) both on the sheet (below `max`) and over `lo..=hi`.
+fn tile_overlaps((lo, hi): (u32, u32), (m0, m1): (u32, u32), at: u32, step: u32, tiles: u32, max: u32) -> bool {
+    let (lo, hi, m0, m1, at, step, tiles, max) =
+        (i64::from(lo), i64::from(hi), i64::from(m0), i64::from(m1), i64::from(at), i64::from(step), i64::from(tiles), i64::from(max));
+    if step <= 0 || tiles <= 0 || hi < at + m0 || max - 1 < at + m1 {
+        return false;
+    }
+    let below = lo - at - m1;
+    let first = if below <= 0 { 0 } else { (below + step - 1) / step };
+    let last = ((hi - at - m0) / step).min((max - 1 - at - m1) / step).min(tiles - 1);
+    first <= last
 }
 
 /// The validation rule of the copied cell `sc`, moved to `dest` alone. Relative references move
