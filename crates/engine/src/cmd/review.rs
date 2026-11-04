@@ -426,7 +426,13 @@ struct SheetPerformance {
 /// would change what the sheet shows. A cell a conditional format covers, or that sits inside a
 /// table, keeps its formatting too: the rule or the table style decides what is drawn, and the
 /// stored style is what it falls back to, so Optimize leaves the cell alone.
-fn optimizable(wb: &gridcraft_model::Workbook, sh: &gridcraft_model::Sheet, at: CellRef, cell: &gridcraft_model::Cell) -> bool {
+fn optimizable(
+    wb: &gridcraft_model::Workbook,
+    sh: &gridcraft_model::Sheet,
+    arrays: &[gridcraft_core::RangeRef],
+    at: CellRef,
+    cell: &gridcraft_model::Cell,
+) -> bool {
     // The constant-time tests come first: most stored cells are not blank, so the range scans
     // below only run for the few that could be optimized at all. `has_content` counts Python
     // code too: an imported Python cell can cache no value while its code still has to run.
@@ -438,8 +444,16 @@ fn optimizable(wb: &gridcraft_model::Workbook, sh: &gridcraft_model::Sheet, at: 
         && sh.merge_at(at).is_none()
         && !sh.spill.contains_key(&at)
         && !sh.spill_ranges.values().any(|range| range.contains(at))
+        && !arrays.iter().any(|range| range.contains(at))
         && !sh.cond_formats.iter().any(|cf| cf.ranges.iter().any(|range| range.contains(at)))
         && !sh.tables.iter().any(|table| table.range.contains(at))
+}
+
+/// The legacy-array ranges of one sheet, read once so each candidate cell is tested without
+/// walking the store again. A follower cell of a Ctrl+Shift+Enter array shows the array's result,
+/// so its stored formatting belongs to that result and Optimize leaves it alone.
+fn legacy_array_ranges(sh: &gridcraft_model::Sheet) -> Vec<gridcraft_core::RangeRef> {
+    sh.cells.iter().filter_map(|(_, cell)| cell.formula.as_ref().and_then(|formula| formula.array)).collect()
 }
 
 /// Excel's volatile functions. `OFFSET`, `INDIRECT`, `CELL` and `INFO` are volatile in Excel but
@@ -472,9 +486,10 @@ fn check_performance(s: &mut Session, p: &Json) -> Result<Json> {
     let mut sheets: Vec<Json> = Vec::with_capacity(d.wb.sheets.len());
     for (si, sh) in d.wb.sheets.iter().enumerate() {
         let used = sh.cells.len() as u64;
+        let arrays = legacy_array_ranges(sh);
         let mut sheet_optimizable = 0u64;
         for (at, cell) in sh.cells.iter() {
-            if !optimizable(&d.wb, sh, at, cell) {
+            if !optimizable(&d.wb, sh, &arrays, at, cell) {
                 continue;
             }
             sheet_optimizable += 1;
@@ -695,9 +710,10 @@ fn optimize_performance(s: &mut Session, p: &Json) -> Result<Json> {
             skipped.push(json!(sh.name));
             continue;
         }
+        let arrays = legacy_array_ranges(sh);
         let mut cells = Vec::new();
         for (at, cell) in sh.cells.iter() {
-            if optimizable(&d.wb, sh, at, cell) {
+            if optimizable(&d.wb, sh, &arrays, at, cell) {
                 if selected >= OPTIMIZE_LIMIT {
                     truncated = true;
                     break;
@@ -1069,6 +1085,28 @@ mod tests {
         assert!(sh.cell(a1).is_some(), "the unlocked input cell stays");
         assert!(!d.wb.styles.get(sh.style_id(a1)).protection.locked, "and it is still unlocked");
         assert!(sh.cell(CellRef::parse("B1").unwrap()).is_none());
+    }
+
+    #[test]
+    fn check_performance_leaves_legacy_array_followers_alone() {
+        // A follower of a Ctrl+Shift+Enter array stores no formula and shows the array's result:
+        // its formatting belongs to that result, so Optimize must not clear it.
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("selection.set", json!({"range": "A1:A3"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A1", "input": "=ROW()", "array": true})).unwrap();
+        s.execute("home.bold", json!({"range": "A2"})).unwrap();
+        s.execute("home.bold", json!({"range": "C1"})).unwrap();
+        let r = s.execute("review.checkPerformance", json!({})).unwrap();
+        assert_eq!(r["optimizableCells"], 1, "only C1 lies outside the array");
+        assert_eq!(r["cells"][0]["cell"], "C1");
+        assert_eq!(s.execute("review.optimizePerformance", json!({})).unwrap()["optimized"], 1);
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        let a2 = CellRef::parse("A2").unwrap();
+        assert!(sh.cell(a2).is_some_and(|c| c.value.is_empty() && c.formula.is_none()), "A2 is still an array follower");
+        assert!(sh.cell(a2).is_some_and(|c| c.style != StyleId::DEFAULT), "the follower keeps its formatting");
+        assert!(sh.cell(a2).and_then(|c| c.formula.as_ref()).and_then(|f| f.array).is_none(), "A2 is not the array's anchor");
     }
 
     #[test]
