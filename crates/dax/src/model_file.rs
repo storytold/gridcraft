@@ -19,10 +19,13 @@
 //! `-- PowerPivot measures command --` command text as
 //!
 //! ```text
-//! CREATE MEASURE 'Sales'[Total Sales]=SUM(Sales[Amount]);
+//! CREATE MEASURE 'Sales'[Total Sales]=SUM(Sales[Amount])
+//! ;
 //! ```
 //!
-//! and the sibling `<CalculationProperties>` element stores the display format. This module
+//! The terminator goes on its own line: a formula may end in a `//` line comment, and sharing
+//! the line would put the `;` inside it. The sibling `<CalculationProperties>` element stores the
+//! display format. This module
 //! reads those definitions and rewrites the script while preserving every other file's stored
 //! bytes, the backup log's manifests and the virtual directory's bookkeeping.
 //!
@@ -923,7 +926,7 @@ fn mdx_name(name: &str) -> String {
 
 fn measure_command(measure: &ModelMeasure) -> XmlNode {
     let text = format!(
-        "----------------------------------------------------------\n-- PowerPivot measures command (do not modify manually) --\n----------------------------------------------------------\n\n\nCREATE MEASURE {}{}={};\n",
+        "----------------------------------------------------------\n-- PowerPivot measures command (do not modify manually) --\n----------------------------------------------------------\n\n\nCREATE MEASURE {}{}={}\n;\n",
         mdx_table(&measure.table),
         mdx_name(&measure.name),
         measure.formula
@@ -1409,6 +1412,27 @@ mod tests {
         let updated = write_measures(&container, std::slice::from_ref(&measure))?;
         let measures = read_measures(&updated)?;
         assert_eq!(measures, vec![measure]);
+        Ok(())
+    }
+
+    #[test]
+    fn formulas_ending_in_a_line_comment_round_trip() -> Result<()> {
+        // The `;` terminator sits on its own line: written on the formula's line it would land
+        // inside the trailing comment, so `read_measures` would read `// net;` as the formula and
+        // every write/read cycle would corrupt it.
+        let script = "<Load xmlns=\"http://schemas.microsoft.com/analysisservices/2003/engine\"><ObjectDefinition><MdxScript><Name>MdxScript</Name><Commands><Command><Text>CALCULATE;</Text></Command></Commands><CalculationProperties/></MdxScript></ObjectDefinition></Load>";
+        let container = synthetic_container(script)?;
+        let measure = ModelMeasure {
+            table: "Sales".to_string(),
+            name: "Net".to_string(),
+            formula: "SUM(Sales[Amount]) // net".to_string(),
+            format: String::new(),
+        };
+        let updated = write_measures(&container, std::slice::from_ref(&measure))?;
+        assert_eq!(read_measures(&updated)?, vec![measure.clone()]);
+        // A second cycle must be a no-op, not another appended terminator.
+        let twice = write_measures(&updated, std::slice::from_ref(&measure))?;
+        assert_eq!(read_measures(&twice)?, vec![measure]);
         Ok(())
     }
 
