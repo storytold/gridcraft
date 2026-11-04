@@ -211,8 +211,16 @@ pub(crate) mod desktop {
 
     enum Job {
         Scan,
-        Save { uid: u64, id: String, name: String, wb: Arc<Workbook> },
+        Save {
+            uid: u64,
+            id: String,
+            name: String,
+            wb: Arc<Workbook>,
+        },
         Discard(String),
+        /// Keeps the worker busy until released (tests).
+        #[cfg(test)]
+        Hold(Receiver<()>),
     }
 
     enum Done {
@@ -249,6 +257,8 @@ pub(crate) mod desktop {
         copies: Vec<RecoveryInfo>,
         ready: bool,
         error: Option<String>,
+        /// How long Discard waits for the worker's answer.
+        discard_wait: Duration,
     }
 
     impl Recovery {
@@ -272,6 +282,7 @@ pub(crate) mod desktop {
                 copies: Vec::new(),
                 ready: false,
                 error: None,
+                discard_wait: FINISH_WAIT,
             };
             r.send(Job::Scan);
             Ok(r)
@@ -321,7 +332,10 @@ pub(crate) mod desktop {
                     }
                     Done::Saved => {}
                     Done::Discarded(id) => {
+                        // Only now does a listed copy leave the list: until the worker confirms,
+                        // it is still on disk.
                         self.discarding.remove(&id);
+                        self.copies.retain(|c| c.id != id);
                     }
                     Done::DiscardFailed(id, e) => {
                         if let Some(retry) = self.discarding.get_mut(&id) {
@@ -427,6 +441,9 @@ pub(crate) mod desktop {
         /// A listed copy's info and bytes, to restore.
         pub(crate) fn read(&self, id: &str) -> Result<(RecoveryInfo, Vec<u8>), String> {
             let info = self.copies.iter().find(|c| c.id == id).cloned().ok_or("no such recovery copy")?;
+            if self.discarding.contains_key(id) {
+                return Err("This copy is being discarded.".into());
+            }
             let bytes = read_capped(&self.root.join(id).join(COPY), MAX_COPY_BYTES)?;
             Ok((info, bytes))
         }
@@ -453,20 +470,37 @@ pub(crate) mod desktop {
             self.slots.insert(uid, Slot { id: Some(id.to_string()), revision: None, due: Instant::now() + INTERVAL });
         }
 
-        /// Deletes a listed copy, as the person asked: waits for the worker (a few seconds at
-        /// most) and reports a delete that failed, leaving the copy listed to try again.
+        /// Deletes a listed copy, as the person asked. The copy stays listed until the worker
+        /// confirms it is gone; Discard waits for that (a few seconds at most) and otherwise
+        /// says why it isn't gone yet. A failed delete is tried again like any other.
         pub(crate) fn discard(&mut self, id: &str) -> Result<(), String> {
-            let at = self.copies.iter().position(|c| c.id == id).ok_or("no such recovery copy")?;
-            let info = self.copies.remove(at);
-            self.queue_discard(id.to_string());
-            self.receive(Some(Instant::now() + FINISH_WAIT));
-            // Still queued after the wait: from here on a failure is retried like any other.
-            if !matches!(self.discarding.get(id), Some(Some(_))) {
-                return Ok(());
+            if !self.copies.iter().any(|c| c.id == id) {
+                return Err("no such recovery copy".into());
             }
-            self.discarding.remove(id);
-            self.copies.insert(at.min(self.copies.len()), info);
-            Err(self.error.clone().unwrap_or_else(|| "the recovery copy could not be removed".into()))
+            // Not already on its way (a failed one goes again now).
+            if !matches!(self.discarding.get(id), Some(None)) {
+                self.queue_discard(id.to_string());
+            }
+            self.receive(Some(Instant::now() + self.discard_wait));
+            match self.discarding.get(id) {
+                None => Ok(()),
+                Some(None) => Err("The copy is still being discarded; it stays listed until it is gone.".into()),
+                Some(Some(_)) => Err(self.error.clone().unwrap_or_else(|| "the recovery copy could not be removed".into())),
+            }
+        }
+
+        /// Keeps the worker busy until the returned sender is used or dropped (tests).
+        #[cfg(test)]
+        pub(crate) fn hold(&mut self) -> Sender<()> {
+            let (release, held) = mpsc::channel();
+            self.send(Job::Hold(held));
+            release
+        }
+
+        /// Discard's wait for the worker (tests).
+        #[cfg(test)]
+        pub(crate) fn set_discard_wait(&mut self, wait: Duration) {
+            self.discard_wait = wait;
         }
     }
 
@@ -509,6 +543,11 @@ pub(crate) mod desktop {
                     Ok(()) => Done::Discarded(id),
                     Err(e) => Done::DiscardFailed(id, format!("could not remove a recovery copy: {e}")),
                 },
+                #[cfg(test)]
+                Job::Hold(release) => {
+                    let _ = release.recv();
+                    Done::Saved
+                }
             };
             if done.send(answer).is_err() {
                 return;
@@ -891,6 +930,36 @@ mod tests {
         jam(&dir, false);
         b.execute("file.recover", json!({"discard": id})).unwrap();
         assert!(b.recovery_copies().is_empty());
+        assert_eq!(records(&dir), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The bug this prevents: a Discard still under way when its wait ran out reported success
+    /// and dropped the copy from the list; when the delete then failed, the copy stayed on disk
+    /// without being listed.
+    #[test]
+    fn a_discard_still_under_way_keeps_the_copy_listed_until_it_is_gone() {
+        let dir = folder("discard-pending");
+        let mut a = app(&dir);
+        type_candy(&mut a);
+        a.recovery_tick_at(Instant::now() + INTERVAL);
+        a.recovery_worker().unwrap().crash();
+        let mut b = app(&dir);
+        let id = b.recovery_copies()[0].id.clone();
+        jam(&dir, true);
+        let w = b.recovery_worker().unwrap();
+        w.set_discard_wait(std::time::Duration::ZERO);
+        let release = w.hold();
+        assert!(b.execute("file.recover", json!({"discard": id.clone()})).is_err(), "not gone yet");
+        assert_eq!(b.recovery_copies().len(), 1);
+        assert!(b.execute("file.recover", json!({"restore": id.clone()})).is_err(), "no restoring a copy being discarded");
+        release.send(()).unwrap();
+        b.recovery_worker().unwrap().settle();
+        assert_eq!(b.recovery_copies().len(), 1, "the delete failed: still listed");
+        jam(&dir, false);
+        b.recovery_tick_at(Instant::now() + 2 * INTERVAL);
+        b.recovery_worker().unwrap().settle();
+        assert!(b.recovery_copies().is_empty(), "the retry removed it, and the list follows");
         assert_eq!(records(&dir), 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
