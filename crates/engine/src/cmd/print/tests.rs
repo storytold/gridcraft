@@ -36,6 +36,22 @@ fn chart_data_table_prints_formatted_values_and_follows_recalculation() {
 }
 
 #[test]
+fn print_range_covers_text_overflowing_the_last_column() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "AAAAAAAAAAAAAAAAAAAA"})).unwrap();
+    let pv = s.execute("file.printPreview", json!({})).unwrap();
+    assert_eq!(pv["pageList"][0]["range"], "A1:D1");
+    // Text from an earlier column that runs past the last used one counts too.
+    s.execute("cell.set", json!({"cell": "B2", "input": "x"})).unwrap();
+    let pv = s.execute("file.printPreview", json!({})).unwrap();
+    assert_eq!(pv["pageList"][0]["range"], "A1:D2");
+    // A print area set by the user is kept as it is.
+    s.execute("pageLayout.pageSetup", json!({"printArea": "A1:B2"})).unwrap();
+    let pv = s.execute("file.printPreview", json!({})).unwrap();
+    assert_eq!(pv["pageList"][0]["range"], "A1:B2");
+}
+
+#[test]
 fn pdf_export_keeps_safe_links_on_their_printed_pages() {
     let mut s = s();
     s.execute("insert.link", json!({"cell": "A1", "target": "https://example.org/report"})).unwrap();
