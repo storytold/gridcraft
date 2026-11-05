@@ -12,8 +12,8 @@ use gridcraft_core::date::datetime_from_serial;
 pub use gridcraft_core::quote_sheet;
 use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, split_sheet};
 use gridcraft_model::{
-    BorderLine, BorderStyle, Cell, Chart, Color, Fill, HAlign, NumFmt, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs,
-    PivotSort, PivotTable, PivotValue, Series, Style, StyleId, Workbook,
+    BorderLine, BorderStyle, Cell, Chart, Color, Fill, HAlign, NumFmt, PivotBaseItem, PivotDateGroup, PivotField, PivotFilter, PivotFunc,
+    PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue, Series, Style, StyleId, Workbook,
 };
 
 use crate::pivot_calc::CalcSet;
@@ -22,6 +22,7 @@ mod charts;
 mod compute;
 mod items;
 mod output;
+mod show_as;
 
 use charts::rebind_charts;
 pub use charts::{chart_link, chart_series, clear_output, links_to, parse_chart_link};

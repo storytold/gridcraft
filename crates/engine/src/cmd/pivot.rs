@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use gridcraft_core::{CellRef, RangeRef};
 use gridcraft_model::{
-    Anchor, Cell, Chart, ChartKind, LegendPos, NumFmt, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs,
-    PivotSort, PivotTable, PivotValue, Sheet, StyleId, Workbook,
+    Anchor, Cell, Chart, ChartKind, LegendPos, NumFmt, PivotBaseItem, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc,
+    PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue, Sheet, StyleId, Workbook,
 };
 use serde_json::{Value as Json, json};
 
@@ -113,7 +113,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Value Field Settings",
             ["PivotTable Analyze", "Active Field"],
             None,
-            "{pivot?, field: caption or source field | index: n, func?, name?, showAs?: normal|percentOfGrandTotal|percentOfColumnTotal|percentOfRowTotal|runningTotal|rank, numberFormat?: \"#,##0\" | null, replace?}",
+            "{pivot?, field: caption or source field | index: n, func?, name?, showAs?: normal|percentOfGrandTotal|percentOfColumnTotal|percentOfRowTotal|percentOf|percentOfParentRowTotal|differenceFrom|percentDifferenceFrom|runningTotal|percentRunningTotal|rankAscending|rank|index, baseField?: row or column field | null (default: the first row field, else the first column field; percentOf, the differences, the running totals and the ranks move along it), baseItem?: \"(previous)\" (default) | \"(next)\" | an item label of the base field | null (percentOf and the differences measure against it), numberFormat?: \"#,##0\" | null, replace?}",
             has_doc,
             value_settings
         ),
