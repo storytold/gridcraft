@@ -2,7 +2,7 @@ use gridcraft_pdf::{FontCatalog, PdfDoc};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output = std::env::args().nth(1).unwrap_or_else(|| "target/thai-pdf-sample.pdf".to_string());
-    let catalog = FontCatalog::system();
+    let catalog = FontCatalog::bundled();
     let font = catalog.face_for("Arial", false, false, "น้ำ กุ้ง ผู้ใช้ เก้าอี้ ยอดรวม บาท").map_err(std::io::Error::other)?;
     let mut doc = PdfDoc::new();
     doc.info.title = "GridCraft Thai PDF regression sample".to_string();

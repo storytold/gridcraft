@@ -13,8 +13,8 @@
 //! - Coordinates are points with a **top-left origin** (y grows down); text `y` is the baseline.
 //!
 //! Streams are written uncompressed (images use the trivial RunLengthDecode filter) so the crate
-//! keeps vector and image output self-contained; the Unicode path uses HarfRust, fontdb and
-//! ttf-parser without depending on the UI crate.
+//! keeps vector and image output self-contained; the Unicode path uses HarfRust and ttf-parser
+//! with pinned bundled or explicitly supplied fonts, without depending on the UI crate.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 

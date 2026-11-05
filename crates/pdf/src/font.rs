@@ -6,7 +6,6 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
-use fontdb::{Database, Family, Query, Style, Weight};
 use harfrust::{FontRef, ShapeOptions, ShaperData, UnicodeBuffer};
 use ttf_parser::Face;
 use unicode_segmentation::UnicodeSegmentation;
@@ -15,8 +14,6 @@ const MAX_FONT_BYTES: usize = 32 * 1024 * 1024;
 const MAX_COVERAGE_SCALARS: usize = 256;
 const MAX_LOOKUP_CACHE_ENTRIES: usize = 512;
 const MAX_LOOKUP_CACHE_BYTES: usize = 64 * 1024;
-const MAX_LOADED_FACE_CACHE_ENTRIES: usize = 128;
-const MAX_LOADED_FACE_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_SCALAR_COVERAGE_ENTRIES: usize = 4096;
 const SCALAR_COVERAGE_WEIGHT: usize = std::mem::size_of::<(char, bool)>();
 const MAX_SCALAR_PROBES_PER_MISS: usize = 8;
@@ -415,7 +412,6 @@ struct LookupKey {
 #[derive(Clone, Copy, Debug)]
 enum FaceRef {
     Supplied(usize),
-    System(fontdb::ID),
 }
 
 struct CacheEntry<V> {
@@ -473,15 +469,11 @@ impl<K: Eq + std::hash::Hash + Clone, V: Clone> BoundedCache<K, V> {
 struct CatalogCounters {
     lookup_hits: usize,
     lookup_misses: usize,
-    system_face_loads: usize,
-    system_face_cache_hits: usize,
-    system_face_parses: usize,
     coverage_checks: usize,
 }
 
 struct CatalogCache {
     lookups: BoundedCache<LookupKey, Option<FaceRef>>,
-    loaded_faces: BoundedCache<fontdb::ID, Option<PdfFont>>,
     scalar_coverage: BoundedCache<char, bool>,
     counters: CatalogCounters,
 }
@@ -490,31 +482,23 @@ impl Default for CatalogCache {
     fn default() -> Self {
         Self {
             lookups: BoundedCache::new(MAX_LOOKUP_CACHE_ENTRIES, MAX_LOOKUP_CACHE_BYTES),
-            loaded_faces: BoundedCache::new(MAX_LOADED_FACE_CACHE_ENTRIES, MAX_LOADED_FACE_CACHE_BYTES),
             scalar_coverage: BoundedCache::new(MAX_SCALAR_COVERAGE_ENTRIES, MAX_SCALAR_COVERAGE_ENTRIES * SCALAR_COVERAGE_WEIGHT),
             counters: CatalogCounters::default(),
         }
     }
 }
 
-/// Resolves native system faces. WASM callers must use [`PdfFont::from_bytes`] with explicitly
-/// supplied font data; WASM has no implicit system-font directory. Face and lookup caches live
-/// only as long as this catalog (normally one PDF export).
+/// Resolves only the project's pinned craft-fonts bundle and explicitly supplied font data.
+/// Installed system fonts are never scanned, so the same inputs choose the same face on every
+/// machine. Face and lookup caches live only as long as this catalog (normally one PDF export).
 pub struct FontCatalog {
-    db: Database,
     supplied: Vec<PdfFont>,
     cache: Mutex<CatalogCache>,
 }
 
 impl FontCatalog {
-    pub fn system() -> Self {
-        #[cfg(not(target_arch = "wasm32"))]
-        let mut db = Database::new();
-        #[cfg(not(target_arch = "wasm32"))]
-        db.load_system_fonts();
-        #[cfg(target_arch = "wasm32")]
-        let db = Database::new();
-        let mut catalog = Self { db, supplied: Vec::new(), cache: Mutex::new(CatalogCache::default()) };
+    pub fn bundled() -> Self {
+        let mut catalog = Self { supplied: Vec::new(), cache: Mutex::new(CatalogCache::default()) };
         for (_source, bytes) in CRAFT_FONTS {
             let face_count = collection_face_count(bytes);
             let shared: Arc<[u8]> = Arc::from(*bytes);
@@ -526,7 +510,7 @@ impl FontCatalog {
     }
 
     pub fn empty() -> Self {
-        Self { db: Database::new(), supplied: Vec::new(), cache: Mutex::new(CatalogCache::default()) }
+        Self { supplied: Vec::new(), cache: Mutex::new(CatalogCache::default()) }
     }
 
     pub fn add_font(&mut self, bytes: impl Into<Arc<[u8]>>, face_index: u32) -> Result<(), String> {
@@ -539,11 +523,11 @@ impl FontCatalog {
 
     pub fn has_family(&self, family: &str) -> bool {
         self.supplied.iter().any(|face| face.family.eq_ignore_ascii_case(family))
-            || self.db.faces().any(|face| face.families.iter().any(|(name, _)| name.eq_ignore_ascii_case(family)))
     }
 
-    /// Selects the requested family/style where it covers the cluster, then an installed face
-    /// that covers it. Workbook Latin characters therefore remain in the selected family.
+    /// Selects the requested family/style where it covers the cluster, then a bundled or
+    /// explicitly supplied face that covers it. Workbook Latin characters therefore remain
+    /// in the selected family when that face is available.
     pub fn face_for(&self, family: &str, bold: bool, italic: bool, cluster: &str) -> Result<PdfFont, String> {
         self.lookup_face(family, bold, italic, cluster, false)
     }
@@ -629,23 +613,10 @@ impl FontCatalog {
             FaceRef::Supplied(index) => {
                 self.supplied.get(index).cloned().ok_or_else(|| "cached supplied font face is no longer available".to_string())
             }
-            FaceRef::System(id) => self.load(id)?.ok_or_else(|| "cached system font face is no longer embeddable".to_string()),
         }
     }
 
     fn resolve_requested_face(&self, family: &str, bold: bool, italic: bool, cluster: &str) -> Result<Option<FaceRef>, String> {
-        let weight = if bold { Weight::BOLD } else { Weight::NORMAL };
-        let style = if italic { Style::Italic } else { Style::Normal };
-        let requested = Query { families: &[Family::Name(family)], weight, stretch: fontdb::Stretch::Normal, style };
-        if let Some(id) = self.db.query(&requested)
-            && self.db.face(id).is_some_and(|face_info| face_info.families.iter().any(|(name, _)| name.eq_ignore_ascii_case(family)))
-            && let Some(face) = self.load(id)?
-            && face.bold == bold
-            && face.italic == italic
-            && self.covers(&face, cluster)
-        {
-            return Ok(Some(FaceRef::System(id)));
-        }
         if let Some((index, _)) =
             self.supplied.iter().enumerate().find(|(_, face)| {
                 face.family.eq_ignore_ascii_case(family) && face.bold == bold && face.italic == italic && self.covers(face, cluster)
@@ -660,20 +631,6 @@ impl FontCatalog {
         if let Some(face) = self.resolve_requested_face(family, bold, italic, cluster)? {
             return Ok(face);
         }
-        let weight = if bold { Weight::BOLD } else { Weight::NORMAL };
-        let style = if italic { Style::Italic } else { Style::Normal };
-        for require_style in [true, false] {
-            for face_info in self.db.faces() {
-                if require_style && (face_info.weight != weight || face_info.style != style) {
-                    continue;
-                }
-                if let Some(face) = self.load(face_info.id)?
-                    && self.covers(&face, cluster)
-                {
-                    return Ok(FaceRef::System(face_info.id));
-                }
-            }
-        }
         if let Some((index, _)) =
             self.supplied.iter().enumerate().find(|(_, face)| face.bold == bold && face.italic == italic && self.covers(face, cluster))
         {
@@ -683,34 +640,6 @@ impl FontCatalog {
             return Ok(FaceRef::Supplied(index));
         }
         Err(no_face_error(family, bold, italic, cluster))
-    }
-
-    fn load(&self, id: fontdb::ID) -> Result<Option<PdfFont>, String> {
-        let mut cache = self.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(face) = cache.loaded_faces.get(&id) {
-            cache.counters.system_face_cache_hits = cache.counters.system_face_cache_hits.saturating_add(1);
-            return Ok(face);
-        }
-        cache.counters.system_face_loads = cache.counters.system_face_loads.saturating_add(1);
-        let mut result = None;
-        let family_name = self.db.face(id).and_then(|face| face.families.first().map(|(name, _)| name.clone()));
-        self.db.with_face_data(id, |data, index| {
-            if data.len() <= MAX_FONT_BYTES {
-                cache.counters.system_face_parses = cache.counters.system_face_parses.saturating_add(1);
-                result = PdfFont::from_bytes(Arc::<[u8]>::from(data), index).ok().map(|mut font| {
-                    if let Some(name) = family_name {
-                        font.family = name;
-                        if font.postscript_name == "Unknown" {
-                            font.postscript_name = font.family.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
-                        }
-                    }
-                    font
-                });
-            }
-        });
-        let weight = result.as_ref().map_or(1, |face| face.bytes.len().saturating_add(1));
-        cache.loaded_faces.insert(id, result.clone(), weight);
-        Ok(result)
     }
 
     fn covers(&self, face: &PdfFont, cluster: &str) -> bool {
@@ -723,7 +652,7 @@ impl FontCatalog {
 
 fn no_face_error(family: &str, bold: bool, italic: bool, cluster: &str) -> String {
     format!(
-        "no installed embeddable font covers `{cluster}` (requested family: `{family}`, bold: {bold}, italic: {italic}); provide licensed font files to the PDF font catalog"
+        "no bundled or supplied embeddable font covers `{cluster}` (requested family: `{family}`, bold: {bold}, italic: {italic}); provide licensed font files to the PDF font catalog"
     )
 }
 
@@ -934,39 +863,43 @@ mod cache_tests {
     }
 
     #[test]
-    fn repeated_face_lookup_does_not_repeat_system_load_parse_or_coverage_work() {
-        let catalog = FontCatalog::system();
-        let first = match catalog.face_for("Calibri", false, false, "a") {
+    fn repeated_face_lookup_does_not_repeat_font_parse_or_coverage_work() {
+        let catalog = FontCatalog::bundled();
+        let Some(source) = catalog.supplied.iter().find(|face| face.covers("a")) else {
+            eprintln!("skipping bundled-font cache regression; no bundled face covers Latin text");
+            return;
+        };
+        let first = match catalog.face_for(&source.family, false, false, "a") {
             Ok(face) => face,
             Err(error) => {
-                eprintln!("skipping system-font cache regression; no embeddable Latin fallback: {error}");
+                eprintln!("skipping bundled-font cache regression; no embeddable Latin fallback: {error}");
                 return;
             }
         };
         let first_counts = catalog.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).counters;
         for _ in 0..199 {
-            let face = catalog.face_for("Calibri", false, false, "a").expect("cached lookup keeps returning its selected face");
+            let face = catalog.face_for(&first.family, false, false, "a").expect("cached lookup keeps returning its selected face");
             assert!(first.same_face(&face), "cache returns clones of the same selected face");
         }
         let cache = catalog.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(cache.counters.lookup_misses, 1);
         assert_eq!(cache.counters.lookup_hits, 199);
-        assert_eq!(cache.counters.system_face_loads, first_counts.system_face_loads);
-        assert_eq!(cache.counters.system_face_parses, first_counts.system_face_parses);
         assert_eq!(cache.counters.coverage_checks, first_counts.coverage_checks);
-        assert!(cache.loaded_faces.entries.len() <= MAX_LOADED_FACE_CACHE_ENTRIES);
-        assert!(cache.loaded_faces.bytes <= MAX_LOADED_FACE_CACHE_BYTES);
         assert!(cache.lookups.entries.len() <= MAX_LOOKUP_CACHE_ENTRIES);
         assert!(cache.lookups.bytes <= MAX_LOOKUP_CACHE_BYTES);
     }
 
     #[test]
     fn coverage_and_shaper_tables_are_shared_by_face_clones() {
-        let catalog = FontCatalog::system();
-        let face = match catalog.face_for("Calibri", false, false, "a") {
+        let catalog = FontCatalog::bundled();
+        let Some(source) = catalog.supplied.iter().find(|face| face.covers("a")) else {
+            eprintln!("skipping face-cache regression; no bundled face covers Latin text");
+            return;
+        };
+        let face = match catalog.face_for(&source.family, false, false, "a") {
             Ok(face) => face,
             Err(error) => {
-                eprintln!("skipping face-cache regression; no embeddable Latin font: {error}");
+                eprintln!("skipping face-cache regression; no embeddable bundled font: {error}");
                 return;
             }
         };
@@ -989,18 +922,15 @@ mod cache_tests {
 
     #[test]
     fn adding_a_supplied_font_invalidates_cached_negative_resolution() {
-        let source_catalog = FontCatalog::system();
-        let source = match source_catalog.face_for("Arial", false, false, "a") {
-            Ok(face) => face,
-            Err(error) => {
-                eprintln!("skipping supplied-font cache invalidation regression; no embeddable font: {error}");
-                return;
-            }
+        let source_catalog = FontCatalog::bundled();
+        let Some(source) = source_catalog.supplied.iter().find(|face| face.covers("a")).cloned() else {
+            eprintln!("skipping supplied-font cache invalidation regression; no bundled face covers Latin text");
+            return;
         };
         let family = source.family.clone();
         let mut catalog = FontCatalog::empty();
         assert!(catalog.face_for(&family, false, false, "a").is_err());
-        catalog.add_font(Arc::clone(&source.bytes), 0).expect("validated system face can be supplied");
+        catalog.add_font(Arc::clone(&source.bytes), 0).expect("validated bundled face can be supplied");
         let resolved = catalog.face_for(&family, false, false, "a").expect("new supplied face takes precedence after invalidation");
         assert!(resolved.same_face(&catalog.supplied[0]));
         let cache = catalog.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1009,37 +939,19 @@ mod cache_tests {
     }
 
     #[test]
-    fn installed_fallback_precedes_supplied_faces_for_an_unavailable_family() {
-        let mut catalog = FontCatalog::system();
-        let mut candidates: Vec<(fontdb::ID, PdfFont)> = Vec::new();
-        for info in catalog.db.faces() {
-            if let Some(face) = catalog.load(info.id).expect("system face loading returns a result")
-                && !face.bold
-                && !face.italic
-                && face.covers("A")
-                && info.families.iter().any(|(name, _)| name.eq_ignore_ascii_case(&face.family))
-                && candidates.iter().all(|(_, prior)| !prior.family.eq_ignore_ascii_case(&face.family))
-            {
-                candidates.push((info.id, face));
-                if candidates.len() == 2 {
-                    break;
-                }
-            }
-        }
-        if candidates.len() < 2 {
-            eprintln!("skipping installed-font precedence regression; fewer than two embeddable system families are available");
+    fn bundled_fallback_is_stable_for_an_unavailable_family() {
+        let catalog = FontCatalog::bundled();
+        let Some(first) = catalog.supplied.iter().find(|face| !face.bold && !face.italic && face.covers("A")) else {
+            eprintln!("skipping bundled-font fallback regression; no bundled regular face covers Latin text");
             return;
-        }
-
-        let supplied_face = candidates.remove(1).1;
-        catalog.add_font(Arc::clone(&supplied_face.bytes), supplied_face.face_index).expect("system font can be re-added as supplied data");
-
-        let mut missing_family = "GridCraft Missing Family".to_string();
-        while catalog.has_family(&missing_family) {
-            missing_family.push('x');
-        }
-        let resolved = catalog.resolve_face(&missing_family, false, false, "A").expect("installed family fallback is available");
-        assert!(matches!(resolved, FaceRef::System(_)), "installed system faces take precedence over supplied fallback faces");
+        };
+        let missing_family = "GridCraft Missing Family";
+        assert!(!catalog.has_family(missing_family));
+        let resolved = catalog.resolve_face(missing_family, false, false, "A").expect("bundled fallback is available");
+        assert!(
+            matches!(resolved, FaceRef::Supplied(index) if catalog.supplied.get(index).is_some_and(|face| face.same_face(first))),
+            "the pinned bundle supplies the fallback face"
+        );
     }
 
     #[test]
@@ -1058,33 +970,25 @@ mod cache_tests {
 
     #[test]
     fn uncovered_scalars_do_not_rescan_faces_after_lookup_and_face_cache_eviction() {
-        let source_catalog = FontCatalog::system();
-        let source = match source_catalog.face_for("Arial", false, false, "A") {
-            Ok(font) => font,
-            Err(error) => {
-                eprintln!("skipping catalog scan regression; no embeddable source face: {error}");
-                return;
-            }
+        let source_catalog = FontCatalog::bundled();
+        let Some(source) = source_catalog.supplied.iter().find(|face| face.covers("A")).cloned() else {
+            eprintln!("skipping catalog coverage regression; no bundled face covers Latin text");
+            return;
         };
         let mut catalog = FontCatalog::empty();
-        catalog.db.load_font_data(source.bytes.to_vec());
-        assert!(catalog.db.faces().next().is_some(), "the regression must exercise a real system-font scan");
+        catalog.add_font(Arc::clone(&source.bytes), source.face_index).expect("bundled face is accepted as supplied data");
         assert!(catalog.face_for("Missing", false, false, "A\u{10ffff}").is_err());
         let before = catalog.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).counters;
-        assert!(before.system_face_loads > 0);
         for mark in ['\u{301}', '\u{302}', '\u{303}', '\u{304}'] {
             {
                 let mut cache = catalog.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 cache.lookups.clear();
-                cache.loaded_faces.clear();
             }
             let cluster = format!("\u{10ffff}{mark}");
             assert!(catalog.face_for("Another missing family", true, true, &cluster).is_err());
         }
         let after = catalog.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).counters;
         assert_eq!(after.coverage_checks, before.coverage_checks, "known uncovered scalars must bypass subsequent face scans");
-        assert_eq!(after.system_face_loads, before.system_face_loads, "evicting font bytes must not discard scalar coverage knowledge");
-        assert_eq!(after.system_face_parses, before.system_face_parses);
         assert!(catalog.face_for("Missing", false, false, "A").is_ok(), "a failed compound lookup must not poison its covered scalars");
     }
 
@@ -1107,32 +1011,18 @@ mod cache_tests {
     #[test]
     fn cff_family_miss_does_not_select_or_poison_another_family() {
         let Some(root) = std::env::var_os("CRAFT_FONTS_DIR") else {
-            assert!(std::env::var_os("GRIDCRAFT_REQUIRE_THAI_FONT").is_none(), "CI must exercise an installed CFF family");
+            assert!(std::env::var_os("GRIDCRAFT_REQUIRE_THAI_FONT").is_none(), "CI must exercise the configured CFF font fixture");
             return;
         };
         let path = std::path::PathBuf::from(root).join("fonts/noto-sans-cjk-sc/NotoSansCJKsc-Regular.otf");
         if !path.exists() {
             return; // Custom font manifests need not contain this CFF fixture.
         }
-        let mut catalog = FontCatalog::empty();
-        catalog.db.load_font_data(std::fs::read(path).unwrap());
-        assert!(catalog.has_family("Noto Sans CJK SC"));
-        for (_, bytes) in CRAFT_FONTS {
-            let _ = catalog.add_font(Arc::<[u8]>::from(*bytes), 0);
-        }
-        if catalog.face_for("Missing", false, false, "ก").is_err() {
-            assert!(std::env::var_os("GRIDCRAFT_REQUIRE_THAI_FONT").is_none(), "CI must supply the Thai fallback fixture");
-            return;
-        }
-        let before = catalog.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).counters;
+        let bytes = std::fs::read(path).unwrap();
+        assert!(PdfFont::from_bytes(Arc::<[u8]>::from(bytes.clone()), 0).is_err(), "CFF faces are not accepted as embeddable PDF fonts");
+        let catalog = FontCatalog::bundled();
+        assert!(!catalog.has_family("Noto Sans CJK SC"), "fonts outside the pinned manifest are not silently loaded from the host");
         assert!(catalog.family_face_for("Noto Sans CJK SC", false, false, "A").is_err());
-        assert!(catalog.family_face_for("Noto Sans CJK SC", true, false, "A").is_err());
-        assert_eq!(
-            catalog.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).counters.coverage_checks,
-            before.coverage_checks,
-            "an unembeddable Latin family must not scan unrelated faces"
-        );
-        assert!(catalog.face_for("Noto Sans CJK SC", false, false, "ก").is_ok(), "a family-only miss must not poison script fallback");
     }
 
     #[test]
@@ -1152,8 +1042,12 @@ mod cache_tests {
 
     #[test]
     fn face_identity_is_shared_only_by_clones() {
-        let catalog = FontCatalog::system();
-        let face = match catalog.face_for("Arial", false, false, "a") {
+        let catalog = FontCatalog::bundled();
+        let Some(source) = catalog.supplied.iter().find(|face| face.covers("a")) else {
+            eprintln!("skipping font identity regression; no bundled font covers Latin text");
+            return;
+        };
+        let face = match catalog.face_for(&source.family, false, false, "a") {
             Ok(face) => face,
             Err(error) => {
                 eprintln!("skipping font identity regression; no embeddable font: {error}");
@@ -1168,11 +1062,15 @@ mod cache_tests {
 
     #[test]
     fn restricted_embedding_permissions_remain_rejected() {
-        let catalog = FontCatalog::system();
-        let face = match catalog.face_for("Arial", false, false, "a") {
+        let catalog = FontCatalog::bundled();
+        let Some(source) = catalog.supplied.iter().find(|face| face.covers("a")) else {
+            eprintln!("skipping restricted-font regression; no bundled font covers Latin text");
+            return;
+        };
+        let face = match catalog.face_for(&source.family, false, false, "a") {
             Ok(face) => face,
             Err(error) => {
-                eprintln!("skipping restricted-font regression; no embeddable system font: {error}");
+                eprintln!("skipping restricted-font regression; no embeddable bundled font: {error}");
                 return;
             }
         };

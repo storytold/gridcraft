@@ -10,7 +10,6 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
-fontdb = "0.23"
 harfrust = "0.12"
 subsetter = { version = "0.2.6", default-features = false }
 ttf-parser = "0.25"

@@ -93,7 +93,7 @@ pub const MAX_PAGES: usize = 2000;
 
 /// Renders laid-out sheets to a PDF.
 pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> std::result::Result<(Vec<u8>, usize), String> {
-    render_pdf_with_catalog(wb, layouts, file, path, &FontCatalog::system())
+    render_pdf_with_catalog(wb, layouts, file, path, &FontCatalog::bundled())
 }
 
 fn render_pdf_with_catalog(
@@ -199,7 +199,7 @@ fn build_pdf(s: &Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
     let d = s.doc()?;
     let lays = layouts(&d.wb, &opts);
     let path = d.path.clone().unwrap_or_default();
-    let mut catalog = FontCatalog::system();
+    let mut catalog = FontCatalog::bundled();
     if let Some(fonts) = p.get("pdfFonts").and_then(Json::as_array) {
         if fonts.len() > 8 {
             return Err(bad(cmd, "`pdfFonts` accepts at most 8 font faces"));

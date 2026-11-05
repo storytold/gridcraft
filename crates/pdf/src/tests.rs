@@ -99,7 +99,7 @@ fn compiled_thai_fixture_is_embeddable_and_shapes_marks() {
 #[test]
 fn thai_text_is_not_silently_replaced_by_winansi_question_marks() {
     assert_eq!(win_ansi('น'), b'?', "baseline: the former standard-font path replaced Thai with '?' ");
-    let catalog = FontCatalog::system();
+    let catalog = FontCatalog::bundled();
     let font = match catalog.face_for("Arial", false, false, "น้ำ") {
         Ok(font) => font,
         Err(error) => {
@@ -179,7 +179,7 @@ fn missing_or_corrupt_unicode_fonts_return_errors_without_panicking() {
     assert!(PdfFont::from_bytes(Arc::<[u8]>::from(collection), 1).is_err(), "wrong TTC face index must be rejected safely");
     let catalog = FontCatalog::empty();
     let error = catalog.face_for("Unavailable Family", false, false, "ภาษาไทย").err().unwrap_or_default();
-    assert!(error.contains("no installed embeddable font"));
+    assert!(error.contains("no bundled or supplied embeddable font"));
 }
 
 #[test]
@@ -204,7 +204,7 @@ fn source_clusters_map_logical_unicode_once_and_long_runs_need_no_semantic_chunk
 
 #[test]
 fn repeated_visible_glyphs_exceeding_cid_space_are_accepted() {
-    let catalog = FontCatalog::system();
+    let catalog = FontCatalog::bundled();
     let font = match catalog.face_for("Arial", false, false, "a") {
         Ok(font) => font,
         Err(error) => {
@@ -212,7 +212,7 @@ fn repeated_visible_glyphs_exceeding_cid_space_are_accepted() {
             return;
         }
     };
-    let shaped = font.shape("a").expect("installed font shapes a repeated Latin glyph");
+    let shaped = font.shape("a").expect("bundled font shapes a repeated Latin glyph");
     assert_eq!(shaped.len(), 1);
     let expected_glyph_id = u16::try_from(shaped[0].glyph_id).expect("font glyph ID fits TrueType CIDToGIDMap");
     let expected_width = shaped[0].x_advance;
@@ -254,7 +254,7 @@ fn repeated_visible_glyphs_exceeding_cid_space_are_accepted() {
 
 #[test]
 fn cid_reuse_keeps_unicode_glyph_and_contextual_width_distinct() {
-    let catalog = FontCatalog::system();
+    let catalog = FontCatalog::bundled();
     let font = match catalog.face_for("Arial", false, false, "a") {
         Ok(font) => font,
         Err(error) => {
@@ -275,7 +275,7 @@ fn cid_reuse_keeps_unicode_glyph_and_contextual_width_distinct() {
 
 #[test]
 fn cid_resource_accepts_the_last_valid_cid_and_reports_true_mapping_exhaustion() {
-    let catalog = FontCatalog::system();
+    let catalog = FontCatalog::bundled();
     let font = match catalog.face_for("Arial", false, false, "a") {
         Ok(font) => font,
         Err(error) => {
@@ -296,7 +296,7 @@ fn cid_resource_accepts_the_last_valid_cid_and_reports_true_mapping_exhaustion()
 
 #[test]
 fn equal_font_names_do_not_merge_distinct_face_bytes() {
-    let catalog = FontCatalog::system();
+    let catalog = FontCatalog::bundled();
     let font = match catalog.face_for("Arial", false, false, "a") {
         Ok(font) => font,
         Err(error) => {
@@ -320,8 +320,8 @@ fn equal_font_names_do_not_merge_distinct_face_bytes() {
 }
 
 #[test]
-fn installed_thai_font_families_and_style_roles_shape_when_available() {
-    let catalog = FontCatalog::system();
+fn bundled_thai_font_families_and_style_roles_shape_when_available() {
+    let catalog = FontCatalog::bundled();
     let mut tested_families = 0;
     let available_families = ["Leelawadee UI", "Tahoma"].iter().filter(|family| catalog.has_family(family)).count();
     for family in ["Leelawadee UI", "Tahoma"] {
@@ -337,22 +337,22 @@ fn installed_thai_font_families_and_style_roles_shape_when_available() {
             assert!(!font.shape("ผู้ใช้").unwrap_or_default().is_empty());
             found_role = true;
         }
-        assert!(found_role, "installed Thai family `{family}` has no tested style role covering Thai");
+        assert!(found_role, "bundled Thai family `{family}` has no tested style role covering Thai");
         tested_families += 1;
     }
     if tested_families == 0 {
-        eprintln!("No Leelawadee UI or Tahoma family installed; two-family Thai font checks skipped.");
+        eprintln!("No bundled Leelawadee UI or Tahoma family; two-family Thai font checks skipped.");
     } else {
         assert_eq!(tested_families, available_families);
     }
 }
 
 #[test]
-fn script_fallback_shapes_all_requested_style_roles_when_available() {
-    let catalog = FontCatalog::system();
+fn bundled_script_fallback_shapes_all_requested_style_roles_when_available() {
+    let catalog = FontCatalog::bundled();
     if catalog.face_for("Arial", false, false, "ผู้ใช้").is_err() {
         assert!(std::env::var_os("GRIDCRAFT_REQUIRE_THAI_FONT").is_none(), "CI requires an embeddable Thai font for style fallback tests");
-        eprintln!("No embeddable Thai font is installed; four-role fallback check skipped.");
+        eprintln!("No bundled embeddable Thai font; four-role fallback check skipped.");
         return;
     }
     for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
@@ -706,12 +706,12 @@ fn outline(face: &ttf_parser::Face, glyph: u16) -> Vec<String> {
     recorder.0
 }
 
-/// The pinned Noto Sans Thai fixture when it is compiled in, else an installed Thai face.
+/// The pinned Noto Sans Thai fixture when it is compiled in, else another bundled Thai face.
 fn thai_face() -> Option<PdfFont> {
     if let Some((_, bytes)) = crate::font::CRAFT_FONTS.iter().find(|(path, _)| *path == "fonts/noto-sans-thai/NotoSansThai.ttf") {
         return Some(PdfFont::from_bytes(Arc::<[u8]>::from(*bytes), 0).unwrap());
     }
-    match FontCatalog::system().face_for("Arial", false, false, "ภาษาไทย") {
+    match FontCatalog::bundled().face_for("Arial", false, false, "ภาษาไทย") {
         Ok(font) => Some(font),
         Err(error) => {
             assert!(std::env::var_os("GRIDCRAFT_REQUIRE_THAI_FONT").is_none(), "CI requires an embeddable Thai font: {error}");
@@ -730,7 +730,7 @@ fn any_face() -> Option<(PdfFont, &'static str)> {
     {
         return Some((font, "ภาษาไทย"));
     }
-    match FontCatalog::system().face_for("Arial", false, false, "Total") {
+    match FontCatalog::bundled().face_for("Arial", false, false, "Total") {
         Ok(font) => Some((font, "Total")),
         Err(error) => {
             eprintln!("skipping font subset checks; no embeddable face: {error}");
@@ -752,9 +752,9 @@ fn thai_and_symbol_faces_embed_subsets_that_keep_outlines_and_text() {
     const THAI: &str = "ภาษาไทย น้ำ ผู้ใช้";
     let Some(thai) = thai_face() else { return };
     let mut runs = vec![(thai, THAI)];
-    match FontCatalog::system().face_for("Arial", false, false, "→") {
+    match FontCatalog::bundled().face_for("Arial", false, false, "→") {
         Ok(arrow) => runs.push((arrow, "→")),
-        Err(error) => eprintln!("no installed face covers the arrow; checking the Thai face only: {error}"),
+        Err(error) => eprintln!("no bundled or supplied face covers the arrow; checking the Thai face only: {error}"),
     }
     let mut doc = PdfDoc::new();
     let page = doc.add_page(300.0, 200.0);

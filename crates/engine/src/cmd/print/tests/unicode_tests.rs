@@ -2,7 +2,7 @@ use super::super::text_unicode::{TextRun, TextRunFont, draw_text_runs};
 use super::*;
 
 fn thai_catalog() -> Option<(FontCatalog, PdfFont)> {
-    let catalog = FontCatalog::system();
+    let catalog = FontCatalog::bundled();
     match catalog.face_for("Arial", false, false, "น้ำกุ้งผู้ใช้เก้าอี้ภาษาไทย") {
         Ok(font) => Some((catalog, font)),
         Err(error) => {
@@ -513,9 +513,9 @@ fn embedded_faces_are_subset_to_the_glyphs_a_document_draws() {
     arrow.execute("pageLayout.pageSetup", json!({"header": "&CTotal → 5"})).unwrap();
     let (pdf, _) = pdf_of(&mut arrow, json!({}));
     eprintln!("header \"Total → 5\": {} bytes", pdf.len());
-    // Without an installed face covering the arrow, the header uses the predefined CID font.
+    // Without a bundled or supplied face covering the arrow, the header uses the predefined CID font.
     if contains(&pdf, "/FontFile2") {
-        assert!(pdf.len() < 100_000, "one arrow embeds a subset, not a full system face: {} bytes", pdf.len());
+        assert!(pdf.len() < 100_000, "one arrow embeds a subset, not a full bundled or supplied face: {} bytes", pdf.len());
     }
 }
 
