@@ -23,10 +23,12 @@ const ACCOUNTING_SYMBOLS: &[(&str, &str, &str)] = &[
     ("₽", "₽ Russian", "_-[$₽-419]* #,##0.00_-;-[$₽-419]* #,##0.00_-;_-[$₽-419]* \"-\"??_-;_-@_-"),
 ];
 
+/// The currency symbol shown on the Accounting button for a format code, or `¤` when the code is not in the list.
 fn accounting_button_symbol(code: &str) -> &str {
     ACCOUNTING_SYMBOLS.iter().find(|(_, _, candidate)| *candidate == code).map_or("¤", |(symbol, _, _)| *symbol)
 }
 
+/// Whether `code` is one of the accounting formats offered in the Accounting Number Format dropdown.
 pub(crate) fn is_accounting_format_code(code: &str) -> bool {
     ACCOUNTING_SYMBOLS.iter().any(|(_, _, candidate)| *candidate == code)
 }
@@ -805,6 +807,7 @@ mod accounting_symbol_tests {
     use gridcraft_engine::numfmt::{NumberFormat, format_value};
 
     #[test]
+    /// Multi-character currencies (CHF, Rp, R$) show their full symbol, not the label's first letter.
     fn accounting_button_uses_currency_symbols_not_label_initials() {
         for (label, symbol) in [("CHF German (Switzerland)", "CHF"), ("Rp Indonesian", "Rp"), ("R$ Portuguese (Brazil)", "R$")] {
             let code = ACCOUNTING_SYMBOLS.iter().find(|(_, name, _)| *name == label).map(|(_, _, code)| *code).unwrap_or_default();

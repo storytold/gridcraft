@@ -55,6 +55,7 @@ fn sequence(h: &mut Harness, letters: &[Key], text_first: bool) {
 }
 
 #[test]
+/// Alt+H, A, N applies the remembered non-default currency format, not the dollar default.
 fn accounting_keytip_reapplies_the_selected_currency() {
     let mut session = blank();
     session.execute("cell.set", json!({"cell": "A1", "input": "123.45"})).unwrap();
