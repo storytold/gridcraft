@@ -128,6 +128,9 @@ fn basename(path: &str) -> String {
 }
 
 fn ends_with_ci(value: &str, suffix: &str) -> bool {
+    // Byte slices, not `&str`: cutting a `&str` at a non-char boundary panics, and part names come
+    // from the (untrusted) backup log, where a name can end in the middle of a multi-byte character.
+    let (value, suffix) = (value.as_bytes(), suffix.as_bytes());
     value.len() >= suffix.len() && value[value.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
 }
 
@@ -659,16 +662,17 @@ fn read_column_values(base: &Base<'_>, column: &ColumnMeta, row_count: usize) ->
         }
         let value = match &column.encoding {
             ColumnEncoding::Value { base_id, magnitude } => {
-                let raw = (i64::from(*id) + *base_id) as f64 * *magnitude;
+                // `BaseId` is read from the file with no range check, so the sum is hostile input.
+                let raw_id = i64::from(*id)
+                    .checked_add(*base_id)
+                    .ok_or_else(|| ModelFileError::Corrupt(format!("column {} BaseId overflows", column.storage)))?;
+                let raw = raw_id as f64 * *magnitude;
                 match kind {
                     ColumnKind::Currency => Scalar::Currency(round_currency(raw)),
                     ColumnKind::Date => Scalar::DateTime(raw),
                     ColumnKind::Boolean => Scalar::Boolean(raw != 0.0),
                     ColumnKind::Real => Scalar::Decimal(raw),
-                    _ => {
-                        let raw_id = i64::from(*id) + *base_id;
-                        Scalar::Integer(if (*magnitude - 1.0).abs() < 1.0e-9 { raw_id } else { (raw_id as f64 * *magnitude).round() as i64 })
-                    }
+                    _ => Scalar::Integer(if (*magnitude - 1.0).abs() < 1.0e-9 { raw_id } else { (raw_id as f64 * *magnitude).round() as i64 }),
                 }
             }
             ColumnEncoding::HashString { .. } => {
@@ -1983,6 +1987,17 @@ mod tests {
         assert_eq!(f64::from_bits(lossy as u64), boundary as f64 / 100.0);
         assert!(numeric_raw(&Scalar::Currency(boundary + 1), true).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn part_name_suffixes_are_compared_as_bytes() {
+        // A part name can end in the middle of a multi-byte character; slicing the `&str` there
+        // used to panic, and these names come from the untrusted backup log.
+        assert!(ends_with_ci("C:\\Cube\\Prix €.0.tbl.xml", ".tbl.xml"));
+        assert!(ends_with_ci("prix €", "€"));
+        assert!(!ends_with_ci("prix €", ".tbl.xml"));
+        assert!(!ends_with_ci("€", "€x"));
+        assert!(ends_with_ci("PART.TBL.XML", ".tbl.xml"));
     }
 
     #[test]
