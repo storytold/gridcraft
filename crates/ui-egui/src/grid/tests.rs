@@ -180,9 +180,20 @@ fn filter_menu_uses_the_table_whose_header_was_clicked() {
     assert_eq!(filter_table_range(&sh, 1, 4), None);
 }
 
+/// The box sits a pixel in from either edge, and a row too short for it doesn't pull Bottom up to
+/// Top: in Excel the digits stay on their own side and the cell clips them.
+#[test]
+fn cell_text_keeps_its_side_of_a_short_row() {
+    let (gh, z) = (20.0, 1.0);
+    let rect = Rect::from_min_max(pos2(0.0, 100.0), pos2(100.0, 115.0));
+    assert_eq!(cell_text_y(VAlign::Top, rect, gh, z), 101.0);
+    assert_eq!(cell_text_y(VAlign::Bottom, rect, gh, z), 94.0);
+    assert_eq!(cell_text_y(VAlign::Center, rect, gh, z), 97.5);
+}
+
 #[test]
 fn cell_text_y_moves_monotonically_in_standard_and_tall_rows() {
-    let rect_std = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 20.0));
+    let rect_std = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 24.0));
     let gh = 18.5;
     let z = 1.0;
 

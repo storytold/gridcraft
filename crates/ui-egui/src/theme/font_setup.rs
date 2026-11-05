@@ -518,6 +518,17 @@ fn font_definitions_impl(language: crate::i18n::Language, used: &[String], syste
     fonts
 }
 
+/// Excel draws a font's line gap above its text, and egui below. In cells that decides where the text
+/// sits, so a cell font carries the difference as a drawing offset; the layout is unchanged.
+pub(crate) fn cell_font_tweak(fd: &mut FontData) {
+    use skrifa::MetadataProvider;
+    let Ok(font) = skrifa::FontRef::from_index(fd.font.as_ref().as_ref(), fd.index) else { return };
+    let m = font.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
+    if m.units_per_em > 0 && m.leading > 0.0 {
+        fd.tweak.y_offset_factor = m.leading / f32::from(m.units_per_em);
+    }
+}
+
 /// Builds one role family's chain: the loaded system face (or its role fallback), egui's bundled
 /// proportional/monospace base, Hack's symbols, then the script fallbacks. Keys without font data
 /// are dropped, as before.
@@ -535,6 +546,9 @@ fn build_role_chain(
     let mut chain: Vec<String> = Vec::new();
     let loaded = if system { try_load(&refs) } else { None };
     if let Some(mut fd) = loaded {
+        if role.starts_with("cell") {
+            cell_font_tweak(&mut fd);
+        }
         // Helvetica Neue Bold's own TrueType hints close Cyrillic е into ө at 13 pt on a Retina
         // screen (#1184). Core Text never runs them, so this draws it the way macOS does.
         if cfg!(target_os = "macos") && role == UI_BOLD {

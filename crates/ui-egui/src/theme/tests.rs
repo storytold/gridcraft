@@ -354,3 +354,29 @@ fn fedora_package_folders_are_searched_after_the_other_linux_layouts() {
     let noto = mono.iter().position(|p| p == "/usr/share/fonts/google-noto-vf/NotoSansMono[wght].ttf");
     assert!(noto.is_some() && noto.unwrap_or(0) + 1 == mono.len(), "Fedora's default Noto Sans Mono must be the last resort: {mono:?}");
 }
+
+/// A cell font moves its line gap above the text; one without a gap, or unreadable, is left alone.
+#[test]
+fn cell_fonts_draw_their_line_gap_above_the_text() {
+    use skrifa::MetadataProvider;
+    let fonts = egui::FontDefinitions::default();
+    let mut checked = 0;
+    for data in fonts.font_data.values() {
+        let mut fd = (**data).clone();
+        let before = fd.tweak.y_offset_factor;
+        crate::theme::cell_font_tweak(&mut fd);
+        let bytes: &[u8] = data.font.as_ref().as_ref();
+        let Ok(font) = skrifa::FontRef::from_index(bytes, data.index) else { continue };
+        let m = font.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
+        if m.leading > 0.0 {
+            assert!((fd.tweak.y_offset_factor - m.leading / f32::from(m.units_per_em)).abs() < 1e-6);
+        } else {
+            assert_eq!(fd.tweak.y_offset_factor, before);
+        }
+        checked += 1;
+    }
+    assert!(checked > 0);
+    let mut broken = egui::FontData::from_owned(vec![0, 1, 2]);
+    crate::theme::cell_font_tweak(&mut broken);
+    assert_eq!(broken.tweak.y_offset_factor, 0.0);
+}
