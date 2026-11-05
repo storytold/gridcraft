@@ -1220,7 +1220,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "First slice angle" => "პირველი სექტორის კუთხე",
         "Format Control…" => "მართვის ელემენტის ფორმატირება…",
         "Slider" => "სლაიდერი",
-        "Spin Button" => "მთვლელი",
+        "Spin Button" => "ისრიანი მთვლელი",
         _ => return None,
     })
 }
