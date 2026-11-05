@@ -139,6 +139,22 @@ const MAX_DYNAMIC_CHECKS: u64 = 16_000_000;
 /// rule copies its element's whole range list, so rules × ranges must stay bounded.
 const MAX_COND_CELLS: u64 = 4_000_000;
 
+/// Automatic heights equal to the sheet's default are noise. Rows arrive before the sheet's format
+/// has been read, so this waits for it: until then `default_row_height` is only the standard one, and
+/// a real 15 points on a sheet whose default is 12 would look like noise.
+fn drop_default_row_heights(root: &El, sheet: &mut Sheet) {
+    if let Some(format) = root.child("sheetFormatPr") {
+        read_sheet_format(format, sheet);
+    }
+    let default = sheet.default_row_height;
+    sheet.rows.retain(|_, info| {
+        if !info.custom && info.size.is_some_and(|size| (size - default).abs() <= 0.5) {
+            info.size = None;
+        }
+        *info != LineInfo::default()
+    });
+}
+
 fn read_sheet_format(e: &El, sheet: &mut Sheet) {
     if let Some(h) = e.attr_f64("defaultRowHeight") {
         let px = pt_to_px(h);
@@ -175,6 +191,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
             El::default()
         }
     };
+    drop_default_row_heights(&root, &mut sheet);
     if st.dropped > 0 {
         cx.warn(format!("sheet \"{name}\": {} cells or rows outside the 1,048,576 × 16,384 grid were dropped", st.dropped));
     }
@@ -483,10 +500,7 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
     let mut info = LineInfo::default();
     if let Some(ht) = row.attr_f64("ht") {
         info.custom = row.flag("customHeight", false);
-        // Automatic heights equal to the default are noise.
-        if info.custom || (pt_to_px(ht) - sheet.default_row_height).abs() > 0.5 {
-            info.size = Some(pt_to_px(ht));
-        }
+        info.size = Some(pt_to_px(ht));
     }
     info.hidden = row.flag("hidden", false);
     info.outline = row.attr_u32("outlineLevel").unwrap_or(0).min(7) as u8;
