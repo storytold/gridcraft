@@ -1628,17 +1628,35 @@ fn kept_rels(pkg: &mut Package<'_>, part: &str) -> Vec<PreservedRel> {
 
 /// Whether `part` is a cache definition whose source is external (the data model, an OLAP server
 /// or another workbook): the range-pivot reader does not model those, so they are kept verbatim.
-fn external_cache(pkg: &mut Package<'_>, part: &str) -> bool {
-    pkg.read_xml(part)
-        .ok()
-        .flatten()
-        .is_some_and(|x| x.name == "pivotCacheDefinition" && x.child("cacheSource").and_then(|s| s.attr("type")) == Some("external"))
+fn external_cache(pkg: &mut Package<'_>, part: &str, report: &mut ReadReport) -> bool {
+    match pkg.read_xml(part) {
+        Ok(Some(x)) => x.name == "pivotCacheDefinition" && x.child("cacheSource").and_then(|s| s.attr("type")) == Some("external"),
+        Ok(None) => false,
+        Err(e) => {
+            // Every PivotTable on this cache is skipped without it; say so rather than dropping them
+            // silently on the next save.
+            report.warn(format!("PivotTable cache {part} could not be read, so its external PivotTables could not be kept: {e}"));
+            false
+        }
+    }
 }
 
 /// The cache part of a PivotTable definition, when that cache is one of the workbook's external
 /// caches (`caches`: `cacheId`, relationship id, part).
-fn external_cache_of(pkg: &mut Package<'_>, table_part: &str, table: &El, caches: &[(u32, String, String)]) -> Option<String> {
-    let rels = pkg.rels(table_part).ok()?;
+fn external_cache_of(
+    pkg: &mut Package<'_>,
+    table_part: &str,
+    table: &El,
+    caches: &[(u32, String, String)],
+    report: &mut ReadReport,
+) -> Option<String> {
+    let rels = match pkg.rels(table_part) {
+        Ok(rels) => rels,
+        Err(e) => {
+            report.warn(format!("PivotTable {table_part} could not be kept: its relationship part could not be read: {e}"));
+            return None;
+        }
+    };
     if let Some(r) = rels.iter().find(|r| r.kind == REL_PIVOT_CACHE && !r.external) {
         return caches.iter().any(|(_, _, p)| p.eq_ignore_ascii_case(&r.target)).then_some(r.target.clone());
     }
@@ -1729,7 +1747,7 @@ pub(crate) fn keep_external_pivots(
     for c in cache_el.kids("pivotCache") {
         let (Some(cache_id), Some(rid)) = (c.attr_u32("cacheId"), c.attr("id")) else { continue };
         let Some(rel) = wb_rels.iter().find(|r| r.id == rid && !r.external) else { continue };
-        if external_cache(pkg, &rel.target) {
+        if external_cache(pkg, &rel.target, report) {
             caches.push((cache_id, rid.to_string(), rel.target.clone()));
         }
     }
@@ -1765,7 +1783,7 @@ pub(crate) fn keep_external_pivots(
             if table.name != "pivotTableDefinition" {
                 continue;
             }
-            let Some(cache_part) = external_cache_of(pkg, &rel.target, &table, &caches) else { continue };
+            let Some(cache_part) = external_cache_of(pkg, &rel.target, &table, &caches, report) else { continue };
             // A PivotTable is only usable when both its definition and its cache part are kept:
             // recording the cache and the sheet link for a pivot whose part was unreadable (or over
             // the part cap) would drop the pivot on save without a word, or leave a definition

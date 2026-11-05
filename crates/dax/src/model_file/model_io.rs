@@ -1365,7 +1365,12 @@ fn numeric_raw(value: &Scalar, real: bool) -> Result<i64> {
         (Scalar::DateTime(serial), true) => Ok(serial.to_bits() as i64),
         (Scalar::DateTime(serial), false) => {
             // A long dictionary stores whole serials; rounding `45000.75` to `45001` would read
-            // back as a different date instead of reporting that the value does not fit.
+            // back as a different date instead of reporting that the value does not fit. NaN fails
+            // every comparison, so non-finite serials are rejected first rather than cast to 0 or
+            // saturated to an integer bound.
+            if !serial.is_finite() {
+                return Err(ModelFileError::InvalidModel("a date serial must be finite".into()));
+            }
             let rounded = serial.round();
             if (serial - rounded).abs() > 1.0e-6 {
                 return Err(ModelFileError::InvalidModel("a date with a time cannot be stored in a long dictionary".into()));
@@ -2043,6 +2048,13 @@ mod tests {
         // A real dictionary keeps the fraction, so the same value round-trips there.
         let bits = numeric_raw(&Scalar::DateTime(45_000.75), true).expect("real dictionary");
         assert_eq!(f64::from_bits(bits as u64), 45_000.75);
+        // NaN fails every comparison, so it must be rejected explicitly instead of being cast to 0.
+        for serial in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            match numeric_raw(&Scalar::DateTime(serial), false) {
+                Err(ModelFileError::InvalidModel(message)) => assert!(message.contains("finite"), "{message}"),
+                other => panic!("expected InvalidModel for {serial}, got {other:?}"),
+            }
+        }
     }
 
     #[test]
