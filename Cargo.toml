@@ -40,6 +40,7 @@ chrono = { version = "0.4.45", default-features = false, features = ["std", "clo
 web-time = "1.1.0"
 rayon = "1"
 regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
+libm = "=0.2.16"
 quick-xml = "0.41"
 zip = { version = "3", default-features = false, features = ["deflate"] }
 sha2 = { version = "0.11", default-features = false }
