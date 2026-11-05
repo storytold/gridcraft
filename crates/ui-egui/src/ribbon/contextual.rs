@@ -189,8 +189,21 @@ pub(super) fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
 /// Reset Crop shows the whole picture again.
 pub(super) fn picture_format(app: &mut SheetApp, ui: &mut Ui) {
     let Some(id) = app.selected_image() else { return };
-    let cropped = app.session.active().and_then(|d| d.wb.active()).and_then(|sh| sh.images.iter().find(|im| im.id == id)).is_some_and(|im| im.crop.iter().any(|c| *c != 0.0));
-    if big_button(ui, Icon::Picture, "Crop", "Crop: drag the black handles to cut the picture, or drag inside it to move it under its frame (Enter when done)", false).clicked() {
+    let cropped = app
+        .session
+        .active()
+        .and_then(|d| d.wb.active())
+        .and_then(|sh| sh.images.iter().find(|im| im.id == id))
+        .is_some_and(|im| im.crop.iter().any(|c| *c != 0.0));
+    if big_button(
+        ui,
+        Icon::Picture,
+        "Crop",
+        "Crop: drag the black handles to cut the picture, or drag inside it to move it under its frame (Enter when done)",
+        false,
+    )
+    .clicked()
+    {
         crate::picture_crop::toggle(app);
     }
     let reset = ui.add_enabled_ui(cropped, |ui| big_button(ui, Icon::Picture, "Reset\nCrop", "Show the whole picture again", false)).inner;

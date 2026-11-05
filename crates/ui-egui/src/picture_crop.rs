@@ -145,7 +145,9 @@ pub(crate) fn paint(p: &Painter, r: Rect, im: &Image, tex: Option<&egui::Texture
         Rect::from_min_max(pos2(full.min.x, r.min.y), pos2(r.min.x, r.max.y)),
         Rect::from_min_max(pos2(r.max.x, r.min.y), pos2(full.max.x, r.max.y)),
     ];
-    let uv = |b: Rect| Rect::from_min_max(pos2((b.min.x - full.min.x) / w, (b.min.y - full.min.y) / h), pos2((b.max.x - full.min.x) / w, (b.max.y - full.min.y) / h));
+    let uv = |b: Rect| {
+        Rect::from_min_max(pos2((b.min.x - full.min.x) / w, (b.min.y - full.min.y) / h), pos2((b.max.x - full.min.x) / w, (b.max.y - full.min.y) / h))
+    };
     for b in bands.into_iter().filter(|b| b.width() > 0.5 && b.height() > 0.5) {
         if let Some(t) = tex {
             p.image(t.id(), b, uv(b), Color32::WHITE);

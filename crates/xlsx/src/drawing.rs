@@ -114,7 +114,8 @@ pub fn dml_color(e: &El) -> Option<Color> {
 /// thousandths of a percent (100000 = all of it). Out-of-range values are kept within -10..1.
 fn src_rect(e: Option<&El>) -> [f32; 4] {
     let Some(e) = e else { return [0.0; 4] };
-    ["l", "t", "r", "b"].map(|k| e.attr(k).and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite()).map_or(0.0, |v| (v / 100_000.0).clamp(-10.0, 1.0) as f32))
+    ["l", "t", "r", "b"]
+        .map(|k| e.attr(k).and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite()).map_or(0.0, |v| (v / 100_000.0).clamp(-10.0, 1.0) as f32))
 }
 
 /// `a:srcRect` for a crop (empty when nothing is cut off).
