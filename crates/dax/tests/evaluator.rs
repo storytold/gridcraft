@@ -539,3 +539,87 @@ fn pivot_cross_puts_column_groups_in_columns() {
     assert_eq!(table.rows[0][1], Scalar::Blank);
     assert_eq!(table.rows[0][2], Scalar::Decimal(40.0));
 }
+
+#[test]
+fn text_is_not_compared_with_numbers() {
+    // DAX refuses to compare text with a number, so `=` answers FALSE instead of coercing "3".
+    assert_eq!(eval("\"3\" = 3"), Scalar::Boolean(false));
+    assert_eq!(eval("\"3\" = \"3\""), Scalar::Boolean(true));
+    // `IN` is DAX equality rather than representation equality: numbers compare by value across
+    // variants and text ignores case, while BLANK still matches only BLANK.
+    assert_eq!(eval("2 IN {2.0}"), Scalar::Boolean(true));
+    assert_eq!(eval("\"a\" IN {\"A\"}"), Scalar::Boolean(true));
+    assert_eq!(eval("BLANK() IN {BLANK()}"), Scalar::Boolean(true));
+    assert_eq!(eval("1 IN {2.0, 3.0}"), Scalar::Boolean(false));
+}
+
+#[test]
+fn distinct_count_folds_text_case() {
+    let mut model = DataModel {
+        tables: vec![ModelTable {
+            name: "Labels".into(),
+            columns: vec![ModelColumn { name: "Name".into(), data_type: Some("String".into()) }],
+            rows: vec![vec![Scalar::String("A".into())], vec![Scalar::String("a".into())], vec![Scalar::String("B".into())], vec![Scalar::Blank]],
+        }],
+        ..DataModel::default()
+    };
+    model.parse_formulas().expect("model parses");
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let evaluate = |src: &str| {
+        let bound = Binder::new(&model).bind_expression(&parse_expression(src).expect("parse")).expect("bind");
+        evaluator.evaluate(&bound).expect("evaluate")
+    };
+    // The model collation is case-insensitive: A/a are one value, and BLANK counts as one more.
+    assert_eq!(evaluate("DISTINCTCOUNT(Labels[Name])"), Scalar::Integer(3));
+    // VALUES reports the same distinct set, keeping the first spelling it saw.
+    let bound = Binder::new(&model).bind_expression(&parse_expression("VALUES(Labels[Name])").expect("parse")).expect("bind");
+    let table = evaluator.evaluate_table(&bound).expect("values");
+    assert_eq!(table.rows, vec![vec![Scalar::String("A".into())], vec![Scalar::String("B".into())], vec![Scalar::Blank]]);
+}
+
+#[test]
+fn the_blank_member_keeps_orphan_fact_rows() {
+    let mut model = DataModel {
+        tables: vec![
+            ModelTable {
+                name: "Sales".into(),
+                columns: vec![
+                    ModelColumn { name: "Amount".into(), data_type: Some("Int64".into()) },
+                    ModelColumn { name: "Product".into(), data_type: Some("String".into()) },
+                ],
+                rows: vec![
+                    vec![Scalar::Integer(10), Scalar::String("A".into())],
+                    // No Products row: an orphan key belongs to Products' BLANK member.
+                    vec![Scalar::Integer(20), Scalar::String("Orphan".into())],
+                ],
+            },
+            ModelTable {
+                name: "Products".into(),
+                columns: vec![ModelColumn { name: "Product".into(), data_type: Some("String".into()) }],
+                rows: vec![vec![Scalar::String("A".into())]],
+            },
+        ],
+        relationships: vec![Relationship {
+            from_table: "Sales".into(),
+            from_column: "Product".into(),
+            to_table: "Products".into(),
+            to_column: "Product".into(),
+            bidirectional: false,
+            inactive: false,
+        }],
+        measures: vec![Measure { name: "Total".into(), formula: "SUM(Sales[Amount])".into(), table: Some("Sales".into()), format: None, expr: None }],
+    };
+    model.parse_formulas().expect("model parses");
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let bound = Binder::new(&model).bind_expression(&parse_expression("[Total]").expect("parse")).expect("bind");
+
+    // The BLANK member of Products carries the rows that do not join, so the total is 20, not 0.
+    let mut filters = FilterContext::default();
+    filters.set(1, 0, [gridcraft_dax::ScalarKey::Blank]);
+    assert_eq!(evaluator.evaluate_with(&bound, filters).expect("blank member"), Scalar::Decimal(20.0));
+
+    // A concrete member still sees only its own rows: the orphan stays out of `"A"`.
+    let mut filters = FilterContext::default();
+    filters.set(1, 0, [gridcraft_dax::ScalarKey::String("A".into())]);
+    assert_eq!(evaluator.evaluate_with(&bound, filters).expect("matched member"), Scalar::Decimal(10.0));
+}

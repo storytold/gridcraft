@@ -35,6 +35,7 @@
 
 mod support;
 
+
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
@@ -43,7 +44,7 @@ use crate::ast::{BinaryOp, Literal, UnaryOp};
 use crate::binder::{BindError, Binder, BoundExpr};
 use crate::model::DataModel;
 use crate::storage::{ColumnKind, ModelStorage, StorageError, TableStorage};
-use crate::value::{EvalError, Scalar, ScalarKey, TableColumn, TableValue};
+use crate::value::{EvalError, Scalar, ScalarKey, TableColumn, TableValue, distinct_key};
 
 use support::*;
 
@@ -93,14 +94,50 @@ pub fn linked_families() -> impl Iterator<Item = &'static str> {
     FAMILIES.iter().map(|family| family.name)
 }
 
+/// How filters pass across one relationship under the current filter context.
+///
+/// DAX's default is the one-to-many direction: a filter on the one side (`to_table`, the lookup
+/// table) restricts the many side (`from_table`, the fact table). `CROSSFILTER` can add the
+/// reverse direction (`BOTH`/`TWOWAY`), turn propagation off (`NONE`), or name a single direction
+/// (`ONEWAY_LEFTFILTERSRIGHT`/`ONEWAY_RIGHTFILTERSLEFT`), which is why both directions are flags.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RelationshipFlow {
+    /// Filters pass from the one side to the many side (the default direction).
+    pub one_to_many: bool,
+    /// Filters pass from the many side back to the one side.
+    pub many_to_one: bool,
+}
+
+impl RelationshipFlow {
+    /// No propagation: `CROSSFILTER ( ..., NONE )` or an inactive relationship.
+    pub const NONE: Self = Self { one_to_many: false, many_to_one: false };
+    /// The default direction: one side filters the many side.
+    pub const ONE_TO_MANY: Self = Self { one_to_many: true, many_to_one: false };
+    /// The reverse direction only: many side filters the one side.
+    pub const MANY_TO_ONE: Self = Self { one_to_many: false, many_to_one: true };
+    /// Both directions: `CROSSFILTER ( ..., BOTH )` or a bidirectional relationship.
+    pub const BOTH: Self = Self { one_to_many: true, many_to_one: true };
+
+    /// The flow of a relationship without a `USERELATIONSHIP`/`CROSSFILTER` modifier.
+    fn from_flags(inactive: bool, bidirectional: bool) -> Self {
+        if inactive {
+            Self::NONE
+        } else if bidirectional {
+            Self::BOTH
+        } else {
+            Self::ONE_TO_MANY
+        }
+    }
+}
+
 /// A set of column-value filters. A column with several keys is an OR; different columns are
 /// ANDed.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FilterContext {
     pub filters: BTreeMap<(usize, usize), BTreeSet<ScalarKey>>,
     /// Relationship behaviour set by `USERELATIONSHIP`/`CROSSFILTER` inside CALCULATE:
-    /// relationship index -> `(active, bidirectional)`.
-    pub relationships: BTreeMap<usize, (bool, bool)>,
+    /// relationship index -> [`RelationshipFlow`].
+    pub relationships: BTreeMap<usize, RelationshipFlow>,
 }
 
 impl FilterContext {
@@ -497,14 +534,23 @@ impl<'a> Evaluator<'a> {
         let mut rows = rows.unwrap_or_else(|| (0..table_storage.row_count()).collect());
 
         for (index, relationship) in storage.relationships().iter().enumerate() {
-            let (active, bidirectional) = filters.relationships.get(&index).copied().unwrap_or((!relationship.inactive, relationship.bidirectional));
-            if !active {
-                continue;
-            }
-            let (other, self_column, other_column) = if relationship.from_table == table {
-                (relationship.to_table, relationship.from_column, relationship.to_column)
-            } else if bidirectional && relationship.to_table == table {
-                (relationship.from_table, relationship.to_column, relationship.from_column)
+            let flow = filters
+                .relationships
+                .get(&index)
+                .copied()
+                .unwrap_or_else(|| RelationshipFlow::from_flags(relationship.inactive, relationship.bidirectional));
+            // `other` is the side whose filters reach `table`: the one side when filters flow
+            // one-to-many (this table is the many side), the many side for the reverse direction.
+            let (other, self_column, other_column, one_to_many) = if relationship.from_table == table {
+                if !flow.one_to_many {
+                    continue;
+                }
+                (relationship.to_table, relationship.from_column, relationship.to_column, true)
+            } else if relationship.to_table == table {
+                if !flow.many_to_one {
+                    continue;
+                }
+                (relationship.from_table, relationship.to_column, relationship.from_column, false)
             } else {
                 continue;
             };
@@ -516,11 +562,17 @@ impl<'a> Evaluator<'a> {
             self.bump(|counters| &counters.relationship_lookups);
             let keys: BTreeSet<ScalarKey> =
                 other_rows.iter().filter_map(|row| storage.value(other, other_column, *row)).map(|value| ScalarKey::from(&value)).collect();
+            // A one-side filter that selects BLANK also selects the rows that do not join it at
+            // all: DAX's BLANK member carries the orphan keys, so the BLANK cell of a pivot counts
+            // its fact rows instead of hiding them.
+            let blank_member = one_to_many && self.selects_blank_member(other, filters, &mut visited.clone());
+            let index_of = |key: &ScalarKey| relationship.rows_to(key);
             let mut retained = Vec::with_capacity(rows.len());
             for row in rows {
-                if let Some(value) = storage.value(table, self_column, row)
-                    && keys.contains(&ScalarKey::from(&value))
-                {
+                let Some(value) = storage.value(table, self_column, row) else { continue };
+                let key = ScalarKey::from(&value);
+                let orphan = key == ScalarKey::Blank || index_of(&key).is_empty();
+                if keys.contains(&key) || (blank_member && orphan) {
                     retained.push(row);
                 }
             }
@@ -560,10 +612,19 @@ impl<'a> Evaluator<'a> {
         let mut rows: Vec<Vec<Scalar>> = model_table
             .rows
             .iter()
+            // A caller-built row can be shorter than the declared columns. Pad it first, so the
+            // filter and every later column read see the missing cells as BLANK — the storage
+            // path and the integrity check already treat them that way.
+            .map(|row| {
+                let mut padded = row.clone();
+                if padded.len() < model_table.columns.len() {
+                    padded.resize(model_table.columns.len(), Scalar::Blank);
+                }
+                padded
+            })
             .filter(|row| {
                 model_table.columns.iter().enumerate().all(|(column, _)| row.get(column).is_none_or(|value| filters.matches(table, column, value)))
             })
-            .cloned()
             .collect();
 
         // Propagate filters across active relationships: a filtered related table restricts this
@@ -574,14 +635,21 @@ impl<'a> Evaluator<'a> {
             let (Some(from), Some(to)) = (self.model.table_index(&relationship.from_table), self.model.table_index(&relationship.to_table)) else {
                 continue;
             };
-            let (active, bidirectional) = filters.relationships.get(&index).copied().unwrap_or((!relationship.inactive, relationship.bidirectional));
-            if !active {
-                continue;
-            }
-            let (other, self_column, other_column) = if from == table {
-                (to, &relationship.from_column, &relationship.to_column)
-            } else if bidirectional && to == table {
-                (from, &relationship.to_column, &relationship.from_column)
+            let flow = filters
+                .relationships
+                .get(&index)
+                .copied()
+                .unwrap_or_else(|| RelationshipFlow::from_flags(relationship.inactive, relationship.bidirectional));
+            let (other, self_column, other_column, one_to_many) = if from == table {
+                if !flow.one_to_many {
+                    continue;
+                }
+                (to, &relationship.from_column, &relationship.to_column, true)
+            } else if to == table {
+                if !flow.many_to_one {
+                    continue;
+                }
+                (from, &relationship.to_column, &relationship.from_column, false)
             } else {
                 continue;
             };
@@ -599,7 +667,23 @@ impl<'a> Evaluator<'a> {
             };
             let keys: BTreeSet<ScalarKey> =
                 self.table_inner(other, filters, visited).rows.iter().filter_map(|row| row.get(other_col)).map(ScalarKey::from).collect();
-            rows.retain(|row| row.get(self_col).is_some_and(|value| keys.contains(&ScalarKey::from(value))));
+            // As on the storage path, a one-side filter that selects BLANK also selects the rows
+            // whose key has no related row: DAX's BLANK member carries the orphan keys.
+            let blank_member = one_to_many && self.selects_blank_member(other, filters, &mut visited.clone());
+            let known: BTreeSet<ScalarKey> = if blank_member {
+                self.model
+                    .tables
+                    .get(other)
+                    .map(|table| table.rows.iter().filter_map(|row| row.get(other_col)).map(ScalarKey::from).collect())
+                    .unwrap_or_default()
+            } else {
+                BTreeSet::new()
+            };
+            rows.retain(|row| {
+                let Some(value) = row.get(self_col) else { return false };
+                let key = ScalarKey::from(value);
+                keys.contains(&key) || (blank_member && (key == ScalarKey::Blank || !known.contains(&key)))
+            });
         }
 
         visited.remove(&table);
@@ -616,17 +700,18 @@ impl<'a> Evaluator<'a> {
             return true;
         }
         for (index, relationship) in self.model.relationships.iter().enumerate() {
-            let (active, bidirectional) = filters.relationships.get(&index).copied().unwrap_or((!relationship.inactive, relationship.bidirectional));
-            if !active {
-                continue;
-            }
+            let flow = filters
+                .relationships
+                .get(&index)
+                .copied()
+                .unwrap_or_else(|| RelationshipFlow::from_flags(relationship.inactive, relationship.bidirectional));
             let (Some(from), Some(to)) = (self.model.table_index(&relationship.from_table), self.model.table_index(&relationship.to_table)) else {
                 continue;
             };
             let next = if from == table {
-                Some(to)
-            } else if bidirectional && to == table {
-                Some(from)
+                flow.one_to_many.then_some(to)
+            } else if to == table {
+                flow.many_to_one.then_some(from)
             } else {
                 None
             };
@@ -634,6 +719,38 @@ impl<'a> Evaluator<'a> {
                 && next != table
                 && self.table_has_filter(next, filters, visited)
             {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Whether the current filters select the BLANK member of `table`.
+    ///
+    /// A filter that names BLANK on any of the table's columns selects it, and so does a filter
+    /// that reaches `table` from a further dimension over an active one-to-many relationship: DAX
+    /// represents the rows that do not join a dimension by the dimension's BLANK member, so the
+    /// whole chain is in the BLANK member. That member is what makes an orphan key belong to the
+    /// BLANK group of a pivot instead of falling out of the filter.
+    fn selects_blank_member(&self, table: usize, filters: &FilterContext, visited: &mut BTreeSet<usize>) -> bool {
+        if !visited.insert(table) {
+            return false;
+        }
+        if filters.filters.iter().any(|((filtered, _), keys)| *filtered == table && keys.contains(&ScalarKey::Blank)) {
+            return true;
+        }
+        for (index, relationship) in self.model.relationships.iter().enumerate() {
+            let flow = filters
+                .relationships
+                .get(&index)
+                .copied()
+                .unwrap_or_else(|| RelationshipFlow::from_flags(relationship.inactive, relationship.bidirectional));
+            let (Some(from), Some(to)) = (self.model.table_index(&relationship.from_table), self.model.table_index(&relationship.to_table)) else {
+                continue;
+            };
+            // `table` is the many side of this relationship, so `to` is the dimension whose
+            // filters reach it.
+            if from == table && flow.one_to_many && to != table && self.selects_blank_member(to, filters, visited) {
                 return true;
             }
         }
@@ -659,7 +776,9 @@ impl<'a> Evaluator<'a> {
             _ => vec![self.eval(left, ctx)?],
         };
         let table = self.eval_table(right, ctx)?;
-        let found = table.rows.iter().any(|row| row.len() == left.len() && row.iter().zip(&left).all(|(a, b)| a.strict_eq(b)));
+        // `IN` is DAX equality, not representation equality: `2 IN {2.0}` and `"a" IN {"A"}` are
+        // TRUE, which `strict_eq`'s variant comparison would miss. BLANK still matches only BLANK.
+        let found = table.rows.iter().any(|row| row.len() == left.len() && row.iter().zip(&left).all(|(a, b)| in_equals(a, b)));
         Ok(Scalar::Boolean(found))
     }
 
@@ -1223,7 +1342,17 @@ impl<'a> Evaluator<'a> {
         let rows = self.filtered_row_ids(table, filters)?;
         let aggregate = name.to_ascii_uppercase();
         let scalar = match aggregate.as_str() {
-            "SUM" | "AVERAGE" | "PRODUCT" | "MIN" | "MAX" => {
+            "MIN" | "MAX" => {
+                // The winning value keeps its own type, so a DateTime column answers a DateTime
+                // and an integer column an Integer. Only numbers compete: text and logicals are
+                // not observations, and a promoted column keeps the row path where that rule
+                // lives.
+                if !matches!(kind, ColumnKind::Integer | ColumnKind::Currency | ColumnKind::Decimal | ColumnKind::DateTime) {
+                    return None;
+                }
+                if aggregate == "MIN" { table_storage.min(column, &rows).ok()? } else { table_storage.max(column, &rows).ok()? }
+            }
+            "SUM" | "AVERAGE" | "PRODUCT" => {
                 // These read numbers only: booleans and text contribute nothing, so a logical or
                 // promoted-to-text column keeps the row path where that rule lives.
                 if !matches!(kind, ColumnKind::Integer | ColumnKind::Currency | ColumnKind::Decimal | ColumnKind::DateTime) {
@@ -1231,8 +1360,6 @@ impl<'a> Evaluator<'a> {
                 }
                 let numbers = table_storage.numeric_values(column, &rows).ok()?;
                 match aggregate.as_str() {
-                    "MIN" => numbers.iter().copied().reduce(f64::min).map(Scalar::Decimal).unwrap_or(Scalar::Blank),
-                    "MAX" => numbers.iter().copied().reduce(f64::max).map(Scalar::Decimal).unwrap_or(Scalar::Blank),
                     "SUM" if numbers.is_empty() => Scalar::Blank,
                     "SUM" => Scalar::Decimal(numbers.iter().sum()),
                     "PRODUCT" if numbers.is_empty() => Scalar::Blank,
@@ -1539,7 +1666,10 @@ impl<'a> Evaluator<'a> {
                 let same_pair = (same(&other.from_table, &relationship.from_table) && same(&other.to_table, &relationship.to_table))
                     || (same(&other.from_table, &relationship.to_table) && same(&other.to_table, &relationship.from_table));
                 if same_pair {
-                    filters.relationships.insert(other_index, (other_index == index, other.bidirectional));
+                    // Activating this one enables it whatever the model marked it as; the other
+                    // links between the same pair stop filtering.
+                    let flow = if other_index == index { RelationshipFlow::from_flags(false, other.bidirectional) } else { RelationshipFlow::NONE };
+                    filters.relationships.insert(other_index, flow);
                 }
             }
             return Ok(());
@@ -1548,13 +1678,24 @@ impl<'a> Evaluator<'a> {
             Some(BoundExpr::Keyword(word)) | Some(BoundExpr::Literal(Literal::String(word))) => word.to_ascii_uppercase(),
             _ => return Err(EvalError::new("CROSSFILTER needs ONE, BOTH or NONE")),
         };
-        let state = match direction.as_str() {
-            "ONE" | "ONEWAY" => (true, false),
-            "BOTH" | "TWOWAY" => (true, true),
-            "NONE" => (false, false),
-            _ => return Err(EvalError::new("CROSSFILTER direction must be ONE, ONEWAY, BOTH, TWOWAY or NONE")),
+        let flow = match direction.as_str() {
+            "ONE" | "ONEWAY" => RelationshipFlow::ONE_TO_MANY,
+            "BOTH" | "TWOWAY" => RelationshipFlow::BOTH,
+            "NONE" => RelationshipFlow::NONE,
+            "ONEWAY_LEFTFILTERSRIGHT" | "ONEWAY_RIGHTFILTERSLEFT" => {
+                // LEFT and RIGHT name the first and second column argument, so which way this is
+                // depends on whether the first argument named the many or the one side.
+                let first_is_one_side = same(&relationship.to_table, &table_a_name) && same(&relationship.to_column, &name_a);
+                let left_filters_right = direction == "ONEWAY_LEFTFILTERSRIGHT";
+                if left_filters_right == first_is_one_side { RelationshipFlow::ONE_TO_MANY } else { RelationshipFlow::MANY_TO_ONE }
+            }
+            _ => {
+                return Err(EvalError::new(
+                    "CROSSFILTER direction must be NONE, ONEWAY, BOTH, TWOWAY, ONEWAY_LEFTFILTERSRIGHT or ONEWAY_RIGHTFILTERSLEFT",
+                ));
+            }
         };
-        filters.relationships.insert(index, state);
+        filters.relationships.insert(index, flow);
         Ok(())
     }
 
@@ -1769,6 +1910,16 @@ fn unary(op: UnaryOp, value: Scalar) -> Result<Scalar, EvalError> {
     }
 }
 
+/// Equality for `IN`: BLANK equals only BLANK, and every other pair follows [`Scalar::compare`],
+/// so numbers compare by value across variants and text ignores case.
+fn in_equals(left: &Scalar, right: &Scalar) -> bool {
+    match (left.is_blank(), right.is_blank()) {
+        (true, true) => true,
+        (true, false) | (false, true) => false,
+        (false, false) => left.compare(right) == Some(Ordering::Equal),
+    }
+}
+
 fn binary(op: BinaryOp, left: Scalar, right: Scalar) -> Result<Scalar, EvalError> {
     match op {
         BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Pow => {
@@ -1952,8 +2103,13 @@ fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
             }
         }
         "UNICHAR" => Ok(char::from_u32(number(0)?.max(0.0) as u32).map(|c| Scalar::String(c.to_string())).unwrap_or(Scalar::Blank)),
-        "GCD" => Ok(Scalar::Integer(gcd(number(0)? as i64, number(1)? as i64))),
-        "LCM" => Ok(Scalar::Integer(lcm(number(0)? as i64, number(1)? as i64))),
+        "GCD" => {
+            let value = gcd(number(0)? as i64, number(1)? as i64);
+            // Excel answers `#NUM!` when the divisor does not fit the integer type.
+            let value = i64::try_from(value).map_err(|_| EvalError::new("GCD result is out of range"))?;
+            Ok(Scalar::Integer(value))
+        }
+        "LCM" => lcm(number(0)? as i64, number(1)? as i64).map(Scalar::Integer).ok_or_else(|| EvalError::new("LCM result is out of range")),
         "PI" => Ok(Scalar::Decimal(std::f64::consts::PI)),
         "DEGREES" => Ok(Scalar::Decimal(number(0)?.to_degrees())),
         "RADIANS" => Ok(Scalar::Decimal(number(0)?.to_radians())),
