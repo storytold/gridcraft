@@ -27,6 +27,7 @@ pub mod functions;
 pub mod integrity;
 pub mod lexer;
 pub mod model;
+pub mod model_file;
 pub mod parser;
 pub mod pivot;
 pub mod pivot_table;
@@ -51,6 +52,7 @@ pub use integrity::{
 };
 pub use lexer::{LexError, MAX_INPUT_LEN, MAX_QUERY_LEN, Token, TokenKind, tokenize};
 pub use model::{DataModel, Measure, ModelColumn, ModelError, ModelTable, Relationship, parse_measure};
+pub use model_file::{ModelFileError, ModelMeasure, read_measures, write_measures};
 pub use parser::{MAX_DEPTH, ParseError, parse_expression, parse_query};
 pub use pivot::{PivotError, PivotField, pivot, pivot_cross, pivot_fields};
 pub use printer::{print_expression, print_query};
