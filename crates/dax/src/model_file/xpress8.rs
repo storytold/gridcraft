@@ -133,7 +133,9 @@ pub fn compress(input: &[u8]) -> Option<Vec<u8>> {
     let mut word_started = false;
     let mut pending_nibble: Option<usize> = None;
 
-    let mut head = [usize::MAX; HASH_SIZE];
+    // `HASH_SIZE` slots of `usize` are 256 KiB: on the heap, or the wasm32 default stack (1 MiB)
+    // would be a third gone before the first match is searched.
+    let mut head = vec![usize::MAX; HASH_SIZE];
     let mut previous = vec![usize::MAX; input.len()];
 
     let mut position = 0usize;
@@ -145,7 +147,7 @@ pub fn compress(input: &[u8]) -> Option<Vec<u8>> {
         let key = a | (b << 8) | (c << 16);
         Some((key.wrapping_mul(2_654_435_761) >> (32 - HASH_BITS)) & (HASH_SIZE - 1))
     };
-    let insert = |at: usize, head: &mut [usize; HASH_SIZE], previous: &mut [usize]| {
+    let insert = |at: usize, head: &mut [usize], previous: &mut [usize]| {
         if let Some(slot) = hash_at(at) {
             previous[at] = head[slot];
             head[slot] = at;
@@ -311,6 +313,17 @@ mod tests {
             }
             let _ = decompress(&data, 1 + (length % 4096));
         }
+    }
+
+    #[test]
+    fn the_hash_table_does_not_live_on_the_stack() {
+        // `HASH_SIZE` slots of `usize` are 256 KiB; they used to be one stack frame, which is a
+        // third of wasm32's default 1 MiB stack. The table is a `Vec` now, so the frame stays small
+        // even for the largest block this codec accepts.
+        assert_eq!(HASH_SIZE * std::mem::size_of::<usize>(), 262_144);
+        let input: Vec<u8> = (0..MAX_BLOCK).map(|index| (index % 251) as u8).collect();
+        let encoded = compress(&input).expect("compressible");
+        assert_eq!(decompress(&encoded, input.len()).expect("decode"), input);
     }
 
     #[test]
