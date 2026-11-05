@@ -423,19 +423,22 @@ fn active_tab_id() -> egui::Id {
 /// [`egui::Area`], not a `Popup`: egui keeps a single
 /// popup slot per viewport, so a `Popup`-based group popup would be replaced — and then abandoned
 /// — by the first control inside it that opens a popup of its own (a font combo, a split menu).
-fn group_dropdown_open_id() -> egui::Id {
+pub(crate) fn group_dropdown_open_id() -> egui::Id {
     egui::Id::unique("ribbon_group_dropdown_open")
 }
 
 /// Where each group's last expanded row-slot width lives (filled whenever a group renders
-/// expanded, read while it renders collapsed — see [`GroupMeasure::width`]). Keyed by group name,
-/// so same-named groups on different tabs share an entry. Never cleared: stale entries for
-/// groups a tab no longer shows are simply never read.
+/// expanded, read while it renders collapsed — see [`GroupMeasure::width`]). Keyed by tab and
+/// group name: the same name ("Properties") names different groups on Automate and Table
+/// Design, and one overwriting the other would feed `plan_for` a wrong expanded width. Never
+/// cleared: stale entries for groups a tab no longer shows are simply never read.
 fn group_expanded_widths_id() -> egui::Id {
     egui::Id::unique("ribbon_group_expanded_widths")
 }
 
-fn expanded_widths(ctx: &egui::Context) -> HashMap<String, f32> {
+type ExpandedWidths = HashMap<(String, String), f32>;
+
+fn expanded_widths(ctx: &egui::Context) -> ExpandedWidths {
     ctx.data(|d| d.get_temp(group_expanded_widths_id())).unwrap_or_default()
 }
 
@@ -502,7 +505,7 @@ pub(crate) fn group(ui: &mut Ui, name: &str, hero: Icon, body: impl FnOnce(&mut 
         // The rendered launcher row, and the width the body would take back: the plan computes
         // with true sizes, so a collapsed group reports its cached expanded slot.
         let row = (ui.cursor().min.x - start).max(0.0);
-        let expanded = expanded_widths(ui.ctx()).get(name).copied();
+        let expanded = expanded_widths(ui.ctx()).get(&(tab.clone(), name.to_owned())).copied();
         (row, expanded.unwrap_or(row))
     } else {
         // The group is expanded while its dropdown temp names it (on this tab): the plan changed
@@ -517,7 +520,7 @@ pub(crate) fn group(ui: &mut Ui, name: &str, hero: Icon, body: impl FnOnce(&mut 
         ui.push_id(("ribbon_group", name), |ui| body(ui));
         let row = (ui.cursor().min.x - start).max(0.0);
         ui.ctx().data_mut(|d| {
-            d.get_temp_mut_or::<HashMap<String, f32>>(group_expanded_widths_id(), HashMap::new()).insert(name.to_owned(), row);
+            d.get_temp_mut_or::<ExpandedWidths>(group_expanded_widths_id(), HashMap::new()).insert((tab.clone(), name.to_owned()), row);
         });
         // What this group's collapsed row would take: the launcher button, the lead separator if
         // the row draws one for it (the first group has none), and the row's trailing spacing.

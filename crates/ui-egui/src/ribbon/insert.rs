@@ -197,6 +197,14 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
                 if r.clicked() {
                     app.grid.placing = if placing == Some(kind) { None } else { Some(kind) };
                     app.selected_object = None;
+                    // A click that arms a placement tool also closes this group's dropdown: the
+                    // sheet behind it must be reachable to place the control.
+                    ui.ctx().data_mut(|d| {
+                        let open: Option<(String, String)> = d.get_temp(crate::ribbon::group_dropdown_open_id()).unwrap_or_default();
+                        if matches!(&open, Some((t, g)) if t == "Insert" && g == "Form Controls") {
+                            d.insert_temp::<Option<(String, String)>>(crate::ribbon::group_dropdown_open_id(), None);
+                        }
+                    });
                 }
             }
         });
@@ -267,11 +275,15 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
 }
 pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
     let tool = app.session.draw_tool.clone();
-    let __k = big_button(ui, Icon::Shapes, "Select\nObjects", "Select and move ink and shapes", false);
-    control_keytip(app, ui, &__k, "draw.lasso");
-    if __k.clicked() {
-        act(app, "draw.lasso", json!({}));
-    }
+    // In a measured group, so the collapse planner counts this button in the Draw row's budget
+    // (an unmeasured button showed scroll arrows while a group was still collapsible).
+    group(ui, "Select", Icon::Shapes, |ui| {
+        let __k = big_button(ui, Icon::Shapes, "Select\nObjects", "Select and move ink and shapes", false);
+        control_keytip(app, ui, &__k, "draw.lasso");
+        if __k.clicked() {
+            act(app, "draw.lasso", json!({}));
+        }
+    });
     group(ui, "Pens", Icon::Pen, |ui| {
         for (label, color) in [("Pen\nBlue", "#1F5FC9"), ("Pen\nBlack", "#000000"), ("Pen\nRed", "#D13B2F"), ("Highlighter", "#F2E33A")] {
             let on = tool == "pen" && app.session.draw_color.eq_ignore_ascii_case(color);
