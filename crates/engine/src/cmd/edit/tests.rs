@@ -727,6 +727,59 @@ fn tiled_paste_replicates_merged_areas_at_every_tile() {
 }
 
 #[test]
+fn tiled_paste_drops_only_the_destination_merges_it_displaces() {
+    // #3370 review: a later tile displaces an existing merge just as the first does.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "D1:E1"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "H1:I1"})).unwrap();
+    paste_over(&mut s, "A1:B1", "C1:F1").unwrap();
+    let merges = &s.doc().unwrap().wb.sheet(0).unwrap().merges;
+    assert_eq!(merges.len(), 4, "{merges:?}");
+    for want in ["A1:B1", "C1:D1", "E1:F1", "H1:I1"] {
+        assert!(merges.contains(&RangeRef::parse(want).unwrap()), "merge {want} in {merges:?}");
+    }
+    assert!(!merges.contains(&RangeRef::parse("D1:E1").unwrap()), "the displaced merge is gone: {merges:?}");
+}
+
+#[test]
+fn tiled_paste_replicates_merges_over_many_tiles() {
+    // #3370 review: tiling down a tall selection lands a merge per tile, without the
+    // destination list being rescanned per tile.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    paste_over(&mut s, "A1:B1", "C1:D2000").unwrap();
+    let merges = &s.doc().unwrap().wb.sheet(0).unwrap().merges;
+    assert_eq!(merges.len(), 2001, "the original plus one per tile row");
+    assert!(merges.contains(&RangeRef::parse("C2000:D2000").unwrap()));
+}
+
+#[test]
+fn paste_displacing_a_merge_unblocks_the_spill_it_covered() {
+    // #3370 review: =SEQUENCE(2) at G2 spills into G3, but the merge E3:G3 covers G3, so
+    // it sits at #SPILL!. Pasting a block whose own merge overlaps only the blocking
+    // merge's left edge displaces it, and the spill is evaluated again even though its
+    // anchor was never written.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2, 3]]})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "B1:C1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "G2", "input": "=SEQUENCE(2)"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "E3:G3"})).unwrap();
+    assert_eq!(value_at(&s, "G2"), gridcraft_core::Value::Error(gridcraft_core::CellError::Spill), "the merge blocks the spill");
+    paste_over(&mut s, "A1:C1", "C3:G3").unwrap();
+    let merges = &s.doc().unwrap().wb.sheet(0).unwrap().merges;
+    assert!(merges.contains(&RangeRef::parse("D3:E3").unwrap()), "the tile's merge landed: {merges:?}");
+    assert!(!merges.contains(&RangeRef::parse("E3:G3").unwrap()), "the blocking merge was displaced: {merges:?}");
+    assert_eq!(value_at(&s, "G2"), Value::Number(1.0), "the spill flows once its merge is displaced");
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(CellRef::new(2, 6)), Value::Number(2.0), "the second value lands in G3");
+}
+#[test]
 fn tiled_cut_moves_each_cell_into_every_tile() {
     // A cut pasted over a multiple of its size tiles; the cut path reads the taken cells by position.
     let mut s = Session::new();

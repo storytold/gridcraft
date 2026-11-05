@@ -90,34 +90,11 @@ fn operation_symbol(op: &str) -> Option<char> {
     }
 }
 
-fn copy_merges(
-    cx: &mut crate::cmd::Ctx,
-    dest_sheet: usize,
-    src_sheet: &gridcraft_model::Sheet,
-    src: RangeRef,
-    at: CellRef,
-    what: What,
-    transpose: bool,
-) -> Result<()> {
-    if !matches!(what, What::All | What::Formats) || transpose {
-        return Ok(());
-    }
-    let merges: Vec<RangeRef> = src_sheet.merges.iter().filter(|merge| src.contains_range(merge)).copied().collect();
-    for merge in merges {
-        let row_offset = at.row as i64 - src.start.row as i64;
-        let col_offset = at.col as i64 - src.start.col as i64;
-        if let (Some(start), Some(end)) = (merge.start.offset(row_offset, col_offset), merge.end.offset(row_offset, col_offset)) {
-            let moved = RangeRef::new(start, end);
-            let sheet = cx.sheet_mut(dest_sheet)?;
-            sheet.merges.retain(|existing| !existing.intersects(&moved));
-            sheet.merges.push(moved);
-        }
-    }
-    Ok(())
-}
-
-/// Copy the block's merged areas to every tile of a tiled paste: [`copy_merges`] at each
-/// tile's anchor. A paste that takes the block once is one call at the anchor itself.
+/// Copy the block's merged areas to every tile of a tiled paste, at the same pitch as
+/// the cell writes. A paste that takes the block once is a single tile at the anchor
+/// itself. The source merges are collected once and the destination merges they
+/// displace are dropped in one pass: rescanning the destination list for every tile
+/// made a tall tiled paste unresponsive.
 #[allow(clippy::too_many_arguments)]
 fn copy_merges_tiled(
     cx: &mut crate::cmd::Ctx,
@@ -132,14 +109,59 @@ fn copy_merges_tiled(
     pitch_h: u32,
     pitch_w: u32,
 ) -> Result<()> {
+    if !matches!(what, What::All | What::Formats) || transpose {
+        return Ok(());
+    }
+    let src_merges: Vec<RangeRef> = src_sheet.merges.iter().filter(|merge| src.contains_range(merge)).copied().collect();
+    if src_merges.is_empty() {
+        return Ok(());
+    }
+    let mut moved: Vec<RangeRef> = Vec::new();
     for tr in 0..tiles_r {
         for tc in 0..tiles_c {
             let row = i64::from(tr).saturating_mul(i64::from(pitch_h));
             let col = i64::from(tc).saturating_mul(i64::from(pitch_w));
             let Some(anchor) = at.offset(row, col) else { continue };
-            copy_merges(cx, dest_sheet, src_sheet, src, anchor, what, transpose)?;
+            let row_offset = anchor.row as i64 - src.start.row as i64;
+            let col_offset = anchor.col as i64 - src.start.col as i64;
+            for merge in &src_merges {
+                if let (Some(start), Some(end)) = (merge.start.offset(row_offset, col_offset), merge.end.offset(row_offset, col_offset)) {
+                    moved.push(RangeRef::new(start, end));
+                }
+            }
         }
     }
+    if moved.is_empty() {
+        return Ok(());
+    }
+    let sheet = cx.sheet_mut(dest_sheet)?;
+    let mut removed: Vec<RangeRef> = Vec::new();
+    sheet.merges.retain(|existing| {
+        let displaced = moved.iter().any(|m| existing.intersects(m));
+        if displaced {
+            removed.push(*existing);
+        }
+        !displaced
+    });
+    sheet.merges.extend(moved.iter().copied());
+    // A merged cell blocks a dynamic array's spill: spills over the areas whose merging
+    // changed, and blocked ones that could reach them, are evaluated again, as in
+    // format::merge. A displaced merge can cover cells the paste never wrote.
+    let areas: Vec<RangeRef> = removed.iter().copied().chain(moved.iter().copied()).collect();
+    let mut touched: Vec<(usize, CellRef)> =
+        sheet.spill_ranges.iter().filter(|(_, r)| areas.iter().any(|a| r.intersects(a))).map(|(anchor, _)| (dest_sheet, *anchor)).collect();
+    if let Some(reach_end) = areas.iter().map(|a| a.end).reduce(|acc, e| CellRef::new(acc.row.max(e.row), acc.col.max(e.col))) {
+        let reach = RangeRef::new(CellRef::new(0, 0), reach_end);
+        touched.extend(
+            sheet
+                .cells
+                .iter_range(reach)
+                // A Python cell's result is blocked and unblocked like a formula's.
+                .filter(|(_, x)| (x.formula.is_some() || x.py.is_some()) && x.value == gridcraft_core::Value::Error(gridcraft_core::CellError::Spill))
+                .map(|(c, _)| (dest_sheet, c)),
+        );
+    }
+    cx.changed.extend(touched);
     Ok(())
 }
 
