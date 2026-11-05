@@ -171,6 +171,11 @@ All overlays are reported through `overlay` = `""` | `openModel` | `existingConn
 | `dataModel.pivotFields` | `{name?}` | `{pivots: [{name, sheet, at, range}], model: {tables, measures, relationships}, selected}` — what the field-list pane reads; `at` is the report body (below the page fields), `range` is the whole report including its page-field rows |
 | `insert.modelPivotTable` | same as `dataModel.createPivot` | same (Insert › Tables entry point) |
 
+`dataModel.createPivot`, `dataModel.pivotFields` and `insert.modelPivotTable` come with the PivotTable
+Fields slice (`crates/engine/src/cmd/dax_pivot.rs`). They belong to this contract — the window's PivotTable
+group and that slice's field pane drive the same reports — so they are listed here, but a build carrying the
+window without that slice does not register them.
+
 `status` is:
 
 ```json
