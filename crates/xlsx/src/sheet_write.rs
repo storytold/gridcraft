@@ -5,8 +5,8 @@ use std::fmt::Write as _;
 
 use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::{
-    Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, LineInfo, NoteBox, NoteCorner, Orientation, PageOrder,
-    Sheet, SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
+    Cell, CellRuns, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, LineInfo, NoteBox, NoteCorner, Orientation,
+    PageOrder, Sheet, SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
 };
 
 use crate::drawing::{Obj, image_content_type, image_ext};
@@ -223,6 +223,7 @@ struct CellWriteInput<'a> {
     reference: CellRef,
     cell: Option<&'a Cell>,
     picture: Option<&'a std::sync::Arc<gridcraft_model::CellPicture>>,
+    runs: Option<&'a CellRuns>,
     header_override: Option<&'a String>,
     spill_value: Option<&'a Value>,
     dynamic_range: Option<&'a RangeRef>,
@@ -656,6 +657,7 @@ fn write_sheet_data(s: &mut String, data: SheetCellData<'_>, sid: &dyn Fn(gridcr
                     reference: cell_ref,
                     cell,
                     picture: sheet.cell_pictures.get(&cell_ref),
+                    runs: sheet.cell_runs.get(&cell_ref),
                     header_override: ov,
                     spill_value: ex,
                     dynamic_range: array.as_ref(),
@@ -736,7 +738,7 @@ fn write_sheet_views(s: &mut String, sheet: &Sheet, selected: bool) {
 }
 
 fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_model::StyleId) -> u32, out: &mut Out) {
-    let CellWriteInput { reference: c, cell, picture, header_override: ov, spill_value: extra, dynamic_range: dynamic } = input;
+    let CellWriteInput { reference: c, cell, picture, runs, header_override: ov, spill_value: extra, dynamic_range: dynamic } = input;
     let style = cell.map(|x| sid(x.style)).unwrap_or(0);
     s.push_str("<c r=\"");
     push_a1(s, c);
@@ -833,7 +835,13 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
             let _ = write!(s, "><v>{}</v></c>", num(*n));
         }
         Value::Text(t) => {
-            let i = out.sst.index(t);
+            // Rich runs join the shared string as formatting on the text; a runs entry that
+            // does not line up with this cell's text (wrong length, override in play) is
+            // ignored and the plain text is shared.
+            let i = match runs {
+                Some(r) if r.valid_for(t) => out.sst.index_rich(t, r),
+                _ => out.sst.index(t),
+            };
             let _ = write!(s, " t=\"s\"><v>{i}</v></c>");
         }
         Value::Bool(b) => {

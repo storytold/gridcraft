@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use gridcraft_core::{CellRef, RangeRef};
-use gridcraft_model::{Sheet, Workbook};
+use gridcraft_model::{Color, RunFont, Sheet, Underline, VertAlign, Workbook};
 
 use crate::{EngineError, Result};
 
@@ -629,6 +629,80 @@ fn html_cell_css(wb: &Workbook, sh: &Sheet, c: CellRef, dir: CellDir) -> String 
     css
 }
 
+/// A rich-text run's font delta as the CSS of the `<span>` drawing it: only the overridden
+/// fields, in a fixed order, each declaration ending in `;`. The surrounding `<td>` already
+/// carries the cell-level style, so an all-`None` delta produces nothing (the run needs only
+/// its delta, never the merged font).
+/// A font name inside a CSS `font-family:"…"` string: the characters a decoder could turn back
+/// into CSS structure (`"`, `\`, and control characters) are backslash-escaped, so the HTML
+/// entity decoding cannot re-open the string or inject declarations.
+fn css_escape(name: &str) -> String {
+    let mut o = String::with_capacity(name.len());
+    for c in name.chars() {
+        if matches!(c, '"' | '\\') || c.is_control() {
+            let _ = write!(o, "\\{:x}", c as u32);
+        } else {
+            o.push(c);
+        }
+    }
+    o
+}
+
+fn run_span_css(delta: &RunFont, wb: &Workbook) -> String {
+    let mut css = String::new();
+    if let Some(c) = &delta.color {
+        // A run's automatic colour renders as unconditionally black (run_color), so the copy
+        // pins black instead of letting the span inherit the <td>'s cell colour.
+        if matches!(c, Color::Auto) {
+            css.push_str("color:#000000;");
+        } else if let Some(h) = c.hex(&wb.theme) {
+            let _ = write!(css, "color:{h};");
+        }
+    }
+    match delta.bold {
+        Some(true) => css.push_str("font-weight:bold;"),
+        Some(false) => css.push_str("font-weight:normal;"),
+        None => {}
+    }
+    match delta.italic {
+        Some(true) => css.push_str("font-style:italic;"),
+        Some(false) => css.push_str("font-style:normal;"),
+        None => {}
+    }
+    // Underline and strike share one declaration; a double underline adds the style upgrade as
+    // its own declaration, so old parsers that drop it still keep the underline itself.
+    let mut deco = String::new();
+    if !matches!(delta.underline, None | Some(Underline::None)) {
+        deco.push_str("underline");
+    }
+    if delta.strike == Some(true) {
+        if !deco.is_empty() {
+            deco.push(' ');
+        }
+        deco.push_str("line-through");
+    }
+    if !deco.is_empty() {
+        let _ = write!(css, "text-decoration:{deco};");
+    }
+    if matches!(delta.underline, Some(Underline::Double | Underline::DoubleAccounting)) {
+        css.push_str("text-decoration-style:double;");
+    }
+    if let Some(size) = delta.size {
+        let _ = write!(css, "font-size:{size}pt;");
+    }
+    if let Some(name) = &delta.name {
+        // CSS-escape the name first (a `"` or `;` inside would close the string or add a
+        // declaration once the HTML parser decodes `&quot;` back to `"`), then HTML-encode.
+        let _ = write!(css, "font-family:\"{}\";", esc(&css_escape(name)));
+    }
+    match delta.vert {
+        Some(VertAlign::Superscript) => css.push_str("vertical-align:super;"),
+        Some(VertAlign::Subscript) => css.push_str("vertical-align:sub;"),
+        _ => {}
+    }
+    css
+}
+
 /// How a cell marks its direction in HTML. Text on a right-to-left sheet, or text with
 /// right-to-left letters, follows its first strong character (`dir="auto"`), so General
 /// alignment puts Arabic and Hebrew on the right. Numbers on a right-to-left sheet stay left to
@@ -705,23 +779,24 @@ pub(crate) fn range_html(wb: &Workbook, sheet: usize, r: RangeRef, plain_text: &
             let dir = CellDir::of(sh, c, &text);
             let css = html_cell_css(wb, sh, c, dir);
             write!(out, "<td style=\"border:1px solid #d4d4d4;padding:2px 4px;white-space:pre-wrap;{css}\"{}{span}>", dir.attr()).ok()?;
-            let mut chars = text.chars().peekable();
-            while let Some(ch) = chars.next() {
-                match ch {
-                    '&' => out.write_str("&amp;"),
-                    '<' => out.write_str("&lt;"),
-                    '>' => out.write_str("&gt;"),
-                    '"' => out.write_str("&quot;"),
-                    '\r' => {
-                        if chars.peek() == Some(&'\n') {
-                            chars.next();
-                        }
-                        out.write_str("<br>")
+            // Rich runs become spans inside the cell. Runs that don't line up with the displayed
+            // text copy flat — never partial spans — as does a cell without runs.
+            let rich: Option<Vec<(&str, String)>> = sh.cell_runs.get(&c).filter(|runs| runs.valid_for(&text)).and_then(|runs| {
+                runs.runs.iter().enumerate().map(|(i, run)| Some((runs.run_text(&text, i)?, run_span_css(&run.font, wb)))).collect()
+            });
+            if let Some(spans) = rich {
+                let mut cr = false;
+                for (segment, css) in spans {
+                    if !css.is_empty() {
+                        write!(out, "<span style=\"{css}\">").ok()?;
                     }
-                    '\n' => out.write_str("<br>"),
-                    _ => out.write_char(ch),
+                    esc_html_cont(&mut out, segment, &mut cr).ok()?;
+                    if !css.is_empty() {
+                        out.write_str("</span>").ok()?;
+                    }
                 }
-                .ok()?;
+            } else {
+                esc_html(&mut out, &text).ok()?;
             }
             out.write_str("</td>").ok()?;
         }
@@ -742,6 +817,45 @@ impl std::fmt::Write for ClipboardHtml {
         self.0.push_str(s);
         Ok(())
     }
+}
+
+/// Escapes `s` into `out` as cell text: `&`, `<`, `>`, `"` as entities, `\r\n` and `\n` as `<br>`.
+/// `cr_pending` says the previous segment ended in `\r` (its `\n` may sit in this one), and the
+/// return value is the same state for the next segment — rich runs escape segment by segment, and
+/// a `\r\n` split across a run boundary must still be one `<br>`, as it is in the flat path.
+fn esc_html(out: &mut ClipboardHtml, s: &str) -> std::fmt::Result {
+    esc_html_cont(out, s, &mut false)
+}
+
+fn esc_html_cont(out: &mut ClipboardHtml, s: &str, cr_pending: &mut bool) -> std::fmt::Result {
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '&' => out.write_str("&amp;"),
+            '<' => out.write_str("&lt;"),
+            '>' => out.write_str("&gt;"),
+            '"' => out.write_str("&quot;"),
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                // A bare `\r` at the segment's end pairs with a `\n` that may open the next.
+                *cr_pending = chars.peek().is_none();
+                out.write_str("<br>")
+            }
+            '\n' => {
+                // The previous segment's closing `\r` already emitted this break.
+                if *cr_pending {
+                    *cr_pending = false;
+                    Ok(())
+                } else {
+                    out.write_str("<br>")
+                }
+            }
+            _ => out.write_char(ch),
+        }?;
+    }
+    Ok(())
 }
 
 /// Most rows Save as Web Page writes. A sheet whose used range is taller fails instead of losing cells.

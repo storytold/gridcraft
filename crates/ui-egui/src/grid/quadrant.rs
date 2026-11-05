@@ -372,7 +372,6 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     if text.is_empty() {
         return;
     }
-    let color = ncolor.unwrap_or(lk.text_color);
     let halign = match st.align.h {
         HAlign::General => match v {
             Value::Number(_) => HAlign::Right,
@@ -385,24 +384,17 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     let indent = st.align.indent as f32 * 9.0 * z;
     let pad = 2.5 * z;
     let rotated = st.align.rotation != 0 && st.align.rotation != 255;
+    // Rich-text runs (#774): a runs side-table valid for the displayed text paints it one
+    // section per run, each in its own merged font and colour.
+    let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
+    let wrapped = !rotated && (st.align.wrap || st.align.h == HAlign::Justify);
+    let cell_runs = sh.cell_runs.get(&c);
+    let rjob = cell_runs.and_then(|r| crate::cell_runs::job(&text, r, &st.font, lk.text_color, &wb.theme, z, wrapped.then_some(wrap_w)));
+    // The job carries its own colours, so the number format's section colour only paints flat text.
+    let color = if rjob.is_some() { lk.text_color } else { ncolor.unwrap_or(lk.text_color) };
     // Rotated text wraps along its own direction (below), not across the column width.
-    if !rotated && (st.align.wrap || st.align.h == HAlign::Justify) {
-        let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
-        let mut job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, wrap_w);
-        job.halign = match halign {
-            HAlign::Center | HAlign::CenterAcross => egui::Align::Center,
-            HAlign::Right => egui::Align::RIGHT,
-            _ => egui::Align::LEFT,
-        };
-        let galley = p.layout_job(job);
-        let x = match halign {
-            HAlign::Center | HAlign::CenterAcross => rect.center().x,
-            HAlign::Right => rect.right() - pad,
-            _ => text_left + pad + indent,
-        };
-        let y = wrapped_cell_text_y(st.align.v, *rect, galley.size().y, z);
-        let text_clip = wrapped_text_clip(p, *rect, &galley, y, st.align.v);
-        p.with_clip_rect(text_clip).galley(pos2(x, y), galley, color);
+    if wrapped {
+        paint_wrapped_text(p, &text, *rect, text_left, &rjob, &font, color, halign, st.align.v, indent, pad, z);
         return;
     }
     // Wrap Text off: Excel ignores the line breaks and draws the whole string on one line.
@@ -416,7 +408,19 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         .flatten();
     let shrunk = small.is_some();
     let font = small.unwrap_or(font);
-    let mut galley = p.layout_no_wrap(first_line.clone(), font.clone(), color);
+    // The runs job stands in for the flat first-line galley, unless a flat-only
+    // transformation (shrink to fit above, `####` or fill characters below) repaints the
+    // text flat.
+    // Wrap Text off draws the whole string on one line (the breaks removed below), so a rich
+    // cell whose text holds a line break cannot go through `first_line` (it cuts at the break):
+    // it falls back to the flat rendering, losing per-run formatting for that case only.
+    let has_break = text.contains(['\n', '\r']);
+    let fjob = if shrunk || fill_char.is_some() || has_break { None } else { rjob.as_ref().map(crate::cell_runs::first_line) };
+    let mut runs_painted = fjob.is_some();
+    let mut galley = match fjob {
+        Some(j) => p.layout_job(j),
+        None => p.layout_no_wrap(first_line.clone(), font.clone(), color),
+    };
     let mut w = galley.size().x;
     // Numbers and dates never overflow: they show #### when too narrow.
     let hashed = !shrunk && (numeric || matches!(v, Value::Number(_))) && w > avail_w - 2.0 * pad && st.align.h != HAlign::Fill;
@@ -426,6 +430,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         let n = ((avail_w - 2.0 * pad) / hash_w).floor().max(1.0) as usize;
         galley = p.layout_no_wrap("#".repeat(n), font.clone(), color);
         w = galley.size().x;
+        runs_painted = false;
     }
     // Repeat fill (`*` in number formats) / Fill alignment. A number already shown as #### keeps
     // it: rebuilding it from the text would overflow and clip its leading digits.
@@ -502,22 +507,122 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     let y = cell_text_y(st.align.v, *rect, gh, z);
     let cp = p.with_clip_rect(clip.intersect(p.clip_rect()));
     if rotated {
-        let angle = -(st.align.rotation as f32).to_radians();
-        // Upright (±90°) wrapped text wraps to the row height: lines then stack across the column.
-        let galley = if st.align.wrap && st.align.rotation.abs() == 90 {
-            let job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, (rect.height() - 2.0 * pad).max(4.0));
-            p.layout_job(job)
-        } else {
-            galley.clone()
-        };
-        let pos = rotated_text_pos(*rect, galley.size(), angle, painted_halign(st.align.h, geo.rtl), st.align.v, pad, indent);
-        let mut shape = egui::epaint::TextShape::new(pos, galley, color);
-        shape.angle = angle;
-        cp.add(shape);
+        paint_rotated_text(p, &cp, &text, *rect, &rjob, &galley, &font, color, st, geo.rtl, pad, indent);
     } else {
         cp.galley(pos2(x, y), galley.clone(), color);
     }
-    paint_text_decorations(&cp, TextDecoration { x, y, width: w, height: gh, color, underline: st.font.underline, strike: st.font.strike });
+    if runs_painted && let Some(runs) = cell_runs {
+        paint_run_decorations(&cp, &galley, runs, &st.font, lk.text_color, &wb.theme, x, y, gh);
+    } else {
+        paint_text_decorations(&cp, TextDecoration { x, y, width: w, height: gh, color, underline: st.font.underline, strike: st.font.strike });
+    }
+}
+
+/// Rotated text: the cell's rotation angle; upright (±90°) wrapped text re-wraps to the row
+/// height — through the rich-runs job when one is valid — and lines then stack across the column.
+#[allow(clippy::too_many_arguments)]
+fn paint_rotated_text(
+    p: &Painter,
+    cp: &Painter,
+    text: &str,
+    rect: Rect,
+    rjob: &Option<egui::text::LayoutJob>,
+    galley: &std::sync::Arc<egui::Galley>,
+    font: &FontId,
+    color: Color32,
+    st: &gridcraft_engine::model::Style,
+    rtl: bool,
+    pad: f32,
+    indent: f32,
+) {
+    let angle = -(st.align.rotation as f32).to_radians();
+    let wrapped = if st.align.wrap && st.align.rotation.abs() == 90 {
+        let wrap_h = (rect.height() - 2.0 * pad).max(4.0);
+        match rjob {
+            Some(j) => {
+                let mut j = j.clone();
+                j.wrap.max_width = wrap_h;
+                j.break_on_newline = true;
+                p.layout_job(j)
+            }
+            None => p.layout_job(egui::text::LayoutJob::simple(text.to_string(), font.clone(), color, wrap_h)),
+        }
+    } else {
+        std::sync::Arc::clone(galley)
+    };
+    let pos = rotated_text_pos(rect, wrapped.size(), angle, painted_halign(st.align.h, rtl), st.align.v, pad, indent);
+    let mut shape = egui::epaint::TextShape::new(pos, wrapped, color);
+    shape.angle = angle;
+    cp.add(shape);
+}
+
+/// Wrap Text on (or Justify): the text wraps to the cell's width — through the rich-runs job
+/// when one is valid for it — and is clipped to the cell vertically.
+#[allow(clippy::too_many_arguments)]
+fn paint_wrapped_text(
+    p: &Painter,
+    text: &str,
+    rect: Rect,
+    text_left: f32,
+    rjob: &Option<egui::text::LayoutJob>,
+    font: &FontId,
+    color: Color32,
+    halign: HAlign,
+    valign: VAlign,
+    indent: f32,
+    pad: f32,
+    z: f32,
+) {
+    let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
+    let mut job = match rjob {
+        Some(j) => j.clone(),
+        None => egui::text::LayoutJob::simple(text.to_string(), font.clone(), color, wrap_w),
+    };
+    job.halign = match halign {
+        HAlign::Center | HAlign::CenterAcross => egui::Align::Center,
+        HAlign::Right => egui::Align::RIGHT,
+        _ => egui::Align::LEFT,
+    };
+    let galley = p.layout_job(job);
+    let x = match halign {
+        HAlign::Center | HAlign::CenterAcross => rect.center().x,
+        HAlign::Right => rect.right() - pad,
+        _ => text_left + pad + indent,
+    };
+    let y = wrapped_cell_text_y(valign, rect, galley.size().y, z);
+    let text_clip = wrapped_text_clip(p, rect, &galley, y, valign);
+    p.with_clip_rect(text_clip).galley(pos2(x, y), galley, color);
+}
+
+/// Per-run decorations (#774): each run's merged font says whether its slice is underlined or
+/// struck; its glyphs give the segment's extent in the galley.
+#[allow(clippy::too_many_arguments)]
+fn paint_run_decorations(
+    cp: &Painter,
+    galley: &std::sync::Arc<egui::Galley>,
+    runs: &gridcraft_engine::model::CellRuns,
+    base: &gridcraft_engine::model::Font,
+    base_color: Color32,
+    theme: &gridcraft_engine::model::Theme,
+    x: f32,
+    y: f32,
+    gh: f32,
+) {
+    // One glyph row per galley row: a wrapped run underlines every line it touches, at that
+    // line's own height (the flat text's single-line look scales per row).
+    let glyph_rows: Vec<(Vec<(f32, f32)>, String)> =
+        galley.rows.iter().map(|pr| (pr.row.glyphs.iter().map(|g| (pr.pos.x + g.pos.x, g.advance_width)).collect(), pr.row.text())).collect();
+    let rows: Vec<crate::cell_runs::Row<'_>> = glyph_rows
+        .iter()
+        .zip(galley.rows.iter())
+        .map(|((glyphs, text), pr)| crate::cell_runs::Row { glyphs, text, y: pr.pos.y, h: pr.rect().height() })
+        .collect();
+    for d in crate::cell_runs::decoration_lines_rows(&rows, runs, base, base_color, theme, gh / (galley.rows.len().max(1) as f32)) {
+        paint_text_decorations(
+            cp,
+            TextDecoration { x: x + d.x0, y: y + d.y, width: d.x1 - d.x0, height: d.h, color: d.color, underline: d.underline, strike: d.strike },
+        );
+    }
 }
 
 struct TextDecoration {
