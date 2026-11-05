@@ -385,7 +385,18 @@ fn save_changes_shortcuts_save_before_closing() {
         if let Ok(prefix) = std::env::var("GRIDCRAFT_SAVE_LANGUAGE_SNAPSHOT") {
             h.render().unwrap().save(format!("{prefix}-{}.png", language.code())).unwrap();
         }
-        h.key_press(egui::Key::Y);
+        // Even without widget focus, the answer's text must not start a cell draft.
+        h.ctx.memory_mut(|m| {
+            if let Some(focused) = m.focused() {
+                m.surrender_focus(focused);
+            }
+        });
+        assert!(h.state().editor.is_none());
+        h.input_mut().events.extend([
+            egui::Event::Key { key: egui::Key::Y, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE },
+            egui::Event::Text("y".into()),
+            egui::Event::Key { key: egui::Key::Y, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE },
+        ]);
         let sent = step_commands(&mut h);
         assert!(sent.contains(&egui::ViewportCommand::Close), "Y saves and continues quitting: {sent:?}");
         assert!(h.state().dialog.is_none());
