@@ -5,8 +5,8 @@ use std::fmt::Write as _;
 
 use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::{
-    Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, IconChoice, LineInfo, NoteBox, NoteCorner, Orientation, PageOrder,
-    Sheet, SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds,
+    Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, IconChoice, LineInfo, NoteBox, NoteCorner, Orientation,
+    PageOrder, Sheet, SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds,
 };
 
 use crate::drawing::{Obj, image_content_type, image_ext};
@@ -259,8 +259,11 @@ fn write_sheet_extensions(s: &mut String, sheet: &Sheet, prio: &[u32], x14_cfs: 
                     SparklineKind::Column => " type=\"column\"",
                     SparklineKind::WinLoss => " type=\"stacked\"",
                 };
-                let src =
-                    if sp.source.contains('!') { sp.source.clone() } else { format!("{}!{}", gridcraft_formula::quote_sheet(&sheet.name), sp.source) };
+                let src = if sp.source.contains('!') {
+                    sp.source.clone()
+                } else {
+                    format!("{}!{}", gridcraft_formula::quote_sheet(&sheet.name), sp.source)
+                };
                 let color = if sp.color == Color::Auto { "rgb=\"FF376092\"".to_string() } else { color_attrs(&sp.color) };
                 let _ = write!(
                     s,
