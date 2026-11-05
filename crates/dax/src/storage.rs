@@ -1405,6 +1405,9 @@ impl RelationshipIndex {
     /// caller can probe with the plain `ScalarKey` of a value and still join an `Integer` key to a
     /// `Decimal` or `Currency` one.
     pub fn rows_from(&self, key: &ScalarKey) -> &[usize] {
+        if crate::value::is_nan_key(key) {
+            return &[];
+        }
         if let Some(rows) = self.from_rows.get(key) {
             return rows;
         }
@@ -1417,6 +1420,9 @@ impl RelationshipIndex {
 
     /// Row ids in the `to` table whose key equals `key`; empty when there is no match.
     pub fn rows_to(&self, key: &ScalarKey) -> &[usize] {
+        if crate::value::is_nan_key(key) {
+            return &[];
+        }
         if let Some(rows) = self.to_rows.get(key) {
             return rows;
         }
@@ -1647,7 +1653,12 @@ fn build_key_index(table: &TableStorage, column: usize, key: fn(&crate::value::S
     let mut index: BTreeMap<ScalarKey, Vec<usize>> = BTreeMap::new();
     for row in 0..table.row_count() {
         if let Some(value) = table.value(column, row) {
-            index.entry(key(&value)).or_default().push(row);
+            let key = key(&value);
+            // A NaN never joins, so it is not a relationship key at all.
+            if crate::value::is_nan_key(&key) {
+                continue;
+            }
+            index.entry(key).or_default().push(row);
         }
     }
     index

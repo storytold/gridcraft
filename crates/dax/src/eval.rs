@@ -635,6 +635,7 @@ impl<'a> Evaluator<'a> {
                 .iter()
                 .filter_map(|row| storage.value(other, other_column, *row))
                 .map(|value| relationship_key_of(&ScalarKey::from(&value)))
+                .filter(|key| !crate::value::is_nan_key(key))
                 .collect();
             let mut retained = Vec::with_capacity(rows.len());
             for row in rows {
@@ -642,7 +643,7 @@ impl<'a> Evaluator<'a> {
                 let key = ScalarKey::from(&value);
                 // A BLANK foreign key never joins a one-side row, whatever the related table
                 // holds: it is an orphan, exactly as `column_field_value` reads it.
-                if key == ScalarKey::Blank {
+                if key == ScalarKey::Blank || crate::value::is_nan_key(&key) {
                     continue;
                 }
                 if keys.contains(&relationship_key_of(&key)) {
@@ -744,12 +745,13 @@ impl<'a> Evaluator<'a> {
                 .iter()
                 .filter_map(|row| row.get(other_col))
                 .map(|value| relationship_key_of(&ScalarKey::from(value)))
+                .filter(|key| !crate::value::is_nan_key(key))
                 .collect();
             rows.retain(|row| {
                 let Some(value) = row.get(self_col) else { return false };
                 let key = ScalarKey::from(value);
                 // A BLANK foreign key never joins, so it is never in the related key set.
-                key != ScalarKey::Blank && keys.contains(&relationship_key_of(&key))
+                key != ScalarKey::Blank && !crate::value::is_nan_key(&key) && keys.contains(&relationship_key_of(&key))
             });
         }
 

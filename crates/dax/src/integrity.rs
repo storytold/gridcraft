@@ -536,7 +536,12 @@ fn key_occurrences(table: &ModelTable, column: usize) -> BTreeMap<ScalarKey, Occ
     let mut keys: BTreeMap<ScalarKey, Occurrence> = BTreeMap::new();
     for (row, cells) in table.rows.iter().enumerate() {
         let value = cells.get(column).unwrap_or(&blank);
-        keys.entry(crate::value::relationship_key_of_value(value)).or_default().push(row);
+        let key = crate::value::relationship_key_of_value(value);
+        // A NaN key never joins on either path, so it is not a relationship key here either.
+        if crate::value::is_nan_key(&key) {
+            continue;
+        }
+        keys.entry(key).or_default().push(row);
     }
     keys
 }

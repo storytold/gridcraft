@@ -295,6 +295,14 @@ pub(crate) fn relationship_key_of(key: &ScalarKey) -> ScalarKey {
     }
 }
 
+/// Whether a key holds a NaN value, which never joins and is never a relationship key.
+pub(crate) fn is_nan_key(key: &ScalarKey) -> bool {
+    match key {
+        ScalarKey::Decimal(bits) | ScalarKey::DateTime(bits) => bits_order(*bits).is_nan(),
+        _ => false,
+    }
+}
+
 /// The same key with text folded to lower case: the rule filter keys and the values they are
 /// compared with share, so a filter set from `VALUES` matches every spelling of the value.
 pub(crate) fn folded_key(key: &ScalarKey) -> ScalarKey {
@@ -325,7 +333,12 @@ fn exact_number(value: &Scalar) -> Option<f64> {
     const LIMIT: i64 = 1 << 53;
     match value {
         Scalar::Integer(number) if number.unsigned_abs() <= LIMIT as u64 => Some(*number as f64),
-        Scalar::Currency(number) if number.unsigned_abs() <= LIMIT as u64 => Some(*number as f64 / 10_000.0),
+        Scalar::Currency(number) if number.unsigned_abs() <= LIMIT as u64 => {
+            let major = *number as f64 / 10_000.0;
+            // The same round-trip rule the relationship key uses, so `strict_eq` and the join
+            // indexes cannot disagree about an amount that does not survive the division.
+            if (major * 10_000.0).round() as i64 == *number { Some(major) } else { None }
+        }
         Scalar::Decimal(number) | Scalar::DateTime(number) => Some(*number),
         _ => None,
     }

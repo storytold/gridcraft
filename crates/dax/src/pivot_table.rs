@@ -1040,6 +1040,9 @@ fn model_field_value(model: &DataModel, lookups: &HopKeyLookups, row: &[Scalar],
         if key == ScalarKey::Blank {
             return Scalar::Blank;
         }
+        if crate::value::is_nan_key(&key) {
+            return Scalar::Blank;
+        }
         let matched = lookups
             .get(&(hop.to_table, hop.to_column))
             .and_then(|index| index.get(&crate::value::relationship_key_of(&key)).copied())
@@ -1070,7 +1073,11 @@ fn hop_key_lookups<'a>(model: &DataModel, fields: impl IntoIterator<Item = &'a B
             if let Some(table) = model.tables.get(hop.to_table) {
                 for (row_id, row) in table.rows.iter().enumerate() {
                     if let Some(value) = row.get(hop.to_column) {
-                        index.entry(crate::value::relationship_key_of_value(value)).or_insert(row_id);
+                        let key = crate::value::relationship_key_of_value(value);
+                        // A NaN never joins, so it is not in the lookup.
+                        if !crate::value::is_nan_key(&key) {
+                            index.entry(key).or_insert(row_id);
+                        }
                     }
                 }
             }
