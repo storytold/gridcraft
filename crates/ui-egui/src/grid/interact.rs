@@ -836,7 +836,7 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
 
 /// An armed Format Painter pastes onto the cells just clicked or dragged over (not while
 /// pointing a formula reference, which also drags a Select).
-fn format_painter_apply(app: &mut SheetApp) {
+pub(super) fn format_painter_apply(app: &mut SheetApp) {
     if app.session.format_painter.is_some()
         && !app.editor.as_ref().is_some_and(|ed| ed.can_point())
         && !app.dialog.as_ref().is_some_and(|d| d.picks_references())
