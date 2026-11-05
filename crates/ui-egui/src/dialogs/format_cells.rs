@@ -107,7 +107,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
             ui.checkbox(&mut st.align.shrink, lang.tr("Shrink to fit"));
         }
         "Font" => {
-            egui::ComboBox::from_label(lang.tr("Font")).selected_text(st.font.name.clone()).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_label(lang.tr("Font")).selected_text(st.font.name.clone()).show_ui(ui, |ui| {
                 for f in crate::fonts::families() {
                     ui.selectable_value(&mut st.font.name, f.clone(), f.clone());
                 }

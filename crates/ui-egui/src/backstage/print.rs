@@ -33,7 +33,7 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
             }
             ui.add_space(16.0);
             let scope = if bs.print_all { "Print Entire Workbook" } else { "Print Active Sheets" };
-            egui::ComboBox::from_id_salt("backstage_print_scope")
+            craft_ui::ComboBox::from_id_salt("backstage_print_scope")
                 .width(230.0)
                 .selected_text(lang.tr(scope))
                 .show_ui(ui, |ui| {

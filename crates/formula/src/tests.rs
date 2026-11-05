@@ -518,3 +518,28 @@ fn three_d_span_and_cell_start_still_lex_as_span() {
     assert_eq!(rt("SUM(Sheet1:Sheet3!A1)"), "SUM(Sheet1:Sheet3!A1)");
     assert_eq!(rt("SUM(Q1:Sheet3!A1)"), "SUM('Q1:Sheet3'!A1)");
 }
+
+/// References print the same through the appending printer for every reference shape.
+#[test]
+fn reference_shapes_print_unchanged() {
+    for text in [
+        "A1",
+        "XFD1048576",
+        "$AA$10:AB$11",
+        "$A:XFD",
+        "B:$C",
+        "1:$1048576",
+        "$3:4",
+        "'My Sheet'!A1",
+        "'It''s'!$B$2:C3",
+        "Sheet1:Sheet3!B2",
+        "'Sheet 1:Sheet3'!B2",
+        "SUM(A1:.B3)+SUM(A.:.B)",
+    ] {
+        let e = parse(text).unwrap();
+        assert_eq!(print(&e), text);
+        if let Expr::Ref(r) = &e {
+            assert_eq!(printer::reference_a1(r), text);
+        }
+    }
+}

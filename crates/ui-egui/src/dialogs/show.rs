@@ -537,7 +537,7 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                         let cur = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
                         if d.name == "dataValidation" {
                             let selected = options.iter().find(|(val, _)| *val == cur).map(|(_, text)| lang.tr(text)).unwrap_or("");
-                            egui::ComboBox::from_id_salt(("dataValidation", key))
+                            craft_ui::ComboBox::from_id_salt(("dataValidation", key))
                                 .selected_text(selected)
                                 .width(300.0)
                                 .show_ui(ui, |ui| {

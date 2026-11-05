@@ -107,7 +107,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
             "dark" => "Dark",
             _ => "Light",
         };
-        egui::ComboBox::from_id_salt("display_theme")
+        craft_ui::ComboBox::from_id_salt("display_theme")
             .selected_text(lang.tr(label))
             .width(88.0)
             .show_ui(ui, |ui| {
@@ -131,7 +131,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
         let label = ui.label(egui::RichText::new(lang.tr("Interface size")).font(theme::ui_font(11.5)).color(t.text_dim));
         let current = app.ui.interface_scale;
         let text = |v: u16| if v == 100 { lang.tr("Auto").to_string() } else { format!("{v}%") };
-        egui::ComboBox::from_id_salt("ui_interface_size")
+        craft_ui::ComboBox::from_id_salt("ui_interface_size")
             .width(120.0)
             .selected_text(egui::RichText::new(text(current)).font(theme::ui_font(12.5)))
             .show_ui(ui, |ui| {
@@ -148,7 +148,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
     // the current language so it stays readable; the choices are always shown in their own script.
     ui.vertical(|ui| {
         let label = ui.label(egui::RichText::new(lang.tr("Interface language")).font(theme::ui_font(11.5)).color(t.text_dim));
-        egui::ComboBox::from_id_salt("ui_language")
+        craft_ui::ComboBox::from_id_salt("ui_language")
             .width(120.0)
             .selected_text(egui::RichText::new(lang.name()).font(theme::ui_font(12.5)))
             .show_ui(ui, |ui| {
