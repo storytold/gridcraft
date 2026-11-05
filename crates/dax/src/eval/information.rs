@@ -314,32 +314,14 @@ fn is_filtered(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Res
 
 fn is_cross_filtered(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
     let target = table_ref(ev, args.first().ok_or_else(|| EvalError::new("ISCROSSFILTERED needs a table or column"))?)?;
-    let filtered: BTreeSet<usize> = ctx.filters.filters.keys().map(|(table, _)| *table).collect();
-    if filtered.contains(&target) {
-        return Ok(Scalar::Boolean(true));
-    }
-    // Mirror the model's filter propagation: a filter on the `to` table restricts the `from`
-    // table, and a filter on the `from` table restricts the `to` table only when the
-    // relationship is bidirectional. `from` is therefore cross-filtered by its related `to`
-    // table, and vice versa.
-    for relationship in &ev.model().relationships {
-        if relationship.inactive {
-            continue;
-        }
-        let from = ev.model().table_index(&relationship.from_table);
-        let to = ev.model().table_index(&relationship.to_table);
-        let related = if from == Some(target) {
-            to
-        } else if to == Some(target) && relationship.bidirectional {
-            from
-        } else {
-            None
-        };
-        if related.is_some_and(|other| filtered.contains(&other)) {
-            return Ok(Scalar::Boolean(true));
-        }
-    }
-    Ok(Scalar::Boolean(false))
+    // A table is cross-filtered when a filter anywhere in the propagation graph reaches it. The
+    // graph is the one `Evaluator::table` walks for its rows: a filter on the `to` table restricts
+    // the `from` table, the reverse only when the relationship is bidirectional, and the active/
+    // bidirectional state comes from the `USERELATIONSHIP`/`CROSSFILTER` overrides in
+    // `ctx.filters.relationships` before the model's own flags. Asking the same predicate keeps
+    // `ISCROSSFILTERED` in agreement with the filtered rows, and it follows chains
+    // (`Sales -> Product -> Category`) rather than stopping one hop away.
+    Ok(Scalar::Boolean(ev.table_has_filter(target, &ctx.filters, &mut BTreeSet::new())))
 }
 
 fn is_empty(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {

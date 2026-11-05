@@ -105,6 +105,85 @@ fn model() -> DataModel {
     model
 }
 
+/// `Sales -> Product -> Category`, plus an inactive `Product -> AltCategory` link so
+/// `USERELATIONSHIP` can switch a hop on.
+fn snowflake_model() -> DataModel {
+    let mut model = DataModel {
+        tables: vec![
+            ModelTable {
+                name: "Category".into(),
+                columns: vec![
+                    ModelColumn { name: "CategoryKey".into(), data_type: Some("Int64".into()) },
+                    ModelColumn { name: "Name".into(), data_type: Some("String".into()) },
+                ],
+                rows: vec![vec![Scalar::Integer(1), Scalar::String("Audio".into())], vec![Scalar::Integer(2), Scalar::String("Computers".into())]],
+            },
+            ModelTable {
+                name: "AltCategory".into(),
+                columns: vec![
+                    ModelColumn { name: "CategoryKey".into(), data_type: Some("Int64".into()) },
+                    ModelColumn { name: "Name".into(), data_type: Some("String".into()) },
+                ],
+                rows: vec![vec![Scalar::Integer(1), Scalar::String("Audio".into())], vec![Scalar::Integer(2), Scalar::String("Computers".into())]],
+            },
+            ModelTable {
+                name: "Product".into(),
+                columns: vec![
+                    ModelColumn { name: "ProductKey".into(), data_type: Some("Int64".into()) },
+                    ModelColumn { name: "CategoryKey".into(), data_type: Some("Int64".into()) },
+                    ModelColumn { name: "AltCategoryKey".into(), data_type: Some("Int64".into()) },
+                ],
+                rows: vec![
+                    vec![Scalar::Integer(1), Scalar::Integer(1), Scalar::Integer(1)],
+                    vec![Scalar::Integer(2), Scalar::Integer(1), Scalar::Integer(2)],
+                    vec![Scalar::Integer(3), Scalar::Integer(2), Scalar::Integer(1)],
+                ],
+            },
+            ModelTable {
+                name: "Sales".into(),
+                columns: vec![
+                    ModelColumn { name: "ProductKey".into(), data_type: Some("Int64".into()) },
+                    ModelColumn { name: "Amount".into(), data_type: Some("Double".into()) },
+                ],
+                rows: vec![
+                    vec![Scalar::Integer(1), Scalar::Decimal(10.0)],
+                    vec![Scalar::Integer(2), Scalar::Decimal(20.0)],
+                    vec![Scalar::Integer(3), Scalar::Decimal(30.0)],
+                ],
+            },
+        ],
+        relationships: vec![
+            Relationship {
+                from_table: "Sales".into(),
+                from_column: "ProductKey".into(),
+                to_table: "Product".into(),
+                to_column: "ProductKey".into(),
+                bidirectional: false,
+                inactive: false,
+            },
+            Relationship {
+                from_table: "Product".into(),
+                from_column: "CategoryKey".into(),
+                to_table: "Category".into(),
+                to_column: "CategoryKey".into(),
+                bidirectional: false,
+                inactive: false,
+            },
+            Relationship {
+                from_table: "Product".into(),
+                from_column: "AltCategoryKey".into(),
+                to_table: "AltCategory".into(),
+                to_column: "CategoryKey".into(),
+                bidirectional: false,
+                inactive: true,
+            },
+        ],
+        measures: vec![],
+    };
+    model.parse_formulas().expect("fixture model parses");
+    model
+}
+
 fn eval(src: &str) -> Result<Scalar, String> {
     evaluate(src, FilterContext::default())
 }
@@ -321,6 +400,42 @@ fn cross_filtered_follows_relationship_propagation() {
     let from_fact = |model: &DataModel| filter(model, "Sales", "Region", &[Scalar::String("East".into())]);
     assert_eq!(eval_with("ISCROSSFILTERED(Product)", from_fact).expect("product"), Scalar::Boolean(false));
     assert_eq!(eval_with("ISCROSSFILTERED(Sales)", from_fact).expect("sales"), Scalar::Boolean(true));
+}
+
+#[test]
+fn cross_filtered_follows_the_whole_chain_and_relationship_overrides() {
+    let model = snowflake_model();
+    let with = |filters: FilterContext, src: &str| evaluate_with_model(&model, src, filters);
+
+    assert_eq!(with(FilterContext::default(), "ISCROSSFILTERED(Sales)").expect("unfiltered sales"), Scalar::Boolean(false));
+    assert_eq!(with(FilterContext::default(), "ISCROSSFILTERED(Product)").expect("unfiltered product"), Scalar::Boolean(false));
+
+    // Two hops away: `Category -> Product -> Sales`. A single-hop check misses this.
+    let category = filter(&model, "Category", "Name", &[Scalar::String("Audio".into())]);
+    assert_eq!(with(category.clone(), "ISCROSSFILTERED(Sales)").expect("sales"), Scalar::Boolean(true));
+    assert_eq!(with(category.clone(), "ISCROSSFILTERED(Product)").expect("product"), Scalar::Boolean(true));
+    assert_eq!(with(category.clone(), "ISCROSSFILTERED(Category)").expect("category"), Scalar::Boolean(true));
+    // The chain only runs towards the many side; the inactive branch stays out of it.
+    assert_eq!(with(category.clone(), "ISCROSSFILTERED(AltCategory)").expect("alt category"), Scalar::Boolean(false));
+
+    // A filter on the fact table does not climb the one-way chain towards `Category`.
+    let sales = filter(&model, "Sales", "Amount", &[Scalar::Decimal(10.0)]);
+    assert_eq!(with(sales.clone(), "ISCROSSFILTERED(Category)").expect("category"), Scalar::Boolean(false));
+    assert_eq!(with(sales.clone(), "ISCROSSFILTERED(Sales)").expect("sales"), Scalar::Boolean(true));
+
+    // An inactive relationship is ignored until `USERELATIONSHIP` activates it; the override in
+    // the filter context, not the model's `inactive` flag, must decide.
+    let alt_category = filter(&model, "AltCategory", "Name", &[Scalar::String("Audio".into())]);
+    assert_eq!(with(alt_category.clone(), "ISCROSSFILTERED(Sales)").expect("inactive link"), Scalar::Boolean(false));
+    let activation = "CALCULATE(ISCROSSFILTERED(Sales), USERELATIONSHIP(Product[AltCategoryKey], AltCategory[CategoryKey]))";
+    assert_eq!(with(alt_category.clone(), activation).expect("activated link"), Scalar::Boolean(true));
+    // Activating the other pair leaves the `Category` chain alone.
+    assert_eq!(with(alt_category, "ISCROSSFILTERED(Category)").expect("category"), Scalar::Boolean(false));
+
+    // `CROSSFILTER` widens the fact-side filter back to the dimension for the surrounding
+    // CALCULATE only.
+    let widened = "CALCULATE(ISCROSSFILTERED(Product), CROSSFILTER(Sales[ProductKey], Product[ProductKey], BOTH))";
+    assert_eq!(with(sales, widened).expect("bidirectional override"), Scalar::Boolean(true));
 }
 
 #[test]

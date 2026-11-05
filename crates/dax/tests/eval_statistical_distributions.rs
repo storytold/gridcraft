@@ -127,8 +127,10 @@ fn chi_squared_distribution_and_inverse() {
     close(number("CHISQ.INV.RT(0.01, 3)"), 11.344_866_730_144_368);
     close(number("CHISQ.INV.RT(1, 10)"), 0.0);
 
-    // The distribution truncates degrees of freedom; the inverse rounds them.
-    close(number("CHISQ.DIST(2.5, 10.9, TRUE)"), 0.009_124_279_218_395_273);
+    // DAX rounds a non-integer Deg_freedom for every CHISQ function, so 10.9 is 11 degrees of
+    // freedom and the distribution pair stays consistent with the inverse.
+    close(number("CHISQ.DIST(2.5, 10.9, TRUE)"), 0.004_175_834_600_147_772);
+    close(number("CHISQ.DIST.RT(2.5, 10.9)"), 0.995_824_165_399_852_2);
     close(number("CHISQ.INV(0.95, 10.4)"), 18.307_038_053_275_146);
 }
 

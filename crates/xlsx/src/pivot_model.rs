@@ -1561,6 +1561,230 @@ pub fn read_kept_model_pivots(wb: &Workbook) -> Result<(Vec<ModelPivotPartInfo>,
     Ok((out, report))
 }
 
+/// Content types declared by `[Content_Types].xml`, by part name and by extension.
+#[derive(Default)]
+struct PartTypes {
+    defaults: HashMap<String, String>,
+    overrides: HashMap<String, String>,
+}
+
+impl PartTypes {
+    fn read(pkg: &mut Package<'_>) -> PartTypes {
+        let mut types = PartTypes::default();
+        let Ok(Some(bytes)) = pkg.read_limited("[Content_Types].xml", 16 * 1024 * 1024) else { return types };
+        let Ok(root) = crate::xml::parse(&bytes) else { return types };
+        for d in root.kids("Default") {
+            if let (Some(ext), Some(ct)) = (d.attr("Extension"), d.attr("ContentType")) {
+                types.defaults.insert(ext.to_ascii_lowercase(), ct.to_string());
+            }
+        }
+        for o in root.kids("Override") {
+            if let (Some(part), Some(ct)) = (o.attr("PartName"), o.attr("ContentType")) {
+                types.overrides.insert(crate::package::normalize(part), ct.to_string());
+            }
+        }
+        types
+    }
+
+    /// The content type of `part`: its `Override`, else the one of its extension.
+    fn get(&self, part: &str) -> Option<String> {
+        let key = crate::package::normalize(part);
+        if let Some(ct) = self.overrides.get(&key) {
+            return Some(ct.clone());
+        }
+        let ext = key.rsplit_once('.')?.1;
+        self.defaults.get(ext).cloned()
+    }
+}
+
+/// The part's relationships with full type URIs, as pass-through content stores them.
+fn kept_rels(pkg: &mut Package<'_>, part: &str) -> Vec<PreservedRel> {
+    pkg.rels(part)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| PreservedRel { id: r.id, rel_type: rel_uri(&r.kind), target: r.target, external: r.external })
+        .collect()
+}
+
+/// Whether `part` is a cache definition whose source is external (the data model, an OLAP server
+/// or another workbook): the range-pivot reader does not model those, so they are kept verbatim.
+fn external_cache(pkg: &mut Package<'_>, part: &str) -> bool {
+    pkg.read_xml(part)
+        .ok()
+        .flatten()
+        .is_some_and(|x| x.name == "pivotCacheDefinition" && x.child("cacheSource").and_then(|s| s.attr("type")) == Some("external"))
+}
+
+/// The cache part of a PivotTable definition, when that cache is one of the workbook's external
+/// caches (`caches`: `cacheId`, relationship id, part).
+fn external_cache_of(pkg: &mut Package<'_>, table_part: &str, table: &El, caches: &[(u32, String, String)]) -> Option<String> {
+    let rels = pkg.rels(table_part).ok()?;
+    if let Some(r) = rels.iter().find(|r| r.kind == REL_PIVOT_CACHE && !r.external) {
+        return caches.iter().any(|(_, _, p)| p.eq_ignore_ascii_case(&r.target)).then_some(r.target.clone());
+    }
+    let id = table.attr_u32("cacheId")?;
+    caches.iter().find(|(cache_id, _, _)| *cache_id == id).map(|(_, _, p)| p.clone())
+}
+
+/// Adds `part` and the cache/records parts its relationships reach to `out`, unless already there
+/// (by part name). Malformed or unreadable parts are skipped; the caller keeps what it can.
+fn keep_pivot_parts(pkg: &mut Package<'_>, types: &PartTypes, roots: &[String], out: &mut Vec<PreservedPart>) {
+    let mut queue: Vec<String> = roots.to_vec();
+    let mut seen: std::collections::HashSet<String> = out.iter().map(|p| crate::package::normalize(&p.name)).collect();
+    while let Some(name) = queue.pop() {
+        let key = crate::package::normalize(&name);
+        if !seen.insert(key) {
+            continue;
+        }
+        // We only ever keep rewrite-blocked PivotTable content, so the graph is a handful of
+        // parts (the definition, its cache, the cache's records snapshot).
+        if out.len() >= 16 {
+            return;
+        }
+        let Ok(Some(data)) = pkg.read_limited(&name, MAX_PART) else { continue };
+        let content_type = types.get(&name).unwrap_or_else(|| {
+            let lower = name.to_ascii_lowercase();
+            if lower.contains("pivotcacherecords") {
+                crate::pivot::CT_PIVOT_CACHE_REC.to_string()
+            } else if lower.contains("pivotcachedefinition") {
+                CT_PIVOT_CACHE_DEF.to_string()
+            } else {
+                CT_PIVOT_TABLE.to_string()
+            }
+        });
+        let rels = kept_rels(pkg, &name);
+        for r in &rels {
+            if !r.external && (r.rel_type == rel_uri(REL_PIVOT_CACHE) || r.rel_type == rel_uri("pivotCacheRecords")) {
+                queue.push(r.target.clone());
+            }
+        }
+        out.push(PreservedPart { name, content_type, data: Arc::from(data), rels });
+    }
+}
+
+/// The workbook's `x15:dataModel` extension element, verbatim from the source XML.
+///
+/// It declares the model's tables and relationships; [`read_model_pivots`] reads them back from
+/// there, so a reopen-and-save must keep it. The element is patched with `xmlns:x15` when the
+/// source declared the prefix on the workbook element instead of on the extension itself.
+fn kept_data_model_ext(pkg: &mut Package<'_>, wb_part: &str) -> Option<String> {
+    let bytes = pkg.read(wb_part).ok()??;
+    let text = String::from_utf8_lossy(&bytes);
+    let at = text.find("x15:dataModel")?;
+    let start = text.get(..at)?.rfind("<ext")?;
+    let after = text.get(start + 4..)?;
+    if !(after.starts_with(' ') || after.starts_with('>')) {
+        return None;
+    }
+    let rest = text.get(start..)?;
+    let end = rest.find("</ext>")?.checked_add("</ext>".len())?;
+    let mut xml = rest.get(..end)?.to_string();
+    if !xml.contains("xmlns:x15=") {
+        xml.insert_str(4, &format!(" xmlns:x15=\"{NS_X15}\""));
+    }
+    Some(xml)
+}
+
+/// Keeps the data-model (external-cache) PivotTables a package is read with as pass-through
+/// content, so that a save of the read [`Workbook`] still has them.
+///
+/// [`crate::read_xlsx`] reads range PivotTables into the model; a PivotTable whose cache source is
+/// `external` (the workbook data model, an OLAP server, another workbook) is deliberately left
+/// unmodelled, and the pass-through reader does not keep it because the relationship graph reaches
+/// rewritten content. This function retains exactly that graph — the definition part, its cache
+/// (and records) part, the workbook's cache relationship and `<pivotCaches>` entry, and the sheet's
+/// relationship — plus the workbook's `x15:dataModel` extension. GridCraft then writes them back
+/// unchanged on every later save, and [`read_model_pivots`] finds the same pivot in the result.
+pub(crate) fn keep_external_pivots(
+    wb: &mut Workbook,
+    pkg: &mut Package<'_>,
+    wb_part: &str,
+    wb_xml: &El,
+    wb_rels: &[crate::package::Rel],
+    file_to_model: &[Option<usize>],
+    report: &mut ReadReport,
+) {
+    let Some(cache_el) = wb_xml.child("pivotCaches") else { return };
+    let mut caches: Vec<(u32, String, String)> = Vec::new();
+    for c in cache_el.kids("pivotCache") {
+        let (Some(cache_id), Some(rid)) = (c.attr_u32("cacheId"), c.attr("id")) else { continue };
+        let Some(rel) = wb_rels.iter().find(|r| r.id == rid && !r.external) else { continue };
+        if external_cache(pkg, &rel.target) {
+            caches.push((cache_id, rid.to_string(), rel.target.clone()));
+        }
+    }
+    if caches.is_empty() {
+        return;
+    }
+    let types = PartTypes::read(pkg);
+    let mut kept: Vec<PreservedPart> = Vec::new();
+    // (model sheet index, sheet relationship id, definition part) of the kept tables.
+    let mut sheet_links: Vec<(usize, String, String)> = Vec::new();
+    let mut kept_caches: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let sheets: Vec<&El> = wb_xml.child("sheets").map(|s| s.kids("sheet").collect()).unwrap_or_default();
+    for (file_index, se) in sheets.iter().enumerate() {
+        let Some(Some(model_index)) = file_to_model.get(file_index).copied() else { continue };
+        let Some(rid) = se.attr("id") else { continue };
+        let Some(sheet_rel) = wb_rels.iter().find(|r| r.id == rid && !r.external) else { continue };
+        let rels = match pkg.rels(&sheet_rel.target) {
+            Ok(rels) => rels,
+            Err(e) => {
+                report.warn(format!("PivotTables on sheet \"{}\" could not be kept: {e}", se.attr("name").unwrap_or("")));
+                continue;
+            }
+        };
+        for rel in rels.iter().filter(|r| r.kind == REL_PIVOT_TABLE && !r.external) {
+            let Some(table) = pkg.read_xml(&rel.target).ok().flatten() else { continue };
+            if table.name != "pivotTableDefinition" {
+                continue;
+            }
+            let Some(cache_part) = external_cache_of(pkg, &rel.target, &table, &caches) else { continue };
+            keep_pivot_parts(pkg, &types, &[rel.target.clone(), cache_part.clone()], &mut kept);
+            kept_caches.insert(crate::package::normalize(&cache_part));
+            sheet_links.push((model_index, rel.id.clone(), rel.target.clone()));
+        }
+    }
+    if kept.is_empty() {
+        return;
+    }
+
+    let p = preserved(wb);
+    for part in kept {
+        if !p.parts.iter().any(|q| q.name.eq_ignore_ascii_case(&part.name)) {
+            p.parts.push(part);
+        }
+    }
+    let retained: Vec<&(u32, String, String)> = caches.iter().filter(|(_, _, part)| kept_caches.contains(&crate::package::normalize(part))).collect();
+    let mut entries = String::new();
+    for (cache_id, rid, part) in retained.iter().copied() {
+        let ty = rel_uri(REL_PIVOT_CACHE);
+        if !p.rels.iter().any(|r| r.id == *rid && r.rel_type == ty) {
+            p.rels.push(PreservedRel { id: rid.clone(), rel_type: ty, target: part.clone(), external: false });
+        }
+        let _ = write!(entries, "<pivotCache cacheId=\"{cache_id}\" r:id=\"{}\"/>", esc_attr(rid));
+    }
+    if !entries.is_empty() {
+        let xml = format!("<pivotCaches xmlns:r=\"{NS_REL}\">{entries}</pivotCaches>");
+        match p.elements.iter_mut().find(|e| e.slot == SLOT_PIVOT_CACHES) {
+            Some(element) => element.xml = xml,
+            None => p.elements.push(PreservedXml { slot: SLOT_PIVOT_CACHES.to_string(), xml }),
+        }
+    }
+    if let Some(ext) = kept_data_model_ext(pkg, wb_part)
+        && !p.elements.iter().any(|e| e.slot == "ext" && e.xml.contains("x15:dataModel"))
+    {
+        p.elements.push(PreservedXml { slot: "ext".to_string(), xml: ext });
+    }
+    for (model_index, rid, table_part) in sheet_links {
+        let Some(sheet) = wb.sheet_mut(model_index) else { continue };
+        let sheet_preserved = Arc::make_mut(sheet.preserved.get_or_insert_with(|| Arc::new(Preserved::default())));
+        let ty = rel_uri(REL_PIVOT_TABLE);
+        if !sheet_preserved.rels.iter().any(|r| r.rel_type == ty && r.target.eq_ignore_ascii_case(&table_part)) {
+            sheet_preserved.rels.push(PreservedRel { id: rid, rel_type: ty, target: table_part, external: false });
+        }
+    }
+}
+
 struct CacheRead {
     connection_id: u32,
     fields: Vec<CacheFieldRead>,

@@ -187,7 +187,8 @@ fn chisq_dist(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Resu
     let values = eval_all(ev, args, ctx)?;
     let a = make_args("CHISQ.DIST", &values);
     let x = finite_number(&a, 0)?;
-    let freedom = finite_number(&a, 1)?.trunc();
+    // DAX rounds a non-integer Deg_freedom (as `CHISQ.INV`/`CHISQ.INV.RT` here do).
+    let freedom = finite_number(&a, 1)?.round();
     let cumulative = a.boolean(2)?;
     if x < 0.0 {
         return Err(domain("CHISQ.DIST", "X must be non-negative"));
@@ -212,7 +213,8 @@ fn chisq_dist_rt(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> R
     let values = eval_all(ev, args, ctx)?;
     let a = make_args("CHISQ.DIST.RT", &values);
     let x = finite_number(&a, 0)?;
-    let freedom = finite_number(&a, 1)?.trunc();
+    // DAX rounds a non-integer Deg_freedom.
+    let freedom = finite_number(&a, 1)?.round();
     if x < 0.0 {
         return Err(domain("CHISQ.DIST.RT", "X must be non-negative"));
     }

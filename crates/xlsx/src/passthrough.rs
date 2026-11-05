@@ -14,7 +14,9 @@
 //! kept XML are rewritten to match. Kept content is conservative:
 //! - Anything whose relationship graph reaches a part GridCraft reads and rewrites (worksheets,
 //!   drawings, charts, tables, PivotTables, comments, slicers…) is not kept: it would point at
-//!   content that no longer exists in the same form.
+//!   content that no longer exists in the same form. Data-model (external-cache) PivotTables are
+//!   the exception: [`crate::pivot_model::keep_external_pivots`] keeps their graph instead, since
+//!   the range-PivotTable reader does not model them.
 //! - External relationship targets (the path of a linked workbook) are kept as text and never
 //!   opened, followed or refreshed. A relative path to a linked workbook is rewritten when the
 //!   workbook is saved into another folder ([`rebase_links`]), so it still names the same file.
