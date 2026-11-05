@@ -191,6 +191,10 @@ impl Scalar {
             (Scalar::String(a), Scalar::String(b)) => Some(a.to_lowercase().cmp(&b.to_lowercase())),
             (Scalar::String(_), _) | (_, Scalar::String(_)) => None,
             (Scalar::Boolean(a), Scalar::Boolean(b)) => Some(a.cmp(b)),
+            // Two keys of the same integer variant compare exactly: above 2^53 the `f64` route
+            // would report distinct values as equal, and `IN`/`=` must not.
+            (Scalar::Integer(a), Scalar::Integer(b)) => Some(a.cmp(b)),
+            (Scalar::Currency(a), Scalar::Currency(b)) => Some(a.cmp(b)),
             _ => self.to_number()?.partial_cmp(&other.to_number()?),
         }
     }
