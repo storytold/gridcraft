@@ -1,4 +1,4 @@
-use egui::{Align, Button, Color32, Layout, RichText, ScrollArea, TextEdit, Ui};
+use egui::{Align, Button, Layout, RichText, ScrollArea, TextEdit, Ui};
 use serde_json::{Value as Json, json};
 
 use super::Dialog;
@@ -6,6 +6,7 @@ use crate::SheetApp;
 
 /// Dialog allowing users to customize keyboard shortcuts for ribbon and menu commands.
 pub(crate) fn customize_keyboard(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut bool) {
+    let lang = crate::i18n::current(ui.ctx());
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
     let categories = ["Home", "Insert", "Page Layout", "Formulas", "Data", "Review", "View", "Automate", "All Commands"];
     let cat = d.values.get("category").and_then(Json::as_str).unwrap_or("Home").to_string();
@@ -14,11 +15,11 @@ pub(crate) fn customize_keyboard(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog
     ui.horizontal_top(|ui| {
         // Left Column: Categories
         ui.vertical(|ui| {
-            ui.label(RichText::new("Categories:").strong());
+            ui.label(RichText::new(lang.tr("Categories:")).strong());
             ScrollArea::vertical().id_salt("cat_scroll").max_height(160.0).min_scrolled_width(140.0).show(ui, |ui| {
                 for &c in &categories {
                     let selected = cat == c;
-                    if ui.selectable_label(selected, c).clicked() {
+                    if ui.selectable_label(selected, lang.tr(c)).clicked() {
                         d.values.insert("category".into(), json!(c));
                         d.values.insert("command".into(), json!(""));
                         d.values.remove("selected_key");
@@ -35,7 +36,7 @@ pub(crate) fn customize_keyboard(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog
 
         // Right Column: Commands
         ui.vertical(|ui| {
-            ui.label(RichText::new("Commands:").strong());
+            ui.label(RichText::new(lang.tr("Commands:")).strong());
             let all_specs = gridcraft_engine::command_specs();
             let filtered: Vec<&gridcraft_engine::cmd::CommandSpec> =
                 all_specs.iter().filter(|s| if cat == "All Commands" { true } else { s.menu.first().is_some_and(|m| *m == cat) }).collect();
@@ -87,9 +88,9 @@ pub(crate) fn customize_keyboard(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog
 
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
-            ui.label("Current keys:");
+            ui.label(lang.tr("Current keys:"));
             if current_keys.is_empty() {
-                ui.weak("[None]");
+                ui.weak(lang.tr("[None]"));
             } else {
                 for k in &current_keys {
                     let is_sel = selected_key == *k;
@@ -104,7 +105,7 @@ pub(crate) fn customize_keyboard(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog
         ui.add_space(20.0);
 
         ui.vertical(|ui| {
-            ui.label("Press new keyboard shortcut:");
+            ui.label(lang.tr("Press new keyboard shortcut:"));
             let r = ui.add(TextEdit::singleline(&mut pressed).hint_text("e.g. Control+Option+E, Ctrl+Shift+F"));
             if r.changed() {
                 d.values.insert("pressed".into(), json!(pressed.clone()));
@@ -142,12 +143,12 @@ pub(crate) fn customize_keyboard(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog
             let p_val = d.values.get("pressed").and_then(Json::as_str).unwrap_or("");
             let norm_p_val = crate::keymap::normalize_for_platform(p_val, mac);
             ui.horizontal(|ui| {
-                ui.label("Currently assigned to:");
+                ui.label(lang.tr("Currently assigned to:"));
                 if p_val.is_empty() {
-                    ui.weak("[unassigned]");
+                    ui.weak(lang.tr("[unassigned]"));
                 } else if let Some(assigned_to) = norm_p_val.as_ref().and_then(|norm| app.ui.shortcuts.get(norm)) {
                     if assigned_to.is_empty() {
-                        ui.weak("[disabled]");
+                        ui.weak(lang.tr("[disabled]"));
                     } else {
                         let lbl = gridcraft_engine::find_command(assigned_to).map(|s| s.label).unwrap_or(assigned_to);
                         ui.label(RichText::new(lbl).strong());
@@ -166,7 +167,7 @@ pub(crate) fn customize_keyboard(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog
                     if let Some(lbl) = found {
                         ui.label(RichText::new(lbl).strong());
                     } else {
-                        ui.weak("[unassigned]");
+                        ui.weak(lang.tr("[unassigned]"));
                     }
                 }
             });
@@ -175,55 +176,42 @@ pub(crate) fn customize_keyboard(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog
 
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        let p_val = d.values.get("pressed").and_then(Json::as_str).unwrap_or("").to_string();
-        let can_assign = !sel_id.is_empty() && !p_val.is_empty();
-        if ui.add_enabled(can_assign, Button::new("Assign")).clicked()
-            && let Some(norm) = crate::keymap::normalize_for_platform(&p_val, mac)
+        let p_val = d.values.get("pressed").and_then(Json::as_str).unwrap_or("");
+        let norm_to_assign = crate::keymap::normalize_for_platform(p_val, mac);
+        let can_assign = !sel_id.is_empty() && norm_to_assign.is_some();
+        if ui.add_enabled(can_assign, Button::new(lang.tr("Assign"))).clicked()
+            && let Some(norm) = norm_to_assign
         {
-            app.ui.shortcuts.insert(norm, sel_id.clone());
+            let _ = app.run("ui.shortcut.assign", json!({"shortcut": norm, "command": sel_id}));
             d.values.insert("pressed".into(), json!(""));
         }
 
         let can_remove = !selected_key.is_empty() && current_keys.contains(&selected_key);
-        if ui.add_enabled(can_remove, Button::new("Remove")).clicked() {
-            let default_sc = sel_spec.and_then(|s| s.shortcut);
-            let is_default = default_sc.is_some_and(|sc| {
-                sc.eq_ignore_ascii_case(&selected_key) || crate::keymap::normalize_for_platform(sc, mac).as_deref() == Some(&selected_key)
-            });
-            if is_default {
-                if let Some(norm) = crate::keymap::normalize_for_platform(&selected_key, mac) {
-                    app.ui.shortcuts.insert(norm, "".into());
-                } else {
-                    app.ui.shortcuts.insert(selected_key.clone(), "".into());
-                }
-            } else {
-                app.ui.shortcuts.remove(&selected_key);
-                if let Some(norm) = crate::keymap::normalize_for_platform(&selected_key, mac) {
-                    app.ui.shortcuts.remove(&norm);
-                }
-            }
+        if ui.add_enabled(can_remove, Button::new(lang.tr("Remove"))).clicked() {
+            let _ = app.run("ui.shortcut.remove", json!({"shortcut": selected_key, "command": sel_id}));
             d.values.remove("selected_key");
         }
 
         let confirm_reset = d.values.get("confirm_reset").and_then(Json::as_bool).unwrap_or(false);
         if !confirm_reset {
-            if ui.add_enabled(!app.ui.shortcuts.is_empty(), Button::new("Reset All…")).clicked() {
+            if ui.add_enabled(!app.ui.shortcuts.is_empty(), Button::new(lang.tr("Reset All…"))).clicked() {
                 d.values.insert("confirm_reset".into(), json!(true));
             }
         } else {
-            ui.label(RichText::new("Reset all?").color(Color32::RED));
-            if ui.button("Yes").clicked() {
-                app.ui.shortcuts.clear();
+            let t = crate::theme::Tokens::get(ui.ctx());
+            ui.label(RichText::new(lang.tr("Reset all?")).color(t.danger));
+            if ui.button(lang.tr("Yes")).clicked() {
+                let _ = app.run("ui.shortcut.resetAll", json!({}));
                 d.values.remove("confirm_reset");
                 d.values.remove("selected_key");
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button(lang.tr("Cancel")).clicked() {
                 d.values.remove("confirm_reset");
             }
         }
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.button("OK").clicked() {
+            if ui.button(lang.tr("OK")).clicked() {
                 *open = false;
             }
         });

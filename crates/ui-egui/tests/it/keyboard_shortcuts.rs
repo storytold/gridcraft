@@ -342,4 +342,16 @@ fn custom_shortcut_triggers_command_and_dialog() {
     h.run_steps(1);
     assert!(h.state().dialog.is_none());
     assert!(h.state().message.is_none());
+
+    // UI commands for shortcut management
+    h.state_mut().run("ui.shortcut.assign", json!({"shortcut": combo, "command": "dialog:customizeKeyboard"})).unwrap();
+    assert_eq!(h.state().ui.shortcuts.get(combo), Some(&"dialog:customizeKeyboard".to_string()));
+
+    h.state_mut().run("ui.shortcut.remove", json!({"shortcut": combo, "command": "dialog:customizeKeyboard"})).unwrap();
+    assert!(!h.state().ui.shortcuts.contains_key(combo));
+
+    h.state_mut().run("ui.shortcut.assign", json!({"shortcut": combo, "command": "dialog:customizeKeyboard"})).unwrap();
+    assert!(!h.state().ui.shortcuts.is_empty());
+    h.state_mut().run("ui.shortcut.resetAll", json!({})).unwrap();
+    assert!(h.state().ui.shortcuts.is_empty());
 }

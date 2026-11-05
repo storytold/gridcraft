@@ -292,6 +292,40 @@ impl SheetApp {
                 self.notice = None;
                 Ok(Json::Null)
             }
+            "ui.shortcut.assign" => {
+                let shortcut = p.get("shortcut").and_then(Json::as_str).unwrap_or("");
+                let command = p.get("command").and_then(Json::as_str).unwrap_or("");
+                if shortcut.is_empty() || command.is_empty() {
+                    return Some(Err("shortcut and command are required".into()));
+                }
+                let norm = crate::keymap::normalize(shortcut).unwrap_or_else(|| shortcut.to_string());
+                self.ui.shortcuts.insert(norm, command.to_string());
+                Ok(Json::Null)
+            }
+            "ui.shortcut.remove" => {
+                let shortcut = p.get("shortcut").and_then(Json::as_str).unwrap_or("");
+                let command = p.get("command").and_then(Json::as_str).unwrap_or("");
+                if shortcut.is_empty() {
+                    return Some(Err("shortcut is required".into()));
+                }
+                let default_sc = if !command.is_empty() { gridcraft_engine::find_command(command).and_then(|s| s.shortcut) } else { None };
+                let is_default =
+                    default_sc.is_some_and(|sc| sc.eq_ignore_ascii_case(shortcut) || crate::keymap::normalize(sc).as_deref() == Some(shortcut));
+                if is_default {
+                    let norm = crate::keymap::normalize(shortcut).unwrap_or_else(|| shortcut.to_string());
+                    self.ui.shortcuts.insert(norm, "".into());
+                } else {
+                    self.ui.shortcuts.remove(shortcut);
+                    if let Some(norm) = crate::keymap::normalize(shortcut) {
+                        self.ui.shortcuts.remove(&norm);
+                    }
+                }
+                Ok(Json::Null)
+            }
+            "ui.shortcut.resetAll" => {
+                self.ui.shortcuts.clear();
+                Ok(Json::Null)
+            }
             _ => return None,
         };
         Some(r)
