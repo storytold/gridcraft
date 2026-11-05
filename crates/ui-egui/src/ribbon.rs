@@ -11,8 +11,12 @@ use crate::icons::{self, Icon};
 use crate::keytips::keytip_table;
 use crate::theme::{self, Cat, Tokens};
 use crate::widgets::{
+<<<<<<< HEAD
     big_button, big_button_width, big_split_button, color_palette, icon_button, launcher_button, small_button, small_split_button, split_button,
     toggle_button,
+=======
+    big_button, big_split_button, color_palette, icon_button, small_button, small_split_button, small_toggle_button, split_button, toggle_button,
+>>>>>>> origin/main
 };
 
 mod automate;
