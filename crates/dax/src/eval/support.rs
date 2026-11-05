@@ -335,10 +335,15 @@ pub(crate) fn utc_today_serial() -> f64 {
 fn excel_precision(value: f64) -> f64 {
     // An exact whole number under 2^53 has no binary noise to remove, and snapping it would drop
     // digits: `ROUND ( 1234567890123457, 0 )` must stay that number.
-    if value.fract() == 0.0 && value.abs() < 2f64.powi(53) {
+    if is_exact_whole(value) {
         return value;
     }
     format!("{value:.14e}").parse().unwrap_or(value)
+}
+
+/// Whether `value` is a whole number held exactly in an `f64`.
+fn is_exact_whole(value: f64) -> bool {
+    value.fract() == 0.0 && value.abs() < 2f64.powi(53)
 }
 
 pub(crate) fn round_to(value: f64, digits: i32) -> f64 {
@@ -349,6 +354,11 @@ pub(crate) fn round_to(value: f64, digits: i32) -> f64 {
     }
     if digits < -308 {
         return 0.0;
+    }
+    // An exact whole number is already rounded: scaling it past 2^53 would only make the snap
+    // lose digits, so `ROUND ( 1234567890123457, 1 )` stays that number.
+    if digits >= 0 && is_exact_whole(value) {
+        return value;
     }
     let factor = 10f64.powi(digits);
     let scaled = excel_precision(value * factor);
@@ -369,6 +379,9 @@ pub(crate) fn round_direction(value: f64, digits: i32, up: bool) -> f64 {
     }
     if digits < -308 {
         return if up && value != 0.0 { f64::INFINITY.copysign(value) } else { 0.0 };
+    }
+    if digits >= 0 && is_exact_whole(value) {
+        return value;
     }
     let factor = 10f64.powi(digits);
     let scaled = excel_precision(value * factor);
@@ -722,6 +735,9 @@ mod tests {
         assert_eq!(round_direction(-2.1, 0, true), -3.0);
         assert_eq!(round_to(2.5, 0), 3.0);
         assert_eq!(round_to(2.345, 2), 2.35);
+        // An exact whole input is already the answer: scaling it past 2^53 must not snap digits.
+        assert_eq!(round_to(1_234_567_890_123_457.0, 1), 1_234_567_890_123_457.0);
+        assert_eq!(round_direction(1_234_567_890_123_457.0, 2, true), 1_234_567_890_123_457.0);
     }
 
     #[test]

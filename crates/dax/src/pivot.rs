@@ -49,10 +49,10 @@ pub fn pivot_cross(model: &DataModel, measure: &str, row_fields: &[PivotField], 
     let mut column_groups: BTreeMap<Vec<ScalarKey>, Vec<Scalar>> = BTreeMap::new();
     for row in &source.rows {
         let row_values = group_values(row, row_fields, table_index)?;
-        row_groups.entry(row_values.iter().map(ScalarKey::from).collect()).or_insert(row_values);
+        row_groups.entry(row_values.iter().map(crate::value::distinct_key).collect()).or_insert(row_values);
         if !column_fields.is_empty() {
             let column_values = group_values(row, column_fields, table_index)?;
-            column_groups.entry(column_values.iter().map(ScalarKey::from).collect()).or_insert(column_values);
+            column_groups.entry(column_values.iter().map(crate::value::distinct_key).collect()).or_insert(column_values);
         }
     }
     if column_fields.is_empty() {

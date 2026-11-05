@@ -179,6 +179,8 @@ fn strict_equality_matches_a_decimal_column_against_an_integer_literal() {
     assert!(gridcraft_dax::Scalar::Integer(2).strict_eq(&Scalar::Decimal(2.0)));
     assert!(!gridcraft_dax::Scalar::Integer(2).strict_eq(&Scalar::Decimal(2.5)));
     assert!(!Scalar::String("a".into()).strict_eq(&Scalar::String("A".into())));
+    // Beyond 2^53 two integers share an `f64`, and they must stay distinct keys.
+    assert!(!Scalar::Integer(9_007_199_254_740_992).strict_eq(&Scalar::Integer(9_007_199_254_740_993)));
 }
 
 #[test]

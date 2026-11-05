@@ -14,7 +14,8 @@
 //!   value is a column read, so the model rows are neither walked nor cloned
 //!   ([`PivotTable::render_with_stats`] reports the counters).
 //! * Filters are applied first: a row must match every filter. A filter's `allowed` list is a set
-//!   of exact scalar values (case-sensitive for strings); an empty `allowed` list keeps no rows.
+//!   of scalar values matched with the model collation (text ignores case, like `=`); an empty
+//!   `allowed` list keeps no rows.
 //! * Row- and column-field values are grouped ascending in [`ScalarKey`] order, so BLANK sorts
 //!   first and is a group of its own (`(Blank)` in labels).
 //! * Cells are evaluated through the normal evaluator with a [`FilterContext`] holding the filters
@@ -137,7 +138,8 @@ pub enum PivotLayout {
 pub struct PivotFilter {
     /// A field reference in `Table[Column]` form, resolved with [`crate::pivot::pivot_fields`].
     pub field: String,
-    /// The allowed values. Membership is exact scalar equality.
+    /// The allowed values, matched with the model collation: text compares case-insensitively,
+    /// everything else exactly.
     #[serde(default)]
     pub allowed: Vec<Scalar>,
     /// Keep every value (`(All)` in Excel): the filter is shown but restricts nothing. `allowed`
@@ -411,20 +413,22 @@ impl<'a> Plan<'a> {
             SourceRows::Columns { storage, rows } => {
                 for row in rows {
                     let values = self.column_group_values(storage, row, &self.row_fields);
-                    row_groups.entry(values.iter().map(ScalarKey::from).collect()).or_insert(values);
+                    // The group key folds text exactly like the cell filter, so `East` and
+                    // `east` are one leaf; the first spelling seen is the one displayed.
+                    row_groups.entry(values.iter().map(crate::value::distinct_key).collect()).or_insert(values);
                     if !self.column_fields.is_empty() {
                         let values = self.column_group_values(storage, row, &self.column_fields);
-                        column_groups.entry(values.iter().map(ScalarKey::from).collect()).or_insert(values);
+                        column_groups.entry(values.iter().map(crate::value::distinct_key).collect()).or_insert(values);
                     }
                 }
             }
             SourceRows::Rows(rows) => {
                 for row in rows.iter() {
                     let values = self.model_group_values(row, &self.row_fields);
-                    row_groups.entry(values.iter().map(ScalarKey::from).collect()).or_insert(values);
+                    row_groups.entry(values.iter().map(crate::value::distinct_key).collect()).or_insert(values);
                     if !self.column_fields.is_empty() {
                         let values = self.model_group_values(row, &self.column_fields);
-                        column_groups.entry(values.iter().map(ScalarKey::from).collect()).or_insert(values);
+                        column_groups.entry(values.iter().map(crate::value::distinct_key).collect()).or_insert(values);
                     }
                 }
             }

@@ -202,7 +202,10 @@ impl Scalar {
         match (self, other) {
             (Scalar::Blank, Scalar::Blank) => true,
             (Scalar::String(a), Scalar::String(b)) => a == b,
-            (a, b) if a.is_numeric() && b.is_numeric() => a.to_number() == b.to_number(),
+            (a, b) if a.is_numeric() && b.is_numeric() => match (exact_number(a), exact_number(b)) {
+                (Some(x), Some(y)) => x == y,
+                _ => false,
+            },
             _ => self == other,
         }
     }
@@ -257,6 +260,21 @@ pub(crate) fn distinct_key(value: &Scalar) -> ScalarKey {
     match value {
         Scalar::String(text) => ScalarKey::String(text.to_lowercase()),
         other => ScalarKey::from(other),
+    }
+}
+
+/// The numeric value of a variant that an `f64` holds exactly.
+///
+/// `Integer` and `Currency` are compared through their exact representation only up to 2^53:
+/// beyond it `9007199254740992` and `9007199254740993` share an `f64`, and a relationship must not
+/// treat two distinct keys as the same one.
+fn exact_number(value: &Scalar) -> Option<f64> {
+    const LIMIT: i64 = 1 << 53;
+    match value {
+        Scalar::Integer(number) if number.unsigned_abs() <= LIMIT as u64 => Some(*number as f64),
+        Scalar::Currency(number) if number.unsigned_abs() <= LIMIT as u64 => Some(*number as f64 / 10_000.0),
+        Scalar::Decimal(number) | Scalar::DateTime(number) => Some(*number),
+        _ => None,
     }
 }
 
