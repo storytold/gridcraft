@@ -1,7 +1,7 @@
 # Analysis ToolPak regression models
 
-Last updated: 2026-11-03. Reconciled with main
-`df137b8ee8cd68503681f759f59b4e30b2e0b048`. For validation status, see
+Last updated: 2026-11-05. Reconciled with main
+`c40295382886f0a18d281a9911e9506fdf53b863`. For validation status, see
 "Validation status and pending work".
 
 `data.analysisToolPak` accepts `tool: "regression"` and an optional `model`:
@@ -99,17 +99,30 @@ amplitude-one constraint for exponential/power.
 
 ## Validation status and pending work
 
-Targeted checks on the reconciled branch:
+On 2026-11-05, the reconciled candidate at main `c4029538` passed all ten
+`cargo xtask ci` gates on Fedora 45: i18n report, formatting, Clippy, tests,
+doctests, assets, dependency layering, WASM, parity and keytips. The run used
+the candidate checkout, rebuilt the host `xtask` and the affected native and
+WASM packages, and completed without source changes. Its log and source
+fingerprint are retained in the local review record.
 
-- `cargo test -p gridcraft-engine regression_`: 8 passed.
-- `cargo test -p gridcraft-ui-egui --test it power_model_survives_shared_refedit_collapse_and_control_confirmation`: passed with the branch's isolated Cargo target and pinned `craft-fonts` inputs.
+Separately, on 2026-11-04, the earlier Windows producer checkout at `5a3ed86c`
+plus local IMSQRT/CLI portability fixes passed all ten CI gates. That source
+also passed Excel 16.0 build 20527 recalculation and SaveAs checks for four
+synthetic regression reports, with 17 cell expectations checked per model.
+Those Windows results apply only to that recorded producer; they are not a
+Windows or Excel test of the reconciled `c4029538` candidate.
 
-The first UI run used a target shared with a different worktree and linked a
-stale engine artifact; its failure was not reproducible after rebuilding in
-this branch's own target. Full `cargo xtask ci`, WASM and screenshot checks have
-not been run on this PR head. Tests below are authored/preserved, not passing
-claims unless listed above.
-Only direct rustfmt, git diff checks and static reading are used in this round.
+Excel 16.0 build 20527 opened, recalculated, saved and reopened all four
+synthetic regression reports. Each model's 17 cell expectations were checked
+on both opens, using native INTERCEPT/SLOPE/RSQ reference formulas in the
+appropriate fitted domain. All passed, and the source files remained intact.
+These exact synthetic cases do not establish accuracy for ill-conditioned or
+arbitrary real-world inputs.
+
+The selected GridCraft screenshots were approved by the contributor on
+2026-11-05. They are visual references, not evidence of Windows rendering or
+Excel equivalence.
 
 Existing noisy LINEST comparisons remain as internal consistency checks, not
 independent benchmarks. Domain rejection without workbook mutation, invalid model
@@ -119,10 +132,10 @@ confirmation. The duplicate picker tests were removed.
 
 Main's unchanged `crates/ui-egui/tests/it/ref_edit.rs` supplies pointer, keyboard,
 focus, cross-sheet quoting, home-sheet deletion/recreation/rename/undo,
-selection restoration and scripted confirmation/cancellation coverage.
-All of it still requires execution on the final reconciled state.
+selection restoration and scripted confirmation/cancellation coverage. The
+complete Fedora CI run included the integration suite.
 
-Additional validation still recommended:
+Focused checks for the next reconciled state:
 
 ```sh
 cargo test -p gridcraft-engine --lib cmd::analysis::tests
@@ -139,6 +152,7 @@ cargo check -p gridcraft-ui-egui --target wasm32-unknown-unknown
 
 | Date | Change |
 |---|---|
-| 2026-11-03 | Reconcile main 178f3eb7 locally; replace private picker with upstream RefEdit; preserve expanded ToolPak; add independent exact benchmark; execution pending |
+| 2026-11-05 | Reconcile with main c4029538 and record its verified Fedora all-ten-gate CI; separately identify the earlier Windows/Excel validation source |
+| 2026-11-03 | Reconcile main df137b8; use upstream RefEdit and preserve expanded ToolPak; add independent exact benchmark; targeted checks: 8 engine and 1 power-model UI test passed; full CI, WASM and coordinator screenshots/visual review pending |
 | 2026-10-27 | Move ToolPak UI and regression tests into shared dialog modules |
 | 2026-10-23 | Document transformed models, diagnostics and domain validation |
