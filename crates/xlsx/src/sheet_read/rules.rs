@@ -205,8 +205,6 @@ fn x14_rule_id(r: &El) -> String {
         .unwrap_or_default()
 }
 
-/// The `x14:id` text of an `extLst`; empty ids count as absent.
-
 /// x14 conditional-format extensions (Excel 2010): each `x14:cfRule` either refines the classic
 /// rule linked by its GUID (data bars, icon sets) or — with no classic counterpart — stands on
 /// its own (x14-only icon sets like `5Boxes`, or expression rules with an inline dxf). Anything
@@ -238,11 +236,6 @@ pub(super) fn read_x14_conditional_formats(cx: &mut Ctx<'_>, c: &El, sheet: &mut
         cx.warn("some Excel 2010 conditional format extensions were skipped");
     }
 }
-
-/// An x14 rule with no classic counterpart (an x14-only icon set like `5Boxes`, or a standalone
-/// expression rule): a complete conditional format over the `xm:sqref` of its
-/// `x14:conditionalFormatting` parent, carrying the x14 rule's priority. Returns whether it had
-/// to be skipped.
 
 /// An x14 rule with no classic counterpart (an x14-only icon set like `5Boxes`, or a standalone
 /// expression rule): a complete conditional format over the `xm:sqref` of its
@@ -289,8 +282,6 @@ fn read_x14_only_rule(cx: &Ctx<'_>, cf: &El, r: &El, sheet: &mut Sheet) -> bool 
 /// through the usual file conversion, the style from the inline `<x14:dxf>`, whose child shape
 /// matches a styles.xml dxf. A missing dxf is a legal style-less rule; a missing or empty
 /// formula drops the rule. Anything outside the modelled shape warns. Returns whether the rule
-/// had to be skipped.
-
 /// Merges an x14 data bar into the classic rule it refines. Returns whether any part of the
 /// extension had to be skipped; a rule that isn't a data bar is skipped wholesale.
 fn merge_x14_data_bar(cx: &Ctx<'_>, db: &El, rule: &mut CfRule) -> bool {
@@ -369,10 +360,6 @@ fn merge_x14_data_bar(cx: &Ctx<'_>, db: &El, rule: &mut CfRule) -> bool {
 /// One x14 `cfvo`, its value in an `xm:f` child (`autoMin`/`autoMax`/`min`/`max` carry none).
 /// `autoMin`/`autoMax` are the data bar's Automatic bounds, apart from Lowest/Highest Value
 /// (`min`/`max`) as in Excel (#1159). `None` when the type or its value can't be used.
-
-/// One x14 `cfvo`, its value in an `xm:f` child (`autoMin`/`autoMax`/`min`/`max` carry none).
-/// `autoMin`/`autoMax` are the data bar's Automatic bounds, apart from Lowest/Highest Value
-/// (`min`/`max`) as in Excel (#1159). `None` when the type or its value can't be used.
 fn x14_cfvo(e: &El) -> Option<CfValueKind> {
     let t = e.attr("type").unwrap_or("num");
     if t == "autoMin" {
@@ -428,8 +415,6 @@ fn merge_x14_icon_set(is: &El, rule: &mut CfRule) -> bool {
     skipped || truncated
 }
 
-/// Whether an `x14:iconSet` element carries anything outside the modelled attributes/children.
-
 /// The custom per-position icon choices (`x14:cfIcon`) of an x14 icon set: `None` when it has
 /// none. The list is capped at 5 (no icon set has more) so a hostile file can't balloon it;
 /// truncation and unusable entries are reported so the reader can warn.
@@ -450,8 +435,6 @@ fn x14_icons(is: &El) -> (Option<Vec<IconChoice>>, bool) {
 }
 
 /// Merges an x14 data bar into the classic rule it refines. Returns whether any part of the
-/// extension had to be skipped; a rule that isn't a data bar is skipped wholesale.
-
 /// Whether an `x14:iconSet` element carries anything outside the modelled attributes/children.
 fn unmodelled_icon_set(is: &El) -> bool {
     is.attrs.iter().any(|(n, _)| !matches!(n.as_str(), "iconSet" | "custom" | "reverse" | "showValue"))
@@ -460,8 +443,6 @@ fn unmodelled_icon_set(is: &El) -> bool {
 
 /// The custom per-position icon choices (`x14:cfIcon`) of an x14 icon set: `None` when it has
 /// none. The list is capped at 5 (no icon set has more) so a hostile file can't balloon it;
-/// truncation and unusable entries are reported so the reader can warn.
-
 /// A stored x14 id, capped at 256 bytes on a char boundary so a hostile file can't balloon it.
 fn capped_id(id: &str) -> String {
     let mut end = id.len().min(256);

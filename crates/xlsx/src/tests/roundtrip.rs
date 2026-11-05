@@ -1967,7 +1967,6 @@ fn generated_rule_formulas_use_the_top_left_cell_of_every_area() {
         stop_if_true: false,
     });
     let bytes = write_xlsx(&wb).unwrap();
-    let (xml, _) = sheet1_xml(&bytes);
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
     let mut xml = String::new();
     z.by_name("xl/worksheets/sheet1.xml").unwrap().read_to_string(&mut xml).unwrap();

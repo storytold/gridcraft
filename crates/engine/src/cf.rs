@@ -127,6 +127,41 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
     a + (b - a) * (rank - lo as f64)
 }
 
+/// Where a data bar's axis sits between the bounds: where zero falls, or the edge nearest zero
+/// when the bounds do not span it (an all-negative range parks it at the right edge, measured
+/// in #1159).
+fn axis_position(lo: f64, hi: f64) -> f64 {
+    if hi > lo {
+        ((0.0 - lo) / (hi - lo)).clamp(0.0, 1.0)
+    } else if lo < 0.0 {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+/// A data bar's share of its side, `n` between the bounds `lo`..`hi`. With bounds that span
+/// zero the axis sits at zero and each bar is its value's share of its own side (the side's
+/// extreme reaching from the axis to that side's edge). Otherwise the axis parks at the edge
+/// nearest zero and the bar is the value's place between the bounds, measured from that edge —
+/// Excel's (value − min) / (max − min), clamped, for Lowest/Number/Percent/Percentile/Formula
+/// bounds alike; only an Automatic minimum pulls the lower bound to zero (see [`threshold`]).
+/// Measured in Excel for Microsoft 365: Lowest–Highest over 10…20 gives 15 → 0.50 and Number
+/// 3–8 gives 4 → 0.20 (#1158); Automatic over 10…20 gives 10 → 0.50, and over −10…0 the
+/// axis-parked share gives −5 → 0.50 (#1159).
+fn bar_share(n: f64, lo: f64, hi: f64) -> f64 {
+    if lo < 0.0 && hi > 0.0 {
+        if n < 0.0 { (n / lo).clamp(0.0, 1.0) } else { (n / hi).clamp(0.0, 1.0) }
+    } else if hi <= 0.0 {
+        // All non-positive: the share runs from the upper bound.
+        if hi > lo { ((hi - n) / (hi - lo)).clamp(0.0, 1.0) } else { 0.0 }
+    } else if hi > lo {
+        ((n - lo) / (hi - lo)).clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
+}
+
 fn threshold(wb: &Workbook, sheet: usize, at: CellRef, st: &RuleStats, k: &CfValueKind) -> f64 {
     let min = st.sorted.first().copied().unwrap_or(0.0);
     let max = st.sorted.last().copied().unwrap_or(0.0);
@@ -327,13 +362,7 @@ impl CfCache {
                         let hi = threshold(wb, sheet, c, st, max);
                         // The axis sits where zero falls between the bounds; bounds that don't
                         // span zero park it on the edge nearest zero.
-                        let axis_pos = if hi > lo {
-                            ((0.0 - lo) / (hi - lo)).clamp(0.0, 1.0)
-                        } else if lo < 0.0 {
-                            1.0
-                        } else {
-                            0.0
-                        };
+                        let axis_pos = axis_position(lo, hi);
                         // Bar length. With bounds that span zero the axis sits at zero and each
                         // bar is its value's share of its own side (the side's extreme reaching
                         // from the axis to that side's edge). Otherwise the axis parks at the
@@ -344,19 +373,9 @@ impl CfCache {
                         // Measured in Excel for Microsoft 365: Lowest–Highest over 10…20 gives
                         // 15 → 0.50 and Number 3–8 gives 4 → 0.20 (#1158); Automatic over 10…20
                         // gives 10 → 0.50 (#1159).
-                        let u = if lo < 0.0 && hi > 0.0 {
-                            if n < 0.0 { (n / lo).clamp(0.0, 1.0) } else { (n / hi).clamp(0.0, 1.0) }
-                        } else if hi <= 0.0 {
-                            // All non-positive: the axis parks at the right edge; the share runs
-                            // from the upper bound (measured: Automatic −10…0 gives −5 → 0.50).
-                            if hi > lo { ((hi - n) / (hi - lo)).clamp(0.0, 1.0) } else { 0.0 }
-                        } else if hi > lo {
-                            ((n - lo) / (hi - lo)).clamp(0.0, 1.0)
-                        } else {
-                            1.0
-                        };
                         // The share is mapped into the rule's length limits, Excel's default
                         // 10/90 for a rule without an x14 extension.
+                        let u = bar_share(n, lo, hi);
                         let (min_len, max_len) = limits.map(|(a, b)| (a.min(b) as f64 / 100.0, a.max(b) as f64 / 100.0)).unwrap_or((0.1, 0.9));
                         let mag = min_len + u * (max_len - min_len);
                         let finite = |x: f64| if x.is_finite() { x as f32 } else { 0.0 };
@@ -485,6 +504,7 @@ fn relative(f: &str, first: CellRef, c: CellRef) -> String {
 
 #[cfg(test)]
 mod tests {
+    use gridcraft_model::IconChoice;
     use serde_json::json;
 
     use super::*;
@@ -649,7 +669,7 @@ mod tests {
     /// Installs `rule` over `range` straight into the model — the x14 extensions have no command
     /// parameters yet, so tests reach the sheet the way `review.rs` does.
     fn add_rule(s: &mut crate::Session, range: &str, rule: CfRule) {
-        let i = s.doc().unwrap().wb.active_sheet;
+        let i = s.doc().unwrap().wb.active_sheet();
         let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
         std::sync::Arc::make_mut(&mut wb.sheets[i]).cond_formats.push(CondFormat {
             ranges: vec![RangeRef::parse(range).unwrap()],

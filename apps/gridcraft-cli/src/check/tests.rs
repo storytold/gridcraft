@@ -236,7 +236,18 @@ fn diff_detects_changed_cond_format_rule() {
     use gridcraft_engine::model::{CfRule, CfValueKind, Color, CondFormat};
     let bar = |gradient: bool, priority: u32| CondFormat {
         ranges: vec![gridcraft_engine::core::RangeRef::parse("A1").unwrap()],
-        rule: CfRule::DataBar { min: CfValueKind::Min, max: CfValueKind::Max, color: Color::Rgb(0x638EC6), gradient, show_value: true },
+        rule: CfRule::DataBar {
+            min: CfValueKind::Min,
+            max: CfValueKind::Max,
+            color: Color::Rgb(0x638EC6),
+            gradient,
+            show_value: true,
+            border: None,
+            negative_fill: None,
+            negative_border: None,
+            axis: None,
+            limits: None,
+        },
         priority,
         stop_if_true: false,
     };

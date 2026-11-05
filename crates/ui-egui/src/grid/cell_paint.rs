@@ -362,15 +362,6 @@ pub(super) fn paint_cf_icon(p: &Painter, r: Rect, set: &str, idx: usize) {
     }
 }
 
-/// Where the active cell is on screen: the whole merged cell when it is part of one.
-fn active_rect(geo: &Geo, sh: &Sheet, sel: &gridcraft_engine::Selection) -> Rect {
-    match sh.merge_at(sel.active) {
-        Some(m) => geo.range_rect(sh, m),
-        None => geo.cell_rect(sh, sel.active),
-    }
-}
-
-/// Black or white, whichever reads on `fill` (the threshold chart labels use).
 pub(super) fn ink_on(fill: Color32) -> Color32 {
     let l = 0.299 * fill.r() as f32 + 0.587 * fill.g() as f32 + 0.114 * fill.b() as f32;
     if l < 150.0 { Color32::WHITE } else { Color32::BLACK }

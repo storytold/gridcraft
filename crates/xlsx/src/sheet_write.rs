@@ -831,9 +831,6 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
     }
 }
 
-const X14_NS: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
-const XM_NS: &str = "http://schemas.microsoft.com/office/excel/2006/main";
-
 /// The box a note made here gets: two columns right of its cell, four rows tall, 108 x 59.25 pt.
 /// A box read from a file that equals it is kept as `None`, so a note's model survives a save.
 pub(crate) const DEFAULT_NOTE_BOX: NoteBox = NoteBox {
