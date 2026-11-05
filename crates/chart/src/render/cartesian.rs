@@ -260,6 +260,12 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     let step = 1.0 - chart.overlap.map_or(0.0, |o| f32::from(o) / 100.0);
     let bw = cw / (1.0 + (nslots - 1.0) * step + gap);
     let (step, cluster) = (bw * step, bw * (1.0 + (nslots - 1.0) * step));
+    let segment_end = |i: usize, j: usize| {
+        let far = spans.get(i)?.get(j).copied().flatten()?.1;
+        let (c, v, k) = (center(j), vpos(far, &scale_of(i)), slot_of.get(i).copied().unwrap_or(0) as f32);
+        let (start, end) = (c - cluster / 2.0 + k * step, c + cluster / 2.0 - bw - k * step);
+        Some(if horizontal { ([v, end + bw], [v, end]) } else { ([start, v], [start + bw, v]) })
+    };
     let labels_on = chart.data_labels && ncat <= MAX_LABELS;
     // Area labels wait until every area is filled, so a later (stacked) area can't paint over them.
     let mut area_labels = Vec::new();
@@ -371,18 +377,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 }
             }
         }
-        let lines = if pass == 1 { data.series_lines } else { None };
-        draw_series_lines(ctx, lines, &fams, ncat, |i, j| {
-            let (_, far) = spans.get(i)?.get(j).copied().flatten()?;
-            let (c, v, k) = (center(j), vpos(far, &scale_of(i)), slot_of.get(i).copied().unwrap_or(0) as f32);
-            Some(if horizontal {
-                let y = c + cluster / 2.0 - bw - k * step;
-                ([v, y + bw], [v, y])
-            } else {
-                let x = c - cluster / 2.0 + k * step;
-                ([x, v], [x + bw, v])
-            })
-        });
+        draw_series_lines(ctx, data.series_lines.filter(|_| pass == 1), &fams, ncat, segment_end);
         draw_bar_labels(ctx, &mut bar_labels);
         for (x, y, t) in area_labels.drain(..) {
             ctx.text(x, y, &t, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
