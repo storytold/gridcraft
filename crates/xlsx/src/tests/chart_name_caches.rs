@@ -55,6 +55,8 @@ fn chart_xml(cats: &str, vals: &str, names: Vec<DefinedName>) -> String {
         source: None,
         by_rows: false,
         pivot: None,
+        hole_size: 75,
+        first_slice_angle: 0,
     });
     let mut named_sheet = Sheet::new("My Sheet");
     for (i, value) in [10.0, 20.0, 30.0].iter().enumerate() {
