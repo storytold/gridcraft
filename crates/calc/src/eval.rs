@@ -27,9 +27,9 @@ const MAX_DEPTH: usize = 400;
 /// every legitimate call; hostile work that grows past one dimension (a LAMBDA that recurses
 /// or nest `MAP` into `MAP`) then stops at the same bound instead of squaring.
 const LAMBDA_FUEL: u64 = MAX_CELLS;
-/// Array cells one formula may materialize in total (range reads and elementwise results). Each
-/// array is capped at `MAX_CELLS`, but a formula can build many of them (`A:A*B:B*C:C*…`), so
-/// the sum is capped too; past it the formula answers `#CALC!` (#2157).
+/// Array cells one formula may materialize in total (literals, range reads, elementwise results,
+/// and lambda-helper outputs). Each array is capped at `MAX_CELLS`, but a formula can build many of
+/// them (`A:A*B:B*C:C*…`), so the sum is capped too; past it the formula answers `#CALC!` (#2157).
 const CELL_BUDGET: u64 = 8 * MAX_CELLS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -339,7 +339,11 @@ impl<'h> Evaluator<'h> {
             Expr::Array(rows) => {
                 let h = rows.len();
                 let w = rows.first().map_or(0, Vec::len);
-                let mut data = Vec::with_capacity(h * w);
+                let Some(n) = h.checked_mul(w).filter(|&n| (n as u64) <= MAX_CELLS) else { return err(CellError::Num) };
+                if !self.charge_cells(n as u64) {
+                    return err(CellError::Calc);
+                }
+                let mut data = Vec::with_capacity(n);
                 for row in rows {
                     for el in row {
                         let v = self.value(el);
@@ -617,12 +621,14 @@ impl<'h> Evaluator<'h> {
                 let mut acc = self.value(left);
                 while let Some((o, r)) = rest.pop() {
                     let y = self.value(r);
-                    acc = binary_values(o, &acc, &y, self.host.workbook().date_system);
-                    if let Value::Array(arr) = &acc
-                        && !self.charge_cells(arr.data.len() as u64)
+                    let array_result = matches!(&acc, Value::Array(_)) || matches!(&y, Value::Array(_));
+                    if array_result
+                        && let Some(n) = binary_output_len(&acc, &y)
+                        && !self.charge_cells(n as u64)
                     {
                         return err(CellError::Calc);
                     }
+                    acc = binary_values(o, &acc, &y, self.host.workbook().date_system);
                 }
                 Ev::V(acc)
             }
@@ -1161,6 +1167,9 @@ impl<'h> Evaluator<'h> {
                 if l.params.len() != arrays.len() {
                     return err(CellError::Value);
                 }
+                if !self.charge_cells(n as u64) {
+                    return err(CellError::Calc);
+                }
                 let mut out = Vec::with_capacity(n);
                 for r in 0..rows {
                     for c in 0..cols {
@@ -1181,6 +1190,9 @@ impl<'h> Evaluator<'h> {
                 let Some(l) = self.lambda_arg(args.get(2), 2) else { return err(CellError::Value) };
                 if l.params.len() != 2 {
                     return err(CellError::Value);
+                }
+                if name == "SCAN" && !self.charge_cells(arr.data.len() as u64) {
+                    return err(CellError::Calc);
                 }
                 let mut scan = Vec::with_capacity(arr.data.len());
                 for v in arr.data.iter() {
@@ -1210,6 +1222,9 @@ impl<'h> Evaluator<'h> {
                 }
                 let by_row = name == "BYROW";
                 let n = if by_row { arr.rows } else { arr.cols };
+                if !self.charge_cells(n as u64) {
+                    return err(CellError::Calc);
+                }
                 let mut out = Vec::with_capacity(n);
                 for i in 0..n {
                     let slice: Vec<Value> = if by_row {
@@ -1241,7 +1256,11 @@ impl<'h> Evaluator<'h> {
                     return err(CellError::Value);
                 }
                 let (rows, cols) = (rows as usize, cols as usize);
-                let mut out = Vec::with_capacity(rows * cols);
+                let Some(n) = rows.checked_mul(cols).filter(|&n| (n as u64) <= MAX_CELLS) else { return err(CellError::Num) };
+                if !self.charge_cells(n as u64) {
+                    return err(CellError::Calc);
+                }
+                let mut out = Vec::with_capacity(n);
                 for r in 0..rows {
                     for c in 0..cols {
                         let bound = vec![
@@ -1836,6 +1855,20 @@ fn broadcast_len(rows: usize, cols: usize) -> Option<usize> {
     rows.checked_mul(cols).filter(|&n| n as u64 <= MAX_CELLS)
 }
 
+/// Size of an elementwise result, when either operand is an array and the broadcast fits.
+fn binary_output_len(a: &Value, b: &Value) -> Option<usize> {
+    let dims = |v: &Value| match v {
+        Value::Array(a) => (a.rows, a.cols),
+        _ => (1, 1),
+    };
+    if !matches!(a, Value::Array(_)) && !matches!(b, Value::Array(_)) {
+        return None;
+    }
+    let (ar, ac) = dims(a);
+    let (br, bc) = dims(b);
+    broadcast_len(broadcast_dim(ar, br), broadcast_dim(ac, bc))
+}
+
 fn broadcast_dim(a: usize, b: usize) -> usize {
     if a == 1 {
         b
@@ -2126,10 +2159,38 @@ mod fuel_tests {
             ev.cells = cells;
             ev.value(&gridcraft_formula::parser::parse(src).unwrap_or_else(|e| panic!("{e}")))
         };
-        // Two products of 4 cells each fit in 8 and run out at 7.
+        // The literal and two products each materialize 4 cells.
         let src = "=({1,2,3,4}*2)*3";
-        assert!(matches!(run(8, src), Value::Array(_)));
-        assert!(matches!(run(7, src), Value::Error(CellError::Calc)));
+        assert!(matches!(run(12, src), Value::Array(_)));
+        assert!(matches!(run(11, src), Value::Error(CellError::Calc)));
+    }
+
+    #[test]
+    fn lambda_helpers_charge_outputs_and_each_formula_gets_a_fresh_budget() {
+        let eval_with_cells = |host: &mut Empty, at, cells, src: &str| {
+            let expr = gridcraft_formula::parser::parse(src).unwrap_or_else(|e| panic!("{e}"));
+            let mut ev = Evaluator::new(host, 0, at);
+            ev.cells = cells;
+            ev.value(&expr)
+        };
+        let mut host = Empty { wb: Workbook::default() };
+
+        // The inner and outer MAP results, plus their two input literals, cost 12 cells total.
+        let nested = "=MAP({1,2},LAMBDA(x,INDEX(MAP({1,2},LAMBDA(y,x+y)),1)))";
+        assert!(matches!(eval_with_cells(&mut host, CellRef::new(0, 0), 12, nested), Value::Array(_)));
+        let just_under = eval_with_cells(&mut host, CellRef::new(0, 1), 11, nested);
+        assert!(matches!(&just_under, Value::Array(a) if a.data.get(1) == Some(&Value::Error(CellError::Calc))), "{just_under:?}");
+
+        // BYROW materializes its input literal and its two result cells.
+        let by_row = "=BYROW({1,2;3,4},LAMBDA(r,SUM(r)))";
+        assert!(matches!(eval_with_cells(&mut host, CellRef::new(0, 2), 6, by_row), Value::Array(_)));
+        assert!(matches!(eval_with_cells(&mut host, CellRef::new(0, 3), 5, by_row), Value::Error(CellError::Calc)));
+
+        // A new root evaluator starts with its own budget, as two filled-down formulas do.
+        let simple = "=({1,2}*2)*3";
+        for col in [4, 5] {
+            assert!(matches!(eval_with_cells(&mut host, CellRef::new(0, col), 6, simple), Value::Array(_)));
+        }
     }
 
     #[test]
