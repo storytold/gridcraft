@@ -429,6 +429,8 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             style: 1,
             hole_size: 75,
             first_slice_angle: 0,
+            gap_width: None,
+            overlap: None,
             x_title: None,
             y_title: None,
             source: None,
