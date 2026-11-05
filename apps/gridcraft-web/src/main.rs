@@ -19,6 +19,8 @@
 #[cfg(target_arch = "wasm32")]
 mod host;
 #[cfg(any(target_arch = "wasm32", test))]
+mod host_save;
+#[cfg(any(target_arch = "wasm32", test))]
 mod prefs;
 #[cfg(target_arch = "wasm32")]
 mod web;
