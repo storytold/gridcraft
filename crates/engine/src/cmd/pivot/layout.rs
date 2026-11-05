@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use super::create::source_param;
 use super::fields::{canonical, in_axes, shift_values, update};
 use super::params::{group_param, layout_name};
@@ -72,14 +74,17 @@ enum SortOrder {
     Custom,
 }
 
+/// `pivot.sort`: orders a row or column field's items by label, by a value field's totals, in source
+/// order, or in a custom order.
 pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.sort";
     let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
     let order = match str_param(p, "order").unwrap_or("asc").to_ascii_lowercase().as_str() {
         "asc" | "ascending" | "a-z" => SortOrder::Ascending,
         "desc" | "descending" | "z-a" => SortOrder::Descending,
-        "none" | "source" => SortOrder::Source,
-        "custom" | "manual" => SortOrder::Custom,
+        // "manual" was source order before custom orders existed; callers may still send it.
+        "none" | "source" | "manual" => SortOrder::Source,
+        "custom" => SortOrder::Custom,
         o => return Err(bad(C, format!("unknown order `{o}` (asc|desc|none|custom)"))),
     };
     let by = str_param(p, "by").map(str::to_string);
@@ -87,11 +92,12 @@ pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad(C, "`by` sorts ascending or descending"));
     }
     let items: Vec<String> = match (order, p.get("items")) {
-        (SortOrder::Custom, Some(Json::Array(list))) if !list.is_empty() => list
-            .iter()
-            .take(100_000)
-            .map(|v| v.as_str().map(str::to_string).ok_or_else(|| bad(C, "`items` are item labels")))
-            .collect::<Result<_>>()?,
+        (SortOrder::Custom, Some(Json::Array(list))) if list.len() > MAX_CUSTOM_ITEMS => {
+            return Err(bad(C, format!("at most {MAX_CUSTOM_ITEMS} `items`")));
+        }
+        (SortOrder::Custom, Some(Json::Array(list))) if !list.is_empty() => {
+            list.iter().map(|v| v.as_str().map(str::to_string).ok_or_else(|| bad(C, "`items` are item labels"))).collect::<Result<_>>()?
+        }
         (SortOrder::Custom, _) => return Err(bad(C, "a custom order needs `items`: the item labels in order")),
         (_, Some(_)) => return Err(bad(C, "`items` go with order: custom")),
         (_, None) => vec![],
@@ -122,17 +128,25 @@ fn value_field_name(cmd: &str, pt: &PivotTable, name: &str) -> Result<String> {
         .ok_or_else(|| bad(cmd, format!("`{name}` isn't in the values area")))
 }
 
-/// `labels` as the axis field `field` shows them (each an item of it), without repeats.
+/// Most labels a custom order lists.
+const MAX_CUSTOM_ITEMS: usize = 100_000;
+
+/// `labels` as the axis field `field` shows them (each an item of it), without repeats. One pass
+/// over the field's items and one over the labels, so a long order on a large field stays fast.
 fn item_labels(cmd: &str, pt: &PivotTable, src: &pv::Source, wb: &gridcraft_model::Workbook, field: &str, labels: &[String]) -> Result<Vec<String>> {
     let axis = pt.rows.iter().chain(pt.columns.iter()).find(|f| f.source_col.eq_ignore_ascii_case(field));
     let axis = axis.ok_or_else(|| bad(cmd, format!("`{field}` isn't in the rows or columns area")))?;
     let column = src.col(&axis.source_col).ok_or_else(|| bad(cmd, format!("no field `{field}` in the source data")))?;
-    let known = pv::distinct_labels(wb, src, column, axis.date_group, usize::MAX);
+    let mut known: HashMap<String, String> = HashMap::new();
+    for label in pv::distinct_labels(wb, src, column, axis.date_group, usize::MAX) {
+        known.entry(label.to_ascii_lowercase()).or_insert(label);
+    }
+    let mut seen: HashSet<String> = HashSet::new();
     let mut out: Vec<String> = Vec::new();
     for label in labels {
-        let canonical =
-            known.iter().find(|k| k.eq_ignore_ascii_case(label.trim())).ok_or_else(|| bad(cmd, format!("`{label}` isn't an item of `{field}`")))?;
-        if !out.iter().any(|o| o.eq_ignore_ascii_case(canonical)) {
+        let key = label.trim().to_ascii_lowercase();
+        let canonical = known.get(&key).ok_or_else(|| bad(cmd, format!("`{label}` isn't an item of `{field}`")))?;
+        if seen.insert(key) {
             out.push(canonical.clone());
         }
     }

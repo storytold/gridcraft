@@ -736,6 +736,8 @@ fn axis_field<'a>(pt: &'a PivotTable, c: &Cache, i: usize) -> Option<&'a PivotFi
     pt.rows.iter().chain(pt.columns.iter()).nth(p)
 }
 
+/// `<pivotFields>`: each cache field's axis, sort (with the value field it sorts by), subtotal and
+/// layout flags, and the items an axis field shows, hides or collapses, in its custom order.
 fn write_pivot_fields(s: &mut String, pt: &PivotTable, c: &Cache, layout: &PivotTableLayout<'_>) {
     let _ = write!(s, "<pivotFields count=\"{}\">", c.fields.len());
     for (i, f) in c.fields.iter().enumerate() {
