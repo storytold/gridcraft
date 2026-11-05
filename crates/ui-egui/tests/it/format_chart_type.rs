@@ -64,9 +64,13 @@ fn chart_type_offers_the_stacked_and_hundred_percent_stacked_types() {
 
 #[test]
 fn chart_type_marks_the_chart_s_current_type() {
-    for (t, sub, label) in
-        [("bar", "stacked100", "100% Stacked Bar"), ("area", "stacked", "Stacked Area"), ("column", "", "Column"), ("line", "markers", "Line")]
-    {
+    for (t, sub, label) in [
+        ("bar", "stacked100", "100% Stacked Bar"),
+        ("area", "stacked", "Stacked Area"),
+        ("column", "", "Column"),
+        ("line", "", "Line"),
+        ("line", "markers", "Line with Markers"),
+    ] {
         let (h, _) = open_chart_type(t, sub);
         for other in [
             "Column",
@@ -76,6 +80,7 @@ fn chart_type_marks_the_chart_s_current_type() {
             "Stacked Bar",
             "100% Stacked Bar",
             "Line",
+            "Line with Markers",
             "Stacked Line",
             "Area",
             "Stacked Area",
