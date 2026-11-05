@@ -327,10 +327,12 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Date]), overload(&[ParamKind::Date, ParamKind::Number])],
         ReturnType::Integer,
         standard(false),
-        "WEEKNUM ( <Date> [, <ReturnType>] ) gives the week number within the year. ReturnType 1 \
-         (default) and 2-17 use system 1, where the week containing January 1 is week 1; \
-         ReturnType 21 uses ISO 8601 system 2, where the week containing the first Thursday is \
-         week 1. Text arguments are read with the same rules as DATEVALUE.",
+        "WEEKNUM ( <Date> [, <ReturnType>] ) gives the week number within the year. The documented \
+         codes are 1 (default), 2, 11-17 and 21: 1, 2 and 11-17 use system 1, where the week \
+         containing January 1 is week 1 (each code picks the first day of the week: 1 Sunday, 2 \
+         Monday, 11 Monday, 12 Tuesday, ... 17 Sunday), and 21 uses ISO 8601 system 2, where the \
+         week containing the first Thursday is week 1. Codes 3-10 are not valid. Text arguments \
+         are read with the same rules as DATEVALUE.",
         &["WEEKNUM ( DATE ( 2024, 1, 15 ) )", "WEEKNUM ( Sales[Order Date], 21 )"],
     ),
     spec(
