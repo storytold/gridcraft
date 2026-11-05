@@ -148,48 +148,6 @@ pub fn gallery() -> Vec<String> {
     v
 }
 
-/// Rewrites the formula text stored on table columns (a calculated column's formula, a custom
-/// totals formula), which cell edits never reach. `f` maps each sub-expression, given the sheet
-/// and range of the table that owns the column and a flag it sets when it changed something; text
-/// that does not parse, or that `f` leaves alone, is kept as it is.
-pub(crate) fn map_column_formulas(
-    cx: &mut crate::cmd::Ctx,
-    f: &mut impl FnMut(gridcraft_formula::Expr, usize, RangeRef, &mut bool) -> gridcraft_formula::Expr,
-) {
-    for si in 0..cx.wb.sheets.len() {
-        let tables = cx.wb.sheet(si).map_or(0, |sh| sh.tables.len());
-        for ti in 0..tables {
-            let Some(t) = cx.wb.sheet(si).and_then(|sh| sh.tables.get(ti)) else { continue };
-            let range = t.range;
-            // (column, new calculated column formula, new custom totals formula)
-            let mut changes: Vec<(usize, Option<String>, Option<String>)> = Vec::new();
-            for (ci, col) in t.columns.iter().enumerate() {
-                let mut remap = |text: &str| {
-                    let e = gridcraft_formula::parse(text).ok()?;
-                    let mut hit = false;
-                    let ne = e.map(&mut |x| f(x, si, range, &mut hit));
-                    hit.then(|| gridcraft_formula::print(&ne))
-                };
-                let formula = col.formula.as_deref().and_then(&mut remap);
-                let totals = if col.totals == gridcraft_model::TotalsFn::Custom { col.totals_label.as_deref().and_then(&mut remap) } else { None };
-                if formula.is_some() || totals.is_some() {
-                    changes.push((ci, formula, totals));
-                }
-            }
-            let Some(t) = cx.wb.sheet_mut(si).and_then(|sh| sh.tables.get_mut(ti)) else { continue };
-            for (ci, formula, totals) in changes {
-                let Some(col) = t.columns.get_mut(ci) else { continue };
-                if formula.is_some() {
-                    col.formula = formula;
-                }
-                if totals.is_some() {
-                    col.totals_label = totals;
-                }
-            }
-        }
-    }
-}
-
 /// Editing a table's header row renames the column, as in Excel: an empty or repeated header
 /// gets a unique name written back into the cell, and structured references follow the rename.
 pub(crate) fn sync_headers(cx: &mut crate::cmd::Ctx) {
@@ -289,25 +247,34 @@ pub(crate) fn sync_headers(cx: &mut crate::cmd::Ctx) {
                 cell.formula = Some(std::sync::Arc::new(Formula::from_expr(ne)));
             }
         }
-    }
-    // Calculated column and custom totals formulas are stored as text on the columns.
-    map_column_formulas(cx, &mut |e, i, owner, hit| match e {
-        gridcraft_formula::Expr::Struct(mut st) => {
-            for (si, table, range, old, name) in &renames {
-                let this = if st.table.is_empty() { i == *si && owner == *range } else { st.table.eq_ignore_ascii_case(table) };
-                if this {
-                    for end in [&mut st.col_start, &mut st.col_end].into_iter().flatten() {
-                        if end.eq_ignore_ascii_case(old) {
-                            *end = name.clone();
-                            *hit = true;
+        // So do calculated column formulas, which are stored as text on the table's columns.
+        let Some(sh) = cx.wb.sheet_mut(i) else { continue };
+        for t in &mut sh.tables {
+            let owner = t.range;
+            for text in t.columns.iter_mut().filter_map(|col| col.formula.as_mut()) {
+                let Ok(e) = gridcraft_formula::parse(text) else { continue };
+                let mut hit = false;
+                let ne = e.map(&mut |x| match x {
+                    gridcraft_formula::Expr::Struct(mut st) => {
+                        for (si, table, range, old, name) in &renames {
+                            let this = if st.table.is_empty() { i == *si && *range == owner } else { st.table.eq_ignore_ascii_case(table) };
+                            for end in [&mut st.col_start, &mut st.col_end].into_iter().flatten().filter(|_| this) {
+                                if end.eq_ignore_ascii_case(old) {
+                                    *end = name.clone();
+                                    hit = true;
+                                }
+                            }
                         }
+                        gridcraft_formula::Expr::Struct(st)
                     }
+                    o => o,
+                });
+                if hit {
+                    *text = gridcraft_formula::print(&ne);
                 }
             }
-            gridcraft_formula::Expr::Struct(st)
         }
-        o => o,
-    });
+    }
     cx.structural = true;
 }
 
@@ -345,6 +312,15 @@ mod tests {
     }
 
     #[test]
+    fn go_to_a_table_selects_its_data() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["a", "b"], [1, 2], [3, 4]]})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:B3", "header": true})).unwrap();
+        assert_eq!(s.execute("edit.goTo", json!({"reference": "Table1"})).unwrap()["selection"], "A2:B3");
+    }
+
+    #[test]
     fn renaming_a_column_updates_calculated_column_formulas() {
         let mut s = Session::new();
         s.new_workbook();
@@ -361,15 +337,6 @@ mod tests {
         assert_eq!(stored(&s), "INDEX(Prices[Amount],MATCH(Orders[@Item],Prices[Sku],0))");
         s.execute("cell.set", json!({"cell": "D1", "input": "Product"})).unwrap();
         assert_eq!(stored(&s), "INDEX(Prices[Amount],MATCH(Orders[@Product],Prices[Sku],0))");
-    }
-
-    #[test]
-    fn go_to_a_table_selects_its_data() {
-        let mut s = Session::new();
-        s.new_workbook();
-        s.execute("range.setValues", json!({"range": "A1", "values": [["a", "b"], [1, 2], [3, 4]]})).unwrap();
-        s.execute("insert.table", json!({"range": "A1:B3", "header": true})).unwrap();
-        assert_eq!(s.execute("edit.goTo", json!({"reference": "Table1"})).unwrap()["selection"], "A2:B3");
     }
 }
 
