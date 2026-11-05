@@ -440,11 +440,8 @@ pub fn models_ui(ui: &mut egui::Ui, lang: crate::i18n::Language) {
             ]
         })
         .collect();
-    let widths: Vec<f32> = titles
-        .iter()
-        .enumerate()
-        .map(|(i, title)| natural(ui, heading(title), rows.iter().filter_map(|r| r.get(i).cloned())))
-        .collect();
+    let widths: Vec<f32> =
+        titles.iter().enumerate().map(|(i, title)| natural(ui, heading(title), rows.iter().filter_map(|r| r.get(i).cloned()))).collect();
     ui.allocate_ui(egui::vec2(ui.available_width(), 340.0), |ui| {
         ui.set_max_height(340.0);
         egui::ScrollArea::horizontal().id_salt("credits_models").auto_shrink([false, false]).show(ui, |ui| {

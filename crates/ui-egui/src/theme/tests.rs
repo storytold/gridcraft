@@ -38,7 +38,14 @@ fn craft_fonts_are_the_last_fallback_in_every_family() {
     }
     for (family, chain) in &fonts.families {
         let first = chain.iter().position(|k| k.starts_with("craft-")).unwrap_or(chain.len());
-        assert_eq!(&chain[first..], expected.as_slice(), "{family:?} must end with exactly the permitted craft faces in manifest order");
+        // Non-first faces carry a baseline-alignment variant key (`face@first`); strip it
+        // before comparing with the manifest keys.
+        let bases: Vec<&str> = chain[first..].iter().map(|k| k.split_once('@').map_or(k.as_str(), |(b, _)| b)).collect();
+        assert_eq!(
+            bases,
+            expected.iter().map(String::as_str).collect::<Vec<_>>(),
+            "{family:?} must end with exactly the permitted craft faces in manifest order"
+        );
     }
 }
 

@@ -196,15 +196,17 @@ impl Language {
     /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
     /// "Orientation") is keyed `context|label`: English shows only the part after the `|`.
     pub fn tr(self, text: &str) -> &str {
-        self.translated(text).unwrap_or_else(|| {
+        self.raw(text).unwrap_or_else(|| {
             #[cfg(not(target_arch = "wasm32"))]
             record_untranslated(self, text);
             text.rsplit_once('|').map_or(text, |(_, label)| label)
         })
     }
 
-    /// The catalog's own translation of `text`, or `None` when it falls back to English.
-    fn translated(self, text: &str) -> Option<&'static str> {
+    /// The catalog translation of `text`, or `None`. `tr` adds the untranslated-label trace on
+    /// top; callers holding runtime data (an error message with a file name in it) use `raw`
+    /// directly so the trace stays a report of interface labels only.
+    fn raw(self, text: &str) -> Option<&'static str> {
         match self {
             Self::En => None,
             Self::Es => es::translate(text),
@@ -232,13 +234,33 @@ impl Language {
     /// same `{slot}` names, so word order and measure words follow the language; a language
     /// without the entry gets the English with the same slots filled.
     pub fn tr_fill(self, english: &str, slots: &[(&str, &str)]) -> String {
-        let mut out = self.tr(english).to_owned();
-        for (name, value) in slots {
-            let slot = format!("{{{name}}}");
-            if out.contains(&slot) {
-                out = out.replace(&slot, value);
+        let template = self.tr(english);
+        // Each placeholder is read from the original template: a value may itself look like a
+        // placeholder (a macro can be named `{book}`), so a search-and-replace loop would rewrite
+        // data inserted earlier.
+        let mut out = String::with_capacity(template.len() + slots.iter().map(|(_, v)| v.len()).sum::<usize>());
+        let mut rest = template;
+        while let Some(open) = rest.find('{') {
+            out.push_str(&rest[..open]);
+            let after = &rest[open + 1..];
+            match after.find('}') {
+                Some(close) => {
+                    let name = &after[..close];
+                    match slots.iter().find(|(n, _)| *n == name).map(|(_, v)| *v) {
+                        Some(value) => out.push_str(value),
+                        // Not one of this sentence's slots: keep the braces as written.
+                        None => out.push_str(&rest[open..open + close + 2]),
+                    }
+                    rest = &after[close + 1..];
+                }
+                None => {
+                    out.push_str(&rest[open..]);
+                    rest = "";
+                    break;
+                }
             }
         }
+        out.push_str(rest);
         out
     }
 
@@ -252,8 +274,12 @@ impl Language {
     pub(crate) fn tr_error(self, message: &str) -> String {
         let message = if message.starts_with("command `") { crate::clean_error(message) } else { message.to_owned() };
 
-        let translated = self.tr(&message);
+        // Runtime data (a file name, a cell reference) must not enter the untranslated-label
+        // trace, so the complete message is looked up without tracing; only the template match
+        // below fills the slots, and it translates captured values from the catalog without
+        // tracing them either.
         let fallback = message.rsplit_once('|').map_or(message.as_str(), |(_, label)| label);
+        let translated = self.raw(&message).unwrap_or(fallback);
 
         if translated == fallback
             && let Some(filled) = self.error_template(&message)
@@ -296,10 +322,10 @@ impl Language {
         table.iter().find_map(|(english, localized)| {
             let values = fill_template(english, message)?;
             // A captured value is user data (a file or sheet name may carry a `|`, which `tr`
-            // reads as a context separator): translate it only when it can't be confused with
-            // one, so `We can't open 'a|b.xlsx'` keeps its whole name.
+            // reads as a context separator): translate it only when it is a known interface
+            // phrase, and look it up without tracing — this is not an interface label.
             let values: Vec<String> =
-                values.iter().map(|value| if value.contains('|') { value.clone() } else { self.tr(value).to_string() }).collect();
+                values.iter().map(|value| if value.contains('|') { value.clone() } else { self.raw(value).unwrap_or(value).to_string() }).collect();
             splice_template(localized, &values)
         })
     }
