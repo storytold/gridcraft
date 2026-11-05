@@ -11,6 +11,11 @@ text, series strokes and fills, markers, smoothing, bar gap/overlap and annotati
 positions. Missing options inherit the normal chart defaults. Text overrides
 inherit the whole-chart text style, with axis roles resolved independently.
 
+General-format logarithmic labels preserve fractional decades rather than
+rounding them with a linear step. Newly inserted charts use native theme-color
+style 2, while explicit style choices remain intact. Stock exports preserve a
+native dash marker on the close series through repeated saves.
+
 Rendering applies the same model to drawing primitives consumed by the UI and
 print/HTML/PDF paths. Tick sampling is bounded for hostile or dense intervals;
 reversed category axes keep data-table columns aligned with the plotted data.

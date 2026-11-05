@@ -139,6 +139,8 @@ fn combo_reordered_series_keep_their_own_formats_across_repeated_saves() {
         gridlines: false,
         data_table: None,
         style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: None,
         y_title: None,
         source: None,

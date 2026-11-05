@@ -655,7 +655,7 @@ impl ChartFormat {
             bold: local.bold.or(base.bold),
             italic: local.italic.or(base.italic),
         }
-}
+    }
 }
 
 /// A chart's data table (`c:dTable`), independent of the chart legend.
@@ -1241,6 +1241,7 @@ mod tests {
             source: None,
             by_rows: false,
             pivot: None,
+            format: Default::default(),
         };
         let mut json = serde_json::to_value(&chart).expect("serialize chart");
         json.as_object_mut().expect("chart object").remove("hole_size");

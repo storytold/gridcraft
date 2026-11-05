@@ -94,6 +94,49 @@ fn fixed_order_chart_labels_stay_aligned_when_reversal_is_requested() {
 }
 
 #[test]
+fn logarithmic_axes_keep_fractional_decades_in_rendered_general_labels() {
+    for kind in [ChartKind::Line, ChartKind::ScatterLines, ChartKind::ColumnClustered] {
+        let mut c = chart(kind);
+        c.title = None;
+        c.legend = LegendPos::None;
+        c.data_labels = false;
+        let axis = gridcraft_model::ChartAxis { minimum: Some(0.001), maximum: Some(1.0), logarithmic: true, ..Default::default() };
+        c.format.y_axis = axis.clone();
+        if kind == ChartKind::ScatterLines {
+            c.format.x_axis = axis;
+        }
+        let mut values = series("Values", &[0.001, 0.01, 0.1, 1.0], [12, 34, 56, 255], kind);
+        values.number_format = "General".into();
+        values.x = Some(values.values.clone());
+        let data = ChartData { categories: vec!["A".into(), "B".into(), "C".into(), "D".into()], series: vec![values], ..Default::default() };
+        let primitives = render(&c, &data, 480.0, 320.0, &ApproxMeasure);
+        let labels: Vec<_> = primitives
+            .iter()
+            .filter_map(|primitive| match primitive {
+                Prim::Text { role, text, .. } if role == "y_axis" => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        for expected in ["0.001", "0.01", "0.1", "1"] {
+            assert!(labels.contains(&expected), "{kind:?}: missing {expected} in {labels:?}");
+        }
+        assert!(!labels.contains(&"0"), "positive logarithmic ticks must never be labelled zero");
+        if kind == ChartKind::ScatterLines {
+            let x_labels: Vec<_> = primitives
+                .iter()
+                .filter_map(|primitive| match primitive {
+                    Prim::Text { role, text, .. } if role == "x_axis" => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            for expected in ["0.001", "0.01", "0.1", "1"] {
+                assert!(x_labels.contains(&expected), "logarithmic X axis: {x_labels:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn logarithmic_area_chart_omits_non_positive_values() {
     let mut c = chart(ChartKind::Area);
     c.title = None;

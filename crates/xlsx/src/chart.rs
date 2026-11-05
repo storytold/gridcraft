@@ -309,6 +309,8 @@ pub fn read_chart(root: &El) -> Option<Chart> {
     })
 }
 
+/// Starts from saved extension overrides, then overlays supported native properties.
+/// Absent hidden gridlines retain their stored style; the final result is sanitized before use.
 fn read_format(root: &El, plot: &El, series: &[Series]) -> gridcraft_model::ChartFormat {
     let scatter = plot
         .children
@@ -1126,7 +1128,15 @@ fn series_format_xml(spec: &gridcraft_model::ChartSeriesFormat, idx: usize, g: G
     x
 }
 
-fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize, spec: Option<&gridcraft_model::ChartSeriesFormat>) -> String {
+fn series_xml(
+    s: &Series,
+    idx: usize,
+    g: G,
+    wb: &Workbook,
+    si: usize,
+    spec: Option<&gridcraft_model::ChartSeriesFormat>,
+    stock_close: bool,
+) -> String {
     // These groups color individual slices or use stock-specific no-fill lines.
     // Keep their series overrides in the extension without flattening native styling.
     let spec = spec.filter(|_| !matches!(g, G::Pie | G::Doughnut | G::Stock));
@@ -1164,6 +1174,7 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize, spec: Opti
     }
     match g {
         G::Bar { .. } => x.push_str("<c:invertIfNegative val=\"0\"/>"),
+        G::Stock if stock_close => x.push_str("<c:marker><c:symbol val=\"dash\"/><c:size val=\"6\"/></c:marker>"),
         G::Line { markers: false, .. } | G::Line100 { markers: false } | G::Scatter { lines: true } | G::Stock if spec.is_none() => {
             x.push_str("<c:marker><c:symbol val=\"none\"/></c:marker>")
         }
@@ -1276,7 +1287,11 @@ fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb
     } else {
         g
     };
-    let sers: String = series.iter().map(|(i, s)| series_xml(s, *i, g, wb, si, ch.format.series.get(i))).collect();
+    let sers: String = series
+        .iter()
+        .enumerate()
+        .map(|(position, (i, s))| series_xml(s, *i, g, wb, si, ch.format.series.get(i), g == G::Stock && position + 1 == series.len()))
+        .collect();
     let dl = dlbls(ch.data_labels);
     let ax = format!("<c:axId val=\"{}\"/><c:axId val=\"{}\"/>", axes.0, axes.1);
     match g {
@@ -1335,6 +1350,7 @@ struct Ax<'a> {
     crosses_max: bool,
 }
 
+/// Writes supported primary-axis options; secondary axes keep native automatic defaults.
 fn axis_xml(a: &Ax<'_>, chart: &Chart) -> String {
     let automatic = gridcraft_model::ChartAxis::default();
     let options = if a.id > 2 {
@@ -1579,7 +1595,7 @@ mod marker_safety_tests {
     fn custom_extension_marker_is_restricted_to_supported_xml_tokens() {
         let series = Series { values: "A1:A2".into(), ..Default::default() };
         let format = gridcraft_model::ChartSeriesFormat { marker: Some("circle\"/><c:evil/>".into()), ..Default::default() };
-        let xml = series_xml(&series, 0, G::Line { stacked: false, markers: true }, &Workbook::default(), 0, Some(&format));
+        let xml = series_xml(&series, 0, G::Line { stacked: false, markers: true }, &Workbook::default(), 0, Some(&format), false);
         assert!(xml.contains("<c:symbol val=\"circle\"/>"));
         assert!(!xml.contains("<c:evil/>"));
     }

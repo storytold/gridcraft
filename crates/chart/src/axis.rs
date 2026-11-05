@@ -17,6 +17,12 @@ pub struct Scale {
 }
 
 impl Scale {
+    /// Linear tick spacing controls decimal rounding. Logarithmic decades have
+    /// no fixed additive step, so their labels keep General's value precision.
+    pub(crate) fn label_step(&self) -> Option<f64> {
+        if self.logarithmic { None } else { Some(self.step) }
+    }
+
     /// Tick values from `min` to `max` (at most 51).
     pub fn ticks(&self) -> Vec<f64> {
         if self.logarithmic {

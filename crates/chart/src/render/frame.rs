@@ -99,7 +99,7 @@ pub(super) struct ValAxis<'a> {
 
 impl ValAxis<'_> {
     fn labels(&self) -> Vec<(f64, String)> {
-        self.scale.ticks().into_iter().map(|v| (v, self.fmt.format(v, Some(self.scale.step)))).collect()
+        self.scale.ticks().into_iter().map(|v| (v, self.fmt.format(v, self.scale.label_step()))).collect()
     }
 }
 
@@ -321,7 +321,7 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
         let y2labels = y2.map(ValAxis::labels);
         let right = match (&y2labels, &cat) {
             (Some(l), _) => (maxw(ctx, l) + 6.0).min(area.w * 0.3),
-            (None, CatAxis::Numeric(s, f)) => (ctx.tw(&f.format(s.max, Some(s.step)), ls) / 2.0).min(area.w * 0.2),
+            (None, CatAxis::Numeric(s, f)) => (ctx.tw(&f.format(s.max, s.label_step()), ls) / 2.0).min(area.w * 0.2),
             _ => 4.0,
         };
         let levels = match &cat {
@@ -365,7 +365,7 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
                         ctx.vline(plot.x + s.frac(*v) * plot.w, plot.y, plot.bottom(), gx, gwx);
                     }
                 }
-                let labels: Vec<String> = ticks.iter().map(|v| f.format(*v, Some(s.step))).collect();
+                let labels: Vec<String> = ticks.iter().map(|v| f.format(*v, s.label_step())).collect();
                 let lw = labels.iter().map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max);
                 let slot = plot.w / ticks.len().max(1) as f32;
                 let k = (((lw + 6.0) / slot.max(1e-3)).ceil() as usize).max(1);

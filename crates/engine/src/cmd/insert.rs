@@ -73,7 +73,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Insert Chart",
             ["Insert", "Charts"],
             None,
-            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers|stacked100Markers, title?, at?: \"H2\", width?, height?, format?: ChartFormat (validated before insertion), style?: 1..16 (clamped, default 1), legend?: none|bottom|top|left|right (default right for pie/doughnut, bottom otherwise; unknown strings use bottom), dataLabels?: false, gridlines?: bool (default depends on chart type)} → {chart}: appearance is part of the single undoable, journaled insertion",
+            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers|stacked100Markers, title?, at?: \"H2\", width?, height?, format?: ChartFormat (validated before insertion), style?: 1..16 (clamped, default 2), legend?: none|bottom|top|left|right (default right for pie/doughnut, bottom otherwise; unknown strings use bottom), dataLabels?: false, gridlines?: bool (default depends on chart type)} → {chart}: appearance is part of the single undoable, journaled insertion",
             has_doc,
             insert_chart
         ),
@@ -860,14 +860,12 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
             LegendPos::Bottom
         }),
         data_table: None,
-        gridlines: !matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel),
-        style: 1,
         hole_size: 75,
         first_slice_angle: 0,
         data_labels: bool_param(p, "dataLabels").unwrap_or(false),
         gridlines: bool_param(p, "gridlines")
             .unwrap_or(!matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel)),
-        style: u32_param(p, "style").map(|style| style.clamp(1, 16)).unwrap_or(1),
+        style: u32_param(p, "style").map(|style| style.clamp(1, 16)).unwrap_or(2),
         x_title: None,
         y_title: None,
         source: (areas.len() == 1).then(|| format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), bounds.a1())),
@@ -898,6 +896,8 @@ fn find_chart(s: &Session, p: &Json) -> Result<(usize, usize)> {
     idx.map(|i| (sheet, i)).ok_or_else(|| bad("chart", "no such chart"))
 }
 
+/// Rejects invalid formatting before a command mutates chart state or consumes undo history.
+/// Bounds on optional values and collection sizes also protect rendering and serialized output.
 fn validate_chart_format(f: &ChartFormat) -> Result<()> {
     if [f.legend_position, f.trendline_label_position].into_iter().flatten().flatten().any(|n| !n.is_finite() || !(0.0..=1.0).contains(&n)) {
         return Err(bad("chart.set", "Chart annotation positions must be between 0 and 1"));
@@ -953,6 +953,7 @@ fn validate_chart_format(f: &ChartFormat) -> Result<()> {
     Ok(())
 }
 
+/// Shared insertion/edit parsing; an unrecognized placement keeps the conventional bottom legend.
 fn chart_legend(legend: &str) -> LegendPos {
     match legend {
         "none" => LegendPos::None,

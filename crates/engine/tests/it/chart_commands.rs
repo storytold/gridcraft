@@ -1,9 +1,26 @@
-//! Chart editing and clipboard/export contracts shared by the UI, CLI and MCP.
+//! Chart formatting and persistence contracts shared by the UI, CLI and MCP.
 
 use std::sync::Arc;
 
 use gridcraft_engine::{Session, core::CellRef, io, model::Chart};
 use serde_json::{Value as Json, json};
+
+#[test]
+fn chart_theme_defaults_and_explicit_style_choices_survive_xlsx() {
+    for kind in ["column", "line", "pie", "doughnut", "stock"] {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range":"A1","values":[["Category","High","Low","Close"],["One",15,8,12],["Two",17,9,14]]})).unwrap();
+        let id = s.execute("insert.chart", json!({"type":kind,"range":"A1:D3"})).unwrap()["chart"].as_u64().unwrap();
+        let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+        let (restored, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+        assert_eq!(restored.active().unwrap().charts[0].style, 2, "{kind}: new charts use native theme colors");
+        s.execute("chart.set", json!({"chart":id,"style":1})).unwrap();
+        let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+        let (restored, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+        assert_eq!(restored.active().unwrap().charts[0].style, 1, "explicit style choices remain intact");
+    }
+}
 
 fn source() -> Session {
     let mut s = Session::new();
@@ -99,7 +116,7 @@ fn insert_chart_appearance_matches_chart_set_parsing_and_defaults() {
         assert_eq!(c.legend, if pie { gridcraft_engine::model::LegendPos::Right } else { gridcraft_engine::model::LegendPos::Bottom });
         assert_eq!(c.gridlines, kind == "column");
         assert!(!c.data_labels);
-        assert_eq!(c.style, 1);
+        assert_eq!(c.style, 2);
         assert_eq!(c.format, Default::default());
     }
 }
