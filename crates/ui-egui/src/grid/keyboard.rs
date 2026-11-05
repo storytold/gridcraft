@@ -92,25 +92,23 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                 return;
             }
             egui::Event::Key { key, physical_key, pressed: true, repeat, modifiers: m, .. } => {
-                shortcut_ran |= key_event(app, ctx, geo, sh, key, physical_key, repeat, m, page);
+                shortcut_ran |= key_event(app, ctx, geo, sh, GridKeyPress { key, physical_key, repeat, modifiers: m }, page);
             }
             _ => {}
         }
     }
 }
 
-/// Runs one grid key press; returns whether it dispatched a command shortcut.
-fn key_event(
-    app: &mut SheetApp,
-    ctx: &egui::Context,
-    geo: &Geo,
-    sh: &Sheet,
+struct GridKeyPress {
     key: egui::Key,
     physical_key: Option<egui::Key>,
     repeat: bool,
-    m: egui::Modifiers,
-    page: i64,
-) -> bool {
+    modifiers: egui::Modifiers,
+}
+
+/// Runs one grid key press; returns whether it dispatched a command shortcut.
+fn key_event(app: &mut SheetApp, ctx: &egui::Context, geo: &Geo, sh: &Sheet, press: GridKeyPress, page: i64) -> bool {
+    let GridKeyPress { key, physical_key, repeat, modifiers: m } = press;
     use egui::Key;
     // End mode lasts for one key: only an unmodified End press arms it, and any other key
     // (a shortcut included) ends it before it runs.
