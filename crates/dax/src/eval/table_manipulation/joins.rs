@@ -91,7 +91,9 @@ fn filters(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<
         .into_iter()
         // Filter keys are folded (lower-cased) for text, so the column value is folded too.
         .filter(|value| direct.is_none_or(|keys| keys.contains(&folded_key(&ScalarKey::from(value)))))
-        .filter(|value| seen.insert(ScalarKey::from(value)))
+        // Text dedupes case-insensitively, like `VALUES`/`DISTINCTCOUNT`, so `FILTERS` and
+        // `VALUES` agree on mixed-case columns.
+        .filter(|value| seen.insert(folded_key(&ScalarKey::from(value))))
         .map(|value| vec![value])
         .collect();
     Ok(TableValue::new(vec![TableColumn { name }], rows).with_lineage(*table))
@@ -287,15 +289,19 @@ fn natural_join(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, outer
 
     let mut matches: BTreeMap<Vec<ScalarKey>, Vec<usize>> = BTreeMap::new();
     for (index, row) in right.rows.iter().enumerate() {
-        let key: Vec<ScalarKey> =
-            common.iter().map(|(_, right_column)| row.get(*right_column).map(ScalarKey::from).unwrap_or(ScalarKey::Blank)).collect();
+        let key: Vec<ScalarKey> = common
+            .iter()
+            .map(|(_, right_column)| row.get(*right_column).map(|value| folded_key(&ScalarKey::from(value))).unwrap_or(ScalarKey::Blank))
+            .collect();
         matches.entry(key).or_default().push(index);
     }
 
     let mut rows = Vec::new();
     for left_row in &left.rows {
-        let key: Vec<ScalarKey> =
-            common.iter().map(|(left_column, _)| left_row.get(*left_column).map(ScalarKey::from).unwrap_or(ScalarKey::Blank)).collect();
+        let key: Vec<ScalarKey> = common
+            .iter()
+            .map(|(left_column, _)| left_row.get(*left_column).map(|value| folded_key(&ScalarKey::from(value))).unwrap_or(ScalarKey::Blank))
+            .collect();
         match matches.get(&key) {
             Some(indices) => {
                 for index in indices {
@@ -592,8 +598,10 @@ fn substitute_with_index(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Conte
     let mut positions: BTreeMap<Vec<ScalarKey>, usize> = BTreeMap::new();
     for (position, row_index) in order.iter().enumerate() {
         let Some(row) = index_table.rows.get(*row_index) else { continue };
-        let key: Vec<ScalarKey> =
-            common.iter().map(|(_, right_column)| row.get(*right_column).map(ScalarKey::from).unwrap_or(ScalarKey::Blank)).collect();
+        let key: Vec<ScalarKey> = common
+            .iter()
+            .map(|(_, right_column)| row.get(*right_column).map(|value| folded_key(&ScalarKey::from(value))).unwrap_or(ScalarKey::Blank))
+            .collect();
         positions.entry(key).or_insert(position);
     }
 
@@ -604,8 +612,10 @@ fn substitute_with_index(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Conte
 
     let mut rows = Vec::new();
     for row in &table.rows {
-        let key: Vec<ScalarKey> =
-            common.iter().map(|(left_column, _)| row.get(*left_column).map(ScalarKey::from).unwrap_or(ScalarKey::Blank)).collect();
+        let key: Vec<ScalarKey> = common
+            .iter()
+            .map(|(left_column, _)| row.get(*left_column).map(|value| folded_key(&ScalarKey::from(value))).unwrap_or(ScalarKey::Blank))
+            .collect();
         let Some(position) = positions.get(&key) else { continue };
         let mut output: Vec<Scalar> = table
             .columns

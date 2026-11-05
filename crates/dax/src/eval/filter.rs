@@ -458,8 +458,14 @@ fn partition_values(clause: &WindowClause, ctx: &Context) -> Option<Vec<ScalarKe
     for (table, column) in &clause.partitions {
         match ctx.filters.filters.get(&(*table, *column)) {
             Some(keys) if keys.len() == 1 => values.push(keys.iter().next()?.clone()),
-            // Without a single outer value every partition is evaluated and unioned.
-            _ => return None,
+            // Several outer values for one column union every partition, as documented.
+            Some(_) => return None,
+            // No outer value: the current row of that table is the outer value, the same frame
+            // `current_entry` reads for the row position. Without one, every partition is unioned.
+            None => {
+                let frame = ctx.rows.iter().rev().find(|frame| frame.lineage == Some(*table))?;
+                values.push(ScalarKey::from(frame.get(*column)?));
+            }
         }
     }
     Some(values)

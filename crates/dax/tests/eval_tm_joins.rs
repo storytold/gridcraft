@@ -288,6 +288,57 @@ fn natural_inner_join_rejects_a_same_named_non_key_column() {
 }
 
 #[test]
+fn filters_and_natural_join_fold_text_like_values() {
+    // Text has one collation: `FILTERS` agrees with `VALUES` on mixed-case labels, and a natural
+    // join matches `east` to `East` (strict semantics means no type coercion, not case sensitivity).
+    let string = |value: &str| Scalar::String(value.into());
+    let mut model = DataModel {
+        tables: vec![
+            ModelTable {
+                name: "Labels".into(),
+                columns: vec![ModelColumn { name: "Name".into(), data_type: Some("String".into()) }],
+                rows: vec![vec![string("A")], vec![string("a")], vec![string("b")]],
+            },
+            ModelTable {
+                name: "Left".into(),
+                columns: vec![ModelColumn { name: "Key".into(), data_type: Some("String".into()) }],
+                rows: vec![vec![string("east")]],
+            },
+            ModelTable {
+                name: "Right".into(),
+                columns: vec![ModelColumn { name: "Key".into(), data_type: Some("String".into()) }],
+                rows: vec![vec![string("East")]],
+            },
+        ],
+        relationships: vec![Relationship {
+            from_table: "Left".into(),
+            from_column: "Key".into(),
+            to_table: "Right".into(),
+            to_column: "Key".into(),
+            bidirectional: false,
+            inactive: false,
+        }],
+        measures: Vec::new(),
+    };
+    model.parse_formulas().expect("model parses");
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    for (source, expected) in [
+        ("COUNTROWS(FILTERS(Labels[Name]))", 2_i64),
+        ("COUNTROWS(VALUES(Labels[Name]))", 2),
+        ("COUNTROWS(CALCULATETABLE(FILTERS(Labels[Name]), Labels[Name] = \"A\"))", 1),
+    ] {
+        let expr = parse_expression(source).expect("parse");
+        let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+        let value = evaluator.evaluate(&bound).expect("evaluate");
+        assert_eq!(value, Scalar::Integer(expected), "{source}");
+    }
+    let expr = parse_expression("NATURALINNERJOIN(Left, Right)").expect("parse");
+    let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+    let table = evaluator.evaluate_table(&bound).expect("natural join folds text keys");
+    assert_eq!(table.rows, vec![vec![string("east")]], "`east` joins `East`");
+}
+
+#[test]
 fn filters_returns_direct_filter_values() {
     assert_eq!(eval("COUNTROWS ( FILTERS ( Sales[Region] ) )"), Ok(Scalar::Integer(3)));
     let direct = table("FILTERS ( Sales[Region] )");

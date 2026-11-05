@@ -160,6 +160,20 @@ fn index_partitions_the_relation() {
 }
 
 #[test]
+fn index_uses_the_current_row_partition_inside_an_iterator() {
+    // No outer filter pins Region, so each row supplies its own partition value: the first row of
+    // its own region, not the first row of the union of every partition.
+    let table =
+        eval_table("ADDCOLUMNS(Sales, \"First\", SUMX(INDEX(1, Sales, ORDERBY(Sales[OrderKey]), PARTITIONBY(Sales[Region])), Sales[Amount]))")
+            .expect("INDEX in an iterator");
+    assert_eq!(
+        column(&table, "First"),
+        vec![Scalar::Decimal(100.0), Scalar::Decimal(200.0), Scalar::Decimal(100.0), Scalar::Decimal(200.0)],
+        "East rows see 100, West rows see 200"
+    );
+}
+
+#[test]
 fn index_uses_the_outer_partition_filter() {
     // CALCULATE pins Region to East, so INDEX only inspects the East partition.
     let value =
