@@ -230,23 +230,30 @@ fn in_operator_with_lists_and_table_expressions() {
     let (_, _, right) = binary(&expr);
     assert!(matches!(&right.kind, ExprKind::Call(_)));
 
-    // `IN` binds tighter than `^`, comparisons and arithmetic in DAX's table.
+    // `IN` sits in the comparison tier of Microsoft's operator table, so the arithmetic on its
+    // left is grouped first and `IN` is the outermost operator.
     let expr = expression("2 ^ 3 IN { 8 }");
     let (op, left, right) = binary(&expr);
-    assert_eq!(*op, BinaryOp::Pow);
-    assert!(matches!(&left.kind, ExprKind::Literal(Literal::Integer(n)) if *n == 2));
-    assert!(matches!(&right.kind, ExprKind::Binary { op: BinaryOp::In, .. }));
+    assert_eq!(*op, BinaryOp::In);
+    assert!(matches!(&left.kind, ExprKind::Binary { op: BinaryOp::Pow, .. }));
+    assert!(matches!(&right.kind, ExprKind::Table(_)));
 
     let expr = expression("1 + 2 IN { 3 }");
     let (op, left, right) = binary(&expr);
-    assert_eq!(*op, BinaryOp::Add);
-    assert!(matches!(&left.kind, ExprKind::Literal(Literal::Integer(n)) if *n == 1));
-    assert!(matches!(&right.kind, ExprKind::Binary { op: BinaryOp::In, .. }));
+    assert_eq!(*op, BinaryOp::In);
+    assert!(matches!(&left.kind, ExprKind::Binary { op: BinaryOp::Add, .. }));
+    assert!(matches!(&right.kind, ExprKind::Table(_)));
 
+    // `IN` and `=` share the tier, so they group left to right.
     let expr = expression("1 IN { 1 } = TRUE");
     let (op, left, _) = binary(&expr);
     assert_eq!(*op, BinaryOp::Eq);
     assert!(matches!(&left.kind, ExprKind::Binary { op: BinaryOp::In, .. }));
+
+    let expr = expression("1 = 1 IN { TRUE }");
+    let (op, left, _) = binary(&expr);
+    assert_eq!(*op, BinaryOp::In);
+    assert!(matches!(&left.kind, ExprKind::Binary { op: BinaryOp::Eq, .. }));
 }
 
 #[test]

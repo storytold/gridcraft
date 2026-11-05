@@ -60,4 +60,5 @@ pub use validate::{ValidationError, ValidationErrorKind, validate_call, validate
 pub use value::{EvalError, Scalar, ScalarKey, TableColumn, TableValue};
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 mod tests;

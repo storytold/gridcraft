@@ -1710,7 +1710,14 @@ fn infer_kind(rows: &[Vec<Scalar>], index: usize) -> ColumnKind {
 }
 
 fn numeric_i64(value: &Scalar) -> i64 {
-    value.to_number().map_or(0, |number| number as i64)
+    // The stored variant is read directly: `to_number` would route an `i64` above 2^53 through
+    // `f64` and collapse distinct keys into one, which a model with large integer keys does not
+    // survive.
+    match value {
+        Scalar::Integer(number) | Scalar::Currency(number) => *number,
+        Scalar::Decimal(number) | Scalar::DateTime(number) => *number as i64,
+        other => other.to_number().map_or(0, |number| number as i64),
+    }
 }
 
 fn numeric_f64(value: &Scalar) -> f64 {

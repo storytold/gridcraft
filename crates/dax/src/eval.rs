@@ -391,18 +391,18 @@ impl<'a> Evaluator<'a> {
     }
 
     pub fn evaluate_with(&self, expr: &BoundExpr, filters: FilterContext) -> Result<Scalar, EvalError> {
-        let mut ctx = Context { filters, rows: Vec::new(), vars: Vec::new() };
+        let mut ctx = Context { filters, rows: Vec::new(), vars: Vec::new(), grouping_scope: None };
         self.eval(expr, &mut ctx)
     }
 
     pub fn evaluate_table(&self, expr: &BoundExpr) -> Result<TableValue, EvalError> {
-        let mut ctx = Context { filters: FilterContext::default(), rows: Vec::new(), vars: Vec::new() };
+        let mut ctx = Context { filters: FilterContext::default(), rows: Vec::new(), vars: Vec::new(), grouping_scope: None };
         self.eval_table(expr, &mut ctx)
     }
 
     pub fn evaluate_measure(&self, name: &str, filters: FilterContext) -> Result<Scalar, EvalError> {
         let index = self.model.measure_index(name).ok_or_else(|| EvalError::new(format!("unknown measure `{name}`")))?;
-        let mut ctx = Context { filters, rows: Vec::new(), vars: Vec::new() };
+        let mut ctx = Context { filters, rows: Vec::new(), vars: Vec::new(), grouping_scope: None };
         self.eval_measure(index, &mut ctx)
     }
 
@@ -469,7 +469,8 @@ impl<'a> Evaluator<'a> {
     pub(crate) fn eval_measure(&self, index: usize, ctx: &mut Context) -> Result<Scalar, EvalError> {
         let expr = self.measures.get(index).ok_or_else(|| EvalError::new(format!("measure index {index} is out of range")))?;
         let filters = self.transitioned_filters(ctx);
-        let mut inner = Context { filters, rows: Vec::new(), vars: Vec::new() };
+        // A measure keeps the grouping scope it is called from.
+        let mut inner = Context { filters, rows: Vec::new(), vars: Vec::new(), grouping_scope: ctx.grouping_scope.clone() };
         self.eval(expr, &mut inner)
     }
 
@@ -860,7 +861,7 @@ impl<'a> Evaluator<'a> {
                         self.apply_filter(arg, &mut filters, ctx)?;
                     }
                 }
-                let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone() };
+                let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone(), grouping_scope: ctx.grouping_scope.clone() };
                 return self.eval(&args[0], &mut inner);
             }
             "CALCULATETABLE" => return Err(EvalError::new("CALCULATETABLE returns a table and cannot be used as a scalar")),
@@ -988,7 +989,7 @@ impl<'a> Evaluator<'a> {
                         self.apply_filter(arg, &mut filters, ctx)?;
                     }
                 }
-                let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone() };
+                let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone(), grouping_scope: ctx.grouping_scope.clone() };
                 self.eval_table(&args[0], &mut inner)
             }
             "RELATEDTABLE" => {
@@ -1827,6 +1828,11 @@ pub(crate) struct Context {
     pub(crate) filters: FilterContext,
     pub(crate) rows: Vec<RowFrame>,
     pub(crate) vars: Vec<Scalar>,
+    /// The `(table, column)` pairs of the group-by columns still active in this row, or `None`
+    /// outside any grouping: `SUMMARIZE`/`SUMMARIZECOLUMNS` set it per group, context transition
+    /// and measure calls carry it along, and a fresh entry point starts with `None`. `ISINSCOPE`
+    /// and the time-intelligence totals read it.
+    pub(crate) grouping_scope: Option<Vec<(usize, usize)>>,
 }
 
 fn literal_value(literal: &Literal) -> Scalar {

@@ -218,12 +218,12 @@ impl BinaryOp {
     /// comparisons, `NOT`, `&&`, `||`.
     pub const fn precedence(self) -> u8 {
         match self {
-            BinaryOp::In => 100,
             BinaryOp::Pow => 90,
             BinaryOp::Mul | BinaryOp::Div => 70,
             BinaryOp::Add | BinaryOp::Sub => 60,
             BinaryOp::Concat => 50,
-            BinaryOp::Eq | BinaryOp::StrictEq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge => 40,
+            // `IN` is a comparison, at the same tier as `=`/`<` (Microsoft's operator table).
+            BinaryOp::In | BinaryOp::Eq | BinaryOp::StrictEq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge => 40,
             BinaryOp::And => 20,
             BinaryOp::Or => 10,
         }

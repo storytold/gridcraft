@@ -33,10 +33,13 @@ The per-category counts below are the catalog's. This crate links no evaluator f
 
 ## Evaluated functions
 
-All 484 catalogued functions have an evaluator path. The catalog sections below are the complete
-list, grouped by family; each family has an integration suite under `crates/dax/tests/eval_*.rs`,
-and `crates/dax/tests/coverage.rs` asserts that every catalogued name binds and reaches an
-implementation.
+In this crate only the scalar core listed in `crates/dax/README.md` has an evaluator path: the
+aggregations and their `*X` iterators, the logical spine, `CALCULATE`/`FILTER`/`ALL*`/`VALUES`/
+`DISTINCT`/`SELECTEDVALUE`, `RELATED*`, `COUNTROWS` and the text/math helpers the core switch
+carries. Every other catalogued function reports "not implemented" until its evaluator family is
+linked (`eval::FAMILIES` is empty here); each family PR adds its dispatch and its own suite under
+`crates/dax/tests/`. The lists below are therefore the **catalog**, not a claim that this build
+evaluates them.
 
 ## Catalogued (parsed and validated)
 
