@@ -303,3 +303,57 @@ fn ctrl_alt_letter_that_typed_text_is_not_select_all() {
     assert_eq!(h.state().session.active().unwrap().selection.current().a1(), "B2");
     assert_eq!(h.state().editor.as_ref().unwrap().text, "\u{e4}");
 }
+
+/// #2780: Ctrl+Shift+V (Cmd+Shift+V on Mac) opens the existing Paste Special dialog.
+#[test]
+fn paste_special_shortcut_aliases_2780() {
+    let expected = Some(Shortcut::Dialog("pasteSpecial", json!({})));
+    let mac_cmd_shift = Modifiers { mac_cmd: true, command: true, shift: true, ..Modifiers::NONE };
+
+    assert_eq!(lookup(Key::V, Some(Key::V), CTRL_SHIFT, false), expected);
+    assert_eq!(lookup(Key::V, Some(Key::V), mac_cmd_shift, true), expected);
+
+    // The existing Paste Special shortcuts still work.
+    assert_eq!(lookup(Key::V, Some(Key::V), Modifiers { alt: true, ..CTRL }, false), expected);
+    assert_eq!(lookup(Key::V, Some(Key::V), Modifiers { ctrl: true, mac_cmd: true, command: true, ..Modifiers::NONE }, true), expected);
+
+    // Ordinary V, Shift+V and Ctrl+V are not intercepted.
+    for modifiers in [Modifiers::NONE, Modifiers::SHIFT, CTRL] {
+        assert_eq!(lookup(Key::V, Some(Key::V), modifiers, false), None);
+    }
+
+    // macOS uses Cmd+Shift+V, not Control+Shift+V.
+    assert_eq!(lookup(Key::V, Some(Key::V), Modifiers { ctrl: true, shift: true, ..Modifiers::NONE }, true), None);
+
+    // Ctrl+Alt+Shift+V already opens Paste Special; preserve that behavior.
+    assert_eq!(lookup(Key::V, Some(Key::V), Modifiers { alt: true, ..CTRL_SHIFT }, false), expected);
+}
+
+/// A real grid key event opens Paste Special without immediately pasting data.
+#[test]
+fn paste_special_alias_opens_without_pasting_2780() {
+    use egui::os::OperatingSystem;
+
+    let mac_cmd_shift = Modifiers { mac_cmd: true, command: true, shift: true, ..Modifiers::NONE };
+
+    for (os, modifiers) in [(OperatingSystem::Windows, CTRL_SHIFT), (OperatingSystem::Mac, mac_cmd_shift)] {
+        let mut h = harness(book("E1"));
+        h.ctx.set_os(os);
+        h.run_steps(2);
+
+        h.state_mut().session.execute("edit.copy", json!({"range": "A1:B2"})).unwrap();
+
+        let before = h.state().session.active().unwrap().wb.clone();
+
+        key(&mut h, Key::V, modifiers);
+
+        assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("pasteSpecial"), "{os:?}: shortcut must open Paste Special");
+
+        assert_eq!(h.state().session.active().unwrap().wb, before, "{os:?}: opening Paste Special must not paste anything");
+        assert!(h.state().editor.is_none(), "{os:?}: no cell editor");
+
+        key(&mut h, Key::Escape, Modifiers::NONE);
+        assert!(h.state().dialog.is_none(), "{os:?}: Escape closes dialog");
+        assert_eq!(h.state().session.active().unwrap().wb, before);
+    }
+}
