@@ -434,12 +434,10 @@ fn sorted_entries(ev: &Evaluator<'_>, relation: &TableValue, clause: &WindowClau
         })();
         ctx.rows.pop();
         let (partition, order) = computed?;
-        // An outer single value on a PARTITIONBY column selects that partition; the documented
-        // engine returns the union of partitions only for the columns without an outer value.
-        // Filter keys are folded (lower-cased) for text, so the row's key is folded too.
-        if let Some(split) = &split
-            && partition.iter().zip(split).any(|(row, outer)| folded_key(row) != folded_key(outer))
-        {
+        // An outer single value on a PARTITIONBY column selects that partition; only the columns
+        // without one are unioned. Filter keys are folded (lower-cased) for text, so the row's key
+        // is folded too.
+        if split.iter().zip(&partition).any(|(outer, row)| outer.as_ref().is_some_and(|outer| folded_key(outer) != folded_key(row))) {
             continue;
         }
         entries.push(RowEntry { row: row.clone(), partition, order });
@@ -450,25 +448,22 @@ fn sorted_entries(ev: &Evaluator<'_>, relation: &TableValue, clause: &WindowClau
 
 /// The partition selected by the outer filter context, when a `PARTITIONBY` column is filtered
 /// down to exactly one value.
-fn partition_values(clause: &WindowClause, ctx: &Context) -> Option<Vec<ScalarKey>> {
-    if clause.partitions.is_empty() {
-        return None;
-    }
-    let mut values = Vec::with_capacity(clause.partitions.len());
-    for (table, column) in &clause.partitions {
-        match ctx.filters.filters.get(&(*table, *column)) {
-            Some(keys) if keys.len() == 1 => values.push(keys.iter().next()?.clone()),
-            // Several outer values for one column union every partition, as documented.
-            Some(_) => return None,
+/// One optional outer value per `PARTITIONBY` column: `Some` pins that column's partition, `None`
+/// leaves it open. Microsoft unions the partitions of the columns without an outer value only, so
+/// the decision is per column rather than for the whole clause.
+fn partition_values(clause: &WindowClause, ctx: &Context) -> Vec<Option<ScalarKey>> {
+    clause
+        .partitions
+        .iter()
+        .map(|(table, column)| match ctx.filters.filters.get(&(*table, *column)) {
+            Some(keys) if keys.len() == 1 => keys.iter().next().cloned(),
+            // Several outer values for this column leave it open.
+            Some(_) => None,
             // No outer value: the current row of that table is the outer value, the same frame
-            // `current_entry` reads for the row position. Without one, every partition is unioned.
-            None => {
-                let frame = ctx.rows.iter().rev().find(|frame| frame.lineage == Some(*table))?;
-                values.push(ScalarKey::from(frame.get(*column)?));
-            }
-        }
-    }
-    Some(values)
+            // `current_entry` reads for the row position. Without one the column stays open.
+            None => ctx.rows.iter().rev().find(|frame| frame.lineage == Some(*table)).and_then(|frame| frame.get(*column)).map(ScalarKey::from),
+        })
+        .collect()
 }
 
 fn compare_orders(left: &[Scalar], right: &[Scalar], clause: &WindowClause) -> Ordering {

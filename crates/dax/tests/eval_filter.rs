@@ -174,6 +174,18 @@ fn index_uses_the_current_row_partition_inside_an_iterator() {
 }
 
 #[test]
+fn partition_by_unions_only_the_columns_without_an_outer_value() {
+    // Region is pinned to East, ProductKey is not: only the East partitions take part, so the
+    // first row of each East partition sums to 100 + 300. Unioning the whole clause (or dropping
+    // the Region restriction because ProductKey is open) would give 1000 instead of 400.
+    let value = eval(
+        "CALCULATE(SUMX(INDEX(1, Sales, ORDERBY(Sales[OrderKey]), PARTITIONBY(Sales[Region], Sales[ProductKey])), Sales[Amount]), Sales[Region] = \"East\")",
+    )
+    .expect("INDEX with a two-column PARTITIONBY");
+    assert_eq!(value, Scalar::Decimal(400.0));
+}
+
+#[test]
 fn index_uses_the_outer_partition_filter() {
     // CALCULATE pins Region to East, so INDEX only inspects the East partition.
     let value =
