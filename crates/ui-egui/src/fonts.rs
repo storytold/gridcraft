@@ -331,9 +331,10 @@ fn installed_in(cat: &[Face], names: &[String]) -> Vec<String> {
 }
 
 /// The full font list: the standard [`crate::ribbon::FONTS`] names first, then every other installed
-/// family A–Z. Blocks until the background scan finishes.
+/// family A–Z once the background scan finishes. While it is still running, returns the standard
+/// names without blocking; the UI's scan polling requests a repaint when the catalog is ready.
 pub fn families() -> Vec<String> {
-    families_from_catalog(Some(catalog()))
+    families_from_catalog(catalog_now())
 }
 
 /// The catalog-backed font list, or the standard names if the background scan is still running.

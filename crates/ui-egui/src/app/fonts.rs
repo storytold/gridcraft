@@ -170,6 +170,19 @@ mod tests {
         assert_eq!(requests.load(Ordering::Relaxed), 1);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn context_setup_starts_the_system_font_catalog_scan() {
+        let ctx = egui::Context::default();
+        SheetApp::setup_context_for_language(&ctx, false, crate::i18n::Language::En);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !fonts::scan_done() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(fonts::scan_done(), "context setup should start the background font scan");
+    }
+
     #[test]
     fn rebinding_workbook_fonts_still_requests_a_repaint() {
         let _ = fonts::catalog();
