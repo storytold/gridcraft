@@ -18,6 +18,33 @@ pub(super) fn is_date_column(data_type: Option<&str>) -> bool {
     data_type.is_none_or(is_date_type)
 }
 
+/// The month and day a `YearEndDate` argument names. The range functions (`DATESYTD`, ...) and the
+/// total functions (`TOTALYTD`, ...) both parse that argument here, so the documented `"6/30/2008"`
+/// and `"6/30"` forms behave the same in both families and an impossible day (`"2/30"`) is rejected
+/// by both instead of being clamped in one and rejected in the other. A month/day-only form is
+/// checked against a leap year, so `"2/29"` stays valid.
+pub(super) fn year_end_parts(value: &Scalar) -> Option<(i64, i64)> {
+    let (year, month, day) = match value {
+        Scalar::String(text) => {
+            let parts: Vec<&str> = text.trim().split(['/', '-']).map(str::trim).filter(|part| !part.is_empty()).collect();
+            let numbers: Vec<i64> = parts.iter().map(|part| part.parse::<i64>().ok()).collect::<Option<Vec<i64>>>()?;
+            match numbers.as_slice() {
+                // `M/D`: only the month and day matter, and the year is never read back.
+                [month, day] => (2000, *month, *day),
+                // `Y/M/D` and `M/D/Y` are both documented shapes; a two-digit year is ignored.
+                [first, second, third] if *first > 31 => (*first, *second, *third),
+                [month, day, year] => (if *year > 99 { *year } else { 2000 }, *month, *day),
+                _ => return None,
+            }
+        }
+        other => {
+            let (year, month, day) = super::support::date_parts(super::support::date_value(other)?);
+            (year, month, day)
+        }
+    };
+    ((1..=12).contains(&month) && day >= 1 && day <= super::support::days_in_month(year, month)).then_some((month, day))
+}
+
 /// The column a table argument contributes to the range and total functions, chosen by one rule so
 /// `DATESWTD(Calendar)` and `TOTALWTD(…, Calendar)` never disagree: a column whose declared type is
 /// a date type, then a column named `Date` that is not declared as another type, then — only when it

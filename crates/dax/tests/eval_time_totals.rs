@@ -119,6 +119,7 @@ fn model() -> DataModel {
             measure("Bad Date Column", "TOTALMTD([Total Amount], Sales[Amount])"),
             measure("Bad Filter", "TOTALMTD([Total Amount], 'Date'[Date], 1)"),
             measure("Bad Year End", "TOTALYTD([Total Amount], 'Date'[Date], ALL(Sales), \"not a date\")"),
+            measure("Impossible Year End", "TOTALYTD([Total Amount], 'Date'[Date], ALL(Sales), \"2/30\")"),
         ],
     };
     model.parse_formulas().expect("model formulas parse");
@@ -305,6 +306,9 @@ fn empty_window_and_invalid_arguments() {
     assert!(error.contains("table expression"), "{error}");
 
     let error = eval_measure(&model, "Bad Year End", FilterContext::default()).expect_err("invalid year end");
+    assert!(error.contains("YearEndDate"), "{error}");
+    // The range functions share the parser, so an impossible day is rejected here too.
+    let error = eval_measure(&model, "Impossible Year End", FilterContext::default()).expect_err("2/30 is not a date");
     assert!(error.contains("YearEndDate"), "{error}");
 
     let evaluator = Evaluator::new(&model).expect("evaluator");

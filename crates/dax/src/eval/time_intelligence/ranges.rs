@@ -253,7 +253,11 @@ fn date_axis(ev: &Evaluator<'_>, expr: &BoundExpr, ctx: &Context, name: &str) ->
         .filter_map(|row| row.get(column))
         .filter_map(|value| date_value(value).filter(|serial| serial.is_finite()).map(|serial| (serial.floor(), value.clone())))
         .collect();
-    dates.sort_by(|left, right| left.0.total_cmp(&right.0));
+    dates.sort_by(|left, right| {
+        left.0
+            .total_cmp(&right.0)
+            .then_with(|| date_value(&left.1).unwrap_or(f64::NEG_INFINITY).total_cmp(&date_value(&right.1).unwrap_or(f64::NEG_INFINITY)))
+    });
     // Deduplicate exact cell values, never whole days: a column can hold several timestamps that
     // share a day, and the window's filter keys are those exact values, so dropping one would
     // silently exclude its row from every range table.
@@ -372,29 +376,6 @@ fn year_end_arg(ev: &Evaluator<'_>, args: &[BoundExpr], index: usize, ctx: &mut 
         return Ok(None);
     }
     year_end_parts(&value).map(Some).ok_or_else(|| EvalError::new(format!("{name} YearEndDate must be a date such as \"6/30/2024\"")))
-}
-
-/// Reads the month/day of a `YearEndDate`. Excel writes it as `M/D/YYYY` (`"6/30/2008"`);
-/// `YYYY-MM-DD` and a real DateTime value are accepted as well. `support::parse_date_text` reads
-/// the first component as the year, so it cannot be used for the Excel form.
-fn year_end_parts(value: &Scalar) -> Option<(i64, i64)> {
-    let (month, day) = match value {
-        Scalar::String(text) => {
-            let numbers =
-                text.split(['/', '-']).map(str::trim).filter(|part| !part.is_empty()).map(str::parse::<i64>).collect::<Result<Vec<i64>, _>>().ok()?;
-            match numbers.as_slice() {
-                [month, day] => (*month, *day),
-                [year, month, day] if *year > 31 => (*month, *day),
-                [month, day, _] => (*month, *day),
-                _ => return None,
-            }
-        }
-        other => {
-            let (_, month, day) = date_parts(date_value(other)?);
-            (month, day)
-        }
-    };
-    ((1..=12).contains(&month) && (1..=31).contains(&day)).then_some((month, day))
 }
 
 fn month_start(serial: f64) -> f64 {

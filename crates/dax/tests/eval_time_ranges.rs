@@ -557,3 +557,46 @@ fn nonblank_candidates_match_mixed_case_text_rows() {
         Scalar::String("A".into())
     );
 }
+
+#[test]
+fn period_ends_pick_the_latest_timestamp_of_a_day() {
+    // A day may hold several timestamps; the axis orders them by their full serial, so `ENDOFMONTH`
+    // returns the latest one even when the model stores it before or after its siblings.
+    let model = DataModel {
+        tables: vec![ModelTable {
+            name: "Log".into(),
+            columns: vec![ModelColumn { name: "Stamp".into(), data_type: Some("DateTime".into()) }],
+            rows: vec![vec![Scalar::DateTime(serial(2024, 3, 31) + 14.0 / 24.0)], vec![Scalar::DateTime(serial(2024, 3, 31) + 9.0 / 24.0)]],
+        }],
+        relationships: Vec::new(),
+        measures: Vec::new(),
+    };
+    let mut filters = FilterContext::default();
+    filters.set(
+        0,
+        0,
+        [Scalar::DateTime(serial(2024, 3, 31) + 14.0 / 24.0), Scalar::DateTime(serial(2024, 3, 31) + 9.0 / 24.0)]
+            .into_iter()
+            .map(|value| ScalarKey::from(&value)),
+    );
+    assert_eq!(
+        evaluate_in(&model, "ENDOFMONTH('Log'[Stamp])", filters.clone()).expect("end of month"),
+        Scalar::DateTime(serial(2024, 3, 31) + 14.0 / 24.0)
+    );
+    assert_eq!(
+        evaluate_in(&model, "STARTOFMONTH('Log'[Stamp])", filters).expect("start of month"),
+        Scalar::DateTime(serial(2024, 3, 31) + 9.0 / 24.0)
+    );
+}
+
+#[test]
+fn an_impossible_year_end_date_is_rejected_by_the_range_functions() {
+    // The same validation the total functions use: `"2/30"` is not a date, while the documented
+    // `"6/30/2024"` and `"6/30"` forms are.
+    let model = model();
+    let count = |argument: &str| evaluate_in(&model, &format!("COUNTROWS(DATESYTD('Date'[Date], \"{argument}\"))"), FilterContext::default());
+    assert!(count("2/30").is_err());
+    assert!(count("6/30").is_ok());
+    assert!(count("6/30/2024").is_ok());
+    assert!(count("2/29").is_ok());
+}
