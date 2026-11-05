@@ -142,6 +142,33 @@ fn save_retries_a_temporarily_locked_destination() {
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(unix)]
 #[test]
+fn save_preserves_mode_despite_restrictive_umask() {
+    use std::os::unix::fs::PermissionsExt;
+    const CHILD: &str = "GRIDCRAFT_SAVE_UMASK_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        // Isolate the process-wide umask so parallel tests cannot observe it.
+        let status = std::process::Command::new("sh")
+            .args(["-c", "umask 077; exec \"$@\"", "sh"])
+            .arg(std::env::current_exe().unwrap())
+            .args(["--exact", "io::tests::save_preserves_mode_despite_restrictive_umask"])
+            .env(CHILD, "1")
+            .status()
+            .unwrap();
+        assert!(status.success(), "umask regression subprocess failed: {status}");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("shared.xlsx");
+    std::fs::write(&dest, b"original").unwrap();
+    std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o664)).unwrap();
+    write_file(dest.to_str().unwrap(), b"new").unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+    assert_eq!(std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777, 0o664);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(unix)]
+#[test]
 fn save_keeps_the_destination_access_restrictions() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();

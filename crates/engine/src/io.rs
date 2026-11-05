@@ -943,8 +943,12 @@ fn create_save_temp(path: &std::path::Path, prior: Option<&std::fs::Permissions>
         builder.permissions(p.clone());
     }
     let temp = builder.tempfile_in(parent)?;
-    #[cfg(not(unix))]
     if let Some(p) = prior {
+        // The mode used at creation is masked by umask on Unix. Restore the
+        // destination's mode after opening, before replacing it.
+        #[cfg(unix)]
+        temp.as_file().set_permissions(p.clone())?;
+        #[cfg(not(unix))]
         let _ = temp.as_file().set_permissions(p.clone());
     }
     Ok(temp)
