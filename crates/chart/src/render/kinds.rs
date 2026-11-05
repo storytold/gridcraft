@@ -196,8 +196,9 @@ fn wedge(ctx: &mut Ctx, ring: &Ring, a0: f32, sweep: f32, fill: Rgba) {
     // its unwrapped start: otherwise the half after TAU is drawn from 0 over its neighbours.
     let a0 = a0.rem_euclid(TAU);
     let a1 = a0 + sweep;
-    if a1 <= TAU {
-        ctx.out.push(Prim::Wedge { cx, cy, r_outer: outer, r_inner: inner, a0, a1, fill, stroke });
+    // Fractions can round a full circle a few ulps past TAU; don't turn that into an extra sliver.
+    if a1 <= TAU + 1e-5 {
+        ctx.out.push(Prim::Wedge { cx, cy, r_outer: outer, r_inner: inner, a0, a1: a1.min(TAU), fill, stroke });
         return;
     }
     // The halves are filled without a stroke: each would outline its own radial edge at 12
