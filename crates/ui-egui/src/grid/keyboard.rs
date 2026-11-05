@@ -42,9 +42,6 @@ fn grid_has_keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Respo
 
 /// Grid keyboard handling when no text field has focus.
 pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
-    if ctx.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false)))) {
-        set_end_mode(app, ctx, false);
-    }
     if !grid_has_keyboard(app, ctx, resp) {
         return;
     }
@@ -64,6 +61,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     let mut shortcut_ran = false;
     for ev in events {
         match ev {
+            egui::Event::WindowFocused(false) => set_end_mode(app, ctx, false),
             egui::Event::Copy => {
                 set_end_mode(app, ctx, false);
                 app.copy_to_clipboard(ctx, "edit.copy");
@@ -94,102 +92,115 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                 return;
             }
             egui::Event::Key { key, physical_key, pressed: true, repeat, modifiers: m, .. } => {
-                use egui::Key;
-                // End mode lasts for one key: only an unmodified End press arms it, and any other key
-                // (a shortcut included) ends it before it runs.
-                let end_jump = app.grid.end_mode && m.is_none() && matches!(key, Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight);
-                if key != Key::End || !m.is_none() {
-                    set_end_mode(app, ctx, false);
-                }
-                if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
-                    shortcut_ran = true;
-                    continue;
-                }
-                let cmd = m.command;
-                let shift = m.shift;
-                let mv = |app: &mut SheetApp, dr: i64, dc: i64| {
-                    let from = app.session.active().map(|d| if shift { d.selection.moving_end() } else { d.selection.active });
-                    let _ = app.session.run("selection.move", json!({"dr": dr, "dc": dc, "extend": shift, "jump": cmd || end_jump}));
-                    app.grid.ensure_visible = true;
-                    app.grid.reveal_moving_end = shift;
-                    app.grid.reveal_from = from;
-                };
-                match key {
-                    Key::ArrowUp => mv(app, -1, 0),
-                    Key::ArrowDown => mv(app, 1, 0),
-                    // Arrows follow the screen: on a right-to-left sheet Left goes to the next column.
-                    Key::ArrowLeft => mv(app, 0, if sh.right_to_left { 1 } else { -1 }),
-                    Key::ArrowRight => mv(app, 0, if sh.right_to_left { -1 } else { 1 }),
-                    Key::PageDown if !cmd => mv(app, page, 0),
-                    Key::PageUp if !cmd => mv(app, -page, 0),
-                    Key::PageDown => app.run_or_alert("sheet.next", json!({})),
-                    Key::PageUp => app.run_or_alert("sheet.previous", json!({})),
-                    Key::Home if cmd => {
-                        let r = sh.freeze.map(|f| f.0).unwrap_or(0);
-                        let c = sh.freeze.map(|f| f.1).unwrap_or(0);
-                        let _ = app.session.run("selection.set", json!({"cell": CellRef::new(r, c).a1()}));
-                        app.grid.ensure_visible = true;
-                    }
-                    Key::End if cmd => {
-                        let end = sh.used_range().map(|u| u.end).unwrap_or_default();
-                        let _ = app.session.run("selection.set", json!({"cell": end.a1()}));
-                        app.grid.ensure_visible = true;
-                    }
-                    // A held End key repeats; only the first press toggles.
-                    Key::End if m.is_none() && !repeat => set_end_mode(app, ctx, !app.grid.end_mode),
-                    Key::Home => {
-                        let a = app.session.active().map(|d| d.selection.active).unwrap_or_default();
-                        let _ = app.session.run("selection.set", json!({"cell": CellRef::new(a.row, 0).a1()}));
-                        app.grid.ensure_visible = true;
-                    }
-                    // Excel: Enter while a copied range is marked pastes it and ends copy mode.
-                    Key::Enter if !m.alt && !m.ctrl && !shift && !cmd && app.session.clipboard.is_some() => {
-                        app.run_or_alert("edit.paste", json!({}));
-                        app.session.clipboard = None;
-                        app.grid.ensure_visible = true;
-                    }
-                    Key::Enter => {
-                        if m.alt || m.ctrl {
-                            app.begin_edit(None, false);
-                        } else {
-                            app.move_after_enter(if shift { -1 } else { 1 }, 0);
-                        }
-                    }
-                    Key::Tab => app.move_after_enter(0, if shift { -1 } else { 1 }),
-                    Key::F2 => app.begin_edit(None, false),
-                    // With an object selected, Delete and Backspace delete it, not the cells.
-                    Key::Delete if app.delete_selected_object() => {}
-                    Key::Delete => app.run_or_alert("edit.clearContents", json!({})),
-                    Key::Backspace if app.delete_selected_object() => {}
-                    Key::Backspace => {
-                        // Excel for Mac: Delete clears the cell and starts editing it.
-                        app.run_or_alert("edit.clearContents", json!({}));
-                        if app.session.active().is_some_and(|d| d.selection.is_single_cell()) {
-                            app.begin_edit(Some(String::new()), false);
-                        }
-                    }
-                    Key::Escape if app.selected_object.is_some() => app.selected_object = None,
-                    Key::Escape => {
-                        app.session.clipboard = None;
-                        app.session.format_painter = None;
-                    }
-                    Key::Space if !cmd && !shift && is_checkbox(sh, app) => app.run_or_alert("cell.toggleCheckbox", json!({})),
-                    Key::F8 if m.alt => {
-                        app.open_dialog("macros", json!({}));
-                    }
-                    Key::F9 => app.run_or_alert("formulas.calculateNow", json!({})),
-                    Key::F4 if !cmd => {}
-                    // Ctrl+Shift+letter (⌘⇧letter) runs the macro with that shortcut, unless GridCraft uses it.
-                    _ if cmd && shift && !m.alt && crate::macro_ui::run_shortcut(app, key) => {}
-                    _ if cmd && !crate::keymap::altgr_text(ctx, m, ctx.os() == egui::os::OperatingSystem::Mac) => {
-                        crate::ribbon::shortcut(app, key, m)
-                    }
-                    _ => {}
-                }
+                shortcut_ran |= key_event(app, ctx, geo, sh, key, physical_key, repeat, m, page);
             }
             _ => {}
         }
     }
+}
+
+/// Runs one grid key press; returns whether it dispatched a command shortcut.
+fn key_event(
+    app: &mut SheetApp,
+    ctx: &egui::Context,
+    geo: &Geo,
+    sh: &Sheet,
+    key: egui::Key,
+    physical_key: Option<egui::Key>,
+    repeat: bool,
+    m: egui::Modifiers,
+    page: i64,
+) -> bool {
+    use egui::Key;
+    // End mode lasts for one key: only an unmodified End press arms it, and any other key
+    // (a shortcut included) ends it before it runs.
+    let end_jump = app.grid.end_mode && m.is_none() && matches!(key, Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight);
+    if key != Key::End || !m.is_none() {
+        set_end_mode(app, ctx, false);
+    }
+    if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
+        return true;
+    }
+    let cmd = m.command;
+    let shift = m.shift;
+    let mv = |app: &mut SheetApp, dr: i64, dc: i64| {
+        let from = app.session.active().map(|d| if shift { d.selection.moving_end() } else { d.selection.active });
+        let _ = app.session.run("selection.move", json!({"dr": dr, "dc": dc, "extend": shift, "jump": cmd || end_jump}));
+        app.grid.ensure_visible = true;
+        app.grid.reveal_moving_end = shift;
+        app.grid.reveal_from = from;
+    };
+    match key {
+        Key::ArrowUp => mv(app, -1, 0),
+        Key::ArrowDown => mv(app, 1, 0),
+        // Arrows follow the screen: on a right-to-left sheet Left goes to the next column.
+        Key::ArrowLeft => mv(app, 0, if sh.right_to_left { 1 } else { -1 }),
+        Key::ArrowRight => mv(app, 0, if sh.right_to_left { -1 } else { 1 }),
+        Key::PageDown if !cmd => mv(app, page, 0),
+        Key::PageUp if !cmd => mv(app, -page, 0),
+        Key::PageDown => app.run_or_alert("sheet.next", json!({})),
+        Key::PageUp => app.run_or_alert("sheet.previous", json!({})),
+        Key::Home if cmd => {
+            let r = sh.freeze.map(|f| f.0).unwrap_or(0);
+            let c = sh.freeze.map(|f| f.1).unwrap_or(0);
+            let _ = app.session.run("selection.set", json!({"cell": CellRef::new(r, c).a1()}));
+            app.grid.ensure_visible = true;
+        }
+        Key::End if cmd => {
+            let end = sh.used_range().map(|u| u.end).unwrap_or_default();
+            let _ = app.session.run("selection.set", json!({"cell": end.a1()}));
+            app.grid.ensure_visible = true;
+        }
+        // A held End key repeats; only the first press toggles.
+        Key::End if m.is_none() && !repeat => set_end_mode(app, ctx, !app.grid.end_mode),
+        Key::Home => {
+            let a = app.session.active().map(|d| d.selection.active).unwrap_or_default();
+            let _ = app.session.run("selection.set", json!({"cell": CellRef::new(a.row, 0).a1()}));
+            app.grid.ensure_visible = true;
+        }
+        // Excel: Enter while a copied range is marked pastes it and ends copy mode.
+        Key::Enter if !m.alt && !m.ctrl && !shift && !cmd && app.session.clipboard.is_some() => {
+            app.run_or_alert("edit.paste", json!({}));
+            app.session.clipboard = None;
+            app.grid.ensure_visible = true;
+        }
+        Key::Enter => {
+            if m.alt || m.ctrl {
+                app.begin_edit(None, false);
+            } else {
+                app.move_after_enter(if shift { -1 } else { 1 }, 0);
+            }
+        }
+        Key::Tab => app.move_after_enter(0, if shift { -1 } else { 1 }),
+        Key::F2 => app.begin_edit(None, false),
+        // With an object selected, Delete and Backspace delete it, not the cells.
+        Key::Delete if app.delete_selected_object() => {}
+        Key::Delete => app.run_or_alert("edit.clearContents", json!({})),
+        Key::Backspace if app.delete_selected_object() => {}
+        Key::Backspace => {
+            // Excel for Mac: Delete clears the cell and starts editing it.
+            app.run_or_alert("edit.clearContents", json!({}));
+            if app.session.active().is_some_and(|d| d.selection.is_single_cell()) {
+                app.begin_edit(Some(String::new()), false);
+            }
+        }
+        Key::Escape if app.selected_object.is_some() => app.selected_object = None,
+        Key::Escape => {
+            app.session.clipboard = None;
+            app.session.format_painter = None;
+        }
+        Key::Space if !cmd && !shift && is_checkbox(sh, app) => app.run_or_alert("cell.toggleCheckbox", json!({})),
+        Key::F8 if m.alt => {
+            app.open_dialog("macros", json!({}));
+        }
+        Key::F9 => app.run_or_alert("formulas.calculateNow", json!({})),
+        Key::F4 if !cmd => {}
+        // Ctrl+Shift+letter (⌘⇧letter) runs the macro with that shortcut, unless GridCraft uses it.
+        _ if cmd && shift && !m.alt && crate::macro_ui::run_shortcut(app, key) => {}
+        _ if cmd && !crate::keymap::altgr_text(ctx, m, ctx.os() == egui::os::OperatingSystem::Mac) => crate::ribbon::shortcut(app, key, m),
+        _ => {}
+    }
+    false
 }
 
 /// This frame's input events, without those the focused form control took.
