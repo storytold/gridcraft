@@ -31,8 +31,8 @@ const HF_MAX_PIXELS: u64 = 16_000_000;
 
 /// A picture: its workbook, its id there, and its size in bytes (object ids are per workbook, so
 /// two open workbooks can both have a picture 1). Header and footer pictures have no object id:
-/// theirs is the address of their bytes, which their cache entry keeps allocated (see
-/// [`Entry::source`]), so no other picture can take that address while the entry lasts.
+/// theirs is the address of their bytes, checked against the picture its cache entry was made
+/// for (see [`Entry::source`]), since a dropped picture's address can be reused by another.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct Key {
     doc: u64,
@@ -66,10 +66,10 @@ struct Entry {
     /// size or the largest texture allowed), or when it can't be decoded.
     side: u32,
     used: u64,
-    /// A header or footer picture's bytes, held weakly: the allocation stays, so its address (the
-    /// key) isn't reused by another picture, and a picture no sheet holds any more is a miss.
-    /// Its bytes are counted in [`Entry::bytes`].
-    source: Option<std::sync::Weak<[u8]>>,
+    /// A header or footer picture, held weakly (its bytes aren't kept alive): an entry whose
+    /// picture no sheet holds any more, or that another picture's bytes now sit at the address of,
+    /// is a miss.
+    source: Option<std::sync::Weak<Vec<u8>>>,
 }
 
 impl Cache {
@@ -94,7 +94,7 @@ impl Cache {
     }
 
     /// [`Cache::texture`] for a picture whose key is the address of `source`'s bytes.
-    fn texture_of(&mut self, ctx: &egui::Context, key: Key, data: &[u8], source: Option<&Arc<[u8]>>, want: u32) -> Option<TextureHandle> {
+    fn texture_of(&mut self, ctx: &egui::Context, key: Key, data: &[u8], source: Option<&Arc<Vec<u8>>>, want: u32) -> Option<TextureHandle> {
         let frame = ctx.cumulative_frame_nr();
         let side = texture_side(want, ctx.input(|i| i.max_texture_side));
         let stale = self.entries.get(&key).is_some_and(|e| match (&e.source, source) {
@@ -112,8 +112,7 @@ impl Cache {
             self.bytes = self.bytes.saturating_sub(old.bytes);
         }
         let decoded = decode(data, side);
-        let held = source.map_or(0, |s| s.len());
-        let bytes = decoded.as_ref().map_or(0, |(image, _)| image.pixels.len().saturating_mul(4)).saturating_add(held);
+        let bytes = decoded.as_ref().map_or(0, |(image, _)| image.pixels.len().saturating_mul(4));
         while self.entries.len() >= MAX_CACHE_ITEMS || self.bytes.saturating_add(bytes) > MAX_CACHE_BYTES {
             let oldest = self.entries.iter().filter(|(_, e)| e.used.saturating_add(1) < frame).min_by_key(|(_, e)| e.used).map(|(key, _)| *key);
             let Some(oldest) = oldest else { break };
@@ -195,7 +194,7 @@ pub(crate) fn texture(ctx: &egui::Context, doc: u64, image: &Image, rect: egui::
 
 /// The texture of a header or footer picture of workbook `doc` (its encoded bytes, as the sheet
 /// keeps them), drawn in `rect` (points), from the same bounded cache as floating pictures.
-pub(crate) fn header_footer_texture(ctx: &egui::Context, doc: u64, data: &Arc<[u8]>, rect: egui::Rect) -> Option<TextureHandle> {
+pub(crate) fn header_footer_texture(ctx: &egui::Context, doc: u64, data: &Arc<Vec<u8>>, rect: egui::Rect) -> Option<TextureHandle> {
     if !printable(data) {
         return None;
     }
@@ -359,22 +358,22 @@ mod tests {
         assert!(!printable(&png_claiming(5000, 4000)), "over 16 million pixels");
         assert!(!printable(&png_claiming(9000, 10)), "over 8192 px on a side");
         let ctx = egui::Context::default();
-        let big: Arc<[u8]> = png_claiming(5000, 4000).into();
+        let big = Arc::new(png_claiming(5000, 4000));
         assert!(header_footer_texture(&ctx, 1, &big, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(50.0, 40.0))).is_none());
     }
 
-    /// A header picture's cache entry keeps its bytes' address from being reused, counts those
-    /// bytes, and is a miss once its sheet has dropped the picture.
+    /// A header picture's cache entry is a miss once other bytes sit at its key's address, as when
+    /// its sheet dropped the picture and a new one took the address.
     #[test]
     fn a_header_picture_entry_is_tied_to_its_bytes() {
         let ctx = egui::Context::default();
         let mut cache = Cache::default();
-        let first: Arc<[u8]> = png(8, 4, [255, 0, 0, 255]).into();
+        let first = Arc::new(png(8, 4, [255, 0, 0, 255]));
         let k = Key { doc: 1, kind: Kind::HeaderFooter, id: first.as_ptr() as usize as u64, len: first.len() };
         let red = cache.texture_of(&ctx, k, &first, Some(&first), 64).unwrap();
-        assert_eq!(cache.bytes, 8 * 4 * 4 + first.len(), "the texture and the bytes it holds");
+        assert_eq!(cache.texture_of(&ctx, k, &first, Some(&first), 64).unwrap().id(), red.id(), "found again");
         // Other bytes under the same key (as if the address were reused) are decoded afresh.
-        let other: Arc<[u8]> = png(8, 4, [0, 0, 255, 255]).into();
+        let other = Arc::new(png(8, 4, [0, 0, 255, 255]));
         let blue = cache.texture_of(&ctx, k, &other, Some(&other), 64).unwrap();
         assert_ne!(red.id(), blue.id());
         assert_eq!(cache.texture_of(&ctx, k, &other, Some(&other), 64).unwrap().id(), blue.id(), "then found again");

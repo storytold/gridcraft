@@ -396,39 +396,38 @@ fn png(w: u32, h: u32) -> Vec<u8> {
     out.into_inner()
 }
 
-/// A Page Layout view of a sheet with `header` and a kept header/footer VML drawing (as reading
-/// an Excel file gives it) holding one picture per `(shape id, style, image)`.
+/// A Page Layout view of a sheet with `header` and header/footer pictures, one per
+/// `(shape id, style, image)` (only left/centre/right header and footer ids are used here).
 fn picture_fixture(header: &str, shapes: &[(&str, &str, Vec<u8>)]) -> Harness {
-    use gridcraft_engine::model::{Preserved, PreservedPart, PreservedRel, PreservedXml};
     let mut session = Session::new();
     session.new_workbook();
     for r in 1..=60 {
         session.execute("cell.set", json!({"cell": format!("A{r}"), "input": r.to_string()})).unwrap();
     }
     session.execute("pageLayout.headerFooter", json!({"header": header})).unwrap();
-    let rel = |id: String, target: String| PreservedRel { id, rel_type: "x/image".into(), target, external: false };
-    let mut vml = String::from("<xml>");
-    let (mut parts, mut vml_rels) = (vec![], vec![]);
-    for (i, (id, style, data)) in shapes.iter().enumerate() {
-        vml.push_str(&format!(r##"<v:shape id="{id}" type="#_x0000_t75" style="{style}"><v:imagedata o:relid="rId{i}"/></v:shape>"##));
-        vml_rels.push(rel(format!("rId{i}"), format!("xl/media/image{i}.png")));
-        parts.push(PreservedPart {
-            name: format!("xl/media/image{i}.png"),
-            content_type: "image/png".into(),
-            data: data.as_slice().into(),
-            rels: vec![],
-        });
-    }
-    vml.push_str("</xml>");
-    parts.push(PreservedPart { name: "xl/drawings/hf.vml".into(), content_type: String::new(), data: vml.as_bytes().into(), rels: vml_rels });
-    let kept = Preserved {
-        rels: vec![rel("rId9".into(), "xl/drawings/hf.vml".into())],
-        elements: vec![PreservedXml { slot: "legacyDrawingHF".into(), xml: "<legacyDrawingHF r:id=\"rId9\"/>".into() }],
-        parts,
-        ..Preserved::default()
-    };
+    let pics = shapes
+        .iter()
+        .map(|(id, style, data)| {
+            let size = |k: &str| style.split(';').find_map(|d| d.strip_prefix(k)).and_then(|v| v.trim_end_matches("pt").parse().ok()).unwrap();
+            gridcraft_engine::model::HfPicture {
+                page: gridcraft_engine::model::HfPage::Odd,
+                footer: id.as_bytes()[1] == b'F',
+                section: match id.as_bytes()[0] {
+                    b'L' => 0,
+                    b'C' => 1,
+                    _ => 2,
+                },
+                width: size("width:"),
+                height: size("height:"),
+                data: std::sync::Arc::new(data.clone()),
+                mime: "image/png".into(),
+                title: String::new(),
+                adjust: vec![],
+            }
+        })
+        .collect();
     let d = session.doc_mut().unwrap();
-    std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap().preserved = Some(std::sync::Arc::new(kept));
+    std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap().print.hf_pictures = pics;
     session.execute("view.pageLayout", json!({})).unwrap();
     crate::common::harness_with(
         crate::common::builder().with_size(vec2(1200.0, 900.0)).with_step_dt(1.0 / 60.0).with_os(egui::os::OperatingSystem::Mac),

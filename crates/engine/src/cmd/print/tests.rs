@@ -949,30 +949,50 @@ fn png(w: u32, h: u32) -> Vec<u8> {
     out
 }
 
-/// Gives the first sheet a kept header/footer VML drawing (as reading an Excel file does) with
-/// one shape per `(id, style, image)`.
-fn keep_hf_pictures(s: &mut Session, shapes: &[(&str, &str, Vec<u8>)]) {
-    use gridcraft_model::{Preserved, PreservedPart, PreservedRel, PreservedXml};
-    let rel = |id: String, target: String| PreservedRel { id, rel_type: "x/image".into(), target, external: false };
-    let mut vml = String::from("<xml>");
-    let mut parts = vec![];
-    let mut vml_rels = vec![];
-    for (i, (id, style, data)) in shapes.iter().enumerate() {
-        vml.push_str(&format!(r##"<v:shape id="{id}" type="#_x0000_t75" style="{style}"><v:imagedata o:relid="rId{i}"/></v:shape>"##));
-        let name = format!("xl/media/image{i}.png");
-        vml_rels.push(rel(format!("rId{i}"), name.clone()));
-        parts.push(PreservedPart { name, content_type: "image/png".into(), data: data.as_slice().into(), rels: vec![] });
-    }
-    vml.push_str("</xml>");
-    parts.push(PreservedPart { name: "xl/drawings/hf.vml".into(), content_type: String::new(), data: vml.as_bytes().into(), rels: vml_rels });
-    let kept = Preserved {
-        rels: vec![rel("rId9".into(), "xl/drawings/hf.vml".into())],
-        elements: vec![PreservedXml { slot: "legacyDrawingHF".into(), xml: "<legacyDrawingHF r:id=\"rId9\"/>".into() }],
-        parts,
-        ..Preserved::default()
+/// The place a shape id (`LH`, `CFFIRST`…) names.
+fn hf_place(id: &str) -> (gridcraft_model::HfPage, bool, u8) {
+    use gridcraft_model::HfPage;
+    let (base, page) = match id {
+        _ if id.ends_with("FIRST") => (&id[..2], HfPage::First),
+        _ if id.ends_with("EVEN") => (&id[..2], HfPage::Even),
+        _ => (id, HfPage::Odd),
     };
+    let section = match &base[..1] {
+        "L" => 0,
+        "C" => 1,
+        _ => 2,
+    };
+    (page, &base[1..2] == "F", section)
+}
+
+/// The size a VML-like style (`width:120pt;height:40pt`) gives, in points.
+fn hf_size(style: &str) -> (f32, f32) {
+    let get = |k: &str| style.split(';').find_map(|d| d.strip_prefix(k)).and_then(|v| v.trim_end_matches("pt").parse().ok()).unwrap_or(10.0);
+    (get("width:"), get("height:"))
+}
+
+/// Gives the first sheet header/footer pictures, one per `(shape id, style, image)`.
+fn keep_hf_pictures(s: &mut Session, shapes: &[(&str, &str, Vec<u8>)]) {
+    let pics = shapes
+        .iter()
+        .map(|(id, style, data)| {
+            let (page, footer, section) = hf_place(id);
+            let (width, height) = hf_size(style);
+            gridcraft_model::HfPicture {
+                page,
+                footer,
+                section,
+                width,
+                height,
+                data: std::sync::Arc::new(data.clone()),
+                mime: "image/png".into(),
+                title: String::new(),
+                adjust: vec![],
+            }
+        })
+        .collect();
     let d = s.doc_mut().unwrap();
-    std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap().preserved = Some(std::sync::Arc::new(kept));
+    std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap().print.hf_pictures = pics;
 }
 
 /// Kept header and footer pictures print at their `&G`, at their size, on the header and footer
@@ -1039,27 +1059,14 @@ fn g_marks_where_the_picture_goes() {
     assert_eq!(r.picture, None);
 }
 
-/// Like [`keep_hf_pictures`], but every shape shows the same image part.
+/// Like [`keep_hf_pictures`], but every picture shares the same image bytes.
 fn keep_one_hf_image(s: &mut Session, ids: &[&str], style: &str, data: Vec<u8>) {
-    use gridcraft_model::{Preserved, PreservedPart, PreservedRel, PreservedXml};
-    let rel = |id: &str, target: &str| PreservedRel { id: id.into(), rel_type: "x/image".into(), target: target.into(), external: false };
-    let vml: String = ids.iter().map(|id| format!(r##"<v:shape id="{id}" style="{style}"><v:imagedata o:relid="rId1"/></v:shape>"##)).collect();
-    let kept = Preserved {
-        rels: vec![rel("rId9", "xl/drawings/hf.vml")],
-        elements: vec![PreservedXml { slot: "legacyDrawingHF".into(), xml: "<legacyDrawingHF r:id=\"rId9\"/>".into() }],
-        parts: vec![
-            PreservedPart { name: "xl/media/logo.png".into(), content_type: "image/png".into(), data: data.as_slice().into(), rels: vec![] },
-            PreservedPart {
-                name: "xl/drawings/hf.vml".into(),
-                content_type: String::new(),
-                data: vml.as_bytes().into(),
-                rels: vec![rel("rId1", "xl/media/logo.png")],
-            },
-        ],
-        ..Preserved::default()
-    };
+    keep_hf_pictures(s, &ids.iter().map(|id| (*id, style, Vec::new())).collect::<Vec<_>>());
+    let data = std::sync::Arc::new(data);
     let d = s.doc_mut().unwrap();
-    std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap().preserved = Some(std::sync::Arc::new(kept));
+    for p in &mut std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap().print.hf_pictures {
+        p.data = data.clone();
+    }
 }
 
 /// A header picture on many pages is one image object the PDF draws on each page.
@@ -1344,12 +1351,12 @@ fn the_same_picture_on_several_sheets_is_one_image_object() {
     s.execute("pageLayout.headerFooter", json!({"header": "&L&G"})).unwrap();
     let d = s.doc_mut().unwrap();
     let wb = std::sync::Arc::make_mut(&mut d.wb);
-    let mut kept = wb.sheet(0).unwrap().preserved.as_deref().unwrap().clone();
-    for p in &mut kept.parts {
-        p.data = std::sync::Arc::from(p.data.to_vec());
+    let mut pictures = wb.sheet(0).unwrap().print.hf_pictures.clone();
+    for p in &mut pictures {
+        p.data = std::sync::Arc::new(p.data.to_vec());
     }
     let two = wb.sheet_index("Two").unwrap();
-    wb.sheet_mut(two).unwrap().preserved = Some(std::sync::Arc::new(kept));
+    wb.sheet_mut(two).unwrap().print.hf_pictures = pictures;
     let (pdf, pages) = pdf_of(&mut s, json!({"sheets": "all"}));
     let text = String::from_utf8_lossy(&pdf);
     assert_eq!(pages, 2);
@@ -1394,7 +1401,7 @@ fn equal_pictures_in_a_wide_and_a_tall_box_are_decoded_at_the_size_they_need() {
 fn a_picture_over_the_budget_at_one_size_still_prints_smaller() {
     use super::header_footer::HfImageCache;
     let mut doc = PdfDoc::new();
-    let data: std::sync::Arc<[u8]> = png(200, 200).into();
+    let data: std::sync::Arc<Vec<u8>> = png(200, 200).into();
     // Room for 60 × 60 pixels: 200 × 200 doesn't fit, 50 × 50 does.
     let mut cache = HfImageCache::with_budget(60 * 60 * 4);
     assert!(cache.image(&mut doc, &data, (200, 200)).is_none(), "over the budget");
@@ -1404,7 +1411,7 @@ fn a_picture_over_the_budget_at_one_size_still_prints_smaller() {
     assert_eq!(cache.image(&mut doc, &data, (40, 40)), Some(small), "a smaller request reuses it");
     assert_eq!(cache.tries(), 2);
     // An image that can't be decoded is tried once, whatever the size.
-    let broken: std::sync::Arc<[u8]> = b"\x89PNG\r\n\x1a\nbroken".to_vec().into();
+    let broken: std::sync::Arc<Vec<u8>> = b"\x89PNG\r\n\x1a\nbroken".to_vec().into();
     assert!(cache.image(&mut doc, &broken, (100, 100)).is_none());
     assert!(cache.image(&mut doc, &broken, (10, 10)).is_none());
     assert_eq!(cache.tries(), 3);
@@ -1454,11 +1461,11 @@ fn a_picture_decoded_at_its_own_size_serves_every_larger_box() {
     use super::header_footer::HfImageCache;
     let mut doc = PdfDoc::new();
     let mut cache = HfImageCache::new();
-    let logo: std::sync::Arc<[u8]> = png(200, 100).into();
+    let logo: std::sync::Arc<Vec<u8>> = png(200, 100).into();
     let first = cache.image(&mut doc, &logo, (230, 230)).expect("decodes");
     assert_eq!(cache.image(&mut doc, &logo, (250, 250)), Some(first), "the same image for a larger box");
     assert_eq!(cache.tries(), 1);
-    let big: std::sync::Arc<[u8]> = png(400, 200).into();
+    let big: std::sync::Arc<Vec<u8>> = png(400, 200).into();
     let small = cache.image(&mut doc, &big, (100, 100)).expect("decodes shrunk");
     let larger = cache.image(&mut doc, &big, (300, 300)).expect("decodes larger");
     assert_ne!(small, larger, "a shrunk picture is decoded again for a larger box");
@@ -1534,4 +1541,138 @@ fn header_footer_layout_is_what_printing_draws() {
     let plain = layout_header_footer(&lay.hf_frame(), &lay.settings, gridcraft_model::HfPage::Odd, &cx, |_, _| None);
     assert!(plain.iter().all(|i| matches!(i, HfItem::Text { .. })));
     assert_eq!(plain.len(), 2);
+}
+
+// ---------------------------------------------------------------- pageLayout.headerFooterPicture
+
+/// A `w` × `h` PNG of one colour, in base64.
+fn b64_png(w: u32, h: u32) -> String {
+    crate::io::base64_encode(&png(w, h))
+}
+
+/// The first sheet's print settings.
+fn print_of(s: &Session) -> PrintSettings {
+    s.doc().unwrap().wb.sheet(0).unwrap().print.clone()
+}
+
+/// `pageLayout.headerFooterPicture` puts the picture in its section with `&G`, keeping its
+/// proportions and fitting the margin, in one undo step.
+#[test]
+fn a_header_picture_is_inserted_with_its_g_and_fits_the_margin() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    s.execute("pageLayout.headerFooter", json!({"header": "&CTitle"})).unwrap();
+    let r = s.execute("pageLayout.headerFooterPicture", json!({"section": "center", "base64": b64_png(200, 100), "title": "Logo"})).unwrap();
+    // 200 × 100 px is 150 × 75 pt; the default top margin leaves 0.45 in (32.4 pt) above the
+    // header margin, so it shrinks to fit, keeping its proportions.
+    let near = |v: &Json, want: f64| v.as_f64().is_some_and(|v| (v - want).abs() < 0.01);
+    assert!(near(&r["width"], 64.8) && near(&r["height"], 32.4), "{r}");
+    assert_eq!(r["header"], "&C&GTitle");
+    let pr = print_of(&s);
+    assert_eq!(pr.hf_pictures.len(), 1);
+    assert_eq!((pr.hf_pictures[0].section, pr.hf_pictures[0].mime.as_str(), pr.hf_pictures[0].title.as_str()), (1, "image/png", "Logo"));
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    assert!(contains(&pdf, "/Subtype /Image") && contains(&pdf, "(Title) Tj"));
+    // One undo step takes it all back.
+    s.execute("edit.undo", json!({})).unwrap();
+    let pr = print_of(&s);
+    assert!(pr.hf_pictures.is_empty());
+    assert_eq!(pr.header, "&CTitle");
+}
+
+/// A picture is sized as asked (one side keeps the proportions), replaces the one in its section,
+/// can go on the first page only, and `remove` takes it and its `&G` away.
+#[test]
+fn header_pictures_are_sized_replaced_and_removed() {
+    let mut s = s();
+    // One side given: the other keeps the proportions.
+    let r =
+        s.execute("pageLayout.headerFooterPicture", json!({"part": "footer", "section": "right", "base64": b64_png(40, 20), "width": 60})).unwrap();
+    assert_eq!((r["width"].as_f64(), r["height"].as_f64(), r["footer"].as_str()), (Some(60.0), Some(30.0), Some("&R&G")));
+    // Both sides given; the second picture replaces the first, and `&G` isn't doubled.
+    s.execute("pageLayout.headerFooterPicture", json!({"part": "footer", "section": "right", "base64": b64_png(5, 5), "width": 10, "height": 20}))
+        .unwrap();
+    let pr = print_of(&s);
+    assert_eq!(pr.hf_pictures.len(), 1);
+    assert_eq!((pr.hf_pictures[0].width, pr.hf_pictures[0].height), (10.0, 20.0));
+    assert_eq!(pr.footer, "&R&G");
+    // First-page pictures are their own.
+    s.execute("pageLayout.headerFooterPicture", json!({"page": "first", "section": "left", "base64": b64_png(5, 5)})).unwrap();
+    assert_eq!(print_of(&s).hf_pictures.len(), 2);
+    assert_eq!(print_of(&s).first_header, "&L&G");
+    // Removing takes the picture and its &G, and leaves the rest of the text.
+    s.execute("pageLayout.headerFooter", json!({"part": "footer", "section": "right", "text": "&[Picture] Page &[Page] &&G"})).unwrap();
+    s.execute("pageLayout.headerFooterPicture", json!({"part": "footer", "section": "right", "remove": true})).unwrap();
+    let pr = print_of(&s);
+    assert_eq!(pr.footer, "&R Page &P &&G");
+    assert_eq!(pr.hf_pictures.len(), 1, "the first-page picture stays");
+}
+
+/// Editing a section so it loses `&G` drops that section's picture and only that one.
+#[test]
+fn erasing_the_picture_field_drops_its_picture() {
+    let mut s = s();
+    s.execute("pageLayout.headerFooterPicture", json!({"section": "left", "base64": b64_png(5, 5)})).unwrap();
+    s.execute("pageLayout.headerFooterPicture", json!({"section": "right", "base64": b64_png(6, 6)})).unwrap();
+    // Editing the left section without &[Picture] (as the in-place editor would commit it).
+    s.execute("pageLayout.headerFooter", json!({"part": "header", "section": "left", "text": "Company"})).unwrap();
+    let pr = print_of(&s);
+    assert_eq!(pr.hf_pictures.len(), 1);
+    assert_eq!(pr.hf_pictures[0].section, 2);
+    assert_eq!(pr.header, "&LCompany&R&G");
+}
+
+/// Hostile input is refused (no picture, bad base64, not an image, a bad section, part or page, a
+/// missing file, over 16 MB) and hostile sizes are clamped.
+#[test]
+fn header_picture_input_is_checked() {
+    let mut s = s();
+    let run = |s: &mut Session, p: Json| s.execute("pageLayout.headerFooterPicture", p);
+    assert!(run(&mut s, json!({})).is_err(), "no picture");
+    assert!(run(&mut s, json!({"base64": "%%%"})).is_err(), "bad base64");
+    assert!(run(&mut s, json!({"base64": crate::io::base64_encode(b"not a picture")})).is_err());
+    assert!(run(&mut s, json!({"base64": b64_png(5, 5), "section": "top"})).is_err());
+    assert!(run(&mut s, json!({"base64": b64_png(5, 5), "part": "side"})).is_err());
+    assert!(run(&mut s, json!({"base64": b64_png(5, 5), "page": "last"})).is_err());
+    assert!(run(&mut s, json!({"path": "/no/such/file.png"})).is_err());
+    let mut huge = png(5, 5);
+    huge.resize(17 * 1024 * 1024, 0);
+    assert!(run(&mut s, json!({"base64": crate::io::base64_encode(&huge)})).is_err(), "over 16 MB");
+    // Hostile sizes are clamped.
+    let r = run(&mut s, json!({"base64": b64_png(5, 5), "width": 1e30, "height": -4})).unwrap();
+    assert_eq!(r["width"].as_f64(), Some(1584.0));
+    assert!(print_of(&s).hf_pictures.iter().all(|p| p.width.is_finite() && p.height.is_finite() && p.height > 0.0));
+}
+
+/// A picture inserted here survives saving as XLSX and reading it back.
+#[test]
+fn an_inserted_header_picture_survives_saving_as_xlsx() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    s.execute("pageLayout.headerFooterPicture", json!({"section": "left", "base64": b64_png(30, 10), "width": 90})).unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let (back, rep) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+    assert!(!rep.warnings.iter().any(|w| w.contains("header")), "{:?}", rep.warnings);
+    let (a, b) = (&wb.sheet(0).unwrap().print, &back.sheet(0).unwrap().print);
+    assert_eq!(b.header, "&L&G");
+    assert_eq!(b.hf_pictures, a.hf_pictures);
+}
+
+/// A sheet that keeps a header/footer drawing from its file (one GridCraft couldn't model)
+/// refuses new pictures: the file's drawing is written back as it was, and a sheet has one.
+#[test]
+fn a_sheet_keeping_its_files_header_drawing_refuses_new_pictures() {
+    use gridcraft_model::{Preserved, PreservedXml};
+    let mut s = s();
+    let kept = Preserved {
+        elements: vec![PreservedXml { slot: "legacyDrawingHF".into(), xml: "<legacyDrawingHF r:id=\"rId9\"/>".into() }],
+        ..Preserved::default()
+    };
+    let d = s.doc_mut().unwrap();
+    std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap().preserved = Some(std::sync::Arc::new(kept));
+    let err = s.execute("pageLayout.headerFooterPicture", json!({"section": "left", "base64": b64_png(5, 5)})).unwrap_err();
+    assert!(err.to_string().contains("can't edit"), "{err}");
+    let sh = s.doc().unwrap().wb.sheet(0).unwrap();
+    assert!(sh.print.hf_pictures.is_empty() && !sh.print.header.contains("&G"));
 }

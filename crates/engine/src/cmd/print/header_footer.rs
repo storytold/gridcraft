@@ -262,10 +262,10 @@ const HF_MAX_SIDE_PX: u32 = 8192;
 /// Decoded header/footer pixels (RGBA bytes) one export may hold, all sheets together.
 const HF_DECODE_BUDGET: usize = 128 * 1024 * 1024;
 
-/// The header and footer pictures a sheet keeps from the file it was read from (#1257), not
-/// decoded: where each goes, its printed size in points and its encoded bytes.
-pub fn hf_pictures(sh: &gridcraft_model::Sheet) -> Vec<gridcraft_xlsx::HfPicture> {
-    sh.preserved.as_deref().map(gridcraft_xlsx::header_footer_pictures).unwrap_or_default()
+/// The header and footer pictures of a sheet (#1257), not decoded: where each goes, its printed
+/// size in points and its encoded bytes.
+pub fn hf_pictures(sh: &gridcraft_model::Sheet) -> &[gridcraft_model::HfPicture] {
+    &sh.print.hf_pictures
 }
 
 /// Header and footer pictures decoded for one export (#1257): each distinct image is decoded
@@ -280,7 +280,7 @@ pub(super) struct HfImageCache {
 }
 
 /// A header/footer image asked for: its encoded bytes, the size in pixels, and the outcome.
-type Decoded = (std::sync::Arc<[u8]>, (u32, u32), Outcome);
+type Decoded = (std::sync::Arc<Vec<u8>>, (u32, u32), Outcome);
 
 /// What decoding a header/footer image for a size gave.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -310,8 +310,8 @@ impl HfImageCache {
     /// within the budget.
     /// An image that can't be decoded is tried once; one that didn't fit the budget is tried
     /// again only for a smaller size (the budget only shrinks).
-    pub(super) fn image(&mut self, doc: &mut PdfDoc, data: &std::sync::Arc<[u8]>, size: (u32, u32)) -> Option<gridcraft_pdf::ImageId> {
-        let same = |d: &std::sync::Arc<[u8]>| std::sync::Arc::ptr_eq(d, data) || (d.len() == data.len() && d[..] == data[..]);
+    pub(super) fn image(&mut self, doc: &mut PdfDoc, data: &std::sync::Arc<Vec<u8>>, size: (u32, u32)) -> Option<gridcraft_pdf::ImageId> {
+        let same = |d: &std::sync::Arc<Vec<u8>>| std::sync::Arc::ptr_eq(d, data) || d == data;
         let covers = |(w, h): (u32, u32)| w >= size.0 && h >= size.1;
         for (d, at, outcome) in &self.decoded {
             if !same(d) {
@@ -376,7 +376,7 @@ pub(super) fn hf_images(
         let spec = pr.hf(page, footer);
         !spec.is_empty() && expand_header_footer(spec, &HfContext::default()).get(section).is_some_and(|s| s.picture.is_some())
     };
-    let pictures: Vec<_> = hf_pictures(sh).into_iter().filter(|p| kinds.contains(&p.page) && has_g(p.page, p.footer, p.section)).collect();
+    let pictures: Vec<_> = hf_pictures(sh).iter().filter(|p| kinds.contains(&p.page) && has_g(p.page, p.footer, usize::from(p.section))).collect();
     // About 150 dpi at the printed size is plenty.
     let px = |pt: f32| ((pt * scale.max(0.01) / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32;
     let mut out = Vec::with_capacity(pictures.len());
@@ -395,7 +395,7 @@ pub(super) fn hf_images(
             _ => fit,
         }
     };
-    for p in &pictures {
+    for p in pictures.iter().copied() {
         // Equal bytes are one image, as the cache counts them, even from separate parts: decoded
         // once, for the largest size any of them needs (a wide box and a tall one for the same
         // square image need two small squares, not one large one).
@@ -407,7 +407,7 @@ pub(super) fn hf_images(
         // When that largest size doesn't fit the budget left, this picture's own size may.
         let own = need(p.width, p.height, &p.data);
         if let Some(id) = cache.image(doc, &p.data, size).or_else(|| if own == size { None } else { cache.image(doc, &p.data, own) }) {
-            out.push(HfImage { page: p.page, footer: p.footer, section: p.section, width: p.width, height: p.height, id });
+            out.push(HfImage { page: p.page, footer: p.footer, section: usize::from(p.section), width: p.width, height: p.height, id });
         }
     }
     out

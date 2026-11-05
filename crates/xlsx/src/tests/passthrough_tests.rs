@@ -892,13 +892,14 @@ fn header_picture_package_with(hf_vml: &[u8]) -> Vec<u8> {
     ])
 }
 
-/// Header and footer pictures are written back byte for byte through two saves.
+/// Header and footer pictures survive two saves, written as Excel writes them: each in its place
+/// and at its size, with its own image, in a drawing of their own after the notes drawing.
 #[test]
 fn header_and_footer_pictures_survive_a_save() {
     let (wb, rep) = read_xlsx(&header_picture_package()).unwrap();
-    assert!(!rep.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep.warnings);
+    assert!(!rep.warnings.iter().any(|w| w.contains("header")), "{:?}", rep.warnings);
     assert_eq!(wb.sheet(0).unwrap().comments.len(), 1, "the note is modelled");
-    // Twice: what was kept on the first save is read back and kept again.
+    // Twice: what was written on the first save is read back and written again.
     let (again, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     for saved in [write_xlsx(&wb).unwrap(), write_xlsx(&again).unwrap()] {
         let u = Unpacked::new(&saved);
@@ -908,7 +909,11 @@ fn header_and_footer_pictures_survive_a_save() {
         assert!(sx.contains("<oddHeader>&amp;L&amp;G&amp;CInvoice</oddHeader>"), "{sx}");
         let (ty, vml) = u.target(&sheet, &attr_of(&sx, "legacyDrawingHF", "r:id"));
         assert!(ty.ends_with("/vmlDrawing"), "{ty}");
-        assert_eq!(u.text(&vml), HF_VML);
+        let text = u.text(&vml);
+        // One picture frame shape per picture, in its place and at its size.
+        assert!(text.contains("<v:shapetype id=\"_x0000_t75\""), "{text}");
+        assert!(text.contains("<v:shape id=\"LH\"") && text.contains("width:120pt;height:40pt"), "{text}");
+        assert!(text.contains("<v:shape id=\"CF\"") && text.contains("width:80pt;height:20pt"), "{text}");
         let pictures: Vec<(String, Vec<u8>)> = u.rels(&vml).into_iter().map(|r| (r.0, u.parts.get(&r.2).unwrap().clone())).collect();
         assert_eq!(pictures, [("rId1".to_string(), LOGO.to_vec()), ("rId2".to_string(), SIGNATURE.to_vec())]);
         // The notes keep their own drawing; CT_Worksheet puts legacyDrawingHF right after it.
@@ -918,27 +923,27 @@ fn header_and_footer_pictures_survive_a_save() {
         assert!(sx.find("<headerFooter").unwrap() < sx.find("<legacyDrawing ").unwrap());
         assert!(sx.find("<legacyDrawing ").unwrap() < sx.find("<legacyDrawingHF ").unwrap());
     }
+    assert_eq!(again.sheet(0).unwrap().print.hf_pictures, wb.sheet(0).unwrap().print.hf_pictures);
 }
 
-/// Header and footer pictures are found for printing in a file read, and again after a save renamed
-/// the kept parts.
+/// Header and footer pictures read from a file become the sheet's own, with nothing of their
+/// drawing left to pass through.
 #[test]
-fn header_and_footer_pictures_are_read_for_printing() {
+fn header_and_footer_pictures_are_the_sheets_own() {
     let (wb, _) = read_xlsx(&header_picture_package()).unwrap();
-    // Read from the file, and again after a save renamed the kept parts.
-    let (again, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
-    for book in [&wb, &again] {
-        let kept = book.sheet(0).unwrap().preserved.clone().expect("the header drawing is kept");
-        let got: Vec<_> =
-            crate::header_footer_pictures(&kept).into_iter().map(|p| (p.page, p.footer, p.section, p.width, p.height, p.data.to_vec())).collect();
-        assert_eq!(
-            got,
-            [
-                (gridcraft_model::HfPage::Odd, false, 0, 120.0, 40.0, LOGO.to_vec()),
-                (gridcraft_model::HfPage::Odd, true, 1, 80.0, 20.0, SIGNATURE.to_vec()),
-            ]
-        );
-    }
+    let sh = wb.sheet(0).unwrap();
+    let got: Vec<_> =
+        sh.print.hf_pictures.iter().map(|p| (p.page, p.footer, p.section, p.width, p.height, p.data.to_vec(), p.mime.as_str())).collect();
+    assert_eq!(
+        got,
+        [
+            (gridcraft_model::HfPage::Odd, false, 0, 120.0, 40.0, LOGO.to_vec(), "image/png"),
+            (gridcraft_model::HfPage::Odd, true, 1, 80.0, 20.0, SIGNATURE.to_vec(), "image/png"),
+        ]
+    );
+    assert_eq!(sh.print.hf_pictures[0].title, "logo");
+    // Nothing of their drawing is left to pass through.
+    assert!(sh.preserved.as_deref().is_none_or(|p| !p.elements.iter().any(|e| e.slot == "legacyDrawingHF")));
 }
 
 /// `text` as UTF-16 (little-endian, with its byte order mark).
@@ -946,15 +951,70 @@ fn utf16(text: &str) -> Vec<u8> {
     [0xFF, 0xFE].into_iter().chain(text.encode_utf16().flat_map(u16::to_le_bytes)).collect()
 }
 
-/// A header/footer drawing saved as UTF-16 gives the same pictures, and is kept byte for byte.
+/// A sheet made here saves its header pictures as Excel lays them out (a valid package, one media
+/// part for a shared image, only known crop/colour settings) and reads them back equal.
 #[test]
-fn utf16_header_and_footer_pictures_are_read_for_printing() {
+fn a_sheet_made_here_saves_its_header_pictures() {
+    let mut wb = gridcraft_model::Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.print.header = "&C&G".into();
+    sh.print.different_first = true;
+    sh.print.first_footer = "&R&G".into();
+    let pic = |page, footer, section, data: &[u8]| gridcraft_model::HfPicture {
+        page,
+        footer,
+        section,
+        width: 90.0,
+        height: 30.0,
+        data: std::sync::Arc::new(data.to_vec()),
+        mime: "image/png".into(),
+        title: "Logo \"A&B\"".into(),
+        adjust: vec![("grayscale".into(), "t".into()), ("evil".into(), "x".into())],
+    };
+    sh.print.hf_pictures = vec![pic(gridcraft_model::HfPage::Odd, false, 1, LOGO), pic(gridcraft_model::HfPage::First, true, 2, LOGO)];
+    let bytes = write_xlsx(&wb).unwrap();
+    let u = Unpacked::new(&bytes);
+    u.assert_valid();
+    let sheet = sheet_part(&u, &wb.sheet(0).unwrap().name);
+    let sx = u.text(&sheet);
+    let vml = u.target(&sheet, &attr_of(&sx, "legacyDrawingHF", "r:id")).1;
+    let text = u.text(&vml);
+    assert!(text.contains("<v:shape id=\"CH\"") && text.contains("<v:shape id=\"RFFIRST\""), "{text}");
+    assert!(text.contains("o:title=\"Logo &quot;A&amp;B&quot;\" grayscale=\"t\"/>"), "{text}");
+    assert!(!text.contains("evil"));
+    // The same image is stored once.
+    assert_eq!(u.parts.keys().filter(|k| k.starts_with("xl/media/")).count(), 1);
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    let mut want = wb.sheet(0).unwrap().print.hf_pictures.clone();
+    for p in &mut want {
+        p.adjust.retain(|(k, _)| k != "evil");
+    }
+    assert_eq!(back.sheet(0).unwrap().print.hf_pictures, want);
+}
+
+/// A header/footer drawing saved as UTF-16 gives the same pictures as in UTF-8.
+#[test]
+fn utf16_header_and_footer_pictures_are_read() {
     let utf16 = utf16(HF_VML);
     let (wb, _) = read_xlsx(&header_picture_package_with(&utf16)).unwrap();
-    let kept = wb.sheet(0).unwrap().preserved.clone().expect("the header drawing is kept");
-    let got: Vec<_> = crate::header_footer_pictures(&kept).into_iter().map(|p| (p.footer, p.section, p.data.to_vec())).collect();
-    assert_eq!(got, [(false, 0, LOGO.to_vec()), (true, 1, SIGNATURE.to_vec())]);
-    assert!(kept.parts.iter().any(|p| p.data[..] == utf16[..]), "the drawing's own bytes are kept");
+    let (utf8, _) = read_xlsx(&header_picture_package()).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().print.hf_pictures.len(), 2);
+    assert_eq!(wb.sheet(0).unwrap().print.hf_pictures, utf8.sheet(0).unwrap().print.hf_pictures);
+}
+
+/// A drawing that names the VML namespace with another prefix than `v` isn't read as having no
+/// pictures (which would drop it): it stays kept and is written back as it was.
+#[test]
+fn a_header_drawing_with_another_vml_prefix_is_kept() {
+    let renamed = HF_VML.replace("xmlns:v=", "xmlns:vml=").replace("<v:", "<vml:").replace("</v:", "</vml:").replace(" v:", " vml:");
+    assert!(!renamed.contains("<v:"));
+    let (wb, _) = read_xlsx(&header_picture_package_with(renamed.as_bytes())).unwrap();
+    assert!(wb.sheet(0).unwrap().print.hf_pictures.is_empty(), "nothing is modelled from it");
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    let sx = u.text(&sheet_part(&u, "Invoice"));
+    let vml = u.text(&u.target(&sheet_part(&u, "Invoice"), &attr_of(&sx, "legacyDrawingHF", "r:id")).1);
+    assert!(vml.contains("<vml:shape") && vml.contains("<vml:imagedata"), "the kept drawing, as it was: {vml}");
 }
 
 /// The shape blocks a VML drawing claims (`<o:idmap data>`) and the blocks of its shape ids
@@ -970,15 +1030,17 @@ fn vml_blocks(vml: &str) -> (Vec<u64>, Vec<u64>) {
     (idmap, spids)
 }
 
+/// Notes and header pictures use different VML shape blocks.
 #[test]
-fn notes_take_shape_blocks_the_header_pictures_dont_use() {
+fn notes_and_header_pictures_use_different_shape_blocks() {
     let (wb, _) = read_xlsx(&header_picture_package()).unwrap();
     let u = Unpacked::new(&write_xlsx(&wb).unwrap());
     let sheet = sheet_part(&u, "Invoice");
     let sx = u.text(&sheet);
     let (hf_map, hf_ids) = vml_blocks(&u.text(&u.target(&sheet, &attr_of(&sx, "legacyDrawingHF", "r:id")).1));
     let (notes_map, notes_ids) = vml_blocks(&u.text(&u.target(&sheet, &attr_of(&sx, "legacyDrawing", "r:id")).1));
-    assert_eq!((hf_map.as_slice(), hf_ids.as_slice()), ([1].as_slice(), [1, 1].as_slice()), "the header drawing is kept as it was");
+    assert_eq!(hf_map.len(), 1, "one block for the header pictures");
+    assert!(hf_ids.len() == 2 && hf_ids.iter().all(|b| hf_map.contains(b)), "their ids in their block: {hf_map:?} {hf_ids:?}");
     assert!(!notes_ids.is_empty());
     for b in notes_map.iter().chain(&notes_ids) {
         assert!(!hf_map.contains(b) && !hf_ids.contains(b), "notes reuse shape block {b}: {notes_map:?} {notes_ids:?}");
@@ -1061,4 +1123,93 @@ fn a_sheet_of_modelled_controls_keeps_nothing_for_them() {
     let sh = back.sheet(0).unwrap();
     assert_eq!(sh.controls.len(), 2);
     assert!(sh.preserved.is_none(), "{:?}", sh.preserved);
+}
+
+/// Notes, form controls (enough to span two blocks) and header pictures on two sheets never share a
+/// VML shape block.
+#[test]
+fn notes_controls_and_header_pictures_on_several_sheets_never_share_a_shape_block() {
+    use gridcraft_model::{Anchor, Comment, ControlKind, FormControl, HfPage, HfPicture};
+    let mut wb = gridcraft_model::Workbook::new();
+    wb.sheets.push(gridcraft_model::Sheet::new("Second").into());
+    let pic = |section| HfPicture {
+        page: HfPage::Odd,
+        footer: false,
+        section,
+        width: 90.0,
+        height: 30.0,
+        data: std::sync::Arc::new(LOGO.to_vec()),
+        mime: "image/png".into(),
+        title: "Logo".into(),
+        adjust: vec![],
+    };
+    for (si, controls) in [(0usize, 1100u32), (1, 2)] {
+        let sh = wb.sheet_mut(si).unwrap();
+        sh.print.header = "&L&G&C&G".into();
+        sh.print.hf_pictures = vec![pic(0), pic(1)];
+        let note = Comment {
+            author: "Me".into(),
+            text: "a note".into(),
+            replies: vec![],
+            threaded: false,
+            resolved: false,
+            visible: false,
+            dates: vec![],
+            note_box: None,
+        };
+        sh.comments.insert(gridcraft_core::CellRef::new(0, 0), note);
+        for i in 0..controls {
+            let anchor = Anchor { cell: gridcraft_core::CellRef::new(2, 2), width: 20.0, height: 30.0, ..Default::default() };
+            sh.controls.push(FormControl { id: i + 1, kind: ControlKind::Spin, anchor, ..Default::default() });
+        }
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let u = Unpacked::new(&bytes);
+    u.assert_valid();
+    let mut claimed: Vec<(String, u64)> = vec![];
+    for si in 0..2 {
+        let sheet = sheet_part(&u, &wb.sheet(si).unwrap().name);
+        let sx = u.text(&sheet);
+        for el in ["legacyDrawing", "legacyDrawingHF"] {
+            let part = u.target(&sheet, &attr_of(&sx, el, "r:id")).1;
+            let (idmap, ids) = vml_blocks(&u.text(&part));
+            assert!(ids.iter().all(|b| idmap.contains(b)), "{part}: ids outside its blocks {idmap:?} {ids:?}");
+            for b in idmap {
+                assert!(!claimed.iter().any(|(_, c)| *c == b), "{part} reuses block {b}: {claimed:?}");
+                claimed.push((part.clone(), b));
+            }
+        }
+    }
+    assert_eq!(claimed.len(), 5, "two blocks for 1100 controls, one per other drawing: {claimed:?}");
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert!((0..2).all(|si| back.sheet(si).unwrap().print.hf_pictures.len() == 2));
+}
+
+/// A header/footer drawing that can't be modelled stays kept and is written back as it was; a
+/// picture the sheet also has in its settings doesn't add a second `<legacyDrawingHF>`, which
+/// Excel would repair.
+#[test]
+fn a_kept_header_drawing_is_the_only_one_written() {
+    let odd = HF_VML.replace("<v:shape id=\"LH\"", "<v:shape id=\"XH\"");
+    let (mut wb, rep) = read_xlsx(&header_picture_package_with(odd.as_bytes())).unwrap();
+    assert!(rep.warnings.iter().any(|w| w.contains("could not be read")), "{:?}", rep.warnings);
+    let sh = wb.sheet_mut(0).unwrap();
+    assert!(sh.print.hf_pictures.is_empty(), "nothing is modelled from it");
+    sh.print.hf_pictures.push(gridcraft_model::HfPicture {
+        page: gridcraft_model::HfPage::Odd,
+        footer: false,
+        section: 2,
+        width: 50.0,
+        height: 20.0,
+        data: std::sync::Arc::new(LOGO.to_vec()),
+        mime: "image/png".into(),
+        title: "new".into(),
+        adjust: vec![],
+    });
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    let sx = u.text(&sheet_part(&u, "Invoice"));
+    assert_eq!(sx.matches("<legacyDrawingHF").count(), 1, "{sx}");
+    let vml = u.text(&u.target(&sheet_part(&u, "Invoice"), &attr_of(&sx, "legacyDrawingHF", "r:id")).1);
+    assert!(vml.contains("id=\"XH\"") && !vml.contains("o:title=\"new\""), "the kept drawing, as it was: {vml}");
 }
