@@ -165,6 +165,8 @@ fn translated_context_menus_fit_a_narrow_viewport_without_resizing_on_hover() {
             let size = egui::vec2(width, 800.0);
             let mut h = harness_sized(1.0, size);
             h.ctx.all_styles_mut(|style| {
+                // Menu sizing uses Button; egui's button theme paints its text with Body.
+                style.text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(font_size));
                 style.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(font_size));
             });
             h.state_mut().ui.language = language;
@@ -175,7 +177,30 @@ fn translated_context_menus_fit_a_narrow_viewport_without_resizing_on_hover() {
             let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
             assert!(viewport.expand(0.5).contains_rect(before), "{language:?} popup exceeds {width}pt viewport: {before:?}");
             assert!(before.width() >= 200.0, "normal English-menu minimum is retained");
-            let item = h.get_by_label(language.tr("Filter by Selected Cell's Value")).rect();
+            let label = language.tr("Filter by Selected Cell's Value");
+            let item = h.get_by_label(label).rect();
+            let galley = h
+                .output()
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == label && item.contains(text.pos) => Some(&text.galley),
+                    _ => None,
+                })
+                .expect("the context command has a painted text galley");
+            // The layout job retains the full label even when the painted glyphs are elided.
+            let rendered: String = galley.rows.iter().flat_map(|row| row.glyphs.iter().map(|glyph| glyph.chr)).collect();
+            assert_eq!(galley.rows.len(), 1, "{language:?} command stays on one line");
+            if width == 300.0 {
+                assert!(galley.elided, "{language:?} narrow command must truncate");
+                assert!(
+                    rendered != label && rendered.ends_with('…') && label.starts_with(rendered.trim_end_matches('…')),
+                    "{language:?} narrow command paints a prefix and ellipsis: {rendered:?}"
+                );
+            } else {
+                assert!(!galley.elided, "{language:?} wide command must remain complete");
+                assert_eq!(rendered, label, "{language:?} wide command paints the full label");
+            }
             let content = context_menu_content_bounds(&h);
             h.input_mut().events.push(Event::PointerMoved(item.center()));
             h.run_steps(3);
