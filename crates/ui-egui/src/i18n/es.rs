@@ -60,6 +60,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Panel\nde formato",
         "Format" => "Formato",
         "Insert" => "Insertar",
+        "Header Menu|Insert" => "Insertar",
         "Insert Cells…" => "Insertar celdas…",
         "Delete" => "Eliminar",
         "Delete Cells…" => "Eliminar celdas…",
@@ -249,6 +250,19 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Convert to Comments" => "Convertir en comentarios",
         "Checkbox" => "Casilla",
         "Insert checkboxes in the selected cells" => "Insertar casillas en las celdas seleccionadas",
+        "Button" => "Botón",
+        "Slider" => "Control deslizante",
+        "Spin Button" => "Control de número",
+        "Draw a button that runs a macro or a command" => "Dibujar un botón que ejecuta una macro o un comando",
+        "Draw a slider that sets a whole number in a linked cell" => {
+            "Dibujar un control deslizante que establece un número entero en una celda vinculada"
+        }
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Dibujar un control de número que cambia un número entero en una celda vinculada"
+        }
+        "Edit Text" => "Modificar texto",
+        "Assign Action…" => "Asignar acción…",
+        "Format Control…" => "Formato de control…",
         "Sheet\nRight-to-Left" => "Hoja de derecha\na izquierda",
         "Sheet Right-to-Left" => "Hoja de derecha a izquierda",
         "Data\nAnalysis" => "Análisis\nde datos",
@@ -381,6 +395,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Leyenda: abajo",
         "Legend: Top" => "Leyenda: arriba",
         "Legend: Right" => "Leyenda: derecha",
+        "First slice angle" => "Ángulo del primer sector",
+        "Doughnut hole size" => "Tamaño del orificio del anillo",
         "Gridlines: None" => "Líneas de cuadrícula: ninguna",
         "Gridlines: Show" => "Líneas de cuadrícula: mostrar",
         "Chart\nTitle" => "Título\ndel gráfico",
