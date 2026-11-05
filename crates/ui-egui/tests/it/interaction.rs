@@ -1655,6 +1655,16 @@ fn scrollbar_arrows_move_by_one_line_and_repeat_while_held() {
     };
     click(&mut h, down);
     assert!((h.state().view().scroll.y - row).abs() < 0.01, "one row: {}", h.state().view().scroll.y);
+    // A click on the track still moves by what the cells show, not by the track between the arrows.
+    let before = h.state().view().scroll.y;
+    let page = {
+        let geo = h.state().grid.geo.as_ref().unwrap();
+        (geo.cells.height() - geo.frozen_h) / geo.z
+    };
+    click(&mut h, egui::pos2(track.center().x, track.bottom() - 3.0));
+    assert!((h.state().view().scroll.y - before - page).abs() < 0.5, "one page: {} from {before}, page {page}", h.state().view().scroll.y);
+    h.state_mut().view_mut().unwrap().scroll.y = row;
+    h.run_steps(2);
 
     h.input_mut().events.push(egui::Event::PointerMoved(down));
     h.step();

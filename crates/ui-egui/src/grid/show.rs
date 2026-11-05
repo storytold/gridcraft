@@ -438,6 +438,7 @@ fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
 /// The worksheet is painted virtually, so it needs its own scrollbar rather than a
 /// ScrollArea containing all million rows. Keep the scroll extent stable during a drag.
 fn vertical_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, sh: &Sheet, geo: &Geo, track_x: (f32, f32), limit: f32, t: &Tokens) {
+    app.grid.vscroll = None;
     // A workbook that hides its vertical scroll bar leaves it no width.
     if track_x.1 <= track_x.0 {
         return;
@@ -449,7 +450,8 @@ fn vertical_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, sh: &Sheet, geo: &G
     let id = ui.scope_id().with("vscroll");
     let (track, arrow) = scroll_arrows(ui, whole, false, id, t);
     app.grid.vscroll = Some(track);
-    let visible = track.height() / geo.z;
+    // A page is what the cells show, whatever the arrows take from the track.
+    let visible = whole.height() / geo.z;
     let scroll = app.view().scroll.y;
     let last = sh.used_range().map(|r| r.end.row.saturating_add(10)).unwrap_or(100).clamp(100, MAX_ROWS - 1);
     let content = geo.scroll_top_of(sh, last);
@@ -557,6 +559,7 @@ fn scroll_arrows(ui: &mut egui::Ui, whole: Rect, horizontal: bool, id: egui::Id,
 /// far end to the grid, which runs later in the same frame.
 pub(crate) fn horizontal_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, whole: Rect, t: &Tokens) {
     app.grid.hscroll = Some(whole);
+    app.grid.hscroll_track = None;
     if whole.height() <= 0.0 || whole.width() <= 0.0 {
         return;
     }
