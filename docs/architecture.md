@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-04 · **Change:** minor (expanded PDF header/footer text and font runs share a 64 KiB section cap; linear PDF wrapping retains explicit and whole-line fallback font metrics; Python mode in the shared editor and Python cells as data; equations: the math crate, layout cache and Symbol PDF encoding; custom fonts measure large equation glyphs and placeholders; recently used functions in preferences; Function Library module and accent icons; toolkit-independent PDF fallback loading shared by desktop and CLI; macro PDF font reads require explicit permission and approval disclosure; macro engine and hidden macro storage; PDF font exports use the current Point/Rect geometry API and explicit imports; PDF headers and footers retain font/style runs; Greek and Cyrillic retain independent fallbacks; PDF font selection follows the split print and theme modules; PDF font sets remain fixed after the first page and fallback loading supports late registration; PDF Unicode aliases retain their text; multiple named PDF font families; per-document PDF text faces and measurement; engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (expanded PDF header/footer text and font runs share a 64 KiB section cap; linear PDF wrapping retains explicit and whole-line fallback font metrics; Python mode in the shared editor and Python cells as data; equations: the math crate, layout cache and Symbol PDF encoding; custom fonts measure large equation glyphs and placeholders; recently used functions in preferences; Function Library module and accent icons; toolkit-independent PDF fallback loading shared by desktop and CLI; macro PDF font reads require explicit permission and approval disclosure; macro engine and hidden macro storage; PDF font exports use the current Point/Rect geometry API and explicit imports; PDF headers and footers retain font/style runs; Greek and Cyrillic retain independent fallbacks; PDF font selection follows the split print and theme modules; PDF font sets remain fixed after the first page and fallback loading supports late registration; PDF Unicode aliases retain their text; multiple named PDF font families; per-document PDF text faces and measurement; engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -12,8 +12,6 @@ including tests, 2026-10-10.
 
 | Layer | Crate | Lines | Job |
 |---|---|---|---|
-| 2026-11-04 | minor | Header/footer sections cap expanded fields and literal text at 64 KiB before copying into plain text and styled runs; oversized fields are omitted whole and later content may still fit |
-| 2026-11-03 | minor | PDF wrapping composes font measurements instead of remeasuring growing lines; explicit faces and whole-line Unicode fallback selection retain matching widths, and long words stop at the line limit |
 | L0 | `core` | ~1.3k | Cell and range addresses (A1, R1C1, sheet-qualified; 1,048,576 × 16,384), `Value`, `CellError`, Excel coercion, 1900/1904 date serials, typed-input parsing |
 | L0 | `numfmt` | ~2.1k | Excel number-format codes (sections, conditions, colours, dates, elapsed time, fractions, scientific, fill), General, `TEXT()`; en-US only |
 | L1 | `formula` | ~1.7k | Tokenizer, parser, AST, printer (A1 and R1C1), reference adjustment for copy, fill and structural edits |
@@ -251,6 +249,9 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | trivial | Reconcile form controls with PDF font capabilities and move misplaced PDF progress entries into the revision history |
+| 2026-11-04 | minor | Header/footer sections cap expanded fields and literal text at 64 KiB before copying into plain text and styled runs; oversized fields are omitted whole and later content may still fit |
+| 2026-11-03 | minor | PDF wrapping composes font measurements instead of remeasuring growing lines; explicit faces and whole-line Unicode fallback selection retain matching widths, and long words stop at the line limit |
 | 2026-11-02 | minor | Python mode in the formula bar: Python mode on the shared editor, `code_field` and its stop keys; drafts follow their sheet by `model::SheetUid` |
 | 2026-11-02 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references; edits that would push code past the limit are refused |
 | 2026-11-02 | minor | Preserve Symbol encoding with Unicode fallbacks and measure equation glyphs with the selected PDF faces |
