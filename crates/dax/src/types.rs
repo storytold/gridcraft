@@ -560,7 +560,9 @@ fn blank_arithmetic(op: BinaryOp, left: InferredType, right: InferredType) -> Re
                 Ok(InferredType::Unknown)
             }
         }
-        BinaryOp::Pow => Ok(InferredType::Blank),
+        // The evaluator coerces a BLANK operand to 0 and answers a number, so exponentiation is
+        // Decimal rather than Blank.
+        BinaryOp::Pow => Ok(InferredType::Data(DataType::Decimal)),
         _ => Err(TypeError::IncompatibleOperands { op, left, right }),
     }
 }

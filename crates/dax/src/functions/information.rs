@@ -851,7 +851,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
             overload(&[ParamKind::Reference, ParamKind::Text, ParamKind::Text]),
         ],
         ReturnType::String,
-        FunctionFlags::new(false, true, false, false, true),
+        FunctionFlags::new(false, false, false, false, true),
         "Text name of a table, column, measure or calendar. Component selects TABLE, COLUMN, \
          MEASURE, CALENDAR, FULL, SELF or PARENT; Escaped selects ESCAPED, UNESCAPED or \
          MINIMALLYESCAPED. Variables and dynamic expressions are not accepted.",

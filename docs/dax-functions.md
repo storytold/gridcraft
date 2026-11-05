@@ -33,13 +33,14 @@ The per-category counts below are the catalog's. This crate links no evaluator f
 
 ## Evaluated functions
 
-In this crate only the scalar core listed in `crates/dax/README.md` has an evaluator path: the
-aggregations and their `*X` iterators, the logical spine, `CALCULATE`/`FILTER`/`ALL*`/`VALUES`/
-`DISTINCT`/`SELECTEDVALUE`, `RELATED*`, `COUNTROWS` and the text/math helpers the core switch
-carries. Every other catalogued function reports "not implemented" until its evaluator family is
-linked (`eval::FAMILIES` is empty here); each family PR adds its dispatch and its own suite under
-`crates/dax/tests/`. The lists below are therefore the **catalog**, not a claim that this build
-evaluates them.
+In this crate the evaluator is `Evaluator::eval`'s built-in switch plus whatever `eval::FAMILIES`
+links, and `FAMILIES` is empty here. The switch handles the aggregations and their `*X` iterators,
+the logical spine, `CALCULATE`/`FILTER`/`ALL*`/`VALUES`/`DISTINCT`/`SELECTEDVALUE`, `RELATED*`,
+`COUNTROWS`, the statement operators, and the scalar helpers it carries directly — `ABS`, `DATE`,
+`LEN`, `PATHLENGTH` and the rest of the small scalar set in `crates/dax/src/eval.rs`. Every other
+catalogued function reports "not implemented" until its evaluator family is linked; each family PR
+adds its dispatch and its own suite under `crates/dax/tests/`. The lists below are therefore the
+**catalog**, not a claim that this build evaluates every name in it.
 
 ## Catalogued (parsed and validated)
 
