@@ -163,8 +163,24 @@ fn main() {
     // line: `tr` keys can carry newlines (`Resize\nTable`), and one raw key per line would
     // split it into two records for the next run.
     if let Some(path) = std::env::var_os("GRIDCRAFT_I18N_TRACE") {
+        // A line that doesn't parse (a corrupted record, or a plaintext key from before the JSON
+        // format) leaves the file alone: rewriting would drop that record for good.
         let mut merged: std::collections::BTreeSet<String> = match std::fs::read_to_string(&path) {
-            Ok(text) => text.lines().filter(|line| !line.is_empty()).filter_map(|line| serde_json::from_str(line).ok()).collect(),
+            Ok(text) => {
+                let mut records = std::collections::BTreeSet::new();
+                for line in text.lines().filter(|line| !line.is_empty()) {
+                    match serde_json::from_str::<String>(line) {
+                        Ok(key) => {
+                            records.insert(key);
+                        }
+                        Err(e) => {
+                            eprintln!("i18n trace: {}: {line:?} is not a JSON record ({e}); not rewriting the trace", path.to_string_lossy());
+                            return;
+                        }
+                    }
+                }
+                records
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Default::default(),
             // A file that exists but can't be read keeps its contents: nothing is written on top of it.
             Err(e) => {

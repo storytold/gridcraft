@@ -20,6 +20,10 @@ pub(super) const TEMPLATES: &[(&str, &str)] = &[
     ("A scenario named '{name}' already exists on this sheet.", "此工作表中已存在名为“{name}”的方案。"),
     ("Input X range must have {MAX_REGRESSORS} columns or fewer.", "输入 X 区域最多只能有 {MAX_REGRESSORS} 列。"),
     ("The criteria label `{head}` doesn't match a column of the list.", "条件标签 `{head}` 与列表中的任何列都不匹配。"),
+    // The specific output-range templates must come before the {OVERWRITE_ERROR} catch-all:
+    // matching takes the first template that fits, and the catch-all would swallow "already
+    // holds data" and leave the phrase in English.
+    ("The output range {} already holds data; pass overwrite: true to replace it.", "输出区域 {} 已有数据；如要替换，请传入 overwrite: true。"),
     (
         "The output range {} {OVERWRITE_ERROR}; pass overwrite: true to replace it.",
         "输出区域 {} {OVERWRITE_ERROR}；如需覆盖，请传入 overwrite: true。",
@@ -78,7 +82,6 @@ pub(super) const TEMPLATES: &[(&str, &str)] = &[
         "无法打开“{name}”：加密文件已损坏（其中还包含另一个加密文件）。",
     ),
     ("The data is too large to keep in the workbook ({} MB at most).", "数据过大，无法保存在工作簿中（最多 {} MB）。"),
-    ("The output range {} already holds data; pass overwrite: true to replace it.", "输出区域 {} 已有数据；如要替换，请传入 overwrite: true。"),
     ("Go To selects at most {GO_TO_MAX_AREAS} areas.", "“定位”最多选择 {GO_TO_MAX_AREAS} 个区域。"),
     ("No {name} cells.", "没有 {name} 单元格。"),
     ("a range titled `{n}` already exists", "已存在名为 `{n}` 的区域"),
