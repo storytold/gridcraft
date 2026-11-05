@@ -1394,8 +1394,16 @@ pub struct RelationshipIndex {
 
 impl RelationshipIndex {
     /// Row ids in the `from` table whose key equals `key`; empty when there is no match.
+    ///
+    /// Keys are normalized the same way the index is built (`value::relationship_key_of`), so a
+    /// caller can probe with the plain `ScalarKey` of a value and still join an `Integer` key to a
+    /// `Decimal` or `Currency` one.
     pub fn rows_from(&self, key: &ScalarKey) -> &[usize] {
-        match self.from_rows.get(key) {
+        if let Some(rows) = self.from_rows.get(key) {
+            return rows;
+        }
+        // A numeric key still joins its other variants: `Integer (2)` finds a `Decimal (2.0)` row.
+        match self.from_rows.get(&crate::value::relationship_key_of(key)) {
             Some(rows) => rows.as_slice(),
             None => &[],
         }
@@ -1403,7 +1411,10 @@ impl RelationshipIndex {
 
     /// Row ids in the `to` table whose key equals `key`; empty when there is no match.
     pub fn rows_to(&self, key: &ScalarKey) -> &[usize] {
-        match self.to_rows.get(key) {
+        if let Some(rows) = self.to_rows.get(key) {
+            return rows;
+        }
+        match self.to_rows.get(&crate::value::relationship_key_of(key)) {
             Some(rows) => rows.as_slice(),
             None => &[],
         }

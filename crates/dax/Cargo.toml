@@ -25,5 +25,11 @@ chrono = { workspace = true }
 # library clock traps there, and `eval/support.rs` would otherwise freeze at 1970.
 js-sys = "0.3"
 
+[[example]]
+name = "parse"
+# Cargo does not test examples by default; this one carries assertions on the query-to-expression
+# fallback, so it has to run under `cargo test`.
+test = true
+
 [dev-dependencies]
 serde_json = { workspace = true }

@@ -209,8 +209,9 @@ fn same_table_fields_are_unchanged_by_the_relationships() {
 }
 
 /// A model whose dimension repeats a key. The one side of a relationship must be unique; when it is
-/// not, the pivot resolves each fact row to the **lowest** matching dimension row, so no fact row is
-/// fanned out and no value is counted twice.
+/// not, the pivot resolves each fact row to the **lowest** matching dimension row for its label,
+/// while the cell filter passes every related key, so a fact row can land in more than one leaf
+/// cell (`integrity` reports the duplicate key).
 fn duplicate_key_model() -> DataModel {
     let mut model = DataModel {
         tables: vec![

@@ -248,6 +248,16 @@ impl From<&Scalar> for ScalarKey {
     }
 }
 
+/// [`relationship_key`] for a key that is already normalized-except-for-variant.
+pub(crate) fn relationship_key_of(key: &ScalarKey) -> ScalarKey {
+    match key {
+        ScalarKey::Integer(number) if number.unsigned_abs() <= (1 << 53) => ScalarKey::Decimal(order_bits(*number as f64)),
+        ScalarKey::Currency(number) if number.unsigned_abs() <= (1 << 53) => ScalarKey::Decimal(order_bits(*number as f64 / 10_000.0)),
+        ScalarKey::DateTime(serial) => ScalarKey::Decimal(*serial),
+        other => other.clone(),
+    }
+}
+
 /// The same key with text folded to lower case: the rule filter keys and the values they are
 /// compared with share, so a filter set from `VALUES` matches every spelling of the value.
 pub(crate) fn folded_key(key: &ScalarKey) -> ScalarKey {

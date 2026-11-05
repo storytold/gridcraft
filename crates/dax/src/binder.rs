@@ -312,14 +312,17 @@ impl<'a> Binder<'a> {
                 _ if matches!(expected, Some(ParamKind::Text)) => keyword_name(arg),
                 _ => visual_keyword_name(spec.name, index, arg),
             }
-            // A real table or measure name always wins: `RANK(Sales, ORDERBY(...))` uses the
-            // table in a position whose documented overload would otherwise be `Ties`. A variable
-            // only shadows a documented text argument (`RANKX(..., Dense)`), because an interval
-            // or enum keyword is not a name position: a variable called `YEAR` must not turn
-            // `DATEDIFF(a, b, YEAR)` into a variable reference.
+            // A name only wins where the position genuinely accepts one — a documented `Text`
+            // argument such as `RANKX(..., Dense)` or a visual calculation's axis. A fixed enum
+            // slot (`DATEDIFF`'s interval, `CONVERT`'s type, the order words) is not a name
+            // position: a table called `Month` must not turn `DATEDIFF(a, b, MONTH)` into a table
+            // reference, and a variable called `YEAR` must not either.
             .filter(|keyword| {
+                if !matches!(expected, Some(ParamKind::Text)) && !is_visual_keyword(spec.name, index, keyword) {
+                    return true;
+                }
                 let named = self.model.table_index(keyword).is_some() || self.model.measure_index(keyword).is_some();
-                let variable = matches!(expected, Some(ParamKind::Text)) && vars.iter().any(|var| var.eq_ignore_ascii_case(keyword));
+                let variable = vars.iter().any(|var| var.eq_ignore_ascii_case(keyword));
                 !named && !variable
             });
             if let Some(keyword) = keyword {

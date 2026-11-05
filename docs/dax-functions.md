@@ -108,8 +108,10 @@ evaluates them.
 - `Evaluated` means a dispatch arm exists in one of the family modules under
   `crates/dax/src/eval/`; table-valued functions are counted when they have a `call_table` path.
 - Engine-only functions (internal filter clusters, `INFO.*` storage views, visual calculations)
-  use bounded equivalents of their documented behaviour, described in the module that implements
-  them; `MS Learn` and dax.guide are the semantic references for everything else.
+  have no evaluator in this crate: like every other catalogued name outside the scalar core they
+  report `not implemented` until the family that owns them is linked. Where a family is linked it
+  documents any bounded equivalent in its own module; `MS Learn` and dax.guide are the semantic
+  references throughout.
 - The catalog is the dax.guide aggregation/data-type/statement/operator surface plus every
   function category in `crates/dax/src/functions/`; see `docs/parity-checklist.md` for the
   GridCraft command surface.

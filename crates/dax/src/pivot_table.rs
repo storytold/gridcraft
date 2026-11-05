@@ -33,8 +33,9 @@
 //! * A source row's related value is the related row's column, found through the storage's
 //!   [`RelationshipIndex`](crate::storage::RelationshipIndex) key indexes (or through the model
 //!   rows when the model is not faithfully materialized). A key with no related row groups as
-//!   BLANK. A key duplicated on the one side resolves to the **lowest row id**, so a source row
-//!   still reaches exactly one related row and its measure value is counted once.
+//!   BLANK. A key duplicated on the one side resolves to the **lowest row id** for the group
+//!   label; the cell filter still passes every related key, so the measure follows the key set
+//!   (see the duplicate-key note below).
 //! * The path must be unique. Two active relationships between the same pair of tables, or a
 //!   second chain to the same table (what a cycle in the relationship graph offers), are rejected
 //!   ([`PivotTableError::AmbiguousFieldPath`]) because a pivot field names a table and a column,
@@ -1002,8 +1003,9 @@ fn storage_mirrors_model(storage: &ModelStorage, model: &DataModel) -> bool {
 /// relationship hops through the substrate's key indexes.
 ///
 /// A hop whose key has no related row (an orphan key) yields BLANK, like `RELATED`. A key
-/// duplicated on the one side resolves to the lowest row id, so a source row reaches at most one
-/// related row and its measure value is never counted twice.
+/// duplicated on the one side resolves to the lowest row id for the label only: the cell's filter
+/// passes every related key, so a duplicated one-side key can put a source row in more than one
+/// leaf cell (`integrity` reports it as a duplicate key).
 fn column_field_value(storage: &ModelStorage, table: usize, row: usize, field: &BoundField) -> Scalar {
     let mut current_table = table;
     let mut current_row = row;
