@@ -243,16 +243,10 @@ fn basis_days(start: f64, end: f64, basis: i64) -> f64 {
         return -basis_days(end, start, basis);
     }
     match basis {
-        0 | 4 => {
-            let (year1, month1, day1) = support::date_parts(start);
-            let (year2, month2, day2) = support::date_parts(end);
-            let mut days = ((year2 - year1) * 12 + (month2 - month1)) * 30 + (day2 - day1);
-            // Excel's 30/360 US counts a February start in the same year as a 30-day month.
-            if basis == 0 && month1 == 2 && month2 != 2 && year1 == year2 {
-                days -= if support::is_leap_year(year1) { 1 } else { 2 };
-            }
-            days as f64
-        }
+        // The 30/360 bases share the day-count numerator with YEARFRAC: a start day 31 rolls back
+        // to 30 (and an end day 31 rolls back too when the start is day 30), and a February start
+        // only moves when it is the last day of February, so a non-terminal February keeps its day.
+        0 | 4 => year_frac_days(start, end, basis),
         _ => end - start,
     }
 }

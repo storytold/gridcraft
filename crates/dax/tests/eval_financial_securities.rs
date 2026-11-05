@@ -142,6 +142,15 @@ fn accrint_sums_quasi_coupon_periods() {
 }
 
 #[test]
+fn basis_days_uses_the_30_360_adjustments() {
+    // A day-31 start rolls back to 30, so Jan 31 → Feb 15 counts 15 days, not 14.
+    close(value("ACCRINTM(DATE(2022,1,31), DATE(2022,2,15), 1, 360, 0)"), 15.0, 1e-12);
+    close(value("ACCRINTM(DATE(2022,1,31), DATE(2022,2,15), 1, 360, 4)"), 15.0, 1e-12);
+    // The US February rule only moves the last day of February: Feb 10 → Apr 1 counts 51 days.
+    close(value("ACCRINTM(DATE(2022,2,10), DATE(2022,4,1), 1, 360, 0)"), 51.0, 1e-12);
+}
+
+#[test]
 fn accrintm_uses_the_year_fraction_to_maturity() {
     // 75 actual days over 365 on a 1000 par at 10%.
     close(value("ACCRINTM(DATE(2008,4,1), DATE(2008,6,15), 0.1, 1000, 3)"), 20.5479452054795, 1e-12);
