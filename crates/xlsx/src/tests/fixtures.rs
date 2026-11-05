@@ -809,6 +809,9 @@ fn automatic_row_heights_are_compared_with_the_sheets_own_default() {
     let near = r#"<sheetFormatPr defaultRowHeight="12"/><sheetData><row r="1" ht="12.25"><c r="A1"><v>1</v></c></row></sheetData>"#;
     let (near_wb, _) = read_xlsx(&minimal(near, &[], "", "")).unwrap();
     assert!((near_wb.sheet(0).unwrap().row_height(0) * 0.75 - 12.25).abs() < 0.01);
+    let tiny = r#"<sheetFormatPr defaultRowHeight="12"/><sheetData><row r="1" ht="12.01"><c r="A1"><v>1</v></c></row></sheetData>"#;
+    let (tiny_wb, _) = read_xlsx(&minimal(tiny, &[], "", "")).unwrap();
+    assert!(tiny_wb.sheet(0).unwrap().rows.get(&0).is_some_and(|i| i.size.is_some()), "any other height is the file's own");
     assert!(s.rows.get(&4).is_some_and(|i| i.custom && i.size.is_some()), "a custom height stays even at the default");
 
     // With the standard default, 15 is the noise.

@@ -148,7 +148,7 @@ fn drop_default_row_heights(root: &El, sheet: &mut Sheet) {
     }
     let default = sheet.default_row_height;
     sheet.rows.retain(|_, info| {
-        if !info.custom && info.size.is_some_and(|size| (size - default).abs() < 0.001) {
+        if !info.custom && info.size.is_some_and(|size| size.to_bits() == default.to_bits()) {
             info.size = None;
         }
         *info != LineInfo::default()
