@@ -385,7 +385,8 @@ mod autosave_gate_tests {
         assert!(app.autosave_job.is_some(), "the frame hands the save to the worker");
         app.finish_pending_autosave();
         assert!(!app.session.active().unwrap().is_dirty(), "the change was not saved");
-        assert!(path.exists());
+        let (saved, _) = gridcraft_engine::io::open_bytes("book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved.sheet(0).unwrap().value(cell(0, 0)), gridcraft_engine::core::Value::text("unsaved change"));
         assert_eq!(app.perf.autosaves, 1);
         assert!(app.perf.autosave_ms >= 0.0);
         std::fs::remove_dir_all(dir).unwrap();
