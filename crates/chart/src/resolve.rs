@@ -122,6 +122,19 @@ fn ref_format(wb: &Workbook, sheet: usize, formula: &str) -> String {
         .unwrap_or_else(|| "General".into())
 }
 
+/// Each cell's number format, for data labels: empty when all are `first`, or not a reference.
+fn point_formats(wb: &Workbook, sheet: usize, formula: &str, first: &str) -> Vec<String> {
+    let Some((sh, r)) = parse_ref(wb, sheet, formula) else { return Vec::new() };
+    let Some(s) = wb.sheet(sh) else { return Vec::new() };
+    let formats: Vec<String> = r.iter().take(MAX_POINTS).map(|c| wb.styles.get(s.style_id(c)).num_fmt.0.to_string()).collect();
+    if formats.iter().all(|f| f == first) { Vec::new() } else { formats }
+}
+
+#[cfg(test)]
+pub(crate) fn point_formats_for_tests(wb: &Workbook, sheet: usize, formula: &str) -> Vec<String> {
+    point_formats(wb, sheet, formula, &ref_format(wb, sheet, formula))
+}
+
 fn value_text(v: &Value) -> String {
     match v {
         Value::Empty => String::new(),
@@ -269,6 +282,7 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
             secondary: s.secondary,
             smooth: s.smooth,
             trendlines,
+            point_formats: point_formats(wb, sheet, &s.values, &ref_format(wb, sheet, &s.values)),
             number_format: ref_format(wb, sheet, &s.values),
         });
     }

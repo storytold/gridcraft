@@ -243,6 +243,9 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
             }
             let sc = scale_of(i);
             let fmt = Fmt::new(&s.number_format);
+            let point_fmts: Vec<Fmt> = s.point_formats.iter().map(|f| Fmt::new(f)).collect();
+            // A data label takes its own cell's format; the axis keeps the first cell's.
+            let fmt_of = |j: usize| point_fmts.get(j).unwrap_or(&fmt);
             let row = match spans.get(i) {
                 Some(r) => r,
                 None => continue,
@@ -261,7 +264,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                             && sp.is_some()
                             && let Some(v) = s.values.get(j).copied().flatten()
                         {
-                            area_labels.push((c, vpos(t, &sc) - 5.0, fmt.format(v, None)));
+                            area_labels.push((c, vpos(t, &sc) - 5.0, fmt_of(j).format(v, None)));
                         }
                     }
                     if top.len() == 1 {
@@ -292,7 +295,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                             ctx.rect(x, lo, bw, len, s.color, None);
                         }
                         if labels_on && let Some(v) = s.values.get(j).copied().flatten() {
-                            let t = fmt.format(v, None);
+                            let t = fmt_of(j).format(v, None);
                             let stacked = fam != Fam::Col;
                             let mid = (pb + pt) / 2.0;
                             if horizontal {
@@ -327,7 +330,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                     if labels_on {
                         for (j, p) in pts.iter().enumerate() {
                             if let (Some(p), Some(v)) = (p, s.values.get(j).copied().flatten()) {
-                                ctx.text(p[0], p[1] - 5.0, &fmt.format(v, None), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
+                                ctx.text(p[0], p[1] - 5.0, &fmt_of(j).format(v, None), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
                             }
                         }
                     }
