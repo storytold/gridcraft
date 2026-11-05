@@ -30,6 +30,7 @@ mod sheet_name_quoting;
 mod sparse_clear_invalidation;
 mod stored_list_shape;
 mod structural_edit_rewrite;
+mod symbol_at_caret;
 mod table_resize_overlap;
 mod table_total_row_last_row;
 mod trace_error;
