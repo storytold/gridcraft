@@ -135,15 +135,17 @@ fn in_cell_height(lines: usize) -> f32 {
     h.state_mut().begin_edit(Some(text.clone()), false);
     settle(&mut h);
     assert_eq!(h.state().editor.as_ref().unwrap().text, text, "the text is kept whole");
-    let rect: Rect = h.ctx.data(|d| d.get_temp(egui::Id::new("gridcraft.cell_editor.rect"))).expect("the in-cell editor painted");
+    let rect: Rect = h.ctx.data(|d| d.get_temp(egui::Id::unique("gridcraft.cell_editor.rect"))).expect("the in-cell editor painted");
     rect.height()
 }
 
 #[test]
-fn in_cell_editor_stops_growing_at_five_lines() {
+fn in_cell_editor_grows_with_every_line() {
+    // The in-cell editor shows every line and never scrolls; the formula bar is the one that
+    // stops at five lines.
     let (four, five, nine) = (in_cell_height(4), in_cell_height(5), in_cell_height(9));
-    assert!(five > four + 1.0, "grows up to five lines ({four} then {five})");
-    assert!((nine - five).abs() < 0.5, "nine lines are as tall as five ({five} vs {nine})");
+    assert!(five > four + 1.0, "grows from four to five lines ({four} then {five})");
+    assert!(nine > five + 1.0, "keeps growing past five lines ({five} then {nine})");
 }
 
 #[test]
@@ -162,7 +164,7 @@ fn code_editor_indents_and_keeps_indentation() {
                 ui.ctx().set_fonts(fonts);
                 return;
             }
-            let id = egui::Id::new("code");
+            let id = egui::Id::unique("code");
             if !s.focused {
                 ui.memory_mut(|m| m.request_focus(id));
                 s.focused = true;

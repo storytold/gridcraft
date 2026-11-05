@@ -136,11 +136,11 @@ fn collapsed_group_opens_popup_and_runs_its_command() {
     assert!(gridcraft_ui_egui::ribbon::collapsed_names(&h.ctx, "Home").iter().any(|n| n == "Font"), "Font is collapsed at 640 px");
     h.run_steps(1);
     let launcher = h.get_by_label("Font"); // accessible name from launcher_button
-    let hidden = h.query_by_label("Bold (⌘B)").is_none(); // toggle_button's accessible name
+    let hidden = h.query_by_label("Bold").is_none(); // toggle_button's accessible name
     assert!(hidden, "body hidden while collapsed");
     launcher.click();
     h.run_steps(2);
-    h.get_by_label("Bold (⌘B)").click(); // toggle_button paints its icon; queried by its accessible name
+    h.get_by_label("Bold").click(); // toggle_button paints its icon; queried by its accessible name
     h.run_steps(2);
     assert!(h.state().session.journal.iter().any(|(id, _)| id == "home.bold"), "control inside the popup runs");
     h.get_by_label("Font").click(); // second click closes; command not duplicated
@@ -158,11 +158,11 @@ fn collapsed_group_dropdown_survives_nested_control_popups() {
     // The Font combo inside the dropdown opens a popup of its own.
     h.get_by_label("Calibri").click();
     h.run_steps(2);
-    assert!(h.query_by_label("Bold (⌘B)").is_some(), "group dropdown still open next to the nested popup");
+    assert!(h.query_by_label("Bold").is_some(), "group dropdown still open next to the nested popup");
     h.get_by_label("Arial").click(); // a row of the nested font list
     h.run_steps(2);
     assert!(h.state().session.journal.iter().any(|(id, _)| id == "home.fontName"), "nested popup row runs its command");
-    assert!(h.query_by_label("Bold (⌘B)").is_some(), "dropdown still open after the nested pick");
+    assert!(h.query_by_label("Bold").is_some(), "dropdown still open after the nested pick");
     // A click on the sheet outside closes the dropdown.
     h.hover_at(egui::pos2(800.0, 400.0));
     for pressed in [true, false] {
@@ -174,13 +174,13 @@ fn collapsed_group_dropdown_survives_nested_control_popups() {
         });
     }
     h.run_steps(1);
-    assert!(h.query_by_label("Bold (⌘B)").is_none(), "click outside closes the dropdown");
+    assert!(h.query_by_label("Bold").is_none(), "click outside closes the dropdown");
     // Escape closes a freshly opened dropdown.
     h.get_by_label("Font").click();
     h.run_steps(2);
     h.key_press(egui::Key::Escape);
     h.run_steps(1);
-    assert!(h.query_by_label("Bold (⌘B)").is_none(), "Escape closes the dropdown");
+    assert!(h.query_by_label("Bold").is_none(), "Escape closes the dropdown");
 }
 
 #[test]
@@ -192,16 +192,16 @@ fn tab_switch_without_a_click_does_not_reopen_a_dropdown() {
     assert!(gridcraft_ui_egui::ribbon::collapsed_names(&h.ctx, "Home").iter().any(|n| n == "Font"), "Font is collapsed at 640 px");
     h.get_by_label("Font").click();
     h.run_steps(2);
-    assert!(h.query_by_label("Bold (⌘B)").is_some(), "dropdown open on Home");
+    assert!(h.query_by_label("Bold").is_some(), "dropdown open on Home");
     // The control channel's path: `ribbon_tab` set directly, no click in the frame.
     h.state_mut().ui.ribbon_tab = "Insert".into();
     h.run_steps(2);
     h.state_mut().ui.ribbon_tab = "Home".into();
     h.run_steps(2);
-    assert!(h.query_by_label("Bold (⌘B)").is_none(), "returning to Home must not re-open the dropdown");
+    assert!(h.query_by_label("Bold").is_none(), "returning to Home must not re-open the dropdown");
     h.get_by_label("Font").click();
     h.run_steps(2);
-    assert!(h.query_by_label("Bold (⌘B)").is_some(), "clicking the launcher re-opens it");
+    assert!(h.query_by_label("Bold").is_some(), "clicking the launcher re-opens it");
 }
 
 #[test]
@@ -210,10 +210,10 @@ fn formulas_autosum_runs_on_the_icon_and_opens_its_menu_on_the_label() {
     h.get_by_label("AutoSum").click();
     h.run_steps(2);
     assert!(h.state().session.journal.iter().any(|(id, _)| id == "formulas.autoSum"), "the icon runs AutoSum");
-    assert!(h.query_by_label("AVERAGE").is_none());
+    assert!(h.query_by_label("Average").is_none());
     h.get_by_label("AutoSum options").click();
     h.run_steps(2);
-    h.get_by_label("AVERAGE").click();
+    h.get_by_label("Average").click();
     h.run_steps(2);
     let last = h.state().session.journal.iter().rev().find(|(id, _)| id == "formulas.autoSum").map(|(_, p)| p.clone());
     assert_eq!(last.and_then(|p| p.get("function").and_then(|f| f.as_str().map(str::to_string))).as_deref(), Some("AVERAGE"));

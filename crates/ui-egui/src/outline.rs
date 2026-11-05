@@ -1,7 +1,8 @@
 //! The outline band of grouped rows and columns (Data ▸ Group), as in Excel: a strip left of the
 //! row headers and one above the column headers, one lane per outline level, with a bracket per
-//! expanded group, a − / + button on its summary line (below / right of the detail) and the level
-//! buttons 1…n+1 in the corner. The bands exist only while the sheet has an outline.
+//! expanded group, a − / + button on its summary line (below / right of the detail, or above /
+//! left of it when the sheet's outline settings say so) and the level buttons 1…n+1 in the
+//! corner. The bands exist only while the sheet has an outline.
 //!
 //! Layout and hit-testing are pure functions of [`Geo`] in logical (left-to-right) coordinates,
 //! so right-to-left sheets get them mirrored with the rest of the grid. Clicks run commands
@@ -30,6 +31,12 @@ pub struct Axis {
 impl Axis {
     pub fn new(lines: &BTreeMap<u32, LineInfo>) -> Axis {
         Axis { levels: outline::max_level(lines), groups: outline::groups(lines) }
+    }
+    /// The outline of a sheet's rows (`rows`) or columns, with its summary lines where the
+    /// sheet's outline settings put them.
+    pub fn of(sh: &Sheet, rows: bool) -> Axis {
+        let lines = if rows { &sh.rows } else { &sh.cols };
+        Axis { levels: outline::max_level(lines), groups: outline::groups_with(lines, outline::summary_before(sh, rows)) }
     }
 }
 
@@ -158,6 +165,35 @@ impl Dir<'_> {
 }
 
 /// The band's buttons and brackets for this frame.
+/// The bracket for one group's detail, and its tick, on the lane `across`; `button` is the group's
+/// summary button when it is on screen.
+fn group_bracket(out: &mut Layout, dir: &Dir, grp: &OutlineGroup, button: Option<f32>, across: f32, side: f32) {
+    let first = dir.first_visible(grp.start, grp.end);
+    let Some((first_line, (a0, _))) = first else { return };
+    if grp.summary_before {
+        // From the button down (or across) to the last detail line, with the tick there.
+        let a0 = button.map_or(a0, |mid| mid + side / 2.0);
+        let end = dir.start(grp.end) + dir.size(grp.end);
+        let a1 = end.min(dir.hi);
+        if a1 <= a0 {
+            return;
+        }
+        let tick = (end <= dir.hi).then(|| [dir.point(a1 - 0.5, across), dir.point(a1 - 0.5, across + side / 2.0)]);
+        out.brackets.push(Bracket { line: [dir.point(a0, across), dir.point(a1 - 0.5, across)], tick });
+        return;
+    }
+    let a1 = match button {
+        Some(mid) => mid - side / 2.0,
+        None => dir.start(grp.summary()).min(dir.hi),
+    };
+    if a1 <= a0 {
+        return;
+    }
+    let start_shown = first_line == grp.start && (a0 - dir.start(grp.start)).abs() < 0.5;
+    let tick = start_shown.then(|| [dir.point(a0 + 0.5, across), dir.point(a0 + 0.5, across + side / 2.0)]);
+    out.brackets.push(Bracket { line: [dir.point(a0 + 0.5, across), dir.point(a1, across)], tick });
+}
+
 pub fn layout(geo: &Geo, sh: &Sheet) -> Layout {
     let mut out = Layout::default();
     let zoom = (geo.z / DISPLAY_SCALE).max(0.1);
@@ -197,7 +233,7 @@ pub fn layout(geo: &Geo, sh: &Sheet) -> Layout {
         for grp in &axis.groups {
             let across = dir.lane(step, grp.level);
             // The button on the summary line, if that line is on screen.
-            let button = dir.visible(grp.summary()).map(|(a0, a1)| (a0 + a1) / 2.0).filter(|_| grp.summary() > grp.end);
+            let button = dir.visible(grp.summary()).map(|(a0, a1)| (a0 + a1) / 2.0).filter(|_| grp.has_summary());
             if let Some(mid) = button {
                 out.buttons.push(Button { rect: dir.rect(mid, across, side), action: Action::Toggle { rows: dir.rows, group: *grp } });
             }
@@ -205,18 +241,7 @@ pub fn layout(geo: &Geo, sh: &Sheet) -> Layout {
                 continue;
             }
             // The bracket, over the part of the detail that is on screen.
-            let first = dir.first_visible(grp.start, grp.end);
-            let Some((first_line, (a0, _))) = first else { continue };
-            let a1 = match button {
-                Some(mid) => mid - side / 2.0,
-                None => dir.start(grp.summary()).min(dir.hi),
-            };
-            if a1 <= a0 {
-                continue;
-            }
-            let start_shown = first_line == grp.start && (a0 - dir.start(grp.start)).abs() < 0.5;
-            let tick = start_shown.then(|| [dir.point(a0 + 0.5, across), dir.point(a0 + 0.5, across + side / 2.0)]);
-            out.brackets.push(Bracket { line: [dir.point(a0 + 0.5, across), dir.point(a1, across)], tick });
+            group_bracket(&mut out, dir, grp, button, across, side);
         }
     }
     out
@@ -224,6 +249,10 @@ pub fn layout(geo: &Geo, sh: &Sheet) -> Layout {
 
 /// The button under `p` (logical coordinates), if any.
 pub fn hit(geo: &Geo, sh: &Sheet, p: Pos2) -> Option<Action> {
+    // Hidden symbols (or no outline) leave empty bands: a click on their edge is a cell click.
+    if geo.band_w <= 0.0 && geo.band_h <= 0.0 {
+        return None;
+    }
     let (rows, cols) = bands(geo);
     if !rows.contains(p) && !cols.contains(p) {
         return None;
@@ -261,7 +290,8 @@ pub fn paint(p: &Painter, geo: &Geo, sh: &Sheet, t: &Tokens) {
             pc.line_segment(tick, ink);
         }
     }
-    let font = theme::ui_font((10.0 * (geo.z / DISPLAY_SCALE).max(0.75)).min(14.0));
+    // The outline levels grow with the zoom like the headings beside them.
+    let font = theme::ui_font((10.0 * (geo.z / DISPLAY_SCALE)).max(7.5));
     for b in &l.buttons {
         let clip = match b.action {
             Action::Toggle { rows: true, .. } => row_clip,
@@ -374,6 +404,41 @@ mod tests {
         assert!((b.line[0].y - g.y(&sh, 4)).abs() < 1.0 && (b.line[1].y - outer.rect.top()).abs() < 0.01);
         assert!(b.tick.is_some());
         assert_eq!(outer.action.label(), "\u{2212}");
+    }
+
+    #[test]
+    fn summaries_above_and_left_take_the_toggles_and_the_bracket_ticks_move_to_the_end() {
+        let mut sh = sheet();
+        sh.summary_below = false;
+        sh.summary_right = false;
+        let g = geo(&sh);
+        let l = layout(&g, &sh);
+        let toggle = |rows: bool, level: u8| {
+            l.buttons.iter().find(|b| matches!(b.action, Action::Toggle { rows: r, group } if r == rows && group.level == level)).unwrap()
+        };
+        // Rows 5:8: the outer − is on row 4 (index 3), the inner one (rows 6:7) on row 5.
+        let outer = toggle(true, 1);
+        assert!(g.cell_rect(&sh, CellRef::new(3, 0)).y_range().contains(outer.rect.center().y));
+        assert!(g.cell_rect(&sh, CellRef::new(4, 0)).y_range().contains(toggle(true, 2).rect.center().y));
+        // Column group C:E: its − is above column B.
+        let col = toggle(false, 1);
+        assert!(g.cell_rect(&sh, CellRef::new(0, 1)).x_range().contains(col.rect.center().x));
+        // The bracket runs from the button to the end of row 8, with the tick there.
+        assert_eq!(l.brackets.len(), 3);
+        let b = l.brackets.iter().find(|b| (b.line[0].x - outer.rect.center().x).abs() < 0.01).unwrap();
+        let row8 = g.cell_rect(&sh, CellRef::new(7, 0));
+        assert!((b.line[0].y - outer.rect.bottom()).abs() < 0.01 && (b.line[1].y - (row8.bottom() - 0.5)).abs() < 1.0);
+        assert!(b.tick.is_some_and(|t| (t[0].y - b.line[1].y).abs() < 0.01 && t[1].x > t[0].x));
+        // A group on the first row has no row above it: no toggle, still a bracket.
+        let mut sh = Sheet::new("S");
+        sh.summary_below = false;
+        for r in 0..=2 {
+            sh.rows.entry(r).or_default().outline = 1;
+        }
+        let g = geo(&sh);
+        let l = layout(&g, &sh);
+        assert!(!l.buttons.iter().any(|b| matches!(b.action, Action::Toggle { .. })));
+        assert_eq!(l.brackets.len(), 1);
     }
 
     #[test]
