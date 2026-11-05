@@ -62,14 +62,24 @@ pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
         },
         // Insert works on one area at a time, so several areas still go through the dialog.
         // The numpad's + arrives as Plus without Shift; Excel takes Ctrl with it as well.
-        Key::Plus | Key::Equals if shift || key == Key::Plus => match whole_lines(app).filter(|_| single_area(app)) {
-            Some(true) => Some(("home.insertRows", json!({}))),
-            Some(false) => Some(("home.insertColumns", json!({}))),
-            None => {
-                app.open_dialog("insertCells", json!({}));
-                None
+        Key::Plus | Key::Equals if shift || key == Key::Plus => {
+            let clipboard_insert = crate::grid::insert_copied_item(app).filter(|_| single_area(app));
+            match clipboard_insert {
+                Some((_, "ui:insertPaste")) => {
+                    app.open_dialog("insertPaste", json!({}));
+                    None
+                }
+                Some((_, id)) => Some((id, json!({}))),
+                None => match whole_lines(app).filter(|_| single_area(app)) {
+                    Some(true) => Some(("home.insertRows", json!({}))),
+                    Some(false) => Some(("home.insertColumns", json!({}))),
+                    None => {
+                        app.open_dialog("insertCells", json!({}));
+                        None
+                    }
+                },
             }
-        },
+        }
         Key::Semicolon => {
             // Insert today's date.
             let text = app
