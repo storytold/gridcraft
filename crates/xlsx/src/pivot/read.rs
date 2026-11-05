@@ -43,6 +43,12 @@ impl FieldIn {
             _ => &self.items,
         }
     }
+
+    /// Whether the report can use the table's item references: not for a grouping we don't model
+    /// (the field reads ungrouped, and its `<item x>` name group items it no longer has).
+    fn items_usable(&self) -> bool {
+        self.group.as_ref().is_none_or(|g| g.kind.is_some())
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -296,7 +302,10 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
             }
             let i = i as usize;
             let Some((name, date_group, number_group)) = field_ref(cx, cache, i) else { continue };
-            let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
+            // Hidden and collapsed items of an ungrouped field read from its group items would name
+            // items the report doesn't have (and hide everything): they are dropped.
+            let usable = cache.fields.get(i).is_some_and(FieldIn::items_usable);
+            let labels = if usable { cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default() } else { vec![] };
             let mut f = PivotField { source_col: name.clone(), date_group, number_group, sort: PivotSort::None, collapsed_items: vec![] };
             if let Some(e) = pf(i) {
                 f.sort = match e.attr("sortType") {
@@ -307,7 +316,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 let items = items_of(e);
                 let lab = |it: &El| it.attr_u32("x").and_then(|k| labels.get(k as usize)).cloned();
                 f.collapsed_items = items.iter().filter(|it| !it.flag("sd", true)).filter_map(|it| lab(it)).collect();
-                if items.iter().any(|it| it.flag("h", false)) {
+                if usable && items.iter().any(|it| it.flag("h", false)) {
                     let shown: Vec<String> = items.iter().filter(|it| !it.flag("h", false)).filter_map(|it| lab(it)).collect();
                     if !filters.iter().any(|ff| same(&ff.source_col, &name)) {
                         filters.push(PivotFilter { source_col: name.clone(), selected: Some(shown) });
@@ -323,7 +332,9 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
         let Some(i) = p.attr_i64("fld").filter(|i| *i >= 0).map(|i| i as usize) else { continue };
         let Some((name, _, _)) = field_ref(cx, cache, i) else { continue };
         let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
-        let selected = if let Some(k) = p.attr_u32("item") {
+        let selected = if !cache.fields.get(i).is_some_and(FieldIn::items_usable) {
+            None
+        } else if let Some(k) = p.attr_u32("item") {
             labels.get(k as usize).map(|l| vec![l.clone()])
         } else {
             pf(i).and_then(|e| {

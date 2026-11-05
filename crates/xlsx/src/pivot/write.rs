@@ -71,6 +71,8 @@ struct Group {
     end: f64,
     /// Group item captions, including the `<start` and `>end` items.
     items: Vec<String>,
+    /// A last, blank item (`<m/>`, "(blank)") for the empty cells of a number-grouped field.
+    blank: bool,
 }
 
 struct CField {
@@ -96,7 +98,13 @@ impl CField {
     /// Item captions the PivotTable's `<item x>` indices refer to.
     fn item_labels(&self) -> Vec<String> {
         match &self.group {
-            Some(g) => g.items.clone(),
+            Some(g) => {
+                let mut items = g.items.clone();
+                if g.blank {
+                    items.push(label(&Value::Empty));
+                }
+                items
+            }
             None => self.items.iter().map(label).collect(),
         }
     }
@@ -344,6 +352,7 @@ fn group_cache_fields(fields: &mut Vec<CField>, axis: &[&PivotField], date_syste
             start,
             end,
             items: group_items(date_system, by, start, end),
+            blank: false,
         };
         let mut prev = *b;
         for (k, by) in list.iter().enumerate() {
@@ -383,6 +392,8 @@ fn group_cache_fields(fields: &mut Vec<CField>, axis: &[&PivotField], date_syste
         let Some(numbers) = pf.number_group else { continue };
         let Some(b) = find(fields, &pf.source_col) else { continue };
         let numeric = fields.get(b).is_some_and(|f| f.stats.number && !f.stats.text && !f.stats.boolean && !f.stats.error);
+        // The engine shows empty cells as a "(blank)" item: the groups need it too.
+        let blank_cells = fields.get(b).is_some_and(|f| f.stats.blank);
         if let Some(f) = fields.get_mut(b).filter(|f| numeric && f.group.is_none()) {
             f.group = Some(Group {
                 kind: GroupKind::Numbers { interval: numbers.by() },
@@ -391,6 +402,7 @@ fn group_cache_fields(fields: &mut Vec<CField>, axis: &[&PivotField], date_syste
                 start: numbers.start(),
                 end: numbers.end(),
                 items: numbers.labels(),
+                blank: blank_cells,
             });
         }
     }
@@ -668,9 +680,12 @@ fn cache_xml(c: &Cache, records_rid: Option<&str>, sys: DateSystem) -> String {
                     );
                 }
             }
-            let _ = write!(s, "/><groupItems count=\"{}\">", g.items.len());
+            let _ = write!(s, "/><groupItems count=\"{}\">", g.items.len() + usize::from(g.blank));
             for it in &g.items {
                 let _ = write!(s, "<s v=\"{}\"/>", esc_attr(it));
+            }
+            if g.blank {
+                s.push_str("<m/>");
             }
             s.push_str("</groupItems></fieldGroup>");
         }

@@ -840,6 +840,8 @@ fn number_ranges_are_read_and_bad_ones_warned_about() {
     ] {
         let (pt, warnings) = read(bad);
         assert_eq!(pt.rows[0].number_group, None, "{bad}");
+        // #3395 review: the hidden item named a range the ungrouped field doesn't have.
+        assert!(pt.filters.is_empty(), "{bad}: {:?}", pt.filters);
         assert!(warnings.iter().any(|w| w.contains("grouping")), "{bad}: {warnings:?}");
     }
 }

@@ -239,6 +239,21 @@ fn number_ranges_survive_an_xlsx_round_trip_with_their_hidden_items() {
 }
 
 #[test]
+fn a_blank_item_survives_an_xlsx_round_trip_with_the_ranges() {
+    // #3395 review: the saved groups had no "(blank)" item, so a selection of it was lost.
+    let mut s = session();
+    s.execute("cell.set", json!({"cell": "A3", "input": ""})).unwrap();
+    pivot(&mut s, &["Age"], &[]);
+    group(&mut s, json!({"field": "Age", "by": "numbers", "start": 20, "end": 79, "interval": 30})).unwrap();
+    s.execute("pivot.filter", json!({"field": "Age", "selected": ["(blank)", "20-49"]})).unwrap();
+    assert_eq!(labels(&s), ["20-49", "(blank)", "Grand Total"]);
+    let before = grid(&s);
+    let mut back = reopen(&mut s);
+    assert_eq!(grid(&back), before);
+    assert_eq!(back.execute("pivot.fields", json!({})).unwrap()["filters"][0]["selected"], json!(["20-49", "(blank)"]));
+}
+
+#[test]
 fn time_parts_survive_an_xlsx_round_trip_with_their_hidden_items() {
     for by in ["hours", "minutes", "seconds"] {
         let mut s = session();
