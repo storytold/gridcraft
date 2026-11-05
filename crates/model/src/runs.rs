@@ -46,6 +46,9 @@ impl RunFont {
             strike: self.strike.unwrap_or(base.strike),
             color: self.color.unwrap_or(base.color),
             vert: self.vert.unwrap_or(base.vert),
+            charset: base.charset,
+            family: base.family,
+            minor: base.minor,
         }
     }
 }

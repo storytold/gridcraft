@@ -21,10 +21,18 @@ pub enum CellError {
     Calc,
     /// Circular reference that could not be resolved (shown as 0 by Excel; we keep it explicit).
     Circ,
+    /// A Python cell's code raised an error, or Python stopped.
+    Python,
+    /// A Python cell is waiting to run.
+    Busy,
+    /// A Python cell ran longer than the time limit.
+    Timeout,
+    /// Python can't run here: the workbook's content isn't enabled, or this build has no Python.
+    Blocked,
 }
 
 impl CellError {
-    pub const ALL: [CellError; 10] = [
+    pub const ALL: [CellError; 14] = [
         CellError::Null,
         CellError::Div0,
         CellError::Value,
@@ -35,6 +43,10 @@ impl CellError {
         CellError::GettingData,
         CellError::Spill,
         CellError::Calc,
+        CellError::Python,
+        CellError::Busy,
+        CellError::Timeout,
+        CellError::Blocked,
     ];
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -49,9 +61,16 @@ impl CellError {
             CellError::Spill => "#SPILL!",
             CellError::Calc => "#CALC!",
             CellError::Circ => "#CIRC!",
+            CellError::Python => "#PYTHON!",
+            CellError::Busy => "#BUSY!",
+            CellError::Timeout => "#TIMEOUT!",
+            CellError::Blocked => "#BLOCKED!",
         }
     }
-    /// `ERROR.TYPE` number.
+    /// `ERROR.TYPE` number. Microsoft documents 1 to 8; 9 (#SPILL!), 11 (#BLOCKED!) and 14 (#CALC!)
+    /// are the numbers Excel returns. Microsoft documents no number for #PYTHON!, #BUSY! or
+    /// #TIMEOUT!: 19, 20 and 21 are GridCraft's own choice, after the numbers Excel is known to use,
+    /// and may change if Excel's numbers become known.
     pub fn code(&self) -> u32 {
         match self {
             CellError::Null => 1,
@@ -65,6 +84,10 @@ impl CellError {
             CellError::Spill => 9,
             CellError::Calc => 14,
             CellError::Circ => 15,
+            CellError::Blocked => 11,
+            CellError::Python => 19,
+            CellError::Busy => 20,
+            CellError::Timeout => 21,
         }
     }
     pub fn parse(s: &str) -> Option<CellError> {
@@ -224,13 +247,17 @@ impl Value {
     /// Coercion to a number as arithmetic does it: empty = 0, TRUE = 1, numeric text parses
     /// (including dates, times, percentages and currency), other text = `#VALUE!`.
     pub fn to_number(&self) -> Result<f64, CellError> {
+        self.to_number_in(crate::DateSystem::D1900)
+    }
+    /// [`Value::to_number`] with date text read in the given workbook date system.
+    pub fn to_number_in(&self, sys: crate::DateSystem) -> Result<f64, CellError> {
         match self {
             Value::Empty => Ok(0.0),
             Value::Number(n) => Ok(*n),
             Value::Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
-            Value::Text(t) => crate::parse::parse_number_text(t).ok_or(CellError::Value),
+            Value::Text(t) => crate::parse::parse_number_text_in(t, sys).ok_or(CellError::Value),
             Value::Error(e) => Err(*e),
-            Value::Array(a) => a.data.first().map(|v| v.to_number()).unwrap_or(Ok(0.0)),
+            Value::Array(a) => a.data.first().map(|v| v.to_number_in(sys)).unwrap_or(Ok(0.0)),
         }
     }
     /// Coercion to text as `&` does it.
@@ -241,7 +268,7 @@ impl Value {
             Value::Bool(b) => Ok(if *b { "TRUE".into() } else { "FALSE".into() }),
             Value::Text(t) => Ok(t.to_string()),
             Value::Error(e) => Err(*e),
-            Value::Array(a) => a.data.first().map(|v| v.to_text()).unwrap_or(Ok(String::new())),
+            Value::Array(a) => a.data.first().map(Value::to_text).unwrap_or(Ok(String::new())),
         }
     }
     /// Coercion to a boolean as `IF` does it.
@@ -260,7 +287,7 @@ impl Value {
                 }
             }
             Value::Error(e) => Err(*e),
-            Value::Array(a) => a.data.first().map(|v| v.to_bool()).unwrap_or(Ok(false)),
+            Value::Array(a) => a.data.first().map(Value::to_bool).unwrap_or(Ok(false)),
         }
     }
     /// Display text with General formatting (for logs, CSV and tests).
@@ -355,6 +382,10 @@ pub fn number_to_text(n: f64) -> String {
     if !(1e-9..1e15).contains(&a) && a.round() != a || a >= 1e15 {
         return sci_text(n, 15);
     }
+    // A value just below 1e15 can round up to 1e15 at 15 significant digits.
+    if format!("{:.14e}", a).parse::<f64>().is_ok_and(|r| r >= 1e15) {
+        return sci_text(n, 15);
+    }
     // 15 significant digits, trailing zeros trimmed.
     let mag = a.log10().floor() as i32;
     let decimals = (14 - mag).clamp(0, 30) as usize;
@@ -399,6 +430,13 @@ mod tests {
     }
 
     #[test]
+    fn number_text_rounds_up_to_scientific_boundary() {
+        assert_eq!(number_to_text(999999999999999.9), "1E+15");
+        assert_eq!(number_to_text(-999999999999999.9), "-1E+15");
+        assert_eq!(number_to_text(999999999999999.0), "999999999999999");
+    }
+
+    #[test]
     fn coercion() {
         assert_eq!(Value::from("12").to_number(), Ok(12.0));
         assert_eq!(Value::from(" 1,234.5 ").to_number(), Ok(1234.5));
@@ -439,11 +477,12 @@ mod tests {
     }
 
     #[test]
-    fn arrays() {
-        let a = Array::new(2, 2, vec![1.0.into(), 2.0.into(), 3.0.into(), 4.0.into()]).unwrap();
+    fn arrays() -> Result<(), std::io::Error> {
+        let a = Array::new(2, 2, vec![1.0.into(), 2.0.into(), 3.0.into(), 4.0.into()]).ok_or_else(|| std::io::Error::other("valid array"))?;
         assert_eq!(a.transpose().get(0, 1), Some(&Value::Number(3.0)));
         assert!(Array::new(2, 2, vec![]).is_none());
         let row = Array::row(vec![1.0.into(), 2.0.into()]);
         assert_eq!(row.get_broadcast(5, 1), Value::Number(2.0));
+        Ok(())
     }
 }

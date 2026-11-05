@@ -380,7 +380,7 @@ fn spill_override_leaves_no_stale_entry() {
 fn runs_workbook(cells: &[(&str, &str, CellRuns)]) -> Workbook {
     let mut s = Sheet::new("Data");
     for (a, text, runs) in cells {
-        s.cells.set(at(a), Cell { value: Value::text(*text), formula: None, style: StyleId::DEFAULT });
+        s.cells.set(at(a), Cell { value: Value::text(*text), formula: None, style: StyleId::DEFAULT, py: None });
         s.cell_runs.insert(at(a), runs.clone());
     }
     let mut wb = Workbook::new();

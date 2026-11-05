@@ -30,6 +30,11 @@ fn rows_of(a: &Array) -> Vec<Vec<Value>> {
     (0..a.rows).map(|r| (0..a.cols).map(|c| a.get(r, c).cloned().unwrap_or(Value::Empty)).collect()).collect()
 }
 
+/// `#NUM!` when an `h` x `w` output would exceed the function cell budget.
+fn check_output_size(h: usize, w: usize) -> R<()> {
+    if h.saturating_mul(w) > MAX_CELLS { Err(CellError::Num) } else { Ok(()) }
+}
+
 /// Builds an array from rows (all rows padded to the widest with `pad`). Empty → `#CALC!`.
 fn from_rows(rows: Vec<Vec<Value>>, pad: &Value) -> R<Value> {
     let h = rows.len();
@@ -37,9 +42,7 @@ fn from_rows(rows: Vec<Vec<Value>>, pad: &Value) -> R<Value> {
     if h == 0 || w == 0 {
         return Err(CellError::Calc);
     }
-    if h.saturating_mul(w) > MAX_CELLS {
-        return Err(CellError::Num);
-    }
+    check_output_size(h, w)?;
     let mut data = Vec::with_capacity(h * w);
     for mut r in rows {
         r.resize(w, pad.clone());
@@ -83,8 +86,11 @@ fn key_of(v: &Value) -> String {
 fn row_key(r: &[Value]) -> String {
     let mut s = String::new();
     for v in r {
-        s.push_str(&key_of(v));
-        s.push('\u{1}');
+        let k = key_of(v);
+        // Length prefix keeps the encoding unambiguous even when a text value contains the separator.
+        s.push_str(&k.len().to_string());
+        s.push(':');
+        s.push_str(&k);
     }
     s
 }
@@ -321,16 +327,20 @@ fn vstack(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 fn hstack(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let mut arrays = Vec::new();
     let mut h = 0usize;
+    let mut w = 0usize;
     let mut total = 0usize;
     for i in 0..args.len() {
         let a = arr_arg(args, i)?;
         h = h.max(a.rows);
+        w = w.saturating_add(a.cols);
         total = total.saturating_add(a.data.len());
         if total > MAX_CELLS {
             return Err(CellError::Num);
         }
         arrays.push(a);
     }
+    // The padded rectangle can be far larger than the inputs; refuse it before building any rows.
+    check_output_size(h, w)?;
     let mut rows = vec![Vec::new(); h];
     for a in &arrays {
         for (r, row) in rows.iter_mut().enumerate() {
@@ -566,6 +576,23 @@ fn parse_agg(v: &Value) -> R<Agg> {
     }
 }
 
+/// The function argument of GROUPBY/PIVOTBY: a built-in aggregation, or `None` for a LAMBDA (called
+/// through the context).
+fn agg_arg(args: &[Arg], i: usize, c: &dyn Ctx) -> R<Option<Agg>> {
+    if c.has_lambda() { Ok(None) } else { parse_agg(&arg(args, i)?.value).map(Some) }
+}
+
+/// Aggregates one group with `f`, or with the LAMBDA (given the group's values as a column) when `None`.
+fn aggregate_with(f: Option<Agg>, vals: &[&Value], c: &mut dyn Ctx) -> Value {
+    match f {
+        Some(f) => aggregate(f, vals),
+        None => {
+            let col = Value::from(Array::column(vals.iter().map(|v| (*v).clone()).collect()));
+            c.call_lambda(col).unwrap_or(Value::Error(CellError::Calc))
+        }
+    }
+}
+
 fn aggregate(f: Agg, vals: &[&Value]) -> Value {
     if f == Agg::CountA {
         return Value::Number(vals.iter().filter(|v| !matches!(v, Value::Empty)).count() as f64);
@@ -725,14 +752,21 @@ fn opt_arr(args: &[Arg], i: usize) -> R<Option<Array>> {
     if has(args, i) { Ok(Some(arr_arg(args, i)?)) } else { Ok(None) }
 }
 
-fn groupby(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn groupby(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let rf = arr_arg(args, 0)?;
     let vals = arr_arg(args, 1)?;
-    let f = parse_agg(&arg(args, 2)?.value)?;
+    let f = agg_arg(args, 2, c)?;
     let fh = opt_count(args, 3)?;
     let total = opt_count(args, 4)?.unwrap_or(1);
     let sort = opt_count(args, 5)?.unwrap_or(1);
     let filter = opt_arr(args, 6)?;
+    let relationship = opt_count(args, 7)?.unwrap_or(0);
+    // A total depth of N adds subtotals for the first N - 1 key columns, so it can't exceed the
+    // key columns, and a flat table (field_relationship 1) has no levels to subtotal.
+    let depth = total.unsigned_abs() as usize;
+    if depth > rf.cols.max(1) || (depth > 1 && relationship == 1) {
+        return Err(CellError::Value);
+    }
     let p = prepare(&[&rf], &vals, fh, filter.as_ref())?;
     let keys: Vec<Vec<Value>> = p.rows.iter().map(|&r| key_row(&rf, r)).collect();
     let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
@@ -741,11 +775,11 @@ fn groupby(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
     let sort_in_keys = if sort.unsigned_abs() as usize <= rf.cols { sort } else { 0 };
     let mut ordered = distinct_keys(&keys, sort_in_keys);
-    let agg_row = |rows: &[usize]| -> Vec<Value> {
+    let mut agg_row = |rows: &[usize]| -> Vec<Value> {
         (0..vals.cols)
-            .map(|c| {
-                let vs: Vec<&Value> = rows.iter().filter_map(|&r| vals.get(r, c)).collect();
-                aggregate(f, &vs)
+            .map(|col| {
+                let vs: Vec<&Value> = rows.iter().filter_map(|&r| vals.get(r, col)).collect();
+                aggregate_with(f, &vs, c)
             })
             .collect()
     };
@@ -764,13 +798,22 @@ fn groupby(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         lines
             .sort_by(|a, b| cmp_keys(&[a.get(ci).cloned().unwrap_or(Value::Empty)], &[b.get(ci).cloned().unwrap_or(Value::Empty)], &[sort.signum()]));
     }
+    if depth > 1 {
+        let mut rows_of = |keys: &[Value]| groups.get(&row_key(keys)).cloned().unwrap_or_default();
+        // The header and total lines count too, so the whole result is checked before it is built.
+        let around = usize::from(p.show_headers) + usize::from(total != 0);
+        let width = rf.cols.saturating_add(vals.cols);
+        let fits = |n: usize| check_output_size(n.saturating_add(around), width);
+        lines = with_subtotals(lines, depth, rf.cols, total < 0, &fits, &mut rows_of, &mut agg_row)?;
+    }
     let mut out = Vec::new();
     if p.show_headers {
         let mut h = p.field_headers.clone();
         h.extend(p.value_headers.iter().cloned());
         out.push(h);
     }
-    let mut total_line = vec![Value::from("Total")];
+    // With subtotals Excel calls the last line "Grand Total".
+    let mut total_line = vec![Value::from(if depth > 1 { "Grand Total" } else { "Total" })];
     total_line.resize(rf.cols, Value::Empty);
     total_line.extend(agg_row(&p.rows));
     if total < 0 {
@@ -785,11 +828,95 @@ fn groupby(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     from_rows(out, &Value::Empty)
 }
 
-fn pivotby(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+/// GROUPBY's subtotals: `lines` (`key_cols` keys, then values) with the lines of each group of a
+/// key level kept together in the order the groups first appear, and for every key level above
+/// `depth` a line after the group (before it when `before`): the group's keys, blanks for the deeper
+/// keys, and the values aggregated over the group's source rows (`rows_of` maps a line's keys to them).
+///
+/// No recursion, so a deep total depth can't exhaust the stack: each line gets the id of its key
+/// prefix at every level (ids count up as prefixes first appear), a stable sort by those ids brings
+/// each group together, and one walk adds a subtotal where a group starts or ends. `fits` gets the
+/// line count as the groups are found, so an oversized result is refused before it is built.
+fn with_subtotals(
+    mut lines: Vec<Vec<Value>>,
+    depth: usize,
+    key_cols: usize,
+    before: bool,
+    fits: &dyn Fn(usize) -> R<()>,
+    rows_of: &mut dyn FnMut(&[Value]) -> Vec<usize>,
+    agg: &mut dyn FnMut(&[usize]) -> Vec<Value>,
+) -> R<Vec<Vec<Value>>> {
+    let levels = depth.saturating_sub(1);
+    if levels == 0 {
+        return Ok(lines);
+    }
+    let mut ids: HashMap<(usize, String), usize> = HashMap::new();
+    let mut paths: Vec<Vec<usize>> = Vec::with_capacity(lines.len());
+    for line in &lines {
+        let mut parent = usize::MAX;
+        let mut path = Vec::with_capacity(levels);
+        for level in 0..levels {
+            let next = ids.len();
+            parent = *ids.entry((parent, row_key(line.get(level..=level).unwrap_or_default()))).or_insert(next);
+            path.push(parent);
+        }
+        fits(lines.len().saturating_add(ids.len()))?;
+        paths.push(path);
+    }
+    let mut group_rows: Vec<Vec<usize>> = vec![Vec::new(); ids.len()];
+    for (line, path) in lines.iter().zip(&paths) {
+        let rows = rows_of(line.get(..key_cols).unwrap_or_default());
+        for &id in path {
+            if let Some(g) = group_rows.get_mut(id) {
+                g.extend_from_slice(&rows);
+            }
+        }
+    }
+    let mut subtotal = |keys: &[Value], level: usize, id: usize| -> Vec<Value> {
+        let mut line: Vec<Value> = keys.iter().take(level + 1).cloned().collect();
+        line.resize(key_cols, Value::Empty);
+        line.extend(agg(group_rows.get(id).map(Vec::as_slice).unwrap_or_default()));
+        line
+    };
+    let mut order: Vec<usize> = (0..lines.len()).collect();
+    order.sort_by(|&a, &b| paths.get(a).cmp(&paths.get(b)));
+    let mut out = Vec::with_capacity(lines.len().saturating_add(ids.len()));
+    let mut prev: Option<(Vec<Value>, &[usize])> = None;
+    for &i in &order {
+        let (Some(line), Some(path)) = (lines.get_mut(i).map(std::mem::take), paths.get(i)) else { continue };
+        // The first level at which this line leaves the previous line's groups.
+        let split = prev.as_ref().map_or(0, |(_, p)| p.iter().zip(path).take_while(|(a, b)| a == b).count());
+        if before {
+            for (level, &id) in path.iter().enumerate().skip(split) {
+                out.push(subtotal(&line, level, id));
+            }
+        } else if let Some((keys, p)) = &prev {
+            for (level, &id) in p.iter().enumerate().skip(split).rev() {
+                out.push(subtotal(keys, level, id));
+            }
+        }
+        prev = Some((line.get(..key_cols).unwrap_or_default().to_vec(), path));
+        out.push(line);
+    }
+    if !before && let Some((keys, p)) = &prev {
+        for (level, &id) in p.iter().enumerate().rev() {
+            out.push(subtotal(keys, level, id));
+        }
+    }
+    Ok(out)
+}
+
+/// Height and width of a PIVOTBY grid: `header_rows` (one per column field, plus the value-name row) and
+/// `body_rows` (row keys plus the total row), each `lead` row-field cells wide plus `value_cols` cells per column key.
+fn pivot_dims(header_rows: usize, body_rows: usize, col_keys: usize, value_cols: usize, lead: usize) -> (usize, usize) {
+    (header_rows.saturating_add(body_rows), col_keys.saturating_mul(value_cols).saturating_add(lead))
+}
+
+fn pivotby(args: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
     let rf = arr_arg(args, 0)?;
     let cf = arr_arg(args, 1)?;
     let vals = arr_arg(args, 2)?;
-    let f = parse_agg(&arg(args, 3)?.value)?;
+    let f = agg_arg(args, 3, ctx)?;
     let fh = opt_count(args, 4)?;
     let row_total = opt_count(args, 5)?.unwrap_or(1);
     let row_sort = opt_count(args, 6)?.unwrap_or(1);
@@ -801,19 +928,16 @@ fn pivotby(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let ckeys: Vec<Vec<Value>> = p.rows.iter().map(|&r| key_row(&cf, r)).collect();
     let rk = distinct_keys(&rkeys, if row_sort.unsigned_abs() as usize <= rf.cols { row_sort } else { 0 });
     let ck = distinct_keys(&ckeys, if col_sort.unsigned_abs() as usize <= cf.cols { col_sort } else { 0 });
-    if rk.len().saturating_add(2).saturating_mul((ck.len() + 1).saturating_mul(vals.cols).saturating_add(rf.cols)) > MAX_CELLS {
-        return Err(CellError::Num);
-    }
     let mut cell: HashMap<(String, String), Vec<usize>> = HashMap::new();
     for ((r, c), &i) in rkeys.iter().zip(ckeys.iter()).zip(p.rows.iter()) {
         cell.entry((row_key(r), row_key(c))).or_default().push(i);
     }
-    let agg = |rows: &[usize], c: usize| -> Value {
+    let mut agg = |rows: &[usize], c: usize| -> Value {
         if rows.is_empty() {
             return Value::Empty;
         }
         let vs: Vec<&Value> = rows.iter().filter_map(|&r| vals.get(r, c)).collect();
-        aggregate(f, &vs)
+        aggregate_with(f, &vs, ctx)
     };
     let rows_for = |r: Option<&Vec<Value>>, c: Option<&Vec<Value>>| -> Vec<usize> {
         let rkey = r.map(|k| row_key(k));
@@ -832,6 +956,14 @@ fn pivotby(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         cols.insert(0, None);
     }
     let lead = rf.cols;
+    let value_row = vals.cols > 1 || p.show_headers;
+    let header_rows = cf.cols.saturating_add(usize::from(value_row));
+    let body_rows = rk.len().saturating_add(usize::from(row_total != 0));
+    // Reject before building any header or body row: every column-field header row is as wide as the whole grid.
+    let (height, width) = pivot_dims(header_rows, body_rows, cols.len(), vals.cols, lead);
+    if height.saturating_mul(width) > MAX_CELLS {
+        return Err(CellError::Num);
+    }
     let mut out: Vec<Vec<Value>> = Vec::new();
     // Column header rows: one per column field, plus value names when several value columns.
     for level in 0..cf.cols {
@@ -847,7 +979,7 @@ fn pivotby(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         }
         out.push(line);
     }
-    if vals.cols > 1 || p.show_headers {
+    if value_row {
         let mut line: Vec<Value> = if p.show_headers { p.field_headers.iter().take(lead).cloned().collect() } else { vec![Value::Empty; lead] };
         line.resize(lead, Value::Empty);
         for _ in &cols {
@@ -855,7 +987,7 @@ fn pivotby(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         }
         out.push(line);
     }
-    let body_line = |r: Option<&Vec<Value>>| -> Vec<Value> {
+    let mut body_line = |r: Option<&Vec<Value>>| -> Vec<Value> {
         let mut line: Vec<Value> = match r {
             Some(k) => k.clone(),
             None => {
@@ -1085,6 +1217,12 @@ mod tests {
     }
 
     #[test]
+    fn unique_keeps_rows_containing_separator_apart() {
+        let m = arr(vec![vec![tv("a"), tv("b\u{1}tc")], vec![tv("a\u{1}tb"), tv("c")]]);
+        assert_eq!(rows_of(&ev("UNIQUE", vec![av(m)])).len(), 2);
+    }
+
+    #[test]
     fn unique() {
         let v = arr(vec![vec![tv("a")], vec![tv("B")], vec![tv("A")], vec![tv("c")], vec![tv("b")]]);
         assert_eq!(rows_of(&ev("UNIQUE", vec![av(v.clone())])), vec![vec![tv("a")], vec![tv("B")], vec![tv("c")]]);
@@ -1130,6 +1268,17 @@ mod tests {
         assert_eq!(rows_of(&ev("TOCOL", vec![av(m.clone()), n(2.0), b(true)])), vec![vec![nv(1.0)], vec![Value::Empty], vec![nv(4.0)]]);
         is_err(ev("TOCOL", vec![av(m), n(4.0)]), CellError::Value);
         is_err(ev("TOROW", vec![av(arr(vec![vec![Value::Empty]])), n(1.0)]), CellError::Calc);
+    }
+
+    #[test]
+    fn output_size_checked_before_padding() {
+        assert_eq!(super::check_output_size(1_000_001, 10), Err(CellError::Num));
+        assert_eq!(super::check_output_size(usize::MAX, 2), Err(CellError::Num));
+        assert_eq!(super::check_output_size(1_000_000, 10), Ok(()));
+        // A 1M-row column beside a 9-wide row: ~1M input cells, but the padded result would be 10,000,010.
+        let tall = Value::from(gridcraft_core::Array::column(vec![nv(1.0); 1_000_001]));
+        let wide = row(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]);
+        is_err(ev("HSTACK", vec![av(tall), av(wide)]), CellError::Num);
     }
 
     #[test]
@@ -1211,6 +1360,78 @@ mod tests {
     }
 
     #[test]
+    fn groupby_subtotals_past_the_size_limit_are_refused_before_they_are_built() {
+        // One row with 4000 key columns at depth 4000 asks for 3999 subtotal lines, each 4001 cells
+        // wide: 16 million cells, over the limit. It is #NUM! before any subtotal line exists (it
+        // used to build them all, nesting 4000 levels deep, and refuse them afterwards).
+        let keys = av(arr(vec![(0..4000).map(|i| nv(f64::from(i))).collect()]));
+        is_err(ev("GROUPBY", vec![keys, av(col(&[1.0])), t("SUM"), empty(), n(4000.0)]), CellError::Num);
+    }
+
+    #[test]
+    fn groupby_total_depth_adds_subtotals() {
+        // #1456 item 1, values as Excel 365 shows them.
+        let keys2 = || av(arr(vec![vec![tv("a"), tv("x")], vec![tv("a"), tv("y")], vec![tv("b"), tv("x")]]));
+        let vals3 = || av(col(&[1.0, 2.0, 3.0]));
+        let e = Value::Empty;
+        let r = ev("GROUPBY", vec![keys2(), vals3(), t("SUM"), empty(), n(2.0)]);
+        assert_eq!(
+            rows_of(&r),
+            vec![
+                vec![tv("a"), tv("x"), nv(1.0)],
+                vec![tv("a"), tv("y"), nv(2.0)],
+                vec![tv("a"), e.clone(), nv(3.0)],
+                vec![tv("b"), tv("x"), nv(3.0)],
+                vec![tv("b"), e.clone(), nv(3.0)],
+                vec![tv("Grand Total"), e.clone(), nv(6.0)],
+            ]
+        );
+        let r = ev("GROUPBY", vec![keys2(), vals3(), t("SUM"), empty(), n(-2.0)]);
+        assert_eq!(
+            rows_of(&r),
+            vec![
+                vec![tv("Grand Total"), e.clone(), nv(6.0)],
+                vec![tv("a"), e.clone(), nv(3.0)],
+                vec![tv("a"), tv("x"), nv(1.0)],
+                vec![tv("a"), tv("y"), nv(2.0)],
+                vec![tv("b"), e.clone(), nv(3.0)],
+                vec![tv("b"), tv("x"), nv(3.0)],
+            ]
+        );
+        let keys3 = || {
+            av(arr(vec![
+                vec![tv("a"), tv("x"), tv("p")],
+                vec![tv("a"), tv("x"), tv("q")],
+                vec![tv("a"), tv("y"), tv("p")],
+                vec![tv("b"), tv("x"), tv("p")],
+            ]))
+        };
+        let vals4 = || av(col(&[1.0, 2.0, 3.0, 4.0]));
+        let r = ev("GROUPBY", vec![keys3(), vals4(), t("SUM"), empty(), n(3.0)]);
+        let line = |k: [&str; 3], v: f64| k.iter().map(|s| if s.is_empty() { Value::Empty } else { tv(s) }).chain([nv(v)]).collect::<Vec<_>>();
+        assert_eq!(
+            rows_of(&r),
+            vec![
+                line(["a", "x", "p"], 1.0),
+                line(["a", "x", "q"], 2.0),
+                line(["a", "x", ""], 3.0),
+                line(["a", "y", "p"], 3.0),
+                line(["a", "y", ""], 3.0),
+                line(["a", "", ""], 6.0),
+                line(["b", "x", "p"], 4.0),
+                line(["b", "x", ""], 4.0),
+                line(["b", "", ""], 4.0),
+                line(["Grand Total", "", ""], 10.0),
+            ]
+        );
+        // Depth 1 keeps "Total"; a depth past the key columns, or subtotals of a flat table, are errors.
+        let r = ev("GROUPBY", vec![keys2(), vals3(), t("SUM"), empty(), n(1.0)]);
+        assert_eq!(rows_of(&r).last().unwrap(), &vec![tv("Total"), e, nv(6.0)]);
+        is_err(ev("GROUPBY", vec![av(arr(vec![vec![tv("a")], vec![tv("b")]])), av(col(&[1.0, 2.0])), t("SUM"), empty(), n(2.0)]), CellError::Value);
+        is_err(ev("GROUPBY", vec![keys2(), vals3(), t("SUM"), empty(), n(2.0), empty(), empty(), n(1.0)]), CellError::Value);
+    }
+
+    #[test]
     fn pivotby() {
         let (region, item, amt) = sales();
         let r = ev("PIVOTBY", vec![rf(region), rf(item), rf(amt), t("SUM"), n(1.0)]);
@@ -1224,5 +1445,30 @@ mod tests {
                 vec![tv("Total"), nv(31.0), nv(12.0), nv(43.0)],
             ]
         );
+    }
+
+    #[test]
+    fn pivotby_size_check_counts_column_header_rows() {
+        // One row, n column fields and n value columns: n header rows + value-name row + body row + total row,
+        // each 1 + 2n wide. The size checked up front matches the grid PIVOTBY builds.
+        let dims = |k: u32, totals: bool| {
+            let fields: Vec<f64> = (0..k).map(f64::from).collect();
+            let mut args = vec![av(row(&[1.0])), av(row(&fields)), av(row(&fields)), t("SUM")];
+            if !totals {
+                args.extend([empty(), n(0.0), empty(), n(0.0)]);
+            }
+            let r = rows_of(&ev("PIVOTBY", args));
+            (r.len(), r.first().map_or(0, Vec::len))
+        };
+        assert_eq!(dims(2, true), super::pivot_dims(3, 2, 2, 2, 1));
+        assert_eq!(dims(10, true), (13, 21));
+        assert_eq!(dims(10, true), super::pivot_dims(11, 2, 2, 10, 1));
+        assert_eq!(dims(10, false), (12, 11));
+        assert_eq!(dims(10, false), super::pivot_dims(11, 1, 1, 10, 1));
+        // n = 2300: the 2300 header rows alone are 10.58M cells, so the check must count them before any is built.
+        let (h, w) = super::pivot_dims(2301, 2, 2, 2300, 1);
+        assert!(2300 * w > crate::util::MAX_CELLS && h * w > crate::util::MAX_CELLS);
+        let wide: Vec<f64> = (0..2300).map(f64::from).collect();
+        is_err(ev("PIVOTBY", vec![av(row(&[1.0])), av(row(&wide)), av(row(&wide)), t("SUM")]), CellError::Num);
     }
 }

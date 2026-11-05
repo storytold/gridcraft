@@ -17,6 +17,7 @@ fn smooth_line_setting_round_trips() {
         color: Some(Color::Rgb(0x4472C4)),
         secondary: false,
         kind: None,
+        quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
     };
@@ -28,6 +29,7 @@ fn smooth_line_setting_round_trips() {
         series: vec![base_series.clone()],
         legend: LegendPos::Bottom,
         data_labels: false,
+        data_table: None,
         gridlines: true,
         style: 2,
         x_title: None,
@@ -46,6 +48,7 @@ fn smooth_line_setting_round_trips() {
         series: vec![smooth_series],
         legend: LegendPos::Bottom,
         data_labels: false,
+        data_table: None,
         gridlines: true,
         style: 2,
         x_title: None,

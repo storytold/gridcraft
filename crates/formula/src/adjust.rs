@@ -3,7 +3,7 @@
 
 use gridcraft_core::{CellError, MAX_COLS, MAX_ROWS, RangeRef};
 
-use crate::ast::*;
+use crate::ast::{Anchor, Expr, RefKind, Reference, SheetSel, clamp_anchor};
 
 /// Copy/fill: relative parts move by `(dr, dc)`. References pushed off the sheet become `#REF!`.
 pub fn shift_relative(e: Expr, dr: i64, dc: i64) -> Expr {
@@ -264,11 +264,10 @@ pub fn rename_sheet(e: Expr, old: &str, new: &str) -> Expr {
             }
             Expr::Ref(r)
         }
-        // Sheet-qualified defined name `Old!MyName` is stored as one string.
+        // Sheet-qualified defined name `Old!MyName` is stored as one string, with the bare sheet name as the parser
+        // stores it (the printer adds the quotes).
         Expr::Name(n) => match n.split_at_checked(old.len()) {
-            Some((head, rest)) if head.eq_ignore_ascii_case(old) && rest.starts_with('!') => {
-                Expr::Name(format!("{}{rest}", crate::printer::quote_sheet(new)))
-            }
+            Some((head, rest)) if head.eq_ignore_ascii_case(old) && rest.starts_with('!') => Expr::Name(format!("{new}{rest}")),
             _ => Expr::Name(n),
         },
         other => other,

@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 use gridcraft_core::{RangeRef, Value};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, EngineError, Result, Session, bad, bool_param, cell_param, cmd, has_doc, ok, str_param, target_range, target_sheet};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -64,7 +64,14 @@ fn known(s: &Session, w: &str) -> bool {
     false
 }
 
+/// Longest word we generate suggestions for. Candidate text grows with the square of the word length, so longer
+/// tokens (no real word is this long) get no suggestions instead of an unbounded allocation.
+const MAX_SUGGEST_LEN: usize = 64;
+
 fn edits1(w: &str) -> Vec<String> {
+    if w.chars().count() > MAX_SUGGEST_LEN {
+        return Vec::new();
+    }
     let chars: Vec<char> = w.chars().collect();
     let mut out = Vec::new();
     let letters = "abcdefghijklmnopqrstuvwxyz";
@@ -176,4 +183,17 @@ fn thesaurus(_: &mut Session, p: &Json) -> Result<Json> {
     related.sort();
     related.truncate(20);
     Ok(json!(related))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn edits1_is_capped_for_very_long_words() {
+        assert_eq!(edits1("helo").len(), 54 * 4 + 25);
+        assert_eq!(edits1(&"a".repeat(MAX_SUGGEST_LEN)).len(), 54 * MAX_SUGGEST_LEN + 25);
+        assert!(edits1(&"a".repeat(MAX_SUGGEST_LEN + 1)).is_empty());
+        assert!(edits1(&"a".repeat(1_000_000)).is_empty());
+    }
 }
