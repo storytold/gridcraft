@@ -117,14 +117,25 @@ pub fn dml_color(e: &El) -> Option<Color> {
 /// hold any other pair, so those take the tint that gives the same result at middle luminance, which
 /// keeps their direction. Values come in thousandths of a percent or, in Strict files, as `50%`.
 fn luminance_tint(scheme: &El) -> i16 {
-    let share = |tag: &str| {
-        let val = scheme.child(tag)?.attr("val")?.trim();
+    let share = |e: &El| {
+        let val = e.attr("val")?.trim();
         match val.strip_suffix('%') {
             Some(percent) => percent.trim().parse::<f64>().ok().map(|v| v / 100.0),
             None => val.parse::<f64>().ok().map(|v| v / 100_000.0),
         }
     };
-    let (modulation, offset) = (share("lumMod").unwrap_or(1.0), share("lumOff").unwrap_or(0.0));
+    // In the order written, as a colour may repeat them: each one acts on the result so far.
+    let (mut modulation, mut offset) = (1.0, 0.0);
+    for transform in &scheme.children {
+        match (transform.name.as_str(), share(transform)) {
+            ("lumMod", Some(v)) => {
+                modulation *= v;
+                offset *= v;
+            }
+            ("lumOff", Some(v)) => offset += v,
+            _ => {}
+        }
+    }
     let tint = if offset > 0.0 && (modulation + offset - 1.0).abs() < 0.001 {
         offset
     } else if offset == 0.0 && modulation <= 1.0 {
@@ -708,6 +719,8 @@ mod luminance_tests {
             // Strict files write percentages.
             ("tx1", "<a:lumMod val=\"50%\"/><a:lumOff val=\"50%\"/>", Color::Theme(1, 500)),
             ("accent1", "<a:lumMod val=\"75%\"/>", Color::Theme(4, -250)),
+            // Repeated transforms act on each other.
+            ("accent1", "<a:lumMod val=\"50000\"/><a:lumMod val=\"50000\"/>", Color::Theme(4, -750)),
             // No tint is exact for these: the direction holds. 50% and 10% darken, 120% lightens.
             ("accent1", "<a:lumMod val=\"50000\"/><a:lumOff val=\"10000\"/>", Color::Theme(4, -300)),
             ("accent1", "<a:lumMod val=\"120000\"/>", Color::Theme(4, 200)),
