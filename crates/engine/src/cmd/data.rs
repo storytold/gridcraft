@@ -223,8 +223,14 @@ fn guess_header(wb: &Workbook, sh: &Sheet, r: RangeRef) -> bool {
 /// array in the block spans several lines or reaches past the block, even if nothing would move.
 fn check_moving_arrays(sh: &Sheet, body: RangeRef, by_cols: bool) -> Result<()> {
     let thick = |a: &RangeRef| if by_cols { a.width() > 1 } else { a.height() > 1 };
-    let split =
-        sh.cells.iter().filter_map(|(_, x)| x.formula.as_ref()?.array).any(|a| a.intersects(&body) && (!body.contains_range(&a) || thick(&a)));
+    let splits = |(_, cell): (CellRef, &Cell)| {
+        cell.formula.as_ref().and_then(|f| f.array).is_some_and(|a| a.intersects(&body) && (!body.contains_range(&a) || thick(&a)))
+    };
+    let above = (body.start.row > 0).then(|| RangeRef::new(CellRef::new(0, 0), CellRef::new(body.start.row - 1, body.end.col)));
+    let left = (body.start.col > 0).then(|| RangeRef::new(CellRef::new(body.start.row, 0), CellRef::new(body.end.row, body.start.col - 1)));
+    let split = above.is_some_and(|r| sh.cells.iter_range(r).any(&splits))
+        || left.is_some_and(|r| sh.cells.iter_range(r).any(&splits))
+        || sh.cells.iter_range(body).any(&splits);
     if split { Err(EngineError::Other("You can't change part of an array.".into())) } else { Ok(()) }
 }
 
