@@ -101,6 +101,9 @@ fn take_cut_source(cx: &mut crate::cmd::Ctx<'_>, sheet: usize, src: RangeRef) ->
     Ok((taken, pictures, runs))
 }
 
+// The tile loop is one read of Excel's paste semantics: every form in one place, in the order
+// the file format applies them. Splitting it scatters a single spec across helpers.
+#[allow(clippy::cognitive_complexity)]
 pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(clip) = s.clipboard.clone() else { return Err(EngineError::Other("Nothing to paste.".into())) };
     let what = match str_param(p, "what").unwrap_or("all") {

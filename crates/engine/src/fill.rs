@@ -86,6 +86,9 @@ pub fn holds_source_in_corner(src: RangeRef, target: RangeRef) -> bool {
 }
 
 /// Fills `target` (which contains `src` at one edge) from the pattern in `src`.
+// One read of Excel's fill semantics: every fill mode's values, formats and rich-text runs in
+// the order the file format applies them.
+#[allow(clippy::cognitive_complexity)]
 pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: FillMode) -> Result<()> {
     let custom = cx.wb.custom_lists.clone();
     let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
