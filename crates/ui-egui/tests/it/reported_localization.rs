@@ -280,3 +280,35 @@ fn press(h: &mut egui_kittest::Harness<'static, SheetApp>, key: egui::Key, modif
         h.input_mut().events.push(egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers });
     }
 }
+
+/// Grid rendering and the Format Cells sample switch locale together without rewriting stored formats.
+#[test]
+fn german_number_samples_match_the_grid_and_keep_canonical_output() {
+    let mut h = harness();
+    h.state_mut().run("range.setValues", json!({"range":"A1", "values":[[1234.5],[46096],[1.5]]})).unwrap();
+    h.state_mut().run("home.numberFormat", json!({"range":"A1", "code":"0.00"})).unwrap();
+    h.state_mut().run("home.numberFormat", json!({"range":"A2", "code":"mmm"})).unwrap();
+    h.state_mut().run("selection.set", json!({"range":"A1"})).unwrap();
+    for (language, number, month, general) in [("en", "1234.50", "Mar", "1.5"), ("de", "1234,50", "Mrz", "1,5"), ("en", "1234.50", "Mar", "1.5")] {
+        h.state_mut().run("app.language.set", json!({"language":language})).unwrap();
+        h.run_steps(3);
+        let texts: Vec<&str> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(t) => Some(t.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        for expected in [number, month, general] {
+            assert!(texts.contains(&expected), "{language}: the grid did not paint {expected}");
+        }
+        let wb = &h.state().session.active().unwrap().wb;
+        assert_eq!(gridcraft_engine::display::format(&gridcraft_engine::core::Value::Number(1234.5), "0.00", wb).text, "1234.50");
+        h.state_mut().open_dialog("formatCells", json!({}));
+        h.run_steps(3);
+        assert!(h.query_by_label(number).is_some(), "{language}: Format Cells sample differs from the grid");
+        h.state_mut().dialog = None;
+    }
+}

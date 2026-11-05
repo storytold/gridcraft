@@ -42,10 +42,8 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                     .session
                     .active()
                     .map(|doc| {
-                        let locale =
-                            if lang == crate::i18n::Language::De { gridcraft_engine::core::Locale::De } else { gridcraft_engine::core::Locale::En };
                         let format = gridcraft_engine::display::number_format(&code);
-                        gridcraft_engine::numfmt::format_value_with_locale(&sample, &format, doc.wb.date_system, locale).text
+                        gridcraft_engine::numfmt::format_value_with_locale(&sample, &format, doc.wb.date_system, lang.number_locale()).text
                     })
                     .unwrap_or_default();
                 cols[1].label(egui::RichText::new(preview).font(theme::ui_font(15.0)));

@@ -41,7 +41,8 @@ impl FormatLocale {
 
     /// Maps only grammar tokens. Quoted/escaped/padded text and non-time brackets are opaque.
     fn translate(&self, code: &str, to_local: bool) -> String {
-        if code.eq_ignore_ascii_case(if to_local { "General" } else { self.general }) {
+        let source = if to_local { "General" } else { self.general };
+        if code.to_lowercase() == source.to_lowercase() {
             return if to_local { self.general } else { "General" }.to_owned();
         }
         let mut out = String::with_capacity(code.len());
@@ -134,7 +135,11 @@ mod tests {
         assert_eq!(locale.canonical("ДД.ММ.ГГГГ ЧЧ:ММ:СС"), "dd.mm.yyyy hh:mm:ss");
         assert_eq!(locale.canonical("dd.mm.yyyy"), "dd.mm.yyyy");
         assert_eq!(locale.display("General"), "Общий");
-        assert_eq!(locale.canonical("Общий"), "General");
+        for code in ["Общий", "общий", "ОБЩИЙ", "оБщИй"] {
+            assert_eq!(locale.canonical(code), "General");
+        }
+        assert_eq!(locale.display("gEnErAl"), "Общий");
+        assert_eq!(locale.canonical(r#""общий""#), r#""общий""#);
         assert_eq!(locale.preset("Time"), "hh:mm:ss");
         assert_eq!(locale.suggestion("h:mm AM/PM"), "h:mm AM/PM");
     }

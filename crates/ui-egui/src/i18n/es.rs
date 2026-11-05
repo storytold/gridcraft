@@ -329,10 +329,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Encabezado (&L izquierda, &C centro, &R derecha; &P página, &N páginas, &D fecha, &A hoja):"
         }
         "Header (in):" => "Encabezado (pulg.):",
-        "Heading 1" => "Encabezado 1",
+        "Heading 1" => "Título 1",
         "Heading 2" => "Título 2",
         "Heading 3" => "Título 3",
-        "Heading 4" => "Encabezado 4",
+        "Heading 4" => "Título 4",
         "Hex" => "Hex",
         "Hidden" => "Oculta",
         "Hidden: {sheets}" => "Ocultas: {sheets}",

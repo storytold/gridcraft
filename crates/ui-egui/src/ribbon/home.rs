@@ -691,7 +691,14 @@ fn number_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
         .iter()
         .map(|n| {
             let code = lang.format_locale().preset(n);
-            let preview = app.session.active().map(|d| gridcraft_engine::display::format(&sample, code, &d.wb).text).unwrap_or_default();
+            let preview = app
+                .session
+                .active()
+                .map(|d| {
+                    let format = gridcraft_engine::display::number_format(code);
+                    gridcraft_engine::numfmt::format_value_with_locale(&sample, &format, d.wb.date_system, lang.number_locale()).text
+                })
+                .unwrap_or_default();
             (*n, format!("{:<12}   {preview}", lang.tr(n)))
         })
         .chain(std::iter::once(("__more", format!("{:>12}", lang.tr("More Number Formats…")))))

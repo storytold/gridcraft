@@ -694,7 +694,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Shift cells down" => "下方单元格下移",
         "Shift cells left" => "右侧单元格左移",
         "Shift cells right" => "右侧单元格右移",
-        "Shift cells up" => "上方单元格上移",
+        "Shift cells up" => "下方单元格上移",
         "Show Formulas (⌃`)" => "显示公式 (⌃`)",
         "Show as % of Grand Total" => "显示为总计的百分比",
         "Show as No Calculation" => "显示为不计算",

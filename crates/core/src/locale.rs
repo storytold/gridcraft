@@ -18,8 +18,8 @@ const EN_MONTHS: [&str; 12] = MONTHS;
 const EN_MONTHS_SHORT: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 /// Full German month names.
 const DE_MONTHS: [&str; 12] = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
-/// Three-letter German month names (`Mär`, `Okt`, `Dez`), the forms German Excel shows.
-const DE_MONTHS_SHORT: [&str; 12] = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
+/// Three-letter German month names (`Mrz`, `Okt`, `Dez`), the forms German Excel shows.
+const DE_MONTHS_SHORT: [&str; 12] = ["Jan", "Feb", "Mrz", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
 /// Full German weekday names, in the order of [`WEEKDAYS`] (index 0 = Sunday).
 const DE_WEEKDAYS: [&str; 7] = ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"];
 /// Three-letter German weekday names, the first three characters of [`DE_WEEKDAYS`].
@@ -44,7 +44,7 @@ impl Locale {
         }
     }
 
-    /// The month name for a month number 1–12 (`short3` = `Jan`/`Mär`), or `""` for a number
+    /// The month name for a month number 1–12 (`short3` = `Jan`/`Mrz`), or `""` for a number
     /// outside that range.
     pub fn month_name(self, month: u8, short3: bool) -> &'static str {
         let table: &[&'static str; 12] = match (self, short3) {
@@ -93,7 +93,7 @@ mod tests {
         assert_eq!(Locale::De.weekday_name(4, false), "Donnerstag");
         assert_eq!(Locale::De.weekday_name(6, false), "Samstag");
         // Short names are the ones `ddd`/`mmm` show.
-        assert_eq!(Locale::De.month_name(3, true), "Mär");
+        assert_eq!(Locale::De.month_name(3, true), "Mrz");
         assert_eq!(Locale::De.month_name(10, true), "Okt");
         assert_eq!(Locale::De.weekday_name(4, true), "Do");
         assert_eq!(Locale::En.month_name(10, true), "Oct");
