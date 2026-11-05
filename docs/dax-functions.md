@@ -7,7 +7,8 @@ and printer. **Evaluated** means the evaluator has a dispatch path for it.
 - Catalogued (parsed and validated): **484**
 - Evaluated by the scalar core in this crate: **the aggregations, the logical spine and the
   relationship/table helpers listed in `crates/dax/README.md`**
-- Everything else: **not implemented until its evaluator family is linked**
+- Every other catalogued function, including the ones named below that the scalar core does
+  not carry: **not implemented until its evaluator family is linked**
 
 The per-category counts below are the catalog's. This crate links no evaluator family yet
 (`eval::FAMILIES` is empty), so a catalogued function outside the scalar core returns
@@ -35,7 +36,7 @@ The per-category counts below are the catalog's. This crate links no evaluator f
 
 In this crate the evaluator is `Evaluator::eval`'s built-in switch plus whatever `eval::FAMILIES`
 links, and `FAMILIES` is empty here. The switch handles the aggregations and their `*X` iterators,
-the logical spine, `CALCULATE`/`FILTER`/`ALL*`/`VALUES`/`DISTINCT`/`SELECTEDVALUE`, `RELATED*`,
+the logical spine, `CALCULATE`/`FILTER`/`ALL`/`ALLEXCEPT`/`ALLNOBLANKROW`/`ALLSELECTED`/`VALUES`/`DISTINCT`/`SELECTEDVALUE`, `RELATED*`,
 `COUNTROWS`, the statement operators, and the scalar helpers it carries directly — `ABS`, `DATE`,
 `LEN`, `PATHLENGTH` and the rest of the small scalar set in `crates/dax/src/eval.rs`. Every other
 catalogued function reports "not implemented" until its evaluator family is linked; each family PR

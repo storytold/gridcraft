@@ -536,12 +536,7 @@ fn key_occurrences(table: &ModelTable, column: usize) -> BTreeMap<ScalarKey, Occ
     let mut keys: BTreeMap<ScalarKey, Occurrence> = BTreeMap::new();
     for (row, cells) in table.rows.iter().enumerate() {
         let value = cells.get(column).unwrap_or(&blank);
-        let key = crate::value::relationship_key_of_value(value);
-        // A NaN key never joins on either path, so it is not a relationship key here either.
-        if crate::value::is_nan_key(&key) {
-            continue;
-        }
-        keys.entry(key).or_default().push(row);
+        keys.entry(crate::value::relationship_key_of_value(value)).or_default().push(row);
     }
     keys
 }
@@ -578,8 +573,10 @@ fn column_name_of(storage: &ModelStorage, table: usize, column: usize) -> String
 /// Runs every per-relationship check and returns its summary plus its findings.
 fn check_relationship(facts: &RelationshipFacts) -> (RelationshipCheck, Vec<IntegrityFinding>) {
     let mut findings: Vec<IntegrityFinding> = Vec::new();
-    let from_unique = facts.from_keys.iter().filter(|(key, _)| !is_blank(key)).all(|(_, occurrence)| occurrence.total <= 1);
-    let to_unique = facts.to_keys.iter().filter(|(key, _)| !is_blank(key)).all(|(_, occurrence)| occurrence.total <= 1);
+    let from_unique =
+        facts.from_keys.iter().filter(|(key, _)| !is_blank(key) && !crate::value::is_nan_key(key)).all(|(_, occurrence)| occurrence.total <= 1);
+    let to_unique =
+        facts.to_keys.iter().filter(|(key, _)| !is_blank(key) && !crate::value::is_nan_key(key)).all(|(_, occurrence)| occurrence.total <= 1);
     let actual = match (from_unique, to_unique) {
         (true, true) => Cardinality::OneToOne,
         (false, true) => Cardinality::OneToMany,
@@ -587,14 +584,17 @@ fn check_relationship(facts: &RelationshipFacts) -> (RelationshipCheck, Vec<Inte
         (false, false) => Cardinality::ManyToMany,
     };
 
-    let from_keys = facts.from_keys.iter().filter(|(key, _)| !is_blank(key)).count();
-    let to_keys = facts.to_keys.iter().filter(|(key, _)| !is_blank(key)).count();
+    let from_keys = facts.from_keys.iter().filter(|(key, _)| !is_blank(key) && !crate::value::is_nan_key(key)).count();
+    let to_keys = facts.to_keys.iter().filter(|(key, _)| !is_blank(key) && !crate::value::is_nan_key(key)).count();
 
     let mut orphan_keys = 0usize;
     let mut orphan_rows = 0usize;
     let mut reported = 0usize;
     for (key, occurrence) in &facts.from_keys {
-        if is_blank(key) || facts.to_keys.contains_key(key) {
+        // A NaN key can never join, so it is reported as an orphan rather than silently skipped;
+        // a NaN on the one side is not a key at all, so it is never a match.
+        let matched = !crate::value::is_nan_key(key) && facts.to_keys.contains_key(key);
+        if is_blank(key) || matched {
             continue;
         }
         orphan_keys += 1;
@@ -629,7 +629,7 @@ fn check_relationship(facts: &RelationshipFacts) -> (RelationshipCheck, Vec<Inte
     let mut duplicate_to_keys = 0usize;
     let mut reported = 0usize;
     for (key, occurrence) in &facts.to_keys {
-        if is_blank(key) || occurrence.total <= 1 {
+        if is_blank(key) || crate::value::is_nan_key(key) || occurrence.total <= 1 {
             continue;
         }
         duplicate_to_keys += 1;

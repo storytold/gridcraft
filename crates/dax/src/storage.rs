@@ -1653,12 +1653,7 @@ fn build_key_index(table: &TableStorage, column: usize, key: fn(&crate::value::S
     let mut index: BTreeMap<ScalarKey, Vec<usize>> = BTreeMap::new();
     for row in 0..table.row_count() {
         if let Some(value) = table.value(column, row) {
-            let key = key(&value);
-            // A NaN never joins, so it is not a relationship key at all.
-            if crate::value::is_nan_key(&key) {
-                continue;
-            }
-            index.entry(key).or_default().push(row);
+            index.entry(key(&value)).or_default().push(row);
         }
     }
     index
