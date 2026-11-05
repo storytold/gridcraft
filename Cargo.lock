@@ -2058,6 +2058,7 @@ dependencies = [
  "gridcraft-calc",
  "gridcraft-chart",
  "gridcraft-core",
+ "gridcraft-dax",
  "gridcraft-formula",
  "gridcraft-functions",
  "gridcraft-math",
