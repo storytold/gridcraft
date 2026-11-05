@@ -1363,7 +1363,15 @@ fn numeric_raw(value: &Scalar, real: bool) -> Result<i64> {
             Ok(raw.to_bits() as i64)
         }
         (Scalar::DateTime(serial), true) => Ok(serial.to_bits() as i64),
-        (Scalar::DateTime(serial), false) => Ok(serial.round() as i64),
+        (Scalar::DateTime(serial), false) => {
+            // A long dictionary stores whole serials; rounding `45000.75` to `45001` would read
+            // back as a different date instead of reporting that the value does not fit.
+            let rounded = serial.round();
+            if (serial - rounded).abs() > 1.0e-6 {
+                return Err(ModelFileError::InvalidModel("a date with a time cannot be stored in a long dictionary".into()));
+            }
+            Ok(rounded as i64)
+        }
         (Scalar::Boolean(flag), true) => Ok((if *flag { 1.0f64 } else { 0.0 }).to_bits() as i64),
         (Scalar::Boolean(flag), false) => Ok(i64::from(*flag)),
         (Scalar::String(_), _) | (Scalar::Blank, _) => Err(ModelFileError::InvalidModel("non-numeric value in a numeric dictionary".into())),
@@ -2019,6 +2027,22 @@ mod tests {
             Err(ModelFileError::InvalidMeasure(message)) => assert!(message.contains("empty formula"), "{message}"),
             other => panic!("expected InvalidMeasure, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_long_dictionary_rejects_a_fractional_date() {
+        // `45000.75` used to be rounded to `45001` and read back as a different date; the same
+        // 1e-6 rule as the Decimal arm now rejects it, while a serial with a negligible fraction
+        // (and a plain date) still stores.
+        assert_eq!(numeric_raw(&Scalar::DateTime(45_000.0), false), Ok(45_000));
+        assert_eq!(numeric_raw(&Scalar::DateTime(45_000.000_000_1), false), Ok(45_000));
+        match numeric_raw(&Scalar::DateTime(45_000.75), false) {
+            Err(ModelFileError::InvalidModel(message)) => assert!(message.contains("date with a time"), "{message}"),
+            other => panic!("expected InvalidModel, got {other:?}"),
+        }
+        // A real dictionary keeps the fraction, so the same value round-trips there.
+        let bits = numeric_raw(&Scalar::DateTime(45_000.75), true).expect("real dictionary");
+        assert_eq!(f64::from_bits(bits as u64), 45_000.75);
     }
 
     #[test]
