@@ -189,11 +189,7 @@ pub(super) fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
 
 /// Contextual actions available for a selected picture; image editing is still a separate gap.
 pub(super) fn picture_format(app: &mut SheetApp, ui: &mut Ui) {
-    let Some(ObjRef { kind: ObjKind::Image, id }) = app.selected_object else { return };
-    let exists = app.session.active().and_then(|d| d.wb.active()).is_some_and(|sh| sh.images.iter().any(|image| image.id == id));
-    if !exists {
-        return;
-    }
+    let Some(ObjRef { id, .. }) = selected_context_object(app, ObjKind::Image) else { return };
     selection_pane_button(app, ui);
     sep(ui);
     let properties = big_button(ui, Icon::Settings, "Cell\nPlacement", "Picture placement relative to cells", true);
@@ -217,16 +213,12 @@ pub(super) fn picture_format(app: &mut SheetApp, ui: &mut Ui) {
 
 /// Contextual actions available for a selected shape.
 pub(super) fn shape_format(app: &mut SheetApp, ui: &mut Ui) {
-    let Some(ObjRef { kind: ObjKind::Shape, id }) = app.selected_object else { return };
-    let exists = app.session.active().and_then(|d| d.wb.active()).is_some_and(|sh| sh.shapes.iter().any(|shape| shape.id == id));
-    if !exists {
-        return;
-    }
+    let Some(ObjRef { id, .. }) = selected_context_object(app, ObjKind::Shape) else { return };
     selection_pane_button(app, ui);
     sep(ui);
     let fill = big_button(ui, Icon::Fill, "Shape\nFill", "Change shape fill color", true);
     egui::Popup::menu(&fill).show(|ui| {
-        if let Some(color) = color_palette(ui, &theme_colors(app), "No change")
+        if let Some(color) = color_palette(ui, &theme_colors(app), app.ui.language.tr("No change"))
             && color != "none"
         {
             act(app, "chart.shapeFill", json!({"kind": "shape", "id": id, "color": color}));
@@ -235,7 +227,7 @@ pub(super) fn shape_format(app: &mut SheetApp, ui: &mut Ui) {
     });
     let outline = big_button(ui, Icon::Borders, "Shape\nOutline", "Change shape outline color", true);
     egui::Popup::menu(&outline).show(|ui| {
-        if let Some(color) = color_palette(ui, &theme_colors(app), "No change")
+        if let Some(color) = color_palette(ui, &theme_colors(app), app.ui.language.tr("No change"))
             && color != "none"
         {
             act(app, "chart.shapeOutline", json!({"kind": "shape", "id": id, "color": color}));
@@ -250,11 +242,7 @@ pub(super) fn shape_format(app: &mut SheetApp, ui: &mut Ui) {
 
 /// Contextual filter actions for a selected slicer.
 pub(super) fn slicer_tools(app: &mut SheetApp, ui: &mut Ui) {
-    let Some(ObjRef { kind: ObjKind::Slicer, id }) = app.selected_object else { return };
-    let exists = app.session.active().and_then(|d| d.wb.active()).is_some_and(|sh| sh.slicers.iter().any(|slicer| slicer.id == id));
-    if !exists {
-        return;
-    }
+    let Some(ObjRef { id, .. }) = selected_context_object(app, ObjKind::Slicer) else { return };
     let clear = big_button(ui, Icon::Filter, "Clear\nFilter", "Clear this slicer's filter", false);
     control_keytip(app, ui, &clear, "slicer.clear");
     if clear.clicked() {
@@ -267,9 +255,46 @@ pub(super) fn slicer_tools(app: &mut SheetApp, ui: &mut Ui) {
     }
 }
 
+/// Validate identity again at the action surface, including equations stored in `shapes`.
+fn selected_context_object(app: &SheetApp, kind: ObjKind) -> Option<ObjRef> {
+    let obj = app.selected_object.filter(|obj| obj.kind == kind)?;
+    app.session.active()?.wb.active()?.object_ref(obj.id).filter(|canonical| *canonical == obj)
+}
+
 /// Opens the Selection Pane without implying cross-type stacking order the renderer doesn't yet support.
 fn selection_pane_button(app: &mut SheetApp, ui: &mut Ui) {
     if big_button(ui, Icon::Settings, "Selection\nPane", "Open Selection Pane", false).clicked() {
         act(app, "ui.selectionPane", json!({}));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Exercise the action gate independently of the tab-list fallback and selection pruning.
+    #[test]
+    fn contextual_action_gate_requires_the_canonical_kind_and_a_live_object() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let shape = session.execute("insert.shape", json!({"kind":"rectangle", "at":"B2"})).unwrap()["shape"].as_u64().unwrap() as u32;
+        let equation = session.execute("insert.equation", json!({"latex":"x^2", "cell":"D4"})).unwrap()["equation"].as_u64().unwrap() as u32;
+        let mut app = SheetApp::new(session, crate::Services::default());
+        let real_shape = ObjRef::new(ObjKind::Shape, shape);
+        app.selected_object = Some(real_shape);
+        assert_eq!(selected_context_object(&app, ObjKind::Shape), Some(real_shape));
+        for obj in [ObjRef::new(ObjKind::Shape, equation), ObjRef::new(ObjKind::Equation, equation), ObjRef::new(ObjKind::Image, shape)] {
+            app.selected_object = Some(obj);
+            for kind in [ObjKind::Shape, ObjKind::Image, ObjKind::Slicer] {
+                assert_eq!(selected_context_object(&app, kind), None, "{obj:?} as {kind:?}");
+            }
+        }
+        // Bypass UI command cleanup so the deleted identity really remains selected.
+        app.selected_object = Some(real_shape);
+        app.session.execute("object.delete", json!({"kind":"shape", "id":shape})).unwrap();
+        assert_eq!(app.selected_object, Some(real_shape));
+        assert_eq!(selected_context_object(&app, ObjKind::Shape), None);
+        app.selected_object = None;
+        assert_eq!(selected_context_object(&app, ObjKind::Shape), None);
     }
 }

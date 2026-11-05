@@ -8,7 +8,9 @@ use crate::SheetApp;
 use crate::icons::{self, Icon};
 use crate::keytips::keytip_table;
 use crate::theme::{self, Cat, Tokens};
-use crate::widgets::{big_button, big_split_button, color_palette, icon_button, small_button, small_split_button, split_button, toggle_button};
+use crate::widgets::{
+    big_button, big_split_button, color_palette, icon_button, small_button, small_split_button, small_toggle_button, split_button, toggle_button,
+};
 
 mod automate;
 mod contextual;
@@ -277,6 +279,10 @@ fn theme_choices(app: &mut SheetApp, ui: &mut Ui) {
 
 const CONTEXTUAL_TABS: [&str; 6] = ["Table Design", "Chart Design", "Picture Format", "Shape Format", "Slicer", crate::paper_view::TAB];
 
+/// Lists the tabs available for the active table, selected object and header/footer editor.
+///
+/// Object tabs require a live canonical kind/id pair. Equations and form controls keep their
+/// own editing surfaces rather than inheriting shape actions from their backing storage.
 fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
     let mut v = Vec::new();
     if let Some(d) = app.session.active()
@@ -285,13 +291,14 @@ fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
         if sh.table_at(d.selection.active).is_some() {
             v.push("Table Design");
         }
-        if let Some(obj) = app.selected_object.filter(|obj| sh.object_anchor(*obj).is_some()) {
+        if let Some(obj) = app.selected_object.filter(|obj| sh.object_ref(obj.id) == Some(*obj)) {
             match obj.kind {
                 ObjKind::Chart => v.push("Chart Design"),
                 ObjKind::Image => v.push("Picture Format"),
                 ObjKind::Shape => v.push("Shape Format"),
                 ObjKind::Slicer => v.push("Slicer"),
-                ObjKind::Equation => {}
+                // Form controls keep upstream's own control actions, not shape palettes.
+                ObjKind::Equation | ObjKind::Control => {}
             }
         }
         if app.grid.hf_edit.is_some() {

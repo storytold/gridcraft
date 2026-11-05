@@ -162,6 +162,73 @@ fn contextual_tabs_reject_wrong_kind_and_deleted_objects() {
 }
 
 #[test]
+fn an_equation_masquerading_as_a_shape_cannot_expose_shape_actions() {
+    let mut session = session_with_table();
+    let id = session.execute("insert.equation", json!({"latex":"x^2", "cell":"C4"})).unwrap()["equation"].as_u64().unwrap() as u32;
+    let sh = session.active().unwrap().wb.active().unwrap();
+    // This is the mismatch missed by anchor-only validation: equations share shape storage.
+    assert!(sh.object_anchor(ObjRef::new(ObjKind::Shape, id)).is_some());
+    assert_eq!(sh.object_ref(id), Some(ObjRef::new(ObjKind::Equation, id)));
+    let mut h = harness(session);
+    let journal = h.state().session.journal.len();
+    for kind in [ObjKind::Shape, ObjKind::Equation] {
+        h.state_mut().selected_object = Some(ObjRef::new(kind, id));
+        h.state_mut().ui.ribbon_tab = "Shape Format".into();
+        h.run_steps(3);
+        assert_eq!(h.state().ui.ribbon_tab, "Home");
+        for label in ["Shape Fill", "Shape Outline", "Delete Shape"] {
+            assert!(h.query_by_label(label).is_none(), "{kind:?} must not expose {label}");
+        }
+        assert_eq!(h.state().session.journal.len(), journal);
+        assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().object_ref(id), Some(ObjRef::new(ObjKind::Equation, id)));
+    }
+}
+
+#[test]
+fn portuguese_shape_palettes_translate_no_change_and_leave_the_shape_unchanged() {
+    for label in ["Preenchimento da Forma", "Contorno da Forma"] {
+        let mut session = session_with_table();
+        let id = session.execute("insert.shape", json!({"kind":"rectangle", "at":"D4"})).unwrap()["shape"].as_u64().unwrap() as u32;
+        let mut h = harness(session);
+        h.state_mut().run("app.language.set", json!({"language":"pt"})).unwrap();
+        h.state_mut().selected_object = Some(ObjRef::new(ObjKind::Shape, id));
+        h.state_mut().ui.ribbon_tab = "Shape Format".into();
+        h.run_steps(3);
+        let journal = h.state().session.journal.len();
+        let undo = h.state().session.active().unwrap().undo.len();
+        h.get_by_label(label).click();
+        h.run_steps(3);
+        assert!(h.query_by_label("No change").is_none());
+        h.get_by_label("Sem alteração").click();
+        h.run_steps(3);
+        assert_eq!(h.state().session.journal.len(), journal, "{label}: no color command");
+        assert_eq!(h.state().session.active().unwrap().undo.len(), undo, "{label}: no edit to undo");
+    }
+}
+
+/// Newly supported form controls must not inherit another floating object's action tab.
+#[test]
+fn form_controls_cannot_expose_shape_picture_slicer_or_chart_actions() {
+    let mut session = session_with_table();
+    let id = session.execute("insert.button", json!({"at":"D4", "text":"Test control"})).unwrap()["control"].as_u64().unwrap() as u32;
+    let mut h = harness(session);
+    let journal = h.state().session.journal.len();
+    for kind in [ObjKind::Control, ObjKind::Shape] {
+        for tab in ["Shape Format", "Picture Format", "Slicer", "Chart Design"] {
+            h.state_mut().selected_object = Some(ObjRef::new(kind, id));
+            h.state_mut().ui.ribbon_tab = tab.into();
+            h.run_steps(3);
+            assert_eq!(h.state().ui.ribbon_tab, "Home", "{kind:?} must not expose {tab}");
+            for label in ["Shape Fill", "Shape Outline", "Delete Shape", "Delete Picture", "Delete Slicer"] {
+                assert!(h.query_by_label(label).is_none(), "form controls must not expose {label}");
+            }
+            assert_eq!(h.state().session.journal.len(), journal);
+            assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().object_ref(id), Some(ObjRef::new(ObjKind::Control, id)));
+        }
+    }
+}
+
+#[test]
 fn leaving_the_table_while_on_table_design_returns_to_home() {
     let mut h = harness(session_with_table());
     h.state_mut().ui.ribbon_tab = "Table Design".into();
