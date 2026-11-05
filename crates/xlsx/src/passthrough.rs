@@ -9,7 +9,8 @@
 //! of `<pageSetup>`, the legacy VML shapes those controls need and the pictures of the headers and
 //! footers, `&G`, with their `<legacyDrawingHF>`). The workbook also keeps its
 //! `<fileVersion>` and the calcFeatures extension, which Excel needs to trust the saved values.
-//! Each worksheet chart keeps its own style, colour and user-shape parts on the chart
+//! Eligible worksheet charts preserve their style and colour parts while their kind and style
+//! number stay unchanged. Ordinary charts also preserve supported user-shape parts
 //! ([`KeptReader::charts`], [`write_chart_parts`]).
 //!
 //! On write, kept parts get fresh part names where needed and new relationship ids; the `r:id`s in
