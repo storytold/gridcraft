@@ -182,6 +182,14 @@ fn column_slots(fams: &[Fam], sec: &[bool]) -> (Vec<usize>, f32) {
     (slot_of, slot_keys.len().max(1) as f32)
 }
 
+type BarLabel = (f32, f32, String, crate::Rgba, (HAlign, VAlign));
+
+fn draw_bar_labels(ctx: &mut Ctx, labels: &mut Vec<BarLabel>) {
+    for (x, y, t, color, align) in labels.drain(..) {
+        ctx.text(x, y, &t, LABEL_SIZE, color, align);
+    }
+}
+
 pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizontal: bool) {
     let ncat = data.categories.len().max(data.series.iter().map(|s| s.values.len()).max().unwrap_or(0)).min(MAX_CATS);
     if ncat == 0 {
@@ -232,6 +240,8 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     let labels_on = chart.data_labels && ncat <= MAX_LABELS;
     // Area labels wait until every area is filled, so a later (stacked) area can't paint over them.
     let mut area_labels = Vec::new();
+    // Bar labels wait for every bar too: with an overlap, a later bar would cover them.
+    let mut bar_labels: Vec<BarLabel> = Vec::new();
 
     // Areas first, then columns, then lines on top.
     for pass in 0..3 {
@@ -302,20 +312,20 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                             if horizontal {
                                 let y = c + cluster / 2.0 - bw / 2.0 - k * step;
                                 if stacked {
-                                    ctx.text(mid, y, &t, LABEL_SIZE, on(s.color), (HAlign::Center, VAlign::Middle));
+                                    bar_labels.push((mid, y, t.clone(), on(s.color), (HAlign::Center, VAlign::Middle)));
                                 } else if v >= 0.0 {
-                                    ctx.text(pb.max(pt) + 3.0, y, &t, LABEL_SIZE, TEXT, (HAlign::Left, VAlign::Middle));
+                                    bar_labels.push((pb.max(pt) + 3.0, y, t.clone(), TEXT, (HAlign::Left, VAlign::Middle)));
                                 } else {
-                                    ctx.text(lo - 3.0, y, &t, LABEL_SIZE, TEXT, (HAlign::Right, VAlign::Middle));
+                                    bar_labels.push((lo - 3.0, y, t.clone(), TEXT, (HAlign::Right, VAlign::Middle)));
                                 }
                             } else {
                                 let x = c - cluster / 2.0 + bw / 2.0 + k * step;
                                 if stacked {
-                                    ctx.text(x, mid, &t, LABEL_SIZE, on(s.color), (HAlign::Center, VAlign::Middle));
+                                    bar_labels.push((x, mid, t.clone(), on(s.color), (HAlign::Center, VAlign::Middle)));
                                 } else if v >= 0.0 {
-                                    ctx.text(x, lo - 2.0, &t, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
+                                    bar_labels.push((x, lo - 2.0, t.clone(), TEXT, (HAlign::Center, VAlign::Bottom)));
                                 } else {
-                                    ctx.text(x, lo + len + 2.0, &t, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Top));
+                                    bar_labels.push((x, lo + len + 2.0, t.clone(), TEXT, (HAlign::Center, VAlign::Top)));
                                 }
                             }
                         }
@@ -338,6 +348,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 }
             }
         }
+        draw_bar_labels(ctx, &mut bar_labels);
         for (x, y, t) in area_labels.drain(..) {
             ctx.text(x, y, &t, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
         }

@@ -1705,3 +1705,17 @@ fn bars_without_gap_or_overlap_keep_the_file_format_defaults() {
     let after = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
     assert_eq!(format!("{before:?}"), format!("{after:?}"));
 }
+
+/// With a positive overlap a later bar lies over an earlier one: labels go on top of all of them.
+#[test]
+fn bar_labels_are_drawn_after_every_bar() {
+    let d = sample(ChartKind::ColumnClustered);
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.overlap = Some(100);
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let colors: Vec<_> = d.series.iter().map(|s| s.color).collect();
+    let last_bar = prims.iter().rposition(|p| matches!(p, Prim::Rect { w, fill: Some(f), .. } if colors.contains(f) && *w > 8.0)).unwrap_or(0);
+    let labels = prims[last_bar..].iter().filter(|p| matches!(p, Prim::Text { text, .. } if text.chars().any(|c| c.is_ascii_digit()))).count();
+    let values: usize = d.series.iter().map(|s| s.values.iter().flatten().count()).sum();
+    assert!(labels >= values, "{labels} labels after the last bar, of {values}");
+}

@@ -263,8 +263,12 @@ pub fn read_chart(root: &El) -> Option<Chart> {
     let doughnut = plot.child("doughnutChart");
     let hole_size = doughnut.and_then(|g| g.child_val("holeSize")).and_then(|v| v.trim().parse::<u8>().ok()).unwrap_or(75).clamp(10, 90);
     let bars = plot.child("barChart").or_else(|| plot.child("bar3DChart"));
-    let gap_width = bars.and_then(|g| g.child_val("gapWidth")).and_then(|v| v.trim().parse::<u16>().ok()).map(|v| v.min(500));
-    let overlap = bars.and_then(|g| g.child_val("overlap")).and_then(|v| v.trim().parse::<i16>().ok()).map(|v| v.clamp(-100, 100));
+    // Strict files write these as percentages (`219%`).
+    let percent = |v: &str| v.trim().trim_end_matches('%').trim().parse::<f64>().ok();
+    let gap_width = bars.and_then(|g| g.child_val("gapWidth")).and_then(percent).map(|v| v.clamp(0.0, 500.0) as u16);
+    // Stacked series share a slot, so the 100 written for them means nothing to keep.
+    let clustered = bars.is_some_and(|g| !matches!(g.child_val("grouping"), Some("stacked" | "percentStacked")));
+    let overlap = bars.filter(|_| clustered).and_then(|g| g.child_val("overlap")).and_then(percent).map(|v| v.clamp(-100.0, 100.0) as i16);
     let first_slice_angle =
         plot.child("pieChart").or(doughnut).and_then(|g| g.child_val("firstSliceAng")).and_then(|v| v.trim().parse::<u16>().ok()).unwrap_or(0) % 360;
     Some(Chart {
