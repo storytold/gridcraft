@@ -836,10 +836,16 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
         }
         Value::Text(t) => {
             // Rich runs join the shared string as formatting on the text; a runs entry that
-            // does not line up with this cell's text (wrong length, override in play) is
-            // ignored and the plain text is shared.
+            // does not line up with this cell's text — wrong length, or a table-header override
+            // that replaced the text with a same-length column name whose characters the runs
+            // were never meant for — is ignored and the plain text is shared.
+            let header_matches = |ov: Option<&String>, cell: Option<&Cell>| match (ov, cell) {
+                (Some(ov), Some(cell)) => cell.value.as_text().is_some_and(|stored| stored == ov),
+                (Some(_), None) => false,
+                _ => true,
+            };
             let i = match runs {
-                Some(r) if r.valid_for(t) => out.sst.index_rich(t, r),
+                Some(r) if r.valid_for(t) && header_matches(ov, cell) => out.sst.index_rich(t, r),
                 _ => out.sst.index(t),
             };
             let _ = write!(s, " t=\"s\"><v>{i}</v></c>");
