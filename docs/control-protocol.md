@@ -160,7 +160,7 @@ Empty params or `{"region":null}` query it. The result contains `region`, `name`
 `available` tags. Unknown tags or non-string values return an error without changing it.
 
 Changing it recalculates `DATEVALUE`, `TIMEVALUE`, implicit date/time text arguments
-(such as `YEAR`, `MONTH`, `DAY` and holiday arrays) and their dependents in every open
+(such as `YEAR`, `MONTH`, `DAY` and holiday arrays), arithmetic on date/time text and their dependents in every open
 document. It preserves each document's clean/dirty state and is not an undoable edit;
 undo/redo and undo-group rollback retain the current session region. Region-only changes
 inside a group create no undo step. Rollback restores the original clean/dirty state unless
@@ -171,9 +171,10 @@ This bridge uses the shared Region/parser from #1524 and `region-typed-input`. I
 not enable regional display or change programmatic `cell.set`/`range.setValues` input,
 which remains canonical en-US. Numeric serial text in date/time functions also retains
 canonical en-US coercion; only its date/time interpretation follows the region.
-General `VALUE` and arithmetic remain en-US as well. This leaves a documented
+Numeric text in arithmetic and all text coercion in `VALUE` stay canonical en-US.
+For `VALUE` this leaves a documented
 [coercion gap](date-order-repro.md#known-coercion-boundary-and-whitespace) for ambiguous
-date strings passed indirectly through those operations. Implicit date arguments reject
+date strings. Implicit date arguments reject
 surrounding whitespace on date/time text while preserving numeric serial text rules.
 The default region is en-US, independent of UI language.
 

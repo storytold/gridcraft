@@ -1,6 +1,6 @@
 # Reproduce a missing January row with regional date text
 
-> **Last updated:** 2026-11-03
+> **Last updated:** 2026-11-05
 
 This fictional two-row workbook is generated entirely in Rust. It contains date text,
 `DATEVALUE`, a `YEAR`/`MONTH` label and amounts; a PivotTable sums amounts by month.
@@ -65,20 +65,22 @@ cargo test -p gridcraft-functions --lib date::tests
 
 ## Known coercion boundary and whitespace
 
-This follow-up does not make all formula text coercion regional. The generated
-`regional_dates_expose_canonical_value_and_arithmetic_boundary` regression records this
-remaining compatibility gap explicitly, rather than treating it as Excel parity:
+The follow-up to #2429 applies the workbook Region to date/time text in arithmetic.
+The generated `regional_date_arithmetic_recalculates_while_value_stays_canonical`
+regression checks these results when changing Region:
 
 | Formula | en-US | it-IT |
 |---|---:|---:|
 | `MONTH("02/01/2026")` | 2 | 1 |
 | `VALUE("02/01/2026")` | 46054 | 46054 |
-| `"02/01/2026"+0` | 46054 | 46054 |
+| `"02/01/2026"+0` | 46054 | 46024 |
 | `MONTH(VALUE("02/01/2026"))` | 2 | 2 |
 
-The table uses the 1900 calendar. In it-IT, the direct date argument means 2 January,
-but passing through `VALUE` or arithmetic still produces the en-US serial for 1 February.
-Numeric serial text such as `"45000"` remains consistent through all three paths.
+The table uses the 1900 calendar. In it-IT, date arguments and arithmetic interpret
+the text as 2 January. `VALUE` still produces the en-US serial for 1 February.
+Numeric serial text such as `"45000"` follows the same canonical rules in all three paths.
+Arithmetic trims surrounding whitespace as before. Unary plus, comparisons and
+concatenation keep their existing rules.
 
 An [Excel desktop COM report](https://github.com/storytold/gridcraft/pull/2429#issuecomment-6459063104)
 measured matching date-function, `VALUE` and arithmetic interpretations in en-US.
@@ -86,8 +88,10 @@ A later [de-DE report by KNUFFIXX](https://github.com/storytold/gridcraft/pull/2
 compared desktop Excel on Windows with GridCraft CLI at `97b6ead`. The tested date
 functions agreed, while Excel returned `44227` for `A1+0` when A1 held the text
 `31.01.2021`. GridCraft returned `#VALUE!`. The report covers one German date
-format and does not test `VALUE` in de-DE. Arithmetic coercion therefore remains
-a separate compatibility change with its own test contract.
+format and does not test `VALUE` in de-DE. A synthetic GridCraft regression now checks
+`A1+0` returns `44227` under de-DE, alongside both calendar systems and array arithmetic.
+[PR #3372](https://github.com/storytold/gridcraft/pull/3372) addresses numeric separators,
+a separate part of [#889](https://github.com/storytold/gridcraft/issues/889).
 
 The earlier en-US COM report measured `DAY("   01/02/2026  ")` as `#VALUE!`. Implicit date arguments
 now reject surrounding whitespace on date/time text, including referenced dates and
@@ -134,6 +138,7 @@ save made while the group was open. Region-only groups do not manufacture an und
 
 | Date | Change |
 | --- | --- |
+| 2026-11-05 | Apply Region to date/time text in arithmetic and retain canonical numeric text and VALUE coercion |
 | 2026-11-05 | Record the external de-DE comparison and align the branch with current main |
 | 2026-10-28 | Reject padded implicit date text without changing numeric serial coercion; document and test the remaining VALUE/arithmetic regional boundary and the limits of reported Excel observations |
 | 2026-10-27 | Add transient native overrides and synthetic grouped rollback, nested history and save-point regressions; preserve the regional CLI oracle after main's module split and inherit these fixes in the implicit-date follow-up |

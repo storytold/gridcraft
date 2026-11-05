@@ -244,20 +244,25 @@ impl Value {
         }
     }
 
-    /// Coercion to a number as arithmetic does it: empty = 0, TRUE = 1, numeric text parses
-    /// (including dates, times, percentages and currency), other text = `#VALUE!`.
+    /// Canonical number coercion: empty = 0, TRUE = 1, numeric, date and time text parse as en-US,
+    /// and other text gives `#VALUE!`.
     pub fn to_number(&self) -> Result<f64, CellError> {
         self.to_number_in(crate::DateSystem::D1900)
     }
     /// [`Value::to_number`] with date text read in the given workbook date system.
     pub fn to_number_in(&self, sys: crate::DateSystem) -> Result<f64, CellError> {
+        self.to_number_with_date_region(sys, &crate::region::EN_US)
+    }
+    /// Number coercion for arithmetic with the workbook's date system and region for date/time text.
+    /// Text representing numbers, percentages or currency keeps the canonical syntax.
+    pub fn to_number_with_date_region(&self, sys: crate::DateSystem, region: &crate::Region) -> Result<f64, CellError> {
         match self {
             Value::Empty => Ok(0.0),
             Value::Number(n) => Ok(*n),
             Value::Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
-            Value::Text(t) => crate::parse::parse_number_text_in(t, sys).ok_or(CellError::Value),
+            Value::Text(t) => crate::parse::parse_number_text_with_date_region(t, sys, region).ok_or(CellError::Value),
             Value::Error(e) => Err(*e),
-            Value::Array(a) => a.data.first().map(|v| v.to_number_in(sys)).unwrap_or(Ok(0.0)),
+            Value::Array(a) => a.data.first().map(|v| v.to_number_with_date_region(sys, region)).unwrap_or(Ok(0.0)),
         }
     }
     /// Coercion to text as `&` does it.

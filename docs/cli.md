@@ -58,10 +58,10 @@ programmatic cell/range input keep their existing canonical en-US syntax. Date/t
 text in implicit arguments such as `YEAR`, `MONTH`, `DAY` and holiday ranges follows
 the selected region. Numeric serial text retains en-US coercion: for example,
 `HOUR("46035.5")` remains 12 under `it-IT`.
-General `VALUE` and arithmetic text coercion also remain en-US, so an ambiguous date string
-can differ from the same string passed directly to `MONTH`. See the explicit
-[remaining coercion gap and whitespace contract](date-order-repro.md#known-coercion-boundary-and-whitespace);
-this is not a claim of full regional Excel formula parity.
+Arithmetic operators also read date/time text in the selected region. `VALUE` keeps
+canonical en-US coercion, so an ambiguous date string can differ from the same string
+passed directly to `MONTH`. See the
+[coercion and whitespace rules](date-order-repro.md#known-coercion-boundary-and-whitespace).
 
 `mcp --connect` rejects `--region`: configure the running application before it opens the
 file instead. A connected client must not silently replace that application's preference.

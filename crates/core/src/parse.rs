@@ -49,15 +49,19 @@ pub fn parse_input_in(s: &str, sys: DateSystem, region: &Region) -> Parsed {
     Parsed { value: Value::text(s), format: None }
 }
 
-/// Numeric text as arithmetic coerces it ("1,000", "50%", "$3", "1/2/2020", "10:00"). en-US:
-/// worksheet text coercion does not follow the region.
+/// Canonical en-US number, date and time text ("1,000", "50%", "$3", "1/2/2020", "10:00").
 pub fn parse_number_text(s: &str) -> Option<f64> {
     parse_number_text_in(s, DateSystem::D1900)
 }
 
 /// Like [`parse_number_text`], with date text read in the given workbook date system.
 pub fn parse_number_text_in(s: &str, sys: DateSystem) -> Option<f64> {
-    parse_numeric(s.trim(), sys, &EN_US).map(|(n, _)| n)
+    parse_number_text_with_date_region(s, sys, &EN_US)
+}
+
+/// Arithmetic text keeps canonical numeric syntax and reads dates and times in the given region.
+pub(crate) fn parse_number_text_with_date_region(s: &str, sys: DateSystem, region: &Region) -> Option<f64> {
+    parse_numeric_regions(s.trim(), sys, &EN_US, region).map(|(n, _)| n)
 }
 
 /// Text consumed by a date-serial argument: numeric serials retain canonical en-US coercion,

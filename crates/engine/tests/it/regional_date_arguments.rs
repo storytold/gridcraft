@@ -42,9 +42,9 @@ fn referenced_italian_dates_recalculate_on_open_and_region_change() {
     assert!(!s.doc().unwrap().is_dirty());
 }
 
-/// Record the current scope boundary: general coercion remains canonical after a region change.
+/// Changing the region recalculates arithmetic on date text while VALUE keeps its current rules.
 #[test]
-fn regional_dates_expose_canonical_value_and_arithmetic_boundary() {
+fn regional_date_arithmetic_recalculates_while_value_stays_canonical() {
     let mut s = Session::new();
     s.new_workbook();
     s.execute(
@@ -55,15 +55,13 @@ fn regional_dates_expose_canonical_value_and_arithmetic_boundary() {
         ]}),
     )
     .unwrap();
-    for (region, month) in [("en-US", 2.0), ("it-IT", 1.0), ("en-US", 2.0)] {
+    for (region, month, serial) in [("en-US", 2.0, 46054.0), ("it-IT", 1.0, 46024.0), ("en-US", 2.0, 46054.0)] {
         s.set_region(region).unwrap();
         assert_eq!(value(&s, "B1"), Value::Number(month));
-        for cell in ["C1", "D1"] {
-            assert_eq!(value(&s, cell), Value::Number(46054.0), "{region}: {cell}");
-        }
-        for cell in ["E1", "F1"] {
-            assert_eq!(value(&s, cell), Value::Number(2.0), "{region}: {cell}");
-        }
+        assert_eq!(value(&s, "C1"), Value::Number(46054.0), "{region}");
+        assert_eq!(value(&s, "D1"), Value::Number(serial), "{region}");
+        assert_eq!(value(&s, "E1"), Value::Number(2.0), "{region}");
+        assert_eq!(value(&s, "F1"), Value::Number(month), "{region}");
         for cell in ["B2", "E2", "F2"] {
             assert_eq!(value(&s, cell), Value::Number(3.0), "{region}: {cell}");
         }
