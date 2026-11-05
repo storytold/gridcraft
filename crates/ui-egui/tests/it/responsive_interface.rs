@@ -51,6 +51,37 @@ fn narrow_tabs_reveal_the_active_tab_and_keep_contextual_tabs_reachable() {
     in_view(&h, h.get_by_role_and_label(Role::Button, "Mais abas").rect());
 }
 
+#[test]
+fn more_tabs_scrolls_to_the_last_contextual_tab_in_a_short_viewport() {
+    let mut h = harness(360.0, 170.0);
+    h.state_mut().session.execute("range.setValues", json!({"range":"A1:B2","values":[["Name","Qty"],["a",1]]})).unwrap();
+    h.state_mut().session.execute("insert.table", json!({"range":"A1:B2"})).unwrap();
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::Button, "More tabs").click();
+    h.run_steps(4);
+    let first = h.get_by_role_and_label(Role::Button, "Home").rect();
+    in_view(&h, first);
+    h.input_mut().events.extend([
+        Event::PointerMoved(first.center()),
+        Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            source: MouseWheelSource::Unknown,
+            delta: vec2(0.0, -1200.0),
+            phase: TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        },
+    ]);
+    h.run_steps(12);
+    let last = h.get_by_role_and_label(Role::Button, "Table Design").rect();
+    in_view(&h, last);
+    assert!(last.top() < 170.0, "the final tab scrolled into view");
+    h.get_by_role_and_label(Role::Button, "Table Design").click();
+    h.run_steps(6);
+    assert_eq!(h.state().ui.ribbon_tab, "Table Design");
+    assert!(h.query_by_role_and_label(Role::Button, "Table Design").is_none(), "selection closes the menu");
+    in_view(&h, h.get_by_role_and_label(Role::RadioButton, "Table Design").rect());
+}
+
 fn toolpak_rect(h: &Harness, tool: &str) -> Rect {
     h.ctx.memory(|memory| memory.area_rect(egui::Id::unique("dialog").with("analysisToolPak").with(tool))).unwrap()
 }
@@ -134,15 +165,18 @@ fn toolpak_actions_stay_fixed_while_the_body_scrolls() {
 
 #[test]
 fn toolpak_can_use_a_tall_viewport_without_a_fixed_height_cap() {
-    for tool in ["", "regression", "randomNumberGeneration"] {
-        let mut h = harness(1200.0, 1000.0);
-        h.state_mut().open_dialog("analysisToolPak", json!({"tool":tool}));
-        h.run_steps(6);
-        let rect = toolpak_rect(&h, tool);
-        assert!(rect.height() > 700.0, "{tool}: {rect:?}");
-        in_view(&h, rect);
-        in_view(&h, h.get_by_role_and_label(Role::Button, "   OK   ").rect());
-    }
+    let mut h = harness(1200.0, 1000.0);
+    h.state_mut().open_dialog("analysisToolPak", json!({}));
+    h.run_steps(6);
+    let compact = toolpak_rect(&h, "");
+    assert!(compact.height() < 700.0, "the chooser fits its list: {compact:?}");
+    resize_dialog(&mut h, compact, vec2(0.0, 350.0));
+    let rect = toolpak_rect(&h, "");
+    assert!(rect.height() > 700.0, "user resize can use the tall viewport: {rect:?}");
+    in_view(&h, rect);
+    let ok = h.get_by_role_and_label(Role::Button, "   OK   ").rect();
+    in_view(&h, ok);
+    assert!(ok.bottom() > compact.bottom() + 100.0, "actions follow the resized body");
 }
 
 #[test]
@@ -222,7 +256,11 @@ fn collapsed_toolpak_refedit_restores_the_expanded_size_and_keeps_enter_from_con
     let id = egui::Id::unique("dialog").with("analysisToolPak").with("regression").with("ref_edit_collapsed");
     let compact = h.ctx.memory(|m| m.area_rect(id)).unwrap();
     assert!(compact.height() < 150.0, "{compact:?}");
-    assert_eq!(compact.min, full.min);
+    // Shared RefEdit moves a compact picker that would cover the grid to the viewport's right
+    // edge, then restores the expanded dialog's position on Enter.
+    assert_eq!(compact.top(), full.top());
+    assert!((compact.right() - (h.ctx.content_rect().right() - 8.0)).abs() < 1.0, "{compact:?}");
+    in_view(&h, compact);
     assert!(h.query_by_role_and_label(Role::Button, "   OK   ").is_none());
     press_key(&mut h, Key::Enter);
     assert_eq!(h.state().dialog.as_ref().unwrap().collapsed(), None);
@@ -236,26 +274,61 @@ fn toolpak_can_be_manually_resized_and_its_actions_follow_the_new_size() {
     h.state_mut().open_dialog("analysisToolPak", json!({}));
     h.run_steps(6);
     let before = toolpak_rect(&h, "");
-    let start = before.right_bottom() - vec2(2.0, 2.0);
-    h.input_mut().events.push(Event::PointerMoved(start));
-    h.run_steps(2);
-    h.input_mut().events.push(Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
-    h.run_steps(2);
-    let end = start - vec2(80.0, 400.0);
-    for step in 1..=4 {
-        h.input_mut().events.push(Event::PointerMoved(start + (end - start) * (step as f32 / 4.0)));
-        h.run_steps(2);
-    }
-    h.input_mut().events.push(Event::PointerButton { pos: end, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
-    h.run_steps(6);
+    resize_dialog(&mut h, before, vec2(-80.0, -200.0));
     let after = toolpak_rect(&h, "");
-    assert!(after.height() < before.height() - 300.0, "{before:?} -> {after:?}");
+    assert!(after.height() < before.height() - 150.0, "{before:?} -> {after:?}");
     assert!(after.width() < before.width() - 40.0, "{before:?} -> {after:?}");
     in_view(&h, after);
     let ok = h.get_by_role_and_label(Role::Button, "   OK   ").rect();
     in_view(&h, ok);
     assert!(after.contains_rect(ok));
     in_view(&h, h.get_by_role_and_label(Role::Button, " Cancel ").rect());
+}
+
+fn resize_dialog(h: &mut Harness, before: Rect, delta: egui::Vec2) {
+    let handle = h.get_by_role_and_label(Role::Splitter, "Resize window bottom-right corner").rect();
+    let start = handle.center();
+    assert!(before.expand(8.0).contains(start), "resize handle {handle:?} belongs to {before:?}");
+    h.input_mut().events.push(Event::PointerMoved(start));
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    let end = start + delta;
+    for step in 1..=4 {
+        h.input_mut().events.push(Event::PointerMoved(start + (end - start) * (step as f32 / 4.0)));
+        h.run_steps(2);
+    }
+    h.input_mut().events.push(Event::PointerButton { pos: end, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(6);
+}
+
+#[test]
+fn short_dialogs_fit_content_and_remember_a_user_resize_when_reopened() {
+    for (name, params, max_height) in [
+        ("rowHeight", json!({}), 250.0),
+        ("columnWidth", json!({}), 250.0),
+        ("cfQuick", json!({"type":"cellIs","operator":"greaterThan","title":"Greater Than…"}), 400.0),
+        ("advancedFilter", json!({}), 400.0),
+    ] {
+        let mut h = harness(1200.0, 1000.0);
+        h.state_mut().open_dialog(name, params.clone());
+        h.run_steps(6);
+        let id = egui::Id::unique("dialog").with(name);
+        let before = h.ctx.memory(|m| m.area_rect(id)).unwrap();
+        assert!(before.height() < max_height, "{name}: {before:?}");
+        let ok = h.get_by_role_and_label(Role::Button, "   OK   ").rect();
+        assert!(before.bottom() - ok.bottom() < 40.0, "{name}: no empty window below the actions");
+        resize_dialog(&mut h, before, vec2(0.0, 150.0));
+        let resized = h.ctx.memory(|m| m.area_rect(id)).unwrap();
+        assert!(resized.height() > before.height() + 100.0, "{name}: {before:?} -> {resized:?}");
+        h.get_by_role_and_label(Role::Button, " Cancel ").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
+        h.state_mut().open_dialog(name, params);
+        h.run_steps(6);
+        let reopened = h.ctx.memory(|m| m.area_rect(id)).unwrap();
+        assert!((reopened.height() - resized.height()).abs() < 1.0, "{name}: {resized:?} -> {reopened:?}");
+    }
 }
 
 #[test]

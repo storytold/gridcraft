@@ -133,17 +133,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let home = app.ui_window();
     // The macro step editor is a large resizable window of its own.
     if d.name == "macroEditor" {
-        let mut open = true;
-        crate::macro_editor::window(app, ctx, &mut d, &mut open);
-        if !open {
-            app.macros.editor = None;
-            app.grid.macro_overlay = None;
-        } else if app.ui_window() != home {
-            // Something run from the editor switched windows: the editor stays in its own.
-            app.return_dialog(home, d);
-        } else {
-            app.dialog = Some(d);
-        }
+        show_macro_editor(app, ctx, d, home);
         return;
     }
     if d.name == "pasteSpecial" {
@@ -154,12 +144,13 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let mut confirm = false;
     let width: f32 = match d.name.as_str() {
         "formatCells" => 560.0,
-        "about" => 660.0,
+        "about" => 820.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "equation" => 520.0,
         "macros" => 480.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
+        "assignAction" => 440.0,
         "zoom" => 220.0,
         "pasteSpecial" => 480.0,
         _ => 380.0,
@@ -171,6 +162,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         // The tool chooser and each form have independent remembered sizes.
         window_id = window_id.with(d.values.get("tool").and_then(Json::as_str).unwrap_or(""));
     }
+    let fit_content = ctx.memory(|memory| memory.area_rect(window_id).is_none());
     let window = egui::Window::new(app.ui.language.tr(&d.title))
         .id(window_id)
         .collapsible(false)
@@ -178,18 +170,14 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         .min_size(vec2(0.0, 0.0))
         .max_size(room)
         .default_width(width.min(room.x))
-        // The scroll body shrinks to its content, so short forms still fit naturally.
-        // Its initial viewport must have room for the fields and the action row.
-        .default_height((room.y - 48.0).max(0.0))
+        // The fork retains a resizable window's default height even when its body shrinks.
+        // Start at zero and let the first bounded content measurement grow it instead.
+        .default_height(0.0)
         // A default position, not an anchor: egui anchors can't be dragged, and dialogs move by their title bar.
         .pivot(egui::Align2::CENTER_CENTER)
         .default_pos(viewport.center())
         .constrain_to(viewport)
         .open(&mut win_open);
-    let window = match d.name.as_str() {
-        "insertPicture" => window.default_height(240.0_f32.min(room.y)),
-        _ => window,
-    };
     let (window, collapsed) = place_window(app, ctx, &mut d, window, window_id);
     // Keep the expanded resize state intact while RefEdit shows only a compact reference box.
     let window = if collapsed.is_some() { window.id(window_id.with("ref_edit_collapsed")).auto_sized().max_size(room) } else { window };
@@ -199,14 +187,31 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             ref_edit(app, ui, &mut d, key, RefLabel::Named(&title), (width - 40.0).min((room.x - 24.0).max(0.0)));
             return;
         }
+        let body_min_height = if fit_content { 0.0 } else { ui.available_height() };
+        if fit_content || d.name != "analysisToolPak" {
+            // Offer the initial scroll body room to measure, without making that room the
+            // remembered window height. Generic forms can also grow when options add fields.
+            // Reserve the title and frame/content margins using the current scale's metrics.
+            let frame = egui::Frame::window(ui.style());
+            let chrome = ui.text_style_height(&egui::TextStyle::Heading)
+                + frame.total_margin().sum().y
+                + 2.0 * frame.inner_margin.sum().y;
+            ui.set_max_height((room.y - chrome).max(0.0));
+        }
         if d.name == "analysisToolPak" {
             // ToolPak owns its body scroll: its actions stay outside it.
-            analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open);
+            analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open, fit_content);
             return;
         }
         let body_width = ui.available_width();
-        egui::ScrollArea::both().id_salt("dialog_body").min_scrolled_height(0.0).max_height(ui.available_height()).show(ui, |ui| {
+        // Keep a user's requested height, but let newly revealed fields grow a short form.
+        egui::ScrollArea::both()
+            .id_salt("dialog_body")
+            .min_scrolled_height(0.0)
+            .max_height(ui.available_height())
+            .show(ui, |ui| {
             ui.set_max_width(body_width);
+            ui.set_min_height(body_min_height);
             match d.name.as_str() {
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
                 "dataValidation" => data_validation_form(app, ui, &mut d, &mut confirm, &mut open),
@@ -228,6 +233,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "solver" => solver(app, ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
+                "assignAction" => crate::control_ui::assign_dialog(app, ui, &mut d, &mut open),
+                "formatControl" => crate::control_ui::format_dialog(app, ui, &mut d, &mut open),
+                "controlQuestion" => crate::control_ui::question_dialog(app, ui, &mut d, &mut open),
                 "agents" => {
                     ui.label("GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:");
                     ui.add_space(4.0);
@@ -433,6 +441,12 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
         confirm = false;
     }
+    if confirm && d.name == "openLink" {
+        confirm = false;
+        if confirm_open_link(app, &d) {
+            open = false;
+        }
+    }
     if confirm && d.command.is_some() && home_sheet_deleted(app, &mut d) {
         // References without a sheet name would land on whichever sheet is shown now.
         app.message = Some((d.title.clone(), SHEET_DELETED.into()));
@@ -511,6 +525,48 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     }
 }
 
+/// Renders the macro editor's independent window and restores its dialog to the window it belongs to.
+fn show_macro_editor(app: &mut SheetApp, ctx: &egui::Context, mut d: Dialog, home: Option<u64>) {
+    let mut open = true;
+    crate::macro_editor::window(app, ctx, &mut d, &mut open);
+    if !open {
+        app.macros.editor = None;
+        app.grid.macro_overlay = None;
+    } else if app.ui_window() != home {
+        // Something run from the editor switched windows: the editor stays in its own.
+        app.return_dialog(home, d);
+    } else {
+        app.dialog = Some(d);
+    }
+}
+
+/// OK in Open Hyperlink; returns whether the prompt closes. A pass that carries control-channel
+/// input (`ui.key`, `ui.click`, `ui.drag`) can't say yes for the user (#2181): the link stays
+/// unopened and the prompt open, with a message. Real input in that same pass is refused too, so
+/// the user just presses OK again.
+pub(super) fn confirm_open_link(app: &mut SheetApp, d: &Dialog) -> bool {
+    if app.synthetic_pending {
+        app.message = Some((d.title.clone(), SYNTHETIC_LINK_CONFIRM.into()));
+        return false;
+    }
+    if let Err(e) = open_confirmed_link(app, d) {
+        app.message = Some((d.title.clone(), crate::clean_error(&e)));
+    }
+    true
+}
+
+/// Why Open Hyperlink ignored an OK that arrived with synthetic control-channel input.
+pub(super) const SYNTHETIC_LINK_CONFIRM: &str = "Synthetic input from the control channel can't open a link: press OK yourself to open it.";
+
+/// The user pressed OK in Open Hyperlink: opens the address the prompt showed (`d.link`), never
+/// one a caller edited into its values afterwards.
+pub(super) fn open_confirmed_link(app: &mut SheetApp, d: &Dialog) -> Result<(), String> {
+    let url = d.link.as_deref().unwrap_or_default();
+    let r = app.session.open_confirmed_link(url).map(|_| ()).map_err(|e| e.to_string());
+    app.after_engine();
+    r
+}
+
 pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
     ui.add_space(8.0);
     // A row as tall as the buttons: a right-to-left layout straight in the window takes all the
@@ -585,7 +641,10 @@ fn track_pick(pick: &mut RefPick, r: &egui::Response, typed: bool) {
 pub(super) fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     // Field labels, choices and notes are English source strings, translated as they are drawn.
     let lang = crate::i18n::current(ui.ctx());
-    egui::Grid::new("form").num_columns(1).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
+    // The single form column already fills the body. Measure at that width on the initial
+    // Grid sizing pass too, so wrapped choices do not seed a viewport-tall desired height.
+    let grid = egui::Grid::new("form").num_columns(1).min_col_width(ui.available_width()).spacing(vec2(8.0, 6.0));
+    grid.show(ui, |ui| {
         for f in d.fields.clone() {
             match f {
                 Field::Text { key, label } => {

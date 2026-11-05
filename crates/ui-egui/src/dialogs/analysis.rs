@@ -1,4 +1,4 @@
-use super::ref_edit::{RefLabel, SHEET_DELETED, end_pick, home_sheet_deleted, ref_edit};
+use super::ref_edit::{RefLabel, SHEET_DELETED, current_area_ref, end_pick, home_sheet_deleted, ref_edit};
 use super::show::{build_params, form_fields, ok_cancel};
 use super::{Dialog, Field, Json, Map, SheetApp, json, vec2};
 
@@ -224,10 +224,11 @@ pub(super) fn toolpak_defaults(sel: &str, tool: &str) -> Map<String, Json> {
 ///
 /// The caller supplies the window's remaining area. This function reserves the action row
 /// before sizing the scrollable chooser or form, keeping OK/Cancel fixed as the body scrolls.
+/// The first layout fits the body's content; subsequent layouts fill the remembered window size.
 /// Choosing a tool replaces the draft with defaults from the current selection and consumes
 /// that Enter press without submitting the new form. In a tool form, `confirm` requests command
 /// execution by the caller and `open` records cancellation; drawing alone never writes a report.
-pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool, fit_content: bool) {
     use gridcraft_engine::cmd::analysis::TOOLS;
     let action_height = (ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y).max(ui.spacing().interact_size.y);
     if d.values.get("askOverwrite").and_then(Json::as_bool) == Some(true) {
@@ -263,7 +264,7 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
         .min_scrolled_height(0.0)
         .min_scrolled_width(0.0)
         .max_height(body_height)
-        .auto_shrink([false, false])
+        .auto_shrink([false, fit_content])
         .show(ui, |ui| {
             ui.set_max_width(body_width);
             if let Some((_, label)) = selected {
@@ -326,7 +327,9 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
         ok_cancel(ui, &mut ok, open);
         let pick = d.values.get("pick").and_then(Json::as_str).unwrap_or("").to_string();
         if (ok || chosen) && TOOLS.iter().any(|(id, _)| *id == pick) {
-            let sel = app.session.active().map(|doc| doc.selection.current().a1()).unwrap_or_default();
+            // The selection becomes the input range, with its sheet's name when another sheet
+            // than the dialog's own is shown.
+            let sel = current_area_ref(app, d);
             d.values = toolpak_defaults(&sel, &pick);
             // Changing the form must not also run it with the same Enter key.
             ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));

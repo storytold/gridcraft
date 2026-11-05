@@ -8,7 +8,9 @@ use crate::SheetApp;
 use crate::icons::{self, Icon};
 use crate::keytips::keytip_table;
 use crate::theme::{self, Cat, Tokens};
-use crate::widgets::{big_button, big_split_button, color_palette, icon_button, small_button, small_split_button, split_button, toggle_button};
+use crate::widgets::{
+    big_button, big_split_button, color_palette, icon_button, small_button, small_split_button, small_toggle_button, split_button, toggle_button,
+};
 
 mod automate;
 mod contextual;
@@ -146,13 +148,19 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         arrow.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, app.ui.language.tr("More tabs")));
                         arrow.clone().on_hover_text(app.ui.language.tr("More tabs"));
                         egui::Popup::menu(&arrow).show(|ui| {
-                            for tab in &tabs {
-                                if ui.selectable_label(app.ui.ribbon_tab == *tab, app.ui.language.tr(tab)).clicked() {
-                                    app.ui.ribbon_tab = (*tab).to_string();
-                                    app.ui.ribbon_collapsed = false;
-                                    ui.close();
+                            // A popup's positioning alone cannot make a tall menu fit a short
+                            // viewport. Leave room for its frame and scroll the tab list.
+                            let frame = egui::Frame::popup(ui.style());
+                            let height = (ui.ctx().content_rect().height() - frame.total_margin().sum().y - 16.0).max(0.0);
+                            egui::ScrollArea::vertical().id_salt("more_tabs").min_scrolled_height(0.0).max_height(height).show(ui, |ui| {
+                                for tab in &tabs {
+                                    if ui.selectable_label(app.ui.ribbon_tab == *tab, app.ui.language.tr(tab)).clicked() {
+                                        app.ui.ribbon_tab = (*tab).to_string();
+                                        app.ui.ribbon_collapsed = false;
+                                        ui.close();
+                                    }
                                 }
-                            }
+                            });
                         });
                     } else {
                         draw_tabs(ui);
