@@ -481,6 +481,11 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Afficher",
         "Collapse dialog" => "Réduire la boîte de dialogue",
         "Expand dialog" => "Développer la boîte de dialogue",
+        "Open Hyperlink" => "Ouvrir le lien hypertexte",
+        "Cancel" => "Annuler",
+        "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook." => {
+            "Ce classeur demande à ouvrir l'adresse ci-dessous. Les liens peuvent mener à des sites malveillants ou lancer d'autres programmes : ne l'ouvrez que si vous faites confiance au classeur."
+        }
         _ => return None,
     })
 }

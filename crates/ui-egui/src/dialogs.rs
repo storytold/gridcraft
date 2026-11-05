@@ -40,6 +40,10 @@ pub(crate) use show::build_params;
 pub use show::show;
 use zoom::zoom_preset;
 
+/// The warning Open Hyperlink shows above the address; a fixed string so each language can translate it.
+const OPEN_LINK_WARNING: &str =
+    "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook.";
+
 /// A form field. `Ref` is a range reference that can also be picked by selecting on the grid
 /// (a RefEdit box).
 #[derive(Clone, Debug, PartialEq)]
@@ -553,9 +557,9 @@ impl Dialog {
             "openLink" => {
                 let url = params.get("url").and_then(Json::as_str).unwrap_or_default().to_string();
                 let mut d = Dialog::custom("openLink", "Open Hyperlink", json!({"url": url}));
-                d.fields = vec![Note(format!(
-                    "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook.\n\n{url}"
-                ))];
+                // The warning and the address are separate notes so the warning is a fixed,
+                // translatable string; the address is user data and is shown as it is.
+                d.fields = vec![Note(OPEN_LINK_WARNING.into()), Note(url.clone())];
                 d.link = Some(url);
                 d
             }
