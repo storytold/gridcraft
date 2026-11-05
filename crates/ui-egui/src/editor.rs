@@ -2,6 +2,8 @@
 //! autocomplete and argument hints.
 
 use gridcraft_engine::core::{CellRef, RangeRef};
+use gridcraft_engine::model::{CellRuns, Color, Font, Run, RunFont, Underline, VertAlign};
+use serde_json::json;
 
 /// How many distinct reference colours a formula cycles through (`Tokens::ref_colors`).
 pub const REF_COLOR_COUNT: usize = 8;
@@ -30,6 +32,9 @@ pub struct EditState {
     pub locale: gridcraft_engine::formula::FormulaLocale,
     pub cell: CellRef,
     pub text: String,
+    /// The rich-text runs of the text being edited (#776): `None` while the edit has none (a
+    /// formula, a plain cell); edited alongside the text and committed with it.
+    pub runs: Option<gridcraft_engine::model::CellRuns>,
     /// Started by typing (Enter mode: arrows commit) rather than F2 (Edit mode: arrows move the caret).
     pub enter_mode: bool,
     pub from_formula_bar: bool,
@@ -84,6 +89,7 @@ impl EditState {
             locale: Default::default(),
             cell,
             text,
+            runs: None,
             enter_mode,
             from_formula_bar,
             caret,
@@ -100,6 +106,16 @@ impl EditState {
             completion: None,
             original,
             python: false,
+        }
+    }
+
+    /// Replaces the edit's whole text, translating its runs to the new text (dropped when they
+    /// no longer line up, or when the new text is a formula).
+    pub fn set_text(&mut self, new: String) {
+        self.runs = self.runs.take().and_then(|r| r.edited(&self.text, &new));
+        self.text = new;
+        if self.is_formula() {
+            self.runs = None;
         }
     }
 
@@ -473,6 +489,259 @@ pub fn column_completion(sheet: &gridcraft_engine::model::Sheet, at: CellRef, ty
 pub fn completion_rest<'a>(full: &'a str, typed: &str) -> Option<&'a str> {
     let start = full.char_indices().nth(typed.chars().count())?.0;
     full.get(start..)
+}
+/// indices map through `char_indices`; one at or past the end maps to the text end.
+pub fn sel_bytes(ed: &EditState) -> Option<std::ops::Range<usize>> {
+    let (from, to) = (ed.caret.min(ed.anchor), ed.caret.max(ed.anchor));
+    if from >= to {
+        return None;
+    }
+    let byte = |at: usize| ed.text.char_indices().nth(at).map(|(i, _)| i).unwrap_or(ed.text.len());
+    Some(byte(from)..byte(to))
+}
+
+/// One `(byte range, font delta)` application against the edit buffer's runs.
+pub type RunApp = (std::ops::Range<usize>, RunFont);
+
+/// The Font-group commands that hit the edit buffer while an edit is active (the ribbon's
+/// `act`/`invoke`, keytips and shortcuts all funnel through [`crate::SheetApp::run`]).
+pub const RUN_FONT_IDS: &[&str] = &[
+    "home.bold",
+    "home.italic",
+    "home.underline",
+    "home.doubleUnderline",
+    "home.strikethrough",
+    "home.superscript",
+    "home.subscript",
+    "home.fontName",
+    "home.fontSize",
+    "home.increaseFontSize",
+    "home.decreaseFontSize",
+    "home.fontColor",
+    "home.formatCells",
+];
+
+/// Decides whether a Font-group command while editing applies to the edit buffer instead of the
+/// engine: `None` = do not intercept (fall through to the engine command — also for the
+/// programmatic `cell`/`range`/`chars` forms, a formula edit, a caret-only selection and
+/// commands missing their key param, which the engine validates); `Some(Ok(apps))` = apply each
+/// `(byte range, delta)` to the buffer runs in order (one entry for most commands, one per
+/// covered run for the size steppers); `Some(Err(msg))` = swallow with an alert (e.g. the run
+/// cap). The engine fn twins live there ([`all_covered`] mirrors the private
+/// `run_toggle_target`, `color_param`/`step_size` mirror theirs) so UI and headless agree.
+pub fn intercept_run_delta(id: &str, params: &serde_json::Value, ed: &EditState, base: &Font) -> Option<Result<Vec<RunApp>, String>> {
+    // The programmatic forms always reach the engine; so does anything outside the Font group.
+    if !RUN_FONT_IDS.contains(&id) || params.get("cell").is_some() || params.get("range").is_some() || params.get("chars").is_some() {
+        return None;
+    }
+    // Runs never apply to a formula.
+    if ed.is_formula() {
+        return None;
+    }
+    let range = sel_bytes(ed)?;
+    let on = params.get("on").and_then(serde_json::Value::as_bool);
+    match id {
+        "home.bold" => {
+            one_app(&range, RunFont { bold: Some(on.unwrap_or_else(|| !all_covered(ed, &range, base, |rf| rf.bold))), ..RunFont::default() })
+        }
+        "home.italic" => {
+            one_app(&range, RunFont { italic: Some(on.unwrap_or_else(|| !all_covered(ed, &range, base, |rf| rf.italic))), ..RunFont::default() })
+        }
+        "home.strikethrough" => {
+            one_app(&range, RunFont { strike: Some(on.unwrap_or_else(|| !all_covered(ed, &range, base, |rf| rf.strike))), ..RunFont::default() })
+        }
+        "home.underline" | "home.doubleUnderline" => {
+            let style = if id == "home.doubleUnderline" {
+                Underline::Double
+            } else {
+                match params.get("style").and_then(serde_json::Value::as_str) {
+                    Some("double") => Underline::Double,
+                    Some("singleAccounting") => Underline::SingleAccounting,
+                    Some("doubleAccounting") => Underline::DoubleAccounting,
+                    Some("none") => Underline::None,
+                    _ => Underline::Single,
+                }
+            };
+            // The engine's chars path resolves a missing `on` via the all-covered toggle over
+            // the requested style's underline; off stores the explicit clear.
+            let on = on.unwrap_or_else(|| !all_covered(ed, &range, base, underline_get(style)));
+            let u = if on { style } else { Underline::None };
+            one_app(&range, RunFont { underline: Some(u), ..RunFont::default() })
+        }
+        "home.superscript" => {
+            // Toggle like the engine's chars path: an all-superscript selection goes back to
+            // baseline, anything else raises.
+            let on = on.unwrap_or_else(|| !all_covered(ed, &range, base, |rf: &RunFont| rf.vert.map(|v| v == VertAlign::Superscript)));
+            one_app(&range, RunFont { vert: Some(if on { VertAlign::Superscript } else { VertAlign::Baseline }), ..RunFont::default() })
+        }
+        "home.subscript" => {
+            let on = on.unwrap_or_else(|| !all_covered(ed, &range, base, |rf: &RunFont| rf.vert.map(|v| v == VertAlign::Subscript)));
+            one_app(&range, RunFont { vert: Some(if on { VertAlign::Subscript } else { VertAlign::Baseline }), ..RunFont::default() })
+        }
+        "home.fontName" => params
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .map(|name| Ok(vec![(range, RunFont { name: Some(name.to_string()), ..RunFont::default() })])),
+        "home.fontSize" => {
+            let size = params.get("size").and_then(serde_json::Value::as_f64)?;
+            if !(1.0..=409.0).contains(&size) {
+                return Some(Err("The number must be between 1 and 409.".into()));
+            }
+            let size = ((size * 2.0).round() / 2.0) as f32;
+            one_app(&range, RunFont { size: Some(size), ..RunFont::default() })
+        }
+        "home.increaseFontSize" | "home.decreaseFontSize" => {
+            let up = id == "home.increaseFontSize";
+            // Without runs the buffer behaves like one all-default run over the whole text.
+            let fallback = Run { start: 0, len: u32::try_from(ed.text.len()).unwrap_or(u32::MAX), font: RunFont::default() };
+            let runs: Vec<&Run> = match &ed.runs {
+                Some(r) => r.runs.iter().collect(),
+                None => vec![&fallback],
+            };
+            let end = range.end.min(ed.text.len());
+            let start = range.start.min(end);
+            // Not one delta: every covered run steps from its own merged size (the engine's
+            // `step_chars_font` ruling), so applying in order splits the selection edges.
+            let mut apps = Vec::new();
+            for run in runs {
+                let rs = run.start as usize;
+                let re = rs.saturating_add(run.len as usize);
+                if re <= start || rs >= end {
+                    continue;
+                }
+                let step = step_size(run.font.merged(base).size, up);
+                apps.push((rs.max(start)..re.min(end), RunFont { size: Some(step), ..RunFont::default() }));
+            }
+            Some(Ok(apps))
+        }
+        "home.fontColor" => color_param(params.get("color")).map(|c| Ok(vec![(range, RunFont { color: Some(c), ..RunFont::default() })])),
+        "home.formatCells" => {
+            // Only `style.font` can apply to a character selection; without it the engine
+            // handles the command (dialog or cell-level patch).
+            let style = params.get("style")?;
+            let font = style.get("font")?;
+            if style.as_object().is_some_and(|o| o.keys().any(|k| k != "font")) {
+                return Some(Err("home.formatCells: only `style.font` can apply to a character selection".into()));
+            }
+            match serde_json::from_value::<RunFont>(font.clone()) {
+                Ok(delta) => one_app(&range, delta),
+                Err(e) => Some(Err(format!("home.formatCells: {e}"))),
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The single application most commands produce.
+fn one_app(range: &std::ops::Range<usize>, delta: RunFont) -> Option<Result<Vec<RunApp>, String>> {
+    Some(Ok(vec![(range.clone(), delta)]))
+}
+
+/// The all-covered rule, the local twin of the engine's private `run_toggle_target`: true only
+/// when every covered character's run font, merged over `base`, has the property `get` reads.
+/// `false` when any covered character lacks it — or nothing is covered (no runs) — so the next
+/// press turns it on.
+fn all_covered(ed: &EditState, range: &std::ops::Range<usize>, base: &Font, get: fn(&RunFont) -> Option<bool>) -> bool {
+    let Some(runs) = &ed.runs else { return false };
+    let end = range.end.min(ed.text.len());
+    let start = range.start.min(end);
+    let mut covered = false;
+    for run in &runs.runs {
+        let rs = run.start as usize;
+        let re = rs.saturating_add(run.len as usize);
+        if re <= start || rs >= end {
+            continue;
+        }
+        // Straddling runs count: format_range keeps their font on the split pieces.
+        covered = true;
+        let f = run.font.merged(base);
+        let resolved = RunFont {
+            name: Some(f.name.clone()),
+            size: Some(f.size),
+            bold: Some(f.bold),
+            italic: Some(f.italic),
+            underline: Some(f.underline),
+            strike: Some(f.strike),
+            color: Some(f.color),
+            vert: Some(f.vert),
+        };
+        if get(&resolved) != Some(true) {
+            return false;
+        }
+    }
+    covered
+}
+
+/// A [`all_covered`] property for underline styles: the resolved underline equals `u` (a plain
+/// `fn`, since the helper takes a function pointer) — the local twin of the engine's
+/// `underline_get`.
+fn underline_get(u: Underline) -> fn(&RunFont) -> Option<bool> {
+    match u {
+        Underline::None => |rf: &RunFont| Some(rf.underline == Some(Underline::None)),
+        Underline::Single => |rf: &RunFont| Some(rf.underline == Some(Underline::Single)),
+        Underline::Double => |rf: &RunFont| Some(rf.underline == Some(Underline::Double)),
+        Underline::SingleAccounting => |rf: &RunFont| Some(rf.underline == Some(Underline::SingleAccounting)),
+        Underline::DoubleAccounting => |rf: &RunFont| Some(rf.underline == Some(Underline::DoubleAccounting)),
+    }
+}
+
+/// The `color` param (`"#RRGGBB"`, `"auto"`, or `{theme, tint}`): the local twin of the engine's
+/// crate-private param read, same forms and clamps.
+fn color_param(v: Option<&serde_json::Value>) -> Option<Color> {
+    match v? {
+        serde_json::Value::String(s) if s.eq_ignore_ascii_case("auto") || s.eq_ignore_ascii_case("automatic") || s.eq_ignore_ascii_case("none") => {
+            Some(gridcraft_engine::model::Color::Auto)
+        }
+        serde_json::Value::String(s) => Color::from_hex(s),
+        serde_json::Value::Object(o) => {
+            let theme = o.get("theme")?.as_u64()? as u8;
+            let tint = o.get("tint").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+            Some(Color::Theme(theme.min(11), (tint.clamp(-1.0, 1.0) * 1000.0) as i16))
+        }
+        _ => None,
+    }
+}
+
+/// One size step from `cur`, saturating at the cell-level bounds (1–409) like the engine's
+/// size steppers.
+fn step_size(cur: f32, up: bool) -> f32 {
+    if !cur.is_finite() {
+        return if up { 409.0 } else { 1.0 };
+    }
+    if up { (cur + 1.0).clamp(1.0, 409.0) } else { (cur - 1.0).clamp(1.0, 409.0) }
+}
+
+/// The runs of flat text: one all-default run over `len` bytes (the engine's fallback too).
+fn default_runs(len: usize) -> CellRuns {
+    CellRuns { runs: vec![Run { start: 0, len: u32::try_from(len).unwrap_or(u32::MAX), font: RunFont::default() }] }
+}
+
+/// Applies intercepted `(byte range, delta)` pairs to the edit buffer's runs, in order. A flat
+/// result — or a buffer without runs — behaves like one all-default run for the next pair; a
+/// final flat result leaves `ed.runs` `None`. `Err` carries the alert message (the per-cell run
+/// cap) and leaves `ed.runs` exactly as it was.
+pub fn apply_run_fonts(ed: &mut EditState, apps: Vec<RunApp>) -> Result<(), String> {
+    for (range, delta) in apps {
+        // Compute-then-assign: a refused press (the cap) must not flatten the buffer by taking
+        // the runs before the result is known.
+        let current = ed.runs.clone().unwrap_or_else(|| default_runs(ed.text.len()));
+        ed.runs = current.format_range(&ed.text, range, &delta).map_err(|_| "too many runs".to_string())?;
+    }
+    Ok(())
+}
+
+/// The `cell.set` params committing `ed`: the cell, the text, and the runs when present. A
+/// formula commits one value and never carries runs, whatever path the text took (an edit can
+/// only hold runs as text).
+pub fn commit_params(ed: &EditState) -> serde_json::Value {
+    let mut params = json!({ "cell": ed.cell.a1(), "input": ed.text });
+    if !ed.is_formula()
+        && let Some(runs) = &ed.runs
+        && let Ok(value) = serde_json::to_value(runs)
+    {
+        params["runs"] = value;
+    }
+    params
 }
 
 #[cfg(test)]

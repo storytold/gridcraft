@@ -580,3 +580,18 @@ fn find_and_replace_within_the_selection() {
     let all = s.execute("edit.find", json!({"what": "pear", "all": true})).unwrap();
     assert_eq!(all["count"], 3, "A1, A3 and A4 on the whole sheet");
 }
+
+#[test]
+fn a_transposed_cut_moves_its_merges() {
+    let mut s = crate::Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1:B2", "values": [[1, 2], [3, 4]]})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1:B2"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"at": "D1", "what": "all", "transpose": true})).unwrap();
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    // A1:B1 (one tall row) transposes to a one-column merge at D1:D2.
+    assert!(sh.merges.iter().any(|m| m.a1() == "D1:D2"), "the merge transposes with the block: {:?}", sh.merges);
+    assert!(!sh.merges.iter().any(|m| m.a1() == "A1:B1"), "the source merge is gone");
+}

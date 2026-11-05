@@ -1,7 +1,9 @@
 //! Formatting: Home › Font, Alignment, Number, Styles, Cells › Format.
 
 use gridcraft_core::{CellRef, RangeRef};
-use gridcraft_model::{BorderLine, BorderStyle, Borders, Color, Fill, HAlign, NumFmt, Style, StyleId, Theme, Underline, VAlign, VertAlign};
+use gridcraft_model::{
+    BorderLine, BorderStyle, Borders, CellRuns, Color, Fill, Font, HAlign, NumFmt, RunFont, Style, StyleId, Theme, Underline, VAlign, VertAlign,
+};
 use serde_json::{Value as Json, json};
 
 use super::{
@@ -12,53 +14,30 @@ use super::{
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         // Font
-        cmd!("home.bold", "Bold", ["Home", "Font"], Some("Cmd+B"), "{range?, on?: bool}", has_doc, |s, p| toggle(
-            s,
-            p,
-            |st| st.font.bold,
-            |st, v| st.font.bold = v
-        )),
-        cmd!("home.italic", "Italic", ["Home", "Font"], Some("Cmd+I"), "{range?, on?}", has_doc, |s, p| toggle(
-            s,
-            p,
-            |st| st.font.italic,
-            |st, v| st.font.italic = v
-        )),
+        cmd!("home.bold", "Bold", ["Home", "Font"], Some("Cmd+B"), "{range?, chars?, on?: bool}", has_doc, bold),
+        cmd!("home.italic", "Italic", ["Home", "Font"], Some("Cmd+I"), "{range?, chars?, on?}", has_doc, italic),
         cmd!(
             "home.underline",
             "Underline",
             ["Home", "Font"],
             Some("Cmd+U"),
-            "{range?, on?, style?: single|double|singleAccounting|doubleAccounting}",
+            "{range?, chars?, on?, style?: single|double|singleAccounting|doubleAccounting}",
             has_doc,
             underline
         ),
-        cmd!("home.doubleUnderline", "Double Underline", ["Home", "Font"], None, "{range?}", has_doc, |s, p| underline(
+        cmd!("home.doubleUnderline", "Double Underline", ["Home", "Font"], None, "{range?, chars?}", has_doc, |s, p| underline(
             s,
             &with(p, "style", json!("double"))
         )),
-        cmd!("home.strikethrough", "Strikethrough", ["Home", "Font"], Some("Cmd+Shift+X"), "{range?, on?}", has_doc, |s, p| toggle(
-            s,
-            p,
-            |st| st.font.strike,
-            |st, v| st.font.strike = v
+        cmd!("home.strikethrough", "Strikethrough", ["Home", "Font"], Some("Cmd+Shift+X"), "{range?, chars?, on?}", has_doc, strikethrough),
+        cmd!("home.superscript", "Superscript", ["Home", "Font"], None, "{range?, chars?, on?}", has_doc, superscript),
+        cmd!("home.subscript", "Subscript", ["Home", "Font"], None, "{range?, chars?, on?}", has_doc, subscript),
+        cmd!("home.fontName", "Font", ["Home", "Font"], None, "{range?, chars?, name: \"Calibri\"}", has_doc, font_name),
+        cmd!("home.fontSize", "Font Size", ["Home", "Font"], None, "{range?, chars?, size: 11}", has_doc, font_size),
+        cmd!("home.increaseFontSize", "Increase Font Size", ["Home", "Font"], Some("Cmd+Shift+>"), "{range?, chars?}", has_doc, |s, p| step_font(
+            s, p, true
         )),
-        cmd!("home.superscript", "Superscript", ["Home", "Font"], None, "{range?, on?}", has_doc, |s, p| toggle(
-            s,
-            p,
-            |st| st.font.vert == VertAlign::Superscript,
-            |st, v| st.font.vert = if v { VertAlign::Superscript } else { VertAlign::Baseline }
-        )),
-        cmd!("home.subscript", "Subscript", ["Home", "Font"], None, "{range?, on?}", has_doc, |s, p| toggle(
-            s,
-            p,
-            |st| st.font.vert == VertAlign::Subscript,
-            |st, v| st.font.vert = if v { VertAlign::Subscript } else { VertAlign::Baseline }
-        )),
-        cmd!("home.fontName", "Font", ["Home", "Font"], None, "{range?, name: \"Calibri\"}", has_doc, font_name),
-        cmd!("home.fontSize", "Font Size", ["Home", "Font"], None, "{range?, size: 11}", has_doc, font_size),
-        cmd!("home.increaseFontSize", "Increase Font Size", ["Home", "Font"], Some("Cmd+Shift+>"), "{range?}", has_doc, |s, p| step_font(s, p, true)),
-        cmd!("home.decreaseFontSize", "Decrease Font Size", ["Home", "Font"], Some("Cmd+Shift+<"), "{range?}", has_doc, |s, p| step_font(
+        cmd!("home.decreaseFontSize", "Decrease Font Size", ["Home", "Font"], Some("Cmd+Shift+<"), "{range?, chars?}", has_doc, |s, p| step_font(
             s, p, false
         )),
         cmd!(
@@ -66,7 +45,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Font Color",
             ["Home", "Font"],
             None,
-            "{range?, color: \"#C00000\" | \"auto\" | {theme: 4, tint: -0.25}}",
+            "{range?, chars?, color: \"#C00000\" | \"auto\" | {theme: 4, tint: -0.25}}",
             has_doc,
             font_color
         ),
@@ -85,7 +64,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Format Cells…",
             ["Home", "Cells", "Format"],
             Some("Cmd+1"),
-            "{range?, style: {font?, fill?, borders?, align?, numFmt?, protection?}} (partial Style JSON merged in)",
+            "{range?, chars?, style: {font?, fill?, borders?, align?, numFmt?, protection?}} (partial Style JSON merged in; with `chars`, `font` only)",
             has_doc,
             format_cells
         ),
@@ -309,6 +288,179 @@ pub(crate) fn apply_style(s: &mut Session, p: &Json, f: impl Fn(&mut Style)) -> 
     })
 }
 
+/// The `chars: [start, len]` param — character-indexed, as the public API speaks — as a byte
+/// range into `text`, by counting `char_indices`. Errors when `chars` is missing or not a
+/// two-number array, covers no characters, or reaches past the text; ranges so derived always
+/// land on UTF-8 boundaries.
+fn chars_bytes(text: &str, p: &Json) -> Result<std::ops::Range<usize>> {
+    let malformed = || bad("chars", "`chars` must be [start, len] in characters");
+    let arr = p.get("chars").and_then(Json::as_array).ok_or_else(malformed)?;
+    let start = arr.first().and_then(Json::as_u64).ok_or_else(malformed)?;
+    let len = arr.get(1).and_then(Json::as_u64).ok_or_else(malformed)?;
+    if len == 0 {
+        return Err(bad("chars", "`chars` must cover at least one character"));
+    }
+    // `last` is the char index just past the range; byte offsets are the positions of the chars
+    // at indexes `start` and `last - 1` (counted, so hostile offsets just miss the text).
+    let last = start.checked_add(len).ok_or_else(malformed)?;
+    let start_one = start.checked_add(1).ok_or_else(malformed)?;
+    let (mut start_byte, mut end_byte) = (None, None);
+    let mut nth: u64 = 0;
+    for (i, c) in text.char_indices() {
+        nth += 1;
+        if nth == start_one {
+            start_byte = Some(i);
+        }
+        if nth == last {
+            end_byte = Some(i.saturating_add(c.len_utf8()));
+            break;
+        }
+    }
+    match (start_byte, end_byte) {
+        (Some(start), Some(end)) => Ok(start..end),
+        _ => Err(bad("chars", format!("`chars` [{start}, {len}] reaches past the cell's text"))),
+    }
+}
+
+/// The runs of a cell without any: one all-default run over `len` bytes.
+fn default_runs(len: u32) -> CellRuns {
+    CellRuns { runs: vec![gridcraft_model::Run { start: 0, len, font: RunFont::default() }] }
+}
+
+/// Formats a character range of one cell's text with a font delta (the `chars` path of the Font
+/// commands, e.g. `home.fontColor {cell, chars, color}`). Requires `cell` (or a one-cell
+/// `range`) naming a cell that holds plain text; the cell's value is untouched — the runs
+/// side-table carries the format. A result that is flat again deletes the side-table entry.
+pub(crate) fn apply_run_font(s: &mut Session, p: &Json, delta: RunFont) -> Result<Json> {
+    if str_param(p, "cell").is_none() && str_param(p, "range").is_none() {
+        return Err(bad("chars", "`chars` needs `cell` (or a one-cell `range`) naming the text to format"));
+    }
+    let sheet = target_sheet(s, p)?;
+    let ranges = target_ranges(s, p)?;
+    let Some(r) = ranges.first().copied() else { return Err(bad("chars", "`chars` needs `cell` (or a one-cell `range`)")) };
+    if ranges.len() > 1 || !r.is_single() {
+        return Err(bad("chars", "`chars` formats a range within one cell: pass `cell`, or a one-cell `range`"));
+    }
+    let at = r.start;
+    if s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.protection.as_ref().is_some_and(|pr| !pr.format_cells)) {
+        return Err(EngineError::Other("The cell or chart you're trying to change is on a protected sheet.".into()));
+    }
+    let d = s.doc()?;
+    let Some(sh) = d.wb.sheet(sheet) else { return Err(EngineError::Other("no such sheet".into())) };
+    let not_text = || bad("chars", "the cell must hold plain text (not a formula or number) to format characters");
+    let text = match sh.cell(at) {
+        Some(cell) if cell.formula.is_none() => cell.value.as_text().ok_or_else(not_text)?.to_string(),
+        _ => return Err(not_text()),
+    };
+    let len = u32::try_from(text.len()).map_err(|_| not_text())?;
+    let range = chars_bytes(&text, p)?;
+    // A cell without runs behaves like one all-default run over its text.
+    let current = sh.cell_runs.get(&at).cloned().unwrap_or_else(|| default_runs(len));
+    let formatted = current.format_range(&text, range, &delta).map_err(|_| bad("home.*", "too many runs"))?;
+    edit(s, |cx| {
+        let sh = cx.sheet_mut(sheet)?;
+        match formatted {
+            Some(runs) => {
+                sh.cell_runs.insert(at, runs);
+            }
+            // Flat again: drop the entry rather than store an empty run list.
+            None => {
+                sh.cell_runs.remove(&at);
+            }
+        }
+        Ok(Json::Null)
+    })
+}
+
+/// The toggle target for a `chars` selection: true only when every covered character's run
+/// font, merged over the cell's base font, has the property `get` reads — the all-covered
+/// rule, mirroring how the cell-level toggles read the active style. `false` when any covered
+/// character lacks it (or nothing is covered: no runs), so the next press turns it on.
+fn run_toggle_target(text: &str, runs: Option<&CellRuns>, range: &std::ops::Range<usize>, base: &Font, get: fn(&RunFont) -> Option<bool>) -> bool {
+    let Some(runs) = runs else { return false };
+    let end = range.end.min(text.len());
+    let start = range.start.min(end);
+    let mut covered = false;
+    for run in &runs.runs {
+        let rs = run.start as usize;
+        let re = rs.saturating_add(run.len as usize);
+        if re <= start || rs >= end {
+            continue;
+        }
+        // Straddling runs count: format_range keeps their font on the split pieces.
+        covered = true;
+        let f = run.font.merged(base);
+        let resolved = RunFont {
+            name: Some(f.name.clone()),
+            size: Some(f.size),
+            bold: Some(f.bold),
+            italic: Some(f.italic),
+            underline: Some(f.underline),
+            strike: Some(f.strike),
+            color: Some(f.color),
+            vert: Some(f.vert),
+        };
+        if get(&resolved) != Some(true) {
+            return false;
+        }
+    }
+    covered
+}
+
+/// What the Font commands' `chars` branches resolve against: the single target cell, its text,
+/// the selected byte range, its current runs (`None` when the cell is flat) and its base font
+/// (the cell style's). Validation mirrors [`apply_run_font`], which re-checks as it applies.
+struct CharsTarget {
+    sheet: usize,
+    at: CellRef,
+    text: String,
+    range: std::ops::Range<usize>,
+    runs: Option<CellRuns>,
+    base: Font,
+}
+
+fn chars_target(s: &Session, p: &Json) -> Result<CharsTarget> {
+    if str_param(p, "cell").is_none() && str_param(p, "range").is_none() {
+        return Err(bad("chars", "`chars` needs `cell` (or a one-cell `range`) naming the text to format"));
+    }
+    let sheet = target_sheet(s, p)?;
+    let ranges = target_ranges(s, p)?;
+    let Some(r) = ranges.first().copied() else { return Err(bad("chars", "`chars` needs `cell` (or a one-cell `range`)")) };
+    if ranges.len() > 1 || !r.is_single() {
+        return Err(bad("chars", "`chars` formats a range within one cell: pass `cell`, or a one-cell `range`"));
+    }
+    let at = r.start;
+    let d = s.doc()?;
+    let Some(sh) = d.wb.sheet(sheet) else { return Err(EngineError::Other("no such sheet".into())) };
+    // The same protection rule every whole-cell Font command enforces, in the one place all
+    // `chars` paths pass (apply_run_font's own check stays: it is reached without a target too).
+    if sh.protection.as_ref().is_some_and(|pr| !pr.format_cells) {
+        return Err(EngineError::Other("The cell or chart you're trying to change is on a protected sheet.".into()));
+    }
+    let not_text = || bad("chars", "the cell must hold plain text (not a formula or number) to format characters");
+    let text = match sh.cell(at) {
+        Some(cell) if cell.formula.is_none() => cell.value.as_text().ok_or_else(not_text)?.to_string(),
+        _ => return Err(not_text()),
+    };
+    let range = chars_bytes(&text, p)?;
+    let base = d.wb.styles.get(sh.style_id(at)).font.clone();
+    Ok(CharsTarget { sheet, at, text, range, runs: sh.cell_runs.get(&at).cloned(), base })
+}
+
+/// The `chars` branch of the Font toggles (bold, italic, …): `on` wins when given, otherwise
+/// the all-covered rule ([`run_toggle_target`]) resolves it like the cell-level toggle reads
+/// the active style — and the delta goes onto the runs, not the cell style.
+fn chars_toggle(s: &mut Session, p: &Json, get: fn(&RunFont) -> Option<bool>, delta: fn(bool) -> RunFont) -> Result<Json> {
+    let on = match bool_param(p, "on") {
+        Some(v) => v,
+        None => {
+            let t = chars_target(s, p)?;
+            !run_toggle_target(&t.text, t.runs.as_ref(), &t.range, &t.base, get)
+        }
+    };
+    apply_run_font(s, p, delta(on)).map(|_| json!({"on": on}))
+}
+
 /// The style of the active cell (what toggles read).
 pub(crate) fn active_style(s: &Session) -> Result<Style> {
     let d = s.doc()?;
@@ -325,6 +477,32 @@ fn toggle(s: &mut Session, p: &Json, get: fn(&Style) -> bool, set: fn(&mut Style
     Ok(json!({"on": on}))
 }
 
+fn bold(s: &mut Session, p: &Json) -> Result<Json> {
+    if p.get("chars").is_some() {
+        return chars_toggle(s, p, |rf| rf.bold, |on| RunFont { bold: Some(on), ..RunFont::default() });
+    }
+    toggle(s, p, |st| st.font.bold, |st, v| st.font.bold = v)
+}
+
+fn italic(s: &mut Session, p: &Json) -> Result<Json> {
+    if p.get("chars").is_some() {
+        return chars_toggle(s, p, |rf| rf.italic, |on| RunFont { italic: Some(on), ..RunFont::default() });
+    }
+    toggle(s, p, |st| st.font.italic, |st, v| st.font.italic = v)
+}
+
+/// A [`run_toggle_target`] property: the resolved underline equals `u` (a plain `fn`, since the
+/// helper takes a function pointer).
+fn underline_get(u: Underline) -> fn(&RunFont) -> Option<bool> {
+    match u {
+        Underline::None => |rf: &RunFont| Some(rf.underline == Some(Underline::None)),
+        Underline::Single => |rf: &RunFont| Some(rf.underline == Some(Underline::Single)),
+        Underline::Double => |rf: &RunFont| Some(rf.underline == Some(Underline::Double)),
+        Underline::SingleAccounting => |rf: &RunFont| Some(rf.underline == Some(Underline::SingleAccounting)),
+        Underline::DoubleAccounting => |rf: &RunFont| Some(rf.underline == Some(Underline::DoubleAccounting)),
+    }
+}
+
 fn underline(s: &mut Session, p: &Json) -> Result<Json> {
     let style = match str_param(p, "style").unwrap_or("single") {
         "double" => Underline::Double,
@@ -333,6 +511,17 @@ fn underline(s: &mut Session, p: &Json) -> Result<Json> {
         "none" => Underline::None,
         _ => Underline::Single,
     };
+    if p.get("chars").is_some() {
+        let on = match bool_param(p, "on") {
+            Some(v) => v,
+            None => {
+                let t = chars_target(s, p)?;
+                !run_toggle_target(&t.text, t.runs.as_ref(), &t.range, &t.base, underline_get(style))
+            }
+        };
+        let u = if on { style } else { Underline::None };
+        return apply_run_font(s, p, RunFont { underline: Some(u), ..RunFont::default() }).map(|_| json!({"on": on}));
+    }
     let cur = active_style(s)?.font.underline;
     let on = bool_param(p, "on").unwrap_or(cur != style);
     let u = if on { style } else { Underline::None };
@@ -340,8 +529,42 @@ fn underline(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"on": on}))
 }
 
+fn strikethrough(s: &mut Session, p: &Json) -> Result<Json> {
+    if p.get("chars").is_some() {
+        return chars_toggle(s, p, |rf| rf.strike, |on| RunFont { strike: Some(on), ..RunFont::default() });
+    }
+    toggle(s, p, |st| st.font.strike, |st, v| st.font.strike = v)
+}
+
+fn superscript(s: &mut Session, p: &Json) -> Result<Json> {
+    if p.get("chars").is_some() {
+        return chars_toggle(
+            s,
+            p,
+            |rf| rf.vert.map(|v| v == VertAlign::Superscript),
+            |on| RunFont { vert: Some(if on { VertAlign::Superscript } else { VertAlign::Baseline }), ..RunFont::default() },
+        );
+    }
+    toggle(s, p, |st| st.font.vert == VertAlign::Superscript, |st, v| st.font.vert = if v { VertAlign::Superscript } else { VertAlign::Baseline })
+}
+
+fn subscript(s: &mut Session, p: &Json) -> Result<Json> {
+    if p.get("chars").is_some() {
+        return chars_toggle(
+            s,
+            p,
+            |rf| rf.vert.map(|v| v == VertAlign::Subscript),
+            |on| RunFont { vert: Some(if on { VertAlign::Subscript } else { VertAlign::Baseline }), ..RunFont::default() },
+        );
+    }
+    toggle(s, p, |st| st.font.vert == VertAlign::Subscript, |st, v| st.font.vert = if v { VertAlign::Subscript } else { VertAlign::Baseline })
+}
+
 fn font_name(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(name) = str_param(p, "name").map(str::to_string) else { return Err(bad("home.fontName", "missing `name`")) };
+    if p.get("chars").is_some() {
+        return apply_run_font(s, p, RunFont { name: Some(name), ..RunFont::default() });
+    }
     apply_style(s, p, |st| {
         st.font.name = name.clone();
         st.font.charset = None;
@@ -355,12 +578,63 @@ fn font_size(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other("The number must be between 1 and 409.".into()));
     }
     let size = ((size * 2.0).round() / 2.0) as f32;
+    if p.get("chars").is_some() {
+        return apply_run_font(s, p, RunFont { size: Some(size), ..RunFont::default() });
+    }
     apply_style(s, p, |st| st.font.size = size)
 }
 
 const SIZES: [f32; 16] = [8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 36.0, 48.0, 72.0, 96.0, 409.0];
 
+/// One size step from `cur`, saturating at the cell-level bounds (1–409) the way `step_font`
+/// saturates past hostile values.
+fn step_size(cur: f32, up: bool) -> f32 {
+    if !cur.is_finite() {
+        return if up { 409.0 } else { 1.0 };
+    }
+    if up { (cur + 1.0).clamp(1.0, 409.0) } else { (cur - 1.0).clamp(1.0, 409.0) }
+}
+
+/// Increase/Decrease Font Size over a `chars` selection: not one delta — every covered run
+/// steps from its own merged size. The runs split at the selection edges first (an all-`None`
+/// delta is the identity, so the pass only splits), each covered run takes `merged.size ± 1`
+/// clamped like [`font_size`], and a final identity pass over the whole text coalesces,
+/// detects flat and checks the cap. One command, one undo step.
+fn step_chars_font(s: &mut Session, p: &Json, up: bool) -> Result<Json> {
+    let t = chars_target(s, p)?;
+    let not_text = || bad("chars", "the cell's text is too long to format");
+    let len = u32::try_from(t.text.len()).map_err(|_| not_text())?;
+    let current = t.runs.unwrap_or_else(|| default_runs(len));
+    let split = current.format_range(&t.text, t.range.clone(), &RunFont::default()).map_err(|_| bad("home.*", "too many runs"))?;
+    let mut split = split.unwrap_or_else(|| default_runs(len));
+    for run in split.runs.iter_mut() {
+        let rs = run.start as usize;
+        if rs < t.range.start || rs.saturating_add(run.len as usize) > t.range.end {
+            continue; // Not covered (the split put the selection edges on run boundaries).
+        }
+        let cur = run.font.merged(&t.base).size;
+        run.font.size = Some(step_size(cur, up));
+    }
+    let formatted = split.format_range(&t.text, 0..t.text.len(), &RunFont::default()).map_err(|_| bad("home.*", "too many runs"))?;
+    edit(s, |cx| {
+        let sh = cx.sheet_mut(t.sheet)?;
+        match formatted {
+            Some(runs) => {
+                sh.cell_runs.insert(t.at, runs);
+            }
+            // Flat again: drop the entry rather than store an empty run list.
+            None => {
+                sh.cell_runs.remove(&t.at);
+            }
+        }
+        Ok(Json::Null)
+    })
+}
+
 fn step_font(s: &mut Session, p: &Json, up: bool) -> Result<Json> {
+    if p.get("chars").is_some() {
+        return step_chars_font(s, p, up);
+    }
     let cur = active_style(s)?.font.size;
     let next =
         if up { SIZES.iter().copied().find(|x| *x > cur).unwrap_or(409.0) } else { SIZES.iter().rev().copied().find(|x| *x < cur).unwrap_or(1.0) };
@@ -385,6 +659,10 @@ pub(crate) fn color_param(v: Option<&Json>) -> Option<Color> {
 
 fn font_color(s: &mut Session, p: &Json) -> Result<Json> {
     let c = color_param(p.get("color")).ok_or_else(|| bad("home.fontColor", "missing or invalid `color`"))?;
+    if p.get("chars").is_some() {
+        // A character range: the delta goes onto the cell's runs, not its cell style.
+        return apply_run_font(s, p, RunFont { color: Some(c), ..RunFont::default() });
+    }
     apply_style(s, p, |st| st.font.color = c)
 }
 
@@ -539,10 +817,16 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn format_cells(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(patch) = p.get("style").map(snake_case_keys) else {
+        if p.get("chars").is_some() {
+            return Err(bad("home.formatCells", "`chars` needs `style.font`: only a font can be applied to a character range"));
+        }
         // Menu invocation without params: the UI opens the dialog.
         s.ui_requests.push(crate::UiRequest::Dialog("formatCells".into(), json!({})));
         return ok();
     };
+    if p.get("chars").is_some() {
+        return format_cells_chars(s, p, patch);
+    }
     // Validate by merging into the active style once.
     let base = serde_json::to_value(active_style(s)?).map_err(|e| EngineError::Other(e.to_string()))?;
     let merged = merge_json(base, &patch);
@@ -580,6 +864,23 @@ fn snake_case_keys(v: &Json) -> Json {
         ),
         other => other.clone(),
     }
+}
+
+/// The `chars` branch of Format Cells: the style object may carry only `font` — fill, borders,
+/// align, numFmt and protection cannot apply to a character range — and the font part becomes
+/// the run delta, read the same way the cell-level path reads it.
+fn format_cells_chars(s: &mut Session, p: &Json, patch: Json) -> Result<Json> {
+    let missing = || bad("home.formatCells", "`chars` needs `style.font`: only a font can be applied to a character range");
+    let obj = patch.as_object().ok_or_else(missing)?;
+    if !obj.contains_key("font") {
+        return Err(missing());
+    }
+    if obj.len() > 1 {
+        return Err(bad("home.formatCells", "`chars` accepts only `style.font` — apply the other style parts to whole cells"));
+    }
+    let font = obj.get("font").cloned().ok_or_else(missing)?;
+    let delta: RunFont = serde_json::from_value(font).map_err(|e| bad("home.formatCells", e.to_string()))?;
+    apply_run_font(s, p, delta)
 }
 
 /// Deep-merges `patch` into `base` (objects merge, everything else replaces).

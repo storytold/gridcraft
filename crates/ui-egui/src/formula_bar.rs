@@ -869,7 +869,7 @@ fn cycle_anchor(ed: &mut crate::editor::EditState) {
                 .collect::<Vec<_>>()
                 .join(":");
             let (Some(x), Some(y)) = (ed.text.get(..a), ed.text.get(b..)) else { return };
-            ed.text = format!("{x}{cycled}{y}");
+            ed.set_text(format!("{x}{cycled}{y}"));
             ed.caret = ed.text.get(..a + cycled.len()).map(|s| s.chars().count()).unwrap_or(ed.caret);
             ed.caret_to_end = false;
             ed.request_focus = true;

@@ -1,4 +1,5 @@
 use gridcraft_core::{CellRef, Value};
+use gridcraft_model::{Cell, CellRuns, Color, Run, RunFont, StyleId, Underline, VertAlign};
 use serde_json::json;
 
 use crate::Session;
@@ -3115,6 +3116,506 @@ fn reopen(s: &mut Session) {
     let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
     let b64 = r["base64"].as_str().unwrap().to_string();
     s.execute("file.open", json!({"name": "x.xlsx", "base64": b64})).unwrap();
+}
+
+// ---------------------------------------------------------------- rich-text runs (issue #774)
+
+fn runs_none_font() -> RunFont {
+    RunFont { name: None, size: None, bold: None, italic: None, underline: None, strike: None, color: None, vert: None }
+}
+
+/// The #774 repro shape (as the XLSX reader attaches it, see the xlsx `runs_roundtrip` test):
+/// three colour forms over "this is black, this is red, this is black".
+fn repro_runs() -> CellRuns {
+    CellRuns {
+        runs: vec![
+            Run { start: 0, len: 14, font: RunFont { color: Some(Color::Auto), ..runs_none_font() } },
+            Run { start: 14, len: 13, font: RunFont { color: Some(Color::Rgb(0xFF0000)), ..runs_none_font() } },
+            Run { start: 27, len: 14, font: RunFont { color: Some(Color::Rgb(0x00B050)), ..runs_none_font() } },
+        ],
+    }
+}
+
+/// Seeds a rich-text cell straight into the model: no command edits runs yet, so tests reach the
+/// side-table the way the XLSX reader does.
+fn add_runs_cell(s: &mut Session, a: &str, runs: CellRuns) -> String {
+    let text = "this is black, this is red, this is black";
+    let c = CellRef::parse(a).unwrap();
+    let d = s.doc_mut().unwrap();
+    let wb = std::sync::Arc::make_mut(&mut d.wb);
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.cells.set(c, Cell { value: Value::text(text), formula: None, style: StyleId::DEFAULT, py: None });
+    sh.cell_runs.insert(c, runs);
+    text.to_string()
+}
+
+fn runs_of(s: &Session, a: &str) -> Option<CellRuns> {
+    s.doc().unwrap().wb.active().unwrap().cell_runs.get(&CellRef::parse(a).unwrap()).cloned()
+}
+
+#[test]
+fn runs_survive_reopen() {
+    let mut s = s();
+    let runs = repro_runs();
+    let text = add_runs_cell(&mut s, "A3", runs.clone());
+    reopen(&mut s);
+    assert_eq!(v(&s, "A3"), Value::text(text.as_str()));
+    let back = runs_of(&s, "A3").expect("runs survive the XLSX round trip");
+    assert_eq!(back, runs);
+    assert!(back.valid_for(&text));
+}
+
+#[test]
+fn edit_clears_runs_and_undo_restores() {
+    let mut s = s();
+    let runs = repro_runs();
+    let text = add_runs_cell(&mut s, "A3", runs.clone());
+    s.execute("cell.set", json!({"cell": "A3", "input": "plain now"})).unwrap();
+    assert_eq!(v(&s, "A3"), Value::text("plain now"));
+    assert!(runs_of(&s, "A3").is_none(), "replacing the cell takes its runs with it");
+    // Undo restores the whole workbook snapshot, runs included.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "A3"), Value::text(text.as_str()));
+    assert_eq!(runs_of(&s, "A3"), Some(runs));
+}
+
+#[test]
+fn set_with_runs_commits_and_reopens() {
+    let mut s = s();
+    s.execute(
+        "cell.set",
+        json!({
+            "cell": "A1",
+            "input": "black red",
+            "runs": {
+                "runs": [
+                    {"start": 0, "len": 5, "font": {}},
+                    {"start": 5, "len": 4, "font": {"color": Color::Rgb(0xFF0000)}}
+                ]
+            }
+        }),
+    )
+    .unwrap();
+    let expected = CellRuns {
+        runs: vec![
+            Run { start: 0, len: 5, font: runs_none_font() },
+            Run { start: 5, len: 4, font: RunFont { color: Some(Color::Rgb(0xFF0000)), ..runs_none_font() } },
+        ],
+    };
+    assert_eq!(v(&s, "A1"), Value::text("black red"), "the render text is unchanged by runs");
+    assert_eq!(runs_of(&s, "A1"), Some(expected.clone()));
+    reopen(&mut s);
+    assert_eq!(v(&s, "A1"), Value::text("black red"));
+    assert_eq!(runs_of(&s, "A1"), Some(expected), "runs survive the XLSX round trip");
+}
+
+#[test]
+fn set_with_mismatched_runs_fails_atomically() {
+    let mut s = s();
+    let runs = repro_runs();
+    let text = add_runs_cell(&mut s, "A1", runs.clone());
+    // The runs leave a gap at byte 5 and stop at byte 8: they don't cover "different" (9 bytes).
+    let e = s
+        .execute(
+            "cell.set",
+            json!({
+                "cell": "A1",
+                "input": "different",
+                "runs": {"runs": [{"start": 0, "len": 5, "font": {}}, {"start": 6, "len": 3, "font": {}}]}
+            }),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("cell.set"), "{e}");
+    assert_eq!(v(&s, "A1"), Value::text(text.as_str()), "the prior value survives the failed edit");
+    assert_eq!(runs_of(&s, "A1"), Some(runs), "the prior runs survive the failed edit");
+}
+
+#[test]
+fn set_with_over_cap_runs_fails_atomically() {
+    let mut s = s();
+    // Runs that match the text exactly (valid_for holds) but exceed the per-cell run cap: the
+    // length half of the runs validation refuses them.
+    let len = gridcraft_model::MAX_RUNS_PER_CELL + 1;
+    let text = "a".repeat(len);
+    let runs: Vec<Run> = (0..len as u32).map(|i| Run { start: i, len: 1, font: runs_none_font() }).collect();
+    let before = s.doc().unwrap().wb.clone();
+    let e = s
+        .execute("cell.set", json!({"cell": "A1", "input": text, "runs": serde_json::to_value(CellRuns { runs }).unwrap()}))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("cell.set"), "{e}");
+    assert_eq!(s.doc().unwrap().wb, before, "the refused edit leaves the workbook as it was");
+    assert_eq!(v(&s, "A1"), Value::Empty, "the refused edit leaves the cell empty");
+    assert!(runs_of(&s, "A1").is_none(), "the refused edit stores no runs");
+}
+
+#[test]
+fn set_without_runs_still_drops_entry() {
+    let mut s = s();
+    add_runs_cell(&mut s, "A3", repro_runs());
+    s.execute("cell.set", json!({"cell": "A3", "input": "plain now"})).unwrap();
+    assert_eq!(v(&s, "A3"), Value::text("plain now"));
+    assert!(runs_of(&s, "A3").is_none(), "editing without `runs` drops the entry");
+    // An explicit `runs`: null is the same as no `runs` (as with the other optional params).
+    s.execute("cell.set", json!({"cell": "B2", "input": "x", "runs": null})).unwrap();
+    assert_eq!(v(&s, "B2"), Value::text("x"));
+}
+
+#[test]
+fn set_with_runs_undo_reverts_text_and_runs() {
+    let mut s = s();
+    let runs = repro_runs();
+    let text = add_runs_cell(&mut s, "A3", runs.clone());
+    let new_runs = CellRuns {
+        runs: vec![
+            Run { start: 0, len: 5, font: runs_none_font() },
+            Run { start: 5, len: 4, font: RunFont { color: Some(Color::Rgb(0xFF0000)), ..runs_none_font() } },
+        ],
+    };
+    s.execute("cell.set", json!({"cell": "A3", "input": "black red", "runs": serde_json::to_value(&new_runs).unwrap()})).unwrap();
+    assert_eq!(v(&s, "A3"), Value::text("black red"));
+    assert_eq!(runs_of(&s, "A3"), Some(new_runs));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "A3"), Value::text(text.as_str()), "one undo restores the previous text");
+    assert_eq!(runs_of(&s, "A3"), Some(runs), "and the previous runs with it");
+}
+
+#[test]
+fn row_insert_translates_runs() {
+    let mut s = s();
+    let runs = repro_runs();
+    let text = add_runs_cell(&mut s, "A3", runs.clone());
+    s.execute("home.insertRows", json!({"rows": "2:2"})).unwrap();
+    assert_eq!(v(&s, "A4"), Value::text(text.as_str()), "the cell moves down a row");
+    assert_eq!(runs_of(&s, "A4"), Some(runs), "the runs entry moves with its cell");
+    assert!(runs_of(&s, "A3").is_none(), "the entry moved, not copied");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(runs_of(&s, "A3"), Some(repro_runs()));
+}
+
+#[test]
+fn column_and_row_deletes_translate_runs() {
+    let mut s = s();
+    let runs = repro_runs();
+    let text = add_runs_cell(&mut s, "C3", runs.clone());
+    s.execute("home.insertColumns", json!({"cols": "B:B"})).unwrap();
+    assert_eq!(runs_of(&s, "D3"), Some(runs.clone()), "inserting a column shifts the entry right");
+    s.execute("home.deleteRows", json!({"rows": "1:1"})).unwrap();
+    assert_eq!(runs_of(&s, "D2"), Some(runs), "deleting a row shifts the entry up");
+    assert_eq!(v(&s, "D2"), Value::text(text.as_str()));
+    // Deleting the runs cell's own row takes the entry with it.
+    s.execute("home.deleteRows", json!({"rows": "2:2"})).unwrap();
+    assert!(runs_of(&s, "D1").is_none(), "deleting the row removes the entry, not moves it off the sheet");
+}
+
+#[test]
+fn sort_moves_runs_with_their_rows() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name"], ["b"], ["c"], ["a"]]})).unwrap();
+    let runs = repro_runs();
+    let text = add_runs_cell(&mut s, "B2", runs.clone());
+    s.execute("selection.set", json!({"range": "A1:B4"})).unwrap();
+    s.execute("data.sort", json!({"header": true, "keys": [{"column": "A"}]})).unwrap();
+    // Ascending: a, b, c — row 2 (b) lands in row 3, runs and all.
+    assert_eq!(runs_of(&s, "B3"), Some(runs));
+    assert_eq!(v(&s, "B3"), Value::text(text.as_str()));
+    assert!(runs_of(&s, "B2").is_none());
+}
+
+/// Remove Duplicates compacts the kept rows' runs with them; a cut moves its cells' runs to the
+/// destination while a copy pastes flat text (the milestone-1 paste semantics).
+#[test]
+fn remove_duplicates_compacts_runs_and_cut_moves_them() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["h"], ["x"], ["x"], ["y"]]})).unwrap();
+    let runs = repro_runs();
+    let text = add_runs_cell(&mut s, "B2", runs.clone());
+    s.execute("selection.set", json!({"range": "A1:B4"})).unwrap();
+    s.execute("data.removeDuplicates", json!({"header": true, "columns": [0]})).unwrap();
+    // The duplicate row is removed; the kept rows compact up and the runs follow (row 2 keeps its).
+    assert_eq!(v(&s, "B2"), Value::text(text.as_str()));
+    assert_eq!(runs_of(&s, "B2"), Some(runs.clone()), "runs compact with kept rows");
+    // Cut B2 (rich) to D5: the runs move with the cell.
+    s.execute("edit.cut", json!({"range": "B2"})).unwrap();
+    s.execute("edit.paste", json!({"at": "D5"})).unwrap();
+    assert_eq!(runs_of(&s, "D5"), Some(runs), "cut-paste moves runs");
+    assert!(runs_of(&s, "B2").is_none());
+    // Copy-paste flattens (milestone-1 decision).
+    s.execute("edit.copy", json!({"range": "D5"})).unwrap();
+    s.execute("edit.paste", json!({"at": "F7"})).unwrap();
+    assert!(runs_of(&s, "F7").is_none(), "copy-paste pastes flat text");
+}
+
+// Formatting a character range of a cell's text: `home.fontColor {cell, chars, color}` (issue #776).
+
+#[test]
+fn fontcolor_chars_builds_runs_on_flat_text() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "black red green"})).unwrap();
+    s.execute("home.fontColor", json!({"cell": "A1", "chars": [6, 3], "color": "#FF0000"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::text("black red green"), "the grid text is unchanged by character formatting");
+    // A flat cell behaves like one all-default run: the overlay splits it around bytes 6..9.
+    let expected = CellRuns {
+        runs: vec![
+            Run { start: 0, len: 6, font: runs_none_font() },
+            Run { start: 6, len: 3, font: RunFont { color: Some(Color::Rgb(0xFF0000)), ..runs_none_font() } },
+            Run { start: 9, len: 6, font: runs_none_font() },
+        ],
+    };
+    assert_eq!(runs_of(&s, "A1"), Some(expected));
+}
+
+#[test]
+fn fontcolor_chars_extends_existing_runs() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "black red green"})).unwrap();
+    s.execute("home.fontColor", json!({"cell": "A1", "chars": [6, 3], "color": "#FF0000"})).unwrap();
+    s.execute("home.fontColor", json!({"cell": "A1", "chars": [10, 5], "color": "#00B050"})).unwrap();
+    // The second command only overlays "green" (chars 10..15); the red run survives untouched.
+    let expected = CellRuns {
+        runs: vec![
+            Run { start: 0, len: 6, font: runs_none_font() },
+            Run { start: 6, len: 3, font: RunFont { color: Some(Color::Rgb(0xFF0000)), ..runs_none_font() } },
+            Run { start: 9, len: 1, font: runs_none_font() },
+            Run { start: 10, len: 5, font: RunFont { color: Some(Color::Rgb(0x00B050)), ..runs_none_font() } },
+        ],
+    };
+    assert_eq!(runs_of(&s, "A1"), Some(expected));
+}
+
+#[test]
+fn fontcolor_chars_errors() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=1+2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "42"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A3", "input": "black red green"})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    let cases = [
+        ("a formula cell", json!({"cell": "A1", "chars": [0, 1], "color": "#FF0000"})),
+        ("a numeric cell", json!({"cell": "A2", "chars": [0, 1], "color": "#FF0000"})),
+        ("a zero-length chars", json!({"cell": "A3", "chars": [6, 0], "color": "#FF0000"})),
+        ("chars past the text", json!({"cell": "A3", "chars": [999999, 3], "color": "#FF0000"})),
+        ("chars without a cell", json!({"chars": [6, 3], "color": "#FF0000"})),
+    ];
+    for (why, p) in cases {
+        let e = s.execute("home.fontColor", p).unwrap_err().to_string();
+        assert!(e.contains("chars") || e.contains("home.fontColor"), "{why}: {e}");
+        assert_eq!(s.doc().unwrap().wb, before, "{why}: the workbook is unchanged by the failed command");
+    }
+}
+
+#[test]
+fn fontcolor_chars_cap_errors() {
+    let mut s = s();
+    // A cell at the cap: 8 191 alternating one-byte runs plus a three-byte tail run over
+    // "a".repeat(8 194). Formatting one character inside the tail splits it, and the result
+    // would exceed MAX_RUNS_PER_CELL.
+    let text = "a".repeat(gridcraft_model::MAX_RUNS_PER_CELL + 2);
+    let mut runs: Vec<Run> = (0..(gridcraft_model::MAX_RUNS_PER_CELL - 1) as u32)
+        .map(|i| Run { start: i, len: 1, font: if i % 2 == 0 { RunFont { bold: Some(true), ..runs_none_font() } } else { runs_none_font() } })
+        .collect();
+    runs.push(Run { start: (gridcraft_model::MAX_RUNS_PER_CELL - 1) as u32, len: 3, font: runs_none_font() });
+    s.execute("cell.set", json!({"cell": "A1", "input": text, "runs": serde_json::to_value(CellRuns { runs }).unwrap()})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    let e = s.execute("home.fontColor", json!({"cell": "A1", "chars": [8192, 1], "color": "#FF0000"})).unwrap_err().to_string();
+    assert!(e.contains("too many runs"), "{e}");
+    assert_eq!(s.doc().unwrap().wb, before, "the capped format leaves the workbook as it was");
+}
+
+#[test]
+fn fontcolor_chars_undo_restores_runs() {
+    let mut s = s();
+    let runs = repro_runs();
+    let text = add_runs_cell(&mut s, "A3", runs.clone());
+    // Green over the leading "this" (chars 0..4) overlays the first (auto-coloured) run only.
+    s.execute("home.fontColor", json!({"cell": "A3", "chars": [0, 4], "color": "#00B050"})).unwrap();
+    let expected = CellRuns {
+        runs: vec![
+            Run { start: 0, len: 4, font: RunFont { color: Some(Color::Rgb(0x00B050)), ..runs_none_font() } },
+            Run { start: 4, len: 10, font: RunFont { color: Some(Color::Auto), ..runs_none_font() } },
+            Run { start: 14, len: 13, font: RunFont { color: Some(Color::Rgb(0xFF0000)), ..runs_none_font() } },
+            Run { start: 27, len: 14, font: RunFont { color: Some(Color::Rgb(0x00B050)), ..runs_none_font() } },
+        ],
+    };
+    assert_eq!(runs_of(&s, "A3"), Some(expected), "the overlay splits only the covered run");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "A3"), Value::text(text.as_str()));
+    assert_eq!(runs_of(&s, "A3"), Some(runs), "one undo restores the exact prior runs");
+}
+
+#[test]
+fn fontcolor_chars_roundtrips_xlsx() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "black red green"})).unwrap();
+    s.execute("home.fontColor", json!({"cell": "A1", "chars": [6, 3], "color": "#FF0000"})).unwrap();
+    let runs = runs_of(&s, "A1").expect("the character format built runs");
+    reopen(&mut s);
+    assert_eq!(v(&s, "A1"), Value::text("black red green"));
+    assert_eq!(runs_of(&s, "A1"), Some(runs), "the runs survive the XLSX round trip");
+}
+
+// The rest of the Font group over a character range: bold/italic/underline/… with `chars`
+// (issue #776).
+
+#[test]
+fn bold_chars_toggles_mixed_to_all() {
+    let mut s = s();
+    // A bold run plus a plain run; `chars` covers both and no `on` is given.
+    s.execute(
+        "cell.set",
+        json!({
+            "cell": "A1",
+            "input": "bold plain",
+            "runs": {"runs": [
+                {"start": 0, "len": 4, "font": {"bold": true}},
+                {"start": 4, "len": 6, "font": {}}
+            ]}
+        }),
+    )
+    .unwrap();
+    s.execute("home.bold", json!({"cell": "A1", "chars": [0, 10]})).unwrap();
+    let expected = CellRuns { runs: vec![Run { start: 0, len: 10, font: RunFont { bold: Some(true), ..runs_none_font() } }] };
+    assert_eq!(runs_of(&s, "A1"), Some(expected), "not everything covered was bold, so bold it all");
+}
+
+#[test]
+fn bold_chars_unbolds_when_all_covered() {
+    let mut s = s();
+    s.execute(
+        "cell.set",
+        json!({
+            "cell": "A1",
+            "input": "all bold",
+            "runs": {"runs": [{"start": 0, "len": 8, "font": {"bold": true}}]}
+        }),
+    )
+    .unwrap();
+    s.execute("home.bold", json!({"cell": "A1", "chars": [0, 8]})).unwrap();
+    let expected = CellRuns { runs: vec![Run { start: 0, len: 8, font: RunFont { bold: Some(false), ..runs_none_font() } }] };
+    assert_eq!(runs_of(&s, "A1"), Some(expected), "everything covered was bold, so unbold");
+}
+
+#[test]
+fn underline_chars_style_double() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "hello"})).unwrap();
+    s.execute("home.underline", json!({"cell": "A1", "chars": [0, 5], "on": true, "style": "double"})).unwrap();
+    let expected = CellRuns { runs: vec![Run { start: 0, len: 5, font: RunFont { underline: Some(Underline::Double), ..runs_none_font() } }] };
+    assert_eq!(runs_of(&s, "A1"), Some(expected));
+}
+
+#[test]
+fn superscript_chars_sets_vert() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x2 = 4"})).unwrap();
+    s.execute("home.superscript", json!({"cell": "A1", "chars": [1, 1], "on": true})).unwrap();
+    let expected = CellRuns {
+        runs: vec![
+            Run { start: 0, len: 1, font: runs_none_font() },
+            Run { start: 1, len: 1, font: RunFont { vert: Some(VertAlign::Superscript), ..runs_none_font() } },
+            Run { start: 2, len: 4, font: runs_none_font() },
+        ],
+    };
+    assert_eq!(runs_of(&s, "A1"), Some(expected));
+}
+
+#[test]
+fn fontsize_and_fontname_chars() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "styled text"})).unwrap();
+    s.execute("home.fontSize", json!({"cell": "A1", "chars": [0, 6], "size": 14})).unwrap();
+    s.execute("home.fontName", json!({"cell": "A1", "chars": [7, 4], "name": "Georgia"})).unwrap();
+    let expected = CellRuns {
+        runs: vec![
+            Run { start: 0, len: 6, font: RunFont { size: Some(14.0), ..runs_none_font() } },
+            Run { start: 6, len: 1, font: runs_none_font() },
+            Run { start: 7, len: 4, font: RunFont { name: Some("Georgia".into()), ..runs_none_font() } },
+        ],
+    };
+    assert_eq!(runs_of(&s, "A1"), Some(expected));
+}
+
+#[test]
+fn increasefontsize_chars_steps_each_covered_run() {
+    let mut s = s();
+    // Two runs at 11pt and 14pt: one shared delta cannot express both results — each covered
+    // run steps from its own size.
+    s.execute(
+        "cell.set",
+        json!({
+            "cell": "A1",
+            "input": "big small",
+            "runs": {"runs": [
+                {"start": 0, "len": 3, "font": {"size": 11.0}},
+                {"start": 3, "len": 6, "font": {"size": 14.0}}
+            ]}
+        }),
+    )
+    .unwrap();
+    s.execute("home.increaseFontSize", json!({"cell": "A1", "chars": [0, 9]})).unwrap();
+    let expected = CellRuns {
+        runs: vec![
+            Run { start: 0, len: 3, font: RunFont { size: Some(12.0), ..runs_none_font() } },
+            Run { start: 3, len: 6, font: RunFont { size: Some(15.0), ..runs_none_font() } },
+        ],
+    };
+    assert_eq!(runs_of(&s, "A1"), Some(expected));
+    // Decreasing only the first run steps that run back on its own.
+    s.execute("home.decreaseFontSize", json!({"cell": "A1", "chars": [0, 3]})).unwrap();
+    let expected = CellRuns {
+        runs: vec![
+            Run { start: 0, len: 3, font: RunFont { size: Some(11.0), ..runs_none_font() } },
+            Run { start: 3, len: 6, font: RunFont { size: Some(15.0), ..runs_none_font() } },
+        ],
+    };
+    assert_eq!(runs_of(&s, "A1"), Some(expected));
+}
+
+#[test]
+fn formatcells_chars_font_only() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "hello"})).unwrap();
+    s.execute("home.formatCells", json!({"cell": "A1", "chars": [0, 5], "style": {"font": {"bold": true}}})).unwrap();
+    let expected = CellRuns { runs: vec![Run { start: 0, len: 5, font: RunFont { bold: Some(true), ..runs_none_font() } }] };
+    assert_eq!(runs_of(&s, "A1"), Some(expected));
+    // Any other style part alongside `chars` is rejected.
+    let before = s.doc().unwrap().wb.clone();
+    let e = s
+        .execute("home.formatCells", json!({"cell": "A1", "chars": [0, 5], "style": {"font": {"italic": true}, "fill": {"color": "#FFFF00"}}}))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("font"), "{e}");
+    assert_eq!(s.doc().unwrap().wb, before, "the rejected style leaves the workbook as it was");
+}
+
+#[test]
+fn formatcells_chars_empty_style_errors() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "hello"})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    for style in [json!({}), json!({"fill": {"color": "#FFFF00"}}), json!({"numFmt": "0.00"})] {
+        let e = s.execute("home.formatCells", json!({"cell": "A1", "chars": [0, 5], "style": style})).unwrap_err().to_string();
+        assert!(e.contains("font"), "{e}");
+    }
+    assert_eq!(s.doc().unwrap().wb, before, "the rejected styles leave the workbook as it was");
+}
+
+/// `chars` speaks characters; the runs are byte-based. On "héllo" the é is two bytes, so
+/// `chars: [1, 1]` covers bytes 1..3.
+#[test]
+fn chars_offsets_are_characters_not_bytes() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "héllo"})).unwrap();
+    s.execute("home.bold", json!({"cell": "A1", "chars": [1, 1]})).unwrap();
+    let expected = CellRuns {
+        runs: vec![
+            Run { start: 0, len: 1, font: runs_none_font() },
+            Run { start: 1, len: 2, font: RunFont { bold: Some(true), ..runs_none_font() } },
+            Run { start: 3, len: 3, font: runs_none_font() },
+        ],
+    };
+    assert_eq!(runs_of(&s, "A1"), Some(expected));
 }
 
 #[test]

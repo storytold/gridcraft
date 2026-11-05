@@ -12,6 +12,7 @@ use crate::features::{
     Anchor, AutoFilter, Chart, Comment, CondFormat, FormControl, Hyperlink, Image, LineInfo, ObjKind, ObjRef, PivotTable, PrintSettings, Shape,
     ShapeKind, SheetProtection, Slicer, Sparkline, Table, Validation,
 };
+use crate::runs::CellRuns;
 use crate::store::CellStore;
 use crate::style::{Color, StyleId};
 
@@ -138,6 +139,11 @@ pub struct Sheet {
     pub autofilter: Option<AutoFilter>,
     #[serde(with = "crate::cellmap")]
     pub comments: BTreeMap<CellRef, Comment>,
+    /// Rich-text runs per cell (issue #774): font deltas layered over the cell's plain text
+    /// value, which stays a plain string. Cleared wherever content changes: `set_cell`,
+    /// `remove_cell`, `take_cells`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", with = "crate::cellmap")]
+    pub cell_runs: BTreeMap<CellRef, CellRuns>,
     #[serde(with = "crate::cellmap")]
     pub hyperlinks: BTreeMap<CellRef, Hyperlink>,
     pub charts: Vec<Chart>,
@@ -217,6 +223,7 @@ impl Sheet {
             tables: vec![],
             autofilter: None,
             comments: BTreeMap::new(),
+            cell_runs: BTreeMap::new(),
             hyperlinks: BTreeMap::new(),
             charts: vec![],
             images: vec![],
@@ -425,23 +432,30 @@ impl Sheet {
         let style = self.style_id(c);
         self.set_cell(c, Cell { value: v, formula: None, style, py: None });
     }
-    /// Replaces content, removing any picture at this address. Style-only edits use set_style.
+    /// Replaces content, removing any picture or rich-text runs at this address. Style-only
+    /// edits use set_style.
     pub fn set_cell(&mut self, c: CellRef, cell: Cell) {
         self.cell_pictures.remove(&c);
+        self.cell_runs.remove(&c);
         self.cells.set(c, cell);
     }
     pub fn remove_cell(&mut self, c: CellRef) -> Option<Cell> {
         self.cell_pictures.remove(&c);
+        self.cell_runs.remove(&c);
         self.cells.remove(c)
     }
-    /// Removes content in a range; returns scalar cells, with pictures removed from the side map.
+    /// Removes content in a range; returns scalar cells, with pictures and rich-text runs
+    /// removed from the side maps.
     pub fn take_cells(&mut self, range: RangeRef) -> Vec<(CellRef, Cell)> {
         self.cell_pictures.retain(|c, _| !range.contains(*c));
+        self.cell_runs.retain(|c, _| !range.contains(*c));
         self.cells.take_range(range)
     }
     /// Pictures retain a scalar fallback for calculation and unsupported consumers.
     pub fn set_picture(&mut self, c: CellRef, picture: Arc<CellPicture>) {
         let style = self.style_id(c);
+        // The #VALUE! fallback replaces the cell's text, so any runs describing it are stale.
+        self.cell_runs.remove(&c);
         self.cells.set(c, Cell { value: Value::Error(gridcraft_core::CellError::Value), formula: None, style, py: None });
         self.cell_pictures.insert(c, picture);
     }
@@ -641,6 +655,7 @@ fn line_at(pos: f64, default: f64, custom: &BTreeMap<u32, LineInfo>, max: u32) -
 mod tests {
     use super::*;
     use crate::cell::Formula;
+    use crate::{CellRuns, Run, RunFont};
 
     #[test]
     fn a_sheet_keeps_its_identity_through_clones_and_a_new_sheet_gets_its_own() {
@@ -789,6 +804,77 @@ mod tests {
         // row 3: a genuine gap (nothing stored, no spill).
         assert_eq!(s.last_contiguous_nonempty(1, 0, 100), 2);
         assert_eq!(s.last_contiguous_nonempty(1, 3, 100), 2); // from_row itself is the gap
+    }
+
+    #[test]
+    fn set_cell_clears_runs() {
+        let mut s = Sheet::new("S");
+        let a1 = CellRef::new(0, 0);
+        s.set_value(a1, Value::text("hello"));
+        s.cell_runs.insert(a1, five_byte_runs());
+        assert!(s.cell_runs.contains_key(&a1));
+        s.set_cell(a1, Cell { value: Value::text("other"), formula: None, style: Default::default(), py: None });
+        assert!(!s.cell_runs.contains_key(&a1), "set_cell must drop the runs entry");
+        // remove_cell clears the side-table the same way.
+        s.cell_runs.insert(a1, five_byte_runs());
+        s.remove_cell(a1);
+        assert!(!s.cell_runs.contains_key(&a1), "remove_cell must drop the runs entry");
+        // set_picture replaces the text with the #VALUE! fallback: its runs are stale too.
+        s.set_value(a1, Value::text("hello"));
+        s.cell_runs.insert(a1, five_byte_runs());
+        s.set_picture(a1, Arc::new(CellPicture { data: vec![1, 2, 3], mime: "image/png".into(), alt: String::new() }));
+        assert!(!s.cell_runs.contains_key(&a1), "set_picture must drop the runs entry");
+    }
+
+    #[test]
+    fn take_cells_clears_range() {
+        let mut s = Sheet::new("S");
+        let a1 = CellRef::new(0, 0);
+        let b2 = CellRef::new(1, 1);
+        let d4 = CellRef::new(3, 3);
+        for &c in &[a1, b2, d4] {
+            s.set_value(c, Value::text("12345"));
+            s.cell_runs.insert(c, five_byte_runs());
+        }
+        let taken = s.take_cells(RangeRef::parse("A1:B2").unwrap());
+        assert_eq!(taken.len(), 2);
+        assert!(!s.cell_runs.contains_key(&a1));
+        assert!(!s.cell_runs.contains_key(&b2));
+        assert!(s.cell_runs.contains_key(&d4), "runs outside the taken range survive");
+    }
+
+    #[test]
+    fn serde_roundtrip_a1_keys() {
+        let mut s = Sheet::new("S");
+        let a1 = CellRef::new(0, 0);
+        s.set_value(a1, Value::text("hello"));
+        let runs = five_byte_runs();
+        s.cell_runs.insert(a1, runs.clone());
+        let json = serde_json::to_string(&s).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(v["cell_runs"]["A1"].is_object(), "cell_runs keyed by A1 in JSON: {json}");
+        let back: Sheet = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.cell_runs.get(&a1), Some(&runs));
+    }
+
+    #[test]
+    fn guard_ignores_non_text_value() {
+        // A runs entry whose slices don't match the cell's actual (numeric) value must fail
+        // `valid_for`, so consumers never draw it (issue #774 review focus).
+        let mut s = Sheet::new("S");
+        let a1 = CellRef::new(0, 0);
+        s.set_value(a1, Value::number(42.0));
+        s.cell_runs.insert(a1, five_byte_runs());
+        let text = s.value(a1).display();
+        assert!(!s.cell_runs.get(&a1).is_some_and(|r| r.valid_for(&text)), "entry must not validate for {text:?}");
+        // The same entry does validate for the five-byte text it was sliced for: the guard
+        // discriminates on content, not on the entry itself.
+        assert!(five_byte_runs().valid_for("12345"));
+    }
+
+    fn five_byte_runs() -> CellRuns {
+        let font = RunFont { name: None, size: None, bold: Some(true), italic: None, underline: None, strike: None, color: None, vert: None };
+        CellRuns { runs: vec![Run { start: 0, len: 5, font }] }
     }
 
     #[test]
