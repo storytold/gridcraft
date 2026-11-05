@@ -157,7 +157,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Picture",
             ["Header & Footer", "Header & Footer Elements"],
             None,
-            "{sheet?, page?: odd|even|first, part?: header|footer, section?: left|center|right, path? | base64?, width?: pt, height?: pt, title?} puts a picture (PNG or JPEG, at most 16 MB, 8192 pixels on a side and 16 million pixels) in that section, replacing the one there, and adds `&G` to the section's text if it has none; without a size it keeps its proportions and fits the margin. {…, remove: true} takes the section's picture and its `&G` away → {page, part, section, width, height, header, footer}",
+            "{sheet?, page?: odd|even|first, part?: header|footer, section?: left|center|right, path? | base64?, width?: pt, height?: pt, title?, spec?} puts a picture (PNG or JPEG, at most 16 MB, 8192 pixels on a side and 16 million pixels) in that section, replacing the one there, and adds `&G` at the section's start if it has none; without a size it keeps its proportions and fits the margin. `spec` first sets that header or footer's whole text (field names or codes), as the in-place editor commits it. Only `width` and/or `height`: resizes the section's picture (one side keeps its proportions). {…, remove: true} takes the section's picture and its `&G` away → {page, part, section, width, height, header, footer}",
             has_doc,
             header_footer_picture
         ),
@@ -540,6 +540,11 @@ fn without_g(raw: &str) -> String {
     out
 }
 
+/// Whether a raw header/footer section has a `&G` code (`&&G` is a literal `&G`).
+fn has_g(raw: &str) -> bool {
+    without_g(raw) != raw
+}
+
 /// Largest header/footer picture accepted, in bytes.
 const MAX_HF_PICTURE_BYTES: usize = 16 * 1024 * 1024;
 
@@ -582,7 +587,14 @@ fn header_footer_picture(s: &mut Session, p: &Json) -> Result<Json> {
         Some(id) => HfPage::parse(id).ok_or_else(|| bad(CMD, format!("`page` must be odd, even or first, not `{id}`")))?,
     };
     let remove = bool_param(p, "remove").unwrap_or(false);
-    let picture = if remove {
+    let size = |k: &str| f64_param(p, k).filter(|v| v.is_finite() && *v > 0.0).map(|v| (v as f32).clamp(1.0, 1584.0));
+    let (want_w, want_h) = (size("width"), size("height"));
+    let has_data = str_param(p, "base64").is_some() || str_param(p, "path").is_some();
+    // Only a size: the section's picture is resized.
+    let resize = !remove && !has_data && (want_w.is_some() || want_h.is_some());
+    // The whole header or footer text of the page kind, as the in-place editor commits it.
+    let spec = str_param(p, "spec").map(super::print::fields_to_codes);
+    let picture = if remove || resize {
         None
     } else {
         let data = if let Some(b) = str_param(p, "base64") {
@@ -590,7 +602,7 @@ fn header_footer_picture(s: &mut Session, p: &Json) -> Result<Json> {
         } else if let Some(path) = str_param(p, "path") {
             crate::io::read_file(path)?
         } else {
-            return Err(bad(CMD, "give the picture as `path` or `base64`, or `remove: true`"));
+            return Err(bad(CMD, "give the picture as `path` or `base64`, a `width` or `height` to resize it, or `remove: true`"));
         };
         if data.len() > MAX_HF_PICTURE_BYTES {
             return Err(bad(CMD, "pictures larger than 16 MB aren't supported in headers and footers"));
@@ -615,14 +627,27 @@ fn header_footer_picture(s: &mut Session, p: &Json) -> Result<Json> {
             .collect();
         Some((data, mime, (pw as f32 * 0.75, ph as f32 * 0.75), title))
     };
-    let size = |k: &str| f64_param(p, k).filter(|v| v.is_finite() && *v > 0.0).map(|v| (v as f32).clamp(1.0, 1584.0));
-    let (want_w, want_h) = (size("width"), size("height"));
     edit(s, |cx| {
         let pr = &mut cx.sheet_mut(si)?.print;
-        pr.hf_pictures.retain(|q| !q.is_at(page, footer, usize::from(idx)));
-        let spec = pr.hf_mut(page, footer);
-        let mut parts = super::print::split_header_footer(spec);
-        if let Some(slot) = parts.get_mut(usize::from(idx)) {
+        if let Some(spec) = &spec {
+            *pr.hf_mut(page, footer) = spec.chars().take(MAX_HEADER_FOOTER).collect();
+        }
+        let mut parts = super::print::split_header_footer(pr.hf(page, footer));
+        let at = usize::from(idx);
+        if resize {
+            let q = pr.hf_pictures.iter_mut().find(|q| q.is_at(page, footer, at)).ok_or_else(|| bad(CMD, "this section has no picture to resize"))?;
+            let (w, h) = match (want_w, want_h) {
+                (Some(w), Some(h)) => (w, h),
+                (Some(w), None) => (w, w * q.height / q.width.max(0.01)),
+                (None, Some(h)) => (h * q.width / q.height.max(0.01), h),
+                (None, None) => (q.width, q.height),
+            };
+            let fit = |v: f32| if v.is_finite() { v.clamp(1.0, 1584.0) } else { 72.0 };
+            (q.width, q.height) = (fit(w), fit(h));
+        } else {
+            pr.hf_pictures.retain(|q| !q.is_at(page, footer, at));
+        }
+        if remove && let Some(slot) = parts.get_mut(at) {
             *slot = without_g(slot);
         }
         if let Some((data, mime, (nw, nh), title)) = picture {
@@ -640,7 +665,11 @@ fn header_footer_picture(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             };
             let fit = |v: f32| if v.is_finite() { v.clamp(1.0, 1584.0) } else { 72.0 };
-            if let Some(slot) = parts.get_mut(usize::from(idx)) {
+            // `&G` stays where it is (the editor puts it at the caret); a section without one
+            // gets it at its start.
+            if let Some(slot) = parts.get_mut(at)
+                && !has_g(slot)
+            {
                 slot.insert_str(0, "&G");
             }
             pr.hf_pictures.push(HfPicture {
@@ -661,6 +690,8 @@ fn header_footer_picture(s: &mut Session, p: &Json) -> Result<Json> {
             return Err(bad(CMD, format!("a header or footer holds at most {MAX_HEADER_FOOTER} characters; shorten it to add the picture")));
         }
         *pr.hf_mut(page, footer) = joined;
+        // A given text may have taken another section's `&G` away.
+        prune_hf_pictures(pr);
         let shown = pr.hf_pictures.iter().find(|q| q.is_at(page, footer, usize::from(idx)));
         let section = ["left", "center", "right"].get(usize::from(idx)).copied().unwrap_or("center");
         Ok(json!({

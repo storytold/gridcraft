@@ -1024,6 +1024,12 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
 /// Portuguese catalog has no entry for them either). Kept apart so the two catalogs above keep the
 /// same key set; it never overlaps them.
 pub(super) const EXTRA: &[(&str, &str)] = &[
+    ("Picture", "図"),
+    ("Format\nPicture", "図の\n書式"),
+    ("Format Picture", "図の書式"),
+    ("Height:", "高さ:"),
+    ("Width:", "幅:"),
+    ("Lock aspect ratio", "縦横比を固定する"),
     ("Cut (⌘X)", "切り取り (⌘X)"),
     ("Copy (⌘C)", "コピー (⌘C)"),
     ("Bold (⌘B)", "太字 (⌘B)"),

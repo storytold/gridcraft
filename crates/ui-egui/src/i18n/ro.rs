@@ -1068,6 +1068,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Afișare",
         "Collapse dialog" => "Restrângere casetă de dialog",
         "Expand dialog" => "Extindere casetă de dialog",
+
+        "Picture" => "Imagine",
+        "Format\nPicture" => "Formatare\nimagine",
+        "Format Picture" => "Formatare imagine",
+        "Height:" => "Înălțime:",
+        "Width:" => "Lățime:",
+        "Lock aspect ratio" => "Blocare raport aspect",
         _ => return None,
     })
 }

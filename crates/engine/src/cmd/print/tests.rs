@@ -1709,3 +1709,39 @@ fn a_sheet_keeping_its_files_header_drawing_refuses_new_pictures() {
     let sh = s.doc().unwrap().wb.sheet(0).unwrap();
     assert!(sh.print.hf_pictures.is_empty() && !sh.print.header.contains("&G"));
 }
+
+/// The in-place editor's commit (the whole header with `&[Picture]` at the caret) keeps `&G` where
+/// it was typed and is one undo step with the picture.
+#[test]
+fn the_editor_commits_text_and_picture_in_one_step() {
+    let mut s = s();
+    s.execute("pageLayout.headerFooter", json!({"header": "&RPage &P"})).unwrap();
+    // As the in-place editor commits: the whole header with `&[Picture]` at the caret.
+    let r = s
+        .execute(
+            "pageLayout.headerFooterPicture",
+            json!({"section": "center", "base64": b64_png(5, 5), "spec": "&CAcme &[Picture] Ltd&RPage &[Page]"}),
+        )
+        .unwrap();
+    assert_eq!(r["header"], "&CAcme &G Ltd&RPage &P", "&G stays at the caret");
+    assert_eq!(print_of(&s).hf_pictures.len(), 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    let pr = print_of(&s);
+    assert_eq!((pr.header.as_str(), pr.hf_pictures.len()), ("&RPage &P", 0), "one undo step");
+}
+
+/// A section's picture is resized in place (one side keeps the proportions), keeping its image,
+/// title and `&G`; an empty section has nothing to resize.
+#[test]
+fn a_header_picture_is_resized_in_place() {
+    let mut s = s();
+    s.execute("pageLayout.headerFooterPicture", json!({"section": "left", "base64": b64_png(40, 20), "width": 80, "title": "Logo"})).unwrap();
+    // One side keeps the proportions; the picture, its title and its &G stay.
+    let r = s.execute("pageLayout.headerFooterPicture", json!({"section": "left", "height": 20})).unwrap();
+    assert_eq!((r["width"].as_f64(), r["height"].as_f64()), (Some(40.0), Some(20.0)));
+    let r = s.execute("pageLayout.headerFooterPicture", json!({"section": "left", "width": 30, "height": 30})).unwrap();
+    assert_eq!((r["width"].as_f64(), r["height"].as_f64(), r["header"].as_str()), (Some(30.0), Some(30.0), Some("&L&G")));
+    assert_eq!(print_of(&s).hf_pictures[0].title, "Logo");
+    // Nothing to resize in an empty section.
+    assert!(s.execute("pageLayout.headerFooterPicture", json!({"section": "right", "width": 30})).is_err());
+}

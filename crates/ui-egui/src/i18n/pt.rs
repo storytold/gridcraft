@@ -1024,6 +1024,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Mostrar",
         "Collapse dialog" => "Recolher caixa de diálogo",
         "Expand dialog" => "Expandir caixa de diálogo",
+
+        "Picture" => "Imagem",
+        "Format\nPicture" => "Formatar\nImagem",
+        "Format Picture" => "Formatar Imagem",
+        "Height:" => "Altura:",
+        "Width:" => "Largura:",
+        "Lock aspect ratio" => "Bloquear proporção",
         _ => return None,
     })
 }

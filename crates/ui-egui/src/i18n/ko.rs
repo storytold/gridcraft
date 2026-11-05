@@ -487,6 +487,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "표시",
         "Collapse dialog" => "대화 상자 축소",
         "Expand dialog" => "대화 상자 확장",
+
+        "Picture" => "그림",
+        "Format\nPicture" => "그림\n서식",
+        "Format Picture" => "그림 서식",
+        "Height:" => "높이:",
+        "Width:" => "너비:",
+        "Lock aspect ratio" => "가로 세로 비율 고정",
         _ => return None,
     })
 }

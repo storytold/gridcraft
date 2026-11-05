@@ -28,6 +28,12 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
                 m.remove("text");
             }
         }
+        "hfPictureFormat" => {
+            if let Some(m) = v.as_object_mut() {
+                m.remove("ratio");
+                m.remove("lock");
+            }
+        }
         "advancedFilter" => {
             if let Some(m) = v.as_object_mut() {
                 m.remove("action");
@@ -233,6 +239,38 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
                         ui.monospace(serde_json::to_string_pretty(&r.unwrap_or(Json::Null)).unwrap_or_default());
                     });
+                }
+                "hfPictureFormat" => {
+                    // Width and height in the rulers' unit (centimetres, or inches in English),
+                    // kept in points; Lock Aspect Ratio moves the other side along.
+                    let lang = app.ui.language;
+                    let metric = !matches!(lang, crate::i18n::Language::En);
+                    let (k, unit) = if metric { (2.54 / 72.0, " cm") } else { (1.0 / 72.0, " in") };
+                    let get = |key: &str| d.values.get(key).and_then(Json::as_f64).filter(|v| v.is_finite() && *v > 0.0);
+                    let ratio = get("ratio").unwrap_or(1.0);
+                    let mut lock = d.values.get("lock").and_then(Json::as_bool).unwrap_or(true);
+                    let mut w = get("width").unwrap_or(72.0) * k;
+                    let mut h = get("height").unwrap_or(72.0) * k;
+                    let (lo, hi) = (k, 1584.0 * k);
+                    egui::Grid::new("hf_picture_size").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+                        ui.label(lang.tr("Height:"));
+                        if ui.add(egui::DragValue::new(&mut h).speed(0.01).range(lo..=hi).fixed_decimals(2).suffix(unit)).changed() && lock {
+                            w = (h / ratio).clamp(lo, hi);
+                        }
+                        ui.end_row();
+                        ui.label(lang.tr("Width:"));
+                        if ui.add(egui::DragValue::new(&mut w).speed(0.01).range(lo..=hi).fixed_decimals(2).suffix(unit)).changed() && lock {
+                            h = (w * ratio).clamp(lo, hi);
+                        }
+                        ui.end_row();
+                    });
+                    if ui.checkbox(&mut lock, lang.tr("Lock aspect ratio")).changed() && lock {
+                        d.values.insert("ratio".into(), json!(if w > 0.0 { h / w } else { 1.0 }));
+                    }
+                    d.values.insert("lock".into(), json!(lock));
+                    d.values.insert("width".into(), json!(w / k));
+                    d.values.insert("height".into(), json!(h / k));
+                    ok_cancel(ui, &mut confirm, &mut open);
                 }
                 "insertPicture" => {
                     // A private inbox dies with this dialog; late browser results
