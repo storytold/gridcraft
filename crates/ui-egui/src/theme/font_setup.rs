@@ -544,9 +544,6 @@ fn build_role_chain(
     let mut chain: Vec<String> = Vec::new();
     let loaded = if system { try_load(&refs) } else { None };
     if let Some(mut fd) = loaded {
-        if role.starts_with("cell") {
-            crate::fonts::record_line_gap(role, line_gap_share(&fd));
-        }
         // Helvetica Neue Bold's own TrueType hints close Cyrillic е into ө at 13 pt on a Retina
         // screen (#1184). Core Text never runs them, so this draws it the way macOS does.
         if cfg!(target_os = "macos") && role == UI_BOLD {
@@ -559,6 +556,12 @@ fn build_role_chain(
         chain.push(format!("sys-{UI}"));
     } else if role.starts_with("cell-") {
         chain.push(format!("sys-{CELL}"));
+    }
+    // The face this role really draws with, which may be the plain cell font, and none at all resets
+    // what an earlier build of the fonts noted.
+    if role.starts_with("cell") {
+        let first = chain.first().and_then(|key| fonts.font_data.get(key));
+        crate::fonts::record_line_gap(role, first.map_or(0.0, |fd| line_gap_share(fd)));
     }
     // Equation faces fall back to the maths font (for the symbols a text face lacks), then to the
     // serif face.

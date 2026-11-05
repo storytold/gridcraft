@@ -499,7 +499,9 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         _ => text_left + pad + indent,
     };
     let gh = galley.size().y;
-    let y = cell_text_y(st.align.v, *rect, gh, z) + crate::fonts::line_gap(&font);
+    // Rotated text finds its own place, and its underline and strikethrough go by this `y`.
+    let gap = if rotated { 0.0 } else { crate::fonts::line_gap(&font) };
+    let y = cell_text_y(st.align.v, *rect, gh, z) + gap;
     let cp = p.with_clip_rect(clip.intersect(p.clip_rect()));
     if rotated {
         let angle = -(st.align.rotation as f32).to_radians();

@@ -382,3 +382,17 @@ fn line_gap_scales_with_the_cell_font_and_leaves_others_alone() {
     assert_eq!(crate::fonts::line_gap(&egui::FontId::proportional(16.0)), 0.0);
     assert_eq!(crate::fonts::line_gap(&egui::FontId::new(16.0, egui::FontFamily::Name("not-recorded".into()))), 0.0);
 }
+
+/// Every cell role carries the gap of the face it draws with, also when that is the plain cell font
+/// because the bold or italic face is missing.
+#[test]
+fn cell_roles_carry_the_gap_of_the_face_they_draw_with() {
+    let fonts = font_definitions_for_language(Language::En);
+    for role in ["cell", "cell-bold", "cell-italic", "cell-bold-italic"] {
+        let family = egui::FontFamily::Name(role.into());
+        let first = fonts.families.get(&family).and_then(|chain| chain.first()).and_then(|key| fonts.font_data.get(key));
+        let want = first.map_or(0.0, |fd| crate::theme::line_gap_share(fd)) * 10.0;
+        let got = crate::fonts::line_gap(&egui::FontId::new(10.0, family));
+        assert!((got - want).abs() < 1e-3, "{role}: {got} against {want}");
+    }
+}
