@@ -276,6 +276,7 @@ pub(crate) fn apply_criteria(wb: &mut Workbook, sheet: usize, r: RangeRef, crite
 
 pub(super) fn clear_filter(s: &mut Session, _: &Json) -> Result<Json> {
     let sheet = s.doc()?.wb.active_sheet();
+    crate::cmd::refuse_unless_allowed(s, sheet, "Filtering", |p| p.autofilter)?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         if let Some(a) = sh.autofilter.as_mut() {
@@ -289,6 +290,7 @@ pub(super) fn clear_filter(s: &mut Session, _: &Json) -> Result<Json> {
 
 pub(super) fn reapply(s: &mut Session, _: &Json) -> Result<Json> {
     let sheet = s.doc()?.wb.active_sheet();
+    crate::cmd::refuse_unless_allowed(s, sheet, "Filtering", |p| p.autofilter)?;
     edit(s, |cx| {
         apply_filter(&mut cx.wb, sheet);
         cx.structural = true;

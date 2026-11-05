@@ -1,4 +1,4 @@
-use super::read::merge_vml;
+use super::read::{first_free_block, merge_vml};
 use super::write::{NameMap, attach, part_rels_xml, remap, write_parts};
 use super::*;
 
@@ -28,7 +28,15 @@ impl<'a> SheetKept<'a> {
         }
     }
 
-    /// GridCraft's notes VML for part `name`, merged with the kept control and object shapes.
+    /// The number GridCraft's own VML shapes start after when they join the kept drawing
+    /// ([`SheetKept::notes_vml`] numbers them `base + 1`, `base + 2`…); `None` without one.
+    pub fn shape_base(&self) -> Option<u64> {
+        let vml = self.vml()?;
+        Some(first_free_block(&String::from_utf8_lossy(&vml.data)).saturating_mul(1024))
+    }
+
+    /// GridCraft's notes and form controls VML for part `name`, merged with the kept control and
+    /// object shapes.
     pub fn notes_vml(&self, ours: String, name: &str, out: &mut Out) -> String {
         let Some(vml) = self.vml() else { return ours };
         self.write_vml_rels(vml, name, out);
@@ -50,19 +58,69 @@ impl<'a> SheetKept<'a> {
         self.ids.get(old).map(String::as_str)
     }
 
-    /// The kept sheet elements, in schema order.
-    pub fn elements(&self) -> String {
-        let Some(p) = self.p else { return String::new() };
+    /// The kept sheet elements, in schema order, with GridCraft's own form control entries
+    /// (`controls`, see `controls::write`) in the sheet's one `<controls>` element.
+    pub fn elements(&self, controls: &str) -> String {
         let mut s = String::new();
-        for slot in SHEET_SLOTS {
-            for e in p.elements.iter().filter(|e| e.slot == *slot) {
-                if let Some(x) = remap(&e.xml, &self.ids) {
-                    s.push_str(&x);
+        let mut placed = controls.is_empty();
+        if let Some(p) = self.p {
+            for slot in SHEET_SLOTS {
+                for e in p.elements.iter().filter(|e| e.slot == *slot) {
+                    if let Some(mut x) = remap(&e.xml, &self.ids) {
+                        if *slot == "controls"
+                            && !placed
+                            && let Some(i) = controls_insert_at(&x)
+                        {
+                            x.insert_str(i, controls);
+                            placed = true;
+                        }
+                        s.push_str(&x);
+                    }
                 }
             }
         }
+        // `<controls>` comes last of the kept elements.
+        if !placed {
+            s.push_str(&crate::controls::controls_element(controls));
+        }
         s
     }
+}
+
+/// Where GridCraft's control entries go in a kept `<controls>` fragment: just before the close
+/// tag of the `<controls>` element the reader reads (`controls::controls_of`), whatever its
+/// namespace prefix. In an `mc:AlternateContent` with separate `<controls>` elements in its
+/// Choice and Fallback branches that is the Choice's, the one an application that knows the
+/// x14 extensions reads; the Fallback's is left as the file had it. With no Choice, or a Choice
+/// without a `<controls>` element, it is the first `<controls>` element (a plain fragment, or a
+/// Fallback alone).
+fn controls_insert_at(x: &str) -> Option<usize> {
+    let from = open_tag(x, "Choice").unwrap_or(0);
+    close_tag_from(x, from, "controls")
+}
+
+/// The local name of the tag whose text starts at `name` (`x:controls` → `controls`).
+fn local_name(name: &str) -> &str {
+    name.rsplit(':').next().unwrap_or(name)
+}
+
+/// The byte offset of the first open tag of `local` in `x`, with any namespace prefix.
+fn open_tag(x: &str, local: &str) -> Option<usize> {
+    x.match_indices('<').find_map(|(i, _)| {
+        let rest = x.get(i + 1..)?;
+        let end = rest.find(|c: char| c.is_whitespace() || c == '>' || c == '/')?;
+        (local_name(rest.get(..end)?) == local).then_some(i)
+    })
+}
+
+/// The byte offset of the first close tag of `local` at or after `from` in `x`, with any
+/// namespace prefix (`</controls>`, `</x:controls>`).
+fn close_tag_from(x: &str, from: usize, local: &str) -> Option<usize> {
+    x.get(from..)?.match_indices("</").find_map(|(i, _)| {
+        let rest = x.get(from + i + 2..)?;
+        let name = rest.get(..rest.find('>')?)?.trim_end();
+        (local_name(name) == local).then_some(from + i)
+    })
 }
 
 // ---------------------------------------------------------------- linked workbooks
