@@ -40,8 +40,9 @@ format or teach the calculation engine ambiguous aliases.
 ## Text read as a number
 
 Arithmetic on text, `VALUE` and criteria read numbers the way the system's region writes them, as
-Excel does. The desktop app takes this from the system's language and region tag; a separator
-changed by hand in the Windows settings isn't seen. In a region with a decimal comma `"1,5"*1` is
+Excel does. On Windows the desktop app takes this from the decimal separator in the regional format
+settings, which can differ from the display language; elsewhere from the system's language and
+region tag. With a decimal comma `"1,5"*1` is
 1.5, `"1.000,5"*1` is 1000.5, `"1,0000"*1` is 1, and `"1.5"*1` and `"$1,5"*1` are `#VALUE!`. So a
 workbook relying on such text can calculate differently on another system, also as in Excel.
 The CLI and the engine's commands always read a decimal point, as do `NUMBERVALUE`, filters and

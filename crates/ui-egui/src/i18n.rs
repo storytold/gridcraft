@@ -55,16 +55,39 @@ pub enum Language {
     Ro,
 }
 
-/// Whether the system's region writes decimals with a comma, by its language tag. A tag is what
-/// the system tells us, so a separator changed by hand in the Windows settings isn't seen.
+/// Whether the system writes decimals with a comma. Windows says so itself, in the regional format
+/// settings, which can differ from the display language and can be changed by hand. Elsewhere, and
+/// if that can't be read, this goes by the language tag.
 pub fn system_uses_decimal_comma() -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        sys_locale::get_locale().is_some_and(|tag| tag_uses_decimal_comma(&tag))
+        decimal_comma_from(windows_decimal_separator().as_deref(), sys_locale::get_locale().as_deref())
     }
     #[cfg(target_arch = "wasm32")]
     {
         false
+    }
+}
+
+/// The decimal separator in the Windows regional format settings.
+#[cfg(not(target_arch = "wasm32"))]
+fn windows_decimal_separator() -> Option<String> {
+    #[cfg(windows)]
+    {
+        windows_registry::CURRENT_USER.open(r"Control Panel\International").and_then(|key| key.get_string("sDecimal")).ok()
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// The separator decides when there is one, otherwise the language tag.
+#[cfg(not(target_arch = "wasm32"))]
+fn decimal_comma_from(separator: Option<&str>, tag: Option<&str>) -> bool {
+    match separator {
+        Some(separator) => separator == ",",
+        None => tag.is_some_and(tag_uses_decimal_comma),
     }
 }
 
@@ -74,9 +97,10 @@ pub fn tag_uses_decimal_comma(tag: &str) -> bool {
     let language = parts.next().unwrap_or("").to_ascii_lowercase();
     let region = parts.find(|p| p.len() == 2 || p.len() == 3).map(str::to_ascii_uppercase).unwrap_or_default();
     // Switzerland and Liechtenstein write a decimal point in most of their languages; Mexico and
-    // Central America write one in Spanish, while South Africa writes a comma in English.
+    // Central America write one in Spanish, as do the United States and Latin America's generic
+    // `419`, while South Africa writes a comma in English.
     match region.as_str() {
-        "CH" | "LI" | "MX" | "GT" | "HN" | "NI" | "PA" | "PE" | "PR" | "SV" | "DO" => return false,
+        "CH" | "LI" | "MX" | "GT" | "HN" | "NI" | "PA" | "PE" | "PR" | "SV" | "DO" | "US" | "419" => return false,
         "ZA" => return true,
         _ => {}
     }
@@ -580,15 +604,25 @@ mod tests {
 
 #[cfg(test)]
 mod decimal_comma_region_tests {
-    use super::tag_uses_decimal_comma;
+    use super::{decimal_comma_from, tag_uses_decimal_comma};
 
     #[test]
     fn regions_and_languages_decide_the_separator() {
         for tag in ["it-IT", "it_IT.UTF-8", "de-DE", "fr-FR", "es-ES", "pt-BR", "en-ZA", "ru"] {
             assert!(tag_uses_decimal_comma(tag), "{tag}");
         }
-        for tag in ["en-US", "en-GB", "it-CH", "de-CH", "es-MX", "ja-JP", "zh-CN", "", "en"] {
+        for tag in ["en-US", "en-GB", "it-CH", "de-CH", "es-MX", "es-US", "es-419", "ja-JP", "zh-CN", "", "en"] {
             assert!(!tag_uses_decimal_comma(tag), "{tag}");
         }
+    }
+
+    /// The regional format wins over the display language, both ways.
+    #[test]
+    fn the_regional_separator_decides_before_the_language() {
+        assert!(decimal_comma_from(Some(","), Some("en-US")));
+        assert!(!decimal_comma_from(Some("."), Some("it-IT")));
+        assert!(decimal_comma_from(None, Some("it-IT")));
+        assert!(!decimal_comma_from(None, Some("en-US")));
+        assert!(!decimal_comma_from(None, None));
     }
 }

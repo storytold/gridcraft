@@ -2179,6 +2179,7 @@ dependencies = [
  "toml",
  "web-sys",
  "web-time",
+ "windows-registry",
  "zbus",
 ]
 
