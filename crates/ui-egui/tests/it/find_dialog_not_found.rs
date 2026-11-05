@@ -22,7 +22,13 @@ fn open_find_and_type(what: &str) -> Harness {
 
 #[test]
 fn find_all_says_there_is_nothing_to_report() {
-    let mut h = open_find_and_type("absent");
+    let mut h = open_find_and_type("hello");
+    h.state_mut().run("cell.set", json!({"cell": "B2", "input": "hello"})).unwrap();
+    h.get_by_label("Find All").click();
+    h.run();
+    assert!(h.query_all_by_value("1 cell(s) found").next().is_some(), "the first search reports its hit");
+    // The failed search must take the results area over, not keep the previous hits.
+    h.state_mut().dialog.as_mut().unwrap().values.insert("what".into(), json!("absent"));
     h.get_by_label("Find All").click();
     h.run();
     let state = h.state();
@@ -32,6 +38,21 @@ fn find_all_says_there_is_nothing_to_report() {
     assert!(d.result.is_none(), "the results list is cleared, not left stale");
     assert_eq!(d.values.get("notFound").and_then(serde_json::Value::as_bool), Some(true));
     assert!(h.query_all_by_value("Nothing found for “absent”").next().is_some(), "the dialog's own line says it");
+    assert!(h.query_all_by_value("1 cell(s) found").next().is_none(), "the earlier count line is gone");
+}
+
+#[test]
+fn an_empty_find_all_query_is_an_error_not_a_no_result() {
+    let mut h = open_find_and_type("");
+    h.get_by_label("Find All").click();
+    h.run();
+    let state = h.state();
+    assert!(state.message.is_some(), "an empty query reaches the message box");
+    assert_eq!(state.message.as_ref().unwrap().0, "Find and Replace");
+    assert_eq!(state.message.as_ref().unwrap().1, "missing `what`");
+    let d = state.dialog.as_ref().unwrap();
+    assert!(d.values.get("notFound").is_none(), "the dialog says no results only for a genuine no-match");
+    assert!(h.query_all_by_value("Nothing found for “”").next().is_none(), "no no-result line for an empty query");
 }
 
 #[test]

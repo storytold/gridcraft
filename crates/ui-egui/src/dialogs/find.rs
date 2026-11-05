@@ -85,14 +85,16 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                     d.values.insert("notFound".into(), json!(false));
                     d.values.remove("foundFor");
                 }
-                Err(_) => {
-                    // Clear the stale list so the dialog reflects this search. Find All reports in
-                    // the dialog's own results area instead of a message box, and the line quotes
-                    // the query this search actually ran, not whatever the field holds later.
+                Err(e) if e.starts_with("We couldn't find what you were looking for: ") => {
+                    // Only the engine's no-match is reported here: the stale list goes, the
+                    // dialog's own results area says it instead of a message box, and the line
+                    // quotes the query this search actually ran, not whatever the field holds later.
                     d.result = None;
                     d.values.insert("notFound".into(), json!(true));
                     d.values.insert("foundFor".into(), json!(what.clone()));
                 }
+                // An empty query or no open workbook is an error, not a no-result, and keeps the message-box path.
+                Err(e) => app.message = Some(("Find and Replace".into(), crate::clean_error(&e))),
             }
         }
         if ui.button(lang.tr("Find Next")).clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
