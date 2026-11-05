@@ -80,6 +80,19 @@ fn numbers_fall_into_ranges_with_their_sums() {
 }
 
 #[test]
+fn the_field_list_samples_read_like_the_report() {
+    // #3395 review: the samples ignored the field's grouping and listed raw numbers.
+    let mut s = session();
+    pivot(&mut s, &["Age"], &[]);
+    group(&mut s, json!({"field": "Age", "by": "numbers", "start": 20, "end": 79, "interval": 10})).unwrap();
+    let fields = s.execute("pivot.fields", json!({})).unwrap()["fields"].clone();
+    let age = fields.as_array().unwrap().iter().find(|f| f["name"] == "Age").unwrap().clone();
+    assert_eq!(age["samples"], json!(["20-29", "30-39", "40-49", "50-59", "60-69"]));
+    let sales = fields.as_array().unwrap().iter().find(|f| f["name"] == "Sales").unwrap().clone();
+    assert_eq!(sales["samples"][0], "10", "a field off the axes lists its values");
+}
+
+#[test]
 fn numbers_below_the_start_come_first_and_above_the_end_last() {
     let mut s = session();
     pivot(&mut s, &["Age"], &[]);

@@ -88,6 +88,8 @@ enum GroupBy {
     },
 }
 
+/// The grouping a `pivot.group` call asks for: a date part, or number ranges with their bounds and
+/// interval (checked here; the bounds default later, from the field's numbers).
 fn group_by_param(p: &Json) -> Result<GroupBy> {
     const C: &str = "pivot.group";
     let raw = str_param(p, "by").unwrap_or("months");
@@ -115,6 +117,8 @@ fn number_bounds(src: &pv::Source, column: usize) -> Option<(f64, f64)> {
     })
 }
 
+/// `pivot.group`: sets a row or column field's grouping, replacing any other kind, and clears the
+/// field's collapsed and hidden items, whose labels no longer exist.
 pub(super) fn group(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.group";
     let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
@@ -149,6 +153,8 @@ pub(super) fn group(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// `pivot.collapse`: collapses or expands items of a row or column field (by default all of them,
+/// as its grouping labels them).
 pub(super) fn collapse(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.collapse";
     let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();

@@ -32,12 +32,14 @@ pub struct Grouping {
 }
 
 impl Grouping {
+    /// The grouping of a row or column field.
     pub fn of(field: &PivotField) -> Self {
         Grouping { dates: field.date_group, numbers: field.number_group }
     }
 }
 
 impl From<PivotDateGroup> for Grouping {
+    /// A date grouping alone.
     fn from(dates: PivotDateGroup) -> Self {
         Grouping { dates, numbers: None }
     }
@@ -122,6 +124,7 @@ fn make_item(wb: &Workbook, v: &Value, grouping: Grouping, fmt: &str, first: usi
 }
 
 impl FieldItems {
+    /// The item id of a source value under `grouping`, adding the item the first time it appears.
     pub(super) fn intern(&mut self, wb: &Workbook, v: &Value, grouping: Grouping, fmt: &str, first: usize) -> u32 {
         let (key, item) = make_item(wb, v, grouping, fmt, first);
         if let Some(i) = self.index.get(&key) {

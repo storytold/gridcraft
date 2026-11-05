@@ -327,6 +327,8 @@ pub(super) fn summarize_table(s: &mut Session, p: &Json) -> Result<Json> {
 
 // ---------------------------------------------------------------- queries
 
+/// A row or column field as `pivot.fields` reports it: sort, grouping (with a number grouping's
+/// bounds and interval) and collapsed items.
 fn axis_field_json(f: &PivotField) -> Json {
     let (group, numbers) = match f.number_group {
         Some(g) => ("numbers", json!({"start": g.start(), "end": g.end(), "interval": g.by()})),
@@ -335,6 +337,7 @@ fn axis_field_json(f: &PivotField) -> Json {
     json!({"field": f.source_col, "sort": sort_name(f.sort), "group": group, "numberGroup": numbers, "collapsed": f.collapsed_items})
 }
 
+/// A PivotTable as `pivot.list` and `pivot.fields` report it: its areas, each field's settings and its options.
 pub(super) fn pivot_json(wb: &Workbook, si: usize, pt: &PivotTable) -> Json {
     json!({
         "id": pt.id,

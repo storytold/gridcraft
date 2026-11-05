@@ -35,6 +35,8 @@ enum GroupKindIn {
 }
 
 impl FieldIn {
+    /// The captions the table's `<item x>` indices refer to: the group items of a grouped field, else
+    /// its shared items.
     fn labels(&self) -> &[String] {
         match &self.group {
             Some(g) if !g.items.is_empty() => &g.items,
@@ -84,6 +86,8 @@ fn item_label_el(e: &El, sys: DateSystem) -> String {
     }
 }
 
+/// Reads a cache definition: its worksheet source and fields, with their shared items and groupings
+/// (dates, number ranges, or a kind we don't model); `None` with a warning for unusable caches.
 fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn> {
     let x = cx.optional_xml(part).ok().flatten()?;
     if x.name != "pivotCacheDefinition" {
@@ -227,6 +231,8 @@ fn field_ref(cx: &mut Ctx<'_>, cache: &CacheIn, i: usize) -> Option<(String, Piv
     }
 }
 
+/// Reads one PivotTable definition into the model, against its cache; `None` (with a warning)
+/// when the table can't be used, such as one without a valid location.
 fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<PivotTable> {
     let mut pt = PivotTable { id, ..PivotTable::default() };
     if let Some(n) = x.attr("name").filter(|n| !n.trim().is_empty()) {

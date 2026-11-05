@@ -119,6 +119,7 @@ fn func_caption(f: PivotFunc) -> &'static str {
     }
 }
 
+/// The `rangePr groupBy` value of a date grouping (`range` for none: number ranges).
 fn group_by_name(g: PivotDateGroup) -> &'static str {
     match g {
         PivotDateGroup::Years => "years",
@@ -132,6 +133,7 @@ fn group_by_name(g: PivotDateGroup) -> &'static str {
     }
 }
 
+/// The caption of an extra group field Excel adds for a coarser date level ("Years2" if taken).
 fn group_caption(g: PivotDateGroup) -> &'static str {
     match g {
         PivotDateGroup::Years => "Years",

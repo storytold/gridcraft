@@ -94,6 +94,8 @@ struct AggregateData {
     col_leaves: HashSet<Vec<u32>>,
 }
 
+/// Counts one source record: skips it when a filter hides it, interns its row and column items
+/// (under each field's grouping) and adds its values to every subtotal it belongs to.
 fn aggregate_record(
     input: &AggregateInput<'_>,
     data: &mut AggregateData,
@@ -387,6 +389,8 @@ fn show_value(definition: &PivotValue, raw: Value, lookup: &ValueLookup<'_>, con
 /// filter on a row or column field selects that field's items, so it takes the field's grouping.
 type ReportFilter<'a> = (usize, &'a PivotFilter, Grouping, bool);
 
+/// The filters that apply to the report (those on fields of the source), and the ones shown above it
+/// as report filters (not on a row or column field).
 fn report_filters<'a>(pt: &'a PivotTable, src: &Source) -> (Vec<ReportFilter<'a>>, Vec<ReportFilter<'a>>) {
     let axis_group = |name: &str| pt.rows.iter().chain(pt.columns.iter()).find(|field| field.source_col.eq_ignore_ascii_case(name)).map(Grouping::of);
     let filters: Vec<_> = pt

@@ -293,6 +293,8 @@ fn cache_fields(sh: &gridcraft_model::Sheet, r: RangeRef) -> Vec<CField> {
     fields
 }
 
+/// Groups the cache fields the axis fields need: date levels (the finest on the field itself, coarser
+/// ones as extra fields chained through `par`), then number ranges on the field itself.
 fn group_cache_fields(fields: &mut Vec<CField>, axis: &[&PivotField], date_system: DateSystem) {
     let find = |fields: &[CField], name: &str| fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
     let groupable = |f: &CField| {
@@ -394,6 +396,8 @@ fn group_cache_fields(fields: &mut Vec<CField>, axis: &[&PivotField], date_syste
     }
 }
 
+/// Builds the cache of a PivotTable from its source: fields, their stats and groupings, the shared
+/// items axis and page fields need, and a records snapshot when it is small enough.
 fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cache> {
     let (si, r, source_xml) = resolve_source(wb, &pt.source, pivot_sheet, 0)?;
     if r.count() > MAX_SOURCE_CELLS {
@@ -526,6 +530,8 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
     Some(Cache { fields, axis_map, source_xml, records })
 }
 
+/// The group item captions of a date grouping between `start` and `end`, with the "<start" and
+/// ">end" items Excel adds.
 fn group_items(sys: DateSystem, by: PivotDateGroup, start: f64, end: f64) -> Vec<String> {
     let mut v = vec![format!("<{}", mdy(sys, start))];
     match by {
@@ -570,6 +576,8 @@ fn item_xml(v: &Value, sys: DateSystem, date: bool) -> String {
     }
 }
 
+/// The `pivotCacheDefinition` part: source, fields with their shared items and `fieldGroup`s (date
+/// parts or number ranges).
 fn cache_xml(c: &Cache, records_rid: Option<&str>, sys: DateSystem) -> String {
     let mut s = format!("{XML_DECL}<pivotCacheDefinition xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\"");
     match (records_rid, &c.records) {
@@ -798,6 +806,8 @@ fn axis_field<'a>(pt: &'a PivotTable, c: &Cache, i: usize) -> Option<&'a PivotFi
     pt.rows.iter().chain(pt.columns.iter()).nth(p)
 }
 
+/// `<pivotFields>`: each cache field's axis, sort, subtotal and layout flags, and the items an axis
+/// field shows, hides or collapses.
 fn write_pivot_fields(s: &mut String, pt: &PivotTable, c: &Cache, layout: &PivotTableLayout<'_>) {
     let _ = write!(s, "<pivotFields count=\"{}\">", c.fields.len());
     for (i, f) in c.fields.iter().enumerate() {

@@ -64,6 +64,7 @@ struct NumberGroupFields {
 
 impl TryFrom<NumberGroupFields> for PivotNumberGroup {
     type Error = &'static str;
+    /// Checks deserialized bounds the way [`PivotNumberGroup::new`] does.
     fn try_from(f: NumberGroupFields) -> Result<Self, Self::Error> {
         PivotNumberGroup::new(f.start, f.end, f.by).ok_or("invalid PivotTable number grouping")
     }
@@ -99,14 +100,17 @@ impl PivotNumberGroup {
         (ok && steps(end - start, by) < f64::from(Self::MAX_RANGES)).then_some(group)
     }
 
+    /// Where the first range starts.
     pub fn start(&self) -> f64 {
         self.start
     }
 
+    /// The largest number in a range; larger ones fall into the ">end" item.
     pub fn end(&self) -> f64 {
         self.end
     }
 
+    /// The width of each range.
     pub fn by(&self) -> f64 {
         self.by
     }
