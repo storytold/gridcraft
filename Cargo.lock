@@ -2146,6 +2146,7 @@ dependencies = [
  "egui_kittest",
  "epaint_default_fonts",
  "gridcraft-chart",
+ "gridcraft-dax",
  "gridcraft-engine",
  "gridcraft-xlsx",
  "image",
