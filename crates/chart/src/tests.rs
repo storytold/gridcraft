@@ -137,6 +137,42 @@ fn logarithmic_axes_keep_fractional_decades_in_rendered_general_labels() {
 }
 
 #[test]
+fn logarithmic_stacked_line_uses_positive_accumulated_tops() {
+    let kind = ChartKind::LineStacked;
+    let mut c = chart(kind);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.x_title = None;
+    c.y_title = None;
+    c.format.y_axis.logarithmic = true;
+    let top_color = [25, 107, 36, 255];
+    let mut negative = series("Negative", &[-100.0, -100.0], [20, 96, 130, 255], kind);
+    negative.number_format = "General".into();
+    let data = ChartData {
+        categories: ["A", "B"].map(String::from).to_vec(),
+        series: vec![negative, series("Top", &[100.5, 200.0], top_color, kind)],
+        ..Default::default()
+    };
+
+    let prims = render(&c, &data, 640.0, 400.0, &ApproxMeasure);
+    let y_labels: Vec<_> = prims
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Prim::Text { role, text, .. } if role == "y_axis" => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    assert!(y_labels.contains(&"0.1"), "the positive stacked top at 0.5 must set a low enough log bound: {y_labels:?}");
+    assert!(
+        prims.iter().any(|primitive| matches!(primitive, Prim::Line { color, pts, .. } if *color == top_color && pts.len() == 2)),
+        "the visible positive stacked line should be rendered"
+    );
+    assert_sane(&prims, 640.0, 400.0);
+}
+
+#[test]
 fn logarithmic_area_chart_omits_non_positive_values() {
     let mut c = chart(ChartKind::Area);
     c.title = None;

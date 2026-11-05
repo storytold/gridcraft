@@ -53,6 +53,10 @@ fn is_line(f: Fam) -> bool {
     matches!(f, Fam::Line | Fam::LineStack | Fam::Line100)
 }
 
+fn is_stacked(f: Fam) -> bool {
+    matches!(f, Fam::ColStack | Fam::Col100 | Fam::LineStack | Fam::Line100 | Fam::AreaStack | Fam::Area100)
+}
+
 fn series_spans(data: &ChartData, fams: &[Fam], sec: &[bool], ncat: usize) -> Vec<Vec<Option<(f64, f64)>>> {
     // Totals for 100% stacking, per axis and family (100% columns, lines and areas stack apart).
     let mut totals: Vec<((bool, Fam), Vec<f64>)> = Vec::new();
@@ -85,7 +89,7 @@ fn series_spans(data: &ChartData, fams: &[Fam], sec: &[bool], ncat: usize) -> Ve
     for (i, s) in data.series.iter().enumerate() {
         let fam = fams.get(i).copied().unwrap_or(Fam::Col);
         let a = sec.get(i).copied().unwrap_or(false);
-        let stacked = matches!(fam, Fam::ColStack | Fam::Col100 | Fam::LineStack | Fam::Line100 | Fam::AreaStack | Fam::Area100);
+        let stacked = is_stacked(fam);
         let key = (a, fam);
         let si = if stacked {
             match stacks.iter().position(|(k, _, _)| *k == key) {
@@ -155,10 +159,17 @@ fn axis_scales(
         let (mut lo, hi) = range.unwrap_or((0.0, 0.0));
         let primary_options = if horizontal { &chart.format.x_axis } else { &chart.format.y_axis };
         if !axis && primary_options.logarithmic {
+            let has_stacked = members.iter().any(|i| fams.get(*i).is_some_and(|f| is_stacked(*f)));
             lo = if all100 {
                 members
                     .iter()
                     .flat_map(|i| spans.get(*i).into_iter().flatten().flatten().flat_map(|(base, top)| [*base, *top]))
+                    .filter(|v| *v > 0.0)
+                    .fold(hi, f64::min)
+            } else if has_stacked {
+                members
+                    .iter()
+                    .flat_map(|i| spans.get(*i).into_iter().flatten().filter_map(|span| span.map(|(_, top)| top)))
                     .filter(|v| *v > 0.0)
                     .fold(hi, f64::min)
             } else {
