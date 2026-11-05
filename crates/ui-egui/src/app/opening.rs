@@ -67,7 +67,9 @@ impl SheetApp {
         self.opening = None;
         let opened = outcome.and_then(|prepared| {
             self.session.offer_prepared_open(path.clone(), prepared);
-            self.run("file.open", json!({"path": path}))
+            let opened = self.run("file.open", json!({"path": path}));
+            self.session.discard_prepared_open();
+            opened
         });
         match opened {
             Ok(r) => self.after_open(Some(&path), &r),

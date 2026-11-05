@@ -590,6 +590,11 @@ impl Session {
     pub fn offer_prepared_open(&mut self, path: String, prepared: cmd::file::PreparedOpen) {
         self.prepared_open = Some((path, prepared));
     }
+    /// Forgets a workbook offered for a `file.open` that was refused before it could take it, so a
+    /// later `file.open` reads the file again, with its own options.
+    pub fn discard_prepared_open(&mut self) {
+        self.prepared_open = None;
+    }
 
     pub fn add_document(&mut self, d: DocState) -> usize {
         let uid = d.uid;
