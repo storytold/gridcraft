@@ -141,7 +141,8 @@ tabs) keeps it. Saving: Excel writes its list separator and drops the line. Grid
 with the separator it was read with, so it keeps a named `,` `;` or tab only when detection picks
 it again on reopening; otherwise (`|`, or `sep=;` over text with as many commas) it saves commas,
 which reopen in the same columns. A first row that would itself read as a `sep=` line (a lone
-`sep=;` cell) is written behind a `sep=` line naming the delimiter, so it stays data. Excel writes
+`sep=;` cell) is written behind a `sep=` line naming the delimiter, so it stays data; a `.tsv`
+or `.txt` file is read with tabs given, so it gets no such line. Excel writes
 such a row bare (`"sep=;";`) and reopens the file garbled (observed: A1 `sep=;;`, row 2 in one cell).
 
 From Text/CSV still guesses its own delimiter; making it detect like File › Open (and so honour

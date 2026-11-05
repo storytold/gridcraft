@@ -415,6 +415,26 @@ fn csv_open_honours_a_sep_line_and_saves_a_file_that_reopens_in_columns() {
     assert_eq!(txt.sheet(0).unwrap().value(CellRef::new(0, 0)).as_text(), Some("sep=|"));
 }
 
+/// A first cell that reads like a `sep=` line needs one of its own only in a CSV. A `.tsv` is read
+/// with tabs given, so a `sep=` line there would come back as an extra row above the data.
+#[test]
+fn tsv_save_writes_no_sep_line_and_reopens_in_place() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(0, 0), gridcraft_core::Value::text("sep=;"));
+    sh.set_value(CellRef::new(1, 0), gridcraft_core::Value::text("x"));
+    let saved = save_bytes(&wb, "list.tsv").unwrap();
+    assert_eq!(saved, b"sep=;\r\nx\r\n");
+    let (again, _) = open_bytes("list.tsv", &saved).unwrap();
+    let text = |r: u32| again.sheet(0).unwrap().value(CellRef::new(r, 0)).as_text().map(str::to_string);
+    assert_eq!((text(0), text(1)), (Some("sep=;".into()), Some("x".into())));
+    // Saved as CSV, the same sheet keeps its protective line, which reading drops again.
+    let csv = save_bytes(&wb, "list.csv").unwrap();
+    assert_eq!(csv, b"sep=,\r\nsep=;\r\nx\r\n");
+    let (again, _) = open_bytes("list.csv", &csv).unwrap();
+    assert_eq!(again.sheet(0).unwrap().value(CellRef::new(0, 0)).as_text(), Some("sep=;"));
+}
+
 #[test]
 fn csv_save_of_a_workbook_not_read_from_csv_uses_commas() {
     let mut wb = Workbook::new();

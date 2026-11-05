@@ -594,7 +594,25 @@ pub fn write_csv(sheet: &Sheet, delimiter: u8, cell_text: impl FnMut(CellRef) ->
 }
 
 /// [`write_csv`] with the output cap `limit` (bytes) given.
-pub fn write_csv_limited(sheet: &Sheet, delimiter: u8, limit: usize, mut cell_text: impl FnMut(CellRef) -> String) -> Result<Vec<u8>, IoError> {
+pub fn write_csv_limited(sheet: &Sheet, delimiter: u8, limit: usize, cell_text: impl FnMut(CellRef) -> String) -> Result<Vec<u8>, IoError> {
+    write_delimited(sheet, delimiter, limit, true, cell_text)
+}
+
+/// The sheet as tab-separated text (`.tsv`, `.txt`), like [`write_csv`] with tabs. Such a file is
+/// read with tabs given, never by detection, so a first cell like `sep=;` stays data without the
+/// `sep=` line a CSV needs: that line would come back as an extra row.
+pub fn write_tsv(sheet: &Sheet, cell_text: impl FnMut(CellRef) -> String) -> Result<Vec<u8>, IoError> {
+    write_delimited(sheet, b'\t', MAX_CSV_BYTES, false, cell_text)
+}
+
+/// [`write_csv_limited`], and with `sep_guard` a first row that reads as a `sep=` line gets one.
+fn write_delimited(
+    sheet: &Sheet,
+    delimiter: u8,
+    limit: usize,
+    sep_guard: bool,
+    mut cell_text: impl FnMut(CellRef) -> String,
+) -> Result<Vec<u8>, IoError> {
     let delim = if delimiter == 0 { ',' } else { delimiter as char };
     let mut out = String::new();
     let Some(r) = sheet.used_range() else { return Ok(Vec::new()) };
@@ -641,7 +659,7 @@ pub fn write_csv_limited(sheet: &Sheet, delimiter: u8, limit: usize, mut cell_te
     }
     // A first row that would read as Excel's `sep=` line (a lone `sep=;` cell) stays data behind a
     // `sep=` line of its own naming the delimiter, which GridCraft and Excel both drop on opening.
-    if out.split(['\r', '\n']).next().is_some_and(|first| sep_line(first, '"').is_some()) {
+    if sep_guard && out.split(['\r', '\n']).next().is_some_and(|first| sep_line(first, '"').is_some()) {
         out.insert_str(0, &format!("sep={delim}\r\n"));
     }
     Ok(out.into_bytes())
