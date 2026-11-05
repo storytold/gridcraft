@@ -244,8 +244,8 @@ fn parse_fraction(t: &str) -> Option<f64> {
     if !v.is_finite() {
         return None;
     }
-    let v = if neg { -v } else { v };
-    keep_15_digits(&v.to_string()).parse().ok()
+    let n: f64 = keep_15_digits(&v.to_string()).parse().ok()?;
+    Some(if neg { -n } else { n })
 }
 
 fn month_from_name(s: &str) -> Option<u32> {
@@ -441,6 +441,7 @@ mod tests {
         assert_eq!(n("1234567890123456%"), Value::number(12345678901234.5));
         assert_eq!(n("$1234567890123456"), Value::number(1234567890123450.0));
         assert_eq!(n("1234567890123456 1/2"), Value::number(1234567890123450.0));
+        assert_eq!(n("-123456789012345 1/2"), Value::number(-123456789012345.0));
         assert_eq!(n("1.2345678901234567E5"), Value::number(123456.789012345));
         assert_eq!(n("1.7976931348623157E308"), Value::number(1.79769313486231e308));
         assert_eq!(n("123456789012345"), Value::number(123456789012345.0));
