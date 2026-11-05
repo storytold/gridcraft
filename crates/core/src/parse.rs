@@ -577,8 +577,9 @@ mod tests {
         assert_eq!(p("#GETTING_DATA").value, Value::Error(CellError::GettingData));
         assert_eq!(p("#BUSY!").value, Value::Error(CellError::Busy));
         assert_eq!(p("#BLOCKED!").value, Value::Error(CellError::Blocked));
+        assert_eq!(p("#PYTHON!").value, Value::Error(CellError::Python));
         // Observed in Excel: these stay text when typed.
-        for t in ["#SPILL!", "#CALC!", "#spill!", "#FIELD!", "#UNKNOWN!", "#CONNECT!", "#PYTHON!"] {
+        for t in ["#SPILL!", "#CALC!", "#spill!", "#FIELD!", "#UNKNOWN!", "#CONNECT!"] {
             assert_eq!(p(t).value, Value::text(t), "{t}");
         }
         assert_eq!(p("e").value, Value::text("e"));
