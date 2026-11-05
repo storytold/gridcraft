@@ -1704,6 +1704,161 @@ fn offset_extreme_arguments_return_ref() {
     }
 }
 
+/// "Set precision as displayed": results are rounded to their cell's format before they are
+/// stored and before other formulas read them. Values observed in Excel (COM,
+/// `Workbook.PrecisionAsDisplayed = True`) with the same synthetic formulas.
+#[test]
+fn precision_as_displayed_rounds_results_by_cell_format() {
+    let fmt = |t: &mut T, at: &str, code: &str| {
+        let id = t.wb.styles.intern(gridcraft_model::Style { num_fmt: gridcraft_model::NumFmt::new(code), ..Default::default() });
+        t.wb.sheet_mut(0).unwrap().set_style(c(at), id);
+    };
+    let mut t = T::new();
+    t.set("A1", "=-130+657.91");
+    t.set("A2", "=A1*10");
+    t.set("A3", "=A1/7");
+    // Cross-cell: E2 rounds what it reads from E1; E1 itself (General) keeps full precision.
+    t.set("E1", "=10/3");
+    t.set("E2", "=E1");
+    t.set("E3", "=E2*10");
+    t.set("E4", "=E1*10");
+    // A spill: each element takes the format of the cell it lands in.
+    t.set("F1", "=SEQUENCE(3,1,0.123,0.111)");
+    t.set("G4", "=SUM(F1:F3)");
+    t.set("H1", "=TRUE");
+    t.set("H2", "=\"1.5\"");
+    // A conditional format rounds by the sign's section, not the one displayed: `[<1]0.00;0`
+    // shows 2+1/3 as `2` but stores 2.33, and stores -10/3 as -3.
+    t.set("J1", "=2+1/3");
+    t.set("J2", "=-10/3");
+    t.set("K1", "=J1*3");
+    t.set("K2", "=J2*3");
+    fmt(&mut t, "J1", "[<1]0.00;0");
+    fmt(&mut t, "J2", "[<1]0.00;0");
+    fmt(&mut t, "A1", "0");
+    fmt(&mut t, "A3", "0.0000");
+    fmt(&mut t, "E2", "0");
+    fmt(&mut t, "F1", "0.0");
+    fmt(&mut t, "F2", "0.0");
+    fmt(&mut t, "H1", "0");
+    fmt(&mut t, "H2", "0");
+    // Off: formats don't change values.
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A1"), -130.0 + 657.91);
+    assert_eq!(t.num("E2"), 10.0 / 3.0);
+    t.wb.calc.precision_as_displayed = true;
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.num("A1"), t.num("A2"), t.num("A3")), (528.0, 5280.0, 75.4286));
+    assert_eq!((t.num("E1"), t.num("E2"), t.num("E3"), t.num("E4")), (10.0 / 3.0, 3.0, 30.0, 10.0 / 3.0 * 10.0));
+    let sh = t.wb.sheet(0).unwrap();
+    assert_eq!(
+        (sh.value(c("F1")), sh.value(c("F2")), sh.value(c("F3"))),
+        (Value::Number(0.1), Value::Number(0.2), Value::Number(0.123 + 0.111 * 2.0))
+    );
+    assert_eq!(t.num("G4"), 0.1 + 0.2 + (0.123 + 0.111 * 2.0));
+    assert_eq!((t.num("J1"), t.num("J2"), t.num("K1"), t.num("K2")), (2.33, -3.0, 2.33 * 3.0, -9.0));
+    // Booleans and text are left alone.
+    assert_eq!((t.get("H1"), t.get("H2")), (Value::Bool(true), Value::from("1.5")));
+    // An edit recalculates through the rounded values too.
+    t.set("A1", "=-130+657.41");
+    fmt(&mut t, "A1", "0");
+    t.calc.cells_changed(&mut t.wb, &[(0, c("A1"))]);
+    assert_eq!((t.num("A1"), t.num("A2")), (527.0, 5270.0));
+    // Off again: a recalculation brings back full precision.
+    t.wb.calc.precision_as_displayed = false;
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A2"), (-130.0 + 657.41) * 10.0);
+}
+
+#[test]
+fn analysis_toolpak_value_params_reject_multi_cell_references() {
+    // Excel 365 (observed): EOMONTH, WORKDAY, COUPDAYS, BIN2DEC... give #VALUE! for a reference to more
+    // than one cell, however the reference is formed, and lift array constants and computed arrays.
+    let mut t = T::new();
+    for (a, v) in [
+        ("A1", "45000"),
+        ("A2", "45031"),
+        ("A3", "45061"),
+        ("B1", "1"),
+        ("B2", "2"),
+        ("B3", "3"),
+        ("C2", "7"),
+        ("F1", "1"),
+        ("F2", "2"),
+        ("F3", "11"),
+    ] {
+        t.set(a, v);
+    }
+    t.wb.names.push(gridcraft_model::DefinedName {
+        name: "Dates".into(),
+        scope: None,
+        formula: "Sheet1!$A$1:$A$3".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    let value = Value::Error(CellError::Value);
+    for f in [
+        "=EOMONTH(A1:A3,1)",
+        "=EOMONTH(A1,B1:B3)",
+        "=EDATE(A1:A3,1)",
+        "=SUMPRODUCT(EOMONTH(A1:A3,0))",
+        "=EOMONTH(INDEX(A1:A3,0,1),0)",
+        "=EOMONTH(OFFSET(A1,0,0,3,1),0)",
+        "=EOMONTH(IF(TRUE,A1:A3),0)",
+        "=EOMONTH(CHOOSE(1,A1:A3),0)",
+        "=LET(x,A1:A3,EOMONTH(x,0))",
+        "=EOMONTH(Dates,0)",
+        "=EOMONTH((A1,A2),0)",
+        "=EOMONTH(Z:Z,0)",
+        "=EOMONTH(A1:INDEX(A1:A3,3),0)",
+        "=WORKDAY(A1:A3,1)",
+        "=NETWORKDAYS(A1,A3:A4)",
+        "=YEARFRAC(A1,A3,B1:B2)",
+        "=WEEKNUM(A1,B1:B3)",
+        "=COUPDAYS(A1:A3,46000,2,0)",
+        "=DISC(A1,46000,98,100,B1:B3)",
+        "=BIN2DEC(B1:B3)",
+        "=ISEVEN(B1:B3)",
+    ] {
+        t.set("H5", f);
+        assert_eq!((t.get("H5"), t.get("H6")), (value.clone(), Value::Empty), "{f}");
+        t.set("H5", "");
+    }
+    // One-cell references, intersections, @ and the range parameters are fine.
+    for (f, want) in [
+        ("=EOMONTH(A1:A1,0)", 45016.0),
+        ("=EOMONTH(INDEX(A1:A3,2),0)", 45046.0),
+        ("=EOMONTH(OFFSET(A1,0,0,1,1),0)", 45016.0),
+        ("=EOMONTH(A1:A3 A2:C2,0)", 45046.0),
+        ("=EOMONTH(@A1:A3,0)", 45046.0),
+        ("=WORKDAY(A1,1,A1:A3)", 45001.0),
+        ("=XNPV(0,B1:B3,A1:A3)", 6.0),
+    ] {
+        t.set("H2", f);
+        assert_eq!(t.num("H2"), want, "{f}");
+        t.set("H2", "");
+    }
+    // Arrays that aren't references lift; so does the WORKDAY.INTL/NETWORKDAYS.INTL weekend.
+    for (f, below, right) in [
+        ("=EOMONTH(A1:A3+0,0)", Value::Number(45046.0), Value::Empty),
+        ("=EOMONTH(A1,{1,2})", Value::Empty, Value::Number(45077.0)),
+        ("=EOMONTH(TRANSPOSE(A1:A3),0)", Value::Empty, Value::Number(45046.0)),
+        ("=MAP(A1:A3,LAMBDA(x,EOMONTH(x,0)))", Value::Number(45046.0), Value::Empty),
+        ("=NETWORKDAYS.INTL(A1,A3+30,F1:F3)", Value::Number(66.0), Value::Empty),
+        ("=ISOWEEKNUM(A1:A3)", Value::Number(15.0), Value::Empty),
+        // The rejected reference adds no shape: a 2x1 array of #VALUE!.
+        ("=EOMONTH(A1:A3,{1;2})", value.clone(), Value::Empty),
+    ] {
+        t.set("H5", f);
+        assert_eq!((t.get("H6"), t.get("I5")), (below, right), "{f}");
+        t.set("H5", "");
+    }
+}
+
+/// A formula reading one further down (or on a later sheet) is calculated on demand, inside the
+/// formula that reads it. Chains of thousands of such formulas, common in financial models, used
+/// to overflow the stack (or give `#CIRC!` past 2,000 levels); they now calculate in full.
+
 /// Fills a sheet, calculates everything, and gives A1's value and whether a circular reference
 /// was found.
 fn calc_cells(cells: &[(&str, &str)]) -> (Value, bool) {
