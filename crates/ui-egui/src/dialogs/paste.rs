@@ -25,34 +25,63 @@ pub(super) fn paste_special(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialo
             let cur = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
             // Column by column, as Excel fills them.
             let rows = options.len().div_ceil(2);
-            crate::rtl::grid(ui, egui::Grid::new(("paste_special", key)).num_columns(2).min_col_width(200.0).spacing(vec2(16.0, 4.0)), |ui| {
-                for r in 0..rows {
-                    for c in 0..2 {
-                        if let Some((value, text)) = options.get(c * rows + r) {
-                            if crate::rtl::radio(ui, cur == *value, lang.tr(text)).clicked() {
+            if crate::rtl::flows(ui) {
+                // Mirrored: two plain columns, the first on the right. (A `Grid` here would be an island
+                // that widens the window.)
+                ui.columns(2, |columns| {
+                    for (i, column) in columns.iter_mut().enumerate() {
+                        let c = 1 - i;
+                        for r in 0..rows {
+                            if let Some((value, text)) = options.get(c * rows + r)
+                                && crate::rtl::radio(column, cur == *value, lang.tr(text)).clicked()
+                            {
                                 d.set_value(key, json!(value));
                             }
-                        } else {
-                            ui.label("");
                         }
                     }
-                    ui.end_row();
-                }
-            });
+                });
+            } else {
+                egui::Grid::new(("paste_special", key)).num_columns(2).min_col_width(200.0).spacing(vec2(16.0, 4.0)).show(ui, |ui| {
+                    for r in 0..rows {
+                        for c in 0..2 {
+                            if let Some((value, text)) = options.get(c * rows + r) {
+                                if crate::rtl::radio(ui, cur == *value, lang.tr(text)).clicked() {
+                                    d.set_value(key, json!(value));
+                                }
+                            } else {
+                                ui.label("");
+                            }
+                        }
+                        ui.end_row();
+                    }
+                });
+            }
         });
     }
     ui.add_space(8.0);
     // In the same columns as the options above.
     egui::Frame::new().inner_margin(egui::Margin::symmetric(11, 0)).show(ui, |ui| {
-        crate::rtl::grid(ui, egui::Grid::new("paste_special_checks").num_columns(2).min_col_width(200.0).spacing(vec2(16.0, 4.0)), |ui| {
-            for (key, label) in [("skipBlanks", "Skip blanks"), ("transpose", "Transpose (E)")] {
-                let mut b = d.values.get(key).and_then(Json::as_bool).unwrap_or(false);
-                if crate::rtl::checkbox(ui, &mut b, lang.tr(label)).changed() {
-                    d.values.insert(key.into(), json!(b));
-                }
+        let checks = [("skipBlanks", "Skip blanks"), ("transpose", "Transpose (E)")];
+        let mut check = |ui: &mut egui::Ui, (key, label): (&str, &str)| {
+            let mut b = d.values.get(key).and_then(Json::as_bool).unwrap_or(false);
+            if crate::rtl::checkbox(ui, &mut b, lang.tr(label)).changed() {
+                d.values.insert(key.into(), json!(b));
             }
-            ui.end_row();
-        });
+        };
+        if crate::rtl::flows(ui) {
+            ui.columns(2, |columns| {
+                for (i, column) in columns.iter_mut().enumerate() {
+                    check(column, checks[1 - i]);
+                }
+            });
+        } else {
+            egui::Grid::new("paste_special_checks").num_columns(2).min_col_width(200.0).spacing(vec2(16.0, 4.0)).show(ui, |ui| {
+                for item in checks {
+                    check(ui, item);
+                }
+                ui.end_row();
+            });
+        }
     });
     ui.add_space(8.0);
     ui.separator();

@@ -564,7 +564,7 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
             m.hex = hex_of(m.hsva.to_srgb());
         }
         ui.horizontal(|ui| {
-            let label = ui.label("Hex");
+            let label = ui.label(tr(ui, "Hex"));
             let r = ui.add(egui::TextEdit::singleline(&mut m.hex).desired_width(72.0).char_limit(7)).labelled_by(label.id);
             if r.changed()
                 && let Some(c) = parse_hex(&m.hex)
@@ -575,20 +575,24 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
             let (sw, _) = ui.allocate_exact_size(vec2(36.0, 18.0), Sense::hover());
             ui.painter().rect_filled(sw, 1.0, Color32::from_rgb(c[0], c[1], c[2]));
             ui.painter().rect_stroke(sw, 1.0, Stroke::new(1.0, Color32::from_gray(160)), StrokeKind::Inside);
-            ui.label(egui::RichText::new("New").small());
+            ui.label(egui::RichText::new(tr(ui, "New")).small());
         });
+        // At the far end like every dialog's OK / Cancel, and mirrored with the interface.
         ui.horizontal(|ui| {
-            if ui.button("  OK  ").clicked() {
-                // A hex still being typed that is not a colour falls back to the picker's.
-                let c = parse_hex(&m.hex).unwrap_or_else(|| m.hsva.to_srgb());
-                let hex = hex_of(c);
-                remember_color(&mut recent, &hex);
-                picked = Some(hex);
-                done = true;
-            }
-            if ui.button("Cancel").clicked() {
-                done = true;
-            }
+            ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
+                let ok = egui::Button::new(egui::RichText::new(tr(ui, "OK")).color(t.on_accent)).fill(t.accent);
+                if ui.add(ok).clicked() {
+                    // A hex still being typed that is not a colour falls back to the picker's.
+                    let c = parse_hex(&m.hex).unwrap_or_else(|| m.hsva.to_srgb());
+                    let hex = hex_of(c);
+                    remember_color(&mut recent, &hex);
+                    picked = Some(hex);
+                    done = true;
+                }
+                if ui.button(tr(ui, "Cancel")).clicked() {
+                    done = true;
+                }
+            });
         });
         if done {
             more = None;

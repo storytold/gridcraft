@@ -13,6 +13,7 @@
 use serde::{Deserialize, Serialize};
 
 mod ar;
+mod ar_functions;
 mod cs;
 mod de;
 mod el;
@@ -273,6 +274,7 @@ impl Language {
     /// The function help tables (descriptions, argument names) of the languages that have them.
     fn function_help(self) -> Option<(HelpTable, HelpTable)> {
         match self {
+            Self::Ar => Some((ar_functions::DESCRIPTIONS, ar_functions::ARGUMENTS)),
             Self::Es => Some((es_functions::DESCRIPTIONS, es_functions::ARGUMENTS)),
             _ => None,
         }
