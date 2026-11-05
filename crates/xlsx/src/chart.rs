@@ -293,7 +293,14 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         first_slice_angle,
         gap_width,
         overlap,
-        value_axis_hidden: y_ax.is_some_and(|a| bool_val(a, "delete")),
+        // The axis of the first group: a combo chart may list its secondary axis first.
+        value_axis_hidden: val_axes
+            .iter()
+            .find(|a| {
+                a.child_val("axId").is_some_and(|id| first_axes.iter().any(|f| f == id)) && (!scatter || y_ax.is_some_and(|y| std::ptr::eq(y, **a)))
+            })
+            .or(y_ax.as_ref())
+            .is_some_and(|a| bool_val(a, "delete")),
         series_lines: bars.and_then(|g| g.child("serLines")).map(|lines| {
             let ln = lines.path(&["spPr", "ln"]);
             gridcraft_model::ChartSeriesLines {

@@ -48,3 +48,22 @@ fn series_lines_are_read_with_their_style() {
     assert_eq!(lines.width, Some(0.75));
     assert!(lines.color.is_some());
 }
+
+/// In a combo chart the first group's axis decides, wherever the file lists it.
+#[test]
+fn the_hidden_value_axis_is_the_first_groups() {
+    let combo = |axes: &str| {
+        let xml = format!(
+            "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart><c:plotArea>\
+            <c:barChart><c:barDir val=\"col\"/><c:grouping val=\"clustered\"/><c:ser><c:idx val=\"0\"/><c:order val=\"0\"/></c:ser><c:axId val=\"1\"/><c:axId val=\"2\"/></c:barChart>\
+            <c:lineChart><c:grouping val=\"standard\"/><c:ser><c:idx val=\"1\"/><c:order val=\"1\"/></c:ser><c:axId val=\"3\"/><c:axId val=\"4\"/></c:lineChart>\
+            <c:catAx><c:axId val=\"1\"/></c:catAx><c:catAx><c:axId val=\"3\"/></c:catAx>{axes}</c:plotArea></c:chart></c:chartSpace>"
+        );
+        read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().value_axis_hidden
+    };
+    let primary = |hidden: u8| format!("<c:valAx><c:axId val=\"2\"/><c:delete val=\"{hidden}\"/></c:valAx>");
+    let secondary = |hidden: u8| format!("<c:valAx><c:axId val=\"4\"/><c:delete val=\"{hidden}\"/></c:valAx>");
+    assert!(!combo(&format!("{}{}", secondary(1), primary(0))), "the secondary listed first doesn't decide");
+    assert!(combo(&format!("{}{}", secondary(0), primary(1))));
+    assert!(combo(&format!("{}{}", primary(1), secondary(0))));
+}
