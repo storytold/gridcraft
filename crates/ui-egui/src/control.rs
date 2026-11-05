@@ -501,6 +501,12 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         "app.save" => wrap(app.run("file.save", json!({"path": s("path")}))),
         "app.quit" => {
             // Programmatic calls never open dialogs: quitting from here doesn't ask about unsaved work.
+            while let Some(window) = app.parked_window_with_draft() {
+                app.enter_window(window);
+                if let Err(e) = app.settle_drafts() {
+                    return err(crate::clean_error(&e));
+                }
+            }
             if let Err(e) = app.settle_drafts() {
                 return err(crate::clean_error(&e));
             }

@@ -416,6 +416,29 @@ mod autosave_gate_tests {
     }
 
     #[test]
+    fn app_quit_commits_drafts_in_parked_windows() {
+        let dir = temp_dir("autosave-parked-draft-exit");
+        let path = dir.join("book.xlsx");
+        let mut app = dirty_app(&path);
+        app.follow_active_window();
+        let original_window = app.ui_window().unwrap();
+        app.begin_edit(Some("typed in parked window".into()), false);
+        app.session.new_window().unwrap();
+        app.follow_active_window();
+        assert_ne!(app.ui_window(), Some(original_window));
+
+        let ctx = egui::Context::default();
+        crate::control::handle(&mut app, &ctx, "app.quit", &json!({}));
+
+        assert!(app.allow_close, "app.quit requests exit after settling parked drafts");
+        assert_eq!(
+            app.session.active().unwrap().wb.sheet(0).unwrap().value(cell(0, 0)),
+            gridcraft_engine::core::Value::text("typed in parked window")
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn failed_write_leaves_the_document_dirty_and_restarts_the_gate() {
         let dir = temp_dir("autosave-failed");
         std::fs::write(dir.join("blocker.txt"), b"not a folder").unwrap();
