@@ -56,6 +56,18 @@ fn an_empty_find_all_query_is_an_error_not_a_no_result() {
 }
 
 #[test]
+fn find_all_no_match_renders_in_the_interface_language() {
+    let mut h = crate::support::blank_harness(6);
+    h.state_mut().run("app.language.set", json!({"language": "ru"})).unwrap();
+    h.state_mut().open_dialog("find", json!({}));
+    h.run_steps(3);
+    h.state_mut().dialog.as_mut().unwrap().values.insert("what".into(), json!("absent"));
+    h.get_by_label("Найти всё").click();
+    h.run();
+    assert!(h.query_all_by_value("Ничего не найдено для “absent”").next().is_some(), "the no-match line renders in Russian");
+}
+
+#[test]
 fn the_find_form_shows_in_the_interface_language() {
     let mut h = crate::support::blank_harness(4);
     h.state_mut().run("app.language.set", json!({"language": "ru"})).unwrap();
