@@ -4762,8 +4762,10 @@ fn analysis_commands_refuse_a_multi_area_selection_without_a_range() {
     let mut s = s();
     quick_analysis_block(&mut s);
     s.execute("selection.set", json!({"range": "A1:C4,E1:F4"})).unwrap();
-    assert!(s.execute("analysis.addTotal", json!({})).is_err());
-    assert!(s.execute("analysis.addSparklines", json!({})).is_err());
+    for c in ["analysis.addTotal", "analysis.addSparklines"] {
+        let e = s.execute(c, json!({})).unwrap_err().to_string();
+        assert!(e.contains("single contiguous range"), "{c}: {e}");
+    }
     assert_eq!(v(&s, "B5"), Value::Empty);
     // An explicit range still works.
     s.execute("analysis.addTotal", json!({"range": "A1:C4"})).unwrap();
