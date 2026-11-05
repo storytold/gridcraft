@@ -1341,7 +1341,9 @@ fn numeric_raw(value: &Scalar, real: bool) -> Result<i64> {
             }
             Ok(scaled / 100)
         }
-        (Scalar::Currency(scaled), true) => Ok((*scaled as f64 / 10_000.0).to_bits() as i64),
+        // The reader turns a real Currency dictionary value back into scaled units with
+        // `raw / 100.0` then `* 10_000.0`, the same scale a long dictionary uses in cents.
+        (Scalar::Currency(scaled), true) => Ok((*scaled as f64 / 100.0).to_bits() as i64),
         (Scalar::DateTime(serial), true) => Ok(serial.to_bits() as i64),
         (Scalar::DateTime(serial), false) => Ok(serial.round() as i64),
         (Scalar::Boolean(flag), true) => Ok((if *flag { 1.0f64 } else { 0.0 }).to_bits() as i64),
@@ -1951,6 +1953,22 @@ mod tests {
             value_base_id: None,
             hierarchy: None,
         }
+    }
+
+    #[test]
+    fn real_currency_dictionary_values_round_trip() -> Result<()> {
+        // A real dictionary stores the currency value the reader divides by 100 before scaling it
+        // by 10_000, so the writer must divide by the same 100 (a long dictionary stores cents).
+        for scaled in [0i64, 123_450, -123_450, 12_345_678_901] {
+            let bits = numeric_raw(&Scalar::Currency(scaled), true)?;
+            let raw = f64::from_bits(bits as u64);
+            assert_eq!(round_currency(raw / 100.0), scaled, "{scaled}");
+            // The long dictionary keeps the same scale, one cent at a time.
+            if scaled % 100 == 0 {
+                assert_eq!(numeric_raw(&Scalar::Currency(scaled), false)?, scaled / 100, "{scaled}");
+            }
+        }
+        Ok(())
     }
 
     #[test]
