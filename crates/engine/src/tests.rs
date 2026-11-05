@@ -1,4 +1,5 @@
 use gridcraft_core::{CellRef, Value};
+use gridcraft_model::{Cell, CellRuns, Color, Run, RunFont, StyleId};
 use serde_json::json;
 
 use crate::Session;
@@ -3115,6 +3116,133 @@ fn reopen(s: &mut Session) {
     let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
     let b64 = r["base64"].as_str().unwrap().to_string();
     s.execute("file.open", json!({"name": "x.xlsx", "base64": b64})).unwrap();
+}
+
+// ---------------------------------------------------------------- rich-text runs (issue #774)
+
+fn runs_none_font() -> RunFont {
+    RunFont { name: None, size: None, bold: None, italic: None, underline: None, strike: None, color: None, vert: None }
+}
+
+/// The #774 repro shape (as the XLSX reader attaches it, see the xlsx `runs_roundtrip` test):
+/// three colour forms over "this is black, this is red, this is black".
+fn repro_runs() -> CellRuns {
+    CellRuns {
+        runs: vec![
+            Run { start: 0, len: 14, font: RunFont { color: Some(Color::Auto), ..runs_none_font() } },
+            Run { start: 14, len: 13, font: RunFont { color: Some(Color::Rgb(0xFF0000)), ..runs_none_font() } },
+            Run { start: 27, len: 14, font: RunFont { color: Some(Color::Rgb(0x00B050)), ..runs_none_font() } },
+        ],
+    }
+}
+
+/// Seeds a rich-text cell straight into the model: no command edits runs yet, so tests reach the
+/// side-table the way the XLSX reader does.
+fn add_runs_cell(s: &mut Session, a: &str, runs: CellRuns) -> String {
+    let text = "this is black, this is red, this is black";
+    let c = CellRef::parse(a).unwrap();
+    let d = s.doc_mut().unwrap();
+    let wb = std::sync::Arc::make_mut(&mut d.wb);
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.cells.set(c, Cell { value: Value::text(text), formula: None, style: StyleId::DEFAULT, py: None });
+    sh.cell_runs.insert(c, runs);
+    text.to_string()
+}
+
+fn runs_of(s: &Session, a: &str) -> Option<CellRuns> {
+    s.doc().unwrap().wb.active().unwrap().cell_runs.get(&CellRef::parse(a).unwrap()).cloned()
+}
+
+#[test]
+fn runs_survive_reopen() {
+    let mut s = s();
+    let runs = repro_runs();
+    let text = add_runs_cell(&mut s, "A3", runs.clone());
+    reopen(&mut s);
+    assert_eq!(v(&s, "A3"), Value::text(text.as_str()));
+    let back = runs_of(&s, "A3").expect("runs survive the XLSX round trip");
+    assert_eq!(back, runs);
+    assert!(back.valid_for(&text));
+}
+
+#[test]
+fn edit_clears_runs_and_undo_restores() {
+    let mut s = s();
+    let runs = repro_runs();
+    let text = add_runs_cell(&mut s, "A3", runs.clone());
+    s.execute("cell.set", json!({"cell": "A3", "input": "plain now"})).unwrap();
+    assert_eq!(v(&s, "A3"), Value::text("plain now"));
+    assert!(runs_of(&s, "A3").is_none(), "replacing the cell takes its runs with it");
+    // Undo restores the whole workbook snapshot, runs included.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "A3"), Value::text(text.as_str()));
+    assert_eq!(runs_of(&s, "A3"), Some(runs));
+}
+
+#[test]
+fn row_insert_translates_runs() {
+    let mut s = s();
+    let runs = repro_runs();
+    let text = add_runs_cell(&mut s, "A3", runs.clone());
+    s.execute("home.insertRows", json!({"rows": "2:2"})).unwrap();
+    assert_eq!(v(&s, "A4"), Value::text(text.as_str()), "the cell moves down a row");
+    assert_eq!(runs_of(&s, "A4"), Some(runs), "the runs entry moves with its cell");
+    assert!(runs_of(&s, "A3").is_none(), "the entry moved, not copied");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(runs_of(&s, "A3"), Some(repro_runs()));
+}
+
+#[test]
+fn column_and_row_deletes_translate_runs() {
+    let mut s = s();
+    let runs = repro_runs();
+    let text = add_runs_cell(&mut s, "C3", runs.clone());
+    s.execute("home.insertColumns", json!({"cols": "B:B"})).unwrap();
+    assert_eq!(runs_of(&s, "D3"), Some(runs.clone()), "inserting a column shifts the entry right");
+    s.execute("home.deleteRows", json!({"rows": "1:1"})).unwrap();
+    assert_eq!(runs_of(&s, "D2"), Some(runs), "deleting a row shifts the entry up");
+    assert_eq!(v(&s, "D2"), Value::text(text.as_str()));
+    // Deleting the runs cell's own row takes the entry with it.
+    s.execute("home.deleteRows", json!({"rows": "2:2"})).unwrap();
+    assert!(runs_of(&s, "D1").is_none(), "deleting the row removes the entry, not moves it off the sheet");
+}
+
+#[test]
+fn sort_moves_runs_with_their_rows() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name"], ["b"], ["c"], ["a"]]})).unwrap();
+    let runs = repro_runs();
+    let text = add_runs_cell(&mut s, "B2", runs.clone());
+    s.execute("selection.set", json!({"range": "A1:B4"})).unwrap();
+    s.execute("data.sort", json!({"header": true, "keys": [{"column": "A"}]})).unwrap();
+    // Ascending: a, b, c — row 2 (b) lands in row 3, runs and all.
+    assert_eq!(runs_of(&s, "B3"), Some(runs));
+    assert_eq!(v(&s, "B3"), Value::text(text.as_str()));
+    assert!(runs_of(&s, "B2").is_none());
+}
+
+/// Remove Duplicates compacts the kept rows' runs with them; a cut moves its cells' runs to the
+/// destination while a copy pastes flat text (the milestone-1 paste semantics).
+#[test]
+fn remove_duplicates_compacts_runs_and_cut_moves_them() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["h"], ["x"], ["x"], ["y"]]})).unwrap();
+    let runs = repro_runs();
+    let text = add_runs_cell(&mut s, "B2", runs.clone());
+    s.execute("selection.set", json!({"range": "A1:B4"})).unwrap();
+    s.execute("data.removeDuplicates", json!({"header": true, "columns": [0]})).unwrap();
+    // The duplicate row is removed; the kept rows compact up and the runs follow (row 2 keeps its).
+    assert_eq!(v(&s, "B2"), Value::text(text.as_str()));
+    assert_eq!(runs_of(&s, "B2"), Some(runs.clone()), "runs compact with kept rows");
+    // Cut B2 (rich) to D5: the runs move with the cell.
+    s.execute("edit.cut", json!({"range": "B2"})).unwrap();
+    s.execute("edit.paste", json!({"at": "D5"})).unwrap();
+    assert_eq!(runs_of(&s, "D5"), Some(runs), "cut-paste moves runs");
+    assert!(runs_of(&s, "B2").is_none());
+    // Copy-paste flattens (milestone-1 decision).
+    s.execute("edit.copy", json!({"range": "D5"})).unwrap();
+    s.execute("edit.paste", json!({"at": "F7"})).unwrap();
+    assert!(runs_of(&s, "F7").is_none(), "copy-paste pastes flat text");
 }
 
 #[test]

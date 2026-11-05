@@ -3,7 +3,9 @@
 //! miss the bugs that need a sequence — insert rows under a spill, undo, sort, paste into a table —
 //! and those are the ones that corrupt a workbook.
 //!
-//! Each seed picks a sample (sales, budget, grades) and runs `GRIDCRAFT_FUZZ_STEPS` commands. Most
+//! Each seed picks a sample workbook (sales, budget, grades, or `runs` — the grades sample with
+//! two rich-text cells seeded into the model, issue #774) and runs `GRIDCRAFT_FUZZ_STEPS`
+//! commands. Most
 //! come from a curated list of state-changing commands with hand-shaped params; the rest are drawn
 //! from every registered command, with params generated from its `params` doc string.
 //!
@@ -34,11 +36,11 @@ use std::sync::Arc;
 
 use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, col_to_letters};
 use gridcraft_engine::calc::Calc;
-use gridcraft_engine::model::{CalcMode, Formula, Sheet, SheetViewMode, Workbook};
+use gridcraft_engine::model::{CalcMode, Cell, CellRuns, Color, Formula, Run, RunFont, Sheet, SheetViewMode, StyleId, Workbook};
 use gridcraft_engine::{EngineError, Session, command_specs, find_command, io};
 use serde_json::{Value as Json, json};
 
-const SAMPLES: [&str; 3] = ["sales", "budget", "grades"];
+const SAMPLES: [&str; 4] = ["sales", "budget", "grades", "runs"];
 /// Episodes end (undo/redo checks, then a fresh history) before the engine's 100-step undo limit
 /// starts dropping the oldest entries.
 const EPISODE_UNDO_DEPTH: usize = 90;
@@ -227,6 +229,46 @@ fn fail(step: usize, kind: &'static str, what: impl Into<String>) -> Failure {
     Failure { step, kind, what: what.into() }
 }
 
+/// Two rich-text cells under the grades table (A11: the #774 repro's three colour forms; B11: a
+/// bold+size lead with a red tail), in the shapes of the XLSX `runs_roundtrip` test. Seeded
+/// straight into the model because no command edits runs yet; every edit, structural change and
+/// undo/redo round them must keep the side-table whole.
+fn seed_runs_cells(s: &mut Session) {
+    let none = || RunFont { name: None, size: None, bold: None, italic: None, underline: None, strike: None, color: None, vert: None };
+    let cells = [
+        (
+            "A11",
+            "this is black, this is red, this is black",
+            CellRuns {
+                runs: vec![
+                    Run { start: 0, len: 14, font: RunFont { color: Some(Color::Auto), ..none() } },
+                    Run { start: 14, len: 13, font: RunFont { color: Some(Color::Rgb(0xFF0000)), ..none() } },
+                    Run { start: 27, len: 14, font: RunFont { color: Some(Color::Rgb(0x00B050)), ..none() } },
+                ],
+            },
+        ),
+        (
+            "B11",
+            "bold fourteen red tail",
+            CellRuns {
+                runs: vec![
+                    Run { start: 0, len: 14, font: RunFont { bold: Some(true), size: Some(14.0), ..none() } },
+                    Run { start: 14, len: 8, font: RunFont { color: Some(Color::Rgb(0xFF0000)), ..none() } },
+                ],
+            },
+        ),
+    ];
+    let d = s.active_mut().expect("document");
+    let wb = Arc::make_mut(&mut d.wb);
+    if let Some(sh) = wb.sheet_mut(0) {
+        for (a, text, runs) in cells {
+            let c = CellRef::parse(a).expect("cell ref");
+            sh.cells.set(c, Cell { value: Value::text(text), formula: None, style: StyleId::DEFAULT, py: None });
+            sh.cell_runs.insert(c, runs);
+        }
+    }
+}
+
 /// Runs `f`, turning a panic into a failure (for checks that run outside `Session::execute`).
 fn guarded<T>(step: usize, kind: &'static str, f: impl FnOnce() -> Result<T, String>) -> Result<T, Failure> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
@@ -242,7 +284,13 @@ fn guarded<T>(step: usize, kind: &'static str, f: impl FnOnce() -> Result<T, Str
 impl Harness {
     fn new(sample: &str) -> Harness {
         let mut s = Session::new();
-        s.execute("file.new", json!({"sample": sample})).expect("sample opens");
+        // The `runs` fixture is the grades sample with two rich-text cells seeded into the model
+        // (samples are built from commands, and no command edits runs yet).
+        let opens = if sample == "runs" { "grades" } else { sample };
+        s.execute("file.new", json!({"sample": opens})).expect("sample opens");
+        if sample == "runs" {
+            seed_runs_cells(&mut s);
+        }
         let base = s.doc().expect("document").wb.clone();
         Harness { s, base }
     }
@@ -529,6 +577,8 @@ fn workbook_diff(a: &Workbook, b: &Workbook) -> Option<String> {
                 ("autofilter", x.autofilter != y.autofilter),
                 ("cond_formats", x.cond_formats != y.cond_formats),
                 ("validations", x.validations != y.validations),
+                ("cell_pictures", x.cell_pictures != y.cell_pictures),
+                ("cell_runs", x.cell_runs != y.cell_runs),
                 ("spill", x.spill != y.spill || x.spill_ranges != y.spill_ranges),
             ]
             .into_iter()

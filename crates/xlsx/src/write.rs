@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 
 use gridcraft_core::RangeRef;
 use gridcraft_formula::quote_sheet;
-use gridcraft_model::{CalcMode, CalcSettings, PhoneticString, ShowObjects, Style, Visibility, Workbook, WorkbookView};
+use gridcraft_model::{CalcMode, CalcSettings, CellRuns, PhoneticString, ShowObjects, Style, Visibility, Workbook, WorkbookView};
 
 use crate::package::ZipOut;
 use crate::xml::{esc, esc_attr};
@@ -83,23 +83,42 @@ impl Rels {
     }
 }
 
+/// One shared string: its plain text and, when it has rich-text runs, its formatting (same
+/// text with different runs is a distinct string, as in Excel's shared-string table).
+pub struct SstEntry {
+    pub text: String,
+    pub runs: Option<CellRuns>,
+}
+
 /// Shared string table being built.
 #[derive(Default)]
 pub struct Sst {
-    list: Vec<String>,
-    map: HashMap<String, u32>,
+    list: Vec<SstEntry>,
+    map: HashMap<(String, Option<CellRuns>), u32>,
     pub count: u64,
 }
 
 impl Sst {
     pub fn index(&mut self, s: &str) -> u32 {
+        self.index_entry(s, None)
+    }
+
+    /// Indexes a string that carries rich-text runs. Deduplicates by text **and** runs: the
+    /// same text with different runs is its own entry.
+    pub fn index_rich(&mut self, s: &str, runs: &CellRuns) -> u32 {
+        self.index_entry(s, Some(runs.clone()))
+    }
+
+    fn index_entry(&mut self, s: &str, runs: Option<CellRuns>) -> u32 {
         self.count += 1;
-        if let Some(&i) = self.map.get(s) {
+        let key = (s.to_string(), runs);
+        if let Some(&i) = self.map.get(&key) {
             return i;
         }
         let i = self.list.len() as u32;
-        self.list.push(s.to_string());
-        self.map.insert(s.to_string(), i);
+        let entry = SstEntry { text: key.0.clone(), runs: key.1.clone() };
+        self.list.push(entry);
+        self.map.insert(key, i);
         i
     }
 }
@@ -212,6 +231,28 @@ const DEFAULT_BOOK_NAME: &str = "Workbook.xlsx";
 
 pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
     write_xlsx_named(wb, kind, None)
+}
+
+/// The shared-strings part: each entry once, as rich `<r>` runs when it has them (falling back
+/// to the plain `<t>` for a runs entry that no longer lines up with its text) with the
+/// workbook's phonetic (furigana) data riding along beside either shape.
+fn write_shared_strings(out: &mut Out, wb_rels: &mut Rels, wb: &Workbook) {
+    // Phonetic data is kept per string text: the table holds each text once, so the runs of the
+    // entry with that text are written next to it (`Workbook::phonetics`).
+    let phonetics: HashMap<&str, &PhoneticString> = wb.phonetics.iter().map(|p| (p.text.as_str(), p)).collect();
+    let mut sst = format!("{XML_DECL}<sst xmlns=\"{NS_MAIN}\" count=\"{}\" uniqueCount=\"{}\">", out.sst.count, out.sst.list.len());
+    for entry in &out.sst.list {
+        let ph = phonetics.get(entry.text.as_str()).copied();
+        let body = match &entry.runs {
+            Some(runs) => crate::styles::si_runs_xml(&entry.text, runs).map(|rich| rich + &crate::xml::phonetic_xml(&entry.text, ph)),
+            None => None,
+        };
+        let body = body.unwrap_or_else(|| crate::xml::si_body(&entry.text, ph));
+        let _ = write!(sst, "<si>{body}</si>");
+    }
+    sst.push_str("</sst>");
+    out.part("xl/sharedStrings.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"), sst.into_bytes());
+    wb_rels.add("sharedStrings", "sharedStrings.xml");
 }
 
 /// The `<workbookView>` attributes beyond `activeTab`: the window's display settings
@@ -372,16 +413,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         crate::theme::write_theme(&wb.theme).into_bytes(),
     );
     wb_rels.add("theme", "theme/theme1.xml");
-    // Phonetic (furigana) data is kept per string text: the table below holds each text once, so
-    // the runs of the entry with that text are written next to it (`Workbook::phonetics`).
-    let phonetics: HashMap<&str, &PhoneticString> = wb.phonetics.iter().map(|p| (p.text.as_str(), p)).collect();
-    let mut sst = format!("{XML_DECL}<sst xmlns=\"{NS_MAIN}\" count=\"{}\" uniqueCount=\"{}\">", out.sst.count, out.sst.list.len());
-    for t in &out.sst.list {
-        let _ = write!(sst, "<si>{}</si>", crate::xml::si_body(t, phonetics.get(t.as_str()).copied()));
-    }
-    sst.push_str("</sst>");
-    out.part("xl/sharedStrings.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"), sst.into_bytes());
-    wb_rels.add("sharedStrings", "sharedStrings.xml");
+    write_shared_strings(&mut out, &mut wb_rels, wb);
     if !out.cell_pictures.is_empty() {
         crate::richdata::write(&mut out, &mut wb_rels)?;
     } else if out.dynamic_arrays {

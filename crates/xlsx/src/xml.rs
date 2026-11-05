@@ -92,6 +92,42 @@ pub fn rich_text(e: &El) -> String {
     decode_xstring(&s)
 }
 
+/// One rich-text run of a string item: its byte range in the concatenated text and its `<rPr>`
+/// properties element when present.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SiRun<'a> {
+    pub start: u32,
+    pub len: u32,
+    pub rpr: Option<&'a El>,
+}
+
+/// Splits a string item into its text and its rich-text runs: the text follows [`rich_text`]
+/// (`<t>` and `<r><t>` concatenated, phonetic runs skipped, `_xHHHH_` escapes decoded) and each
+/// `<r>` records the byte range its text occupies. When an escape changes the text's length the
+/// offsets no longer line up; callers guard with `CellRuns::valid_for`.
+pub fn si_parts(e: &El) -> (String, Vec<SiRun<'_>>) {
+    let mut s = String::new();
+    let mut runs = Vec::new();
+    for c in &e.children {
+        match c.name.as_str() {
+            "t" => s.push_str(&c.text),
+            "r" => {
+                let start = s.len();
+                for t in c.kids("t") {
+                    s.push_str(&t.text);
+                }
+                runs.push(SiRun {
+                    start: u32::try_from(start).unwrap_or(u32::MAX),
+                    len: u32::try_from(s.len() - start).unwrap_or(u32::MAX),
+                    rpr: c.child("rPr"),
+                });
+            }
+            _ => {}
+        }
+    }
+    (decode_xstring(&s), runs)
+}
+
 /// The phonetic (furigana) data of a string item: its `<rPh>` runs in document order, and its
 /// `<phoneticPr>` when present.
 ///
@@ -530,6 +566,14 @@ pub fn t_el(s: &str) -> String {
 /// all dropped still keeps its settings.
 pub fn si_body(text: &str, phonetic: Option<&PhoneticString>) -> String {
     let mut s = t_el(text);
+    s.push_str(&phonetic_xml(text, phonetic));
+    s
+}
+
+/// The `<rPh>`/`<phoneticPr>` suffix [`si_body`] appends after the base text — shared by the
+/// plain body and a rich-run body, which the schema treats the same (§18.4.8).
+pub fn phonetic_xml(text: &str, phonetic: Option<&PhoneticString>) -> String {
+    let mut s = String::new();
     let Some(p) = phonetic else { return s };
     // The model is public and restored from GridCraft JSON too, so the reader's checks are not the
     // only way data gets here: validate again and write only what the schema allows (§18.4.6: an

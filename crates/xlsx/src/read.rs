@@ -9,6 +9,7 @@ use gridcraft_model::{
 };
 
 use crate::package::{Package, Rel};
+use crate::runs;
 use crate::styles::{StylesIn, read_styles};
 use crate::xml::{self, El};
 use crate::{IoError, ReadReport};
@@ -17,7 +18,12 @@ use crate::{IoError, ReadReport};
 pub struct Ctx<'a> {
     pub pkg: Package<'a>,
     pub report: ReadReport,
-    pub sst: Vec<Arc<str>>,
+    /// Shared strings: the plain text every sharing cell stores, plus its rich-text runs when
+    /// the item has any worth keeping (issue #774).
+    pub sst: Vec<runs::Si>,
+    /// Rich-text runs still attachable this workbook: every kept run (shared or inline) spends
+    /// one unit; at zero, hostile input loses its runs and keeps its text.
+    pub run_budget: u64,
     /// Phonetic (furigana) data of the shared strings, one entry per base text.
     pub phonetics: Vec<PhoneticString>,
     /// Cell format index → model style.
@@ -106,24 +112,28 @@ pub fn find_rel<'r>(rels: &'r [Rel], kind: &str) -> Option<&'r Rel> {
 
 fn read_shared_strings(cx: &mut Ctx<'_>, wb_rels: &[Rel]) -> Result<(), IoError> {
     // Shared strings, streamed item by item. Phonetic (furigana) runs are kept next to the text
-    // they annotate, so an open + save does not delete them.
+    // they annotate, so an open + save does not delete them; rich-text runs (#774) travel with
+    // the item for every cell sharing it.
     if let Some(r) = find_rel(wb_rels, "sharedStrings").cloned() {
         match cx.pkg.read(&r.target)? {
             Some(b) => {
                 let mut sst = Vec::new();
                 let mut phonetics = Vec::new();
                 let mut dropped = 0usize;
+                let mut budget = cx.run_budget;
+                let palette = cx.palette.clone();
                 let res = xml::parse_streaming(&b, &["si"], &mut |si| {
-                    let text = xml::rich_text(&si);
+                    let item = runs::Si::parse(&si, &palette, &mut budget);
                     let raw = si.kids("rPh").count();
-                    let (runs, props) = xml::phonetic_data(&si, &text);
+                    let (runs, props) = xml::phonetic_data(&si, &item.text);
                     dropped += raw.saturating_sub(runs.len());
                     if !runs.is_empty() || props.is_some() {
-                        phonetics.push(PhoneticString { text: text.clone(), runs, props });
+                        phonetics.push(PhoneticString { text: item.text.to_string(), runs, props });
                     }
-                    sst.push(Arc::from(text));
+                    sst.push(item);
                     Ok(())
                 });
+                cx.run_budget = budget;
                 if let Err(e) = res {
                     cx.warn(format!("shared strings are damaged ({e}); kept {} strings", sst.len()));
                 }
@@ -136,7 +146,6 @@ fn read_shared_strings(cx: &mut Ctx<'_>, wb_rels: &[Rel]) -> Result<(), IoError>
             None => cx.warn(format!("missing part {}", r.target)),
         }
     }
-
     Ok(())
 }
 
@@ -244,6 +253,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         pkg,
         report: ReadReport::default(),
         sst: vec![],
+        run_budget: 1 << 20,
         phonetics: vec![],
         xf_map: vec![],
         dxfs: vec![],
