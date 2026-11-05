@@ -50,12 +50,27 @@ pub(super) fn median(v: Vec<f64>) -> R<f64> {
 
 /// Values occurring at least twice, ordered by first occurrence, with their (equal, maximal) count.
 fn modes(v: &[f64]) -> Vec<f64> {
+    // Index of each distinct number in `counts`, so counting is linear rather than a search of
+    // every distinct number so far. Keyed by bits with -0 folded into 0 (they compare equal); NaN
+    // never equals anything, so it is never merged.
+    let mut index: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
     let mut counts: Vec<(f64, usize)> = Vec::new();
     for &x in v {
-        if let Some(e) = counts.iter_mut().find(|e| e.0 == x) {
-            e.1 += 1;
-        } else {
+        if x.is_nan() {
             counts.push((x, 1));
+            continue;
+        }
+        let key = if x == 0.0 { 0 } else { x.to_bits() };
+        match index.entry(key) {
+            std::collections::hash_map::Entry::Occupied(e) => {
+                if let Some(c) = counts.get_mut(*e.get()) {
+                    c.1 += 1;
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(counts.len());
+                counts.push((x, 1));
+            }
         }
     }
     let best = counts.iter().map(|e| e.1).max().unwrap_or(0);
@@ -451,11 +466,15 @@ pub(super) fn frequency(a: &[Arg], _: C) -> R<Value> {
     if bins.is_empty() {
         return col_value(vec![data.len() as f64]);
     }
-    let mut order: Vec<usize> = (0..bins.len()).collect();
+    // a NaN bin equals no value (and would break the ascending order searched below)
+    let mut order: Vec<usize> = (0..bins.len()).filter(|&i| bins.get(i).is_some_and(|b| !b.is_nan())).collect();
     order.sort_by(|&i, &j| bins.get(i).copied().unwrap_or(0.0).total_cmp(&bins.get(j).copied().unwrap_or(0.0)));
     let mut counts = vec![0.0; bins.len() + 1];
     for x in data {
-        let slot = order.iter().find(|&&i| x <= bins.get(i).copied().unwrap_or(f64::INFINITY)).copied().unwrap_or(bins.len());
+        // `order` sorts the bins ascending, so the bins `x` exceeds come first: binary search for
+        // the first bin at or above `x` (the first of equal bins, as a linear scan would find).
+        let pos = if x.is_nan() { order.len() } else { order.partition_point(|&i| bins.get(i).copied().unwrap_or(f64::INFINITY) < x) };
+        let slot = order.get(pos).copied().unwrap_or(bins.len());
         if let Some(c) = counts.get_mut(slot) {
             *c += 1.0;
         }
