@@ -221,8 +221,9 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
     let tx_box = obj.path(&["nvSpPr", "cNvSpPr"]).is_some_and(|c| c.flag("txBox", false));
     let ln = sp.child("ln");
     let arrow = ln.is_some_and(|l| l.child("tailEnd").or_else(|| l.child("headEnd")).is_some_and(|t| t.attr("type").is_some_and(|v| v != "none")));
-    // WordArt: a text body carrying a text warp (`a:bodyPr/a:prstTxWarp`).
-    let word_art = obj.path(&["txBody", "bodyPr", "prstTxWarp"]).is_some();
+    // WordArt: our marker, a text body with the non-warping text warp `textNoShape`. Any other warp
+    // (Excel puts one on ordinary filled shapes too) leaves the shape what its geometry says.
+    let word_art = obj.path(&["txBody", "bodyPr", "prstTxWarp"]).is_some_and(|w| w.attr("prst") == Some("textNoShape"));
     let kind = match prst {
         _ if word_art => ShapeKind::WordArt,
         _ if tx_box => ShapeKind::TextBox,
@@ -554,7 +555,8 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                     s.push_str("</a:ln>");
                 }
                 s.push_str("</xdr:spPr>");
-                if !sh.text.is_empty() {
+                // A WordArt with no text still writes its body, which carries the WordArt marker.
+                if !sh.text.is_empty() || sh.kind == ShapeKind::WordArt {
                     let f = &sh.format;
                     let anchor = match f.anchor {
                         Some(ShapeTextAnchor::Top) => " anchor=\"t\"",
