@@ -484,11 +484,11 @@ fn compare_window_values(left: Option<&Scalar>, right: Option<&Scalar>, desc: bo
                 }
             }
             BlankPlacement::Default => {
+                // Decide against zero with the same total order the non-blank comparison uses, so
+                // NaN (which the total order puts after every number) cannot sort both before and
+                // after BLANK and make the comparator cyclic.
                 let other = if left_blank { right } else { left };
-                let blank_first = other.is_none_or(|value| match value {
-                    Scalar::String(_) => true,
-                    _ => value.to_number().is_none_or(|number| number >= 0.0),
-                });
+                let blank_first = other.is_none_or(|value| total_order(value, &Scalar::Decimal(0.0)) != Ordering::Less);
                 let ordering = if left_blank {
                     if blank_first { Ordering::Less } else { Ordering::Greater }
                 } else if blank_first {

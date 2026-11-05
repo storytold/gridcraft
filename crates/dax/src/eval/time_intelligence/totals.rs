@@ -95,7 +95,7 @@ fn total(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context, 
         None => window,
     };
     filters.set(dates.table, dates.column, keys);
-    let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone() };
+    let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone(), grouping_scope: ctx.grouping_scope.clone() };
     ev.eval(&args[0], &mut inner)
 }
 
@@ -142,7 +142,7 @@ fn balance(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context
         _ => BTreeSet::from([ScalarKey::from(&boundary)]),
     };
     filters.set(dates.table, dates.column, keys);
-    let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone() };
+    let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone(), grouping_scope: ctx.grouping_scope.clone() };
     ev.eval(&args[0], &mut inner)
 }
 
@@ -161,7 +161,7 @@ fn non_blank_value(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut
     let values = source.column(column);
     let keys: BTreeSet<ScalarKey> = values.iter().filter(|value| !value.is_blank()).map(ScalarKey::from).collect();
     let ordered: Vec<ScalarKey> = if first { keys.into_iter().collect() } else { keys.into_iter().rev().collect() };
-    let mut inner = Context { filters: base, rows: Vec::new(), vars: ctx.vars.clone() };
+    let mut inner = Context { filters: base, rows: Vec::new(), vars: ctx.vars.clone(), grouping_scope: ctx.grouping_scope.clone() };
     for key in ordered {
         inner.filters.set(table, column, [key]);
         let value = ev.eval(&args[1], &mut inner)?;

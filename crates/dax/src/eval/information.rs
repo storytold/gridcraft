@@ -349,9 +349,10 @@ fn is_empty(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result
 
 fn is_in_scope(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
     let (table, column) = column_ref(ev, args.first().ok_or_else(|| EvalError::new("ISINSCOPE needs a column"))?)?;
-    // A grouping frame over the column's table puts the column in scope. Hierarchy levels are not
-    // modelled, so every column of the current grouping frame is in scope.
-    let in_scope = ctx.rows.iter().any(|frame| frame.lineage == Some(table) && frame.model_columns.contains(&Some(column)));
+    // Only the group-by columns of the grouping row being evaluated are in scope. Hierarchy levels
+    // are not modelled, so every active (non-rolled-up) group-by column is in scope; a rolled-up
+    // column is not, and a row iterator over a table puts no column in scope.
+    let in_scope = ctx.grouping_scope.as_ref().is_some_and(|columns| columns.contains(&(table, column)));
     Ok(Scalar::Boolean(in_scope))
 }
 

@@ -330,6 +330,30 @@ fn window_error_paths() {
     assert!(error.contains("ABS or REL"), "{error}");
 }
 
+#[test]
+fn window_default_blank_placement_orders_nan_without_a_cycle() {
+    // Model data can hold NaN even though DAX cannot spell it. The default placement used to
+    // decide with `number >= 0.0`, so NaN sorted after BLANK while the total order sorted it
+    // after every number: BLANK < 3, 3 < NaN and NaN < BLANK, a non-total comparator.
+    let mut model = model();
+    let notes = model.table_index("Notes").expect("Notes");
+    model.tables[notes].rows.push(vec![Scalar::Integer(3), Scalar::Decimal(f64::NAN)]);
+    model.tables[notes].rows.push(vec![Scalar::Integer(4), Scalar::Integer(-1)]);
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let evaluate = |src: &str| {
+        let expr = parse_expression(src).expect("parse");
+        let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+        evaluator.evaluate_table(&bound).expect("window sorts")
+    };
+
+    // Negative, then BLANK (just below zero), then the finite value, then NaN last.
+    let ascending = evaluate("WINDOW(1, ABS, 4, ABS, Notes, ORDERBY(Notes[Score]))");
+    assert_eq!(column(&ascending, "Key"), vec![Scalar::Integer(4), Scalar::Integer(1), Scalar::Integer(2), Scalar::Integer(3)]);
+    // The reversal keeps the same braces: NaN, finite, BLANK, negative.
+    let descending = evaluate("WINDOW(1, ABS, 4, ABS, Notes, ORDERBY(Notes[Score], DESC))");
+    assert_eq!(column(&descending, "Key"), vec![Scalar::Integer(3), Scalar::Integer(2), Scalar::Integer(1), Scalar::Integer(4)]);
+}
+
 // ---------------------------------------------------------------------------------------------
 // LOOKUP / LOOKUPVALUE / LOOKUPWITHTOTALS
 // ---------------------------------------------------------------------------------------------

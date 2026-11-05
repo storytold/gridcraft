@@ -90,6 +90,50 @@ fn compare_order(left: Option<&Scalar>, right: Option<&Scalar>) -> Ordering {
     }
 }
 
+/// One `CONCATENATEX` order-by pair: the key expression and whether it sorts descending.
+struct OrderKey<'a> {
+    expr: &'a BoundExpr,
+    descending: bool,
+}
+
+/// `CONCATENATEX`'s `<expression>[, <order>]` pairs, starting at argument 4. 0/FALSE/DESC is
+/// descending, 1/TRUE/ASC ascending, and a key without an explicit order sorts ascending, as
+/// dax.guide documents.
+fn order_keys<'a>(ev: &Evaluator<'_>, args: &'a [BoundExpr], ctx: &mut Context) -> Result<Vec<OrderKey<'a>>, EvalError> {
+    let mut keys = Vec::with_capacity(args.len().saturating_sub(3).div_ceil(2));
+    let mut index = 3;
+    while index < args.len() {
+        let Some(expr) = args.get(index) else { break };
+        let descending = match args.get(index + 1) {
+            Some(order) => {
+                let value = ev.eval(order, ctx)?;
+                match &value {
+                    Scalar::String(text) if text.eq_ignore_ascii_case("ASC") => false,
+                    Scalar::String(text) if text.eq_ignore_ascii_case("DESC") => true,
+                    other => !other.to_bool().ok_or_else(|| EvalError::new("CONCATENATEX order must be ASC, DESC or a Boolean"))?,
+                }
+            }
+            None => false,
+        };
+        keys.push(OrderKey { expr, descending });
+        index += 2;
+    }
+    Ok(keys)
+}
+
+/// Compares two rows' order-by keys pair by pair, reversing only the pairs marked descending;
+/// `compare_order` keeps BLANK last in ascending order.
+fn compare_order_keys(left: &[Scalar], right: &[Scalar], keys: &[OrderKey<'_>]) -> Ordering {
+    for (index, key) in keys.iter().enumerate() {
+        let ordering = compare_order(left.get(index), right.get(index));
+        let ordering = if key.descending { ordering.reverse() } else { ordering };
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+    }
+    Ordering::Equal
+}
+
 fn concatenate_x(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
     let (table_arg, expression) = match (args.first(), args.get(1)) {
         (Some(table), Some(expression)) => (table, expression),
@@ -100,41 +144,24 @@ fn concatenate_x(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> R
         Some(expr) => ev.eval(expr, ctx)?.to_text(),
         None => String::new(),
     };
-    let order_by = args.get(3);
-    // 0/FALSE/DESC is descending, 1/TRUE/ASC ascending. dax.guide documents ASC as the default
-    // when an order-by expression has no explicit order.
-    let descending = match args.get(4) {
-        Some(expr) => {
-            let value = ev.eval(expr, ctx)?;
-            match &value {
-                Scalar::String(text) if text.eq_ignore_ascii_case("ASC") => false,
-                Scalar::String(text) if text.eq_ignore_ascii_case("DESC") => true,
-                other => !other.to_bool().ok_or_else(|| EvalError::new("CONCATENATEX order must be ASC, DESC or a Boolean"))?,
-            }
-        }
-        None => false,
-    };
-    let mut items: Vec<(Option<Scalar>, String)> = Vec::with_capacity(table.rows.len());
+    let keys = order_keys(ev, args, ctx)?;
+    let mut items: Vec<(Vec<Scalar>, String)> = Vec::with_capacity(table.rows.len());
     for row in &table.rows {
         ctx.rows.push(frame_for(ev, &table, row));
-        let value = ev.eval(expression, ctx);
-        let key = match (&value, order_by) {
-            (Ok(_), Some(expr)) => Some(ev.eval(expr, ctx)),
-            _ => None,
-        };
+        let computed = (|| -> Result<(Scalar, Vec<Scalar>), EvalError> {
+            let value = ev.eval(expression, ctx)?;
+            let mut row_keys = Vec::with_capacity(keys.len());
+            for key in &keys {
+                row_keys.push(ev.eval(key.expr, ctx)?);
+            }
+            Ok((value, row_keys))
+        })();
         ctx.rows.pop();
-        let value = value?;
-        let key = match key {
-            Some(key) => Some(key?),
-            None => None,
-        };
-        items.push((key, value.to_dax_text()));
+        let (value, row_keys) = computed?;
+        items.push((row_keys, value.to_dax_text()));
     }
-    if order_by.is_some() {
-        items.sort_by(|left, right| {
-            let ordering = compare_order(left.0.as_ref(), right.0.as_ref());
-            if descending { ordering.reverse() } else { ordering }
-        });
+    if !keys.is_empty() {
+        items.sort_by(|left, right| compare_order_keys(&left.0, &right.0, &keys));
     }
     if items.is_empty() {
         return Ok(Scalar::Blank);

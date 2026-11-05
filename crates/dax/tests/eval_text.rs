@@ -174,6 +174,22 @@ fn concatenate_x_orders_mixed_keys_deterministically() {
 }
 
 #[test]
+fn concatenate_x_orders_by_every_pair() {
+    // The two East rows tie on Region, so the second key (Amount, descending) decides them;
+    // ignoring it left them in source order (A-1 before C"3).
+    assert_eq!(text(r##"CONCATENATEX(Sales, Sales[Code], ",", Sales[Region], TRUE, Sales[Amount], FALSE)"##), "C\"3,A-1,B,2");
+    // Each pair keeps its own direction: East/West descending, then Amount ascending.
+    assert_eq!(text(r##"CONCATENATEX(Sales, Sales[Code], "|", Sales[Region], "DESC", Sales[Amount], "ASC")"##), "B,2|A-1|C\"3");
+    // A Boolean pair direction applies per pair as well: Qty > 2 descending keeps the TRUE rows
+    // first, then Label ascending breaks each group's ties.
+    assert_eq!(text(r##"CONCATENATEX(Items, Items[Label], ",", Items[Qty] > 2, FALSE, Items[Label], TRUE)"##), "Alpha,Delta,Beta,Gamma");
+    // The documented spelling is a bare ASC/DESC word.
+    assert_eq!(text(r##"CONCATENATEX(Sales, Sales[Code], "|", Sales[Region], DESC, Sales[Amount], ASC)"##), "B,2|A-1|C\"3");
+    let error = eval_error(r##"CONCATENATEX(Sales, Sales[Code], ",", Sales[Region], "SIDEWAYS")"##);
+    assert!(error.contains("CONCATENATEX order must be ASC, DESC or a Boolean"), "{error}");
+}
+
+#[test]
 fn fixed_rounds_and_groups() {
     assert_eq!(text("FIXED(384518.16, 2, FALSE)"), "384,518.16");
     assert_eq!(text("FIXED(4392768.29, 0, TRUE)"), "4392768");

@@ -9,11 +9,15 @@
 //! aggregation that summarizes it — `Sum of Amount`, Excel's implicit measure, which the command
 //! evaluates without adding a measure to the model.
 //!
-//! `dataModel.pivotFields` reads the package's pivot parts back, so its answer is cached per
-//! (document uid, revision, model shape) and per (document uid, revision, model shape, pivot name),
-//! like `app.grid.pivot_fields` keeps the worksheet pane's field list.
+//! `dataModel.pivotFields` reads the model's metadata and the package's kept pivot parts, so its
+//! answer is cached per (document uid, model contents, kept-pivot parts) and per that key plus the
+//! pivot name — not per document revision: an ordinary cell edit changes neither input, so the
+//! cached answer survives it (and the parts are not parsed again). The field list's `VALUES()`
+//! members are model data, so their cache does take the revision.
 
 use egui::{Color32, Sense, Ui, vec2};
+use gridcraft_dax::DataModel;
+use gridcraft_engine::model::Workbook;
 use serde_json::{Value as Json, json};
 
 use crate::SheetApp;
@@ -33,10 +37,25 @@ const MAX_SEARCH_CHARS: usize = 80;
 /// The aggregations `dataModel.createPivot` accepts for a column in Σ Values, in Excel's order.
 const AGGREGATES: [&str; 5] = ["Sum", "Average", "Count", "Min", "Max"];
 
-/// (document uid, revision, model shape): a command answer goes stale when any of them changes.
-type CacheKey = (u64, u64, (usize, usize));
-/// [`CacheKey`] plus the PivotTable the answer describes.
-type NamedKey = (u64, u64, (usize, usize), String);
+/// What `dataModel.pivotFields` reads: the open workbook, the model's contents and the kept
+/// PivotTable parts the command parses. Deliberately not the document revision: a cell edit
+/// changes none of them, so the cached answer stays valid and the parts are not read again.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CacheKey {
+    /// The open workbook (a different one is a different answer).
+    uid: u64,
+    /// [`model_hash`]: the model's contents as the answer reports them.
+    model: u64,
+    /// [`kept_pivot_fingerprint`]: the kept PivotTable parts it is read from.
+    parts: u64,
+}
+
+/// [`CacheKey`] plus the PivotTable the `selected` answer describes.
+type NamedKey = (CacheKey, String);
+
+/// A filter field's `VALUES(Table[Column])` members read model data, which a cell edit can change,
+/// so they also take the document revision: (uid, revision, model hash, field reference).
+type MemberKey = (u64, u64, u64, String);
 
 /// Where a field sits in the report.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -291,7 +310,7 @@ struct State {
     /// The user closed the pane with its ×.
     closed: bool,
     /// A filter field's members, for the filter's `allowed` list.
-    members: Option<(NamedKey, Vec<Json>)>,
+    members: Option<(MemberKey, Vec<Json>)>,
     /// The slicers the person added from a filter field: the sheet's slicer object binds to a
     /// worksheet table's column, so a data-model field's slicer is drawn here and drives the
     /// PivotTable's page filter through Apply.
@@ -341,37 +360,25 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     if crate::pivot_pane::active_pivot(app).is_some() || app.grid.pane.is_some() || app.session.comments_pane {
         return;
     }
-    let Some((uid, revision)) = app.session.active().map(|doc| (doc.uid, doc.revision)) else { return };
-    // Model edits are session state and do not bump the document revision, so the key hashes the
-    // model's contents: names, column types and measure names.
-    let fingerprint = app.session.dax_model.as_ref().map(|model| {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        for table in &model.tables {
-            table.name.hash(&mut hasher);
-            for column in &table.columns {
-                column.name.hash(&mut hasher);
-                column.data_type.hash(&mut hasher);
-            }
-        }
-        for measure in &model.measures {
-            measure.name.hash(&mut hasher);
-            measure.table.hash(&mut hasher);
-        }
-        (model.tables.len(), hasher.finish() as usize)
-    });
-    let mut state = load(ui.ctx());
-    if fingerprint.is_none() {
+    let Some(uid) = app.session.active().map(|doc| doc.uid) else { return };
+    // Model edits are session state and do not bump the document revision, so the model is part
+    // of the key by its contents, not by a revision number.
+    let Some(model) = app.session.dax_model.as_ref().map(model_hash) else {
         // Without a model there is nothing to read, and no model PivotTable to describe.
+        let mut state = load(ui.ctx());
         state.all = None;
         state.one = None;
-    }
-    let key = (uid, revision, fingerprint.unwrap_or_default());
-    // Reading the field list serializes the workbook and reads its parts back, so it runs only
+        state.members = None;
+        store(ui.ctx(), &state);
+        return;
+    };
+    let mut state = load(ui.ctx());
+    let key = CacheKey { uid, model, parts: app.session.active().map_or(0, |doc| kept_pivot_fingerprint(&doc.wb)) };
+    // The field list reads the model's metadata and the package's kept pivot parts; it runs only
     // when it can tell the person something: the workbook carries model PivotTables (their parts
     // are in the package) or the pane was opened to build one.
     let kept = has_kept_pivots(app);
-    let answer = if fingerprint.is_some() && (state.opened || (!state.closed && kept)) { read_all(app, &mut state, key) } else { None };
+    let answer = if state.opened || (!state.closed && kept) { read_all(app, &mut state, key) } else { None };
     if let Some(answer) = answer {
         let info = answer.as_ref().ok();
         let pivots: Vec<Json> = info.and_then(|info| info["pivots"].as_array()).cloned().unwrap_or_default();
@@ -418,9 +425,8 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         } else {
             reopen_tab(ui, &mut state);
         }
-    } else if fingerprint.is_some() {
-        // Nothing read: the closed pane's strip is all there is to paint. Without a model the
-        // strip would open a pane that can never load, so it is not shown at all.
+    } else {
+        // Nothing read: the closed pane's strip is all there is to paint.
         reopen_tab(ui, &mut state);
     }
     store(ui.ctx(), &state);
@@ -428,12 +434,81 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
 
 /// Whether the workbook's package carries PivotTable parts: the only place a model PivotTable lives.
 fn has_kept_pivots(app: &SheetApp) -> bool {
-    app.session.active().and_then(|doc| doc.wb.preserved.as_ref()).is_some_and(|preserved| {
-        preserved.parts.iter().any(|part| {
-            let name = part.name.to_ascii_lowercase();
-            name.starts_with("xl/pivottables/") && name.ends_with(".xml")
-        })
-    })
+    app.session
+        .active()
+        .and_then(|doc| doc.wb.preserved.as_ref())
+        .is_some_and(|preserved| preserved.parts.iter().any(|part| is_pivot_part(&part.name)))
+}
+
+/// Whether `name` is a kept PivotTable definition part (`xl/pivotTables/*.xml`).
+fn is_pivot_part(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.starts_with("xl/pivottables/") && name.ends_with(".xml")
+}
+
+/// The model's contents as `dataModel.pivotFields` reports them in `model`: table and column names
+/// and types, measure names, home tables and formats, and relationships. Model edits are session
+/// state and do not bump the document revision, so the field list's key hashes them instead.
+fn model_hash(model: &DataModel) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for table in &model.tables {
+        table.name.hash(&mut hasher);
+        for column in &table.columns {
+            column.name.hash(&mut hasher);
+            column.data_type.hash(&mut hasher);
+        }
+    }
+    for measure in &model.measures {
+        measure.name.hash(&mut hasher);
+        measure.table.hash(&mut hasher);
+        measure.format.hash(&mut hasher);
+    }
+    for relationship in &model.relationships {
+        relationship.from_table.hash(&mut hasher);
+        relationship.from_column.hash(&mut hasher);
+        relationship.to_table.hash(&mut hasher);
+        relationship.to_column.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// The kept PivotTable parts `dataModel.pivotFields` parses, by name and contents: every
+/// definition under `xl/pivotTables/`, the cache definition each one names, and the sheet names
+/// and relationships that say which sheet owns it. The cache's record part is not read by the
+/// command, so it is not hashed (it can be the largest part in the package).
+fn kept_pivot_fingerprint(wb: &Workbook) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    // `part.sheet` in the answer comes from the sheet's relationship to the definition part.
+    for sheet in &wb.sheets {
+        sheet.name.hash(&mut hasher);
+        for rel in sheet.preserved.as_deref().map_or(&[][..], |preserved| preserved.rels.as_slice()) {
+            rel.rel_type.hash(&mut hasher);
+            rel.target.trim_start_matches('/').to_ascii_lowercase().hash(&mut hasher);
+            rel.external.hash(&mut hasher);
+        }
+    }
+    let Some(preserved) = wb.preserved.as_deref() else { return hasher.finish() };
+    for part in preserved.parts.iter().filter(|part| is_pivot_part(&part.name)) {
+        part.name.to_ascii_lowercase().hash(&mut hasher);
+        part.data.hash(&mut hasher);
+        for rel in &part.rels {
+            rel.rel_type.hash(&mut hasher);
+            rel.target.hash(&mut hasher);
+            rel.external.hash(&mut hasher);
+        }
+        // The fields, hierarchies and measures the answer reports come from this part.
+        let cache = part
+            .rels
+            .iter()
+            .find(|rel| !rel.external && rel.rel_type.ends_with("/pivotCacheDefinition"))
+            .and_then(|rel| preserved.parts.iter().find(|kept| kept.name.eq_ignore_ascii_case(rel.target.trim_start_matches('/'))));
+        if let Some(cache) = cache {
+            cache.data.hash(&mut hasher);
+        }
+    }
+    hasher.finish()
 }
 
 /// The `dataModel.pivotFields` answer for the workbook, read once per [`CacheKey`].
@@ -454,7 +529,7 @@ fn named_selected(app: &mut SheetApp, state: &mut State, key: CacheKey, name: Op
         state.one = None;
         return None;
     };
-    let named = (key.0, key.1, key.2, name.to_string());
+    let named = (key, name.to_string());
     let answer = match state.cached_one(&named) {
         Some(answer) => answer,
         None => {
@@ -1305,7 +1380,10 @@ fn values_formula(reference: &str) -> String {
 
 /// A filter field's members, for its `allowed` list: `VALUES(Table[Column])` over the model.
 fn members(app: &mut SheetApp, state: &mut State, key: CacheKey, reference: &str) -> Result<Vec<Json>, String> {
-    let named = (key.0, key.1, key.2, reference.to_string());
+    // The members are model data (`DataModel::tables[..].rows`), which a cell edit can change: the
+    // cache takes the revision as well as the model's contents.
+    let revision = app.session.active().map_or(0, |doc| doc.revision);
+    let named: MemberKey = (key.uid, revision, key.model, reference.to_string());
     if let Some((cached, values)) = &state.members
         && *cached == named
     {
@@ -1321,4 +1399,133 @@ fn members(app: &mut SheetApp, state: &mut State, key: CacheKey, reference: &str
     }
     state.members = Some((named, values.clone()));
     Ok(values)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gridcraft_dax::value::Scalar;
+    use gridcraft_dax::{Measure, ModelColumn, ModelTable, Relationship};
+    use gridcraft_engine::core::{CellRef, Value};
+    use gridcraft_engine::model::{Cell, Preserved, PreservedPart, PreservedRel};
+    use std::sync::Arc;
+
+    const PIVOT_TABLE_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotTable";
+    const PIVOT_CACHE_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition";
+
+    fn rel(rel_type: &str, target: &str) -> PreservedRel {
+        PreservedRel { id: "rId1".to_string(), rel_type: rel_type.to_string(), target: target.to_string(), external: false }
+    }
+
+    fn part(name: &str, data: &str, rels: Vec<PreservedRel>) -> PreservedPart {
+        PreservedPart { name: name.to_string(), content_type: String::new(), data: Arc::from(data.as_bytes()), rels }
+    }
+
+    /// A workbook with one model PivotTable: its sheet relates to the definition, which relates
+    /// to its cache definition, and a model database part the command never reads.
+    fn workbook() -> Workbook {
+        let mut wb = Workbook::new();
+        wb.sheet_mut(0).expect("Sheet1").preserved =
+            Some(Arc::new(Preserved { rels: vec![rel(PIVOT_TABLE_REL, "xl/pivotTables/pivotTable1.xml")], ..Default::default() }));
+        wb.preserved = Some(Arc::new(Preserved {
+            parts: vec![
+                part(
+                    "xl/pivotTables/pivotTable1.xml",
+                    r#"<pivotTableDefinition name="PivotTable1"><location ref="A3:B4"/></pivotTableDefinition>"#,
+                    vec![rel(PIVOT_CACHE_REL, "xl/pivotCache/pivotCacheDefinition1.xml")],
+                ),
+                part("xl/pivotCache/pivotCacheDefinition1.xml", "<pivotCacheDefinition saveData=\"0\"/>", Vec::new()),
+                part("xl/model/item.data", "<data/>", Vec::new()),
+            ],
+            ..Default::default()
+        }));
+        wb
+    }
+
+    fn part_mut<'a>(wb: &'a mut Workbook, name: &str) -> &'a mut PreservedPart {
+        let preserved = Arc::make_mut(wb.preserved.as_mut().expect("the test workbook carries kept parts"));
+        preserved.parts.iter_mut().find(|part| part.name == name).expect("the test workbook carries this part")
+    }
+
+    /// The cache key's inputs: a cell edit must reuse the field list, while the model PivotTable's
+    /// definition, its cache definition, the sheet that owns it and the model metadata must not.
+    #[test]
+    fn field_list_key_changes_only_with_its_inputs() {
+        let mut wb = workbook();
+        let before = kept_pivot_fingerprint(&wb);
+
+        // An ordinary cell edit changes neither the kept parts nor the model.
+        wb.sheet_mut(0).expect("Sheet1").set_cell(CellRef::new(0, 0), Cell::value(Value::text("edited")));
+        assert_eq!(before, kept_pivot_fingerprint(&wb), "a cell edit must reuse the cached field list");
+
+        // Nor does a kept part the command never reads: the model database can be large.
+        part_mut(&mut wb, "xl/model/item.data").data = Arc::from(&b"<data>edited</data>"[..]);
+        assert_eq!(before, kept_pivot_fingerprint(&wb));
+
+        // The PivotTable definition is what the answer reports: its part changed is a new answer.
+        part_mut(&mut wb, "xl/pivotTables/pivotTable1.xml").data = Arc::from(&b"<pivotTableDefinition name=\"PivotTable1\"/>"[..]);
+        let definition = kept_pivot_fingerprint(&wb);
+        assert_ne!(before, definition);
+
+        // Its cache definition carries the fields, hierarchies and measures.
+        part_mut(&mut wb, "xl/pivotCache/pivotCacheDefinition1.xml").data = Arc::from(&b"<pivotCacheDefinition/>"[..]);
+        let cache = kept_pivot_fingerprint(&wb);
+        assert_ne!(definition, cache);
+
+        // Which sheet owns the PivotTable is in the answer (`part.sheet`).
+        wb.sheet_mut(0).expect("Sheet1").name = "Renamed".to_string();
+        assert_ne!(cache, kept_pivot_fingerprint(&wb));
+    }
+
+    fn model() -> DataModel {
+        DataModel {
+            tables: vec![
+                ModelTable {
+                    name: "Sales".to_string(),
+                    columns: vec![ModelColumn { name: "Amount".to_string(), data_type: Some("Double".to_string()) }],
+                    rows: vec![vec![Scalar::Decimal(1.0)]],
+                },
+                ModelTable {
+                    name: "Products".to_string(),
+                    columns: vec![ModelColumn { name: "Name".to_string(), data_type: Some("String".to_string()) }],
+                    rows: vec![vec![Scalar::String("Widget".to_string())]],
+                },
+            ],
+            measures: vec![Measure {
+                name: "Total".to_string(),
+                formula: "SUM(Sales[Amount])".to_string(),
+                table: Some("Sales".to_string()),
+                format: None,
+                expr: None,
+            }],
+            relationships: Vec::new(),
+        }
+    }
+
+    /// The model side of the key: everything `dataModel.pivotFields` puts in `model`, and nothing
+    /// the field list does not show (the rows behind `VALUES()` are the members' own key).
+    #[test]
+    fn model_hash_follows_the_field_list_metadata_not_the_rows() {
+        let before = model_hash(&model());
+        assert_eq!(before, model_hash(&model()), "an unchanged model reuses the cached field list");
+
+        let mut data = model();
+        data.tables[0].rows = vec![vec![Scalar::Decimal(2.0)], vec![Scalar::Decimal(3.0)]];
+        assert_eq!(before, model_hash(&data), "model data does not change the field list");
+
+        let mut formatted = model();
+        formatted.measures[0].format = Some("#,##0.00".to_string());
+        assert_ne!(before, model_hash(&formatted), "the measure's format is in the field list");
+
+        let mut related = model();
+        related.relationships.push(Relationship {
+            from_table: "Sales".to_string(),
+            from_column: "Amount".to_string(),
+            to_table: "Products".to_string(),
+            to_column: "Name".to_string(),
+            bidirectional: false,
+            inactive: false,
+        });
+        assert_ne!(before, model_hash(&related), "the relationships are in the field list");
+    }
 }

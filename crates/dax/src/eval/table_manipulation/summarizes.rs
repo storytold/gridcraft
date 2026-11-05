@@ -576,7 +576,13 @@ fn eval_in_group(ev: &Evaluator<'_>, ctx: &Context, expression: &BoundExpr, grou
             }
         }
     }
-    let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone() };
+    // The group-by columns that stay active in this row are the ones `ISINSCOPE` reports as in
+    // scope. A rolled-up column is blank in the row and is not part of the grouping level, so it
+    // is out of scope. The state lives on the per-expression context below, so it disappears when
+    // the expression ends and a nested grouping cannot leak its scope to the outer row.
+    let grouping_scope: Vec<(usize, usize)> =
+        group.columns.iter().zip(group.active).filter(|(_, active)| **active).map(|(column, _)| (column.table, column.column)).collect();
+    let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone(), grouping_scope: Some(grouping_scope) };
     ev.eval(expression, &mut inner)
 }
 
@@ -1039,7 +1045,16 @@ fn summarize_columns(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) 
                     filters.set(column.table, column.column, [ScalarKey::from(value)]);
                 }
             }
-            let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone() };
+            // A rolled-up column has no value in this combination: it is blank in the row and out
+            // of scope for `ISINSCOPE`. The remaining group-by columns are the active level.
+            let grouping_scope: Vec<(usize, usize)> = parsed
+                .columns
+                .iter()
+                .zip(&combination)
+                .filter(|(_, value)| value.is_some())
+                .map(|(column, _)| (column.table, column.column))
+                .collect();
+            let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone(), grouping_scope: Some(grouping_scope) };
             let mut expression_values = Vec::with_capacity(parsed.expressions.len());
             for (_, expression, _) in &parsed.expressions {
                 expression_values.push(ev.eval(expression, &mut inner)?);

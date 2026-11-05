@@ -122,6 +122,13 @@ fn model() -> DataModel {
         measures: vec![
             Measure { name: "Total Sales".into(), formula: "SUM(Sales[Amount])".into(), table: Some("Sales".into()), format: None, expr: None },
             Measure { name: "Total Quantity".into(), formula: "SUM(Sales[Quantity])".into(), table: Some("Sales".into()), format: None, expr: None },
+            Measure {
+                name: "Region In Scope".into(),
+                formula: "ISINSCOPE(Sales[Region])".into(),
+                table: Some("Sales".into()),
+                format: None,
+                expr: None,
+            },
         ],
     };
     model.parse_formulas().expect("model parses");
@@ -401,6 +408,82 @@ fn summarize_columns_rollupgroup_contributes_its_columns() {
     assert_columns(&table, &["Region", "Product", "Amount"]);
     assert_eq!(table.rows.len(), 5, "one row per non-blank region/product combination");
     assert_eq!(table.rows[0], vec![text("East"), text("Gadget"), money(30.0)]);
+}
+
+#[test]
+fn is_in_scope_reports_the_active_grouping_level() {
+    // A grouped output expression sees the group-by columns of its own row: the detail rows keep
+    // the region level, the ROLLUP grand total rolls it up, and Product is not a group column.
+    let table = eval_table(
+        "SUMMARIZE(Sales, ROLLUP(Sales[Region]), \
+         \"RegionInScope\", ISINSCOPE(Sales[Region]), \
+         \"ProductInScope\", ISINSCOPE(Sales[Product]))",
+    )
+    .expect("summarize scope");
+    assert_columns(&table, &["Region", "RegionInScope", "ProductInScope"]);
+    assert_eq!(table.rows.len(), 5, "four region details plus the grand total");
+    for detail in &table.rows[..4] {
+        assert_eq!(detail[1], Scalar::Boolean(true), "the region level is active on a detail row");
+        assert_eq!(detail[2], Scalar::Boolean(false), "Product is not a group-by column");
+    }
+    assert_eq!(row(&table, 4), vec![Scalar::Blank, Scalar::Boolean(false), Scalar::Boolean(false)], "the grand total rolls Region up");
+}
+
+#[test]
+fn is_in_scope_follows_summarize_columns_rollup_levels() {
+    let table = eval_table(
+        "SUMMARIZECOLUMNS(ROLLUPADDISSUBTOTAL(VALUES(Sales[Region]), Sales[Region], \"RegionTotal\", Sales[Product], \"ProductTotal\"), \
+         \"RegionInScope\", ISINSCOPE(Sales[Region]), \"ProductInScope\", ISINSCOPE(Sales[Product]))",
+    )
+    .expect("rollup scope");
+    assert_columns(&table, &["Region", "Product", "RegionTotal", "ProductTotal", "RegionInScope", "ProductInScope"]);
+    let detail = table.rows.iter().find(|row| row[0] == text("East") && row[1] == text("Widget")).expect("East/Widget detail");
+    assert_eq!((detail[4].clone(), detail[5].clone()), (Scalar::Boolean(true), Scalar::Boolean(true)), "detail row keeps both levels");
+    let region_total = table.rows.iter().find(|row| row[0] == text("East") && row[1] == Scalar::Blank).expect("East subtotal");
+    assert_eq!(
+        (region_total[4].clone(), region_total[5].clone()),
+        (Scalar::Boolean(true), Scalar::Boolean(false)),
+        "only Product is rolled up in a region subtotal"
+    );
+    let grand_total = table.rows.iter().find(|row| row[2] == Scalar::Boolean(true) && row[3] == Scalar::Boolean(true)).expect("grand total");
+    assert_eq!(
+        (grand_total[4].clone(), grand_total[5].clone()),
+        (Scalar::Boolean(false), Scalar::Boolean(false)),
+        "the grand total rolls both levels up"
+    );
+}
+
+#[test]
+fn is_in_scope_reports_groupby_columns() {
+    let table =
+        eval_table("GROUPBY(Sales, Sales[Region], \"RegionInScope\", ISINSCOPE(Sales[Region]), \"ProductInScope\", ISINSCOPE(Sales[Product]))")
+            .expect("groupby scope");
+    assert_columns(&table, &["Region", "RegionInScope", "ProductInScope"]);
+    for row in &table.rows {
+        assert_eq!(row[1], Scalar::Boolean(true), "Region is a GROUPBY column");
+        assert_eq!(row[2], Scalar::Boolean(false), "Product is not a GROUPBY column");
+    }
+}
+
+#[test]
+fn is_in_scope_ignores_row_iterators_inside_a_group() {
+    let table = eval_table(
+        "SUMMARIZE(Sales, Sales[Region], \
+         \"RegionInScope\", ISINSCOPE(Sales[Region]), \
+         \"ProductRowsInScope\", SUMX(VALUES(Sales[Product]), IF(ISINSCOPE(Sales[Product]), 1, 0)))",
+    )
+    .expect("row iterator scope");
+    for row in &table.rows {
+        assert_eq!(row[1], Scalar::Boolean(true), "the grouping level stays in scope across the iterator");
+        assert_eq!(row[2], money(0.0), "a row iterator over Product puts no column in scope");
+    }
+}
+
+#[test]
+fn is_in_scope_reaches_a_measure_called_from_a_group() {
+    let table = eval_table("SUMMARIZECOLUMNS(Sales[Region], \"InScope\", [Region In Scope])").expect("measure scope");
+    let east = table.rows.iter().find(|row| row[0] == text("East")).expect("East row");
+    assert_eq!(east[1], Scalar::Boolean(true), "the measure keeps the grouping scope of its caller");
 }
 
 #[test]

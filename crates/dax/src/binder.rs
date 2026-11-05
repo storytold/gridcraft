@@ -270,6 +270,10 @@ impl<'a> Binder<'a> {
                 "DATEDIFF" if index == 2 => keyword_name(arg),
                 // TOPN's `(expression, Order)` pairs: ASC/DESC sit at every odd index from 3.
                 "TOPN" if index >= 3 && index % 2 == 1 => clause_keyword(arg, &["ASC", "DESC"]),
+                // CONCATENATEX's `(expression [, Order])...` pairs start at index 3, so a bare
+                // ASC/DESC sits at 4, 6, ...; any other argument there is another order-by
+                // expression and binds normally.
+                "CONCATENATEX" if index >= 4 && (index - 4) % 2 == 0 => clause_keyword(arg, &["ASC", "DESC"]),
                 "CROSSFILTER" if index == 2 => clause_keyword(arg, &["ONE", "ONEWAY", "BOTH", "TWOWAY", "NONE"]),
                 // Window/relation clauses take bare enum words: `ORDERBY(x, DESC)`,
                 // `WINDOW(1, ABS, 1, ABS, ...)`, `INDEX(..., KEEP, PARTITIONBY(...))`, and the
