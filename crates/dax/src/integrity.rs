@@ -587,7 +587,9 @@ fn check_relationship(facts: &RelationshipFacts) -> (RelationshipCheck, Vec<Inte
     // A NaN foreign key is a distinct non-blank key (it is reported as an orphan), so it counts
     // here even though it never matches.
     let from_keys = facts.from_keys.iter().filter(|(key, _)| !is_blank(key)).count();
-    let to_keys = facts.to_keys.iter().filter(|(key, _)| !is_blank(key) && !crate::value::is_nan_key(key)).count();
+    // A NaN on the one side is a distinct non-blank key too (it is just never a match and never
+    // a duplicate), so the count includes it.
+    let to_keys = facts.to_keys.iter().filter(|(key, _)| !is_blank(key)).count();
 
     let mut orphan_keys = 0usize;
     let mut orphan_rows = 0usize;
