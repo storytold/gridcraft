@@ -61,8 +61,14 @@ fn coupncd_and_couppcd_follow_the_maturity_anchored_schedule() {
     // A settlement exactly on a coupon date keeps that date as the previous coupon.
     assert_eq!(date("COUPPCD(DATE(2011,5,15), DATE(2011,11,15), 2)"), date("DATE(2011,5,15)"));
     assert_eq!(date("COUPNCD(DATE(2011,5,15), DATE(2011,11,15), 2)"), date("DATE(2011,11,15)"));
-    // Month-end maturity clamps the derived coupon day (Aug 31 minus six months is Feb 29).
+    // Month-end maturity clamps the derived coupon day (Aug 31 minus six months is Feb 28).
     assert_eq!(date("COUPPCD(DATE(2011,5,30), DATE(2011,8,31), 2)"), date("DATE(2011,2,28)"));
+    // A month-end anchor keeps every derived coupon on month-end: June 30 minus six months is
+    // December 31, not December 30 (the LibreOffice COUP* schedule).
+    assert_eq!(date("COUPPCD(DATE(2024,1,15), DATE(2024,6,30), 2)"), date("DATE(2023,12,31)"));
+    assert_eq!(date("COUPNCD(DATE(2024,1,15), DATE(2024,6,30), 2)"), date("DATE(2024,6,30)"));
+    // 2023-12-31 to 2024-01-15 is 15 actual days (December 30 would have been 16).
+    assert_eq!(value("COUPDAYBS(DATE(2024,1,15), DATE(2024,6,30), 2, 1)"), 15.0);
 }
 
 #[test]

@@ -190,13 +190,16 @@ fn month_index(serial: f64) -> i64 {
 
 /// Adds whole months to a date, clamping the day to the last day of the target month. This is the
 /// rule Excel uses to derive coupon dates from the maturity date (Aug 31 minus six months is the
-/// last day of February).
+/// last day of February), and a month-end anchor keeps every derived coupon date on month-end
+/// (June 30 minus six months is December 31, not December 30).
 fn add_months(serial: f64, months: i64) -> f64 {
     let (year, month, day) = support::date_parts(serial);
+    let month_end = day == support::days_in_month(year, month);
     let total = year * 12 + (month - 1) + months;
     let new_year = total.div_euclid(12);
     let new_month = total.rem_euclid(12) + 1;
-    let new_day = day.min(support::days_in_month(new_year, new_month));
+    let last = support::days_in_month(new_year, new_month);
+    let new_day = if month_end { last } else { day.min(last) };
     support::date_serial(new_year, new_month, new_day, 0, 0, 0)
 }
 
