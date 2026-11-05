@@ -920,6 +920,28 @@ fn an_anchor_given_a_formula_that_reads_its_old_spill_area_sees_it_empty() {
 }
 
 #[test]
+fn an_array_reading_its_own_new_spill_area_settles_like_a_full_recalc() {
+    // Issue #3401: B1 spills over B1:C2 and reads A2:B3, so C1 (A2:B3's B2) is the value B1
+    // spills into B2, which is A3. The first evaluation read B2 before the array was laid out
+    // (0); the anchor was not evaluated again, so C1 stayed 0 while B2 showed 9.
+    let mut t = T::new();
+    t.set("A2", "4");
+    t.set("A3", "9");
+    t.set("B1", "=A2:B3");
+    assert_eq!((t.num("B1"), t.num("B2"), t.num("C2")), (4.0, 9.0, 0.0));
+    assert_eq!(t.num("C1"), t.num("B2"), "C1 reads B2");
+    // A full recalculation from scratch agrees.
+    let mut fresh = t.wb.clone();
+    Calc::new().recalc_all(&mut fresh);
+    for at in ["B1", "C1", "B2", "C2"] {
+        assert_eq!(fresh.sheet(0).unwrap().value(c(at)), t.get(at), "{at}");
+    }
+    // Editing what it reads through its own spill settles again.
+    t.set("A3", "11");
+    assert_eq!((t.num("B2"), t.num("C1")), (11.0, 11.0));
+}
+
+#[test]
 fn references_keep_their_size_past_the_used_range() {
     let mut t = T::new();
     t.set("A1", "5");
