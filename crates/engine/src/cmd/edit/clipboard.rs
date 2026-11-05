@@ -217,16 +217,19 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
                     .locale
                     .as_ref()
                     .filter(|_| html_cell.is_some_and(|hc| crate::clip_html::normalized(&hc.text) == crate::clip_html::normalized(v)));
+                let destination_style = cx.wb.sheet(sheet).map(|sh| sh.style_id(c)).unwrap_or_default();
+                let destination_general = cx.wb.styles.get(destination_style).num_fmt.as_str() == "General";
                 let mut cell = super::cell::input_to_cell_in(v, sheet, c, &mut cx.wb, source_locale.or(locale.as_ref()))
                     .unwrap_or_else(|_| Some(Cell::value(Value::text(v.as_str()))));
-                if cell.is_none() && source_locale.is_some() && html_cell.is_some_and(|hc| hc.copied_number.is_some()) {
-                    let style = cx.wb.sheet(sheet).map(|sh| sh.style_id(c)).unwrap_or_default();
-                    if cx.wb.styles.get(style).num_fmt.as_str() != "@" {
-                        cell = Some(Cell::styled(Value::Empty, style));
-                    }
+                if cell.is_none()
+                    && source_locale.is_some()
+                    && html_cell.is_some_and(|hc| hc.copied_number.is_some())
+                    && cx.wb.styles.get(destination_style).num_fmt.as_str() != "@"
+                {
+                    cell = Some(Cell::styled(Value::Empty, destination_style));
                 }
                 if let Some(cl) = cell.as_mut() {
-                    numeric_from_html(cl, v, html_cell, source_locale, &mut cx.wb);
+                    numeric_from_html(cl, v, html_cell, source_locale, destination_general, &mut cx.wb);
                 }
                 let sh = cx.sheet_mut(sheet)?;
                 match cell {
@@ -257,6 +260,7 @@ fn numeric_from_html(
     field: &str,
     html: Option<&crate::clip_html::HtmlCell>,
     source_locale: Option<&gridcraft_numfmt::Locale>,
+    destination_general: bool,
     wb: &mut gridcraft_model::Workbook,
 ) {
     let Some(hc) = html else { return };
@@ -280,7 +284,7 @@ fn numeric_from_html(
             _ => copied.value,
         };
         cell.value = Value::number(n);
-        if wb.styles.get(cell.style).num_fmt.as_str() == "General" {
+        if destination_general {
             cell.style = wb.styles.derive(cell.style, |style| style.num_fmt = copied.format.clone());
         }
         return;

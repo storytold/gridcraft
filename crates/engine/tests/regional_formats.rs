@@ -559,3 +559,42 @@ fn regional_clipboard_validates_rounded_number_metadata_and_currency_format() {
     clean.run_interactive("edit.paste", json!({"at":"A1","text":copied["text"],"html":bad_html}), &Locale::from_tag("ro-RO")).unwrap();
     assert_eq!(clean.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::Number(1.23));
 }
+
+/// Parser-inferred percent/date formats must not hide captured precision in a General target.
+#[test]
+fn regional_clipboard_captures_general_before_inferred_formatting() {
+    let ro = Locale::from_tag("ro-RO");
+    let mut source = Session::new();
+    source.new_workbook();
+    let date = gridcraft_engine::core::parse::parse_input("2026-03-04", DateSystem::D1900).value.as_f64().unwrap();
+    source.execute("range.setValues", json!({"range":"A1:B1","values":[[0.1256789,date]]})).unwrap();
+    source.execute("home.formatCells", json!({"range":"A1","style":{"num_fmt":"0.0000%"}})).unwrap();
+    {
+        let wb = Arc::make_mut(&mut source.active_mut().unwrap().wb);
+        let custom = wb.styles.derive(Default::default(), |style| style.num_fmt = NumFmt::custom("m/d/yyyy"));
+        wb.sheet_mut(0).unwrap().set_style(CellRef::new(0, 1), custom);
+    }
+    let copied = source.run_interactive("edit.copy", json!({"range":"A1:B1","html":true}), &ro).unwrap();
+    let mut dest = Session::new();
+    dest.new_workbook();
+    Arc::make_mut(&mut dest.active_mut().unwrap().wb).date_system = DateSystem::D1904;
+    dest.run_interactive("edit.paste", json!({"at":"A1","text":copied["text"],"html":copied["html"]}), &ro).unwrap();
+    {
+        let wb = &dest.active().unwrap().wb;
+        let sh = wb.sheet(0).unwrap();
+        assert_eq!(sh.value(CellRef::new(0, 0)), Value::Number(0.1256789));
+        assert_eq!(wb.styles.get(sh.style_id(CellRef::new(0, 0))).num_fmt.as_str(), "0.0000%");
+        assert_eq!(cell_text_in(wb, sh, CellRef::new(0, 0), &ro), "12,5679%");
+        assert!(wb.styles.get(sh.style_id(CellRef::new(0, 1))).num_fmt.is_literal_short_date());
+        assert_eq!(cell_text_in(wb, sh, CellRef::new(0, 1), &ro), "3/4/2026");
+    }
+    dest.execute("home.formatCells", json!({"range":"A2","style":{"num_fmt":"0.0%"}})).unwrap();
+    dest.execute("home.formatCells", json!({"range":"B2","style":{"num_fmt":"yyyy-mm-dd"}})).unwrap();
+    dest.run_interactive("edit.paste", json!({"at":"A2","text":copied["text"],"html":copied["html"]}), &ro).unwrap();
+    let wb = &dest.active().unwrap().wb;
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.value(CellRef::new(1, 0)), Value::Number(0.1256789));
+    assert_eq!(wb.styles.get(sh.style_id(CellRef::new(1, 0))).num_fmt.as_str(), "0.0%");
+    assert_eq!(wb.styles.get(sh.style_id(CellRef::new(1, 1))).num_fmt.as_str(), "yyyy-mm-dd");
+    assert_eq!(cell_text_in(wb, sh, CellRef::new(1, 1), &ro), "2026-03-04");
+}
