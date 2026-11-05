@@ -860,6 +860,12 @@ fn find_statement_end(bytes: &[u8], start: usize) -> usize {
                 line_comment = true;
                 index += 2;
             }
+            b'-' if next == Some(b'-') => {
+                // DAX accepts `--` as a line comment; without this arm a quote or bracket in the
+                // comment opens a string and hides the `;` on the next line.
+                line_comment = true;
+                index += 2;
+            }
             b'/' if next == Some(b'*') => {
                 block_comment = true;
                 index += 2;
@@ -1431,6 +1437,32 @@ mod tests {
         let updated = write_measures(&container, std::slice::from_ref(&measure))?;
         assert_eq!(read_measures(&updated)?, vec![measure.clone()]);
         // A second cycle must be a no-op, not another appended terminator.
+        let twice = write_measures(&updated, std::slice::from_ref(&measure))?;
+        assert_eq!(read_measures(&twice)?, vec![measure]);
+        Ok(())
+    }
+
+    #[test]
+    fn dash_line_comments_do_not_swallow_the_terminator() -> Result<()> {
+        // `--` is a line comment in DAX, but only `//` and `/* */` were skipped. An apostrophe in
+        // the comment opened a string literal, the `;` on the next line was swallowed, and every
+        // write/read cycle appended another terminator to the stored formula.
+        let text = "CREATE MEASURE 'Sales'[Net]=SUM(Sales[Amount]) -- don't\n;\n";
+        let parsed = parse_measure_statements(text)?;
+        assert_eq!(parsed.len(), 1);
+        let parsed_measure = parsed.first().ok_or_else(|| ModelFileError::Corrupt("measure".into()))?;
+        assert_eq!(parsed_measure.formula, "SUM(Sales[Amount]) -- don't");
+
+        let script = "<Load xmlns=\"http://schemas.microsoft.com/analysisservices/2003/engine\"><ObjectDefinition><MdxScript><Name>MdxScript</Name><Commands><Command><Text>CALCULATE;</Text></Command></Commands><CalculationProperties/></MdxScript></ObjectDefinition></Load>";
+        let container = synthetic_container(script)?;
+        let measure = ModelMeasure {
+            table: "Sales".to_string(),
+            name: "Net".to_string(),
+            formula: "SUM(Sales[Amount]) -- don't".to_string(),
+            format: String::new(),
+        };
+        let updated = write_measures(&container, std::slice::from_ref(&measure))?;
+        assert_eq!(read_measures(&updated)?, vec![measure.clone()]);
         let twice = write_measures(&updated, std::slice::from_ref(&measure))?;
         assert_eq!(read_measures(&twice)?, vec![measure]);
         Ok(())
