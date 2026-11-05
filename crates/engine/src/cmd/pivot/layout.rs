@@ -8,6 +8,8 @@ use super::{
     Session, bad, bool_param, edit, find_pivot, json, other, pv, str_param,
 };
 
+/// `pivot.filter`: the items a field shows (`null`: all). On a row or column field it keeps any
+/// value filter; a filter left hiding nothing goes away.
 pub(super) fn filter(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.filter";
     let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
@@ -107,6 +109,8 @@ fn value_rule_param(p: &Json) -> Result<Option<PivotValueRule>> {
     }))
 }
 
+/// `pivot.valueFilter`: sets or clears a row or column field's value filter, measured by a value
+/// field of the report (the first by default).
 pub(super) fn value_filter(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.valueFilter";
     let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
