@@ -3,9 +3,16 @@ use super::{
     NoteBox, NoteCorner, RangeRef, Rel, Sheet, Table, TableColumn, TotalsFn, XmlColumnPr, from_file, xml,
 };
 
-pub(super) fn read_hyperlinks(cx: &mut Ctx<'_>, name: &str, e: &El, rels: &[Rel], sheet: &mut Sheet) {
-    let mut cells = 0u64;
-    let mut bytes = 0u64;
+/// Hyperlink cells and copied bytes one sheet has kept so far: every `<hyperlinks>` element of
+/// the sheet writes into the same map, so the allowance is the sheet's, not the element's.
+#[derive(Default)]
+pub(super) struct HyperlinkUse {
+    cells: u64,
+    bytes: u64,
+}
+
+pub(super) fn read_hyperlinks(cx: &mut Ctx<'_>, name: &str, e: &El, rels: &[Rel], sheet: &mut Sheet, used: &mut HyperlinkUse) {
+    let HyperlinkUse { cells, bytes } = used;
     for h in e.kids("hyperlink") {
         let Some(range) = h.attr("ref").and_then(RangeRef::parse) else { continue };
         let mut target = h.attr("id").and_then(|id| rels.iter().find(|r| r.id == id)).map(|r| r.target.clone()).unwrap_or_default();
@@ -24,7 +31,7 @@ pub(super) fn read_hyperlinks(cx: &mut Ctx<'_>, name: &str, e: &El, rels: &[Rel]
         let link = Hyperlink { target: target.clone(), tooltip: h.attr("tooltip").map(str::to_string), external };
         let link_bytes = (target.len() + link.tooltip.as_ref().map_or(0, |t| t.len())) as u64;
         for c in range.iter() {
-            if cells >= MAX_HYPERLINK_CELLS {
+            if *cells >= MAX_HYPERLINK_CELLS {
                 cx.warn(format!("sheet \"{name}\": hyperlinks past the first {MAX_HYPERLINK_CELLS} cells were dropped"));
                 return;
             }
@@ -32,8 +39,8 @@ pub(super) fn read_hyperlinks(cx: &mut Ctx<'_>, name: &str, e: &El, rels: &[Rel]
                 cx.warn(format!("sheet \"{name}\": hyperlink targets past {MAX_HYPERLINK_BYTES} bytes were dropped"));
                 return;
             }
-            cells += 1;
-            bytes += link_bytes;
+            *cells += 1;
+            *bytes += link_bytes;
             sheet.hyperlinks.insert(c, link.clone());
         }
     }
