@@ -1,15 +1,25 @@
-//! The formula bar (Name Box, ✕ ✓ fx, formula field) and the shared cell editor widget.
+//! The formula bar (Name Box, ✕ ✓ fx, the PY badge, formula field) and the shared cell editor
+//! widget. In Python mode the field is the code editor.
 
 use egui::{FontId, Key, Rect, Sense, Stroke, StrokeKind, TextEdit, pos2, vec2};
 use serde_json::json;
 
 use crate::SheetApp;
+use crate::code_editor::{self, FieldOptions, Lang};
 use crate::editor::formula_refs;
 use crate::icons::{self, Icon};
 use crate::theme::{self, Tokens};
 
 /// Lines the formula bar (and the in-cell editor) grows to before it scrolls.
 pub const MAX_LINES: usize = 5;
+/// The most lines a drag of the bar's bottom edge can give it (the window caps it at half its
+/// height first).
+pub const MAX_DRAG_LINES: usize = 100;
+/// How far the bar's bottom edge reaches up into the bar as a resize handle (its bottom margin).
+const HANDLE: f32 = 4.0;
+/// What an expanded bar leaves below it: the status bar (26) and sheet tabs (32), and the
+/// worksheet's column headings and two rows, so the grid never disappears in a short window.
+const KEEP_BELOW: f32 = 26.0 + 32.0 + crate::grid::COL_HEADER_H + 2.0 * gridcraft_engine::model::DEFAULT_ROW_HEIGHT;
 /// The bar's height at one line.
 const ONE_LINE: f32 = 30.0;
 /// What the bar adds around the field's rows: the panel's margins (3 + 3), the field's (3 + 3)
@@ -38,11 +48,22 @@ pub struct BarLayout {
     pub visible_lines: usize,
     /// The caret while editing in the bar.
     pub caret: Option<Rect>,
+    /// The bottom edge that resizes the bar.
+    pub handle: Rect,
 }
 
 impl Default for BarLayout {
     fn default() -> Self {
-        BarLayout { name_box: Rect::NOTHING, buttons: Rect::NOTHING, field: Rect::NOTHING, height: 0.0, lines: 1, visible_lines: 1, caret: None }
+        BarLayout {
+            name_box: Rect::NOTHING,
+            buttons: Rect::NOTHING,
+            field: Rect::NOTHING,
+            height: 0.0,
+            lines: 1,
+            visible_lines: 1,
+            caret: None,
+            handle: Rect::NOTHING,
+        }
     }
 }
 
@@ -71,13 +92,15 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let font = theme::ui_font(13.0);
     let row_h = ui.ctx().fonts_mut(|f| f.row_height(&font));
     let last = BarLayout::get(ui.ctx());
-    // Height follows the content's line count (last frame's), 1 to MAX_LINES; the chevron pins it
-    // at MAX_LINES. It eases only when that target changes.
-    let lines = if app.ui.formula_bar_expanded { MAX_LINES } else { last.lines.clamp(1, MAX_LINES) };
+    // Height follows the content's line count (last frame's), 1 to MAX_LINES; expanded (the
+    // chevron), it is the height the bottom edge was dragged to. It eases only when that target
+    // changes.
+    let most = max_lines(ui.ctx().content_rect().height(), ui.available_rect_before_wrap().height(), row_h);
+    let lines = if app.ui.formula_bar_expanded { app.ui.formula_bar_lines.clamp(1, most) } else { last.lines.clamp(1, MAX_LINES) };
     let target = one_line(row_h) + (lines - 1) as f32 * row_h;
     let h = ui.ctx().animate_value_with_time(egui::Id::unique("formula_bar.height"), target, EASE_SECONDS);
     let mut layout = BarLayout { height: h, ..Default::default() };
-    egui::Panel::top("formula_bar")
+    let panel = egui::Panel::top("formula_bar")
         .exact_size(h)
         .frame(egui::Frame::NONE.fill(t.window).inner_margin(egui::Margin { left: 8, right: 8, top: 3, bottom: 3 }))
         .show(ui, |ui| {
@@ -100,6 +123,9 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                     app.open_dialog("insertFunction", json!({}));
                 }
                 layout.buttons = cancel.rect.union(fx.rect);
+                if let Some(badge) = python_badge(app, ui, &t) {
+                    layout.buttons = layout.buttons.union(badge);
+                }
                 ui.add_space(4.0);
                 // The formula field fills the rest, as tall as the bar.
                 let avail = ui.available_width() - 24.0;
@@ -114,10 +140,16 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 let info = if app.editor.is_some() {
                     editor_widget(app, &mut child, id, font.clone(), true, inner.width(), inner.height())
                 } else {
-                    // Show the active cell's content; clicking starts editing in the bar.
+                    // Show the active cell's content (a Python cell's code in the code editor's
+                    // colours); clicking starts editing in the bar.
                     let text = active_input(app);
                     let color = if read_only { t.text_disabled } else { t.text };
-                    let galley = child.painter().layout(text, font.clone(), color, inner.width());
+                    let galley = if active_python(app).is_some() && !read_only {
+                        let job = code_editor::layout_job(&text, Lang::Python, &code_editor::font(), color, &t.syntax, inner.width());
+                        child.fonts_mut(|f| f.layout_job(job))
+                    } else {
+                        child.painter().layout(text, font.clone(), color, inner.width())
+                    };
                     let lines = galley.rows.len();
                     // Each cell's view starts at its top: the offset is kept per cell, not per bar.
                     let shown = app.session.active().map(|d| (d.uid, d.wb.active_sheet(), d.selection.active.row, d.selection.active.col));
@@ -145,7 +177,60 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 }
             });
         });
+    layout.handle = resize_handle(app, ui, panel.response.rect, row_h, most);
     ui.ctx().data_mut(|d| d.insert_temp(BarLayout::id(), layout));
+}
+
+/// The most lines the bar takes in a window `window_h` tall with `room` left under the ribbon:
+/// half the window, as in Excel (never fewer than the chevron's [`MAX_LINES`]), and no more than
+/// leaves [`KEEP_BELOW`] for the status bar, sheet tabs and a few rows of the grid.
+fn max_lines(window_h: f32, room: f32, row_h: f32) -> usize {
+    let lines_in = |h: f32| {
+        let fit = ((h - one_line(row_h)) / row_h).floor();
+        if fit.is_finite() && fit > 0.0 { fit as usize + 1 } else { 1 }
+    };
+    lines_in(window_h * 0.5).clamp(MAX_LINES, MAX_DRAG_LINES).min(lines_in(room - KEEP_BELOW))
+}
+
+/// The lines a bar whose top is at `top` shows with its bottom edge dragged to `y`, in whole lines.
+fn dragged_lines(y: f32, top: f32, row_h: f32, most: usize) -> usize {
+    let extra = ((y - top - one_line(row_h)) / row_h).round();
+    if extra.is_finite() && extra > 0.0 { (extra as usize + 1).min(most) } else { 1 }
+}
+
+/// The bar's bottom edge: dragging it sets the bar's height in whole lines, as in Excel. The bar
+/// follows the pointer; the release runs `view.expandFormulaBar` with the lines, so one drag is
+/// one step (one line collapses the bar).
+fn resize_handle(app: &mut SheetApp, ui: &mut egui::Ui, bar: Rect, row_h: f32, most: usize) -> Rect {
+    let handle = Rect::from_x_y_ranges(bar.x_range(), (bar.bottom() - HANDLE)..=bar.bottom());
+    let resp = ui.interact(handle, egui::Id::unique("formula_bar.resize"), Sense::drag());
+    let name = app.ui.language.tr("Resize formula bar");
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
+    if resp.hovered() || resp.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+    }
+    // The state before the drag: the preview changes it, the release puts it back for the command.
+    let before = resp.id.with("before");
+    if resp.drag_started() {
+        let state = (app.ui.formula_bar_expanded, app.ui.formula_bar_lines);
+        ui.ctx().data_mut(|d| d.insert_temp(before, state));
+    }
+    if let Some(p) = resp.interact_pointer_pos().filter(|_| resp.dragged() || resp.drag_stopped()) {
+        let lines = dragged_lines(p.y, bar.top(), row_h, most);
+        if resp.drag_stopped() {
+            if let Some((expanded, kept)) = ui.ctx().data_mut(|d| d.remove_temp::<(bool, usize)>(before)) {
+                (app.ui.formula_bar_expanded, app.ui.formula_bar_lines) = (expanded, kept);
+            }
+            app.run_or_alert("view.expandFormulaBar", json!({"lines": lines}));
+        } else {
+            app.ui.formula_bar_expanded = lines > 1;
+            if lines > 1 {
+                app.ui.formula_bar_lines = lines;
+            }
+            ui.ctx().request_repaint();
+        }
+    }
+    handle
 }
 
 /// Resolve ownership on every frame; never cache a spill range in presentation state.
@@ -156,12 +241,30 @@ pub(crate) fn active_spill_anchor(app: &SheetApp) -> Option<gridcraft_engine::co
     sh.spill_anchor(at)
 }
 
+/// The active cell's Python cell (itself, or the anchor whose result spills over it): its sheet,
+/// cell and code.
+pub(crate) fn active_python(app: &SheetApp) -> Option<(usize, gridcraft_engine::core::CellRef, std::sync::Arc<gridcraft_engine::model::PyCode>)> {
+    let d = app.session.active()?;
+    let sh = d.wb.active()?;
+    let a = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
+    let at = sh.spill_anchor(a).unwrap_or(a);
+    sh.cell(at).and_then(|c| c.py.clone()).map(|py| (d.wb.active_sheet(), at, py))
+}
+
 fn active_input(app: &SheetApp) -> String {
     let Some(d) = app.session.active() else { return String::new() };
     let Some(sh) = d.wb.active() else { return String::new() };
     let a = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
     if let Some(picture) = sh.cell_pictures.get(&a) {
         return if picture.alt.is_empty() { "Picture in cell".into() } else { format!("Picture: {}", picture.alt) };
+    }
+    // Python code is shown as it is: it isn't a formula to translate or a value to format. Like
+    // a formula, it stays out of view in a Hidden cell on a protected sheet.
+    if let Some((_, at, py)) = active_python(app) {
+        if gridcraft_engine::display::formula_hidden(&d.wb, sh, at) {
+            return String::new();
+        }
+        return py.code.clone();
     }
     if let Some(anchor) = sh.spill_anchor(a) {
         if gridcraft_engine::display::formula_hidden(&d.wb, sh, anchor) {
@@ -173,7 +276,8 @@ fn active_input(app: &SheetApp) -> String {
             .unwrap_or_default();
     }
     if let Some(c) = sh.cell(a) {
-        if c.formula.is_some() && d.wb.styles.get(c.style).protection.hidden && sh.is_protected() {
+        // A Hidden cell on a protected sheet shows neither its formula nor its Python code.
+        if (c.formula.is_some() || c.py.is_some()) && d.wb.styles.get(c.style).protection.hidden && sh.is_protected() {
             return String::new();
         }
         return if let Some(f) = &c.formula {
@@ -185,6 +289,66 @@ fn active_input(app: &SheetApp) -> String {
         };
     }
     String::new()
+}
+
+/// Ctrl+Alt+Shift+P, and Cmd+Option+Shift+P on macOS: Python mode on or off.
+pub fn is_python_shortcut(ev: &egui::Event) -> bool {
+    matches!(ev, egui::Event::Key { key: Key::P, pressed: true, modifiers: m, .. } if m.shift && m.alt && (m.ctrl || m.command || m.mac_cmd))
+}
+
+/// Takes Ctrl+Alt+Shift+P out of this pass's input; whether it was there.
+fn take_python_shortcut(i: &mut egui::InputState) -> bool {
+    let found = i.events.iter().any(is_python_shortcut);
+    if found {
+        i.events.retain(|e| !is_python_shortcut(e));
+    }
+    found
+}
+
+/// What a key in Python mode does, besides editing the code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PythonKey {
+    /// Ctrl+Enter (Cmd+Enter on macOS): put the code in the cell.
+    Commit,
+    /// Esc: cancel the edit.
+    Cancel,
+    /// Ctrl+Alt+Shift+P: leave Python mode.
+    Leave,
+}
+
+fn python_key(ev: &egui::Event) -> Option<PythonKey> {
+    match ev {
+        egui::Event::Key { key: Key::Enter, pressed: true, modifiers: m, .. } if (m.ctrl || m.command || m.mac_cmd) && !m.alt => {
+            Some(PythonKey::Commit)
+        }
+        egui::Event::Key { key: Key::Escape, pressed: true, .. } => Some(PythonKey::Cancel),
+        _ if is_python_shortcut(ev) => Some(PythonKey::Leave),
+        _ => None,
+    }
+}
+
+/// The PY badge beside fx: shown in Python mode and on a selected Python cell. Clicking it
+/// switches Python mode, as Ctrl+Alt+Shift+P does. Returns its rect when shown.
+fn python_badge(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Option<Rect> {
+    let show = match &app.editor {
+        Some(ed) => ed.python,
+        None => active_python(app).is_some(),
+    };
+    if !show {
+        return None;
+    }
+    let text = ui.painter().layout_no_wrap("PY".into(), theme::ui_bold(11.0), t.on_badge);
+    let (rect, resp) = ui.allocate_exact_size(vec2(text.size().x + 12.0, 24.0), Sense::click());
+    let pill = Rect::from_center_size(rect.center(), vec2(rect.width(), 18.0));
+    ui.painter().rect_filled(pill, 4.0, t.badge_py);
+    ui.painter().galley(pill.center() - text.size() / 2.0, text, t.on_badge);
+    let label = app.ui.language.tr("Python Mode").to_string();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+    let resp = resp.on_hover_text(format!("{label} (Ctrl+Alt+Shift+P)"));
+    if resp.clicked() {
+        app.toggle_python_mode();
+    }
+    Some(rect)
 }
 
 /// Draws the Name Box and its name dropdown; Enter jumps to a reference or known name (or defines a new name) and is consumed so the grid does not move down.
@@ -291,132 +455,19 @@ fn show_edit<'t>(
 /// The text editor used in the cell and in the formula bar (they share `app.editor`). It shows
 /// `max_height` of text and scrolls beyond that, keeping the caret in view.
 pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: FontId, multiline: bool, width: f32, max_height: f32) -> EditorInfo {
+    if app.editor.as_ref().is_some_and(|e| e.python) {
+        // Python mode edits in the formula bar only.
+        if id != egui::Id::unique("gridcraft.formula_bar") {
+            return EditorInfo::default();
+        }
+        return python_editor(app, ui, id, width, max_height);
+    }
     let Some(mut ed) = app.editor.take() else { return EditorInfo::default() };
     let mine = ed.from_formula_bar == (id == egui::Id::unique("gridcraft.formula_bar"));
     // Keys the editor handles itself (before the TextEdit sees them), only where it has focus.
     let focused = ui.ctx().memory(|m| m.focused());
     let has_focus = focused == Some(id) || (mine && (ed.request_focus || focused.is_none()));
-    let mut action: Option<(i64, i64, bool, bool)> = None;
-    let mut arrow = false;
-    let mut cancel = false;
-    // A message box over the editor (a data validation alert, a formula error) gets Enter and Esc;
-    // the editor used to take them, so the first Esc cancelled the edit behind the message.
-    // So does a dialog opened from the editor (Paste Name): its OK takes Enter.
-    if has_focus && mine && app.message.is_none() && app.dialog.is_none() {
-        let (enter, tab, esc, alt_enter, cmd_enter, ctrl_shift_enter, shift) = ui.input_mut(|i| {
-            let m = i.modifiers;
-            let alt_enter =
-                i.consume_key(egui::Modifiers::ALT, Key::Enter) || i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::ALT, Key::Enter);
-            let ctrl_shift_enter = i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, Key::Enter);
-            let cmd_enter = i.consume_key(egui::Modifiers::COMMAND, Key::Enter);
-            let enter = i.consume_key(egui::Modifiers::NONE, Key::Enter) || i.consume_key(egui::Modifiers::SHIFT, Key::Enter);
-            let tab = i.consume_key(egui::Modifiers::NONE, Key::Tab) || i.consume_key(egui::Modifiers::SHIFT, Key::Tab);
-            let esc = i.consume_key(egui::Modifiers::NONE, Key::Escape);
-            dismiss_completion(i, &mut ed.completion);
-            (enter, tab, esc, alt_enter, cmd_enter, ctrl_shift_enter, m.shift)
-        });
-        if alt_enter {
-            let b = ed.text.char_indices().nth(ed.caret).map(|(i, _)| i).unwrap_or(ed.text.len());
-            ed.text.insert(b, '\n');
-            ed.caret += 1;
-            ed.caret_to_end = false;
-            ed.sync_caret = true;
-        }
-        if !ed.autocomplete.is_empty() && tab {
-            ed.accept_autocomplete();
-        } else if enter {
-            action = Some((if shift { -1 } else { 1 }, 0, false, false));
-        } else if tab {
-            action = Some((0, if shift { -1 } else { 1 }, false, false));
-        }
-        if cmd_enter {
-            action = Some((0, 0, false, true));
-        }
-        if ctrl_shift_enter {
-            action = Some((0, 0, true, false));
-        }
-        if esc {
-            if !ed.autocomplete.is_empty() {
-                ed.autocomplete.clear();
-            } else if ed.completion.is_some() {
-                ed.completion = None;
-            } else {
-                cancel = true;
-            }
-        }
-        // Arrow keys: autocomplete navigation, point mode, or (Enter mode) commit and move.
-        let arrows = ui.input(|i| {
-            (
-                i.key_pressed(Key::ArrowUp),
-                i.key_pressed(Key::ArrowDown),
-                i.key_pressed(Key::ArrowLeft),
-                i.key_pressed(Key::ArrowRight),
-                i.modifiers.shift,
-            )
-        });
-        let (up, down, left, right, ashift) = arrows;
-        if (up || down) && !ed.autocomplete.is_empty() {
-            ui.input_mut(|i| {
-                i.consume_key(egui::Modifiers::NONE, Key::ArrowUp);
-                i.consume_key(egui::Modifiers::NONE, Key::ArrowDown);
-            });
-            let n = ed.autocomplete.len();
-            ed.ac_index = if down { (ed.ac_index + 1) % n } else { (ed.ac_index + n - 1) % n };
-        } else if ed.enter_mode && (up || down || left || right) && !ed.from_formula_bar {
-            let (dr, dc) = if up {
-                (-1, 0)
-            } else if down {
-                (1, 0)
-            } else if left {
-                (0, -1)
-            } else {
-                (0, 1)
-            };
-            // Left/Right follow the screen on a right-to-left sheet.
-            let rtl = app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.right_to_left);
-            let dc = if rtl { -dc } else { dc };
-            if ed.can_point() {
-                ui.input_mut(|i| {
-                    for k in [Key::ArrowUp, Key::ArrowDown, Key::ArrowLeft, Key::ArrowRight] {
-                        i.consume_key(egui::Modifiers::NONE, k);
-                        i.consume_key(egui::Modifiers::SHIFT, k);
-                    }
-                });
-                crate::grid::point_move(app, &mut ed, dr, dc, ashift);
-            } else {
-                action = Some((dr, dc, false, false));
-                arrow = true;
-            }
-        }
-        // F4 cycles $ anchors of the reference before the caret.
-        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F4)) {
-            cycle_anchor(&mut ed);
-        }
-        // F3 opens Paste Name when the workbook has names; OK puts the name at the caret.
-        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F3)) {
-            app.open_dialog("pasteName", json!({"shortcut": true}));
-        }
-        // Ctrl+Shift+A (Control+Shift+A on a Mac) inserts the argument names. Consumed anywhere,
-        // as in Excel, so it never falls through to the text's select-all.
-        if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, Key::A)) {
-            let (text, caret) = (ed.text.clone(), ed.caret);
-            if ed.insert_argument_names(app.ui.language)
-                && let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id)
-            {
-                // The text edit records an undo point only once typing pauses: mark the text
-                // before the shortcut so one Undo takes back just the inserted names.
-                let mut undoer = state.undoer();
-                let cursor = state.cursor.char_range().unwrap_or(egui::text::CCursorRange::one(egui::text::CCursor::new(caret)));
-                undoer.add_undo(&(cursor, text));
-                state.set_undoer(undoer);
-                state.store(ui.ctx(), id);
-            }
-        }
-        // Ctrl+Shift+U (Control+Shift+U on a Mac) expands or collapses the formula bar while editing too.
-        if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, Key::U)) {
-            app.run_or_alert("view.expandFormulaBar", json!({}));
-        }
-    }
+    let EditorKeyOutcome { action, arrow, cancel, to_python } = editor_shortcuts(app, ui, id, &mut ed, mine, has_focus);
     // The text widget.
     let refs = formula_refs(&ed.text);
     let t = Tokens::get(ui.ctx());
@@ -509,8 +560,10 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     }
     if resp.changed() {
         ed.completion = None;
+        // Python code is never completed from the column's text values.
         if app.ui.autocomplete
             && !ed.is_formula()
+            && !ed.python
             && !entry_shrank(chars_before, &ed.text)
             && ed.caret == ed.text.chars().count()
             && let Some(sh) = app.session.active().and_then(|d| d.wb.sheet(ed.sheet))
@@ -536,87 +589,15 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
             gridcraft_engine::Mode::Edit
         };
     }
-    // Column AutoComplete: the rest of the suggested entry, shown selected after the caret.
-    if let Some(full) = &ed.completion
-        && let Some(rest) = crate::editor::completion_rest(full, &ed.text)
-    {
-        let pos = resp.rect.left_top() + egui::vec2(output.galley.rect.width(), 0.0);
-        let g = ui.painter().layout_no_wrap(
-            rest.to_string(),
-            output.galley.job.sections.first().map(|s| s.format.font_id.clone()).unwrap_or_default(),
-            t.on_accent,
-        );
-        let r = egui::Rect::from_min_size(pos, g.size());
-        ui.painter().rect_filled(r, 0.0, t.accent);
-        ui.painter().galley(pos, g, t.on_accent);
-    }
-    // Autocomplete list and argument hint under the editor. Decide visibility from the area the
-    // editor was allotted, not from its response: egui 0.37 gives every text field a
-    // `spacing.interact_size.y` floor, so a one-line cell editor's response can reach below a short
-    // cell and touch the visible quadrant even while the cell itself is hidden under a frozen row.
-    if mine && ui.max_rect().intersect(ui.clip_rect()).is_positive() && (!ed.autocomplete.is_empty() || ed.current_function().is_some()) {
-        let below = resp.rect.left_bottom() + vec2(0.0, 4.0);
-        let language = app.ui.language;
-        // Areas have their own clip rect: keep cell helpers inside the worksheet.
-        let bounds = if ed.from_formula_bar { ui.ctx().content_rect() } else { ui.clip_rect() };
-        egui::Area::new(id.with("ac")).fixed_pos(below).constrain_to(bounds).order(egui::Order::Tooltip).show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).inner_margin(4.0).show(ui, |ui| {
-                if !ed.autocomplete.is_empty() {
-                    let mut pick = None;
-                    for (i, n) in ed.autocomplete.iter().enumerate() {
-                        let sel = i == ed.ac_index;
-                        let r = ui.add(
-                            egui::Button::selectable(sel, egui::RichText::new(format!("ƒ  {n}")).font(theme::ui_font(12.5)))
-                                .min_size(vec2(220.0, 20.0)),
-                        );
-                        if r.clicked() {
-                            pick = Some(i);
-                        }
-                        if sel && let Some(desc) = crate::formula_locale::description(n, ed.locale, language) {
-                            r.on_hover_text(desc);
-                        }
-                    }
-                    if let Some(desc) = ed.autocomplete.get(ed.ac_index).and_then(|n| crate::formula_locale::description(n, ed.locale, language)) {
-                        ui.separator();
-                        ui.add(egui::Label::new(egui::RichText::new(desc).small()).wrap());
-                    }
-                    if let Some(i) = pick {
-                        ed.ac_index = i;
-                        ed.accept_autocomplete();
-                        ed.request_focus = true;
-                    }
-                } else if let Some((name, arg)) = ed.current_function()
-                    && let Some(sig) = crate::formula_locale::signature(&name, ed.locale, language)
-                {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing.x = 0.0;
-                        let (head, rest) = sig.split_once('(').unwrap_or((&sig, ""));
-                        ui.label(egui::RichText::new(format!("{head}(")).font(theme::ui_font(12.0)));
-                        let inner = rest.trim_end_matches(')');
-                        let parts: Vec<&str> = inner.split(&format!("{} ", ed.locale.list_separator())).collect();
-                        for (i, part) in parts.iter().enumerate() {
-                            let is_cur = i == arg.min(parts.len().saturating_sub(1)) || (part.contains("...") && arg >= i);
-                            let txt = egui::RichText::new(*part).font(if is_cur { theme::ui_bold(12.0) } else { theme::ui_font(12.0) });
-                            ui.label(txt);
-                            if i + 1 < parts.len() {
-                                ui.label(egui::RichText::new(format!("{} ", ed.locale.list_separator())).font(theme::ui_font(12.0)));
-                            }
-                        }
-                        ui.label(egui::RichText::new(")").font(theme::ui_font(12.0)));
-                    });
-                    // The description too, so values an argument takes (DATEDIF's units, #363) show
-                    // while it's typed; wrapped to the hint's width.
-                    if let Some(desc) = crate::formula_locale::description(&name, ed.locale, language) {
-                        ui.set_max_width(ui.min_rect().width().max(220.0));
-                        ui.separator();
-                        ui.add(egui::Label::new(egui::RichText::new(desc).small()).wrap());
-                    }
-                }
-            });
-        });
-    }
+    show_editor_suggestions(ui, EditorSuggestion { app, id, resp: &resp, ed: &mut ed, galley: &output.galley, tokens: &t, mine });
     let lines = output.galley.rows.len().max(1);
     let caret = Some(output.galley.pos_from_cursor(egui::text::CCursor::new(ed.caret)).translate(output.galley_pos.to_vec2()));
+    if to_python && !app.draft_in_spill(&ed) {
+        ed.enter_python();
+        app.editor = Some(ed);
+        app.session.mode = gridcraft_engine::Mode::Edit;
+        return EditorInfo { lines, caret };
+    }
     app.editor = Some(ed);
     if cancel {
         app.cancel_edit();
@@ -628,6 +609,239 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         }
     }
     EditorInfo { lines, caret }
+}
+
+type EditorAction = (i64, i64, bool, bool);
+
+struct EditorKeyOutcome {
+    action: Option<EditorAction>,
+    arrow: bool,
+    cancel: bool,
+    /// Ctrl+Alt+Shift+P, or `=PY` then Tab: the edit turns into Python code.
+    to_python: bool,
+}
+
+fn editor_shortcuts(
+    app: &mut SheetApp,
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    ed: &mut crate::editor::EditState,
+    mine: bool,
+    has_focus: bool,
+) -> EditorKeyOutcome {
+    let mut outcome = EditorKeyOutcome { action: None, arrow: false, cancel: false, to_python: false };
+    // A message or dialog owns Enter and Escape until it closes.
+    if !has_focus || !mine || app.message.is_some() || app.dialog.is_some() {
+        return outcome;
+    }
+    // Ctrl+Alt+Shift+P turns the edit into Python code.
+    outcome.to_python = ui.input_mut(take_python_shortcut);
+    let (action, cancel, py_trigger) = editor_confirm_keys(ui, ed);
+    outcome.action = action;
+    outcome.cancel = cancel;
+    outcome.to_python |= py_trigger;
+    let (action, arrow) = editor_arrow_keys(app, ui, ed, outcome.action);
+    outcome.action = action;
+    outcome.arrow = arrow;
+    editor_other_shortcuts(app, ui, id, ed);
+    outcome
+}
+
+/// Enter, Tab, Esc and their variants: the move to make, whether the edit is cancelled, and
+/// whether `=PY` then Tab starts Python mode.
+fn editor_confirm_keys(ui: &mut egui::Ui, ed: &mut crate::editor::EditState) -> (Option<EditorAction>, bool, bool) {
+    let (enter, tab, esc, alt_enter, cmd_enter, ctrl_shift_enter, shift) = ui.input_mut(|i| {
+        let m = i.modifiers;
+        let alt_enter = i.consume_key(egui::Modifiers::ALT, Key::Enter) || i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::ALT, Key::Enter);
+        let ctrl_shift_enter = i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, Key::Enter);
+        let cmd_enter = i.consume_key(egui::Modifiers::COMMAND, Key::Enter);
+        let enter = i.consume_key(egui::Modifiers::NONE, Key::Enter) || i.consume_key(egui::Modifiers::SHIFT, Key::Enter);
+        let tab = i.consume_key(egui::Modifiers::NONE, Key::Tab) || i.consume_key(egui::Modifiers::SHIFT, Key::Tab);
+        let esc = i.consume_key(egui::Modifiers::NONE, Key::Escape);
+        dismiss_completion(i, &mut ed.completion);
+        (enter, tab, esc, alt_enter, cmd_enter, ctrl_shift_enter, m.shift)
+    });
+    if alt_enter {
+        let b = ed.text.char_indices().nth(ed.caret).map(|(i, _)| i).unwrap_or(ed.text.len());
+        ed.text.insert(b, '\n');
+        ed.caret += 1;
+        ed.caret_to_end = false;
+        ed.sync_caret = true;
+    }
+    // `=PY` then Tab starts Python mode, as in Excel.
+    let py_trigger = tab && !shift && ed.is_py_trigger();
+    let mut action = if py_trigger {
+        None
+    } else if !ed.autocomplete.is_empty() && tab {
+        ed.accept_autocomplete();
+        None
+    } else if enter {
+        Some((if shift { -1 } else { 1 }, 0, false, false))
+    } else if tab {
+        Some((0, if shift { -1 } else { 1 }, false, false))
+    } else {
+        None
+    };
+    if cmd_enter {
+        action = Some((0, 0, false, true));
+    }
+    if ctrl_shift_enter {
+        action = Some((0, 0, true, false));
+    }
+    let cancel = if !esc {
+        false
+    } else if !ed.autocomplete.is_empty() {
+        ed.autocomplete.clear();
+        false
+    } else if ed.completion.is_some() {
+        ed.completion = None;
+        false
+    } else {
+        true
+    };
+    (action, cancel, py_trigger)
+}
+
+fn editor_arrow_keys(
+    app: &mut SheetApp,
+    ui: &mut egui::Ui,
+    ed: &mut crate::editor::EditState,
+    mut action: Option<EditorAction>,
+) -> (Option<EditorAction>, bool) {
+    // The modifiers come with the key event: an arrow pressed and released within one frame (a
+    // control client's or an automation tool's keystroke) has already lost them from `i.modifiers`.
+    let arrow = ui.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            egui::Event::Key { key: key @ (Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight), pressed: true, modifiers, .. } => {
+                Some((*key, *modifiers))
+            }
+            _ => None,
+        })
+    });
+    let (up, down, left, right) = (
+        arrow.is_some_and(|(k, _)| k == Key::ArrowUp),
+        arrow.is_some_and(|(k, _)| k == Key::ArrowDown),
+        arrow.is_some_and(|(k, _)| k == Key::ArrowLeft),
+        arrow.is_some_and(|(k, _)| k == Key::ArrowRight),
+    );
+    let (shift, jump) = arrow.map_or((false, false), |(_, m)| (m.shift, m.command));
+    if (up || down) && !ed.autocomplete.is_empty() {
+        ui.input_mut(|i| {
+            i.consume_key(egui::Modifiers::NONE, Key::ArrowUp);
+            i.consume_key(egui::Modifiers::NONE, Key::ArrowDown);
+        });
+        let n = ed.autocomplete.len();
+        ed.ac_index = if down { (ed.ac_index + 1) % n } else { (ed.ac_index + n - 1) % n };
+        return (action, false);
+    }
+    if !ed.enter_mode || (!up && !down && !left && !right) || ed.from_formula_bar {
+        return (action, false);
+    }
+    let (dr, dc) = if up {
+        (-1, 0)
+    } else if down {
+        (1, 0)
+    } else if left {
+        (0, -1)
+    } else {
+        (0, 1)
+    };
+    let rtl = app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.right_to_left);
+    let dc = if rtl { -dc } else { dc };
+    if ed.can_point() {
+        // Ctrl+arrow (⌘arrow) jumps the pointed cell to the edge of its data, Ctrl+Shift+arrow
+        // extends the pointed range there, as the same keys do on the selection.
+        ui.input_mut(|i| {
+            for key in [Key::ArrowUp, Key::ArrowDown, Key::ArrowLeft, Key::ArrowRight] {
+                for modifiers in
+                    [egui::Modifiers::NONE, egui::Modifiers::SHIFT, egui::Modifiers::COMMAND, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT]
+                {
+                    i.consume_key(modifiers, key);
+                }
+            }
+        });
+        crate::grid::point_move(app, ed, dr, dc, shift, jump);
+        (action, false)
+    } else {
+        action = Some((dr, dc, false, false));
+        (action, true)
+    }
+}
+
+fn editor_other_shortcuts(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, ed: &mut crate::editor::EditState) {
+    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F4)) {
+        cycle_anchor(ed);
+    }
+    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F3)) {
+        app.open_dialog("pasteName", json!({"shortcut": true}));
+    }
+    if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, Key::A)) {
+        let (text, caret) = (ed.text.clone(), ed.caret);
+        if ed.insert_argument_names(app.ui.language)
+            && let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id)
+        {
+            // Record the pre-shortcut text so one Undo removes the inserted argument names.
+            let mut undoer = state.undoer();
+            let cursor = state.cursor.char_range().unwrap_or(egui::text::CCursorRange::one(egui::text::CCursor::new(caret)));
+            undoer.add_undo(&(cursor, text));
+            state.set_undoer(undoer);
+            state.store(ui.ctx(), id);
+        }
+    }
+    if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, Key::U)) {
+        app.run_or_alert("view.expandFormulaBar", json!({}));
+    }
+}
+
+/// The formula bar in Python mode: the code editor (monospace, Python colours). Its keys are
+/// applied in input order with the typing: Enter starts a new line with the indentation, Tab and
+/// Shift+Tab indent, Ctrl+Enter (Cmd+Enter on macOS) commits through `python.set`, Esc cancels and
+/// Ctrl+Alt+Shift+P leaves Python mode.
+fn python_editor(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, width: f32, max_height: f32) -> EditorInfo {
+    let Some(mut ed) = app.editor.take() else { return EditorInfo::default() };
+    // A message box (the code was refused) or a dialog over the edit has the keyboard; the
+    // editor takes it back when it closes.
+    let blocked = app.message.is_some() || app.dialog.is_some();
+    let mut caret = None;
+    if blocked {
+        ed.request_focus = true;
+    } else {
+        // Focus left on nothing (a click on the sheet's chrome, a closed message box whose modal
+        // layer held it one more pass) comes back to the code.
+        if std::mem::take(&mut ed.request_focus) || ui.memory(|m| m.focused()).is_none() {
+            ui.memory_mut(|m| m.request_focus(id));
+        }
+        if std::mem::take(&mut ed.sync_caret) {
+            caret = Some(ed.caret);
+        }
+    }
+    let name = app.ui.language.tr("Formula Bar").to_string();
+    let stop = |ev: &egui::Event| python_key(ev).is_some();
+    let options = FieldOptions {
+        width,
+        max_height,
+        interactive: !blocked,
+        stop: &stop,
+        keep_escape: true,
+        caret,
+        name: &name,
+        ..FieldOptions::new(Lang::Python)
+    };
+    let out = code_editor::code_field(ui, id, &mut ed.text, &options);
+    if !blocked && caret.is_none() {
+        (ed.caret, ed.anchor) = out.selection;
+    }
+    let info = EditorInfo { lines: out.lines, caret: out.caret };
+    app.editor = Some(ed);
+    match out.stop.as_ref().and_then(python_key) {
+        Some(PythonKey::Commit) => {
+            app.commit_python_edit();
+        }
+        Some(PythonKey::Cancel) => app.cancel_edit(),
+        Some(PythonKey::Leave) => app.toggle_python_mode(),
+        None => {}
+    }
+    info
 }
 
 fn cycle_anchor(ed: &mut crate::editor::EditState) {
@@ -780,6 +994,23 @@ mod spill_tests {
         app.run("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
         check(&mut app, "A2", "=FILTER(D1:D3,D1:D3>0)", true);
     }
+
+    #[test]
+    fn a_hidden_python_cell_on_a_protected_sheet_shows_no_code() {
+        let mut app = app();
+        app.run("python.set", json!({"cell": "A1", "code": "secret = 1\nsecret"})).unwrap();
+        app.run("python.set", json!({"cell": "B1", "code": "'shown'"})).unwrap();
+        set(&mut app, "C1", "=1+1");
+        app.run("home.formatCells", json!({"range": "A1:C1", "style": {"protection": {"locked": true, "hidden": true}}})).unwrap();
+        app.run("home.formatCells", json!({"range": "B1", "style": {"protection": {"locked": true, "hidden": false}}})).unwrap();
+        select(&mut app, "A1");
+        assert_eq!(active_input(&app), "secret = 1\nsecret", "an unprotected sheet hides nothing");
+        app.run("review.protectSheet", json!({})).unwrap();
+        for (cell, text) in [("A1", ""), ("B1", "'shown'"), ("C1", "")] {
+            select(&mut app, cell);
+            assert_eq!(active_input(&app), text, "{cell}");
+        }
+    }
     #[test]
     /// A disabled spill formula paints disabled and does not edit; clicking an active formula starts formula-bar editing in both light and dark themes, with accessibility checks.
     fn formula_bar_click_and_theme_presentation() {
@@ -869,5 +1100,98 @@ mod tests {
                 assert!((inner / row_h).floor() as usize >= lines, "{lines} lines of {row_h} px in a {bar} px bar");
             }
         }
+    }
+}
+
+struct EditorSuggestion<'a> {
+    app: &'a SheetApp,
+    id: egui::Id,
+    resp: &'a egui::Response,
+    ed: &'a mut crate::editor::EditState,
+    galley: &'a egui::Galley,
+    tokens: &'a Tokens,
+    mine: bool,
+}
+
+fn show_editor_suggestions(ui: &mut egui::Ui, suggestion: EditorSuggestion<'_>) {
+    let EditorSuggestion { app, id, resp, ed, galley, tokens: t, mine } = suggestion;
+    // Column AutoComplete: the rest of the suggested entry, shown selected after the caret.
+    if let Some(full) = &ed.completion
+        && let Some(rest) = crate::editor::completion_rest(full, &ed.text)
+    {
+        let pos = resp.rect.left_top() + egui::vec2(galley.rect.width(), 0.0);
+        let g = ui.painter().layout_no_wrap(
+            rest.to_string(),
+            galley.job.sections.first().map(|s| s.format.font_id.clone()).unwrap_or_default(),
+            t.on_accent,
+        );
+        let r = egui::Rect::from_min_size(pos, g.size());
+        ui.painter().rect_filled(r, 0.0, t.accent);
+        ui.painter().galley(pos, g, t.on_accent);
+    }
+    // Autocomplete list and argument hint under the editor. Decide visibility from the area the
+    // editor was allotted, not from its response: egui 0.37 gives every text field a
+    // `spacing.interact_size.y` floor, so a one-line cell editor's response can reach below a short
+    // cell and touch the visible quadrant even while the cell itself is hidden under a frozen row.
+    if mine && ui.max_rect().intersect(ui.clip_rect()).is_positive() && (!ed.autocomplete.is_empty() || ed.current_function().is_some()) {
+        let below = resp.rect.left_bottom() + vec2(0.0, 4.0);
+        let language = app.ui.language;
+        // Areas have their own clip rect: keep cell helpers inside the worksheet.
+        let bounds = if ed.from_formula_bar { ui.ctx().content_rect() } else { ui.clip_rect() };
+        egui::Area::new(id.with("ac")).fixed_pos(below).constrain_to(bounds).order(egui::Order::Tooltip).show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).inner_margin(4.0).show(ui, |ui| {
+                if !ed.autocomplete.is_empty() {
+                    let mut pick = None;
+                    for (i, n) in ed.autocomplete.iter().enumerate() {
+                        let sel = i == ed.ac_index;
+                        let r = ui.add(
+                            egui::Button::selectable(sel, egui::RichText::new(format!("ƒ  {n}")).font(theme::ui_font(12.5)))
+                                .min_size(vec2(220.0, 20.0)),
+                        );
+                        if r.clicked() {
+                            pick = Some(i);
+                        }
+                        if sel && let Some(desc) = crate::formula_locale::description(n, ed.locale, language) {
+                            r.on_hover_text(desc);
+                        }
+                    }
+                    if let Some(desc) = ed.autocomplete.get(ed.ac_index).and_then(|n| crate::formula_locale::description(n, ed.locale, language)) {
+                        ui.separator();
+                        ui.add(egui::Label::new(egui::RichText::new(desc).small()).wrap());
+                    }
+                    if let Some(i) = pick {
+                        ed.ac_index = i;
+                        ed.accept_autocomplete();
+                        ed.request_focus = true;
+                    }
+                } else if let Some((name, arg)) = ed.current_function()
+                    && let Some(sig) = crate::formula_locale::signature(&name, ed.locale, language)
+                {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        let (head, rest) = sig.split_once('(').unwrap_or((&sig, ""));
+                        ui.label(egui::RichText::new(format!("{head}(")).font(theme::ui_font(12.0)));
+                        let inner = rest.trim_end_matches(')');
+                        let parts: Vec<&str> = inner.split(&format!("{} ", ed.locale.list_separator())).collect();
+                        for (i, part) in parts.iter().enumerate() {
+                            let is_cur = i == arg.min(parts.len().saturating_sub(1)) || (part.contains("...") && arg >= i);
+                            let txt = egui::RichText::new(*part).font(if is_cur { theme::ui_bold(12.0) } else { theme::ui_font(12.0) });
+                            ui.label(txt);
+                            if i + 1 < parts.len() {
+                                ui.label(egui::RichText::new(format!("{} ", ed.locale.list_separator())).font(theme::ui_font(12.0)));
+                            }
+                        }
+                        ui.label(egui::RichText::new(")").font(theme::ui_font(12.0)));
+                    });
+                    // The description too, so values an argument takes (DATEDIF's units, #363) show
+                    // while it's typed; wrapped to the hint's width.
+                    if let Some(desc) = crate::formula_locale::description(&name, ed.locale, language) {
+                        ui.set_max_width(ui.min_rect().width().max(220.0));
+                        ui.separator();
+                        ui.add(egui::Label::new(egui::RichText::new(desc).small()).wrap());
+                    }
+                }
+            });
+        });
     }
 }

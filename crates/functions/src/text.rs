@@ -1,5 +1,7 @@
 //! Text functions.
 
+use std::collections::HashMap;
+
 use gridcraft_core::parse::parse_number_text_in;
 use gridcraft_core::{CellError, Value, number_to_text};
 
@@ -111,12 +113,31 @@ fn len(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(text(a, 0)?.chars().count() as f64)
 }
 
+fn lower_char(ch: char) -> char {
+    match ch.to_lowercase().next() {
+        Some(lower) => lower,
+        None => ch,
+    }
+}
+
+fn upper_char(ch: char) -> char {
+    let mut uppercase = ch.to_uppercase();
+    match uppercase.next() {
+        Some(upper) if uppercase.next().is_none() => upper,
+        _ => ch,
+    }
+}
+
+fn proper_upper_char(ch: char) -> char {
+    if ch == '\u{130}' { 'I' } else { upper_char(ch) }
+}
+
 fn lower(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    text_val(text(a, 0)?.to_lowercase())
+    text_val(text(a, 0)?.chars().map(lower_char).collect::<String>())
 }
 
 fn upper(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    text_val(text(a, 0)?.to_uppercase())
+    text_val(text(a, 0)?.chars().map(upper_char).collect::<String>())
 }
 
 fn proper(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
@@ -126,9 +147,9 @@ fn proper(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     for ch in s.chars() {
         if ch.is_alphabetic() {
             if prev_letter {
-                out.extend(ch.to_lowercase());
+                out.push(lower_char(ch));
             } else {
-                out.extend(ch.to_uppercase());
+                out.push(proper_upper_char(ch));
             }
             prev_letter = true;
         } else {
@@ -281,7 +302,11 @@ fn unichar(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     if !(1.0..=1_114_111.0).contains(&n) {
         return Err(CellError::Value);
     }
-    match char::from_u32(n as u32) {
+    let cp = n as u32;
+    if (0xFDD0..=0xFDEF).contains(&cp) || cp & 0xFFFE == 0xFFFE {
+        return Err(CellError::NA);
+    }
+    match char::from_u32(cp) {
         Some(c) => text_val(c.to_string()),
         None => Err(CellError::NA),
     }
@@ -316,11 +341,11 @@ fn numbervalue(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     if body.is_empty() {
         return num_val(0.0);
     }
-    let mut pct = 0;
-    while let Some(b) = body.strip_suffix('%') {
-        body = b.to_string();
-        pct += 1;
-    }
+    // Count the trailing percent signs and cut them off in place: copying the rest once per sign
+    // made a long run of them quadratic.
+    let kept = body.trim_end_matches('%').len();
+    let pct = body.len() - kept;
+    body.truncate(kept);
     let mut seen_dec = false;
     let mut out = String::new();
     for c in body.chars() {
@@ -350,10 +375,10 @@ fn numbervalue(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 /// Formats `x` (already rounded) with `decimals` places and optional thousands separators.
 fn format_fixed(x: f64, decimals: i64, commas: bool) -> String {
     let d = decimals.max(0) as usize;
-    let s = format!("{:.*}", d, x.abs());
+    let s = x.abs().to_string();
     let (int_part, frac) = match s.split_once('.') {
-        Some((i, f)) => (i.to_string(), Some(f.to_string())),
-        None => (s.clone(), None),
+        Some((i, f)) => (i, f),
+        None => (s.as_str(), ""),
     };
     let int_part = if commas {
         let b = int_part.as_bytes();
@@ -366,12 +391,14 @@ fn format_fixed(x: f64, decimals: i64, commas: bool) -> String {
         }
         o
     } else {
-        int_part
+        int_part.to_string()
     };
     let mut out = int_part;
-    if let Some(f) = frac {
+    if d > 0 {
+        let frac_len = frac.len().min(d);
         out.push('.');
-        out.push_str(&f);
+        out.push_str(&frac[..frac_len]);
+        out.extend(std::iter::repeat_n('0', d - frac_len));
     }
     out
 }
@@ -394,13 +421,21 @@ fn fixed(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let (r, d) = rounded(a, 2.0)?;
     let no_commas = opt_bool(a, 2, false)?;
     let body = format_fixed(r, d, !no_commas);
+    if body.len() + if r < 0.0 { 1 } else { 0 } > 255 {
+        return Err(CellError::Value);
+    }
     text_val(if r < 0.0 { format!("-{body}") } else { body })
 }
 
 fn dollar(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let (r, d) = rounded(a, 2.0)?;
+    let negative = r < 0.0 || (r == 0.0 && d >= 0 && num(a, 0)? < 0.0);
     let body = format_fixed(r, d, true);
-    text_val(if r < 0.0 { format!("(${body})") } else { format!("${body}") })
+    let out = if negative { format!("(${body})") } else { format!("${body}") };
+    if out.len() > 254 {
+        return Err(CellError::Value);
+    }
+    text_val(out)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -508,23 +543,52 @@ fn delimiters(v: &Value) -> R<Vec<Vec<char>>> {
     as_array(v).iter().map(|d| d.to_text().map(|s| chars(&s))).collect()
 }
 
+/// Most delimiter characters compared in one search: text length × delimiters is the formula's
+/// to choose, so the search gives up with `#VALUE!` rather than run on.
+const MAX_MATCH_WORK: u64 = 100_000_000;
+
 /// Non-overlapping delimiter matches (start, end) in char positions, in ascending order. Scans left
 /// to right preferring the longest delimiter starting at each position, or (`from_end`) right to
 /// left preferring the longest delimiter ending at each position. Empty delimiters are ignored unless all
-/// delimiters are empty, in which case every position matches with zero length.
-fn find_matches(text: &[char], delims: &[Vec<char>], insensitive: bool, from_end: bool) -> Vec<(usize, usize)> {
+/// delimiters are empty, in which case every position matches with zero length. Repeated
+/// delimiters are tried once, and only those whose first (or, from the end, last) character is the
+/// one at hand; a search past [`MAX_MATCH_WORK`] is `#VALUE!`.
+fn find_matches(text: &[char], delims: &[Vec<char>], insensitive: bool, from_end: bool) -> R<Vec<(usize, usize)>> {
     let t = if insensitive { fold(text) } else { text.to_vec() };
-    let ds: Vec<Vec<char>> = delims.iter().filter(|d| !d.is_empty()).map(|d| if insensitive { fold(d) } else { d.clone() }).collect();
+    let mut ds: Vec<Vec<char>> = delims.iter().filter(|d| !d.is_empty()).map(|d| if insensitive { fold(d) } else { d.clone() }).collect();
     if ds.is_empty() {
-        return (0..=t.len()).map(|i| (i, i)).collect();
+        return Ok((0..=t.len()).map(|i| (i, i)).collect());
     }
+    ds.sort_unstable();
+    ds.dedup();
+    // Delimiters by the character a match is anchored on.
+    let mut by_char: HashMap<char, Vec<&[char]>> = HashMap::new();
+    for d in &ds {
+        let anchor = if from_end { d.last() } else { d.first() };
+        if let Some(&c) = anchor {
+            by_char.entry(c).or_default().push(d);
+        }
+    }
+    let mut work = 0u64;
+    let mut longest = |candidates: Option<&Vec<&[char]>>, fits: &dyn Fn(&[char]) -> bool| -> R<Option<usize>> {
+        let mut best = None;
+        for d in candidates.into_iter().flatten() {
+            work = work.saturating_add(d.len() as u64);
+            if work > MAX_MATCH_WORK {
+                return Err(CellError::Value);
+            }
+            if fits(d) {
+                best = best.max(Some(d.len()));
+            }
+        }
+        Ok(best)
+    };
     let mut out = Vec::new();
     if from_end {
         let mut j = t.len();
         while j > 0 {
-            let best =
-                ds.iter().filter(|d| j.checked_sub(d.len()).and_then(|st| t.get(st..j)).is_some_and(|w| w == d.as_slice())).map(Vec::len).max();
-            match best {
+            let at = t.get(j - 1).and_then(|c| by_char.get(c));
+            match longest(at, &|d| j.checked_sub(d.len()).and_then(|st| t.get(st..j)).is_some_and(|w| w == d))? {
                 Some(l) => {
                     out.push((j - l, j));
                     j -= l;
@@ -533,12 +597,12 @@ fn find_matches(text: &[char], delims: &[Vec<char>], insensitive: bool, from_end
             }
         }
         out.reverse();
-        return out;
+        return Ok(out);
     }
     let mut i = 0;
     while i < t.len() {
-        let best = ds.iter().filter(|d| t.get(i..i + d.len()).is_some_and(|w| w == d.as_slice())).map(Vec::len).max();
-        match best {
+        let at = t.get(i).and_then(|c| by_char.get(c));
+        match longest(at, &|d| t.get(i..i + d.len()).is_some_and(|w| w == d))? {
             Some(l) => {
                 out.push((i, i + l));
                 i += l;
@@ -546,7 +610,7 @@ fn find_matches(text: &[char], delims: &[Vec<char>], insensitive: bool, from_end
             None => i += 1,
         }
     }
-    out
+    Ok(out)
 }
 
 fn text_before_after(a: &[Arg], before: bool) -> R<Value> {
@@ -558,7 +622,7 @@ fn text_before_after(a: &[Arg], before: bool) -> R<Value> {
     if !(0..=1).contains(&mode) || inst == 0 || inst.unsigned_abs() as usize > s.len().max(1) {
         return Err(CellError::Value);
     }
-    let mut m = find_matches(&s, &delims, mode == 1, inst < 0);
+    let mut m = find_matches(&s, &delims, mode == 1, inst < 0)?;
     if match_end {
         if inst > 0 {
             if m.last().is_none_or(|x| x.0 != s.len()) {
@@ -587,18 +651,18 @@ fn textafter(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     text_before_after(a, false)
 }
 
-fn split_by(s: &[char], delims: &[Vec<char>], insensitive: bool) -> Vec<Vec<char>> {
+fn split_by(s: &[char], delims: &[Vec<char>], insensitive: bool) -> R<Vec<Vec<char>>> {
     if delims.iter().all(Vec::is_empty) {
-        return vec![s.to_vec()];
+        return Ok(vec![s.to_vec()]);
     }
     let mut out = Vec::new();
     let mut last = 0;
-    for (st, en) in find_matches(s, delims, insensitive, false) {
+    for (st, en) in find_matches(s, delims, insensitive, false)? {
         out.push(s[last..st].to_vec());
         last = en;
     }
     out.push(s[last..].to_vec());
-    out
+    Ok(out)
 }
 
 fn textsplit(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
@@ -615,12 +679,12 @@ fn textsplit(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
     let pad = if has(a, 5) { scalar(arg(a, 5)?) } else { Value::Error(CellError::NA) };
     let mut rows: Vec<Vec<String>> = Vec::new();
-    for r in split_by(&s, &row_d, mode == 1) {
+    for r in split_by(&s, &row_d, mode == 1)? {
         if ignore && r.is_empty() {
             continue;
         }
         let cells: Vec<String> =
-            split_by(&r, &col_d, mode == 1).into_iter().filter(|c| !(ignore && c.is_empty())).map(|c| c.into_iter().collect()).collect();
+            split_by(&r, &col_d, mode == 1)?.into_iter().filter(|c| !(ignore && c.is_empty())).map(|c| c.into_iter().collect()).collect();
         if ignore && cells.is_empty() {
             continue;
         }
@@ -1051,6 +1115,15 @@ mod tests {
 
     use crate::util::testutil::*;
 
+    /// Trailing percent signs each divide by 100, and a long run of them is cut off in one pass.
+    #[test]
+    fn numbervalue_percent_signs() {
+        close(ev("NUMBERVALUE", vec![t("5%%")]), 0.0005);
+        close(ev("NUMBERVALUE", vec![t("1,5%"), t(","), t(".")]), 0.015);
+        let many = format!("1{}", "%".repeat(32_000));
+        close(ev("NUMBERVALUE", vec![t(&many)]), 0.0);
+    }
+
     #[test]
     fn bahttext() {
         let bt = |x: f64| ev("BAHTTEXT", vec![n(x)]);
@@ -1123,6 +1196,20 @@ mod tests {
     fn case_and_cleanup() {
         is_text(ev("UPPER", vec![t("abc")]), "ABC");
         is_text(ev("LOWER", vec![t("ABC")]), "abc");
+        is_text(ev("UPPER", vec![t("Straße")]), "STRAßE");
+        is_text(ev("LOWER", vec![t("İ")]), "i");
+        is_text(ev("PROPER", vec![t("İSTANBUL")]), "Istanbul");
+        is_text(ev("PROPER", vec![t("ß")]), "ß");
+        is_text(ev("PROPER", vec![t("ÉCOLE")]), "École");
+        let proper = ev("PROPER", vec![t("İSTANBUL Straße")]);
+        is_text(proper.clone(), "Istanbul Straße");
+        assert_eq!(
+            match proper {
+                Value::Text(s) => s.chars().count(),
+                _ => 0,
+            },
+            "Istanbul Straße".chars().count()
+        );
         is_text(ev("PROPER", vec![t("this is a TITLE")]), "This Is A Title");
         is_text(ev("PROPER", vec![t("2-way street's")]), "2-Way Street'S");
         is_text(ev("TRIM", vec![t("  a   b  c ")]), "a b c");
@@ -1181,8 +1268,15 @@ mod tests {
         close(ev("CODE", vec![t("€")]), 128.0);
         is_err(ev("CODE", vec![t("")]), CellError::Value);
         is_text(ev("UNICHAR", vec![n(9731.0)]), "☃");
+        for cp in [0xFDD0, 0xFDEF, 0xFFFE, 0xFFFF, 0x1FFFE, 0x1FFFF, 0x10FFFE, 0x10FFFF] {
+            is_err(ev("UNICHAR", vec![n(f64::from(cp))]), CellError::NA);
+        }
+        for (cp, expected) in [(0xFDCF, "\u{FDCF}"), (0xFDF0, "\u{FDF0}"), (0xFFFD, "\u{FFFD}"), (0x1FFFD, "\u{1FFFD}")] {
+            is_text(ev("UNICHAR", vec![n(f64::from(cp))]), expected);
+        }
         close(ev("UNICODE", vec![t("☃")]), 9731.0);
         is_err(ev("UNICHAR", vec![n(0.0)]), CellError::Value);
+        is_err(ev("UNICHAR", vec![n(1_114_112.0)]), CellError::Value);
         is_err(ev("UNICHAR", vec![n(55296.0)]), CellError::NA);
     }
 
@@ -1237,8 +1331,55 @@ mod tests {
         is_text(ev("DOLLAR", vec![n(0.5), n(0.0)]), "$1");
         is_text(ev("USDOLLAR", vec![n(1.0)]), "$1.00");
         is_text(ev("USDOLLAR", vec![n(-1234.567), n(1.0)]), "($1,234.6)");
+        let fixed_16 = format!("1.1{}", "0".repeat(15));
+        let dollar_16 = format!("$1.1{}", "0".repeat(15));
+        let fixed_20 = format!("1.005{}", "0".repeat(17));
+        let dollar_20 = format!("$1.005{}", "0".repeat(17));
+        let fixed_127 = format!("1.1{}", "0".repeat(126));
+        let dollar_127 = format!("$1.1{}", "0".repeat(126));
+        is_text(ev("FIXED", vec![n(1.1), n(16.0)]), &fixed_16);
+        is_text(ev("DOLLAR", vec![n(1.1), n(16.0)]), &dollar_16);
+        is_text(ev("FIXED", vec![n(1.005), n(20.0)]), &fixed_20);
+        is_text(ev("DOLLAR", vec![n(1.005), n(20.0)]), &dollar_20);
+        is_text(ev("FIXED", vec![n(1.1), n(127.0)]), &fixed_127);
+        is_text(ev("DOLLAR", vec![n(1.1), n(127.0)]), &dollar_127);
         is_text(ev("T", vec![t("x")]), "x");
         is_text(ev("T", vec![n(1.0)]), "");
+    }
+
+    #[test]
+    fn fixed_and_dollar_output_limits() {
+        assert!(matches!(ev("FIXED", vec![n(1e191), n(0.0)]), Value::Text(ref s) if s.len() == 255));
+        is_err(ev("FIXED", vec![n(1e192), n(0.0)]), CellError::Value);
+        assert!(matches!(ev("FIXED", vec![n(-1e253), n(0.0), b(true)]), Value::Text(ref s) if s.starts_with('-')));
+        is_err(ev("FIXED", vec![n(-1e191), n(0.0)]), CellError::Value);
+        assert!(matches!(ev("FIXED", vec![n(1e189), n(1.0)]), Value::Text(ref s) if s.len() == 255));
+        is_err(ev("FIXED", vec![n(1e190), n(1.0)]), CellError::Value);
+
+        assert!(matches!(ev("DOLLAR", vec![n(1e189), n(0.0)]), Value::Text(ref s) if s.len() == 254));
+        is_err(ev("DOLLAR", vec![n(1e190), n(0.0)]), CellError::Value);
+        assert!(matches!(ev("DOLLAR", vec![n(-1e188), n(0.0)]), Value::Text(ref s) if s.len() == 254));
+        is_err(ev("DOLLAR", vec![n(-1e189), n(0.0)]), CellError::Value);
+        assert!(matches!(ev("DOLLAR", vec![n(1.23456789e187), n(2.0)]), Value::Text(ref s) if s.len() == 254));
+        is_err(ev("DOLLAR", vec![n(1.23456789e188), n(2.0)]), CellError::Value);
+        is_err(ev("DOLLAR", vec![n(-1.23456789e186), n(2.0)]), CellError::Value);
+        assert!(matches!(ev("DOLLAR", vec![n(1e189), n(-1.0)]), Value::Text(ref s) if s.len() == 254));
+        is_err(ev("DOLLAR", vec![n(1e190), n(-1.0)]), CellError::Value);
+    }
+
+    #[test]
+    fn dollar_keeps_negative_sign_when_nonnegative_precision_rounds_to_zero() {
+        is_text(ev("DOLLAR", vec![n(-0.0001), n(0.0)]), "($0)");
+        is_text(ev("DOLLAR", vec![n(-0.0001), n(2.0)]), "($0.00)");
+        is_text(ev("DOLLAR", vec![n(0.0), n(0.0)]), "$0");
+        is_text(ev("DOLLAR", vec![n(-0.0), n(0.0)]), "$0");
+        is_text(ev("DOLLAR", vec![n(0.0001), n(0.0)]), "$0");
+        is_text(ev("DOLLAR", vec![n(-0.0001), n(-1.0)]), "$0");
+        is_text(ev("DOLLAR", vec![n(-4.0), n(-1.0)]), "$0");
+        is_text(ev("DOLLAR", vec![n(-5.0), n(-1.0)]), "($10)");
+        is_text(ev("DOLLAR", vec![n(-0.4), n(0.0)]), "($0)");
+        is_text(ev("DOLLAR", vec![n(-0.5), n(0.0)]), "($1)");
+        is_text(ev("FIXED", vec![n(-0.0001), n(0.0)]), "0");
     }
 
     #[test]
@@ -1263,6 +1404,24 @@ mod tests {
         is_text(ev("TEXTBEFORE", vec![t("aaaa"), t("aa"), n(-2.0)]), "");
         is_text(ev("TEXTBEFORE", vec![t("AaA"), t("aa"), n(-1.0), n(1.0)]), "A");
         is_text(ev("TEXTAFTER", vec![t("aaa"), t("aa"), n(1.0)]), "a");
+    }
+
+    /// Thousands of copies of one delimiter are tried once; delimiters that can't start where the
+    /// scan stands aren't compared; a search over a budget of comparisons is `#VALUE!`.
+    #[test]
+    fn delimiter_matching_stays_bounded() {
+        let text = "ab,".repeat(10_000);
+        let same: Vec<&str> = vec![","; 50_000];
+        let v = ev("TEXTSPLIT", vec![t(&text), av(row_t(&same))]);
+        assert_eq!(rows_of(&v).first().map(Vec::len), Some(10_001));
+        // Distinct long delimiters that start and end like every position: refused, not run.
+        let long: Vec<String> = (0..5_000).map(|i| format!("a{i}{}", "a".repeat(1_000))).collect();
+        let long: Vec<&str> = long.iter().map(String::as_str).collect();
+        is_err(ev("TEXTSPLIT", vec![t(&"a".repeat(30_000)), av(row_t(&long))]), CellError::Value);
+        is_err(ev("TEXTBEFORE", vec![t(&"a".repeat(30_000)), av(row_t(&long)), n(-1.0)]), CellError::Value);
+        // Longest match wins at a position, from either end.
+        is_text(ev("TEXTBEFORE", vec![t("x--y-z"), av(row_t(&["-", "--"]))]), "x");
+        is_text(ev("TEXTAFTER", vec![t("x--y-z"), av(row_t(&["-", "--"])), n(-1.0)]), "z");
     }
 
     #[test]
