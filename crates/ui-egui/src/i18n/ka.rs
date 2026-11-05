@@ -65,6 +65,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "ფორმატირების\nპანელი",
         "Format" => "ფორმატი",
         "Insert" => "ჩასმა",
+        "Header Menu|Insert" => "ჩასმა",
         "Insert Cells…" => "უჯრების ჩასმა…",
         "Delete" => "წაშლა",
         "Delete Cells…" => "უჯრების წაშლა…",
