@@ -39,19 +39,19 @@ mod support;
 // marker line in both lists, in `ALL_FAMILIES` order, so a family branch replaces exactly its own
 // line instead of inserting at a shared anchor and conflicting with its siblings.
 // aggregation
-// date_time
+mod date_time;
 // filter
 // financial
 // information
 // logical
-// math_trig
+mod math_trig;
 // model_info
 // other
 // parent_child
 // statistical
 // table_manipulation
 // text
-// time_intelligence
+mod time_intelligence;
 // visual
 
 use std::cmp::Ordering;
@@ -108,19 +108,19 @@ pub const ALL_FAMILIES: &[&str] = &[
 /// own marker line below with its `Family` entry.
 const FAMILIES: &[Family] = &[
     // aggregation
-    // date_time
+    Family { name: "date_time", scalar: date_time::call, table: date_time::call_table },
     // filter
     // financial
     // information
     // logical
-    // math_trig
+    Family { name: "math_trig", scalar: math_trig::call, table: math_trig::call_table },
     // model_info
     // other
     // parent_child
     // statistical
     // table_manipulation
     // text
-    // time_intelligence
+    Family { name: "time_intelligence", scalar: time_intelligence::call, table: time_intelligence::call_table },
     // visual
 ];
 
