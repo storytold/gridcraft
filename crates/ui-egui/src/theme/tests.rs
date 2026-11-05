@@ -355,28 +355,30 @@ fn fedora_package_folders_are_searched_after_the_other_linux_layouts() {
     assert!(noto.is_some() && noto.unwrap_or(0) + 1 == mono.len(), "Fedora's default Noto Sans Mono must be the last resort: {mono:?}");
 }
 
-/// A cell font moves its line gap above the text; one without a gap, or unreadable, is left alone.
+/// A font's line gap as a share of its size, and nothing for one that can't be read.
 #[test]
-fn cell_fonts_draw_their_line_gap_above_the_text() {
+fn line_gap_share_reads_the_font() {
     use skrifa::MetadataProvider;
     let fonts = egui::FontDefinitions::default();
     let mut checked = 0;
     for data in fonts.font_data.values() {
-        let mut fd = (**data).clone();
-        let before = fd.tweak.y_offset_factor;
-        crate::theme::cell_font_tweak(&mut fd);
         let bytes: &[u8] = data.font.as_ref().as_ref();
         let Ok(font) = skrifa::FontRef::from_index(bytes, data.index) else { continue };
         let m = font.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
-        if m.leading > 0.0 {
-            assert!((fd.tweak.y_offset_factor - m.leading / f32::from(m.units_per_em)).abs() < 1e-6);
-        } else {
-            assert_eq!(fd.tweak.y_offset_factor, before);
-        }
+        let want = (m.leading / f32::from(m.units_per_em)).max(0.0);
+        assert!((crate::theme::line_gap_share(data) - want).abs() < 1e-6);
         checked += 1;
     }
     assert!(checked > 0);
-    let mut broken = egui::FontData::from_owned(vec![0, 1, 2]);
-    crate::theme::cell_font_tweak(&mut broken);
-    assert_eq!(broken.tweak.y_offset_factor, 0.0);
+    assert_eq!(crate::theme::line_gap_share(&egui::FontData::from_owned(vec![0, 1, 2])), 0.0);
+}
+
+/// Only cell fonts carry a gap: a shared family or an unknown one stays where it was.
+#[test]
+fn line_gap_scales_with_the_cell_font_and_leaves_others_alone() {
+    crate::fonts::record_line_gap("cell-gap-test", 0.25);
+    let cell = egui::FontId::new(16.0, egui::FontFamily::Name("cell-gap-test".into()));
+    assert_eq!(crate::fonts::line_gap(&cell), 4.0);
+    assert_eq!(crate::fonts::line_gap(&egui::FontId::proportional(16.0)), 0.0);
+    assert_eq!(crate::fonts::line_gap(&egui::FontId::new(16.0, egui::FontFamily::Name("not-recorded".into()))), 0.0);
 }

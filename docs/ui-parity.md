@@ -249,7 +249,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-05 | minor | Cell text sits where Excel puts it vertically: cell fonts draw their line gap above the text, and the line box is a pixel in from the row's edge, measured against Excel with Calibri |
+| 2026-11-05 | minor | Cell text sits where Excel puts it vertically: it goes down by its font's line gap, and the line box is a pixel in from the row's edge, measured against Excel with Calibri |
 | 2026-11-02 | minor | Form controls: buttons, sliders (scroll bars) and spin buttons placed, worked, selected and edited on the sheet (Insert › Controls, Assign Action, Format Control); catalog 281 / 296 |
 | 2026-11-03 | minor | Highlight the active cell's row: a global preference that tints the whole row, off by default |
 | 2026-11-03 | minor | The formula bar's bottom edge is a resize handle: dragging it sets the bar's height in whole lines, up to half the window, and dragging it to one line collapses it; expanding (the chevron, Ctrl+Shift+U) returns to the dragged height, which is kept with the UI preferences. `view.expandFormulaBar {lines}` sets it (#1246) |

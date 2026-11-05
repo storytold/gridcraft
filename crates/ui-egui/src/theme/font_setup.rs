@@ -518,15 +518,13 @@ fn font_definitions_impl(language: crate::i18n::Language, used: &[String], syste
     fonts
 }
 
-/// Excel draws a font's line gap above its text, and egui below. In cells that decides where the text
-/// sits, so a cell font carries the difference as a drawing offset; the layout is unchanged.
-pub(crate) fn cell_font_tweak(fd: &mut FontData) {
+/// A font's line gap as a share of its size. Excel draws it above the text and egui below, which in a
+/// cell decides where the text sits: see `fonts::line_gap`.
+pub(crate) fn line_gap_share(fd: &FontData) -> f32 {
     use skrifa::MetadataProvider;
-    let Ok(font) = skrifa::FontRef::from_index(fd.font.as_ref().as_ref(), fd.index) else { return };
+    let Ok(font) = skrifa::FontRef::from_index(fd.font.as_ref().as_ref(), fd.index) else { return 0.0 };
     let m = font.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
-    if m.units_per_em > 0 && m.leading > 0.0 {
-        fd.tweak.y_offset_factor = m.leading / f32::from(m.units_per_em);
-    }
+    if m.units_per_em > 0 { (m.leading / f32::from(m.units_per_em)).max(0.0) } else { 0.0 }
 }
 
 /// Builds one role family's chain: the loaded system face (or its role fallback), egui's bundled
@@ -547,7 +545,7 @@ fn build_role_chain(
     let loaded = if system { try_load(&refs) } else { None };
     if let Some(mut fd) = loaded {
         if role.starts_with("cell") {
-            cell_font_tweak(&mut fd);
+            crate::fonts::record_line_gap(role, line_gap_share(&fd));
         }
         // Helvetica Neue Bold's own TrueType hints close Cyrillic е into ө at 13 pt on a Retina
         // screen (#1184). Core Text never runs them, so this draws it the way macOS does.

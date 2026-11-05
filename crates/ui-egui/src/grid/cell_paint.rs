@@ -144,8 +144,7 @@ pub(crate) fn wrapped_cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -
 
 /// The line box as Excel places it, measured with Calibri: a pixel in from the row's edge, top or
 /// bottom. In a row too short for it the two simply overlap, so each keeps its side and the cell clips
-/// the rest. Cell fonts draw their line gap above the text (`theme::cell_font_tweak`), as Excel does,
-/// so the box holds the text the way Excel's does.
+/// the rest. The caller adds the font's line gap (`fonts::line_gap`), which Excel has above the text.
 pub(crate) fn cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
     let y_top = rect.top() + 1.0 * z;
     let y_bottom = rect.bottom() - gh - 1.0 * z;
