@@ -466,6 +466,8 @@ pub struct Machine {
     pub last_params: Option<Json>,
     /// Files the run wrote ("step 1 (file.exportCsv)"): rolling the run back doesn't take them back.
     pub wrote_files: Vec<String>,
+    /// Whether a real, successful macro step explicitly wrote the default zoom.
+    default_zoom_written: bool,
     /// Repeat and If bodies by the path of their frame: a body is copied the first time its step
     /// runs, not on every pass.
     bodies: HashMap<String, Arc<Vec<Step>>>,
@@ -574,6 +576,7 @@ impl Machine {
             partial: None,
             last_params: None,
             wrote_files: Vec::new(),
+            default_zoom_written: false,
             bodies: HashMap::new(),
             param_bytes: 0,
             guard: None,
@@ -856,6 +859,9 @@ impl Machine {
             }
         }
         r.map_err(|e| fail(e.to_string()))?;
+        if !self.dry_run && id == "view.defaultZoom" && self.last_params.as_ref().is_some_and(|p| p.get("percent").is_some()) {
+            self.default_zoom_written = true;
+        }
         if writes {
             self.wrote_files.push(format!("step {path} ({id})"));
         }
@@ -1476,12 +1482,14 @@ pub fn run(s: &mut Session, name: &str, p: &Json) -> Result<Json> {
     let label = format!("Run Macro: {}", b.mac.name);
     // Undo groups restore the workbook, but not application preferences.
     let default_zoom = s.prefs.default_zoom;
+    let mut explicit_zoom_write = false;
     let result = s.grouped(&label, |s| {
         let (mut machine, shifted) = make_way(s, &b)?;
         let name = &b.mac.name;
         // `ran` counts the run's own steps; the budget also holds the dry runs'.
         let before_run = machine.executed;
         machine.run_to_end(s).map_err(|e| e.into_engine(name))?;
+        explicit_zoom_write = machine.default_zoom_written;
         match machine.stopped {
             Some((msg, true)) => Err(EngineError::Other(format!("Macro '{name}' stopped: {msg} {}", rolled_back(&machine.wrote_files)))),
             stopped => {
@@ -1498,6 +1506,10 @@ pub fn run(s: &mut Session, name: &str, p: &Json) -> Result<Json> {
     });
     if result.is_err() {
         s.prefs.default_zoom = default_zoom;
+    } else if explicit_zoom_write && s.depth() == 1 {
+        // The other workbook's completed macro explicitly chose this zoom,
+        // even if it was already the current value. Only a kept top-level run counts.
+        super::debug::preserve_external_macro_zoom(s);
     }
     result
 }
