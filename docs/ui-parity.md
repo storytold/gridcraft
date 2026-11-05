@@ -1,10 +1,10 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (Print preview: Show Margins, dragging margins and the table into place) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (Print preview: Show Margins, dragging margins and the table into place) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
-separately in [parity-checklist.md](parity-checklist.md) (277 / 292).
+separately in [parity-checklist.md](parity-checklist.md) (281 / 296).
 
 Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes),
 `crates/engine/src/cmd` (shortcuts in command specs), the owner's black-box notes
@@ -73,6 +73,7 @@ this logic, with one undo step.
 | Copy as HTML table for other apps | done (#36, 10-10) |
 | Context menu on cells | 16 items (Cut, Copy, Paste, Paste Special, Insert, Delete, Clear Contents, Filter by value, Sort, New Comment, New Note, Format Cells, Pick From Drop-down List, Define Name, Link). Insert Copied Cells (Insert Cut Cells for whole rows/columns) while the clipboard holds a copy (#21). Show Details on a PivotTable's value, subtotal or grand total cell (`pivot.showDetails`). Missing: Insert Cut Cells for a cell block, paste-option icons, Quick Analysis, Get Data from Table, Show Changes, Smart Lookup |
 | Move and resize charts, pictures and shapes | done (#190, #213): charts, pictures, shapes, equations and slicers select with a frame of eight handles; each handle resizes only its own edges (they never cross), the body moves the object, and the pointer shows a resize or move cursor; Delete or Backspace deletes the selected object and Escape drops the selection; double-click edits a text box, opens Format Chart for a chart. Rotation handle, Shift for proportional resizing, Alt to snap to cells and multi-object selection missing |
+| Form controls: buttons, scroll bars (sliders), spin buttons | done (10-31): Insert › Controls (Button, Slider, Spin Button; Excel has them under Developer › Insert) places one by a drag, or at its default size by a click; a click works a control: drag the thumb, page on the track, click or hold an arrow (a drag or a hold is one undo step), press a button, which runs a macro or a command and asks first in a workbook opened from a file (an answer runs only the action it asked about: if an agent changes the button, its macro or the selection while the prompt is open, nothing runs); the control last worked takes the arrows, Page Up and Page Down, Home, End, and Space or Enter (a button gives the keyboard back as soon as the grid takes a key or a right-click; Space on a slider or spin button does what it does with no control focused: it toggles a checkbox cell or starts a cell edit like any other character); Ctrl or Cmd+click or a right-click selects it to move or resize; its menu has Edit Text, Assign Action, Format Control and Delete. Check boxes, option buttons, list boxes and drop-downs (form controls) are kept from files but not shown |
 | Context menus on row/column headers, sheet tabs, charts, shapes | headers and tabs done; objects partial |
 | Quick Analysis (Ctrl+Q) | missing |
 | Smooth scrolling, scrollbars | done; vertical scrollbar added 10-09 (#73); horizontal scrollbar in the tab bar (60/40 split, drag, track click pages) 10-13 (#176, #840); dragging the handle at the scrollbar's left edge gives the tabs more or less of the bar; each workbook keeps its share while it is open (not saved in the file) |
@@ -243,6 +244,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-02 | minor | Print preview: Show Margins draws the margin, header and footer lines and the table's place on the page; each is dragged (one undo step per drag, Ctrl+Z on the page), with margin fields in cm or inches and centring; Ctrl+F2 and Margins › Adjust in Print Preview open it |
+| 2026-11-02 | minor | Form controls: buttons, sliders (scroll bars) and spin buttons placed, worked, selected and edited on the sheet (Insert › Controls, Assign Action, Format Control); catalog 281 / 296 |
 | 2026-11-03 | minor | Highlight the active cell's row: a global preference that tints the whole row, off by default |
 | 2026-11-03 | minor | The formula bar's bottom edge is a resize handle: dragging it sets the bar's height in whole lines, up to half the window, and dragging it to one line collapses it; expanding (the chevron, Ctrl+Shift+U) returns to the dragged height, which is kept with the UI preferences. `view.expandFormulaBar {lines}` sets it (#1246) |
 | 2026-11-03 | minor | Cell context menu on a cell with a link: Edit Hyperlink… (the link dialog, titled Edit Hyperlink and filled with the link), Open Hyperlink and Remove Hyperlink, as in Excel, instead of Link… (#2120) |
