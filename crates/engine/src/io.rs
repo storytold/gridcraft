@@ -1076,7 +1076,8 @@ mod w3cdtf_tests {
 
     #[test]
     fn a_save_keeps_the_creation_and_records_who_and_when() {
-        let mut p = gridcraft_model::DocProps { created: "2022-05-27T04:57:00Z".into(), last_modified_by: "Nguyễn An".into(), ..Default::default() };
+        let mut p =
+            gridcraft_model::DocProps { created: "2022-05-27T04:57:00Z".into(), last_modified_by: "Nguyễn An".into(), ..Default::default() };
         stamp_saved(&mut p, "Sam", "2026-10-14T08:00:00Z");
         assert_eq!((p.created.as_str(), p.modified.as_str(), p.last_modified_by.as_str()), ("2022-05-27T04:57:00Z", "2026-10-14T08:00:00Z", "Sam"));
         let mut new = gridcraft_model::DocProps::default();
