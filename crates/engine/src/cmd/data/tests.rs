@@ -7,7 +7,7 @@ fn text_as_numbers_sorts_numeric_text_only_when_requested() {
     }
     let mut s = Session::new();
     s.new_workbook();
-    s.execute("range.setValues", json!({"range": "A1", "parse": false, "values": [["10"], ["9"], ["a"], [""], ["-2"]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "parse": false, "values": [["10"], ["9"], ["a"], [null], ["-2"]]})).unwrap();
 
     s.execute("data.sort", json!({"range": "A1:A5", "header": false, "keys": [{"column": "A", "order": "asc"}]})).unwrap();
     assert_eq!(values(&s), ["-2", "10", "9", "a", ""]);
