@@ -24,6 +24,10 @@ pub enum Scalar {
     /// Currency is an integer scaled by 10,000.
     #[serde(with = "currency_serde")]
     Currency(i64),
+    /// A decimal. A finite value is a JSON number; `NaN`/`Infinity` become `{"$decimal": "NaN"}`
+    /// so they survive a round trip (`serde_json` writes a non-finite float as `null`, which would
+    /// read back as BLANK).
+    #[serde(with = "decimal_serde")]
     Decimal(f64),
     /// DateTime is an OLE Automation serial: whole days since 1899-12-30 plus a time fraction.
     #[serde(with = "datetime_serde")]
@@ -49,21 +53,92 @@ mod currency_serde {
     }
 }
 
+mod decimals {
+    /// The JSON text of a non-finite value, or `None` when it is finite.
+    pub fn to_text(value: f64) -> Option<&'static str> {
+        if value.is_nan() {
+            Some("NaN")
+        } else if value == f64::INFINITY {
+            Some("Infinity")
+        } else if value == f64::NEG_INFINITY {
+            Some("-Infinity")
+        } else {
+            None
+        }
+    }
+
+    /// The value of a JSON text produced by [`to_text`].
+    pub fn from_text(text: &str) -> Option<f64> {
+        match text {
+            "NaN" => Some(f64::NAN),
+            "Infinity" => Some(f64::INFINITY),
+            "-Infinity" => Some(f64::NEG_INFINITY),
+            _ => None,
+        }
+    }
+}
+
+mod decimal_serde {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::decimals;
+
+    #[derive(Serialize, Deserialize)]
+    #[serde(untagged)]
+    enum Json {
+        Number(f64),
+        Tagged {
+            #[serde(rename = "$decimal")]
+            text: String,
+        },
+    }
+
+    pub fn serialize<S: Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+        match decimals::to_text(*value) {
+            Some(text) => Json::Tagged { text: text.to_string() }.serialize(serializer),
+            None => Json::Number(*value).serialize(serializer),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+        match Json::deserialize(deserializer)? {
+            Json::Number(value) => Ok(value),
+            Json::Tagged { text } => decimals::from_text(&text).ok_or_else(|| serde::de::Error::custom("unknown non-finite decimal")),
+        }
+    }
+}
+
 mod datetime_serde {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::decimals;
+
+    #[derive(Serialize, Deserialize)]
+    #[serde(untagged)]
+    enum Number {
+        Finite(f64),
+        Text(String),
+    }
 
     #[derive(Serialize, Deserialize)]
     struct Tagged {
         #[serde(rename = "$dateTime")]
-        value: f64,
+        value: Number,
     }
 
     pub fn serialize<S: Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
-        Tagged { value: *value }.serialize(serializer)
+        let value = match decimals::to_text(*value) {
+            Some(text) => Number::Text(text.to_string()),
+            None => Number::Finite(*value),
+        };
+        Tagged { value }.serialize(serializer)
     }
 
     pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
-        Ok(Tagged::deserialize(deserializer)?.value)
+        match Tagged::deserialize(deserializer)?.value {
+            Number::Finite(value) => Ok(value),
+            Number::Text(text) => decimals::from_text(&text).ok_or_else(|| serde::de::Error::custom("unknown non-finite serial")),
+        }
     }
 }
 
@@ -470,6 +545,21 @@ impl EvalError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn non_finite_values_survive_a_json_round_trip() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for scalar in [Scalar::Decimal(value), Scalar::DateTime(value)] {
+                let json = serde_json::to_value(&scalar).expect("serialize");
+                let back: Scalar = serde_json::from_value(json.clone()).expect("deserialize");
+                assert_eq!(format!("{back:?}"), format!("{scalar:?}"), "round trip through {json}");
+            }
+        }
+        // A finite decimal keeps its natural JSON number, and text is still text.
+        assert_eq!(serde_json::to_value(Scalar::Decimal(1.5)).expect("serialize"), serde_json::json!(1.5));
+        let text: Scalar = serde_json::from_value(serde_json::json!("NaN")).expect("deserialize");
+        assert_eq!(text, Scalar::String("NaN".into()));
+    }
 
     #[test]
     fn relationship_keys_normalize_only_what_is_exact() {
