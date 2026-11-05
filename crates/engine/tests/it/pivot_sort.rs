@@ -169,6 +169,16 @@ fn sort_parameters_are_validated() {
 }
 
 #[test]
+fn a_custom_order_takes_labels_with_spaces_as_they_are() {
+    // #3399 review: the requested label was trimmed first, so "East " in the source never matched.
+    let mut s = session_with(&[("East ", "x", json!(1)), ("West", "x", json!(2)), ("North", "x", json!(3))]);
+    pivot(&mut s, &["Region"], &[], json!(["Sales"]));
+    sort(&mut s, json!({"field": "Region", "order": "custom", "items": ["East ", "  west  "]})).unwrap();
+    assert_eq!(field(&mut s)["customOrder"], json!(["East ", "West"]), "exact first, then without padding");
+    assert_eq!(labels(&s), ["East ", "West", "North"]);
+}
+
+#[test]
 fn manual_still_means_source_order() {
     // #3398 review: "manual" was an alias of source order before custom orders; it stays one.
     let mut s = session_with(&[("West", "x", json!(1)), ("East", "x", json!(2)), ("North", "x", json!(3))]);
