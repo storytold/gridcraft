@@ -33,6 +33,22 @@ pub(crate) struct HtmlCell {
 pub(crate) struct CopiedNumber {
     pub value: f64,
     pub calendar: Option<gridcraft_core::DateSystem>,
+    pub format: gridcraft_model::NumFmt,
+}
+
+impl CopiedNumber {
+    /// Exact values refine a field only if their captured format reproduces its shown text.
+    pub(crate) fn matches_text(&self, field: &str, locale: &gridcraft_numfmt::Locale, default_system: gridcraft_core::DateSystem) -> bool {
+        let parsed = crate::display::number_format(self.format.as_str());
+        let system = self.calendar.unwrap_or(default_system);
+        let value = gridcraft_core::Value::Number(self.value);
+        let shown = if self.format.is_literal_short_date() {
+            gridcraft_numfmt::format_literal_in(&value, &parsed, system, locale)
+        } else {
+            gridcraft_numfmt::format_value_in(&value, &parsed, system, locale)
+        };
+        normalized(&crate::display::formatted_text(shown)) == normalized(field)
+    }
 }
 
 /// The cells of the first table in `html`, row by row, read no further than `max_rows` rows of
@@ -141,7 +157,23 @@ fn copied_number(attrs: &str) -> Option<CopiedNumber> {
         Some("1904") => Some(gridcraft_core::DateSystem::D1904),
         _ => return None,
     };
-    Some(CopiedNumber { value, calendar })
+    let format = match attr(attrs, "data-gridcraft-format-v1") {
+        Some(raw) if raw.len() <= 4096 => {
+            let bytes = crate::io::base64_decode(raw)?;
+            let format = serde_json::from_slice::<gridcraft_model::NumFmt>(&bytes).ok()?;
+            if format.as_str().chars().take(256).count() > 255 {
+                return None;
+            }
+            format
+        }
+        Some(_) => return None,
+        None => gridcraft_model::NumFmt::new("General"),
+    };
+    let is_calendar = crate::display::number_format(format.as_str()).date_shape(value).is_some_and(|(date, _)| date);
+    if is_calendar != calendar.is_some() {
+        return None;
+    }
+    Some(CopiedNumber { value, calendar, format })
 }
 
 /// A `colspan`/`rowspan` attribute: at least 1, at most `max` (the sheet's extent), so a hostile

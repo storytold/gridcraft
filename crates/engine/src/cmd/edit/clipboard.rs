@@ -219,8 +219,14 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
                     .filter(|_| html_cell.is_some_and(|hc| crate::clip_html::normalized(&hc.text) == crate::clip_html::normalized(v)));
                 let mut cell = super::cell::input_to_cell_in(v, sheet, c, &mut cx.wb, source_locale.or(locale.as_ref()))
                     .unwrap_or_else(|_| Some(Cell::value(Value::text(v.as_str()))));
+                if cell.is_none() && source_locale.is_some() && html_cell.is_some_and(|hc| hc.copied_number.is_some()) {
+                    let style = cx.wb.sheet(sheet).map(|sh| sh.style_id(c)).unwrap_or_default();
+                    if cx.wb.styles.get(style).num_fmt.as_str() != "@" {
+                        cell = Some(Cell::styled(Value::Empty, style));
+                    }
+                }
                 if let Some(cl) = cell.as_mut() {
-                    numeric_from_html(cl, v, html_cell, &mut cx.wb);
+                    numeric_from_html(cl, v, html_cell, source_locale, &mut cx.wb);
                 }
                 let sh = cx.sheet_mut(sheet)?;
                 match cell {
@@ -246,7 +252,13 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
 /// source recorded for it in its HTML, with a format that shows the same text when one can be
 /// inferred and the cell has none. The HTML cell must show the same text as the tab-separated
 /// field, so HTML that belongs to another copy (or a table laid out differently) changes nothing.
-fn numeric_from_html(cell: &mut Cell, field: &str, html: Option<&crate::clip_html::HtmlCell>, wb: &mut gridcraft_model::Workbook) {
+fn numeric_from_html(
+    cell: &mut Cell,
+    field: &str,
+    html: Option<&crate::clip_html::HtmlCell>,
+    source_locale: Option<&gridcraft_numfmt::Locale>,
+    wb: &mut gridcraft_model::Workbook,
+) {
     let Some(hc) = html else { return };
     if cell.formula.is_some() || wb.styles.get(cell.style).num_fmt.as_str() == "@" {
         return;
@@ -254,9 +266,12 @@ fn numeric_from_html(cell: &mut Cell, field: &str, html: Option<&crate::clip_htm
     if crate::clip_html::normalized(&hc.text) != crate::clip_html::normalized(field) {
         return;
     }
-    if let Some(copied) = &hc.copied_number
-        && matches!(cell.value, Value::Number(_) | Value::Text(_))
+    if let (Some(copied), Some(locale)) = (&hc.copied_number, source_locale)
+        && matches!(cell.value, Value::Number(_) | Value::Text(_) | Value::Empty)
     {
+        if !copied.matches_text(field, locale, wb.date_system) {
+            return;
+        }
         let n = match copied.calendar {
             Some(source) if source != wb.date_system => {
                 let in_1900 = copied.value - gridcraft_core::date::serial_in_system(source, 0.0);
@@ -265,6 +280,9 @@ fn numeric_from_html(cell: &mut Cell, field: &str, html: Option<&crate::clip_htm
             _ => copied.value,
         };
         cell.value = Value::number(n);
+        if wb.styles.get(cell.style).num_fmt.as_str() == "General" {
+            cell.style = wb.styles.derive(cell.style, |style| style.num_fmt = copied.format.clone());
+        }
         return;
     }
     let Some(n) = hc.num else { return };

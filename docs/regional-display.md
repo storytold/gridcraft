@@ -126,3 +126,24 @@ in [#3048](https://github.com/storytold/gridcraft/pull/3048), or the destination
 in [#3106](https://github.com/storytold/gridcraft/pull/3106). Those remain separate work; a future
 accepted parser can replace this front-end normalization without changing invariant callers.
 Original #2263 credit to @pick2510 and its ancestry remain intact.
+
+## Clipboard follow-up — 2026-11-05
+
+Host Copy/Cut captures `clipboardLocale` through the interactive command boundary. Ordinary
+programmatic copies retain invariant output unless that bounded snapshot is supplied explicitly.
+As with `inputLocale`, `shortDate` requires a complete numeric year/month/day order; time-only,
+partial-calendar and month-name patterns are rejected.
+
+The rich HTML flavour carries the source region, number format, exact finite numeric value and,
+for calendar dates, its date system. Restoration requires matching HTML/plain text and a value
+that renders to the copied text using the captured source format and region. Rounded displays
+can retain their underlying precision; inconsistent metadata cannot replace a parsed number.
+General destinations retain captured number formats, including currency. Standard Text (`@`)
+destinations and formulas keep their existing interpretation. Zeros hidden by number formatting
+remain stored zeros. Calendar values rebase between 1900/1904 systems; time-only values and
+durations do not shift. Matching internal clipboard copies retain their identity path.
+
+Existing rich-export caps (10,000 cells / 4 MiB) and text fallback remain. Text alone retains
+formatting-rounding and cross-region ambiguity limits. Controls are synthetic, in memory and
+offscreen: actual OS clipboard transport, native Excel, full style/type preservation and arbitrary
+workbooks remain unqualified. No workstation configuration or installed binary is changed.

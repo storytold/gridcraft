@@ -158,7 +158,7 @@ fn value_text_in(wb: &Workbook, v: &Value, code: &str, loc: &Locale) -> String {
 
 /// Flatten formatted output to plain text, replacing an alignment fill with one space
 /// only when its insertion position is a valid text boundary.
-fn formatted_text(f: Formatted) -> String {
+pub(crate) fn formatted_text(f: Formatted) -> String {
     match f.fill {
         Some((_, pos)) => {
             let mut t = f.text;

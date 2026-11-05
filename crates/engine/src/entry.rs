@@ -36,7 +36,11 @@ pub(crate) fn parse_locale_snapshot(value: &serde_json::Value, name: &str) -> cr
         _ => character("group").ok_or_else(invalid)?,
     };
     let date = value.get("shortDate").and_then(serde_json::Value::as_str).ok_or_else(invalid)?;
-    if decimal == group || date.chars().take(256).count() > 255 || date.is_empty() || !crate::display::number_format(date).is_date() {
+    if decimal == group
+        || date.chars().take(256).count() > 255
+        || date.is_empty()
+        || !crate::display::number_format(date).has_numeric_calendar_order()
+    {
         return Err(invalid());
     }
     Ok(Locale { decimal, group, short_date: std::borrow::Cow::Owned(date.to_string()) })

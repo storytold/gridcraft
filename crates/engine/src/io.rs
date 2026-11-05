@@ -710,7 +710,15 @@ pub(crate) fn range_html(wb: &Workbook, sheet: usize, r: RangeRef, plain_text: &
                 && value.is_finite()
             {
                 write!(number, " data-gridcraft-number-v1=\"{value}\"").ok()?;
-                let format = crate::display::number_format(wb.styles.get(sh.style_id(c)).num_fmt.as_str());
+                let stored_format = &wb.styles.get(sh.style_id(c)).num_fmt;
+                let captured_format = if stored_format.as_str().chars().take(256).count() <= 255 {
+                    stored_format.clone()
+                } else {
+                    gridcraft_model::NumFmt::new("General")
+                };
+                let encoded_format = base64_encode(&serde_json::to_vec(&captured_format).ok()?);
+                write!(number, " data-gridcraft-format-v1=\"{encoded_format}\"").ok()?;
+                let format = crate::display::number_format(captured_format.as_str());
                 if format.date_shape(value).is_some_and(|(calendar, _)| calendar) {
                     let epoch = match wb.date_system {
                         gridcraft_core::DateSystem::D1900 => "1900",

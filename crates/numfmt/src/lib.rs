@@ -196,6 +196,24 @@ impl NumberFormat {
         self.num_sections().iter().any(|s| s.kind == SecKind::Date)
     }
 
+    /// Whether an input snapshot has exactly one numeric year, month and day, without time or names.
+    pub fn has_numeric_calendar_order(&self) -> bool {
+        if self.calendar_order().is_none() {
+            return false;
+        }
+        let Some(section) = self.num_sections().iter().find(|s| s.kind == SecKind::Date) else { return false };
+        let mut count = 0;
+        for token in &section.toks {
+            if let Tok::Date(part) = token {
+                if !matches!(*part, DatePart::Year(_) | DatePart::Month(1 | 2) | DatePart::Day(1 | 2)) {
+                    return false;
+                }
+                count += 1;
+            }
+        }
+        count == 3
+    }
+
     /// For a date or time format, whether the section that formats `value` shows calendar parts (year, month,
     /// day) and whether it shows time parts, as `(date, time)`. `None` for any other format and for
     /// elapsed-time codes like `[h]:mm`, whose value is a duration, not a moment.
@@ -499,3 +517,18 @@ pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, C
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod numeric_calendar_snapshot_tests {
+    use super::NumberFormat;
+
+    #[test]
+    fn snapshot_dates_require_complete_numeric_calendar_fields() {
+        for code in ["m/d/yyyy", "dd.mm.yyyy", "yyyy-mm-dd", "dd/mm/yy"] {
+            assert!(NumberFormat::parse(code).has_numeric_calendar_order(), "{code}");
+        }
+        for code in ["h:mm", "mm:ss", "[h]:mm", "dd/mm", "dd-mmm-yyyy", "dddd, mm/dd/yyyy", "yyyy-mm-dd h:mm", "yyyy-mm-dd-dd", "General"] {
+            assert!(!NumberFormat::parse(code).has_numeric_calendar_order(), "{code}");
+        }
+    }
+}

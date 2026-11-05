@@ -379,6 +379,9 @@ fn invalid_interactive_snapshots_leave_values_unchanged() {
         json!({"decimal":"..","group":",","shortDate":"dd.mm.yyyy"}),
         json!({"decimal":",","group":".","shortDate":"d".repeat(256)}),
         json!({"decimal":",","group":"\n","shortDate":"dd.mm.yyyy"}),
+        json!({"decimal":",","group":".","shortDate":"h:mm"}),
+        json!({"decimal":",","group":".","shortDate":"dd/mm"}),
+        json!({"decimal":",","group":".","shortDate":"dd-mmm-yyyy"}),
     ] {
         assert!(s.execute("cell.set", json!({"cell":"A1","input":"1,234","inputLocale":locale})).is_err());
         assert_eq!(s.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::Number(7.0));
@@ -393,12 +396,22 @@ fn regional_clipboard_plain_text_keeps_decimal_values_between_sessions() {
     source.new_workbook();
     source.display_locale = ro.clone();
     source.execute("cell.set", json!({"cell":"A1","input":"1.234"})).unwrap();
-    let copied = source.run_interactive("edit.copy", json!({"range":"A1"}), &ro).unwrap();
+    let copied = source.run_interactive("edit.copy", json!({"range":"A1","html":true}), &ro).unwrap();
     let mut dest = Session::new();
     dest.new_workbook();
     dest.run_interactive("edit.paste", json!({"at":"A1","text":copied["text"]}), &ro).unwrap();
     assert_eq!(dest.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::Number(1.234));
     assert_eq!(copied["text"], "1,234\n");
+    // Fresh en-US sessions prove the host parsing path and its plain-text ambiguity.
+    let mut en_plain = Session::new();
+    en_plain.new_workbook();
+    en_plain.run_interactive("edit.paste", json!({"at":"A1","text":copied["text"]}), &Locale::EN_US).unwrap();
+    assert_eq!(en_plain.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::Number(1234.0));
+    let mut en_rich = Session::new();
+    en_rich.new_workbook();
+    en_rich.run_interactive("edit.paste", json!({"at":"A1","text":copied["text"],"html":copied["html"]}), &Locale::EN_US).unwrap();
+    assert_eq!(en_rich.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::Number(1.234));
+    // Separately, internal clipboard identity must survive a later region change.
     source.run_interactive("edit.paste", json!({"at":"B1","text":copied["text"]}), &Locale::EN_US).unwrap();
     assert_eq!(source.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 1)), Value::Number(1.234));
     assert_eq!(source.execute("edit.copy", json!({"range":"A1"})).unwrap()["text"], "1.234\n");
@@ -488,6 +501,7 @@ fn regional_clipboard_exact_values_respect_text_and_formula_destinations() {
     assert!(cell.formula.is_some());
     assert_eq!(cell.value, Value::Number(3.0));
     for attributes in [
+        "data-gridcraft-number-v1=\"999\"",
         "data-gridcraft-number-v1=\"NaN\"",
         "data-gridcraft-number-v1=\"1e999\"",
         "data-gridcraft-number-v1=\"999\" data-gridcraft-calendar-v1=\"invalid\"",
@@ -496,4 +510,52 @@ fn regional_clipboard_exact_values_respect_text_and_formula_destinations() {
         dest.run_interactive("edit.paste", json!({"at":"C2","text":"1.234","html":html}), &ro).unwrap();
         assert_eq!(dest.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(1, 2)), Value::Number(1.234));
     }
+}
+
+/// Financial formats can hide zeros visually without turning their stored values into blanks.
+#[test]
+fn regional_clipboard_keeps_numeric_zero_when_format_shows_blank() {
+    for range in ["A1", "A1:B1"] {
+        let mut source = Session::new();
+        source.new_workbook();
+        source.execute("range.setValues", json!({"range":"A1:B1","values":[[0,1.234]]})).unwrap();
+        source.execute("home.formatCells", json!({"range":"A1","style":{"num_fmt":"0;-0;;@"}})).unwrap();
+        let copied = source.run_interactive("edit.copy", json!({"range":range,"html":true}), &Locale::from_tag("ro-RO")).unwrap();
+        let mut dest = Session::new();
+        dest.new_workbook();
+        dest.run_interactive("edit.paste", json!({"at":"A1","text":copied["text"],"html":copied["html"]}), &Locale::from_tag("ro-RO")).unwrap();
+        assert_eq!(dest.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::Number(0.0), "{range}");
+        if range == "A1:B1" {
+            assert_eq!(dest.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 1)), Value::Number(1.234));
+        }
+        dest.execute("home.formatCells", json!({"range":"A2","style":{"num_fmt":"@"}})).unwrap();
+        dest.run_interactive("edit.paste", json!({"at":"A2","text":copied["text"],"html":copied["html"]}), &Locale::from_tag("ro-RO")).unwrap();
+        assert_eq!(dest.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(1, 0)), Value::Empty);
+    }
+}
+
+/// Rounded source formats validate exact values and preserve a currency's display in General.
+#[test]
+fn regional_clipboard_validates_rounded_number_metadata_and_currency_format() {
+    let mut source = Session::new();
+    source.new_workbook();
+    source.execute("range.setValues", json!({"range":"A1:B1","values":[[1.234567,10000.125]]})).unwrap();
+    source.execute("home.formatCells", json!({"range":"A1","style":{"num_fmt":"0.00"}})).unwrap();
+    source.execute("home.formatCells", json!({"range":"B1","style":{"num_fmt":"\"RON \"#,##0.00"}})).unwrap();
+    let copied = source.run_interactive("edit.copy", json!({"range":"A1:B1","html":true}), &Locale::from_tag("ro-RO")).unwrap();
+    let mut dest = Session::new();
+    dest.new_workbook();
+    dest.run_interactive("edit.paste", json!({"at":"A1","text":copied["text"],"html":copied["html"]}), &Locale::from_tag("ro-RO")).unwrap();
+    let wb = &dest.active().unwrap().wb;
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.value(CellRef::new(0, 0)), Value::Number(1.234567));
+    assert_eq!(sh.value(CellRef::new(0, 1)), Value::Number(10000.125));
+    assert_eq!(cell_text_in(wb, sh, CellRef::new(0, 0), &Locale::from_tag("ro-RO")), "1,23");
+    assert_eq!(cell_text_in(wb, sh, CellRef::new(0, 1), &Locale::from_tag("ro-RO")), "RON 10.000,13");
+    let bad_html = copied["html"].as_str().unwrap().replacen("data-gridcraft-number-v1=\"1.234567\"", "data-gridcraft-number-v1=\"999\"", 1);
+    assert_ne!(bad_html, copied["html"].as_str().unwrap());
+    let mut clean = Session::new();
+    clean.new_workbook();
+    clean.run_interactive("edit.paste", json!({"at":"A1","text":copied["text"],"html":bad_html}), &Locale::from_tag("ro-RO")).unwrap();
+    assert_eq!(clean.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::Number(1.23));
 }
