@@ -18,6 +18,11 @@ impl SheetApp {
 
     pub(super) fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
         let mut params = params;
+        if id == "home.borders"
+            && let Some(preset) = params.get("preset").and_then(Json::as_str)
+        {
+            self.grid.last_border = preset.to_string();
+        }
         if id == "home.borders" && params.as_object().is_some() && params.get("color").is_none() && params.get("preset").is_some() {
             params["color"] = json!(self.grid.last_border_color.clone());
         }

@@ -748,6 +748,31 @@ fn border_keytip_line_color_after_no_border_remembers_it_without_reapplying_none
 }
 
 #[test]
+fn border_keytip_line_color_keeps_thick_bottom_style() {
+    use gridcraft_engine::model::BorderStyle::{None as N, Thick};
+    let mut h = harness(selected("A1"));
+    h.state_mut().grid.last_border = "thickBottom".to_string();
+    h.state_mut().run("home.borders", json!({"range": "A1", "preset": "thickBottom"})).unwrap();
+    assert_eq!(sides(&h, "A1"), [N, N, N, Thick]);
+
+    // Abre o menu de bordas
+    sequence(&mut h, &[Key::H, Key::B], false);
+    h.run_steps(3);
+
+    // Força o clique no submenu "Line Color" (o keytip I não abre no harness)
+    if let Some(line_color) = h.query_by_label("Line Color") {
+        line_color.click();
+        h.run_steps(3);
+    }
+
+    // Agora clica em "Automatic"
+    h.get_by_label("Automatic").click();
+    h.run_steps(3);
+
+    assert_eq!(sides(&h, "A1"), [N, N, N, Thick], "recolouring keeps the thick bottom style intact");
+}
+
+#[test]
 fn border_keytip_all_borders_covers_every_side_of_a_block() {
     use gridcraft_engine::model::BorderStyle::Thin;
     let mut h = harness(selected("A1:B2"));
