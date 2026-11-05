@@ -251,7 +251,7 @@ pub(super) fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inne
             let d = explode(j) * r;
             let mid = a + sweep / 2.0;
             let (cx, cy) = (pcx + d * mid.sin(), pcy - d * mid.cos());
-            ctx.out.push(Prim::Wedge { cx, cy, r_outer: r, r_inner: ri, a0: a, a1: (a + sweep).min(TAU), fill, stroke: Some(stroke) });
+            wedge(ctx, &Ring { cx, cy, outer: r, inner: ri, stroke: Some(stroke) }, a, sweep, fill);
             if (chart.data_labels || names) && vals.len() <= MAX_LABELS {
                 let t = if names { cat_label(data, j) } else { f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None) };
                 let rr = if ri > 0.0 { (r + ri) / 2.0 } else { r * 0.65 };
