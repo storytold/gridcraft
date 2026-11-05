@@ -109,6 +109,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sparklines" => "Wykresy przebiegu w czasie",
         "Checkbox" => "Pole wyboru",
         "Insert checkboxes in the selected cells" => "Wstaw pola wyboru w zaznaczonych komórkach",
+        "Button" => "Przycisk",
+        "Slider" => "Suwak",
+        "Spin Button" => "Pokrętło",
+        "Draw a button that runs a macro or a command" => "Narysuj przycisk, który uruchamia makro lub polecenie",
+        "Draw a slider that sets a whole number in a linked cell" => "Narysuj suwak, który ustawia liczbę całkowitą w połączonej komórce",
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Narysuj pokrętło, które zmienia o krok liczbę całkowitą w połączonej komórce"
+        }
+        "Edit Text" => "Edytuj tekst",
+        "Assign Action…" => "Przypisz akcję…",
+        "Format Control…" => "Formatuj formant…",
         "Header & Footer" => "Nagłówek i stopka",
         "Draw with ink" => "Rysuj piórem",
         "Eraser" => "Gumka",
@@ -240,6 +251,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Legenda: u dołu",
         "Legend: Top" => "Legenda: u góry",
         "Legend: Right" => "Legenda: z prawej",
+        "First slice angle" => "Kąt pierwszego wycinka",
+        "Doughnut hole size" => "Rozmiar otworu pączka",
         "Gridlines: None" => "Linie siatki: brak",
         "Gridlines: Show" => "Linie siatki: pokaż",
         "Chart\nTitle" => "Tytuł\nwykresu",
