@@ -1637,3 +1637,34 @@ fn solver_load_model_after_a_cross_sheet_pick_reads_the_dialogs_sheet() {
     assert!(field(&h, "variables").contains("B2"), "{:?}", field(&h, "variables"));
     assert_eq!(selection(&h).0, 0, "back on the dialog's sheet");
 }
+
+/// #1388: Remove Duplicates starts with the selected range and can pick a new one.
+#[test]
+fn remove_duplicates_range_can_be_picked_1388() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("selection.set", json!({"range": "B2:C4"})).unwrap();
+
+    let mut h = harness(session);
+    let before = h.state().session.active().unwrap().wb.clone();
+
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+
+    assert_eq!(field(&h, "range"), "B2:C4");
+    assert_eq!(h.get_all_by_label("Collapse dialog").count(), 1);
+
+    click_button(&mut h, "Collapse dialog", 0);
+    assert_eq!(collapsed(&h).as_deref(), Some("range"));
+
+    drag(&mut h, "D2", "E5");
+    assert_eq!(field(&h, "range"), "$D$2:$E$5");
+
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert_eq!(collapsed(&h), None);
+    assert_eq!(field(&h, "range"), "$D$2:$E$5");
+
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().session.active().unwrap().wb, before);
+}

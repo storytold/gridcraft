@@ -649,7 +649,7 @@ impl Dialog {
                 "Remove Duplicates",
                 "data.removeDuplicates",
                 vec![
-                    Text { key: "range", label: "Range:" },
+                    Ref { key: "range", label: "Range:" },
                     Check { key: "header", label: "My data has headers" },
                     Text { key: "columnsText", label: "Columns (blank = all, e.g. A,C):" },
                 ],
@@ -1127,6 +1127,7 @@ impl Dialog {
 mod tests {
     use super::*;
 
+    /// The selected range is offered through RefEdit and edits reach the command.
     #[test]
     fn remove_duplicates_prefills_the_selection_and_submits_the_edited_range() {
         let mut session = gridcraft_engine::Session::default();
@@ -1135,7 +1136,7 @@ mod tests {
         let mut app = SheetApp::new(session, Default::default());
         let mut dialog = Dialog::open(&mut app, "removeDuplicates", json!({})).unwrap();
         assert_eq!(dialog.values.get("range"), Some(&json!("B2:C5")));
-        assert!(dialog.fields.iter().any(|field| matches!(field, Field::Text { key: "range", .. })));
+        assert!(dialog.fields.iter().any(|field| matches!(field, Field::Ref { key: "range", .. })));
         assert_eq!(build_params(&dialog)["range"], "B2:C5");
         dialog.set_value("range", json!("D2:E6"));
         assert_eq!(build_params(&dialog)["range"], "D2:E6");
