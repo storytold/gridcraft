@@ -214,8 +214,8 @@ impl BinaryOp {
     }
 
     /// Binding power, higher binds tighter. The values encode the ten precedence levels
-    /// from DAX Guide: parentheses/calls/`IN`, `^`, unary sign, `* /`, `+ -`, `&`,
-    /// comparisons, `NOT`, `&&`, `||`.
+    /// from the operator table: parentheses/calls, `^`, unary sign, `* /`, `+ -`, `&`,
+    /// comparisons (including `IN`), `NOT`, `&&`, `||`.
     pub const fn precedence(self) -> u8 {
         match self {
             BinaryOp::Pow => 90,

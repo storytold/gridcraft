@@ -1,9 +1,9 @@
 //! Pratt parser: tokens → [`Expr`] / [`Query`].
 //!
-//! Binding powers encode the DAX operator table from <https://dax.guide/operators/> (tighter
-//! binds first): parentheses, function calls and `IN`; `^`; unary `+`/`-`; `*`/`/`; binary
-//! `+`/`-`; `&`; comparisons; `NOT`; `&&`; `||`. All operators are left-associative except
-//! `^`, which Excel evaluates right-associatively (`2^3^2` is 512).
+//! Binding powers encode the operator table (tighter binds first): parentheses and function
+//! calls; `^`; unary `+`/`-`; `*`/`/`; binary `+`/`-`; `&`; comparisons, which include `IN`; `NOT`;
+//! `&&`; `||`. All operators are left-associative except `^`, which Excel evaluates
+//! right-associatively (`2^3^2` is 512).
 
 use crate::ast::{
     Axis, AxisGroup, AxisKind, AxisOrderItem, BinaryOp, Call, ColumnDef, Define, Definition, Evaluate, Expr, ExprKind, FunctionDef, FunctionParam,
