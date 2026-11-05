@@ -63,8 +63,9 @@ Edit. The Data View/Diagram canvas stays visible below this ribbon.
 - **Calculations — Insert Function** opens the Function Picker; **Calculation Options** opens the
   Automatic/Manual dialog. The Picker searches Excel-style categories and inserts a filled
   template into the formula bar (or the Add Measure formula field) using the first loaded table's
-  name, a numeric column, a text column and the first measure. Catalogued and evaluated functions
-  are listed in [DAX functions](dax-functions.md).
+  name, a numeric column, a text column and the first measure. The catalogued functions live in
+  `crates/dax/src/functions.rs`; which families a build actually evaluates is `linked_families()` in
+  `crates/dax/src/eval.rs`.
 - **Relationships — Create Relationship…** and **Manage Relationships** both work (see dialogs).
 - **Table Properties** opens the read-only properties dialog.
 - **Mark as Date Table** works (`dataModel.markDateTable`, `dataModel.unmarkDateTable`): it validates
@@ -78,7 +79,9 @@ Groups: Perspectives, Show Implicit Measures, Summarize By, Reporting Properties
 - **Show Implicit Measures** is a real toggle (`dataModel.setShowImplicitMeasures`): with it on, the
   Calculation Area lists an implicit measure per numeric column (its default aggregation) and per
   non-numeric column (`COUNT(column)`, the column's non-blank values), matching Excel's default
-  summarization. Hidden columns and columns summarized by `None` get no implicit measure.
+  summarization. Hidden columns and columns summarized by `None` get no implicit measure. One gap:
+  `COUNT` skips `Scalar::Boolean` values, so a Boolean column has no implicit count measure where
+  Excel would show its non-blank count.
 - **Summarize By** works (`dataModel.setSummarizeBy`): Sum, Average, Count, Min, Max or None on the
   selected column, which is what the implicit measure uses.
 - Perspectives, Table Detail, Table Behavior and Image URL are disabled: the model engine has no
@@ -241,5 +244,6 @@ window without that slice does not register them.
 | Pivot Preview | Not present: the window has no separate preview surface |
 | Model persistence and refresh from a source | Partial: `xl/model/item.data` is kept through read and save, and `dataModel.createPivot` writes the session model's measures into it before attaching the cache. Excel reopened a written package and listed and evaluated the written measures (through `CUBEVALUE`); modified VertiPaq column *values* are not applied by Excel, so a refreshed PivotTable is not supported. The model's *tables* still come from the workbook's own model, not from the session JSON, and a model created from JSON alone has no database part to write |
 
-DAX support is partial: the catalog parses 484 functions and every one of them is evaluated. See
-[DAX functions](dax-functions.md) for the per-category breakdown.
+DAX support is partial: the catalog parses 484 functions, but a build evaluates only the families linked
+in `crates/dax/src/eval.rs`'s `FAMILIES`; a call into an unlinked family reaches the evaluator's
+`not implemented` fallback. With every family linked, all 484 evaluate.
