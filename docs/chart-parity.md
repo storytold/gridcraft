@@ -107,7 +107,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-05 | patch | Data labels on column, bar, line and area charts take each point's own cell format, as observed in Excel; the value axis keeps the first cell's |
+| 2026-11-05 | patch | Data labels on column, bar, line and area charts with a plain cell reference take each point's own cell format, as observed in Excel on column charts; the value axis keeps the first cell's. Defined names and reference unions keep the first cell's format |
 | 2026-11-02 | minor | Charts move and resize from eight handles, each moving only its own edges (#190); resizing leaves the work list (1–2 h, within the 40–60 h rounding) |
 | 2026-11-01 | minor | Chart data tables for column, bar, line, area and compatible combo charts: command/UI controls, formatted source values, blanks, grouped category headers, legend keys, independent borders, shared print/PDF rendering and native c:dTable import/export. Dense tables show a space notice; no readiness score change. |
 | 2026-10-29 | minor | Selected charts highlight their source cells beneath floating objects, so the blue outline no longer crosses the chart; uncovered source cells remain highlighted (#2861) |
