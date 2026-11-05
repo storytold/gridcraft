@@ -140,21 +140,15 @@ fn iterator_and_sugar_metadata() {
         assert_eq!(spec.is_iterator(), spec.flags.iterator, "{} is_iterator", spec.name);
     }
 
-    for (name, target) in [
-        ("AVERAGE", "AVERAGEX"),
-        ("COUNT", "COUNTX"),
-        ("COUNTA", "COUNTAX"),
-        ("MAX", "MAXX"),
-        ("MIN", "MINX"),
-        ("PRODUCT", "PRODUCTX"),
-        ("SUM", "SUMX"),
-        ("DISTINCTCOUNTNOBLANK", "DISTINCTCOUNT"),
-    ] {
+    for (name, target) in [("AVERAGE", "AVERAGEX"), ("COUNT", "COUNTX"), ("COUNTA", "COUNTAX"), ("PRODUCT", "PRODUCTX"), ("SUM", "SUMX")] {
         assert_eq!(spec(name).sugar_of, Some(target), "{name} sugar");
     }
 
     for name in [
         "APPROXIMATEDISTINCTCOUNT",
+        "DISTINCTCOUNTNOBLANK",
+        "MAX",
+        "MIN",
         "AVERAGEA",
         "AVERAGEX",
         "COUNTAX",

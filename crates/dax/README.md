@@ -263,8 +263,11 @@ and `dt` literal engine support) instead of hiding them behind one total order.
 ## Limits, errors and printing
 
 Expressions are capped at 8192 bytes, queries at 1 MiB, and expression nesting at 256 levels; each
-limit produces an error, never a stack overflow. The printer and `Expr::walk` use explicit stacks, and the parser's binary loop is
-iterative for left-associated chains.
+limit produces an error, never a stack overflow. The printer and `Expr::walk` use explicit stacks, and
+the parser's binary loop is iterative, so a left-associated chain does not recurse — but the chain
+still grows the tree one level per operator, and the depth check applies to it: a flat
+`1 + 1 + ... + 1` with more than about 256 terms is rejected as too deeply nested (asserted for a
+1,000-term chain in `src/tests.rs`). Long generated `&&`, `||` or `&` chains hit the same limit.
 
 Numeric literal overflow (an integer outside `i64`, or a decimal outside finite `f64`) and invalid
 date/time literals are lexer errors with the literal's span. Errors carry `message` and a byte

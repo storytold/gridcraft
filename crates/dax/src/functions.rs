@@ -508,10 +508,11 @@ pub static AGGREGATION: [FunctionSpec; 22] = [
         overloads: &[overload(&[ParamKind::Column])],
         return_type: ReturnType::Integer,
         flags: FunctionFlags::new(false, false, false, false, true),
-        sugar_of: Some("DISTINCTCOUNT"),
+        sugar_of: None,
         blank_policy: BlankPolicy::Unspecified,
-        description: "Counts distinct values in a column, excluding BLANK. Syntax sugar for \
-                      DISTINCTCOUNT with an ISBLANK filter. Not available to Excel's embedded engine.",
+        description: "Counts distinct values in a column, excluding BLANK — DISTINCTCOUNT counts \
+                      BLANK, so this is not pure sugar for it. Not available to Excel's embedded \
+                      engine.",
         examples: &["DISTINCTCOUNTNOBLANK ( Store[Area Manager] )"],
     },
     FunctionSpec {
@@ -523,10 +524,10 @@ pub static AGGREGATION: [FunctionSpec; 22] = [
         overloads: &[overload(&[ParamKind::Column]), overload(&[ParamKind::Scalar, ParamKind::Scalar])],
         return_type: ReturnType::Any,
         flags: standard(false),
-        sugar_of: Some("MAXX"),
+        sugar_of: None,
         blank_policy: BlankPolicy::Unspecified,
-        description: "With one argument, the largest non-blank value of a column (internally \
-                      MAXX); text compares alphabetically and logical values are unsupported. With \
+        description: "With one argument, the largest non-blank value of a column (the same result \
+                      MAXX gives over the column); text compares alphabetically and logical values are unsupported. With \
                       two arguments, the larger scalar, where BLANK is significant per dax.guide \
                       but treated as zero by Microsoft Learn.",
         examples: &["MAX ( Sales[Net Price] )", "MAX ( 10000, [Sales Amount] )", "MAX ( 3, 5 )"],
@@ -572,10 +573,10 @@ pub static AGGREGATION: [FunctionSpec; 22] = [
         overloads: &[overload(&[ParamKind::Column]), overload(&[ParamKind::Scalar, ParamKind::Scalar])],
         return_type: ReturnType::Any,
         flags: standard(false),
-        sugar_of: Some("MINX"),
+        sugar_of: None,
         blank_policy: BlankPolicy::Unspecified,
-        description: "With one argument, the smallest non-blank value of a column (internally \
-                      MINX); text compares alphabetically and logical values are unsupported. With \
+        description: "With one argument, the smallest non-blank value of a column (the same result \
+                      MINX gives over the column); text compares alphabetically and logical values are unsupported. With \
                       two arguments, the smaller scalar, where BLANK is significant per dax.guide \
                       but treated as zero by Microsoft Learn.",
         examples: &["MIN ( Sales[Net Price] )", "MIN ( 5000000, [Sales Amount] )", "MIN ( 3, 5 )"],
