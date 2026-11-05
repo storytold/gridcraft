@@ -168,7 +168,11 @@ fn same_row_cells_keep_their_baseline_with_baseline_aligned_fallbacks() {
                     .shapes
                     .iter()
                     .find_map(|s| match &s.shape {
-                        egui::Shape::Text(t) if t.galley.text() == *text && rect.contains(t.pos + egui::vec2(0.0, 2.0 * geo.z)) => Some(t),
+                        egui::Shape::Text(t)
+                            if t.galley.text() == *text && t.visual_bounding_rect().intersect(s.clip_rect).intersect(rect).is_positive() =>
+                        {
+                            Some(t)
+                        }
                         _ => None,
                     })
                     .expect("cell text is painted");
