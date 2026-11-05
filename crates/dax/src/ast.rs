@@ -231,8 +231,7 @@ impl BinaryOp {
 
     /// DAX binary operators all associate to the left. Microsoft's operator reference puts `^` in
     /// its own precedence tier and states that operators of equal precedence are ordered from left
-    /// to right, so `2^3^2` is `(2^3)^2` = 64. (Excel's worksheet engine groups the chain the other
-    /// way and answers 512; this crate implements DAX.)
+    /// to right, so `2^3^2` is `(2^3)^2` = 64 — the same value Excel and Power Pivot produce.
     pub const fn is_left_associative(self) -> bool {
         true
     }

@@ -219,8 +219,8 @@ operator was written. `IN` is a comparison at the same level as `=`, so `1 + 2 I
 
 Microsoft's operator reference states that operators of equal precedence are ordered from left to
 right, and `^` shares no tier with another operator, so a chain groups left: `2^3^2` is `(2^3)^2` =
-64. (Excel's worksheet engine answers 512 for the same text; this crate follows DAX.) Unary minus
-binds looser than `^`: `-2^2` parses as `-(2^2)`.
+64, the value Excel and Power Pivot produce as well. Unary minus binds looser than `^`: `-2^2` parses
+as `-(2^2)`.
 
 ## Data types and static inference
 
