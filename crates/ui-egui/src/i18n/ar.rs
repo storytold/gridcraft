@@ -1805,6 +1805,17 @@ Macro",
     ("The picture on the clipboard can't be pasted: {e}", "تعذّر لصق الصورة الموجودة في الحافظة: {e}"),
     ("Next Corner of Selection", "الزاوية التالية في التحديد"),
     ("Drag and Drop", "السحب والإفلات"),
+    ("Button", "زر"),
+    ("Slider", "شريط تمرير"),
+    ("Spin Button", "زر تدوير"),
+    ("Draw a button that runs a macro or a command", "رسم زر ينفّذ ماكرو أو أمرًا"),
+    ("Draw a slider that sets a whole number in a linked cell", "رسم شريط تمرير يضبط عددًا صحيحًا في خلية مرتبطة"),
+    ("Draw a spin button that steps a whole number in a linked cell", "رسم زر تدوير يزيد عددًا صحيحًا في خلية مرتبطة أو ينقصه"),
+    ("Edit Text", "تحرير النص"),
+    ("Assign Action…", "تعيين إجراء…"),
+    ("Format Control…", "تنسيق عنصر التحكم…"),
+    ("First slice angle", "زاوية الشريحة الأولى"),
+    ("Doughnut hole size", "حجم ثقب الحلقة"),
 ];
 
 /// The Arabic for `text`, or `None` while it has no entry.
