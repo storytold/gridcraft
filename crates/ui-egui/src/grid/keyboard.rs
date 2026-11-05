@@ -89,16 +89,8 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             return;
         }
         match ev {
-            egui::Event::Copy => {
-                if handle_copy(app, ctx) {
-                    shortcut_ran = true;
-                }
-            }
-            egui::Event::Cut => {
-                if handle_cut(app, ctx) {
-                    shortcut_ran = true;
-                }
-            }
+            egui::Event::Copy => shortcut_ran |= handle_copy(app, ctx),
+            egui::Event::Cut => shortcut_ran |= handle_cut(app, ctx),
             egui::Event::Paste(text) => app.paste_external(text),
             // A picture with no text on the clipboard (a screenshot, a browser image) is pasted as
             // a floating picture at the active cell, as Excel does.

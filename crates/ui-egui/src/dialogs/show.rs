@@ -171,7 +171,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 820.0,
-        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "newFormattingRule" | "journal" | "agents" | "equation" | "customizeKeyboard" => 520.0,
+        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "newFormattingRule" | "journal" | "agents" | "equation"
+        | "customizeKeyboard" => 520.0,
         "macros" => 480.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
