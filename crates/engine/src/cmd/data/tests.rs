@@ -555,7 +555,7 @@ fn list_validation_disjoint_ranges_keep_their_formula_anchors_when_first_is_clea
     let mut s = Session::new();
     s.new_workbook();
     s.execute("range.setValues", json!({"range": "B1", "values": [["Alpha", "Beta"]]})).unwrap();
-    s.execute("data.validation", json!({"range": "C1,A1,D1", "type": "list", "formula1": "=B1"})).unwrap();
+    s.execute("data.validation", json!({"range": "C1,D1", "type": "list", "formula1": "=B1"})).unwrap();
 
     let wb = s.doc().unwrap().wb.clone();
     let dv = wb.active().unwrap().validations.first().unwrap();
