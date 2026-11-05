@@ -435,6 +435,7 @@ pub(super) const ENTRIES: &[(&str, &str)] = &[
     ("Input Y Range:", "نطاق إدخال Y:"),
     ("Input message:", "رسالة الإدخال:"),
     ("Insert", "إدراج"),
+    ("Header Menu|Insert", "إدراج"),
     ("Insert\nFunction", "إدراج\nدالة"),
     ("Insert\nSlicer", "إدراج\nمقطّع"),
     ("Insert Calculated Field", "إدراج حقل محسوب"),
