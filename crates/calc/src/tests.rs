@@ -1439,12 +1439,17 @@ fn aggregate_reference_form_needs_references() {
     t.set("D4", "=AGGREGATE(9,6,A1)");
     t.set("D5", "=AGGREGATE(14,6,{1,2},1)");
     t.set("D6", "=AGGREGATE(14,6,A1:A2*2,1)");
-    for d in ["D1", "D2", "D3"] {
+    t.set("D7", "=AGGREGATE(9,6,5)");
+    t.set("D8", "=AGGREGATE(14,6,5,1)");
+    t.set("D9", "=MATCH(1,1)");
+    for d in ["D1", "D2", "D3", "D7"] {
         assert_eq!(t.get(d), Value::Error(CellError::Value), "{d}");
     }
     assert_eq!(t.num("D4"), 1.0);
     assert_eq!(t.num("D5"), 2.0);
     assert_eq!(t.num("D6"), 4.0);
+    assert_eq!(t.num("D8"), 5.0);
+    assert_eq!(t.get("D9"), Value::Error(CellError::NA));
 }
 
 #[test]
