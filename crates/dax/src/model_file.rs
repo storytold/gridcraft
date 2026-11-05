@@ -1330,13 +1330,12 @@ pub fn read_measures(data: &[u8]) -> Result<Vec<ModelMeasure>> {
     measures_from_script(&text)
 }
 
-/// Rewrites the model's measure definitions and returns a complete replacement stream.
+/// Rejects a measure the stored script could not represent: `measure_command` would write
+/// `CREATE MEASURE 'T'[]=` or an empty formula, which Excel cannot parse.
 ///
-/// All files other than the cube's MDX script keep their original stored bytes (including their
-/// CRC trailers). The script is re-encoded as verbatim xpress8 chunks, the backup log's size for
-/// the script is updated, and the virtual directory and header offsets are recomputed. The
-/// result remains page aligned.
-pub fn write_measures(data: &[u8], measures: &[ModelMeasure]) -> Result<Vec<u8>> {
+/// Both public writers call this, so [`write_measures`] and
+/// [`crate::model_file::write_model`] enforce the same rules for the same type.
+pub(super) fn validate_measures(measures: &[ModelMeasure]) -> Result<()> {
     for measure in measures {
         if measure.name.trim().is_empty() || measure.table.trim().is_empty() {
             return Err(ModelFileError::InvalidMeasure("table and name must not be empty".into()));
@@ -1345,6 +1344,17 @@ pub fn write_measures(data: &[u8], measures: &[ModelMeasure]) -> Result<Vec<u8>>
             return Err(ModelFileError::InvalidMeasure(format!("measure {} has an empty formula", measure.name)));
         }
     }
+    Ok(())
+}
+
+/// Rewrites the model's measure definitions and returns a complete replacement stream.
+///
+/// All files other than the cube's MDX script keep their original stored bytes (including their
+/// CRC trailers). The script is re-encoded as verbatim xpress8 chunks, the backup log's size for
+/// the script is updated, and the virtual directory and header offsets are recomputed. The
+/// result remains page aligned.
+pub fn write_measures(data: &[u8], measures: &[ModelMeasure]) -> Result<Vec<u8>> {
+    validate_measures(measures)?;
     let container = Container::parse(data)?;
     let script_index = container.measure_script_index()?.ok_or(ModelFileError::NoMeasureScript)?;
     let script_entry = container.entries.get(script_index).ok_or_else(|| ModelFileError::Corrupt("script index".into()))?;

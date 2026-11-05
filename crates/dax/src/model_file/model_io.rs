@@ -873,7 +873,13 @@ pub fn file_contents(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>> {
 }
 
 /// Rewrites the data model described by `model` on top of the `base` container.
+///
+/// # Errors
+/// The model's shape must match the container (tables, columns, relationships) and its measures
+/// must pass the same check [`super::write_measures`] applies, so neither writer can store a
+/// script Excel cannot parse.
 pub fn write_model(base: &[u8], model: &ModelData) -> Result<Vec<u8>> {
+    super::validate_measures(&model.measures)?;
     let loaded = Base::load(base)?;
     let layout = ModelLayout::load(&loaded)?;
     // Preserve every stored byte of a column whose values did not change: Excel's own ids,
@@ -1987,6 +1993,32 @@ mod tests {
         assert_eq!(f64::from_bits(lossy as u64), boundary as f64 / 100.0);
         assert!(numeric_raw(&Scalar::Currency(boundary + 1), true).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn write_model_rejects_an_invalid_measure_before_touching_the_container() {
+        // `write_measures` refused a blank name/table or formula; `write_model` used to skip the
+        // check and store a script Excel cannot parse. Both now share `validate_measures`.
+        let data = empty_container();
+        let mut model = ModelData::default();
+        model.measures.push(super::super::ModelMeasure {
+            table: "Sales".to_string(),
+            name: " ".to_string(),
+            formula: "1".to_string(),
+            format: String::new(),
+        });
+        match write_model(&data, &model) {
+            Err(ModelFileError::InvalidMeasure(_)) => {}
+            other => panic!("expected InvalidMeasure, got {other:?}"),
+        }
+        if let Some(measure) = model.measures.first_mut() {
+            measure.name = "Net".to_string();
+            measure.formula = "  ".to_string();
+        }
+        match write_model(&data, &model) {
+            Err(ModelFileError::InvalidMeasure(message)) => assert!(message.contains("empty formula"), "{message}"),
+            other => panic!("expected InvalidMeasure, got {other:?}"),
+        }
     }
 
     #[test]
