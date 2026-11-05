@@ -27,6 +27,7 @@ const MAX_ENTRY_BYTES: usize = gridcraft_dax::model_file::MAX_CONTAINER_BYTES;
 /// need.
 const MAX_PACKAGE_BYTES: usize = 2 * MAX_ENTRY_BYTES;
 
+/// Runs the `dax` subcommand named by `args` (`format`, `parse`, `bind`, `eval`, `pivot`, `measures`).
 pub fn main(args: &[String]) -> Result<(), String> {
     let action = args.first().map(String::as_str).ok_or_else(|| format!("missing dax action\n{USAGE}"))?;
     let rest = args.get(1..).unwrap_or_default();
@@ -41,6 +42,7 @@ pub fn main(args: &[String]) -> Result<(), String> {
     }
 }
 
+/// Prints the canonical text of a query or an expression.
 fn format(args: &[String]) -> Result<(), String> {
     let text = read_input(args)?;
     match parse_any(&text)? {
@@ -50,6 +52,7 @@ fn format(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Prints the syntax tree of a query or an expression.
 fn parse(args: &[String]) -> Result<(), String> {
     let text = read_input(args)?;
     match parse_any(&text)? {
@@ -240,6 +243,7 @@ fn create_temporary(temporary: &std::path::Path) -> std::io::Result<std::fs::Fil
     std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(temporary)
 }
 
+/// Opens the temporary file `write_atomically` writes into, with the platform default mode.
 #[cfg(not(unix))]
 fn create_temporary(temporary: &std::path::Path) -> std::io::Result<std::fs::File> {
     std::fs::File::create(temporary)
@@ -257,6 +261,7 @@ fn copy_target_permissions(target: &std::path::Path, temporary: &std::path::Path
     }
 }
 
+/// Reads one zip entry, refusing to decompress past [`MAX_ENTRY_BYTES`].
 fn read_zip_entry(bytes: &[u8], name: &str) -> Result<Vec<u8>, String> {
     let mut archive = ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("not a zip package: {e}"))?;
     let mut entry = archive.by_name(name).map_err(|e| format!("missing {name}: {e}"))?;
@@ -272,6 +277,8 @@ fn read_zip_entry(bytes: &[u8], name: &str) -> Result<Vec<u8>, String> {
     Ok(content)
 }
 
+/// Rewrites one entry of the package, copying the other entries and charging every decompressed byte
+/// against [`MAX_PACKAGE_BYTES`]. Fails when the entry is missing.
 fn replace_zip_entry(bytes: &[u8], name: &str, content: &[u8]) -> Result<Vec<u8>, String> {
     let mut archive = ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("not a zip package: {e}"))?;
     let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
@@ -340,6 +347,7 @@ fn copy_entry(entry: &mut impl Read, writer: &mut impl Write, name: &str, remain
     Ok(copied)
 }
 
+/// Renders a scalar as the JSON value the CLI prints, mapping blank to `null`.
 fn scalar_json(value: &gridcraft_dax::Scalar) -> serde_json::Value {
     match value {
         gridcraft_dax::Scalar::Blank => serde_json::Value::Null,
@@ -384,6 +392,7 @@ fn parse_any(text: &str) -> Result<Parsed, String> {
     }
 }
 
+/// Whether `text` opens with `EVALUATE` or `DEFINE`, so a malformed query reports its query error.
 fn starts_with_query_keyword(text: &str) -> bool {
     tokenize(text).is_ok_and(|tokens| match tokens.first().map(|token| &token.kind) {
         Some(TokenKind::Evaluate) => true,
