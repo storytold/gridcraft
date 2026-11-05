@@ -580,3 +580,101 @@ fn find_and_replace_within_the_selection() {
     let all = s.execute("edit.find", json!({"what": "pear", "all": true})).unwrap();
     assert_eq!(all["count"], 3, "A1, A3 and A4 on the whole sheet");
 }
+
+/// A copied column goes into every selected column: whole columns get it once (blank below the
+/// copied cells, not repeated down the sheet), and a range over 4,000,000 cells is tiled too.
+#[test]
+fn paste_tiles_a_column_across_whole_columns_and_large_ranges() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1:A4", "values": [[1], [2], [3], [4]]})).unwrap();
+    s.execute("edit.copy", json!({"range": "A:A"})).unwrap();
+    s.execute("selection.set", json!({"range": "B:F"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    let at = |s: &Session, a: &str| s.doc().unwrap().wb.active().unwrap().value(CellRef::parse(a).unwrap());
+    assert_eq!(
+        (at(&s, "B1"), at(&s, "C1"), at(&s, "F1"), at(&s, "F4")),
+        (Value::number(1.0), Value::number(1.0), Value::number(1.0), Value::number(4.0))
+    );
+    assert_eq!((at(&s, "B5"), at(&s, "F5"), at(&s, "F1048576")), (Value::Empty, Value::Empty, Value::Empty), "pasted once per column");
+
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "7"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1000000", "input": "7"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A1000000"})).unwrap();
+    s.execute("selection.set", json!({"range": "B1:F1000000"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!((at(&s, "C1"), at(&s, "F1"), at(&s, "F1000000")), (Value::number(7.0), Value::number(7.0), Value::number(7.0)), "5,000,000 cells");
+
+    // A paste too large to tile is refused, not pasted once without a word.
+    s.execute("edit.copy", json!({"range": "A1:A1048576"})).unwrap();
+    s.execute("selection.set", json!({"range": "G:Z"})).unwrap();
+    assert!(s.execute("edit.paste", json!({})).is_err());
+    assert_eq!(at(&s, "G1"), Value::Empty);
+}
+
+/// A merged area in the copy is merged again in every tile of a repeated paste, not only the first.
+#[test]
+fn paste_tiles_merged_areas_into_every_tile() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1:A3", "values": [[1], [2], [3]]})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:A2"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A:A"})).unwrap();
+    s.execute("selection.set", json!({"range": "B:D"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    let merges: Vec<String> = s.doc().unwrap().wb.active().unwrap().merges.iter().map(|m| m.a1()).collect();
+    assert_eq!(merges, ["A1:A2", "B1:B2", "C1:C2", "D1:D2"]);
+
+    s.execute("edit.copy", json!({"range": "A1:A2"})).unwrap();
+    s.execute("selection.set", json!({"range": "F1:G4"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    let merges: Vec<String> = s.doc().unwrap().wb.active().unwrap().merges.iter().map(|m| m.a1()).collect();
+    assert_eq!(merges, ["A1:A2", "B1:B2", "C1:C2", "D1:D2", "F1:F2", "G1:G2", "F3:F4", "G3:G4"]);
+}
+
+/// A repeated paste removes the merged areas it lands on, and only those: one that misses every
+/// copied merge stays, and so does one under a copied merge that falls off the sheet.
+#[test]
+fn paste_tiles_merged_areas_replace_only_the_ones_they_overlap() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("home.mergeCells", json!({"range": "A1:A2"})).unwrap();
+    for range in ["C2:D2", "E1:E2", "C3:C4", "F3:F4", "H6:I6", "A1048576:B1048576"] {
+        s.execute("home.mergeCells", json!({"range": range})).unwrap();
+    }
+    // A1:B2 holds the A1:A2 merge in its first column, so the tiles over C1:F4 merge C1:C2,
+    // E1:E2, C3:C4 and E3:E4; D and F stay unmerged.
+    s.execute("edit.copy", json!({"range": "A1:B2"})).unwrap();
+    s.execute("selection.set", json!({"range": "C1:F4"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A2"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"at": "A1048576"})).unwrap();
+    let merges: Vec<String> = s.doc().unwrap().wb.active().unwrap().merges.iter().map(|m| m.a1()).collect();
+    assert_eq!(merges, ["A1:A2", "F3:F4", "H6:I6", "A1048576:B1048576", "C1:C2", "E1:E2", "C3:C4", "E3:E4"]);
+}
+
+/// A repeated paste gives every cell the copied cell's rule, moved to it, in place of the old one.
+#[test]
+fn paste_tiles_validation_rules_over_the_old_ones() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("data.validation", json!({"range": "A1", "type": "custom", "formula1": "=A1>10"})).unwrap();
+    s.execute("data.validation", json!({"range": "B1:C3", "type": "whole", "operator": "greater", "formula1": "0"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+    s.execute("selection.set", json!({"range": "B1:C2"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    let rules: Vec<(String, String)> = s
+        .doc()
+        .unwrap()
+        .wb
+        .active()
+        .unwrap()
+        .validations
+        .iter()
+        .map(|dv| (dv.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(","), dv.f1.clone()))
+        .collect();
+    let rule = |r: &str, f: &str| (r.to_string(), f.to_string());
+    assert_eq!(rules, [rule("A1", "A1>10"), rule("B3:C3", "0"), rule("B1", "B1>10"), rule("C1", "C1>10"), rule("B2", "B2>10"), rule("C2", "C2>10")]);
+}
