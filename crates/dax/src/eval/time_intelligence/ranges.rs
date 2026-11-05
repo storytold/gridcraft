@@ -208,12 +208,7 @@ fn date_axis(ev: &Evaluator<'_>, expr: &BoundExpr, ctx: &Context, name: &str) ->
         }
         BoundExpr::Table(table) => {
             let model_table = model.tables.get(*table).ok_or_else(|| EvalError::new(format!("{name} needs a date table")))?;
-            let index = model_table
-                .columns
-                .iter()
-                .position(|column| column.data_type.as_deref().is_some_and(is_date_type))
-                .or_else(|| model_table.columns.iter().position(|column| column.name.eq_ignore_ascii_case("Date")))
-                .ok_or_else(|| EvalError::new(format!("{name} needs a calendar with a date column")))?;
+            let index = table_date_column(model_table).ok_or_else(|| EvalError::new(format!("{name} needs a calendar with a date column")))?;
             (*table, index)
         }
         _ => return Err(EvalError::new(format!("{name} needs a date column reference"))),
@@ -236,7 +231,11 @@ fn date_axis(ev: &Evaluator<'_>, expr: &BoundExpr, ctx: &Context, name: &str) ->
         .filter_map(|value| date_value(value).filter(|serial| serial.is_finite()).map(|serial| (serial.floor(), value.clone())))
         .collect();
     dates.sort_by(|left, right| left.0.total_cmp(&right.0));
-    dates.dedup_by(|left, right| left.0 == right.0);
+    // Deduplicate exact cell values, never whole days: a column can hold several timestamps that
+    // share a day, and the window's filter keys are those exact values, so dropping one would
+    // silently exclude its row from every range table.
+    let mut seen = BTreeSet::new();
+    dates.retain(|(_, value)| seen.insert(ScalarKey::from(value)));
 
     // The visible dates honour the filter context. Only filters on the date table itself count:
     // a filter on a fact table does not restrict the dimension it points at.

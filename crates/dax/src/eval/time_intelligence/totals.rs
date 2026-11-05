@@ -187,12 +187,7 @@ fn date_column(ev: &Evaluator<'_>, expr: &BoundExpr) -> Result<DateColumn, EvalE
         let Some(model_table) = ev.model().tables.get(*table) else {
             return Err(EvalError::new("the date table is out of range"));
         };
-        let column = model_table
-            .columns
-            .iter()
-            .position(|column| column.data_type.as_deref().is_some_and(is_date_type))
-            .or_else(|| model_table.columns.iter().position(|column| column.name.eq_ignore_ascii_case("Date")))
-            .ok_or_else(|| EvalError::new(format!("table `{}` has no date column", model_table.name)))?;
+        let column = table_date_column(model_table).ok_or_else(|| EvalError::new(format!("table `{}` has no date column", model_table.name)))?;
         return Ok(DateColumn { table: *table, column });
     }
     let (table, column) = column_reference(ev, expr)?;

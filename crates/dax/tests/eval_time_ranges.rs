@@ -441,3 +441,29 @@ fn dateadd_does_not_expand_a_single_month_end_date_to_the_target_period() {
     assert_eq!(bounds("DATEADD('Date'[Date], 1, \"MONTH\")", selection.clone()), (serial(2024, 5, 30), serial(2024, 5, 30)));
     assert_eq!(row_count("DATEADD('Date'[Date], 1, \"MONTH\")", selection), 1);
 }
+
+#[test]
+fn same_day_timestamps_stay_in_the_date_axis() {
+    // Two timestamps sharing a day are distinct cells of the column, and the range tables key
+    // their filter on those exact values, so both rows have to survive the axis.
+    let model = DataModel {
+        tables: vec![ModelTable {
+            name: "Log".into(),
+            columns: vec![ModelColumn { name: "Stamp".into(), data_type: Some("DateTime".into()) }],
+            rows: vec![
+                vec![Scalar::DateTime(serial(2024, 1, 1))],
+                vec![Scalar::DateTime(serial(2024, 1, 2) + 9.0 / 24.0)],
+                vec![Scalar::DateTime(serial(2024, 1, 2) + 14.0 / 24.0)],
+            ],
+        }],
+        relationships: Vec::new(),
+        measures: Vec::new(),
+    };
+    let table = evaluate_table_in(&model, "DATESBETWEEN('Log'[Stamp], DATE(2024,1,2), DATE(2024,1,2))").expect("window");
+    assert_eq!(table.rows.len(), 2);
+    assert_eq!(table.rows[0][0], Scalar::DateTime(serial(2024, 1, 2) + 9.0 / 24.0));
+    assert_eq!(table.rows[1][0], Scalar::DateTime(serial(2024, 1, 2) + 14.0 / 24.0));
+    // The other days are untouched by the value-level deduplication.
+    let whole = evaluate_table_in(&model, "DATESBETWEEN('Log'[Stamp], DATE(2024,1,1), DATE(2024,1,2))").expect("whole window");
+    assert_eq!(whole.rows.len(), 3);
+}

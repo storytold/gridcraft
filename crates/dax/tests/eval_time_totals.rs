@@ -503,3 +503,58 @@ fn a_calendar_table_argument_uses_its_typed_date_column() {
     // the window and the sum is 30. Binding the untyped `Label` column would return BLANK.
     assert_number(eval_measure(&model, "Week To Date", FilterContext::default()), 30.0);
 }
+
+#[test]
+fn a_calendar_with_one_untyped_column_is_still_a_calendar() {
+    // A calendar whose only date column is untyped keeps working: the unambiguous untyped column
+    // is the fallback once no typed date column and no `Date` column exist.
+    let mut model = DataModel {
+        tables: vec![
+            ModelTable {
+                name: "Calendar".into(),
+                columns: vec![ModelColumn { name: "Day".into(), data_type: None }],
+                rows: vec![vec![date(2024, 1, 1)], vec![date(2024, 1, 2)]],
+            },
+            ModelTable {
+                name: "Sales".into(),
+                columns: vec![
+                    ModelColumn { name: "Amount".into(), data_type: Some("Double".into()) },
+                    ModelColumn { name: "Date".into(), data_type: Some("DateTime".into()) },
+                ],
+                rows: vec![[10.0, serial(2024, 1, 1)], [20.0, serial(2024, 1, 2)]]
+                    .into_iter()
+                    .map(|[amount, serial]| vec![Scalar::Decimal(amount), Scalar::DateTime(serial)])
+                    .collect(),
+            },
+        ],
+        relationships: Vec::new(),
+        measures: vec![measure("Week To Date", "TOTALWTD(SUM(Sales[Amount]), Calendar)")],
+    };
+    model.parse_formulas().expect("model formulas parse");
+    assert_number(eval_measure(&model, "Week To Date", FilterContext::default()), 30.0);
+}
+
+#[test]
+fn a_calendar_date_column_declared_as_a_non_date_type_is_rejected() {
+    // An integer `Date` column (YYYYMMDD keys) is not a date axis: report the model, do not read
+    // its numbers as OLE serials.
+    let mut model = DataModel {
+        tables: vec![
+            ModelTable {
+                name: "Calendar".into(),
+                columns: vec![ModelColumn { name: "Date".into(), data_type: Some("Int64".into()) }],
+                rows: vec![vec![Scalar::Integer(20_240_101)]],
+            },
+            ModelTable {
+                name: "Sales".into(),
+                columns: vec![ModelColumn { name: "Amount".into(), data_type: Some("Double".into()) }],
+                rows: vec![vec![Scalar::Decimal(10.0)]],
+            },
+        ],
+        relationships: Vec::new(),
+        measures: vec![measure("Week To Date", "TOTALWTD(SUM(Sales[Amount]), Calendar)")],
+    };
+    model.parse_formulas().expect("model formulas parse");
+    let error = eval_measure(&model, "Week To Date", FilterContext::default()).expect_err("an Int64 Date column is not a date axis");
+    assert!(error.contains("has no date column"), "{error}");
+}
