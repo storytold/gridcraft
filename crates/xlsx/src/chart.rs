@@ -352,14 +352,13 @@ fn read_format(root: &El, plot: &El, series: &[Series]) -> gridcraft_model::Char
         if a.path(&["spPr", "ln", "noFill"]).is_some() {
             options.line.width = Some(0.0);
         }
-        let category_grid = if scatter { x } else { matches!(a.name.as_str(), "catAx" | "dateAx") };
         if let Some(grid) = a.child("majorGridlines") {
             let surface = read_surface(grid.child("spPr"));
             let style = gridcraft_model::ChartStroke {
                 color: surface.border.filter(|color| *color != [217, 217, 217, 255]),
                 width: surface.border_width.filter(|width| *width != 1.0),
             };
-            if category_grid {
+            if x {
                 format.vertical_gridline = style;
             } else {
                 format.horizontal_gridline = style;
@@ -1175,6 +1174,9 @@ fn series_xml(
     match g {
         G::Bar { .. } => x.push_str("<c:invertIfNegative val=\"0\"/>"),
         G::Stock if stock_close => x.push_str("<c:marker><c:symbol val=\"dash\"/><c:size val=\"6\"/></c:marker>"),
+        G::Scatter { lines: false } if spec.is_none() && color.is_none() => {
+            x.push_str("<c:marker><c:symbol val=\"circle\"/><c:size val=\"5\"/></c:marker>");
+        }
         G::Line { markers: false, .. } | G::Line100 { markers: false } | G::Scatter { lines: true } | G::Stock if spec.is_none() => {
             x.push_str("<c:marker><c:symbol val=\"none\"/></c:marker>")
         }
@@ -1280,13 +1282,8 @@ fn dlbls(show: bool) -> String {
 }
 
 fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb: &Workbook, si: usize) -> String {
-    let g = if g == (G::Scatter { lines: false })
-        && series.iter().any(|(i, _)| ch.format.series.get(i).is_some_and(|s| s.line_width.is_some() && !s.no_line))
-    {
-        G::Scatter { lines: true }
-    } else {
-        g
-    };
+    // A series-level line override must not change the marker/line defaults of its siblings.
+    // Both scatter kinds use the same native container; series_xml encodes each line explicitly.
     let sers: String = series
         .iter()
         .enumerate()
@@ -1377,7 +1374,8 @@ fn axis_xml(a: &Ax<'_>, chart: &Chart) -> String {
     let scatter = matches!(chart.kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble);
     let category_grid = if scatter { matches!(a.pos, "b" | "t") } else { a.cat };
     if a.grid || (a.id <= 2 && category_grid && chart.format.vertical_gridlines) {
-        let style = if category_grid { &chart.format.vertical_gridline } else { &chart.format.horizontal_gridline };
+        // Stroke names follow visual orientation; visibility remains category/value-role based.
+        let style = if matches!(a.pos, "b" | "t") { &chart.format.vertical_gridline } else { &chart.format.horizontal_gridline };
         let sp = surface_xml(&gridcraft_model::ChartSurface { border: style.color, border_width: style.width, ..Default::default() }, "c");
         if sp.is_empty() {
             s.push_str("<c:majorGridlines/>");
@@ -1590,6 +1588,85 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
 #[cfg(test)]
 mod marker_safety_tests {
     use super::*;
+
+    fn chart(kind: ChartKind) -> Chart {
+        Chart {
+            id: 1,
+            kind,
+            anchor: Default::default(),
+            title: None,
+            series: vec![Series { values: "{1,2,3}".into(), categories: Some("{1,2,3}".into()), ..Default::default() }; 3],
+            legend: LegendPos::Bottom,
+            data_labels: false,
+            data_table: None,
+            gridlines: true,
+            style: 2,
+            x_title: None,
+            y_title: None,
+            source: None,
+            by_rows: false,
+            pivot: None,
+            hole_size: 75,
+            first_slice_angle: 0,
+            format: Default::default(),
+        }
+    }
+
+    #[test]
+    fn mixed_scatter_line_override_preserves_unstyled_and_marker_styled_siblings() {
+        for color in [None, Color::from_hex("#123456")] {
+            let mut ch = chart(ChartKind::Scatter);
+            for series in &mut ch.series {
+                series.color = color;
+            }
+            ch.format.series.insert(0, gridcraft_model::ChartSeriesFormat { line_width: Some(2.0), ..Default::default() });
+            ch.format.series.insert(2, gridcraft_model::ChartSeriesFormat { marker_size: Some(9.0), ..Default::default() });
+            for _ in 0..3 {
+                let xml = write_chart(&Workbook::default(), 0, &ch, "Book");
+                let root = crate::xml::parse(xml.as_bytes()).unwrap();
+                let group = root.path(&["chart", "plotArea", "scatterChart"]).unwrap();
+                let series: Vec<_> = group.kids("ser").collect();
+                assert!(series[0].path(&["spPr", "ln", "solidFill"]).is_some());
+                for ser in &series[1..] {
+                    assert!(ser.path(&["spPr", "ln", "noFill"]).is_some());
+                    assert_eq!(ser.path(&["marker", "symbol"]).and_then(|m| m.attr("val")), Some("circle"));
+                }
+                ch = read_chart(&root).unwrap();
+                assert_eq!(ch.format.series[&0].line_width, Some(2.0));
+                for i in [1, 2] {
+                    assert!(ch.format.series[&i].no_line);
+                    assert_eq!(ch.format.series[&i].marker.as_deref(), Some("circle"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn horizontal_bar_native_gridline_strokes_follow_visual_orientation() {
+        for kind in [ChartKind::BarClustered, ChartKind::ColumnClustered, ChartKind::Scatter] {
+            let mut ch = chart(kind);
+            ch.format.vertical_gridlines = true;
+            ch.format.vertical_gridline = gridcraft_model::ChartStroke { color: Some([255, 0, 0, 255]), width: Some(2.0) };
+            ch.format.horizontal_gridline = gridcraft_model::ChartStroke { color: Some([0, 0, 255, 255]), width: Some(3.0) };
+            let xml = write_chart(&Workbook::default(), 0, &ch, "Book");
+            let root = crate::xml::parse(xml.as_bytes()).unwrap();
+            let plot = root.path(&["chart", "plotArea"]).unwrap();
+            for axis in plot.children.iter().filter(|a| matches!(a.name.as_str(), "catAx" | "valAx")) {
+                let grid = axis.child("majorGridlines").unwrap();
+                let surface = read_surface(grid.child("spPr"));
+                let expected =
+                    if matches!(axis.child_val("axPos"), Some("b" | "t")) { &ch.format.vertical_gridline } else { &ch.format.horizontal_gridline };
+                assert_eq!(surface.border, expected.color, "{kind:?}");
+                assert_eq!(surface.border_width, expected.width, "{kind:?}");
+            }
+            // Import native XML alone so an extension cannot mask a swapped style.
+            let native = xml.split("<c:extLst>").next().unwrap().to_owned() + "</c:chartSpace>";
+            let root = crate::xml::parse(native.as_bytes()).unwrap();
+            let back = read_chart(&root).unwrap();
+            assert_eq!(back.format.vertical_gridline, ch.format.vertical_gridline);
+            assert_eq!(back.format.horizontal_gridline, ch.format.horizontal_gridline);
+        }
+    }
 
     #[test]
     fn custom_extension_marker_is_restricted_to_supported_xml_tokens() {

@@ -811,7 +811,7 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         .map(|v| serde_json::from_value::<ChartFormat>(v.clone()).map_err(|_| bad("insert.chart", "invalid chart format")))
         .transpose()?
         .unwrap_or_default();
-    validate_chart_format(&format)?;
+    validate_chart_format("insert.chart", &format)?;
     let areas = chart_areas(s, p)?;
     if areas.iter().fold(0_u64, |count, area| count.saturating_add(area.count())) > MAX_CHART_CELLS {
         return Err(bad("insert.chart", "range too large for a chart"));
@@ -898,9 +898,9 @@ fn find_chart(s: &Session, p: &Json) -> Result<(usize, usize)> {
 
 /// Rejects invalid formatting before a command mutates chart state or consumes undo history.
 /// Bounds on optional values and collection sizes also protect rendering and serialized output.
-fn validate_chart_format(f: &ChartFormat) -> Result<()> {
+fn validate_chart_format(cmd: &str, f: &ChartFormat) -> Result<()> {
     if [f.legend_position, f.trendline_label_position].into_iter().flatten().flatten().any(|n| !n.is_finite() || !(0.0..=1.0).contains(&n)) {
-        return Err(bad("chart.set", "Chart annotation positions must be between 0 and 1"));
+        return Err(bad(cmd, "Chart annotation positions must be between 0 and 1"));
     }
     if f.text.len() > 16
         || f.text.iter().any(|(role, t)| {
@@ -911,7 +911,7 @@ fn validate_chart_format(f: &ChartFormat) -> Result<()> {
                 || t.name.as_ref().is_some_and(|n| n.len() > 256)
         })
     {
-        return Err(bad("chart.set", "Invalid chart text format"));
+        return Err(bad(cmd, "Invalid chart text format"));
     }
     for a in [&f.x_axis, &f.y_axis] {
         if a.minimum.is_some_and(|v| !v.is_finite() || v.abs() > 1e100 || (a.logarithmic && v <= 0.0))
@@ -923,7 +923,7 @@ fn validate_chart_format(f: &ChartFormat) -> Result<()> {
             || a.minor_tick.as_deref().is_some_and(|v| !matches!(v, "none" | "in" | "out" | "cross"))
             || a.minor_unit.is_some_and(|v| !v.is_finite() || v <= 0.0 || v > 1e100)
         {
-            return Err(bad("chart.set", "Axis bounds must increase; logarithmic bounds and major units must be positive."));
+            return Err(bad(cmd, "Axis bounds must increase; logarithmic bounds and major units must be positive."));
         }
     }
     let width_ok = |v: Option<f32>| v.is_none_or(|v| v.is_finite() && (0.0..=20.0).contains(&v));
@@ -931,7 +931,7 @@ fn validate_chart_format(f: &ChartFormat) -> Result<()> {
         .iter()
         .any(|v| !width_ok(v.width))
     {
-        return Err(bad("chart.set", "Invalid axis/grid line width"));
+        return Err(bad(cmd, "Invalid axis/grid line width"));
     }
     if !width_ok(f.border_width)
         || [&f.chart_area, &f.plot_area].iter().any(|s| !width_ok(s.border_width))
@@ -948,7 +948,7 @@ fn validate_chart_format(f: &ChartFormat) -> Result<()> {
                     .is_some_and(|m| !matches!(m, "none" | "circle" | "square" | "diamond" | "triangle" | "cross" | "plus" | "star" | "dash"))
         })
     {
-        return Err(bad("chart.set", "Invalid line width, marker size or marker type."));
+        return Err(bad(cmd, "Invalid line width, marker size or marker type."));
     }
     Ok(())
 }
@@ -971,7 +971,7 @@ fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         .map(|v| serde_json::from_value::<ChartFormat>(v.clone()).map_err(|_| bad("chart.set", "invalid chart format")))
         .transpose()?;
     if let Some(f) = &format {
-        validate_chart_format(f)?;
+        validate_chart_format("chart.set", f)?;
     }
     let at = cell_param_on(s, p, "at", si)?;
     let quartiles = p

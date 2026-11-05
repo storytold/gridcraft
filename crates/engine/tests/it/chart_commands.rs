@@ -154,6 +154,23 @@ fn insert_chart_invalid_format_preserves_workbook_history_redo_and_journal() {
 }
 
 #[test]
+fn invalid_chart_format_reports_the_command_that_was_called() {
+    let mut s = source();
+    for command in ["insert.chart", "chart.set"] {
+        for format in [
+            json!({"legend_position":[2,0]}),
+            json!({"text":{"title":{"size":0}}}),
+            json!({"y_axis":{"minimum":30,"maximum":20}}),
+            json!({"horizontal_gridline":{"width":21}}),
+            json!({"series":{"0":{"marker":"bogus"}}}),
+        ] {
+            let error = s.execute(command, json!({"range":"A1:E6","format":format})).unwrap_err();
+            assert!(matches!(error, gridcraft_engine::EngineError::BadParams { cmd, .. } if cmd == command));
+        }
+    }
+}
+
+#[test]
 fn deleting_series_remaps_styles_and_keeps_the_last_series() {
     let mut s = source();
     styled(&mut s);
