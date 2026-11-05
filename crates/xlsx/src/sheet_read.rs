@@ -157,7 +157,9 @@ fn read_sheet_format(e: &El, sheet: &mut Sheet) {
     }
 }
 
-pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoError> {
+/// Reads the sheet part `part`, with the VML shape numbers of the form controls read into the
+/// model (pass-through keeps the other controls).
+pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, crate::controls::ReadControls), IoError> {
     let bytes = cx.pkg.read(part)?.ok_or_else(|| IoError::Format(format!("missing part {part}")))?;
     let rels = cx.pkg.rels(part)?;
     let mut sheet = Sheet::new(name);
@@ -309,6 +311,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
             _ => {}
         }
     }
+    let read_controls = read_form_controls(cx, &root, &rels, &mut sheet);
     // Comments are related to the sheet without an element in it.
     for rel in rels.iter().filter(|r| r.kind == "comments") {
         if let Some(x) = cx.optional_xml(&rel.target)? {
@@ -330,7 +333,17 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
             }
         }
     }
-    Ok(sheet)
+    Ok((sheet, read_controls))
+}
+
+/// Buttons, scroll bars and spin buttons: the `<controls>` list (also inside
+/// `mc:AlternateContent`) with its properties parts, else the shapes of the VML drawing that
+/// `<legacyDrawing r:id>` names (not the header and footer drawing of `<legacyDrawingHF>`).
+/// Returns the VML shape numbers read, so pass-through keeps only the others.
+fn read_form_controls(cx: &mut Ctx<'_>, root: &El, rels: &[Rel], sheet: &mut Sheet) -> crate::controls::ReadControls {
+    let controls = root.children.iter().filter_map(crate::controls::controls_of).next_back();
+    let vml = root.child("legacyDrawing").and_then(|e| e.attr("id"));
+    if controls.is_some() || vml.is_some() { crate::controls::read(cx, controls, vml, rels, sheet) } else { Default::default() }
 }
 
 /// A protection password hash: the iterated attributes (`algorithmName`, `hashValue`,

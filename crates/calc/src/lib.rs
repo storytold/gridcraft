@@ -4,11 +4,13 @@
 #![forbid(unsafe_code)]
 
 pub mod eval;
+mod precision;
 pub mod recalc;
 mod trimrange;
 
 pub use eval::{Area, SPECIAL_FUNCTIONS, is_known_function};
 pub use gridcraft_functions::{FetchError, ImageFetcher};
+pub use precision::DisplayedPrecision;
 pub use recalc::{Calc, Key, evaluate, now_serial};
 
 #[cfg(test)]
