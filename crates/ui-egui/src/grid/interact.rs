@@ -66,10 +66,12 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
     let in_corner = pos.is_some_and(|p| p.x < geo.cells.left() && p.y < geo.cells.top() && p.x >= geo.head_left() && p.y >= geo.head_top());
     // Insert › Controls places a control; a click works a form control (Ctrl or Cmd+click, or a
     // right-click, selects it instead).
-    if app.editor.is_none() && crate::control_ui::place(app, ui, resp, geo, sh) {
+    // Reference picking must select the cell beneath worksheet controls.
+    let picking_ref = app.dialog.as_ref().is_some_and(|d| d.is_ref_edit_picking());
+    if app.editor.is_none() && !picking_ref && crate::control_ui::place(app, ui, resp, geo, sh) {
         return;
     }
-    if app.editor.is_none() && app.session.draw_tool.is_empty() && crate::form_controls::interact(app, &ctx, resp, geo, sh) {
+    if app.editor.is_none() && !picking_ref && app.session.draw_tool.is_empty() && crate::form_controls::interact(app, &ctx, resp, geo, sh) {
         keyboard(app, &ctx, resp, geo, sh);
         return;
     }
@@ -139,7 +141,7 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         // The selected object's handles reach a little outside it, so they win over hit-testing.
         // Only they resize: a press anywhere on another object selects and moves it, as the
         // hover cursor shows.
-        let under = at.and_then(|p| object_under(app, geo, sh, p));
+        let under = at.and_then(|p| object_under(app, geo, sh, p)).filter(|(obj, _, _)| !picking_ref || obj.kind != ObjKind::Control);
         let handle = under.and_then(|(.., h)| h);
         if let Some(p) = at
             && let Some((obj, _, _)) = under
@@ -375,6 +377,7 @@ fn handle_row_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, p: 
     }
 }
 
+/// Handles grid pointer presses, selection changes and dialog reference picks.
 fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
     let (geo, sh, wb, resp) = (input.geo, input.sheet, input.workbook, input.response);
     let (pos, mods, sel) = (input.position, input.modifiers, &input.selection);
@@ -508,7 +511,10 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         }
     } else {
         let _ = app.session.run("selection.set", json!({"cell": c.a1()}));
-        if primary_clicked && wb.styles.get(sh.style_id(c)).num_fmt.as_str() == "checkbox" {
+        if primary_clicked
+            && !app.dialog.as_ref().is_some_and(|d| d.is_ref_edit_picking())
+            && wb.styles.get(sh.style_id(c)).num_fmt.as_str() == "checkbox"
+        {
             let _ = app.run("cell.toggleCheckbox", json!({"cell": c.a1()}));
         }
         // A click on a hyperlink's text follows it (like Excel); elsewhere in the cell selects.
@@ -520,6 +526,13 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
             if p.x < r.left() + r.width() * 0.8 {
                 follow_link(app, &h.target);
             }
+        }
+    }
+    // A click may select the same cell again, which selection-change tracking misses.
+    if primary_clicked {
+        let area = if mods.shift { app.session.active().map(|doc| doc.selection.current()).unwrap_or(RangeRef::cell(c)) } else { RangeRef::cell(c) };
+        if let Some(d) = app.dialog.as_mut() {
+            d.note_remove_duplicates_cell_click(area, sh);
         }
     }
     app.grid.drag = Drag::Select;

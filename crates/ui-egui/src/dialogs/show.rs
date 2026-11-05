@@ -608,7 +608,11 @@ pub(super) fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                         } else {
                             ui.add(egui::TextEdit::singleline(&mut s).desired_width(320.0)).labelled_by(label.id)
                         };
-                        take_first_focus(d, &r);
+                        // Remove Duplicates gives initial focus to its Range RefEdit.
+                        // Do not let Columns override that pending focus request.
+                        if d.name != "removeDuplicates" || key != "columnsText" {
+                            take_first_focus(d, &r);
+                        }
                         if r.changed() {
                             d.values.insert(key.into(), json!(s));
                         }

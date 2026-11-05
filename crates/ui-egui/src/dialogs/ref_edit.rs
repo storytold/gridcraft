@@ -251,6 +251,30 @@ pub(super) fn begin_pick(app: &SheetApp, d: &mut Dialog, key: &str) {
     d.refs.seen_sheet = active_sheet_name(app);
 }
 
+impl Dialog {
+    /// Records a real grid click for Remove Duplicates, even when selection is unchanged.
+    pub(crate) fn note_remove_duplicates_cell_click(&mut self, area: gridcraft_engine::core::RangeRef, sheet: &Sheet) {
+        if self.name == "removeDuplicates" && self.refs.target.as_deref() == Some("range") {
+            let picked = abs(&area);
+            let picked = match self.refs.home.as_ref() {
+                Some(home) if home.uid.get() != sheet.uid.get() => {
+                    format!("{}!{picked}", gridcraft_engine::formula::quote_sheet(&sheet.name))
+                }
+                _ => picked,
+            };
+            self.set_value("range", json!(picked.clone()));
+            self.refs.seen = picked;
+            self.refs.seen_sheet = sheet.name.clone();
+            self.refs.refocus = true;
+        }
+    }
+
+    /// Whether a RefEdit field is currently accepting grid selections.
+    pub(crate) fn is_ref_edit_picking(&self) -> bool {
+        self.refs.target.is_some()
+    }
+}
+
 /// The name of the sheet shown in the active workbook.
 fn active_sheet_name(app: &SheetApp) -> String {
     app.session.active().and_then(|doc| doc.wb.active()).map(|sh| sh.name.clone()).unwrap_or_default()
@@ -296,6 +320,10 @@ pub(super) fn ref_edit(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &
             RefLabel::By(label) => r.labelled_by(label),
             RefLabel::Named(name) => r.accessible_name(lang.tr(name)),
         };
+        // Preserve first-field focus when Remove Duplicates uses RefEdit.
+        if d.name == "removeDuplicates" && key == "range" {
+            super::show::take_first_focus(d, &r);
+        }
         // F4 cycles the anchors of the reference in the box, as in Excel's reference boxes.
         if r.has_focus() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F4)) {
             s = cycle_anchors(&s);
