@@ -35,6 +35,24 @@
 
 mod support;
 
+// The evaluator families link themselves in here and in `FAMILIES` below. Each family owns one
+// marker line in both lists, in `ALL_FAMILIES` order, so a family branch replaces exactly its own
+// line instead of inserting at a shared anchor and conflicting with its siblings.
+// aggregation
+// date_time
+// filter
+// financial
+// information
+// logical
+// math_trig
+// model_info
+// other
+// parent_child
+// statistical
+// table_manipulation
+// text
+// time_intelligence
+// visual
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -86,8 +104,25 @@ pub const ALL_FAMILIES: &[&str] = &[
 ///
 /// The catalog-wide audits in `tests/` read this to tell a function whose family is not linked
 /// from one that genuinely lacks an evaluator path: the "every catalogued function evaluates"
-/// assertion only holds for a build that links all of [`ALL_FAMILIES`].
-const FAMILIES: &[Family] = &[];
+/// assertion only holds for a build that links all of [`ALL_FAMILIES`]. Each family replaces its
+/// own marker line below with its `Family` entry.
+const FAMILIES: &[Family] = &[
+    // aggregation
+    // date_time
+    // filter
+    // financial
+    // information
+    // logical
+    // math_trig
+    // model_info
+    // other
+    // parent_child
+    // statistical
+    // table_manipulation
+    // text
+    // time_intelligence
+    // visual
+];
 
 /// The names of the evaluator families linked into this build, in dispatch order.
 pub fn linked_families() -> impl Iterator<Item = &'static str> {
