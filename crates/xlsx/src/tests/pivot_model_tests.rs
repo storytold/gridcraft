@@ -864,6 +864,20 @@ fn a_zero_cache_id_is_clamped_to_one() {
     assert!(table.contains("cacheId=\"1\""), "{table}");
 }
 
+#[test]
+fn a_second_pivot_cannot_claim_a_cache_id_in_use() {
+    // Both specs keep the default `cache_id`, so the second cache part would have no entry of its
+    // own in `<pivotCaches>`: the workbook would map one `cacheId` to two cache parts. Re-applying
+    // the same pivot is still fine (it reuses the relationship id), which the update tests cover.
+    let mut wb = workbook();
+    attach_model_pivot(&mut wb, "Pivot", at("A3"), &spec(), &report(), None).unwrap();
+    let mut second = spec();
+    second.name = "ModelPivot2".into();
+    second.connection_id = 2;
+    let error = attach_model_pivot(&mut wb, "Pivot", at("A12"), &second, &report(), None).expect_err("a reused cache id must be refused");
+    assert!(format!("{error}").contains("cache id"), "{error}");
+}
+
 // ---------------------------------------------------------------- re-applying a pivot
 
 /// A spec whose fields differ from [`spec`]'s, so an update in place is visible in what is read.

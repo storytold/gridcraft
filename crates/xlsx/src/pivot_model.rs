@@ -1142,10 +1142,27 @@ fn fnv1a(s: &str) -> u64 {
 fn add_pivot_cache(p: &mut Preserved, cache_id: u32, rid: &str) -> Result<(), IoError> {
     // `cacheId="0"` is not a valid pivot cache id: the first cache is 1.
     let cache_id = cache_id.max(1);
+    let cache_attr = format!("cacheId=\"{cache_id}\"");
+    let rid_attr = format!("r:id=\"{}\"", esc_attr(rid));
     let child = format!("<pivotCache cacheId=\"{cache_id}\" r:id=\"{}\"/>", esc_attr(rid));
     if let Some(element) = p.elements.iter_mut().find(|e| e.slot == SLOT_PIVOT_CACHES) {
-        if element.xml.contains(&format!("cacheId=\"{cache_id}\"")) {
-            return Ok(());
+        // Each entry is one element, so a `cacheId` match cannot borrow another entry's `r:id`.
+        // Re-applying the same pivot keeps its relationship id and is a no-op; a different cache
+        // claiming the id would leave one cache part unreachable from `<pivotCaches>`.
+        for entry in element.xml.split('<') {
+            let Some(rest) = entry.strip_prefix("pivotCache") else { continue };
+            if rest.starts_with('s') {
+                // The `<pivotCaches>` container itself, not one of its entries.
+                continue;
+            }
+            let head = entry.split('>').next().unwrap_or(entry);
+            if !head.contains(&cache_attr) {
+                continue;
+            }
+            if head.contains(&rid_attr) {
+                return Ok(());
+            }
+            return Err(IoError::Format(format!("pivot cache id {cache_id} is already used by another pivot cache")));
         }
         if !append_xml_before(&mut element.xml, "</pivotCaches>", &child) {
             return Err(IoError::Xml("the workbook's kept <pivotCaches> element is not closed".into()));
