@@ -63,14 +63,14 @@ fn slicer_criteria_outside_the_sheet_filters_columns_are_still_applied() {
 
 #[test]
 fn choices_use_the_same_custom_and_statistical_criteria_as_filtering() {
-    for (criterion, expected) in [
-        (json!({"custom": {"op": ">=", "value": 20, "op2": "<", "value2": 100}}), vec!["mid", "upper"]),
-        (json!({"custom": {"op": "=", "value": 10, "op2": "=", "value2": 100, "and": false}}), vec!["high", "low"]),
-        (json!({"custom": {"op": "=", "value": "n?*"}}), vec!["text"]),
-        (json!({"top": {"count": 2}}), vec!["high", "upper"]),
-        (json!({"top": {"count": 50, "percent": true, "bottom": true}}), vec!["low", "mid"]),
-        (json!({"aboveAverage": true}), vec!["high"]),
-        (json!({"aboveAverage": false}), vec!["low", "mid", "upper"]),
+    for (criterion, expected, mid_checked) in [
+        (json!({"custom": {"op": ">=", "value": 20, "op2": "<", "value2": 100}}), vec!["mid", "upper"], true),
+        (json!({"custom": {"op": "=", "value": 10, "op2": "=", "value2": 100, "and": false}}), vec!["high", "low"], false),
+        (json!({"custom": {"op": "=", "value": "n?*"}}), vec!["text"], false),
+        (json!({"top": {"count": 2}}), vec!["high", "upper"], false),
+        (json!({"top": {"count": 50, "percent": true, "bottom": true}}), vec!["low", "mid"], true),
+        (json!({"aboveAverage": true}), vec!["high"], false),
+        (json!({"aboveAverage": false}), vec!["low", "mid", "upper"], true),
     ] {
         let mut s = Session::new();
         s.new_workbook();
@@ -93,8 +93,8 @@ fn choices_use_the_same_custom_and_statistical_criteria_as_filtering() {
         assert_eq!(actual, expected, "{criterion}, with the current column filtered");
         assert_eq!(
             filter_values(&s.doc().unwrap().wb, 0, 1),
-            vec![("20".into(), true)],
-            "the numeric column's own criterion must be excluded: {criterion}"
+            vec![("20".into(), mid_checked)],
+            "the numeric column's criterion sets checkboxes without excluding alternatives: {criterion}"
         );
     }
 }
@@ -220,6 +220,7 @@ fn choices_match_color_criteria_and_do_not_infer_icon_matches_from_hidden_rows()
         sh.autofilter.as_mut().unwrap().criteria = vec![(1, criterion)];
         s.execute("data.reapply", json!({})).unwrap();
         assert_eq!(filter_values(&s.doc().unwrap().wb, 0, 0), vec![("red".into(), true)]);
+        assert_eq!(filter_selection(&s.doc().unwrap().wb, 0, 1, &[]), vec![("1".into(), true), ("2".into(), false)]);
     }
     let sh = Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
     sh.autofilter.as_mut().unwrap().criteria = vec![(1, FilterCriterion::Icon { set: "3Arrows".into(), id: Some(0) })];
@@ -282,4 +283,75 @@ fn choices_are_bounded_at_the_last_sheet_row_and_empty_for_missing_data() {
     s.execute("data.filter", json!({"range": "B1048574:C1048576"})).unwrap();
     s.execute("data.filterBy", json!({"column": "B", "values": ["East"]})).unwrap();
     assert_eq!(filter_values(&s.doc().unwrap().wb, 0, 2), vec![("Last East".into(), true)]);
+}
+
+#[test]
+fn merging_hidden_choices_preserves_the_active_criterion() {
+    for (criterion, checked) in [
+        (json!({"values": ["7"], "blanks": true}), [false, true, false, false, true]),
+        (json!({"custom": {"op": ">=", "value": 7}}), [false, true, true, true, false]),
+        (json!({"top": {"count": 2}}), [false, false, true, true, false]),
+        (json!({"aboveAverage": true}), [false, false, false, true, false]),
+        (json!({"aboveAverage": false}), [true, true, true, false, false]),
+    ] {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute(
+            "range.setValues",
+            json!({"range": "A1", "values": [["Region", "Amount"], ["East", 1], ["East", 9], ["West", 7], ["West", 20], ["West", null]]}),
+        )
+        .unwrap();
+        s.execute("home.numberFormat", json!({"range": "B2:B6", "code": "0.00"})).unwrap();
+        s.execute("data.filter", json!({"range": "A1:B6"})).unwrap();
+        s.execute("data.filterBy", json!({"column": "A", "values": ["East"]})).unwrap();
+        let mut params = criterion.clone();
+        params["column"] = json!("B");
+        s.execute("data.filterBy", params).unwrap();
+        let doc = s.doc().unwrap();
+        let choices = filter_values(&doc.wb, 0, 1);
+        let selection = filter_selection(&doc.wb, 0, 1, &choices);
+        let expected: Vec<_> =
+            ["1.00", "7.00", "9.00", "20.00", "(Blanks)"].into_iter().zip(checked).map(|(label, on)| (label.to_string(), on)).collect();
+        assert_eq!(selection, expected, "unchanged eligible choices must preserve hidden matches: {criterion}");
+        let values: Vec<_> = selection.iter().filter(|(label, on)| *on && label != "(Blanks)").map(|(label, _)| label.clone()).collect();
+        s.execute("data.filterBy", json!({"column": "B", "values": values, "blanks": checked[4]})).unwrap();
+        s.execute("data.filterBy", json!({"column": "A", "clear": true})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        for (row, on) in [checked[0], checked[2], checked[1], checked[3], checked[4]].into_iter().enumerate() {
+            assert_eq!(!sh.is_row_hidden(row as u32 + 1), on, "row after Apply and clearing the other filter: {criterion}");
+        }
+    }
+}
+
+#[test]
+fn large_values_criteria_preserve_ascii_case_and_blank_matching() {
+    use gridcraft_engine::core::RangeRef;
+    use gridcraft_engine::model::AutoFilter;
+    let mut s = Session::new();
+    s.new_workbook();
+    let sh = Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+    let mut selected = Vec::new();
+    for row in 1..=5_000 {
+        sh.set_cell(CellRef::new(row, 0), Cell { value: Value::Text(format!("item-{row}").into()), ..Default::default() });
+        sh.set_cell(CellRef::new(row, 1), Cell { value: Value::Number(f64::from(row)), ..Default::default() });
+        selected.push(format!("ITEM-{row}"));
+    }
+    selected.extend(["ITEM-1".into(), "Ä".into()]);
+    for (row, value, label) in [
+        (5_001, Value::Text("Ä".into()), "unicode selected"),
+        (5_002, Value::Text("ä".into()), "unicode excluded"),
+        (5_003, Value::Empty, "blank row"),
+    ] {
+        sh.set_cell(CellRef::new(row, 0), Cell { value, ..Default::default() });
+        sh.set_cell(CellRef::new(row, 1), Cell { value: Value::Text(label.into()), ..Default::default() });
+    }
+    sh.autofilter = Some(AutoFilter {
+        range: RangeRef::new(CellRef::new(0, 0), CellRef::new(5_003, 1)),
+        criteria: vec![(0, FilterCriterion::Values { values: selected, blanks: true })],
+    });
+    let choices = filter_values(&s.doc().unwrap().wb, 0, 1);
+    assert_eq!(choices.len(), 5_002);
+    assert!(choices.contains(&("unicode selected".into(), true)));
+    assert!(choices.contains(&("blank row".into(), true)));
+    assert!(!choices.iter().any(|(label, _)| label == "unicode excluded"));
 }
