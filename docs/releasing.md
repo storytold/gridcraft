@@ -302,5 +302,5 @@ On GitHub Actions, notarized artifacts still require the native `stapler` to sta
 
 | Date | Change |
 |---|---|
-| 2026-11-05 | trivial | PR #3169: require native ticket stapling and validation in GitHub Actions; retain rcodesign and missing-tool warnings only for local packaging. Synthetic app/DMG controls mask host tools and cover release rejection; no new Apple notarization run. |
+| 2026-11-05 | PR #3169: require native ticket stapling and validation in GitHub Actions; retain rcodesign and missing-tool warnings only for local packaging. Synthetic app/DMG controls mask host tools and cover release rejection; no new Apple notarization run. |
 | 2026-11-02 | macOS packaging prefers native stapler, falls back to rcodesign staple with bounded retries, and warns when neither exists while retaining Gatekeeper assessment. |
