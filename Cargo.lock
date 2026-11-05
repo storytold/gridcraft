@@ -2021,6 +2021,7 @@ dependencies = [
 name = "gridcraft-cli"
 version = "0.16.0"
 dependencies = [
+ "gridcraft-dax",
  "gridcraft-engine",
  "gridcraft-mcp",
  "log",
