@@ -215,9 +215,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Date])],
         ReturnType::Table,
         FunctionFlags::new(false, false, false, true, true),
-        "Returns the last date of the month visible in the filter context as a single-row table, \
-         restricted to dates present in the date column. Use it as a CALCULATE modifier for \
-         semi-additive measures; the marked date table must contain the month-end date.",
+        "Returns the last date of the month visible in the filter context as a single-row table: \
+         the latest date of that month that exists in the date column of the marked date table. Use it as a CALCULATE \
+         modifier for semi-additive measures.",
         &["ENDOFMONTH ( 'Date'[Date] )"],
     ),
     spec(
@@ -229,9 +229,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Date])],
         ReturnType::Table,
         FunctionFlags::new(false, false, false, true, true),
-        "Returns the last date of the quarter visible in the filter context as a single-row table, \
-         restricted to dates present in the date column. Quarter boundaries follow the marked \
-         date table; a non-contiguous table can omit the quarter-end date.",
+        "Returns the last date of the quarter visible in the filter context as a single-row table: \
+         the latest date of that quarter that exists in the date column of the marked date table, so \
+         a calendar that omits the quarter-end date still returns its last present day.",
         &["ENDOFQUARTER ( 'Date'[Date] )"],
     ),
     spec(
@@ -257,9 +257,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Date]), overload(&[ParamKind::Date, ParamKind::Text])],
         ReturnType::Table,
         FunctionFlags::new(false, false, false, true, true),
-        "Returns the last date of the year visible in the filter context as a single-row table. \
-         YearEndDate selects a fiscal year end; without it the window is December 31. The date \
-         table must be marked and must contain the resulting date.",
+        "Returns the last date of the year visible in the filter context as a single-row table: \
+         the latest date of that year that exists in the date column of the marked date table. YearEndDate selects a fiscal \
+         year end; without it the window is December 31.",
         &["ENDOFYEAR ( 'Date'[Date] )", "ENDOFYEAR ( 'Date'[Date], \"6/30/2008\" )"],
     ),
     spec(
@@ -595,9 +595,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Date])],
         ReturnType::Table,
         FunctionFlags::new(false, false, false, true, true),
-        "Returns the first date of the month visible in the filter context, as a single-row table \
-         restricted to dates in the date column. The marked date table must contain the month's \
-         first day for the result to be non-empty.",
+        "Returns the first date of the month visible in the filter context, as a single-row table: \
+         the earliest date of that month that exists in the date column of the marked date table, so \
+         a calendar that starts mid-month still returns its first present day.",
         &["STARTOFMONTH ( 'Date'[Date] )"],
     ),
     spec(
@@ -610,8 +610,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         ReturnType::Table,
         FunctionFlags::new(false, false, false, true, true),
         "Returns the first date of the quarter visible in the filter context, as a single-row \
-         table restricted to dates in the date column. Quarter boundaries follow the marked date \
-         table, so an incomplete calendar can omit the first day.",
+         table: the earliest date of that quarter that exists in the date column of the marked date \
+         table, so an incomplete calendar still returns its first present day.",
         &["STARTOFQUARTER ( 'Date'[Date] )"],
     ),
     spec(
@@ -637,9 +637,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Date]), overload(&[ParamKind::Date, ParamKind::Text])],
         ReturnType::Table,
         FunctionFlags::new(false, false, false, true, true),
-        "Returns the first date of the year visible in the filter context as a single-row table. \
-         YearEndDate shifts the start to a fiscal year; the date table must be marked and include \
-         every day from the fiscal-year start through year end.",
+        "Returns the first date of the year visible in the filter context as a single-row table: \
+         the earliest date of that year that exists in the date column of the marked date table. YearEndDate shifts the \
+         start to a fiscal year.",
         &["STARTOFYEAR ( 'Date'[Date] )", "STARTOFYEAR ( 'Date'[Date], \"6/30/2008\" )"],
     ),
     spec(

@@ -37,45 +37,44 @@ thread_local! {
     /// single-threaded, so a thread-local counter is enough; it is not observable through the
     /// public API because it only bounds work.
     static VISUAL_STEPS: Cell<usize> = const { Cell::new(0) };
-
-    /// Nesting depth of visual-function calls. Only the outermost call restarts the budget, so a
-    /// visual function evaluated while another one is scanning the axis shares its caller's budget.
-    static VISUAL_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 
-/// Pops the nesting depth when a visual-function call returns, including on the error path.
-struct BudgetGuard;
-
-impl Drop for BudgetGuard {
-    fn drop(&mut self) {
-        VISUAL_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
-    }
-}
-
-/// Charges `positions` evaluated axis rows plus the axis materialization to the step budget.
+/// Starts a fresh visual step budget at the beginning of one top-level evaluation.
 ///
-/// A call on the axis's first row that is not nested inside another visual call starts a fresh
-/// budget: iterating an axis (`ADDCOLUMNS(Sales, "R", RUNNINGSUM([Total]))`) begins at position 0,
-/// so one pass over the axis spends one budget. Returning the guard keeps the depth correct while
-/// `positions` evaluations run.
-fn charge(name: &str, axis: &Axis, positions: usize) -> Result<BudgetGuard, EvalError> {
-    let outermost = VISUAL_DEPTH.with(Cell::get) == 0;
-    if outermost && axis.current == 0 {
-        VISUAL_STEPS.with(|steps| steps.set(0));
-    }
-    let cost = axis.rows.len().saturating_add(positions);
-    let spent = VISUAL_STEPS.with(|steps| {
-        let spent = steps.get().saturating_add(cost);
+/// Visual functions run inside row iterators, so how often they are called is a property of the
+/// evaluation, not of the call: `ADDCOLUMNS(Sales, "R", RUNNINGSUM([Total]))` calls `RUNNINGSUM`
+/// once per row. The budget must therefore be scoped to the evaluation. The row position cannot
+/// provide that boundary: duplicate axis rows all match position 0 and would restart the budget
+/// repeatedly, while an iterator over a filtered subset never visits position 0 and would inherit
+/// the steps of an earlier evaluation on the same thread. `Evaluator::evaluate`,
+/// `evaluate_with`, `evaluate_table` and `evaluate_measure` are the places where a top-level
+/// evaluation begins, so they reset the budget here; every visual call of that evaluation then
+/// accumulates into the same counter.
+pub(crate) fn reset_budget() {
+    VISUAL_STEPS.with(|steps| steps.set(0));
+}
+
+/// Charges `steps` of visual-calculation work to the current evaluation's budget.
+///
+/// The charge happens before the work it pays for, so a call that would cross the budget fails
+/// without materializing the axis or evaluating a window.
+fn charge(name: &str, steps: usize) -> Result<(), EvalError> {
+    let spent = VISUAL_STEPS.with(|budget| {
+        let spent = budget.get().saturating_add(steps);
         if spent <= MAX_VISUAL_STEPS {
-            steps.set(spent);
+            budget.set(spent);
         }
         spent
     });
     if spent > MAX_VISUAL_STEPS {
         return Err(EvalError::new(format!("{name} would exceed the {MAX_VISUAL_STEPS}-step visual calculation budget")));
     }
-    VISUAL_DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
-    Ok(BudgetGuard)
+    Ok(())
+}
+
+/// Charges the axis materialization plus `positions` evaluated axis rows.
+fn charge_axis(name: &str, axis: &Axis, positions: usize) -> Result<(), EvalError> {
+    charge(name, axis.rows.len().saturating_add(positions))
 }
 
 /// The ordered axis a visual calculation navigates, plus the position of the current row.
@@ -175,7 +174,7 @@ fn boolean_arg(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, index:
 fn first_last(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
     let axis = axis(ev, ctx)?;
     let expr = args.first().ok_or_else(|| EvalError::new(format!("{name} needs a column")))?;
-    let _budget = charge(name, &axis, 1)?;
+    charge_axis(name, &axis, 1)?;
     let position = if name.eq_ignore_ascii_case("FIRST") { Some(0) } else { axis.rows.len().checked_sub(1) };
     match position {
         Some(position) => eval_at(ev, expr, ctx, &axis, position),
@@ -188,7 +187,7 @@ fn first_last(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Cont
 fn previous_next(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
     let axis = axis(ev, ctx)?;
     let expr = args.first().ok_or_else(|| EvalError::new(format!("{name} needs a column")))?;
-    let _budget = charge(name, &axis, 1)?;
+    charge_axis(name, &axis, 1)?;
     let steps = positive_count(ev, args, ctx, 1, "Steps")?;
     let position = if name.eq_ignore_ascii_case("PREVIOUS") { axis.current.checked_sub(steps) } else { axis.current.checked_add(steps) };
     match position {
@@ -202,7 +201,7 @@ fn running_sum(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Res
     let axis = axis(ev, ctx)?;
     let expr = args.first().ok_or_else(|| EvalError::new("RUNNINGSUM needs a column"))?;
     // The window is the axis prefix through the current row.
-    let _budget = charge("RUNNINGSUM", &axis, axis.current.saturating_add(1))?;
+    charge_axis("RUNNINGSUM", &axis, axis.current.saturating_add(1))?;
     let values = window(ev, expr, ctx, &axis, 0, axis.current)?;
     if values.is_empty() { Ok(Scalar::Blank) } else { Ok(Scalar::Decimal(values.iter().sum())) }
 }
@@ -210,16 +209,19 @@ fn running_sum(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Res
 /// `MOVINGAVERAGE`: the average of a window of `windowSize` rows. With `includeCurrent` (the
 /// default) the window ends at the current row; otherwise it ends at the previous row.
 fn moving_average(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
-    let axis = axis(ev, ctx)?;
     let expr = args.first().ok_or_else(|| EvalError::new("MOVINGAVERAGE needs a column"))?;
     if args.len() < 2 {
         return Err(EvalError::new("MOVINGAVERAGE needs a window size"));
     }
     let window_size = positive_count(ev, args, ctx, 1, "WindowSize")?;
     let include_current = boolean_arg(ev, args, ctx, 2, true)?;
-    // Charge the requested window, not the part of it the axis actually covers: an explicit huge
-    // window is exactly the shape that must be rejected before it is evaluated.
-    let _budget = charge("MOVINGAVERAGE", &axis, window_size)?;
+    // Charge the requested window before the axis exists, not the part of it the axis actually
+    // covers: an explicit huge window is exactly the shape that must be rejected without
+    // materializing or scanning the axis at all. The axis materialization is charged after it is
+    // known.
+    charge("MOVINGAVERAGE", window_size)?;
+    let axis = axis(ev, ctx)?;
+    charge("MOVINGAVERAGE", axis.rows.len())?;
     let end = if include_current {
         axis.current
     } else {
@@ -249,7 +251,7 @@ fn layout(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context)
 fn range_table(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<TableValue, EvalError> {
     let axis = axis(ev, ctx)?;
     // RANGE evaluates no expression, so the axis materialization and slice copy are the cost.
-    let _budget = charge("RANGE", &axis, 0)?;
+    charge_axis("RANGE", &axis, 0)?;
     let step_expr = args.first().ok_or_else(|| EvalError::new("RANGE needs a step"))?;
     let step_value = ev.eval(step_expr, ctx)?;
     let number = step_value.to_number().ok_or_else(|| EvalError::new("RANGE step must be a number"))?;

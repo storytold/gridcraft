@@ -238,7 +238,8 @@ pub(crate) fn date_weekday(serial: f64) -> i64 {
 
 pub(crate) fn eomonth(serial: f64, months: i64) -> f64 {
     let (year, month, _) = date_parts(serial);
-    let total = year * 12 + month - 1 + months;
+    // Saturating arithmetic: a caller's `months` is arbitrary input and must not overflow.
+    let total = year.saturating_mul(12).saturating_add(month - 1).saturating_add(months);
     let y = total.div_euclid(12);
     let m = total.rem_euclid(12) + 1;
     date_serial(y, m, days_in_month(y, m), 0, 0, 0)
@@ -246,7 +247,8 @@ pub(crate) fn eomonth(serial: f64, months: i64) -> f64 {
 
 pub(crate) fn edate(serial: f64, months: i64) -> f64 {
     let (year, month, day) = date_parts(serial);
-    let total = year * 12 + month - 1 + months;
+    // Saturating arithmetic: a caller's `months` is arbitrary input and must not overflow.
+    let total = year.saturating_mul(12).saturating_add(month - 1).saturating_add(months);
     let y = total.div_euclid(12);
     let m = total.rem_euclid(12) + 1;
     date_serial(y, m, day.min(days_in_month(y, m)), 0, 0, 0)

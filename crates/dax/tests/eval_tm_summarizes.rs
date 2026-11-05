@@ -742,3 +742,40 @@ fn summarize_rejects_cross_column_table_filters_that_leak_rows() {
     assert!(message.contains("SUMMARIZE"), "error names the operation: {message}");
     assert!(message.contains("table argument"), "error names the table argument: {message}");
 }
+
+#[test]
+fn summarize_reads_the_lineage_once_per_group_not_once_per_expression() {
+    const ROWS: usize = 12_000;
+    const GROUPS: usize = 2_000;
+
+    // Six rows per group and two expressions: a per-expression leak check or table-row rebuild
+    // would serve the whole lineage `GROUPS * 2` times, while the hoisted preparation only sets
+    // the group's column filters.
+    let mut rows = Vec::with_capacity(ROWS);
+    for row in 0..ROWS {
+        rows.push(vec![Scalar::String(format!("Group {:04}", row % GROUPS)), Scalar::Integer(row as i64), Scalar::Integer((row % 7) as i64)]);
+    }
+    let mut model = DataModel {
+        tables: vec![table("Sales", vec![column("Region", "String"), column("Amount", "Int64"), column("Quantity", "Int64")], rows)],
+        relationships: Vec::new(),
+        measures: Vec::new(),
+    };
+    model.parse_formulas().expect("model parses");
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let expression =
+        parse_expression("SUMMARIZE(Sales, Sales[Region], \"Amount\", SUM(Sales[Amount]), \"Quantity\", SUM(Sales[Quantity]))").expect("parse");
+    let bound = Binder::new(&model).bind_expression(&expression).expect("bind");
+    let result = evaluator.evaluate_table(&bound).expect("evaluate");
+    assert_eq!(result.rows.len(), GROUPS, "one row per group");
+    let expected = money((0..ROWS).filter(|row| row % GROUPS == 0).map(|row| row as f64).sum::<f64>());
+    assert_eq!(result.rows.first().map(|row| row[1].clone()), Some(expected), "each group sums only its own rows");
+
+    // A bare table argument is its own lineage, so the group filters describe the group: the
+    // source is materialized once and each aggregate reads the rows of its own group
+    // (`2 * ROWS`). A per-expression leak check would serve `GROUPS * 2 * ROWS` rows instead.
+    let stats = evaluator.storage_stats();
+    assert!(
+        stats.rows_from_storage < 6 * ROWS as u64,
+        "grouping must not rescan the lineage per expression: {stats:?} for {ROWS} source rows across {GROUPS} groups"
+    );
+}

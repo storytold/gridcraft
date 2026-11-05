@@ -512,26 +512,54 @@ fn subtotal_rows(details: &[(Vec<Scalar>, Vec<Vec<Scalar>>)], layout: &GroupLayo
 /// the group covers (a rollup subtotal covers the union of its groups).
 type SummaryRow = (Vec<Scalar>, Vec<bool>, Vec<Vec<Scalar>>);
 
-struct GroupContext<'a> {
-    columns: &'a [ColumnRef],
-    values: &'a [Scalar],
-    active: &'a [bool],
-    source: &'a TableValue,
-    rows: &'a [Vec<Scalar>],
+/// The filter context and grouping scope shared by every expression of one summarized row.
+///
+/// Preparing it clones the caller's filters, turns the table argument's rows into column filters
+/// and walks the lineage for the leak check. Doing that inside the expression loop repeated all
+/// three `groups × expressions` times, so each row prepares it once and every expression reuses
+/// it.
+struct GroupContext {
+    filters: FilterContext,
+    grouping_scope: Vec<(usize, usize)>,
 }
 
-fn eval_in_group(ev: &Evaluator<'_>, ctx: &Context, expression: &BoundExpr, group: &GroupContext<'_>, operation: &str) -> Result<Scalar, EvalError> {
+/// Whether the table argument is the lineage table itself under the caller's filters.
+///
+/// A bare `Table` reference selects exactly the rows the caller's filters admit, and the
+/// group-column filters then describe the group inside them, so neither the row-set filters nor
+/// the leak check can tell anything new. `FILTER`, `VALUES`, `DISTINCT` and projections can drop
+/// or reorder rows relative to the lineage, so they keep both paths.
+fn table_argument_is_source_lineage(argument: &BoundExpr, table: &TableValue) -> bool {
+    matches!(argument, BoundExpr::Table(index) if table.lineage == Some(*index))
+}
+
+/// Builds the per-row filter context: the table argument's rows as column filters, the group's
+/// active column values, and the leak verdict for a table argument that is not the lineage.
+#[allow(clippy::too_many_arguments)]
+fn prepare_group(
+    ev: &Evaluator<'_>,
+    ctx: &Context,
+    columns: &[ColumnRef],
+    values: &[Scalar],
+    active: &[bool],
+    source: &TableValue,
+    rows: &[Vec<Scalar>],
+    lineage_is_source: bool,
+    operation: &str,
+) -> Result<GroupContext, EvalError> {
     let mut filters = ctx.filters.clone();
     // The table argument's own rows bound the group: `SUMMARIZE(FILTER(...), ...)` must not see
     // rows the filter removed. Applying the group's rows as column filters keeps the lineage
-    // contract the evaluator already relies on.
-    if let Some(lineage) = group.source.lineage
-        && !group.rows.is_empty()
+    // contract the evaluator already relies on. A bare table is its own lineage, so its rows add
+    // nothing the caller's filters did not already say.
+    if let Some(lineage) = source.lineage
+        && !rows.is_empty()
+        && !lineage_is_source
     {
-        let rows = TableValue::new(group.source.columns.clone(), group.rows.to_vec()).with_lineage(lineage);
-        apply_table_values(ev, &rows, &mut filters);
+        let table = TableValue::new(source.columns.clone(), rows.to_vec()).with_lineage(lineage);
+        apply_table_values(ev, &table, &mut filters);
     }
-    for ((column, value), active) in group.columns.iter().zip(group.values).zip(group.active) {
+    for ((column, value), active) in columns.iter().zip(values).zip(active) {
         if *active {
             filters.set(column.table, column.column, [ScalarKey::from(value)]);
         }
@@ -544,23 +572,23 @@ fn eval_in_group(ev: &Evaluator<'_>, ctx: &Context, expression: &BoundExpr, grou
     // of returning a silent wrong answer. The comparison is by identity, not by count: forms that
     // deduplicate while keeping the lineage (`VALUES`, `DISTINCT`, column-form `ALL`) legitimately
     // own fewer rows than the lineage has, so only a lineage row that projects to a column
-    // combination the group does not own is a leak.
-    if let Some(lineage) = group.source.lineage
-        && !group.rows.is_empty()
+    // combination the group does not own is a leak. A bare table argument cannot leak: the group
+    // columns partition the very rows the caller's filters admit.
+    if let Some(lineage) = source.lineage
+        && !rows.is_empty()
+        && !lineage_is_source
     {
         // The table argument may be a projection that reorders or drops columns, so its columns
         // are matched to model columns by name. A column the model does not know cannot
         // participate in the comparison.
-        let mapped: Vec<(usize, usize)> = group
-            .source
+        let mapped: Vec<(usize, usize)> = source
             .columns
             .iter()
             .enumerate()
             .filter_map(|(position, column)| ev.model().column_index(lineage, &column.name).map(|index| (position, index)))
             .collect();
         if !mapped.is_empty() {
-            let owned: BTreeSet<Vec<ScalarKey>> = group
-                .rows
+            let owned: BTreeSet<Vec<ScalarKey>> = rows
                 .iter()
                 .map(|row| mapped.iter().map(|(position, _)| row.get(*position).map(ScalarKey::from).unwrap_or(ScalarKey::Blank)).collect())
                 .collect();
@@ -581,8 +609,13 @@ fn eval_in_group(ev: &Evaluator<'_>, ctx: &Context, expression: &BoundExpr, grou
     // is out of scope. The state lives on the per-expression context below, so it disappears when
     // the expression ends and a nested grouping cannot leak its scope to the outer row.
     let grouping_scope: Vec<(usize, usize)> =
-        group.columns.iter().zip(group.active).filter(|(_, active)| **active).map(|(column, _)| (column.table, column.column)).collect();
-    let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone(), grouping_scope: Some(grouping_scope) };
+        columns.iter().zip(active).filter(|(_, active)| **active).map(|(column, _)| (column.table, column.column)).collect();
+    Ok(GroupContext { filters, grouping_scope })
+}
+
+fn eval_in_group(ev: &Evaluator<'_>, ctx: &Context, expression: &BoundExpr, group: &GroupContext) -> Result<Scalar, EvalError> {
+    let mut inner =
+        Context { filters: group.filters.clone(), rows: Vec::new(), vars: ctx.vars.clone(), grouping_scope: Some(group.grouping_scope.clone()) };
     ev.eval(expression, &mut inner)
 }
 
@@ -591,6 +624,7 @@ fn summarize(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Resul
         return Err(EvalError::new("SUMMARIZE needs a table"));
     };
     let table = ev.eval_table(first, ctx)?;
+    let lineage_is_source = table_argument_is_source_lineage(first, &table);
     let parsed = parse_summarize_args(ev, args, "SUMMARIZE")?;
     let layout = group_layout(&parsed.group)?;
     // With neither group-by columns nor expressions there is nothing to group or compute, so the
@@ -621,14 +655,13 @@ fn summarize(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Resul
             layout.columns.iter().zip(&active).filter(|(_, active)| !**active).map(|(column, _)| (column.table, column.column)).collect();
         {
             let _guard = SubtotalGuard::push(rolled_up);
-            for (_, expression) in &parsed.expressions {
-                row.push(eval_in_group(
-                    ev,
-                    ctx,
-                    expression,
-                    &GroupContext { columns: &layout.columns, values: &values, active: &active, source: &table, rows: &group_rows },
-                    "SUMMARIZE",
-                )?);
+            if !parsed.expressions.is_empty() {
+                // The group's filters and leak verdict are built once for every expression of
+                // this row, not once per expression.
+                let group = prepare_group(ev, ctx, &layout.columns, &values, &active, &table, &group_rows, lineage_is_source, "SUMMARIZE")?;
+                for (_, expression) in &parsed.expressions {
+                    row.push(eval_in_group(ev, ctx, expression, &group)?);
+                }
             }
         }
         output.push(row);
@@ -641,6 +674,7 @@ fn group_by(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result
         return Err(EvalError::new("GROUPBY needs a table"));
     };
     let table = ev.eval_table(first, ctx)?;
+    let lineage_is_source = table_argument_is_source_lineage(first, &table);
     let parsed = parse_summarize_args(ev, args, "GROUPBY")?;
     let mut columns = Vec::new();
     for arg in &parsed.group {
@@ -672,14 +706,11 @@ fn group_by(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result
         let mut row = values.clone();
         {
             let _guard = CurrentGroupGuard::push(current);
-            for (_, expression) in &parsed.expressions {
-                row.push(eval_in_group(
-                    ev,
-                    ctx,
-                    expression,
-                    &GroupContext { columns: &columns, values, active: &active, source: &table, rows: group_rows },
-                    "GROUPBY",
-                )?);
+            if !parsed.expressions.is_empty() {
+                let group = prepare_group(ev, ctx, &columns, values, &active, &table, group_rows, lineage_is_source, "GROUPBY")?;
+                for (_, expression) in &parsed.expressions {
+                    row.push(eval_in_group(ev, ctx, expression, &group)?);
+                }
             }
         }
         rows.push(row);

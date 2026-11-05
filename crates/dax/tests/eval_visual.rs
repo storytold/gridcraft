@@ -302,3 +302,46 @@ fn aggregate_windows_skip_blank_values() {
     // Row 0: [10] -> 10. Row 1: [10, BLANK] -> 10. Row 2: [BLANK, 30] -> 30.
     assert_eq!(values, vec![Some(10.0), Some(10.0), Some(30.0)]);
 }
+
+#[test]
+fn duplicate_axis_rows_accumulate_the_step_budget() {
+    // Both axis rows are identical, so locating the current row resolves to position 0 for either
+    // of them. The budget belongs to the evaluation, so the second row cannot restart it: the two
+    // 3M windows charged on the first row plus the same windows on the second row cross the cap.
+    let mut model = model();
+    model.tables[0].rows[1] = model.tables[0].rows[0].clone();
+    model.parse_formulas().expect("model parses");
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let expr = parse_expression("ADDCOLUMNS(Sales, \"Result\", MOVINGAVERAGE(Sales[Amount], 3000000) + MOVINGAVERAGE(Sales[Amount], 3000000))")
+        .expect("parse");
+    let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+    let error = evaluator.evaluate_table(&bound).expect_err("duplicate rows must not restart the step budget");
+    assert!(error.to_string().contains("MOVINGAVERAGE"), "{error}");
+    assert!(error.to_string().contains("10000000"), "{error}");
+}
+
+#[test]
+fn a_second_evaluation_starts_with_a_fresh_step_budget() {
+    let model = model();
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let bind = |source: &str| {
+        let expr = parse_expression(source).expect("parse");
+        Binder::new(&model).bind_expression(&expr).expect("bind")
+    };
+
+    // The first evaluation spends about 7.8M of the 10M budget: two 1.3M windows on each of the
+    // three rows.
+    let first = bind("ADDCOLUMNS(Sales, \"Result\", MOVINGAVERAGE(Sales[Amount], 1300000) + MOVINGAVERAGE(Sales[Amount], 1300000))");
+    let table = evaluator.evaluate_table(&first).expect("the first evaluation stays under the budget");
+    assert_eq!(table.rows.len(), 3);
+
+    // The second evaluation only iterates the filtered subset, so it starts on the third axis row
+    // and never visits position 0. Charged against a row-position budget it would inherit the first
+    // evaluation's 7.8M and its own 3M window would cross the cap; the evaluation boundary resets.
+    let second = bind("ADDCOLUMNS(FILTER(Sales, Sales[Month] = \"Mar\"), \"Result\", MOVINGAVERAGE(Sales[Amount], 3000000))");
+    let table = evaluator.evaluate_table(&second).expect("a new evaluation starts at zero");
+    assert_eq!(table.rows.len(), 1);
+    let index = table.column_index("Result").expect("Result column");
+    // Mar's 3M window covers the whole three-row axis: (10 + 20 + 30) / 3.
+    assert_eq!(table.rows[0][index].to_number(), Some(20.0));
+}

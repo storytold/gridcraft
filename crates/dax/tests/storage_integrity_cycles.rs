@@ -80,14 +80,19 @@ fn a_self_relationship_is_a_cycle() {
 
 #[test]
 fn a_bidirectional_relationship_adds_the_reverse_edge() {
+    let tables = || vec![link_table("A", 1), link_table("B", 1), link_table("C", 1)];
+    // Without the flag, A -> B, A -> C and C -> B form no cycle.
+    let plain = validate_model(&model(tables(), vec![link("A", "B"), link("A", "C"), link("C", "B")]));
+    assert!(cycles(&plain).is_empty(), "findings: {:?}", plain.findings);
+    // The bidirectional link also offers the reverse edge A -> B, which closes A -> B -> C -> A.
     let mut forward = link("A", "B");
     forward.bidirectional = true;
-    let report = validate_model(&model(vec![link_table("A", 1), link_table("B", 1)], vec![forward, link("B", "A")]));
+    let report = validate_model(&model(tables(), vec![forward, link("A", "C"), link("C", "B")]));
     let found = cycles(&report);
     assert_eq!(found.len(), 1, "findings: {:?}", report.findings);
     let cycle = found.first().expect("one cycle");
-    assert_eq!(cycle.cycle, vec!["A".to_string(), "B".into(), "A".into()]);
-    assert_eq!(cycle.message, "circular relationship chain: A -> B -> A");
+    assert_eq!(cycle.cycle, vec!["A".to_string(), "B".into(), "C".into(), "A".into()]);
+    assert_eq!(cycle.message, "circular relationship chain: A -> B -> C -> A");
 }
 
 #[test]

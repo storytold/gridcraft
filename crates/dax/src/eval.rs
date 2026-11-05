@@ -286,16 +286,19 @@ impl<'a> Evaluator<'a> {
     }
 
     pub fn evaluate_with(&self, expr: &BoundExpr, filters: FilterContext) -> Result<Scalar, EvalError> {
+        visual::reset_budget();
         let mut ctx = Context { filters, rows: Vec::new(), vars: Vec::new(), grouping_scope: None };
         self.eval(expr, &mut ctx)
     }
 
     pub fn evaluate_table(&self, expr: &BoundExpr) -> Result<TableValue, EvalError> {
+        visual::reset_budget();
         let mut ctx = Context { filters: FilterContext::default(), rows: Vec::new(), vars: Vec::new(), grouping_scope: None };
         self.eval_table(expr, &mut ctx)
     }
 
     pub fn evaluate_measure(&self, name: &str, filters: FilterContext) -> Result<Scalar, EvalError> {
+        visual::reset_budget();
         let index = self.model.measure_index(name).ok_or_else(|| EvalError::new(format!("unknown measure `{name}`")))?;
         let mut ctx = Context { filters, rows: Vec::new(), vars: Vec::new(), grouping_scope: None };
         self.eval_measure(index, &mut ctx)

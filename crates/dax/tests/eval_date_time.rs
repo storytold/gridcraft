@@ -379,3 +379,16 @@ fn clock_functions_track_the_system_clock() {
     assert!(eval("NOW(1)").is_err());
     assert!(eval("TODAY(1)").is_err());
 }
+
+#[test]
+fn edate_and_eomonth_survive_extreme_month_offsets() {
+    // `months` is arbitrary input: the month arithmetic must saturate instead of overflowing.
+    let model = model();
+    for (formula, name) in [("EDATE(DATE(2024,1,15), 1E18)", "EDATE"), ("EOMONTH(DATE(2024,1,15), -1E18)", "EOMONTH")] {
+        match eval_in(&model, formula) {
+            // Out-of-range serials are reported, but the month arithmetic itself must not overflow.
+            Ok(value) => assert!(matches!(value, Scalar::DateTime(serial) if serial.is_finite() || serial.is_nan()), "{name}: {value:?}"),
+            Err(error) => assert!(!error.is_empty(), "{name} reported an empty error"),
+        }
+    }
+}

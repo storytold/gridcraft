@@ -121,6 +121,8 @@ fn simple_interest_and_rates() {
     assert_error("PDURATION(0, 2000, 2200)");
     assert_error("RRI(0, 1000, 1100)");
     assert_error("RRI(10, 0, 1100)");
+    // A zero period count is a division by zero, not a share of zero.
+    assert_error("ISPMT(0.1, 1, 0, 1000)");
 }
 
 #[test]

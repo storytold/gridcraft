@@ -299,10 +299,14 @@ fn ispmt(name: &str, values: &[Scalar]) -> Result<Scalar, EvalError> {
     let a = args(name, values);
     let rate = a.number(0)?;
     let per = a.number(1)?;
+
     let nper = a.number(2)?;
     let pv = a.number(3)?;
-    let share = if nper == 0.0 { 0.0 } else { per / nper };
-    decimal(name, pv * rate * (share - 1.0))
+    // Excel reports #DIV/0! for a zero period count instead of returning a share of zero.
+    if nper == 0.0 {
+        return Err(division_by_zero(name));
+    }
+    decimal(name, pv * rate * (per / nper - 1.0))
 }
 
 fn rate(name: &str, values: &[Scalar]) -> Result<Scalar, EvalError> {
