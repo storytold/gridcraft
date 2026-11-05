@@ -103,18 +103,19 @@ pub struct SiRun<'a> {
 
 /// Splits a string item into its text and its rich-text runs: the text follows [`rich_text`]
 /// (`<t>` and `<r><t>` concatenated, phonetic runs skipped, `_xHHHH_` escapes decoded) and each
-/// `<r>` records the byte range its text occupies. When an escape changes the text's length the
-/// offsets no longer line up; callers guard with `CellRuns::valid_for`.
+/// `<r>` records the byte range its text occupies. Each `<t>` is decoded before it is appended,
+/// so the offsets are in the decoded text's coordinates and line up whatever the escapes shrink
+/// (an escape split across two `<t>` nodes is not a sequence in either node and stays literal).
 pub fn si_parts(e: &El) -> (String, Vec<SiRun<'_>>) {
     let mut s = String::new();
     let mut runs = Vec::new();
     for c in &e.children {
         match c.name.as_str() {
-            "t" => s.push_str(&c.text),
+            "t" => s.push_str(&decode_xstring(&c.text)),
             "r" => {
                 let start = s.len();
                 for t in c.kids("t") {
-                    s.push_str(&t.text);
+                    s.push_str(&decode_xstring(&t.text));
                 }
                 runs.push(SiRun {
                     start: u32::try_from(start).unwrap_or(u32::MAX),
@@ -125,7 +126,7 @@ pub fn si_parts(e: &El) -> (String, Vec<SiRun<'_>>) {
             _ => {}
         }
     }
-    (decode_xstring(&s), runs)
+    (s, runs)
 }
 
 /// The phonetic (furigana) data of a string item: its `<rPh>` runs in document order, and its

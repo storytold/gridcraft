@@ -13,6 +13,7 @@ use crate::runs::{Si, runs_fits};
 use crate::styles::{read_run_font, run_font_set};
 use crate::tables::INDEXED;
 use crate::write_xlsx;
+
 use crate::xml::{El, parse, si_parts};
 
 fn si(xml: &str) -> El {
@@ -495,4 +496,47 @@ fn invalid_runs_write_plain() {
     let s = back.sheet(0).unwrap();
     assert_eq!(s.value(at("A1")), Value::text("hello world"));
     assert!(s.cell_runs.is_empty());
+}
+
+/// `_xHHHH_` escapes decode before the offsets are measured, so a formatted run whose text holds
+/// an escape keeps its formatting (the offsets are in the decoded text's coordinates).
+#[test]
+fn si_parts_offsets_follow_decoded_text() {
+    // An escape in the unformatted run and one inside the formatted run: `_x000D_` is `\r`
+    // (7 bytes -> 1). Excel writes unformatted parts as `<r>` without `<rPr>`.
+    let el = si(concat!(r#"<si><r><t>a_x000D_b</t></r>"#, r#"<r><rPr><b/></rPr><t>c_x000D_d</t></r></si>"#,));
+    let (text, parts) = si_parts(&el);
+    assert_eq!(text, "a\rbc\rd");
+    assert_eq!(parts.len(), 2);
+    assert_eq!((parts[0].start, parts[0].len), (0, 3));
+    assert_eq!((parts[1].start, parts[1].len), (3, 3));
+
+    let mut budget = 1 << 20;
+    let Si { text: t, runs } = Si::parse(&el, &INDEXED, &mut budget);
+    assert_eq!(&*t, "a\rbc\rd");
+    let cr = runs.expect("the escape does not drop the runs");
+    assert!(cr.valid_for(&t));
+    assert_eq!(cr.run_text(&t, 1), Some("c\rd"));
+}
+
+/// A literal escape sequence split across two `<t>` nodes is not a sequence in either node, so it
+/// stays literal: the round trip through GridCraft's own writer keeps both the text and the runs.
+#[test]
+fn a_split_escape_sequence_round_trips_literal() {
+    // Run 0 holds `_x00`, run 1 holds `41_`: neither slice carries a complete `_xHHHH_`.
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    let text = "_x0041_";
+    let runs = CellRuns {
+        runs: vec![Run { start: 0, len: 4, font: RunFont { bold: Some(true), ..none_font() } }, Run { start: 4, len: 3, font: none_font() }],
+    };
+    sh.cells.set(at("A1"), Cell { value: Value::text(text), formula: None, style: Default::default(), py: None });
+    sh.cell_runs.insert(at("A1"), runs);
+    let bytes = write_xlsx(&wb).unwrap();
+    let (back, rep) = read_xlsx(&bytes).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let sh = back.sheet(0).unwrap();
+    assert_eq!(sh.value(at("A1")), Value::text("_x0041_"), "the split sequence stays literal");
+    let cr = sh.cell_runs.get(&at("A1")).expect("the runs survive the round trip");
+    assert!(cr.valid_for("_x0041_"));
 }
