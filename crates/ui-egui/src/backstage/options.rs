@@ -19,6 +19,11 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut highlight_row, lang.tr("Highlight the active cell's row")).changed() {
         app.run_or_alert("options.highlightActiveRow", json!({"on": highlight_row}));
     }
+    let mut dark_sheet = app.ui.dark_sheet;
+    let hint = lang.tr("Show the cells with their colours inverted. Saving, printing and PDFs are unchanged.");
+    if ui.checkbox(&mut dark_sheet, lang.tr("Dark sheet (light text on dark cells)")).on_hover_text(hint).changed() {
+        app.run_or_alert("view.darkSheet", json!({"on": dark_sheet}));
+    }
     ui.add_space(18.0);
     section(ui, lang, "Options|Editing");
     let mut autocomplete = app.ui.autocomplete;

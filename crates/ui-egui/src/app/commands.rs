@@ -183,6 +183,12 @@ impl SheetApp {
                 self.ui.system_theme = false;
                 Ok(json!({"on": self.ui.dark}))
             }
+            "view.darkSheet" => {
+                // `{on}`; WordCraft's `{value}` spelling is accepted too. No parameter toggles.
+                let given = p.get("on").or_else(|| p.get("value")).and_then(Json::as_bool);
+                self.ui.dark_sheet = given.unwrap_or(!self.ui.dark_sheet);
+                Ok(json!({"on": self.ui.dark_sheet}))
+            }
             "view.theme" => {
                 match p.get("mode").and_then(Json::as_str) {
                     Some("system") => self.ui.system_theme = true,
