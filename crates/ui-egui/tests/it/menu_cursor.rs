@@ -5,7 +5,7 @@
 //! the sheet, and every item below them lies over the grid. The crosshair then stayed until the
 //! pointer crossed back out of the grid.
 
-use egui::{CursorIcon, Event, Modifiers, PointerButton, Rect, vec2};
+use egui::{CursorIcon, Event, Modifiers, PointerButton, Pos2, Rect, pos2, vec2};
 use egui_kittest::kittest::Queryable;
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
@@ -43,6 +43,17 @@ fn hover(h: &mut Harness, pos: egui::Pos2) -> CursorIcon {
 
 fn rect(h: &Harness, label: &str) -> Rect {
     h.get_by_label(label).rect()
+}
+
+fn press(h: &mut Harness, pos: Pos2) {
+    h.input_mut().events.push(Event::PointerMoved(pos));
+    h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+}
+
+fn release(h: &mut Harness, pos: Pos2) {
+    h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
 }
 
 /// The Page Layout tab owns the menus the report is about.
@@ -116,4 +127,98 @@ fn leaving_a_menu_restores_the_cursor_over_the_ribbon() {
     let _ = hover(&mut h, executive);
     let tab = rect(&h, "Home").center();
     assert_eq!(hover(&mut h, tab), CursorIcon::Default, "the cell cursor must not stick after the pointer leaves the grid");
+}
+
+/// A dialog is a `Middle`-order window, not a `Foreground` area: it owns the pointer just the same.
+#[test]
+fn the_draw_tool_does_not_paint_its_crosshair_over_a_dialog() {
+    let mut h = harness();
+    pen_on(&mut h);
+    page_layout(&mut h);
+    let margins = rect(&h, "Margins").center();
+    click(&mut h, margins);
+    let custom = rect(&h, "Custom Margins…").center();
+    click(&mut h, custom);
+    // Probe the bottom of the dialog: the window hangs over the cells, and the mirrored point
+    // must be a cell, or the check is vacuous.
+    let win = rect(&h, "Page Setup");
+    let probe = pos2(win.center().x, win.bottom() - 24.0);
+    let g = h.state().grid.geo.clone().expect("the grid is laid out");
+    assert!(win.intersects(g.cells), "the Page Setup dialog opens over the sheet");
+    assert!(g.in_cells(g.mirror_pos(probe)), "the probe lies in a cell under the dialog");
+    assert_ne!(hover(&mut h, probe), CursorIcon::Crosshair, "the Page Setup dialog is not a drawing surface");
+}
+
+/// The layer lookup works in screen coordinates: on a right-to-left sheet the mirrored grid
+/// position would land outside the menu and leak the crosshair through.
+#[test]
+fn the_draw_tool_keeps_the_arrow_over_a_menu_on_a_right_to_left_sheet() {
+    let mut h = harness();
+    h.state_mut().session.execute("view.rightToLeft", json!({"on": true})).unwrap();
+    h.run_steps(2);
+    pen_on(&mut h);
+    let grid = h.state().grid.rect.expect("the grid is laid out");
+    assert_eq!(hover(&mut h, grid.center()), CursorIcon::Crosshair, "the pen still draws on a mirrored sheet");
+    open_size_menu(&mut h);
+    for label in ["Letter", "Executive", "A3", "B4", "Japanese Postcard"] {
+        let item = rect(&h, label).center();
+        assert_eq!(hover(&mut h, item), CursorIcon::Default, "{label} must not show the crosshair on a mirrored sheet");
+    }
+}
+
+/// Every committed ink stroke, its points mapped back to the screen the way the preview draws it.
+fn ink_strokes_on_screen(h: &Harness) -> Vec<Vec<Pos2>> {
+    let d = h.state().session.active().unwrap();
+    let sh = d.wb.active().unwrap();
+    let g = h.state().grid.geo.clone().expect("the grid is laid out");
+    let mut strokes = vec![];
+    for s in sh.shapes.iter().filter(|s| s.kind == gridcraft_engine::model::ShapeKind::Ink) {
+        let ox = sh.col_left(s.anchor.cell.col) as f32 + s.anchor.dx;
+        let oy = sh.row_top(s.anchor.cell.row) as f32 + s.anchor.dy;
+        let mut points = vec![];
+        for q in s.text.split(';').filter(|q| !q.is_empty()) {
+            let (x, y) = q.split_once(',').expect("an ink point is x,y");
+            let (ax, ay) = (ox + x.parse::<f32>().unwrap(), oy + y.parse::<f32>().unwrap());
+            let (col, row) = (sh.col_at(f64::from(ax)), sh.row_at(f64::from(ay)));
+            points.push(g.mirror_pos(pos2(
+                g.x(sh, col) + (ax - sh.col_left(col) as f32) * g.z,
+                g.y(sh, row) + (ay - sh.row_top(row) as f32) * g.z,
+            )));
+        }
+        strokes.push(points);
+    }
+    strokes
+}
+
+/// A stroke that starts on the sheet, crosses an open menu and comes back commits no ink over the
+/// menu, and no single stroke joins the two sides across the covered cells.
+#[test]
+fn a_stroke_does_not_run_under_an_open_menu() {
+    let mut h = harness();
+    pen_on(&mut h);
+    open_size_menu(&mut h);
+    let items: Vec<Rect> = ["Letter", "Executive", "A3", "B4", "Japanese Postcard"].iter().map(|l| rect(&h, l)).collect();
+    let menu = items.iter().fold(items[0], |a, r| a.union(*r));
+    // A horizontal pass at the height of an item that lies over the sheet, from a cell left of
+    // the menu to the cells right of it.
+    let y = items[3].center().y;
+    let start = pos2(items[0].left() - 180.0, y);
+    let end = pos2(items[0].right() + 160.0, y);
+    press(&mut h, start);
+    for t in 1..=12 {
+        let step = (end - start) * (t as f32 / 12.0);
+        h.input_mut().events.push(Event::PointerMoved(start + step));
+        h.run_steps(2);
+    }
+    release(&mut h, end);
+    let strokes = ink_strokes_on_screen(&h);
+    assert!(!strokes.is_empty() && strokes.iter().all(|s| !s.is_empty()), "the pen still commits ink on this pass");
+    for (i, stroke) in strokes.iter().enumerate() {
+        let left = stroke.iter().any(|p| p.x < menu.left());
+        let right = stroke.iter().any(|p| p.x > menu.right());
+        assert!(!(left && right), "stroke {i} joins across the menu instead of ending at it");
+        for (k, p) in stroke.iter().enumerate() {
+            assert!(!menu.contains(*p), "ink point {k} of stroke {i} lies under the menu");
+        }
+    }
 }

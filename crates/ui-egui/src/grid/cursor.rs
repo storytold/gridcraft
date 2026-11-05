@@ -6,8 +6,15 @@ use super::{CellRef, Color32, CursorIcon, Drag, Pos2, RangeRef, Rect, Sheet, She
 
 /// Whether a menu, a dialog or another area is drawn above the sheet at `pos`: such a layer owns
 /// the pointer, so the grid must not paint its own cursor over it.
-pub(super) fn popup_over(ctx: &egui::Context, pos: Option<Pos2>) -> bool {
-    pos.and_then(|p| ctx.layer_id_at(p)).is_some_and(|layer| layer.order >= egui::Order::Foreground)
+///
+/// `layer_id_at` walks the registered areas from the top — menus are `Foreground` areas, dialogs
+/// are `Middle`-order windows — and skips the overlays that take no input, like a cell's note.
+/// The sheet paints in its own layer (`sheet`, the grid UI's), so the topmost area at the pointer
+/// is the sheet itself unless something is drawn above it. `pos` is the pointer's screen position:
+/// `layer_id_at` knows nothing of the sheet's right-to-left mirror, so a mirrored grid position
+/// would look up the wrong side.
+pub(super) fn popup_over(ctx: &egui::Context, pos: Option<Pos2>, sheet: egui::LayerId) -> bool {
+    pos.and_then(|p| ctx.layer_id_at(p)).is_some_and(|top| top != sheet)
 }
 
 /// Decide after interaction so drag start and release use the new state in the same frame.
@@ -17,7 +24,9 @@ pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Resp
     }
     let ctx = ui.ctx();
     let pointer = ctx.input(|i| i.pointer.clone());
-    let pos = pointer.interact_pos().or(pointer.hover_pos()).map(|p| geo.mirror_pos(p));
+    // Hit-testing works in logical coordinates, the layer lookup in screen ones (see `Geo::rtl`).
+    let screen = pointer.interact_pos().or(pointer.hover_pos());
+    let pos = screen.map(|p| geo.mirror_pos(p));
     let in_cells = pos.is_some_and(|p| geo.in_cells(p));
     let (freeze_cols, freeze_rows) = freeze_handles(geo);
     // Hover bookkeeping also serves cell notes, independently of who owns the cursor.
@@ -33,7 +42,7 @@ pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Resp
     // recording a stroke or drawing the control — but not through a menu or a dialog drawn above
     // the sheet: the pointer there belongs to the popup, and the crosshair it left behind stayed
     // until the pointer crossed out of the grid.
-    if (!app.session.draw_tool.is_empty() || app.grid.placing.is_some()) && in_cells && !popup_over(ctx, pos) {
+    if (!app.session.draw_tool.is_empty() || app.grid.placing.is_some()) && in_cells && !popup_over(ctx, screen, ui.layer_id()) {
         ctx.set_cursor_icon(CursorIcon::Crosshair);
         return;
     }
