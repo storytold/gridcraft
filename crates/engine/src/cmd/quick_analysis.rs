@@ -74,6 +74,10 @@ struct Block {
     /// The columns (or, `by_rows`, the rows) of `data` that hold numbers.
     lines: BTreeSet<u32>,
     by_rows: bool,
+    /// Last row / column the results must stay clear of: the selection's own far edge, so a
+    /// selection reaching past the data still gets its results outside it. Whole rows or columns
+    /// (reaching the sheet limit) fall back to the clipped range.
+    edge: CellRef,
 }
 
 impl Block {
@@ -93,7 +97,13 @@ fn block(s: &Session, p: &Json, by_rows: bool, cmd: &str) -> Result<Block> {
     let sheet = target_sheet(s, p)?;
     let sel = match str_param(p, "range") {
         Some(_) => target_range(s, p)?,
-        None => s.doc()?.selection.current(),
+        None => {
+            // Never guess from the current area of a multi-area selection.
+            if s.doc()?.selection.ranges.len() > 1 {
+                return Err(bad(cmd, "select a single contiguous range"));
+            }
+            s.doc()?.selection.current()
+        }
     };
     if sel.is_single() {
         return Err(bad(cmd, "select at least two cells"));
@@ -130,7 +140,11 @@ fn block(s: &Session, p: &Json, by_rows: bool, cmd: &str) -> Result<Block> {
     if lines.is_empty() {
         return Err(EngineError::Other("The selection holds no numbers.".into()));
     }
-    Ok(Block { sheet, range: r, data, lines, by_rows })
+    let edge = CellRef::new(
+        if sel.end.row >= MAX_ROWS - 1 { r.end.row } else { sel.end.row.max(r.end.row) },
+        if sel.end.col >= MAX_COLS - 1 { r.end.col } else { sel.end.col.max(r.end.col) },
+    );
+    Ok(Block { sheet, range: r, data, lines, by_rows, edge })
 }
 
 fn add_total(s: &mut Session, p: &Json) -> Result<Json> {
@@ -160,11 +174,12 @@ fn add_total(s: &mut Session, p: &Json) -> Result<Json> {
     };
     // (target, formula) pairs.
     let mut writes: Vec<(CellRef, String)> = Vec::with_capacity(out_cells as usize);
-    let (height, width) = (r.height(), r.width());
+    let (height, width) = (b.edge.row - r.start.row + 1, b.edge.col - r.start.col + 1);
     for &line in &b.lines {
         match func {
             Func::Aggregate(name) => {
-                let target = if by_rows { CellRef::new(line, r.end.col.saturating_add(1)) } else { CellRef::new(r.end.row.saturating_add(1), line) };
+                let target =
+                    if by_rows { CellRef::new(line, b.edge.col.saturating_add(1)) } else { CellRef::new(b.edge.row.saturating_add(1), line) };
                 writes.push((target, format!("={name}({})", b.line_range(line, lo, hi).a1())));
             }
             Func::Percent | Func::Running => {
@@ -238,12 +253,11 @@ fn add_sparklines(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad(SPARK, "selection too large for this result"));
     }
     let (lo, hi) = b.span_of_line();
-    let r = b.range;
     let sparks: Vec<(CellRef, String)> = b
         .lines
         .iter()
         .map(|&line| {
-            let at = if by_rows { CellRef::new(line, r.end.col.saturating_add(1)) } else { CellRef::new(r.end.row.saturating_add(1), line) };
+            let at = if by_rows { CellRef::new(line, b.edge.col.saturating_add(1)) } else { CellRef::new(b.edge.row.saturating_add(1), line) };
             (at, b.line_range(line, lo, hi).a1())
         })
         .collect();

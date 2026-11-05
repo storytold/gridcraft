@@ -4726,6 +4726,51 @@ fn analysis_add_total_refuses_bad_and_huge_input() {
 }
 
 #[test]
+fn analysis_results_stay_outside_a_selection_that_extends_past_the_data() {
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    // Data ends in row 4; the selection runs to row 10, so the sum goes in row 11.
+    let r = s.execute("analysis.addTotal", json!({"range": "A1:C10"})).unwrap();
+    assert_eq!(r["output"], "B11:C11");
+    assert_eq!(v(&s, "B11"), Value::Number(6.0));
+    assert_eq!(v(&s, "B5"), Value::Empty);
+    // Per-row blocks and sparklines move out by the selection's size too.
+    let r = s.execute("analysis.addTotal", json!({"range": "B1:C10", "function": "runningTotal", "direction": "rows"})).unwrap();
+    assert_eq!(r["output"], "B12:C14", "per-row block lands below the selection, not inside it");
+    let r = s.execute("analysis.addSparklines", json!({"range": "A1:F4"})).unwrap();
+    assert_eq!(r["output"], "G2:G4");
+    let r = s.execute("analysis.addSparklines", json!({"range": "A1:C8", "direction": "columns"})).unwrap();
+    assert_eq!(r["output"], "B9:C9");
+}
+
+#[test]
+fn analysis_overwrite_keeps_the_target_cell_style() {
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    s.execute("cell.set", json!({"cell": "B5", "input": "1"})).unwrap();
+    s.execute("selection.set", json!({"cell": "B5"})).unwrap();
+    s.execute("home.bold", json!({})).unwrap();
+    s.execute("analysis.addTotal", json!({"range": "A1:C4", "overwrite": true})).unwrap();
+    assert_eq!(v(&s, "B5"), Value::Number(6.0));
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    assert!(d.wb.styles.get(sh.style_id(CellRef::parse("B5").unwrap())).font.bold, "bold survives the overwrite");
+}
+
+#[test]
+fn analysis_commands_refuse_a_multi_area_selection_without_a_range() {
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    s.execute("selection.set", json!({"range": "A1:C4,E1:F4"})).unwrap();
+    assert!(s.execute("analysis.addTotal", json!({})).is_err());
+    assert!(s.execute("analysis.addSparklines", json!({})).is_err());
+    assert_eq!(v(&s, "B5"), Value::Empty);
+    // An explicit range still works.
+    s.execute("analysis.addTotal", json!({"range": "A1:C4"})).unwrap();
+    assert_eq!(v(&s, "B5"), Value::Number(6.0));
+}
+
+#[test]
 fn analysis_add_sparklines_one_per_row_in_one_undo_step() {
     let mut s = s();
     quick_analysis_block(&mut s);

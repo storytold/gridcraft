@@ -42,7 +42,8 @@ pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
         Key::T if shift => Some(("formulas.autoSum", json!({}))),
         Key::T => Some(("insert.table", json!({}))),
         Key::E => Some(("edit.flashFill", json!({}))),
-        Key::Q => {
+        // Plain Ctrl+Q only: Ctrl+Shift+Q and Ctrl+Alt+Q (AltGr+Q) are not Quick Analysis.
+        Key::Q if !shift && !m.alt => {
             // Quick Analysis; a single cell has nothing to analyse, which is not worth an alert,
             // but several areas deserve to be told why nothing opened.
             if let Err(e) = crate::quick_analysis::toggle(app, None)
