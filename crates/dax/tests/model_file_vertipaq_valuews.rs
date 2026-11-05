@@ -106,14 +106,22 @@ fn changing_a_value_to_another_existing_value_round_trips() {
     // has to move, while the hierarchy and its hash index stay exactly as Excel wrote them.
     let rows: Vec<usize> = target.values.iter().enumerate().filter(|(_, value)| numeric(value).is_some()).map(|(row, _)| row).collect();
     assert!(rows.len() >= 2, "value-encoded column needs two numeric rows");
-    let source = target.values[rows[0]].clone();
-    let destination = target.values[rows[1]].clone();
-    assert_ne!(numeric(&source), numeric(&destination));
-    target.values[rows[1]] = source.clone();
+    // The fixture is real Excel output and may repeat a value, so do not assume the first two
+    // numeric rows differ: find one that actually holds a different value.
+    let first = rows[0];
+    let source = target.values[first].clone();
+    let source_number = numeric(&source).unwrap_or_else(|| panic!("value-encoded column needs a numeric row"));
+    let destination_row = rows
+        .iter()
+        .copied()
+        .skip(1)
+        .find(|row| numeric(&target.values[*row]).is_some_and(|value| value != source_number))
+        .unwrap_or_else(|| panic!("value-encoded column needs two different numeric values"));
+    target.values[destination_row] = source.clone();
 
     let written = write_model(&base, &model).expect("write");
     let back = read_model(&written).expect("read back");
-    assert_eq!(column(&back, &table_name, &column_name).values[rows[1]], source);
+    assert_eq!(column(&back, &table_name, &column_name).values[destination_row], source);
     assert_only_column_changed(&model, &back, &table_name, &column_name);
 
     // The hierarchy itself did not change ids, so Excel's hash index must still be valid byte for
