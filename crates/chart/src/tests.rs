@@ -52,6 +52,7 @@ fn chart(kind: ChartKind) -> Chart {
         first_slice_angle: 0,
         gap_width: None,
         overlap: None,
+        series_lines: None,
         x_title: Some("Quarter".into()),
         y_title: Some("Revenue".into()),
         source: None,
@@ -84,6 +85,7 @@ fn sample(kind: ChartKind) -> ChartData {
     ChartData {
         category_levels: vec![],
         palette: vec![],
+        series_lines: None,
         categories: cats.iter().map(ToString::to_string).collect(),
         series: vec![
             series("North", &[12000.0, -4000.0, 23000.0, 31000.0, 18000.0, 27000.0], [20, 96, 130, 255], k1),
@@ -164,6 +166,7 @@ fn doughnut_draws_each_series_as_a_ring() {
     let d = ChartData {
         category_levels: vec![],
         palette: vec![],
+        series_lines: None,
         categories: ["A", "B", "C"].iter().map(|s| s.to_string()).collect(),
         series: vec![
             series("Inner", &[1.0, 2.0, 3.0], [20, 96, 130, 255], ChartKind::Doughnut),
@@ -197,12 +200,14 @@ fn doughnut_with_many_series_still_draws_the_outer_rings() {
     let many = ChartData {
         category_levels: vec![],
         palette: vec![],
+        series_lines: None,
         categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
         series: (0..255).map(|i| series(&format!("S{i}"), &[1.0, 1.0], [20, 96, 130, 255], ChartKind::Doughnut)).collect(),
     };
     let single = ChartData {
         category_levels: vec![],
         palette: vec![],
+        series_lines: None,
         categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
         // Two series, so the title fallback (a lone series names the chart) does not shrink the plot.
         series: vec![
@@ -245,6 +250,7 @@ fn doughnut_one_pixel_rings_skip_the_separator_stroke() {
     let thin = ChartData {
         category_levels: vec![],
         palette: vec![],
+        series_lines: None,
         categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
         series: (0..255).map(|i| series(&format!("S{i}"), &[1.0, 1.0], [20, 96, 130, 255], ChartKind::Doughnut)).collect(),
     };
@@ -262,6 +268,7 @@ fn doughnut_one_pixel_rings_skip_the_separator_stroke() {
     let thick = ChartData {
         category_levels: vec![],
         palette: vec![],
+        series_lines: None,
         categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
         series: vec![
             series("Inner", &[1.0, 1.0], [20, 96, 130, 255], ChartKind::Doughnut),
@@ -294,6 +301,7 @@ fn doughnut_wedge_budget_bounds_many_series_and_categories() {
     let d = ChartData {
         category_levels: vec![],
         palette: vec![],
+        series_lines: None,
         categories: (0..cats).map(|j| format!("C{j}")).collect(),
         series: (0..80)
             .map(|i| SeriesData { name: format!("S{i}"), values: values.iter().map(|v| Some(*v)).collect(), ..SeriesData::default() })
@@ -332,6 +340,7 @@ fn doughnut_first_slice_angle_rotates_the_start() {
     let d = ChartData {
         category_levels: vec![],
         palette: vec![],
+        series_lines: None,
         categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
         series: vec![series("Only", &[1.0, 1.0], [20, 96, 130, 255], ChartKind::Doughnut)],
     };
@@ -358,6 +367,7 @@ fn rotated_wedges_cover_each_slice_once_without_overlap() {
             let d = ChartData {
                 category_levels: vec![],
                 palette: vec![[230, 126, 34, 255], [39, 174, 96, 255], [142, 68, 173, 255]],
+                series_lines: None,
                 categories: ["A", "B", "C", "D"].iter().map(|s| s.to_string()).collect(),
                 series: vec![series("Only", &[1.0; 4], [20, 96, 130, 255], kind)],
             };
@@ -400,6 +410,7 @@ fn slice_crossing_twelve_has_no_internal_seam() {
     let d = ChartData {
         category_levels: vec![],
         palette: vec![a, b],
+        series_lines: None,
         categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
         series: vec![series("Only", &[1.0, 1.0], a, ChartKind::Pie)],
     };
@@ -440,6 +451,7 @@ fn doughnut_legend_names_categories_and_matches_every_ring() {
     let d = ChartData {
         category_levels: vec![],
         palette: vec![[230, 126, 34, 255], [39, 174, 96, 255], [142, 68, 173, 255]],
+        series_lines: None,
         categories: ["A", "B", "C", "D"].iter().map(|s| s.to_string()).collect(),
         series: vec![
             series("Outer", &[1.0; 4], [20, 96, 130, 255], ChartKind::Doughnut),
@@ -690,8 +702,13 @@ fn scatter_with_text_x_values_numbers_the_points() {
         let d = resolve(&wb, 0, &c);
         assert_eq!(d.series[0].x, None, "{kind:?}");
         let prims = render(&c, &d, 400.0, 300.0, &ApproxMeasure);
-        let empty =
-            render(&c, &ChartData { category_levels: vec![], palette: vec![], categories: vec![], series: vec![] }, 400.0, 300.0, &ApproxMeasure);
+        let empty = render(
+            &c,
+            &ChartData { category_levels: vec![], palette: vec![], series_lines: None, categories: vec![], series: vec![] },
+            400.0,
+            300.0,
+            &ApproxMeasure,
+        );
         assert!(prims.len() > empty.len() + 2, "{kind:?} draws its points");
         // Numeric X values are kept.
         c.series[0].categories = Some("Sheet1!$C$1:$C$3".into());
@@ -791,6 +808,7 @@ fn negative_values_put_axis_below_zero() {
     let d = ChartData {
         category_levels: vec![],
         palette: vec![],
+        series_lines: None,
         categories: vec![],
         series: vec![series("N", &[-5.0, 3.0, -2.0], [1, 2, 3, 255], ChartKind::ColumnClustered)],
     };
@@ -807,12 +825,14 @@ fn edge_cases_never_panic() {
     let zeros = ChartData {
         category_levels: vec![],
         palette: vec![],
+        series_lines: None,
         categories: vec!["a".into(), "b".into()],
         series: vec![series("z", &[0.0, 0.0], [0, 0, 0, 255], ChartKind::Line)],
     };
     let weird = ChartData {
         category_levels: vec![],
         palette: vec![],
+        series_lines: None,
         categories: vec![String::new(); 3],
         series: vec![SeriesData {
             name: "w".repeat(500),
@@ -846,6 +866,7 @@ fn thousands_of_points_are_decimated() {
     let d = ChartData {
         category_levels: vec![],
         palette: vec![],
+        series_lines: None,
         categories: vec![],
         series: vec![series("big", &vals, [9, 9, 9, 255], ChartKind::Line)],
     };
@@ -873,7 +894,7 @@ fn smooth_line_adds_interpolated_points_and_keeps_endpoints() {
     let line_pts = |smooth: bool, m: &ApproxMeasure| -> usize {
         let mut s = series("L", &[1.0, 5.0, 2.0, 6.0], [10, 20, 30, 255], ChartKind::Line);
         s.smooth = smooth;
-        let d = ChartData { category_levels: vec![], palette: vec![], categories: cats.clone(), series: vec![s] };
+        let d = ChartData { category_levels: vec![], palette: vec![], series_lines: None, categories: cats.clone(), series: vec![s] };
         render(&chart(ChartKind::Line), &d, 600.0, 400.0, m)
             .iter()
             .filter_map(|p| match p {
@@ -890,7 +911,7 @@ fn smooth_line_adds_interpolated_points_and_keeps_endpoints() {
     // Rendering either way must stay finite and inside the canvas.
     let mut s = series("L", &[1.0, 5.0, 2.0, 6.0], [10, 20, 30, 255], ChartKind::Line);
     s.smooth = true;
-    let d = ChartData { category_levels: vec![], palette: vec![], categories: cats, series: vec![s] };
+    let d = ChartData { category_levels: vec![], palette: vec![], series_lines: None, categories: cats, series: vec![s] };
     assert_sane(&render(&chart(ChartKind::Line), &d, 600.0, 400.0, &m), 600.0, 400.0);
 }
 
@@ -900,7 +921,13 @@ fn smooth_line_splits_at_gaps() {
     let mut s = series("L", &[1.0, 5.0, 2.0, 6.0], [10, 20, 30, 255], ChartKind::Line);
     s.smooth = true;
     s.values[1] = None; // gap between two data points
-    let d = ChartData { category_levels: vec![], palette: vec![], categories: vec!["a".into(), "b".into(), "c".into(), "d".into()], series: vec![s] };
+    let d = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        series_lines: None,
+        categories: vec!["a".into(), "b".into(), "c".into(), "d".into()],
+        series: vec![s],
+    };
     let prims = render(&chart(ChartKind::Line), &d, 600.0, 400.0, &m);
     // Two separate runs (before/after the gap) → at least two line primitives.
     let lines = prims.iter().filter(|p| matches!(p, Prim::Line { .. })).count();
@@ -980,6 +1007,7 @@ fn fuzz_random_data_and_sizes() {
         let d = ChartData {
             category_levels: vec![],
             palette: vec![],
+            series_lines: None,
             categories: (0..ncat).map(|i| "c".repeat(i % 7) + &i.to_string()).collect(),
             series,
         };
@@ -1157,8 +1185,13 @@ fn line_chart_draws_trendline_forecast_and_labels() {
     let mut s = series("Sales", &[9.0, 7.0, 5.0, 3.0], [10, 20, 30, 255], ChartKind::Line);
     s.trendlines =
         vec![TrendlineData { spec: Trendline { forward: 1.0, display_equation: true, display_r_squared: true, ..Trendline::default() }, color: tc }];
-    let d =
-        ChartData { category_levels: vec![], palette: vec![], categories: ["a", "b", "c", "d"].map(String::from).to_vec(), series: vec![s.clone()] };
+    let d = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        series_lines: None,
+        categories: ["a", "b", "c", "d"].map(String::from).to_vec(),
+        series: vec![s.clone()],
+    };
     let mut c = chart(ChartKind::Line);
     c.legend = LegendPos::None; // keeps legend swatches out of the line counts
     let prims = render(&c, &d, 600.0, 400.0, &m);
@@ -1182,7 +1215,7 @@ fn line_chart_draws_trendline_forecast_and_labels() {
     assert!(lines_of(&pie, tc).is_empty());
     // One point: nothing to fit, nothing drawn.
     s.values.truncate(1);
-    let one = ChartData { category_levels: vec![], palette: vec![], categories: vec!["a".into()], series: vec![s] };
+    let one = ChartData { category_levels: vec![], palette: vec![], series_lines: None, categories: vec!["a".into()], series: vec![s] };
     assert!(lines_of(&render(&c, &one, 600.0, 400.0, &m), tc).is_empty());
 }
 
@@ -1202,7 +1235,7 @@ fn scatter_trendlines_use_x_values_and_stay_in_the_plot() {
         TrendlineData { spec: Trendline { kind: TrendlineKind::Exponential, forward: 30.0, ..Trendline::default() }, color: colors[1] },
         TrendlineData { spec: Trendline { kind: TrendlineKind::MovingAverage(2), ..Trendline::default() }, color: colors[2] },
     ];
-    let d = ChartData { category_levels: vec![], palette: vec![], categories: vec![], series: vec![s] };
+    let d = ChartData { category_levels: vec![], palette: vec![], series_lines: None, categories: vec![], series: vec![s] };
     let mut c = chart(ChartKind::Scatter);
     c.legend = LegendPos::None;
     let prims = render(&c, &d, 600.0, 400.0, &m);
@@ -1219,6 +1252,7 @@ fn treemap_and_histogram_shapes() {
     let d = ChartData {
         category_levels: vec![],
         palette: vec![],
+        series_lines: None,
         categories: vec!["a".into(), "b".into(), "c".into(), "d".into()],
         series: vec![series("t", &[6.0, 6.0, 4.0, 3.0], [10, 20, 30, 255], ChartKind::Treemap)],
     };
@@ -1242,6 +1276,7 @@ fn treemap_and_histogram_shapes() {
     let d = ChartData {
         category_levels: vec![],
         palette: vec![],
+        series_lines: None,
         categories: vec![],
         series: vec![series("h", &vals, [10, 20, 30, 255], ChartKind::Histogram)],
     };
@@ -1256,6 +1291,7 @@ fn histogram_boundary_values_match_interval_labels() {
         let d = ChartData {
             category_levels: vec![],
             palette: vec![],
+            series_lines: None,
             categories: vec![],
             series: vec![series("h", vals, [10, 20, 30, 255], ChartKind::Histogram)],
         };
@@ -1329,6 +1365,7 @@ fn funnel_value_labels_follow_the_data_labels_flag() {
     let data = ChartData {
         category_levels: vec![],
         palette: vec![],
+        series_lines: None,
         categories: vec!["a".into(), "b".into(), "c".into()],
         series: vec![series("S", &[11111.0, 22222.0, 33333.0], [20, 96, 130, 255], ChartKind::Funnel)],
     };
@@ -1425,6 +1462,7 @@ fn hundred_percent_stacked_areas_fill_each_category_to_its_total() {
     let d = ChartData {
         category_levels: vec![],
         palette: vec![],
+        series_lines: None,
         categories: ["Q1", "Q2", "Q3", "Q4"].iter().map(|s| s.to_string()).collect(),
         series: vec![
             series("North", &[10.0, 30.0, 0.0, 5.0], [20, 96, 130, 255], ChartKind::AreaStacked100),
@@ -1540,7 +1578,13 @@ fn a_huge_trendline_forecast_does_not_collapse_the_columns() {
     let col: Rgba = [10, 20, 30, 255];
     let mut s = series("Sales", &[1.0, 3.0, 2.0, 5.0, 4.0], col, ChartKind::ColumnClustered);
     s.trendlines = vec![TrendlineData { spec: Trendline { forward: 1e6, backward: 1e6, ..Trendline::default() }, color: tc }];
-    let d = ChartData { palette: vec![], category_levels: vec![], categories: ["a", "b", "c", "d", "e"].map(String::from).to_vec(), series: vec![s] };
+    let d = ChartData {
+        palette: vec![],
+        series_lines: None,
+        category_levels: vec![],
+        categories: ["a", "b", "c", "d", "e"].map(String::from).to_vec(),
+        series: vec![s],
+    };
     let mut c = chart(ChartKind::ColumnClustered);
     c.legend = LegendPos::None;
     let prims = render(&c, &d, 600.0, 400.0, &m);
@@ -1718,4 +1762,60 @@ fn bar_labels_are_drawn_after_every_bar() {
     let labels = prims[last_bar..].iter().filter(|p| matches!(p, Prim::Text { text, .. } if text.chars().any(|c| c.is_ascii_digit()))).count();
     let values: usize = d.series.iter().map(|s| s.values.iter().flatten().count()).sum();
     assert!(labels >= values, "{labels} labels after the last bar, of {values}");
+}
+
+/// As Excel draws them: each series joined at its far end, also a negative one, between the
+/// facing edges of neighbouring columns.
+#[test]
+fn series_lines_join_stacked_series_at_their_far_ends() {
+    let mut d = sample(ChartKind::ColumnStacked);
+    let first = d.series[0].clone();
+    d.categories = vec!["x".into(), "y".into(), "z".into()];
+    d.series = [(vec![40.0, -10.0, 30.0], [10, 0, 0, 255]), (vec![30.0, 30.0, 0.0], [0, 10, 0, 255])]
+        .into_iter()
+        .map(|(values, color)| {
+            let mut s = first.clone();
+            s.values = values.into_iter().map(Some).collect();
+            s.color = color;
+            s
+        })
+        .collect();
+    let mut c = chart(ChartKind::ColumnStacked);
+    c.data_labels = false;
+    let ink = [1, 2, 3, 255];
+    let drawn = |d: &ChartData| -> Vec<Vec<[f32; 2]>> {
+        render(&c, d, 640.0, 400.0, &ApproxMeasure)
+            .into_iter()
+            .filter_map(|p| match p {
+                Prim::Line { pts, color, .. } if color == ink => Some(pts),
+                _ => None,
+            })
+            .collect()
+    };
+    assert!(drawn(&d).is_empty(), "off by default");
+    d.series_lines = Some((ink, 0.75));
+    let lines = drawn(&d);
+    assert_eq!(lines.len(), 4, "two series, two gaps: {lines:?}");
+    let bars: Vec<(f32, f32, f32, f32)> = render(&c, &d, 640.0, 400.0, &ApproxMeasure)
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Rect { x, y, w, h, fill: Some(f), .. } if *f == d.series[0].color && *w > 8.0 => Some((*x, *y, *w, *h)),
+            _ => None,
+        })
+        .collect();
+    let (a, b) = (bars[0], bars[1]);
+    let line = &lines[0];
+    assert!((line[0][0] - (a.0 + a.2)).abs() < 0.01 && (line[1][0] - b.0).abs() < 0.01, "edge to edge: {line:?} {a:?} {b:?}");
+    assert!((line[0][1] - a.1).abs() < 0.01, "from the top of the first: {line:?} {a:?}");
+    assert!((line[1][1] - (b.1 + b.3)).abs() < 0.01, "to the bottom of the negative one: {line:?} {b:?}");
+}
+
+/// Clustered columns have nothing to join, as in Excel.
+#[test]
+fn series_lines_are_only_for_stacks() {
+    let mut d = sample(ChartKind::ColumnClustered);
+    let ink = [1, 2, 3, 255];
+    d.series_lines = Some((ink, 0.75));
+    let prims = render(&chart(ChartKind::ColumnClustered), &d, 640.0, 400.0, &ApproxMeasure);
+    assert!(!prims.iter().any(|p| matches!(p, Prim::Line { color, .. } if *color == ink)));
 }

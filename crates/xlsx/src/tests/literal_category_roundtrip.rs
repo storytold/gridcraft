@@ -48,6 +48,7 @@ fn literal_category_with_separators_survives_save() {
         first_slice_angle: 0,
         gap_width: None,
         overlap: None,
+        series_lines: None,
         x_title: None,
         y_title: None,
         source: None,

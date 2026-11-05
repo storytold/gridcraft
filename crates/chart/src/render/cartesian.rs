@@ -182,6 +182,29 @@ fn column_slots(fams: &[Fam], sec: &[bool]) -> (Vec<usize>, f32) {
     (slot_of, slot_keys.len().max(1) as f32)
 }
 
+/// The lines joining each stacked series across the categories, as Excel draws them: from the far
+/// end of a series' segment, also a negative or empty one, to the same end in the next category.
+/// `edges` gives a segment's two corners at that end, nearest the previous category first.
+fn draw_series_lines(
+    ctx: &mut Ctx,
+    style: Option<(crate::Rgba, f32)>,
+    fams: &[Fam],
+    ncat: usize,
+    edges: impl Fn(usize, usize) -> Option<([f32; 2], [f32; 2])>,
+) {
+    let Some((color, width)) = style else { return };
+    for (i, fam) in fams.iter().enumerate() {
+        if !is_col(*fam) || *fam == Fam::Col {
+            continue;
+        }
+        for j in 1..ncat {
+            if let (Some((_, from)), Some((to, _))) = (edges(i, j - 1), edges(i, j)) {
+                ctx.out.push(Prim::Line { pts: vec![from, to], color, width, dash: false });
+            }
+        }
+    }
+}
+
 type BarLabel = (f32, f32, String, crate::Rgba, (HAlign, VAlign));
 
 fn draw_bar_labels(ctx: &mut Ctx, labels: &mut Vec<BarLabel>) {
@@ -348,6 +371,18 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 }
             }
         }
+        let lines = if pass == 1 { data.series_lines } else { None };
+        draw_series_lines(ctx, lines, &fams, ncat, |i, j| {
+            let (_, far) = spans.get(i)?.get(j).copied().flatten()?;
+            let (c, v, k) = (center(j), vpos(far, &scale_of(i)), slot_of.get(i).copied().unwrap_or(0) as f32);
+            Some(if horizontal {
+                let y = c + cluster / 2.0 - bw - k * step;
+                ([v, y + bw], [v, y])
+            } else {
+                let x = c - cluster / 2.0 + k * step;
+                ([x, v], [x + bw, v])
+            })
+        });
         draw_bar_labels(ctx, &mut bar_labels);
         for (x, y, t) in area_labels.drain(..) {
             ctx.text(x, y, &t, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));

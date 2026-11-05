@@ -835,6 +835,7 @@ mod tests {
                 first_slice_angle: 0,
                 gap_width: None,
                 overlap: None,
+                series_lines: None,
                 x_title: None,
                 y_title: None,
                 source: None,

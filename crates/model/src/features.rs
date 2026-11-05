@@ -547,6 +547,15 @@ fn default_hole_size() -> u8 {
 }
 
 /// A chart's data table (`c:dTable`), independent of the chart legend.
+/// The lines joining the series of neighbouring stacked columns or bars.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChartSeriesLines {
+    /// `None`: black.
+    pub color: Option<Color>,
+    /// In points. `None`: 0.75.
+    pub width: Option<f32>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ChartDataTable {
@@ -590,6 +599,9 @@ pub struct Chart {
     /// width (-100–100, negative for a space between them). `None`: 0.
     #[serde(default)]
     pub overlap: Option<i16>,
+    /// Stacked column and bar charts: lines joining each series across the categories.
+    #[serde(default)]
+    pub series_lines: Option<ChartSeriesLines>,
     pub x_title: Option<String>,
     pub y_title: Option<String>,
     /// Source range when created from a selection (for Switch Row/Column).
@@ -1130,6 +1142,7 @@ mod tests {
             first_slice_angle: 0,
             gap_width: None,
             overlap: None,
+            series_lines: None,
             x_title: None,
             y_title: None,
             source: None,

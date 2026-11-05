@@ -132,6 +132,9 @@ pub struct ChartData {
     /// Workbook-theme colours for the points of pie-like charts, repeating (point `j` uses entry `j % len`); empty uses the default theme.
     #[serde(default)]
     pub palette: Vec<Rgba>,
+    /// Colour and width of the lines joining stacked series, when the chart has them.
+    #[serde(default)]
+    pub series_lines: Option<(Rgba, f32)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

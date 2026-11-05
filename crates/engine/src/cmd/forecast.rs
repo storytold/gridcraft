@@ -431,6 +431,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             first_slice_angle: 0,
             gap_width: None,
             overlap: None,
+            series_lines: None,
             x_title: None,
             y_title: None,
             source: None,

@@ -32,3 +32,16 @@ fn a_stacked_charts_overlap_is_not_kept() {
         assert_eq!(bars(grouping, "<c:gapWidth val=\"50\"/><c:overlap val=\"100\"/>").overlap, None, "{grouping}");
     }
 }
+
+#[test]
+fn series_lines_are_read_with_their_style() {
+    assert_eq!(bars("stacked", "").series_lines, None);
+    assert_eq!(bars("stacked", "<c:serLines/>").series_lines, Some(Default::default()));
+    let styled = bars(
+        "stacked",
+        "<c:serLines><c:spPr><a:ln xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" w=\"9525\"><a:solidFill><a:srgbClr val=\"808080\"/></a:solidFill></a:ln></c:spPr></c:serLines>",
+    );
+    let lines = styled.series_lines.unwrap();
+    assert_eq!(lines.width, Some(0.75));
+    assert!(lines.color.is_some());
+}

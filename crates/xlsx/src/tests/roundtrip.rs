@@ -418,6 +418,7 @@ fn sample() -> Workbook {
         first_slice_angle: 0,
         gap_width: None,
         overlap: None,
+        series_lines: None,
         x_title: Some("Region".into()),
         y_title: Some("Amount".into()),
         source: None,
@@ -457,7 +458,13 @@ fn sample() -> Workbook {
     });
     s.charts.push(combo);
     s.charts.push(Chart { kind: ChartKind::Waterfall, legend: LegendPos::None, title: None, ..base_chart.clone() });
-    s.charts.push(Chart { kind: ChartKind::ColumnClustered, gap_width: Some(219), overlap: Some(-27), ..base_chart.clone() });
+    s.charts.push(Chart {
+        kind: ChartKind::ColumnClustered,
+        gap_width: Some(219),
+        overlap: Some(-27),
+        series_lines: Some(Default::default()),
+        ..base_chart.clone()
+    });
     let mut doughnut = Chart { kind: ChartKind::Doughnut, hole_size: 25, first_slice_angle: 180, legend: LegendPos::Right, ..base_chart.clone() };
     doughnut.series.push(base_chart.series[0].clone());
     s.charts.push(doughnut);
@@ -1756,5 +1763,6 @@ fn remove_personal_information_is_kept_and_honoured() {
 fn assert_same_bar_spacing(x: &Chart, y: &Chart) {
     if x.gap_width.is_some() {
         assert_eq!((y.gap_width, y.overlap), (x.gap_width, x.overlap));
+        assert_eq!(y.series_lines, x.series_lines);
     }
 }

@@ -291,6 +291,13 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         first_slice_angle,
         gap_width,
         overlap,
+        series_lines: bars.and_then(|g| g.child("serLines")).map(|lines| {
+            let ln = lines.path(&["spPr", "ln"]);
+            gridcraft_model::ChartSeriesLines {
+                color: ln.and_then(|l| l.child("solidFill")).and_then(dml_color),
+                width: ln.and_then(|l| l.attr_f64("w")).map(|w| (w / EMU_PER_PT) as f32).filter(|w| w.is_finite() && *w > 0.0),
+            }
+        }),
         x_title: x_ax.and_then(|a| a.child("title")).and_then(rich_title),
         y_title: y_ax.and_then(|a| a.child("title")).and_then(rich_title),
         source: None,
@@ -677,6 +684,16 @@ fn dlbls(show: bool) -> String {
     )
 }
 
+fn series_lines_xml(ch: &Chart, wb: &Workbook) -> String {
+    let Some(lines) = &ch.series_lines else { return String::new() };
+    let width = lines.width.map_or(String::new(), |w| format!(" w=\"{}\"", (f64::from(w) * EMU_PER_PT).round().clamp(0.0, 20_116_800.0) as u64));
+    let fill = lines.color.as_ref().and_then(|c| srgb(c, &wb.theme)).map_or(String::new(), |c| format!("<a:solidFill>{c}</a:solidFill>"));
+    if width.is_empty() && fill.is_empty() {
+        return "<c:serLines/>".into();
+    }
+    format!("<c:serLines><c:spPr><a:ln{width}>{fill}</a:ln></c:spPr></c:serLines>")
+}
+
 fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb: &Workbook, si: usize) -> String {
     let sers: String = series.iter().map(|(i, s)| series_xml(s, *i, g, wb, si)).collect();
     let dl = dlbls(ch.data_labels);
@@ -689,8 +706,9 @@ fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb
                 None => "<c:overlap val=\"100\"/>".into(),
             };
             let gap = ch.gap_width.unwrap_or(150);
+            let lines = series_lines_xml(ch, wb);
             format!(
-                "<c:barChart><c:barDir val=\"{}\"/><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:gapWidth val=\"{gap}\"/>{overlap}{ax}</c:barChart>",
+                "<c:barChart><c:barDir val=\"{}\"/><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:gapWidth val=\"{gap}\"/>{overlap}{lines}{ax}</c:barChart>",
                 if bar { "bar" } else { "col" }
             )
         }
