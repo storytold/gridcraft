@@ -313,16 +313,43 @@ fn attach_survives_a_plain_save_and_a_reopen() {
     // The normal save path, called twice: attaching must not depend on write_model_pivot.
     let first = write_xlsx(&wb).unwrap();
     let second = write_xlsx(&wb).unwrap();
-    for bytes in [first, second] {
-        let parts = entries(&bytes);
+    for bytes in [&first, &second] {
+        let parts = entries(bytes);
         assert!(parts.contains_key("xl/pivotCache/pivotCacheDefinition1.xml"));
         assert!(parts.contains_key("xl/pivotTables/pivotTable1.xml"));
         assert!(text(&parts, "xl/workbook.xml").contains("<pivotCache cacheId=\"1\""));
-        let (pivots, warnings) = read_model_pivots(&bytes).unwrap();
+        let (pivots, warnings) = read_model_pivots(bytes).unwrap();
         assert_eq!(pivots.len(), 1, "{:?}", warnings.warnings);
         assert_eq!(pivots[0].spec.name, "ModelPivot");
         assert_eq!(pivots[0].location, at("A3"));
     }
+    // Reading the saved package back and saving it again must reproduce the PivotTable: its cache
+    // is external (the data model), so the range-pivot reader leaves it alone and only the
+    // pass-through content can carry it.
+    let (reopened, report) = read_xlsx(&first).unwrap();
+    let resaved = write_xlsx(&reopened).unwrap();
+    let parts = entries(&resaved);
+    assert!(parts.contains_key("xl/pivotCache/pivotCacheDefinition1.xml"), "parts {:?}", parts.keys().collect::<Vec<_>>());
+    assert!(parts.contains_key("xl/pivotTables/pivotTable1.xml"), "parts {:?}", parts.keys().collect::<Vec<_>>());
+    assert!(parts.contains_key("xl/connections.xml"), "parts {:?}", parts.keys().collect::<Vec<_>>());
+    assert!(text(&parts, "xl/workbook.xml").contains("<pivotCache cacheId=\"1\""));
+    let (pivots, warnings) = read_model_pivots(&resaved).unwrap();
+    assert_eq!(pivots.len(), 1, "warnings: {:?}, read warnings: {:?}", report.warnings, warnings.warnings);
+    assert_eq!(pivots[0].spec.name, "ModelPivot");
+    assert_eq!(pivots[0].location, at("A3"));
+    // The model declaration survives too, so the tables and relationships read back unchanged.
+    let by_name = |t: &ModelPivotTable| t.name.clone();
+    let mut read_tables = pivots[0].spec.tables.clone();
+    let mut want_tables = spec().tables;
+    read_tables.sort_by_key(by_name);
+    want_tables.sort_by_key(by_name);
+    assert_eq!(read_tables, want_tables);
+    let by_tables = |r: &ModelPivotRelationship| (r.from_table.clone(), r.from_column.clone(), r.to_table.clone(), r.to_column.clone());
+    let mut read_relationships = pivots[0].spec.relationships.clone();
+    let mut want_relationships = spec().relationships;
+    read_relationships.sort_by_key(by_tables);
+    want_relationships.sort_by_key(by_tables);
+    assert_eq!(read_relationships, want_relationships);
 }
 
 #[test]

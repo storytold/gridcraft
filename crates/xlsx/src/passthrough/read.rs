@@ -89,6 +89,12 @@ impl KeptReader {
         k
     }
 
+    /// Whether unmodelled content is kept at all: false for Strict Open XML packages and for
+    /// packages whose content types can't be read, where nothing can be written back faithfully.
+    pub fn keeps(&self) -> bool {
+        self.on
+    }
+
     fn content_type(&self, part: &str) -> Option<String> {
         let key = normalize(part);
         if let Some(t) = self.overrides.get(&key) {

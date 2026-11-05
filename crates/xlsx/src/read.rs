@@ -449,6 +449,12 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         }
     }
     wb.preserved = kept.workbook(&mut cx, &wb_part, &wb_xml, &file_to_model);
+    // Data-model PivotTables are not modelled (their cache source is external), and the
+    // pass-through reader drops their graph because it reaches rewritten content. Keep it here so
+    // a save of the workbook read from this package still has them.
+    if kept.keeps() {
+        crate::pivot_model::keep_external_pivots(&mut wb, &mut cx.pkg, &wb_part, &wb_xml, &wb_rels, &file_to_model, &mut cx.report);
+    }
     if let Some(w) = cx.python.warning() {
         cx.warn(w);
     }
