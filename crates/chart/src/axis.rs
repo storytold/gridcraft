@@ -122,7 +122,7 @@ impl Fmt {
     pub fn new(code: &str) -> Fmt {
         let t = code.trim();
         let general = t.is_empty() || t.eq_ignore_ascii_case("general");
-        Fmt { general, fmt: NumberFormat::parse(if general { "General" } else { t }) }
+        Fmt { general, fmt: NumberFormat::parse_cached(if general { "General" } else { t }) }
     }
     /// Formats `v`; `step` (axis labels) fixes the decimals for General.
     pub fn format(&self, v: f64, step: Option<f64>) -> String {

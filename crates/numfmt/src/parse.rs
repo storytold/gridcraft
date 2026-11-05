@@ -125,12 +125,20 @@ pub(crate) struct Section {
 }
 
 /// Splits a code into sections at unquoted, unescaped, unbracketed semicolons.
+///
+/// A `[` opens a bracket only when a `]` follows it; the bracket then runs to the next `]` (quotes
+/// inside it are not special), exactly as `tokenize` reads it. An unclosed `[` is a literal in both
+/// passes, so a later `;` still separates sections. Linear: each `[` either jumps over its bracket
+/// or, with no `]` left in the code, is a literal at once.
 fn split_sections(code: &str) -> Vec<String> {
+    let cs: Vec<char> = code.chars().collect();
+    let last_close = cs.iter().rposition(|&c| c == ']');
     let mut out = vec![String::new()];
     let mut quoted = false;
-    let mut bracket = false;
     let mut escape = false;
-    for c in code.chars() {
+    let mut i = 0usize;
+    while let Some(&c) = cs.get(i) {
+        i += 1;
         let cur = match out.last_mut() {
             Some(c) => c,
             None => break,
@@ -145,19 +153,22 @@ fn split_sections(code: &str) -> Vec<String> {
                 quoted = !quoted;
                 cur.push(c);
             }
-            '\\' | '_' | '*' if !quoted && !bracket => {
+            '\\' | '_' | '*' if !quoted => {
                 escape = true;
                 cur.push(c);
             }
-            '[' if !quoted => {
-                bracket = true;
+            '[' if !quoted && last_close.is_some_and(|l| l >= i) => {
+                // `i` is already past the `[`; the closing bracket is at or after it.
                 cur.push(c);
+                while let Some(&d) = cs.get(i) {
+                    i += 1;
+                    cur.push(d);
+                    if d == ']' {
+                        break;
+                    }
+                }
             }
-            ']' if !quoted => {
-                bracket = false;
-                cur.push(c);
-            }
-            ';' if !quoted && !bracket => {
+            ';' if !quoted => {
                 if out.len() >= MAX_SECTIONS {
                     break;
                 }
@@ -246,6 +257,8 @@ fn tokenize(src: &str) -> Raw {
     let cs: Vec<char> = src.chars().collect();
     let mut raw = Raw { toks: Vec::new(), color: None, cond: None, currency: false };
     let toks = &mut raw.toks;
+    // With no `]` at or after a `[`, that `[` is a literal; checking this once keeps the scan linear.
+    let last_close = cs.iter().rposition(|&c| c == ']');
     let mut i = 0usize;
     while let Some(&c) = cs.get(i) {
         match c {
@@ -290,7 +303,7 @@ fn tokenize(src: &str) -> Raw {
                 continue;
             }
             '[' => {
-                let close = cs.get(i + 1..).and_then(|r| r.iter().position(|&d| d == ']'));
+                let close = if last_close.is_some_and(|l| l > i) { cs.get(i + 1..).and_then(|r| r.iter().position(|&d| d == ']')) } else { None };
                 if let Some(p) = close {
                     let content: String = cs.get(i + 1..i + 1 + p).unwrap_or(&[]).iter().collect();
                     bracket(&mut raw_parts(toks, &mut raw.color, &mut raw.cond, &mut raw.currency), &content);
@@ -425,7 +438,7 @@ fn date_part(t: &Tok) -> Option<DatePart> {
 }
 
 fn analyze(raw: Raw) -> Section {
-    let Raw { mut toks, color, cond, currency } = raw;
+    let Raw { toks, color, cond, currency } = raw;
     let is_date = toks.iter().any(|t| matches!(t, Tok::Date(_)));
     let has_general = toks.iter().any(|t| matches!(t, Tok::General));
     let mut sec = Section {
@@ -445,74 +458,104 @@ fn analyze(raw: Raw) -> Section {
     };
     if is_date {
         sec.kind = SecKind::Date;
-        // m/mm after hours or before seconds means minutes.
-        for i in 0..toks.len() {
-            let Some(Tok::Date(DatePart::Month(n))) = toks.get(i) else { continue };
-            let n = *n;
-            if n > 2 {
-                continue;
-            }
-            let prev = toks.get(..i).and_then(|s| s.iter().rev().find_map(date_part));
-            let next = toks.get(i + 1..).and_then(|s| s.iter().find_map(date_part));
-            let after_h = matches!(prev, Some(DatePart::Hour(_) | DatePart::ElapsedH(_)));
-            let before_s = matches!(next, Some(DatePart::Second(_) | DatePart::ElapsedS(_)));
-            if (after_h || before_s)
-                && let Some(t) = toks.get_mut(i)
-            {
-                *t = Tok::Date(DatePart::Minute(n));
-            }
-        }
-        let mut out = Vec::with_capacity(toks.len());
-        let mut i = 0;
-        while let Some(t) = toks.get(i) {
-            if matches!(t, Tok::Point) && toks.get(i + 1) == Some(&Tok::Digit('0')) {
-                let mut n = 0usize;
-                while toks.get(i + 1 + n) == Some(&Tok::Digit('0')) {
-                    n += 1;
-                }
-                out.push(Tok::Date(DatePart::SubSec(n.min(255) as u8)));
-                i += 1 + n;
-                continue;
-            }
-            match t {
-                Tok::Date(_) | Tok::Fill(_) => out.push(t.clone()),
-                other => push_lit(&mut out, &other.literal_text()),
-            }
-            i += 1;
-        }
-        sec.toks = out;
-        return sec;
+        return analyze_date(toks, sec);
     }
     if has_general {
         sec.kind = SecKind::General;
-        let mut out = Vec::with_capacity(toks.len());
-        for t in &toks {
-            match t {
-                Tok::General | Tok::Fill(_) => out.push(t.clone()),
-                other => push_lit(&mut out, &other.literal_text()),
-            }
-        }
-        sec.toks = out;
-        return sec;
+        return analyze_general(toks, sec);
     }
     sec.has_digits = toks.iter().any(|t| matches!(t, Tok::Digit(_)));
     if sec.has_at && !sec.has_digits {
         sec.kind = SecKind::Text;
-        let mut out = Vec::with_capacity(toks.len());
-        for t in &toks {
-            match t {
-                Tok::At | Tok::Fill(_) => out.push(t.clone()),
-                other => push_lit(&mut out, &other.literal_text()),
-            }
-        }
-        sec.toks = out;
-        return sec;
+        return analyze_text(toks, sec);
     }
+    analyze_number(toks, sec)
+}
+
+fn analyze_date(mut toks: Vec<Tok>, mut sec: Section) -> Section {
+    // m/mm after hours or before seconds means minutes.
+    for i in 0..toks.len() {
+        let Some(Tok::Date(DatePart::Month(n))) = toks.get(i) else { continue };
+        let n = *n;
+        if n > 2 {
+            continue;
+        }
+        let prev = toks.get(..i).and_then(|s| s.iter().rev().find_map(date_part));
+        let next = toks.get(i + 1..).and_then(|s| s.iter().find_map(date_part));
+        let after_h = matches!(prev, Some(DatePart::Hour(_) | DatePart::ElapsedH(_)));
+        let before_s = matches!(next, Some(DatePart::Second(_) | DatePart::ElapsedS(_)));
+        if (after_h || before_s)
+            && let Some(t) = toks.get_mut(i)
+        {
+            *t = Tok::Date(DatePart::Minute(n));
+        }
+    }
+    let mut out = Vec::with_capacity(toks.len());
+    let mut i = 0;
+    while let Some(t) = toks.get(i) {
+        if matches!(t, Tok::Point) && toks.get(i + 1) == Some(&Tok::Digit('0')) {
+            let mut n = 0usize;
+            while toks.get(i + 1 + n) == Some(&Tok::Digit('0')) {
+                n += 1;
+            }
+            out.push(Tok::Date(DatePart::SubSec(n.min(255) as u8)));
+            i += 1 + n;
+            continue;
+        }
+        match t {
+            Tok::Date(_) | Tok::Fill(_) => out.push(t.clone()),
+            other => push_lit(&mut out, &other.literal_text()),
+        }
+        i += 1;
+    }
+    sec.toks = out;
+    sec
+}
+
+fn analyze_general(toks: Vec<Tok>, mut sec: Section) -> Section {
+    let mut out = Vec::with_capacity(toks.len());
+    for t in &toks {
+        match t {
+            Tok::General | Tok::Fill(_) => out.push(t.clone()),
+            other => push_lit(&mut out, &other.literal_text()),
+        }
+    }
+    sec.toks = out;
+    sec
+}
+
+fn analyze_text(toks: Vec<Tok>, mut sec: Section) -> Section {
+    let mut out = Vec::with_capacity(toks.len());
+    for t in &toks {
+        match t {
+            Tok::At | Tok::Fill(_) => out.push(t.clone()),
+            other => push_lit(&mut out, &other.literal_text()),
+        }
+    }
+    sec.toks = out;
+    sec
+}
+
+fn analyze_number(mut toks: Vec<Tok>, mut sec: Section) -> Section {
     // Number section.
     let mut seen_point = false;
     let mut seen_exp = false;
     let mut seen_digit = false;
     let mut fraction_slash = false;
+    // Precomputed so each comma and slash is O(1) (a long run of them stays linear): whether the
+    // first non-comma token after a position is a digit, and where the last exponent marker is.
+    let mut digit_after_commas = vec![false; toks.len()];
+    let mut after = false;
+    for (j, t) in toks.iter().enumerate().rev() {
+        if let Some(slot) = digit_after_commas.get_mut(j) {
+            *slot = after;
+        }
+        if !matches!(t, Tok::Comma) {
+            after = matches!(t, Tok::Digit(_));
+        }
+    }
+    let last_exp = toks.iter().rposition(|t| matches!(t, Tok::Exp { .. }));
+    let scientific = toks.iter().skip_while(|t| !matches!(t, Tok::Digit(_))).any(|t| matches!(t, Tok::Exp { .. }));
     for i in 0..toks.len() {
         let Some(t) = toks.get(i).cloned() else { break };
         let replace = match t {
@@ -542,10 +585,13 @@ fn analyze(raw: Raw) -> Section {
                 }
             }
             Tok::Comma => {
-                let next = toks.get(i + 1..).and_then(|s| s.iter().find(|t| !matches!(t, Tok::Comma)));
-                let next_digit = matches!(next, Some(Tok::Digit(_)));
+                let next_digit = digit_after_commas.get(i).copied().unwrap_or(false);
                 if seen_digit && next_digit && !seen_point && !seen_exp {
                     sec.thousands = true;
+                    Some(Tok::Lit(String::new()))
+                } else if seen_digit && scientific {
+                    // Observed: a scientific section never scales; any other comma after the
+                    // first digit shows nothing (`#,e+#`, `#e+#,`, `#e+000,00`).
                     Some(Tok::Lit(String::new()))
                 } else if seen_digit && !next_digit {
                     sec.scale += 1;
@@ -558,7 +604,8 @@ fn analyze(raw: Raw) -> Section {
                 // Literal text may sit between the bar and the denominator (`#/ #`, `# ?=/=?`).
                 let next_ok = matches!(toks.get(i + 1), Some(Tok::FixedDenom(_)))
                     || matches!(toks.get(i + 1..).and_then(|s| s.iter().find(|t| !matches!(t, Tok::Lit(_)))), Some(Tok::Digit(_)));
-                let has_exp = toks.iter().any(|t| matches!(t, Tok::Exp { .. }));
+                // An exponent kept before this bar (`seen_exp`) or any marker still ahead of it.
+                let has_exp = seen_exp || last_exp.is_some_and(|l| l > i);
                 if !fraction_slash && seen_digit && next_ok && !seen_point && !has_exp {
                     fraction_slash = true;
                     sec.fraction = true;
