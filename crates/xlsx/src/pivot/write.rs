@@ -798,7 +798,8 @@ fn write_pivot_fields(s: &mut String, pt: &PivotTable, c: &Cache, layout: &Pivot
             let collapsed: &[String] = axis_field(pt, c, i).map(|f| f.collapsed_items.as_slice()).unwrap_or(&[]);
             let count = labels.len() + usize::from(pt.subtotals);
             let _ = write!(s, "><items count=\"{count}\">");
-            for (x, l) in labels.iter().enumerate() {
+            for x in item_order(axis_field(pt, c, i), f, &labels) {
+                let Some(l) = labels.get(x) else { continue };
                 let _ = write!(s, "<item x=\"{x}\"");
                 if hide.get(x).copied().unwrap_or(false) {
                     s.push_str(" h=\"1\"");
@@ -811,12 +812,65 @@ fn write_pivot_fields(s: &mut String, pt: &PivotTable, c: &Cache, layout: &Pivot
             if pt.subtotals {
                 s.push_str("<item t=\"default\"/>");
             }
-            s.push_str("</items></pivotField>");
+            s.push_str("</items>");
+            if let Some(k) = axis_field(pt, c, i).and_then(|af| sort_value_index(af, layout)) {
+                // Sorted by a value field: the data field (`-2` as an unsigned field index) and which.
+                let _ = write!(
+                    s,
+                    "<autoSortScope><pivotArea dataOnly=\"0\" outline=\"0\" fieldPosition=\"0\"><references count=\"1\"><reference field=\"4294967294\" count=\"1\" selected=\"0\"><x v=\"{k}\"/></reference></references></pivotArea></autoSortScope>"
+                );
+            }
+            s.push_str("</pivotField>");
         } else {
             s.push_str("/>");
         }
     }
     s.push_str("</pivotFields>");
+}
+
+/// The position among the written data fields of the value field `field`'s items are sorted by.
+fn sort_value_index(field: &PivotField, layout: &PivotTableLayout<'_>) -> Option<usize> {
+    if field.sort == PivotSort::None {
+        return None;
+    }
+    let name = field.sort_by.as_deref()?;
+    layout.values.iter().position(|(_, v)| same(&v.name, name))
+}
+
+/// The order of a field's `<item>`s: its custom order (listed labels first, the rest ascending as
+/// the engine shows them), else the cache's order.
+fn item_order(field: Option<&PivotField>, f: &CField, labels: &[String]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..labels.len()).collect();
+    let Some(field) = field.filter(|af| af.sort == PivotSort::None && !af.custom_order.is_empty()) else { return order };
+    if f.group.is_none() && f.items.len() == labels.len() {
+        order.sort_by(|a, b| match (f.items.get(*a), f.items.get(*b)) {
+            (Some(x), Some(y)) => ascending(x, y),
+            _ => std::cmp::Ordering::Equal,
+        });
+    }
+    let mut ranks: HashMap<String, usize> = HashMap::new();
+    for (i, label) in field.custom_order.iter().enumerate() {
+        ranks.entry(label.to_lowercase()).or_insert(i);
+    }
+    order.sort_by_cached_key(|x| labels.get(*x).and_then(|l| ranks.get(&l.to_lowercase()).copied()).unwrap_or(usize::MAX));
+    order
+}
+
+/// The engine's ascending item order: numbers, then text (ignoring case), logicals, errors, blanks.
+fn ascending(a: &Value, b: &Value) -> std::cmp::Ordering {
+    let class = |v: &Value| match v {
+        Value::Number(_) => 0,
+        Value::Text(_) => 1,
+        Value::Bool(_) => 2,
+        Value::Error(_) => 3,
+        Value::Empty | Value::Array(_) => 4,
+    };
+    class(a).cmp(&class(b)).then_with(|| match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x.total_cmp(y),
+        (Value::Text(x), Value::Text(y)) => x.to_lowercase().cmp(&y.to_lowercase()),
+        (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
+        _ => std::cmp::Ordering::Equal,
+    })
 }
 
 fn write_page_fields(s: &mut String, c: &Cache, layout: &PivotTableLayout<'_>) {

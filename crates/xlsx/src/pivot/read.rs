@@ -173,6 +173,27 @@ pub fn read_pivots(cx: &mut Ctx<'_>, caches: &mut CachesIn, sheet_part: &str, sh
 }
 
 /// A pivot field's data items (not subtotal or grand-total items).
+/// The data field a pivot field's items are sorted by (`autoSortScope` referring to the data
+/// field, `-2`, written unsigned or signed).
+fn auto_sort_data_field(e: &El) -> Option<usize> {
+    let references = e.path(&["autoSortScope", "pivotArea", "references"])?;
+    let data = references.kids("reference").find(|r| matches!(r.attr("field"), Some("4294967294" | "-2")))?;
+    data.child("x")?.attr_u32("v").map(|v| v as usize)
+}
+
+/// Most labels kept from a manual item order.
+const MAX_CUSTOM_ORDER: usize = 100_000;
+
+/// A field's manual item order: its `<item>`s' labels when they aren't in the cache's order (then
+/// the report shows the cache's order anyway).
+fn custom_order(items: &[&El], labels: &[String]) -> Vec<String> {
+    let xs: Vec<u32> = items.iter().filter_map(|it| it.attr_u32("x")).take(MAX_CUSTOM_ORDER).collect();
+    if xs.windows(2).all(|w| w.first() < w.get(1)) {
+        return vec![];
+    }
+    xs.iter().filter_map(|x| labels.get(*x as usize).cloned()).collect()
+}
+
 fn items_of(e: &El) -> Vec<&El> {
     e.child("items").map(|it| it.kids("item").filter(|i| i.attr("t").is_none_or(|t| t == "data")).collect()).unwrap_or_default()
 }
@@ -266,41 +287,51 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
     let mut filters: Vec<PivotFilter> = Vec::new();
 
     // (fields, position of Σ Values (`-2`) among them)
-    let axis = |cx: &mut Ctx<'_>, list: &[i64], filters: &mut Vec<PivotFilter>| -> (Vec<PivotField>, Option<usize>) {
-        let mut v = Vec::new();
-        let mut values_at = None;
-        for &i in list {
-            if i == -2 {
-                values_at = Some(v.len());
-                continue;
-            }
-            if i < 0 {
-                continue;
-            }
-            let i = i as usize;
-            let Some((name, group)) = field_ref(cx, cache, i) else { continue };
-            let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
-            let mut f = PivotField { source_col: name.clone(), date_group: group, sort: PivotSort::None, collapsed_items: vec![] };
-            if let Some(e) = pf(i) {
-                f.sort = match e.attr("sortType") {
-                    Some("ascending") => PivotSort::Asc,
-                    Some("descending") => PivotSort::Desc,
-                    _ => PivotSort::None,
-                };
-                let items = items_of(e);
-                let lab = |it: &El| it.attr_u32("x").and_then(|k| labels.get(k as usize)).cloned();
-                f.collapsed_items = items.iter().filter(|it| !it.flag("sd", true)).filter_map(|it| lab(it)).collect();
-                if items.iter().any(|it| it.flag("h", false)) {
-                    let shown: Vec<String> = items.iter().filter(|it| !it.flag("h", false)).filter_map(|it| lab(it)).collect();
-                    if !filters.iter().any(|ff| same(&ff.source_col, &name)) {
-                        filters.push(PivotFilter { source_col: name.clone(), selected: Some(shown) });
+    // (index in its axis, data field index) of each field sorted by a value field.
+    let axis =
+        |cx: &mut Ctx<'_>, list: &[i64], filters: &mut Vec<PivotFilter>, sort_refs: &mut Vec<(usize, usize)>| -> (Vec<PivotField>, Option<usize>) {
+            let mut v = Vec::new();
+            let mut values_at = None;
+            for &i in list {
+                if i == -2 {
+                    values_at = Some(v.len());
+                    continue;
+                }
+                if i < 0 {
+                    continue;
+                }
+                let i = i as usize;
+                let Some((name, group)) = field_ref(cx, cache, i) else { continue };
+                let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
+                let mut f = PivotField { source_col: name.clone(), date_group: group, ..PivotField::default() };
+                if let Some(e) = pf(i) {
+                    f.sort = match e.attr("sortType") {
+                        Some("ascending") => PivotSort::Asc,
+                        Some("descending") => PivotSort::Desc,
+                        _ => PivotSort::None,
+                    };
+                    if f.sort != PivotSort::None
+                        && let Some(k) = auto_sort_data_field(e)
+                    {
+                        sort_refs.push((v.len(), k));
+                    }
+                    let items = items_of(e);
+                    let lab = |it: &El| it.attr_u32("x").and_then(|k| labels.get(k as usize)).cloned();
+                    if f.sort == PivotSort::None {
+                        f.custom_order = custom_order(&items, &labels);
+                    }
+                    f.collapsed_items = items.iter().filter(|it| !it.flag("sd", true)).filter_map(|it| lab(it)).collect();
+                    if items.iter().any(|it| it.flag("h", false)) {
+                        let shown: Vec<String> = items.iter().filter(|it| !it.flag("h", false)).filter_map(|it| lab(it)).collect();
+                        if !filters.iter().any(|ff| same(&ff.source_col, &name)) {
+                            filters.push(PivotFilter { source_col: name.clone(), selected: Some(shown) });
+                        }
                     }
                 }
+                v.push(f);
             }
-            v.push(f);
-        }
-        (v, values_at)
-    };
+            (v, values_at)
+        };
     let mut page_filters = Vec::new();
     for p in &pages {
         let Some(i) = p.attr_i64("fld").filter(|i| *i >= 0).map(|i| i as usize) else { continue };
@@ -323,8 +354,9 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
         page_filters.push(PivotFilter { source_col: name, selected });
     }
     let mut axis_filters = Vec::new();
-    let (rows, rows_values) = axis(cx, &row_x, &mut axis_filters);
-    let (columns, cols_values) = axis(cx, &col_x, &mut axis_filters);
+    let (mut row_sorts, mut col_sorts) = (Vec::new(), Vec::new());
+    let (rows, rows_values) = axis(cx, &row_x, &mut axis_filters, &mut row_sorts);
+    let (columns, cols_values) = axis(cx, &col_x, &mut axis_filters, &mut col_sorts);
     pt.rows = rows;
     pt.columns = columns;
     // Σ Values: where its `-2` entry is, else `dataOnRows` and `dataPosition`; after the last
@@ -337,8 +369,9 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
     pt.filters = filters;
 
     // Values.
+    let mut data_field_names: Vec<(usize, String)> = Vec::new();
     if let Some(df) = x.child("dataFields") {
-        for d in df.kids("dataField") {
+        for (k, d) in df.kids("dataField").enumerate() {
             let Some(i) = d.attr_u32("fld").map(|i| i as usize) else { continue };
             let Some(f) = cache.fields.get(i) else { continue };
             let func = match d.attr("subtotal") {
@@ -387,6 +420,17 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 .and_then(|id| crate::tables::builtin_format(id).map(str::to_string).or_else(|| cx.num_fmts.get(&id).cloned()));
             let name = d.attr("name").map(str::to_string).unwrap_or_else(|| format!("{} of {}", func_caption(func), f.name));
             pt.values.push(PivotValue { source_col: f.name.clone(), func, name, show_as, base_field, base_item, number_format });
+            data_field_names.push((k, pt.values.last().map(|v| v.name.clone()).unwrap_or_default()));
+        }
+    }
+
+    // Fields sorted by a value field name it by its position among the data fields.
+    let name_of = |k: usize| data_field_names.iter().find(|(j, _)| *j == k).map(|(_, n)| n.clone());
+    for (fields, sorts) in [(&mut pt.rows, &row_sorts), (&mut pt.columns, &col_sorts)] {
+        for (position, k) in sorts {
+            if let Some(f) = fields.get_mut(*position) {
+                f.sort_by = name_of(*k);
+            }
         }
     }
 

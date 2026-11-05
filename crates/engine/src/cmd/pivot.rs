@@ -119,7 +119,15 @@ pub fn specs() -> Vec<CommandSpec> {
             value_settings
         ),
         cmd!("pivot.filter", "Filter Items", [], None, "{pivot?, field, selected: [\"East\", ..] | null (all), replace?}", has_doc, filter),
-        cmd!("pivot.sort", "Sort Field", [], None, "{pivot?, field, order: asc|desc|none, replace?}", has_doc, sort),
+        cmd!(
+            "pivot.sort",
+            "Sort Field",
+            [],
+            None,
+            "{pivot?, field, order: asc|desc|none|custom, by?: value field (sorts the items by its totals instead of their labels), items?: [labels] (order: custom: these first, in this order, the rest ascending), replace?}",
+            has_doc,
+            sort
+        ),
         cmd!(
             "pivot.group",
             "Group Field",

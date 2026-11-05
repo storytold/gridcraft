@@ -205,9 +205,10 @@ fn remove_from_area(cmd: &str, pt: &mut PivotTable, field: &str, area: &str) -> 
     }
 }
 
-/// Keeps every value field's base field one of the report's row or column fields: one that left
-/// both areas is forgotten (the default base field applies), with a base item named after it.
-pub(super) fn forget_stale_base_fields(pt: &mut PivotTable) {
+/// Drops references to fields that left the report: a value field's base field that is no longer
+/// in Rows or Columns (the default base field applies, and a base item named after it goes too),
+/// and an axis field's sort by a value field no longer in Values (it sorts by label again).
+pub(super) fn forget_stale_references(pt: &mut PivotTable) {
     let axes: Vec<String> = pt.rows.iter().chain(pt.columns.iter()).map(|f| f.source_col.to_ascii_lowercase()).collect();
     for value in &mut pt.values {
         if value.base_field.as_ref().is_some_and(|name| !axes.contains(&name.to_ascii_lowercase())) {
@@ -215,6 +216,12 @@ pub(super) fn forget_stale_base_fields(pt: &mut PivotTable) {
             if matches!(value.base_item, PivotBaseItem::Named(_)) {
                 value.base_item = PivotBaseItem::Previous;
             }
+        }
+    }
+    let values: Vec<String> = pt.values.iter().map(|v| v.name.to_ascii_lowercase()).collect();
+    for field in pt.rows.iter_mut().chain(pt.columns.iter_mut()) {
+        if field.sort_by.as_ref().is_some_and(|name| !values.contains(&name.to_ascii_lowercase())) {
+            field.sort_by = None;
         }
     }
 }
@@ -230,7 +237,7 @@ pub(super) fn update(s: &mut Session, p: &Json, f: impl FnOnce(&mut PivotTable, 
         let src = pv::read_source(&cx.wb, &pt.source, si).map_err(other)?;
         let mut new = pt.clone();
         let mut out = f(&mut new, &src, &cx.wb)?;
-        forget_stale_base_fields(&mut new);
+        forget_stale_references(&mut new);
         if let Some(slot) = cx.sheet_mut(si)?.pivots.get_mut(pi) {
             *slot = new;
         }
@@ -633,6 +640,12 @@ pub(super) fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
             None => {}
         }
         let name = v.name.clone();
+        // Fields sorted by this value field follow a new caption.
+        for field in pt.rows.iter_mut().chain(pt.columns.iter_mut()) {
+            if field.sort_by.as_ref().is_some_and(|by| by.eq_ignore_ascii_case(&cur.name)) {
+                field.sort_by = Some(name.clone());
+            }
+        }
         if let Some(slot) = pt.values.get_mut(i) {
             *slot = v;
         }
