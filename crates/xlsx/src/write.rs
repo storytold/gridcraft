@@ -229,6 +229,28 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
     write_xlsx_named(wb, kind, None)
 }
 
+/// The shared-strings part: each entry once, as rich `<r>` runs when it has them (falling back
+/// to the plain `<t>` for a runs entry that no longer lines up with its text) with the
+/// workbook's phonetic (furigana) data riding along beside either shape.
+fn write_shared_strings(out: &mut Out, wb_rels: &mut Rels, wb: &Workbook) {
+    // Phonetic data is kept per string text: the table holds each text once, so the runs of the
+    // entry with that text are written next to it (`Workbook::phonetics`).
+    let phonetics: HashMap<&str, &PhoneticString> = wb.phonetics.iter().map(|p| (p.text.as_str(), p)).collect();
+    let mut sst = format!("{XML_DECL}<sst xmlns=\"{NS_MAIN}\" count=\"{}\" uniqueCount=\"{}\">", out.sst.count, out.sst.list.len());
+    for entry in &out.sst.list {
+        let ph = phonetics.get(entry.text.as_str()).copied();
+        let body = match &entry.runs {
+            Some(runs) => crate::styles::si_runs_xml(&entry.text, runs).map(|rich| rich + &crate::xml::phonetic_xml(&entry.text, ph)),
+            None => None,
+        };
+        let body = body.unwrap_or_else(|| crate::xml::si_body(&entry.text, ph));
+        let _ = write!(sst, "<si>{body}</si>");
+    }
+    sst.push_str("</sst>");
+    out.part("xl/sharedStrings.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"), sst.into_bytes());
+    wb_rels.add("sharedStrings", "sharedStrings.xml");
+}
+
 /// The `<workbookView>` attributes beyond `activeTab`: the window's display settings
 /// that differ from the format's defaults. An ordinary workbook gets none, so its file
 /// is unchanged; a workbook Excel saved with the sheet tabs or scroll bars hidden
@@ -384,25 +406,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         crate::theme::write_theme(&wb.theme).into_bytes(),
     );
     wb_rels.add("theme", "theme/theme1.xml");
-    // Phonetic (furigana) data is kept per string text: the table below holds each text once, so
-    // the runs of the entry with that text are written next to it (`Workbook::phonetics`).
-    let phonetics: HashMap<&str, &PhoneticString> = wb.phonetics.iter().map(|p| (p.text.as_str(), p)).collect();
-    let mut sst = format!("{XML_DECL}<sst xmlns=\"{NS_MAIN}\" count=\"{}\" uniqueCount=\"{}\">", out.sst.count, out.sst.list.len());
-    for entry in &out.sst.list {
-        // Rich runs go back as `<r><rPr>…</rPr><t>slice</t></r>`; a runs entry that does not
-        // line up with the text (written but never added through `index_rich`) falls back to
-        // the plain `<t>`. Phonetic (furigana) data rides along either way, as on a plain item.
-        let ph = phonetics.get(entry.text.as_str()).copied();
-        let body = match &entry.runs {
-            Some(runs) => crate::styles::si_runs_xml(&entry.text, runs).map(|rich| rich + &crate::xml::phonetic_xml(&entry.text, ph)),
-            None => None,
-        };
-        let body = body.unwrap_or_else(|| crate::xml::si_body(&entry.text, ph));
-        let _ = write!(sst, "<si>{body}</si>");
-    }
-    sst.push_str("</sst>");
-    out.part("xl/sharedStrings.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"), sst.into_bytes());
-    wb_rels.add("sharedStrings", "sharedStrings.xml");
+    write_shared_strings(&mut out, &mut wb_rels, wb);
     if !out.cell_pictures.is_empty() {
         crate::richdata::write(&mut out, &mut wb_rels)?;
     } else if out.dynamic_arrays {
