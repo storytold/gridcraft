@@ -46,6 +46,17 @@ fn model() -> DataModel {
                     vec![Scalar::Integer(20)],
                 ],
             },
+            ModelTable {
+                name: "Mixed".into(),
+                columns: vec![column("Value", "Any")],
+                rows: vec![
+                    vec![Scalar::Integer(7)],
+                    vec![Scalar::String("abc".into())],
+                    vec![Scalar::Decimal(f64::NAN)],
+                    vec![Scalar::Integer(3)],
+                    vec![Scalar::String("Zed".into())],
+                ],
+            },
         ],
         relationships: vec![],
         measures: vec![],
@@ -316,9 +327,37 @@ fn sample() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Empty and all-blank inputs
+// Mixed-type ordering
 // ---------------------------------------------------------------------------------------------
 
+#[test]
+fn sample_orders_mixed_text_numbers_and_nan() {
+    // `Scalar::compare` answers `None` for text against a number and for NaN; the old comparator
+    // read `None` as `Ordering::Equal`, so `"abc" == 3` and `"abc" == 7` while `3 < 7`. That is
+    // not a total order and `sort_by` may panic on it (Rust 1.81+). The shared total order sorts
+    // numbers first (NaN last among them), then text, and never panics.
+    let table = eval_table("SAMPLE(5, Mixed, Mixed[Value])").expect("SAMPLE mixed");
+    let values: Vec<Scalar> = table.rows.iter().filter_map(|row| row.first().cloned()).collect();
+    let is_nan = |value: &Scalar| matches!(value, Scalar::Decimal(number) if number.is_nan());
+
+    // Descending: the text keys come first (case-insensitively, "Zed" before "abc"), then the
+    // numbers, with the NaN placed after every finite number.
+    assert_eq!(values.len(), 5);
+    assert!(matches!(values.get(2), Some(value) if is_nan(value)), "{values:?}");
+    let ordered: Vec<Scalar> = values.iter().filter(|value| !is_nan(value)).cloned().collect();
+    assert_eq!(ordered, vec![Scalar::String("Zed".into()), Scalar::String("abc".into()), Scalar::Integer(7), Scalar::Integer(3)]);
+
+    // Ascending puts the numbers first and the text last.
+    let table = eval_table("SAMPLE(5, Mixed, Mixed[Value], 1)").expect("SAMPLE mixed ascending");
+    let values: Vec<Scalar> = table.rows.iter().filter_map(|row| row.first().cloned()).collect();
+    assert!(matches!(values.get(2), Some(value) if is_nan(value)), "{values:?}");
+    let ordered: Vec<Scalar> = values.iter().filter(|value| !is_nan(value)).cloned().collect();
+    assert_eq!(ordered, vec![Scalar::Integer(3), Scalar::Integer(7), Scalar::String("abc".into()), Scalar::String("Zed".into())]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Empty and all-blank inputs
+// ---------------------------------------------------------------------------------------------
 #[test]
 fn empty_and_all_blank_inputs() {
     assert_eq!(eval("MEDIAN(Empty[Value])").expect("MEDIAN empty"), Scalar::Blank);

@@ -7,6 +7,8 @@
 //! argument coercion, Excel date serials, rounding and row-frame construction.
 #![allow(dead_code)] // helpers are consumed by the per-family modules as they land
 
+use std::cmp::Ordering;
+
 use super::*;
 use chrono::{Datelike, NaiveDate};
 
@@ -105,6 +107,52 @@ pub(crate) fn derived_row_frame(lineage: Option<usize>, names: Vec<String>, valu
 /// Eagerly evaluated scalar argument access for functions that already hold `Vec<Scalar>`.
 pub(crate) fn args<'a>(name: &'a str, values: &'a [Scalar]) -> Args<'a> {
     Args { name, values }
+}
+
+/// Orders two scalars for sorting: deterministic, transitive and total over every variant.
+///
+/// [`Scalar::compare`] follows DAX's `=`/`<` coercion rules and answers `None` for pairs DAX
+/// does not compare: text against a number, and anything against NaN. A sort cannot read `None`
+/// as equality, because text would then equal every number while the numbers still order among
+/// themselves — not a total order, which `sort_by` may panic on (Rust 1.81+).
+///
+/// This ordering ranks whole classes instead, so mixed columns sort predictably:
+///
+/// 1. numbers (`Integer`, `Currency`, `Decimal`, `DateTime`) by numeric value, through
+///    `f64::total_cmp`, so NaN has a fixed place (after every other number) and `-0.0` sorts
+///    before `0.0`;
+/// 2. text, case-insensitively (Unicode lowercase, matching [`Scalar::compare`]); strings equal
+///    under lowercasing tie-break on the raw strings, so `"A"` and `"a"` still have a fixed
+///    order;
+/// 3. Booleans, `FALSE` before `TRUE`.
+///
+/// BLANK is the caller's business. Callers with a blank placement policy (`FIRST`/`LAST` in
+/// `RANK`/`ROWNUMBER`, the blank-aware window ordering) place blanks before calling. A blank
+/// that does reach this function orders as the number zero, which is DAX's default comparison
+/// and keeps the order transitive.
+pub(crate) fn total_order(left: &Scalar, right: &Scalar) -> Ordering {
+    fn class(value: &Scalar) -> u8 {
+        match value {
+            Scalar::String(_) => 1,
+            Scalar::Boolean(_) => 2,
+            Scalar::Blank | Scalar::Integer(_) | Scalar::Currency(_) | Scalar::Decimal(_) | Scalar::DateTime(_) => 0,
+        }
+    }
+
+    // BLANK counts as zero, as in DAX's default comparison; every other number-class variant has
+    // a numeric value, so the NaN fallback is unreachable but keeps the function total.
+    fn number(value: &Scalar) -> f64 {
+        value.to_number().unwrap_or(f64::NAN)
+    }
+
+    match class(left).cmp(&class(right)) {
+        Ordering::Equal => match (left, right) {
+            (Scalar::String(a), Scalar::String(b)) => a.to_lowercase().cmp(&b.to_lowercase()).then_with(|| a.cmp(b)),
+            (Scalar::Boolean(a), Scalar::Boolean(b)) => a.cmp(b),
+            _ => number(left).total_cmp(&number(right)),
+        },
+        ordering => ordering,
+    }
 }
 
 /// 400 Gregorian years, after which the calendar (and every month length) repeats.

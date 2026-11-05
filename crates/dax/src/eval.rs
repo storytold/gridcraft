@@ -1711,7 +1711,9 @@ fn intersect_rows(rows: Vec<usize>, keep: &[usize]) -> Vec<usize> {
 /// Orders two `TOPN` key lists: the first differing key decides, in the direction its pair names.
 fn compare_order_keys(left: &[Scalar], right: &[Scalar], descending: &[bool]) -> Ordering {
     for ((a, b), desc) in left.iter().zip(right).zip(descending) {
-        let ordering = a.compare(b).unwrap_or(Ordering::Equal);
+        // A total order: `Scalar::compare` is partial (mixed text and numbers, NaN), and mapping
+        // its `None` to `Equal` would leave `sort_by` with an intransitive comparator.
+        let ordering = support::total_order(a, b);
         let ordering = if *desc { ordering.reverse() } else { ordering };
         if ordering != Ordering::Equal {
             return ordering;

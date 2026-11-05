@@ -1016,6 +1016,11 @@ fn model_field_value(model: &DataModel, row: &[Scalar], field: &BoundField) -> S
     let mut current = row;
     for hop in &field.hops {
         let key = ScalarKey::from(&current.get(hop.from_column).cloned().unwrap_or(Scalar::Blank));
+        // The relationship index never matches a BLANK key, so a blank foreign key is an orphan
+        // here too; otherwise both paths would group the same row differently.
+        if key == ScalarKey::Blank {
+            return Scalar::Blank;
+        }
         let matched = model
             .tables
             .get(hop.to_table)
@@ -1085,4 +1090,54 @@ pub enum PivotTableError {
     /// The rendered table would exceed the cell budget.
     #[error("pivot `{pivot}` would materialize {rows} rows x {columns} columns x {measures} values, over the limit of {limit} cells")]
     TooManyCells { pivot: String, rows: usize, columns: usize, measures: usize, limit: usize },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{ModelColumn, ModelTable, Relationship};
+
+    /// A fact row whose foreign key is BLANK is an orphan: `column_field_value` never matches it,
+    /// so the model-row path must not group it under the related table's own BLANK key row.
+    #[test]
+    fn a_blank_key_is_an_orphan_on_the_model_row_path() {
+        let model = DataModel {
+            tables: vec![
+                ModelTable {
+                    name: "Sales".into(),
+                    columns: vec![
+                        ModelColumn { name: "ProductKey".into(), data_type: Some("Int64".into()) },
+                        ModelColumn { name: "Amount".into(), data_type: Some("Double".into()) },
+                    ],
+                    rows: vec![vec![Scalar::Blank, Scalar::Integer(10)], vec![Scalar::Integer(1), Scalar::Integer(20)]],
+                },
+                ModelTable {
+                    name: "Product".into(),
+                    columns: vec![
+                        ModelColumn { name: "ProductKey".into(), data_type: Some("Int64".into()) },
+                        ModelColumn { name: "Name".into(), data_type: Some("String".into()) },
+                    ],
+                    rows: vec![vec![Scalar::Blank, Scalar::String("Unknown".into())], vec![Scalar::Integer(1), Scalar::String("Widget".into())]],
+                },
+            ],
+            relationships: vec![Relationship {
+                from_table: "Sales".into(),
+                from_column: "ProductKey".into(),
+                to_table: "Product".into(),
+                to_column: "ProductKey".into(),
+                bidirectional: false,
+                inactive: false,
+            }],
+            measures: Vec::new(),
+        };
+        let field = BoundField {
+            field: PivotField { table: 1, column: 1, name: "Product[Name]".into() },
+            hops: vec![Hop { relationship: 0, from_column: 0, to_table: 1, to_column: 0 }],
+            label: "Product[Name]".into(),
+        };
+        let blank_key_row = model.tables[0].rows.first().cloned().unwrap_or_default();
+        assert_eq!(model_field_value(&model, &blank_key_row, &field), Scalar::Blank);
+        let matched_row = model.tables[0].rows.get(1).cloned().unwrap_or_default();
+        assert_eq!(model_field_value(&model, &matched_row, &field), Scalar::String("Widget".into()));
+    }
 }

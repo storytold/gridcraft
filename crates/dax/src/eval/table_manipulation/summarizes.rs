@@ -520,7 +520,7 @@ struct GroupContext<'a> {
     rows: &'a [Vec<Scalar>],
 }
 
-fn eval_in_group(ev: &Evaluator<'_>, ctx: &Context, expression: &BoundExpr, group: &GroupContext<'_>) -> Result<Scalar, EvalError> {
+fn eval_in_group(ev: &Evaluator<'_>, ctx: &Context, expression: &BoundExpr, group: &GroupContext<'_>, operation: &str) -> Result<Scalar, EvalError> {
     let mut filters = ctx.filters.clone();
     // The table argument's own rows bound the group: `SUMMARIZE(FILTER(...), ...)` must not see
     // rows the filter removed. Applying the group's rows as column filters keeps the lineage
@@ -535,6 +535,20 @@ fn eval_in_group(ev: &Evaluator<'_>, ctx: &Context, expression: &BoundExpr, grou
         if *active {
             filters.set(column.table, column.column, [ScalarKey::from(value)]);
         }
+    }
+    // One value set per column describes the group exactly only when the table argument's rows
+    // are the ones those sets select. A cross-column predicate (`FILTER(Sales, Sales[Amount] >
+    // Sales[Cost])`) cannot be expressed that way: each column's set independently admits rows
+    // the predicate removed, so the group would aggregate rows it does not own. Counting the
+    // lineage rows under the final filters catches that leak instead of returning a silent wrong
+    // answer.
+    if let Some(lineage) = group.source.lineage
+        && !group.rows.is_empty()
+        && ev.table(lineage, &filters).rows.len() > group.rows.len()
+    {
+        return Err(EvalError::new(format!(
+            "{operation} cannot evaluate the table argument: the group's column filters select rows outside the group"
+        )));
     }
     let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone() };
     ev.eval(expression, &mut inner)
@@ -578,6 +592,7 @@ fn summarize(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Resul
                     ctx,
                     expression,
                     &GroupContext { columns: &layout.columns, values: &values, active: &active, source: &table, rows: &group_rows },
+                    "SUMMARIZE",
                 )?);
             }
         }
@@ -626,6 +641,7 @@ fn group_by(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result
                     ctx,
                     expression,
                     &GroupContext { columns: &columns, values, active: &active, source: &table, rows: group_rows },
+                    "GROUPBY",
                 )?);
             }
         }

@@ -7,7 +7,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::support::{eval_all, frame_for};
+use super::support::{eval_all, frame_for, total_order};
 use super::*;
 use crate::ast::Literal;
 
@@ -551,8 +551,11 @@ fn substitute_with_index(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Conte
         }
         order.sort_by(|a, b| {
             for (position, (_, ascending)) in order_specs.iter().enumerate() {
-                let ordering = keys[*a].get(position).and_then(|left| keys[*b].get(position).and_then(|right| left.compare(right)));
-                match ordering.unwrap_or(Ordering::Equal) {
+                let ordering = match (keys[*a].get(position), keys[*b].get(position)) {
+                    (Some(left), Some(right)) => total_order(left, right),
+                    _ => Ordering::Equal,
+                };
+                match ordering {
                     Ordering::Equal => {}
                     other => return if *ascending { other } else { other.reverse() },
                 }

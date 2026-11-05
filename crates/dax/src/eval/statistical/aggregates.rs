@@ -9,7 +9,7 @@
 
 use std::cmp::Ordering;
 
-use super::super::support::{eval_all, frame_for};
+use super::super::support::{eval_all, frame_for, total_order};
 use super::*;
 
 pub(crate) fn call(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Option<Result<Scalar, EvalError>> {
@@ -599,7 +599,7 @@ fn sample(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<T
     let mut indices: Vec<usize> = (0..table.rows.len()).collect();
     indices.sort_by(|left, right| {
         for (a, b) in keys[*left].iter().zip(keys[*right].iter()) {
-            let ordering = a.compare(b).unwrap_or(Ordering::Equal);
+            let ordering = total_order(a, b);
             let ordering = if order == SortOrder::Descending { ordering.reverse() } else { ordering };
             if ordering != Ordering::Equal {
                 return ordering;

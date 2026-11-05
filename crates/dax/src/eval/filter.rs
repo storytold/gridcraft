@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 
 use crate::ast::Literal;
 
-use super::support::{eval_table as support_eval_table, frame_for};
+use super::support::{eval_table as support_eval_table, frame_for, total_order};
 use super::*;
 
 pub(crate) fn call(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Option<Result<Scalar, EvalError>> {
@@ -502,7 +502,7 @@ fn compare_window_values(left: Option<&Scalar>, right: Option<&Scalar>, desc: bo
         // FIRST/LAST pin blanks regardless of the sort direction.
         return ordering;
     }
-    let ordering = left.zip(right).and_then(|(left, right)| left.compare(right)).unwrap_or(Ordering::Equal);
+    let ordering = left.zip(right).map_or(Ordering::Equal, |(left, right)| total_order(left, right));
     if desc { ordering.reverse() } else { ordering }
 }
 

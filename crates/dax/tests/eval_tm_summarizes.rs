@@ -565,3 +565,31 @@ fn summarize_columns_without_expressions_keeps_only_existing_combinations() {
     assert!(table.rows.iter().any(|row| row == &vec![text("East"), text("Widget")]));
     assert_eq!(table.rows.len(), 5, "one row per existing pair: {:?}", table.rows);
 }
+
+#[test]
+fn summarize_rejects_cross_column_table_filters_that_leak_rows() {
+    // The predicate compares two columns, so one value set per column cannot rebuild the group:
+    // East keeps (Amount 5, Cost 3) and (9, 8), while the removed (5, 8) matches the Amount set
+    // {5, 9} and the Cost set {3, 8}. Aggregating that row would return 19 instead of 14, so the
+    // evaluation has to fail rather than answer with rows the filter removed.
+    let mut model = DataModel {
+        tables: vec![table(
+            "Sales",
+            vec![column("Region", "String"), column("Amount", "Double"), column("Cost", "Double")],
+            vec![vec![text("East"), money(5.0), money(3.0)], vec![text("East"), money(9.0), money(8.0)], vec![text("East"), money(5.0), money(8.0)]],
+        )],
+        relationships: Vec::new(),
+        measures: Vec::new(),
+    };
+    model.parse_formulas().expect("model parses");
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let expression =
+        parse_expression("SUMMARIZE(FILTER(Sales, Sales[Amount] > Sales[Cost]), Sales[Region], \"T\", SUM(Sales[Amount]))").expect("parse");
+    let bound = Binder::new(&model).bind_expression(&expression).expect("bind");
+    let message = match evaluator.evaluate_table(&bound) {
+        Ok(table) => panic!("cross-column filter should fail, returned {table:?}"),
+        Err(error) => error.to_string(),
+    };
+    assert!(message.contains("SUMMARIZE"), "error names the operation: {message}");
+    assert!(message.contains("table argument"), "error names the table argument: {message}");
+}

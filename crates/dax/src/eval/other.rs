@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 
 use crate::ast::Literal;
 
-use super::support::{args, eval_all, eval_table, frame_for};
+use super::support::{args, eval_all, eval_table, frame_for, total_order};
 use super::*;
 
 /// FNV-1a 64-bit offset basis and prime. `HASH` uses a fixed, version-independent algorithm so
@@ -667,7 +667,7 @@ fn compare_values(left: &Scalar, right: &Scalar, descending: bool, blanks: Blank
             BlanksOrder::First => Ordering::Less,
             BlanksOrder::Last => Ordering::Greater,
             BlanksOrder::Default => {
-                let ordering = compare_non_blank(left, right);
+                let ordering = total_order(left, right);
                 if descending { ordering.reverse() } else { ordering }
             }
         },
@@ -675,19 +675,15 @@ fn compare_values(left: &Scalar, right: &Scalar, descending: bool, blanks: Blank
             BlanksOrder::First => Ordering::Greater,
             BlanksOrder::Last => Ordering::Less,
             BlanksOrder::Default => {
-                let ordering = compare_non_blank(left, right);
+                let ordering = total_order(left, right);
                 if descending { ordering.reverse() } else { ordering }
             }
         },
         (false, false) => {
-            let ordering = compare_non_blank(left, right);
+            let ordering = total_order(left, right);
             if descending { ordering.reverse() } else { ordering }
         }
     }
-}
-
-fn compare_non_blank(left: &Scalar, right: &Scalar) -> Ordering {
-    left.compare(right).unwrap_or_else(|| left.to_text().to_lowercase().cmp(&right.to_text().to_lowercase()))
 }
 
 fn compare_keys(keys: &[OrderKey<'_>], default_blanks: BlanksOrder, left: &[Scalar], right: &[Scalar]) -> Ordering {
