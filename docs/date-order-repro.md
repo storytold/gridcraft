@@ -80,14 +80,16 @@ The table uses the 1900 calendar. In it-IT, the direct date argument means 2 Jan
 but passing through `VALUE` or arithmetic still produces the en-US serial for 1 February.
 Numeric serial text such as `"45000"` remains consistent through all three paths.
 
-A [reviewer's Excel desktop COM report](https://github.com/storytold/gridcraft/pull/2429#issuecomment-6459063104)
-measured matching date-function, `VALUE` and arithmetic interpretations in en-US. Its
-expectation that they also agree in a day-first Region is explicitly an inference: that
-Region was not measured. Aligning generic formula coercion needs a separate, measured
-contract across calculation operators and function arguments. This PR preserves that
-existing contract and exposes its limitation; it does not claim to resolve the gap.
+An [Excel desktop COM report](https://github.com/storytold/gridcraft/pull/2429#issuecomment-6459063104)
+measured matching date-function, `VALUE` and arithmetic interpretations in en-US.
+A later [de-DE report by KNUFFIXX](https://github.com/storytold/gridcraft/pull/2429#issuecomment-6659734560)
+compared desktop Excel on Windows with GridCraft CLI at `97b6ead`. The tested date
+functions agreed, while Excel returned `44227` for `A1+0` when A1 held the text
+`31.01.2021`. GridCraft returned `#VALUE!`. The report covers one German date
+format and does not test `VALUE` in de-DE. Arithmetic coercion therefore remains
+a separate compatibility change with its own test contract.
 
-The same report measured `DAY("   01/02/2026  ")` as `#VALUE!`. Implicit date arguments
+The earlier en-US COM report measured `DAY("   01/02/2026  ")` as `#VALUE!`. Implicit date arguments
 now reject surrounding whitespace on date/time text, including referenced dates and
 holiday arrays. Numeric serial text retains its existing padding and number syntax rules:
 `HOUR(" 45000.5 ")` stays 12. Core/function regressions cover both calendars and regions,
@@ -95,7 +97,7 @@ and a generated XLSX round trip preserves the original padded text and its error
 Typed cell input and the separate `DATEVALUE`/`TIMEVALUE` paths retain their existing
 whitespace behavior; this fix is scoped to implicit date arguments.
 
-The branch integrates #1886 at `45ea3b95` and main at `7bb397a3`. File opening retains `csvAsText` while
+The branch is stacked on #1886 and includes main at `c4029538`. File opening retains `csvAsText` while
 applying the selected formula region before recalculation. Text-only import keeps
 `00123` and `13/01/2026` as text. Automatic CSV import preserves main's per-column
 date-order inference from #3043: the identifier becomes 123 and the unambiguous
@@ -132,6 +134,7 @@ save made while the group was open. Region-only groups do not manufacture an und
 
 | Date | Change |
 | --- | --- |
+| 2026-11-05 | Record the external de-DE comparison and align the branch with current main |
 | 2026-10-28 | Reject padded implicit date text without changing numeric serial coercion; document and test the remaining VALUE/arithmetic regional boundary and the limits of reported Excel observations |
 | 2026-10-27 | Add transient native overrides and synthetic grouped rollback, nested history and save-point regressions; preserve the regional CLI oracle after main's module split and inherit these fixes in the implicit-date follow-up |
 | 2026-10-26 | Verify shared workbook windows and preserve parser bounds, regional implicit date text and canonical numeric coercion |
