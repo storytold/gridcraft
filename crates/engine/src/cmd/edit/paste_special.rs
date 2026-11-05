@@ -90,13 +90,60 @@ fn operation_symbol(op: &str) -> Option<char> {
     }
 }
 
-/// The slice of `sorted` (ranges sorted by start row, none spanning more than
-/// `max_span` rows) whose rows can reach the query rows: a range in the slice may
-/// intersect a range over those rows; one outside it cannot.
-fn row_window(sorted: &[RangeRef], max_span: u32, start_row: u32, end_row: u32) -> &[RangeRef] {
-    let hi = sorted.partition_point(|m| m.start.row <= end_row);
-    let lo = sorted.partition_point(|m| m.start.row < start_row.saturating_sub(max_span));
-    &sorted[lo..hi]
+/// Ranges sorted by start row, then start column, answering "does any range
+/// here intersect this one?" without scanning every candidate. The row window
+/// alone is not enough: a wide tiled paste puts thousands of ranges on a single
+/// row, and a row-only window hands all of them to every query on that row.
+/// Within a start-row group, candidates are narrowed by column — a binary
+/// search drops the ones starting past the query's last column, and the
+/// group's running maximum end column stops the backward scan once no earlier
+/// candidate can reach the query's first column.
+struct RangeIndex {
+    sorted: Vec<RangeRef>,
+    /// Per entry, the largest end column among its start-row group up to and
+    /// including it.
+    end_col_prefix_max: Vec<u32>,
+    /// The largest row span of any range in the index.
+    max_span: u32,
+}
+
+impl RangeIndex {
+    fn new(mut ranges: Vec<RangeRef>) -> Self {
+        ranges.sort_by_key(|r| (r.start.row, r.start.col));
+        let mut end_col_prefix_max = Vec::with_capacity(ranges.len());
+        for (i, r) in ranges.iter().enumerate() {
+            let prev = if i > 0 && ranges[i - 1].start.row == r.start.row { end_col_prefix_max[i - 1] } else { 0 };
+            end_col_prefix_max.push(prev.max(r.end.col));
+        }
+        let max_span = ranges.iter().map(|r| r.end.row - r.start.row).max().unwrap_or(0);
+        RangeIndex { sorted: ranges, end_col_prefix_max, max_span }
+    }
+
+    fn any_intersects(&self, q: &RangeRef) -> bool {
+        // The row window: entries starting after the query's last row, or ending
+        // before its first row (start row above it by more than the largest
+        // span), cannot intersect it.
+        let hi = self.sorted.partition_point(|m| m.start.row <= q.end.row);
+        let lo = self.sorted.partition_point(|m| m.start.row < q.start.row.saturating_sub(self.max_span));
+        let mut group_start = lo;
+        while group_start < hi {
+            let row = self.sorted[group_start].start.row;
+            let group_end = group_start + self.sorted[group_start..hi].partition_point(|m| m.start.row == row);
+            let col_hi = group_start + self.sorted[group_start..group_end].partition_point(|m| m.start.col <= q.end.col);
+            let mut i = col_hi;
+            while i > group_start {
+                i -= 1;
+                if self.end_col_prefix_max[i] < q.start.col {
+                    break;
+                }
+                if self.sorted[i].intersects(q) {
+                    return true;
+                }
+            }
+            group_start = group_end;
+        }
+        false
+    }
 }
 
 /// Copy the block's merged areas to every tile of a tiled paste, at the same pitch as
@@ -143,18 +190,16 @@ fn copy_merges_tiled(
     if moved.is_empty() {
         return Ok(());
     }
-    // Tile merges never overlap and each spans at most the block's height, so a copy
-    // sorted by start row lets a destination merge check only the tiles whose rows can
-    // reach it — a repeat paste over an area already holding a tile's worth of merges
-    // for every row stays near-linear instead of existing × moved.
-    let mut moved_by_row = moved.clone();
-    moved_by_row.sort_by_key(|m| m.start.row);
-    let moved_span = moved.iter().map(|m| m.end.row - m.start.row).max().unwrap_or(0);
+    // Tile merges never overlap and each spans at most the block's height, so an
+    // index by start row and column lets a destination merge check only the tiles
+    // that can reach it — a repeat paste over an area already holding a tile's
+    // worth of merges stays near-linear instead of existing × moved, on tall and
+    // wide pastes alike.
+    let moved_index = RangeIndex::new(moved.clone());
     let sheet = cx.sheet_mut(dest_sheet)?;
     let mut removed: Vec<RangeRef> = Vec::new();
     sheet.merges.retain(|existing| {
-        let window = row_window(&moved_by_row, moved_span, existing.start.row, existing.end.row);
-        let displaced = window.iter().any(|m| existing.intersects(m));
+        let displaced = moved_index.any_intersects(existing);
         if displaced {
             removed.push(*existing);
         }
@@ -165,15 +210,9 @@ fn copy_merges_tiled(
     // changed, and blocked ones that could reach them, are evaluated again, as in
     // format::merge. A displaced merge can cover cells the paste never wrote.
     let areas: Vec<RangeRef> = removed.iter().copied().chain(moved.iter().copied()).collect();
-    let mut areas_by_row = areas.clone();
-    areas_by_row.sort_by_key(|a| a.start.row);
-    let areas_span = areas.iter().map(|a| a.end.row - a.start.row).max().unwrap_or(0);
-    let mut touched: Vec<(usize, CellRef)> = sheet
-        .spill_ranges
-        .iter()
-        .filter(|(_, r)| row_window(&areas_by_row, areas_span, r.start.row, r.end.row).iter().any(|a| r.intersects(a)))
-        .map(|(anchor, _)| (dest_sheet, *anchor))
-        .collect();
+    let areas_index = RangeIndex::new(areas.clone());
+    let mut touched: Vec<(usize, CellRef)> =
+        sheet.spill_ranges.iter().filter(|(_, r)| areas_index.any_intersects(r)).map(|(anchor, _)| (dest_sheet, *anchor)).collect();
     if let Some(reach_end) = areas.iter().map(|a| a.end).reduce(|acc, e| CellRef::new(acc.row.max(e.row), acc.col.max(e.col))) {
         let reach = RangeRef::new(CellRef::new(0, 0), reach_end);
         touched.extend(

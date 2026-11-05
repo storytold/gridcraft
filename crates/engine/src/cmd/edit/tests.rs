@@ -797,6 +797,24 @@ fn repeating_a_tiled_merge_paste_over_itself_keeps_one_merge_per_tile() {
 }
 
 #[test]
+fn repeating_a_wide_tiled_merge_paste_over_itself_keeps_one_merge_per_tile() {
+    // #3370 review: a wide tiled paste puts thousands of merges on a single row;
+    // pasting it again must displace each with the identical new one — the count
+    // stays one per tile — and the candidate lookup must prune by column as well
+    // as row, or the repeat checks every merge on the row against every other.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    paste_over(&mut s, "A1:B1", "C1:XFD1").unwrap();
+    paste_over(&mut s, "A1:B1", "C1:XFD1").unwrap();
+    let merges = &s.doc().unwrap().wb.sheet(0).unwrap().merges;
+    assert_eq!(merges.len(), 8192, "the original plus one per tile across the row, replaced not duplicated");
+    assert!(merges.contains(&RangeRef::parse("XFC1:XFD1").unwrap()));
+    assert_eq!(value_at(&s, "XFC1"), Value::Number(1.0));
+}
+
+#[test]
 fn tiled_cut_moves_each_cell_into_every_tile() {
     // A cut pasted over a multiple of its size tiles; the cut path reads the taken cells by position.
     let mut s = Session::new();
