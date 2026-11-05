@@ -352,6 +352,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Options|Save" => "Guardar",
         "Show formula bar" => "Mostrar barra de fórmulas",
         "Highlight the active cell's row" => "Resaltar la fila de la celda activa",
+        "Rows to scroll per mouse wheel notch (0 = usual speed)" => "Filas por cada paso de la rueda del ratón (0 = velocidad habitual)",
         "Display options for this workbook" => "Opciones de presentación para este libro",
         "Show horizontal scroll bar" => "Mostrar barra de desplazamiento horizontal",
         "Show vertical scroll bar" => "Mostrar barra de desplazamiento vertical",

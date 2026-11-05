@@ -19,6 +19,14 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut highlight_row, lang.tr("Highlight the active cell's row")).changed() {
         app.run_or_alert("options.highlightActiveRow", json!({"on": highlight_row}));
     }
+    let mut wheel_rows = app.ui.wheel_rows;
+    ui.horizontal(|ui| {
+        let value = ui.add(egui::DragValue::new(&mut wheel_rows).range(0..=20));
+        let label = ui.label(lang.tr("Rows to scroll per mouse wheel notch (0 = usual speed)"));
+        if value.labelled_by(label.id).changed() {
+            app.run_or_alert("options.wheelRows", json!({"rows": wheel_rows}));
+        }
+    });
     ui.add_space(18.0);
     section(ui, lang, "Options|Editing");
     let mut autocomplete = app.ui.autocomplete;

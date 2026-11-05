@@ -439,6 +439,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Options|Save" => "저장",
         "Show formula bar" => "수식 입력줄 표시",
         "Highlight the active cell's row" => "활성 셀의 행 강조 표시",
+        "Rows to scroll per mouse wheel notch (0 = usual speed)" => "마우스 휠 한 칸당 스크롤할 행 수 (0 = 기본 속도)",
         "Display options for this workbook" => "이 통합 문서의 표시 옵션",
         "Show horizontal scroll bar" => "가로 스크롤 막대 표시",
         "Show vertical scroll bar" => "세로 스크롤 막대 표시",

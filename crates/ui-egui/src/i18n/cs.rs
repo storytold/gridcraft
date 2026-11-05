@@ -346,6 +346,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Options|Save" => "Uložit",
         "Show formula bar" => "Zobrazit řádek vzorců",
         "Highlight the active cell's row" => "Zvýraznit řádek aktivní buňky",
+        "Rows to scroll per mouse wheel notch (0 = usual speed)" => "Počet řádků na jeden krok kolečka myši (0 = obvyklá rychlost)",
         "Display options for this workbook" => "Možnosti zobrazení pro tento sešit",
         "Show horizontal scroll bar" => "Zobrazit vodorovný posuvník",
         "Show vertical scroll bar" => "Zobrazit svislý posuvník",

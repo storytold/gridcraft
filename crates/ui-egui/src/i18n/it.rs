@@ -427,6 +427,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Options|Editing" => "Modifica",
         "Show formula bar" => "Mostra barra della formula",
         "Highlight the active cell's row" => "Evidenzia la riga della cella attiva",
+        "Rows to scroll per mouse wheel notch (0 = usual speed)" => "Righe da scorrere per ogni scatto della rotella (0 = velocità normale)",
         "Enable AutoComplete for cell values" => "Abilita Completamento automatico per i valori delle celle",
         "Save .xlsx workbooks automatically after every change" => "Salva automaticamente le cartelle di lavoro .xlsx dopo ogni modifica",
         "Workbook calculation" => "Calcolo della cartella di lavoro",

@@ -123,6 +123,7 @@ mod ui_clock;
 mod undo_while_grouping;
 mod validation_alert;
 mod validation_input_message;
+mod wheel_rows;
 mod wheel_zoom;
 mod whole_line_shortcuts;
 mod widgets;

@@ -441,6 +441,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Options|Save" => "Сохранение",
         "Show formula bar" => "Показывать строку формул",
         "Highlight the active cell's row" => "Выделять строку активной ячейки",
+        "Rows to scroll per mouse wheel notch (0 = usual speed)" => "Строк за один щелчок колёсика мыши (0 = обычная скорость)",
         "Display options for this workbook" => "Параметры отображения для этой книги",
         "Show horizontal scroll bar" => "Показывать горизонтальную полосу прокрутки",
         "Show vertical scroll bar" => "Показывать вертикальную полосу прокрутки",
