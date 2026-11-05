@@ -575,6 +575,16 @@ fn scatter_series_format_changes_real_geometry_and_can_hide_lines() {
 }
 
 #[test]
+fn bar_series_border_uses_configured_line_color() {
+    let mut c = chart(ChartKind::ColumnClustered);
+    let data = sample(ChartKind::ColumnClustered);
+    let expected = [12, 34, 56, 255];
+    c.format.series.insert(0, gridcraft_model::ChartSeriesFormat { border_width: Some(2.0), line_color: Some(expected), ..Default::default() });
+    let prims = render(&c, &data, 640.0, 400.0, &ApproxMeasure);
+    assert!(prims.iter().any(|p| matches!(p, Prim::Rect { stroke: Some((color, width)), .. } if *color == expected && *width == 2.0)));
+}
+
+#[test]
 fn hollow_markers_have_independent_contours_and_number_formats_are_axis_only() {
     let mut c = chart(ChartKind::ScatterLines);
     c.format.y_axis.number_format = Some("0.0 \"kg\"".into());
@@ -2076,6 +2086,23 @@ fn hundred_percent_stacked_lines_end_each_category_at_its_total() {
         let with_markers = kind == ChartKind::LineStacked100Markers;
         assert_eq!((circles(true), circles(false)), if with_markers { (8, 2) } else { (0, 0) }, "{kind:?}");
     }
+}
+
+#[test]
+fn hundred_percent_axis_keeps_fixed_bounds_with_major_unit_override() {
+    let kind = ChartKind::LineStacked100;
+    let d = ChartData {
+        categories: ["Q1", "Q2"].map(String::from).to_vec(),
+        series: vec![series("A", &[1.0, 2.0], [20, 96, 130, 255], kind), series("B", &[3.0, 4.0], [25, 107, 36, 255], kind)],
+        ..Default::default()
+    };
+    let mut c = chart(kind);
+    c.format.y_axis.major_unit = Some(0.3);
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let labels = texts(&prims);
+    assert!(labels.contains(&"0%"), "{labels:?}");
+    let maximum_percent_tick = labels.iter().filter_map(|label| label.strip_suffix('%')?.parse::<u32>().ok()).max().unwrap_or_default();
+    assert!(maximum_percent_tick <= 100, "a unit override must not expand a 100% axis: {labels:?}");
 }
 
 #[test]

@@ -392,6 +392,7 @@ fn pie_doughnut_and_stock_keep_native_series_defaults_with_extension_styles() {
         let native = |root: &crate::xml::El| root.path(&["chart", "plotArea", group]).unwrap().kids("ser").cloned().collect::<Vec<_>>();
         assert_eq!(native(&after), native(&before), "{kind:?}: series-wide overrides must not replace native defaults");
         assert_eq!(crate::chart::read_custom_format(&after).unwrap().series.get(&0), Some(&spec));
+        assert_eq!(crate::chart::read_chart(&after).unwrap().format.series.get(&0), Some(&spec), "{kind:?}: extension style must survive import");
     }
 }
 

@@ -182,7 +182,12 @@ fn axis_scales(
                 || primary_options.major_unit.is_some()
                 || primary_options.logarithmic)
         {
-            configured_scale(scale.min, scale.max, false, primary_options)
+            let mut options = primary_options.clone();
+            if !options.logarithmic {
+                options.minimum = options.minimum.or(Some(scale.min));
+                options.maximum = options.maximum.or(Some(scale.max));
+            }
+            configured_scale(scale.min, scale.max, false, &options)
         } else {
             scale
         };

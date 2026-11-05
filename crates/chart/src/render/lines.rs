@@ -243,7 +243,7 @@ pub(super) fn style_series(ctx: &mut Ctx, start: usize, spec: Option<&gridcraft_
             Prim::Rect { fill: Some(c), stroke, .. } | Prim::Polygon { fill: c, stroke, .. } if *c == color => {
                 *c = spec.fill_color.unwrap_or(color);
                 if let Some(w) = spec.border_width {
-                    *stroke = (w > 0.0).then_some((DARK_TEXT, w));
+                    *stroke = (w > 0.0).then_some((spec.line_color.unwrap_or(DARK_TEXT), w));
                 }
             }
             Prim::Circle { cx, cy, r, fill, stroke } if *fill == Some(color) => {

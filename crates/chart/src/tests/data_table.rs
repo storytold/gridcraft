@@ -55,6 +55,16 @@ fn tables_draw_source_values_for_every_supported_chart_kind() {
         let labels = texts(&prims);
         // Source amounts, including on 100% stacked charts, not shares or running totals.
         if supported {
+            assert!(
+                prims
+                    .iter()
+                    .filter_map(|p| match p {
+                        Prim::Text { text, role, .. } if ["$12,000", "Q1", "North"].contains(&text.as_str()) => Some(role.as_str()),
+                        _ => None,
+                    })
+                    .all(|role| role == "data_table"),
+                "table text must not inherit data-label formatting or hit testing: {kind:?}"
+            );
             for value in ["$12,000", "-$4,000", "$38,000", "$61,870"] {
                 assert!(labels.contains(&value), "{kind:?}: missing {value}");
             }

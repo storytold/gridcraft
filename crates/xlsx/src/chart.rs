@@ -398,6 +398,15 @@ fn read_format(root: &El, plot: &El, series: &[Series]) -> gridcraft_model::Char
         );
         for ser in group.kids("ser") {
             let custom = ser.child_val("idx").and_then(|value| value.parse::<usize>().ok()).and_then(|index| custom_series.get(&index));
+            if matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Stock) {
+                // These groups keep per-series overrides in the GridCraft extension; native XML
+                // intentionally contains only the chart kind's defaults.
+                if let Some(style) = custom {
+                    format.series.insert(series_index, style.clone());
+                }
+                series_index += 1;
+                continue;
+            }
             let ln = ser.path(&["spPr", "ln"]);
             let marker = ser.child("marker");
             let native_smooth = bool_val(ser, "smooth");
