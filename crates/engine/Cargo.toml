@@ -15,6 +15,7 @@ gridcraft-formula = { workspace = true }
 gridcraft-functions = { workspace = true }
 gridcraft-model = { workspace = true }
 gridcraft-calc = { workspace = true }
+gridcraft-dax = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 web-time = { workspace = true }
