@@ -32,5 +32,5 @@ The extension is intended for GridCraft round trips; other editors may discard
 extension-only properties. Automated round trips do not establish Excel visual
 parity. Secondary scatter axes, error bars, 3-D, and full per-point/data-label
 formatting are outside this change. Element selection and editing controls,
-standalone image export, clipboard actions and local templates are subsequent
-parts of the contribution series.
+standalone image export and clipboard actions are subsequent parts of the
+contribution series; local chart templates are implemented in the templates PR.
