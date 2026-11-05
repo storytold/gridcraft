@@ -1,6 +1,6 @@
 //! Native Unicode fallback fonts. Font files remain outside the source repository.
 //! Embed TrueType outlines and a ToUnicode map, rather than relying on a reader's CJK fonts.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -18,6 +18,10 @@ static FONTS: OnceLock<[Option<Arc<UnicodeFont>>; 4]> = OnceLock::new();
 pub(super) const FONT_LIMIT: usize = 36;
 type NamedFace = (String, bool, bool, Arc<UnicodeFont>);
 static NAMED: Mutex<Vec<NamedFace>> = Mutex::new(Vec::new());
+type MissingFace = (String, bool, bool);
+static MISSING: Mutex<BTreeSet<MissingFace>> = Mutex::new(BTreeSet::new());
+/// Missing names do not consume the limited embedded-font slots.
+const MISSING_CACHE_LIMIT: usize = 256;
 
 /// Return an installed fallback face (slots 0..4) or a resolved named face.
 pub(super) fn font(style: usize) -> Option<Arc<UnicodeFont>> {
@@ -37,14 +41,48 @@ pub(super) fn style(index: usize) -> usize {
 
 /// Resolve by the font's internal family name, never by an input-derived path.
 pub(super) fn named(name: &str, bold: bool, italic: bool) -> Option<usize> {
-    let mut fonts = NAMED.lock().ok()?;
+    resolve_named(&NAMED, &MISSING, name, bold, italic, || load_named(name, bold, italic))
+}
+
+/// Keep filesystem work outside the cache locks and recheck concurrent insertions.
+fn resolve_named(
+    named: &Mutex<Vec<NamedFace>>,
+    missing: &Mutex<BTreeSet<MissingFace>>,
+    name: &str,
+    bold: bool,
+    italic: bool,
+    load: impl FnOnce() -> Option<UnicodeFont>,
+) -> Option<usize> {
+    if name.len() > 256 {
+        return None;
+    }
+    {
+        let fonts = named.lock().ok()?;
+        if let Some(i) = fonts.iter().position(|e| e.0.eq_ignore_ascii_case(name) && e.1 == bold && e.2 == italic) {
+            return Some(i + 4);
+        }
+        if fonts.len() >= FONT_LIMIT - 4 {
+            return None;
+        }
+    }
+    let key = (name.to_ascii_lowercase(), bold, italic);
+    if missing.lock().ok()?.contains(&key) {
+        return None;
+    }
+    let Some(font) = load() else {
+        let mut cache = missing.lock().ok()?;
+        if cache.len() < MISSING_CACHE_LIMIT {
+            cache.insert(key);
+        }
+        return None;
+    };
+    let mut fonts = named.lock().ok()?;
     if let Some(i) = fonts.iter().position(|e| e.0.eq_ignore_ascii_case(name) && e.1 == bold && e.2 == italic) {
         return Some(i + 4);
     }
-    if fonts.len() >= FONT_LIMIT - 4 || name.len() > 256 {
+    if fonts.len() >= FONT_LIMIT - 4 {
         return None;
     }
-    let font = load_named(name, bold, italic)?;
     let index = fonts.len() + 4;
     fonts.push((name.to_owned(), bold, italic, Arc::new(font)));
     Some(index)
@@ -64,10 +102,16 @@ type CatalogFace = (Vec<String>, bool, bool, std::path::PathBuf);
 fn load_named(name: &str, bold: bool, italic: bool) -> Option<UnicodeFont> {
     static CATALOG: OnceLock<Vec<CatalogFace>> = OnceLock::new();
     let catalog = CATALOG.get_or_init(|| scan_fonts(font_dirs()));
+    load_catalog_match(catalog, name, bold, italic)
+}
+
+/// A stale or unreadable catalog entry must not hide a later eligible match.
+#[cfg(not(target_arch = "wasm32"))]
+fn load_catalog_match(catalog: &[CatalogFace], name: &str, bold: bool, italic: bool) -> Option<UnicodeFont> {
     for (names, b, i, path) in catalog {
         if *b == bold && *i == italic && names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
-            let bytes = read_font(path)?;
-            let face = ttf_parser::Face::parse(&bytes, 0).ok()?;
+            let Some(bytes) = read_font(path) else { continue };
+            let Ok(face) = ttf_parser::Face::parse(&bytes, 0) else { continue };
             if embeddable(&face) {
                 return Some(UnicodeFont::new(bytes));
             }
@@ -352,6 +396,63 @@ pub(super) fn test_font(bold: bool, italic: bool) -> super::Font {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Failed lookups are reused across case variants, bounded, and isolated by style.
+    #[test]
+    fn missing_names_are_cached_without_holding_locks() {
+        let named = Mutex::new(Vec::new());
+        let missing = Mutex::new(BTreeSet::new());
+        let calls = std::cell::Cell::new(0);
+        let load = || {
+            assert!(named.try_lock().is_ok());
+            assert!(missing.try_lock().is_ok());
+            calls.set(calls.get() + 1);
+            None
+        };
+        assert_eq!(resolve_named(&named, &missing, "Absent", false, false, load), None);
+        assert_eq!(resolve_named(&named, &missing, "ABSENT", false, false, load), None);
+        assert_eq!(calls.get(), 1);
+        assert_eq!(resolve_named(&named, &missing, "Absent", true, false, load), None);
+        assert_eq!(calls.get(), 2);
+        for i in 0..MISSING_CACHE_LIMIT + 10 {
+            resolve_named(&named, &missing, &format!("Absent{i}"), false, false, load);
+        }
+        assert_eq!(missing.lock().unwrap().len(), MISSING_CACHE_LIMIT);
+        assert!(named.lock().unwrap().is_empty());
+    }
+
+    /// A concurrent resolver wins without allocating a duplicate font slot.
+    #[test]
+    fn named_resolution_rechecks_after_loading() {
+        let named = Mutex::new(Vec::new());
+        let missing = Mutex::new(BTreeSet::new());
+        let result = resolve_named(&named, &missing, "Concurrent", false, false, || {
+            named.lock().unwrap().push(("Concurrent".into(), false, false, Arc::new(UnicodeFont::new(Vec::new()))));
+            Some(UnicodeFont::new(Vec::new()))
+        });
+        assert_eq!(result, Some(4));
+        assert_eq!(named.lock().unwrap().len(), 1);
+    }
+
+    /// Missing and malformed files are skipped before the next matching font.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn catalog_skips_unreadable_and_invalid_matches() -> std::io::Result<()> {
+        let Some(installed) = font(0) else { return Ok(()) };
+        let root = std::env::temp_dir().join(format!("gridcraft-font-load-{}", std::process::id()));
+        std::fs::create_dir_all(&root)?;
+        let invalid = root.join("invalid.ttf");
+        let valid = root.join("valid.ttf");
+        std::fs::write(&invalid, b"invalid font")?;
+        std::fs::write(&valid, &installed.bytes)?;
+        let catalog = [root.join("missing.ttf"), invalid.clone(), valid.clone()].map(|path| (vec!["Test Family".into()], false, false, path));
+        let loaded = load_catalog_match(&catalog, "Test Family", false, false).unwrap();
+        assert_eq!(loaded.bytes, installed.bytes);
+        std::fs::remove_file(invalid)?;
+        std::fs::remove_file(valid)?;
+        std::fs::remove_dir(root)?;
+        Ok(())
+    }
 
     /// Both successful metrics and missing glyphs are cached without unbounded growth.
     #[test]

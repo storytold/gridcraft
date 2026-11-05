@@ -29,6 +29,11 @@ The native resolver currently supports at most 32 named faces per process, up to
 file. TrueType collections, CFF outlines and variable-font instance selection are not yet
 supported. Missing/unsupported faces and WASM retain the standard-family fallback.
 
+Named-font loading does not hold the shared font-cache lock during filesystem access.
+Up to 256 missing family/style combinations are cached for the process lifetime,
+independently of the embedded-font limit. Unreadable or malformed matching font files
+are skipped so a later eligible catalog entry can be used.
+
 ## API migration
 
 The geometry-taking methods now use `Point` and `Rect` values to name their coordinates, and
