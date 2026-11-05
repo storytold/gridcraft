@@ -2106,6 +2106,24 @@ fn hundred_percent_axis_keeps_fixed_bounds_with_major_unit_override() {
 }
 
 #[test]
+fn hundred_percent_log_axis_uses_smallest_positive_stacked_share() {
+    let kind = ChartKind::LineStacked100;
+    let small_share = [20, 96, 130, 255];
+    let d = ChartData {
+        categories: ["Q1", "Q2"].map(String::from).to_vec(),
+        series: vec![series("Small", &[1.0, 2.0], small_share, kind), series("Rest", &[999_999.0, 1_999_998.0], [25, 107, 36, 255], kind)],
+        ..Default::default()
+    };
+    let mut c = chart(kind);
+    c.format.y_axis.logarithmic = true;
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    assert!(
+        prims.iter().any(|p| matches!(p, Prim::Line { pts, color, width, .. } if *color == small_share && *width > 2.1 && pts.len() >= 2)),
+        "the 1-in-1,000,000 share must remain visible on a logarithmic axis"
+    );
+}
+
+#[test]
 fn two_level_categories_resolve_and_draw() {
     let years = ["2023", "", "", "2024", "", ""];
     let months = ["Oct", "Nov", "Dec", "Jan", "Feb", "Mar"];

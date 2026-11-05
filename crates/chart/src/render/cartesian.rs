@@ -155,12 +155,20 @@ fn axis_scales(
         let (mut lo, hi) = range.unwrap_or((0.0, 0.0));
         let primary_options = if horizontal { &chart.format.x_axis } else { &chart.format.y_axis };
         if !axis && primary_options.logarithmic {
-            lo = members
-                .iter()
-                .filter_map(|i| data.series.get(*i))
-                .flat_map(|s| s.values.iter().flatten().copied())
-                .filter(|v| *v > 0.0)
-                .fold(hi, f64::min);
+            lo = if all100 {
+                members
+                    .iter()
+                    .flat_map(|i| spans.get(*i).into_iter().flatten().flatten().flat_map(|(base, top)| [*base, *top]))
+                    .filter(|v| *v > 0.0)
+                    .fold(hi, f64::min)
+            } else {
+                members
+                    .iter()
+                    .filter_map(|i| data.series.get(*i))
+                    .flat_map(|s| s.values.iter().flatten().copied())
+                    .filter(|v| *v > 0.0)
+                    .fold(hi, f64::min)
+            };
         }
         let (scale, fmt) = if all100 {
             (fixed_scale(if lo < -1e-9 { -1.0 } else { 0.0 }, if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, 0.2), Fmt::new("0%"))
@@ -187,7 +195,7 @@ fn axis_scales(
                 options.minimum = options.minimum.or(Some(scale.min));
                 options.maximum = options.maximum.or(Some(scale.max));
             }
-            configured_scale(scale.min, scale.max, false, &options)
+            configured_scale(if options.logarithmic { lo } else { scale.min }, scale.max, false, &options)
         } else {
             scale
         };
