@@ -29,6 +29,23 @@ fn save_fixture(label: &str) -> tempfile::TempDir {
         .unwrap()
 }
 
+/// New saves inherit the process umask just like an ordinary newly created file.
+#[cfg(all(not(target_arch = "wasm32"), unix))]
+#[test]
+fn new_workbook_save_keeps_default_creation_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = save_fixture("new-permissions");
+    let reference = fixture.path().join("ordinary.txt");
+    std::fs::OpenOptions::new().write(true).create_new(true).open(&reference).unwrap();
+    let saved = fixture.path().join("synthetic.xlsx");
+    write_file(saved.to_str().unwrap(), b"synthetic workbook bytes").unwrap();
+    let expected = std::fs::metadata(&reference).unwrap().permissions().mode() & 0o777;
+    let actual = std::fs::metadata(&saved).unwrap().permissions().mode() & 0o777;
+    assert_eq!(actual, expected, "a new save must use the ordinary creation mode after umask");
+    assert_eq!(std::fs::read(saved).unwrap(), b"synthetic workbook bytes");
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(unix)]
 #[test]

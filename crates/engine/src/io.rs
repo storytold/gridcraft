@@ -951,7 +951,7 @@ fn atomic_write(dir: &cap_std::fs::Dir, name: &std::ffi::OsStr, bytes: &[u8]) ->
     #[cfg(unix)]
     {
         use cap_std::fs::{OpenOptionsExt, PermissionsExt};
-        opts.mode(prior.as_ref().map_or(0o600, |p| p.mode()));
+        opts.mode(prior.as_ref().map_or(0o666, |p| p.mode()));
     }
     let mut created = None;
     for _ in 0..32 {
