@@ -351,6 +351,16 @@ fn end_mode_ends_when_the_grid_loses_the_keyboard() {
 }
 
 #[test]
+fn end_mode_ends_when_the_window_loses_focus() {
+    let mut h = harness(book("A1"));
+    key(&mut h, Key::End, Modifiers::NONE);
+    assert!(h.state().grid.end_mode);
+    h.input_mut().events.push(Event::WindowFocused(false));
+    h.run_steps(2);
+    assert!(!h.state().grid.end_mode);
+}
+
+#[test]
 fn clipboard_events_end_end_mode() {
     for event in [Event::Copy, Event::Cut, Event::Paste("x".into())] {
         let mut h = harness(book("A1"));

@@ -42,6 +42,9 @@ fn grid_has_keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Respo
 
 /// Grid keyboard handling when no text field has focus.
 pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
+    if ctx.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false)))) {
+        set_end_mode(app, ctx, false);
+    }
     if !grid_has_keyboard(app, ctx, resp) {
         return;
     }

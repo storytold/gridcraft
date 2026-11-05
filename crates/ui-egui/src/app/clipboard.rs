@@ -4,6 +4,10 @@ impl SheetApp {
     /// Copy or cut the selected cells to the system clipboard. Engine-only commands keep
     /// their existing internal clipboard behavior and do not write to the host clipboard.
     pub fn copy_to_clipboard(&mut self, ctx: &egui::Context, command: &str) {
+        if self.grid.end_mode {
+            self.grid.end_mode = false;
+            ctx.request_repaint();
+        }
         // Only ask the engine for HTML when the host can publish it.
         let result = match self.run_command(command, json!({"html": self.services.copy_html.is_some()})) {
             Ok(result) => result,
@@ -52,6 +56,7 @@ impl SheetApp {
     /// the text that was there when GridCraft last copied without publishing, GridCraft's own
     /// clipboard is pasted.
     pub fn paste_from_clipboard(&mut self) {
+        self.grid.end_mode = false;
         match self.system_clipboard_text() {
             Some(text) if self.session.clipboard.is_none() || self.clipboard_text_at_copy.as_ref() != Some(&text) => self.paste_external(text),
             Some(_) => self.run_or_alert("edit.paste", json!({})),
