@@ -34,6 +34,8 @@ pub struct DocWindows {
     quit_with_last_window: bool,
     /// The root viewport is hidden because no window is open.
     root_hidden: bool,
+    /// A new window must be drawn before its native viewport can receive focus commands.
+    pending_focus: Option<u64>,
 }
 
 impl DocWindows {
@@ -41,7 +43,14 @@ impl DocWindows {
     pub fn new(app: &mut SheetApp, base: egui::ViewportBuilder, quit_with_last_window: bool) -> DocWindows {
         app.native_windows = true;
         // The root window keeps the desktop's frame, so every window does.
-        DocWindows { list: WindowList::new(), viewports: Viewports::new(Frame::Desktop), base, quit_with_last_window, root_hidden: false }
+        DocWindows {
+            list: WindowList::new(),
+            viewports: Viewports::new(Frame::Desktop),
+            base,
+            quit_with_last_window,
+            root_hidden: false,
+            pending_focus: None,
+        }
     }
 
     /// The platform default for the last window closing: macOS keeps running, others quit.
@@ -130,6 +139,12 @@ impl DocWindows {
         for w in visible {
             if self.find(w).is_none() {
                 self.list.open(w);
+                if app.session.active_window() == Some(w) {
+                    self.pending_focus = Some(w);
+                }
+                // A command in a viewport's UI can create a workbook after this frame's
+                // viewport list was drawn. Schedule the root to create its native window.
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
             }
         }
         if self.viewports.root().is_none() {
@@ -177,10 +192,11 @@ impl DocWindows {
         let ctx = ui.ctx().clone();
         self.sync(app, &ctx);
         let focused = self.list.active().and_then(|id| self.list.get(id).copied());
+        let pending_focus = self.pending_focus.take().filter(|w| app.session.active_window() == Some(*w) && app.session.window(*w).is_some());
         let titles: std::collections::HashMap<u64, String> = self.list.iter().map(|(_, w)| (*w, window_title(app, *w))).collect();
         let base = &self.base;
         // The window a command run in some window's UI activated (File › New, Switch Windows, a close).
-        let mut requested: Option<u64> = None;
+        let mut requested = pending_focus;
         let events = self.viewports.show(
             ui,
             &mut self.list,
@@ -224,6 +240,15 @@ impl DocWindows {
             app.enter_window(target);
         }
         self.sync(app, &ctx);
+        if let Some(window) = pending_focus.filter(|w| app.session.active_window() == Some(*w))
+            && let Some(viewport) = self.viewport_of(window)
+        {
+            // The native child now exists. Restoring and focusing it here also prevents an
+            // old root focus snapshot from taking back a window just opened by File > New.
+            ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Focus);
+        }
     }
 
     /// A window's close button. Returns the window to bring forward when the close needs an

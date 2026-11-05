@@ -20,14 +20,36 @@ thread_local! {
     static SENT: RefCell<Vec<(ViewportId, ViewportCommand)>> = const { RefCell::new(Vec::new()) };
     /// Input events for the root window's next frame (a key pressed in it).
     static EVENTS: RefCell<Vec<egui::Event>> = const { RefCell::new(Vec::new()) };
+    static CHILD_EVENTS: RefCell<egui::ViewportIdMap<Vec<egui::Event>>> = RefCell::new(egui::ViewportIdMap::default());
+    static BUTTONS: RefCell<std::collections::HashMap<(ViewportId, String), egui::Pos2>> = RefCell::new(std::collections::HashMap::new());
+    static DRAWN: RefCell<Vec<ViewportId>> = const { RefCell::new(Vec::new()) };
+    static REPAINTS: RefCell<Vec<ViewportId>> = const { RefCell::new(Vec::new()) };
 }
 
-fn record(mut out: egui::FullOutput) {
+fn record(viewport: ViewportId, mut out: egui::FullOutput) {
     out.textures_delta.clear(); // not painted
+    if let Some(update) = &out.platform_output.accesskit_update {
+        BUTTONS.with(|buttons| {
+            let mut buttons = buttons.borrow_mut();
+            for (_, node) in &update.nodes {
+                if node.role() == egui::accesskit::Role::Button
+                    && let (Some(label), Some(bounds)) = (node.label(), node.bounds())
+                {
+                    buttons.insert(
+                        (viewport, label.to_owned()),
+                        egui::pos2(((bounds.x0 + bounds.x1) / 2.0) as f32, ((bounds.y0 + bounds.y1) / 2.0) as f32),
+                    );
+                }
+            }
+        });
+    }
     SENT.with(|s| {
         let mut s = s.borrow_mut();
         for (id, v) in &out.viewport_output {
             s.extend(v.commands.iter().map(|c| (*id, c.clone())));
+            if v.repaint_delay.is_zero() {
+                REPAINTS.with(|repaints| repaints.borrow_mut().push(*id));
+            }
         }
     });
 }
@@ -41,15 +63,20 @@ struct Desk {
 impl Desk {
     fn new(quit_with_last_window: bool) -> Desk {
         INFOS.with(|i| i.borrow_mut().clear());
+        CHILD_EVENTS.with(|events| events.borrow_mut().clear());
+        BUTTONS.with(|buttons| buttons.borrow_mut().clear());
         let ctx = Context::default();
+        ctx.enable_accesskit();
         ctx.set_embed_viewports(false);
         Context::set_immediate_viewport_renderer(|ctx, viewport| {
             let id = viewport.ids.this;
             let mut input = RawInput { viewport_id: id, ..RawInput::default() };
             input.viewports = INFOS.with(|i| i.borrow().clone());
             input.viewports.entry(id).or_default().parent = Some(viewport.ids.parent);
+            input.events = CHILD_EVENTS.with(|events| events.borrow_mut().remove(&id).unwrap_or_default());
+            DRAWN.with(|drawn| drawn.borrow_mut().push(id));
             let mut cb = viewport.viewport_ui_cb;
-            record(ctx.run_ui(input, |ui| cb(ui)));
+            record(id, ctx.run_ui(input, |ui| cb(ui)));
         });
         let mut session = Session::new();
         session.new_workbook();
@@ -64,6 +91,8 @@ impl Desk {
     /// commands sent.
     fn frame_with(&mut self, act: impl FnOnce(&mut SheetApp, &Context)) -> Vec<(ViewportId, ViewportCommand)> {
         SENT.with(|s| s.borrow_mut().clear());
+        DRAWN.with(|drawn| drawn.borrow_mut().clear());
+        REPAINTS.with(|repaints| repaints.borrow_mut().clear());
         let mut input = RawInput { viewport_id: ViewportId::ROOT, ..RawInput::default() };
         input.viewports = INFOS.with(|i| i.borrow().clone());
         input.viewports.entry(ViewportId::ROOT).or_default();
@@ -79,7 +108,7 @@ impl Desk {
             windows.logic(app, &ctx);
             windows.show(app, ui);
         });
-        record(out);
+        record(ViewportId::ROOT, out);
         // Close buttons are one-shot events.
         INFOS.with(|i| i.borrow_mut().values_mut().for_each(|v| v.events.clear()));
         SENT.with(|s| s.borrow().clone())
@@ -173,6 +202,73 @@ fn each_window_keeps_its_own_selection_and_draft() {
     assert!(desk.app.session.documents().iter().all(|d| !d.is_dirty()), "drawing the other window commits no draft");
 }
 
+fn queue_input(viewport: ViewportId, input: Vec<egui::Event>) {
+    if viewport == ViewportId::ROOT {
+        EVENTS.with(|events| events.borrow_mut().extend(input));
+    } else {
+        CHILD_EVENTS.with(|events| events.borrow_mut().entry(viewport).or_default().extend(input));
+    }
+}
+
+#[test]
+fn backstage_blank_workbook_schedules_and_focuses_its_native_window() {
+    for from_child in [false, true] {
+        let mut desk = Desk::new(true);
+        if from_child {
+            desk.app.run("file.new", json!({})).unwrap();
+            desk.frames(3);
+        }
+        let source_index = usize::from(from_child);
+        let source = desk.window_of(source_index);
+        let source_viewport = desk.viewport(source);
+        desk.app.run("cell.set", json!({"cell": "A1", "input": "kept"})).unwrap();
+        INFOS.with(|infos| infos.borrow_mut().entry(source_viewport).or_default().focused = Some(true));
+        desk.frames(2);
+        desk.app.run("ui.backstage", json!({"page": "new"})).unwrap();
+        desk.frames(3);
+        let point = BUTTONS.with(|buttons| buttons.borrow().get(&(source_viewport, "Blank workbook".to_owned())).copied()).unwrap();
+        queue_input(
+            source_viewport,
+            vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+            ],
+        );
+        desk.frame_with(|_, _| {});
+        queue_input(
+            source_viewport,
+            vec![egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }],
+        );
+        desk.frame_with(|_, _| {});
+        assert_eq!(desk.app.session.documents().len(), source_index + 2, "the actual Backstage button creates a workbook during UI");
+        let created = desk.window_of(source_index + 1);
+        let child = desk.viewport(created);
+        assert_eq!(desk.app.session.active_window(), Some(created));
+        assert!(!DRAWN.with(|drawn| drawn.borrow().contains(&child)), "the child was added after this frame's viewport iteration");
+        assert!(REPAINTS.with(|repaints| repaints.borrow().contains(&ViewportId::ROOT)), "create the child without waiting for another user event");
+
+        let sent = desk.frame_with(|_, _| {});
+        assert!(DRAWN.with(|drawn| drawn.borrow().contains(&child)), "the scheduled root frame creates the native child");
+        assert!(sent_to(&sent, child, &ViewportCommand::Focus), "focus is sent after the child exists: {sent:?}");
+        assert_eq!(desk.app.session.active_window(), Some(created));
+
+        INFOS.with(|infos| {
+            let mut infos = infos.borrow_mut();
+            infos.entry(source_viewport).or_default().focused = Some(false);
+            infos.entry(child).or_default().focused = Some(true);
+        });
+        queue_input(child, vec![egui::Event::Text("7".to_owned())]);
+        desk.frame_with(|_, _| {});
+        queue_input(
+            child,
+            vec![egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }],
+        );
+        desk.frame_with(|_, _| {});
+        assert_eq!(desk.app.session.documents()[source_index + 1].wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(7.0));
+        assert_eq!(desk.app.session.documents()[source_index].wb.active().unwrap().value(CellRef::new(0, 0)), Value::text("kept"));
+        assert_eq!(desk.windows.shown_windows().len(), source_index + 2);
+    }
+}
 #[test]
 fn closing_one_of_two_windows_on_a_workbook_does_not_ask() {
     let mut desk = Desk::new(true);
