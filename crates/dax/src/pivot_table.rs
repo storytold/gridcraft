@@ -1042,7 +1042,7 @@ fn model_field_value(model: &DataModel, lookups: &HopKeyLookups, row: &[Scalar],
         }
         let matched = lookups
             .get(&(hop.to_table, hop.to_column))
-            .and_then(|index| index.get(&key).copied())
+            .and_then(|index| index.get(&crate::value::relationship_key_of(&key)).copied())
             .and_then(|row_id| model.tables.get(hop.to_table).and_then(|table| table.rows.get(row_id)));
         let Some(next) = matched else { return Scalar::Blank };
         current = next;
@@ -1070,7 +1070,7 @@ fn hop_key_lookups<'a>(model: &DataModel, fields: impl IntoIterator<Item = &'a B
             if let Some(table) = model.tables.get(hop.to_table) {
                 for (row_id, row) in table.rows.iter().enumerate() {
                     if let Some(value) = row.get(hop.to_column) {
-                        index.entry(ScalarKey::from(value)).or_insert(row_id);
+                        index.entry(crate::value::relationship_key_of_value(value)).or_insert(row_id);
                     }
                 }
             }

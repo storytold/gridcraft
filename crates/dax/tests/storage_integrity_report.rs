@@ -136,7 +136,7 @@ fn hostile_model_reports_orphans_duplicates_blanks_and_invalid_cardinality() {
             "ProductKey",
             Some("Product"),
             Some("ProductKey"),
-            Some(Scalar::Integer(7)),
+            Some(Scalar::Decimal(7.0)),
             vec![2],
             1,
             "1 row(s) in `Sales[ProductKey]` have key 7 with no match in `Product[ProductKey]`",
@@ -148,7 +148,7 @@ fn hostile_model_reports_orphans_duplicates_blanks_and_invalid_cardinality() {
             "ProductKey",
             Some("Sales"),
             Some("ProductKey"),
-            Some(Scalar::Integer(1)),
+            Some(Scalar::Decimal(1.0)),
             vec![0, 3],
             2,
             "key 1 appears in 2 row(s) of `Product[ProductKey]`, so the one side of the relationship is not unique",
@@ -355,14 +355,14 @@ fn big_orphan_sets_are_capped_but_counted_in_full() {
     let orphans: Vec<&IntegrityFinding> = report.findings_for(IntegrityCheck::OrphanRow).collect();
     assert_eq!(orphans.len(), MAX_REPORTED_KEYS, "key findings are capped");
     let first = orphans.first().expect("first orphan");
-    assert_eq!(first.key, Some(Scalar::Integer(10)));
+    assert_eq!(first.key, Some(Scalar::Decimal(10.0)));
     assert_eq!(first.total, 25, "the uncapped row count survives the cap");
     assert_eq!(first.rows.len(), MAX_REPORTED_ROWS, "row ids are capped");
     assert_eq!(first.rows.first().copied(), Some(0));
     assert_eq!(first.rows.last().copied(), Some(MAX_REPORTED_ROWS - 1));
     // The last captured key is still in ascending order and inside the cap.
     let last = orphans.last().expect("last orphan");
-    assert_eq!(last.key, Some(Scalar::Integer(25)));
+    assert_eq!(last.key, Some(Scalar::Decimal(25.0)));
     assert_eq!(last.total, 1);
     // The many-to-one orientation of the capped report is unchanged.
     assert_eq!(check.actual, Cardinality::OneToMany);

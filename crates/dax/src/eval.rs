@@ -62,7 +62,7 @@ use crate::ast::{BinaryOp, Literal, UnaryOp};
 use crate::binder::{BindError, Binder, BoundExpr};
 use crate::model::DataModel;
 use crate::storage::{ColumnKind, ModelStorage, StorageError, TableStorage};
-use crate::value::{EvalError, Scalar, ScalarKey, TableColumn, TableValue, distinct_key, folded_key};
+use crate::value::{EvalError, Scalar, ScalarKey, TableColumn, TableValue, distinct_key, folded_key, relationship_key_of};
 
 use support::*;
 
@@ -629,8 +629,13 @@ impl<'a> Evaluator<'a> {
             }
             let other_rows = self.filtered_row_ids_inner(other, filters, visited)?;
             self.bump(|counters| &counters.relationship_lookups);
-            let keys: BTreeSet<ScalarKey> =
-                other_rows.iter().filter_map(|row| storage.value(other, other_column, *row)).map(|value| ScalarKey::from(&value)).collect();
+            // Both sides use the relationship key rule, so an `Integer` key on one side joins a
+            // `Decimal` or `Currency` key on the other.
+            let keys: BTreeSet<ScalarKey> = other_rows
+                .iter()
+                .filter_map(|row| storage.value(other, other_column, *row))
+                .map(|value| relationship_key_of(&ScalarKey::from(&value)))
+                .collect();
             let mut retained = Vec::with_capacity(rows.len());
             for row in rows {
                 let Some(value) = storage.value(table, self_column, row) else { continue };
@@ -640,7 +645,7 @@ impl<'a> Evaluator<'a> {
                 if key == ScalarKey::Blank {
                     continue;
                 }
-                if keys.contains(&key) {
+                if keys.contains(&relationship_key_of(&key)) {
                     retained.push(row);
                 }
             }
@@ -733,13 +738,18 @@ impl<'a> Evaluator<'a> {
             else {
                 continue;
             };
-            let keys: BTreeSet<ScalarKey> =
-                self.table_inner(other, filters, visited).rows.iter().filter_map(|row| row.get(other_col)).map(ScalarKey::from).collect();
+            let keys: BTreeSet<ScalarKey> = self
+                .table_inner(other, filters, visited)
+                .rows
+                .iter()
+                .filter_map(|row| row.get(other_col))
+                .map(|value| relationship_key_of(&ScalarKey::from(value)))
+                .collect();
             rows.retain(|row| {
                 let Some(value) = row.get(self_col) else { return false };
                 let key = ScalarKey::from(value);
                 // A BLANK foreign key never joins, so it is never in the related key set.
-                key != ScalarKey::Blank && keys.contains(&key)
+                key != ScalarKey::Blank && keys.contains(&relationship_key_of(&key))
             });
         }
 

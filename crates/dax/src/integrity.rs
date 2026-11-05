@@ -536,7 +536,7 @@ fn key_occurrences(table: &ModelTable, column: usize) -> BTreeMap<ScalarKey, Occ
     let mut keys: BTreeMap<ScalarKey, Occurrence> = BTreeMap::new();
     for (row, cells) in table.rows.iter().enumerate() {
         let value = cells.get(column).unwrap_or(&blank);
-        keys.entry(ScalarKey::from(value)).or_default().push(row);
+        keys.entry(crate::value::relationship_key_of_value(value)).or_default().push(row);
     }
     keys
 }
@@ -555,8 +555,10 @@ fn storage_facts(storage: &ModelStorage, relationship: &RelationshipIndex, index
         inactive: relationship.inactive,
         from_rows: storage.table(relationship.from_table).map_or(0, TableStorage::row_count),
         to_rows: storage.table(relationship.to_table).map_or(0, TableStorage::row_count),
-        from_keys: relationship.from_rows.iter().map(|(key, rows)| (key.clone(), Occurrence::from_rows(rows))).collect(),
-        to_keys: relationship.to_rows.iter().map(|(key, rows)| (key.clone(), Occurrence::from_rows(rows))).collect(),
+        // A numeric key is compared under the relationship rule, so `Integer (2)` and
+        // `Decimal (2.0)` are one key rather than an orphan plus a duplicate.
+        from_keys: relationship.from_rows.iter().map(|(key, rows)| (crate::value::relationship_key_of(key), Occurrence::from_rows(rows))).collect(),
+        to_keys: relationship.to_rows.iter().map(|(key, rows)| (crate::value::relationship_key_of(key), Occurrence::from_rows(rows))).collect(),
     }
 }
 
@@ -749,6 +751,9 @@ fn display_key(key: &ScalarKey) -> String {
     match key.to_scalar() {
         Scalar::Blank => "BLANK".to_string(),
         Scalar::String(text) => format!("`{text}`"),
+        // A numeric key is normalized to `Decimal` for comparison, so an integral one prints
+        // without the fraction: `key 7`, not `key 7.0`.
+        Scalar::Decimal(value) if value.fract() == 0.0 => format!("{value:.0}"),
         other => other.to_text(),
     }
 }
