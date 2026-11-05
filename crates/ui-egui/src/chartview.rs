@@ -1030,7 +1030,7 @@ pub(crate) fn ink_color(line: Color32, width_pt: f32) -> Color32 {
 
 #[cfg(test)]
 mod selection_tests {
-    use super::{Prim, SeriesSelectionMark, selected_element_bounds, series_selection_marks};
+    use super::{Prim, SeriesSelectionMark, series_selection_marks};
 
     #[test]
     fn selected_legend_bounds_follow_overlay_layout_without_another_hit() {
