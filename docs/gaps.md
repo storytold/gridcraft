@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-04 · **Change:** minor (§8: items sort by a value field or a custom order; earlier: §8: every Show Values As mode, with base fields and items; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-05 · **Change:** minor (§8: value filters; earlier: §8: items sort by a value field or a custom order; earlier: §8: every Show Values As mode, with base fields and items; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -93,7 +93,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   label), Running Total In and % Running Total In, both ranks and Index, along any row or column
   base field, read and written in XLSX (`showDataAs`, `baseField`, `baseItem`, `x14:pivotShowAs`).
   Items sort by label, by a value field's totals or in a custom order (`autoSortScope` and the
-  `<items>` order in XLSX).
+  `<items>` order in XLSX). Value filters (`pivot.valueFilter`: Top/Bottom N items, percent or sum,
+  and comparisons) keep items by their totals within each outer item, and filtered items leave the
+  totals; read and written in XLSX. Label and date filters are still missing.
 - **Impact:** pivots are the analyst's main tool.
 - **Estimate:** 20–30 h for beta (25–40 h full).
 
@@ -191,6 +193,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | §8: PivotTable value filters (`pivot.valueFilter`): Top/Bottom N items, percent or sum and the value comparisons, measured with the value field's own function; filtered items leave subtotals and grand totals; XLSX `<filters>` round-trip |
 | 2026-11-04 | minor | §8: PivotTable items sort by a value field's totals (`pivot.sort` `by`) or in a custom order (`order: custom`, `items`), with XLSX round-trip |
 | 2026-11-04 | minor | §8: PivotTable Show Values As: % Of, % of Parent Row Total, Difference From, % Difference From, % Running Total In, Rank Smallest to Largest and Index, with a base field (any row or column field) and base item; XLSX round-trip |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |

@@ -105,7 +105,7 @@ fn workbook() -> Workbook {
                 ..PivotValue::default()
             },
         ],
-        filters: vec![PivotFilter { source_col: "Channel".into(), selected: Some(vec!["Online".into()]) }],
+        filters: vec![PivotFilter { source_col: "Channel".into(), selected: Some(vec!["Online".into()]), value: None }],
         layout: PivotLayout::Tabular,
         enable_show_details: false,
         grand_totals_rows: false,
@@ -188,8 +188,8 @@ fn workbook() -> Workbook {
             },
         ],
         filters: vec![
-            PivotFilter { source_col: "Region".into(), selected: Some(vec!["East".into(), "North".into()]) },
-            PivotFilter { source_col: "Product".into(), selected: Some(vec!["A".into(), "B".into()]) },
+            PivotFilter { source_col: "Region".into(), selected: Some(vec!["East".into(), "North".into()]), value: None },
+            PivotFilter { source_col: "Product".into(), selected: Some(vec!["A".into(), "B".into()]), value: None },
         ],
         layout: PivotLayout::Outline,
         enable_show_details: true,
@@ -212,7 +212,7 @@ fn workbook() -> Workbook {
         anchor: at("AB1"),
         rows: vec![field("Product")],
         values: vec![PivotValue { source_col: "Units".into(), func: PivotFunc::Product, name: "Product of Units".into(), ..PivotValue::default() }],
-        filters: vec![PivotFilter { source_col: "Channel".into(), selected: None }],
+        filters: vec![PivotFilter { source_col: "Channel".into(), selected: None, value: None }],
         last_range: Some(rr("AB1:AC6")),
         ..PivotTable::default()
     };
@@ -971,4 +971,93 @@ fn value_sorts_and_custom_orders_are_read() {
     assert!(read(in_order, two).custom_order.is_empty(), "the cache's order is no custom order");
     let ascending = r#"<pivotField axis="axisRow" sortType="ascending"><items><item x="3"/><item x="0"/></items></pivotField>"#;
     assert!(read(ascending, two).custom_order.is_empty(), "a sorted field has no manual order");
+}
+
+#[test]
+fn value_filters_are_written_and_read_back() {
+    let cols = [
+        ("Region", vec![Value::text("East"), Value::text("West"), Value::text("North")]),
+        ("Product", vec![Value::text("A"), Value::text("B"), Value::text("A")]),
+        ("Sales", vec![Value::number(10.0), Value::number(20.0), Value::number(5.0)]),
+    ];
+    let value = |func: PivotFunc, name: &str| PivotValue { source_col: "Sales".into(), func, name: name.into(), ..PivotValue::default() };
+    let rules = [
+        (PivotValueRule::Top { count: 2.0, of: PivotTopOf::Items }, "count", r#"<top10 val="2" filterVal="2"/>"#),
+        (PivotValueRule::Bottom { count: 25.0, of: PivotTopOf::Percent }, "percent", r#"<top10 top="0" percent="1" val="25" filterVal="25"/>"#),
+        (PivotValueRule::Top { count: 1.5, of: PivotTopOf::Sum }, "sum", r#"<top10 val="1.5" filterVal="1.5"/>"#),
+        (PivotValueRule::Greater(7.0), "valueGreaterThan", r#"<customFilter operator="greaterThan" val="7"/>"#),
+        (
+            PivotValueRule::Between(9.0, 3.0),
+            "valueBetween",
+            r#"<customFilters and="1"><customFilter operator="greaterThanOrEqual" val="3"/><customFilter operator="lessThanOrEqual" val="9"/></customFilters>"#,
+        ),
+        (
+            PivotValueRule::NotBetween(3.0, 9.0),
+            "valueNotBetween",
+            r#"<customFilter operator="lessThan" val="3"/><customFilter operator="greaterThan" val="9"/>"#,
+        ),
+    ];
+    for (rule, kind, content) in rules {
+        let wb = small_pivot_workbook(&cols, |p| {
+            p.rows = vec![field("Region"), field("Product")];
+            p.values = vec![value(PivotFunc::Sum, "Sum of Sales"), value(PivotFunc::Max, "Max of Sales")];
+            p.filters =
+                vec![PivotFilter { source_col: "Product".into(), selected: None, value: Some(PivotValueFilter { by: "Max of Sales".into(), rule }) }];
+        });
+        let bytes = write_xlsx(&wb).unwrap();
+        let parts = unzip(&bytes);
+        let t = String::from_utf8_lossy(&parts["xl/pivotTables/pivotTable1.xml"]).into_owned();
+        assert!(t.contains(&format!(r#"<filters count="1"><filter fld="1" type="{kind}" evalOrder="-1" id="1" iMeasureFld="1"><autoFilter ref="A1"><filterColumn colId="0">"#)), "{t}");
+        assert!(t.contains(content), "{t}");
+        let style_at = t.find("<pivotTableStyleInfo").unwrap();
+        assert!(t.find("<filters").unwrap() > style_at, "filters come after the style info");
+        let (back, report) = read_xlsx(&bytes).unwrap();
+        assert!(report.warnings.iter().all(|w| !w.contains("filters")), "{:?}", report.warnings);
+        let filters = &back.sheets.iter().find_map(|sh| sh.pivots.first()).unwrap().filters;
+        let want = match rule {
+            // Bounds are saved low first.
+            PivotValueRule::Between(a, b) => PivotValueRule::Between(a.min(b), a.max(b)),
+            r => r,
+        };
+        assert_eq!(
+            filters,
+            &vec![PivotFilter {
+                source_col: "Product".into(),
+                selected: None,
+                value: Some(PivotValueFilter { by: "Max of Sales".into(), rule: want })
+            }]
+        );
+    }
+}
+
+#[test]
+fn other_filter_kinds_warn_and_bad_value_filters_are_dropped() {
+    let table = |filters: &str| {
+        format!(
+            r#"<pivotTableDefinition name="P" cacheId="1"><location ref="C1:D4"/><pivotFields count="2"><pivotField axis="axisRow"><items><item x="0"/><item x="1"/><item t="default"/></items></pivotField><pivotField dataField="1"/></pivotFields><rowFields><field x="0"/></rowFields><dataFields><dataField name="S" fld="1"/></dataFields><filters>{filters}</filters></pivotTableDefinition>"#
+        )
+    };
+    let read = |filters: &str| {
+        let (wb, report) = read_xlsx(&with_pivot(&table(filters), Some(GOOD_CACHE))).unwrap();
+        (wb.sheet(0).unwrap().pivots[0].filters.clone(), report.warnings)
+    };
+    let (f, w) = read(r#"<filter fld="0" type="captionEqual" evalOrder="-1" id="1" stringValue1="x"/>"#);
+    assert!(f.is_empty() && w.iter().any(|w| w.contains("captionEqual filters are not supported")), "{f:?} {w:?}");
+    for bad in [
+        r#"<filter fld="0" type="count" id="1"/>"#,
+        r#"<filter fld="0" type="valueBetween" id="1"><autoFilter><filterColumn colId="0"><customFilters><customFilter val="1"/></customFilters></filterColumn></autoFilter></filter>"#,
+        r#"<filter fld="0" type="valueEqual" id="1"><autoFilter><filterColumn colId="0"><customFilters><customFilter val="NaN"/></customFilters></filterColumn></autoFilter></filter>"#,
+    ] {
+        let (f, w) = read(bad);
+        assert!(f.is_empty(), "{bad}: {f:?}");
+        assert!(!w.is_empty(), "{bad}");
+    }
+    // Thresholds can come as stringValue attributes; a filter on a field off the axes or by a
+    // missing data field is dropped quietly.
+    let (f, _) = read(r#"<filter fld="0" type="valueBetween" id="1" iMeasureFld="0" stringValue1="1" stringValue2="5"/>"#);
+    assert_eq!(f.first().and_then(|f| f.value.clone()), Some(PivotValueFilter { by: "S".into(), rule: PivotValueRule::Between(1.0, 5.0) }));
+    let (f, _) = read(r#"<filter fld="0" type="valueEqual" id="1" iMeasureFld="7" stringValue1="1"/>"#);
+    assert!(f.is_empty());
+    let (f, _) = read(r#"<filter fld="1" type="valueEqual" id="1" stringValue1="1"/>"#);
+    assert!(f.is_empty());
 }

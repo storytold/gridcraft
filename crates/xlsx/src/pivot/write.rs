@@ -721,6 +721,7 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
         let _ = write!(s, " name=\"{}\"", esc_attr(&pt.style));
     }
     s.push_str(" showRowHeaders=\"1\" showColHeaders=\"1\" showRowStripes=\"0\" showColStripes=\"0\" showLastColumn=\"1\"/>");
+    write_value_filters(&mut s, pt, c, &layout);
     if hide_values_row {
         let _ = write!(
             s,
@@ -828,6 +829,26 @@ fn write_pivot_fields(s: &mut String, pt: &PivotTable, c: &Cache, layout: &Pivot
         }
     }
     s.push_str("</pivotFields>");
+}
+
+/// `<filters>`: the value filters of the row and column fields, each naming the field's cache
+/// field and the data field it measures by.
+fn write_value_filters(s: &mut String, pt: &PivotTable, c: &Cache, layout: &PivotTableLayout<'_>) {
+    let mut written: Vec<String> = Vec::new();
+    for f in &pt.filters {
+        let Some(vf) = &f.value else { continue };
+        let Some(position) = pt.rows.iter().chain(pt.columns.iter()).position(|a| same(&a.source_col, &f.source_col)) else { continue };
+        let Some(field) = c.axis_map.get(position).copied().flatten() else { continue };
+        let Some(measure) = layout.values.iter().position(|(_, v)| same(&v.name, &vf.by)) else { continue };
+        let (kind, content) = value_filter_xml(vf.rule);
+        written.push(format!(
+            "<filter fld=\"{field}\" type=\"{kind}\" evalOrder=\"-1\" id=\"{}\" iMeasureFld=\"{measure}\"><autoFilter ref=\"A1\"><filterColumn colId=\"0\">{content}</filterColumn></autoFilter></filter>",
+            written.len() + 1
+        ));
+    }
+    if !written.is_empty() {
+        let _ = write!(s, "<filters count=\"{}\">{}</filters>", written.len(), written.concat());
+    }
 }
 
 /// The position among the written data fields of the value field `field`'s items are sorted by.

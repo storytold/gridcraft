@@ -22,6 +22,7 @@ mod percent_entry;
 mod pivot_show_as;
 mod pivot_sort;
 mod pivot_unknown_func;
+mod pivot_value_filters;
 mod pivotchart_link;
 mod range_fill_formats;
 mod recently_used;

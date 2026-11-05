@@ -1,7 +1,7 @@
 use super::{
     BASE_ITEM_NEXT, CellRef, Ctx, DateSystem, El, HashMap, IoError, MAX_FIELDS, PivotBaseItem, PivotCalcField, PivotDateGroup, PivotField,
-    PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue, RangeRef, abs_range, func_caption, func_from,
-    number_to_text, quote_sheet, same, show_as_from_xml,
+    PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue, PivotValueFilter, PivotValueRule, RangeRef, abs_range,
+    func_caption, func_from, number_to_text, quote_sheet, same, show_as_from_xml, value_filter_from_xml,
 };
 
 // ================================================================ reading
@@ -280,8 +280,17 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
     pt.show_headers = x.flag("showHeaders", true);
     pt.enable_show_details = x.flag("enableDrill", true);
     pt.style = x.child("pivotTableStyleInfo").and_then(|s| s.attr("name")).unwrap_or("").to_string();
-    if x.child("calculatedItems").is_some() || x.path(&["filters", "filter"]).is_some() {
-        cx.warn(format!("PivotTable \"{}\": calculated items and label/value filters are not supported", pt.name));
+    if x.child("calculatedItems").is_some() {
+        cx.warn(format!("PivotTable \"{}\": calculated items are not supported", pt.name));
+    }
+    // (cache field, data field, rule) of each value filter; other filter kinds are dropped.
+    let mut value_filters: Vec<(usize, usize, PivotValueRule)> = Vec::new();
+    for f in x.child("filters").into_iter().flat_map(|fs| fs.kids("filter")) {
+        let rule = value_filter_from_xml(f);
+        match (rule, f.attr_u32("fld")) {
+            (Some(rule), Some(fld)) => value_filters.push((fld as usize, f.attr_u32("iMeasureFld").unwrap_or(0) as usize, rule)),
+            _ => cx.warn(format!("PivotTable \"{}\": {} filters are not supported", pt.name, f.attr("type").unwrap_or("label"))),
+        }
     }
 
     let mut filters: Vec<PivotFilter> = Vec::new();
@@ -324,7 +333,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                     if items.iter().any(|it| it.flag("h", false)) {
                         let shown: Vec<String> = items.iter().filter(|it| !it.flag("h", false)).filter_map(|it| lab(it)).collect();
                         if !filters.iter().any(|ff| same(&ff.source_col, &name)) {
-                            filters.push(PivotFilter { source_col: name.clone(), selected: Some(shown) });
+                            filters.push(PivotFilter { source_col: name.clone(), selected: Some(shown), value: None });
                         }
                     }
                 }
@@ -351,7 +360,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 })
             })
         };
-        page_filters.push(PivotFilter { source_col: name, selected });
+        page_filters.push(PivotFilter { source_col: name, selected, value: None });
     }
     let mut axis_filters = Vec::new();
     let (mut row_sorts, mut col_sorts) = (Vec::new(), Vec::new());
@@ -421,6 +430,22 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
             let name = d.attr("name").map(str::to_string).unwrap_or_else(|| format!("{} of {}", func_caption(func), f.name));
             pt.values.push(PivotValue { source_col: f.name.clone(), func, name, show_as, base_field, base_item, number_format });
             data_field_names.push((k, pt.values.last().map(|v| v.name.clone()).unwrap_or_default()));
+        }
+    }
+
+    // Value filters, on the row or column field their cache field stands for.
+    for (fld, measure, rule) in value_filters {
+        let (Some(name), Some(by)) = (axis_source_name(cache, fld), data_field_names.iter().find(|(j, _)| *j == measure).map(|(_, n)| n.clone()))
+        else {
+            continue;
+        };
+        if !pt.rows.iter().chain(pt.columns.iter()).any(|f| same(&f.source_col, &name)) {
+            continue;
+        }
+        let value = Some(PivotValueFilter { by, rule });
+        match pt.filters.iter_mut().find(|f| same(&f.source_col, &name)) {
+            Some(f) => f.value = value,
+            None => pt.filters.push(PivotFilter { source_col: name, selected: None, value }),
         }
     }
 

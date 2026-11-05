@@ -1,9 +1,10 @@
 use super::items::{Acc, AxisOrder, FieldItems, build_tree, collect_siblings, is_collapsed, item_label};
 use super::output::{AggMap, CellKind, ColKind, ColSpec, Ctx, Grid, Line, LineKind, Output, RowKind, ValSrc, data_cols_exceed_sheet, flatten_cols};
-use super::show_as::{AxisItems, CellAt, ShowAs, Siblings, ValueLookup, display_format, resolve_base_field};
+use super::show_as::{Axis, AxisItems, CellAt, ShowAs, Siblings, ValueLookup, display_format, resolve_base_field};
+use super::value_filter;
 use super::{
-    CalcSet, CellRef, HashSet, MAX_AXIS_FIELDS, MAX_COLS, MAX_VALUE_FIELDS, PivotDateGroup, PivotField, PivotFilter, PivotLayout, PivotTable,
-    PivotValue, Source, Value, Workbook, read_source,
+    CalcSet, CellRef, HashMap, HashSet, MAX_AXIS_FIELDS, MAX_COLS, MAX_VALUE_FIELDS, PivotDateGroup, PivotField, PivotFilter, PivotLayout,
+    PivotTable, PivotValue, PivotValueFilter, Source, Value, Workbook, read_source,
 };
 
 /// Why Show Details turns a cell down when it isn't a value cell of a PivotTable (the front end
@@ -68,6 +69,7 @@ pub(super) struct Probe {
     cells: Option<HashSet<(usize, usize)>>,
 }
 
+#[derive(Clone, Copy)]
 struct AggregateInput<'a> {
     wb: &'a Workbook,
     pt: &'a PivotTable,
@@ -83,6 +85,10 @@ struct AggregateInput<'a> {
     row_fmts: &'a [String],
     col_fmts: &'a [String],
     empty: bool,
+    /// The records still in the report after the value filters so far (`None`: all).
+    keep: Option<&'a [bool]>,
+    /// Collect every record's item paths in [`AggregateData::paths`].
+    collect_paths: bool,
 }
 
 #[derive(Default)]
@@ -93,6 +99,8 @@ struct AggregateData {
     row_set: HashSet<Vec<u32>>,
     col_set: HashSet<Vec<u32>>,
     col_leaves: HashSet<Vec<u32>>,
+    /// (record, row path, column path) of every record counted, with `collect_paths`.
+    paths: Vec<ProbePath>,
 }
 
 fn aggregate_record(
@@ -102,6 +110,9 @@ fn aggregate_record(
     ri: usize,
     rec: &[Value],
 ) -> Result<(), String> {
+    if input.keep.is_some_and(|keep| !keep.get(ri).copied().unwrap_or(true)) {
+        return Ok(());
+    }
     for (((c, _, group, _), fmt), selected) in input.filters.iter().zip(input.filter_fmts).zip(input.filter_sets) {
         if let Some(selected) = selected {
             let label = item_label(input.wb, rec.get(*c).unwrap_or(&Value::Empty), *group, fmt);
@@ -148,6 +159,9 @@ fn aggregate_record(
     if let Some(paths) = probe.as_deref_mut().and_then(|value| value.paths.as_mut()) {
         paths.push((ri, row_path.clone(), col_path.clone()));
     }
+    if input.collect_paths {
+        data.paths.push((ri, row_path.clone(), col_path.clone()));
+    }
     data.row_set.insert(row_path);
     data.col_set.insert(col_path);
     if !input.cols.is_empty() && data_cols_exceed_sheet(data.col_leaves.len(), input.pt.grand_totals_rows, input.vals.len()) {
@@ -169,6 +183,76 @@ fn aggregate_source(input: AggregateInput<'_>, probe: &mut Option<&mut Probe>) -
         aggregate_record(&input, &mut data, probe, ri, record)?;
     }
     Ok(data)
+}
+
+/// A value filter on a field of the report: its axis, the field's depth there, and the filter.
+struct ValueFilterAt<'a> {
+    axis: Axis,
+    depth: usize,
+    filter: &'a PivotValueFilter,
+}
+
+/// The value filters on the report's row fields (outermost first), then its column fields. A
+/// value filter on a field that isn't on an axis, or by a value field not in the report, does nothing.
+fn value_filters<'a>(pt: &'a PivotTable, rows: &[&PivotField], cols: &[&PivotField], vals: &[(ValSrc, &PivotValue)]) -> Vec<ValueFilterAt<'a>> {
+    let mut out = Vec::new();
+    for (axis, fields) in [(Axis::Rows, rows), (Axis::Columns, cols)] {
+        for (depth, field) in fields.iter().enumerate() {
+            let filter = pt.filters.iter().find(|f| f.source_col.eq_ignore_ascii_case(&field.source_col)).and_then(|f| f.value.as_ref());
+            if let Some(filter) = filter.filter(|vf| vals.iter().any(|(_, v)| v.name.eq_ignore_ascii_case(&vf.by))) {
+                // A field on an axis twice (date levels) is filtered at its first place.
+                if !out.iter().any(|f: &ValueFilterAt<'_>| std::ptr::eq(f.filter, filter)) {
+                    out.push(ValueFilterAt { axis, depth, filter });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Which records the value filters leave, one aggregation pass per filter (see `value_filter`).
+fn apply_value_filters(input: AggregateInput<'_>, filters: &[ValueFilterAt<'_>], calc: &CalcSet) -> Result<Vec<bool>, String> {
+    let mut keep = vec![true; input.src.rows.len()];
+    for at in filters {
+        let data = aggregate_source(AggregateInput { keep: Some(&keep), collect_paths: true, ..input }, &mut None)?;
+        let lookup = ValueLookup { wb: input.wb, source: input.src, calc, vals: input.vals, extra: input.extra, aggs: &data.aggs };
+        let Some(vi) = input.vals.iter().position(|(_, v)| v.name.eq_ignore_ascii_case(&at.filter.by)) else { continue };
+        let path_of = |rp: &'_ [u32], cp: &'_ [u32]| -> Vec<u32> {
+            match at.axis {
+                Axis::Rows => rp.to_vec(),
+                Axis::Columns => cp.to_vec(),
+            }
+        };
+        let total = |path: &[u32]| {
+            let value = match at.axis {
+                Axis::Rows => lookup.get(path, &[], vi),
+                Axis::Columns => lookup.get(&[], path, vi),
+            };
+            value.as_ref().and_then(Value::as_f64)
+        };
+        let axis_paths: Vec<Vec<u32>> = data.paths.iter().map(|(_, rp, cp)| path_of(rp, cp)).collect();
+        let mut allowed: HashMap<Vec<u32>, HashSet<u32>> = HashMap::new();
+        for (prefix, items) in value_filter::groups(axis_paths.iter().map(Vec::as_slice), at.depth) {
+            let totals: Vec<(u32, Option<f64>)> = items
+                .iter()
+                .map(|item| {
+                    let mut path = prefix.clone();
+                    path.push(*item);
+                    (*item, total(&path))
+                })
+                .collect();
+            allowed.insert(prefix, value_filter::passing(at.filter.rule, &totals));
+        }
+        for ((ri, _, _), path) in data.paths.iter().zip(&axis_paths) {
+            let (Some(prefix), Some(item)) = (path.get(..at.depth), path.get(at.depth)) else { continue };
+            if !allowed.get(prefix).is_some_and(|items| items.contains(item))
+                && let Some(slot) = keep.get_mut(*ri)
+            {
+                *slot = false;
+            }
+        }
+    }
+    Ok(keep)
 }
 
 struct HeaderInput<'a> {
@@ -383,25 +467,29 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
         filters.iter().map(|(_, field, _, _)| field.selected.as_ref().map(|s| s.iter().map(|v| v.to_ascii_lowercase()).collect())).collect();
     let row_fmts: Vec<String> = rows.iter().map(|(c, _)| fmt_of(*c)).collect();
     let col_fmts: Vec<String> = cols.iter().map(|(c, _)| fmt_of(*c)).collect();
-    let aggregate = aggregate_source(
-        AggregateInput {
-            wb,
-            pt,
-            src,
-            rows: &rows,
-            cols: &cols,
-            vals: &vals,
-            extra: &extra,
-            filters: &filters,
-            filter_fmts: &filter_fmts,
-            filter_sets: &filter_sets,
-            row_fmts: &row_fmts,
-            col_fmts: &col_fmts,
-            empty,
-        },
-        &mut probe,
-    )?;
-    let AggregateData { row_items, col_items, aggs, row_set, col_set, col_leaves: _ } = aggregate;
+    let input = AggregateInput {
+        wb,
+        pt,
+        src,
+        rows: &rows,
+        cols: &cols,
+        vals: &vals,
+        extra: &extra,
+        filters: &filters,
+        filter_fmts: &filter_fmts,
+        filter_sets: &filter_sets,
+        row_fmts: &row_fmts,
+        col_fmts: &col_fmts,
+        empty,
+        keep: None,
+        collect_paths: false,
+    };
+    let row_axis: Vec<&PivotField> = rows.iter().map(|(_, f)| *f).collect();
+    let col_axis: Vec<&PivotField> = cols.iter().map(|(_, f)| *f).collect();
+    let value_filters = value_filters(pt, &row_axis, &col_axis, &vals);
+    let keep = if value_filters.is_empty() { None } else { Some(apply_value_filters(input, &value_filters, &calc)?) };
+    let aggregate = aggregate_source(AggregateInput { keep: keep.as_deref(), ..input }, &mut probe)?;
+    let AggregateData { row_items, col_items, aggs, row_set, col_set, col_leaves: _, paths: _ } = aggregate;
 
     // ---- axes
     let row_fields: Vec<&PivotField> = rows.iter().map(|(_, f)| *f).collect();
