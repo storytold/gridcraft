@@ -659,10 +659,12 @@ fn summarize(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Resul
             layout.columns.iter().zip(&active).filter(|(_, active)| !**active).map(|(column, _)| (column.table, column.column)).collect();
         {
             let _guard = SubtotalGuard::push(rolled_up);
-            let group = GroupContext { columns: &layout.columns, values: &values, active: &active, source: &table, rows: &group_rows };
-            let (group_filters, grouping_scope) = prepare_group(ev, ctx, &group, "SUMMARIZE")?;
-            for (_, expression) in &parsed.expressions {
-                row.push(eval_in_group(ev, ctx, expression, &group_filters, &grouping_scope)?);
+            if !parsed.expressions.is_empty() {
+                let group = GroupContext { columns: &layout.columns, values: &values, active: &active, source: &table, rows: &group_rows };
+                let (group_filters, grouping_scope) = prepare_group(ev, ctx, &group, "SUMMARIZE")?;
+                for (_, expression) in &parsed.expressions {
+                    row.push(eval_in_group(ev, ctx, expression, &group_filters, &grouping_scope)?);
+                }
             }
         }
         output.push(row);
@@ -697,17 +699,21 @@ fn group_by(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result
     for (name, _) in &parsed.expressions {
         output_columns.push(TableColumn { name: name.clone() });
     }
-    let active = vec![true; columns.len()];
     let mut rows = Vec::with_capacity(details.len());
     for (values, group_rows) in &details {
         let current = TableValue::new(table.columns.clone(), group_rows.clone()).with_lineage_if(table.lineage);
         let mut row = values.clone();
         {
             let _guard = CurrentGroupGuard::push(current);
-            let group = GroupContext { columns: &columns, values, active: &active, source: &table, rows: group_rows };
-            let (group_filters, grouping_scope) = prepare_group(ev, ctx, &group, "GROUPBY")?;
-            for (_, expression) in &parsed.expressions {
-                row.push(eval_in_group(ev, ctx, expression, &group_filters, &grouping_scope)?);
+            // `GROUPBY` does not perform an implicit `CALCULATE` for its extension columns: they
+            // iterate `CURRENTGROUP()`, so the outer filter context is what they see. Only the
+            // grouping scope travels with the row.
+            if !parsed.expressions.is_empty() {
+                let grouping_scope: Vec<(usize, usize)> = columns.iter().map(|column| (column.table, column.column)).collect();
+                let group_filters = ctx.filters.clone();
+                for (_, expression) in &parsed.expressions {
+                    row.push(eval_in_group(ev, ctx, expression, &group_filters, &grouping_scope)?);
+                }
             }
         }
         rows.push(row);

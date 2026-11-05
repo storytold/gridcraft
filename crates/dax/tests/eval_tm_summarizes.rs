@@ -711,6 +711,29 @@ fn summarize_groups_an_orphan_under_a_group_column_named_like_a_fact_column() {
 }
 
 #[test]
+fn summarize_without_expressions_skips_the_group_filter_context() {
+    // A group-only SUMMARIZE aggregates nothing, so a cross-column table argument must not hit
+    // the group filter leak check that only matters for measures.
+    let table = eval_table("SUMMARIZE(FILTER(Sales, Sales[Amount] > Sales[Quantity]), Sales[Region])").expect("group-only summarize");
+    assert_columns(&table, &["Region"]);
+    assert_eq!(table.rows.len(), 4, "East, West, North and the blank region");
+}
+
+#[test]
+fn groupby_extension_columns_see_the_outer_filter_context() {
+    // `GROUPBY` performs no implicit CALCULATE for its extension columns; they read
+    // `CURRENTGROUP()`, so a cross-column table argument must not raise the group filter leak.
+    let table = eval_table("GROUPBY(FILTER(Sales, Sales[Amount] > Sales[Quantity]), Sales[Region], \"T\", SUMX(CURRENTGROUP(), Sales[Amount]))")
+        .expect("groupby with an extension column");
+    let mut rows = table.rows.clone();
+    rows.sort_by(|left, right| format!("{left:?}").cmp(&format!("{right:?}")));
+    assert_eq!(
+        rows,
+        vec![vec![Scalar::Blank, money(7.0)], vec![text("East"), money(45.0)], vec![text("North"), money(50.0)], vec![text("West"), money(20.0)],]
+    );
+}
+
+#[test]
 fn issue_subtotal_marks_only_the_rolled_up_rows() {
     let table = eval_table("SUMMARIZE(Sales, ROLLUP(Sales[Region]), \"IsSubtotal\", ISSUBTOTAL(Sales[Region]))").expect("issue subtotal");
     assert_columns(&table, &["Region", "IsSubtotal"]);
