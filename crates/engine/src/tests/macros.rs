@@ -2434,3 +2434,83 @@ fn a_shortcut_taken_while_recording_is_reported_when_it_is_left_off() {
     assert!(r.get("shortcutDropped").is_none(), "{r}");
     assert_eq!(s.execute("macro.get", json!({"name": "Keep"})).unwrap()["shortcut"], "Ctrl+Shift+Q");
 }
+
+/// `output` (a form button's output cell) moves where the macro writes: the footprint, the
+/// conflict rule and `macro.check` protect the data at the cells it names, as at the macro's own
+/// anchor, and a value that names no cell is refused before anything runs.
+#[test]
+fn an_output_override_is_checked_and_protected_like_the_macros_own_anchor() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Other"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    put(
+        &mut s,
+        json!({"name": "Placed", "output": {"anchor": "D1"}, "steps": [
+            {"command": "cell.set", "params": {"cell": "Output", "input": "out"}}
+        ]}),
+    );
+    set(&mut s, "F1", "keep me");
+    let start = s.doc().unwrap().wb.clone();
+    // Writing over F1 asks (programmatic runs fail) and changes nothing, as it would at D1.
+    let r = s.execute("macro.run", json!({"name": "Placed", "output": "F1"}));
+    let Err(EngineError::Confirm(q)) = r else { panic!("{r:?}") };
+    assert!(q.contains("(F1 on Sheet1)"), "{q}");
+    let err = s.execute("macro.run", json!({"name": "Placed", "output": "F1", "onConflict": "fail"})).unwrap_err().to_string();
+    assert!(err.contains("Nothing was changed"), "{err}");
+    assert!(Arc::ptr_eq(&s.doc().unwrap().wb, &start));
+    // macro.check reports the override and its conflict.
+    let c = s.execute("macro.check", json!({"name": "Placed", "output": "F1"})).unwrap();
+    assert_eq!((&c["ok"], &c["output"], &c["conflicts"]), (&json!(false), &json!("F1"), &json!(1)), "{c}");
+    // On another sheet too.
+    s.execute("cell.set", json!({"cell": "Other!B2", "input": "theirs"})).unwrap();
+    let r = s.execute("macro.run", json!({"name": "Placed", "output": "Other!B2"}));
+    assert!(matches!(&r, Err(EngineError::Confirm(q)) if q.contains("(B2 on Other)")), "{r:?}");
+    // The stored anchor holding data doesn't matter when the output goes elsewhere.
+    set(&mut s, "D1", "stored anchor's data");
+    s.execute("macro.run", json!({"name": "Placed", "output": "H1"})).unwrap();
+    assert_eq!((v(&s, "H1").display(), v(&s, "D1").display()), ("out".to_string(), "stored anchor's data".to_string()));
+    // Hostile values are refused before anything runs.
+    let before = s.doc().unwrap().wb.clone();
+    for (bad, needle) in [
+        (json!(5), "`output` must be reference text"),
+        (json!({"cell": "F1"}), "`output` must be reference text"),
+        (json!(" "), "`output` must be reference text"),
+        (json!("x".repeat(1_025)), "`output` must be reference text"),
+        (json!("F1\nF2"), "`output` must be reference text"),
+        (json!("NoSuchSheet!A1"), "output anchor"),
+        (json!("XFE1"), "output anchor"),
+        (json!("A1048577"), "output anchor"),
+        (json!("not a cell!!"), "output anchor"),
+    ] {
+        let err = s.execute("macro.run", json!({"name": "Placed", "output": bad, "onConflict": "overwrite"})).unwrap_err().to_string();
+        assert!(err.contains(needle), "{bad}: {err}");
+        let c = s.execute("macro.check", json!({"name": "Placed", "output": bad})).unwrap();
+        assert!(c["errors"].to_string().contains(needle), "{bad}: {c}");
+    }
+    assert!(Arc::ptr_eq(&s.doc().unwrap().wb, &before));
+}
+
+/// After a partial footprint (Solver can't be previewed), a later step that deletes a form
+/// control is caught by the check of each step, as one that deletes a chart or a picture is.
+#[test]
+fn a_step_that_deletes_a_form_control_after_a_partial_footprint_is_caught() {
+    let mut s = s();
+    set(&mut s, "A1", "1");
+    set(&mut s, "C1", "=A1");
+    let control = s.execute("insert.spinButton", json!({"at": "E2"})).unwrap()["control"].as_u64().unwrap();
+    let solver = json!({"command": "data.solver", "params": {"objective": "C1", "variables": "A1", "constraints": ["A1 <= 5"], "method": "simplex", "saveModel": false}});
+    let delete = json!({"command": "object.delete", "params": {"kind": "control", "id": control}});
+    put(&mut s, json!({"name": "Drop", "inputs": [{"name": "Input"}], "steps": [solver, delete]}));
+    let start = s.doc().unwrap().wb.clone();
+    for rule in ["fail", "ask"] {
+        let r = s.execute("macro.run", json!({"name": "Drop", "inputs": "A1", "onConflict": rule}));
+        let e = match (rule, r) {
+            ("fail", Err(EngineError::Other(e))) | ("ask", Err(EngineError::Confirm(e))) => e,
+            (_, r) => panic!("{rule}: {r:?}"),
+        };
+        assert!(e.contains("Step 2 (object.delete): It would write over data (1 object)"), "{e}");
+        assert!(Arc::ptr_eq(&s.doc().unwrap().wb, &start), "{rule}: rolled back");
+    }
+    s.execute("macro.run", json!({"name": "Drop", "inputs": "A1", "overwrite": true})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().controls.is_empty());
+}
