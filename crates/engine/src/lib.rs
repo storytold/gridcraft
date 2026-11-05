@@ -703,12 +703,12 @@ impl Session {
         id: &str,
         params: &Json,
         result: &Result<Json>,
-        journals: bool,
-        records_script: bool,
-        place: Option<(u64, usize, String, Selection)>,
-        requests_before: usize,
+        journal_recording: (bool, bool),
+        recording_context: (Option<(u64, usize, String, Selection)>, usize),
         before: Option<&(u64, Arc<Workbook>, Selection)>,
     ) {
+        let (journals, records_script) = journal_recording;
+        let (place, requests_before) = recording_context;
         if !(journals || records_script) || result.is_err() {
             return;
         }
@@ -844,7 +844,7 @@ impl Session {
         if result.is_err() {
             self.rollback_groups_from(first_group);
         }
-        self.record_and_journal(id, &params, &result, journals, records_script, place, requests_before, before.as_ref());
+        self.record_and_journal(id, &params, &result, (journals, records_script), (place, requests_before), before.as_ref());
         // Inside an undo group the group owns the step. A command that ended a group open before
         // it leaves the group its step and makes one of its own for what it changed after the end.
         // A command that opened and closed its own groups makes one step of its own, which
