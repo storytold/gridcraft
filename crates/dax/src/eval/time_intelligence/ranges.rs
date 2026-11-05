@@ -142,8 +142,23 @@ impl DateAxis {
         TableValue::new(vec![TableColumn { name: self.name.clone() }], rows).with_lineage(self.table)
     }
 
-    fn single(&self, date: f64) -> TableValue {
-        self.table(date, date)
+    /// One cell of `date` as a one-row table: the earliest cell of the day, or the latest when
+    /// `last` is set. Single-date operations (`FIRSTDATE`, `LASTDATE`, `PREVIOUSDAY`, ...) must stay
+    /// scalar, so they pick one exact cell value even when the day holds several timestamps; the
+    /// range tables keep every cell.
+    fn single(&self, date: f64, last: bool) -> TableValue {
+        let day = date.floor();
+        let cells: Vec<&Scalar> = self.dates.iter().filter(|(serial, _)| *serial == day).map(|(_, value)| value).collect();
+        let ordering = |value: &&Scalar| date_value(value).unwrap_or(f64::NEG_INFINITY);
+        let picked = if last {
+            cells.into_iter().max_by(|a, b| ordering(a).total_cmp(&ordering(b)))
+        } else {
+            cells.into_iter().min_by(|a, b| ordering(a).total_cmp(&ordering(b)))
+        };
+        match picked {
+            Some(value) => TableValue::new(vec![TableColumn { name: self.name.clone() }], vec![vec![value.clone()]]).with_lineage(self.table),
+            None => self.empty(),
+        }
     }
 
     /// The first date that exists in `[start, end]`, as a one-row table.
@@ -163,14 +178,14 @@ impl DateAxis {
 
     fn first(&self) -> TableValue {
         match self.min {
-            Some(min) => self.single(min),
+            Some(min) => self.single(min, false),
             None => self.empty(),
         }
     }
 
     fn last(&self) -> TableValue {
         match self.max {
-            Some(max) => self.single(max),
+            Some(max) => self.single(max, true),
             None => self.empty(),
         }
     }
@@ -604,11 +619,11 @@ fn compute_table(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut C
             }
         }
         "NEXTDAY" => match axis.max {
-            Some(max) => Ok(axis.single(max + 1.0)),
+            Some(max) => Ok(axis.single(max + 1.0, true)),
             None => Ok(axis.empty()),
         },
         "PREVIOUSDAY" => match axis.min {
-            Some(min) => Ok(axis.single(min - 1.0)),
+            Some(min) => Ok(axis.single(min - 1.0, true)),
             None => Ok(axis.empty()),
         },
         "NEXTMONTH" => match axis.max {

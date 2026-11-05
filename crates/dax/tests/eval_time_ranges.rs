@@ -467,3 +467,37 @@ fn same_day_timestamps_stay_in_the_date_axis() {
     let whole = evaluate_table_in(&model, "DATESBETWEEN('Log'[Stamp], DATE(2024,1,1), DATE(2024,1,2))").expect("whole window");
     assert_eq!(whole.rows.len(), 3);
 }
+
+#[test]
+fn single_date_functions_pick_one_cell_of_a_day() {
+    // A day can hold several timestamps; `FIRSTDATE`/`LASTDATE` are scalar conveniences and must
+    // return one exact cell rather than every cell of the day.
+    let model = DataModel {
+        tables: vec![ModelTable {
+            name: "Log".into(),
+            columns: vec![ModelColumn { name: "Stamp".into(), data_type: Some("DateTime".into()) }],
+            rows: vec![
+                vec![Scalar::DateTime(serial(2024, 1, 2) + 9.0 / 24.0)],
+                vec![Scalar::DateTime(serial(2024, 1, 2) + 14.0 / 24.0)],
+                vec![Scalar::DateTime(serial(2024, 1, 3) + 10.0 / 24.0)],
+            ],
+        }],
+        relationships: Vec::new(),
+        measures: Vec::new(),
+    };
+    assert_eq!(
+        evaluate_in(&model, "LASTDATE('Log'[Stamp])", FilterContext::default()).expect("last date"),
+        Scalar::DateTime(serial(2024, 1, 3) + 10.0 / 24.0)
+    );
+
+    // Filtered to the first day, which holds two timestamps: `FIRSTDATE` still returns one value.
+    let mut filters = FilterContext::default();
+    filters.set(
+        0,
+        0,
+        [Scalar::DateTime(serial(2024, 1, 2) + 9.0 / 24.0), Scalar::DateTime(serial(2024, 1, 2) + 14.0 / 24.0)]
+            .into_iter()
+            .map(|value| ScalarKey::from(&value)),
+    );
+    assert_eq!(evaluate_in(&model, "FIRSTDATE('Log'[Stamp])", filters).expect("first date"), Scalar::DateTime(serial(2024, 1, 2) + 9.0 / 24.0));
+}
