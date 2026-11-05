@@ -887,6 +887,7 @@ fn header_picture_package() -> Vec<u8> {
     ])
 }
 
+/// Header and footer pictures are written back byte for byte through two saves.
 #[test]
 fn header_and_footer_pictures_survive_a_save() {
     let (wb, rep) = read_xlsx(&header_picture_package()).unwrap();
@@ -914,6 +915,8 @@ fn header_and_footer_pictures_survive_a_save() {
     }
 }
 
+/// Header and footer pictures are found for printing in a file read, and again after a save renamed
+/// the kept parts.
 #[test]
 fn header_and_footer_pictures_are_read_for_printing() {
     let (wb, _) = read_xlsx(&header_picture_package()).unwrap();

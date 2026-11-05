@@ -941,6 +941,7 @@ fn equations_print_with_the_symbol_font() {
 
 // ---------------------------------------------------------------- header/footer pictures (#1257)
 
+/// A `w` × `h` PNG of one colour.
 fn png(w: u32, h: u32) -> Vec<u8> {
     let img = image::RgbaImage::from_pixel(w, h, image::Rgba([20, 90, 160, 255]));
     let mut out = Vec::new();
@@ -974,6 +975,8 @@ fn keep_hf_pictures(s: &mut Session, shapes: &[(&str, &str, Vec<u8>)]) {
     std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap().preserved = Some(std::sync::Arc::new(kept));
 }
 
+/// Kept header and footer pictures print at their `&G`, at their size, on the header and footer
+/// margins.
 #[test]
 fn header_and_footer_pictures_print_where_their_g_is() {
     let mut s = s();
@@ -990,6 +993,8 @@ fn header_and_footer_pictures_print_where_their_g_is() {
     assert!(text.contains("(Invoice) Tj") && text.contains("(Page 1 ) Tj"));
 }
 
+/// A kept picture prints only where its section has `&G`, and an unreadable or oversized image is
+/// left out.
 #[test]
 fn header_pictures_need_their_g_and_a_readable_image() {
     let mut s = s();
@@ -1011,6 +1016,7 @@ fn header_pictures_need_their_g_and_a_readable_image() {
     assert!(contains(&pdf, "(Before after) Tj"));
 }
 
+/// With Different First Page, the first-page picture prints on page 1 only.
 #[test]
 fn first_page_pictures_print_on_the_first_page_only() {
     let mut s = s();
@@ -1023,6 +1029,7 @@ fn first_page_pictures_print_on_the_first_page_only() {
     assert_eq!(String::from_utf8_lossy(&pdf).matches(" cm /Sh").count(), 1);
 }
 
+/// `expand_header_footer` records where in its section's text the first `&G` is.
 #[test]
 fn g_marks_where_the_picture_goes() {
     let cx = HfContext::default();
@@ -1055,6 +1062,7 @@ fn keep_one_hf_image(s: &mut Session, ids: &[&str], style: &str, data: Vec<u8>) 
     std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap().preserved = Some(std::sync::Arc::new(kept));
 }
 
+/// A header picture on many pages is one image object the PDF draws on each page.
 #[test]
 fn a_header_picture_is_one_image_object_for_every_page() {
     let mut s = s();
@@ -1071,6 +1079,7 @@ fn a_header_picture_is_one_image_object_for_every_page() {
     assert_eq!(text.matches("/Sh1 Do").count(), 6 * pages as usize, "drawn six times on every page");
 }
 
+/// Pictures no printed page shows (no `&G`, or a page kind not used) are not decoded.
 #[test]
 fn only_header_pictures_a_page_prints_are_decoded() {
     let mut s = s();
@@ -1092,6 +1101,7 @@ fn only_header_pictures_a_page_prints_are_decoded() {
     assert!(text.contains("/Width 4 /Height 4"));
 }
 
+/// Large pictures share one decoding budget per export: those past it are left out, the rest print.
 #[test]
 fn header_pictures_share_a_decoding_budget() {
     let mut s = s();
@@ -1183,6 +1193,8 @@ fn image_placements(pdf: &[u8]) -> Vec<String> {
     text.lines().filter(|l| l.starts_with("q ") && l.contains(" cm /")).map(|l| l.split(" cm ").next().unwrap_or("").to_string()).collect()
 }
 
+/// An XLSX with a logo in the left header and another picture in the right footer prints both at
+/// their size and place, and prints the same after one and two saves.
 #[test]
 fn an_xlsx_letterhead_and_footer_picture_print_and_survive_a_save() {
     // A logo in the left header and a different picture in the right footer, as Excel saves them.
@@ -1217,6 +1229,8 @@ fn an_xlsx_letterhead_and_footer_picture_print_and_survive_a_save() {
     }
 }
 
+/// `&LBefore&Gafter`: the picture sits right after "Before" and "after" right after the picture, on
+/// one line.
 #[test]
 fn a_picture_sits_between_the_text_around_its_g() {
     let bytes = hf_package("&LBefore&Gafter", "", &[("LH", "width:20pt;height:10pt", "image1.png")], &[("image1.png", png(4, 2))]);
@@ -1241,6 +1255,8 @@ fn a_picture_sits_between_the_text_around_its_g() {
     assert!((after - (image_x + 20.0)).abs() < 0.01, "after at {after}");
 }
 
+/// A picture relationship naming a missing image part: the workbook opens and prints its text, the
+/// drawing is reported as dropped, and the saved file has no dangling relationship.
 #[test]
 fn a_missing_picture_part_is_reported_and_the_rest_prints_and_saves() {
     // The logo's relationship names a part the package doesn't have; the footer picture is fine.
@@ -1286,6 +1302,8 @@ fn a_missing_picture_part_is_reported_and_the_rest_prints_and_saves() {
     }
 }
 
+/// Only the page kinds the printed pages use are decoded: a one-page sheet with first and even
+/// pages on decodes only its first-page picture.
 #[test]
 fn only_page_kinds_the_printed_pages_use_are_decoded() {
     let mut s = s();
@@ -1312,6 +1330,7 @@ fn only_page_kinds_the_printed_pages_use_are_decoded() {
     assert!(text.contains("/Width 5 /Height 5"), "only the first-page picture");
 }
 
+/// The same picture on several sheets is decoded once and is one image object in the PDF.
 #[test]
 fn the_same_picture_on_several_sheets_is_one_image_object() {
     let mut s = s();
@@ -1338,6 +1357,8 @@ fn the_same_picture_on_several_sheets_is_one_image_object() {
     assert_eq!(text.matches(" cm /Sh1 Do").count(), 2, "drawn on both sheets' pages");
 }
 
+/// A picture over the budget at one size is still tried at a smaller size, while an unreadable one
+/// is tried only once.
 #[test]
 fn a_picture_over_the_budget_at_one_size_still_prints_smaller() {
     use super::header_footer::HfImageCache;
@@ -1358,6 +1379,8 @@ fn a_picture_over_the_budget_at_one_size_still_prints_smaller() {
     assert_eq!(cache.tries(), 3);
 }
 
+/// A picture whose pixels at the printed size don't fit the budget is refused from its header
+/// alone, before decoding.
 #[test]
 fn a_picture_over_the_budget_is_refused_before_decoding() {
     use super::header_footer::{Outcome, decode_limited};
@@ -1375,6 +1398,7 @@ fn a_picture_over_the_budget_is_refused_before_decoding() {
     assert_eq!((rgba.len(), w, h), (150 * 100 * 4, 150, 100));
 }
 
+/// The size checked against the budget is the size `thumbnail` gives, over awkward ratios.
 #[test]
 fn the_size_checked_against_the_budget_is_the_size_decoding_gives() {
     use super::header_footer::thumbnail_size;
@@ -1389,4 +1413,23 @@ fn the_size_checked_against_the_budget_is_the_size_decoding_gives() {
         let img = image::DynamicImage::new_rgba8(src.0, src.1).thumbnail(max.0, max.1);
         assert_eq!(thumbnail_size(src, max), (img.width(), img.height()), "{src:?} into {max:?}");
     }
+}
+
+/// A picture smaller than its box keeps its own pixels, which serve a larger box too: the same
+/// logo asked for at two sizes it fits in is decoded once and is one PDF image, while a picture
+/// that was shrunk is decoded again for a larger box.
+#[test]
+fn a_picture_decoded_at_its_own_size_serves_every_larger_box() {
+    use super::header_footer::HfImageCache;
+    let mut doc = PdfDoc::new();
+    let mut cache = HfImageCache::new();
+    let logo: std::sync::Arc<[u8]> = png(200, 100).into();
+    let first = cache.image(&mut doc, &logo, (230, 230)).expect("decodes");
+    assert_eq!(cache.image(&mut doc, &logo, (250, 250)), Some(first), "the same image for a larger box");
+    assert_eq!(cache.tries(), 1);
+    let big: std::sync::Arc<[u8]> = png(400, 200).into();
+    let small = cache.image(&mut doc, &big, (100, 100)).expect("decodes shrunk");
+    let larger = cache.image(&mut doc, &big, (300, 300)).expect("decodes larger");
+    assert_ne!(small, larger, "a shrunk picture is decoded again for a larger box");
+    assert_eq!(cache.tries(), 3);
 }

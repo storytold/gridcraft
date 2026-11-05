@@ -837,6 +837,7 @@ fn pdf_text_string(text: &str) -> String {
 }
 
 impl PdfDoc {
+    /// An empty document.
     pub fn new() -> PdfDoc {
         PdfDoc::default()
     }
