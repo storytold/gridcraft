@@ -106,6 +106,9 @@ fn read_input_with(args: &[String], with_value: &[&str], switches: &[&str]) -> R
 /// Groups a model by row fields and evaluates a measure per group.
 fn pivot_cmd(args: &[String]) -> Result<(), String> {
     let parsed = Args::parse(args, &["model", "measure", "rows", "columns"], &[])?;
+    // `dax pivot` takes everything from options, so a positional is an argument the command would
+    // silently drop: `--rows Sales[Region] Sales[Year]` would group by region alone.
+    parsed.no_extra(0)?;
     let path = parsed.opt("model").ok_or("dax pivot needs --model PATH")?;
     let measure = parsed.opt("measure").ok_or("dax pivot needs --measure NAME")?;
     let rows = parsed.opt("rows").ok_or("dax pivot needs --rows 'Sales[Region]'")?;
@@ -170,6 +173,8 @@ fn eval(args: &[String]) -> Result<(), String> {
 /// Reads or rewrites Power Pivot measures in `xl/model/item.data` inside an `.xlsx` package.
 fn measures(args: &[String]) -> Result<(), String> {
     let parsed = Args::parse(args, &["file", "write", "out"], &[])?;
+    // Every input is an option, so a positional would be silently ignored.
+    parsed.no_extra(0)?;
     let path = parsed.opt("file").ok_or("dax measures needs --file PATH")?;
     let bytes = std::fs::read(path).map_err(|e| format!("can't read {path}: {e}"))?;
     let item_data = read_zip_entry(&bytes, "xl/model/item.data")?;

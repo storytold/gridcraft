@@ -297,6 +297,11 @@ fn dax_eval_model_rows_and_measures() {
     assert!(table.contains("\"columns\"") && table.contains("West"), "{table}");
     let pivot = ok(&["dax", "pivot", "--model", model, "--measure", "Total Sales", "--rows", "Sales[Region]"]);
     assert!(pivot.contains("East") && pivot.contains("40.0") && pivot.contains("West"), "{pivot}");
+    // A surplus positional would otherwise be dropped, grouping by fewer fields than asked.
+    let o = run(&["dax", "pivot", "--model", model, "--measure", "Total Sales", "--rows", "Sales[Region]", "Sales[Amount]"]);
+    assert_eq!(o.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(stderr.contains("unexpected argument `Sales[Amount]`"), "{stderr}");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -334,6 +339,12 @@ fn dax_format_parse_and_errors() {
     std::fs::write(&file, "1 + 2 * 3").unwrap();
     assert_eq!(ok(&["dax", "format", "--file", file.to_str().unwrap()]).trim(), "1 + 2 * 3");
     let _ = std::fs::remove_dir_all(dir);
+
+    // `dax measures` reads every input from options; a positional must not be silently dropped.
+    let o = run(&["dax", "measures", "--file", "/no/such/workbook.xlsx", "surplus"]);
+    assert_eq!(o.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(stderr.contains("unexpected argument `surplus`"), "{stderr}");
 
     let mut child = bin().args(["dax", "format"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     child.stdin.as_mut().unwrap().write_all(b"1 + 2 * 3").unwrap();
