@@ -26,7 +26,7 @@ image = { workspace = true }
 skrifa = { workspace = true }
 web-time = { workspace = true }
 
-# Linux only, where winit reports no system theme: the desktop portal's light/dark answer (see
+# Linux only: the desktop portal's light/dark and text-size preferences (see
 # `desktop_theme.rs`). Already in the tree, with these features, through egui's own
 # accessibility bus; pinned to one version so nothing is built twice.
 [target.'cfg(target_os = "linux")'.dependencies]

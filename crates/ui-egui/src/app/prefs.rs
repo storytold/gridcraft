@@ -3,11 +3,11 @@ use super::updates_ui;
 use super::{SheetApp, desktop_theme};
 
 impl SheetApp {
-    /// Runs a command and shows its error in a message box (for menu/ribbon clicks).
-    /// Follow the desktop's light/dark choice while the app runs (Linux; the desktop app calls
-    /// this once — tests and embedders don't start the watcher thread).
-    pub fn watch_desktop_theme(&mut self) {
-        self.desktop_theme = desktop_theme::DesktopTheme::start();
+    /// Follow the desktop's appearance and text size while the app runs (Linux; the desktop app
+    /// calls this once with its context, so changes also wake an idle window). Tests and embedders
+    /// do not start the watcher thread.
+    pub fn watch_desktop_theme(&mut self, ctx: &egui::Context) {
+        self.desktop_theme = desktop_theme::DesktopTheme::start(ctx.clone());
     }
 
     /// Follows the desktop/system theme preference and records the effective theme.
@@ -41,7 +41,9 @@ impl SheetApp {
         if (ctx.os() != egui::os::OperatingSystem::Mac || self.native_windows) && ctx.options(|o| !o.quit_shortcuts.is_empty()) {
             ctx.options_mut(|o| o.quit_shortcuts.clear());
         }
-        let zoom = self.ui.zoom_factor();
+        // 100 is the existing Auto sentinel, not an explicit override. Manual sizes stay
+        // relative to display DPI and do not acquire a second text-scale multiplier.
+        let zoom = if self.ui.interface_scale == 100 { self.desktop_text_scale } else { self.ui.zoom_factor() };
         if (ctx.zoom_factor() - zoom).abs() > 0.001 {
             ctx.set_zoom_factor(zoom);
             ctx.request_repaint();
