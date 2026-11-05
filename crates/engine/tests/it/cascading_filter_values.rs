@@ -350,8 +350,7 @@ fn large_values_criteria_preserve_ascii_case_and_blank_matching() {
         criteria: vec![(0, FilterCriterion::Values { values: selected, blanks: true })],
     });
     let choices = filter_values(&s.doc().unwrap().wb, 0, 1);
-    assert_eq!(choices.len(), 5_002);
-    assert!(choices.contains(&("unicode selected".into(), true)));
-    assert!(choices.contains(&("blank row".into(), true)));
-    assert!(!choices.iter().any(|(label, _)| label == "unicode excluded"));
+    let mut expected: Vec<_> = (1..=5_000).map(|n| (n.to_string(), true)).collect();
+    expected.extend([("blank row".into(), true), ("unicode selected".into(), true)]);
+    assert_eq!(choices, expected);
 }
