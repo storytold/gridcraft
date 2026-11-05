@@ -383,7 +383,9 @@ pub(crate) fn is_nan_key(key: &ScalarKey) -> bool {
 pub(crate) fn folded_key(key: &ScalarKey) -> ScalarKey {
     match key {
         ScalarKey::String(text) => ScalarKey::String(text.to_lowercase()),
-        other => other.clone(),
+        // Numbers fold to one variant too, so a filter key built from `Integer(3)` matches a
+        // column cell stored as `Decimal(3.0)` (a promoted column) and vice versa.
+        other => relationship_key_of(other),
     }
 }
 
@@ -393,10 +395,10 @@ pub(crate) fn folded_key(key: &ScalarKey) -> ScalarKey {
 /// `DISTINCTCOUNT`, `DISTINCTCOUNTNOBLANK`, `VALUES`/`DISTINCT` and the storage dictionary all use
 /// this, so a faithful model and a row-scanned one count the same values.
 pub(crate) fn distinct_key(value: &Scalar) -> ScalarKey {
-    match value {
-        Scalar::String(text) => ScalarKey::String(text.to_lowercase()),
-        other => ScalarKey::from(other),
-    }
+    // Text folds by case and numbers fold by value: a promoted column can hold `Integer(2)` and
+    // `Decimal(2.0)` in the same cell family, and DAX counts that as one value. The relationship
+    // rule keeps the conversions exact (and NaN distinct).
+    folded_key(&ScalarKey::from(value))
 }
 
 /// The numeric value of a variant that an `f64` holds exactly.
@@ -451,6 +453,12 @@ impl ScalarKey {
 /// A `DateTime` serial as DAX prints it: `M/D/YYYY H:MM:SS AM/PM`.
 fn datetime_text(serial: f64) -> String {
     use chrono::Datelike;
+
+    // A non-finite serial is not a date: print the value itself instead of a fabricated one
+    // (`NaN.floor() as i64` is 0, which would render as 1899-12-30 noon).
+    if !serial.is_finite() {
+        return serial.to_string();
+    }
     let epoch = chrono::NaiveDate::from_ymd_opt(1899, 12, 30);
     let Some(epoch) = epoch else { return serial.to_string() };
     let mut seconds = ((serial - serial.floor()) * 86_400.0).round() as i64;
@@ -545,6 +553,16 @@ impl EvalError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn distinct_keys_treat_one_number_as_one_value() {
+        assert_eq!(distinct_key(&Scalar::Integer(2)), distinct_key(&Scalar::Decimal(2.0)));
+        assert_eq!(distinct_key(&Scalar::Currency(20_000)), distinct_key(&Scalar::Decimal(2.0)));
+        assert_eq!(distinct_key(&Scalar::String("A".into())), distinct_key(&Scalar::String("a".into())));
+        assert_ne!(distinct_key(&Scalar::Integer(2)), distinct_key(&Scalar::Integer(3)));
+        // A non-finite serial prints as itself, not as a fabricated calendar date.
+        assert_eq!(Scalar::DateTime(f64::NAN).to_dax_text(), "NaN");
+    }
 
     #[test]
     fn non_finite_values_survive_a_json_round_trip() {
