@@ -467,3 +467,39 @@ fn balance_filters_intersect_the_boundary_day() {
     // With a filter that keeps only the 14:00 cell the boundary is one cell: 10, not 13.
     assert_number(eval_measure(&model, "CB Month Filtered", FilterContext::default()), 10.0);
 }
+
+#[test]
+fn a_calendar_table_argument_uses_its_typed_date_column() {
+    // `TOTALWTD(…, Calendar)` must resolve the calendar's date column exactly like `DATESWTD`:
+    // the declared date type wins over an earlier untyped column.
+    let mut model = DataModel {
+        tables: vec![
+            ModelTable {
+                name: "Calendar".into(),
+                columns: vec![
+                    ModelColumn { name: "Label".into(), data_type: None },
+                    ModelColumn { name: "Day".into(), data_type: Some("DateTime".into()) },
+                ],
+                rows: vec![vec![Scalar::String("first".into()), date(2024, 1, 1)], vec![Scalar::String("second".into()), date(2024, 1, 2)]],
+            },
+            ModelTable {
+                name: "Sales".into(),
+                columns: vec![
+                    ModelColumn { name: "Amount".into(), data_type: Some("Double".into()) },
+                    ModelColumn { name: "Date".into(), data_type: Some("DateTime".into()) },
+                ],
+                rows: vec![[10.0, serial(2024, 1, 1)], [20.0, serial(2024, 1, 2)]]
+                    .into_iter()
+                    .map(|[amount, serial]| vec![Scalar::Decimal(amount), Scalar::DateTime(serial)])
+                    .collect(),
+            },
+        ],
+        relationships: Vec::new(),
+        measures: vec![measure("Week To Date", "TOTALWTD(SUM(Sales[Amount]), Calendar)")],
+    };
+    model.parse_formulas().expect("model formulas parse");
+
+    // 2024-01-02 is a Tuesday, so the week starts on Sunday 2023-12-31: both calendar days are in
+    // the window and the sum is 30. Binding the untyped `Label` column would return BLANK.
+    assert_number(eval_measure(&model, "Week To Date", FilterContext::default()), 30.0);
+}

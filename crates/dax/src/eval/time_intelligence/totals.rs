@@ -179,7 +179,9 @@ fn non_blank_value(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut
 }
 
 /// Resolves a date-column argument. The week functions in the catalog take a calendar/table
-/// reference, so a table argument is accepted too and its first date column is used.
+/// reference, so a table argument is accepted too and its date column is chosen the same way
+/// `ranges::date_axis` chooses one: a column whose declared type is a date type first, a column
+/// named `Date` only as the fallback. An untyped column is never preferred over a typed one.
 fn date_column(ev: &Evaluator<'_>, expr: &BoundExpr) -> Result<DateColumn, EvalError> {
     if let BoundExpr::Table(table) = expr {
         let Some(model_table) = ev.model().tables.get(*table) else {
@@ -188,8 +190,8 @@ fn date_column(ev: &Evaluator<'_>, expr: &BoundExpr) -> Result<DateColumn, EvalE
         let column = model_table
             .columns
             .iter()
-            .position(|column| column.name.eq_ignore_ascii_case("Date") && is_date_column(column.data_type.as_deref()))
-            .or_else(|| model_table.columns.iter().position(|column| is_date_column(column.data_type.as_deref())))
+            .position(|column| column.data_type.as_deref().is_some_and(is_date_type))
+            .or_else(|| model_table.columns.iter().position(|column| column.name.eq_ignore_ascii_case("Date")))
             .ok_or_else(|| EvalError::new(format!("table `{}` has no date column", model_table.name)))?;
         return Ok(DateColumn { table: *table, column });
     }
