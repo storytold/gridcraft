@@ -21,5 +21,10 @@ thiserror = { workspace = true }
 # same with the same workspace dependency).
 chrono = { workspace = true }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The browser clock for NOW/TODAY under wasm, the same dependency `crates/core` uses: the standard
+# library clock traps there, and `eval/support.rs` would otherwise freeze at 1970.
+js-sys = "0.3"
+
 [dev-dependencies]
 serde_json = { workspace = true }
