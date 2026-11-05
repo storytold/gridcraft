@@ -282,8 +282,15 @@ pub(crate) fn relationship_key_of_value(value: &Scalar) -> ScalarKey {
 pub(crate) fn relationship_key_of(key: &ScalarKey) -> ScalarKey {
     match key {
         ScalarKey::Integer(number) if number.unsigned_abs() <= (1 << 53) => ScalarKey::Decimal(order_bits(*number as f64)),
-        ScalarKey::Currency(number) if number.unsigned_abs() <= (1 << 53) => ScalarKey::Decimal(order_bits(*number as f64 / 10_000.0)),
-        ScalarKey::DateTime(serial) => ScalarKey::Decimal(*serial),
+        ScalarKey::Currency(number) if number.unsigned_abs() <= (1 << 53) => {
+            let major = *number as f64 / 10_000.0;
+            // The division must land back on the stored amount. Past roughly 2^49 hundredths it
+            // rounds, and two distinct currencies would then share one key.
+            if (major * 10_000.0).round() as i64 == *number { ScalarKey::Decimal(order_bits(major)) } else { key.clone() }
+        }
+        // A NaN serial has no ordering and never joins, so it keeps its own variant instead of
+        // folding onto a `Decimal` NaN with the same bits.
+        ScalarKey::DateTime(serial) if !bits_order(*serial).is_nan() => ScalarKey::Decimal(*serial),
         other => other.clone(),
     }
 }
@@ -444,5 +451,29 @@ impl EvalError {
 
     pub fn not_implemented(name: &str) -> Self {
         EvalError::new(format!("DAX function `{name}` is not implemented by this evaluator"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relationship_keys_normalize_only_what_is_exact() {
+        // Integer and currency amounts fold onto the decimal key a decimal column uses.
+        assert_eq!(relationship_key_of(&ScalarKey::Integer(2)), relationship_key_of(&ScalarKey::Decimal(order_bits(2.0))));
+        assert_eq!(relationship_key_of(&ScalarKey::Currency(20_000)), relationship_key_of(&ScalarKey::Decimal(order_bits(2.0))));
+        // A currency amount whose major-unit division cannot round-trip keeps its own key.
+        let huge = 5_500_000_000_000_001_i64;
+        assert_ne!(
+            relationship_key_of(&ScalarKey::Currency(huge)),
+            relationship_key_of(&ScalarKey::Currency(huge + 1)),
+            "two distinct currency keys must not collapse"
+        );
+        // A NaN serial never joins, so it keeps its variant instead of matching a decimal NaN.
+        assert_ne!(
+            relationship_key_of(&ScalarKey::from(&Scalar::DateTime(f64::NAN))),
+            relationship_key_of(&ScalarKey::from(&Scalar::Decimal(f64::NAN))),
+        );
     }
 }
