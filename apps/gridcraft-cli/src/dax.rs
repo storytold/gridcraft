@@ -12,6 +12,13 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 use super::{Args, USAGE};
 
+/// Decompressed bytes a single zip entry may hold.
+///
+/// `read_measures` only rejects a container past [`gridcraft_dax::model_file::MAX_CONTAINER_BYTES`]
+/// once it is already in memory, so the same bound is enforced while the entry is decompressed: a
+/// zip bomb would otherwise allocate without limit first.
+const MAX_ENTRY_BYTES: usize = gridcraft_dax::model_file::MAX_CONTAINER_BYTES;
+
 pub fn main(args: &[String]) -> Result<(), String> {
     let action = args.first().map(String::as_str).ok_or_else(|| format!("missing dax action\n{USAGE}"))?;
     let rest = args.get(1..).unwrap_or_default();
@@ -185,8 +192,10 @@ fn write_atomically(path: &str, bytes: &[u8]) -> Result<(), String> {
     let file_name = target.file_name().ok_or_else(|| format!("can't write {path}: no file name"))?;
     let temporary = directory.join(format!(".{}.{}.tmp", file_name.to_string_lossy(), std::process::id()));
     let written = (|| -> std::io::Result<()> {
-        let mut file = std::fs::File::create(&temporary)?;
+        let mut file = create_temporary(&temporary)?;
         file.write_all(bytes)?;
+        #[cfg(unix)]
+        copy_target_permissions(target, &temporary)?;
         file.sync_all()
     })();
     written.map_err(|e| {
@@ -199,11 +208,54 @@ fn write_atomically(path: &str, bytes: &[u8]) -> Result<(), String> {
     })
 }
 
+/// Opens the temporary file `write_atomically` writes into.
+///
+/// `File::create` would give the temporary the umask-dependent default mode, and renaming it over
+/// an existing `0600` workbook would then widen that workbook's permissions. Unix temporaries
+/// therefore start at `0600` and only ever inherit the target's own permissions. The temporary is
+/// created exclusively: a crash can leave a stale one behind under a reused process id, so any
+/// leftover is removed first.
+#[cfg(unix)]
+fn create_temporary(temporary: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    match std::fs::remove_file(temporary) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(temporary)
+}
+
+#[cfg(not(unix))]
+fn create_temporary(temporary: &std::path::Path) -> std::io::Result<std::fs::File> {
+    std::fs::File::create(temporary)
+}
+
+/// Gives `temporary` the permissions of an existing `target`, so an in-place rewrite keeps the
+/// workbook's mode instead of the temporary's `0600`.
+#[cfg(unix)]
+fn copy_target_permissions(target: &std::path::Path, temporary: &std::path::Path) -> std::io::Result<()> {
+    match std::fs::metadata(target) {
+        Ok(metadata) => std::fs::set_permissions(temporary, metadata.permissions()),
+        // A new output file keeps the restrictive mode the temporary was created with.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
 fn read_zip_entry(bytes: &[u8], name: &str) -> Result<Vec<u8>, String> {
     let mut archive = ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("not a zip package: {e}"))?;
     let mut entry = archive.by_name(name).map_err(|e| format!("missing {name}: {e}"))?;
+    if entry.size() > MAX_ENTRY_BYTES as u64 {
+        return Err(format!("{name} exceeds the supported size limit"));
+    }
     let mut content = Vec::new();
-    entry.read_to_end(&mut content).map_err(|e| format!("can't read {name}: {e}"))?;
+    let mut bounded = (&mut entry).take(MAX_ENTRY_BYTES as u64 + 1);
+    let read = bounded.read_to_end(&mut content).map_err(|e| format!("can't read {name}: {e}"))?;
+    if read > MAX_ENTRY_BYTES {
+        return Err(format!("{name} exceeds the supported size limit"));
+    }
     Ok(content)
 }
 
@@ -222,8 +274,11 @@ fn replace_zip_entry(bytes: &[u8], name: &str, content: &[u8]) -> Result<Vec<u8>
         } else if entry.is_dir() {
             writer.add_directory(entry_name, options).map_err(|e| format!("can't copy zip directory: {e}"))?;
         } else {
+            if entry.size() > MAX_ENTRY_BYTES as u64 {
+                return Err(format!("can't copy {entry_name}: exceeds the supported size limit"));
+            }
             writer.start_file(&entry_name, options).map_err(|e| format!("can't copy {entry_name}: {e}"))?;
-            std::io::copy(&mut entry, &mut writer).map_err(|e| format!("can't copy {entry_name}: {e}"))?;
+            copy_entry(&mut entry, &mut writer, &entry_name)?;
         }
     }
     if !replaced {
@@ -231,6 +286,19 @@ fn replace_zip_entry(bytes: &[u8], name: &str, content: &[u8]) -> Result<Vec<u8>
     }
     let cursor = writer.finish().map_err(|e| format!("can't finish zip: {e}"))?;
     Ok(cursor.into_inner())
+}
+
+/// Copies one archive entry into `writer`, refusing to decompress past [`MAX_ENTRY_BYTES`].
+///
+/// A zip bomb declares a small compressed entry that expands without bound; the declared size is
+/// checked by the caller, and this bounds the actual bytes once a lying header slips through.
+fn copy_entry(entry: &mut impl Read, writer: &mut impl Write, name: &str) -> Result<(), String> {
+    let mut bounded = entry.take(MAX_ENTRY_BYTES as u64 + 1);
+    let copied = std::io::copy(&mut bounded, writer).map_err(|e| format!("can't copy {name}: {e}"))?;
+    if copied > MAX_ENTRY_BYTES as u64 {
+        return Err(format!("can't copy {name}: exceeds the supported size limit"));
+    }
+    Ok(())
 }
 
 fn scalar_json(value: &gridcraft_dax::Scalar) -> serde_json::Value {
@@ -302,6 +370,93 @@ mod tests {
         let replaced = replace_zip_entry(&bytes, "xl/model/item.data", b"new")?;
         assert_eq!(read_zip_entry(&replaced, "xl/model/item.data")?, b"new");
         assert_eq!(read_zip_entry(&replaced, "xl/workbook.xml")?, b"<workbook/>");
+        Ok(())
+    }
+
+    /// Builds a one-entry stored zip whose headers claim `declared` uncompressed bytes for `data`.
+    fn zip_declaring_size(name: &str, data: &[u8], declared: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+        bytes.extend_from_slice(&20u16.to_le_bytes()); // version needed
+        bytes.extend_from_slice(&0u16.to_le_bytes()); // flags
+        bytes.extend_from_slice(&0u16.to_le_bytes()); // method: stored
+        bytes.extend_from_slice(&0u16.to_le_bytes()); // modification time
+        bytes.extend_from_slice(&0u16.to_le_bytes()); // modification date
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // CRC-32
+        bytes.extend_from_slice(&(data.len() as u32).to_le_bytes()); // compressed size
+        bytes.extend_from_slice(&declared.to_le_bytes()); // uncompressed size
+        bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes()); // extra length
+        bytes.extend_from_slice(name.as_bytes());
+        bytes.extend_from_slice(data);
+        let directory_at = bytes.len() as u32;
+
+        let mut directory = Vec::new();
+        directory.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+        directory.extend_from_slice(&20u16.to_le_bytes()); // version made by
+        directory.extend_from_slice(&20u16.to_le_bytes()); // version needed
+        directory.extend_from_slice(&0u16.to_le_bytes()); // flags
+        directory.extend_from_slice(&0u16.to_le_bytes()); // method: stored
+        directory.extend_from_slice(&0u16.to_le_bytes()); // modification time
+        directory.extend_from_slice(&0u16.to_le_bytes()); // modification date
+        directory.extend_from_slice(&0u32.to_le_bytes()); // CRC-32
+        directory.extend_from_slice(&(data.len() as u32).to_le_bytes()); // compressed size
+        directory.extend_from_slice(&declared.to_le_bytes()); // uncompressed size
+        directory.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        directory.extend_from_slice(&0u16.to_le_bytes()); // extra length
+        directory.extend_from_slice(&0u16.to_le_bytes()); // comment length
+        directory.extend_from_slice(&0u16.to_le_bytes()); // disk number
+        directory.extend_from_slice(&0u16.to_le_bytes()); // internal attributes
+        directory.extend_from_slice(&0u32.to_le_bytes()); // external attributes
+        directory.extend_from_slice(&0u32.to_le_bytes()); // local header offset
+        directory.extend_from_slice(name.as_bytes());
+        let directory_size = directory.len() as u32;
+
+        bytes.extend_from_slice(&directory);
+        bytes.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes()); // this disk
+        bytes.extend_from_slice(&0u16.to_le_bytes()); // central directory disk
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // entries on this disk
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // entries in total
+        bytes.extend_from_slice(&directory_size.to_le_bytes());
+        bytes.extend_from_slice(&directory_at.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes()); // comment length
+        bytes
+    }
+
+    #[test]
+    fn an_entry_declaring_past_the_bound_is_rejected_before_it_is_read() {
+        let declared = (MAX_ENTRY_BYTES + 1) as u32;
+        let bomb = zip_declaring_size("xl/other.bin", b"tiny", declared);
+        let error = read_zip_entry(&bomb, "xl/other.bin").unwrap_err();
+        assert!(error.contains("exceeds the supported size limit"), "{error}");
+
+        let error = replace_zip_entry(&bomb, "xl/model/item.data", b"x").unwrap_err();
+        assert!(error.contains("exceeds the supported size limit"), "{error}");
+    }
+
+    #[test]
+    fn a_stream_past_the_bound_is_rejected_rather_than_truncated() {
+        let error = copy_entry(&mut std::io::repeat(0), &mut std::io::sink(), "bomb").unwrap_err();
+        assert!(error.contains("exceeds the supported size limit"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rewriting_in_place_keeps_the_workbook_permissions() -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = std::env::temp_dir().join(format!("gridcraft-cli-permissions-{}", std::process::id()));
+        std::fs::create_dir_all(&directory)?;
+        let path = directory.join("book.xlsx");
+        std::fs::write(&path, b"old")?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+
+        let written = write_atomically(path.to_str().ok_or("temporary path is not UTF-8")?, b"new");
+        assert_eq!(written, Ok(()));
+        assert_eq!(std::fs::read(&path)?, b"new");
+        assert_eq!(std::fs::metadata(&path)?.permissions().mode() & 0o777, 0o600);
+        std::fs::remove_dir_all(&directory)?;
         Ok(())
     }
 }

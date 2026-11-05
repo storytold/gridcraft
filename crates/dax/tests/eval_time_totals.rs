@@ -334,3 +334,44 @@ fn comparison_and_unqualified_column_filters_are_applied() {
     let east = eval_measure(&model, "YTD Unqualified", FilterContext::default()).expect("YTD Unqualified");
     assert_eq!(east.to_number(), Some(360.0));
 }
+
+#[test]
+fn related_dimension_filters_reach_the_visible_date_range() {
+    // Snowflaked calendar: `Date` is many-to-one against a `Year` dimension on its one side.
+    // Filtering `Year` propagates to `Date`, so the dates visible to the range functions narrow
+    // to the filtered year instead of spanning the whole model calendar.
+    let mut model = model();
+    model.tables.push(ModelTable {
+        name: "Year".into(),
+        columns: vec![ModelColumn { name: "Year".into(), data_type: Some("Int64".into()) }],
+        rows: vec![vec![Scalar::Integer(2023)], vec![Scalar::Integer(2024)]],
+    });
+    model.relationships.push(Relationship {
+        from_table: "Date".into(),
+        from_column: "Year".into(),
+        to_table: "Year".into(),
+        to_column: "Year".into(),
+        bidirectional: false,
+        inactive: false,
+    });
+    model.measures.push(measure("Last Date", "LASTDATE('Date'[Date])"));
+    model.measures.push(measure("First Date", "FIRSTDATE('Date'[Date])"));
+    model.measures.push(measure("Dates YTD Rows", "COUNTROWS(DATESYTD('Date'[Date]))"));
+    model.parse_formulas().expect("model formulas parse");
+
+    let y2023 = filters(&model, &[("Year", "Year", Scalar::Integer(2023))]);
+    // The axis ends on the last date of the year the relationship selects, not on the model's
+    // overall last date (2024-12-31).
+    assert_eq!(eval_measure(&model, "Last Date", y2023.clone()), Ok(date(2023, 12, 31)));
+    assert_eq!(eval_measure(&model, "First Date", y2023.clone()), Ok(date(2023, 1, 1)));
+    // 2023 is not a leap year: 365 days in the year-to-date window, not the 366 of 2024.
+    assert_number(eval_measure(&model, "Dates YTD Rows", y2023.clone()), 365.0);
+    // The year-to-date total is 2023's own facts: 60 + 140 + 200 + 80.
+    assert_number(eval_measure(&model, "YTD", y2023.clone()), 480.0);
+
+    let y2024 = filters(&model, &[("Year", "Year", Scalar::Integer(2024))]);
+    assert_eq!(eval_measure(&model, "Last Date", y2024.clone()), Ok(date(2024, 12, 31)));
+    assert_number(eval_measure(&model, "Dates YTD Rows", y2024.clone()), 366.0);
+    // 2024's facts: 40 + 100 + 250 + 75 + 400 + 150 + 300 + 50 + 220 + 90 + 180 + 310.
+    assert_number(eval_measure(&model, "YTD", y2024), 2165.0);
+}

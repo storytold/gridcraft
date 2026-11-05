@@ -55,7 +55,7 @@ pub const PAGE_SIZE: usize = 4096;
 const SIGNATURE: &str = "STREAM_STORAGE_SIGNATURE_)!@#$%^&*(";
 
 /// Maximum container size accepted by the parser (512 MiB).
-const MAX_CONTAINER_BYTES: usize = 512 * 1024 * 1024;
+pub const MAX_CONTAINER_BYTES: usize = 512 * 1024 * 1024;
 /// Maximum virtual-directory XML size accepted (16 MiB).
 const MAX_VDIR_BYTES: usize = 16 * 1024 * 1024;
 /// Maximum number of files listed by the virtual directory.

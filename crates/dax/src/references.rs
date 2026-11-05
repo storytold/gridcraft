@@ -6,7 +6,7 @@
 
 /// Reserved words the lexer or parser turns into operators and statement keywords: a table with
 /// one of these names must be quoted, or `SUM(In[Amount])` would not parse.
-const RESERVED: [&str; 5] = ["NOT", "IN", "EVALUATE", "VAR", "RETURN"];
+const RESERVED: [&str; 7] = ["NOT", "IN", "EVALUATE", "VAR", "RETURN", "TRUE", "FALSE"];
 
 /// A DAX table reference for a model name, quoted when the name is not a plain identifier or is a
 /// reserved word.
@@ -51,6 +51,9 @@ mod tests {
         assert_eq!(table_ref("O'Brien"), "'O''Brien'");
         assert_eq!(table_ref("In"), "'In'");
         assert_eq!(table_ref("VAR"), "'VAR'");
+        // A bare `TRUE`/`FALSE` would parse as a Boolean literal, not as a table.
+        assert_eq!(table_ref("TRUE"), "'TRUE'");
+        assert_eq!(table_ref("False"), "'False'");
         assert_eq!(column_ref("Amount"), "[Amount]");
         assert_eq!(column_ref("a]b"), "[a]]b]");
     }

@@ -756,13 +756,14 @@ fn display_key(key: &ScalarKey) -> String {
 /// Finds circular relationship chains with an explicit-stack depth-first search.
 ///
 /// Only active relationships form chains: an inactive one is not part of the default filter
-/// propagation, so an active and an inactive link between the same tables is not a cycle. Each
-/// active relationship is one undirected edge carrying its model index, so a chain is a set of
-/// relationships that leads back to an already-visited table without reusing the edge it arrived
-/// on. That models the two real cases exactly: `A -> B -> C -> A` (three links), two relationships
-/// between the same pair of tables, and a self relationship `T -> T` are chains; a single
-/// relationship — even a bidirectional one — is not, because its reverse traversal would be the
-/// same edge. A chain is reported once per distinct cycle (canonicalised to start at its smallest
+/// propagation, so an active and an inactive link between the same tables is not a cycle. The walk
+/// follows filter direction: each active relationship contributes an edge `to -> from`, plus the
+/// reverse `from -> to` only when the relationship is bidirectional (or when the pair is
+/// duplicated, so one traversal of each edge sees the loop). A chain is therefore a directed cycle
+/// that returns to an already-visited table without reusing the edge it arrived on. That models
+/// the real cases exactly: `A -> B -> C -> A` in filter direction, two relationships between the
+/// same pair of tables, and a self relationship `T -> T` are chains; a single relationship — even
+/// a bidirectional one — is not, because its reverse traversal would be the same edge. A chain is reported once per distinct cycle (canonicalised to start at its smallest
 /// table id) and at most [`MAX_REPORTED_CYCLES`] times per model, so a hostile graph cannot flood
 /// the report. A dense graph can contain more cycles than the cap; the reported ones are the first
 /// the deterministic walk finds.
