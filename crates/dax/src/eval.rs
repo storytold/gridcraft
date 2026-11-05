@@ -34,10 +34,16 @@
 #![allow(clippy::wildcard_imports)]
 
 mod aggregation;
+mod filter;
 mod information;
 mod logical;
 mod model_info;
+mod other;
+mod parent_child;
+mod statistical;
 mod support;
+mod table_manipulation;
+mod visual;
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -92,9 +98,15 @@ pub const ALL_FAMILIES: &[&str] = &[
 /// assertion only holds for a build that links all of [`ALL_FAMILIES`].
 const FAMILIES: &[Family] = &[
     Family { name: "aggregation", scalar: aggregation::call, table: aggregation::call_table },
+    Family { name: "filter", scalar: filter::call, table: filter::call_table },
     Family { name: "information", scalar: information::call, table: information::call_table },
     Family { name: "logical", scalar: logical::call, table: logical::call_table },
     Family { name: "model_info", scalar: model_info::call, table: model_info::call_table },
+    Family { name: "other", scalar: other::call, table: other::call_table },
+    Family { name: "parent_child", scalar: parent_child::call, table: parent_child::call_table },
+    Family { name: "statistical", scalar: statistical::call, table: statistical::call_table },
+    Family { name: "table_manipulation", scalar: table_manipulation::call, table: table_manipulation::call_table },
+    Family { name: "visual", scalar: visual::call, table: visual::call_table },
 ];
 
 /// The names of the evaluator families linked into this build, in dispatch order.
