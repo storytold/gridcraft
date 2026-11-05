@@ -9,6 +9,7 @@ fn percent_stacked_line_table_keys_use_lines_and_optional_markers() {
         c.legend = LegendPos::None;
         c.data_labels = false;
         c.data_table = Some(ChartDataTable::default());
+        c.format.text.insert("data_labels".into(), gridcraft_model::ChartTextFormat { size: Some(20.0), ..Default::default() });
         let data = ChartData {
             categories: vec!["Q1".into(), "Q2".into()],
             series: vec![series("Measured", &[2.0, 4.0], color, kind)],
@@ -55,15 +56,17 @@ fn tables_draw_source_values_for_every_supported_chart_kind() {
         let labels = texts(&prims);
         // Source amounts, including on 100% stacked charts, not shares or running totals.
         if supported {
+            let table_sizes = prims
+                .iter()
+                .filter_map(|p| match p {
+                    Prim::Text { size, role, .. } if role == "data_table" => Some(*size),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(!table_sizes.is_empty(), "{kind:?}: data-table text has a dedicated rendering role");
             assert!(
-                prims
-                    .iter()
-                    .filter_map(|p| match p {
-                        Prim::Text { text, role, .. } if ["$12,000", "Q1", "North"].contains(&text.as_str()) => Some(role.as_str()),
-                        _ => None,
-                    })
-                    .all(|role| role == "data_table"),
-                "table text must not inherit data-label formatting or hit testing: {kind:?}"
+                table_sizes.iter().all(|size| (*size - 9.0).abs() < f32::EPSILON),
+                "data-label font settings must not resize table text: {kind:?}: {table_sizes:?}"
             );
             for value in ["$12,000", "-$4,000", "$38,000", "$61,870"] {
                 assert!(labels.contains(&value), "{kind:?}: missing {value}");
