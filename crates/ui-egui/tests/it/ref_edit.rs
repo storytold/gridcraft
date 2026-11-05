@@ -1815,3 +1815,37 @@ fn remove_duplicates_checkbox_pick_does_not_edit_workbook_1388() {
     assert!(h.state().dialog.is_none());
     assert_eq!(h.state().session.active().unwrap().wb, before);
 }
+
+/// #1388: selecting a cell beneath a spin control must not operate that control.
+#[test]
+fn remove_duplicates_pick_over_spin_control_1388() {
+    let mut session = Session::new();
+    session.new_workbook();
+
+    session.execute("insert.spinButton", json!({"at": "D6", "width": 90, "height": 38, "value": 5})).unwrap();
+
+    session.execute("selection.set", json!({"range": "B2:C4"})).unwrap();
+
+    let mut h = harness(session);
+    let before = h.state().session.active().unwrap().wb.clone();
+
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+
+    let pos = cell_pos(&h, "D6");
+    h.input_mut().events.push(Event::PointerMoved(pos));
+    press(&mut h, pos, true);
+    h.run_steps(2);
+    press(&mut h, pos, false);
+    h.run_steps(3);
+
+    assert_eq!(field(&h, "range"), "$D$6");
+    assert_eq!(h.state().session.active().unwrap().wb, before, "reference picking must not change the spin control or workbook");
+
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().session.active().unwrap().wb, before);
+}

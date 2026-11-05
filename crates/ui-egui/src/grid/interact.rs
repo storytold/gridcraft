@@ -66,10 +66,12 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
     let in_corner = pos.is_some_and(|p| p.x < geo.cells.left() && p.y < geo.cells.top() && p.x >= geo.head_left() && p.y >= geo.head_top());
     // Insert › Controls places a control; a click works a form control (Ctrl or Cmd+click, or a
     // right-click, selects it instead).
-    if app.editor.is_none() && crate::control_ui::place(app, ui, resp, geo, sh) {
+    // Reference picking must select the cell beneath worksheet controls.
+    let picking_ref = app.dialog.as_ref().is_some_and(|d| d.is_ref_edit_picking());
+    if app.editor.is_none() && !picking_ref && crate::control_ui::place(app, ui, resp, geo, sh) {
         return;
     }
-    if app.editor.is_none() && app.session.draw_tool.is_empty() && crate::form_controls::interact(app, &ctx, resp, geo, sh) {
+    if app.editor.is_none() && !picking_ref && app.session.draw_tool.is_empty() && crate::form_controls::interact(app, &ctx, resp, geo, sh) {
         keyboard(app, &ctx, resp, geo, sh);
         return;
     }
@@ -139,7 +141,7 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         // The selected object's handles reach a little outside it, so they win over hit-testing.
         // Only they resize: a press anywhere on another object selects and moves it, as the
         // hover cursor shows.
-        let under = at.and_then(|p| object_under(app, geo, sh, p));
+        let under = at.and_then(|p| object_under(app, geo, sh, p)).filter(|(obj, _, _)| !picking_ref || obj.kind != ObjKind::Control);
         let handle = under.and_then(|(.., h)| h);
         if let Some(p) = at
             && let Some((obj, _, _)) = under
