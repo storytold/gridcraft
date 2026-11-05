@@ -1668,3 +1668,67 @@ fn remove_duplicates_range_can_be_picked_1388() {
     assert!(h.state().dialog.is_none());
     assert_eq!(h.state().session.active().unwrap().wb, before);
 }
+
+/// #1388: typing immediately after opening Remove Duplicates edits Range, not Columns.
+#[test]
+fn remove_duplicates_initial_focus_goes_to_range_1388() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("selection.set", json!({"range": "B2:C4"})).unwrap();
+
+    let mut h = harness(session);
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+
+    assert!(h.ctx.text_edit_focused(), "Range should own text focus");
+    assert_eq!(field(&h, "range"), "B2:C4");
+    assert_eq!(field(&h, "columnsText"), "");
+
+    // Initial focus selects the existing range so typing replaces it.
+    type_text(&mut h, "D2:E5");
+
+    assert_eq!(field(&h, "range"), "D2:E5");
+    assert_eq!(field(&h, "columnsText"), "", "typing a range must not change the Columns field");
+}
+
+/// #1388: clicking the already-selected cell must replace the inferred region.
+#[test]
+fn remove_duplicates_can_pick_already_selected_cell_1388() {
+    let mut session = Session::new();
+    session.new_workbook();
+
+    session
+        .execute(
+            "range.setValues",
+            json!({
+                "range": "B2:C4",
+                "values": [
+                    ["Name", "Qty"],
+                    ["A", 1],
+                    ["B", 2]
+                ]
+            }),
+        )
+        .unwrap();
+
+    session.execute("selection.set", json!({"range": "C3"})).unwrap();
+
+    let mut h = harness(session);
+
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+
+    // A single cursor initially infers the surrounding data region.
+    assert_eq!(field(&h, "range"), "B2:C4");
+    assert_eq!(selection(&h).1, "C3");
+
+    click_button(&mut h, "Collapse dialog", 0);
+    assert_eq!(collapsed(&h).as_deref(), Some("range"));
+
+    // Explicitly pick C3 without changing the current selection.
+    let pos = cell_pos(&h, "C3");
+    click_at(&mut h, pos);
+
+    assert_eq!(selection(&h).1, "C3");
+    assert_eq!(field(&h, "range"), "$C$3", "an explicit click must replace the inferred region");
+}

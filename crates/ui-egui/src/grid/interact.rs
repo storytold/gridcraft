@@ -522,6 +522,10 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
             }
         }
     }
+    // A click may select the same cell again, which selection-change tracking misses.
+    if primary_clicked && let Some(d) = app.dialog.as_mut() {
+        d.note_remove_duplicates_cell_click(c);
+    }
     app.grid.drag = Drag::Select;
     app.grid.drag_select = true;
     if resp.drag_started()
