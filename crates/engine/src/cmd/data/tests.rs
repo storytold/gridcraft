@@ -454,6 +454,7 @@ fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
         ("F1", "Blue"),
         ("G1", "Red"),
         ("H1", "Green"),
+        ("I1", "Blue"),
     ];
     let check = |wb: &Workbook| {
         for (cell, input) in accepted {
