@@ -575,6 +575,20 @@ fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
         }
+        // Calculated column and custom totals formulas are stored as text on the columns.
+        let shadowed: Vec<bool> = (0..cx.wb.sheets.len()).map(|i| cx.wb.name(&old, i).is_some()).collect();
+        crate::tables::map_column_formulas(cx, &mut |e, i, _, hit| match e {
+            gridcraft_formula::Expr::Struct(mut st) if st.table.eq_ignore_ascii_case(&old) => {
+                st.table = name.clone();
+                *hit = true;
+                gridcraft_formula::Expr::Struct(st)
+            }
+            gridcraft_formula::Expr::Name(n) if n.eq_ignore_ascii_case(&old) && !shadowed.get(i).copied().unwrap_or(false) => {
+                *hit = true;
+                gridcraft_formula::Expr::Name(name.clone())
+            }
+            o => o,
+        });
         cx.structural = true;
         Ok(Json::Null)
     })
@@ -1975,5 +1989,24 @@ mod tests {
         }
         s.execute("table.rename", json!({"table": "Table1", "name": "Table1"})).unwrap();
         s.execute("table.rename", json!({"table": "Table1", "name": "Rates"})).unwrap();
+    }
+
+    #[test]
+    fn renaming_a_table_updates_calculated_column_formulas() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Sku", "Price"], [101, 5], [102, 7]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "D1", "values": [["Item", "Cost"], [102, 0], [101, 0]]})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:B3", "header": true, "name": "Prices"})).unwrap();
+        s.execute("insert.table", json!({"range": "D1:E3", "header": true, "name": "Orders"})).unwrap();
+        // Excel-authored files carry calculated column formulas; no command creates them.
+        let f = "INDEX(Prices[Price],MATCH(Orders[@Item],Prices[Sku],0))";
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        wb.sheet_mut(0).unwrap().tables[1].columns[1].formula = Some(f.into());
+        let stored = |s: &Session| s.doc().unwrap().wb.sheet(0).unwrap().tables[1].columns[1].formula.clone().unwrap();
+        s.execute("table.rename", json!({"table": "Prices", "name": "PriceList"})).unwrap();
+        assert_eq!(stored(&s), "INDEX(PriceList[Price],MATCH(Orders[@Item],PriceList[Sku],0))");
+        s.execute("table.rename", json!({"table": "Orders", "name": "Sales"})).unwrap();
+        assert_eq!(stored(&s), "INDEX(PriceList[Price],MATCH(Sales[@Item],PriceList[Sku],0))");
     }
 }

@@ -148,6 +148,48 @@ pub fn gallery() -> Vec<String> {
     v
 }
 
+/// Rewrites the formula text stored on table columns (a calculated column's formula, a custom
+/// totals formula), which cell edits never reach. `f` maps each sub-expression, given the sheet
+/// and range of the table that owns the column and a flag it sets when it changed something; text
+/// that does not parse, or that `f` leaves alone, is kept as it is.
+pub(crate) fn map_column_formulas(
+    cx: &mut crate::cmd::Ctx,
+    f: &mut impl FnMut(gridcraft_formula::Expr, usize, RangeRef, &mut bool) -> gridcraft_formula::Expr,
+) {
+    for si in 0..cx.wb.sheets.len() {
+        let tables = cx.wb.sheet(si).map_or(0, |sh| sh.tables.len());
+        for ti in 0..tables {
+            let Some(t) = cx.wb.sheet(si).and_then(|sh| sh.tables.get(ti)) else { continue };
+            let range = t.range;
+            // (column, new calculated column formula, new custom totals formula)
+            let mut changes: Vec<(usize, Option<String>, Option<String>)> = Vec::new();
+            for (ci, col) in t.columns.iter().enumerate() {
+                let mut remap = |text: &str| {
+                    let e = gridcraft_formula::parse(text).ok()?;
+                    let mut hit = false;
+                    let ne = e.map(&mut |x| f(x, si, range, &mut hit));
+                    hit.then(|| gridcraft_formula::print(&ne))
+                };
+                let formula = col.formula.as_deref().and_then(&mut remap);
+                let totals = if col.totals == gridcraft_model::TotalsFn::Custom { col.totals_label.as_deref().and_then(&mut remap) } else { None };
+                if formula.is_some() || totals.is_some() {
+                    changes.push((ci, formula, totals));
+                }
+            }
+            let Some(t) = cx.wb.sheet_mut(si).and_then(|sh| sh.tables.get_mut(ti)) else { continue };
+            for (ci, formula, totals) in changes {
+                let Some(col) = t.columns.get_mut(ci) else { continue };
+                if formula.is_some() {
+                    col.formula = formula;
+                }
+                if totals.is_some() {
+                    col.totals_label = totals;
+                }
+            }
+        }
+    }
+}
+
 /// Editing a table's header row renames the column, as in Excel: an empty or repeated header
 /// gets a unique name written back into the cell, and structured references follow the rename.
 pub(crate) fn sync_headers(cx: &mut crate::cmd::Ctx) {
@@ -248,6 +290,24 @@ pub(crate) fn sync_headers(cx: &mut crate::cmd::Ctx) {
             }
         }
     }
+    // Calculated column and custom totals formulas are stored as text on the columns.
+    map_column_formulas(cx, &mut |e, i, owner, hit| match e {
+        gridcraft_formula::Expr::Struct(mut st) => {
+            for (si, table, range, old, name) in &renames {
+                let this = if st.table.is_empty() { i == *si && owner == *range } else { st.table.eq_ignore_ascii_case(table) };
+                if this {
+                    for end in [&mut st.col_start, &mut st.col_end].into_iter().flatten() {
+                        if end.eq_ignore_ascii_case(old) {
+                            *end = name.clone();
+                            *hit = true;
+                        }
+                    }
+                }
+            }
+            gridcraft_formula::Expr::Struct(st)
+        }
+        o => o,
+    });
     cx.structural = true;
 }
 
@@ -282,6 +342,25 @@ mod tests {
         let names: Vec<&str> = sh.tables[0].columns.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["x", "x2", "5"]);
         assert_eq!(sh.value(gridcraft_core::CellRef::new(0, 2)), Value::from("5"));
+    }
+
+    #[test]
+    fn renaming_a_column_updates_calculated_column_formulas() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Sku", "Price"], [101, 5], [102, 7]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "D1", "values": [["Item", "Cost"], [102, 0], [101, 0]]})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:B3", "header": true, "name": "Prices"})).unwrap();
+        s.execute("insert.table", json!({"range": "D1:E3", "header": true, "name": "Orders"})).unwrap();
+        // Excel-authored files carry calculated column formulas; no command creates them.
+        let f = "INDEX(Prices[Price],MATCH(Orders[@Item],Prices[Sku],0))";
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        wb.sheet_mut(0).unwrap().tables[1].columns[1].formula = Some(f.into());
+        let stored = |s: &Session| s.doc().unwrap().wb.sheet(0).unwrap().tables[1].columns[1].formula.clone().unwrap();
+        s.execute("cell.set", json!({"cell": "B1", "input": "Amount"})).unwrap();
+        assert_eq!(stored(&s), "INDEX(Prices[Amount],MATCH(Orders[@Item],Prices[Sku],0))");
+        s.execute("cell.set", json!({"cell": "D1", "input": "Product"})).unwrap();
+        assert_eq!(stored(&s), "INDEX(Prices[Amount],MATCH(Orders[@Product],Prices[Sku],0))");
     }
 
     #[test]
