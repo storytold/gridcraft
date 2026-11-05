@@ -49,6 +49,29 @@ struct EntryInfo {
     base: String,
 }
 
+/// What a `.tbl.xml` entry holds: a user table, an internal hierarchy or a relationship index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TableEntryKind {
+    Table,
+    Hierarchy,
+    Relationship,
+}
+
+/// Classifies a `.tbl.xml` entry from its basename and logical path.
+///
+/// `H$`/`R$` mark an internal file only as a **prefix of the basename or of a path segment**: a user
+/// table may be called `Vendas R$`, and a plain substring match would hide it from the tables.
+fn table_entry_kind(base_name: &str, logical: &str) -> TableEntryKind {
+    let prefixed = |prefix: &str| base_name.starts_with(prefix) || logical.split(['\\', '/']).any(|segment| segment.starts_with(prefix));
+    if prefixed("H$") {
+        TableEntryKind::Hierarchy
+    } else if prefixed("R$") {
+        TableEntryKind::Relationship
+    } else {
+        TableEntryKind::Table
+    }
+}
+
 struct Base<'a> {
     container: Container<'a>,
     entries: Vec<EntryInfo>,
@@ -529,12 +552,10 @@ impl ModelLayout {
                 continue;
             }
             if ends_with_ci(&entry.base, ".tbl.xml") {
-                if entry.logical.contains("H$") || entry.base.starts_with("H$") {
-                    hierarchy_indices.push(index);
-                } else if entry.logical.contains("R$") || entry.base.starts_with("R$") {
-                    relationship_indices.push(index);
-                } else {
-                    table_indices.push(index);
+                match table_entry_kind(&entry.base, &entry.logical) {
+                    TableEntryKind::Hierarchy => hierarchy_indices.push(index),
+                    TableEntryKind::Relationship => relationship_indices.push(index),
+                    TableEntryKind::Table => table_indices.push(index),
                 }
             } else if ends_with_ci(&entry.base, ".dim.xml") {
                 dimension_indices.push(index);
@@ -2066,6 +2087,18 @@ mod tests {
         assert!(!ends_with_ci("prix €", ".tbl.xml"));
         assert!(!ends_with_ci("€", "€x"));
         assert!(ends_with_ci("PART.TBL.XML", ".tbl.xml"));
+    }
+
+    #[test]
+    fn table_entries_are_classified_by_prefix_not_substring() {
+        // A user table can be called `Vendas R$`; the internal markers only count as a prefix of
+        // the basename or of a path segment.
+        assert_eq!(table_entry_kind("Sales.tbl.xml", "Sales.tbl.xml"), TableEntryKind::Table);
+        assert_eq!(table_entry_kind("Vendas R$.tbl.xml", "Cube/Vendas R$.tbl.xml"), TableEntryKind::Table);
+        assert_eq!(table_entry_kind("H$Sales.tbl.xml", "Cube/H$Sales.tbl.xml"), TableEntryKind::Hierarchy);
+        assert_eq!(table_entry_kind("R$Sales$r1.tbl.xml", "Cube/R$Sales$r1.tbl.xml"), TableEntryKind::Relationship);
+        // The prefix may live on a directory segment instead of the basename.
+        assert_eq!(table_entry_kind("facts.tbl.xml", "Cube\\\\R$Sales$r1\\\\facts.tbl.xml"), TableEntryKind::Relationship);
     }
 
     #[test]
