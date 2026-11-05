@@ -89,7 +89,9 @@ pub fn dml_color(e: &El) -> Option<Color> {
     if let Some(c) = e.child("sysClr").and_then(|c| c.attr("lastClr")) {
         return Color::from_hex(c);
     }
-    if let Some(c) = e.child("schemeClr").and_then(|c| c.attr("val")) {
+    if let Some(scheme) = e.child("schemeClr")
+        && let Some(c) = scheme.attr("val")
+    {
         let i = match c {
             "bg1" | "lt1" => 0,
             "tx1" | "dk1" => 1,
@@ -105,9 +107,22 @@ pub fn dml_color(e: &El) -> Option<Color> {
             "folHlink" => 11,
             _ => return None,
         };
-        return Some(Color::Theme(i, 0));
+        return Some(Color::Theme(i, luminance_tint(scheme)));
     }
     None
+}
+
+/// A theme colour's `lumMod` and `lumOff` as a tint in thousandths. What Excel writes for a lighter
+/// colour (`lumMod` 50%, `lumOff` 50%) and a darker one (`lumMod` 75%) are exactly tints; any other
+/// pair comes out close, led by `lumOff`.
+fn luminance_tint(scheme: &El) -> i16 {
+    let share = |tag: &str| scheme.child(tag).and_then(|c| c.attr_f64("val")).map(|v| v / 100_000.0);
+    let tint = match (share("lumMod"), share("lumOff")) {
+        (_, Some(off)) if off > 0.0 => off,
+        (Some(modulation), _) => modulation - 1.0,
+        _ => 0.0,
+    };
+    (tint.clamp(-1.0, 1.0) * 1000.0).round() as i16
 }
 
 fn mime_for(name: &str) -> &'static str {
@@ -657,5 +672,54 @@ pub fn image_content_type(ext: &str) -> &'static str {
         "wmf" => "image/x-wmf",
         "webp" => "image/webp",
         _ => "image/png",
+    }
+}
+
+#[cfg(test)]
+mod luminance_tests {
+    use gridcraft_model::Color;
+    use gridcraft_model::style::apply_tint;
+
+    fn parsed(inner: &str) -> Option<Color> {
+        let xml = format!("<a:solidFill xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">{inner}</a:solidFill>");
+        super::dml_color(&crate::xml::parse(xml.as_bytes()).ok()?)
+    }
+
+    #[test]
+    fn theme_colours_keep_their_luminance() {
+        let scheme = |val: &str, children: &str| format!("<a:schemeClr val=\"{val}\">{children}</a:schemeClr>");
+        let cases = [
+            ("tx1", "<a:lumMod val=\"50000\"/><a:lumOff val=\"50000\"/>", Color::Theme(1, 500)),
+            ("accent1", "<a:lumMod val=\"60000\"/><a:lumOff val=\"40000\"/>", Color::Theme(4, 400)),
+            ("accent1", "<a:lumMod val=\"75000\"/>", Color::Theme(4, -250)),
+            ("bg1", "<a:lumMod val=\"50000\"/>", Color::Theme(0, -500)),
+            ("accent2", "", Color::Theme(5, 0)),
+        ];
+        for (val, children, want) in cases {
+            assert_eq!(parsed(&scheme(val, children)), Some(want), "{val} {children}");
+        }
+    }
+
+    /// Measured in Excel, on a chart series with the default Office theme.
+    #[test]
+    fn those_tints_give_the_colours_excel_shows() {
+        let cases = [
+            ([0x00, 0x00, 0x00], 0.5, [0x7F, 0x7F, 0x7F]),
+            ([0x00, 0x00, 0x00], 0.25, [0x40, 0x40, 0x40]),
+            ([0xFF, 0xFF, 0xFF], -0.25, [0xBF, 0xBF, 0xBF]),
+            ([0xFF, 0xFF, 0xFF], -0.5, [0x7F, 0x7F, 0x7F]),
+            ([0x44, 0x72, 0xC4], 0.4, [0x8F, 0xAA, 0xDC]),
+            ([0x44, 0x72, 0xC4], 0.6, [0xB4, 0xC7, 0xE7]),
+            ([0x44, 0x72, 0xC4], -0.25, [0x2F, 0x55, 0x97]),
+            ([0x44, 0x72, 0xC4], -0.5, [0x20, 0x38, 0x64]),
+            ([0xED, 0x7D, 0x31], 0.4, [0xF4, 0xB1, 0x83]),
+            ([0x70, 0xAD, 0x47], -0.25, [0x54, 0x82, 0x35]),
+        ];
+        for (rgb, tint, excel) in cases {
+            let got = apply_tint(rgb, tint);
+            for (a, b) in got.iter().zip(excel) {
+                assert!(a.abs_diff(b) <= 2, "{rgb:?} at {tint}: {got:?} against {excel:?}");
+            }
+        }
     }
 }
