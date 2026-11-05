@@ -243,7 +243,7 @@ pub(crate) fn paint_headers_footers(app: &SheetApp, ui: &egui::Ui, p: &Painter, 
     let needs_text = sh.print.has_header_footer();
     let (date, time) = if needs_text { print::hf_date_time(wb) } else { Default::default() };
     // Pictures (`&G`) the sheet keeps from its file, drawn as on paper (#1257).
-    let pictures = if needs_text { print::hf_pictures(sh) } else { vec![] };
+    let pictures = if needs_text { print::hf_pictures(sh) } else { &[] };
     for (i, j) in pages_iter(geo, &pg) {
         let page = screen_rect(geo, pg.page_rect(i, j));
         if !page.intersects(geo.cells) {
@@ -282,7 +282,7 @@ pub(crate) fn paint_headers_footers(app: &SheetApp, ui: &egui::Ui, p: &Painter, 
             let (_, py, _, h) = pg.page_rect(i, j);
             let [_, _, _, _, hm, fm] = pg.margins;
             for (k, sec) in secs.iter().enumerate() {
-                let picture = sec.picture.and_then(|_| pictures.iter().find(|q| q.page == kind && q.footer == footer && q.section == k));
+                let picture = sec.picture.and_then(|_| pictures.iter().find(|q| q.is_at(kind, footer, k)));
                 if let Some(pic) = picture {
                     let edge = if footer { screen(geo, 0.0, py + h - fm).y } else { screen(geo, 0.0, py + hm).y };
                     paint_picture_section(&p, geo, &pg, d.uid, (rects[k], k, footer, edge), sec, pic);

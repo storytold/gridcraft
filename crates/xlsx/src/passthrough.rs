@@ -42,13 +42,12 @@ use crate::read::Ctx;
 use crate::write::{NS_REL, Out, Rels, XML_DECL};
 use crate::xml::{self, esc_attr};
 
-mod hf_pictures;
 mod read;
 mod rebase;
 mod write;
 
-pub use hf_pictures::{HfPicture, header_footer_pictures};
 pub use read::KeptReader;
+pub(crate) use read::shape_spans;
 pub use rebase::{SheetKept, rebase_links};
 #[cfg(test)]
 pub(crate) use write::sheet_names_in;

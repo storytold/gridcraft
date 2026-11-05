@@ -174,7 +174,7 @@ pub(crate) fn texture(ctx: &egui::Context, doc: u64, image: &Image, rect: egui::
 
 /// The texture of a header or footer picture of workbook `doc` (its encoded bytes, as the sheet
 /// keeps them), drawn in `rect` (points), from the same bounded cache as floating pictures.
-pub(crate) fn header_footer_texture(ctx: &egui::Context, doc: u64, data: &Arc<[u8]>, rect: egui::Rect) -> Option<TextureHandle> {
+pub(crate) fn header_footer_texture(ctx: &egui::Context, doc: u64, data: &Arc<Vec<u8>>, rect: egui::Rect) -> Option<TextureHandle> {
     let key = Key { doc, kind: Kind::HeaderFooter, id: data.as_ptr() as usize as u64, len: data.len() };
     cache(ctx).lock().unwrap_or_else(std::sync::PoisonError::into_inner).texture(ctx, key, data, want_side(ctx, rect))
 }

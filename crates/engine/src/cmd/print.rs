@@ -29,7 +29,7 @@ mod objects;
 mod text;
 
 use draw::{Block, PrintedBlock, draw_block, draw_block_links, draw_headings, make_block, printed_target};
-pub use gridcraft_xlsx::HfPicture;
+pub use gridcraft_model::HfPicture;
 use header_footer::draw_header_footer;
 pub use header_footer::{
     HF_FIELDS, HfContext, HfFrame, HfItem, HfLine, HfSection, codes_to_fields, expand_header_footer, fields_to_codes, hf_date_time, hf_pictures,

@@ -139,7 +139,7 @@ fn paint_header_footer(p: &egui::Painter, rect: Rect, (paper_w, paper_h): (f32, 
     // The pictures this kind of page shows, with their textures (one that can't be decoded
     // takes no room, as on paper).
     let pictures: Vec<_> = pr::hf_pictures(sh)
-        .into_iter()
+        .iter()
         .filter(|q| q.page == which)
         .filter_map(|q| {
             let size = vec2(q.width, q.height) * frame.text_scale * per_pt;
@@ -147,7 +147,7 @@ fn paint_header_footer(p: &egui::Painter, rect: Rect, (paper_w, paper_h): (f32, 
             Some((q, tex))
         })
         .collect();
-    let picture = |footer: bool, section: usize| pictures.iter().find(|(q, _)| q.footer == footer && q.section == section);
+    let picture = |footer: bool, section: usize| pictures.iter().find(|(q, _)| q.is_at(which, footer, section));
     let items = pr::layout_header_footer(&frame, &sh.print, which, &cx, |f, s| picture(f, s).map(|(q, _)| (q.width, q.height)));
     let p = p.with_clip_rect(rect);
     let at = |x: f32, y: f32| pos2(rect.left() + x * per_pt, rect.top() + y * per_pt);

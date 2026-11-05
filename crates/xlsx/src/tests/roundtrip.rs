@@ -302,6 +302,8 @@ fn sample() -> Workbook {
         hf_scale_with_doc: false,
         hf_align_with_margins: true,
         page_order: PageOrder::OverThenDown,
+
+        hf_pictures: vec![],
     };
     s.sparklines.push(Sparkline { cell: at("J2"), source: "B2:B3".into(), kind: SparklineKind::WinLoss, color: Color::Rgb(0x112233), markers: true });
     s.tables.push(Table {
