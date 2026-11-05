@@ -309,10 +309,22 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
         if merged && gridlines {
             pg.rect_stroke(x, y, w, h, (0.35 * b.scale).clamp(0.1, 0.5), [0xB0, 0xB0, 0xB0]);
         }
-        if let Some((frac, rgb, _)) = l.cf.as_ref().and_then(|cf| cf.bar) {
+        if let Some(bar) = l.cf.as_ref().and_then(|cf| cf.bar.as_ref()) {
             let pad = 1.5 * b.k;
-            let bwid = ((w - 2.0 * pad) * frac.clamp(0.0, 1.0)).max(0.0);
-            pg.fill_rect(x + pad, y + pad, bwid, (h - 2.0 * pad).max(0.0), rgb);
+            // The axis-aware geometry of the grid's data bars: negatives grow left of the axis
+            // in their own fill, positives right of it.
+            let drawable = (w - 2.0 * pad).max(0.0);
+            let axis_x = x + pad + (bar.axis_frac.clamp(0.0, 1.0) * drawable).max(0.0);
+            let mag = bar.frac.clamp(-1.0, 1.0).abs();
+            let rgb = if bar.frac < 0.0 { bar.negative_fill } else { bar.color };
+            let (bx, bwid) = if bar.frac < 0.0 {
+                let bwid = (mag * (axis_x - x - pad).max(0.0)).max(0.0);
+                (axis_x - bwid, bwid)
+            } else {
+                let bwid = (mag * (x + w - pad - axis_x).max(0.0)).max(0.0);
+                (axis_x, bwid)
+            };
+            pg.fill_rect(bx, y + pad, bwid, (h - 2.0 * pad).max(0.0), rgb);
         }
     }
     // Borders.

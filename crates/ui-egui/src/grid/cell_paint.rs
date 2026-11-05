@@ -1,7 +1,7 @@
 use super::geo::Geo;
 use super::{
     BorderLine, BorderStyle, CellRef, CfCache, CfLook, Color, Color32, FontId, HAlign, MAX_COLS, Painter, PatternType, Pos2, RangeRef, Rect, Sheet,
-    Stroke, Style, Underline, VAlign, Value, Workbook, pos2, theme, vec2,
+    Stroke, StrokeKind, Style, Underline, VAlign, Value, Workbook, pos2, theme, vec2,
 };
 
 /// Resolved look of a cell for painting.
@@ -255,6 +255,58 @@ pub(crate) fn paint_border(p: &Painter, pts: [Pos2; 2], style: BorderStyle, col:
     }
 }
 
+/// The shape families a conditional-format icon set draws, apart from colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IconShape {
+    Arrow,
+    TrafficLight,
+    Rating,
+    Quarter,
+    Star,
+    Triangle,
+    Box,
+    Dot,
+}
+
+/// Which shape an icon set's name draws (`3Arrows`, `5Quarters`, `3Stars`…); names outside the
+/// families fall back to a plain dot.
+pub fn cf_icon_shape(set: &str) -> IconShape {
+    let s = set.to_ascii_lowercase();
+    if s.contains("arrow") {
+        IconShape::Arrow
+    } else if s.contains("trafficlight") {
+        IconShape::TrafficLight
+    } else if s.contains("rating") {
+        IconShape::Rating
+    } else if s.contains("quarter") {
+        IconShape::Quarter
+    } else if s.contains("star") {
+        IconShape::Star
+    } else if s.contains("triangle") {
+        IconShape::Triangle
+    } else if s.contains("box") {
+        IconShape::Box
+    } else {
+        IconShape::Dot
+    }
+}
+
+/// A rating, quarter or box icon: an outline (circle or square) that fills from the bottom with
+/// the slot's share of the set — a meter, original to GridCraft.
+fn icon_meter(p: &Painter, r: Rect, idx: usize, n: usize, round: bool) {
+    if round {
+        p.circle_stroke(r.center(), r.width() / 2.0 - 0.5, Stroke::new(1.0, Color32::GRAY));
+    } else {
+        p.rect_stroke(r, 1.0, Stroke::new(1.0, Color32::GRAY), StrokeKind::Inside);
+    }
+    let frac = idx as f32 / (n - 1).max(1) as f32;
+    p.rect_filled(
+        Rect::from_min_size(pos2(r.left() + 2.0, r.bottom() - 2.0 - (r.height() - 4.0) * frac), vec2(r.width() - 4.0, (r.height() - 4.0) * frac)),
+        1.0,
+        Color32::from_rgb(0x2B, 0x7C, 0xD3),
+    );
+}
+
 pub(super) fn paint_cf_icon(p: &Painter, r: Rect, set: &str, idx: usize) {
     let n = gridcraft_engine::cf::icon_count(set);
     let palette3 = [Color32::from_rgb(0xD1, 0x3B, 0x2F), Color32::from_rgb(0xF2, 0xB8, 0x2E), Color32::from_rgb(0x2E, 0x9E, 0x4F)];
@@ -268,32 +320,48 @@ pub(super) fn paint_cf_icon(p: &Painter, r: Rect, set: &str, idx: usize) {
             (0x2F as f32 * (1.0 - t) + 0x4F as f32 * t) as u8,
         )
     };
-    let lower = set.to_ascii_lowercase();
-    if lower.contains("arrow") {
-        let c = r.center();
-        let s = r.width() / 2.0;
-        let pts = if idx + 1 == n {
-            vec![pos2(c.x, c.y - s), pos2(c.x + s, c.y + 0.1 * s), pos2(c.x - s, c.y + 0.1 * s)]
-        } else if idx == 0 {
-            vec![pos2(c.x, c.y + s), pos2(c.x - s, c.y - 0.1 * s), pos2(c.x + s, c.y - 0.1 * s)]
-        } else {
-            vec![pos2(c.x + s, c.y), pos2(c.x - 0.1 * s, c.y - s), pos2(c.x - 0.1 * s, c.y + s)]
-        };
-        p.add(egui::Shape::convex_polygon(pts, col, Stroke::NONE));
-    } else if lower.contains("rating") || lower.contains("quarter") {
-        p.circle_stroke(r.center(), r.width() / 2.0 - 0.5, Stroke::new(1.0, Color32::GRAY));
-        let frac = idx as f32 / (n - 1).max(1) as f32;
-        p.rect_filled(
-            Rect::from_min_size(pos2(r.left() + 2.0, r.bottom() - 2.0 - (r.height() - 4.0) * frac), vec2(r.width() - 4.0, (r.height() - 4.0) * frac)),
-            1.0,
-            Color32::from_rgb(0x2B, 0x7C, 0xD3),
-        );
-    } else {
-        p.circle_filled(r.center(), r.width() / 2.0 - 0.5, col);
+    match cf_icon_shape(set) {
+        IconShape::Arrow => {
+            let c = r.center();
+            let s = r.width() / 2.0;
+            let pts = if idx + 1 == n {
+                vec![pos2(c.x, c.y - s), pos2(c.x + s, c.y + 0.1 * s), pos2(c.x - s, c.y + 0.1 * s)]
+            } else if idx == 0 {
+                vec![pos2(c.x, c.y + s), pos2(c.x - s, c.y - 0.1 * s), pos2(c.x + s, c.y - 0.1 * s)]
+            } else {
+                vec![pos2(c.x + s, c.y), pos2(c.x - 0.1 * s, c.y - s), pos2(c.x - 0.1 * s, c.y + s)]
+            };
+            p.add(egui::Shape::convex_polygon(pts, col, Stroke::NONE));
+        }
+        IconShape::Star => {
+            // A five-point star, filled by triangles fanned from its centre: the outline is not
+            // convex, so a single polygon would tessellate wrong.
+            let c = r.center();
+            let outer = r.width() / 2.0 - 0.5;
+            let pt = |i: usize| {
+                let rad = if i.is_multiple_of(2) { outer } else { outer * 0.45 };
+                let a = (-90.0 + i as f32 * 36.0).to_radians();
+                pos2(c.x + rad * a.cos(), c.y + rad * a.sin())
+            };
+            for i in 0..10 {
+                p.add(egui::Shape::convex_polygon(vec![c, pt(i), pt((i + 1) % 10)], col, Stroke::NONE));
+            }
+        }
+        IconShape::Triangle => {
+            p.add(egui::Shape::convex_polygon(
+                vec![pos2(r.center().x, r.top() + 0.5), pos2(r.right() - 0.5, r.bottom() - 0.5), pos2(r.left() + 0.5, r.bottom() - 0.5)],
+                col,
+                Stroke::NONE,
+            ));
+        }
+        IconShape::Rating | IconShape::Quarter => icon_meter(p, r, idx, n, true),
+        IconShape::Box => icon_meter(p, r, idx, n, false),
+        IconShape::TrafficLight | IconShape::Dot => {
+            p.circle_filled(r.center(), r.width() / 2.0 - 0.5, col);
+        }
     }
 }
 
-/// Black or white, whichever reads on `fill` (the threshold chart labels use).
 pub(super) fn ink_on(fill: Color32) -> Color32 {
     let l = 0.299 * fill.r() as f32 + 0.587 * fill.g() as f32 + 0.114 * fill.b() as f32;
     if l < 150.0 { Color32::WHITE } else { Color32::BLACK }

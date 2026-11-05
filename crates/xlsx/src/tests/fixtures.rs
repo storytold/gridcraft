@@ -1,7 +1,9 @@
 //! Hand-written packages exercising specific reader paths.
 
 use gridcraft_core::{CellError, CellRef, DateSystem, RangeRef, Value};
-use gridcraft_model::{CalcMode, CfRule, Color, HAlign, PatternType, StyleId, Underline, Visibility};
+use gridcraft_model::{
+    BorderLine, BorderStyle, CalcMode, CfRule, CfValueKind, Color, HAlign, IconChoice, PatternType, StyleId, Underline, Visibility,
+};
 
 use super::minimal;
 use crate::read_xlsx;
@@ -349,6 +351,311 @@ Check this</t></r></text></comment></commentList></comments>"#;
     assert!(!rep.warnings.iter().any(|w| w.contains("password")), "{:?}", rep.warnings);
     assert_eq!(s.sparklines.len(), 1);
     assert_eq!(s.sparklines[0].kind, gridcraft_model::SparklineKind::Column);
+}
+
+/// An Excel-shaped x14 data bar: the classic rule carries a GUID ext, the sheet-level ext holds
+/// the x14 refinement linked by that GUID. Colour children are flat color-attribute elements
+/// (MS-XLSX §2.6.30).
+const X14_DATABAR_SHEET: &str = r#"<sheetData>
+<row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>-5</v></c></row>
+</sheetData>
+<conditionalFormatting sqref="A1:B1"><cfRule type="dataBar" priority="1">
+<dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF638EC8"/>
+<extLst><ext xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}"><x14:id>{D4A5D3C2-6B7E-4E8F-9A01-2C3B4D5E6F70}</x14:id></ext></extLst>
+</dataBar></cfRule></conditionalFormatting>
+<extLst><ext xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}">
+<x14:conditionalFormattings><x14:conditionalFormatting xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">
+<x14:cfRule type="dataBar" id="{D4A5D3C2-6B7E-4E8F-9A01-2C3B4D5E6F70}" priority="1">
+<x14:dataBar minLength="0" maxLength="100" gradient="0" border="1" negativeBarColorSameAsPositive="0" negativeBarBorderColorSameAsPositive="0">
+<x14:cfvo type="autoMin"/><x14:cfvo type="autoMax"/>
+<x14:fillColor rgb="FF638EC8"/>
+<x14:borderColor rgb="FF638EC8"/>
+<x14:negativeFillColor rgb="FFFF0000"/>
+<x14:negativeBorderColor rgb="FF000000"/>
+<x14:axisColor rgb="FF000000"/>
+</x14:dataBar></x14:cfRule>
+<xm:sqref>A1:B1</xm:sqref>
+</x14:conditionalFormatting></x14:conditionalFormattings>
+</ext></extLst>"#;
+
+#[test]
+fn excel_shaped_x14_databar_imports() {
+    let (wb, rep) = read_xlsx(&minimal(X14_DATABAR_SHEET, &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    let CfRule::DataBar { min, max, gradient, border, negative_fill, negative_border, axis, limits, .. } = &s.cond_formats[0].rule else {
+        panic!("not a data bar: {:?}", s.cond_formats[0].rule)
+    };
+    // The x14 autoMin/autoMax tell the Automatic bounds apart from the classic section's
+    // Lowest/Highest min/max (#1159): this bar keeps Excel's gallery defaults.
+    assert_eq!(*min, CfValueKind::AutoMin);
+    assert_eq!(*max, CfValueKind::AutoMax);
+    assert!(!*gradient);
+    assert_eq!(*border, Some(Color::Rgb(0x638EC8)));
+    assert_eq!(*negative_fill, Some(Color::Rgb(0xFF0000)));
+    assert_eq!(*negative_border, Some(Color::Rgb(0x000000)));
+    assert_eq!(*axis, Some(Color::Rgb(0x000000)));
+    assert_eq!(*limits, Some((0, 100)));
+    assert!(!rep.warnings.iter().any(|w| w.contains("2010")), "{:?}", rep.warnings);
+}
+
+#[test]
+fn pre_610_id_placement_still_links() {
+    // The id ext as a direct child of <cfRule> (after </dataBar>) instead of inside it.
+    let ext = r#"<extLst><ext xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}"><x14:id>{D4A5D3C2-6B7E-4E8F-9A01-2C3B4D5E6F70}</x14:id></ext></extLst>"#;
+    let body = X14_DATABAR_SHEET.replace(&format!("{ext}\n</dataBar></cfRule>"), &format!("</dataBar>{ext}</cfRule>"));
+    let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    let CfRule::DataBar { gradient, .. } = &s.cond_formats[0].rule else { panic!("not a data bar: {:?}", s.cond_formats[0].rule) };
+    assert!(!*gradient);
+    assert!(!rep.warnings.iter().any(|w| w.contains("2010")), "{:?}", rep.warnings);
+}
+
+#[test]
+fn unmodelled_and_hostile_x14() {
+    // An attribute outside the modelled set warns, while what is modelled still imports.
+    // (`negativeBarColorAsSame` was this writer's pre-schema-fix invention; MS-XLSX names it
+    // `negativeBarColorSameAsPositive`.)
+    let body = X14_DATABAR_SHEET
+        .replace(r#"border="1" negativeBarColorSameAsPositive="0""#, r#"border="1" negativeBarColorAsSame="0" negativeBarColorSameAsPositive="0""#);
+    let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    let CfRule::DataBar { gradient, .. } = &wb.sheet(0).unwrap().cond_formats[0].rule else { panic!("not a data bar") };
+    assert!(!*gradient);
+    assert!(rep.warnings.iter().any(|w| w.contains("2010")), "{:?}", rep.warnings);
+
+    // Bar direction is unmodelled: an rtl bar still merges (gradient honoured) but warns,
+    // because saving it back would silently flip the direction to left-to-right.
+    let body = X14_DATABAR_SHEET.replace(r#"gradient="0""#, r#"gradient="0" direction="rtl""#);
+    let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    let CfRule::DataBar { gradient, .. } = &wb.sheet(0).unwrap().cond_formats[0].rule else { panic!("not a data bar") };
+    assert!(!*gradient, "the extension was not merged");
+    assert!(rep.warnings.iter().any(|w| w.contains("2010")), "{:?}", rep.warnings);
+
+    // …but a file carrying Excel's schema default (`direction="context"`) must not warn.
+    let body = X14_DATABAR_SHEET.replace(r#"gradient="0""#, r#"gradient="0" direction="context""#);
+    let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    let CfRule::DataBar { gradient, .. } = &wb.sheet(0).unwrap().cond_formats[0].rule else { panic!("not a data bar") };
+    assert!(!*gradient, "the extension was not merged");
+    assert!(!rep.warnings.iter().any(|w| w.contains("2010")), "{:?}", rep.warnings);
+
+    // A hostile maxLength clamps to Excel's 100 percent.
+    let body = X14_DATABAR_SHEET.replace(r#"maxLength="100""#, r#"maxLength="4294967295""#);
+    let (wb, _) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    let CfRule::DataBar { limits, .. } = &wb.sheet(0).unwrap().cond_formats[0].rule else { panic!("not a data bar") };
+    assert_eq!(*limits, Some((0, 100)));
+
+    // A 100 KB id: no panic, and the rule stays unmatched (the stored id is capped at 256 bytes).
+    let body = X14_DATABAR_SHEET.replace("{D4A5D3C2-6B7E-4E8F-9A01-2C3B4D5E6F70}", &"A".repeat(100 * 1024));
+    let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    let CfRule::DataBar { gradient, .. } = &wb.sheet(0).unwrap().cond_formats[0].rule else { panic!("not a data bar") };
+    assert!(*gradient, "the extension was not merged");
+    assert!(rep.warnings.iter().any(|w| w.contains("2010")), "{:?}", rep.warnings);
+}
+
+/// An Excel-shaped x14 custom icon set: the classic rule carries a GUID ext, the x14 block
+/// restates the thresholds and swaps each position's icon for one from another set.
+const X14_ICONSET_SHEET: &str = r#"<sheetData>
+<row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>9</v></c></row>
+</sheetData>
+<conditionalFormatting sqref="A1:B1"><cfRule type="iconSet" priority="3">
+<iconSet iconSet="3TrafficLights1">
+<cfvo type="percent" val="0"/><cfvo type="percent" val="33"/><cfvo type="percent" val="67"/>
+<extLst><ext xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}"><x14:id>{E7F8A9B0-1C2D-3E4F-5A6B-7C8D9E0F1A2B}</x14:id></ext></extLst>
+</iconSet></cfRule></conditionalFormatting>
+<extLst><ext xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}">
+<x14:conditionalFormattings><x14:conditionalFormatting xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">
+<x14:cfRule type="iconSet" id="{E7F8A9B0-1C2D-3E4F-5A6B-7C8D9E0F1A2B}" priority="3">
+<x14:iconSet custom="1">
+<x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo>
+<x14:cfvo type="percentile"><xm:f>50</xm:f></x14:cfvo>
+<x14:cfvo type="formula"><xm:f>A1*2</xm:f></x14:cfvo>
+<x14:cfIcon iconSet="3Triangles" iconId="0"/><x14:cfIcon iconSet="3Triangles" iconId="1"/><x14:cfIcon iconSet="3Triangles" iconId="2"/>
+</x14:iconSet></x14:cfRule>
+<xm:sqref>A1:B1</xm:sqref>
+</x14:conditionalFormatting></x14:conditionalFormattings>
+</ext></extLst>"#;
+
+/// An x14-only icon set (`5Boxes` doesn't exist in the classic namespace): no classic rule, the
+/// x14 cfRule stands on its own over its `xm:sqref`.
+const X14_ONLY_ICONSET_SHEET: &str = r#"<sheetData>
+<row r="1"><c r="A1"><v>1</v></c><c r="A5"><v>5</v></c></row>
+</sheetData>
+<extLst><ext xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}">
+<x14:conditionalFormattings><x14:conditionalFormatting xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">
+<x14:cfRule type="iconSet" priority="6" id="{C380A90B-1F64-482D-A170-25C1B0C3B8B1}">
+<x14:iconSet iconSet="5Boxes">
+<x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo>
+<x14:cfvo type="percent"><xm:f>20</xm:f></x14:cfvo>
+<x14:cfvo type="percent"><xm:f>40</xm:f></x14:cfvo>
+<x14:cfvo type="percent"><xm:f>60</xm:f></x14:cfvo>
+<x14:cfvo type="percent"><xm:f>80</xm:f></x14:cfvo>
+</x14:iconSet></x14:cfRule>
+<xm:sqref>A1:A5</xm:sqref>
+</x14:conditionalFormatting></x14:conditionalFormattings>
+</ext></extLst>"#;
+
+#[test]
+fn custom_icon_set_imports() {
+    let (wb, rep) = read_xlsx(&minimal(X14_ICONSET_SHEET, &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.cond_formats.len(), 1);
+    let CfRule::IconSet { set, thresholds, icons, .. } = &s.cond_formats[0].rule else { panic!("not an icon set: {:?}", s.cond_formats[0].rule) };
+    assert_eq!(set, "3TrafficLights1");
+    // The x14 cfvos restated with their own kinds override the classic percent thresholds.
+    assert_eq!(thresholds, &[CfValueKind::Percent(0.0), CfValueKind::Percentile(50.0), CfValueKind::Formula("A1*2".into())]);
+    assert_eq!(
+        icons.as_deref(),
+        Some(
+            &[
+                IconChoice { set: "3Triangles".into(), id: 0 },
+                IconChoice { set: "3Triangles".into(), id: 1 },
+                IconChoice { set: "3Triangles".into(), id: 2 },
+            ][..]
+        )
+    );
+    assert!(!rep.warnings.iter().any(|w| w.contains("2010")), "{:?}", rep.warnings);
+}
+
+#[test]
+fn x14_only_icon_set_imports() {
+    let (wb, rep) = read_xlsx(&minimal(X14_ONLY_ICONSET_SHEET, &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.cond_formats.len(), 1);
+    let f = &s.cond_formats[0];
+    assert_eq!(f.ranges, vec![RangeRef::parse("A1:A5").unwrap()]);
+    assert_eq!(f.priority, 6);
+    assert!(!f.stop_if_true);
+    let CfRule::IconSet { set, thresholds, icons, .. } = &f.rule else { panic!("not an icon set: {:?}", f.rule) };
+    assert_eq!(set, "5Boxes");
+    assert_eq!(
+        thresholds,
+        &[CfValueKind::Percent(0.0), CfValueKind::Percent(20.0), CfValueKind::Percent(40.0), CfValueKind::Percent(60.0), CfValueKind::Percent(80.0),]
+    );
+    assert!(icons.is_none());
+    assert!(!rep.warnings.iter().any(|w| w.contains("2010")), "{:?}", rep.warnings);
+}
+
+/// An x14-only expression rule (issue #703, real-world shape): no classic counterpart, the
+/// formula in an `xm:f` child, the style in an inline `<x14:dxf>` — bold+italic red font and a
+/// thin red border on all four sides.
+const X14_ONLY_EXPRESSION_SHEET: &str = r#"<sheetData>
+<row r="12"><c r="F12"><v>1</v></c></row>
+</sheetData>
+<extLst><ext xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}">
+<x14:conditionalFormattings><x14:conditionalFormatting xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">
+<x14:cfRule type="expression" priority="505" id="{13B289B8-6F2A-4C1D-9E34-A1B2C3D4E5F6}">
+<xm:f>AND(F12&lt;&gt;"",ISERROR(MATCH(F12,OFFSET(References!$C$15,,,COUNTIF(References!$C$15:$C$251,"&lt;&gt;")),0)))</xm:f>
+<x14:dxf><font><b/><i/><color rgb="FFFF0000"/></font><border><left style="thin"><color rgb="FFFF0000"/></left><right style="thin"><color rgb="FFFF0000"/></right><top style="thin"><color rgb="FFFF0000"/></top><bottom style="thin"><color rgb="FFFF0000"/></bottom></border></x14:dxf>
+</x14:cfRule>
+<xm:sqref>F12:F261</xm:sqref>
+</x14:conditionalFormatting></x14:conditionalFormattings>
+</ext></extLst>"#;
+
+#[test]
+fn x14_only_expression_rule_imports() {
+    let (wb, rep) = read_xlsx(&minimal(X14_ONLY_EXPRESSION_SHEET, &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.cond_formats.len(), 1);
+    let f = &s.cond_formats[0];
+    assert_eq!(f.ranges, vec![RangeRef::parse("F12:F261").unwrap()]);
+    assert_eq!(f.priority, 505);
+    assert!(!f.stop_if_true);
+    let CfRule::Expression { formula, style } = &f.rule else { panic!("not an expression: {:?}", f.rule) };
+    assert_eq!(formula, "AND(F12<>\"\",ISERROR(MATCH(F12,OFFSET(References!$C$15,,,COUNTIF(References!$C$15:$C$251,\"<>\")),0)))");
+    assert!(style.font.bold && style.font.italic);
+    assert_eq!(style.font.color, Color::Rgb(0xFF0000));
+    let thin_red = BorderLine { style: BorderStyle::Thin, color: Color::Rgb(0xFF0000) };
+    assert_eq!((style.borders.left, style.borders.right, style.borders.top, style.borders.bottom), (thin_red, thin_red, thin_red, thin_red));
+    assert!(!rep.warnings.iter().any(|w| w.contains("2010")), "{:?}", rep.warnings);
+}
+
+#[test]
+fn x14_only_expression_without_formula_warns() {
+    let body = X14_ONLY_EXPRESSION_SHEET.replace(
+        r#"<xm:f>AND(F12&lt;&gt;"",ISERROR(MATCH(F12,OFFSET(References!$C$15,,,COUNTIF(References!$C$15:$C$251,"&lt;&gt;")),0)))</xm:f>"#,
+        "",
+    );
+    let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    assert!(wb.sheet(0).unwrap().cond_formats.is_empty(), "the rule was imported anyway");
+    assert!(rep.warnings.iter().any(|w| w.contains("2010")), "{:?}", rep.warnings);
+}
+
+/// The flat colour children of an x14 data bar: `fillColor` overrides the classic bar colour,
+/// `axisPosition="none"` leaves the axis unset, and a same-as-positive flag with no element
+/// takes the (overridden) positive colour.
+#[test]
+fn flat_databar_colour_elements_parse() {
+    let body = X14_DATABAR_SHEET
+        .replace(r#"<x14:fillColor rgb="FF638EC8"/>"#, r#"<x14:fillColor rgb="FF00B0F0"/>"#)
+        .replace(r#"<x14:axisColor rgb="FF000000"/>"#, "")
+        .replace(r#"negativeBarColorSameAsPositive="0""#, r#"negativeBarColorSameAsPositive="1""#)
+        .replace(r#"<x14:negativeFillColor rgb="FFFF0000"/>"#, "");
+    let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    let CfRule::DataBar { color, negative_fill, axis, .. } = &wb.sheet(0).unwrap().cond_formats[0].rule else {
+        panic!("not a data bar: {:?}", wb.sheet(0).unwrap().cond_formats[0].rule)
+    };
+    assert_eq!(*color, Color::Rgb(0x00B0F0), "fillColor overrides the classic colour");
+    assert_eq!(*negative_fill, Some(Color::Rgb(0x00B0F0)), "the flag takes the positive colour");
+    assert_eq!(*axis, None, "axisPosition=\"none\" keeps the axis unset");
+    assert!(!rep.warnings.iter().any(|w| w.contains("2010")), "{:?}", rep.warnings);
+}
+
+/// The nested container shape (`<x14:border><x14:color/></x14:border>`) is not in MS-XLSX;
+/// its element names are unknown children and warn, importing nothing.
+#[test]
+fn nested_databar_colour_containers_warn() {
+    let body = X14_DATABAR_SHEET
+        .replace(r#"<x14:borderColor rgb="FF638EC8"/>"#, r#"<x14:border><x14:color rgb="FF638EC8"/></x14:border>"#)
+        .replace(r#"<x14:axisColor rgb="FF000000"/>"#, r#"<x14:axis><x14:color rgb="FF000000"/></x14:axis>"#);
+    let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    let CfRule::DataBar { border, axis, .. } = &wb.sheet(0).unwrap().cond_formats[0].rule else { panic!("not a data bar") };
+    assert!(border.is_none() && axis.is_none());
+    assert!(rep.warnings.iter().any(|w| w.contains("2010")), "{:?}", rep.warnings);
+}
+
+#[test]
+fn garbage_sqref_and_dangling_id_warn() {
+    // An x14-only rule whose sqref token won't parse: the rule is dropped, not partly imported.
+    let body = X14_ONLY_ICONSET_SHEET.replace("<xm:sqref>A1:A5</xm:sqref>", "<xm:sqref>ZZZZZ1</xm:sqref>");
+    let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    assert!(wb.sheet(0).unwrap().cond_formats.is_empty(), "the rule was imported anyway");
+    assert!(rep.warnings.iter().any(|w| w.contains("2010")), "{:?}", rep.warnings);
+
+    // An x14 rule whose id no classic rule carries: nothing to refine, so nothing imports.
+    let body = X14_DATABAR_SHEET.replace(r#"id="{D4A5D3C2-6B7E-4E8F-9A01-2C3B4D5E6F70}""#, r#"id="{FFFFFFFF-1111-2222-3333-444444444444}""#);
+    let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.cond_formats.len(), 1);
+    let CfRule::DataBar { gradient, .. } = &s.cond_formats[0].rule else { panic!("not a data bar") };
+    assert!(*gradient, "the extension was merged anyway");
+    assert!(rep.warnings.iter().any(|w| w.contains("2010")), "{:?}", rep.warnings);
+}
+
+#[test]
+fn hostile_cficons_are_bounded() {
+    let mut icons = String::new();
+    for i in 0..10_000 {
+        icons.push_str(&format!(r#"<x14:cfIcon iconSet="3Triangles" iconId="{}"/>"#, i % 256));
+    }
+    let three =
+        r#"<x14:cfIcon iconSet="3Triangles" iconId="0"/><x14:cfIcon iconSet="3Triangles" iconId="1"/><x14:cfIcon iconSet="3Triangles" iconId="2"/>"#;
+    let body = X14_ICONSET_SHEET.replace(three, &icons);
+    let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.cond_formats.len(), 1);
+    let CfRule::IconSet { icons, .. } = &s.cond_formats[0].rule else { panic!("not an icon set: {:?}", s.cond_formats[0].rule) };
+    assert_eq!(
+        icons.as_deref(),
+        Some(
+            &[
+                IconChoice { set: "3Triangles".into(), id: 0 },
+                IconChoice { set: "3Triangles".into(), id: 1 },
+                IconChoice { set: "3Triangles".into(), id: 2 },
+                IconChoice { set: "3Triangles".into(), id: 3 },
+                IconChoice { set: "3Triangles".into(), id: 4 },
+            ][..]
+        )
+    );
+    assert!(rep.warnings.iter().any(|w| w.contains("2010")), "{:?}", rep.warnings);
 }
 
 /// The sheet's hyperlinks as written: cell, relationship target (external only), location.

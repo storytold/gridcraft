@@ -33,7 +33,8 @@ pub struct Ctx<'a> {
     pub num_fmts: std::collections::HashMap<u32, String>,
     /// Value metadata blocks, indexed by the worksheet's one-based `vm` attribute.
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
-    /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
+    /// x14 extension ids of the current sheet's conditional-format rules: (id, index into
+    /// `sheet.cond_formats`). Cleared per sheet; the sheet's x14 ext links back by id.
     pub cf_ext_ids: Vec<(String, usize)>,
     /// Whether GridCraft calculates a function, when the caller says: cell formulas wrapped by
     /// Google Sheets' export are then read as the formula inside (see [`crate::read_xlsx_with`]).

@@ -9,6 +9,7 @@ use super::{
     CellRef, CfCache, CfLook, Color32, FontId, HAlign, MAX_COLS, Painter, Pos2, RangeRef, Rect, Sheet, Stroke, StrokeKind, Tokens, Underline, VAlign,
     Value, Workbook, pos2, theme, vec2,
 };
+use gridcraft_engine::cf::BarLook;
 
 /// Mirror what the grid painted into `layer` (the shape indices in `range`) for a right-to-left
 /// sheet. Geometry is reflected; text and meshes (glyphs, pictures) keep their reading direction
@@ -261,9 +262,9 @@ fn paint_cell_decorations(q: &QuadrantPaint<'_>, c: CellRef, rect: Rect, lk: &Lo
         return true;
     }
     if let Some(l) = cfl
-        && let Some((frac, rgb, gradient)) = l.bar
+        && let Some(bar) = &l.bar
     {
-        paint_data_bar(p, rect, frac, rgb, gradient);
+        paint_data_bar(p, rect, bar);
     }
     if let Some(l) = cfl
         && let Some((set, idx)) = &l.icon
@@ -281,15 +282,41 @@ fn paint_cell_decorations(q: &QuadrantPaint<'_>, c: CellRef, rect: Rect, lk: &Lo
 /// Most repeats of a fill character laid out in one cell.
 const MAX_FILL_REPEATS: usize = 8192;
 
-fn paint_data_bar(p: &egui::Painter, rect: Rect, frac: f32, rgb: [u8; 3], gradient: bool) {
-    let bar = Rect::from_min_size(pos2(rect.left() + 2.0, rect.top() + 2.0), vec2((rect.width() - 4.0) * frac, rect.height() - 4.0));
+/// Where a data bar sits in its cell: the bar's rectangle, and the x of the axis line when the
+/// rule colours one. The bar grows from the axis (zero) toward its side — left for a negative
+/// `frac` — covering `|frac|` of that side's drawable width.
+pub fn bar_geometry(cell: Rect, look: &BarLook) -> (Rect, Option<f32>) {
+    let left = cell.left() + 2.0;
+    let right = cell.right() - 2.0;
+    let top = cell.top() + 2.0;
+    let bottom = cell.bottom() - 2.0;
+    let axis_x = left + look.axis_frac.clamp(0.0, 1.0) * (right - left).max(0.0);
+    let mag = look.frac.abs().clamp(0.0, 1.0);
+    // `max`/`min` take the sane side of a stray NaN, keeping the rect finite.
+    let bar = if look.frac < 0.0 {
+        Rect::from_min_max(pos2((axis_x - mag * (axis_x - left).max(0.0)).max(left), top), pos2(axis_x, bottom))
+    } else {
+        Rect::from_min_max(pos2(axis_x, top), pos2((axis_x + mag * (right - axis_x).max(0.0)).min(right), bottom))
+    };
+    (bar, look.axis.is_some().then_some(axis_x))
+}
+
+fn paint_data_bar(p: &egui::Painter, rect: Rect, bl: &BarLook) {
+    let (bar, axis_x) = bar_geometry(rect, bl);
+    let rgb = if bl.frac < 0.0 { bl.negative_fill } else { bl.color };
     let col = theme::color32(rgb);
-    if gradient {
+    if bl.gradient {
         let mut mesh = egui::Mesh::default();
         let light =
             Color32::from_rgb(((rgb[0] as u16 + 255 * 3) / 4) as u8, ((rgb[1] as u16 + 255 * 3) / 4) as u8, ((rgb[2] as u16 + 255 * 3) / 4) as u8);
+        // Solid at the axis, fading toward the far end; mirrored for negative bars.
+        let corners = if bl.frac < 0.0 {
+            [(bar.left_top(), light), (bar.right_top(), col), (bar.right_bottom(), col), (bar.left_bottom(), light)]
+        } else {
+            [(bar.left_top(), col), (bar.right_top(), light), (bar.right_bottom(), light), (bar.left_bottom(), col)]
+        };
         let i = mesh.vertices.len() as u32;
-        for (pt, cc) in [(bar.left_top(), col), (bar.right_top(), light), (bar.right_bottom(), light), (bar.left_bottom(), col)] {
+        for (pt, cc) in corners {
             mesh.colored_vertex(pt, cc);
         }
         mesh.add_triangle(i, i + 1, i + 2);
@@ -298,6 +325,13 @@ fn paint_data_bar(p: &egui::Painter, rect: Rect, frac: f32, rgb: [u8; 3], gradie
         p.rect_stroke(bar, 0.0, Stroke::new(1.0, col), StrokeKind::Inside);
     } else {
         p.rect_filled(bar, 0.0, col);
+    }
+    // The rule's border colour, already resolved to the negative one for negative bars.
+    if let Some(border) = bl.border {
+        p.rect_stroke(bar, 0.0, Stroke::new(1.0, theme::color32(border)), StrokeKind::Inside);
+    }
+    if let (Some(x), Some(axis)) = (axis_x, bl.axis) {
+        p.line_segment([pos2(x, rect.top() + 2.0), pos2(x, rect.bottom() - 2.0)], Stroke::new(1.0, theme::color32(axis)));
     }
 }
 

@@ -5,8 +5,8 @@ use std::fmt::Write as _;
 
 use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::{
-    Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, LineInfo, NoteBox, NoteCorner, Orientation, PageOrder,
-    Sheet, SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
+    Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, IconChoice, LineInfo, NoteBox, NoteCorner, Orientation,
+    PageOrder, Sheet, SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds,
 };
 
 use crate::drawing::{Obj, image_content_type, image_ext};
@@ -23,7 +23,7 @@ mod rules;
 
 pub(crate) use parts::password_attrs;
 use parts::{autofilter_xml, comments_xml, protected_ranges_xml, table_columns, table_name, table_xml, thread_ids, threaded_xml, vml_xml};
-use rules::{cf_rule_xml, solid_bar_id, validation_xml, x14_cfvo};
+use rules::{cf_rule_xml, validation_xml};
 
 fn sqref(ranges: &[RangeRef]) -> String {
     ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(" ")
@@ -193,7 +193,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
 
     write_sheet_data(&mut s, SheetCellData { workbook: wb, index: si, sheet, overrides: &overrides, extra: &extra, dynamic: &dynamic }, &sid, out);
 
-    let prio = write_sheet_rules(&mut s, sheet, &mut rels, out);
+    let (prio, x14_cfs) = write_sheet_rules(&mut s, sheet, &mut rels, out);
     let kept = write_sheet_printing(&mut s, sheet, &mut rels, out);
 
     write_sheet_drawing(&mut s, wb, si, sheet, &mut rels, out);
@@ -214,7 +214,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         }
         let _ = write!(s, "<tableParts count=\"{}\">{parts}</tableParts>", tables.len());
     }
-    write_sheet_extensions(&mut s, sheet, &prio);
+    write_sheet_extensions(&mut s, sheet, &prio, &x14_cfs);
     s.push_str("</worksheet>");
     (s, rels)
 }
@@ -228,56 +228,56 @@ struct CellWriteInput<'a> {
     dynamic_range: Option<&'a RangeRef>,
 }
 
-fn write_sheet_extensions(s: &mut String, sheet: &Sheet, prio: &[u32]) {
-    // Excel 2010 extensions: solid data bars, then sparklines.
-    let solid_bars: Vec<(&CondFormat, u32)> = sheet
-        .cond_formats
-        .iter()
-        .enumerate()
-        .filter(|(_, cf)| !cf.ranges.is_empty() && matches!(cf.rule, CfRule::DataBar { gradient: false, .. }))
-        .map(|(i, cf)| (cf, prio.get(i).copied().unwrap_or(1)))
-        .collect();
-    if !solid_bars.is_empty() || !sheet.sparklines.is_empty() {
+fn write_sheet_extensions(s: &mut String, sheet: &Sheet, prio: &[u32], x14_cfs: &[String]) {
+    // Excel 2010 extensions share one worksheet extLst: conditional formats first (the x14
+    // rule bodies `write_sheet_rules` collected, linked to their classic rules by the id ext
+    // inside them), then sparklines.
+    let cf_ext = if x14_cfs.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<ext uri=\"{}\" xmlns:x14=\"{}\"><x14:conditionalFormattings>{}</x14:conditionalFormattings></ext>",
+            rules::URI_X14_CF,
+            rules::NS_X14,
+            x14_cfs.join("")
+        )
+    };
+    if !cf_ext.is_empty() || !sheet.sparklines.is_empty() {
         s.push_str("<extLst>");
-    }
-    if !solid_bars.is_empty() {
-        let _ = write!(
-            s,
-            "<ext uri=\"{{78C0D931-6437-407d-A8A1-0F90B4350D7D}}\" xmlns:x14=\"{X14_NS}\" xmlns:xm=\"{XM_NS}\"><x14:conditionalFormattings>"
-        );
-        for (cf, p) in &solid_bars {
-            if let CfRule::DataBar { min, max, .. } = &cf.rule {
-                let (id, lo, hi) = (solid_bar_id(*p), x14_cfvo(min), x14_cfvo(max));
-                let _ = write!(s, "<x14:conditionalFormatting><x14:cfRule type=\"dataBar\" id=\"{id}\"><x14:dataBar gradient=\"0\">{lo}{hi}");
-                let _ = write!(s, "</x14:dataBar></x14:cfRule><xm:sqref>{}</xm:sqref></x14:conditionalFormatting>", sqref(&cf.ranges));
-            }
-        }
-        s.push_str("</x14:conditionalFormattings></ext>");
-    }
-    if !sheet.sparklines.is_empty() {
-        let _ = write!(s, "<ext uri=\"{{05C60535-1F16-4fd2-B633-F4F36F0B64E0}}\" xmlns:x14=\"{X14_NS}\"><x14:sparklineGroups xmlns:xm=\"{XM_NS}\">");
-        for sp in &sheet.sparklines {
-            let ty = match sp.kind {
-                SparklineKind::Line => "",
-                SparklineKind::Column => " type=\"column\"",
-                SparklineKind::WinLoss => " type=\"stacked\"",
-            };
-            let src =
-                if sp.source.contains('!') { sp.source.clone() } else { format!("{}!{}", gridcraft_formula::quote_sheet(&sheet.name), sp.source) };
-            let color = if sp.color == Color::Auto { "rgb=\"FF376092\"".to_string() } else { color_attrs(&sp.color) };
+        s.push_str(&cf_ext);
+        if !sheet.sparklines.is_empty() {
             let _ = write!(
                 s,
-                "<x14:sparklineGroup displayEmptyCellsAs=\"gap\"{ty}{}><x14:colorSeries {color}/><x14:sparklines><x14:sparkline><xm:f>{}</xm:f><xm:sqref>{}</xm:sqref></x14:sparkline></x14:sparklines></x14:sparklineGroup>",
-                if sp.markers { " markers=\"1\"" } else { "" },
-                esc(&src),
-                sp.cell.a1()
+                "<ext uri=\"{}\" xmlns:x14=\"{}\"><x14:sparklineGroups xmlns:xm=\"{}\">",
+                rules::URI_SPARKLINES,
+                rules::NS_X14,
+                rules::NS_XM
             );
+            for sp in &sheet.sparklines {
+                let ty = match sp.kind {
+                    SparklineKind::Line => "",
+                    SparklineKind::Column => " type=\"column\"",
+                    SparklineKind::WinLoss => " type=\"stacked\"",
+                };
+                let src = if sp.source.contains('!') {
+                    sp.source.clone()
+                } else {
+                    format!("{}!{}", gridcraft_formula::quote_sheet(&sheet.name), sp.source)
+                };
+                let color = if sp.color == Color::Auto { "rgb=\"FF376092\"".to_string() } else { color_attrs(&sp.color) };
+                let _ = write!(
+                    s,
+                    "<x14:sparklineGroup displayEmptyCellsAs=\"gap\"{ty}{}><x14:colorSeries {color}/><x14:sparklines><x14:sparkline><xm:f>{}</xm:f><xm:sqref>{}</xm:sqref></x14:sparkline></x14:sparklines></x14:sparklineGroup>",
+                    if sp.markers { " markers=\"1\"" } else { "" },
+                    esc(&src),
+                    sp.cell.a1()
+                );
+            }
+            s.push_str("</x14:sparklineGroups></ext>");
         }
-        s.push_str("</x14:sparklineGroups></ext>");
-    }
-    if !solid_bars.is_empty() || !sheet.sparklines.is_empty() {
         s.push_str("</extLst>");
     }
+    let _ = prio; // priorities are baked into the collected rule bodies
 }
 
 fn write_sheet_notes(s: &mut String, sheet: &Sheet, si: usize, kept: &crate::passthrough::SheetKept<'_>, rels: &mut Rels, out: &mut Out) {
@@ -463,7 +463,7 @@ fn write_sheet_printing<'a>(s: &mut String, sheet: &'a Sheet, rels: &mut Rels, o
     kept
 }
 
-fn write_sheet_rules(s: &mut String, sheet: &Sheet, rels: &mut Rels, out: &mut Out) -> Vec<u32> {
+fn write_sheet_rules(s: &mut String, sheet: &Sheet, rels: &mut Rels, out: &mut Out) -> (Vec<u32>, Vec<String>) {
     // sheetProtection
     if let Some(p) = &sheet.protection {
         s.push_str("<sheetProtection sheet=\"1\" objects=\"1\" scenarios=\"1\"");
@@ -508,7 +508,9 @@ fn write_sheet_rules(s: &mut String, sheet: &Sheet, rels: &mut Rels, out: &mut O
         }
         s.push_str("</mergeCells>");
     }
-    // Conditional formats, priorities renumbered 1..n in priority order.
+    // Conditional formats, priorities renumbered 1..n in priority order. Rules carrying x14
+    // extensions also feed the sheet-level CF ext; x14-only rules (sets without a classic
+    // value) appear there alone, with no classic counterpart.
     let mut order: Vec<usize> = (0..sheet.cond_formats.len()).collect();
     order.sort_by_key(|&i| sheet.cond_formats.get(i).map(|c| c.priority).unwrap_or(0));
     let mut prio = vec![0u32; sheet.cond_formats.len()];
@@ -517,16 +519,22 @@ fn write_sheet_rules(s: &mut String, sheet: &Sheet, rels: &mut Rels, out: &mut O
             *p = rank as u32 + 1;
         }
     }
+    let mut x14_cfs: Vec<String> = Vec::new();
     for (i, cf) in sheet.cond_formats.iter().enumerate() {
         if cf.ranges.is_empty() {
             continue;
         }
-        let _ = write!(
-            s,
-            "<conditionalFormatting sqref=\"{}\">{}</conditionalFormatting>",
-            sqref(&cf.ranges),
-            cf_rule_xml(cf, prio.get(i).copied().unwrap_or(1), out)
-        );
+        let rule = cf_rule_xml(cf, prio.get(i).copied().unwrap_or(1), out);
+        if let Some(classic) = &rule.classic {
+            let _ = write!(s, "<conditionalFormatting sqref=\"{}\">{classic}</conditionalFormatting>", sqref(&cf.ranges));
+        }
+        if let Some(body) = rule.x14 {
+            x14_cfs.push(format!(
+                "<x14:conditionalFormatting xmlns:xm=\"{}\">{body}<xm:sqref>{}</xm:sqref></x14:conditionalFormatting>",
+                rules::NS_XM,
+                sqref(&cf.ranges)
+            ));
+        }
     }
     let vals: Vec<&Validation> = sheet.validations.iter().filter(|v| !v.ranges.is_empty()).collect();
     if !vals.is_empty() {
@@ -571,7 +579,7 @@ fn write_sheet_rules(s: &mut String, sheet: &Sheet, rels: &mut Rels, out: &mut O
         }
         s.push_str("</hyperlinks>");
     }
-    prio
+    (prio, x14_cfs)
 }
 
 struct SheetCellData<'a> {
@@ -844,9 +852,6 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
         }
     }
 }
-
-const X14_NS: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
-const XM_NS: &str = "http://schemas.microsoft.com/office/excel/2006/main";
 
 /// The box a note made here gets: two columns right of its cell, four rows tall, 108 x 59.25 pt.
 /// A box read from a file that equals it is kept as `None`, so a note's model survives a save.

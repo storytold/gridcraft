@@ -205,7 +205,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Conditional Formatting",
             ["Home", "Styles"],
             None,
-            "{range?, rule: {type: cellIs|expression|containsText|beginsWith|endsWith|blanks|noBlanks|errors|noErrors|duplicate|unique|top10|aboveAverage|timePeriod|colorScale|dataBar|iconSet, operator?, value?, value2?, formula?, text?, rank?, bottom?, percent?, below?, period?, colors?: [..], color?, set?, style?: {font?: {bold?, italic?, color?}, fill?: \"#FFC7CE\" | {pattern?, fg?, bg?}, borders?, num_fmt?} (colours \"#RRGGBB\") | preset?: lightRedFill|redText|yellowFill|greenFill|redBorder|lightRedFillDarkRedText…}; a text `value` is matched as text, or kept when already a quoted literal}",
+            "{range?, rule: {type: cellIs|expression|containsText|beginsWith|endsWith|blanks|noBlanks|errors|noErrors|duplicate|unique|top10|aboveAverage|timePeriod|colorScale|dataBar|iconSet, operator?, value?, value2?, formula?, text?, rank?, bottom?, percent?, below?, period?, colors?: [..], color?, set?, min?: {type: min|max|autoMin|autoMax|num|percent|percentile|formula}, max?: {type: min|max|autoMin|autoMax|num|percent|percentile|formula}, style?: {font?: {bold?, italic?, color?}, fill?: \"#FFC7CE\" | {pattern?, fg?, bg?}, borders?, num_fmt?} (colours \"#RRGGBB\") | preset?: lightRedFill|redText|yellowFill|greenFill|redBorder|lightRedFillDarkRedText…}; a text `value` is matched as text, or kept when already a quoted literal}",
             has_doc,
             add_cf
         ),
@@ -1639,6 +1639,10 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
                 let t = o.get("type").and_then(Json::as_str).unwrap_or("num");
                 let val = o.get("value").and_then(Json::as_f64).unwrap_or(0.0);
                 match t {
+                    // A data bar's Automatic bounds (the Data Bars gallery's default), apart from
+                    // Lowest/Highest Value ("min"/"max") as in Excel.
+                    "autoMin" => CfValueKind::AutoMin,
+                    "autoMax" => CfValueKind::AutoMax,
                     "min" => CfValueKind::Min,
                     "max" => CfValueKind::Max,
                     "percent" => CfValueKind::Percent(val),
@@ -1720,12 +1724,18 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
             color: super::format::color_param(rule.get("color")).unwrap_or(Color::rgb(0x63, 0x8E, 0xC6)),
             gradient: rule.get("gradient").and_then(Json::as_bool).unwrap_or(true),
             show_value: true,
+            border: None,
+            negative_fill: None,
+            negative_border: None,
+            axis: None,
+            limits: None,
         },
         "iconSet" => CfRule::IconSet {
             set: g("set").unwrap_or_else(|| "3TrafficLights1".into()),
             thresholds: vec![],
             reverse: rule.get("reverse").and_then(Json::as_bool).unwrap_or(false),
             show_value: true,
+            icons: None,
         },
         other => return Err(bad("home.conditionalFormat", format!("unknown rule type `{other}`"))),
     };

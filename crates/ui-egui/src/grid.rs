@@ -37,6 +37,7 @@ mod show;
 mod tables;
 
 pub(crate) use cell_paint::paint_border;
+pub use cell_paint::{IconShape, cf_icon_shape};
 #[cfg(test)]
 pub(crate) use cell_paint::{cell_text_y, rotated_text_pos, wrapped_cell_text_y};
 #[cfg(test)]
@@ -46,6 +47,7 @@ pub use editor::validation_arrow;
 use editor::{editor_slack, editor_width, list_picker_height};
 pub use geo::Geo;
 pub use interact::{follow_link, freeze_handles, point_move};
+pub use quadrant::bar_geometry;
 pub(crate) use quadrant::{QuadrantPaint, paint_quadrant};
 pub use selection::selection_fill;
 pub(crate) use selection::{SelectionPaintInput, paint_selection};

@@ -152,12 +152,18 @@ fn sample() -> Workbook {
             color: Color::Rgb(0x638EC6),
             gradient: true,
             show_value: false,
+            border: None,
+            negative_fill: None,
+            negative_border: None,
+            axis: None,
+            limits: None,
         },
         CfRule::IconSet {
             set: "3Arrows".into(),
             thresholds: vec![CfValueKind::Percent(0.0), CfValueKind::Percent(33.0), CfValueKind::Percent(67.0)],
             reverse: true,
             show_value: false,
+            icons: None,
         },
     ];
     for (i, rule) in cfs.into_iter().enumerate() {
@@ -972,7 +978,7 @@ fn icon_sets_always_write_one_cfvo_per_icon() {
     {
         s.cond_formats.push(CondFormat {
             ranges: vec![rr(&format!("A{}", i + 1))],
-            rule: CfRule::IconSet { set: set.into(), thresholds, reverse: false, show_value: true },
+            rule: CfRule::IconSet { set: set.into(), thresholds, reverse: false, show_value: true, icons: None },
             priority: i as u32 + 1,
             stop_if_true: false,
         });
@@ -1002,6 +1008,229 @@ fn icon_sets_always_write_one_cfvo_per_icon() {
         })
         .collect();
     assert_eq!(rules, [3, 4, 5]);
+}
+
+/// #703: x14 conditional-format extensions write in Excel's shape and survive a round trip —
+/// solid bars with border/negative colours/axis/length limits, custom icon sets, x14-only sets
+/// (`5Boxes`) — sharing the worksheet `extLst` with sparklines, conditional formats first.
+/// A plain gradient bar carries nothing x14 and must not grow an extension.
+#[test]
+fn x14_extensions_round_trip() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    for (i, v) in [-40.0, -12.0, 0.0, 5.0, 9.0, 33.0, 50.0, 67.0, 100.0].into_iter().enumerate() {
+        s.set_value(CellRef::new(i as u32 + 1, 1), Value::Number(v));
+    }
+    // (a) Solid bar with every extension field set.
+    s.cond_formats.push(CondFormat {
+        ranges: vec![rr("B2:B10")],
+        rule: CfRule::DataBar {
+            min: CfValueKind::Number(0.0),
+            max: CfValueKind::Number(100.0),
+            color: Color::Rgb(0x638EC6),
+            gradient: false,
+            show_value: true,
+            border: Some(Color::Rgb(0xFF0000)),
+            negative_fill: Some(Color::Rgb(0xFF00FF)),
+            negative_border: Some(Color::Rgb(0x0000FF)),
+            axis: Some(Color::Rgb(0x00FF00)),
+            limits: Some((10, 90)),
+        },
+        priority: 1,
+        stop_if_true: false,
+    });
+    // (b) Plain gradient bar: must NOT grow an ext.
+    s.cond_formats.push(CondFormat {
+        ranges: vec![rr("C2:C10")],
+        rule: CfRule::DataBar {
+            min: CfValueKind::Min,
+            max: CfValueKind::Max,
+            color: Color::Rgb(0x638EC6),
+            gradient: true,
+            show_value: true,
+            border: None,
+            negative_fill: None,
+            negative_border: None,
+            axis: None,
+            limits: None,
+        },
+        priority: 2,
+        stop_if_true: false,
+    });
+    // (c) Bare solid bar: solid fill is x14-only, everything else stays default — flags and
+    // colour elements omitted, axisPosition="none".
+    s.cond_formats.push(CondFormat {
+        ranges: vec![rr("G2:G10")],
+        rule: CfRule::DataBar {
+            min: CfValueKind::Min,
+            max: CfValueKind::Max,
+            color: Color::Rgb(0x638EC6),
+            gradient: false,
+            show_value: true,
+            border: None,
+            negative_fill: None,
+            negative_border: None,
+            axis: None,
+            limits: None,
+        },
+        priority: 3,
+        stop_if_true: false,
+    });
+    // (d) Custom icon set: classic set with per-position icons from another set.
+    s.cond_formats.push(CondFormat {
+        ranges: vec![rr("D2:D10")],
+        rule: CfRule::IconSet {
+            set: "3Arrows".into(),
+            thresholds: default_icon_thresholds("3Arrows"),
+            reverse: false,
+            show_value: true,
+            icons: Some((0..3).map(|id| IconChoice { set: "3Triangles".into(), id }).collect()),
+        },
+        priority: 4,
+        stop_if_true: false,
+    });
+    // (e) `5Boxes` exists only in x14: an x14-only rule with no classic counterpart.
+    s.cond_formats.push(CondFormat {
+        ranges: vec![rr("E2:E10")],
+        rule: CfRule::IconSet { set: "5Boxes".into(), thresholds: default_icon_thresholds("5Boxes"), reverse: false, show_value: true, icons: None },
+        priority: 5,
+        stop_if_true: false,
+    });
+    // (f) A sparkline sharing the worksheet extLst.
+    s.sparklines.push(Sparkline {
+        cell: at("F2"),
+        source: "Sheet1!B2:B10".into(),
+        kind: SparklineKind::Line,
+        color: Color::Rgb(0x376092),
+        markers: false,
+    });
+
+    let bytes = write_xlsx(&wb).unwrap();
+    let (xml, _) = sheet1_xml(&bytes);
+    // The id ext sits inside the rule element (Excel's shape, PR #610), not after it.
+    assert!(xml.contains("<x14:id>{00000000-0000-0000-0000-000000000001}</x14:id></ext></extLst></dataBar>"), "{xml}");
+    assert!(xml.contains("<x14:id>{00000000-0000-0000-0000-000000000004}</x14:id></ext></extLst></iconSet>"), "{xml}");
+    // x14 cfvo values are xm:f children, never val attributes.
+    assert!(xml.contains("<x14:cfvo type=\"num\"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type=\"num\"><xm:f>100</xm:f></x14:cfvo>"), "{xml}");
+    for rest in xml.split("<x14:cfvo ").skip(1) {
+        let head = rest.split('>').next().unwrap();
+        assert!(!head.contains("val="), "an x14 cfvo carries a val attribute: {head}");
+    }
+    // MS-XLSX §2.6.30: the colour children are flat color-attribute elements, in the schema
+    // sequence, each with its same-as-positive flag "0"; fillColor mirrors the classic colour.
+    assert!(
+        xml.contains(
+            "<x14:dataBar minLength=\"10\" maxLength=\"90\" gradient=\"0\" border=\"1\" negativeBarColorSameAsPositive=\"0\" negativeBarBorderColorSameAsPositive=\"0\">\
+<x14:cfvo type=\"num\"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type=\"num\"><xm:f>100</xm:f></x14:cfvo>\
+<x14:fillColor rgb=\"FF638EC6\"/><x14:borderColor rgb=\"FFFF0000\"/><x14:negativeFillColor rgb=\"FFFF00FF\"/>\
+<x14:negativeBorderColor rgb=\"FF0000FF\"/><x14:axisColor rgb=\"FF00FF00\"/></x14:dataBar>"
+        ),
+        "{xml}"
+    );
+    // A bare solid bar: omitted flags and elements, no axis, no border. Min/Max are
+    // Lowest/Highest Value — x14 `min`/`max`, not the gallery's `autoMin`/`autoMax` (#1159).
+    assert!(
+        xml.contains(
+            "<x14:dataBar gradient=\"0\" axisPosition=\"none\">\
+<x14:cfvo type=\"min\"/><x14:cfvo type=\"max\"/><x14:fillColor rgb=\"FF638EC6\"/></x14:dataBar>"
+        ),
+        "{xml}"
+    );
+    // The nested container shape does not exist in the schema.
+    assert!(!xml.contains("<x14:border>") && !xml.contains("<x14:negativeFill>") && !xml.contains("<x14:axis>"), "{xml}");
+    // The conditional-format ext precedes the sparkline ext; one worksheet extLst holds both.
+    let (cf_at, spark_at) = (xml.find("{78C0D931").unwrap(), xml.find("{05C60535").unwrap());
+    assert!(cf_at < spark_at, "{xml}");
+    assert_eq!(xml.matches("<extLst>").count(), 4, "one inside each extended rule element plus the worksheet's: {xml}");
+    // The plain gradient bar's rule stays classic-only.
+    let plain = xml.split("<conditionalFormatting sqref=\"C2:C10\">").nth(1).unwrap().split("</conditionalFormatting>").next().unwrap();
+    assert!(!plain.contains("extLst") && !plain.contains("x14:"), "a plain gradient bar grows an ext: {plain}");
+    // The x14-only set lives in the extension alone.
+    assert!(xml.contains("<x14:iconSet iconSet=\"5Boxes\">"), "{xml}");
+    assert!(!xml.contains("<iconSet iconSet=\"5Boxes\">"), "{xml}");
+
+    let (back, rep) = read_xlsx(&bytes).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    assert_eq!(back.sheet(0).unwrap().cond_formats, wb.sheet(0).unwrap().cond_formats);
+    assert_eq!(back.sheet(0).unwrap().sparklines, wb.sheet(0).unwrap().sparklines);
+}
+
+/// #703: the x14 dataBar must mirror the classic `showValue="0"` — if Excel merges the x14
+/// refinement over the classic rule, hidden values would reappear without it.
+#[test]
+fn x14_databar_mirrors_hidden_values() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    s.cond_formats.push(CondFormat {
+        ranges: vec![rr("B2:B10")],
+        rule: CfRule::DataBar {
+            min: CfValueKind::Min,
+            max: CfValueKind::Max,
+            color: Color::Rgb(0x638EC6),
+            gradient: false,
+            show_value: false,
+            border: None,
+            negative_fill: None,
+            negative_border: None,
+            axis: None,
+            limits: None,
+        },
+        priority: 1,
+        stop_if_true: false,
+    });
+    let bytes = write_xlsx(&wb).unwrap();
+    let (xml, _) = sheet1_xml(&bytes);
+    // Both sides carry the flag: the classic bar and its x14 refinement.
+    assert!(xml.contains("<dataBar showValue=\"0\">"), "{xml}");
+    assert!(xml.contains("<x14:dataBar showValue=\"0\" gradient=\"0\" axisPosition=\"none\">"), "{xml}");
+    let (back, rep) = read_xlsx(&bytes).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    assert_eq!(back.sheet(0).unwrap().cond_formats, wb.sheet(0).unwrap().cond_formats);
+}
+
+/// #703: MS-XLSX couples `negativeBorderColor` to `border="1"` (the element MUST exist iff
+/// `negativeBarBorderColorSameAsPositive="0"` *and* `border="1"`). A negative border colour
+/// without a border is not expressible, so writing forces the border on with an automatic
+/// colour — a one-way normalisation: the corner reads back with `border: Some(_)`, its
+/// negative border colour intact.
+#[test]
+fn negative_border_forces_the_x14_border() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    s.cond_formats.push(CondFormat {
+        ranges: vec![rr("B2:B10")],
+        rule: CfRule::DataBar {
+            min: CfValueKind::Min,
+            max: CfValueKind::Max,
+            color: Color::Rgb(0x638EC6),
+            gradient: false,
+            show_value: true,
+            border: None,
+            negative_fill: None,
+            negative_border: Some(Color::Rgb(0xFF0000)),
+            axis: None,
+            limits: None,
+        },
+        priority: 1,
+        stop_if_true: false,
+    });
+    let bytes = write_xlsx(&wb).unwrap();
+    let (xml, _) = sheet1_xml(&bytes);
+    assert!(
+        xml.contains(
+            "<x14:dataBar gradient=\"0\" border=\"1\" negativeBarBorderColorSameAsPositive=\"0\" axisPosition=\"none\">\
+<x14:cfvo type=\"min\"/><x14:cfvo type=\"max\"/><x14:fillColor rgb=\"FF638EC6\"/>\
+<x14:borderColor auto=\"1\"/><x14:negativeBorderColor rgb=\"FFFF0000\"/></x14:dataBar>"
+        ),
+        "{xml}"
+    );
+    let (back, rep) = read_xlsx(&bytes).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let CfRule::DataBar { border, negative_border, .. } = &back.sheet(0).unwrap().cond_formats[0].rule else {
+        panic!("not a data bar: {:?}", back.sheet(0).unwrap().cond_formats[0].rule)
+    };
+    assert!(border.is_some(), "the border was forced on");
+    assert_eq!(*negative_border, Some(Color::Rgb(0xFF0000)), "the negative border colour survives");
 }
 
 /// Files have no `@` operator: Excel writes `@x` as `_xlfn.SINGLE(x)` in a dynamic-array
@@ -1226,6 +1455,43 @@ fn package_kind_sets_workbook_content_type() {
     assert_eq!(crate::XlsxKind::from_path("noext"), crate::XlsxKind::Workbook);
 }
 
+/// #1159: Automatic bounds keep apart from Lowest/Highest Value. An Automatic bar grows an x14
+/// rule (the classic section cannot express the difference), writes `min`/`max` there with
+/// `autoMin`/`autoMax` in the x14 refinement — never `autoMin` in the classic section — and
+/// reads back with its Automatic bounds intact.
+#[test]
+fn automatic_databar_bounds_survive_a_round_trip() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    s.cond_formats.push(CondFormat {
+        ranges: vec![rr("A1:A10")],
+        rule: CfRule::DataBar {
+            min: CfValueKind::AutoMin,
+            max: CfValueKind::AutoMax,
+            color: Color::Rgb(0x638EC6),
+            gradient: true,
+            show_value: true,
+            border: None,
+            negative_fill: None,
+            negative_border: None,
+            axis: None,
+            limits: None,
+        },
+        priority: 1,
+        stop_if_true: false,
+    });
+    let bytes = write_xlsx(&wb).unwrap();
+    let (xml, _) = sheet1_xml(&bytes);
+    // Classic section: Lowest/Highest names only.
+    assert!(xml.contains("<cfvo type=\"min\"/><cfvo type=\"max\"/>"), "{xml}");
+    assert!(!xml.contains("val=\"autoMin\"") && !xml.contains("<cfvo type=\"autoMin\""), "no autoMin in the classic section: {xml}");
+    // The x14 refinement carries the Automatic bounds.
+    assert!(xml.contains("<x14:cfvo type=\"autoMin\"/><x14:cfvo type=\"autoMax\"/>"), "{xml}");
+    let (back, rep) = read_xlsx(&bytes).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    assert_eq!(back.sheet(0).unwrap().cond_formats, wb.sheet(0).unwrap().cond_formats);
+}
+
 /// The workbook's default font (`fonts[0]`, the Normal style's) is what every default-formatted
 /// cell shows, typed or empty; saving keeps it instead of resetting it to Calibri 11 (#805).
 #[test]
@@ -1362,8 +1628,18 @@ fn solid_data_bar_survives_with_sparklines_and_gradient_neighbours() {
     let mut wb = Workbook::new();
     let s = wb.sheet_mut(0).unwrap();
     s.set_value(at("A1"), Value::Number(1.0));
-    let bar =
-        |gradient: bool, max: CfValueKind| CfRule::DataBar { min: CfValueKind::Min, max, color: Color::Rgb(0x638EC6), gradient, show_value: true };
+    let bar = |gradient: bool, max: CfValueKind| CfRule::DataBar {
+        min: CfValueKind::Min,
+        max,
+        color: Color::Rgb(0x638EC6),
+        gradient,
+        show_value: true,
+        border: None,
+        negative_fill: None,
+        negative_border: None,
+        axis: None,
+        limits: None,
+    };
     let rules = [(true, "A1", CfValueKind::Max), (false, "B1", CfValueKind::Formula("$C$1".into())), (false, "D1:D3", CfValueKind::Number(9.0))];
     for (i, (gradient, range, max)) in rules.into_iter().enumerate() {
         s.cond_formats.push(CondFormat { ranges: vec![rr(range)], rule: bar(gradient, max), priority: i as u32 + 1, stop_if_true: false });

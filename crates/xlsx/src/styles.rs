@@ -363,8 +363,9 @@ pub fn read_styles(root: &El, checkboxes: &[bool], minor_font: &str) -> StylesIn
     StylesIn { xfs, dxfs, palette, named, num_fmts: fmts }
 }
 
-/// One differential format (`dxf`): the style it sets over a cell's own.
-fn read_dxf(x: &El, palette: &[u32], fmts: &HashMap<u32, String>) -> Style {
+/// One `<dxf>` (differential format) element as a model style. The inline `<x14:dxf>` of an
+/// x14-only conditional-format rule has the same child shape, so both readers share this.
+pub(crate) fn read_dxf(x: &El, palette: &[u32], fmts: &HashMap<u32, String>) -> Style {
     let mut s = Style::default();
     if let Some(e) = x.child("font") {
         let f = read_font(e, palette);

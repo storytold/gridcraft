@@ -160,6 +160,8 @@ fn read_sheet_format(e: &El, sheet: &mut Sheet) {
 /// Reads the sheet part `part`, with the VML shape numbers of the form controls read into the
 /// model (pass-through keeps the other controls).
 pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, crate::controls::ReadControls), IoError> {
+    // The x14 ids recorded by read_cf index this sheet's cond_formats only.
+    cx.cf_ext_ids.clear();
     let bytes = cx.pkg.read(part)?.ok_or_else(|| IoError::Format(format!("missing part {part}")))?;
     let rels = cx.pkg.rels(part)?;
     let mut sheet = Sheet::new(name);
@@ -724,7 +726,6 @@ pub fn parse_sqref(s: Option<&str>) -> Vec<RangeRef> {
     s.unwrap_or("").split_whitespace().filter_map(RangeRef::parse).collect()
 }
 
-/// Worksheet extensions: x14 data validations and sparklines.
 fn read_ext(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
     for ext in e.kids("ext") {
         for c in &ext.children {
@@ -753,23 +754,7 @@ fn read_ext(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
                         }
                     }
                 }
-                "conditionalFormattings" => {
-                    let mut skipped = false;
-                    for r in c.kids("conditionalFormatting").flat_map(|f| f.kids("cfRule")) {
-                        let idx = r.attr("id").and_then(|id| cx.cf_ext_ids.iter().find(|(i, _)| i == id)).map(|(_, n)| *n);
-                        match (idx.and_then(|n| sheet.cond_formats.get_mut(n)), r.child("dataBar")) {
-                            (Some(CondFormat { rule: CfRule::DataBar { gradient, .. }, .. }), Some(db)) => {
-                                *gradient = db.flag("gradient", true);
-                                // Only the fill style is modelled; borders, lengths, axis or negative colours are lost.
-                                skipped |= db.attrs.iter().any(|(k, _)| k != "gradient") || db.children.iter().any(|k| k.name != "cfvo");
-                            }
-                            _ => skipped = true,
-                        }
-                    }
-                    if skipped {
-                        cx.warn("some Excel 2010 conditional format extensions were skipped");
-                    }
-                }
+                "conditionalFormattings" => rules::read_x14_conditional_formats(cx, c, sheet),
                 _ => {}
             }
         }

@@ -13,11 +13,26 @@ pub struct CfLook {
     pub style: Option<Style>,
     /// Fill from a colour scale (RGB).
     pub scale_fill: Option<[u8; 3]>,
-    /// Data bar: fraction 0..=1 of the cell width, colour, gradient.
-    pub bar: Option<(f32, [u8; 3], bool)>,
+    /// Data bar geometry and colours.
+    pub bar: Option<BarLook>,
     /// Icon: set name and index (0 = lowest).
     pub icon: Option<(String, usize)>,
     pub hide_value: bool,
+}
+
+/// One cell's data bar: how the UI paints it. `frac` is signed — the magnitude is the bar's
+/// width as a fraction of the drawable width on its side of the axis (honouring the rule's
+/// `limits`), the sign the side it grows to; `axis_frac` is where zero falls across the
+/// drawable width (0 = left edge, 1 = right).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BarLook {
+    pub frac: f32,
+    pub axis_frac: f32,
+    pub color: [u8; 3],
+    pub gradient: bool,
+    pub border: Option<[u8; 3]>,
+    pub negative_fill: [u8; 3],
+    pub axis: Option<[u8; 3]>,
 }
 
 /// Precomputed statistics per rule (min/max/percentiles/top-N thresholds/duplicates).
@@ -112,10 +127,50 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
     a + (b - a) * (rank - lo as f64)
 }
 
+/// Where a data bar's axis sits between the bounds: where zero falls, or the edge nearest zero
+/// when the bounds do not span it (an all-negative range parks it at the right edge, measured
+/// in #1159).
+fn axis_position(lo: f64, hi: f64) -> f64 {
+    if hi > lo {
+        ((0.0 - lo) / (hi - lo)).clamp(0.0, 1.0)
+    } else if lo < 0.0 {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+/// A data bar's share of its side, `n` between the bounds `lo`..`hi`. With bounds that span
+/// zero the axis sits at zero and each bar is its value's share of its own side (the side's
+/// extreme reaching from the axis to that side's edge). Otherwise the axis parks at the edge
+/// nearest zero and the bar is the value's place between the bounds, measured from that edge —
+/// Excel's (value − min) / (max − min), clamped, for Lowest/Number/Percent/Percentile/Formula
+/// bounds alike; only an Automatic minimum pulls the lower bound to zero (see [`threshold`]).
+/// Measured in Excel for Microsoft 365: Lowest–Highest over 10…20 gives 15 → 0.50 and Number
+/// 3–8 gives 4 → 0.20 (#1158); Automatic over 10…20 gives 10 → 0.50, and over −10…0 the
+/// axis-parked share gives −5 → 0.50 (#1159).
+fn bar_share(n: f64, lo: f64, hi: f64) -> f64 {
+    if lo < 0.0 && hi > 0.0 {
+        if n < 0.0 { (n / lo).clamp(0.0, 1.0) } else { (n / hi).clamp(0.0, 1.0) }
+    } else if hi <= 0.0 {
+        // All non-positive: the share runs from the upper bound.
+        if hi > lo { ((hi - n) / (hi - lo)).clamp(0.0, 1.0) } else { 0.0 }
+    } else if hi > lo {
+        ((n - lo) / (hi - lo)).clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
+}
+
 fn threshold(wb: &Workbook, sheet: usize, at: CellRef, st: &RuleStats, k: &CfValueKind) -> f64 {
     let min = st.sorted.first().copied().unwrap_or(0.0);
     let max = st.sorted.last().copied().unwrap_or(0.0);
     match k {
+        // A data bar's Automatic bounds: the minimum is pulled to zero unless the values go
+        // lower (the gallery's bar starts at 0, or at the lowest value when that is negative);
+        // the maximum is the highest value as-is.
+        CfValueKind::AutoMin => min.min(0.0),
+        CfValueKind::AutoMax => max,
         CfValueKind::Min => min,
         CfValueKind::Max => max,
         CfValueKind::Number(n) => *n,
@@ -301,25 +356,55 @@ impl CfCache {
                     }
                     None
                 }
-                CfRule::DataBar { min, max, color, gradient, show_value } => {
+                CfRule::DataBar { min, max, color, gradient, show_value, border, negative_fill, negative_border, axis, limits } => {
                     if let Some(n) = v.as_f64() {
                         let lo = threshold(wb, sheet, c, st, min);
                         let hi = threshold(wb, sheet, c, st, max);
-                        let lo = if lo > 0.0 { 0.0 } else { lo };
-                        let frac = if hi > lo { ((n - lo) / (hi - lo)).clamp(0.0, 1.0) } else { 1.0 };
+                        // The axis sits where zero falls between the bounds; bounds that don't
+                        // span zero park it on the edge nearest zero.
+                        let axis_pos = axis_position(lo, hi);
+                        // Bar length. With bounds that span zero the axis sits at zero and each
+                        // bar is its value's share of its own side (the side's extreme reaching
+                        // from the axis to that side's edge). Otherwise the axis parks at the
+                        // edge nearest zero and the bar is the value's place between the bounds,
+                        // measured from that edge — Excel's (value − min) / (max − min), clamped,
+                        // for Lowest/Number/Percent/Percentile/Formula bounds alike; only an
+                        // Automatic minimum pulls the lower bound to zero (see `threshold`).
+                        // Measured in Excel for Microsoft 365: Lowest–Highest over 10…20 gives
+                        // 15 → 0.50 and Number 3–8 gives 4 → 0.20 (#1158); Automatic over 10…20
+                        // gives 10 → 0.50 (#1159).
+                        // The share is mapped into the rule's length limits, Excel's default
+                        // 10/90 for a rule without an x14 extension.
+                        let u = bar_share(n, lo, hi);
+                        let (min_len, max_len) = limits.map(|(a, b)| (a.min(b) as f64 / 100.0, a.max(b) as f64 / 100.0)).unwrap_or((0.1, 0.9));
+                        let mag = min_len + u * (max_len - min_len);
+                        let finite = |x: f64| if x.is_finite() { x as f32 } else { 0.0 };
+                        let col = color.resolve(&wb.theme).unwrap_or([0x63, 0x8E, 0xC6]);
+                        // A negative bar takes its own border when the rule colours one,
+                        // falling back to the positive border (Excel couples them by default).
+                        let border_col = if n < 0.0 { negative_border.as_ref().or(border.as_ref()) } else { border.as_ref() };
                         if out.bar.is_none() {
-                            out.bar = Some((
-                                (frac as f32) * 0.9 + 0.1 * (frac > 0.0) as u8 as f32,
-                                color.resolve(&wb.theme).unwrap_or([0x63, 0x8E, 0xC6]),
-                                *gradient,
-                            ));
+                            out.bar = Some(BarLook {
+                                frac: finite(if n < 0.0 { -mag } else { mag }),
+                                axis_frac: finite(axis_pos),
+                                color: col,
+                                gradient: *gradient,
+                                border: border_col.and_then(|c| c.resolve(&wb.theme)),
+                                negative_fill: negative_fill
+                                    .as_ref()
+                                    .and_then(|c| c.resolve(&wb.theme))
+                                    // No explicit fill (and `negativeBarColorSameAsPositive` was
+                                    // resolved at read time): Excel's default red.
+                                    .unwrap_or([255, 0, 0]),
+                                axis: axis.as_ref().and_then(|c| c.resolve(&wb.theme)),
+                            });
                             out.hide_value |= !show_value;
                             any = true;
                         }
                     }
                     None
                 }
-                CfRule::IconSet { set, thresholds, reverse, show_value } => {
+                CfRule::IconSet { set, thresholds, reverse, show_value, icons } => {
                     if let Some(n) = v.as_f64() {
                         let k = icon_count(set);
                         // One threshold per icon, the first being the lower bound (as in the file);
@@ -339,7 +424,13 @@ impl CfCache {
                             idx = k - 1 - idx.min(k - 1);
                         }
                         if out.icon.is_none() {
-                            out.icon = Some((set.clone(), idx.min(k - 1)));
+                            // A custom icon for this slot (x14:cfIcon), which may come from
+                            // another set; an unnamed choice falls back to the rule's own.
+                            let icon = match icons.as_ref().and_then(|list| list.get(idx)) {
+                                Some(choice) => (if choice.set.is_empty() { set.clone() } else { choice.set.clone() }, choice.id as usize),
+                                None => (set.clone(), idx.min(k - 1)),
+                            };
+                            out.icon = Some(icon);
                             out.hide_value |= !show_value;
                             any = true;
                         }
@@ -413,6 +504,7 @@ fn relative(f: &str, first: CellRef, c: CellRef) -> String {
 
 #[cfg(test)]
 mod tests {
+    use gridcraft_model::IconChoice;
     use serde_json::json;
 
     use super::*;
@@ -572,6 +664,213 @@ mod tests {
         let mut cache = CfCache::new();
         let mut look = |a: &str| cache.look(&d.wb, 0, CellRef::parse(a).unwrap()).and_then(|l| l.style).is_some();
         assert_eq!([look("A1"), look("A2")], [true, false]);
+    }
+
+    /// Installs `rule` over `range` straight into the model — the x14 extensions have no command
+    /// parameters yet, so tests reach the sheet the way `review.rs` does.
+    fn add_rule(s: &mut crate::Session, range: &str, rule: CfRule) {
+        let i = s.doc().unwrap().wb.active_sheet();
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        std::sync::Arc::make_mut(&mut wb.sheets[i]).cond_formats.push(CondFormat {
+            ranges: vec![RangeRef::parse(range).unwrap()],
+            rule,
+            priority: 1,
+            stop_if_true: false,
+        });
+    }
+
+    /// A min..max data bar in the classic blue; the x14 parts come as arguments.
+    fn databar(border: Option<Color>, negative_fill: Option<Color>, negative_border: Option<Color>, limits: Option<(u8, u8)>) -> CfRule {
+        CfRule::DataBar {
+            min: CfValueKind::Min,
+            max: CfValueKind::Max,
+            color: Color::rgb(0x63, 0x8E, 0xC6),
+            gradient: true,
+            show_value: true,
+            border,
+            negative_fill,
+            negative_border,
+            axis: None,
+            limits,
+        }
+    }
+
+    #[test]
+    fn negative_bars_draw_left_with_negative_fill() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[-5], [1], [10]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "B1", "values": [[-5], [1], [10]]})).unwrap();
+        add_rule(&mut s, "A1:A3", databar(None, Some(Color::rgb(0xFF, 0x00, 0x00)), None, None));
+        // Borders: the rule's colour for positive bars, the negative one for negative bars.
+        add_rule(&mut s, "B1:B3", databar(Some(Color::rgb(0x11, 0x22, 0x33)), None, Some(Color::rgb(0x44, 0x55, 0x66)), None));
+        let d = s.doc().unwrap();
+        let mut cache = CfCache::new();
+        let mut bar = |a: &str| cache.look(&d.wb, 0, CellRef::parse(a).unwrap()).and_then(|l| l.bar);
+        let a1 = bar("A1").expect("the negative cell has a bar");
+        assert!(a1.frac < 0.0, "A1's bar grows left of the axis ({})", a1.frac);
+        assert!((a1.frac.abs() - 0.9).abs() < 1e-4, "the most negative value reaches the maximum length on its side ({})", a1.frac);
+        assert!(a1.axis_frac > 0.0 && a1.axis_frac < 1.0, "bounds spanning zero put the axis inside ({})", a1.axis_frac);
+        assert_eq!(a1.negative_fill, [255, 0, 0], "an explicit negative fill is resolved");
+        assert_eq!(a1.color, [0x63, 0x8E, 0xC6]);
+        assert_eq!(a1.border, None, "no border colour, no border");
+        let a3 = bar("A3").expect("the positive cell has a bar");
+        assert!(a3.frac > 0.0, "A3's bar grows right of the axis ({})", a3.frac);
+        assert!((a3.frac - 0.9).abs() < 1e-4, "the maximum value reaches the maximum length ({})", a3.frac);
+        assert_eq!(a3.color, [0x63, 0x8E, 0xC6]);
+        assert_eq!(a1.axis_frac, a3.axis_frac, "one rule, one axis");
+        assert_eq!(bar("B1").unwrap().border, Some([0x44, 0x55, 0x66]), "the negative bar borders in negative_border");
+        assert_eq!(bar("B3").unwrap().border, Some([0x11, 0x22, 0x33]), "the positive bar borders in border");
+        assert_eq!(bar("B1").unwrap().negative_fill, [255, 0, 0], "no explicit negative fill: Excel's default red");
+    }
+
+    #[test]
+    fn limits_scale_bar_width() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[-5], [1], [10]]})).unwrap();
+        add_rule(&mut s, "A1:A3", databar(None, None, None, Some((10, 90))));
+        let d = s.doc().unwrap();
+        let mut cache = CfCache::new();
+        let mut bar = |a: &str| cache.look(&d.wb, 0, CellRef::parse(a).unwrap()).and_then(|l| l.bar);
+        let a3 = bar("A3").expect("the max cell has a bar");
+        assert!((a3.frac.abs() - 0.9).abs() < 1e-4, "the max value reaches the 90% limit ({})", a3.frac);
+        let a2 = bar("A2").expect("the near-zero cell has a bar");
+        assert!(a2.frac.abs() >= 0.1, "a near-zero value keeps at least the minimum length ({})", a2.frac);
+        assert!((a2.axis_frac - 5.0 / 15.0).abs() < 1e-4, "the axis sits where zero falls ({})", a2.axis_frac);
+        assert_eq!(bar("A1").unwrap().negative_fill, [255, 0, 0], "no explicit negative fill: Excel's default red");
+    }
+
+    #[test]
+    fn degenerate_ranges_have_sane_geometry() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[-10], [-2]]})).unwrap();
+        add_rule(&mut s, "A1:A2", databar(None, None, None, None));
+        let d = s.doc().unwrap();
+        let mut cache = CfCache::new();
+        let bars: Vec<_> =
+            ["A1", "A2"].iter().map(|a| cache.look(&d.wb, 0, CellRef::parse(a).unwrap()).and_then(|l| l.bar).expect("a bar")).collect();
+        assert!((bars[0].axis_frac - 1.0).abs() < 1e-4, "all-negative bounds park the axis at the right edge ({})", bars[0].axis_frac);
+        for b in &bars {
+            assert!(b.frac.is_finite() && b.axis_frac.is_finite(), "no NaN geometry");
+            assert!((-1.0..=1.0).contains(&b.frac) && (0.0..=1.0).contains(&b.axis_frac));
+            assert!(b.frac <= 0.0, "negative cells stay on the left side ({})", b.frac);
+        }
+        // One repeated value (hi == lo) keeps the old full-bar fallback, not a NaN.
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[7], [7]]})).unwrap();
+        add_rule(&mut s, "A1:A2", databar(None, None, None, None));
+        let d = s.doc().unwrap();
+        let mut cache = CfCache::new();
+        for a in ["A1", "A2"] {
+            let b = cache.look(&d.wb, 0, CellRef::parse(a).unwrap()).and_then(|l| l.bar).expect("a bar");
+            assert!(b.frac.is_finite() && b.frac > 0.5 && b.frac <= 1.0, "a repeated value draws a full-length bar ({})", b.frac);
+            assert_eq!(b.axis_frac, 0.0);
+        }
+    }
+
+    #[test]
+    fn bar_lengths_match_excel() {
+        // Measured in Excel for Microsoft 365 (issues #1158 and #1159), tolerance 0.02: a data
+        // bar's length is the value's place between its bounds — (value − min) / (max − min),
+        // clamped — mapped into the rule's length limits (0–100 here, as Excel's own x14 rule
+        // stores); only an Automatic minimum pulls the lower bound to zero, and bounds spanning
+        // zero draw the axis at zero with each side scaled to its own extreme.
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        // A: Number 3–8 and Percent 20–80 over 0…10; B: Lowest–Highest over 10…20;
+        // C: Automatic over 10…20; D: Automatic with an axis over −5…5; E: over −10…0.
+        s.execute("range.setValues", json!({"range": "A1", "values": [[0],[1],[2],[3],[4],[5],[6],[7],[8],[9],[10]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "B1", "values": [[10],[11],[12],[13],[14],[15],[16],[17],[18],[19],[20]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "C1", "values": [[10],[11],[12],[13],[14],[15],[16],[17],[18],[19],[20]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "D1", "values": [[-5],[-4],[-3],[-2],[-1],[0],[1],[2],[3],[4],[5]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "E1", "values": [[-10],[-9],[-8],[-7],[-6],[-5],[-4],[-3],[-2],[-1],[0]]})).unwrap();
+        let bar = |min, max| CfRule::DataBar {
+            min,
+            max,
+            color: Color::rgb(0x63, 0x8E, 0xC6),
+            gradient: true,
+            show_value: true,
+            border: None,
+            negative_fill: None,
+            negative_border: None,
+            axis: None,
+            limits: Some((0, 100)),
+        };
+        add_rule(&mut s, "A1:A11", bar(CfValueKind::Number(3.0), CfValueKind::Number(8.0)));
+        // Percent 20–80 over 0…10: the percent bounds resolve against the range (2 and 8).
+        s.execute("range.setValues", json!({"range": "F1", "values": [[0],[1],[2],[3],[4],[5],[6],[7],[8],[9],[10]]})).unwrap();
+        add_rule(&mut s, "F1:F11", bar(CfValueKind::Percent(20.0), CfValueKind::Percent(80.0)));
+        add_rule(&mut s, "B1:B11", bar(CfValueKind::Min, CfValueKind::Max));
+        add_rule(&mut s, "C1:C11", bar(CfValueKind::AutoMin, CfValueKind::AutoMax));
+        add_rule(&mut s, "D1:D11", bar(CfValueKind::AutoMin, CfValueKind::AutoMax));
+        add_rule(&mut s, "E1:E11", bar(CfValueKind::AutoMin, CfValueKind::AutoMax));
+        let d = s.doc().unwrap();
+        let mut cache = CfCache::new();
+        let mut look = |a: &str| cache.look(&d.wb, 0, CellRef::parse(a).unwrap()).and_then(|l| l.bar);
+        let frac = |b: &Option<BarLook>| b.as_ref().map(|b| b.frac);
+        let close = |got: Option<f32>, want: f64, what: &str| {
+            let got = got.unwrap_or(f32::NAN);
+            assert!((f64::from(got) - want).abs() < 0.02, "{what}: {got} vs {want}");
+        };
+        // Number 3–8: the value's place between the bounds, not its share of the maximum.
+        close(frac(&look("A4")), 0.0, "Number 3–8, value 3");
+        close(frac(&look("A5")), 0.20, "Number 3–8, value 4");
+        close(frac(&look("A7")), 0.60, "Number 3–8, value 6");
+        close(frac(&look("A9")), 1.00, "Number 3–8, value 8");
+        // Percent 20–80 over 0…10: the bounds are 2 and 8, so 3 sits one sixth of the way.
+        close(frac(&look("F4")), 0.17, "Percent 20–80, value 3");
+        close(frac(&look("F6")), 0.50, "Percent 20–80, value 5");
+        // Lowest–Highest over 10…20: 15 sits half-way, not at 0.75 of the maximum.
+        close(frac(&look("B1")), 0.0, "Lowest–Highest, value 10");
+        close(frac(&look("B6")), 0.50, "Lowest–Highest, value 15");
+        close(frac(&look("B11")), 1.00, "Lowest–Highest, value 20");
+        // Automatic over 10…20: the minimum is pulled to zero, so the lowest value is half a bar.
+        close(frac(&look("C1")), 0.50, "Automatic, value 10");
+        close(frac(&look("C6")), 0.75, "Automatic, value 15");
+        close(frac(&look("C11")), 1.00, "Automatic, value 20");
+        // Automatic with bounds spanning zero: the axis at the middle, each side its own scale
+        // (the reported frac is of its side's half, so −1 reaches from the axis to the left edge).
+        let d1 = look("D1").expect("a bar");
+        assert!((d1.axis_frac - 0.5).abs() < 0.02, "the axis sits at zero ({})", d1.axis_frac);
+        close(frac(&look("D1")), -1.00, "axis, value −5");
+        close(frac(&look("D5")), -0.20, "axis, value −1");
+        close(frac(&look("D11")), 1.00, "axis, value 5");
+        // All non-positive: the axis parks at the right edge and bars grow left from it.
+        let e1 = look("E1").expect("a bar");
+        assert!((e1.axis_frac - 1.0).abs() < 0.02, "the axis parks at the right edge ({})", e1.axis_frac);
+        close(frac(&look("E1")), -1.00, "right-edge axis, value −10");
+        close(frac(&look("E6")), -0.50, "right-edge axis, value −5");
+    }
+
+    #[test]
+    fn custom_icons_resolve_per_slot() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[-5], [1], [10]]})).unwrap();
+        add_rule(
+            &mut s,
+            "A1:A3",
+            CfRule::IconSet {
+                set: "3Arrows".into(),
+                thresholds: vec![],
+                reverse: false,
+                show_value: true,
+                icons: Some(vec![
+                    IconChoice { set: "3Triangles".into(), id: 2 },
+                    IconChoice { set: "3Stars".into(), id: 1 },
+                    IconChoice { set: "5Boxes".into(), id: 3 },
+                ]),
+            },
+        );
+        let d = s.doc().unwrap();
+        let mut cache = CfCache::new();
+        let mut icon = |a: &str| cache.look(&d.wb, 0, CellRef::parse(a).unwrap()).and_then(|l| l.icon);
+        assert_eq!(icon("A1"), Some(("3Triangles".to_string(), 2)), "the lowest slot takes the first custom icon");
+        assert_eq!(icon("A2"), Some(("3Stars".to_string(), 1)));
+        assert_eq!(icon("A3"), Some(("5Boxes".to_string(), 3)), "the highest slot takes the last custom icon");
     }
 
     #[test]
