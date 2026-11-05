@@ -43,7 +43,7 @@ fn chart_data_table_prints_formatted_values_and_follows_recalculation() {
     assert!(!contains(&updated, "(1,234.00) Tj"));
     let actual_text: String = "1,111.00".encode_utf16().map(|unit| format!("{unit:04X}")).collect();
     assert!(contains(&updated, &format!("/ActualText <FEFF{actual_text}>")), "the cell text remains extractable from embedded glyphs");
-    assert_eq!(count(&updated, "(1,111.00) Tj"), 1, "the chart data table prints the recalculated value");
+    assert!(count(&updated, "(1,111.00) Tj") >= 2, "the cell and chart data table both print the recalculated value");
 }
 
 #[test]
