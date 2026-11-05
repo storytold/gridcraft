@@ -53,7 +53,9 @@ pub(in super::super) fn remove_validation_cells(validations: &mut Vec<Validation
             remaining.push(dv);
             continue;
         }
-        for range in std::mem::take(&mut dv.ranges) {
+        let mut ranges = std::mem::take(&mut dv.ranges);
+        ranges.sort_by_key(|range| (range.start.row, range.start.col, range.end.row, range.end.col));
+        for range in ranges {
             let mut split = dv.clone();
             split.ranges.push(range);
             split.f1 = move_rule_formula(&dv.f1, from, range.start);
