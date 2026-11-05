@@ -8,6 +8,7 @@ mod chart_combo_kinds;
 mod chart_data_table;
 mod chart_name_caches;
 mod chart_ref_offsets;
+mod controls_tests;
 mod csv_tests;
 mod encrypted_tests;
 mod equation_tests;
