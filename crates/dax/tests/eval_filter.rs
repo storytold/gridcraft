@@ -239,6 +239,53 @@ fn offset_outside_the_relation_needs_a_row_context() {
     assert_eq!(column(&table, "Shifted"), vec![Scalar::Blank, Scalar::Blank]);
 }
 
+#[test]
+fn offset_reads_the_frame_of_the_relation_own_table() {
+    // `OFFSET` runs inside `SUMX(Products, …)` while the window relation is `Sales`: the row
+    // context stack is [Sales, Products] and the frame that identifies the current Sales row is
+    // the outer one. A `Products` column that happens to hold "East" must not be mistaken for
+    // `Sales[Region]`.
+    let products = ModelTable {
+        name: "Products".into(),
+        columns: vec![
+            ModelColumn { name: "ProductKey".into(), data_type: Some("Int64".into()) },
+            ModelColumn { name: "Region".into(), data_type: Some("String".into()) },
+        ],
+        rows: vec![vec![Scalar::Integer(1), Scalar::String("East".into())]],
+    };
+    let sales = ModelTable {
+        name: "Sales".into(),
+        columns: vec![
+            ModelColumn { name: "OrderKey".into(), data_type: Some("Int64".into()) },
+            ModelColumn { name: "Region".into(), data_type: Some("String".into()) },
+            number_column("Amount"),
+        ],
+        rows: vec![
+            vec![Scalar::Integer(1), Scalar::String("East".into()), Scalar::Integer(100)],
+            vec![Scalar::Integer(2), Scalar::String("West".into()), Scalar::Integer(200)],
+            vec![Scalar::Integer(3), Scalar::String("East".into()), Scalar::Integer(300)],
+        ],
+    };
+    let model = DataModel { tables: vec![products, sales], relationships: vec![], measures: vec![] };
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let expr = parse_expression("ADDCOLUMNS(Sales, \"Previous\", SUMX(Products, COUNTROWS(OFFSET(-1, ALL(Sales[Region]), ORDERBY(Sales[Region])))))")
+        .expect("parse");
+    let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+    let table = evaluator.evaluate_table(&bound).expect("nested window evaluates");
+    // East is the first region, so only the West row has a previous entry; COUNTROWS of the empty
+    // relation is BLANK.
+    assert_eq!(column(&table, "Previous"), vec![Scalar::Blank, Scalar::Decimal(1.0), Scalar::Blank]);
+}
+
+#[test]
+fn offset_requires_a_row_context_of_the_relation_table() {
+    // A `Products` row does not identify a `Sales` row, so the window cannot anchor at all; the
+    // old code read a `Products` column through the `Sales` model index instead.
+    let error = eval_table("ADDCOLUMNS(Products, \"x\", COUNTROWS(OFFSET(-1, ALL(Sales[Region]), ORDERBY(Sales[Region]))))")
+        .expect_err("Products row context does not identify a Sales row");
+    assert!(error.contains("row context"), "{error}");
+}
+
 // ---------------------------------------------------------------------------------------------
 // WINDOW
 // ---------------------------------------------------------------------------------------------

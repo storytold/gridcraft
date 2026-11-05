@@ -46,6 +46,19 @@ fn model() -> DataModel {
                 ],
             },
             ModelTable {
+                name: "Mixed".into(),
+                columns: vec![
+                    ModelColumn { name: "Label".into(), data_type: Some("String".into()) },
+                    ModelColumn { name: "Key".into(), data_type: None },
+                ],
+                rows: vec![
+                    vec![Scalar::String("ten".into()), Scalar::Integer(10)],
+                    vec![Scalar::String("two-text".into()), Scalar::String("2".into())],
+                    vec![Scalar::String("three".into()), Scalar::Integer(3)],
+                    vec![Scalar::String("blank".into()), Scalar::Blank],
+                ],
+            },
+            ModelTable {
                 name: "Items".into(),
                 columns: vec![
                     ModelColumn { name: "Label".into(), data_type: Some("String".into()) },
@@ -149,6 +162,15 @@ fn concatenate_x_orders_by_text() {
     // insensitive, so a space sorts before a comma.
     assert_eq!(text(r##"CONCATENATEX(Items, Items[Label], ",", Items[Note])"##), "Alpha,Gamma,Beta,Delta");
     assert_eq!(text(r##"CONCATENATEX(Items, Items[Label], ",", Items[Note], 0)"##), "Delta,Beta,Gamma,Alpha");
+}
+
+#[test]
+fn concatenate_x_orders_mixed_keys_deterministically() {
+    // Numbers sort before text (and text after numbers) regardless of how the values print, so
+    // the comparator stays transitive; BLANK stays last ascending and first descending. The
+    // numeric key 10 versus the text key "2" is what the old text fallback ordered backwards.
+    assert_eq!(text(r##"CONCATENATEX(Mixed, Mixed[Label], ",", Mixed[Key])"##), "three,ten,two-text,blank");
+    assert_eq!(text(r##"CONCATENATEX(Mixed, Mixed[Label], ",", Mixed[Key], 0)"##), "blank,two-text,ten,three");
 }
 
 #[test]

@@ -48,14 +48,15 @@ fn ragged_rows_keep_the_row_scan_semantics() {
 #[test]
 fn promoted_columns_keep_the_row_scan_semantics() {
     // Booleans mixed with an integer are promoted to dictionary-encoded text by the storage
-    // inference; DAX still reads TRUE as 1 in a numeric aggregate, so storage must not answer.
+    // inference; DAX's SUM ignores logicals (only numbers are aggregated), so storage must not
+    // answer and the row-scan path must agree.
     let model = single_table("Mixed", &[("Value", "Boolean")], vec![vec![Scalar::Boolean(true)], vec![Scalar::Integer(2)], vec![Scalar::Blank]]);
     let evaluator = Evaluator::new(&model).expect("evaluator");
     assert!(!evaluator.storage().expect("storage").is_faithful());
 
     let expr = parse_expression("SUM(Mixed[Value])").expect("parse");
     let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
-    assert_eq!(evaluator.evaluate(&bound).expect("evaluate"), Scalar::Decimal(3.0));
+    assert_eq!(evaluator.evaluate(&bound).expect("evaluate"), Scalar::Decimal(2.0));
     assert_eq!(eval(&model, "COUNT(Mixed[Value])"), Scalar::Integer(1), "COUNT ignores booleans");
     assert_eq!(eval(&model, "COUNTA(Mixed[Value])"), Scalar::Integer(2));
     assert!(evaluator.storage_stats().row_scan_fallbacks > 0, "{:?}", evaluator.storage_stats());

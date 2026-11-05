@@ -102,7 +102,7 @@ fn model() -> DataModel {
             measure("YTD All", "TOTALYTD([Total Amount], 'Date'[Date], ALL ())"),
             measure("QTD Remove All", "TOTALQTD([Total Amount], 'Date'[Date], REMOVEFILTERS ())"),
             measure("YTD Region All", "TOTALYTD([Total Amount], 'Date'[Date], ALL([Region]))"),
-            measure("YTD Over Ten", "TOTALYTD(SUM(Sales[Amount]), 'Date'[Date], Sales[Amount] > 10)"),
+            measure("YTD Over Ten", "TOTALYTD(SUM(Sales[Amount]), 'Date'[Date], Sales[Amount] > 100)"),
             measure("YTD Unqualified", "TOTALYTD([Total Amount], 'Date'[Date], [Region] = \"East\")"),
             measure("OB Month", "OPENINGBALANCEMONTH([Total Amount], 'Date'[Date])"),
             measure("CB Month", "CLOSINGBALANCEMONTH([Total Amount], 'Date'[Date])"),
@@ -327,7 +327,10 @@ fn comparison_and_unqualified_column_filters_are_applied() {
     let february = date_filter(&model, &[Scalar::DateTime(serial(2024, 2, 1)), Scalar::DateTime(serial(2024, 2, 29))]);
     let plain = eval_measure(&model, "YTD", february.clone()).expect("YTD");
     let filtered = eval_measure(&model, "YTD Over Ten", february).expect("YTD Over Ten");
-    assert!(filtered.to_number().unwrap_or(0.0) <= plain.to_number().unwrap_or(0.0));
+    // Exact totals, so a filter argument the evaluator ignored could not pass: every 2024
+    // January-February amount is above 10 but only two are above 100.
+    assert_eq!(plain.to_number(), Some(865.0));
+    assert_eq!(filtered.to_number(), Some(650.0));
     let east = eval_measure(&model, "YTD Unqualified", FilterContext::default()).expect("YTD Unqualified");
-    assert!(east.to_number().is_some());
+    assert_eq!(east.to_number(), Some(360.0));
 }

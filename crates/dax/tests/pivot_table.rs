@@ -96,6 +96,23 @@ fn row_and_column_cross_tab_puts_column_groups_in_columns() {
 }
 
 #[test]
+fn same_field_in_rows_and_columns_blanks_off_diagonal_cells() {
+    let table = sales_pivot()
+        .with_row_fields(vec!["Sales[Region]".into()])
+        .with_column_fields(vec!["Sales[Region]".into()])
+        .with_layout(PivotLayout::Tabular)
+        .render(&model())
+        .expect("render");
+
+    assert_eq!(header(&table), vec!["Region".to_string(), "(Blank)".to_string(), "East".to_string(), "West".to_string()]);
+    assert_eq!(table.rows.len(), 3);
+    // The row and column filter on Region intersect: only diagonal cells have rows at all.
+    assert_eq!(row(&table, 0), vec![Scalar::Blank, Scalar::Decimal(7.0), Scalar::Blank, Scalar::Blank]);
+    assert_eq!(row(&table, 1), vec![text("East"), Scalar::Blank, Scalar::Decimal(45.0), Scalar::Blank]);
+    assert_eq!(row(&table, 2), vec![text("West"), Scalar::Blank, Scalar::Blank, Scalar::Decimal(20.0)]);
+}
+
+#[test]
 fn several_values_produce_one_column_per_measure() {
     let table = sales_pivot()
         .with_row_fields(vec!["Sales[Region]".into()])

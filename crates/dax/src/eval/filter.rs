@@ -534,9 +534,17 @@ fn current_entry(
     }
     let mut needle: Vec<Scalar> = Vec::new();
     if clause.match_by.is_empty() {
-        let Some(frame) = ctx.rows.last() else { return Ok(None) };
-        for (index, column) in relation.columns.iter().enumerate() {
+        // The relation's own row is the innermost frame of the relation's table; a frame from an
+        // outer iterator (e.g. `Products` around a window over `Sales`) resolves model column
+        // indexes against the wrong table. Relations without lineage can only use the innermost.
+        let frame = match relation.lineage {
+            Some(lineage) => ctx.rows.iter().rev().find(|frame| frame.lineage == Some(lineage)),
+            None => ctx.rows.last(),
+        };
+        let Some(frame) = frame else { return Ok(None) };
+        for column in &relation.columns {
             let value = if let Some(lineage) = relation.lineage
+                && frame.lineage == Some(lineage)
                 && let Some(model_column) = ev.model().column_index(lineage, &column.name)
             {
                 frame.get(model_column).cloned()
@@ -547,7 +555,6 @@ fn current_entry(
                 return Err(EvalError::new("window function could not identify the current row; add a MATCHBY clause"));
             };
             needle.push(value);
-            let _ = index;
         }
     } else {
         for (table, column) in &clause.match_by {

@@ -548,10 +548,10 @@ impl<'a> Plan<'a> {
             context.set(table, column, allowed);
         }
         for (field, key) in self.row_fields.iter().zip(row_key) {
-            context.set(field.field.table, field.field.column, [key.clone()]);
+            narrow_to_key(&mut context, field.field.table, field.field.column, key);
         }
         for (field, key) in self.column_fields.iter().zip(column_key) {
-            context.set(field.field.table, field.field.column, [key.clone()]);
+            narrow_to_key(&mut context, field.field.table, field.field.column, key);
         }
         context
     }
@@ -1029,6 +1029,21 @@ fn model_field_value(model: &DataModel, row: &[Scalar], field: &BoundField) -> S
         current = next;
     }
     current.get(field.field.column).cloned().unwrap_or(Scalar::Blank)
+}
+
+/// Narrows `context` to the single group value `key` on `(table, column)`, intersecting with any
+/// filter already set on the column.
+///
+/// A field used as both a row field and a column field receives one filter per axis, and a cell's
+/// rows must satisfy both: the second axis therefore intersects instead of replacing. An
+/// off-diagonal combination leaves the column's filter empty, and an empty filter matches no row,
+/// so the cell is BLANK rather than the other axis's total.
+pub(crate) fn narrow_to_key(context: &mut FilterContext, table: usize, column: usize, key: &ScalarKey) {
+    match context.filters.get(&(table, column)) {
+        // The intersection with `{key}` is empty: no row can satisfy both axes.
+        Some(allowed) if !allowed.contains(key) => context.set(table, column, std::iter::empty()),
+        _ => context.set(table, column, [key.clone()]),
+    }
 }
 
 /// Writes `label` into the first of `cells`, when there is one.

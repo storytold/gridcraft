@@ -364,7 +364,14 @@ pub(crate) fn lcm(a: i64, b: i64) -> i64 {
 
 /// Applies a scalar aggregation over already-evaluated values.
 pub(crate) fn aggregate_values(name: &str, values: &[Scalar]) -> Result<Scalar, EvalError> {
-    let numbers: Vec<f64> = values.iter().filter(|v| !v.is_blank()).filter_map(Scalar::to_number).collect();
+    // Plain aggregations take numeric values only: DAX specifies that SUM/AVERAGE/MIN/MAX/PRODUCT
+    // ignore logicals and text instead of coercing them. The `*A` variants below keep their own
+    // coercion and read `values` directly.
+    let numbers: Vec<f64> = values
+        .iter()
+        .filter(|value| matches!(value, Scalar::Integer(_) | Scalar::Currency(_) | Scalar::Decimal(_) | Scalar::DateTime(_)))
+        .filter_map(Scalar::to_number)
+        .collect();
     match name.to_ascii_uppercase().as_str() {
         "SUM" => Ok(if numbers.is_empty() { Scalar::Blank } else { Scalar::Decimal(numbers.iter().sum()) }),
         "AVERAGE" => Ok(if numbers.is_empty() { Scalar::Blank } else { Scalar::Decimal(numbers.iter().sum::<f64>() / numbers.len() as f64) }),
@@ -536,6 +543,33 @@ mod tests {
         assert_eq!(days_in_month(2023, 2), 28);
         assert_eq!(days_in_month(1900, 2), 28);
         assert_eq!(days_in_month(2000, 2), 29);
+    }
+
+    #[test]
+    fn plain_aggregations_ignore_text_logicals_and_blanks() {
+        // DAX specifies that SUM/AVERAGE/MIN/MAX/PRODUCT use the numeric rows only: text (even
+        // numeric text), logicals and BLANK are ignored, unlike the `*A` variants.
+        let values = [
+            Scalar::Integer(2),
+            Scalar::String("3".into()),
+            Scalar::Boolean(true),
+            Scalar::Blank,
+            Scalar::Decimal(0.5),
+            Scalar::Currency(15_000),
+            Scalar::DateTime(10.0),
+        ];
+        assert_eq!(aggregate_values("SUM", &values).expect("SUM"), Scalar::Decimal(14.0));
+        assert_eq!(aggregate_values("AVERAGE", &values).expect("AVERAGE"), Scalar::Decimal(3.5));
+        assert_eq!(aggregate_values("MIN", &values).expect("MIN"), Scalar::Decimal(0.5));
+        assert_eq!(aggregate_values("MAX", &values).expect("MAX"), Scalar::Decimal(10.0));
+        assert_eq!(aggregate_values("PRODUCT", &values).expect("PRODUCT"), Scalar::Decimal(15.0));
+        // A column holding only text, logicals and blanks has no numeric observations at all.
+        let non_numeric = [Scalar::String("5".into()), Scalar::Boolean(false), Scalar::Blank];
+        assert_eq!(aggregate_values("SUM", &non_numeric).expect("SUM"), Scalar::Blank);
+        assert_eq!(aggregate_values("AVERAGE", &non_numeric).expect("AVERAGE"), Scalar::Blank);
+        // The `*A` variants keep their own coercion: text counts as 0 and TRUE as 1.
+        assert_eq!(aggregate_values("MINA", &non_numeric).expect("MINA"), Scalar::Decimal(0.0));
+        assert_eq!(aggregate_values("COUNTA", &non_numeric).expect("COUNTA"), Scalar::Integer(2));
     }
 
     #[test]

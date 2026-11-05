@@ -567,6 +567,58 @@ fn summarize_columns_without_expressions_keeps_only_existing_combinations() {
 }
 
 #[test]
+fn summarize_accepts_projected_table_arguments_that_keep_lineage() {
+    // `VALUES` keeps the source lineage while dropping duplicate rows, so the group owns fewer
+    // rows than the lineage has under the group's filters. That is not a leak: every lineage row
+    // the filters admit still carries a region the group owns.
+    let table = eval_table("SUMMARIZE(VALUES(Sales[Region]), Sales[Region], \"T\", SUM(Sales[Amount]))").expect("summarize values");
+    assert_columns(&table, &["Region", "T"]);
+    assert_eq!(
+        table.rows,
+        vec![vec![text("East"), money(45.0)], vec![text("North"), money(50.0)], vec![text("West"), money(20.0)], vec![Scalar::Blank, money(7.0)]]
+    );
+}
+
+#[test]
+fn groupby_accepts_projected_table_arguments_that_keep_lineage() {
+    // `DISTINCT`/`VALUES` deduplicate, so `COUNTROWS(CURRENTGROUP())` is 1 per group; the guard
+    // must compare identities rather than counts and let the evaluation through.
+    let table = eval_table("GROUPBY(VALUES(Sales[Region]), Sales[Region], \"Rows\", COUNTROWS(CURRENTGROUP()))").expect("groupby values");
+    assert_columns(&table, &["Region", "Rows"]);
+    assert_eq!(table.rows.len(), 4);
+    assert!(table.rows.iter().all(|row| row[1] == int(1)), "one source row per region: {:?}", table.rows);
+}
+
+#[test]
+fn topnskip_orders_mixed_type_keys_without_losing_stability() {
+    // A key column that mixes text, numbers and a blank has pairs `Scalar::compare` cannot order.
+    // A total order keeps the sort stable and makes the ascending result the exact reverse of the
+    // descending one. NaN is avoided here only because `Scalar` equality is not reflexive for it.
+    let mut model = DataModel {
+        tables: vec![table(
+            "Mix",
+            vec![column("Key", "Variant")],
+            vec![vec![text("b")], vec![int(5)], vec![int(10)], vec![Scalar::Blank], vec![text("A")], vec![money(-2.5)]],
+        )],
+        relationships: Vec::new(),
+        measures: Vec::new(),
+    };
+    model.parse_formulas().expect("model parses");
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let run = |source: &str| -> Vec<Vec<Scalar>> {
+        let expression = parse_expression(source).expect("parse");
+        let bound = Binder::new(&model).bind_expression(&expression).expect("bind");
+        evaluator.evaluate_table(&bound).expect(source).rows
+    };
+    let descending = run("TOPNSKIP(6, 0, Mix, Mix[Key], 0)");
+    let ascending = run("TOPNSKIP(6, 0, Mix, Mix[Key], 1)");
+    assert_eq!(descending.len(), 6);
+    let mut reversed = ascending.clone();
+    reversed.reverse();
+    assert_eq!(reversed, descending, "ascending {ascending:?} is not the reverse of descending {descending:?}");
+}
+
+#[test]
 fn summarize_rejects_cross_column_table_filters_that_leak_rows() {
     // The predicate compares two columns, so one value set per column cannot rebuild the group:
     // East keeps (Amount 5, Cost 3) and (9, 8), while the removed (5, 8) matches the Amount set

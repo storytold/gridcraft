@@ -304,7 +304,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         standard(false),
         "Moves Number toward zero to the closest multiple of Significance; both must share a \
          sign. The result is always Decimal regardless of the argument types.",
-        &["FLOOR ( 2.7, 1 )", "FLOOR ( -2.7, 1 )"],
+        &["FLOOR ( 2.7, 1 )", "FLOOR ( -2.7, -1 )"],
     ),
     spec(
         "GCD",

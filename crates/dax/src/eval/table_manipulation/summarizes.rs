@@ -539,16 +539,42 @@ fn eval_in_group(ev: &Evaluator<'_>, ctx: &Context, expression: &BoundExpr, grou
     // One value set per column describes the group exactly only when the table argument's rows
     // are the ones those sets select. A cross-column predicate (`FILTER(Sales, Sales[Amount] >
     // Sales[Cost])`) cannot be expressed that way: each column's set independently admits rows
-    // the predicate removed, so the group would aggregate rows it does not own. Counting the
-    // lineage rows under the final filters catches that leak instead of returning a silent wrong
-    // answer.
+    // the predicate removed, so the group would aggregate rows it does not own. Comparing the
+    // lineage rows under the final filters against the group's own rows catches that leak instead
+    // of returning a silent wrong answer. The comparison is by identity, not by count: forms that
+    // deduplicate while keeping the lineage (`VALUES`, `DISTINCT`, column-form `ALL`) legitimately
+    // own fewer rows than the lineage has, so only a lineage row that projects to a column
+    // combination the group does not own is a leak.
     if let Some(lineage) = group.source.lineage
         && !group.rows.is_empty()
-        && ev.table(lineage, &filters).rows.len() > group.rows.len()
     {
-        return Err(EvalError::new(format!(
-            "{operation} cannot evaluate the table argument: the group's column filters select rows outside the group"
-        )));
+        // The table argument may be a projection that reorders or drops columns, so its columns
+        // are matched to model columns by name. A column the model does not know cannot
+        // participate in the comparison.
+        let mapped: Vec<(usize, usize)> = group
+            .source
+            .columns
+            .iter()
+            .enumerate()
+            .filter_map(|(position, column)| ev.model().column_index(lineage, &column.name).map(|index| (position, index)))
+            .collect();
+        if !mapped.is_empty() {
+            let owned: BTreeSet<Vec<ScalarKey>> = group
+                .rows
+                .iter()
+                .map(|row| mapped.iter().map(|(position, _)| row.get(*position).map(ScalarKey::from).unwrap_or(ScalarKey::Blank)).collect())
+                .collect();
+            let lineage_rows = ev.table(lineage, &filters);
+            let leaked = lineage_rows.rows.iter().any(|row| {
+                let key: Vec<ScalarKey> = mapped.iter().map(|(_, index)| row.get(*index).map(ScalarKey::from).unwrap_or(ScalarKey::Blank)).collect();
+                !owned.contains(&key)
+            });
+            if leaked {
+                return Err(EvalError::new(format!(
+                    "{operation} cannot evaluate the table argument: the group's column filters select rows outside the group"
+                )));
+            }
+        }
     }
     let mut inner = Context { filters, rows: Vec::new(), vars: ctx.vars.clone() };
     ev.eval(expression, &mut inner)
@@ -1217,7 +1243,9 @@ fn order_is_ascending(expr: &BoundExpr) -> bool {
 
 fn compare_scores(left: &[Scalar], right: &[Scalar], keys: &[(&BoundExpr, bool)]) -> Ordering {
     for ((left, right), (_, ascending)) in left.iter().zip(right).zip(keys) {
-        let Some(ordering) = left.compare(right) else { continue };
+        // `Scalar::compare` returns `None` for incomparable values (mixed text and numbers, NaN);
+        // a key with those must still produce a stable order, so fall back to a total order.
+        let ordering = super::super::support::total_order(left, right);
         // `Order` defaults to descending: reverse the natural ordering unless ascending is set.
         let ordering = if *ascending { ordering } else { ordering.reverse() };
         if ordering != Ordering::Equal {

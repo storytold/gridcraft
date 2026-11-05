@@ -84,7 +84,9 @@ fn compare_order(left: Option<&Scalar>, right: Option<&Scalar>) -> Ordering {
         (true, true) => Ordering::Equal,
         (true, false) => Ordering::Greater,
         (false, true) => Ordering::Less,
-        _ => left.compare(&right).unwrap_or_else(|| left.to_text().cmp(&right.to_text())),
+        // `Scalar::compare` answers `None` for text/number pairs and NaN, and the text fallback is
+        // not transitive across those classes; the shared total order keeps the sort consistent.
+        _ => super::support::total_order(&left, &right),
     }
 }
 

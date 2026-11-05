@@ -82,10 +82,10 @@ pub fn pivot_cross(model: &DataModel, measure: &str, row_fields: &[PivotField], 
         for (column_key, _) in &column_headers {
             let mut filters = FilterContext::default();
             for (field, key) in row_fields.iter().zip(&row_key) {
-                filters.set(field.table, field.column, [key.clone()]);
+                crate::pivot_table::narrow_to_key(&mut filters, field.table, field.column, key);
             }
             for (field, key) in column_fields.iter().zip(column_key) {
-                filters.set(field.table, field.column, [key.clone()]);
+                crate::pivot_table::narrow_to_key(&mut filters, field.table, field.column, key);
             }
             out.push(evaluator.evaluate_measure(measure, filters)?);
         }
