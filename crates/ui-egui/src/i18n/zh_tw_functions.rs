@@ -734,7 +734,7 @@ pub(super) const ARGUMENTS: &[(&str, &str)] = &[
     ("salvage", "殘值"),
     ("sample_s", "樣本成功數"),
     ("scan_by_column", "按欄掃描"),
-    ("schedule", "還款計劃"),
+    ("schedule", "利率序列"),
     ("search_mode", "搜尋方式"),
     ("seasonality", "週期性"),
     ("second", "秒"),

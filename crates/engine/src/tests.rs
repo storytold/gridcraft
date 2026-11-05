@@ -5764,3 +5764,40 @@ fn generated_sheet_prefix_validation_is_shared_between_creation_commands() {
     assert_eq!(session.doc().unwrap().wb.sheets.len(), 2);
     assert!(session.doc().unwrap().wb.sheets.iter().all(|s| s.name.starts_with(&prefix)));
 }
+
+/// Totals use the shared formula printer for literal column names, including generated special characters.
+#[test]
+fn table_totals_with_special_column_names_recalculate_after_xlsx_round_trip() {
+    use gridcraft_formula::Expr;
+    for prefix in ["A[", "A]", "A#", "A'", "A,", "A:", "Лист["] {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range":"A1", "values":[[1,2],[3,5]]})).unwrap();
+        s.execute("insert.table", json!({"range":"A1:B2", "header":false, "columnPrefix":prefix})).unwrap();
+        let column = format!("{prefix}2");
+        s.execute("table.totalRow", json!({"table":"Table1", "on":true})).unwrap();
+        s.execute("table.totalFunction", json!({"table":"Table1", "column":column, "function":"sum"})).unwrap();
+        assert_eq!(v(&s, "B4"), Value::Number(7.0), "{prefix}");
+        let formula = &s.doc().unwrap().wb.active().unwrap().cell(CellRef::new(3, 1)).unwrap().formula.as_ref().unwrap().text;
+        let Expr::Call(_, args) = gridcraft_formula::parse(formula).unwrap() else { panic!("a SUBTOTAL call") };
+        let Expr::Struct(reference) = &args[1] else { panic!("a structured reference") };
+        assert_eq!(reference.table, "Table1");
+        assert_eq!(reference.col_start.as_deref(), Some(column.as_str()));
+        let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+        s.execute("file.open", json!({"name":"escaped-columns.xlsx", "base64":crate::io::base64_encode(&bytes)})).unwrap();
+        s.execute("formulas.calculateNow", json!({})).unwrap();
+        assert_eq!(v(&s, "B4"), Value::Number(7.0), "{prefix} after saving");
+    }
+}
+
+/// The generated-name search and command validation agree on non-ASCII case collisions.
+#[test]
+fn generated_sheet_names_skip_unicode_case_collisions() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name":"лист1"})).unwrap();
+    s.execute("cell.set", json!({"sheet":"ЛИСТ1", "cell":"A1", "input":"7"})).unwrap();
+    s.execute("home.insertSheet", json!({"namePrefix":"Лист"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().name, "Лист2");
+    s.execute("cell.set", json!({"cell":"A1", "input":"=ЛИСТ1!A1"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(7.0));
+    assert!(s.execute("home.insertSheet", json!({"name":"ЛИСТ1"})).is_err());
+}

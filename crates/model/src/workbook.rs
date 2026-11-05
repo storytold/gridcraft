@@ -375,7 +375,7 @@ impl Workbook {
         self.sheets.get_mut(i).map(Arc::make_mut)
     }
     pub fn sheet_index(&self, name: &str) -> Option<usize> {
-        self.sheets.iter().position(|s| s.name.eq_ignore_ascii_case(name))
+        self.sheets.iter().position(|s| gridcraft_formula::same_name(&s.name, name))
     }
     /// The index of the sheet the workbook's window shows (the file's active tab).
     pub fn active_sheet(&self) -> usize {
@@ -674,5 +674,16 @@ mod tests {
         assert!(many.windows(2).all(|w| w[0] < w[1]), "ascending without repeats");
         assert!(!many.contains(&0) && !many.contains(&(u32::MAX - 1)) && !many.contains(&u32::MAX));
         assert_eq!(wb.free_object_ids(0), Vec::<u32>::new());
+    }
+    /// Unicode case variants resolve to the same sheet and cannot produce duplicate generated names.
+    #[test]
+    fn sheet_names_compare_case_insensitively_beyond_ascii() {
+        let mut wb = Workbook::new();
+        let index = wb.sheets.len();
+        wb.sheets.push(Arc::new(Sheet::new("лист1")));
+        assert_eq!(wb.sheet_index("ЛИСТ1"), Some(index));
+        assert_eq!(wb.next_sheet_name_with_prefix("Лист"), "Лист2");
+        assert!(wb.check_sheet_name("Лист1", None).is_err());
+        assert!(wb.check_sheet_name("ЛИСТ1", Some(index)).is_ok());
     }
 }

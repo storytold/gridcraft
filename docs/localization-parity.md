@@ -163,6 +163,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | Localize the initial desktop workbook after preference loading, enforce Unicode-aware sheet uniqueness, print totals formulas through the shared structured-reference printer and correct Traditional Chinese rate-series help |
 | 2026-11-05 | minor | Localize selection statistics, correct Thai date IDs and Traditional Chinese security-price help; keep generated-name defaults local to UI invocation, share prefix validation and document/test name-scope identities without changing legacy deletion semantics |
 | 2026-11-05 | minor | Align grid and format previews with the UI number locale while keeping engine output canonical; accept Unicode case variants of General, match observed German Excel March abbreviation, and correct Chinese price/direction and Spanish/Italian gallery labels |
 | 2026-11-05 | minor | Fix Polish/Traditional Chinese template lookups, Greek coupon-rate and Chinese analysis/preview terms, native Insert menu context and macOS language declarations; correct Thai built-in time format IDs and localized fractional seconds |

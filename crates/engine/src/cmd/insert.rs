@@ -484,10 +484,26 @@ fn write_totals(sh: &mut Sheet, ti: usize) {
     for (i, col) in t.columns.iter().enumerate() {
         let c = CellRef::new(row, t.range.start.col + i as u32);
         if let Some(code) = col.totals.subtotal_code() {
-            let f = format!("=SUBTOTAL({code},{}[{}])", t.name, col.name);
+            let f = gridcraft_formula::Expr::Call(
+                "SUBTOTAL".into(),
+                vec![
+                    gridcraft_formula::Expr::Number(f64::from(code)),
+                    gridcraft_formula::Expr::Struct(gridcraft_formula::StructRef {
+                        table: t.name.clone(),
+                        specifiers: vec![],
+                        col_start: Some(col.name.clone()),
+                        col_end: None,
+                    }),
+                ],
+            );
             sh.set_cell(
                 c,
-                Cell { formula: Some(std::sync::Arc::new(Formula::new(&f))), value: gridcraft_core::Value::Empty, style: sh.style_id(c), py: None },
+                Cell {
+                    formula: Some(std::sync::Arc::new(Formula::from_expr(f))),
+                    value: gridcraft_core::Value::Empty,
+                    style: sh.style_id(c),
+                    py: None,
+                },
             );
         } else if let Some(l) = &col.totals_label {
             sh.set_value(c, gridcraft_core::Value::text(l.as_str()));
