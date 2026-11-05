@@ -2625,6 +2625,10 @@ fn saving_characters_the_file_encoding_cannot_hold_asks_first() {
     // Encoding without asking (CLI, save_bytes) is an error naming the characters, never a silent `?`.
     let err = crate::io::save_bytes(&s.doc().unwrap().wb, "x.csv").unwrap_err().to_string();
     assert!(err.contains("Windows-1252 (ANSI)") && err.contains("Ć, č, ć"), "{err}");
+    // So is `file.save` for a caller with no one to ask (CLI, MCP): not a `saved: false` success.
+    let err = s.execute_headless("file.save", json!({})).unwrap_err().to_string();
+    assert!(err.contains("Windows-1252 (ANSI)") && err.contains("Ć, č, ć"), "{err}");
+    assert_eq!(std::fs::read(&path).unwrap(), ansi, "nothing is written");
     // Keeping Windows-1252 writes `?` and doesn't become the file's choice: the next save asks again.
     s.execute("file.save", json!({"encoding": "windows-1252"})).unwrap();
     assert_eq!(std::fs::read(&path).unwrap(), b"Caf\xe9;5\r\nNa\xefve;6\r\n?evap?i?i;\r\n");
@@ -2647,6 +2651,11 @@ fn saving_characters_the_file_encoding_cannot_hold_asks_first() {
     s.execute("file.exportCsv", json!({"path": exported, "encoding": "utf-8-bom"})).unwrap();
     assert_eq!(std::fs::read(&exported).unwrap(), "\u{feff}Café\r\nč\r\n".as_bytes());
     assert!(s.execute("file.save", json!({"path": dir.join("x.csv"), "encoding": "latin-2"})).is_err());
+    // Raw values always export as UTF-8: an `encoding` with them is refused, not ignored.
+    let raw = dir.join("raw.csv");
+    let err = s.execute("file.exportCsv", json!({"path": raw, "values": true, "encoding": "utf-16le"})).unwrap_err().to_string();
+    assert!(err.contains("values"), "{err}");
+    assert!(!raw.exists());
     std::fs::remove_dir_all(dir).unwrap();
 }
 

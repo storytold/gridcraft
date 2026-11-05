@@ -1103,10 +1103,21 @@ impl Session {
 
     /// Runs a command for a caller with no UI (MCP, CLI): queued UI requests are dropped, and a command that only
     /// queued a file dialog because it got no file (`file.open`, `file.saveAs`, `file.save` on a workbook with no
-    /// file yet, `data.getData`) is an error instead of a silent success.
+    /// file yet, `data.getData`) is an error instead of a silent success. So is a text-file save that wrote nothing
+    /// because the file's encoding can't hold some characters (`file.save`, `file.exportCsv` answering
+    /// `saved: false` to ask which encoding to use): the error names them and the `encoding` param.
     pub fn execute_headless(&mut self, id: &str, params: Json) -> Result<Json> {
         let r = self.execute(id, params);
         let requests = self.take_ui_requests();
+        let unsaved = requests.iter().find_map(|q| match q {
+            UiRequest::Dialog(name, info) if name == "textEncoding" => info.get("message").and_then(Json::as_str),
+            _ => None,
+        });
+        if r.is_ok()
+            && let Some(msg) = unsaved
+        {
+            return Err(EngineError::Other(msg.to_string()));
+        }
         let asked_for_file = requests.iter().any(|q| matches!(q, UiRequest::Dialog(name, _) if name == "open" || name == "saveAs"));
         // A call that only opened a dialog is not recorded (see `execute`), so the recording
         // has no step to take back here.

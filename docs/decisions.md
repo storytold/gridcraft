@@ -142,7 +142,8 @@ and the interface asks which encoding to use, suggesting UTF-8, which holds ever
 writes `?` for them; here that happens only when someone picks Windows-1252 in that dialog (or
 passes `encoding`). An encoding chosen there that holds everything becomes the file's, so the next
 save doesn't ask; keeping Windows-1252 asks again next time. Paths that can't ask (`save_bytes`,
-the CLI) fail with the characters named instead of writing `?`.
+and `file.save` or `file.exportCsv` run by the CLI or MCP) fail with the characters named instead
+of writing `?`. Raw-values CSV export (`values: true`) is always UTF-8 and refuses an `encoding`.
 
 Save As has no encoding choice yet (Excel offers it as file types: CSV UTF-8, CSV, Unicode Text).
 Whether to add one, as a type or a separate list, is left to the maintainers.

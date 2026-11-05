@@ -13,7 +13,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path, encoding?} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet; `encoding` as in file.save)", has_doc, save_as),
         cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html} → {base64}", has_doc, save_bytes),
         cmd!(noundo "file.close", "Close", ["File"], Some("Cmd+W"), "{force?: bool, document?: bool} (closes the active window, or with `document` the workbook and all its windows; the workbook closes with its last window)", has_doc, close),
-        cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?, values?: bool, encoding?} â†’ {path, bytes}: writes the cells as displayed, like Excel's Save As CSV (`encoding` as in file.save); `values: true` writes raw values instead (full-precision numbers, ISO 8601 dates and times, TRUE/FALSE)", has_doc, |s, p| export(s, p, "csv")),
+        cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?, values?: bool, encoding?} → {path, bytes}: writes the cells as displayed, like Excel's Save As CSV (`encoding` as in file.save); `values: true` writes raw values instead (full-precision numbers, ISO 8601 dates and times, TRUE/FALSE), always as UTF-8, so not with `encoding`", has_doc, |s, p| export(s, p, "csv")),
         cmd!(noundo "file.exportHtml", "Save as Web Page", ["File", "Export"], None, "{path}", has_doc, |s, p| export(s, p, "html")),
         cmd!("file.properties", "Properties", ["File"], None, "{title?, subject?, author?, company?, keywords?, description?}", has_doc, properties),
         cmd!(
@@ -253,7 +253,11 @@ fn export(s: &mut Session, p: &Json, ext: &str) -> Result<Json> {
         wb.set_active_sheet(target_sheet(s, p)?);
     }
     let target = if path.ends_with(&format!(".{ext}")) { path.clone() } else { format!("{path}.{ext}") };
-    let bytes = if ext == "csv" && bool_param(p, "values").unwrap_or(false) {
+    let values = ext == "csv" && bool_param(p, "values").unwrap_or(false);
+    if values && encoding.is_some() {
+        return Err(bad("file.exportCsv", "`encoding` applies to the displayed values; `values: true` always writes UTF-8"));
+    }
+    let bytes = if values {
         crate::io::csv_values_bytes(&wb)?
     } else if ext == "csv" {
         match encode_text_file(&wb, crate::io::FileKind::Csv, encoding)? {
