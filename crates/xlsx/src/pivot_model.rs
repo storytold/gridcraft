@@ -74,6 +74,10 @@ pub const CT_MODEL_DATA: &str = "application/vnd.openxmlformats-officedocument.m
 
 /// The workbook part that carries the Spreadsheet Data Model (`xl/model/item.data`).
 pub const MODEL_DATA_PART: &str = "xl/model/item.data";
+/// How many PivotTable parts a read may keep as pass-through content. Each external-cache
+/// PivotTable costs up to three parts (definition, cache, records), so a dashboard with a few
+/// dozen pivots fits; the cap only stops a hostile package from making the read unbounded.
+const MAX_KEPT_PIVOT_PARTS: usize = 256;
 const REL_PIVOT_TABLE: &str = "pivotTable";
 const REL_PIVOT_CACHE: &str = "pivotCacheDefinition";
 const REL_CONNECTIONS: &str = "connections";
@@ -1654,7 +1658,7 @@ fn keep_pivot_parts(pkg: &mut Package<'_>, types: &PartTypes, roots: &[String], 
         }
         // We only ever keep rewrite-blocked PivotTable content, so the graph is a handful of
         // parts (the definition, its cache, the cache's records snapshot).
-        if out.len() >= 16 {
+        if out.len() >= MAX_KEPT_PIVOT_PARTS {
             return;
         }
         let Ok(Some(data)) = pkg.read_limited(&name, MAX_PART) else { continue };
@@ -1755,7 +1759,18 @@ pub(crate) fn keep_external_pivots(
                 continue;
             }
             let Some(cache_part) = external_cache_of(pkg, &rel.target, &table, &caches) else { continue };
+            // A PivotTable is only usable when both its definition and its cache part are kept:
+            // recording the cache and the sheet link for a pivot whose part was unreadable (or over
+            // the part cap) would drop the pivot on save without a word, or leave a definition
+            // without its cache relationship and make Excel offer a repair.
+            let mark = kept.len();
             keep_pivot_parts(pkg, &types, &[rel.target.clone(), cache_part.clone()], &mut kept);
+            let kept_part = |name: &str| kept.iter().any(|part| part.name.eq_ignore_ascii_case(name));
+            if !kept_part(&rel.target) || !kept_part(&cache_part) {
+                kept.truncate(mark);
+                report.warn(format!("PivotTable {} could not be kept: its parts were unreadable or over the part limit", rel.target));
+                continue;
+            }
             kept_caches.insert(crate::package::normalize(&cache_part));
             sheet_links.push((model_index, rel.id.clone(), rel.target.clone()));
         }
