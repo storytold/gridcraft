@@ -62,6 +62,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "서식\n창",
         "Format" => "서식",
         "Insert" => "삽입",
+        "Header Menu|Insert" => "삽입",
         "Insert Cells…" => "셀 삽입…",
         "Delete" => "삭제",
         "Delete Cells…" => "셀 삭제…",
