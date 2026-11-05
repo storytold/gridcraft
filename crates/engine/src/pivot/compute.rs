@@ -77,6 +77,8 @@ struct AggregateInput<'a> {
     extra: &'a [usize],
     filters: &'a [(usize, &'a PivotFilter, PivotDateGroup, bool)],
     filter_fmts: &'a [String],
+    /// Each filter's selected labels, ASCII-lowercased, so a record's test is one probe.
+    filter_sets: &'a [Option<HashSet<String>>],
     row_fmts: &'a [String],
     col_fmts: &'a [String],
     empty: bool,
@@ -99,10 +101,10 @@ fn aggregate_record(
     ri: usize,
     rec: &[Value],
 ) -> Result<(), String> {
-    for ((c, field, group, _), fmt) in input.filters.iter().zip(input.filter_fmts) {
-        if let Some(selected) = &field.selected {
+    for (((c, _, group, _), fmt), selected) in input.filters.iter().zip(input.filter_fmts).zip(input.filter_sets) {
+        if let Some(selected) = selected {
             let label = item_label(input.wb, rec.get(*c).unwrap_or(&Value::Empty), *group, fmt);
-            if !selected.iter().any(|value| value.eq_ignore_ascii_case(&label)) {
+            if !selected.contains(&label.to_ascii_lowercase()) {
                 return Ok(());
             }
         }
@@ -475,6 +477,8 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
 
     // ---- aggregate
     let filter_fmts: Vec<String> = filters.iter().map(|f| fmt_of(f.0)).collect();
+    let filter_sets: Vec<Option<HashSet<String>>> =
+        filters.iter().map(|(_, field, _, _)| field.selected.as_ref().map(|s| s.iter().map(|v| v.to_ascii_lowercase()).collect())).collect();
     let row_fmts: Vec<String> = rows.iter().map(|(c, _)| fmt_of(*c)).collect();
     let col_fmts: Vec<String> = cols.iter().map(|(c, _)| fmt_of(*c)).collect();
     let aggregate = aggregate_source(
@@ -488,6 +492,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             extra: &extra,
             filters: &filters,
             filter_fmts: &filter_fmts,
+            filter_sets: &filter_sets,
             row_fmts: &row_fmts,
             col_fmts: &col_fmts,
             empty,

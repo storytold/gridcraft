@@ -628,7 +628,7 @@ fn info(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage) {
         });
     });
     ui.add_space(18.0);
-    ui.horizontal(|ui| {
+    ui.horizontal_top(|ui| {
         if square_button(ui, Icon::Lock, lang.tr("Protect Workbook")).clicked() {
             protect_workbook(app);
         }
