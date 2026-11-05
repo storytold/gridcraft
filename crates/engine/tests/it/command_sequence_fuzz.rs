@@ -3,7 +3,9 @@
 //! miss the bugs that need a sequence — insert rows under a spill, undo, sort, paste into a table —
 //! and those are the ones that corrupt a workbook.
 //!
-//! Each seed picks a sample (sales, budget, grades) and runs `GRIDCRAFT_FUZZ_STEPS` commands. Most
+//! Each seed picks a sample workbook (sales, budget, grades, or `runs` — the grades sample with
+//! two rich-text cells seeded into the model, issue #774) and runs `GRIDCRAFT_FUZZ_STEPS`
+//! commands. Most
 //! come from a curated list of state-changing commands with hand-shaped params; the rest are drawn
 //! from every registered command, with params generated from its `params` doc string.
 //!
@@ -14,6 +16,8 @@
 //! - the structure stays valid: active sheet in range, sheet and table names valid and unique,
 //!   merges and tables on the sheet and not overlapping, legacy arrays anchored at their
 //!   top-left cell, the selection on the sheet;
+//! - every rich-text runs entry stays valid for its cell's text — the side-table only
+//!   describes text values, and the runs concatenate to exactly that text (issue #906);
 //! - a full recalculation from scratch gives the values the incremental recalculation left
 //!   (catches stale dependency graphs);
 //! - every few steps and at the end, an XLSX save and reload (with the recalculation opening does)
@@ -34,11 +38,11 @@ use std::sync::Arc;
 
 use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, col_to_letters};
 use gridcraft_engine::calc::Calc;
-use gridcraft_engine::model::{CalcMode, Formula, Sheet, SheetViewMode, Workbook};
+use gridcraft_engine::model::{CalcMode, Cell, CellRuns, Color, Formula, Run, RunFont, Sheet, SheetViewMode, StyleId, Workbook};
 use gridcraft_engine::{EngineError, Session, command_specs, find_command, io};
 use serde_json::{Value as Json, json};
 
-const SAMPLES: [&str; 3] = ["sales", "budget", "grades"];
+const SAMPLES: [&str; 4] = ["sales", "budget", "grades", "runs"];
 /// Episodes end (undo/redo checks, then a fresh history) before the engine's 100-step undo limit
 /// starts dropping the oldest entries.
 const EPISODE_UNDO_DEPTH: usize = 90;
@@ -227,6 +231,46 @@ fn fail(step: usize, kind: &'static str, what: impl Into<String>) -> Failure {
     Failure { step, kind, what: what.into() }
 }
 
+/// Two rich-text cells under the grades table (A11: the #774 repro's three colour forms; B11: a
+/// bold+size lead with a red tail), in the shapes of the XLSX `runs_roundtrip` test. Seeded
+/// straight into the model (the seeding itself is not a command); every edit, structural change
+/// and undo/redo round them must keep the side-table whole.
+fn seed_runs_cells(s: &mut Session) {
+    let none = || RunFont { name: None, size: None, bold: None, italic: None, underline: None, strike: None, color: None, vert: None };
+    let cells = [
+        (
+            "A11",
+            "this is black, this is red, this is black",
+            CellRuns {
+                runs: vec![
+                    Run { start: 0, len: 14, font: RunFont { color: Some(Color::Auto), ..none() } },
+                    Run { start: 14, len: 13, font: RunFont { color: Some(Color::Rgb(0xFF0000)), ..none() } },
+                    Run { start: 27, len: 14, font: RunFont { color: Some(Color::Rgb(0x00B050)), ..none() } },
+                ],
+            },
+        ),
+        (
+            "B11",
+            "bold fourteen red tail",
+            CellRuns {
+                runs: vec![
+                    Run { start: 0, len: 14, font: RunFont { bold: Some(true), size: Some(14.0), ..none() } },
+                    Run { start: 14, len: 8, font: RunFont { color: Some(Color::Rgb(0xFF0000)), ..none() } },
+                ],
+            },
+        ),
+    ];
+    let d = s.active_mut().expect("document");
+    let wb = Arc::make_mut(&mut d.wb);
+    if let Some(sh) = wb.sheet_mut(0) {
+        for (a, text, runs) in cells {
+            let c = CellRef::parse(a).expect("cell ref");
+            sh.cells.set(c, Cell { value: Value::text(text), formula: None, style: StyleId::DEFAULT, py: None });
+            sh.cell_runs.insert(c, runs);
+        }
+    }
+}
+
 /// Runs `f`, turning a panic into a failure (for checks that run outside `Session::execute`).
 fn guarded<T>(step: usize, kind: &'static str, f: impl FnOnce() -> Result<T, String>) -> Result<T, Failure> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
@@ -242,7 +286,13 @@ fn guarded<T>(step: usize, kind: &'static str, f: impl FnOnce() -> Result<T, Str
 impl Harness {
     fn new(sample: &str) -> Harness {
         let mut s = Session::new();
-        s.execute("file.new", json!({"sample": sample})).expect("sample opens");
+        // The `runs` fixture is the grades sample with two rich-text cells seeded into the model
+        // (samples are built from commands, and the seeding is direct model manipulation).
+        let opens = if sample == "runs" { "grades" } else { sample };
+        s.execute("file.new", json!({"sample": opens})).expect("sample opens");
+        if sample == "runs" {
+            seed_runs_cells(&mut s);
+        }
         let base = s.doc().expect("document").wb.clone();
         Harness { s, base }
     }
@@ -279,11 +329,14 @@ impl Harness {
         Ok(())
     }
 
-    /// Structure and recalculation invariants on the current state.
+    /// Structure, rich-text runs and recalculation invariants on the current state.
     fn check_state(&self, i: usize) -> Result<(), Failure> {
         let d = self.s.doc().expect("document");
         if let Some(e) = structure_problem(&d.wb, &d.selection) {
             return Err(fail(i, "structure", e));
+        }
+        if let Some(e) = runs_problem(&d.wb) {
+            return Err(fail(i, "runs", e));
         }
         let wb = d.wb.clone();
         guarded(i, "recalc", || recalc_diff(&wb))
@@ -416,6 +469,23 @@ fn structure_problem(wb: &Workbook, sel: &gridcraft_engine::Selection) -> Option
     None
 }
 
+/// Every `cell_runs` entry must stay valid for its cell's text (issue #906): the side-table
+/// only ever layers font deltas over a cell's plain `Value::Text`, so an entry on any other
+/// value (number, non-text formula result, empty) is stale, and an entry whose runs don't
+/// concatenate to exactly the current text would draw slices that aren't there. Checked after
+/// every step and around undo/redo, alongside the XLSX round-trip and `workbook_diff`, which
+/// compare the whole side-table between states.
+fn runs_problem(wb: &Workbook) -> Option<String> {
+    for sh in &wb.sheets {
+        for (c, runs) in &sh.cell_runs {
+            if !sh.cell(*c).is_some_and(|cell| cell.value.as_text().is_some_and(|t| runs.valid_for(t))) {
+                return Some(format!("{}!{c}: runs not valid for the cell text", sh.name));
+            }
+        }
+    }
+    None
+}
+
 fn same_value(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Number(x), Value::Number(y)) => x == y || (x.is_nan() && y.is_nan()),
@@ -529,6 +599,8 @@ fn workbook_diff(a: &Workbook, b: &Workbook) -> Option<String> {
                 ("autofilter", x.autofilter != y.autofilter),
                 ("cond_formats", x.cond_formats != y.cond_formats),
                 ("validations", x.validations != y.validations),
+                ("cell_pictures", x.cell_pictures != y.cell_pictures),
+                ("cell_runs", x.cell_runs != y.cell_runs),
                 ("spill", x.spill != y.spill || x.spill_ranges != y.spill_ranges),
             ]
             .into_iter()
@@ -739,6 +811,28 @@ fn chart_ids(wb: &Workbook) -> Vec<u32> {
     wb.sheets.iter().flat_map(|s| s.charts.iter().map(|c| c.id)).collect()
 }
 
+/// A `chars` form for the Font commands: a one-cell `range` (with its `sheet`) that holds plain
+/// text right now, and a `chars: [start, len]` window within the text's current length (never
+/// empty — zero-length ranges are rejected by design). `None` when no sheet has a plain-text
+/// cell; callers fall back to the range form rather than emit a guaranteed error.
+fn chars_params(rng: &mut Rng, wb: &Workbook) -> Option<Json> {
+    let texts: Vec<(usize, CellRef, &str)> = wb
+        .sheets
+        .iter()
+        .enumerate()
+        .flat_map(|(i, sh)| {
+            sh.cells.iter().filter_map(move |(c, cell)| {
+                let text = (cell.formula.is_none()).then(|| cell.value.as_text()).flatten()?;
+                (!text.is_empty()).then_some((i, c, text))
+            })
+        })
+        .collect();
+    let (sheet, at, text) = *texts.get(rng.below(texts.len()))?;
+    let n = text.chars().count() as i64;
+    let start = rng.below(n as usize) as i64;
+    Some(json!({"sheet": sheet, "range": at.a1(), "chars": [start, rng.int(1, n - start)]}))
+}
+
 /// Curated state-changing commands and their weights.
 const CURATED: &[(&str, usize)] = &[
     ("cell.set", 22),
@@ -758,6 +852,9 @@ const CURATED: &[(&str, usize)] = &[
     ("edit.autoFill", 2),
     ("edit.fillSeries", 1),
     ("home.bold", 1),
+    ("home.fontColor", 1),
+    ("home.underline", 1),
+    ("home.superscript", 1),
     ("home.fillColor", 1),
     ("home.numberFormat", 1),
     ("home.borders", 1),
@@ -884,6 +981,27 @@ fn curated_params(rng: &mut Rng, wb: &Workbook, id: &str) -> Json {
         }
         "edit.fillSeries" => json!({"range": near_range(rng).a1(), "type": rng.pick(&["linear", "growth", "autofill"]), "step": rng.int(-2, 3)}),
         "home.bold" => json!({"range": range(rng)}),
+        "home.fontColor" => {
+            // The range form, or the run-level `chars` form on a plain-text cell.
+            if rng.chance(50)
+                && let Some(mut p) = chars_params(rng, wb)
+            {
+                p["color"] = json!(color(rng));
+                return p;
+            }
+            json!({"range": range(rng), "color": color(rng)})
+        }
+        "home.underline" | "home.superscript" => {
+            // Run-level: format a character range within one cell's text (`on` left to the
+            // all-covered rule half the time).
+            if let Some(mut p) = chars_params(rng, wb) {
+                if rng.chance(50) {
+                    p["on"] = json!(rng.chance(50));
+                }
+                return p;
+            }
+            json!({"range": range(rng)})
+        }
         "home.fillColor" => json!({"range": range(rng), "color": color(rng)}),
         "home.numberFormat" => json!({"range": range(rng), "format": rng.pick(&["Currency", "Percentage", "Short Date", "Text", "General"])}),
         "home.borders" => json!({"range": range(rng), "preset": rng.pick(&["all", "outside", "none", "thickBottom"])}),

@@ -159,6 +159,7 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
             .collect();
         let mut moved: Vec<(CellRef, Option<Cell>)> = Vec::with_capacity(body.count() as usize);
         let mut pictures = Vec::new();
+        let mut runs = Vec::new();
         for (dst_i, &src_i) in order.iter().enumerate() {
             for &k in &lanes {
                 let src = line(src_i, k);
@@ -173,6 +174,9 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
                 }
                 if let Some(picture) = sh.cell_pictures.get(&src) {
                     pictures.push((dst, picture.clone()));
+                }
+                if let Some(cr) = sh.cell_runs.get(&src) {
+                    runs.push((dst, cr.clone()));
                 }
                 moved.push((dst, cell));
             }
@@ -228,6 +232,8 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
             shm.hyperlinks.insert(at, h);
         }
         shm.cell_pictures.extend(pictures);
+        // After `set_cell` cleared the destinations, the runs go back with their rows.
+        shm.cell_runs.extend(runs);
         for (i, h) in heights.into_iter().enumerate() {
             let row = body.start.row + i as u32;
             match h {

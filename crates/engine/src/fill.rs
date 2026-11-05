@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use gridcraft_core::date::{MONTHS, WEEKDAYS, datetime_from_serial, days_in_month, serial_from_ymd};
 use gridcraft_core::{CellRef, RangeRef, Value};
-use gridcraft_model::{Cell, Formula, Workbook};
+use gridcraft_model::{Cell, CellRuns, Formula, Workbook};
 use gridcraft_numfmt::{FormatKind, NumberFormat};
 
 use crate::Result;
@@ -86,6 +86,9 @@ pub fn holds_source_in_corner(src: RangeRef, target: RangeRef) -> bool {
 }
 
 /// Fills `target` (which contains `src` at one edge) from the pattern in `src`.
+// One read of Excel's fill semantics: every fill mode's values, formats and rich-text runs in
+// the order the file format applies them.
+#[allow(clippy::cognitive_complexity)]
 pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: FillMode) -> Result<()> {
     let custom = cx.wb.custom_lists.clone();
     let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
@@ -112,6 +115,7 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
     let src_len = if vertical { src.height() } else { src.width() };
     let mut writes: Vec<(CellRef, Option<Cell>)> = Vec::new();
     let mut pictures = Vec::new();
+    let mut runs: Vec<(CellRef, CellRuns)> = Vec::new();
     for lane in lanes {
         let src_cells: Vec<(CellRef, Option<Cell>)> = (0..src_len)
             .map(|i| {
@@ -182,6 +186,20 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
                     cell.style = style;
                 }
             }
+            // Rich-text runs travel with the cell that carries them (#906): cloned when the
+            // fill writes the same text (a copy), re-based when a series pattern changed it.
+            if mode != FillMode::ValuesOnly
+                && let Some(src_runs) = sh.cell_runs.get(&sc)
+                && let Some(old_cell) = &scell
+                && let Value::Text(new_t) = &cell.value
+                && let Value::Text(old_t) = &old_cell.value
+            {
+                // Same text (a copy): clone. Changed by a series pattern: re-base positionally.
+                let carried = if old_t == new_t { Some(src_runs.clone()) } else { src_runs.filled(old_t, new_t) };
+                if let Some(cr) = carried {
+                    runs.push((*t, cr));
+                }
+            }
             if let Some(picture) = sh.cell_pictures.get(&sc) {
                 pictures.push((*t, picture.clone()));
             }
@@ -199,6 +217,8 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
         }
     }
     sh.cell_pictures.extend(pictures);
+    // After `set_cell` cleared the destinations, the runs go back with their cells.
+    sh.cell_runs.extend(runs);
     for (c, _) in writes {
         cx.touch(sheet, c);
     }

@@ -60,6 +60,7 @@ this logic, with one undo step.
 | Fill handle: drag to fill series, double-click to fill down, right-drag menu | fill done (Ctrl+drag swaps copy and series; month patterns use the workbook's 1900 or 1904 date system); right-drag menu partial: Copy Cells, Fill Series, Fill Formatting Only, Fill Without Formatting, and from a date Fill Days, Fill Weekdays, Fill Months and Fill Years, then Series…; a left-drag leaves an Auto Fill Options button with the same fill choices (gone once the workbook changes or the selection moves); Linear/Growth Trend and Flash Fill missing |
 | Drag-move and drag-copy cells (border drag, Ctrl/Option, Shift to insert) | border drag moves (M3) and asks "There's already data here. Do you want to replace it?" before replacing cells that hold data (`range.move`, #3136); Ctrl/Option to copy and Shift to insert are not wired to the border drag yet (reorder whole columns by their headers instead) |
 | In-cell editing, Enter/Tab movement, Alt/Option+Enter line breaks | done |
+| Font group (colour, bold, italic, underline, strikethrough, super/subscript, font, size) applies to the selected characters while editing | done (#776, 10-13): the in-cell editor and the formula bar carry per-character runs, the Home ▸ Font commands hit the edit buffer, and committing stores them on the cell (undo restores the previous runs) |
 | Point mode (click/drag/arrow references), reference colouring, F4 | done; dragging over row or column headers points at whole rows or columns (`A:C`, `2:5`); Command/Ctrl-click adds separate arguments with the edit's locale separator, and Shift-click extends the current reference from a fixed anchor on the same sheet. Pointer-event regressions cover repeated/reversed selections, manual separators, sheet switches and keyboard continuation. |
 | Number-format colors (`[Green]`, `[Color1]`–`[Color56]`) | Rendered in grid and PDF from shared RGB mappings (#1452) |
 | Point mode (click/drag/arrow references), reference colouring, F4 | done |
@@ -242,6 +243,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | The Home ▸ Font group works on a character selection while editing, in the in-cell editor and in the formula bar; runs are stored on the cell (#776) |
 | 2026-11-02 | minor | Form controls: buttons, sliders (scroll bars) and spin buttons placed, worked, selected and edited on the sheet (Insert › Controls, Assign Action, Format Control); catalog 281 / 296 |
 | 2026-11-03 | minor | Highlight the active cell's row: a global preference that tints the whole row, off by default |
 | 2026-11-03 | minor | The formula bar's bottom edge is a resize handle: dragging it sets the bar's height in whole lines, up to half the window, and dragging it to one line collapses it; expanding (the chevron, Ctrl+Shift+U) returns to the dragged height, which is kept with the UI preferences. `view.expandFormulaBar {lines}` sets it (#1246) |

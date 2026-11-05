@@ -7,15 +7,16 @@ use gridcraft_core::date::{serial_from_ymd, time_fraction};
 use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_formula::Expr;
 use gridcraft_model::{
-    AutoFilter, Cell, CfOperator, CfRule, CfValueKind, Comment, CondFormat, EditRange, ErrorStyle, FilterCriterion, Formula, Hyperlink, LineInfo,
-    NoteBox, NoteCorner, Orientation, PageOrder, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn,
-    Validation, ValidationKind, XmlColumnPr,
+    AutoFilter, Cell, CellRuns, CfOperator, CfRule, CfValueKind, Comment, CondFormat, EditRange, ErrorStyle, FilterCriterion, Formula, Hyperlink,
+    LineInfo, NoteBox, NoteCorner, Orientation, PageOrder, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn,
+    TotalsFn, Validation, ValidationKind, XmlColumnPr,
 };
 
 use crate::IoError;
 use crate::fmla::{from_file, unwrap_google_sheets};
 use crate::package::Rel;
 use crate::read::Ctx;
+use crate::runs::{self, Si};
 use crate::styles::read_color;
 use crate::tables::{col_width_to_px, paper_name, pt_to_px};
 use crate::xml::{self, El};
@@ -523,10 +524,20 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
 fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos: CellRef) {
     let style = cx.style(c.attr_u32("s"));
     let v = c.child("v").map(|v| v.text.as_str());
+    // The cell's rich-text runs, when its string item carries any worth keeping; attached to
+    // the side-table only after the final value is known (issue #774).
+    let mut runs: Option<CellRuns> = None;
     let value = match c.attr("t").unwrap_or("n") {
         "s" => match v.and_then(|v| v.trim().parse::<usize>().ok()) {
             Some(i) => match cx.sst.get(i) {
-                Some(s) => Value::Text(s.clone()),
+                Some(si) => {
+                    // Parse-time charging bounds building each item once; this per-reference
+                    // charge bounds total *stored* runs, so one rich item referenced by a
+                    // huge number of cells stops attaching at the budget and they keep their
+                    // plain text (issue #774).
+                    runs = si.runs.as_ref().filter(|cr| runs::runs_fits(&mut cx.run_budget, cr.runs.len())).cloned();
+                    Value::Text(si.text.clone())
+                }
                 None => {
                     cx.warn("some cells refer to missing shared strings");
                     Value::Empty
@@ -535,9 +546,13 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
             None => Value::Empty,
         },
         "str" => v.map(|v| Value::text(xml::decode_xstring(v))).unwrap_or(Value::Empty),
-        "inlineStr" => {
-            c.child("is").map(|is| Value::text(xml::rich_text(is))).or_else(|| v.map(|v| Value::text(xml::decode_xstring(v)))).unwrap_or(Value::Empty)
-        }
+        "inlineStr" => match c.child("is").map(|is| runs::Si::parse(is, &cx.palette, &mut cx.run_budget)) {
+            Some(Si { text, runs: item_runs }) => {
+                runs = item_runs;
+                Value::Text(text)
+            }
+            None => v.map(|v| Value::text(xml::decode_xstring(v))).unwrap_or(Value::Empty),
+        },
         "b" => v.map(|v| Value::Bool(matches!(v.trim(), "1" | "true" | "TRUE"))).unwrap_or(Value::Empty),
         "e" => v.map(|v| Value::Error(CellError::parse(v.trim()).unwrap_or(CellError::Value))).unwrap_or(Value::Empty),
         "d" => match v.and_then(|v| parse_iso_datetime(v.trim(), cx.date_system)) {
@@ -620,6 +635,13 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
         Some(_) => Value::Empty,
         None => value,
     };
+    // Runs attach only to the final text value: a spilled cell's cached value was just emptied.
+    if let Some(cr) = runs
+        && let Value::Text(t) = &value
+        && cr.valid_for(t)
+    {
+        sheet.cell_runs.insert(pos, cr);
+    }
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style, py });
 }
 

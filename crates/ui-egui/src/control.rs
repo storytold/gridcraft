@@ -384,7 +384,9 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         }
         "ui.edit.text" => match app.editor.as_mut() {
             Some(e) => {
-                e.text = s("text").unwrap_or("").to_string();
+                // Through `set_text`, so the loaded runs translate with the text (and drop on a
+                // formula transition) instead of going stale against it.
+                e.set_text(s("text").unwrap_or("").to_string());
                 e.caret = e.text.chars().count();
                 ok(Json::Null)
             }

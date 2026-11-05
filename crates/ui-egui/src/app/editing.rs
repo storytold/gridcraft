@@ -64,6 +64,11 @@ impl SheetApp {
             None => (current.clone(), false),
         };
         let mut ed = editor::EditState::new(d.uid, d.wb.active_sheet(), at, text, replace, from_formula_bar).on_sheet(&d.wb);
+        // An edit of the cell's own text (F2, the formula bar: `replace` false) continues its
+        // rich runs; typing replaces the text and its runs; a formula edit never has them.
+        if !ed.is_formula() && !replace {
+            ed.runs = sh.cell_runs.get(&at).cloned();
+        }
         ed.window = self.session.active_window();
         ed.locale = locale;
         if replace && self.ui.autocomplete && !ed.is_formula() {
@@ -196,7 +201,27 @@ impl SheetApp {
         } else if fill_selection {
             self.session.run("range.fill", json!({"input": text}))
         } else {
-            self.session.run("cell.set", json!({"cell": ed.cell.a1(), "input": text, "array": array}))
+            {
+                let mut params = editor::commit_params(&ed);
+                // The committed text can differ from the edit's buffer (column AutoComplete's
+                // full entry, whitespace `canonical` trims): translate the runs to it, or drop
+                // them (a formula, or a translation that no longer lines up) — `cell.set` would
+                // refuse the whole edit otherwise.
+                if text != ed.text {
+                    let runs = if text.starts_with('=') { None } else { ed.runs.as_ref().and_then(|r| r.edited(&ed.text, &text)) };
+                    match runs.and_then(|r| serde_json::to_value(r).ok()) {
+                        Some(v) => params["runs"] = v,
+                        None => {
+                            if let Some(o) = params.as_object_mut() {
+                                o.remove("runs");
+                            }
+                        }
+                    }
+                }
+                params["array"] = json!(array);
+                params["input"] = json!(text);
+                self.session.run("cell.set", params)
+            }
         };
         match r {
             Ok(_) => {

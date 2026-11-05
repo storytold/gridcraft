@@ -128,6 +128,10 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
     // Both spellings take a string, number or boolean, as typed (#697).
     let input = p.get("input").or_else(|| p.get("value")).map(json_to_input).ok_or_else(|| bad("cell.set", "missing `input` (or `value`)"))?;
     let array = bool_param(p, "array").unwrap_or(false);
+    let runs = match p.get("runs").cloned() {
+        None | Some(Json::Null) => None,
+        Some(v) => Some(serde_json::from_value::<gridcraft_model::CellRuns>(v).map_err(|_| bad("cell.set", "invalid `runs`"))?),
+    };
     let d = s.doc()?;
     if let Some(sh) = d.wb.sheet(sheet)
         && sh.is_protected()
@@ -173,6 +177,19 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
         }
         crate::cmd::data::grow_autofilter(sh, at);
         cx.touch(sheet, at);
+        // `runs` commits with the text, in the same undo entry: it must describe exactly the
+        // final text of the cell, or the whole edit is refused.
+        if let Some(runs) = runs {
+            let sh = cx.sheet_mut(sheet)?;
+            let matched = match sh.value(at) {
+                Value::Text(t) => runs.valid_for(&t) && runs.runs.len() <= gridcraft_model::MAX_RUNS_PER_CELL,
+                _ => false,
+            };
+            if !matched {
+                return Err(bad("cell.set", "runs do not match the text"));
+            }
+            sh.cell_runs.insert(at, runs);
+        }
         Ok(Json::Null)
     })?;
     let v = s.doc()?.wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default();

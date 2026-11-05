@@ -25,6 +25,13 @@ mod print;
 mod quit;
 mod view;
 
+/// The base font an active edit's Font-group commands format over: the edited cell's style font
+/// (the default when there is no document, so interception then only ever sees all-default
+/// merges). Field-disjoint from `SheetApp::editor`, so the interception can borrow both.
+pub(super) fn edit_base_font(session: &gridcraft_engine::Session, ed: &crate::editor::EditState) -> gridcraft_engine::model::Font {
+    session.active().and_then(|d| d.wb.sheet(ed.sheet).map(|sh| d.wb.styles.get(sh.style_id(ed.cell)).font.clone())).unwrap_or_default()
+}
+
 impl SheetApp {
     /// Constructs a `SheetApp` with default UI, grid, printing, control and screenshot state and the caller's session and services.
     pub fn new(session: Session, services: Services) -> SheetApp {

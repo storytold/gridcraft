@@ -49,6 +49,15 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
                     .filter_map(move |col| sh.cell_pictures.get(&CellRef::new(*row, col)).map(|p| (CellRef::new(start + i as u32, col), p.clone())))
             })
             .collect();
+        // Rich-text runs travel with the kept rows, like the pictures.
+        let runs: Vec<_> = keep
+            .iter()
+            .enumerate()
+            .flat_map(|(i, row)| {
+                (r.start.col..=r.end.col)
+                    .filter_map(move |col| sh.cell_runs.get(&CellRef::new(*row, col)).map(|cr| (CellRef::new(start + i as u32, col), cr.clone())))
+            })
+            .collect();
         // Rows a filter keeps are compacted to `start + i`, so the notes and hyperlinks that
         // describe them move with them; the ones on removed rows are dropped with the row.
         let notes: Vec<_> = keep
@@ -90,6 +99,7 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         shm.cell_pictures.extend(pictures);
+        shm.cell_runs.extend(runs);
         for (at, cm) in notes {
             shm.comments.insert(at, cm);
         }

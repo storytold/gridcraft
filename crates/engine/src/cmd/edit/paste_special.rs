@@ -3,6 +3,7 @@ use super::{
     Cell, CellRef, EngineError, Formula, Json, RangeRef, Result, Session, StyleId, Value, bad, bool_param, cell_param_on, edit, json, str_param,
     target_sheet,
 };
+use gridcraft_model::CellRuns;
 
 fn tiled_cells(rows: u32, cols: u32, tiles_r: u32, tiles_c: u32) -> impl Iterator<Item = (u32, u32, u32, u32)> + Clone {
     (0..tiles_r).flat_map(move |tr| (0..tiles_c).flat_map(move |tc| (0..rows).flat_map(move |r| (0..cols).map(move |c| (tr, tc, r, c)))))
@@ -55,14 +56,23 @@ fn copy_merges(
     what: What,
     transpose: bool,
 ) -> Result<()> {
-    if !matches!(what, What::All | What::Formats) || transpose {
+    if !matches!(what, What::All | What::Formats) {
         return Ok(());
     }
     let merges: Vec<RangeRef> = src_sheet.merges.iter().filter(|merge| src.contains_range(merge)).copied().collect();
     for merge in merges {
         let row_offset = at.row as i64 - src.start.row as i64;
         let col_offset = at.col as i64 - src.start.col as i64;
-        if let (Some(start), Some(end)) = (merge.start.offset(row_offset, col_offset), merge.end.offset(row_offset, col_offset)) {
+        // A transposed paste swaps the block's rows and columns; a merge inside it moves with
+        // its cells, its rectangle swapped the same way (a cut already dropped it at the source,
+        // so transposing here is what keeps it from being lost).
+        let (moved_start, moved_end) = if transpose {
+            let swap = |c: CellRef| -> Option<CellRef> { at.offset(c.col as i64 - src.start.col as i64, c.row as i64 - src.start.row as i64) };
+            (swap(merge.start), swap(merge.end))
+        } else {
+            (merge.start.offset(row_offset, col_offset), merge.end.offset(row_offset, col_offset))
+        };
+        if let (Some(start), Some(end)) = (moved_start, moved_end) {
             let moved = RangeRef::new(start, end);
             let sheet = cx.sheet_mut(dest_sheet)?;
             sheet.merges.retain(|existing| !existing.intersects(&moved));
@@ -72,6 +82,37 @@ fn copy_merges(
     Ok(())
 }
 
+/// Empties the cut's source block and returns what must travel with its cells: the cells
+/// themselves, their pictures and their rich-text runs. Notes, hyperlinks and merged areas sit
+/// beside the cells, and a cut takes them with the block: the destination is written from the
+/// clipboard snapshot taken before the cut, so removing them here loses nothing and leaves the
+/// old place clean instead of leaving one merged block and one note behind.
+/// What a cut empties from its source and carries to the destination: the cells themselves,
+/// their pictures and their rich-text runs.
+type CutSource = (
+    Vec<(CellRef, Option<Cell>)>,
+    std::collections::BTreeMap<CellRef, std::sync::Arc<gridcraft_model::CellPicture>>,
+    std::collections::BTreeMap<CellRef, CellRuns>,
+);
+
+fn take_cut_source(cx: &mut crate::cmd::Ctx<'_>, sheet: usize, src: RangeRef) -> Result<CutSource> {
+    let source = cx.sheet_mut(sheet)?;
+    let pictures = source.cell_pictures.iter().filter(|(c, _)| src.contains(**c)).map(|(c, p)| (*c, p.clone())).collect();
+    // `take_cells` drops the runs side-table entries; keep them to move with their cells.
+    let runs = source.cell_runs.iter().filter(|(c, _)| src.contains(**c)).map(|(c, cr)| (*c, cr.clone())).collect();
+    let taken: Vec<(CellRef, Option<Cell>)> = source.take_cells(src).into_iter().map(|(c, v)| (c, Some(v))).collect();
+    source.comments.retain(|c, _| !src.contains(*c));
+    source.hyperlinks.retain(|c, _| !src.contains(*c));
+    source.merges.retain(|m| !src.contains_range(m));
+    for (c, _) in &taken {
+        cx.touch(sheet, *c);
+    }
+    Ok((taken, pictures, runs))
+}
+
+// The tile loop is one read of Excel's paste semantics: every form in one place, in the order
+// the file format applies them. Splitting it scatters a single spec across helpers.
+#[allow(clippy::cognitive_complexity)]
 pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(clip) = s.clipboard.clone() else { return Err(EngineError::Other("Nothing to paste.".into())) };
     let what = match str_param(p, "what").unwrap_or("all") {
@@ -126,31 +167,20 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             }
             *style_map.entry(id).or_insert_with(|| wb.styles.intern(src_wb.styles.get(id).clone()))
         };
-        let mut moved_formulas = Vec::new();
+        let mut moved_formulas: Vec<(CellRef, Option<Cell>)> = Vec::new();
         let mut moved_pictures = std::collections::BTreeMap::new();
+        let mut moved_runs = std::collections::BTreeMap::new();
         if cut_move {
             // Remove the source first (contents and formats), and fix references to it.
-            let source = cx.sheet_mut(clip.sheet)?;
-            moved_pictures = source.cell_pictures.iter().filter(|(c, _)| src.contains(**c)).map(|(c, p)| (*c, p.clone())).collect();
-            let taken = source.take_cells(src);
-            // Notes, hyperlinks and merged areas sit beside the cells, and a cut takes them
-            // with the block: the destination is written from the clipboard snapshot taken
-            // before the cut, so removing them here loses nothing and leaves the old place
-            // clean instead of leaving one merged block and one note behind.
-            source.comments.retain(|c, _| !src.contains(*c));
-            source.hyperlinks.retain(|c, _| !src.contains(*c));
-            source.merges.retain(|m| !src.contains_range(m));
-            for (c, _) in &taken {
-                cx.touch(clip.sheet, *c);
-            }
-            moved_formulas = taken;
+            (moved_formulas, moved_pictures, moved_runs) = take_cut_source(cx, clip.sheet, src)?;
         }
         let dest_name = cx.wb.sheet(dest_sheet).map(|sh| sh.name.clone()).unwrap_or_default();
         for (tr, tc, r, c) in tiled_cells(src.height(), src.width(), tiles_r, tiles_c) {
             let sc = CellRef::new(src.start.row + r, src.start.col + c);
             let (dr, dc) = if transpose { (c, r) } else { (r, c) };
             let Some(dest) = at.offset((tr * h + dr) as i64, (tc * w + dc) as i64) else { continue };
-            let src_cell = if cut_move { moved_formulas.iter().find(|(k, _)| *k == sc).map(|(_, v)| v.clone()) } else { src_sheet.cell(sc).cloned() };
+            let src_cell: Option<Cell> =
+                if cut_move { moved_formulas.iter().find(|(k, _)| *k == sc).and_then(|(_, v)| v.clone()) } else { src_sheet.cell(sc).cloned() };
             let src_val = src_sheet.value(sc);
             let src_picture = if cut_move { moved_pictures.get(&sc) } else { src_sheet.cell_pictures.get(&sc) }.cloned();
             if skip_blanks && src_picture.is_none() && src_val.is_empty() && src_cell.as_ref().is_none_or(|x| x.formula.is_none() && x.py.is_none()) {
@@ -277,6 +307,12 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                     apply_operation(&op, &old, &mut new);
                 }
             }
+            // The text this cell will hold after the paste, captured before `new` moves into
+            // `set_cell`: rich runs travel only with the text they still describe.
+            let pasted_text = match new.value.scalar() {
+                Value::Text(t) => Some(t),
+                _ => None,
+            };
             // The copied cell's validation rule replaces whatever rule the destination had.
             if !link && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
                 let rule = src_sheet.validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(sc))).cloned();
@@ -315,6 +351,20 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             }
             if let Some(picture) = new_picture {
                 cx.sheet_mut(dest_sheet)?.cell_pictures.insert(dest, picture);
+            }
+            // A cut moves its cells' rich text with it; a copy repeats it — tiled, transposed
+            // and cross-sheet like the cell itself (a value-pasting form or a link drops it).
+            let runs_dest: Option<gridcraft_model::CellRuns> = (!link
+                && matches!(what, What::All | What::AllExceptBorders)
+                && (if cut_move { moved_runs.get(&sc) } else { src_sheet.cell_runs.get(&sc) })
+                    .is_some_and(|cr| pasted_text.as_ref().is_some_and(|t| cr.valid_for(t))))
+            .then(|| {
+                let cr = if cut_move { moved_runs.get(&sc) } else { src_sheet.cell_runs.get(&sc) };
+                cr.cloned()
+            })
+            .flatten();
+            if let Some(cr) = runs_dest {
+                cx.sheet_mut(dest_sheet)?.cell_runs.insert(dest, cr);
             }
             cx.touch(dest_sheet, dest);
         }
