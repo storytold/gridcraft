@@ -461,7 +461,7 @@ impl<'a> Plan<'a> {
                 previous_leaf = Some(row_group.values.clone());
             }
             for group in &columns {
-                let context = self.filter_context(&row_group.key, &group.key);
+                let context = self.filter_context(&row_group.values, &group.values);
                 for measure in &self.measures {
                     let value = self.evaluator.evaluate_measure(measure, context.clone()).map_err(PivotError::from)?;
                     out.push(value);
@@ -543,7 +543,7 @@ impl<'a> Plan<'a> {
     ///
     /// A related field's group value is set on the related table, so the evaluator's relationship
     /// propagation restricts the source table exactly as a slicer on that dimension would.
-    fn filter_context(&self, row_key: &[ScalarKey], column_key: &[ScalarKey]) -> FilterContext {
+    fn filter_context(&self, row_values: &[Scalar], column_values: &[Scalar]) -> FilterContext {
         let mut context = FilterContext::default();
         // Several filters on one column intersect, the same way `passes` ANDs them for the groups:
         // the last one must not silently win in the cells while the groups use all of them.
@@ -551,7 +551,7 @@ impl<'a> Plan<'a> {
         for (field, allowed) in &self.filters {
             let key = (field.field.table, field.field.column);
             match merged.get_mut(&key) {
-                Some(existing) => *existing = existing.intersection(allowed).cloned().collect(),
+                Some(existing) => *existing = crate::value::fold_intersect(existing, allowed),
                 None => {
                     merged.insert(key, allowed.clone());
                 }
@@ -560,11 +560,13 @@ impl<'a> Plan<'a> {
         for ((table, column), allowed) in merged {
             context.set(table, column, allowed);
         }
-        for (field, key) in self.row_fields.iter().zip(row_key) {
-            narrow_to_key(&mut context, field.field.table, field.field.column, key);
+        // The group values keep their own variant and case, so a date group stays a date for
+        // `SELECTEDVALUE`; matching folds both sides inside `narrow_to_key`.
+        for (field, value) in self.row_fields.iter().zip(row_values) {
+            narrow_to_key(&mut context, field.field.table, field.field.column, &ScalarKey::from(value));
         }
-        for (field, key) in self.column_fields.iter().zip(column_key) {
-            narrow_to_key(&mut context, field.field.table, field.field.column, key);
+        for (field, value) in self.column_fields.iter().zip(column_values) {
+            narrow_to_key(&mut context, field.field.table, field.field.column, &ScalarKey::from(value));
         }
         context
     }
@@ -577,19 +579,19 @@ impl<'a> Plan<'a> {
         for (index, entry) in leaves.iter().enumerate() {
             let key: &[ScalarKey] = entry.0.as_slice();
             let values: &[Scalar] = entry.1.as_slice();
-            out.push(ColumnGroup { key: key.to_vec(), values: values.to_vec(), is_total: false });
+            out.push(ColumnGroup { values: values.to_vec(), is_total: false });
             if !self.pivot.column_subtotals {
                 continue;
             }
             let next = leaves.get(index + 1).map(|entry| entry.0.as_slice());
             for level in (1..levels).rev() {
                 if prefix_closed(key, next, level) {
-                    out.push(ColumnGroup { key: key[..level].to_vec(), values: values[..level].to_vec(), is_total: true });
+                    out.push(ColumnGroup { values: values[..level].to_vec(), is_total: true });
                 }
             }
         }
         if self.pivot.grand_totals && levels > 0 && !groups.is_empty() {
-            out.push(ColumnGroup { key: Vec::new(), values: Vec::new(), is_total: true });
+            out.push(ColumnGroup { values: Vec::new(), is_total: true });
         }
         out
     }
@@ -602,19 +604,19 @@ impl<'a> Plan<'a> {
         for (index, entry) in leaves.iter().enumerate() {
             let key: &[ScalarKey] = entry.0.as_slice();
             let values: &[Scalar] = entry.1.as_slice();
-            out.push(RowGroup { key: key.to_vec(), values: values.to_vec(), kind: RowKind::Leaf });
+            out.push(RowGroup { values: values.to_vec(), kind: RowKind::Leaf });
             if !self.pivot.row_subtotals || levels < 2 {
                 continue;
             }
             let next = leaves.get(index + 1).map(|entry| entry.0.as_slice());
             for level in (1..levels).rev() {
                 if prefix_closed(key, next, level) {
-                    out.push(RowGroup { key: key[..level].to_vec(), values: values[..level].to_vec(), kind: RowKind::Subtotal(level) });
+                    out.push(RowGroup { values: values[..level].to_vec(), kind: RowKind::Subtotal(level) });
                 }
             }
         }
         if self.pivot.grand_totals && levels > 0 && !groups.is_empty() {
-            out.push(RowGroup { key: Vec::new(), values: Vec::new(), kind: RowKind::GrandTotal });
+            out.push(RowGroup { values: Vec::new(), kind: RowKind::GrandTotal });
         }
         out
     }
@@ -714,10 +716,9 @@ impl<'a> Plan<'a> {
 
 /// One rendered column group: a leaf column-field combination, or a subtotal/grand-total column.
 struct ColumnGroup {
-    /// The column-field values constrained by this group; a prefix for subtotals, empty for the
-    /// grand total.
-    key: Vec<ScalarKey>,
-    /// The group's column-field values, parallel to `key`.
+    /// The group's column-field values, crossing the row/column layout; a prefix for a subtotal,
+    /// empty for the grand total. They keep their own variant and case so the cell's filter can
+    /// rebuild the scalar.
     values: Vec<Scalar>,
     /// `true` for a subtotal or grand-total group.
     is_total: bool,
@@ -735,10 +736,8 @@ impl ColumnGroup {
 
 /// One rendered row.
 struct RowGroup {
-    /// The row-field values constrained by this row; a prefix for subtotals, empty for the grand
-    /// total.
-    key: Vec<ScalarKey>,
-    /// The row's field values, parallel to `key`.
+    /// The row's field values; a prefix for a subtotal, empty for the grand total. They keep their
+    /// own variant and case so the cell's filter can rebuild the scalar.
     values: Vec<Scalar>,
     kind: RowKind,
 }

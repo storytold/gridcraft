@@ -62,7 +62,7 @@ use crate::ast::{BinaryOp, Literal, UnaryOp};
 use crate::binder::{BindError, Binder, BoundExpr};
 use crate::model::DataModel;
 use crate::storage::{ColumnKind, ModelStorage, StorageError, TableStorage};
-use crate::value::{EvalError, Scalar, ScalarKey, TableColumn, TableValue, distinct_key, folded_key, relationship_key_of};
+use crate::value::{EvalError, Scalar, ScalarKey, TableColumn, TableValue, distinct_key, fold_intersect, folded_key, relationship_key_of};
 
 use support::*;
 
@@ -196,8 +196,12 @@ impl FilterContext {
             // Both sides fold through the same rule, so text ignores case and a numeric key
             // matches its other variants (a caller may insert keys into the public map directly).
             Some(values) => {
-                let wanted = distinct_key(value);
-                values.iter().any(|allowed| folded_key(allowed) == wanted)
+                // Fast path: the exact key is usually in the set; only a miss folds.
+                let exact = ScalarKey::from(value);
+                values.contains(&exact) || {
+                    let wanted = folded_key(&exact);
+                    values.iter().any(|allowed| folded_key(allowed) == wanted)
+                }
             }
             None => true,
         }
@@ -1638,7 +1642,7 @@ impl<'a> Evaluator<'a> {
                 self.apply_filter(inner, &mut narrowed, ctx)?;
                 for (key, keys) in narrowed.filters {
                     let merged = match filters.filters.get(&key) {
-                        Some(existing) => existing.intersection(&keys).cloned().collect(),
+                        Some(existing) => fold_intersect(existing, &keys),
                         None => keys,
                     };
                     filters.set(key.0, key.1, merged);

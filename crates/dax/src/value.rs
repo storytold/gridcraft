@@ -370,6 +370,15 @@ pub(crate) fn relationship_key_of(key: &ScalarKey) -> ScalarKey {
     }
 }
 
+/// Intersects two key sets under [`folded_key`], keeping the left-hand representatives.
+///
+/// Two filters that allow `"East"` and `"east"` accept the same rows, so their intersection must
+/// not be empty; the same holds for `Integer(2)` and `Decimal(2.0)`.
+pub(crate) fn fold_intersect(left: &BTreeSet<ScalarKey>, right: &BTreeSet<ScalarKey>) -> BTreeSet<ScalarKey> {
+    let right: BTreeSet<ScalarKey> = right.iter().map(folded_key).collect();
+    left.iter().filter(|key| right.contains(&folded_key(key))).cloned().collect()
+}
+
 /// Whether a key holds a NaN value, which never joins and is never a relationship key.
 pub(crate) fn is_nan_key(key: &ScalarKey) -> bool {
     match key {
