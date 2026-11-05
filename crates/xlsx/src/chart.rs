@@ -266,9 +266,11 @@ pub fn read_chart(root: &El) -> Option<Chart> {
     // Strict files write these as percentages (`219%`).
     let percent = |v: &str| v.trim().trim_end_matches('%').trim().parse::<f64>().ok();
     let gap_width = bars.and_then(|g| g.child_val("gapWidth")).and_then(percent).map(|v| v.clamp(0.0, 500.0) as u16);
-    // Stacked series share a slot, so the 100 written for them means nothing to keep.
-    let clustered = bars.is_some_and(|g| !matches!(g.child_val("grouping"), Some("stacked" | "percentStacked")));
-    let overlap = bars.filter(|_| clustered).and_then(|g| g.child_val("overlap")).and_then(percent).map(|v| v.clamp(-100.0, 100.0) as i16);
+    // Stacked series share a slot, so the 100 written for them means nothing to keep. Any other value
+    // is the file's own.
+    let stacked = bars.is_some_and(|g| matches!(g.child_val("grouping"), Some("stacked" | "percentStacked")));
+    let overlap =
+        bars.and_then(|g| g.child_val("overlap")).and_then(percent).map(|v| v.clamp(-100.0, 100.0) as i16).filter(|v| !(stacked && *v == 100));
     let first_slice_angle =
         plot.child("pieChart").or(doughnut).and_then(|g| g.child_val("firstSliceAng")).and_then(|v| v.trim().parse::<u16>().ok()).unwrap_or(0) % 360;
     Some(Chart {

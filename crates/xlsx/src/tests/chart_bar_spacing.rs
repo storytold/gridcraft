@@ -30,6 +30,9 @@ fn bar_spacing_is_read_in_both_notations() {
 fn a_stacked_charts_overlap_is_not_kept() {
     for grouping in ["stacked", "percentStacked"] {
         assert_eq!(bars(grouping, "<c:gapWidth val=\"50\"/><c:overlap val=\"100\"/>").overlap, None, "{grouping}");
+        assert_eq!(bars(grouping, "<c:overlap val=\"150\"/>").overlap, None, "{grouping}: 150 is 100 once clamped");
+        assert_eq!(bars(grouping, "<c:overlap val=\"-27\"/>").overlap, Some(-27), "{grouping}: the file's own value stays");
+        assert_eq!(bars(grouping, "<c:overlap val=\"50\"/>").overlap, Some(50), "{grouping}: the file's own value stays");
     }
 }
 
