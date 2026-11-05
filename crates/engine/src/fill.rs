@@ -575,20 +575,9 @@ pub fn series(cx: &mut Ctx, sheet: usize, options: SeriesOptions<'_>) -> Result<
                     match (unit, d) {
                         ("month", Some(_)) => (step as i64).checked_mul(i as i64).and_then(|m| add_months_clamped(sys, start, m)).unwrap_or(v),
                         ("year", Some(_)) => (step as i64).checked_mul(i as i64 * 12).and_then(|m| add_months_clamped(sys, start, m)).unwrap_or(v),
-                        ("weekday", Some(_)) => {
-                            let mut n = v;
-                            let mut left = step.abs() as i64;
-                            while left > 0 {
-                                n += step.signum();
-                                let Some(day) = datetime_from_serial(sys, n) else {
-                                    return Err(crate::EngineError::Other("The weekday series runs past the supported date range.".into()));
-                                };
-                                if day.weekday != 0 && day.weekday != 6 {
-                                    left -= 1;
-                                }
-                            }
-                            n
-                        }
+                        // Whole weeks at a time: a huge step costs no more than a small one.
+                        ("weekday", Some(_)) => add_weekdays(sys, v, step as i64)
+                            .ok_or_else(|| crate::EngineError::Other("The weekday series runs past the supported date range.".into()))?,
                         _ => v + step,
                     }
                 }
