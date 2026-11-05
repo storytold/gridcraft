@@ -1,7 +1,7 @@
 //! Rendering a value with a parsed section.
 
 use gridcraft_core::DateSystem;
-use gridcraft_core::date::{MONTHS, WEEKDAYS, datetime_from_serial};
+use gridcraft_core::date::{MONTHS, WEEKDAYS, datetime_from_serial, max_serial};
 
 use crate::decimal::{decimal_digits, fixed, fixed_from_digits, format_general_fit};
 use crate::parse::{DatePart, Section, Tok};
@@ -11,6 +11,8 @@ use crate::parse::{DatePart, Section, Tok};
 pub(crate) struct Out {
     pub text: String,
     pub fill: Option<(char, usize)>,
+    /// True when every digit shown is zero (a number section that rounded to zero).
+    pub zero: bool,
 }
 
 impl Out {
@@ -58,7 +60,7 @@ pub(crate) fn render_general(sec: &Section, v: f64, width: usize) -> Out {
 
 /// Renders a date/time. `None` when the serial is outside the supported range.
 pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem) -> Option<Out> {
-    if !v.is_finite() || !(0.0..2_958_466.0).contains(&v) {
+    if !v.is_finite() || !(0.0..max_serial(sys) as f64 + 1.0).contains(&v) {
         return None;
     }
     let sub_digits = sec.toks.iter().filter_map(|t| if let Tok::Date(DatePart::SubSec(n)) = t { Some(*n) } else { None }).max().unwrap_or(0).min(3);
@@ -231,7 +233,9 @@ fn digit_indices(toks: &[Tok], range: std::ops::Range<usize>) -> Vec<usize> {
 /// Renders a non-negative number through a number section.
 pub(crate) fn render_number(sec: &Section, v: f64) -> Out {
     let mut x = v.abs();
-    if sec.percent > 0 {
+    // Observed: `%` in a scientific section is only a literal (`#%e+#` shows 123456.789 as
+    // `1%e+5`).
+    if sec.percent > 0 && !sec.exp {
         x *= 100f64.powi(sec.percent.min(20));
     }
     if sec.scale > 0 {
@@ -247,6 +251,7 @@ pub(crate) fn render_number(sec: &Section, v: f64) -> Out {
     let mut pieces: Vec<String> = vec![String::new(); n];
     let mut before: Vec<String> = vec![String::new(); n + 1];
     let mut lits: Vec<Option<String>> = Vec::new();
+    let mut zero = false;
     if sec.fraction {
         lits = vec![None; n];
         render_fraction(sec, x, &mut pieces, &mut lits);
@@ -264,7 +269,9 @@ pub(crate) fn render_number(sec: &Section, v: f64) -> Out {
             let exp_idx = digit_indices(toks, e_at + 1..n);
             let step = int_idx.len().max(1) as i32;
             let (mut e, int_s, frac_s) = if x == 0.0 {
-                (0i32, String::new(), "0".repeat(frac_idx.len()))
+                // Observed: zero shows `0` in every integer placeholder, `#` and `?` too
+                // (`#.#E+#` gives `0.E+0`, `####.####E+#` gives `0000.E+0`).
+                (0i32, "0".repeat(int_idx.len()), "0".repeat(frac_idx.len()))
             } else {
                 let (digits, xe) = decimal_digits(x);
                 let mut e = xe - xe.rem_euclid(step);
@@ -283,26 +290,30 @@ pub(crate) fn render_number(sec: &Section, v: f64) -> Out {
             if int_s.is_empty() && frac_s.chars().all(|c| c == '0') {
                 e = 0;
             }
-            let mut head = String::from(if upper { "E" } else { "e" });
-            if e < 0 {
-                head.push('-');
+            let head = if upper { "E" } else { "e" };
+            let sign = if e < 0 {
+                "-"
             } else if plus {
-                head.push('+');
-            }
-            let width = exp_idx.iter().filter(|&&i| matches!(toks.get(i), Some(Tok::Digit('0')))).count().min(20);
-            let digits = format!("{:0w$}", e.unsigned_abs(), w = width);
+                "+"
+            } else {
+                ""
+            };
+            let digits = e.unsigned_abs().to_string();
+            // The sign sits right before the exponent digits, after any literal that follows the
+            // `E` (observed: `|0|e+|0|` shows `|1|e|+5|`); `?` pads the digits with spaces.
             match exp_idx.first() {
                 Some(&first) => {
                     if let Some(p) = pieces.get_mut(e_at) {
-                        *p = head;
+                        *p = head.to_string();
                     }
-                    if let Some(p) = pieces.get_mut(first) {
-                        *p = digits;
+                    if let Some(b) = before.get_mut(first) {
+                        *b = sign.to_string();
                     }
+                    fill_int(toks, &exp_idx, &digits, false, false, &mut pieces);
                 }
                 None => {
                     if let Some(p) = pieces.get_mut(e_at) {
-                        *p = head + &digits;
+                        *p = format!("{head}{sign}{digits}");
                     }
                 }
             }
@@ -310,6 +321,7 @@ pub(crate) fn render_number(sec: &Section, v: f64) -> Out {
         } else {
             fixed(x, frac_idx.len())
         };
+        zero = int_s.chars().chain(frac_s.chars()).all(|c| c == '0');
         fill_int(toks, &int_idx, &int_s, sec.thousands, false, &mut pieces);
         if int_idx.is_empty()
             && !int_s.is_empty()
@@ -338,6 +350,7 @@ pub(crate) fn render_number(sec: &Section, v: f64) -> Out {
             _ => out.push(pieces.get(i).map(String::as_str).unwrap_or("")),
         }
     }
+    out.zero = zero;
     out
 }
 
@@ -453,20 +466,26 @@ fn render_fraction(sec: &Section, x: f64, pieces: &mut [String], lits: &mut [Opt
     let has_q = |idx: &[usize]| idx.iter().any(|&i| toks.get(i) == Some(&Tok::Digit('?')));
     let has_whole = !whole_idx.is_empty();
     let (mut whole, f) = if has_whole { (x.floor(), x - x.floor()) } else { (0.0, x) };
-    let (mut num, den) = match fixed_den {
-        Some(d) => ((f * d as f64).round() as u64, d),
+    // Without a whole part the numerator carries the whole value and can pass u64::MAX, so it
+    // stays an f64 (a float-to-u64 cast saturates).
+    let (mut num, den): (f64, u64) = match fixed_den {
+        Some(d) => ((f * d as f64).round(), d),
+        None if f >= 1e15 => (f.round(), 1),
         None => {
             let digits = den_idx.len().clamp(1, 7) as u32;
-            approximate(f, 10u64.pow(digits) - 1)
+            let (n, d) = approximate(f, 10u64.pow(digits) - 1);
+            (n as f64, d)
         }
     };
-    if has_whole && num >= den && den > 0 {
-        whole += (num / den) as f64;
-        num %= den;
+    if has_whole && num >= den as f64 && den > 0 {
+        // The fractional part is below 1, so the numerator is at most the denominator here.
+        let n = num as u64;
+        whole += (n / den) as f64;
+        num = (n % den) as f64;
     }
     let whole_s = if whole >= 1.0 { fixed(whole, 0).0 } else { String::new() };
     let num_zero_ph = num_idx.iter().any(|&i| toks.get(i) == Some(&Tok::Digit('0')));
-    if has_whole && num == 0 && !num_zero_ph {
+    if has_whole && num == 0.0 && !num_zero_ph {
         fill_int(toks, &whole_idx, &whole_s, sec.thousands, true, pieces);
         let spaces = has_q(&whole_idx) || has_q(&num_idx) || has_q(&den_idx);
         blank_range(toks, sep_start..den_end, spaces, pieces, lits);
@@ -475,7 +494,7 @@ fn render_fraction(sec: &Section, x: f64, pieces: &mut [String], lits: &mut [Opt
     if has_whole {
         // A zero value shows `0` in a `?` or `0` units place, nothing in a `#` one.
         let units_hash = whole_idx.last().is_some_and(|&i| toks.get(i) == Some(&Tok::Digit('#')));
-        let force = whole_s.is_empty() && num == 0 && !units_hash;
+        let force = whole_s.is_empty() && num == 0.0 && !units_hash;
         fill_int(toks, &whole_idx, &whole_s, sec.thousands, force, pieces);
         let whole_shown = whole_idx.iter().any(|&i| pieces.get(i).is_some_and(|p| p.chars().any(|c| c.is_ascii_digit())));
         if !whole_shown {
@@ -483,7 +502,8 @@ fn render_fraction(sec: &Section, x: f64, pieces: &mut [String], lits: &mut [Opt
             blank_range(toks, sep_start..num_start, spaces, pieces, lits);
         }
     }
-    fill_int(toks, &num_idx, &num.to_string(), false, true, pieces);
+    let num_s = if num < 1e15 { (num as u64).to_string() } else { fixed(num, 0).0 };
+    fill_int(toks, &num_idx, &num_s, false, true, pieces);
     if let Some(p) = pieces.get_mut(slash) {
         *p = "/".into();
     }
@@ -496,14 +516,16 @@ fn render_fraction(sec: &Section, x: f64, pieces: &mut [String], lits: &mut [Opt
         // Denominator digits are zero padded to the `0` placeholders, then left aligned; `?`
         // pads with spaces after them.
         let zeros = den_idx.iter().filter(|&&i| toks.get(i) == Some(&Tok::Digit('0'))).count();
-        let padded = format!("{den_s:0>zeros$}");
+        // No `{:0>zeros$}`: a format width above u16::MAX panics.
+        let mut padded = "0".repeat(zeros.saturating_sub(den_s.chars().count()));
+        padded.push_str(&den_s);
         let dc: Vec<char> = padded.chars().collect();
         let count = den_idx.len();
         for (k, &ti) in den_idx.iter().enumerate() {
             let s = if k + 1 == count {
                 dc.get(k..).map(|r| r.iter().collect::<String>()).unwrap_or_default()
             } else {
-                dc.get(k).map(|c| c.to_string()).unwrap_or_default()
+                dc.get(k).map(ToString::to_string).unwrap_or_default()
             };
             let s = if s.is_empty() {
                 match toks.get(ti) {

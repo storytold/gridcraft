@@ -120,19 +120,20 @@ fn pages_iter(geo: &Geo, pg: &PageGrid) -> impl Iterator<Item = (usize, usize)> 
 }
 
 /// Paints the desk, the pages and their cells; returns the per-page quadrants for the headings.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn paint_pages(
-    app: &SheetApp,
-    p: &Painter,
-    geo: &Geo,
-    wb: &Workbook,
-    si: usize,
-    sh: &Sheet,
-    sel: &gridcraft_engine::Selection,
-    outline: Rect,
-    cf: &mut CfCache,
-    t: &Tokens,
-) -> Vec<((u32, u32), (u32, u32), Rect)> {
+pub(crate) struct PagePaintInput<'a> {
+    pub(crate) app: &'a SheetApp,
+    pub(crate) painter: &'a Painter,
+    pub(crate) geo: &'a Geo,
+    pub(crate) workbook: &'a Workbook,
+    pub(crate) sheet_index: usize,
+    pub(crate) sheet: &'a Sheet,
+    pub(crate) selection: &'a gridcraft_engine::Selection,
+    pub(crate) outline: Rect,
+    pub(crate) tokens: &'a Tokens,
+}
+
+pub(crate) fn paint_pages(input: PagePaintInput<'_>, cf: &mut CfCache) -> Vec<grid::PaneQuad> {
+    let PagePaintInput { app, painter: p, geo, workbook: wb, sheet_index: si, sheet: sh, selection: sel, outline, tokens: t } = input;
     let mut quads = Vec::new();
     let Some(pg) = geo.paper.clone() else { return quads };
     p.rect_filled(geo.cells, 0.0, t.desk);
@@ -161,16 +162,42 @@ pub(crate) fn paint_pages(
         }
         painted += 1;
         let pc = p.with_clip_rect(clip);
-        grid::paint_quadrant(&pc, geo, wb, si, sh, rows, cols, cf, t);
+        let active_row = app.ui.highlight_active_row.then_some(sel.active.row);
+        grid::paint_quadrant(grid::QuadrantPaint {
+            painter: &pc,
+            geo,
+            workbook: wb,
+            sheet_index: si,
+            sheet: sh,
+            rows,
+            cols,
+            cf,
+            tokens: t,
+            active_row,
+        });
         if !pg.is_data_page(i, j) {
             // "Click to add data" pages: faded until something is typed there.
             pc.rect_filled(clip, 0.0, t.grid_bg.gamma_multiply(0.75));
+            // The fade would all but hide the active row's band: it goes on again.
+            if let Some(band) = active_row.and_then(|row| grid::active_row_band(geo, sh, row, rows, cols)) {
+                pc.rect_filled(band, 0.0, t.active_row);
+            }
             let size = (14.0 * geo.z / DISPLAY_SCALE).clamp(8.0, 22.0);
             pc.text(clip.center(), Align2::CENTER_CENTER, tr(app, "Click to add data"), theme::ui_font(size), Color32::from_gray(150));
         }
         // The selection outline may straddle the margin edge (as at A1 in Normal view).
         let sel_clip = clip.expand(3.0).intersect(page).intersect(geo.cells);
-        grid::paint_selection(&p.with_clip_rect(sel_clip), geo, sh, sel, outline, t, app, rows, cols);
+        grid::paint_selection(grid::SelectionPaintInput {
+            painter: &p.with_clip_rect(sel_clip),
+            geo,
+            sheet: sh,
+            selection: sel,
+            outline,
+            tokens: t,
+            app,
+            rows,
+            cols,
+        });
     }
     quads
 }
@@ -182,7 +209,8 @@ fn tr<'a>(app: &SheetApp, s: &'a str) -> &'a str {
 /// Section rectangles (left, centre, right) of a page's header or footer on screen.
 fn section_rects(geo: &Geo, pg: &PageGrid, (i, j): (usize, usize), footer: bool) -> [Rect; 3] {
     let (px, py, w, h) = pg.page_rect(i, j);
-    let [l, r, t, b, ..] = pg.margins;
+    let [_, _, t, b, ..] = pg.margins;
+    let [l, r] = pg.hf_sides;
     let (y0, y1) = if footer { (py + h - b, py + h) } else { (py, py + t) };
     let inner = (w - l - r).max(3.0);
     let third = inner / 3.0;
@@ -195,8 +223,8 @@ fn section_rects(geo: &Geo, pg: &PageGrid, (i, j): (usize, usize), footer: bool)
     out
 }
 
-fn hf_font(geo: &Geo, size_pt: Option<f32>, bold: bool) -> FontId {
-    let px = size_pt.unwrap_or(10.0).clamp(1.0, 72.0) * 96.0 / 72.0 * geo.z;
+fn hf_font(geo: &Geo, pg: &PageGrid, size_pt: Option<f32>, bold: bool) -> FontId {
+    let px = size_pt.unwrap_or(10.0).clamp(1.0, 72.0) * 96.0 / 72.0 * pg.hf_text_k * geo.z;
     let px = px.clamp(4.0, 120.0);
     if bold { theme::ui_bold(px) } else { theme::ui_font(px) }
 }
@@ -235,7 +263,7 @@ pub(crate) fn paint_headers_footers(app: &SheetApp, ui: &egui::Ui, p: &Painter, 
             if spec.is_empty() {
                 if hovered {
                     let label = if footer { "Add footer" } else { "Add header" };
-                    p.text(rects[1].center(), Align2::CENTER_CENTER, tr(app, label), hf_font(geo, Some(10.0), false), Color32::from_gray(120));
+                    p.text(rects[1].center(), Align2::CENTER_CENTER, tr(app, label), hf_font(geo, &pg, Some(10.0), false), Color32::from_gray(120));
                 }
                 continue;
             }
@@ -255,7 +283,7 @@ pub(crate) fn paint_headers_footers(app: &SheetApp, ui: &egui::Ui, p: &Painter, 
                 if sec.text.trim().is_empty() {
                     continue;
                 }
-                let font = hf_font(geo, sec.size, sec.bold);
+                let font = hf_font(geo, &pg, sec.size, sec.bold);
                 let r = rects[k];
                 let (anchor, x) = match k {
                     0 => (Align2::LEFT_TOP, r.left()),
@@ -279,13 +307,14 @@ pub(crate) fn paint_headers_footers(app: &SheetApp, ui: &egui::Ui, p: &Painter, 
 pub(crate) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
     // Leaving the sheet or the view commits.
     if let Some(e) = &app.grid.hf_edit
-        && (e.sheet != wb.active_sheet || sh.view != SheetViewMode::PageLayout || geo.paper.is_none())
+        && (e.sheet != wb.active_sheet() || sh.view != SheetViewMode::PageLayout || geo.paper.is_none())
     {
         commit(app);
     }
     let Some(pg) = geo.paper.clone() else { return };
+    ruler_margins(app, ui, geo, &pg, sh, wb.active_sheet());
     if std::mem::take(&mut app.grid.hf_start) {
-        begin(app, wb.active_sheet, sh, (pg.data_rows.0, pg.data_cols.0), HfZone { footer: false, section: 1 });
+        begin(app, wb.active_sheet(), sh, (pg.data_rows.0, pg.data_cols.0), HfZone { footer: false, section: 1 });
     }
     if resp.clicked_by(egui::PointerButton::Primary)
         && let Some(p) = ui.input(|i| i.pointer.interact_pos())
@@ -293,7 +322,7 @@ pub(crate) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         let (x, y) =
             (geo.scroll.x as f64 + ((p.x - geo.cells.left()) / geo.z) as f64, geo.scroll.y as f64 + ((p.y - geo.cells.top()) / geo.z) as f64);
         match pg.hf_zone_at(x, y) {
-            Some((page, zone)) if geo.cells.contains(p) => begin(app, wb.active_sheet, sh, page, zone),
+            Some((page, zone)) if geo.cells.contains(p) => begin(app, wb.active_sheet(), sh, page, zone),
             _ => {
                 // A click anywhere else ends the edit; the grid then handles the click.
                 if app.grid.hf_edit.is_some() {
@@ -325,8 +354,9 @@ pub fn start_editing(app: &mut SheetApp) {
     app.grid.hf_start = true;
 }
 
-/// Turns Different First Page / Different Odd & Even Pages on or off, keeping the edit on the
-/// same page (which may now show another header).
+/// Turns a Header & Footer option (Different First Page, Different Odd & Even Pages, Scale with
+/// Document, Align with Page Margins) on or off, keeping the edit on the same page (which may
+/// now show another header).
 fn set_option(app: &mut SheetApp, key: &str, on: bool) {
     let Some(e) = app.grid.hf_edit.as_ref() else { return };
     let (sheet, page, zone) = (e.sheet, e.page, HfZone { footer: e.footer, section: e.section });
@@ -435,6 +465,7 @@ pub fn go_to(app: &mut SheetApp, footer: bool) {
     begin(app, sheet, &sh, page, HfZone { footer, section });
 }
 
+/// Edits a header/footer section across left/center/right, cancels on Esc, switches sections and preserves focus/caret while the page scrolls.
 fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
     let Some(mut e) = app.grid.hf_edit.take() else { return };
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape)) {
@@ -445,7 +476,7 @@ fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
     let rects = section_rects(geo, pg, e.page, e.footer);
     let p = ui.painter().with_clip_rect(geo.cells);
     let t = Tokens::get(ui.ctx());
-    let font = hf_font(geo, Some(10.0), false);
+    let font = hf_font(geo, pg, Some(10.0), false);
     let mut switch_to = None;
     for (k, r) in rects.iter().enumerate() {
         if !r.intersects(geo.cells) {
@@ -466,7 +497,7 @@ fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
         let anchor = [Align2::LEFT_TOP, Align2::CENTER_TOP, Align2::RIGHT_TOP][k];
         let x = [r.left() + 3.0, r.center().x, r.right() - 3.0][k];
         p.text(pos2(x, r.top() + 2.0), anchor, text, font.clone(), Color32::BLACK);
-        if ui.interact(*r, ui.id().with(("hf_section", k)), egui::Sense::click()).clicked() {
+        if ui.interact(*r, ui.scope_id().with(("hf_section", k)), egui::Sense::click()).clicked() {
             switch_to = Some(k);
         }
     }
@@ -475,9 +506,9 @@ fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
         app.grid.hf_edit = Some(e);
         return;
     };
-    let id = egui::Id::new("gridcraft.header_footer_editor");
+    let id = egui::Id::unique("gridcraft.header_footer_editor");
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(3.0, 2.0)).intersect(geo.cells)));
-    let align = [egui::Align::LEFT, egui::Align::Center, egui::Align::RIGHT][e.section.min(2)];
+    let align = [egui::Align2::LEFT_TOP, egui::Align2::CENTER_TOP, egui::Align2::RIGHT_TOP][e.section.min(2)];
     if let Some(text) = e.texts.get_mut(e.section) {
         let mut output = TextEdit::multiline(text)
             .id(id)
@@ -485,7 +516,7 @@ fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
             .font(font)
             .text_color(Color32::BLACK)
             .background_color(Color32::WHITE)
-            .horizontal_align(align)
+            .align(align)
             .desired_width(r.width() - 6.0)
             .desired_rows(1)
             .lock_focus(true)
@@ -510,6 +541,14 @@ fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
     app.grid.hf_edit = Some(e);
 }
 
+/// Screen rectangles of the horizontal and vertical rulers. Right-to-left sheets mirror both:
+/// the vertical ruler sits on the right, beside the row headings.
+fn ruler_rects(outer: Rect, geo: &Geo) -> (Rect, Rect) {
+    let hr = geo.mirror_rect(Rect::from_min_max(pos2(geo.cells.left(), outer.top()), pos2(geo.cells.right(), outer.top() + RULER)));
+    let (x0, x1) = if geo.rtl { (outer.right() - RULER, outer.right()) } else { (outer.left(), outer.left() + RULER) };
+    (hr, Rect::from_min_max(pos2(x0, geo.cells.top()), pos2(x1, geo.cells.bottom())))
+}
+
 /// Horizontal and vertical rulers (`outer` is the grid area including the rulers).
 pub(crate) fn paint_rulers(app: &SheetApp, p: &Painter, outer: Rect, geo: &Geo, t: &Tokens) {
     let Some(pg) = geo.paper.clone() else { return };
@@ -523,17 +562,20 @@ pub(crate) fn paint_rulers(app: &SheetApp, p: &Painter, outer: Rect, geo: &Geo, 
     let minor = if metric { 2.0 } else { 4.0 };
     let label_every = ((22.0 / unit).ceil() as usize).max(1);
     let font = theme::ui_font(9.5);
-    let hr = Rect::from_min_max(pos2(geo.cells.left(), outer.top()), pos2(geo.cells.right(), outer.top() + RULER));
-    let vr = Rect::from_min_max(pos2(outer.left(), geo.cells.top()), pos2(outer.left() + RULER, geo.cells.bottom()));
+    let (hr, vr) = ruler_rects(outer, geo);
+    // Right-to-left sheets: the horizontal ruler is mirrored with the pages (ticks run from the
+    // right margin leftwards).
+    let mx = |x: f32| geo.mirror_x(x);
     p.rect_filled(Rect::from_min_max(outer.min, pos2(outer.right(), outer.top() + RULER)), 0.0, t.window);
-    p.rect_filled(Rect::from_min_max(outer.min, pos2(outer.left() + RULER, outer.bottom())), 0.0, t.window);
+    p.rect_filled(Rect::from_min_max(pos2(vr.left(), outer.top()), pos2(vr.right(), outer.bottom())), 0.0, t.window);
     let ((i0, i1), (j0, j1)) = visible_pages(geo, &pg);
-    let [ml, mr, mt, mb, ..] = pg.margins;
+    let [ml, mr, mt, mb, mh, mf] = pg.margins;
     // One ruler span per page: margins shaded, the printable part light, ticks from the margin.
     let span = |p: &Painter, from: f32, to: f32, m0: f32, m1: f32, horizontal: bool, area: Rect| {
         let band = |a: f32, b: f32| {
             if horizontal {
-                Rect::from_min_max(pos2(a, area.top() + 2.0), pos2(b, area.bottom() - 2.0))
+                let (a, b) = (mx(a), mx(b));
+                Rect::from_min_max(pos2(a.min(b), area.top() + 2.0), pos2(a.max(b), area.bottom() - 2.0))
             } else {
                 Rect::from_min_max(pos2(area.left() + 2.0, a), pos2(area.right() - 2.0, b))
             }
@@ -550,6 +592,7 @@ pub(crate) fn paint_rulers(app: &SheetApp, p: &Painter, outer: Rect, geo: &Geo, 
             if pos > m1 + 0.5 {
                 break;
             }
+            let pos = if horizontal { mx(pos) } else { pos };
             let major = s.is_multiple_of(minor as usize);
             let len = if major {
                 6.0
@@ -569,6 +612,8 @@ pub(crate) fn paint_rulers(app: &SheetApp, p: &Painter, outer: Rect, geo: &Geo, 
             }
             let (a, b) = if horizontal {
                 (pos2(pos, area.bottom() - 2.0 - len), pos2(pos, area.bottom() - 2.0))
+            } else if geo.rtl {
+                (pos2(area.left() + 2.0, pos), pos2(area.left() + 2.0 + len, pos))
             } else {
                 (pos2(area.right() - 2.0 - len, pos), pos2(area.right() - 2.0, pos))
             };
@@ -586,12 +631,244 @@ pub(crate) fn paint_rulers(app: &SheetApp, p: &Painter, outer: Rect, geo: &Geo, 
         let a = screen(geo, 0.0, y).y;
         let b = screen(geo, 0.0, y + h).y;
         span(p, a, b, screen(geo, 0.0, y + mt).y, screen(geo, 0.0, y + h - mb).y, false, vr);
+        // Header and footer margins: a small marker at each distance, grabbable like the margins.
+        let pc = p.with_clip_rect(vr);
+        for at in [screen(geo, 0.0, y + mh).y, screen(geo, 0.0, y + h - mf).y] {
+            let (x, d) = if geo.rtl { (vr.right() - 2.0, -6.0) } else { (vr.left() + 2.0, 6.0) };
+            pc.add(egui::Shape::convex_polygon(vec![pos2(x, at - 3.5), pos2(x, at + 3.5), pos2(x + d, at)], t.header_text, Stroke::NONE));
+        }
     }
     p.line_segment([pos2(outer.left(), outer.top() + RULER - 0.5), pos2(outer.right(), outer.top() + RULER - 0.5)], Stroke::new(1.0, t.header_line));
     p.line_segment(
-        [pos2(outer.left() + RULER - 0.5, outer.top()), pos2(outer.left() + RULER - 0.5, outer.bottom())],
+        if geo.rtl {
+            [pos2(vr.left() + 0.5, outer.top()), pos2(vr.left() + 0.5, outer.bottom())]
+        } else {
+            [pos2(vr.right() - 0.5, outer.top()), pos2(vr.right() - 0.5, outer.bottom())]
+        },
         Stroke::new(1.0, t.header_line),
     );
+}
+
+/// A page edge that can be dragged on a ruler.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Edge {
+    Left,
+    Right,
+    Top,
+    Bottom,
+    /// Distance of the header from the top of the page.
+    Header,
+    /// Distance of the footer from the bottom of the page.
+    Footer,
+}
+
+impl Edge {
+    /// Index into `PrintSettings::margins` / `PageGrid::margins`.
+    fn index(self) -> usize {
+        match self {
+            Edge::Left => 0,
+            Edge::Right => 1,
+            Edge::Top => 2,
+            Edge::Bottom => 3,
+            Edge::Header => 4,
+            Edge::Footer => 5,
+        }
+    }
+    /// The `pageLayout.pageSetup` margin key.
+    fn key(self) -> &'static str {
+        ["left", "right", "top", "bottom", "header", "footer"][self.index()]
+    }
+    fn label(self) -> &'static str {
+        ["Left Margin", "Right Margin", "Top Margin", "Bottom Margin", "Header Margin", "Footer Margin"][self.index()]
+    }
+    fn horizontal(self) -> bool {
+        matches!(self, Edge::Left | Edge::Right)
+    }
+}
+
+/// A margin being dragged on a ruler: the page it started on and the previewed value (inches).
+#[derive(Clone, Debug)]
+pub struct RulerDrag {
+    pub sheet: usize,
+    pub edge: Edge,
+    /// Page column (horizontal ruler) or row (vertical ruler) the drag started on.
+    pub page: usize,
+    pub start_inches: f32,
+    pub inches: f32,
+    /// The sheet re-paginated with `inches` (page breaks and fit-to-page scale as a commit would
+    /// give them), rebuilt when the value changes.
+    preview: Option<(f32, Arc<PageGrid>)>,
+}
+
+/// Content that must stay between the margins, in points.
+const MIN_CONTENT_PT: f64 = 36.0;
+/// Screen distance within which a ruler margin edge is grabbed.
+const EDGE_GRAB: f32 = 4.0;
+
+/// Margin (inches, rounded to 0.01) for an edge dragged to `rel_pt` points from the page's
+/// left/top edge. The margin stays on the page and leaves [`MIN_CONTENT_PT`] between the two
+/// margins of its axis. `None` for NaN/infinite input or a page without a size.
+pub fn margin_from_drag(edge: Edge, rel_pt: f64, page_pt: (f32, f32), margins_in: [f32; 6]) -> Option<f32> {
+    let page = f64::from(if edge.horizontal() { page_pt.0 } else { page_pt.1 });
+    if !rel_pt.is_finite() || !page.is_finite() || page <= 0.0 {
+        return None;
+    }
+    let other = f64::from(margins_in.get(edge.index() ^ 1).copied().filter(|v| v.is_finite())?).max(0.0) * 72.0;
+    let raw = match edge {
+        Edge::Left | Edge::Top | Edge::Header => rel_pt,
+        Edge::Right | Edge::Bottom | Edge::Footer => page - rel_pt,
+    };
+    let mut max = (page - other - MIN_CONTENT_PT).max(0.0);
+    let mut min = 0.0_f64;
+    let pt_of = |i: usize| f64::from(margins_in.get(i).copied().filter(|v| v.is_finite()).unwrap_or(0.0)).max(0.0) * 72.0;
+    match edge {
+        // The header/footer sits within its page margin (conservative: never past the margin edge).
+        Edge::Header => max = max.min(pt_of(2)),
+        Edge::Footer => max = max.min(pt_of(3)),
+        // ... so the top/bottom margin can't be dragged inside it.
+        Edge::Top => min = pt_of(4),
+        Edge::Bottom => min = pt_of(5),
+        _ => {}
+    }
+    let pt = raw.clamp(min.min(max), max);
+    Some(((pt / 72.0 * 100.0).round() / 100.0) as f32)
+}
+
+/// The grid while a margin is dragged: the sheet is re-paginated with the previewed margin, so
+/// the content area, page breaks and the fit-to-page scale are those a commit would give.
+pub(crate) fn with_dragged_margin(app: &mut SheetApp, wb: &Workbook, si: usize, pg: Arc<PageGrid>) -> Arc<PageGrid> {
+    let Some(d) = app.grid.ruler_drag.as_mut().filter(|d| d.sheet == si) else { return pg };
+    if let Some((v, g)) = &d.preview
+        && (*v - d.inches).abs() < f32::EPSILON
+    {
+        return g.clone();
+    }
+    let mut w = wb.clone();
+    let Some(sheet) = w.sheets.get_mut(si) else { return pg };
+    let Some(slot) = Arc::make_mut(sheet).print.margins.get_mut(d.edge.index()) else { return pg };
+    *slot = d.inches;
+    let rows = pg.row_bands.last().map_or(0, |b| b.1);
+    let cols = pg.col_bands.last().map_or(0, |b| b.1);
+    let Some(g) = PageGrid::build(&w, si, rows, cols) else { return pg };
+    let g = Arc::new(g);
+    d.preview = Some((d.inches, g.clone()));
+    g
+}
+
+/// Points per layout unit of the grid (paper size over the layout page size).
+fn pt_per_unit(pg: &PageGrid) -> Option<f64> {
+    let k = f64::from(pg.paper_pt.0) / pg.page_w;
+    (k.is_finite() && k > 0.0).then_some(k)
+}
+
+/// The margin edge of a visible page under `pos` on the horizontal (`h`) or vertical ruler.
+fn edge_at(geo: &Geo, pg: &PageGrid, pos: Pos2, h: bool) -> Option<(Edge, usize)> {
+    let ((i0, i1), (j0, j1)) = visible_pages(geo, pg);
+    let [ml, mr, mt, mb, mh, mf] = pg.margins;
+    let mut best: Option<(f32, Edge, usize)> = None;
+    let mut consider = |d: f32, e: Edge, page: usize| {
+        if d <= EDGE_GRAB && best.is_none_or(|b| d < b.0) {
+            best = Some((d, e, page));
+        }
+    };
+    if h {
+        for j in j0..=j1.min(j0.saturating_add(200)) {
+            let (x, _, w, _) = pg.page_rect(0, j);
+            consider((screen(geo, x + ml, 0.0).x - pos.x).abs(), Edge::Left, j);
+            consider((screen(geo, x + w - mr, 0.0).x - pos.x).abs(), Edge::Right, j);
+        }
+    } else {
+        for i in i0..=i1.min(i0.saturating_add(200)) {
+            let (_, y, _, hh) = pg.page_rect(i, 0);
+            consider((screen(geo, 0.0, y + mt).y - pos.y).abs(), Edge::Top, i);
+            consider((screen(geo, 0.0, y + hh - mb).y - pos.y).abs(), Edge::Bottom, i);
+            consider((screen(geo, 0.0, y + mh).y - pos.y).abs(), Edge::Header, i);
+            consider((screen(geo, 0.0, y + hh - mf).y - pos.y).abs(), Edge::Footer, i);
+        }
+    }
+    best.map(|(_, e, p)| (e, p))
+}
+
+/// Dragging the margin edges on the rulers sets the page margins: a resize cursor and a tooltip
+/// on hover, a live preview while dragging, one `pageLayout.pageSetup` (one undo step) on
+/// release, Esc cancels.
+fn ruler_margins(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid, sh: &Sheet, si: usize) {
+    let Some(outer) = app.grid.rect else { return };
+    if geo.rect.top() - outer.top() < RULER - 0.5 {
+        app.grid.ruler_drag = None;
+        return;
+    }
+    // Leaving the sheet or the view drops the drag.
+    if app.grid.ruler_drag.as_ref().is_some_and(|d| d.sheet != si) {
+        app.grid.ruler_drag = None;
+    }
+    let (hr, vr) = ruler_rects(outer, geo);
+    // Right-to-left sheets mirror the pages and the horizontal ruler; hit-testing is logical.
+    let hresp = ui.interact(hr, egui::Id::unique("ruler_margin_h"), egui::Sense::drag());
+    let vresp = ui.interact(vr, egui::Id::unique("ruler_margin_v"), egui::Sense::drag());
+    let margins_in = |sh: &Sheet| -> [f32; 6] {
+        let m = |i: usize| sh.print.margins.get(i).copied().unwrap_or(0.5);
+        [m(0), m(1), m(2), m(3), m(4), m(5)]
+    };
+    let current = margins_in(sh);
+    let metric = metric(app);
+    let tip = |ui: &egui::Ui, app: &SheetApp, edge: Edge, inches: f32| {
+        let value = if metric { format!("{:.2} cm", inches * 2.54) } else { format!("{inches:.2} in") };
+        let text = format!("{}: {value}", app.ui.language.tr(edge.label()));
+        egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::unique("ruler_margin_tip"), egui::PopupAnchor::Pointer).show(|ui| {
+            ui.label(text);
+        });
+    };
+    let cursor = |ui: &egui::Ui, edge: Edge| {
+        ui.ctx().set_cursor_icon(if edge.horizontal() { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical });
+    };
+    if let Some(d) = app.grid.ruler_drag.clone() {
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape)) {
+            app.grid.ruler_drag = None;
+            return;
+        }
+        cursor(ui, d.edge);
+        let down = ui.input(|i| i.pointer.primary_down());
+        let pos = ui.input(|i| i.pointer.latest_pos()).map(|p| geo.mirror_pos(p));
+        let mut cur = d.clone();
+        if let (Some(pos), Some(k)) = (pos, pt_per_unit(pg)) {
+            let rel = if d.edge.horizontal() {
+                let page_x = pg.page_x(d.page);
+                f64::from(geo.scroll.x) + f64::from((pos.x - geo.cells.left()) / geo.z) - page_x
+            } else {
+                let page_y = pg.page_y(d.page);
+                f64::from(geo.scroll.y) + f64::from((pos.y - geo.cells.top()) / geo.z) - page_y
+            };
+            if let Some(v) = margin_from_drag(d.edge, rel * k, pg.paper_pt, current) {
+                cur.inches = v;
+            }
+        }
+        if down {
+            tip(ui, app, cur.edge, cur.inches);
+            app.grid.ruler_drag = Some(cur);
+            ui.ctx().request_repaint();
+        } else {
+            app.grid.ruler_drag = None;
+            if (cur.inches - cur.start_inches).abs() > f32::EPSILON {
+                app.run_or_alert("pageLayout.pageSetup", json!({"sheet": si, "margins": {cur.edge.key(): cur.inches}}));
+            }
+        }
+        return;
+    }
+    for (resp, h) in [(&hresp, true), (&vresp, false)] {
+        let Some(pos) = resp.hover_pos().or_else(|| resp.interact_pointer_pos()) else { continue };
+        let origin = if resp.drag_started() { ui.input(|i| i.pointer.press_origin()).unwrap_or(pos) } else { pos };
+        let origin = geo.mirror_pos(origin);
+        let Some((edge, page)) = edge_at(geo, pg, origin, h) else { continue };
+        let value = current.get(edge.index()).copied().unwrap_or(0.5);
+        if resp.drag_started() {
+            app.grid.ruler_drag = Some(RulerDrag { sheet: si, edge, page, start_inches: value, inches: value, preview: None });
+            cursor(ui, edge);
+        } else if resp.hovered() {
+            cursor(ui, edge);
+            tip(ui, app, edge, value);
+        }
+    }
 }
 
 /// The Header & Footer contextual ribbon tab.
@@ -646,11 +923,10 @@ pub fn ribbon_tab(app: &mut SheetApp, ui: &mut egui::Ui) {
         go_to(app, true);
     }
     sep(ui);
-    let (first, odd_even) = app
-        .session
-        .active()
-        .and_then(|d| d.wb.sheet(app.grid.hf_edit.as_ref().map_or(0, |e| e.sheet)).map(|s| (s.print.different_first, s.print.different_odd_even)))
-        .unwrap_or_default();
+    let (first, odd_even, scale_doc, align) =
+        app.session.active().and_then(|d| d.wb.sheet(app.grid.hf_edit.as_ref().map_or(0, |e| e.sheet))).map_or((false, false, true, true), |s| {
+            (s.print.different_first, s.print.different_odd_even, s.print.hf_scale_with_doc, s.print.hf_align_with_margins)
+        });
     ui.vertical(|ui| {
         let (mut f, mut o) = (first, odd_even);
         if ui.checkbox(&mut f, tr(app, "Different First Page")).changed() {
@@ -660,10 +936,63 @@ pub fn ribbon_tab(app: &mut SheetApp, ui: &mut egui::Ui) {
             set_option(app, "differentOddEven", o);
         }
     });
+    ui.vertical(|ui| {
+        let (mut sd, mut am) = (scale_doc, align);
+        if ui.checkbox(&mut sd, tr(app, "Scale with Document")).changed() {
+            set_option(app, "scaleWithDoc", sd);
+        }
+        if ui.checkbox(&mut am, tr(app, "Align with Page Margins")).changed() {
+            set_option(app, "alignWithMargins", am);
+        }
+    });
 }
 
 fn sep(ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(13.0, 72.0), egui::Sense::hover());
     ui.painter().line_segment([pos2(r.center().x, r.top() + 6.0), pos2(r.center().x, r.bottom() - 6.0)], Stroke::new(1.0, t.separator));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const A4: (f32, f32) = (595.0, 842.0);
+
+    #[test]
+    fn drag_maps_to_margins_and_clamps_inside_the_page() {
+        let m = [0.7, 0.7, 0.75, 0.75, 0.3, 0.3];
+        // 72 pt from the left edge is one inch; from the right edge the margin is measured inward.
+        assert_eq!(margin_from_drag(Edge::Left, 72.0, A4, m), Some(1.0));
+        assert_eq!(margin_from_drag(Edge::Right, f64::from(A4.0) - 36.0, A4, m), Some(0.5));
+        assert_eq!(margin_from_drag(Edge::Top, 108.0, A4, m), Some(1.5));
+        // Dragged off the page: never negative (top/bottom keep the header/footer distance).
+        assert_eq!(margin_from_drag(Edge::Left, -50.0, A4, m), Some(0.0));
+        assert_eq!(margin_from_drag(Edge::Bottom, f64::from(A4.1) + 99.0, A4, m), Some(0.3));
+        // Dragged across the opposite margin: stops a minimum content width short of it.
+        let max = margin_from_drag(Edge::Left, 10_000.0, A4, m).unwrap();
+        assert!((f64::from(max) * 72.0 - (f64::from(A4.0) - 0.7 * 72.0 - MIN_CONTENT_PT)).abs() < 1.0, "{max}");
+        // Hostile input is ignored, not clamped to something arbitrary.
+        assert_eq!(margin_from_drag(Edge::Left, f64::NAN, A4, m), None);
+        assert_eq!(margin_from_drag(Edge::Left, f64::INFINITY, A4, m), None);
+        assert_eq!(margin_from_drag(Edge::Left, 10.0, (0.0, 0.0), m), None);
+        assert_eq!(margin_from_drag(Edge::Left, 10.0, A4, [0.7, f32::NAN, 0.7, 0.7, 0.3, 0.3]), None);
+        // Oversized opposite margin leaves nothing to drag into.
+        assert_eq!(margin_from_drag(Edge::Left, 300.0, A4, [0.0, 40.0, 0.0, 0.0, 0.3, 0.3]), Some(0.0));
+        // Header/footer distances are measured from the top / bottom edge.
+        assert_eq!(margin_from_drag(Edge::Header, 36.0, A4, m), Some(0.5));
+        assert_eq!(margin_from_drag(Edge::Footer, f64::from(A4.1) - 18.0, A4, m), Some(0.25));
+        assert_eq!(margin_from_drag(Edge::Footer, 1e9, A4, m), Some(0.0));
+        // Header stays within the top margin (0.75 in), footer within the bottom margin.
+        assert_eq!(margin_from_drag(Edge::Header, 500.0, A4, m), Some(0.75));
+        assert_eq!(margin_from_drag(Edge::Footer, f64::from(A4.1) - 500.0, A4, m), Some(0.75));
+        // The top/bottom margin can't be dragged inside the header/footer distance (0.3 in).
+        assert_eq!(margin_from_drag(Edge::Top, 2.0, A4, m), Some(0.3));
+        assert_eq!(margin_from_drag(Edge::Bottom, f64::from(A4.1) - 2.0, A4, m), Some(0.3));
+        // Hostile header/footer values (NaN, negative, huge) never panic or escape the page.
+        assert_eq!(margin_from_drag(Edge::Header, 10.0, A4, [0.7, 0.7, 0.75, 0.75, f32::NAN, 0.3]), Some(0.14));
+        assert_eq!(margin_from_drag(Edge::Top, 300.0, A4, [0.7, 0.7, 0.75, 0.75, -5.0, f32::INFINITY]), Some(4.17));
+        assert_eq!(margin_from_drag(Edge::Header, f64::NAN, A4, m), None);
+        assert!(margin_from_drag(Edge::Footer, 10.0, A4, [0.0, 0.0, 1e9, 1e9, 0.3, 1e9]).is_some_and(|v| (0.0..=11.7).contains(&v)));
+    }
 }

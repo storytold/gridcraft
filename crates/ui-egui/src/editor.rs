@@ -1,83 +1,116 @@
 //! In-cell / formula-bar editing state: point mode, reference colouring, function
 //! autocomplete and argument hints.
 
-use egui::Color32;
 use gridcraft_engine::core::{CellRef, RangeRef};
 use gridcraft_engine::model::{CellRuns, Color, Font, Run, RunFont, Underline, VertAlign};
-use serde_json::{Value as Json, json};
+use serde_json::json;
 
-/// Colours for references in a formula being edited (our own palette).
-pub const REF_COLORS: [Color32; 8] = [
-    Color32::from_rgb(0x2E, 0x6F, 0xD8),
-    Color32::from_rgb(0xD0, 0x3C, 0x3C),
-    Color32::from_rgb(0x7A, 0x4F, 0xC9),
-    Color32::from_rgb(0x2B, 0x9A, 0x4A),
-    Color32::from_rgb(0xC2, 0x5E, 0x1E),
-    Color32::from_rgb(0x1D, 0x92, 0xA6),
-    Color32::from_rgb(0xB8, 0x3B, 0x8E),
-    Color32::from_rgb(0x8A, 0x7A, 0x1F),
-];
+/// How many distinct reference colours a formula cycles through (`Tokens::ref_colors`).
+pub const REF_COLOR_COUNT: usize = 8;
 
 #[derive(Clone, Debug)]
 pub struct EditState {
+    /// The workbook (`DocState::uid`) the draft belongs to: it is drawn and committed only there.
+    pub doc: u64,
+    /// The window it was typed in: switching to another window, even on the same workbook,
+    /// commits it there first (`None` until the app sets it).
+    pub window: Option<u64>,
+    /// The sheet's index when the draft was last resolved; [`EditState::sheet_in`] finds it again
+    /// by `sheet_uid` after sheets are inserted, deleted or moved.
     pub sheet: usize,
+    /// The sheet's identity while the app runs (`model::SheetUid`), recorded when the draft is
+    /// created ([`EditState::on_sheet`]); 0 (never given out) when none was.
+    pub sheet_uid: u64,
+    /// The draft began on a Python cell, with its code as the text. Kept so the code stays out of
+    /// view once the cell can't be looked at, its sheet gone.
+    pub py_cell: bool,
+    /// The order of the workbook's sheets ([`sheet_order`]) when the draft was last resolved: a
+    /// change after a command points the draft at its sheet again and lets go of
+    /// `point_anchor`, which holds a sheet index.
+    pub sheet_order: u64,
     /// Syntax of this edit, captured when it starts (prevents a language switch reinterpreting it).
     pub locale: gridcraft_engine::formula::FormulaLocale,
     pub cell: CellRef,
     pub text: String,
-    /// Rich-text runs over `text` (byte ranges), translated through every text change; `None` is
-    /// flat text.
-    pub runs: Option<CellRuns>,
+    /// The rich-text runs of the text being edited (#776): `None` while the edit has none (a
+    /// formula, a plain cell); edited alongside the text and committed with it.
+    pub runs: Option<gridcraft_engine::model::CellRuns>,
     /// Started by typing (Enter mode: arrows commit) rather than F2 (Edit mode: arrows move the caret).
     pub enter_mode: bool,
     pub from_formula_bar: bool,
     /// Caret position (char index), mirrored from the text widget.
     pub caret: usize,
-    /// The selection as char indices `(min, max)`, mirrored from the text widget; `None` when the
-    /// caret is not a selection.
-    pub sel: Option<(usize, usize)>,
+    /// The other end of the selected text (char index), mirrored like `caret`; equal to `caret`
+    /// when nothing is selected.
+    pub anchor: usize,
     /// The reference most recently inserted by point mode (byte range) — arrows/clicks replace it.
     pub point: Option<(usize, usize)>,
     /// Where point mode's keyboard cursor is.
     pub point_cell: Option<CellRef>,
+    /// The fixed range anchor and its sheet while pointing with the mouse or keyboard.
+    pub point_anchor: Option<(usize, CellRef)>,
     pub autocomplete: Vec<String>,
     pub ac_index: usize,
     pub request_focus: bool,
     /// The text changed programmatically: push `caret` into the widget on the next frame.
     pub sync_caret: bool,
+    /// A dialog opened over the edit has the keyboard: when the editor takes it back without a
+    /// change to the caret, the selected text (`anchor`..`caret`) stays selected.
+    pub keep_selection: bool,
     /// Column AutoComplete: the full entry the typed text completes to.
     pub completion: Option<String>,
     /// Move the caret to the end on the next frame.
     pub caret_to_end: bool,
+    /// The cell's text when an F2-style edit began. Committing it unchanged leaves the cell alone
+    /// (no undo step, the workbook stays clean). `None` for an edit started by typing.
+    pub original: Option<String>,
+    /// Python mode: the text is a Python cell's code, edited in the formula bar's code editor and
+    /// committed with Ctrl+Enter (Cmd+Enter on macOS) through `python.set`.
+    pub python: bool,
+}
+
+/// A digest of the order of `wb`'s sheets by identity: it changes when a sheet is inserted,
+/// deleted or moved, not when one is renamed or edited.
+pub fn sheet_order(wb: &gridcraft_engine::model::Workbook) -> u64 {
+    wb.sheets.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, sh| (h ^ sh.uid.get()).wrapping_mul(0x0000_0100_0000_01b3))
 }
 
 impl EditState {
-    pub fn new(sheet: usize, cell: CellRef, text: String, enter_mode: bool, from_formula_bar: bool, runs: Option<CellRuns>) -> EditState {
+    pub fn new(doc: u64, sheet: usize, cell: CellRef, text: String, enter_mode: bool, from_formula_bar: bool) -> EditState {
         let caret = text.chars().count();
+        let original = (!enter_mode).then(|| text.clone());
         EditState {
+            doc,
+            window: None,
             sheet,
+            sheet_uid: 0,
+            py_cell: false,
+            sheet_order: 0,
             locale: Default::default(),
             cell,
             text,
-            runs,
+            runs: None,
             enter_mode,
             from_formula_bar,
             caret,
-            sel: None,
+            anchor: caret,
             point: None,
             point_cell: None,
+            point_anchor: None,
             autocomplete: vec![],
             ac_index: 0,
             request_focus: true,
             sync_caret: true,
+            keep_selection: false,
             caret_to_end: true,
             completion: None,
+            original,
+            python: false,
         }
     }
 
-    /// The single text-mutation point: translates the runs through the change (dropping them when
-    /// the result is flat) and replaces the text. Runs never survive a turn into a formula: a
-    /// committed formula is one value, so its commit must not carry runs.
+    /// Replaces the edit's whole text, translating its runs to the new text (dropped when they
+    /// no longer line up, or when the new text is a formula).
     pub fn set_text(&mut self, new: String) {
         self.runs = self.runs.take().and_then(|r| r.edited(&self.text, &new));
         self.text = new;
@@ -86,10 +119,75 @@ impl EditState {
         }
     }
 
+    /// An edit of a cell's Python code, in the formula bar.
+    pub fn python(doc: u64, sheet: usize, cell: CellRef, code: String) -> EditState {
+        let mut ed = EditState::new(doc, sheet, cell, code, false, true);
+        ed.python = true;
+        ed
+    }
+
+    /// Records the identity of the draft's sheet, from the workbook it is typed in.
+    pub fn on_sheet(mut self, wb: &gridcraft_engine::model::Workbook) -> EditState {
+        self.sheet_uid = wb.sheet(self.sheet).map_or(0, |sh| sh.uid.get());
+        self.sheet_order = sheet_order(wb);
+        self
+    }
+
+    /// The draft's sheet's index now, found by its identity, since commands insert, delete and
+    /// move sheets under an open draft; `None` once the sheet is gone (or none was recorded).
+    pub fn sheet_in(&self, wb: &gridcraft_engine::model::Workbook) -> Option<usize> {
+        if self.sheet_uid == 0 {
+            return None;
+        }
+        if wb.sheet(self.sheet).is_some_and(|sh| sh.uid.get() == self.sheet_uid) {
+            return Some(self.sheet);
+        }
+        wb.sheets.iter().position(|sh| sh.uid.get() == self.sheet_uid)
+    }
+
+    /// Whether the text is the `=PY` that Tab turns into Python mode, as in Excel (`=PY(` too,
+    /// in any letter case).
+    pub fn is_py_trigger(&self) -> bool {
+        let t = self.text.trim();
+        !self.python && (t.eq_ignore_ascii_case("=PY") || t.eq_ignore_ascii_case("=PY("))
+    }
+
+    /// Switches the edit to Python mode, in the formula bar. The `=PY` trigger becomes empty code;
+    /// other text is kept as the code, so the shortcut pressed mid-edit loses nothing.
+    pub fn enter_python(&mut self) {
+        if self.is_py_trigger() {
+            self.text.clear();
+        }
+        self.python = true;
+        self.from_formula_bar = true;
+        self.enter_mode = false;
+        self.point = None;
+        self.point_cell = None;
+        self.point_anchor = None;
+        self.autocomplete.clear();
+        self.completion = None;
+        self.caret = self.text.chars().count();
+        self.anchor = self.caret;
+        self.caret_to_end = false;
+        self.request_focus = true;
+        self.sync_caret = true;
+    }
+
+    /// Leaves Python mode: the edit goes on as an ordinary entry of the same text.
+    pub fn leave_python(&mut self) {
+        self.python = false;
+        self.caret = self.text.chars().count();
+        self.anchor = self.caret;
+        self.request_focus = true;
+        self.sync_caret = true;
+    }
+
+    /// Whether the text is a formula (never in Python mode: there it is code).
     pub fn is_formula(&self) -> bool {
-        self.text.starts_with('=')
-            || (self.text.starts_with('+') && self.text.len() > 1)
-            || (self.text.starts_with('-') && self.text.len() > 1 && !self.text[1..].starts_with(|c: char| c.is_ascii_digit()))
+        !self.python
+            && (self.text.starts_with('=')
+                || (self.text.starts_with('+') && self.text.len() > 1)
+                || (self.text.starts_with('-') && self.text.len() > 1 && !self.text[1..].starts_with(|c: char| c.is_ascii_digit())))
     }
 
     fn byte_caret(&self) -> usize {
@@ -102,14 +200,16 @@ impl EditState {
         if !self.is_formula() {
             return false;
         }
-        if let Some((_, e)) = self.point
-            && e == self.byte_caret()
-        {
+        if self.point_at_caret() {
             return true;
         }
         let before = self.text.get(..self.byte_caret()).unwrap_or("");
         let last = before.trim_end().chars().last();
         matches!(last, Some('=' | '(' | ',' | '+' | '-' | '*' | '/' | '^' | '&' | '<' | '>' | ':' | ';' | '{'))
+    }
+
+    pub fn point_at_caret(&self) -> bool {
+        self.point.is_some_and(|(start, end)| end == self.byte_caret() && self.text.get(start..end).is_some())
     }
 
     /// Inserts (or replaces the last pointed) reference text at the caret.
@@ -120,7 +220,7 @@ impl EditState {
             _ => (caret_b, caret_b),
         };
         let (Some(a), Some(b)) = (self.text.get(..start), self.text.get(end..)) else { return };
-        self.set_text(format!("{a}{r}{b}"));
+        self.text = format!("{a}{r}{b}");
         let new_end = start + r.len();
         self.point = Some((start, new_end));
         self.caret = self.text.get(..new_end).map(|s| s.chars().count()).unwrap_or(0);
@@ -128,10 +228,42 @@ impl EditState {
         self.sync_caret = true;
     }
 
+    /// Inserts `t` at the caret as typed text (Paste Names), in place of the selected text: the
+    /// caret ends after it, and point mode starts afresh.
+    pub fn insert_at_caret(&mut self, t: &str) {
+        // When code moved the caret this frame (`sync_caret`), the widget has not yet stored it, so `anchor` is out of
+        // date and the name goes in at the caret.
+        let (from, to) = if self.sync_caret { (self.caret, self.caret) } else { (self.anchor.min(self.caret), self.anchor.max(self.caret)) };
+        let byte = |c: usize| self.text.char_indices().nth(c).map(|(i, _)| i).unwrap_or(self.text.len());
+        let (Some(a), Some(b)) = (self.text.get(..byte(from)), self.text.get(byte(to)..)) else { return };
+        self.text = format!("{a}{t}{b}");
+        self.point = None;
+        self.caret = from + t.chars().count();
+        self.anchor = self.caret;
+        // A function suggestion shown before the name went in no longer fits the text.
+        self.autocomplete.clear();
+        self.ac_index = 0;
+        self.completion = None;
+        self.caret_to_end = false;
+        self.sync_caret = true;
+        self.request_focus = true;
+    }
+
+    /// Add another argument after the current pointed reference. Keep only the new reference
+    /// replaceable, so a subsequent plain click does not remove earlier arguments or the separator.
+    pub fn append_ref(&mut self, r: &str) {
+        let separator = if self.point_at_caret() { self.locale.list_separator().to_string() } else { String::new() };
+        self.point = None;
+        self.insert_ref(&format!("{separator}{r}"));
+        if let Some((start, end)) = self.point {
+            self.point = Some((start + separator.len(), end));
+        }
+    }
+
     /// Updates function autocomplete for the word before the caret.
     pub fn update_autocomplete(&mut self, names: &[String]) {
         self.autocomplete.clear();
-        if !self.is_formula() {
+        if self.python || !self.is_formula() {
             return;
         }
         let before = self.text.get(..self.byte_caret()).unwrap_or("");
@@ -157,7 +289,7 @@ impl EditState {
         let wlen: usize = before.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').map(char::len_utf8).sum();
         let start = caret_b - wlen;
         let (Some(a), Some(b)) = (self.text.get(..start), self.text.get(caret_b..)) else { return false };
-        self.set_text(format!("{a}{name}({b}"));
+        self.text = format!("{a}{name}({b}");
         self.caret = self.text.get(..start + name.len() + 1).map(|s| s.chars().count()).unwrap_or(0);
         self.autocomplete.clear();
         self.caret_to_end = false;
@@ -165,9 +297,47 @@ impl EditState {
         true
     }
 
+    /// Ctrl+Shift+A, as in Excel: right after a function name, or after its `(`, inserts the
+    /// argument names (optional ones without their brackets) and the closing parenthesis, and
+    /// the `(` too when missing. Anywhere else nothing changes and it returns false.
+    pub fn insert_argument_names(&mut self, language: crate::i18n::Language) -> bool {
+        if !self.is_formula() {
+            return false;
+        }
+        let caret_b = self.byte_caret();
+        let (Some(before), Some(after)) = (self.text.get(..caret_b), self.text.get(caret_b..)) else { return false };
+        // An odd number of quotes before the caret: it is inside a text literal.
+        if before.matches('"').count() % 2 == 1 {
+            return false;
+        }
+        let open = before.ends_with('(');
+        if !open && after.starts_with('(') {
+            return false;
+        }
+        let head = before.strip_suffix('(').unwrap_or(before);
+        let name: String =
+            head.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').collect::<String>().chars().rev().collect();
+        if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
+            return false;
+        }
+        let Some(signature) = crate::formula_locale::signature(&name, self.locale, language) else { return false };
+        let sep = self.locale.list_separator();
+        let inner = signature.split_once('(').map(|(_, rest)| rest.trim_end().trim_end_matches(')')).unwrap_or("");
+        let args: Vec<&str> = inner.split(sep).map(|a| a.trim().trim_start_matches('[').trim_end_matches(']')).filter(|a| !a.is_empty()).collect();
+        let close = if open && after.starts_with(')') { "" } else { ")" };
+        let inserted = format!("{}{}{close}", if open { "" } else { "(" }, args.join(&sep.to_string()));
+        self.text = format!("{before}{inserted}{after}");
+        self.caret += inserted.chars().count();
+        self.autocomplete.clear();
+        self.completion = None;
+        self.caret_to_end = false;
+        self.sync_caret = true;
+        true
+    }
+
     /// The function call the caret is inside and the argument index (for the hint tooltip).
     pub fn current_function(&self) -> Option<(String, usize)> {
-        if !self.is_formula() {
+        if self.python || !self.is_formula() {
             return None;
         }
         let before = self.text.get(..self.byte_caret())?;
@@ -214,10 +384,205 @@ impl EditState {
     }
 }
 
-/// The selection as a byte range on `ed.text`: `None` without a selection (caret only). Char
+/// References in formula text with their byte spans and colour index (same reference text ⇒
+/// same colour), for colouring the editor and outlining ranges on the grid.
+pub fn formula_refs(text: &str) -> Vec<(usize, usize, RangeRef, Option<String>, usize)> {
+    let body = text.strip_prefix('=').or_else(|| text.strip_prefix('+')).unwrap_or(text);
+    let offset = text.len() - body.len();
+    let Ok(toks) = gridcraft_engine::formula::lexer::tokenize(body) else { return vec![] };
+    let mut out: Vec<(usize, usize, RangeRef, Option<String>, usize)> = Vec::new();
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut i = 0;
+    while i < toks.len() {
+        use gridcraft_engine::formula::lexer::Tok;
+        let (sheet, start, j) = match &toks[i].tok {
+            Tok::Sheet(a, _) => (Some(a.clone()), toks[i].start, i + 1),
+            _ => (None, toks[i].start, i),
+        };
+        if let Some(Tok::Word(w)) = toks.get(j).map(|t| &t.tok) {
+            let range_end = if matches!(toks.get(j + 1).map(|t| &t.tok), Some(Tok::Colon | Tok::Trim(_))) {
+                toks.get(j + 2).and_then(|token| {
+                    let end = match &token.tok {
+                        Tok::Word(w) => Some(w.clone()),
+                        Tok::Number(n) if n.fract() == 0.0 && *n >= 1.0 => Some(format!("{n}")),
+                        _ => None,
+                    }?;
+                    RangeRef::parse(&format!("{w}:{end}")).map(|range| (range, token.end))
+                })
+            } else {
+                None
+            };
+            let (range, end) = if let Some(range_end) = range_end {
+                i = j + 3;
+                range_end
+            } else if let Some(c) = CellRef::parse(w) {
+                i = j + 1;
+                (RangeRef::cell(c), toks[j].end)
+            } else {
+                i += 1;
+                continue;
+            };
+            let key = body.get(start..end).unwrap_or("").replace('$', "").to_ascii_uppercase();
+            let next = seen.len();
+            let idx = *seen.entry(key).or_insert(next);
+            out.push((start + offset, end + offset, range, sheet, idx % REF_COLOR_COUNT));
+            continue;
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Whether a reference of the formula being edited belongs on the sheet shown: a reference with a
+/// sheet name is on that sheet, one without is on the sheet the edit started on, even while
+/// pointing at another sheet.
+pub fn ref_is_on_sheet(ref_sheet: Option<&str>, origin: &str, shown: &str) -> bool {
+    ref_sheet.unwrap_or(origin).eq_ignore_ascii_case(shown)
+}
+
+/// Excel-style AutoComplete: the one distinct text entry in the same column (contiguous data
+/// above and below) that starts with `typed` (case-insensitive). `None` when ambiguous.
+pub fn column_completion(sheet: &gridcraft_engine::model::Sheet, at: CellRef, typed: &str) -> Option<String> {
+    if typed.is_empty() || typed.starts_with('=') || typed.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '-') {
+        return None;
+    }
+    let lower = typed.to_lowercase();
+    let mut found: Option<String> = None;
+    let mut ambiguous = false;
+    let mut scan = |row: u32| -> bool {
+        match sheet.value(CellRef::new(row, at.col)) {
+            gridcraft_engine::core::Value::Empty => false,
+            gridcraft_engine::core::Value::Text(t) => {
+                let folded = t.to_lowercase();
+                if folded.starts_with(&lower) && folded.len() > lower.len() {
+                    match &found {
+                        Some(f) if f.to_lowercase() != folded => ambiguous = true,
+                        None => found = Some(t.to_string()),
+                        _ => {}
+                    }
+                }
+                true
+            }
+            _ => true,
+        }
+    };
+    let mut r = at.row;
+    let mut n = 0;
+    while r > 0 && n < 5000 {
+        r -= 1;
+        n += 1;
+        if !scan(r) {
+            break;
+        }
+    }
+    let mut r = at.row + 1;
+    n = 0;
+    while n < 5000 && scan(r) {
+        r += 1;
+        n += 1;
+    }
+    if ambiguous { None } else { found }
+}
+
+/// The part of `full` after the `typed` prefix, counted in characters: case folding can change
+/// a character's byte length ("ß" is two bytes, "ẞ" three).
+pub fn completion_rest<'a>(full: &'a str, typed: &str) -> Option<&'a str> {
+    let start = full.char_indices().nth(typed.chars().count())?.0;
+    full.get(start..)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn point_mode() {
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=SUM(".into(), true, false);
+        assert!(e.can_point());
+        e.insert_ref("A1");
+        assert_eq!(e.text, "=SUM(A1");
+        e.insert_ref("A2");
+        assert_eq!(e.text, "=SUM(A2");
+        e.text.push(':');
+        e.caret += 1;
+        e.point = None;
+        assert!(e.can_point());
+        let e2 = EditState::new(1, 0, CellRef::new(0, 0), "hello".into(), true, false);
+        assert!(!e2.can_point());
+    }
+
+    #[test]
+    fn a_pasted_name_replaces_the_selected_text() {
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=OldName+1".into(), false, false);
+        e.sync_caret = false;
+        (e.anchor, e.caret) = (8, 1);
+        e.autocomplete = vec!["SUM".into()];
+        e.insert_at_caret("Sales");
+        assert_eq!((e.text.as_str(), e.caret, e.anchor), ("=Sales+1", 6, 6));
+        assert!(e.autocomplete.is_empty(), "the earlier function suggestion is gone");
+        // Nothing selected: the name goes in at the caret.
+        e.sync_caret = false;
+        e.insert_at_caret("Rate");
+        assert_eq!((e.text.as_str(), e.caret), ("=SalesRate+1", 10));
+    }
+
+    #[test]
+    fn autocomplete_and_hints() {
+        let names: Vec<String> = ["SUM", "SUMIF", "SUMPRODUCT", "AVERAGE"].iter().map(|s| s.to_string()).collect();
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=su".into(), true, false);
+        e.update_autocomplete(&names);
+        assert_eq!(e.autocomplete.len(), 3);
+        assert!(e.accept_autocomplete());
+        assert_eq!(e.text, "=SUM(");
+        let e = EditState::new(1, 0, CellRef::new(0, 0), "=IF(A1>0,SUM(B1,".into(), true, false);
+        assert_eq!(e.current_function(), Some(("SUM".into(), 1)));
+    }
+
+    #[test]
+    fn ref_spans() {
+        let r = formula_refs("=A1+B2:C3*a1+Sheet2!D4");
+        assert_eq!(r.len(), 4);
+        assert_eq!(r[0].4, r[2].4); // A1 and a1 share a colour
+        assert_eq!(r[1].2.a1(), "B2:C3");
+        assert_eq!(r[3].3.as_deref(), Some("Sheet2"));
+    }
+
+    #[test]
+    fn refs_are_outlined_on_their_own_sheet_only() {
+        // Pointing at Sheet2 while the edit started on Sheet1: `A1` stays on Sheet1, `Sheet2!B2` shows on Sheet2.
+        assert!(ref_is_on_sheet(None, "Sheet1", "Sheet1"));
+        assert!(!ref_is_on_sheet(None, "Sheet1", "Sheet2"));
+        assert!(ref_is_on_sheet(Some("Sheet2"), "Sheet1", "Sheet2"));
+        assert!(!ref_is_on_sheet(Some("Sheet2"), "Sheet1", "Sheet1"));
+        assert!(ref_is_on_sheet(Some("sheet2"), "Sheet1", "Sheet2"), "sheet names compare ignoring case");
+    }
+
+    #[test]
+    fn whole_row_and_column_ref_spans() {
+        let refs = formula_refs("=SUM(C:C,4:6,$D:$E,Sheet2!7:8)");
+        assert_eq!(refs.len(), 4);
+        assert_eq!(refs[0].2.a1(), "C:C");
+        assert_eq!(refs[1].2.a1(), "4:6");
+        assert_eq!(refs[2].2.a1(), "D:E");
+        assert_eq!(refs[3].2.a1(), "7:8");
+        assert_eq!(refs[3].3.as_deref(), Some("Sheet2"));
+    }
+
+    #[test]
+    fn inserting_a_union_keeps_each_reference_separately_pointed() {
+        let mut edit = EditState::new(1, 0, CellRef::new(0, 0), "=SUM(".into(), true, false);
+        edit.insert_ref("C:C");
+        edit.append_ref("E:E");
+        assert_eq!(edit.text, "=SUM(C:C,E:E");
+        assert_eq!(formula_refs(&edit.text).iter().map(|r| r.2.a1()).collect::<Vec<_>>(), ["C:C", "E:E"]);
+        assert_eq!(edit.point, Some((9, 12)));
+        assert!(edit.can_point());
+    }
+}
+
 /// indices map through `char_indices`; one at or past the end maps to the text end.
 pub fn sel_bytes(ed: &EditState) -> Option<std::ops::Range<usize>> {
-    let (from, to) = ed.sel?;
+    let (from, to) = (ed.caret.min(ed.anchor), ed.caret.max(ed.anchor));
     if from >= to {
         return None;
     }
@@ -251,7 +616,12 @@ pub const RUN_FONT_IDS: &[&str] = &[
 /// covered run for the size steppers); `Some(Err(msg))` = swallow with an alert (e.g. the run
 /// cap). The engine fn twins live there ([`all_covered`] mirrors the private
 /// `run_toggle_target`, `color_param`/`step_size` mirror theirs) so UI and headless agree.
-pub fn intercept_run_delta(id: &str, params: &Json, ed: &EditState, base: &Font) -> Option<Result<Vec<(std::ops::Range<usize>, RunFont)>, String>> {
+pub fn intercept_run_delta(
+    id: &str,
+    params: &serde_json::Value,
+    ed: &EditState,
+    base: &Font,
+) -> Option<Result<Vec<(std::ops::Range<usize>, RunFont)>, String>> {
     // The programmatic forms always reach the engine; so does anything outside the Font group.
     if !RUN_FONT_IDS.contains(&id) || params.get("cell").is_some() || params.get("range").is_some() || params.get("chars").is_some() {
         return None;
@@ -261,7 +631,7 @@ pub fn intercept_run_delta(id: &str, params: &Json, ed: &EditState, base: &Font)
         return None;
     }
     let range = sel_bytes(ed)?;
-    let on = params.get("on").and_then(Json::as_bool);
+    let on = params.get("on").and_then(serde_json::Value::as_bool);
     match id {
         "home.bold" => {
             one_app(&range, RunFont { bold: Some(on.unwrap_or_else(|| !all_covered(ed, &range, base, |rf| rf.bold))), ..RunFont::default() })
@@ -276,7 +646,7 @@ pub fn intercept_run_delta(id: &str, params: &Json, ed: &EditState, base: &Font)
             let style = if id == "home.doubleUnderline" {
                 Underline::Double
             } else {
-                match params.get("style").and_then(Json::as_str) {
+                match params.get("style").and_then(serde_json::Value::as_str) {
                     Some("double") => Underline::Double,
                     Some("singleAccounting") => Underline::SingleAccounting,
                     Some("doubleAccounting") => Underline::DoubleAccounting,
@@ -300,11 +670,12 @@ pub fn intercept_run_delta(id: &str, params: &Json, ed: &EditState, base: &Font)
             let on = on.unwrap_or_else(|| !all_covered(ed, &range, base, |rf: &RunFont| rf.vert.map(|v| v == VertAlign::Subscript)));
             one_app(&range, RunFont { vert: Some(if on { VertAlign::Subscript } else { VertAlign::Baseline }), ..RunFont::default() })
         }
-        "home.fontName" => {
-            params.get("name").and_then(Json::as_str).map(|name| Ok(vec![(range, RunFont { name: Some(name.to_string()), ..RunFont::default() })]))
-        }
+        "home.fontName" => params
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .map(|name| Ok(vec![(range, RunFont { name: Some(name.to_string()), ..RunFont::default() })])),
         "home.fontSize" => {
-            let size = params.get("size").and_then(Json::as_f64)?;
+            let size = params.get("size").and_then(serde_json::Value::as_f64)?;
             if !(1.0..=409.0).contains(&size) {
                 return Some(Err("The number must be between 1 and 409.".into()));
             }
@@ -408,15 +779,15 @@ fn underline_get(u: Underline) -> fn(&RunFont) -> Option<bool> {
 
 /// The `color` param (`"#RRGGBB"`, `"auto"`, or `{theme, tint}`): the local twin of the engine's
 /// crate-private param read, same forms and clamps.
-fn color_param(v: Option<&Json>) -> Option<Color> {
+fn color_param(v: Option<&serde_json::Value>) -> Option<Color> {
     match v? {
-        Json::String(s) if s.eq_ignore_ascii_case("auto") || s.eq_ignore_ascii_case("automatic") || s.eq_ignore_ascii_case("none") => {
-            Some(Color::Auto)
+        serde_json::Value::String(s) if s.eq_ignore_ascii_case("auto") || s.eq_ignore_ascii_case("automatic") || s.eq_ignore_ascii_case("none") => {
+            Some(gridcraft_engine::model::Color::Auto)
         }
-        Json::String(s) => Color::from_hex(s),
-        Json::Object(o) => {
+        serde_json::Value::String(s) => Color::from_hex(s),
+        serde_json::Value::Object(o) => {
             let theme = o.get("theme")?.as_u64()? as u8;
-            let tint = o.get("tint").and_then(Json::as_f64).unwrap_or(0.0);
+            let tint = o.get("tint").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
             Some(Color::Theme(theme.min(11), (tint.clamp(-1.0, 1.0) * 1000.0) as i16))
         }
         _ => None,
@@ -454,7 +825,7 @@ pub fn apply_run_fonts(ed: &mut EditState, apps: Vec<(std::ops::Range<usize>, Ru
 /// The `cell.set` params committing `ed`: the cell, the text, and the runs when present. A
 /// formula commits one value and never carries runs, whatever path the text took (an edit can
 /// only hold runs as text).
-pub fn commit_params(ed: &EditState) -> Json {
+pub fn commit_params(ed: &EditState) -> serde_json::Value {
     let mut params = json!({ "cell": ed.cell.a1(), "input": ed.text });
     if !ed.is_formula()
         && let Some(runs) = &ed.runs
@@ -463,368 +834,4 @@ pub fn commit_params(ed: &EditState) -> Json {
         params["runs"] = value;
     }
     params
-}
-
-/// References in formula text with their byte spans and colour index (same reference text ⇒
-/// same colour), for colouring the editor and outlining ranges on the grid.
-pub fn formula_refs(text: &str) -> Vec<(usize, usize, RangeRef, Option<String>, usize)> {
-    let body = text.strip_prefix('=').or_else(|| text.strip_prefix('+')).unwrap_or(text);
-    let offset = text.len() - body.len();
-    let Ok(toks) = gridcraft_engine::formula::lexer::tokenize(body) else { return vec![] };
-    let mut out: Vec<(usize, usize, RangeRef, Option<String>, usize)> = Vec::new();
-    let mut seen: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < toks.len() {
-        use gridcraft_engine::formula::lexer::Tok;
-        let (sheet, start, j) = match &toks[i].tok {
-            Tok::Sheet(a, _) => (Some(a.clone()), toks[i].start, i + 1),
-            _ => (None, toks[i].start, i),
-        };
-        if let Some(Tok::Word(w)) = toks.get(j).map(|t| &t.tok)
-            && let Some(c) = CellRef::parse(w)
-        {
-            let mut end = toks[j].end;
-            let mut range = RangeRef::cell(c);
-            if let (Some(Tok::Colon | Tok::Trim(_)), Some(Tok::Word(w2))) = (toks.get(j + 1).map(|t| &t.tok), toks.get(j + 2).map(|t| &t.tok))
-                && let Some(c2) = CellRef::parse(w2)
-            {
-                range = RangeRef::new(c, c2);
-                end = toks[j + 2].end;
-                i = j + 3;
-            } else {
-                i = j + 1;
-            }
-            let key = body.get(start..end).unwrap_or("").replace('$', "").to_ascii_uppercase();
-            let idx = match seen.iter().position(|k| *k == key) {
-                Some(k) => k,
-                None => {
-                    seen.push(key);
-                    seen.len() - 1
-                }
-            };
-            out.push((start + offset, end + offset, range, sheet, idx % REF_COLORS.len()));
-            continue;
-        }
-        i += 1;
-    }
-    out
-}
-
-/// Excel-style AutoComplete: the one distinct text entry in the same column (contiguous data
-/// above and below) that starts with `typed` (case-insensitive). `None` when ambiguous.
-pub fn column_completion(sheet: &gridcraft_engine::model::Sheet, at: CellRef, typed: &str) -> Option<String> {
-    if typed.is_empty() || typed.starts_with('=') || typed.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '-') {
-        return None;
-    }
-    let lower = typed.to_lowercase();
-    let mut found: Option<String> = None;
-    let mut ambiguous = false;
-    let mut scan = |row: u32| -> bool {
-        match sheet.value(CellRef::new(row, at.col)) {
-            gridcraft_engine::core::Value::Empty => false,
-            gridcraft_engine::core::Value::Text(t) => {
-                if t.to_lowercase().starts_with(&lower) && t.len() > typed.len() {
-                    match &found {
-                        Some(f) if !f.eq_ignore_ascii_case(&t) => ambiguous = true,
-                        None => found = Some(t.to_string()),
-                        _ => {}
-                    }
-                }
-                true
-            }
-            _ => true,
-        }
-    };
-    let mut r = at.row;
-    let mut n = 0;
-    while r > 0 && n < 5000 {
-        r -= 1;
-        n += 1;
-        if !scan(r) {
-            break;
-        }
-    }
-    let mut r = at.row + 1;
-    n = 0;
-    while n < 5000 && scan(r) {
-        r += 1;
-        n += 1;
-    }
-    if ambiguous { None } else { found }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use gridcraft_engine::model::{CellRuns, Color, Font, Run, RunFont};
-
-    /// Two runs over "black red": "black" bold, " red" red.
-    fn black_red_runs() -> CellRuns {
-        CellRuns {
-            runs: vec![
-                Run { start: 0, len: 5, font: RunFont { bold: Some(true), ..RunFont::default() } },
-                Run { start: 5, len: 4, font: RunFont { color: Some(Color::rgb(0xFF, 0, 0)), ..RunFont::default() } },
-            ],
-        }
-    }
-
-    /// An edit over `text` with the selection preset (the widget usually mirrors it).
-    fn edit_sel(text: &str, sel: Option<(usize, usize)>, runs: Option<CellRuns>) -> EditState {
-        let mut e = EditState::new(0, CellRef::new(0, 0), text.into(), true, false, runs);
-        e.sel = sel;
-        e
-    }
-
-    #[test]
-    fn point_mode() {
-        let mut e = EditState::new(0, CellRef::new(0, 0), "=SUM(".into(), true, false, None);
-        assert!(e.can_point());
-        e.insert_ref("A1");
-        assert_eq!(e.text, "=SUM(A1");
-        e.insert_ref("A2");
-        assert_eq!(e.text, "=SUM(A2");
-        e.text.push(':');
-        e.caret += 1;
-        e.point = None;
-        assert!(e.can_point());
-        let e2 = EditState::new(0, CellRef::new(0, 0), "hello".into(), true, false, None);
-        assert!(!e2.can_point());
-    }
-
-    #[test]
-    fn autocomplete_and_hints() {
-        let names: Vec<String> = ["SUM", "SUMIF", "SUMPRODUCT", "AVERAGE"].iter().map(|s| s.to_string()).collect();
-        let mut e = EditState::new(0, CellRef::new(0, 0), "=su".into(), true, false, None);
-        e.update_autocomplete(&names);
-        assert_eq!(e.autocomplete.len(), 3);
-        assert!(e.accept_autocomplete());
-        assert_eq!(e.text, "=SUM(");
-        let e = EditState::new(0, CellRef::new(0, 0), "=IF(A1>0,SUM(B1,".into(), true, false, None);
-        assert_eq!(e.current_function(), Some(("SUM".into(), 1)));
-    }
-
-    #[test]
-    fn set_text_translates_runs() {
-        let mut e = EditState::new(0, CellRef::new(0, 0), "black red".into(), true, false, Some(black_red_runs()));
-        e.set_text("blackx red".into());
-        assert!(e.runs.as_ref().is_some_and(|r| r.valid_for("blackx red")));
-        // The " red" run shifted past the inserted `x`.
-        assert_eq!(e.runs.as_ref().and_then(|r| r.runs.get(1)).map(|run| run.start), Some(6));
-    }
-
-    #[test]
-    fn set_text_delete_all_drops_runs() {
-        let mut e = EditState::new(0, CellRef::new(0, 0), "black red".into(), true, false, Some(black_red_runs()));
-        e.set_text(String::new());
-        assert!(e.runs.is_none());
-        assert!(e.text.is_empty());
-    }
-
-    #[test]
-    fn commit_params_includes_runs_when_present() {
-        let e = EditState::new(0, CellRef::new(0, 0), "black red".into(), true, false, Some(black_red_runs()));
-        let p = commit_params(&e);
-        assert_eq!(p.get("cell"), Some(&json!("A1")));
-        assert_eq!(p.get("input"), Some(&json!("black red")));
-        assert_eq!(p.get("runs").and_then(|r| r.get("runs")).and_then(|r| r.as_array()).map(|a| a.len()), Some(2));
-    }
-
-    #[test]
-    fn commit_params_omits_runs_when_none() {
-        let e = EditState::new(0, CellRef::new(0, 0), "black red".into(), true, false, None);
-        let p = commit_params(&e);
-        assert_eq!(p.get("cell"), Some(&json!("A1")));
-        assert_eq!(p.get("input"), Some(&json!("black red")));
-        assert!(p.get("runs").is_none());
-    }
-
-    #[test]
-    fn sel_bytes_maps_chars_to_bytes() {
-        let mut e = EditState::new(0, CellRef::new(0, 0), "é ok".into(), true, false, None);
-        e.sel = Some((1, 3));
-        assert_eq!(sel_bytes(&e), Some(2..4));
-    }
-
-    #[test]
-    fn sel_bytes_none_when_caret_only() {
-        let e = EditState::new(0, CellRef::new(0, 0), "é ok".into(), true, false, None);
-        assert_eq!(sel_bytes(&e), None);
-    }
-
-    #[test]
-    fn sel_bytes_none_when_empty_selection() {
-        let mut e = edit_sel("black red", Some((3, 3)), None);
-        assert_eq!(sel_bytes(&e), None);
-        e.sel = Some((4, 2));
-        assert_eq!(sel_bytes(&e), None);
-    }
-
-    #[test]
-    fn set_text_drops_runs_when_edit_becomes_formula() {
-        let mut e = EditState::new(0, CellRef::new(0, 0), "black red".into(), true, false, Some(black_red_runs()));
-        e.set_text("=SUM(A1)".into());
-        assert!(e.runs.is_none());
-        assert!(e.is_formula());
-    }
-
-    #[test]
-    fn commit_params_omits_runs_for_a_formula() {
-        // A path that bypassed `set_text` (control-driven text) leaves stale runs: the commit
-        // must still not send them for a formula.
-        let mut e = EditState::new(0, CellRef::new(0, 0), "black red".into(), true, false, Some(black_red_runs()));
-        e.text = "=SUM(A1)".into();
-        assert!(commit_params(&e).get("runs").is_none());
-    }
-
-    #[test]
-    fn intercept_fontcolor() {
-        let e = edit_sel("black red green", Some((6, 9)), None);
-        let apps = intercept_run_delta("home.fontColor", &json!({"color": "#FF0000"}), &e, &Font::default()).unwrap().unwrap();
-        assert_eq!(apps.len(), 1);
-        assert_eq!(apps[0].0, 6..9);
-        assert_eq!(apps[0].1.color, Some(Color::rgb(0xFF, 0, 0)));
-    }
-
-    #[test]
-    fn intercept_resolves_toggle() {
-        let e = edit_sel("black red", Some((0, 9)), Some(black_red_runs()));
-        // Not all covered — bold "black", plain " red" — so the press turns bold on everywhere.
-        let apps = intercept_run_delta("home.bold", &json!({}), &e, &Font::default()).unwrap().unwrap();
-        assert_eq!(apps.len(), 1);
-        assert_eq!(apps[0].1.bold, Some(true));
-        // An explicit `on` wins over the all-covered rule.
-        let apps = intercept_run_delta("home.bold", &json!({"on": false}), &e, &Font::default()).unwrap().unwrap();
-        assert_eq!(apps[0].1.bold, Some(false));
-    }
-
-    #[test]
-    fn intercept_skips() {
-        let base = Font::default();
-        // A formula edit is never intercepted.
-        let f = edit_sel("=SUM(A1)", Some((2, 5)), None);
-        assert!(intercept_run_delta("home.bold", &json!({}), &f, &base).is_none());
-        // Caret only: nothing covered.
-        let e = edit_sel("black red", None, Some(black_red_runs()));
-        assert!(intercept_run_delta("home.bold", &json!({}), &e, &base).is_none());
-        // The programmatic forms (cell/range/chars) always reach the engine.
-        let e = edit_sel("black red", Some((0, 5)), None);
-        for p in [json!({"cell": "A1"}), json!({"range": "A1:B2"}), json!({"chars": [0, 4]})] {
-            assert!(intercept_run_delta("home.bold", &p, &e, &base).is_none());
-        }
-        // An id outside the Font group falls through.
-        assert!(intercept_run_delta("home.fillColor", &json!({"color": "#FFFF00"}), &e, &base).is_none());
-    }
-
-    #[test]
-    fn intercept_increase_steps_per_run() {
-        let runs = CellRuns {
-            runs: vec![
-                Run { start: 0, len: 2, font: RunFont { size: Some(11.0), ..RunFont::default() } },
-                Run { start: 2, len: 3, font: RunFont { size: Some(14.0), ..RunFont::default() } },
-            ],
-        };
-        let e = edit_sel("aa bb", Some((0, 5)), Some(runs));
-        let apps = intercept_run_delta("home.increaseFontSize", &json!({}), &e, &Font::default()).unwrap().unwrap();
-        assert_eq!(apps.len(), 2);
-        assert_eq!((apps[0].0.clone(), apps[0].1.size), (0..2, Some(12.0)));
-        assert_eq!((apps[1].0.clone(), apps[1].1.size), (2..5, Some(15.0)));
-    }
-
-    #[test]
-    fn intercept_underline_toggles_like_the_engine() {
-        // All underlined: the press clears (explicit clear, `Underline::None`); the next applies
-        // again. An explicit `on` still wins over the all-covered rule.
-        let runs = CellRuns { runs: vec![Run { start: 0, len: 5, font: RunFont { underline: Some(Underline::Single), ..RunFont::default() } }] };
-        let mut e = edit_sel("black", Some((0, 5)), Some(runs));
-        let base = Font::default();
-        let apps = intercept_run_delta("home.underline", &json!({}), &e, &base).unwrap().unwrap();
-        assert_eq!(apps[0].1.underline, Some(Underline::None));
-        apply_run_fonts(&mut e, apps).unwrap();
-        // The explicit clear survives as one run over the whole text (an all-`None` font would
-        // be flat, `Some(None)` is the stored "off", like the engine).
-        assert!(e.runs.as_ref().is_some_and(|r| r.runs.iter().all(|run| run.font.underline == Some(Underline::None))));
-        let apps = intercept_run_delta("home.underline", &json!({}), &e, &base).unwrap().unwrap();
-        assert_eq!(apps[0].1.underline, Some(Underline::Single));
-        apply_run_fonts(&mut e, apps).unwrap();
-        assert!(e.runs.as_ref().is_some_and(|r| r.runs.iter().all(|run| run.font.underline == Some(Underline::Single))));
-        // Explicit `on` is honored whatever the buffer holds.
-        let apps = intercept_run_delta("home.underline", &json!({"on": true}), &e, &base).unwrap().unwrap();
-        assert_eq!(apps[0].1.underline, Some(Underline::Single));
-        let apps = intercept_run_delta("home.underline", &json!({"on": false}), &e, &base).unwrap().unwrap();
-        assert_eq!(apps[0].1.underline, Some(Underline::None));
-    }
-
-    #[test]
-    fn intercept_superscript_toggles_like_the_engine() {
-        // All superscript: the press returns to baseline; the next raises again.
-        let runs = CellRuns { runs: vec![Run { start: 0, len: 5, font: RunFont { vert: Some(VertAlign::Superscript), ..RunFont::default() } }] };
-        let mut e = edit_sel("black", Some((0, 5)), Some(runs));
-        let base = Font::default();
-        let apps = intercept_run_delta("home.superscript", &json!({}), &e, &base).unwrap().unwrap();
-        assert_eq!(apps[0].1.vert, Some(VertAlign::Baseline));
-        apply_run_fonts(&mut e, apps).unwrap();
-        // The explicit baseline survives as one run over the whole text (the engine's off
-        // stores `Some(VertAlign::Baseline)`, which is not an all-`None` font).
-        assert!(e.runs.as_ref().is_some_and(|r| r.runs.iter().all(|run| run.font.vert == Some(VertAlign::Baseline))));
-        let apps = intercept_run_delta("home.superscript", &json!({}), &e, &base).unwrap().unwrap();
-        assert_eq!(apps[0].1.vert, Some(VertAlign::Superscript));
-        apply_run_fonts(&mut e, apps).unwrap();
-        assert!(e.runs.as_ref().is_some_and(|r| r.runs.iter().all(|run| run.font.vert == Some(VertAlign::Superscript))));
-    }
-
-    #[test]
-    fn apply_run_fonts_cap_error_keeps_runs() {
-        // A buffer already at the per-cell run cap (alternating fonts so nothing coalesces) plus
-        // a two-byte tail: one more split is refused, and the refused press must surface `Err`
-        // and leave the buffer's runs exactly as they were — not flattened to `None`.
-        let cap = gridcraft_engine::model::MAX_RUNS_PER_CELL;
-        let mut runs: Vec<Run> = (0..cap as u32)
-            .map(|i| Run { start: i, len: 1, font: if i % 2 == 0 { RunFont { bold: Some(true), ..RunFont::default() } } else { RunFont::default() } })
-            .collect();
-        runs.push(Run { start: cap as u32, len: 2, font: RunFont { bold: Some(true), ..RunFont::default() } });
-        let at_cap = CellRuns { runs };
-        let mut e = EditState::new(0, CellRef::new(0, 0), "a".repeat(cap + 2), true, false, Some(at_cap.clone()));
-        let apps = vec![((cap + 1)..(cap + 2), RunFont { color: Some(Color::rgb(0xFF, 0, 0)), ..RunFont::default() })];
-        assert_eq!(apply_run_fonts(&mut e, apps).unwrap_err(), "too many runs");
-        assert_eq!(e.runs, Some(at_cap), "the refused press leaves the buffer's runs unchanged");
-    }
-
-    #[test]
-    fn run_routes_font_commands_into_the_buffer() {
-        let mut session = gridcraft_engine::Session::new();
-        session.new_workbook();
-        let mut app = crate::SheetApp::new(session, crate::Services::default());
-        assert!(app.session.run("cell.set", json!({"cell": "A1", "input": "black red"})).is_ok());
-        app.begin_edit(Some("black red".into()), false);
-        if let Some(ed) = app.editor.as_mut() {
-            ed.sel = Some((0, 9));
-        }
-        // Ribbon, keytips and shortcuts all funnel through `run`: the bold hits the buffer.
-        assert_eq!(app.run("home.bold", json!({})), Ok(Json::Null));
-        let ed = app.editor.as_ref().unwrap();
-        assert!(ed.runs.as_ref().is_some_and(|r| r.runs.iter().all(|run| run.font.bold == Some(true))));
-        // Caret only: swallowed (Excel parity), the buffer untouched.
-        if let Some(ed) = app.editor.as_mut() {
-            ed.sel = None;
-        }
-        assert_eq!(app.run("home.italic", json!({})), Ok(Json::Null));
-        let ed = app.editor.as_ref().unwrap();
-        assert!(ed.runs.as_ref().is_some_and(|r| r.runs.iter().all(|run| run.font.italic.is_none())));
-        // The cell on the sheet is untouched until the edit commits.
-        let d = app.session.active().unwrap();
-        assert!(!d.wb.active().unwrap().cell_runs.contains_key(&CellRef::new(0, 0)));
-        // The programmatic form still reaches the engine.
-        assert!(app.run("home.italic", json!({"cell": "A1", "chars": [0, 9], "on": true})).is_ok());
-        let d = app.session.active().unwrap();
-        assert!(d.wb.active().unwrap().cell_runs.contains_key(&CellRef::new(0, 0)));
-    }
-
-    #[test]
-    fn ref_spans() {
-        let r = formula_refs("=A1+B2:C3*a1+Sheet2!D4");
-        assert_eq!(r.len(), 4);
-        assert_eq!(r[0].4, r[2].4); // A1 and a1 share a colour
-        assert_eq!(r[1].2.a1(), "B2:C3");
-        assert_eq!(r[3].3.as_deref(), Some("Sheet2"));
-    }
 }
