@@ -260,6 +260,19 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Convert to Comments" => "In Kommentare konvertieren",
         "Checkbox" => "Kontrollkästchen",
         "Insert checkboxes in the selected cells" => "Kontrollkästchen in die ausgewählten Zellen einfügen",
+        "Button" => "Schaltfläche",
+        "Slider" => "Schieberegler",
+        "Spin Button" => "Drehfeld",
+        "Draw a button that runs a macro or a command" => "Eine Schaltfläche zeichnen, die ein Makro oder einen Befehl ausführt",
+        "Draw a slider that sets a whole number in a linked cell" => {
+            "Einen Schieberegler zeichnen, der eine ganze Zahl in einer verknüpften Zelle festlegt"
+        }
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Ein Drehfeld zeichnen, das eine ganze Zahl in einer verknüpften Zelle schrittweise ändert"
+        }
+        "Edit Text" => "Text bearbeiten",
+        "Assign Action…" => "Aktion zuweisen…",
+        "Format Control…" => "Steuerelement formatieren…",
         "Sheet\nRight-to-Left" => "Blatt von rechts\nnach links",
         "Sheet Right-to-Left" => "Blatt von rechts nach links",
         "Data\nAnalysis" => "Daten-\nanalyse",
@@ -350,6 +363,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Options|General" => "Allgemein",
         "Options|Save" => "Speichern",
         "Show formula bar" => "Bearbeitungsleiste anzeigen",
+        "Highlight the active cell's row" => "Zeile der aktiven Zelle hervorheben",
+        "Display options for this workbook" => "Optionen für die Anzeige dieser Arbeitsmappe",
+        "Show horizontal scroll bar" => "Horizontale Bildlaufleiste anzeigen",
+        "Show vertical scroll bar" => "Vertikale Bildlaufleiste anzeigen",
+        "Show sheet tabs" => "Blattregisterkarten anzeigen",
+        "Edit Hyperlink…" => "Link bearbeiten…",
+        "Edit Hyperlink" => "Link bearbeiten",
+        "Open Hyperlink" => "Link öffnen",
+        "Remove Hyperlink" => "Link entfernen",
+        "Resize formula bar" => "Größe der Bearbeitungsleiste ändern",
         "Enable AutoComplete for cell values" => "AutoVervollständigen für Zellwerte aktivieren",
         "Save .xlsx workbooks automatically after every change" => ".xlsx-Arbeitsmappen nach jeder Änderung automatisch speichern",
         "Workbook calculation" => "Arbeitsmappenberechnung",
