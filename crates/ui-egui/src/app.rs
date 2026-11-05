@@ -400,11 +400,13 @@ mod autosave_gate_tests {
         app.ui.autosave = true;
         app.grid.last_autosave = monotonic_ms() - 5000.0;
         frame(&mut app);
-        // The user keeps typing while the snapshot is written.
-        app.run("cell.set", json!({"cell": "A1", "input": "typed during the save"})).unwrap();
+        // The user is still editing while the snapshot is written. Quit must commit this draft
+        // before it authorizes shutdown, then save the newer workbook after the worker finishes.
+        app.begin_edit(Some("typed during the save".into()), false);
         let ctx = egui::Context::default();
         crate::control::handle(&mut app, &ctx, "app.quit", &json!({}));
         assert!(app.allow_close, "app.quit requests exit without an unsaved-work dialog");
+        assert!(app.editor.is_none(), "app.quit commits the cell draft before authorizing exit");
         app.autosave_on_exit();
         assert!(!app.session.active().unwrap().is_dirty());
         let (saved, _) = gridcraft_engine::io::open_bytes("book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
