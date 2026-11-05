@@ -96,8 +96,11 @@ fn series_spans(data: &ChartData, fams: &[Fam], sec: &[bool], ncat: usize) -> Ve
         } else {
             None
         };
-        let mut row = Vec::with_capacity(ncat);
-        for j in 0..ncat {
+        // A series without values has no spans: 255 empty series over 20,000 categories would
+        // otherwise fill ~5 million entries.
+        let n = if s.values.is_empty() { 0 } else { ncat };
+        let mut row = Vec::with_capacity(n);
+        for j in 0..n {
             let v = s.values.get(j).copied().flatten();
             let span = match (si.and_then(|p| stacks.get_mut(p)), fam) {
                 (Some((_, pos, neg)), Fam::ColStack | Fam::Col100) => v.and_then(|v| {
@@ -449,4 +452,19 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
         draw_trendlines(ctx, s, &pts, &frac, &px, &mut trend_labels, (xs.min, xs.max));
     }
     draw_trend_labels(ctx, plot, &trend_labels);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_series_get_no_span_entries() {
+        let empty = SeriesData::default();
+        let full = SeriesData { values: vec![Some(1.0); 3], ..SeriesData::default() };
+        let data = ChartData { series: vec![empty.clone(), full, empty], ..ChartData::default() };
+        let fams = [Fam::Col; 3];
+        let spans = series_spans(&data, &fams, &[false; 3], MAX_CATS);
+        assert_eq!(spans.iter().map(Vec::len).collect::<Vec<_>>(), [0, MAX_CATS, 0]);
+    }
 }

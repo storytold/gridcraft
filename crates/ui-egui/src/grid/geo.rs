@@ -158,11 +158,21 @@ impl Geo {
             self.cells.top() + self.frozen_h + (self.ri.start(row) as f32 - self.ri.start(self.fr) as f32 - self.scroll.y) * self.z
         }
     }
+    /// Screen x of `col`'s right edge. Not `x(col + 1)`: across the freeze line (and between
+    /// pages) the next column is laid out elsewhere (#2544).
+    pub fn x_end(&self, sh: &Sheet, col: u32) -> f32 {
+        self.x(sh, col) + sh.col_width(col) * self.z
+    }
+    /// Screen y of `row`'s bottom edge (see `x_end`).
+    pub fn y_end(&self, sh: &Sheet, row: u32) -> f32 {
+        self.y(sh, row) + sh.row_height(row) * self.z
+    }
+    /// Columns `a` and `b` are on the same side of the freeze line, so they scroll together.
+    pub fn same_col_pane(&self, a: u32, b: u32) -> bool {
+        (a < self.fc) == (b < self.fc)
+    }
     pub fn cell_rect(&self, sh: &Sheet, c: CellRef) -> Rect {
-        Rect::from_min_max(
-            pos2(self.x(sh, c.col), self.y(sh, c.row)),
-            pos2(self.x(sh, c.col) + sh.col_width(c.col) * self.z, self.y(sh, c.row) + sh.row_height(c.row) * self.z),
-        )
+        Rect::from_min_max(pos2(self.x(sh, c.col), self.y(sh, c.row)), pos2(self.x_end(sh, c.col), self.y_end(sh, c.row)))
     }
     pub fn range_rect(&self, sh: &Sheet, r: RangeRef) -> Rect {
         let a = self.cell_rect(sh, r.start);

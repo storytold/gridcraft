@@ -325,6 +325,11 @@ impl<'h> Evaluator<'h> {
             Expr::Array(rows) => {
                 let h = rows.len();
                 let w = rows.first().map_or(0, Vec::len);
+                // A ragged literal is an error either way; one wide row and many empty ones must
+                // not reserve their rows-times-width product first.
+                if rows.iter().any(|row| row.len() != w) {
+                    return err(CellError::Value);
+                }
                 let mut data = Vec::with_capacity(h * w);
                 for row in rows {
                     for el in row {
@@ -359,9 +364,10 @@ impl<'h> Evaluator<'h> {
             return v.clone();
         }
         let wb = self.host.workbook();
-        // Sheet-qualified `Sheet1!Name`.
-        let (scope_sheet, bare) = match n.split_once('!') {
-            Some((s, b)) => match wb.sheet_index(&gridcraft_core::unquote_sheet(s)) {
+        // Sheet-qualified `Sheet1!Name`. The parser stores the sheet unquoted, so it is used as
+        // is (`' Sales '` keeps its spaces) and split at the last `!` (`'a!b'!Name`).
+        let (scope_sheet, bare) = match n.rsplit_once('!') {
+            Some((s, b)) => match wb.sheet_index(s) {
                 Some(i) => (i, b),
                 None => return err(CellError::Name),
             },
