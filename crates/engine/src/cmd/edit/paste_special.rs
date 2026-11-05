@@ -116,6 +116,33 @@ fn copy_merges(
     Ok(())
 }
 
+/// Copy the block's merged areas to every tile of a tiled paste: [`copy_merges`] at each
+/// tile's anchor. A paste that takes the block once is one call at the anchor itself.
+#[allow(clippy::too_many_arguments)]
+fn copy_merges_tiled(
+    cx: &mut crate::cmd::Ctx,
+    dest_sheet: usize,
+    src_sheet: &gridcraft_model::Sheet,
+    src: RangeRef,
+    at: CellRef,
+    what: What,
+    transpose: bool,
+    tiles_r: u32,
+    tiles_c: u32,
+    pitch_h: u32,
+    pitch_w: u32,
+) -> Result<()> {
+    for tr in 0..tiles_r {
+        for tc in 0..tiles_c {
+            let row = i64::from(tr).saturating_mul(i64::from(pitch_h));
+            let col = i64::from(tc).saturating_mul(i64::from(pitch_w));
+            let Some(anchor) = at.offset(row, col) else { continue };
+            copy_merges(cx, dest_sheet, src_sheet, src, anchor, what, transpose)?;
+        }
+    }
+    Ok(())
+}
+
 /// Take a cut's source block off its sheet and return what was taken, by position: its
 /// cells, and the pictures among them. Notes, hyperlinks and merged areas sit beside the
 /// cells, and a cut takes them with the block: the destination is written from the
@@ -382,8 +409,8 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             }
             cx.touch(dest_sheet, dest);
         }
-        // Merged areas inside the copied block travel with it.
-        copy_merges(cx, dest_sheet, src_sheet, src, at, what, transpose)?;
+        // Merged areas inside the copied block travel with it, at every tile.
+        copy_merges_tiled(cx, dest_sheet, src_sheet, src, at, what, transpose, tiles_r, tiles_c, pitch_h, pitch_w)?;
         if cut_move {
             // References elsewhere to the moved block now point to its new place.
             let dest_name = cx.wb.sheet(dest_sheet).map(|s| s.name.clone()).unwrap_or_default();

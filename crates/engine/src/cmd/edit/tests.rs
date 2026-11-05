@@ -711,6 +711,22 @@ fn paste_writing_more_than_the_bound_is_refused_and_writes_nothing() {
 }
 
 #[test]
+fn tiled_paste_replicates_merged_areas_at_every_tile() {
+    // #3370 review: the copied block's merged areas travel with the cells, tile by tile.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    paste_over(&mut s, "A1:B1", "C1:F1").unwrap();
+    assert_eq!(value_at(&s, "C1"), Value::Number(1.0));
+    assert_eq!(value_at(&s, "E1"), Value::Number(1.0));
+    let merges = &s.doc().unwrap().wb.sheet(0).unwrap().merges;
+    for want in ["A1:B1", "C1:D1", "E1:F1"] {
+        assert!(merges.contains(&RangeRef::parse(want).unwrap()), "merge {want} in {merges:?}");
+    }
+}
+
+#[test]
 fn tiled_cut_moves_each_cell_into_every_tile() {
     // A cut pasted over a multiple of its size tiles; the cut path reads the taken cells by position.
     let mut s = Session::new();
