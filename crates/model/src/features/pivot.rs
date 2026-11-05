@@ -41,7 +41,14 @@ pub enum PivotDateGroup {
 pub struct PivotField {
     /// Source column header name.
     pub source_col: String,
+    /// Ascending or descending by label (or by `sort_by`), or source order (or `custom_order`).
     pub sort: PivotSort,
+    /// Sort the items by this value field's totals (its caption) instead of their labels; only
+    /// with an ascending or descending `sort`.
+    pub sort_by: Option<String>,
+    /// A manual order of item labels (Excel's dragged items); only with `PivotSort::None`. Items
+    /// not listed follow, ascending by label.
+    pub custom_order: Vec<String>,
     pub date_group: PivotDateGroup,
     /// Item labels whose detail is hidden (collapsed).
     pub collapsed_items: Vec<String>,

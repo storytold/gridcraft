@@ -127,8 +127,22 @@ fn workbook() -> Workbook {
         source: "SalesTbl".into(),
         anchor: at("K4"),
         rows: vec![
-            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Years, sort: PivotSort::None, collapsed_items: vec!["2024".into()] },
-            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Months, sort: PivotSort::Asc, collapsed_items: vec![] },
+            PivotField {
+                source_col: "Date".into(),
+                date_group: PivotDateGroup::Years,
+                sort: PivotSort::None,
+                collapsed_items: vec!["2024".into()],
+                sort_by: None,
+                custom_order: vec![],
+            },
+            PivotField {
+                source_col: "Date".into(),
+                date_group: PivotDateGroup::Months,
+                sort: PivotSort::Asc,
+                collapsed_items: vec![],
+                sort_by: None,
+                custom_order: vec![],
+            },
         ],
         columns: vec![PivotField { sort: PivotSort::Desc, ..field("Product") }],
         values: vec![
@@ -897,4 +911,64 @@ fn base_fields_and_items_are_read_from_hand_written_tables() {
     let (mode, _, _, warnings) = read(r#"<dataField name="A" fld="1" showDataAs="index"/>"#);
     assert_eq!(mode, PivotShowAs::Index);
     assert!(warnings.iter().all(|w| !w.contains("show-values-as")), "{warnings:?}");
+}
+
+#[test]
+fn value_sorts_and_custom_orders_are_written() {
+    let cols = [
+        ("Region", vec![Value::text("East"), Value::text("West"), Value::text("North"), Value::number(7.0)]),
+        ("Sales", vec![Value::number(10.0), Value::number(20.0), Value::number(5.0), Value::number(1.0)]),
+    ];
+    let value = |func: PivotFunc, name: &str| PivotValue { source_col: "Sales".into(), func, name: name.into(), ..PivotValue::default() };
+    let by_value = small_pivot(&cols, |p| {
+        p.rows = vec![PivotField { sort: PivotSort::Desc, sort_by: Some("Max of Sales".into()), ..field("Region") }];
+        p.values = vec![value(PivotFunc::Sum, "Sum of Sales"), value(PivotFunc::Max, "Max of Sales")];
+    });
+    let t = &by_value["xl/pivotTables/pivotTable1.xml"];
+    assert!(t.contains(r#" sortType="descending""#), "{t}");
+    assert!(t.contains(r#"</items><autoSortScope><pivotArea dataOnly="0" outline="0" fieldPosition="0"><references count="1"><reference field="4294967294" count="1" selected="0"><x v="1"/></reference></references></pivotArea></autoSortScope></pivotField>"#), "{t}");
+    let custom = small_pivot(&cols, |p| {
+        p.rows = vec![PivotField { sort: PivotSort::None, custom_order: vec!["west".into()], ..field("Region") }];
+        p.values = vec![value(PivotFunc::Sum, "Sum of Sales")];
+    });
+    let t = &custom["xl/pivotTables/pivotTable1.xml"];
+    // Cache items in first-appearance order: East 0, West 1, North 2, 7 3. West first, then the
+    // rest ascending as the engine shows them: the number, East, North.
+    assert!(t.contains(r#"<items count="5"><item x="1"/><item x="3"/><item x="0"/><item x="2"/><item t="default"/></items>"#), "{t}");
+    assert!(!t.contains("autoSortScope") && !t.contains("sortType"), "{t}");
+}
+
+#[test]
+fn value_sorts_and_custom_orders_are_read() {
+    let table = |field: &str, data: &str| {
+        format!(
+            r#"<pivotTableDefinition name="P" cacheId="1"><location ref="C1:D4"/><pivotFields count="2">{field}<pivotField dataField="1"/></pivotFields><rowFields><field x="0"/></rowFields><dataFields>{data}</dataFields></pivotTableDefinition>"#
+        )
+    };
+    let read = |field: &str, data: &str| {
+        let (wb, _) = read_xlsx(&with_pivot(&table(field, data), Some(GOOD_CACHE))).unwrap();
+        wb.sheet(0).unwrap().pivots[0].rows[0].clone()
+    };
+    let two = r#"<dataField name="Total" fld="1"/><dataField name="Biggest" fld="1" subtotal="max"/>"#;
+    let sorted = |reference: &str| {
+        format!(
+            r#"<pivotField axis="axisRow" sortType="ascending"><items><item x="0"/><item x="1"/></items><autoSortScope><pivotArea><references count="1"><reference field="{reference}" count="1"><x v="1"/></reference></references></pivotArea></autoSortScope></pivotField>"#
+        )
+    };
+    for reference in ["4294967294", "-2"] {
+        let f = read(&sorted(reference), two);
+        assert_eq!((f.sort, f.sort_by.as_deref()), (PivotSort::Asc, Some("Biggest")), "{reference}");
+    }
+    let f = read(&sorted("4294967294"), r#"<dataField name="Total" fld="1"/>"#);
+    assert_eq!(f.sort_by, None, "a data field index past the end");
+    let f = read(&sorted("0"), two);
+    assert_eq!(f.sort_by, None, "a reference to another field");
+    // K's items: x, 2, (blank), TRUE, the date. Out of the cache's order: a manual order.
+    let manual = r#"<pivotField axis="axisRow"><items><item x="3"/><item x="0"/><item x="1"/><item t="default"/></items></pivotField>"#;
+    let f = read(manual, two);
+    assert_eq!((f.sort, f.custom_order.clone()), (PivotSort::None, vec!["TRUE".to_string(), "x".into(), "2".into()]));
+    let in_order = r#"<pivotField axis="axisRow"><items><item x="0"/><item x="1"/><item x="3"/></items></pivotField>"#;
+    assert!(read(in_order, two).custom_order.is_empty(), "the cache's order is no custom order");
+    let ascending = r#"<pivotField axis="axisRow" sortType="ascending"><items><item x="3"/><item x="0"/></items></pivotField>"#;
+    assert!(read(ascending, two).custom_order.is_empty(), "a sorted field has no manual order");
 }

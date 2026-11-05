@@ -62,19 +62,81 @@ fn axis_field<'a>(cmd: &str, pt: &'a mut PivotTable, field: &str) -> Result<&'a 
         .ok_or_else(|| bad(cmd, format!("`{field}` isn't in the rows or columns area")))
 }
 
+/// What `pivot.sort` orders a field's items by.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SortOrder {
+    Ascending,
+    Descending,
+    Source,
+    /// The `items` given, then the rest ascending.
+    Custom,
+}
+
 pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.sort";
     let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
     let order = match str_param(p, "order").unwrap_or("asc").to_ascii_lowercase().as_str() {
-        "asc" | "ascending" | "a-z" => PivotSort::Asc,
-        "desc" | "descending" | "z-a" => PivotSort::Desc,
-        "none" | "manual" | "source" => PivotSort::None,
-        o => return Err(bad(C, format!("unknown order `{o}` (asc|desc|none)"))),
+        "asc" | "ascending" | "a-z" => SortOrder::Ascending,
+        "desc" | "descending" | "z-a" => SortOrder::Descending,
+        "none" | "source" => SortOrder::Source,
+        "custom" | "manual" => SortOrder::Custom,
+        o => return Err(bad(C, format!("unknown order `{o}` (asc|desc|none|custom)"))),
     };
-    update(s, p, |pt, _, _| {
-        axis_field(C, pt, &field)?.sort = order;
-        Ok(json!({}))
+    let by = str_param(p, "by").map(str::to_string);
+    if by.is_some() && !matches!(order, SortOrder::Ascending | SortOrder::Descending) {
+        return Err(bad(C, "`by` sorts ascending or descending"));
+    }
+    let items: Vec<String> = match (order, p.get("items")) {
+        (SortOrder::Custom, Some(Json::Array(list))) if !list.is_empty() => list
+            .iter()
+            .take(100_000)
+            .map(|v| v.as_str().map(str::to_string).ok_or_else(|| bad(C, "`items` are item labels")))
+            .collect::<Result<_>>()?,
+        (SortOrder::Custom, _) => return Err(bad(C, "a custom order needs `items`: the item labels in order")),
+        (_, Some(_)) => return Err(bad(C, "`items` go with order: custom")),
+        (_, None) => vec![],
+    };
+    update(s, p, |pt, src, wb| {
+        let sort_by = by.as_deref().map(|name| value_field_name(C, pt, name)).transpose()?;
+        let custom = if order == SortOrder::Custom { item_labels(C, pt, src, wb, &field, &items)? } else { vec![] };
+        let f = axis_field(C, pt, &field)?;
+        f.sort = match order {
+            SortOrder::Ascending => PivotSort::Asc,
+            SortOrder::Descending => PivotSort::Desc,
+            SortOrder::Source | SortOrder::Custom => PivotSort::None,
+        };
+        f.sort_by = sort_by;
+        f.custom_order = custom;
+        Ok(json!({"field": f.source_col, "sortBy": f.sort_by, "customOrder": f.custom_order}))
     })
+}
+
+/// The caption of the value field `name` (a caption or the source field of one).
+fn value_field_name(cmd: &str, pt: &PivotTable, name: &str) -> Result<String> {
+    let name = name.trim();
+    pt.values
+        .iter()
+        .find(|v| v.name.eq_ignore_ascii_case(name))
+        .or_else(|| pt.values.iter().find(|v| v.source_col.eq_ignore_ascii_case(name)))
+        .map(|v| v.name.clone())
+        .ok_or_else(|| bad(cmd, format!("`{name}` isn't in the values area")))
+}
+
+/// `labels` as the axis field `field` shows them (each an item of it), without repeats.
+fn item_labels(cmd: &str, pt: &PivotTable, src: &pv::Source, wb: &gridcraft_model::Workbook, field: &str, labels: &[String]) -> Result<Vec<String>> {
+    let axis = pt.rows.iter().chain(pt.columns.iter()).find(|f| f.source_col.eq_ignore_ascii_case(field));
+    let axis = axis.ok_or_else(|| bad(cmd, format!("`{field}` isn't in the rows or columns area")))?;
+    let column = src.col(&axis.source_col).ok_or_else(|| bad(cmd, format!("no field `{field}` in the source data")))?;
+    let known = pv::distinct_labels(wb, src, column, axis.date_group, usize::MAX);
+    let mut out: Vec<String> = Vec::new();
+    for label in labels {
+        let canonical =
+            known.iter().find(|k| k.eq_ignore_ascii_case(label.trim())).ok_or_else(|| bad(cmd, format!("`{label}` isn't an item of `{field}`")))?;
+        if !out.iter().any(|o| o.eq_ignore_ascii_case(canonical)) {
+            out.push(canonical.clone());
+        }
+    }
+    Ok(out)
 }
 
 pub(super) fn group(s: &mut Session, p: &Json) -> Result<Json> {

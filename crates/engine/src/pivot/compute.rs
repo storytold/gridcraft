@@ -1,4 +1,4 @@
-use super::items::{Acc, FieldItems, build_tree, collect_siblings, is_collapsed, item_label};
+use super::items::{Acc, AxisOrder, FieldItems, build_tree, collect_siblings, is_collapsed, item_label};
 use super::output::{AggMap, CellKind, ColKind, ColSpec, Ctx, Grid, Line, LineKind, Output, RowKind, ValSrc, data_cols_exceed_sheet, flatten_cols};
 use super::show_as::{AxisItems, CellAt, ShowAs, Siblings, ValueLookup, display_format, resolve_base_field};
 use super::{
@@ -408,8 +408,12 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
     let col_fields: Vec<&PivotField> = cols.iter().map(|(_, f)| *f).collect();
     let row_paths: Vec<&[u32]> = row_set.iter().map(Vec::as_slice).collect();
     let col_paths: Vec<&[u32]> = col_set.iter().map(Vec::as_slice).collect();
-    let row_tree = build_tree(&row_paths, 0, &row_fields, &row_items);
-    let col_tree = build_tree(&col_paths, 0, &col_fields, &col_items);
+    let lookup = ValueLookup { wb, source: src, calc: &calc, vals: &vals, extra: &extra, aggs: &aggs };
+    let value_names: Vec<&str> = vals.iter().map(|(_, v)| v.name.as_str()).collect();
+    let row_measure = |path: &[u32], vi: usize| lookup.get(path, &[], vi).as_ref().and_then(Value::as_f64);
+    let col_measure = |path: &[u32], vi: usize| lookup.get(&[], path, vi).as_ref().and_then(Value::as_f64);
+    let row_tree = build_tree(&row_paths, 0, &mut Vec::new(), &AxisOrder::new(&row_fields, &row_items, &value_names, &row_measure));
+    let col_tree = build_tree(&col_paths, 0, &mut Vec::new(), &AxisOrder::new(&col_fields, &col_items, &value_names, &col_measure));
     let mut row_siblings = Siblings::new();
     collect_siblings(&row_tree, &mut Vec::new(), &mut row_siblings);
     let mut col_siblings = Siblings::new();
