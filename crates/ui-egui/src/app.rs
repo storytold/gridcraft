@@ -245,10 +245,18 @@ impl SheetApp {
                 self.perf.grid_ms = now_ms() - g0;
             });
         }
+        // An existing message owns Enter/Escape before the underlying dialog.
+        // A newly created message is still shown in the same frame (#2189).
+        let had_message = self.message.is_some();
+        if had_message {
+            widgets::message_box(self, &ctx);
+        }
         dialogs::show(self, &ctx);
         macro_ui::forget_closed_editor(self);
         macro_ui::question_box(self, &ctx);
-        widgets::message_box(self, &ctx);
+        if !had_message {
+            widgets::message_box(self, &ctx);
+        }
         widgets::toast(self, &ctx);
         // Requests are admitted in `logic`, for the root viewport, so only its pass issues them.
         if ctx.viewport_id() == egui::ViewportId::ROOT {

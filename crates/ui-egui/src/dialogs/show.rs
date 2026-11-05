@@ -531,7 +531,9 @@ pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) 
             let lang = crate::i18n::current(ui.ctx());
             let t = crate::theme::Tokens::get(ui.ctx());
             let ok = ui.add(egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(t.on_accent)).fill(t.accent));
-            if ok.clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
+            // Consume Enter so a newly opened error message cannot dismiss itself (#2189).
+            let enter = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter));
+            if ok.clicked() || enter {
                 *confirm = true;
             }
             if ui.button(format!(" {} ", lang.tr("Cancel"))).clicked() {
