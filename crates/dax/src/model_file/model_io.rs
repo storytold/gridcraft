@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::value::{Scalar, ScalarKey};
+use crate::value::{Scalar, ScalarKey, distinct_key};
 
 use super::model_data::{ModelColumnData, ModelData, ModelRelationship, ModelTableData, RelationshipMultiplicity};
 use super::vertipaq::{
@@ -1193,6 +1193,39 @@ fn build_write_plan(base: &Base<'_>, layout: &ModelLayout, model: &ModelData, pr
     Ok(WritePlan { tables, relationships, measures: model.measures.clone() })
 }
 
+/// Plans a text column's dictionary under the model collation: ids start at 3, blanks are id 2.
+///
+/// The model collation folds case (`value::distinct_key`), so `"East"` and `"east"` are one
+/// dictionary value — VertiPaq would store them as one — and the first spelling seen is written,
+/// keeping the value's own casing rather than the folded key.
+fn string_dictionary(values: &[Scalar], name: &str) -> Result<(Vec<String>, Vec<u32>, bool)> {
+    let mut distinct: BTreeMap<ScalarKey, String> = BTreeMap::new();
+    for value in values {
+        match value {
+            Scalar::Blank => {}
+            Scalar::String(text) => {
+                distinct.entry(distinct_key(value)).or_insert_with(|| text.clone());
+            }
+            _ => return Err(ModelFileError::InvalidModel(format!("text column {name} holds a non-text value"))),
+        }
+    }
+    let dictionary: Vec<String> = distinct.into_values().collect();
+    let mut lookup: BTreeMap<ScalarKey, u32> = BTreeMap::new();
+    for (index, value) in dictionary.iter().enumerate() {
+        lookup.insert(distinct_key(&Scalar::String(value.clone())), u32::try_from(index).map_err(|_| ModelFileError::TooLarge)? + 3);
+    }
+    let ids = values
+        .iter()
+        .map(|value| match value {
+            Scalar::Blank => Ok(2),
+            Scalar::String(_) => lookup.get(&distinct_key(value)).copied().ok_or_else(|| ModelFileError::Corrupt("missing string id".into())),
+            _ => Err(ModelFileError::InvalidModel("text column holds a non-text value".into())),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let has_nulls = values.iter().any(|value| matches!(value, Scalar::Blank));
+    Ok((dictionary, ids, has_nulls))
+}
+
 fn build_column_write(
     layout: &ModelLayout,
     column: &ColumnMeta,
@@ -1213,33 +1246,8 @@ fn build_column_write(
             ids = encoded;
         }
         (ColumnEncoding::HashString { dictionary: name, flags }, ColumnKind::String) => {
-            let mut distinct: BTreeMap<ScalarKey, String> = BTreeMap::new();
-            for value in &model_column.values {
-                match value {
-                    Scalar::Blank => {}
-                    Scalar::String(text) => {
-                        distinct.entry(ScalarKey::String(text.clone())).or_insert_with(|| text.clone());
-                    }
-                    _ => return Err(ModelFileError::InvalidModel(format!("text column {} holds a non-text value", model_column.name))),
-                }
-            }
-            let values: Vec<String> = distinct.into_values().collect();
-            let mut lookup: BTreeMap<ScalarKey, u32> = BTreeMap::new();
-            for (index, value) in values.iter().enumerate() {
-                lookup.insert(ScalarKey::String(value.clone()), u32::try_from(index).map_err(|_| ModelFileError::TooLarge)? + 3);
-            }
-            ids = model_column
-                .values
-                .iter()
-                .map(|value| match value {
-                    Scalar::Blank => Ok(2),
-                    Scalar::String(text) => {
-                        lookup.get(&ScalarKey::String(text.clone())).copied().ok_or_else(|| ModelFileError::Corrupt("missing string id".into()))
-                    }
-                    _ => Err(ModelFileError::InvalidModel("text column holds a non-text value".into())),
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let has_nulls = model_column.values.iter().any(|value| matches!(value, Scalar::Blank));
+            let (values, encoded_ids, has_nulls) = string_dictionary(&model_column.values, &model_column.name)?;
+            ids = encoded_ids;
             dictionary = Some((name.clone(), encode_string_dictionary(&values, has_nulls, flags & 1 != 0)?));
         }
         (ColumnEncoding::HashNumeric { dictionary: name, real, element_bytes }, _) => {
@@ -1465,10 +1473,12 @@ fn build_hierarchy_write(layout: &ModelLayout, name: &str, positions: &[u32]) ->
 }
 
 fn build_relationship_index(from: &ColumnWrite, to: &ColumnWrite, idf_name: String) -> Result<RelationshipWrite> {
+    // The same collation the dictionaries use: a foreign `"east"` joins a primary `"East"` when the
+    // model folds case.
     let mut lookup: BTreeMap<ScalarKey, usize> = BTreeMap::new();
     for (row, value) in to.values.iter().enumerate() {
         if !matches!(value, Scalar::Blank) {
-            lookup.entry(ScalarKey::from(value)).or_insert(row);
+            lookup.entry(distinct_key(value)).or_insert(row);
         }
     }
     let maximum_id = from.ids.iter().copied().max().unwrap_or(2);
@@ -1483,7 +1493,7 @@ fn build_relationship_index(from: &ColumnWrite, to: &ColumnWrite, idf_name: Stri
         if matches!(value, Scalar::Blank) {
             continue;
         }
-        if let Some(primary_row) = lookup.get(&ScalarKey::from(value))
+        if let Some(primary_row) = lookup.get(&distinct_key(value))
             && let Some(slot) = index.get_mut(*id as usize)
         {
             *slot = i64::try_from(*primary_row).map_err(|_| ModelFileError::TooLarge)?;
@@ -2099,6 +2109,21 @@ mod tests {
         assert_eq!(table_entry_kind("R$Sales$r1.tbl.xml", "Cube/R$Sales$r1.tbl.xml"), TableEntryKind::Relationship);
         // The prefix may live on a directory segment instead of the basename.
         assert_eq!(table_entry_kind("facts.tbl.xml", "Cube\\\\R$Sales$r1\\\\facts.tbl.xml"), TableEntryKind::Relationship);
+    }
+
+    #[test]
+    fn text_dictionary_folds_case_under_the_model_collation() -> Result<()> {
+        // VertiPaq treats `"East"` and `"east"` as one value under the model collation, so the
+        // dictionary holds one entry (with the first spelling) and both rows share its id. The
+        // order follows the folded key, which is also the dictionary order Excel expects.
+        let values = vec![Scalar::String("East".to_string()), Scalar::String("east".to_string()), Scalar::Blank, Scalar::String("West".to_string())];
+        let (dictionary, ids, has_nulls) = string_dictionary(&values, "Region")?;
+        assert_eq!(dictionary, vec!["East".to_string(), "West".to_string()]);
+        assert_eq!(ids, vec![3, 3, 2, 4]);
+        assert!(has_nulls);
+        // A non-text value is still refused.
+        assert!(string_dictionary(&[Scalar::Integer(1)], "Region").is_err());
+        Ok(())
     }
 
     #[test]
