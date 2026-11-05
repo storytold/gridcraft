@@ -361,6 +361,21 @@ pub fn dark_sheet(ctx: &egui::Context) -> bool {
     ctx.data(|d| d.get_temp::<bool>(dark_sheet_key())).unwrap_or(false)
 }
 
+/// Where the dark-charts flag lives in the egui context (`chartview` reads it).
+fn dark_charts_key() -> egui::Id {
+    egui::Id::unique("gridcraft.dark_charts")
+}
+
+/// Mirrors the dark-charts preference into the egui context; the update loop calls it every frame.
+pub fn set_dark_charts(ctx: &egui::Context, on: bool) {
+    ctx.data_mut(|d| d.insert_temp(dark_charts_key(), on));
+}
+
+/// Whether charts are drawn dark for this context (off until [`set_dark_charts`] says otherwise).
+pub fn dark_charts(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(dark_charts_key())).unwrap_or(false)
+}
+
 impl Tokens {
     /// Light interface, light sheet.
     pub fn light() -> Tokens {

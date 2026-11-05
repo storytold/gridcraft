@@ -38,11 +38,19 @@ pub fn paint_chart(p: &Painter, rect: Rect, wb: &Workbook, sheet: usize, chart: 
     let data = gridcraft_chart::resolve(wb, sheet, chart);
     let m = EguiMeasure { painter: p, z };
     let prims = gridcraft_chart::render(chart, &data, w, h, &m);
-    paint_prims(&p.with_clip_rect(rect.intersect(p.clip_rect())), origin, &prims, z);
+    paint_prims_dark(&p.with_clip_rect(rect.intersect(p.clip_rect())), origin, &prims, z, theme::dark_charts(p.ctx()));
 }
 
 /// Paints chart primitives at `origin`, scaled by `z`.
 pub fn paint_prims(p: &Painter, origin: Pos2, prims: &[Prim], z: f32) {
+    paint_prims_dark(p, origin, prims, z, false);
+}
+
+/// [`paint_prims`] with the dark-charts colour rule when `dark` (`theme::ink`; text keeps its
+/// contrast against the chart's white area). Screen only: print and export rasterise on their own.
+pub fn paint_prims_dark(p: &Painter, origin: Pos2, prims: &[Prim], z: f32, dark: bool) {
+    let plain = rgba;
+    let rgba = |c: [u8; 4]| if dark { theme::ink(plain(c)) } else { plain(c) };
     let pt = |x: f32, y: f32| pos2(origin.x + x * z, origin.y + y * z);
     for prim in prims {
         match prim {
@@ -119,8 +127,9 @@ pub fn paint_prims(p: &Painter, origin: Pos2, prims: &[Prim], z: f32) {
                 }
             }
             Prim::Text { x, y, text, size, color, bold, align, valign, rotation } => {
+                let tc = if dark { theme::ink_guarded(plain(*color), Color32::WHITE, theme::INK_TEXT_MIN) } else { plain(*color) };
                 let font: FontId = if *bold { theme::ui_bold(size * z) } else { theme::ui_font(size * z) };
-                let galley = p.layout_no_wrap(text.clone(), font, rgba(*color));
+                let galley = p.layout_no_wrap(text.clone(), font, tc);
                 let sz = galley.size();
                 let ax = match align {
                     HAlign::Left => 0.0,
@@ -134,13 +143,13 @@ pub fn paint_prims(p: &Painter, origin: Pos2, prims: &[Prim], z: f32) {
                 };
                 let anchor = pt(*x, *y);
                 if *rotation == 0.0 {
-                    p.galley(pos2(anchor.x - sz.x * ax, anchor.y - sz.y * ay), galley, rgba(*color));
+                    p.galley(pos2(anchor.x - sz.x * ax, anchor.y - sz.y * ay), galley, tc);
                 } else {
                     // Rotate about the anchor: offset the galley origin by the rotated alignment.
                     let (s, c) = rotation.sin_cos();
                     let off = vec2(-sz.x * ax, -sz.y * ay);
                     let rot = vec2(off.x * c - off.y * s, off.x * s + off.y * c);
-                    let mut shape = egui::epaint::TextShape::new(anchor + rot, galley, rgba(*color));
+                    let mut shape = egui::epaint::TextShape::new(anchor + rot, galley, tc);
                     shape.angle = *rotation;
                     p.add(shape);
                 }
@@ -377,7 +386,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         let data = gridcraft_chart::resolve(wb, si, ch);
         let m = EguiMeasure { painter: p, z: geo.z };
         let prims = gridcraft_chart::render(ch, &data, ch.anchor.width, ch.anchor.height, &m);
-        paint_prims(&p.with_clip_rect(r.intersect(p.clip_rect())), r.min, &prims, geo.z);
+        paint_prims_dark(&p.with_clip_rect(r.intersect(p.clip_rect())), r.min, &prims, geo.z, theme::dark_charts(p.ctx()));
         done(start, r);
     }
     paint_slicers(p, geo, wb, si, sh);
