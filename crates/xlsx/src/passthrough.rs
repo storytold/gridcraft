@@ -4,13 +4,14 @@
 //! relationship graph, per owner: the package root (custom document properties, ribbon
 //! customisation, add-in task panes), the workbook (custom XML, links to external workbooks with
 //! their `<externalReferences>`, data connections, XML maps) and each sheet (query tables, cells
-//! mapped to XML elements, form controls, ActiveX controls, OLE objects, the sheet background and
-//! printer settings, with the sheet's `<picture>`, `<oleObjects>` and `<controls>` XML, the `r:id`
-//! of `<pageSetup>`, the legacy VML shapes those controls need and the pictures of the headers and footers (`&G`, with their `<legacyDrawingHF>`). PivotTables whose source is in
-//! another workbook are kept too: the PivotTable parts with their sheet, the cache definition and
-//! records parts (with the cache's link to the other workbook's path) with the workbook and its
-//! `<pivotCache>` entry, its `cacheId` unchanged. The workbook also keeps its
-//! `<fileVersion>` and the calcFeatures extension, which Excel needs to trust the saved values.
+//! mapped to XML elements, form controls other than the buttons, scroll bars and spin buttons
+//! `controls.rs` models, ActiveX controls, OLE objects, the sheet background and printer settings,
+//! with the sheet's `<picture>`, `<oleObjects>` and `<controls>` XML, the `r:id` of `<pageSetup>`,
+//! the legacy VML shapes those controls need and the pictures of the headers and footers (`&G`,
+//! with their `<legacyDrawingHF>`). PivotTables whose source is in another workbook are kept too:
+//! their table parts with the sheet, their cache definition and records parts with the workbook,
+//! and the cache's external-workbook link and original `cacheId`.
+//! The workbook also keeps its `<fileVersion>` and the calcFeatures extension, which Excel needs to trust the saved values.
 //!
 //! On write, kept parts get fresh part names where needed and new relationship ids; the `r:id`s in
 //! kept XML are rewritten to match. Kept content is conservative:
