@@ -661,9 +661,17 @@ impl<'a> Plan<'a> {
                         let deepest = row.values.len().saturating_sub(1);
                         // Blank a label only while every level up to it repeats the previous leaf:
                         // a new ancestor starts a new group, so its inner labels show again.
+                        // The predecessor check uses the folded key: `East` and `east` are one
+                        // ancestor, so the repeated label blanks while the value shown keeps its
+                        // own spelling.
                         let mut same_prefix = previous_leaf.is_some();
                         for (level, (cell, value)) in cells.iter_mut().zip(&row.values).enumerate() {
-                            same_prefix = same_prefix && previous_leaf.is_some_and(|previous| previous.get(level) == Some(value));
+                            same_prefix = same_prefix
+                                && previous_leaf.is_some_and(|previous| {
+                                    previous.get(level).is_some_and(|earlier| {
+                                        crate::value::folded_key(&ScalarKey::from(earlier)) == crate::value::folded_key(&ScalarKey::from(value))
+                                    })
+                                });
                             let repeats = level < deepest && same_prefix;
                             *cell = if repeats { Scalar::Blank } else { value.clone() };
                         }
