@@ -17,7 +17,6 @@ pub(super) const TEMPLATES: &[(&str, &str)] = &[
         "'{name}' is a legacy binary file but not an Excel workbook (no workbook stream). GridCraft can't open it.",
         "“{name}”是旧版二进制文件，但不是 Excel 工作簿（没有工作簿流）。GridCraft 无法打开。",
     ),
-    ("'{name}' {PASSWORD_REQUIRED}", "“{name}”{PASSWORD_REQUIRED}"),
     ("A scenario named '{name}' already exists on this sheet.", "此工作表中已存在名为“{name}”的方案。"),
     ("Input X range must have {MAX_REGRESSORS} columns or fewer.", "输入 X 区域最多只能有 {MAX_REGRESSORS} 列。"),
     ("The criteria label `{head}` doesn't match a column of the list.", "条件标签 `{head}` 与列表中的任何列都不匹配。"),
