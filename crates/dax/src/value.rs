@@ -195,7 +195,7 @@ impl Scalar {
             // would report distinct values as equal, and `IN`/`=` must not.
             (Scalar::Integer(a), Scalar::Integer(b)) => Some(a.cmp(b)),
             (Scalar::Currency(a), Scalar::Currency(b)) => Some(a.cmp(b)),
-            _ => self.to_number()?.partial_cmp(&other.to_number()?),
+            _ => numeric_compare(self, other),
         }
     }
 
@@ -250,6 +250,32 @@ impl From<&Scalar> for ScalarKey {
             Scalar::String(value) => ScalarKey::String(value.clone()),
         }
     }
+}
+
+/// Compares two numeric scalars.
+///
+/// An `Integer` against a `Decimal`/`DateTime` is compared through `i128` when the decimal is
+/// integral, so a value above 2^53 is not rounded into its neighbour; every other pair uses the
+/// `f64` coercion DAX applies.
+fn numeric_compare(left: &Scalar, right: &Scalar) -> Option<Ordering> {
+    fn exact(value: &Scalar) -> Option<i128> {
+        match value {
+            Scalar::Integer(number) => Some(i128::from(*number)),
+            Scalar::Decimal(number) | Scalar::DateTime(number) if number.fract() == 0.0 && number.abs() < 9.2e18 => Some(*number as i128),
+            _ => None,
+        }
+    }
+    let integer_involved = matches!(left, Scalar::Integer(_) | Scalar::Currency(_)) || matches!(right, Scalar::Integer(_) | Scalar::Currency(_));
+    if integer_involved && let (Some(a), Some(b)) = (exact(left), exact(right)) {
+        return Some(a.cmp(&b));
+    }
+    left.to_number()?.partial_cmp(&right.to_number()?)
+}
+
+/// [`relationship_key_of`] for a value: the key a relationship index stores for it under the
+/// numeric rule.
+pub(crate) fn relationship_key_of_value(value: &Scalar) -> ScalarKey {
+    relationship_key_of(&ScalarKey::from(value))
 }
 
 /// [`relationship_key`] for a key that is already normalized-except-for-variant.

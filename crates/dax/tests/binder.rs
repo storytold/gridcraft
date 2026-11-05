@@ -301,3 +301,18 @@ fn concatenate_x_binds_a_bare_order_word_in_every_pair() {
     let expr = parse_expression("CONCATENATEX ( Sales, Sales[Region], \"|\", Sales[Region], SIDEWAYS )").expect("parse");
     assert!(Binder::new(&model).bind_expression(&expr).is_err());
 }
+
+#[test]
+fn a_datatable_type_word_is_never_a_table_name() {
+    let mut model = sample_model();
+    // A table called `INTEGER` must not capture DATATABLE's type word.
+    model.tables.push(gridcraft_dax::model::ModelTable {
+        name: "INTEGER".into(),
+        columns: vec![gridcraft_dax::model::ModelColumn { name: "Id".into(), data_type: Some("Int64".into()) }],
+        rows: Vec::new(),
+    });
+    match bind(&model, "DATATABLE ( \"Id\", INTEGER, { { 1 } } )") {
+        BoundExpr::Call { args, .. } => assert!(matches!(&args[1], BoundExpr::Keyword(word) if word == "INTEGER"), "{:?}", args[1]),
+        other => panic!("expected a call, got {other:?}"),
+    }
+}

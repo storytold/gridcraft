@@ -318,7 +318,11 @@ impl<'a> Binder<'a> {
             // position: a table called `Month` must not turn `DATEDIFF(a, b, MONTH)` into a table
             // reference, and a variable called `YEAR` must not either.
             .filter(|keyword| {
-                if !matches!(expected, Some(ParamKind::Text)) && !is_visual_keyword(spec.name, index, keyword) {
+                // `DATATABLE`'s type words are types even though the catalog marks them `Text`,
+                // so a table named `INTEGER` must not capture them either.
+                let fixed_slot =
+                    spec.name == "DATATABLE" || (!matches!(expected, Some(ParamKind::Text)) && !is_visual_keyword(spec.name, index, keyword));
+                if fixed_slot {
                     return true;
                 }
                 let named = self.model.table_index(keyword).is_some() || self.model.measure_index(keyword).is_some();

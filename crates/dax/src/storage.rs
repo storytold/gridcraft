@@ -1390,6 +1390,12 @@ pub struct RelationshipIndex {
     pub from_rows: BTreeMap<ScalarKey, Vec<usize>>,
     /// Key value to row ids in the `to` table.
     pub to_rows: BTreeMap<ScalarKey, Vec<usize>>,
+    /// `from_rows` under the numeric key rule (`value::relationship_key_of`), so a probe with the
+    /// other variant still joins. Kept beside the exact map because integrity reporting needs the
+    /// model's own variant.
+    from_rows_normalized: BTreeMap<ScalarKey, Vec<usize>>,
+    /// `to_rows` under the same rule.
+    to_rows_normalized: BTreeMap<ScalarKey, Vec<usize>>,
 }
 
 impl RelationshipIndex {
@@ -1403,7 +1409,7 @@ impl RelationshipIndex {
             return rows;
         }
         // A numeric key still joins its other variants: `Integer (2)` finds a `Decimal (2.0)` row.
-        match self.from_rows.get(&crate::value::relationship_key_of(key)) {
+        match self.from_rows_normalized.get(&crate::value::relationship_key_of(key)) {
             Some(rows) => rows.as_slice(),
             None => &[],
         }
@@ -1414,7 +1420,7 @@ impl RelationshipIndex {
         if let Some(rows) = self.to_rows.get(key) {
             return rows;
         }
-        match self.to_rows.get(&crate::value::relationship_key_of(key)) {
+        match self.to_rows_normalized.get(&crate::value::relationship_key_of(key)) {
             Some(rows) => rows.as_slice(),
             None => &[],
         }
@@ -1490,8 +1496,10 @@ impl ModelStorage {
                 to_column,
                 bidirectional: relationship.bidirectional,
                 inactive: relationship.inactive,
-                from_rows: build_key_index(from_storage, from_column),
-                to_rows: build_key_index(to_storage, to_column),
+                from_rows: build_key_index(from_storage, from_column, |value| ScalarKey::from(value)),
+                to_rows: build_key_index(to_storage, to_column, |value| ScalarKey::from(value)),
+                from_rows_normalized: build_key_index(from_storage, from_column, crate::value::relationship_key_of_value),
+                to_rows_normalized: build_key_index(to_storage, to_column, crate::value::relationship_key_of_value),
             });
         }
 
@@ -1635,11 +1643,11 @@ fn storage_round_trips(storage: &TableStorage, table: &crate::model::ModelTable)
     })
 }
 
-fn build_key_index(table: &TableStorage, column: usize) -> BTreeMap<ScalarKey, Vec<usize>> {
+fn build_key_index(table: &TableStorage, column: usize, key: fn(&crate::value::Scalar) -> ScalarKey) -> BTreeMap<ScalarKey, Vec<usize>> {
     let mut index: BTreeMap<ScalarKey, Vec<usize>> = BTreeMap::new();
     for row in 0..table.row_count() {
         if let Some(value) = table.value(column, row) {
-            index.entry(ScalarKey::from(&value)).or_default().push(row);
+            index.entry(key(&value)).or_default().push(row);
         }
     }
     index

@@ -187,6 +187,8 @@ fn strict_equality_matches_a_decimal_column_against_an_integer_literal() {
     // `compare` keeps the same exactness, so `IN` and `=` do not conflate large integers either.
     assert_eq!(Scalar::Integer(9_007_199_254_740_992).compare(&Scalar::Integer(9_007_199_254_740_993)), Some(std::cmp::Ordering::Less));
     assert!(Scalar::Integer(9_007_199_254_740_993).compare(&Scalar::Integer(9_007_199_254_740_993)) == Some(std::cmp::Ordering::Equal));
+    // A large integer against an integral decimal stays exact instead of rounding into it.
+    assert_eq!(Scalar::Integer(9_007_199_254_740_993).compare(&Scalar::Decimal(9_007_199_254_740_992.0)), Some(std::cmp::Ordering::Greater));
 }
 
 #[test]
