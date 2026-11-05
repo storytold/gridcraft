@@ -244,7 +244,8 @@ fn parse_fraction(t: &str) -> Option<f64> {
     if !v.is_finite() {
         return None;
     }
-    Some(if neg { -v } else { v })
+    let v = if neg { -v } else { v };
+    keep_15_digits(&v.to_string()).parse().ok()
 }
 
 fn month_from_name(s: &str) -> Option<u32> {
@@ -430,12 +431,20 @@ mod tests {
     fn typed_numbers_keep_15_significant_digits() {
         let n = |s: &str| p(s).value;
         assert_eq!(n("12345678901234567890"), Value::number(12345678901234500000.0));
+        assert_eq!(n("1234567890123456789"), Value::number(1234567890123450000.0));
         assert_eq!(n("0.12345678901234567"), Value::number(0.123456789012345));
+        assert_eq!(n("0.1234567890123456789"), Value::number(0.123456789012345));
+        assert_eq!(n("1.234567890123456E+20"), Value::number(1.23456789012345e20));
         assert_eq!(n("1234567890123456"), Value::number(1234567890123450.0));
+        assert_eq!(n("+1234567890123456"), Value::number(1234567890123450.0));
         assert_eq!(n("-1234567890123456"), Value::number(-1234567890123450.0));
+        assert_eq!(n("1234567890123456%"), Value::number(12345678901234.5));
+        assert_eq!(n("$1234567890123456"), Value::number(1234567890123450.0));
+        assert_eq!(n("1234567890123456 1/2"), Value::number(1234567890123450.0));
         assert_eq!(n("1.2345678901234567E5"), Value::number(123456.789012345));
         assert_eq!(n("1.7976931348623157E308"), Value::number(1.79769313486231e308));
         assert_eq!(n("123456789012345"), Value::number(123456789012345.0));
+        assert_eq!(n("12.34"), Value::number(12.34));
         assert_eq!(n("0.1"), Value::number(0.1));
         assert_eq!(parse_number_text("0.12345678901234567"), Some(0.123456789012345));
         assert_eq!(n("0.000123456789012345678"), Value::number(0.000123456789012345));
