@@ -53,6 +53,8 @@ pub struct KeptReader {
     overrides: HashMap<String, String>,
     budget: usize,
     parts_left: usize,
+    /// Whether the workbook's model database (`xl/model/item.data`) was dropped by the budget.
+    model_dropped: bool,
 }
 
 impl KeptReader {
@@ -64,6 +66,7 @@ impl KeptReader {
             overrides: HashMap::new(),
             budget: kept_total(),
             parts_left: MAX_KEPT_PARTS,
+            model_dropped: false,
         };
         if let Ok(root) = raw_rels(cx, "")
             && root.iter().any(|r| r.rel_type.starts_with("http://purl.oclc.org/"))
@@ -93,6 +96,15 @@ impl KeptReader {
     /// packages whose content types can't be read, where nothing can be written back faithfully.
     pub fn keeps(&self) -> bool {
         self.on
+    }
+
+    /// Whether the workbook's model database survived the keep budget.
+    ///
+    /// `xl/model/item.data` can exceed [`crate::passthrough::MAX_KEPT_PART`]; when it is dropped the
+    /// model-backed PivotTables must not be kept either, or the saved package would hold pivots
+    /// whose model is gone.
+    pub fn keeps_model_data(&self) -> bool {
+        !self.model_dropped
     }
 
     fn content_type(&self, part: &str) -> Option<String> {
@@ -216,6 +228,9 @@ impl KeptReader {
         for r in wb_rels.iter().filter(|r| is_kind(r, WORKBOOK_ROOTS)) {
             if let Err(why) = self.keep(cx, &mut p, std::slice::from_ref(r), &mut seen) {
                 cx.warn(format!("{} part {} was dropped: {why}", kind(&r.rel_type), r.target));
+                if kind(&r.rel_type) == "powerPivotData" {
+                    self.model_dropped = true;
+                }
             }
         }
         // Chart sheets: the sheet entry (name, state, position) plus the chart sheet part and the

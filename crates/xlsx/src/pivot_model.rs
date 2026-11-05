@@ -1664,6 +1664,20 @@ fn external_cache_of(
     caches.iter().find(|(cache_id, _, _)| *cache_id == id).map(|(_, _, p)| p.clone())
 }
 
+/// The `id` of the workbook's model connection in the kept `xl/connections.xml`, if any.
+fn kept_model_connection(pkg: &mut Package<'_>) -> Option<u32> {
+    let bytes = pkg.read_limited("xl/connections.xml", MAX_PART).ok().flatten()?;
+    let text = String::from_utf8_lossy(&bytes);
+    model_connection_id(&text)
+}
+
+/// Whether `part` is a cache definition that reads the workbook's data model (`model_id`).
+fn cache_is_model_backed(pkg: &mut Package<'_>, part: &str, model_id: Option<u32>) -> bool {
+    let Some(model_id) = model_id else { return false };
+    let Ok(Some(cache)) = pkg.read_xml(part) else { return false };
+    cache.child("cacheSource").and_then(|source| source.attr_u32("connectionId")) == Some(model_id)
+}
+
 /// Adds `part` and the cache/records parts its relationships reach to `out`, unless already there
 /// (by part name). Malformed or unreadable parts are skipped; the caller keeps what it can.
 fn keep_pivot_parts(pkg: &mut Package<'_>, types: &PartTypes, roots: &[String], out: &mut Vec<PreservedPart>) {
@@ -1733,16 +1747,29 @@ fn kept_data_model_ext(pkg: &mut Package<'_>, wb_part: &str) -> Option<String> {
 /// (and records) part, the workbook's cache relationship and `<pivotCaches>` entry, and the sheet's
 /// relationship — plus the workbook's `x15:dataModel` extension. GridCraft then writes them back
 /// unchanged on every later save, and [`read_model_pivots`] finds the same pivot in the result.
-pub(crate) fn keep_external_pivots(
-    wb: &mut Workbook,
-    pkg: &mut Package<'_>,
-    wb_part: &str,
-    wb_xml: &El,
-    wb_rels: &[crate::package::Rel],
-    file_to_model: &[Option<usize>],
-    report: &mut ReadReport,
-) {
+/// What [`keep_external_pivots`] needs from the package it is reading.
+pub(crate) struct KeepContext<'a> {
+    /// The workbook part the relationships are read from.
+    pub wb_part: &'a str,
+    /// The parsed workbook XML.
+    pub wb_xml: &'a El,
+    /// The workbook's relationships, with full type URIs.
+    pub wb_rels: &'a [crate::package::Rel],
+    /// Sheet index per workbook `<sheet>` entry, as the reader built it.
+    pub file_to_model: &'a [Option<usize>],
+    /// Whether the workbook's model database (`xl/model/item.data`) survived the keep budget.
+    ///
+    /// A model-backed PivotTable cannot work without it, so when the part was dropped for size the
+    /// pivots that read the model are skipped rather than saved half-alive; OLAP and other-workbook
+    /// caches are unaffected. A pivot written without a model still opens (it only cannot refresh),
+    /// so an absent part alone is not a drop.
+    pub model_data_kept: bool,
+}
+
+pub(crate) fn keep_external_pivots(wb: &mut Workbook, pkg: &mut Package<'_>, cx: &KeepContext<'_>, report: &mut ReadReport) {
+    let KeepContext { wb_part, wb_xml, wb_rels, file_to_model, model_data_kept } = *cx;
     let Some(cache_el) = wb_xml.child("pivotCaches") else { return };
+    let model_connection = kept_model_connection(pkg);
     let mut caches: Vec<(u32, String, String)> = Vec::new();
     for c in cache_el.kids("pivotCache") {
         let (Some(cache_id), Some(rid)) = (c.attr_u32("cacheId"), c.attr("id")) else { continue };
@@ -1784,6 +1811,13 @@ pub(crate) fn keep_external_pivots(
                 continue;
             }
             let Some(cache_part) = external_cache_of(pkg, &rel.target, &table, &caches, report) else { continue };
+            if !model_data_kept && cache_is_model_backed(pkg, &cache_part, model_connection) {
+                // The model database (`xl/model/item.data`) was over the keep budget: a pivot whose
+                // cache reads the model cannot work without it, while OLAP and other-workbook
+                // caches are unaffected.
+                report.warn(format!("PivotTable {} could not be kept: its model database was dropped", rel.target));
+                continue;
+            }
             // A PivotTable is only usable when both its definition and its cache part are kept:
             // recording the cache and the sheet link for a pivot whose part was unreadable (or over
             // the part cap) would drop the pivot on save without a word, or leave a definition
