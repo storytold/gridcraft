@@ -370,7 +370,6 @@ fn active_rect(geo: &Geo, sh: &Sheet, sel: &gridcraft_engine::Selection) -> Rect
     }
 }
 
-
 /// Black or white, whichever reads on `fill` (the threshold chart labels use).
 pub(super) fn ink_on(fill: Color32) -> Color32 {
     let l = 0.299 * fill.r() as f32 + 0.587 * fill.g() as f32 + 0.114 * fill.b() as f32;

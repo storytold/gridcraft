@@ -476,7 +476,6 @@ fn ext_lst_id(e: &El) -> Option<String> {
     (!id.is_empty()).then_some(id)
 }
 
-
 fn read_x14_only_expression(cx: &Ctx<'_>, r: &El, ranges: Vec<RangeRef>, sheet: &mut Sheet) -> bool {
     // Known attributes only: `type`, `priority` and the `id` (unused here — an x14-only rule has
     // no classic counterpart to link).
