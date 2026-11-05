@@ -90,6 +90,15 @@ fn operation_symbol(op: &str) -> Option<char> {
     }
 }
 
+/// The slice of `sorted` (ranges sorted by start row, none spanning more than
+/// `max_span` rows) whose rows can reach the query rows: a range in the slice may
+/// intersect a range over those rows; one outside it cannot.
+fn row_window(sorted: &[RangeRef], max_span: u32, start_row: u32, end_row: u32) -> &[RangeRef] {
+    let hi = sorted.partition_point(|m| m.start.row <= end_row);
+    let lo = sorted.partition_point(|m| m.start.row < start_row.saturating_sub(max_span));
+    &sorted[lo..hi]
+}
+
 /// Copy the block's merged areas to every tile of a tiled paste, at the same pitch as
 /// the cell writes. A paste that takes the block once is a single tile at the anchor
 /// itself. The source merges are collected once and the destination merges they
@@ -134,10 +143,18 @@ fn copy_merges_tiled(
     if moved.is_empty() {
         return Ok(());
     }
+    // Tile merges never overlap and each spans at most the block's height, so a copy
+    // sorted by start row lets a destination merge check only the tiles whose rows can
+    // reach it — a repeat paste over an area already holding a tile's worth of merges
+    // for every row stays near-linear instead of existing × moved.
+    let mut moved_by_row = moved.clone();
+    moved_by_row.sort_by_key(|m| m.start.row);
+    let moved_span = moved.iter().map(|m| m.end.row - m.start.row).max().unwrap_or(0);
     let sheet = cx.sheet_mut(dest_sheet)?;
     let mut removed: Vec<RangeRef> = Vec::new();
     sheet.merges.retain(|existing| {
-        let displaced = moved.iter().any(|m| existing.intersects(m));
+        let window = row_window(&moved_by_row, moved_span, existing.start.row, existing.end.row);
+        let displaced = window.iter().any(|m| existing.intersects(m));
         if displaced {
             removed.push(*existing);
         }
@@ -148,8 +165,15 @@ fn copy_merges_tiled(
     // changed, and blocked ones that could reach them, are evaluated again, as in
     // format::merge. A displaced merge can cover cells the paste never wrote.
     let areas: Vec<RangeRef> = removed.iter().copied().chain(moved.iter().copied()).collect();
-    let mut touched: Vec<(usize, CellRef)> =
-        sheet.spill_ranges.iter().filter(|(_, r)| areas.iter().any(|a| r.intersects(a))).map(|(anchor, _)| (dest_sheet, *anchor)).collect();
+    let mut areas_by_row = areas.clone();
+    areas_by_row.sort_by_key(|a| a.start.row);
+    let areas_span = areas.iter().map(|a| a.end.row - a.start.row).max().unwrap_or(0);
+    let mut touched: Vec<(usize, CellRef)> = sheet
+        .spill_ranges
+        .iter()
+        .filter(|(_, r)| row_window(&areas_by_row, areas_span, r.start.row, r.end.row).iter().any(|a| r.intersects(a)))
+        .map(|(anchor, _)| (dest_sheet, *anchor))
+        .collect();
     if let Some(reach_end) = areas.iter().map(|a| a.end).reduce(|acc, e| CellRef::new(acc.row.max(e.row), acc.col.max(e.col))) {
         let reach = RangeRef::new(CellRef::new(0, 0), reach_end);
         touched.extend(

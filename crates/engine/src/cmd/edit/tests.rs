@@ -780,6 +780,23 @@ fn paste_displacing_a_merge_unblocks_the_spill_it_covered() {
     assert_eq!(sh.value(CellRef::new(2, 6)), Value::Number(2.0), "the second value lands in G3");
 }
 #[test]
+fn repeating_a_tiled_merge_paste_over_itself_keeps_one_merge_per_tile() {
+    // #3370 review: pasting the same merged block over an area that already holds its
+    // merges displaces each old merge with the identical new one — the count stays one
+    // per tile, and the lookup must not rescan every existing merge per tile.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    paste_over(&mut s, "A1:B1", "C1:D2000").unwrap();
+    paste_over(&mut s, "A1:B1", "C1:D2000").unwrap();
+    let merges = &s.doc().unwrap().wb.sheet(0).unwrap().merges;
+    assert_eq!(merges.len(), 2001, "the original plus one per tile row, replaced not duplicated");
+    assert!(merges.contains(&RangeRef::parse("C2000:D2000").unwrap()));
+    assert_eq!(value_at(&s, "C2000"), Value::Number(1.0));
+}
+
+#[test]
 fn tiled_cut_moves_each_cell_into_every_tile() {
     // A cut pasted over a multiple of its size tiles; the cut path reads the taken cells by position.
     let mut s = Session::new();
