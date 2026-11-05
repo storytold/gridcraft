@@ -64,6 +64,15 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
     let in_col_header = pos.is_some_and(|p| p.y < geo.cells.top() && p.y >= geo.head_top() && p.x >= geo.cells.left());
     let in_row_header = pos.is_some_and(|p| p.x < geo.cells.left() && p.x >= geo.head_left() && p.y >= geo.cells.top());
     let in_corner = pos.is_some_and(|p| p.x < geo.cells.left() && p.y < geo.cells.top() && p.x >= geo.head_left() && p.y >= geo.head_top());
+    // Insert › Controls places a control; a click works a form control (Ctrl or Cmd+click, or a
+    // right-click, selects it instead).
+    if app.editor.is_none() && crate::control_ui::place(app, ui, resp, geo, sh) {
+        return;
+    }
+    if app.editor.is_none() && app.session.draw_tool.is_empty() && crate::form_controls::interact(app, &ctx, resp, geo, sh) {
+        keyboard(app, &ctx, resp, geo, sh);
+        return;
+    }
     let sel = app.session.active().map(|d| d.selection.clone()).unwrap_or_default();
     let cur_rect = geo.range_rect(sh, sel.current());
     let handle = Rect::from_center_size(cur_rect.right_bottom(), vec2(9.0, 9.0));
@@ -100,10 +109,14 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         return;
     }
     // A plain click on a slicer value tile toggles it (Ctrl/Cmd for multi-select); the clear
-    // button resets it. Runs before the generic object select/drag so tiles stay clickable.
+    // button resets it. Runs before the generic object select/drag so tiles stay clickable, but
+    // only when the slicer is what the press lands on: a form control over a tile (Ctrl or
+    // Cmd+clicked, or clicked while selected, so `form_controls::interact` left the click) and a
+    // selected object's handle keep the generic path, which selects, moves or resizes them.
     if primary_clicked
         && !resp.drag_started()
         && let Some(p) = pos
+        && object_under(app, geo, sh, p).is_some_and(|(o, _, handle)| o.kind == ObjKind::Slicer && handle.is_none())
         && let Some((id, act)) = crate::chartview::slicer_click(geo, sh, wb, wb.active_sheet(), p)
     {
         app.selected_object = Some(ObjRef::new(ObjKind::Slicer, id));
@@ -126,10 +139,10 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         // The selected object's handles reach a little outside it, so they win over hit-testing.
         // Only they resize: a press anywhere on another object selects and moves it, as the
         // hover cursor shows.
-        let on_handle = at.and_then(|p| crate::chartview::selected_handle(app, geo, sh, p));
-        let handle = on_handle.map(|(.., h)| h);
+        let under = at.and_then(|p| object_under(app, geo, sh, p));
+        let handle = under.and_then(|(.., h)| h);
         if let Some(p) = at
-            && let Some((obj, _)) = on_handle.map(|(o, r, _)| (o, r)).or_else(|| crate::chartview::hit(app, geo, sh, p))
+            && let Some((obj, _, _)) = under
         {
             app.selected_object = Some(obj);
             if resp.double_clicked() && app.open_object(obj) != crate::objects::OpenAction::Select {
@@ -146,14 +159,18 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         }
         app.selected_object = None;
     }
-    // A right-click on a chart, picture, shape or slicer opens the object's menu, not the cell's
-    // under it; a right press that wobbles into a drag counts too (#2067).
+    // A right-click on a chart, picture, shape, slicer or form control opens the object's menu, not
+    // the cell's under it; a right press that wobbles into a drag counts too (#2067). On a form
+    // control it selects the control without running it.
     let secondary_drag = resp.drag_started_by(egui::PointerButton::Secondary);
     if (resp.secondary_clicked() || secondary_drag)
         && let Some(p) = if secondary_drag { pointer.press_origin().map(|p| geo.mirror_pos(p)).or(pos) } else { pos }
         && let Some((obj, _)) = crate::chartview::hit(app, geo, sh, p)
     {
         app.selected_object = Some(obj);
+        if obj.kind == ObjKind::Control {
+            app.grid.focused_control = None;
+        }
         app.grid.object_menu = Some((geo.mirror_pos(p), obj.kind.name(), obj.id));
         return;
     }
@@ -542,6 +559,15 @@ fn handle_cell_double_click(app: &mut SheetApp, input: &InteractionInput<'_>, c:
         return true;
     }
     false
+}
+
+/// What a press at `p` lands on, for slicer tiles and the generic object handling alike, so the
+/// z-order decides once: the selected object's handle (handles reach a little past the frame and
+/// win over hit-testing), else the topmost object under `p` and its rect.
+fn object_under(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect, Option<crate::objects::Handle>)> {
+    crate::chartview::selected_handle(app, geo, sh, p)
+        .map(|(o, r, h)| (o, r, Some(h)))
+        .or_else(|| crate::chartview::hit(app, geo, sh, p).map(|(o, r)| (o, r, None)))
 }
 
 fn handle_context_menu_and_keyboard(app: &mut SheetApp, input: &InteractionInput<'_>) {
@@ -1069,8 +1095,9 @@ fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
 }
 
 /// A click on a hyperlink. References select; web and e-mail addresses ask first (the dialog's
-/// OK runs `link.open`); every other kind is refused with a message. The decision is the
-/// engine's ([`gridcraft_engine::links::classify`]), the same one `link.open` applies.
+/// OK calls `Session::open_confirmed_link`, since `link.open` refuses them for programmatic
+/// callers, #2181); every other kind is refused with a message. The decision is the engine's
+/// ([`gridcraft_engine::links::classify`]), the same one `link.open` applies.
 pub fn follow_link(app: &mut SheetApp, target: &str) {
     use gridcraft_engine::links::{LinkKind, classify};
     match classify(target) {
