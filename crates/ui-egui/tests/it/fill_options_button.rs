@@ -5,7 +5,7 @@
 use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::kittest::{NodeT as _, Queryable};
 use gridcraft_engine::Session;
-use gridcraft_engine::core::{CellRef, Value};
+use gridcraft_engine::core::{CellRef, RangeRef, Value};
 use gridcraft_ui_egui::{SheetApp, grid::Geo};
 use serde_json::json;
 
@@ -180,6 +180,91 @@ fn fill_handle_shows_numeric_values_while_dragging_without_committing_them() {
         .map(|cell| gridcraft_engine::display::value_text(&h.state().session.active().unwrap().wb, sh, CellRef::parse(cell).unwrap()))
         .join("\n");
     assert_eq!(preview, committed, "the displayed preview matches the fill result");
+}
+
+/// Windows input semantics can also run on other hosts; a native Windows run is still required.
+/// Set GRIDCRAFT_FILL_PREVIEW_SCREENSHOTS to an existing directory for optional PNG evidence.
+#[test]
+fn windows_ctrl_preview_delegates_to_engine_and_matches_release() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "B1", "values": [[1], [2], [4]]})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "B2", "code": "0.00%"})).unwrap();
+    s.execute("selection.set", json!({"range": "B1:B3"})).unwrap();
+    let mut h = crate::common::harness_with(
+        crate::common::builder().with_os(egui::os::OperatingSystem::Windows).with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)),
+        crate::common::app(s),
+        4,
+    );
+    let screenshot = |h: &mut Harness, phase: &str| {
+        if let Some(dir) = std::env::var_os("GRIDCRAFT_FILL_PREVIEW_SCREENSHOTS") {
+            h.render().unwrap().save(std::path::Path::new(&dir).join(format!("2661-windows-input-{phase}.png"))).unwrap();
+        }
+    };
+    let expected = |h: &Harness, alternate| {
+        let d = h.state().session.active().unwrap();
+        let sh = d.wb.active().unwrap();
+        gridcraft_engine::fill::numeric_preview(&d.wb, sh, RangeRef::parse("B1:B3").unwrap(), RangeRef::parse("B1:B8").unwrap(), alternate)
+            .unwrap()
+            .iter()
+            .map(|p| gridcraft_engine::display::value_text_as(&d.wb, &p.value, d.wb.styles.get(sh.style_id(p.source)).num_fmt.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let (start, end) = (corner(&h, "B3"), center(&h, "B8"));
+    press(&mut h, start, PointerButton::Primary);
+    move_to(&mut h, start, end);
+    let normal = expected(&h, false);
+    assert!(h.query_by_label(normal.as_str()).is_some());
+    screenshot(&mut h, "series");
+    let ctrl = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+    h.input_mut().events.push(Event::ModifiersChanged(ctrl));
+    h.run_steps(3);
+    let alternate = expected(&h, true);
+    assert_ne!(normal, alternate);
+    assert!(h.query_by_label(alternate.as_str()).is_some());
+    assert!(h.query_by_label(normal.as_str()).is_none());
+    assert_eq!(values(&h, &["B4", "B8"]), [Value::Empty, Value::Empty]);
+    screenshot(&mut h, "ctrl");
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(3);
+    assert!(h.query_by_label(normal.as_str()).is_some(), "releasing Ctrl restores the series preview");
+    h.input_mut().events.push(Event::ModifiersChanged(ctrl));
+    h.run_steps(3);
+    let undo_before = h.state().session.active().unwrap().undo.len();
+    h.input_mut().events.push(Event::PointerButton { pos: end, button: PointerButton::Primary, pressed: false, modifiers: ctrl });
+    h.run_steps(3);
+    let d = h.state().session.active().unwrap();
+    let sh = d.wb.active().unwrap();
+    let committed = (3..8).map(|row| gridcraft_engine::display::value_text(&d.wb, sh, CellRef::new(row, 1))).collect::<Vec<_>>().join("\n");
+    assert_eq!(alternate, committed);
+    assert_eq!(d.undo.len(), undo_before + 1);
+    assert!(h.query_by_label(alternate.as_str()).is_none(), "release removes the tooltip");
+    screenshot(&mut h, "committed");
+}
+
+#[test]
+fn windows_escape_cancels_ctrl_preview_without_an_undo_step() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "B1", "input": "5"})).unwrap();
+    s.execute("selection.set", json!({"cell": "B1"})).unwrap();
+    let mut h = crate::common::os_harness(s, egui::os::OperatingSystem::Windows);
+    let (start, end) = (corner(&h, "B1"), center(&h, "B4"));
+    press(&mut h, start, PointerButton::Primary);
+    let ctrl = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+    h.input_mut().events.push(Event::ModifiersChanged(ctrl));
+    move_to(&mut h, start, end);
+    assert!(h.query_by_label("6\n7\n8").is_some());
+    let undo_before = h.state().session.active().unwrap().undo.len();
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.query_by_label("6\n7\n8").is_none());
+    release(&mut h, end, PointerButton::Primary);
+    assert_eq!(values(&h, &["B2", "B3", "B4"]), [Value::Empty, Value::Empty, Value::Empty]);
+    assert_eq!(h.state().session.active().unwrap().undo.len(), undo_before);
+    assert!(h.state().grid.fill_tag.is_none());
+    assert!(h.state().grid.fill_menu.is_none());
 }
 
 /// Escape removes the preview and cancels the fill, including the eventual pointer release.
