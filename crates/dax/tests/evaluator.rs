@@ -429,6 +429,11 @@ fn userelationship_selects_the_matching_relationship_by_column() {
     // USERELATIONSHIP picks ShipDate even though OrderDate is the first relationship in the model.
     assert_eq!(evaluate("CALCULATE([Total], USERELATIONSHIP(Sales[ShipDate], Date[Date]), Date[Date] = DATE(2024,1,2))"), Scalar::Decimal(10.0));
     assert_eq!(evaluate("CALCULATE([Total], USERELATIONSHIP(Sales[ShipDate], Date[Date]), Date[Date] = DATE(2024,1,1))"), Scalar::Decimal(20.0));
+    // CROSSFILTER cannot activate ShipDate: only USERELATIONSHIP may do that.
+    let crossfilter = parse_expression("CALCULATE([Total], CROSSFILTER(Sales[ShipDate], Date[Date], BOTH))").expect("parse");
+    let bound = Binder::new(&model).bind_expression(&crossfilter).expect("bind");
+    let error = evaluator.evaluate(&bound).expect_err("CROSSFILTER must not activate an inactive relationship");
+    assert!(error.message.contains("USERELATIONSHIP"), "{error}");
     // CROSSFILTER accepts both documented spellings and leaves the active relationship in place.
     assert_eq!(evaluate("CALCULATE([Total], CROSSFILTER(Sales[OrderDate], Date[Date], OneWay))"), Scalar::Decimal(30.0));
     assert_eq!(evaluate("CALCULATE([Total], CROSSFILTER(Sales[OrderDate], Date[Date], BOTH))"), Scalar::Decimal(30.0));
@@ -544,6 +549,10 @@ fn pivot_cross_puts_column_groups_in_columns() {
 fn text_is_not_compared_with_numbers() {
     // DAX refuses to compare text with a number, so `=` answers FALSE instead of coercing "3".
     assert_eq!(eval("\"3\" = 3"), Scalar::Boolean(false));
+    // The negation of an incomparable pair is TRUE: two contradictory comparisons cannot both be
+    // FALSE, and the evaluator maps "no ordering" to inequality.
+    assert_eq!(eval("\"3\" <> 3"), Scalar::Boolean(true));
+    assert_eq!(eval("\"3\" < 3"), Scalar::Boolean(false));
     assert_eq!(eval("\"3\" = \"3\""), Scalar::Boolean(true));
     // `IN` is DAX equality rather than representation equality: numbers compare by value across
     // variants and text ignores case, while BLANK still matches only BLANK.

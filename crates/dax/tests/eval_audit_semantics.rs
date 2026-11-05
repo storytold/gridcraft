@@ -135,6 +135,8 @@ fn calculate_filter_accepts_an_in_list() {
         eval_in_sales(r#"CALCULATE(SUM(Sales[Amount]), Sales[Region] IN FILTER(VALUES(Sales[Region]), Sales[Region] <> "East"))"#),
         Scalar::Decimal(110.0)
     );
+    // The filter form follows DAX equality too: the Decimal column matches an Integer literal.
+    assert_eq!(eval_in_sales(r#"CALCULATE(SUM(Sales[Amount]), Sales[Amount] IN { 10 })"#), Scalar::Decimal(10.0));
     // The scalar IN operator keeps working.
     assert_eq!(eval("1 IN { 1, 2 }"), Scalar::Boolean(true));
     assert_eq!(eval("3 IN { 1, 2 }"), Scalar::Boolean(false));

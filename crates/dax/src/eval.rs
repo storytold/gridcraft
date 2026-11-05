@@ -1547,7 +1547,8 @@ impl<'a> Evaluator<'a> {
             BoundExpr::Binary { op: BinaryOp::In, left, right } => {
                 // `CALCULATE ( expr, Table[Column] IN { ... } )`: the list (or table expression)
                 // is the membership set, and the filter keeps the rows whose column value is a
-                // member — the same per-row truth the other comparison operators apply.
+                // member — the same per-row truth `IN` and the other comparison operators apply,
+                // so a number matches across variants and text ignores case.
                 let BoundExpr::Column { table, column } = &**left else {
                     return Err(EvalError::new("CALCULATE filter must compare a column"));
                 };
@@ -1559,7 +1560,7 @@ impl<'a> Evaluator<'a> {
                     .table(*table, &FilterContext::default())
                     .column(*column)
                     .into_iter()
-                    .filter(|candidate| members.rows.iter().any(|row| row.first().is_some_and(|member| member.strict_eq(candidate))))
+                    .filter(|candidate| members.rows.iter().any(|row| row.first().is_some_and(|member| in_equals(member, candidate))))
                     .map(|candidate| ScalarKey::from(&candidate))
                     .collect();
                 filters.set(*table, *column, keys);
@@ -1730,6 +1731,11 @@ impl<'a> Evaluator<'a> {
                 ));
             }
         };
+        if relationship.inactive && flow != RelationshipFlow::NONE {
+            // `CROSSFILTER` only redirects filtering between tables that already filter; turning an
+            // inactive relationship on is `USERELATIONSHIP`'s job.
+            return Err(EvalError::new(format!("{name} needs an active relationship; use USERELATIONSHIP to activate it")));
+        }
         filters.relationships.insert(index, flow);
         Ok(())
     }
@@ -2005,7 +2011,12 @@ fn binary(op: BinaryOp, left: Scalar, right: Scalar) -> Result<Scalar, EvalError
             } else {
                 left.compare(&right)
             };
-            let Some(ordering) = ordering else { return Ok(Scalar::Boolean(false)) };
+            let Some(ordering) = ordering else {
+                // An incomparable pair (`"3"` against `3`) is not equal, so `<>` answers TRUE
+                // while `=`, `==` and the ordering operators answer FALSE. Reporting FALSE for
+                // both would make two contradictory comparisons agree.
+                return Ok(Scalar::Boolean(op == BinaryOp::Ne));
+            };
             let result = match op {
                 BinaryOp::Eq | BinaryOp::StrictEq => ordering == Ordering::Equal,
                 BinaryOp::Ne => ordering != Ordering::Equal,

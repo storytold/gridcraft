@@ -250,7 +250,8 @@ fn relatedtable_requires_a_table_expression() {
 
 #[test]
 fn crossfilter_accepts_every_documented_direction_argument() {
-    for direction in ["NONE", "ONEWAY", "BOTH", "ONEWAY_RIGHTFILTERSLEFT", "ONEWAY_LEFTFILTERSRIGHT", "0", "1", "2", "3", "4"] {
+    // Directions are the documented words; a numeric argument is not one of them.
+    for direction in ["NONE", "ONE", "ONEWAY", "BOTH", "TWOWAY", "ONEWAY_RIGHTFILTERSLEFT", "ONEWAY_LEFTFILTERSRIGHT"] {
         let src = format!("CROSSFILTER ( Sales[CustomerKey], Customer[CustomerKey], {direction} )");
         assert_valid(&src);
     }
