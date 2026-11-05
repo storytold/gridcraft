@@ -321,7 +321,14 @@ pub const fn literal_type(literal: &Literal) -> DataType {
 /// evaluation time (`LASTDATE('Date'[Date]) - 1`), so it is unknown here rather than a table.
 fn scalar_operand(expr: &Expr) -> Result<InferredType, TypeError> {
     let inferred = infer_type(expr)?;
-    Ok(if inferred == InferredType::Table && matches!(&expr.kind, ExprKind::Call(_)) { InferredType::Unknown } else { inferred })
+    // A `VAR`/`RETURN` block is transparent for this check: its body is what the operator sees,
+    // so `(VAR d = 1 RETURN LASTDATE('Date'[Date])) - 1` is the same table-valued operand as the
+    // unwrapped call and must be rejected identically.
+    let mut inner = expr;
+    while let ExprKind::VarReturn { body, .. } = &inner.kind {
+        inner = body;
+    }
+    Ok(if inferred == InferredType::Table && matches!(&inner.kind, ExprKind::Call(_)) { InferredType::Unknown } else { inferred })
 }
 
 /// Infers the static type of an expression.

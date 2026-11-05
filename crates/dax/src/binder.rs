@@ -63,7 +63,12 @@ pub enum BoundExpr {
     TableConstructor(Vec<BoundExpr>),
     /// `( value, ... )`.
     Tuple(Vec<BoundExpr>),
-    /// A variable reference, indexed in the enclosing [`BoundExpr::VarReturn`].
+    /// A variable reference.
+    ///
+    /// `index` is the variable's absolute slot in the cumulative stack of every enclosing
+    /// [`BoundExpr::VarReturn`] block — outer blocks first, each block appending its own
+    /// declarations in order — not its position inside the innermost `vars` list. The evaluator
+    /// pushes each block's values onto the same stack, so the index stays valid across nesting.
     Variable {
         index: usize,
         name: String,
