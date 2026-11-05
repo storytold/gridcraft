@@ -229,14 +229,16 @@ impl BinaryOp {
         }
     }
 
-    /// DAX binary operators associate to the left, except `^`, which is right-associative
-    /// (verified against Excel: `2^3^2` is 512).
+    /// DAX binary operators all associate to the left. Microsoft's operator reference puts `^` in
+    /// its own precedence tier and states that operators of equal precedence are ordered from left
+    /// to right, so `2^3^2` is `(2^3)^2` = 64. (Excel's worksheet engine groups the chain the other
+    /// way and answers 512; this crate implements DAX.)
     pub const fn is_left_associative(self) -> bool {
-        !matches!(self, BinaryOp::Pow)
+        true
     }
 
     pub const fn is_right_associative(self) -> bool {
-        matches!(self, BinaryOp::Pow)
+        false
     }
 
     pub const fn is_comparison(self) -> bool {

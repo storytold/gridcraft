@@ -217,9 +217,10 @@ operator was written. `IN` is a comparison at the same level as `=`, so `1 + 2 I
 `(1 + 2) IN { 3 }`, and it takes a list (`expr IN { v1, v2 }`) or a table expression
 (`expr IN VALUES(T[Col])`).
 
-Excel evaluates `2^3^2` as `512` (`2^(3^2)`), so `^` is right-associative even though the generic
-DAX Guide note says operators of equal precedence go left to right. Unary minus binds looser than
-`^`: `-2^2` parses as `-(2^2)`.
+Microsoft's operator reference states that operators of equal precedence are ordered from left to
+right, and `^` shares no tier with another operator, so a chain groups left: `2^3^2` is `(2^3)^2` =
+64. (Excel's worksheet engine answers 512 for the same text; this crate follows DAX.) Unary minus
+binds looser than `^`: `-2^2` parses as `-(2^2)`.
 
 ## Data types and static inference
 

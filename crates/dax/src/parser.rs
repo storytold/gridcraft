@@ -2,8 +2,8 @@
 //!
 //! Binding powers encode the operator table (tighter binds first): parentheses and function
 //! calls; `^`; unary `+`/`-`; `*`/`/`; binary `+`/`-`; `&`; comparisons, which include `IN`; `NOT`;
-//! `&&`; `||`. All operators are left-associative except `^`, which Excel evaluates
-//! right-associatively (`2^3^2` is 512).
+//! `&&`; `||`. Every operator is left-associative, including `^`: Microsoft's operator reference
+//! orders equal-precedence operators from left to right, so `2^3^2` is `(2^3)^2`.
 
 use crate::ast::{
     Axis, AxisGroup, AxisKind, AxisOrderItem, BinaryOp, Call, ColumnDef, Define, Definition, Evaluate, Expr, ExprKind, FunctionDef, FunctionParam,
@@ -678,7 +678,7 @@ impl Parser {
                 break;
             }
             self.next();
-            // `^` is right-associative; every other binary operator is left-associative.
+            // Every binary operator is left-associative (DAX orders equal precedence left to right).
             let next_min = if op.is_right_associative() { bp } else { bp + 1 };
             let rhs = self.expr(next_min)?;
             // Grouped expressions return their inner tree without a parenthesis node, so the

@@ -78,8 +78,8 @@ fn arithmetic_precedence_parentheses_and_associativity() {
         ("2 * 3 ^ 4", "2 * 3 ^ 4"),
         ("2 ^ 3 + 4", "2 ^ 3 + 4"),
         ("2 ^ 3 ^ 2", "2 ^ 3 ^ 2"),
-        ("2 ^ (3 ^ 2)", "2 ^ 3 ^ 2"),
-        ("(2 ^ 3) ^ 2", "(2 ^ 3) ^ 2"),
+        ("(2 ^ 3) ^ 2", "2 ^ 3 ^ 2"),
+        ("2 ^ (3 ^ 2)", "2 ^ (3 ^ 2)"),
         ("-2 ^ 2", "-2 ^ 2"),
         ("(-2) ^ 2", "(-2) ^ 2"),
         ("2 ^ -3", "2 ^ (-3)"),
@@ -107,18 +107,19 @@ fn arithmetic_precedence_parentheses_and_associativity() {
 }
 
 #[test]
-fn binary_operators_associate_left_except_exponentiation() {
+fn binary_operators_associate_left() {
     let expr = expression("1 - 2 - 3");
     let (op, left, right) = binary(&expr);
     assert_eq!(*op, BinaryOp::Sub);
     assert!(matches!(&left.kind, ExprKind::Binary { op: BinaryOp::Sub, .. }));
     assert!(matches!(&right.kind, ExprKind::Literal(Literal::Integer(n)) if *n == 3));
 
+    // DAX orders equal precedence left to right, so a `^` chain groups left: `(2^3)^2`.
     let expr = expression("2 ^ 3 ^ 2");
     let (op, left, right) = binary(&expr);
     assert_eq!(*op, BinaryOp::Pow);
-    assert!(matches!(&left.kind, ExprKind::Literal(Literal::Integer(n)) if *n == 2));
-    assert!(matches!(&right.kind, ExprKind::Binary { op: BinaryOp::Pow, .. }));
+    assert!(matches!(&left.kind, ExprKind::Binary { op: BinaryOp::Pow, .. }));
+    assert!(matches!(&right.kind, ExprKind::Literal(Literal::Integer(n)) if *n == 2));
 
     let expr = expression("1 / 2 / 3");
     let (op, left, _) = binary(&expr);
