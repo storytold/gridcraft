@@ -237,6 +237,8 @@ pub(super) struct AxisOrder<'a> {
 }
 
 impl<'a> AxisOrder<'a> {
+    /// The order of an axis's fields: each field's sort-by value field (by caption, among `value_names`)
+    /// and custom order are looked up once here; `measure` reads an item's total.
     pub(super) fn new(
         fields: &'a [&'a PivotField],
         items: &'a [FieldItems],

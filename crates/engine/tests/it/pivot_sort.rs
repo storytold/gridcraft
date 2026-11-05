@@ -162,8 +162,39 @@ fn sort_parameters_are_validated() {
     assert!(err(&mut s, json!({"field": "Region", "order": "none", "by": "Sum of Sales"})).contains("ascending or descending"));
     assert!(err(&mut s, json!({"field": "Region", "order": "asc", "by": "Profit"})).contains("isn't in the values area"));
     assert!(err(&mut s, json!({"field": "Region", "order": "sideways"})).contains("unknown order"));
+    let too_many: Vec<String> = (0..100_001).map(|i| format!("x{i}")).collect();
+    assert!(err(&mut s, json!({"field": "Region", "order": "custom", "items": too_many})).contains("at most 100000"), "refused, not cut short");
     assert!(err(&mut s, json!({"field": "Sales", "order": "asc"})).contains("isn't in the rows or columns"));
     assert_eq!(labels(&s), ["East", "North", "West"], "nothing changed");
+}
+
+#[test]
+fn manual_still_means_source_order() {
+    // #3398 review: "manual" was an alias of source order before custom orders; it stays one.
+    let mut s = session_with(&[("West", "x", json!(1)), ("East", "x", json!(2)), ("North", "x", json!(3))]);
+    pivot(&mut s, &["Region"], &[], json!(["Sales"]));
+    sort(&mut s, json!({"field": "Region", "order": "manual"})).unwrap();
+    assert_eq!(labels(&s), ["West", "East", "North"]);
+    assert_eq!(field(&mut s)["sort"], "none");
+}
+
+#[test]
+fn a_long_custom_order_on_a_large_field_is_accepted() {
+    // #3398 review: validating each label against every item was quadratic.
+    let mut s = Session::new();
+    s.new_workbook();
+    let n = 20_000;
+    let mut rows = vec![json!(["Key", "Sales"])];
+    rows.extend((0..n).map(|i| json!([format!("k{i:05}"), i])));
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute(
+        "insert.pivotTable",
+        json!({"source": format!("Sheet1!$A$1:$B${}", n + 1), "rows": ["Key"], "values": ["Sales"], "destination": "Sheet1!D3"}),
+    )
+    .unwrap();
+    let order: Vec<String> = (0..n).rev().map(|i| format!("K{i:05}")).collect();
+    sort(&mut s, json!({"field": "Key", "order": "custom", "items": order})).unwrap();
+    assert_eq!(grid(&s)[1][0].display(), "k19999");
 }
 
 #[test]
