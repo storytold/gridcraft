@@ -9,6 +9,14 @@
 //!   as PDF. The parent stores it and reports failures itself.
 //! - `gridcraft:dirty` (to the parent): `{ dirty }` whenever unsaved changes appear or go away.
 //! - `gridcraft:failed` (to the parent): `{ error }` when the app couldn't start.
+//! - `gridcraft:command` (from the parent): `{ id, method, params }`, any method of the desktop
+//!   control protocol (`docs/control-protocol.md`): `engine.execute` runs any command
+//!   (`cell.set`, `selection.set`, `home.bold`…), `cell.get` / `sheet.read` /
+//!   `document.inspect` read, `ui.cell.click` clicks. It runs on the next frame, like a command
+//!   the user gave, and is undoable the same way.
+//! - `gridcraft:result` (to the parent): `{ id, ok, result | error }`, one per command.
+//! - `gridcraft:selection` (to the parent): `{ sheet, active, ranges }` (A1 text) once when a
+//!   workbook opens and whenever the selection or the active sheet changes.
 //!
 //! Only the parent window on the page's own origin is heard or answered. In host mode the page
 //! starts with an empty workbook instead of a sample, and the parent guards leaving the page.
@@ -16,7 +24,9 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use gridcraft_ui_egui::control::{self, Outcome};
 use gridcraft_ui_egui::{Inbox, Services, SheetApp};
+use serde_json::{Value as Json, json};
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
@@ -28,6 +38,16 @@ const WORKBOOK_EXTS: &[&str] = &["xlsx"];
 /// The longest user name taken from `?author=`.
 const MAX_AUTHOR_CHARS: usize = 200;
 
+/// Commands the parent may queue between two frames; more are refused, not buffered.
+const MAX_QUEUED_COMMANDS: usize = 1_000;
+
+/// A `gridcraft:command` waiting for the next frame.
+struct Command {
+    id: Json,
+    method: String,
+    params: Json,
+}
+
 #[derive(Clone)]
 pub struct Bridge {
     window: web_sys::Window,
@@ -37,6 +57,10 @@ pub struct Bridge {
     saved: Rc<RefCell<Vec<String>>>,
     /// The unsaved-changes state last reported to the parent.
     reported: Rc<Cell<Option<bool>>>,
+    /// Commands from the parent, run on the next frame.
+    commands: Rc<RefCell<Vec<Command>>>,
+    /// The selection last reported to the parent.
+    selection: Rc<RefCell<Option<Json>>>,
 }
 
 impl Bridge {
@@ -48,7 +72,7 @@ impl Bridge {
             return None;
         }
         let origin = window.location().origin().ok()?;
-        Some(Self { window, parent, origin, saved: Rc::default(), reported: Rc::default() })
+        Some(Self { window, parent, origin, saved: Rc::default(), reported: Rc::default(), commands: Rc::default(), selection: Rc::default() })
     }
 
     /// Send saved and exported files to the parent instead of downloading them, and hear files
@@ -79,9 +103,21 @@ impl Bridge {
         self.send(&[("type", "gridcraft:failed".into()), ("error", error.into())]);
     }
 
-    /// After each frame: a workbook handed to the parent this frame counts as saved under the
-    /// name it was saved as, and the parent hears when unsaved changes appear or go away.
-    pub fn sync(&self, app: &mut SheetApp) {
+    /// After each frame: the parent's queued commands run, a workbook handed to the parent this
+    /// frame counts as saved under the name it was saved as, and the parent hears when unsaved
+    /// changes appear or go away and when the selection moves.
+    pub fn sync(&self, app: &mut SheetApp, ctx: &egui::Context) {
+        let commands = std::mem::take(&mut *self.commands.borrow_mut());
+        if !commands.is_empty() {
+            for command in commands {
+                let reply = match control::handle(app, ctx, &command.method, &command.params) {
+                    Outcome::Done(reply) => reply,
+                    Outcome::Screenshot { .. } => json!({"ok": false, "error": "ui.screenshot is not available in the browser"}),
+                };
+                self.post_result(command.id, &reply);
+            }
+            ctx.request_repaint();
+        }
         let saved = std::mem::take(&mut *self.saved.borrow_mut());
         if let Some(name) = saved.iter().rev().find(|name| is_workbook(name))
             && let Some(doc) = app.session.active_mut()
@@ -95,6 +131,37 @@ impl Bridge {
         if self.reported.get() != Some(dirty) && self.send(&[("type", "gridcraft:dirty".into()), ("dirty", dirty.into())]) {
             self.reported.set(Some(dirty));
         }
+        let selection = selection_of(app);
+        if *self.selection.borrow() != selection {
+            let sent = match &selection {
+                Some(current) => {
+                    let mut message = current.clone();
+                    if let Some(fields) = message.as_object_mut() {
+                        fields.insert("type".into(), json!("gridcraft:selection"));
+                    }
+                    self.send_json(&message)
+                }
+                None => true,
+            };
+            if sent {
+                *self.selection.borrow_mut() = selection;
+            }
+        }
+    }
+
+    /// `reply` is the control protocol's `{ok, result}` or `{ok: false, error}`.
+    fn post_result(&self, id: Json, reply: &Json) {
+        let mut message = reply.clone();
+        if let Some(fields) = message.as_object_mut() {
+            fields.insert("type".into(), json!("gridcraft:result"));
+            fields.insert("id".into(), id);
+        }
+        self.send_json(&message);
+    }
+
+    /// Post a JSON message to the parent; false if it couldn't be sent.
+    fn send_json(&self, value: &Json) -> bool {
+        to_js(value).is_some_and(|m| self.parent.post_message(&m, &self.origin).is_ok())
     }
 
     fn post_save(&self, path: &str, bytes: &[u8]) -> Result<(), String> {
@@ -112,11 +179,30 @@ impl Bridge {
     fn listen(&self, inbox: Inbox, ctx: egui::Context) {
         let parent = self.parent.clone();
         let origin = self.origin.clone();
+        let commands = self.commands.clone();
+        let bridge = self.clone();
         let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
             if event.origin() != origin || !event.source().is_some_and(|s| js_sys::Object::is(&s, &parent)) {
                 return;
             }
             let data = event.data();
+            if string(&data, "type").as_deref() == Some("gridcraft:command") {
+                let id = js_sys::Reflect::get(&data, &JsValue::from_str("id")).ok().and_then(|id| from_js(&id)).unwrap_or(Json::Null);
+                let Some(method) = string(&data, "method").filter(|m| !m.is_empty()) else {
+                    bridge.post_result(id, &json!({"ok": false, "error": "missing `method`"}));
+                    return;
+                };
+                let params = js_sys::Reflect::get(&data, &JsValue::from_str("params")).ok().and_then(|p| from_js(&p)).unwrap_or(json!({}));
+                let mut queue = commands.borrow_mut();
+                if queue.len() >= MAX_QUEUED_COMMANDS {
+                    drop(queue);
+                    bridge.post_result(id, &json!({"ok": false, "error": "too many queued commands"}));
+                    return;
+                }
+                queue.push(Command { id, method, params: if params.is_null() { json!({}) } else { params } });
+                ctx.request_repaint();
+                return;
+            }
             if string(&data, "type").as_deref() != Some("gridcraft:open") {
                 return;
             }
@@ -147,6 +233,26 @@ fn message(fields: &[(&str, JsValue)]) -> Option<js_sys::Object> {
         js_sys::Reflect::set(&m, &JsValue::from_str(key), value).ok()?;
     }
     Some(m)
+}
+
+/// The active workbook's selection as the parent sees it: sheet name and A1 text.
+fn selection_of(app: &SheetApp) -> Option<Json> {
+    let doc = app.session.active()?;
+    let sheet = doc.wb.active().map(|s| s.name.clone()).unwrap_or_default();
+    let ranges: Vec<String> = doc.selection.ranges.iter().map(|r| r.a1()).collect();
+    Some(json!({"sheet": sheet, "active": doc.selection.active.a1(), "ranges": ranges}))
+}
+
+fn to_js(value: &Json) -> Option<JsValue> {
+    js_sys::JSON::parse(&serde_json::to_string(value).ok()?).ok()
+}
+
+fn from_js(value: &JsValue) -> Option<Json> {
+    if value.is_undefined() {
+        return None;
+    }
+    let text = js_sys::JSON::stringify(value).ok()?.as_string()?;
+    serde_json::from_str(&text).ok()
 }
 
 fn string(data: &JsValue, key: &str) -> Option<String> {
