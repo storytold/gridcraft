@@ -7,9 +7,18 @@ use gridcraft_numfmt::Locale;
 /// Read an explicit command-entry snapshot; absent means invariant parsing. The small schema
 /// is bounded and validated, independently of any saved document or front-end preferences.
 pub(crate) fn locale_from_params(params: &serde_json::Value) -> crate::Result<Option<Locale>> {
-    let Some(value) = params.get("inputLocale") else { return Ok(None) };
+    locale_from_params_named(params, "inputLocale")
+}
+
+/// Validate interactive entry and clipboard output with the same bounded schema.
+pub(crate) fn locale_from_params_named(params: &serde_json::Value, name: &str) -> crate::Result<Option<Locale>> {
+    params.get(name).map(|value| parse_locale_snapshot(value, name)).transpose()
+}
+
+/// Read numeric-region data from a command or a matching clipboard table.
+pub(crate) fn parse_locale_snapshot(value: &serde_json::Value, name: &str) -> crate::Result<Locale> {
     let invalid =
-        || crate::EngineError::Other("inputLocale requires distinct decimal/group separators and a numeric shortDate (up to 255 characters).".into());
+        || crate::EngineError::Other(format!("{name} requires distinct decimal/group separators and a numeric shortDate (up to 255 characters)."));
     let character = |key| {
         let mut chars = value.get(key).and_then(serde_json::Value::as_str)?.chars();
         let c = chars.next()?;
@@ -30,7 +39,12 @@ pub(crate) fn locale_from_params(params: &serde_json::Value) -> crate::Result<Op
     if decimal == group || date.chars().take(256).count() > 255 || date.is_empty() || !crate::display::number_format(date).is_date() {
         return Err(invalid());
     }
-    Ok(Some(Locale { decimal, group, short_date: std::borrow::Cow::Owned(date.to_string()) }))
+    Ok(Locale { decimal, group, short_date: std::borrow::Cow::Owned(date.to_string()) })
+}
+
+/// Capture numeric conventions independently of later host preference changes.
+pub(crate) fn locale_snapshot(locale: &Locale) -> serde_json::Value {
+    serde_json::json!({"decimal":locale.decimal.to_string(),"group":locale.group.to_string(),"shortDate":locale.short_date})
 }
 
 /// Canonical input for one destination, keeping Text cells and formulas untouched.

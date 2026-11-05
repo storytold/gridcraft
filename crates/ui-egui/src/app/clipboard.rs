@@ -5,7 +5,8 @@ impl SheetApp {
     /// their existing internal clipboard behavior and do not write to the host clipboard.
     pub fn copy_to_clipboard(&mut self, ctx: &egui::Context, command: &str) {
         // Only ask the engine for HTML when the host can publish it.
-        let result = match self.run_command(command, json!({"html": self.services.copy_html.is_some()})) {
+        let locale = self.session.display_locale.clone();
+        let result = match self.run_command_in(command, json!({"html": self.services.copy_html.is_some()}), Some(&locale)) {
             Ok(result) => result,
             Err(e) => return self.alert(e),
         };

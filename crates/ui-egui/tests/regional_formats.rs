@@ -268,3 +268,33 @@ fn python_drafts_keep_their_numeric_region_after_leaving_python() {
         assert_eq!(back.sheet(0).unwrap().value(cell), gridcraft_engine::core::Value::Number(1.234));
     }
 }
+
+/// Actual host copy/cut uses regional text even when the host provides no rich clipboard.
+#[test]
+fn regional_host_copy_and_cut_preserve_decimals_between_sessions() {
+    for event in [egui::Event::Copy, egui::Event::Cut] {
+        let mut source = harness(Some("ro-RO"));
+        source.state_mut().run("cell.set", json!({"cell":"D1","input":"1.234"})).unwrap();
+        source.state_mut().run("selection.set", json!({"range":"D1"})).unwrap();
+        source.input_mut().events.push(event);
+        source.step();
+        let text = source
+            .output()
+            .platform_output
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(text, "1,234\n");
+        let mut dest = harness(Some("ro-RO"));
+        dest.state_mut().run("selection.set", json!({"range":"D1"})).unwrap();
+        dest.state_mut().paste_external(text);
+        assert_eq!(
+            dest.state().session.active().unwrap().wb.sheet(0).unwrap().value(gridcraft_engine::core::CellRef::new(0, 3)),
+            gridcraft_engine::core::Value::Number(1.234)
+        );
+    }
+}

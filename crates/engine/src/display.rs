@@ -173,6 +173,11 @@ fn formatted_text(f: Formatted) -> String {
 
 /// Tab-separated text of a range, as the system clipboard gets it.
 pub fn range_text(wb: &Workbook, sheet: usize, r: RangeRef) -> String {
+    range_text_in(wb, sheet, r, &Locale::EN_US)
+}
+
+/// Host clipboard text in its captured region; file and agent exports remain invariant.
+pub fn range_text_in(wb: &Workbook, sheet: usize, r: RangeRef, locale: &Locale) -> String {
     let Some(sh) = wb.sheet(sheet) else { return String::new() };
     let mut out = String::new();
     let r = clipboard_range(r);
@@ -186,7 +191,7 @@ pub fn range_text(wb: &Workbook, sheet: usize, r: RangeRef) -> String {
                 out.push('\t');
             }
             first = false;
-            let t = cell_text(wb, sh, CellRef::new(row, col));
+            let t = cell_text_in(wb, sh, CellRef::new(row, col), locale);
             // Like Excel, only text with a tab or line break is quoted (its quotes doubled);
             // `say "hi"` is copied as it is (#2225).
             if t.contains(['\t', '\n', '\r']) {

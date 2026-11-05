@@ -384,3 +384,116 @@ fn invalid_interactive_snapshots_leave_values_unchanged() {
         assert_eq!(s.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::Number(7.0));
     }
 }
+
+/// Independent Romanian sessions exchange regional plain text; agent copies stay invariant.
+#[test]
+fn regional_clipboard_plain_text_keeps_decimal_values_between_sessions() {
+    let ro = Locale::from_tag("ro-RO");
+    let mut source = Session::new();
+    source.new_workbook();
+    source.display_locale = ro.clone();
+    source.execute("cell.set", json!({"cell":"A1","input":"1.234"})).unwrap();
+    let copied = source.run_interactive("edit.copy", json!({"range":"A1"}), &ro).unwrap();
+    let mut dest = Session::new();
+    dest.new_workbook();
+    dest.run_interactive("edit.paste", json!({"at":"A1","text":copied["text"]}), &ro).unwrap();
+    assert_eq!(dest.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::Number(1.234));
+    assert_eq!(copied["text"], "1,234\n");
+    source.run_interactive("edit.paste", json!({"at":"B1","text":copied["text"]}), &Locale::EN_US).unwrap();
+    assert_eq!(source.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 1)), Value::Number(1.234));
+    assert_eq!(source.execute("edit.copy", json!({"range":"A1"})).unwrap()["text"], "1.234\n");
+}
+
+/// A rich copy carries its numeric region across sessions, even across date systems.
+#[test]
+fn regional_clipboard_html_keeps_numbers_percentages_and_calendar_dates() {
+    for source_system in [DateSystem::D1900, DateSystem::D1904] {
+        for target_system in [DateSystem::D1900, DateSystem::D1904] {
+            for (source_locale, target_locale) in [("ro-RO", "en-US"), ("en-US", "ro-RO"), ("ro-RO", "ro-RO")] {
+                let mut source = Session::new();
+                source.new_workbook();
+                Arc::make_mut(&mut source.active_mut().unwrap().wb).date_system = source_system;
+                let serial = gridcraft_engine::core::parse::parse_input("2026-03-04", source_system).value.as_f64().unwrap();
+                source.execute("range.setValues", json!({"range":"A1:C1","values":[[1.2345678901234,0.125,serial]]})).unwrap();
+                source.execute("home.formatCells", json!({"range":"B1","style":{"num_fmt":"0.00%"}})).unwrap();
+                source.execute("home.numberFormat", json!({"range":"C1","format":"Short Date"})).unwrap();
+                let copied = source.run_interactive("edit.copy", json!({"range":"A1:C1","html":true}), &Locale::from_tag(source_locale)).unwrap();
+                let mut dest = Session::new();
+                dest.new_workbook();
+                Arc::make_mut(&mut dest.active_mut().unwrap().wb).date_system = target_system;
+                dest.run_interactive("edit.paste", json!({"at":"A1","text":copied["text"],"html":copied["html"]}), &Locale::from_tag(target_locale))
+                    .unwrap();
+                let sh = dest.active().unwrap().wb.sheet(0).unwrap();
+                assert_eq!(sh.value(CellRef::new(0, 0)), Value::Number(1.2345678901234), "{source_locale} to {target_locale}");
+                assert_eq!(sh.value(CellRef::new(0, 1)), Value::Number(0.125));
+                let expected = gridcraft_engine::core::parse::parse_input("2026-03-04", target_system).value;
+                assert_eq!(sh.value(CellRef::new(0, 2)), expected, "{source_locale} to {target_locale}, {source_system:?} to {target_system:?}");
+            }
+        }
+    }
+}
+
+/// Stale HTML and malformed/oversized region metadata leave ordinary regional input intact.
+#[test]
+fn regional_clipboard_ignores_unmatched_or_invalid_html_region() {
+    let valid = json!({"decimal":".","group":",","shortDate":"m/d/yyyy"});
+    let invalid = json!({"decimal":".","group":".","shortDate":"m/d/yyyy"});
+    let table = |region: &str, shown: &str| format!("<table data-gridcraft-region-v1=\"{region}\"><tr><td>{shown}</td></tr></table>");
+    let encode = |v: &serde_json::Value| gridcraft_engine::io::base64_encode(v.to_string().as_bytes());
+    for (html, field, expected) in [
+        (table(&encode(&valid), "1,234"), "2,345", 2.345),
+        (table(&encode(&invalid), "1.234"), "1.234", 1234.0),
+        (table(&"A".repeat(5000), "1.234"), "1.234", 1234.0),
+    ] {
+        let mut dest = Session::new();
+        dest.new_workbook();
+        dest.run_interactive("edit.paste", json!({"at":"A1","text":field,"html":html}), &Locale::from_tag("ro-RO")).unwrap();
+        assert_eq!(dest.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::Number(expected));
+    }
+}
+
+/// Exact HTML values survive display rounding, custom date order and different date systems.
+#[test]
+fn regional_clipboard_exact_values_respect_text_and_formula_destinations() {
+    let ro = Locale::from_tag("ro-RO");
+    let mut source = Session::new();
+    source.new_workbook();
+    let date = gridcraft_engine::core::parse::parse_input("2026-03-04", DateSystem::D1900).value.as_f64().unwrap();
+    source.execute("range.setValues", json!({"range":"A1:D1","values":[[1.2345678901234,date,0.5,1.5]]})).unwrap();
+    {
+        let wb = Arc::make_mut(&mut source.active_mut().unwrap().wb);
+        let custom = wb.styles.derive(Default::default(), |style| style.num_fmt = NumFmt::custom("m/d/yyyy"));
+        wb.sheet_mut(0).unwrap().set_style(CellRef::new(0, 1), custom);
+    }
+    source.execute("home.formatCells", json!({"range":"C1","style":{"num_fmt":"h:mm"}})).unwrap();
+    source.execute("home.formatCells", json!({"range":"D1","style":{"num_fmt":"[h]:mm"}})).unwrap();
+    let copied = source.run_interactive("edit.copy", json!({"range":"A1:D1","html":true}), &ro).unwrap();
+    let mut dest = Session::new();
+    dest.new_workbook();
+    Arc::make_mut(&mut dest.active_mut().unwrap().wb).date_system = DateSystem::D1904;
+    dest.run_interactive("edit.paste", json!({"at":"A1","text":copied["text"],"html":copied["html"]}), &ro).unwrap();
+    let sh = dest.active().unwrap().wb.sheet(0).unwrap();
+    assert_eq!(sh.value(CellRef::new(0, 0)), Value::Number(1.2345678901234));
+    assert_eq!(sh.value(CellRef::new(0, 1)), gridcraft_engine::core::parse::parse_input("2026-03-04", DateSystem::D1904).value);
+    assert_eq!(sh.value(CellRef::new(0, 2)), Value::Number(0.5));
+    assert_eq!(sh.value(CellRef::new(0, 3)), Value::Number(1.5));
+    let one = source.run_interactive("edit.copy", json!({"range":"A1","html":true}), &ro).unwrap();
+    dest.execute("home.formatCells", json!({"range":"A2","style":{"num_fmt":"@"}})).unwrap();
+    dest.run_interactive("edit.paste", json!({"at":"A2","text":one["text"],"html":one["html"]}), &ro).unwrap();
+    assert_eq!(dest.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(1, 0)), Value::text(one["text"].as_str().unwrap().trim_end()));
+    let region = gridcraft_engine::io::base64_encode(json!({"decimal":".","group":",","shortDate":"m/d/yyyy"}).to_string().as_bytes());
+    let formula_html = format!("<table data-gridcraft-region-v1=\"{region}\"><tr><td data-gridcraft-number-v1=\"999\">=1+2</td></tr></table>");
+    dest.run_interactive("edit.paste", json!({"at":"B2","text":"=1+2","html":formula_html}), &ro).unwrap();
+    let cell = dest.active().unwrap().wb.sheet(0).unwrap().cell(CellRef::new(1, 1)).unwrap();
+    assert!(cell.formula.is_some());
+    assert_eq!(cell.value, Value::Number(3.0));
+    for attributes in [
+        "data-gridcraft-number-v1=\"NaN\"",
+        "data-gridcraft-number-v1=\"1e999\"",
+        "data-gridcraft-number-v1=\"999\" data-gridcraft-calendar-v1=\"invalid\"",
+    ] {
+        let html = format!("<table data-gridcraft-region-v1=\"{region}\"><tr><td {attributes}>1.234</td></tr></table>");
+        dest.run_interactive("edit.paste", json!({"at":"C2","text":"1.234","html":html}), &ro).unwrap();
+        assert_eq!(dest.active().unwrap().wb.sheet(0).unwrap().value(CellRef::new(1, 2)), Value::Number(1.234));
+    }
+}

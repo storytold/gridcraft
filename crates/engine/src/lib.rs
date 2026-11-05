@@ -1101,16 +1101,18 @@ impl Session {
         self.execute(id, params).map_err(|e| e.to_string())
     }
 
-    /// Run one typed entry or external text paste through the regular command lifecycle. The
-    /// explicit input snapshot is recorded with the command, so replay cannot reinterpret it.
+    /// Run entry, external text paste or host clipboard export with a captured numeric region.
+    /// Recorded snapshots make replay independent of later host preferences.
     /// Ordinary `run`/`execute` calls without `inputLocale` remain invariant.
     pub fn run_interactive(&mut self, id: &str, mut params: Json, locale: &gridcraft_numfmt::Locale) -> std::result::Result<Json, String> {
-        if matches!(id, "cell.set" | "range.fill" | "edit.paste") && locale != &gridcraft_numfmt::Locale::EN_US {
+        let field = match id {
+            "edit.copy" | "edit.cut" => Some("clipboardLocale"),
+            "cell.set" | "range.fill" | "edit.paste" if locale != &gridcraft_numfmt::Locale::EN_US => Some("inputLocale"),
+            _ => None,
+        };
+        if let Some(field) = field {
             let object = params.as_object_mut().ok_or("Interactive input parameters must be an object.")?;
-            object.insert(
-                "inputLocale".into(),
-                serde_json::json!({"decimal":locale.decimal.to_string(),"group":locale.group.to_string(),"shortDate":locale.short_date}),
-            );
+            object.insert(field.into(), crate::entry::locale_snapshot(locale));
         }
         self.run(id, params)
     }

@@ -5,7 +5,8 @@
 //! number. The HTML of the common sources also carries the underlying number as a cell attribute:
 //! `x:num="10000"` (Excel, Excel for the web) and `sdval="10000"` (LibreOffice Calc). Paste uses
 //! it to keep such cells numeric (#257). Only the table structure, the cell text and these two
-//! attributes are read; everything else in the markup is ignored.
+//! attributes are read, along with bounded GridCraft numeric-region, exact-number and calendar
+//! metadata. These refine only fields whose HTML cell matches the clipboard text.
 
 /// Largest clipboard HTML we look at; past this the paste uses the plain text alone.
 const MAX_HTML: usize = 16 * 1024 * 1024;
@@ -24,6 +25,14 @@ pub(crate) struct HtmlCell {
     pub text: String,
     pub num: Option<f64>,
     pub header: bool,
+    pub copied_number: Option<CopiedNumber>,
+}
+
+/// An exact GridCraft numeric value; calendar values also identify their source epoch.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CopiedNumber {
+    pub value: f64,
+    pub calendar: Option<gridcraft_core::DateSystem>,
 }
 
 /// The cells of the first table in `html`, row by row, read no further than `max_rows` rows of
@@ -31,10 +40,22 @@ pub(crate) struct HtmlCell {
 /// in all. A cell spanning columns is followed by empty cells, and a column covered by a `rowspan`
 /// from above holds an empty cell, so positions line up with the tab-separated text. Empty when
 /// there is no table.
+#[derive(Default)]
+pub(crate) struct HtmlTable {
+    pub cells: Vec<Vec<HtmlCell>>,
+    pub locale: Option<gridcraft_numfmt::Locale>,
+}
+
 pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<Vec<HtmlCell>> {
+    table_with_region(html, max_rows, max_cols).cells
+}
+
+/// A source region refines only fields whose HTML and plain-text contents match.
+pub(crate) fn table_with_region(html: &str, max_rows: usize, max_cols: usize) -> HtmlTable {
+    let mut locale = None;
     let mut grid = Grid::new(max_rows, max_cols);
     if html.len() > MAX_HTML {
-        return grid.rows;
+        return HtmlTable::default();
     }
     let mut cell: Option<OpenCell> = None;
     let mut in_table = false;
@@ -72,6 +93,11 @@ pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<V
                 if in_table {
                     break; // a nested table: the outer one is the clipboard grid, stop here
                 }
+                locale = attr(attrs, "data-gridcraft-region-v1")
+                    .filter(|raw| raw.len() <= 4096)
+                    .and_then(crate::io::base64_decode)
+                    .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                    .and_then(|value| crate::entry::parse_locale_snapshot(&value, "clipboard region").ok());
                 in_table = true;
             }
             ("table", true) => {
@@ -90,7 +116,8 @@ pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<V
                 let num = attr(attrs, "x:num").or_else(|| attr(attrs, "sdval")).and_then(|v| v.trim().parse::<f64>().ok()).filter(|n| n.is_finite());
                 let colspan = span(attrs, "colspan", MAX_SPAN);
                 let rowspan = span(attrs, "rowspan", MAX_ROW_SPAN);
-                cell = Some(OpenCell { cell: HtmlCell { text: String::new(), num, header: name == "th" }, colspan, rowspan });
+                let copied_number = locale.as_ref().and_then(|_| copied_number(attrs));
+                cell = Some(OpenCell { cell: HtmlCell { text: String::new(), num, header: name == "th", copied_number }, colspan, rowspan });
             }
             ("td" | "th", true) | ("tr", true) => grid.finish(&mut cell),
             ("br", _) => {
@@ -102,7 +129,19 @@ pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<V
         }
     }
     grid.finish(&mut cell);
-    grid.rows
+    HtmlTable { cells: grid.rows, locale }
+}
+
+/// Ignore malformed values and epochs; only a bounded, finite scalar is accepted.
+fn copied_number(attrs: &str) -> Option<CopiedNumber> {
+    let value = attr(attrs, "data-gridcraft-number-v1").filter(|raw| raw.len() <= 64)?.parse::<f64>().ok().filter(|n| n.is_finite())?;
+    let calendar = match attr(attrs, "data-gridcraft-calendar-v1") {
+        None => None,
+        Some("1900") => Some(gridcraft_core::DateSystem::D1900),
+        Some("1904") => Some(gridcraft_core::DateSystem::D1904),
+        _ => return None,
+    };
+    Some(CopiedNumber { value, calendar })
 }
 
 /// A `colspan`/`rowspan` attribute: at least 1, at most `max` (the sheet's extent), so a hostile

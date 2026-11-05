@@ -32,10 +32,11 @@ fn copy_impl(s: &mut Session, p: &Json, cut: bool) -> Result<Json> {
     } else {
         (d.wb.clone(), trim(ranges.first().copied().unwrap_or_default()), Vec::new())
     };
-    let text = crate::display::range_text(&wb, sheet, range);
+    let locale = crate::entry::locale_from_params_named(p, "clipboardLocale")?.unwrap_or(gridcraft_numfmt::Locale::EN_US);
+    let text = crate::display::range_text_in(&wb, sheet, range, &locale);
     // The HTML rendering is for the host clipboard (UI); it can reach 4 MB, so agents and
     // scripts get it only when they ask for it.
-    let html = if p.get("html").and_then(Json::as_bool) == Some(true) { crate::io::range_html(&wb, sheet, range, &text) } else { None };
+    let html = if p.get("html").and_then(Json::as_bool) == Some(true) { crate::io::range_html(&wb, sheet, range, &text, &locale) } else { None };
     let clip = Clipboard { wb, sheet, range, cut, doc_uid: d.uid, text: text.clone(), areas, selected, trust: d.trust };
     s.clipboard = Some(clip);
     let mut result = json!({"range": range.a1(), "text": text});
@@ -206,15 +207,20 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
     let w = rows.iter().map(Vec::len).max().unwrap_or(0);
     // The HTML flavour, when the host passed it: the number behind each cell's shown text. Read
     // only as far as the text's own shape, so spans in the markup can't expand without bound.
-    let html = str_param(p, "html").map(|html| crate::clip_html::table_cells(html, h, w)).unwrap_or_default();
+    let html = str_param(p, "html").map(|html| crate::clip_html::table_with_region(html, h, w)).unwrap_or_default();
     edit(s, |cx| {
         for (ri, row) in rows.iter().enumerate() {
             for (ci, v) in row.iter().enumerate() {
                 let Some(c) = at.offset(ri as i64, ci as i64) else { continue };
-                let mut cell = super::cell::input_to_cell_in(v, sheet, c, &mut cx.wb, locale.as_ref())
+                let html_cell = html.cells.get(ri).and_then(|r| r.get(ci));
+                let source_locale = html
+                    .locale
+                    .as_ref()
+                    .filter(|_| html_cell.is_some_and(|hc| crate::clip_html::normalized(&hc.text) == crate::clip_html::normalized(v)));
+                let mut cell = super::cell::input_to_cell_in(v, sheet, c, &mut cx.wb, source_locale.or(locale.as_ref()))
                     .unwrap_or_else(|_| Some(Cell::value(Value::text(v.as_str()))));
                 if let Some(cl) = cell.as_mut() {
-                    numeric_from_html(cl, v, html.get(ri).and_then(|r| r.get(ci)), &mut cx.wb);
+                    numeric_from_html(cl, v, html_cell, &mut cx.wb);
                 }
                 let sh = cx.sheet_mut(sheet)?;
                 match cell {
@@ -235,17 +241,34 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
     Ok(json!({"rows": h, "cols": w}))
 }
 
+/// Matching GridCraft metadata preserves exact numeric values, rebasing calendar dates only.
 /// A pasted cell that came out as text ("Rp10,000.00" isn't en-US input) becomes the number the
 /// source recorded for it in its HTML, with a format that shows the same text when one can be
 /// inferred and the cell has none. The HTML cell must show the same text as the tab-separated
 /// field, so HTML that belongs to another copy (or a table laid out differently) changes nothing.
 fn numeric_from_html(cell: &mut Cell, field: &str, html: Option<&crate::clip_html::HtmlCell>, wb: &mut gridcraft_model::Workbook) {
     let Some(hc) = html else { return };
-    let Some(n) = hc.num else { return };
-    if cell.formula.is_some() || !matches!(cell.value, Value::Text(_)) || wb.styles.get(cell.style).num_fmt.as_str() == "@" {
+    if cell.formula.is_some() || wb.styles.get(cell.style).num_fmt.as_str() == "@" {
         return;
     }
     if crate::clip_html::normalized(&hc.text) != crate::clip_html::normalized(field) {
+        return;
+    }
+    if let Some(copied) = &hc.copied_number
+        && matches!(cell.value, Value::Number(_) | Value::Text(_))
+    {
+        let n = match copied.calendar {
+            Some(source) if source != wb.date_system => {
+                let in_1900 = copied.value - gridcraft_core::date::serial_in_system(source, 0.0);
+                gridcraft_core::date::serial_in_system(wb.date_system, in_1900)
+            }
+            _ => copied.value,
+        };
+        cell.value = Value::number(n);
+        return;
+    }
+    let Some(n) = hc.num else { return };
+    if !matches!(cell.value, Value::Text(_)) {
         return;
     }
     cell.value = Value::number(n);
