@@ -4,8 +4,9 @@
 //! documented range raises an error instead of returning NaN. `CONVERT` follows the catalog and
 //! dax.guide, i.e. `CONVERT ( <Expression>, <DataType> )` with a bare type keyword.
 //!
-//! `RAND`/`RANDBETWEEN` use a local xorshift64* generator seeded from the clock and process id:
-//! the crate takes no dependencies and the catalog already flags both functions as volatile.
+//! `RAND`/`RANDBETWEEN` use a local xorshift64* generator seeded from the clock (`js_sys::Date` on
+//! wasm, where `SystemTime::now` traps) and a per-call salt; the catalog already flags both
+//! functions as volatile.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
@@ -249,9 +250,12 @@ fn clock_nanos() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|duration| duration.as_nanos() as u64).unwrap_or(0)
 }
 
+/// The browser's wall clock in nanoseconds. `SystemTime::now` traps on wasm, and a fixed seed
+/// would make every page load produce the same `RAND()` sequence, so the shared `js_sys::Date`
+/// clock that `support.rs` already uses seeds the generator instead.
 #[cfg(target_arch = "wasm32")]
 fn clock_nanos() -> u64 {
-    0
+    (js_sys::Date::now() * 1_000_000.0) as u64
 }
 
 fn next_random_u64() -> u64 {

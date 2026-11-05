@@ -780,7 +780,10 @@ fn nonblank(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, first: bo
     }
 
     for (key, value) in entries {
-        let previous = ctx.filters.filters.insert((table, column), BTreeSet::from([key]));
+        let previous = ctx.filters.filters.get(&(table, column)).cloned();
+        // `FilterContext::set` folds the key the same way the filter's `matches` does, so a
+        // mixed-case text candidate still selects its rows.
+        ctx.filters.set(table, column, [key]);
         // The row context is `VALUES(column)`, not one model row: a measure's context transition
         // must keep every row that shares the candidate value.
         ctx.rows.push(derived_row_frame(Some(table), vec![column_name.clone()], vec![value.clone()], vec![Some(column)]));
@@ -788,7 +791,7 @@ fn nonblank(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, first: bo
         ctx.rows.pop();
         match previous {
             Some(values) => {
-                ctx.filters.filters.insert((table, column), values);
+                ctx.filters.set(table, column, values);
             }
             None => {
                 ctx.filters.filters.remove(&(table, column));

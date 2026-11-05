@@ -529,3 +529,31 @@ fn single_date_functions_stay_inside_the_visible_cells() {
     assert_eq!(evaluate_in(&model, "LASTDATE('Log'[Stamp])", early_filters.clone()).expect("last date"), early);
     assert_eq!(evaluate_in(&model, "FIRSTDATE('Log'[Stamp])", early_filters).expect("first date"), early);
 }
+
+#[test]
+fn nonblank_candidates_match_mixed_case_text_rows() {
+    // The candidate filter is written through `FilterContext::set`, which folds text the same way
+    // the filter's own comparison does: a candidate `"A"` has to select the `"A"` and `"a"` rows.
+    let mut model = DataModel {
+        tables: vec![ModelTable {
+            name: "T".into(),
+            columns: vec![ModelColumn { name: "Text".into(), data_type: Some("String".into()) }],
+            rows: vec![vec![Scalar::String("A".into())], vec![Scalar::String("a".into())], vec![Scalar::String("B".into())]],
+        }],
+        relationships: Vec::new(),
+        measures: vec![gridcraft_dax::model::Measure {
+            name: "Rows".into(),
+            formula: "COUNTROWS('T')".into(),
+            table: Some("T".into()),
+            format: None,
+            expr: None,
+        }],
+    };
+    model.parse_formulas().expect("model formulas parse");
+    // Only the folded candidate filter leaves rows for the expression; an unfolded key would match
+    // nothing and make every candidate blank.
+    assert_eq!(
+        evaluate_in(&model, "FIRSTNONBLANK('T'[Text], IF([Rows] = 0, BLANK(), 1))", FilterContext::default()).expect("first non blank"),
+        Scalar::String("A".into())
+    );
+}
