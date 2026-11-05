@@ -147,22 +147,28 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
                 // Fresh measurements for this frame's row; `group` fills the vec in as it renders.
                 ui.ctx().data_mut(|d| d.insert_temp(group_measures_id(), Vec::<GroupMeasure>::new()));
-                // And this tab's collapse plan, where `group` can find it. While key tips are
-                // being typed — or any popup is open, so one a key tip just opened (or a combo
-                // menu inside a group) keeps its anchor — every group renders expanded, each
-                // control keeping its key tip badge and popup (the card scrolls when that row is
-                // too wide, as without the collapse engine); the plan returns when they close.
-                let navigating = app.keytips.prefix().is_some() || egui::Popup::is_any_open(ui.ctx());
-                // A key tip that will open a control's popup this frame (consumed by the control
-                // as the body renders below): the plan must not collapse that control's group
-                // out from under the popup that is about to open.
+                // And this tab's collapse plan, where `group` can find it. Three regimes:
+                // · Key tips being typed, or a key tip that will open a control's popup this
+                //   frame (consumed by the control as the body renders below): every group
+                //   renders expanded, so each control keeps its key tip badge and its popup
+                //   anchor — the card scrolls when that row is too wide, as without the collapse
+                //   engine.
+                // · Any popup open otherwise: the plan that was in use when it opened stays
+                //   frozen. A combo menu inside a group dropdown keeps that group collapsed (its
+                //   dropdown is an Area, not a popup), and a popup a key tip opened keeps the
+                //   expanded row it was anchored in.
+                // · Otherwise the tab's stored plan, freshly computed each frame below.
                 let invoking = app.ui.keytip_invoke.is_some();
-                let plan = if navigating || invoking {
+                let popup_open = egui::Popup::is_any_open(ui.ctx());
+                let plan = if app.keytips.prefix().is_some() || invoking {
                     Vec::new()
+                } else if popup_open {
+                    ui.ctx().data(|d| d.get_temp::<Vec<String>>(group_plan_frozen_id())).unwrap_or_default()
                 } else {
                     ui.ctx().data(|d| d.get_temp::<Vec<String>>(group_plan_id(&app.ui.ribbon_tab))).unwrap_or_default()
                 };
-                ui.ctx().data_mut(|d| d.insert_temp(group_plan_active_id(), plan));
+                ui.ctx().data_mut(|d| d.insert_temp(group_plan_active_id(), plan.clone()));
+                ui.ctx().data_mut(|d| d.insert_temp(group_plan_frozen_id(), plan));
                 ui.ctx().data_mut(|d| d.insert_temp(active_tab_id(), app.ui.ribbon_tab.clone()));
                 // One scroll state per tab: a tab opened after scrolling another starts at its
                 // left edge, and a tab keeps its own offset while others are used.
@@ -209,10 +215,10 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 // The collapse engine: with this frame's measurements, keep what fits expanded
                 // and collapse the rest rightmost-first; the next frame renders from the plan.
                 // Key-tip navigation renders everything expanded instead (above), so it never
-                // files a plan of its own; the last plan returns unchanged afterwards. Nor does
-                // a frame that ends with a popup open — one a key tip just opened keeps its
-                // anchor body rendered until it closes.
-                if !(app.keytips.prefix().is_some() || egui::Popup::is_any_open(ui.ctx()) || invoking) {
+                // files a plan of its own; nor does a frame that ends with a popup open or a
+                // key tip invoke pending — a popup must not have its anchor group collapsed (or
+                // re-expanded) out from under it while it is open.
+                if !(app.keytips.prefix().is_some() || popup_open || invoking) {
                     let measures = group_measures(ui.ctx());
                     let budget = RibbonOverflow::get(ui.ctx()).visible;
                     let current: Vec<String> = ui.ctx().data(|d| d.get_temp(group_plan_id(&app.ui.ribbon_tab))).unwrap_or_default();
@@ -393,6 +399,14 @@ pub fn collapsed_names(ctx: &egui::Context, tab: &str) -> Vec<String> {
 /// renders without knowing which tab it is on).
 fn group_plan_active_id() -> egui::Id {
     egui::Id::unique("ribbon_group_plan_active")
+}
+
+/// Where the plan in use when the currently open popup opened lives: while any popup is open
+/// the active plan is frozen to it, so a combo menu inside a group dropdown keeps that group
+/// collapsed (its dropdown is an `egui::Area`, not a popup, and would otherwise never re-render)
+/// and a popup opened from the expanded row keeps its anchor.
+fn group_plan_frozen_id() -> egui::Id {
+    egui::Id::unique("ribbon_group_plan_frozen")
 }
 
 /// Where [`show`] files the active tab's name for [`group`] to read, written next to
