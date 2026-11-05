@@ -65,6 +65,8 @@ fn binds_qualified_columns_tables_and_measures() {
     }
     assert!(matches!(bind(&model, "Sales"), BoundExpr::Table(0)));
     assert!(matches!(bind(&model, "[Total Sales]"), BoundExpr::Measure(0)));
+    // A measure reference may carry its home table as a qualifier.
+    assert!(matches!(bind(&model, "Sales[Total Sales]"), BoundExpr::Measure(0)));
     assert!(matches!(bind(&model, "[Amount]"), BoundExpr::UnqualifiedColumn { .. }));
 }
 
@@ -77,6 +79,8 @@ fn reports_unknown_names_and_bad_arities() {
     };
     assert!(error("Missing[Amount]").message.contains("unknown table"));
     assert!(error("Sales[Missing]").message.contains("unknown column"));
+    // A measure qualifier has to name the measure's home table.
+    assert!(error("Date[Total Sales]").message.contains("unknown column or measure"));
     assert!(error("SUM ( )").message.contains("expects 1"));
     assert!(error("NOPE ( 1 )").message.contains("unknown DAX function"));
 }

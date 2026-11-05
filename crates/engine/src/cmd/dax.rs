@@ -51,6 +51,7 @@ pub fn specs() -> Vec<CommandSpec> {
             pivot_cmd
         ),
         cmd!(
+            noundo
             "dataModel.addMeasure",
             "Add Measure",
             ["Data", "Data Model"],
@@ -60,6 +61,7 @@ pub fn specs() -> Vec<CommandSpec> {
             add_measure
         ),
         cmd!(
+            noundo
             "dataModel.updateMeasure",
             "Update Measure",
             ["Data", "Data Model"],
@@ -68,8 +70,9 @@ pub fn specs() -> Vec<CommandSpec> {
             has_model,
             update_measure
         ),
-        cmd!("dataModel.deleteMeasure", "Delete Measure", ["Data", "Data Model"], None, "{name} → status", has_model, delete_measure),
+        cmd!(noundo "dataModel.deleteMeasure", "Delete Measure", ["Data", "Data Model"], None, "{name} → status", has_model, delete_measure),
         cmd!(
+            noundo
             "dataModel.addRelationship",
             "Create Relationship",
             ["Data", "Data Model"],
@@ -79,6 +82,7 @@ pub fn specs() -> Vec<CommandSpec> {
             add_relationship
         ),
         cmd!(
+            noundo
             "dataModel.deleteRelationship",
             "Delete Relationship",
             ["Data", "Data Model"],
@@ -1660,6 +1664,40 @@ mod tests {
         s.execute("dataModel.load", json!({"path": path.to_string_lossy()})).expect("load");
         assert!(s.execute("dataModel.evaluate", json!({"formula": "SUM(Missing[Amount])"})).is_err());
         assert!(s.execute("dataModel.pivot", json!({"measure": "Missing", "rows": ["Sales[Region]"]})).is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn model_edits_add_no_workbook_undo_steps() {
+        // The model lives on the session, not in the workbook, so an edit cannot be an undo step:
+        // undoing a later workbook edit must not silently discard a measure or a relationship.
+        let (path, dir) = write_model(
+            "model-edits-undo",
+            r#"{
+                "tables": [
+                    {"name":"Sales","columns":[{"name":"Region"},{"name":"Amount"},{"name":"DateKey"}],
+                     "rows":[["East",10,1],["West",20,2]]},
+                    {"name":"Date","columns":[{"name":"DateKey"}],"rows":[[1],[2]]}
+                ],
+                "relationships": [],
+                "measures": [{"name":"Total Sales","formula":"SUM(Sales[Amount])","table":"Sales"}]
+            }"#,
+        );
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("dataModel.load", json!({"path": path.to_string_lossy()})).expect("load");
+        let undo = s.doc().expect("doc").undo.len();
+        s.execute("dataModel.addMeasure", json!({"name": "Double Sales", "formula": "1", "table": "Sales"})).expect("add measure");
+        s.execute("dataModel.updateMeasure", json!({"name": "Double Sales", "formula": "2"})).expect("update measure");
+        s.execute("dataModel.deleteMeasure", json!({"name": "Double Sales"})).expect("delete measure");
+        s.execute("dataModel.addRelationship", json!({"from_table": "Sales", "from_column": "DateKey", "to_table": "Date", "to_column": "DateKey"}))
+            .expect("add relationship");
+        s.execute(
+            "dataModel.deleteRelationship",
+            json!({"from_table": "Sales", "from_column": "DateKey", "to_table": "Date", "to_column": "DateKey"}),
+        )
+        .expect("delete relationship");
+        assert_eq!(s.doc().expect("doc").undo.len(), undo, "model edits are not workbook undo steps");
         let _ = std::fs::remove_dir_all(dir);
     }
 

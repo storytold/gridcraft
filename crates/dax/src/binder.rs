@@ -209,11 +209,17 @@ impl<'a> Binder<'a> {
     fn bind_name(&self, name: &NameRef, span: crate::Span, vars: &[String]) -> Result<BoundExpr, BindError> {
         if let Some(table) = &name.table {
             let table_index = self.model.table_index(&table.text).ok_or_else(|| BindError::new(format!("unknown table `{}`", table.text), span))?;
-            let column_index = self
-                .model
-                .column_index(table_index, &name.name.text)
-                .ok_or_else(|| BindError::new(format!("unknown column `{}` in table `{}`", name.name.text, table.text), span))?;
-            return Ok(BoundExpr::Column { table: table_index, column: column_index });
+            if let Some(column_index) = self.model.column_index(table_index, &name.name.text) {
+                return Ok(BoundExpr::Column { table: table_index, column: column_index });
+            }
+            // `Sales[Total Sales]` names a measure homed on the qualifying table; DAX allows the
+            // table qualifier on a measure reference and only rejects it for another table.
+            if let Some(index) = self.model.measure_index(&name.name.text)
+                && self.model.measures[index].table.as_deref().is_some_and(|home| self.model.table_index(home) == Some(table_index))
+            {
+                return Ok(BoundExpr::Measure(index));
+            }
+            return Err(BindError::new(format!("unknown column or measure `{}` in table `{}`", name.name.text, table.text), span));
         }
 
         // A bracketed name is always a model object reference (`[Measure]`, `[Column]`), never a
