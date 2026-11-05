@@ -267,6 +267,10 @@ impl XmlNode {
         self.children.iter().find(|child| child.local_name() == name)
     }
 
+    fn child_mut(&mut self, name: &str) -> Option<&mut XmlNode> {
+        self.children.iter_mut().find(|child| child.local_name() == name)
+    }
+
     fn find_descendant(&self, name: &str) -> Option<&XmlNode> {
         if self.local_name() == name {
             return Some(self);
@@ -877,6 +881,29 @@ fn find_statement_end(bytes: &[u8], start: usize) -> usize {
     index
 }
 
+/// Returns a command's text without its `CREATE MEASURE` statements, other bytes kept verbatim.
+///
+/// One `<Command><Text>` may hold several statements; only the measure ones are rewritten, so
+/// dropping the whole command would silently discard `CALCULATE;` and its neighbours.
+fn non_measure_statements(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut output = String::new();
+    let mut cursor = 0usize;
+    while cursor < bytes.len() {
+        let end = find_statement_end(bytes, cursor);
+        let stop = if end < bytes.len() { end + 1 } else { bytes.len() };
+        let Some(statement) = text.get(cursor..stop) else { break };
+        if !statement.to_ascii_lowercase().contains("create measure") {
+            output.push_str(statement);
+        }
+        cursor = stop;
+        if end >= bytes.len() {
+            break;
+        }
+    }
+    output.trim().to_string()
+}
+
 fn format_from_property(node: &XmlNode) -> String {
     let raw = node.child("FormatString").map(|child| child.text.trim()).unwrap_or("");
     if raw.is_empty() {
@@ -1087,10 +1114,21 @@ fn apply_script_edits(root: &mut XmlNode, old_names: &[String], measures: &[Mode
         let commands = ensure_child(&mut *script, "Commands");
         let mut kept = Vec::new();
         for child in commands.children.drain(..) {
-            if child.local_name() == "Command" && is_measure_command(&child) {
+            if child.local_name() != "Command" || !is_measure_command(&child) {
+                kept.push(child);
                 continue;
             }
-            kept.push(child);
+            // A command may also hold statements this rewrite knows nothing about (`CALCULATE;`
+            // shares the Power Pivot command). Keep them and drop only the measure statements.
+            let remaining = non_measure_statements(command_text(&child));
+            if remaining.is_empty() {
+                continue;
+            }
+            let mut command = child;
+            if let Some(text) = command.child_mut("Text") {
+                text.text = remaining;
+            }
+            kept.push(command);
         }
         commands.children = kept;
         for measure in measures {
@@ -1439,6 +1477,26 @@ mod tests {
         // A second cycle must be a no-op, not another appended terminator.
         let twice = write_measures(&updated, std::slice::from_ref(&measure))?;
         assert_eq!(read_measures(&twice)?, vec![measure]);
+        Ok(())
+    }
+
+    #[test]
+    fn mixed_commands_keep_their_non_measure_statements() -> Result<()> {
+        // `CALCULATE;` shares the Power Pivot command with the measures; rewriting must not drop
+        // it along with the measure statements it replaces.
+        let script = "<Load xmlns=\"http://schemas.microsoft.com/analysisservices/2003/engine\"><ObjectDefinition><MdxScript><Name>MdxScript</Name><Commands><Command><Text>CALCULATE;\nCREATE MEASURE 'Sales'[Old]=1;\n</Text></Command></Commands><CalculationProperties/></MdxScript></ObjectDefinition></Load>";
+        let container = synthetic_container(script)?;
+        let measure =
+            ModelMeasure { table: "Sales".to_string(), name: "Net".to_string(), formula: "SUM(Sales[Amount])".to_string(), format: String::new() };
+        let updated = write_measures(&container, std::slice::from_ref(&measure))?;
+        let reread = Container::parse(&updated)?;
+        let index = reread.measure_script_index()?.ok_or_else(|| ModelFileError::Corrupt("script".into()))?;
+        let entry = reread.entries.get(index).ok_or_else(|| ModelFileError::Corrupt("script".into()))?;
+        let content = reread.decode_entry(entry)?;
+        let text = content_text(&content);
+        assert!(text.contains("CALCULATE;"), "{text}");
+        assert!(!text.contains("[Old]"), "the replaced measure must be gone: {text}");
+        assert_eq!(read_measures(&updated)?, vec![measure]);
         Ok(())
     }
 

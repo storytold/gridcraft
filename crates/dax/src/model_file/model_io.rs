@@ -1343,7 +1343,15 @@ fn numeric_raw(value: &Scalar, real: bool) -> Result<i64> {
         }
         // The reader turns a real Currency dictionary value back into scaled units with
         // `raw / 100.0` then `* 10_000.0`, the same scale a long dictionary uses in cents.
-        (Scalar::Currency(scaled), true) => Ok((*scaled as f64 / 100.0).to_bits() as i64),
+        (Scalar::Currency(scaled), true) => {
+            let raw = *scaled as f64 / 100.0;
+            // Only 53 bits of the value survive in the eight-byte slot; a value the reader cannot
+            // recover exactly is rejected instead of being stored lossily.
+            if round_currency(raw / 100.0) != *scaled {
+                return Err(ModelFileError::InvalidModel(format!("currency value {scaled} does not survive a real dictionary round trip")));
+            }
+            Ok(raw.to_bits() as i64)
+        }
         (Scalar::DateTime(serial), true) => Ok(serial.to_bits() as i64),
         (Scalar::DateTime(serial), false) => Ok(serial.round() as i64),
         (Scalar::Boolean(flag), true) => Ok((if *flag { 1.0f64 } else { 0.0 }).to_bits() as i64),
@@ -1968,6 +1976,12 @@ mod tests {
                 assert_eq!(numeric_raw(&Scalar::Currency(scaled), false)?, scaled / 100, "{scaled}");
             }
         }
+        // Adjacent values above 2^53 share one `f64`: the second is refused instead of being
+        // written back as its neighbour.
+        let boundary = 9_007_199_254_740_992i64;
+        let lossy = numeric_raw(&Scalar::Currency(boundary), true)?;
+        assert_eq!(f64::from_bits(lossy as u64), boundary as f64 / 100.0);
+        assert!(numeric_raw(&Scalar::Currency(boundary + 1), true).is_err());
         Ok(())
     }
 
