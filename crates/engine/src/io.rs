@@ -814,13 +814,13 @@ fn create_save_temp(path: &std::path::Path, prior: Option<&std::fs::Permissions>
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
     let mut builder = tempfile::Builder::new();
     builder.prefix(".gridcraft-save-").suffix(".sctmp");
-    #[cfg(unix)]
-    if let Some(p) = prior {
-        builder.permissions(p.clone());
-    }
     let temp = builder.tempfile_in(parent)?;
-    #[cfg(not(unix))]
+    // Apply existing permissions after creation: Builder::permissions applies the
+    // process umask, which can silently remove bits from the destination mode.
     if let Some(p) = prior {
+        #[cfg(unix)]
+        temp.as_file().set_permissions(p.clone())?;
+        #[cfg(not(unix))]
         let _ = temp.as_file().set_permissions(p.clone());
     }
     Ok(temp)

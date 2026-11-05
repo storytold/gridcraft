@@ -84,6 +84,15 @@ fn save_keeps_the_destination_access_restrictions() {
     write_file(dest.to_str().unwrap(), b"v2").unwrap();
     let mode = std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
+
+    // A common 022 umask would strip group-write if applied while creating the temp file.
+    let shared = dir.path().join("shared.xlsx");
+    std::fs::write(&shared, b"v1").unwrap();
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o664)).unwrap();
+    write_file(shared.to_str().unwrap(), b"v2").unwrap();
+    let mode = std::fs::metadata(&shared).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o664);
+
     // And a brand-new file is created with the restrictive, not permissive, default.
     let fresh = dir.path().join("new.xlsx");
     write_file(fresh.to_str().unwrap(), b"v").unwrap();
