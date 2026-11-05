@@ -19,6 +19,14 @@ use super::{Args, USAGE};
 /// zip bomb would otherwise allocate without limit first.
 const MAX_ENTRY_BYTES: usize = gridcraft_dax::model_file::MAX_CONTAINER_BYTES;
 
+/// Total decompressed bytes a rewritten package may hold.
+///
+/// The replacement package is built in memory, so per-entry limits alone are not enough: deflate
+/// reaches roughly 1000:1, and many individually-legal entries could still allocate tens of
+/// gigabytes. Two entries at the per-entry limit is the most any single workbook is expected to
+/// need.
+const MAX_PACKAGE_BYTES: usize = 2 * MAX_ENTRY_BYTES;
+
 pub fn main(args: &[String]) -> Result<(), String> {
     let action = args.first().map(String::as_str).ok_or_else(|| format!("missing dax action\n{USAGE}"))?;
     let rest = args.get(1..).unwrap_or_default();
@@ -264,10 +272,13 @@ fn replace_zip_entry(bytes: &[u8], name: &str, content: &[u8]) -> Result<Vec<u8>
     let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
     let mut replaced = false;
+    // Decompressed bytes written so far; the whole rewritten package is held in memory.
+    let mut total = 0u64;
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(|e| format!("can't read zip entry: {e}"))?;
         let entry_name = entry.name().to_string();
         if entry_name == name {
+            charge_package(&mut total, content.len() as u64, name)?;
             writer.start_file(name, options).map_err(|e| format!("can't write {name}: {e}"))?;
             writer.write_all(content).map_err(|e| format!("can't write {name}: {e}"))?;
             replaced = true;
@@ -277,8 +288,10 @@ fn replace_zip_entry(bytes: &[u8], name: &str, content: &[u8]) -> Result<Vec<u8>
             if entry.size() > MAX_ENTRY_BYTES as u64 {
                 return Err(format!("can't copy {entry_name}: exceeds the supported size limit"));
             }
+            let remaining = (MAX_PACKAGE_BYTES as u64).saturating_sub(total);
             writer.start_file(&entry_name, options).map_err(|e| format!("can't copy {entry_name}: {e}"))?;
-            copy_entry(&mut entry, &mut writer, &entry_name)?;
+            let copied = copy_entry(&mut entry, &mut writer, &entry_name, remaining)?;
+            charge_package(&mut total, copied, &entry_name)?;
         }
     }
     if !replaced {
@@ -288,17 +301,38 @@ fn replace_zip_entry(bytes: &[u8], name: &str, content: &[u8]) -> Result<Vec<u8>
     Ok(cursor.into_inner())
 }
 
-/// Copies one archive entry into `writer`, refusing to decompress past [`MAX_ENTRY_BYTES`].
-///
-/// A zip bomb declares a small compressed entry that expands without bound; the declared size is
-/// checked by the caller, and this bounds the actual bytes once a lying header slips through.
-fn copy_entry(entry: &mut impl Read, writer: &mut impl Write, name: &str) -> Result<(), String> {
-    let mut bounded = entry.take(MAX_ENTRY_BYTES as u64 + 1);
-    let copied = std::io::copy(&mut bounded, writer).map_err(|e| format!("can't copy {name}: {e}"))?;
-    if copied > MAX_ENTRY_BYTES as u64 {
-        return Err(format!("can't copy {name}: exceeds the supported size limit"));
+/// Charges `bytes` against the running decompressed total of the rewritten package.
+fn charge_package(total: &mut u64, bytes: u64, name: &str) -> Result<(), String> {
+    *total = total.saturating_add(bytes);
+    if *total > MAX_PACKAGE_BYTES as u64 {
+        return Err(format!("can't copy {name}: package exceeds the supported size limit of {MAX_PACKAGE_BYTES} bytes"));
     }
     Ok(())
+}
+
+/// Copies one archive entry into `writer` and returns the actual bytes copied.
+///
+/// `remaining` is the decompressed budget left for the whole package. Copying stops at the smaller
+/// of [`MAX_ENTRY_BYTES`] and `remaining` so it cannot write past either bound: a zip bomb declares
+/// a small compressed entry that expands without bound, and the declared size checked by the caller
+/// can lie. Both limits are verified against the bytes actually copied, not the declared size.
+fn copy_entry(entry: &mut impl Read, writer: &mut impl Write, name: &str, remaining: u64) -> Result<u64, String> {
+    let per_entry = MAX_ENTRY_BYTES as u64;
+    let allowance = per_entry.min(remaining);
+    let copied = std::io::copy(&mut (&mut *entry).take(allowance), writer).map_err(|e| format!("can't copy {name}: {e}"))?;
+    if copied == allowance {
+        // Exactly at the bound: probe for one more byte without writing it, to tell "fits" from
+        // "lies about its size".
+        let mut probe = [0u8; 1];
+        let extra = entry.read(&mut probe).map_err(|e| format!("can't copy {name}: {e}"))?;
+        if extra > 0 {
+            if allowance == per_entry {
+                return Err(format!("can't copy {name}: exceeds the supported size limit"));
+            }
+            return Err(format!("can't copy {name}: package exceeds the supported size limit of {MAX_PACKAGE_BYTES} bytes"));
+        }
+    }
+    Ok(copied)
 }
 
 fn scalar_json(value: &gridcraft_dax::Scalar) -> serde_json::Value {
@@ -437,8 +471,41 @@ mod tests {
 
     #[test]
     fn a_stream_past_the_bound_is_rejected_rather_than_truncated() {
-        let error = copy_entry(&mut std::io::repeat(0), &mut std::io::sink(), "bomb").unwrap_err();
+        let error = copy_entry(&mut std::io::repeat(0), &mut std::io::sink(), "bomb", MAX_PACKAGE_BYTES as u64).unwrap_err();
         assert!(error.contains("exceeds the supported size limit"), "{error}");
+    }
+
+    #[test]
+    fn copy_entry_reports_the_bytes_it_copied() -> Result<(), Box<dyn std::error::Error>> {
+        let copy = |data: &[u8], remaining: u64| {
+            let mut source = Cursor::new(data.to_vec());
+            copy_entry(&mut source, &mut std::io::sink(), "entry", remaining)
+        };
+
+        assert_eq!(copy(b"hello", MAX_PACKAGE_BYTES as u64)?, 5);
+        // Exactly filling the remaining budget is allowed; the probe must not count as copied.
+        assert_eq!(copy(b"12345678", 8)?, 8);
+        assert_eq!(copy(b"", 0)?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn copying_past_the_remaining_package_budget_is_rejected() {
+        let error = copy_entry(&mut std::io::repeat(0), &mut std::io::sink(), "bomb", 16).unwrap_err();
+        assert!(error.contains("package exceeds the supported size limit"), "{error}");
+        assert!(error.contains(&MAX_PACKAGE_BYTES.to_string()), "{error}");
+    }
+
+    #[test]
+    fn the_package_budget_is_charged_across_entries() {
+        let mut total = 0u64;
+        assert_eq!(charge_package(&mut total, MAX_ENTRY_BYTES as u64, "a"), Ok(()));
+        assert_eq!(charge_package(&mut total, MAX_ENTRY_BYTES as u64, "b"), Ok(()));
+        assert_eq!(total, MAX_PACKAGE_BYTES as u64);
+
+        let error = charge_package(&mut total, 1, "c").unwrap_err();
+        assert!(error.contains("package exceeds the supported size limit"), "{error}");
+        assert!(error.contains(&MAX_PACKAGE_BYTES.to_string()), "{error}");
     }
 
     #[cfg(unix)]
