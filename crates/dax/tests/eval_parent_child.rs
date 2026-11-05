@@ -41,6 +41,44 @@ fn value(src: &str) -> Scalar {
 }
 
 #[test]
+fn path_reuses_its_parent_map_across_rows_and_hierarchies() {
+    // `ADDCOLUMNS` calls each expression once per row: the parent map is built once per
+    // (table, id, parent) triple for the evaluation, and a second hierarchy in the same row must
+    // not be served the first one's map.
+    let mut model = DataModel {
+        tables: vec![ModelTable {
+            name: "Node".into(),
+            columns: vec![
+                ModelColumn { name: "Id".into(), data_type: Some("Int64".into()) },
+                ModelColumn { name: "Parent".into(), data_type: Some("Int64".into()) },
+                ModelColumn { name: "GroupId".into(), data_type: Some("Int64".into()) },
+                ModelColumn { name: "GroupParent".into(), data_type: Some("Int64".into()) },
+            ],
+            rows: vec![
+                vec![Scalar::Integer(3), Scalar::Integer(2), Scalar::Integer(30), Scalar::Integer(20)],
+                vec![Scalar::Integer(2), Scalar::Integer(1), Scalar::Integer(20), Scalar::Integer(10)],
+                vec![Scalar::Integer(1), Scalar::Blank, Scalar::Integer(10), Scalar::Blank],
+            ],
+        }],
+        relationships: Vec::new(),
+        measures: Vec::new(),
+    };
+    model.parse_formulas().expect("model parses");
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let expr =
+        parse_expression("ADDCOLUMNS(Node, \"P\", PATH(Node[Id], Node[Parent]), \"G\", PATH(Node[GroupId], Node[GroupParent]))").expect("parse");
+    let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+    let table = evaluator.evaluate_table(&bound).expect("add columns");
+    let paths: Vec<(Scalar, Scalar)> = table.rows.iter().map(|row| (row[4].clone(), row[5].clone())).collect();
+    let expected: Vec<(Scalar, Scalar)> = vec![
+        (Scalar::String("1|2|3".into()), Scalar::String("10|20|30".into())),
+        (Scalar::String("1|2".into()), Scalar::String("10|20".into())),
+        (Scalar::String("1".into()), Scalar::String("10".into())),
+    ];
+    assert_eq!(paths, expected, "both hierarchies resolve through the same evaluation");
+}
+
+#[test]
 fn counts_backwards_from_the_last_item() {
     assert_eq!(value("PATHITEMREVERSE(\"123|456|789|764\", 1)"), Scalar::String("764".into()));
     assert_eq!(value("PATHITEMREVERSE(\"123|456|789|764\", 2)"), Scalar::String("789".into()));

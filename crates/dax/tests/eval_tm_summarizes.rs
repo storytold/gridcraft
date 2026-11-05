@@ -497,6 +497,13 @@ fn topnskip_skips_then_takes_ordered_rows() {
 
     let ascending = eval_table("TOPNSKIP(2, 1, Sales, Sales[Amount], 1)").expect("ascending");
     assert_eq!(ascending.rows.iter().map(|row| row[2].clone()).collect::<Vec<_>>(), vec![money(7.0), money(10.0)]);
+
+    // A bare `ASC`/`DESC` binds as a keyword; it is an order argument, not a sort key, so the
+    // selection is the same as with the numeric spelling.
+    let keyword_ascending = eval_table("TOPNSKIP(2, 1, Sales, Sales[Amount], ASC)").expect("keyword ascending");
+    assert_eq!(keyword_ascending.rows, ascending.rows);
+    let keyword_descending = eval_table("TOPNSKIP(2, 1, Sales, Sales[Amount], DESC)").expect("keyword descending");
+    assert_eq!(keyword_descending.rows, table.rows);
 }
 
 #[test]

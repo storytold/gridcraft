@@ -1327,6 +1327,14 @@ fn top_n_skip(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Resu
                     last.1 = order_is_ascending(&args[index]);
                 }
             }
+            // The binder turns a bare `ASC`/`DESC` into a keyword. Only an order slot takes one:
+            // a string in an order-by position stays a sort key, which is why this matches
+            // `Keyword` and not `Literal::String`.
+            BoundExpr::Keyword(word) if keys.last().is_some() && (word.eq_ignore_ascii_case("ASC") || word.eq_ignore_ascii_case("DESC")) => {
+                if let Some(last) = keys.last_mut() {
+                    last.1 = word.eq_ignore_ascii_case("ASC");
+                }
+            }
             other => keys.push((other, false)),
         }
         index += 1;

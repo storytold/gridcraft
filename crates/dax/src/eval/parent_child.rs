@@ -8,6 +8,8 @@
 //! below 1 or past the end of the path is BLANK, exactly like an out-of-range `PATHITEM`.
 #![allow(unused_imports)]
 
+use std::sync::{Arc, Mutex};
+
 use super::*;
 
 pub(crate) fn call(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Option<Result<Scalar, EvalError>> {
@@ -47,6 +49,58 @@ fn path(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -
     }
     let table = ev.model().tables.get(id_table).ok_or_else(|| EvalError::new(format!("{name} table is out of range")))?;
 
+    // The parent map and its validation depend only on the hierarchy columns, so one evaluation
+    // builds them once: `ADDCOLUMNS(Sales, "Path", PATH(...))` would otherwise rescan the whole
+    // hierarchy for every row. The cache sits in the evaluator's memo slot for this evaluation
+    // and hands out `Arc` copies, so a lookup never clones the map itself.
+    let cache: ParentCache =
+        ev.memoized("parent_child_path", || Arc::new(Mutex::new(BTreeMap::new())), |cache| Ok::<ParentCache, EvalError>(Arc::clone(cache)))?;
+    let columns = (id_table, id_column, parent_column);
+    // The lookup guard is released before the miss path takes the lock again: a temporary in the
+    // match scrutinee would stay alive for the whole block and deadlock on the second lock.
+    let existing = {
+        let guard = cache.lock().unwrap_or_else(|poison| poison.into_inner());
+        guard.get(&columns).cloned()
+    };
+    let parents: Arc<BTreeMap<ScalarKey, ScalarKey>> = match existing {
+        Some(map) => map,
+        None => {
+            let built = Arc::new(build_parent_map(name, table, id_column, parent_column)?);
+            cache.lock().unwrap_or_else(|poison| poison.into_inner()).insert(columns, Arc::clone(&built));
+            built
+        }
+    };
+
+    let mut chain = vec![ScalarKey::from(&id)];
+    let mut seen: BTreeSet<ScalarKey> = chain.iter().cloned().collect();
+    let mut current = ScalarKey::from(&id);
+    loop {
+        let Some(parent) = parents.get(&current).cloned() else {
+            return Err(EvalError::new(format!("{name} ID `{}` is not part of the hierarchy", current.to_scalar().to_text())));
+        };
+        if matches!(parent, ScalarKey::Blank) {
+            break;
+        }
+        if !seen.insert(parent.clone()) {
+            return Err(EvalError::new(format!("{name} hierarchy has a cycle at `{}`", parent.to_scalar().to_text())));
+        }
+        chain.push(parent.clone());
+        current = parent;
+    }
+    chain.reverse();
+    Ok(Scalar::String(chain.iter().map(|key| key.to_scalar().to_dax_text()).collect::<Vec<_>>().join(&SEPARATOR.to_string())))
+}
+
+/// The parent map of one hierarchy, validated once per evaluation: one parent per ID, no ID with
+/// two different parents, and every parent itself an ID of the hierarchy.
+type ParentCache = Arc<Mutex<BTreeMap<(usize, usize, usize), Arc<BTreeMap<ScalarKey, ScalarKey>>>>>;
+
+fn build_parent_map(
+    name: &str,
+    table: &crate::model::ModelTable,
+    id_column: usize,
+    parent_column: usize,
+) -> Result<BTreeMap<ScalarKey, ScalarKey>, EvalError> {
     // One parent per ID. The same ID with the same parent twice is Excel's common-parent case; a
     // second, different parent makes the hierarchy ambiguous.
     let mut parents: BTreeMap<ScalarKey, ScalarKey> = BTreeMap::new();
@@ -75,25 +129,7 @@ fn path(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -
             return Err(EvalError::new(format!("{name} parent `{}` is not an ID of the hierarchy", parent.to_scalar().to_text())));
         }
     }
-
-    let mut chain = vec![ScalarKey::from(&id)];
-    let mut seen: BTreeSet<ScalarKey> = chain.iter().cloned().collect();
-    let mut current = ScalarKey::from(&id);
-    loop {
-        let Some(parent) = parents.get(&current).cloned() else {
-            return Err(EvalError::new(format!("{name} ID `{}` is not part of the hierarchy", current.to_scalar().to_text())));
-        };
-        if matches!(parent, ScalarKey::Blank) {
-            break;
-        }
-        if !seen.insert(parent.clone()) {
-            return Err(EvalError::new(format!("{name} hierarchy has a cycle at `{}`", parent.to_scalar().to_text())));
-        }
-        chain.push(parent.clone());
-        current = parent;
-    }
-    chain.reverse();
-    Ok(Scalar::String(chain.iter().map(|key| key.to_scalar().to_dax_text()).collect::<Vec<_>>().join(&SEPARATOR.to_string())))
+    Ok(parents)
 }
 
 /// The table and column a `PATH` argument names; anything else is an error, as the catalog says.
