@@ -1855,10 +1855,6 @@ fn analysis_toolpak_value_params_reject_multi_cell_references() {
     }
 }
 
-/// A formula reading one further down (or on a later sheet) is calculated on demand, inside the
-/// formula that reads it. Chains of thousands of such formulas, common in financial models, used
-/// to overflow the stack (or give `#CIRC!` past 2,000 levels); they now calculate in full.
-
 /// Fills a sheet, calculates everything, and gives A1's value and whether a circular reference
 /// was found.
 fn calc_cells(cells: &[(&str, &str)]) -> (Value, bool) {
