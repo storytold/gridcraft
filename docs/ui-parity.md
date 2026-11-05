@@ -243,11 +243,8 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
-<<<<<<< HEAD
 | 2026-10-13 | minor | The Home ▸ Font group works on a character selection while editing, in the in-cell editor and in the formula bar; runs are stored on the cell (#776) |
-=======
 | 2026-11-02 | minor | Form controls: buttons, sliders (scroll bars) and spin buttons placed, worked, selected and edited on the sheet (Insert › Controls, Assign Action, Format Control); catalog 281 / 296 |
->>>>>>> origin/main
 | 2026-11-03 | minor | Highlight the active cell's row: a global preference that tints the whole row, off by default |
 | 2026-11-03 | minor | The formula bar's bottom edge is a resize handle: dragging it sets the bar's height in whole lines, up to half the window, and dragging it to one line collapses it; expanding (the chevron, Ctrl+Shift+U) returns to the dragged height, which is kept with the UI preferences. `view.expandFormulaBar {lines}` sets it (#1246) |
 | 2026-11-03 | minor | Cell context menu on a cell with a link: Edit Hyperlink… (the link dialog, titled Edit Hyperlink and filled with the link), Open Hyperlink and Remove Hyperlink, as in Excel, instead of Link… (#2120) |
