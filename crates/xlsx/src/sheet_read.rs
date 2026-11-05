@@ -7,17 +7,25 @@ use gridcraft_core::date::{serial_from_ymd, time_fraction};
 use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_formula::Expr;
 use gridcraft_model::{
-    AutoFilter, Cell, CfOperator, CfRule, CfValueKind, Comment, CondFormat, EditRange, ErrorStyle, FilterCriterion, Formula, Hyperlink, IconChoice,
-    LineInfo, Orientation, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn, Validation, ValidationKind,
+    AutoFilter, Cell, CfOperator, CfRule, CfValueKind, Comment, CondFormat, EditRange, ErrorStyle, FilterCriterion, Formula, Hyperlink, LineInfo,
+    NoteBox, NoteCorner, Orientation, PageOrder, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn,
+    Validation, ValidationKind, XmlColumnPr,
 };
 
 use crate::IoError;
-use crate::fmla::from_file;
+use crate::fmla::{from_file, unwrap_google_sheets};
 use crate::package::Rel;
 use crate::read::Ctx;
-use crate::styles::{read_color, read_dxf};
+use crate::styles::read_color;
 use crate::tables::{col_width_to_px, paper_name, pt_to_px};
 use crate::xml::{self, El};
+
+mod parts;
+mod rules;
+
+pub use parts::{read_autofilter, read_table};
+use parts::{read_comments, read_hyperlinks, read_note_shapes, read_threaded};
+use rules::{read_cf, read_validation};
 
 struct Shared {
     anchor: CellRef,
@@ -32,11 +40,122 @@ struct RowState {
     /// Dynamic-array spill ranges and legacy array ranges: cached values inside them (other than
     /// the anchor) are not stored, so the formula can fill them again.
     dynamic: Vec<RangeRef>,
+    /// Cells inside the ranges above, for a cap before a pathological sheet proves it itself.
+    dynamic_cells: u64,
+    /// Row-membership checks served so far, for the work cap above.
+    dynamic_checks: u64,
     dropped: u64,
     rows: u64,
 }
 
+/// The known dynamic range `pos` lies in, when it isn't the range's anchor: the cell's cached
+/// value gives way to the formula that will fill it (or, for a Python cell, becomes its
+/// result). Charges every scanned range against one work budget, then gives up consulting the
+/// ranges at all: the worst kind of file may then import a few cached spill values, but it
+/// never stalls the whole import.
+fn dynamic_range(st: &mut RowState, pos: CellRef) -> Option<RangeRef> {
+    if st.dynamic_checks > MAX_DYNAMIC_CHECKS || st.dynamic.is_empty() {
+        return None;
+    }
+    let ranges = st.dynamic.len();
+    let hit = st.dynamic.iter().find(|r| r.contains(pos) && r.start != pos).copied();
+    st.dynamic_checks = st.dynamic_checks.saturating_add(ranges as u64);
+    hit
+}
+
+/// Records a dynamic-array range, so its cells outside the anchor import as empty and the
+/// formula fills them again. Repeated identical anchors (a damaged or hostile sheet may repeat
+/// the same record) are recorded once, and count and area are capped: every later cell inside
+/// known range territory pays a scan proportional to what is recorded here.
+fn push_dynamic(st: &mut RowState, range: RangeRef) {
+    if st.dynamic.contains(&range) {
+        return;
+    }
+    let cells = range.count();
+    if st.dynamic.len() >= MAX_DYNAMIC_RANGES || st.dynamic_cells.saturating_add(cells) > MAX_DYNAMIC_CELLS {
+        return;
+    }
+    st.dynamic_cells = st.dynamic_cells.saturating_add(cells);
+    st.dynamic.push(range);
+}
+
+/// Forgets the range anchored at `pos` (a Python cell whose code the file doesn't hold, which
+/// keeps only its cached value): the cached values over the rest of its spill are kept as plain
+/// values too, as the file shows them, rather than left for a result that won't come. Charged
+/// like [`dynamic_range`]'s scans.
+fn forget_dynamic(st: &mut RowState, pos: CellRef) {
+    if st.dynamic_checks > MAX_DYNAMIC_CHECKS {
+        return;
+    }
+    st.dynamic_checks = st.dynamic_checks.saturating_add(st.dynamic.len() as u64);
+    if let Some(i) = st.dynamic.iter().rposition(|r| r.start == pos) {
+        st.dynamic.remove(i);
+    }
+}
+
+/// Records the spill range of the Python cell read at `pos`, its anchor, when the file declares
+/// one that a result can fill: the spill then exists even when the file holds no records for its
+/// blank cells. Charged like [`dynamic_range`]'s scans.
+fn record_python_spill(st: &mut RowState, sheet: &mut Sheet, pos: CellRef) {
+    if st.dynamic_checks > MAX_DYNAMIC_CHECKS {
+        return;
+    }
+    st.dynamic_checks = st.dynamic_checks.saturating_add(st.dynamic.len() as u64);
+    let Some(r) = st.dynamic.iter().rev().find(|r| r.start == pos).copied() else { return };
+    if r.count() > 1 && r.count() <= gridcraft_model::python::MAX_RESULT_CELLS as u64 {
+        sheet.spill_ranges.insert(pos, r);
+    }
+}
+
+/// Past the scan budget, the cells of a Python spill read afterwards were kept as plain cells, not
+/// as its spilled values, and a result rebuilt over them would block itself. Every Python spill of
+/// such a sheet keeps its values as plain values instead, with no live spill.
+fn settle_python_spills_past_budget(st: &RowState, sheet: &mut Sheet) {
+    if st.dynamic_checks <= MAX_DYNAMIC_CHECKS {
+        return;
+    }
+    let anchors: Vec<CellRef> = sheet.spill_ranges.keys().copied().filter(|a| sheet.cells.get(*a).is_some_and(|c| c.py.is_some())).collect();
+    for anchor in anchors {
+        sheet.settle_spill(anchor);
+    }
+}
+
 const MAX_HYPERLINK_CELLS: u64 = 10_000;
+/// Target and tooltip bytes kept for hyperlinks of one sheet, over all cells: the same URL is
+/// copied for every cell of its range, so length × cells must stay bounded whatever the file.
+const MAX_HYPERLINK_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_COLUMN_ASSIGNMENTS: u64 = 1_000_000;
+/// Most dynamic-array and legacy-array ranges of one sheet.
+const MAX_DYNAMIC_RANGES: usize = 65_536;
+/// Worst-case cells inside the dynamic ranges the sheet declares. Beyond it further ranges are
+/// dropped: they would cost their storage in every membership lookup that follows.
+const MAX_DYNAMIC_CELLS: u64 = 16_000_000;
+/// Most row-membership checks the sheet's ranges may serve. Beyond it the remaining cells are
+/// imported with their cached values instead of being blanked for a spill that may still come,
+/// so adversarial range counts can't make each cell scan a long list (a real workbook has a
+/// handful of ranges).
+const MAX_DYNAMIC_CHECKS: u64 = 16_000_000;
+/// Most conditional-format range cells one sheet keeps, over all rules of an element: every
+/// rule copies its element's whole range list, so rules × ranges must stay bounded.
+const MAX_COND_CELLS: u64 = 4_000_000;
+
+fn read_sheet_format(e: &El, sheet: &mut Sheet) {
+    if let Some(h) = e.attr_f64("defaultRowHeight") {
+        let px = pt_to_px(h);
+        if px > 0.0 {
+            sheet.default_row_height = px;
+        }
+    }
+    if let Some(w) = e.attr_f64("defaultColWidth") {
+        let px = col_width_to_px(w);
+        if px > 0.0 {
+            sheet.default_col_width = px;
+        }
+    } else if let Some(b) = e.attr_f64("baseColWidth") {
+        let px = ((b.clamp(0.0, 255.0) * 7.0 + 5.0) / 8.0).ceil() * 8.0;
+        sheet.default_col_width = px as f32;
+    }
+}
 
 pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoError> {
     // The x14 ids recorded by read_cf index this sheet's cond_formats only.
@@ -59,36 +178,27 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     if st.dropped > 0 {
         cx.warn(format!("sheet \"{name}\": {} cells or rows outside the 1,048,576 × 16,384 grid were dropped", st.dropped));
     }
+    settle_python_spills_past_budget(&st, &mut sheet);
     drop(bytes);
 
     let mut fit_to_page = false;
+    let mut column_assignments_left = MAX_COLUMN_ASSIGNMENTS;
+    cx.cf_ext_ids.clear();
     for e in &root.children {
         match e.name.as_str() {
             "sheetPr" => {
                 if let Some(t) = e.child("tabColor") {
                     sheet.tab_color = Some(read_color(t, &cx.palette));
                 }
+                if let Some(o) = e.child("outlinePr") {
+                    sheet.summary_below = o.flag("summaryBelow", true);
+                    sheet.summary_right = o.flag("summaryRight", true);
+                }
                 fit_to_page = e.child("pageSetUpPr").is_some_and(|p| p.flag("fitToPage", false));
             }
             "sheetViews" => read_views(e, &mut sheet),
-            "sheetFormatPr" => {
-                if let Some(h) = e.attr_f64("defaultRowHeight") {
-                    let px = pt_to_px(h);
-                    if px > 0.0 {
-                        sheet.default_row_height = px;
-                    }
-                }
-                if let Some(w) = e.attr_f64("defaultColWidth") {
-                    let px = col_width_to_px(w);
-                    if px > 0.0 {
-                        sheet.default_col_width = px;
-                    }
-                } else if let Some(b) = e.attr_f64("baseColWidth") {
-                    let px = ((b.clamp(0.0, 255.0) * 7.0 + 5.0) / 8.0).ceil() * 8.0;
-                    sheet.default_col_width = px as f32;
-                }
-            }
-            "cols" => read_cols(cx, e, &mut sheet),
+            "sheetFormatPr" => read_sheet_format(e, &mut sheet),
+            "cols" => read_cols(cx, e, &mut sheet, &mut column_assignments_left)?,
             "mergeCells" => {
                 for m in e.kids("mergeCell") {
                     if let Some(r) = m.attr("ref").and_then(RangeRef::parse)
@@ -106,7 +216,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                     }
                 }
             }
-            "hyperlinks" => read_hyperlinks(e, &rels, &mut sheet),
+            "hyperlinks" => read_hyperlinks(cx, name, e, &rels, &mut sheet),
             "autoFilter" => sheet.autofilter = read_autofilter(cx, e),
             "printOptions" => {
                 sheet.print.gridlines = e.flag("gridLines", false);
@@ -126,6 +236,8 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                 if e.attr("orientation") == Some("landscape") {
                     sheet.print.orientation = Orientation::Landscape;
                 }
+                // `downThenOver` when absent (ECMA-376's default); an unknown value reads as that too.
+                sheet.print.page_order = e.attr("pageOrder").and_then(PageOrder::parse).unwrap_or_default();
                 if let Some(p) = e.attr_u32("paperSize").and_then(paper_name) {
                     sheet.print.paper = p.to_string();
                 }
@@ -210,12 +322,13 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
             read_threaded(cx, &x, &mut sheet);
         }
     }
-    // Which notes are displayed lives in the VML shapes (`<x:Visible/>`). Best effort: the VML is
-    // only read for that flag, so a part that doesn't parse is skipped without a warning.
+    // Which notes are displayed (`<x:Visible/>`) and where their boxes sit live in the VML shapes.
+    // Best effort: the VML is only read for those, so a part that doesn't parse is skipped without
+    // a warning.
     if !sheet.comments.is_empty() {
         for rel in rels.iter().filter(|r| r.kind == "vmlDrawing") {
             if let Ok(Some(x)) = cx.pkg.read_xml(&rel.target) {
-                read_note_visibility(&x, &mut sheet, 0);
+                read_note_shapes(&x, &mut sheet, 0);
             }
         }
     }
@@ -271,6 +384,7 @@ fn read_views(e: &El, sheet: &mut Sheet) {
     sheet.show_headings = v.flag("showRowColHeaders", true);
     sheet.show_formulas = v.flag("showFormulas", false);
     sheet.show_zeros = v.flag("showZeros", true);
+    sheet.show_outline_symbols = v.flag("showOutlineSymbols", true);
     sheet.right_to_left = v.flag("rightToLeft", false);
     sheet.view = v.attr("view").and_then(gridcraft_model::SheetViewMode::parse).unwrap_or_default();
     if let Some(z) = v.attr_u32("zoomScale") {
@@ -300,7 +414,7 @@ fn read_views(e: &El, sheet: &mut Sheet) {
     }
 }
 
-fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet) {
+fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet, remaining: &mut u64) -> Result<(), IoError> {
     for c in e.kids("col") {
         let (Some(min), Some(max)) = (c.attr_u32("min"), c.attr_u32("max")) else { continue };
         if min == 0 || min > MAX_COLS || max < min {
@@ -324,14 +438,20 @@ fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet) {
                 info.style = Some(id);
             }
         }
-        // A width equal to the default with nothing else set is noise.
-        if info == LineInfo::default() || (info.size == Some(sheet.default_col_width) && LineInfo { size: None, ..info } == LineInfo::default()) {
+        // A custom width equal to the default still pins the column (Standard Width leaves it alone).
+        if info == LineInfo::default() {
             continue;
         }
+        // Overlapping declarations repeat work even when the final map stays small.
+        // Charge the clipped span before expansion, sharing the budget across <cols> blocks.
+        *remaining = remaining
+            .checked_sub(u64::from(max - min + 1))
+            .ok_or_else(|| IoError::TooLarge(format!("sheet \"{}\": more than {MAX_COLUMN_ASSIGNMENTS} expanded column assignments", sheet.name)))?;
         for col in (min - 1)..max {
             sheet.cols.insert(col, info);
         }
     }
+    Ok(())
 }
 
 fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
@@ -451,12 +571,59 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     }
     let dynamic = c.attr("cm").is_some();
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
-    let value = if formula.is_none() && st.dynamic.iter().any(|r| r.contains(pos) && r.start != pos) { Value::Empty } else { value };
-    sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
+    // A `PY(index,0|1)` formula is a Python cell whose code is a script of the Python part. The
+    // older `PY("…",0|1)` form is read from the formula's own text: the formula parser would fold
+    // line breaks in the code. A formula naming a script the part lacks keeps only its cached
+    // values, its own and its spill's, as plain values.
+    let py = match (&formula, c.child("f")) {
+        (Some(fm), Some(f)) => crate::python_part::cell_code(&mut cx.python, fm, &f.text),
+        _ => crate::python_part::PyFormula::Not,
+    };
+    let (formula, py) = match py {
+        crate::python_part::PyFormula::Not => (formula, None),
+        crate::python_part::PyFormula::Code(py) => (None, Some(Arc::new(py))),
+        crate::python_part::PyFormula::Missing => {
+            forget_dynamic(st, pos);
+            (None, None)
+        }
+    };
+    if py.is_some() {
+        record_python_spill(st, sheet, pos);
+    }
+    let spilled_from = if formula.is_none() && py.is_none() { dynamic_range(st, pos) } else { None };
+    let python_anchor = spilled_from.is_some_and(|r| sheet.cells.get(r.start).is_some_and(|a| a.py.is_some()));
+    let value = match spilled_from {
+        // A Python cell's spilled values are kept: they are its result until it runs again.
+        Some(r) if python_anchor && r.count() <= gridcraft_model::python::MAX_RESULT_CELLS as u64 => {
+            if !value.is_empty() {
+                sheet.spill.insert(pos, value);
+            }
+            sheet.spill_ranges.insert(r.start, r);
+            Value::Empty
+        }
+        // A Python cell's range larger than a result may be is a crafted file's: it is no spill,
+        // and its cells keep the values the file shows as plain values, as when the cell keeps
+        // only its own value.
+        Some(_) if python_anchor => value,
+        // A formula's spilled values are dropped: recalculation fills them again.
+        Some(_) => Value::Empty,
+        None => value,
+    };
+    sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style, py });
 }
 
 fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {
-    let model = from_file(f.text.trim());
+    // Keep the file's dynamic-array mark, so saving never turns the formula into a legacy one.
+    read_formula_text(cx, st, f, pos, dynamic).map(|fm| Formula { dynamic, ..fm })
+}
+
+fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {
+    let mut model = from_file(f.text.trim());
+    if let Some(known) = cx.known_function
+        && let Some(unwrapped) = unwrap_google_sheets(&model, known)
+    {
+        model = unwrapped;
+    }
     let text = model.as_str();
     match f.attr("t").unwrap_or("normal") {
         "shared" => {
@@ -487,7 +654,7 @@ fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynam
             let mut fm = Formula::new(text);
             let range = f.attr("ref").and_then(RangeRef::parse).unwrap_or(RangeRef::cell(pos));
             if !range.is_single() {
-                st.dynamic.push(range);
+                push_dynamic(st, range);
             }
             if !dynamic {
                 fm.array = Some(range);
@@ -543,433 +710,9 @@ pub fn parse_iso_datetime(s: &str, sys: DateSystem) -> Option<f64> {
 }
 
 pub fn parse_sqref(s: Option<&str>) -> Vec<RangeRef> {
-    s.unwrap_or("").split_whitespace().filter_map(RangeRef::parse).take(10_000).collect()
+    s.unwrap_or("").split_whitespace().filter_map(RangeRef::parse).collect()
 }
 
-fn cf_op(s: Option<&str>) -> CfOperator {
-    match s.unwrap_or("between") {
-        "notBetween" => CfOperator::NotBetween,
-        "equal" => CfOperator::Equal,
-        "notEqual" => CfOperator::NotEqual,
-        "greaterThan" => CfOperator::Greater,
-        "lessThan" => CfOperator::Less,
-        "greaterThanOrEqual" => CfOperator::GreaterOrEqual,
-        "lessThanOrEqual" => CfOperator::LessOrEqual,
-        _ => CfOperator::Between,
-    }
-}
-
-fn cfvo(e: &El) -> CfValueKind {
-    let val = e.attr("val").unwrap_or("");
-    let n = val.trim().parse::<f64>().ok().filter(|v| v.is_finite());
-    match e.attr("type").unwrap_or("num") {
-        // The classic section's own bound names are Lowest/Highest (`min`/`max`); a classic
-        // `autoMin`/`autoMax` is not in the schema, but a writer that puts one there means
-        // Automatic, so it reads as that (and saves with a proper x14 rule).
-        "autoMin" => CfValueKind::AutoMin,
-        "autoMax" => CfValueKind::AutoMax,
-        "min" => CfValueKind::Min,
-        "max" => CfValueKind::Max,
-        "percent" => n.map(CfValueKind::Percent).unwrap_or_else(|| CfValueKind::Formula(from_file(val))),
-        "percentile" => n.map(CfValueKind::Percentile).unwrap_or_else(|| CfValueKind::Formula(from_file(val))),
-        "formula" => CfValueKind::Formula(from_file(val)),
-        _ => n.map(CfValueKind::Number).unwrap_or_else(|| CfValueKind::Formula(from_file(val))),
-    }
-}
-
-/// `cfvo` elements: plain children, or x14 ones with the value in an `xm:f` child.
-fn cfvos(e: &El) -> Vec<CfValueKind> {
-    e.kids("cfvo")
-        .map(|c| {
-            if c.attr("val").is_none()
-                && let Some(f) = c.child("f")
-            {
-                let mut c2 = c.clone();
-                c2.attrs.push(("val".into(), f.text.clone()));
-                return cfvo(&c2);
-            }
-            cfvo(c)
-        })
-        .collect()
-}
-
-fn read_cf(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
-    let ranges = parse_sqref(e.attr("sqref"));
-    if ranges.is_empty() {
-        return;
-    }
-    for r in e.kids("cfRule") {
-        let style = Box::new(r.attr_u32("dxfId").and_then(|i| cx.dxfs.get(i as usize)).cloned().unwrap_or_default());
-        let formulas: Vec<String> = r.kids("formula").map(|f| from_file(f.text.trim())).collect();
-        let f0 = formulas.first().cloned().unwrap_or_default();
-        let text = r.attr("text").unwrap_or("").to_string();
-        let rule = match r.attr("type").unwrap_or("") {
-            "cellIs" => CfRule::CellIs { op: cf_op(r.attr("operator")), a: f0, b: formulas.get(1).cloned(), style },
-            "expression" => CfRule::Expression { formula: f0, style },
-            "containsText" => CfRule::ContainsText { text, style },
-            "notContainsText" => CfRule::NotContainsText { text, style },
-            "beginsWith" => CfRule::BeginsWith { text, style },
-            "endsWith" => CfRule::EndsWith { text, style },
-            "containsBlanks" => CfRule::Blanks { style },
-            "notContainsBlanks" => CfRule::NoBlanks { style },
-            "containsErrors" => CfRule::Errors { style },
-            "notContainsErrors" => CfRule::NoErrors { style },
-            "duplicateValues" => CfRule::Duplicate { style },
-            "uniqueValues" => CfRule::Unique { style },
-            "top10" => {
-                CfRule::Top10 { bottom: r.flag("bottom", false), percent: r.flag("percent", false), rank: r.attr_u32("rank").unwrap_or(10), style }
-            }
-            "aboveAverage" => CfRule::AboveAverage {
-                below: !r.flag("aboveAverage", true),
-                equal: r.flag("equalAverage", false),
-                std_dev: r.attr_u32("stdDev").unwrap_or(0).min(3) as u8,
-                style,
-            },
-            "timePeriod" => CfRule::TimePeriod { period: r.attr("timePeriod").unwrap_or("today").to_string(), style },
-            "colorScale" => {
-                let Some(cs) = r.child("colorScale") else { continue };
-                let colors = cs.kids("color").map(|c| read_color(c, &cx.palette));
-                CfRule::ColorScale { stops: cfvos(cs).into_iter().zip(colors).collect() }
-            }
-            "dataBar" => {
-                let Some(db) = r.child("dataBar") else { continue };
-                let v = cfvos(db);
-                CfRule::DataBar {
-                    min: v.first().cloned().unwrap_or(CfValueKind::Min),
-                    max: v.get(1).cloned().unwrap_or(CfValueKind::Max),
-                    color: db.child("color").map(|c| read_color(c, &cx.palette)).unwrap_or_default(),
-                    gradient: true,
-                    show_value: db.flag("showValue", true),
-                    border: None,
-                    negative_fill: None,
-                    negative_border: None,
-                    axis: None,
-                    limits: None,
-                }
-            }
-            "iconSet" => {
-                let Some(is) = r.child("iconSet") else { continue };
-                CfRule::IconSet {
-                    set: is.attr("iconSet").unwrap_or("3TrafficLights1").to_string(),
-                    thresholds: cfvos(is),
-                    reverse: is.flag("reverse", false),
-                    show_value: is.flag("showValue", true),
-                    icons: None,
-                }
-            }
-            other => {
-                cx.warn(format!("conditional format type \"{other}\" is not supported"));
-                continue;
-            }
-        };
-        // An x14 id ext (inside the rule element or a direct child) links this rule to its
-        // x14 refinement, read later by read_ext.
-        let ext_id = x14_rule_id(r);
-        if !ext_id.is_empty() {
-            cx.cf_ext_ids.push((capped_id(&ext_id), sheet.cond_formats.len()));
-        }
-        sheet.cond_formats.push(CondFormat {
-            ranges: ranges.clone(),
-            rule,
-            priority: r.attr_u32("priority").unwrap_or(0),
-            stop_if_true: r.flag("stopIfTrue", false),
-        });
-    }
-}
-
-/// The `x14:id` linking a classic conditional-format rule to its x14 extension: the id ext
-/// inside the rule's `dataBar`/`iconSet`/`colorScale` element, or (PR #610's shape) the rule's
-/// own extLst. Empty when the rule carries none.
-fn x14_rule_id(r: &El) -> String {
-    ["dataBar", "iconSet", "colorScale"]
-        .iter()
-        .find_map(|n| r.child(n).and_then(|e| e.child("extLst")).and_then(ext_lst_id))
-        .or_else(|| r.child("extLst").and_then(ext_lst_id))
-        .unwrap_or_default()
-}
-
-/// The `x14:id` text of an `extLst`; empty ids count as absent.
-fn ext_lst_id(e: &El) -> Option<String> {
-    let id = e.kids("ext").find_map(|x| x.child("id"))?.text.trim().to_string();
-    (!id.is_empty()).then_some(id)
-}
-
-/// A stored x14 id, capped at 256 bytes on a char boundary so a hostile file can't balloon it.
-fn capped_id(id: &str) -> String {
-    let mut end = id.len().min(256);
-    while !id.is_char_boundary(end) {
-        end -= 1;
-    }
-    id.get(..end).unwrap_or_default().to_string()
-}
-
-/// A `dataValidation` (main namespace, or x14 with `xm:f` formulas and an `xm:sqref` child).
-fn read_validation(v: &El) -> Option<Validation> {
-    let sq = v.attr("sqref").map(str::to_string).or_else(|| v.child("sqref").map(|s| s.text.clone()));
-    let ranges = parse_sqref(sq.as_deref());
-    if ranges.is_empty() {
-        return None;
-    }
-    let formula = |n: &str| -> Option<String> {
-        let f = v.child(n)?;
-        let t = f.child("f").map(|x| x.text.as_str()).unwrap_or(f.text.as_str()).trim();
-        if t.is_empty() { None } else { Some(t.to_string()) }
-    };
-    let kind = match v.attr("type").unwrap_or("none") {
-        "whole" => ValidationKind::Whole,
-        "decimal" => ValidationKind::Decimal,
-        "list" => ValidationKind::List,
-        "date" => ValidationKind::Date,
-        "time" => ValidationKind::Time,
-        "textLength" => ValidationKind::TextLength,
-        "custom" => ValidationKind::Custom,
-        _ => ValidationKind::Any,
-    };
-    let mut f1 = formula("formula1").unwrap_or_default();
-    if kind == ValidationKind::List && !f1.is_empty() && !f1.starts_with('"') {
-        f1 = format!("={}", from_file(&f1));
-    } else if !f1.starts_with('"') && !f1.is_empty() {
-        f1 = from_file(&f1);
-    }
-    Some(Validation {
-        ranges,
-        kind,
-        op: cf_op(v.attr("operator")),
-        f1,
-        f2: formula("formula2").map(|f| from_file(&f)),
-        allow_blank: v.flag("allowBlank", false),
-        // `showDropDown="1"` *hides* the in-cell list arrow.
-        in_cell_dropdown: !v.flag("showDropDown", false),
-        input_title: v.attr("promptTitle").unwrap_or("").to_string(),
-        input_message: v.attr("prompt").unwrap_or("").to_string(),
-        show_input: v.flag("showInputMessage", false),
-        error_title: v.attr("errorTitle").unwrap_or("").to_string(),
-        error_message: v.attr("error").unwrap_or("").to_string(),
-        error_style: match v.attr("errorStyle") {
-            Some("warning") => ErrorStyle::Warning,
-            Some("information") => ErrorStyle::Information,
-            _ => ErrorStyle::Stop,
-        },
-        show_error: v.flag("showErrorMessage", false),
-    })
-}
-
-fn read_hyperlinks(e: &El, rels: &[Rel], sheet: &mut Sheet) {
-    let mut cells = 0u64;
-    for h in e.kids("hyperlink") {
-        let Some(range) = h.attr("ref").and_then(RangeRef::parse) else { continue };
-        let mut target = h.attr("id").and_then(|id| rels.iter().find(|r| r.id == id)).map(|r| r.target.clone()).unwrap_or_default();
-        if let Some(loc) = h.attr("location").filter(|l| !l.is_empty()) {
-            if target.is_empty() {
-                target = loc.trim_start_matches('#').to_string();
-            } else {
-                target = format!("{target}#{loc}");
-            }
-        }
-        if target.is_empty() {
-            continue;
-        }
-        let link = Hyperlink { target, tooltip: h.attr("tooltip").map(str::to_string) };
-        for c in range.iter() {
-            if cells >= MAX_HYPERLINK_CELLS {
-                return;
-            }
-            cells += 1;
-            sheet.hyperlinks.insert(c, link.clone());
-        }
-    }
-}
-
-fn filter_op(s: Option<&str>) -> &'static str {
-    match s.unwrap_or("equal") {
-        "lessThan" => "<",
-        "lessThanOrEqual" => "<=",
-        "notEqual" => "<>",
-        "greaterThanOrEqual" => ">=",
-        "greaterThan" => ">",
-        _ => "=",
-    }
-}
-
-pub fn read_autofilter(cx: &mut Ctx<'_>, e: &El) -> Option<AutoFilter> {
-    let range = e.attr("ref").and_then(RangeRef::parse)?;
-    let mut criteria = vec![];
-    for fc in e.kids("filterColumn") {
-        let Some(col) = fc.attr_u32("colId") else { continue };
-        let crit = if let Some(f) = fc.child("filters") {
-            FilterCriterion::Values {
-                values: f.kids("filter").filter_map(|x| x.attr("val")).map(str::to_string).collect(),
-                blanks: f.flag("blank", false),
-            }
-        } else if let Some(cf) = fc.child("customFilters") {
-            let mut it = cf.kids("customFilter").map(|c| (filter_op(c.attr("operator")).to_string(), c.attr("val").unwrap_or("").to_string()));
-            let Some(a) = it.next() else { continue };
-            FilterCriterion::Custom { a, b: it.next(), and: cf.flag("and", false) }
-        } else if let Some(t) = fc.child("top10") {
-            FilterCriterion::Top10 {
-                bottom: !t.flag("top", true),
-                percent: t.flag("percent", false),
-                count: t.attr_f64("val").unwrap_or(10.0).clamp(0.0, 1e9) as u32,
-            }
-        } else if let Some(d) = fc.child("dynamicFilter") {
-            match d.attr("type") {
-                Some("aboveAverage") => FilterCriterion::AboveAverage(true),
-                Some("belowAverage") => FilterCriterion::AboveAverage(false),
-                _ => {
-                    cx.warn("date filters in AutoFilters are not supported");
-                    continue;
-                }
-            }
-        } else if let Some(c) = fc.child("colorFilter") {
-            let Some(dxf) = c.attr_u32("dxfId").and_then(|i| cx.dxfs.get(i as usize)) else { continue };
-            if c.flag("cellColor", true) { FilterCriterion::FillColor(dxf.fill.fg) } else { FilterCriterion::FontColor(dxf.font.color) }
-        } else if let Some(i) = fc.child("iconFilter") {
-            let Some(set) = i.attr("iconSet") else { continue };
-            FilterCriterion::Icon { set: set.to_string(), id: i.attr_u32("iconId") }
-        } else {
-            continue;
-        };
-        criteria.push((col, crit));
-    }
-    Some(AutoFilter { range, criteria })
-}
-
-pub fn read_table(cx: &mut Ctx<'_>, x: &El) -> Option<Table> {
-    let range = x.attr("ref").and_then(RangeRef::parse)?;
-    let name = x.attr("displayName").or_else(|| x.attr("name")).unwrap_or("Table").to_string();
-    let header_row = x.attr_u32("headerRowCount").unwrap_or(1) > 0;
-    let totals_row = x.attr_u32("totalsRowCount").unwrap_or(0) > 0;
-    let columns = x
-        .child("tableColumns")
-        .map(|tc| {
-            tc.kids("tableColumn")
-                .map(|c| {
-                    let totals = match c.attr("totalsRowFunction").unwrap_or("none") {
-                        "average" => TotalsFn::Average,
-                        "count" => TotalsFn::Count,
-                        "countNums" => TotalsFn::CountNums,
-                        "max" => TotalsFn::Max,
-                        "min" => TotalsFn::Min,
-                        "sum" => TotalsFn::Sum,
-                        "stdDev" => TotalsFn::StdDev,
-                        "var" => TotalsFn::Var,
-                        "custom" => TotalsFn::Custom,
-                        _ => TotalsFn::None,
-                    };
-                    let totals_label = if totals == TotalsFn::Custom {
-                        c.child("totalsRowFormula").map(|f| from_file(f.text.trim()))
-                    } else {
-                        c.attr("totalsRowLabel").map(str::to_string)
-                    };
-                    TableColumn {
-                        name: xml::decode_xstring(c.attr("name").unwrap_or("")),
-                        totals,
-                        totals_label,
-                        formula: c.child("calculatedColumnFormula").map(|f| from_file(f.text.trim())),
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let si = x.child("tableStyleInfo");
-    Some(Table {
-        id: x.attr_u32("id").unwrap_or(0),
-        name,
-        range,
-        header_row,
-        totals_row,
-        columns,
-        style: si.and_then(|s| s.attr("name")).unwrap_or("").to_string(),
-        banded_rows: si.is_some_and(|s| s.flag("showRowStripes", false)),
-        banded_cols: si.is_some_and(|s| s.flag("showColumnStripes", false)),
-        first_col: si.is_some_and(|s| s.flag("showFirstColumn", false)),
-        last_col: si.is_some_and(|s| s.flag("showLastColumn", false)),
-        filter_button: x.child("autoFilter").is_some(),
-        filter: x.child("autoFilter").and_then(|e| read_autofilter(cx, e)).map(|af| af.criteria).unwrap_or_default(),
-    })
-}
-
-fn read_comments(x: &El, sheet: &mut Sheet) {
-    let authors: Vec<String> = x.child("authors").map(|a| a.kids("author").map(|a| a.text.clone()).collect()).unwrap_or_default();
-    let Some(list) = x.child("commentList") else { return };
-    for c in list.kids("comment") {
-        let Some(cell) = c.attr("ref").and_then(CellRef::parse) else { continue };
-        let author = c.attr_u32("authorId").and_then(|i| authors.get(i as usize)).cloned().unwrap_or_default();
-        let mut text = c.child("text").map(xml::rich_text).unwrap_or_default();
-        // Excel starts a note with a bold "Author:" line.
-        if !author.is_empty()
-            && let Some(rest) = text.strip_prefix(&format!("{author}:"))
-        {
-            text = rest.strip_prefix('\n').unwrap_or(rest).to_string();
-        }
-        sheet.comments.insert(cell, Comment { author, text, replies: vec![], threaded: false, resolved: false, visible: false, dates: vec![] });
-    }
-}
-
-/// Marks the notes whose VML shape carries `<x:Visible/>` as shown. Shapes may sit in groups.
-fn read_note_visibility(x: &El, sheet: &mut Sheet, depth: usize) {
-    if depth > xml::MAX_DEPTH {
-        return;
-    }
-    for e in &x.children {
-        if e.name != "shape" {
-            read_note_visibility(e, sheet, depth + 1);
-            continue;
-        }
-        let Some(cd) = e.child("ClientData").filter(|cd| cd.attr("ObjectType") == Some("Note")) else { continue };
-        if cd.child("Visible").is_none() {
-            continue;
-        }
-        let num = |k: &str| cd.child(k).and_then(|v| v.text.trim().parse::<u32>().ok());
-        if let (Some(row), Some(col)) = (num("Row"), num("Column"))
-            && let Some(c) = sheet.comments.get_mut(&CellRef::new(row, col))
-            && !c.threaded
-        {
-            c.visible = true;
-        }
-    }
-}
-
-fn read_threaded(cx: &Ctx<'_>, x: &El, sheet: &mut Sheet) {
-    let mut by_id: HashMap<String, CellRef> = HashMap::new();
-    let mut replies: Vec<(String, String, String, String)> = vec![];
-    for t in x.kids("threadedComment") {
-        let Some(cell) = t.attr("ref").and_then(CellRef::parse) else { continue };
-        let author = t.attr("personId").and_then(|p| cx.persons.get(p)).cloned().unwrap_or_default();
-        let text = t.child("text").map(|e| e.text.clone()).unwrap_or_default();
-        let date = t.attr("dT").unwrap_or("").to_string();
-        match t.attr("parentId") {
-            Some(p) => replies.push((p.to_string(), author, text, date)),
-            None => {
-                if let Some(id) = t.attr("id") {
-                    by_id.insert(id.to_string(), cell);
-                }
-                let dates = if date.is_empty() { vec![] } else { vec![date] };
-                sheet
-                    .comments
-                    .insert(cell, Comment { author, text, replies: vec![], threaded: true, resolved: t.flag("done", false), visible: false, dates });
-            }
-        }
-    }
-    // Replies in file order; ones whose thread is missing are dropped.
-    for (parent, author, text, date) in replies {
-        if let Some(c) = by_id.get(&parent)
-            && let Some(cm) = sheet.comments.get_mut(c)
-        {
-            if !date.is_empty() {
-                // `dates[0]` is the thread, `dates[i + 1]` reply i; unknown dates stay empty.
-                let at = cm.replies.len() + 1;
-                if cm.dates.len() < at {
-                    cm.dates.resize(at, String::new());
-                }
-                cm.dates.push(date);
-            }
-            cm.replies.push((author, text));
-        }
-    }
-}
-
-/// Worksheet extensions: x14 data validations, sparklines and conditional formats.
 fn read_ext(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
     for ext in e.kids("ext") {
         for c in &ext.children {
@@ -998,265 +741,10 @@ fn read_ext(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
                         }
                     }
                 }
-                "conditionalFormattings" => read_x14_conditional_formats(cx, c, sheet),
+                "conditionalFormattings" => rules::read_x14_conditional_formats(cx, c, sheet),
                 _ => {}
             }
         }
-    }
-}
-
-/// x14 conditional-format extensions (Excel 2010): each `x14:cfRule` either refines the classic
-/// rule linked by its GUID (data bars, icon sets) or — with no classic counterpart — stands on
-/// its own (x14-only icon sets like `5Boxes`, or expression rules with an inline dxf). Anything
-/// unmatched or unmodelled warns once, honestly.
-fn read_x14_conditional_formats(cx: &mut Ctx<'_>, c: &El, sheet: &mut Sheet) {
-    let mut skipped = false;
-    for cf in c.kids("conditionalFormatting") {
-        for r in cf.kids("cfRule") {
-            let id = r.attr("id").unwrap_or("");
-            let Some(index) = cx.cf_ext_ids.iter().find(|(sid, _)| sid == id).map(|(_, i)| *i) else {
-                // No classic rule carries this id: an x14-only rule over its `xm:sqref`.
-                skipped |= read_x14_only_rule(cx, cf, r, sheet);
-                continue;
-            };
-            let Some(rule) = sheet.cond_formats.get_mut(index).map(|f| &mut f.rule) else {
-                skipped = true;
-                continue;
-            };
-            if let Some(db) = r.child("dataBar") {
-                skipped |= merge_x14_data_bar(cx, db, rule);
-            } else if let Some(is) = r.child("iconSet") {
-                skipped |= merge_x14_icon_set(is, rule);
-            } else {
-                skipped = true;
-            }
-        }
-    }
-    if skipped {
-        cx.warn("some Excel 2010 conditional format extensions were skipped");
-    }
-}
-
-/// An x14 rule with no classic counterpart (an x14-only icon set like `5Boxes`, or a standalone
-/// expression rule): a complete conditional format over the `xm:sqref` of its
-/// `x14:conditionalFormatting` parent, carrying the x14 rule's priority. Returns whether it had
-/// to be skipped.
-fn read_x14_only_rule(cx: &Ctx<'_>, cf: &El, r: &El, sheet: &mut Sheet) -> bool {
-    // The rule is dropped when any sqref token won't parse: importing the rest would quietly
-    // change what the format covers.
-    let sq = cf.child("sqref").map(|s| s.text.as_str()).unwrap_or("");
-    let ranges = parse_sqref(Some(sq));
-    if ranges.is_empty() || ranges.len() != sq.split_whitespace().count() {
-        return true;
-    }
-    if let Some(is) = r.child("iconSet") {
-        let skipped = unmodelled_icon_set(is);
-        let mut thresholds = Vec::new();
-        for v in is.kids("cfvo") {
-            // A threshold we can't model would leave a hole the icons shift into.
-            let Some(kind) = x14_cfvo(v) else { return true };
-            thresholds.push(kind);
-        }
-        let (icons, truncated) = x14_icons(is);
-        sheet.cond_formats.push(CondFormat {
-            ranges,
-            rule: CfRule::IconSet {
-                set: is.attr("iconSet").unwrap_or("3TrafficLights1").to_string(),
-                thresholds,
-                reverse: is.flag("reverse", false),
-                show_value: is.flag("showValue", true),
-                icons,
-            },
-            priority: r.attr_u32("priority").unwrap_or(0),
-            stop_if_true: false,
-        });
-        return skipped || truncated;
-    }
-    if r.attr("type") == Some("expression") {
-        return read_x14_only_expression(cx, r, ranges, sheet);
-    }
-    true
-}
-
-/// An x14-only expression rule: an ordinary model expression rule — the formula from `xm:f`
-/// through the usual file conversion, the style from the inline `<x14:dxf>`, whose child shape
-/// matches a styles.xml dxf. A missing dxf is a legal style-less rule; a missing or empty
-/// formula drops the rule. Anything outside the modelled shape warns. Returns whether the rule
-/// had to be skipped.
-fn read_x14_only_expression(cx: &Ctx<'_>, r: &El, ranges: Vec<RangeRef>, sheet: &mut Sheet) -> bool {
-    // Known attributes only: `type`, `priority` and the `id` (unused here — an x14-only rule has
-    // no classic counterpart to link).
-    let mut skipped = r.attrs.iter().any(|(n, _)| !matches!(n.as_str(), "type" | "priority" | "id"));
-    // No formula, no rule: the condition is all an expression rule is.
-    let Some(formula) = r.child("f").map(|f| f.text.trim()).filter(|f| !f.is_empty()) else {
-        return true;
-    };
-    let style = r.child("dxf").map(|d| read_dxf(d, &cx.palette, &cx.num_fmts)).unwrap_or_default();
-    skipped |= r.children.iter().any(|c| !matches!(c.name.as_str(), "f" | "dxf"));
-    sheet.cond_formats.push(CondFormat {
-        ranges,
-        rule: CfRule::Expression { formula: from_file(formula), style: Box::new(style) },
-        priority: r.attr_u32("priority").unwrap_or(0),
-        stop_if_true: false,
-    });
-    skipped
-}
-
-/// Merges an x14 icon set into the classic rule it refines: restated cfvo thresholds and custom
-/// per-position icons (`x14:cfIcon`). Returns whether any part of the extension had to be
-/// skipped; a rule that isn't an icon set is skipped wholesale.
-fn merge_x14_icon_set(is: &El, rule: &mut CfRule) -> bool {
-    let CfRule::IconSet { set, thresholds, reverse, show_value, icons, .. } = rule else {
-        return true;
-    };
-    let mut skipped = unmodelled_icon_set(is);
-    if let Some(name) = is.attr("iconSet") {
-        *set = name.to_string();
-    }
-    *reverse = is.flag("reverse", *reverse);
-    *show_value = is.flag("showValue", *show_value);
-    let cfvos: Vec<&El> = is.kids("cfvo").collect();
-    if cfvos.len() > thresholds.len() {
-        skipped = true;
-    }
-    for (slot, v) in thresholds.iter_mut().zip(cfvos) {
-        if let Some(kind) = x14_cfvo(v) {
-            *slot = kind;
-        } else {
-            // Unusable bound: keep the classic one and say so.
-            skipped = true;
-        }
-    }
-    let (list, truncated) = x14_icons(is);
-    *icons = list;
-    skipped || truncated
-}
-
-/// Whether an `x14:iconSet` element carries anything outside the modelled attributes/children.
-fn unmodelled_icon_set(is: &El) -> bool {
-    is.attrs.iter().any(|(n, _)| !matches!(n.as_str(), "iconSet" | "custom" | "reverse" | "showValue"))
-        || is.children.iter().any(|c| !matches!(c.name.as_str(), "cfvo" | "cfIcon"))
-}
-
-/// The custom per-position icon choices (`x14:cfIcon`) of an x14 icon set: `None` when it has
-/// none. The list is capped at 5 (no icon set has more) so a hostile file can't balloon it;
-/// truncation and unusable entries are reported so the reader can warn.
-fn x14_icons(is: &El) -> (Option<Vec<IconChoice>>, bool) {
-    let mut skipped = false;
-    let mut icons: Vec<IconChoice> = Vec::new();
-    for e in is.kids("cfIcon") {
-        if icons.len() == 5 {
-            skipped = true;
-            break;
-        }
-        match (e.attr("iconSet"), e.attr_u32("iconId").and_then(|i| u8::try_from(i).ok())) {
-            (Some(set), Some(id)) => icons.push(IconChoice { set: set.to_string(), id }),
-            _ => skipped = true,
-        }
-    }
-    (if icons.is_empty() { None } else { Some(icons) }, skipped)
-}
-
-/// Merges an x14 data bar into the classic rule it refines. Returns whether any part of the
-/// extension had to be skipped; a rule that isn't a data bar is skipped wholesale.
-fn merge_x14_data_bar(cx: &Ctx<'_>, db: &El, rule: &mut CfRule) -> bool {
-    let CfRule::DataBar { min, max, color, gradient, border, negative_fill, negative_border, axis, limits, .. } = rule else {
-        return true;
-    };
-    let mut skipped = false;
-    for (name, _) in &db.attrs {
-        // `direction` is checked separately below: only a non-default direction is unmodelled.
-        if name == "direction" {
-            continue;
-        }
-        if !matches!(
-            name.as_str(),
-            "minLength"
-                | "maxLength"
-                | "showValue"
-                | "border"
-                | "gradient"
-                | "negativeBarColorSameAsPositive"
-                | "negativeBarBorderColorSameAsPositive"
-                | "axisPosition"
-        ) {
-            skipped = true;
-        }
-    }
-    // Bar direction has no modelled home: an rtl bar would save back as ltr, so a direction
-    // other than Excel's schema default ("context") warns instead of silently flipping it.
-    if db.attr("direction").is_some_and(|d| d != "context") {
-        skipped = true;
-    }
-    for child in &db.children {
-        if !matches!(child.name.as_str(), "cfvo" | "fillColor" | "borderColor" | "negativeFillColor" | "negativeBorderColor" | "axisColor") {
-            skipped = true;
-        }
-    }
-    *gradient = db.flag("gradient", true);
-    let (lo, hi) = (db.attr_u32("minLength"), db.attr_u32("maxLength"));
-    *limits = match (lo, hi) {
-        (None, None) => None,
-        (lo, hi) => Some((lo.unwrap_or(10).min(100) as u8, hi.unwrap_or(90).min(100) as u8)),
-    };
-    // MS-XLSX §2.6.30: the colour children are flat color-attribute elements (`rgb`/`theme`/
-    // `tint`/`auto` directly, like the classic `<color>`); `fillColor` overrides the classic
-    // bar colour. No negative-fill element means Excel's default red — the model's `None` —
-    // unless a same-as-positive flag pins it to the positive colour.
-    let flat = |name: &str| db.child(name).map(|e| read_color(e, &cx.palette));
-    if let Some(c) = flat("fillColor") {
-        *color = c;
-    }
-    *border = flat("borderColor");
-    *negative_fill = flat("negativeFillColor");
-    *negative_border = flat("negativeBorderColor");
-    *axis = flat("axisColor");
-    if db.flag("negativeBarColorSameAsPositive", false) {
-        *negative_fill = Some(*color);
-    }
-    if db.attr("axisPosition") == Some("none") {
-        *axis = None;
-    }
-    let cfvos: Vec<&El> = db.kids("cfvo").collect();
-    if cfvos.len() > 2 {
-        skipped = true;
-    }
-    for (slot, v) in [min, max].into_iter().zip(cfvos) {
-        if let Some(kind) = x14_cfvo(v) {
-            *slot = kind;
-        } else {
-            // Unusable bound: keep the classic one and say so.
-            skipped = true;
-        }
-    }
-    skipped
-}
-
-/// One x14 `cfvo`, its value in an `xm:f` child (`autoMin`/`autoMax`/`min`/`max` carry none).
-/// `autoMin`/`autoMax` are the data bar's Automatic bounds, apart from Lowest/Highest Value
-/// (`min`/`max`) as in Excel (#1159). `None` when the type or its value can't be used.
-fn x14_cfvo(e: &El) -> Option<CfValueKind> {
-    let t = e.attr("type").unwrap_or("num");
-    if t == "autoMin" {
-        return Some(CfValueKind::AutoMin);
-    }
-    if t == "autoMax" {
-        return Some(CfValueKind::AutoMax);
-    }
-    if t == "min" {
-        return Some(CfValueKind::Min);
-    }
-    if t == "max" {
-        return Some(CfValueKind::Max);
-    }
-    let f = e.child("f").map(|f| f.text.trim()).filter(|f| !f.is_empty())?;
-    let n = || f.parse::<f64>().ok().filter(|v| v.is_finite());
-    match t {
-        "num" => n().map(CfValueKind::Number),
-        "percent" => n().map(CfValueKind::Percent),
-        "percentile" => n().map(CfValueKind::Percentile),
-        "formula" => Some(CfValueKind::Formula(from_file(f))),
-        _ => None,
     }
 }
 
@@ -1272,5 +760,13 @@ mod tests {
         assert_eq!(parse_iso_datetime("06:00:00", DateSystem::D1900), Some(0.25));
         assert_eq!(parse_iso_datetime("garbage", DateSystem::D1900), None);
         assert_eq!(parse_iso_datetime("2024-13-01", DateSystem::D1900), None);
+    }
+
+    #[test]
+    fn sqref_keeps_more_than_ten_thousand_ranges() {
+        let sq = (1..=12_000).map(|r| format!("A{r}")).collect::<Vec<_>>().join(" ");
+        let ranges = parse_sqref(Some(&sq));
+        assert_eq!(ranges.len(), 12_000);
+        assert_eq!(ranges.last().copied(), RangeRef::parse("A12000"));
     }
 }

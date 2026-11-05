@@ -51,6 +51,8 @@ pub(super) struct Links {
     pub sheets: Vec<String>,
     /// Defined names (Lbl records), in order; `None` for names that can't be referenced.
     pub names: Vec<String>,
+    /// Per defined name: whether the import skips it (its formula can't be decoded).
+    pub skipped: Vec<bool>,
     pub books: Vec<SupBook>,
     pub xti: Vec<Xti>,
 }
@@ -330,13 +332,13 @@ pub(super) fn decode(rgce: &[u8], rgcb: &[u8], base: CellRef, mode: Mode, links:
                 }
             }
             0x23 => {
-                let i = t.u32()?;
-                let name = usize::try_from(i)
-                    .ok()
-                    .and_then(|i| i.checked_sub(1))
-                    .and_then(|i| links.names.get(i))
-                    .filter(|n| !n.is_empty())
-                    .ok_or(Unsupported("reference to a missing defined name"))?;
+                let i = usize::try_from(t.u32()?).ok().and_then(|i| i.checked_sub(1));
+                let name = i.and_then(|i| links.names.get(i)).filter(|n| !n.is_empty()).ok_or(Unsupported("reference to a missing defined name"))?;
+                // A cell using a name the import drops would calculate to #NAME?: keep its
+                // saved result instead, as for references to other workbooks.
+                if mode != Mode::Name && i.and_then(|i| links.skipped.get(i)) == Some(&true) {
+                    return Err(Unsupported("defined names GridCraft skipped"));
+                }
                 push(&mut stack, kids, Expr::Name(name.clone()))?;
             }
             0x24 | 0x2C => {
@@ -479,6 +481,7 @@ mod tests {
         Links {
             sheets: vec!["Sheet1".into(), "My Data".into()],
             names: vec!["Rate".into()],
+            skipped: vec![false],
             books: vec![
                 SupBook { internal: true, addin: false, names: vec![] },
                 SupBook { internal: false, addin: true, names: vec!["_xlfn.IFERROR".into()] },
