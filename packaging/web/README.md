@@ -87,7 +87,7 @@ downloading them. The two sides talk `postMessage` with plain window messages th
 
 | Message | Direction | Fields |
 |---|---|---|
-| `gridcraft:ready` | app → page | `version`: the app is listening; send a file now |
+| `gridcraft:ready` | app → page | `version`, `appVersion`: the app is listening; send a file now |
 | `gridcraft:open` | page → app | `name`, `bytes` (an `ArrayBuffer` or `Uint8Array`): open like File › Open |
 | `gridcraft:save` | app → page | `name`, `bytes` (a transferred `ArrayBuffer`): every file the app would otherwise download (Save, Save As, Export as PDF). The page stores it and reports failures itself. |
 | `gridcraft:dirty` | app → page | `dirty`: unsaved changes appeared or went away |
@@ -148,6 +148,8 @@ As with the parent bridge, the app starts with an empty workbook instead of a sa
 `?author=` on the page's URL names the user for new notes and comments. The `data-host` value
 must be exactly `page`; anything else is ignored, and the app runs as a standalone page with
 downloads.
+
+The messages and both transports are the shared contract of [`craft-web-host`](https://github.com/storytold/craft-libs/tree/main/crates/web-host) (storytold/craft-libs#420), the same for every Craft app: its README lists every message, including `saved`, with the compatibility notes. In `gridcraft:ready`, `version` is the contract's (`"1"`) and `appVersion` is this app's release. GridCraft reads bytes, so a host sends `bytes`, not a `File`.
 
 ### Trust and limits
 

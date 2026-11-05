@@ -1,23 +1,18 @@
 //! Pure host-mode rules, shared by the bridge ([`crate::host`]) and testable without a browser
-//! (like [`crate::prefs`]): what opts a page into hosting GridCraft in its own document, and the
-//! name the bridge fills in when a host's open request has none.
-
-/// The one `data-host` value that opts a page in: the exact string `"page"`.
-pub const PAGE_HOST: &str = "page";
+//! (like [`crate::prefs`]): the name the bridge fills in when a host's open request has none.
+//! Which pages host the app is `craft-web-host`'s.
 
 /// The file name used when an open request carries no usable one.
 pub const DEFAULT_OPEN_NAME: &str = "Book.xlsx";
 
-/// Does this `data-host` value ask for page host mode? Only the exact value [`PAGE_HOST`] counts;
-/// anything else is ignored, so the page host mode stays opt-in.
-pub fn page_host_requested(data_host: Option<&str>) -> bool {
-    data_host == Some(PAGE_HOST)
-}
+/// The name `craft-web-host` gives an open request that carries no usable one (it cleans a host's
+/// name and falls back to this).
+const NAMELESS: &str = "document";
 
-/// A usable file name for an open request: the host's name when it isn't blank, else the
-/// [`DEFAULT_OPEN_NAME`].
-pub fn open_name(name: Option<&str>) -> String {
-    name.filter(|n| !n.trim().is_empty()).unwrap_or(DEFAULT_OPEN_NAME).to_string()
+/// A usable file name for an open request: the cleaned name the crate hands over, or
+/// [`DEFAULT_OPEN_NAME`] when the host sent none.
+pub fn open_name(name: &str) -> String {
+    if name == NAMELESS { DEFAULT_OPEN_NAME.to_string() } else { name.to_string() }
 }
 
 #[cfg(test)]
@@ -25,21 +20,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_the_exact_page_value_opts_in() {
-        assert!(page_host_requested(Some("page")));
-        assert!(!page_host_requested(Some("Page")));
-        assert!(!page_host_requested(Some(" page")));
-        assert!(!page_host_requested(Some("parent")));
-        assert!(!page_host_requested(Some("")));
-        assert!(!page_host_requested(None));
-    }
-
-    #[test]
-    fn open_names_fall_back_to_the_default_when_blank() {
-        assert_eq!(open_name(Some("Budget.xlsx")), "Budget.xlsx");
-        assert_eq!(open_name(Some(" Sheet2!Book.xlsx ")), " Sheet2!Book.xlsx ");
-        assert_eq!(open_name(Some("")), DEFAULT_OPEN_NAME);
-        assert_eq!(open_name(Some("   ")), DEFAULT_OPEN_NAME);
-        assert_eq!(open_name(None), DEFAULT_OPEN_NAME);
+    fn open_names_fall_back_to_the_default_when_the_host_sent_none() {
+        assert_eq!(open_name("Budget.xlsx"), "Budget.xlsx");
+        assert_eq!(open_name("Sheet2!Book.xlsx"), "Sheet2!Book.xlsx");
+        assert_eq!(open_name("document"), DEFAULT_OPEN_NAME, "what the crate says for a missing or blank name");
     }
 }
