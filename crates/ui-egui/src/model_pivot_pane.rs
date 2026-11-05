@@ -311,6 +311,9 @@ struct State {
     closed: bool,
     /// A filter field's members, for the filter's `allowed` list.
     members: Option<(MemberKey, Vec<Json>)>,
+    /// The kept PivotTable parts' fingerprint, memoized by (uid, revision): the field list's key
+    /// needs it only when it reads, and hashing the package is not something a repaint may repeat.
+    parts: Option<(u64, u64, u64)>,
     /// The slicers the person added from a filter field: the sheet's slicer object binds to a
     /// worksheet table's column, so a data-model field's slicer is drawn here and drives the
     /// PivotTable's page filter through Apply.
@@ -373,12 +376,20 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         return;
     };
     let mut state = load(ui.ctx());
-    let key = CacheKey { uid, model, parts: app.session.active().map_or(0, |doc| kept_pivot_fingerprint(&doc.wb)) };
     // The field list reads the model's metadata and the package's kept pivot parts; it runs only
     // when it can tell the person something: the workbook carries model PivotTables (their parts
-    // are in the package) or the pane was opened to build one.
+    // are in the package) or the pane was opened to build one. The part fingerprint is therefore
+    // only computed for a read — hashing every kept definition on each repaint of a closed pane
+    // would parse the package for nothing.
     let kept = has_kept_pivots(app);
-    let answer = if state.opened || (!state.closed && kept) { read_all(app, &mut state, key) } else { None };
+    if !state.opened && (state.closed || !kept) {
+        // Nothing read: the closed pane's strip is all there is to paint.
+        reopen_tab(ui, &mut state);
+        store(ui.ctx(), &state);
+        return;
+    }
+    let key = field_list_key(app, &mut state, uid, model);
+    let answer = read_all(app, &mut state, key);
     if let Some(answer) = answer {
         let info = answer.as_ref().ok();
         let pivots: Vec<Json> = info.and_then(|info| info["pivots"].as_array()).cloned().unwrap_or_default();
@@ -444,6 +455,22 @@ fn has_kept_pivots(app: &SheetApp) -> bool {
 fn is_pivot_part(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
     name.starts_with("xl/pivottables/") && name.ends_with(".xml")
+}
+
+/// The field list's [`CacheKey`], hashing the kept PivotTable parts at most once per document
+/// revision: [`show`] only calls this for a read, and the fingerprint is reused for every repaint
+/// until an edit moves the revision (the parts and the model cannot change without one).
+fn field_list_key(app: &mut SheetApp, state: &mut State, uid: u64, model: u64) -> CacheKey {
+    let revision = app.session.active().map_or(0, |doc| doc.revision);
+    let parts = match state.parts {
+        Some((cached_uid, cached_revision, fingerprint)) if cached_uid == uid && cached_revision == revision => fingerprint,
+        _ => {
+            let fingerprint = app.session.active().map_or(0, |doc| kept_pivot_fingerprint(&doc.wb));
+            state.parts = Some((uid, revision, fingerprint));
+            fingerprint
+        }
+    };
+    CacheKey { uid, model, parts }
 }
 
 /// The model's contents as `dataModel.pivotFields` reports them in `model`: table and column names
