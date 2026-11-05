@@ -277,8 +277,20 @@ pub(crate) fn today_serial() -> f64 {
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn today_serial() -> f64 {
-    // The web build has no clock; TODAY/NOW return a fixed serial instead of trapping.
-    25569.0
+    now_serial().floor()
+}
+
+/// The browser clock as an Excel serial, the wasm arm of [`now_serial`]/[`utc_now_serial`].
+///
+/// The standard library's clock traps on wasm, so the epoch comes from `js_sys::Date`, the same
+/// source `crates/core/src/date.rs` uses. `Date::now()` is UTC milliseconds; for the local serial
+/// the browser's time-zone offset is subtracted (it counts minutes *west* of UTC), and only
+/// `TODAY`/`UTCTODAY` floor the result.
+#[cfg(target_arch = "wasm32")]
+fn wasm_now_serial(local: bool) -> f64 {
+    const MILLISECONDS_PER_DAY: f64 = 86_400_000.0;
+    let offset_minutes = if local { -js_sys::Date::new_0().get_timezone_offset() } else { 0.0 };
+    25569.0 + js_sys::Date::now() / MILLISECONDS_PER_DAY + offset_minutes / 1_440.0
 }
 
 /// The local date and time as an Excel serial (NOW).
@@ -298,7 +310,7 @@ pub(crate) fn now_serial() -> f64 {
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn now_serial() -> f64 {
-    25569.0
+    wasm_now_serial(true)
 }
 
 /// The UTC date and time as an Excel serial (UTCNOW).
@@ -318,7 +330,7 @@ pub(crate) fn utc_now_serial() -> f64 {
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn utc_now_serial() -> f64 {
-    25569.0
+    wasm_now_serial(false)
 }
 
 /// The UTC date at midnight as an Excel serial (UTCTODAY).

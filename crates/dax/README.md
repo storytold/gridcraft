@@ -201,19 +201,20 @@ right, except `^`:
 
 | Level | Operators | Associativity |
 | --- | --- | --- |
-| 1 | grouping `()`, function calls, `IN` | — (`IN` is an infix operator) |
+| 1 | grouping `()`, function calls | — |
 | 2 | `^` | right |
 | 3 | unary `+`, `-` | prefix |
 | 4 | `*`, `/` | left |
 | 5 | binary `+`, `-` | left |
 | 6 | `&` | left |
-| 7 | `=`, `==`, `<>`, `<`, `>`, `<=`, `>=` | left |
+| 7 | `=`, `==`, `<>`, `<`, `>`, `<=`, `>=`, `IN` | left |
 | 8 | `NOT` | prefix |
 | 9 | `&&` | left |
 | 10 | `\|\|` | left |
 
 `=` coerces types at evaluation time; `==` is strict equality. This crate only records which
-operator was written. `IN` takes a list (`expr IN { v1, v2 }`) or a table expression
+operator was written. `IN` is a comparison at the same level as `=`, so `1 + 2 IN { 3 }` parses as
+`(1 + 2) IN { 3 }`, and it takes a list (`expr IN { v1, v2 }`) or a table expression
 (`expr IN VALUES(T[Col])`).
 
 Excel evaluates `2^3^2` as `512` (`2^(3^2)`), so `^` is right-associative even though the generic

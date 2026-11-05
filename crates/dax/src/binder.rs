@@ -63,7 +63,12 @@ pub enum BoundExpr {
     TableConstructor(Vec<BoundExpr>),
     /// `( value, ... )`.
     Tuple(Vec<BoundExpr>),
-    /// A variable reference, indexed in the enclosing [`BoundExpr::VarReturn`].
+    /// A variable reference.
+    ///
+    /// `index` is the variable's absolute slot in the cumulative stack of every enclosing
+    /// [`BoundExpr::VarReturn`] block — outer blocks first, each block appending its own
+    /// declarations in order — not its position inside the innermost `vars` list. The evaluator
+    /// pushes each block's values onto the same stack, so the index stays valid across nesting.
     Variable {
         index: usize,
         name: String,
@@ -281,8 +286,11 @@ impl<'a> Binder<'a> {
                 // The documented bare ASC/DESC slots: RANKX and RANK.EQ take Order at index 3/2,
                 // TOPNSKIP/CONCATENATEX at index 4 and SAMPLE at index 3.
                 "RANK.EQ" if index == 2 => clause_keyword(arg, &["ASC", "DESC"]),
-                "TOPNSKIP" if index == 4 => clause_keyword(arg, &["ASC", "DESC"]),
-                "SAMPLE" if index == 3 => clause_keyword(arg, &["ASC", "DESC"]),
+                // SAMPLE and TOPNSKIP repeat `(orderBy, Order)` pairs, so every order word sits at
+                // an even offset from the first one: 3, 5, 7, ... for SAMPLE and 4, 6, 8, ... for
+                // TOPNSKIP.
+                "TOPNSKIP" if index >= 4 && (index - 4) % 2 == 0 => clause_keyword(arg, &["ASC", "DESC"]),
+                "SAMPLE" if index >= 3 && (index - 3) % 2 == 0 => clause_keyword(arg, &["ASC", "DESC"]),
                 // CONCATENATEX takes `(orderBy, Order)` pairs from index 4 on, so every even
                 // offset from 4 is an order word.
                 "CONCATENATEX" if index >= 4 && (index - 4) % 2 == 0 => clause_keyword(arg, &["ASC", "DESC"]),

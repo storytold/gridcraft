@@ -267,6 +267,19 @@ fn documented_order_keywords_bind_at_their_argument_positions() {
             other => panic!("{src}: expected a call, got {other:?}"),
         }
     }
+    // Every repeated `(orderBy, Order)` pair binds, not just the first one.
+    for (src, positions) in [
+        ("SAMPLE ( 10, Sales, Sales[Amount], DESC, Sales[Amount], ASC )", [3usize, 5usize]),
+        ("TOPNSKIP ( 10, 20, Sales, Sales[Amount], DESC, Sales[Amount], ASC )", [4usize, 6usize]),
+    ] {
+        match bind(&model, src) {
+            BoundExpr::Call { args, .. } => {
+                assert!(matches!(&args[positions[0]], BoundExpr::Keyword(word) if word == "DESC"), "{src}: {:?}", args[positions[0]]);
+                assert!(matches!(&args[positions[1]], BoundExpr::Keyword(word) if word == "ASC"), "{src}: {:?}", args[positions[1]]);
+            }
+            other => panic!("{src}: expected a call, got {other:?}"),
+        }
+    }
     // An unknown word in a keyword slot is still unknown.
     let expr = parse_expression("SAMPLE ( 10, Sales, Sales[Amount], SIDEWAYS )").expect("parse");
     assert!(Binder::new(&model).bind_expression(&expr).is_err());

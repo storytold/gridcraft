@@ -135,7 +135,8 @@ pub enum PivotLayout {
 ///
 /// An empty `allowed` list keeps nothing (the pivot renders no rows), unless [`PivotFilter::all`]
 /// is set: that is the page field's `(All)` — a filter that names its field but keeps every value.
-/// Values compare exactly; string values are case-sensitive.
+/// Values are matched with the model collation: text compares case-insensitively, like `=`, and
+/// everything else exactly.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PivotFilter {
     /// A field reference in `Table[Column]` form, resolved with [`crate::pivot::pivot_fields`].
