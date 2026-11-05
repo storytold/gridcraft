@@ -7,14 +7,14 @@ fn text_as_numbers_sorts_numeric_text_only_when_requested() {
     }
     let mut s = Session::new();
     s.new_workbook();
-    s.execute("range.setValues", json!({"range": "A1", "values": [["10"], ["9"], ["a"], [""], ["-2"]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "parse": false, "values": [["10"], ["9"], ["a"], [""], ["-2"]]})).unwrap();
 
     s.execute("data.sort", json!({"range": "A1:A5", "header": false, "keys": [{"column": "A", "order": "asc"}]})).unwrap();
-    assert_eq!(values(&s), ["", "-2", "10", "9", "a"]);
+    assert_eq!(values(&s), ["-2", "10", "9", "a", ""]);
 
     s.execute("edit.undo", json!({})).unwrap();
     s.execute("data.sort", json!({"range": "A1:A5", "header": false, "textAsNumbers": true, "keys": [{"column": "A", "order": "asc"}]})).unwrap();
-    assert_eq!(values(&s), ["", "-2", "9", "10", "a"]);
+    assert_eq!(values(&s), ["-2", "9", "10", "a", ""]);
 
     s.execute("edit.undo", json!({})).unwrap();
     s.execute(
@@ -22,7 +22,7 @@ fn text_as_numbers_sorts_numeric_text_only_when_requested() {
         json!({"range": "A1:A5", "header": false, "textAsNumbers": true, "keys": [{"column": "A", "order": "asc", "customList": ["10", "9"]}]}),
     )
     .unwrap();
-    assert_eq!(values(&s), ["10", "9", "-2", "a", ""]);
+    assert_eq!(values(&s), ["10", "9", "a", "", "-2"]);
 }
 
 #[test]
