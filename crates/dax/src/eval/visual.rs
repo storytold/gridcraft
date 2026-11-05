@@ -12,6 +12,7 @@
 //! ("If `orderBy` is not provided, the data is sorted by the grouping columns on the default axis
 //! in ascending order by default", <https://learn.microsoft.com/dax/range-function-dax>).
 
+use std::cell::Cell;
 use std::cmp::Ordering;
 
 use super::support::model_row_frame;
@@ -20,6 +21,62 @@ use super::*;
 /// Error text shared by every function that needs a visual row. The contract asks for a
 /// documented "no visual frame" error when a visual calculation runs outside a visual row.
 const NO_FRAME: &str = "visual calculation requires a visual frame, but the current context has no row";
+
+/// Hard cap on the visual-calculation steps one evaluation may spend, mirroring the
+/// `MAX_GROUP_ROWS` cap of the grouping functions. Every call materializes the whole
+/// axis and scans it, and inside a row iterator (`ADDCOLUMNS`, `FILTER`, `SUMX`) that happens once
+/// per row, so an N-row table otherwise costs O(N²) row copies; the navigation functions add up to
+/// N evaluations per row on top. Each call is charged one step per axis row it materializes and
+/// scans plus one step per position it evaluates (the requested `MOVINGAVERAGE` window size, so an
+/// explicit huge window is rejected without touching the axis), and the call that would cross the
+/// budget fails instead of doing the work.
+const MAX_VISUAL_STEPS: usize = 10_000_000;
+
+thread_local! {
+    /// Steps charged by visual-function calls in the current evaluation. Evaluation is
+    /// single-threaded, so a thread-local counter is enough; it is not observable through the
+    /// public API because it only bounds work.
+    static VISUAL_STEPS: Cell<usize> = const { Cell::new(0) };
+
+    /// Nesting depth of visual-function calls. Only the outermost call restarts the budget, so a
+    /// visual function evaluated while another one is scanning the axis shares its caller's budget.
+    static VISUAL_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Pops the nesting depth when a visual-function call returns, including on the error path.
+struct BudgetGuard;
+
+impl Drop for BudgetGuard {
+    fn drop(&mut self) {
+        VISUAL_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
+}
+
+/// Charges `positions` evaluated axis rows plus the axis materialization to the step budget.
+///
+/// A call on the axis's first row that is not nested inside another visual call starts a fresh
+/// budget: iterating an axis (`ADDCOLUMNS(Sales, "R", RUNNINGSUM([Total]))`) begins at position 0,
+/// so one pass over the axis spends one budget. Returning the guard keeps the depth correct while
+/// `positions` evaluations run.
+fn charge(name: &str, axis: &Axis, positions: usize) -> Result<BudgetGuard, EvalError> {
+    let outermost = VISUAL_DEPTH.with(Cell::get) == 0;
+    if outermost && axis.current == 0 {
+        VISUAL_STEPS.with(|steps| steps.set(0));
+    }
+    let cost = axis.rows.len().saturating_add(positions);
+    let spent = VISUAL_STEPS.with(|steps| {
+        let spent = steps.get().saturating_add(cost);
+        if spent <= MAX_VISUAL_STEPS {
+            steps.set(spent);
+        }
+        spent
+    });
+    if spent > MAX_VISUAL_STEPS {
+        return Err(EvalError::new(format!("{name} would exceed the {MAX_VISUAL_STEPS}-step visual calculation budget")));
+    }
+    VISUAL_DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
+    Ok(BudgetGuard)
+}
 
 /// The ordered axis a visual calculation navigates, plus the position of the current row.
 struct Axis {
@@ -118,6 +175,7 @@ fn boolean_arg(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, index:
 fn first_last(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
     let axis = axis(ev, ctx)?;
     let expr = args.first().ok_or_else(|| EvalError::new(format!("{name} needs a column")))?;
+    let _budget = charge(name, &axis, 1)?;
     let position = if name.eq_ignore_ascii_case("FIRST") { Some(0) } else { axis.rows.len().checked_sub(1) };
     match position {
         Some(position) => eval_at(ev, expr, ctx, &axis, position),
@@ -130,6 +188,7 @@ fn first_last(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Cont
 fn previous_next(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
     let axis = axis(ev, ctx)?;
     let expr = args.first().ok_or_else(|| EvalError::new(format!("{name} needs a column")))?;
+    let _budget = charge(name, &axis, 1)?;
     let steps = positive_count(ev, args, ctx, 1, "Steps")?;
     let position = if name.eq_ignore_ascii_case("PREVIOUS") { axis.current.checked_sub(steps) } else { axis.current.checked_add(steps) };
     match position {
@@ -142,6 +201,8 @@ fn previous_next(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut C
 fn running_sum(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
     let axis = axis(ev, ctx)?;
     let expr = args.first().ok_or_else(|| EvalError::new("RUNNINGSUM needs a column"))?;
+    // The window is the axis prefix through the current row.
+    let _budget = charge("RUNNINGSUM", &axis, axis.current.saturating_add(1))?;
     let values = window(ev, expr, ctx, &axis, 0, axis.current)?;
     if values.is_empty() { Ok(Scalar::Blank) } else { Ok(Scalar::Decimal(values.iter().sum())) }
 }
@@ -156,6 +217,9 @@ fn moving_average(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> 
     }
     let window_size = positive_count(ev, args, ctx, 1, "WindowSize")?;
     let include_current = boolean_arg(ev, args, ctx, 2, true)?;
+    // Charge the requested window, not the part of it the axis actually covers: an explicit huge
+    // window is exactly the shape that must be rejected before it is evaluated.
+    let _budget = charge("MOVINGAVERAGE", &axis, window_size)?;
     let end = if include_current {
         axis.current
     } else {
@@ -184,6 +248,8 @@ fn layout(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context)
 /// <https://learn.microsoft.com/dax/range-function-dax>.
 fn range_table(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<TableValue, EvalError> {
     let axis = axis(ev, ctx)?;
+    // RANGE evaluates no expression, so the axis materialization and slice copy are the cost.
+    let _budget = charge("RANGE", &axis, 0)?;
     let step_expr = args.first().ok_or_else(|| EvalError::new("RANGE needs a step"))?;
     let step_value = ev.eval(step_expr, ctx)?;
     let number = step_value.to_number().ok_or_else(|| EvalError::new("RANGE step must be a number"))?;

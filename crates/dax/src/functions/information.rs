@@ -69,7 +69,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         "Returns TRUE when the table has a row whose values equal every supplied value, in \
          column order. The IN operator executes this function; comparisons are strict, so \
          BLANK does not match 0.",
-        &["CONTAINSROW ( { \"Red\", \"Blue\" }, Product[Color] )", "CONTAINSROW ( Sales, Sales[ProductKey], 1 )"],
+        &["CONTAINSROW ( { \"Red\", \"Blue\" }, Product[Color] )", "CONTAINSROW ( VALUES ( Sales[ProductKey] ), 1 )"],
     ),
     spec(
         "CONTAINSSTRING",
@@ -106,9 +106,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[])],
         ReturnType::String,
         FunctionFlags::new(false, true, false, true, false),
-        "Returns the CustomData connection-string property supplied by the client, or BLANK when \
-         the connection did not define it. It does not inspect the data model or the filter \
-         context.",
+        "Returns the CustomData connection-string property supplied by the client, or an empty \
+         string when the connection did not define it. It does not inspect the data model or the \
+         filter context.",
         &["CUSTOMDATA ()"],
     ),
     spec(

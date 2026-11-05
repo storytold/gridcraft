@@ -220,33 +220,6 @@ fn index_at_or_before(target: f64, anchor: f64, months: i64) -> i64 {
     k
 }
 
-/// Days between two whole-day serials for the 30/360 conventions, following Excel's US variant
-/// (day 31 rolls to the 1st of the next month when the start day is not the 30th, February month
-/// ends count as the 30th).
-fn days_360(start: f64, end: f64, us: bool) -> i64 {
-    let (year1, month1, mut day1) = support::date_parts(start);
-    let (mut year2, mut month2, mut day2) = support::date_parts(end);
-    if day1 == 31 {
-        day1 -= 1;
-    } else if us && month1 == 2 && (day1 == 29 || (day1 == 28 && !support::is_leap_year(year1))) {
-        day1 = 30;
-    }
-    if day2 == 31 {
-        if us && day1 != 30 {
-            day2 = 1;
-            if month2 == 12 {
-                year2 += 1;
-                month2 = 1;
-            } else {
-                month2 += 1;
-            }
-        } else {
-            day2 = 30;
-        }
-    }
-    (day2 + month2 * 30 + year2 * 360) - (day1 + month1 * 30 + year1 * 360)
-}
-
 /// Signed day count between two dates for a basis.
 fn basis_days(start: f64, end: f64, basis: i64) -> f64 {
     if start == end {
@@ -710,34 +683,35 @@ fn tbill_args(a: &support::Args<'_>, value_index: usize) -> Result<(f64, f64, f6
     Ok((settle, maturity, value))
 }
 
+/// Days from settlement to maturity as Excel counts them for Treasury bills: the actual number of
+/// calendar days (DSM). The 360 in the published formulas below is a fixed denominator, not a
+/// day-count basis, so settlement and maturity are simple date-serial differences.
+fn tbill_days(a: &support::Args<'_>, settle: f64, maturity: f64) -> Result<f64, EvalError> {
+    let days = maturity - settle;
+    if days <= 0.0 {
+        return Err(num_error(a.name, "the settlement to maturity period is empty"));
+    }
+    Ok(days)
+}
+
 fn tbillprice(a: &support::Args<'_>) -> Result<Scalar, EvalError> {
     let (settle, maturity, discount) = tbill_args(a, 2)?;
     require_positive(a.name, "discount", discount)?;
-    // A Treasury bill matures one day after the quoted maturity for day-count purposes.
-    let fraction = year_frac(settle, maturity + 1.0, 0);
-    if fraction == 0.0 {
-        return Err(num_error(a.name, "the settlement to maturity period is empty"));
-    }
-    finite(a.name, 100.0 * (1.0 - discount * fraction)).map(Scalar::Decimal)
+    let days = tbill_days(a, settle, maturity)?;
+    finite(a.name, 100.0 * (1.0 - discount * days / 360.0)).map(Scalar::Decimal)
 }
 
 fn tbillyield(a: &support::Args<'_>) -> Result<Scalar, EvalError> {
     let (settle, maturity, price) = tbill_args(a, 2)?;
     require_positive(a.name, "price", price)?;
-    let days = days_360(settle, maturity, true) as f64 + 1.0;
-    if days <= 0.0 || days > 360.0 {
-        return Err(num_error(a.name, "the settlement to maturity period is out of range"));
-    }
-    finite(a.name, (100.0 / price - 1.0) * 360.0 / days).map(Scalar::Decimal)
+    let days = tbill_days(a, settle, maturity)?;
+    finite(a.name, (100.0 - price) / price * 360.0 / days).map(Scalar::Decimal)
 }
 
 fn tbilleq(a: &support::Args<'_>) -> Result<Scalar, EvalError> {
     let (settle, maturity, discount) = tbill_args(a, 2)?;
     require_positive(a.name, "discount", discount)?;
-    let days = days_360(settle, maturity + 1.0, true) as f64;
-    if days <= 0.0 || days > 360.0 {
-        return Err(num_error(a.name, "the settlement to maturity period is out of range"));
-    }
+    let days = tbill_days(a, settle, maturity)?;
     let denominator = 360.0 - discount * days;
     if denominator <= 0.0 {
         return Err(num_error(a.name, "the discount rate is too large for the period"));

@@ -593,7 +593,10 @@ fn summarize(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Resul
     let table = ev.eval_table(first, ctx)?;
     let parsed = parse_summarize_args(ev, args, "SUMMARIZE")?;
     let layout = group_layout(&parsed.group)?;
-    if layout.columns.is_empty() {
+    // With neither group-by columns nor expressions there is nothing to group or compute, so the
+    // distinct rows are the answer. Expressions over no group-by columns still form one group that
+    // spans the whole table, which the grouping path below produces.
+    if layout.columns.is_empty() && parsed.expressions.is_empty() {
         return Ok(table.distinct_rows());
     }
     let details = group_details(ev, &table, &layout.columns)?;
@@ -647,7 +650,9 @@ fn group_by(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result
             GroupArg::Rollup(_) => return Err(EvalError::new("GROUPBY does not support ROLLUP; use SUMMARIZE")),
         }
     }
-    if columns.is_empty() {
+    // Only a bare `GROUPBY(table)` returns the distinct rows; expressions with no group-by columns
+    // aggregate the whole table as a single group.
+    if columns.is_empty() && parsed.expressions.is_empty() {
         return Ok(table.distinct_rows());
     }
     for (index, column) in columns.iter().enumerate() {

@@ -147,6 +147,26 @@ fn moving_average_rejects_a_bad_window_size() {
 }
 
 #[test]
+fn moving_average_window_over_the_step_budget_is_rejected_before_it_runs() {
+    // The axis is only three rows, but the requested window is charged against the visual step
+    // budget, so the call fails up front instead of evaluating twenty million positions per row.
+    let error = eval_table("ADDCOLUMNS(Sales, \"Result\", MOVINGAVERAGE(Sales[Amount], 20000000))")
+        .expect_err("the requested window exceeds the step budget");
+    assert!(error.contains("MOVINGAVERAGE"), "{error}");
+    assert!(error.contains("10000000"), "{error}");
+}
+
+#[test]
+fn repeated_visual_calls_share_the_step_budget() {
+    // Three huge windows in one row: the first row restarts the budget per call, so the second
+    // row's calls cross the cap even though no individual call is over it.
+    let expression = "MOVINGAVERAGE(Sales[Amount], 4000000) + MOVINGAVERAGE(Sales[Amount], 4000000) + MOVINGAVERAGE(Sales[Amount], 4000000)";
+    let error = eval_table(&format!("ADDCOLUMNS(Sales, \"Result\", {expression})")).expect_err("repeated calls exceed the step budget");
+    assert!(error.contains("MOVINGAVERAGE"), "{error}");
+    assert!(error.contains("10000000"), "{error}");
+}
+
+#[test]
 fn range_selects_rows_after_a_non_negative_step() {
     // RANGE(1) with the default includeCurrent selects the current and following row.
     assert_eq!(visual_column("COUNTROWS(RANGE(1))"), vec![Some(2.0), Some(2.0), Some(1.0)]);

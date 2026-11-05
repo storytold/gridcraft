@@ -170,6 +170,18 @@ fn treasury_bill_functions() {
     fails("TBILLEQ(DATE(2008,3,31), DATE(2008,6,1), -0.09)");
 }
 
+#[test]
+fn treasury_bill_day_count_is_the_actual_number_of_days() {
+    // Jan 1 to Mar 1 2008 spans 60 actual days (2008 is a leap year), while 30/360 would count
+    // 61. Excel's published formulas use DSM = 60:
+    //   TBILLPRICE = 100 * (1 - discount * DSM / 360)          = 100 * (1 - 0.09 * 60 / 360)
+    //   TBILLYIELD = (100 - price) / price * 360 / DSM          = 1.5 / 98.5 * 6
+    //   TBILLEQ    = 365 * discount / (360 - discount * DSM)    = 32.85 / (360 - 5.4)
+    close(value("TBILLPRICE(DATE(2008,1,1), DATE(2008,3,1), 0.09)"), 98.5, 1e-12);
+    close(value("TBILLYIELD(DATE(2008,1,1), DATE(2008,3,1), 98.5)"), 9.0 / 98.5, 1e-12);
+    close(value("TBILLEQ(DATE(2008,1,1), DATE(2008,3,1), 0.09)"), 32.85 / 354.6, 1e-12);
+}
+
 // --- coupon bonds ----------------------------------------------------------------------------
 
 #[test]

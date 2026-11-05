@@ -196,6 +196,13 @@ fn summarize_without_group_columns_returns_distinct_rows() {
 }
 
 #[test]
+fn summarize_without_group_columns_evaluates_expressions_over_the_whole_table() {
+    let table = eval_table("SUMMARIZE(Sales, \"Total\", SUM(Sales[Amount]))").expect("summarize");
+    assert_columns(&table, &["Total"]);
+    assert_eq!(table.rows, vec![vec![money(122.0)]]);
+}
+
+#[test]
 fn summarize_rollup_adds_subtotals_and_grand_total() {
     let table = eval_table("SUMMARIZE(Sales, ROLLUP(Sales[Region], Sales[Product]), \"Amount\", SUM(Sales[Amount]))").expect("rollup");
     assert_columns(&table, &["Region", "Product", "Amount"]);
@@ -500,6 +507,13 @@ fn groupby_aggregates_the_current_group() {
 
     let distinct = eval_table("GROUPBY(Sales)").expect("distinct rows");
     assert_eq!(distinct.rows.len(), 6, "GROUPBY without group columns returns the distinct rows");
+}
+
+#[test]
+fn groupby_without_group_columns_evaluates_expressions_over_the_whole_table() {
+    let table = eval_table("GROUPBY(Sales, \"N\", COUNTROWS(CURRENTGROUP()))").expect("groupby");
+    assert_columns(&table, &["N"]);
+    assert_eq!(table.rows, vec![vec![int(6)]]);
 }
 
 #[test]
