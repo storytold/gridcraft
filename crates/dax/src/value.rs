@@ -202,10 +202,16 @@ impl Scalar {
         match (self, other) {
             (Scalar::Blank, Scalar::Blank) => true,
             (Scalar::String(a), Scalar::String(b)) => a == b,
-            (a, b) if a.is_numeric() && b.is_numeric() => match (exact_number(a), exact_number(b)) {
-                (Some(x), Some(y)) => x == y,
-                _ => false,
-            },
+            (a, b) if a.is_numeric() && b.is_numeric() => {
+                // Two keys of the same variant compare exactly, however large they are.
+                if std::mem::discriminant(a) == std::mem::discriminant(b) {
+                    return a == b;
+                }
+                match (exact_number(a), exact_number(b)) {
+                    (Some(x), Some(y)) => x == y,
+                    _ => false,
+                }
+            }
             _ => self == other,
         }
     }

@@ -181,6 +181,9 @@ fn strict_equality_matches_a_decimal_column_against_an_integer_literal() {
     assert!(!Scalar::String("a".into()).strict_eq(&Scalar::String("A".into())));
     // Beyond 2^53 two integers share an `f64`, and they must stay distinct keys.
     assert!(!Scalar::Integer(9_007_199_254_740_992).strict_eq(&Scalar::Integer(9_007_199_254_740_993)));
+    // A large key still matches itself, in the same variant and through currency.
+    assert!(Scalar::Integer(9_007_199_254_740_993).strict_eq(&Scalar::Integer(9_007_199_254_740_993)));
+    assert!(Scalar::Currency(9_007_199_254_740_993).strict_eq(&Scalar::Currency(9_007_199_254_740_993)));
 }
 
 #[test]
