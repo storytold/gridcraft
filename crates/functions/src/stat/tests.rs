@@ -852,3 +852,23 @@ fn binom_and_poisson_edge_cases() {
     // Inverse stays consistent: the smallest k with cdf >= alpha.
     close(ev("BINOM.INV", vec![n(10_000.0), n(0.5), n(0.5)]), 5000.0);
 }
+
+/// Security: FREQUENCY finds each value's bin by binary search, and MODE counts distinct numbers
+/// through an index, so neither is quadratic in its inputs. Results are as before: unsorted and
+/// duplicate bins keep their positions (a value goes to the first of equal bins), and tied modes
+/// come in first-occurrence order.
+#[test]
+fn frequency_and_mode_scale_with_their_inputs() {
+    let f = ev("FREQUENCY", vec![c(&[1.0, 2.0, 2.0, 3.0, 5.0, 9.0, -1.0]), c(&[3.0, 2.0, 2.0, 0.0])]);
+    assert_eq!(rows_of(&f), vec![vec![nv(1.0)], vec![nv(3.0)], vec![nv(0.0)], vec![nv(1.0)], vec![nv(2.0)]]);
+    // NaN data goes to the overflow bin, and a NaN bin takes nothing
+    let f = ev("FREQUENCY", vec![c(&[f64::NAN, 0.5, 2.0]), c(&[f64::NAN, 1.0])]);
+    assert_eq!(rows_of(&f), vec![vec![nv(0.0)], vec![nv(1.0)], vec![nv(2.0)]]);
+    let data: Vec<f64> = (0..200_000).map(|i| f64::from(i) + 1e6).collect();
+    let bins: Vec<f64> = (0..200_000).map(f64::from).collect();
+    let f = ev("FREQUENCY", vec![c(&data), c(&bins)]);
+    assert_eq!(rows_of(&f).last(), Some(&vec![nv(200_000.0)]));
+    let distinct = ev("MODE", vec![c(&data)]);
+    is_err(distinct, CellError::NA);
+    assert_eq!(rows_of(&ev("MODE.MULT", vec![c(&[3.0, 0.0, 1.0, -0.0, 3.0, 1.0])])), vec![vec![nv(3.0)], vec![nv(0.0)], vec![nv(1.0)]]);
+}

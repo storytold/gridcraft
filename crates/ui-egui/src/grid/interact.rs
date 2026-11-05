@@ -1069,8 +1069,9 @@ fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
 }
 
 /// A click on a hyperlink. References select; web and e-mail addresses ask first (the dialog's
-/// OK runs `link.open`); every other kind is refused with a message. The decision is the
-/// engine's ([`gridcraft_engine::links::classify`]), the same one `link.open` applies.
+/// OK calls `Session::open_confirmed_link`, since `link.open` refuses them for programmatic
+/// callers, #2181); every other kind is refused with a message. The decision is the engine's
+/// ([`gridcraft_engine::links::classify`]), the same one `link.open` applies.
 pub fn follow_link(app: &mut SheetApp, target: &str) {
     use gridcraft_engine::links::{LinkKind, classify};
     match classify(target) {
