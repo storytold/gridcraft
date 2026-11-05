@@ -743,7 +743,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ("Total principal repaid between two periods.", "Capitalul total rambursat între două perioade."),
     ("Two-tailed Student's t probability.", "Probabilitatea bilaterală pentru distribuția t a lui Student."),
     ("Two-tailed inverse of Student's t distribution.", "Inversa bilaterală a distribuției t a lui Student."),
-    ("Two-tailed probability that two variances do not differ.", "Probabilitate bilaterală ca două dispersii să nu difere."),
+    ("Two-tailed p-value of an F-test for equality of variances.", "Valoarea p bilaterală a unui test F pentru egalitatea varianțelor."),
     ("Values along a fitted exponential growth curve.", "Valori de-a lungul unei curbe de creștere exponențială adaptată."),
     ("Values along a least-squares linear fit.", "Valori de-a lungul unei drepte ajustate prin metoda celor mai mici pătrate."),
     ("Vertical array of all the most frequent numbers.", "Matrice verticală a tuturor celor mai frecvente numere."),

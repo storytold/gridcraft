@@ -719,7 +719,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ("Total principal repaid between two periods.", "Totale hoofdsom afgelost tussen twee periodes."),
     ("Two-tailed Student's t probability.", "Tweezijdige kans van de t-verdeling van Student."),
     ("Two-tailed inverse of Student's t distribution.", "Tweezijdige inverse van Student's t-verdeling."),
-    ("Two-tailed probability that two variances do not differ.", "Tweezijdige waarschijnlijkheid dat twee varianties niet verschillen."),
+    ("Two-tailed p-value of an F-test for equality of variances.", "Tweezijdige p-waarde van een F-toets op gelijkheid van varianties."),
     ("Values along a fitted exponential growth curve.", "Waarden langs een aangepaste exponentiële groeicurve."),
     ("Values along a least-squares linear fit.", "Waarden langs een lineaire aanpassing met de kleinste kwadraten."),
     ("Vertical array of all the most frequent numbers.", "Verticale reeks van de meest voorkomende nummers."),

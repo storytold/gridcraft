@@ -304,6 +304,9 @@ pub struct FilterValue {
     pub selected: bool,
     pub value: Value,
     pub formula_shown: bool,
+    /// Representative source cell, allowing interfaces to retain its numeric format for display.
+    /// Commands continue to use the canonical `label`, independently of this presentation metadata.
+    pub source: CellRef,
 }
 
 /// Distinct filter choices retaining typed values; blanks use Empty while command labels stay canonical.
@@ -331,7 +334,9 @@ pub fn filter_entries(wb: &Workbook, sheet: usize, col: u32) -> Vec<FilterValue>
         let key = if blank { sort_key(&Value::Empty) } else { sort_key(&v) };
         let formula_shown =
             !blank && sh.show_formulas && sh.cell(c).is_some_and(|cell| cell.formula.is_some()) && !crate::display::formula_hidden(wb, sh, c);
-        seen.entry((key, t, formula_shown)).or_insert((on, if blank { Value::Empty } else { v }));
+        seen.entry((key, t, formula_shown)).or_insert((on, if blank { Value::Empty } else { v }, c));
     }
-    seen.into_iter().map(|((_, label, formula_shown), (selected, value))| FilterValue { label, selected, value, formula_shown }).collect()
+    seen.into_iter()
+        .map(|((_, label, formula_shown), (selected, value, source))| FilterValue { label, selected, value, formula_shown, source })
+        .collect()
 }

@@ -506,7 +506,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ("Total principal repaid between two periods.", "两个时期之间偿还的本金总额。"),
     ("Two-tailed Student's t probability.", "双尾学生 t 概率。"),
     ("Two-tailed inverse of Student's t distribution.", "Student t 分布的双尾逆分布。"),
-    ("Two-tailed probability that two variances do not differ.", "两个方差没有差异的双尾概率。"),
+    ("Two-tailed p-value of an F-test for equality of variances.", "检验方差是否相等的 F 检验的双侧 p 值。"),
     ("Values along a fitted exponential growth curve.", "沿着拟合指数增长曲线的值。"),
     ("Values along a least-squares linear fit.", "沿最小二乘线性拟合的值。"),
     ("Vertical array of all the most frequent numbers.", "所有最常见数字的垂直数组。"),

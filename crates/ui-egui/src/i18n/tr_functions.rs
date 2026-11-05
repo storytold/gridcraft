@@ -665,7 +665,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ("Total principal repaid between two periods.", "İki dönem arasında geri ödenen toplam anapara."),
     ("Two-tailed Student's t probability.", "İki kuyruklu Student t olasılığı."),
     ("Two-tailed inverse of Student's t distribution.", "Student t dağılımının iki kuyruklu tersi."),
-    ("Two-tailed probability that two variances do not differ.", "İki varyansın farklı olmadığı iki kuyruklu olasılık."),
+    ("Two-tailed p-value of an F-test for equality of variances.", "Varyansların eşitliğine ilişkin F testinin iki yönlü p değeri."),
     ("Values along a fitted exponential growth curve.", "Verilere uydurulmuş bir üstel büyüme eğrisi üzerindeki değerler."),
     ("Values along a least-squares linear fit.", "En küçük kareler doğrusal uyumu boyunca değerler."),
     ("Vertical array of all the most frequent numbers.", "En sık görülen tüm sayılardan oluşan dikey dizi."),

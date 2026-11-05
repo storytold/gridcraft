@@ -24,6 +24,19 @@ messages use `tr_error`; selected dynamic parser/parameter messages preserve cap
 The Format Cells editor displays Russian date/time tokens while keeping canonical format
 codes in storage. Full regional number/date rendering remains outstanding.
 
+## Czech catalog audit (2026-11-05)
+
+The Czech interface catalog explicitly covers the 2,427 keys in the current audited
+inventory, including diagnostic templates, generated names, macro controls, chart and
+filter dialogs, printing and update prompts. A regression checks this inventory.
+This is catalog coverage; connecting every remaining UI literal is a separate audit.
+The 479 function descriptions and 283 argument labels were read against the English
+catalog, with corrections to statistical, financial and text-function terminology.
+This pass uses direct language review without an external translation service;
+native-speaker review remains welcome. Formula aliases and stored XLSX syntax are unchanged.
+F.TEST/FTEST help now describes a two-tailed p-value rather than a probability that
+variances are equal; its English key and all existing translated help rows change together.
+
 ## Function help coverage
 
 Twenty languages have descriptions and argument labels for the current
@@ -120,7 +133,9 @@ include the rest of the catalog work below (10–20 h, counted once), localized 
 separators, number/date formats, machine translation with agent review, and script work.
 
 | Language | Code | UI strings translated | Dialogs / tooltips / help | Script support | Native review | Status | Estimate to full |
-|---|---|---|---|---|---|---|---|
+|---|---|---|
+| 2026-11-05 | minor | Complete the Czech 2,427-key interface inventory and review all 762 Czech help rows; correct mathematical and financial terms and synchronize the clarified F-test help key across all 19 translated tables |---|---|---|---|
+| 2026-11-05 | minor | Complete the Czech 2,427-key interface inventory and review all 762 Czech help rows; correct mathematical and financial terms and synchronize the clarified F-test help key across all 19 translated tables |---|
 | English | en | ~2,200 / ~2,200 (100%, source) | yes | Latin: yes | yes | full | — |
 | Simplified Chinese (Mandarin) | zh-Hans | 266 (~12%) | no | CJK system-font fallback (#38); IME unverified; PDF can't export | no | menus only | 8–13 h |
 | Spanish | es | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
@@ -163,6 +178,8 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | Complete the Czech 2,427-key interface inventory and review all 762 Czech help rows; correct mathematical and financial terms and synchronize the clarified F-test help key across all 19 translated tables |
+| 2026-11-05 | minor | Search translated command paths with contextual ribbon-tab names; localize Boolean/error format samples and numeric filter captions without changing canonical filter values; correct French agreement and replace 100 English fallback entries in the Ukrainian interface |
 | 2026-11-05 | minor | Localize the initial desktop workbook after preference loading, enforce Unicode-aware sheet uniqueness, print totals formulas through the shared structured-reference printer and correct Traditional Chinese rate-series help |
 | 2026-11-05 | minor | Localize selection statistics, correct Thai date IDs and Traditional Chinese security-price help; keep generated-name defaults local to UI invocation, share prefix validation and document/test name-scope identities without changing legacy deletion semantics |
 | 2026-11-05 | minor | Align grid and format previews with the UI number locale while keeping engine output canonical; accept Unicode case variants of General, match observed German Excel March abbreviation, and correct Chinese price/direction and Spanish/Italian gallery labels |

@@ -731,7 +731,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ("Total principal repaid between two periods.", "Συνολικό κεφάλαιο που εξοφλήθηκε μεταξύ δύο περιόδων."),
     ("Two-tailed Student's t probability.", "Πιθανότητα δύο ουρών της κατανομής t του Student."),
     ("Two-tailed inverse of Student's t distribution.", "Αντίστροφη της κατανομής t του Student για δύο ουρές."),
-    ("Two-tailed probability that two variances do not differ.", "Πιθανότητα δύο ουρών ότι δύο διακυμάνσεις δεν διαφέρουν."),
+    ("Two-tailed p-value of an F-test for equality of variances.", "Αμφίπλευρη τιμή p ελέγχου F για την ισότητα διασπορών."),
     ("Values along a fitted exponential growth curve.", "Τιμές κατά μήκος προσαρμοσμένης καμπύλης εκθετικής ανάπτυξης."),
     ("Values along a least-squares linear fit.", "Τιμές κατά μήκος γραμμικής προσαρμογής ελαχίστων τετραγώνων."),
     ("Vertical array of all the most frequent numbers.", "Κάθετη διάταξη όλων των πιο συχνών αριθμών."),

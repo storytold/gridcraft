@@ -135,6 +135,15 @@ fn filter_value_label(entry: &FilterValue, language: crate::i18n::Language, wb: 
         language.tr("(Blanks)").to_owned()
     } else if entry.formula_shown {
         crate::formula_locale::display(&entry.label, language.formula_locale(), wb, sheet)
+    } else if matches!(entry.value, gridcraft_engine::core::Value::Number(_)) {
+        wb.sheet(sheet).map_or_else(
+            || entry.label.clone(),
+            |sh| {
+                let style = wb.styles.get(sh.style_id(entry.source));
+                let format = gridcraft_engine::display::number_format(style.num_fmt.as_str());
+                gridcraft_engine::numfmt::format_value_with_locale(&entry.value, &format, wb.date_system, language.number_locale()).text
+            },
+        )
     } else {
         crate::formula_locale::localized_constant(&entry.value, language.formula_locale()).unwrap_or(&entry.label).to_owned()
     }

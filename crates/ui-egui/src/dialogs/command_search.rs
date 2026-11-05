@@ -33,15 +33,9 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
                 || c.label.to_lowercase().contains(&q)
                 || lang.tr(c.label).to_lowercase().contains(&q)
                 || c.id.to_ascii_lowercase().contains(&q)
+                || localized_menu_path(&c.menu, lang).to_lowercase().contains(&q)
         })
-        .map(|c| {
-            (
-                c.id.to_string(),
-                lang.tr(c.label).to_string(),
-                c.menu.iter().map(|part| lang.tr(part)).collect::<Vec<_>>().join(" › "),
-                c.shortcut_for_platform(mac),
-            )
-        })
+        .map(|c| (c.id.to_string(), lang.tr(c.label).to_string(), localized_menu_path(&c.menu, lang), c.shortcut_for_platform(mac)))
         .take(40)
         .collect();
 
@@ -104,4 +98,9 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         app.dialog = None;
         app.run_or_alert(&id, json!({}));
     }
+}
+
+/// Uses the ribbon's contextual tab name and ordinary translations for its groups.
+fn localized_menu_path(menu: &[&str], language: crate::i18n::Language) -> String {
+    menu.iter().enumerate().map(|(index, part)| if index == 0 { language.tr_tab(part) } else { language.tr(part) }).collect::<Vec<_>>().join(" › ")
 }

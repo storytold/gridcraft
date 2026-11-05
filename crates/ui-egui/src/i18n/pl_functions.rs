@@ -686,7 +686,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ("Total principal repaid between two periods.", "Łączny kapitał spłacony między dwoma okresami."),
     ("Two-tailed Student's t probability.", "Dwustronne prawdopodobieństwo t-Studenta."),
     ("Two-tailed inverse of Student's t distribution.", "Dwustronna odwrotność rozkładu t-Studenta."),
-    ("Two-tailed probability that two variances do not differ.", "Dwustronne prawdopodobieństwo, że dwie wariancje nie różnią się."),
+    ("Two-tailed p-value of an F-test for equality of variances.", "Dwustronna wartość p testu F równości wariancji."),
     ("Values along a fitted exponential growth curve.", "Wartości wzdłuż dopasowanej krzywej wzrostu wykładniczego."),
     ("Values along a least-squares linear fit.", "Wartości zgodne z dopasowaniem liniowym metodą najmniejszych kwadratów."),
     ("Vertical array of all the most frequent numbers.", "Pionowa tablica wszystkich najczęściej występujących liczb."),

@@ -340,3 +340,68 @@ fn programmatic_generated_names_are_language_independent() {
         assert_eq!(app.session.active().unwrap().wb.active().unwrap().tables[0].columns[0].name, "Field1");
     }
 }
+
+/// Command search follows contextual ribbon-tab names while preserving command-ID lookup.
+#[test]
+fn command_search_matches_localized_menu_paths() {
+    let mut h = harness();
+    h.state_mut().open_dialog("commandSearch", json!({}));
+    h.state_mut().dialog.as_mut().unwrap().search = Language::Ru.tr_tab("Insert").into();
+    h.run_steps(3);
+    assert!(h.query_by_label_contains(Language::Ru.tr("Table")).is_some(), "Insert-tab commands must be searchable by Вставка");
+    assert!(h.get_all_by_label_contains("Вставка ›").count() > 0, "the displayed path must use the ribbon's noun");
+    h.state_mut().dialog.as_mut().unwrap().search = "insert.table".into();
+    h.run_steps(3);
+    assert!(h.query_by_label_contains(Language::Ru.tr("Table")).is_some());
+}
+
+/// Format Cells samples localize typed constants without translating ordinary cell text.
+#[test]
+fn format_samples_localize_boolean_and_error_constants() {
+    for (input, expected) in [("=TRUE()", "ИСТИНА"), ("=FALSE()", "ЛОЖЬ"), ("=1/0", "#ДЕЛ/0!")] {
+        let mut h = harness();
+        h.state_mut().run("cell.set", json!({"cell":"A1", "input":input})).unwrap();
+        h.state_mut().open_dialog("formatCells", json!({}));
+        h.run_steps(3);
+        assert!(h.query_by_label(expected).is_some(), "{input}: missing sample {expected}");
+    }
+    let mut h = harness();
+    h.state_mut().run("range.setValues", json!({"range":"A1", "values":[["TRUE"]], "parse":false})).unwrap();
+    h.state_mut().open_dialog("formatCells", json!({}));
+    h.run_steps(3);
+    assert!(h.query_by_label("TRUE").is_some());
+}
+
+/// Localized filter captions retain number formats and canonical filter payloads.
+#[test]
+fn numeric_filter_search_uses_regional_display_and_canonical_values() {
+    use egui::{Event, Key, Modifiers, accesskit::Role};
+    for (code, value, caption, canonical) in [
+        ("General", 1.5, "1,5", "1.5"),
+        ("0.00", 1.5, "1,50", "1.50"),
+        ("0.00\" v1.0\"", 1.5, "1,50 v1.0", "1.50 v1.0"),
+        ("mmm", 46096.0, "Mrz", "Mar"),
+    ] {
+        let mut h = harness();
+        h.state_mut().run("app.language.set", json!({"language":"de"})).unwrap();
+        h.state_mut().run("range.setValues", json!({"range":"A1", "values":[["Header"],[value],[2.5]]})).unwrap();
+        h.state_mut().run("home.numberFormat", json!({"range":"A2", "code":code})).unwrap();
+        h.state_mut().run("data.filter", json!({"range":"A1:A3"})).unwrap();
+        let doc = h.state().session.active().unwrap();
+        let entries = gridcraft_engine::cmd::data::filter_entries(&doc.wb, doc.wb.active_sheet(), 0);
+        assert!(entries.iter().any(|entry| entry.label == canonical));
+        h.state_mut().run("selection.set", json!({"cell":"A1"})).unwrap();
+        press(&mut h, Key::ArrowDown, Modifiers::ALT);
+        h.run_steps(4);
+        h.get_by_role_and_label(Role::CheckBox, caption);
+        h.input_mut().events.push(Event::Text(caption.into()));
+        h.run_steps(3);
+        h.get_by_role_and_label(Role::CheckBox, caption);
+        press(&mut h, Key::Enter, Modifiers::NONE);
+        h.run_steps(3);
+        let sheet = h.state().session.active().unwrap().wb.active().unwrap();
+        assert!(!sheet.is_row_hidden(1), "{code}: selected numeric value disappeared");
+        assert!(sheet.is_row_hidden(2), "{code}: unrelated row remained visible");
+        assert_eq!(sheet.value(gridcraft_engine::core::CellRef::new(1, 0)), gridcraft_engine::core::Value::Number(value));
+    }
+}

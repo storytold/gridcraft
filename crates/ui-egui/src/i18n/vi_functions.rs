@@ -629,7 +629,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ("Total principal repaid between two periods.", "Tổng số tiền gốc hoàn trả giữa 2 kỳ."),
     ("Two-tailed Student's t probability.", "Xác suất t Student hai đuôi."),
     ("Two-tailed inverse of Student's t distribution.", "Nghịch đảo hai đuôi của phân phối t Student."),
-    ("Two-tailed probability that two variances do not differ.", "Xác suất hai phía mà hai phương sai không khác nhau."),
+    ("Two-tailed p-value of an F-test for equality of variances.", "Giá trị p hai phía của kiểm định F về sự bằng nhau của các phương sai."),
     ("Values along a fitted exponential growth curve.", "Các giá trị dọc theo đường cong tăng trưởng theo cấp số nhân phù hợp."),
     ("Values along a least-squares linear fit.", "Các giá trị dọc theo đường khớp tuyến tính bình phương nhỏ nhất."),
     ("Vertical array of all the most frequent numbers.", "Mảng dọc chứa tất cả các số thường xuyên nhất."),

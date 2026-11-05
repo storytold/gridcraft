@@ -641,7 +641,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ("Total principal repaid between two periods.", "Загальна сума основної суми, погашена між двома періодами."),
     ("Two-tailed Student's t probability.", "Двостороння ймовірність t Стьюдента."),
     ("Two-tailed inverse of Student's t distribution.", "Двосторонній обернений t-розподіл Стьюдента."),
-    ("Two-tailed probability that two variances do not differ.", "Двостороння ймовірність того, що дві дисперсії не відрізняються."),
+    ("Two-tailed p-value of an F-test for equality of variances.", "Двобічне p-значення F-тесту рівності дисперсій."),
     ("Values along a fitted exponential growth curve.", "Значення вздовж підігнаної кривої експоненціального зростання."),
     ("Values along a least-squares linear fit.", "Значення вздовж лінійної відповідності методом найменших квадратів."),
     ("Vertical array of all the most frequent numbers.", "Вертикальний масив усіх найчастіших чисел."),

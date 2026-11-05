@@ -763,10 +763,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ("Total principal repaid between two periods.", "Возвращает общую сумму погашенного основного долга между двумя периодами."),
     ("Two-tailed Student's t probability.", "Вычисляет двустороннюю вероятность распределения Стьюдента."),
     ("Two-tailed inverse of Student's t distribution.", "Возвращает двустороннюю обратную функцию распределения Стьюдента."),
-    (
-        "Two-tailed probability that two variances do not differ.",
-        "Возвращает двустороннюю вероятность того, что дисперсии двух выборок не различаются.",
-    ),
+    ("Two-tailed p-value of an F-test for equality of variances.", "Возвращает двустороннее p-значение F-теста равенства дисперсий."),
     ("Values along a fitted exponential growth curve.", "Возвращает значения подобранной кривой экспоненциального роста."),
     ("Values along a least-squares linear fit.", "Возвращает значения линейной зависимости, подобранной методом наименьших квадратов."),
     ("Vertical array of all the most frequent numbers.", "Возвращает вертикальный массив всех наиболее часто встречающихся чисел."),

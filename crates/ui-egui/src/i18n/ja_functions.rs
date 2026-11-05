@@ -587,7 +587,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ("Total principal repaid between two periods.", "2 つの期間の間に返済された元本の合計。"),
     ("Two-tailed Student's t probability.", "スチューデントの t 分布の両側確率。"),
     ("Two-tailed inverse of Student's t distribution.", "Student の t 分布の両側逆関数。"),
-    ("Two-tailed probability that two variances do not differ.", "2 つの分散が異ならない両側確率。"),
+    ("Two-tailed p-value of an F-test for equality of variances.", "分散の等しさを検定する F 検定の両側 p 値を返します。"),
     ("Values along a fitted exponential growth curve.", "近似された指数関数的増加曲線に沿った値。"),
     ("Values along a least-squares linear fit.", "最小二乗線形近似に基づく値。"),
     ("Vertical array of all the most frequent numbers.", "すべての最頻値の垂直配列。"),

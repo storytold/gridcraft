@@ -632,7 +632,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ("Total principal repaid between two periods.", "Ukupna glavnica otplaćena između dva perioda."),
     ("Two-tailed Student's t probability.", "Dvostrana Studentova t verovatnoća."),
     ("Two-tailed inverse of Student's t distribution.", "Dvostrana inverzna funkcija Studentove t-raspodele."),
-    ("Two-tailed probability that two variances do not differ.", "Dvostrana verovatnoća da se dve varijanse ne razlikuju."),
+    ("Two-tailed p-value of an F-test for equality of variances.", "Dvostrana p-vrednost F-testa jednakosti varijansi."),
     ("Values along a fitted exponential growth curve.", "Vrednosti duž prilagođene krive eksponencijalnog rasta."),
     ("Values along a least-squares linear fit.", "Vrednosti na pravoj prilagođenoj metodom najmanjih kvadrata."),
     ("Vertical array of all the most frequent numbers.", "Vertikalni niz svih najčešćih brojeva."),

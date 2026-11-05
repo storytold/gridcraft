@@ -578,7 +578,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ("Total principal repaid between two periods.", "두 기간 사이에 상환된 총 원금입니다."),
     ("Two-tailed Student's t probability.", "스튜던트 t 분포의 양측 확률입니다."),
     ("Two-tailed inverse of Student's t distribution.", "스튜던트 t 분포의 양측 역함수입니다."),
-    ("Two-tailed probability that two variances do not differ.", "두 분산이 다르지 않을 양측 확률입니다."),
+    ("Two-tailed p-value of an F-test for equality of variances.", "두 분산의 동일성을 검정하는 F 검정의 양측 p값입니다."),
     ("Values along a fitted exponential growth curve.", "적합 지수 성장 곡선에 따른 값입니다."),
     ("Values along a least-squares linear fit.", "최소 제곱 선형 피팅에 따른 값입니다."),
     ("Vertical array of all the most frequent numbers.", "가장 빈번한 모든 숫자의 수직 배열입니다."),
