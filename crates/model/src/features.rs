@@ -108,6 +108,14 @@ pub enum CfOperator {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CfValueKind {
+    /// A data bar's Automatic minimum: the bar starts at 0, or at the lowest value when that is
+    /// negative — the default of Excel's Data Bars gallery. Excel tells it apart from
+    /// [`CfValueKind::Min`] (Lowest Value) only in the x14 extension (`autoMin`), so a rule with
+    /// one always needs an extension on save.
+    AutoMin,
+    /// A data bar's Automatic maximum: the highest value. Like [`CfValueKind::AutoMin`], only
+    /// the x14 extension (`autoMax`) tells it apart from [`CfValueKind::Max`] (Highest Value).
+    AutoMax,
     Min,
     Max,
     Number(f64),

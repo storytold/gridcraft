@@ -309,9 +309,13 @@ const X14_DATABAR_SHEET: &str = r#"<sheetData>
 fn excel_shaped_x14_databar_imports() {
     let (wb, rep) = read_xlsx(&minimal(X14_DATABAR_SHEET, &[], "", "")).unwrap();
     let s = wb.sheet(0).unwrap();
-    let CfRule::DataBar { gradient, border, negative_fill, negative_border, axis, limits, .. } = &s.cond_formats[0].rule else {
+    let CfRule::DataBar { min, max, gradient, border, negative_fill, negative_border, axis, limits, .. } = &s.cond_formats[0].rule else {
         panic!("not a data bar: {:?}", s.cond_formats[0].rule)
     };
+    // The x14 autoMin/autoMax tell the Automatic bounds apart from the classic section's
+    // Lowest/Highest min/max (#1159): this bar keeps Excel's gallery defaults.
+    assert_eq!(*min, CfValueKind::AutoMin);
+    assert_eq!(*max, CfValueKind::AutoMax);
     assert!(!*gradient);
     assert_eq!(*border, Some(Color::Rgb(0x638EC8)));
     assert_eq!(*negative_fill, Some(Color::Rgb(0xFF0000)));

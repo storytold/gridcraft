@@ -563,8 +563,13 @@ fn cfvo(e: &El) -> CfValueKind {
     let val = e.attr("val").unwrap_or("");
     let n = val.trim().parse::<f64>().ok().filter(|v| v.is_finite());
     match e.attr("type").unwrap_or("num") {
-        "min" | "autoMin" => CfValueKind::Min,
-        "max" | "autoMax" => CfValueKind::Max,
+        // The classic section's own bound names are Lowest/Highest (`min`/`max`); a classic
+        // `autoMin`/`autoMax` is not in the schema, but a writer that puts one there means
+        // Automatic, so it reads as that (and saves with a proper x14 rule).
+        "autoMin" => CfValueKind::AutoMin,
+        "autoMax" => CfValueKind::AutoMax,
+        "min" => CfValueKind::Min,
+        "max" => CfValueKind::Max,
         "percent" => n.map(CfValueKind::Percent).unwrap_or_else(|| CfValueKind::Formula(from_file(val))),
         "percentile" => n.map(CfValueKind::Percentile).unwrap_or_else(|| CfValueKind::Formula(from_file(val))),
         "formula" => CfValueKind::Formula(from_file(val)),
@@ -1227,14 +1232,21 @@ fn merge_x14_data_bar(cx: &Ctx<'_>, db: &El, rule: &mut CfRule) -> bool {
     skipped
 }
 
-/// One x14 `cfvo`, its value in an `xm:f` child (`autoMin`/`autoMax` carry none). `None` when
-/// the type or its value can't be used.
+/// One x14 `cfvo`, its value in an `xm:f` child (`autoMin`/`autoMax`/`min`/`max` carry none).
+/// `autoMin`/`autoMax` are the data bar's Automatic bounds, apart from Lowest/Highest Value
+/// (`min`/`max`) as in Excel (#1159). `None` when the type or its value can't be used.
 fn x14_cfvo(e: &El) -> Option<CfValueKind> {
     let t = e.attr("type").unwrap_or("num");
     if t == "autoMin" {
-        return Some(CfValueKind::Min);
+        return Some(CfValueKind::AutoMin);
     }
     if t == "autoMax" {
+        return Some(CfValueKind::AutoMax);
+    }
+    if t == "min" {
+        return Some(CfValueKind::Min);
+    }
+    if t == "max" {
         return Some(CfValueKind::Max);
     }
     let f = e.child("f").map(|f| f.text.trim()).filter(|f| !f.is_empty())?;

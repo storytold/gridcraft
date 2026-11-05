@@ -59,12 +59,15 @@ fn id_ext(priority: u32) -> String {
     format!("<extLst><ext xmlns:x14=\"{NS_X14}\" uri=\"{URI_X14_ID}\"><x14:id>{}</x14:id></ext></extLst>", x14_guid(priority))
 }
 
-/// One x14 `cfvo`: the value is an `xm:f` child, never a `val` attribute; `Min`/`Max` are
-/// Excel's `autoMin`/`autoMax`, which carry no value.
+/// One x14 `cfvo`: the value is an `xm:f` child, never a `val` attribute; the bound types that
+/// carry no value are `autoMin`/`autoMax` (a data bar's Automatic bounds) and `min`/`max`
+/// (Lowest/Highest Value) — the distinction the classic section cannot make (#1159).
 fn x14_cfvo_xml(v: &CfValueKind) -> String {
     match v {
-        CfValueKind::Min => "<x14:cfvo type=\"autoMin\"/>".into(),
-        CfValueKind::Max => "<x14:cfvo type=\"autoMax\"/>".into(),
+        CfValueKind::AutoMin => "<x14:cfvo type=\"autoMin\"/>".into(),
+        CfValueKind::AutoMax => "<x14:cfvo type=\"autoMax\"/>".into(),
+        CfValueKind::Min => "<x14:cfvo type=\"min\"/>".into(),
+        CfValueKind::Max => "<x14:cfvo type=\"max\"/>".into(),
         CfValueKind::Number(n) => format!("<x14:cfvo type=\"num\"><xm:f>{}</xm:f></x14:cfvo>", num(*n)),
         CfValueKind::Percent(n) => format!("<x14:cfvo type=\"percent\"><xm:f>{}</xm:f></x14:cfvo>", num(*n)),
         CfValueKind::Percentile(n) => format!("<x14:cfvo type=\"percentile\"><xm:f>{}</xm:f></x14:cfvo>", num(*n)),
@@ -807,6 +810,11 @@ fn write_cell(
 
 fn cfvo_xml(v: &CfValueKind) -> String {
     match v {
+        // The classic section cannot tell Automatic from Lowest/Highest (both are `min`/`max`;
+        // only the x14 extension can — see `x14_cfvo_xml`), which is why a rule with an
+        // Automatic bound always writes one.
+        CfValueKind::AutoMin => "<cfvo type=\"min\"/>".into(),
+        CfValueKind::AutoMax => "<cfvo type=\"max\"/>".into(),
         CfValueKind::Min => "<cfvo type=\"min\"/>".into(),
         CfValueKind::Max => "<cfvo type=\"max\"/>".into(),
         CfValueKind::Number(n) => format!("<cfvo type=\"num\" val=\"{}\"/>", num(*n)),
@@ -925,10 +933,18 @@ fn cf_rule_xml(cf: &CondFormat, priority: u32, out: &mut Out) -> CfXml {
             CfXml { classic: Some(format!("<cfRule type=\"colorScale\" priority=\"{priority}\"{stop}>{b}</cfRule>")), x14: None }
         }
         CfRule::DataBar { min, max, color, gradient, show_value, border, negative_fill, negative_border, axis, limits } => {
-            // Solid fill, border, negative colours, axis and length limits exist only in x14;
-            // a plain gradient bar is fully classic and must not grow an extension.
-            let extended =
-                !*gradient || border.is_some() || negative_fill.is_some() || negative_border.is_some() || axis.is_some() || limits.is_some();
+            // Solid fill, border, negative colours, axis, length limits and Automatic bounds
+            // (which the classic section cannot express — `min`/`max` there are Lowest/Highest)
+            // exist only in x14; a plain gradient bar is fully classic and must not grow an
+            // extension.
+            let extended = !*gradient
+                || border.is_some()
+                || negative_fill.is_some()
+                || negative_border.is_some()
+                || axis.is_some()
+                || limits.is_some()
+                || matches!(min, CfValueKind::AutoMin | CfValueKind::AutoMax)
+                || matches!(max, CfValueKind::AutoMin | CfValueKind::AutoMax);
             let col = if *color == Color::Auto { "rgb=\"FF638EC6\"".to_string() } else { color_attrs(color) };
             let x14 = extended.then(|| {
                 let mut a = String::new();

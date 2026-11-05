@@ -87,6 +87,11 @@ fn threshold(wb: &Workbook, sheet: usize, at: CellRef, st: &RuleStats, k: &CfVal
     let min = st.sorted.first().copied().unwrap_or(0.0);
     let max = st.sorted.last().copied().unwrap_or(0.0);
     match k {
+        // A data bar's Automatic bounds: the minimum is pulled to zero unless the values go
+        // lower (the gallery's bar starts at 0, or at the lowest value when that is negative);
+        // the maximum is the highest value as-is.
+        CfValueKind::AutoMin => min.min(0.0),
+        CfValueKind::AutoMax => max,
         CfValueKind::Min => min,
         CfValueKind::Max => max,
         CfValueKind::Number(n) => *n,
@@ -266,19 +271,30 @@ impl CfCache {
                         } else {
                             0.0
                         };
-                        // Bar length: the value's share of its own side's span — its magnitude
-                        // against that side's extreme, so the extreme reaches the maximum —
-                        // mapped into the rule's length limits, Excel's default 10/90.
-                        let (min_len, max_len) = limits.map(|(a, b)| (a.min(b) as f64 / 100.0, a.max(b) as f64 / 100.0)).unwrap_or((0.1, 0.9));
-                        let u = if n < 0.0 {
-                            // Below a non-negative lower bound the value is off the scale low:
-                            // the shortest bar, not the longest.
-                            if lo < 0.0 { (n / lo).clamp(0.0, 1.0) } else { 0.0 }
-                        } else if hi > 0.0 {
-                            (n / hi).clamp(0.0, 1.0)
+                        // Bar length. With bounds that span zero the axis sits at zero and each
+                        // bar is its value's share of its own side (the side's extreme reaching
+                        // from the axis to that side's edge). Otherwise the axis parks at the
+                        // edge nearest zero and the bar is the value's place between the bounds,
+                        // measured from that edge — Excel's (value − min) / (max − min), clamped,
+                        // for Lowest/Number/Percent/Percentile/Formula bounds alike; only an
+                        // Automatic minimum pulls the lower bound to zero (see `threshold`).
+                        // Measured in Excel for Microsoft 365: Lowest–Highest over 10…20 gives
+                        // 15 → 0.50 and Number 3–8 gives 4 → 0.20 (#1158); Automatic over 10…20
+                        // gives 10 → 0.50 (#1159).
+                        let u = if lo < 0.0 && hi > 0.0 {
+                            if n < 0.0 { (n / lo).clamp(0.0, 1.0) } else { (n / hi).clamp(0.0, 1.0) }
+                        } else if hi <= 0.0 {
+                            // All non-positive: the axis parks at the right edge; the share runs
+                            // from the upper bound (measured: Automatic −10…0 gives −5 → 0.50).
+                            if hi > lo { ((hi - n) / (hi - lo)).clamp(0.0, 1.0) } else { 0.0 }
+                        } else if hi > lo {
+                            ((n - lo) / (hi - lo)).clamp(0.0, 1.0)
                         } else {
                             1.0
                         };
+                        // The share is mapped into the rule's length limits, Excel's default
+                        // 10/90 for a rule without an x14 extension.
+                        let (min_len, max_len) = limits.map(|(a, b)| (a.min(b) as f64 / 100.0, a.max(b) as f64 / 100.0)).unwrap_or((0.1, 0.9));
                         let mag = min_len + u * (max_len - min_len);
                         let finite = |x: f64| if x.is_finite() { x as f32 } else { 0.0 };
                         let col = color.resolve(&wb.theme).unwrap_or([0x63, 0x8E, 0xC6]);
@@ -570,6 +586,80 @@ mod tests {
             assert!(b.frac.is_finite() && b.frac > 0.5 && b.frac <= 1.0, "a repeated value draws a full-length bar ({})", b.frac);
             assert_eq!(b.axis_frac, 0.0);
         }
+    }
+
+    #[test]
+    fn bar_lengths_match_excel() {
+        // Measured in Excel for Microsoft 365 (issues #1158 and #1159), tolerance 0.02: a data
+        // bar's length is the value's place between its bounds — (value − min) / (max − min),
+        // clamped — mapped into the rule's length limits (0–100 here, as Excel's own x14 rule
+        // stores); only an Automatic minimum pulls the lower bound to zero, and bounds spanning
+        // zero draw the axis at zero with each side scaled to its own extreme.
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        // A: Number 3–8 and Percent 20–80 over 0…10; B: Lowest–Highest over 10…20;
+        // C: Automatic over 10…20; D: Automatic with an axis over −5…5; E: over −10…0.
+        s.execute("range.setValues", json!({"range": "A1", "values": [[0],[1],[2],[3],[4],[5],[6],[7],[8],[9],[10]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "B1", "values": [[10],[11],[12],[13],[14],[15],[16],[17],[18],[19],[20]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "C1", "values": [[10],[11],[12],[13],[14],[15],[16],[17],[18],[19],[20]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "D1", "values": [[-5],[-4],[-3],[-2],[-1],[0],[1],[2],[3],[4],[5]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "E1", "values": [[-10],[-9],[-8],[-7],[-6],[-5],[-4],[-3],[-2],[-1],[0]]})).unwrap();
+        let bar = |min, max| CfRule::DataBar {
+            min,
+            max,
+            color: Color::rgb(0x63, 0x8E, 0xC6),
+            gradient: true,
+            show_value: true,
+            border: None,
+            negative_fill: None,
+            negative_border: None,
+            axis: None,
+            limits: Some((0, 100)),
+        };
+        add_rule(&mut s, "A1:A11", bar(CfValueKind::Number(3.0), CfValueKind::Number(8.0)));
+        // Percent 20–80 over 0…10: the percent bounds resolve against the range (2 and 8).
+        s.execute("range.setValues", json!({"range": "F1", "values": [[0],[1],[2],[3],[4],[5],[6],[7],[8],[9],[10]]})).unwrap();
+        add_rule(&mut s, "F1:F11", bar(CfValueKind::Percent(20.0), CfValueKind::Percent(80.0)));
+        add_rule(&mut s, "B1:B11", bar(CfValueKind::Min, CfValueKind::Max));
+        add_rule(&mut s, "C1:C11", bar(CfValueKind::AutoMin, CfValueKind::AutoMax));
+        add_rule(&mut s, "D1:D11", bar(CfValueKind::AutoMin, CfValueKind::AutoMax));
+        add_rule(&mut s, "E1:E11", bar(CfValueKind::AutoMin, CfValueKind::AutoMax));
+        let d = s.doc().unwrap();
+        let mut cache = CfCache::new();
+        let mut look = |a: &str| cache.look(&d.wb, 0, CellRef::parse(a).unwrap()).and_then(|l| l.bar);
+        let frac = |b: &Option<BarLook>| b.as_ref().map(|b| b.frac);
+        let close = |got: Option<f32>, want: f64, what: &str| {
+            let got = got.unwrap_or(f32::NAN);
+            assert!((f64::from(got) - want).abs() < 0.02, "{what}: {got} vs {want}");
+        };
+        // Number 3–8: the value's place between the bounds, not its share of the maximum.
+        close(frac(&look("A4")), 0.0, "Number 3–8, value 3");
+        close(frac(&look("A5")), 0.20, "Number 3–8, value 4");
+        close(frac(&look("A7")), 0.60, "Number 3–8, value 6");
+        close(frac(&look("A9")), 1.00, "Number 3–8, value 8");
+        // Percent 20–80 over 0…10: the bounds are 2 and 8, so 3 sits one sixth of the way.
+        close(frac(&look("F4")), 0.17, "Percent 20–80, value 3");
+        close(frac(&look("F6")), 0.50, "Percent 20–80, value 5");
+        // Lowest–Highest over 10…20: 15 sits half-way, not at 0.75 of the maximum.
+        close(frac(&look("B1")), 0.0, "Lowest–Highest, value 10");
+        close(frac(&look("B6")), 0.50, "Lowest–Highest, value 15");
+        close(frac(&look("B11")), 1.00, "Lowest–Highest, value 20");
+        // Automatic over 10…20: the minimum is pulled to zero, so the lowest value is half a bar.
+        close(frac(&look("C1")), 0.50, "Automatic, value 10");
+        close(frac(&look("C6")), 0.75, "Automatic, value 15");
+        close(frac(&look("C11")), 1.00, "Automatic, value 20");
+        // Automatic with bounds spanning zero: the axis at the middle, each side its own scale
+        // (the reported frac is of its side's half, so −1 reaches from the axis to the left edge).
+        let d1 = look("D1").expect("a bar");
+        assert!((d1.axis_frac - 0.5).abs() < 0.02, "the axis sits at zero ({})", d1.axis_frac);
+        close(frac(&look("D1")), -1.00, "axis, value −5");
+        close(frac(&look("D5")), -0.20, "axis, value −1");
+        close(frac(&look("D11")), 1.00, "axis, value 5");
+        // All non-positive: the axis parks at the right edge and bars grow left from it.
+        let e1 = look("E1").expect("a bar");
+        assert!((e1.axis_frac - 1.0).abs() < 0.02, "the axis parks at the right edge ({})", e1.axis_frac);
+        close(frac(&look("E1")), -1.00, "right-edge axis, value −10");
+        close(frac(&look("E6")), -0.50, "right-edge axis, value −5");
     }
 
     #[test]

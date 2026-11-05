@@ -964,11 +964,12 @@ fn x14_extensions_round_trip() {
         ),
         "{xml}"
     );
-    // A bare solid bar: omitted flags and elements, no axis, no border.
+    // A bare solid bar: omitted flags and elements, no axis, no border. Min/Max are
+    // Lowest/Highest Value — x14 `min`/`max`, not the gallery's `autoMin`/`autoMax` (#1159).
     assert!(
         xml.contains(
             "<x14:dataBar gradient=\"0\" axisPosition=\"none\">\
-<x14:cfvo type=\"autoMin\"/><x14:cfvo type=\"autoMax\"/><x14:fillColor rgb=\"FF638EC6\"/></x14:dataBar>"
+<x14:cfvo type=\"min\"/><x14:cfvo type=\"max\"/><x14:fillColor rgb=\"FF638EC6\"/></x14:dataBar>"
         ),
         "{xml}"
     );
@@ -1055,7 +1056,7 @@ fn negative_border_forces_the_x14_border() {
     assert!(
         xml.contains(
             "<x14:dataBar gradient=\"0\" border=\"1\" negativeBarBorderColorSameAsPositive=\"0\" axisPosition=\"none\">\
-<x14:cfvo type=\"autoMin\"/><x14:cfvo type=\"autoMax\"/><x14:fillColor rgb=\"FF638EC6\"/>\
+<x14:cfvo type=\"min\"/><x14:cfvo type=\"max\"/><x14:fillColor rgb=\"FF638EC6\"/>\
 <x14:borderColor auto=\"1\"/><x14:negativeBorderColor rgb=\"FFFF0000\"/></x14:dataBar>"
         ),
         "{xml}"
@@ -1241,4 +1242,41 @@ fn package_kind_sets_workbook_content_type() {
         assert_eq!(back.sheet(0).unwrap().value(at("A1")), Value::Number(7.0));
     }
     assert_eq!(crate::XlsxKind::from_path("noext"), crate::XlsxKind::Workbook);
+}
+
+/// #1159: Automatic bounds keep apart from Lowest/Highest Value. An Automatic bar grows an x14
+/// rule (the classic section cannot express the difference), writes `min`/`max` there with
+/// `autoMin`/`autoMax` in the x14 refinement — never `autoMin` in the classic section — and
+/// reads back with its Automatic bounds intact.
+#[test]
+fn automatic_databar_bounds_survive_a_round_trip() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    s.cond_formats.push(CondFormat {
+        ranges: vec![rr("A1:A10")],
+        rule: CfRule::DataBar {
+            min: CfValueKind::AutoMin,
+            max: CfValueKind::AutoMax,
+            color: Color::Rgb(0x638EC6),
+            gradient: true,
+            show_value: true,
+            border: None,
+            negative_fill: None,
+            negative_border: None,
+            axis: None,
+            limits: None,
+        },
+        priority: 1,
+        stop_if_true: false,
+    });
+    let bytes = write_xlsx(&wb).unwrap();
+    let (xml, _) = sheet1_xml(&bytes);
+    // Classic section: Lowest/Highest names only.
+    assert!(xml.contains("<cfvo type=\"min\"/><cfvo type=\"max\"/>"), "{xml}");
+    assert!(!xml.contains("val=\"autoMin\"") && !xml.contains("<cfvo type=\"autoMin\""), "no autoMin in the classic section: {xml}");
+    // The x14 refinement carries the Automatic bounds.
+    assert!(xml.contains("<x14:cfvo type=\"autoMin\"/><x14:cfvo type=\"autoMax\"/>"), "{xml}");
+    let (back, rep) = read_xlsx(&bytes).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    assert_eq!(back.sheet(0).unwrap().cond_formats, wb.sheet(0).unwrap().cond_formats);
 }
