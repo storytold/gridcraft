@@ -56,6 +56,7 @@ pub fn job(text: &str, runs: &CellRuns, base: &Font, base_color: Color32, theme:
 /// sections come out at the widget's own pixel size (`font_px`) over the cell style's point
 /// size, keeping the editor's type size while the runs paint their colours and fonts. `None` as
 /// [`job`] (invalid runs) — the widget then lays the text out flat, in one format.
+#[cfg(test)]
 pub fn buffer_job(text: &str, runs: &CellRuns, base: &Font, base_color: Color32, theme: &Theme, font_px: f32) -> Option<LayoutJob> {
     // A hostile file can carry a zero or negative base size (or NaN): no zoom recovers that, so
     // lay flat.

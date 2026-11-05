@@ -490,96 +490,6 @@ pub fn completion_rest<'a>(full: &'a str, typed: &str) -> Option<&'a str> {
     let start = full.char_indices().nth(typed.chars().count())?.0;
     full.get(start..)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn point_mode() {
-        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=SUM(".into(), true, false);
-        assert!(e.can_point());
-        e.insert_ref("A1");
-        assert_eq!(e.text, "=SUM(A1");
-        e.insert_ref("A2");
-        assert_eq!(e.text, "=SUM(A2");
-        e.text.push(':');
-        e.caret += 1;
-        e.point = None;
-        assert!(e.can_point());
-        let e2 = EditState::new(1, 0, CellRef::new(0, 0), "hello".into(), true, false);
-        assert!(!e2.can_point());
-    }
-
-    #[test]
-    fn a_pasted_name_replaces_the_selected_text() {
-        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=OldName+1".into(), false, false);
-        e.sync_caret = false;
-        (e.anchor, e.caret) = (8, 1);
-        e.autocomplete = vec!["SUM".into()];
-        e.insert_at_caret("Sales");
-        assert_eq!((e.text.as_str(), e.caret, e.anchor), ("=Sales+1", 6, 6));
-        assert!(e.autocomplete.is_empty(), "the earlier function suggestion is gone");
-        // Nothing selected: the name goes in at the caret.
-        e.sync_caret = false;
-        e.insert_at_caret("Rate");
-        assert_eq!((e.text.as_str(), e.caret), ("=SalesRate+1", 10));
-    }
-
-    #[test]
-    fn autocomplete_and_hints() {
-        let names: Vec<String> = ["SUM", "SUMIF", "SUMPRODUCT", "AVERAGE"].iter().map(|s| s.to_string()).collect();
-        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=su".into(), true, false);
-        e.update_autocomplete(&names);
-        assert_eq!(e.autocomplete.len(), 3);
-        assert!(e.accept_autocomplete());
-        assert_eq!(e.text, "=SUM(");
-        let e = EditState::new(1, 0, CellRef::new(0, 0), "=IF(A1>0,SUM(B1,".into(), true, false);
-        assert_eq!(e.current_function(), Some(("SUM".into(), 1)));
-    }
-
-    #[test]
-    fn ref_spans() {
-        let r = formula_refs("=A1+B2:C3*a1+Sheet2!D4");
-        assert_eq!(r.len(), 4);
-        assert_eq!(r[0].4, r[2].4); // A1 and a1 share a colour
-        assert_eq!(r[1].2.a1(), "B2:C3");
-        assert_eq!(r[3].3.as_deref(), Some("Sheet2"));
-    }
-
-    #[test]
-    fn refs_are_outlined_on_their_own_sheet_only() {
-        // Pointing at Sheet2 while the edit started on Sheet1: `A1` stays on Sheet1, `Sheet2!B2` shows on Sheet2.
-        assert!(ref_is_on_sheet(None, "Sheet1", "Sheet1"));
-        assert!(!ref_is_on_sheet(None, "Sheet1", "Sheet2"));
-        assert!(ref_is_on_sheet(Some("Sheet2"), "Sheet1", "Sheet2"));
-        assert!(!ref_is_on_sheet(Some("Sheet2"), "Sheet1", "Sheet1"));
-        assert!(ref_is_on_sheet(Some("sheet2"), "Sheet1", "Sheet2"), "sheet names compare ignoring case");
-    }
-
-    #[test]
-    fn whole_row_and_column_ref_spans() {
-        let refs = formula_refs("=SUM(C:C,4:6,$D:$E,Sheet2!7:8)");
-        assert_eq!(refs.len(), 4);
-        assert_eq!(refs[0].2.a1(), "C:C");
-        assert_eq!(refs[1].2.a1(), "4:6");
-        assert_eq!(refs[2].2.a1(), "D:E");
-        assert_eq!(refs[3].2.a1(), "7:8");
-        assert_eq!(refs[3].3.as_deref(), Some("Sheet2"));
-    }
-
-    #[test]
-    fn inserting_a_union_keeps_each_reference_separately_pointed() {
-        let mut edit = EditState::new(1, 0, CellRef::new(0, 0), "=SUM(".into(), true, false);
-        edit.insert_ref("C:C");
-        edit.append_ref("E:E");
-        assert_eq!(edit.text, "=SUM(C:C,E:E");
-        assert_eq!(formula_refs(&edit.text).iter().map(|r| r.2.a1()).collect::<Vec<_>>(), ["C:C", "E:E"]);
-        assert_eq!(edit.point, Some((9, 12)));
-        assert!(edit.can_point());
-    }
-}
-
 /// indices map through `char_indices`; one at or past the end maps to the text end.
 pub fn sel_bytes(ed: &EditState) -> Option<std::ops::Range<usize>> {
     let (from, to) = (ed.caret.min(ed.anchor), ed.caret.max(ed.anchor));
@@ -589,6 +499,9 @@ pub fn sel_bytes(ed: &EditState) -> Option<std::ops::Range<usize>> {
     let byte = |at: usize| ed.text.char_indices().nth(at).map(|(i, _)| i).unwrap_or(ed.text.len());
     Some(byte(from)..byte(to))
 }
+
+/// One `(byte range, font delta)` application against the edit buffer's runs.
+pub type RunApp = (std::ops::Range<usize>, RunFont);
 
 /// The Font-group commands that hit the edit buffer while an edit is active (the ribbon's
 /// `act`/`invoke`, keytips and shortcuts all funnel through [`crate::SheetApp::run`]).
@@ -616,12 +529,7 @@ pub const RUN_FONT_IDS: &[&str] = &[
 /// covered run for the size steppers); `Some(Err(msg))` = swallow with an alert (e.g. the run
 /// cap). The engine fn twins live there ([`all_covered`] mirrors the private
 /// `run_toggle_target`, `color_param`/`step_size` mirror theirs) so UI and headless agree.
-pub fn intercept_run_delta(
-    id: &str,
-    params: &serde_json::Value,
-    ed: &EditState,
-    base: &Font,
-) -> Option<Result<Vec<(std::ops::Range<usize>, RunFont)>, String>> {
+pub fn intercept_run_delta(id: &str, params: &serde_json::Value, ed: &EditState, base: &Font) -> Option<Result<Vec<RunApp>, String>> {
     // The programmatic forms always reach the engine; so does anything outside the Font group.
     if !RUN_FONT_IDS.contains(&id) || params.get("cell").is_some() || params.get("range").is_some() || params.get("chars").is_some() {
         return None;
@@ -725,7 +633,7 @@ pub fn intercept_run_delta(
 }
 
 /// The single application most commands produce.
-fn one_app(range: &std::ops::Range<usize>, delta: RunFont) -> Option<Result<Vec<(std::ops::Range<usize>, RunFont)>, String>> {
+fn one_app(range: &std::ops::Range<usize>, delta: RunFont) -> Option<Result<Vec<RunApp>, String>> {
     Some(Ok(vec![(range.clone(), delta)]))
 }
 
@@ -812,7 +720,7 @@ fn default_runs(len: usize) -> CellRuns {
 /// result — or a buffer without runs — behaves like one all-default run for the next pair; a
 /// final flat result leaves `ed.runs` `None`. `Err` carries the alert message (the per-cell run
 /// cap) and leaves `ed.runs` exactly as it was.
-pub fn apply_run_fonts(ed: &mut EditState, apps: Vec<(std::ops::Range<usize>, RunFont)>) -> Result<(), String> {
+pub fn apply_run_fonts(ed: &mut EditState, apps: Vec<RunApp>) -> Result<(), String> {
     for (range, delta) in apps {
         // Compute-then-assign: a refused press (the cap) must not flatten the buffer by taking
         // the runs before the result is known.
@@ -834,4 +742,93 @@ pub fn commit_params(ed: &EditState) -> serde_json::Value {
         params["runs"] = value;
     }
     params
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn point_mode() {
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=SUM(".into(), true, false);
+        assert!(e.can_point());
+        e.insert_ref("A1");
+        assert_eq!(e.text, "=SUM(A1");
+        e.insert_ref("A2");
+        assert_eq!(e.text, "=SUM(A2");
+        e.text.push(':');
+        e.caret += 1;
+        e.point = None;
+        assert!(e.can_point());
+        let e2 = EditState::new(1, 0, CellRef::new(0, 0), "hello".into(), true, false);
+        assert!(!e2.can_point());
+    }
+
+    #[test]
+    fn a_pasted_name_replaces_the_selected_text() {
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=OldName+1".into(), false, false);
+        e.sync_caret = false;
+        (e.anchor, e.caret) = (8, 1);
+        e.autocomplete = vec!["SUM".into()];
+        e.insert_at_caret("Sales");
+        assert_eq!((e.text.as_str(), e.caret, e.anchor), ("=Sales+1", 6, 6));
+        assert!(e.autocomplete.is_empty(), "the earlier function suggestion is gone");
+        // Nothing selected: the name goes in at the caret.
+        e.sync_caret = false;
+        e.insert_at_caret("Rate");
+        assert_eq!((e.text.as_str(), e.caret), ("=SalesRate+1", 10));
+    }
+
+    #[test]
+    fn autocomplete_and_hints() {
+        let names: Vec<String> = ["SUM", "SUMIF", "SUMPRODUCT", "AVERAGE"].iter().map(|s| s.to_string()).collect();
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=su".into(), true, false);
+        e.update_autocomplete(&names);
+        assert_eq!(e.autocomplete.len(), 3);
+        assert!(e.accept_autocomplete());
+        assert_eq!(e.text, "=SUM(");
+        let e = EditState::new(1, 0, CellRef::new(0, 0), "=IF(A1>0,SUM(B1,".into(), true, false);
+        assert_eq!(e.current_function(), Some(("SUM".into(), 1)));
+    }
+
+    #[test]
+    fn ref_spans() {
+        let r = formula_refs("=A1+B2:C3*a1+Sheet2!D4");
+        assert_eq!(r.len(), 4);
+        assert_eq!(r[0].4, r[2].4); // A1 and a1 share a colour
+        assert_eq!(r[1].2.a1(), "B2:C3");
+        assert_eq!(r[3].3.as_deref(), Some("Sheet2"));
+    }
+
+    #[test]
+    fn refs_are_outlined_on_their_own_sheet_only() {
+        // Pointing at Sheet2 while the edit started on Sheet1: `A1` stays on Sheet1, `Sheet2!B2` shows on Sheet2.
+        assert!(ref_is_on_sheet(None, "Sheet1", "Sheet1"));
+        assert!(!ref_is_on_sheet(None, "Sheet1", "Sheet2"));
+        assert!(ref_is_on_sheet(Some("Sheet2"), "Sheet1", "Sheet2"));
+        assert!(!ref_is_on_sheet(Some("Sheet2"), "Sheet1", "Sheet1"));
+        assert!(ref_is_on_sheet(Some("sheet2"), "Sheet1", "Sheet2"), "sheet names compare ignoring case");
+    }
+
+    #[test]
+    fn whole_row_and_column_ref_spans() {
+        let refs = formula_refs("=SUM(C:C,4:6,$D:$E,Sheet2!7:8)");
+        assert_eq!(refs.len(), 4);
+        assert_eq!(refs[0].2.a1(), "C:C");
+        assert_eq!(refs[1].2.a1(), "4:6");
+        assert_eq!(refs[2].2.a1(), "D:E");
+        assert_eq!(refs[3].2.a1(), "7:8");
+        assert_eq!(refs[3].3.as_deref(), Some("Sheet2"));
+    }
+
+    #[test]
+    fn inserting_a_union_keeps_each_reference_separately_pointed() {
+        let mut edit = EditState::new(1, 0, CellRef::new(0, 0), "=SUM(".into(), true, false);
+        edit.insert_ref("C:C");
+        edit.append_ref("E:E");
+        assert_eq!(edit.text, "=SUM(C:C,E:E");
+        assert_eq!(formula_refs(&edit.text).iter().map(|r| r.2.a1()).collect::<Vec<_>>(), ["C:C", "E:E"]);
+        assert_eq!(edit.point, Some((9, 12)));
+        assert!(edit.can_point());
+    }
 }

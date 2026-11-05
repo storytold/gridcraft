@@ -1254,5 +1254,3 @@ fn python_mode_does_not_start_on_a_draft_typed_inside_a_spill() {
     let a2 = app.session.active().and_then(|d| d.wb.sheet(0)).and_then(|sh| sh.cell(gridcraft_engine::core::CellRef::new(1, 0)).cloned());
     assert_eq!(a2.map(|c| (c.input_text(), c.py.is_some())), Some(("5".to_string(), false)));
 }
-
-use super::*;
