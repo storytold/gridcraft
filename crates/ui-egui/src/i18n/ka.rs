@@ -1211,6 +1211,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Over, then down" => "ჯერ მარჯვნივ, შემდეგ ქვემოთ",
         "Collapse dialog" => "დიალოგის აკეცვა",
         "Expand dialog" => "დიალოგის ჩამოშლა",
+        "Assign Action…" => "ქმედების მინიჭება…",
+        "Button" => "ღილაკი",
+        "Doughnut hole size" => "რგოლის ხვრელის ზომა",
+        "Draw a button that runs a macro or a command" => "მაკროსის ან ბრძანების გამშვები ღილაკის დახატვა",
+        "Draw a slider that sets a whole number in a linked cell" => "დაკავშირებულ უჯრაში მთელი რიცხვის დამყენებელი სლაიდერის დახატვა",
+        "Edit Text" => "ტექსტის რედაქტირება",
+        "First slice angle" => "პირველი სექტორის კუთხე",
+        "Format Control…" => "მართვის ელემენტის ფორმატირება…",
+        "Slider" => "სლაიდერი",
+        "Spin Button" => "მთვლელი",
         _ => return None,
     })
 }
