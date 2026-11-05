@@ -760,10 +760,11 @@ fn display_key(key: &ScalarKey) -> String {
 /// follows filter direction: each active relationship contributes an edge `to -> from`, plus the
 /// reverse `from -> to` only when the relationship is bidirectional (or when the pair is
 /// duplicated, so one traversal of each edge sees the loop). A chain is therefore a directed cycle
-/// that returns to an already-visited table without reusing the edge it arrived on. That models
+/// that returns to a table on the current path without reusing the edge it arrived on. That models
 /// the real cases exactly: `A -> B -> C -> A` in filter direction, two relationships between the
 /// same pair of tables, and a self relationship `T -> T` are chains; a single relationship — even
-/// a bidirectional one — is not, because its reverse traversal would be the same edge. A chain is reported once per distinct cycle (canonicalised to start at its smallest
+/// a bidirectional one — is not, because its reverse traversal would be the same edge. A chain is
+/// reported once per distinct cycle (canonicalised to start at its smallest
 /// table id) and at most [`MAX_REPORTED_CYCLES`] times per model, so a hostile graph cannot flood
 /// the report. A dense graph can contain more cycles than the cap; the reported ones are the first
 /// the deterministic walk finds.
@@ -796,64 +797,167 @@ fn cycle_findings<'a>(
 
 /// Depth-first cycle detection over the directed filter graph, iterative and bounded.
 ///
-/// The stack entry keeps the edge the walk arrived on so a bidirectional relationship's own
-/// reverse edge never counts as the second half of a cycle. Grey marks the current path (a grey
-/// neighbour closes a chain) and black a finished table.
+/// A chain is a directed cycle that does not traverse one edge both ways, so the graph is first
+/// split into strongly connected components: only a component that has at least as many distinct
+/// relationships as tables can close a chain (see [`component_closes_a_chain`]). Cycles are then
+/// enumerated inside each such component, where the path itself is the only visited set: the walk
+/// skips the edge it arrived on so a single bidirectional link never counts as the second half of
+/// a cycle, and it never marks a table as finished, because a table reached by a second path can
+/// still close a cycle that the first path could not.
 fn detect_cycles(adjacency: &BTreeMap<usize, Vec<(usize, usize)>>, table_count: usize) -> Vec<Vec<usize>> {
-    const WHITE: u8 = 0;
-    const GREY: u8 = 1;
-    const BLACK: u8 = 2;
-    let mut colour = vec![WHITE; table_count];
     let mut cycles: BTreeSet<Vec<usize>> = BTreeSet::new();
-    for start in 0..table_count {
-        if colour.get(start).copied().unwrap_or(BLACK) != WHITE {
+    let mut steps: usize = 0;
+    for component in strongly_connected_components(adjacency, table_count) {
+        if cycles.len() >= MAX_REPORTED_CYCLES {
+            break;
+        }
+        if !component_closes_a_chain(adjacency, &component) {
             continue;
         }
-        if let Some(slot) = colour.get_mut(start) {
-            *slot = GREY;
+        if !walk_component(adjacency, &component, &mut cycles, &mut steps) {
+            break;
         }
+    }
+    cycles.into_iter().collect()
+}
+
+/// The most edge visits one [`detect_cycles`] call spends, so a dense circular component cannot
+/// turn the cycle enumeration into a hostile workload.
+const MAX_CYCLE_STEPS: usize = 100_000;
+
+/// Whether a strongly connected component closes a chain.
+///
+/// A directed cycle visits one distinct relationship per table it enters, so a component needs at
+/// least as many distinct relationships as tables. That bound is also sufficient for every case
+/// the check distinguishes: a self relationship (1 table, 1 link), a duplicated pair (2 tables, 2
+/// links) and any longer loop qualify, while a tree of bidirectional links (n tables, n-1 links)
+/// is strongly connected without ever closing a chain.
+fn component_closes_a_chain(adjacency: &BTreeMap<usize, Vec<(usize, usize)>>, component: &[usize]) -> bool {
+    let mut ids: BTreeSet<usize> = BTreeSet::new();
+    for &node in component {
+        for &(next, edge) in adjacency.get(&node).map_or(&[][..], Vec::as_slice) {
+            if component.binary_search(&next).is_ok() {
+                ids.insert(edge);
+            }
+        }
+    }
+    ids.len() >= component.len()
+}
+
+/// Enumerates the distinct cycles inside one circular component.
+///
+/// Returns `false` when the cycle or step cap was reached, so the caller stops the whole search.
+fn walk_component(
+    adjacency: &BTreeMap<usize, Vec<(usize, usize)>>,
+    component: &[usize],
+    cycles: &mut BTreeSet<Vec<usize>>,
+    steps: &mut usize,
+) -> bool {
+    for &start in component {
         let mut stack: Vec<(usize, usize, Option<usize>)> = vec![(start, 0, None)];
         let mut path: Vec<usize> = vec![start];
         while let Some(&(node, cursor, arrived_on)) = stack.last() {
             let neighbours = adjacency.get(&node).map_or(&[][..], Vec::as_slice);
             if cursor < neighbours.len() {
+                *steps = steps.saturating_add(1);
+                if *steps > MAX_CYCLE_STEPS {
+                    return false;
+                }
                 if let Some(entry) = stack.last_mut() {
                     entry.1 = cursor + 1;
                 }
                 let (next, edge) = neighbours[cursor];
-                if arrived_on == Some(edge) {
+                if arrived_on == Some(edge) || component.binary_search(&next).is_err() {
                     // The edge we came in on is not a second path back.
                     continue;
                 }
-                match colour.get(next).copied().unwrap_or(BLACK) {
-                    WHITE => {
-                        if let Some(slot) = colour.get_mut(next) {
-                            *slot = GREY;
+                match path.iter().position(|table| *table == next) {
+                    Some(position) => {
+                        let cycle = path.get(position..).map_or_else(Vec::new, <[usize]>::to_vec);
+                        cycles.insert(canonical_cycle(&cycle));
+                        if cycles.len() >= MAX_REPORTED_CYCLES {
+                            return false;
                         }
+                    }
+                    None => {
                         stack.push((next, 0, Some(edge)));
                         path.push(next);
                     }
-                    GREY => {
-                        if let Some(position) = path.iter().position(|table| *table == next) {
-                            let cycle = path.get(position..).map_or_else(Vec::new, <[usize]>::to_vec);
-                            cycles.insert(canonical_cycle(&cycle));
-                            if cycles.len() >= MAX_REPORTED_CYCLES {
-                                return cycles.into_iter().collect();
-                            }
-                        }
-                    }
-                    _ => {}
                 }
             } else {
                 stack.pop();
                 path.pop();
-                if let Some(slot) = colour.get_mut(node) {
-                    *slot = BLACK;
+            }
+        }
+    }
+    true
+}
+
+/// The strongly connected components of the directed filter graph, by Tarjan's algorithm with an
+/// explicit stack. Components are returned in ascending table order.
+fn strongly_connected_components(adjacency: &BTreeMap<usize, Vec<(usize, usize)>>, table_count: usize) -> Vec<Vec<usize>> {
+    let mut index_of: Vec<Option<usize>> = vec![None; table_count];
+    let mut low: Vec<usize> = vec![0; table_count];
+    let mut on_stack: Vec<bool> = vec![false; table_count];
+    let mut pending: Vec<usize> = Vec::new();
+    let mut next_index: usize = 0;
+    let mut components: Vec<Vec<usize>> = Vec::new();
+    for start in 0..table_count {
+        if index_of[start].is_some() {
+            continue;
+        }
+        index_of[start] = Some(next_index);
+        low[start] = next_index;
+        next_index += 1;
+        pending.push(start);
+        on_stack[start] = true;
+        let mut work: Vec<(usize, usize)> = vec![(start, 0)];
+        while let Some(&(node, cursor)) = work.last() {
+            let neighbours = adjacency.get(&node).map_or(&[][..], Vec::as_slice);
+            if cursor < neighbours.len() {
+                if let Some(entry) = work.last_mut() {
+                    entry.1 = cursor + 1;
+                }
+                let next = neighbours[cursor].0;
+                if next >= table_count {
+                    continue;
+                }
+                match index_of[next] {
+                    None => {
+                        index_of[next] = Some(next_index);
+                        low[next] = next_index;
+                        next_index += 1;
+                        pending.push(next);
+                        on_stack[next] = true;
+                        work.push((next, 0));
+                    }
+                    Some(position) => {
+                        if on_stack[next] {
+                            low[node] = low[node].min(position);
+                        }
+                    }
+                }
+            } else {
+                work.pop();
+                if let Some(&(parent, _)) = work.last() {
+                    low[parent] = low[parent].min(low[node]);
+                }
+                if index_of[node] == Some(low[node]) {
+                    let mut component = Vec::new();
+                    while let Some(member) = pending.pop() {
+                        on_stack[member] = false;
+                        component.push(member);
+                        if member == node {
+                            break;
+                        }
+                    }
+                    component.sort_unstable();
+                    components.push(component);
                 }
             }
         }
     }
-    cycles.into_iter().collect()
+    components
 }
 
 /// Canonicalises a cycle: it starts at its smallest table id, is traversed in the direction whose
@@ -882,4 +986,71 @@ fn rotate_to_smallest(nodes: &[usize]) -> Vec<usize> {
     let mut rotated: Vec<usize> = nodes.get(position..).unwrap_or_default().to_vec();
     rotated.extend_from_slice(nodes.get(..position).unwrap_or_default());
     rotated
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{ModelColumn, ModelTable, Relationship};
+
+    fn table(name: &str) -> ModelTable {
+        ModelTable {
+            name: name.into(),
+            columns: vec![ModelColumn { name: "Key".into(), data_type: Some("Int64".into()) }],
+            rows: vec![vec![Scalar::Integer(1)]],
+        }
+    }
+
+    fn relationship(from: &str, to: &str, bidirectional: bool) -> Relationship {
+        Relationship {
+            from_table: from.into(),
+            from_column: "Key".into(),
+            to_table: to.into(),
+            to_column: "Key".into(),
+            bidirectional,
+            inactive: false,
+        }
+    }
+
+    fn model(tables: &[&str], relationships: Vec<Relationship>) -> DataModel {
+        DataModel { tables: tables.iter().map(|name| table(name)).collect(), relationships, measures: Vec::new() }
+    }
+
+    fn cycles(model: &DataModel) -> Vec<Vec<String>> {
+        validate_model(model)
+            .findings
+            .into_iter()
+            .filter(|finding| finding.check == IntegrityCheck::CircularRelationship)
+            .map(|finding| finding.cycle)
+            .collect()
+    }
+
+    #[test]
+    fn a_chain_closing_through_a_bidirectional_reverse_edge_is_reported() {
+        // `A -r0 (bidirectional)- B`, `C -> A (r1)`, `B -> C (r2)` filters `A -> C -> B -> A`, and
+        // the last hop is the reverse of r0. A walk that marks B as finished after reaching it
+        // directly over r0 never closes this chain.
+        let model = model(&["A", "B", "C"], vec![relationship("A", "B", true), relationship("C", "A", false), relationship("B", "C", false)]);
+        assert_eq!(cycles(&model).len(), 1, "{:?}", validate_model(&model).findings);
+    }
+
+    #[test]
+    fn one_bidirectional_link_is_not_a_chain() {
+        let model = model(&["A", "B"], vec![relationship("A", "B", true)]);
+        assert!(cycles(&model).is_empty(), "{:?}", validate_model(&model).findings);
+    }
+
+    #[test]
+    fn a_tree_of_bidirectional_links_is_not_a_chain() {
+        let model = model(&["A", "B", "C"], vec![relationship("A", "B", true), relationship("B", "C", true)]);
+        assert!(cycles(&model).is_empty(), "{:?}", validate_model(&model).findings);
+    }
+
+    #[test]
+    fn a_duplicated_pair_and_a_self_relationship_are_chains() {
+        let duplicated = model(&["A", "B"], vec![relationship("A", "B", false), relationship("A", "B", false)]);
+        assert_eq!(cycles(&duplicated).len(), 1, "{:?}", validate_model(&duplicated).findings);
+        let self_link = model(&["T"], vec![relationship("T", "T", false)]);
+        assert_eq!(cycles(&self_link).len(), 1, "{:?}", validate_model(&self_link).findings);
+    }
 }
