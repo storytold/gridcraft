@@ -182,6 +182,11 @@ fn column_slots(fams: &[Fam], sec: &[bool]) -> (Vec<usize>, f32) {
     (slot_of, slot_keys.len().max(1) as f32)
 }
 
+/// The labels' own formats, built only when labels are drawn.
+fn point_fmts(s: &crate::SeriesData, labels_on: bool) -> Vec<Fmt> {
+    if labels_on { s.point_formats.iter().map(|f| Fmt::new(f)).collect() } else { Vec::new() }
+}
+
 pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizontal: bool) {
     let ncat = data.categories.len().max(data.series.iter().map(|s| s.values.len()).max().unwrap_or(0)).min(MAX_CATS);
     if ncat == 0 {
@@ -243,7 +248,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
             }
             let sc = scale_of(i);
             let fmt = Fmt::new(&s.number_format);
-            let point_fmts: Vec<Fmt> = s.point_formats.iter().map(|f| Fmt::new(f)).collect();
+            let point_fmts = point_fmts(s, labels_on);
             // A data label takes its own cell's format; the axis keeps the first cell's.
             let fmt_of = |j: usize| point_fmts.get(j).unwrap_or(&fmt);
             let row = match spans.get(i) {

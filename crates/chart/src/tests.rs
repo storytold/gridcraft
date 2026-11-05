@@ -1686,4 +1686,7 @@ fn point_formats_are_left_empty_when_every_cell_agrees() {
     let formats = |formula: &str| crate::resolve::point_formats_for_tests(&wb, 0, formula);
     assert_eq!(formats("A1:A2"), Vec::<String>::new());
     assert_eq!(formats("B1:B2"), vec!["0%".to_string(), "General".to_string()]);
+    // A huge reference follows the used range the evaluator trims it to, column by column in a row.
+    assert_eq!(formats("A1:C1048576").len(), 4, "A1, B1, A2, B2");
+    assert_eq!(formats("A:A"), Vec::<String>::new(), "only as many formats as values");
 }
