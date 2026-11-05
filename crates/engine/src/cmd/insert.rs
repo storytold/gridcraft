@@ -99,7 +99,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Chart Properties",
             ["Chart Design"],
             None,
-            "{chart?: id, type?, subtype?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, gapWidth?: 0-500, overlap?: -100-100 (column and bar charts), seriesLines?: bool (stacked column and bar charts), dataTable?: bool, dataTableKeys?: bool, dataTableHorizontalBorder?: bool, dataTableVerticalBorder?: bool, dataTableOutline?: bool (data tables: column/bar/line/area and compatible combo charts), quartiles?: exclusive|inclusive, style?, holeSize?, firstSliceAngle?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?}",
+            "{chart?: id, type?, subtype?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, gapWidth?: 0-500, overlap?: -100-100 (column and bar charts), seriesLines?: bool (stacked column and bar charts), valueAxisHidden?: bool, dataTable?: bool, dataTableKeys?: bool, dataTableHorizontalBorder?: bool, dataTableVerticalBorder?: bool, dataTableOutline?: bool (data tables: column/bar/line/area and compatible combo charts), quartiles?: exclusive|inclusive, style?, holeSize?, firstSliceAngle?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?}",
             has_doc,
             chart_set
         ),
@@ -855,6 +855,7 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         gap_width: None,
         overlap: None,
         series_lines: None,
+        value_axis_hidden: false,
         x_title: None,
         y_title: None,
         source: (areas.len() == 1).then(|| format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), bounds.a1())),
@@ -936,6 +937,9 @@ fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         }
         if let Some(v) = u32_param(p, "firstSliceAngle") {
             c.first_slice_angle = (v % 360) as u16;
+        }
+        if let Some(on) = bool_param(p, "valueAxisHidden") {
+            c.value_axis_hidden = on;
         }
         if let Some(on) = bool_param(p, "seriesLines") {
             c.series_lines = on.then(|| c.series_lines.clone().unwrap_or_default());

@@ -61,6 +61,7 @@ fn chart(id: u32, kind: ChartKind, trendlines: Vec<Trendline>) -> Chart {
         gap_width: None,
         overlap: None,
         series_lines: None,
+        value_axis_hidden: false,
         x_title: None,
         y_title: None,
         source: None,

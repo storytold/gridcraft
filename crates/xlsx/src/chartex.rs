@@ -138,6 +138,7 @@ pub fn read_chartex(root: &El) -> Option<Chart> {
         gap_width: None,
         overlap: None,
         series_lines: None,
+        value_axis_hidden: false,
         x_title: axis_title("0"),
         y_title: axis_title("1"),
         source: None,

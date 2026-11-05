@@ -227,8 +227,8 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
 
     let axes = axis_scales(data, &fams, &sec, &spans);
     let Some((s1, f1)) = axes.first() else { return };
-    let y1 = ValAxis { scale: *s1, fmt: f1 };
-    let y2 = axes.get(1).map(|(s, f)| ValAxis { scale: *s, fmt: f });
+    let y1 = ValAxis { scale: *s1, fmt: f1, hidden: chart.value_axis_hidden };
+    let y2 = axes.get(1).map(|(s, f)| ValAxis { scale: *s, fmt: f, hidden: false });
     // A forward forecast on a category axis adds empty category slots after the data.
     let fwd = data
         .series
@@ -438,7 +438,8 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
     let ys = nice_scale(ylo, yhi, false);
     let fx = Fmt::new("General");
     let fy = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
-    let plot = frame(ctx, area, CatAxis::Numeric(xs, &fx), &ValAxis { scale: ys, fmt: &fy }, None, false, chart.gridlines);
+    let plot =
+        frame(ctx, area, CatAxis::Numeric(xs, &fx), &ValAxis { scale: ys, fmt: &fy, hidden: chart.value_axis_hidden }, None, false, chart.gridlines);
     if !plot.ok() {
         return;
     }

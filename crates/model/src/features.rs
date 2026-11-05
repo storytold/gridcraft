@@ -602,6 +602,9 @@ pub struct Chart {
     /// Stacked column and bar charts: lines joining each series across the categories.
     #[serde(default)]
     pub series_lines: Option<ChartSeriesLines>,
+    /// The file deletes the primary value axis: its labels aren't drawn, while gridlines stay.
+    #[serde(default)]
+    pub value_axis_hidden: bool,
     pub x_title: Option<String>,
     pub y_title: Option<String>,
     /// Source range when created from a selection (for Switch Row/Column).
@@ -1143,6 +1146,7 @@ mod tests {
             gap_width: None,
             overlap: None,
             series_lines: None,
+            value_axis_hidden: false,
             x_title: None,
             y_title: None,
             source: None,

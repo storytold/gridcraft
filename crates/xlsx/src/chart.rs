@@ -293,6 +293,7 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         first_slice_angle,
         gap_width,
         overlap,
+        value_axis_hidden: y_ax.is_some_and(|a| bool_val(a, "delete")),
         series_lines: bars.and_then(|g| g.child("serLines")).map(|lines| {
             let ln = lines.path(&["spPr", "ln"]);
             gridcraft_model::ChartSeriesLines {
@@ -861,7 +862,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 id: 2,
                 cross: 1,
                 pos: "l",
-                delete: false,
+                delete: ch.value_axis_hidden,
                 grid: ch.gridlines,
                 title: ch.y_title.as_deref(),
                 crosses_max: false,
@@ -883,7 +884,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 id: 2,
                 cross: 1,
                 pos: "b",
-                delete: false,
+                delete: ch.value_axis_hidden,
                 grid: ch.gridlines,
                 title: ch.y_title.as_deref(),
                 crosses_max: false,
@@ -905,7 +906,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 id: 2,
                 cross: 1,
                 pos: "l",
-                delete: false,
+                delete: ch.value_axis_hidden,
                 grid: ch.gridlines,
                 title: ch.y_title.as_deref(),
                 crosses_max: false,

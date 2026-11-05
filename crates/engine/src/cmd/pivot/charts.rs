@@ -72,6 +72,7 @@ pub(super) fn insert_pivot_chart(s: &mut Session, p: &Json) -> Result<Json> {
         gap_width: None,
         overlap: None,
         series_lines: None,
+        value_axis_hidden: false,
         style: 1,
         x_title: None,
         y_title: None,

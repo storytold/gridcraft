@@ -419,6 +419,7 @@ fn sample() -> Workbook {
         gap_width: None,
         overlap: None,
         series_lines: None,
+        value_axis_hidden: false,
         x_title: Some("Region".into()),
         y_title: Some("Amount".into()),
         source: None,
@@ -463,6 +464,7 @@ fn sample() -> Workbook {
         gap_width: Some(219),
         overlap: Some(-27),
         series_lines: Some(Default::default()),
+        value_axis_hidden: true,
         ..base_chart.clone()
     });
     let mut doughnut = Chart { kind: ChartKind::Doughnut, hole_size: 25, first_slice_angle: 180, legend: LegendPos::Right, ..base_chart.clone() };
@@ -1764,5 +1766,6 @@ fn assert_same_bar_spacing(x: &Chart, y: &Chart) {
     if x.gap_width.is_some() {
         assert_eq!((y.gap_width, y.overlap), (x.gap_width, x.overlap));
         assert_eq!(y.series_lines, x.series_lines);
+        assert_eq!(y.value_axis_hidden, x.value_axis_hidden);
     }
 }

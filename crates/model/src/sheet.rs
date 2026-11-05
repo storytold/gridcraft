@@ -836,6 +836,7 @@ mod tests {
                 gap_width: None,
                 overlap: None,
                 series_lines: None,
+                value_axis_hidden: false,
                 x_title: None,
                 y_title: None,
                 source: None,

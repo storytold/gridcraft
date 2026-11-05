@@ -53,6 +53,7 @@ fn chart(kind: ChartKind) -> Chart {
         gap_width: None,
         overlap: None,
         series_lines: None,
+        value_axis_hidden: false,
         x_title: Some("Quarter".into()),
         y_title: Some("Revenue".into()),
         source: None,
@@ -1818,4 +1819,30 @@ fn series_lines_are_only_for_stacks() {
     d.series_lines = Some((ink, 0.75));
     let prims = render(&chart(ChartKind::ColumnClustered), &d, 640.0, 400.0, &ApproxMeasure);
     assert!(!prims.iter().any(|p| matches!(p, Prim::Line { color, .. } if *color == ink)));
+}
+
+/// A deleted value axis loses its labels and the room for them; gridlines stay, as in Excel.
+#[test]
+fn a_hidden_value_axis_draws_no_labels_but_keeps_gridlines() {
+    let d = sample(ChartKind::ColumnClustered);
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.data_labels = false;
+    c.gridlines = true;
+    let parts = |c: &Chart| {
+        let prims = render(c, &d, 640.0, 400.0, &ApproxMeasure);
+        let axis_texts = prims.iter().filter(|p| matches!(p, Prim::Text { text, .. } if text.starts_with('$'))).count();
+        let lines = prims.iter().filter(|p| matches!(p, Prim::Line { .. })).count();
+        let first_bar = prims.iter().filter_map(|p| match p {
+            Prim::Rect { x, w, .. } if *w > 8.0 && *w < 200.0 => Some(*x),
+            _ => None,
+        });
+        (axis_texts, lines, first_bar.fold(f32::MAX, f32::min))
+    };
+    let (shown_labels, shown_lines, shown_x) = parts(&c);
+    c.value_axis_hidden = true;
+    let (hidden_labels, hidden_lines, hidden_x) = parts(&c);
+    assert!(shown_labels > 0, "the sample's axis is in dollars");
+    assert_eq!(hidden_labels, 0);
+    assert_eq!(hidden_lines, shown_lines, "gridlines stay");
+    assert!(hidden_x < shown_x, "the plot takes the room: {hidden_x} {shown_x}");
 }
