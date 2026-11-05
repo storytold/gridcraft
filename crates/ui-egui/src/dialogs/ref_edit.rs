@@ -253,12 +253,25 @@ pub(super) fn begin_pick(app: &SheetApp, d: &mut Dialog, key: &str) {
 
 impl Dialog {
     /// Records a real grid click for Remove Duplicates, even when selection is unchanged.
-    pub(crate) fn note_remove_duplicates_cell_click(&mut self, cell: gridcraft_engine::core::CellRef) {
+    pub(crate) fn note_remove_duplicates_cell_click(&mut self, area: gridcraft_engine::core::RangeRef, sheet: &Sheet) {
         if self.name == "removeDuplicates" && self.refs.target.as_deref() == Some("range") {
-            let picked = abs(&gridcraft_engine::core::RangeRef::cell(cell));
-            self.set_value("range", json!(picked));
+            let picked = abs(&area);
+            let picked = match self.refs.home.as_ref() {
+                Some(home) if home.uid.get() != sheet.uid.get() => {
+                    format!("{}!{picked}", gridcraft_engine::formula::quote_sheet(&sheet.name))
+                }
+                _ => picked,
+            };
+            self.set_value("range", json!(picked.clone()));
+            self.refs.seen = picked;
+            self.refs.seen_sheet = sheet.name.clone();
             self.refs.refocus = true;
         }
+    }
+
+    /// Whether a RefEdit field is currently accepting grid selections.
+    pub(crate) fn is_ref_edit_picking(&self) -> bool {
+        self.refs.target.is_some()
     }
 }
 

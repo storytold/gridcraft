@@ -1732,3 +1732,86 @@ fn remove_duplicates_can_pick_already_selected_cell_1388() {
     assert_eq!(selection(&h).1, "C3");
     assert_eq!(field(&h, "range"), "$C$3", "an explicit click must replace the inferred region");
 }
+
+/// Simulates a primary pointer click with keyboard modifiers.
+fn click_with_modifiers_1388(h: &mut H, pos: egui::Pos2, modifiers: Modifiers) {
+    h.input_mut().events.push(Event::ModifiersChanged(modifiers));
+    h.input_mut().events.push(Event::PointerMoved(pos));
+    h.run_steps(1);
+
+    for pressed in [true, false] {
+        h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers });
+        h.run_steps(1);
+    }
+
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(3);
+}
+
+/// #1388: picking an already-selected cell on another sheet keeps its name.
+#[test]
+fn remove_duplicates_cross_sheet_same_cell_1388() {
+    let mut h = harness(two_sheets());
+
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    h.run_steps(3);
+
+    assert_eq!(selection(&h), (1, "A1".into()));
+
+    let pos = cell_pos(&h, "A1");
+    click_at(&mut h, pos);
+
+    assert_eq!(field(&h, "range"), "Rates!$A$1");
+}
+
+/// #1388: Shift-click must retain the full resulting selection.
+#[test]
+fn remove_duplicates_shift_click_keeps_full_range_1388() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("selection.set", json!({"range": "B2:C4", "active": "B2"})).unwrap();
+
+    let mut h = harness(session);
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+
+    click_button(&mut h, "Collapse dialog", 0);
+
+    let pos = cell_pos(&h, "C4");
+    click_with_modifiers_1388(&mut h, pos, Modifiers::SHIFT);
+
+    assert_eq!(selection(&h).1, "B2:C4");
+    assert_eq!(field(&h, "range"), "$B$2:$C$4");
+}
+
+/// #1388: reference picking must not toggle cell checkboxes.
+#[test]
+fn remove_duplicates_checkbox_pick_does_not_edit_workbook_1388() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("insert.checkbox", json!({"range": "D6"})).unwrap();
+    session.execute("selection.set", json!({"range": "B2:C4"})).unwrap();
+
+    let mut h = harness(session);
+    let before = h.state().session.active().unwrap().wb.clone();
+
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+
+    let pos = cell_pos(&h, "D6");
+    click_at(&mut h, pos);
+
+    assert_eq!(field(&h, "range"), "$D$6");
+    assert_eq!(h.state().session.active().unwrap().wb, before);
+
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().session.active().unwrap().wb, before);
+}

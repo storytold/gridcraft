@@ -375,6 +375,7 @@ fn handle_row_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, p: 
     }
 }
 
+/// Handles grid pointer presses, selection changes and dialog reference picks.
 fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
     let (geo, sh, wb, resp) = (input.geo, input.sheet, input.workbook, input.response);
     let (pos, mods, sel) = (input.position, input.modifiers, &input.selection);
@@ -508,7 +509,10 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         }
     } else {
         let _ = app.session.run("selection.set", json!({"cell": c.a1()}));
-        if primary_clicked && wb.styles.get(sh.style_id(c)).num_fmt.as_str() == "checkbox" {
+        if primary_clicked
+            && !app.dialog.as_ref().is_some_and(|d| d.is_ref_edit_picking())
+            && wb.styles.get(sh.style_id(c)).num_fmt.as_str() == "checkbox"
+        {
             let _ = app.run("cell.toggleCheckbox", json!({"cell": c.a1()}));
         }
         // A click on a hyperlink's text follows it (like Excel); elsewhere in the cell selects.
@@ -523,8 +527,11 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         }
     }
     // A click may select the same cell again, which selection-change tracking misses.
-    if primary_clicked && let Some(d) = app.dialog.as_mut() {
-        d.note_remove_duplicates_cell_click(c);
+    if primary_clicked {
+        let area = if mods.shift { app.session.active().map(|doc| doc.selection.current()).unwrap_or(RangeRef::cell(c)) } else { RangeRef::cell(c) };
+        if let Some(d) = app.dialog.as_mut() {
+            d.note_remove_duplicates_cell_click(area, sh);
+        }
     }
     app.grid.drag = Drag::Select;
     app.grid.drag_select = true;
