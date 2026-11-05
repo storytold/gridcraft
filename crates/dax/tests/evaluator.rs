@@ -592,7 +592,7 @@ fn distinct_count_folds_text_case() {
 }
 
 #[test]
-fn the_blank_member_keeps_orphan_fact_rows() {
+fn a_blank_dimension_member_drops_orphan_fact_rows() {
     let mut model = DataModel {
         tables: vec![
             ModelTable {
@@ -627,10 +627,11 @@ fn the_blank_member_keeps_orphan_fact_rows() {
     let evaluator = Evaluator::new(&model).expect("evaluator");
     let bound = Binder::new(&model).bind_expression(&parse_expression("[Total]").expect("parse")).expect("bind");
 
-    // The BLANK member of Products carries the rows that do not join, so the total is 20, not 0.
+    // A filter on Products' BLANK member keeps no orphan fact rows: an orphan key does not join,
+    // so `SUM` over the empty set is BLANK (the model's inner-join semantics).
     let mut filters = FilterContext::default();
     filters.set(1, 0, [gridcraft_dax::ScalarKey::Blank]);
-    assert_eq!(evaluator.evaluate_with(&bound, filters).expect("blank member"), Scalar::Decimal(20.0));
+    assert_eq!(evaluator.evaluate_with(&bound, filters).expect("blank member"), Scalar::Blank);
 
     // A concrete member still sees only its own rows: the orphan stays out of `"A"`.
     let mut filters = FilterContext::default();

@@ -283,7 +283,9 @@ impl<'a> Binder<'a> {
                 "RANK.EQ" if index == 2 => clause_keyword(arg, &["ASC", "DESC"]),
                 "TOPNSKIP" if index == 4 => clause_keyword(arg, &["ASC", "DESC"]),
                 "SAMPLE" if index == 3 => clause_keyword(arg, &["ASC", "DESC"]),
-                "CONCATENATEX" if index == 4 => clause_keyword(arg, &["ASC", "DESC"]),
+                // CONCATENATEX takes `(orderBy, Order)` pairs from index 4 on, so every even
+                // offset from 4 is an order word.
+                "CONCATENATEX" if index >= 4 && (index - 4) % 2 == 0 => clause_keyword(arg, &["ASC", "DESC"]),
                 "ROWNUMBER" if index == 5 => clause_keyword(arg, &["NONE", "LOWESTPARENT", "HIGHESTPARENT"]),
                 // Window/relation clauses take bare enum words: `ORDERBY(x, DESC)`,
                 // `WINDOW(1, ABS, 1, ABS, ...)`, `INDEX(..., KEEP, PARTITIONBY(...))`, and the

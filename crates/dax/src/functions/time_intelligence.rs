@@ -215,9 +215,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[overload(&[ParamKind::Date])],
         ReturnType::Table,
         FunctionFlags::new(false, false, false, true, true),
-        "Returns the last date of the month visible in the filter context as a single-row table, \
-         restricted to dates present in the date column. Use it as a CALCULATE modifier for \
-         semi-additive measures; the marked date table must contain the month-end date.",
+        "Returns the last date of the month visible in the filter context as a single-row table: \
+         the latest date of that month that exists in the date column of the marked date table. Use it as a CALCULATE \
+         modifier for semi-additive measures.",
         &["ENDOFMONTH ( 'Date'[Date] )"],
     ),
     spec(

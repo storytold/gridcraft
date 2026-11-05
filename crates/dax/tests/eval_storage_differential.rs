@@ -333,11 +333,13 @@ fn measures_evaluate_through_storage() {
 }
 
 #[test]
-fn pivot_blank_group_counts_orphan_fact_rows() {
+fn a_blank_foreign_key_and_an_orphan_key_group_as_blank_with_an_empty_cell() {
     // `Product` has an "Unknown" row whose key is BLANK. `Sales` has a row matching `Widget`, a
     // row whose key has no `Product` at all, and a row whose key is BLANK. A relationship never
-    // joins a BLANK key, so the last two are orphans: they group as `(Blank)` and the BLANK cell
-    // must count them instead of showing zero.
+    // joins a BLANK key, and a key with no related row is an orphan, so grouping puts both under
+    // `(Blank)`; the `(Blank)` cell then selects no source rows and stays empty (`SUM` over an
+    // empty set). That is the model's inner-join semantics, and it is the rule the related-pivot
+    // suites pin.
     let mut model = DataModel {
         tables: vec![
             ModelTable {
@@ -385,11 +387,10 @@ fn pivot_blank_group_counts_orphan_fact_rows() {
         .with_layout(PivotLayout::Tabular);
     let (table, stats) = pivot.render_with_stats(&model).expect("render pivot");
 
-    // (Blank) 60 = the orphan key 99 (20) plus the BLANK key (40); Widget 10; total 70.
+    // (Blank) is empty, Widget is 10, and the grand total still spans every fact row (70).
     assert_eq!(table.rows.len(), 3, "{:?}", table.rows);
-    assert_eq!(table.rows[0], vec![Scalar::Blank, Scalar::Decimal(60.0)]);
+    assert_eq!(table.rows[0], vec![Scalar::Blank, Scalar::Blank]);
     assert_eq!(table.rows[1], vec![text("Widget"), Scalar::Decimal(10.0)]);
     assert_eq!(table.rows[2], vec![text("Grand Total"), Scalar::Decimal(70.0)]);
-    // Every cell was answered from the columns, so both sides read the same relationship indexes.
     assert!(stats.aggregates > 0, "each pivot cell is a storage aggregate, got {stats:?}");
 }

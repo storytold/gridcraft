@@ -46,13 +46,15 @@
 //!   rejected ([`PivotTableError::ForeignField`]).
 //! * A cell of a related field's group is evaluated with the group value as a filter on the
 //!   *related table*, so the evaluator's own relationship propagation (through the same indexes,
-//!   over any number of hops) restricts the source table. A source row whose key has no related
-//!   row — an orphan key, shown as `(Blank)` — belongs to the related table's BLANK member, so the
-//!   `(Blank)` cell counts it and the leaf rows still add up to the grand total. A BLANK foreign
-//!   key is an orphan as well: a relationship never joins one. A related field whose one side
-//!   repeats a key resolves to its lowest row id for the *label*, while the cell's filter passes
-//!   every related key, so a source row can be counted in more than one leaf cell in that model;
-//!   a one-side key that must be unique is what `integrity` reports as a duplicate-key finding.
+//!   over any number of hops) restricts the source table. A group value the relationship cannot
+//!   resolve — an orphan key, shown as `(Blank)` — therefore selects no source rows and the
+//!   measure returns its empty-set value (BLANK for `SUM`), the model's inner-join semantics.
+//!   A BLANK foreign key is an orphan for the same reason and never joins a one-side row, even one
+//!   whose key is BLANK: the cell filter and the relationship join both drop it, which is the
+//!   VertiPaq rule the related-pivot suites pin.
+//!   A related field whose one side repeats a key resolves to its lowest row id for the *label*,
+//!   while the cell's filter passes every related key, so a source row can be counted in more than
+//!   one leaf cell in such a model; `integrity` reports that duplicate one-side key.
 //!   A label column of a related field is named `Table[Column]`, so two dimensions with a column
 //!   of the same name stay distinguishable; source-table fields keep the bare column name.
 //!
@@ -423,11 +425,12 @@ impl<'a> Plan<'a> {
                 }
             }
             SourceRows::Rows(rows) => {
+                let lookups = hop_key_lookups(self.model, self.row_fields.iter().chain(&self.column_fields));
                 for row in rows.iter() {
-                    let values = self.model_group_values(row, &self.row_fields);
+                    let values = self.model_group_values(&lookups, row, &self.row_fields);
                     row_groups.entry(values.iter().map(crate::value::distinct_key).collect()).or_insert(values);
                     if !self.column_fields.is_empty() {
-                        let values = self.model_group_values(row, &self.column_fields);
+                        let values = self.model_group_values(&lookups, row, &self.column_fields);
                         column_groups.entry(values.iter().map(crate::value::distinct_key).collect()).or_insert(values);
                     }
                 }
@@ -529,9 +532,9 @@ impl<'a> Plan<'a> {
         fields.iter().map(|field| column_field_value(storage, self.table, row, field)).collect()
     }
 
-    /// The values of `fields` for one source model row.
-    fn model_group_values(&self, row: &[Scalar], fields: &[BoundField]) -> Vec<Scalar> {
-        fields.iter().map(|field| model_field_value(self.model, row, field)).collect()
+    /// The values of `fields` for one source model row, through the prebuilt hop indexes.
+    fn model_group_values(&self, lookups: &HopKeyLookups, row: &[Scalar], fields: &[BoundField]) -> Vec<Scalar> {
+        fields.iter().map(|field| model_field_value(self.model, lookups, row, field)).collect()
     }
 
     /// The filter context of one cell: the filters plus the row and column group values.
@@ -1025,7 +1028,7 @@ fn column_field_value(storage: &ModelStorage, table: usize, row: usize, field: &
 /// The row-scan counterpart of [`column_field_value`]: the same hops, matched by key equality over
 /// the related table's rows and resolving a duplicate key to the lowest row, so both paths group
 /// identically.
-fn model_field_value(model: &DataModel, row: &[Scalar], field: &BoundField) -> Scalar {
+fn model_field_value(model: &DataModel, lookups: &HopKeyLookups, row: &[Scalar], field: &BoundField) -> Scalar {
     let mut current = row;
     for hop in &field.hops {
         let key = ScalarKey::from(&current.get(hop.from_column).cloned().unwrap_or(Scalar::Blank));
@@ -1034,14 +1037,44 @@ fn model_field_value(model: &DataModel, row: &[Scalar], field: &BoundField) -> S
         if key == ScalarKey::Blank {
             return Scalar::Blank;
         }
-        let matched = model
-            .tables
-            .get(hop.to_table)
-            .and_then(|table| table.rows.iter().find(|row| row.get(hop.to_column).is_some_and(|value| ScalarKey::from(value) == key)));
+        let matched = lookups
+            .get(&(hop.to_table, hop.to_column))
+            .and_then(|index| index.get(&key).copied())
+            .and_then(|row_id| model.tables.get(hop.to_table).and_then(|table| table.rows.get(row_id)));
         let Some(next) = matched else { return Scalar::Blank };
         current = next;
     }
     current.get(field.field.column).cloned().unwrap_or(Scalar::Blank)
+}
+
+/// Key indexes for the model-row grouping path, one per distinct hop: `(to_table, to_column)` to
+/// the lowest row id carrying each key.
+type HopKeyLookups = BTreeMap<(usize, usize), BTreeMap<ScalarKey, usize>>;
+
+/// Builds a [`HopKeyLookups`] entry for every hop of `fields`.
+///
+/// A duplicated key keeps the lowest row id, matching the `find` the lookup replaces, so a source
+/// row still reaches at most one related row. A row too short to hold the key column has no key,
+/// exactly as that `find` never matched it.
+fn hop_key_lookups<'a>(model: &DataModel, fields: impl IntoIterator<Item = &'a BoundField>) -> HopKeyLookups {
+    let mut lookups = HopKeyLookups::new();
+    for field in fields {
+        for hop in &field.hops {
+            if lookups.contains_key(&(hop.to_table, hop.to_column)) {
+                continue;
+            }
+            let mut index = BTreeMap::new();
+            if let Some(table) = model.tables.get(hop.to_table) {
+                for (row_id, row) in table.rows.iter().enumerate() {
+                    if let Some(value) = row.get(hop.to_column) {
+                        index.entry(ScalarKey::from(value)).or_insert(row_id);
+                    }
+                }
+            }
+            lookups.insert((hop.to_table, hop.to_column), index);
+        }
+    }
+    lookups
 }
 
 /// Narrows `context` to the single group value `key` on `(table, column)`, intersecting with any
@@ -1165,9 +1198,10 @@ mod tests {
             hops: vec![Hop { relationship: 0, from_column: 0, to_table: 1, to_column: 0 }],
             label: "Product[Name]".into(),
         };
+        let lookups = hop_key_lookups(&model, [&field]);
         let blank_key_row = model.tables[0].rows.first().cloned().unwrap_or_default();
-        assert_eq!(model_field_value(&model, &blank_key_row, &field), Scalar::Blank);
+        assert_eq!(model_field_value(&model, &lookups, &blank_key_row, &field), Scalar::Blank);
         let matched_row = model.tables[0].rows.get(1).cloned().unwrap_or_default();
-        assert_eq!(model_field_value(&model, &matched_row, &field), Scalar::String("Widget".into()));
+        assert_eq!(model_field_value(&model, &lookups, &matched_row, &field), Scalar::String("Widget".into()));
     }
 }

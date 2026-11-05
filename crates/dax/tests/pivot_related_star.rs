@@ -102,7 +102,7 @@ fn related_row_field_groups_by_the_dimension_value() {
     // apart. ProductKey 3 has no Product row: its fact row groups as BLANK, and the cell is BLANK
     // because the BLANK member selects no related row, so the relationship filter keeps nothing.
     assert_eq!(header(&table), vec!["Product[Name]".to_string(), "Total Sales".to_string()]);
-    assert_eq!(table.rows, vec![vec![Scalar::Blank, dec(40.0)], vec![text("Gadget"), dec(35.0)], vec![text("Widget"), dec(180.0)],]);
+    assert_eq!(table.rows, vec![vec![Scalar::Blank, Scalar::Blank], vec![text("Gadget"), dec(35.0)], vec![text("Widget"), dec(180.0)],]);
     assert_eq!(table.lineage, Some(0), "the rendered table keeps the source table's lineage");
 }
 
@@ -130,7 +130,7 @@ fn two_dimensions_cross_tabulate_with_two_measures() {
     assert_eq!(
         table.rows,
         vec![
-            vec![Scalar::Blank, dec(40.0), dec(4.0), Scalar::Blank, Scalar::Blank],
+            vec![Scalar::Blank, Scalar::Blank, Scalar::Blank, Scalar::Blank, Scalar::Blank],
             vec![text("Gadget"), dec(25.0), dec(3.0), dec(10.0), dec(1.0)],
             // Widget x North: 100 + 30, quantities 1 + 1.
             vec![text("Widget"), dec(130.0), dec(2.0), dec(50.0), dec(2.0)],
@@ -151,7 +151,7 @@ fn two_related_row_fields_order_blank_first_and_total_every_fact_row() {
     assert_eq!(
         table.rows,
         vec![
-            vec![Scalar::Blank, text("North"), dec(40.0)],
+            vec![Scalar::Blank, text("North"), Scalar::Blank],
             vec![text("Gadget"), text("North"), dec(25.0)],
             vec![text("Gadget"), text("South"), dec(10.0)],
             vec![text("Widget"), text("North"), dec(130.0)],
@@ -181,7 +181,7 @@ fn a_filter_on_a_dimension_field_restricts_the_fact_table() {
         .with_layout(PivotLayout::Tabular)
         .render(&model())
         .expect("render");
-    assert_eq!(by_store.rows, vec![vec![Scalar::Blank, dec(40.0)], vec![text("Gadget"), dec(25.0)], vec![text("Widget"), dec(130.0)]]);
+    assert_eq!(by_store.rows, vec![vec![Scalar::Blank, Scalar::Blank], vec![text("Gadget"), dec(25.0)], vec![text("Widget"), dec(130.0)]]);
 
     // A filter that matches no dimension row keeps no fact row, but the header survives.
     let nothing = pivot()
@@ -263,7 +263,7 @@ fn an_empty_dimension_table_groups_every_fact_row_as_blank() {
     // member to attach them to, so the leaf cell is the empty-set measure (BLANK) while the grand
     // total, which constrains no dimension, still sums the fact table.
     assert_eq!(header(&table), vec!["Product[Name]".to_string(), "Total Sales".to_string()]);
-    assert_eq!(table.rows, vec![vec![Scalar::Blank, dec(255.0)], vec![text("Grand Total"), dec(255.0)]]);
+    assert_eq!(table.rows, vec![vec![Scalar::Blank, Scalar::Blank], vec![text("Grand Total"), dec(255.0)]]);
 }
 
 #[test]
@@ -279,7 +279,7 @@ fn related_grouping_survives_an_unfaithful_model() {
 
     let (table, stats) =
         pivot().with_row_fields(vec!["Product[Name]".into()]).with_layout(PivotLayout::Tabular).render_with_stats(&model).expect("render");
-    assert_eq!(table.rows, vec![vec![Scalar::Blank, dec(40.0)], vec![text("Gadget"), dec(35.0)], vec![text("Widget"), dec(180.0)]]);
+    assert_eq!(table.rows, vec![vec![Scalar::Blank, Scalar::Blank], vec![text("Gadget"), dec(35.0)], vec![text("Widget"), dec(180.0)]]);
     assert_eq!(stats.pivot_group_rows, 0, "grouping fell back to the model rows: {stats:?}");
     assert!(stats.row_scan_fallbacks > 0, "the unfaithful model must be reported: {stats:?}");
 

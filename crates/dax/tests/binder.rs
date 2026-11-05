@@ -271,3 +271,20 @@ fn documented_order_keywords_bind_at_their_argument_positions() {
     let expr = parse_expression("SAMPLE ( 10, Sales, Sales[Amount], SIDEWAYS )").expect("parse");
     assert!(Binder::new(&model).bind_expression(&expr).is_err());
 }
+
+#[test]
+fn concatenate_x_binds_a_bare_order_word_in_every_pair() {
+    let model = sample_model();
+    // Every `(orderBy, Order)` pair takes a bare keyword: index 4 and index 6 here.
+    let bound = bind(&model, "CONCATENATEX ( Sales, Sales[Region], \"|\", Sales[Region], DESC, Sales[Amount], ASC )");
+    match bound {
+        BoundExpr::Call { args, .. } => {
+            assert!(matches!(&args[4], BoundExpr::Keyword(word) if word == "DESC"), "{:?}", args[4]);
+            assert!(matches!(&args[6], BoundExpr::Keyword(word) if word == "ASC"), "{:?}", args[6]);
+        }
+        other => panic!("expected a call, got {other:?}"),
+    }
+    // A non-keyword in an order slot is still a name, and there is no such name here.
+    let expr = parse_expression("CONCATENATEX ( Sales, Sales[Region], \"|\", Sales[Region], SIDEWAYS )").expect("parse");
+    assert!(Binder::new(&model).bind_expression(&expr).is_err());
+}

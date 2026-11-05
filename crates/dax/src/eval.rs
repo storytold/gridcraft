@@ -578,16 +578,16 @@ impl<'a> Evaluator<'a> {
                 .unwrap_or_else(|| RelationshipFlow::from_flags(relationship.inactive, relationship.bidirectional));
             // `other` is the side whose filters reach `table`: the one side when filters flow
             // one-to-many (this table is the many side), the many side for the reverse direction.
-            let (other, self_column, other_column, one_to_many) = if relationship.from_table == table {
+            let (other, self_column, other_column) = if relationship.from_table == table {
                 if !flow.one_to_many {
                     continue;
                 }
-                (relationship.to_table, relationship.from_column, relationship.to_column, true)
+                (relationship.to_table, relationship.from_column, relationship.to_column)
             } else if relationship.to_table == table {
                 if !flow.many_to_one {
                     continue;
                 }
-                (relationship.from_table, relationship.to_column, relationship.from_column, false)
+                (relationship.from_table, relationship.to_column, relationship.from_column)
             } else {
                 continue;
             };
@@ -599,17 +599,16 @@ impl<'a> Evaluator<'a> {
             self.bump(|counters| &counters.relationship_lookups);
             let keys: BTreeSet<ScalarKey> =
                 other_rows.iter().filter_map(|row| storage.value(other, other_column, *row)).map(|value| ScalarKey::from(&value)).collect();
-            // A one-side filter that selects BLANK also selects the rows that do not join it at
-            // all: DAX's BLANK member carries the orphan keys, so the BLANK cell of a pivot counts
-            // its fact rows instead of hiding them.
-            let blank_member = one_to_many && self.selects_blank_member(other, filters, &mut visited.clone());
-            let index_of = |key: &ScalarKey| relationship.rows_to(key);
             let mut retained = Vec::with_capacity(rows.len());
             for row in rows {
                 let Some(value) = storage.value(table, self_column, row) else { continue };
                 let key = ScalarKey::from(&value);
-                let orphan = key == ScalarKey::Blank || index_of(&key).is_empty();
-                if keys.contains(&key) || (blank_member && orphan) {
+                // A BLANK foreign key never joins a one-side row, whatever the related table
+                // holds: it is an orphan, exactly as `column_field_value` reads it.
+                if key == ScalarKey::Blank {
+                    continue;
+                }
+                if keys.contains(&key) {
                     retained.push(row);
                 }
             }
@@ -677,16 +676,16 @@ impl<'a> Evaluator<'a> {
                 .get(&index)
                 .copied()
                 .unwrap_or_else(|| RelationshipFlow::from_flags(relationship.inactive, relationship.bidirectional));
-            let (other, self_column, other_column, one_to_many) = if from == table {
+            let (other, self_column, other_column) = if from == table {
                 if !flow.one_to_many {
                     continue;
                 }
-                (to, &relationship.from_column, &relationship.to_column, true)
+                (to, &relationship.from_column, &relationship.to_column)
             } else if to == table {
                 if !flow.many_to_one {
                     continue;
                 }
-                (from, &relationship.to_column, &relationship.from_column, false)
+                (from, &relationship.to_column, &relationship.from_column)
             } else {
                 continue;
             };
@@ -704,22 +703,11 @@ impl<'a> Evaluator<'a> {
             };
             let keys: BTreeSet<ScalarKey> =
                 self.table_inner(other, filters, visited).rows.iter().filter_map(|row| row.get(other_col)).map(ScalarKey::from).collect();
-            // As on the storage path, a one-side filter that selects BLANK also selects the rows
-            // whose key has no related row: DAX's BLANK member carries the orphan keys.
-            let blank_member = one_to_many && self.selects_blank_member(other, filters, &mut visited.clone());
-            let known: BTreeSet<ScalarKey> = if blank_member {
-                self.model
-                    .tables
-                    .get(other)
-                    .map(|table| table.rows.iter().filter_map(|row| row.get(other_col)).map(ScalarKey::from).collect())
-                    .unwrap_or_default()
-            } else {
-                BTreeSet::new()
-            };
             rows.retain(|row| {
                 let Some(value) = row.get(self_col) else { return false };
                 let key = ScalarKey::from(value);
-                keys.contains(&key) || (blank_member && (key == ScalarKey::Blank || !known.contains(&key)))
+                // A BLANK foreign key never joins, so it is never in the related key set.
+                key != ScalarKey::Blank && keys.contains(&key)
             });
         }
 
@@ -756,38 +744,6 @@ impl<'a> Evaluator<'a> {
                 && next != table
                 && self.table_has_filter(next, filters, visited)
             {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Whether the current filters select the BLANK member of `table`.
-    ///
-    /// A filter that names BLANK on any of the table's columns selects it, and so does a filter
-    /// that reaches `table` from a further dimension over an active one-to-many relationship: DAX
-    /// represents the rows that do not join a dimension by the dimension's BLANK member, so the
-    /// whole chain is in the BLANK member. That member is what makes an orphan key belong to the
-    /// BLANK group of a pivot instead of falling out of the filter.
-    fn selects_blank_member(&self, table: usize, filters: &FilterContext, visited: &mut BTreeSet<usize>) -> bool {
-        if !visited.insert(table) {
-            return false;
-        }
-        if filters.filters.iter().any(|((filtered, _), keys)| *filtered == table && keys.contains(&ScalarKey::Blank)) {
-            return true;
-        }
-        for (index, relationship) in self.model.relationships.iter().enumerate() {
-            let flow = filters
-                .relationships
-                .get(&index)
-                .copied()
-                .unwrap_or_else(|| RelationshipFlow::from_flags(relationship.inactive, relationship.bidirectional));
-            let (Some(from), Some(to)) = (self.model.table_index(&relationship.from_table), self.model.table_index(&relationship.to_table)) else {
-                continue;
-            };
-            // `table` is the many side of this relationship, so `to` is the dimension whose
-            // filters reach it.
-            if from == table && flow.one_to_many && to != table && self.selects_blank_member(to, filters, visited) {
                 return true;
             }
         }

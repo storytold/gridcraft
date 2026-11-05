@@ -91,9 +91,9 @@ fn a_two_hop_related_field_groups_and_filters_through_both_hops() {
     let table = pivot().with_row_fields(vec!["Category[Category]".into()]).with_layout(PivotLayout::Tabular).render(&model()).expect("render");
 
     // Widget (key 1) is Hardware: 100 + 50. Gadget (key 2) is Software: 25. The orphan key 3
-    // reaches no Product row, so it is the BLANK member of both hops and its cell counts it (40).
+    // reaches no Product row, so it groups as BLANK and its cell stays empty.
     assert_eq!(header(&table), vec!["Category[Category]".to_string(), "Total Sales".to_string()]);
-    assert_eq!(table.rows, vec![vec![Scalar::Blank, dec(40.0)], vec![text("Hardware"), dec(150.0)], vec![text("Software"), dec(25.0)]]);
+    assert_eq!(table.rows, vec![vec![Scalar::Blank, Scalar::Blank], vec![text("Hardware"), dec(150.0)], vec![text("Software"), dec(25.0)]]);
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn one_hop_and_two_hop_row_fields_mix() {
     assert_eq!(
         table.rows,
         vec![
-            vec![Scalar::Blank, Scalar::Blank, dec(40.0)],
+            vec![Scalar::Blank, Scalar::Blank, Scalar::Blank],
             vec![text("Gadget"), text("Software"), dec(25.0)],
             vec![text("Widget"), text("Hardware"), dec(150.0)],
         ]
@@ -120,8 +120,8 @@ fn a_dimension_row_without_fact_rows_is_not_a_group() {
     let table = pivot().with_row_fields(vec!["Product[Name]".into()]).with_layout(PivotLayout::Tabular).render(&model()).expect("render");
 
     // Doohickey (ProductKey 4) has no fact row; the cells come from the fact table, so it never
-    // appears. The orphan key still does, as the BLANK member — and its cell counts it.
-    assert_eq!(table.rows, vec![vec![Scalar::Blank, dec(40.0)], vec![text("Gadget"), dec(25.0)], vec![text("Widget"), dec(150.0)]]);
+    // appears. The orphan key still does, as BLANK.
+    assert_eq!(table.rows, vec![vec![Scalar::Blank, Scalar::Blank], vec![text("Gadget"), dec(25.0)], vec![text("Widget"), dec(150.0)]]);
 }
 
 #[test]
@@ -158,7 +158,7 @@ fn the_grand_total_spans_the_fact_table_across_the_snowflake() {
     assert_eq!(
         table.rows,
         vec![
-            vec![Scalar::Blank, dec(40.0)],
+            vec![Scalar::Blank, Scalar::Blank],
             vec![text("Hardware"), dec(150.0)],
             vec![text("Software"), dec(25.0)],
             vec![text("Grand Total"), dec(215.0)],
