@@ -278,6 +278,12 @@ impl<'a> Binder<'a> {
                 // RANK/ROWNUMBER's Reset argument is `NONE`, `LOWESTPARENT` or `HIGHESTPARENT`,
                 // catalogued as `Any` so that a relation expression still binds there.
                 "RANK" if index == 6 => clause_keyword(arg, &["NONE", "LOWESTPARENT", "HIGHESTPARENT"]),
+                // The documented bare ASC/DESC slots: RANKX and RANK.EQ take Order at index 3/2,
+                // TOPNSKIP/CONCATENATEX at index 4 and SAMPLE at index 3.
+                "RANK.EQ" if index == 2 => clause_keyword(arg, &["ASC", "DESC"]),
+                "TOPNSKIP" if index == 4 => clause_keyword(arg, &["ASC", "DESC"]),
+                "SAMPLE" if index == 3 => clause_keyword(arg, &["ASC", "DESC"]),
+                "CONCATENATEX" if index == 4 => clause_keyword(arg, &["ASC", "DESC"]),
                 "ROWNUMBER" if index == 5 => clause_keyword(arg, &["NONE", "LOWESTPARENT", "HIGHESTPARENT"]),
                 // Window/relation clauses take bare enum words: `ORDERBY(x, DESC)`,
                 // `WINDOW(1, ABS, 1, ABS, ...)`, `INDEX(..., KEEP, PARTITIONBY(...))`, and the

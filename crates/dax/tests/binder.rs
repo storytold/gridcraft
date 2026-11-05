@@ -246,3 +246,28 @@ fn an_interval_keyword_is_not_shadowed_by_a_variable() {
     let bound = bind(&model, "VAR DENSE = 1 RETURN RANKX ( Sales, Sales[Amount], 42, DENSE )");
     assert!(format!("{bound:?}").contains("Variable"), "{bound:?}");
 }
+
+#[test]
+fn documented_order_keywords_bind_at_their_argument_positions() {
+    let model = sample_model();
+    // Each documented bare `ASC`/`DESC` slot binds as a keyword instead of failing as an unknown
+    // name, and an undocumented word there is still a name (and therefore an unknown one).
+    let calls = [
+        ("RANKX ( Sales, Sales[Amount], 42, DESC )", 3),
+        ("RANK.EQ ( 42, Sales[Amount], DESC )", 2),
+        ("TOPNSKIP ( 10, 20, Sales, Sales[Amount], DESC )", 4),
+        ("CONCATENATEX ( Sales, Sales[Amount], \", \", Sales[Amount], DESC )", 4),
+        ("SAMPLE ( 10, Sales, Sales[Amount], DESC )", 3),
+    ];
+    for (src, position) in calls {
+        match bind(&model, src) {
+            BoundExpr::Call { args, .. } => {
+                assert!(matches!(&args[position], BoundExpr::Keyword(word) if word == "DESC"), "{src}: {:?}", args[position]);
+            }
+            other => panic!("{src}: expected a call, got {other:?}"),
+        }
+    }
+    // An unknown word in a keyword slot is still unknown.
+    let expr = parse_expression("SAMPLE ( 10, Sales, Sales[Amount], SIDEWAYS )").expect("parse");
+    assert!(Binder::new(&model).bind_expression(&expr).is_err());
+}
