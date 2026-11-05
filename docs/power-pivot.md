@@ -65,8 +65,9 @@ Edit. The Data View/Diagram canvas stays visible below this ribbon.
   template into the formula bar (or the Add Measure formula field) using the first loaded table's
   name, a numeric column, a text column and the first measure. The catalogued functions live in
   `crates/dax/src/functions.rs`; which families a build dispatches is `linked_families()` in
-  `crates/dax/src/eval.rs`, alongside the functions the evaluator core handles itself (the aggregation
-  set — `SUM`, `COUNT`, … — and a scalar fallback such as `DATE` or `POWER`).
+  `crates/dax/src/eval.rs`, alongside the functions the evaluator core handles itself: the aggregation
+  set (`SUM`, `COUNT`, …) before dispatch, and a scalar fallback (`DATE`, `POWER`, …) after family dispatch
+  when no linked family claims the name.
 - **Relationships — Create Relationship…** and **Manage Relationships** both work (see dialogs).
 - **Table Properties** opens the read-only properties dialog.
 - **Mark as Date Table** works (`dataModel.markDateTable`, `dataModel.unmarkDateTable`): it validates
@@ -246,6 +247,6 @@ window without that slice does not register them.
 | Model persistence and refresh from a source | Partial: `xl/model/item.data` is kept through read and save, and `dataModel.createPivot` writes the session model's measures into it before attaching the cache. Excel reopened a written package and listed and evaluated the written measures (through `CUBEVALUE`); modified VertiPaq column *values* are not applied by Excel, so a refreshed PivotTable is not supported. The model's *tables* still come from the workbook's own model, not from the session JSON, and a model created from JSON alone has no database part to write |
 
 DAX support is partial: the catalog parses 484 functions. The evaluator core handles the aggregation
-functions and a scalar fallback of its own (`DATE`, `POWER`, …) before dispatch; the rest belong to
-families, and only the families linked in `crates/dax/src/eval.rs`'s `FAMILIES` are dispatched, so a call
-into an unlinked family reaches the `not implemented` fallback. With every family linked, all 484 evaluate.
+functions before dispatch, then the families linked in `crates/dax/src/eval.rs`'s `FAMILIES`, and finally a
+scalar fallback of its own (`DATE`, `POWER`, …) for names no linked family claims; a call into a family that
+is not linked therefore ends in the `not implemented` fallback. With every family linked, all 484 evaluate.
