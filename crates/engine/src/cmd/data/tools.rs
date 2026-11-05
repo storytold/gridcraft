@@ -1,4 +1,6 @@
 use super::*;
+use super::{check_moving_arrays, moved_array};
+use std::sync::Arc;
 
 // ---------------------------------------------------------------- tools
 
