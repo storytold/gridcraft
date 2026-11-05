@@ -161,6 +161,8 @@ fn lookup_windows_shortcuts(ctx: LookupContext) -> Option<Shortcut> {
     })
 }
 
+/// Maps platform-specific letter shortcuts to existing commands and dialogs.
+/// Returns None when this shortcut group does not handle the key.
 fn lookup_platform_letters(ctx: LookupContext) -> Option<Shortcut> {
     use Key::*;
     let LookupContext { key: k, ctrl, cmd, alt, ctrl_alt, plain, shift: s, mac, .. } = ctx;
