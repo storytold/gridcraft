@@ -1273,6 +1273,20 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text that Contains" => "Teksts, kurā ir",
         "Total Row" => "Kopsummas rinda",
         "Write a macro step by step" => "Rakstīt makro soli pa solim",
+        // Form controls and doughnut charts.
+        "Assign Action…" => "Piešķirt darbību…",
+        "Button" => "Poga",
+        "Doughnut hole size" => "Gredzena cauruma izmērs",
+        "Draw a button that runs a macro or a command" => "Uzzīmēt pogu, kas izpilda makro vai komandu",
+        "Draw a slider that sets a whole number in a linked cell" => "Uzzīmēt slīdni, kas iestata veselu skaitli saistītajā šūnā",
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Uzzīmēt skaitītāja pogu, kas pa soļiem maina veselu skaitli saistītajā šūnā"
+        }
+        "Edit Text" => "Rediģēt tekstu",
+        "First slice angle" => "Pirmā sektora leņķis",
+        "Format Control…" => "Formatēt vadīklu…",
+        "Slider" => "Slīdnis",
+        "Spin Button" => "Skaitītāja poga",
         _ => return None,
     })
 }
