@@ -147,7 +147,7 @@ impl SheetApp {
         // (`doc_windows` decides what having none left means).
         if self.session.active().is_none()
             && !self.native_windows
-            && let Err(error) = self.run("file.new", json!({}))
+            && let Err(error) = self.run_from_ui("file.new", json!({}))
         {
             self.message = Some(("GridCraft".into(), error));
         }

@@ -78,9 +78,9 @@ const LOCALE_FORMATS: [(u32, u32); 37] = [
     (69, 12),
     (70, 13),
     (71, 14),
-    (72, 14),
-    (73, 15),
-    (74, 16),
+    (72, 15),
+    (73, 16),
+    (74, 17),
     (75, 20),
     (76, 21),
     (77, 22),
@@ -444,7 +444,7 @@ mod tests {
     #[test]
     fn locale_builtin_ids_read_as_excel_shows_them() {
         // Dates stored as the East Asian ids show as the short date, and save as it.
-        for id in [27, 30, 31, 36, 50, 57, 58, 71, 72] {
+        for id in [27, 30, 31, 36, 50, 57, 58, 71] {
             assert_eq!(builtin_format(id), Some("m/d/yyyy"), "id {id}");
         }
         assert_eq!(builtin_id(builtin_format(58).unwrap()), Some(14));
@@ -452,7 +452,9 @@ mod tests {
             assert_eq!(builtin_format(id), Some("h:mm:ss"), "id {id}");
         }
         // The Thai ids repeat the en-US numbers, percents, fractions, dates and times.
-        for (thai, en) in [(59, 1), (62, 4), (67, 9), (70, 13), (73, 15), (75, 20), (76, 21), (77, 22), (78, 45), (79, 46), (80, 47)] {
+        for (thai, en) in
+            [(59, 1), (62, 4), (67, 9), (70, 13), (72, 15), (73, 16), (74, 17), (75, 20), (76, 21), (77, 22), (78, 45), (79, 46), (80, 47)]
+        {
             assert_eq!(builtin_format(thai), builtin_format(en), "id {thai}");
             assert!(builtin_format(thai).is_some(), "id {thai}");
         }

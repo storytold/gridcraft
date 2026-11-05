@@ -45,11 +45,11 @@ pub fn specs() -> Vec<CommandSpec> {
             "Delete Name",
             [],
             None,
-            "{name, scope?: null|\"Workbook\"|sheet name|{sheet: name}, force?: bool} (missing or null scope selects every scope; Workbook selects only workbook scope. Hidden GridCraft data names are refused unless force is true)",
+            "{name, scope?: null|\"Workbook\"|sheet name|{sheet: name}, force?: bool} (missing or null scope selects every scope; Workbook selects only workbook scope. When reusing nameManager scopeIdentity: null, pass scope: \"Workbook\" to delete only the workbook name. Hidden GridCraft data names are refused unless force is true)",
             has_doc,
             delete_name
         ),
-        cmd!(query "formulas.nameManager", "Name Manager", ["Formulas", "Defined Names"], Some("Cmd+F3"), "{} → names with values, display scope and scopeIdentity (null or {sheet: name})", has_doc, name_manager),
+        cmd!(query "formulas.nameManager", "Name Manager", ["Formulas", "Defined Names"], Some("Cmd+F3"), "{} → names with values, display scope and scopeIdentity (null or {sheet: name}); for deleteName, convert scopeIdentity: null to scope: \"Workbook\" because null deletes across all scopes", has_doc, name_manager),
         cmd!(
             "formulas.createFromSelection",
             "Create from Selection",

@@ -251,6 +251,18 @@ fn test_commands() -> std::sync::MutexGuard<'static, Vec<&'static CommandSpec>> 
 pub(crate) fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
+/// Validates common generated-name limits; sheet prefixes also reject a leading quote.
+pub(crate) fn check_generated_prefix(command: &str, prefix: &str, sheet: bool) -> Result<()> {
+    if prefix.trim().is_empty()
+        || prefix.chars().count() > 16
+        || prefix.chars().any(|c| c.is_control() || "[]:*?/\\".contains(c))
+        || (sheet && prefix.starts_with('\''))
+    {
+        return Err(bad(command, "invalid generated-name prefix"));
+    }
+    Ok(())
+}
+
 pub(crate) fn str_param<'a>(p: &'a Json, key: &str) -> Option<&'a str> {
     p.get(key).and_then(Json::as_str)
 }

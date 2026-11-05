@@ -9,9 +9,7 @@ pub(super) fn insert_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         Some(n) => n.to_string(),
         None => {
             let prefix = str_param(p, "namePrefix").unwrap_or("Sheet");
-            if prefix.trim().is_empty() || prefix.chars().count() > 16 || prefix.chars().any(|c| c.is_control() || "[]:*?/\\".contains(c)) {
-                return Err(bad("home.insertSheet", "invalid generated-name prefix"));
-            }
+            crate::cmd::check_generated_prefix("home.insertSheet", prefix, true)?;
             s.doc()?.wb.next_sheet_name_with_prefix(prefix)
         }
     };

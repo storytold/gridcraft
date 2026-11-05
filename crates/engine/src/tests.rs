@@ -1,5 +1,5 @@
 use gridcraft_core::{CellRef, Value};
-use serde_json::json;
+use serde_json::{Value as Json, json};
 
 use crate::Session;
 
@@ -5709,4 +5709,58 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
         assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "destination": dest})).is_err(), "destination {dest:?}");
     }
     assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
+}
+
+/// Name Manager's identities distinguish a sheet literally named Workbook; null deletion stays legacy-wide.
+#[test]
+fn name_scope_identities_round_trip_and_null_deletion_keeps_its_contract() {
+    let mut s = s();
+    for name in ["Workbook", "Other"] {
+        s.execute("home.insertSheet", json!({"name":name})).unwrap();
+    }
+    let identities = [Json::Null, json!({"sheet":"Workbook"}), json!({"sheet":"Other"})];
+    for scope in &identities {
+        s.execute("formulas.defineName", json!({"name":"Rate", "refersTo":"=1", "scope":scope})).unwrap();
+    }
+    let result = s.execute("formulas.nameManager", json!({})).unwrap();
+    let rows = result.as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    for identity in &identities {
+        let row = rows.iter().find(|row| &row["scopeIdentity"] == identity).unwrap();
+        assert_eq!(row["name"], "Rate");
+        assert_eq!(row["scope"], identity.get("sheet").and_then(Json::as_str).unwrap_or("Workbook"));
+    }
+    s.execute("formulas.deleteName", json!({"name":"Rate", "scope":{"sheet":"Workbook"}})).unwrap();
+    let result = s.execute("formulas.nameManager", json!({})).unwrap();
+    let rows = result.as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().any(|row| row["scopeIdentity"].is_null()));
+    assert!(rows.iter().any(|row| row["scopeIdentity"] == json!({"sheet":"Other"})));
+    s.execute("formulas.deleteName", json!({"name":"Rate", "scope":"Workbook"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.names.len(), 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.names.len(), 2);
+    s.execute("formulas.deleteName", json!({"name":"Rate", "scope":null})).unwrap();
+    assert!(s.doc().unwrap().wb.names.is_empty());
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.names.len(), 2);
+}
+
+/// Both naming commands apply the same limits, counting Unicode characters rather than bytes.
+#[test]
+fn generated_sheet_prefix_validation_is_shared_between_creation_commands() {
+    for prefix in ["", " ", "Bad/Name", "12345678901234567", "Bad\nName", "'Data"] {
+        let mut empty = Session::new();
+        assert!(empty.execute("file.new", json!({"sheetPrefix":prefix})).is_err());
+        assert!(empty.documents().is_empty());
+        let mut existing = s();
+        assert!(existing.execute("home.insertSheet", json!({"namePrefix":prefix})).is_err());
+        assert_eq!(existing.doc().unwrap().wb.sheets.len(), 1);
+    }
+    let prefix = "Л".repeat(16);
+    let mut session = Session::new();
+    session.execute("file.new", json!({"sheetPrefix":prefix})).unwrap();
+    session.execute("home.insertSheet", json!({"namePrefix":prefix})).unwrap();
+    assert_eq!(session.doc().unwrap().wb.sheets.len(), 2);
+    assert!(session.doc().unwrap().wb.sheets.iter().all(|s| s.name.starts_with(&prefix)));
 }

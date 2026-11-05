@@ -611,7 +611,8 @@ impl Session {
         self.new_workbook_named("Book", "Sheet")
     }
 
-    /// Creates a blank workbook using caller-supplied, validated generated-name prefixes.
+    /// Creates a blank workbook using caller-supplied generated-name prefixes.
+    /// Callers must validate the prefixes first; the `file.new` command performs that validation.
     pub fn new_workbook_named(&mut self, book_prefix: &str, sheet_prefix: &str) -> usize {
         let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("{book_prefix}{n}") && d.path.is_none())).unwrap_or(1);
         let mut wb = Workbook::new();

@@ -13,12 +13,12 @@ fn harness() -> egui_kittest::Harness<'static, SheetApp> {
 #[test]
 fn generated_names_are_localized_and_existing_names_stay_unchanged() {
     let mut h = harness();
-    h.state_mut().run("file.new", json!({})).unwrap();
+    h.state_mut().run_or_alert("file.new", json!({}));
     assert_eq!(h.state().session.active().unwrap().title, "Книга1");
     assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().name, "Лист1");
-    h.state_mut().run("home.insertSheet", json!({})).unwrap();
+    h.state_mut().run_or_alert("home.insertSheet", json!({}));
     assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().name, "Лист2");
-    h.state_mut().run("insert.table", json!({"range":"A1:B2","header":false})).unwrap();
+    h.state_mut().run_or_alert("insert.table", json!({"range":"A1:B2","header":false}));
     let doc = h.state().session.active().unwrap();
     let table = &doc.wb.active().unwrap().tables[0];
     assert_eq!(table.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Столбец1", "Столбец2"]);
@@ -28,7 +28,7 @@ fn generated_names_are_localized_and_existing_names_stay_unchanged() {
     assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().tables[0].columns[0].name, "Столбец1");
     h.state_mut().run("app.language.set", json!({"language":"en"})).unwrap();
     assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().name, "Лист2");
-    h.state_mut().run("file.new", json!({})).unwrap();
+    h.state_mut().run_or_alert("file.new", json!({}));
     assert!(h.state().session.active().unwrap().title.starts_with("Book"));
 }
 
@@ -310,5 +310,33 @@ fn german_number_samples_match_the_grid_and_keep_canonical_output() {
         h.run_steps(3);
         assert!(h.query_by_label(number).is_some(), "{language}: Format Cells sample differs from the grid");
         h.state_mut().dialog = None;
+    }
+}
+
+/// Programmatic entry does not inherit UI naming defaults; explicit prefixes still take precedence.
+#[test]
+fn programmatic_generated_names_are_language_independent() {
+    for language in ["en", "ru", "tr"] {
+        let mut app = SheetApp::new(gridcraft_engine::Session::new(), Default::default());
+        app.run("app.language.set", json!({"language":language})).unwrap();
+        app.run("file.new", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().title, "Book1");
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().name, "Sheet1");
+        app.run("home.insertSheet", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().name, "Sheet2");
+        app.run("insert.table", json!({"range":"A1:B2", "header":false})).unwrap();
+        app.run("home.formatAsTable", json!({"range":"D1:E2", "header":false, "style":"TableStyleMedium2"})).unwrap();
+        for table in &app.session.active().unwrap().wb.active().unwrap().tables {
+            assert_eq!(table.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Column1", "Column2"]);
+        }
+        app.run_or_alert("file.new", json!({"bookPrefix":"Custom", "sheetPrefix":"Data"}));
+        assert!(app.message.is_none());
+        assert_eq!(app.session.active().unwrap().title, "Custom1");
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().name, "Data1");
+        app.run_or_alert("home.insertSheet", json!({"namePrefix":"Tab"}));
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().name, "Tab1");
+        app.run_or_alert("insert.table", json!({"range":"A1:B2", "header":false, "columnPrefix":"Field"}));
+        assert!(app.message.is_none());
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().tables[0].columns[0].name, "Field1");
     }
 }

@@ -286,10 +286,20 @@ fn locale_date_format_reads_as_a_date_and_saves_as_one() {
     assert_eq!(fmt(&again), "m/d/yyyy");
 }
 
-/// Thai built-in time formats keep their time meaning through import and canonical XLSX export.
+/// Thai built-in dates and times keep their formats through import and canonical XLSX export.
 #[test]
-fn thai_builtin_time_formats_survive_xlsx_round_trip() {
-    for (id, code) in [(75, "h:mm"), (76, "h:mm:ss"), (77, "m/d/yyyy h:mm"), (78, "mm:ss"), (79, "[h]:mm:ss"), (80, "mmss.0")] {
+fn thai_builtin_formats_survive_xlsx_round_trip() {
+    for (id, code) in [
+        (72, "d-mmm-yy"),
+        (73, "d-mmm"),
+        (74, "mmm-yy"),
+        (75, "h:mm"),
+        (76, "h:mm:ss"),
+        (77, "m/d/yyyy h:mm"),
+        (78, "mm:ss"),
+        (79, "[h]:mm:ss"),
+        (80, "mmss.0"),
+    ] {
         let styles = format!(
             r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
           <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>

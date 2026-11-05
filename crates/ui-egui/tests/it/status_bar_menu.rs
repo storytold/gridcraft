@@ -79,3 +79,25 @@ fn selection_statistics_use_the_interface_language() {
         }
     }
 }
+
+/// Status-bar statistics share the grid's regional separators, including an absent fractional part.
+#[test]
+fn selection_statistics_format_values_with_the_interface_number_locale() {
+    use gridcraft_ui_egui::i18n::Language;
+    let mut h = harness();
+    h.state_mut().run("range.setValues", json!({"range":"A1", "values":[[1000.25],[1001.25]]})).unwrap();
+    h.state_mut().run("selection.set", json!({"range":"A1:A2"})).unwrap();
+    for (language, code, expected) in [(Language::De, "General", "2.001,5"), (Language::En, "General", "2,001.5"), (Language::De, "0.00", "2001,50")]
+    {
+        h.state_mut().run("app.language.set", json!({"language":language.code()})).unwrap();
+        h.state_mut().run("home.numberFormat", json!({"range":"A1", "code":code})).unwrap();
+        h.run_steps(3);
+        let label = format!("{}: {expected}", language.tr("Sum"));
+        assert!(h.query_by_label(&label).is_some(), "missing {label}");
+    }
+    h.state_mut().run("range.setValues", json!({"range":"A1", "values":[[1000],[1001]]})).unwrap();
+    h.state_mut().run("home.numberFormat", json!({"range":"A1", "code":"General"})).unwrap();
+    h.run_steps(3);
+    let label = format!("{}: 2.001", Language::De.tr("Sum"));
+    assert!(h.query_by_label(&label).is_some(), "an integer statistic must not end in a decimal separator");
+}

@@ -43,14 +43,8 @@ fn new_workbook(s: &mut Session, p: &Json) -> Result<Json> {
         None => {
             let book = str_param(p, "bookPrefix").unwrap_or("Book");
             let sheet = str_param(p, "sheetPrefix").unwrap_or("Sheet");
-            for prefix in [book, sheet] {
-                if prefix.trim().is_empty() || prefix.chars().count() > 16 || prefix.chars().any(|c| c.is_control() || "[]:*?/\\".contains(c)) {
-                    return Err(bad("file.new", "invalid generated-name prefix"));
-                }
-            }
-            if sheet.starts_with('\'') {
-                return Err(bad("file.new", "invalid generated-name prefix"));
-            }
+            super::check_generated_prefix("file.new", book, false)?;
+            super::check_generated_prefix("file.new", sheet, true)?;
             s.new_workbook_named(book, sheet)
         }
     };

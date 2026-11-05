@@ -698,7 +698,7 @@ pub(super) const ARGUMENTS: &[(&str, &str)] = &[
     ("pmt", "各期付款額"),
     ("population_s", "母體成功數"),
     ("power", "冪"),
-    ("pr", "每期本金"),
+    ("pr", "每 100 面額的價格"),
     ("principal", "本金"),
     ("prob_range", "機率區域"),
     ("probability", "機率"),
