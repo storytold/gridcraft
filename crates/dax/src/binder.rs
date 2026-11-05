@@ -215,11 +215,14 @@ impl<'a> Binder<'a> {
             // `Sales[Total Sales]` names a measure homed on the qualifying table; DAX allows the
             // table qualifier on a measure reference and only rejects it for another table.
             if let Some(index) = self.model.measure_index(&name.name.text)
-                && self.model.measures[index].table.as_deref().is_some_and(|home| self.model.table_index(home) == Some(table_index))
+                && let Some(home) = self.model.measures[index].table.as_deref()
             {
-                return Ok(BoundExpr::Measure(index));
+                if self.model.table_index(home) == Some(table_index) {
+                    return Ok(BoundExpr::Measure(index));
+                }
+                return Err(BindError::new(format!("measure `{}` belongs to table `{}`, not `{}`", name.name.text, home, table.text), span));
             }
-            return Err(BindError::new(format!("unknown column or measure `{}` in table `{}`", name.name.text, table.text), span));
+            return Err(BindError::new(format!("unknown column `{}` in table `{}`", name.name.text, table.text), span));
         }
 
         // A bracketed name is always a model object reference (`[Measure]`, `[Column]`), never a

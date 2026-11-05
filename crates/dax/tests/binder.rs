@@ -80,7 +80,7 @@ fn reports_unknown_names_and_bad_arities() {
     assert!(error("Missing[Amount]").message.contains("unknown table"));
     assert!(error("Sales[Missing]").message.contains("unknown column"));
     // A measure qualifier has to name the measure's home table.
-    assert!(error("Date[Total Sales]").message.contains("unknown column or measure"));
+    assert!(error("Date[Total Sales]").message.contains("belongs to table `Sales`"));
     assert!(error("SUM ( )").message.contains("expects 1"));
     assert!(error("NOPE ( 1 )").message.contains("unknown DAX function"));
 }

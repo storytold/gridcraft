@@ -173,6 +173,11 @@ fn fixed_rounds_and_groups() {
 #[test]
 fn format_predefined_numeric_names() {
     assert_eq!(text(r##"FORMAT(12345.67, "General Number")"##), "12345.67");
+    // Excel shows 15 significant digits: the binary sum of 0.1 and 0.2 reads as 0.3, not as Rust's
+    // shortest round-trip form 0.30000000000000004. `General` and an empty pattern share the path.
+    assert_eq!(text(r##"FORMAT(0.1 + 0.2, "General Number")"##), "0.3");
+    assert_eq!(text(r##"FORMAT(0.1 + 0.2, "General")"##), "0.3");
+    assert_eq!(text(r##"FORMAT(0.1 + 0.2, "")"##), "0.3");
     assert_eq!(text(r##"FORMAT(12345.67, "Currency")"##), "$12,345.67");
     assert_eq!(text(r##"FORMAT(12345.67, "Fixed")"##), "12345.67");
     assert_eq!(text(r##"FORMAT(12345.67, "Standard")"##), "12,345.67");

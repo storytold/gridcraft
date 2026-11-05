@@ -415,7 +415,10 @@ fn general_number(value: f64) -> String {
     if value.fract() == 0.0 && value.abs() < 1e15 {
         return format!("{value:.0}");
     }
-    format!("{value}")
+    // Excel/DAX show at most 15 significant digits, so `0.1 + 0.2` reads as `0.3` rather than as
+    // Rust's shortest round-trip form `0.30000000000000004`.
+    let rounded: f64 = format!("{value:.14e}").parse().unwrap_or(value);
+    format!("{rounded}")
 }
 
 /// True when the pattern contains date/time tokens and no digit placeholders, so a numeric value
