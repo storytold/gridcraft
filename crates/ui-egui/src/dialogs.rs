@@ -1083,6 +1083,13 @@ impl Dialog {
                 d.result = Some(app.session.run("review.spelling", json!({})).unwrap_or_else(|e| json!({"error": e})));
                 d
             }
+            "saveChartTemplate" => Dialog::form(
+                "saveChartTemplate",
+                "Save Chart Template",
+                "chart.saveTemplate",
+                vec![Text { key: "name", label: "Template name" }],
+                json!({"chart":p("chart"),"name":"My Chart Template","target":app.view_key()}),
+            ),
             "chartTitle" => Dialog::form(
                 "chartTitle",
                 "Chart Title",

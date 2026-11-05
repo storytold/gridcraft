@@ -56,7 +56,7 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Per-series / per-point fill, line, marker, effects | Format pane for every element | format-model series fills/strokes, markers and smoothing; full per-point styling and effects missing; element-oriented pane is a subsequent change |
 | Chart styles and colour palettes | ~16 styles × colour sets | style number stored, own palettes |
 | Chart sheets | yes | **kept, not editable**: not shown, and written back unchanged in their place on save (#727); left out when a sheet they plot is deleted or renamed. No F11 / Move Chart > New sheet |
-| Chart templates (`.crtx`) | yes | **missing** |
+| Chart templates (`.crtx`) | yes | local appearance presets can be saved/applied/deleted and used as per-kind insertion defaults; Excel `.crtx` interchange remains missing; see [chart-templates.md](chart-templates.md) |
 | Recommended Charts | yes | dialog with recommendations from the data's shape (own heuristic) and an All Charts list, live previews (#215) |
 | Switch Row/Column, Select Data | yes | yes (Switch on charts read from files landed in #116) |
 | Recommended Charts | yes | partial (Insert ▸ Recommended) |
