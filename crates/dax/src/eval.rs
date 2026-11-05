@@ -40,19 +40,19 @@ mod support;
 // line instead of inserting at a shared anchor and conflicting with its siblings.
 // aggregation
 // date_time
-// filter
+mod filter;
 // financial
 // information
 // logical
 // math_trig
 // model_info
-// other
-// parent_child
-// statistical
-// table_manipulation
+mod other;
+mod parent_child;
+mod statistical;
+mod table_manipulation;
 // text
 // time_intelligence
-// visual
+mod visual;
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -109,19 +109,19 @@ pub const ALL_FAMILIES: &[&str] = &[
 const FAMILIES: &[Family] = &[
     // aggregation
     // date_time
-    // filter
+    Family { name: "filter", scalar: filter::call, table: filter::call_table },
     // financial
     // information
     // logical
     // math_trig
     // model_info
-    // other
-    // parent_child
-    // statistical
-    // table_manipulation
+    Family { name: "other", scalar: other::call, table: other::call_table },
+    Family { name: "parent_child", scalar: parent_child::call, table: parent_child::call_table },
+    Family { name: "statistical", scalar: statistical::call, table: statistical::call_table },
+    Family { name: "table_manipulation", scalar: table_manipulation::call, table: table_manipulation::call_table },
     // text
     // time_intelligence
-    // visual
+    Family { name: "visual", scalar: visual::call, table: visual::call_table },
 ];
 
 /// The names of the evaluator families linked into this build, in dispatch order.
@@ -418,20 +418,24 @@ impl<'a> Evaluator<'a> {
 
     /// Evaluates an expression with an empty filter context.
     pub fn evaluate(&self, expr: &BoundExpr) -> Result<Scalar, EvalError> {
+        visual::reset_budget();
         self.evaluate_with(expr, FilterContext::default())
     }
 
     pub fn evaluate_with(&self, expr: &BoundExpr, filters: FilterContext) -> Result<Scalar, EvalError> {
+        visual::reset_budget();
         let mut ctx = Context { filters, rows: Vec::new(), vars: Vec::new(), grouping_scope: None };
         self.eval(expr, &mut ctx)
     }
 
     pub fn evaluate_table(&self, expr: &BoundExpr) -> Result<TableValue, EvalError> {
+        visual::reset_budget();
         let mut ctx = Context { filters: FilterContext::default(), rows: Vec::new(), vars: Vec::new(), grouping_scope: None };
         self.eval_table(expr, &mut ctx)
     }
 
     pub fn evaluate_measure(&self, name: &str, filters: FilterContext) -> Result<Scalar, EvalError> {
+        visual::reset_budget();
         let index = self.model.measure_index(name).ok_or_else(|| EvalError::new(format!("unknown measure `{name}`")))?;
         let mut ctx = Context { filters, rows: Vec::new(), vars: Vec::new(), grouping_scope: None };
         self.eval_measure(index, &mut ctx)

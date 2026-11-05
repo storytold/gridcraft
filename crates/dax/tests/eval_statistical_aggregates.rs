@@ -1,0 +1,499 @@
+//! Evaluator tests for the statistical aggregates: combinatorics, geometric mean, median,
+//! percentiles, variance/standard deviation, ranking and SAMPLE.
+
+use gridcraft_dax::model::{DataModel, ModelColumn, ModelTable, Relationship};
+use gridcraft_dax::value::{Scalar, TableValue};
+use gridcraft_dax::{Binder, Evaluator, StorageStats, parse_expression};
+
+fn column(name: &str, data_type: &str) -> ModelColumn {
+    ModelColumn { name: name.into(), data_type: Some(data_type.into()) }
+}
+
+fn model() -> DataModel {
+    let mut model = DataModel {
+        tables: vec![
+            ModelTable {
+                name: "Sales".into(),
+                columns: vec![column("Region", "String"), column("Amount", "Double"), column("Quantity", "Int64"), column("Flag", "Boolean")],
+                rows: vec![
+                    vec![Scalar::String("East".into()), Scalar::Integer(10), Scalar::Integer(2), Scalar::Boolean(true)],
+                    vec![Scalar::String("West".into()), Scalar::Integer(20), Scalar::Integer(3), Scalar::Boolean(false)],
+                    vec![Scalar::String("East".into()), Scalar::Integer(30), Scalar::Integer(4), Scalar::Boolean(true)],
+                    vec![Scalar::String("West".into()), Scalar::Integer(40), Scalar::Integer(5), Scalar::Boolean(false)],
+                ],
+            },
+            ModelTable {
+                name: "Sparse".into(),
+                columns: vec![column("Label", "String"), column("Value", "Double")],
+                rows: vec![
+                    vec![Scalar::String("a".into()), Scalar::Integer(2)],
+                    vec![Scalar::String("b".into()), Scalar::Blank],
+                    vec![Scalar::String("c".into()), Scalar::Integer(4)],
+                    vec![Scalar::String("d".into()), Scalar::Blank],
+                ],
+            },
+            ModelTable { name: "Nulls".into(), columns: vec![column("Value", "Double")], rows: vec![vec![Scalar::Blank], vec![Scalar::Blank]] },
+            ModelTable { name: "Empty".into(), columns: vec![column("Value", "Double")], rows: vec![] },
+            ModelTable { name: "Single".into(), columns: vec![column("Value", "Double")], rows: vec![vec![Scalar::Integer(5)]] },
+            ModelTable {
+                name: "Ties".into(),
+                columns: vec![column("Value", "Int64")],
+                rows: vec![
+                    vec![Scalar::Integer(10)],
+                    vec![Scalar::Integer(10)],
+                    vec![Scalar::Integer(20)],
+                    vec![Scalar::Integer(20)],
+                    vec![Scalar::Integer(20)],
+                ],
+            },
+            ModelTable {
+                name: "Mixed".into(),
+                columns: vec![column("Value", "Any")],
+                rows: vec![
+                    vec![Scalar::Integer(7)],
+                    vec![Scalar::String("abc".into())],
+                    vec![Scalar::Decimal(f64::NAN)],
+                    vec![Scalar::Integer(3)],
+                    vec![Scalar::String("Zed".into())],
+                ],
+            },
+        ],
+        relationships: vec![],
+        measures: vec![],
+    };
+    model.parse_formulas().expect("model parses");
+    model
+}
+
+fn eval(src: &str) -> Result<Scalar, String> {
+    let model = model();
+    let evaluator = Evaluator::new(&model).map_err(|error| error.to_string())?;
+    let expr = parse_expression(src).map_err(|error| error.to_string())?;
+    let bound = Binder::new(&model).bind_expression(&expr).map_err(|error| error.to_string())?;
+    evaluator.evaluate(&bound).map_err(|error| error.to_string())
+}
+
+fn eval_table(src: &str) -> Result<TableValue, String> {
+    let model = model();
+    let evaluator = Evaluator::new(&model).map_err(|error| error.to_string())?;
+    let expr = parse_expression(src).map_err(|error| error.to_string())?;
+    let bound = Binder::new(&model).bind_expression(&expr).map_err(|error| error.to_string())?;
+    evaluator.evaluate_table(&bound).map_err(|error| error.to_string())
+}
+
+fn number(value: Scalar) -> f64 {
+    match value {
+        Scalar::Decimal(value) => value,
+        Scalar::Integer(value) => value as f64,
+        Scalar::Currency(value) => value as f64 / 10_000.0,
+        other => panic!("expected a numeric scalar, got {other:?}"),
+    }
+}
+
+fn assert_close(actual: Scalar, expected: f64) {
+    let value = number(actual);
+    let tolerance = 1e-9 * expected.abs().max(1.0);
+    assert!((value - expected).abs() <= tolerance, "expected {expected}, got {value}");
+}
+
+fn assert_integer(actual: Scalar, expected: i64) {
+    assert_eq!(actual, Scalar::Integer(expected));
+}
+
+// ---------------------------------------------------------------------------------------------
+// COMBIN / COMBINA / PERMUT
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn combinatorics() {
+    assert_integer(eval("COMBIN(8, 3)").expect("COMBIN"), 56);
+    assert_integer(eval("COMBIN(8, 2)").expect("COMBIN"), 28);
+    assert_integer(eval("COMBIN(8, 0)").expect("COMBIN"), 1);
+    assert_integer(eval("COMBIN(8, 8)").expect("COMBIN"), 1);
+    // Exact integer arithmetic far beyond f64's 2^53 integer range.
+    assert_integer(eval("COMBIN(60, 30)").expect("COMBIN large"), 118_264_581_564_861_424);
+    assert_integer(eval("COMBIN(52, 5)").expect("COMBIN 52 choose 5"), 2_598_960);
+    // Arguments truncate to integers, as the catalog says: 8 choose 3.
+    assert_integer(eval("COMBIN(8.9, 3.9)").expect("COMBIN truncates"), 56);
+
+    assert_integer(eval("COMBINA(8, 3)").expect("COMBINA"), 120);
+    assert_integer(eval("COMBINA(4, 3)").expect("COMBINA"), 20);
+    assert_integer(eval("COMBINA(10, 3)").expect("COMBINA"), 220);
+    assert_integer(eval("COMBINA(0, 0)").expect("COMBINA both zero"), 1);
+    assert_integer(eval("COMBINA(5, 0)").expect("COMBINA nothing chosen"), 1);
+
+    assert_close(eval("PERMUT(8, 3)").expect("PERMUT"), 336.0);
+    assert_close(eval("PERMUT(5, 0)").expect("PERMUT"), 1.0);
+    assert_close(eval("PERMUT(5, 5)").expect("PERMUT"), 120.0);
+    assert_close(eval("PERMUT(8.9, 3.9)").expect("PERMUT truncates"), 336.0);
+}
+
+#[test]
+fn combinatoric_domain_errors() {
+    assert!(eval("COMBIN(-1, 0)").is_err());
+    assert!(eval("COMBIN(2, 3)").is_err());
+    assert!(eval("COMBIN(8, -1)").is_err());
+    assert!(eval("COMBINA(2, 3)").is_err());
+    assert!(eval("COMBINA(-1, 0)").is_err());
+    assert!(eval("PERMUT(0, 0)").is_err());
+    assert!(eval("PERMUT(3, 4)").is_err());
+    assert!(eval("PERMUT(-3, 1)").is_err());
+}
+
+// ---------------------------------------------------------------------------------------------
+// GEOMEAN / GEOMEANX
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn geometric_mean() {
+    // (10 * 20 * 30 * 40)^(1/4)
+    assert_close(eval("GEOMEAN(Sales[Amount])").expect("GEOMEAN"), 240_000_f64.powf(0.25));
+    assert_close(eval("GEOMEAN(Sales[Amount])").expect("GEOMEAN"), 22.133_638_394_006_432);
+    // Blanks are ignored: geometric mean of 2 and 4.
+    assert_close(eval("GEOMEAN(Sparse[Value])").expect("GEOMEAN blanks"), 8_f64.sqrt());
+    assert_close(eval("GEOMEANX(Sales, Sales[Amount])").expect("GEOMEANX"), 22.133_638_394_006_432);
+    assert_close(eval("GEOMEANX(Sales, Sales[Amount] * 2)").expect("GEOMEANX expression"), 2.0 * 240_000_f64.powf(0.25));
+    assert_close(eval("GEOMEANX(Sparse, Sparse[Value])").expect("GEOMEANX blanks"), 8_f64.sqrt());
+    // Non-positive values do not contribute; a single positive value is its own mean.
+    assert_close(eval("GEOMEANX(Sales, Sales[Amount] - 20)").expect("GEOMEANX non-positive"), (10.0 * 20.0_f64).powf(1.0 / 2.0));
+}
+
+// ---------------------------------------------------------------------------------------------
+// MEDIAN / MEDIANX
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn median_and_medianx() {
+    assert_eq!(eval("MEDIAN(Sales[Amount])").expect("MEDIAN"), Scalar::Decimal(25.0));
+    assert_eq!(eval("MEDIANX(Sales, Sales[Amount])").expect("MEDIANX"), Scalar::Decimal(25.0));
+    // MEDIAN ignores blanks: median of 2 and 4.
+    assert_eq!(eval("MEDIAN(Sparse[Value])").expect("MEDIAN blanks"), Scalar::Decimal(3.0));
+    // MEDIANX includes blanks: sorted [BLANK, BLANK, 2, 4] has 1.0 as its median.
+    assert_eq!(eval("MEDIANX(Sparse, Sparse[Value])").expect("MEDIANX blanks"), Scalar::Decimal(1.0));
+    assert_eq!(eval("MEDIAN(Single[Value])").expect("MEDIAN single"), Scalar::Decimal(5.0));
+    assert_eq!(eval("MEDIANX(Sales, Sales[Amount] / 2)").expect("MEDIANX expression"), Scalar::Decimal(12.5));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Percentiles
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn percentile_inclusive() {
+    assert_eq!(eval("PERCENTILE.INC(Sales[Amount], 0)").expect("PERCENTILE.INC min"), Scalar::Decimal(10.0));
+    assert_eq!(eval("PERCENTILE.INC(Sales[Amount], 0.5)").expect("PERCENTILE.INC median"), Scalar::Decimal(25.0));
+    assert_eq!(eval("PERCENTILE.INC(Sales[Amount], 1)").expect("PERCENTILE.INC max"), Scalar::Decimal(40.0));
+    // rank = 0.25 * (4 - 1) = 0.75 -> 10 + 0.75 * (20 - 10)
+    assert_eq!(eval("PERCENTILE.INC(Sales[Amount], 0.25)").expect("PERCENTILE.INC interpolation"), Scalar::Decimal(17.5));
+    // PERCENTILE.INC ignores blanks in the column: values 2 and 4.
+    assert_eq!(eval("PERCENTILE.INC(Sparse[Value], 0.5)").expect("PERCENTILE.INC blanks"), Scalar::Decimal(3.0));
+    assert_eq!(eval("PERCENTILEX.INC(Sales, Sales[Amount], 0.25)").expect("PERCENTILEX.INC"), Scalar::Decimal(17.5));
+    // PERCENTILEX.INC includes blanks: sorted [BLANK, BLANK, 2, 4], rank = 0.5 * 3 = 1.5.
+    assert_eq!(eval("PERCENTILEX.INC(Sparse, Sparse[Value], 0.25)").expect("PERCENTILEX.INC blank position"), Scalar::Blank);
+    assert_eq!(eval("PERCENTILEX.INC(Sparse, Sparse[Value], 0.5)").expect("PERCENTILEX.INC interpolation"), Scalar::Decimal(1.0));
+}
+
+#[test]
+fn percentile_exclusive() {
+    assert_eq!(eval("PERCENTILE.EXC(Sales[Amount], 0.25)").expect("PERCENTILE.EXC"), Scalar::Decimal(12.5));
+    assert_eq!(eval("PERCENTILE.EXC(Sales[Amount], 0.5)").expect("PERCENTILE.EXC median"), Scalar::Decimal(25.0));
+    assert_eq!(eval("PERCENTILE.EXC(Sales[Amount], 0.75)").expect("PERCENTILE.EXC"), Scalar::Decimal(37.5));
+    // Boundaries 1/(n+1) and n/(n+1) are valid for n = 4.
+    assert_eq!(eval("PERCENTILE.EXC(Sales[Amount], 0.2)").expect("PERCENTILE.EXC lower bound"), Scalar::Decimal(10.0));
+    assert_eq!(eval("PERCENTILE.EXC(Sales[Amount], 0.8)").expect("PERCENTILE.EXC upper bound"), Scalar::Decimal(40.0));
+    // Blanks are ignored by the column form: values 2 and 4.
+    assert_eq!(eval("PERCENTILE.EXC(Sparse[Value], 0.5)").expect("PERCENTILE.EXC blanks"), Scalar::Decimal(3.0));
+    // The iterator form counts blanks: sorted [BLANK, BLANK, 2, 4]; k = 0.6 -> rank 2 -> 2.
+    assert_eq!(eval("PERCENTILEX.EXC(Sparse, Sparse[Value], 0.6)").expect("PERCENTILEX.EXC"), Scalar::Decimal(2.0));
+    assert_eq!(eval("PERCENTILEX.EXC(Sparse, Sparse[Value], 0.8)").expect("PERCENTILEX.EXC upper"), Scalar::Decimal(4.0));
+}
+
+#[test]
+fn percentile_errors() {
+    assert!(eval("PERCENTILE.INC(Sales[Amount], -0.1)").is_err());
+    assert!(eval("PERCENTILE.INC(Sales[Amount], 1.1)").is_err());
+    // 0.1 < 1/(4+1) and 0.9 > 4/(4+1) are outside the exclusive range.
+    assert!(eval("PERCENTILE.EXC(Sales[Amount], 0.1)").is_err());
+    assert!(eval("PERCENTILE.EXC(Sales[Amount], 0.9)").is_err());
+    assert!(eval("PERCENTILE.EXC(Single[Value], 0.5)").is_ok());
+    assert!(eval("PERCENTILEX.EXC(Sales, Sales[Amount], 0.1)").is_err());
+}
+
+// ---------------------------------------------------------------------------------------------
+// VAR / STDEV
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn variance_and_standard_deviation() {
+    // Values 10, 20, 30, 40; mean 25; sum of squared deviations 500.
+    assert_close(eval("VAR.P(Sales[Amount])").expect("VAR.P"), 125.0);
+    assert_close(eval("VAR.S(Sales[Amount])").expect("VAR.S"), 500.0 / 3.0);
+    assert_close(eval("STDEV.P(Sales[Amount])").expect("STDEV.P"), 125.0_f64.sqrt());
+    assert_close(eval("STDEV.S(Sales[Amount])").expect("STDEV.S"), (500.0_f64 / 3.0).sqrt());
+    assert_close(eval("VARX.P(Sales, Sales[Amount])").expect("VARX.P"), 125.0);
+    assert_close(eval("VARX.S(Sales, Sales[Amount])").expect("VARX.S"), 500.0 / 3.0);
+    assert_close(eval("STDEVX.P(Sales, Sales[Amount])").expect("STDEVX.P"), 125.0_f64.sqrt());
+    assert_close(eval("STDEVX.S(Sales, Sales[Amount])").expect("STDEVX.S"), (500.0_f64 / 3.0).sqrt());
+    // Blanks are ignored: numeric values 2 and 4.
+    assert_close(eval("VAR.P(Sparse[Value])").expect("VAR.P blanks"), 1.0);
+    assert_close(eval("VAR.S(Sparse[Value])").expect("VAR.S blanks"), 2.0);
+    assert_close(eval("STDEVX.P(Sparse, Sparse[Value])").expect("STDEVX.P blanks"), 1.0);
+    assert_close(eval("STDEVX.S(Sparse, Sparse[Value])").expect("STDEVX.S blanks"), 2.0_f64.sqrt());
+}
+
+#[test]
+fn variance_requires_two_values() {
+    // Microsoft documents "An error is returned if `columnName` contains less than 2 non-blank
+    // rows" for the population forms as well, so VAR.P/STDEV.P reject a single observation too;
+    // BLANK rows are filtered out, so an all-blank column has no observation at all.
+    assert!(eval("VAR.P(Single[Value])").is_err());
+    assert!(eval("VAR.S(Single[Value])").is_err());
+    assert!(eval("STDEV.P(Single[Value])").is_err());
+    assert!(eval("STDEV.S(Single[Value])").is_err());
+    assert!(eval("VARX.P(Empty, Empty[Value])").is_err());
+    assert!(eval("STDEVX.S(Empty, Empty[Value])").is_err());
+    assert!(eval("VAR.P(Nulls[Value])").is_err());
+}
+
+// ---------------------------------------------------------------------------------------------
+// RANK.EQ
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn rank_eq() {
+    assert_integer(eval("RANK.EQ(30, Sales[Amount])").expect("RANK.EQ descending"), 2);
+    assert_integer(eval("RANK.EQ(40, Sales[Amount])").expect("RANK.EQ top"), 1);
+    assert_integer(eval("RANK.EQ(10, Sales[Amount])").expect("RANK.EQ bottom"), 4);
+    assert_integer(eval("RANK.EQ(10, Sales[Amount], 1)").expect("RANK.EQ ascending"), 1);
+    assert_integer(eval("RANK.EQ(30, Sales[Amount], 1)").expect("RANK.EQ ascending"), 3);
+    assert_integer(eval("RANK.EQ(30, Sales[Amount], 0)").expect("RANK.EQ explicit descending"), 2);
+    // Ties share the top rank and the next rank skips the duplicates.
+    assert_integer(eval("RANK.EQ(10, Ties[Value])").expect("RANK.EQ tie"), 4);
+    assert_integer(eval("RANK.EQ(20, Ties[Value])").expect("RANK.EQ tied top"), 1);
+    assert_integer(eval("RANK.EQ(20, Ties[Value], 1)").expect("RANK.EQ tie ascending"), 3);
+    // A value that is not in the column, or a BLANK value, returns BLANK.
+    assert_eq!(eval("RANK.EQ(25, Sales[Amount])").expect("RANK.EQ missing"), Scalar::Blank);
+    assert_eq!(eval("RANK.EQ(BLANK(), Sales[Amount])").expect("RANK.EQ blank"), Scalar::Blank);
+}
+
+// ---------------------------------------------------------------------------------------------
+// RANKX
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn rank_x() {
+    assert_integer(eval("RANKX(Sales, Sales[Amount], 30)").expect("RANKX default"), 2);
+    assert_integer(eval("RANKX(Sales, Sales[Amount], 30, 1)").expect("RANKX ascending"), 3);
+    // A value that is not in the table is ranked as if it had been added.
+    assert_integer(eval("RANKX(Sales, Sales[Amount], 25)").expect("RANKX missing value"), 3);
+    assert_integer(eval("RANKX(Sales, Sales[Amount], 45)").expect("RANKX above maximum"), 1);
+    // Skip (default) leaves gaps after ties; Dense does not.
+    assert_integer(eval("RANKX(Ties, Ties[Value], 10)").expect("RANKX skip"), 4);
+    assert_integer(eval("RANKX(Ties, Ties[Value], 10, 0, \"Dense\")").expect("RANKX dense"), 2);
+    assert_integer(eval("RANKX(Ties, Ties[Value], 15, 1)").expect("RANKX ascending skip"), 3);
+    assert_integer(eval("RANKX(Ties, Ties[Value], 15, 1, \"Dense\")").expect("RANKX ascending dense"), 2);
+    assert_integer(eval("RANKX(Ties, Ties[Value], 15, 0)").expect("RANKX descending skip"), 4);
+    // BLANK expression results are ranked as zero.
+    assert_integer(eval("RANKX(Sparse, Sparse[Value], 0)").expect("RANKX blank as zero"), 3);
+    assert!(eval("RANKX(Ties, Ties[Value], 10, 0, \"Middle\")").is_err());
+    assert!(eval("RANKX(Ties, Ties[Value], 10, 2)").is_err());
+}
+
+// ---------------------------------------------------------------------------------------------
+// SAMPLE
+// ---------------------------------------------------------------------------------------------
+
+fn sampled_amounts(source: &str) -> Vec<Scalar> {
+    let table = eval_table(source).expect("SAMPLE table");
+    table.rows.iter().filter_map(|row| row.get(1).cloned()).collect()
+}
+
+#[test]
+fn sample() {
+    // Descending by Amount: 40, 30, 20, 10. A size of 2 keeps the first and last rows.
+    assert_eq!(sampled_amounts("SAMPLE(2, Sales, Sales[Amount])"), vec![Scalar::Integer(40), Scalar::Integer(10)]);
+    assert_eq!(sampled_amounts("SAMPLE(3, Sales, Sales[Amount])"), vec![Scalar::Integer(40), Scalar::Integer(20), Scalar::Integer(10)]);
+    assert_eq!(
+        sampled_amounts("SAMPLE(4, Sales, Sales[Amount])"),
+        vec![Scalar::Integer(40), Scalar::Integer(30), Scalar::Integer(20), Scalar::Integer(10)]
+    );
+    // Order 1 sorts ascending.
+    assert_eq!(sampled_amounts("SAMPLE(2, Sales, Sales[Amount], 1)"), vec![Scalar::Integer(10), Scalar::Integer(40)]);
+    // A sample larger than the table returns every row.
+    assert_eq!(eval_table("SAMPLE(10, Sales, Sales[Amount])").expect("SAMPLE clamp").rows.len(), 4);
+    // Size 0 or less returns an empty table.
+    assert!(eval_table("SAMPLE(0, Sales, Sales[Amount])").expect("SAMPLE zero").rows.is_empty());
+    assert!(eval_table("SAMPLE(-5, Sales, Sales[Amount])").expect("SAMPLE negative").rows.is_empty());
+    // The result keeps the source columns.
+    let table = eval_table("SAMPLE(2, Sales, Sales[Amount])").expect("SAMPLE columns");
+    assert_eq!(table.columns.len(), 4);
+}
+
+#[test]
+fn sample_pairs_each_order_by_with_its_own_order() {
+    // `SAMPLE(n, table, orderBy[, order[, orderBy[, order]]…])`: `1`/`0` apply to the order-by
+    // expression just before them, so Region sorts ascending and Amount descending inside it.
+    assert_eq!(
+        sampled_amounts("SAMPLE(4, Sales, Sales[Region], 1, Sales[Amount], 0)"),
+        vec![Scalar::Integer(30), Scalar::Integer(10), Scalar::Integer(40), Scalar::Integer(20)]
+    );
+    // An omitted Order keeps the default (descending) for that key alone.
+    assert_eq!(
+        sampled_amounts("SAMPLE(4, Sales, Sales[Region], 1, Sales[Amount])"),
+        vec![Scalar::Integer(30), Scalar::Integer(10), Scalar::Integer(40), Scalar::Integer(20)]
+    );
+    // Swapping the directions swaps both keys.
+    assert_eq!(
+        sampled_amounts("SAMPLE(4, Sales, Sales[Region], 0, Sales[Amount], 1)"),
+        vec![Scalar::Integer(20), Scalar::Integer(40), Scalar::Integer(10), Scalar::Integer(30)]
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Mixed-type ordering
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn sample_orders_mixed_text_numbers_and_nan() {
+    // `Scalar::compare` answers `None` for text against a number and for NaN; the old comparator
+    // read `None` as `Ordering::Equal`, so `"abc" == 3` and `"abc" == 7` while `3 < 7`. That is
+    // not a total order and `sort_by` may panic on it (Rust 1.81+). The shared total order sorts
+    // numbers first (NaN last among them), then text, and never panics.
+    let table = eval_table("SAMPLE(5, Mixed, Mixed[Value])").expect("SAMPLE mixed");
+    let values: Vec<Scalar> = table.rows.iter().filter_map(|row| row.first().cloned()).collect();
+    let is_nan = |value: &Scalar| matches!(value, Scalar::Decimal(number) if number.is_nan());
+
+    // Descending: the text keys come first (case-insensitively, "Zed" before "abc"), then the
+    // numbers, with the NaN placed after every finite number.
+    assert_eq!(values.len(), 5);
+    assert!(matches!(values.get(2), Some(value) if is_nan(value)), "{values:?}");
+    let ordered: Vec<Scalar> = values.iter().filter(|value| !is_nan(value)).cloned().collect();
+    assert_eq!(ordered, vec![Scalar::String("Zed".into()), Scalar::String("abc".into()), Scalar::Integer(7), Scalar::Integer(3)]);
+
+    // Ascending puts the numbers first and the text last.
+    let table = eval_table("SAMPLE(5, Mixed, Mixed[Value], 1)").expect("SAMPLE mixed ascending");
+    let values: Vec<Scalar> = table.rows.iter().filter_map(|row| row.first().cloned()).collect();
+    assert!(matches!(values.get(2), Some(value) if is_nan(value)), "{values:?}");
+    let ordered: Vec<Scalar> = values.iter().filter(|value| !is_nan(value)).cloned().collect();
+    assert_eq!(ordered, vec![Scalar::Integer(3), Scalar::Integer(7), Scalar::String("abc".into()), Scalar::String("Zed".into())]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Empty and all-blank inputs
+// ---------------------------------------------------------------------------------------------
+#[test]
+fn empty_and_all_blank_inputs() {
+    assert_eq!(eval("MEDIAN(Empty[Value])").expect("MEDIAN empty"), Scalar::Blank);
+    assert_eq!(eval("MEDIANX(Empty, Empty[Value])").expect("MEDIANX empty"), Scalar::Blank);
+    assert_eq!(eval("GEOMEAN(Empty[Value])").expect("GEOMEAN empty"), Scalar::Blank);
+    assert_eq!(eval("GEOMEANX(Empty, Empty[Value])").expect("GEOMEANX empty"), Scalar::Blank);
+    assert_eq!(eval("PERCENTILE.INC(Empty[Value], 0.5)").expect("PERCENTILE.INC empty"), Scalar::Blank);
+    assert_eq!(eval("PERCENTILE.EXC(Empty[Value], 0.5)").expect("PERCENTILE.EXC empty"), Scalar::Blank);
+    assert_eq!(eval("PERCENTILEX.INC(Empty, Empty[Value], 0.5)").expect("PERCENTILEX.INC empty"), Scalar::Blank);
+    assert_eq!(eval("PERCENTILEX.EXC(Empty, Empty[Value], 0.5)").expect("PERCENTILEX.EXC empty"), Scalar::Blank);
+    assert_eq!(eval("MEDIAN(Nulls[Value])").expect("MEDIAN all blank"), Scalar::Blank);
+    assert_eq!(eval("MEDIANX(Nulls, Nulls[Value])").expect("MEDIANX all blank"), Scalar::Blank);
+    assert_eq!(eval("GEOMEAN(Nulls[Value])").expect("GEOMEAN all blank"), Scalar::Blank);
+    assert_eq!(eval("PERCENTILEX.INC(Nulls, Nulls[Value], 0.5)").expect("PERCENTILEX.INC all blank"), Scalar::Blank);
+}
+
+#[test]
+fn column_arguments_are_required() {
+    assert!(eval("MEDIAN(1)").is_err());
+    assert!(eval("VAR.P(2)").is_err());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Documented values from the storage-differential fixture
+// ---------------------------------------------------------------------------------------------
+
+// The star-schema fixture behind `statistical_aggregate_matches_documented_values`, relocated from
+// `tests/eval_storage_differential.rs` along with that one test (the file keeps the rest of the
+// fixture's expectations). Blanks sit in the Amount, Quantity, Region and key columns.
+//
+// Product  ProductKey Name       Category UnitPrice
+//          1          Widget     Hardware    20.00
+//          2          Gadget     Hardware     5.00
+//          3          Gizmo      Tools       12.50
+//          4          Doohickey  Tools        0.75
+//
+// Sales    ProductKey Region Amount Quantity
+//          1          East      100    2
+//          2          East       50    5
+//          1          West       30    3
+//          3          West       70    1
+//          1          East     (blank) (blank)
+//          4          North      20    4
+//          2          (blank)    10    2
+fn documented_model() -> DataModel {
+    let product = |key: i64, name: &str, category: &str, price: i64| {
+        vec![Scalar::Integer(key), Scalar::String(name.into()), Scalar::String(category.into()), Scalar::Currency(price)]
+    };
+    let sale = |key: i64, region: Scalar, amount: Scalar, quantity: Scalar| vec![Scalar::Integer(key), region, amount, quantity];
+    let mut model = DataModel {
+        tables: vec![
+            ModelTable {
+                name: "Product".into(),
+                columns: vec![column("ProductKey", "Int64"), column("Name", "String"), column("Category", "String"), column("UnitPrice", "Currency")],
+                rows: vec![
+                    product(1, "Widget", "Hardware", 200_000),
+                    product(2, "Gadget", "Hardware", 50_000),
+                    product(3, "Gizmo", "Tools", 125_000),
+                    product(4, "Doohickey", "Tools", 7_500),
+                ],
+            },
+            ModelTable {
+                name: "Sales".into(),
+                columns: vec![column("ProductKey", "Int64"), column("Region", "String"), column("Amount", "Int64"), column("Quantity", "Int64")],
+                rows: vec![
+                    sale(1, Scalar::String("East".into()), Scalar::Integer(100), Scalar::Integer(2)),
+                    sale(2, Scalar::String("East".into()), Scalar::Integer(50), Scalar::Integer(5)),
+                    sale(1, Scalar::String("West".into()), Scalar::Integer(30), Scalar::Integer(3)),
+                    sale(3, Scalar::String("West".into()), Scalar::Integer(70), Scalar::Integer(1)),
+                    sale(1, Scalar::String("East".into()), Scalar::Blank, Scalar::Blank),
+                    sale(4, Scalar::String("North".into()), Scalar::Integer(20), Scalar::Integer(4)),
+                    sale(2, Scalar::Blank, Scalar::Integer(10), Scalar::Integer(2)),
+                ],
+            },
+        ],
+        relationships: vec![Relationship {
+            from_table: "Sales".into(),
+            from_column: "ProductKey".into(),
+            to_table: "Product".into(),
+            to_column: "ProductKey".into(),
+            bidirectional: false,
+            inactive: false,
+        }],
+        measures: vec![],
+    };
+    model.parse_formulas().expect("model parses");
+    model
+}
+
+/// Evaluates a scalar formula against the documented fixture together with the storage counters
+/// it moved.
+fn eval_with_stats(model: &DataModel, formula: &str) -> (Scalar, StorageStats) {
+    let evaluator = Evaluator::new(model).expect("evaluator");
+    let expr = parse_expression(formula).expect("parse");
+    let bound = Binder::new(model).bind_expression(&expr).expect("bind");
+    let value = evaluator.evaluate(&bound).expect("evaluate");
+    (value, evaluator.storage_stats())
+}
+
+fn assert_close_to(actual: &Scalar, expected: f64, label: &str) {
+    match actual {
+        Scalar::Decimal(value) => assert!((value - expected).abs() <= 1e-9, "{label}: expected {expected}, got {value}"),
+        other => panic!("{label}: expected a decimal {expected}, got {other:?}"),
+    }
+}
+
+#[test]
+fn statistical_aggregate_matches_documented_values() {
+    let model = documented_model();
+    // Observations 100, 50, 30, 70, 20, 10; mean 280/6.
+    let mean = 280.0 / 6.0;
+    let squares: f64 = [100.0, 50.0, 30.0, 70.0, 20.0, 10.0].iter().map(|value| (value - mean) * (value - mean)).sum();
+    let (value, stats) = eval_with_stats(&model, "STDEV.S(Sales[Amount])");
+    assert_close_to(&value, (squares / 5.0).sqrt(), "STDEV.S");
+    assert!(stats.aggregates > 0, "STDEV.S must read observations from storage, got {stats:?}");
+}
