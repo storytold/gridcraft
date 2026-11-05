@@ -168,7 +168,7 @@ fn xlsx_stores_the_code_in_the_python_part_with_cached_values() {
             .contains("Type=\"http://schemas.microsoft.com/office/2023/09/relationships/Python\" Target=\"python.xml\"")
     );
     assert!(xml.contains("t=\"array\" ref=\"C1:D2\""), "the spill is saved like a dynamic array's: {xml}");
-    assert!(xml.contains("#PYTHON!") && !xml.contains("#VALUE!"), "Python errors keep their error type in the cached value");
+    assert!(xml.contains("#VALUE!") && !xml.contains("#PYTHON!"), "Python errors are cached as #VALUE!");
 
     open(&mut s, "book.xlsx", &bytes);
     assert_eq!(s.doc().unwrap().trust, Trust::FromFile);
@@ -182,7 +182,7 @@ fn xlsx_stores_the_code_in_the_python_part_with_cached_values() {
     assert_eq!(code(&s, "B1").unwrap().code, "xl('A1') * 2");
     assert!(code(&s, "E1").unwrap().object);
     assert_eq!(code(&s, "F1").unwrap().code, long, "long code with quotes and line breaks survives");
-    assert_eq!(v(&s, "G1"), Value::Error(CellError::Python));
+    assert_eq!(v(&s, "G1"), Value::Error(CellError::Value));
     // A blocker typed into the spill area gives #SPILL!; clearing it spills again, without
     // running anything.
     s.execute("cell.set", json!({"cell": "D2", "input": "x"})).unwrap();
