@@ -556,6 +556,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Weergeven",
         "Collapse dialog" => "Dialoogvenster samenvouwen",
         "Expand dialog" => "Dialoogvenster uitvouwen",
+
+        "Picture" => "Afbeelding",
+        "Format\nPicture" => "Afbeelding\nopmaken",
+        "Format Picture" => "Afbeelding opmaken",
+        "Height:" => "Hoogte:",
+        "Width:" => "Breedte:",
+        "Lock aspect ratio" => "Hoogte-breedteverhouding vergrendelen",
         _ => return None,
     })
 }

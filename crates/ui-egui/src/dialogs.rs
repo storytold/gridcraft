@@ -106,6 +106,31 @@ struct RefPick {
     applies_to: String,
 }
 
+/// Header & Footer › Format Picture, opened on the section `params` names: its picture's size in
+/// points. `None` when the section has no picture.
+fn hf_picture_format(app: &SheetApp, params: &Json) -> Option<Dialog> {
+    let p = |k: &str| params.get(k).cloned().unwrap_or(Json::Null);
+    let page = p("page").as_str().and_then(gridcraft_engine::model::HfPage::parse).unwrap_or(gridcraft_engine::model::HfPage::Odd);
+    let footer = p("part").as_str() == Some("footer");
+    let section = match p("section").as_str() {
+        Some("left") => 0,
+        Some("right") => 2,
+        _ => 1,
+    };
+    let sheet = p("sheet").as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(0);
+    let (w, h) = app
+        .session
+        .active()
+        .and_then(|d| d.wb.sheet(sheet))
+        .and_then(|sh| sh.print.hf_pictures.iter().find(|q| q.is_at(page, footer, section)).map(|q| (q.width, q.height)))?;
+    let mut values = params.clone();
+    values["width"] = json!(w);
+    values["height"] = json!(h);
+    values["ratio"] = json!(if w > 0.0 { h / w } else { 1.0 });
+    values["lock"] = json!(true);
+    Some(Dialog::form("hfPictureFormat", "Format Picture", "pageLayout.headerFooterPicture", vec![], values))
+}
+
 impl Dialog {
     pub fn name(&self) -> &str {
         &self.name
@@ -343,6 +368,7 @@ impl Dialog {
                 vec![Number { key: "width", label: "Standard column width (pixels):" }],
                 json!({"width": 64}),
             ),
+            "hfPictureFormat" => hf_picture_format(app, &params)?,
             "renameSheet" => Dialog::form(
                 "renameSheet",
                 "Rename Sheet",

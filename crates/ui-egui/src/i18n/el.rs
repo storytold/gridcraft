@@ -1010,6 +1010,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Εμφάνιση",
         "Collapse dialog" => "Σύμπτυξη παραθύρου διαλόγου",
         "Expand dialog" => "Ανάπτυξη παραθύρου διαλόγου",
+
+        "Picture" => "Εικόνα",
+        "Format\nPicture" => "Μορφοποίηση\nεικόνας",
+        "Format Picture" => "Μορφοποίηση εικόνας",
+        "Height:" => "Ύψος:",
+        "Width:" => "Πλάτος:",
+        "Lock aspect ratio" => "Κλείδωμα αναλογιών",
         _ => return None,
     })
 }

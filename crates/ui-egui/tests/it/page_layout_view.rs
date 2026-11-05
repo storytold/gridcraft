@@ -516,3 +516,106 @@ fn print_preview_without_headers_draws_none() {
     assert!(picture_rects(&h).is_empty());
     assert!(!painted_text(&h).iter().any(|t| t.starts_with("Title")));
 }
+
+// ---------------------------------------------------------------- Header & Footer › Picture
+
+/// A picture file the stub picker hands over.
+fn picture_file(name: &str) -> String {
+    let path = std::env::temp_dir().join(format!("gridcraft-hf-{}-{name}.png", std::process::id()));
+    std::fs::write(&path, png(40, 20)).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+/// Starts editing the first page's centre header, with a picker that answers `path`.
+fn edit_header_with_picker(h: &mut Harness, path: Option<String>) {
+    h.state_mut().services.pick_picture = Some(Box::new(move || path.clone()));
+    let sh = h.state().session.doc().unwrap().wb.sheet(0).unwrap().clone();
+    gridcraft_ui_egui::paper_view::begin(h.state_mut(), 0, &sh, (0, 0), gridcraft_engine::paper::HfZone { footer: false, section: 1 });
+    h.run_steps(2);
+}
+
+/// The first sheet's print settings.
+fn hf(h: &Harness) -> gridcraft_engine::model::PrintSettings {
+    h.state().session.doc().unwrap().wb.sheet(0).unwrap().print.clone()
+}
+
+/// Picture puts `&[Picture]` at the caret, replaces it when chosen again, writes nothing before the
+/// commit, and saves text and picture as one undo step.
+#[test]
+fn picture_puts_its_field_at_the_caret_and_saves_with_the_text() {
+    let mut h = picture_fixture("&CTitle", &[]);
+    h.run_steps(2);
+    edit_header_with_picker(&mut h, Some(picture_file("logo")));
+    gridcraft_ui_egui::paper_view::pick_picture(h.state_mut());
+    let e = h.state().grid.hf_edit.as_ref().unwrap();
+    assert_eq!(e.texts[1], "Title&[Picture]", "the field at the caret (the end of the section)");
+    assert!(hf(&h).hf_pictures.is_empty(), "nothing is written before the edit is committed");
+    // Choosing again replaces the picture without a second field.
+    gridcraft_ui_egui::paper_view::pick_picture(h.state_mut());
+    assert_eq!(h.state().grid.hf_edit.as_ref().unwrap().texts[1], "Title&[Picture]");
+    gridcraft_ui_egui::paper_view::commit(h.state_mut());
+    h.run_steps(4);
+    let pr = hf(&h);
+    assert_eq!(pr.header, "&CTitle&G");
+    assert_eq!(pr.hf_pictures.len(), 1);
+    assert_eq!((pr.hf_pictures[0].section, pr.hf_pictures[0].title.ends_with("logo")), (1, true));
+    assert_eq!(picture_rects(&h).len(), 1, "the view draws it");
+    // Text and picture are one undo step.
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    let pr = hf(&h);
+    assert_eq!((pr.header.as_str(), pr.hf_pictures.len()), ("&CTitle", 0));
+}
+
+/// A picture chosen then cancelled, or whose field is erased before the commit, is not saved;
+/// closing the picker without a choice changes nothing.
+#[test]
+fn a_picture_chosen_then_cancelled_or_erased_is_not_saved() {
+    let mut h = picture_fixture("&CTitle", &[]);
+    h.run_steps(2);
+    edit_header_with_picker(&mut h, Some(picture_file("cancel")));
+    gridcraft_ui_egui::paper_view::pick_picture(h.state_mut());
+    gridcraft_ui_egui::paper_view::cancel(h.state_mut());
+    assert!(hf(&h).hf_pictures.is_empty());
+    assert_eq!(hf(&h).header, "&CTitle");
+    // Its field erased before committing: the text is saved, the picture isn't.
+    edit_header_with_picker(&mut h, Some(picture_file("erased")));
+    gridcraft_ui_egui::paper_view::pick_picture(h.state_mut());
+    h.state_mut().grid.hf_edit.as_mut().unwrap().texts[1] = "Other".into();
+    gridcraft_ui_egui::paper_view::commit(h.state_mut());
+    assert!(hf(&h).hf_pictures.is_empty());
+    assert_eq!(hf(&h).header, "&COther");
+    // The picker closed without a choice: nothing changes.
+    edit_header_with_picker(&mut h, None);
+    gridcraft_ui_egui::paper_view::pick_picture(h.state_mut());
+    assert_eq!(h.state().grid.hf_edit.as_ref().unwrap().texts[1], "Other");
+}
+
+/// Format Picture opens on the section's picture size and OK resizes it; a section without a
+/// picture has nothing to format.
+#[test]
+fn format_picture_opens_on_the_sections_picture_and_resizes_it() {
+    let mut h = picture_fixture("&C&G", &[("CH", "width:120pt;height:40pt", png(30, 10))]);
+    h.run_steps(2);
+    edit_header_with_picker(&mut h, None);
+    assert!(gridcraft_ui_egui::paper_view::editing_has_picture(h.state()));
+    gridcraft_ui_egui::paper_view::format_picture(h.state_mut());
+    let d = h.state().dialog.as_ref().expect("Format Picture opens");
+    assert_eq!((d.values["width"].as_f64(), d.values["height"].as_f64()), (Some(120.0), Some(40.0)));
+    // OK resizes it with the dialog's values (in points behind the shown unit).
+    let d = h.state_mut().dialog.as_mut().unwrap();
+    d.values.insert("width".into(), json!(60.0));
+    d.values.insert("height".into(), json!(20.0));
+    h.run_steps(2);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "OK closes it");
+    let q = &hf(&h).hf_pictures[0];
+    assert_eq!((q.width, q.height), (60.0, 20.0));
+    // A section without a picture has nothing to format.
+    h.state_mut().dialog = None;
+    let sh = h.state().session.doc().unwrap().wb.sheet(0).unwrap().clone();
+    gridcraft_ui_egui::paper_view::begin(h.state_mut(), 0, &sh, (0, 0), gridcraft_engine::paper::HfZone { footer: false, section: 0 });
+    assert!(!gridcraft_ui_egui::paper_view::editing_has_picture(h.state()));
+    gridcraft_ui_egui::paper_view::format_picture(h.state_mut());
+    assert!(h.state().dialog.is_none());
+}
