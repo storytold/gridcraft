@@ -175,7 +175,9 @@ fn font_file(path: &str, index: u32) -> Option<Blob> {
     Some(blob)
 }
 
-/// (ascent, row height) of one face in em units, read the way epaint reads them.
+/// (ascent, row height) of one face as egui renders it, in em units: the font's own metrics read
+/// the way epaint reads them, times the face's `FontTweak::scale` (a bundled icon or emoji face
+/// draws at a scale below 1, and epaint scales its effective metrics with it).
 pub(crate) fn face_em_metrics(fd: &FontData) -> Option<(f32, f32)> {
     use skrifa::MetadataProvider as _;
     let font = skrifa::FontRef::from_index(fd.bytes(), fd.index).ok()?;
@@ -184,7 +186,7 @@ pub(crate) fn face_em_metrics(fd: &FontData) -> Option<(f32, f32)> {
     if upm <= 0.0 {
         return None;
     }
-    Some((m.ascent / upm, (m.ascent - m.descent + m.leading) / upm))
+    Some((m.ascent / upm * fd.tweak.scale, (m.ascent - m.descent + m.leading) / upm * fd.tweak.scale))
 }
 
 /// How much lower than the chain's first face a face draws, in em units: epaint places a glyph
@@ -199,10 +201,10 @@ pub(crate) fn baseline_gap_em(p: (f32, f32), f: (f32, f32)) -> f32 {
 /// epaint centres each face's row against the chain's first face instead of aligning baselines, so
 /// a face with a tall ascent draws low: Noto Sans CJK (ascent 1.16 em) next to Liberation Sans
 /// (0.91 em) sinks by about 0.09 em, and in “中文aa123” the digits and letters ride visibly high.
-/// `FontTweak::y_offset_factor` shifts a face's drawn glyphs by a fraction of the font size
-/// without touching layout, and the gap is size-proportional, so one factor per (face, chain)
-/// pair fixes every font size. A face whose data is owned (an installed font, shared by nothing)
-/// is left alone rather than copied for every chain it appears in.
+/// `FontTweak::y_offset_factor` shifts a face's drawn glyphs by `tweak.scale` × a fraction of the
+/// font size without touching layout, and the gap is size-proportional, so one factor per (face,
+/// chain) pair fixes every font size. A face whose data is owned (an installed font, shared by
+/// nothing) is left alone rather than copied for every chain it appears in.
 fn align_following_faces_to_chain_baseline(fonts: &mut FontDefinitions) {
     for chain in fonts.families.values_mut() {
         let Some(first) = chain.first().cloned() else { continue };
@@ -217,7 +219,10 @@ fn align_following_faces_to_chain_baseline(fonts: &mut FontDefinitions) {
             let variant = format!("{key}@{first}");
             if !fonts.font_data.contains_key(&variant) {
                 let mut vfd = fd.as_ref().clone();
-                vfd.tweak.y_offset_factor = -gap;
+                // epaint applies the shift as `font_size · tweak.scale · y_offset_factor`, and
+                // the gap above is in the face's effective (scaled) em: divide it out so the
+                // drawn shift matches the gap whatever scale the face carries.
+                vfd.tweak.y_offset_factor = if fd.tweak.scale > 0.0 { -gap / fd.tweak.scale } else { -gap };
                 fonts.font_data.insert(variant.clone(), Arc::new(vfd));
             }
             *key = variant;

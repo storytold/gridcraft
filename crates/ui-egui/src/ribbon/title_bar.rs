@@ -91,7 +91,10 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     ui.label(crate::i18n::current(ui.ctx()).tr("Can't Undo"));
                 }
                 for (i, l) in labels.iter().enumerate() {
-                    if ui.button(format!("{} {l}", crate::i18n::current(ui.ctx()).tr("Undo"))).clicked() {
+                    // The engine's `spec.label` is English: translate it like the Undo prefix,
+                    // so the menu doesn't mix `撤销 Insert Cells` into a Chinese interface.
+                    let lang = crate::i18n::current(ui.ctx());
+                    if ui.button(format!("{} {}", lang.tr("Undo"), lang.tr(l))).clicked() {
                         app.run_or_alert("edit.undo", json!({"steps": i + 1}));
                     }
                 }

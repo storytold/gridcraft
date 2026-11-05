@@ -8,7 +8,7 @@ pub(super) fn table_style_hover(ui: &Ui, name: &str) -> String {
     if let Some(rest) = name.strip_prefix("TableStyle") {
         for fam in ["Light", "Medium", "Dark"] {
             if let Some(n) = rest.strip_prefix(fam) {
-                return format!("{}{} {}", lang.tr("Table Style"), lang.tr(fam), n);
+                return format!("{} {} {}", lang.tr("Table Style"), lang.tr(fam), n);
             }
         }
     }

@@ -303,7 +303,9 @@ pub fn summary(lang: crate::i18n::Language, st: &Step) -> String {
                 ("cell.set", Some(c), Some(i), _) => lang.tr_fill("Set {cell} to {input}", &[("cell", &c), ("input", &i)]),
                 ("selection.set", _, _, Some(r)) => lang.tr_fill("Select {range}", &[("range", &r)]),
                 _ => {
-                    let label = command_label(id);
+                    // The catalog keys step summaries by the English command label, so the label
+                    // reads in the interface language like every other use of it.
+                    let label = lang.tr(&command_label(id)).to_owned();
                     let args: Vec<String> =
                         params.as_object().map(|o| o.iter().take(3).map(|(k, v)| format!("{k}: {}", short(v))).collect()).unwrap_or_default();
                     if args.is_empty() { label } else { format!("{label} · {}", args.join(", ")) }
@@ -761,6 +763,9 @@ pub fn check(app: &mut SheetApp, ed: &mut Editor) {
     }
 }
 
+/// What a `macro.check` result says in one line: the errors it reported, else the permissions it
+/// needs approval for, else what it would write (cell count, conflicts and how far the preview
+/// reaches).
 fn check_text(lang: crate::i18n::Language, v: &Json) -> String {
     if let Some(errors) = v["errors"].as_array().filter(|e| !e.is_empty()) {
         return errors.iter().filter_map(Json::as_str).collect::<Vec<_>>().join(" ");
@@ -1314,12 +1319,12 @@ fn status_line(app: &SheetApp, ui: &mut Ui, ed: &Editor, t: &Tokens) {
     if let Some(st) = &ed.debug {
         let cur = &st["current"];
         let step = cur["step"].as_str().unwrap_or("");
+        let lang = app.ui.language;
         let what = match cur["kind"].as_str() {
-            Some("command") => command_label(cur["command"].as_str().unwrap_or("")),
+            Some("command") => lang.tr(&command_label(cur["command"].as_str().unwrap_or(""))).to_owned(),
             Some(k) => k.to_string(),
             None => String::new(),
         };
-        let lang = app.ui.language;
         let mut head = lang.tr_fill("Paused before step {step} · {what}", &[("step", step), ("what", &what)]);
         if let (Some(at), Some(of)) = (cur["iteration"]["at"].as_u64(), cur["iteration"]["of"].as_u64()) {
             head.push_str(&lang.tr_fill(" · pass {at} of {of}", &[("at", &at.to_string()), ("of", &of.to_string())]));
@@ -1838,13 +1843,14 @@ fn step_tab(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, ed: &mut Editor) {
     ui.horizontal(|ui| {
         let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
         icons::paint(ui.painter(), r, icon, t.cat(cat));
+        let lang = crate::i18n::current(ui.ctx());
         let title = match &st.kind {
-            StepKind::Command { id, .. } => command_label(id),
-            StepKind::Repeat { .. } => "Repeat".into(),
-            StepKind::If { .. } => "If".into(),
-            StepKind::Stop { .. } => "Stop".into(),
+            StepKind::Command { id, .. } => lang.tr(&command_label(id)).to_owned(),
+            StepKind::Repeat { .. } => lang.tr("Repeat").to_owned(),
+            StepKind::If { .. } => lang.tr("If").to_owned(),
+            StepKind::Stop { .. } => lang.tr("Stop").to_owned(),
         };
-        let heading = crate::i18n::current(ui.ctx()).tr_fill("Step {path} · {title}", &[("path", &path), ("title", &title)]);
+        let heading = lang.tr_fill("Step {path} · {title}", &[("path", &path), ("title", &title)]);
         ui.label(egui::RichText::new(heading).strong());
         if let StepKind::Command { id, .. } = &st.kind {
             ui.label(egui::RichText::new(id).monospace().color(t.text_dim));

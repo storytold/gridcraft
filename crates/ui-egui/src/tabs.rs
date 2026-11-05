@@ -506,8 +506,6 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     ui.add_space(16.0);
                     // The layout runs right to left, so the last statistic is drawn first.
                     // Clicking a statistic copies its value (without the label) to the clipboard.
-                    // Only the rightmost statistics that fit are drawn: on a narrow window the rest
-                    // would paint over the mode text such as "Ready" at the left end (#4187).
                     let stats = selection_statistics(app);
                     let font = theme::ui_font(12.5);
                     let widths: Vec<f32> = stats.iter().map(|p| ui.painter().layout_no_wrap(p.clone(), font.clone(), t.text_dim).size().x).collect();
@@ -517,7 +515,10 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     let keep = fitting_statistics(&widths, ui.available_width(), gap);
                     let span = stats.len();
                     for p in stats.into_iter().skip(span - keep).rev() {
-                        let value = p.split_once(": ").map_or(p.as_str(), |(_, v)| v).to_owned();
+                        // Localized statistics use a full-width colon (`平均值：4`): copy just
+                        // the value after either separator, or the whole text when neither is
+                        // there.
+                        let value = p.split_once(": ").or_else(|| p.split_once('：')).map_or(p.as_str(), |(_, v)| v).to_owned();
                         let resp = ui.add(
                             egui::Label::new(egui::RichText::new(p).font(theme::ui_font(12.5)).color(t.text_dim))
                                 .selectable(false)
