@@ -107,8 +107,11 @@ adds its dispatch and its own suite under `crates/dax/tests/`. The lists below a
 
 ## Notes
 
-- `Evaluated` means a dispatch arm exists in one of the family modules under
+- `Evaluated` means a dispatch path exists: either the built-in switch in
+  `crates/dax/src/eval.rs` (`Evaluator::eval`/`call_table`) or a family module under
   `crates/dax/src/eval/`; table-valued functions are counted when they have a `call_table` path.
+  In this crate only the built-in switch is linked (`FAMILIES` is empty), which is the subset the
+  scope paragraph above lists.
 - Engine-only functions (internal filter clusters, `INFO.*` storage views, visual calculations)
   have no evaluator in this crate: like every other catalogued name outside the scalar core they
   report `not implemented` until the family that owns them is linked. Where a family is linked it

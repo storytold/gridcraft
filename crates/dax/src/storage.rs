@@ -59,9 +59,11 @@
 //!   [`TableStorage::numeric_values`] and [`TableStorage::distinct_values`] for the aggregate fast
 //!   paths, `VALUES`/`DISTINCT` and the statistical aggregates. The typed exact aggregates
 //!   ([`TableStorage::sum`], [`TableStorage::min`], [`TableStorage::max`],
-//!   [`TableStorage::aggregate`]) stay the API for typed consumers; the evaluator derives the six
-//!   numeric DAX aggregates from [`TableStorage::numeric_values`] because DAX's `SUM`/`MIN`/`MAX`
-//!   are defined over `f64` observations in this evaluator, not over an exact integer total.
+//!   [`TableStorage::aggregate`]) stay the API for typed consumers. The evaluator reads
+//!   `SUM`/`AVERAGE`/`PRODUCT` from [`TableStorage::numeric_values`] (DAX defines them over `f64`
+//!   observations) and `MIN`/`MAX` from [`TableStorage::min`]/[`TableStorage::max`], which return
+//!   the winning value with its own type — an Int64 column answers an Integer, a date column a
+//!   DateTime.
 //!
 //! What still scans model rows: `FILTER`, `ADDCOLUMNS`, `TOPN` and every other function that
 //! evaluates an expression per row, because those need a row context; plus any model that is not
