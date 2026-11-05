@@ -113,6 +113,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sparklines" => "Спарклайни",
         "Checkbox" => "Прапорець",
         "Insert checkboxes in the selected cells" => "Вставити прапорці у виділені комірки",
+        "Button" => "Кнопка",
+        "Slider" => "Повзунок",
+        "Spin Button" => "Лічильник",
+        "Draw a button that runs a macro or a command" => "Намалювати кнопку, яка запускає макрос або команду",
+        "Draw a slider that sets a whole number in a linked cell" => "Намалювати повзунок, який задає ціле число у зв’язаній комірці",
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Намалювати лічильник, який змінює ціле число у зв’язаній комірці з кроком"
+        }
+        "Edit Text" => "Редагувати текст",
+        "Assign Action…" => "Призначити дію…",
+        "Format Control…" => "Формат елемента керування…",
         "Header & Footer" => "Верхній і нижній колонтитули",
         "Draw with ink" => "Малювання від руки",
         "Eraser" => "Гумка",
@@ -994,6 +1005,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recording" => "Запис",
         "New Macro" => "Новий макрос",
         "Show" => "Показати",
+        "Collapse dialog" => "Згорнути діалогове вікно",
+        "Expand dialog" => "Розгорнути діалогове вікно",
         _ => return None,
     })
 }

@@ -119,6 +119,15 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Sparklines", "スパークライン"),
     ("Checkbox", "チェックボックス"),
     ("Insert checkboxes in the selected cells", "選択したセルにチェックボックスを挿入"),
+    ("Button", "ボタン"),
+    ("Slider", "スライダー"),
+    ("Spin Button", "スピン ボタン"),
+    ("Draw a button that runs a macro or a command", "マクロまたはコマンドを実行するボタンを描画"),
+    ("Draw a slider that sets a whole number in a linked cell", "リンクされたセルに整数を設定するスライダーを描画"),
+    ("Draw a spin button that steps a whole number in a linked cell", "リンクされたセルの整数を増減するスピン ボタンを描画"),
+    ("Edit Text", "テキストの編集"),
+    ("Assign Action…", "動作の登録…"),
+    ("Format Control…", "コントロールの書式設定…"),
     ("Header & Footer", "ヘッダーとフッター"),
     ("Draw with ink", "インクで描画"),
     ("Eraser", "消しゴム"),
@@ -1004,6 +1013,8 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Tab Color", "シートの見出しの色"),
     ("Unhide…", "再表示…"),
     ("Unprotect Sheet…", "シート保護の解除…"),
+    ("Collapse dialog", "ダイアログを折りたたむ"),
+    ("Expand dialog", "ダイアログを展開する"),
 ];
 
 /// Labels of the ribbon menus, pop-ups and palettes that the reference catalog does not cover (the

@@ -251,6 +251,19 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Convert to Comments" => "Convertir en comentarios",
         "Checkbox" => "Casilla",
         "Insert checkboxes in the selected cells" => "Insertar casillas en las celdas seleccionadas",
+        "Button" => "Botón",
+        "Slider" => "Control deslizante",
+        "Spin Button" => "Control de número",
+        "Draw a button that runs a macro or a command" => "Dibujar un botón que ejecuta una macro o un comando",
+        "Draw a slider that sets a whole number in a linked cell" => {
+            "Dibujar un control deslizante que establece un número entero en una celda vinculada"
+        }
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Dibujar un control de número que cambia un número entero en una celda vinculada"
+        }
+        "Edit Text" => "Modificar texto",
+        "Assign Action…" => "Asignar acción…",
+        "Format Control…" => "Formato de control…",
         "Sheet\nRight-to-Left" => "Hoja de derecha\na izquierda",
         "Sheet Right-to-Left" => "Hoja de derecha a izquierda",
         "Data\nAnalysis" => "Análisis\nde datos",
@@ -339,6 +352,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Options|General" => "General",
         "Options|Save" => "Guardar",
         "Show formula bar" => "Mostrar barra de fórmulas",
+        "Highlight the active cell's row" => "Resaltar la fila de la celda activa",
+        "Display options for this workbook" => "Opciones de presentación para este libro",
+        "Show horizontal scroll bar" => "Mostrar barra de desplazamiento horizontal",
+        "Show vertical scroll bar" => "Mostrar barra de desplazamiento vertical",
+        "Show sheet tabs" => "Mostrar pestañas de hojas",
+        "Edit Hyperlink…" => "Modificar hipervínculo…",
+        "Edit Hyperlink" => "Modificar hipervínculo",
+        "Open Hyperlink" => "Abrir hipervínculo",
+        "Remove Hyperlink" => "Quitar hipervínculo",
+        "Resize formula bar" => "Cambiar el tamaño de la barra de fórmulas",
         "Enable AutoComplete for cell values" => "Habilitar Autocompletar para valores de celda",
         "Save .xlsx workbooks automatically after every change" => "Guardar automáticamente los libros .xlsx tras cada cambio",
         "Workbook calculation" => "Cálculo del libro",
@@ -495,6 +518,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Detener",
         "New Macro" => "Nueva macro",
         "Show" => "Mostrar",
+        "Collapse dialog" => "Contraer diálogo",
+        "Expand dialog" => "Expandir diálogo",
         _ => return None,
     })
 }
