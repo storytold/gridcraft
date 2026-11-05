@@ -7,6 +7,7 @@ use super::kinds::squarify;
 use super::legend::swatch_w;
 use super::*;
 use crate::{ApproxMeasure, Measure};
+use gridcraft_model::LegendPos;
 
 /// The pre-rewrite `Ctx::fit`: one `Measure` call per candidate length, longest first.
 fn fit_reference(ctx: &Ctx, s: &str, size: f32, maxw: f32) -> String {
