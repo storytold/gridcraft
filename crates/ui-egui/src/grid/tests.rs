@@ -237,6 +237,24 @@ fn german_context_menus_have_no_two_items_alike() {
     }
 }
 
+/// From a report on #3435: Middle is the line box's midpoint at any zoom and row height, for one line
+/// and for wrapped text alike.
+#[test]
+fn middle_alignment_uses_the_cell_midpoint() {
+    for z in [0.8, 1.92, 3.2] {
+        for height in [8.0, 20.0, 40.0] {
+            let rect = Rect::from_min_size(pos2(17.3, 42.5), vec2(100.0 * z, height * z));
+            for gh in [12.25 * z, 31.5 * z] {
+                for align in [VAlign::Center, VAlign::Justify, VAlign::Distributed] {
+                    let y = cell_text_y(align, rect, gh, z);
+                    assert!((y + gh / 2.0 - rect.center().y).abs() < 0.001);
+                    assert!((y - wrapped_cell_text_y(align, rect, gh, z)).abs() < 0.001);
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn cell_text_y_moves_monotonically_in_standard_and_tall_rows() {
     let rect_std = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 24.0));
