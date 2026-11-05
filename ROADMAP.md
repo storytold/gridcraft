@@ -179,6 +179,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-15 | Row auto-fit counts a cell's line breaks only when the cell wraps, as Excel does: a file whose unwrapped cells hold multi-line text no longer opens with tall rows (typing a break still turns wrap on and grows the row) |
 | 2026-10-15 | XLSX PivotTables on a data connection or the Data Model are kept on save (they were dropped), with the Data Model (`xl/model/item.data`) byte for byte; Excel opens the result without repair and refreshes it |
 | 2026-10-14 | XLSX PivotTables whose source is a range or name in another workbook are kept on save (they were dropped): table, cache and records parts unchanged, style references renumbered; Excel opens the result without repair and refreshes it |
+| 2026-10-14 | Set precision as displayed is applied: with the option on, formula results, spills and numbers typed or reformatted are stored as their number format shows them and formulas calculate from those values; `formulas.calculationOptions` gains `precisionAsDisplayed` (turning it on rounds existing constants; locked constants on a protected sheet keep their value; numbers written to a new sheet are rounded too) (#1343) |
 | 2026-10-14 | Lookups (MATCH, XMATCH, VLOOKUP, HLOOKUP, XLOOKUP, LOOKUP) compare numbers exactly like Excel, so a computed key such as `=0.1+0.2` no longer finds 0.3; `=` and COUNTIF/SUMIF keep their 15-digit comparison |
 | 2026-10-14 | Functions: EOMONTH, EDATE, WORKDAY, NETWORKDAYS, YEARFRAC, WEEKNUM, the bond and coupon functions, DISC, BIN2DEC, IM* and the other Analysis ToolPak functions give `#VALUE!` for a reference to more than one cell in a value argument, as Excel 365 does, instead of spilling; array constants and computed arrays still lift |
 | 2026-10-14 | Protect Sheet on a protected sheet: Home › Format, its keytips (HOP, RPS) and the tab menu now read Unprotect Sheet… and unprotect (straight away without a password); a protected sheet that forbids selecting locked (or unlocked) cells is enforced for clicks, arrows and Go To, and the Protect Sheet dialog has the select options (#1346) |
@@ -291,6 +292,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-16 | trivial | Progress log: web preferences kept between visits (#1562) |
 | 2026-10-16 | minor | Progress log: interface fonts held once instead of twice |
 | 2026-10-15 | trivial | Progress log: XLSX PivotTables on a data connection or the Data Model kept on save |
+| 2026-10-14 | minor | Progress log: Set precision as displayed applied in calculation (#1343) |
 | 2026-10-14 | minor | Progress log: `.xls` import reads cell formatting |
 | 2026-10-14 | trivial | Progress log: XLSX PivotTables on another workbook kept on save |
 | 2026-10-14 | minor | Progress log: lookups compare numbers exactly |
