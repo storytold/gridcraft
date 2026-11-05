@@ -29,6 +29,11 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut dark_charts, lang.tr("Dark charts")).on_hover_text(hint).changed() {
         app.run_or_alert("view.darkCharts", json!({"on": dark_charts}));
     }
+    let mut dark_pictures = app.ui.dark_pictures;
+    let hint = lang.tr("Show pictures with their colours inverted. Saving, printing and PDFs are unchanged.");
+    if ui.checkbox(&mut dark_pictures, lang.tr("Dark pictures")).on_hover_text(hint).changed() {
+        app.run_or_alert("view.darkPictures", json!({"on": dark_pictures}));
+    }
     ui.add_space(18.0);
     section(ui, lang, "Options|Editing");
     let mut autocomplete = app.ui.autocomplete;

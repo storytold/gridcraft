@@ -139,6 +139,11 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
         if ui.checkbox(&mut dark_charts, lang.tr("Dark charts")).on_hover_text(hint).changed() {
             act(app, "view.darkCharts", json!({"on": dark_charts}));
         }
+        let mut dark_pictures = app.ui.dark_pictures;
+        let hint = lang.tr("Show pictures with their colours inverted. Saving, printing and PDFs are unchanged.");
+        if ui.checkbox(&mut dark_pictures, lang.tr("Dark pictures")).on_hover_text(hint).changed() {
+            act(app, "view.darkPictures", json!({"on": dark_pictures}));
+        }
     });
     sep(ui);
     // Interface size (issue #230): scales the whole window on top of the desktop's scale.

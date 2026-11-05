@@ -195,6 +195,12 @@ impl SheetApp {
                 self.ui.dark_charts = given.unwrap_or(!self.ui.dark_charts);
                 Ok(json!({"on": self.ui.dark_charts}))
             }
+            "view.darkPictures" => {
+                // `{on}`; `{value}` is accepted like on view.darkSheet. No parameter toggles.
+                let given = p.get("on").or_else(|| p.get("value")).and_then(Json::as_bool);
+                self.ui.dark_pictures = given.unwrap_or(!self.ui.dark_pictures);
+                Ok(json!({"on": self.ui.dark_pictures}))
+            }
             "view.theme" => {
                 match p.get("mode").and_then(Json::as_str) {
                     Some("system") => self.ui.system_theme = true,

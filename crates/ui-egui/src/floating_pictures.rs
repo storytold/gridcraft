@@ -23,13 +23,15 @@ const MIN_TEXTURE_SIDE: u32 = 64;
 const MAX_CACHE_BYTES: usize = 128 * 1024 * 1024;
 const MAX_CACHE_ITEMS: usize = 4096;
 
-/// A picture: its workbook, its object id there, and its size in bytes (object ids are per
-/// workbook, so two open workbooks can both have a picture 1).
+/// A picture: its workbook, its object id there, its size in bytes (object ids are per
+/// workbook, so two open workbooks can both have a picture 1), and whether it is drawn dark
+/// (the dark-pictures setting): the dark texture is an entry of its own.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct Key {
     doc: u64,
     id: u32,
     len: usize,
+    dark: bool,
 }
 
 #[derive(Default)]
@@ -80,7 +82,12 @@ impl Cache {
         if let Some(old) = self.entries.remove(&key) {
             self.bytes = self.bytes.saturating_sub(old.bytes);
         }
-        let decoded = decode(data, side);
+        let decoded = decode(data, side).map(|(mut image, complete)| {
+            if key.dark {
+                crate::theme::ink_image(&mut image);
+            }
+            (image, complete)
+        });
         let bytes = decoded.as_ref().map_or(0, |(image, _)| image.pixels.len().saturating_mul(4));
         while self.entries.len() >= MAX_CACHE_ITEMS || self.bytes.saturating_add(bytes) > MAX_CACHE_BYTES {
             let oldest = self.entries.iter().filter(|(_, e)| e.used.saturating_add(1) < frame).min_by_key(|(_, e)| e.used).map(|(key, _)| *key);
@@ -159,7 +166,7 @@ pub(crate) fn forget_closed(ctx: &egui::Context, open: &[u64]) {
 pub(crate) fn texture(ctx: &egui::Context, doc: u64, image: &Image, rect: egui::Rect) -> Option<TextureHandle> {
     let px = (rect.width().max(rect.height()) * ctx.pixels_per_point()).ceil();
     let want = if px.is_finite() && px > 0.0 { px.min(u32::MAX as f32) as u32 } else { 1 };
-    let key = Key { doc, id: image.id, len: image.data.len() };
+    let key = Key { doc, id: image.id, len: image.data.len(), dark: crate::theme::dark_pictures(ctx) };
     cache(ctx).lock().unwrap_or_else(std::sync::PoisonError::into_inner).texture(ctx, key, &image.data, want)
 }
 
@@ -175,7 +182,7 @@ mod tests {
     }
 
     fn key(doc: u64, id: u32, data: &[u8]) -> Key {
-        Key { doc, id, len: data.len() }
+        Key { doc, id, len: data.len(), dark: false }
     }
 
     /// Runs one frame, so the frame number moves on as it does when the app paints.

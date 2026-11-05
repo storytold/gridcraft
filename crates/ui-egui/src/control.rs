@@ -272,6 +272,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("view.darkMode", "Dark Mode", ""),
                 ("view.darkSheet", "Dark Sheet", "{on?: bool} (toggles without it) → {on}; screen only, off by default"),
                 ("view.darkCharts", "Dark Charts", "{on?: bool} (toggles without it) → {on}; screen only, off by default"),
+                ("view.darkPictures", "Dark Pictures", "{on?: bool} (toggles without it) → {on}; screen only, off by default"),
                 ("view.theme", "Display Theme", ""),
                 ("view.animations", "Animations", "{on?: bool} (toggles without it) → {on}"),
                 ("options.autoComplete", "Enable AutoComplete for cell values", "{on?: bool} (toggles without it) → {on}"),

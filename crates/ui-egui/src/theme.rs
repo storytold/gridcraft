@@ -376,6 +376,28 @@ pub fn dark_charts(ctx: &egui::Context) -> bool {
     ctx.data(|d| d.get_temp::<bool>(dark_charts_key())).unwrap_or(false)
 }
 
+/// Where the dark-pictures flag lives in the egui context (the picture caches read it).
+fn dark_pictures_key() -> egui::Id {
+    egui::Id::unique("gridcraft.dark_pictures")
+}
+
+/// Mirrors the dark-pictures preference into the egui context; the update loop calls it every frame.
+pub fn set_dark_pictures(ctx: &egui::Context, on: bool) {
+    ctx.data_mut(|d| d.insert_temp(dark_pictures_key(), on));
+}
+
+/// Whether pictures are drawn dark for this context (off until [`set_dark_pictures`] says otherwise).
+pub fn dark_pictures(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(dark_pictures_key())).unwrap_or(false)
+}
+
+/// Applies [`ink`] to every pixel of a decoded picture (the dark-pictures setting).
+pub fn ink_image(image: &mut egui::ColorImage) {
+    for px in &mut image.pixels {
+        *px = ink(*px);
+    }
+}
+
 impl Tokens {
     /// Light interface, light sheet.
     pub fn light() -> Tokens {
@@ -907,6 +929,24 @@ mod contrast_tests {
         let light = contrast(SheetColors::LIGHT.gridline, SheetColors::LIGHT.grid_bg);
         let dark = contrast(SheetColors::DARK.gridline, SheetColors::DARK.grid_bg);
         assert!(light > 1.3 && dark >= light, "light {light:.2}:1, dark {dark:.2}:1");
+    }
+
+    #[test]
+    fn ink_image_maps_every_pixel_and_keeps_alpha() {
+        let mut image = egui::ColorImage::new([2, 1], vec![Color32::WHITE, Color32::from_rgba_unmultiplied(0, 0, 0, 128)]);
+        ink_image(&mut image);
+        assert_eq!(image.pixels[0], Color32::from_rgb(DARK_PAPER, DARK_PAPER, DARK_PAPER));
+        assert_eq!(image.pixels[1].to_srgba_unmultiplied()[3], 128);
+        assert_eq!(image.pixels[1], ink(Color32::from_rgba_unmultiplied(0, 0, 0, 128)));
+    }
+
+    #[test]
+    fn dark_pictures_flag_is_off_until_set() {
+        let ctx = egui::Context::default();
+        assert!(!dark_pictures(&ctx));
+        set_dark_pictures(&ctx, true);
+        assert!(dark_pictures(&ctx));
+        assert!(!dark_charts(&ctx) && !dark_sheet(&ctx), "the three settings are separate");
     }
 
     #[test]

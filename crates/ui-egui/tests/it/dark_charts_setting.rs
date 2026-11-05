@@ -1,4 +1,4 @@
-//! The dark charts setting (`view.darkCharts`): off by default, a toggle, a preference, independent
+//! The dark charts and dark pictures settings (`view.darkCharts`, `view.darkPictures`): off by default, a toggle, a preference, independent
 //! of the dark sheet and of Display theme, and it inverts what a chart paints.
 
 use egui::{Color32, Pos2, Rect, vec2};
@@ -52,6 +52,23 @@ fn it_is_independent_of_the_dark_sheet_and_the_display_theme_and_not_a_document_
     h.run_steps(2);
     assert!(theme::dark_charts(&h.ctx), "neither the theme nor the sheet setting touch it");
     assert_eq!(h.state().session.active().map(|d| d.is_dirty()), dirty);
+}
+
+#[test]
+fn dark_pictures_command_toggles_is_independent_and_persists() {
+    assert!(!UiState::default().dark_pictures);
+    let mut h = harness();
+    assert!(!theme::dark_pictures(&h.ctx));
+    assert_eq!(h.state_mut().run("view.darkPictures", json!({})), Ok(json!({"on": true})));
+    assert_eq!(h.state_mut().run("view.darkPictures", json!({})), Ok(json!({"on": false})));
+    assert_eq!(h.state_mut().run("view.darkPictures", json!({"value": true})), Ok(json!({"on": true})));
+    h.run_steps(2);
+    assert!(theme::dark_pictures(&h.ctx));
+    assert!(!theme::dark_charts(&h.ctx) && !theme::dark_sheet(&h.ctx), "only pictures");
+    let state = UiState { dark_pictures: true, ..UiState::default() };
+    let saved = serde_json::to_string(&state).unwrap();
+    assert!(serde_json::from_str::<UiState>(&saved).unwrap().dark_pictures);
+    assert!(!serde_json::from_str::<UiState>("{}").unwrap().dark_pictures);
 }
 
 #[test]
