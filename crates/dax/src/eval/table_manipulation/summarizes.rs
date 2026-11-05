@@ -554,7 +554,13 @@ fn prepare_group(
         // table has a blank member, or the fact row's key matches nothing (an orphan). Filtering
         // the related column to BLANK would drop the orphan rows, so that group is left to the
         // table argument's own rows, which already select exactly the fact rows it covers.
-        let on_source = group.source.columns.iter().any(|candidate| candidate.name.eq_ignore_ascii_case(&column.name));
+        // The column is the source table's own when it belongs to the source's lineage; a name
+        // match is not enough, because a star schema often names a fact column after a dimension
+        // column (`Sales[Product]` and `Products[Product]`).
+        let on_source = match group.source.lineage {
+            Some(lineage) => column.table == lineage,
+            None => group.source.columns.iter().any(|candidate| candidate.name.eq_ignore_ascii_case(&column.name)),
+        };
         if value.is_blank() && !on_source {
             continue;
         }

@@ -670,7 +670,14 @@ fn compare_values(left: &Scalar, right: &Scalar, descending: bool, blanks: Blank
             BlanksOrder::First => Ordering::Less,
             BlanksOrder::Last => Ordering::Greater,
             BlanksOrder::Default => {
-                let ordering = total_order(left, right);
+                // `total_order` treats BLANK as zero, so it would tie with a zero key. The
+                // documented order puts a numeric BLANK strictly below zero, and
+                // `compare_window_values` in `eval/filter.rs` breaks the tie the same way, so
+                // RANK/ROWNUMBER and the INDEX/OFFSET/WINDOW ordering agree.
+                let ordering = match total_order(left, right) {
+                    Ordering::Equal => Ordering::Less,
+                    other => other,
+                };
                 if descending { ordering.reverse() } else { ordering }
             }
         },
@@ -678,7 +685,10 @@ fn compare_values(left: &Scalar, right: &Scalar, descending: bool, blanks: Blank
             BlanksOrder::First => Ordering::Greater,
             BlanksOrder::Last => Ordering::Less,
             BlanksOrder::Default => {
-                let ordering = total_order(left, right);
+                let ordering = match total_order(left, right) {
+                    Ordering::Equal => Ordering::Greater,
+                    other => other,
+                };
                 if descending { ordering.reverse() } else { ordering }
             }
         },
@@ -880,4 +890,18 @@ fn cell_span(radius: f64, width: f64, height: f64, cells: usize) -> usize {
         return 0;
     }
     (radius / cell_size).ceil().clamp(0.0, 4.0) as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_default_blanks_order_puts_blank_strictly_below_zero() {
+        // `total_order` treats BLANK as zero; RANK/ROWNUMBER must still separate the two, the way
+        // `compare_window_values` does for INDEX/OFFSET/WINDOW.
+        assert_eq!(compare_values(&Scalar::Blank, &Scalar::Decimal(0.0), false, BlanksOrder::Default), Ordering::Less);
+        assert_eq!(compare_values(&Scalar::Decimal(0.0), &Scalar::Blank, false, BlanksOrder::Default), Ordering::Greater);
+        assert_eq!(compare_values(&Scalar::Blank, &Scalar::Integer(0), true, BlanksOrder::Default), Ordering::Greater);
+    }
 }

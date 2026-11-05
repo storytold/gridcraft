@@ -675,6 +675,42 @@ fn summarize_groups_an_orphan_foreign_key_under_the_related_tables_blank_member(
 }
 
 #[test]
+fn summarize_groups_an_orphan_under_a_group_column_named_like_a_fact_column() {
+    // `Sales[Product]` and `Products[Product]` share a name, but the group column is still the
+    // dimension's own: the orphan fact row must land in the BLANK group with its measure, not be
+    // filtered away by a `Products[Product] = BLANK` filter.
+    let mut model = DataModel {
+        tables: vec![
+            table(
+                "Sales",
+                vec![column("Product", "String"), column("Amount", "Double")],
+                vec![vec![text("Widget"), money(10.0)], vec![text("Gadget"), money(50.0)]],
+            ),
+            table("Products", vec![column("Product", "String"), column("Category", "String")], vec![vec![text("Widget"), text("Hardware")]]),
+        ],
+        relationships: vec![Relationship {
+            from_table: "Sales".into(),
+            from_column: "Product".into(),
+            to_table: "Products".into(),
+            to_column: "Product".into(),
+            bidirectional: false,
+            inactive: false,
+        }],
+        measures: Vec::new(),
+    };
+    model.parse_formulas().expect("model parses");
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let expr = parse_expression("SUMMARIZE(Sales, Products[Product], \"Amount\", SUM(Sales[Amount]))").expect("parse");
+    let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+    let table = evaluator.evaluate_table(&bound).expect("summarize over an orphan key");
+    assert_eq!(
+        table.rows,
+        vec![vec![text("Widget"), money(10.0)], vec![Scalar::Blank, money(50.0)]],
+        "the orphan groups as BLANK and keeps its measure"
+    );
+}
+
+#[test]
 fn issue_subtotal_marks_only_the_rolled_up_rows() {
     let table = eval_table("SUMMARIZE(Sales, ROLLUP(Sales[Region]), \"IsSubtotal\", ISSUBTOTAL(Sales[Region]))").expect("issue subtotal");
     assert_columns(&table, &["Region", "IsSubtotal"]);

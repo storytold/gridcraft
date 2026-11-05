@@ -238,7 +238,7 @@ fn natural_join_columns(ev: &Evaluator<'_>, left: &TableValue, right: &TableValu
             (Some(a), Some(b)) if a == b => {}
             // Two related model tables expose the same key column: the relationship is the
             // expanded-table lineage the natural join compares.
-            (Some(a), Some(b)) if related_tables(ev, a, b) => {}
+            (Some(a), Some(b)) if related_key_column(ev, a, b, &left_column.name) => {}
             (Some(_), Some(_)) => {
                 return Err(EvalError::new(format!("natural join column `{}` has a different lineage on each side", left_column.name)));
             }
@@ -255,18 +255,21 @@ fn natural_join_columns(ev: &Evaluator<'_>, left: &TableValue, right: &TableValu
     Ok((common, right_only))
 }
 
-/// Whether an active relationship joins the two model tables, in either direction.
-fn related_tables(ev: &Evaluator<'_>, left: usize, right: usize) -> bool {
+/// Whether an active relationship joins the two model tables through `column`, in either
+/// direction. Only a relationship key column is the same column on both sides; a same-named
+/// non-key column keeps its own lineage.
+fn related_key_column(ev: &Evaluator<'_>, left: usize, right: usize, column: &str) -> bool {
     let Some(left_table) = ev.model().tables.get(left) else { return false };
     let Some(right_table) = ev.model().tables.get(right) else { return false };
     ev.model().relationships.iter().any(|relationship| {
         if relationship.inactive {
             return false;
         }
+        let key = relationship.from_column.eq_ignore_ascii_case(column) && relationship.to_column.eq_ignore_ascii_case(column);
         let forward = relationship.from_table.eq_ignore_ascii_case(&left_table.name) && relationship.to_table.eq_ignore_ascii_case(&right_table.name);
         let backward =
             relationship.from_table.eq_ignore_ascii_case(&right_table.name) && relationship.to_table.eq_ignore_ascii_case(&left_table.name);
-        forward || backward
+        key && (forward || backward)
     })
 }
 

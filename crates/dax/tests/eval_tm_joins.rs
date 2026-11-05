@@ -246,6 +246,48 @@ fn natural_inner_join_of_related_tables_joins_on_the_relationship_key() {
 }
 
 #[test]
+fn natural_inner_join_rejects_a_same_named_non_key_column() {
+    // `Name` exists on both tables but is not the relationship key, so the two columns keep their
+    // own lineage and the natural join reports it instead of silently joining on `Name`.
+    let string = |value: &str| Scalar::String(value.into());
+    let mut model = DataModel {
+        tables: vec![
+            ModelTable {
+                name: "Sales".into(),
+                columns: vec![
+                    ModelColumn { name: "ProductKey".into(), data_type: Some("Int64".into()) },
+                    ModelColumn { name: "Name".into(), data_type: Some("String".into()) },
+                ],
+                rows: vec![vec![Scalar::Integer(1), string("left")]],
+            },
+            ModelTable {
+                name: "Product".into(),
+                columns: vec![
+                    ModelColumn { name: "ProductKey".into(), data_type: Some("Int64".into()) },
+                    ModelColumn { name: "Name".into(), data_type: Some("String".into()) },
+                ],
+                rows: vec![vec![Scalar::Integer(1), string("right")]],
+            },
+        ],
+        relationships: vec![Relationship {
+            from_table: "Sales".into(),
+            from_column: "ProductKey".into(),
+            to_table: "Product".into(),
+            to_column: "ProductKey".into(),
+            bidirectional: false,
+            inactive: false,
+        }],
+        measures: Vec::new(),
+    };
+    model.parse_formulas().expect("model parses");
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let expr = parse_expression("NATURALINNERJOIN(Sales, Product)").expect("parse");
+    let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+    let message = evaluator.evaluate_table(&bound).expect_err("Name is not a join key");
+    assert!(message.to_string().contains("different lineage"), "{message}");
+}
+
+#[test]
 fn filters_returns_direct_filter_values() {
     assert_eq!(eval("COUNTROWS ( FILTERS ( Sales[Region] ) )"), Ok(Scalar::Integer(3)));
     let direct = table("FILTERS ( Sales[Region] )");
