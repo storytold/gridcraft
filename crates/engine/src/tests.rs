@@ -445,6 +445,7 @@ fn undo_after_a_script_replays_as_one_journal_step() {
     assert_eq!(v(&s, "B1"), Value::Empty);
     assert_eq!(s.journal[journal_at].0, "automate.runScript");
     assert_eq!(s.journal[journal_at].1["commands"].as_array().map(Vec::len), Some(2));
+    assert_eq!(s.journal.get(journal_at + 1).map(|entry| entry.0.as_str()), Some("edit.undo"));
 
     // The journal carries the steps, so replay does not depend on the saved script still existing.
     let mut replay = with_script();

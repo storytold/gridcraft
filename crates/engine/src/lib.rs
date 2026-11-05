@@ -698,6 +698,43 @@ impl Session {
         Ok((spec, query))
     }
 
+    fn record_and_journal(
+        &mut self,
+        id: &str,
+        params: &Json,
+        result: &Result<Json>,
+        journals: bool,
+        records_script: bool,
+        place: Option<(u64, usize, String, Selection)>,
+        requests_before: usize,
+        before: Option<&(u64, Arc<Workbook>, Selection)>,
+    ) {
+        if !(journals || records_script) || result.is_err() {
+            return;
+        }
+        let opened_dialog = self.ui_requests.get(requests_before..).is_some_and(|new| new.iter().any(|q| matches!(q, UiRequest::Dialog(..))));
+        let changed = before.is_some_and(|(uid, wb, _)| self.docs.iter().any(|d| d.uid == *uid && !Arc::ptr_eq(&d.wb, wb)));
+        if let Some((doc, sheet, sheet_name, selection)) = place.filter(|_| (!opened_dialog || changed) && !record::NOT_RECORDED.contains(&id))
+            && let Some(rec) = self.recorder.as_mut()
+        {
+            let params = match result {
+                Ok(r) if params.is_object() => record::with_toggle_state(id, cmd::journal_params(params), r),
+                _ => cmd::journal_params(params),
+            };
+            let kept = rec.push(record::RecordedStep { doc, sheet, sheet_name, selection, id: id.to_string(), params });
+            if let Some(ran) = self.script_ran.take()
+                && kept
+                && matches!(id, "automate.runScript" | "macro.run")
+            {
+                rec.attach_ran(ran);
+            }
+        }
+        if journals && self.journal_paused == 0 {
+            self.push_journal(id, cmd::journal_params(params));
+            recent::note(&mut self.prefs.recent_functions, id, params);
+        }
+    }
+
     pub fn execute(&mut self, id: &str, params: Json) -> Result<Json> {
         let (spec, query) = self.prepare_command(id)?;
         let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
@@ -807,40 +844,7 @@ impl Session {
         if result.is_err() {
             self.rollback_groups_from(first_group);
         }
-        if (journals || records_script) && result.is_ok() {
-            // A command that started recording is not part of the recording; one that stopped it
-            // finds no recorder. A menu-style call that only opened a dialog (`file.open` with no
-            // file, `home.formatCells` with no style) is not recorded either: the dialog's own
-            // call is, so playing the recording back runs the command once, with its parameters.
-            // A call that opened a dialog and changed the workbook too (a script with an edit before
-            // a menu-style step) is recorded: the edit happened, and the dialog's confirming call
-            // is a step of its own.
-            let opened_dialog = self.ui_requests.get(requests_before..).is_some_and(|new| new.iter().any(|q| matches!(q, UiRequest::Dialog(..))));
-            let changed = before.as_ref().is_some_and(|(uid, wb, _)| self.docs.iter().any(|d| d.uid == *uid && !Arc::ptr_eq(&d.wb, wb)));
-            if let Some((doc, sheet, sheet_name, selection)) = place.filter(|_| (!opened_dialog || changed) && !record::NOT_RECORDED.contains(&id))
-                && let Some(rec) = self.recorder.as_mut()
-            {
-                // A toggle (Bold) is recorded with the state it set, as Excel records
-                // `Bold = True`: playing it back sets that state rather than flipping it again.
-                let params = match &result {
-                    Ok(r) if params.is_object() => record::with_toggle_state(id, cmd::journal_params(&params), r),
-                    _ => cmd::journal_params(&params),
-                };
-                let kept = rec.push(record::RecordedStep { doc, sheet, sheet_name, selection, id: id.to_string(), params });
-                // A script or macro run is kept with the steps it ran, so editing or deleting the
-                // script or macro before the recording stops does not change what was recorded.
-                if let Some(ran) = self.script_ran.take()
-                    && kept
-                    && matches!(id, "automate.runScript" | "macro.run")
-                {
-                    rec.attach_ran(ran);
-                }
-            }
-            if journals && self.journal_paused == 0 {
-                self.push_journal(id, cmd::journal_params(&params));
-                recent::note(&mut self.prefs.recent_functions, id, &params);
-            }
-        }
+        self.record_and_journal(id, &params, &result, journals, records_script, place, requests_before, before.as_ref());
         // Inside an undo group the group owns the step. A command that ended a group open before
         // it leaves the group its step and makes one of its own for what it changed after the end.
         // A command that opened and closed its own groups makes one step of its own, which
