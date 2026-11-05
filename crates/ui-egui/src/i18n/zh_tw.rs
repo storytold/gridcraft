@@ -1486,8 +1486,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Value Field Settings" => "值欄位設定",
         "Window" => "視窗",
         "Workbook Views" => "活頁簿檢視",
-        "{n} engine commands are available. See docs/mcp.md and docs/control-protocol.md." => {
-            "當前可用 {n} 個引擎命令。參見 docs/mcp.md 與 docs/control-protocol.md。"
+        "{count} engine commands are available. See docs/mcp.md and docs/control-protocol.md." => {
+            "當前可用 {count} 個引擎命令。參見 docs/mcp.md 與 docs/control-protocol.md。"
         }
         "{n} cell(s) found" => "找到 {n} 個儲存格。",
         "No Fill" => "無填滿",

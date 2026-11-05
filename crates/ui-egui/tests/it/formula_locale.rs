@@ -477,7 +477,8 @@ fn russian_autocomplete_and_argument_insertion_use_unicode_caret_positions() {
     assert_eq!(editor.caret, editor.text.chars().count());
     assert_eq!(editor.current_function(), Some(("СЧЁТ".into(), 0)));
     assert!(editor.insert_argument_names(Language::Ru));
-    assert!(editor.text.contains(Language::Ru.function_argument("value").unwrap()));
+    let value = Language::Ru.function_argument("value").unwrap();
+    assert_eq!(editor.text, format!("=СЧЁТ({value}1;{value}2;...)"));
 }
 
 /// Checks explicit Text formatting protects localized-looking input in both supported translated syntaxes.

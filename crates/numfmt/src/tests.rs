@@ -911,3 +911,17 @@ fn explicit_locale_renders_numbers_dates_and_currency_without_rewriting_codes() 
     assert_eq!(render(1234.56, r##""$"#,##0.00"##), "$1.234,56");
     assert_eq!(render(1234.56, r#"#,##0.00 "€""#), "1.234,56 €");
 }
+
+/// Fractional seconds follow the output locale while format codes stay canonical.
+#[test]
+fn fractional_seconds_use_the_locale_decimal_separator() {
+    let serial = 0.5 + 123.0 / 86_400_000.0;
+    for (locale, expected) in [(Locale::En, "12:00:00.123"), (Locale::De, "12:00:00,123")] {
+        let fmt = NumberFormat::parse("hh:mm:ss.000");
+        assert_eq!(format_value_with_locale(&Value::Number(serial), &fmt, DateSystem::D1900, locale).text, expected);
+    }
+    for (code, expected) in [("hh:mm:ss.0", "12:00:00,1"), ("[h]:mm:ss.00", "36:00:00,12")] {
+        let serial = if code.starts_with('[') { serial + 1.0 } else { serial };
+        assert_eq!(format_value_with_locale(&Value::Number(serial), &NumberFormat::parse(code), DateSystem::D1900, Locale::De).text, expected);
+    }
+}

@@ -458,10 +458,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Japanese Envelope #4" => "Koperta japońska nr 4",
         "Japanese Envelope Kaku #2" => "Koperta japońska Kaku nr 2",
         "Japanese Envelope Kaku #3" => "Koperta japońska Kaku nr 3",
-        "{n} engine commands are available. See docs/mcp.md and docs/control-protocol.md." => {
-            "Dostępne polecenia silnika: {n}. Zobacz docs/mcp.md i docs/control-protocol.md."
+        "{count} engine commands are available. See docs/mcp.md and docs/control-protocol.md." => {
+            "Dostępne polecenia silnika: {count}. Zobacz docs/mcp.md i docs/control-protocol.md."
         }
-        "{n} contributors · {c} commits" => "Współtwórcy: {n} · commity: {c}",
+        "{contributors} contributors · {commits} commits" => "Współtwórcy: {contributors} · commity: {commits}",
         "Page {page}" => "Strona {page}",
         "Paste" => "Wklej",
         "Paste Values" => "Wklej wartości",

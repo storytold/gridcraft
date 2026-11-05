@@ -510,6 +510,40 @@ mod tests {
         }
     }
 
+    /// Dynamic UI messages must use the same placeholder names as their callers.
+    #[test]
+    fn dynamic_ui_messages_resolve_and_substitute_their_placeholders() {
+        let key = "{count} engine commands are available. See docs/mcp.md and docs/control-protocol.md.";
+        for (language, expected) in [
+            (Language::Pl, "Dostępne polecenia silnika: 368. Zobacz docs/mcp.md i docs/control-protocol.md."),
+            (Language::ZhTw, "當前可用 368 個引擎命令。參見 docs/mcp.md 與 docs/control-protocol.md。"),
+        ] {
+            assert_eq!(craft_i18n::fmt(language.tr(key), &[("count", "368")]), expected);
+        }
+        assert_eq!(
+            craft_i18n::fmt(Language::Pl.tr("{contributors} contributors · {commits} commits"), &[("contributors", "16"), ("commits", "148")]),
+            "Współtwórcy: 16 · commity: 148"
+        );
+    }
+
+    /// AppKit's system dialogs should recognize every language offered by the interface.
+    #[test]
+    fn macos_bundle_declares_every_interface_language() {
+        let plist = include_str!("../../../packaging/macos/Info.plist.in");
+        let array = plist.split_once("<key>CFBundleLocalizations</key>").unwrap().1.split_once("</array>").unwrap().0;
+        let tags: Vec<&str> = array.split("<string>").skip(1).map(|s| s.split_once("</string>").unwrap().0).collect();
+        assert_eq!(tags.len(), Language::ALL.len());
+        for language in Language::ALL {
+            let tag = match language {
+                Language::PtBr => "pt-BR",
+                Language::Zh => "zh-Hans",
+                Language::ZhTw => "zh-Hant",
+                _ => language.code(),
+            };
+            assert!(tags.contains(&tag), "{language:?} is missing from the macOS bundle");
+        }
+    }
+
     #[test]
     fn untranslated_text_falls_back_to_english() {
         let label = |key: &'static str| key.rsplit_once('|').map_or(key, |(_, label)| label);

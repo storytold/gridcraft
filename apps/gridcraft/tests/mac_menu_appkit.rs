@@ -37,6 +37,14 @@ fn main() {
     let last = windows_menu.itemAtIndex(windows_menu.numberOfItems() - 1).expect("a Window menu item");
     assert_eq!(last.title().to_string(), open[0].label(), "the Window menu lists the open workbook");
 
+    // A contextual menu title remains a noun on a language switch, and refreshes back to English.
+    for (language, expected) in [("ru", "Вставка"), ("en", "Insert")] {
+        app.run("app.language.set", serde_json::json!({"language": language})).unwrap();
+        menu.poll(&mut app, &ctx, egui::ViewportId::ROOT);
+        let insert = bar.itemAtIndex(4).unwrap().submenu().unwrap();
+        assert_eq!(insert.title().to_string(), expected);
+    }
+
     println!("mac_menu_appkit: ok");
 }
 

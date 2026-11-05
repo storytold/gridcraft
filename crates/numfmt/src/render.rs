@@ -124,7 +124,7 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem, loc: Locale) -
                     DatePart::Minute(n) => pad(minute, n),
                     DatePart::Second(n) => pad(second, n),
                     DatePart::SubSec(n) => {
-                        let mut s = format!(".{:03}", milli);
+                        let mut s = format!("{}{:03}", loc.decimal(), milli);
                         s.truncate(1 + (n as usize).min(3));
                         if n > 3 {
                             s.push_str(&"0".repeat(n as usize - 3));

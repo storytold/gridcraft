@@ -87,7 +87,7 @@ fn tree() -> Vec<(&'static str, Vec<Entry>)> {
             ],
         ),
         (
-            "Insert",
+            "Tab|Insert",
             vec![
                 ("Cells…", "dialog:insertCells", None),
                 ("Rows", "home.insertRows", None),

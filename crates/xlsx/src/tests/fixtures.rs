@@ -286,6 +286,30 @@ fn locale_date_format_reads_as_a_date_and_saves_as_one() {
     assert_eq!(fmt(&again), "m/d/yyyy");
 }
 
+/// Thai built-in time formats keep their time meaning through import and canonical XLSX export.
+#[test]
+fn thai_builtin_time_formats_survive_xlsx_round_trip() {
+    for (id, code) in [(75, "h:mm"), (76, "h:mm:ss"), (77, "m/d/yyyy h:mm"), (78, "mm:ss"), (79, "[h]:mm:ss"), (80, "mmss.0")] {
+        let styles = format!(
+            r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+          <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+          <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+          <cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="{id}" fontId="0" fillId="0" borderId="0" applyNumberFormat="1"/></cellXfs>
+        </styleSheet>"#
+        );
+        let rels =
+            r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+        let body = r#"<sheetData><row r="1"><c r="A1" s="1"><v>1.5</v></c></row></sheetData>"#;
+        let (wb, _) = read_xlsx(&minimal(body, &[("xl/styles.xml", &styles)], rels, "")).unwrap();
+        let fmt = |wb: &gridcraft_model::Workbook| wb.styles.get(wb.sheet(0).unwrap().cell(at("A1")).unwrap().style).num_fmt.as_str().to_string();
+        assert_eq!(fmt(&wb), code, "Thai format {id}");
+        let (again, _) = read_xlsx(&crate::write_xlsx(&wb).unwrap()).unwrap();
+        assert_eq!(fmt(&again), code, "Thai format {id} after saving");
+        assert_eq!(again.sheet(0).unwrap().value(at("A1")), Value::Number(1.5));
+    }
+}
+
 #[test]
 fn strict_namespace_and_shared_strings() {
     let ct = super::CT;

@@ -47,8 +47,9 @@ const BUILTIN_FORMATS: [(u32, &str); 36] = [
 /// them too (an `es-MX` workbook stored its dates as 58). Observed black-box in Excel for Mac with
 /// the es-MX region on a synthetic workbook, one cell per id: the dates show as the short date
 /// (14), the times as `h:mm:ss` (21), and the numeric ids as the matching number, percent and
-/// fraction formats. Currency ids 63–66 remain unresolved because the source currency is unknown. Without this they read as General and dates showed as serial numbers.
-const LOCALE_FORMATS: [(u32, u32); 38] = [
+/// fraction formats. Currency ids 63–66 remain unresolved because the source currency is unknown; Thai id 81
+/// remains unresolved because its Buddhist calendar has no equivalent in the en-US table. Without this they read as General and dates showed as serial numbers.
+const LOCALE_FORMATS: [(u32, u32); 37] = [
     (27, 14),
     (28, 14),
     (29, 14),
@@ -80,13 +81,12 @@ const LOCALE_FORMATS: [(u32, u32); 38] = [
     (72, 14),
     (73, 15),
     (74, 16),
-    (75, 17),
-    (76, 20),
-    (77, 21),
-    (78, 22),
-    (79, 45),
-    (80, 46),
-    (81, 47),
+    (75, 20),
+    (76, 21),
+    (77, 22),
+    (78, 45),
+    (79, 46),
+    (80, 47),
 ];
 
 /// Format code for a built-in id, reading a locale-specific id as the en-US built-in Excel shows it
@@ -448,16 +448,16 @@ mod tests {
             assert_eq!(builtin_format(id), Some("m/d/yyyy"), "id {id}");
         }
         assert_eq!(builtin_id(builtin_format(58).unwrap()), Some(14));
-        for id in [32, 35, 77] {
+        for id in [32, 35, 76] {
             assert_eq!(builtin_format(id), Some("h:mm:ss"), "id {id}");
         }
         // The Thai ids repeat the en-US numbers, percents, fractions, dates and times.
-        for (thai, en) in [(59, 1), (62, 4), (67, 9), (70, 13), (73, 15), (78, 22), (81, 47)] {
+        for (thai, en) in [(59, 1), (62, 4), (67, 9), (70, 13), (73, 15), (75, 20), (76, 21), (77, 22), (78, 45), (79, 46), (80, 47)] {
             assert_eq!(builtin_format(thai), builtin_format(en), "id {thai}");
             assert!(builtin_format(thai).is_some(), "id {thai}");
         }
         // Ids Excel shows as General, and ids past the table.
-        for id in [23, 26, 63, 66, 82, 164, u32::MAX] {
+        for id in [23, 26, 63, 66, 81, 82, 164, u32::MAX] {
             assert_eq!(builtin_format(id), None, "id {id}");
         }
         // The en-US built-ins are untouched.
