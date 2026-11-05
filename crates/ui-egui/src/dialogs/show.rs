@@ -9,6 +9,7 @@ use super::format_cells::format_cells;
 use super::insert_function::insert_function;
 use super::names::{name_manager, paste_name};
 use super::paste::{paste_special, paste_special_shortcuts};
+use super::power_pivot::power_pivot;
 use super::ref_edit::{RefLabel, SHEET_DELETED, end_pick, home_sheet_deleted, place_window, ref_edit, window_shown};
 use super::spelling::spelling;
 use super::zoom::zoom;
@@ -157,13 +158,16 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "assignAction" => 440.0,
         "zoom" => 220.0,
         "pasteSpecial" => 480.0,
+        // The field list is wide, but it must fit the host window: the minimum content width
+        // derives from this value, so an unclamped 1320 would not shrink on a narrow screen.
+        "powerPivot" => (ctx.content_rect().width() - 40.0).clamp(380.0, 1320.0),
         _ => 380.0,
     };
     let window_id = egui::Id::unique("dialog").with(&d.name);
     let window = egui::Window::new(app.ui.language.tr(&d.title))
         .id(window_id)
         .collapsible(false)
-        .resizable(false)
+        .resizable(d.name == "powerPivot")
         .default_width(width)
         // A default position, not an anchor: egui anchors can't be dragged, and dialogs move by their title bar.
         .pivot(egui::Align2::CENTER_CENTER)
@@ -172,6 +176,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let window = match d.name.as_str() {
         "insertPicture" => window.default_height(240.0),
         "advancedFilter" => window.default_height(0.0),
+        "powerPivot" => window.default_height(740.0),
         _ => window,
     };
     let (window, collapsed) = place_window(app, ctx, &mut d, window, window_id);
@@ -203,6 +208,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),
                 "solver" => solver(app, ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
+                "powerPivot" => power_pivot(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
                 "assignAction" => crate::control_ui::assign_dialog(app, ui, &mut d, &mut open),
                 "formatControl" => crate::control_ui::format_dialog(app, ui, &mut d, &mut open),

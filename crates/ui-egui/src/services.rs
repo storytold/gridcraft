@@ -20,6 +20,9 @@ pub struct Services {
     /// Browser picture picker. Each dialog owns its inbox, so canceled picks cannot
     /// insert into a subsequent dialog or open the image as a workbook.
     pub pick_picture_async: Option<Box<dyn Fn(Inbox)>>,
+    /// Browser data-model picker (JSON). Like the picture picker, each dialog owns its inbox so a
+    /// canceled or late pick cannot load a model into a later dialog.
+    pub pick_model_async: Option<Box<dyn Fn(Inbox)>>,
     pub open_url: Option<OpenUrl>,
     /// Publish HTML and its plain-text alternative together. `Ok` means the host owns the
     /// write (including any asynchronous fallback); an immediate error uses egui's text path.
