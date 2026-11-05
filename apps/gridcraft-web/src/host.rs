@@ -9,14 +9,19 @@
 //!   as PDF. The parent stores it and reports failures itself.
 //! - `gridcraft:dirty` (to the parent): `{ dirty }` whenever unsaved changes appear or go away.
 //! - `gridcraft:failed` (to the parent): `{ error }` when the app couldn't start.
+//! - `gridcraft:mcp` (from the parent): `{ id, method, params }`, with a unique string id and
+//!   `tools/list` or `tools/call`; `gridcraft:mcp-result` returns `{ id, result }`.
 //!
 //! Only the parent window on the page's own origin is heard or answered. In host mode the page
 //! starts with an empty workbook instead of a sample, and the parent guards leaving the page.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::rc::Rc;
 
+use gridcraft_mcp::{Backend, ToolResult};
 use gridcraft_ui_egui::{Inbox, Services, SheetApp};
+use serde_json::{Value, json};
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
@@ -28,6 +33,17 @@ const WORKBOOK_EXTS: &[&str] = &["xlsx"];
 /// The longest user name taken from `?author=`.
 const MAX_AUTHOR_CHARS: usize = 200;
 
+// Retain request identities for this page's lifetime. At the bound, reject new work rather
+// than evict identities and risk executing a delayed duplicate mutation a second time.
+const MAX_MCP_IDS: usize = 16_384;
+const MAX_MCP_QUEUE: usize = 128;
+
+#[derive(Default)]
+struct McpInbox {
+    seen: HashSet<String>,
+    queued: Vec<(String, Value)>,
+}
+
 #[derive(Clone)]
 pub struct Bridge {
     window: web_sys::Window,
@@ -37,6 +53,8 @@ pub struct Bridge {
     saved: Rc<RefCell<Vec<String>>>,
     /// The unsaved-changes state last reported to the parent.
     reported: Rc<Cell<Option<bool>>>,
+    /// Requests are admitted by the listener and run only on the app's normal frame thread.
+    mcp: Rc<RefCell<McpInbox>>,
 }
 
 impl Bridge {
@@ -48,7 +66,7 @@ impl Bridge {
             return None;
         }
         let origin = window.location().origin().ok()?;
-        Some(Self { window, parent, origin, saved: Rc::default(), reported: Rc::default() })
+        Some(Self { window, parent, origin, saved: Rc::default(), reported: Rc::default(), mcp: Rc::default() })
     }
 
     /// Send saved and exported files to the parent instead of downloading them, and hear files
@@ -77,6 +95,68 @@ impl Bridge {
 
     pub fn post_failed(&self, error: &str) {
         self.send(&[("type", "gridcraft:failed".into()), ("error", error.into())]);
+    }
+
+    /// Reuse upstream MCP schemas, dispatch and command handling against the visible workbook.
+    pub fn poll_mcp(&self, app: &mut SheetApp, ctx: &egui::Context) {
+        let queued = std::mem::take(&mut self.mcp.borrow_mut().queued);
+        for (id, request) in queued {
+            let result = match request.get("method").and_then(Value::as_str) {
+                Some("tools/list") => json!({"tools": gridcraft_mcp::tool_definitions()}),
+                Some("tools/call") => {
+                    let params = request.get("params").unwrap_or(&Value::Null);
+                    match params.get("name").and_then(Value::as_str) {
+                        Some(name) => {
+                            gridcraft_mcp::call_tool(&mut BrowserBackend { app, ctx }, name, params.get("arguments").unwrap_or(&Value::Null))
+                                .to_value()
+                        }
+                        None => ToolResult::error("tools/call requires a tool name").to_value(),
+                    }
+                }
+                _ => ToolResult::error("unsupported browser MCP method; use tools/list or tools/call").to_value(),
+            };
+            self.post_mcp(&id, result);
+        }
+    }
+
+    fn post_mcp(&self, id: &str, result: Value) {
+        // JSON round-tripping retains the upstream MCP content-block/result shape.
+        if let Ok(result) = js_sys::JSON::parse(&result.to_string()) {
+            self.send(&[("type", "gridcraft:mcp-result".into()), ("id", id.into()), ("result", result)]);
+        }
+    }
+
+    fn enqueue_mcp(&self, data: &JsValue, ctx: &egui::Context) {
+        let Some(id) = string(data, "id").filter(|id| !id.is_empty() && id.len() <= 200) else {
+            self.post_mcp("", ToolResult::error("browser MCP requires a nonempty string id of at most 200 bytes").to_value());
+            return;
+        };
+        let mut inbox = self.mcp.borrow_mut();
+        let error = if inbox.seen.contains(&id) {
+            Some("duplicate browser MCP request id; the request will not run again")
+        } else if inbox.seen.len() >= MAX_MCP_IDS {
+            Some("browser MCP request identity limit reached; new work is blocked for this page")
+        } else {
+            // Remember even a rejected request: redelivery can never turn rejection into a mutation.
+            inbox.seen.insert(id.clone());
+            if inbox.queued.len() >= MAX_MCP_QUEUE { Some("browser MCP request queue is full") } else { None }
+        };
+        if let Some(error) = error {
+            drop(inbox);
+            self.post_mcp(&id, ToolResult::error(error).to_value());
+            return;
+        }
+        let request = js_sys::JSON::stringify(data).ok().and_then(|s| s.as_string()).and_then(|s| serde_json::from_str::<Value>(&s).ok());
+        match request {
+            Some(request) => {
+                inbox.queued.push((id, request));
+                ctx.request_repaint();
+            }
+            None => {
+                drop(inbox);
+                self.post_mcp(&id, ToolResult::error("invalid browser MCP request").to_value());
+            }
+        }
     }
 
     /// After each frame: a workbook handed to the parent this frame counts as saved under the
@@ -112,11 +192,16 @@ impl Bridge {
     fn listen(&self, inbox: Inbox, ctx: egui::Context) {
         let parent = self.parent.clone();
         let origin = self.origin.clone();
+        let bridge = self.clone();
         let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
             if event.origin() != origin || !event.source().is_some_and(|s| js_sys::Object::is(&s, &parent)) {
                 return;
             }
             let data = event.data();
+            if string(&data, "type").as_deref() == Some("gridcraft:mcp") {
+                bridge.enqueue_mcp(&data, &ctx);
+                return;
+            }
             if string(&data, "type").as_deref() != Some("gridcraft:open") {
                 return;
             }
@@ -134,6 +219,39 @@ impl Bridge {
     /// Post a message to the parent; false if it couldn't be sent.
     fn send(&self, fields: &[(&str, JsValue)]) -> bool {
         message(fields).is_some_and(|m| self.parent.post_message(&m, &self.origin).is_ok())
+    }
+}
+
+/// A borrowing backend routes upstream MCP tools into the app; it never creates another Session.
+struct BrowserBackend<'a> {
+    app: &'a mut SheetApp,
+    ctx: &'a egui::Context,
+}
+
+impl Backend for BrowserBackend<'_> {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        // Browser screenshots require asynchronous frame capture and are outside this adapter.
+        if method == "ui.screenshot" {
+            return Err("browser screenshots are not supported by this MCP adapter".into());
+        }
+        match gridcraft_ui_egui::control::handle(self.app, self.ctx, method, &params) {
+            gridcraft_ui_egui::control::Outcome::Done(reply) => {
+                if reply.get("ok").and_then(Value::as_bool) == Some(true) {
+                    Ok(reply.get("result").cloned().unwrap_or(Value::Null))
+                } else {
+                    Err(reply.get("error").and_then(Value::as_str).unwrap_or("browser command failed").to_string())
+                }
+            }
+            gridcraft_ui_egui::control::Outcome::Screenshot { .. } => Err("asynchronous browser screenshots are unsupported".into()),
+        }
+    }
+
+    fn has_ui(&self) -> bool {
+        false
+    }
+
+    fn describe(&self) -> String {
+        "the visible browser workbook".into()
     }
 }
 
