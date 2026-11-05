@@ -1,14 +1,16 @@
-//! Static validation of aggregation-function calls.
+//! Static validation of catalogued function calls.
 //!
 //! The parser accepts any `NAME ( args )`; this module applies the catalog in
-//! [`crate::functions`] to reject what can be decided without a data model:
+//! [`crate::functions`] to reject what can be decided without a data model, for every catalog
+//! category:
 //!
 //! - argument counts against the documented arities (including `COUNTROWS ()` and the optional
 //!   `Variant` of `MAXX`/`MINX`);
 //! - column-only parameters that are not a bracketed name reference (`SUM ( 1 )`);
-//! - table parameters that are an obvious scalar literal or scalar operator expression
-//!   (`COUNTROWS ( 1 )`). Dynamic table expressions such as `FILTER ( ... )`, `DISTINCT ( ... )`,
-//!   variables and table constructors are accepted.
+//! - table parameters that are certainly not a table: an obvious scalar literal or scalar operator
+//!   expression (`COUNTROWS ( 1 )`) or a bracketed column reference (`COUNTROWS ( Sales[Amount] )`).
+//!   Dynamic table expressions such as `FILTER ( ... )`, `DISTINCT ( ... )`, variables and table
+//!   constructors are accepted.
 //!
 //! Unknown functions are ignored, so the validator can run over expressions that use the rest of
 //! the DAX language.

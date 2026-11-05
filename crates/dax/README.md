@@ -3,8 +3,8 @@
 The DAX language for GridCraft: a tokenizer, a Pratt parser, a syntax tree, a canonical printer,
 the function catalog for every dax.guide category with static call validation, the static type surface (types,
 literals, inference and operator result tables), the full DAX statement/query grammar, a model
-evaluator, a columnar model store, a model-backed PivotTable renderer and a reader/writer for
-Power Pivot measures in `xl/model/item.data`. It has no dependency on the GridCraft engine.
+evaluator, a columnar model store and a model-backed PivotTable renderer. It has no dependency on
+the GridCraft engine.
 
 ```rust
 use gridcraft_dax::{parse_expression, print_expression};
@@ -42,11 +42,10 @@ assert!(gridcraft_dax::print_query(&query).starts_with("DEFINE\n    MEASURE Sale
 | `types::{literal_type, infer_type, unary_type, binary_type, arithmetic_type, comparison_coercion, comparison_compatible, comparison_type}` | Literal classification, static inference and the documented operator/coercion tables. |
 | `model::{DataModel, ModelTable, ModelColumn, Measure, Relationship, parse_measure}` | Metadata + inline-row model, formula parsing and name validation. |
 | `binder::{Binder, BoundExpr, BoundMeasure, bind_formula}` | Name/measure/column resolution, dependency graph and cycle rejection. |
-| `eval::{Evaluator, FilterContext}` | Expression/measure evaluator over `DataModel` (every catalogued function). |
+| `eval::{Evaluator, FilterContext}` | Expression/measure evaluator over `DataModel`; a catalogued function whose family is not linked reports "not implemented". |
 | `pivot::{pivot, pivot_cross, pivot_fields}` | Row/column grouping helpers. |
 | `pivot_table::PivotTable` | Power Pivot-style row/column/filter/value layout with subtotals and grand totals. |
 | `storage::{ModelStorage, TableStorage, ColumnStorage, ColumnData}` | Columnar, dictionary-encoded model store with filter/aggregate/relationship indexes. |
-| `model_file::{read_measures, write_measures, ModelMeasure}` | Read/write Power Pivot measures in `xl/model/item.data` (ABF container). |
 | `MAX_INPUT_LEN` (8192 bytes, expressions) / `MAX_QUERY_LEN` (1 MiB, queries) / `MAX_DEPTH` (256) | Limits enforced with errors. |
 
 ### Syntax tree
@@ -360,9 +359,10 @@ catalogued function. Spans point at the offending argument for kind errors and a
 for arity errors; unknown functions are ignored but their arguments are still visited.
 
 A `ParamKind::Column` argument must be a bracketed `NameRef` (`Sales[Amount]` or `[Amount]`), so
-`SUM ( 1 )` and `AVERAGE ( 1 + 1 )` are rejected. A `ParamKind::Table` argument is rejected only
-when it is certainly scalar — a literal or an operator expression — so `COUNTROWS ( 1 )` fails
-while `COUNTROWS ( DISTINCT ( Sales[Region] ) )`, table variables and `{ 1, 2 }` are accepted.
+`SUM ( 1 )` and `AVERAGE ( 1 + 1 )` are rejected. A `ParamKind::Table` argument is rejected when
+it is certainly not a table — a literal, an operator expression or a bracketed column reference —
+so `COUNTROWS ( 1 )` and `COUNTROWS ( Sales[Amount] )` fail while
+`COUNTROWS ( DISTINCT ( Sales[Region] ) )`, table variables and `{ 1, 2 }` are accepted.
 `COUNTROWS ()` is valid in the catalog (the Excel limitation is recorded on the function, not
 enforced here). `Date`, `Text`, `Number`, `Boolean`, `Function`, `Reference`, `Json`, `Variant`,
 `Expression`, `Scalar`, `Logical` and `Any` are not statically decidable: DAX's implicit
