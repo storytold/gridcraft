@@ -2,6 +2,7 @@ use super::cell_paint::ink_on;
 use super::geo::Geo;
 use super::{Align2, CellRef, Color32, FontId, PatternType, Rect, Sheet, SheetApp, Stroke, StrokeKind, Tokens, Workbook, json, pos2, theme, vec2};
 
+/// Where the in-cell editor leaves its text colour for the formula-bar editor widget it hosts.
 fn cell_editor_ink_id() -> egui::Id {
     egui::Id::unique("gridcraft.cell_editor.ink")
 }

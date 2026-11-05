@@ -13,6 +13,8 @@ pub(super) struct Look {
     /// The authored colour behind the cell's text and borders (its fill, or white): what the
     /// contrast guard measures the authored pairs against.
     pub(super) paper: Color32,
+    /// The colour painted behind them (`fill`, or the sheet): what the guarded ink must read on.
+    pub(super) behind: Color32,
     /// Painted on the dark sheet.
     pub(super) dark: bool,
 }
@@ -20,12 +22,12 @@ pub(super) struct Look {
 impl Look {
     /// Display colour of a text colour drawn in this cell (a number format's `[Red]`, say).
     pub(super) fn text_ink(&self, c: Color32) -> Color32 {
-        painted_ink(c, self.paper, theme::INK_TEXT_MIN, self.dark)
+        painted_ink(c, self.paper, self.behind, theme::INK_TEXT_MIN, self.dark)
     }
 
     /// Display colour of a border line of this cell.
     pub(super) fn line_ink(&self, c: Color32) -> Color32 {
-        painted_ink(c, self.paper, theme::INK_LINE_MIN, self.dark)
+        painted_ink(c, self.paper, self.behind, theme::INK_LINE_MIN, self.dark)
     }
 }
 
@@ -39,9 +41,10 @@ pub(super) fn painted_fill(c: Color32, dark: bool) -> Color32 {
 }
 
 /// A workbook colour drawn over the authored `paper` (text, a border), as painted: as authored,
-/// or mapped and held legible by the contrast guard on the dark sheet.
-pub(super) fn painted_ink(c: Color32, paper: Color32, min_ratio: f32, dark: bool) -> Color32 {
-    if dark { theme::ink_guarded(c, paper, min_ratio) } else { c }
+/// or mapped and held legible by the contrast guard against `behind`, the colour painted under it,
+/// on the dark sheet.
+pub(super) fn painted_ink(c: Color32, paper: Color32, behind: Color32, min_ratio: f32, dark: bool) -> Color32 {
+    if dark { theme::ink_guarded_on(c, paper, behind, min_ratio) } else { c }
 }
 
 /// A pattern fill drawn as one colour: a quarter foreground, three quarters background.
@@ -125,10 +128,12 @@ pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Cf
         fill = Some((f, painted_fill(f, dark)));
     }
     let paper = fill.map_or(Color32::WHITE, |(authored, _)| authored);
+    // A pattern's painted blend is not ink() of its authored blend: guard against what is drawn.
+    let behind = fill.map_or(painted_fill(Color32::WHITE, dark), |(_, painted)| painted);
     // Automatic, Text 1 / Background 1, hyperlinks, cell and table styles: all resolved to a colour
     // first, then the one rule.
-    let text_color = painted_ink(col32(style.font.color, wb, Color32::BLACK), paper, theme::INK_TEXT_MIN, dark);
-    (Look { style, fill: fill.map(|(_, painted)| painted), text_color, paper, dark }, cfl)
+    let text_color = painted_ink(col32(style.font.color, wb, Color32::BLACK), paper, behind, theme::INK_TEXT_MIN, dark);
+    (Look { style, fill: fill.map(|(_, painted)| painted), text_color, paper, behind, dark }, cfl)
 }
 
 /// Text for a value with General narrowing to the available width.

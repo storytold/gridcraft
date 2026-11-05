@@ -582,18 +582,26 @@ pub fn ink(c: Color32) -> Color32 {
 /// authored colours; the result goes on `ink(bg)`. A pair the author made illegible (white on
 /// white) stays so. Results are cached, so a large sheet pays for each pair once.
 pub fn ink_guarded(fg: Color32, bg: Color32, min_ratio: f32) -> Color32 {
-    type Key = ([u8; 4], [u8; 4], u32);
+    ink_guarded_on(fg, bg, ink(bg), min_ratio)
+}
+
+/// [`ink_guarded`] where what is painted behind the ink is not simply `ink(bg)`: a pattern fill is
+/// painted as the blend of its two mapped colours, which the non-linear [`ink`] of the authored
+/// blend does not match. The target still comes from the authored pair `fg` on `bg`; the mapped ink
+/// is held to it against `painted_bg`.
+pub fn ink_guarded_on(fg: Color32, bg: Color32, painted_bg: Color32, min_ratio: f32) -> Color32 {
+    type Key = ([u8; 4], [u8; 4], [u8; 4], u32);
     thread_local! {
         static CACHE: std::cell::RefCell<std::collections::HashMap<Key, Color32>> = std::cell::RefCell::default();
     }
     /// Distinct pairs kept before the cache starts over (a sheet has a few dozen).
     const CAP: usize = 4096;
-    let key = (fg.to_array(), bg.to_array(), min_ratio.to_bits());
+    let key = (fg.to_array(), bg.to_array(), painted_bg.to_array(), min_ratio.to_bits());
     let cached = CACHE.try_with(|c| c.try_borrow().ok().and_then(|m| m.get(&key).copied())).ok().flatten();
     if let Some(hit) = cached {
         return hit;
     }
-    let out = guard_ink(fg, bg, min_ratio);
+    let out = guard_ink(fg, bg, painted_bg, min_ratio);
     let _ = CACHE.try_with(|c| {
         if let Ok(mut m) = c.try_borrow_mut() {
             if m.len() >= CAP {
@@ -605,14 +613,17 @@ pub fn ink_guarded(fg: Color32, bg: Color32, min_ratio: f32) -> Color32 {
     out
 }
 
+/// `c` with its alpha dropped: contrast is measured on the straight colour.
 fn opaque(c: Color32) -> Color32 {
     let [r, g, b, _] = c.to_srgba_unmultiplied();
     Color32::from_rgb(r, g, b)
 }
 
-fn guard_ink(fg: Color32, bg: Color32, min_ratio: f32) -> Color32 {
+/// The uncached guard: `ink(fg)`, its HSL lightness moved away from `painted_bg` until it reads at
+/// least `min(min_ratio, contrast of fg on bg)` against it.
+fn guard_ink(fg: Color32, bg: Color32, painted_bg: Color32, min_ratio: f32) -> Color32 {
     let target = min_ratio.min(contrast(opaque(fg), opaque(bg)));
-    let (fg_ink, bg_ink) = (ink(fg), opaque(ink(bg)));
+    let (fg_ink, bg_ink) = (ink(fg), opaque(painted_bg));
     if contrast(opaque(fg_ink), bg_ink) >= target {
         return fg_ink;
     }

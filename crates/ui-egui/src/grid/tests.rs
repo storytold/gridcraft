@@ -198,6 +198,32 @@ fn cell_colours_are_authored_on_the_light_sheet_and_mapped_on_the_dark_one() {
 }
 
 #[test]
+fn pattern_fill_text_is_guarded_against_the_blend_actually_painted() {
+    use crate::theme::{INK_TEXT_MIN, contrast};
+    use gridcraft_engine::model::{Color, PatternType};
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    session.execute("cell.set", json!({"cell": "A1", "input": "pattern"})).unwrap();
+    let mut wb = (*session.active().unwrap().wb).clone();
+    let mut style = wb.styles.get(wb.sheet(0).unwrap().style_id(CellRef::new(0, 0))).clone();
+    // Red on green: ink() of the authored blend is far lighter than the blend of the mapped colours.
+    style.fill.pattern = PatternType::Gray25;
+    style.fill.fg = Color::Rgb(0xFF0000);
+    style.fill.bg = Color::Rgb(0x00FF00);
+    let id = wb.styles.intern(style);
+    wb.sheet_mut(0).unwrap().set_style(CellRef::new(0, 0), id);
+    let sh = wb.sheet(0).unwrap();
+    let lk = look(&wb, 0, sh, CellRef::new(0, 0), &mut CfCache::new(), true).0;
+    let painted = lk.fill.unwrap();
+    assert_eq!(lk.behind, painted);
+    let target = INK_TEXT_MIN.min(contrast(Color32::BLACK, lk.paper));
+    assert!(contrast(lk.text_color, painted) >= target - 0.05, "{:?} on {painted:?}", lk.text_color);
+    // The light sheet is untouched.
+    let light = look(&wb, 0, sh, CellRef::new(0, 0), &mut CfCache::new(), false).0;
+    assert_eq!(light.text_color, Color32::BLACK);
+}
+
+#[test]
 fn filter_menu_uses_the_table_whose_header_was_clicked() {
     use gridcraft_engine::model::Table;
     let table = |id: u32, r0: u32, r1: u32| Table {
