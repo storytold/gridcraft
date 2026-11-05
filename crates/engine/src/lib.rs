@@ -596,8 +596,10 @@ impl Session {
             let d = self.docs.remove(i);
             self.groups.retain(|g| g.doc != d.uid);
             // A macro being debugged in this workbook ends with it; its group just went.
-            if self.macro_debug.as_ref().is_some_and(|m| m.doc == d.uid) {
-                self.macro_debug = None;
+            if self.macro_debug.as_ref().is_some_and(|m| m.doc == d.uid)
+                && let Some(dbg) = self.macro_debug.take()
+            {
+                self.prefs.default_zoom = dbg.rollback_default_zoom();
             }
             self.windows.retain(|w| w.doc_uid != d.uid);
             if self.active_window.is_some_and(|w| self.window(w).is_none()) {
@@ -696,7 +698,8 @@ impl Session {
         }
         // Independent preference commands during a paused debug run must survive
         // a later macro rollback. Steps execute with the debugger's machine out.
-        let external_prefs = (id != "macro.debug" && self.macro_debug.as_ref().is_some_and(|d| !d.stepping())).then(|| self.prefs.clone());
+        let external_zoom =
+            (self.depth == 0 && id != "macro.debug" && self.macro_debug.as_ref().is_some_and(|d| !d.stepping())).then_some(self.prefs.default_zoom);
         let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
         // A dry run inside this command that a panic cuts short leaves journaling paused and its
         // touch log open; the panic branch puts both back.
@@ -893,8 +896,8 @@ impl Session {
         } else if let Some(uid) = doc_uid {
             self.bound_tail(uid);
         }
-        if let Some(before_prefs) = external_prefs {
-            macros::debug::note_external_prefs(self, &before_prefs, id, &params, result.is_ok());
+        if let Some(before_zoom) = external_zoom {
+            macros::debug::note_external_zoom(self, before_zoom, id, &params, result.is_ok());
         }
         result
     }
