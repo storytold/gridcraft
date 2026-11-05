@@ -103,6 +103,8 @@ struct AggregateData {
     paths: Vec<ProbePath>,
 }
 
+/// Counts one source record: skips it when a value filter dropped it or a label filter hides it,
+/// interns its row and column items and adds its values to every subtotal it belongs to.
 fn aggregate_record(
     input: &AggregateInput<'_>,
     data: &mut AggregateData,

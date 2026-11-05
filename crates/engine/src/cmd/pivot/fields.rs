@@ -438,6 +438,8 @@ pub(super) fn remove_field(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// `pivot.moveField`: reorders a field within its area, or moves it to another (keeping an axis
+/// field's sort, grouping and filters when it goes between Rows and Columns), and moves Σ Values.
 pub(super) fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.moveField";
     let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
