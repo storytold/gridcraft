@@ -177,12 +177,13 @@ fn decrypt_message(name: &str, e: gridcraft_xlsx::DecryptError) -> String {
 /// What a text file's reading found ([`open_bytes_text`]); `None` for other formats.
 type TextFound = Option<gridcraft_xlsx::text_layout::TextReport>;
 
-/// Parses bytes that aren't encrypted, then takes the workbook's macros out of their hidden names
-/// and adopts the Python cells they hold (see [`adopt_python`]) within the limits of
-/// [`enforce_python_limits`].
+/// Parses bytes that aren't encrypted, then takes the workbook's macros, and the button actions
+/// xlsx has no place for, out of their hidden names, and adopts the Python cells they hold (see
+/// [`adopt_python`]) within the limits of [`enforce_python_limits`].
 fn open_plain(name: &str, bytes: &[u8], text: &TextOpen) -> Result<(Workbook, Vec<String>, TextFound)> {
     let (mut wb, mut warnings, found) = read_plain(name, bytes, text)?;
     warnings.extend(crate::macros::load(&mut wb));
+    crate::cmd::controls::load_action_names(&mut wb);
     warnings.extend(adopt_python(&mut wb));
     warnings.extend(enforce_python_limits(&mut wb));
     Ok((wb, warnings, found))
@@ -631,9 +632,13 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
     match kind {
         // The extension picks the package kind; only the macro-enabled kinds (.xlsm, .xltm) carry
         // the VBA project, so any other name saves without it, as Excel does.
-        // Macros travel in hidden names.
+        // Macros, and button actions xlsx has no place for, travel in hidden names.
         FileKind::Xlsx => {
             let named = crate::macros::with_names(wb)?;
+            let named = match crate::cmd::controls::with_action_names(named.as_ref().unwrap_or(wb))? {
+                Some(w) => Some(w),
+                None => named,
+            };
             let book = std::path::Path::new(path).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or_default();
             gridcraft_xlsx::write_xlsx_named(named.as_ref().unwrap_or(wb), gridcraft_xlsx::XlsxKind::from_path(path), book)
                 .map_err(|e| EngineError::Other(e.to_string()))
