@@ -170,7 +170,7 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             // Object ids are unique across the workbook (selection and the `{kind, id}` commands
             // rely on it), so the copied objects get fresh ones (free ones, even when a file used
             // the largest id).
-            let count = sh.charts.len() + sh.images.len() + sh.shapes.len() + sh.slicers.len();
+            let count = sh.charts.len() + sh.images.len() + sh.shapes.len() + sh.slicers.len() + sh.controls.len();
             let ids = cx.wb.free_object_ids(count);
             if ids.len() < count {
                 return Err(bad("sheet.move", "no free object ids are left for the copied objects"));
@@ -181,6 +181,7 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             sh.images.iter_mut().for_each(|o| o.id = fresh());
             sh.shapes.iter_mut().for_each(|o| o.id = fresh());
             sh.slicers.iter_mut().for_each(|o| o.id = fresh());
+            sh.controls.iter_mut().for_each(|o| o.id = fresh());
             let at = to.min(n);
             // The copy gets its own copies of the sheet's names, referring to the copy.
             let copies: Vec<gridcraft_model::DefinedName> = cx
