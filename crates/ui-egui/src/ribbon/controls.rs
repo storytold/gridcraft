@@ -80,12 +80,14 @@ pub(super) fn popup_command(forced: bool, clicked: bool) -> Option<egui::SetOpen
     if forced { Some(egui::SetOpenCommand::Bool(true)) } else { clicked.then_some(egui::SetOpenCommand::Toggle) }
 }
 
-/// Per-control state of an [`editable_combo`]: the filter text and highlighted row.
+/// Per-control state of an [`editable_combo`]: the filter text, the highlighted row, and the
+/// item values it last saw (a list can change while its popup is open).
 #[derive(Clone, Default)]
 struct ComboState {
     text: String,
     sel: i32,
     was_open: bool,
+    values: Vec<String>,
 }
 
 /// What the user did with an [`editable_combo`].
@@ -226,13 +228,20 @@ fn combo_popup(
         egui::Popup::open_id(ui.ctx(), popup_id);
     }
     let open_now = egui::Popup::is_id_open(ui.ctx(), popup_id);
-    if open_now && !st.was_open {
-        st.text = String::new();
+    let values: Vec<String> = items.iter().map(|(v, _)| (*v).to_owned()).collect();
+    if open_now && (!st.was_open || st.values != values) {
+        if !st.was_open {
+            st.text = String::new();
+            // The reset lands on the frame AFTER the popup opens, which usually has no input of
+            // its own — without a repaint request the stale filtered list stays on screen.
+            ui.ctx().request_repaint();
+        }
+        // Rematch on a changed list too, not just on open: the font list grows when the
+        // background font scan lands, and a highlight left at its old index would sit on a
+        // different row, so Enter would apply that row instead of the current value.
         st.sel = items.iter().position(|(v, _)| *v == current_value).map(|i| i as i32).unwrap_or(0);
-        // The reset lands on the frame AFTER the popup opens, which usually has no input of
-        // its own — without a repaint request the stale filtered list stays on screen.
-        ui.ctx().request_repaint();
     }
+    st.values = values;
     st.was_open = open_now;
     // Below `under` and as wide as it, or below the anchor itself.
     let mut field = anchor.clone();
