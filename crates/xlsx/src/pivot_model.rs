@@ -1778,14 +1778,16 @@ pub(crate) fn keep_external_pivots(
                 report.warn(format!("PivotTable {} could not be kept: its parts were unreadable or over the part limit", rel.target));
                 continue;
             }
-            // A cache whose records part was not kept keeps a relationship that the save skips, so
-            // the cached rows would vanish without a word.
+            // A cache whose records part was not kept would keep a relationship the save skips, so
+            // the pivot is dropped rather than writing a cache definition with a dangling `r:id`.
             let records_dropped = kept
                 .iter()
                 .find(|part| part.name.eq_ignore_ascii_case(&cache_part))
                 .is_some_and(|cache| cache.rels.iter().any(|r| !r.external && r.rel_type == rel_uri("pivotCacheRecords") && !kept_part(&r.target)));
             if records_dropped {
-                report.warn(format!("PivotTable {} lost its cached rows: its pivotCacheRecords part could not be read", rel.target));
+                kept.truncate(mark);
+                report.warn(format!("PivotTable {} could not be kept: its pivotCacheRecords part could not be read", rel.target));
+                continue;
             }
             kept_caches.insert(crate::package::normalize(&cache_part));
             sheet_links.push((model_index, rel.id.clone(), rel.target.clone()));
