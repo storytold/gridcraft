@@ -152,6 +152,8 @@ impl Language {
         Self::ALL.iter().map(|l| format!("\"{}\"", l.code())).collect::<Vec<_>>().join(separator)
     }
 
+    /// The language a locale tag names, read from its primary subtag: `lv-LV` and `lv_LV.UTF-8` are
+    /// both Latvian. `None` when that language is not supported.
     fn from_tag(tag: &str) -> Option<Self> {
         match tag.trim().split(['-', '_']).next()?.to_ascii_lowercase().as_str() {
             "en" => Some(Self::En),
