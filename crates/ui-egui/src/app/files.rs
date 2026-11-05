@@ -179,6 +179,19 @@ impl SheetApp {
         }
     }
 
+    /// Finishes a running AutoSave and saves any newer edit before the app exits.
+    pub fn autosave_on_exit(&mut self) {
+        self.finish_pending_autosave();
+        if !self.ui.autosave {
+            return;
+        }
+        if let Some(job) = self.session.autosave_job() {
+            let started = crate::monotonic_ms();
+            let result = crate::autosave::run(&job);
+            self.finish_autosave(&job, started, result);
+        }
+    }
+
     /// Flip AutoSave (title-bar switch / Options ▸ Save). Persisted with the other UI
     /// preferences, so it stays as the user left it across restarts (#1901).
     pub fn toggle_autosave(&mut self) {

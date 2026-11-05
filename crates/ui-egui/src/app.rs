@@ -393,8 +393,8 @@ mod autosave_gate_tests {
     }
 
     #[test]
-    fn edits_while_the_worker_writes_stay_unsaved_until_the_next_autosave() {
-        let dir = temp_dir("autosave-worker");
+    fn app_quit_saves_edits_made_during_an_in_flight_autosave() {
+        let dir = temp_dir("autosave-exit");
         let path = dir.join("book.xlsx");
         let mut app = dirty_app(&path);
         app.ui.autosave = true;
@@ -402,15 +402,13 @@ mod autosave_gate_tests {
         frame(&mut app);
         // The user keeps typing while the snapshot is written.
         app.run("cell.set", json!({"cell": "A1", "input": "typed during the save"})).unwrap();
-        app.finish_pending_autosave();
-        assert!(app.session.active().unwrap().is_dirty(), "the newer edit is not in the file yet");
-        let (saved, _) = gridcraft_engine::io::open_bytes("book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(saved.sheet(0).unwrap().value(cell(0, 0)), gridcraft_engine::core::Value::text("unsaved change"));
-        // The next AutoSave writes it.
-        app.grid.last_autosave = monotonic_ms() - 5000.0;
-        frame(&mut app);
-        app.finish_pending_autosave();
+        let ctx = egui::Context::default();
+        crate::control::handle(&mut app, &ctx, "app.quit", &json!({}));
+        assert!(app.allow_close, "app.quit requests exit without an unsaved-work dialog");
+        app.autosave_on_exit();
         assert!(!app.session.active().unwrap().is_dirty());
+        let (saved, _) = gridcraft_engine::io::open_bytes("book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved.sheet(0).unwrap().value(cell(0, 0)), gridcraft_engine::core::Value::text("typed during the save"));
         assert_eq!(app.perf.autosaves, 2);
         std::fs::remove_dir_all(dir).unwrap();
     }
