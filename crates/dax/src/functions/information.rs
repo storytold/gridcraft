@@ -69,7 +69,9 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         "Returns TRUE when the table has a row whose values equal every supplied value, in \
          column order. The IN operator executes this function; comparisons are strict, so \
          BLANK does not match 0.",
-        &["CONTAINSROW ( { \"Red\", \"Blue\" }, Product[Color] )", "CONTAINSROW ( VALUES ( Sales[ProductKey] ), 1 )"],
+        // The first argument is the row to test against, so both examples pair a one-column table
+        // (a constructor, or a table expression) with exactly one scalar value.
+        &["CONTAINSROW ( { \"Red\", \"Blue\" }, \"Red\" )", "CONTAINSROW ( VALUES ( Sales[ProductKey] ), 1 )"],
     ),
     spec(
         "CONTAINSSTRING",

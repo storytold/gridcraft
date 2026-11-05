@@ -309,6 +309,8 @@ fn arity_boundaries_are_enforced() {
     assert_arity_error("CONTAINS ( Product, Product[Color] )");
 
     assert_valid("CONTAINSROW ( Sales, Sales[ProductKey] )");
+    // The documented example pairs a one-column constructor with one value.
+    assert_valid("CONTAINSROW ( { \"Red\", \"Blue\" }, \"Red\" )");
     assert_arity_error("CONTAINSROW ( Sales )");
 
     assert_valid("ISAFTER ( Sales[Year], 2008 )");
