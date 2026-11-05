@@ -391,6 +391,50 @@ fn shared_formula_copies_are_bounded() {
 }
 
 #[test]
+fn a_long_shared_master_expands_into_only_part_of_many_cells() {
+    use gridcraft_core::{CellRef, Value};
+    // About 4,000 characters and 2,000 operands: parseable, but far more than an ordinary
+    // formula cell, so each copy pays for its excess and ten thousand of them exceed the budget.
+    let master = vec![format!("SUM({}1)", "1,".repeat(199)); 10].join("+");
+    let mut rows = format!(r#"<row r="1"><c r="A1"><f t="shared" si="0" ref="A1:A10000">{master}</f><v>1</v></c></row>"#);
+    for r in 2..=10_000 {
+        rows.push_str(&format!(r#"<row r="{r}"><c r="A{r}"><f t="shared" si="0"/><v>7</v></c></row>"#));
+    }
+    let (wb, rep) = read_xlsx(&minimal(&format!("<sheetData>{rows}</sheetData>"), &[], "", "")).unwrap();
+    let cells = &wb.sheets[0].cells;
+    assert!(cells.get(CellRef::new(1, 0)).unwrap().formula.is_some(), "the first dependents still expand");
+    let last = cells.get(CellRef::new(9_999, 0)).unwrap();
+    assert!(last.formula.is_none());
+    assert_eq!(last.value, Value::Number(7.0));
+    assert!(rep.warnings.iter().any(|w| w.contains("expand to too much data")), "{:?}", rep.warnings);
+}
+
+#[test]
+fn many_ordinary_shared_formulas_all_expand() {
+    let mut rows =
+        String::from(r#"<row r="1"><c r="B1"><f t="shared" si="0" ref="B1:B60000">IF(A1>0,SUM(A1:A10)/COUNT(A1:A10),"")</f><v>1</v></c></row>"#);
+    for r in 2..=60_000 {
+        rows.push_str(&format!(r#"<row r="{r}"><c r="B{r}"><f t="shared" si="0"/><v>7</v></c></row>"#));
+    }
+    let (wb, rep) = read_xlsx(&minimal(&format!("<sheetData>{rows}</sheetData>"), &[], "", "")).unwrap();
+    let cells = &wb.sheets[0].cells;
+    assert!(cells.get(gridcraft_core::CellRef::new(59_999, 1)).unwrap().formula.is_some());
+    assert!(!rep.warnings.iter().any(|w| w.contains("shared formula")), "{:?}", rep.warnings);
+}
+
+#[test]
+fn an_unparseable_multibyte_shared_master_gets_no_length_warning() {
+    // 5,001 characters but over 10,000 bytes, and unparseable for another reason (an open string).
+    let master = format!("\"{}", "\u{e9}".repeat(5_000));
+    assert!(master.len() > gridcraft_formula::MAX_FORMULA_LEN && master.chars().count() < gridcraft_formula::MAX_FORMULA_LEN);
+    let rows = format!(
+        r#"<row r="1"><c r="A1"><f t="shared" si="0" ref="A1:A2">{master}</f><v>1</v></c></row><row r="2"><c r="A2"><f t="shared" si="0"/><v>7</v></c></row>"#
+    );
+    let (_, rep) = read_xlsx(&minimal(&format!("<sheetData>{rows}</sheetData>"), &[], "", "")).unwrap();
+    assert!(!rep.warnings.iter().any(|w| w.contains("longer than")), "{:?}", rep.warnings);
+}
+
+#[test]
 fn repeated_column_ranges_have_one_worksheet_work_budget() {
     // 62 * 16,384 = 1,015,808 assignments, while the map holds at most 16,384 columns.
     // This stays small even on the unbounded reader, but exceeds the one-million work cap.

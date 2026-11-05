@@ -31,8 +31,8 @@ struct Shared {
     anchor: CellRef,
     expr: Option<Expr>,
     text: String,
-    /// Approximate bytes one dependent cell costs (its printed text plus its expression tree),
-    /// charged against [`MAX_SHARED_FORMULA_BYTES`].
+    /// Approximate bytes one dependent cell costs (its printed text plus its expression tree);
+    /// what exceeds [`SHARED_FORMULA_FREE_COST`] is charged against [`MAX_SHARED_FORMULA_BYTES`].
     cost: u64,
 }
 
@@ -139,9 +139,14 @@ const MAX_HYPERLINK_CELLS: u64 = 10_000;
 const MAX_HYPERLINK_TARGET: usize = 8_192;
 /// Longest hyperlink ScreenTip kept, in characters (Excel's limit).
 const MAX_TOOLTIP_CHARS: usize = 255;
-/// Budget, per workbook, for shared formulas expanded into their dependent cells: each dependent
-/// costs a copy of the master's text and expression tree.
-pub const MAX_SHARED_FORMULA_BYTES: u64 = 2 << 30;
+/// What a dependent of a shared formula may cost for free: an ordinary formula cell's worth (by
+/// [`shared_cost`], a formula of about 40 operators and operands), so a sheet of many ordinary
+/// shared formulas is never cut short however many cells share them.
+const SHARED_FORMULA_FREE_COST: u64 = 4096;
+/// Budget, per workbook, for what shared formulas cost beyond [`SHARED_FORMULA_FREE_COST`] per
+/// dependent cell: a long master copied into many cells is where the expansion multiplies the
+/// file's bytes, and this bounds it to well within a web build's memory.
+pub const MAX_SHARED_FORMULA_BYTES: u64 = 256 << 20;
 const MAX_COLUMN_ASSIGNMENTS: u64 = 1_000_000;
 /// Most dynamic-array and legacy-array ranges of one sheet.
 const MAX_DYNAMIC_RANGES: usize = 65_536;
@@ -656,14 +661,19 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
                     cx.warn("a shared formula refers to a missing master cell; kept the cached value");
                     return None;
                 };
-                if sh.expr.is_none() && sh.text.len() > gridcraft_formula::MAX_FORMULA_LEN {
+                // The parser's own test: bytes first (cheap), then characters, so a multibyte
+                // master that failed to parse for another reason gets no false length warning.
+                if sh.expr.is_none()
+                    && sh.text.len() > gridcraft_formula::MAX_FORMULA_LEN
+                    && sh.text.chars().count() > gridcraft_formula::MAX_FORMULA_LEN
+                {
                     cx.warn(format!(
                         "a shared formula is longer than {} characters; kept the cached values of the cells that share it",
                         gridcraft_formula::MAX_FORMULA_LEN
                     ));
                     return None;
                 }
-                if !charge(&mut cx.shared_formula_bytes, sh.cost, MAX_SHARED_FORMULA_BYTES) {
+                if !charge(&mut cx.shared_formula_bytes, extra_shared_cost(sh.cost), MAX_SHARED_FORMULA_BYTES) {
                     cx.warn("shared formulas expand to too much data; kept the cached values of the remaining cells that share them");
                     return None;
                 }
@@ -747,6 +757,12 @@ fn shared_cost(text: &str, expr: Option<&Expr>) -> u64 {
     }
     let node = std::mem::size_of::<Expr>() as u64;
     (text.len() as u64).saturating_mul(2).saturating_add(nodes.saturating_mul(node)).saturating_add(64)
+}
+
+/// What one dependent of a shared formula costing `cost` is charged: its cost beyond an ordinary
+/// formula cell's.
+fn extra_shared_cost(cost: u64) -> u64 {
+    cost.saturating_sub(SHARED_FORMULA_FREE_COST)
 }
 
 /// Adds `cost` to `used` when that stays within `cap`; `false` (and `used` unchanged) otherwise.
@@ -839,6 +855,21 @@ mod tests {
         assert!(!charge(&mut used, cost, cap));
         assert_eq!(used, cap);
         assert!(!charge(&mut used, u64::MAX, u64::MAX));
+    }
+
+    #[test]
+    fn ordinary_shared_formulas_are_free_and_long_ones_pay_their_excess() {
+        let text = r#"IF(AND(A1>0,B1<>""),VLOOKUP(C1,Sheet2!$A$1:$D$500,4,FALSE)*SUM(D1:D10)/COUNT(D1:D10),IFERROR(E1/F1,0))"#;
+        let expr = gridcraft_formula::parse(text).ok();
+        assert!(expr.is_some());
+        assert_eq!(extra_shared_cost(shared_cost(text, expr.as_ref())), 0, "an ordinary formula costs nothing extra");
+        let long = vec![format!("SUM({}1)", "1,".repeat(199)); 10].join("+");
+        let expr = gridcraft_formula::parse(&long).ok();
+        assert!(expr.is_some());
+        let cost = shared_cost(&long, expr.as_ref());
+        assert_eq!(extra_shared_cost(cost), cost - SHARED_FORMULA_FREE_COST);
+        // A few thousand copies of a long master no longer fit the budget.
+        assert!(extra_shared_cost(cost).saturating_mul(10_000) > MAX_SHARED_FORMULA_BYTES);
     }
 
     #[test]
