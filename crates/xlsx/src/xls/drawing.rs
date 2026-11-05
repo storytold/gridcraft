@@ -147,7 +147,13 @@ fn dib_as_bmp(dib: &[u8]) -> Blip {
     } else {
         let bits = u16::from_le_bytes(dib.get(14..16)?.try_into().ok()?);
         let used = u32_at(32)?;
-        let colors = if used > 0 { used.min(256) } else if bits <= 8 { 1 << bits } else { 0 };
+        let colors = if used > 0 {
+            used.min(256)
+        } else if bits <= 8 {
+            1 << bits
+        } else {
+            0
+        };
         // BI_BITFIELDS with a 40-byte header keeps its three masks after it.
         let masks = if header == 40 && u32_at(16)? == 3 { 12 } else { 0 };
         colors * 4 + masks

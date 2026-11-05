@@ -665,7 +665,9 @@ fn worksheet(
     // Comments: a Note names its text's object, whose TxO came earlier in the substream.
     for (cell, object, author, visible) in std::mem::take(&mut st.notes) {
         let text = st.note_texts.get(&object).cloned().unwrap_or_default();
-        st.sheet.comments.insert(cell, Comment { author, text, replies: vec![], threaded: false, resolved: false, visible, dates: vec![], note_box: None });
+        st.sheet
+            .comments
+            .insert(cell, Comment { author, text, replies: vec![], threaded: false, resolved: false, visible, dates: vec![], note_box: None });
     }
     if st.dropped > 0 {
         report.warn(format!("{} cells outside the grid were skipped.", st.dropped));
@@ -681,7 +683,13 @@ const WINDOW2_MIN_LEN: usize = 10;
 
 /// The drawing-layer records of a sheet: comment objects (Obj, TxO, Note) and the drawing
 /// stream (MsoDrawing) that places pictures.
-fn object_record(rec: &Record<'_>, c: &mut Cursor<'_, '_>, st: &mut SheetState<'_>, budget: &mut Budget, report: &mut ReadReport) -> Result<(), IoError> {
+fn object_record(
+    rec: &Record<'_>,
+    c: &mut Cursor<'_, '_>,
+    st: &mut SheetState<'_>,
+    budget: &mut Budget,
+    report: &mut ReadReport,
+) -> Result<(), IoError> {
     match rec.id {
         // Obj: a comment's drawing object (FtCmo first: ft 0x15, cb, object type, id).
         0x005D => {

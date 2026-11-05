@@ -815,7 +815,11 @@ fn reads_pictures() {
         let a: Vec<u8> = std::iter::once(0u16).chain(anchor).flat_map(u16::to_le_bytes).collect();
         od(0x000F, 0xF004, &cat(&[&opt, &od(0, 0xF010, &a)]))
     };
-    let dg = od(0x000F, 0xF002, &od(0x000F, 0xF003, &cat(&[&shape(1, [1, 0, 1, 0, 3, 0, 3, 0]), &shape(2, [5, 0, 5, 0, 6, 0, 6, 0]), &shape(3, [7, 0, 7, 0, 8, 0, 8, 0])])));
+    let dg = od(
+        0x000F,
+        0xF002,
+        &od(0x000F, 0xF003, &cat(&[&shape(1, [1, 0, 1, 0, 3, 0, 3, 0]), &shape(2, [5, 0, 5, 0, 6, 0, 6, 0]), &shape(3, [7, 0, 7, 0, 8, 0, 8, 0])])),
+    );
     let xf = rec(0x00E0, &cat(&[&u16s(&[0, 0, 0]), &[0; 14]]));
     let globals = |pos: u32| {
         cat(&[
