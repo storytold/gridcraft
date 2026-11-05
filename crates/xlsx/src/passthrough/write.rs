@@ -12,6 +12,12 @@ pub struct KeptOut {
     vml_blocks: u32,
     /// Package-root relationships (type, target, external), added when `_rels/.rels` is written.
     root: Vec<(String, String, bool)>,
+    /// Written name of every kept part claimed so far, package-wide: a part's relationships may
+    /// point at a part another owner holds (a sheet's PivotTable points at the workbook's cache).
+    names: NameMap,
+    /// Written names already emitted, package-wide: a shared part can be kept by several sheets,
+    /// and the ZIP entry (and its `Override`) must appear once.
+    written: HashSet<String>,
 }
 
 impl KeptOut {
@@ -37,7 +43,7 @@ impl KeptOut {
 
     /// A part name for a kept part: its original name when that can't collide with anything
     /// written, otherwise a fresh one in the same folder.
-    pub(super) fn claim(&mut self, original: &str) -> String {
+    pub(crate) fn claim(&mut self, original: &str) -> String {
         let lower = original.to_ascii_lowercase();
         let own = OWN_DIRS.iter().any(|d| lower.starts_with(d));
         if own && self.used.insert(lower) {
@@ -86,17 +92,29 @@ pub(super) fn part_rels_xml(rels: &[PreservedRel], names: &NameMap) -> String {
 }
 
 pub(super) fn write_parts(out: &mut Out, parts: &[PreservedPart]) -> NameMap {
-    let mut names = NameMap::new();
     for p in parts {
-        names.entry(normalize(&p.name)).or_insert_with(|| out.kept.claim(&p.name));
+        if !out.kept.names.contains_key(&normalize(&p.name)) {
+            let new = out.kept.claim(&p.name);
+            out.kept.names.insert(normalize(&p.name), new);
+        }
     }
-    let mut written = HashSet::new();
+    let names = out.kept.names.clone();
     for p in parts {
         let Some(new) = names.get(&normalize(&p.name)).cloned() else { continue };
-        if !written.insert(new.clone()) {
+        if !out.kept.written.insert(new.clone()) {
             continue;
         }
-        out.part(&new, Some(&p.content_type), p.data.to_vec());
+        // The model database is found by extension, as Excel writes it (`Default
+        // Extension="data"`). Another `.data` part with a different content type keeps its own
+        // `Override`, because only one default per extension exists.
+        if p.content_type.eq_ignore_ascii_case(crate::pivot_model::CT_MODEL_DATA)
+            && new.to_ascii_lowercase().ends_with(".data")
+            && out.default_type("data", &p.content_type)
+        {
+            out.part(&new, None, p.data.to_vec());
+        } else {
+            out.part(&new, Some(&p.content_type), p.data.to_vec());
+        }
         if !p.rels.is_empty() {
             out.part(&rels_part_name(&new), None, part_rels_xml(&p.rels, &names).into_bytes());
         }
@@ -162,9 +180,18 @@ pub struct WorkbookKept {
     /// Workbook XML elements that go right after `<sheets>` (`<externalReferences>`).
     pub elements: String,
     sheets: Vec<KeptSheet>,
+    /// Kept relationship id → the id it was written with.
+    ids: HashMap<String, String>,
 }
 
 impl WorkbookKept {
+    /// The workbook's kept elements of `slot` whose `r:id`s point at kept parts (`pivotCaches`),
+    /// with those ids rewritten to the written ones. Unlike [`workbook_elements`], which is for
+    /// elements that refer to no part.
+    pub fn element(&self, wb: &Workbook, slot: &str) -> String {
+        let Some(p) = wb.preserved.as_deref() else { return String::new() };
+        p.elements.iter().filter(|e| e.slot == slot).filter_map(|e| remap(&e.xml, &self.ids)).collect()
+    }
     /// Where the model's sheet `i` is in the file's sheet list: chart sheets come between worksheets.
     pub fn file_index(&self, i: usize) -> usize {
         i + self.sheets.iter().filter(|s| s.before <= i).count()
@@ -314,6 +341,7 @@ pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> Workb
                 })
             })
             .collect(),
+        ids,
     }
 }
 
