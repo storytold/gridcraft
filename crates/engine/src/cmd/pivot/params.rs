@@ -44,6 +44,7 @@ pub(super) fn func_name(f: PivotFunc) -> &'static str {
     }
 }
 
+/// The Show Values As mode a `showAs` parameter names (ignoring case; "none" is Normal).
 pub(super) fn show_as_param(v: &str) -> Option<PivotShowAs> {
     if v.eq_ignore_ascii_case("none") {
         return Some(PivotShowAs::Normal);
@@ -51,6 +52,7 @@ pub(super) fn show_as_param(v: &str) -> Option<PivotShowAs> {
     PivotShowAs::ALL.into_iter().find(|mode| show_as_name(*mode).eq_ignore_ascii_case(v))
 }
 
+/// The `showAs` parameter name of a mode, as `pivot.fields` reports it.
 pub(super) fn show_as_name(v: PivotShowAs) -> &'static str {
     match v {
         PivotShowAs::Normal => "normal",
@@ -73,6 +75,7 @@ pub(super) fn show_as_name(v: PivotShowAs) -> &'static str {
 pub(super) const BASE_ITEM_PREVIOUS: &str = "(previous)";
 pub(super) const BASE_ITEM_NEXT: &str = "(next)";
 
+/// The `baseItem` parameter text of a base item: "(previous)", "(next)" or its label.
 pub(super) fn base_item_name(item: &PivotBaseItem) -> &str {
     match item {
         PivotBaseItem::Previous => BASE_ITEM_PREVIOUS,

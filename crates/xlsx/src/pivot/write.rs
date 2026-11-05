@@ -616,6 +616,8 @@ struct PivotTableLayout<'a> {
     values: Vec<(usize, &'a PivotValue)>,
 }
 
+/// The `pivotTableDefinition` part of a PivotTable: location, fields, areas, data fields with
+/// their Show Values As settings, style info.
 fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn Fn(&str) -> Option<u32>) -> String {
     let find_db = |name: &str| c.fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
     let row_fields: Vec<usize> = c.axis_map.iter().take(pt.rows.len()).filter_map(|x| *x).collect();
@@ -862,6 +864,8 @@ fn base_item_index(c: &Cache, field: usize, item: &PivotBaseItem) -> u32 {
     }
 }
 
+/// `<dataFields>`: each value field's caption (made unique), function, Show Values As mode with its
+/// base field and item, and number format.
 fn write_data_fields(s: &mut String, pt: &PivotTable, c: &Cache, layout: &PivotTableLayout<'_>, fmt_id: &dyn Fn(&str) -> Option<u32>) {
     if layout.values.is_empty() {
         return;

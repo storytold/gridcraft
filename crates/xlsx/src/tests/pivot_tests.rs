@@ -844,8 +844,10 @@ fn show_values_as_modes_round_trip_with_their_base() {
     let got = &back.sheets.iter().find_map(|sh| sh.pivots.first()).unwrap().values;
     let mut want = show_as_values();
     for v in &mut want {
-        // The first row field is the default base field: it reads back as unset.
-        if v.base_field.as_deref() == Some("Region") || !v.show_as.uses_base_field() {
+        // The first row field is the default base field: it reads back as unset, unless a named
+        // base item pins it.
+        let named = matches!(v.base_item, PivotBaseItem::Named(_)) && v.show_as.uses_base_item();
+        if (v.base_field.as_deref() == Some("Region") && !named) || !v.show_as.uses_base_field() {
             v.base_field = None;
         }
         if v.base_item == PivotBaseItem::Named("Gone".into()) {
@@ -868,9 +870,12 @@ fn base_fields_and_items_are_read_from_hand_written_tables() {
         let v = wb.sheet(0).unwrap().pivots[0].values[0].clone();
         (v.show_as, v.base_field, v.base_item, report.warnings)
     };
-    // K, the only row field, is the default base field: it reads back as unset.
+    // K, the only row field, is the default base field, but a named base item keeps its field.
+    let k = Some("K".to_string());
     let (mode, field, item, _) = read(r#"<dataField name="A" fld="1" showDataAs="difference" baseField="0" baseItem="0"/>"#);
-    assert_eq!((mode, field, item), (PivotShowAs::DifferenceFrom, None, PivotBaseItem::Named("x".into())));
+    assert_eq!((mode, field, item), (PivotShowAs::DifferenceFrom, k.clone(), PivotBaseItem::Named("x".into())));
+    let (_, field, item, _) = read(r#"<dataField name="A" fld="1" showDataAs="difference" baseField="0" baseItem="1048829"/>"#);
+    assert_eq!((field, item), (None, PivotBaseItem::Next), "with (next) the default field reads back as unset");
     let (_, _, item, _) = read(r#"<dataField name="A" fld="1" showDataAs="percent" baseField="0" baseItem="1048829"/>"#);
     assert_eq!(item, PivotBaseItem::Next);
     let (_, _, item, _) = read(r#"<dataField name="A" fld="1" showDataAs="percentDiff" baseField="0" baseItem="1048828"/>"#);

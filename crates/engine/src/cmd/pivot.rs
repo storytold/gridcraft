@@ -31,6 +31,7 @@ use create::{insert_pivot, options, show_details, summarize_table};
 use fields::{add_field, calculated_field, fields, list, move_field, remove_field, value_settings};
 use layout::{change_source, collapse, delete, filter, grand_totals, group, layout, refresh, refresh_all, sort};
 
+/// The PivotTable commands: ids, labels, ribbon places and the parameters each one takes.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(

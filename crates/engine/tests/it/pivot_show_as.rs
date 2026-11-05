@@ -424,6 +424,30 @@ fn base_field_and_item_are_validated_and_reported() {
 }
 
 #[test]
+fn a_named_base_item_pins_its_field() {
+    // #3394 review: an item named against the default base field kept no field, so a new first
+    // row field turned "East" into an item of the wrong field and emptied every cell.
+    let mut s = sales();
+    pivot(&mut s, &["Region"], &[]);
+    settings(&mut s, json!({"showAs": "differenceFrom", "baseItem": "East"}));
+    assert_eq!(value_json(&mut s)["baseField"], "Region");
+    s.execute("pivot.addField", json!({"field": "Product", "area": "rows", "position": 0})).unwrap();
+    assert_eq!(value_json(&mut s)["baseField"], "Region");
+    close(at(&s, &["Apples", "West"], None), 50.0 - 160.0);
+    empty(at(&s, &["Apples", "East"], None));
+    // (previous) and (next) don't depend on a field: they keep following the default.
+    settings(&mut s, json!({"baseField": null, "baseItem": "(previous)"}));
+    assert_eq!(value_json(&mut s)["baseField"], Json::Null);
+    // The pinned field survives a file round trip.
+    settings(&mut s, json!({"baseItem": "Pears"}));
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let mut back = Session::new();
+    back.execute("file.open", json!({"name": "p.xlsx", "base64": saved["base64"]})).unwrap();
+    let v = back.execute("pivot.fields", json!({"pivot": "PivotTable1"})).unwrap()["values"][0].clone();
+    assert_eq!((v["baseField"].clone(), v["baseItem"].clone()), (json!("Product"), json!("Pears")));
+}
+
+#[test]
 fn a_base_field_that_leaves_the_report_is_forgotten() {
     let mut s = sales();
     pivot(&mut s, &["Region", "Product"], &[]);

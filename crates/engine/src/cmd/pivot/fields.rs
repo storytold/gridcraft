@@ -116,6 +116,8 @@ pub(super) struct AreaPlacement<'a> {
     pub position: Option<usize>,
 }
 
+/// Places a field in an area (an axis field leaves the other axis first; a value field gets a
+/// unique caption); refuses what Excel refuses, such as a calculated field outside Values.
 pub(super) fn add_to_area(pt: &mut PivotTable, src: &pv::Source, placement: AreaPlacement<'_>) -> Result<()> {
     let AreaPlacement { cmd, field, area, func, name, position } = placement;
     let is_calc = src.col(field).is_none() && calc_field(pt, field).is_some();
@@ -509,13 +511,22 @@ fn axis_field_name(cmd: &str, pt: &PivotTable, name: &str) -> Result<String> {
 
 /// A `baseItem` parameter: "(previous)", "(next)", or the label of an item of the base field
 /// (`base_field`, else the first row field, else the first column field, as the report uses).
-fn base_item_param(cmd: &str, pt: &PivotTable, src: &pv::Source, wb: &Workbook, base_field: Option<&str>, text: &str) -> Result<PivotBaseItem> {
+/// A label comes back with the field it belongs to, so the caller can pin that field: a later
+/// layout change must not move the label onto another field.
+fn base_item_param(
+    cmd: &str,
+    pt: &PivotTable,
+    src: &pv::Source,
+    wb: &Workbook,
+    base_field: Option<&str>,
+    text: &str,
+) -> Result<(PivotBaseItem, Option<String>)> {
     let text = text.trim();
     if text.eq_ignore_ascii_case(BASE_ITEM_PREVIOUS) {
-        return Ok(PivotBaseItem::Previous);
+        return Ok((PivotBaseItem::Previous, None));
     }
     if text.eq_ignore_ascii_case(BASE_ITEM_NEXT) {
-        return Ok(PivotBaseItem::Next);
+        return Ok((PivotBaseItem::Next, None));
     }
     let axes = || pt.rows.iter().chain(pt.columns.iter()).filter(|f| src.col(&f.source_col).is_some());
     let field = match base_field {
@@ -527,10 +538,12 @@ fn base_item_param(cmd: &str, pt: &PivotTable, src: &pv::Source, wb: &Workbook, 
     pv::distinct_labels(wb, src, column, field.date_group, usize::MAX)
         .into_iter()
         .find(|label| label.eq_ignore_ascii_case(text))
-        .map(PivotBaseItem::Named)
+        .map(|label| (PivotBaseItem::Named(label), Some(field.source_col.clone())))
         .ok_or_else(|| bad(cmd, format!("`{text}` isn't an item of `{}`", field.source_col)))
 }
 
+/// `pivot.valueSettings`: a value field's function, caption, Show Values As mode with its base
+/// field and item, and number format.
 pub(super) fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.valueSettings";
     let field = str_param(p, "field").map(str::to_string);
@@ -603,10 +616,14 @@ pub(super) fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
             v.base_field = field;
         }
         if let Some(item) = &base_item {
-            v.base_item = match item {
-                None => PivotBaseItem::Previous,
+            let (item, field) = match item {
+                None => (PivotBaseItem::Previous, None),
                 Some(text) => base_item_param(C, pt, src, wb, v.base_field.as_deref(), text)?,
             };
+            if field.is_some() {
+                v.base_field = field;
+            }
+            v.base_item = item;
         }
         match &fmt {
             Some(Json::String(f)) if !f.is_empty() && f.len() <= 255 => v.number_format = Some(f.clone()),

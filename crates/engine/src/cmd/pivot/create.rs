@@ -327,6 +327,7 @@ pub(super) fn summarize_table(s: &mut Session, p: &Json) -> Result<Json> {
 
 // ---------------------------------------------------------------- queries
 
+/// A PivotTable as `pivot.list` and `pivot.fields` report it: its areas, each field's settings and its options.
 pub(super) fn pivot_json(wb: &Workbook, si: usize, pt: &PivotTable) -> Json {
     json!({
         "id": pt.id,

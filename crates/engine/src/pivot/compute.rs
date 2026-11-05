@@ -342,6 +342,9 @@ fn data_columns(specs: &[ColSpec], has_column_fields: bool, on_rows: bool, value
     Ok(columns)
 }
 
+/// Computes the report grid from the source records: filters, aggregates, lays out the axes,
+/// then writes headers, labels and the value cells (through Show Values As). `probe` collects what
+/// Show Details needs from the same computation.
 pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut probe: Option<&mut Probe>) -> Result<Output, String> {
     let fmt_of = |c: usize| src.formats.get(c).cloned().unwrap_or_else(|| "General".into());
     let rows: Vec<(usize, &PivotField)> = pt.rows.iter().filter_map(|f| src.col(&f.source_col).map(|c| (c, f))).collect();

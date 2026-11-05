@@ -214,6 +214,8 @@ fn field_ref(cx: &mut Ctx<'_>, cache: &CacheIn, i: usize) -> Option<(String, Piv
     }
 }
 
+/// Reads one PivotTable definition into the model, against its cache; `None` (with a warning)
+/// when the table can't be used, such as one without a valid location.
 fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<PivotTable> {
     let mut pt = PivotTable { id, ..PivotTable::default() };
     if let Some(n) = x.attr("name").filter(|n| !n.trim().is_empty()) {
@@ -375,8 +377,10 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
             };
             // A file always names a base field; the default one (the first row field, else the
             // first column field) reads back as unset, so the report keeps following its first field.
+            // A named base item keeps its field: the label belongs to that field, wherever it moves.
             let default_base = pt.rows.first().or(pt.columns.first()).map(|f| f.source_col.as_str());
-            let base_field = base.map(|(_, name)| name).filter(|name| !default_base.is_some_and(|d| same(d, name)));
+            let named = matches!(base_item, PivotBaseItem::Named(_));
+            let base_field = base.map(|(_, name)| name).filter(|name| named || !default_base.is_some_and(|d| same(d, name)));
             let number_format = d
                 .attr_u32("numFmtId")
                 .filter(|id| *id != 0)

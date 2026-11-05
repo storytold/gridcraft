@@ -90,6 +90,7 @@ pub(super) struct CellAt<'a> {
 }
 
 impl CellAt<'_> {
+    /// The cell's item path on an axis.
     fn path(&self, axis: Axis) -> &[u32] {
         match axis {
             Axis::Rows => self.row,
@@ -149,6 +150,7 @@ pub(super) struct ShowAs<'a> {
 }
 
 impl<'a> ShowAs<'a> {
+    /// One per report, over its value lookup and both axes; runs are built as cells need them.
     pub(super) fn new(lookup: &'a ValueLookup<'a>, rows: AxisItems<'a>, cols: AxisItems<'a>) -> Self {
         ShowAs { lookup, rows, cols, runs: RefCell::default() }
     }
@@ -183,6 +185,7 @@ impl<'a> ShowAs<'a> {
         }
     }
 
+    /// The items and item tree of an axis.
     fn axis(&self, axis: Axis) -> &AxisItems<'_> {
         match axis {
             Axis::Rows => &self.rows,
@@ -209,6 +212,8 @@ impl<'a> ShowAs<'a> {
         Some((run, index))
     }
 
+    /// Reads the run's totals once: each sibling's number, the running totals, the distinct values
+    /// for ranks, and the named base item when the value field has one.
     fn build_run(&self, value: &PivotValue, base: BaseField, cell: CellAt<'_>, siblings: &[u32]) -> Run {
         let numbers: Vec<Option<f64>> = siblings
             .iter()
