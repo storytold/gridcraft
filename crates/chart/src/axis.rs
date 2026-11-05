@@ -72,6 +72,55 @@ pub fn nice_scale(lo: f64, hi: f64, force_zero: bool) -> Scale {
     if lo < 0.0 {
         lo -= range * 0.05;
     }
+    nice_steps(lo, hi)
+}
+
+/// Excel's automatic value axis for column, bar, line, area and combo charts, as observed in
+/// Excel for Windows (Microsoft 365) with synthetic workbooks (#1688). Column and bar charts are
+/// not forced to include 0. When every value is at least ⅚ of the largest one (95…100, or
+/// 84…100), the axis leaves 0 out and starts half the data range below the smallest value,
+/// rounded down to a step: 95…100 starts at 92, 84…100 at 75, and a stacked bar of start dates
+/// 45200… plus a few days at 45180. 83…100 starts at 0. All-negative data mirrors this at the
+/// top. `lo`/`hi` are the plotted values (stacked: the stacked positions, not the 0 a stack starts
+/// from). The steps are [`nice_steps`]', which can differ from Excel's (95…100: Excel 92–101 by 1).
+pub fn value_axis_scale(lo: f64, hi: f64) -> Scale {
+    let (mut lo, mut hi) = (clean(lo), clean(hi));
+    if lo > hi {
+        std::mem::swap(&mut lo, &mut hi);
+    }
+    if lo == hi {
+        // One value: include 0, as `nice_scale` does.
+        lo = lo.min(0.0);
+        hi = hi.max(0.0);
+        if lo == hi {
+            return Scale { min: 0.0, max: 1.0, step: 0.2 };
+        }
+    }
+    let span = hi - lo;
+    let (padded_low, padded_high) = (lo > 0.0 && lo >= hi * 5.0 / 6.0, hi < 0.0 && hi <= lo * 5.0 / 6.0);
+    if padded_low {
+        lo -= span / 2.0;
+    } else if padded_high {
+        hi += span / 2.0;
+    } else {
+        lo = lo.min(0.0);
+        hi = hi.max(0.0);
+    }
+    // 5% headroom past the end away from 0, of the data range when 0 is left out (95…100 → 100.25,
+    // so 101) and of the whole axis otherwise (0…100 → 105, so 120), as `nice_scale` adds it.
+    let room = if padded_low || padded_high { span } else { hi - lo };
+    if hi > 0.0 {
+        hi += room * 0.05;
+    }
+    if lo < 0.0 {
+        lo -= room * 0.05;
+    }
+    nice_steps(lo, hi)
+}
+
+/// Steps of 1, 2 or 5 × 10ⁿ giving at most 8 intervals over `lo..=hi`, and the bounds rounded
+/// out to them.
+fn nice_steps(lo: f64, hi: f64) -> Scale {
     let range = hi - lo;
     if !range.is_finite() || range <= 0.0 {
         return Scale { min: 0.0, max: 1.0, step: 0.2 };
