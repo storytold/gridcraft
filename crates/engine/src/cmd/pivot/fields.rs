@@ -133,7 +133,7 @@ pub(super) fn add_to_area(pt: &mut PivotTable, src: &pv::Source, placement: Area
             let existing = take_from_axes(pt, &field).unwrap_or_else(|| PivotField { source_col: field.clone(), ..Default::default() });
             // A report filter that selects nothing in particular goes away; a selection stays
             // as the field's hidden items.
-            pt.filters.retain(|f| !(f.source_col.eq_ignore_ascii_case(&field) && f.selected.is_none()));
+            pt.filters.retain(|f| !(f.source_col.eq_ignore_ascii_case(&field) && f.is_inactive()));
             insert_axis_field(pt, area == "rows", existing, position);
         }
         "values" => {
@@ -160,8 +160,9 @@ pub(super) fn add_to_area(pt: &mut PivotTable, src: &pv::Source, placement: Area
             take_from_axes(pt, &field);
             let existing = pt.filters.iter().position(|f| f.source_col.eq_ignore_ascii_case(&field));
             let entry = match existing {
-                Some(i) => pt.filters.remove(i),
-                None => PivotFilter { source_col: field, selected: None },
+                // A report filter selects items; a value filter belongs to a row or column field.
+                Some(i) => PivotFilter { value: None, ..pt.filters.remove(i) },
+                None => PivotFilter { source_col: field, ..PivotFilter::default() },
             };
             let at = position.unwrap_or(pt.filters.len()).min(pt.filters.len());
             pt.filters.insert(at, entry);
@@ -207,7 +208,8 @@ fn remove_from_area(cmd: &str, pt: &mut PivotTable, field: &str, area: &str) -> 
 
 /// Drops references to fields that left the report: a value field's base field that is no longer
 /// in Rows or Columns (the default base field applies, and a base item named after it goes too),
-/// and an axis field's sort by a value field no longer in Values (it sorts by label again).
+/// an axis field's sort by a value field no longer in Values (it sorts by label again), and a
+/// value filter whose value field or row/column field is gone.
 pub(super) fn forget_stale_references(pt: &mut PivotTable) {
     let axes: Vec<String> = pt.rows.iter().chain(pt.columns.iter()).map(|f| f.source_col.to_ascii_lowercase()).collect();
     for value in &mut pt.values {
@@ -224,6 +226,14 @@ pub(super) fn forget_stale_references(pt: &mut PivotTable) {
             field.sort_by = None;
         }
     }
+    // A value filter measures by a value field of the report, on a row or column field.
+    for filter in &mut pt.filters {
+        let measured = filter.value.as_ref().is_some_and(|vf| values.contains(&vf.by.to_ascii_lowercase()));
+        if !measured || !axes.contains(&filter.source_col.to_ascii_lowercase()) {
+            filter.value = None;
+        }
+    }
+    pt.filters.retain(|f| !(f.is_inactive() && axes.contains(&f.source_col.to_ascii_lowercase())));
 }
 
 // ---------------------------------------------------------------- shared update
@@ -486,7 +496,7 @@ pub(super) fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
             if let (Some(k), Some(slot)) = (kept, list.iter_mut().find(|f| f.source_col.eq_ignore_ascii_case(&src_field))) {
                 *slot = k;
             }
-            if let Some(h) = hidden.filter(|h| h.selected.is_some())
+            if let Some(h) = hidden.filter(|h| !h.is_inactive())
                 && !pt.filters.iter().any(|f| f.source_col.eq_ignore_ascii_case(&src_field))
             {
                 pt.filters.push(h);
@@ -640,10 +650,15 @@ pub(super) fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
             None => {}
         }
         let name = v.name.clone();
-        // Fields sorted by this value field follow a new caption.
+        // Sorts and value filters by this value field follow a new caption.
         for field in pt.rows.iter_mut().chain(pt.columns.iter_mut()) {
             if field.sort_by.as_ref().is_some_and(|by| by.eq_ignore_ascii_case(&cur.name)) {
                 field.sort_by = Some(name.clone());
+            }
+        }
+        for vf in pt.filters.iter_mut().filter_map(|f| f.value.as_mut()) {
+            if vf.by.eq_ignore_ascii_case(&cur.name) {
+                vf.by = name.clone();
             }
         }
         if let Some(slot) = pt.values.get_mut(i) {

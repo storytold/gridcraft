@@ -183,13 +183,69 @@ pub struct PivotValue {
     pub number_format: Option<String>,
 }
 
-/// A report filter (or, for a field also in Rows/Columns, its hidden-items filter).
+/// A report filter (or, for a field also in Rows/Columns, its hidden-items filter and value filter).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PivotFilter {
     pub source_col: String,
     /// Item labels shown; `None` = all.
     pub selected: Option<Vec<String>>,
+    /// A row or column field's value filter: it keeps the items whose total passes (applied to the
+    /// items `selected` shows).
+    pub value: Option<PivotValueFilter>,
+}
+
+impl PivotFilter {
+    /// Whether the filter hides nothing (so it can go away).
+    pub fn is_inactive(&self) -> bool {
+        self.selected.is_none() && self.value.is_none()
+    }
+}
+
+/// A value filter (Value Filters, Top 10): keeps a field's items by their total of value field
+/// `by` (its caption), within each item of the fields outside it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PivotValueFilter {
+    pub by: String,
+    pub rule: PivotValueRule,
+}
+
+/// Which items a value filter keeps, by their totals. Items without a numeric total (no records, an
+/// error) never pass.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum PivotValueRule {
+    /// The largest items: `count` of them, or those making up `count` percent or a sum of
+    /// `count` of the total.
+    Top {
+        count: f64,
+        of: PivotTopOf,
+    },
+    /// The smallest items, the same way.
+    Bottom {
+        count: f64,
+        of: PivotTopOf,
+    },
+    Equal(f64),
+    NotEqual(f64),
+    Greater(f64),
+    GreaterOrEqual(f64),
+    Less(f64),
+    LessOrEqual(f64),
+    /// Between the two bounds, both included (in either order).
+    Between(f64, f64),
+    NotBetween(f64, f64),
+}
+
+/// What a Top/Bottom value filter counts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PivotTopOf {
+    /// `count` items (ties at the cut all stay).
+    #[default]
+    Items,
+    /// The items whose totals add up to `count` percent of the field's total.
+    Percent,
+    /// The items whose totals add up to `count`.
+    Sum,
 }
 
 /// A PivotTable: its definition plus where its output was last written. The output itself is

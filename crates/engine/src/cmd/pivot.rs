@@ -9,7 +9,7 @@ use std::sync::Arc;
 use gridcraft_core::{CellRef, RangeRef};
 use gridcraft_model::{
     Anchor, Cell, Chart, ChartKind, LegendPos, NumFmt, PivotBaseItem, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc,
-    PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue, Sheet, StyleId, Workbook,
+    PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotTopOf, PivotValue, PivotValueFilter, PivotValueRule, Sheet, StyleId, Workbook,
 };
 use serde_json::{Value as Json, json};
 
@@ -29,7 +29,7 @@ mod params;
 use charts::{insert_pivot_chart, recommended};
 use create::{insert_pivot, options, show_details, summarize_table};
 use fields::{add_field, calculated_field, fields, list, move_field, remove_field, value_settings};
-use layout::{change_source, collapse, delete, filter, grand_totals, group, layout, refresh, refresh_all, sort};
+use layout::{change_source, collapse, delete, filter, grand_totals, group, layout, refresh, refresh_all, sort, value_filter};
 
 /// The PivotTable commands: ids, labels, ribbon places and the parameters each one takes.
 pub fn specs() -> Vec<CommandSpec> {
@@ -119,6 +119,15 @@ pub fn specs() -> Vec<CommandSpec> {
             value_settings
         ),
         cmd!("pivot.filter", "Filter Items", [], None, "{pivot?, field, selected: [\"East\", ..] | null (all), replace?}", has_doc, filter),
+        cmd!(
+            "pivot.valueFilter",
+            "Value Filters",
+            [],
+            None,
+            "{pivot?, field: row or column field, rule: top|bottom|equal|notEqual|greater|greaterOrEqual|less|lessOrEqual|between|notBetween|none, by?: value field (default: the first), count?: 10 (top/bottom), of?: items|percent|sum (top/bottom), value?, value2? (between), replace?} keeps the field's items whose totals pass, within each item of the fields outside it; filtered items leave the totals too → {field, valueFilter}",
+            has_doc,
+            value_filter
+        ),
         cmd!(
             "pivot.sort",
             "Sort Field",
