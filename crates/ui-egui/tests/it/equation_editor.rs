@@ -13,7 +13,7 @@ type Harness = egui_kittest::Harness<'static, SheetApp>;
 
 fn harness(s: Session) -> Harness {
     let mut h =
-        egui_kittest::Harness::builder().with_os(OperatingSystem::Mac).with_size(vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        egui_kittest::Harness::builder().with_os(OperatingSystem::Mac).with_size(vec2(1800.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
             |ui, app: &mut SheetApp| {
                 app.logic(ui.ctx());
                 app.ui(ui);
