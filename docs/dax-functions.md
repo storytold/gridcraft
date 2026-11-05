@@ -13,23 +13,23 @@ The per-category counts below are the catalog's. This crate links no evaluator f
 (`eval::FAMILIES` is empty), so a catalogued function outside the scalar core returns
 `not implemented`; each family PR adds its own dispatch and its own suite.
 
-| Category | Catalogued | Evaluated |
-| --- | ---: | ---: |
-| Aggregation | 22 | 22 |
-| Date and time | 24 | 24 |
-| Filter | 29 | 29 |
-| Financial | 51 | 51 |
-| Information | 114 | 114 |
-| Logical | 13 | 13 |
-| Math and trig | 49 | 49 |
-| Other | 16 | 16 |
-| Parent and child | 5 | 5 |
-| Relationships | 4 | 4 |
-| Statistical | 43 | 43 |
-| Table manipulation | 35 | 35 |
-| Text | 23 | 23 |
-| Time intelligence | 45 | 45 |
-| Visual calculations | 11 | 11 |
+| Category | Catalogued |
+| --- | ---: |
+| Aggregation | 22 |
+| Date and time | 24 |
+| Filter | 29 |
+| Financial | 51 |
+| Information | 114 |
+| Logical | 13 |
+| Math and trig | 49 |
+| Other | 16 |
+| Parent and child | 5 |
+| Relationships | 4 |
+| Statistical | 43 |
+| Table manipulation | 35 |
+| Text | 23 |
+| Time intelligence | 45 |
+| Visual calculations | 11 |
 
 ## Evaluated functions
 

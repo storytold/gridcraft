@@ -108,7 +108,8 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         FunctionFlags::new(false, true, false, true, false),
         "Returns the CustomData connection-string property supplied by the client, or an empty \
          string when the connection did not define it. It does not inspect the data model or the \
-         filter context.",
+         filter context. GridCraft has no client connection string in a workbook, so the \
+         evaluator always answers the empty string.",
         &["CUSTOMDATA ()"],
     ),
     spec(

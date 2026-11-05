@@ -311,6 +311,11 @@ pub struct Evaluator<'a> {
     /// is the behaviour this evaluator had before storage existed.
     storage_error: Option<StorageError>,
     counters: StorageCounters,
+    /// One memo slot a family may fill with an expensive per-evaluation value (a BM25 corpus, an
+    /// index). It lives on the `Evaluator`, so it is built once per evaluation and cannot leak
+    /// across models — a thread-local would survive a second evaluation on the same stack.
+    #[allow(dead_code)] // the family that fills it (a corpus statistic) ships in its own slice
+    memo: std::sync::Mutex<Option<(&'static str, Box<dyn std::any::Any + Send>)>>,
 }
 
 impl<'a> Evaluator<'a> {
@@ -333,7 +338,33 @@ impl<'a> Evaluator<'a> {
             Ok(storage) => (Some(storage), None),
             Err(error) => (None, Some(error)),
         };
-        Ok(Evaluator { model, measures, storage, storage_error, counters: StorageCounters::default() })
+        Ok(Evaluator { model, measures, storage, storage_error, counters: StorageCounters::default(), memo: std::sync::Mutex::new(None) })
+    }
+
+    /// Runs `with` against the value memoized under `tag`, building it with `build` on first use.
+    ///
+    /// A family that needs an expensive statistic once per evaluation (a corpus, an index) stores
+    /// it here. `T` is cloned out of the slot, so `with` cannot deadlock on the lock; a slot
+    /// written for another tag is replaced.
+    #[allow(dead_code)]
+    pub(crate) fn memoized<T: 'static + Send + Clone, R>(&self, tag: &'static str, build: impl FnOnce() -> T, with: impl FnOnce(&T) -> R) -> R {
+        let cached = {
+            let slot = self.memo.lock().unwrap_or_else(|poison| poison.into_inner());
+            match slot.as_ref() {
+                Some((existing, value)) if *existing == tag => value.downcast_ref::<T>().cloned(),
+                _ => None,
+            }
+        };
+        let value = match cached {
+            Some(value) => value,
+            None => {
+                let built = build();
+                let mut slot = self.memo.lock().unwrap_or_else(|poison| poison.into_inner());
+                *slot = Some((tag, Box::new(built.clone())));
+                built
+            }
+        };
+        with(&value)
     }
 
     /// The columnar substrate, when the model could be materialized.
