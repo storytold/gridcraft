@@ -209,6 +209,31 @@ fn refresh_element_bounds(
     bounds
 }
 
+/// Returns the selected element's current-frame bounds, populating the cache when selection came
+/// from the keyboard or the format-pane combo rather than a pointer hit test.
+fn selected_element_bounds(
+    painter: &Painter,
+    chart: &gridcraft_engine::model::Chart,
+    data: &gridcraft_chart::ChartData,
+    prims: &[Prim],
+) -> Option<(ChartElement, Rect)> {
+    let element = selected_element(painter.ctx(), chart.id);
+    let id = egui::Id::unique(("chart_element_bounds", chart.id));
+    let cached = painter
+        .ctx()
+        .data_mut(|d| d.get_temp::<(ChartElement, Rect)>(id))
+        .filter(|(cached_element, rect)| *cached_element == element && rect.is_finite());
+    if let Some(cached) = cached {
+        return Some(cached);
+    }
+    let bounds = element_bounds(painter, chart, data, prims, element, Rect::NOTHING);
+    if !bounds.is_finite() {
+        return None;
+    }
+    painter.ctx().data_mut(|d| d.insert_temp(id, (element, bounds)));
+    Some((element, bounds))
+}
+
 /// Hit test the primitives actually painted, including point markers, bars, lines and labels.
 pub(crate) fn element_at(ui: &egui::Ui, wb: &Workbook, si: usize, chart: &gridcraft_engine::model::Chart, rect: Rect, point: Pos2) -> ChartElement {
     let z = rect.width() / chart.anchor.width.max(1.0);
@@ -287,7 +312,7 @@ pub(crate) fn element_at(ui: &egui::Ui, wb: &Workbook, si: usize, chart: &gridcr
                 if !Rect::from_min_size(pos2(-sz.x * ax, -sz.y * ay), sz).expand(3.0).contains(local) {
                     continue;
                 }
-                return remember(match role.as_str() {
+                let element = match role.as_str() {
                     "title" => ChartElement::Title,
                     "legend" => ChartElement::Legend,
                     "x_axis" => ChartElement::XAxis,
@@ -295,8 +320,10 @@ pub(crate) fn element_at(ui: &egui::Ui, wb: &Workbook, si: usize, chart: &gridcr
                     "x_axis_title" => ChartElement::XAxisTitle,
                     "y_axis_title" => ChartElement::YAxisTitle,
                     "trendline" => ChartElement::TrendlineText,
+                    "data_table" => continue,
                     _ => ChartElement::DataLabels,
-                });
+                };
+                return remember(element);
             }
             Prim::Circle { cx, cy, r, fill, stroke } if (p - vec2(*cx, *cy)).length() <= r + 4.0 => fill.or_else(|| stroke.map(|(c, _)| c)),
             Prim::Rect { x, y, w, h, fill, .. }
@@ -788,10 +815,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         let prims = gridcraft_chart::render(ch, &data, ch.anchor.width, ch.anchor.height, &m);
         paint_prims(&p.with_clip_rect(r.intersect(p.clip_rect())), r.min, &prims, geo.z);
         if app.selected_chart() == Some(ch.id)
-            && let Some((element, bounds)) =
-                p.ctx().data_mut(|d| d.get_temp::<(ChartElement, Rect)>(egui::Id::unique(("chart_element_bounds", ch.id))))
-            && element == selected_element(p.ctx(), ch.id)
-            && bounds.is_finite()
+            && let Some((element, bounds)) = selected_element_bounds(p, ch, &data, &prims)
         {
             let bounds = refresh_element_bounds(p, ch, &data, &prims, element, bounds);
             let overlay = p.with_clip_rect(r);
@@ -1041,7 +1065,7 @@ mod tests {
 
 #[cfg(test)]
 mod selection_tests {
-    use super::{Prim, SeriesSelectionMark, series_selection_marks};
+    use super::{Prim, SeriesSelectionMark, selected_element_bounds, series_selection_marks};
 
     #[test]
     fn selected_legend_bounds_follow_overlay_layout_without_another_hit() {
@@ -1072,6 +1096,35 @@ mod selection_tests {
             assert!((after.center() - before.center()).length() > 20.0);
             assert_eq!(selected_element(&ctx, chart.id), ChartElement::Legend);
             assert_eq!(ctx.data_mut(|d| d.get_temp::<(ChartElement, Rect)>(egui::Id::unique(("chart_element_bounds", chart.id)))).unwrap().1, after);
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn keyboard_selected_element_populates_bounds_without_hit_testing() {
+        use super::*;
+        use gridcraft_engine::Session;
+        use serde_json::json;
+        let mut session = Session::new();
+        session.new_workbook();
+        session.execute("range.setValues", json!({"range":"A1","values":[["X","Measured","Comparison"],[1,2,3],[2,4,5],[3,6,7]]})).unwrap();
+        session.execute("insert.chart", json!({"type":"line","range":"A1:C4"})).unwrap();
+        let wb = &session.doc().unwrap().wb;
+        let chart = &wb.active().unwrap().charts[0];
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let data = gridcraft_chart::resolve(wb, 0, chart);
+            let prims =
+                gridcraft_chart::render(chart, &data, chart.anchor.width, chart.anchor.height, &EguiMeasure { painter: ui.painter(), z: 1.0 });
+            select_element(&ctx, chart.id, ChartElement::Legend);
+            assert!(ctx.data_mut(|d| d.get_temp::<(ChartElement, Rect)>(egui::Id::unique(("chart_element_bounds", chart.id)))).is_none());
+            let (selected, bounds) = selected_element_bounds(ui.painter(), chart, &data, &prims).unwrap();
+            assert_eq!(selected, ChartElement::Legend);
+            assert!(bounds.is_finite());
+            assert_eq!(
+                ctx.data_mut(|d| d.get_temp::<(ChartElement, Rect)>(egui::Id::unique(("chart_element_bounds", chart.id)))).unwrap(),
+                (selected, bounds)
+            );
         });
         output.textures_delta.clear();
     }
