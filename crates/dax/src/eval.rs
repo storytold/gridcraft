@@ -180,8 +180,11 @@ impl FilterContext {
         self.filters.clear();
     }
 
+    /// Sets a column filter. The keys keep their own variant so `column_value` can rebuild the
+    /// original scalar (`SELECTEDVALUE` must answer a date for a date filter); matching folds both
+    /// sides through [`folded_key`] instead.
     pub fn set(&mut self, table: usize, column: usize, values: impl IntoIterator<Item = ScalarKey>) {
-        self.filters.insert((table, column), values.into_iter().map(|key| folded_key(&key)).collect());
+        self.filters.insert((table, column), values.into_iter().collect());
     }
 
     pub fn remove_table(&mut self, table: usize) {
@@ -190,9 +193,12 @@ impl FilterContext {
 
     fn matches(&self, table: usize, column: usize, value: &Scalar) -> bool {
         match self.filters.get(&(table, column)) {
-            // Filter keys and values fold text the same way, so `VALUES`/`DISTINCTCOUNT` and the
-            // filters they feed agree on `"A"` and `"a"`.
-            Some(values) => values.contains(&distinct_key(value)),
+            // Both sides fold through the same rule, so text ignores case and a numeric key
+            // matches its other variants (a caller may insert keys into the public map directly).
+            Some(values) => {
+                let wanted = distinct_key(value);
+                values.iter().any(|allowed| folded_key(allowed) == wanted)
+            }
             None => true,
         }
     }

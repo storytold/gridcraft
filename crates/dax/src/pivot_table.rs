@@ -393,7 +393,7 @@ impl<'a> Plan<'a> {
             let field =
                 resolved.into_iter().next().ok_or_else(|| PivotTableError::UnknownField { pivot: name.clone(), field: filter.field.clone() })?;
             let bound = bind_field(model, table, &table_name, field)?;
-            let allowed = filter.allowed.iter().map(|value| crate::value::folded_key(&ScalarKey::from(value))).collect();
+            let allowed = filter.allowed.iter().map(ScalarKey::from).collect();
             filters.push((bound, allowed));
         }
 
@@ -525,7 +525,7 @@ impl<'a> Plan<'a> {
     fn passes(&self, row: &[Scalar]) -> bool {
         self.filters.iter().all(|(field, allowed)| {
             let value = row.get(field.field.column).cloned().unwrap_or(Scalar::Blank);
-            allowed.contains(&crate::value::distinct_key(&value))
+            allowed.iter().any(|allowed| crate::value::folded_key(allowed) == crate::value::distinct_key(&value))
         })
     }
 
@@ -1095,12 +1095,12 @@ fn hop_key_lookups<'a>(model: &DataModel, fields: impl IntoIterator<Item = &'a B
 /// off-diagonal combination leaves the column's filter empty, and an empty filter matches no row,
 /// so the cell is BLANK rather than the other axis's total.
 pub(crate) fn narrow_to_key(context: &mut FilterContext, table: usize, column: usize, key: &ScalarKey) {
-    // Filter keys fold text, so the group key is folded before it is compared with them.
-    let key = crate::value::folded_key(key);
+    // The stored keys keep their variants; the comparison folds both sides.
+    let folded = crate::value::folded_key(key);
     match context.filters.get(&(table, column)) {
         // The intersection with `{key}` is empty: no row can satisfy both axes.
-        Some(allowed) if !allowed.contains(&key) => context.set(table, column, std::iter::empty()),
-        _ => context.set(table, column, [key]),
+        Some(allowed) if !allowed.iter().any(|allowed| crate::value::folded_key(allowed) == folded) => context.set(table, column, std::iter::empty()),
+        _ => context.set(table, column, [key.clone()]),
     }
 }
 
