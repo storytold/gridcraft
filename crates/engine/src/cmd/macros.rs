@@ -28,7 +28,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Run Macro",
             [],
             None,
-            "{name, inputs?: {Input: \"B2:D9\"} | \"B2:D9\", onConflict?: ask|fail|overwrite|shiftDown|shiftRight, overwrite?: bool, approve?: bool, timeLimit?: seconds} runs as one undo step; any error rolls it all back → {macro, ran, inputs, stopped?, shifted?}",
+            "{name, inputs?: {Input: \"B2:D9\"} | \"B2:D9\", output?: \"F2\" (instead of the macro's output anchor), onConflict?: ask|fail|overwrite|shiftDown|shiftRight, overwrite?: bool, approve?: bool, timeLimit?: seconds} runs as one undo step; any error rolls it all back → {macro, ran, inputs, stopped?, shifted?}",
             has_doc,
             run
         ),
@@ -37,7 +37,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Check Macro",
             [],
             None,
-            "{name, inputs?, onConflict?, overwrite?, timeLimit?: seconds} validates the inputs and dry-runs the macro on the workbook (then puts everything back) → {ok (macro.run with these parameters would go ahead without a question), errors?, needsApproval?, onConflict, inputs, output?, conflicts, footprint}",
+            "{name, inputs?, output?: \"F2\" (as macro.run), onConflict?, overwrite?, timeLimit?: seconds} validates the inputs and dry-runs the macro on the workbook (then puts everything back) → {ok (macro.run with these parameters would go ahead without a question), errors?, needsApproval?, onConflict, inputs, output?, conflicts, footprint}",
             has_doc,
             check
         ),
@@ -55,7 +55,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Step Into",
             [],
             None,
-            "{action: start|step|continue|runTo|stop|state, name, inputs?, onConflict?, overwrite?, approve?, timeLimit?: seconds per action (start, as macro.run), step: path (runTo), keep?: bool (stop), breakpoints?: [\"3\", \"2.1\"] (steps of the macro), breakpointsOnly?: bool (the list replaces the steps' own breakpoints)} debugs a macro one step at a time; stop keeps the changes as one undo step or rolls them back. Runs on its own, never as a step of a script or macro. Until it finishes or stops, its workbook runs only macro.debug, queries, selection and sheet changes, Go To, Find, Copy, zoom, Switch Window, Close and Stop Action (other workbooks stay editable) → {state: paused|finished|stopped|failed, current: {step, kind, command?, params?, iteration?}, lastParams, executed, changed (at most 500), changedCells, atBreakpoint?, shifted?, wroteFiles?, message?, error?}",
+            "{action: start|step|continue|runTo|stop|state, name, inputs?, output?, overwrite?, approve?, timeLimit?: seconds per action (start, as macro.run), step: path (runTo), keep?: bool (stop), breakpoints?: [\"3\", \"2.1\"] (steps of the macro), breakpointsOnly?: bool (the list replaces the steps' own breakpoints)} debugs a macro one step at a time; stop keeps the changes as one undo step or rolls them back. Runs on its own, never as a step of a script or macro. Until it finishes or stops, its workbook runs only macro.debug, queries, selection and sheet changes, Go To, Find, Copy, zoom, Switch Window, Close and Stop Action (other workbooks stay editable) → {state: paused|finished|stopped|failed, current: {step, kind, command?, params?, iteration?}, lastParams, executed, changed (at most 500), changedCells, atBreakpoint?, shifted?, wroteFiles?, message?, error?}",
             has_doc,
             |s, p| crate::macros::debug::debug(s, p)
         ),
@@ -170,7 +170,21 @@ fn rename(s: &mut Session, p: &Json) -> Result<Json> {
         renamed.name = to.clone();
         // The whole check, size included: a longer name can take a macro past what a file holds.
         crate::macros::check(&renamed).map_err(EngineError::Other)?;
-        *m = renamed;
+        let from = std::mem::replace(m, renamed).name;
+        // Buttons that run the macro follow the new name.
+        let runs = |c: &gridcraft_model::FormControl| matches!(&c.action, Some(gridcraft_model::ControlAction::Macro { name, .. }) if name.eq_ignore_ascii_case(&from));
+        for si in 0..cx.wb.sheets.len() {
+            if !cx.wb.sheet(si).is_some_and(|sh| sh.controls.iter().any(runs)) {
+                continue;
+            }
+            for c in cx.sheet_mut(si)?.controls.iter_mut() {
+                if let Some(gridcraft_model::ControlAction::Macro { name, .. }) = &mut c.action
+                    && name.eq_ignore_ascii_case(&from)
+                {
+                    *name = to.clone();
+                }
+            }
+        }
         Ok(())
     })?;
     Ok(json!({"name": to}))

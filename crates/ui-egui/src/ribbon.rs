@@ -9,7 +9,8 @@ use crate::icons::{self, Icon};
 use crate::keytips::keytip_table;
 use crate::theme::{self, Cat, Tokens};
 use crate::widgets::{
-    big_button, big_split_button, color_palette, icon_button, small_button, small_split_button, split_button, split_button_symbol, toggle_button,
+    big_button, big_split_button, color_palette, icon_button, small_button, small_split_button, small_toggle_button, split_button,
+    split_button_symbol, toggle_button,
 };
 
 mod automate;
