@@ -176,14 +176,20 @@ fn measures(args: &[String]) -> Result<(), String> {
 
 /// Writes `bytes` to a temporary file beside `path`, then renames it over `path`.
 ///
-/// `--out` may name the workbook `--file` read, and an interrupted or full-disk `fs::write`
-/// would then leave no complete copy: the rename only happens once the new bytes are on disk.
+/// `--out` may name the workbook `--file` read, and an interrupted or full-disk write would then
+/// leave no complete copy: the temporary file is flushed to disk before the rename, so the rename
+/// never publishes bytes the filesystem has not stored.
 fn write_atomically(path: &str, bytes: &[u8]) -> Result<(), String> {
     let target = std::path::Path::new(path);
     let directory = target.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
     let file_name = target.file_name().ok_or_else(|| format!("can't write {path}: no file name"))?;
     let temporary = directory.join(format!(".{}.{}.tmp", file_name.to_string_lossy(), std::process::id()));
-    std::fs::write(&temporary, bytes).map_err(|e| {
+    let written = (|| -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()
+    })();
+    written.map_err(|e| {
         let _ = std::fs::remove_file(&temporary);
         format!("can't write {path}: {e}")
     })?;

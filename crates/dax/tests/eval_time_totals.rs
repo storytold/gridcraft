@@ -239,10 +239,11 @@ fn opening_and_closing_balances() {
     assert_number(eval_measure(&facts, "OB Week", second_week.clone()), 550.0);
     assert_number(eval_measure(&facts, "CB Week", second_week), 650.0);
 
-    // Without a fact on the boundary date Excel returns BLANK, not a scan backwards.
+    // March 31 carries a boundary fact, so the closing balance is that day's value.
     let march = filters(&facts, &[("Date", "Year", Scalar::Integer(2024)), ("Date", "Month", Scalar::Integer(3))]);
     assert_eq!(eval_measure(&facts, "CB Month", march), Ok(Scalar::Decimal(800.0)));
 
+    // Without a fact on the boundary date Excel returns BLANK, not a scan backwards.
     let sparse = model();
     let february = february_filter(&sparse);
     assert_eq!(eval_measure(&sparse, "OB Month", february.clone()), Ok(Scalar::Blank));

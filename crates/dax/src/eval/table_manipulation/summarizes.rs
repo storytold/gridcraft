@@ -908,6 +908,32 @@ fn summarize_columns(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) 
         columns.push(TableColumn { name: name.clone() });
     }
 
+    // The auto-exist rule asks, for every candidate combination, whether the contributing table
+    // still has a row. Scanning the table per combination is quadratic in the domain sizes, so
+    // when every group column belongs to one table that table is materialized once under the
+    // measure filters and the projections of its group values are looked up instead. Multi-table
+    // layouts keep the per-combination scan: there a filter on one table can remove rows from
+    // another over a relationship, which a per-table projection cannot model.
+    // Whether an expression decides visibility only depends on the IGNORE markers, so the answer
+    // is the same for every combination.
+    let auto_exist_only = parsed.expressions.iter().all(|(_, _, ignore)| *ignore);
+    let single_table = if auto_exist_only {
+        let mut tables = parsed.columns.iter().map(|column| column.table);
+        match tables.next() {
+            Some(first) if tables.all(|table| table == first) => Some(first),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let auto_exist_rows = single_table.and_then(|table| {
+        let width = ev.model().tables.get(table).map_or(0, |model_table| model_table.columns.len());
+        let rows = ev.table(table, &measure_filters).rows;
+        // The row-scan filter treats a missing trailing cell as matching every filter, which a
+        // projection key cannot express; such (ragged) models keep the per-combination check.
+        rows.iter().all(|row| row.len() >= width).then_some(rows)
+    });
+
     let mut rows: Vec<Vec<Scalar>> = Vec::new();
     for selection in rollup_selections(&parsed.dimensions)? {
         let rolled = rolled_columns(&parsed.dimensions, &selection);
@@ -932,6 +958,22 @@ fn summarize_columns(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) 
                 flags.push(Scalar::Boolean(*level >= keep));
             }
         }
+        // For a single-table layout this selection's existing group values are hashed once; the
+        // per-combination check below then only looks a key up. The empty projection is the grand
+        // total, which exists whenever the table has a row under the measure filters.
+        let auto_exist = match (auto_exist_only, &auto_exist_rows) {
+            (true, Some(table_rows)) => {
+                let varying: Vec<usize> = (0..parsed.columns.len()).filter(|index| !rolled.contains(index)).collect();
+                let mut projections: BTreeSet<Vec<ScalarKey>> = BTreeSet::new();
+                for row in table_rows {
+                    projections.insert(
+                        varying.iter().map(|&index| row.get(parsed.columns[index].column).map(ScalarKey::from).unwrap_or(ScalarKey::Blank)).collect(),
+                    );
+                }
+                Some((varying, projections))
+            }
+            _ => None,
+        };
         let mut products: Vec<Vec<Option<Scalar>>> = vec![Vec::new()];
         for domain in &domains {
             if domain.is_empty() {
@@ -965,9 +1007,22 @@ fn summarize_columns(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) 
             if judged.is_empty() {
                 // No measure decides visibility: keep only combinations that exist in the data,
                 // which is the auto-exist rule for columns of one table.
-                let tables: BTreeSet<usize> = parsed.columns.iter().map(|column| column.table).collect();
-                if tables.iter().any(|table| ev.table(*table, &inner.filters).rows.is_empty()) {
-                    continue;
+                match &auto_exist {
+                    Some((varying, projections)) => {
+                        let key: Vec<ScalarKey> = varying
+                            .iter()
+                            .map(|&index| combination.get(index).and_then(|value| value.as_ref()).map(ScalarKey::from).unwrap_or(ScalarKey::Blank))
+                            .collect();
+                        if !projections.contains(&key) {
+                            continue;
+                        }
+                    }
+                    None => {
+                        let tables: BTreeSet<usize> = parsed.columns.iter().map(|column| column.table).collect();
+                        if tables.iter().any(|table| ev.table(*table, &inner.filters).rows.is_empty()) {
+                            continue;
+                        }
+                    }
                 }
             } else if judged.iter().all(|value| value.is_blank()) {
                 continue;
@@ -1347,4 +1402,58 @@ fn within_boundaries(value: Option<&Scalar>, first: &Option<Scalar>, last: &Opti
         return false;
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{DataModel, ModelColumn, ModelTable};
+    use crate::{Binder, parse_expression};
+
+    const ROWS: usize = 12_000;
+    const REGIONS: usize = 50;
+    // `ROWS / REGIONS` products, so every row is a distinct (Region, Product) pair.
+    const PRODUCTS: usize = ROWS / REGIONS;
+
+    /// `SUMMARIZECOLUMNS` without a measure keeps only combinations that exist in the data. That
+    /// check must not rescan the source table per candidate combination: the fixture has
+    /// `REGIONS * PRODUCTS` combinations, so a per-combination scan would serve tens of millions
+    /// of rows from storage.
+    #[test]
+    fn summarize_columns_auto_exist_scans_the_group_table_once() {
+        let mut rows = Vec::with_capacity(ROWS);
+        for row in 0..ROWS {
+            // Every (Region, Product) pair occurs exactly once.
+            let region = row % REGIONS;
+            let product = (row / REGIONS) % PRODUCTS;
+            rows.push(vec![
+                Scalar::String(format!("Region {region:02}")),
+                Scalar::String(format!("Product {product:03}")),
+                Scalar::Integer(row as i64),
+            ]);
+        }
+        let model = DataModel {
+            tables: vec![ModelTable {
+                name: "Sales".into(),
+                columns: vec![
+                    ModelColumn { name: "Region".into(), data_type: Some("String".into()) },
+                    ModelColumn { name: "Product".into(), data_type: Some("String".into()) },
+                    ModelColumn { name: "Amount".into(), data_type: Some("Int64".into()) },
+                ],
+                rows,
+            }],
+            relationships: Vec::new(),
+            measures: Vec::new(),
+        };
+        let evaluator = Evaluator::new(&model).expect("evaluator");
+        let expr = parse_expression("SUMMARIZECOLUMNS(Sales[Region], Sales[Product])").expect("parse");
+        let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+        let table = evaluator.evaluate_table(&bound).expect("evaluate");
+        assert_eq!(table.rows.len(), ROWS, "one row per existing region/product pair");
+
+        // One scan per group column to build the domains plus one for the auto-exist projections;
+        // the per-combination implementation would serve REGIONS * PRODUCTS * ROWS rows instead.
+        let stats = evaluator.storage_stats();
+        assert!(stats.rows_from_storage < 6 * ROWS as u64, "auto-exist must not rescan the table per combination: {stats:?} for {ROWS} source rows");
+    }
 }

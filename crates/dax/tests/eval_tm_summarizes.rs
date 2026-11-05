@@ -545,7 +545,7 @@ fn topnperlevel_validates_its_arguments() {
 
 #[test]
 fn summarize_evaluates_expressions_over_the_table_arguments_rows() {
-    // `FILTER` narrows the table argument; East's 5 and 10 rows survive (Amount > 5 removes only
+    // `FILTER` narrows the table argument; East's 10 and 30 rows survive (Amount > 5 removes only
     // the 5), so East sums 10 + 30 = 40. Without the table rows in the group context the removed
     // row would be counted too.
     let table = eval_table("SUMMARIZE(FILTER(Sales, Sales[Amount] > 5), Sales[Region], \"Amount\", SUM(Sales[Amount]))").expect("summarize");
