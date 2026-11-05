@@ -51,6 +51,16 @@ pub(crate) fn has_mimetype(bytes: &[u8]) -> bool {
 /// exactly stays a constant. Always inspect the returned warnings. Saving to ODS is not
 /// supported.
 pub fn read_ods(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
+    // Without a caller's contract every syntactically valid call translates (this is the shape
+    // tests and tools use); the engine passes the evaluator's real contract through the
+    // `read_ods_with` variant.
+    read_ods_with(bytes, &|_| true)
+}
+
+/// [`read_ods`] with the caller's known-function contract: a call neither it nor the syntax
+/// accepts keeps the file's cached constant instead of opening as a live `#NAME?` formula. The
+/// engine passes the evaluator's complete contract (its special functions included).
+pub fn read_ods_with(bytes: &[u8], known: &dyn Fn(&str) -> bool) -> Result<(Workbook, ReadReport), IoError> {
     let mut package = Package::open(bytes)?;
     if !has_mimetype(bytes) {
         return Err(IoError::Format("missing or invalid ODS mimetype".into()));
@@ -60,10 +70,12 @@ pub fn read_ods(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     }
     let content = package.read("content.xml")?.ok_or_else(|| IoError::Format("ODS content.xml is missing".into()))?;
     let mut import = Import::new();
+    import.known = Some(known);
     import.parse(&content)?;
     if import.wb.sheets.is_empty() {
         return Err(IoError::Format("ODS contains no worksheets".into()));
     }
+    import.rewrite_renamed_refs();
     Ok((import.wb, import.report))
 }
 
@@ -195,6 +207,10 @@ struct SheetDraft {
     sheet: Sheet,
     depth: usize,
     row: u32,
+    /// The legacy-array range being imported (its anchor already written): covered cells inside
+    /// it drop their cached values, so recalculation — which reads the anchor — is the only
+    /// truth left, as it is for every other formula.
+    matrix: Option<RangeRef>,
 }
 struct RowDraft {
     depth: usize,
@@ -228,9 +244,16 @@ struct CellDraft {
     paragraph_started: bool,
     pending_space: bool,
 }
-struct Import {
+struct Import<'k> {
     wb: Workbook,
     report: ReadReport,
+    /// Sheet names the importer changed (invalid or duplicated in XLSX, both legal in ODS):
+    /// original → final. Formulas copy names from the file's text, so after reading they are
+    /// rewritten to the final names — a live formula naming a sheet that no longer exists
+    /// recalculates to #REF!.
+    renames: Vec<(String, String)>,
+    /// The caller's known-function contract for translated calls (see [`read_ods_with`]).
+    known: Option<&'k dyn Fn(&str) -> bool>,
     stack: Vec<Tag>,
     sheet: Option<SheetDraft>,
     row: Option<RowDraft>,
@@ -242,13 +265,56 @@ struct Import {
     spreadsheet_seen: bool,
 }
 
-impl Import {
+impl<'k> Import<'k> {
     fn new() -> Self {
         let mut wb = Workbook::new();
         wb.sheets.clear();
         let mut report = ReadReport::default();
         report.warn("ODS import: formulas are imported and recalculate; ones that cannot be translated keep their saved result as a constant. Source formatting, charts, images and other features are not imported. Save a new .xlsx file; ODS saving is not supported.");
-        Self { wb, report, stack: vec![], sheet: None, row: None, cell: None, cells: 0, merges: 0, text: 0, formats: vec![], spreadsheet_seen: false }
+        Self {
+            wb,
+            report,
+            renames: vec![],
+            known: None,
+            stack: vec![],
+            sheet: None,
+            row: None,
+            cell: None,
+            cells: 0,
+            merges: 0,
+            text: 0,
+            formats: vec![],
+            spreadsheet_seen: false,
+        }
+    }
+
+    /// Rewrites every formula's sheet-qualified references through the importer's sheet renames
+    /// (`original → final`), with the engine's own rename adjustment. Only formulas are touched:
+    /// names, table sources and the rest of the model were built with the final names already.
+    fn rewrite_renamed_refs(&mut self) {
+        if self.renames.is_empty() {
+            return;
+        }
+        let renames = std::mem::take(&mut self.renames);
+        for sheet in self.wb.sheets.iter_mut() {
+            let sheet = std::sync::Arc::make_mut(sheet);
+            let mut cells = Vec::new();
+            for (at, cell) in sheet.cells.iter() {
+                if cell.formula.is_some() {
+                    cells.push(at);
+                }
+            }
+            for at in cells {
+                let Some(cell) = sheet.cells.get_mut(at) else { continue };
+                let Some(f) = cell.formula.as_mut() else { continue };
+                let Some(expr) = f.expr() else { continue };
+                let mut renamed = expr;
+                for (old, new) in &renames {
+                    renamed = gridcraft_formula::adjust::rename_sheet(renamed, old, new);
+                }
+                cell.formula = Some(std::sync::Arc::new(gridcraft_model::Formula::from_expr(renamed)));
+            }
+        }
     }
 
     fn parse(&mut self, bytes: &[u8]) -> Result<(), IoError> {
@@ -330,8 +396,9 @@ impl Import {
                 }
                 if name != original {
                     self.report.warn("Some ODS sheet names were shortened or renamed to valid, unique XLSX sheet names.");
+                    self.renames.push((original.clone(), name.clone()));
                 }
-                self.sheet = Some(SheetDraft { sheet: Sheet::new(name), depth, row: 0 });
+                self.sheet = Some(SheetDraft { sheet: Sheet::new(name), depth, row: 0, matrix: None });
             }
             Tag::Row if self.sheet.as_ref().is_some_and(|s| self.stack.get(s.depth + 1..).is_some_and(|p| p.iter().all(|t| *t == Tag::Rows))) => {
                 self.row =
@@ -487,6 +554,14 @@ impl Import {
                     return Err(IoError::TooLarge("ODS expands beyond the import limit (64 MiB of text)".into()));
                 }
             }
+            // A covered cell inside the matrix span being imported keeps no cached value: the
+            // anchor's array recalculation owns the range, and a follower constant left in the
+            // store could still be read where a legacy array's followers are not resolved.
+            let cell = if draft.covered && self.sheet.as_ref().is_some_and(|sh| sh.matrix.is_some_and(|r| r.contains(pos_of(sh.row, row.col)))) {
+                Cell::default()
+            } else {
+                cell
+            };
             row.cells.push(RepeatedCell {
                 col: row.col,
                 repeat: draft.repeat,
@@ -503,7 +578,14 @@ impl Import {
 
     fn convert(&mut self, draft: &CellDraft) -> Cell {
         let raw = draft.raw.as_deref();
-        let formula = draft.formula.as_deref().and_then(crate::ods_formula::translate).map(|text| Formula::new(&text));
+        let formula = draft
+            .formula
+            .as_deref()
+            .and_then(|t| match self.known {
+                Some(known) => crate::ods_formula::translate(t, known),
+                None => crate::ods_formula::translate(t, &|_: &str| false),
+            })
+            .map(|text| Formula::new(&text));
         let mut format = None;
         let value = match draft.kind.as_deref() {
             Some("float" | "percentage" | "currency") => raw.and_then(|s| s.parse::<f64>().ok()).filter(|n| n.is_finite()).map(|n| {
@@ -618,6 +700,7 @@ impl Import {
                         let mut cell = entry.cell.clone();
                         if let (Some(last), Some(f)) = (matrix_last, cell.formula.as_mut()) {
                             Arc::make_mut(f).array = Some(RangeRef::new(pos, last));
+                            sheet.matrix = Some(RangeRef::new(pos, last));
                         }
                         sheet.sheet.cells.set(pos, cell);
                     }
@@ -630,6 +713,10 @@ impl Import {
         sheet.row = end;
         Ok(())
     }
+}
+
+fn pos_of(row: u32, col: u32) -> CellRef {
+    CellRef::new(row, col)
 }
 
 fn push_text(out: &mut String, text: &str) -> Result<(), IoError> {

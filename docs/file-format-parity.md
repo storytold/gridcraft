@@ -158,6 +158,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | ODS review fixes: formulas follow importer sheet renames (a >31-char or XLSX-invalid sheet name no longer leaves live #REF! formulas), unknown calls keep their cached constant against the evaluator's contract, and matrix followers drop their cached values for the anchor's recalculation (#711) |
 | 2026-10-12 | minor | ODS: formulas import live (OpenFormula→Excel translation with fallback to the cached constant, #711) |
 | 2026-11-02 | minor | XLSX: buttons, scroll bars and spin buttons read and written (control properties parts, `<controls>`, VML `x:ClientData`); other form controls stay with pass-through; a button's command, fixed input or output cell travels in a hidden defined name and comes back only while the file still assigns the button's macro (or none, for a command) |
 | 2026-11-03 | minor | SYLK (`.slk`) import: values, R1C1 formulas as A1 (shared formulas too) with cached results, number formats and column widths; import only (#1481) |

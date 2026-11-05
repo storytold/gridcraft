@@ -15,12 +15,12 @@ use gridcraft_core::{MAX_COLS, MAX_ROWS};
 
 /// Translates an ODS `table:formula` attribute value into Excel/model formula body text (no
 /// leading `=`), or `None` when any construct has no exact Excel equivalent.
-pub(crate) fn translate(text: &str) -> Option<String> {
+pub(crate) fn translate(text: &str, known: &dyn Fn(&str) -> bool) -> Option<String> {
     let (namespace, body) = split_prefix(text)?;
     if namespace == Some("msoxl") {
-        return validated(body.to_string());
+        return validated(body.to_string(), known);
     }
-    validated(scan(body)?)
+    validated(scan(body)?, known)
 }
 
 /// Splits an `of:=`, `oooc:=`, `msoxl:=` or bare `=` prefix into (namespace, body).
@@ -33,9 +33,24 @@ fn split_prefix(text: &str) -> Option<(Option<&'static str>, &str)> {
     text.strip_prefix('=').map(|body| (None, body))
 }
 
-/// Returns the text only if it parses as a model formula.
-fn validated(text: String) -> Option<String> {
-    gridcraft_formula::parse(&text).ok().map(|_| text)
+/// Returns the text only if it parses as a model formula whose every call names a function the
+/// evaluator knows (a `UNKNOWN()` that only parses would open as a live formula and recalculate
+/// to `#NAME?`, where the importer's contract keeps the source's cached constant for anything it
+/// cannot guarantee to reproduce). The evaluator's complete contract, its special functions
+/// included, decides — `gridcraft_functions::lookup` alone would reject the specials.
+fn validated(text: String, known: &dyn Fn(&str) -> bool) -> Option<String> {
+    // A call the caller's contract does not know cannot be guaranteed to recalculate to the
+    // saved result, so the importer keeps the cache instead (its caller warns).
+    let mut all_known = true;
+    gridcraft_formula::parse(&text).ok()?.map(&mut |e| {
+        if let gridcraft_formula::Expr::Call(n, _) = &e
+            && !known(n)
+        {
+            all_known = false;
+        }
+        e
+    });
+    all_known.then_some(text)
 }
 
 /// Scans OpenFormula text in one pass, copying everything that is Excel syntax already and
@@ -286,51 +301,51 @@ mod tests {
 
     #[test]
     fn prefixes_and_passthrough() {
-        assert_eq!(translate("of:=SUM(A1:A9)"), Some("SUM(A1:A9)".to_string()));
-        assert_eq!(translate("oooc:=SUM(A1:A9)"), Some("SUM(A1:A9)".to_string()));
-        assert_eq!(translate("msoxl:=SUM(A1:A9)"), Some("SUM(A1:A9)".to_string()));
-        assert_eq!(translate("=SUM(A1:A9)"), Some("SUM(A1:A9)".to_string()));
-        assert_eq!(translate("of:=1"), Some("1".to_string()));
+        assert_eq!(translate("of:=SUM(A1:A9)", &|_| true), Some("SUM(A1:A9)".to_string()));
+        assert_eq!(translate("oooc:=SUM(A1:A9)", &|_| true), Some("SUM(A1:A9)".to_string()));
+        assert_eq!(translate("msoxl:=SUM(A1:A9)", &|_| true), Some("SUM(A1:A9)".to_string()));
+        assert_eq!(translate("=SUM(A1:A9)", &|_| true), Some("SUM(A1:A9)".to_string()));
+        assert_eq!(translate("of:=1", &|_| true), Some("1".to_string()));
         // The namespace without the `=` is not a formula prefix.
-        assert_eq!(translate("of:1"), None);
+        assert_eq!(translate("of:1", &|_| true), None);
     }
 
     #[test]
     fn argument_separator_respects_strings() {
-        assert_eq!(translate("of:=IF(A1>1;2;3)"), Some("IF(A1>1,2,3)".to_string()));
-        assert_eq!(translate("of:=CONCAT(\"a;b\";\"c\")"), Some("CONCAT(\"a;b\",\"c\")".to_string()));
-        assert_eq!(translate("of:=SUM(1.5;2)"), Some("SUM(1.5,2)".to_string()));
+        assert_eq!(translate("of:=IF(A1>1;2;3)", &|_| true), Some("IF(A1>1,2,3)".to_string()));
+        assert_eq!(translate("of:=CONCAT(\"a;b\";\"c\")", &|_| true), Some("CONCAT(\"a;b\",\"c\")".to_string()));
+        assert_eq!(translate("of:=SUM(1.5;2)", &|_| true), Some("SUM(1.5,2)".to_string()));
     }
 
     #[test]
     fn bracketed_references() {
-        assert_eq!(translate("of:=[.A1]"), Some("A1".to_string()));
-        assert_eq!(translate("of:=[.$A$1:.B2]"), Some("$A$1:B2".to_string()));
-        assert_eq!(translate("of:=['Sheet 2'.A1]"), Some("'Sheet 2'!A1".to_string()));
-        assert_eq!(translate("of:=[$S.$A1]"), Some("S!$A1".to_string()));
-        assert_eq!(translate("of:=['O''Brien.s'.A1]"), Some("'O''Brien.s'!A1".to_string()));
-        assert_eq!(translate("of:=['a#b'.A1]"), Some("'a#b'!A1".to_string()));
-        assert_eq!(translate("of:=[$.A1]"), Some("A1".to_string()));
+        assert_eq!(translate("of:=[.A1]", &|_| true), Some("A1".to_string()));
+        assert_eq!(translate("of:=[.$A$1:.B2]", &|_| true), Some("$A$1:B2".to_string()));
+        assert_eq!(translate("of:=['Sheet 2'.A1]", &|_| true), Some("'Sheet 2'!A1".to_string()));
+        assert_eq!(translate("of:=[$S.$A1]", &|_| true), Some("S!$A1".to_string()));
+        assert_eq!(translate("of:=['O''Brien.s'.A1]", &|_| true), Some("'O''Brien.s'!A1".to_string()));
+        assert_eq!(translate("of:=['a#b'.A1]", &|_| true), Some("'a#b'!A1".to_string()));
+        assert_eq!(translate("of:=[$.A1]", &|_| true), Some("A1".to_string()));
     }
 
     #[test]
     fn microsoft_function_names() {
-        assert_eq!(translate("of:=COM.MICROSOFT.XLOOKUP(1;A1;B1)"), Some("XLOOKUP(1,A1,B1)".to_string()));
-        assert_eq!(translate("of:=com.microsoft.XLOOKUP(1;A1;B1)"), Some("XLOOKUP(1,A1,B1)".to_string()));
+        assert_eq!(translate("of:=COM.MICROSOFT.XLOOKUP(1;A1;B1)", &|_| true), Some("XLOOKUP(1,A1,B1)".to_string()));
+        assert_eq!(translate("of:=com.microsoft.XLOOKUP(1;A1;B1)", &|_| true), Some("XLOOKUP(1,A1,B1)".to_string()));
     }
 
     #[test]
     fn bail_on_untranslatable() {
-        assert_eq!(translate("of:=ORG.OPENOFFICE.FOO()"), None);
-        assert_eq!(translate("of:=com.sun.star.sheet.addin.X()"), None);
-        assert_eq!(translate("of:=[.A:.A]"), None); // column-only range
-        assert_eq!(translate("of:=[.A1]~[.B1]"), None); // union operator
-        assert_eq!(translate("of:=[.A1]![.B1]"), None); // intersection operator
-        assert_eq!(translate("of:=#REF!+1"), None); // error literal
-        assert_eq!(translate("of:=['file:///x'#S.A1]"), None); // external document ref
-        assert_eq!(translate("of:=\"unterminated"), None); // unterminated string
-        assert_eq!(translate("rq:=A1"), None); // no known prefix
-        assert_eq!(translate("of:=TRUE()"), Some("TRUE()".to_string())); // must NOT bail
+        assert_eq!(translate("of:=ORG.OPENOFFICE.FOO()", &|_| true), None);
+        assert_eq!(translate("of:=com.sun.star.sheet.addin.X()", &|_| true), None);
+        assert_eq!(translate("of:=[.A:.A]", &|_| true), None); // column-only range
+        assert_eq!(translate("of:=[.A1]~[.B1]", &|_| true), None); // union operator
+        assert_eq!(translate("of:=[.A1]![.B1]", &|_| true), None); // intersection operator
+        assert_eq!(translate("of:=#REF!+1", &|_| true), None); // error literal
+        assert_eq!(translate("of:=['file:///x'#S.A1]", &|_| true), None); // external document ref
+        assert_eq!(translate("of:=\"unterminated", &|_| true), None); // unterminated string
+        assert_eq!(translate("rq:=A1", &|_| true), None); // no known prefix
+        assert_eq!(translate("of:=TRUE()", &|_| true), Some("TRUE()".to_string())); // must NOT bail
     }
 
     /// 1-based column number → letters (`1 → A`, `MAX_COLS → XFD`), so boundary cases are
@@ -349,17 +364,17 @@ mod tests {
     /// name (`#NAME?` after recalc); the caller keeps the cached constant instead.
     #[test]
     fn worksheet_bounds_bail_instead_of_becoming_names() {
-        assert_eq!(translate("of:=[.ZZZ1]"), None); // past the last column
-        assert_eq!(translate(&format!("of:=[.{}1]", col_letters(MAX_COLS + 1))), None);
-        assert_eq!(translate(&format!("of:=[.A{}]", MAX_ROWS + 1)), None);
-        assert_eq!(translate(&format!("of:=[.A1:.{}1]", col_letters(MAX_COLS + 1))), None); // range second endpoint
+        assert_eq!(translate("of:=[.ZZZ1]", &|_| true), None); // past the last column
+        assert_eq!(translate(&format!("of:=[.{}1]", col_letters(MAX_COLS + 1)), &|_| true), None);
+        assert_eq!(translate(&format!("of:=[.A{}]", MAX_ROWS + 1), &|_| true), None);
+        assert_eq!(translate(&format!("of:=[.A1:.{}1]", col_letters(MAX_COLS + 1)), &|_| true), None); // range second endpoint
         // The last real cell stays translatable.
         let corner = format!("{}{}", col_letters(MAX_COLS), MAX_ROWS);
-        assert_eq!(translate(&format!("of:=[.{corner}]")), Some(corner));
+        assert_eq!(translate(&format!("of:=[.{corner}]"), &|_| true), Some(corner));
     }
 
     #[test]
     fn parse_gate() {
-        assert_eq!(translate("of:=SUM("), None);
+        assert_eq!(translate("of:=SUM(", &|_| true), None);
     }
 }
