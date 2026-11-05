@@ -253,6 +253,15 @@ mod title_bar_tests {
     }
 
     #[test]
+    fn labelled_distribution_survives_long_workbook_title_truncation() {
+        let title = format!("GridCraft (Preview) - {}", "synthetic workbook ".repeat(30));
+        let (text, w, dot_w) = layout_title(&title, true, 300.0);
+        assert!(text.starts_with("GridCraft (Preview)"), "{text}");
+        assert!(text.ends_with('…'));
+        assert!(w + dot_w <= 300.0);
+    }
+
+    #[test]
     fn short_title_is_left_whole() {
         let (text, _, _) = layout_title("Book1.xlsx", false, 300.0);
         assert_eq!(text, "Book1.xlsx");

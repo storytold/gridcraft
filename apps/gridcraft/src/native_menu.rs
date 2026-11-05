@@ -222,8 +222,8 @@ fn select_theme(app: &mut SheetApp, id: &str) -> bool {
 impl NativeMenu {
     pub fn install(ctx: &egui::Context) -> NativeMenu {
         let menu = Menu::new();
-        let app_name = gridcraft_ui_egui::build_config::app_name();
-        let app_menu = Submenu::new(app_name, true);
+        let app_name = gridcraft_ui_egui::build_config::menu_name();
+        let app_menu = Submenu::new(&app_name, true);
         let about = MenuItem::with_id("dialog:about", format!("About {app_name}"), true, None);
         let _ = app_menu.append_items(&[
             &about,

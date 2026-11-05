@@ -19,6 +19,11 @@ fn name_for_label(label: &str) -> String {
     if label.is_empty() { "GridCraft".into() } else { format!("GridCraft ({label})") }
 }
 
+/// Muda treats a single ampersand as a mnemonic marker; double literal ampersands.
+pub fn menu_name() -> String {
+    app_name().replace('&', "&&")
+}
+
 /// Preserve ordinary document titles; identify labelled distributions in each window.
 pub fn window_title(title: &str) -> String {
     title_for_label(title, BUILD_LABEL)
@@ -30,7 +35,7 @@ fn title_for_label(title: &str, label: &str) -> String {
     } else if title.is_empty() {
         name_for_label(label)
     } else {
-        format!("{title} - {}", name_for_label(label))
+        format!("{} - {title}", name_for_label(label))
     }
 }
 
@@ -49,7 +54,9 @@ mod tests {
         assert_eq!(name_for_label("Preview"), "GridCraft (Preview)");
         assert_eq!(title_for_label("Book1", ""), "Book1");
         assert_eq!(title_for_label("", "Preview"), "GridCraft (Preview)");
-        assert_eq!(title_for_label("Synthetic — Edited", "Preview"), "Synthetic — Edited - GridCraft (Preview)");
+        assert_eq!(title_for_label("Synthetic — Edited", "Preview"), "GridCraft (Preview) - Synthetic — Edited");
+        assert_eq!(name_for_label("R&D").replace('&', "&&"), "GridCraft (R&&D)");
+        assert_eq!(menu_name().replace("&&", "&"), app_name());
         assert_eq!(app_name(), name_for_label(BUILD_LABEL));
         assert_eq!(window_title("Synthetic"), title_for_label("Synthetic", BUILD_LABEL));
         assert_eq!(startup_update_check(), BUILD_LABEL.is_empty());
