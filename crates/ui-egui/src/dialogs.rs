@@ -552,16 +552,11 @@ impl Dialog {
                     if threaded { "New Comment" } else { "New Note" },
                     if threaded { "review.newComment" } else { "review.newNote" },
                     vec![Text { key: "text", label: if threaded { "Start a conversation:" } else { "Note:" } }],
-                    // The engine falls back to its built-in user name; hand it the localized one so
-                    // the stored author reads in the interface language (unless the user set their own).
-                    json!({
-                        "text": existing,
-                        "author": if app.session.prefs.user_name == "GridCraft User" {
-                            app.ui.language.tr("GridCraft User").to_owned()
-                        } else {
-                            app.session.prefs.user_name.clone()
-                        },
-                    }),
+                    // No `author`: the engine keeps the stored author when editing an existing
+                    // comment and falls back to the user's own name otherwise. The built-in
+                    // default ("GridCraft User") is translated where the author is displayed,
+                    // so workbook data stays language-independent.
+                    json!({ "text": existing }),
                 )
             }
             // Asks before a web or e-mail link leaves the workbook. OK opens it through

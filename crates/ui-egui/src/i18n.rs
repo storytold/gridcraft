@@ -242,6 +242,13 @@ impl Language {
         out
     }
 
+    /// The display form of a comment or note author. A stored author is user data and shows as
+    /// written — a name may carry a `|`, which `tr` reads as a context separator — so only the
+    /// engine's built-in default name is translated, and it reads in the interface language.
+    pub fn author_name(self, author: &str) -> String {
+        if author == "GridCraft User" { self.tr(author).to_owned() } else { author.to_owned() }
+    }
+
     pub(crate) fn tr_error(self, message: &str) -> String {
         let message = if message.starts_with("command `") { crate::clean_error(message) } else { message.to_owned() };
 
@@ -288,7 +295,11 @@ impl Language {
         };
         table.iter().find_map(|(english, localized)| {
             let values = fill_template(english, message)?;
-            let values: Vec<String> = values.iter().map(|value| self.tr(value).to_string()).collect();
+            // A captured value is user data (a file or sheet name may carry a `|`, which `tr`
+            // reads as a context separator): translate it only when it can't be confused with
+            // one, so `We can't open 'a|b.xlsx'` keeps its whole name.
+            let values: Vec<String> =
+                values.iter().map(|value| if value.contains('|') { value.clone() } else { self.tr(value).to_string() }).collect();
             splice_template(localized, &values)
         })
     }

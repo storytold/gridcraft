@@ -6,20 +6,21 @@ automatically on a fresh installation when the system locale is `zh` (`zh-CN`, `
 The localization follows the existing GridCraft interface translation infrastructure:
 
 - `crates/ui-egui/src/i18n/zh.rs` supplies Simplified Chinese translations of the UI strings:
-  2,025 entries covering the ribbon and every ribbon path, the sheet tabs, the status bar, the
-  formula bar, the Backstage/File view, every dialog (including Goal Seek, Solver, the analysis
-  toolpak dialogs, Format Cells, Insert Function, the macro editor and step editor), the context
-  menus, the task panes, the message boxes and the command labels.
-- `crates/ui-egui/src/i18n/zh_errors.rs` adds 142 sentence templates for engine messages that
-  carry data (`'{name}' is protected.`, `The timeline must hold numbers or dates ({} isn't one).`).
+  the ribbon and every ribbon path, the sheet tabs, the status bar, the formula bar, the
+  Backstage/File view, every dialog (including Goal Seek, Solver, the analysis toolpak dialogs,
+  Format Cells, Insert Function, the macro editor and step editor), the context menus, the task
+  panes, the message boxes and the command labels.
+- `crates/ui-egui/src/i18n/zh_errors.rs` adds sentence templates for engine messages that carry
+  data (`'{name}' is protected.`, `The timeline must hold numbers or dates ({} isn't one).`).
   `Language::tr_error` (also added here) matches the fixed parts of a finished sentence against
   the template and carries the data across, so a message whose middle is a file name still reads
   naturally in Chinese.
-- `crates/ui-egui/src/i18n/zh_functions.rs` adds function help in Chinese: 752 entries of
-  `DESCRIPTIONS` (one per catalog function, so the argument hint, the autocomplete list, Insert
-  Function and the Formulas-tab menus all read in Chinese). Function *names* stay English —
-  formulas keep `=SUM(A1:A9)` — matching the project's convention that command and function
-  identifiers are stable.
+- `crates/ui-egui/src/i18n/zh_functions.rs` adds function help in Chinese: a `DESCRIPTIONS` table
+  (keyed by the English catalog description text, so functions that share a description share an
+  entry) and an `ARGUMENTS` table of translated argument names, so the argument hint, the
+  autocomplete list, Insert Function and the Formulas-tab menus all read in Chinese. Function
+  *names* stay English — formulas keep `=SUM(A1:A9)` — matching the project's convention that
+  command and function identifiers are stable.
 - `Language::tr_fill` fills `{slot}` templates for composed labels; dialog notes that combine a
   sentence with live data (the Allow Edit Ranges summary, the Move or Copy sheet list, the
   hidden-sheet list, the protected-file name, the hyperlink warning) build their text from

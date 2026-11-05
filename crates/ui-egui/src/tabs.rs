@@ -485,7 +485,10 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     // The layout runs right to left, so the last statistic is drawn first.
                     // Clicking a statistic copies its value (without the label) to the clipboard.
                     for p in selection_statistics(app).into_iter().rev() {
-                        let value = p.split_once(": ").map_or(p.as_str(), |(_, v)| v).to_owned();
+                        // Localized statistics use a full-width colon (`平均值：4`): copy just
+                        // the value after either separator, or the whole text when neither is
+                        // there.
+                        let value = p.split_once(": ").or_else(|| p.split_once('：')).map_or(p.as_str(), |(_, v)| v).to_owned();
                         let resp = ui.add(
                             egui::Label::new(egui::RichText::new(p).font(theme::ui_font(12.5)).color(t.text_dim))
                                 .selectable(false)

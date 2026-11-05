@@ -77,14 +77,14 @@ fn comments(app: &mut SheetApp, ui: &mut Ui) {
                         let _ = app.run("selection.set", json!({"cell": cell}));
                         app.grid.ensure_visible = true;
                     }
-                    ui.label(egui::RichText::new(crate::i18n::current(ui.ctx()).tr(&c.author)).color(t.text_dim));
+                    ui.label(egui::RichText::new(crate::i18n::current(ui.ctx()).author_name(&c.author)).color(t.text_dim));
                     if c.resolved {
                         ui.label(egui::RichText::new(crate::i18n::current(ui.ctx()).tr("Resolved")).small().color(t.accent));
                     }
                 });
                 ui.label(&c.text);
                 for (a, txt) in &c.replies {
-                    ui.label(egui::RichText::new(format!("↳ {}: {txt}", crate::i18n::current(ui.ctx()).tr(a))).color(t.text));
+                    ui.label(egui::RichText::new(format!("↳ {}: {txt}", crate::i18n::current(ui.ctx()).author_name(a))).color(t.text));
                 }
                 let key = egui::Id::unique(("reply", &cell));
                 let mut draft: String = ui.ctx().data_mut(|m| m.get_temp(key)).unwrap_or_default();

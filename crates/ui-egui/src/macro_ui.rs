@@ -217,7 +217,9 @@ pub fn question_box(app: &mut SheetApp, ctx: &egui::Context) {
     egui::Modal::new(egui::Id::unique("gridcraft.macro_question")).show(ctx, |ui| {
         ui.set_width(400.0);
         ui.label(egui::RichText::new(tr(ui, &q.title)).strong());
-        ui.add(egui::Label::new(tr(ui, &q.text)).wrap());
+        // `q.text` is already formatted around data (a macro name may carry a `|`, which `tr`
+        // reads as a context separator): it renders as written, no translation pass.
+        ui.add(egui::Label::new(egui::RichText::new(&q.text)).wrap());
         ui.add_space(8.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button(tr(ui, "Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {

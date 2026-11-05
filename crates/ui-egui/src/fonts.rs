@@ -150,20 +150,38 @@ fn file_faces(data: &[u8]) -> Vec<(u32, String, Vec<String>, String, String)> {
     let name = |f: &skrifa::FontRef<'_>, ids: &[StringId]| -> Option<String> {
         ids.iter().find_map(|id| f.localized_strings(*id).english_or_first().map(|s| s.to_string()).filter(|s| !s.is_empty()))
     };
-    // The Chinese family name: the first `zh` record (zh-Hans, zh-Hant, zh-CN, …) across the
-    // family-name ids. A font with no Chinese name gets none.
+    // The Chinese family name: a `zh-Hans`/`zh-CN` record when the font has one (this is the
+    // Simplified Chinese interface), else the first other `zh` record (zh-Hant, …) across the
+    // family-name ids — whichever order the font lists them in. A font with no Chinese name
+    // gets none.
     let zh_name = |f: &skrifa::FontRef<'_>, ids: &[StringId]| -> String {
-        ids.iter()
-            .flat_map(|id| f.localized_strings(*id))
-            .find(|s| s.language().is_some_and(|l| l.starts_with("zh")) && !s.to_string().is_empty())
-            .map(|s| s.to_string())
-            .unwrap_or_default()
+        let mut hans: Option<String> = None;
+        let mut first_zh: Option<String> = None;
+        for s in ids.iter().flat_map(|id| f.localized_strings(*id)) {
+            let text = s.to_string();
+            if text.is_empty() {
+                continue;
+            }
+            let Some(lang) = s.language() else { continue };
+            if !lang.starts_with("zh") {
+                continue;
+            }
+            if lang.starts_with("zh-Hans") || lang == "zh-CN" {
+                if hans.is_none() {
+                    hans = Some(text);
+                }
+            } else if first_zh.is_none() {
+                first_zh = Some(text);
+            }
+        }
+        hans.or(first_zh).unwrap_or_default()
     };
     let family_ids = [StringId::TYPOGRAPHIC_FAMILY_NAME, StringId::FAMILY_NAME];
     (0..count)
         .filter_map(|i| {
             let f = skrifa::FontRef::from_index(data, i).ok()?;
             let family = name(&f, &family_ids)?;
+            let zh = zh_name(&f, &family_ids);
             let mut names = vec![family.clone()];
             for s in family_ids.iter().flat_map(|id| f.localized_strings(*id)) {
                 if names.len() >= MAX_FAMILY_NAMES {
@@ -174,8 +192,17 @@ fn file_faces(data: &[u8]) -> Vec<(u32, String, Vec<String>, String, String)> {
                     names.push(s);
                 }
             }
+            // The font list offers the Chinese name (`display_name`), so it has to stay
+            // resolvable by `faces_named`: when the first MAX_FAMILY_NAMES name records don't
+            // carry it, a slot goes to the Chinese alias instead of the least significant name.
+            if !zh.is_empty() && !names.iter().any(|n| n.eq_ignore_ascii_case(&zh)) {
+                if names.len() >= MAX_FAMILY_NAMES {
+                    names.pop();
+                }
+                names.push(zh.clone());
+            }
             let style = name(&f, &[StringId::TYPOGRAPHIC_SUBFAMILY_NAME, StringId::SUBFAMILY_NAME]).unwrap_or_else(|| "Regular".into());
-            Some((i, family, names, style, zh_name(&f, &family_ids)))
+            Some((i, family, names, style, zh))
         })
         .collect()
 }
@@ -640,6 +667,38 @@ mod tests {
         let texts: Vec<String> = (0..100).map(|i| format!("Family {i}")).collect();
         let records: Vec<(u16, u16, &str)> = texts.iter().enumerate().map(|(i, t)| (0x0400 + i as u16, 1, t.as_str())).collect();
         let (_, _, names, _, _) = &file_faces(&font_with_names(&records))[0];
+        assert_eq!(names.len(), MAX_FAMILY_NAMES);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_simplified_chinese_name_wins_over_the_traditional_one() {
+        // A font may list its zh-Hant record before its zh-Hans one: the Simplified Chinese
+        // interface shows the zh-Hans (or zh-CN) name, not whichever zh record comes first.
+        const ZH_HANT: u16 = 0x0404;
+        const ZH_HANS: u16 = 0x0804;
+        let font = font_with_names(&[(EN, 1, "Test Font"), (ZH_HANT, 1, "測試字體"), (ZH_HANS, 1, "测试字体")]);
+        let (_, _, names, _, zh) = &file_faces(&font)[0];
+        assert_eq!(zh, "测试字体");
+        assert!(names.iter().any(|n| n == "测试字体"));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_chinese_alias_stays_resolvable_when_names_are_capped() {
+        // The font list offers the Chinese name, so the cap on `names` must not cost the
+        // Chinese alias its slot: 39 other localized names push the zh record past the limit.
+        const ZH_HANS: u16 = 0x0804;
+        let mut texts: Vec<String> = (0..39).map(|i| format!("Family {i}")).collect();
+        texts.push("思源黑体".into());
+        let records: Vec<(u16, u16, &str)> = texts
+            .iter()
+            .enumerate()
+            .map(|(i, t)| if i == texts.len() - 1 { (ZH_HANS, 1, t.as_str()) } else { (EN + i as u16, 1, t.as_str()) })
+            .collect();
+        let (_, _, names, _, zh) = &file_faces(&font_with_names(&records))[0];
+        assert_eq!(zh, "思源黑体");
+        assert!(names.iter().any(|n| n == "思源黑体"), "the offered Chinese name stays in `names`");
         assert_eq!(names.len(), MAX_FAMILY_NAMES);
     }
 
