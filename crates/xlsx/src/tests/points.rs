@@ -275,7 +275,11 @@ fn hostile_point_lists_are_bounded() {
     assert!(pts.iter().all(|p| p.explosion.is_some_and(|e| e <= 400)));
     // Written back without panicking, and the point indexes survive.
     let (back, _) = round_trip(vec![c]);
-    assert_eq!(back[0].series[0].points.len(), pts.len());
+    assert_eq!(
+        back[0].series[0].points.iter().map(|p| p.index).collect::<Vec<_>>(),
+        vec![0, 2],
+        "the two formatted points inside the four-value series survive the round trip"
+    );
 }
 
 #[test]
