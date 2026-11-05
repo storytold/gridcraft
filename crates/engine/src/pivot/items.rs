@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use super::{CellError, HashMap, MONTHS, Ordering, PivotDateGroup, PivotField, PivotFunc, PivotSort, Source, Value, Workbook, datetime_from_serial};
 
 // ---------------------------------------------------------------- items
@@ -120,10 +122,35 @@ pub(super) struct Acc {
     mean: f64,
     m2: f64,
     err: Option<CellError>,
+    /// The values seen so far, kept only for a Distinct Count accumulator.
+    distinct: Option<HashSet<String>>,
+}
+
+/// What makes two values the same for a Distinct Count: text ignores case, like item labels do.
+fn distinct_key(v: &Value) -> Option<String> {
+    Some(match v {
+        Value::Empty => return None,
+        Value::Number(n) => format!("n{}", if *n == 0.0 { 0.0 } else { *n }.to_bits()),
+        Value::Text(t) if t.is_empty() => return None,
+        Value::Text(t) => format!("t{}", t.to_lowercase()),
+        Value::Bool(b) => format!("b{b}"),
+        Value::Error(e) => format!("e{}", e.as_str()),
+        Value::Array(_) => return distinct_key(&v.scalar()),
+    })
 }
 
 impl Acc {
+    /// An accumulator for value field function `f`: a Distinct Count also remembers each value it saw.
+    pub(super) fn for_func(f: PivotFunc) -> Self {
+        Self { distinct: (f == PivotFunc::DistinctCount).then(HashSet::new), ..Self::default() }
+    }
+
     pub(super) fn add(&mut self, v: &Value) {
+        if let Some(seen) = &mut self.distinct
+            && let Some(key) = distinct_key(v)
+        {
+            seen.insert(key);
+        }
         match v {
             Value::Empty => {}
             Value::Number(n) => {
@@ -158,6 +185,7 @@ impl Acc {
         match f {
             PivotFunc::Count => return Value::number(self.count as f64),
             PivotFunc::CountNumbers => return Value::number(n),
+            PivotFunc::DistinctCount => return Value::number(self.distinct.as_ref().map_or(0, HashSet::len) as f64),
             _ => {}
         }
         if let Some(e) = self.err {
@@ -192,7 +220,7 @@ impl Acc {
                     Value::number(if f == PivotFunc::VarP { var } else { var.sqrt() })
                 }
             }
-            PivotFunc::Count | PivotFunc::CountNumbers => Value::Empty,
+            PivotFunc::Count | PivotFunc::CountNumbers | PivotFunc::DistinctCount => Value::Empty,
         }
     }
 }
@@ -208,6 +236,7 @@ pub fn func_caption(f: PivotFunc) -> &'static str {
         PivotFunc::Min => "Min",
         PivotFunc::Product => "Product",
         PivotFunc::CountNumbers => "Count",
+        PivotFunc::DistinctCount => "Distinct Count",
         PivotFunc::StdDev => "StdDev",
         PivotFunc::StdDevP => "StdDevp",
         PivotFunc::Var => "Var",

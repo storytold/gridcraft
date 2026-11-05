@@ -116,6 +116,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                                 for (func, l) in [
                                     ("sum", "Summarize by Sum"),
                                     ("count", "Summarize by Count"),
+                                    ("distinctCount", "Summarize by Distinct Count"),
                                     ("average", "Summarize by Average"),
                                     ("max", "Summarize by Max"),
                                     ("min", "Summarize by Min"),

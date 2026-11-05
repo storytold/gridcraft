@@ -58,6 +58,9 @@ pub enum PivotFunc {
     Min,
     Product,
     CountNumbers,
+    /// Number of different non-empty values (Excel's Distinct Count, a Data Model summary).
+    /// A workbook file has no field for it: it is saved as Count.
+    DistinctCount,
     StdDev,
     StdDevP,
     Var,

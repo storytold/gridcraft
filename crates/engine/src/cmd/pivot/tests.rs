@@ -1059,3 +1059,30 @@ fn legacy_count_numbers_caption_follows_the_function() {
         assert_eq!(text(&s, "E3"), after, "{legacy}");
     }
 }
+
+#[test]
+fn distinct_count_counts_each_different_value_once_per_cell_and_in_the_totals() {
+    // #3336: Alice, Bob, Alice, Charlie is 3 distinct customers, where Count says 4. Case does not
+    // make a name different, and an empty cell is not a value.
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = json!([
+        ["Region", "Customer"],
+        ["East", "Alice"],
+        ["East", "Bob"],
+        ["East", "alice"],
+        ["East", null],
+        ["West", "Alice"],
+        ["West", "Charlie"]
+    ]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    let make = json!({"source": "Sheet1!$A$1:$B$7", "destination": "Sheet1!D3", "rows": ["Region"], "values": ["Customer"]});
+    s.execute("insert.pivotTable", make).unwrap();
+    s.execute("pivot.valueSettings", json!({"index": 0, "func": "count"})).unwrap();
+    let counts: Vec<Value> = ["E4", "E5", "E6"].iter().map(|a| val(&s, a)).collect();
+    assert_eq!(counts, [3.0, 2.0, 5.0].map(Value::Number), "Count counts every non-empty cell");
+    s.execute("pivot.valueSettings", json!({"index": 0, "func": "distinctCount"})).unwrap();
+    assert_eq!(text(&s, "E3"), "Distinct Count of Customer");
+    let distinct: Vec<Value> = ["E4", "E5", "E6"].iter().map(|a| val(&s, a)).collect();
+    assert_eq!(distinct, [2.0, 2.0, 3.0].map(Value::Number), "East has Alice and Bob, West Alice and Charlie, 3 in all");
+}

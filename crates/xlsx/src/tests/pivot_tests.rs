@@ -760,3 +760,26 @@ fn two_value_fields_without_columns_hide_the_values_row() {
     assert!(t.contains("firstHeaderRow=\"1\""), "{t}");
     assert!(!t.contains("hideValuesRow"), "{t}");
 }
+
+#[test]
+fn distinct_count_is_saved_as_count_and_keeps_its_name() {
+    // The file format's subtotal list has no distinct count: the file stays valid and the field
+    // keeps its caption, but it reads back as Count.
+    let mut wb = workbook();
+    let pivot = wb.sheet_mut(1).unwrap().pivots.iter_mut().find(|p| p.name == "Trend").unwrap();
+    let distinct = PivotValue { func: PivotFunc::DistinctCount, name: "Distinct Count of Sales".into(), ..pivot.values[0].clone() };
+    pivot.values = vec![distinct];
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = unzip(&bytes);
+    let table = parts
+        .iter()
+        .filter(|(path, _)| path.starts_with("xl/pivotTables/pivotTable"))
+        .map(|(_, xml)| String::from_utf8_lossy(xml))
+        .find(|xml| xml.contains("name=\"Trend\""))
+        .unwrap();
+    assert!(table.contains("<dataField name=\"Distinct Count of Sales\" fld=\"4\" subtotal=\"count\""), "{table}");
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    assert!(report.warnings.iter().all(|w| !w.to_lowercase().contains("pivot")), "{:?}", report.warnings);
+    let value = &back.sheet(1).unwrap().pivots.iter().find(|p| p.name == "Trend").unwrap().values[0];
+    assert_eq!((value.func, value.name.as_str()), (PivotFunc::Count, "Distinct Count of Sales"));
+}
