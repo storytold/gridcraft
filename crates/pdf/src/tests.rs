@@ -351,6 +351,8 @@ fn symbol_font_draws_maths_in_its_own_encoding() {
     assert_eq!(text_width(Font::Symbol, 10.0, "\u{2211}"), 7.13);
 }
 
+/// A shared image is written once however many pages draw it, an unused one not at all, and pages
+/// refuse bad buffers and another document's images.
 #[test]
 fn shared_images_are_written_once() -> Result<(), Box<dyn Error>> {
     let mut d = PdfDoc::new();

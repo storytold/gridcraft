@@ -300,7 +300,8 @@ impl HfImageCache {
     }
 
     /// The PDF image of `data` decoded for at least `size` pixels: one already decoded that
-    /// large (the same bytes, from this sheet or another), or a new decode within the budget.
+    /// large, or at its own size (the same bytes, from this sheet or another), or a new decode
+    /// within the budget.
     /// An image that can't be decoded is tried once; one that didn't fit the budget is tried
     /// again only for a smaller size (the budget only shrinks).
     pub(super) fn image(&mut self, doc: &mut PdfDoc, data: &std::sync::Arc<[u8]>, size: (u32, u32)) -> Option<gridcraft_pdf::ImageId> {
@@ -318,6 +319,7 @@ impl HfImageCache {
                 _ => {}
             }
         }
+        let mut at = size;
         let outcome = match decode_limited(data, size.0, size.1, self.budget) {
             Err(failed) => failed,
             Ok((rgba, pw, ph)) => match self.budget.checked_sub(rgba.len()) {
@@ -325,13 +327,18 @@ impl HfImageCache {
                 Some(left) => match doc.add_image(&rgba, [pw, ph]) {
                     Some(id) => {
                         self.budget = left;
+                        // Not shrunk: the source's own pixels, which serve any larger size too
+                        // (images are never enlarged).
+                        if crate::io::image_size(data) == Some((pw, ph)) {
+                            at = (u32::MAX, u32::MAX);
+                        }
                         Outcome::Image(id)
                     }
                     None => Outcome::Unreadable,
                 },
             },
         };
-        self.decoded.push((data.clone(), size, outcome));
+        self.decoded.push((data.clone(), at, outcome));
         match outcome {
             Outcome::Image(id) => Some(id),
             _ => None,

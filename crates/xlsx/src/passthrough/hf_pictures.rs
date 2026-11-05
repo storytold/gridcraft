@@ -160,10 +160,12 @@ mod tests {
     use super::*;
     use gridcraft_model::{PreservedRel, PreservedXml};
 
+    /// A relationship from a kept part to `target`.
     fn rel(id: &str, target: &str) -> PreservedRel {
         PreservedRel { id: id.into(), rel_type: "x/image".into(), target: target.into(), external: false }
     }
 
+    /// Kept content with a header/footer drawing `vml` and two images.
     fn kept(vml: &str) -> Preserved {
         let part = |name: &str, data: &[u8], rels: Vec<PreservedRel>| PreservedPart {
             name: name.into(),
@@ -183,12 +185,14 @@ mod tests {
         }
     }
 
+    /// A picture shape `id` with `style`, showing the image `rid`.
     fn shape(id: &str, style: &str, rid: &str) -> String {
         format!(
             r##"<v:shape id="{id}" o:spid="_x0000_s1025" type="#_x0000_t75" style="{style}"><v:imagedata o:relid="{rid}" o:title="x"/></v:shape>"##
         )
     }
 
+    /// Each shape gives its section, page kind, size (in any unit) and image.
     #[test]
     fn positions_sizes_and_images() {
         let vml = [
@@ -209,6 +213,8 @@ mod tests {
         );
     }
 
+    /// Shapes with an unknown id, a bad size or unit or a missing image are skipped, never an error;
+    /// sizes are capped and only the first shape of a section counts.
     #[test]
     fn damaged_or_unknown_shapes_are_skipped() {
         let vml = [
@@ -228,6 +234,7 @@ mod tests {
         assert_eq!((pics[0].section, pics[0].footer, pics[0].width, &*pics[0].data), (2, true, MAX_SIDE_PT, b"two".as_slice()));
     }
 
+    /// No drawing, no drawing part or a drawing that isn't text gives no pictures.
     #[test]
     fn nothing_without_the_drawing() {
         assert!(header_footer_pictures(&Preserved::default()).is_empty());
@@ -239,6 +246,7 @@ mod tests {
         assert!(header_footer_pictures(&k).is_empty());
     }
 
+    /// Attributes are matched by their whole name, in either quote style.
     #[test]
     fn attributes_need_their_own_name() {
         let tag = r#"<v:shape o:spid="_x0000_s1" id='CH' xid="no""#;
