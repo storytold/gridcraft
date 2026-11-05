@@ -2,6 +2,7 @@
 //! `data.sortAscending`) plus primitive editing commands (`cell.set`, `selection.set`).
 
 pub mod analysis;
+pub mod controls;
 pub mod data;
 pub mod draw;
 pub mod edit;
@@ -16,6 +17,7 @@ pub mod inspect;
 pub mod macros;
 pub mod pivot;
 pub mod print;
+pub mod python;
 pub mod review;
 pub mod sheet;
 pub mod slicer;
@@ -164,6 +166,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(format::specs());
         v.extend(sheet::specs());
         v.extend(insert::specs());
+        v.extend(controls::specs());
         v.extend(equation::specs());
         v.extend(data::specs());
         v.extend(formulas::specs());
@@ -176,6 +179,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(spelling::specs());
         v.extend(solver::specs());
         v.extend(pivot::specs());
+        v.extend(python::specs());
         v.extend(slicer::specs());
         v.extend(whatif::specs());
         v.extend(forecast::specs());
@@ -433,6 +437,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     } else if !changed.is_empty() {
         d.calc.cells_changed(&mut wb, &changed);
     }
+    controls::sync_linked_values(&mut wb);
     if let Some(t0) = t0 {
         eprintln!("commit: + recalc {:?}", since(t0));
     }
@@ -457,8 +462,11 @@ pub(crate) const TOUCH_LOG_LIMIT: usize = 1_000_000;
 pub(crate) const PROTECTED: &str = "The cell or chart you're trying to change is on a protected sheet.";
 
 /// Refuses an edit that changed what a locked cell on a protected sheet holds (its value or
-/// formula), whichever command made it. Sheets are matched by name, so moving, renaming or
-/// deleting a sheet isn't an edit of its cells.
+/// formula), or that unlocked it, whichever command made it. Sheets are matched by name, so
+/// moving, renaming or deleting a sheet isn't an edit of its cells. A sort or duplicate removal
+/// that moves an unlocked cell with equal content onto a locked one changes no content but would
+/// leave the cell editable, so the effective lock (row and column formats included) is compared
+/// as well.
 fn check_protection(old: &Workbook, new: &Workbook, unlocked: &[(String, String)]) -> Result<()> {
     for sh in &old.sheets {
         if !sh.is_protected() {
@@ -469,7 +477,8 @@ fn check_protection(old: &Workbook, new: &Workbook, unlocked: &[(String, String)
             continue;
         }
         for c in sh.cells.diff(&after.cells) {
-            if !same_content(sh.cell(c), after.cell(c))
+            let unlocked_now = !new.styles.get(after.style_id(c)).protection.locked;
+            if (unlocked_now || !same_content(sh.cell(c), after.cell(c)))
                 && old.styles.get(sh.style_id(c)).protection.locked
                 && let Some(m) = locked_cell_error(sh, c, unlocked)
             {
@@ -497,10 +506,14 @@ pub(crate) fn refuse_unless_allowed(s: &Session, sheet: usize, what: &str, pick:
 pub(crate) fn locked_cell_error(sh: &gridcraft_model::Sheet, c: CellRef, unlocked: &[(String, String)]) -> Option<String> {
     let mut needs_password = None;
     for r in sh.edit_ranges.iter().filter(|r| r.contains(c)) {
-        if r.password.is_none() || unlocked.iter().any(|(s, t)| *s == sh.name && *t == r.title) {
+        // A range limited to Windows users or groups (a security descriptor) can't be checked
+        // here, so without a password it stays locked rather than opening to every editor.
+        if (r.password.is_none() && r.security_descriptor.is_none()) || unlocked.iter().any(|(s, t)| *s == sh.name && *t == r.title) {
             return None;
         }
-        needs_password.get_or_insert(r.title.as_str());
+        if r.password.is_some() {
+            needs_password.get_or_insert(r.title.as_str());
+        }
     }
     Some(match needs_password {
         Some(t) => format!("The range \"{t}\" needs its password before it can be changed (Review › Allow Edit Ranges)."),
@@ -522,7 +535,7 @@ fn check_arrays(old: &Workbook, new: &Workbook) -> Result<()> {
             continue;
         }
         for c in sh.cells.diff(&after.cells) {
-            let filled = after.cell(c).is_some_and(|x| x.formula.is_some() || !x.value.is_empty());
+            let filled = after.cell(c).is_some_and(gridcraft_model::Cell::has_content);
             if !filled || !sh.spill.contains_key(&c) || same_content(sh.cell(c), after.cell(c)) {
                 continue;
             }
@@ -538,13 +551,18 @@ fn check_arrays(old: &Workbook, new: &Workbook) -> Result<()> {
     Ok(())
 }
 
-/// Two cells hold the same value or formula (formats aside).
+/// Two cells hold the same value, formula or Python code (formats aside; a Python cell's result
+/// is not something the person edits).
 fn same_content(a: Option<&gridcraft_model::Cell>, b: Option<&gridcraft_model::Cell>) -> bool {
-    let empty = |c: Option<&gridcraft_model::Cell>| c.is_none_or(|c| c.formula.is_none() && c.value.is_empty());
+    let empty = |c: Option<&gridcraft_model::Cell>| c.is_none_or(|c| !c.has_content());
     match (a, b) {
         (Some(a), Some(b)) => match (&a.formula, &b.formula) {
             (Some(x), Some(y)) => x.text == y.text && x.array == y.array,
-            (None, None) => a.value == b.value,
+            (None, None) => match (&a.py, &b.py) {
+                (Some(x), Some(y)) => x.code == y.code && x.object == y.object,
+                (None, None) => a.value == b.value,
+                _ => false,
+            },
             _ => false,
         },
         _ => empty(a) && empty(b),

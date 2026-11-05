@@ -78,6 +78,8 @@ fn chart_names_are_written_qualified() {
         data_table: None,
         gridlines: true,
         style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: None,
         y_title: None,
         source: None,
@@ -138,4 +140,44 @@ fn chart_names_are_written_qualified() {
     zip::ZipArchive::new(std::io::Cursor::new(&bytes2)).unwrap().by_name("xl/charts/chart1.xml").unwrap().read_to_string(&mut again).unwrap();
     let refs = |x: &str| x.split("<c:f>").skip(1).filter_map(|p| p.split_once("</c:f>").map(|(f, _)| f.to_string())).collect::<Vec<_>>();
     assert_eq!(refs(&again), refs(&xml));
+}
+
+/// A quoted sheet name keeps its outer spaces: `' Sales '!Data` is not `Sales!Data`, so the
+/// chart doesn't switch to the other sheet's name on save.
+#[test]
+fn chart_names_keep_spaces_around_a_quoted_sheet_name() {
+    let mut wb = Workbook::default();
+    let mut s = Sheet::new("Sales");
+    s.charts.push(Chart {
+        id: 1,
+        kind: ChartKind::BarStacked,
+        anchor: Anchor { cell: gridcraft_core::CellRef::new(0, 3), width: 480.0, height: 300.0, ..Anchor::default() },
+        title: None,
+        series: vec![series("' Sales '!Label", "' Sales '!Data")],
+        legend: LegendPos::Bottom,
+        data_labels: false,
+        data_table: None,
+        gridlines: true,
+        style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
+        x_title: None,
+        y_title: None,
+        source: None,
+        by_rows: false,
+        pivot: None,
+    });
+    wb.sheets = vec![Arc::new(s), Arc::new(Sheet::new(" Sales "))];
+    wb.names = vec![
+        name("Items", None, "Sales!$A$2:$A$4"),
+        name("Data", Some(0), "Sales!$B$2:$B$4"),
+        name("Data", Some(1), "' Sales '!$B$2:$B$4"),
+        name("Label", Some(0), "Sales!$B$1"),
+        name("Label", Some(1), "' Sales '!$B$1"),
+    ];
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut xml = String::new();
+    zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap().by_name("xl/charts/chart1.xml").unwrap().read_to_string(&mut xml).unwrap();
+    assert!(xml.contains("<c:val><c:numRef><c:f>' Sales '!Data</c:f>"), "{xml}");
+    assert!(xml.contains("<c:tx><c:strRef><c:f>' Sales '!Label</c:f>"), "{xml}");
 }

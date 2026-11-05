@@ -2,14 +2,15 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use gridcraft_core::{CellRef, RangeRef, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::cell::{Cell, CellPicture};
 use crate::features::{
-    Anchor, AutoFilter, Chart, Comment, CondFormat, Hyperlink, Image, LineInfo, ObjKind, ObjRef, PivotTable, PrintSettings, Shape, ShapeKind,
-    SheetProtection, Slicer, Sparkline, Table, Validation,
+    Anchor, AutoFilter, Chart, Comment, CondFormat, FormControl, Hyperlink, Image, LineInfo, ObjKind, ObjRef, PivotTable, PrintSettings, Shape,
+    ShapeKind, SheetProtection, Slicer, Sparkline, Table, Validation,
 };
 use crate::store::CellStore;
 use crate::style::{Color, StyleId};
@@ -52,9 +53,44 @@ impl SheetViewMode {
     }
 }
 
+/// A sheet's identity while the app runs, for what must follow one sheet (an open cell draft): a
+/// sheet made new (added, inserted, copied, read from a file or from JSON) gets a fresh one, and it
+/// stays with the sheet through renames, moves and the copies undo keeps. Never saved.
+/// It is not content: any two compare equal, so comparing sheets compares what they hold; compare
+/// identities with [`SheetUid::get`].
+#[derive(Clone, Copy, Debug)]
+pub struct SheetUid(u64);
+
+/// The next [`SheetUid`]; 0 is never given out.
+static NEXT_SHEET_UID: AtomicU64 = AtomicU64::new(1);
+
+impl SheetUid {
+    pub fn fresh() -> SheetUid {
+        SheetUid(NEXT_SHEET_UID.fetch_add(1, Ordering::Relaxed))
+    }
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl Default for SheetUid {
+    fn default() -> SheetUid {
+        SheetUid::fresh()
+    }
+}
+
+impl PartialEq for SheetUid {
+    fn eq(&self, _: &SheetUid) -> bool {
+        true
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Sheet {
     pub name: String,
+    /// The sheet's identity while the app runs ([`SheetUid`]). Not in JSON or the file.
+    #[serde(skip)]
+    pub uid: SheetUid,
     /// The `sheetId` the file gave the sheet, written back on save so that what refers to the
     /// sheet by its id keeps finding it; 0 for a sheet the file did not have. Not in JSON.
     #[serde(skip)]
@@ -111,6 +147,10 @@ pub struct Sheet {
     /// On-sheet slicer widgets (filter a table column by clicking value tiles).
     #[serde(default)]
     pub slicers: Vec<Slicer>,
+    /// Form controls (buttons, sliders, spin buttons). They paint above every other object and
+    /// take clicks first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub controls: Vec<FormControl>,
     /// PivotTables whose output lives on this sheet.
     #[serde(default)]
     pub pivots: Vec<PivotTable>,
@@ -149,6 +189,7 @@ impl Sheet {
     pub fn new(name: impl Into<String>) -> Sheet {
         Sheet {
             name: name.into(),
+            uid: SheetUid::fresh(),
             file_id: 0,
             cells: CellStore::new(),
             cell_pictures: BTreeMap::new(),
@@ -182,6 +223,7 @@ impl Sheet {
             shapes: vec![],
             sparklines: vec![],
             slicers: vec![],
+            controls: vec![],
             pivots: vec![],
             protection: None,
             edit_ranges: vec![],
@@ -202,6 +244,42 @@ impl Sheet {
         self.spill_ranges.iter().find(|(anchor, range)| **anchor != c && range.contains(c)).map(|(anchor, _)| *anchor)
     }
 
+    /// Removes the spilled values inside `r`. The work is bounded by the values stored, not by
+    /// the size of `r`, so a range from a file that claims the whole sheet costs no more than the
+    /// values it holds.
+    pub fn clear_spill(&mut self, r: RangeRef) {
+        if r.count() <= self.spill.len() as u64 {
+            for c in r.iter() {
+                self.spill.remove(&c);
+            }
+        } else {
+            self.spill.retain(|c, _| !r.contains(*c));
+        }
+    }
+
+    /// Turns the spill anchored at `anchor` into plain values, for a Python cell that keeps only
+    /// its value: the range is forgotten, and each spilled value in it becomes its cell's value,
+    /// unless the cell holds content of its own (its format is kept either way). The work is
+    /// bounded by the spilled values stored, not by the size of the range.
+    pub fn settle_spill(&mut self, anchor: CellRef) {
+        let Some(r) = self.spill_ranges.remove(&anchor) else { return };
+        let inside: Vec<CellRef> = self.spill.range(r.start..=r.end).map(|(c, _)| *c).filter(|c| r.contains(*c)).collect();
+        for c in inside {
+            let Some(v) = self.spill.remove(&c) else { continue };
+            if v.is_empty() || c == anchor {
+                continue;
+            }
+            match self.cells.get_mut(c) {
+                Some(cell) if cell.has_content() => {}
+                Some(cell) => cell.value = v,
+                None => {
+                    let style = self.style_id(c);
+                    self.cells.set(c, Cell::styled(v, style));
+                }
+            }
+        }
+    }
+
     /// The floating object with workbook-unique id `id` on this sheet.
     pub fn object_ref(&self, id: u32) -> Option<ObjRef> {
         let kind = if self.charts.iter().any(|o| o.id == id) {
@@ -212,6 +290,8 @@ impl Sheet {
             if s.kind == ShapeKind::Equation { ObjKind::Equation } else { ObjKind::Shape }
         } else if self.slicers.iter().any(|o| o.id == id) {
             ObjKind::Slicer
+        } else if self.controls.iter().any(|o| o.id == id) {
+            ObjKind::Control
         } else {
             return None;
         };
@@ -232,6 +312,7 @@ impl Sheet {
             ObjKind::Shape => self.shapes.iter().find(|c| c.id == o.id).map(|c| c.anchor),
             ObjKind::Slicer => self.slicers.iter().find(|c| c.id == o.id).map(|c| c.anchor),
             ObjKind::Equation => self.shapes.iter().find(|c| c.id == o.id && c.kind == ShapeKind::Equation).map(|c| c.anchor),
+            ObjKind::Control => self.controls.iter().find(|c| c.id == o.id).map(|c| c.anchor),
         }
     }
 
@@ -242,6 +323,7 @@ impl Sheet {
             ObjKind::Shape => self.shapes.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
             ObjKind::Slicer => self.slicers.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
             ObjKind::Equation => self.shapes.iter_mut().find(|c| c.id == o.id && c.kind == ShapeKind::Equation).map(|c| &mut c.anchor),
+            ObjKind::Control => self.controls.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
         }
     }
 
@@ -258,12 +340,13 @@ impl Sheet {
             ObjKind::Shape => take(&mut self.shapes, |c| c.id == o.id),
             ObjKind::Slicer => take(&mut self.slicers, |c| c.id == o.id),
             ObjKind::Equation => take(&mut self.shapes, |c| c.id == o.id && c.kind == ShapeKind::Equation),
+            ObjKind::Control => take(&mut self.controls, |c| c.id == o.id),
         }
     }
 
-    /// Every floating object's anchor in a fixed order (charts, images, shapes, slicers) that
-    /// [`Sheet::object_anchors_mut`] repeats, so a pass can compute new anchors from the old ones
-    /// and write them back in step.
+    /// Every floating object's anchor in a fixed order (charts, images, shapes, slicers, controls)
+    /// that [`Sheet::object_anchors_mut`] repeats, so a pass can compute new anchors from the old
+    /// ones and write them back in step.
     pub fn object_anchors(&self) -> impl Iterator<Item = &Anchor> {
         self.charts
             .iter()
@@ -271,6 +354,7 @@ impl Sheet {
             .chain(self.images.iter().map(|o| &o.anchor))
             .chain(self.shapes.iter().map(|o| &o.anchor))
             .chain(self.slicers.iter().map(|o| &o.anchor))
+            .chain(self.controls.iter().map(|o| &o.anchor))
     }
 
     pub fn object_anchors_mut(&mut self) -> impl Iterator<Item = &mut Anchor> {
@@ -280,6 +364,7 @@ impl Sheet {
             .chain(self.images.iter_mut().map(|o| &mut o.anchor))
             .chain(self.shapes.iter_mut().map(|o| &mut o.anchor))
             .chain(self.slicers.iter_mut().map(|o| &mut o.anchor))
+            .chain(self.controls.iter_mut().map(|o| &mut o.anchor))
     }
     /// Displayed value of a cell: its own value, or a spilled value.
     pub fn value(&self, c: CellRef) -> Value {
@@ -338,7 +423,7 @@ impl Sheet {
     }
     pub fn set_value(&mut self, c: CellRef, v: Value) {
         let style = self.style_id(c);
-        self.set_cell(c, Cell { value: v, formula: None, style });
+        self.set_cell(c, Cell { value: v, formula: None, style, py: None });
     }
     /// Replaces content, removing any picture at this address. Style-only edits use set_style.
     pub fn set_cell(&mut self, c: CellRef, cell: Cell) {
@@ -357,7 +442,7 @@ impl Sheet {
     /// Pictures retain a scalar fallback for calculation and unsupported consumers.
     pub fn set_picture(&mut self, c: CellRef, picture: Arc<CellPicture>) {
         let style = self.style_id(c);
-        self.cells.set(c, Cell { value: Value::Error(gridcraft_core::CellError::Value), formula: None, style });
+        self.cells.set(c, Cell { value: Value::Error(gridcraft_core::CellError::Value), formula: None, style, py: None });
         self.cell_pictures.insert(c, picture);
     }
     pub fn input_text(&self, c: CellRef) -> String {
@@ -558,6 +643,26 @@ mod tests {
     use crate::cell::Formula;
 
     #[test]
+    fn a_sheet_keeps_its_identity_through_clones_and_a_new_sheet_gets_its_own() {
+        let a = Sheet::new("A");
+        let b = Sheet::new("A");
+        assert_ne!(a.uid.get(), b.uid.get(), "two new sheets");
+        assert_ne!(a.uid.get(), 0);
+        // A clone (an undo snapshot, a rename through Arc::make_mut) is the same sheet.
+        let mut renamed = a.clone();
+        renamed.name = "B".into();
+        assert_eq!(renamed.uid.get(), a.uid.get());
+        // Not content: equal sheets compare equal whatever their identity.
+        assert_eq!(a, b);
+        // Not in JSON: a sheet read back is a new one.
+        let json = serde_json::to_string(&a).unwrap();
+        assert!(!json.contains("uid"), "{json}");
+        let read: Sheet = serde_json::from_str(&json).unwrap();
+        assert_ne!(read.uid.get(), a.uid.get());
+        assert_eq!(read, a);
+    }
+
+    #[test]
     fn line_index_matches_linear() {
         let mut s = Sheet::new("S");
         for r in (0..5000).step_by(3) {
@@ -726,6 +831,8 @@ mod tests {
                 data_table: None,
                 gridlines: false,
                 style: 0,
+                hole_size: 75,
+                first_slice_angle: 0,
                 x_title: None,
                 y_title: None,
                 source: None,
@@ -746,6 +853,7 @@ mod tests {
             ObjKind::Slicer => {
                 s.slicers.push(Slicer { id, table: String::new(), column: String::new(), caption: String::new(), anchor, selected: None, columns: 1 })
             }
+            ObjKind::Control => s.controls.push(FormControl { id, anchor, ..Default::default() }),
         }
     }
 
@@ -767,13 +875,15 @@ mod tests {
             (ObjKind::Slicer, 1),
             (ObjKind::Image, 4),
             (ObjKind::Equation, 6),
+            (ObjKind::Control, 13),
             (ObjKind::Shape, 12),
             (ObjKind::Equation, 8),
+            (ObjKind::Control, 15),
         ];
         for &(kind, id) in &inserted {
             push_object(&mut s, kind, id, Anchor { cell: CellRef::new(id, 0), ..Default::default() });
         }
-        let per_kind = s.charts.len() + s.images.len() + s.shapes.len() + s.slicers.len();
+        let per_kind = s.charts.len() + s.images.len() + s.shapes.len() + s.slicers.len() + s.controls.len();
         assert_eq!(per_kind, inserted.len());
         assert_eq!(s.object_anchors().count(), per_kind, "object_anchors visits every collection");
         assert_eq!(s.object_anchors_mut().count(), per_kind, "object_anchors_mut visits every collection");
@@ -784,10 +894,10 @@ mod tests {
         }
         let marks: Vec<f32> = s.object_anchors().map(|a| a.dx).collect();
         assert_eq!(marks, (0..per_kind).map(|i| i as f32).collect::<Vec<f32>>());
-        // The sequence is the documented one (charts, images, shapes, slicers, each in insertion
-        // order; equations are shapes) and every object appears in it once.
+        // The sequence is the documented one (charts, images, shapes, slicers, controls, each in
+        // insertion order; equations are shapes) and every object appears in it once.
         let collection = |k: ObjKind| if k == ObjKind::Equation { ObjKind::Shape } else { k };
-        let documented: Vec<u32> = [ObjKind::Chart, ObjKind::Image, ObjKind::Shape, ObjKind::Slicer]
+        let documented: Vec<u32> = [ObjKind::Chart, ObjKind::Image, ObjKind::Shape, ObjKind::Slicer, ObjKind::Control]
             .iter()
             .flat_map(|&k| inserted.iter().filter(move |(kind, _)| collection(*kind) == k).map(|&(_, id)| id))
             .collect();
