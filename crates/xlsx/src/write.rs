@@ -94,7 +94,10 @@ pub struct SstEntry {
 #[derive(Default)]
 pub struct Sst {
     list: Vec<SstEntry>,
-    map: HashMap<(String, Option<CellRuns>), u32>,
+    /// Entries by hash of `(text, runs)`, verified against the entry on lookup (a collision
+    /// only costs a comparison against the wrong entry, never a wrong answer). Keying by hash
+    /// keeps both `index` and `index_rich` allocation-free on a hit.
+    map: HashMap<u64, u32>,
     pub count: u64,
 }
 
@@ -106,19 +109,27 @@ impl Sst {
     /// Indexes a string that carries rich-text runs. Deduplicates by text **and** runs: the
     /// same text with different runs is its own entry.
     pub fn index_rich(&mut self, s: &str, runs: &CellRuns) -> u32 {
-        self.index_entry(s, Some(runs.clone()))
+        self.index_entry(s, Some(runs))
     }
 
-    fn index_entry(&mut self, s: &str, runs: Option<CellRuns>) -> u32 {
+    fn index_entry(&mut self, s: &str, runs: Option<&CellRuns>) -> u32 {
+        use std::hash::BuildHasher;
         self.count += 1;
-        let key = (s.to_string(), runs);
-        if let Some(&i) = self.map.get(&key) {
+        let hash = self.map.hasher().hash_one((s, runs));
+        if let Some(&i) = self.map.get(&hash)
+            && let Some(entry) = self.list.get(i as usize)
+            && entry.text == s
+            && match (runs, &entry.runs) {
+                (None, None) => true,
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            }
+        {
             return i;
         }
         let i = self.list.len() as u32;
-        let entry = SstEntry { text: key.0.clone(), runs: key.1.clone() };
-        self.list.push(entry);
-        self.map.insert(key, i);
+        self.list.push(SstEntry { text: s.to_string(), runs: runs.cloned() });
+        self.map.insert(hash, i);
         i
     }
 }

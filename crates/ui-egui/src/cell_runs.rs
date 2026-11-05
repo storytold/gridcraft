@@ -71,6 +71,9 @@ pub struct RunLine {
     /// Left and right edge of the run's glyphs in the row.
     pub x0: f32,
     pub x1: f32,
+    /// The row's top and height (a wrapped text draws one segment per row its run touches).
+    pub y: f32,
+    pub h: f32,
     /// The run's merged underline style (`Underline::None` when only the strike applies).
     pub underline: Underline,
     pub strike: bool,
@@ -83,32 +86,62 @@ pub struct RunLine {
 /// those glyphs spell, one glyph per char in order (true for the grid's single-row cell
 /// galleys). Runs reaching past the end of `text` (a first-line clip) are clamped to it; runs
 /// whose merged font has neither decoration, or that left no glyphs, are omitted.
+#[cfg(test)]
 pub fn decoration_lines(glyphs: &[(f32, f32)], text: &str, runs: &CellRuns, base: &Font, base_color: Color32, theme: &Theme) -> Vec<RunLine> {
+    // The flat caller passes one row of glyphs; the row covers the whole text.
+    decoration_lines_rows(&[Row { glyphs, text, y: 0.0, h: 0.0 }], runs, base, base_color, theme, 0.0)
+}
+
+/// One galley row offered to [`decoration_lines_rows`]: its glyphs (row-local x), the text the
+/// row shows, and its top and height in galley coordinates.
+pub struct Row<'a> {
+    pub glyphs: &'a [(f32, f32)],
+    pub text: &'a str,
+    pub y: f32,
+    pub h: f32,
+}
+
+/// Per-run underline/strike segments across every row of a (possibly wrapped) galley: a run that
+/// spans a line break draws one segment in each row it touches, at that row's own height.
+pub fn decoration_lines_rows(rows: &[Row<'_>], runs: &CellRuns, base: &Font, base_color: Color32, theme: &Theme, row_height: f32) -> Vec<RunLine> {
     let mut out = Vec::new();
-    for run in &runs.runs {
-        let merged = run.font.merged(base);
-        if merged.underline == Underline::None && !merged.strike {
-            continue;
+    // Char index where each row's text starts in the full job text (one glyph per char).
+    let mut char_base = 0usize;
+    for row in rows {
+        for run in &runs.runs {
+            let merged = run.font.merged(base);
+            if merged.underline == Underline::None && !merged.strike {
+                continue;
+            }
+            // `valid_for` put every run start on a char boundary of the full text; a row shows a
+            // contiguous slice of it, so the clamped offsets are boundaries here too.
+            let start_b = (run.start as usize).min(row.text.len());
+            let end_b = match (run.start as usize).checked_add(run.len as usize) {
+                Some(end) => end.min(row.text.len()),
+                None => row.text.len(),
+            };
+            let c0 = row.text.get(..start_b).map_or(0, |s| s.chars().count());
+            let c1 = row.text.get(..end_b).map_or(c0, |s| s.chars().count());
+            let (mut x0, mut x1) = (f32::INFINITY, f32::NEG_INFINITY);
+            for (x, adv) in row.glyphs.get(c0..c1).into_iter().flatten() {
+                x0 = x0.min(*x);
+                x1 = x1.max(x + adv);
+            }
+            if x0.is_finite() && x1 > x0 {
+                out.push(RunLine {
+                    x0,
+                    x1,
+                    y: row.y,
+                    h: if row.h > 0.0 { row.h } else { row_height },
+                    underline: merged.underline,
+                    strike: merged.strike,
+                    color: run_color(&run.font, base_color, theme),
+                });
+            }
         }
-        // `valid_for` put every run start on a char boundary of the full text; `text` here is a
-        // prefix of it, so the clamped offsets are boundaries too. A byte offset maps to its
-        // glyph by counting the chars before it (one glyph per char).
-        let start_b = (run.start as usize).min(text.len());
-        let end_b = match (run.start as usize).checked_add(run.len as usize) {
-            Some(end) => end.min(text.len()),
-            None => text.len(),
-        };
-        let c0 = text.get(..start_b).map_or(0, |s| s.chars().count());
-        let c1 = text.get(..end_b).map_or(c0, |s| s.chars().count());
-        let (mut x0, mut x1) = (f32::INFINITY, f32::NEG_INFINITY);
-        for (x, adv) in glyphs.get(c0..c1).into_iter().flatten() {
-            x0 = x0.min(*x);
-            x1 = x1.max(x + adv);
-        }
-        if x0.is_finite() && x1 > x0 {
-            out.push(RunLine { x0, x1, underline: merged.underline, strike: merged.strike, color: run_color(&run.font, base_color, theme) });
-        }
+        char_base += row.text.chars().count();
     }
+    let _ = char_base;
     out
 }
 

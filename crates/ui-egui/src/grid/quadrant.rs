@@ -608,12 +608,19 @@ fn paint_run_decorations(
     y: f32,
     gh: f32,
 ) {
-    let glyphs: Vec<(f32, f32)> =
-        galley.rows.first().map(|pr| pr.row.glyphs.iter().map(|g| (pr.pos.x + g.pos.x, g.advance_width)).collect()).unwrap_or_default();
-    for d in crate::cell_runs::decoration_lines(&glyphs, &galley.job.text, runs, base, base_color, theme) {
+    // One glyph row per galley row: a wrapped run underlines every line it touches, at that
+    // line's own height (the flat text's single-line look scales per row).
+    let glyph_rows: Vec<(Vec<(f32, f32)>, String)> =
+        galley.rows.iter().map(|pr| (pr.row.glyphs.iter().map(|g| (pr.pos.x + g.pos.x, g.advance_width)).collect(), pr.row.text())).collect();
+    let rows: Vec<crate::cell_runs::Row<'_>> = glyph_rows
+        .iter()
+        .zip(galley.rows.iter())
+        .map(|((glyphs, text), pr)| crate::cell_runs::Row { glyphs, text, y: pr.pos.y, h: pr.rect().height() })
+        .collect();
+    for d in crate::cell_runs::decoration_lines_rows(&rows, runs, base, base_color, theme, gh / (galley.rows.len().max(1) as f32)) {
         paint_text_decorations(
             cp,
-            TextDecoration { x: x + d.x0, y, width: d.x1 - d.x0, height: gh, color: d.color, underline: d.underline, strike: d.strike },
+            TextDecoration { x: x + d.x0, y: y + d.y, width: d.x1 - d.x0, height: d.h, color: d.color, underline: d.underline, strike: d.strike },
         );
     }
 }

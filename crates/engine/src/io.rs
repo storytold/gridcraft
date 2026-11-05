@@ -633,6 +633,21 @@ fn html_cell_css(wb: &Workbook, sh: &Sheet, c: CellRef, dir: CellDir) -> String 
 /// fields, in a fixed order, each declaration ending in `;`. The surrounding `<td>` already
 /// carries the cell-level style, so an all-`None` delta produces nothing (the run needs only
 /// its delta, never the merged font).
+/// A font name inside a CSS `font-family:"…"` string: the characters a decoder could turn back
+/// into CSS structure (`"`, `\`, and control characters) are backslash-escaped, so the HTML
+/// entity decoding cannot re-open the string or inject declarations.
+fn css_escape(name: &str) -> String {
+    let mut o = String::with_capacity(name.len());
+    for c in name.chars() {
+        if matches!(c, '"' | '\\') || c.is_control() {
+            let _ = write!(o, "\\{:x}", c as u32);
+        } else {
+            o.push(c);
+        }
+    }
+    o
+}
+
 fn run_span_css(delta: &RunFont, wb: &Workbook) -> String {
     let mut css = String::new();
     if let Some(c) = &delta.color {
@@ -676,7 +691,9 @@ fn run_span_css(delta: &RunFont, wb: &Workbook) -> String {
         let _ = write!(css, "font-size:{size}pt;");
     }
     if let Some(name) = &delta.name {
-        let _ = write!(css, "font-family:\"{}\";", esc(name));
+        // CSS-escape the name first (a `"` or `;` inside would close the string or add a
+        // declaration once the HTML parser decodes `&quot;` back to `"`), then HTML-encode.
+        let _ = write!(css, "font-family:\"{}\";", esc(&css_escape(name)));
     }
     match delta.vert {
         Some(VertAlign::Superscript) => css.push_str("vertical-align:super;"),
@@ -768,11 +785,12 @@ pub(crate) fn range_html(wb: &Workbook, sheet: usize, r: RangeRef, plain_text: &
                 runs.runs.iter().enumerate().map(|(i, run)| Some((runs.run_text(&text, i)?, run_span_css(&run.font, wb)))).collect()
             });
             if let Some(spans) = rich {
+                let mut cr = false;
                 for (segment, css) in spans {
                     if !css.is_empty() {
                         write!(out, "<span style=\"{css}\">").ok()?;
                     }
-                    esc_html(&mut out, segment).ok()?;
+                    esc_html_cont(&mut out, segment, &mut cr).ok()?;
                     if !css.is_empty() {
                         out.write_str("</span>").ok()?;
                     }
@@ -802,8 +820,14 @@ impl std::fmt::Write for ClipboardHtml {
 }
 
 /// Escapes `s` into `out` as cell text: `&`, `<`, `>`, `"` as entities, `\r\n` and `\n` as `<br>`.
-/// Shared by the flat and rich-run paths, so the budget aborts the whole copy either way.
+/// `cr_pending` says the previous segment ended in `\r` (its `\n` may sit in this one), and the
+/// return value is the same state for the next segment — rich runs escape segment by segment, and
+/// a `\r\n` split across a run boundary must still be one `<br>`, as it is in the flat path.
 fn esc_html(out: &mut ClipboardHtml, s: &str) -> std::fmt::Result {
+    esc_html_cont(out, s, &mut false)
+}
+
+fn esc_html_cont(out: &mut ClipboardHtml, s: &str, cr_pending: &mut bool) -> std::fmt::Result {
     let mut chars = s.chars().peekable();
     while let Some(ch) = chars.next() {
         match ch {
@@ -815,9 +839,19 @@ fn esc_html(out: &mut ClipboardHtml, s: &str) -> std::fmt::Result {
                 if chars.peek() == Some(&'\n') {
                     chars.next();
                 }
+                // A bare `\r` at the segment's end pairs with a `\n` that may open the next.
+                *cr_pending = chars.peek().is_none();
                 out.write_str("<br>")
             }
-            '\n' => out.write_str("<br>"),
+            '\n' => {
+                // The previous segment's closing `\r` already emitted this break.
+                if *cr_pending {
+                    *cr_pending = false;
+                    Ok(())
+                } else {
+                    out.write_str("<br>")
+                }
+            }
             _ => out.write_char(ch),
         }?;
     }

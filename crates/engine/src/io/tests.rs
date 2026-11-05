@@ -802,7 +802,30 @@ fn run_span_css_doubles_the_underline_without_losing_it() {
 fn run_span_css_escapes_font_names() {
     let wb = Workbook::new();
     let delta = RunFont { name: Some("Bad\"Name&".into()), ..RunFont::default() };
-    assert_eq!(run_span_css(&delta, &wb), "font-family:\"Bad&quot;Name&amp;\";");
+    // The quote leaves as a CSS escape (decoding the attribute cannot re-open the string); the
+    // ampersand leaves as an HTML entity, as everywhere else in the table.
+    assert_eq!(run_span_css(&delta, &wb), "font-family:\"Bad\\22Name&amp;\";");
+}
+
+/// A font name that would break out of the CSS string once the HTML entities decode back: the
+/// CSS backslash escape keeps the decoded value inert (no injected declarations).
+#[test]
+fn run_span_css_neutralizes_css_breakouts() {
+    let wb = Workbook::new();
+    let delta = RunFont { name: Some("A\";display:none;--x:\"".into()), ..RunFont::default() };
+    let css = run_span_css(&delta, &wb);
+    // The inner quotes are CSS escapes, not characters the attribute decoder can act on.
+    assert_eq!(css, "font-family:\"A\\22;display:none;--x:\\22\";", "inert: {css}");
+}
+
+/// A `\r\n` split across two runs copies as one `<br>`, like the same text in one flat cell.
+#[test]
+fn range_html_keeps_one_break_across_a_run_boundary() {
+    let text = "a\r\nb";
+    let red = RunFont { color: Some(Color::rgb(255, 0, 0)), ..RunFont::default() };
+    let wb = rich_cell(text, vec![(0, 2, red.clone()), (2, 2, red)]);
+    let html = range_html(&wb, 0, RangeRef::cell(CellRef::new(0, 0)), text).unwrap();
+    assert_eq!(html.matches("<br>").count(), 1, "exactly one break: {html}");
 }
 
 #[test]
