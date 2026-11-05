@@ -344,8 +344,10 @@ pub fn encode_no_split(values: &[i64], width: u32, min: i32) -> Result<Vec<u8>> 
 /// Builds a minimal uncompressed string dictionary page.
 ///
 /// Strings are written in id order; ids start at 3, so a string's index in `strings` is its
-/// data id minus 3.
-pub fn encode_string_dictionary(strings: &[String], nulls: bool) -> Result<Vec<u8>> {
+/// data id minus 3. `hash_information` mirrors the column's `DictionaryFlags` bit 0: the reader
+/// skips the 24-byte hash block exactly when that bit is set, so the writer must only emit the
+/// block when it is, or the rewritten dictionary would not parse back.
+pub fn encode_string_dictionary(strings: &[String], nulls: bool, hash_information: bool) -> Result<Vec<u8>> {
     let mut buffer = Vec::new();
     let mut handles = Vec::with_capacity(strings.len());
     let mut longest = 0usize;
@@ -361,11 +363,13 @@ pub fn encode_string_dictionary(strings: &[String], nulls: bool) -> Result<Vec<u
     let count = strings.len();
     let mut out = Vec::new();
     out.extend_from_slice(&2i32.to_le_bytes()); // XM_TYPE_STRING
-    out.extend_from_slice(&1i32.to_le_bytes()); // hash algorithm (observed)
-    out.extend_from_slice(&8u32.to_le_bytes());
-    out.extend_from_slice(&64u32.to_le_bytes());
-    out.extend_from_slice(&6u32.to_le_bytes());
-    out.extend_from_slice(&u64::MAX.to_le_bytes()); // c_bins = -1
+    if hash_information {
+        out.extend_from_slice(&1i32.to_le_bytes()); // hash algorithm (observed)
+        out.extend_from_slice(&8u32.to_le_bytes());
+        out.extend_from_slice(&64u32.to_le_bytes());
+        out.extend_from_slice(&6u32.to_le_bytes());
+        out.extend_from_slice(&u64::MAX.to_le_bytes()); // c_bins = -1
+    }
     out.extend_from_slice(&u64::try_from(count).map_err(|_| ModelFileError::TooLarge)?.to_le_bytes());
     out.push(0); // store_compressed
     out.extend_from_slice(&u64::try_from(longest).map_err(|_| ModelFileError::TooLarge)?.to_le_bytes());
@@ -878,9 +882,9 @@ mod tests {
     fn empty_string_dictionary_round_trips() -> Result<()> {
         // A text column with only blanks has no strings, but the encoder still writes one page.
         let strings: Vec<String> = Vec::new();
-        let bytes = encode_string_dictionary(&strings, true)?;
+        let bytes = encode_string_dictionary(&strings, true, true)?;
         assert_eq!(decode_string_dictionary(&bytes, true)?, strings);
-        let bytes = encode_string_dictionary(&strings, false)?;
+        let bytes = encode_string_dictionary(&strings, false, true)?;
         assert_eq!(decode_string_dictionary(&bytes, true)?, strings);
         Ok(())
     }
@@ -888,8 +892,22 @@ mod tests {
     #[test]
     fn string_dictionary_round_trips() -> Result<()> {
         let strings = vec!["Alpha".to_string(), "Beta".to_string(), "Ventes Été".to_string()];
-        let bytes = encode_string_dictionary(&strings, true)?;
+        let bytes = encode_string_dictionary(&strings, true, true)?;
         assert_eq!(decode_string_dictionary(&bytes, true)?, strings);
+        Ok(())
+    }
+
+    #[test]
+    fn dictionary_hash_block_follows_the_flag_it_is_written_with() -> Result<()> {
+        // The reader skips the 24-byte hash block only when the column's `DictionaryFlags` bit 0
+        // is set. A dictionary rewritten with a block the metadata does not declare would fail to
+        // parse, so the encoder emits the block only for that flag.
+        let strings = vec!["Alpha".to_string(), "Beta".to_string()];
+        let with_block = encode_string_dictionary(&strings, true, true)?;
+        assert_eq!(decode_string_dictionary(&with_block, true)?, strings);
+        let without_block = encode_string_dictionary(&strings, true, false)?;
+        assert_eq!(decode_string_dictionary(&without_block, false)?, strings);
+        assert_eq!(without_block.len() + 24, with_block.len());
         Ok(())
     }
 
@@ -960,7 +978,7 @@ mod tests {
     #[test]
     fn truncated_dictionary_and_idf_are_errors() {
         let strings = vec!["x".to_string(); 4];
-        let bytes = encode_string_dictionary(&strings, false).expect("encode");
+        let bytes = encode_string_dictionary(&strings, false, true).expect("encode");
         for end in 0..bytes.len() {
             assert!(decode_string_dictionary(&bytes[..end], true).is_err(), "prefix {end}");
         }

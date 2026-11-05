@@ -599,6 +599,19 @@ fn load_dictionary_bytes(base: &Base<'_>, name: &str) -> Result<Vec<u8>> {
     base.decode(index)
 }
 
+/// Returns the data ids an unchanged column still stores in its `.idf` payload.
+///
+/// The writer derives ids from a sorted dictionary, but a column whose values did not change keeps
+/// Excel's own payload on disk, and Excel's ids need not follow sorted value order.
+fn stored_column_ids(base: &Base<'_>, column: &ColumnMeta) -> Result<Option<Vec<u32>>> {
+    let Some(idf_name) = &column.idf else {
+        return Ok(None);
+    };
+    let index = base.find(idf_name).ok_or_else(|| ModelFileError::Corrupt(format!("missing column data file {idf_name}")))?;
+    let idf = base.decode(index)?;
+    Ok(Some(decode_column_ids(&idf, &column.segments)?))
+}
+
 fn read_column_values(base: &Base<'_>, column: &ColumnMeta, row_count: usize) -> Result<(Vec<Scalar>, Vec<u32>, usize, usize)> {
     let kind = column.kind();
     let Some(idf_name) = &column.idf else {
@@ -862,7 +875,7 @@ pub fn write_model(base: &[u8], model: &ModelData) -> Result<Vec<u8>> {
     // Preserve every stored byte of a column whose values did not change: Excel's own ids,
     // dictionaries and hierarchy arrays are known-good and need no rebuild.
     let previous = read_model(base).unwrap_or_default();
-    let plan = build_write_plan(&layout, model, &previous)?;
+    let plan = build_write_plan(&loaded, &layout, model, &previous)?;
     apply_write_plan(&loaded, &layout, model, plan)
 }
 
@@ -950,7 +963,7 @@ fn check_type(column: &ColumnMeta, model_column: &ModelColumnData) -> Result<()>
     Ok(())
 }
 
-fn build_write_plan(layout: &ModelLayout, model: &ModelData, previous: &ModelData) -> Result<WritePlan> {
+fn build_write_plan(base: &Base<'_>, layout: &ModelLayout, model: &ModelData, previous: &ModelData) -> Result<WritePlan> {
     let order = layout.dimensions_in_order()?;
     let mut tables: Vec<TableWrite> = Vec::new();
     for dimension in &order {
@@ -1011,6 +1024,19 @@ fn build_write_plan(layout: &ModelLayout, model: &ModelData, previous: &ModelDat
             });
             let mut write = build_column_write(layout, column, model_column, rows, unchanged)?;
             write.unchanged = unchanged;
+            if unchanged && let Some(ids) = stored_column_ids(base, column)? {
+                // An unchanged column keeps Excel's own payload, and its ids are not guaranteed to
+                // follow the sorted dictionary this writer would produce. A relationship index
+                // rebuilt from recomputed ids would map foreign rows to the wrong primary row.
+                if ids.len() != rows {
+                    return Err(ModelFileError::Corrupt(format!(
+                        "column {} decodes {} rows but the metadata declares {rows}",
+                        column.storage,
+                        ids.len()
+                    )));
+                }
+                write.ids = ids;
+            }
             columns.push(write);
         }
         if let Some(row_number) = table.columns.iter().find(|column| column.row_number) {
@@ -1155,7 +1181,7 @@ fn build_column_write(
             value_base_id = Some(base_id);
             ids = encoded;
         }
-        (ColumnEncoding::HashString { dictionary: name, .. }, ColumnKind::String) => {
+        (ColumnEncoding::HashString { dictionary: name, flags }, ColumnKind::String) => {
             let mut distinct: BTreeMap<ScalarKey, String> = BTreeMap::new();
             for value in &model_column.values {
                 match value {
@@ -1183,7 +1209,7 @@ fn build_column_write(
                 })
                 .collect::<Result<Vec<_>>>()?;
             let has_nulls = model_column.values.iter().any(|value| matches!(value, Scalar::Blank));
-            dictionary = Some((name.clone(), encode_string_dictionary(&values, has_nulls)?));
+            dictionary = Some((name.clone(), encode_string_dictionary(&values, has_nulls, flags & 1 != 0)?));
         }
         (ColumnEncoding::HashNumeric { dictionary: name, real, element_bytes }, _) => {
             let mut distinct: BTreeMap<ScalarKey, Scalar> = BTreeMap::new();
@@ -1897,5 +1923,45 @@ mod tests {
         let model = ModelData::default();
         let written = write_model(&data, &model).expect("empty write");
         assert_eq!(read_model(&written).expect("read").tables.len(), 0);
+    }
+
+    fn index_column(values: Vec<Scalar>, ids: Vec<u32>) -> ColumnWrite {
+        ColumnWrite {
+            storage: "C".to_string(),
+            row_number: false,
+            unchanged: false,
+            has_payload: true,
+            rows: values.len(),
+            values,
+            ids,
+            packed_values: 0,
+            rle_runs: 0,
+            others_rle_runs: 0,
+            distinct_incl_null: 0,
+            non_null_distinct: 0,
+            min: 2,
+            min_id: 2,
+            max_id: 2,
+            has_nulls: false,
+            width: 1,
+            idf_name: None,
+            idf: Vec::new(),
+            hidx: None,
+            dictionary: None,
+            value_base_id: None,
+            hierarchy: None,
+        }
+    }
+
+    #[test]
+    fn relationship_index_slots_follow_the_stored_ids() -> Result<()> {
+        // Excel's ids need not follow sorted value order. The index is keyed by the ids the column
+        // actually stores, so a value that sorts last can still own id 3.
+        let from = index_column(vec![Scalar::String("Zeta".into()), Scalar::String("Alpha".into()), Scalar::String("Zeta".into())], vec![3, 4, 3]);
+        let to = index_column(vec![Scalar::String("Alpha".into()), Scalar::String("Zeta".into())], vec![3, 4]);
+        let index = build_relationship_index(&from, &to, "R$INDEX".into())?;
+        assert_eq!(index.index, vec![-1, -1, -1, 1, 0]);
+        assert_eq!(index.records, 5);
+        Ok(())
     }
 }
