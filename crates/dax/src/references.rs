@@ -26,13 +26,15 @@ pub fn column_ref(name: &str) -> String {
 /// The formula Excel's implicit measure over `table[column]` evaluates, or `None` when
 /// `aggregate` is not one of Excel's five summarizations.
 ///
-/// `Count` is `COUNT`, not `COUNTROWS`: Excel counts the column's non-blank values, so the model
-/// window and a model PivotTable show the same number under `Count of <column>`.
+/// `Count` is `COUNTA`, not `COUNT`: Excel counts the column's non-blank values whatever their
+/// type, and `COUNT` ignores booleans — a `TRUE`/`FALSE` column would answer BLANK — while
+/// `COUNTROWS` would count blanks too. `COUNTA` is the "non-blank values" rule the model window
+/// and a model PivotTable show under `Count of <column>`.
 pub fn implicit_measure_formula(aggregate: &str, table: &str, column: &str) -> Option<String> {
     let function = match aggregate.trim().to_ascii_lowercase().as_str() {
         "sum" => "SUM",
         "average" => "AVERAGE",
-        "count" => "COUNT",
+        "count" => "COUNTA",
         "min" => "MIN",
         "max" => "MAX",
         _ => return None,
@@ -61,7 +63,10 @@ mod tests {
     #[test]
     fn implicit_measures_count_non_blank_values() {
         assert_eq!(implicit_measure_formula("Sum", "Sales", "Amount"), Some("SUM(Sales[Amount])".to_string()));
-        assert_eq!(implicit_measure_formula("count", "Sales Data", "Region"), Some("COUNT('Sales Data'[Region])".to_string()));
+        // `Count` counts non-blank values of any type, so it maps to COUNTA: COUNT would ignore a
+        // boolean column and answer BLANK.
+        assert_eq!(implicit_measure_formula("count", "Sales Data", "Region"), Some("COUNTA('Sales Data'[Region])".to_string()));
+        assert_eq!(implicit_measure_formula("Count", "Sales", "IsPriority"), Some("COUNTA(Sales[IsPriority])".to_string()));
         assert_eq!(implicit_measure_formula("Average", "Sales", "Amount"), Some("AVERAGE(Sales[Amount])".to_string()));
         assert_eq!(implicit_measure_formula("Min", "Sales", "Amount"), Some("MIN(Sales[Amount])".to_string()));
         assert_eq!(implicit_measure_formula("Max", "Sales", "Amount"), Some("MAX(Sales[Amount])".to_string()));
