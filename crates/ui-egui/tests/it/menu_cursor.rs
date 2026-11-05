@@ -13,6 +13,7 @@ use serde_json::json;
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
+/// An empty workbook in a 1200×800 window, laid out and settled.
 fn harness() -> Harness {
     let mut session = Session::new();
     session.new_workbook();
@@ -27,6 +28,7 @@ fn harness() -> Harness {
     h
 }
 
+/// Move to `pos`, press and release the primary button there, and settle.
 fn click(h: &mut Harness, pos: egui::Pos2) {
     h.input_mut().events.push(Event::PointerMoved(pos));
     for pressed in [true, false] {
@@ -35,22 +37,26 @@ fn click(h: &mut Harness, pos: egui::Pos2) {
     h.run_steps(4);
 }
 
+/// Move to `pos` and return the cursor the app asks for, after it settles.
 fn hover(h: &mut Harness, pos: egui::Pos2) -> CursorIcon {
     h.input_mut().events.push(Event::PointerMoved(pos));
     h.run_steps(3);
     h.output().platform_output.cursor_icon
 }
 
+/// The on-screen rectangle of the widget labelled `label`.
 fn rect(h: &Harness, label: &str) -> Rect {
     h.get_by_label(label).rect()
 }
 
+/// Press the primary button at `pos` and keep it down: a stroke needs a held drag.
 fn press(h: &mut Harness, pos: Pos2) {
     h.input_mut().events.push(Event::PointerMoved(pos));
     h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
     h.run_steps(2);
 }
 
+/// Release the primary button at `pos`.
 fn release(h: &mut Harness, pos: Pos2) {
     h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
@@ -70,6 +76,7 @@ fn open_size_menu(h: &mut Harness) {
     assert!(h.query_by_label("A4").is_some(), "the Size menu opens");
 }
 
+/// Turn the pen on with the default blue at 2 pt.
 fn pen_on(h: &mut Harness) {
     h.state_mut().session.execute("draw.pen", json!({"on": true, "color": "#1F5FC9", "width": 2.0})).expect("the pen turns on");
     h.run_steps(2);
@@ -180,10 +187,7 @@ fn ink_strokes_on_screen(h: &Harness) -> Vec<Vec<Pos2>> {
             let (x, y) = q.split_once(',').expect("an ink point is x,y");
             let (ax, ay) = (ox + x.parse::<f32>().unwrap(), oy + y.parse::<f32>().unwrap());
             let (col, row) = (sh.col_at(f64::from(ax)), sh.row_at(f64::from(ay)));
-            points.push(g.mirror_pos(pos2(
-                g.x(sh, col) + (ax - sh.col_left(col) as f32) * g.z,
-                g.y(sh, row) + (ay - sh.row_top(row) as f32) * g.z,
-            )));
+            points.push(g.mirror_pos(pos2(g.x(sh, col) + (ax - sh.col_left(col) as f32) * g.z, g.y(sh, row) + (ay - sh.row_top(row) as f32) * g.z)));
         }
         strokes.push(points);
     }
@@ -221,4 +225,61 @@ fn a_stroke_does_not_run_under_an_open_menu() {
             assert!(!menu.contains(*p), "ink point {k} of stroke {i} lies under the menu");
         }
     }
+}
+
+/// The crosshair must not appear under a menu when the pointer reaches it during a stroke, not
+/// only when it is merely hovering: the drag fell through to the cell cursor there.
+#[test]
+fn a_stroke_dragged_into_a_menu_shows_no_cell_cursor() {
+    let mut h = harness();
+    pen_on(&mut h);
+    open_size_menu(&mut h);
+    let items: Vec<Rect> = ["Letter", "Executive", "A3", "B4", "Japanese Postcard"].iter().map(|l| rect(&h, l)).collect();
+    let y = items[3].center().y;
+    let start = pos2(items[0].left() - 180.0, y);
+    press(&mut h, start);
+    let over = items[3].center();
+    for t in 1..=8 {
+        h.input_mut().events.push(Event::PointerMoved(start + (over - start) * (t as f32 / 8.0)));
+        h.run_steps(2);
+    }
+    assert_eq!(h.output().platform_output.cursor_icon, CursorIcon::Default, "a stroke under a menu shows no cell cursor");
+    release(&mut h, over);
+}
+
+/// The eraser owns its gesture over a popup too: it erases nothing through the menu, and the drag
+/// does not fall through to selecting the cells underneath.
+#[test]
+fn an_eraser_drag_under_a_menu_erases_and_selects_nothing() {
+    let mut h = harness();
+    open_size_menu(&mut h);
+    let items: Vec<Rect> = ["Letter", "Executive", "A3", "B4", "Japanese Postcard"].iter().map(|l| rect(&h, l)).collect();
+    let menu = items.iter().fold(items[0], |a, r| a.union(*r));
+    let probe = items[3].center();
+    // Ink under the menu, in sheet coordinates, so "erases nothing" is not vacuous.
+    let g = h.state().grid.geo.clone().expect("the grid is laid out");
+    let (sx, sy) = {
+        let d = h.state().session.active().expect("a document is open");
+        let sh = d.wb.active().expect("the workbook has a sheet");
+        let c = g.cell_at(sh, g.mirror_pos(probe));
+        (sh.col_left(c.col) as f32 + (probe.x - g.x(sh, c.col)) / g.z, sh.row_top(c.row) as f32 + (probe.y - g.y(sh, c.row)) / g.z)
+    };
+    h.state_mut().session.execute("draw.stroke", json!({"points": [[sx - 30.0, sy], [sx, sy + 4.0], [sx + 30.0, sy]]})).expect("ink is committed");
+    h.state_mut().session.execute("draw.eraser", json!({"on": true})).expect("the eraser turns on");
+    h.run_steps(3);
+    let ink_count = |h: &Harness| {
+        let d = h.state().session.active().expect("a document is open");
+        let sh = d.wb.active().expect("the workbook has a sheet");
+        sh.shapes.iter().filter(|s| s.kind == gridcraft_engine::model::ShapeKind::Ink).count()
+    };
+    assert_eq!(ink_count(&h), 1, "the ink is there to be erased");
+    let before = h.state().session.active().unwrap().selection.current().a1();
+    let start = pos2(menu.left() - 180.0, probe.y);
+    press(&mut h, start);
+    h.input_mut().events.push(Event::PointerMoved(probe));
+    h.run_steps(3);
+    let during = h.state().session.active().unwrap().selection.current().a1();
+    release(&mut h, probe);
+    assert_eq!(during, before, "an eraser drag under a menu must not select cells");
+    assert_eq!(ink_count(&h), 1, "the eraser deletes nothing through the menu");
 }

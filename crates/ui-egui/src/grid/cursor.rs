@@ -42,7 +42,14 @@ pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Resp
     // recording a stroke or drawing the control — but not through a menu or a dialog drawn above
     // the sheet: the pointer there belongs to the popup, and the crosshair it left behind stayed
     // until the pointer crossed out of the grid.
-    if (!app.session.draw_tool.is_empty() || app.grid.placing.is_some()) && in_cells && !popup_over(ctx, screen, ui.layer_id()) {
+    let over_popup = popup_over(ctx, screen, ui.layer_id());
+    let drawing = !app.session.draw_tool.is_empty() || app.grid.placing.is_some();
+    if over_popup && drawing {
+        // Over the popup the grid sets nothing — and must not fall through either: a stroke dragged
+        // into a menu left the popup with the cell cursor showing underneath it.
+        return;
+    }
+    if drawing && in_cells {
         ctx.set_cursor_icon(CursorIcon::Crosshair);
         return;
     }

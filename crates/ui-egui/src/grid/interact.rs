@@ -269,8 +269,11 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
             }
             return true;
         }
-        if app.session.draw_tool == "eraser" && !over_popup && (primary_clicked || resp.dragged()) {
-            if let Some(p) = pos
+        if app.session.draw_tool == "eraser" && (primary_clicked || resp.dragged()) {
+            // The eraser owns the gesture over a popup too: it deletes nothing there, but returning
+            // false let `handle_press` select the cells under the menu.
+            if !over_popup
+                && let Some(p) = pos
                 && let Some((ObjRef { kind: ObjKind::Shape, id }, _)) = crate::chartview::hit(app, geo, sh, p)
                 && sh.shapes.iter().any(|s| s.id == id && s.kind == gridcraft_engine::model::ShapeKind::Ink)
             {
