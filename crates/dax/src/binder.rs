@@ -267,10 +267,18 @@ impl<'a> Binder<'a> {
                 "CONVERT" if index == 1 => keyword_name(arg),
                 // RANKX's Ties argument is documented as `Dense` but catalogued as a Scalar.
                 "RANKX" if index == 4 => keyword_name(arg),
+                // RANKX's Order argument is catalogued as a Scalar too, but it is `ASC`/`DESC`.
+                "RANKX" if index == 3 => clause_keyword(arg, &["ASC", "DESC"]),
                 "DATEDIFF" if index == 2 => keyword_name(arg),
                 // TOPN's `(expression, Order)` pairs: ASC/DESC sit at every odd index from 3.
                 "TOPN" if index >= 3 && index % 2 == 1 => clause_keyword(arg, &["ASC", "DESC"]),
-                "CROSSFILTER" if index == 2 => clause_keyword(arg, &["ONE", "ONEWAY", "BOTH", "TWOWAY", "NONE"]),
+                "CROSSFILTER" if index == 2 => {
+                    clause_keyword(arg, &["NONE", "ONE", "ONEWAY", "BOTH", "TWOWAY", "ONEWAY_LEFTFILTERSRIGHT", "ONEWAY_RIGHTFILTERSLEFT"])
+                }
+                // RANK/ROWNUMBER's Reset argument is `NONE`, `LOWESTPARENT` or `HIGHESTPARENT`,
+                // catalogued as `Any` so that a relation expression still binds there.
+                "RANK" if index == 6 => clause_keyword(arg, &["NONE", "LOWESTPARENT", "HIGHESTPARENT"]),
+                "ROWNUMBER" if index == 5 => clause_keyword(arg, &["NONE", "LOWESTPARENT", "HIGHESTPARENT"]),
                 // Window/relation clauses take bare enum words: `ORDERBY(x, DESC)`,
                 // `WINDOW(1, ABS, 1, ABS, ...)`, `INDEX(..., KEEP, PARTITIONBY(...))`, and the
                 // LOOKUP associated-columns behaviour (`INFERRED`).

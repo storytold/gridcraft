@@ -171,6 +171,11 @@ impl Scalar {
     }
 
     /// Comparison with DAX's blank coercion for `=`/ordering and case-insensitive strings.
+    ///
+    /// `None` means the types are not comparable: text against a number or a logical, and any
+    /// pair with NaN. Text is never coerced to a number here — arithmetic coerces numeric text
+    /// (`to_number`), comparison does not — so the caller decides what an incomparable pair means
+    /// (the evaluator maps it to FALSE for `=`/ordering and to an error where DAX raises one).
     pub fn compare(&self, other: &Scalar) -> Option<Ordering> {
         match (self, other) {
             (Scalar::Blank, Scalar::Blank) => Some(Ordering::Equal),
@@ -179,6 +184,7 @@ impl Scalar {
             (Scalar::Blank, Scalar::String(b)) => Some(String::new().cmp(&b.to_lowercase())),
             (Scalar::String(a), Scalar::Blank) => Some(a.to_lowercase().cmp(&String::new())),
             (Scalar::String(a), Scalar::String(b)) => Some(a.to_lowercase().cmp(&b.to_lowercase())),
+            (Scalar::String(_), _) | (_, Scalar::String(_)) => None,
             (Scalar::Boolean(a), Scalar::Boolean(b)) => Some(a.cmp(b)),
             _ => self.to_number()?.partial_cmp(&other.to_number()?),
         }
@@ -193,7 +199,12 @@ impl Scalar {
     }
 }
 
-/// A comparable/hashable key used for filter context values.
+/// A comparable/hashable key used for filter context values, relationship joins and dictionary
+/// lookups.
+///
+/// Keys keep the exact spelling: they double as the reported key in integrity findings. Where DAX
+/// compares values for *distinctness* instead of identity — `DISTINCTCOUNT`, `VALUES`/`DISTINCT`
+/// — the text folds through [`distinct_key`], which is the model's case-insensitive collation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ScalarKey {
     Blank,
@@ -216,6 +227,18 @@ impl From<&Scalar> for ScalarKey {
             Scalar::DateTime(value) => ScalarKey::DateTime(order_bits(*value)),
             Scalar::String(value) => ScalarKey::String(value.clone()),
         }
+    }
+}
+
+/// The key a distinctness comparison uses: text folds to lower case, the model collation, so `"A"`
+/// and `"a"` are one value. Every other type keeps its exact key.
+///
+/// `DISTINCTCOUNT`, `DISTINCTCOUNTNOBLANK`, `VALUES`/`DISTINCT` and the storage dictionary all use
+/// this, so a faithful model and a row-scanned one count the same values.
+pub(crate) fn distinct_key(value: &Scalar) -> ScalarKey {
+    match value {
+        Scalar::String(text) => ScalarKey::String(text.to_lowercase()),
+        other => ScalarKey::from(other),
     }
 }
 

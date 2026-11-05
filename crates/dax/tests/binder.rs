@@ -203,3 +203,33 @@ fn model_json_deserializes_and_parses_measures() {
     model.parse_formulas().expect("model parses");
     assert!(model.measures[0].expr.is_some());
 }
+
+#[test]
+fn documented_keyword_arguments_bind_instead_of_resolving_as_names() {
+    let model = sample_model();
+    // CROSSFILTER's direction words are documented enum values, including the two directional
+    // spellings; none of them may be resolved as a model name.
+    for direction in ["NONE", "ONE", "ONEWAY", "BOTH", "TWOWAY", "ONEWAY_LEFTFILTERSRIGHT", "ONEWAY_RIGHTFILTERSLEFT"] {
+        let formula = format!("CROSSFILTER ( Sales[Region], Date[Date], {direction} )");
+        match bind(&model, &formula) {
+            BoundExpr::Call { args, .. } => {
+                assert!(matches!(&args[2], BoundExpr::Keyword(word) if word.eq_ignore_ascii_case(direction)), "{direction}: {:?}", args[2]);
+            }
+            other => panic!("expected a call for {direction}, got {other:?}"),
+        }
+    }
+    // RANK/ROWNUMBER's Reset argument takes the same three words at the documented position.
+    for reset in ["NONE", "LOWESTPARENT", "HIGHESTPARENT"] {
+        let rank =
+            format!("RANK ( DENSE, Sales, ORDERBY ( Sales[Amount] ), DEFAULT, PARTITIONBY ( Sales[Region] ), MATCHBY ( Sales[Amount] ), {reset} )");
+        assert!(matches!(bind(&model, &rank), BoundExpr::Call { .. }), "RANK should bind {reset}");
+        let rownumber =
+            format!("ROWNUMBER ( Sales, ORDERBY ( Sales[Amount] ), DEFAULT, PARTITIONBY ( Sales[Region] ), MATCHBY ( Sales[Amount] ), {reset} )");
+        assert!(matches!(bind(&model, &rownumber), BoundExpr::Call { .. }), "ROWNUMBER should bind {reset}");
+    }
+    // RANKX's Order argument is `ASC`/`DESC`, not a name.
+    match bind(&model, "RANKX ( Sales, Sales[Amount], 42, DESC )") {
+        BoundExpr::Call { args, .. } => assert!(matches!(args[3], BoundExpr::Keyword(ref word) if word == "DESC"), "{:?}", args[3]),
+        other => panic!("expected a call, got {other:?}"),
+    }
+}

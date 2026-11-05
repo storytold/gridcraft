@@ -310,6 +310,16 @@ pub(crate) fn utc_today_serial() -> f64 {
     utc_now_serial().floor()
 }
 
+/// Rounds `value` to 15 significant digits, the precision Excel and DAX compute with.
+///
+/// `value * 10^digits` carries the binary representation error of its factors, and a directed
+/// rounding makes that error visible: `0.29 * 100` is `28.999999999999996`, so `ROUNDDOWN ( 0.29,
+/// 2 )` would truncate to `0.28` and `ROUNDUP ( 0.07, 2 )` would ceil `7.000000000000001` to
+/// `0.08`. Snap that noise away before rounding, exactly as `to_dax_text` does when it prints.
+fn excel_precision(value: f64) -> f64 {
+    format!("{value:.14e}").parse().unwrap_or(value)
+}
+
 pub(crate) fn round_to(value: f64, digits: i32) -> f64 {
     // The scale factor overflows or underflows outside f64's exponent range: past +308 digits the
     // value cannot change, past -308 every digit is rounded away.
@@ -320,7 +330,7 @@ pub(crate) fn round_to(value: f64, digits: i32) -> f64 {
         return 0.0;
     }
     let factor = 10f64.powi(digits);
-    let scaled = value * factor;
+    let scaled = excel_precision(value * factor);
     if !scaled.is_finite() {
         return value;
     }
@@ -340,7 +350,7 @@ pub(crate) fn round_direction(value: f64, digits: i32, up: bool) -> f64 {
         return if up && value != 0.0 { f64::INFINITY.copysign(value) } else { 0.0 };
     }
     let factor = 10f64.powi(digits);
-    let scaled = value * factor;
+    let scaled = excel_precision(value * factor);
     if !scaled.is_finite() {
         return value;
     }
@@ -348,9 +358,10 @@ pub(crate) fn round_direction(value: f64, digits: i32, up: bool) -> f64 {
     rounded / factor
 }
 
-pub(crate) fn gcd(mut a: i64, mut b: i64) -> i64 {
-    a = a.abs();
-    b = b.abs();
+/// The greatest common divisor of the two magnitudes, so `i64::MIN` is represented without
+/// overflowing the way `i64::abs` would.
+pub(crate) fn gcd(a: i64, b: i64) -> u64 {
+    let (mut a, mut b) = (a.unsigned_abs(), b.unsigned_abs());
     while b != 0 {
         let t = a % b;
         a = b;
@@ -359,8 +370,12 @@ pub(crate) fn gcd(mut a: i64, mut b: i64) -> i64 {
     a
 }
 
-pub(crate) fn lcm(a: i64, b: i64) -> i64 {
-    if a == 0 || b == 0 { 0 } else { (a / gcd(a, b) * b).abs() }
+/// The least common multiple, or `None` when it does not fit in an `i64` (Excel answers `#NUM!`).
+pub(crate) fn lcm(a: i64, b: i64) -> Option<i64> {
+    if a == 0 || b == 0 {
+        return Some(0);
+    }
+    (a.unsigned_abs() / gcd(a, b)).checked_mul(b.unsigned_abs()).and_then(|value| i64::try_from(value).ok())
 }
 
 /// Applies a scalar aggregation over already-evaluated values.
@@ -394,8 +409,23 @@ pub(crate) fn aggregate_values(name: &str, values: &[Scalar]) -> Result<Scalar, 
             Ok(Scalar::Decimal(sum / values.len() as f64))
         }
         "PRODUCT" => Ok(if numbers.is_empty() { Scalar::Blank } else { Scalar::Decimal(numbers.iter().product()) }),
-        "MIN" => Ok(numbers.iter().copied().reduce(f64::min).map(Scalar::Decimal).unwrap_or(Scalar::Blank)),
-        "MAX" => Ok(numbers.iter().copied().reduce(f64::max).map(Scalar::Decimal).unwrap_or(Scalar::Blank)),
+        "MIN" | "MAX" => {
+            // The winner keeps its own type — a date column answers a DateTime and an integer
+            // column an Integer — so this cannot read the `f64` projection the sum-like
+            // aggregations use. Only numbers compete: text and logicals are not observations.
+            let want = if name.eq_ignore_ascii_case("MIN") { Ordering::Less } else { Ordering::Greater };
+            let mut best: Option<&Scalar> = None;
+            for value in
+                values.iter().filter(|value| matches!(value, Scalar::Integer(_) | Scalar::Currency(_) | Scalar::Decimal(_) | Scalar::DateTime(_)))
+            {
+                match best {
+                    None => best = Some(value),
+                    Some(current) if value.compare(current) == Some(want) => best = Some(value),
+                    Some(_) => {}
+                }
+            }
+            Ok(best.cloned().unwrap_or(Scalar::Blank))
+        }
         "MINA" => Ok(values
             .iter()
             .filter(|value| !value.is_blank())
@@ -428,11 +458,11 @@ pub(crate) fn aggregate_values(name: &str, values: &[Scalar]) -> Result<Scalar, 
         }
         "COUNTBLANK" => Ok(Scalar::Integer(values.iter().filter(|v| v.is_blank() || v.to_text().is_empty()).count() as i64)),
         "DISTINCTCOUNT" | "APPROXIMATEDISTINCTCOUNT" => {
-            let distinct: BTreeSet<ScalarKey> = values.iter().map(ScalarKey::from).collect();
+            let distinct: BTreeSet<ScalarKey> = values.iter().map(distinct_key).collect();
             Ok(if values.is_empty() { Scalar::Blank } else { Scalar::Integer(distinct.len() as i64) })
         }
         "DISTINCTCOUNTNOBLANK" => {
-            let distinct: BTreeSet<ScalarKey> = values.iter().filter(|value| !value.is_blank()).map(ScalarKey::from).collect();
+            let distinct: BTreeSet<ScalarKey> = values.iter().filter(|value| !value.is_blank()).map(distinct_key).collect();
             Ok(Scalar::Integer(distinct.len() as i64))
         }
         _ => Err(EvalError::not_implemented(name)),
@@ -481,12 +511,32 @@ pub(crate) fn parse_date_text(text: &str) -> Option<f64> {
     let (hour, minute, second) = match time.map(str::trim).filter(|time| !time.is_empty()) {
         None => (0, 0, 0),
         Some(time) => {
+            // `datetime_text` prints a date as `M/D/YYYY H:MM:SS AM/PM`, so the form the crate
+            // itself writes has to parse back. The suffix decides the half of the day and the
+            // hour is then 1-12; without it the hour is 0-23.
+            let (clock, meridiem) = match time.rsplit_once(' ') {
+                Some((clock, suffix)) if suffix.eq_ignore_ascii_case("AM") || suffix.eq_ignore_ascii_case("PM") => {
+                    (clock.trim(), Some(suffix.eq_ignore_ascii_case("PM")))
+                }
+                _ => (time, None),
+            };
             // A present time must parse and be in range: `25:00:00` is rejected rather than
             // rolled into the next day, like an impossible date.
-            let parts: Vec<&str> = time.split(':').collect();
+            let parts: Vec<&str> = clock.split(':').collect();
             let hour: i64 = parts.first()?.trim().parse().ok()?;
             let minute: i64 = parts.get(1).unwrap_or(&"0").trim().parse().ok()?;
             let second: i64 = parts.get(2).unwrap_or(&"0").trim().parse().ok()?;
+            let hour = match meridiem {
+                // 12 AM is midnight and 12 PM is noon; the other PM hours move to the afternoon.
+                Some(pm) if (1..=12).contains(&hour) => match (hour, pm) {
+                    (12, false) => 0,
+                    (12, true) => 12,
+                    (hour, true) => hour + 12,
+                    (hour, false) => hour,
+                },
+                Some(_) => return None,
+                None => hour,
+            };
             if !(0..24).contains(&hour) || !(0..60).contains(&minute) || !(0..60).contains(&second) {
                 return None;
             }
@@ -593,9 +643,14 @@ mod tests {
         ];
         assert_eq!(aggregate_values("SUM", &values).expect("SUM"), Scalar::Decimal(14.0));
         assert_eq!(aggregate_values("AVERAGE", &values).expect("AVERAGE"), Scalar::Decimal(3.5));
+        // MIN/MAX return the winning value itself: its type survives, so the 10.0 date stays a
+        // DateTime rather than becoming a decimal serial.
         assert_eq!(aggregate_values("MIN", &values).expect("MIN"), Scalar::Decimal(0.5));
-        assert_eq!(aggregate_values("MAX", &values).expect("MAX"), Scalar::Decimal(10.0));
+        assert_eq!(aggregate_values("MAX", &values).expect("MAX"), Scalar::DateTime(10.0));
         assert_eq!(aggregate_values("PRODUCT", &values).expect("PRODUCT"), Scalar::Decimal(15.0));
+        let integers = [Scalar::Integer(7), Scalar::Integer(3), Scalar::Blank];
+        assert_eq!(aggregate_values("MIN", &integers).expect("MIN"), Scalar::Integer(3));
+        assert_eq!(aggregate_values("MAX", &integers).expect("MAX"), Scalar::Integer(7));
         // A column holding only text, logicals and blanks has no numeric observations at all.
         let non_numeric = [Scalar::String("5".into()), Scalar::Boolean(false), Scalar::Blank];
         assert_eq!(aggregate_values("SUM", &non_numeric).expect("SUM"), Scalar::Blank);
@@ -620,5 +675,42 @@ mod tests {
         assert_eq!(parse_date_text("2023-02-29"), None);
         assert_eq!(parse_date_text("1/8"), None);
         assert_eq!(parse_date_text(""), None);
+    }
+
+    #[test]
+    fn date_text_round_trips_the_ampm_form_the_crate_prints() {
+        // `datetime_text` writes `M/D/YYYY H:MM:SS AM/PM`, so the same text has to parse back:
+        // 12 AM is midnight and 12 PM is noon, and the other PM hours move to the afternoon.
+        assert_eq!(parse_date_text("1/2/2024 12:00:00 AM"), Some(date_serial(2024, 1, 2, 0, 0, 0)));
+        assert_eq!(parse_date_text("1/2/2024 12:00:00 PM"), Some(date_serial(2024, 1, 2, 12, 0, 0)));
+        assert_eq!(parse_date_text("1/2/2024 1:30:15 PM"), Some(date_serial(2024, 1, 2, 13, 30, 15)));
+        assert_eq!(parse_date_text("1/2/2024 1:30:15 AM"), Some(date_serial(2024, 1, 2, 1, 30, 15)));
+        // A suffixed hour is 1-12, so 13 PM and 0 AM are impossible rather than 13:00 and 00:00.
+        assert_eq!(parse_date_text("1/2/2024 13:00:00 PM"), None);
+        assert_eq!(parse_date_text("1/2/2024 0:00:00 AM"), None);
+    }
+
+    #[test]
+    fn rounding_snaps_binary_noise_at_fifteen_digits() {
+        // `value * 100` carries the binary error of the input, and a directed rounding exposes it.
+        assert_eq!(round_to(1.005, 2), 1.01);
+        assert_eq!(round_direction(0.29, 2, false), 0.29);
+        assert_eq!(round_direction(0.07, 2, true), 0.07);
+        // The ordinary cases still behave: sign-aware directed rounding and half away from zero.
+        assert_eq!(round_direction(-2.9, 0, false), -2.0);
+        assert_eq!(round_direction(-2.1, 0, true), -3.0);
+        assert_eq!(round_to(2.5, 0), 3.0);
+        assert_eq!(round_to(2.345, 2), 2.35);
+    }
+
+    #[test]
+    fn gcd_and_lcm_report_results_that_do_not_fit() {
+        assert_eq!(gcd(12, 18), 6);
+        // `i64::MIN` has no positive counterpart: the magnitudes are used instead of `abs`.
+        assert_eq!(gcd(i64::MIN, 2), 2);
+        assert_eq!(lcm(4, 6), Some(12));
+        assert_eq!(lcm(0, 7), Some(0));
+        // Coprime operands above 2^32 overflow the product, which Excel answers with `#NUM!`.
+        assert_eq!(lcm(1 << 40, (1 << 40) + 1), None);
     }
 }

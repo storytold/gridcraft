@@ -30,7 +30,8 @@ fn single_table(name: &str, columns: &[(&str, &str)], rows: Vec<Vec<Scalar>>) ->
 
 #[test]
 fn ragged_rows_keep_the_row_scan_semantics() {
-    // Row 0 only supplies A; the missing B cell is a row the columnar copy would blank-extend.
+    // Row 0 only supplies A; the missing B cell is padded to BLANK, the same value the columnar
+    // copy and the integrity check read, so both paths agree.
     let model =
         single_table("Sales", &[("A", "Int64"), ("B", "Int64")], vec![vec![Scalar::Integer(1)], vec![Scalar::Integer(2), Scalar::Integer(3)]]);
     let evaluator = Evaluator::new(&model).expect("evaluator");
@@ -39,9 +40,12 @@ fn ragged_rows_keep_the_row_scan_semantics() {
 
     let expr = parse_expression("SUM(Sales[B])").expect("parse");
     let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
-    // `TableValue::column` skips a row shorter than the requested column, so only row 1 counts.
+    // BLANK contributes nothing to SUM, so only row 1 counts.
     assert_eq!(evaluator.evaluate(&bound).expect("evaluate"), Scalar::Decimal(3.0));
     assert_eq!(eval(&model, "COUNTROWS(Sales)"), Scalar::Integer(2));
+    // The padded cell is a real BLANK for the filter and for `VALUES`, instead of vanishing.
+    assert_eq!(eval(&model, "CALCULATE(COUNTROWS(Sales), Sales[B] = 3)"), Scalar::Integer(1));
+    assert_eq!(eval(&model, "COUNTROWS(VALUES(Sales[B]))"), Scalar::Integer(2));
     assert!(evaluator.storage_stats().row_scan_fallbacks > 0, "{:?}", evaluator.storage_stats());
 }
 

@@ -45,9 +45,10 @@
 //!   rejected ([`PivotTableError::ForeignField`]).
 //! * A cell of a related field's group is evaluated with the group value as a filter on the
 //!   *related table*, so the evaluator's own relationship propagation (through the same indexes,
-//!   over any number of hops) restricts the source table. A group value the relationship cannot
-//!   resolve — an orphan key, shown as `(Blank)` — therefore selects no source rows and the
-//!   measure returns its empty-set value (BLANK for `SUM`), the model's inner-join semantics.
+//!   over any number of hops) restricts the source table. A source row whose key has no related
+//!   row — an orphan key, shown as `(Blank)` — belongs to the related table's BLANK member, so the
+//!   `(Blank)` cell counts it and the leaf rows still add up to the grand total. A BLANK foreign
+//!   key is an orphan as well: a relationship never joins one.
 //!   A label column of a related field is named `Table[Column]`, so two dimensions with a column
 //!   of the same name stay distinguishable; source-table fields keep the bare column name.
 //!
@@ -998,6 +999,11 @@ fn column_field_value(storage: &ModelStorage, table: usize, row: usize, field: &
     for hop in &field.hops {
         let key = storage.value(current_table, hop.from_column, current_row).unwrap_or(Scalar::Blank);
         let key = ScalarKey::from(&key);
+        // A BLANK key never joins, even when the related table has its own BLANK key row: DAX
+        // treats it as an orphan, and `model_field_value` groups it as one too.
+        if key == ScalarKey::Blank {
+            return Scalar::Blank;
+        }
         let Some(next) = storage.relationships().get(hop.relationship).and_then(|relationship| relationship.rows_to(&key).first().copied()) else {
             return Scalar::Blank;
         };
@@ -1016,8 +1022,8 @@ fn model_field_value(model: &DataModel, row: &[Scalar], field: &BoundField) -> S
     let mut current = row;
     for hop in &field.hops {
         let key = ScalarKey::from(&current.get(hop.from_column).cloned().unwrap_or(Scalar::Blank));
-        // The relationship index never matches a BLANK key, so a blank foreign key is an orphan
-        // here too; otherwise both paths would group the same row differently.
+        // A BLANK key is an orphan here too — a relationship never joins one, even when the
+        // related table has a BLANK key row of its own — so both paths group the row the same way.
         if key == ScalarKey::Blank {
             return Scalar::Blank;
         }

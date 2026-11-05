@@ -92,7 +92,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::model::DataModel;
-use crate::value::{Scalar, ScalarKey};
+use crate::value::{Scalar, ScalarKey, distinct_key};
 
 /// A bitset used for column blank/null bitmaps.
 ///
@@ -966,20 +966,19 @@ impl TableStorage {
     /// `DISTINCTCOUNT` over the selected rows. BLANK counts as a distinct value, as in DAX.
     ///
     /// A dictionary-encoded column counts distinct codes instead of decoding a value per row, so
-    /// each label is compared once whatever the row count.
+    /// each label is compared once whatever the row count. Labels fold to lower case, the model
+    /// collation, so `"A"` and `"a"` are one distinct value — the same key the row-scan path
+    /// builds and the same folding the filter context uses.
     pub fn distinct_count(&self, column: usize, rows: &[usize]) -> Result<Scalar, StorageError> {
         let storage = self.column_checked(column)?;
         self.check_rows(storage, rows)?;
         if let Some((dictionary, nulls)) = storage.data().string_parts() {
             let mut seen = vec![false; dictionary.len()];
-            let mut distinct: usize = 0;
             let mut seen_blank = false;
+            let mut folded: BTreeSet<String> = BTreeSet::new();
             for &row in rows {
                 if nulls.get(row) {
-                    if !seen_blank {
-                        seen_blank = true;
-                        distinct += 1;
-                    }
+                    seen_blank = true;
                     continue;
                 }
                 if let Some(code) = storage.data().code_at(row).and_then(|code| usize::try_from(code).ok())
@@ -987,16 +986,19 @@ impl TableStorage {
                     && !*seen
                 {
                     *seen = true;
-                    distinct += 1;
+                    if let Some(label) = dictionary.get(code) {
+                        folded.insert(label.to_lowercase());
+                    }
                 }
             }
+            let distinct = folded.len() + usize::from(seen_blank);
             return Ok(Scalar::Integer(i64::try_from(distinct).unwrap_or(i64::MAX)));
         }
         let data = storage.data();
         let mut keys = BTreeSet::new();
         for &row in rows {
             if let Some(value) = data.value(row) {
-                keys.insert(ScalarKey::from(&value));
+                keys.insert(distinct_key(&value));
             }
         }
         Ok(Scalar::Integer(i64::try_from(keys.len()).unwrap_or(i64::MAX)))
@@ -1026,8 +1028,8 @@ impl TableStorage {
 
     /// The numeric values of `column` over `rows`, in row order, using DAX coercion.
     ///
-    /// This is the observation list `SUM`, `AVERAGE`, `PRODUCT`, `MIN`, `MAX` and the variance
-    /// family aggregate: blanks, booleans and text contribute nothing (BLANK is skipped,
+    /// This is the observation list `SUM`, `AVERAGE`, `PRODUCT` and the variance family
+    /// aggregate: blanks, booleans and text contribute nothing (BLANK is skipped,
     /// booleans and text are not numbers here even when Excel would coerce them), integers are
     /// read as `f64`, currency in major units and date/time serials unchanged. Non-finite values
     /// are kept; callers that need finite observations filter them.
@@ -1084,7 +1086,8 @@ impl TableStorage {
     /// The distinct values of `column` over `rows`, in first-occurrence row order.
     ///
     /// BLANK is a value of its own. A dictionary-encoded column compares each label once through
-    /// its dictionary instead of decoding a value per row.
+    /// its dictionary instead of decoding a value per row, and text folds to lower case — the
+    /// model collation — so `"A"` and `"a"` are one value, reported with the first spelling seen.
     pub fn distinct_values(&self, column: usize, rows: &[usize]) -> Result<Vec<Scalar>, StorageError> {
         let storage = self.column_checked(column)?;
         self.check_rows(storage, rows)?;
@@ -1093,6 +1096,10 @@ impl TableStorage {
         if let Some((dictionary, nulls)) = data.string_parts() {
             let mut seen = vec![false; dictionary.len()];
             let mut seen_blank = false;
+            // Labels fold to lower case, the model collation, so `"A"` and `"a"` are one value —
+            // the same key `DISTINCTCOUNT` counts and the filter context filters on. The first
+            // spelling encountered is the one reported.
+            let mut labels: BTreeSet<String> = BTreeSet::new();
             for &row in rows {
                 if nulls.get(row) {
                     if !seen_blank {
@@ -1107,10 +1114,14 @@ impl TableStorage {
                 let Some(label) = dictionary.get(code) else {
                     continue;
                 };
-                if let Some(seen) = seen.get_mut(code)
-                    && !*seen
-                {
-                    *seen = true;
+                let Some(seen) = seen.get_mut(code) else {
+                    continue;
+                };
+                if *seen {
+                    continue;
+                }
+                *seen = true;
+                if labels.insert(label.to_lowercase()) {
                     values.push(Scalar::String(label.clone()));
                 }
             }
@@ -1120,7 +1131,7 @@ impl TableStorage {
                 let Some(value) = data.value(row) else {
                     continue;
                 };
-                if seen.insert(ScalarKey::from(&value)) {
+                if seen.insert(distinct_key(&value)) {
                     values.push(value);
                 }
             }

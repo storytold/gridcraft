@@ -153,16 +153,20 @@ fn column_aggregates_match_documented_values() {
     assert_eq!(value, Scalar::Integer(7));
     assert!(stats.aggregates > 0);
 
-    assert_eq!(eval(&model, "MIN(Sales[Amount])").0, Scalar::Decimal(10.0));
-    assert_eq!(eval(&model, "MAX(Sales[Amount])").0, Scalar::Decimal(100.0));
+    // MIN/MAX answer the winning value, so an Int64 column keeps its Integer type.
+    let (value, stats) = eval(&model, "MIN(Sales[Amount])");
+    assert_eq!(value, Scalar::Integer(10));
+    assert!(stats.aggregates > 0, "MIN must be served by storage, got {stats:?}");
+    assert_eq!(eval(&model, "MAX(Sales[Amount])").0, Scalar::Integer(100));
     // 100 * 50 * 30 * 70 * 20 * 10 = 2,100,000,000.
     assert_eq!(eval(&model, "PRODUCT(Sales[Amount])").0, Scalar::Decimal(2_100_000_000.0));
 
-    // Currency is read in major units: MIN is 0.75 and MAX is 20.00 (Excel agrees).
+    // Currency is read in major units: MIN is 0.75 and MAX is 20.00 (Excel agrees), and the
+    // result stays currency — 7,500 and 200,000 in the internal ten-thousandths scale.
     let (value, stats) = eval(&model, "MIN(Product[UnitPrice])");
-    assert_eq!(value, Scalar::Decimal(0.75));
+    assert_eq!(value, Scalar::Currency(7_500));
     assert!(stats.aggregates > 0);
-    assert_eq!(eval(&model, "MAX(Product[UnitPrice])").0, Scalar::Decimal(20.0));
+    assert_eq!(eval(&model, "MAX(Product[UnitPrice])").0, Scalar::Currency(200_000));
 }
 
 #[test]
@@ -326,4 +330,66 @@ fn measures_evaluate_through_storage() {
     // Sales Rows Per Product resolve their RELATED/RELATEDTABLE calls through the index (their
     // derived iterator expressions stay row-based, so `iterators` is zero here).
     assert!(stats.aggregates >= 2 && stats.count_rows == 1 && stats.related > 0 && stats.related_table > 0, "{stats:?}");
+}
+
+#[test]
+fn pivot_blank_group_counts_orphan_fact_rows() {
+    // `Product` has an "Unknown" row whose key is BLANK. `Sales` has a row matching `Widget`, a
+    // row whose key has no `Product` at all, and a row whose key is BLANK. A relationship never
+    // joins a BLANK key, so the last two are orphans: they group as `(Blank)` and the BLANK cell
+    // must count them instead of showing zero.
+    let mut model = DataModel {
+        tables: vec![
+            ModelTable {
+                name: "Product".into(),
+                columns: vec![
+                    ModelColumn { name: "ProductKey".into(), data_type: Some("Int64".into()) },
+                    ModelColumn { name: "Name".into(), data_type: Some("String".into()) },
+                ],
+                rows: vec![vec![Scalar::Integer(1), text("Widget")], vec![Scalar::Blank, text("Unknown")]],
+            },
+            ModelTable {
+                name: "Sales".into(),
+                columns: vec![
+                    ModelColumn { name: "ProductKey".into(), data_type: Some("Int64".into()) },
+                    ModelColumn { name: "Amount".into(), data_type: Some("Int64".into()) },
+                ],
+                rows: vec![
+                    vec![Scalar::Integer(1), Scalar::Integer(10)],
+                    vec![Scalar::Integer(99), Scalar::Integer(20)],
+                    vec![Scalar::Blank, Scalar::Integer(40)],
+                ],
+            },
+        ],
+        relationships: vec![Relationship {
+            from_table: "Sales".into(),
+            from_column: "ProductKey".into(),
+            to_table: "Product".into(),
+            to_column: "ProductKey".into(),
+            bidirectional: false,
+            inactive: false,
+        }],
+        measures: vec![Measure {
+            name: "Total Amount".into(),
+            formula: "SUM(Sales[Amount])".into(),
+            table: Some("Sales".into()),
+            format: None,
+            expr: None,
+        }],
+    };
+    model.parse_formulas().expect("model parses");
+
+    let pivot = PivotTable::new("Sales by product", "Total Amount")
+        .with_row_fields(vec!["Product[Name]".into()])
+        .with_grand_totals(true)
+        .with_layout(PivotLayout::Tabular);
+    let (table, stats) = pivot.render_with_stats(&model).expect("render pivot");
+
+    // (Blank) 60 = the orphan key 99 (20) plus the BLANK key (40); Widget 10; total 70.
+    assert_eq!(table.rows.len(), 3, "{:?}", table.rows);
+    assert_eq!(table.rows[0], vec![Scalar::Blank, Scalar::Decimal(60.0)]);
+    assert_eq!(table.rows[1], vec![text("Widget"), Scalar::Decimal(10.0)]);
+    assert_eq!(table.rows[2], vec![text("Grand Total"), Scalar::Decimal(70.0)]);
+    // Every cell was answered from the columns, so both sides read the same relationship indexes.
+    assert!(stats.aggregates > 0, "each pivot cell is a storage aggregate, got {stats:?}");
 }
