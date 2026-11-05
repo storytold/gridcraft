@@ -269,8 +269,12 @@ fn installed_in(cat: &[Face], names: &[String]) -> Vec<String> {
 /// offers, and what we substitute), then every other installed family A–Z. Never blocks: until the
 /// background scan finishes it returns just the standard names.
 pub fn families() -> Vec<String> {
+    families_from(catalog_now().unwrap_or_default())
+}
+
+/// [`families`] over a given catalog (empty while the scan has not finished).
+fn families_from(cat: &[Face]) -> Vec<String> {
     let mut out: Vec<String> = crate::ribbon::FONTS.iter().map(|s| s.to_string()).collect();
-    let Some(cat) = catalog_now() else { return out };
     let mut seen: HashSet<String> = out.iter().map(|s| s.to_lowercase()).collect();
     let mut installed: Vec<String> = cat.iter().map(|f| f.family.clone()).collect();
     installed.sort_by_key(|a| a.to_lowercase());
@@ -579,6 +583,26 @@ mod tests {
         assert_eq!(faces_named(&cat, "Noto Sans KR").len(), 2);
         let medium = faces_named(&cat, "Noto Sans KR Medium");
         assert_eq!(medium.iter().map(|f| f.weight).collect::<Vec<_>>(), [500.0]);
+    }
+
+    #[test]
+    fn the_font_list_is_the_standard_set_until_the_scan_lands() {
+        assert_eq!(families_from(&[]), crate::ribbon::FONTS.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn the_font_list_appends_installed_families_sorted_and_deduped() {
+        let cat = [
+            face("Zebra", &["Zebra"], "zebra.ttf", 400.0),
+            face("Meiryo", &["Meiryo"], "meiryo.ttc", 400.0),
+            face("Meiryo", &["Meiryo"], "meiryob.ttc", 700.0),
+            face("arial", &["arial"], "arial.ttf", 400.0),
+        ];
+        let list = families_from(&cat);
+        let standard = crate::ribbon::FONTS.len();
+        assert_eq!(&list[..standard], crate::ribbon::FONTS);
+        // "arial" is already in the standard set (case aside), and Meiryo's two faces are one entry.
+        assert_eq!(&list[standard..], ["Meiryo", "Zebra"]);
     }
 
     #[test]
