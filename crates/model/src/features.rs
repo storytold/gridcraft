@@ -1212,6 +1212,7 @@ mod tests {
             source: None,
             by_rows: false,
             pivot: None,
+            vary_colors: None,
         };
         let mut json = serde_json::to_value(&chart).expect("serialize chart");
         json.as_object_mut().expect("chart object").remove("hole_size");
