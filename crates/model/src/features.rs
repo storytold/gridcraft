@@ -287,64 +287,6 @@ pub struct CondFormat {
     pub stop_if_true: bool,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// JSON saved before the x14 extension fields existed must still deserialize, with the new
-    /// fields defaulting (`None`).
-    #[test]
-    fn old_json_databar_and_iconset_deserialize_with_default_extensions() {
-        let old = r#"{"DataBar":{"min":"Min","max":"Max","color":{"Rgb":10066329},"gradient":true,"show_value":true}}"#;
-        let CfRule::DataBar { border, negative_fill, negative_border, axis, limits, .. } = serde_json::from_str::<CfRule>(old).unwrap() else {
-            panic!("not a data bar")
-        };
-        assert!(border.is_none() && negative_fill.is_none() && negative_border.is_none() && axis.is_none() && limits.is_none());
-
-        let old = r#"{"IconSet":{"set":"3Arrows","thresholds":["Min","Max"],"reverse":false,"show_value":true}}"#;
-        let CfRule::IconSet { icons, .. } = serde_json::from_str::<CfRule>(old).unwrap() else { panic!("not an icon set") };
-        assert!(icons.is_none());
-    }
-
-    #[test]
-    fn databar_and_iconset_round_trip_with_extensions() {
-        let rules = [
-            CfRule::DataBar {
-                min: CfValueKind::Min,
-                max: CfValueKind::Max,
-                color: Color::Rgb(0x638EC6),
-                gradient: false,
-                show_value: false,
-                border: Some(Color::Rgb(0xFF0000)),
-                negative_fill: Some(Color::Theme(9, -99)),
-                negative_border: Some(Color::Auto),
-                axis: Some(Color::Rgb(0x00FF00)),
-                limits: Some((10, 90)),
-            },
-            CfRule::IconSet {
-                set: "3Arrows".into(),
-                thresholds: default_icon_thresholds("3Arrows"),
-                reverse: false,
-                show_value: true,
-                icons: Some(vec![IconChoice { set: "3Triangles".into(), id: 2 }, IconChoice { set: String::new(), id: 0 }]),
-            },
-        ];
-        for rule in &rules {
-            let json = serde_json::to_string(rule).unwrap();
-            assert_eq!(&serde_json::from_str::<CfRule>(&json).unwrap(), rule);
-        }
-    }
-
-    #[test]
-    fn icon_choice_round_trips() {
-        let c = IconChoice { set: "3Triangles".into(), id: 2 };
-        assert_eq!(
-            serde_json::to_value(&c).unwrap(),
-            serde_json::to_value(serde_json::from_str::<IconChoice>(&serde_json::to_string(&c).unwrap()).unwrap()).unwrap()
-        );
-    }
-}
-
 // ---------------------------------------------------------------- data validation
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1298,5 +1240,59 @@ mod equation_cache_tests {
         let took = start.elapsed();
         assert_eq!(HASHES.with(|h| h.get()), 0, "a thousand lookups read nothing");
         assert!(took < std::time::Duration::from_millis(500), "{took:?}");
+    }
+    use super::*;
+
+    /// JSON saved before the x14 extension fields existed must still deserialize, with the new
+    /// fields defaulting (`None`).
+    #[test]
+    fn old_json_databar_and_iconset_deserialize_with_default_extensions() {
+        let old = r#"{"DataBar":{"min":"Min","max":"Max","color":{"Rgb":10066329},"gradient":true,"show_value":true}}"#;
+        let CfRule::DataBar { border, negative_fill, negative_border, axis, limits, .. } = serde_json::from_str::<CfRule>(old).unwrap() else {
+            panic!("not a data bar")
+        };
+        assert!(border.is_none() && negative_fill.is_none() && negative_border.is_none() && axis.is_none() && limits.is_none());
+
+        let old = r#"{"IconSet":{"set":"3Arrows","thresholds":["Min","Max"],"reverse":false,"show_value":true}}"#;
+        let CfRule::IconSet { icons, .. } = serde_json::from_str::<CfRule>(old).unwrap() else { panic!("not an icon set") };
+        assert!(icons.is_none());
+    }
+
+    #[test]
+    fn databar_and_iconset_round_trip_with_extensions() {
+        let rules = [
+            CfRule::DataBar {
+                min: CfValueKind::Min,
+                max: CfValueKind::Max,
+                color: Color::Rgb(0x638EC6),
+                gradient: false,
+                show_value: false,
+                border: Some(Color::Rgb(0xFF0000)),
+                negative_fill: Some(Color::Theme(9, -99)),
+                negative_border: Some(Color::Auto),
+                axis: Some(Color::Rgb(0x00FF00)),
+                limits: Some((10, 90)),
+            },
+            CfRule::IconSet {
+                set: "3Arrows".into(),
+                thresholds: default_icon_thresholds("3Arrows"),
+                reverse: false,
+                show_value: true,
+                icons: Some(vec![IconChoice { set: "3Triangles".into(), id: 2 }, IconChoice { set: String::new(), id: 0 }]),
+            },
+        ];
+        for rule in &rules {
+            let json = serde_json::to_string(rule).unwrap();
+            assert_eq!(&serde_json::from_str::<CfRule>(&json).unwrap(), rule);
+        }
+    }
+
+    #[test]
+    fn icon_choice_round_trips() {
+        let c = IconChoice { set: "3Triangles".into(), id: 2 };
+        assert_eq!(
+            serde_json::to_value(&c).unwrap(),
+            serde_json::to_value(serde_json::from_str::<IconChoice>(&serde_json::to_string(&c).unwrap()).unwrap()).unwrap()
+        );
     }
 }
