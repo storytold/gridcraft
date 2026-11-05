@@ -196,13 +196,13 @@ table below rather than a fixed grammar cascade.
 
 ## Operators
 
-Precedence from the DAX Guide operator table (tighter first); equal precedence evaluates left to
-right, except `^`:
+Precedence from the operator table (tighter first); operators of equal precedence evaluate left to
+right, including `^`:
 
 | Level | Operators | Associativity |
 | --- | --- | --- |
 | 1 | grouping `()`, function calls | — |
-| 2 | `^` | right |
+| 2 | `^` | left |
 | 3 | unary `+`, `-` | prefix |
 | 4 | `*`, `/` | left |
 | 5 | binary `+`, `-` | left |
