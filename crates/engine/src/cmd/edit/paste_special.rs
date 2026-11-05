@@ -81,6 +81,9 @@ fn copy_merges(
             }
         }
     }
+    if moved.is_empty() {
+        return Ok(());
+    }
     // The copied areas never overlap one another, so only the merges already in the paste area
     // need checking against them. Each is checked against the copied merges once, not once per
     // tile: the tiles that put a copied merge over it are worked out row-wise and column-wise.
