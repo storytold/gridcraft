@@ -74,6 +74,8 @@ mod macros_ui;
 mod menu_hover;
 mod merge_center_label;
 mod merged_cells;
+mod model_pivot_pane;
+mod model_pivot_slicer;
 mod more_colors;
 mod native_print;
 mod nowrap_line_breaks;

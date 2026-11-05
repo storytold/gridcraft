@@ -250,6 +250,9 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("dataModel.markDateTable", "Data", "Data Model", "Mark as Date Table"),
     ("dataModel.unmarkDateTable", "Data", "Data Model", "Unmark Date Table"),
     ("dataModel.validate", "Data", "Data Model", "Validate Data Model"),
+    ("dataModel.createPivot", "Data", "Data Model", "Create PivotTable"),
+    ("dataModel.pivotFields", "Data", "Data Model", "PivotTable Fields"),
+    ("insert.modelPivotTable", "Insert", "Tables", "PivotTable from Data Model"),
     // Review
     ("review.spelling", "Review", "Proofing", "Spelling"),
     ("review.thesaurus", "Review", "Proofing", "Thesaurus"),
