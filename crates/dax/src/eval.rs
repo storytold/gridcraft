@@ -41,7 +41,7 @@ mod support;
 // aggregation
 // date_time
 // filter
-// financial
+mod financial;
 // information
 // logical
 // math_trig
@@ -50,7 +50,7 @@ mod support;
 // parent_child
 // statistical
 // table_manipulation
-// text
+mod text;
 // time_intelligence
 // visual
 
@@ -110,7 +110,7 @@ const FAMILIES: &[Family] = &[
     // aggregation
     // date_time
     // filter
-    // financial
+    Family { name: "financial", scalar: financial::call, table: financial::call_table },
     // information
     // logical
     // math_trig
@@ -119,7 +119,7 @@ const FAMILIES: &[Family] = &[
     // parent_child
     // statistical
     // table_manipulation
-    // text
+    Family { name: "text", scalar: text::call, table: text::call_table },
     // time_intelligence
     // visual
 ];
