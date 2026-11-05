@@ -7,6 +7,7 @@
 //! argument coercion, Excel date serials, rounding and row-frame construction.
 #![allow(dead_code)] // helpers are consumed by the per-family modules as they land
 
+use std::cell::RefCell;
 use std::cmp::Ordering;
 
 use super::*;
@@ -498,6 +499,38 @@ pub(crate) fn parse_date_text(text: &str) -> Option<f64> {
 /// Current evaluation frame's innermost row frame, if any.
 pub(crate) fn current_frame(ctx: &Context) -> Option<&RowFrame> {
     ctx.rows.last()
+}
+
+thread_local! {
+    /// Columns that are rolled up (blanked) in the `SUMMARIZE` row currently being evaluated.
+    /// `None` outside a `SUMMARIZE` expression, so `ISSUBTOTAL` can tell "detail row" from "not in
+    /// a `SUMMARIZE` at all". The state lives here, next to the evaluator's other row-context
+    /// state, because the function that reads it (`ISSUBTOTAL`) and the one that writes it
+    /// (`SUMMARIZE`) ship in different evaluator families.
+    static SUBTOTAL_COLUMNS: RefCell<Option<Vec<(usize, usize)>>> = const { RefCell::new(None) };
+}
+
+/// The rolled-up columns of the `SUMMARIZE` row being evaluated, or `None` outside `SUMMARIZE`.
+pub(crate) fn subtotal_columns() -> Option<Vec<(usize, usize)>> {
+    SUBTOTAL_COLUMNS.with(|columns| columns.borrow().clone())
+}
+
+/// Pushes the rolled-up columns for one `SUMMARIZE` row and restores the outer state on drop, so
+/// a nested `SUMMARIZE` and an error path both leave the context as they found it.
+pub(crate) struct SubtotalGuard(Option<Vec<(usize, usize)>>);
+
+impl SubtotalGuard {
+    pub(crate) fn push(columns: Vec<(usize, usize)>) -> Self {
+        let previous = SUBTOTAL_COLUMNS.with(|current| current.borrow_mut().replace(columns));
+        SubtotalGuard(previous)
+    }
+}
+
+impl Drop for SubtotalGuard {
+    fn drop(&mut self) {
+        let previous = self.0.take();
+        SUBTOTAL_COLUMNS.with(|current| *current.borrow_mut() = previous);
+    }
 }
 
 #[cfg(test)]
