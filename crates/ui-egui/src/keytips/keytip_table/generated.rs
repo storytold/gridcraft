@@ -265,7 +265,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("MXP", Entry::Finish(Action::Command("formulas.calculationOptions"))), // Excel: Partial Calculation; Calculation options: Partial
     ("AB", Entry::Finish(Action::Dialog("subtotal"))),         // Excel: Subtotal
     ("AC", Entry::Finish(Action::Command("data.clearFilter"))), // Excel: Clear Filter
-    ("AD", Entry::Finish(Action::Command("data.consolidate"))), // Excel: Consolidate
+    ("AD", Entry::Finish(Action::Dialog("consolidate"))),      // Excel: Consolidate
     ("AE", Entry::Finish(Action::Dialog("textToColumns"))),    // Excel: Text to Columns
     ("AF1", Entry::Continue), // Excel: Data from Picture Menu; group level: feature gap; reserved until the command lands
     ("AF1C", Entry::Finish(Action::Command("insert.picture"))), // Excel: Picture from Clipboard (source TBD)
@@ -318,7 +318,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("AW", Entry::Continue),                                                // group: group: What-If (goalSeek/scenarioManager/dataTable)
     ("AWG", Entry::Finish(Action::Dialog("goalSeek"))),                     // Excel: Goal Seek
     ("AWS", Entry::Finish(Action::Command("data.scenarioManager"))),        // Excel: Scenario Manager
-    ("AWT", Entry::Finish(Action::Command("data.dataTable"))),              // Excel: Data Table
+    ("AWT", Entry::Finish(Action::Dialog("dataTable"))),                    // Excel: Data Table
     ("AX", Entry::Finish(Action::Pending("data.existingConnections"))), // pending; Excel: Existing Connections; gap #12; reserved until the command lands
     ("AY", Entry::Finish(Action::Command("data.reapply"))),             // Excel: Reapply Filter; containment(Reapply)
     ("RA1", Entry::Finish(Action::Dialog("accessibility"))),            // Excel: Check Accessibility
@@ -400,16 +400,16 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("OHR", Entry::Finish(Action::Dialog("renameSheet"))), // Excel: Format > Sheet > Rename; Legacy Excel 2003 menu path (#941).
     ("OHH", Entry::Finish(Action::Command("sheet.hide"))), // Excel: Format > Sheet > Hide; Legacy Excel 2003 menu path (#941).
     ("OHU", Entry::Finish(Action::Command("sheet.unhide"))), // Excel: Format > Sheet > Unhide; Legacy Excel 2003 menu path (#941).
-    ("OE", Entry::Finish(Action::Command("home.formatCells"))), // Excel: Format > Cells; Legacy Excel 2003 menu path (#941).
-    ("OD", Entry::Finish(Action::Command("home.conditionalFormat"))), // Excel: Format > Conditional Formatting; Legacy Excel 2003 menu path (#941).
+    ("OE", Entry::Finish(Action::Dialog("formatCells"))),  // Excel: Format Cells
+    ("OD", Entry::Finish(Action::Dialog("manageRules"))),  // Excel: Conditional Formatting
     ("DFF", Entry::Finish(Action::Command("data.filter"))), // Excel: Data > Filter > AutoFilter; Legacy Excel 2003 menu path (#941).
     ("DS", Entry::Finish(Action::Dialog("sort"))),         // Excel: Data > Sort; Legacy Excel 2003 menu path (#941).
     ("DGG", Entry::Finish(Action::Command("data.group"))), // Excel: Data > Group and Outline > Group; Legacy Excel 2003 menu path (#941).
     ("DGU", Entry::Finish(Action::Command("data.ungroup"))), // Excel: Data > Group and Outline > Ungroup; Legacy Excel 2003 menu path (#941).
     ("DGS", Entry::Finish(Action::Command("data.showDetail"))), // Excel: Data > Group and Outline > Show Detail; Legacy Excel 2003 menu path (#941).
     ("DGH", Entry::Finish(Action::Command("data.hideDetail"))), // Excel: Data > Group and Outline > Hide Detail; Legacy Excel 2003 menu path (#941).
-    ("DL", Entry::Finish(Action::Command("data.validation"))), // Excel: Data > Validation; Legacy Excel 2003 menu path (#941).
-    ("DT", Entry::Finish(Action::Command("data.dataTable"))), // Excel: Data > Table (what-if data table); Legacy Excel 2003 menu path (#941).
+    ("DL", Entry::Finish(Action::Dialog("dataValidation"))), // Excel: Validation; Legacy Excel Data menu
+    ("DT", Entry::Finish(Action::Dialog("dataTable"))),    // Excel: Data Table; Legacy Excel Data menu
     ("VN", Entry::Finish(Action::Command("view.normal"))), // Excel: View > Normal; Legacy Excel 2003 menu path (#941).
     ("VP", Entry::Finish(Action::Command("view.pageBreakPreview"))), // Excel: View > Page Break Preview; Legacy Excel 2003 menu path (#941).
     ("VZ", Entry::Finish(Action::Dialog("zoom"))),         // Excel: View > Zoom; Legacy Excel 2003 menu path (#941).
@@ -419,4 +419,55 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("TUT", Entry::Finish(Action::Command("formulas.tracePrecedents"))), // Excel: Tools > Formula Auditing > Trace Precedents; Legacy Excel 2003 menu path (#941).
     ("FU", Entry::Finish(Action::Dialog("pageSetup"))),                  // Excel: File > Page Setup; Legacy Excel 2003 menu path (#941).
     ("Q", Entry::Finish(Action::Pending("ui.search"))), // pending; Excel: Search / Tell Me; Alt+Q search box does not exist yet (issue #49)
+    ("D", Entry::Tab("Data")),                          // Legacy Excel menu prefix
+    ("DB", Entry::Finish(Action::Dialog("subtotal"))),  // Excel: Subtotal; Legacy Excel Data menu
+    ("DE", Entry::Finish(Action::Dialog("textToColumns"))), // Excel: Text to Columns; Legacy Excel Data menu
+    ("DFA", Entry::Finish(Action::Dialog("advancedFilter"))), // Excel: Advanced Filter; Legacy Excel Data menu
+    ("DFS", Entry::Finish(Action::Command("data.clearFilter"))), // Excel: Show All; Legacy Excel Data menu
+    ("DGE", Entry::Finish(Action::Dialog("outlineSettings"))), // Excel: Outline Settings; Legacy Excel Data menu
+    ("DIC", Entry::Finish(Action::Command("insert.table"))), // Excel: Create List; Legacy Excel Data menu
+    ("DIR", Entry::Finish(Action::Dialog("tableResize"))), // Excel: Resize List; Legacy Excel Data menu
+    ("DIT", Entry::Finish(Action::Command("table.totalRow"))), // Excel: Total Row; Legacy Excel Data menu
+    ("DIV", Entry::Finish(Action::Command("table.convertToRange"))), // Excel: Convert to Range; Legacy Excel Data menu
+    ("DN", Entry::Finish(Action::Dialog("consolidate"))), // Excel: Consolidate; Legacy Excel Data menu
+    ("DP", Entry::Finish(Action::Command("insert.pivotTable"))), // Excel: PivotTable and PivotChart Report; Legacy Excel Data menu
+    ("DR", Entry::Finish(Action::Command("pivot.refresh"))), // Excel: Refresh Data; Legacy Excel Data menu
+    ("EAF", Entry::Finish(Action::Command("edit.clearFormats"))), // Excel: Clear Formats
+    ("EC", Entry::Finish(Action::Command("edit.copy"))), // Excel: Copy
+    ("EE", Entry::Finish(Action::DialogWith("find", "{\"replace\":true}"))), // Excel: Replace
+    ("EID", Entry::Finish(Action::Command("edit.fillDown"))), // Excel: Fill Down
+    ("EIJ", Entry::Finish(Action::Command("home.justify"))), // Excel: Fill Justify
+    ("EIL", Entry::Finish(Action::Command("edit.fillLeft"))), // Excel: Fill Left
+    ("EIR", Entry::Finish(Action::Command("edit.fillRight"))), // Excel: Fill Right
+    ("EIS", Entry::Finish(Action::Dialog("series"))),   // Excel: Fill Series
+    ("EIU", Entry::Finish(Action::Command("edit.fillUp"))), // Excel: Fill Up
+    ("EP", Entry::Finish(Action::Command("edit.paste"))), // Excel: Paste
+    ("ET", Entry::Finish(Action::Command("edit.cut"))), // Excel: Cut
+    ("EU", Entry::Finish(Action::Command("edit.undo"))), // Excel: Undo
+    ("FS", Entry::Finish(Action::Command("file.save"))), // Excel: Save; Legacy File menu
+    ("FV", Entry::Finish(Action::Command("file.print"))), // Excel: Print Preview; Legacy File menu; opens the Windows Print page with preview
+    ("I", Entry::Tab("Insert")),                        // Legacy Excel menu prefix
+    ("IB", Entry::Finish(Action::CommandWith("pageLayout.breaks", "{\"insert\":true}"))), // Excel: Insert Page Break
+    ("IH", Entry::Finish(Action::Command("insert.recommendedCharts"))), // Excel: Insert Chart
+    ("II", Entry::Finish(Action::Dialog("insertLink"))), // Excel: Insert Hyperlink
+    ("IM", Entry::Finish(Action::DialogWith("comment", "{\"threaded\":false}"))), // Excel: Insert Note
+    ("INP", Entry::Finish(Action::Dialog("pasteName"))), // Excel: Paste Name
+    ("IPF", Entry::Finish(Action::DialogWith("insertPicture", "{\"placement\":\"overCells\"}"))), // Excel: Insert Picture from File
+    ("OCS", Entry::Finish(Action::Dialog("defaultWidth"))), // Excel: Standard Column Width
+    ("TG", Entry::Finish(Action::Dialog("goalSeek"))),  // Excel: Goal Seek; Legacy Tools menu
+    ("TK", Entry::Finish(Action::Dialog("errorChecking"))), // Excel: Error Checking; Legacy Tools menu
+    ("TMM", Entry::Finish(Action::Dialog("macros"))),   // Excel: Macros; Legacy Tools menu
+    ("TMR", Entry::Finish(Action::Dialog("recordMacro"))), // Excel: Record Macro; Legacy Tools menu; stops while recording
+    ("TPA", Entry::Finish(Action::Dialog("allowEditRanges"))), // Excel: Allow Users to Edit Ranges; Legacy Tools menu
+    ("TPP", Entry::Finish(Action::Dialog("protectSheet"))), // Excel: Protect Sheet; Legacy Tools menu
+    ("TPW", Entry::Finish(Action::Dialog("protectWorkbook"))), // Excel: Protect Workbook; Legacy Tools menu
+    ("TS", Entry::Finish(Action::Dialog("spelling"))),  // Excel: Spelling; Legacy Tools menu
+    ("TUE", Entry::Finish(Action::Command("formulas.traceError"))), // Excel: Trace Error; Legacy Tools menu
+    ("TUF", Entry::Finish(Action::Dialog("evaluateFormula"))), // Excel: Evaluate Formula; Legacy Tools menu
+    ("TUW", Entry::Finish(Action::Command("formulas.watchWindow"))), // Excel: Watch Window; Legacy Tools menu
+    ("TV", Entry::Finish(Action::Dialog("solver"))),    // Excel: Solver; Legacy Tools menu
+    ("V", Entry::Tab("View")),                          // Legacy Excel menu prefix
+    ("VC", Entry::Finish(Action::Command("review.showAllNotes"))), // Excel: Show All Notes
+    ("VF", Entry::Finish(Action::Command("view.formulaBar"))), // Excel: Toggle Formula Bar
+    ("VH", Entry::Finish(Action::Dialog("headerFooter"))), // Excel: Header and Footer
 ];

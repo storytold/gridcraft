@@ -13,6 +13,7 @@ use super::ref_edit::{RefLabel, SHEET_DELETED, end_pick, home_sheet_deleted, pla
 use super::spelling::spelling;
 use super::zoom::zoom;
 use super::{Dialog, Field, Json, Key, Map, RefPick, SheetApp, json, vec2};
+use gridcraft_engine::core::split_areas;
 use gridcraft_engine::model::PageOrder;
 
 /// Builds the command params from form values for dialogs that need translation.
@@ -38,6 +39,10 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
                     m.remove("criteria");
                 }
             }
+        }
+        "consolidate" => {
+            let sources = d.values.get("sources").and_then(Json::as_str).unwrap_or_default();
+            v["sources"] = json!(split_areas(sources).into_iter().map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>());
         }
         "dataValidation" => {
             let kind = d.values.get("type").and_then(Json::as_str).unwrap_or("any");

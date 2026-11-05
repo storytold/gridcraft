@@ -689,6 +689,42 @@ impl Dialog {
             }
             "equation" => return crate::equation::open_editor(app, &params),
             "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active, "to": "0", "changing": ""})),
+            "dataTable" => Dialog::form(
+                "dataTable",
+                "Data Table",
+                "data.dataTable",
+                vec![
+                    Text { key: "rowInput", label: "Row input cell:" },
+                    Text { key: "columnInput", label: "Column input cell:" },
+                    Ref { key: "range", label: "Table range:" },
+                ],
+                json!({"range": sel}),
+            ),
+            "consolidate" => Dialog::form(
+                "consolidate",
+                "Consolidate",
+                "data.consolidate",
+                vec![
+                    Text { key: "sources", label: "Source ranges (separate with commas):" },
+                    Ref { key: "destination", label: "Destination:" },
+                    Choice {
+                        key: "function",
+                        label: "Function",
+                        options: vec![
+                            ("sum", "Sum"),
+                            ("count", "Count"),
+                            ("countNums", "Count Numbers"),
+                            ("average", "Average"),
+                            ("max", "Max"),
+                            ("min", "Min"),
+                            ("product", "Product"),
+                        ],
+                    },
+                    Check { key: "topRow", label: "Use labels in top row" },
+                    Check { key: "leftColumn", label: "Use labels in left column" },
+                ],
+                json!({"function": "sum", "destination": active}),
+            ),
             "forecastSheet" => Dialog::form(
                 "forecastSheet",
                 "Create Forecast Worksheet",
@@ -1163,6 +1199,42 @@ mod tests {
         let mut app = SheetApp::new(session, Default::default());
         let dialog = Dialog::open(&mut app, "removeDuplicates", json!({})).unwrap();
         assert_eq!(dialog.values.get("range"), Some(&json!("B2:C4")));
+    }
+
+    #[test]
+    fn data_table_uses_the_selected_range_and_the_entered_input_cell() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        session.execute("cell.set", json!({"cell": "B2", "input": "500"})).unwrap();
+        session.execute("cell.set", json!({"cell": "E2", "input": "=B2*2"})).unwrap();
+        session.execute("cell.set", json!({"cell": "D3", "input": "100"})).unwrap();
+        session.execute("selection.set", json!({"range": "D2:E3"})).unwrap();
+        let mut app = SheetApp::new(session, Default::default());
+        let mut d = Dialog::open(&mut app, "dataTable", json!({})).unwrap();
+        assert_eq!(d.values["range"], "D2:E3");
+        d.set_value("columnInput", json!("B2"));
+        app.run(d.command.unwrap(), build_params(&d)).unwrap();
+        let sheet = app.session.active().unwrap().wb.active().unwrap();
+        assert_eq!(sheet.value(gridcraft_engine::core::CellRef::new(2, 4)).as_f64(), Some(200.0));
+        assert_eq!(sheet.value(gridcraft_engine::core::CellRef::new(1, 1)).as_f64(), Some(500.0));
+    }
+
+    #[test]
+    fn consolidate_keeps_commas_inside_quoted_sheet_names() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        session.execute("cell.set", json!({"cell": "A1", "input": "7"})).unwrap();
+        session.execute("home.insertSheet", json!({})).unwrap();
+        session.execute("sheet.rename", json!({"name": "West, Retail"})).unwrap();
+        session.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+        session.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        session.execute("selection.set", json!({"range": "D1"})).unwrap();
+        let mut app = SheetApp::new(session, Default::default());
+        let mut d = Dialog::open(&mut app, "consolidate", json!({})).unwrap();
+        d.set_value("sources", json!("'West, Retail'!A1, A1"));
+        app.run(d.command.unwrap(), build_params(&d)).unwrap();
+        let sheet = app.session.active().unwrap().wb.active().unwrap();
+        assert_eq!(sheet.value(gridcraft_engine::core::CellRef::new(0, 3)).as_f64(), Some(12.0));
     }
 
     #[test]

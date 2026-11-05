@@ -54,6 +54,49 @@ fn sequence(h: &mut Harness, letters: &[Key], text_first: bool) {
     }
 }
 
+#[test]
+fn legacy_tools_formula_auditing_updates_the_grid() {
+    let mut s = blank();
+    s.execute("cell.set", json!({"cell": "A1", "input": "4"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=A1*2"})).unwrap();
+    s.execute("selection.set", json!({"cell": "B1"})).unwrap();
+    let mut h = harness_on(s, OperatingSystem::Windows);
+    h.state_mut().ui.ribbon_tab = "Insert".into();
+
+    sequence(&mut h, &[Key::T, Key::U, Key::T], false);
+    assert_eq!(h.state().grid.trace.as_ref().map(|trace| trace.arrows.len()), Some(1));
+    sequence(&mut h, &[Key::T, Key::U, Key::A], false);
+    assert!(h.state().grid.trace.is_none());
+    sequence(&mut h, &[Key::T, Key::U, Key::W], false);
+    assert_eq!(h.state().grid.pane.as_deref(), Some("watch"));
+}
+
+#[test]
+fn legacy_tools_options_opens_the_backstage_options_page() {
+    let mut h = harness_on(blank(), OperatingSystem::Windows);
+    h.state_mut().ui.ribbon_tab = "Insert".into();
+
+    sequence(&mut h, &[Key::T, Key::O], false);
+
+    assert_eq!(h.state().backstage.as_ref().map(|backstage| backstage.page), Some(gridcraft_ui_egui::backstage::Page::Options));
+    assert!(h.state().dialog.is_none());
+}
+
+#[test]
+fn legacy_tools_protect_workbook_opens_the_appropriate_password_prompt() {
+    let mut h = harness_on(blank(), OperatingSystem::Windows);
+    sequence(&mut h, &[Key::T, Key::P, Key::W], false);
+    assert_eq!(h.state().dialog.as_ref().map(|dialog| dialog.name()), Some("protectWorkbook"));
+    assert!(!h.state().session.active().unwrap().wb.protected_structure);
+
+    let mut s = blank();
+    s.execute("review.protectWorkbook", json!({"password": "test password"})).unwrap();
+    let mut h = harness_on(s, OperatingSystem::Windows);
+    sequence(&mut h, &[Key::T, Key::P, Key::W], false);
+    assert_eq!(h.state().dialog.as_ref().map(|dialog| dialog.name()), Some("unprotectWorkbook"));
+    assert!(h.state().session.active().unwrap().wb.protected_structure);
+}
+
 fn value(h: &Harness, cell: &str) -> Value {
     h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::parse(cell).unwrap())
 }
@@ -272,6 +315,34 @@ fn alt_up(h: &mut Harness, alt: Key) {
 
 fn alt_letter(h: &mut Harness, key: Key) {
     events(h, [key_event(key, true, Modifiers::ALT), key_event(key, false, Modifiers::ALT)]);
+}
+
+#[test]
+fn legacy_data_filter_toggles_autofilter_with_alt_tapped_or_held() {
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Fruit", "Quantity"], ["Apple", 2], ["Pear", 3]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:B3"})).unwrap();
+    let mut h = harness_on(s, OperatingSystem::Windows);
+
+    alt_down(&mut h, Key::AltLeft);
+    alt_up(&mut h, Key::AltLeft);
+    letter(&mut h, Key::D, false);
+    letter(&mut h, Key::F, false);
+    assert_eq!(h.state().keytips.prefix(), Some("DF"));
+    letter(&mut h, Key::F, false);
+    let sheet = h.state().session.active().unwrap().wb.active().unwrap();
+    assert_eq!(sheet.autofilter.as_ref().unwrap().range.a1(), "A1:B3");
+
+    alt_down(&mut h, Key::AltLeft);
+    for key in [Key::D, Key::F, Key::F] {
+        alt_letter(&mut h, key);
+    }
+    alt_up(&mut h, Key::AltLeft);
+    let sheet = h.state().session.active().unwrap().wb.active().unwrap();
+    assert!(sheet.autofilter.is_none());
+    assert_eq!(h.state().keytips.prefix(), None);
+    assert!(h.state().editor.is_none());
+    assert_eq!(value(&h, "A1"), Value::from("Fruit"));
 }
 
 fn line_size(h: &Harness, cols: bool) -> Option<f32> {
