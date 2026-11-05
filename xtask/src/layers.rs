@@ -30,6 +30,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("numfmt", Class::Layer(0)),
     ("pdf", Class::Layer(0)),
     ("formula", Class::Layer(1)),
+    ("dax", Class::Layer(1)),
     ("functions", Class::Layer(1)),
     // Equation layout (LaTeX to glyphs, rules and paths) and OMML, on top of RaTeX.
     ("math", Class::Layer(1)),
