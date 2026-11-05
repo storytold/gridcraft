@@ -348,9 +348,14 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     ui.label(lang.tr_with("Do you want to save the changes you made to {title}?", &[("title", &title)]));
                     let quitting = d.values.get("quit").and_then(Json::as_bool) == Some(true);
                     ui.horizontal(|ui| {
-                        for (label, answer) in
-                            [("Don't Save", crate::SaveAnswer::DontSave), ("Cancel", crate::SaveAnswer::Cancel), ("Save", crate::SaveAnswer::Save)]
-                        {
+                        // Mirrored, the row reads from the right: Save, Don't Save, Cancel (the order
+                        // Arabic users meet in other applications); the English row is unchanged.
+                        let mut answers =
+                            [("Don't Save", crate::SaveAnswer::DontSave), ("Cancel", crate::SaveAnswer::Cancel), ("Save", crate::SaveAnswer::Save)];
+                        if crate::rtl::flows(ui) {
+                            answers = [("Save", crate::SaveAnswer::Save), ("Don't Save", crate::SaveAnswer::DontSave), ("Cancel", crate::SaveAnswer::Cancel)];
+                        }
+                        for (label, answer) in answers {
                             if ui.button(lang.tr(label)).clicked() && app.answer_save_changes(answer, quitting, ui.ctx()) {
                                 open = false;
                             }
