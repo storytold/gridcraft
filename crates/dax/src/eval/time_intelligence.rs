@@ -26,7 +26,12 @@ pub(super) fn is_date_column(data_type: Option<&str>) -> bool {
 pub(super) fn year_end_parts(value: &Scalar) -> Option<(i64, i64)> {
     let (year, month, day) = match value {
         Scalar::String(text) => {
-            let parts: Vec<&str> = text.trim().split(['/', '-']).map(str::trim).filter(|part| !part.is_empty()).collect();
+            let parts: Vec<&str> = text.trim().split(['/', '-']).map(str::trim).collect();
+            // An empty component (`"6/-30"`, `"6/"`) is not a date: reject it instead of letting
+            // the remaining parts parse as a valid month and day.
+            if parts.iter().any(|part| part.is_empty()) {
+                return None;
+            }
             let numbers: Vec<i64> = parts.iter().map(|part| part.parse::<i64>().ok()).collect::<Option<Vec<i64>>>()?;
             match numbers.as_slice() {
                 // `M/D`: only the month and day matter, and the year is never read back.

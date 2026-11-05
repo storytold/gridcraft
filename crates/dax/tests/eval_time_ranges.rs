@@ -596,6 +596,9 @@ fn an_impossible_year_end_date_is_rejected_by_the_range_functions() {
     let model = model();
     let count = |argument: &str| evaluate_in(&model, &format!("COUNTROWS(DATESYTD('Date'[Date], \"{argument}\"))"), FilterContext::default());
     assert!(count("2/30").is_err());
+    // An empty component is not a date either.
+    assert!(count("6/-30").is_err());
+    assert!(count("6/").is_err());
     assert!(count("6/30").is_ok());
     assert!(count("6/30/2024").is_ok());
     assert!(count("2/29").is_ok());
