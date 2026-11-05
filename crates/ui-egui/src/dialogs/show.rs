@@ -407,6 +407,12 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
         confirm = false;
     }
+    if confirm && d.name == "openLink" {
+        confirm = false;
+        if confirm_open_link(app, &d) {
+            open = false;
+        }
+    }
     if confirm && d.command.is_some() && home_sheet_deleted(app, &mut d) {
         // References without a sheet name would land on whichever sheet is shown now.
         app.message = Some((d.title.clone(), SHEET_DELETED.into()));
@@ -483,6 +489,33 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     } else if let Some(back) = d.back.take() {
         app.dialog = Some(*back);
     }
+}
+
+/// OK in Open Hyperlink; returns whether the prompt closes. A pass that carries control-channel
+/// input (`ui.key`, `ui.click`, `ui.drag`) can't say yes for the user (#2181): the link stays
+/// unopened and the prompt open, with a message. Real input in that same pass is refused too, so
+/// the user just presses OK again.
+pub(super) fn confirm_open_link(app: &mut SheetApp, d: &Dialog) -> bool {
+    if app.synthetic_pending {
+        app.message = Some((d.title.clone(), SYNTHETIC_LINK_CONFIRM.into()));
+        return false;
+    }
+    if let Err(e) = open_confirmed_link(app, d) {
+        app.message = Some((d.title.clone(), crate::clean_error(&e)));
+    }
+    true
+}
+
+/// Why Open Hyperlink ignored an OK that arrived with synthetic control-channel input.
+pub(super) const SYNTHETIC_LINK_CONFIRM: &str = "Synthetic input from the control channel can't open a link: press OK yourself to open it.";
+
+/// The user pressed OK in Open Hyperlink: opens the address the prompt showed (`d.link`), never
+/// one a caller edited into its values afterwards.
+pub(super) fn open_confirmed_link(app: &mut SheetApp, d: &Dialog) -> Result<(), String> {
+    let url = d.link.as_deref().unwrap_or_default();
+    let r = app.session.open_confirmed_link(url).map(|_| ()).map_err(|e| e.to_string());
+    app.after_engine();
+    r
 }
 
 pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {

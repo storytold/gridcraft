@@ -179,7 +179,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open Hyperlink",
             [],
             None,
-            "{url?: \"https://…\" | \"mailto:…\" | \"Sheet2!A1\", cell?} (default: the cell's link); only http, https and mailto are opened, any other scheme is an error; the UI asks before opening",
+            "{url?: \"https://…\" | \"mailto:…\" | \"Sheet2!A1\", cell?} (default: the cell's link); a reference selects; a web or e-mail address is an error unless the host allows it: the user opens those by clicking the link and confirming; any scheme but http, https and mailto is always an error",
             has_doc,
             open_link
         ),
@@ -1100,6 +1100,10 @@ fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
         .unwrap_or_else(|| if data.starts_with(&[0x89, b'P', b'N', b'G']) { "image/png".into() } else { "image/jpeg".into() });
     let (w, h) = crate::io::image_size(&data).unwrap_or((320, 240));
     let d = s.doc()?;
+    // Sheet protection locks drawing objects, as for a text box's text.
+    if d.wb.active().is_some_and(|sh| sh.is_protected()) {
+        return Err(EngineError::Other(PROTECTED.into()));
+    }
     let id = d.wb.next_object_id();
     let at = cell_param(s, p, "at")?.unwrap_or(d.selection.active);
     let scale = (640.0 / w.max(1) as f32).min(1.0);
@@ -1336,9 +1340,11 @@ fn insert_link(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-/// Follows a link: a reference selects it, an `http`/`https`/`mailto` address is handed to the
-/// host (`UiRequest::OpenUrl`); anything else is refused ([`crate::links::classify`]). Opens no
-/// dialog; the interactive click asks for confirmation first, in the UI.
+/// Follows a link: a reference selects it; anything else is refused ([`crate::links::classify`]).
+/// An `http`/`https`/`mailto` address is refused too unless the host set
+/// [`crate::links::LinkPolicy::Allow`]: every caller of a command may be a script or an agent, so
+/// the user opens such links by clicking and confirming, and the UI then calls
+/// [`Session::open_confirmed_link`] (#2181). Opens no dialog.
 fn open_link(s: &mut Session, p: &Json) -> Result<Json> {
     let target = match str_param(p, "url").or_else(|| str_param(p, "target")) {
         Some(t) => t.to_string(),
@@ -1354,6 +1360,9 @@ fn open_link(s: &mut Session, p: &Json) -> Result<Json> {
     match crate::links::classify(&target) {
         crate::links::LinkKind::Internal(r) => super::edit::go_to(s, &json!({"reference": r.trim_start_matches('#')})),
         crate::links::LinkKind::External(u) => {
+            if s.link_policy != crate::links::LinkPolicy::Allow {
+                return Err(EngineError::Other(crate::links::NEEDS_CONFIRMATION.into()));
+            }
             s.ui_requests.push(crate::UiRequest::OpenUrl(u.clone()));
             Ok(json!({"opened": u}))
         }
@@ -1733,12 +1742,31 @@ fn clear_cf(s: &mut Session, p: &Json) -> Result<Json> {
             sh.cond_formats.clear();
         } else {
             for cf in sh.cond_formats.iter_mut() {
+                let before = RangeRef::top_left(&cf.ranges);
                 cf.ranges.retain(|r| !ranges.iter().any(|x| x.intersects(r)));
+                // The relative formulas are written for the top-left cell: when it goes, they're
+                // rewritten for the new one, so the areas left keep reading the same cells.
+                if let (Some(from), Some(to)) = (before, RangeRef::top_left(&cf.ranges)) {
+                    rebase_cf_formulas(&mut cf.rule, from, to);
+                }
             }
             sh.cond_formats.retain(|c| !c.ranges.is_empty());
         }
         Ok(Json::Null)
     })
+}
+
+/// Moves the relative references of a rule's per-cell formulas written for `from` to `to`.
+fn rebase_cf_formulas(rule: &mut CfRule, from: CellRef, to: CellRef) {
+    let mv = |f: &str| crate::cmd::data::move_rule_formula(f, from, to);
+    match rule {
+        CfRule::CellIs { a, b, .. } => {
+            *a = mv(a);
+            *b = b.as_deref().map(mv);
+        }
+        CfRule::Expression { formula, .. } => *formula = mv(formula),
+        _ => {}
+    }
 }
 
 fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
