@@ -278,6 +278,10 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         },
     };
     let format = read_format(root, plot, &series);
+    let doughnut = plot.child("doughnutChart");
+    let hole_size = doughnut.and_then(|g| g.child_val("holeSize")).and_then(|v| v.trim().parse::<u8>().ok()).unwrap_or(75).clamp(10, 90);
+    let first_slice_angle =
+        plot.child("pieChart").or(doughnut).and_then(|g| g.child_val("firstSliceAng")).and_then(|v| v.trim().parse::<u16>().ok()).unwrap_or(0) % 360;
     Some(Chart {
         id: 0,
         kind,
@@ -294,6 +298,8 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         }),
         gridlines: if scatter { y_ax } else { val_axes.first().copied() }.is_some_and(|a| a.child("majorGridlines").is_some()),
         style: root.child_val("style").and_then(|v| v.parse().ok()).unwrap_or(2),
+        hole_size,
+        first_slice_angle,
         x_title: x_ax.and_then(|a| a.child("title")).and_then(rich_title),
         y_title: y_ax.and_then(|a| a.child("title")).and_then(rich_title),
         source: None,
@@ -1298,6 +1304,12 @@ fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb
         G::Doughnut => {
             format!("<c:doughnutChart><c:varyColors val=\"1\"/>{sers}{dl}<c:firstSliceAng val=\"0\"/><c:holeSize val=\"50\"/></c:doughnutChart>")
         }
+        G::Pie => format!("<c:pieChart><c:varyColors val=\"1\"/>{sers}{dl}<c:firstSliceAng val=\"{}\"/></c:pieChart>", ch.first_slice_angle % 360),
+        G::Doughnut => format!(
+            "<c:doughnutChart><c:varyColors val=\"1\"/>{sers}{dl}<c:firstSliceAng val=\"{}\"/><c:holeSize val=\"{}\"/></c:doughnutChart>",
+            ch.first_slice_angle % 360,
+            ch.hole_size.clamp(10, 90)
+        ),
         G::Area { grouping } => format!("<c:areaChart><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:areaChart>"),
         G::Scatter { .. } => format!("<c:scatterChart><c:scatterStyle val=\"lineMarker\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:scatterChart>"),
         G::Bubble => {
