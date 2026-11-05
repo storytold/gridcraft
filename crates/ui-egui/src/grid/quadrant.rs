@@ -411,7 +411,11 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     // The runs job stands in for the flat first-line galley, unless a flat-only
     // transformation (shrink to fit above, `####` or fill characters below) repaints the
     // text flat.
-    let fjob = if shrunk || fill_char.is_some() { None } else { rjob.as_ref().map(crate::cell_runs::first_line) };
+    // Wrap Text off draws the whole string on one line (the breaks removed below), so a rich
+    // cell whose text holds a line break cannot go through `first_line` (it cuts at the break):
+    // it falls back to the flat rendering, losing per-run formatting for that case only.
+    let has_break = text.contains(['\n', '\r']);
+    let fjob = if shrunk || fill_char.is_some() || has_break { None } else { rjob.as_ref().map(crate::cell_runs::first_line) };
     let mut runs_painted = fjob.is_some();
     let mut galley = match fjob {
         Some(j) => p.layout_job(j),
