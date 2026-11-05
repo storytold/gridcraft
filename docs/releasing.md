@@ -1,6 +1,6 @@
 # Releasing GridCraft
 
-> **Last updated:** 2026-11-02 · **Change:** macOS packaging prefers native stapler, falls back to rcodesign staple with bounded retries, and warns when neither exists while retaining Gatekeeper assessment.
+> **Last updated:** 2026-11-05 · **Change:** macOS packaging prefers native stapler, falls back to rcodesign staple with bounded retries, and warns when neither exists while retaining Gatekeeper assessment.
 
 Every push to the `release` branch runs `.github/workflows/release.yml`. The workflow builds
 signed installers for macOS, Windows, Linux, FreeBSD and the web, then creates or updates a
@@ -296,8 +296,11 @@ also runs on `main` and PRs.
 
 macOS packaging prefers native stapler, falls back to rcodesign staple with bounded retries, and warns when neither exists while retaining Gatekeeper assessment.
 
+On GitHub Actions, notarized artifacts still require the native `stapler` to staple and validate the ticket; absence is fatal even if `rcodesign` is installed. The `rcodesign` fallback and missing-tool warning are for local packaging only. A successful online Gatekeeper assessment is not evidence that a ticket was stapled. These paths are covered with synthetic shell mocks, not a new Apple notarization run.
+
 ## Revision history
 
 | Date | Change |
 |---|---|
+| 2026-11-05 | trivial | PR #3169: require native ticket stapling and validation in GitHub Actions; retain rcodesign and missing-tool warnings only for local packaging. Synthetic app/DMG controls mask host tools and cover release rejection; no new Apple notarization run. |
 | 2026-11-02 | macOS packaging prefers native stapler, falls back to rcodesign staple with bounded retries, and warns when neither exists while retaining Gatekeeper assessment. |
