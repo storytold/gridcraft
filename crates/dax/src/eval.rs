@@ -33,6 +33,10 @@
 // functions rather than an import list.
 #![allow(clippy::wildcard_imports)]
 
+mod aggregation;
+mod information;
+mod logical;
+mod model_info;
 mod support;
 
 use std::cmp::Ordering;
@@ -86,7 +90,12 @@ pub const ALL_FAMILIES: &[&str] = &[
 /// The catalog-wide audits in `tests/` read this to tell a function whose family is not linked
 /// from one that genuinely lacks an evaluator path: the "every catalogued function evaluates"
 /// assertion only holds for a build that links all of [`ALL_FAMILIES`].
-const FAMILIES: &[Family] = &[];
+const FAMILIES: &[Family] = &[
+    Family { name: "aggregation", scalar: aggregation::call, table: aggregation::call_table },
+    Family { name: "information", scalar: information::call, table: information::call_table },
+    Family { name: "logical", scalar: logical::call, table: logical::call_table },
+    Family { name: "model_info", scalar: model_info::call, table: model_info::call_table },
+];
 
 /// The names of the evaluator families linked into this build, in dispatch order.
 pub fn linked_families() -> impl Iterator<Item = &'static str> {
