@@ -9,7 +9,11 @@
 //! gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl] [--out FILE] [--print RANGE] [--quiet]
 //! gridcraft-cli commands [--json] [--search X]
 //! gridcraft-cli functions [--json] [--search X] [--category C]
-//! gridcraft-cli dax format|parse|bind|eval|pivot [TEXT] [--file PATH] [--model PATH] [--measure NAME] [--table]
+//! gridcraft-cli dax format|parse [TEXT] [--file PATH]
+//! gridcraft-cli dax bind [FORMULA] --model PATH [--measure NAME]
+//! gridcraft-cli dax eval [FORMULA] --model PATH [--table | --measure NAME]
+//! gridcraft-cli dax pivot --model PATH --measure NAME --rows 'T[A],…' [--columns 'T[B],…']
+//! gridcraft-cli dax measures --file BOOK.xlsx [--write JSON --out BOOK.xlsx]
 //! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
 //! gridcraft-cli send <port> <method> [json]
 //! gridcraft-cli version | --version
@@ -49,9 +53,13 @@ const USAGE: &str = "usage:
                      blank lines and lines starting with # or // are skipped
   gridcraft-cli commands [--json] [--search X]
   gridcraft-cli functions [--json] [--search X] [--category C]
-  gridcraft-cli dax format [TEXT] [--file PATH]           canonical DAX text (expression or EVALUATE/DEFINE query)
-  gridcraft-cli dax parse [TEXT] [--file PATH]            DAX syntax tree
-  gridcraft-cli dax bind|eval|pivot ...                   bind/evaluate/pivot a JSON data model
+  gridcraft-cli dax format|parse [TEXT] [--file PATH]      canonical DAX text and syntax tree
+  gridcraft-cli dax bind [FORMULA] --model PATH [--measure NAME]
+                                                          bind a formula or a model measure
+  gridcraft-cli dax eval [FORMULA] --model PATH [--table | --measure NAME]
+                                                          evaluate a formula or a model measure
+  gridcraft-cli dax pivot --model PATH --measure NAME --rows 'T[A],…' [--columns 'T[B],…']
+                                                          group a measure by row (and column) fields
   gridcraft-cli dax measures --file BOOK.xlsx [--write JSON --out BOOK.xlsx]
                                                           read or rewrite Power Pivot measures
   gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
