@@ -1,8 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-03 · **Change:** chart-formatting review fixes integrated with main `df137b8`; local CI completed, manual Excel open/save check pending · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-02 · **Change:** minor (doughnut charts: every series is a concentric ring, the first series innermost; hole size and first slice angle kept; rotated slices cover their own sweep; legend names categories; earlier: charts resize from eight handles, chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-07 · **Change:** minor (chart-data-table keys pass the series index to the shared combo plot-kind rule, restoring compilation after #1150; earlier: doughnut charts: every series is a concentric ring, the first series innermost; hole size and first slice angle kept; rotated slices cover their own sweep; legend names categories; earlier: charts resize from eight handles, chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-11-12 · **Last updated:** 2026-11-12 · **Change:** local chart appearance templates integrated on current main; UI validation pending · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -65,7 +63,7 @@ for scope and limitations. The overall readiness estimate has not been remeasure
 | Per-series / per-point fill, line, marker, effects | Format pane for every element | series line/fill/marker colors, transparency, widths, smoothing and marker types/sizes; point overrides and effects pending |
 | Chart styles and colour palettes | ~16 styles × colour sets | style number stored, own palettes |
 | Chart sheets | yes | **kept, not editable**: not shown, and written back unchanged in their place on save (#727); left out when a sheet they plot is deleted or renamed. No F11 / Move Chart > New sheet |
-| Chart templates (`.crtx`) | yes | **partial** — local named style templates can be applied to same-kind charts; `.crtx` import/export and workbook portability are missing |
+| Chart templates (`.crtx`) | yes | local appearance presets can be saved/applied/deleted and used as per-kind insertion defaults; Excel `.crtx` interchange remains missing; see [chart-templates.md](chart-templates.md) |
 | Recommended Charts | yes | dialog with recommendations from the data's shape (own heuristic) and an All Charts list, live previews (#215) |
 | Switch Row/Column, Select Data | yes | yes (Switch on charts read from files landed in #116) |
 | Recommended Charts | yes | partial (Insert ▸ Recommended) |
@@ -115,6 +113,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-12 | minor | Save, apply, delete and use local chart-appearance presets as per-kind insertion defaults; Excel `.crtx` interchange and workbook portability remain out of scope. |
 | 2026-11-03 | chart-formatting integration | Preserve unified selection, chart data tables and paired area decimation; fix tick thinning, reversed category/table alignment, Waterfall legend styling, stacked-bar defaults, ChartEx fills and SVG font fallback. Local CI completed; no new manual Excel open/save check yet. |
 | 2026-11-07 | minor | Chart-data-table keys use the shared plot-kind helper with their series index after #1150. A focused regression checks the first combo series uses a column key and later series use line keys. No readiness score change. |
 | 2026-11-02 | minor | Charts move and resize from eight handles, each moving only its own edges (#190); resizing leaves the work list (1–2 h, within the 40–60 h rounding) |

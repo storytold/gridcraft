@@ -73,7 +73,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Insert Chart",
             ["Insert", "Charts"],
             None,
-            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers|stacked100Markers, title?, at?: \"H2\", width?, height?, format?: ChartFormat (validated before insertion), style?: 1..16 (clamped, default 2), legend?: none|bottom|top|left|right (default right for pie/doughnut, bottom otherwise; unknown strings use bottom), dataLabels?: false, gridlines?: bool (default depends on chart type)} → {chart}: appearance is part of the single undoable, journaled insertion",
+            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers|stacked100Markers, title?, at?: \"H2\", width?, height?, holeSize?: 10..90 (default 75), firstSliceAngle?: degrees modulo 360, format?: ChartFormat (validated before insertion), style?: 1..16 (clamped, default 2), legend?: none|bottom|top|left|right (default right for pie/doughnut, bottom otherwise; unknown strings use bottom), dataLabels?: false, gridlines?: bool (default depends on chart type)} → {chart}: appearance is part of the single undoable, journaled insertion",
             has_doc,
             insert_chart
         ),
@@ -860,8 +860,8 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
             LegendPos::Bottom
         }),
         data_table: None,
-        hole_size: 75,
-        first_slice_angle: 0,
+        hole_size: u32_param(p, "holeSize").unwrap_or(75).clamp(10, 90) as u8,
+        first_slice_angle: (u32_param(p, "firstSliceAngle").unwrap_or(0) % 360) as u16,
         data_labels: bool_param(p, "dataLabels").unwrap_or(false),
         gridlines: bool_param(p, "gridlines")
             .unwrap_or(!matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel)),

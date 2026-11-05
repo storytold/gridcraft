@@ -73,10 +73,14 @@ use serde_json::{Value as Json, json};
 pub use control::{ControlRequest, ControlResponse};
 
 mod app;
+#[cfg(test)]
+mod chart_template_tests;
+mod chart_templates;
 mod clock;
 mod services;
 mod state;
 
+pub use chart_templates::ChartTemplate;
 pub use clock::{monotonic_ms, now_ms};
 pub use services::{Chrome, Inbox, Services};
 pub use state::{NoticeKind, OpenWindow, SaveAnswer, SheetView};
@@ -108,6 +112,9 @@ pub struct UiState {
     /// change. A preference like the rest of this struct — it stays on across restarts (#1901).
     pub autosave: bool,
     pub recent: Vec<String>,
+    /// Chart appearance presets saved in this installation's UI preferences.
+    #[serde(default, deserialize_with = "chart_templates::deserialize")]
+    pub chart_templates: Vec<ChartTemplate>,
     /// One-shot keytip request for a ribbon control: set when a keytip action resolves to
     /// [`keytips::Action::Control`], consumed (and cleared) by the control's render site.
     #[serde(skip)]
@@ -158,6 +165,7 @@ impl Default for UiState {
             highlight_active_row: false,
             autosave: false,
             recent: vec![],
+            chart_templates: vec![],
             keytip_invoke: None,
             keytip_invoke_next: None,
             language: i18n::Language::En,
