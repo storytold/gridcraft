@@ -186,6 +186,7 @@ impl eframe::App for WebShell {
 fn services(inbox: Inbox, ctx: egui::Context) -> Services {
     let open_inbox = inbox.clone();
     let picture_ctx = ctx.clone();
+    let model_ctx = ctx.clone();
     Services {
         copy_html: Some(Box::new(copy_html)),
         open_async: Some(Box::new(move || {
@@ -208,6 +209,17 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
             let ctx = picture_ctx.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let Some(file) = rfd::AsyncFileDialog::new().add_filter("Pictures (PNG, JPEG)", &["png", "jpg", "jpeg"]).pick_file().await else {
+                    return;
+                };
+                let bytes = file.read().await;
+                inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((file.file_name(), bytes));
+                ctx.request_repaint();
+            });
+        })),
+        pick_model_async: Some(Box::new(move |inbox| {
+            let ctx = model_ctx.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let Some(file) = rfd::AsyncFileDialog::new().add_filter("Data model (JSON)", &["json"]).pick_file().await else {
                     return;
                 };
                 let bytes = file.read().await;
