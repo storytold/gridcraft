@@ -35,6 +35,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let sel = d.selection.clone();
     let place = (d.uid, si);
     let mut view = app.view();
+    view.scroll = (view.scroll + take_fill_auto_scroll(app, ui, place)).max(egui::Vec2::ZERO);
     // Page Layout view: pages on a desk, rulers above and left of the headings.
     let paper = sh.view == gridcraft_engine::model::SheetViewMode::PageLayout;
     let ruler = if paper && !app.session.hide_ruler { crate::paper_view::RULER } else { 0.0 };
@@ -324,6 +325,17 @@ impl<F: Fn(&mut SheetApp, egui::Vec2) -> Geo> ActiveCellVisibility<'_, F> {
         }
         view.scroll = view.scroll.max(egui::Vec2::ZERO);
         *geo = (self.make_geo)(app, view.scroll);
+    }
+}
+
+fn take_fill_auto_scroll(app: &mut SheetApp, ui: &egui::Ui, place: (u64, usize)) -> egui::Vec2 {
+    match app.grid.fill_auto_scroll.take() {
+        Some((from, scroll))
+            if from == place && matches!(app.grid.drag, Drag::Fill { menu: false, .. }) && ui.input(|i| i.pointer.primary_down()) =>
+        {
+            scroll
+        }
+        _ => egui::Vec2::ZERO,
     }
 }
 

@@ -211,6 +211,115 @@ fn fill_drag_previews_endpoint_without_changing_the_workbook() {
 }
 
 #[test]
+fn edge_auto_scroll_release_keeps_the_last_preview_target() {
+    let mut failures = Vec::new();
+    for (horizontal, rtl, zoom) in [
+        (false, false, 100),
+        (true, false, 100),
+        (false, true, 100),
+        (true, true, 100),
+        (false, false, 150),
+        (true, false, 150),
+        (false, true, 150),
+        (true, true, 150),
+    ] {
+        let mut h = harness(|s| {
+            if horizontal {
+                s.execute("range.setValues", json!({"range": "B2", "values": [[1, 2]]})).unwrap();
+                s.execute("selection.set", json!({"range": "B2:C2"})).unwrap();
+            } else {
+                one_two(s);
+            }
+            s.execute("view.zoom", json!({"percent": zoom})).unwrap();
+            std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().right_to_left = rtl;
+        });
+        let undo = h.state().session.active().unwrap().undo.len();
+        let start = corner(&h, if horizontal { "C2" } else { "B2" });
+        let geo = h.state().grid.geo.as_ref().unwrap();
+        let mut end = geo.mirror_pos(center(&h, if horizontal { "C2" } else { "B2" }));
+        if horizontal {
+            end.x = geo.cells.right() - 3.0;
+        } else {
+            end.y = geo.cells.bottom() - 3.0;
+        }
+        let end = geo.mirror_pos(end);
+        press(&mut h, start, PointerButton::Primary);
+        move_to(&mut h, start, end);
+        let gridcraft_ui_egui::grid::Drag::Fill { target: Some(target), .. } = h.state().grid.drag else { panic!("expected a fill drag") };
+        let expected = if horizontal { target.end.col } else { target.end.row + 1 };
+        assert!(h.query_by_label(&expected.to_string()).is_some(), "the endpoint is visible in the actual tooltip");
+        if !horizontal
+            && !rtl
+            && zoom == 100
+            && let Ok(path) = std::env::var("GRIDCRAFT_FILL_EDGE_SCREENSHOT")
+        {
+            h.render().unwrap().save(path).unwrap();
+        }
+        let beyond = if horizontal { target.end.offset_clamped(0, 1) } else { target.end.offset_clamped(1, 0) };
+        assert_eq!(value(&h, &beyond.a1()), Value::Empty);
+        release(&mut h, end, PointerButton::Primary);
+        let actual = selection(&h);
+        if actual != target.a1() || value(&h, &beyond.a1()) != Value::Empty {
+            failures.push(format!(
+                "horizontal={horizontal}, rtl={rtl}, zoom={zoom}: preview={}, committed={actual}, unseen={} ({:?})",
+                target.a1(),
+                beyond.a1(),
+                value(&h, &beyond.a1())
+            ));
+        }
+        assert_eq!(h.state().session.active().unwrap().undo.len(), undo + 1);
+    }
+    assert!(failures.is_empty(), "release filled beyond the preview: {failures:?}");
+}
+
+#[test]
+fn edge_scroll_does_not_cross_sheets_before_an_immediate_release() {
+    for rtl in [false, true] {
+        let mut h = harness(|s| {
+            one_two(s);
+            s.execute("view.rightToLeft", json!({"on": rtl})).unwrap();
+            s.execute("home.insertSheet", json!({"name": "Other"})).unwrap();
+            s.execute("range.setValues", json!({"range": "B1", "values": [[10], [20]]})).unwrap();
+            s.execute("selection.set", json!({"range": "B1:B2"})).unwrap();
+            s.execute("view.zoom", json!({"percent": 200})).unwrap();
+            s.execute("view.rightToLeft", json!({"on": rtl})).unwrap();
+            s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+            s.execute("selection.set", json!({"range": "B1:B2"})).unwrap();
+        });
+        h.ctx.set_os(egui::os::OperatingSystem::Windows);
+        let start = corner(&h, "B2");
+        let geo = h.state().grid.geo.as_ref().unwrap();
+        let mut end = geo.mirror_pos(center(&h, "B2"));
+        end.y = geo.cells.bottom() - 3.0;
+        let end = geo.mirror_pos(end);
+        press(&mut h, start, PointerButton::Primary);
+        move_to(&mut h, start, end);
+        h.input_mut().events.extend([
+            Event::ModifiersChanged(Modifiers::COMMAND),
+            Event::Key { key: egui::Key::PageDown, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND },
+        ]);
+        h.step();
+        let app = h.state();
+        let doc = app.session.active().unwrap();
+        assert_eq!(doc.wb.active_sheet(), 1);
+        assert_eq!(app.view().scroll, egui::Vec2::ZERO, "the destination sheet starts unscrolled");
+        let sh = doc.wb.active().unwrap();
+        let geo = Geo::new(sh, app.grid.rect.unwrap(), app.view().scroll);
+        let at = geo.cell_at(sh, geo.mirror_pos(end));
+        let expected = format!("B1:B{}", at.row + 1);
+        h.input_mut().events.extend([
+            Event::ModifiersChanged(Modifiers::NONE),
+            Event::Key { key: egui::Key::PageDown, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE },
+        ]);
+        release(&mut h, end, PointerButton::Primary);
+        assert_eq!(selection(&h), expected, "release maps the current sheet without the previous sheet's queued scroll");
+        assert_eq!(value(&h, &format!("B{}", at.row + 1)), n(f64::from(at.row + 1) * 10.0));
+        assert_eq!(value(&h, &format!("B{}", at.row + 2)), Value::Empty);
+        assert_eq!(h.state().session.active().unwrap().wb.sheet(0).unwrap().value(CellRef::parse("B3").unwrap()), Value::Empty);
+    }
+}
+
+#[test]
 fn fill_handle_takes_focus_from_the_font_size_box() {
     let mut failures = Vec::new();
     for key in [egui::Key::ArrowLeft, egui::Key::ArrowRight] {

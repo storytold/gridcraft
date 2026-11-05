@@ -236,6 +236,9 @@ impl Trace {
 #[derive(Default)]
 pub struct GridState {
     pub drag: Drag,
+    /// The next primary-fill scroll step, keyed to its document and sheet. Only another held
+    /// drag frame applies it, so release uses the geometry of the last displayed preview.
+    pub fill_auto_scroll: Option<((u64, usize), egui::Vec2)>,
     pub ensure_visible: bool,
     /// With `ensure_visible`: scroll to the moving end of the selection instead of the active cell
     /// (Shift/Ctrl+Shift+arrows keep the active cell on the anchor while the far corner moves).

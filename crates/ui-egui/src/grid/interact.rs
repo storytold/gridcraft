@@ -701,7 +701,13 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 let src = sel.current();
                 let target = fill_target(src, pc);
                 app.grid.drag = Drag::Fill { target: Some(target), menu };
-                scroll_by(app, auto);
+                if menu {
+                    scroll_by(app, auto);
+                } else {
+                    // Scroll before the next held frame's geometry is built, never ahead of
+                    // the preview that a release is about to commit.
+                    app.grid.fill_auto_scroll = app.session.active().map(|d| ((d.uid, d.wb.active_sheet()), auto));
+                }
             }
             Drag::Move { grab, .. } => {
                 let src = sel.current();
