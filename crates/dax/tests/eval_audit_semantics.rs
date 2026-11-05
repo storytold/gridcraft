@@ -174,6 +174,11 @@ fn strict_equality_matches_a_decimal_column_against_an_integer_literal() {
     // `Scalar::Decimal`, the literal `Scalar::Integer`.
     assert_eq!(eval_in_sales("COUNTROWS(FILTER(Sales, Sales[Amount] == 10))"), Scalar::Integer(1));
     assert_eq!(eval_in_sales("COUNTROWS(FILTER(Sales, Sales[Region] == \"east\"))"), Scalar::Integer(2));
+    // `strict_eq` keeps text case-sensitive but joins numeric keys across variants, so a
+    // relationship whose keys are Integer on one side and Decimal on the other still matches.
+    assert!(gridcraft_dax::Scalar::Integer(2).strict_eq(&Scalar::Decimal(2.0)));
+    assert!(!gridcraft_dax::Scalar::Integer(2).strict_eq(&Scalar::Decimal(2.5)));
+    assert!(!Scalar::String("a".into()).strict_eq(&Scalar::String("A".into())));
 }
 
 #[test]

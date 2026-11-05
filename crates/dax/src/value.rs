@@ -84,6 +84,11 @@ impl Scalar {
         }
     }
 
+    /// Whether the value is one of the four numeric variants, without coercing anything else.
+    pub fn is_numeric(&self) -> bool {
+        matches!(self, Scalar::Integer(_) | Scalar::Currency(_) | Scalar::Decimal(_) | Scalar::DateTime(_))
+    }
+
     /// DAX arithmetic coercion: BLANK is 0, booleans are 1/0, numeric text parses, dates are
     /// serials, and currency is divided by 10,000.
     pub fn to_number(&self) -> Option<f64> {
@@ -190,10 +195,14 @@ impl Scalar {
         }
     }
 
+    /// Identity for relationship joins and member filters: BLANK equals only BLANK and text is
+    /// case-sensitive, while the numeric variants compare by value — a key can be `Integer` on one
+    /// side and `Decimal` or `Currency` on the other, and the two must still join.
     pub fn strict_eq(&self, other: &Scalar) -> bool {
         match (self, other) {
             (Scalar::Blank, Scalar::Blank) => true,
             (Scalar::String(a), Scalar::String(b)) => a == b,
+            (a, b) if a.is_numeric() && b.is_numeric() => a.to_number() == b.to_number(),
             _ => self == other,
         }
     }
