@@ -113,14 +113,25 @@ pub fn dml_color(e: &El) -> Option<Color> {
 }
 
 /// A theme colour's `lumMod` and `lumOff` as a tint in thousandths. What Excel writes for a lighter
-/// colour (`lumMod` 50%, `lumOff` 50%) and a darker one (`lumMod` 75%) are exactly tints; any other
-/// pair comes out close, led by `lumOff`.
+/// colour (`lumMod` 50%, `lumOff` 50%) and a darker one (`lumMod` 75%) are exactly tints. A tint can't
+/// hold any other pair, so those take the tint that gives the same result at middle luminance, which
+/// keeps their direction. Values come in thousandths of a percent or, in Strict files, as `50%`.
 fn luminance_tint(scheme: &El) -> i16 {
-    let share = |tag: &str| scheme.child(tag).and_then(|c| c.attr_f64("val")).map(|v| v / 100_000.0);
-    let tint = match (share("lumMod"), share("lumOff")) {
-        (_, Some(off)) if off > 0.0 => off,
-        (Some(modulation), _) => modulation - 1.0,
-        _ => 0.0,
+    let share = |tag: &str| {
+        let val = scheme.child(tag)?.attr("val")?.trim();
+        match val.strip_suffix('%') {
+            Some(percent) => percent.trim().parse::<f64>().ok().map(|v| v / 100.0),
+            None => val.parse::<f64>().ok().map(|v| v / 100_000.0),
+        }
+    };
+    let (modulation, offset) = (share("lumMod").unwrap_or(1.0), share("lumOff").unwrap_or(0.0));
+    let tint = if offset > 0.0 && (modulation + offset - 1.0).abs() < 0.001 {
+        offset
+    } else if offset == 0.0 && modulation <= 1.0 {
+        modulation - 1.0
+    } else {
+        let middle = (0.5 * modulation + offset).clamp(0.0, 1.0);
+        (middle - 0.5) / 0.5
     };
     (tint.clamp(-1.0, 1.0) * 1000.0).round() as i16
 }
@@ -694,6 +705,12 @@ mod luminance_tests {
             ("accent1", "<a:lumMod val=\"75000\"/>", Color::Theme(4, -250)),
             ("bg1", "<a:lumMod val=\"50000\"/>", Color::Theme(0, -500)),
             ("accent2", "", Color::Theme(5, 0)),
+            // Strict files write percentages.
+            ("tx1", "<a:lumMod val=\"50%\"/><a:lumOff val=\"50%\"/>", Color::Theme(1, 500)),
+            ("accent1", "<a:lumMod val=\"75%\"/>", Color::Theme(4, -250)),
+            // No tint is exact for these: the direction holds. 50% and 10% darken, 120% lightens.
+            ("accent1", "<a:lumMod val=\"50000\"/><a:lumOff val=\"10000\"/>", Color::Theme(4, -300)),
+            ("accent1", "<a:lumMod val=\"120000\"/>", Color::Theme(4, 200)),
         ];
         for (val, children, want) in cases {
             assert_eq!(parsed(&scheme(val, children)), Some(want), "{val} {children}");
