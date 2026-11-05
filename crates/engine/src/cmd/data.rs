@@ -4,10 +4,16 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use gridcraft_core::{CellRef, RangeRef, Value, sort_compare};
-use gridcraft_model::*;
+use gridcraft_model::{
+    Anchor, AnchorMode, AutoFilter, Cell, CfOperator, Comment, ErrorStyle, FilterCriterion, Formula, Hyperlink, LineInfo, Sheet, Validation,
+    ValidationKind, Workbook,
+};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{
+    CommandSpec, EngineError, Result, Session, bad, bool_param, cell_param, cell_param_on, cmd, edit, has_doc, ok, parse_lines, split_sheet,
+    str_param, target_range, target_ranges, target_sheet,
+};
 use crate::outline;
 use crate::selection::current_region;
 
@@ -93,18 +99,30 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!(query "data.validate", "Check Value Against Validation", [], None, "{cell?, input} → {ok, message?}", has_doc, validate_cmd),
         cmd!(noundo "data.circleInvalid", "Circle Invalid Data", ["Data", "Data Tools", "Data Validation"], None, "{} → invalid cells", has_doc, circle_invalid),
-        cmd!(
-            "data.group",
-            "Group",
-            ["Data", "Outline"],
-            Some("Alt+Shift+Right"),
-            "{rows?: \"2:5\" | cols?: \"B:C\" | by?: rows|cols (the selection's rows or columns; a block of cells groups rows by default), sheet?}",
-            has_doc,
-            |s, p| group(s, p, true)
-        ),
-        cmd!("data.ungroup", "Ungroup", ["Data", "Outline"], Some("Alt+Shift+Left"), "{rows? | cols? | by?: rows|cols, sheet?}", has_doc, |s, p| {
-            group(s, p, false)
-        }),
+        CommandSpec {
+            shortcut_mac: Some("Cmd+Shift+K"),
+            ..cmd!(
+                "data.group",
+                "Group",
+                ["Data", "Outline"],
+                Some("Alt+Shift+Right"),
+                "{rows?: \"2:5\" | cols?: \"B:C\" | by?: rows|cols (the selection's rows or columns; a block of cells groups rows by default), sheet?}",
+                has_doc,
+                |s, p| group(s, p, true)
+            )
+        },
+        CommandSpec {
+            shortcut_mac: Some("Cmd+Shift+J"),
+            ..cmd!(
+                "data.ungroup",
+                "Ungroup",
+                ["Data", "Outline"],
+                Some("Alt+Shift+Left"),
+                "{rows? | cols? | by?: rows|cols, sheet?}",
+                has_doc,
+                |s, p| { group(s, p, false) }
+            )
+        },
         cmd!(
             "data.hideDetail",
             "Hide Detail",

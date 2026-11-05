@@ -1,4 +1,6 @@
-use super::*;
+use super::{
+    CellRef, EngineError, Json, RangeRef, Result, Session, StyleId, bad, edit, f64_param, parse_lines, split_sheet, str_param, target_sheet,
+};
 
 // ---------------------------------------------------------------- sizes
 
@@ -7,6 +9,17 @@ use super::*;
 /// sheet is `sheet`, else the prefix, else the active one. The selection belongs to the active
 /// sheet, so another sheet needs explicit lines.
 fn line_targets(s: &Session, p: &Json, rows: bool) -> Result<(usize, Vec<(u32, u32)>)> {
+    let (sheet, lines) = resolve_lines(s, p, rows)?;
+    // Sizes and visibility are formatting of the line, which a protected sheet must allow.
+    if rows {
+        crate::cmd::refuse_unless_allowed(s, sheet, "Formatting rows", |p| p.format_rows)?;
+    } else {
+        crate::cmd::refuse_unless_allowed(s, sheet, "Formatting columns", |p| p.format_columns)?;
+    }
+    Ok((sheet, lines))
+}
+
+fn resolve_lines(s: &Session, p: &Json, rows: bool) -> Result<(usize, Vec<(u32, u32)>)> {
     let key = if rows { "rows" } else { "cols" };
     let mut sheet = target_sheet(s, p)?;
     if let Some(t) = str_param(p, key) {

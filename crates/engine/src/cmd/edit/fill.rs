@@ -1,4 +1,4 @@
-use super::*;
+use super::{CellRef, EngineError, Json, RangeRef, Result, Session, bad, edit, f64_param, json, str_param, target_range, target_sheet};
 
 // ---------------------------------------------------------------- fill
 
@@ -78,7 +78,7 @@ pub(super) fn fill_series(s: &mut Session, p: &Json) -> Result<Json> {
     let stop = f64_param(p, "stop");
     let unit = str_param(p, "dateUnit").unwrap_or("day").to_string();
     edit(s, |cx| {
-        crate::fill::series(cx, sheet, r, rows, &kind, step, stop, &unit)?;
+        crate::fill::series(cx, sheet, crate::fill::SeriesOptions { range: r, rows, kind: &kind, step, stop, unit: &unit })?;
         Ok(Json::Null)
     })
 }

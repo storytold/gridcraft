@@ -1,10 +1,13 @@
 //! View tab (sheet view state that's saved with the file) and Page Layout settings.
 
-use gridcraft_core::{CellRef, RangeRef};
+use gridcraft_core::RangeRef;
 use gridcraft_model::Orientation;
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{
+    CommandSpec, EngineError, Result, Session, always, bad, bool_param, cell_param, cell_param_on, cmd, edit, f64_param, has_doc, str_param,
+    target_range, target_sheet, u32_param,
+};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -37,6 +40,27 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("view.showZeros", "Show Zeros", [], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "zeros")),
         cmd!("view.showOutlineSymbols", "Show Outline Symbols", [], Some("Ctrl+8"), "{on?}", has_doc, |s, p| sheet_flag(s, p, "outlineSymbols")),
         cmd!("view.showObjects", "Show Objects", [], Some("Ctrl+6"), "{on?}", has_doc, show_objects),
+        cmd!(
+            "view.showSheetTabs",
+            "Show Sheet Tabs",
+            [],
+            None,
+            "{on?} (File › Options › Advanced, this workbook; toggles without `on`)",
+            has_doc,
+            |s, p| { workbook_view_flag(s, p, "sheetTabs") }
+        ),
+        cmd!(
+            "view.showHorizontalScrollBar",
+            "Show Horizontal Scroll Bar",
+            [],
+            None,
+            "{on?} (this workbook; toggles without `on`)",
+            has_doc,
+            |s, p| { workbook_view_flag(s, p, "horizontal") }
+        ),
+        cmd!("view.showVerticalScrollBar", "Show Vertical Scroll Bar", [], None, "{on?} (this workbook; toggles without `on`)", has_doc, |s, p| {
+            workbook_view_flag(s, p, "vertical")
+        }),
         cmd!("view.rightToLeft", "Sheet Right-to-Left", ["Page Layout", "Sheet Options"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "rtl")),
         cmd!("view.zoom", "Zoom", ["View", "Zoom"], None, "{percent: 10..400}", has_doc, zoom),
         cmd!("view.zoom100", "100%", ["View", "Zoom"], None, "{}", has_doc, |s, _| zoom(s, &json!({"percent": 100}))),
@@ -180,6 +204,21 @@ fn sheet_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json> {
             "rtl" => &mut sh.right_to_left,
             "printGridlines" => &mut sh.print.gridlines,
             _ => &mut sh.print.headings,
+        };
+        *slot = bool_param(p, "on").unwrap_or(!*slot);
+        Ok(json!({"on": *slot}))
+    })
+}
+
+/// File › Options › Advanced › Display options for this workbook: the sheet tabs and the two
+/// scroll bars, saved with the workbook (`<workbookView showSheetTabs … />`).
+fn workbook_view_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json> {
+    edit(s, |cx| {
+        let view = &mut cx.wb.view;
+        let slot = match which {
+            "sheetTabs" => &mut view.show_sheet_tabs,
+            "horizontal" => &mut view.show_horizontal_scroll,
+            _ => &mut view.show_vertical_scroll,
         };
         *slot = bool_param(p, "on").unwrap_or(!*slot);
         Ok(json!({"on": *slot}))
@@ -492,9 +531,6 @@ fn theme(s: &mut Session, p: &Json) -> Result<Json> {
         Ok(Json::Null)
     })
 }
-
-#[allow(dead_code)]
-fn unused(_: CellRef) {}
 
 #[cfg(test)]
 mod tests {

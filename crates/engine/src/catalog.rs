@@ -269,11 +269,17 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("view.unhideWindow", "View", "Window", "Unhide"),
     ("view.switchWindows", "View", "Window", "Switch Windows"),
     ("view.macros", "View", "Macros", "Macros"),
+    ("macro.record", "View", "Macros", "Record Macro"),
     // Automate
     ("automate.newScript", "Automate", "Scripting Tools", "New Script"),
     ("automate.allScripts", "Automate", "Scripting Tools", "All Scripts"),
     ("automate.recordActions", "Automate", "Scripting Tools", "Record Actions"),
     ("automate.trustScripts", "Automate", "Scripting Tools", "Trust Scripts"),
+    // Developer (Insert › Controls in GridCraft)
+    ("insert.button", "Developer", "Controls", "Button (Form Control)"),
+    ("insert.spinButton", "Developer", "Controls", "Spin Button (Form Control)"),
+    ("insert.slider", "Developer", "Controls", "Scroll Bar (Form Control)"),
+    ("control.format", "Developer", "Controls", "Properties"),
     // Table Design
     ("table.rename", "Table Design", "Properties", "Table Name"),
     ("table.resize", "Table Design", "Properties", "Resize Table"),

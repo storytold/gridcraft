@@ -1,4 +1,8 @@
-use super::*;
+use super::RangeRef;
+use crate::eval::Area;
+use gridcraft_core::CellRef;
+use std::collections::BTreeSet;
+use std::hash::{BuildHasherDefault, Hasher};
 
 /// A fast, non-cryptographic hasher for cell keys (FxHash-style multiply-rotate).
 #[derive(Default, Clone, Copy)]
@@ -147,6 +151,54 @@ impl<T: Copy + Ord> Intervals<T> {
         self.walk(1, 0, self.max_end.len() / 2, p, a, f)
     }
 
+    /// [`Intervals::query`] that skips entries an earlier call with the same `taken` already
+    /// took (and whole subtrees of them), so that a series of queries lists each interval once in
+    /// all. `f` answers whether it took the entry; one it declines is offered again later.
+    /// `taken` belongs to this index as it is now; start it empty. Pending insertions (a few at
+    /// most after [`Intervals::settle`]) are offered every time.
+    pub(super) fn query_untaken(&self, a: u32, b: u32, taken: &mut Vec<bool>, f: &mut dyn FnMut(&T) -> bool) {
+        for it in &self.pending {
+            if it.0 <= b && it.1 >= a {
+                f(&it.2);
+            }
+        }
+        let p = self.items.partition_point(|it| it.0 <= b);
+        if p == 0 {
+            return;
+        }
+        if taken.len() != self.max_end.len() {
+            *taken = vec![false; self.max_end.len()];
+        }
+        self.walk_untaken(1, 0, self.max_end.len() / 2, p, a, taken, f);
+    }
+
+    /// Returns whether everything under `node` has now been reported (or is dead).
+    #[allow(clippy::too_many_arguments)]
+    fn walk_untaken(&self, node: usize, lo: usize, hi: usize, p: usize, a: u32, taken: &mut [bool], f: &mut dyn FnMut(&T) -> bool) -> bool {
+        if taken.get(node).copied().unwrap_or(true) {
+            return true;
+        }
+        if lo >= p || self.max_end.get(node).is_none_or(|m| *m < a) {
+            return false;
+        }
+        let done = if hi - lo <= 1 {
+            match (self.items.get(lo), self.dead.get(lo)) {
+                (Some(it), Some(false)) if it.1 >= a => f(&it.2),
+                (Some(_), Some(true)) => true,
+                _ => false,
+            }
+        } else {
+            let mid = lo + (hi - lo) / 2;
+            let left = self.walk_untaken(2 * node, lo, mid, p, a, taken, f);
+            let right = self.walk_untaken(2 * node + 1, mid, hi, p, a, taken, f);
+            left && right
+        };
+        if done && let Some(slot) = taken.get_mut(node) {
+            *slot = true;
+        }
+        done
+    }
+
     fn walk(&self, node: usize, lo: usize, hi: usize, p: usize, a: u32, f: &mut dyn FnMut(&T)) -> usize {
         if lo >= p || self.max_end.get(node).is_none_or(|m| *m < a) {
             return 1;
@@ -164,6 +216,13 @@ impl<T: Copy + Ord> Intervals<T> {
     }
 }
 
+/// Range-index entries one dependency walk has already listed (see [`Graph::dependents_untaken`]).
+#[derive(Default)]
+pub(super) struct Taken {
+    cols: HashMap<(usize, u32), Vec<bool>>,
+    wide: HashMap<usize, Vec<bool>>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Graph {
     pub(super) nodes: HashMap<Key, Node>,
@@ -179,6 +238,9 @@ pub struct Graph {
     unsettled_wide: HashSet<usize>,
 }
 
+/// A formula's precedents split by shape: single cells, column intervals and wide ranges.
+type Entries = (Vec<Key>, Vec<(usize, u32, u32, u32)>, Vec<(usize, RangeRef)>);
+
 impl Graph {
     pub fn len(&self) -> usize {
         self.nodes.len()
@@ -189,7 +251,7 @@ impl Graph {
 
     /// Index entries of a formula's precedents, without duplicates: single cells, column
     /// intervals and wide ranges.
-    fn entries(areas: &[Area]) -> (Vec<Key>, Vec<(usize, u32, u32, u32)>, Vec<(usize, RangeRef)>) {
+    fn entries(areas: &[Area]) -> Entries {
         let (mut cells, mut cols, mut wide) = (Vec::new(), Vec::new(), Vec::new());
         for a in areas {
             if a.range.is_single() {
@@ -291,6 +353,32 @@ impl Graph {
                 if *c0 <= c.col && c.col <= *c1 {
                     out.push(*k);
                 }
+            });
+        }
+    }
+
+    /// [`Graph::dependents`] leaving out the formulas whose range reads an earlier call with the
+    /// same `taken` already listed. A walk over many changed cells that a few broad ranges cover
+    /// then lists those formulas once, instead of once per cell (which squared the work). The
+    /// graph must not change while `taken` is in use.
+    pub(super) fn dependents_untaken(&self, sheet: usize, c: CellRef, taken: &mut Taken, out: &mut Vec<Key>) {
+        if let Some(v) = self.cell_deps.get(&(sheet, c)) {
+            out.extend(v.iter().copied());
+        }
+        if let Some(v) = self.col_deps.get(&(sheet, c.col)) {
+            v.query_untaken(c.row, c.row, taken.cols.entry((sheet, c.col)).or_default(), &mut |k| {
+                out.push(*k);
+                true
+            });
+        }
+        if let Some(v) = self.wide_deps.get(&sheet) {
+            // A wide entry is taken once it covers the cell's column too.
+            v.query_untaken(c.row, c.row, taken.wide.entry(sheet).or_default(), &mut |(c0, c1, k)| {
+                let hit = *c0 <= c.col && c.col <= *c1;
+                if hit {
+                    out.push(*k);
+                }
+                hit
             });
         }
     }
