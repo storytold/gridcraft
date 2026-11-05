@@ -56,14 +56,23 @@ fn copy_merges(
     what: What,
     transpose: bool,
 ) -> Result<()> {
-    if !matches!(what, What::All | What::Formats) || transpose {
+    if !matches!(what, What::All | What::Formats) {
         return Ok(());
     }
     let merges: Vec<RangeRef> = src_sheet.merges.iter().filter(|merge| src.contains_range(merge)).copied().collect();
     for merge in merges {
         let row_offset = at.row as i64 - src.start.row as i64;
         let col_offset = at.col as i64 - src.start.col as i64;
-        if let (Some(start), Some(end)) = (merge.start.offset(row_offset, col_offset), merge.end.offset(row_offset, col_offset)) {
+        // A transposed paste swaps the block's rows and columns; a merge inside it moves with
+        // its cells, its rectangle swapped the same way (a cut already dropped it at the source,
+        // so transposing here is what keeps it from being lost).
+        let (moved_start, moved_end) = if transpose {
+            let swap = |c: CellRef| -> Option<CellRef> { at.offset(c.col as i64 - src.start.col as i64, c.row as i64 - src.start.row as i64) };
+            (swap(merge.start), swap(merge.end))
+        } else {
+            (merge.start.offset(row_offset, col_offset), merge.end.offset(row_offset, col_offset))
+        };
+        if let (Some(start), Some(end)) = (moved_start, moved_end) {
             let moved = RangeRef::new(start, end);
             let sheet = cx.sheet_mut(dest_sheet)?;
             sheet.merges.retain(|existing| !existing.intersects(&moved));

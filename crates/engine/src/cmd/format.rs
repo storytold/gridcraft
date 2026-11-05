@@ -432,6 +432,11 @@ fn chars_target(s: &Session, p: &Json) -> Result<CharsTarget> {
     let at = r.start;
     let d = s.doc()?;
     let Some(sh) = d.wb.sheet(sheet) else { return Err(EngineError::Other("no such sheet".into())) };
+    // The same protection rule every whole-cell Font command enforces, in the one place all
+    // `chars` paths pass (apply_run_font's own check stays: it is reached without a target too).
+    if sh.protection.as_ref().is_some_and(|pr| !pr.format_cells) {
+        return Err(EngineError::Other("The cell or chart you're trying to change is on a protected sheet.".into()));
+    }
     let not_text = || bad("chars", "the cell must hold plain text (not a formula or number) to format characters");
     let text = match sh.cell(at) {
         Some(cell) if cell.formula.is_none() => cell.value.as_text().ok_or_else(not_text)?.to_string(),
