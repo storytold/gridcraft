@@ -120,6 +120,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sparklines" => "Courbes de tendance",
         "Checkbox" => "Case à cocher",
         "Insert checkboxes in the selected cells" => "Insérer des cases à cocher dans les cellules sélectionnées",
+        "Button" => "Bouton",
+        "Slider" => "Curseur",
+        "Spin Button" => "Toupie",
+        "Draw a button that runs a macro or a command" => "Dessiner un bouton qui exécute une macro ou une commande",
+        "Draw a slider that sets a whole number in a linked cell" => "Dessiner un curseur qui définit un nombre entier dans une cellule liée",
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Dessiner une toupie qui modifie par pas un nombre entier dans une cellule liée"
+        }
+        "Edit Text" => "Modifier le texte",
+        "Assign Action…" => "Affecter une action…",
+        "Format Control…" => "Format de contrôle…",
         "Header & Footer" => "En-tête et pied de page",
         "Draw with ink" => "Dessiner à l'encre",
         "Eraser" => "Gomme",
@@ -161,6 +172,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Error Checking" => "Vérification des erreurs",
         "Trace Error" => "Repérer une erreur",
         "Circular References" => "Références circulaires",
+        "Python Mode" => "Mode Python",
         "Evaluate Formula" => "Évaluation de formule",
         "Watch Window" => "Fenêtre Espion",
         "Calculation\nOptions" => "Options de\ncalcul",
@@ -261,6 +273,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Légende : Bas",
         "Legend: Top" => "Légende : Haut",
         "Legend: Right" => "Légende : Droite",
+        "First slice angle" => "Angle du premier secteur",
+        "Doughnut hole size" => "Taille du trou de l'anneau",
         "Gridlines: None" => "Quadrillage : Aucun",
         "Gridlines: Show" => "Quadrillage : Afficher",
         "Chart\nTitle" => "Titre du\ngraphique",
@@ -464,6 +478,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Stop" => "Arrêter",
         "New Macro" => "Nouvelle macro",
         "Show" => "Afficher",
+        "Collapse dialog" => "Réduire la boîte de dialogue",
+        "Expand dialog" => "Développer la boîte de dialogue",
         _ => return None,
     })
 }
