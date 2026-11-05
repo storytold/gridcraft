@@ -501,3 +501,31 @@ fn single_date_functions_pick_one_cell_of_a_day() {
     );
     assert_eq!(evaluate_in(&model, "FIRSTDATE('Log'[Stamp])", filters).expect("first date"), Scalar::DateTime(serial(2024, 1, 2) + 9.0 / 24.0));
 }
+
+#[test]
+fn single_date_functions_stay_inside_the_visible_cells() {
+    // A filter that selects one timestamp of a two-timestamp day: `FIRSTDATE`/`LASTDATE` must pick
+    // from the selected cell, not from the other timestamp the same day holds.
+    let model = DataModel {
+        tables: vec![ModelTable {
+            name: "Log".into(),
+            columns: vec![ModelColumn { name: "Stamp".into(), data_type: Some("DateTime".into()) }],
+            rows: vec![vec![Scalar::DateTime(serial(2024, 1, 2) + 9.0 / 24.0)], vec![Scalar::DateTime(serial(2024, 1, 2) + 14.0 / 24.0)]],
+        }],
+        relationships: Vec::new(),
+        measures: Vec::new(),
+    };
+    let early = Scalar::DateTime(serial(2024, 1, 2) + 9.0 / 24.0);
+    let late = Scalar::DateTime(serial(2024, 1, 2) + 14.0 / 24.0);
+    let mut filters = FilterContext::default();
+    filters.set(0, 0, [ScalarKey::from(&late)]);
+
+    // 14:00 is the only visible cell: the last date is it, even though 09:00 exists in the column.
+    assert_eq!(evaluate_in(&model, "LASTDATE('Log'[Stamp])", filters.clone()).expect("last date"), late);
+    assert_eq!(evaluate_in(&model, "FIRSTDATE('Log'[Stamp])", filters.clone()).expect("first date"), late);
+
+    let mut early_filters = FilterContext::default();
+    early_filters.set(0, 0, [ScalarKey::from(&early)]);
+    assert_eq!(evaluate_in(&model, "LASTDATE('Log'[Stamp])", early_filters.clone()).expect("last date"), early);
+    assert_eq!(evaluate_in(&model, "FIRSTDATE('Log'[Stamp])", early_filters).expect("first date"), early);
+}

@@ -123,6 +123,10 @@ struct DateAxis {
     /// The distinct visible dates, ascending. Used to tell a selection that actually contains the
     /// month's last two days from one that merely ends near its boundary.
     visible_dates: Vec<f64>,
+    /// The visible cells themselves, as (day serial, original value): `FIRSTDATE`/`LASTDATE` pick
+    /// an exact cell, so they must choose among the values the filter context selects, not among
+    /// every timestamp the day happens to hold.
+    visible_values: Vec<(f64, Scalar)>,
 }
 
 impl DateAxis {
@@ -148,7 +152,11 @@ impl DateAxis {
     /// range tables keep every cell.
     fn single(&self, date: f64, last: bool) -> TableValue {
         let day = date.floor();
-        let cells: Vec<&Scalar> = self.dates.iter().filter(|(serial, _)| *serial == day).map(|(_, value)| value).collect();
+        let visible: Vec<&Scalar> = self.visible_values.iter().filter(|(serial, _)| *serial == day).map(|(_, value)| value).collect();
+        // A day the filter context selects contributes its visible cells; a day outside the
+        // selection (a `NEXTDAY` probe, say) falls back to every cell the column holds.
+        let cells =
+            if visible.is_empty() { self.dates.iter().filter(|(serial, _)| *serial == day).map(|(_, value)| value).collect() } else { visible };
         let ordering = |value: &&Scalar| date_value(value).unwrap_or(f64::NEG_INFINITY);
         let picked = if last {
             cells.into_iter().max_by(|a, b| ordering(a).total_cmp(&ordering(b)))
@@ -257,18 +265,22 @@ fn date_axis(ev: &Evaluator<'_>, expr: &BoundExpr, ctx: &Context, name: &str) ->
     let mut min: Option<f64> = None;
     let mut max: Option<f64> = None;
     let mut visible_dates: Vec<f64> = Vec::new();
+    let mut visible_values: Vec<(f64, Scalar)> = Vec::new();
     for row in visible_rows(ev, table, ctx) {
-        if let Some(serial) = row.get(column).and_then(date_value).filter(|serial| serial.is_finite()) {
+        if let Some(value) = row.get(column)
+            && let Some(serial) = date_value(value).filter(|serial| serial.is_finite())
+        {
             let serial = serial.floor();
             min = Some(min.map_or(serial, |value| value.min(serial)));
             max = Some(max.map_or(serial, |value| value.max(serial)));
             visible_dates.push(serial);
+            visible_values.push((serial, value.clone()));
         }
     }
     visible_dates.sort_by(|left, right| left.total_cmp(right));
     visible_dates.dedup_by(|left, right| left.total_cmp(right).is_eq());
 
-    Ok(DateAxis { table, name: model_column.name.clone(), dates, min, max, visible_dates })
+    Ok(DateAxis { table, name: model_column.name.clone(), dates, min, max, visible_dates, visible_values })
 }
 
 /// The model rows of a table that survive the filters currently in effect, in model column order.
