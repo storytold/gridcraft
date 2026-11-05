@@ -758,11 +758,11 @@ pub(crate) fn paint_overlays(input: OverlayInput<'_>) {
             |ui| {
                 egui::Frame::popup(ui.style()).fill(if cm.threaded { Color32::WHITE } else { Color32::from_rgb(0xFF, 0xFF, 0xE1) }).show(ui, |ui| {
                     ui.set_max_width(240.0);
-                    ui.label(egui::RichText::new(format!("{}:", app.ui.language.tr(&cm.author))).strong().color(Color32::BLACK));
+                    ui.label(egui::RichText::new(format!("{}:", app.ui.language.author_name(&cm.author))).strong().color(Color32::BLACK));
                     ui.label(egui::RichText::new(&cm.text).color(Color32::BLACK));
                     for (a, t) in &cm.replies {
                         ui.separator();
-                        ui.label(egui::RichText::new(format!("{}: {t}", app.ui.language.tr(a))).color(Color32::BLACK));
+                        ui.label(egui::RichText::new(format!("{}: {t}", app.ui.language.author_name(a))).color(Color32::BLACK));
                     }
                 });
             },

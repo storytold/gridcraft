@@ -155,7 +155,14 @@ fn following_faces_carry_a_baseline_shift_matching_their_metrics() {
         if gap.abs() < 0.005 {
             continue;
         }
-        assert!((vfd.tweak.y_offset_factor + gap).abs() < 1e-4, "{key}: shift {} ≠ −gap {gap}", vfd.tweak.y_offset_factor);
+        // epaint applies the shift as `font_size · tweak.scale · y_offset_factor`, so the drawn
+        // shift matches the gap through the face's own scale.
+        assert!(
+            (vfd.tweak.y_offset_factor * fd.tweak.scale + gap).abs() < 1e-4,
+            "{key}: shift {} · scale {} ≠ −gap {gap}",
+            vfd.tweak.y_offset_factor,
+            fd.tweak.scale
+        );
     }
 }
 

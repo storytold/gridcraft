@@ -16,7 +16,7 @@ pub(super) fn spelling(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, op
     };
     let word = it["word"].as_str().unwrap_or("").to_string();
     let cell = it["cell"].as_str().unwrap_or("").to_string();
-    ui.label(format!("{} ({cell}):", crate::i18n::current(ui.ctx()).tr("Not in Dictionary")));
+    ui.label(crate::i18n::current(ui.ctx()).tr_fill("Not in Dictionary ({cell}):", &[("cell", cell.as_str())]));
     ui.label(egui::RichText::new(&word).strong().color(crate::theme::Tokens::get(ui.ctx()).danger));
     let sugg: Vec<String> =
         it["suggestions"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
