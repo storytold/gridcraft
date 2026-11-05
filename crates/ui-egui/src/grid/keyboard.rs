@@ -1,5 +1,4 @@
 use super::geo::Geo;
-use super::interact::delete_selected_object;
 use super::menus::is_checkbox;
 use super::{CellRef, Drag, Sheet, SheetApp, json};
 
@@ -52,11 +51,9 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                 app.copy_to_clipboard(ctx, "edit.cut");
             }
             egui::Event::Paste(text) => app.paste_external(text),
-            // GridCraft has no image-clipboard pipeline and no cell-picture insert-from-clipboard
-            // command. Choosing to ignore `PasteImage` is explicit: inserting the bytes as a
-            // floating picture without a chosen anchor/size would be a new feature, not parity.
-            // A text representation, when the clipboard has one, still arrives as `Paste` above.
-            egui::Event::PasteImage(_) => {}
+            // A picture with no text on the clipboard (a screenshot, a browser image) is pasted as
+            // a floating picture at the active cell, as Excel does.
+            egui::Event::PasteImage(image) => app.paste_color_image(&image),
             // PRIMARY middle-click paste belongs to egui's TextEdit; the grid has no caret to
             // insert text at, so a middle click on a cell is deliberately not a paste.
             egui::Event::MiddleClickPaste { .. } => {}
@@ -124,9 +121,10 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                     }
                     Key::Tab => app.move_after_enter(0, if shift { -1 } else { 1 }),
                     Key::F2 => app.begin_edit(None, false),
-                    Key::Delete if delete_selected_object(app, sh) => {}
+                    // With an object selected, Delete and Backspace delete it, not the cells.
+                    Key::Delete if app.delete_selected_object() => {}
                     Key::Delete => app.run_or_alert("edit.clearContents", json!({})),
-                    Key::Backspace if delete_selected_object(app, sh) => {}
+                    Key::Backspace if app.delete_selected_object() => {}
                     Key::Backspace => {
                         // Excel for Mac: Delete clears the cell and starts editing it.
                         app.run_or_alert("edit.clearContents", json!({}));
@@ -134,6 +132,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                             app.begin_edit(Some(String::new()), false);
                         }
                     }
+                    Key::Escape if app.selected_object.is_some() => app.selected_object = None,
                     Key::Escape => {
                         app.session.clipboard = None;
                         app.session.format_painter = None;
