@@ -1,13 +1,15 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-02 · **Change:** minor (charts resize from eight handles; earlier: chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-02 · **Change:** minor (doughnut charts: every series is a concentric ring, the first series innermost; hole size and first slice angle kept; rotated slices cover their own sweep; legend names categories; earlier: charts resize from eight handles, chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
 
 Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crates/chart/src`
 (layout and rendering), `crates/xlsx/src/chart.rs` (DrawingML chart parts), merged PRs #62, #116,
-#158 and #161, and issue #190.
+#158 and #161, and issue #190. Behaviour checked against Microsoft's
+[Pareto](https://support.microsoft.com/en-us/excel/create-a-pareto-chart) and
+[pie/doughnut](https://support.microsoft.com/en-us/excel/add-a-pie-chart) support pages.
 
 ## Chart types
 
@@ -17,6 +19,7 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Bar | clustered, stacked, 100%, 3-D ×3 | 3 of 6 | no 3-D |
 | Line | line, stacked, 100% stacked, with markers ×3, 3-D line | 3 of 7 (line, with markers, stacked) | no 100% stacked; smoothed lines landed (#62) |
 | Pie | pie, 3-D pie, pie of pie, bar of pie, doughnut | 2 of 5 (pie, doughnut) | exploded slices per point (Format Data Point); no exploded-pie subtype, pie of pie, bar of pie |
+
 | Area | area, stacked, 100%, 3-D ×3 | 3 of 6 | no 3-D; 100% stacked drawn as shares of each category's total and kept as `percentStacked` in XLSX |
 | X Y (scatter) | markers, smooth lines (±markers), straight lines (±markers) | 2 of 5 | no smooth lines |
 | Bubble | bubble, 3-D bubble | 1 of 2 | |
@@ -45,6 +48,7 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Gridlines | major/minor per axis, formatting | one on/off flag |
 | Axis options | min/max/units, log scale, reverse order, crossing point, display units, date axis, number format | **missing** (auto only) |
 | Multi-level category axis (a category range two or more columns wide beside the values: year beside month) | the outer levels grouped under the labels with separators | read (`multiLvlStrRef`), drawn (rows under the labels; columns beside them in bar charts; up to three outer levels), written back with Excel's level caches |
+| Doughnut hole size, first slice angle | 10–90% hole (Excel default 75%), 0–359° first slice | Format Chart pane sliders; read from and written to `c:holeSize` / `c:firstSliceAng`; documents saved before the setting existed keep their old 50% hole |
 | Secondary axis | any series | line series in combo charts |
 | Trendlines | linear, exponential, logarithmic, polynomial, power, moving average, equation and R² | all six types, several per series, name, forward/backward forecast, set intercept, equation and R² label, line colour/width/dash; read, written and drawn on 2-D column, bar, line, area, scatter and bubble series; `chart.addElement` `trendline` adds/removes them. No Format Trendline pane, label position/number format not kept |
 | Error bars | fixed, %, standard deviation/error, custom | **missing** |
@@ -139,6 +143,7 @@ Observed in Excel 365 on synthetic charts built through COM (exported pictures s
 | 2026-10-29 | minor | Selected charts highlight their source cells beneath floating objects, so the blue outline no longer crosses the chart; uncovered source cells remain highlighted (#2861) |
 | 2026-10-24 | minor | 100% Stacked Area: inserted from the ribbon and All Charts, drawn as shares of each category's total, read and written as `percentStacked` |
 | 2026-10-18 | trivial | Stale notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip (PRs #158, #161) |
+| 2026-10-18 | minor | Doughnut charts: every series is a ring (first series innermost), hole size and first slice angle modelled, editable and round-tripped; rotated slices split at 12 o'clock without overlap; legend names categories like Excel's default (#1823) |
 | 2026-10-16 | trivial | Series that refer to defined names (`[0]!Name`, `Sheet!Name`) resolve instead of showing `#NAME?`, and are saved qualified, as Excel needs (#1686) |
 | 2026-10-16 | minor | Box & whisker quartiles default to exclusive, honor each series on draw and XLSX round-trip; `chart.set {quartiles}` changes the method (#1453) |
 | 2026-10-15 | minor | Per-point formatting (`c:dPt` fill, line, marker, explosion, point invert), Invert if Negative with the c14 inverted fill, vary colors by point: modelled, round-tripped and drawn as Excel draws them; Format Data Point through `chart.formatSelection` `point` |

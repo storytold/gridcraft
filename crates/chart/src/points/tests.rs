@@ -26,6 +26,8 @@ fn chart(kind: ChartKind, series: Vec<Series>) -> Chart {
         data_table: None,
         gridlines: false,
         style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: None,
         y_title: None,
         source: None,
@@ -136,6 +138,34 @@ fn vary_colors_colours_the_only_bar_series_point_by_point() {
     let (d, p) = draw(&c);
     assert!(bars(&p).iter().all(|x| x.0 == RED));
     assert_eq!(legend_entries(&c, &d).len(), 4);
+}
+
+#[test]
+fn vary_colors_uses_the_point_palette_for_single_line_scatter_and_bubble_series() {
+    for kind in [ChartKind::LineMarkers, ChartKind::Scatter, ChartKind::Bubble] {
+        let mut c = chart(kind, vec![ser("{4,3,2,1}")]);
+        c.legend = LegendPos::None;
+        c.vary_colors = Some(true);
+        if matches!(kind, ChartKind::Scatter | ChartKind::Bubble) {
+            c.series[0].categories = Some("{1,2,3,4}".into());
+        }
+        if kind == ChartKind::Bubble {
+            c.series[0].bubble_sizes = Some("{1,2,3,4}".into());
+        }
+        let (d, prims) = draw(&c);
+        assert!(d.vary_colors, "{kind:?}");
+        let colors: Vec<_> = prims
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Circle { fill: Some(c), .. } => Some([c[0], c[1], c[2]]),
+                _ => None,
+            })
+            .collect();
+        let expected: Vec<_> = palette(4).into_iter().map(|c| [c[0], c[1], c[2]]).collect();
+        for color in expected {
+            assert!(colors.contains(&color), "{kind:?} is missing palette color {color:?}: {colors:?}");
+        }
+    }
 }
 
 #[test]

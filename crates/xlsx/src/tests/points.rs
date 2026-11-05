@@ -28,6 +28,8 @@ fn chart(id: u32, kind: ChartKind, series: Vec<Series>) -> Chart {
         data_table: None,
         gridlines: true,
         style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: None,
         y_title: None,
         source: None,
@@ -212,6 +214,7 @@ fn read_group(group: &str) -> Chart {
 }
 
 const VAL: &str = "<c:val><c:numRef><c:f>Data!$B$2:$B$5</c:f></c:numRef></c:val>";
+const VAL_COUNTED: &str = "<c:val><c:numRef><c:f>Data!$B$2:$B$5</c:f><c:numCache><c:ptCount val=\"4\"/></c:numCache></c:numRef></c:val>";
 
 #[test]
 fn absent_vary_colors_is_on() {
@@ -273,6 +276,14 @@ fn hostile_point_lists_are_bounded() {
     // Written back without panicking, and the point indexes survive.
     let (back, _) = round_trip(vec![c]);
     assert_eq!(back[0].series[0].points.len(), pts.len());
+}
+
+#[test]
+fn point_overrides_outside_the_series_are_ignored() {
+    let c = read_group(&format!(
+        "<c:pieChart><c:ser><c:idx val=\"0\"/><c:order val=\"0\"/><c:dPt><c:idx val=\"3\"/><c:explosion val=\"20\"/></c:dPt><c:dPt><c:idx val=\"4\"/><c:explosion val=\"30\"/></c:dPt><c:dPt><c:idx val=\"4294967295\"/><c:explosion val=\"40\"/></c:dPt>{VAL_COUNTED}</c:ser></c:pieChart>"
+    ));
+    assert_eq!(c.series[0].points, vec![DataPoint { index: 3, explosion: Some(20), ..DataPoint::default() }]);
 }
 
 #[test]

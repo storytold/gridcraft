@@ -146,7 +146,7 @@ fn read_series(s: &El) -> Series {
         quartiles: Default::default(),
         smooth: bool_val(s, "smooth"),
         trendlines: s.kids("trendline").filter_map(read_trendline).collect(),
-        points: read_points(s, invert),
+        points: read_points(s, invert, series_point_count(s)),
         invert_if_negative: invert,
         invert_color: s
             .child("extLst")
@@ -194,13 +194,27 @@ fn read_marker(m: &El) -> Option<MarkerFormat> {
 /// The series' `<c:dPt>` overrides, sorted by index, one per index, capped. Points that set
 /// nothing GridCraft models (Excel echoes the series' invertIfNegative into every bar point)
 /// are dropped.
-fn read_points(s: &El, series_invert: bool) -> Vec<DataPoint> {
+fn series_point_count(s: &El) -> Option<u32> {
+    ["val", "yVal", "cat", "xVal"].into_iter().find_map(|tag| {
+        let data = s.child(tag)?;
+        ["numRef", "strRef", "numLit", "strLit", "multiLvlStrRef"].into_iter().find_map(|kind| {
+            let source = data.child(kind)?;
+            let cache = source.child("numCache").or_else(|| source.child("strCache")).or_else(|| source.child("multiLvlStrCache")).unwrap_or(source);
+            cache.child("ptCount")?.attr_u32("val")
+        })
+    })
+}
+
+fn read_points(s: &El, series_invert: bool, point_count: Option<u32>) -> Vec<DataPoint> {
     // The cap counts distinct point indices, so repeated `dPt` entries for one index can't use it up.
     // The first entry for an index wins.
     let mut seen = std::collections::HashSet::new();
     let mut out: Vec<DataPoint> = Vec::new();
     for d in s.kids("dPt") {
         let Some(index) = d.child("idx").and_then(|i| i.attr_u32("val")) else { continue };
+        if point_count.is_some_and(|n| index >= n) {
+            continue;
+        }
         let (fill, line) = sp_colors(d.child("spPr"));
         let p = DataPoint {
             index,
@@ -337,6 +351,10 @@ pub fn read_chart(root: &El) -> Option<Chart> {
             _ => LegendPos::Right,
         },
     };
+    let doughnut = plot.child("doughnutChart");
+    let hole_size = doughnut.and_then(|g| g.child_val("holeSize")).and_then(|v| v.trim().parse::<u8>().ok()).unwrap_or(75).clamp(10, 90);
+    let first_slice_angle =
+        plot.child("pieChart").or(doughnut).and_then(|g| g.child_val("firstSliceAng")).and_then(|v| v.trim().parse::<u16>().ok()).unwrap_or(0) % 360;
     Some(Chart {
         id: 0,
         kind,
@@ -353,6 +371,8 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         }),
         gridlines: val_axes.iter().any(|a| a.child("majorGridlines").is_some()),
         style: root.child_val("style").and_then(|v| v.parse().ok()).unwrap_or(2),
+        hole_size,
+        first_slice_angle,
         x_title: x_ax.and_then(|a| a.child("title")).and_then(rich_title),
         y_title: y_ax.and_then(|a| a.child("title")).and_then(rich_title),
         source: None,
@@ -846,9 +866,15 @@ fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), va
             "<c:lineChart><c:grouping val=\"{}\"/><c:varyColors val=\"{vary}\"/>{sers}{dl}<c:marker val=\"1\"/>{ax}</c:lineChart>",
             if stacked { "stacked" } else { "standard" }
         ),
-        G::Pie => format!("<c:pieChart><c:varyColors val=\"{vary}\"/>{sers}{dl}<c:firstSliceAng val=\"0\"/></c:pieChart>"),
+        G::Pie => {
+            format!("<c:pieChart><c:varyColors val=\"{vary}\"/>{sers}{dl}<c:firstSliceAng val=\"{}\"/></c:pieChart>", ch.first_slice_angle % 360)
+        }
         G::Doughnut => {
-            format!("<c:doughnutChart><c:varyColors val=\"{vary}\"/>{sers}{dl}<c:firstSliceAng val=\"0\"/><c:holeSize val=\"50\"/></c:doughnutChart>")
+            format!(
+                "<c:doughnutChart><c:varyColors val=\"{vary}\"/>{sers}{dl}<c:firstSliceAng val=\"{}\"/><c:holeSize val=\"{}\"/></c:doughnutChart>",
+                ch.first_slice_angle % 360,
+                ch.hole_size.clamp(10, 90)
+            )
         }
         G::Area { grouping } => format!("<c:areaChart><c:grouping val=\"{grouping}\"/><c:varyColors val=\"{vary}\"/>{sers}{dl}{ax}</c:areaChart>"),
         G::Scatter { .. } => {

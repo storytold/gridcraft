@@ -46,6 +46,8 @@ fn workbook(categories: &str, values: &str) -> Workbook {
         gridlines: true,
         style: 2,
         vary_colors: None,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: None,
         y_title: None,
         source: None,
