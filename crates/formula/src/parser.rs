@@ -5,7 +5,7 @@ use std::sync::Arc;
 use gridcraft_core::addr::{letters_to_col, parse_a1_prefix};
 use gridcraft_core::{CellError, MAX_ROWS};
 
-use crate::ast::*;
+use crate::ast::{Anchor, BinOp, Expr, RefKind, Reference, SheetSel, StructItem, StructRef, TrimMode, UnOp};
 use crate::lexer::{Tok, Token, tokenize_locale};
 
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
@@ -17,18 +17,57 @@ pub struct ParseError {
 
 pub(crate) const MAX_DEPTH: usize = 256;
 
+/// Longest formula accepted, in characters: Excel's limit for formula contents. It also bounds
+/// the depth of the trees long operator chains build (`1+1+…`), which dropping and evaluating
+/// walk recursively; without it a formula of a few hundred kilobytes in a file overflows the stack.
+pub const MAX_FORMULA_LEN: usize = 8_192;
+
 /// Parses formula text. A leading `=` (or `+`/`-` as Lotus users type) is accepted and skipped
 /// for `=`.
 pub fn parse(src: &str) -> Result<Expr, ParseError> {
     parse_syntax(src, crate::FormulaLocale::En)
 }
 
+/// Parses a defined name's formula. Unlike a cell formula, a comma at the top level is the
+/// union operator: Excel stores and shows a name over several ranges as `Sheet1!$A$1,Sheet1!$C$1`.
+pub fn parse_name(src: &str) -> Result<Expr, ParseError> {
+    parse_top(src, crate::FormulaLocale::En, true)
+}
+
+/// Most closing parentheses [`parse_closing_parens`] adds.
+const MAX_CLOSED_PARENS: usize = 8;
+
+/// Parses formula text as typed into a cell with `parse`, closing up to eight missing `)` at the
+/// end as Excel does (`SUM(1,2` enters `SUM(1,2)`). When no number of `)` makes it parse, the
+/// error describes the text as typed: `1+` is "unexpected end of formula", not "unexpected `)`".
+pub fn parse_closing_parens<T>(src: &str, parse: impl Fn(&str) -> Result<T, ParseError>) -> Result<T, ParseError> {
+    let typed = match parse(src) {
+        Ok(parsed) => return Ok(parsed),
+        Err(e) => e,
+    };
+    let mut text = src.to_string();
+    for _ in 0..MAX_CLOSED_PARENS {
+        text.push(')');
+        if let Ok(parsed) = parse(&text) {
+            return Ok(parsed);
+        }
+    }
+    Err(typed)
+}
+
 pub(crate) fn parse_syntax(src: &str, locale: crate::FormulaLocale) -> Result<Expr, ParseError> {
+    parse_top(src, locale, false)
+}
+
+fn parse_top(src: &str, locale: crate::FormulaLocale, allow_union: bool) -> Result<Expr, ParseError> {
     let body = src.strip_prefix('=').unwrap_or(src);
+    if body.len() > MAX_FORMULA_LEN && body.chars().count() > MAX_FORMULA_LEN {
+        return Err(ParseError { msg: format!("formula is longer than {MAX_FORMULA_LEN} characters"), pos: 0 });
+    }
     let toks = tokenize_locale(body, locale).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
     let toks = significant_spaces(toks);
     let mut p = Parser { toks, i: 0, depth: 0, input: locale == crate::FormulaLocale::Es };
-    let e = p.expr(0, false)?;
+    let e = p.expr(0, allow_union)?;
     match p.peek() {
         Tok::Eof => Ok(e),
         t => Err(p.err(format!("unexpected {}", describe(t)))),
@@ -50,8 +89,9 @@ fn significant_spaces(toks: Vec<Token>) -> Vec<Token> {
     let mut out: Vec<Token> = Vec::with_capacity(toks.len());
     for (i, t) in toks.iter().enumerate() {
         if t.tok == Tok::Space {
-            let prev_end = out.last().is_some_and(|p| matches!(p.tok, Tok::Word(_) | Tok::RParen | Tok::Struct(_)));
-            let next_start = toks.get(i + 1).is_some_and(|n| matches!(n.tok, Tok::Word(_) | Tok::Sheet(..) | Tok::LParen | Tok::Func(_)));
+            let prev_end = out.last().is_some_and(|p| matches!(p.tok, Tok::Word(_) | Tok::RParen | Tok::Struct(_) | Tok::Error(_)));
+            let next_start =
+                toks.get(i + 1).is_some_and(|n| matches!(n.tok, Tok::Word(_) | Tok::Sheet(..) | Tok::LParen | Tok::Func(_) | Tok::Error(_)));
             if prev_end && next_start {
                 out.push(t.clone());
             }
@@ -88,15 +128,19 @@ fn word_is_cell(w: &str) -> Option<Anchor> {
     Some(Anchor { row, col, row_abs, col_abs })
 }
 
-/// `_xlfn.XLOOKUP` → `XLOOKUP`.
+/// `_xlfn.XLOOKUP` → `XLOOKUP`. `_xludf.` is kept (`_xludf.SUM`): it marks a user-defined
+/// function, never the built-in of the same name, and files need it back.
 pub fn normalize_function_name(name: &str) -> String {
     let u = name.to_ascii_uppercase();
-    for p in ["_XLFN._XLWS.", "_XLFN.", "_XLWS.", "_XLUDF."] {
+    for p in ["_XLFN._XLWS.", "_XLFN.", "_XLWS."] {
         if let Some(r) = u.strip_prefix(p) {
             return r.to_string();
         }
     }
-    u
+    match u.strip_prefix("_XLUDF.") {
+        Some(r) => format!("_xludf.{r}"),
+        None => u,
+    }
 }
 
 impl Parser {
@@ -155,10 +199,17 @@ impl Parser {
             return Err(self.err("formula is nested too deeply"));
         }
         let mut lhs = self.prefix(allow_union)?;
+        // Postfix operators (`%`, invoking a result) wrap `lhs` without recursing: they count
+        // towards the nesting limit, so `1%%%…` can't build a tree deeper than it.
+        let mut postfix = 0;
         loop {
             if *self.peek() == Tok::Op("%") {
                 if 70 < min_bp {
                     break;
+                }
+                postfix += 1;
+                if self.depth + postfix > MAX_DEPTH {
+                    return Err(self.err("formula is nested too deeply"));
                 }
                 self.next();
                 lhs = Expr::Unary(UnOp::Percent, Box::new(lhs));
@@ -168,6 +219,10 @@ impl Parser {
                 // Invoking a LAMBDA result.
                 if let Expr::Name(_) = lhs {
                     // A name followed by '(' was lexed as Func; this is `(name)(…)` only.
+                }
+                postfix += 1;
+                if self.depth + postfix > MAX_DEPTH {
+                    return Err(self.err("formula is nested too deeply"));
                 }
                 self.next();
                 let args = self.args()?;
@@ -357,6 +412,10 @@ impl Parser {
         if w.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             return Err(self.err(format!("unexpected `{w}`")));
         }
+        // A function passed by name is saved as `_xleta.SUM`.
+        if let Some(f) = w.get(..7).filter(|p| p.eq_ignore_ascii_case("_xleta.")).and_then(|_| w.get(7..)) {
+            return Ok(Expr::Name(f.to_ascii_uppercase()));
+        }
         Ok(Expr::Name(w.to_string()))
     }
 
@@ -417,6 +476,9 @@ fn combine(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
 pub fn parse_struct(table: &str, body: &str) -> Result<StructRef, String> {
     let mut specifiers = Vec::new();
     let mut cols: Vec<String> = Vec::new();
+    // Spaces at the edges of a column name are part of it (`Table1[Qty ]` names `Qty `), so the
+    // untrimmed body is what a lone column is read from.
+    let raw = body;
     let body = body.trim();
     let unescape = |s: &str| {
         let mut out = String::new();
@@ -468,7 +530,7 @@ pub fn parse_struct(table: &str, body: &str) -> Result<StructRef, String> {
         } else if let Some(i) = item(body) {
             specifiers.push(i);
         } else if !body.is_empty() {
-            cols.push(column(body)?);
+            cols.push(column(raw)?);
         }
     } else {
         // [[#Headers],[Col1]:[Col3]], [[#This Row],[Col 1]] or [[#This Row],Col1]

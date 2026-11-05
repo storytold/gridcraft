@@ -1,6 +1,6 @@
 //! Date and time functions.
 
-use gridcraft_core::date::{DateTime, datetime_from_serial, days_in_month, days_in_month_in, is_leap, serial_from_ymd};
+use gridcraft_core::date::{DateTime, datetime_from_serial, days_in_month, is_leap, serial_from_ymd, serial_in_system};
 use gridcraft_core::parse::parse_input;
 use gridcraft_core::{CellError, DateSystem, Value};
 
@@ -13,16 +13,16 @@ const ND: &[bool] = &[true, true, false];
 const NDI: &[bool] = &[true, true, true, false];
 
 /// A date serial argument (truncated to whole days when `whole`). Out of range → `#NUM!`.
-fn serial_arg(a: &[Arg], i: usize) -> R<f64> {
-    let n = num(a, i)?;
+fn serial_arg(a: &[Arg], i: usize, sys: DateSystem) -> R<f64> {
+    let n = scalar(arg(a, i)?).to_number_in(sys)?;
     if !(0.0..MAX_SERIAL + 1.0).contains(&n) {
         return Err(CellError::Num);
     }
     Ok(n)
 }
 
-fn day_arg(a: &[Arg], i: usize) -> R<i64> {
-    Ok(serial_arg(a, i)?.floor() as i64)
+fn day_arg(a: &[Arg], i: usize, sys: DateSystem) -> R<i64> {
+    Ok(serial_arg(a, i, sys)?.floor() as i64)
 }
 
 fn dt(sys: DateSystem, serial: f64) -> R<DateTime> {
@@ -66,8 +66,9 @@ fn time(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 fn part(a: &[Arg], c: &mut dyn Ctx, f: fn(&DateTime) -> f64) -> R<Value> {
-    let s = serial_arg(a, 0)?;
-    num_val(f(&dt(c.date_system(), s.floor())?))
+    let sys = c.date_system();
+    let s = serial_arg(a, 0, sys)?;
+    num_val(f(&dt(sys, s.floor())?))
 }
 
 fn year(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
@@ -81,33 +82,34 @@ fn day(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 }
 
 /// Seconds into the day, rounded to the nearest second.
-fn day_seconds(a: &[Arg]) -> R<i64> {
-    let s = serial_arg(a, 0)?;
+fn day_seconds(a: &[Arg], sys: DateSystem) -> R<i64> {
+    let s = serial_arg(a, 0, sys)?;
     let secs = ((s - s.floor()) * 86400.0).round() as i64;
     Ok(if secs >= 86400 { 0 } else { secs })
 }
 
-fn hour(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val((day_seconds(a)? / 3600) as f64)
+fn hour(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val((day_seconds(a, c.date_system())? / 3600) as f64)
 }
-fn minute(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val((day_seconds(a)? / 60 % 60) as f64)
+fn minute(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val((day_seconds(a, c.date_system())? / 60 % 60) as f64)
 }
-fn second(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val((day_seconds(a)? % 60) as f64)
+fn second(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val((day_seconds(a, c.date_system())? % 60) as f64)
 }
 
 fn now(_a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    num_val(c.now_serial())
+    num_val(serial_in_system(c.date_system(), c.now_serial()))
 }
 fn today(_a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    num_val(c.now_serial().floor())
+    num_val(serial_in_system(c.date_system(), c.now_serial()).floor())
 }
 
 fn weekday(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let s = day_arg(a, 0)?;
+    let sys = c.date_system();
+    let s = day_arg(a, 0, sys)?;
     let t = to_int(opt_num(a, 1, 1.0)?)?;
-    let wd = weekday0(c.date_system(), s) as i64;
+    let wd = weekday0(sys, s) as i64;
     let r = match t {
         1 | 17 => wd + 1,
         2 | 11 => (wd + 6) % 7 + 1,
@@ -121,14 +123,22 @@ fn weekday(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 fn isoweek(sys: DateSystem, s: i64) -> R<i64> {
     let iso_wd = (weekday0(sys, s) + 6) % 7 + 1; // Monday = 1
     let thursday = s - iso_wd as i64 + 4;
-    let y = if thursday < 1 { 1900 } else { dt(sys, thursday as f64)?.year as i64 };
-    let jan1 = ymd_serial(sys, y, 1, 1)?;
+    let first = match sys {
+        DateSystem::D1900 => 1,
+        DateSystem::D1904 => 0,
+    };
+    let jan1 = if thursday < first {
+        // The week belongs to the year before the calendar starts.
+        first - 365
+    } else {
+        ymd_serial(sys, dt(sys, thursday as f64)?.year as i64, 1, 1)?
+    };
     Ok((thursday - jan1).div_euclid(7) + 1)
 }
 
 fn weeknum(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let sys = c.date_system();
-    let s = day_arg(a, 0)?;
+    let s = day_arg(a, 0, sys)?;
     let t = to_int(opt_num(a, 1, 1.0)?)?;
     let start = match t {
         1 | 17 => 0,
@@ -144,7 +154,8 @@ fn weeknum(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 }
 
 fn isoweeknum(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    num_val(isoweek(c.date_system(), day_arg(a, 0)?)? as f64)
+    let sys = c.date_system();
+    num_val(isoweek(sys, day_arg(a, 0, sys)?)? as f64)
 }
 
 fn months_arg(a: &[Arg], i: usize) -> R<i64> {
@@ -157,33 +168,36 @@ fn months_arg(a: &[Arg], i: usize) -> R<i64> {
 
 fn edate(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let sys = c.date_system();
-    let d = dt(sys, day_arg(a, 0)? as f64)?;
+    let d = dt(sys, day_arg(a, 0, sys)? as f64)?;
     let m = months_arg(a, 1)?;
     let total = d.year as i64 * 12 + d.month as i64 - 1 + m;
     let (y, mo) = (total.div_euclid(12), total.rem_euclid(12) + 1);
     if !(1900..=9999).contains(&y) {
         return Err(CellError::Num);
     }
-    let dd = (d.day.max(1) as i64).min(days_in_month_in(sys, y as i32, mo as u32) as i64);
+    // Excel keeps serial 0's day 0 and gives February 1900 its real 28 days here, though the
+    // sheet's calendar has a 29 February 1900 (serial 60).
+    let dd = (d.day as i64).min(days_in_month(y as i32, mo as u32) as i64);
     num_val(ymd_serial(sys, y, mo, dd)? as f64)
 }
 
 fn eomonth(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let sys = c.date_system();
-    let d = dt(sys, day_arg(a, 0)? as f64)?;
+    let d = dt(sys, day_arg(a, 0, sys)? as f64)?;
     let m = months_arg(a, 1)?;
     let total = d.year as i64 * 12 + d.month as i64 - 1 + m;
     let (y, mo) = (total.div_euclid(12), total.rem_euclid(12) + 1);
     if !(1900..=9999).contains(&y) {
         return Err(CellError::Num);
     }
-    num_val(ymd_serial(sys, y, mo, days_in_month_in(sys, y as i32, mo as u32) as i64)? as f64)
+    // Like EDATE, February 1900 ends on the 28th (serial 59).
+    num_val(ymd_serial(sys, y, mo, days_in_month(y as i32, mo as u32) as i64)? as f64)
 }
 
 fn datedif(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let sys = c.date_system();
-    let s = day_arg(a, 0)?;
-    let e = day_arg(a, 1)?;
+    let s = day_arg(a, 0, sys)?;
+    let e = day_arg(a, 1, sys)?;
     let unit = text(a, 2)?.to_ascii_uppercase();
     if s > e {
         return Err(CellError::Num);
@@ -244,8 +258,9 @@ fn timevalue(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     num_val(n - n.floor())
 }
 
-fn days(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val((day_arg(a, 0)? - day_arg(a, 1)?) as f64)
+fn days(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let sys = c.date_system();
+    num_val((day_arg(a, 0, sys)? - day_arg(a, 1, sys)?) as f64)
 }
 
 fn last_of_feb(d: &DateTime) -> bool {
@@ -254,8 +269,8 @@ fn last_of_feb(d: &DateTime) -> bool {
 
 fn days360(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let sys = c.date_system();
-    let d1 = dt(sys, day_arg(a, 0)? as f64)?;
-    let d2 = dt(sys, day_arg(a, 1)? as f64)?;
+    let d1 = dt(sys, day_arg(a, 0, sys)? as f64)?;
+    let d2 = dt(sys, day_arg(a, 1, sys)? as f64)?;
     let european = opt_bool(a, 2, false)?;
     num_val(days360_core(&d1, &d2, european) as f64)
 }
@@ -283,7 +298,10 @@ fn weekend_mask(v: Option<&Arg>) -> R<[bool; 7]> {
         Value::Empty if !arg.from_ref => Ok([true, false, false, false, false, false, true]),
         Value::Text(t) => {
             let b = t.as_bytes();
-            if b.len() != 7 || !b.iter().all(|c| *c == b'0' || *c == b'1') || b.iter().all(|c| *c == b'1') {
+            // All seven days marked as the weekend is a valid string: Microsoft documents
+            // NETWORKDAYS.INTL as "Using 1111111 will always return 0" and WORKDAY.INTL as
+            // rejecting it, which `workday_core`'s `per_week == 0` guard already implements.
+            if b.len() != 7 || !b.iter().all(|c| *c == b'0' || *c == b'1') {
                 return Err(CellError::Value);
             }
             // String order is Monday..Sunday.
@@ -310,7 +328,7 @@ fn weekend_mask(v: Option<&Arg>) -> R<[bool; 7]> {
     }
 }
 
-fn holidays(v: Option<&Arg>) -> R<Vec<i64>> {
+fn holidays(v: Option<&Arg>, sys: DateSystem) -> R<Vec<i64>> {
     let mut out = Vec::new();
     if let Some(a) = v {
         for x in as_array(&a.value).iter() {
@@ -318,7 +336,7 @@ fn holidays(v: Option<&Arg>) -> R<Vec<i64>> {
                 Value::Empty => {}
                 Value::Error(e) => return Err(*e),
                 other => {
-                    let n = other.to_number()?;
+                    let n = other.to_number_in(sys)?;
                     if !(0.0..MAX_SERIAL + 1.0).contains(&n) {
                         return Err(CellError::Num);
                     }
@@ -350,9 +368,9 @@ fn count_workdays(sys: DateSystem, a: i64, b: i64, mask: &[bool; 7]) -> i64 {
 
 fn networkdays_core(a: &[Arg], c: &mut dyn Ctx, mask: [bool; 7], hol: Option<&Arg>) -> R<Value> {
     let sys = c.date_system();
-    let s = day_arg(a, 0)?;
-    let e = day_arg(a, 1)?;
-    let hs = holidays(hol)?;
+    let s = day_arg(a, 0, sys)?;
+    let e = day_arg(a, 1, sys)?;
+    let hs = holidays(hol, sys)?;
     let (lo, hi, sign) = if s <= e { (s, e, 1) } else { (e, s, -1) };
     let mut n = count_workdays(sys, lo, hi, &mask);
     n -= hs.iter().filter(|&&h| h >= lo && h <= hi && !mask[weekday0(sys, h)]).count() as i64;
@@ -384,13 +402,13 @@ fn advance(sys: DateSystem, start: i64, n: i64, dir: i64, mask: &[bool; 7], per_
 
 fn workday_core(a: &[Arg], c: &mut dyn Ctx, mask: [bool; 7], hol: Option<&Arg>) -> R<Value> {
     let sys = c.date_system();
-    let start = day_arg(a, 0)?;
+    let start = day_arg(a, 0, sys)?;
     let days = num(a, 1)?.trunc();
     if days.abs() > 1e7 {
         return Err(CellError::Num);
     }
     let days = days as i64;
-    let hs = holidays(hol)?;
+    let hs = holidays(hol, sys)?;
     let per_week = mask.iter().filter(|w| !**w).count() as i64;
     if per_week == 0 {
         return Err(CellError::Value);
@@ -431,18 +449,16 @@ pub(crate) fn yearfrac_core(sys: DateSystem, s: i64, e: i64, basis: i64) -> R<f6
     Ok(match basis {
         0 => {
             let (mut a, mut b) = (d1.day as i64, d2.day as i64);
-            if a == 31 && b == 31 {
-                a = 30;
+            // Excel tests the end-31 rule against the original start day, before a February end moves to 30.
+            let start_30 = a >= 30;
+            if last_of_feb(&d1) && last_of_feb(&d2) {
                 b = 30;
-            } else if a == 31 {
+            }
+            if last_of_feb(&d1) || a == 31 {
                 a = 30;
-            } else if a == 30 && b == 31 {
+            }
+            if start_30 && b == 31 {
                 b = 30;
-            } else if last_of_feb(&d1) && last_of_feb(&d2) {
-                a = 30;
-                b = 30;
-            } else if last_of_feb(&d1) {
-                a = 30;
             }
             ((d2.year as i64 - d1.year as i64) * 360 + (d2.month as i64 - d1.month as i64) * 30 + b - a) as f64 / 360.0
         }
@@ -473,10 +489,11 @@ fn feb29_between(sys: DateSystem, s: i64, e: i64, d1: &DateTime, d2: &DateTime) 
 }
 
 fn yearfrac(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let s = day_arg(a, 0)?;
-    let e = day_arg(a, 1)?;
+    let sys = c.date_system();
+    let s = day_arg(a, 0, sys)?;
+    let e = day_arg(a, 1, sys)?;
     let basis = if has(a, 2) { to_int(num(a, 2)?)? } else { 0 };
-    num_val(yearfrac_core(c.date_system(), s, e, basis)?)
+    num_val(yearfrac_core(sys, s, e, basis)?)
 }
 
 pub(crate) fn specs() -> Vec<FnSpec> {
@@ -680,15 +697,33 @@ mod tests {
         close(ev("DATEVALUE", vec![t("2/29/1900")]), 60.0);
         close(ev("DATEVALUE", vec![t("3/1/1900")]), 61.0);
         is_err(ev("DATEVALUE", vec![t("2/29/1901")]), CellError::Value);
-        // EDATE and EOMONTH land on it as the end of February 1900.
-        close(ev("EOMONTH", vec![n(d(1900.0, 1.0, 15.0)), n(1.0)]), 60.0);
-        close(ev("EOMONTH", vec![n(60.0), n(0.0)]), 60.0);
-        close(ev("EOMONTH", vec![n(d(1900.0, 3.0, 15.0)), n(-1.0)]), 60.0);
+        // EDATE and EOMONTH read it as 29 February, but end February 1900 on the 28th.
+        close(ev("EOMONTH", vec![n(d(1900.0, 1.0, 15.0)), n(1.0)]), 59.0);
+        close(ev("EOMONTH", vec![n(60.0), n(0.0)]), 59.0);
+        close(ev("EOMONTH", vec![n(d(1900.0, 3.0, 15.0)), n(-1.0)]), 59.0);
         close(ev("EOMONTH", vec![n(60.0), n(12.0)]), d(1901.0, 2.0, 28.0));
-        close(ev("EDATE", vec![n(d(1900.0, 1.0, 31.0)), n(1.0)]), 60.0);
-        close(ev("EDATE", vec![n(d(1900.0, 3.0, 31.0)), n(-1.0)]), 60.0);
+        close(ev("EDATE", vec![n(d(1900.0, 1.0, 31.0)), n(1.0)]), 59.0);
+        close(ev("EDATE", vec![n(d(1900.0, 3.0, 31.0)), n(-1.0)]), 59.0);
         close(ev("EDATE", vec![n(60.0), n(1.0)]), d(1900.0, 3.0, 29.0));
         close(ev("EDATE", vec![n(60.0), n(12.0)]), d(1901.0, 2.0, 28.0));
+    }
+
+    #[test]
+    fn edate_eomonth_early_1900() {
+        // Excel 365: serial 0 is 0 January 1900 and February 1900 has 28 days here.
+        close(ev("EDATE", vec![n(0.0), n(0.0)]), 0.0);
+        close(ev("EDATE", vec![n(0.0), n(1.0)]), 31.0);
+        close(ev("EDATE", vec![n(0.0), n(12.0)]), 366.0);
+        close(ev("EOMONTH", vec![n(0.0), n(1.0)]), 59.0);
+        close(ev("EDATE", vec![n(31.0), n(1.0)]), 59.0);
+        close(ev("EOMONTH", vec![n(59.0), n(0.0)]), 59.0);
+        // Unchanged, and the same as Excel.
+        close(ev("EOMONTH", vec![n(0.0), n(0.0)]), 31.0);
+        is_err(ev("EOMONTH", vec![n(0.0), n(-1.0)]), CellError::Num);
+        close(ev("EDATE", vec![n(59.0), n(1.0)]), 88.0);
+        close(ev("EDATE", vec![n(60.0), n(1.0)]), 89.0);
+        close(ev("EDATE", vec![n(61.0), n(-1.0)]), 32.0);
+        close(ev("EOMONTH", vec![n(31.0), n(0.0)]), 31.0);
     }
 
     #[test]
@@ -745,7 +780,10 @@ mod tests {
         close(ev("NETWORKDAYS.INTL", vec![n(d(2006.0, 1.0, 1.0)), n(d(2006.0, 2.0, 1.0)), n(7.0)]), 24.0);
         close(ev("NETWORKDAYS.INTL", vec![n(d(2006.0, 1.0, 1.0)), n(d(2006.0, 2.0, 1.0)), t("0000110")]), 24.0);
         close(ev("NETWORKDAYS.INTL", vec![n(d(2006.0, 1.0, 1.0)), n(d(2006.0, 1.0, 31.0)), n(11.0)]), 26.0);
-        is_err(ev("NETWORKDAYS.INTL", vec![n(1.0), n(10.0), t("1111111")]), CellError::Value);
+        // An all-weekend string is valid: no day is a workday, so the count is 0.
+        close(ev("NETWORKDAYS.INTL", vec![n(1.0), n(10.0), t("1111111")]), 0.0);
+        // WORKDAY.INTL rejects it (there is no working day to move to).
+        is_err(ev("WORKDAY.INTL", vec![n(1.0), n(10.0), t("1111111")]), CellError::Value);
         is_err(ev("NETWORKDAYS.INTL", vec![n(1.0), n(10.0), n(8.0)]), CellError::Num);
         // WORKDAY
         close(ev("WORKDAY", vec![n(d(2008.0, 10.0, 1.0)), n(151.0)]), d(2009.0, 4.0, 30.0));
@@ -780,6 +818,18 @@ mod tests {
     }
 
     #[test]
+    fn yearfrac_basis0_feb_end_to_31() {
+        // Excel 16: a February-end start keeps its original day for the end-31 test, so 31 days.
+        close(ev("YEARFRAC", vec![n(d(2021.0, 2.0, 28.0)), n(d(2021.0, 3.0, 31.0)), n(0.0)]), 0.086_111_111_111_111_11);
+        close(ev("YEARFRAC", vec![n(d(2020.0, 2.0, 29.0)), n(d(2020.0, 3.0, 31.0)), n(0.0)]), 0.086_111_111_111_111_11);
+        close(ev("YEARFRAC", vec![n(d(2021.0, 3.0, 31.0)), n(d(2021.0, 2.0, 28.0)), n(0.0)]), 0.086_111_111_111_111_11);
+        close(ev("YEARFRAC", vec![n(d(2021.0, 1.0, 31.0)), n(d(2021.0, 2.0, 28.0)), n(0.0)]), 0.077_777_777_777_777_78);
+        close(ev("YEARFRAC", vec![n(d(2021.0, 1.0, 30.0)), n(d(2021.0, 3.0, 31.0)), n(0.0)]), 1.0 / 6.0);
+        close(ev("YEARFRAC", vec![n(d(2020.0, 2.0, 29.0)), n(d(2021.0, 2.0, 28.0)), n(0.0)]), 1.0);
+        close(ev("YEARFRAC", vec![n(d(2021.0, 2.0, 28.0)), n(d(2021.0, 2.0, 28.0)), n(0.0)]), 0.0);
+    }
+
+    #[test]
     fn date_lifting() {
         let v = ev("YEAR", vec![av(row(&[43831.0, 46302.0]))]);
         assert_eq!(rows_of(&v), vec![vec![nv(2020.0), nv(2026.0)]]);
@@ -794,6 +844,11 @@ mod tests {
         close(crate::call(spec, &[n(0.0)], &mut ctx), 6.0);
         let spec = crate::lookup("YEAR").unwrap();
         close(crate::call(spec, &[n(0.0)], &mut ctx), 1904.0);
+        // The clock is 2026-10-07 12:00; in the 1904 system that is serial 44840.5.
+        close(crate::call(crate::lookup("NOW").unwrap(), &[], &mut ctx), 44840.5);
+        let today = crate::call(crate::lookup("TODAY").unwrap(), &[], &mut ctx);
+        close(today.clone(), 44840.0);
+        close(crate::call(spec, &[crate::Arg::val(today)], &mut ctx), 2026.0);
         // No fictitious day here: 1904 is a real leap year and 1900 is before the epoch.
         let spec = crate::lookup("DATE").unwrap();
         close(crate::call(spec, &[n(1904.0), n(2.0), n(29.0)], &mut ctx), 59.0);
@@ -805,5 +860,29 @@ mod tests {
         let spec = crate::lookup("DATEVALUE").unwrap();
         close(crate::call(spec, &[t("2/29/1904")], &mut ctx), 59.0);
         is_err(crate::call(spec, &[t("2/29/1900")], &mut ctx), CellError::Value);
+    }
+
+    #[test]
+    fn isoweek_at_calendar_start() {
+        let iso = crate::lookup("ISOWEEKNUM").unwrap();
+        let wk = crate::lookup("WEEKNUM").unwrap();
+        let mut ctx = TestCtx::default();
+        close(crate::call(iso, &[n(1.0)], &mut ctx), 52.0);
+        close(crate::call(wk, &[n(1.0), n(21.0)], &mut ctx), 52.0);
+        let mut ctx = TestCtx { sys: gridcraft_core::DateSystem::D1904, ..TestCtx::default() };
+        for s in [0.0, 1.0, 2.0] {
+            close(crate::call(iso, &[n(s)], &mut ctx), 53.0);
+        }
+    }
+
+    #[test]
+    fn date_text_arguments_use_the_workbook_date_system() {
+        let mut ctx = TestCtx { sys: gridcraft_core::DateSystem::D1904, ..TestCtx::default() };
+        close(crate::call(crate::lookup("YEAR").unwrap(), &[t("1/1/2020")], &mut ctx), 2020.0);
+        close(crate::call(crate::lookup("MONTH").unwrap(), &[t("2/29/1904")], &mut ctx), 2.0);
+        close(crate::call(crate::lookup("DAY").unwrap(), &[t("2/29/1904")], &mut ctx), 29.0);
+        close(crate::call(crate::lookup("DAYS").unwrap(), &[t("1/2/2020"), t("1/1/2020")], &mut ctx), 1.0);
+        let networkdays = crate::lookup("NETWORKDAYS").unwrap();
+        close(crate::call(networkdays, &[t("1/6/2020"), t("1/10/2020"), t("1/8/2020")], &mut ctx), 4.0);
     }
 }

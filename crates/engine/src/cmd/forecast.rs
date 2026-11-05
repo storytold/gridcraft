@@ -11,7 +11,7 @@ use gridcraft_functions::Timeline;
 use gridcraft_model::{Anchor, Cell, Chart, ChartKind, Formula, LegendPos, Series, Sheet, StyleId, Table, TableColumn, TotalsFn};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, has_doc, split_sheet, str_param};
 use crate::selection::current_region;
 
 const CMD: &str = "data.forecastSheet";
@@ -42,7 +42,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Forecast Sheet",
         ["Data", "Forecast"],
         None,
-        "{timeline?: \"A2:A25\", values?: \"B2:B25\" (default: the first two columns of `range`, the selection or the current region; a text first cell is the header), end?: timeline value or date text | periods?: n (default: a third of the history, at least 1; ≤10,000 and history × periods ≤ 500,000; history ≤ 10,000 rows), confidenceInterval?: bool (default true), confidence?: 0.95 or 95, seasonality?: \"auto\" | 0 (none) | 2–8,760, fillMissing?: interpolate|zeros, aggregate?: average|count|counta|max|median|min|sum, statistics?: bool, chart?: line|column} → {sheet, table, chart, history, periods}. Inserts a sheet before the active one: timeline, values, Forecast (FORECAST.ETS), Lower/Upper Confidence Bound (FORECAST.ETS.CONFINT), optional FORECAST.ETS.STAT table, and a chart.",
+        "{timeline?: \"A2:A25\", values?: \"B2:B25\" (default: the first two columns of `range`, the selection or the current region; a text first cell is the header), end?: timeline value or date text | periods?: n (default: a third of the history, at least 1; ≤10,000 and history × periods ≤ 500,000; history ≤ 10,000 rows), forecastStart?: a timeline value or date text on the history, before its last point (hindcast: the model is fit to the points before it, the forecast columns start there and run over the actuals; default and the last point: forecast after the history), confidenceInterval?: bool (default true), confidence?: 0.95 or 95, seasonality?: \"auto\" | 0 (none) | 2–8,760, fillMissing?: interpolate|zeros, aggregate?: average|count|counta|max|median|min|sum, statistics?: bool, chart?: line|column} → {sheet, table, chart, history, periods}. Inserts a sheet before the active one: timeline, values, Forecast (FORECAST.ETS), Lower/Upper Confidence Bound (FORECAST.ETS.CONFINT), optional FORECAST.ETS.STAT table, and a chart.",
         has_doc,
         forecast_sheet
     )]
@@ -68,7 +68,7 @@ fn range_on(s: &Session, t: &str) -> Result<(usize, RangeRef)> {
     let (sh, body) = split_sheet(t);
     let si = match sh {
         Some(n) => d.wb.sheet_index(&n).ok_or_else(|| bad(CMD, format!("no sheet named `{n}`")))?,
-        None => d.wb.active_sheet,
+        None => d.wb.active_sheet(),
     };
     let r = RangeRef::parse(body.trim()).ok_or_else(|| bad(CMD, format!("not a range: `{t}`")))?;
     let r = if r.is_full_cols() || r.is_full_rows() {
@@ -101,7 +101,7 @@ fn source(s: &Session, p: &Json) -> Result<(usize, Vec<CellRef>, Vec<CellRef>)> 
                 None => {
                     let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
                     let sel = d.selection.current();
-                    (d.wb.active_sheet, if sel.is_single() { current_region(sh, d.selection.active) } else { sel })
+                    (d.wb.active_sheet(), if sel.is_single() { current_region(sh, d.selection.active) } else { sel })
                 }
             };
             if r.width() < 2 {
@@ -223,13 +223,39 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     if !rows.iter().any(|r| matches!(r.1, Value::Number(_))) {
         return Err(EngineError::Other("There are no values to forecast.".into()));
     }
-    let end = match p.get("end") {
-        Some(Json::Number(n)) => n.as_f64(),
-        Some(Json::String(t)) if !t.trim().is_empty() => match gridcraft_core::parse::parse_input(t.trim(), sys).value {
-            Value::Number(end) => Some(end),
-            _ => return Err(bad(CMD, format!("`end` is not a number or a date: `{t}`"))),
-        },
-        _ => None,
+    let time_param = |key: &str| -> Result<Option<f64>> {
+        match p.get(key) {
+            Some(Json::Number(n)) => Ok(n.as_f64()),
+            Some(Json::String(t)) if !t.trim().is_empty() => match gridcraft_core::parse::parse_input(t.trim(), sys).value {
+                Value::Number(x) => Ok(Some(x)),
+                _ => Err(bad(CMD, format!("`{key}` is not a number or a date: `{t}`"))),
+            },
+            None | Some(Json::Null) => Ok(None),
+            Some(Json::String(_)) => Ok(None),
+            Some(_) => Err(bad(CMD, format!("`{key}` is not a number or a date"))),
+        }
+    };
+    let end = time_param("end")?;
+    // Forecast Start: the index (into `rows`) of the first forecast point, or `rows.len()` for the
+    // usual forecast after the history.
+    let fit = match time_param("forecastStart")? {
+        None => rows.len(),
+        Some(start) => {
+            let last_t = times.last().copied().unwrap_or(f64::NAN);
+            let tol = |a: f64, b: f64| (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0);
+            if tol(start, last_t) || timeline.after_last(1).is_some_and(|next| tol(start, next)) {
+                rows.len()
+            } else {
+                let i = times
+                    .iter()
+                    .position(|t| tol(*t, start))
+                    .ok_or_else(|| bad(CMD, "`forecastStart` is not on the timeline (it is a point of the history, before its last point)"))?;
+                if rows.get(..i).is_none_or(|h| h.iter().filter(|r| matches!(r.1, Value::Number(_))).count() < 2) {
+                    return Err(EngineError::Other("The forecast start needs at least two values before it to fit the forecast.".into()));
+                }
+                i
+            }
+        }
     };
     let cap = max_periods(rows.len());
     let periods = match end {
@@ -252,8 +278,9 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     // Columns: A timeline, B values, C forecast, D/E bounds.
     let n = rows.len() as u32;
     let last = n + 1; // 1-based row of the last history point
+    let fit_last = fit as u32 + 1; // 1-based row of the last point the model is fit to
     let end_row = last + periods; // 1-based row of the last forecast
-    let hist = |col: u32| format!("${0}$2:${0}${last}", col_letters(col));
+    let hist = |col: u32| format!("${0}$2:${0}${fit_last}", col_letters(col));
     let mut tail = format!("{},{}", opts.seasonality, opts.fill);
     if let Some(a) = opts.aggregate {
         tail.push_str(&format!(",{a}"));
@@ -280,7 +307,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     let stats_col = width + 1;
     let chart_col = if opts.statistics { stats_col + 3 } else { width + 1 };
 
-    let at = s.doc()?.wb.active_sheet;
+    let at = s.doc()?.wb.active_sheet();
     let index = edit(s, |cx| {
         let at = at.min(cx.wb.sheets.len());
         let bold = cx.wb.styles.derive(StyleId::DEFAULT, |st| st.font.bold = true);
@@ -288,7 +315,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         let vstyle = cx.wb.styles.derive(StyleId::DEFAULT, |st| st.num_fmt = vfmt.clone());
         let mut sheet = Sheet::new(sheet_name.clone());
         let put = |sheet: &mut Sheet, row: u32, col: u32, v: Value, style: StyleId| {
-            sheet.set_cell(CellRef::new(row, col), Cell { value: v, formula: None, style });
+            sheet.set_cell(CellRef::new(row, col), Cell { value: v, formula: None, style, py: None });
         };
         let formula = |sheet: &mut Sheet, row: u32, col: u32, text: String, style: StyleId| {
             let mut cell = Cell::formula(Formula::new(&text));
@@ -305,22 +332,30 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 put(&mut sheet, r, 1, v.clone(), vstyle);
             }
         }
-        // The last history point starts the forecast lines, so they join the values.
-        formula(&mut sheet, n, 2, format!("=B{last}"), vstyle);
+        // The last point the model is fit to starts the forecast lines, so they join the values.
+        let join = fit_last - 1; // 0-based row
+        formula(&mut sheet, join, 2, format!("=B{fit_last}"), vstyle);
         if opts.confidence.is_some() {
-            formula(&mut sheet, n, 3, format!("=C{last}"), vstyle);
-            formula(&mut sheet, n, 4, format!("=C{last}"), vstyle);
+            formula(&mut sheet, join, 3, format!("=C{fit_last}"), vstyle);
+            formula(&mut sheet, join, 4, format!("=C{fit_last}"), vstyle);
         }
         let (tl, vl) = (hist(0), hist(1));
+        let forecast_row = |sheet: &mut Sheet, r: u32| {
+            formula(sheet, r - 1, 2, format!("=FORECAST.ETS(A{r},{vl},{tl},{tail})"), vstyle);
+            if let Some(c) = opts.confidence {
+                let ci = format!("FORECAST.ETS.CONFINT(A{r},{vl},{tl},{c},{tail})");
+                formula(sheet, r - 1, 3, format!("=C{r}-{ci}"), vstyle);
+                formula(sheet, r - 1, 4, format!("=C{r}+{ci}"), vstyle);
+            }
+        };
+        // Hindcast: forecasts over the actuals from the start to the last history point.
+        for r in (fit_last + 1)..=last {
+            forecast_row(&mut sheet, r);
+        }
         for (k, t) in future.iter().enumerate() {
             let r = last + k as u32 + 1; // 1-based
             put(&mut sheet, r - 1, 0, Value::Number(*t), tstyle);
-            formula(&mut sheet, r - 1, 2, format!("=FORECAST.ETS(A{r},{vl},{tl},{tail})"), vstyle);
-            if let Some(c) = opts.confidence {
-                let ci = format!("FORECAST.ETS.CONFINT(A{r},{vl},{tl},{c},{tail})");
-                formula(&mut sheet, r - 1, 3, format!("=C{r}-{ci}"), vstyle);
-                formula(&mut sheet, r - 1, 4, format!("=C{r}+{ci}"), vstyle);
-            }
+            forecast_row(&mut sheet, r);
         }
         if opts.statistics {
             put(&mut sheet, 0, stats_col, Value::text("Statistic"), bold);
@@ -351,7 +386,10 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             range,
             header_row: true,
             totals_row: false,
-            columns: headers.iter().map(|h| TableColumn { name: h.clone(), totals: TotalsFn::None, totals_label: None, formula: None }).collect(),
+            columns: headers
+                .iter()
+                .map(|h| TableColumn { name: h.clone(), totals: TotalsFn::None, totals_label: None, formula: None, unique_name: None, xml: None })
+                .collect(),
             style: "TableStyleMedium2".into(),
             banded_rows: true,
             banded_cols: false,
@@ -359,6 +397,8 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             last_col: false,
             filter_button: true,
             filter: vec![],
+            table_type: None,
+            connection_id: None,
         });
         let q = gridcraft_formula::quote_sheet(&sheet_name);
         let col_ref = |c: u32| format!("{q}!${0}$2:${0}${end_row}", col_letters(c));
@@ -371,6 +411,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 color: None,
                 secondary: false,
                 kind: (opts.column_chart && c >= 3).then_some(ChartKind::Line),
+                quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
             })
@@ -383,6 +424,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             series,
             legend: LegendPos::Bottom,
             data_labels: false,
+            data_table: None,
             gridlines: true,
             style: 1,
             x_title: None,
@@ -399,7 +441,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 *sc += 1;
             }
         }
-        cx.wb.active_sheet = at;
+        cx.wb.set_active_sheet(at);
         *cx.sel = crate::Selection::at(CellRef::new(0, 0));
         cx.structural = true;
         Ok(at)
@@ -407,7 +449,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     if let Ok(d) = s.doc_mut() {
         d.sheet_selections.insert(index.min(d.sheet_selections.len()), crate::Selection::default());
     }
-    Ok(json!({"sheet": sheet_name, "table": table_name, "chart": chart_id, "history": n, "periods": periods}))
+    Ok(json!({"sheet": sheet_name, "table": table_name, "chart": chart_id, "history": n, "periods": periods, "fitted": fit}))
 }
 
 /// Forecast rows needed to reach `end` (rounded up to whole steps).
@@ -461,7 +503,7 @@ mod tests {
         assert_eq!(r["periods"], 4);
         let wb = &s.doc().unwrap().wb;
         // Inserted before the data sheet and activated.
-        assert_eq!(wb.active_sheet, 0);
+        assert_eq!(wb.active_sheet(), 0);
         let sh = wb.sheet(0).unwrap();
         assert_eq!(sh.name, r["sheet"].as_str().unwrap());
         assert_eq!(value(&s, 0, "C1"), Value::text("Forecast(Sales)"));
@@ -544,5 +586,40 @@ mod tests {
         assert!(s.execute("data.forecastSheet", json!({"range": "Sheet1!B1:B17"})).is_err());
         s.execute("cell.set", json!({"cell": "A5", "input": "4.5"})).unwrap();
         assert!(s.execute("data.forecastSheet", json!({"range": "Sheet1!A1:B17"})).is_err());
+    }
+
+    #[test]
+    fn forecast_start_hindcasts_over_the_actuals() {
+        let mut s = session_with_history(); // t = 1..16 in A2:A17
+        let r = s.execute("data.forecastSheet", json!({"range": "A1:B17", "forecastStart": 13, "periods": 2, "confidenceInterval": false})).unwrap();
+        assert_eq!(r["fitted"], 12);
+        // Fit to t = 1..12 (rows 2..13); the line joins at row 13 and forecasts rows 14..19.
+        assert_eq!(formula(&s, 0, "C13"), "B13");
+        assert_eq!(value(&s, 0, "C13"), value(&s, 0, "B13"));
+        assert_eq!(formula(&s, 0, "C14"), "FORECAST.ETS(A14,$B$2:$B$13,$A$2:$A$13,1,1)");
+        assert_eq!(formula(&s, 0, "C19"), "FORECAST.ETS(A19,$B$2:$B$13,$A$2:$A$13,1,1)");
+        // The exact seasonal series is recovered, and the actual is still shown next to it.
+        let c14 = value(&s, 0, "C14").as_f64().unwrap();
+        assert!((c14 - 39.0).abs() < 1e-6, "{c14}"); // t = 13: 10 + 26 + 3
+        assert!(value(&s, 0, "B14").as_f64().is_some());
+        // Start at the last point or one step later: as without forecastStart.
+        for start in [json!(16), json!(17)] {
+            let r = s.execute("data.forecastSheet", json!({"range": "Sheet1!A1:B17", "forecastStart": start, "periods": 2})).unwrap();
+            assert_eq!(r["fitted"], 16);
+        }
+        assert_eq!(formula(&s, 0, "C18"), "FORECAST.ETS(A18,$B$2:$B$17,$A$2:$A$17,1,1)");
+    }
+
+    #[test]
+    fn forecast_start_invalid_values_are_errors() {
+        let mut s = session_with_history();
+        let sheets = s.doc().unwrap().wb.sheets.len();
+        for bad in [json!(0), json!(2), json!(3.5), json!(18), json!(1000), json!("abc"), json!([1]), json!(1e308)] {
+            assert!(s.execute("data.forecastSheet", json!({"range": "A1:B17", "forecastStart": bad})).is_err(), "{bad}");
+        }
+        assert_eq!(s.doc().unwrap().wb.sheets.len(), sheets);
+        // Blank or null behaves like no start; empty params unchanged.
+        let r = s.execute("data.forecastSheet", json!({"range": "A1:B17", "forecastStart": ""})).unwrap();
+        assert_eq!(r["fitted"], 16);
     }
 }

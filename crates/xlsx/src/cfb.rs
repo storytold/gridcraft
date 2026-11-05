@@ -209,13 +209,19 @@ impl<'a> Compound<'a> {
     }
 
     /// Follows a FAT chain from `start`, reading at most `limit` bytes. A chain longer than the
-    /// FAT (so a cycle) or pointing outside the file is an error.
+    /// FAT (so a cycle) or pointing outside the file is an error. The file may end inside the
+    /// chain's last sector (some writers don't pad it, and Excel opens those files): that sector
+    /// reads short, and the caller checks the stream's declared size against what was read.
     fn read_chain(&self, start: u32, limit: u64) -> Result<Vec<u8>, String> {
         let limit = usize::try_from(limit.min(MAX_STREAM)).unwrap_or(usize::MAX);
         let mut out = Vec::new();
         let mut id = start;
         let mut seen = vec![false; self.fat.len()];
+        let mut cut = false;
         while id != END_OF_CHAIN && out.len() < limit {
+            if cut {
+                return Err("damaged compound file: sector out of range (the file may be truncated)".into());
+            }
             if id >= MAX_REG_SECT {
                 return Err("damaged compound file: broken sector chain".into());
             }
@@ -226,20 +232,26 @@ impl<'a> Compound<'a> {
             }
             let start = (id as usize).checked_add(1).and_then(|i| i.checked_mul(self.sector_size));
             let s = start
-                .and_then(|s| self.bytes.get(s..s.checked_add(self.sector_size)?))
+                .and_then(|s| self.bytes.get(s..s.checked_add(self.sector_size)?.min(self.bytes.len())))
                 .ok_or("damaged compound file: sector out of range (the file may be truncated)")?;
+            cut = s.len() < self.sector_size;
             out.extend_from_slice(s);
             id = *self.fat.get(id as usize).ok_or("damaged compound file: sector missing from the FAT")?;
         }
         Ok(out)
     }
 
-    /// Follows a mini FAT chain inside the mini stream container.
+    /// Follows a mini FAT chain inside the mini stream container. Like `read_chain`, the
+    /// container may end inside the chain's last mini sector.
     fn read_mini_chain(&self, container: &[u8], start: u32, limit: usize) -> Result<Vec<u8>, String> {
         let mut out = Vec::new();
         let mut id = start;
         let mut seen = vec![false; self.mini_fat.len()];
+        let mut cut = false;
         while id != END_OF_CHAIN && out.len() < limit {
+            if cut {
+                return Err("damaged compound file: mini sector out of range".into());
+            }
             if id >= MAX_REG_SECT {
                 return Err("damaged compound file: broken mini sector chain".into());
             }
@@ -249,8 +261,10 @@ impl<'a> Compound<'a> {
                 None => return Err("damaged compound file: mini sector missing from the mini FAT".into()),
             }
             let at = (id as usize).checked_mul(self.mini_sector_size);
-            let s =
-                at.and_then(|a| container.get(a..a.checked_add(self.mini_sector_size)?)).ok_or("damaged compound file: mini sector out of range")?;
+            let s = at
+                .and_then(|a| container.get(a..a.checked_add(self.mini_sector_size)?.min(container.len())))
+                .ok_or("damaged compound file: mini sector out of range")?;
+            cut = s.len() < self.mini_sector_size;
             out.extend_from_slice(s);
             id = *self.mini_fat.get(id as usize).ok_or("damaged compound file: mini sector missing from the mini FAT")?;
         }
@@ -378,5 +392,64 @@ pub(crate) mod tests {
         // A directory chain that loops back on itself stops at the bound.
         b[516..520].copy_from_slice(&1u32.to_le_bytes());
         assert!(!is_encrypted(&b));
+    }
+
+    /// `compound_file` with one regular-sector stream of `len` bytes (FAT in sector 0, directory
+    /// in sector 1, the stream from sector 2), cut right after the stream's last byte, the way
+    /// some writers leave the final sector unpadded.
+    fn unpadded(len: usize) -> (Vec<u8>, Vec<u8>) {
+        let data: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+        let mut file = crate::testing::compound_file(&[("Workbook", &data)]);
+        file.truncate(512 * 3 + len);
+        (file, data)
+    }
+
+    #[test]
+    fn an_unpadded_last_sector_still_reads() {
+        let (file, data) = unpadded(5000);
+        assert_ne!(file.len() % 512, 0);
+        let cf = Compound::open(&file).unwrap();
+        assert_eq!(cf.root_stream("Workbook").unwrap().unwrap(), data);
+        // Bytes the stream needs that the file doesn't hold are still damage.
+        let cf = Compound::open(&file[..file.len() - 1]).unwrap();
+        assert!(cf.root_stream("Workbook").is_err());
+    }
+
+    #[test]
+    fn an_unpadded_last_mini_sector_still_reads() {
+        let data: Vec<u8> = (0..1000u32).map(|i| (i % 251) as u8).collect();
+        let mut file = crate::testing::compound_file(&[("Workbook", &data)]);
+        // Header, FAT, directory, mini FAT, then the mini stream holding the stream's bytes.
+        file.truncate(512 * 4 + data.len());
+        let cf = Compound::open(&file).unwrap();
+        assert_eq!(cf.root_stream("Workbook").unwrap().unwrap(), data);
+        let cf = Compound::open(&file[..file.len() - 1]).unwrap();
+        assert!(cf.root_stream("Workbook").is_err());
+    }
+
+    #[test]
+    fn a_cut_sector_inside_a_chain_is_damage() {
+        let (mut file, _) = unpadded(5000);
+        // The cut sector (11) points on to the directory sector and the stream claims those
+        // bytes too: the partial sector would splice 392 bytes into the middle of the stream.
+        file[512 + 11 * 4..512 + 12 * 4].copy_from_slice(&1u32.to_le_bytes());
+        file[1024 + 128 + 120..1024 + 128 + 124].copy_from_slice(&5512u32.to_le_bytes());
+        let cf = Compound::open(&file).unwrap();
+        assert!(cf.root_stream("Workbook").is_err());
+    }
+
+    #[test]
+    fn a_cut_mini_sector_inside_a_chain_is_damage() {
+        let small = [7u8; 100];
+        let data: Vec<u8> = (0..1000u32).map(|i| (i % 251) as u8).collect();
+        let mut file = crate::testing::compound_file(&[("Small", &small), ("Workbook", &data)]);
+        // "Small" holds mini sectors 0-1, "Workbook" 2-17; the mini stream starts at sector 3.
+        file.truncate(512 * 4 + 128 + data.len());
+        assert_eq!(Compound::open(&file).unwrap().root_stream("Workbook").unwrap().unwrap(), data);
+        // The cut mini sector (17) points on to sector 0 and the stream claims those bytes too.
+        file[1536 + 17 * 4..1536 + 18 * 4].copy_from_slice(&0u32.to_le_bytes());
+        file[1024 + 2 * 128 + 120..1024 + 2 * 128 + 124].copy_from_slice(&1064u32.to_le_bytes());
+        let cf = Compound::open(&file).unwrap();
+        assert!(cf.root_stream("Workbook").is_err());
     }
 }

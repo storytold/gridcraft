@@ -119,16 +119,42 @@ pub struct Theme {
     pub colors: [u32; 12],
     pub major_font: String,
     pub minor_font: String,
+    /// The heading font's East Asian typeface (`<a:ea>`); empty when the file did not set one.
+    #[serde(default)]
+    pub major_font_ea: String,
+    /// The body font's East Asian typeface (`<a:ea>`); empty when the file did not set one.
+    #[serde(default)]
+    pub minor_font_ea: String,
+    /// The heading font's complex-script typeface (`<a:cs>`); empty when the file did not set one.
+    #[serde(default)]
+    pub major_font_cs: String,
+    /// The body font's complex-script typeface (`<a:cs>`); empty when the file did not set one.
+    #[serde(default)]
+    pub minor_font_cs: String,
+    /// The heading font's per-script typefaces (`<a:font script="Arab" typeface="…"/>`), as
+    /// (script, typeface) in file order.
+    #[serde(default)]
+    pub major_font_scripts: Vec<(String, String)>,
+    /// The body font's per-script typefaces, as (script, typeface) in file order.
+    #[serde(default)]
+    pub minor_font_scripts: Vec<(String, String)>,
 }
 
 impl Default for Theme {
-    /// GridCraft's own default theme ("Craft"): original palette.
+    /// GridCraft's own default theme ("Craft"): original palette. The East Asian and
+    /// complex-script typefaces stay empty: the file did not set one.
     fn default() -> Self {
         Theme {
             name: "Craft".into(),
             colors: [0xFFFFFF, 0x000000, 0xE8E8E8, 0x0E2841, 0x156082, 0xE97132, 0x196B24, 0x0F9ED5, 0xA02B93, 0x4EA72E, 0x467886, 0x96607D],
             major_font: crate::DEFAULT_FONT.into(),
             minor_font: crate::DEFAULT_FONT.into(),
+            major_font_ea: String::new(),
+            minor_font_ea: String::new(),
+            major_font_cs: String::new(),
+            minor_font_cs: String::new(),
+            major_font_scripts: Vec::new(),
+            minor_font_scripts: Vec::new(),
         }
     }
 }
@@ -161,6 +187,20 @@ pub struct Font {
     pub strike: bool,
     pub color: Color,
     pub vert: VertAlign,
+    /// Windows character set the font was chosen for (178 = Arabic); kept so Excel substitutes a font for the same script.
+    #[serde(default)]
+    pub charset: Option<u8>,
+    /// Font family class (1 roman, 2 swiss, 3 modern…); `None` is swiss, the default.
+    #[serde(default)]
+    pub family: Option<u8>,
+    /// The font follows the theme's body font (`<scheme val="minor"/>`) while its face is the
+    /// theme's minor font. Fonts derived from it (bold, a colour, a size) keep the link.
+    #[serde(default = "default_minor")]
+    pub minor: bool,
+}
+
+fn default_minor() -> bool {
+    true
 }
 
 impl Eq for Font {}
@@ -168,7 +208,7 @@ impl Hash for Font {
     fn hash<H: Hasher>(&self, h: &mut H) {
         self.name.hash(h);
         self.size.to_bits().hash(h);
-        (self.bold, self.italic, self.underline, self.strike, self.color, self.vert).hash(h);
+        (self.bold, self.italic, self.underline, self.strike, self.color, self.vert, self.charset, self.family, self.minor).hash(h);
     }
 }
 
@@ -183,6 +223,9 @@ impl Default for Font {
             strike: false,
             color: Color::Auto,
             vert: VertAlign::Baseline,
+            charset: None,
+            family: None,
+            minor: true,
         }
     }
 }
@@ -339,6 +382,27 @@ pub struct Style {
     /// Number format code; "General" by default.
     pub num_fmt: NumFmt,
     pub protection: Protection,
+    /// Differential formats only.
+    #[serde(default)]
+    pub dxf_stated: DxfStated,
+}
+
+/// The parts a differential format states at a value its `Style` can't tell from unset: a dxf's
+/// default parts are unset, so a bold turned off, a face, a size or a protection that matches the
+/// defaults would otherwise read as nothing. The values are the style's own; this records that
+/// the format states them, and only where they match the defaults, so a format built in the app
+/// and the same format read back from a file stay equal.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct DxfStated {
+    pub bold: bool,
+    pub italic: bool,
+    pub strike: bool,
+    pub underline: bool,
+    pub size: bool,
+    pub name: bool,
+    /// `<scheme val>`: the theme font the face follows (`major`, `minor` or `none`).
+    pub scheme: Option<String>,
+    pub protection: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -377,6 +441,12 @@ impl Default for StyleTable {
 }
 
 impl StyleTable {
+    /// A table whose default (Normal) style is `normal`, such as a file's own Normal font.
+    pub fn with_default(normal: Style) -> Self {
+        let mut index = HashMap::new();
+        index.insert(normal.clone(), StyleId::DEFAULT);
+        StyleTable { styles: vec![normal], index }
+    }
     pub fn get(&self, id: StyleId) -> &Style {
         self.styles.get(id.0 as usize).or_else(|| self.styles.first()).unwrap_or(&DEFAULT_STYLE)
     }
@@ -430,12 +500,46 @@ mod tests {
     }
 
     #[test]
-    fn colors() {
+    fn a_theme_saved_before_per_script_fonts_still_opens() -> Result<(), Box<dyn std::error::Error>> {
+        let mut json = serde_json::to_value(Theme::default())?;
+        let fields = json.as_object_mut().ok_or("none")?;
+        assert!(fields.remove("major_font_scripts").is_some() && fields.remove("minor_font_scripts").is_some());
+        assert_eq!(serde_json::from_value::<Theme>(json)?, Theme::default());
+        Ok(())
+    }
+
+    #[test]
+    fn colors() -> Result<(), Box<dyn std::error::Error>> {
         let th = Theme::default();
-        assert_eq!(Color::from_hex("#FF0000").unwrap().resolve(&th), Some([255, 0, 0]));
-        assert_eq!(Color::from_hex("FF00FF00").unwrap().resolve(&th), Some([0, 255, 0]));
+        assert_eq!(Color::from_hex("#FF0000").ok_or("none")?.resolve(&th), Some([255, 0, 0]));
+        assert_eq!(Color::from_hex("FF00FF00").ok_or("none")?.resolve(&th), Some([0, 255, 0]));
         assert_eq!(Color::Theme(0, -500).resolve(&th), Some([128, 128, 128]));
         assert_eq!(Color::Theme(1, 500).resolve(&th), Some([128, 128, 128]));
         assert_eq!(Color::Auto.resolve(&th), None);
+        Ok(())
+    }
+
+    #[test]
+    fn theme_json_keeps_ea_and_cs_and_reads_old_json() -> Result<(), Box<dyn std::error::Error>> {
+        // JSON written before the ea/cs fields existed still deserializes (`serde(default)`).
+        let mut old = serde_json::to_value(Theme::default())?;
+        let obj = old.as_object_mut().ok_or("none")?;
+        for key in ["major_font_ea", "minor_font_ea", "major_font_cs", "minor_font_cs"] {
+            assert!(obj.remove(key).is_some(), "the default theme serializes {key}");
+        }
+        assert_eq!(serde_json::from_value::<Theme>(old)?, Theme::default());
+
+        // Set fields serialize and come back.
+        let t = Theme {
+            major_font_ea: "游ゴシック".into(),
+            minor_font_ea: "ＭＳ Ｐゴシック".into(),
+            major_font_cs: "Arial".into(),
+            minor_font_cs: "Times New Roman".into(),
+            ..Theme::default()
+        };
+        let json = serde_json::to_string(&t)?;
+        assert!(json.contains("major_font_ea") && json.contains("游ゴシック"), "{json}");
+        assert_eq!(serde_json::from_str::<Theme>(&json)?, t);
+        Ok(())
     }
 }

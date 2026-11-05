@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use gridcraft_core::{CellError, DateSystem, Value};
+use gridcraft_core::{Array, CellError, DateSystem, Value};
 
 /// Builds a [`FnSpec`] whose implementation returns `Result<Value, CellError>`.
 ///
@@ -30,6 +30,7 @@ macro_rules! f {
             category: $crate::Category::$cat,
             volatile: true,
             scalar_args: $scal,
+            value_args: &[],
             signature: $sig,
             description: $desc,
             imp: {
@@ -48,6 +49,7 @@ macro_rules! f {
             category: $crate::Category::$cat,
             volatile: false,
             scalar_args: $scal,
+            value_args: &[],
             signature: $sig,
             description: $desc,
             imp: {
@@ -105,6 +107,21 @@ pub trait Ctx {
     fn now_serial(&self) -> f64;
     /// Uniform in [0, 1).
     fn random(&mut self) -> f64;
+    /// For the database functions: whether the formula in the criteria cell at (`row`, `col`) holds
+    /// for `record` (a row of `db` below its labels). `None` when that cell holds no formula or the
+    /// criteria didn't come from a reference.
+    fn computed_criterion(&mut self, _row: usize, _col: usize, _db: &Array, _record: usize) -> Option<bool> {
+        None
+    }
+    /// For GROUPBY/PIVOTBY: whether their function argument is a LAMBDA (its value is then not used).
+    fn has_lambda(&self) -> bool {
+        false
+    }
+    /// Calls that LAMBDA with `arg` (one group's values) and returns its single result; `None` when
+    /// there is no lambda.
+    fn call_lambda(&mut self, _arg: Value) -> Option<Value> {
+        None
+    }
 }
 
 pub type FnImpl = fn(&[Arg], &mut dyn Ctx) -> Value;
@@ -141,6 +158,11 @@ pub struct FnSpec {
     /// (broadcast like Excel's dynamic arrays). The last entry repeats for variadic tails; an
     /// empty slice means no lifting.
     pub scalar_args: &'static [bool],
+    /// Parameter positions that take a single value and reject a reference to more than one
+    /// cell with `#VALUE!` (the Analysis ToolPak functions: EOMONTH, WORKDAY, COUPDAYS, BIN2DEC…),
+    /// where other scalar parameters lift the range. Arrays that aren't references still lift.
+    /// Same layout as `scalar_args`; filled at registration from [`lift::value_args`].
+    pub value_args: &'static [bool],
     pub signature: &'static str,
     pub description: &'static str,
     pub imp: FnImpl,
@@ -161,6 +183,14 @@ impl FnSpec {
         }
     }
 
+    /// Whether parameter `i` takes a single value, so a multi-cell reference there is `#VALUE!`.
+    pub fn is_value_arg(&self, i: usize) -> bool {
+        match self.value_args.get(i) {
+            Some(b) => *b,
+            None => self.value_args.last().copied().unwrap_or(false),
+        }
+    }
+
     /// Whether a call with `n` arguments is valid (Excel allows at most 255).
     pub fn accepts(&self, n: usize) -> bool {
         (self.min_args..=self.max_args).contains(&n) && n <= 255
@@ -171,7 +201,7 @@ impl FnSpec {
 pub(crate) const VAR: usize = usize::MAX;
 
 fn registry() -> &'static (Vec<FnSpec>, HashMap<&'static str, usize>) {
-    static REG: OnceLock<(Vec<FnSpec>, HashMap<&'static str, usize>)> = OnceLock::new();
+    static REG: OnceLock<(Vec<FnSpec>, HashMap<&str, usize>)> = OnceLock::new();
     REG.get_or_init(|| {
         let mut v: Vec<FnSpec> = Vec::new();
         for list in [
@@ -189,6 +219,9 @@ fn registry() -> &'static (Vec<FnSpec>, HashMap<&'static str, usize>) {
         ] {
             v.extend(list);
         }
+        for s in &mut v {
+            s.value_args = lift::value_args(s.name);
+        }
         let mut map = HashMap::with_capacity(v.len());
         for (i, s) in v.iter().enumerate() {
             map.entry(s.name).or_insert(i);
@@ -197,7 +230,8 @@ fn registry() -> &'static (Vec<FnSpec>, HashMap<&'static str, usize>) {
     })
 }
 
-/// Looks a function up by name (case-insensitive; `_xlfn.`, `_xlws.` and `_xludf.`-free names).
+/// Looks a function up by name (case-insensitive; `_xlfn.`- and `_xlws.`-free names). A
+/// `_xludf.` name is user-defined and never found.
 pub fn lookup(name: &str) -> Option<&'static FnSpec> {
     let mut n = name.trim().to_ascii_uppercase();
     loop {
@@ -248,6 +282,37 @@ mod tests {
         }
     }
 
+    /// #2163: a NaN column index is refused (it used to become 0 and underflow to `usize::MAX`).
+    #[test]
+    fn nan_index_is_a_value_error() {
+        use crate::util::testutil::*;
+        use gridcraft_core::CellError;
+        let table = rf(arr(vec![vec![tv("Field"), tv("Other")], vec![nv(1.0), nv(2.0)]]));
+        let nan = || av(Value::Number(f64::NAN));
+        assert_eq!(ev("VLOOKUP", vec![n(1.0), table.clone(), nan()]), Value::Error(CellError::Value));
+        assert_eq!(ev("HLOOKUP", vec![t("Field"), table.clone(), nan()]), Value::Error(CellError::Value));
+        assert_eq!(ev("DSUM", vec![table.clone(), nan(), table.clone()]), Value::Error(CellError::Value));
+        assert_eq!(ev("VLOOKUP", vec![n(1.0), table, n(2.0)]), Value::Number(2.0));
+    }
+
+    /// #2162: REGEXREPLACE gives up on a too-long result while building it, and otherwise replaces
+    /// as before (every match, `$n` groups).
+    #[test]
+    fn regexreplace_bounds_its_result() {
+        use crate::util::testutil::*;
+        use gridcraft_core::CellError;
+        let many = "a".repeat(32_767);
+        assert_eq!(ev("REGEXREPLACE", vec![t(&many), t("."), t(&"b".repeat(32_767))]), Value::Error(CellError::Value));
+        assert_eq!(ev("REGEXREPLACE", vec![t(&many), t("a"), t("b")]), Value::text("b".repeat(32_767)));
+        assert_eq!(ev("REGEXREPLACE", vec![t("a1b22c"), t("[0-9]+"), t("#")]), Value::text("a#b#c"));
+        assert_eq!(ev("REGEXREPLACE", vec![t("2026-10-22"), t("(\\d+)-(\\d+)-(\\d+)"), t("$3/$2/$1")]), Value::text("22/10/2026"));
+        assert_eq!(ev("REGEXREPLACE", vec![t("abc"), t("x*"), t("-")]), Value::text("-a-b-c-"));
+        assert_eq!(ev("REGEXREPLACE", vec![t("a1b2"), t("[0-9]"), t("#"), n(2.0)]), Value::text("a1b#"));
+        // One match whose replacement repeats it 10,000 times: refused before it is built.
+        assert_eq!(ev("REGEXREPLACE", vec![t(&many), t("^.*$"), t(&"$0".repeat(10_000))]), Value::Error(CellError::Value));
+        assert_eq!(ev("REGEXREPLACE", vec![t(&many), t("^.*$"), t(&"$0".repeat(10_000)), n(1.0)]), Value::Error(CellError::Value));
+    }
+
     #[test]
     fn hostile_inputs_never_panic() {
         use crate::util::testutil::*;
@@ -263,6 +328,9 @@ mod tests {
             n(-1e308),
             n(1e10),
             n(2.5),
+            // Numbers no formula should make, but code can (#2163).
+            av(Value::Number(f64::NAN)),
+            av(Value::Number(f64::INFINITY)),
             t(""),
             t("abc"),
             t("*?~"),
