@@ -7,16 +7,18 @@ evaluator, a columnar model store and a model-backed PivotTable renderer. It has
 the GridCraft engine.
 
 ```rust
-use gridcraft_dax::{parse_expression, print_expression};
+use gridcraft_dax::{ParseError, parse_expression, print_expression};
 
-let expr = parse_expression("1 + 2 * 3")?;
-assert_eq!(print_expression(&expr), "1 + 2 * 3");
+fn main() -> Result<(), ParseError> {
+    let expr = parse_expression("1 + 2 * 3")?;
+    assert_eq!(print_expression(&expr), "1 + 2 * 3");
 
-let query = gridcraft_dax::parse_query(
-    "DEFINE MEASURE Sales[Margin] = [Sales Amount] - [Total Cost] EVALUATE Sales ORDER BY [Margin] DESC",
-)?;
-assert!(gridcraft_dax::print_query(&query).starts_with("DEFINE\n    MEASURE Sales[Margin] ="));
-# Ok::<(), gridcraft_dax::ParseError>(())
+    let query = gridcraft_dax::parse_query(
+        "DEFINE MEASURE Sales[Margin] = [Sales Amount] - [Total Cost] EVALUATE Sales ORDER BY [Margin] DESC",
+    )?;
+    assert!(gridcraft_dax::print_query(&query).starts_with("DEFINE\n    MEASURE Sales[Margin] ="));
+    Ok(())
+}
 ```
 
 ## Public API
@@ -387,8 +389,7 @@ Variadic overloads repeat their last parameter kind for every additional argumen
 `Binder::bind_expression` resolves `Table[Column]`, measures, variables and function calls;
 `Binder::bind_measure` and `Binder::dependency_graph` expose direct measure dependencies and reject
 cycles. `Evaluator::new` pre-binds the measures and evaluates scalar or table expressions with a
-`FilterContext`; `pivot::pivot` groups a measure by row fields. This crate has no CLI of its own:
-the `dax` subcommands land with the engine slice, which is the crate that depends on it.
+`FilterContext`; `pivot::pivot` groups a measure by row fields.
 
 The evaluator's core switch implements the scalar spine — literals, operators, `VAR`/`RETURN`,
 context transition, `CALCULATE`/`FILTER`/`ALL`/`VALUES`/`DISTINCT`/`SELECTEDVALUE`, the
