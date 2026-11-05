@@ -554,15 +554,17 @@ fn list_validation_shifts_relative_references_for_each_cell() {
 fn list_validation_disjoint_ranges_keep_their_formula_anchors_when_first_is_cleared() {
     let mut s = Session::new();
     s.new_workbook();
-    s.execute("range.setValues", json!({"range": "B1", "values": [["Alpha", "Beta"]]})).unwrap();
-    s.execute("data.validation", json!({"range": "C1,D1", "type": "list", "formula1": "=B1"})).unwrap();
+    s.execute("range.setValues", json!({"range": "B1", "values": [["Alpha", "Beta", "Gamma"]]})).unwrap();
+    s.execute("data.validation", json!({"range": "C1,D1,E1", "type": "list", "formula1": "=B1"})).unwrap();
 
     let wb = s.doc().unwrap().wb.clone();
     let dv = wb.active().unwrap().validations.first().unwrap();
     let c1 = CellRef::parse("C1").unwrap();
     let d1 = CellRef::parse("D1").unwrap();
+    let e1 = CellRef::parse("E1").unwrap();
     assert_eq!(list_items(&wb, 0, c1, dv), ["Alpha"]);
     assert_eq!(list_items(&wb, 0, d1, dv), ["Beta"]);
+    assert_eq!(list_items(&wb, 0, e1, dv), ["Gamma"]);
 
     s.execute("data.validation", json!({"range": "C1", "clear": true})).unwrap();
     let wb = s.doc().unwrap().wb.clone();
@@ -570,6 +572,8 @@ fn list_validation_disjoint_ranges_keep_their_formula_anchors_when_first_is_clea
     assert_eq!(dv.ranges.len(), 1);
     assert_eq!(dv.ranges.first().copied(), Some(RangeRef::new(d1, d1)));
     assert_eq!(list_items(&wb, 0, d1, dv), ["Beta"]);
+    let ev = wb.active().unwrap().validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(e1))).unwrap();
+    assert_eq!(list_items(&wb, 0, e1, ev), ["Gamma"]);
     assert!(check_validation(&wb, 0, d1, "Beta").is_none());
     assert!(check_validation(&wb, 0, d1, "Alpha").is_some());
 }
