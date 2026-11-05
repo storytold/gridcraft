@@ -580,6 +580,11 @@ fn distinct_count_folds_text_case() {
     };
     // The model collation is case-insensitive: A/a are one value, and BLANK counts as one more.
     assert_eq!(evaluate("DISTINCTCOUNT(Labels[Name])"), Scalar::Integer(3));
+    // A filter set from that key matches every spelling, so COUNTROWS agrees with the count.
+    let mut filters = FilterContext::default();
+    filters.set(0, 0, [gridcraft_dax::ScalarKey::String("A".into())]);
+    let bound = Binder::new(&model).bind_expression(&parse_expression("COUNTROWS(Labels)").expect("parse")).expect("bind");
+    assert_eq!(evaluator.evaluate_with(&bound, filters).expect("filtered count"), Scalar::Integer(2));
     // VALUES reports the same distinct set, keeping the first spelling it saw.
     let bound = Binder::new(&model).bind_expression(&parse_expression("VALUES(Labels[Name])").expect("parse")).expect("bind");
     let table = evaluator.evaluate_table(&bound).expect("values");

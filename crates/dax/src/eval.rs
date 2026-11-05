@@ -62,7 +62,7 @@ use crate::ast::{BinaryOp, Literal, UnaryOp};
 use crate::binder::{BindError, Binder, BoundExpr};
 use crate::model::DataModel;
 use crate::storage::{ColumnKind, ModelStorage, StorageError, TableStorage};
-use crate::value::{EvalError, Scalar, ScalarKey, TableColumn, TableValue, distinct_key};
+use crate::value::{EvalError, Scalar, ScalarKey, TableColumn, TableValue, distinct_key, folded_key};
 
 use support::*;
 
@@ -181,7 +181,7 @@ impl FilterContext {
     }
 
     pub fn set(&mut self, table: usize, column: usize, values: impl IntoIterator<Item = ScalarKey>) {
-        self.filters.insert((table, column), values.into_iter().collect());
+        self.filters.insert((table, column), values.into_iter().map(|key| folded_key(&key)).collect());
     }
 
     pub fn remove_table(&mut self, table: usize) {
@@ -190,7 +190,9 @@ impl FilterContext {
 
     fn matches(&self, table: usize, column: usize, value: &Scalar) -> bool {
         match self.filters.get(&(table, column)) {
-            Some(values) => values.contains(&ScalarKey::from(value)),
+            // Filter keys and values fold text the same way, so `VALUES`/`DISTINCTCOUNT` and the
+            // filters they feed agree on `"A"` and `"a"`.
+            Some(values) => values.contains(&distinct_key(value)),
             None => true,
         }
     }

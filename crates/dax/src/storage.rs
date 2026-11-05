@@ -92,7 +92,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::model::DataModel;
-use crate::value::{Scalar, ScalarKey, distinct_key};
+use crate::value::{Scalar, ScalarKey, distinct_key, folded_key};
 
 /// A bitset used for column blank/null bitmaps.
 ///
@@ -851,18 +851,15 @@ impl TableStorage {
         let storage = self.column_checked(column)?;
         let wanted: BTreeSet<ScalarKey> = values.iter().cloned().collect();
         let mut rows = Vec::new();
+        // Filter keys fold text to lower case (the model collation), and so do the labels and the
+        // values they are compared with, so a filter set from `VALUES` matches every spelling.
+        let wanted_folded: BTreeSet<ScalarKey> = wanted.iter().map(folded_key).collect();
         if let Some((dictionary, nulls)) = storage.data().string_parts() {
-            let wanted_text: BTreeSet<&str> = wanted
-                .iter()
-                .filter_map(|key| match key {
-                    ScalarKey::String(text) => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect();
             let blank_wanted = wanted.contains(&ScalarKey::Blank);
             let mut allowed = vec![false; dictionary.len()];
             for (code, text) in dictionary.iter().enumerate() {
-                if wanted_text.contains(text.as_str())
+                let folded = ScalarKey::String(text.to_lowercase());
+                if wanted_folded.contains(&folded)
                     && let Some(slot) = allowed.get_mut(code)
                 {
                     *slot = true;
@@ -889,7 +886,7 @@ impl TableStorage {
         let data = storage.data();
         for row in 0..self.row_count {
             if let Some(value) = data.value(row)
-                && wanted.contains(&ScalarKey::from(&value))
+                && wanted_folded.contains(&distinct_key(&value))
             {
                 rows.push(row);
             }

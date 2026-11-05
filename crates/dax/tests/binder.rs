@@ -233,3 +233,16 @@ fn documented_keyword_arguments_bind_instead_of_resolving_as_names() {
         other => panic!("expected a call, got {other:?}"),
     }
 }
+
+#[test]
+fn an_interval_keyword_is_not_shadowed_by_a_variable() {
+    let model = sample_model();
+    // A variable in scope must not turn the documented interval argument into a name: `YEAR` here
+    // is DATEDIFF's interval, and the binder keeps it a keyword.
+    let bound = bind(&model, "VAR YEAR = 1 RETURN DATEDIFF ( Sales[Amount], Sales[Amount], YEAR )");
+    let debug = format!("{bound:?}");
+    assert!(debug.contains("Keyword(\"YEAR\")"), "{debug}");
+    // A variable still wins where the parameter is documented as text: RANKX's Ties argument.
+    let bound = bind(&model, "VAR DENSE = 1 RETURN RANKX ( Sales, Sales[Amount], 42, DENSE )");
+    assert!(format!("{bound:?}").contains("Variable"), "{bound:?}");
+}

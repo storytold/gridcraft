@@ -230,6 +230,15 @@ impl From<&Scalar> for ScalarKey {
     }
 }
 
+/// The same key with text folded to lower case: the rule filter keys and the values they are
+/// compared with share, so a filter set from `VALUES` matches every spelling of the value.
+pub(crate) fn folded_key(key: &ScalarKey) -> ScalarKey {
+    match key {
+        ScalarKey::String(text) => ScalarKey::String(text.to_lowercase()),
+        other => other.clone(),
+    }
+}
+
 /// The key a distinctness comparison uses: text folds to lower case, the model collation, so `"A"`
 /// and `"a"` are one value. Every other type keeps its exact key.
 ///
@@ -339,7 +348,7 @@ impl TableValue {
         let mut seen = BTreeSet::new();
         let mut rows = Vec::new();
         for row in &self.rows {
-            let key: Vec<ScalarKey> = row.iter().map(ScalarKey::from).collect();
+            let key: Vec<ScalarKey> = row.iter().map(distinct_key).collect();
             if seen.insert(key) {
                 rows.push(row.clone());
             }

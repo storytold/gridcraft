@@ -237,20 +237,36 @@ pub(crate) fn date_weekday(serial: f64) -> i64 {
     if weekday == 0 { 7 } else { weekday }
 }
 
-pub(crate) fn eomonth(serial: f64, months: i64) -> f64 {
+/// The year and month `months` away from the month of `serial`, or `None` when the shift leaves
+/// the years Excel dates can represent.
+///
+/// The month total is computed in `i128`: `months` arrives from `number(..) as i64`, which saturates
+/// at `i64::MAX`, and `year * 12 + month - 1 + months` would wrap (or panic in debug builds) for
+/// such an argument.
+fn shift_month(serial: f64, months: i64) -> Option<(i64, i64)> {
     let (year, month, _) = date_parts(serial);
-    let total = year * 12 + month - 1 + months;
-    let y = total.div_euclid(12);
-    let m = total.rem_euclid(12) + 1;
-    date_serial(y, m, days_in_month(y, m), 0, 0, 0)
+    let total = i128::from(year) * 12 + i128::from(month) - 1 + i128::from(months);
+    let year = i64::try_from(total.div_euclid(12)).ok()?;
+    if !(1..=9999).contains(&year) {
+        return None;
+    }
+    Some((year, i64::try_from(total.rem_euclid(12)).ok()? + 1))
+}
+
+pub(crate) fn eomonth(serial: f64, months: i64) -> f64 {
+    match shift_month(serial, months) {
+        Some((year, month)) => date_serial(year, month, days_in_month(year, month), 0, 0, 0),
+        // A shift Excel cannot represent leaves the date where it was instead of wrapping.
+        None => serial,
+    }
 }
 
 pub(crate) fn edate(serial: f64, months: i64) -> f64 {
-    let (year, month, day) = date_parts(serial);
-    let total = year * 12 + month - 1 + months;
-    let y = total.div_euclid(12);
-    let m = total.rem_euclid(12) + 1;
-    date_serial(y, m, day.min(days_in_month(y, m)), 0, 0, 0)
+    let (_, _, day) = date_parts(serial);
+    match shift_month(serial, months) {
+        Some((year, month)) => date_serial(year, month, day.min(days_in_month(year, month)), 0, 0, 0),
+        None => serial,
+    }
 }
 
 /// The local date as an Excel serial (TODAY).
@@ -317,6 +333,11 @@ pub(crate) fn utc_today_serial() -> f64 {
 /// 2 )` would truncate to `0.28` and `ROUNDUP ( 0.07, 2 )` would ceil `7.000000000000001` to
 /// `0.08`. Snap that noise away before rounding, exactly as `to_dax_text` does when it prints.
 fn excel_precision(value: f64) -> f64 {
+    // An exact whole number under 2^53 has no binary noise to remove, and snapping it would drop
+    // digits: `ROUND ( 1234567890123457, 0 )` must stay that number.
+    if value.fract() == 0.0 && value.abs() < 2f64.powi(53) {
+        return value;
+    }
     format!("{value:.14e}").parse().unwrap_or(value)
 }
 

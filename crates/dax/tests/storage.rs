@@ -206,7 +206,9 @@ fn filters_by_value_set_including_blanks_and_duplicates() {
         Ok(vec![0, 2, 3, 5])
     );
     assert_eq!(sales.filter_rows(region, &[ScalarKey::String("West".into())]), Ok(vec![1]));
-    assert_eq!(sales.filter_rows(region, &[ScalarKey::String("east".into())]), Ok(vec![]));
+    // Text keys fold to lower case, the model collation: both spellings select the same rows.
+    assert_eq!(sales.filter_rows(region, &[ScalarKey::String("East".into())]), Ok(vec![0, 2, 5]));
+    assert_eq!(sales.filter_rows(region, &[ScalarKey::String("east".into())]), Ok(vec![0, 2, 5]));
     assert_eq!(sales.filter_rows(region, &[]), Ok(vec![]));
 
     let product_key = column_index(sales, "ProductKey");

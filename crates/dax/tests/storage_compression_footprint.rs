@@ -69,7 +69,7 @@ fn run_length_and_packed_columns_account_for_far_less_than_their_logical_size() 
     assert_eq!(block.rows, ROWS);
     assert_eq!(block.logical_bytes, ROWS * 8, "one i64 slot per row");
     // 100 runs: 100 values + 101 offsets = 1608 bytes, plus the 12.5 kB null bitmap.
-    assert_eq!(block.encoded_bytes, 100 * 8 + 101 * 8 + ROWS.div_ceil(64) * 8);
+    assert_eq!(block.encoded_bytes, 100 * 8 + 101 * std::mem::size_of::<usize>() + ROWS.div_ceil(64) * 8);
     assert!(block.encoded_bytes * 10 < block.logical_bytes, "run-length encoding must be >10x smaller");
     assert_eq!(block.saved_bytes(), block.logical_bytes - block.encoded_bytes);
 

@@ -296,9 +296,16 @@ impl<'a> Binder<'a> {
                 _ if matches!(expected, Some(ParamKind::Text)) => keyword_name(arg),
                 _ => visual_keyword_name(spec.name, index, arg),
             }
-            // A real table, measure or variable name always wins: `RANK(Sales, ORDERBY(...))`
-            // uses the table in a position whose documented overload would otherwise be `Ties`.
-            .filter(|keyword| !self.bare_name_resolves(keyword, vars));
+            // A real table or measure name always wins: `RANK(Sales, ORDERBY(...))` uses the
+            // table in a position whose documented overload would otherwise be `Ties`. A variable
+            // only shadows a documented text argument (`RANKX(..., Dense)`), because an interval
+            // or enum keyword is not a name position: a variable called `YEAR` must not turn
+            // `DATEDIFF(a, b, YEAR)` into a variable reference.
+            .filter(|keyword| {
+                let named = self.model.table_index(keyword).is_some() || self.model.measure_index(keyword).is_some();
+                let variable = matches!(expected, Some(ParamKind::Text)) && vars.iter().any(|var| var.eq_ignore_ascii_case(keyword));
+                !named && !variable
+            });
             if let Some(keyword) = keyword {
                 args.push(BoundExpr::Keyword(keyword));
             } else {
@@ -313,15 +320,6 @@ fn keyword_name(expr: &Expr) -> Option<String> {
     match &expr.kind {
         ExprKind::Name(name) if name.table.is_none() && name.name.style == crate::NameStyle::Bare => Some(name.name.text.clone()),
         _ => None,
-    }
-}
-
-impl Binder<'_> {
-    /// Whether a bare name denotes a model table, measure or expression-level variable.
-    fn bare_name_resolves(&self, name: &str, vars: &[String]) -> bool {
-        self.model.table_index(name).is_some()
-            || self.model.measure_index(name).is_some()
-            || vars.iter().any(|variable| variable.eq_ignore_ascii_case(name))
     }
 }
 

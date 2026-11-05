@@ -157,7 +157,7 @@ fn overloads_model_the_documented_signatures() {
 fn arity_boundaries_accept_and_reject_the_right_calls() {
     for src in [
         "CROSSFILTER ( Sales[CustomerKey], Customer[CustomerKey], BOTH )",
-        "CROSSFILTER ( Sales[CustomerKey], Customer[CustomerKey], 0 )",
+        "CROSSFILTER ( Sales[CustomerKey], Customer[CustomerKey], ONEWAY )",
         "RELATED ( 'Product'[List Price] )",
         "RELATED ( [Amount] )",
         "RELATEDTABLE ( Sales )",

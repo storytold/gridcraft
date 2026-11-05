@@ -39,7 +39,9 @@ pub fn pivot_cross(model: &DataModel, measure: &str, row_fields: &[PivotField], 
         .and_then(|measure| measure.table.as_deref())
         .and_then(|table| model.table_index(table));
     let Some(table_index) = table_index else {
-        return Err(PivotError::Eval(EvalError::new(format!("measure `{measure}` has no home table; pass a table explicitly"))));
+        return Err(PivotError::Eval(EvalError::new(format!(
+            "measure `{measure}` has no home table; give the measure a home table or set `PivotTable::source_table`"
+        ))));
     };
     let source = model.tables.get(table_index).ok_or_else(|| PivotError::Eval(EvalError::new("missing table")))?;
 

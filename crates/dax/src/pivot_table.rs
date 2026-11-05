@@ -48,7 +48,10 @@
 //!   over any number of hops) restricts the source table. A source row whose key has no related
 //!   row — an orphan key, shown as `(Blank)` — belongs to the related table's BLANK member, so the
 //!   `(Blank)` cell counts it and the leaf rows still add up to the grand total. A BLANK foreign
-//!   key is an orphan as well: a relationship never joins one.
+//!   key is an orphan as well: a relationship never joins one. A related field whose one side
+//!   repeats a key resolves to its lowest row id for the *label*, while the cell's filter passes
+//!   every related key, so a source row can be counted in more than one leaf cell in that model;
+//!   a one-side key that must be unique is what `integrity` reports as a duplicate-key finding.
 //!   A label column of a related field is named `Table[Column]`, so two dimensions with a column
 //!   of the same name stay distinguishable; source-table fields keep the bare column name.
 //!
@@ -384,7 +387,7 @@ impl<'a> Plan<'a> {
             let field =
                 resolved.into_iter().next().ok_or_else(|| PivotTableError::UnknownField { pivot: name.clone(), field: filter.field.clone() })?;
             let bound = bind_field(model, table, &table_name, field)?;
-            let allowed = filter.allowed.iter().map(ScalarKey::from).collect();
+            let allowed = filter.allowed.iter().map(|value| crate::value::folded_key(&ScalarKey::from(value))).collect();
             filters.push((bound, allowed));
         }
 
@@ -513,7 +516,7 @@ impl<'a> Plan<'a> {
     fn passes(&self, row: &[Scalar]) -> bool {
         self.filters.iter().all(|(field, allowed)| {
             let value = row.get(field.field.column).cloned().unwrap_or(Scalar::Blank);
-            allowed.contains(&ScalarKey::from(&value))
+            allowed.contains(&crate::value::distinct_key(&value))
         })
     }
 
@@ -1045,10 +1048,12 @@ fn model_field_value(model: &DataModel, row: &[Scalar], field: &BoundField) -> S
 /// off-diagonal combination leaves the column's filter empty, and an empty filter matches no row,
 /// so the cell is BLANK rather than the other axis's total.
 pub(crate) fn narrow_to_key(context: &mut FilterContext, table: usize, column: usize, key: &ScalarKey) {
+    // Filter keys fold text, so the group key is folded before it is compared with them.
+    let key = crate::value::folded_key(key);
     match context.filters.get(&(table, column)) {
         // The intersection with `{key}` is empty: no row can satisfy both axes.
-        Some(allowed) if !allowed.contains(key) => context.set(table, column, std::iter::empty()),
-        _ => context.set(table, column, [key.clone()]),
+        Some(allowed) if !allowed.contains(&key) => context.set(table, column, std::iter::empty()),
+        _ => context.set(table, column, [key]),
     }
 }
 

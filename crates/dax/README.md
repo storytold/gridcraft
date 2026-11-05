@@ -387,8 +387,8 @@ Variadic overloads repeat their last parameter kind for every additional argumen
 `Binder::bind_expression` resolves `Table[Column]`, measures, variables and function calls;
 `Binder::bind_measure` and `Binder::dependency_graph` expose direct measure dependencies and reject
 cycles. `Evaluator::new` pre-binds the measures and evaluates scalar or table expressions with a
-`FilterContext`; `pivot::pivot` groups a measure by row fields. `dax eval`, `dax bind` and
-`dax pivot` expose the same surfaces through the CLI.
+`FilterContext`; `pivot::pivot` groups a measure by row fields. This crate has no CLI of its own:
+the `dax` subcommands land with the engine slice, which is the crate that depends on it.
 
 The evaluator's core switch implements the scalar spine — literals, operators, `VAR`/`RETURN`,
 context transition, `CALCULATE`/`FILTER`/`ALL`/`VALUES`/`DISTINCT`/`SELECTEDVALUE`, the
