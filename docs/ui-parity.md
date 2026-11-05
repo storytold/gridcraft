@@ -14,7 +14,6 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 
 | Element | Excel | GridCraft | Status |
 |---|---|---|---|
-| 2026-11-04 | minor | AutoFilter checkboxes and hidden-choice merging use the active row criterion, including raw/formatted Values, custom comparisons, Top 10, averages and colors; Values criteria use one prepared ASCII-insensitive lookup per query (#2641) |
 | 2026-10-14 | minor | Dialogs (Find and Replace, Go To, Format Cells, Sort and the rest) move by their title bar instead of staying pinned to the centre (#1250) |
 | Title bar, Quick Access Toolbar, AutoSave toggle | yes | yes | done; macOS window controls misaligned (#170), Dock icon size (#169) |
 | Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable, Header & Footer tabs); Fill Color, Font Color and the Format Cells colour pickers end with Recent Colors and More Colors… (#928); large split buttons (Formulas › AutoSum); arrows at the card's edges scroll a tab wider than the window | done; missing contextual tabs for pictures, shapes, sparklines, slicers; groups do not collapse when narrow |
@@ -266,6 +265,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | AutoFilter checkboxes and hidden-choice merging use the active row criterion, including raw/formatted Values, custom comparisons, Top 10, averages and colors; Values criteria use one prepared ASCII-insensitive lookup per query (#2641) |
 | 2026-11-02 | minor | Form controls: buttons, sliders (scroll bars) and spin buttons placed, worked, selected and edited on the sheet (Insert › Controls, Assign Action, Format Control); catalog 281 / 296 |
 | 2026-11-03 | minor | Highlight the active cell's row: a global preference that tints the whole row, off by default |
 | 2026-11-03 | minor | The formula bar's bottom edge is a resize handle: dragging it sets the bar's height in whole lines, up to half the window, and dragging it to one line collapses it; expanding (the chevron, Ctrl+Shift+U) returns to the dragged height, which is kept with the UI preferences. `view.expandFormulaBar {lines}` sets it (#1246) |
