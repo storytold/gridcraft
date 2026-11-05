@@ -82,6 +82,9 @@ pub(super) fn group_name(g: PivotDateGroup) -> &'static str {
         PivotDateGroup::Quarters => "quarters",
         PivotDateGroup::Months => "months",
         PivotDateGroup::Days => "days",
+        PivotDateGroup::Hours => "hours",
+        PivotDateGroup::Minutes => "minutes",
+        PivotDateGroup::Seconds => "seconds",
     }
 }
 
@@ -105,6 +108,9 @@ pub(super) fn group_param(v: Option<&str>) -> Option<PivotDateGroup> {
         "quarters" | "quarter" => PivotDateGroup::Quarters,
         "months" | "month" => PivotDateGroup::Months,
         "days" | "day" => PivotDateGroup::Days,
+        "hours" | "hour" => PivotDateGroup::Hours,
+        "minutes" | "minute" => PivotDateGroup::Minutes,
+        "seconds" | "second" => PivotDateGroup::Seconds,
         "none" | "ungroup" => PivotDateGroup::None,
         _ => return None,
     })

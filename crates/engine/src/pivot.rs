@@ -12,8 +12,8 @@ use gridcraft_core::date::datetime_from_serial;
 pub use gridcraft_core::quote_sheet;
 use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, split_sheet};
 use gridcraft_model::{
-    BorderLine, BorderStyle, Cell, Chart, Color, Fill, HAlign, NumFmt, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs,
-    PivotSort, PivotTable, PivotValue, Series, Style, StyleId, Workbook,
+    BorderLine, BorderStyle, Cell, Chart, Color, Fill, HAlign, NumFmt, NumberBucket, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout,
+    PivotNumberGroup, PivotShowAs, PivotSort, PivotTable, PivotValue, Series, Style, StyleId, Workbook,
 };
 
 use crate::pivot_calc::CalcSet;
@@ -27,7 +27,7 @@ use charts::rebind_charts;
 pub use charts::{chart_link, chart_series, clear_output, links_to, parse_chart_link};
 use compute::compute_from;
 pub use compute::{NOT_A_VALUE_CELL, detail_cells, detail_records};
-pub use items::{distinct_labels, func_caption, item_label};
+pub use items::{Grouping, distinct_labels, func_caption, hour_caption, item_label};
 #[cfg(test)]
 use output::data_cols_exceed_sheet;
 pub use output::{CellKind, OutCell, Output, RowKind};
