@@ -15,7 +15,7 @@ use gridcraft_core::{CellError, DateSystem, Value};
 pub use builtin::{builtin_format, builtin_id};
 pub use decimal::format_general_fit;
 
-use parse::{SecKind, Section, Tok};
+use parse::{DatePart, SecKind, Section, Tok};
 use render::Out;
 
 /// Width (in characters) of General output in a cell.
@@ -36,6 +36,24 @@ pub enum FormatColor {
     Yellow,
     /// `[Color1]`..`[Color56]` (palette index).
     Indexed(u8),
+}
+
+impl FormatColor {
+    /// RGB value used to render this number-format color.
+    pub fn rgb(self) -> Option<[u8; 3]> {
+        use FormatColor as F;
+        Some(match self {
+            F::Black => [0, 0, 0],
+            F::Blue => [0, 0, 255],
+            F::Cyan => [0, 255, 255],
+            F::Green => [0, 255, 0],
+            F::Magenta => [255, 0, 255],
+            F::Red => [255, 0, 0],
+            F::White => [255, 255, 255],
+            F::Yellow => [255, 255, 0],
+            F::Indexed(index) => return gridcraft_core::color::indexed_color(index),
+        })
+    }
 }
 
 /// Best guess at the ribbon's number-format category.
@@ -98,13 +116,38 @@ impl Default for NumberFormat {
     }
 }
 
+/// Longest number format code, in characters (not bytes), that is parsed: Excel's own limit.
+/// A longer code is invalid: [`NumberFormat::parse`] returns a General format (the cell shows
+/// its value unformatted; the stored code is kept as is) and `TEXT` returns `#VALUE!`. The cap
+/// also bounds every allocation that scales with the number of placeholders in a code.
+pub const MAX_FORMAT_CODE_CHARS: usize = 255;
+
+/// True when `code` is longer than [`MAX_FORMAT_CODE_CHARS`] characters.
+fn too_long(code: &str) -> bool {
+    // A code of more than 255 bytes can still be short in characters; count only when needed.
+    code.len() > MAX_FORMAT_CODE_CHARS && code.chars().count() > MAX_FORMAT_CODE_CHARS
+}
+
 impl NumberFormat {
-    /// Parses a format code. Never fails: unknown or malformed parts degrade to literal text.
+    /// Parses a format code. Never fails: unknown or malformed parts degrade to literal text, and
+    /// a code longer than [`MAX_FORMAT_CODE_CHARS`] characters degrades to General.
     pub fn parse(code: &str) -> NumberFormat {
+        Self::parse_inner(code, false)
+    }
+
+    /// `parse` without the length cap, so tests can reach renderer paths a capped code cannot.
+    #[cfg(test)]
+    fn parse_uncapped(code: &str) -> NumberFormat {
+        Self::parse_inner(code, true)
+    }
+
+    fn parse_inner(code: &str, uncapped: bool) -> NumberFormat {
+        #[cfg(test)]
+        parse_cache::count_parse();
         let trimmed = code.trim();
         // `checkbox` marks a checkbox cell (Insert › Checkbox): TRUE/FALSE draw as a box, any other
         // value displays as General.
-        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("general") || trimmed == "checkbox" {
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("general") || trimmed == "checkbox" || (!uncapped && too_long(code)) {
             return NumberFormat {
                 inner: Arc::new(Inner { code: code.to_string(), general: true, sections: Vec::new(), num_sections: 0, text_section: None }),
             };
@@ -148,6 +191,18 @@ impl NumberFormat {
     /// True when the code contains date or time tokens.
     pub fn is_date(&self) -> bool {
         self.num_sections().iter().any(|s| s.kind == SecKind::Date)
+    }
+
+    /// For a date or time format, whether the section that formats `value` shows calendar parts (year, month,
+    /// day) and whether it shows time parts, as `(date, time)`. `None` for any other format and for
+    /// elapsed-time codes like `[h]:mm`, whose value is a duration, not a moment.
+    pub fn date_shape(&self, value: f64) -> Option<(bool, bool)> {
+        let s = self.select(value).map(|(s, _)| s).filter(|s| s.kind == SecKind::Date)?;
+        let parts = || s.toks.iter().filter_map(|t| if let Tok::Date(d) = t { Some(*d) } else { None });
+        if parts().any(|d| matches!(d, DatePart::ElapsedH(_) | DatePart::ElapsedM(_) | DatePart::ElapsedS(_))) {
+            return None;
+        }
+        Some((parts().any(DatePart::is_calendar), parts().any(|d| !d.is_calendar())))
     }
 
     pub fn is_percent(&self) -> bool {
@@ -261,7 +316,8 @@ impl NumberFormat {
         let Some(mut out) = out else {
             return (Formatted { text: OVERFLOW.into(), color: sec.color, fill: None, numeric: true }, true);
         };
-        if minus && sec.kind != SecKind::Text {
+        // Excel drops the minus sign when the first section shows a negative number as all zeros.
+        if minus && sec.kind != SecKind::Text && !out.zero {
             out.prepend("-");
         }
         (Formatted { text: out.text, color: sec.color, fill: out.fill, numeric: true }, false)
@@ -294,6 +350,78 @@ pub fn format_value(v: &Value, fmt: &NumberFormat, sys: DateSystem) -> Formatted
     }
 }
 
+/// A small per-thread cache of parsed format codes for callers that format many values with the
+/// same code (`TEXT` over a range, chart labels). A parsed format depends on the code text only
+/// (the date system and values are applied when formatting), so the code is the whole key.
+mod parse_cache {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    use super::NumberFormat;
+
+    /// Most codes kept per thread. A full cache is emptied, so memory stays bounded.
+    pub(super) const CAPACITY: usize = 64;
+    /// Longer codes are parsed every time and never stored.
+    pub(super) const MAX_CODE_LEN: usize = 256;
+
+    thread_local! {
+        static CACHE: RefCell<HashMap<String, NumberFormat>> = RefCell::new(HashMap::new());
+    }
+
+    pub(super) fn get(code: &str) -> NumberFormat {
+        if code.len() > MAX_CODE_LEN {
+            return NumberFormat::parse(code);
+        }
+        // Not usable (thread shutting down, re-entered): parse without the cache.
+        let cached = CACHE
+            .try_with(|c| {
+                let mut c = c.try_borrow_mut().ok()?;
+                if let Some(f) = c.get(code) {
+                    return Some(f.clone());
+                }
+                let f = NumberFormat::parse(code);
+                if c.len() >= CAPACITY {
+                    c.clear();
+                }
+                c.insert(code.to_string(), f.clone());
+                Some(f)
+            })
+            .ok()
+            .flatten();
+        cached.unwrap_or_else(|| NumberFormat::parse(code))
+    }
+
+    #[cfg(test)]
+    thread_local! {
+        static PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    #[cfg(test)]
+    pub(super) fn count_parse() {
+        let _ = PARSES.try_with(|p| p.set(p.get() + 1));
+    }
+
+    /// Parses done on this thread so far (tests only).
+    #[cfg(test)]
+    pub(super) fn parses() -> usize {
+        PARSES.try_with(std::cell::Cell::get).unwrap_or(0)
+    }
+
+    /// Empties this thread's cache (tests only).
+    #[cfg(test)]
+    pub(super) fn clear() {
+        let _ = CACHE.try_with(|c| c.borrow_mut().clear());
+    }
+}
+
+impl NumberFormat {
+    /// Like [`NumberFormat::parse`], but remembers recently parsed codes (per thread, bounded) so
+    /// formatting many values with one code parses it once. Same result as `parse`.
+    pub fn parse_cached(code: &str) -> NumberFormat {
+        parse_cache::get(code)
+    }
+}
+
 /// The `TEXT()` worksheet function: formats a value with a format code. Numeric text is
 /// converted to a number first; other text and booleans (as `TRUE`/`FALSE`) go through the text
 /// section, or are returned as is.
@@ -301,7 +429,10 @@ pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, C
     if code.is_empty() {
         return Ok(String::new());
     }
-    let fmt = NumberFormat::parse(code);
+    if too_long(code) {
+        return Err(CellError::Value);
+    }
+    let fmt = NumberFormat::parse_cached(code);
     let n = match v.scalar() {
         Value::Error(e) => return Err(e),
         Value::Empty => 0.0,

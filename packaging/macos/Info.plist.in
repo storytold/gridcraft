@@ -6,6 +6,30 @@
 <dict>
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
+  <!-- UI translations are embedded in Rust; declare them for AppKit's system dialogs (open and
+       save panels, overwrite confirmation). Keep in sync with the interface languages. -->
+  <key>CFBundleLocalizations</key>
+  <array>
+    <string>en</string>
+    <string>cs</string>
+    <string>de</string>
+    <string>el</string>
+    <string>es</string>
+    <string>fr</string>
+    <string>it</string>
+    <string>ja</string>
+    <string>ko</string>
+    <string>nl</string>
+    <string>pl</string>
+    <string>pt-BR</string>
+    <string>ro</string>
+    <string>ru</string>
+    <string>sr</string>
+    <string>tr</string>
+    <string>uk</string>
+    <string>vi</string>
+    <string>zh-Hans</string>
+  </array>
   <key>CFBundleDisplayName</key>
   <string>GridCraft</string>
   <key>CFBundleName</key>
@@ -111,6 +135,39 @@
       <key>CFBundleTypeMIMETypes</key>
       <array><string>text/tab-separated-values</string></array>
     </dict>
+    <!-- .xlsb and .ods are imported (data only) into a new workbook that saves as .xlsx. -->
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Excel Binary Workbook</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>com.microsoft.excel.sheet.binary.macroenabled</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>xlsb</string></array>
+      <key>CFBundleTypeMIMETypes</key>
+      <array><string>application/vnd.ms-excel.sheet.binary.macroEnabled.12</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>OpenDocument Spreadsheet</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>org.oasis-open.opendocument.spreadsheet</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>ods</string></array>
+      <key>CFBundleTypeMIMETypes</key>
+      <array><string>application/vnd.oasis.opendocument.spreadsheet</string></array>
+    </dict>
   </array>
 
   <!-- Types macOS may not know; the system's own declaration wins when it has one. -->
@@ -132,6 +189,24 @@
         <array><string>xlsm</string></array>
         <key>public.mime-type</key>
         <array><string>application/vnd.ms-excel.sheet.macroEnabled.12</string></array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>com.microsoft.excel.sheet.binary.macroenabled</string>
+      <key>UTTypeDescription</key>
+      <string>Excel Binary Workbook</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+        <string>public.zip-archive</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>xlsb</string></array>
+        <key>public.mime-type</key>
+        <array><string>application/vnd.ms-excel.sheet.binary.macroEnabled.12</string></array>
       </dict>
     </dict>
   </array>

@@ -8,9 +8,18 @@
 //! (bytes arrive asynchronously through `Services::inbox`); Save downloads the file; dropped
 //! files are read asynchronously.
 //!
-//! URL query flags: `?webgl` forces WebGL2; `?sample=sales|budget|grades` opens a sample.
+//! URL query flags: `?webgl` forces WebGL2; `?sample=sales|budget|grades` opens a sample;
+//! `?host=parent` (inside an `<iframe>`) talks to a same-origin parent page instead: it sends the
+//! workbook to open and stores what GridCraft saves (`host`), and `&author=` names the user for
+//! notes and comments. `?chrome=none|notitlebar|nofiletab` leaves the title bar and/or the File tab
+//! undrawn for a host that embeds the sheet in its own window (see `Chrome`). Preferences (theme,
+//! interface size, editing options…) are kept in `localStorage` (`prefs`).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(target_arch = "wasm32")]
+mod host;
+#[cfg(any(target_arch = "wasm32", test))]
+mod prefs;
 #[cfg(target_arch = "wasm32")]
 mod web;
 

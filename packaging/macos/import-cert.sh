@@ -12,17 +12,23 @@ umask 077
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 
-if [ -z "${APPLE_CERTIFICATE:-}" ]; then
+if [[ -z "${APPLE_CERTIFICATE:-}" ]]; then
   warn "APPLE_CERTIFICATE is not set: macOS builds will be ad-hoc signed and not notarized"
   exit 0
 fi
 
-TMP="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
-KEYCHAIN="$TMP/gridcraft-signing.keychain-db"
-CERT="$TMP/gridcraft-signing.p12"
+BASE="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+# A private directory created exclusively, not predictable names in a possibly shared temp
+# root: another local user's symlink at `gridcraft-signing.p12` would otherwise select the
+# write target and capture the decoded certificate.
+WORK="$(mktemp -d "$BASE/gridcraft-signing.XXXXXXXX")"
+KEYCHAIN="$WORK/gridcraft-signing.keychain-db"
+CERT="$WORK/gridcraft-signing.p12"
 KC_PASS="${KEYCHAIN_PASSWORD:-$(openssl rand -hex 24)}"
 
-trap 'rm -f "$CERT"' EXIT
+# Remove only the decoded certificate: the keychain lives in the same directory and codesign
+# needs it until the workflow's "Remove temporary keychain" step deletes it.
+trap 'rm -f "${CERT:-}"' EXIT
 printf '%s' "$APPLE_CERTIFICATE" | base64 --decode >"$CERT"
 security create-keychain -p "$KC_PASS" "$KEYCHAIN"
 security set-keychain-settings -lut 21600 "$KEYCHAIN"
@@ -36,13 +42,13 @@ security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PASS"
 security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
 
 IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | awk '/Developer ID Application/ { print $2; exit }')"
-if [ -z "$IDENTITY" ]; then
+if [[ -z "$IDENTITY" ]]; then
   security find-identity -v -p codesigning "$KEYCHAIN" >&2
   echo "error: no 'Developer ID Application' identity in APPLE_CERTIFICATE" >&2
   exit 1
 fi
 echo "Imported signing identity $IDENTITY"
-if [ -n "${GITHUB_ENV:-}" ]; then
+if [[ -n "${GITHUB_ENV:-}" ]]; then
   { echo "MACOS_SIGN_IDENTITY=$IDENTITY"; echo "MACOS_KEYCHAIN=$KEYCHAIN"; } >>"$GITHUB_ENV"
 else
   echo "MACOS_SIGN_IDENTITY=$IDENTITY"
