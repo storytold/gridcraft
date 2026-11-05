@@ -37,10 +37,11 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         RELATIONSHIP_FLAGS,
         "Overrides the cross-filter direction of an existing relationship for the duration of \
          the filter context it modifies. The two column arguments identify the relationship \
-         endpoints; the third argument is 0/1/2/3/4 or the words NONE, ONEWAY, BOTH or \
-         TWOWAY. It changes filter propagation in both directions, never which relationship is \
-         active, so it is used as a filter modifier inside CALCULATE and similar functions and \
-         returns no value.",
+         endpoints; the third argument is 0/1/2/3/4 or the words NONE, ONE, ONEWAY, BOTH, \
+         TWOWAY, ONEWAY_LEFTFILTERSRIGHT or ONEWAY_RIGHTFILTERSLEFT (the last two flow from the \
+         first column argument's table to the second's, or back). It changes filter propagation \
+         in both directions, never which relationship is active, so it is used as a filter \
+         modifier inside CALCULATE and similar functions and returns no value.",
         &[
             "CALCULATE ( [Sales Amount], CROSSFILTER ( Sales[CustomerKey], Customer[CustomerKey], BOTH ) )",
             "CALCULATE ( COUNTROWS ( Customer ), CROSSFILTER ( Sales[ProductKey], 'Product'[ProductKey], NONE ) )",
