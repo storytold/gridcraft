@@ -694,6 +694,9 @@ impl Session {
         if locked && !macros::debug::runs_while_locked(id, query) {
             return Err(EngineError::Disabled(id.to_string(), macros::debug::BUSY.into()));
         }
+        // Independent preference commands during a paused debug run must survive
+        // a later macro rollback. Steps execute with the debugger's machine out.
+        let external_prefs = (id != "macro.debug" && self.macro_debug.as_ref().is_some_and(|d| !d.stepping())).then(|| self.prefs.clone());
         let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
         // A dry run inside this command that a panic cuts short leaves journaling paused and its
         // touch log open; the panic branch puts both back.
@@ -889,6 +892,9 @@ impl Session {
             self.group_step = None;
         } else if let Some(uid) = doc_uid {
             self.bound_tail(uid);
+        }
+        if let Some(before_prefs) = external_prefs {
+            macros::debug::note_external_prefs(self, &before_prefs, id, &params, result.is_ok());
         }
         result
     }

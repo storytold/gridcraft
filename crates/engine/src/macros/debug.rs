@@ -113,6 +113,66 @@ impl Debugger {
     }
 }
 
+/// Preserves user-owned preference changes made while a macro debugger is paused.
+///
+/// The debugger's saved preferences are the rollback target. Update only fields
+/// changed by independent commands, leaving macro-owned fields restorable.
+/// A successful explicit write to an already-equal value also counts as a
+/// user choice for that preference.
+pub(crate) fn note_external_prefs(s: &mut Session, before: &crate::Prefs, id: &str, params: &Json, succeeded: bool) {
+    let Some(d) = s.macro_debug.as_mut().filter(|d| !d.stepping()) else {
+        return;
+    };
+    let now = &s.prefs;
+
+    macro_rules! preserve_copy {
+        ($($field:ident),+ $(,)?) => {
+            $(
+                if before.$field != now.$field {
+                    d.prefs.$field = now.$field;
+                }
+            )+
+        };
+    }
+
+    macro_rules! preserve_clone {
+        ($($field:ident),+ $(,)?) => {
+            $(
+                if before.$field != now.$field {
+                    d.prefs.$field = now.$field.clone();
+                }
+            )+
+        };
+    }
+
+    preserve_copy!(autocomplete, default_font_size, default_zoom, sheets_in_new_workbook, r1c1, formula_bar);
+
+    preserve_clone!(enter_direction, user_name, default_font, user_dictionary, recent_functions);
+
+    // Status bar settings are independent flags. Do not retain a macro's
+    // changes to unrelated flags when the user changes just one of them.
+    macro_rules! preserve_stat {
+        ($($field:ident),+ $(,)?) => {
+            $(
+                if before.status_bar.$field != now.status_bar.$field {
+                    d.prefs.status_bar.$field = now.status_bar.$field;
+                }
+            )+
+        };
+    }
+
+    preserve_stat!(average, count, numerical_count, minimum, maximum, sum);
+
+    // Record an explicit preference choice even if a macro already set
+    // the same value, so a subsequent rollback cannot discard that choice.
+    if succeeded && id == "view.defaultZoom" && params.get("percent").is_some() {
+        d.prefs.default_zoom = now.default_zoom;
+    }
+    if succeeded && id == "view.formulaBar" {
+        d.prefs.formula_bar = now.formula_bar;
+    }
+}
+
 /// Each open workbook's uid and its current version, to see which ones a step changes.
 fn versions(s: &Session) -> Vec<(u64, Arc<Workbook>)> {
     s.docs.iter().map(|d| (d.uid, d.wb.clone())).collect()
@@ -715,6 +775,83 @@ mod tests {
             s.new_workbook();
             assert_eq!(s.doc().unwrap().wb.active().unwrap().zoom, 225);
         }
+    }
+
+    /// User preference changes during a pause survive both kinds of discard.
+    #[test]
+    fn debug_external_preferences_survive_discard() {
+        for stop_action in [false, true] {
+            let mut s = zoom_debug_session(json!([
+                {"command": "view.defaultZoom", "params": {"percent": 175}},
+                {"command": "cell.set", "params": {"cell": "A1", "input": "next"}}
+            ]));
+
+            s.execute("macro.debug", json!({"name": "ZoomDebug"})).unwrap();
+            s.execute("macro.debug", json!({"action": "step"})).unwrap();
+
+            assert_eq!(s.prefs.default_zoom, 175);
+            assert!(s.prefs.formula_bar);
+
+            // These changes are made by the user, not by the macro.
+            s.execute("view.defaultZoom", json!({"percent": 150})).unwrap();
+            s.execute("view.formulaBar", json!({"on": false})).unwrap();
+
+            if stop_action {
+                s.execute("automate.stopAction", json!({})).unwrap();
+            } else {
+                s.execute("macro.debug", json!({"action": "stop", "keep": false})).unwrap();
+            }
+
+            assert_eq!(s.prefs.default_zoom, 150);
+            assert!(!s.prefs.formula_bar);
+            assert!(s.macro_debug.is_none());
+
+            s.new_workbook();
+            assert_eq!(s.doc().unwrap().wb.active().unwrap().zoom, 150);
+        }
+    }
+
+    /// Rollback restores macro-owned settings but keeps a user's zoom choice.
+    #[test]
+    fn debug_rollback_restores_only_macro_owned_preferences() {
+        let mut s = zoom_debug_session(json!([
+            {"command": "view.defaultZoom", "params": {"percent": 175}},
+            {"command": "view.formulaBar", "params": {"on": false}},
+            {"command": "cell.set", "params": {"cell": "A1", "input": "next"}}
+        ]));
+
+        s.execute("macro.debug", json!({"name": "ZoomDebug"})).unwrap();
+        s.execute("macro.debug", json!({"action": "step"})).unwrap();
+        s.execute("macro.debug", json!({"action": "step"})).unwrap();
+
+        assert_eq!(s.prefs.default_zoom, 175);
+        assert!(!s.prefs.formula_bar);
+
+        // Only the zoom is independently changed by the user.
+        s.execute("view.defaultZoom", json!({"percent": 150})).unwrap();
+
+        s.execute("macro.debug", json!({"action": "stop", "keep": false})).unwrap();
+
+        assert_eq!(s.prefs.default_zoom, 150);
+        assert!(s.prefs.formula_bar);
+        assert!(s.macro_debug.is_none());
+    }
+
+    /// Explicitly choosing the same zoom during a pause is still a user choice.
+    #[test]
+    fn debug_explicit_same_value_zoom_survives_discard() {
+        let mut s = zoom_debug_session(json!([
+            {"command": "view.defaultZoom", "params": {"percent": 175}},
+            {"command": "cell.set", "params": {"cell": "A1", "input": "next"}}
+        ]));
+
+        s.execute("macro.debug", json!({"name": "ZoomDebug"})).unwrap();
+        s.execute("macro.debug", json!({"action": "step"})).unwrap();
+
+        s.execute("view.defaultZoom", json!({"percent": 175})).unwrap();
+        s.execute("macro.debug", json!({"action": "stop", "keep": false})).unwrap();
+
+        assert_eq!(s.prefs.default_zoom, 175);
     }
 
     #[test]
