@@ -13,6 +13,7 @@ type Harness = egui_kittest::Harness<'static, SheetApp>;
 const SHARE: &str =
     "https://onedrive.live.com/:f:/g/personal/0123456789ABCDEF/EaBcDe?resid=0123456789ABCDEF%21123&ithint=folder&redeem=aHR0cHM6Ly9l#a=1&b=2";
 
+/// A real file the local-link tests can point at.
 fn local_file() -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!("gridcraft-ui-link-{}.txt", std::process::id()));
     std::fs::write(&path, "x").unwrap();
@@ -36,6 +37,7 @@ fn harness() -> Harness {
     show(session)
 }
 
+/// Renders a session's grid in a test harness.
 fn show(session: Session) -> Harness {
     let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
@@ -119,6 +121,7 @@ fn ctrl_alt_click_on_the_link_text_still_extends_the_selection() {
 }
 
 #[test]
+/// A click on a local file link opens the confirmation dialog first.
 fn a_click_on_a_local_file_link_asks_before_opening_it() {
     let mut h = harness();
     click(&mut h, "B6", Modifiers::NONE);
@@ -128,6 +131,7 @@ fn a_click_on_a_local_file_link_asks_before_opening_it() {
 }
 
 #[test]
+/// A click on a `=HYPERLINK()` cell follows its target.
 fn a_click_on_a_hyperlink_formula_follows_it() {
     let mut h = harness();
     click(&mut h, "B8", Modifiers::NONE);
@@ -136,6 +140,7 @@ fn a_click_on_a_hyperlink_formula_follows_it() {
 }
 
 #[test]
+/// A link to a program is refused with a message.
 fn a_click_on_a_link_to_a_program_is_refused_with_a_message() {
     let mut h = harness();
     click(&mut h, "B10", Modifiers::NONE);
@@ -144,6 +149,7 @@ fn a_click_on_a_link_to_a_program_is_refused_with_a_message() {
 }
 
 #[test]
+/// Confirming a folder share link hands the whole URL to the system.
 fn confirming_a_folder_share_link_hands_the_whole_url_to_the_system() {
     let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
     let mut h = harness();
@@ -157,6 +163,7 @@ fn confirming_a_folder_share_link_hands_the_whole_url_to_the_system() {
 }
 
 #[test]
+/// A formula link to a sibling file opens the path resolved from the saved workbook's folder.
 fn a_formula_link_to_a_sibling_file_opens_the_resolved_path_of_a_saved_workbook() {
     #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
     let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();

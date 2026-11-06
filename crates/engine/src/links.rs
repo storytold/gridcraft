@@ -194,6 +194,7 @@ fn file_url_path(rest: &str) -> Result<String, String> {
     Ok(decoded)
 }
 
+/// Decodes `%xx` escapes as UTF-8; `None` when a `%` starts no valid escape or the bytes aren't UTF-8.
 fn percent_decode(s: &str) -> Option<String> {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
@@ -217,6 +218,7 @@ fn is_unc_prefix(path: &str) -> bool {
     b.len() >= 2 && matches!(b[0], b'/' | b'\\') && matches!(b[1], b'/' | b'\\')
 }
 
+/// A file or folder path as a link kind: refused when empty, on a network location or a program.
 fn local(path: &str) -> LinkKind {
     let path = path.trim();
     if path.is_empty() {
@@ -299,6 +301,7 @@ const PROGRAMS: &[&str] = &[
     "dmg",
 ];
 
+/// Whether the name has an extension that runs code when the system opens it ([`PROGRAMS`]).
 fn is_program(path: &Path) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
     let name = name.trim_end_matches(['.', ' ']);
@@ -466,6 +469,7 @@ mod tests {
     }
 
     #[test]
+    /// Paths, `file:` addresses and escaped names classify as local files and folders.
     fn local_files_and_folders_are_recognised() {
         for (target, path) in [
             ("file:///home/u/a%20b.pdf", "/home/u/a b.pdf"),
@@ -504,6 +508,7 @@ mod tests {
     }
 
     #[test]
+    /// Programs, network shares and malformed addresses are refused, after decoding.
     fn local_programs_network_shares_and_bad_addresses_are_refused() {
         for bad in [
             "file://host/share/x.txt",
@@ -539,6 +544,7 @@ mod tests {
     }
 
     #[test]
+    /// Resolution succeeds only for an existing document or folder.
     fn resolving_a_local_link_needs_an_existing_document_or_folder() {
         #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
         let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
