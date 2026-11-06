@@ -68,6 +68,7 @@ fn the_self_test_finds_every_denial() {
         "denied: write in the temporary directory",
         "denied: TCP connection",
         "denied: start a process",
+        "denied: signal another process",
         "denied: UDP socket",
         "denied: list the home directory",
         "works: start a thread",
@@ -136,13 +137,9 @@ fn a_launch_whose_check_fails_runs_nothing() {
     std::fs::remove_dir_all(canary).unwrap();
 }
 
-/// A Python found on this system starts and imports its standard library while confined, with
-/// read access to its installation only. Skipped when there is no `python3`.
-#[test]
-fn python_starts_confined() {
-    if !confines() {
-        return;
-    }
+/// A Python found on this system: the interpreter to run confined, and its installation, the path it
+/// needs to read. `None` when there is no `python3`.
+fn system_python() -> Option<(String, String)> {
     // On macOS `/usr/bin/python3` is a stub that starts Xcode's Python, outside any read path given
     // here; an installed Python comes first.
     let candidates = if cfg!(target_os = "macos") {
@@ -150,16 +147,82 @@ fn python_starts_confined() {
     } else {
         ["/usr/bin/python3", "/usr/local/bin/python3"]
     };
-    let Some(python) = candidates.into_iter().find(|p| Path::new(p).exists()) else {
-        return;
-    };
+    let python = candidates.into_iter().find(|p| Path::new(p).exists())?;
     let prefix = Command::new(python).args(["-c", "import sys; print(sys.base_prefix)"]).output().unwrap();
     let prefix = String::from_utf8_lossy(&prefix.stdout).trim().to_string();
     // A framework build's `bin/python3` only starts `Python.app`'s interpreter as a new process,
     // which the sandbox refuses; the interpreter itself is run instead.
     let framework = Path::new(&prefix).join("Resources/Python.app/Contents/MacOS/Python");
     let real = if framework.exists() { framework } else { std::fs::canonicalize(python).unwrap() };
-    let real = real.to_string_lossy().into_owned();
+    Some((real.to_string_lossy().into_owned(), prefix))
+}
+
+/// Confined, a program can't signal another process (this test, signal 0 delivering nothing), but can
+/// still signal itself and its own threads. On Linux, where the filter names them, it also can't
+/// change another process's limits or priority, or type into a terminal: no call here reaches a real
+/// terminal, since its standard input isn't one.
+#[test]
+fn a_confined_program_leaves_other_processes_alone() {
+    if !confines() {
+        return;
+    }
+    let Some((python, prefix)) = system_python() else {
+        return;
+    };
+    let code = r#"
+import os, signal, sys, threading
+other = int(sys.argv[1])
+def refused(call, *args):
+    try:
+        call(*args)
+    except PermissionError:
+        return True
+    except OSError as e:
+        print("other error", call, args, e)
+    return False
+assert refused(os.kill, other, 0), "a signal to another process"
+os.kill(os.getpid(), 0)
+seen = []
+signal.signal(signal.SIGUSR1, lambda *_: seen.append(1))
+signal.raise_signal(signal.SIGUSR1)
+worker = threading.Thread(target=lambda: signal.pthread_kill(threading.main_thread().ident, signal.SIGUSR1))
+worker.start()
+worker.join()
+assert len(seen) >= 1, "a signal to itself"
+if sys.platform == "linux":
+    import fcntl, resource, termios
+    # macOS answers these for the processes the profile lets it signal, which are only itself.
+    assert refused(os.kill, -1, 0), "a signal to every process"
+    assert refused(os.kill, 0, 0), "a signal to the process group"
+    assert refused(resource.prlimit, other, resource.RLIMIT_NOFILE), "another process's limits"
+    assert refused(os.setpriority, os.PRIO_PROCESS, other, 0), "another process's priority"
+    assert refused(os.setpriority, os.PRIO_USER, 0, 0), "every process's priority"
+    assert refused(os.sched_setaffinity, other, {0}), "another process's processors"
+    assert refused(os.pidfd_open, other), "a handle on another process"
+    resource.prlimit(0, resource.RLIMIT_NOFILE)
+    resource.prlimit(os.getpid(), resource.RLIMIT_NOFILE)
+    os.setpriority(os.PRIO_PROCESS, 0, os.getpriority(os.PRIO_PROCESS, 0))
+    assert refused(fcntl.ioctl, 0, termios.TIOCSTI, b"x"), "typing into a terminal"
+    assert refused(fcntl.ioctl, 0, termios.TIOCSTI | (1 << 32), b"x"), "the same with high bits set"
+    assert refused(fcntl.ioctl, 0, 0x541C, b"x"), "TIOCLINUX"
+print("left alone")
+"#;
+    let me = std::process::id().to_string();
+    let o = cli(&["sandbox-check", "--read", &prefix, "--", &python, "-I", "-c", code, &me]);
+    assert!(o.status.success(), "{}", text(&o));
+    assert!(String::from_utf8_lossy(&o.stdout).contains("left alone"), "{}", text(&o));
+}
+
+/// A Python found on this system starts and imports its standard library while confined, with
+/// read access to its installation only. Skipped when there is no `python3`.
+#[test]
+fn python_starts_confined() {
+    if !confines() {
+        return;
+    }
+    let Some((real, prefix)) = system_python() else {
+        return;
+    };
     let o =
         cli(&["sandbox-check", "--read", &prefix, "--", &real, "-I", "-c", "import json, math, datetime, decimal; print(json.dumps([math.pi > 3]))"]);
     assert!(o.status.success(), "{}", text(&o));
