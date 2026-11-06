@@ -276,6 +276,74 @@ fn inherit_line_format(sh: &mut Sheet, axis: Axis, at: u32, count: u32) {
     }
 }
 
+fn line_would_overflow(line: u32, at: u32, count: u32, limit: u32) -> bool {
+    line >= at && line as u64 + count as u64 >= limit as u64
+}
+
+fn range_would_overflow(range: RangeRef, axis: Axis, at: u32, count: u32, limit: u32) -> bool {
+    let end = if axis == Axis::Rows { range.end.row } else { range.end.col };
+    line_would_overflow(end, at, count, limit)
+}
+
+/// Reordering uses a temporary structural insert. Refuse when that insert would push any
+/// worksheet state that the insert helper shifts past the grid edge: the later delete cannot
+/// recover it. This intentionally rejects some moves when unrelated tail metadata lies after
+/// the destination; it keeps the existing insert/move/delete algorithm lossless.
+fn reorder_would_overflow(sh: &Sheet, axis: Axis, at: u32, count: u32, limit: u32) -> bool {
+    let cell_line = |cell: CellRef| if axis == Axis::Rows { cell.row } else { cell.col };
+    let ranges_overflow = |ranges: &[RangeRef]| ranges.iter().any(|r| range_would_overflow(*r, axis, at, count, limit));
+    let line_info_overflow = if axis == Axis::Rows { &sh.rows } else { &sh.cols }.keys().any(|&line| line_would_overflow(line, at, count, limit));
+    let picture_overflow = sh.cell_pictures.keys().any(|&cell| line_would_overflow(cell_line(cell), at, count, limit));
+    let merge_overflow = ranges_overflow(&sh.merges);
+    let cf_overflow = sh.cond_formats.iter().any(|cf| ranges_overflow(&cf.ranges));
+    let edit_range_overflow = sh.edit_ranges.iter().any(|er| ranges_overflow(&er.ranges));
+    let validation_overflow = sh.validations.iter().any(|dv| ranges_overflow(&dv.ranges));
+    let table_overflow = sh.tables.iter().any(|table| range_would_overflow(table.range, axis, at, count, limit));
+    let autofilter_overflow = sh.autofilter.as_ref().is_some_and(|filter| range_would_overflow(filter.range, axis, at, count, limit));
+    let cell_metadata_overflow = sh.comments.keys().chain(sh.hyperlinks.keys()).any(|&cell| line_would_overflow(cell_line(cell), at, count, limit));
+    let anchor_overflow = sh.object_anchors().any(|anchor| {
+        if anchor.mode == AnchorMode::Absolute {
+            return false;
+        }
+        let (far_col, far_row, _, _) = anchor_corner(sh, anchor);
+        [cell_line(anchor.cell), if axis == Axis::Rows { far_row } else { far_col }]
+            .into_iter()
+            .any(|line| line_would_overflow(line, at, count, limit))
+    });
+    let sparkline_overflow = sh.sparklines.iter().any(|sparkline| line_would_overflow(cell_line(sparkline.cell), at, count, limit));
+    let print_area_overflow = sh.print.print_area.is_some_and(|area| range_would_overflow(area, axis, at, count, limit));
+    let pivot_overflow = sh.pivots.iter().any(|pivot| {
+        line_would_overflow(cell_line(pivot.anchor), at, count, limit)
+            || pivot.last_range.is_some_and(|r| range_would_overflow(r, axis, at, count, limit))
+    });
+    let spill_overflow = sh.spill.keys().chain(sh.spill_ranges.keys()).any(|&cell| line_would_overflow(cell_line(cell), at, count, limit))
+        || sh.spill_ranges.values().any(|&r| range_would_overflow(r, axis, at, count, limit));
+    let cell_overflow = sh.used_range().is_some_and(|r| range_would_overflow(r, axis, at, count, limit));
+
+    line_info_overflow
+        || picture_overflow
+        || merge_overflow
+        || cf_overflow
+        || edit_range_overflow
+        || validation_overflow
+        || table_overflow
+        || autofilter_overflow
+        || cell_metadata_overflow
+        || anchor_overflow
+        || sparkline_overflow
+        || print_area_overflow
+        || pivot_overflow
+        || spill_overflow
+        || cell_overflow
+}
+
+fn check_reorder_push_off_sheet(s: &Session, sheet: usize, axis: Axis, at: u32, count: u32, limit: u32) -> Result<()> {
+    if s.doc()?.wb.sheet(sheet).is_some_and(|sh| reorder_would_overflow(sh, axis, at, count, limit)) {
+        return Err(EngineError::Other("To prevent possible loss of data, rows or columns cannot be shifted off of the worksheet.".into()));
+    }
+    Ok(())
+}
+
 fn check_push_off_sheet(s: &Session, sheet: usize, axis: Axis, at: u32, count: u32, limit: u32) -> Result<()> {
     if let Some(u) = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.used_range()) {
         let last = if axis == Axis::Rows { u.end.row } else { u.end.col };
@@ -400,12 +468,7 @@ fn move_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
         return Ok(json!({(key): range(from, end.saturating_sub(1)).a1()}));
     }
     let sheet = target_sheet(s, p)?;
-    if let Some(u) = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.used_range())
-        && index(u.end) >= before
-        && index(u.end) as u64 + count as u64 >= limit as u64
-    {
-        return Err(EngineError::Other("To prevent possible loss of data, rows or columns cannot be shifted off of the worksheet.".into()));
-    }
+    check_reorder_push_off_sheet(s, sheet, axis, before, count, limit)?;
     // The checks must authorize the sheet this command modifies, not whatever sheet is active:
     // both get the index `target_sheet` resolved (from `sheet`, or a `Sheet!` range or cell).
     check_lines_protection(s, &json!({(key): range(before, before).a1(), "sheet": sheet}), axis, before, count, true)?;
@@ -464,13 +527,7 @@ fn move_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
             infos.retain(|line, _| !(moved_from..moved_from + count).contains(line));
             let movement = Edit::Move { from: source, to_row: if rows { destination } else { 0 }, to_col: if rows { 0 } else { destination } };
             shift_cell_features(sh, &movement);
-            for object in sh
-                .charts
-                .iter_mut()
-                .map(|o| &mut o.anchor)
-                .chain(sh.images.iter_mut().map(|o| &mut o.anchor))
-                .chain(sh.shapes.iter_mut().map(|o| &mut o.anchor))
-            {
+            for object in sh.object_anchors_mut() {
                 if object.mode != AnchorMode::Absolute && (moved_from..moved_from + count).contains(&index(object.cell)) {
                     object.cell = relocate(object.cell);
                 }

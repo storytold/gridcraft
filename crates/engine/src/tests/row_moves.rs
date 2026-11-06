@@ -74,6 +74,119 @@ fn move_rows_rejects_invalid_boundaries_without_mutation() {
 }
 
 #[test]
+fn moving_data_from_the_last_line_is_refused_without_loss() {
+    let mut rows = s();
+    rows.execute("cell.set", json!({"cell":"A1048576", "input":"keep row"})).unwrap();
+    let before = rows.doc().unwrap().wb.clone();
+    let err = rows.execute("sheet.moveRows", json!({"rows":"1048576:1048576", "before":0})).unwrap_err();
+    assert!(err.to_string().contains("cannot be shifted off of the worksheet"));
+    assert_eq!(*rows.doc().unwrap().wb, *before);
+
+    let mut cols = s();
+    cols.execute("cell.set", json!({"cell":"XFD1", "input":"keep column"})).unwrap();
+    let before = cols.doc().unwrap().wb.clone();
+    let err = cols.execute("sheet.moveColumns", json!({"cols":"XFD:XFD", "before":0})).unwrap_err();
+    assert!(err.to_string().contains("cannot be shifted off of the worksheet"));
+    assert_eq!(*cols.doc().unwrap().wb, *before);
+}
+
+#[test]
+fn move_rows_refuses_tail_line_metadata_without_mutation() {
+    for count in [1, 2] {
+        let mut rows = s();
+        let tail = gridcraft_core::MAX_ROWS - count;
+        std::sync::Arc::make_mut(&mut rows.doc_mut().unwrap().wb)
+            .sheet_mut(0)
+            .unwrap()
+            .rows
+            .insert(tail, gridcraft_model::LineInfo { hidden: true, ..Default::default() });
+        let before = rows.doc().unwrap().wb.clone();
+        let err = rows.execute("sheet.moveRows", json!({"rows":"2:2", "count":count, "before":0})).unwrap_err();
+        assert!(err.to_string().contains("cannot be shifted off of the worksheet"), "{err}");
+        assert_eq!(*rows.doc().unwrap().wb, *before);
+    }
+}
+
+#[test]
+fn move_columns_refuses_tail_line_metadata_without_mutation() {
+    for count in [1, 2] {
+        let mut cols = s();
+        let tail = gridcraft_core::MAX_COLS - count;
+        std::sync::Arc::make_mut(&mut cols.doc_mut().unwrap().wb)
+            .sheet_mut(0)
+            .unwrap()
+            .cols
+            .insert(tail, gridcraft_model::LineInfo { hidden: true, ..Default::default() });
+        let before = cols.doc().unwrap().wb.clone();
+        let err = cols.execute("sheet.moveColumns", json!({"cols":"B:B", "count":count, "before":0})).unwrap_err();
+        assert!(err.to_string().contains("cannot be shifted off of the worksheet"), "{err}");
+        assert_eq!(*cols.doc().unwrap().wb, *before);
+    }
+}
+
+#[test]
+fn move_rows_refuses_tail_merge_without_mutation() {
+    for count in [1, 2] {
+        let mut rows = s();
+        let tail = gridcraft_core::MAX_ROWS - count;
+        let sh = std::sync::Arc::make_mut(&mut rows.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sh.merges.push(gridcraft_core::RangeRef::new(CellRef::new(tail.saturating_sub(1), 0), CellRef::new(tail, 0)));
+        let before = rows.doc().unwrap().wb.clone();
+        let err = rows.execute("sheet.moveRows", json!({"rows":"2:2", "count":count, "before":0})).unwrap_err();
+        assert!(err.to_string().contains("cannot be shifted off of the worksheet"), "{err}");
+        assert_eq!(*rows.doc().unwrap().wb, *before);
+    }
+}
+
+#[test]
+fn move_columns_refuses_tail_merge_without_mutation() {
+    for count in [1, 2] {
+        let mut cols = s();
+        let tail = gridcraft_core::MAX_COLS - count;
+        let sh = std::sync::Arc::make_mut(&mut cols.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sh.merges.push(gridcraft_core::RangeRef::new(CellRef::new(0, tail.saturating_sub(1)), CellRef::new(0, tail)));
+        let before = cols.doc().unwrap().wb.clone();
+        let err = cols.execute("sheet.moveColumns", json!({"cols":"B:B", "count":count, "before":0})).unwrap_err();
+        assert!(err.to_string().contains("cannot be shifted off of the worksheet"), "{err}");
+        assert_eq!(*cols.doc().unwrap().wb, *before);
+    }
+}
+
+#[test]
+fn move_rows_refuses_tail_cell_picture_map_without_mutation() {
+    for count in [1, 2] {
+        let mut rows = s();
+        let tail = gridcraft_core::MAX_ROWS - count;
+        let sh = std::sync::Arc::make_mut(&mut rows.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sh.cell_pictures.insert(
+            CellRef::new(tail, 0),
+            std::sync::Arc::new(gridcraft_model::CellPicture { data: vec![1], mime: "image/png".into(), alt: "tail".into() }),
+        );
+        let before = rows.doc().unwrap().wb.clone();
+        let err = rows.execute("sheet.moveRows", json!({"rows":"2:2", "count":count, "before":0})).unwrap_err();
+        assert!(err.to_string().contains("cannot be shifted off of the worksheet"), "{err}");
+        assert_eq!(*rows.doc().unwrap().wb, *before);
+    }
+}
+
+#[test]
+fn move_columns_refuses_tail_cell_picture_map_without_mutation() {
+    for count in [1, 2] {
+        let mut cols = s();
+        let tail = gridcraft_core::MAX_COLS - count;
+        let sh = std::sync::Arc::make_mut(&mut cols.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sh.cell_pictures.insert(
+            CellRef::new(0, tail),
+            std::sync::Arc::new(gridcraft_model::CellPicture { data: vec![1], mime: "image/png".into(), alt: "tail".into() }),
+        );
+        let before = cols.doc().unwrap().wb.clone();
+        let err = cols.execute("sheet.moveColumns", json!({"cols":"B:B", "count":count, "before":0})).unwrap_err();
+        assert!(err.to_string().contains("cannot be shifted off of the worksheet"), "{err}");
+        assert_eq!(*cols.doc().unwrap().wb, *before);
+    }
+}
+
+#[test]
 fn move_rows_checks_named_sheet_protection() {
     let mut s = s();
     s.execute("home.insertSheet", json!({"name":"Protected"})).unwrap();
@@ -163,4 +276,129 @@ fn move_rows_keeps_array_region_with_its_formula_and_rejects_splitting() {
     assert_eq!(f.text, "ROW(A3:A4)");
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(*s.doc().unwrap().wb, *before);
+}
+
+#[test]
+fn move_rows_preserves_sheet_edge_range_reference() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell":"Z1", "input":"=SUM(A5:A1048576)"})).unwrap();
+    s.execute("sheet.moveRows", json!({"rows":"2:3", "before":9})).unwrap();
+    assert_eq!(s.execute("cell.get", json!({"cell":"Z1"})).unwrap()["formula"], "=SUM(A3:A1048576)");
+}
+
+#[test]
+fn move_rows_preserves_sheet_edge_cell_reference() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell":"AA1", "input":"=A1048576"})).unwrap();
+    s.execute("sheet.moveRows", json!({"rows":"2:3", "before":9})).unwrap();
+    assert_eq!(s.execute("cell.get", json!({"cell":"AA1"})).unwrap()["formula"], "=A1048576");
+}
+
+#[test]
+fn move_rows_preserves_sheet_edge_absolute_and_mixed_references() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell":"AC1", "input":"=$A$1048576+A$1048576+$A1048576+SUM(5:1048576)+SUM($A$5:A$1048576)"})).unwrap();
+    s.execute("sheet.moveRows", json!({"rows":"2:3", "before":9})).unwrap();
+    assert_eq!(
+        s.execute("cell.get", json!({"cell":"AC1"})).unwrap()["formula"],
+        "=$A$1048576+A$1048576+$A1048576+SUM(3:1048576)+SUM($A$3:A$1048576)"
+    );
+}
+
+#[test]
+fn move_rows_preserves_sheet_edge_cross_sheet_references() {
+    let mut s = s();
+    s.execute("sheet.rename", json!({"name":"Source"})).unwrap();
+    s.execute("home.insertSheet", json!({"name":"Ref"})).unwrap();
+    s.execute("cell.set", json!({"cell":"A1", "input":"=Source!A1048576+SUM(Source!A5:A1048576)+SUM(Source!5:1048576)"})).unwrap();
+    s.execute("sheet.moveRows", json!({"sheet":"Source", "rows":"2:3", "before":9})).unwrap();
+    assert_eq!(s.execute("cell.get", json!({"cell":"A1"})).unwrap()["formula"], "=Source!A1048576+SUM(Source!A3:A1048576)+SUM(Source!3:1048576)");
+}
+
+#[test]
+fn move_columns_preserves_sheet_edge_range_reference() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell":"A2", "input":"=SUM(E1:XFD1)"})).unwrap();
+    s.execute("sheet.moveColumns", json!({"cols":"B:C", "before":9})).unwrap();
+    assert_eq!(s.execute("cell.get", json!({"cell":"A2"})).unwrap()["formula"], "=SUM(C1:XFD1)");
+}
+
+#[test]
+fn move_columns_preserves_sheet_edge_cell_reference() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell":"A3", "input":"=XFD1"})).unwrap();
+    s.execute("sheet.moveColumns", json!({"cols":"B:C", "before":9})).unwrap();
+    assert_eq!(s.execute("cell.get", json!({"cell":"A3"})).unwrap()["formula"], "=XFD1");
+}
+
+#[test]
+fn move_columns_preserves_sheet_edge_absolute_and_mixed_references() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell":"A4", "input":"=$XFD$1+XFD$1+$XFD1+SUM(E:XFD)+SUM($E$1:XFD$1)"})).unwrap();
+    s.execute("sheet.moveColumns", json!({"cols":"B:C", "before":9})).unwrap();
+    assert_eq!(s.execute("cell.get", json!({"cell":"A4"})).unwrap()["formula"], "=$XFD$1+XFD$1+$XFD1+SUM(C:XFD)+SUM($C$1:XFD$1)");
+}
+
+#[test]
+fn move_columns_preserves_sheet_edge_cross_sheet_references() {
+    let mut s = s();
+    s.execute("sheet.rename", json!({"name":"Source"})).unwrap();
+    s.execute("home.insertSheet", json!({"name":"Ref"})).unwrap();
+    s.execute("cell.set", json!({"cell":"A1", "input":"=Source!XFD1+SUM(Source!E1:XFD1)+SUM(Source!E:XFD)"})).unwrap();
+    s.execute("sheet.moveColumns", json!({"sheet":"Source", "cols":"B:C", "before":9})).unwrap();
+    assert_eq!(s.execute("cell.get", json!({"cell":"A1"})).unwrap()["formula"], "=Source!XFD1+SUM(Source!C1:XFD1)+SUM(Source!C:XFD)");
+}
+
+#[test]
+fn move_rows_preserves_penultimate_line_ranges() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell":"Z1", "input":"=A1048575+SUM(A5:A1048575)"})).unwrap();
+    s.execute("sheet.moveRows", json!({"rows":"2:3", "before":9})).unwrap();
+    assert_eq!(s.execute("cell.get", json!({"cell":"Z1"})).unwrap()["formula"], "=A1048575+SUM(A3:A1048575)");
+}
+
+#[test]
+fn move_columns_preserves_penultimate_line_ranges() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell":"A2", "input":"=XFC1+SUM(E1:XFC1)"})).unwrap();
+    s.execute("sheet.moveColumns", json!({"cols":"B:C", "before":9})).unwrap();
+    assert_eq!(s.execute("cell.get", json!({"cell":"A2"})).unwrap()["formula"], "=XFC1+SUM(C1:XFC1)");
+}
+
+#[test]
+fn move_near_sheet_edge_preserves_tail_reference_through_intermediate_source() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell":"Z1", "input":"=A1048576"})).unwrap();
+    s.execute("sheet.moveRows", json!({"rows":"1048573:1048574", "before":1})).unwrap();
+    assert_eq!(s.execute("cell.get", json!({"cell":"Z1"})).unwrap()["formula"], "=A1048576");
+}
+
+#[test]
+fn move_rows_carries_slicer_and_control_anchors() {
+    let mut s = s();
+    let anchor = gridcraft_model::Anchor { cell: CellRef::new(1, 0), mode: gridcraft_model::AnchorMode::MoveOnly, ..Default::default() };
+    let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+    sh.slicers.push(gridcraft_model::Slicer {
+        id: 1,
+        table: String::new(),
+        column: String::new(),
+        caption: String::new(),
+        anchor,
+        selected: None,
+        columns: 1,
+    });
+    sh.controls.push(gridcraft_model::FormControl { id: 1, anchor, ..Default::default() });
+    let absolute = gridcraft_model::Anchor { cell: CellRef::new(1, 2), mode: gridcraft_model::AnchorMode::Absolute, ..Default::default() };
+    sh.controls.push(gridcraft_model::FormControl { id: 2, anchor: absolute, ..Default::default() });
+    let before = s.doc().unwrap().wb.clone();
+    s.execute("sheet.moveRows", json!({"rows":"2:3", "before":9})).unwrap();
+    let moved = s.doc().unwrap().wb.clone();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.slicers[0].anchor.cell.row, 7);
+    assert_eq!(sh.controls[0].anchor.cell.row, 7);
+    assert_eq!(sh.controls[1].anchor.cell.row, 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(*s.doc().unwrap().wb, *before);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(*s.doc().unwrap().wb, *moved);
 }

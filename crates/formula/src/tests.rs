@@ -567,3 +567,35 @@ fn column_starting_with_at_round_trips() {
         assert_eq!(parse(&text).ok(), Some(Expr::Struct(s)), "printed as {text}");
     }
 }
+
+#[test]
+fn reorder_preserves_row_and_column_sheet_edges() -> Result<(), Box<dyn std::error::Error>> {
+    let rows = Edit::Reorder { axis: Axis::Rows, from: 1, count: 2, before: 9 };
+    let e = parse("SUM(A5:A1048576)+A1048575+A1048576+$A$1048576+A$1048576+$A1048576+SUM(5:1048576)")?;
+    assert_eq!(print(&adjust(e, "S", "S", &rows)), "SUM(A3:A1048576)+A1048575+A1048576+$A$1048576+A$1048576+$A1048576+SUM(3:1048576)");
+
+    let cols = Edit::Reorder { axis: Axis::Cols, from: 1, count: 2, before: 9 };
+    let e = parse("SUM(E1:XFD1)+XFC1+XFD1+$XFD$1+XFD$1+$XFD1+SUM(E:XFD)")?;
+    assert_eq!(print(&adjust(e, "S", "S", &cols)), "SUM(C1:XFD1)+XFC1+XFD1+$XFD$1+XFD$1+$XFD1+SUM(C:XFD)");
+    Ok(())
+}
+
+#[test]
+fn reorder_moves_references_in_source_at_sheet_edge() -> Result<(), Box<dyn std::error::Error>> {
+    let rows = Edit::Reorder { axis: Axis::Rows, from: gridcraft_core::MAX_ROWS - 1, count: 1, before: 0 };
+    let e = parse("A1048576+SUM(1048576:1048576)")?;
+    assert_eq!(print(&adjust(e, "S", "S", &rows)), "A1+SUM(1:1)");
+    let cols = Edit::Reorder { axis: Axis::Cols, from: gridcraft_core::MAX_COLS - 1, count: 1, before: 0 };
+    let e = parse("XFD1+SUM(XFD:XFD)")?;
+    assert_eq!(print(&adjust(e, "S", "S", &cols)), "A1+SUM(A:A)");
+    Ok(())
+}
+
+#[test]
+fn invalid_reorder_still_invalidates_references() -> Result<(), Box<dyn std::error::Error>> {
+    let invalid = Edit::Reorder { axis: Axis::Rows, from: gridcraft_core::MAX_ROWS - 1, count: 2, before: 0 };
+    assert_eq!(print(&adjust(parse("A1048576")?, "S", "S", &invalid)), "#REF!");
+    let invalid = Edit::Reorder { axis: Axis::Cols, from: gridcraft_core::MAX_COLS - 1, count: 2, before: 0 };
+    assert_eq!(print(&adjust(parse("XFD1")?, "S", "S", &invalid)), "#REF!");
+    Ok(())
+}
