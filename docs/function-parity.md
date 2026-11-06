@@ -135,6 +135,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | Number text coercion (arithmetic, VALUE, criteria) follows the system's region in the desktop app: with a decimal comma, `"1,5"` is 1.5, `"1.000,5"` is 1000.5, `"1,0000"` is 1, and `"1.5"` and `"$1"` are `#VALUE!`, as measured in Excel. The CLI and commands keep a decimal point |
 | 2026-11-03 | minor | GROUPBY: a total depth of 2 or more adds a subtotal line for each group of the leading key columns (after the group, or before it for a negative depth) and labels the last line Grand Total; a depth past the key columns, or above 1 with `field_relationship` 1, is `#VALUE!`, as in Excel (#1456 item 1) |
 | 2026-11-01 | minor | Python in cells row: Python mode in the formula bar |
 | 2026-11-01 | minor | Python in cells (stored, not run): `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!` done, with their `ERROR.TYPE` numbers; `PY` still counted as missing |
