@@ -522,10 +522,18 @@ fn functions(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Whether `addr` (`HOST:PORT`, after `control_addr`) is at least shaped like an address: a host of
-/// some kind and a numeric port.
+/// Whether `addr` (`HOST:PORT`, after `control_addr`) is shaped like an address: a hostname or IPv4
+/// address (letters, digits, `-`, `.`, `_`), or a bracketed IPv6 address, and a numeric port.
+/// Whether the host resolves is not checked: the app's machine may be unreachable for now.
 fn valid_connect_addr(addr: &str) -> bool {
-    addr.rsplit_once(':').is_some_and(|(host, port)| !host.is_empty() && port.parse::<u16>().is_ok())
+    let Some((host, port)) = addr.rsplit_once(':') else { return false };
+    if port.parse::<u16>().is_err() {
+        return false;
+    }
+    match host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        Some(v6) => v6.parse::<std::net::Ipv6Addr>().is_ok(),
+        None => !host.is_empty() && host.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_')),
+    }
 }
 
 /// `mcp` (headless, in-process engine) or `mcp --connect PORT|HOST:PORT` (drive a running app
@@ -539,7 +547,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
             let addr = control_addr(c);
             // A malformed address must fail at startup, not on every call the lazy remote would retry it on.
             if !valid_connect_addr(&addr) {
-                return Err(format!("mcp: --connect needs PORT or HOST:PORT with a numeric port, got `{c}`"));
+                return Err(format!("mcp: --connect needs PORT or HOST:PORT (a hostname, IPv4 or [IPv6] address and a numeric port), got `{c}`"));
             }
             match Remote::connect(&addr) {
                 Ok(remote) => Box::new(remote),
@@ -676,11 +684,22 @@ mod tests {
     /// instead of being retried on every call.
     #[test]
     fn mcp_connect_refuses_a_malformed_address_at_startup() {
-        for bad in ["notaport", "127.0.0.1:notaport", ":7979", "127.0.0.1:99999"] {
+        for bad in [
+            "notaport",
+            "127.0.0.1:notaport",
+            ":7979",
+            "127.0.0.1:99999",
+            // A colon in an unbracketed host, a bracketed non-IPv6 host, a space.
+            "bad:host:7979",
+            "::1:7979",
+            "[nope]:7979",
+            "[::1:7979",
+            "two words:7979",
+        ] {
             let e = mcp(&["--connect".to_string(), bad.to_string()]).unwrap_err();
             assert!(e.contains("numeric port"), "{bad}: {e}");
         }
-        for good in ["7979", "127.0.0.1:7979", "localhost:7979", "[::1]:7979"] {
+        for good in ["7979", "127.0.0.1:7979", "localhost:7979", "[::1]:7979", "grid-box_2.local:7979"] {
             assert!(valid_connect_addr(&gridcraft_mcp::control_addr(good)), "{good}");
         }
     }
