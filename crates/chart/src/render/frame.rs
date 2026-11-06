@@ -100,6 +100,13 @@ impl ValAxis<'_> {
 
 /// Draws gridlines, axis labels and the category axis line; returns the plot rectangle.
 pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis>, horizontal: bool, grid: bool) -> Bx {
+    // A plot area placed by hand: with its axis labels, it stands in for the space left; without,
+    // it is the plot itself.
+    let (area, fixed) = match ctx.plot {
+        Some((b, false)) => (b, None),
+        Some((b, true)) => (area, Some(b)),
+        None => (area, None),
+    };
     let ls = LABEL_SIZE;
     let lh = ls * 1.4;
     let ylabels = y.labels();
@@ -120,7 +127,7 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
             CatAxis::Labels(_, o) => o.len() as f32,
             CatAxis::Numeric(..) | CatAxis::Table(..) => 0.0,
         };
-        let plot = Bx { x: area.x + left, y: area.y + lh * 0.5, w: area.w - left - right, h: area.h - lh * 1.5 - 4.0 - lh * levels };
+        let plot = fixed.unwrap_or(Bx { x: area.x + left, y: area.y + lh * 0.5, w: area.w - left - right, h: area.h - lh * 1.5 - 4.0 - lh * levels });
         if !plot.ok() {
             return plot;
         }
@@ -198,7 +205,7 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
         let levels_w: f32 = level_w.iter().sum();
         let right = ylabels.last().map(|(_, t)| ctx.tw(t, ls) / 2.0).unwrap_or(0.0).min(area.w * 0.2) + 2.0;
         let left = (lw + levels_w).max(stub);
-        let plot = Bx { x: area.x + left, y: area.y + 2.0, w: area.w - left - right, h: area.h - lh - 6.0 };
+        let plot = fixed.unwrap_or(Bx { x: area.x + left, y: area.y + 2.0, w: area.w - left - right, h: area.h - lh - 6.0 });
         if !plot.ok() {
             return plot;
         }

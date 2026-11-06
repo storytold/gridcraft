@@ -55,6 +55,7 @@ fn chart(kind: ChartKind) -> Chart {
         source: None,
         by_rows: false,
         pivot: None,
+        layout: Default::default(),
     }
 }
 
@@ -1646,4 +1647,45 @@ fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
+}
+
+/// A plot area and a title placed by hand go where the file puts them.
+#[test]
+fn hand_placed_plot_area_and_title_go_where_the_file_puts_them() {
+    use gridcraft_model::{ChartLayout, ChartRect};
+    let d = sample(ChartKind::ColumnClustered);
+    let (w, h) = (600.0, 400.0);
+    let bars = |c: &Chart| -> Vec<(f32, f32, f32, f32)> {
+        let colors: Vec<_> = d.series.iter().map(|s| s.color).collect();
+        render(c, &d, w, h, &ApproxMeasure)
+            .into_iter()
+            .filter_map(|p| match p {
+                Prim::Rect { x, y, w, h, fill: Some(f), .. } if colors.contains(&f) && w > 2.0 => Some((x, y, x + w, y + h)),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.legend = LegendPos::None;
+    let rect = ChartRect { x: 0.25, y: 0.3, w: 0.5, h: 0.4 };
+    c.layout = ChartLayout { plot: Some(rect), plot_inner: true, title: Some([0.05, 0.02]) };
+    let (x0, y0, x1, y1) = (rect.x * w, rect.y * h, (rect.x + rect.w) * w, (rect.y + rect.h) * h);
+    let inside = bars(&c);
+    assert!(!inside.is_empty());
+    for (bx0, by0, bx1, by1) in &inside {
+        assert!(*bx0 >= x0 - 0.5 && *bx1 <= x1 + 0.5 && *by0 >= y0 - 0.5 && *by1 <= y1 + 0.5, "bar {bx0},{by0}-{bx1},{by1} in {x0},{y0}-{x1},{y1}");
+    }
+    // The plot area is filled: the leftmost bar starts near its left edge, the tallest reaches near its top.
+    let left = inside.iter().map(|b| b.0).fold(f32::MAX, f32::min);
+    let top = inside.iter().map(|b| b.1).fold(f32::MAX, f32::min);
+    assert!(left - x0 < rect.w * w * 0.1 && top - y0 < rect.h * h * 0.2, "left {left} top {top}");
+    let title = render(&c, &d, w, h, &ApproxMeasure).into_iter().find_map(|p| match p {
+        Prim::Text { x, y, text, align, .. } if text == "Quarterly Sales" => Some((x, y, align)),
+        _ => None,
+    });
+    assert_eq!(title, Some((0.05 * w, 0.02 * h, HAlign::Left)));
+    // Holding its axis labels too, the plot itself is smaller than the rectangle.
+    c.layout.plot_inner = false;
+    let outer = bars(&c);
+    assert!(outer.iter().map(|b| b.0).fold(f32::MAX, f32::min) > left + 1.0, "labels take room on the left");
 }
