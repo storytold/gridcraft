@@ -127,6 +127,10 @@ fn save_to_read_only_directory_fails_without_changing_existing_file() {
     }
 }
 
+/// Windows attribute that opts a file out of content indexing.
+#[cfg(windows)]
+const FILE_ATTRIBUTE_NOT_CONTENT_INDEXED: u32 = 0x2000;
+
 /// Creates a writable Windows file that opts out of content indexing.
 #[cfg(windows)]
 fn create_unindexed_file(path: &std::path::Path) {
@@ -148,6 +152,27 @@ fn save_preserves_windows_content_index_opt_out() {
     write_file(dest.to_str().unwrap(), b"new").unwrap();
     assert_eq!(std::fs::read(&dest).unwrap(), b"new");
     assert_ne!(std::fs::metadata(&dest).unwrap().file_attributes() & FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, 0);
+}
+
+/// Replacing a hidden Windows file retains its hidden attribute without adding an indexing opt-out.
+#[cfg(windows)]
+#[test]
+fn save_preserves_windows_hidden_attribute() {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("book.xlsx");
+    std::fs::write(&dest, b"original").unwrap();
+    let status = std::process::Command::new("attrib.exe").arg("+H").arg(&dest).status().unwrap();
+    assert!(status.success(), "failed to set hidden attribute: {status}");
+    let prior = std::fs::metadata(&dest).unwrap().file_attributes();
+    assert_ne!(prior & FILE_ATTRIBUTE_HIDDEN, 0);
+    assert_eq!(prior & FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, 0);
+    write_file(dest.to_str().unwrap(), b"new").unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+    let after = std::fs::metadata(&dest).unwrap().file_attributes();
+    assert_ne!(after & FILE_ATTRIBUTE_HIDDEN, 0);
+    assert_eq!(after & FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, 0);
 }
 
 /// A temporarily locked destination can be replaced without losing its indexing opt-out.

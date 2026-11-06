@@ -955,10 +955,6 @@ fn create_save_temp(path: &std::path::Path, prior: Option<&std::fs::Permissions>
     Ok(temp)
 }
 
-/// Windows attribute that opts a file out of content indexing.
-#[cfg(windows)]
-const FILE_ATTRIBUTE_NOT_CONTENT_INDEXED: u32 = 0x2000;
-
 /// Reads existing attributes before a Windows save, retrying temporary access conflicts.
 #[cfg(windows)]
 fn save_metadata(path: &str) -> Result<Option<std::fs::Metadata>> {
@@ -991,11 +987,6 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     let metadata = save_metadata(path)?;
     #[cfg(not(windows))]
     let metadata = std::fs::metadata(path).ok();
-    #[cfg(windows)]
-    let not_content_indexed = {
-        use std::os::windows::fs::MetadataExt;
-        metadata.as_ref().is_some_and(|m| m.file_attributes() & FILE_ATTRIBUTE_NOT_CONTENT_INDEXED != 0)
-    };
     let prior = metadata.map(|m| m.permissions());
     let mut temp = create_save_temp(std::path::Path::new(path), prior.as_ref()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     temp.write_all(bytes).and_then(|()| temp.flush()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
@@ -1020,12 +1011,12 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
                 Err(e) => return Err(EngineError::Other(format!("{path}: {}", e.error))),
             }
         };
-        if not_content_indexed && let Some(permissions) = prior {
+        if let Some(permissions) = prior {
             // tempfile clears Windows attributes during persist. Restore through
             // the saved handle so a concurrent replacement is not modified.
             saved
                 .set_permissions(permissions)
-                .map_err(|e| EngineError::Other(format!("{path}: saved, but could not restore indexing attributes: {e}")))?;
+                .map_err(|e| EngineError::Other(format!("{path}: saved, but could not restore file attributes: {e}")))?;
         }
         Ok(())
     }
