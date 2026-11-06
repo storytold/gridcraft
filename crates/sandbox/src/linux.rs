@@ -112,6 +112,9 @@ fn denied_calls() -> Vec<libc::c_long> {
         libc::SYS_process_vm_readv,
         libc::SYS_process_vm_writev,
         libc::SYS_pidfd_getfd,
+        libc::SYS_pidfd_open,
+        libc::SYS_pidfd_send_signal,
+        libc::SYS_kcmp,
         // Mounts, namespaces and file handles (ways around path-based rules).
         libc::SYS_mount,
         libc::SYS_umount2,
@@ -150,10 +153,52 @@ fn denied_calls() -> Vec<libc::c_long> {
     calls
 }
 
+/// `who` and `which` of `setpriority` and `ioprio_set` for one process.
+const PRIO_PROCESS: u64 = 0;
+const IOPRIO_WHO_PROCESS: u64 = 1;
+// `libc::Ioctl` differs by C library.
+#[allow(clippy::unnecessary_cast)]
+const TIOCSTI: u64 = libc::TIOCSTI as u64;
+#[allow(clippy::unnecessary_cast)]
+const TIOCLINUX: u64 = libc::TIOCLINUX as u64;
+
+/// What the main filter refuses with `EPERM`: the calls above, and these when their arguments match.
+/// - `clone` without `CLONE_THREAD`: a new process.
+/// - A signal to any process but `me`, whose ID `exec` keeps. Landlock's signal scope needs a newer
+///   kernel than the rest (ABI 6), and `kill(-1, 9)` must not get through on an older one.
+/// - A change to the limits, priority or scheduling of any process but `me`.
+/// - `TIOCSTI` and `TIOCLINUX`, which type into a terminal the program inherited, as when
+///   `gridcraft-cli sandbox-check` runs a program from a shell.
+///
+/// Process IDs and `ioctl` requests are compared as the kernel reads them, in 32 bits, so high bits
+/// set on the 64-bit argument don't get past a rule.
+fn main_rules(me: u32) -> Result<BTreeMap<i64, Vec<SeccompRule>>> {
+    let me = u64::from(me);
+    let word = |arg: u8, op: SeccompCmpOp, value: u64| SeccompCondition::new(arg, SeccompCmpArgLen::Dword, op, value).map_err(not_enforced);
+    let rule = |conditions: Vec<SeccompCondition>| SeccompRule::new(conditions).map_err(not_enforced);
+    let mut rules: BTreeMap<i64, Vec<SeccompRule>> = denied_calls().into_iter().map(|nr| (nr, Vec::new())).collect();
+    let clone_thread = u64::try_from(libc::CLONE_THREAD).map_err(not_enforced)?;
+    let new_process = SeccompCondition::new(0, SeccompCmpArgLen::Qword, SeccompCmpOp::MaskedEq(clone_thread), 0).map_err(not_enforced)?;
+    rules.insert(libc::SYS_clone, vec![rule(vec![new_process])?]);
+    for nr in [libc::SYS_kill, libc::SYS_tkill, libc::SYS_tgkill, libc::SYS_rt_sigqueueinfo, libc::SYS_rt_tgsigqueueinfo] {
+        rules.insert(nr, vec![rule(vec![word(0, SeccompCmpOp::Ne, me)?])?]);
+    }
+    // These take 0 for the caller too.
+    for nr in [libc::SYS_prlimit64, libc::SYS_sched_setaffinity, libc::SYS_sched_setscheduler, libc::SYS_sched_setparam, libc::SYS_sched_setattr] {
+        rules.insert(nr, vec![rule(vec![word(0, SeccompCmpOp::Ne, me)?, word(0, SeccompCmpOp::Ne, 0)?])?]);
+    }
+    for (nr, one_process) in [(libc::SYS_setpriority, PRIO_PROCESS), (libc::SYS_ioprio_set, IOPRIO_WHO_PROCESS)] {
+        let another = rule(vec![word(1, SeccompCmpOp::Ne, me)?, word(1, SeccompCmpOp::Ne, 0)?])?;
+        rules.insert(nr, vec![rule(vec![word(0, SeccompCmpOp::Ne, one_process)?])?, another]);
+    }
+    rules.insert(libc::SYS_ioctl, vec![rule(vec![word(1, SeccompCmpOp::Eq, TIOCSTI)?])?, rule(vec![word(1, SeccompCmpOp::Eq, TIOCLINUX)?])?]);
+    Ok(rules)
+}
+
 /// The filters: the first answers `clone3` with `ENOSYS`, so the C library falls back to `clone`,
 /// whose flags a filter can read (a thread passes `CLONE_THREAD`; a new process doesn't); the
-/// second refuses with `EPERM` the calls above and `clone` without `CLONE_THREAD`; on x86_64 a
-/// third refuses every x32 call, which carries the same architecture value but other numbers.
+/// second is [`main_rules`]; on x86_64 a third refuses every x32 call, which carries the same
+/// architecture value but other numbers.
 fn seccomp() -> Result<()> {
     let arch = arch().ok_or_else(|| SandboxError::Unsupported(format!("no seccomp filter for {}", std::env::consts::ARCH)))?;
     let program = |rules: BTreeMap<i64, Vec<SeccompRule>>, errno: i32| -> Result<BpfProgram> {
@@ -161,13 +206,7 @@ fn seccomp() -> Result<()> {
         SeccompFilter::new(rules, SeccompAction::Allow, SeccompAction::Errno(errno), arch).and_then(BpfProgram::try_from).map_err(not_enforced)
     };
     let clone3 = program(BTreeMap::from([(libc::SYS_clone3, Vec::new())]), libc::ENOSYS)?;
-    let mut rules: BTreeMap<i64, Vec<SeccompRule>> = denied_calls().into_iter().map(|nr| (nr, Vec::new())).collect();
-    let flag = |arg: u8, len: SeccompCmpArgLen, op: SeccompCmpOp, value: u64| {
-        SeccompCondition::new(arg, len, op, value).and_then(|c| SeccompRule::new(vec![c])).map_err(not_enforced)
-    };
-    let clone_thread = u64::try_from(libc::CLONE_THREAD).map_err(not_enforced)?;
-    rules.insert(libc::SYS_clone, vec![flag(0, SeccompCmpArgLen::Qword, SeccompCmpOp::MaskedEq(clone_thread), 0)?]);
-    let main = program(rules, libc::EPERM)?;
+    let main = program(main_rules(std::process::id())?, libc::EPERM)?;
     // Landlock already set no_new_privs, which installing a filter without privileges needs.
     if std::env::consts::ARCH == "x86_64" {
         seccompiler::apply_filter(&x32_filter()).map_err(not_enforced)?;
@@ -212,10 +251,34 @@ mod tests {
     fn the_filters_build_for_both_architectures() {
         // Building only: installing one would confine the test process.
         for arch in [TargetArch::x86_64, TargetArch::aarch64] {
-            let rules: BTreeMap<i64, Vec<SeccompRule>> = denied_calls().into_iter().map(|nr| (nr, Vec::new())).collect();
-            let f = SeccompFilter::new(rules, SeccompAction::Allow, SeccompAction::Errno(1), arch);
+            let f = SeccompFilter::new(main_rules(4242).unwrap(), SeccompAction::Allow, SeccompAction::Errno(1), arch);
             assert!(f.and_then(BpfProgram::try_from).is_ok(), "{arch:?}");
         }
+    }
+
+    #[test]
+    fn the_calls_that_reach_another_process_have_rules() {
+        let rules = main_rules(4242).unwrap();
+        for nr in [
+            libc::SYS_kill,
+            libc::SYS_tkill,
+            libc::SYS_tgkill,
+            libc::SYS_rt_sigqueueinfo,
+            libc::SYS_rt_tgsigqueueinfo,
+            libc::SYS_prlimit64,
+            libc::SYS_setpriority,
+            libc::SYS_ioprio_set,
+            libc::SYS_sched_setaffinity,
+            libc::SYS_sched_setscheduler,
+            libc::SYS_sched_setparam,
+            libc::SYS_sched_setattr,
+        ] {
+            assert_eq!(rules.get(&nr).map(Vec::len), Some(if nr == libc::SYS_setpriority || nr == libc::SYS_ioprio_set { 2 } else { 1 }), "{nr}");
+        }
+        for nr in [libc::SYS_pidfd_open, libc::SYS_pidfd_send_signal, libc::SYS_kcmp] {
+            assert_eq!(rules.get(&nr).map(Vec::len), Some(0), "{nr} is refused outright");
+        }
+        assert_eq!(rules.get(&libc::SYS_ioctl).map(Vec::len), Some(2));
     }
 
     #[test]
