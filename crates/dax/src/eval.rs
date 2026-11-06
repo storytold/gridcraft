@@ -521,8 +521,12 @@ impl<'a> Evaluator<'a> {
         }
         // Without a row frame the answer must be a genuine singleton of the *visible* column, with
         // the `VALUES` collation: a filter of `{"missing"}` that matches no row, or one that matches
-        // both `"A"` and `"a"` (one value), must not answer as if the column held one value.
-        let visible = self.table(table, &ctx.filters).column(column);
+        // both `"A"` and `"a"` (one value), must not answer as if the column held one value. The
+        // storage path answers from the column's dictionary/keys; the row scan is the fallback.
+        let visible = match self.storage_distinct_values(table, column, &ctx.filters) {
+            Some(values) => values,
+            None => self.table(table, &ctx.filters).column(column),
+        };
         let mut distinct: BTreeMap<ScalarKey, Scalar> = BTreeMap::new();
         for value in visible {
             distinct.entry(distinct_key(&value)).or_insert(value);

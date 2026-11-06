@@ -230,7 +230,8 @@ fn return_type_metadata() {
 #[test]
 fn compatibility_flags_are_honest() {
     assert!(!spec("APPROXIMATEDISTINCTCOUNT").flags.excel_compatible);
-    assert!(!spec("DISTINCTCOUNTNOBLANK").flags.excel_compatible);
+    // Excel Microsoft 365 (engine 16.0.9.17+) supports it; older embedded engines do not.
+    assert!(spec("DISTINCTCOUNTNOBLANK").flags.excel_compatible);
     assert!(spec("COUNTROWS").flags.excel_compatible);
     for spec in aggregation_catalog() {
         if spec.name != "APPROXIMATEDISTINCTCOUNT" && spec.name != "DISTINCTCOUNTNOBLANK" {

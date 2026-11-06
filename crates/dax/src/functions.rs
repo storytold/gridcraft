@@ -507,12 +507,13 @@ pub static AGGREGATION: [FunctionSpec; 22] = [
         params: &[required("ColumnName", ParamKind::Column)],
         overloads: &[overload(&[ParamKind::Column])],
         return_type: ReturnType::Integer,
-        flags: FunctionFlags::new(false, false, false, false, true),
+        // dax.guide marks it Excel-compatible from Microsoft 365 engine 16.0.9.17.
+        flags: FunctionFlags::new(false, false, false, true, true),
         sugar_of: None,
         blank_policy: BlankPolicy::Unspecified,
         description: "Counts distinct values in a column, excluding BLANK — DISTINCTCOUNT counts \
-                      BLANK, so this is not pure sugar for it. Not available to Excel's embedded \
-                      engine.",
+                      BLANK, so this is not pure sugar for it. Newer Excel engines (Microsoft 365 \
+                      from 16.0.9.17) support it; older embedded versions reject the name.",
         examples: &["DISTINCTCOUNTNOBLANK ( Store[Area Manager] )"],
     },
     FunctionSpec {
