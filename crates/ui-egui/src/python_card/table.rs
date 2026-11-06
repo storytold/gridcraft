@@ -39,10 +39,12 @@ fn column_widths(table: &PyTable) -> Vec<f32> {
         .collect()
 }
 
-/// The widths, worked out once per table: the table is the same until the cell runs again.
+/// The widths, worked out once per table: the table is the same until the cell runs again. The entry
+/// goes by the table's address, and holds a weak reference so that a later table can't be given it.
 fn widths(ui: &Ui, table: &Arc<PyTable>) -> Arc<Vec<f32>> {
     let id = egui::Id::unique(("python_card_widths", Arc::as_ptr(table) as usize));
-    ui.ctx().data_mut(|d| d.get_temp_mut_or_insert_with(id, || Arc::new(column_widths(table))).clone())
+    let entry = ui.ctx().data_mut(|d| d.get_temp_mut_or_insert_with(id, || (Arc::downgrade(table), Arc::new(column_widths(table)))).clone());
+    entry.1
 }
 
 /// A text on one line, at most [`SHOWN_CHARS`] characters: the work is bounded by that, and a line
@@ -157,6 +159,21 @@ mod tests {
 
     fn table(rows: usize, cols: usize, text: &str) -> PyTable {
         PyTable { rows, cols, data: vec![Value::text(text); rows * cols], total_rows: rows as u64, total_cols: cols as u64, ..PyTable::default() }
+    }
+
+    /// The allocator hands a dropped table's address straight to the next one, as when a cell runs again.
+    #[test]
+    fn a_later_table_gets_widths_of_its_own() {
+        let ctx = egui::Context::default();
+        let mut columns = Vec::new();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            for cols in [2, 5, 3] {
+                let table = Arc::new(table(1, cols, "x"));
+                columns.push(widths(ui, &table).len());
+            }
+        });
+        out.textures_delta.clear();
+        assert_eq!(columns, [2, 5, 3]);
     }
 
     #[test]

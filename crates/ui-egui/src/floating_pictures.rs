@@ -51,6 +51,9 @@ struct Entry {
     /// size or the largest texture allowed), or when it can't be decoded.
     side: u32,
     used: u64,
+    /// Holds the source's address, part of the key, so no later picture can be given it while this entry
+    /// lasts: a picture's bytes can go without any undo step keeping them.
+    source: Option<std::sync::Weak<Vec<u8>>>,
 }
 
 impl Cache {
@@ -67,6 +70,13 @@ impl Cache {
             keep
         });
         self.docs = open.to_vec();
+    }
+
+    /// Ties the entry of `key` to the bytes it was decoded from.
+    fn hold_source(&mut self, key: &Key, source: &std::sync::Arc<Vec<u8>>) {
+        if let Some(entry) = self.entries.get_mut(key) {
+            entry.source = Some(std::sync::Arc::downgrade(source));
+        }
     }
 
     /// The texture for picture `key` drawn with its longer side `want` pixels long.
@@ -106,7 +116,7 @@ impl Cache {
             return texture;
         }
         self.bytes = self.bytes.saturating_add(bytes);
-        self.entries.insert(key, Entry { texture: texture.clone(), bytes, side, used: frame });
+        self.entries.insert(key, Entry { texture: texture.clone(), bytes, side, used: frame, source: None });
         texture
     }
 }
@@ -173,7 +183,11 @@ pub(crate) fn texture(ctx: &egui::Context, doc: u64, image: &Image, rect: egui::
     let px = (rect.width().max(rect.height()) * ctx.pixels_per_point()).ceil();
     let want = if px.is_finite() && px > 0.0 { px.min(u32::MAX as f32) as u32 } else { 1 };
     let key = Key { doc, id: image.id, at: std::sync::Arc::as_ptr(&image.data) as usize, len: image.data.len() };
-    cache(ctx).lock().unwrap_or_else(std::sync::PoisonError::into_inner).texture(ctx, key, &image.data, want)
+    let cache = cache(ctx);
+    let mut cache = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let texture = cache.texture(ctx, key, &image.data, want);
+    cache.hold_source(&key, &image.data);
+    texture
 }
 
 #[cfg(test)]
@@ -195,6 +209,24 @@ mod tests {
     fn frame(ctx: &egui::Context) {
         let mut out = ctx.run_ui(Default::default(), |_| {});
         out.textures_delta.clear(); // nothing consumes the uploads in a headless test
+    }
+
+    #[test]
+    fn a_cached_pictures_address_goes_to_no_later_picture() {
+        let ctx = egui::Context::default();
+        let mut cache = Cache::default();
+        let data = png(4, 4, [10, 120, 200, 255]);
+        let source = std::sync::Arc::new(data.clone());
+        let at = std::sync::Arc::as_ptr(&source) as usize;
+        let k = Key { doc: 1, id: 1, at, len: data.len() };
+        cache.texture(&ctx, k, &source, 16);
+        cache.hold_source(&k, &source);
+        drop(source);
+        let held = cache.entries.get(&k).and_then(|e| e.source.as_ref()).expect("the entry holds it");
+        assert_eq!(held.as_ptr() as usize, at);
+        // The allocator hands a freed block straight back, unless something holds it.
+        let later: Vec<_> = (0..64).map(|_| std::sync::Arc::new(vec![0u8; data.len()])).collect();
+        assert!(later.iter().all(|l| std::sync::Arc::as_ptr(l) as usize != at));
     }
 
     #[test]
