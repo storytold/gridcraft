@@ -57,6 +57,17 @@ impl SheetApp {
         let before = self.session.active_window();
         let zoom_from = matches!(id, "view.zoom" | "view.zoom100" | "view.zoomToSelection").then(|| crate::grid::Trace::key(self));
         let r = self.session.run(id, params);
+        // A workbook the user saved is a workbook they worked with, so it joins the Recent list
+        // the same way an opened one does (#3519). Only the document's own file counts: a PDF is
+        // a print and a CSV copy leaves the workbook without a file of its own, and AutoSave
+        // calls the session directly, so it never reorders the list.
+        if matches!(id, "file.save" | "file.saveAs")
+            && let Ok(saved) = &r
+            && let Some(path) = saved.get("path").and_then(Json::as_str)
+            && self.session.documents().iter().any(|d| d.path.as_deref() == Some(path))
+        {
+            self.record_recent(path);
+        }
         if let Some(from) = zoom_from {
             crate::grid::Trace::keep_through_zoom(self, from);
         }

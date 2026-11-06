@@ -17,11 +17,18 @@ impl SheetApp {
     pub fn after_open(&mut self, path: Option<&str>, r: &Json) {
         self.backstage = None;
         if let Some(path) = path {
-            self.ui.recent.retain(|p| p != path);
-            self.ui.recent.insert(0, path.to_string());
-            self.ui.recent.truncate(20);
+            self.record_recent(path);
         }
         self.show_open_warnings(r);
+    }
+
+    /// Puts a workbook at the front of the Recent list: newest first, once, capped at 20.
+    /// Opening and saving both go through here, so a file the user works with is listed
+    /// whichever way they reached it (#3519).
+    pub(super) fn record_recent(&mut self, path: &str) {
+        self.ui.recent.retain(|p| p != path);
+        self.ui.recent.insert(0, path.to_string());
+        self.ui.recent.truncate(20);
     }
 
     /// Turns the `warnings` a `file.open` result carries into an info-bar notice, choosing the
