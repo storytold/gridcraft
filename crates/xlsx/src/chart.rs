@@ -5,7 +5,9 @@ use std::fmt::Write as _;
 
 use gridcraft_core::{RangeRef, Value, category_levels};
 use gridcraft_formula::{Expr, SheetSel};
-use gridcraft_model::{Chart, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
+use gridcraft_model::{
+    Chart, ChartKind, ChartTextStyle, ChartTextStyles, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook,
+};
 
 use crate::drawing::{dml_color, srgb};
 use crate::xml::{El, esc, num};
@@ -197,6 +199,20 @@ fn read_trendline(t: &El) -> Option<Trendline> {
     })
 }
 
+/// A chart part's text style: its `txPr`, or for a title the first run of its rich text over the
+/// paragraph's defaults.
+fn text_style(e: Option<&El>) -> ChartTextStyle {
+    let Some(e) = e else { return ChartTextStyle::default() };
+    let run = e.path(&["tx", "rich", "p", "r", "rPr"]);
+    let defaults = e.path(&["txPr", "p", "pPr", "defRPr"]).or_else(|| e.path(&["tx", "rich", "p", "pPr", "defRPr"]));
+    let attr = |k: &str| run.and_then(|r| r.attr(k)).or_else(|| defaults.and_then(|d| d.attr(k)));
+    ChartTextStyle {
+        size: attr("sz").and_then(|v| v.trim().parse::<f32>().ok()).map(|v| v / 100.0).filter(|v| (1.0..=400.0).contains(v)),
+        bold: attr("b").map(|v| matches!(v.trim(), "1" | "true")),
+        caps: attr("cap") == Some("all"),
+    }
+}
+
 fn rich_title(t: &El) -> Option<String> {
     let tx = t.child("tx")?;
     if let Some(rich) = tx.child("rich") {
@@ -260,6 +276,16 @@ pub fn read_chart(root: &El) -> Option<Chart> {
             _ => LegendPos::Right,
         },
     };
+    // Labels' style from the first series that has them, else from a group's.
+    let labels =
+        groups.iter().find_map(|(g, _)| g.kids("ser").find_map(|s| s.child("dLbls"))).or_else(|| groups.iter().find_map(|(g, _)| g.child("dLbls")));
+    let text = ChartTextStyles {
+        title: text_style(chart.child("title")),
+        legend: text_style(chart.child("legend")),
+        data_labels: text_style(labels),
+        category_axis: text_style(x_ax),
+        value_axis: text_style(y_ax),
+    };
     let doughnut = plot.child("doughnutChart");
     let hole_size = doughnut.and_then(|g| g.child_val("holeSize")).and_then(|v| v.trim().parse::<u8>().ok()).unwrap_or(75).clamp(10, 90);
     let first_slice_angle =
@@ -287,6 +313,7 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         source: None,
         by_rows: false,
         pivot: root.path(&["pivotSource", "name"]).map(|n| strip_book(n.text.trim()).to_string()).filter(|n| !n.is_empty()),
+        text,
     })
 }
 
