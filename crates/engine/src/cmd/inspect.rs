@@ -5,6 +5,7 @@ use serde_json::{Value as Json, json};
 
 use super::{CommandSpec, EngineError, Result, Session, always, bad, bool_param, cell_param_on, cmd, has_doc, str_param, target_range, target_sheet};
 
+/// Register read-only inspection commands and their bounded range-reading parameters.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "document.inspect", "Inspect Workbook", [], None, "{} → sheets, selection, names, tables, charts, dirty, trust (local|fromFile), history", has_doc, inspect),
@@ -77,6 +78,7 @@ fn inspect(s: &mut Session, _: &Json) -> Result<Json> {
     }))
 }
 
+/// Read a bounded rectangular page of whole rows and return a sheet-qualified continuation range when truncated.
 fn read(s: &mut Session, p: &Json) -> Result<Json> {
     if p.get("maxCells").is_some_and(|v| v.as_u64().is_none_or(|n| n == 0 || n > 1_000_000)) {
         return Err(bad("sheet.read", "maxCells must be a positive integer no greater than 1,000,000"));

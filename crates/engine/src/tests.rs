@@ -4398,6 +4398,7 @@ fn reading_a_range_in_pages() {
 }
 
 #[test]
+/// Check malformed and zero page limits fail without disabling range-size protection.
 fn sheet_read_rejects_invalid_max_cells() {
     let mut s = s();
     for value in [json!(-1), json!(0), json!(-10), json!(1.5), json!("5000"), json!(null), json!(true)] {

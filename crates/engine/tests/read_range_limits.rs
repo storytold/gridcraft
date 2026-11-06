@@ -3,6 +3,7 @@ use gridcraft_engine::Session;
 use serde_json::json;
 
 #[test]
+/// Check oversized integer limits cannot narrow to an absent limit or bypass pagination bounds.
 fn read_range_rejects_oversized_limits_instead_of_silently_disabling_paging() {
     let mut s = Session::new();
     s.new_workbook();

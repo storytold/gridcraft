@@ -239,6 +239,7 @@ fn read_range_pages_long_ranges() {
 }
 
 #[test]
+/// Check the MCP tool propagates invalid page limits as errors instead of reading the whole range.
 fn read_range_rejects_invalid_max_cells() {
     let mut s = server();
     let rows: Vec<Value> = (1..=2000).map(|i| json!([i, i * 2, "x"])).collect();

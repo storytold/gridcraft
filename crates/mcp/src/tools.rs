@@ -25,6 +25,7 @@ impl ToolResult {
     pub fn error(t: impl Into<String>) -> Self {
         Self { content: vec![json!({"type": "text", "text": t.into()})], is_error: true }
     }
+    /// Serialize MCP content blocks with their error indicator, preserving compact JSON text results.
     pub fn to_value(&self) -> Value {
         json!({"content": self.content, "isError": self.is_error})
     }
@@ -131,6 +132,7 @@ pub fn tool_definitions() -> Vec<Value> {
     tools
 }
 
+/// Describe public tool arguments, including the positive range-page budget and its upper bound.
 fn base_tool_definitions() -> Vec<Value> {
     let empty = || obj(json!({}), &[]);
     vec![
@@ -633,6 +635,7 @@ fn screenshot(b: &mut dyn Backend, a: &Args) -> Result<Value, String> {
     b.call("ui.screenshot", json!({"path": req_str(a, "path")?}))
 }
 
+/// Translate tool inputs to engine calls, applying the default page budget when read_range omits maxCells.
 fn dispatch(b: &mut dyn Backend, name: &str, a: &Args) -> Result<Value, String> {
     match name {
         "execute_command" => {
