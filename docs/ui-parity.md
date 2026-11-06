@@ -183,7 +183,10 @@ applies to as it is (#2348).
 Reference boxes (RefEdit) take a range by selection on the grid: while a box is the one being
 picked into, clicking or dragging on the sheet writes the absolute reference into it (with the
 sheet name, quoted when it needs quotes, when the selection is on another sheet:
-`'Rates Table'!$A$2:$A$4`), and typing still edits it. The box's collapse button shrinks the
+`'Rates Table'!$A$2:$A$4`), and typing still edits it. A click on the cell already selected
+writes it too, and so does a second quick click (it does not edit the cell), while clicking into
+the box alone keeps the box's text. While a box picks, a click on a link or a checkbox picks its
+cell, without following the link or toggling the checkbox. The box's collapse button shrinks the
 dialog to the box while the person selects; Escape, Enter or the expand button restore it (Enter
 there does not press OK, which is not shown while collapsed). Cancel, Escape, a ribbon command
 that opens another dialog over it, and a scripted `ui.dialog.cancel` put the sheet and selection
@@ -209,7 +212,11 @@ the constraint value once the operator is int or bin) is no longer picked into: 
 made meanwhile does not land in it when it is shown again.
 The dialog follows the sheet it was opened on by the sheet's identity while the app runs
 (fresh for every sheet added, inserted, copied or read from a file; kept through renames,
-moves, undo and redo), wherever it is moved and whatever it is renamed to. A sheet deleted and
+moves, undo and redo), wherever it is moved and whatever it is renamed to. The sheet is
+recorded when the dialog opens (from the ribbon or a script): a sheet shown before any box
+picks is not the dialog's, so picks there carry its name, and OK or Cancel goes back to the
+sheet the dialog was opened on and its selection; a Data Analysis tool chosen there takes that
+sheet's selection with its name. A sheet deleted and
 another inserted in its place or given its own name, or a copy of it, even in one script batch
 or one undo step, is not taken for it: OK is refused and Cancel leaves the selection where it
 is; an undo that brings the sheet back makes it the dialog's again. The collapse button is
@@ -257,7 +264,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-11-03 | minor | Copy puts a cell that holds a quote on the clipboard as it is (`say "hi"`), quoting only text with a tab or line break, as Excel does; pasting text reads a field as quoted only when its closing quote ends it, so `"hi" there` pastes with its quotes (#2225) |
 | 2026-11-03 | minor | Ctrl+. (Control+. on a Mac): Next Corner of Selection, `selection.nextCorner`: the active cell moves clockwise to the next corner of the selected area, which stays selected, and becomes the anchor, as in Excel (#1442) |
 | 2026-11-02 | minor | Dragging the selection's border onto cells that hold data asks "There's already data here. Do you want to replace it?" (OK replaces, Cancel leaves the sheet and clipboard as they were) through the new `range.move` command (#3136); the row no longer claims Ctrl/Option copy and Shift insert for the border drag, which are not wired yet |
-| 2026-11-02 | minor | RefEdit reference boxes in dialogs: pick a range on the grid, collapse the dialog while selecting; Goal Seek, Solver (with the Model Range of Load/Save) and Data Analysis use them; while collapsed the arrow keys move the selection and Shift+arrow extends it, F4 cycles a reference's anchors, a click elsewhere keeps the box picking, a dialog opened over a picking one puts the selection back, OK stays on the sheet its command showed, and scripted cancel and confirm end a pick like the buttons; the dialog's sheet is followed through the recorded undo steps, so a sheet deleted and recreated under its name is not taken for it and an undo of the deletion brings it back; a box the dialog stops showing is no longer picked into |
+| 2026-11-02 | minor | RefEdit reference boxes in dialogs: pick a range on the grid, collapse the dialog while selecting; Goal Seek, Solver (with the Model Range of Load/Save) and Data Analysis use them; while collapsed the arrow keys move the selection and Shift+arrow extends it, F4 cycles a reference's anchors, a click elsewhere keeps the box picking, a dialog opened over a picking one puts the selection back, OK stays on the sheet its command showed, and scripted cancel and confirm end a pick like the buttons; the dialog's sheet is followed through the recorded undo steps, so a sheet deleted and recreated under its name is not taken for it and an undo of the deletion brings it back; a box the dialog stops showing is no longer picked into; the dialog's sheet is recorded when it opens, not at its first pick |
 | 2026-11-02 | minor | Python mode edits a cell's code in the formula bar's code editor (Ctrl+Alt+Shift+P, `=PY` then Tab, editing a Python cell), with the PY badge beside fx; its keys apply in input order, also several in one frame, and Ctrl+Enter commits through `python.set` (empty code clears the cell), keeping the code and showing the command's message when the code is refused |
 | 2026-11-02 | minor | Insert › Symbols: Equation split button (access keys N E), a gallery of examples, and an equation editor with quick-insert buttons, the error underlined at its position and a live preview; double-clicking an equation edits it |
 | 2026-11-02 | minor | Floating objects: one selection for charts, pictures, shapes and slicers, eight resize handles with matching cursors (right-to-left sheets included), Escape drops the selection |
