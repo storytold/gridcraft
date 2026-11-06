@@ -457,8 +457,7 @@ impl Sheet {
 
     /// A present empty default cell resets its inherited line format; absence would inherit it.
     fn store_cell(&mut self, c: CellRef, cell: Cell) {
-        let inherited = self.inherited_style_id(c);
-        if cell.is_blank() && inherited != StyleId::DEFAULT {
+        if cell.is_blank() && self.inherited_style_id(c) != StyleId::DEFAULT {
             self.cells.set_explicit(c, cell);
         } else {
             self.cells.set(c, cell);
