@@ -411,6 +411,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Description" => "설명",
         "No workbook is open." => "열려 있는 통합 문서가 없습니다.",
         "Save as type" => "파일 형식",
+        "File name" => "파일 이름",
         "Excel Workbook (*.xlsx)" => "Excel 통합 문서 (*.xlsx)",
         "CSV UTF-8 (Comma delimited) (*.csv)" => "CSV UTF-8(쉼표로 분리) (*.csv)",
         "Web Page (*.html)" => "웹 페이지 (*.html)",
