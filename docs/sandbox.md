@@ -153,6 +153,7 @@ Windows, FreeBSD and the web build have no confinement here: `support()` reports
 ```text
 gridcraft-cli sandbox-check
 gridcraft-cli sandbox-check --read /usr -- /usr/bin/python3 -I -c "print(1)"
+gridcraft-cli python-check --code "1 + 1"
 ```
 
 Without a program it runs a confined copy of itself that tries each denied action, plus UDP and
@@ -161,3 +162,7 @@ prints one line per attempt. With a program it runs that program confined. Exit 
 everything is as required, and 1 not, including a launch the launcher refused (for example on a
 Linux kernel without Landlock). 2 means GridCraft has no sandbox for this kind of system at all
 (Windows, FreeBSD, an architecture other than x86_64 or aarch64, macOS without `sandbox-exec`).
+
+`python-check` goes further, through the same worker as a Python cell: it prints the Python found,
+what runs, what it may read and the packages it can import, listed from inside the sandbox, and
+runs each `--code` from its own command line.

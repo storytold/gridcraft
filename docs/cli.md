@@ -32,6 +32,8 @@ cargo install --path apps/gridcraft-cli     # or: cargo run -p gridcraft-cli -- 
 | `functions [--json] [--search X] [--category C]` | `gridcraft-cli functions --search lookup` |
 | `mcp [--connect PORT] [--in FILE \| --sample NAME]` | MCP server on stdio ([mcp.md](mcp.md)). |
 | `send <port> <method> [json]` | `gridcraft-cli send 7979 engine.execute '{"command":"home.bold","params":{"range":"A1:C1"}}'` — one control-channel request to a running app (`gridcraft --control 7979`). |
+| `sandbox-check [--read PATH]... [--exec PATH]... [-- PROGRAM ARGS...]` | `gridcraft-cli sandbox-check`: whether this system confines programs (see below) |
+| `python-check [--python PATH] [--code CODE]...` | `gridcraft-cli python-check --code '1 + 1'`: which Python cells would use here and what it can do (see below) |
 | `version` | Prints `gridcraft-cli <version>`. |
 
 ## `run`

@@ -240,7 +240,7 @@ by their commands either way.
 
 `file.save` and `file.saveAs` through the control channel, also as `app.save` or called by their
 ids, never show a dialog: a workbook with no file and no `path`, and `file.saveAs` with no `path`,
-is the error `missing `path`: programmatic calls never open dialogs`.
+is the error ``missing `path`: programmatic calls never open dialogs``.
 
 Without `wait` a save happens at once, whatever is running. A cell still running or queued stores
 its last result; one that never had a result stores none, and its cached value in the file is
