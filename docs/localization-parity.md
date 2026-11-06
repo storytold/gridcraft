@@ -176,6 +176,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | minor | Correct Greek argument and Options labels, Ukrainian contextual/shared labels, and the Danish linked-cell caption; retain the established Danish Paste Link term and context-appropriate permission infinitives |
 | 2026-11-06 | minor | Preserve regional output alongside main display-precision helpers; align Czech logical tokens with its formula syntax, correct Chinese help labels and Traditional Chinese terms, and repair the Languages table |
 | 2026-11-05 | minor | Complete the Czech 2,427-key interface inventory and review all 762 Czech help rows; correct mathematical and financial terms and synchronize the clarified F-test help key across all 19 translated tables |
 | 2026-11-05 | minor | Search translated command paths with contextual ribbon-tab names; localize Boolean/error format samples and numeric filter captions without changing canonical filter values; correct French agreement and replace 100 English fallback entries in the Ukrainian interface |

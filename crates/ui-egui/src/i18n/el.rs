@@ -325,7 +325,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save the workbook as a web page." => "Αποθηκεύστε το βιβλίο εργασίας ως ιστοσελίδα.",
         "Options|General" => "Γενικά",
         "Options|Save" => "Αποθήκευση",
-        "Options|Editing" => "Editing",
+        "Options|Editing" => "Επεξεργασία",
         "Show formula bar" => "Εμφάνιση γραμμής τύπων",
         "Enable AutoComplete for cell values" => "Ενεργοποίηση αυτόματης συμπλήρωσης τιμών κελιών",
         "Save .xlsx workbooks automatically after every change" => "Αυτόματη αποθήκευση βιβλίων .xlsx μετά από κάθε αλλαγή",

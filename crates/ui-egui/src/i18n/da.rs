@@ -495,6 +495,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Password (optional):" => "Adgangskode (valgfri):",
         "Password:" => "Adgangskode:",
         "Allow all users of this sheet to:" => "Tillad alle brugere af dette ark at:",
+        // Infinitives complete the preceding Danish permission prompt ending in "at:".
         "Format cells" => "Formatere celler",
         "Format columns" => "Formatere kolonner",
         "Format rows" => "Formatere rækker",
@@ -1132,7 +1133,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Check Cell" => "Kontrolcelle",
         "Explanatory Text" => "Forklarende tekst",
         "Input" => "Input",
-        "Linked Cell" => "Kædet celle",
+        "Linked Cell" => "Cellekæde",
         "Note" => "Note",
         "Output" => "Output",
         "Warning Text" => "Advarselstekst",
