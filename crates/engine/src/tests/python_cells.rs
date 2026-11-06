@@ -199,9 +199,13 @@ fn python_cells_survive_native_json() {
 #[test]
 fn new_errors_parse_and_have_error_type_numbers() {
     use gridcraft_core::CellError;
-    for (text, e) in
-        [("#PYTHON!", CellError::Python), ("#BUSY!", CellError::Busy), ("#TIMEOUT!", CellError::Timeout), ("#BLOCKED!", CellError::Blocked)]
-    {
+    for (text, e) in [
+        ("#PYTHON!", CellError::Python),
+        ("#BUSY!", CellError::Busy),
+        ("#TIMEOUT!", CellError::Timeout),
+        ("#BLOCKED!", CellError::Blocked),
+        ("#CONNECT!", CellError::Connect),
+    ] {
         assert_eq!(CellError::parse(text), Some(e));
         assert_eq!(e.as_str(), text);
     }
@@ -210,6 +214,11 @@ fn new_errors_parse_and_have_error_type_numbers() {
     assert_eq!(super::v(&s, "A1"), Value::Number(11.0));
     s.execute("cell.set", json!({"cell": "A2", "input": "=ISERROR(#PYTHON!)"})).unwrap();
     assert_eq!(super::v(&s, "A2"), Value::Bool(true));
+    // #CONNECT! (the Python worker could not start) is 10, the number Excel gives it.
+    s.execute("cell.set", json!({"cell": "A3", "input": "=ERROR.TYPE(#CONNECT!)"})).unwrap();
+    assert_eq!(super::v(&s, "A3"), Value::Number(10.0));
+    s.execute("cell.set", json!({"cell": "A4", "input": "=#connect!"})).unwrap();
+    assert_eq!(super::v(&s, "A4"), Value::Error(CellError::Connect));
 }
 
 #[test]
