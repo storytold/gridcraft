@@ -316,7 +316,6 @@ fn main() -> eframe::Result<()> {
         log::warn!("sample {s}: {e}");
     }
     let mut app = SheetApp::new(session, services());
-    app.watch_desktop_theme();
     app.start_update_check();
     let control_port = control_port;
     load_prefs(&mut app);
@@ -390,6 +389,7 @@ fn main() -> eframe::Result<()> {
                     return Err("the app was already created".into());
                 };
                 SheetApp::setup_context_for_language(&cc.egui_ctx, app.ui.dark, app.ui.language);
+                app.watch_desktop_theme(&cc.egui_ctx);
                 if let Some(port) = control_port {
                     match control_server::start(port, control_token.clone(), cc.egui_ctx.clone()) {
                         Ok(rx) => app.control_rx = Some(rx),

@@ -64,6 +64,7 @@ impl SheetApp {
             effective_dark: false,
             desktop_theme: desktop_theme::DesktopTheme::default(),
             desktop_dark: None,
+            desktop_text_scale: 1.0,
             name_box: None,
             keytips: keytips::KeyTips::default(),
             shots: control::Shots::default(),
@@ -116,7 +117,12 @@ impl SheetApp {
         floating_pictures::forget_closed(ctx, &open);
         self.apply_font_state(ctx);
         if let Some(answer) = self.desktop_theme.take_change() {
-            self.desktop_dark = Some(answer);
+            if let Some(dark) = answer.dark {
+                self.desktop_dark = Some(dark);
+            }
+            if let Some(scale) = answer.text_scale {
+                self.desktop_text_scale = scale;
+            }
         }
         self.sync_theme_preference(ctx);
         self.sync_input_options(ctx);

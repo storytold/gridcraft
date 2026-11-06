@@ -120,8 +120,9 @@ pub struct UiState {
     /// rather than failing the whole `UiState`.
     #[serde(deserialize_with = "i18n::lenient")]
     pub language: i18n::Language,
-    /// Interface size in percent on top of the desktop's scale (100 = Auto), applied as egui's
-    /// zoom factor so the ribbon, menus, dialogs and grid grow together. Kept within
+    /// Interface size in percent on top of the desktop's scale (100 = Auto, following Linux's
+    /// text-scaling-factor when available), applied as egui's zoom factor so the ribbon, menus,
+    /// dialogs and grid grow together. Kept within
     /// [`INTERFACE_SCALE_MIN`]..=[`INTERFACE_SCALE_MAX`]; a malformed saved value reads as 100.
     #[serde(deserialize_with = "lenient_interface_scale")]
     pub interface_scale: u16,
@@ -265,10 +266,12 @@ pub struct SheetApp {
     /// only when it changes this (see `theme::HanOrder`).
     fonts_han: Option<theme::HanOrder>,
     effective_dark: bool,
-    /// The desktop's light/dark choice, watched while the app runs (Linux has no winit answer).
+    /// The desktop's appearance and text size, watched off the frame thread on Linux.
     desktop_theme: desktop_theme::DesktopTheme,
     /// The last answer [`desktop_theme`] gave, so a frame that asks costs nothing.
     desktop_dark: Option<bool>,
+    /// The last usable desktop text scale; Auto uses it on top of each monitor's display scale.
+    desktop_text_scale: f32,
     pub name_box: Option<String>,
     /// Transient ribbon keyboard navigation; never saved with UI preferences.
     pub keytips: keytips::KeyTips,
