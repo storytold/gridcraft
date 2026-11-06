@@ -135,6 +135,24 @@ fn copied_cells_carry_inherited_formats_between_sheets() {
 }
 
 #[test]
+/// Keep the copied style snapshot even when undo lets the live catalog reuse its identifiers.
+fn copied_formats_survive_undo_reusing_the_style_catalog() {
+    let mut s = book();
+    s.execute("home.bold", json!({"range": "2:2"})).unwrap();
+    let original = s.doc().unwrap().wb.styles.get(style(&s, "B2")).clone();
+    s.execute("edit.copy", json!({"range": "2:2"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("home.italic", json!({"range": "D4"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Destination"})).unwrap();
+    s.execute("home.insertCopiedCells", json!({"at": "A5", "shift": "down"})).unwrap();
+    let inserted = style(&s, "B5");
+    assert_eq!(s.doc().unwrap().wb.styles.get(inserted), &original, "clipboard must use its own style snapshot");
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.styles.get(style(&s, "B5")), &original);
+}
+
+#[test]
 /// Check oversized inherited-format transfers leave the workbook, undo stack and clipboard intact.
 fn copied_format_limit_rolls_back_the_whole_insertion() {
     let mut s = book();
