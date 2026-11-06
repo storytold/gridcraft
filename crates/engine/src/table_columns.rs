@@ -76,7 +76,7 @@ pub(crate) fn fill_column(cx: &mut Ctx<'_>, sheet: usize, at: CellRef, previous:
         };
         let sh = cx.sheet_mut(sheet)?;
         let style = sh.style_id(c);
-        sh.set_cell(c, Cell { value: Value::Empty, formula: Some(shifted), style });
+        sh.set_cell(c, Cell { value: Value::Empty, formula: Some(shifted), style, ..Cell::default() });
         cx.touch(sheet, c);
     }
     Ok(())
