@@ -166,9 +166,17 @@ impl OutlinePen for Polygons {
     }
 }
 
+/// Up to this size glyphs are drawn a pixel larger: Excel's small text is as tall as the next size
+/// up. At [`UP_TO`] they aren't, so the next size, drawn the usual way, isn't smaller than this one.
+const LARGER_UP_TO: u32 = UP_TO - 1;
+
+/// The pixel size glyphs of a `nominal` size are drawn at.
+fn drawn_size(nominal: u32) -> u32 {
+    if nominal <= LARGER_UP_TO { nominal + 1 } else { nominal }
+}
+
 fn rasterize(font: &FontRef<'_>, gid: GlyphId, nominal: u32, widen_bold: bool) -> Option<Glyph> {
-    // One pixel larger: Excel's small text is as tall as the next size up.
-    let px = (nominal + 1) as f32;
+    let px = drawn_size(nominal) as f32;
     let outlines = font.outline_glyphs();
     let outline = outlines.get(gid)?;
     let hinting = HintingInstance::new(&outlines, Size::new(px), LocationRef::default(), Target::Mono).ok()?;
@@ -305,30 +313,32 @@ fn small_size(ctx: &Context, font_id: &FontId) -> Option<u32> {
     (px >= 1.0 && px <= UP_TO as f32).then_some(px as u32)
 }
 
-/// Where the baseline goes, in pixels, for a line box whose top is at `top` as the cell's own font
-/// lays it out. The glyphs drawn are larger, and maybe of another face, so their line is placed
-/// in that box as the cell aligns it: descenders where the cell font's end, above the gridline, for
-/// bottom alignment,
-/// ascenders where its start for top, and between the two for centre.
-fn baseline(face: &Face, px: u32, top: f32, valign: VAlign) -> i32 {
+/// Where the baseline goes, in pixels, for a line box `height` pixels tall whose top is at `top`, as
+/// the cell's own font lays it out. The glyphs drawn are larger, and maybe of another face, so their
+/// line is placed in that box as the cell aligns it: for bottom alignment descenders end where the
+/// cell font's do, above the gridline; for top, capitals start where its capitals do; for centre,
+/// capitals and digits are centred in the box, as Excel centres them whatever the font.
+fn baseline(face: &Face, px: u32, top: f32, (valign, height): (VAlign, f32)) -> i32 {
+    // Ascent, descent and capital height, in pixels.
     let metrics = |data: &FontData, size: u32| {
-        font_ref(data).map_or((0.0, 0.0), |f| {
+        font_ref(data).map_or((0.0, 0.0, 0.0), |f| {
             let m = f.metrics(Size::new(size as f32), LocationRef::default());
-            (m.ascent.round(), -m.descent.round())
+            (m.ascent, -m.descent, m.cap_height.unwrap_or(m.ascent * 0.72))
         })
     };
-    let (own_ascent, own_descent) = metrics(&face.own, px);
-    let (ascent, descent) = metrics(&face.data, px + 1);
-    let own = top + own_ascent;
-    // A pixel up: the cell font's descenders end on the row's last pixel, where its gridline is.
-    let by_bottom = own + own_descent - descent - 1.0;
-    let by_top = own - own_ascent + ascent;
+    let (own_ascent, own_descent, own_cap) = metrics(&face.own, px);
+    let (_, descent, cap) = metrics(&face.data, drawn_size(px));
+    let own = top + own_ascent.round();
     let at = match valign {
-        VAlign::Bottom => by_bottom,
-        VAlign::Top => by_top,
-        VAlign::Center | VAlign::Justify | VAlign::Distributed => ((by_bottom + by_top) / 2.0).round(),
+        // A pixel up: the cell font's descenders end on the row's last pixel, where its gridline is.
+        VAlign::Bottom => own + own_descent.round() - descent.round() - 1.0,
+        // Capitals start where the cell font's would.
+        VAlign::Top => own - own_cap + cap,
+        // Capitals and digits centred in the line box, descenders below, as Excel centres them
+        // whatever the font. The faces' ascents differ, so they can't be what is centred.
+        VAlign::Center | VAlign::Justify | VAlign::Distributed => top + height / 2.0 + cap / 2.0,
     };
-    at as i32
+    at.round() as i32
 }
 
 /// The width in points of `text` as [`paint`] draws it, or `None` when it would leave the text to the
@@ -346,16 +356,17 @@ pub(super) fn width(ctx: &Context, font_id: &FontId, text: &str) -> Option<f32> 
     Some(pen / ctx.pixels_per_point())
 }
 
-/// Draws one line of `text` with its line box's top left at `at`. Returns false, having drawn
+/// Draws one line of `text` with its line box's top left at `at`, the box `line.1` points tall and
+/// aligned in its cell by `line.0`. Returns false, having drawn
 /// nothing, when it leaves the text to the usual drawing.
-pub(super) fn paint(p: &Painter, font_id: &FontId, text: &str, at: Pos2, valign: VAlign, color: Color32) -> bool {
+pub(super) fn paint(p: &Painter, font_id: &FontId, text: &str, at: Pos2, line: (VAlign, f32), color: Color32) -> bool {
     let ctx = p.ctx();
     let ppp = ctx.pixels_per_point();
     let Some(px) = small_size(ctx, font_id) else { return false };
     let Some(face) = face(ctx, &font_id.family) else { return false };
     let Some(font) = font_ref(&face.data) else { return false };
     // The baseline stays where the cell's own font puts it, also when a face for small sizes stands in.
-    let baseline = baseline(&face, px, (at.y * ppp).round(), valign);
+    let baseline = baseline(&face, px, (at.y * ppp).round(), (line.0, line.1 * ppp));
     let pass = ctx.cumulative_pass_nr();
     let shared = cache(ctx);
     let mut c = shared.lock();

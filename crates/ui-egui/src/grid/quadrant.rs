@@ -583,7 +583,9 @@ fn paint_line(p: &Painter, line: &Line<'_>) -> (f32, f32) {
     let crisp = super::small_text::width(p.ctx(), line.font, line.text)
         .filter(|own| line.room.is_none_or(|room| *own <= room.max(line.width)))
         .map(|own| (line.at.x + align_shift(line.halign, line.width, own), own));
-    match crisp.filter(|(x, _)| super::small_text::paint(p, line.font, line.text, pos2(*x, line.at.y), line.valign, line.color)) {
+    match crisp
+        .filter(|(x, _)| super::small_text::paint(p, line.font, line.text, pos2(*x, line.at.y), (line.valign, line.galley.size().y), line.color))
+    {
         Some(drawn) => drawn,
         None => {
             p.galley(line.at, line.galley.clone(), line.color);
