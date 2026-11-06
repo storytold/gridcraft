@@ -3,14 +3,12 @@
 use gridcraft_core::{CellRef, RangeRef, Value};
 use serde_json::{Value as Json, json};
 
-use super::{
-    CommandSpec, EngineError, Result, Session, always, bad, bool_param, cell_param_on, cmd, has_doc, str_param, target_range, target_sheet, u32_param,
-};
+use super::{CommandSpec, EngineError, Result, Session, always, bad, bool_param, cell_param_on, cmd, has_doc, str_param, target_range, target_sheet};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "document.inspect", "Inspect Workbook", [], None, "{} → sheets, selection, names, tables, charts, dirty, trust (local|fromFile), history", has_doc, inspect),
-        cmd!(query "sheet.read", "Read Range", [], None, "{range?: \"A1:D10\" (default: used range), sheet?, formulas?: bool, formatted?: bool, maxCells?: positive integer, whole rows up to this many cells} → rows of values; a cut range adds truncated: true, totalRows and next (the range of the remaining rows)", has_doc, read),
+        cmd!(query "sheet.read", "Read Range", [], None, "{range?: \"A1:D10\" (default: used range), sheet?, formulas?: bool, formatted?: bool, maxCells?: integer 1..=1000000, whole rows up to this many cells} → rows of values; a cut range adds truncated: true, totalRows and next (the range of the remaining rows)", has_doc, read),
         cmd!(query "cell.get", "Get Cell", [], None, "{cell?, sheet?} → value, formula, display text, style, comment, link, python {code, output, typeName, preview, stale}", has_doc, cell_get),
         cmd!(query "selection.stats", "Selection Statistics", [], None, "{} → count, sum, average, min, max", has_doc, sel_stats),
         cmd!(query "history.list", "Undo History", [], None, "{} → undo/redo labels, grouping (an undo group is open)", has_doc, history),
@@ -80,8 +78,8 @@ fn inspect(s: &mut Session, _: &Json) -> Result<Json> {
 }
 
 fn read(s: &mut Session, p: &Json) -> Result<Json> {
-    if p.get("maxCells").is_some_and(|v| v.as_u64().is_none_or(|n| n == 0)) {
-        return Err(bad("sheet.read", "maxCells must be a positive integer"));
+    if p.get("maxCells").is_some_and(|v| v.as_u64().is_none_or(|n| n == 0 || n > 1_000_000)) {
+        return Err(bad("sheet.read", "maxCells must be a positive integer no greater than 1,000,000"));
     }
     let sheet = target_sheet(s, p)?;
     let d = s.doc()?;
@@ -100,9 +98,10 @@ fn read(s: &mut Session, p: &Json) -> Result<Json> {
     // `maxCells` reads whole rows up to that many cells (at least one row) and says where the rest
     // starts, so a caller can page through a long range instead of getting it in one reply.
     let total_rows = r.height();
-    let page_rows = u32_param(p, "maxCells").map(|max| (u64::from(max) / u64::from(r.width().max(1))).max(1));
+    let page_rows = p.get("maxCells").and_then(Json::as_u64).map(|max| (max / u64::from(r.width().max(1))).max(1));
     let (r, rest) = match page_rows {
         Some(n) if n < u64::from(total_rows) => {
+            // n is positive and below total_rows (a u32), so this narrowing cannot truncate.
             let last = r.start.row.saturating_add(n as u32 - 1);
             (RangeRef::new(r.start, CellRef::new(last, r.end.col)), Some(RangeRef::new(CellRef::new(last.saturating_add(1), r.start.col), r.end)))
         }

@@ -180,7 +180,7 @@ fn base_tool_definitions() -> Vec<Value> {
             "Read cell values from a range as rows (2-D array). Numbers/booleans/strings are returned as JSON values, empty cells as \
              null, errors as {\"error\":\"#DIV/0!\"}. Without `range`, reads the sheet's used range. formulas:true returns formula \
              text (\"=SUM(B2:B4)\") for formula cells; formatted:true returns the displayed text (\"$1,234.00\", \"12%\"). \
-             One call returns whole rows up to maxCells cells (default 5000): a longer range comes back with \"truncated\": true, \
+             One call returns whole rows up to maxCells cells (default 5000, maximum 1000000): a longer range comes back with \"truncated\": true, \
              \"totalRows\" and \"next\", the range of the remaining rows, to pass as `range` in the next call.",
             obj(
                 json!({
@@ -188,7 +188,7 @@ fn base_tool_definitions() -> Vec<Value> {
                     "sheet": string("Sheet name (default: the active sheet)"),
                     "formulas": boolean("Return formulas instead of computed values for formula cells"),
                     "formatted": boolean("Return display text with number formats applied"),
-                    "maxCells": {"type": "integer", "minimum": 1, "description": "Most cells per call, a positive integer, in whole rows (default 5000)"},
+                    "maxCells": {"type": "integer", "minimum": 1, "maximum": 1_000_000, "description": "Most cells per call, a positive integer up to 1000000, in whole rows (default 5000)"},
                 }),
                 &[],
             ),
