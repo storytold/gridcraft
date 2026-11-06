@@ -456,21 +456,30 @@ pub(crate) fn aggregate_values(name: &str, values: &[Scalar]) -> Result<Scalar, 
         }
         "PRODUCT" => Ok(if numbers.is_empty() { Scalar::Blank } else { Scalar::Decimal(numbers.iter().product()) }),
         "MIN" | "MAX" => {
-            // The winner keeps its own type — a date column answers a DateTime and an integer
-            // column an Integer — so this cannot read the `f64` projection the sum-like
-            // aggregations use. Only numbers compete: text and logicals are not observations.
+            // The winner keeps its own type — a date column answers a DateTime, an integer column
+            // an Integer and a text column its alphabetical extremum — so this cannot read the
+            // `f64` projection the sum-like aggregations use. Numbers compete first: when a column
+            // holds any number, text and logicals are not observations. A column with no numbers
+            // (the usual text column) compares its text alphabetically, case-insensitively, like
+            // `MIN ( Products[Color] )`.
             let want = if name.eq_ignore_ascii_case("MIN") { Ordering::Less } else { Ordering::Greater };
-            let mut best: Option<&Scalar> = None;
-            for value in
-                values.iter().filter(|value| matches!(value, Scalar::Integer(_) | Scalar::Currency(_) | Scalar::Decimal(_) | Scalar::DateTime(_)))
-            {
-                match best {
-                    None => best = Some(value),
-                    Some(current) if value.compare(current) == Some(want) => best = Some(value),
-                    Some(_) => {}
+            let extremum = |candidates: &mut dyn Iterator<Item = &Scalar>| {
+                let mut best: Option<&Scalar> = None;
+                for value in candidates {
+                    match best {
+                        None => best = Some(value),
+                        Some(current) if value.compare(current) == Some(want) => best = Some(value),
+                        Some(_) => {}
+                    }
                 }
-            }
-            Ok(best.cloned().unwrap_or(Scalar::Blank))
+                best.cloned()
+            };
+            let numbers = extremum(
+                &mut values
+                    .iter()
+                    .filter(|value| matches!(value, Scalar::Integer(_) | Scalar::Currency(_) | Scalar::Decimal(_) | Scalar::DateTime(_))),
+            );
+            Ok(numbers.or_else(|| extremum(&mut values.iter().filter(|value| matches!(value, Scalar::String(_))))).unwrap_or(Scalar::Blank))
         }
         "MINA" => Ok(values
             .iter()

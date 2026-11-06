@@ -638,3 +638,29 @@ fn a_blank_dimension_member_drops_orphan_fact_rows() {
     filters.set(1, 0, [gridcraft_dax::ScalarKey::String("A".into())]);
     assert_eq!(evaluator.evaluate_with(&bound, filters).expect("matched member"), Scalar::Decimal(10.0));
 }
+
+#[test]
+fn min_and_max_answer_the_text_extremum_of_a_text_column() {
+    let mut model = DataModel {
+        tables: vec![ModelTable {
+            name: "Products".into(),
+            columns: vec![ModelColumn { name: "Color".into(), data_type: Some("String".into()) }],
+            rows: vec![
+                vec![Scalar::String("Red".into())],
+                vec![Scalar::String("blue".into())],
+                vec![Scalar::String("Green".into())],
+                vec![Scalar::Blank],
+            ],
+        }],
+        ..DataModel::default()
+    };
+    model.parse_formulas().expect("model parses");
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let evaluate = |src: &str| {
+        let bound = Binder::new(&model).bind_expression(&parse_expression(src).expect("parse")).expect("bind");
+        evaluator.evaluate(&bound).expect("evaluate")
+    };
+    // Text compares alphabetically and case-insensitively; BLANK is not an observation.
+    assert_eq!(evaluate("MIN(Products[Color])"), Scalar::String("blue".into()));
+    assert_eq!(evaluate("MAX(Products[Color])"), Scalar::String("Red".into()));
+}

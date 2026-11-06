@@ -1390,11 +1390,10 @@ impl<'a> Evaluator<'a> {
         let aggregate = name.to_ascii_uppercase();
         let scalar = match aggregate.as_str() {
             "MIN" | "MAX" => {
-                // The winning value keeps its own type, so a DateTime column answers a DateTime
-                // and an integer column an Integer. Only numbers compete: text and logicals are
-                // not observations, and a promoted column keeps the row path where that rule
-                // lives.
-                if !matches!(kind, ColumnKind::Integer | ColumnKind::Currency | ColumnKind::Decimal | ColumnKind::DateTime) {
+                // The winning value keeps its own type, so a DateTime column answers a DateTime, an
+                // integer column an Integer and a text column its alphabetical extremum (the same
+                // rule as the row path). Logical columns keep the row path.
+                if !matches!(kind, ColumnKind::Integer | ColumnKind::Currency | ColumnKind::Decimal | ColumnKind::DateTime | ColumnKind::String) {
                     return None;
                 }
                 if aggregate == "MIN" { table_storage.min(column, &rows).ok()? } else { table_storage.max(column, &rows).ok()? }
