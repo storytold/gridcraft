@@ -47,6 +47,8 @@ mod tests;
 use gridcraft_core::DateSystem;
 use gridcraft_model::Workbook;
 
+/// Read-only Compound File Binary (CFB/OLE2) reader: streams by path through nested storages.
+pub use cfb::Compound;
 pub use crypto::{DecryptError, check_encryption, decrypt};
 pub use csv::{MAX_CSV_BYTES, decode_text, read_csv, read_csv_with_report, write_csv, write_csv_limited};
 pub use ods::read_ods;
