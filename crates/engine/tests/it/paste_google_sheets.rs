@@ -140,6 +140,7 @@ fn inline_styles_of_other_sources_are_not_applied() {
     assert_eq!(style(&s, "A1"), gridcraft_engine::model::Style::default());
 }
 
+/// Malformed Sheets attributes paste without crashing.
 #[test]
 fn hostile_sheets_attributes_do_not_crash_paste() {
     let mut s = session();
@@ -205,6 +206,7 @@ fn typed(value: &str, format: &str, shown: &str) -> String {
     )
 }
 
+/// A typed calendar date lands on the same day in a 1900 and in a 1904 workbook.
 #[test]
 fn sheets_dates_follow_the_workbook_date_system() {
     // Sheets counts days from 1899-12-30; a 1904 workbook is 1462 days behind that, so only calendar

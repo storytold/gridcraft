@@ -198,6 +198,8 @@ pub(super) fn range_move(s: &mut Session, p: &Json) -> Result<Json> {
     moved
 }
 
+/// Pastes tab-separated `text` at `at` (the selection when absent), keeping what the clipboard's HTML
+/// adds for the cells it describes: typed numbers, formats, and for Google Sheets formulas and formatting.
 fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let at = cell_param_on(s, p, "at", sheet)?.unwrap_or(s.doc()?.selection.current().start);

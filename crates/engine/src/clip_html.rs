@@ -695,6 +695,7 @@ mod tests {
         assert!(table_cells("<table><tr><td colspan=999999999>a</td></tr></table>", 1, usize::MAX)[0].len() <= MAX_SPAN);
     }
 
+    /// Spans never expand past the cell budget.
     #[test]
     fn huge_spans_stay_within_the_cell_budget() {
         // #2171: 100,000 rows of `colspan=16384` once expanded to ~1.6 billion cells (OOM). Even
@@ -760,6 +761,7 @@ mod tests {
         assert_eq!(table_cells(plain, 1, 1)[0][0], HtmlCell { text: "3".into(), num: Some(3.0), ..Default::default() });
     }
 
+    /// Sheets data applies only to cells of a table the page marks as Sheets.
     #[test]
     fn sheets_marks_do_not_leak_between_tables_or_into_unmarked_cells() {
         let cell = r##"<td style="font-weight:bold" data-sheets-value="{&quot;1&quot;:3,&quot;3&quot;:5}" data-sheets-formula="=RC[1]">5</td>"##;
@@ -789,6 +791,7 @@ mod tests {
         }
     }
 
+    /// R1C1 references become A1 ones relative to the cell the formula lands in.
     #[test]
     fn converts_r1c1_formulas_to_a1() {
         let at = CellRef::parse("C3").unwrap();
@@ -815,6 +818,7 @@ mod tests {
         assert_eq!(r1c1_to_a1("=R[-1]C[-1]", CellRef::parse("XFD1048576").unwrap()).as_deref(), Some("=XFC1048575"));
     }
 
+    /// Malformed Sheets attributes and R1C1 formulas are read without panicking.
     #[test]
     fn hostile_sheets_markup_does_not_panic() {
         for html in [
