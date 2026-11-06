@@ -46,6 +46,11 @@ fn not_enforced(e: impl std::fmt::Display) -> SandboxError {
     SandboxError::NotEnforced(e.to_string())
 }
 
+/// A kernel without Landlock fails while the rules are made, with the Landlock crate's own text.
+fn landlock_not_enforced(e: impl std::fmt::Display) -> SandboxError {
+    SandboxError::NotEnforced(format!("Landlock is not enforced: {e}"))
+}
+
 /// Filesystem: every right Landlock handles is denied except reading the policy's read paths,
 /// executing (and reading) its exec paths, and `/dev/null`. On kernels with network rights (ABI
 /// 4), TCP binding and connecting are denied too; with scopes (ABI 6), signals to and abstract
@@ -58,15 +63,15 @@ fn landlock(policy: &Checked) -> Result<()> {
         .and_then(|r| r.handle_access(AccessNet::from_all(NEWEST)))
         .and_then(|r| r.scope(Scope::from_all(NEWEST)))
         .and_then(|r| r.create())
-        .map_err(not_enforced)?;
+        .map_err(landlock_not_enforced)?;
     let read = AccessFs::ReadFile | AccessFs::ReadDir;
     let ruleset = ruleset
         .set_compatibility(CompatLevel::HardRequirement)
         .add_rules(path_beneath_rules(&policy.read, read))
         .and_then(|r| r.add_rules(path_beneath_rules(&policy.exec, read | AccessFs::Execute)))
         .and_then(|r| r.add_rules(path_beneath_rules(["/dev/null"], AccessFs::ReadFile | AccessFs::WriteFile)))
-        .map_err(not_enforced)?;
-    let status = ruleset.restrict_self().map_err(not_enforced)?;
+        .map_err(landlock_not_enforced)?;
+    let status = ruleset.restrict_self().map_err(landlock_not_enforced)?;
     if !status.no_new_privs {
         return Err(SandboxError::NotEnforced("no_new_privs is not set".into()));
     }
@@ -211,6 +216,12 @@ mod tests {
             let f = SeccompFilter::new(rules, SeccompAction::Allow, SeccompAction::Errno(1), arch);
             assert!(f.and_then(BpfProgram::try_from).is_ok(), "{arch:?}");
         }
+    }
+
+    #[test]
+    fn a_kernel_without_landlock_says_so() {
+        // What the tests and a person read to tell this from a sandbox that failed its check.
+        assert!(landlock_not_enforced("the crate's text").to_string().contains("Landlock is not enforced: the crate's text"));
     }
 
     #[test]
