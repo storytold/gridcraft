@@ -6393,3 +6393,58 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
     }
     assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
 }
+
+#[test]
+fn apply_remote_changes_cells_without_its_own_history_or_journal() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": 2})).unwrap();
+    s.take_changed();
+    let (undo, journal, revision) = {
+        let d = s.doc().unwrap();
+        (d.undo.len(), s.journal.len(), d.revision)
+    };
+    s.apply_remote("cell.set", json!({"cell": "B2", "input": "=A1*3"})).unwrap();
+    assert_eq!(v(&s, "B2").as_f64(), Some(6.0));
+    let d = s.doc().unwrap();
+    assert_eq!(d.undo.len(), undo, "a remote apply must not add an undo step");
+    assert_eq!(s.journal.len(), journal, "a remote apply must not journal");
+    assert_eq!(d.revision, revision, "a remote apply must not count as this session's own edit");
+}
+
+#[test]
+fn apply_remote_reports_the_changed_cells_including_dependents() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": 2})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "=A1*3"})).unwrap();
+    let _ = s.take_changed();
+    s.apply_remote("cell.set", json!({"cell": "A1", "input": 5})).unwrap();
+    let changed = s.take_changed();
+    assert!(changed.contains(&(0, CellRef::new(0, 0))), "the edited cell is reported: {changed:?}");
+    assert!(changed.contains(&(0, CellRef::new(1, 1))), "the dependent formula is reported: {changed:?}");
+    assert_eq!(v(&s, "B2").as_f64(), Some(15.0));
+    assert!(s.take_changed().is_empty(), "the list is taken once");
+}
+
+#[test]
+fn a_failed_remote_apply_changes_nothing() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "kept"})).unwrap();
+    let undo = s.doc().unwrap().undo.len();
+    assert!(s.apply_remote("sheet.rename", json!({"sheet": 99, "name": "Nope"})).is_err());
+    assert_eq!(s.doc().unwrap().undo.len(), undo);
+    assert!(s.take_changed().is_empty(), "a refused call reports no changes of its own");
+    assert_eq!(v(&s, "A1"), Value::text("kept"));
+}
+
+#[test]
+fn a_local_command_after_a_remote_one_is_journaled_and_undone_as_usual() {
+    let mut s = s();
+    s.apply_remote("cell.set", json!({"cell": "A1", "input": "remote"})).unwrap();
+    let undo = s.doc().unwrap().undo.len();
+    s.execute("cell.set", json!({"cell": "A2", "input": "local"})).unwrap();
+    assert_eq!(s.doc().unwrap().undo.len(), undo + 1);
+    assert_eq!(s.journal.len(), 1, "only the local command is journaled");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "A2"), Value::Empty);
+    assert_eq!(v(&s, "A1"), Value::text("remote"), "undo leaves the remote edit alone");
+}

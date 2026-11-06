@@ -454,6 +454,15 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     }
     d.wb = std::sync::Arc::new(wb);
     d.selection = sel;
+    // Kept for a front end that has to tell another party what the command changed (the
+    // collaboration layer reads it with `Session::take_changed`). A command made of several
+    // commits appends, so every cell it changed is reported; the formulas the recalculation
+    // evaluated are added because their displayed values change too, even though their content
+    // did not.
+    d.last_changed.extend(changed);
+    d.last_changed.extend(d.calc.take_evaluated());
+    d.last_changed.sort_unstable_by_key(|(s, c)| (*s, c.row, c.col));
+    d.last_changed.dedup();
     Ok(r)
 }
 

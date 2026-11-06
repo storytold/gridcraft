@@ -53,6 +53,10 @@ pub struct Calc {
     /// `rebuild`, kept up to date by `cells_changed` and by the write-back of a run; an entry is
     /// always checked against the workbook before it is used.
     spill_errors: SpillErrors,
+    /// Formulas the last recalculation evaluated, in the order it did, with repeats when a
+    /// formula was evaluated again (iterative calculation, a dynamic-array pass). Handed to a
+    /// front end that has to report which cells changed (`Session::take_changed`).
+    pub last_evaluated: Vec<Key>,
 }
 
 /// A set of cells by row, each row's columns in their own set: a window of rows and columns is
@@ -102,6 +106,7 @@ impl Default for Calc {
             circular: vec![],
             last_recalc_cells: 0,
             spill_errors: SpillErrors::default(),
+            last_evaluated: vec![],
         }
     }
 }
@@ -264,6 +269,13 @@ impl Calc {
     fn unblock_candidates(&self, wb: &Workbook, sheet: usize, end: CellRef) -> Vec<Key> {
         let cells = self.spill_errors_in(wb, sheet, (0, end.row), (0, end.col));
         cells.into_iter().filter(|c| self.graph.nodes.contains_key(&(sheet, *c))).map(|c| (sheet, c)).collect()
+    }
+
+    /// Takes the formulas the last recalculation evaluated, leaving the list empty. Repeats are
+    /// possible (iterative calculation, a second dynamic-array pass); the caller deduplicates if
+    /// it needs a set.
+    pub fn take_evaluated(&mut self) -> Vec<Key> {
+        std::mem::take(&mut self.last_evaluated)
     }
 
     /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
@@ -472,10 +484,12 @@ impl Calc {
     fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool) {
         let mut dynamic_again = !self.graph.dynamic.is_empty();
         self.last_recalc_cells = 0;
+        self.last_evaluated.clear();
         for _round in 0..8 {
             if dirty.is_empty() {
                 break;
             }
+            self.last_evaluated.extend(dirty.iter().copied());
             // Row-major order is a good topological guess; on-demand evaluation fixes the rest.
             dirty.sort_by_key(|(s, c)| (*s, c.row, c.col));
             let mut exprs: HashMap<Key, std::sync::Arc<Expr>> = HashMap::with_capacity_and_hasher(dirty.len(), Default::default());

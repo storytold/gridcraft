@@ -224,6 +224,11 @@ pub struct DocState {
     /// The references `edit.goTo` with `record: true` went to in this document, newest first,
     /// without names, each area written with its sheet (`Sheet1!B14:C22,Sheet1!F19:G30`).
     pub go_to_recent: Vec<String>,
+    /// Cells whose content the last command changed, as the recalculation saw them (sheet index
+    /// and address). Filled by [`cmd::commit`] for every command; [`Session::take_changed`] hands
+    /// it to a front end that has to tell another party what changed (the collaboration layer).
+    /// Not history and not saved.
+    pub last_changed: Vec<gridcraft_calc::Key>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -330,6 +335,7 @@ impl DocState {
             touched: None,
             edits: None,
             go_to_recent: vec![],
+            last_changed: vec![],
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -494,6 +500,11 @@ pub struct Session {
     pub recorder: Option<record::Recorder>,
     /// How many `execute` calls are running (0 between top-level commands).
     depth: u32,
+    /// How many of the running calls are remote operations applied for another participant
+    /// ([`Session::apply_remote`]). Such a call changes the workbook but leaves this session's
+    /// journal, undo/redo history and command recording alone: the operation belongs to the
+    /// journal and history of the session it came from.
+    remote: u32,
     /// The steps the last successful `automate.runScript` or `macro.run` ran while a recorder was
     /// on, for the recorder to keep with that step (see [`record::Recorder::ran`]); taken by the
     /// recording hook.
@@ -668,6 +679,14 @@ impl Session {
     /// unless an undo group is open on the document (the group then makes the step).
     /// Panics inside commands are caught and reported; the workbook is restored.
     pub fn execute(&mut self, id: &str, params: Json) -> Result<Json> {
+        // The change list belongs to one top-level call: a command made of several commits
+        // reports every cell they changed, and a new call starts empty, even when the command is
+        // refused before it changes anything.
+        if self.depth == 0
+            && let Some(d) = self.active_mut()
+        {
+            d.last_changed.clear();
+        }
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         if let Err(why) = (spec.enabled)(self) {
             return Err(EngineError::Disabled(id.to_string(), why));
@@ -713,7 +732,7 @@ impl Session {
             None => Vec::new(),
         };
         // The recorder keeps top-level calls with the place they ran in.
-        let place = (self.depth == 0 && self.recorder.is_some()).then(|| match self.active() {
+        let place = (self.depth == 0 && self.recorder.is_some() && self.remote == 0).then(|| match self.active() {
             Some(d) => (d.uid, d.wb.active_sheet(), d.wb.active().map(|sh| sh.name.clone()).unwrap_or_default(), d.selection.clone()),
             None => (0, 0, String::new(), Selection::default()),
         });
@@ -811,7 +830,7 @@ impl Session {
                     rec.attach_ran(ran);
                 }
             }
-            if self.journal_paused == 0 {
+            if self.journal_paused == 0 && self.remote == 0 {
                 self.push_journal(id, cmd::journal_params(&params));
                 recent::note(&mut self.prefs.recent_functions, id, &params);
             }
@@ -824,6 +843,7 @@ impl Session {
         let in_group_now = before.as_ref().is_some_and(|(uid, ..)| self.in_group(*uid));
         let was_open = start.is_some_and(|(was_open, _)| was_open);
         if spec.undoable
+            && self.remote == 0
             && let Some((uid, wb, sel)) = before
             && let Some(d) = self.docs.iter_mut().find(|d| d.uid == uid)
             && !Arc::ptr_eq(&d.wb, &wb)
@@ -1120,6 +1140,33 @@ impl Session {
             return Err(EngineError::BadParams { cmd: id.to_string(), msg });
         }
         r
+    }
+
+    /// Applies a command that came from another participant of a shared session.
+    ///
+    /// The command changes the workbook exactly as [`Session::execute`] does — the same
+    /// `enabled` checks, sheet-protection and array checks, recalculation and panic guard — but
+    /// it leaves this session's journal, undo/redo history and command recording alone: the
+    /// operation is already journaled by the session that sent it, and undoing it here would
+    /// undo someone else's step. The cells it changed are available from
+    /// [`Session::take_changed`].
+    pub fn apply_remote(&mut self, id: &str, params: Json) -> Result<Json> {
+        self.remote = self.remote.saturating_add(1);
+        // The counter comes back even when a command escapes as a panic, so a later local
+        // command is not mistaken for a remote one.
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.execute(id, params)));
+        self.remote = self.remote.saturating_sub(1);
+        match r {
+            Ok(v) => v,
+            Err(p) => std::panic::resume_unwind(p),
+        }
+    }
+
+    /// Takes the cells the last command changed, as `(sheet index, cell)`, leaving the list empty.
+    /// [`cmd::commit`] fills it for every command, local or remote; a front end that has to tell
+    /// another party what changed (the collaboration layer) reads it once per applied operation.
+    pub fn take_changed(&mut self) -> Vec<gridcraft_calc::Key> {
+        self.active_mut().map(|d| std::mem::take(&mut d.last_changed)).unwrap_or_default()
     }
 }
 
