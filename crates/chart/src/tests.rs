@@ -1810,6 +1810,44 @@ fn series_lines_join_stacked_series_at_their_far_ends() {
     assert!((line[1][1] - (b.1 + b.3)).abs() < 0.01, "to the bottom of the negative one: {line:?} {b:?}");
 }
 
+/// A category a series has no value in is skipped: Excel joins the values on either side in a straight
+/// line, of which only the pieces between the columns show.
+#[test]
+fn series_lines_join_over_a_missing_value() {
+    for kind in [ChartKind::ColumnStacked, ChartKind::BarStacked] {
+        let mut d = sample(kind);
+        let first = d.series[0].clone();
+        d.categories = vec!["x".into(), "y".into(), "z".into()];
+        d.series = [(vec![Some(40.0), Some(10.0), Some(40.0)], [10, 0, 0, 255]), (vec![Some(30.0), None, Some(30.0)], [0, 10, 0, 255])]
+            .into_iter()
+            .map(|(values, color)| {
+                let mut s = first.clone();
+                s.values = values;
+                s.color = color;
+                s
+            })
+            .collect();
+        let ink = [1, 2, 3, 255];
+        d.series_lines = Some((ink, 0.75));
+        let mut c = chart(kind);
+        c.data_labels = false;
+        let lines: Vec<Vec<[f32; 2]>> = render(&c, &d, 640.0, 400.0, &ApproxMeasure)
+            .into_iter()
+            .filter_map(|p| match p {
+                Prim::Line { pts, color, .. } if color == ink => Some(pts),
+                _ => None,
+            })
+            .collect();
+        // The first series has two gaps; the second, joined from x to z, shows in the same two.
+        assert_eq!(lines.len(), 4, "{kind:?}: {lines:?}");
+        let (u, v) = if kind == ChartKind::BarStacked { (1, 0) } else { (0, 1) };
+        let (a, b) = (&lines[2], &lines[3]);
+        assert!((a[0][v] - b[1][v]).abs() < 0.01, "{kind:?}: x and z are both at 70, so the line stays level: {a:?} {b:?}");
+        assert!((a[1][v] - a[0][v]).abs() < 0.01 && (b[1][v] - b[0][v]).abs() < 0.01, "{kind:?}: {a:?} {b:?}");
+        assert!((a[1][u] - a[0][u]).abs() < (b[0][u] - a[0][u]).abs(), "{kind:?}: the y column hides the middle: {a:?} {b:?}");
+    }
+}
+
 /// Clustered columns have nothing to join, as in Excel.
 #[test]
 fn series_lines_are_only_for_stacks() {
