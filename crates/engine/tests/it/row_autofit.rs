@@ -59,3 +59,71 @@ fn whole_row_format_keeps_hidden_rows_hidden() {
     assert!(info.size.unwrap_or(before) > before + 10.0, "hidden row still grows to its font: before={before}, size={:?}", info.size);
     assert!(info.hidden, "formatting a hidden row must not unhide it");
 }
+
+#[test]
+fn rotated_text_autofits_row_height_and_undoes() {
+    for angle in ["up", "down", "counterclockwise", "clockwise"] {
+        let mut s = gridcraft_engine::Session::new();
+        s.new_workbook();
+        s.execute(
+            "range.setValues",
+            json!({
+                "range": "A5",
+                "values": [["A long heading that needs substantially more room when rotated"]]
+            }),
+        )
+        .unwrap();
+
+        let before = s.doc().unwrap().wb.active().unwrap().row_height(4);
+        s.execute(
+            "home.orientation",
+            json!({"range": "A5", "angle": angle}),
+        )
+        .unwrap();
+
+        let after = s.doc().unwrap().wb.active().unwrap().row_height(4);
+        assert!(
+            after > before + 20.0,
+            "rotation `{angle}` should grow the row to fit the text: before={before}, after={after}"
+        );
+
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(
+            s.doc().unwrap().wb.active().unwrap().row_height(4),
+            before,
+            "undoing rotation `{angle}` should restore the original row height"
+        );
+    }
+}
+
+#[test]
+fn rotated_text_autofit_respects_custom_row_height() {
+    let mut s = gridcraft_engine::Session::new();
+    s.new_workbook();
+    s.execute(
+        "range.setValues",
+        json!({
+            "range": "A5",
+            "values": [["A long heading that needs room when rotated"]]
+        }),
+    )
+    .unwrap();
+    {
+        let sh = sheet_mut(&mut s);
+        let e = sh.rows.entry(4).or_default();
+        e.custom = true;
+        e.size = Some(25.0);
+    }
+
+    s.execute(
+        "home.orientation",
+        json!({"range": "A5", "angle": "up"}),
+    )
+    .unwrap();
+    assert_eq!(
+        s.doc().unwrap().wb.active().unwrap().row_height(4),
+        25.0,
+        "rotating text must not resize a row with a user-set height"
+    );
+}
+

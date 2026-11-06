@@ -726,10 +726,11 @@ pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
         return;
     }
     let default = sh.default_row_height;
-    // Fast path: rows of default-size, unwrapped content keep the default height.
+    // Fast path: rows of default-size, unwrapped, unrotated content keep the default height.
+    // Rotated text can need a taller row even when it uses the default font size.
     let plain = sh.cells.row(row, 0, gridcraft_core::MAX_COLS - 1).all(|(_, cell)| {
         let st = wb.styles.get(cell.style);
-        st.font.size <= gridcraft_model::DEFAULT_FONT_SIZE && !st.align.wrap
+        st.font.size <= gridcraft_model::DEFAULT_FONT_SIZE && !st.align.wrap && st.align.rotation == 0
     });
     if plain {
         if sh.rows.get(&row).is_some_and(|i| i.size.is_some())
@@ -766,7 +767,7 @@ pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
         if !cell.value.is_empty() || cell.formula.is_some() {
             // Only a wrapping cell is laid out over several lines: each explicit line break
             // starts one, and each line folds at the column width.
-            if st.align.wrap {
+            if st.align.wrap && st.align.rotation == 0 {
                 let text = crate::display::cell_text(wb, sh, CellRef::new(row, c));
                 let w = sh.col_width(c).max(1.0) - 6.0;
                 lines = text.lines().map(|l| wrapped_line_count(l, w.max(1.0), size, st.font.bold)).sum::<f32>().max(1.0);
@@ -774,7 +775,25 @@ pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
         } else if st.font.size <= gridcraft_model::DEFAULT_FONT_SIZE {
             continue;
         }
-        let h = if lines > 1.0 { (size * 96.0 / 72.0 * 1.22 * lines + 5.0).ceil() } else { line };
+        let h = if st.align.rotation != 0 {
+            // Upright rotated text with Wrap Text on wraps along the row height in the painter,
+            // so it does not need the full unwrapped width. Other rotations project the text's
+            // width onto the row's vertical axis.
+            if st.align.wrap && st.align.rotation.abs() == 90 {
+                line
+            } else {
+                let text = crate::display::cell_text(wb, sh, CellRef::new(row, c));
+                let one_line: String =
+                    text.chars().filter(|&ch| ch != '\n' && ch != '\r').collect();
+                let width = crate::cmd::format::approx_text_width(&one_line, size, st.font.bold);
+                let angle = (st.align.rotation as f32).to_radians();
+                (width * angle.sin().abs() + line * angle.cos().abs() + 5.0).ceil()
+            }
+        } else if lines > 1.0 {
+            (size * 96.0 / 72.0 * 1.22 * lines + 5.0).ceil()
+        } else {
+            line
+        };
         need = need.max(h.min(546.0));
     }
     let Some(shm) = wb.sheet_mut(si) else { return };
