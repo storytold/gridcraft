@@ -158,6 +158,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             });
             // Centred title, cut with "…" so it never runs under the controls on either side.
             let title = app.session.active().map(|d| d.display_title()).unwrap_or_default();
+            let title = crate::build_config::window_title(&title);
             let dirty = app.session.active().is_some_and(|d| d.is_dirty());
             let max_w = title_max_width(rect.center().x, left_end, right.inner);
             paint_title(ui, rect.center(), &title, dirty, max_w, t.text);
@@ -249,6 +250,15 @@ mod title_bar_tests {
         assert!(text.ends_with('…'), "truncated title ends with an ellipsis: {text:?}");
         assert!(text.chars().count() < long.chars().count());
         assert!(w <= 300.0, "title stays within its room: {w}");
+    }
+
+    #[test]
+    fn labelled_distribution_survives_long_workbook_title_truncation() {
+        let title = format!("GridCraft (Preview) - {}", "synthetic workbook ".repeat(30));
+        let (text, w, dot_w) = layout_title(&title, true, 300.0);
+        assert!(text.starts_with("GridCraft (Preview)"), "{text}");
+        assert!(text.ends_with('…'));
+        assert!(w + dot_w <= 300.0);
     }
 
     #[test]
