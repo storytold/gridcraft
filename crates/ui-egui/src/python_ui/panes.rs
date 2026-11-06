@@ -230,7 +230,7 @@ fn named_field(ui: &mut Ui, text: &mut String, name: &str) {
 
 /// Whether this is what a package can be called in an install command: a name, with extras or a
 /// version. Everything else stays out of what a person pastes into a terminal.
-fn package_spec(text: &str) -> bool {
+pub(super) fn package_spec(text: &str) -> bool {
     !text.is_empty()
         && text.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
         && text.chars().all(|c| c.is_ascii_alphanumeric() || "._-[],=<>!~".contains(c))

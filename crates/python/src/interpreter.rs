@@ -70,6 +70,12 @@ fn quoted(path: &Path) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
 
+/// Package names as text a shell reads back as one word each: a person copies these commands to a
+/// terminal, a name can come from a workbook's code, and a version such as `a>=1,<2` holds redirections.
+pub fn shell_words(packages: &[&str]) -> String {
+    packages.iter().map(|p| quoted(Path::new(p))).collect::<Vec<_>>().join(" ")
+}
+
 /// The commands that make the suggested environment with uv and install `packages` in it. The
 /// search finds that environment first, so nothing else needs choosing. Bytecode is compiled at
 /// install time because the sandbox can't write it later: without it, the first plot in every new
@@ -78,7 +84,7 @@ pub fn uv_setup_commands(packages: &[&str]) -> Vec<String> {
     let env = format!("~/{}", crate::interp::RECOMMENDED_ENV);
     let mut out = vec![format!("uv venv {env} --python 3.12")];
     if !packages.is_empty() {
-        out.push(format!("uv pip install --compile-bytecode --python {env} {}", packages.join(" ")));
+        out.push(format!("uv pip install --compile-bytecode --python {env} {}", shell_words(packages)));
     }
     out
 }
@@ -87,7 +93,7 @@ pub fn uv_setup_commands(packages: &[&str]) -> Vec<String> {
 /// environment, otherwise into a new environment, since a Python outside one refuses them.
 pub fn uv_install_commands(interpreter: &Interpreter, packages: &[&str]) -> Vec<String> {
     if interpreter.kind.is_environment() {
-        vec![format!("uv pip install --compile-bytecode --python {} {}", quoted(&interpreter.path), packages.join(" "))]
+        vec![format!("uv pip install --compile-bytecode --python {} {}", quoted(&interpreter.path), shell_words(packages))]
     } else {
         uv_setup_commands(packages)
     }
@@ -95,5 +101,5 @@ pub fn uv_install_commands(interpreter: &Interpreter, packages: &[&str]) -> Vec<
 
 /// The same with pip, for people who manage their Pythons another way.
 pub fn pip_install_command(interpreter: &Interpreter, packages: &[&str]) -> String {
-    format!("{} -m pip install {}", quoted(&interpreter.path), packages.join(" "))
+    format!("{} -m pip install {}", quoted(&interpreter.path), shell_words(packages))
 }

@@ -39,7 +39,7 @@ use gridcraft_model::{CalcMode, Sheet, Workbook};
 pub use gridcraft_python::Limits;
 pub use gridcraft_python::Transport;
 pub use gridcraft_python::describe::{
-    Interpreter, Kind as InterpreterKind, STARTER_PACKAGES, UV_INSTALL, pip_install_command, uv_install_commands, uv_setup_commands,
+    Interpreter, Kind as InterpreterKind, STARTER_PACKAGES, UV_INSTALL, pip_install_command, shell_words, uv_install_commands, uv_setup_commands,
 };
 pub use gridcraft_python::diagnostics::{Action, CATALOG, Diagnostic, Kind, Scope, Severity};
 pub use gridcraft_python::interp::{MIN_VERSION, Version};

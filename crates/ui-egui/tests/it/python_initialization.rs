@@ -561,6 +561,12 @@ fn what_code_from_a_file_went_on_without_is_in_the_problems_pane() {
     let row = |module: &str| gridcraft_engine::python::Diagnostic::new("init.skipped", module, Some(1));
     assert_eq!(python_ui::packages_for(&row("scipy.stats")), ["scipy.stats"]);
     assert!(python_ui::packages_for(&row("excel")).is_empty());
+    // A workbook chooses this name and a person runs the command, so what can't be a package isn't offered.
+    for name in ["x;id", "x y", "$(id)", "`id`", "a|b", "../x", "-e"] {
+        assert!(python_ui::packages_for(&row(name)).is_empty(), "{name}");
+    }
+    let finding = gridcraft_engine::python::Diagnostic::new("lint.importMissing", "x;id", Some(1));
+    assert!(python_ui::packages_for(&finding).is_empty());
 }
 
 #[test]

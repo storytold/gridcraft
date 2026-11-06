@@ -529,7 +529,7 @@ pub fn install_command(interpreter: Option<&Interpreter>, packages: &[&str]) -> 
 pub fn pip_command(interpreter: Option<&Interpreter>, packages: &[&str]) -> String {
     match interpreter {
         Some(i) => pip_install_command(i, packages),
-        None => format!("python3 -m pip install {}", packages.join(" ")),
+        None => format!("python3 -m pip install {}", python::shell_words(packages)),
     }
 }
 
@@ -693,14 +693,17 @@ pub enum Guard {
 
 /// The packages a diagnostic is asking for, by the names to install them under.
 pub fn packages_for(d: &Diagnostic) -> Vec<String> {
-    match d.kind.id {
+    let names: Vec<String> = match d.kind.id {
         "packages.noPandas" => vec!["pandas".to_string()],
         "packages.missing" | "init.skipped" => python::install_name_of(&d.detail).into_iter().collect(),
         // A finding's detail is the name to install already.
         "lint.importMissing" => vec![d.detail.clone()],
         "module.missing" => module_named(&d.detail).map(|m| install_name(&m)).into_iter().collect(),
         _ => Vec::new(),
-    }
+    };
+    // A workbook's code chooses these names, and a person runs the command: only what can be a package
+    // is offered at all.
+    names.into_iter().filter(|name| panes::package_spec(name)).collect()
 }
 
 /// The module Python's message names: `No module named 'x.y'`, or the detail when it is one word.
@@ -1139,5 +1142,12 @@ mod tests {
             "uv venv ~/.gridcraft/python --python 3.12 && uv pip install --compile-bytecode --python ~/.gridcraft/python pandas"
         );
         assert_eq!(pip_command(None, &["pandas"]), "python3 -m pip install pandas");
+    }
+
+    #[test]
+    fn a_copied_command_reads_each_package_as_one_word() {
+        assert_eq!(pip_command(None, &["a>=1,<2", "x;id"]), "python3 -m pip install 'a>=1,<2' 'x;id'");
+        assert!(install_command(None, &["x;id $(y)"]).ends_with(" 'x;id $(y)'"), "{}", install_command(None, &["x;id $(y)"]));
+        assert_eq!(python::shell_words(&["it's"]), r"'it'\''s'");
     }
 }

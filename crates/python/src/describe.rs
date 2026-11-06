@@ -49,7 +49,7 @@ struct Info {
     sites: Vec<String>,
 }
 
-pub use crate::interpreter::{Interpreter, Kind, STARTER_PACKAGES, UV_INSTALL, pip_install_command, uv_install_commands, uv_setup_commands};
+pub use crate::interpreter::{Interpreter, Kind, STARTER_PACKAGES, UV_INSTALL, pip_install_command, shell_words, uv_install_commands, uv_setup_commands};
 
 /// Asks the interpreter at `path` what it is.
 pub fn describe(path: &Path, timeout: Duration) -> Result<Interpreter, ProbeError> {
