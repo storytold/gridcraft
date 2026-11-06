@@ -933,6 +933,7 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
+/// Creates an exclusively owned temporary file beside the destination, with its prior permissions when available.
 #[cfg(not(target_arch = "wasm32"))]
 fn create_save_temp(path: &std::path::Path, prior: Option<&std::fs::Permissions>) -> std::io::Result<tempfile::NamedTempFile> {
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
@@ -954,6 +955,30 @@ fn create_save_temp(path: &std::path::Path, prior: Option<&std::fs::Permissions>
     Ok(temp)
 }
 
+/// Windows attribute that opts a file out of content indexing.
+#[cfg(windows)]
+const FILE_ATTRIBUTE_NOT_CONTENT_INDEXED: u32 = 0x2000;
+
+/// Reads existing attributes before a Windows save, retrying temporary access conflicts.
+#[cfg(windows)]
+fn save_metadata(path: &str) -> Result<Option<std::fs::Metadata>> {
+    let mut delays = [10, 25, 50, 100].into_iter();
+    loop {
+        match std::fs::metadata(path) {
+            Ok(metadata) => return Ok(Some(metadata)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) if matches!(error.raw_os_error(), Some(5 | 32 | 33)) => {
+                let Some(delay_ms) = delays.next() else {
+                    return Err(EngineError::Other(format!("{path}: could not read existing file attributes: {error}")));
+                };
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            }
+            Err(error) => return Err(EngineError::Other(format!("{path}: could not read existing file attributes: {error}"))),
+        }
+    }
+}
+
+/// Writes a complete file through an owned temporary sibling before replacing the destination.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
@@ -962,7 +987,16 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     // saves. RAII removes only our own temporary file if writing or replacement fails;
     // an open failure never removes somebody else's path. A crash may leave this unique
     // file behind, but cannot leave a partially written destination workbook.
-    let prior = std::fs::metadata(path).ok().map(|m| m.permissions());
+    #[cfg(windows)]
+    let metadata = save_metadata(path)?;
+    #[cfg(not(windows))]
+    let metadata = std::fs::metadata(path).ok();
+    #[cfg(windows)]
+    let not_content_indexed = {
+        use std::os::windows::fs::MetadataExt;
+        metadata.as_ref().is_some_and(|m| m.file_attributes() & FILE_ATTRIBUTE_NOT_CONTENT_INDEXED != 0)
+    };
+    let prior = metadata.map(|m| m.permissions());
     let mut temp = create_save_temp(std::path::Path::new(path), prior.as_ref()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     temp.write_all(bytes).and_then(|()| temp.flush()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     #[cfg(windows)]
@@ -970,19 +1004,30 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
         // Antivirus and indexing software can briefly hold the destination without
         // sharing delete access. Retain ownership of the temp across bounded retries.
         let mut temp = temp;
-        for delay_ms in [10, 25, 50, 100] {
+        let mut delays = [10, 25, 50, 100].into_iter();
+        let saved = loop {
             match temp.persist(path) {
-                Ok(_) => return Ok(()),
+                Ok(file) => break file,
                 // Windows may report access denied as well as sharing/lock
                 // violations while a destination is temporarily held open.
                 Err(e) if matches!(e.error.raw_os_error(), Some(5 | 32 | 33)) => {
+                    let Some(delay_ms) = delays.next() else {
+                        return Err(EngineError::Other(format!("{path}: {}", e.error)));
+                    };
                     temp = e.file;
                     std::thread::sleep(std::time::Duration::from_millis(delay_ms));
                 }
                 Err(e) => return Err(EngineError::Other(format!("{path}: {}", e.error))),
             }
+        };
+        if not_content_indexed && let Some(permissions) = prior {
+            // tempfile clears Windows attributes during persist. Restore through
+            // the saved handle so a concurrent replacement is not modified.
+            saved
+                .set_permissions(permissions)
+                .map_err(|e| EngineError::Other(format!("{path}: saved, but could not restore indexing attributes: {e}")))?;
         }
-        temp.persist(path).map(|_| ()).map_err(|e| EngineError::Other(format!("{path}: {}", e.error)))
+        Ok(())
     }
     #[cfg(not(windows))]
     temp.persist(path).map(|_| ()).map_err(|e| EngineError::Other(format!("{path}: {}", e.error)))

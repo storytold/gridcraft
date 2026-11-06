@@ -18,6 +18,7 @@ fn copied(wb: &Workbook, range: &str) -> String {
     range_html(wb, 0, r, &crate::display::range_text(wb, 0, r)).unwrap()
 }
 
+/// A stale legacy symlink and its target remain untouched when a workbook is saved.
 #[cfg(all(not(target_arch = "wasm32"), unix))]
 #[test]
 fn save_preserves_a_preexisting_legacy_temp_symlink() {
@@ -33,6 +34,7 @@ fn save_preserves_a_preexisting_legacy_temp_symlink() {
     assert_eq!(std::fs::read(&dest).unwrap(), b"new");
 }
 
+/// Repeated saves leave a pre-existing legacy temporary file untouched.
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(unix)]
 #[test]
@@ -50,6 +52,7 @@ fn save_preserves_a_preexisting_legacy_temp_file_and_can_save_again() {
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2, "successful saves leave no new temp files");
 }
 
+/// An abandoned unique temp is preserved and a failed replacement removes only its own temp.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn save_ignores_an_abandoned_unique_temp_and_cleans_failed_replacement() {
@@ -72,6 +75,7 @@ fn save_ignores_an_abandoned_unique_temp_and_cleans_failed_replacement() {
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3, "failed persist cleans only its owned temp");
 }
 
+/// Concurrent saves leave one complete result and no temporary files.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn concurrent_saves_leave_one_complete_file() {
@@ -79,7 +83,7 @@ fn concurrent_saves_leave_one_complete_file() {
     let dest = dir.path().join("book.xlsx");
     let path = dest.to_str().unwrap().to_owned();
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
-    let handles: Vec<_> = [b'a', b'b']
+    let handles: Vec<_> = (*b"ab")
         .into_iter()
         .map(|byte| {
             let path = path.clone();
@@ -101,6 +105,7 @@ fn concurrent_saves_leave_one_complete_file() {
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
 }
 
+/// A denied directory write leaves the destination unchanged.
 #[cfg(all(not(target_arch = "wasm32"), unix))]
 #[test]
 fn save_to_read_only_directory_fails_without_changing_existing_file() {
@@ -122,23 +127,49 @@ fn save_to_read_only_directory_fails_without_changing_existing_file() {
     }
 }
 
+/// Creates a writable Windows file that opts out of content indexing.
+#[cfg(windows)]
+fn create_unindexed_file(path: &std::path::Path) {
+    use std::os::windows::fs::MetadataExt;
+    std::fs::write(path, b"original").unwrap();
+    let status = std::process::Command::new("attrib.exe").arg("+I").arg(path).status().unwrap();
+    assert!(status.success(), "failed to set content-indexing opt-out: {status}");
+    assert_ne!(std::fs::metadata(path).unwrap().file_attributes() & FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, 0);
+}
+
+/// A successful replacement retains the original file's content-indexing opt-out.
+#[cfg(windows)]
+#[test]
+fn save_preserves_windows_content_index_opt_out() {
+    use std::os::windows::fs::MetadataExt;
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("book.xlsx");
+    create_unindexed_file(&dest);
+    write_file(dest.to_str().unwrap(), b"new").unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+    assert_ne!(std::fs::metadata(&dest).unwrap().file_attributes() & FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, 0);
+}
+
+/// A temporarily locked destination can be replaced without losing its indexing opt-out.
 #[cfg(windows)]
 #[test]
 fn save_retries_a_temporarily_locked_destination() {
-    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
     let dir = tempfile::tempdir().unwrap();
     let dest = dir.path().join("book.xlsx");
-    std::fs::write(&dest, b"original").unwrap();
+    create_unindexed_file(&dest);
     let lock = std::fs::OpenOptions::new().read(true).share_mode(0).open(&dest).unwrap();
     let path = dest.to_str().unwrap().to_owned();
     let writer = std::thread::spawn(move || write_file(&path, b"new"));
     std::thread::sleep(std::time::Duration::from_millis(50));
     drop(lock);
     writer.join().unwrap().unwrap();
-    assert_eq!(std::fs::read(dest).unwrap(), b"new");
+    assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+    assert_ne!(std::fs::metadata(&dest).unwrap().file_attributes() & FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, 0);
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
 }
 
+/// An isolated restrictive umask does not remove bits from the destination mode.
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(unix)]
 #[test]
@@ -166,6 +197,7 @@ fn save_preserves_mode_despite_restrictive_umask() {
     assert_eq!(std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777, 0o664);
 }
 
+/// Existing Unix restrictions are retained and new files are created conservatively.
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(unix)]
 #[test]
@@ -185,6 +217,7 @@ fn save_keeps_the_destination_access_restrictions() {
     assert!(mode & 0o022 == 0, "mode {mode:o}");
 }
 
+/// The native reader refuses directories and missing paths.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn open_refuses_directories_and_unknowable_lengths() {
