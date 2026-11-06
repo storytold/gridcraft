@@ -186,6 +186,39 @@ pub enum Icon {
     RunTo,
     /// Stop: a square.
     StopSquare,
+    /// Python in cells: a cell with a green PY tag over its corner (original; no language logo).
+    Python,
+    /// The Python editor: a window with a column of line numbers beside lines of code (original).
+    PythonEditor,
+    /// Python's states, a PY tag each: an empty tag (off), a tag with a question mark (not set up),
+    /// a tag with a check (ready), a tag with a run arrow (running), a tag with a stop bar (blocked).
+    PythonOff,
+    PythonNotSetUp,
+    PythonReady,
+    PythonRunning,
+    PythonBlocked,
+    /// Run one cell: a cell and a run arrow.
+    RunCell,
+    /// Run all: a column of cells and a run arrow.
+    RunAll,
+    /// Reset: an arrow going round.
+    PythonReset,
+    /// Initialization: braces.
+    PythonInit,
+    /// Output As: an arrow into a cell.
+    PythonOutput,
+    /// An interpreter: a terminal window with a prompt.
+    PythonInterpreter,
+    /// Packages: a box.
+    PythonPackages,
+    /// What Python can do: a shield.
+    PythonShield,
+    /// Check Sandbox: a shield with a check.
+    PythonShieldCheck,
+    /// Problems: a warning triangle.
+    PythonProblems,
+    /// The Run Log: lines with a run arrow.
+    PythonRunLog,
 }
 
 struct G<'a> {
@@ -911,7 +944,142 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             g.line(&[(13.0, 3.0), (13.0, 9.0)], c, 1.1);
         }
         Icon::StopSquare => g.rect(3.0, 3.0, 10.0, 10.0, Some(pal.recording), None),
+        Icon::Python => {
+            // A cell of a sheet, its row of code marked by short lines, and the PY tag a Python
+            // cell carries.
+            g.rect(1.5, 1.5, 11.0, 9.0, Some(paper), Some(c));
+            g.line(&[(3.5, 4.5), (6.0, 4.5)], light, 1.1);
+            g.line(&[(5.0, 7.0), (9.5, 7.0)], light, 1.1);
+            g.p.rect_filled(Rect::from_min_max(g.pt(4.5, 8.5), g.pt(15.0, 15.0)), 1.6 * g.s, green);
+            g.text(9.75, 11.85, "PY", 6.2, paper, (true, false));
+        }
+        Icon::PythonEditor => paint_python_editor(&g, c, light, paper, green),
+        Icon::PythonOff
+        | Icon::PythonNotSetUp
+        | Icon::PythonReady
+        | Icon::PythonRunning
+        | Icon::PythonBlocked
+        | Icon::RunCell
+        | Icon::RunAll
+        | Icon::PythonReset
+        | Icon::PythonInit
+        | Icon::PythonOutput
+        | Icon::PythonInterpreter
+        | Icon::PythonPackages
+        | Icon::PythonShield
+        | Icon::PythonShieldCheck
+        | Icon::PythonProblems
+        | Icon::PythonRunLog => paint_python_tab(&g, icon, c, light, paper, (green, red, yellow)),
     }
+}
+
+/// The Python tab's icons. `marks` are the green, red and amber of the state and action marks.
+fn paint_python_tab(g: &G<'_>, icon: Icon, c: Color32, light: Color32, paper: Color32, marks: (Color32, Color32, Color32)) {
+    let (green, red, amber) = marks;
+    // The PY tag every state shows, low on the left, with room for its mark above on the right.
+    let tag = |fill: Option<Color32>, stroke: Option<Color32>, text: Color32| {
+        let r = Rect::from_min_max(g.pt(0.8, 6.0), g.pt(12.2, 14.2));
+        if let Some(f) = fill {
+            g.p.rect_filled(r, 1.6 * g.s, f);
+        }
+        if let Some(s) = stroke {
+            g.p.rect_stroke(r, 1.6 * g.s, Stroke::new(1.0, s), egui::StrokeKind::Inside);
+        }
+        g.text(6.5, 10.1, "PY", 6.4, text, (true, false));
+    };
+    match icon {
+        Icon::PythonOff => tag(None, Some(c), c),
+        Icon::PythonNotSetUp => {
+            tag(Some(amber), None, paper);
+            g.text(12.6, 3.6, "?", 8.0, c, (true, false));
+        }
+        Icon::PythonReady => {
+            tag(Some(green), None, paper);
+            g.line(&[(9.2, 3.6), (11.2, 5.4), (15.0, 1.2)], green, 1.5);
+        }
+        Icon::PythonRunning => {
+            tag(Some(green), None, paper);
+            g.poly(&[(10.0, 0.8), (15.2, 3.4), (10.0, 6.0)], c);
+        }
+        Icon::PythonBlocked => {
+            tag(None, Some(red), red);
+            g.circle(12.4, 3.5, 2.9, Some(red), None);
+            g.line(&[(10.6, 3.5), (14.2, 3.5)], paper, 1.3);
+        }
+        Icon::RunCell => {
+            g.rect(1.5, 2.5, 13.0, 11.0, Some(paper), Some(c));
+            g.poly(&[(5.5, 4.8), (11.5, 8.0), (5.5, 11.2)], green);
+        }
+        Icon::RunAll => {
+            for y in [1.5, 6.0, 10.5] {
+                g.rect(1.5, y, 5.5, 4.0, Some(paper), Some(c));
+            }
+            g.poly(&[(8.5, 3.5), (15.0, 8.0), (8.5, 12.5)], green);
+        }
+        Icon::PythonReset => {
+            let around: Vec<(f32, f32)> = (0..=9)
+                .map(|i| {
+                    let a = 0.6 + f32::from(i as u8) * 0.55;
+                    (8.0 + 5.2 * a.cos(), 8.0 + 5.2 * a.sin())
+                })
+                .collect();
+            g.line(&around, c, 1.4);
+            g.poly(&[(9.2, 0.6), (13.4, 3.6), (8.8, 5.0)], c);
+        }
+        Icon::PythonInit => {
+            g.line(&[(6.0, 2.0), (4.6, 2.6), (4.6, 7.0), (3.0, 8.0), (4.6, 9.0), (4.6, 13.4), (6.0, 14.0)], c, 1.2);
+            g.line(&[(10.0, 2.0), (11.4, 2.6), (11.4, 7.0), (13.0, 8.0), (11.4, 9.0), (11.4, 13.4), (10.0, 14.0)], c, 1.2);
+        }
+        Icon::PythonOutput => {
+            g.rect(8.0, 3.5, 6.5, 9.0, Some(paper), Some(c));
+            g.line(&[(1.5, 8.0), (6.5, 8.0)], green, 1.5);
+            g.poly(&[(5.5, 5.4), (9.2, 8.0), (5.5, 10.6)], green);
+        }
+        Icon::PythonInterpreter => {
+            g.rect(1.5, 2.5, 13.0, 11.0, Some(paper), Some(c));
+            g.line(&[(4.0, 5.8), (6.6, 8.0), (4.0, 10.2)], green, 1.3);
+            g.line(&[(8.0, 10.4), (12.0, 10.4)], c, 1.2);
+        }
+        Icon::PythonPackages => {
+            g.closed(&[(8.0, 1.5), (14.0, 4.5), (14.0, 11.5), (8.0, 14.5), (2.0, 11.5), (2.0, 4.5)], c, 1.2);
+            g.line(&[(2.0, 4.5), (8.0, 7.5), (14.0, 4.5)], c, 1.1);
+            g.line(&[(8.0, 7.5), (8.0, 14.5)], light, 1.1);
+        }
+        Icon::PythonShield | Icon::PythonShieldCheck => {
+            g.closed(&[(8.0, 1.2), (14.0, 3.2), (13.6, 8.6), (8.0, 14.8), (2.4, 8.6), (2.0, 3.2)], c, 1.2);
+            if icon == Icon::PythonShieldCheck {
+                g.line(&[(5.2, 7.6), (7.4, 9.8), (11.0, 5.2)], green, 1.5);
+            } else {
+                g.line(&[(8.0, 4.0), (8.0, 11.5)], light, 1.1);
+            }
+        }
+        Icon::PythonProblems => {
+            g.poly(&[(8.0, 1.5), (15.0, 14.0), (1.0, 14.0)], amber);
+            g.line(&[(8.0, 5.6), (8.0, 10.2)], paper, 1.5);
+            g.circle(8.0, 12.2, 0.8, Some(paper), None);
+        }
+        Icon::PythonRunLog => {
+            for y in [3.0, 8.0, 13.0] {
+                g.line(&[(7.0, y), (14.5, y)], c, 1.2);
+            }
+            g.poly(&[(1.5, 5.0), (5.5, 8.0), (1.5, 11.0)], green);
+        }
+        _ => {}
+    }
+}
+
+/// The Python editor button: a window with its title bar, a gutter of line numbers (dots) and
+/// lines of code, the second one indented.
+fn paint_python_editor(g: &G<'_>, c: Color32, light: Color32, paper: Color32, green: Color32) {
+    g.rect(1.5, 2.0, 13.0, 12.0, Some(paper), Some(c));
+    g.line(&[(1.5, 4.8), (14.5, 4.8)], c, 1.1);
+    g.line(&[(5.0, 4.8), (5.0, 14.0)], light, 1.0);
+    for y in [7.0, 9.4, 11.8] {
+        g.circle(3.3, y, 0.55, Some(c), None);
+    }
+    g.line(&[(6.6, 7.0), (11.0, 7.0)], green, 1.2);
+    g.line(&[(8.2, 9.4), (13.0, 9.4)], c, 1.1);
+    g.line(&[(6.6, 11.8), (10.0, 11.8)], c, 1.1);
 }
 
 /// Icons offered by Insert › Icons, by name.

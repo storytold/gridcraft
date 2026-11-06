@@ -97,6 +97,13 @@ fn prefs_enabled() -> bool {
 }
 
 /// Where the log files live: `logs` in the settings folder, next to `ui.json` (see `logging`).
+/// `X,Y` for `--window-pos`.
+fn parse_window_pos(v: &str) -> Option<[f32; 2]> {
+    let (x, y) = v.split_once(',')?;
+    let (x, y): (f32, f32) = (x.trim().parse().ok()?, y.trim().parse().ok()?);
+    (x.is_finite() && y.is_finite()).then_some([x, y])
+}
+
 fn log_dir() -> Option<std::path::PathBuf> {
     Some(config_dir()?.join("logs"))
 }
@@ -151,10 +158,16 @@ fn read_clipboard<T>(
     read(clipboard.as_mut()?).ok()
 }
 
+/// Where running GridCraft processes tell each other which floating picture is on the clipboard.
+fn published_picture_note() -> std::path::PathBuf {
+    std::env::temp_dir().join(gridcraft_ui_egui::published_picture::NOTE_FILE)
+}
+
 fn services() -> Services {
     // Keep the owner alive: X11/Wayland serve clipboard data from this handle.
     let clipboard: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
-    let (html_clipboard, text_clipboard, image_clipboard) = (clipboard.clone(), clipboard.clone(), clipboard.clone());
+    let (html_clipboard, text_clipboard, image_clipboard, copy_clipboard) =
+        (clipboard.clone(), clipboard.clone(), clipboard.clone(), clipboard.clone());
     Services {
         copy_html: Some(Box::new(move |html, text| {
             let mut clipboard = clipboard.borrow_mut();
@@ -169,6 +182,24 @@ fn services() -> Services {
             let image = read_clipboard(&image_clipboard, |clipboard| clipboard.get_image())?;
             image::RgbaImage::from_raw(u32::try_from(image.width).ok()?, u32::try_from(image.height).ok()?, image.bytes.into_owned())
         })),
+        copy_image: Some(Box::new(move |image| {
+            let mut clipboard = copy_clipboard.borrow_mut();
+            if clipboard.is_none() {
+                *clipboard = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);
+            }
+            let data = arboard::ImageData {
+                width: image.width() as usize,
+                height: image.height() as usize,
+                bytes: std::borrow::Cow::Borrowed(image.as_raw()),
+            };
+            clipboard.as_mut().ok_or("clipboard unavailable")?.set_image(data).map_err(|e| e.to_string())
+        })),
+        note_published_picture: Some(Box::new(|hash| {
+            if let Err(e) = gridcraft_ui_egui::published_picture::write(&published_picture_note(), hash) {
+                log::warn!("Can't note the published picture: {e}");
+            }
+        })),
+        read_published_picture: Some(Box::new(|| gridcraft_ui_egui::published_picture::read(&published_picture_note()))),
         pick_open: Some(Box::new(|| {
             rfd::FileDialog::new()
                 .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "slk", "json"])
@@ -180,6 +211,7 @@ fn services() -> Services {
                 .pick_file()
                 .and_then(|p| p.to_str().map(str::to_string))
         })),
+        pick_interpreter: Some(Box::new(|| rfd::FileDialog::new().pick_file().and_then(|p| p.to_str().map(str::to_string)))),
         pick_picture: Some(Box::new(|| {
             rfd::FileDialog::new()
                 .add_filter("Pictures (PNG, JPEG)", &["png", "jpg", "jpeg"])
@@ -280,10 +312,19 @@ fn main() -> eframe::Result<()> {
     let mut control_port: Option<u16> = std::env::var("GRIDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
     let mut control_token: Option<String> = std::env::var("GRIDCRAFT_CONTROL_TOKEN").ok();
     let mut sample: Option<String> = None;
+    let mut window_pos: Option<[f32; 2]> = None;
     let mut files: Vec<String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            // For test runs: where the window opens, in points from the main display's top left.
+            "--window-pos" => {
+                i += 1;
+                window_pos = args.get(i).and_then(|v| parse_window_pos(v));
+                if window_pos.is_none() {
+                    eprintln!("--window-pos takes X,Y");
+                }
+            }
             "--control" => {
                 i += 1;
                 control_port = args.get(i).and_then(|p| p.parse().ok());
@@ -343,6 +384,9 @@ fn main() -> eframe::Result<()> {
         .with_min_inner_size([640.0, 420.0])
         .with_app_id("ai.storyteller.gridcraft")
         .with_drag_and_drop(true);
+    if let Some(at) = window_pos {
+        viewport = viewport.with_position(at);
+    }
     if cfg!(target_os = "macos") {
         viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
     }

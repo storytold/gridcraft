@@ -987,7 +987,18 @@ fn python_ui_commands_are_listed() {
         panic!("command discovery must return immediately");
     };
     let commands = reply["result"].as_array().cloned().unwrap_or_default();
-    let listed = [("ui.pythonMode", "{on?: bool} (toggles without it) → {on}; a refused start is an error")];
+    let listed = [
+        ("ui.pythonMode", "{on?: bool} (toggles without it) → {on}; a refused start is an error"),
+        ("ui.pythonCard", "{on?: bool} (false closes it; otherwise opens the active Python cell's card) → {open, cell?}"),
+        (
+            "ui.pythonEditor",
+            "{on?: bool (toggles without it), cell?: \"A1\" | \"Sheet2!B3\" (default: the active cell), force?: bool (discards unsaved code instead of refusing)} → {open, sheet?, cell?, text? (null while the code is hidden), hidden?, dirty?, pending?, notice?, rect?}",
+        ),
+        (
+            "ui.pythonInitialization",
+            "{on?: bool (toggles without it), force?: bool (discards unsaved code instead of refusing)} → the state ui.pythonEditor gives, with initialization: true while the window has the workbook's initialization code",
+        ),
+    ];
     for (id, docs) in listed {
         let command = commands.iter().find(|c| c["id"] == id).unwrap_or_else(|| panic!("engine.commands lists {id}"));
         assert_eq!(command["ui"], true, "{id}");
@@ -1253,4 +1264,28 @@ fn python_mode_does_not_start_on_a_draft_typed_inside_a_spill() {
     call(&mut app, &ctx, "ui.edit.commit", json!({"move": "none"}));
     let a2 = app.session.active().and_then(|d| d.wb.sheet(0)).and_then(|sh| sh.cell(gridcraft_engine::core::CellRef::new(1, 0)).cloned());
     assert_eq!(a2.map(|c| (c.input_text(), c.py.is_some())), Some(("5".to_string(), false)));
+}
+
+#[test]
+fn the_python_editor_shows_no_code_once_it_is_hidden_in_the_same_batch() {
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    session.execute("python.set", json!({"cell": "B2", "code": "secret = 41\nsecret + 1"})).unwrap();
+    session.execute("home.formatCells", json!({"range": "B2", "style": {"protection": {"hidden": true}}})).unwrap();
+    let mut app = SheetApp::new(session, crate::Services::default());
+    let ctx = egui::Context::default();
+    execute(&mut app, &ctx, "ui.pythonEditor", json!({"on": true, "cell": "B2"}));
+    assert_eq!(inspected(&mut app, &ctx)["pythonEditor"]["text"], "secret = 41\nsecret + 1", "unprotected, the code shows");
+    // Typed code, then the sheet protected and the state read in the same batch: no frame has
+    // run, so the window is still open, but neither its code nor the typing is in the reply.
+    if let Some(w) = app.py_window.as_mut() {
+        w.text = "secret = 42 # typed".into();
+    }
+    execute(&mut app, &ctx, "review.protectSheet", json!({}));
+    assert!(app.py_window.is_some(), "no frame has closed the window yet");
+    let after = inspected(&mut app, &ctx);
+    assert!(!after.to_string().contains("secret"), "{after}");
+    assert_eq!(after["pythonEditor"]["text"], Json::Null);
+    assert_eq!(after["pythonEditor"]["hidden"], true);
+    assert!(!crate::python_window::state(&app).to_string().contains("secret"));
 }

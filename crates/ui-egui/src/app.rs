@@ -35,6 +35,9 @@ impl SheetApp {
             views: HashMap::new(),
             editor: None,
             text_box_editor: None,
+            py_window: None,
+            python: Default::default(),
+            save_waits: Default::default(),
             dialog: None,
             backstage: None,
             message: None,
@@ -73,6 +76,8 @@ impl SheetApp {
             selected_object: None,
             clipboard_text_at_copy: None,
             cut_text: None,
+            published_picture: None,
+            copied_image: None,
             tab_run: None,
             macros: macro_ui::MacroUi::default(),
             started: now_ms(),
@@ -132,6 +137,9 @@ impl SheetApp {
         // issues the capture command (after every widget, so a command cannot be missed).
         control::drain_screenshots(self, ctx);
         control::poll(self, ctx);
+        crate::python_ui::tick(self, ctx);
+        // A save that waited, once Python has taken this frame's result.
+        crate::save_wait::poll(self, ctx);
         // Printing feedback is polled once per frame, here, so hidden windows and logic-only
         // frames still see worker completion. `ui` and the desktop app no longer poll it.
         self.poll_printing(ctx);
@@ -206,6 +214,7 @@ impl SheetApp {
         if self.draft_elsewhere() {
             self.commit_edit(0, 0, false, false);
         }
+        crate::python_window::before_ui(self, &ctx);
         // The language the widgets translate with this frame (see `i18n::current`).
         i18n::set_current(&ctx, self.ui.language);
         #[cfg(not(target_arch = "wasm32"))]
@@ -224,10 +233,13 @@ impl SheetApp {
         }
         if self.backstage.is_some() {
             // File tab: the Backstage view replaces everything below the title bar.
+            crate::save_wait::bar(self, ui);
             backstage::show(self, ui);
         } else {
             ribbon::show(self, ui);
             widgets::notice_bar(self, ui);
+            crate::save_wait::bar(self, ui);
+            crate::python_ui::enable_bar(self, ui);
             // Python mode edits only in the formula bar: it shows while a Python edit is open,
             // also when the preference hides it.
             if self.session.prefs.formula_bar || self.editor.as_ref().is_some_and(|e| e.python) {
@@ -245,6 +257,7 @@ impl SheetApp {
                 self.perf.grid_ms = now_ms() - g0;
             });
         }
+        crate::python_window::show(self, &ctx);
         dialogs::show(self, &ctx);
         macro_ui::forget_closed_editor(self);
         macro_ui::question_box(self, &ctx);

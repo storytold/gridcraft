@@ -12,11 +12,25 @@ impl SheetApp {
         if matches!(id, "edit.copy" | "edit.cut") && r.is_ok() {
             self.clipboard_text_at_copy = self.system_clipboard_text();
             self.cut_text = if id == "edit.cut" { self.clipboard_text_at_copy.clone() } else { None };
+            self.forget_published_picture();
+        }
+        if matches!(id, "object.copy" | "object.cut") && r.is_ok() {
+            self.note_clipboard_at_object_copy();
         }
         r
     }
 
     pub(super) fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        // A save only waits where something can hold it (`run_or_alert`, the control channel):
+        // `wait` must not reach the engine, where it would block the frame.
+        let params = if matches!(id, "file.save" | "file.saveAs") { crate::save_wait::without_wait(params) } else { params };
+        // Closing the workbook would lose the Python editor's unsaved code. The interface asks
+        // first (see `run_or_alert`); a programmatic call is refused.
+        if (id == "file.close" && crate::python_window::blocks_close(self, &params))
+            || (id == "window.close" && crate::python_window::blocks_window_close(self, &params))
+        {
+            return Err("The Python editor has unsaved changes for this workbook. Apply or discard them first (ui.pythonEditor with on: false and force: true discards them).".into());
+        }
         let switches_window = id.starts_with("window.")
             || matches!(id, "view.newWindow" | "view.hideWindow" | "view.unhideWindow")
             || (id == "view.switchWindows" && ["window", "doc"].iter().any(|k| params.get(*k).is_some_and(|d| !d.is_null())));
@@ -91,6 +105,13 @@ impl SheetApp {
         {
             self.selected_object = Some(gridcraft_engine::model::ObjRef::new(gridcraft_engine::model::ObjKind::Chart, chart));
         }
+        // The pasted picture is selected, as the new chart is above.
+        if id == "object.paste"
+            && let Ok(r) = &r
+            && let Some(image) = r.get("image").and_then(Json::as_u64).and_then(|id| u32::try_from(id).ok())
+        {
+            self.selected_object = Some(gridcraft_engine::model::ObjRef::new(gridcraft_engine::model::ObjKind::Image, image));
+        }
         if id == "file.exportPdf"
             && let Ok(r) = &r
         {
@@ -100,6 +121,26 @@ impl SheetApp {
     }
 
     pub fn run_or_alert(&mut self, id: &str, params: Json) {
+        // File › Close (or Ctrl+W) with unsaved code in the Python editor: the editor asks first.
+        if id == "file.close" && crate::python_window::blocks_close(self, &params) {
+            return crate::python_window::ask(self, crate::python_window::Pending::CloseWorkbook(params));
+        }
+        // The close button of the workbook's last window (a native window) asks the same way.
+        if id == "window.close" && crate::python_window::blocks_window_close(self, &params) {
+            return crate::python_window::ask(self, crate::python_window::Pending::CloseWindow(params));
+        }
+        // A save waiting for Python cells asks before its workbook closes, as unsaved work does.
+        if matches!(id, "file.close" | "window.close") && self.ask_before_closing_waiting_save(id, &params) {
+            return;
+        }
+        // A save while the workbook's Python cells run waits for them.
+        if matches!(id, "file.save" | "file.saveAs") {
+            match self.person_save_waits(id, &params) {
+                Ok(true) => return,
+                Ok(false) => {}
+                Err(e) => return self.alert_unless_shown(e),
+            }
+        }
         // A menu/shortcut opens the settings first; the Print page's button submits explicitly.
         if id == "file.print" {
             if self.services.print_native.is_some() {
@@ -112,6 +153,10 @@ impl SheetApp {
         // Programmatic callers use `run` and keep getting the PDF bytes back.
         if id == "file.exportPdf" && self.services.pick_save.is_some() && params.get("path").and_then(Json::as_str).is_none_or(str::is_empty) {
             return self.export_pdf_with_picker(params);
+        }
+        // A Python table with no file named: the same. `python.saveCsv` itself never asks.
+        if id == "python.saveCsv" && params.get("path").and_then(Json::as_str).is_none_or(str::is_empty) {
+            return crate::python_card::save_with_picker(self, &params);
         }
         // Recommended Charts with no chart type named (ribbon button, keytip, command search) asks
         // which chart to insert; programmatic callers of `run` still get the first recommendation.
@@ -126,11 +171,16 @@ impl SheetApp {
             self.open_switch_windows = true;
             return;
         }
-        match self.run(id, params) {
-            // A refused cell draft already shows its own message (with the rule's title).
-            Err(e) if self.message.as_ref().is_some_and(|(_, m)| *m == e) => {}
-            Err(e) => self.alert(e),
-            Ok(_) => {}
+        if let Err(e) = self.run(id, params) {
+            self.alert_unless_shown(e);
+        }
+    }
+
+    /// Shows a command error, unless it is on the screen already: a refused cell draft shows its own
+    /// message (with the rule's title).
+    fn alert_unless_shown(&mut self, e: String) {
+        if !self.message.as_ref().is_some_and(|(_, m)| *m == e) {
+            self.alert(e);
         }
     }
 
@@ -245,7 +295,19 @@ impl SheetApp {
                 match p.get("page").and_then(Json::as_str).map(str::trim) {
                     Some("close" | "none" | "") => self.backstage = None,
                     Some(id) => match backstage::Page::parse(id) {
-                        Some(page) => self.open_backstage(page),
+                        Some(page) => {
+                            self.open_backstage(page);
+                            // `{"page": "options", "section": "python"}` opens File › Options › Python.
+                            if let Some(section) = p.get("section").and_then(Json::as_str)
+                                && let Some(b) = self.backstage.as_mut()
+                            {
+                                b.options_tab = if section.eq_ignore_ascii_case("python") {
+                                    backstage::OptionsTab::Python
+                                } else {
+                                    backstage::OptionsTab::General
+                                };
+                            }
+                        }
                         None => {
                             return Some(Err(format!(
                                 "unknown File page {id:?} (use home, new, open, info, saveAs, print, export, options or close)"
@@ -276,6 +338,14 @@ impl SheetApp {
                 }
                 Ok(json!({"on": self.editor.as_ref().is_some_and(|e| e.python)}))
             }
+            "ui.pythonCard" => crate::python_card::command(self, p),
+            "ui.pythonEditor" => crate::python_window::command(self, p),
+            "ui.pythonInitialization" => crate::python_window::initialization_command(self, p),
+            "ui.pythonEnvironment" | "ui.pythonPackages" | "ui.pythonProblems" | "ui.pythonRunLog" | "ui.pythonPermissions" => {
+                crate::python_ui::pane_of_command(id)
+                    .map_or_else(|| Err("unknown pane".to_string()), |pane| crate::python_ui::pane_command(self, pane, p))
+            }
+            "ui.saveWait" => crate::save_wait::command(self, p),
             "ui.message.dismiss" => {
                 self.message = None;
                 Ok(Json::Null)

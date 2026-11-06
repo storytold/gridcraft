@@ -167,6 +167,7 @@ pub(crate) fn paint_pages(input: PagePaintInput<'_>, cf: &mut CfCache) -> Vec<gr
             painter: &pc,
             geo,
             workbook: wb,
+            session: &app.session,
             sheet_index: si,
             sheet: sh,
             rows,

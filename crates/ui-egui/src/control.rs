@@ -15,7 +15,15 @@
 //! - `ui.edit.begin {text?}`, `ui.edit.commit {move?}`, `ui.edit.cancel`
 //! - `ui.screenshot {path?}` — PNG of the window (base64 when no path); animations are settled
 //! - `ui.resize {width, height}`, `ui.set {dark?, formulaBar?, ribbonCollapsed?, animations?}`
-//! - `app.open {path, password?}`, `app.save {path?}`, `app.quit`
+//! - `app.open {path, password?}`, `app.save {path?, wait?, waitSeconds?}`, `app.quit`
+//!
+//! `engine.execute` takes `wait` and `waitSeconds`, and `file.save` and `file.saveAs` as well in
+//! their own params: the reply is held until the workbook's Python is idle, or the save has happened
+//! ([`crate::save_wait`]).
+//!
+//! Nothing here turns Python on, chooses its interpreter or enables a workbook. They aren't
+//! commands, `ui.set` has no such field, and the widgets refuse synthetic input ([`crate::python_ui`]
+//! says what that covers, and the limit).
 
 use std::sync::mpsc::Sender;
 
@@ -80,7 +88,20 @@ impl ControlRequest {
 
 pub enum Outcome {
     Done(Json),
-    Screenshot { path: Option<String> },
+    Screenshot {
+        path: Option<String>,
+    },
+    /// The reply waits for Python ([`crate::save_wait`]).
+    Hold(crate::save_wait::Hold),
+}
+
+/// How long a sender waits for a reply, when the UI is responsive, before it gives up.
+const REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// How long a control server waits for the reply to a request with these params: a request that
+/// asks to wait may hold its reply for up to [`gridcraft_engine::python::MAX_WAIT`] once it runs.
+pub fn reply_timeout(params: &Json) -> std::time::Duration {
+    if gridcraft_engine::python::reply_may_be_held(params) { REPLY_TIMEOUT.saturating_add(gridcraft_engine::python::MAX_WAIT) } else { REPLY_TIMEOUT }
 }
 
 fn ok(v: Json) -> Outcome {
@@ -148,6 +169,9 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
         "scroll": [v.scroll.x, v.scroll.y],
         "editor": app.editor.as_ref().map(|e| editor_json(app, e)),
         "dialog": app.dialog.as_ref().map(|d| json!({"name": d.name, "title": d.title, "values": d.values, "tab": d.tab})),
+        "saveWaits": crate::save_wait::inspect(app),
+        "pythonEditor": crate::python_window::state(app),
+        "python": crate::python_ui::inspect(app),
         "backstage": app.backstage.as_ref().map(|b| b.page.id()),
         "message": app.message.as_ref().map(|(t, m)| json!({"title": t, "text": m})),
         "selectedObject": app.selected_object,
@@ -170,14 +194,18 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
 /// draft's own, found by identity: a sheet inserted, deleted or moved in the same batch puts
 /// another at its index. With its sheet gone, such a draft is left out too.
 fn editor_json(app: &SheetApp, e: &crate::editor::EditState) -> Json {
-    let code = e.python || e.py_cell;
-    let hidden = code
+    let hidden = draft_hidden(app, e);
+    let text = if hidden { Json::Null } else { json!(e.text) };
+    json!({"cell": e.cell.a1(), "text": text, "hidden": hidden, "formulaBar": e.from_formula_bar, "point": e.can_point(), "python": e.python})
+}
+
+/// Whether a draft of Python code is out of view: see [`editor_json`].
+pub(crate) fn draft_hidden(app: &SheetApp, e: &crate::editor::EditState) -> bool {
+    (e.python || e.py_cell)
         && app.session.documents().iter().find(|d| d.uid == e.doc).is_some_and(|d| match e.sheet_in(&d.wb).and_then(|i| d.wb.sheet(i)) {
             Some(sh) => gridcraft_engine::display::formula_hidden(&d.wb, sh, e.cell),
             None => true,
-        });
-    let text = if hidden { Json::Null } else { json!(e.text) };
-    json!({"cell": e.cell.a1(), "text": text, "hidden": hidden, "formulaBar": e.from_formula_bar, "point": e.can_point(), "python": e.python})
+        })
 }
 
 /// `ui.dialog.cancel`: closes the open dialog as its Cancel button does, going back to the sheet
@@ -231,6 +259,81 @@ fn select_object(app: &mut SheetApp, p: &Json) -> Outcome {
     ok(json!({"selected": o, "rect": rect.map(|r| [r.left(), r.top(), r.width(), r.height()])}))
 }
 
+/// `file.save` or `file.saveAs` asked for through the control channel, in the target window: see
+/// [`crate::save_wait::control_save`]. `envelope` is the request around `params`, which may say to
+/// wait as well.
+fn save_request(app: &mut SheetApp, id: &str, params: Json, envelope: &Json) -> Outcome {
+    let bound = match crate::save_wait::asked_of(&params, envelope) {
+        Ok(bound) => bound,
+        Err(e) => return err(e),
+    };
+    let target = match gridcraft_engine::Target::from_json(envelope) {
+        Ok(t) => t,
+        Err(e) => return err(e),
+    };
+    let guard = match app.session.enter_target(target) {
+        Ok(guard) => guard,
+        Err(e) => return err(e),
+    };
+    let out = crate::save_wait::control_save(app, id, params, bound);
+    app.session.leave_target(guard);
+    out
+}
+
+/// `file.save` or `file.saveAs` called by its id: `window` and `doc` are the target, and the rest its
+/// params.
+fn direct_save(app: &mut SheetApp, id: &str, p: &Json) -> Outcome {
+    let mut params = p.clone();
+    if let Some(o) = params.as_object_mut() {
+        o.remove("window");
+        o.remove("doc");
+    }
+    save_request(app, id, params, p)
+}
+
+/// `app.quit`. Programmatic calls never open dialogs: quitting from here doesn't ask about unsaved
+/// workbooks. Unsaved code in the Python editor refuses the quit instead, as it refuses `file.close`
+/// (the code is in no workbook, so nothing could save it), and so does a save waiting for Python cells,
+/// which would be lost with a reply someone is waiting for.
+fn quit(app: &mut SheetApp, ctx: &egui::Context) -> Outcome {
+    if let Some(e) = crate::python_window::quit_refused(app) {
+        return err(e);
+    }
+    if app.save_waits.any() {
+        return err("A save is waiting for Python cells. End it first (ui.saveWait with saveNow or cancel), or wait for it.");
+    }
+    app.allow_close = true;
+    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    ok(Json::Null)
+}
+
+/// `engine.execute` of anything but a save: the command runs, and with `wait` its reply holds until
+/// the workbook it ran in has no Python running or queued.
+fn execute(app: &mut SheetApp, id: &str, params: Json, envelope: &Json) -> Outcome {
+    let bound = match gridcraft_engine::python::wait_asked(envelope) {
+        Ok(bound) => bound,
+        Err(e) => return err(e),
+    };
+    let target = match gridcraft_engine::Target::from_json(envelope) {
+        Ok(t) => t,
+        Err(e) => return err(e),
+    };
+    let asked_params = bound.is_some().then(|| params.clone());
+    let doc = bound.and_then(|_| app.session.target_window(target).ok()).and_then(|w| app.session.window(w).map(|w| w.doc_uid));
+    let r = run_in(app, target, id, params);
+    match (bound, r) {
+        (Some(bound), Ok(result)) => {
+            // A command may have opened or closed the workbook it ran in.
+            let doc = doc.filter(|d| app.session.document_index(*d).is_some()).or_else(|| app.session.active().map(|d| d.uid));
+            match doc {
+                Some(doc) => crate::save_wait::hold_until_idle(app, doc, result, asked_params.as_ref().unwrap_or(&Json::Null), bound),
+                None => ok(result),
+            }
+        }
+        (_, r) => wrap(r),
+    }
+}
+
 /// Keeps the commands whose id, label or ribbon path contains `search` (case-insensitive); `None` keeps all.
 fn filter_commands(commands: Vec<Json>, search: Option<&str>) -> Vec<Json> {
     let Some(q) = search.map(str::to_ascii_lowercase) else { return commands };
@@ -249,12 +352,8 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
     let out = match method {
         "engine.execute" | "command" | "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
-            let params = p.get("params").cloned().unwrap_or(json!({}));
-            let target = match gridcraft_engine::Target::from_json(p) {
-                Ok(t) => t,
-                Err(e) => return err(e),
-            };
-            wrap(run_in(app, target, id, if params.is_null() { json!({}) } else { params }))
+            let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
+            if matches!(id, "file.save" | "file.saveAs") { save_request(app, id, params, p) } else { execute(app, id, params, p) }
         }
         "engine.commands" => {
             let mut v: Vec<Json> = app.session.commands().into_iter().map(|c| serde_json::to_value(c).unwrap_or_default()).collect();
@@ -269,6 +368,27 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                     "{on?: bool} (toggles without it) → {on}; {lines: int} sets the expanded height (1 collapses) → {on, lines}",
                 ),
                 ("ui.pythonMode", "Python Mode", "{on?: bool} (toggles without it) → {on}; a refused start is an error"),
+                ("ui.pythonCard", "Python Card", "{on?: bool} (false closes it; otherwise opens the active Python cell's card) → {open, cell?}"),
+                (
+                    "ui.pythonEditor",
+                    "Python Editor",
+                    "{on?: bool (toggles without it), cell?: \"A1\" | \"Sheet2!B3\" (default: the active cell), force?: bool (discards unsaved code instead of refusing)} → {open, sheet?, cell?, text? (null while the code is hidden), hidden?, dirty?, pending?, notice?, rect?}",
+                ),
+                (
+                    "ui.pythonInitialization",
+                    "Initialization",
+                    "{on?: bool (toggles without it), force?: bool (discards unsaved code instead of refusing)} → the state ui.pythonEditor gives, with initialization: true while the window has the workbook's initialization code",
+                ),
+                ("ui.pythonEnvironment", "Python Environment", "{on?: bool} (toggles without it) → {open}"),
+                ("ui.pythonPackages", "Python Packages", "{on?: bool} (toggles without it) → {open}"),
+                ("ui.pythonProblems", "Python Problems", "{on?: bool} (toggles without it) → {open}"),
+                ("ui.pythonRunLog", "Python Run Log", "{on?: bool} (toggles without it) → {open}"),
+                ("ui.pythonPermissions", "What Python Can Do", "{on?: bool} (toggles without it) → {open}"),
+                (
+                    "ui.saveWait",
+                    "Save Waiting for Python",
+                    "{action?: saveNow|cancel} → {waiting, doc?, ms?, capMs?, prompt?, saves?, closeAfter?, quitting?, unfinished?, unfinishedCount?} for the active workbook; saveNow saves without waiting any longer, cancel ends the wait with no save",
+                ),
                 ("view.darkMode", "Dark Mode", ""),
                 ("view.theme", "Display Theme", ""),
                 ("view.animations", "Animations", "{on?: bool} (toggles without it) → {on}"),
@@ -276,7 +396,11 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("options.highlightActiveRow", "Highlight the active cell's row", "{on?: bool} (toggles without it) → {on}"),
                 ("view.interfaceScale", "Interface Size", "{percent: 75–200 | \"auto\"} (100 = auto; clamped)"),
                 ("ui.dialog", "Open Dialog", ""),
-                ("ui.backstage", "File (Backstage view)", "{page?: home|new|open|info|saveAs|print|export|options|account|close}"),
+                (
+                    "ui.backstage",
+                    "File (Backstage view)",
+                    "{page?: home|new|open|info|saveAs|print|export|options|account|close, section?: general|python}",
+                ),
                 (
                     "ui.printSettings",
                     "Print Settings",
@@ -490,13 +614,9 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 (Ok(_), None) => ok(json!({"title": app.session.active().map(|d| d.display_title())})),
             }
         }
-        "app.save" => wrap(app.run("file.save", json!({"path": s("path")}))),
-        "app.quit" => {
-            // Programmatic calls never open dialogs: quitting from here doesn't ask about unsaved work.
-            app.allow_close = true;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            ok(Json::Null)
-        }
+        "app.save" => save_request(app, "file.save", json!({"path": s("path")}), p),
+        "app.quit" => quit(app, ctx),
+        "file.save" | "file.saveAs" => direct_save(app, method, p),
         // Anything else that names a command runs it.
         other if gridcraft_engine::find_command(other).is_some() => wrap(direct(app, other, p, true)),
         other => err(format!("unknown method `{other}`")),
@@ -520,6 +640,7 @@ pub fn poll(app: &mut SheetApp, ctx: &egui::Context) {
                 let _ = req.reply.send(v);
             }
             Outcome::Screenshot { path } => admit(app, ctx, path, req.reply),
+            Outcome::Hold(held) => crate::save_wait::hold(app, ctx, held, req.reply),
         }
     }
     app.control_rx = Some(rx);
