@@ -1072,6 +1072,8 @@ mod tests {
         let asked = s.take_ui_requests();
         let Some(crate::UiRequest::Dialog(name, p)) = asked.first() else { panic!("{asked:?}") };
         assert_eq!((name.as_str(), p["table"].as_str(), p["then"].as_str()), ("dbPassword", Some(names[1].as_str()), Some("refreshAll")));
+        // The answers are recorded without them, as in the journal.
+        s.start_recording();
         // The first answer: still one password missing, still nothing runs.
         let r = s.execute("data.refreshAll", json!({"table": names[1], "password": "p1"})).unwrap();
         assert_eq!(r["needPassword"], json!([names[2]]), "{r}");
@@ -1081,8 +1083,11 @@ mod tests {
         assert_eq!(r["refreshed"], 3, "{r}");
         let ran: Vec<(String, Option<String>)> = seen.lock().unwrap()[before..].iter().map(|q| (q.query.clone(), q.password.clone())).collect();
         assert_eq!(ran, [("open".into(), None), ("one".into(), Some("p1".into())), ("two".into(), Some("p2".into()))]);
-        // The answers are never journaled (a recorded script would replay them).
+        // The answers are never journaled or recorded (a recorded script would replay them).
         assert!(s.journal.iter().all(|(_, p)| p.get("password").is_none()), "{:?}", s.journal);
+        let recorded = s.stop_recording().expect("recording").steps;
+        assert_eq!(recorded.iter().filter(|r| r.id == "data.refreshAll").count(), 2);
+        assert!(recorded.iter().all(|r| r.params.get("password").is_none() && !r.params.to_string().contains("p1")), "{recorded:?}");
         // A password for a table that wasn't imported is refused.
         assert!(s.execute("data.refreshAll", json!({"table": "Nope", "password": "x"})).is_err());
     }
