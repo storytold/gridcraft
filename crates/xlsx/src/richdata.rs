@@ -1,11 +1,11 @@
 //! Static in-cell PNG/JPEG images, from the public MS-XLSX rich-data schemas.
 //! `vm` and metadata type IDs are one-based; every subsequent table index is zero-based.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use gridcraft_model::CellPicture;
+use gridcraft_model::{CellPicture, Workbook};
 
 use crate::IoError;
 use crate::package::{Rel, normalize};
@@ -24,6 +24,18 @@ const MAX_PIXELS: u64 = 16_000_000;
 
 /// Header dimensions bound decode allocations in consumers. Full decoding is left to the UI.
 fn image_type(data: &[u8]) -> Option<(&'static str, &'static str)> {
+    image_header(data).map(|(_, _, mime, ext)| (mime, ext))
+}
+
+/// The pixels across and down and the MIME type of bytes that can be a cell picture.
+pub(crate) fn picture_size(data: &[u8]) -> Option<(u32, u32, &'static str)> {
+    if data.len() as u64 > MAX_IMAGE {
+        return None;
+    }
+    image_header(data).map(|(width, height, mime, _)| (width, height, mime))
+}
+
+fn image_header(data: &[u8]) -> Option<(u32, u32, &'static str, &'static str)> {
     let dimensions = if data.len() >= 33 && data.starts_with(b"\x89PNG\r\n\x1a\n") && data.get(8..16)? == b"\0\0\0\rIHDR" {
         let w = u32::from_be_bytes(data.get(16..20)?.try_into().ok()?);
         let h = u32::from_be_bytes(data.get(20..24)?.try_into().ok()?);
@@ -34,7 +46,7 @@ fn image_type(data: &[u8]) -> Option<(&'static str, &'static str)> {
         None
     };
     let (w, h, mime, ext) = dimensions?;
-    (w > 0 && h > 0 && w <= 8192 && h <= 8192 && u64::from(w) * u64::from(h) <= MAX_PIXELS).then_some((mime, ext))
+    (w > 0 && h > 0 && w <= 8192 && h <= 8192 && u64::from(w) * u64::from(h) <= MAX_PIXELS).then_some((w, h, mime, ext))
 }
 
 fn jpeg_dimensions(data: &[u8]) -> Option<(u32, u32)> {
@@ -259,11 +271,37 @@ fn read_value(
 pub struct PicturesOut {
     pictures: Vec<Arc<CellPicture>>,
     indices: HashMap<*const CellPicture, u32>,
+    /// Bytes and rich values Python cells may still take ([`PicturesOut::python_index`]).
+    python_bytes: usize,
+    python_records: usize,
 }
 
 impl PicturesOut {
     pub fn is_empty(&self) -> bool {
         self.pictures.is_empty()
+    }
+    /// Leaves the workbook's plain cell pictures the room the limits below give them, whatever Python
+    /// cells come first: a save fails when a plain picture doesn't fit, as it has nowhere else to go.
+    pub fn keep_room_for_plain_pictures(&mut self, wb: &Workbook) {
+        let mut seen = HashSet::new();
+        let plain = wb.sheets.iter().flat_map(|s| s.cell_pictures.values()).filter(|p| seen.insert(Arc::as_ptr(p)));
+        let bytes = plain.fold(0usize, |n, p| n.saturating_add(p.data.len()));
+        self.python_bytes = MAX_IMAGES_TOTAL.saturating_sub(bytes);
+        self.python_records = MAX_RECORDS.saturating_sub(seen.len());
+    }
+    /// The rich value of a Python cell's picture. `None` when it doesn't fit: such a cell loses nothing,
+    /// as its companion picture holds the picture, and it never fails a save.
+    pub fn python_index(&mut self, picture: &Arc<CellPicture>) -> Option<u32> {
+        if let Some(index) = self.indices.get(&Arc::as_ptr(picture)) {
+            return Some(*index);
+        }
+        let size = picture.data.len();
+        if picture_size(&picture.data).is_none() || size > self.python_bytes || self.python_records == 0 {
+            return None;
+        }
+        self.python_bytes -= size;
+        self.python_records -= 1;
+        Some(self.index(picture))
     }
     pub fn index(&mut self, picture: &Arc<CellPicture>) -> u32 {
         let key = Arc::as_ptr(picture);
@@ -294,9 +332,13 @@ pub fn write(out: &mut Out, workbook_rels: &mut Rels) -> Result<(), IoError> {
         }
         let (mime, ext) = image_type(&picture.data)
             .ok_or_else(|| IoError::Format("cell pictures must be PNG/JPEG with at most 8192 pixels per side and 16 million pixels".into()))?;
-        let image_name = format!("cellImage{}.{}", i + 1, ext);
         out.default_type(ext, mime);
-        out.part(&format!("xl/media/{image_name}"), None, picture.data.clone());
+        // A Python cell's companion picture holds the same bytes, and they are stored once.
+        let image_name = out.find_image(ext, &picture.data).unwrap_or_else(|| {
+            let name = format!("cellImage{}.{}", i + 1, ext);
+            out.part(&format!("xl/media/{name}"), None, picture.data.clone());
+            name
+        });
         let rid = image_rels.add("image", &format!("../media/{image_name}"));
         let _ = write!(rel_list, "<rel r:id=\"{rid}\"/>");
         let _ = write!(data, "<rv s=\"0\"><v>{i}</v><v>5</v><v>{}</v></rv>", esc(&picture.alt));
