@@ -335,7 +335,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         }
         let pasted = RangeRef::new(at, at.offset_clamped(i64::from(tiles_r * h) - 1, i64::from(tiles_c * w) - 1));
         if !link && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
-            paste_validations(cx, src_sheet, src, dest_sheet, pasted, transpose, skip_blanks, &skip_rows)?;
+            paste_validations(cx, src_sheet, src, dest_sheet, pasted, PasteMode { transpose, skip_blanks, skip_rows: &skip_rows })?;
         }
         if what == What::ColumnWidths {
             // Each pasted column takes the width of the column copied to it (transposed, the
@@ -403,6 +403,15 @@ const MAX_PASTE_LINK_CELLS: u64 = 1_048_576;
 /// selection makes one range per tile).
 const MAX_PASTE_VALIDATION_RANGES: usize = 100_000;
 
+/// How a validation paste lays the rules out: transposed or not, keeping the destination's rule under
+/// blank source cells, and leaving the rows a filter hides as they are.
+#[derive(Clone, Copy)]
+struct PasteMode<'a> {
+    transpose: bool,
+    skip_blanks: bool,
+    skip_rows: &'a std::collections::BTreeSet<u32>,
+}
+
 /// `range` less the rows in `skip`: the runs of rows between them, as ranges of its columns.
 fn without_rows(range: RangeRef, skip: &std::collections::BTreeSet<u32>) -> Vec<RangeRef> {
     let mut out = Vec::new();
@@ -429,10 +438,9 @@ fn paste_validations(
     src: RangeRef,
     dest_sheet: usize,
     pasted: RangeRef,
-    transpose: bool,
-    skip_blanks: bool,
-    skip_rows: &std::collections::BTreeSet<u32>,
+    mode: PasteMode<'_>,
 ) -> Result<()> {
+    let PasteMode { transpose, skip_blanks, skip_rows } = mode;
     let (h, w) = if transpose { (src.width(), src.height()) } else { (src.height(), src.width()) };
     let (tiles_r, tiles_c) = (pasted.height() / h.max(1), pasted.width() / w.max(1));
     let mut rules = Vec::new();

@@ -5104,7 +5104,8 @@ fn filtered_rows_with_links() -> Session {
     s.execute("range.setValues", json!({"range": "E1", "values": [["X"]]})).unwrap();
     let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
     for r in 2..=11u32 {
-        sh.hyperlinks.insert(CellRef::new(r - 1, 0), gridcraft_model::Hyperlink { target: format!("https://example.com/{r}"), tooltip: None, external: true });
+        sh.hyperlinks
+            .insert(CellRef::new(r - 1, 0), gridcraft_model::Hyperlink { target: format!("https://example.com/{r}"), tooltip: None, external: true });
     }
     s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
     s.execute("data.filter", json!({})).unwrap();
@@ -5132,7 +5133,8 @@ fn filtered_copy_pastes_links_and_validation_of_the_rows_showing_only() {
     s.execute("edit.copy", json!({"range": "A1:B11"})).unwrap();
     s.execute("edit.paste", json!({"at": "H20"})).unwrap();
     let links: Vec<Option<String>> = (20..=26).map(|r| cell_link_target(&s, &format!("H{r}"))).collect();
-    let expected: Vec<Option<String>> = [None, Some(2u32), Some(4), Some(6), Some(8), Some(10), Some(11)].iter().map(|n| n.map(|n| format!("https://example.com/{n}"))).collect();
+    let expected: Vec<Option<String>> =
+        [None, Some(2u32), Some(4), Some(6), Some(8), Some(10), Some(11)].iter().map(|n| n.map(|n| format!("https://example.com/{n}"))).collect();
     assert_eq!(links, expected);
     let rules: Vec<Option<String>> = (20..=26).map(|r| cell_validation(&s, &format!("H{r}"))).collect();
     assert_eq!(rules, [None, None, Some("\"showing\"".to_string()), None, None, None, None]);
@@ -5155,7 +5157,11 @@ fn single_row_paste_over_filtered_rows_leaves_their_validation_alone() {
         let rules: Vec<Option<String>> = (2..=11).map(|r| cell_validation(&s, &format!("A{r}"))).collect();
         let showing = Some("\"copied\"".to_string());
         let old = Some("\"old\"".to_string());
-        assert_eq!(rules, [showing.clone(), old.clone(), showing.clone(), old, showing.clone(), None, showing.clone(), None, showing.clone(), showing], "skip blanks: {skip_blanks}");
+        assert_eq!(
+            rules,
+            [showing.clone(), old.clone(), showing.clone(), old, showing.clone(), None, showing.clone(), None, showing.clone(), showing],
+            "skip blanks: {skip_blanks}"
+        );
     }
 }
 
