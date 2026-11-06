@@ -158,9 +158,12 @@ fn read_clipboard<T>(
     read(clipboard.as_mut()?).ok()
 }
 
-/// Where running GridCraft processes tell each other which floating picture is on the clipboard.
+/// Where this user's running GridCraft processes tell each other which floating picture is on the
+/// clipboard. Not the system's temporary folder: `/tmp` on Linux is shared, and a note another user
+/// left there can't be replaced, so this user's notes would fail and that user's would be read.
 fn published_picture_note() -> std::path::PathBuf {
-    std::env::temp_dir().join(gridcraft_ui_egui::published_picture::NOTE_FILE)
+    let dir = gridcraft_mcp::control_auth::user_dir().filter(|dir| std::fs::create_dir_all(dir).is_ok());
+    dir.unwrap_or_else(std::env::temp_dir).join(gridcraft_ui_egui::published_picture::NOTE_FILE)
 }
 
 fn services() -> Services {
@@ -478,6 +481,14 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod packaging_tests {
     use gridcraft_engine::io::FileKind;
+
+    #[test]
+    fn the_published_picture_note_is_in_this_users_folder() {
+        let Some(dir) = gridcraft_mcp::control_auth::user_dir() else { return };
+        let note = super::published_picture_note();
+        assert_eq!(note.parent(), Some(dir.as_path()));
+        assert_ne!(note.parent(), Some(std::env::temp_dir().as_path()));
+    }
 
     /// The text between `start` and `end` that follows each `marker` in `text`, sorted (e.g. the
     /// `xlsb` in `Classes\.xlsb\OpenWithProgids`).
