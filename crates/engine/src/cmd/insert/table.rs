@@ -270,6 +270,7 @@ fn valid_table_name(name: &str) -> bool {
         && name.chars().enumerate().all(|(i, c)| c.is_alphanumeric() || c == '_' || c == '.' || (i == 0 && c == '\\'))
 }
 
+/// Rename a table and its references without discarding formula call namespaces.
 pub(super) fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, ti) = find_table(s, p)?;
     let name = str_param(p, "name").ok_or_else(|| bad("table.rename", "missing `name`"))?.to_string();
@@ -303,7 +304,7 @@ pub(super) fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
                     o => o,
                 });
                 if let Some(cell) = sh.cells.get_mut(c) {
-                    cell.formula = Some(std::sync::Arc::new(Formula::from_expr(ne)));
+                    cell.formula = Some(std::sync::Arc::new(f.rewrite_expr(ne)));
                 }
             }
         }

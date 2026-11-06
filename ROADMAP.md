@@ -271,6 +271,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-31 | minor | File-page text fields keep the view open when Esc cancels an edit (#3035) |
 | 2026-10-31 | minor | Progress log: Recently Used and Insert Function categories |
 | 2026-10-31 | minor | Progress log: Function Library |
+| 2026-10-29 | minor | #2836 outside-diff review: preserve mixed bare/prefixed known-function occurrences; XLSX and command regressions; estimates unchanged |
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
 | 2026-10-24 | minor | Macro interface on the Automate tab; progress log row |
 | 2026-10-24 | minor | Macro engine and `macro.*` commands; catalog 275 / 291 → 276 / 292 (View › Macros › Record Macro); progress log row |

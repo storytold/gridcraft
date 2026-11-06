@@ -11,6 +11,28 @@ docs; the summary is in [target-app-parity.md](target-app-parity.md).
 Kinds: **F** feature · **U** UI/UX · **FF** file format · **H** hardware · **L** localization ·
 **P** performance · **S** stability.
 
+## Imported cell-function namespaces (#2775)
+
+Mixed bare and prefixed occurrences of known functions (for example `XLOOKUP` /
+`_xlfn.XLOOKUP` and `FILTER` / `_xlfn._xlws.FILTER`) retain their per-call spelling on
+import, unrelated/argument edits, copying, undo/redo and repeated saves. Uniform canonical
+calls keep their existing behavior; this does not change function calculation support.
+Namespaces are assigned to the original expression calls before file-only operator calls are
+generated. Model-normalized trim calls are aligned on import; mismatched occurrence counts
+fall back to canonical spelling instead of attaching a namespace to another call.
+
+
+Cell formulas keep explicit `_xlfn.` / `_xlfn._xlws.` spellings that the known-function table
+cannot recreate. The evaluator still sees normalized names; this does not implement the
+functions. Shared/array formulas, JSON, formula confirmation and argument edits, copy/fill,
+structural edits and sheet/table renaming retain the metadata. New replacement expressions
+keep only prefixes for calls still present. This complements #2793's default spellings for
+newly entered functions. Defined-name, validation and conditional-format formula strings do
+not yet carry equivalent metadata. Per-name call-count changes drop ambiguous metadata;
+LET/LAMBDA binding-structure changes use fresh formula spelling instead of retargeting a local
+call. Synthetic regression checks do not qualify arbitrary
+Excel-authored workbooks or native Excel calculation.
+
 ## Beta blockers
 
 No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-gate).
@@ -186,6 +208,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | #2836 outside-diff review: preserve mixed bare/prefixed known-function occurrences; XLSX and command regressions; estimates unchanged |
+| 2026-10-28 | minor | Preserve imported cell-function namespaces through read/edit/save, including shared formulas; synthetic compatibility regressions (#2775) |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |
 | 2026-11-02 | minor | §13: Solver Sensitivity report: shadow prices, reduced costs and allowable ranges for Simplex LP; Lagrange multipliers and reduced gradients for GRG Nonlinear |
 | 2026-11-02 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |

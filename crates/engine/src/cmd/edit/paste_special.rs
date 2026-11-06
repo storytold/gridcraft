@@ -5,6 +5,7 @@ use super::{
 };
 
 #[allow(clippy::cognitive_complexity)] // The command applies the selected paste mode in one atomic edit.
+/// Paste components sparsely while retaining imported formula namespaces through rewrites.
 pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(clip) = s.clipboard.clone() else { return Err(EngineError::Other("Nothing to paste.".into())) };
     let what = match str_param(p, "what").unwrap_or("all") {
@@ -165,7 +166,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                             } else {
                                 e
                             };
-                            let mut moved = Formula::from_expr(e);
+                            let mut moved = f.rewrite_expr(e);
                             // The array range moves with its formula.
                             let (dr, dc) = (dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
                             moved.array = f.array.and_then(|a| Some(RangeRef::new(a.start.offset(dr, dc)?, a.end.offset(dr, dc)?)));
@@ -173,7 +174,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                             return Some(std::sync::Arc::new(moved));
                         }
                         let moved = gridcraft_formula::adjust::shift_relative(e, dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
-                        Some(std::sync::Arc::new(Formula { dynamic: f.dynamic, ..Formula::from_expr(moved) }))
+                        Some(std::sync::Arc::new(Formula { dynamic: f.dynamic, ..f.rewrite_expr(moved) }))
                     };
                     let moved_py = |cell: &Cell| -> Result<Option<std::sync::Arc<gridcraft_model::PyCode>>> {
                         let Some(py) = cell.py.clone() else { return Ok(None) };
@@ -295,7 +296,9 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                                 }
                             {
                                 let text = format!("=({}){sym}{}", f.text, gridcraft_core::number_to_text(y));
-                                new.formula = Some(std::sync::Arc::new(Formula::new(&text)));
+                                let mut rewritten = Formula::new(&text);
+                                rewritten.file_functions = f.file_functions.clone();
+                                new.formula = Some(std::sync::Arc::new(rewritten));
                                 new.value = Value::Empty;
                             }
                         }
@@ -539,7 +542,7 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
             if (text != f.text || array != f.array)
                 && let Some(cell) = sheet.cells.get_mut(c)
             {
-                let mut nf = Formula::from_expr(new);
+                let mut nf = f.rewrite_expr(new);
                 nf.array = array;
                 nf.dynamic = f.dynamic;
                 cell.formula = Some(std::sync::Arc::new(nf));

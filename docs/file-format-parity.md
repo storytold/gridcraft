@@ -14,6 +14,32 @@ support comes from `crates/engine/src/io.rs` (`FileKind`), `crates/xlsx/src` and
 Legacy scalar `INDEX(range, MATCH(...))` formulas remain ordinary formulas on save, including when
 shared formulas are expanded during import (`array_export.rs`, #1505).
 
+## Imported cell-function namespaces (#2775)
+Mixed bare and prefixed occurrences of known functions (for example `XLOOKUP` /
+`_xlfn.XLOOKUP` and `FILTER` / `_xlfn._xlws.FILTER`) retain their per-call spelling on
+import, unrelated/argument edits, copying, undo/redo and repeated saves. Uniform canonical
+calls keep their existing behavior; this does not change function calculation support.
+The active table-rename command preserves imported namespaces. All expression rewrites,
+including Name Manager edits, discard stale occurrence metadata when local LET/LAMBDA
+bindings change; XLSX output then chooses the canonical global/local function spelling.
+Explicit namespaces typed or pasted into the formula editor override the previous per-call
+sequence for that function. Unmarked functions keep inherited or canonical XLSX spelling;
+namespace-looking string contents do not override metadata. Automatic parenthesis closing
+retains the explicit namespace as well.
+Namespaces are assigned to the original expression calls before file-only operator calls are
+generated. Model-normalized trim calls are aligned on import; mismatched occurrence counts
+fall back to canonical spelling instead of attaching a namespace to another call.
+Cell formulas keep explicit `_xlfn.` / `_xlfn._xlws.` spellings that the known-function table
+cannot recreate. The evaluator still sees normalized names; this does not implement the
+functions. Shared/array formulas, JSON, formula confirmation and argument edits, copy/fill,
+structural edits and sheet/table renaming retain the metadata. New replacement expressions
+keep only prefixes for calls still present. This complements #2793's default spellings for
+newly entered functions. Defined-name, validation and conditional-format formula strings do
+not yet carry equivalent metadata. Per-name call-count changes drop ambiguous metadata;
+LET/LAMBDA binding-structure changes use fresh formula spelling instead of retargeting a local
+call. Synthetic regression checks do not qualify arbitrary
+Excel-authored workbooks or native Excel calculation.
+
 ## Workbook window settings
 
 GridCraft keeps one modelled workbook window. On XLSX import it selects the first visible
@@ -159,6 +185,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-02 | minor | XLSX: buttons, scroll bars and spin buttons read and written (control properties parts, `<controls>`, VML `x:ClientData`); other form controls stay with pass-through; a button's command, fixed input or output cell travels in a hidden defined name and comes back only while the file still assigns the button's macro (or none, for a command) |
+| 2026-10-29 | minor | #2836 outside-diff review: preserve mixed bare/prefixed known-function occurrences; XLSX and command regressions; estimates unchanged |
 | 2026-11-03 | minor | SYLK (`.slk`) import: values, R1C1 formulas as A1 (shared formulas too) with cached results, number formats and column widths; import only (#1481) |
 | 2026-11-03 | minor | Opening a web page (HTML) reads its first table as a sheet, whatever the file is called: a web app's "Export to Excel" saved as `.xls` no longer opens as lines of markup. Values read as in a CSV (or as text with `csvAsText`), `<th>` cells are bold and centred, `<x:Name>` names the sheet, and a page not named `.htm`/`.html` opens with a warning (#3166) |
 | 2026-11-03 | minor | XLSX `<workbookPr filterPrivacy="1"/>` (Remove personal information from file properties on save) is read and written back, and while it is on GridCraft saves no author (`dc:creator`) and no company, as Excel leaves them empty (#3089, file part) |
@@ -179,6 +206,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-11-01 | trivial | XLSX selects the first visible workbook view as one unit and bounds imported/exported tab ratios; isolated attributes and sheet-edit round trips covered, with firstSheet left to #2264 (#3057) |
 | 2026-10-31 | minor | CSV and text open detects each column's date order: a value that reads only day first (`31/05/2026`) makes the column day first, a value that reads only month first (`12/31/2026`) makes it month first, an all-ambiguous column keeps month first with a warning, and a column with both kinds stays text with a warning (#2765) |
 | 2026-10-31 | minor | XLSX open reads Google Sheets' `IFERROR(__xludf.DUMMYFUNCTION("…"),cached)` export wrapper as the formula inside when GridCraft calculates every function in it (plain, shared and array formulas, whole or nested; Google-only functions and unparseable, over-long or over-deep inner text keep the wrapper and the cached value) and keeps the cached value; saving writes the real formula with Excel's `_xlfn.` prefixes (#2871) |
+| 2026-10-28 | minor | Preserve imported cell-function namespaces through read/edit/save, including shared formulas; synthetic compatibility regressions (#2775) |
 | 2026-10-21 | minor | HTML (Save as Web Page) writes pictures (`data:` URI `<img>`) and charts (inline SVG from the chart crate's drawing primitives, text included) at their anchors; the table uses the sheet's column widths and row heights when the sheet has either, and output for sheets without pictures or charts is unchanged |
 | 2026-10-20 | trivial | XLSX shared strings: Japanese phonetic runs (ふりがな, `<rPh sb="…" eb="…">` with `<phoneticPr>`) are read into the workbook and written back next to the string with the same text, so an open + save no longer deletes them; bad offsets and readings are dropped with a warning, a `<phoneticPr>` without runs is kept on its own, and when duplicate `<si>` items share a text but not a reading only the first reading is written (reported on open) (`phonetic_tests.rs`) |
 | 2026-10-20 | minor | A workbook theme's major/minor per-script typefaces (`<a:font script="Arab" typeface="…"/>`, also Hebr, Jpan and the rest) are read and written back in file order after `<a:cs>`; they were dropped before. A hostile file is held to 64 entries of 256 characters |
