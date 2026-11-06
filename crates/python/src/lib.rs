@@ -35,7 +35,9 @@ pub mod describe;
 /// The web build finds no interpreter, and only has the types.
 #[cfg(target_arch = "wasm32")]
 pub mod describe {
-    pub use crate::interpreter::{Interpreter, Kind, STARTER_PACKAGES, UV_INSTALL, pip_install_command, shell_words, uv_install_commands, uv_setup_commands};
+    pub use crate::interpreter::{
+        Interpreter, Kind, STARTER_PACKAGES, UV_INSTALL, pip_install_command, shell_words, uv_install_commands, uv_setup_commands,
+    };
 }
 #[cfg(not(target_arch = "wasm32"))]
 pub mod fake;
