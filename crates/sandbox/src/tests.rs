@@ -90,6 +90,8 @@ fn the_launcher_reads_its_arguments_back() {
     assert!(bad_policy(Checked::from_args(&os(&["--exec"]))).contains("needs a path"));
     // A second canary isn't taken.
     assert!(bad_policy(Checked::from_args(&os(&["--exec", &p, "--probe", &c, "--probe", &c, "--", &p]))).contains("unknown"));
+    // The enforcement check starts the current executable, so a hand-built list must let it.
+    assert!(bad_policy(Checked::from_args(&os(&["--exec", &p, "--probe", &c, "--", &p]))).contains("current executable"));
     std::fs::remove_dir_all(dir).unwrap();
 }
 
