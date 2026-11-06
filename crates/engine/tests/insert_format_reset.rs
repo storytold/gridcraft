@@ -84,3 +84,59 @@ fn implicit_default_source_clears_a_formatted_destination_line() {
     assert_eq!(capped["formattingCellLimit"], 1_000_000);
     assert_eq!(s.doc().unwrap().wb.active().unwrap().cells.len(), 0);
 }
+
+#[test]
+fn copied_cells_carry_inherited_formats_between_sheets() {
+    for (source, at, line, formatted, outside) in
+        [("B2:C3", "E5", "2:2", "E5", "D5"), ("2:2", "A5", "2:2", "XFD5", "A4"), ("B:B", "E1", "B:B", "E1000000", "D1")]
+    {
+        let mut s = book();
+        s.execute("home.bold", json!({"range": line})).unwrap();
+        let expected = style(&s, "B2");
+        s.execute("home.rowHeight", json!({"rows": "2:2", "height": 71})).unwrap();
+        s.execute("home.columnWidth", json!({"cols": "B:B", "width": 137})).unwrap();
+        s.execute("edit.copy", json!({"range": source})).unwrap();
+        s.execute("home.insertSheet", json!({"name": "Destination"})).unwrap();
+        // Destination dimensions and unrelated formats must not come from source axes.
+        s.execute("home.rowHeight", json!({"rows": "4:6", "height": 31})).unwrap();
+        s.execute("home.columnWidth", json!({"cols": "D:F", "width": 89})).unwrap();
+        s.execute("home.insertCopiedCells", json!({"at": at, "shift": "down"})).unwrap();
+        assert_eq!(style(&s, formatted), expected, "{source} must carry inherited formatting, including blank cells");
+        assert_eq!(style(&s, outside), StyleId::DEFAULT);
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert_eq!(sh.row_height(4), 31.0, "source row height must not overwrite destination metadata");
+        assert_eq!(sh.col_width(4), 89.0, "source column width must not overwrite destination metadata");
+        assert!(s.doc().unwrap().wb.active().unwrap().cells.len() < 40_000, "whole lines stay sparse");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(style(&s, formatted), StyleId::DEFAULT);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(style(&s, formatted), expected);
+        for format in ["xlsx", "json"] {
+            let saved = s.execute("file.saveBytes", json!({"format": format})).unwrap();
+            let mut loaded = Session::new();
+            loaded.execute("file.open", json!({"name": format!("book.{format}"), "base64": saved["base64"]})).unwrap();
+            assert_eq!(style(&loaded, formatted), expected, "{format} lost copied style");
+        }
+    }
+    let mut s = book();
+    s.execute("edit.copy", json!({"range": "B2"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Destination"})).unwrap();
+    s.execute("home.bold", json!({"range": "3:3"})).unwrap();
+    s.execute("home.insertCopiedCells", json!({"at": "B3"})).unwrap();
+    assert_eq!(style(&s, "B3"), StyleId::DEFAULT, "blank default source must clear destination inheritance");
+    check_round_trips(&mut s, "B3");
+}
+
+#[test]
+fn copied_format_limit_rolls_back_the_whole_insertion() {
+    let mut s = book();
+    s.execute("home.bold", json!({"range": "2:70"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A2:XFC70"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Destination"})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    let depth = s.doc().unwrap().undo.len();
+    assert!(s.execute("home.insertCopiedCells", json!({"at": "A1"})).is_err());
+    assert_eq!(s.doc().unwrap().wb, before, "an oversized formatting transfer must leave no partial insertion");
+    assert_eq!(s.doc().unwrap().undo.len(), depth);
+    assert!(s.clipboard.is_some(), "a refused insertion must retain its source copy");
+}

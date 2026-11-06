@@ -250,6 +250,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | minor | Insert Copied Cells carries effective formats between sheets, including blank inherited styles and default overrides. Whole-line styles remain sparse; source dimensions and visibility stay separate. Transfers exceeding 1,000,000 differing cells or 4,000,000 comparisons are refused atomically |
 | 2026-11-06 | minor | Inserted cells and lines retain explicit default-format overrides of inherited row/column styles; empty overrides survive shifts, undo/redo and XLSX/JSON save/open (`insert_format_reset`) |
 | 2026-11-02 | minor | Form controls: buttons, sliders (scroll bars) and spin buttons placed, worked, selected and edited on the sheet (Insert › Controls, Assign Action, Format Control); catalog 281 / 296 |
 | 2026-11-03 | minor | Highlight the active cell's row: a global preference that tints the whole row, off by default |

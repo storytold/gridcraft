@@ -818,6 +818,7 @@ fn insert_copied_steps(s: &mut Session, clip: &crate::Clipboard, sheet: usize, a
     s.clipboard = Some(clip.clone());
     let out = s.execute("edit.pasteSpecial", json!({"what": "all", "at": paste_at.a1(), "sheet": sheet}))?;
     if !cut {
+        copy_inserted_formats(s, &clip, sheet, inserted)?;
         return Ok((inserted, out));
     }
     // Close the gap the moved lines left behind.
@@ -838,6 +839,105 @@ fn insert_copied_steps(s: &mut Session, clip: &crate::Clipboard, sheet: usize, a
         inserted
     };
     Ok((moved, out))
+}
+
+/// Copy effective formats without carrying source axis sizes, visibility or other metadata.
+/// Whole-line styles stay sparse; only differing cell overrides are materialized, with a cap.
+fn copy_inserted_formats(s: &mut Session, clip: &crate::Clipboard, sheet: usize, inserted: RangeRef) -> Result<()> {
+    let src = if clip.selected.is_full_rows() || clip.selected.is_full_cols() { clip.selected } else { clip.range };
+    let source = clip.wb.sheet(clip.sheet).ok_or_else(|| EngineError::Other("The copied sheet no longer exists.".into()))?;
+    let same_doc = s.doc()?.uid == clip.doc_uid;
+    edit(s, |cx| {
+        let mut styles = std::collections::HashMap::new();
+        let mut mapped = |id| {
+            if same_doc { id } else { *styles.entry(id).or_insert_with(|| cx.wb.styles.intern(clip.wb.styles.get(id).clone())) }
+        };
+        // Re-intern before borrowing the destination. Include inherited styles, not only cells.
+        let mut map = std::collections::HashMap::new();
+        for id in source
+            .cells
+            .iter_range(src)
+            .map(|(_, c)| c.style)
+            .chain(source.rows.values().chain(source.cols.values()).filter_map(|i| i.style))
+            .chain(std::iter::once(gridcraft_model::StyleId::DEFAULT))
+        {
+            map.entry(id).or_insert_with(|| mapped(id));
+        }
+        let dest = cx.sheet_mut(sheet)?;
+        if src.is_full_rows() || src.is_full_cols() {
+            let (from, to, start, end, dest_start) = if src.is_full_rows() {
+                (&source.rows, &mut dest.rows, src.start.row, src.end.row, inserted.start.row)
+            } else {
+                (&source.cols, &mut dest.cols, src.start.col, src.end.col, inserted.start.col)
+            };
+            for i in start..=end {
+                let style = from.get(&i).and_then(|info| info.style).map(|id| map[&id]);
+                let key = dest_start + i - start;
+                if style.is_some() || to.contains_key(&key) {
+                    to.entry(key).or_default().style = style;
+                }
+            }
+        }
+        let mut candidates = std::collections::BTreeSet::new();
+        let mut visits = 0u64;
+        let mut add = |r, c| -> Result<()> {
+            visits += 1;
+            if visits > 4_000_000 {
+                return Err(EngineError::Other("Too many cell formats to compare at once (limit: 4,000,000).".into()));
+            }
+            let from = CellRef::new(src.start.row + r, src.start.col + c);
+            let to = CellRef::new(inserted.start.row + r, inserted.start.col + c);
+            if map[&source.style_id(from)] == dest.style_id(to) {
+                return Ok(());
+            }
+            candidates.insert((r, c));
+            if candidates.len() > 1_000_000 {
+                return Err(EngineError::Other("Too many differing cell formats to insert at once (limit: 1,000,000).".into()));
+            }
+            Ok(())
+        };
+        for (c, _) in source.cells.iter_range(src) {
+            add(c.row - src.start.row, c.col - src.start.col)?;
+        }
+        for (c, _) in dest.cells.iter_range(inserted) {
+            add(c.row - inserted.start.row, c.col - inserted.start.col)?;
+        }
+        // Equal line styles need no visits. Orthogonal line styles and explicit overrides
+        // are compared below using the actual effective style (rows take priority).
+        for (a, b, source_start, dest_start, count, across, rows) in [
+            (&source.rows, &dest.rows, src.start.row, inserted.start.row, src.height(), src.width(), true),
+            (&source.cols, &dest.cols, src.start.col, inserted.start.col, src.width(), src.height(), false),
+        ] {
+            let lines: std::collections::BTreeSet<_> = a
+                .range(source_start..source_start + count)
+                .map(|(i, _)| i - source_start)
+                .chain(b.range(dest_start..dest_start + count).map(|(i, _)| i - dest_start))
+                .collect();
+            for i in lines {
+                let from = a.get(&(source_start + i)).and_then(|x| x.style).unwrap_or_default();
+                let to = b.get(&(dest_start + i)).and_then(|x| x.style).unwrap_or_default();
+                if map[&from] == to {
+                    continue;
+                }
+                for j in 0..across {
+                    if rows {
+                        add(i, j)?;
+                    } else {
+                        add(j, i)?;
+                    }
+                }
+            }
+        }
+        for (r, c) in candidates {
+            let from = CellRef::new(src.start.row + r, src.start.col + c);
+            let to = CellRef::new(inserted.start.row + r, inserted.start.col + c);
+            let style = map[&source.style_id(from)];
+            if dest.style_id(to) != style {
+                dest.set_style(to, style);
+            }
+        }
+        Ok(())
+    })
 }
 
 /// Sheet protection for inserting or deleting rows/columns: the protection must allow it, and
