@@ -125,6 +125,7 @@ struct DirEntry {
 /// so `ä` and `Ä` are the same name and `ß` (whose upper case is two letters) only matches itself.
 /// Code units with no single-unit upper case, and surrogates, are compared as they are.
 fn names_match(a: &str, b: &str) -> bool {
+    /// The simple (one-to-one) upper case of one UTF-16 code unit; a unit with no single-unit upper case, or a surrogate, is returned unchanged.
     fn upper(u: u16) -> u16 {
         let Some(c) = char::from_u32(u32::from(u)) else { return u };
         let mut up = c.to_uppercase();
@@ -459,6 +460,7 @@ pub(crate) mod tests {
         b
     }
 
+    /// A one-element path finds the same stream as `root_stream`, case-insensitively; a stream can't be an intermediate hop, and an empty path is an error.
     #[test]
     fn root_level_paths_match_root_streams() {
         let big: Vec<u8> = (0..5000u32).map(|i| (i % 251) as u8).collect();
@@ -603,6 +605,7 @@ pub(crate) mod tests {
         assert!(cf.stream_at_path(&path).unwrap_err().contains("deeper than 8"));
         assert!(cf.children_at_path(&path).is_err());
     }
+    /// A sibling link inside the `VBA` storage that loops (to itself, to an earlier sibling, or back through a left link) is an error for lookups and listings there, while root-level streams still read.
     #[test]
     fn a_sibling_loop_inside_a_storage_is_an_error() {
         let clean = vba_tree();
@@ -618,6 +621,7 @@ pub(crate) mod tests {
             assert_eq!(cf.stream_at_path(&["PROJECT"]).unwrap().unwrap(), filler(300, 1));
         }
     }
+    /// Child links that cycle between two storages, or a storage that is its own child, end in an error within the path depth cap, never a hang.
     #[test]
     fn a_child_cycle_between_storages_is_bounded() {
         let clean = build_tree(&[Node::Storage("A", vec![Node::Storage("B", vec![Node::Stream("x", filler(10, 7))])])]);
@@ -660,6 +664,7 @@ pub(crate) mod tests {
         let err = Compound::open(&file).unwrap().stream_at_path(&["VBA", "dir"]).unwrap_err();
         assert!(err.contains("mini sector chain loops"), "{err}");
     }
+    /// A stream whose declared size is larger than its sector chain holds, in regular and in mini sectors, is an error instead of a short read.
     #[test]
     fn a_declared_size_past_the_data_is_an_error() {
         let clean = vba_tree();
@@ -756,6 +761,7 @@ pub(crate) mod tests {
         assert!(cf.root_stream("Workbook").is_err());
     }
 
+    /// Storage and stream names with accented letters match in any case, and `ß` matches only itself, per [MS-CFB] 2.6.4.
     #[test]
     fn names_match_with_unicode_upper_case() {
         use crate::testing::{Node, build_tree};
