@@ -144,6 +144,134 @@ fn partial_validation_edits_keep_the_rest_of_the_old_rule() {
     assert!(!ok(&mut s, "B1", "150"));
 }
 
+/// The sheet of #3102: Qty in A1:A6, a whole number from 1 to 10 required on A2:A6.
+fn qty_sheet() -> Session {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Qty"], [5], [20], ["abc"], [0], [7]]})).unwrap();
+    s.execute("data.validation", json!({"range": "A2:A6", "type": "whole", "operator": "between", "formula1": "1", "formula2": "10"})).unwrap();
+    s
+}
+
+fn circles(s: &Session, sheet: &str) -> Vec<String> {
+    s.doc().unwrap().validation_circles_on(sheet).iter().map(|c| c.a1()).collect()
+}
+
+#[test]
+fn circle_invalid_data_circles_the_cells_it_lists_and_replaces_them_when_run_again() {
+    let mut s = qty_sheet();
+    assert!(circles(&s, "Sheet1").is_empty());
+    let (wb, undo) = (s.doc().unwrap().wb.clone(), s.doc().unwrap().undo.len());
+    let r = s.execute("data.circleInvalid", json!({})).unwrap();
+    assert_eq!(r, json!({"invalid": ["A3", "A4", "A5"]}));
+    assert_eq!(circles(&s, "Sheet1"), ["A3", "A4", "A5"]);
+    let d = s.doc().unwrap();
+    assert!(Arc::ptr_eq(&d.wb, &wb), "the circles are not part of the workbook");
+    assert_eq!(d.undo.len(), undo, "no undo step");
+    let info = s.execute("document.inspect", json!({})).unwrap();
+    assert_eq!(info["sheets"][0]["validationCircles"], json!(["A3", "A4", "A5"]), "agents read them back");
+    // As in Excel, the circles stay where they are when values change, until the command runs again.
+    s.execute("cell.set", json!({"cell": "A3", "input": "5"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "50"})).unwrap();
+    assert_eq!(circles(&s, "Sheet1"), ["A3", "A4", "A5"]);
+    let r = s.execute("data.circleInvalid", json!({})).unwrap();
+    assert_eq!(r["invalid"], json!(["A2", "A4", "A5"]));
+    assert_eq!(circles(&s, "Sheet1"), ["A2", "A4", "A5"], "replaced, not added to");
+    // Once every value is valid, running it again leaves no circle.
+    for (cell, v) in [("A2", "1"), ("A4", "2"), ("A5", "3")] {
+        s.execute("cell.set", json!({"cell": cell, "input": v})).unwrap();
+    }
+    assert_eq!(s.execute("data.circleInvalid", json!({})).unwrap()["invalid"], json!([]));
+    assert!(s.doc().unwrap().validation_circles.is_empty());
+}
+
+#[test]
+fn clear_validation_circles_removes_the_circles_and_keeps_the_rules() {
+    let mut s = qty_sheet();
+    s.execute("data.circleInvalid", json!({})).unwrap();
+    let (wb, undo) = (s.doc().unwrap().wb.clone(), s.doc().unwrap().undo.len());
+    s.execute("data.clearValidationCircles", json!({})).unwrap();
+    assert!(circles(&s, "Sheet1").is_empty());
+    let d = s.doc().unwrap();
+    assert!(Arc::ptr_eq(&d.wb, &wb), "the rules and the cells are as they were");
+    assert_eq!(d.undo.len(), undo, "no undo step");
+    assert_eq!(d.wb.active().unwrap().validations.len(), 1);
+    let r = s.execute("data.validate", json!({"cell": "A3", "input": "20"})).unwrap();
+    assert_eq!(r["ok"], json!(false), "A3 still refuses 20: {r}");
+    assert_eq!(s.execute("document.inspect", json!({})).unwrap()["sheets"][0]["validationCircles"], json!([]));
+    // Without circles, or without any rule, it succeeds and changes nothing.
+    s.execute("data.clearValidationCircles", json!({})).unwrap();
+    let mut blank = Session::new();
+    blank.new_workbook();
+    blank.execute("data.clearValidationCircles", json!({})).unwrap();
+    assert!(blank.doc().unwrap().validation_circles.is_empty());
+    assert_eq!(blank.execute("data.circleInvalid", json!({})).unwrap(), json!({"invalid": []}));
+}
+
+#[test]
+fn each_sheet_keeps_its_own_validation_circles() {
+    let mut s = qty_sheet();
+    s.execute("data.circleInvalid", json!({})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Two"})).unwrap();
+    s.execute("range.setValues", json!({"range": "B1", "values": [["x"], ["q"]]})).unwrap();
+    s.execute("data.validation", json!({"range": "B1:B2", "type": "list", "formula1": "x,y"})).unwrap();
+    s.execute("data.circleInvalid", json!({})).unwrap();
+    assert_eq!(circles(&s, "Two"), ["B2"]);
+    assert_eq!(circles(&s, "Sheet1"), ["A3", "A4", "A5"], "Circle Invalid Data on Two leaves Sheet1's circles");
+    let sheets = s.execute("document.inspect", json!({})).unwrap()["sheets"].clone();
+    assert_eq!((sheets[0]["validationCircles"].clone(), sheets[1]["validationCircles"].clone()), (json!(["A3", "A4", "A5"]), json!(["B2"])));
+    // Clear Validation Circles works on the active sheet only, like Excel's.
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("data.clearValidationCircles", json!({})).unwrap();
+    assert!(circles(&s, "Sheet1").is_empty());
+    assert_eq!(circles(&s, "Two"), ["B2"]);
+}
+
+#[test]
+fn validation_circles_move_with_inserted_and_deleted_rows_and_go_with_their_sheet_name() {
+    let mut s = qty_sheet();
+    s.execute("data.circleInvalid", json!({})).unwrap();
+    s.execute("home.insertRows", json!({"rows": "2:2"})).unwrap();
+    assert_eq!(circles(&s, "Sheet1"), ["A4", "A5", "A6"], "they stay on their cells");
+    s.execute("home.deleteRows", json!({"rows": "5:5"})).unwrap();
+    assert_eq!(circles(&s, "Sheet1"), ["A4", "A5"], "the deleted cell's circle goes with it");
+    s.execute("sheet.rename", json!({"name": "Data"})).unwrap();
+    assert!(s.doc().unwrap().validation_circles.is_empty(), "a renamed sheet loses its circles");
+    s.execute("data.circleInvalid", json!({})).unwrap();
+    assert_eq!(circles(&s, "Data"), ["A4", "A5"]);
+    s.execute("home.insertSheet", json!({"name": "Other"})).unwrap();
+    s.execute("home.deleteSheet", json!({"sheet": "Data"})).unwrap();
+    assert!(s.doc().unwrap().validation_circles.is_empty(), "a deleted sheet's circles go too");
+}
+
+#[test]
+fn validation_circles_are_not_saved_and_stay_on_the_open_sheet_after_a_save() {
+    let mut s = qty_sheet();
+    s.execute("data.circleInvalid", json!({})).unwrap();
+    let no_circles_in = |bytes: &[u8]| {
+        assert!(!bytes.windows(b"xl/drawings/".len()).any(|w| w == b"xl/drawings/"), "no drawing part");
+        let (reopened, _) = gridcraft_xlsx::read_xlsx(bytes).unwrap();
+        let sh = reopened.sheets[0].clone();
+        assert!(sh.shapes.is_empty() && sh.images.is_empty());
+        assert_eq!(sh.validations.len(), 1, "the rule round-trips");
+    };
+    no_circles_in(&gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap());
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let dir = std::env::temp_dir().join(format!("gridcraft-circles-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("circles.xlsx");
+        s.execute("file.saveAs", json!({"path": path})).unwrap();
+        assert_eq!(circles(&s, "Sheet1"), ["A3", "A4", "A5"], "saving keeps the circles on screen");
+        no_circles_in(&std::fs::read(&path).unwrap());
+        let mut other = Session::new();
+        other.execute("file.open", json!({"path": path})).unwrap();
+        assert!(other.doc().unwrap().validation_circles.is_empty(), "the opened file brings none");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 #[test]
 fn showing_detail_gives_zero_width_columns_their_width_back() {
     // #1714: templates hide grouped columns as `width="0" hidden="1"`; + must show them.
