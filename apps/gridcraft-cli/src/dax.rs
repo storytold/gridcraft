@@ -179,6 +179,11 @@ fn measures(args: &[String]) -> Result<(), String> {
     // Every input is an option, so a positional would be silently ignored.
     parsed.no_extra(0)?;
     let path = parsed.opt("file").ok_or("dax measures needs --file PATH")?;
+    // Without `--write` the command only prints the current measures, so `--out` would be silently
+    // ignored and the command could report success without creating or updating that file.
+    if parsed.opt("write").is_none() && parsed.opt("out").is_some() {
+        return Err("dax measures --out needs --write".into());
+    }
     let bytes = std::fs::read(path).map_err(|e| format!("can't read {path}: {e}"))?;
     let item_data = read_zip_entry(&bytes, "xl/model/item.data")?;
     let current = read_measures(&item_data).map_err(|e| e.to_string())?;
