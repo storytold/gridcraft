@@ -194,6 +194,7 @@ mod tests {
             ("Insert", "N"),
             ("Page Layout", "P"),
             ("Formulas", "M"),
+            ("Python", "Y"),
             ("Data", "A"),
             ("Review", "R"),
             ("View", "W"),

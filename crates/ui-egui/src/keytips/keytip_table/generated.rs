@@ -12,6 +12,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("JI", Entry::Tab("Draw")), // Two-letter unit. Deeper Draw letters differ between Excel and GridCraft; left blank for future contributors.
     ("P", Entry::Tab("Page Layout")),
     ("M", Entry::Tab("Formulas")),
+    ("Y", Entry::Tab("Python")), // A contextual tab of GridCraft's own (Excel keeps these in Formulas, M Y): the letter answers only while the tab is up. Its letters are below, after M.
     ("A", Entry::Tab("Data")),
     ("R", Entry::Tab("Review")),
     ("W", Entry::Tab("View")),
@@ -263,6 +264,27 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("MXA", Entry::Finish(Action::Command("formulas.calculationOptions"))), // Excel: Automatic Calculation; Calculation options: Automatic
     ("MXM", Entry::Finish(Action::Command("formulas.calculationOptions"))), // Excel: Manual Calculation; Calculation options: Manual
     ("MXP", Entry::Finish(Action::Command("formulas.calculationOptions"))), // Excel: Partial Calculation; Calculation options: Partial
+    ("MY", Entry::Finish(Action::Control("python.insert"))),   // Excel: Insert Python; Python group: starts Python mode on the active cell
+    ("MZR", Entry::Finish(Action::Command("python.reset"))),   // Excel: Reset; Python group
+    ("MZI", Entry::Finish(Action::Control("python.initializationEditor"))), // Excel: Initialization; Python group: opens the Initialization editor
+    ("MZD", Entry::Finish(Action::Control("python.problems"))), // Excel: Diagnostics; Python group: opens the Problems pane
+    ("YA", Entry::Finish(Action::Command("python.runAll"))),   // Python tab, Run: Run All
+    ("YB", Entry::Finish(Action::Control("python.problems"))), // Python tab, Diagnostics: Problems
+    ("YC", Entry::Finish(Action::Command("python.run"))),      // Python tab, Run: Run Cell
+    ("YE", Entry::Finish(Action::Control("python.editor"))),   // Python tab, Code: Editor
+    ("YI", Entry::Finish(Action::Control("python.insert"))),   // Python tab, Code: Insert Python
+    ("YK", Entry::Finish(Action::Control("python.checkSandbox"))), // Python tab, Environment: Check Sandbox
+    ("YL", Entry::Finish(Action::Control("python.runLogPane"))), // Python tab, Diagnostics: Run Log
+    ("YM", Entry::Finish(Action::Control("python.calculationMenu"))), // Python tab, Run: Python Calculation
+    ("YN", Entry::Finish(Action::Control("python.state"))),    // Python tab, Environment: the state button
+    ("YO", Entry::Finish(Action::Control("python.outputAs"))), // Python tab, Code: Output As
+    ("YP", Entry::Finish(Action::Control("python.packages"))), // Python tab, Environment: Packages
+    ("YR", Entry::Finish(Action::Command("python.reset"))),    // Python tab, Run: Reset
+    ("YS", Entry::Finish(Action::Command("python.stop"))),     // Python tab, Run: Stop
+    ("YT", Entry::Finish(Action::Control("python.initializationEditor"))), // Python tab, Code: Initialization
+    ("YV", Entry::Finish(Action::Control("python.interpreter"))), // Python tab, Environment: Interpreter; its items are widgets, with no letters
+    ("YW", Entry::Finish(Action::Control("python.permissions"))), // Python tab, Permissions: What Python Can Do
+    ("YX", Entry::Finish(Action::Command("python.clearRunLog"))), // Python tab, Diagnostics: Clear
     ("AB", Entry::Finish(Action::Dialog("subtotal"))),         // Excel: Subtotal
     ("AC", Entry::Finish(Action::Command("data.clearFilter"))), // Excel: Clear Filter
     ("AD", Entry::Finish(Action::Command("data.consolidate"))), // Excel: Consolidate
