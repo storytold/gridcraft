@@ -634,7 +634,7 @@ pub fn toast(app: &mut SheetApp, ctx: &egui::Context) {
     ctx.request_repaint_after(std::time::Duration::from_millis(200));
 }
 
-/// The info bar under the ribbon (Excel's message-bar slot). Shows an open-time notice with an
+/// The info bar under the ribbon (Excel's message-bar slot). Shows a file or command notice with an
 /// optional action button and a dismiss ✕. Returns nothing; dismissing clears `app.notice`.
 pub fn notice_bar(app: &mut SheetApp, ui: &mut Ui) {
     let Some(notice) = app.notice.clone() else { return };

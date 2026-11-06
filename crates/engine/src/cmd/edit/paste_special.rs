@@ -5,6 +5,7 @@ use super::{
 };
 
 #[allow(clippy::cognitive_complexity)] // The command applies the selected paste mode in one atomic edit.
+/// Paste the chosen content atomically, resolving copied snapshot styles before commit-time rounding.
 pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(clip) = s.clipboard.clone() else { return Err(EngineError::Other("Nothing to paste.".into())) };
     let what = match str_param(p, "what").unwrap_or("all") {
@@ -62,11 +63,12 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(src_sheet) = src_wb.sheet(clip.sheet) else { return Err(EngineError::Other("The copied sheet no longer exists.".into())) };
     let src_sheet_name = src_sheet.name.clone();
     edit(s, |cx| {
-        // Styles from another workbook must be re-interned.
+        // Copies use the clipboard snapshot catalog even within the same document: undo can
+        // recycle a numeric style id. Cuts below take live cells from the current catalog.
         let dest_name = cx.wb.sheet(dest_sheet).map(|sh| sh.name.clone()).unwrap_or_default();
         let mut style_map = std::collections::HashMap::new();
         let mut map_style = |id: StyleId, wb: &mut gridcraft_model::Workbook| -> StyleId {
-            if same_doc {
+            if cut_move {
                 return id;
             }
             *style_map.entry(id).or_insert_with(|| wb.styles.intern(src_wb.styles.get(id).clone()))
