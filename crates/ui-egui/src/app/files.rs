@@ -107,8 +107,14 @@ impl SheetApp {
     pub(super) fn autosave(&mut self, ctx: &egui::Context) {
         let dirty_xlsx = self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")));
         let now = crate::monotonic_ms();
-        let autosave_due =
-            self.ui.autosave && self.editor.is_none() && self.text_box_editor.is_none() && now - self.grid.last_autosave > 2000.0 && dirty_xlsx;
+        // Python cells that run hold a save back: it comes at the next idle moment, and asks nothing.
+        let python = self.session.active().is_some_and(|d| self.session.python_workbook_busy(d.uid) || self.save_waits.waiting(d.uid));
+        let autosave_due = self.ui.autosave
+            && self.editor.is_none()
+            && self.text_box_editor.is_none()
+            && now - self.grid.last_autosave > 2000.0
+            && dirty_xlsx
+            && !python;
         if autosave_due {
             self.grid.last_autosave = now;
             self.store_view_state();
