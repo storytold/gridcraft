@@ -125,6 +125,23 @@ impl Hub {
         self.documents.get(doc).map(|d| d.room.version())
     }
 
+    pub fn epoch(&self, doc: &str) -> Option<u64> {
+        self.documents.get(doc).map(|d| d.room.epoch())
+    }
+
+    /// Every sheet of the document with its session key, for the welcome message.
+    pub fn sheet_map(&self, doc: &str) -> Option<Vec<(String, String)>> {
+        let document = self.documents.get(doc)?;
+        let workbook = document.session.active()?.wb.as_ref();
+        let mut out = Vec::with_capacity(workbook.sheets.len());
+        for (index, sheet) in workbook.sheets.iter().enumerate() {
+            if let Some(key) = document.room.sheet_keys().key_for_index(workbook, index) {
+                out.push((key.to_string(), sheet.name.clone()));
+            }
+        }
+        Some(out)
+    }
+
     /// The session key of the sheet at `index`, as the wire carries it. A client that has just
     /// joined gets the map from the welcome message.
     pub fn sheet_key(&self, doc: &str, index: usize) -> Option<String> {

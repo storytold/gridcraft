@@ -13,14 +13,18 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+mod auth;
 mod delta;
+mod gateway;
 mod hub;
 mod keys;
 mod ops;
 mod protocol;
 mod room;
 
+pub use auth::{AuthError, Claims, Expected};
 pub use delta::delta_for;
+pub use gateway::{ClientMessage, Connection, Gateway, ServerMessage, SheetName};
 pub use hub::{Hub, HubError, Participant, Presence, Role, Viewport, viewer_rejection};
 pub use keys::SheetKeys;
 pub use ops::{Class, classify};

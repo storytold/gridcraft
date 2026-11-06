@@ -189,3 +189,90 @@ fn commit_writes_the_authoritative_workbook_as_a_zip_package() {
     let bytes = hub.commit("book").unwrap();
     assert!(bytes.starts_with(b"PK"), "an .xlsx is a zip package");
 }
+
+fn claims(sub: &str, role: crate::Role) -> crate::Claims {
+    crate::Claims {
+        iss: "mail.lzmkm.ru".into(),
+        sub: sub.into(),
+        aud: "office-sync".into(),
+        file_id: 7,
+        app: "gridcraft".into(),
+        role,
+        session_id: "book".into(),
+        iat: 900,
+        exp: 2_000,
+    }
+}
+
+fn expected<'a>() -> crate::Expected<'a> {
+    crate::Expected { aud: "office-sync", app: "gridcraft", file_id: 7, session_id: "book" }
+}
+
+#[test]
+fn a_valid_token_joins_and_gets_the_sheets_and_version() {
+    let mut gw = crate::Gateway::new();
+    assert!(gw.hub_mut().open("book", session()));
+    let (connection, welcome) = gw.connect(&claims("ann", crate::Role::Editor), 1_000, expected(), "Ann").unwrap();
+    assert_eq!(connection.actor, "ann");
+    match welcome {
+        crate::ServerMessage::Welcome { role, version, sheets, participants, .. } => {
+            assert_eq!(role, crate::Role::Editor);
+            assert_eq!(version, 0);
+            assert_eq!(sheets.len(), 1);
+            assert_eq!(participants.len(), 1);
+        }
+        other => panic!("expected welcome, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_token_for_another_file_or_an_expired_one_is_refused() {
+    let mut gw = crate::Gateway::new();
+    assert!(gw.hub_mut().open("book", session()));
+    let mut wrong_file = claims("ann", crate::Role::Editor);
+    wrong_file.file_id = 8;
+    assert_eq!(gw.connect(&wrong_file, 1_000, expected(), "Ann").unwrap_err(), crate::AuthError::WrongFile);
+    let mut expired = claims("ann", crate::Role::Editor);
+    expired.exp = 999;
+    assert_eq!(gw.connect(&expired, 1_000, expected(), "Ann").unwrap_err(), crate::AuthError::Expired);
+    let mut wrong_app = claims("ann", crate::Role::Editor);
+    wrong_app.app = "pdfcraft".into();
+    assert_eq!(gw.connect(&wrong_app, 1_000, expected(), "Ann").unwrap_err(), crate::AuthError::WrongApp);
+}
+
+#[test]
+fn a_viewer_gets_a_rejection_from_the_message_loop() {
+    let mut gw = crate::Gateway::new();
+    assert!(gw.hub_mut().open("book", session()));
+    let (connection, welcome) = gw.connect(&claims("vic", crate::Role::Viewer), 1_000, expected(), "Vic").unwrap();
+    let sheet = match welcome {
+        crate::ServerMessage::Welcome { sheets, .. } => sheets[0].key.clone(),
+        other => panic!("expected welcome, got {other:?}"),
+    };
+    let messages = gw.handle(&connection, crate::ClientMessage::Op { op: op("v", "cell.set", json!({"input": 1}), &sheet, "A1") });
+    match &messages[0] {
+        crate::ServerMessage::Rejected { rejected } => assert_eq!(rejected.code, crate::RejectCode::Forbidden),
+        other => panic!("expected rejection, got {other:?}"),
+    }
+}
+
+#[test]
+fn presence_and_ping_round_trip_through_the_gateway() {
+    let mut gw = crate::Gateway::new();
+    assert!(gw.hub_mut().open("book", session()));
+    let (ann, _) = gw.connect(&claims("ann", crate::Role::Editor), 1_000, expected(), "Ann").unwrap();
+    let (bob, _) = gw.connect(&claims("bob", crate::Role::Viewer), 1_000, expected(), "Bob").unwrap();
+    let presence = crate::Presence { sheet: "1".into(), active: "B2".into(), ranges: vec![], viewport: None };
+    let messages = gw.handle(&ann, crate::ClientMessage::Presence { presence: Some(presence.clone()) });
+    match &messages[0] {
+        crate::ServerMessage::Presence { participants } => {
+            assert_eq!(participants.len(), 2);
+            assert_eq!(participants.iter().find(|p| p.actor == "ann").unwrap().presence, Some(presence));
+        }
+        other => panic!("expected presence, got {other:?}"),
+    }
+    match gw.handle(&bob, crate::ClientMessage::Ping { nonce: 42 })[0] {
+        crate::ServerMessage::Pong { nonce } => assert_eq!(nonce, 42),
+        ref other => panic!("expected pong, got {other:?}"),
+    }
+}
