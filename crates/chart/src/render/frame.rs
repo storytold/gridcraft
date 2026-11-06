@@ -209,6 +209,8 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
         if !plot.ok() {
             return plot;
         }
+        // A plot placed by hand leaves its own room for the labels on its left.
+        let lw = fixed.map_or(lw, |p| lw.min(p.x - area.x - levels_w).max(0.0));
         let vw = maxw(ctx, &ylabels);
         let slot = plot.w / ylabels.len().max(1) as f32;
         let k = (((vw + 6.0) / slot.max(1e-3)).ceil() as usize).max(1);

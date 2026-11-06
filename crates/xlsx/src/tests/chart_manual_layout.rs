@@ -35,6 +35,20 @@ fn hand_placed_parts_are_read() {
     assert!(c.layout.plot.is_some() && !c.layout.plot_inner);
 }
 
+/// `wMode` and `hMode` set to `edge` make `w` and `h` the right and bottom edges, not a size.
+#[test]
+fn edges_given_for_width_and_height_become_a_size() {
+    let modes = "<c:xMode val=\"edge\"/><c:yMode val=\"edge\"/><c:wMode val=\"edge\"/><c:hMode val=\"edge\"/>";
+    let c = chart(
+        "",
+        &layout("<c:layoutTarget val=\"inner\"/>", modes, "<c:x val=\"0.25\"/><c:y val=\"0.125\"/><c:w val=\"0.75\"/><c:h val=\"0.625\"/>"),
+    );
+    assert_eq!(c.layout.plot, Some(ChartRect { x: 0.25, y: 0.125, w: 0.5, h: 0.5 }));
+    // A right edge left of the plot's own left edge leaves no size, and so no plot area.
+    let c = chart("", &layout("", modes, "<c:x val=\"0.5\"/><c:y val=\"0.1\"/><c:w val=\"0.25\"/><c:h val=\"0.9\"/>"));
+    assert_eq!(c.layout.plot, None);
+}
+
 #[test]
 fn layouts_relative_to_the_automatic_place_or_without_a_size_are_left_out() {
     // `factor` (the default mode) moves a part from where it would go by itself: not kept.

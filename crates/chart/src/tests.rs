@@ -1689,3 +1689,29 @@ fn hand_placed_plot_area_and_title_go_where_the_file_puts_them() {
     let outer = bars(&c);
     assert!(outer.iter().map(|b| b.0).fold(f32::MAX, f32::min) > left + 1.0, "labels take room on the left");
 }
+
+/// A bar chart's plot placed by hand near the left edge: the category labels fit in the room
+/// left of it instead of running off the chart.
+#[test]
+fn bar_labels_fit_left_of_a_hand_placed_plot() {
+    use gridcraft_model::{ChartLayout, ChartRect};
+    let mut d = sample(ChartKind::BarClustered);
+    d.categories = (1..=6).map(|i| format!("A rather long category name {i}")).collect();
+    let (w, h) = (600.0, 400.0);
+    let mut c = chart(ChartKind::BarClustered);
+    c.legend = LegendPos::None;
+    c.layout = ChartLayout { plot: Some(ChartRect { x: 0.15, y: 0.1, w: 0.8, h: 0.8 }), plot_inner: true, title: None };
+    let labels: Vec<(f32, String, f32)> = render(&c, &d, w, h, &ApproxMeasure)
+        .into_iter()
+        .filter_map(|p| match p {
+            Prim::Text { x, text, size, align: HAlign::Right, .. } if text.starts_with('A') => Some((x, text, size)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(labels.len(), 6);
+    for (x, t, size) in &labels {
+        let left = x - ApproxMeasure.text_width(t, *size, false);
+        assert!(left >= -0.5, "{t:?} starts at {left}");
+        assert!(t.ends_with('…'), "{t:?} is cut to fit");
+    }
+}

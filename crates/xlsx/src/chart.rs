@@ -171,14 +171,20 @@ fn bool_val(e: &El, tag: &str) -> bool {
 
 /// A part's hand-placed rectangle (`layout/manualLayout`), when measured from the chart's edges.
 /// Positions relative to where the part would go by itself (`factor`, the default mode) aren't
-/// kept. Width and height are 0 where the file leaves them out.
+/// kept. Width and height are 0 where the file leaves them out. With `wMode` or `hMode` set to
+/// `edge`, `w` and `h` are where the right and bottom edges fall, and become a size here.
 fn manual_layout(e: Option<&El>) -> Option<(ChartRect, bool)> {
     let m = e?.path(&["layout", "manualLayout"])?;
     if m.child_val("xMode") != Some("edge") || m.child_val("yMode") != Some("edge") {
         return None;
     }
     let v = |k: &str| f64_val(m, k).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 1.0) as f32);
-    let rect = ChartRect { x: v("x")?, y: v("y")?, w: v("w").unwrap_or(0.0), h: v("h").unwrap_or(0.0) };
+    let (x, y) = (v("x")?, v("y")?);
+    let size = |k: &str, mode: &str, from: f32| {
+        let s = v(k).unwrap_or(0.0);
+        if m.child_val(mode) == Some("edge") { (s - from).max(0.0) } else { s }
+    };
+    let rect = ChartRect { x, y, w: size("w", "wMode", x), h: size("h", "hMode", y) };
     Some((rect, m.child_val("layoutTarget") == Some("inner")))
 }
 
