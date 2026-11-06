@@ -132,7 +132,7 @@ impl Scan {
 pub enum Stripped {
     /// It had none, and stays as it came.
     Unchanged,
-    /// It holds other properties.
+    /// It holds something else.
     Part(Vec<u8>),
     /// They were all it had.
     Nothing,
@@ -143,7 +143,8 @@ pub fn without_notices(bytes: &[u8]) -> Stripped {
     if !scan.properties.iter().any(|p| p.notice) {
         return Stripped::Unchanged;
     }
-    if scan.properties.iter().all(|p| p.notice) {
+    // Any other content keeps the part: an element beside the properties isn't one of them.
+    if scan.properties.iter().all(|p| p.notice) && scan.content_without_notices().is_some_and(|rest| rest.trim().is_empty()) {
         return Stripped::Nothing;
     }
     scan.part("").map_or(Stripped::Unchanged, Stripped::Part)

@@ -196,6 +196,10 @@ fn output_refuses_table_headers_and_locked_cells_as_set_does() {
     let e = s.execute("python.output", json!({"cell": "D1"})).unwrap_err();
     assert!(e.to_string().contains("table header"), "{e}");
     assert_eq!(output_of(&mut s, "D1"), "value");
+    // So does choosing the return type already in effect.
+    let e = s.execute("python.output", json!({"cell": "D1", "mode": "value"})).unwrap_err();
+    assert!(e.to_string().contains("table header"), "{e}");
+    assert!(!py_at(&s, "D1").output_chosen);
     // A locked cell on a protected sheet refuses it; an unlocked one formatted Hidden takes it,
     // as it takes python.set.
     set(&mut s, "F1", "1");
@@ -600,4 +604,53 @@ fn a_protected_sheet_refuses_a_new_linked_picture() {
     let e = s.execute("python.createReference", json!({"id": image})).unwrap_err();
     assert!(e.to_string().contains("protected"), "{e}");
     assert_eq!(count(&s), before, "no picture was added");
+}
+
+#[test]
+fn python_set_with_the_same_code_keeps_a_cell_waiting_for_its_result() {
+    let mut s = s();
+    set(&mut s, "A1", "1");
+    cache_list(&mut s, "A1");
+    {
+        let at = gridcraft_core::CellRef::parse("A1").unwrap();
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        let c = wb.sheet_mut(0).unwrap().cells.get_mut(at).unwrap();
+        std::sync::Arc::make_mut(c.py.as_mut().unwrap()).busy = true;
+    }
+    set(&mut s, "A1", "1");
+    assert!(py_at(&s, "A1").busy);
+}
+
+#[test]
+fn python_set_with_the_same_code_keeps_a_picture_with_no_choice_for_either_return_type() {
+    for (output, object) in [("object", true), ("value", false)] {
+        let mut s = s();
+        set(&mut s, "A1", "plot()");
+        cache_picture(&mut s, "A1");
+        s.execute("python.set", json!({"cell": "A1", "code": "plot()", "output": output})).unwrap();
+        let py = py_at(&s, "A1");
+        assert!(py.image().is_some(), "{output}");
+        assert_eq!((py.output_chosen, py.shows_object()), (true, object), "{output}");
+    }
+}
+
+/// A linked picture names its source by a reference, which goes on naming it when the sheet is renamed;
+/// and it exists only while the source can give it a picture.
+#[test]
+fn a_linked_picture_follows_a_renamed_sheet_and_goes_with_its_source() {
+    let mut s = s();
+    set(&mut s, "A1", "plot()");
+    cache_picture(&mut s, "A1");
+    s.execute("python.displayOverCells", json!({"cell": "A1", "at": "C1"})).unwrap();
+    let sources = |s: &crate::Session| -> Vec<Option<String>> {
+        s.doc().unwrap().wb.active().unwrap().images.iter().map(|o| o.python_source.clone()).collect()
+    };
+    assert_eq!(sources(&s), [Some("Sheet1!$A$1".to_string())]);
+    s.execute("sheet.rename", json!({"name": "My Data"})).unwrap();
+    assert_eq!(sources(&s), [Some("'My Data'!$A$1".to_string())], "the reference follows the name");
+    s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+    assert_eq!(sources(&s), Vec::<Option<String>>::new(), "the picture goes when the cell stops being a Python cell");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(sources(&s).len(), 1, "and undo brings it back");
 }
