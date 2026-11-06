@@ -119,6 +119,46 @@ fn command_search_shows_engine_shortcuts() {
     }
 }
 
+/// The result path (menu breadcrumb) is localized like the command label.
+#[test]
+fn command_search_localizes_the_menu_path() {
+    let mut h = harness();
+    h.state_mut().ui.language = gridcraft_ui_egui::i18n::Language::PtBr;
+    h.run_steps(2);
+    h.state_mut().open_dialog("commandSearch", json!({}));
+    h.run_steps(6);
+    h.state_mut().dialog.as_mut().unwrap().search = "data.sortAscending".into();
+    h.run_steps(3);
+    h.get_by_label_contains("Classificar de A a Z    Dados › Classificar e Filtrar");
+}
+
+/// A decomposed accent typed into the query matches the composed accent in a translated label.
+#[test]
+fn command_search_matches_decomposed_accents() {
+    let mut h = harness();
+    h.state_mut().ui.language = gridcraft_ui_egui::i18n::Language::PtBr;
+    h.run_steps(2);
+    h.state_mut().open_dialog("commandSearch", json!({}));
+    h.run_steps(6);
+    // "Gráfico" typed as "Gra" + U+0301 (combining acute) + "fico".
+    h.state_mut().dialog.as_mut().unwrap().search = "Gra\u{301}fico".into();
+    h.run_steps(3);
+    assert!(h.query_all_by_label_contains("Gráfico").next().is_some(), "the decomposed query matched the composed accent in the label");
+}
+
+/// A decomposed Polish `ż` (z + U+0307) matches the composed `ż` in "Pokaż formuły".
+#[test]
+fn command_search_matches_decomposed_polish() {
+    let mut h = harness();
+    h.state_mut().ui.language = gridcraft_ui_egui::i18n::Language::Pl;
+    h.run_steps(2);
+    h.state_mut().open_dialog("commandSearch", json!({}));
+    h.run_steps(6);
+    h.state_mut().dialog.as_mut().unwrap().search = "Pokaz\u{307}".into();
+    h.run_steps(3);
+    assert!(h.query_all_by_label_contains("Pokaż formuły").next().is_some(), "the decomposed query matched the composed Polish label");
+}
+
 /// Paste Special uses the engine's shortcut metadata when enabled.
 #[test]
 fn command_search_shows_paste_special_metadata() {
