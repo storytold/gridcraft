@@ -40,7 +40,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Convert to Normal Cell",
             [],
             None,
-            "{cell?} turns a Python cell (default: the active cell) into a normal cell that keeps what it shows: the code goes, the cell keeps its value, and each cell its result spills over keeps its value as a plain value. A Python-only error (#BLOCKED!, #BUSY!, #PYTHON!, #TIMEOUT!) is no result and can't be an ordinary cell's value, so a cell showing one becomes empty. Formats stay, and what reads the cells is recalculated. One undo step brings the Python cell back with its code, return type and result",
+            "{cell?} turns a Python cell (default: the active cell) into a normal cell that keeps what it shows: the code goes, the cell keeps its value, and each cell its result spills over keeps its value as a plain value. A Python-only error (#BLOCKED!, #BUSY!, #CONNECT!, #PYTHON!, #TIMEOUT!) is no result and can't be an ordinary cell's value, so a cell showing one becomes empty. Formats stay, and what reads the cells is recalculated. One undo step brings the Python cell back with its code, return type and result",
             has_doc,
             clear
         ),
@@ -428,6 +428,8 @@ fn display_over_cells(s: &mut Session, p: &Json) -> Result<Json> {
     let image = kept_image(s, sheet, at)?;
     let d = s.doc()?;
     let target = d.wb.active_sheet();
+    // Sheet protection locks drawing objects, as for `insert.picture`.
+    super::object_clipboard::refuse_when_protected(s, target)?;
     let place = cell_param(s, p, "at")?.unwrap_or_else(|| CellRef::new(at.row, at.col.saturating_add(1).min(gridcraft_core::MAX_COLS - 1)));
     let id = d.wb.next_object_id();
     let picture = crate::python::links::new_picture(&d.wb, sheet, at, &image, id, place).ok_or(EngineError::NoDocument)?;
@@ -441,6 +443,7 @@ fn display_over_cells(s: &mut Session, p: &Json) -> Result<Json> {
 /// `python.createReference`: another picture of the same cell, near the first.
 fn create_reference(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(id) = u32_param(p, "id") else { return Err(bad("python.createReference", "missing `id`")) };
+    super::object_clipboard::refuse_when_protected(s, s.doc()?.wb.active_sheet())?;
     let d = s.doc()?;
     let target = d.wb.active_sheet();
     let sh = d.wb.sheet(target).ok_or(EngineError::NoDocument)?;
@@ -560,7 +563,7 @@ pub fn clear_refusal(s: &Session, sheet: usize, at: CellRef) -> Option<String> {
 /// Whether `v` is an error only a Python cell shows: not a result, and not something an ordinary
 /// cell can hold (a file keeps it as `#VALUE!`).
 fn python_only_error(v: &Value) -> bool {
-    matches!(v, Value::Error(CellError::Python | CellError::Busy | CellError::Timeout | CellError::Blocked))
+    matches!(v, Value::Error(CellError::Python | CellError::Busy | CellError::Timeout | CellError::Blocked | CellError::Connect))
 }
 
 /// `python.clear` (Convert to Normal Cell): the code goes and nothing shown is lost. The cell keeps

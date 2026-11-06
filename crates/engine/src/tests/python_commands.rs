@@ -551,3 +551,53 @@ fn a_picture_with_no_choice_keeps_its_result_when_its_return_type_becomes_a_choi
     assert!(py.object && py.output_chosen && py.shows_object() && py.image().is_some());
     assert_eq!(v(&s, "B1"), Value::text("Image"));
 }
+
+#[test]
+fn replace_keeps_what_the_cell_chose() {
+    let mut s = s();
+    s.execute("python.set", json!({"cell": "A1", "code": "x = 1", "output": "value"})).unwrap();
+    {
+        let at = gridcraft_core::CellRef::parse("A1").unwrap();
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        let c = wb.sheet_mut(0).unwrap().cells.get_mut(at).unwrap();
+        std::sync::Arc::make_mut(c.py.as_mut().unwrap()).spill_lines = true;
+    }
+    assert_eq!(s.execute("edit.replace", json!({"what": "x", "with": "y"})).unwrap()["replaced"], 1);
+    let py = py_at(&s, "A1");
+    assert_eq!(py.code, "y = 1");
+    assert!(py.output_chosen, "the return type stays a choice");
+    assert!(py.spill_lines, "what a text does with its lines stays");
+}
+
+#[test]
+fn clear_leaves_no_python_only_error_behind() {
+    use CellError::{Blocked, Busy, Connect, Python, Timeout};
+    for error in [Blocked, Busy, Connect, Python, Timeout] {
+        let mut s = s();
+        set(&mut s, "A1", "1");
+        {
+            let at = gridcraft_core::CellRef::parse("A1").unwrap();
+            let d = s.doc_mut().unwrap();
+            std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap().cells.get_mut(at).unwrap().value = Value::Error(error);
+        }
+        s.execute("python.clear", json!({"cell": "A1"})).unwrap();
+        assert_eq!(v(&s, "A1"), Value::Empty, "{error:?}");
+    }
+}
+
+#[test]
+fn a_protected_sheet_refuses_a_new_linked_picture() {
+    let mut s = s();
+    set(&mut s, "A1", "plot()");
+    cache_picture(&mut s, "A1");
+    let image = s.execute("python.displayOverCells", json!({"cell": "A1", "at": "C1"})).unwrap()["image"].clone();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let count = |s: &crate::Session| s.doc().unwrap().wb.active().unwrap().images.len();
+    let before = count(&s);
+    let e = s.execute("python.displayOverCells", json!({"cell": "A1", "at": "E1"})).unwrap_err();
+    assert!(e.to_string().contains("protected"), "{e}");
+    let e = s.execute("python.createReference", json!({"id": image})).unwrap_err();
+    assert!(e.to_string().contains("protected"), "{e}");
+    assert_eq!(count(&s), before, "no picture was added");
+}
