@@ -299,6 +299,24 @@ fn store(s: &mut Session, cmd: &str, sheet: usize, at: CellRef, mut py: PyCode, 
     })
 }
 
+/// The return type in effect stays, with its result, and is now a choice: a picture with no choice
+/// behaves as a Python Object, and needs no new run to move into the cell. A locked cell on a
+/// protected sheet is refused here, as the choice isn't what the edit itself compares.
+fn set_output_choice(s: &mut Session, sheet: usize, at: CellRef, object: bool, spill_lines: bool) -> Result<()> {
+    if let Some(m) = s.locked_cell_message(sheet, at) {
+        return Err(EngineError::Other(m));
+    }
+    edit(s, |cx| {
+        let Some(py) = cx.sheet_mut(sheet)?.cells.get_mut(at).and_then(|c| c.py.as_mut()) else { return Ok(()) };
+        let py = Arc::make_mut(py);
+        py.object = object;
+        py.output_chosen = true;
+        py.spill_lines = spill_lines;
+        cx.touch(sheet, at);
+        Ok(())
+    })
+}
+
 /// `python.output`: the cell's return type. The code stays; a cached result belongs to the old
 /// return type, so it goes, as with `python.set` and a new return type: the cell shows
 /// `#BLOCKED!` until it runs, and its old spill goes with its readers recalculated.
@@ -314,15 +332,13 @@ fn output(s: &mut Session, p: &Json) -> Result<Json> {
     let mode = |object: bool| if object { "object" } else { "value" };
     let spill_lines = lines.unwrap_or(old.spill_lines);
     let chooses = requested.is_some() || lines.is_none();
-    if object != old.object {
+    if object != old.object && object != current {
         // One edit, so one undo step, when `lines` changes too.
         let py = PyCode { code: old.code.clone(), object, output_chosen: chooses || old.output_chosen, ..PyCode::default() };
         store(s, "python.output", sheet, at, py, Some(PyCode { spill_lines, ..old }))?;
         s.python_after_edit();
-    } else if chooses && !old.output_chosen && old.image().is_some() {
-        // A picture with no choice behaves as a Python Object, and now it is a choice. It needs no new
-        // run to move into the cell.
-        set_output_chosen(s, sheet, at, spill_lines)?;
+    } else if chooses && (object != old.object || !old.output_chosen) {
+        set_output_choice(s, sheet, at, object, spill_lines)?;
         s.python_after_edit();
     } else if spill_lines != old.spill_lines {
         set_spill_lines(s, sheet, at, spill_lines)?;
@@ -357,21 +373,6 @@ fn set_spill_lines(s: &mut Session, sheet: usize, at: CellRef, on: bool) -> Resu
     edit(s, |cx| {
         let Some(py) = cx.sheet_mut(sheet)?.cells.get_mut(at).and_then(|c| c.py.as_mut()) else { return Ok(()) };
         Arc::make_mut(py).spill_lines = on;
-        cx.touch(sheet, at);
-        Ok(())
-    })
-}
-
-/// The return type stays and is now a choice.
-fn set_output_chosen(s: &mut Session, sheet: usize, at: CellRef, spill_lines: bool) -> Result<()> {
-    if let Some(m) = s.locked_cell_message(sheet, at) {
-        return Err(EngineError::Other(m));
-    }
-    edit(s, |cx| {
-        let Some(py) = cx.sheet_mut(sheet)?.cells.get_mut(at).and_then(|c| c.py.as_mut()) else { return Ok(()) };
-        let py = Arc::make_mut(py);
-        py.output_chosen = true;
-        py.spill_lines = spill_lines;
         cx.touch(sheet, at);
         Ok(())
     })

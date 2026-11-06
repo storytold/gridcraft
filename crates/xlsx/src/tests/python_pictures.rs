@@ -320,6 +320,29 @@ fn a_python_cell_keeps_its_picture_through_a_file_for_either_return_type() {
     assert_eq!(text(&again, "xl/worksheets/sheet1.xml"), cells);
 }
 
+/// The rich value and the companion have the same bytes, or the reader would float the companion and
+/// lose the density: the copy fitted to the cell stays out of the file.
+#[test]
+fn an_excel_value_with_a_fitted_copy_keeps_its_picture_and_density_through_a_file() {
+    let (full, small) = (png(80, 60), png(40, 30));
+    let mut image = image_of(&full, 2);
+    let copy = CellPicture { data: small, mime: "image/png".to_string(), alt: image.picture.alt.clone() };
+    image.fitted = Some((Arc::new(copy), [40, 30]));
+    let mut sheet = Sheet::new("Data");
+    image_cell(&mut sheet, "H7", false, image);
+    let bytes = write_xlsx(&book(vec![sheet])).unwrap();
+
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    assert!(!report.warnings.iter().any(|w| w.contains("picture")), "{:?}", report.warnings);
+    let sheet = &back.sheets[0];
+    assert!(sheet.images.is_empty() && sheet.cell_pictures.is_empty(), "a companion is no floating picture");
+    let py = py_at(sheet, "H7");
+    assert!(!py.shows_object());
+    let image = py.image().unwrap();
+    assert_eq!((image.width, image.height, image.density), (40, 30, 2));
+    assert_eq!(image.picture.data, full);
+}
+
 #[test]
 fn a_picture_with_the_density_of_one_keeps_its_size() {
     let mut sheet = Sheet::new("Data");

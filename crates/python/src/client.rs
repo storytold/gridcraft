@@ -174,8 +174,7 @@ impl Client {
             return None;
         }
         let id = self.take_id().ok()?;
-        self.send(Request::Render { id, at, width, height });
-        Some(id)
+        self.deliver(Request::Render { id, at, width, height }, false).then_some(id)
     }
 
     /// Clears the globals. With no worker running there is nothing to clear, and the result is
@@ -271,15 +270,24 @@ impl Client {
     /// Sends a request, starting a worker first if none runs. Failures become the request's
     /// result.
     fn send(&mut self, req: Request) {
+        self.deliver(req, true);
+    }
+
+    /// Sends `req`. Without `may_start` it goes only to the worker already running, which may have
+    /// stopped since anyone last looked: then nothing starts, and the answer is false.
+    fn deliver(&mut self, req: Request, may_start: bool) -> bool {
         let id = req.id();
         self.drain_idle();
         let fresh = self.conn.is_none();
+        if fresh && !may_start {
+            return false;
+        }
         let start = now();
         let mut allowance = self.limits.timeout;
         if fresh {
             if let Err(why) = self.start_worker() {
                 self.local = Some(RunResult { id, outcome: Outcome::FailedToStart(why) });
-                return;
+                return true;
             }
             allowance = allowance.saturating_add(self.limits.start_timeout);
         }
@@ -294,10 +302,10 @@ impl Client {
             self.kill_worker();
             if fresh {
                 self.local = Some(RunResult { id, outcome: Outcome::FailedToStart("Python stopped as it started".into()) });
-                return;
+                return true;
             }
-            // An idle worker that died: start a fresh one for this request.
-            return self.send(req);
+            // An idle worker that died: start a fresh one for this request, if it may have one.
+            return may_start && self.deliver(req, may_start);
         }
         self.inflight = Some(Inflight { id, deadline: later(start, allowance) });
         if let Some(c) = self.conn.as_ref() {
@@ -306,6 +314,7 @@ impl Client {
                 let _ = w.send(());
             }
         }
+        true
     }
 
     fn start_worker(&mut self) -> Result<(), String> {
