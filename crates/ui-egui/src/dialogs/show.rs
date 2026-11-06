@@ -451,8 +451,6 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 open = false;
                 if d.name == "solver" {
                     app.open_dialog("solverResults", r);
-                } else if matches!(d.name.as_str(), "dbPassword" | "dbTrust") && d.values.get("then").and_then(Json::as_str) == Some("refreshAll") {
-                    crate::refresh_all(app);
                 } else if d.name == "openPassword" {
                     let path = d.values.get("path").and_then(Json::as_str).map(str::to_string);
                     app.after_open(path.as_deref(), &r);
@@ -472,9 +470,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     } else if confirm && d.command.is_none() {
         open = false;
     }
-    if !open {
-        stop_waiting(app, &d);
-    }
+    stop_waiting(app, &d, open);
     if !open
         && !confirm
         && let Err(e) = end_pick(app, &mut d)

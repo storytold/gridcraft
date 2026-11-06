@@ -206,12 +206,16 @@ pub(super) fn run_confirmed(app: &mut SheetApp, d: &mut Dialog, confirm: &mut bo
         return None;
     };
     d.values.remove("busy");
+    // The password or the trust asked for by Refresh All: the other tables follow.
+    if r.is_ok() && matches!(d.name.as_str(), "dbPassword" | "dbTrust") && d.values.get("then").and_then(Json::as_str) == Some("refreshAll") {
+        crate::refresh_all(app);
+    }
     Some(r)
 }
 
 /// A dialog closed while waiting for the database: its answers are no longer wanted.
-pub(super) fn stop_waiting(app: &mut SheetApp, d: &Dialog) {
-    if !db_str(d, "busy").is_empty() {
+pub(super) fn stop_waiting(app: &mut SheetApp, d: &Dialog, open: bool) {
+    if !open && !db_str(d, "busy").is_empty() {
         app.cancel_db();
     }
 }

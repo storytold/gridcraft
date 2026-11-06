@@ -271,7 +271,7 @@ fn write_cells(sh: &mut gridcraft_model::Sheet, at: CellRef, headers: &[String],
         if value == Value::Empty && style == Default::default() {
             sh.remove_cell(cell);
         } else {
-            sh.set_cell(cell, Cell { value, formula: None, style });
+            sh.set_cell(cell, Cell { value, formula: None, style, py: None });
         }
     };
     for (ci, h) in headers.iter().enumerate() {
@@ -500,7 +500,7 @@ fn refill(s: &mut Session, tid: u32, tname: &str, table: &DbTable, max_rows: usi
             for c in old.start.col..=old.end.col {
                 let cell = CellRef::new(r, c);
                 match sheet.cell(cell).map(|x| x.style) {
-                    Some(style) if style != Default::default() => sheet.set_cell(cell, Cell { value: Value::Empty, formula: None, style }),
+                    Some(style) if style != Default::default() => sheet.set_cell(cell, Cell { value: Value::Empty, formula: None, style, py: None }),
                     _ => {
                         sheet.remove_cell(cell);
                     }

@@ -45,12 +45,31 @@ use zoom::zoom_preset;
 /// (a RefEdit box).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Field {
-    Text { key: &'static str, label: &'static str },
-    Ref { key: &'static str, label: &'static str },
-    Password { key: &'static str, label: &'static str },
-    Number { key: &'static str, label: &'static str },
-    Choice { key: &'static str, label: &'static str, options: Vec<(&'static str, &'static str)> },
-    Check { key: &'static str, label: &'static str },
+    Text {
+        key: &'static str,
+        label: &'static str,
+    },
+    Ref {
+        key: &'static str,
+        label: &'static str,
+    },
+    Password {
+        key: &'static str,
+        label: &'static str,
+    },
+    Number {
+        key: &'static str,
+        label: &'static str,
+    },
+    Choice {
+        key: &'static str,
+        label: &'static str,
+        options: Vec<(&'static str, &'static str)>,
+    },
+    Check {
+        key: &'static str,
+        label: &'static str,
+    },
     Note(String),
     /// Text shown as it is, read-only and in a monospace font, scrolling when long (SQL).
     Code(String),
