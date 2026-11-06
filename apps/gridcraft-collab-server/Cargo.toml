@@ -1,0 +1,29 @@
+[package]
+name = "gridcraft-collab-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "GridCraft real-time collaboration server: WebSocket transport, JWT and lease around crates/collab"
+
+[lints]
+workspace = true
+
+[dependencies]
+gridcraft-collab = { workspace = true }
+gridcraft-engine = { workspace = true }
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal"] }
+jsonwebtoken = "9.3"
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+base64 = "0.22"
+sha2 = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tokio-tungstenite = "0.29"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }

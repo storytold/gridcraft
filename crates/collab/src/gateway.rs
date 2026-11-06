@@ -13,11 +13,13 @@ use crate::protocol::{Applied, ClientOp, Rejected};
 
 /// One message from a client.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ClientMessage {
-    /// The first message: the verified token, the display name and the version the client holds.
+    /// The first message: the signed token, the display name and the version the client holds.
+    /// The token is a string here — its signature is checked by the transport before a [`Claims`]
+    /// value exists, and it is never logged.
     Hello {
-        jwt: Claims,
+        token: String,
         name: String,
         last_version: u64,
     },
@@ -45,16 +47,47 @@ pub struct SheetName {
     pub name: String,
 }
 
+/// The lease of the file (ADR-0007 §1): who holds the one active session and until when. The
+/// transport re-reads it on every `ping` and operation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeaseInfo {
+    pub owner: String,
+    pub expires_at: u64,
+}
+
 /// One message to a client.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ServerMessage {
-    Welcome { session_id: String, actor_id: String, role: Role, version: u64, epoch: u64, sheets: Vec<SheetName>, participants: Vec<Participant> },
-    Applied { applied: Applied },
-    Rejected { rejected: Rejected },
-    Presence { participants: Vec<Participant> },
-    Pong { nonce: u64 },
-    Error { code: String, message: String, retryable: bool },
+    Welcome {
+        session_id: String,
+        actor_id: String,
+        role: Role,
+        version: u64,
+        epoch: u64,
+        sheets: Vec<SheetName>,
+        participants: Vec<Participant>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lease: Option<LeaseInfo>,
+    },
+    Applied {
+        applied: Applied,
+    },
+    Rejected {
+        rejected: Rejected,
+    },
+    Presence {
+        participants: Vec<Participant>,
+    },
+    Pong {
+        nonce: u64,
+    },
+    Error {
+        code: String,
+        message: String,
+        retryable: bool,
+    },
 }
 
 /// Who a connection speaks for, fixed at the handshake.
@@ -85,8 +118,16 @@ impl Gateway {
     }
 
     /// Accepts a verified token: validates its claims against this server, joins the participant
-    /// and builds the welcome message the client needs before it sends anything else.
-    pub fn connect(&mut self, claims: &Claims, now: u64, expected: Expected<'_>, name: &str) -> Result<(Connection, ServerMessage), AuthError> {
+    /// and builds the welcome message the client needs before it sends anything else. `lease` is
+    /// the lease of the file, when the transport keeps one.
+    pub fn connect(
+        &mut self,
+        claims: &Claims,
+        now: u64,
+        expected: Expected<'_>,
+        name: &str,
+        lease: Option<LeaseInfo>,
+    ) -> Result<(Connection, ServerMessage), AuthError> {
         let role = claims.validate(now, expected)?;
         let doc = expected.session_id;
         let participants = self.hub.join(doc, &claims.sub, name, role).map_err(|_| AuthError::WrongFile)?;
@@ -100,6 +141,7 @@ impl Gateway {
             epoch: self.hub.epoch(doc).unwrap_or(0),
             sheets,
             participants,
+            lease,
         };
         Ok((connection, welcome))
     }

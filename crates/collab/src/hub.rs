@@ -30,9 +30,10 @@ impl Role {
 
 /// Where a participant is looking (ADR-0006). Never journaled.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Presence {
     /// Session key of the sheet.
-    pub sheet: String,
+    pub sheet_key: String,
     pub active: String,
     #[serde(default)]
     pub ranges: Vec<String>,
@@ -41,6 +42,7 @@ pub struct Presence {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Viewport {
     pub top_left: String,
     pub rows: u32,
@@ -101,6 +103,17 @@ impl Hub {
         let room = Room::new(&session);
         self.documents.insert(doc.to_string(), Document { session, room, participants: BTreeMap::new() });
         true
+    }
+
+    /// Whether a document is open.
+    pub fn is_open(&self, doc: &str) -> bool {
+        self.documents.contains_key(doc)
+    }
+
+    /// Drops a document and its room. The caller has already told the participants (a takeover by
+    /// the owner of the file, or the cabinet closing the session); nothing is saved here.
+    pub fn close(&mut self, doc: &str) -> bool {
+        self.documents.remove(doc).is_some()
     }
 
     /// Adds a participant. The role comes from the JWT, never from the client's message.

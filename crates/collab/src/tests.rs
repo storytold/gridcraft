@@ -173,7 +173,7 @@ fn an_editor_changes_the_document_and_presence_is_returned_to_others() {
     let applied = hub.apply("book", "ann", op("e1", "cell.set", json!({"input": 4}), &sheet, "A1")).unwrap();
     assert_eq!(applied.version, 1);
     assert_eq!(applied.actor, "ann");
-    let presence = crate::Presence { sheet: sheet.clone(), active: "A1".into(), ranges: vec![], viewport: None };
+    let presence = crate::Presence { sheet_key: sheet.clone(), active: "A1".into(), ranges: vec![], viewport: None };
     let all = hub.presence("book", "bob", Some(presence)).unwrap();
     let bob = all.iter().find(|p| p.actor == "bob").unwrap();
     assert_eq!(bob.presence.as_ref().unwrap().active, "A1");
@@ -212,7 +212,7 @@ fn expected<'a>() -> crate::Expected<'a> {
 fn a_valid_token_joins_and_gets_the_sheets_and_version() {
     let mut gw = crate::Gateway::new();
     assert!(gw.hub_mut().open("book", session()));
-    let (connection, welcome) = gw.connect(&claims("ann", crate::Role::Editor), 1_000, expected(), "Ann").unwrap();
+    let (connection, welcome) = gw.connect(&claims("ann", crate::Role::Editor), 1_000, expected(), "Ann", None).unwrap();
     assert_eq!(connection.actor, "ann");
     match welcome {
         crate::ServerMessage::Welcome { role, version, sheets, participants, .. } => {
@@ -231,20 +231,20 @@ fn a_token_for_another_file_or_an_expired_one_is_refused() {
     assert!(gw.hub_mut().open("book", session()));
     let mut wrong_file = claims("ann", crate::Role::Editor);
     wrong_file.file_id = 8;
-    assert_eq!(gw.connect(&wrong_file, 1_000, expected(), "Ann").unwrap_err(), crate::AuthError::WrongFile);
+    assert_eq!(gw.connect(&wrong_file, 1_000, expected(), "Ann", None).unwrap_err(), crate::AuthError::WrongFile);
     let mut expired = claims("ann", crate::Role::Editor);
     expired.exp = 999;
-    assert_eq!(gw.connect(&expired, 1_000, expected(), "Ann").unwrap_err(), crate::AuthError::Expired);
+    assert_eq!(gw.connect(&expired, 1_000, expected(), "Ann", None).unwrap_err(), crate::AuthError::Expired);
     let mut wrong_app = claims("ann", crate::Role::Editor);
     wrong_app.app = "pdfcraft".into();
-    assert_eq!(gw.connect(&wrong_app, 1_000, expected(), "Ann").unwrap_err(), crate::AuthError::WrongApp);
+    assert_eq!(gw.connect(&wrong_app, 1_000, expected(), "Ann", None).unwrap_err(), crate::AuthError::WrongApp);
 }
 
 #[test]
 fn a_viewer_gets_a_rejection_from_the_message_loop() {
     let mut gw = crate::Gateway::new();
     assert!(gw.hub_mut().open("book", session()));
-    let (connection, welcome) = gw.connect(&claims("vic", crate::Role::Viewer), 1_000, expected(), "Vic").unwrap();
+    let (connection, welcome) = gw.connect(&claims("vic", crate::Role::Viewer), 1_000, expected(), "Vic", None).unwrap();
     let sheet = match welcome {
         crate::ServerMessage::Welcome { sheets, .. } => sheets[0].key.clone(),
         other => panic!("expected welcome, got {other:?}"),
@@ -260,9 +260,9 @@ fn a_viewer_gets_a_rejection_from_the_message_loop() {
 fn presence_and_ping_round_trip_through_the_gateway() {
     let mut gw = crate::Gateway::new();
     assert!(gw.hub_mut().open("book", session()));
-    let (ann, _) = gw.connect(&claims("ann", crate::Role::Editor), 1_000, expected(), "Ann").unwrap();
-    let (bob, _) = gw.connect(&claims("bob", crate::Role::Viewer), 1_000, expected(), "Bob").unwrap();
-    let presence = crate::Presence { sheet: "1".into(), active: "B2".into(), ranges: vec![], viewport: None };
+    let (ann, _) = gw.connect(&claims("ann", crate::Role::Editor), 1_000, expected(), "Ann", None).unwrap();
+    let (bob, _) = gw.connect(&claims("bob", crate::Role::Viewer), 1_000, expected(), "Bob", None).unwrap();
+    let presence = crate::Presence { sheet_key: "1".into(), active: "B2".into(), ranges: vec![], viewport: None };
     let messages = gw.handle(&ann, crate::ClientMessage::Presence { presence: Some(presence.clone()) });
     match &messages[0] {
         crate::ServerMessage::Presence { participants } => {
@@ -275,4 +275,44 @@ fn presence_and_ping_round_trip_through_the_gateway() {
         crate::ServerMessage::Pong { nonce } => assert_eq!(nonce, 42),
         ref other => panic!("expected pong, got {other:?}"),
     }
+}
+
+#[test]
+fn a_hello_on_the_wire_carries_the_signed_token_not_claims() {
+    let text = r#"{"type":"hello","token":"a.b.c","name":"Ann","lastVersion":3}"#;
+    let message: crate::ClientMessage = serde_json::from_str(text).unwrap();
+    assert!(matches!(message, crate::ClientMessage::Hello { .. }));
+    if let crate::ClientMessage::Hello { token, name, last_version } = message {
+        assert_eq!(token, "a.b.c");
+        assert_eq!(name, "Ann");
+        assert_eq!(last_version, 3);
+    }
+}
+
+#[test]
+fn the_wire_uses_the_camel_case_names_of_the_contract() {
+    let welcome = crate::ServerMessage::Welcome {
+        session_id: "s-1".into(),
+        actor_id: "ann".into(),
+        role: crate::Role::Editor,
+        version: 1,
+        epoch: 0,
+        sheets: vec![crate::SheetName { key: "7".into(), name: "Sheet1".into() }],
+        participants: vec![],
+        lease: Some(crate::LeaseInfo { owner: "ann".into(), expires_at: 60 }),
+    };
+    let text = serde_json::to_string(&welcome).unwrap();
+    assert!(text.contains("\"sessionId\":\"s-1\""), "{text}");
+    assert!(text.contains("\"actorId\":\"ann\""), "{text}");
+    assert!(text.contains("\"expiresAt\":60"), "{text}");
+
+    let presence = crate::Presence {
+        sheet_key: "7".into(),
+        active: "A1".into(),
+        ranges: vec!["A1:B2".into()],
+        viewport: Some(crate::Viewport { top_left: "A1".into(), rows: 20, cols: 8 }),
+    };
+    let text = serde_json::to_string(&presence).unwrap();
+    assert!(text.contains("\"sheetKey\":\"7\""), "{text}");
+    assert!(text.contains("\"topLeft\":\"A1\""), "{text}");
 }

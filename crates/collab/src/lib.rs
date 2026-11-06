@@ -24,7 +24,7 @@ mod room;
 
 pub use auth::{AuthError, Claims, Expected};
 pub use delta::delta_for;
-pub use gateway::{ClientMessage, Connection, Gateway, ServerMessage, SheetName};
+pub use gateway::{ClientMessage, Connection, Gateway, LeaseInfo, ServerMessage, SheetName};
 pub use hub::{Hub, HubError, Participant, Presence, Role, Viewport, viewer_rejection};
 pub use keys::SheetKeys;
 pub use ops::{Class, classify};

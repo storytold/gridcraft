@@ -126,6 +126,20 @@ pub enum RejectCode {
     Internal,
 }
 
+impl RejectCode {
+    /// The wire code, as `serde` writes it; the same string labels the metric.
+    pub fn code(self) -> &'static str {
+        match self {
+            RejectCode::Forbidden => "forbidden",
+            RejectCode::Invalid => "invalid",
+            RejectCode::Stale => "stale",
+            RejectCode::Conflict => "conflict",
+            RejectCode::TooLarge => "too_large",
+            RejectCode::Internal => "internal",
+        }
+    }
+}
+
 /// A refusal. `retryable` tells the client whether sending the same operation again with the new
 /// version can succeed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
