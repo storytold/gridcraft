@@ -4,8 +4,8 @@ use std::io::{Cursor, Read, Write};
 
 use gridcraft_dax::model::DataModel;
 use gridcraft_dax::{
-    Binder, Evaluator, Expr, ModelMeasure, Query, TokenKind, parse_expression, parse_query, pivot_cross, pivot_fields, print_expression, print_query,
-    read_measures, tokenize, write_measures,
+    Binder, Evaluator, Expr, ModelMeasure, Query, TableValue, TokenKind, parse_expression, parse_query, pivot_cross, pivot_fields, print_expression,
+    print_query, read_measures, tokenize, write_measures,
 };
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
@@ -118,11 +118,8 @@ fn pivot_cmd(args: &[String]) -> Result<(), String> {
     let json = std::fs::read_to_string(path).map_err(|e| format!("can't read {path}: {e}"))?;
     let mut model: DataModel = serde_json::from_str(&json).map_err(|e| format!("invalid model JSON: {e}"))?;
     model.parse_formulas().map_err(|e| e.to_string())?;
-    let fields = pivot_fields(&model, &rows.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect::<Vec<_>>())
-        .map_err(|e| e.to_string())?;
-    let columns = parsed
-        .opt("columns")
-        .map(|columns| pivot_fields(&model, &columns.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect::<Vec<_>>()));
+    let fields = pivot_fields(&model, &split_fields(&rows)).map_err(|e| e.to_string())?;
+    let columns = parsed.opt("columns").map(|columns| pivot_fields(&model, &split_fields(&columns)));
     let column_fields = match columns {
         Some(Ok(fields)) => fields,
         Some(Err(error)) => return Err(error.to_string()),
@@ -130,9 +127,61 @@ fn pivot_cmd(args: &[String]) -> Result<(), String> {
     };
     let table = pivot_cross(&model, measure, &fields, &column_fields).map_err(|e| e.to_string())?;
     let columns: Vec<&str> = table.columns.iter().map(|column| column.name.as_str()).collect();
-    let rows: Vec<Vec<serde_json::Value>> = table.rows.iter().map(|row| row.iter().map(scalar_json).collect()).collect();
+    let rows = table_rows_json(&table)?;
     outln!("{}", serde_json::json!({"columns": columns, "rows": rows}));
     Ok(())
+}
+
+/// Splits a `--rows`/`--columns` list on the commas that separate fields.
+///
+/// A comma inside a quoted table name or a bracketed column name belongs to the reference
+/// (`'Sales, EU'[Region]`, `Sales[Last, First]`), and DAX escapes those delimiters by doubling them:
+/// `]]` stays inside a column name and `''` inside a table name.
+fn split_fields(list: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut start = 0usize;
+    let mut quoted = false;
+    let mut brackets = 0usize;
+    let mut chars = list.char_indices().peekable();
+    while let Some((index, ch)) = chars.next() {
+        match ch {
+            '\'' if brackets == 0 => {
+                if quoted {
+                    if chars.peek().is_some_and(|(_, next)| *next == '\'') {
+                        chars.next();
+                    } else {
+                        quoted = false;
+                    }
+                } else {
+                    quoted = true;
+                }
+            }
+            '[' if !quoted => brackets += 1,
+            ']' if !quoted && brackets > 0 => {
+                if chars.peek().is_some_and(|(_, next)| *next == ']') {
+                    // An escaped `]` inside the column name, not the closing bracket.
+                    chars.next();
+                } else {
+                    brackets -= 1;
+                }
+            }
+            ',' if !quoted && brackets == 0 => {
+                push_field(&mut fields, &list[start..index]);
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    push_field(&mut fields, &list[start..]);
+    fields
+}
+
+/// Adds one trimmed field, dropping the empty segments a trailing or doubled comma would produce.
+fn push_field(fields: &mut Vec<String>, field: &str) {
+    let field = field.trim();
+    if !field.is_empty() {
+        fields.push(field.to_string());
+    }
 }
 
 /// Evaluates a formula or measure against a JSON data model.
@@ -154,7 +203,7 @@ fn eval(args: &[String]) -> Result<(), String> {
             return Err("dax eval --measure returns a scalar; drop --table".into());
         }
         let value = evaluator.evaluate_measure(name, Default::default()).map_err(|e| e.to_string())?;
-        outln!("{}", scalar_json(&value));
+        outln!("{}", scalar_json(&value)?);
         return Ok(());
     }
 
@@ -164,11 +213,11 @@ fn eval(args: &[String]) -> Result<(), String> {
     if parsed.has("table") {
         let table = evaluator.evaluate_table(&bound).map_err(|e| e.to_string())?;
         let columns: Vec<&str> = table.columns.iter().map(|column| column.name.as_str()).collect();
-        let rows: Vec<Vec<serde_json::Value>> = table.rows.iter().map(|row| row.iter().map(scalar_json).collect()).collect();
+        let rows = table_rows_json(&table)?;
         outln!("{}", serde_json::json!({"columns": columns, "rows": rows}));
     } else {
         let value = evaluator.evaluate(&bound).map_err(|e| e.to_string())?;
-        outln!("{}", scalar_json(&value));
+        outln!("{}", scalar_json(&value)?);
     }
     Ok(())
 }
@@ -353,11 +402,25 @@ fn copy_entry(entry: &mut impl Read, writer: &mut impl Write, name: &str, remain
 }
 
 /// Renders a scalar as the JSON value the CLI prints, mapping blank to `null`.
-fn scalar_json(value: &gridcraft_dax::Scalar) -> serde_json::Value {
-    match value {
-        gridcraft_dax::Scalar::Blank => serde_json::Value::Null,
-        other => serde_json::to_value(other).unwrap_or(serde_json::Value::Null),
+///
+/// JSON has no infinity: `serde_json` would print a non-finite number as `null`, which is also how
+/// a blank is printed, so an overflow or a division by zero would look like an empty result. Those
+/// values are reported instead.
+fn scalar_json(value: &gridcraft_dax::Scalar) -> Result<serde_json::Value, String> {
+    if let gridcraft_dax::Scalar::Decimal(number) = value
+        && !number.is_finite()
+    {
+        return Err(format!("result is not a finite number: {number}"));
     }
+    match value {
+        gridcraft_dax::Scalar::Blank => Ok(serde_json::Value::Null),
+        other => serde_json::to_value(other).map_err(|error| format!("can't serialize result: {error}")),
+    }
+}
+
+/// Renders a result table's cells as JSON, reporting the first cell [`scalar_json`] rejects.
+fn table_rows_json(table: &TableValue) -> Result<Vec<Vec<serde_json::Value>>, String> {
+    table.rows.iter().map(|row| row.iter().map(scalar_json).collect()).collect()
 }
 
 enum Parsed {

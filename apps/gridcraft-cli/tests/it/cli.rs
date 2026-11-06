@@ -200,7 +200,8 @@ fn dax_bind_resolves_model_names_and_measures() {
             "relationships": [],
             "measures": [
                 {"name":"Total Sales","formula":"SUM(Sales[Amount])","table":"Sales"},
-                {"name":"East Sales","formula":"CALCULATE([Total Sales], Sales[Region] = \"East\")","table":"Sales"}
+                {"name":"East Sales","formula":"CALCULATE([Total Sales], Sales[Region] = \"East\")","table":"Sales"},
+                {"name":"Per Zero","formula":"[Total Sales] / 0","table":"Sales"}
             ]
         }"#,
     )
@@ -287,7 +288,8 @@ fn dax_eval_model_rows_and_measures() {
             "relationships": [],
             "measures": [
                 {"name":"Total Sales","formula":"SUM(Sales[Amount])","table":"Sales"},
-                {"name":"East Sales","formula":"CALCULATE([Total Sales], Sales[Region] = \"East\")","table":"Sales"}
+                {"name":"East Sales","formula":"CALCULATE([Total Sales], Sales[Region] = \"East\")","table":"Sales"},
+                {"name":"Per Zero","formula":"[Total Sales] / 0","table":"Sales"}
             ]
         }"#,
     )
@@ -305,6 +307,50 @@ fn dax_eval_model_rows_and_measures() {
     assert_eq!(o.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&o.stderr);
     assert!(stderr.contains("unexpected argument `Sales[Amount]`"), "{stderr}");
+
+    // JSON has no infinity, so a non-finite result must not print as `null` — that is BLANK.
+    let o = run(&["dax", "eval", "--model", model, "5 / 0"]);
+    assert_eq!(o.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(stderr.contains("not a finite number"), "{stderr}");
+    let o = run(&["dax", "pivot", "--model", model, "--measure", "Per Zero", "--rows", "Sales[Region]"]);
+    assert_eq!(o.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(stderr.contains("not a finite number"), "{stderr}");
+    // BLANK keeps its `null` rendering.
+    assert_eq!(ok(&["dax", "eval", "--model", model, "BLANK()"]).trim(), "null");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn dax_pivot_splits_only_on_separating_commas() {
+    let dir = tmpdir("dax-pivot-fields");
+    let model = dir.join("model.json");
+    std::fs::write(
+        &model,
+        r#"{
+            "tables": [{"name":"Sales, EU","columns":[{"name":"Last, First"},{"name":"Amount"},{"name":"A]B"}],
+                        "rows":[["Ada, Lovelace",10,"x"],["Alan, Turing",20,"y"]]}],
+            "relationships": [],
+            "measures": [{"name":"Total","formula":"SUM('Sales, EU'[Amount])","table":"Sales, EU"}]
+        }"#,
+    )
+    .unwrap();
+    let model = model.to_str().unwrap();
+
+    // The comma inside the quoted table name and the one inside the bracketed column name belong to
+    // the reference; only the comma between the two fields separates them.
+    let pivot = ok(&["dax", "pivot", "--model", model, "--measure", "Total", "--rows", "'Sales, EU'[Last, First], 'Sales, EU'[Amount]"]);
+    assert!(pivot.contains("\"Last, First\"") && pivot.contains("\"Amount\"") && pivot.contains("Ada, Lovelace"), "{pivot}");
+
+    // `--columns` splits the same way.
+    let pivot =
+        ok(&["dax", "pivot", "--model", model, "--measure", "Total", "--rows", "'Sales, EU'[Last, First]", "--columns", "'Sales, EU'[Amount]"]);
+    assert!(pivot.contains("Ada, Lovelace") && pivot.contains("10.0"), "{pivot}");
+
+    // A doubled bracket inside the column name is an escape, not the end of the reference.
+    let pivot = ok(&["dax", "pivot", "--model", model, "--measure", "Total", "--rows", "'Sales, EU'[A]]B]"]);
+    assert!(pivot.contains("\"A]B\""), "{pivot}");
     let _ = std::fs::remove_dir_all(dir);
 }
 
