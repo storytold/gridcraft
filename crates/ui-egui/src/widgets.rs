@@ -254,9 +254,13 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
         ui.painter().rect_filled(rect, 4.0, t.hover);
         ui.painter().line_segment([pos2(main.right(), rect.top() + 3.0), pos2(main.right(), rect.bottom() - 3.0)], Stroke::new(1.0, t.separator));
     }
-    icons::paint(ui.painter(), Rect::from_center_size(main.center() - vec2(0.0, 2.0), vec2(16.0, 16.0)), icon, t.text);
+    // The icon sits on the same centre line as the plain buttons beside it (Bold, Italic, Percent).
+    // A colour bar (Fill, Font Color) goes directly beneath the glyph, as wide as the icon, and the
+    // glyph rises just enough that the glyph and bar together stay centred on that line.
+    let lift = if accent.is_some() { 2.0 } else { 0.0 };
+    icons::paint(ui.painter(), Rect::from_center_size(main.center() - vec2(0.0, lift), vec2(16.0, 16.0)), icon, t.text);
     if let Some(c) = accent {
-        ui.painter().rect_filled(Rect::from_min_size(pos2(main.left() + 4.0, main.bottom() - 5.0), vec2(17.0, 3.0)), 0.0, c);
+        ui.painter().rect_filled(Rect::from_center_size(pos2(main.center().x, main.center().y + 5.5), vec2(14.0, 3.0)), 0.0, c);
     }
     icons::paint(ui.painter(), Rect::from_center_size(arrow.center(), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
     (m.on_hover_text(tip_text(ui, tip)).clicked(), a)
