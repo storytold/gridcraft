@@ -20,6 +20,11 @@ impl SheetApp {
             self.clipboard_text_at_copy = self.system_clipboard_text();
             self.cut_text = if id == "edit.cut" { self.clipboard_text_at_copy.clone() } else { None };
         }
+        if !self.ask_agent.agent_turn_active()
+            && let (Some(hub), Some(current)) = (&self.ask_agent.hub, crate::ask_agent::current_target(self))
+        {
+            hub.invalidate(&current);
+        }
         r
     }
 

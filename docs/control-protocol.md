@@ -164,8 +164,17 @@ GridCraft accepts the existing `file.print` sheet/pagination params on `ui.print
 
 ## Ask Agent
 
-Desktop Ask Agent hands selected cells and an instruction to an external agent over authenticated control.
-- `agent.listen {timeoutMs?, agent?}` claims the oldest waiting request or returns `{"none": true}`.
-- `agent.reply {id, text, done?, error?}` sends progress notes (`done: false`) or a final answer (`done: true`).
-- The agent edits with standard commands tagged with `request`. All edits form ONE undo group in the app.
-- Only the connection that claimed the request may edit while it is open (`NOT_OWNER`).
+Desktop Ask Agent hands a captured selection and instruction to an external agent over authenticated control.
+
+- `agent.listen {timeoutMs?, agent?}` claims the oldest eligible waiting request or returns `{"none": true}`. An omitted or blank name retains the connection's registered name. Closing the connection removes that listener and requeues eligible unfinished work.
+- `agent.reply {id, text?, done?, error?, proposal?, format?, comment?}` sends progress (`done: false`) or a final response. An error completes the request as Failed. All response fields are literal text; proposals and format labels execute nothing. Replies are validated and accepted on the document owner, against its live identity and revision.
+- Claims belong to the authenticated connection. Standard commands carry `request`; the native connection and connected MCP client retain the last claimed id. A final reply or matching `NO_REQUEST`, `NOT_OWNER`, `READ_ONLY_REQUEST` or `STALE_REQUEST` clears that binding. Errors concerning a different explicit id leave it intact. A bound call is never replayed after transport failure.
+- Edits are checked against the original document, sheet and selected areas, including the actual dimensions of `range.setValues`. Cell writes, bounded cell formatting and comments are supported. Structural edits, scripts, history operations and synthetic UI input are refused within a request (`OUTSIDE_SELECTION`); use an ordinary control session for actions outside a claim. Commands and replies are serialized with document changes. Each authorized edit advances the claim's revision; external content edits, including Undo/Redo, invalidate unfinished claims.
+- `HELD` rejects unscoped external mutations of a document with queued/working requests. `NOT_OWNER` rejects another connection, `NO_REQUEST` an unknown id, `READ_ONLY_REQUEST` a finished request, `STALE_REQUEST` a changed/closed document and `INVALID_PARAMS` malformed arguments or payload-limit violations. Ordinary reads and operations on other unheld documents remain available.
+- Only consecutive agent changes join an Ask Agent undo step. Human edits stay separate. Keep/Undo and closing an owned review are window-only (`HUMAN_REVIEW_REQUIRED` remotely), including after a Failed response that left partial edits. They require the original document and unchanged agent history; a matching undo depth alone is insufficient. The response note waits for its original document and preserves existing comment threads.
+- One thread cannot replace its queued/working request. Follow-ups retain the original selection and include prior answered turns. The instruction is not added to the engine journal.
+- Defaults bound the queue at 128 requests, one request at 1 MiB, a reply at 256 KiB, retained progress at 64 KiB/128 notes and registered listeners at 64. Exceeding a budget is an explicit error.
+
+On native builds, the person may configure `GRIDCRAFT_AGENT_LAUNCH` as an executable path, or supply `agent/launch` (`agent/launch.cmd` on Windows) beside the application. The app starts that program when queuing work with nobody listening, never starts a second copy while its child is alive, and displays launch errors. It passes no model settings, keys, instructions or shell-expanded arguments. Windows launchers run without a console window. This facility is excluded from WebAssembly.
+
+The local shared Hub and renderer mirror `storytold/craft-libs#142`; migration to the upstream crate waits for that proposal to merge. No unmerged fork is a dependency.

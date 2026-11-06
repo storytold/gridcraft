@@ -284,7 +284,9 @@ fn serve(
                 Line::Reject(e) => e,
                 Line::Request { id, method, mut params } => {
                     // Ask Agent: answered here, on the connection's own thread.
-                    if let Some(mut reply) = agents.handle(conn, &method, &params, || peer_open(&probe)) {
+                    if let Some(mut reply) =
+                        (method == "agent.listen").then(|| agents.handle(conn, &method, &params, || peer_open(&probe), |_| None)).flatten()
+                    {
                         match (method.as_str(), reply["result"]["id"].as_u64()) {
                             ("agent.listen", taken) => request = taken,
                             ("agent.reply", Some(done)) if reply["result"]["done"] == true && Some(done) == request => request = None,
@@ -324,26 +326,16 @@ fn serve(
                         params.get("request").and_then(Json::as_u64).or(request)
                     };
 
-                    let is_write = (gridcraft_engine::find_command(command).is_some() && !gridcraft_ui_egui::ask_agent::is_query_method(command))
-                        || matches!(command, "edit.undo" | "edit.redo" | "automate.runScript")
-                        || command.starts_with("file.")
-                        || method.starts_with("app.");
-                    if is_write && let Err(e) = agents.may_edit(conn, request_id) {
-                        if matches!(e.code, "NO_REQUEST" | "NOT_OWNER" | "READ_ONLY_REQUEST") && request == request_id {
-                            request = None;
-                        }
-                        let _ = writeln!(out, "{}", json!({"id": id, "ok": false, "error": e.message, "errorCode": e.code}));
-                        continue;
-                    }
-
                     if let Some(p) = params.as_object_mut() {
                         if let Some(request_id) = request_id {
                             p.insert("request".into(), json!(request_id));
-                            p.insert("_agentConnection".into(), json!(conn));
                         }
+                        p.insert("_agentConnection".into(), json!(conn));
                         p.insert("_externalAgent".into(), json!(true));
                     }
 
+                    let sent_request = if method == "agent.reply" { params.get("id").and_then(Json::as_u64) } else { request_id };
+                    let replying = method == "agent.reply";
                     let (req, rx) = ControlRequest::new(method, params);
                     let state = std::sync::Arc::clone(&req.state);
                     if tx.send(req).is_err() {
@@ -375,6 +367,12 @@ fn serve(
                             o.insert("errorCode".into(), json!(code));
                             o.insert("error".into(), json!(message));
                         }
+                    }
+                    if request == sent_request
+                        && (matches!(reply["errorCode"].as_str(), Some("NO_REQUEST" | "NOT_OWNER" | "READ_ONLY_REQUEST" | "STALE_REQUEST"))
+                            || replying && reply["ok"] == true && reply["result"]["done"] == true)
+                    {
+                        request = None;
                     }
                     if writeln!(out, "{reply}").is_err() {
                         break;
@@ -626,7 +624,7 @@ mod tests {
             let mut app = gridcraft_ui_egui::SheetApp::new(gridcraft_engine::Session::new(), Default::default()).with_agent_hub(ui_hub);
             app.session.new_workbook();
             let c = next_connection();
-            app.ask_agent.hub.as_ref().unwrap().listen(c, None, Duration::ZERO, || true);
+            let _ = app.ask_agent.hub.as_ref().unwrap().listen(c, None, Duration::ZERO, || true);
             rtx.send(app.run("ui.askAgent", json!({"instruction":"test"})).unwrap()["id"].as_u64().unwrap()).unwrap();
             for r in rx {
                 let _ = r.reply.send(match gridcraft_ui_egui::control::handle(&mut app, &egui::Context::default(), &r.method, &r.params) {
@@ -698,7 +696,8 @@ mod tests {
         assert_eq!(serde_json::from_str::<Json>(&line).unwrap()["ok"], true);
         let mut call = |method: &str, params: Json| {
             writeln!(out, "{}", json!({"id":7,"method":method,"params":params})).unwrap();
-            line.clear(); reader.read_line(&mut line).unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
             serde_json::from_str::<Json>(&line).unwrap()
         };
         assert_eq!(call("agent.listen", json!({"agent":"worker","timeoutMs":0}))["result"]["id"], id);
@@ -706,7 +705,10 @@ mod tests {
         assert_eq!(outside["errorCode"], "OUTSIDE_SELECTION", "the real command must stay inside the captured selection");
         assert_eq!(call("ui.edit.begin", json!({"text":"bypass"}))["errorCode"], "OUTSIDE_SELECTION");
         // An error about some other explicit request cannot unbind this connection's claim.
-        assert_eq!(call("engine.execute", json!({"request":id + 999,"command":"cell.set","params":{"cell":"A1","input":"bad"}}))["errorCode"], "NO_REQUEST");
+        assert_eq!(
+            call("engine.execute", json!({"request":id + 999,"command":"cell.set","params":{"cell":"A1","input":"bad"}}))["errorCode"],
+            "NO_REQUEST"
+        );
         for value in ["first", "second"] {
             assert_eq!(call("engine.execute", json!({"command":"cell.set","params":{"cell":"A1","input":value}}))["ok"], true);
         }
@@ -718,5 +720,4 @@ mod tests {
         assert!(matches!(stale["errorCode"].as_str(), Some("STALE_REQUEST" | "READ_ONLY_REQUEST")), "{stale}");
         assert_eq!(call("cell.get", json!({"cell":"A1"}))["result"]["text"], "second", "the stale sticky binding was cleared");
     }
-
 }

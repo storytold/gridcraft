@@ -488,6 +488,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "You" => "사용자",
         "Agent" => "에이전트",
         "Current instruction" => "현재 지시사항",
+        "Proposal (not applied)" => "제안(적용되지 않음)",
+        "Keep tool edits and notes. Proposals are not applied." => "도구의 변경 사항과 메모를 유지합니다. 제안은 적용되지 않습니다.",
         "Undo all of the agent's edits" => "에이전트의 모든 편집 내용 취소",
         "Actions" => "동작",
         "Choose a starting instruction, then edit and send" => "시작 지시사항을 선택하고 편집하여 보냅니다",

@@ -492,6 +492,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "You" => "Вы",
         "Agent" => "Агент",
         "Current instruction" => "Текущая инструкция",
+        "Proposal (not applied)" => "Предложение (не применено)",
+        "Keep tool edits and notes. Proposals are not applied." => "Сохранить изменения инструментов и заметки. Предложения не применяются.",
         "Undo all of the agent's edits" => "Отменить все правки агента",
         "Actions" => "Действия",
         "Choose a starting instruction, then edit and send" => "Выберите начальную инструкцию, отредактируйте и отправьте",

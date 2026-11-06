@@ -598,6 +598,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "You" => "Vy",
         "Agent" => "Agent",
         "Current instruction" => "Aktuální instrukce",
+        "Proposal (not applied)" => "Návrh (nepoužitý)",
+        "Keep tool edits and notes. Proposals are not applied." => "Zachovat změny nástrojů a poznámky. Návrhy se nepoužijí.",
         "Undo all of the agent's edits" => "Vrátit všechny úpravy agenta",
         "Actions" => "Akce",
         "Choose a starting instruction, then edit and send" => "Vyberte výchozí instrukci, upravte a odešlete",

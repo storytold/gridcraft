@@ -1035,6 +1035,8 @@ pub(super) const EXTRA: &[(&str, &str)] = &[
     ("You", "あなた"),
     ("Agent", "エージェント"),
     ("Current instruction", "現在の指示"),
+    ("Proposal (not applied)", "提案（未適用）"),
+    ("Keep tool edits and notes. Proposals are not applied.", "ツールによる変更とメモを残します。提案は適用されません。"),
     ("Undo all of the agent's edits", "エージェントの編集をすべて元に戻す"),
     ("Actions", "アクション"),
     ("Choose a starting instruction, then edit and send", "最初の指示を選択し、編集して送信"),

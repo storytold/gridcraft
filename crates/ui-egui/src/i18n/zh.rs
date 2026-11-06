@@ -480,6 +480,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "You" => "您",
         "Agent" => "智能体",
         "Current instruction" => "当前指令",
+        "Proposal (not applied)" => "建议（未应用）",
+        "Keep tool edits and notes. Proposals are not applied." => "保留工具所做的修改和备注。建议不会被应用。",
         "Undo all of the agent's edits" => "撤消智能体的所有编辑",
         "Actions" => "操作",
         "Choose a starting instruction, then edit and send" => "选择初始指令，编辑后发送",

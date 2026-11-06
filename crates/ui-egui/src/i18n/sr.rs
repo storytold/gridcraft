@@ -479,6 +479,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "You" => "Vi",
         "Agent" => "Agent",
         "Current instruction" => "Trenutna instrukcija",
+        "Proposal (not applied)" => "Предлог (није примењен)",
+        "Keep tool edits and notes. Proposals are not applied." => "Задржи измене алата и белешке. Предлози се не примењују.",
         "Undo all of the agent's edits" => "Opozovi sve izmene agenta",
         "Actions" => "Radnje",
         "Choose a starting instruction, then edit and send" => "Izaberite početnu instrukciju, izmenite i pošaljite",

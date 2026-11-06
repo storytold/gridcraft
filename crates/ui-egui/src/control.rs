@@ -17,8 +17,7 @@
 //! - `ui.resize {width, height}`, `ui.set {dark?, formulaBar?, ribbonCollapsed?, animations?}`
 //! - `app.open {path, password?}`, `app.save {path?}`, `app.quit`
 //!
-//! Ask Agent's `agent.listen` / `agent.reply` are answered by the host's transport from
-//! [`crate::ask_agent::AgentHub`], never here on the UI thread.
+//! Ask Agent listens on the transport; replies are validated and accepted here on the document owner.
 
 use std::sync::mpsc::Sender;
 
@@ -101,7 +100,13 @@ fn wrap(r: Result<Json, String>) -> Outcome {
 
 /// Runs a command for an agent. Commands that move the selection scroll the active cell into
 /// view, as the Go To dialog, the Name Box and the arrow keys do.
-fn run(app: &mut SheetApp, id: &str, params: Json, context: &Json) -> Result<Json, String> {
+fn run(app: &mut SheetApp, id: &str, mut params: Json, context: &Json) -> Result<Json, String> {
+    if id == "ui.askAgent"
+        && context.get("_externalAgent") == Some(&Json::Bool(true))
+        && let Some(params) = params.as_object_mut()
+    {
+        params.insert("_externalAgent".into(), Json::Bool(true));
+    }
     let r = if let Some(request) = context.get("request").and_then(Json::as_u64) {
         let conn = context.get("_agentConnection").and_then(Json::as_u64).ok_or("Ask Agent commands need an authenticated connection")?;
         crate::ask_agent::run_for(app, conn, request, id, params)
@@ -257,6 +262,28 @@ fn filter_commands(commands: Vec<Json>, search: Option<&str>) -> Vec<Json> {
 
 /// Dispatches one control request: commands, inspection, UI state, dialogs, editing, synthetic input, open/save/quit and screenshots. Unknown methods (and unknown command ids) return an error. Immediate answers request a repaint; `ui.screenshot` is admitted asynchronously instead of being answered here.
 pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -> Outcome {
+    if method == "agent.reply" {
+        let Some(conn) = p.get("_agentConnection").and_then(Json::as_u64) else { return err("NOT_OWNER: authenticated connection required") };
+        return Outcome::Done(crate::ask_agent::handle_reply(app, conn, p));
+    }
+    if p.get("request").is_some_and(|id| id.as_u64().is_none()) {
+        return err("INVALID_PARAMS: request must be an unsigned integer");
+    }
+    if p.get("request").is_some()
+        && !matches!(method, "engine.execute" | "command" | "ui.menu.invoke")
+        && gridcraft_engine::find_command(method).is_none()
+    {
+        return err("OUTSIDE_SELECTION: request-scoped UI actions must use a scoped document command");
+    }
+    if p.get("_externalAgent") == Some(&Json::Bool(true))
+        && p.get("request").is_none()
+        && !crate::ask_agent::is_query_method(method)
+        && method != "ui.askAgent"
+        && let (Some(hub), Some(current)) = (&app.ask_agent.hub, crate::ask_agent::current_target(app))
+        && let Err(e) = hub.may_edit(p.get("_agentConnection").and_then(Json::as_u64).unwrap_or(0), None, &current, |_| false)
+    {
+        return err(e);
+    }
     let s = |k: &str| p.get(k).and_then(Json::as_str);
     let f = |k: &str| p.get(k).and_then(Json::as_f64).unwrap_or(0.0) as f32;
     let out = match method {
