@@ -213,6 +213,14 @@ fn unmodelled_parts_survive_a_round_trip() {
     let out = write_xlsx(&wb).unwrap();
     let u = Unpacked::new(&out);
     u.assert_valid();
+    assert_kept_workbook_parts(&u);
+    let sheet = sheet_part(&u, "Data");
+    let sx = u.text(&sheet);
+    assert_kept_sheet_parts(&u, &sheet, &sx);
+    assert_round_trip_kept_content(&wb, &out);
+}
+
+fn assert_kept_workbook_parts(u: &Unpacked) {
     // Every kept part is in the output byte for byte.
     for d in [
         PRINTER,
@@ -244,34 +252,37 @@ fn unmodelled_parts_survive_a_round_trip() {
     let item = u.find(CUSTOM_XML.as_bytes())[0].clone();
     assert!(u.rels(&item).iter().any(|r| r.1.ends_with("/customXmlProps")));
     // Formulas using the link are written as they were.
-    let sheet = sheet_part(&u, "Data");
+    let sheet = sheet_part(u, "Data");
     let sx = u.text(&sheet);
     assert!(sx.contains("<f>[1]Sheet1!$A$1</f>"), "{sx}");
     assert!(sx.contains("<f>SUM([1]Sheet1!A1:A3)*2</f>"), "{sx}");
+}
+
+fn assert_kept_sheet_parts(u: &Unpacked, sheet: &str, sx: &str) {
     // Printer settings (#324).
-    let ps = attr_of(&sx, "pageSetup", "r:id");
-    let (ty, target) = u.target(&sheet, &ps);
+    let ps = attr_of(sx, "pageSetup", "r:id");
+    let (ty, target) = u.target(sheet, &ps);
     assert!(ty.ends_with("/printerSettings"));
     assert_eq!(u.parts.get(&target).unwrap(), PRINTER);
     // The OLE object and its preview image, re-linked.
-    let ole = attr_of(&sx, "oleObject", "r:id");
-    assert_eq!(u.parts.get(&u.target(&sheet, &ole).1).unwrap(), OLE);
-    let preview = attr_of(&sx, "objectPr", "r:id");
-    assert_eq!(u.parts.get(&u.target(&sheet, &preview).1).unwrap(), EMF);
+    let ole = attr_of(sx, "oleObject", "r:id");
+    assert_eq!(u.parts.get(&u.target(sheet, &ole).1).unwrap(), OLE);
+    let preview = attr_of(sx, "objectPr", "r:id");
+    assert_eq!(u.parts.get(&u.target(sheet, &preview).1).unwrap(), EMF);
     // Namespace declarations travel with the fragment.
-    assert_eq!(attr_of(&sx, "mc:AlternateContent", "xmlns:mc"), "http://schemas.openxmlformats.org/markup-compatibility/2006");
-    assert_eq!(attr_of(&sx, "mc:AlternateContent", "xmlns:x14"), "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main");
+    assert_eq!(attr_of(sx, "mc:AlternateContent", "xmlns:mc"), "http://schemas.openxmlformats.org/markup-compatibility/2006");
+    assert_eq!(attr_of(sx, "mc:AlternateContent", "xmlns:x14"), "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main");
     // The form control.
-    let ctrl = attr_of(&sx, "control", "r:id");
-    assert_eq!(u.parts.get(&u.target(&sheet, &ctrl).1).unwrap(), CTRL_PROP.as_bytes());
+    let ctrl = attr_of(sx, "control", "r:id");
+    assert_eq!(u.parts.get(&u.target(sheet, &ctrl).1).unwrap(), CTRL_PROP.as_bytes());
     // Schema order: pageSetup < legacyDrawing < oleObjects < controls.
     let pos = |t: &str| sx.find(t).unwrap_or_else(|| panic!("no {t}"));
     assert!(pos("<pageSetup") < pos("<legacyDrawing") && pos("<legacyDrawing") < pos("<oleObjects") && pos("<oleObjects") < pos("<controls"));
     // Query table: a sheet relationship only.
-    assert!(u.rels(&sheet).iter().any(|r| r.1.ends_with("/queryTable") && u.parts.get(&r.2).is_some_and(|b| b == QUERY_TABLE.as_bytes())));
+    assert!(u.rels(sheet).iter().any(|r| r.1.ends_with("/queryTable") && u.parts.get(&r.2).is_some_and(|b| b == QUERY_TABLE.as_bytes())));
     // One VML drawing: the kept control shapes plus GridCraft's note, in a fresh shape block.
-    let vml_id = attr_of(&sx, "legacyDrawing", "r:id");
-    let vml_part = u.target(&sheet, &vml_id).1;
+    let vml_id = attr_of(sx, "legacyDrawing", "r:id");
+    let vml_part = u.target(sheet, &vml_id).1;
     let vml = u.text(&vml_part);
     assert!(vml.contains("_x0000_s1025") && vml.contains("_x0000_s1026"));
     assert!(!vml.contains("old note") && !vml.contains("_x0000_s1027"), "the source's note shape is replaced");
@@ -280,9 +291,11 @@ fn unmodelled_parts_survive_a_round_trip() {
     let img = u.rels(&vml_part);
     assert_eq!(img.len(), 1);
     assert_eq!(u.parts.get(&img[0].2).unwrap(), EMF);
+}
 
+fn assert_round_trip_kept_content(wb: &gridcraft_model::Workbook, out: &[u8]) {
     // Reading the output keeps the same content again.
-    let (wb2, rep2) = read_xlsx(&out).unwrap();
+    let (wb2, rep2) = read_xlsx(out).unwrap();
     assert!(!rep2.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep2.warnings);
     let a = wb.sheet(0).unwrap().preserved.as_deref().unwrap();
     let b = wb2.sheet(0).unwrap().preserved.as_deref().unwrap();
@@ -293,7 +306,6 @@ fn unmodelled_parts_survive_a_round_trip() {
     assert_eq!(da, db);
     assert_eq!(a.elements.len(), b.elements.len());
     assert_eq!(wb.preserved.as_deref().unwrap().parts.len(), wb2.preserved.as_deref().unwrap().parts.len());
-    u.assert_valid();
 }
 
 #[test]
@@ -837,6 +849,10 @@ const LOGO: &[u8] = b"\x89PNG\r\n\x1a\n letterhead logo";
 const SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n footer signature";
 const HF_VML: &str = r##"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="1"/></o:shapelayout><v:shapetype id="_x0000_t75" coordsize="21600,21600" o:spt="75" o:preferrelative="t" path="m@4@5l@4@11@9@11@9@5xe" filled="f" stroked="f"/><v:shape id="LH" o:spid="_x0000_s1025" type="#_x0000_t75" style="position:absolute;margin-left:0;margin-top:0;width:120pt;height:40pt;z-index:1"><v:imagedata o:relid="rId1" o:title="logo"/><o:lock v:ext="edit" rotation="t"/></v:shape><v:shape id="CF" o:spid="_x0000_s1026" type="#_x0000_t75" style="position:absolute;margin-left:0;margin-top:0;width:80pt;height:20pt;z-index:2"><v:imagedata o:relid="rId2" o:title="signature"/><o:lock v:ext="edit" rotation="t"/></v:shape></xml>"##;
 
+/// The VML drawing of one note and nothing else. [`VML`] also holds a check box that only the
+/// drawing lists, which is kept with the drawing (and its source shape block).
+const NOTE_VML: &str = r##"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="1"/></o:shapelayout><v:shape id="_x0000_s1027" type="#_x0000_t202" style="position:absolute"><v:textbox><div>old note<br></div></v:textbox><x:ClientData ObjectType="Note"><x:Row>0</x:Row><x:Column>0</x:Column></x:ClientData></v:shape></xml>"##;
+
 /// #1257: a letterhead in the header and a picture in the footer (`&G`), drawn from a VML part
 /// that `<legacyDrawingHF>` names, next to a note whose VML drawing GridCraft rewrites.
 fn header_picture_package() -> Vec<u8> {
@@ -863,7 +879,7 @@ fn header_picture_package() -> Vec<u8> {
         ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
         ("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels.as_bytes()),
         ("xl/comments1.xml", COMMENTS.as_bytes()),
-        ("xl/drawings/vmlDrawing1.vml", VML.as_bytes()),
+        ("xl/drawings/vmlDrawing1.vml", NOTE_VML.as_bytes()),
         ("xl/drawings/vmlDrawing2.vml", HF_VML.as_bytes()),
         ("xl/drawings/_rels/vmlDrawing2.vml.rels", hf_rels.as_bytes()),
         ("xl/media/image1.png", LOGO),
@@ -925,4 +941,65 @@ fn notes_take_shape_blocks_the_header_pictures_dont_use() {
         assert!(!hf_map.contains(b) && !hf_ids.contains(b), "notes reuse shape block {b}: {notes_map:?} {notes_ids:?}");
     }
     assert!(notes_ids.iter().all(|b| notes_map.contains(b)), "note ids outside their drawing's blocks");
+}
+
+#[test]
+fn modelled_form_controls_join_kept_ones_in_one_controls_element() {
+    use gridcraft_model::{Anchor, ControlKind, FormControl};
+    let (mut wb, _) = read_xlsx(&rich_package()).unwrap();
+    assert!(wb.sheet(0).unwrap().controls.is_empty(), "a check box stays with pass-through");
+    let anchor = Anchor { cell: gridcraft_core::CellRef::new(8, 1), width: 120.0, height: 20.0, ..Default::default() };
+    let slider = FormControl { id: 900, kind: ControlKind::Slider, anchor, link: Some("$B$9".into()), value: 40, ..Default::default() };
+    if let Some(sh) = wb.sheet_mut(0) {
+        sh.controls.push(slider);
+    }
+    let out = write_xlsx(&wb).unwrap();
+    let u = Unpacked::new(&out);
+    u.assert_valid();
+    let sheet = sheet_part(&u, "Data");
+    let sx = u.text(&sheet);
+    assert_eq!(sx.matches("<controls").count(), 1, "{sx}");
+    // The kept check box and the slider, each with its own properties part.
+    let ids: Vec<&str> = sx.split("<control shapeId=\"").skip(1).filter_map(|r| r.split('"').next()).collect();
+    assert!(ids.contains(&"1026"), "{ids:?}");
+    let ours = ids.iter().find(|i| **i != "1026").copied().unwrap_or_default();
+    assert_eq!(u.find(CTRL_PROP.as_bytes()).len(), 1, "the kept properties part is written once");
+    // One VML drawing holds the kept shapes, the note and the slider, in fresh blocks.
+    let vml = u.text(&u.target(&sheet, &attr_of(&sx, "legacyDrawing", "r:id")).1);
+    assert!(vml.contains("_x0000_s1025") && vml.contains("_x0000_s1026"), "{vml}");
+    assert!(vml.contains(&format!("id=\"_x0000_s{ours}\"")) && vml.contains("ObjectType=\"Scroll\""), "{vml}");
+    assert!(vml.contains("id=\"_x0000_t201\""), "the form control shape type is defined");
+    assert_eq!(ours, "2050", "the note is 2049, the slider follows it");
+
+    // Read back: the slider is modelled again and the check box is kept, once.
+    let (wb2, rep) = read_xlsx(&out).unwrap();
+    assert!(!rep.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep.warnings);
+    let data = wb2.sheet(0).unwrap();
+    assert_eq!(data.controls.len(), 1);
+    assert_eq!((data.controls[0].kind, data.controls[0].value, data.controls[0].link.as_deref()), (ControlKind::Slider, 40, Some("$B$9")));
+    let kept = data.preserved.as_deref().unwrap();
+    let controls = kept.elements.iter().find(|e| e.slot == "controls").map(|e| e.xml.clone()).unwrap_or_default();
+    assert!(controls.contains("Check Box 1") && !controls.contains(&format!("shapeId=\"{ours}\"")), "{controls}");
+    let kept_vml = String::from_utf8_lossy(&kept.vml.as_ref().unwrap().data).into_owned();
+    assert!(!kept_vml.contains("ObjectType=\"Scroll\""), "the modelled slider's shape is not kept");
+    // A second save writes the same controls again, without duplicates.
+    let again = Unpacked::new(&write_xlsx(&wb2).unwrap());
+    let sx2 = again.text(&sheet_part(&again, "Data"));
+    assert_eq!(sx2.matches("<control shapeId=").count(), sx.matches("<control shapeId=").count(), "{sx2}");
+    again.assert_valid();
+}
+
+#[test]
+fn a_sheet_of_modelled_controls_keeps_nothing_for_them() {
+    use gridcraft_model::{ControlKind, FormControl};
+    let mut wb = gridcraft_model::Workbook::default();
+    if let Some(sh) = wb.sheet_mut(0) {
+        sh.controls.push(FormControl { id: 1, kind: ControlKind::Button, text: "Go".into(), ..Default::default() });
+        sh.controls.push(FormControl { id: 2, kind: ControlKind::Spin, ..Default::default() });
+    }
+    let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let sh = back.sheet(0).unwrap();
+    assert_eq!(sh.controls.len(), 2);
+    assert!(sh.preserved.is_none(), "{:?}", sh.preserved);
 }

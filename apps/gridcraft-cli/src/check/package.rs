@@ -6,6 +6,10 @@ const MAX_XML_PART: u64 = 64 * 1024 * 1024;
 /// Most zip entries looked at while validating a written package.
 const MAX_ENTRIES: usize = 200_000;
 
+/// Decompressed bytes that comparing one package's relationship kinds may read in total: the
+/// relationship parts themselves and the targets whose content is checked.
+const RELATIONSHIP_BUDGET: u64 = 512 * 1024 * 1024;
+
 /// Relationship kinds (lower case) whose absence after a save isn't a loss: the calculation chain is
 /// a cache Excel rebuilds, and GridCraft never writes it.
 pub(super) const REBUILT_KINDS: [&str; 1] = ["calcchain"];
@@ -20,7 +24,9 @@ fn local_name(name: &[u8]) -> &[u8] {
 }
 
 /// `(element local name, attributes)` for every start/empty element of an XML part.
-fn xml_elements(xml: &[u8]) -> Result<Vec<(String, Vec<(String, String)>)>, String> {
+type XmlElement = (String, Vec<(String, String)>);
+
+fn xml_elements(xml: &[u8]) -> Result<Vec<XmlElement>, String> {
     use quick_xml::events::Event;
     let mut reader = quick_xml::Reader::from_reader(xml);
     let mut buf = Vec::new();
@@ -112,6 +118,30 @@ fn read_zip_part(zip: &mut Zip<'_>, name: &str) -> Result<Vec<u8>, String> {
     let f = zip.by_name(name).map_err(|e| format!("{name}: {e}"))?;
     let mut buf = Vec::new();
     f.take(MAX_XML_PART).read_to_end(&mut buf).map_err(|e| format!("{name}: {e}"))?;
+    Ok(buf)
+}
+
+enum PartError {
+    /// Reading the part would spend more than the remaining budget.
+    OverBudget,
+    Unreadable,
+}
+
+/// Reads a part like [`read_zip_part`], charging the decompressed bytes to `budget`.
+fn read_zip_part_within(zip: &mut Zip<'_>, name: &str, budget: &mut u64) -> Result<Vec<u8>, PartError> {
+    let f = zip.by_name(name).map_err(|_| PartError::Unreadable)?;
+    // One byte past what is left shows that the part doesn't fit.
+    let limit = MAX_XML_PART.min(budget.saturating_add(1));
+    let mut buf = Vec::new();
+    // Bytes read before a decompression error still count against the budget.
+    let res = f.take(limit).read_to_end(&mut buf);
+    let read = buf.len() as u64;
+    if read > *budget {
+        *budget = 0;
+        return Err(PartError::OverBudget);
+    }
+    *budget -= read;
+    res.map_err(|_| PartError::Unreadable)?;
     Ok(buf)
 }
 
@@ -230,19 +260,30 @@ pub fn validate_package(bytes: &[u8]) -> Result<Vec<String>, String> {
 /// nothing are left out, as a save may rightly drop them: a link to a place in the workbook
 /// (`#Sheet1!A1`, written as a cell's `location`) and a target part with nothing in it.
 pub(super) fn relationship_kinds(bytes: &[u8]) -> Result<BTreeMap<String, String>, String> {
+    relationship_kinds_within(bytes, RELATIONSHIP_BUDGET)
+}
+
+/// [`relationship_kinds`] reading at most `budget` decompressed bytes. `Err` once the relationship
+/// parts alone need more: their kinds can't be listed completely.
+fn relationship_kinds_within(bytes: &[u8], mut budget: u64) -> Result<BTreeMap<String, String>, String> {
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("not a zip package: {e}"))?;
     let names = zip_names(&mut zip);
     let by_key: HashMap<String, &String> = names.iter().map(|n| (part_key(n), n)).collect();
     // Several relationships name the same part; each fresh check decompressed it again, so
     // repeated references to one highly compressible part multiplied the work. The verdict is
     // remembered per (part, named content) and the decompression the package can cause is
-    // budgeted as a whole (finding: repeated decompression).
+    // budgeted as a whole, the relationship parts included: many large, unreferenced rels parts
+    // would otherwise each spend a full per-part allowance.
     let mut verdicts: HashMap<(String, &'static str), bool> = HashMap::new();
-    let mut budget: u64 = 512 * 1024 * 1024;
     let mut kinds = BTreeMap::new();
     for n in names.iter().filter(|n| part_key(n).ends_with(".rels")) {
         let Some(src_dir) = rels_source_dir(&part_key(n)) else { continue };
-        let Ok(els) = read_zip_part(&mut zip, n).and_then(|xml| xml_elements(&xml)) else { continue };
+        let xml = match read_zip_part_within(&mut zip, n, &mut budget) {
+            Ok(xml) => xml,
+            Err(PartError::OverBudget) => return Err(format!("{n}: relationship check stopped at its decompression limit")),
+            Err(PartError::Unreadable) => continue,
+        };
+        let Ok(els) = xml_elements(&xml) else { continue };
         for (_, attrs) in els.iter().filter(|(el, _)| el == "Relationship") {
             let Some(kind) = attr(attrs, "Type").and_then(|t| t.rsplit('/').next()) else { continue };
             let target = attr(attrs, "Target").unwrap_or("");
@@ -325,5 +366,38 @@ fn holds_something_uncached(zip: &mut Zip<'_>, name: &str, marker: &'static str,
             Err(_) => return true,
         }
         buf.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write as _;
+
+    use super::*;
+
+    /// A package with `count` relationship parts of `size` bytes each, none of them describing an
+    /// existing part.
+    fn many_rels(count: usize, size: usize) -> Vec<u8> {
+        let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let head = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/custom" Target="https://example.com" TargetMode="External"/>"#;
+        let tail = "</Relationships>";
+        let filler = " ".repeat(size.saturating_sub(head.len() + tail.len()));
+        for i in 0..count {
+            z.start_file(format!("xl/_rels/part{i}.xml.rels"), opts).unwrap();
+            z.write_all(head.as_bytes()).unwrap();
+            z.write_all(filler.as_bytes()).unwrap();
+            z.write_all(tail.as_bytes()).unwrap();
+        }
+        z.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn relationship_parts_count_against_the_decompression_budget() {
+        // Each part fits the per-part allowance, but together they need more than the budget.
+        let bytes = many_rels(8, 64 * 1024);
+        assert!(relationship_kinds_within(&bytes, 256 * 1024).is_err());
+        let kinds = relationship_kinds_within(&bytes, 1024 * 1024).unwrap();
+        assert_eq!(kinds.get("custom").map(String::as_str), Some("custom"));
     }
 }

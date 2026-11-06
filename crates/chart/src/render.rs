@@ -1,9 +1,8 @@
 //! Chart layout: title, legend, axes and every chart kind, drawn into [`Prim`]s.
 
-use std::collections::HashSet;
 use std::f32::consts::{PI, TAU};
 
-use gridcraft_model::{Chart, ChartKind, LegendPos, LineDash, QuartileMethod, Theme, TrendlineKind};
+use gridcraft_model::{Chart, ChartKind, LineDash, QuartileMethod, Theme, TrendlineKind};
 
 use crate::axis::{Fmt, Scale, clean, fixed_scale, nice_scale};
 use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, series_color};
@@ -15,11 +14,12 @@ mod frame;
 mod kinds;
 mod legend;
 mod lines;
+mod table;
 mod trend;
 
 use cartesian::{cartesian, scatter};
 use frame::{Bx, axis_titles, chart_title};
-use kinds::{box_whisker, funnel, histogram, pie, radar, stock, treemap, waterfall};
+use kinds::{box_whisker, doughnut, funnel, histogram, pie, radar, stock, treemap, waterfall};
 use legend::draw_legend;
 pub use legend::{Swatch, legend_entries};
 pub use trend::supports_trendline;
@@ -44,6 +44,11 @@ const MAX_LINE_PTS: usize = 2000;
 const MAX_MARKERS: usize = 5000;
 /// Data labels are skipped when a series has more points than this.
 const MAX_LABELS: usize = 200;
+/// Most wedges a doughnut draws for the whole chart. The per-series and per-category limits do not
+/// bound their product: 255 series of 20,000 categories would be millions of wedges. Every drawable
+/// ring shares this budget, so the innermost ring keeps its largest slices and the outer rings are
+/// capped instead of the chart dropping rings wholesale.
+pub(crate) const MAX_WEDGES: usize = 2_048;
 
 struct Ctx<'a> {
     out: Vec<Prim>,
@@ -70,8 +75,7 @@ impl Ctx<'_> {
         }
         String::new()
     }
-    #[allow(clippy::too_many_arguments)]
-    fn text(&mut self, x: f32, y: f32, s: &str, size: f32, color: Rgba, align: HAlign, valign: VAlign) {
+    fn text(&mut self, x: f32, y: f32, s: &str, size: f32, color: Rgba, (align, valign): (HAlign, VAlign)) {
         if s.is_empty() {
             return;
         }
@@ -135,7 +139,7 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
     if let Some(t) = chart_title(chart, &data) {
         let size = TITLE_SIZE.min(h * 0.12).max(4.0);
         let t = ctx.fit(&t, size, area.w);
-        ctx.text(w / 2.0, area.y, &t, size, TEXT, HAlign::Center, VAlign::Top);
+        ctx.text(w / 2.0, area.y, &t, size, TEXT, (HAlign::Center, VAlign::Top));
         let used = size * 1.3 + 4.0;
         area.y += used;
         area.h -= used;
@@ -154,7 +158,7 @@ fn draw_kind(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     use ChartKind::*;
     match chart.kind {
         Pie => pie(ctx, chart, data, area, 0.0, false),
-        Doughnut => pie(ctx, chart, data, area, 0.5, false),
+        Doughnut => doughnut(ctx, chart, data, area),
         Sunburst => pie(ctx, chart, data, area, 0.2, true),
         Treemap => treemap(ctx, chart, data, area),
         Funnel => funnel(ctx, chart, data, area),

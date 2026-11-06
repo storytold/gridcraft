@@ -8,7 +8,9 @@ use crate::SheetApp;
 use crate::icons::{self, Icon};
 use crate::keytips::keytip_table;
 use crate::theme::{self, Cat, Tokens};
-use crate::widgets::{big_button, big_split_button, color_palette, icon_button, small_button, small_split_button, split_button, toggle_button};
+use crate::widgets::{
+    big_button, big_split_button, color_palette, icon_button, small_button, small_split_button, small_toggle_button, split_button, toggle_button,
+};
 
 mod automate;
 mod contextual;
@@ -282,7 +284,7 @@ fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
         if sh.table_at(d.selection.active).is_some() {
             v.push("Table Design");
         }
-        if app.selected_chart.is_some_and(|id| sh.charts.iter().any(|c| c.id == id)) {
+        if app.selected_chart().is_some_and(|id| sh.charts.iter().any(|c| c.id == id)) {
             v.push("Chart Design");
         }
         if app.grid.hf_edit.is_some() {
@@ -290,4 +292,32 @@ fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
         }
     }
     v
+}
+
+#[cfg(test)]
+mod tooltip_tests {
+    /// A ribbon tooltip names its control only; `widgets::tooltip_shortcut` adds the shortcut of
+    /// the platform it runs on. A Command-key glyph written into the text would show on Windows
+    /// and Linux, where the shortcut is a Ctrl or Alt one (AutoSum is Alt+=).
+    #[test]
+    fn tooltips_leave_the_shortcut_to_the_platform_lookup() {
+        let sources = [
+            include_str!("ribbon.rs"),
+            include_str!("ribbon/automate.rs"),
+            include_str!("ribbon/contextual.rs"),
+            include_str!("ribbon/controls.rs"),
+            include_str!("ribbon/data.rs"),
+            include_str!("ribbon/formulas.rs"),
+            include_str!("ribbon/galleries.rs"),
+            include_str!("ribbon/home.rs"),
+            include_str!("ribbon/insert.rs"),
+            include_str!("ribbon/page_layout.rs"),
+            include_str!("ribbon/review.rs"),
+            include_str!("ribbon/shortcuts.rs"),
+            include_str!("ribbon/title_bar.rs"),
+            include_str!("ribbon/view.rs"),
+        ];
+        let mac_only = sources.iter().flat_map(|s| s.lines()).filter(|l| l.contains('\u{2318}')).collect::<Vec<_>>();
+        assert!(mac_only.is_empty(), "Command-key glyph in ribbon text: {mac_only:?}");
+    }
 }
