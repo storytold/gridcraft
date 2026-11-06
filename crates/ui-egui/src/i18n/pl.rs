@@ -392,6 +392,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Description" => "Opis",
         "No workbook is open." => "Żaden skoroszyt nie jest otwarty.",
         "Save as type" => "Zapisz jako typ",
+        "File name" => "Nazwa pliku",
         "Excel Workbook (*.xlsx)" => "Skoroszyt programu Excel (*.xlsx)",
         "CSV UTF-8 (Comma delimited) (*.csv)" => "CSV UTF-8 (rozdzielany przecinkami) (*.csv)",
         "Web Page (*.html)" => "Strona sieci Web (*.html)",

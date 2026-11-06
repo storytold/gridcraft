@@ -400,6 +400,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Description" => "Beschrijving",
         "No workbook is open." => "Er is geen werkmap geopend.",
         "Save as type" => "Opslaan als type",
+        "File name" => "Bestandsnaam",
         "Excel Workbook (*.xlsx)" => "Excel-werkmap (*.xlsx)",
         "CSV UTF-8 (Comma delimited) (*.csv)" => "CSV UTF-8 (door komma's gescheiden) (*.csv)",
         "Web Page (*.html)" => "Webpagina (*.html)",
