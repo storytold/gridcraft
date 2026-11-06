@@ -1,0 +1,18 @@
+[package]
+name = "gridcraft-collab"
+description = "GridCraft real-time collaboration: operation envelope, session keys and authoritative deltas"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+gridcraft-core = { workspace = true }
+gridcraft-model = { workspace = true }
+gridcraft-calc = { workspace = true }
+gridcraft-engine = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

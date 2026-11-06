@@ -2083,6 +2083,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gridcraft-collab"
+version = "0.16.0"
+dependencies = [
+ "gridcraft-calc",
+ "gridcraft-core",
+ "gridcraft-engine",
+ "gridcraft-model",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "gridcraft-core"
 version = "0.16.0"
 dependencies = [
