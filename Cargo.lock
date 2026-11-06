@@ -2023,6 +2023,7 @@ dependencies = [
  "getrandom 0.4.3",
  "gridcraft-engine",
  "gridcraft-mcp",
+ "gridcraft-sandbox",
  "gridcraft-ui-egui",
  "image",
  "log",
@@ -2065,6 +2066,7 @@ version = "0.16.0"
 dependencies = [
  "gridcraft-engine",
  "gridcraft-mcp",
+ "gridcraft-sandbox",
  "log",
  "quick-xml 0.41.0",
  "serde_json",
