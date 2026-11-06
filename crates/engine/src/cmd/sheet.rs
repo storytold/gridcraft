@@ -295,7 +295,11 @@ fn format_same_as_before(wb: &mut Workbook, sheet: usize, axis: Axis, at: u32, c
     // Where a source cell's format can differ from what the new cell gets from its row and column:
     // where a cell is stored, or (inserted cells only) where a row or column format reaches.
     let line_has_borders = line_style.is_some_and(|id| styles.get(id).borders != Default::default());
-    let across: Vec<u32> = if line_style.is_some() && (!whole_lines || line_has_borders) {
+    let destination_line_format = !whole_lines
+        && (if axis == Axis::Rows { &sh.rows } else { &sh.cols })
+            .range(at..end)
+            .any(|(_, info)| info.style.is_some_and(|id| id != gridcraft_model::StyleId::DEFAULT));
+    let across: Vec<u32> = if destination_line_format || line_style.is_some() && (!whole_lines || line_has_borders) {
         (k0..=k1).collect()
     } else {
         let mut v: Vec<u32> = if axis == Axis::Rows {
@@ -317,17 +321,15 @@ fn format_same_as_before(wb: &mut Workbook, sheet: usize, axis: Axis, at: u32, c
     };
     let styled: Vec<_> = across
         .into_iter()
-        .filter_map(|k| {
+        .map(|k| {
+            // Absence is the default format too: it can reset an inherited destination style.
             let source = sh.style_id(cell(prev, k));
-            if source == gridcraft_model::StyleId::DEFAULT && sh.cells.get(cell(prev, k)).is_none() {
-                return None;
-            }
             let far = if end < if axis == Axis::Rows { MAX_ROWS } else { MAX_COLS } {
                 sh.style_id(cell(end, k))
             } else {
                 gridcraft_model::StyleId::DEFAULT
             };
-            Some((k, inserted_style(styles, source, far, axis)))
+            (k, inserted_style(styles, source, far, axis))
         })
         .collect();
     // New cells are empty after the shift. Group destination lines by their inherited style,

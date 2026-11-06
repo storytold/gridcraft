@@ -62,3 +62,25 @@ fn whole_line_insert_preserves_a_default_override_in_the_source_line() {
         check_round_trips(&mut s, at);
     }
 }
+
+#[test]
+fn implicit_default_source_clears_a_formatted_destination_line() {
+    for (line, at, shift) in [("3:3", "B3", "down"), ("C:C", "C2", "right")] {
+        let mut s = book();
+        s.execute("home.bold", json!({"range": line})).unwrap();
+        assert_ne!(style(&s, at), StyleId::DEFAULT);
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().cells.len(), 0);
+        s.execute("home.insertCells", json!({"range": at, "shift": shift})).unwrap();
+        assert_eq!(style(&s, at), StyleId::DEFAULT, "an absent source cell still supplies the default format");
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().cells.len(), 1, "only the necessary reset is stored");
+        check_round_trips(&mut s, at);
+    }
+    let mut s = book();
+    s.execute("home.insertCells", json!({"range": "B3:Z10000", "shift": "down"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().cells.len(), 0, "ordinary defaults must not materialize empty cells");
+    s.execute("home.bold", json!({"range": "2:2"})).unwrap();
+    let capped = s.execute("home.insertCells", json!({"range": "A3:XFD70", "shift": "down"})).unwrap();
+    assert_eq!(capped["formattingSkipped"], true, "over one million differing styles must be refused before allocation");
+    assert_eq!(capped["formattingCellLimit"], 1_000_000);
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().cells.len(), 0);
+}
