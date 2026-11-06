@@ -687,30 +687,58 @@ fn info(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage) {
     });
     ui.add_space(22.0);
     section(ui, lang, "Properties");
-    crate::rtl::grid(ui, egui::Grid::new("backstage_props").num_columns(2).spacing(vec2(18.0, 8.0)), |ui| {
-        ui.label(RichText::new(lang.tr("Location")).color(t.text_dim));
-        ui.label(path.as_deref().unwrap_or(lang.tr("Not saved yet")));
-        ui.end_row();
-        ui.label(RichText::new(lang.tr("Sheets")).color(t.text_dim));
-        ui.label(sheets.to_string());
-        ui.end_row();
-        for (i, (key, label)) in PROPERTIES.iter().enumerate() {
-            let (Some(draft), Some(saved)) = (bs.props.get_mut(i), current.get(i)) else { continue };
-            let label = ui.label(RichText::new(lang.tr(label)).color(t.text_dim));
-            let id = ui.make_persistent_id(("backstage_prop", *key));
-            // Show the workbook's value unless the field is being edited (undo, another window).
-            if !ui.ctx().memory(|m| m.has_focus(id)) {
-                draft.clone_from(saved);
-            }
-            let resp = ui.add(egui::TextEdit::singleline(draft).id(id).desired_width(360.0)).labelled_by(label.id);
-            if resp.lost_focus() && draft != saved {
-                let mut params = serde_json::Map::new();
-                params.insert((*key).to_string(), json!(draft.clone()));
-                app.run_or_alert("file.properties", Json::Object(params));
-            }
+    // A property row: its name, then its value. Mirrored, rows are drawn by hand (name on the right
+    // in a fixed-width cell) because a `Grid` always puts its first column on the left.
+    let mirrored = crate::rtl::flows(ui);
+    let row = |ui: &mut Ui, name: &str, value: &mut dyn FnMut(&mut Ui, &egui::Response)| {
+        if mirrored {
+            ui.horizontal(|ui| {
+                let label = ui
+                    .allocate_ui_with_layout(vec2(150.0, 24.0), crate::rtl::row_layout(ui, egui::Align::Center), |ui| {
+                        ui.label(RichText::new(name).color(t.text_dim))
+                    })
+                    .inner;
+                value(ui, &label);
+            });
+        } else {
+            let label = ui.label(RichText::new(name).color(t.text_dim));
+            value(ui, &label);
             ui.end_row();
         }
-    });
+    };
+    let mut edit = |ui: &mut Ui, i: usize, key: &str, label: &egui::Response| {
+        let (Some(draft), Some(saved)) = (bs.props.get_mut(i), current.get(i)) else { return };
+        let id = ui.make_persistent_id(("backstage_prop", key));
+        // Show the workbook's value unless the field is being edited (undo, another window).
+        if !ui.ctx().memory(|m| m.has_focus(id)) {
+            draft.clone_from(saved);
+        }
+        let resp = ui.add(egui::TextEdit::singleline(draft).id(id).desired_width(360.0)).labelled_by(label.id);
+        if resp.lost_focus() && draft != saved {
+            let mut params = serde_json::Map::new();
+            params.insert(key.to_string(), json!(draft.clone()));
+            app.run_or_alert("file.properties", Json::Object(params));
+        }
+    };
+    let mut body = |ui: &mut Ui| {
+        row(ui, lang.tr("Location"), &mut |ui, _| {
+            ui.label(path.as_deref().unwrap_or(lang.tr("Not saved yet")));
+        });
+        row(ui, lang.tr("Sheets"), &mut |ui, _| {
+            ui.label(sheets.to_string());
+        });
+        for (i, (key, label)) in PROPERTIES.iter().enumerate() {
+            row(ui, lang.tr(label), &mut |ui, l| edit(ui, i, key, l));
+        }
+    };
+    if mirrored {
+        ui.scope(|ui| {
+            ui.spacing_mut().item_spacing.y = 8.0;
+            body(ui);
+        });
+    } else {
+        egui::Grid::new("backstage_props").num_columns(2).spacing(vec2(18.0, 8.0)).show(ui, body);
+    }
 }
 
 /// Draws the Save As type picker and action: xlsx opens the `saveAs` dialog, other types export, and the page closes when the save/export succeeds (or a web download handles it).

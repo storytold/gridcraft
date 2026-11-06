@@ -58,7 +58,11 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
             }
         });
         ui.add_space(24.0);
-        crate::rtl::vertical(ui, |ui| {
+        // The preview fills the room beside the settings and is centred in it, so a mirrored page
+        // does not sit against the settings column while the rest of the room is left empty.
+        let room = ui.available_width().max(0.0);
+        let column = egui::Layout::top_down(egui::Align::Center);
+        ui.allocate_ui_with_layout(vec2(room, ui.available_height()), column, |ui| {
             if pages.is_empty() {
                 dim(ui, lang.tr("Nothing to print."));
                 return;

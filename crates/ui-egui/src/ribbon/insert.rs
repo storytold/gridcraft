@@ -172,7 +172,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     // default size). Their key tips run the command at the active cell.
     use gridcraft_engine::model::ControlKind;
     let placing = app.grid.placing;
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         for (icon, kind, label, tip, id) in [
             (Icon::Button, ControlKind::Button, "Button", "Draw a button that runs a macro or a command", "insert.button"),
             (Icon::Slider, ControlKind::Slider, "Slider", "Draw a slider that sets a whole number in a linked cell", "insert.slider"),
