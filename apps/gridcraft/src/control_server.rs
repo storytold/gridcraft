@@ -312,6 +312,15 @@ fn serve(
                         break;
                     }
 
+                    if params.get("request").is_some_and(|value| value.as_u64().is_none()) {
+                        let _ = writeln!(
+                            out,
+                            "{}",
+                            json!({"id": id, "ok": false, "error": "request must be a non-negative integer", "errorCode": "INVALID_PARAMS"})
+                        );
+                        continue;
+                    }
+
                     let command = if matches!(method.as_str(), "engine.execute" | "command" | "ui.menu.invoke") {
                         params.get("command").or_else(|| params.get("id")).and_then(Json::as_str).unwrap_or("")
                     } else {
@@ -709,6 +718,12 @@ mod tests {
             call("engine.execute", json!({"request":id + 999,"command":"cell.set","params":{"cell":"A1","input":"bad"}}))["errorCode"],
             "NO_REQUEST"
         );
+        // Malformed explicit tags must be rejected before the sticky claim is substituted.
+        for malformed in [json!("invalid"), Json::Null, json!(true), json!([]), json!({}), json!(-1), json!(1.5)] {
+            let invalid = call("engine.execute", json!({"request":malformed,"command":"cell.set","params":{"cell":"A1","input":"invalid tag"}}));
+            assert_eq!(invalid["errorCode"], "INVALID_PARAMS", "a malformed tag must not turn into a valid sticky request");
+            assert_eq!(call("cell.get", json!({"cell":"A1"}))["result"]["text"], "", "rejection precedes every document edit");
+        }
         for value in ["first", "second"] {
             assert_eq!(call("engine.execute", json!({"command":"cell.set","params":{"cell":"A1","input":value}}))["ok"], true);
         }

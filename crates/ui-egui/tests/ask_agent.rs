@@ -300,3 +300,35 @@ fn answer_notes_wait_for_the_original_workbook() {
     h.run_steps(2);
     assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().comments.len(), 1);
 }
+
+#[test]
+/// A trimmed checkpoint cannot be mistaken for a newer entry at the same undo depth.
+fn trimming_history_during_agent_edits_refuses_partial_review() {
+    let hub = AgentHub::default();
+    let conn = 88;
+    let mut h = harness(hub.clone());
+    h.state_mut().session.active_mut().unwrap().undo.clear();
+    h.state_mut().run("selection.set", json!({"range":"B3:B4"})).unwrap();
+    ask_agent::open_from_ui(h.state_mut());
+    h.run_steps(2);
+    send(&mut h, "edit both selected cells");
+    let request = hub.listen(conn, Some("editor"), Duration::ZERO, || true).unwrap().unwrap();
+    ask_agent::run_for(h.state_mut(), conn, request.id, "cell.set", json!({"cell":"B3","input":"agent north"})).unwrap();
+    // Simulate the retained-size estimate of a large checkpoint; the next real edit
+    // runs the engine's normal history-budget trim without allocating a huge workbook.
+    h.state_mut().session.active_mut().unwrap().undo.last_mut().unwrap().retained_bytes = 129 * 1024 * 1024;
+    ask_agent::run_for(h.state_mut(), conn, request.id, "cell.set", json!({"cell":"B4","input":"agent south"})).unwrap();
+    assert_eq!(h.state().session.active().unwrap().undo.len(), 1, "the engine actually trimmed the first checkpoint");
+    hub.reply(conn, request.id, ask_agent::Reply { text: "done", done: true, ..Default::default() }, ask_agent::current_target(h.state()).as_ref())
+        .unwrap();
+    h.run_steps(2);
+    click_bubble_undo(&mut h);
+    h.run_steps(2);
+    assert_eq!(cell_text(&mut h, "B3"), "agent north");
+    assert_eq!(cell_text(&mut h, "B4"), "agent south", "a lost checkpoint must not allow an incomplete Undo");
+    assert!(h.state().ask_agent.open.is_some(), "the unresolved review stays available");
+    assert!(h.state().toast.as_ref().unwrap().0.contains("changed"));
+    h.get_by_label("Keep").click();
+    h.run_steps(2);
+    assert!(h.state().ask_agent.open.is_some(), "Keep uses the same checkpoint guard");
+}

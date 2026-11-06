@@ -9,6 +9,7 @@ use egui::{Key, Pos2, Rect, Vec2};
 use gridcraft_engine::core::{CellRef, RangeRef};
 use gridcraft_engine::model::{Sheet, Workbook};
 use serde_json::{Value, json};
+use std::sync::{Arc, Weak};
 
 pub use hub::{AgentHub, HELD, HubError, INVALID_PARAMS, NO_REQUEST, NOT_OWNER, READ_ONLY_REQUEST, Reply, Request, Snapshot, Status, Turn};
 pub use ui::Action;
@@ -64,9 +65,22 @@ pub struct Open {
     review_safe: bool,
     /// Undo depth before the current uninterrupted group of agent edits.
     edited_from: Option<usize>,
+    /// Identity only: keeping this weak lets the engine reclaim a trimmed checkpoint.
+    edited_checkpoint: Option<Weak<Workbook>>,
     /// Undo depth just after the thread's last merged step, to tell whether a person edited since.
     edited_to: Option<usize>,
     commented: bool,
+}
+
+impl Open {
+    /// A depth reused after history trimming must still refer to this thread's original snapshot.
+    fn checkpoint_available(&self, undo: &[gridcraft_engine::HistoryEntry]) -> bool {
+        match (self.edited_from, self.edited_checkpoint.as_ref()) {
+            (None, None) => true,
+            (Some(from), Some(checkpoint)) => undo.get(from).is_some_and(|entry| checkpoint.ptr_eq(&Arc::downgrade(&entry.wb))),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -151,6 +165,7 @@ pub fn open_from_ui(app: &mut SheetApp) {
         review_safe: true,
         asked: String::new(),
         edited_from: None,
+        edited_checkpoint: None,
         edited_to: None,
         commented: false,
     });
@@ -172,7 +187,13 @@ fn group_start(app: &SheetApp, request: u64) -> usize {
     app.ask_agent
         .open
         .as_ref()
-        .filter(|o| o.id == Some(request) && o.document == d.uid && o.edited_to == Some(d.undo.len()) && o.edited_revision == Some(d.revision))
+        .filter(|o| {
+            o.id == Some(request)
+                && o.document == d.uid
+                && o.edited_to == Some(d.undo.len())
+                && o.edited_revision == Some(d.revision)
+                && o.checkpoint_available(&d.undo)
+        })
         .and_then(|o| o.edited_from)
         .unwrap_or(d.undo.len())
 }
@@ -183,23 +204,23 @@ fn group_done(app: &mut SheetApp, request: u64, from: usize, before: u64, depth:
     if d.revision == before {
         return;
     }
-    if d.undo.len() <= from {
-        if let Some(o) = app.ask_agent.open.as_mut().filter(|o| o.id == Some(request) && o.document == d.uid) {
-            o.review_safe = false;
-            o.edited_revision = Some(d.revision);
-            o.edited_to = Some(d.undo.len());
-        }
-        return;
-    }
     let Some(o) = app.ask_agent.open.as_mut().filter(|o| o.id == Some(request) && o.document == d.uid) else { return };
-    if o.edited_to.is_some() && (o.edited_revision != Some(before) || o.edited_to != Some(depth)) {
+    let checkpoint_available = o.checkpoint_available(&d.undo);
+    if o.edited_to.is_some() && (o.edited_revision != Some(before) || o.edited_to != Some(depth) || !checkpoint_available) {
         o.review_safe = false;
+    }
+    if d.undo.len() <= from || o.edited_from == Some(from) && !checkpoint_available {
+        o.review_safe = false;
+        o.edited_revision = Some(d.revision);
+        o.edited_to = Some(d.undo.len());
+        return;
     }
     let retained = d.undo.iter().skip(from).fold(0usize, |sum, e| sum.saturating_add(e.retained_bytes));
     d.undo.truncate(from + 1);
     if let Some(entry) = d.undo.get_mut(from) {
         entry.label = "Ask Agent".into();
         entry.retained_bytes = retained;
+        o.edited_checkpoint = Some(Arc::downgrade(&entry.wb));
     }
     o.edited_from = Some(from);
     o.edited_to = Some(d.undo.len());
@@ -577,7 +598,11 @@ fn note_once(app: &mut SheetApp, s: &Snapshot) {
 fn review_allowed(app: &SheetApp) -> bool {
     app.ask_agent.open.as_ref().is_some_and(|o| {
         app.session.active().is_some_and(|d| {
-            d.uid == o.document && o.review_safe && o.edited_revision.is_none_or(|r| r == d.revision) && o.edited_to.is_none_or(|n| n == d.undo.len())
+            d.uid == o.document
+                && o.review_safe
+                && o.edited_revision.is_none_or(|r| r == d.revision)
+                && o.edited_to.is_none_or(|n| n == d.undo.len())
+                && o.checkpoint_available(&d.undo)
         })
     })
 }
