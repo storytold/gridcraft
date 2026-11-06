@@ -7,11 +7,16 @@ fn find_chart(s: &Session, p: &Json) -> Result<(usize, usize)> {
     let d = s.doc()?;
     let si = d.wb.active_sheet();
     let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
-    let idx = match u32_param(p, "chart") {
-        Some(id) => sh.charts.iter().position(|c| c.id == id),
-        None => sh.charts.len().checked_sub(1),
+    let Some(id) = u32_param(p, "chart") else {
+        return sh.charts.len().checked_sub(1).map(|i| (si, i)).ok_or_else(|| bad("chart", "no chart on this sheet"));
     };
-    idx.map(|i| (si, i)).ok_or_else(|| bad("chart", "no chart on this sheet"))
+    if let Some(i) = sh.charts.iter().position(|c| c.id == id) {
+        return Ok((si, i));
+    }
+    (0..)
+        .map_while(|k| d.wb.sheet(k).map(|sh| (k, sh)))
+        .find_map(|(k, sh)| sh.charts.iter().position(|c| c.id == id).map(|i| (k, i)))
+        .ok_or_else(|| bad("chart", "no chart with this id"))
 }
 
 fn with_chart(s: &mut Session, p: &Json, f: impl FnOnce(&mut Chart) -> Result<()>) -> Result<Json> {
