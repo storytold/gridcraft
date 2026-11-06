@@ -71,6 +71,8 @@ pub struct PyEnvironmentXml {
     /// `environmentDefinition` had no `initialization`, which a save doesn't add while there is no
     /// code.
     pub no_initialization: bool,
+    /// The file had an `environmentDefinition` with no readable GUID, which a save has too.
+    pub definition: bool,
     /// Attributes of `initialization` besides `userModified`.
     pub initialization_attrs: String,
     /// Elements of `initialization` besides `code`.
@@ -352,7 +354,11 @@ impl PyCode {
                         _ => return None,
                     };
                     skip_space(&mut chars);
-                    return (chars.next()? == ')' && chars.all(char::is_whitespace)).then(|| PyCode { object, ..PyCode::new(&code) });
+                    return (chars.next()? == ')' && chars.all(char::is_whitespace)).then(|| PyCode {
+                        object,
+                        output_chosen: true,
+                        ..PyCode::new(&code)
+                    });
                 }
                 ')' => return chars.all(char::is_whitespace).then(|| PyCode::new(&code)),
                 _ => return None,
@@ -762,5 +768,20 @@ mod tests {
         }
         assert_eq!(xl_calls("xl  (  \"A1\"  )")[0].reference.as_deref(), Some("A1"));
         assert_eq!(xl_calls("xl('''A1''')")[0].reference, None);
+    }
+
+    #[test]
+    fn a_literal_formula_with_a_return_type_has_chosen_it() {
+        let value = PyCode::from_formula("=PY(\"plot()\",0)").unwrap();
+        assert!(value.output_chosen && !value.object);
+        assert!(PyCode::from_formula("=PY(\"plot()\",1)").unwrap().output_chosen);
+        assert!(!PyCode::from_formula("=PY(\"plot()\")").unwrap().output_chosen);
+    }
+
+    #[test]
+    fn a_tables_cells_stop_at_its_shape() {
+        let table = PyTable { rows: 1, cols: 1, data: vec![Value::Number(1.0), Value::Number(2.0)], ..Default::default() };
+        assert_eq!(table.cell(0, 0), Some(&Value::Number(1.0)));
+        assert_eq!(table.cell(1, 0), None, "data past its rows is no cell");
     }
 }

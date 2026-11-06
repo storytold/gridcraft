@@ -365,7 +365,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
     wb.set_active_sheet(file_to_model.get(active_tab).copied().flatten().unwrap_or(0));
     if cx.python_pictures_without_cell > 0 {
         cx.warn(format!(
-            "{} picture(s) saved for a Python cell have no such cell in this file; they are shown as floating pictures",
+            "{} picture(s) saved for a Python cell don't go with what that cell holds in this file; they are shown as floating pictures",
             cx.python_pictures_without_cell
         ));
     }

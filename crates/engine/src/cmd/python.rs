@@ -269,20 +269,21 @@ fn store(s: &mut Session, cmd: &str, sheet: usize, at: CellRef, mut py: PyCode, 
     refuse_table_header(s, sheet, at)?;
     // Unchanged code with the same return type keeps its result (and its value); new code, or a
     // new return type, has none until it runs: a result of the other type would show a value and
-    // preview that don't belong to the cell.
+    // preview that don't belong to the cell. A picture with no choice is both, so any choice keeps it.
     // The formats its results wrote stay its to take back, whatever the new code gives, and what a
     // text does with its lines is the cell's choice.
     if let Some(o) = &old {
         py.dates.written = o.dates.written.clone();
         py.spill_lines = o.spill_lines;
     }
-    let keep = old.filter(|o| o.code == py.code && o.object == py.object);
+    let keep = old.filter(|o| o.code == py.code && (o.object == py.object || (!o.output_chosen && o.image().is_some())));
     let value = match &keep {
         Some(o) => {
             py.output = o.output.clone();
             py.dates.result = o.dates.result.clone();
             py.stale = o.stale;
             py.failed = o.failed;
+            py.busy = o.busy;
             None
         }
         None => Some(gridcraft_model::python::BLOCKED),
@@ -303,6 +304,7 @@ fn store(s: &mut Session, cmd: &str, sheet: usize, at: CellRef, mut py: PyCode, 
 /// behaves as a Python Object, and needs no new run to move into the cell. A locked cell on a
 /// protected sheet is refused here, as the choice isn't what the edit itself compares.
 fn set_output_choice(s: &mut Session, sheet: usize, at: CellRef, object: bool, spill_lines: bool) -> Result<()> {
+    refuse_table_header(s, sheet, at)?;
     if let Some(m) = s.locked_cell_message(sheet, at) {
         return Err(EngineError::Other(m));
     }
