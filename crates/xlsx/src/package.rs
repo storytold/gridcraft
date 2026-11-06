@@ -52,6 +52,14 @@ impl<'a> Package<'a> {
         Ok(Package { zip, names, total: 0 })
     }
 
+    /// Every part's (normalized) name, sorted.
+    #[cfg(test)]
+    pub fn names(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.names.keys().cloned().collect();
+        v.sort();
+        v
+    }
+
     pub fn has(&self, part: &str) -> bool {
         self.names.contains_key(&normalize(part))
     }
@@ -59,6 +67,19 @@ impl<'a> Package<'a> {
     /// Reads a part's bytes; `Ok(None)` when it doesn't exist.
     pub fn read(&mut self, part: &str) -> Result<Option<Vec<u8>>, IoError> {
         self.read_limited(part, MAX_PART)
+    }
+
+    /// Reads a part the reader can do without (the caller warns and goes on when it fails). A read
+    /// that fails partway is charged this part's whole allowance (`maximum`, and the byte that
+    /// detects an overrun) instead of ending the package's: the decompression work stays bounded,
+    /// and the parts read after it still open.
+    pub fn read_optional_limited(&mut self, part: &str, maximum: u64) -> Result<Option<Vec<u8>>, IoError> {
+        let before = self.total;
+        let read = self.read_limited(part, maximum);
+        if let Err(IoError::Zip(_)) = &read {
+            self.total = before.saturating_add(maximum.min(MAX_PART).saturating_add(1)).min(MAX_TOTAL);
+        }
+        read
     }
 
     /// Reads a small metadata part without allowing it to expand to the general part limit.
@@ -74,14 +95,24 @@ impl<'a> Package<'a> {
         let remaining = MAX_TOTAL.saturating_sub(self.total);
         let limit = maximum.min(remaining);
         let mut out = Vec::with_capacity(f.size().min(16 * 1024 * 1024) as usize);
-        (&mut f).take(limit + 1).read_to_end(&mut out).map_err(|e| IoError::Zip(format!("{part}: {e}")))?;
+        let read = (&mut f).take(limit + 1).read_to_end(&mut out).map_err(|e| {
+            // A read that fails partway has already spent decompression work and buffered data
+            // the package budget never sees: count the allowance as spent, so a loop over many
+            // broken parts can't decompress it over and over.
+            self.total = MAX_TOTAL;
+            IoError::Zip(format!("{part}: {e}"))
+        });
         if out.len() as u64 > limit {
+            // The allowance was spent getting here; make the exhaustion terminal instead of
+            // letting later reads pay the same decompression cost again.
+            self.total = MAX_TOTAL;
             return Err(IoError::TooLarge(if remaining < maximum {
                 "package expands to more than 1 GB".into()
             } else {
                 format!("{part} expands to more than {maximum} bytes")
             }));
         }
+        read?;
         self.total += out.len() as u64;
         Ok(Some(out))
     }
@@ -118,6 +149,15 @@ impl<'a> Package<'a> {
             })
             .collect())
     }
+}
+
+/// The first part whose declared unpacked size is over [`MAX_PART`], with that size.
+pub fn oversized_part(bytes: &[u8]) -> Option<(String, u64)> {
+    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).ok()?;
+    (0..zip.len().min(MAX_ENTRIES)).find_map(|i| {
+        let f = zip.by_index_raw(i).ok()?;
+        (f.size() > MAX_PART).then(|| (f.name().to_string(), f.size()))
+    })
 }
 
 fn prefix(part: &str, e: IoError) -> IoError {
@@ -191,5 +231,44 @@ mod tests {
         assert_eq!(resolve("a", "../../../x"), "x");
         assert_eq!(split_dir("xl/workbook.xml"), ("xl", "workbook.xml"));
         assert_eq!(split_dir("x.xml"), ("", "x.xml"));
+    }
+
+    /// An over-budget read must spend the package's allowance once and for all: loops over many
+    /// broken parts (a sheet's optional VML relationships, for one) otherwise re-decompress the
+    /// remaining allowance again and again.
+    #[test]
+    fn a_failed_part_ends_the_package_budget() {
+        let z = crate::tests::make_zip(&[("a.xml", b"0123456789"), ("b.xml", b"hello")]);
+        let mut pkg = Package::open(&z).unwrap();
+        assert!(pkg.read("a.xml").unwrap().is_some());
+        // Nothing left to spend within the per-part limit either.
+        pkg.total = MAX_TOTAL - 1;
+        assert!(pkg.read("b.xml").is_err());
+        assert_eq!(pkg.total, MAX_TOTAL, "the failed read is charged");
+        // Oversized repeated attempts stay cheap errors now: no allowance is left to pay for.
+        assert!(matches!(pkg.read("b.xml"), Err(IoError::TooLarge(_))));
+    }
+
+    /// A part the reader can do without, damaged inside an intact archive, costs its own
+    /// allowance: the parts after it are still read.
+    #[test]
+    fn a_damaged_optional_part_costs_only_its_allowance() {
+        use std::io::Write as _;
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        w.start_file("a.xml", stored).unwrap();
+        w.write_all(b"<a>damaged</a>").unwrap();
+        w.start_file("b.xml", zip::write::SimpleFileOptions::default()).unwrap();
+        w.write_all(b"hello").unwrap();
+        let mut z = w.finish().unwrap().into_inner();
+        let at = z.windows(7).position(|x| x == b"damaged").unwrap();
+        z[at] ^= 0x20;
+        let mut pkg = Package::open(&z).unwrap();
+        assert!(matches!(pkg.read_optional_limited("a.xml", 1024), Err(IoError::Zip(_))));
+        assert_eq!(pkg.total, 1025, "the failed read is charged its allowance");
+        assert_eq!(pkg.read("b.xml").unwrap().as_deref(), Some(&b"hello"[..]));
+        // An ordinary read of it still ends the package's budget.
+        assert!(pkg.read("a.xml").is_err());
+        assert_eq!(pkg.total, MAX_TOTAL);
     }
 }
