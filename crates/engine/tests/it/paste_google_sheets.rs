@@ -198,3 +198,37 @@ fn html_that_shows_other_text_than_the_pasted_field_changes_nothing() {
     assert_eq!((formula(&s, "A1"), value(&s, "A1")), (None, Value::number(99.0)));
     assert_eq!(style(&s, "A1"), gridcraft_engine::model::Style::default());
 }
+
+fn typed(value: &str, format: &str, shown: &str) -> String {
+    format!(
+        "<tr><td data-sheets-value=\"{{&quot;1&quot;:3,&quot;3&quot;:{value}}}\" data-sheets-numberformat=\"{{&quot;1&quot;:2,&quot;2&quot;:&quot;{format}&quot;,&quot;3&quot;:1}}\">{shown}</td></tr>"
+    )
+}
+
+#[test]
+fn sheets_dates_follow_the_workbook_date_system() {
+    // Sheets counts days from 1899-12-30; a 1904 workbook is 1462 days behind that, so only calendar
+    // dates (with or without a time) move. Plain numbers, times of day and durations keep their value.
+    let cases = [
+        ("46323", "dd/mm/yyyy", "28/10/2026", 46323.0, 46323.0 - 1462.0),
+        ("46323.5", "dd/mm/yyyy hh:mm", "28/10/2026 12:00", 46323.5, 46323.5 - 1462.0),
+        ("0.5", "hh:mm", "12:00", 0.5, 0.5),
+        ("1.5", "[h]:mm", "36:00", 1.5, 1.5),
+        ("46323", "0", "46323", 46323.0, 46323.0),
+    ];
+    for (n, format, text, in_1900, in_1904) in cases {
+        for (sys, expected) in
+            [(gridcraft_engine::core::date::DateSystem::D1900, in_1900), (gridcraft_engine::core::date::DateSystem::D1904, in_1904)]
+        {
+            let mut s = session();
+            std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).date_system = sys;
+            let html = sheets_table(&typed(n, format, text));
+            s.execute("edit.paste", json!({"at": "A1", "text": text, "html": html})).unwrap();
+            assert_eq!(value(&s, "A1"), Value::number(expected), "{format} in {sys:?}");
+        }
+    }
+    let mut s = session();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).date_system = gridcraft_engine::core::date::DateSystem::D1904;
+    s.execute("edit.paste", json!({"at": "A1", "text": "28/10/2026", "html": sheets_table(&typed("46323", "dd/mm/yyyy", "28/10/2026"))})).unwrap();
+    assert_eq!(shown(&s, "A1"), "28/10/2026", "the converted serial shows the date Sheets showed");
+}

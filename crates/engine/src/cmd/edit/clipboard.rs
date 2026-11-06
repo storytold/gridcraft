@@ -257,10 +257,19 @@ fn numeric_from_html(cell: &mut Cell, field: &str, html: Option<&crate::clip_htm
     if crate::clip_html::normalized(&hc.text) != crate::clip_html::normalized(field) {
         return;
     }
-    cell.value = Value::number(n);
     // Sheets states the format of a typed number (a date, a currency); it wins over the format the
     // text happened to parse into. Otherwise a format is inferred for a cell that has none.
     let source_fmt = hc.num_fmt.as_deref().filter(|code| hc.typed && renders(code, n));
+    // Sheets counts days from 1899-12-30, the 1900 system's serials; a 1904 workbook is 1462 days
+    // behind. Only a calendar date moves: other numbers, times of day and durations keep their value.
+    use gridcraft_core::date::DateSystem::D1904;
+    let n = match source_fmt {
+        Some(code) if wb.date_system == D1904 && gridcraft_numfmt::NumberFormat::parse(code).date_shape(n).is_some_and(|(date, _)| date) => {
+            gridcraft_core::date::serial_in_system(D1904, n)
+        }
+        _ => n,
+    };
+    cell.value = Value::number(n);
     if let Some(code) = source_fmt {
         cell.style = wb.styles.derive(cell.style, |s| s.num_fmt = gridcraft_model::NumFmt::new(code));
     } else if wb.styles.get(cell.style).num_fmt.as_str() == "General"
