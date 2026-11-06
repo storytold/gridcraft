@@ -130,6 +130,7 @@ impl Backend for Remote {
         {
             p.entry("request").or_insert(json!(request));
         }
+        let sent_request = if method == "agent.reply" { params.get("id") } else { params.get("request") }.and_then(Value::as_u64);
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
         let wait = read_timeout(method, &params);
@@ -137,7 +138,7 @@ impl Backend for Remote {
         // One retry with a fresh connection (the app may have restarted).
         let reply = match self.roundtrip(&line, wait) {
             Ok(r) => r,
-            Err(e) if bound.is_some() => {
+            Err(e) if bound.is_some() || sent_request.is_some() => {
                 // A request-bound write may already have run. Never replay it on a fresh
                 // connection (which does not own that request).
                 self.conn = None;
@@ -166,7 +167,7 @@ impl Backend for Remote {
             Ok(result)
         } else {
             let code = v.get("errorCode").and_then(Value::as_str).unwrap_or("APPLY_FAILED");
-            if matches!(code, "NO_REQUEST" | "NOT_OWNER" | "READ_ONLY_REQUEST") {
+            if matches!(code, "NO_REQUEST" | "NOT_OWNER" | "READ_ONLY_REQUEST" | "STALE_REQUEST") && sent_request == self.request {
                 self.request = None;
             }
             Err(format!("{}: {}", code, v.get("error").and_then(Value::as_str).unwrap_or("unknown error")))

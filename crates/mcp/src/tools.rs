@@ -551,7 +551,7 @@ pub(crate) fn check_arguments(name: &str, args: &Value) -> Result<(), String> {
         return Err("timeout_s must be nonnegative".into());
     }
     if name == "reply_to_request" {
-        if !args["id"].as_u64().is_some_and(|n| n <= 9_007_199_254_740_991) {
+        if args["id"].as_u64().is_none_or(|n| n > 9_007_199_254_740_991) {
             return Err("invalid request id".into());
         }
         if !["text", "error"].iter().any(|k| a.contains_key(*k)) {
