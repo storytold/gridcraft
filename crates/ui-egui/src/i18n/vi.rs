@@ -64,6 +64,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Ngăn\nđịnh dạng",
         "Format" => "Định dạng",
         "Insert" => "Chèn",
+        "Header Menu|Insert" => "Chèn",
         "Insert Cells…" => "Chèn ô…",
         "Delete" => "Xóa",
         "Delete Cells…" => "Xóa ô…",

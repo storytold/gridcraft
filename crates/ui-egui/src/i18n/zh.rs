@@ -62,6 +62,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "格式\n窗格",
         "Format" => "格式",
         "Insert" => "插入",
+        "Header Menu|Insert" => "插入",
         "Insert Cells…" => "插入单元格…",
         "Delete" => "删除",
         "Delete Cells…" => "删除单元格…",

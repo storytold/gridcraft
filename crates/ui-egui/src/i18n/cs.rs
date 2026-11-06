@@ -57,6 +57,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Podokno\nformátu",
         "Format" => "Formát",
         "Insert" => "Vložit",
+        "Header Menu|Insert" => "Vložit",
         "Insert Cells…" => "Vložit buňky…",
         "Delete" => "Odstranit",
         "Delete Cells…" => "Odstranit buňky…",

@@ -59,6 +59,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Biçim\nBölmesi",
         "Format" => "Biçim",
         "Insert" => "Ekle",
+        "Header Menu|Insert" => "Ekle",
         "Insert Cells…" => "Hücre Ekle…",
         "Delete" => "Sil",
         "Delete Cells…" => "Hücreleri Sil…",

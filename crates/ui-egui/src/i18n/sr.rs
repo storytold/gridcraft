@@ -63,6 +63,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Okno za\noblikovanje",
         "Format" => "Oblikovanje",
         "Insert" => "Umetni",
+        "Header Menu|Insert" => "Umetni",
         "Insert Cells…" => "Umetni ćelije…",
         "Delete" => "Obriši",
         "Delete Cells…" => "Obriši ćelije…",
