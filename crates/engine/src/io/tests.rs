@@ -638,7 +638,9 @@ fn save_refuses_a_symlink_retargeted_since_open() {
     std::os::unix::fs::symlink(dir.join("gone.xlsx"), &deep_link).unwrap();
     assert!(write_file_expecting(deep_link.to_str().unwrap(), b"x", Some(&expected)).is_err());
     assert!(std::fs::symlink_metadata(&deep_link).unwrap().file_type().is_symlink());
-    // A target whose name isn't UTF-8 is still written through the link.
+    // A target whose name isn't UTF-8 is still written through the link. (APFS and HFS+ refuse
+    // such names, so the case can't be created on macOS.)
+    #[cfg(not(target_os = "macos"))]
     {
         use std::os::unix::ffi::OsStrExt;
         let odd = dir.join("sub").join(std::ffi::OsStr::from_bytes(b"odd-\xff.xlsx"));
