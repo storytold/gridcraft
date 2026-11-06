@@ -27,6 +27,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
     match d.tab.as_str() {
         "Number" => {
             let mut code = st.num_fmt.as_str().to_string();
+            let mut changed = false;
             ui.columns(2, |cols| {
                 cols[0].label(egui::RichText::new(lang.tr("Category:")).strong());
                 for name in
@@ -35,6 +36,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                     let c = gridcraft_engine::cmd::format::format_code_for(name).to_string();
                     if cols[0].selectable_label(code == c, lang.tr(name)).clicked() {
                         code = c;
+                        changed = true;
                     }
                 }
                 cols[1].label(egui::RichText::new(lang.tr("Sample")).strong());
@@ -42,7 +44,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                 cols[1].label(egui::RichText::new(preview).font(theme::ui_font(15.0)));
                 cols[1].add_space(8.0);
                 let label = cols[1].label(lang.tr("Type (custom format code):"));
-                cols[1].text_edit_singleline(&mut code).labelled_by(label.id);
+                changed |= cols[1].text_edit_singleline(&mut code).labelled_by(label.id).changed();
                 for c in [
                     "0",
                     "0.00",
@@ -63,10 +65,14 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                 ] {
                     if cols[1].small_button(c).clicked() {
                         code = c.to_string();
+                        changed = true;
                     }
                 }
             });
-            st.num_fmt = gridcraft_engine::model::NumFmt::new(&code);
+            // Merely rendering the tab must retain an imported custom short date's identity.
+            if changed {
+                st.num_fmt = gridcraft_engine::model::NumFmt::new(&code);
+            }
         }
         "Alignment" => {
             use gridcraft_engine::model::{HAlign, VAlign};

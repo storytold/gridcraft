@@ -12,6 +12,7 @@ mod chart_svg;
 mod clip_html;
 pub mod cmd;
 pub mod display;
+pub mod entry;
 pub mod fill;
 pub mod io;
 pub mod links;
@@ -531,6 +532,9 @@ pub struct Session {
     /// Measures cell text for AutoFit Column Width. Without it (CLI, MCP) AutoFit uses
     /// [`cmd::format::approx_text_width`].
     pub text_width: Option<TextWidth>,
+    /// The region a front end shows numbers and dates in (`numfmt::Locale`): the grid draws cells
+    /// with it and AutoFit measures the text as shown. Commands, files and agents stay en-US.
+    pub display_locale: gridcraft_numfmt::Locale,
 }
 
 impl Session {
@@ -1095,6 +1099,22 @@ impl Session {
 
     pub fn run(&mut self, id: &str, params: Json) -> std::result::Result<Json, String> {
         self.execute(id, params).map_err(|e| e.to_string())
+    }
+
+    /// Run entry, external text paste or host clipboard export with a captured numeric region.
+    /// Recorded snapshots make replay independent of later host preferences.
+    /// Ordinary `run`/`execute` calls without `inputLocale` remain invariant.
+    pub fn run_interactive(&mut self, id: &str, mut params: Json, locale: &gridcraft_numfmt::Locale) -> std::result::Result<Json, String> {
+        let field = match id {
+            "edit.copy" | "edit.cut" => Some("clipboardLocale"),
+            "cell.set" | "range.fill" | "edit.paste" if locale != &gridcraft_numfmt::Locale::EN_US => Some("inputLocale"),
+            _ => None,
+        };
+        if let Some(field) = field {
+            let object = params.as_object_mut().ok_or("Interactive input parameters must be an object.")?;
+            object.insert(field.into(), crate::entry::locale_snapshot(locale));
+        }
+        self.run(id, params)
     }
 
     pub fn take_ui_requests(&mut self) -> Vec<UiRequest> {

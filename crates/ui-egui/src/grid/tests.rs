@@ -130,6 +130,7 @@ fn center_across_run_stops_at_first_non_continuing_column() {
     assert_eq!(center_across_end(0, 1, |_| true), 1);
 }
 
+/// The effective conditional number format reaches the text drawn for the cell.
 #[test]
 fn conditional_number_format_reaches_the_cell_text() {
     // #1163: a rule's number format replaces the cell's own; unmatched cells keep theirs.
@@ -145,7 +146,7 @@ fn conditional_number_format_reaches_the_cell_text() {
     let text = |row: u32, cf: &mut CfCache| {
         let c = CellRef::new(row, 0);
         let (lk, _) = look(&wb, 0, sh, c, cf);
-        display_text(&wb, sh, c, &sh.value(c), &lk.style, 200.0, 7.0).0
+        display_text(&wb, sh, c, &sh.value(c), &lk.style, 200.0, 7.0, &Default::default()).0
     };
     assert_eq!(text(0, &mut cf), "1");
     assert_eq!(text(1, &mut cf), "3.00");

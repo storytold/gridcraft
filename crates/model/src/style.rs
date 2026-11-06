@@ -405,18 +405,59 @@ pub struct DxfStated {
     pub protection: bool,
 }
 
+/// Number format code and whether an imported custom code spells a built-in short date.
+/// Keep this distinction: custom format 164 `m/d/yyyy` is literal; built-in 14 is regional.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct NumFmt(pub Arc<str>);
+#[serde(from = "NumFmtRepr", into = "NumFmtRepr")]
+pub struct NumFmt(pub Arc<str>, bool);
 
-impl Default for NumFmt {
-    fn default() -> Self {
-        NumFmt(Arc::from("General"))
-    }
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum NumFmtRepr {
+    Code(Arc<str>),
+    Literal { code: Arc<str>, literal_short_date: bool },
 }
 
+impl From<NumFmtRepr> for NumFmt {
+    /// Restore format identity from either legacy string JSON or the marked custom representation.
+    fn from(value: NumFmtRepr) -> Self {
+        match value {
+            NumFmtRepr::Code(code) => Self(code, false),
+            NumFmtRepr::Literal { code, literal_short_date } => {
+                if literal_short_date {
+                    Self::custom(&code)
+                } else {
+                    Self(code, false)
+                }
+            }
+        }
+    }
+}
+impl From<NumFmt> for NumFmtRepr {
+    /// Choose marked JSON only for literal short-date aliases; serialize other formats as strings.
+    fn from(value: NumFmt) -> Self {
+        if value.1 { Self::Literal { code: value.0, literal_short_date: true } } else { Self::Code(value.0) }
+    }
+}
+impl Default for NumFmt {
+    /// Use General with ordinary format identity as the default number format.
+    fn default() -> Self {
+        Self::new("General")
+    }
+}
 impl NumFmt {
-    pub fn new(s: &str) -> NumFmt {
-        NumFmt(Arc::from(s))
+    /// Create ordinary format identity; imported custom aliases use `Self::custom`.
+    pub fn new(s: &str) -> Self {
+        Self(Arc::from(s), false)
+    }
+    /// A custom XLSX format. Preserve literal short-date aliases across display and save.
+    pub fn custom(s: &str) -> Self {
+        let normalized: String = s.chars().filter(|c| *c != '\\').flat_map(char::to_lowercase).collect();
+        Self(Arc::from(s), matches!(normalized.as_str(), "m/d/yyyy" | "m/d/yyyy h:mm"))
+    }
+    /// Whether this custom short-date alias must retain its literal date order when displayed.
+    pub fn is_literal_short_date(&self) -> bool {
+        self.1
     }
     pub fn as_str(&self) -> &str {
         &self.0

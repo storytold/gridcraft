@@ -205,7 +205,7 @@ pub(crate) fn derive(hash: Hash, a: &[u8], b: &[u8], len: usize) -> Vec<u8> {
     k
 }
 
-/// HMAC-SHA-`hash` ([RFC2104]), as Agile's dataIntegrity uses.
+/// HMAC-SHA-`hash` ([RFC 2104](https://www.rfc-editor.org/rfc/rfc2104)), as Agile's dataIntegrity uses.
 pub(crate) fn hmac(hash: Hash, key: &[u8], message: &[u8]) -> Vec<u8> {
     let bs = hash.block_size();
     let mut k = key.to_vec();

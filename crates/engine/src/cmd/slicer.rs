@@ -2,7 +2,7 @@
 //!
 //! A slicer is a thin front-end over the existing filter machinery: its selection is written as a
 //! [`FilterCriterion::Values`] into the sheet's [`AutoFilter`] (over the table's range) and
-//! [`super::data::apply_filter`] hides the rows. Creating a slicer (`insert.slicer` /
+//! `super::data::apply_filter` hides the rows. Creating a slicer (`insert.slicer` /
 //! `table.insertSlicer`) selects everything, i.e. applies no filter.
 
 use gridcraft_core::CellRef;

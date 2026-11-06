@@ -17,6 +17,11 @@ impl SheetApp {
     }
 
     pub(super) fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        self.run_command_in(id, params, None)
+    }
+
+    /// An actual user input event may supply a numeric region; programmatic `run` stays invariant.
+    pub(super) fn run_command_in(&mut self, id: &str, params: Json, locale: Option<&gridcraft_engine::numfmt::Locale>) -> Result<Json, String> {
         let switches_window = id.starts_with("window.")
             || matches!(id, "view.newWindow" | "view.hideWindow" | "view.unhideWindow")
             || (id == "view.switchWindows" && ["window", "doc"].iter().any(|k| params.get(*k).is_some_and(|d| !d.is_null())));
@@ -56,7 +61,10 @@ impl SheetApp {
         }
         let before = self.session.active_window();
         let zoom_from = matches!(id, "view.zoom" | "view.zoom100" | "view.zoomToSelection").then(|| crate::grid::Trace::key(self));
-        let r = self.session.run(id, params);
+        let r = match locale {
+            Some(locale) => self.session.run_interactive(id, params, locale),
+            None => self.session.run(id, params),
+        };
         if let Some(from) = zoom_from {
             crate::grid::Trace::keep_through_zoom(self, from);
         }
