@@ -51,6 +51,8 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    /// Only an executable inside a macOS `.app` skips the runtime icon; unbundled runs and other
+    /// platforms (Linux and Windows builds) still set it.
     #[test]
     fn only_a_macos_app_bundle_skips_the_runtime_icon() {
         assert!(in_app_bundle(Path::new("/Applications/GridCraft.app/Contents/MacOS/gridcraft")));
@@ -64,6 +66,8 @@ mod tests {
         assert_eq!(sets_runtime_icon(Some(Path::new("/Applications/GridCraft.app/Contents/MacOS/gridcraft"))), !cfg!(target_os = "macos"));
     }
 
+    /// Inside a bundle the viewport gets an empty `IconData`, so eframe neither sets a runtime icon
+    /// nor paints its default glyph on the Dock (storytold/photocraft#7253).
     #[test]
     fn viewport_icon_blocks_eframe_default_when_runtime_icon_is_skipped() {
         let bundled = Some(Path::new("/Applications/GridCraft.app/Contents/MacOS/gridcraft"));
@@ -75,6 +79,7 @@ mod tests {
         }
     }
 
+    /// The embedded PNG decodes to a square, non-blank icon of at least 256 px.
     #[test]
     fn window_icon_decodes() {
         let icon = window_icon();
