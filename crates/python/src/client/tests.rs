@@ -370,6 +370,47 @@ fn a_worker_that_exits_early() {
     assert_eq!(h.starts(), 2);
 }
 
+/// Drawing a figure again goes only to the worker holding it: one that stopped while idle took the
+/// figure with it, and starting a fresh one would start Python for nothing.
+#[test]
+fn a_worker_that_exits_while_idle_is_not_started_again_to_draw_a_figure() {
+    let (mut c, h) = client(
+        FakeTransport::new(|mut w| {
+            w.ready();
+            if let Some(req) = w.next_request() {
+                w.done(req.id(), Ok(Output::Value(Value::Number(1.0))));
+            }
+            // Exits after one request.
+        }),
+        5_000,
+    );
+    assert_eq!(ok_value(&c.run("1", no_inputs()).unwrap()), Value::Number(1.0));
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(c.alive(), "nothing has read that it stopped");
+    assert_eq!(c.submit_render([0, 0, 0], 10, 10), None);
+    assert_eq!(h.starts(), 1, "nothing started");
+    assert!(!c.alive());
+}
+
+#[test]
+fn a_running_worker_draws_a_figure_again() {
+    let (mut c, h) = client(
+        FakeTransport::new(|mut w| {
+            w.ready();
+            while let Some(req) = w.next_request() {
+                w.done(req.id(), Ok(Output::Value(Value::Empty)));
+            }
+        }),
+        5_000,
+    );
+    assert_eq!(c.submit_render([0, 0, 0], 10, 10), None, "no worker, so no figure");
+    assert_eq!(h.starts(), 0);
+    ok_value(&c.run("1", no_inputs()).unwrap());
+    let id = c.submit_render([0, 0, 0], 10, 10).unwrap();
+    assert!(c.poll(Duration::from_secs(5)).is_some_and(|r| r.id == id));
+    assert_eq!(h.starts(), 1);
+}
+
 #[test]
 fn a_worker_that_exits_while_idle_is_replaced() {
     let (mut c, h) = client(
