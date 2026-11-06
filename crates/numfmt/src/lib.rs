@@ -15,7 +15,7 @@ use gridcraft_core::{CellError, DateSystem, Value};
 pub use builtin::{builtin_format, builtin_id};
 pub use decimal::format_general_fit;
 
-use parse::{SecKind, Section, Tok};
+use parse::{DatePart, SecKind, Section, Tok};
 use render::Out;
 
 /// Width (in characters) of General output in a cell.
@@ -193,6 +193,18 @@ impl NumberFormat {
         self.num_sections().iter().any(|s| s.kind == SecKind::Date)
     }
 
+    /// For a date or time format, whether the section that formats `value` shows calendar parts (year, month,
+    /// day) and whether it shows time parts, as `(date, time)`. `None` for any other format and for
+    /// elapsed-time codes like `[h]:mm`, whose value is a duration, not a moment.
+    pub fn date_shape(&self, value: f64) -> Option<(bool, bool)> {
+        let s = self.select(value).map(|(s, _)| s).filter(|s| s.kind == SecKind::Date)?;
+        let parts = || s.toks.iter().filter_map(|t| if let Tok::Date(d) = t { Some(*d) } else { None });
+        if parts().any(|d| matches!(d, DatePart::ElapsedH(_) | DatePart::ElapsedM(_) | DatePart::ElapsedS(_))) {
+            return None;
+        }
+        Some((parts().any(DatePart::is_calendar), parts().any(|d| !d.is_calendar())))
+    }
+
     pub fn is_percent(&self) -> bool {
         self.num_sections().iter().any(|s| s.kind == SecKind::Number && s.percent > 0)
     }
@@ -309,6 +321,60 @@ impl NumberFormat {
             out.prepend("-");
         }
         (Formatted { text: out.text, color: sec.color, fill: out.fill, numeric: true }, false)
+    }
+
+    /// The number `n` as this format displays it: what Excel stores when "Set precision as
+    /// displayed" is on. Fixed decimals, percent, thousands scaling (`0.0,,`), scientific and
+    /// fraction sections round to what they show; the section is picked as for display, so
+    /// `0.00;(0.0)` keeps one decimal for negatives. Observed in Excel (COM,
+    /// `Workbook.PrecisionAsDisplayed`), these keep the full value: General, date and time
+    /// formats (`mm:ss.0` included), text formats and sections without digits (`"x"`, `;;;`).
+    /// The section is picked by [`NumberFormat::rounding_section`], which ignores conditions.
+    /// Never returns `-0`.
+    pub fn round_as_displayed(&self, n: f64) -> f64 {
+        if self.is_general() || !n.is_finite() {
+            return n;
+        }
+        let Some(sec) = self.rounding_section(n) else { return n };
+        if sec.kind != SecKind::Number {
+            return n;
+        }
+        let Some(m) = render::shown_value(sec, n) else { return n };
+        if m == 0.0 {
+            0.0
+        } else if n < 0.0 {
+            -m
+        } else {
+            m
+        }
+    }
+
+    /// The section whose digits "Set precision as displayed" rounds `n` by. Observed in Excel
+    /// (COM), this differs from the section that displays `n`:
+    /// - Conditions are ignored; the sign picks the section, the first for positives and the
+    ///   second for negatives. `[<1]0.00;0` shows 2.333 as `2` but stores 2.33, and stores -10/3
+    ///   as -3 although it shows `-3.00`. `[>1]0.0;0.000` stores 1/3 as 0.3.
+    /// - A format with a condition and a single number section keeps negatives at full value
+    ///   (`[<1]0.00`, `[>=-100]0.0`); with an `@` section added (`[<1]0.00;@`) negatives use the
+    ///   first section, as every format without a condition does.
+    /// - A completely empty section (no characters, not even a colour) passes to the next one:
+    ///   `0.0;;0.000` stores -2.333 as -2.333, `;0.0` stores 2.333 as 2.3, `;;0.0` too. A section
+    ///   with only a colour or a literal (`0.0;[Red];0.000`, `0.0;" "`) has no digits and keeps
+    ///   the full value.
+    ///
+    /// `None` keeps the full value.
+    fn rounding_section(&self, n: f64) -> Option<&Section> {
+        let secs = self.num_sections();
+        let conditional = secs.iter().any(|s| s.cond.is_some());
+        let slot = if n < 0.0 && secs.len() >= 2 {
+            1
+        } else if n < 0.0 && conditional && self.inner.text_section.is_none() {
+            return None;
+        } else {
+            0
+        };
+        let empty = |s: &Section| s.toks.is_empty() && s.color.is_none() && s.cond.is_none();
+        secs.get(slot..)?.iter().find(|s| !empty(s))
     }
 
     fn format_text(&self, t: &str) -> Formatted {
