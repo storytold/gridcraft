@@ -251,6 +251,11 @@ fn kept_xml(bytes: &[u8]) -> Option<PyEnvironmentXml> {
             (In::Root, b"environmentDefinition") if !seen_environment => {
                 seen_environment = true;
                 kept.environment_attrs = attrs_besides(&e, b"id");
+                // A readable GUID says there is a definition; without one, only this does.
+                kept.definition = !e
+                    .attributes()
+                    .flatten()
+                    .any(|a| a.key.as_ref() == b"id" && std::str::from_utf8(&a.value).is_ok_and(gridcraft_model::python::is_guid));
                 if open {
                     place = In::Environment;
                 }
@@ -287,7 +292,6 @@ fn kept_xml(bytes: &[u8]) -> Option<PyEnvironmentXml> {
         }
     }
     kept.no_initialization = seen_environment && !seen_initialization;
-    kept.definition = seen_environment;
     Some(kept)
 }
 
@@ -576,6 +580,14 @@ mod tests {
         let definition = env(PyEnvironmentXml { definition: true, ..Default::default() });
         assert!(defines_environment(&definition));
         assert!(!needs_part(&[], Some(&env(PyEnvironmentXml::default()))));
+        // A readable GUID is enough by itself, and adds nothing to keep.
+        let (_, kept) =
+            read_back(&format!("<python xmlns=\"{NS}\"><environmentDefinition id=\"not a guid\"><initialization/></environmentDefinition></python>"));
+        assert!(kept.definition);
+        let (_, kept) = read_back(&format!(
+            "<python xmlns=\"{NS}\"><environmentDefinition id=\"{{AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE}}\"><initialization/></environmentDefinition></python>"
+        ));
+        assert!(!kept.definition);
     }
 
     #[test]
