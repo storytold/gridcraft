@@ -431,6 +431,17 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         app.grid.filter_menu = Some((c.col, c.row, geo.mirror_pos(p)));
         return;
     }
+    // A Python cell's PY tag selects the cell and opens its card.
+    if primary_clicked
+        && app.editor.is_none()
+        && app.dialog.is_none()
+        && !mods.any()
+        && crate::python_card::tag_at(geo, wb, sh, c).is_some_and(|tag| tag.contains(p))
+    {
+        let _ = app.session.run("selection.set", json!({"cell": c.a1()}));
+        let _ = crate::python_card::open(app);
+        return;
+    }
     // A dialog's formula box in point mode (New Formatting Rule) takes the reference; the
     // selection, which the dialog acts on, stays.
     if let Some(d) = app.dialog.as_mut().filter(|d| d.picks_references()) {
@@ -829,9 +840,8 @@ fn point_header(app: &mut SheetApp, wb: &Workbook, sh: &Sheet, range: RangeRef, 
     let active_sheet = wb.active_sheet();
     let pressed = range;
     let range = if extend {
-        ed.point
-            .and_then(|point| crate::editor::formula_refs(&ed.text).into_iter().find(|(start, end, ..)| (*start, *end) == point))
-            .and_then(|(_, _, previous, previous_sheet, _)| {
+        ed.pointed_range()
+            .and_then(|(previous, previous_sheet)| {
                 let previous_sheet = previous_sheet.as_deref().map(|name| wb.sheet_index(name)).unwrap_or(Some(edit_sheet));
                 if previous_sheet != Some(active_sheet) {
                     return None;
@@ -1139,7 +1149,7 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
     let anchor = if extend {
         // The anchor is the corner opposite the moving end: the written range is normalized, so
         // after extending up or left its first cell is the moving end, not the anchor.
-        let pointed = ed.point.and_then(|(s, e)| ed.text.get(s..e)).and_then(RangeRef::parse);
+        let pointed = ed.pointed_text().as_deref().and_then(RangeRef::parse);
         let inferred_anchor = pointed
             .map(|r| {
                 CellRef::new(
@@ -1153,6 +1163,7 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
         to
     };
     let text = if extend { RangeRef::new(anchor, to).a1() } else { to.a1() };
+    // Pointing on another sheet than the edited cell's names the sheet, as a click there does.
     let text = if ed.sheet != d.wb.active_sheet() { format!("{}!{text}", gridcraft_engine::formula::quote_sheet(&sheet.name)) } else { text };
     let sheet = d.wb.active_sheet();
     ed.insert_ref(&text);

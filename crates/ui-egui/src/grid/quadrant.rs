@@ -97,6 +97,8 @@ pub(crate) struct QuadrantPaint<'a> {
     pub(crate) painter: &'a Painter,
     pub(crate) geo: &'a Geo,
     pub(crate) workbook: &'a Workbook,
+    /// What the PY tags ask about their cells.
+    pub(crate) session: &'a gridcraft_engine::Session,
     pub(crate) sheet_index: usize,
     pub(crate) sheet: &'a Sheet,
     pub(crate) rows: (u32, u32),
@@ -256,7 +258,7 @@ fn paint_cell_decorations(q: &QuadrantPaint<'_>, c: CellRef, rect: Rect, lk: &Lo
     let v = q.sheet.value(c);
     let p = q.painter;
     let z = q.geo.z;
-    if let Some(picture) = q.sheet.cell_pictures.get(&c) {
+    if let Some(picture) = q.sheet.picture_at(c) {
         crate::cell_pictures::paint(p, rect, picture);
         return true;
     }
@@ -312,6 +314,28 @@ fn paint_checkbox(p: &egui::Painter, rect: Rect, z: f32, on: bool) {
     }
 }
 
+/// A Python cell carries a PY tag at its start, and its text goes in the rest of the cell: paints
+/// the tag when there is room and moves `text_left` past it. Whether the cell is a Python cell.
+fn paint_python_tag(q: &QuadrantPaint<'_>, c: CellRef, rect: Rect, lk: &Look, text_left: &mut f32) -> bool {
+    let Some((cell, py)) = q.sheet.cell(c).and_then(|x| x.py.as_deref().map(|py| (x, py))) else { return false };
+    if let Some(tag) = crate::python_card::tag_rect(rect, *text_left, q.geo.z, lk.style.align.v) {
+        let state = crate::python_card::tag_state(q.session, q.sheet_index, c, py, &cell.value);
+        crate::python_card::paint_tag(q.painter, tag, q.tokens, state);
+        *text_left = tag.right();
+    }
+    true
+}
+
+/// Where a cell's text area starts: a Python cell's text stays clear of its PY tag.
+fn python_text_min(python: bool, text_left: f32, rect: &Rect) -> Pos2 {
+    if python { pos2(text_left.min(rect.right()), rect.top()) } else { rect.min }
+}
+
+/// A Python cell's text, too wide for the cell, starts after its PY tag (at `min`) rather than over it.
+fn after_python_tag(python: bool, x: f32, min: f32) -> f32 {
+    if python { x.max(min) } else { x }
+}
+
 fn text_overflows_cell(numeric: bool, value: &Value, rotation: i16, width: f32, rect_width: f32, pad: f32) -> bool {
     !numeric && !matches!(value, Value::Number(_)) && rotation.abs() != 90 && width > rect_width - 2.0 * pad
 }
@@ -344,10 +368,11 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     }
     let v = sh.value(c);
     let mut text_left = rect.left();
+    let python = paint_python_tag(q, c, *rect, lk, &mut text_left);
     if let Some(l) = cfl
         && let Some((set, idx)) = &l.icon
     {
-        let r = Rect::from_min_size(pos2(rect.left() + 2.0, rect.center().y - 6.0 * z), vec2(12.0 * z, 12.0 * z));
+        let r = Rect::from_min_size(pos2(text_left + 2.0, rect.center().y - 6.0 * z), vec2(12.0 * z, 12.0 * z));
         paint_cf_icon(p, r, set, *idx);
         text_left += 15.0 * z;
     }
@@ -356,7 +381,8 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     }
     // Align and clip header text inside the content area, away from the dropdown.
     let filter_space = sh.filter_button_space(c) * z;
-    let text_rect = Rect::from_min_max(rect.min, pos2((rect.right() - filter_space).max(rect.left()), rect.bottom()));
+    let text_min = python_text_min(python, text_left, rect);
+    let text_rect = Rect::from_min_max(text_min, pos2((rect.right() - filter_space).max(text_min.x), rect.bottom()));
     let rect = &text_rect;
     let st = &lk.style;
     let size = st.font.size * 96.0 / 72.0 * z;
@@ -469,7 +495,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
                 cc += 1;
             }
         }
-        if matches!(halign, HAlign::Right | HAlign::Center) {
+        if matches!(halign, HAlign::Right | HAlign::Center) && !python {
             let mut cc = c.col;
             while rect.right() - left < w + 2.0 * pad && cc > 0 && empty_ok(CellRef::new(c.row, cc - 1)) && cc + 20 > c0 {
                 cc -= 1;
@@ -498,6 +524,8 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         HAlign::Right => rect.right() - pad - w - indent,
         _ => text_left + pad + indent,
     };
+    // Text too wide for a Python cell starts after its PY tag rather than over it.
+    let x = after_python_tag(python, x, text_left + pad);
     let gh = galley.size().y;
     let y = cell_text_y(st.align.v, *rect, gh, z);
     let cp = p.with_clip_rect(clip.intersect(p.clip_rect()));
