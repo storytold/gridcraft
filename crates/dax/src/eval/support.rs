@@ -474,11 +474,12 @@ pub(crate) fn aggregate_values(name: &str, values: &[Scalar]) -> Result<Scalar, 
                 }
                 best.cloned()
             };
-            let numbers = extremum(
-                &mut values
-                    .iter()
-                    .filter(|value| matches!(value, Scalar::Integer(_) | Scalar::Currency(_) | Scalar::Decimal(_) | Scalar::DateTime(_))),
-            );
+            let numbers = extremum(&mut values.iter().filter(|value| {
+                matches!(value, Scalar::Integer(_) | Scalar::Currency(_) | Scalar::Decimal(_) | Scalar::DateTime(_))
+                    // NaN takes part in no ordering, so it must not win a comparison: without this
+                    // a leading NaN would stick as the extremum.
+                    && value.to_number().is_some_and(|number| !number.is_nan())
+            }));
             Ok(numbers.or_else(|| extremum(&mut values.iter().filter(|value| matches!(value, Scalar::String(_))))).unwrap_or(Scalar::Blank))
         }
         "MINA" => Ok(values

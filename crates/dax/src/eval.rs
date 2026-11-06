@@ -519,12 +519,18 @@ impl<'a> Evaluator<'a> {
         if let Some(frame) = ctx.rows.iter().rev().find(|frame| frame.lineage == Some(table)) {
             return frame.get(column).cloned().ok_or_else(|| EvalError::new("row is out of range"));
         }
-        if let Some(values) = ctx.filters.filters.get(&(table, column))
-            && values.len() == 1
-        {
-            return values.iter().next().map(scalar_from_key).ok_or_else(|| EvalError::new("empty filter"));
+        // Without a row frame the answer must be a genuine singleton of the *visible* column, with
+        // the `VALUES` collation: a filter of `{"missing"}` that matches no row, or one that matches
+        // both `"A"` and `"a"` (one value), must not answer as if the column held one value.
+        let visible = self.table(table, &ctx.filters).column(column);
+        let mut distinct: BTreeMap<ScalarKey, Scalar> = BTreeMap::new();
+        for value in visible {
+            distinct.entry(distinct_key(&value)).or_insert(value);
         }
-        Err(EvalError::new("a column reference needs a row or a single-value filter context"))
+        match distinct.len() {
+            1 => distinct.into_values().next().ok_or_else(|| EvalError::new("empty filter")),
+            _ => Err(EvalError::new("a column reference needs a row or a single-value filter context")),
+        }
     }
 
     pub(crate) fn unqualified_column(&self, name: &str, ctx: &mut Context) -> Result<Scalar, EvalError> {
@@ -1902,10 +1908,6 @@ fn literal_value(literal: &Literal) -> Scalar {
         Literal::String(value) => Scalar::String(value.clone()),
         Literal::Boolean(value) => Scalar::Boolean(*value),
     }
-}
-
-fn scalar_from_key(key: &ScalarKey) -> Scalar {
-    key.to_scalar()
 }
 
 /// The rows of `rows` that also appear in `keep`. Both are ascending row-id lists.

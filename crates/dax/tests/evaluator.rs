@@ -664,3 +664,21 @@ fn min_and_max_answer_the_text_extremum_of_a_text_column() {
     assert_eq!(evaluate("MIN(Products[Color])"), Scalar::String("blue".into()));
     assert_eq!(evaluate("MAX(Products[Color])"), Scalar::String("Red".into()));
 }
+
+#[test]
+fn a_singleton_column_value_comes_from_the_visible_column() {
+    let model = model();
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let evaluate = |src: &str, filters: FilterContext| {
+        let bound = Binder::new(&model).bind_expression(&parse_expression(src).expect("parse")).expect("bind");
+        evaluator.evaluate_with(&bound, filters)
+    };
+    // A filter that names a value the column does not hold must not become the column's value.
+    let mut filters = FilterContext::default();
+    filters.set(1, 0, [gridcraft_dax::ScalarKey::String("missing".into())]);
+    assert_eq!(evaluate("SELECTEDVALUE(Date[Date])", filters).expect("selected"), Scalar::Blank);
+    // Two spellings of one value are one value under the `VALUES` collation, so it is a singleton.
+    let mut filters = FilterContext::default();
+    filters.set(0, 0, [gridcraft_dax::ScalarKey::String("East".into()), gridcraft_dax::ScalarKey::String("east".into())]);
+    assert_eq!(evaluate("SELECTEDVALUE(Sales[Region])", filters).expect("selected"), Scalar::String("East".into()));
+}
