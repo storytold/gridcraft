@@ -773,3 +773,47 @@ fn export_previews_the_pages_create_pdf_writes() {
 fn preview_pages(h: &mut egui_kittest::Harness<'static, SheetApp>, sheets: &str) -> u64 {
     h.state_mut().session.run("file.printPreview", serde_json::json!({"sheets": sheets})).unwrap()["pages"].as_u64().unwrap()
 }
+
+/// File › Export › Publish What: Create PDF and its preview publish the active sheet, every
+/// visible sheet or the selected cells; another choice, or another selection, lays the preview
+/// out again from its first page.
+#[test]
+fn export_publish_what_picks_the_sheets_or_the_selection() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-export-publish-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (_, mut h) = pdf_picker_harness(&dir);
+    let column = |n: u32| serde_json::Value::Array((1..=n).map(|i| serde_json::json!([i])).collect());
+    let app = h.state_mut();
+    app.run("range.setValues", serde_json::json!({"range": "A1", "values": column(120)})).unwrap();
+    app.run("home.insertSheet", serde_json::json!({"name": "Two"})).unwrap();
+    app.run("sheet.activate", serde_json::json!({"sheet": "Two"})).unwrap();
+    app.run("range.setValues", serde_json::json!({"range": "A1", "values": column(30)})).unwrap();
+    app.run("sheet.activate", serde_json::json!({"sheet": "Sheet1"})).unwrap();
+    app.run("selection.set", serde_json::json!({"range": "A1:A10"})).unwrap();
+    let (active, all) = (preview_pages(&mut h, "active"), preview_pages(&mut h, "all"));
+    assert!(all > active && active > 1, "active {active}, all {all}");
+
+    choose(&mut h, "Export");
+    h.check_accessibility();
+    h.get_by_label(&format!("Page 1 of {active}"));
+    h.get_by_label("▶").click();
+    h.run_steps(3);
+    h.get_by_label("Entire Workbook").click();
+    h.run_steps(3);
+    h.get_by_label(&format!("Page 1 of {all}"));
+
+    h.get_by_label("Selection").click();
+    h.run_steps(3);
+    h.get_by_label("Page 1 of 1");
+    h.get_by_label("Sheet1 · A1:A10");
+    // The selection is not part of the workbook's revision; the preview still follows it.
+    h.state_mut().run("selection.set", serde_json::json!({"range": "A1:A5"})).unwrap();
+    h.run_steps(3);
+    h.get_by_label("Sheet1 · A1:A5");
+
+    click(&mut h, "Create PDF");
+    let pdf = std::fs::read(dir.join("Report.pdf")).unwrap();
+    assert_eq!(String::from_utf8_lossy(&pdf).matches("/Type /Page /Parent").count(), 1, "the selection fits one page");
+    assert!(h.state().message.is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}

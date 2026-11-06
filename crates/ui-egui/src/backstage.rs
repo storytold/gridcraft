@@ -124,6 +124,8 @@ pub struct Backstage {
     preview_page: usize,
     /// Print: the preview for (document, revision, whole workbook, fit to page).
     preview: Option<((u64, u64, bool, bool), Json)>,
+    /// Export › Create PDF: what it publishes.
+    pub publish: PublishWhat,
     /// Export › Create PDF: the previewed page (0-based).
     export_page: usize,
     /// Export › Create PDF: the pages it would export, or why they couldn't be laid out.
@@ -132,6 +134,30 @@ pub struct Backstage {
     pub save_format: &'static str,
     /// Home and Open: when the recent workbooks were last changed.
     recent: RecentFiles,
+}
+
+/// What File › Export › Create PDF publishes ("Publish What").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PublishWhat {
+    /// The active sheet: GridCraft can't group sheets, so there is one.
+    #[default]
+    ActiveSheet,
+    /// Every visible sheet, one after the other.
+    EntireWorkbook,
+    /// The selected cells of the active sheet.
+    Selection,
+}
+
+impl PublishWhat {
+    const ALL: [PublishWhat; 3] = [PublishWhat::ActiveSheet, PublishWhat::EntireWorkbook, PublishWhat::Selection];
+
+    fn label(self) -> &'static str {
+        match self {
+            PublishWhat::ActiveSheet => "Active Sheet",
+            PublishWhat::EntireWorkbook => "Entire Workbook",
+            PublishWhat::Selection => "Selection",
+        }
+    }
 }
 
 /// What the Create PDF preview was laid out for: (document, revision, active sheet, the
@@ -154,6 +180,7 @@ impl Backstage {
             fit_to_page: false,
             preview_page: 0,
             preview: None,
+            publish: PublishWhat::ActiveSheet,
             export_page: 0,
             export_preview: None,
             save_format: "xlsx",
@@ -727,12 +754,14 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
     dim(ui, lang.tr("A CSV file, web page or PDF is a copy: the workbook keeps its own file."));
 }
 
-/// File › Export. Beside Create PDF, its pages are previewed through `file.printPreview` with
-/// the parameters it exports with; `file.printPreview` lays pages out as `file.exportPdf` does,
-/// so the preview shows the pages the PDF will hold.
+/// File › Export. Create PDF publishes what "Publish What" names; beside it, its pages are
+/// previewed through `file.printPreview` with the parameters it exports with.
+/// `file.printPreview` lays pages out as `file.exportPdf` does, so the preview shows the pages
+/// the PDF will hold.
 fn export(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
+    let t = Tokens::get(ui.ctx());
     let lang = app.ui.language;
-    let params = pdf_params();
+    let params = pdf_params(app, bs.publish);
     refresh_export_preview(app, bs, params.clone());
     // Create PDF is offered only when the preview has pages: with nothing to export, a layout
     // error or no workbook open it would write nothing.
@@ -747,11 +776,22 @@ fn export(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome
         // In line with the row's title, under its icon.
         ui.add_space(52.0);
         ui.vertical(|ui| {
+            ui.set_width(180.0);
+            ui.label(RichText::new(lang.tr("Publish What")).font(theme::ui_bold(12.5)).color(t.text));
+            ui.add_space(4.0);
+            for what in PublishWhat::ALL {
+                if ui.radio(bs.publish == what, lang.tr(what.label())).clicked() && bs.publish != what {
+                    bs.publish = what;
+                    bs.export_page = 0;
+                }
+            }
+        });
+        ui.add_space(16.0);
+        ui.vertical(|ui| {
             match bs.export_preview.as_ref().map(|(_, pages)| pages) {
                 Some(Ok(pages)) => preview_pane(app, ui, pages, &mut bs.export_page, vec2(300.0, 380.0), lang.tr("Nothing to export.")),
                 // A layout error blocks the export, so it reads as one.
                 Some(Err(e)) => {
-                    let t = Tokens::get(ui.ctx());
                     ui.label(RichText::new(e.as_str()).font(theme::ui_font(12.5)).color(t.danger));
                 }
                 None => dim(ui, lang.tr("No workbook is open.")),
@@ -770,10 +810,16 @@ fn export(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome
     }
 }
 
-/// The `file.exportPdf` parameters of Create PDF, which its preview lays out with too: the active
-/// sheet.
-fn pdf_params() -> Json {
-    json!({"sheets": "active"})
+/// The `file.exportPdf` parameters of Create PDF for `publish`, which its preview lays out with
+/// too. Selection is the active sheet's selected areas, as A1 text.
+fn pdf_params(app: &SheetApp, publish: PublishWhat) -> Json {
+    let mut params = json!({"sheets": if publish == PublishWhat::EntireWorkbook { "all" } else { "active" }});
+    if publish == PublishWhat::Selection
+        && let Some(d) = app.session.active()
+    {
+        params["range"] = json!(d.selection.a1());
+    }
+    params
 }
 
 /// Lays out Create PDF's pages for `params` again only when the document, its revision, its
