@@ -129,11 +129,12 @@ pub fn handle_args(args: &[OsString]) -> Option<i32> {
 /// The launcher: check what it inherited, confine, check the confinement, become the program.
 /// Returns only on failure.
 fn launch(args: &[OsString]) -> Result<std::convert::Infallible> {
-    // First, before the launcher opens anything itself. On macOS this is also before the sandbox:
-    // under a deny-by-default profile the system's libraries hold a socket of their own, which
-    // closes at `exec` and which must not be taken for an inherited one.
-    close_inherited_descriptors()?;
+    // Arguments that can't be a launch are refused with nothing done. Reading them leaves nothing open.
     let (checked, _) = policy::Checked::from_args(args)?;
+    // Before the launcher opens anything itself. On macOS this is also before the sandbox: under a
+    // deny-by-default profile the system's libraries hold a socket of their own, which closes at
+    // `exec` and which must not be taken for an inherited one.
+    close_inherited_descriptors()?;
     platform::confine(&checked, args)?;
     confined(args)
 }
