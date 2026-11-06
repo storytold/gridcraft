@@ -416,10 +416,11 @@ impl Sheet {
         if let Some(cell) = self.cells.get(c) {
             return cell.style;
         }
-        if let Some(s) = self.rows.get(&c.row).and_then(|r| r.style) {
-            return s;
-        }
-        self.cols.get(&c.col).and_then(|r| r.style).unwrap_or_default()
+        self.inherited_style_id(c)
+    }
+    /// The row's format, or the column's when no row format is set, before a cell overrides it.
+    pub fn inherited_style_id(&self, c: CellRef) -> StyleId {
+        self.rows.get(&c.row).and_then(|r| r.style).or_else(|| self.cols.get(&c.col).and_then(|r| r.style)).unwrap_or_default()
     }
     pub fn set_value(&mut self, c: CellRef, v: Value) {
         let style = self.style_id(c);
@@ -428,7 +429,7 @@ impl Sheet {
     /// Replaces content, removing any picture at this address. Style-only edits use set_style.
     pub fn set_cell(&mut self, c: CellRef, cell: Cell) {
         self.cell_pictures.remove(&c);
-        self.cells.set(c, cell);
+        self.store_cell(c, cell);
     }
     pub fn remove_cell(&mut self, c: CellRef) -> Option<Cell> {
         self.cell_pictures.remove(&c);
@@ -451,7 +452,17 @@ impl Sheet {
     pub fn set_style(&mut self, c: CellRef, style: StyleId) {
         let mut cell = self.cells.get(c).cloned().unwrap_or_default();
         cell.style = style;
-        self.cells.set(c, cell);
+        self.store_cell(c, cell);
+    }
+
+    /// A present empty default cell resets its inherited line format; absence would inherit it.
+    fn store_cell(&mut self, c: CellRef, cell: Cell) {
+        let inherited = self.inherited_style_id(c);
+        if cell.is_blank() && inherited != StyleId::DEFAULT {
+            self.cells.set_explicit(c, cell);
+        } else {
+            self.cells.set(c, cell);
+        }
     }
 
     // ---- geometry

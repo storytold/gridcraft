@@ -56,6 +56,10 @@ impl CellStore {
             self.remove(c);
             return;
         }
+        self.set_explicit(c, cell);
+    }
+    /// Stores an explicit cell, including an empty default format overriding a row or column.
+    pub fn set_explicit(&mut self, c: CellRef, cell: Cell) {
         let band = Arc::make_mut(self.bands.entry(c.row / BAND).or_default());
         if band.rows.entry(c.row).or_default().insert(c.col, cell).is_none() {
             self.len += 1;
@@ -72,7 +76,7 @@ impl CellStore {
                 for (col, cell) in cols.iter() {
                     let at = CellRef::new(*row, *col);
                     if at.is_valid() {
-                        out.set(at, cell.clone());
+                        out.set_explicit(at, cell.clone());
                     } else {
                         dropped += 1;
                     }
@@ -281,7 +285,7 @@ impl CellStore {
         for (c, cell) in moved {
             let nr = c.row as i64 + delta;
             if (0..gridcraft_core::MAX_ROWS as i64).contains(&nr) {
-                self.set(CellRef::new(nr as u32, c.col), cell);
+                self.set_explicit(CellRef::new(nr as u32, c.col), cell);
             }
         }
     }
@@ -291,7 +295,7 @@ impl CellStore {
         for (c, cell) in moved {
             let nc = c.col as i64 + delta;
             if (0..gridcraft_core::MAX_COLS as i64).contains(&nc) {
-                self.set(CellRef::new(c.row, nc as u32), cell);
+                self.set_explicit(CellRef::new(c.row, nc as u32), cell);
             }
         }
     }
@@ -303,7 +307,7 @@ impl CellStore {
         for (c, cell) in moved {
             let nc = c.col as i64 + delta;
             if (0..gridcraft_core::MAX_COLS as i64).contains(&nc) {
-                self.set(CellRef::new(c.row, nc as u32), cell);
+                self.set_explicit(CellRef::new(c.row, nc as u32), cell);
             }
         }
     }
@@ -314,7 +318,7 @@ impl CellStore {
         for (c, cell) in moved {
             let nr = c.row as i64 + delta;
             if (0..gridcraft_core::MAX_ROWS as i64).contains(&nr) {
-                self.set(CellRef::new(nr as u32, c.col), cell);
+                self.set_explicit(CellRef::new(nr as u32, c.col), cell);
             }
         }
     }

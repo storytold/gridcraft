@@ -319,7 +319,7 @@ fn format_same_as_before(wb: &mut Workbook, sheet: usize, axis: Axis, at: u32, c
         .into_iter()
         .filter_map(|k| {
             let source = sh.style_id(cell(prev, k));
-            if source == gridcraft_model::StyleId::DEFAULT {
+            if source == gridcraft_model::StyleId::DEFAULT && sh.cells.get(cell(prev, k)).is_none() {
                 return None;
             }
             let far = if end < if axis == Axis::Rows { MAX_ROWS } else { MAX_COLS } {
