@@ -226,6 +226,7 @@ mod tests {
     }
     use DepKind::*;
 
+    /// A graph where every crate depends only on lower layers (including `vba` on `core`) has no violations.
     #[test]
     fn clean_downward_graph_passes() {
         let g = [
@@ -251,6 +252,7 @@ mod tests {
         assert!(matches!(v[..], [Violation::Upward { from: 1, to: 5, .. }]));
     }
 
+    /// A dependency between two crates of the same layer that are not in one allowed chain is flagged, including `vba` reaching into `xlsx`.
     #[test]
     fn sideways_dependency_flagged() {
         let v = check(&[c("gridcraft-xlsx", &[("gridcraft-calc", Normal, true)])]);

@@ -396,6 +396,7 @@ mod tests {
         chunk
     }
 
+    /// A raw chunk (CompressedChunkFlag 0) holding 4096 bytes decompresses to those bytes unchanged.
     #[test]
     fn raw_chunk_is_copied() {
         let mut data = [0u8; 4096];
@@ -562,6 +563,7 @@ mod tests {
         assert_round_trip(b"x");
     }
 
+    /// Inputs just under, at and just over one and two 4096-byte chunks, and a 20,000-byte input, compress and decompress back to themselves.
     #[test]
     fn compress_round_trips_around_the_chunk_size() {
         for len in [4095, 4096, 4097, 8192, 8193] {

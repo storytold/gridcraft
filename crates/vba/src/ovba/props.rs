@@ -48,6 +48,7 @@ const P2_STREAM: u64 = 0x5032_5032_5032_5032;
 struct Rng(u64);
 
 impl Rng {
+    /// A generator for `seed` on its own `stream`, so each property draws an independent sequence from the same seed list. The state is mixed and never zero, and the first outputs are discarded.
     fn new(seed: u64, stream: u64) -> Self {
         // Spread consecutive seeds over the state space; xorshift needs a nonzero state.
         let mixed = seed.wrapping_add(1).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ stream;
@@ -71,6 +72,7 @@ impl Rng {
         (self.next() >> 56) as u8
     }
 
+    /// A value in `0..n`, or 0 when `n` is 0.
     fn below(&mut self, n: usize) -> usize {
         if n == 0 { 0 } else { (self.next() % n as u64) as usize }
     }
@@ -168,6 +170,7 @@ fn push_segment(rng: &mut Rng, data: &mut Vec<u8>, end: usize) {
     }
 }
 
+/// P1's input for `seed`: a random length (often a chunk-boundary length) filled with compressible segments; every eighth seed instead ends in an incompressible tail after whole chunks, so the last chunk can be raw.
 fn p1_input(seed: u64) -> Vec<u8> {
     let mut rng = Rng::new(seed, P1_STREAM);
     // Every eighth seed ends in an incompressible tail after whole chunks.
@@ -250,6 +253,7 @@ fn p1_round_trip() {
 
 // ---------------------------------------------------------------- P2: arbitrary input
 
+/// Up to 300 random bytes, half the time starting with the container signature byte, so `decompress` gets past the signature check.
 fn uniform_input(rng: &mut Rng) -> Vec<u8> {
     let mut input = Vec::new();
     let len = rng.range(0, 300);
@@ -352,6 +356,7 @@ fn run(input: &[u8], max_out: usize) -> Result<Outcome, String> {
     catch_unwind(AssertUnwindSafe(|| decompress(input, max_out))).map_err(|_| format!("decompress panicked (max_out {max_out})"))
 }
 
+/// Runs `decompress` on `input` and fails if it panics or returns more than `max_out` bytes.
 fn check_bounded(input: &[u8], max_out: usize) -> Result<Outcome, String> {
     let result = run(input, max_out)?;
     if let Ok(v) = &result
