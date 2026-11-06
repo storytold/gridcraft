@@ -1866,3 +1866,27 @@ fn remove_personal_information_is_kept_and_honoured() {
     assert_eq!(book.child("workbookPr").and_then(|p| p.attr("filterPrivacy")), None);
     assert!(String::from_utf8(pkg.read("docProps/core.xml").unwrap().unwrap()).unwrap().contains("Jane Example"));
 }
+
+/// Keeping additional document properties must not bypass Remove personal information on save.
+#[test]
+fn additional_document_properties_respect_remove_personal_info() {
+    let mut wb = Workbook::new();
+    wb.props.author = "Original author".into();
+    wb.props.last_modified_by = "Last editor".into();
+    wb.props.manager = "Project manager".into();
+    wb.props.company = "Private company".into();
+    wb.props.title = "Public title".into();
+    wb.remove_personal_info = true;
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut package = Package::open(&bytes).unwrap();
+    let core = package.read_xml("docProps/core.xml").unwrap().unwrap();
+    let app = package.read_xml("docProps/app.xml").unwrap().unwrap();
+    for tag in ["creator", "lastModifiedBy"] {
+        assert!(core.child(tag).is_none(), "personal core property leaked: {tag}");
+    }
+    for tag in ["Manager", "Company"] {
+        assert!(app.child(tag).is_none(), "personal extended property leaked: {tag}");
+    }
+    assert_eq!(core.child("title").unwrap().text, "Public title");
+    assert_eq!(wb.props.last_modified_by, "Last editor", "saving never changes the in-memory properties");
+}

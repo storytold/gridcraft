@@ -412,9 +412,10 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
 
     // Document properties.
     let p = &wb.props;
-    // "Remove personal information on save": the author and company are not saved (#3089).
+    // "Remove personal information on save": author, last editor, manager and company are not saved.
     let private = |v: &String| if wb.remove_personal_info { String::new() } else { v.clone() };
     let (author, company) = (private(&p.author), private(&p.company));
+    let (last_modified_by, manager) = (private(&p.last_modified_by), private(&p.manager));
     let mut core = format!(
         "{XML_DECL}<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:dcmitype=\"http://purl.org/dc/dcmitype/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">"
     );
@@ -424,7 +425,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         ("dc:creator", &author),
         ("cp:keywords", &p.keywords),
         ("dc:description", &p.description),
-        ("cp:lastModifiedBy", &p.last_modified_by),
+        ("cp:lastModifiedBy", &last_modified_by),
         ("cp:revision", &p.revision),
         ("cp:lastPrinted", &p.last_printed),
         ("dcterms:created", &p.created),
@@ -445,7 +446,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     out.part("docProps/core.xml", Some("application/vnd.openxmlformats-package.core-properties+xml"), core.into_bytes());
     let mut app = String::from(XML_DECL);
     app.push_str("<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\" xmlns:vt=\"http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes\"><Application>GridCraft</Application>");
-    for (tag, value) in [("Manager", &p.manager), ("Company", &company), ("HyperlinkBase", &p.hyperlink_base)] {
+    for (tag, value) in [("Manager", &manager), ("Company", &company), ("HyperlinkBase", &p.hyperlink_base)] {
         if !value.is_empty() {
             let _ = write!(app, "<{tag}>{}</{tag}>", esc(value));
         }
