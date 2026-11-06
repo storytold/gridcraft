@@ -179,8 +179,13 @@ impl EditState {
     }
 
     /// Point mode: the caret follows an operator, `(`, `,` or `=` in a formula, so clicking a
-    /// cell or pressing an arrow inserts a reference.
+    /// cell or pressing an arrow inserts a reference. In Python mode the caret may also follow
+    /// whitespace or start a line, outside a string or comment, and the reference goes in as an
+    /// `xl("…")` call.
     pub fn can_point(&self) -> bool {
+        if self.python {
+            return self.point_at_caret() || self.text.get(..self.byte_caret()).is_some_and(python_can_point);
+        }
         if !self.is_formula() {
             return false;
         }
@@ -196,8 +201,18 @@ impl EditState {
         self.point.is_some_and(|(start, end)| end == self.byte_caret() && self.text.get(start..end).is_some())
     }
 
-    /// Inserts (or replaces the last pointed) reference text at the caret.
+    /// Inserts (or replaces the last pointed) reference text at the caret. In Python mode the
+    /// reference goes in as an `xl("…")` call ([`python_xl`]).
     pub fn insert_ref(&mut self, r: &str) {
+        if self.python {
+            self.insert_pointed(&python_xl(r));
+        } else {
+            self.insert_pointed(r);
+        }
+    }
+
+    /// Puts `r` at the caret, in place of the pointed text there, as the new pointed text.
+    fn insert_pointed(&mut self, r: &str) {
         let caret_b = self.byte_caret();
         let (start, end) = match self.point {
             Some((s, e)) if e == caret_b => (s, e),
@@ -235,13 +250,45 @@ impl EditState {
 
     /// Add another argument after the current pointed reference. Keep only the new reference
     /// replaceable, so a subsequent plain click does not remove earlier arguments or the separator.
+    /// In Python mode the separator is Python's `, `, whatever the formula locale.
     pub fn append_ref(&mut self, r: &str) {
-        let separator = if self.point_at_caret() { self.locale.list_separator().to_string() } else { String::new() };
+        let separator = match (self.point_at_caret(), self.python) {
+            (false, _) => String::new(),
+            (true, true) => ", ".to_string(),
+            (true, false) => self.locale.list_separator().to_string(),
+        };
         self.point = None;
-        self.insert_ref(&format!("{separator}{r}"));
+        let r = if self.python { python_xl(r) } else { r.to_string() };
+        self.insert_pointed(&format!("{separator}{r}"));
         if let Some((start, end)) = self.point {
             self.point = Some((start + separator.len(), end));
         }
+    }
+
+    /// The reference text this pointing session inserted, without Python mode's `xl("…")`.
+    pub fn pointed_text(&self) -> Option<String> {
+        let (start, end) = self.point?;
+        let text = self.text.get(start..end)?;
+        if self.python { python_xl_reference(text) } else { Some(text.to_string()) }
+    }
+
+    /// The range and sheet name of the reference this pointing session inserted.
+    pub fn pointed_range(&self) -> Option<(RangeRef, Option<String>)> {
+        let (start, end) = self.point?;
+        if self.python {
+            let text = self.pointed_text()?;
+            formula_refs(&text).into_iter().find(|(s, e, ..)| (*s, *e) == (0, text.len())).map(|(_, _, range, sheet, _)| (range, sheet))
+        } else {
+            formula_refs(&self.text).into_iter().find(|(s, e, ..)| (*s, *e) == (start, end)).map(|(_, _, range, sheet, _)| (range, sheet))
+        }
+    }
+
+    /// Ends the pointing session: the next click or arrow inserts a new reference, and arrows
+    /// start again from the edited cell.
+    pub fn end_pointing(&mut self) {
+        self.point = None;
+        self.point_anchor = None;
+        self.point_cell = None;
     }
 
     /// Updates function autocomplete for the word before the caret.
@@ -366,6 +413,129 @@ impl EditState {
         }
         None
     }
+}
+
+/// A reference as Python mode inserts it: a call of `xl` with the reference as a Python string
+/// literal (`xl("'My Sheet'!A1:B3")`). A `"` or `\` in a sheet name is escaped, and so is a
+/// control character, so the literal stays on one line and the code stays valid Python.
+pub fn python_xl(reference: &str) -> String {
+    let mut out = String::with_capacity(reference.len() + 6);
+    out.push_str("xl(\"");
+    for c in reference.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            // `char::is_control` is Unicode's Cc category, all below U+0100.
+            c if c.is_control() => out.push_str(&format!("\\x{:02x}", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out.push_str("\")");
+    out
+}
+
+/// The reference inside an `xl("…")` call [`python_xl`] wrote; `None` for other text.
+pub fn python_xl_reference(call: &str) -> Option<String> {
+    let inner = call.strip_prefix("xl(\"")?.strip_suffix("\")")?;
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next()? {
+            'n' => out.push('\n'),
+            'r' => out.push('\r'),
+            't' => out.push('\t'),
+            'x' => {
+                let hex: String = chars.by_ref().take(2).collect();
+                out.push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?)?);
+            }
+            other => out.push(other),
+        }
+    }
+    Some(out)
+}
+
+/// Whether Python code ending in `before` leaves room for a reference at its end: after `(`, `,`,
+/// `=`, an operator or whitespace, or at the start, and never inside a string or a comment, where
+/// the `xl("…")` call would break the code.
+fn python_can_point(before: &str) -> bool {
+    let Some(depth) = python_code_depth(before) else { return false };
+    let code = before.trim_end();
+    let Some(last) = code.chars().last() else { return true };
+    let space = before.get(code.len()..).unwrap_or_default();
+    // A new line outside brackets starts a statement (the last one is the cell's result).
+    if depth == 0 && space.contains('\n') {
+        return true;
+    }
+    if python_expects_value_after(last) {
+        return true;
+    }
+    // After a completed operand (`value `, `f(a)`) the next token can't be a value: a reference
+    // there would make invalid code. Only a keyword that takes a value (`return `, `x if c else `)
+    // lets one follow.
+    !space.is_empty() && PY_VALUE_KEYWORDS.contains(&python_trailing_word(code))
+}
+
+/// Python keywords that a value follows.
+const PY_VALUE_KEYWORDS: &[&str] = &["return", "yield", "in", "not", "and", "or", "if", "elif", "else", "while", "assert", "raise", "is", "await"];
+
+/// Whether a value can follow `c`: an opening bracket, a separator or an operator.
+fn python_expects_value_after(c: char) -> bool {
+    matches!(c, '(' | '[' | '{' | ',' | '=' | '+' | '-' | '*' | '/' | '%' | '@' | '&' | '|' | '^' | '~' | '<' | '>' | ':' | ';')
+}
+
+/// The identifier or keyword `code` ends with ("" when it ends with something else).
+fn python_trailing_word(code: &str) -> &str {
+    let start = code.char_indices().rev().take_while(|(_, c)| c.is_alphanumeric() || *c == '_').last().map_or(code.len(), |(i, _)| i);
+    code.get(start..).unwrap_or_default()
+}
+
+/// How many brackets are open at the end of the Python code `before`, or `None` when it ends
+/// inside a string literal (single, double or triple quoted) or a comment.
+fn python_code_depth(before: &str) -> Option<usize> {
+    #[derive(PartialEq)]
+    enum At {
+        Code,
+        Comment,
+        Text { quote: char, triple: bool },
+    }
+    let chars: Vec<char> = before.chars().collect();
+    let mut at = At::Code;
+    let mut depth = 0usize;
+    let mut i = 0;
+    while let Some(&c) = chars.get(i) {
+        let tripled = |q: char| chars.get(i + 1) == Some(&q) && chars.get(i + 2) == Some(&q);
+        match at {
+            At::Code if c == '#' => at = At::Comment,
+            At::Code if matches!(c, '(' | '[' | '{') => depth = depth.saturating_add(1),
+            At::Code if matches!(c, ')' | ']' | '}') => depth = depth.saturating_sub(1),
+            At::Code if c == '"' || c == '\'' => {
+                let triple = tripled(c);
+                at = At::Text { quote: c, triple };
+                if triple {
+                    i += 2;
+                }
+            }
+            At::Comment if c == '\n' => at = At::Code,
+            At::Text { .. } if c == '\\' => i += 1,
+            At::Text { triple: false, .. } if c == '\n' => at = At::Code,
+            At::Text { quote, triple } if c == quote && (!triple || tripled(c)) => {
+                at = At::Code;
+                if triple {
+                    i += 2;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    (at == At::Code).then_some(depth)
 }
 
 /// References in formula text with their byte spans and colour index (same reference text ⇒
@@ -561,5 +731,93 @@ mod tests {
         assert_eq!(formula_refs(&edit.text).iter().map(|r| r.2.a1()).collect::<Vec<_>>(), ["C:C", "E:E"]);
         assert_eq!(edit.point, Some((9, 12)));
         assert!(edit.can_point());
+    }
+
+    fn python_edit(code: &str) -> EditState {
+        EditState::python(1, 0, CellRef::new(0, 0), code.into())
+    }
+
+    #[test]
+    fn python_mode_points_after_an_operator_whitespace_or_a_line_start() {
+        for code in ["", "df = ", "f(", "f(a,", "x =", "[", "a +", "x = 1\n", "y = f(1,\n    ", "return ", "x if c else ", "a and ", "y = 1\n  "] {
+            assert!(python_edit(code).can_point(), "{code:?}");
+        }
+        for code in [
+            "abc",
+            "x = 1",
+            "f(a)",
+            "df.",
+            "x = 'a ",
+            "s = \"(",
+            "# note ",
+            "'''doc\n",
+            "x = 1  # see ",
+            "value ",
+            "x = 1 ",
+            "f(a) ",
+            "f(a\n    ",
+            "return",
+            "returns ",
+        ] {
+            assert!(!python_edit(code).can_point(), "{code:?}");
+        }
+        assert!(python_edit("s = 'it''s' + ").can_point(), "after two strings the code goes on");
+        assert!(python_edit("s = '''a'''\n").can_point(), "after a closed triple-quoted string");
+        assert!(!python_edit("s = 'a\\' + ").can_point(), "an escaped quote doesn't close the string");
+        assert!(python_edit("# note\n").can_point(), "a comment ends with its line");
+    }
+
+    #[test]
+    fn python_mode_inserts_xl_calls_and_replaces_the_pointed_one() {
+        let mut e = python_edit("df = ");
+        e.insert_ref("B2");
+        assert_eq!(e.text, "df = xl(\"B2\")");
+        assert!(e.can_point(), "right after its own reference");
+        e.insert_ref("B2:C4");
+        assert_eq!(e.text, "df = xl(\"B2:C4\")", "the session's reference is replaced, not stacked");
+        assert_eq!(e.pointed_text().as_deref(), Some("B2:C4"));
+        assert_eq!(e.pointed_range().map(|(r, sheet)| (r.a1(), sheet)), Some(("B2:C4".to_string(), None)));
+        e.append_ref("E5");
+        assert_eq!(e.text, "df = xl(\"B2:C4\"), xl(\"E5\")", "Ctrl+click adds a Python argument");
+        assert_eq!(e.pointed_text().as_deref(), Some("E5"));
+        e.end_pointing();
+        assert!(!e.can_point(), "after `)` with the session over");
+        // A locale whose formulas separate arguments with `;` still writes Python's `, `.
+        let mut f = python_edit("f(1, ");
+        f.locale = gridcraft_engine::formula::FormulaLocale::Es;
+        f.insert_ref("A1");
+        f.append_ref("B1");
+        assert_eq!(f.text, "f(1, xl(\"A1\"), xl(\"B1\")");
+    }
+
+    #[test]
+    fn python_xl_quotes_sheet_names_as_a_python_string() {
+        assert_eq!(python_xl("A:A"), r#"xl("A:A")"#);
+        assert_eq!(python_xl("1:3"), r#"xl("1:3")"#);
+        assert_eq!(python_xl("'My Sheet'!A1"), r#"xl("'My Sheet'!A1")"#);
+        assert_eq!(python_xl("'Bob''s'!A1"), r#"xl("'Bob''s'!A1")"#);
+        assert_eq!(python_xl(r#"'Say "hi"'!A1"#), r#"xl("'Say \"hi\"'!A1")"#);
+        assert_eq!(python_xl("'a\\b\nc\u{1}'!A1"), r#"xl("'a\\b\nc\x01'!A1")"#);
+        for reference in ["B2:C4", "'My Sheet'!A1", "'Bob''s'!A1", r#"'Say "hi"'!A1"#, "'a\\b\nc\u{1}\u{85}'!A1"] {
+            let call = python_xl(reference);
+            assert_eq!(python_xl_reference(&call).as_deref(), Some(reference), "{reference:?}");
+            // The literal stays on one line and closes where the call does.
+            assert!(!call.contains('\n') && !call.contains('\r'), "{call:?}");
+            assert!(python_can_point(&format!("{call} + ")), "{call:?}");
+        }
+        assert_eq!(python_xl_reference(r#"f("A1")"#), None);
+        assert_eq!(python_xl_reference(r#"xl("A1\")"#), None);
+        let mut e = python_edit("x = ");
+        e.insert_ref(r#"'Say "hi"'!B2:C3"#);
+        assert_eq!(e.pointed_range().map(|(r, sheet)| (r.a1(), sheet)), Some(("B2:C3".to_string(), Some(r#"Say "hi""#.to_string()))));
+    }
+
+    #[test]
+    fn formula_point_mode_inserts_no_xl_call() {
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=SUM(".into(), true, false);
+        e.insert_ref("'My Sheet'!A1");
+        assert_eq!(e.text, "=SUM('My Sheet'!A1");
+        assert_eq!(e.pointed_text().as_deref(), Some("'My Sheet'!A1"));
+        assert!(!EditState::new(1, 0, CellRef::new(0, 0), "x = ".into(), true, false).can_point(), "text that isn't a formula");
     }
 }
