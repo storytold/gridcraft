@@ -76,14 +76,16 @@ fn font_ref(data: &FontData) -> Option<FontRef<'_>> {
 }
 
 /// The face for small sizes, regular and bold, once the installed fonts have been scanned. The scan
-/// runs in the background from startup, so until it ends nothing is remembered and the cell's font
-/// draws meanwhile.
-fn small_faces() -> Option<&'static [Option<Arc<FontData>>; 2]> {
+/// runs in the background; this starts it if nothing has yet (the desktop app doesn't), and until it
+/// ends nothing is remembered, the cell's font draws, and another frame is asked for.
+fn small_faces(ctx: &Context) -> Option<&'static [Option<Arc<FontData>>; 2]> {
     static FACES: OnceLock<[Option<Arc<FontData>>; 2]> = OnceLock::new();
     if let Some(faces) = FACES.get() {
         return Some(faces);
     }
     if !crate::fonts::scan_done() {
+        crate::fonts::start_scan();
+        ctx.request_repaint_after(std::time::Duration::from_millis(250));
         return None;
     }
     Some(FACES.get_or_init(|| {
@@ -106,7 +108,7 @@ fn face(ctx: &Context, family: &FontFamily) -> Option<Face> {
         Some((key, data))
     })?;
     let bold = font_ref(&own).is_some_and(|f| f.attributes().weight.value() >= 600.0);
-    if let Some(small) = small_faces().and_then(|faces| faces.get(usize::from(bold)).cloned().flatten()) {
+    if let Some(small) = small_faces(ctx).and_then(|faces| faces.get(usize::from(bold)).cloned().flatten()) {
         return Some(Face { key: format!("small:{}", u8::from(bold)), data: small, own, widen_bold: false });
     }
     Some(Face { key, data: own.clone(), own, widen_bold: bold })
