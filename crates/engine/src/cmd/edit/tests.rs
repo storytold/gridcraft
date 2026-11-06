@@ -307,6 +307,9 @@ fn tsv() {
     assert_eq!(parse_tsv("a\tb\n1\t2\n"), vec![vec!["a", "b"], vec!["1", "2"]]);
     assert_eq!(parse_tsv("\"x\ty\"\tz"), vec![vec!["x\ty", "z"]]);
     assert_eq!(parse_tsv("\"he said \"\"hi\"\"\""), vec![vec!["he said \"hi\""]]);
+    // #2225: a quote that doesn't close the field leaves it as written, as Excel pastes it.
+    assert_eq!(parse_tsv("\"hi\" there\tx\n"), vec![vec!["\"hi\" there", "x"]]);
+    assert_eq!(parse_tsv("say \"hi\"\n"), vec![vec!["say \"hi\""]]);
 }
 
 #[test]
@@ -354,6 +357,74 @@ fn cut_paste_that_overflows_the_grid_moves_nothing() {
 }
 
 #[test]
+fn drag_and_drop_asks_before_replacing_data() {
+    // #3136: dragging column B's border onto column A replaced A without asking.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1:B3", "values": [["Apple", "Kiwi"], ["Pear", "Plum"], ["Fig", "Lime"]]})).unwrap();
+    s.execute("edit.copy", json!({"range": "D9"})).unwrap();
+    let text = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap()["input"].clone();
+    let r = s.execute("range.move", json!({"range": "B:B", "to": "A1"}));
+    let Err(EngineError::Confirm(q)) = r else { panic!("{r:?}") };
+    assert_eq!(q, "There's already data here. Do you want to replace it?");
+    // Nothing moved, and the copy made before is still on the clipboard.
+    assert_eq!(text(&mut s, "A1"), json!("Apple"));
+    assert_eq!(text(&mut s, "B1"), json!("Kiwi"));
+    assert!(s.clipboard.as_ref().is_some_and(|c| !c.cut && c.range.a1() == "D9"));
+    // Confirmed, column B replaces column A.
+    s.execute("range.move", json!({"range": "B:B", "to": "A1", "overwrite": true})).unwrap();
+    assert_eq!(text(&mut s, "A1"), json!("Kiwi"));
+    assert_eq!(text(&mut s, "A3"), json!("Lime"));
+    assert_eq!(text(&mut s, "B1"), json!(""));
+    // Onto empty cells, or overlapping only the moved cells themselves, nothing is asked.
+    s.execute("range.move", json!({"range": "A1:A3", "to": "A2"})).unwrap();
+    assert_eq!(text(&mut s, "A4"), json!("Lime"));
+    s.execute("range.move", json!({"range": "A2:A4", "to": "C2"})).unwrap();
+    assert_eq!(text(&mut s, "C2"), json!("Kiwi"));
+    assert!(s.execute("range.move", json!({"range": "C2"})).is_err(), "`to` is required");
+}
+
+#[test]
+fn drag_and_drop_asks_before_replacing_spilled_values() {
+    // Cells showing a dynamic array's spilled values hold no cell of their own, but they are data.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(3)"})).unwrap();
+    s.execute("range.setValues", json!({"range": "C2:C3", "values": [["Kiwi"], ["Plum"]]})).unwrap();
+    let r = s.execute("range.move", json!({"range": "C2:C3", "to": "A2"}));
+    let Err(EngineError::Confirm(q)) = r else { panic!("{r:?}") };
+    assert_eq!(q, "There's already data here. Do you want to replace it?");
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(CellRef::new(2, 2)), Value::text("Plum"));
+    s.execute("range.move", json!({"range": "C2:C3", "to": "A2", "overwrite": true})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(CellRef::new(1, 0)), Value::text("Kiwi"));
+}
+
+#[test]
+fn drag_and_drop_on_another_sheet_stays_on_that_sheet() {
+    // The move was checked on the range's sheet but pasted on the active one, replacing its data
+    // without asking.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    s.execute("range.setValues", json!({"range": "B1:B2", "values": [["Kiwi"], ["Plum"]]})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "Keep"})).unwrap();
+    s.execute("selection.set", json!({"range": "C5"})).unwrap();
+    s.execute("range.move", json!({"range": "Two!B1:B2", "to": "A1"})).unwrap();
+    // Sheet1 stays active with its own selection; the moved cells are on Two.
+    assert_eq!(s.doc().unwrap().wb.active_sheet(), 0);
+    assert_eq!(s.doc().unwrap().selection.a1(), "C5");
+    let wb = &s.doc().unwrap().wb;
+    let two = wb.sheet_index("Two").unwrap();
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::text("Keep"));
+    assert_eq!(wb.sheet(two).unwrap().value(CellRef::new(0, 0)), Value::text("Kiwi"));
+    assert_eq!(wb.sheet(two).unwrap().value(CellRef::new(1, 0)), Value::text("Plum"));
+    assert_eq!(wb.sheet(two).unwrap().value(CellRef::new(0, 1)), Value::Empty);
+}
+
+#[test]
 fn replace_case_insensitive() {
     assert_eq!(replace_ci("Apple apple APPLE", "apple", "pear"), "pear pear pear");
 }
@@ -370,4 +441,142 @@ fn replace_case_insensitive_keeps_text_when_folding_moves_boundaries() {
     s.execute("edit.replace", json!({"what": "k", "with": "x"})).unwrap();
     let sh = s.doc().unwrap().wb.active().unwrap();
     assert_eq!(sh.value(CellRef::new(0, 0)), Value::text(text));
+}
+
+#[test]
+fn next_corner_of_selection_goes_clockwise_and_anchors_there() {
+    // #1442, as Excel does it: B2 → D2 → D4 → B4 → B2, the area stays selected, and Shift+arrows
+    // then move the corner opposite the new active cell.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("selection.set", json!({"range": "B2:D4", "active": "B2"})).unwrap();
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        let r = s.execute("selection.nextCorner", json!({})).unwrap();
+        assert_eq!(r["selection"], "B2:D4");
+        seen.push(r["active"].as_str().unwrap().to_string());
+    }
+    assert_eq!(seen, ["D2", "D4", "B4", "B2"]);
+    s.execute("selection.nextCorner", json!({})).unwrap();
+    s.execute("selection.nextCorner", json!({})).unwrap();
+    s.execute("selection.move", json!({"dr": 0, "dc": 1, "extend": true})).unwrap();
+    assert_eq!(s.doc().unwrap().selection.current().a1(), "C2:D4");
+    // One row goes end to end; a single cell stays.
+    s.execute("selection.set", json!({"range": "B2:D2", "active": "B2"})).unwrap();
+    assert_eq!(s.execute("selection.nextCorner", json!({})).unwrap()["active"], "D2");
+    assert_eq!(s.execute("selection.nextCorner", json!({})).unwrap()["active"], "B2");
+    s.execute("selection.set", json!({"range": "C5"})).unwrap();
+    assert_eq!(s.execute("selection.nextCorner", json!({})).unwrap()["active"], "C5");
+}
+
+#[test]
+fn next_corner_skips_corners_the_sheet_protection_does_not_let_you_select() {
+    // With locked cells unselectable, Ctrl+. goes on to the next corner it may select.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("home.lockCell", json!({"range": "B2:C3", "on": false})).unwrap();
+    s.execute("selection.set", json!({"range": "B2:D3", "active": "B2"})).unwrap();
+    s.execute("review.protectSheet", json!({"selectLockedCells": false})).unwrap();
+    let r = s.execute("selection.nextCorner", json!({})).unwrap();
+    assert_eq!((r["active"].as_str(), r["selection"].as_str()), (Some("B3"), Some("B2:D3")), "D2 and D3 are locked");
+    assert_eq!(s.execute("selection.nextCorner", json!({})).unwrap()["active"], "B2");
+}
+
+#[test]
+fn next_corner_stops_once_on_a_merged_corner_at_its_top_left_cell() {
+    // A corner inside a merged cell is that merged cell, whose active cell is its top-left one.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("home.mergeCells", json!({"range": "C2:D2"})).unwrap();
+    s.execute("selection.set", json!({"range": "B2:D3", "active": "B2"})).unwrap();
+    let seen: Vec<String> = (0..4).map(|_| s.execute("selection.nextCorner", json!({})).unwrap()["active"].as_str().unwrap().to_string()).collect();
+    assert_eq!(seen, ["C2", "D3", "B3", "B2"]);
+    // A selection that is one merged cell has no other corner.
+    s.execute("selection.set", json!({"range": "C2:D2", "active": "C2"})).unwrap();
+    assert_eq!(s.execute("selection.nextCorner", json!({})).unwrap()["active"], "C2");
+}
+
+#[test]
+fn next_corner_skips_hidden_corners_and_stays_inside_the_selected_area() {
+    // A corner in a hidden column is passed over, as keyboard moves pass over hidden cells.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("home.hideColumns", json!({"cols": "D:D"})).unwrap();
+    s.execute("selection.set", json!({"range": "B2:D3", "active": "B2"})).unwrap();
+    assert_eq!(s.execute("selection.nextCorner", json!({})).unwrap()["active"], "B3");
+    // Column C selected with B1:C1 merged: its top corner's merged cell starts in column B,
+    // outside the selection, so the active cell doesn't go there.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("home.mergeCells", json!({"range": "B1:C1"})).unwrap();
+    s.execute("selection.set", json!({"cell": "C5"})).unwrap();
+    s.execute("selection.column", json!({})).unwrap();
+    let r = s.execute("selection.nextCorner", json!({})).unwrap();
+    assert_eq!((r["active"].as_str(), r["selection"].as_str()), (Some("C1048576"), Some("C:C")));
+}
+
+#[test]
+fn copy_quotes_only_cells_with_tabs_or_line_breaks() {
+    // #2225: a cell holding a quote was wrapped in quotes on copy; Excel quotes only text with a
+    // tab or line break, and pastes the result back as the same cells.
+    let mut s = Session::new();
+    s.new_workbook();
+    for (cell, input) in [("A1", "say \"hi\""), ("A2", "plain"), ("A3", "\"hi\" there"), ("A4", "x \"q\"\ny"), ("A5", "tab\tinside")] {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+    }
+    let text = s.execute("edit.copy", json!({"range": "A1:A5"})).unwrap()["text"].as_str().unwrap().to_string();
+    assert_eq!(text, "say \"hi\"\nplain\n\"hi\" there\n\"x \"\"q\"\"\ny\"\n\"tab\tinside\"\n");
+    let rows = parse_tsv(&text);
+    let cells: Vec<&str> = rows.iter().map(|r| r[0].as_str()).collect();
+    assert_eq!(cells, ["say \"hi\"", "plain", "\"hi\" there", "x \"q\"\ny", "tab\tinside"]);
+}
+
+#[test]
+fn a_field_that_is_not_really_quoted_keeps_its_separators() {
+    // A field opening with a quote is quoted only if a closing quote ends it; when it doesn't (or
+    // never closes), the text is read as written, and the tabs and line breaks inside it still
+    // separate cells, as they would have without the leading quote.
+    assert_eq!(parse_tsv("\"a\tb\"x\tc"), vec![vec!["\"a", "b\"x", "c"]]);
+    assert_eq!(parse_tsv("\"a\tb\nc"), vec![vec!["\"a", "b"], vec!["c"]]);
+    assert_eq!(parse_tsv("\"a\tb\tc\n"), vec![vec!["\"a", "b", "c"]]);
+    // Cells copied without quotes (they hold no tab or line break) read back as the same cells.
+    let mut s = Session::new();
+    s.new_workbook();
+    for (cell, input) in [("A1", "'\"a"), ("B1", "b\"x"), ("C1", "c")] {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+    }
+    let text = s.execute("edit.copy", json!({"range": "A1:C1"})).unwrap()["text"].as_str().unwrap().to_string();
+    assert_eq!(parse_tsv(&text), vec![vec!["\"a", "b\"x", "c"]], "{text:?}");
+    // Many fields that only look quoted: each is replayed at most once (the replay budget is the
+    // input's length), and every one is still its own cell.
+    let hostile = "\"x\t".repeat(50_000);
+    assert_eq!(parse_tsv(&hostile).first().map(Vec::len), Some(50_001));
+}
+
+/// `within: selection` searches only the selected cells, as Excel does with a range selected
+/// (#3224): Find All lists them, Find Next moves the active cell through them and keeps the range
+/// selected, and Replace changes only them.
+#[test]
+fn find_and_replace_within_the_selection() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1:B4", "values": [["pear", "pear"], ["plum", "pear"], ["pear", "fig"], ["pear", "pear"]]}))
+        .unwrap();
+    s.execute("selection.set", json!({"range": "B1:B4"})).unwrap();
+    let all = s.execute("edit.find", json!({"what": "pear", "all": true, "within": "selection"})).unwrap();
+    let cells: Vec<&str> = all["results"].as_array().unwrap().iter().filter_map(|r| r["cell"].as_str()).collect();
+    assert_eq!(cells, ["B1", "B2", "B4"], "only column B");
+    assert_eq!(s.execute("edit.find", json!({"what": "pear", "within": "selection"})).unwrap()["cell"], "B2");
+    assert_eq!(s.execute("edit.find", json!({"what": "pear", "within": "selection"})).unwrap()["cell"], "B4");
+    assert_eq!(s.execute("edit.find", json!({"what": "pear", "within": "selection"})).unwrap()["cell"], "B1", "wraps inside the range");
+    let sel = &s.doc().unwrap().selection;
+    assert_eq!((sel.a1(), sel.active.a1()), ("B1:B4".to_string(), "B1".to_string()), "the range stays selected");
+    assert!(s.execute("edit.find", json!({"what": "plum", "within": "selection"})).is_err(), "A2 is outside the range");
+    assert_eq!(s.execute("edit.replace", json!({"what": "pear", "with": "kiwi", "within": "selection"})).unwrap()["replaced"], 3);
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let at = |a: &str| sh.value(CellRef::parse(a).unwrap());
+    assert_eq!((at("A1"), at("B1"), at("B4"), at("A4")), (Value::text("pear"), Value::text("kiwi"), Value::text("kiwi"), Value::text("pear")));
+    // The sheet scope is unchanged.
+    let all = s.execute("edit.find", json!({"what": "pear", "all": true})).unwrap();
+    assert_eq!(all["count"], 3, "A1, A3 and A4 on the whole sheet");
 }

