@@ -145,20 +145,18 @@ fn paint_gridlines(q: &QuadrantPaint<'_>) {
     let (c0, c1) = q.cols;
     // Gridlines.
     if sh.show_gridlines {
-        let stroke = Stroke::new(1.0, t.gridline);
         let top = geo.y(sh, r0);
         let bottom = geo.y_end(sh, r1);
         let left = geo.x(sh, c0);
         let right = geo.x_end(sh, c1);
         let xs = (c0..=c1).filter(|&c| sh.col_width(c) > 0.0).map(|c| geo.x(sh, c)).chain([right]);
+        // One physical pixel, on the pixel grid: a point-wide line falls across two pixels at 125%.
         for x in xs {
-            let x = x.round() - 0.5;
-            p.line_segment([pos2(x, top), pos2(x, bottom)], stroke);
+            super::cell_paint::crisp_line(p, pos2(x, top), pos2(x, bottom), 1.0, t.gridline);
         }
         let ys = (r0..=r1).filter(|&r| sh.row_height(r) > 0.0).map(|r| geo.y(sh, r)).chain([bottom]);
         for y in ys {
-            let y = y.round() - 0.5;
-            p.line_segment([pos2(left, y), pos2(right, y)], stroke);
+            super::cell_paint::crisp_line(p, pos2(left, y), pos2(right, y), 1.0, t.gridline);
         }
     }
 }
@@ -492,7 +490,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
             }
         }
     }
-    let x = match halign {
+    let mut x = match halign {
         HAlign::CenterAcross => clip.center().x - w / 2.0,
         HAlign::Center | HAlign::Distributed => rect.center().x - w / 2.0,
         HAlign::Right => rect.right() - pad - w - indent,
@@ -515,7 +513,19 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         shape.angle = angle;
         cp.add(shape);
     } else {
-        cp.galley(pos2(x, y), galley.clone(), color);
+        // What must fit its cell (numbers, which otherwise show ####, and shrunk text) gets no wider.
+        let must_fit = shrunk || numeric || matches!(v, Value::Number(_));
+        let line = Line {
+            font: &font,
+            text: &first_line,
+            galley: &galley,
+            color,
+            at: pos2(x, y),
+            width: w,
+            halign,
+            room: must_fit.then_some(avail_w - 2.0 * pad - indent),
+        };
+        (x, w) = paint_line(&cp, &line);
     }
     paint_text_decorations(&cp, TextDecoration { x, y, width: w, height: gh, color, underline: st.font.underline, strike: st.font.strike });
 }
@@ -545,6 +555,45 @@ fn paint_text_decorations(p: &Painter, decoration: TextDecoration) {
     }
     if strike {
         p.line_segment([pos2(x, y + height * 0.55), pos2(x + width, y + height * 0.55)], Stroke::new(1.0, color));
+    }
+}
+
+/// One line of cell text to draw: where egui's layout of it starts and how wide it is, and the room
+/// it must fit in, if any.
+struct Line<'a> {
+    font: &'a FontId,
+    text: &'a str,
+    galley: &'a std::sync::Arc<egui::Galley>,
+    color: Color32,
+    at: Pos2,
+    width: f32,
+    halign: HAlign,
+    room: Option<f32>,
+}
+
+/// Draws small text in black and white on the pixel grid (see `small_text`), else the usual way, and
+/// returns where it starts and how wide it is. Its own glyph advances make a slightly different
+/// width, which the alignment takes into account. Text that must fit its room and wouldn't at that
+/// width is left to the usual drawing, which the fit was decided by.
+fn paint_line(p: &Painter, line: &Line<'_>) -> (f32, f32) {
+    let crisp = super::small_text::width(p.ctx(), line.font, line.text)
+        .filter(|own| line.room.is_none_or(|room| *own <= room.max(line.width)))
+        .map(|own| (line.at.x + align_shift(line.halign, line.width, own), own));
+    match crisp.filter(|(x, _)| super::small_text::paint(p, line.font, line.text, pos2(*x, line.at.y), line.color)) {
+        Some(drawn) => drawn,
+        None => {
+            p.galley(line.at, line.galley.clone(), line.color);
+            (line.at.x, line.width)
+        }
+    }
+}
+
+/// How much text of width `own` moves from where text of width `w` would start, under `halign`.
+fn align_shift(halign: HAlign, w: f32, own: f32) -> f32 {
+    match halign {
+        HAlign::Right => w - own,
+        HAlign::Center | HAlign::Distributed | HAlign::CenterAcross => (w - own) / 2.0,
+        _ => 0.0,
     }
 }
 

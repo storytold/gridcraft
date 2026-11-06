@@ -1541,8 +1541,8 @@ fn general_numbers_fit_by_the_cells_own_font() {
             _ => None,
         })
         .collect();
-    assert!(texts.iter().any(|t| t == "100"), "100 drawn in full: {texts:?}");
-    // A number that really doesn't fit still shows #### (once: only B1).
+    // "100" fits, so it isn't ####; a number that really doesn't fit still is (once: only B1). At
+    // 9pt "100" is small enough to be drawn on the pixel grid, as glyphs rather than a text shape.
     assert_eq!(texts.iter().filter(|t| t.starts_with('#')).count(), 1, "{texts:?}");
 }
 

@@ -34,6 +34,7 @@ mod menus;
 mod quadrant;
 mod selection;
 mod show;
+mod small_text;
 mod tables;
 
 pub(crate) use cell_paint::paint_border;
