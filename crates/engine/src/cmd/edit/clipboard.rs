@@ -15,7 +15,7 @@ fn copy_impl(s: &mut Session, p: &Json, cut: bool) -> Result<Json> {
         return Err(multiple());
     }
     // The selection as made (untrimmed), for Insert Copied Cells.
-    let selected = ranges.first().copied().unwrap_or_default();
+    let mut selected = ranges.first().copied().unwrap_or_default();
     let d = s.doc()?;
     let Some(sh) = d.wb.sheet(sheet) else { return Err(EngineError::NoDocument) };
     let trim = |range: RangeRef| {
@@ -37,14 +37,21 @@ fn copy_impl(s: &mut Session, p: &Json, cut: bool) -> Result<Json> {
         // A cut still takes every row.
         let hidden = if cut { Default::default() } else { super::filtered_rows(sh, range) };
         let visible = if hidden.is_empty() { Vec::new() } else { visible_row_runs(range, &hidden) };
-        match visible.as_slice() {
+        let any_visible = !visible.is_empty();
+        let packed = match visible.as_slice() {
             [] => (d.wb.clone(), range, Vec::new()),
             [only] => (d.wb.clone(), *only, Vec::new()),
             _ => {
                 let (wb, block) = slide_together(&d.wb, sheet, &visible).ok_or_else(multiple)?;
                 (std::sync::Arc::new(wb), block, visible)
             }
+        };
+        // Whole rows copied with some hidden by a filter come as the block of rows showing, so
+        // Insert Copied Cells makes room for those rows, not for the hidden ones too.
+        if !hidden.is_empty() && any_visible && selected.is_full_rows() {
+            selected = RangeRef::rows(packed.1.start.row, packed.1.end.row);
         }
+        packed
     };
     let text = crate::display::range_text(&wb, sheet, range);
     // The HTML rendering is for the host clipboard (UI); it can reach 4 MB, so agents and
@@ -113,6 +120,9 @@ fn slide_together(wb: &gridcraft_model::Workbook, sheet: usize, areas: &[RangeRe
     dst.spill.retain(|c, _| !block.contains(*c));
     dst.spill_ranges.retain(|c, _| !block.contains(*c));
     dst.comments.retain(|c, _| !block.contains(*c));
+    dst.hyperlinks.retain(|c, _| !block.contains(*c));
+    super::super::data::remove_validation_cells(&mut dst.validations, &[block]);
+    let mut packed_rules = Vec::new();
     dst.merges.retain(|m| !m.intersects(&block));
     if across {
         dst.cols.retain(|c, _| !(block.start.col..=block.end.col).contains(c));
@@ -130,6 +140,27 @@ fn slide_together(wb: &gridcraft_model::Workbook, sheet: usize, areas: &[RangeRe
             if let Some(picture) = src.cell_pictures.get(&c) {
                 dst.cell_pictures.insert(to, picture.clone());
             }
+        }
+        // Links and validation rules follow their cells too, so a row the filter hides leaves its
+        // own behind.
+        for (c, link) in src.hyperlinks.range(a.start..=a.end).filter(|(c, _)| a.contains(**c)) {
+            if let Some(to) = c.offset(dr, dc) {
+                dst.hyperlinks.insert(to, link.clone());
+            }
+        }
+        for dv in &src.validations {
+            let ranges: Vec<RangeRef> = dv
+                .ranges
+                .iter()
+                .filter_map(|r| r.intersection(a))
+                .filter_map(|r| Some(RangeRef::new(r.start.offset(dr, dc)?, r.end.offset(dr, dc)?)))
+                .collect();
+            let (Some(from), Some(to)) = (dv.ranges.first().map(|r| r.start), ranges.first().map(|r| r.start)) else { continue };
+            let mut rule = dv.clone();
+            rule.f1 = super::super::data::move_rule_formula(&dv.f1, from, to);
+            rule.f2 = dv.f2.as_ref().map(|f| super::super::data::move_rule_formula(f, from, to));
+            rule.ranges = ranges;
+            packed_rules.push(rule);
         }
         for (c, comment) in src.comments.iter().filter(|(c, _)| a.contains(**c)) {
             if let Some(to) = c.offset(dr, dc) {
@@ -153,6 +184,7 @@ fn slide_together(wb: &gridcraft_model::Workbook, sheet: usize, areas: &[RangeRe
         }
         next = next.saturating_add(if across { a.width() } else { a.height() });
     }
+    dst.validations.extend(packed_rules);
     Some((out, block))
 }
 

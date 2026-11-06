@@ -5121,6 +5121,26 @@ fn cell_validation(s: &Session, cell: &str) -> Option<String> {
     s.doc().unwrap().wb.active().unwrap().validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(c))).map(|d| d.f1.clone())
 }
 
+/// Copying a filtered range packs the rows showing into one block; their links and validation
+/// rules travel with them, and those of the hidden rows are left behind.
+#[test]
+fn filtered_copy_pastes_links_and_validation_of_the_rows_showing_only() {
+    let mut s = filtered_rows_with_links();
+    for (cell, source) in [("A3", "\"hidden\""), ("A4", "\"showing\""), ("A9", "\"hidden too\"")] {
+        s.execute("data.validation", json!({"range": cell, "type": "list", "formula1": source})).unwrap();
+    }
+    s.execute("edit.copy", json!({"range": "A1:B11"})).unwrap();
+    s.execute("edit.paste", json!({"at": "H20"})).unwrap();
+    let links: Vec<Option<String>> = (20..=26).map(|r| cell_link_target(&s, &format!("H{r}"))).collect();
+    let expected: Vec<Option<String>> = [None, Some(2u32), Some(4), Some(6), Some(8), Some(10), Some(11)].iter().map(|n| n.map(|n| format!("https://example.com/{n}"))).collect();
+    assert_eq!(links, expected);
+    let rules: Vec<Option<String>> = (20..=26).map(|r| cell_validation(&s, &format!("H{r}"))).collect();
+    assert_eq!(rules, [None, None, Some("\"showing\"".to_string()), None, None, None, None]);
+    // The source keeps its own links and rules where they were.
+    assert_eq!(cell_link_target(&s, "A3").as_deref(), Some("https://example.com/3"));
+    assert_eq!(cell_validation(&s, "A3").as_deref(), Some("\"hidden\""));
+}
+
 /// One cell pasted over a filtered column leaves the rules of the rows the filter hides alone, and
 /// does not give them the copied rule, with or without Skip Blanks.
 #[test]
@@ -5139,6 +5159,21 @@ fn single_row_paste_over_filtered_rows_leaves_their_validation_alone() {
     }
 }
 
+/// Insert Copied Cells after a filtered copy of whole rows makes room for the rows copied, not for
+/// the rows that were selected.
+#[test]
+fn insert_copied_cells_after_a_filtered_row_copy_inserts_only_the_rows_showing() {
+    let mut s = filtered_rows_with_links();
+    s.execute("cell.set", json!({"cell": "A30", "input": "below"})).unwrap();
+    s.execute("edit.copy", json!({"range": "1:11"})).unwrap();
+    s.execute("selection.set", json!({"range": "A20"})).unwrap();
+    s.execute("home.insertCopiedCells", json!({})).unwrap();
+    // Seven rows were copied (the header and six rows showing).
+    assert_eq!(v(&s, "A37"), Value::from("below"));
+    assert_eq!(v(&s, "A20"), Value::from("Val"));
+    assert_eq!(v(&s, "A26"), Value::from("v11"));
+    assert_eq!(v(&s, "A27"), Value::Empty);
+}
 
 #[test]
 fn editing_quote_prefixed_text_keeps_it_text() {
