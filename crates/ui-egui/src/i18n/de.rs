@@ -20,6 +20,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Increase Font Size" => "Schriftgrad vergrößern",
         "Decrease Font Size" => "Schriftgrad verkleinern",
         "Wrap Text" => "Zeilenumbruch",
+        "More ribbon commands" => "Weitere Menübandbefehle",
         "Merge & Center" => "Verbinden und zentrieren",
         "Merge Cells" => "Zellen verbinden",
         "Merge Across" => "Zeilenweise verbinden",

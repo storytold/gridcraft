@@ -27,6 +27,9 @@ pub(super) fn act(app: &mut SheetApp, id: &str, params: serde_json::Value) {
 
 /// Keytips are painted, not focusable widgets: the grid retains keyboard focus.
 pub(super) fn keytip(app: &SheetApp, ui: &Ui, sequence: &str, at: egui::Pos2) {
+    if super::pack::measuring() {
+        return;
+    }
     let Some(rest) = app
         .keytips
         .prefix()
@@ -67,6 +70,9 @@ pub(super) fn checkbox_on(clicked: bool, shown: bool) -> bool {
 
 /// Consume a one-shot keytip request for control `id` (set by `Action::Control`).
 pub(super) fn invoke(app: &mut SheetApp, id: &str) -> bool {
+    if super::pack::measuring() {
+        return false;
+    }
     if app.ui.keytip_invoke == Some(id) {
         app.ui.keytip_invoke = None;
         true

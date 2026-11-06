@@ -1,20 +1,25 @@
-//! Ribbon layout: the big split button, the scroll arrows of an overflowing tab, and every tab
-//! fitting the card's height.
+//! Ribbon layout: groups pack to the card width, and every tab fits the card's height.
 
-use egui::vec2;
+use egui::{Shape, vec2};
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
+use gridcraft_ui_egui::i18n::Language;
 use gridcraft_ui_egui::icons::Icon;
-use gridcraft_ui_egui::ribbon::{RibbonOverflow, TABS};
+use gridcraft_ui_egui::ribbon::{HomeStep, PACK_SLACK, RibbonLayout, RibbonOverflow, TABS};
 use gridcraft_ui_egui::{SheetApp, widgets};
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
 fn app_at(width: f32, tab: &str) -> Harness {
+    app_lang(width, tab, Language::En)
+}
+
+fn app_lang(width: f32, tab: &str, language: Language) -> Harness {
     let mut session = Session::new();
     session.new_workbook();
     let mut app = crate::common::app(session);
     app.ui.ribbon_tab = tab.into();
+    app.ui.language = language;
     let mut h = crate::common::builder().with_size(vec2(width, 700.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
@@ -37,61 +42,107 @@ fn every_tab_fits_the_card_height() {
     }
 }
 
-#[test]
-fn an_overflowing_tab_shows_scroll_arrows_that_scroll() {
-    let mut h = app_at(700.0, "Home");
-    let o = RibbonOverflow::get(&h.ctx);
-    assert!(o.overflows(), "Home is wider than a 700 px window");
-    assert_eq!(o.offset, 0.0);
-    assert!(h.query_by_label("Scroll ribbon left").is_none(), "nothing to the left yet");
-    h.get_by_label("Scroll ribbon right").click();
-    h.run_steps(3);
-    let scrolled = RibbonOverflow::get(&h.ctx).offset;
-    assert!(scrolled > 0.0);
-    h.get_by_label("Scroll ribbon left").click();
-    h.run_steps(3);
-    assert!(RibbonOverflow::get(&h.ctx).offset < scrolled);
-    // A tab that fits shows no arrows.
-    let h = app_at(1440.0, "Automate");
-    assert!(!RibbonOverflow::get(&h.ctx).overflows());
-    assert!(h.query_by_label("Scroll ribbon right").is_none());
+/// Window widths the pack is checked at, narrow to wide. The card is inset 28 px on each side, so
+/// [`RibbonLayout::budget`] is the window width minus 56. [`HomeStep::choose`] uses that budget.
+const WIDTHS: [f32; 7] = [480.0, 700.0, 1000.0, 1200.0, 1440.0, 1800.0, 2200.0];
+
+/// Home content width of the four steps on the pinned UI font, measured in this test.
+/// Order: full labels, alignment icons, stacked style commands, wrapped number icons.
+/// A step is the one drawn once `width + PACK_SLACK` fits the card and the wider step does not.
+/// English then starts Full at about 1360 px, CompactAlign at 1266, StackStyles at 1226 and
+/// WrapNumber at 1166. German: Full at about 1540, CompactAlign at 1392, StackStyles at 1308,
+/// WrapNumber at 1248. Narrower windows keep WrapNumber and move whole groups into the menu.
+const HOME_CONTENT_EN: [f32; 4] = [1299.2813, 1205.1875, 1165.9375, 1105.9375];
+const HOME_CONTENT_DE: [f32; 4] = [1479.8438, 1331.5938, 1247.9063, 1187.9063];
+
+fn assert_inside(h: &Harness, what: &str) {
+    let layout = RibbonLayout::get(&h.ctx);
+    assert!(layout.ribbon_right > layout.ribbon_left, "{what}: the card was laid out");
+    assert!(layout.placed_right <= layout.ribbon_right + 0.5, "{what}: groups end at {} past {}", layout.placed_right, layout.ribbon_right);
+    for shape in &h.output().shapes {
+        let Shape::Text(text) = &shape.shape else { continue };
+        // egui paints this when two widgets share an id. It is not a ribbon label.
+        if text.galley.job.text.starts_with('\u{1f525}') {
+            continue;
+        }
+        let right = text.pos.x + text.galley.size().x;
+        let y = text.pos.y + text.galley.size().y * 0.5;
+        if y < layout.ribbon_top || y > layout.ribbon_bottom {
+            continue;
+        }
+        assert!(right <= layout.ribbon_right + 1.0, "{what}: {:?} ends at {right}, card at {}", text.galley.job.text, layout.ribbon_right);
+    }
 }
 
 #[test]
-fn each_tab_keeps_a_scroll_offset_of_its_own() {
-    // Scrolling Home must not hide the first groups of another overflowing tab, and Home keeps
-    // its offset while the other tab is used.
-    let mut h = app_at(700.0, "Home");
-    h.get_by_label("Scroll ribbon right").click();
-    h.run_steps(3);
-    let home_offset = RibbonOverflow::get(&h.ctx).offset;
-    assert!(home_offset > 0.0);
-    let other = TABS.iter().copied().find(|t| *t != "Home" && RibbonOverflow::get(&app_at(700.0, t).ctx).overflows());
-    let other = other.expect("another tab overflows a 700 px window");
-    h.state_mut().ui.ribbon_tab = other.into();
-    h.run_steps(3);
-    let o = RibbonOverflow::get(&h.ctx);
-    assert!(o.overflows(), "{other} overflows");
-    assert_eq!(o.offset, 0.0, "{other} starts at its left edge");
-    h.get_by_label("Scroll ribbon right").click();
-    h.run_steps(3);
-    assert!(RibbonOverflow::get(&h.ctx).offset > 0.0);
-    h.state_mut().ui.ribbon_tab = "Home".into();
-    h.run_steps(3);
-    assert_eq!(RibbonOverflow::get(&h.ctx).offset, home_offset, "Home kept its offset");
+fn home_pack_steps_follow_the_measured_widths() {
+    for language in [Language::En, Language::De] {
+        let wide = app_lang(2200.0, "Home", language);
+        let content = RibbonLayout::get(&wide.ctx).content;
+        let locked = match language {
+            Language::De => HOME_CONTENT_DE,
+            _ => HOME_CONTENT_EN,
+        };
+        for (i, (got, want)) in content.iter().zip(locked).enumerate() {
+            assert!((got - want).abs() <= 1.0, "{language:?} step {i}: measured {got}, locked {want}");
+        }
+        assert!(content[0] > content[1] + 8.0, "{language:?}: full {} then icons {}", content[0], content[1]);
+        assert!(content[1] > content[2] + 8.0, "{language:?}: icons {} then stacked styles {}", content[1], content[2]);
+        assert!(content[2] > content[3] + 8.0, "{language:?}: stacked styles {} then wrapped numbers {}", content[2], content[3]);
+        let mut previous = None;
+        for width in WIDTHS {
+            let h = app_lang(width, "Home", language);
+            let layout = RibbonLayout::get(&h.ctx);
+            assert_eq!(layout.step, HomeStep::choose(layout.content, layout.budget) as u8, "{language:?} at {width}");
+            assert_inside(&h, &format!("{language:?} Home {width}"));
+            if let Some(prev) = previous {
+                assert!(layout.step <= prev, "{language:?}: {width}px unpacked to step {} from {prev}", layout.step);
+            }
+            previous = Some(layout.step);
+            if layout.content[layout.step as usize] + PACK_SLACK > layout.budget {
+                let menu = language.tr("More ribbon commands");
+                assert!(h.query_by_label(menu).is_some(), "{language:?} at {width} still overflows without a menu");
+            }
+        }
+    }
 }
 
 #[test]
-fn the_scroll_arrows_stay_inside_a_narrow_window() {
-    // The tab row can be wider than a narrow window (more so with wider system fonts); the card
-    // and its arrows stay inside the window, and the right arrow still scrolls.
+fn an_overflowing_tab_opens_the_menu_instead_of_clipping() {
+    let mut h = app_at(700.0, "Home");
+    assert!(RibbonOverflow::get(&h.ctx).overflows(), "Home is wider than a 700 px window");
+    assert_inside(&h, "Home 700");
+    let chevron = h.get_by_label("More ribbon commands").rect();
+    assert!(chevron.max.x <= 700.0, "the menu button ends at {}", chevron.max.x);
+    assert!(h.query_by_label("Find & Select").is_none(), "the last Home group is not clipped onto the card");
+    h.get_by_label("More ribbon commands").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Find & Select").is_some(), "a group that did not fit is in the menu");
+    let fitting = app_at(2200.0, "Automate");
+    assert!(fitting.query_by_label("More ribbon commands").is_none(), "a tab that fits has no menu");
+}
+
+#[test]
+fn other_tabs_stay_inside_the_card() {
+    for tab in ["Formulas", "Data", "View", "Insert"] {
+        for width in [480.0, 700.0, 1200.0, 1600.0] {
+            let h = app_at(width, tab);
+            assert_inside(&h, &format!("{tab} {width}"));
+            let layout = RibbonLayout::get(&h.ctx);
+            if layout.fit < layout.groups {
+                assert!(h.query_by_label("More ribbon commands").is_some(), "{tab} at {width}");
+            }
+        }
+    }
+}
+
+#[test]
+fn the_overflow_button_stays_inside_a_narrow_window() {
     for width in [600.0, 480.0] {
-        let mut h = app_at(width, "Home");
-        let arrow = h.get_by_label("Scroll ribbon right").rect();
-        assert!(arrow.max.x <= width, "{width}: the arrow ends at {}", arrow.max.x);
-        h.get_by_label("Scroll ribbon right").click();
-        h.run_steps(3);
-        assert!(RibbonOverflow::get(&h.ctx).offset > 0.0, "{width}: the right arrow scrolls");
+        let h = app_at(width, "Home");
+        let chevron = h.get_by_label("More ribbon commands").rect();
+        assert!(chevron.max.x <= width, "{width}: the menu button ends at {}", chevron.max.x);
+        assert_inside(&h, &format!("narrow {width}"));
     }
 }
 
