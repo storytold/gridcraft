@@ -525,6 +525,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
             at: pos2(x, y),
             width: w,
             halign,
+            valign: st.align.v,
             room: must_fit.then_some(avail_w - 2.0 * pad - indent),
         };
         (x, w) = paint_line(&cp, &line);
@@ -570,6 +571,7 @@ struct Line<'a> {
     at: Pos2,
     width: f32,
     halign: HAlign,
+    valign: VAlign,
     room: Option<f32>,
 }
 
@@ -581,7 +583,7 @@ fn paint_line(p: &Painter, line: &Line<'_>) -> (f32, f32) {
     let crisp = super::small_text::width(p.ctx(), line.font, line.text)
         .filter(|own| line.room.is_none_or(|room| *own <= room.max(line.width)))
         .map(|own| (line.at.x + align_shift(line.halign, line.width, own), own));
-    match crisp.filter(|(x, _)| super::small_text::paint(p, line.font, line.text, pos2(*x, line.at.y), line.color)) {
+    match crisp.filter(|(x, _)| super::small_text::paint(p, line.font, line.text, pos2(*x, line.at.y), line.valign, line.color)) {
         Some(drawn) => drawn,
         None => {
             p.galley(line.at, line.galley.clone(), line.color);

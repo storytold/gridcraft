@@ -5,7 +5,7 @@
 //! those sizes blurs together next to it. So one line of cell text up to [`UP_TO`] pixels is drawn
 //! here: outlines hinted by the font's own instructions for black and white, scan converted as
 //! TrueType defines it (pixel centres, with dropout control so a thin stroke doesn't vanish), one
-//! pixel larger than the cell's size. A face drawn for small sizes ([`SMALL_FACE`]) stands in for the
+//! pixel larger than the cell's size. A face drawn for small sizes ([`SMALL_FACE_FILES`]) stands in for the
 //! cell's font when the system has it.
 //!
 //! Glyphs are cached in a texture atlas in the text's colour, so a plain mesh draws them.
@@ -15,6 +15,7 @@ use std::sync::{Arc, OnceLock};
 use egui::epaint::{Mesh, Vertex};
 use egui::mutex::Mutex;
 use egui::{Color32, ColorImage, Context, FontData, FontFamily, FontId, Id, Painter, Pos2, Rect, TextureHandle, TextureOptions, pos2, vec2};
+use gridcraft_engine::model::VAlign;
 use skrifa::instance::{LocationRef, Size};
 use skrifa::outline::{DrawSettings, HintingInstance, OutlinePen, Target};
 use skrifa::{FontRef, GlyphId, MetadataProvider};
@@ -24,9 +25,9 @@ pub(super) const UP_TO: u32 = 11;
 /// Up to this size a bold cell font's strokes are widened by a pixel: hinting leaves them as thin as
 /// the regular face's.
 const BOLD_WIDEN_UP_TO: u32 = 9;
-/// A face drawn for small sizes, used instead of the cell's own when the system has it. Its regular
-/// and bold styles are both needed.
-const SMALL_FACE: &str = "Tahoma";
+/// A face drawn for small sizes (Tahoma), used instead of the cell's own when the system has it: the
+/// files of its regular and bold styles.
+const SMALL_FACE_FILES: (&str, &str) = ("tahoma.ttf", "tahomabd.ttf");
 /// Side of the square glyph atlas, in pixels.
 const ATLAS: usize = 2048;
 
@@ -75,29 +76,21 @@ fn font_ref(data: &FontData) -> Option<FontRef<'_>> {
     FontRef::from_index(data.font.as_ref().as_ref(), data.index).ok()
 }
 
-/// The face for small sizes, regular and bold, once the installed fonts have been scanned. The scan
-/// runs in the background; this starts it if nothing has yet (the desktop app doesn't), and until it
-/// ends nothing is remembered, the cell's font draws, and another frame is asked for.
-fn small_faces(ctx: &Context) -> Option<&'static [Option<Arc<FontData>>; 2]> {
+/// The face for small sizes, regular and bold, read from the system's font folders the first time
+/// small text is drawn. Its files are looked for by name rather than through the catalog of
+/// installed fonts, whose background scan the desktop app doesn't start.
+fn small_faces() -> &'static [Option<Arc<FontData>>; 2] {
     static FACES: OnceLock<[Option<Arc<FontData>>; 2]> = OnceLock::new();
-    if let Some(faces) = FACES.get() {
-        return Some(faces);
-    }
-    if !crate::fonts::scan_done() {
-        crate::fonts::start_scan();
-        ctx.request_repaint_after(std::time::Duration::from_millis(250));
-        return None;
-    }
-    Some(FACES.get_or_init(|| {
-        let faces = crate::fonts::faces_of(SMALL_FACE);
-        let load = |bold: bool| {
-            let face = faces.iter().find(|f| !f.italic && (f.weight >= 600.0) == bold)?;
-            let mut data = FontData::from_owned(std::fs::read(&face.path).ok()?);
-            data.index = face.index;
-            Some(Arc::new(data))
+    FACES.get_or_init(|| {
+        let dirs = crate::fonts::system_font_dirs();
+        let load = |file: &str| {
+            let path = dirs.iter().find_map(|dir| {
+                std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).find(|p| p.file_name().is_some_and(|n| n.eq_ignore_ascii_case(file)))
+            })?;
+            Some(Arc::new(FontData::from_owned(std::fs::read(path).ok()?)))
         };
-        [load(false), load(true)]
-    }))
+        [load(SMALL_FACE_FILES.0), load(SMALL_FACE_FILES.1)]
+    })
 }
 
 fn face(ctx: &Context, family: &FontFamily) -> Option<Face> {
@@ -108,7 +101,7 @@ fn face(ctx: &Context, family: &FontFamily) -> Option<Face> {
         Some((key, data))
     })?;
     let bold = font_ref(&own).is_some_and(|f| f.attributes().weight.value() >= 600.0);
-    if let Some(small) = small_faces(ctx).and_then(|faces| faces.get(usize::from(bold)).cloned().flatten()) {
+    if let Some(small) = small_faces().get(usize::from(bold)).cloned().flatten() {
         return Some(Face { key: format!("small:{}", u8::from(bold)), data: small, own, widen_bold: false });
     }
     Some(Face { key, data: own.clone(), own, widen_bold: bold })
@@ -301,6 +294,32 @@ fn small_size(ctx: &Context, font_id: &FontId) -> Option<u32> {
     (px >= 1.0 && px <= UP_TO as f32).then_some(px as u32)
 }
 
+/// Where the baseline goes, in pixels, for a line box whose top is at `top` as the cell's own font
+/// lays it out. The glyphs drawn are larger, and maybe of another face, so their line is placed
+/// in that box as the cell aligns it: descenders where the cell font's end, above the gridline, for
+/// bottom alignment,
+/// ascenders where its start for top, and between the two for centre.
+fn baseline(face: &Face, px: u32, top: f32, valign: VAlign) -> i32 {
+    let metrics = |data: &FontData, size: u32| {
+        font_ref(data).map_or((0.0, 0.0), |f| {
+            let m = f.metrics(Size::new(size as f32), LocationRef::default());
+            (m.ascent.round(), -m.descent.round())
+        })
+    };
+    let (own_ascent, own_descent) = metrics(&face.own, px);
+    let (ascent, descent) = metrics(&face.data, px + 1);
+    let own = top + own_ascent;
+    // A pixel up: the cell font's descenders end on the row's last pixel, where its gridline is.
+    let by_bottom = own + own_descent - descent - 1.0;
+    let by_top = own - own_ascent + ascent;
+    let at = match valign {
+        VAlign::Bottom => by_bottom,
+        VAlign::Top => by_top,
+        VAlign::Center | VAlign::Justify | VAlign::Distributed => ((by_bottom + by_top) / 2.0).round(),
+    };
+    at as i32
+}
+
 /// The width in points of `text` as [`paint`] draws it, or `None` when it would leave the text to the
 /// usual drawing: a size over [`UP_TO`] pixels, or a character the face lacks.
 pub(super) fn width(ctx: &Context, font_id: &FontId, text: &str) -> Option<f32> {
@@ -318,15 +337,14 @@ pub(super) fn width(ctx: &Context, font_id: &FontId, text: &str) -> Option<f32> 
 
 /// Draws one line of `text` with its line box's top left at `at`. Returns false, having drawn
 /// nothing, when it leaves the text to the usual drawing.
-pub(super) fn paint(p: &Painter, font_id: &FontId, text: &str, at: Pos2, color: Color32) -> bool {
+pub(super) fn paint(p: &Painter, font_id: &FontId, text: &str, at: Pos2, valign: VAlign, color: Color32) -> bool {
     let ctx = p.ctx();
     let ppp = ctx.pixels_per_point();
     let Some(px) = small_size(ctx, font_id) else { return false };
     let Some(face) = face(ctx, &font_id.family) else { return false };
     let Some(font) = font_ref(&face.data) else { return false };
     // The baseline stays where the cell's own font puts it, also when a face for small sizes stands in.
-    let ascent = font_ref(&face.own).map_or(0.0, |f| f.metrics(Size::new(px as f32), LocationRef::default()).ascent);
-    let baseline = (at.y * ppp).round() as i32 + ascent.round() as i32;
+    let baseline = baseline(&face, px, (at.y * ppp).round(), valign);
     let pass = ctx.cumulative_pass_nr();
     let shared = cache(ctx);
     let mut c = shared.lock();
