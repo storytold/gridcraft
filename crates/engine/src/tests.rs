@@ -5838,10 +5838,17 @@ fn a_script_cannot_switch_windows() {
 mod controls;
 mod equation;
 mod macros;
+mod object_clipboard;
 mod objects;
 mod python_cells;
 mod python_commands;
+mod python_dates;
 mod python_files;
+mod python_images;
+mod python_init;
+mod python_output;
+mod python_run;
+mod python_wait;
 mod seams;
 
 #[test]
