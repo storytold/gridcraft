@@ -183,6 +183,14 @@ impl SheetApp {
             self.session.mode = gridcraft_engine::Mode::Edit;
             return false;
         }
+        let cmd = if fill_selection { "range.fill" } else { "cell.set" };
+        let target = if fill_selection { None } else { Some(gridcraft_engine::core::RangeRef::cell(ed.cell)) };
+        if let Some(why) = crate::ask_agent::held_for(self, cmd, target) {
+            self.toast = Some((why, now_ms()));
+            self.editor = Some(ed);
+            self.session.mode = gridcraft_engine::Mode::Edit;
+            return false;
+        }
         // Committing nothing into an empty cell changes nothing: no undo step (#1855, Backspace has
         // already cleared the cell as its own step).
         let unchanged = !fill_selection

@@ -28,7 +28,9 @@ execute_command. Convenience tools cover the common flow: write_range / set_cell
 starting with = are formulas), read_range / get_cell to read computed values back, format_range, create_table, \
 insert_chart, sort_range, filter, evaluate_formula (try a formula without changing the sheet), undo / redo, \
 open_workbook / save_workbook. inspect_workbook summarizes sheets, used ranges, tables, charts and names. \
-list_functions lists the worksheet functions.";
+list_functions lists the worksheet functions. Ask Agent: when connected to the app, wait_for_request returns what the \
+person asks from the GridCraft window (an instruction about the cells they selected); send a short progress note with \
+reply_to_request (done: false) at once, do it, then answer with reply_to_request.";
 
 /// Resource URIs.
 pub const WORKBOOK_URI: &str = "gridcraft://workbook";
@@ -39,6 +41,7 @@ pub const FUNCTIONS_URI: &str = "gridcraft://functions";
 pub struct Server {
     backend: Box<dyn Backend>,
     initialized: bool,
+    client_name: String,
 }
 
 fn response(id: Value, result: Value) -> Value {
@@ -51,7 +54,7 @@ fn error(id: Value, code: i64, message: impl Into<String>) -> Value {
 
 impl Server {
     pub fn new(backend: Box<dyn Backend>) -> Self {
-        Self { backend, initialized: false }
+        Self { backend, initialized: false, client_name: String::new() }
     }
 
     pub fn backend(&mut self) -> &mut dyn Backend {
@@ -149,6 +152,7 @@ impl Server {
     fn request(&mut self, method: &str, params: &Value) -> Result<Value, (i64, String)> {
         match method {
             "initialize" => {
+                self.client_name = params["clientInfo"]["name"].as_str().unwrap_or("").to_owned();
                 let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL_VERSION);
                 let version = if SUPPORTED_VERSIONS.contains(&asked) { asked } else { PROTOCOL_VERSION };
                 Ok(json!({
@@ -162,12 +166,22 @@ impl Server {
             "tools/list" => Ok(json!({"tools": tool_definitions()})),
             "tools/call" => {
                 let name = params.get("name").and_then(Value::as_str).ok_or((INVALID_PARAMS, "missing tool `name`".to_string()))?;
-                let args = match params.get("arguments") {
+                let mut args = match params.get("arguments") {
                     None | Some(Value::Null) => json!({}),
                     Some(v @ Value::Object(_)) => v.clone(),
                     Some(_) => return Err((INVALID_PARAMS, "tool `arguments` must be an object".to_string())),
                 };
                 check_arguments(name, &args).map_err(|e| (INVALID_PARAMS, e))?;
+                if name == "wait_for_request" && args.get("agent").is_none() && !self.client_name.is_empty() {
+                    args["agent"] = json!(self.client_name);
+                }
+                if name == "tool_call"
+                    && args["name"] == "wait_for_request"
+                    && args["arguments"].get("agent").is_none()
+                    && !self.client_name.is_empty()
+                {
+                    args["arguments"]["agent"] = json!(self.client_name);
+                }
                 Ok(call_tool(self.backend.as_mut(), name, &args).to_value())
             }
             "resources/list" => Ok(json!({"resources": [

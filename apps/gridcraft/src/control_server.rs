@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use gridcraft_mcp::control_auth;
 use gridcraft_ui_egui::ControlRequest;
+use gridcraft_ui_egui::ask_agent::AgentHub;
 use serde_json::{Value as Json, json};
 
 const MAX_LINE: usize = 64 * 1024 * 1024;
@@ -72,20 +73,26 @@ fn make_token(port: u16, chosen: Option<String>) -> std::io::Result<String> {
     Ok(token)
 }
 
-pub fn start(port: u16, chosen_token: Option<String>, ctx: egui::Context) -> std::io::Result<Receiver<ControlRequest>> {
+pub fn start(port: u16, chosen_token: Option<String>, ctx: egui::Context, agents: AgentHub) -> std::io::Result<Receiver<ControlRequest>> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let token: Arc<str> = make_token(port, chosen_token)?.into();
-    let rx = serve_listener(listener, token, ctx)?;
+    let rx = serve_listener(listener, token, ctx, agents)?;
     log::info!("control channel listening on 127.0.0.1:{port}");
     Ok(rx)
 }
 
 /// Accept connections on `listener`; requests arrive on the returned receiver.
-fn serve_listener(listener: TcpListener, token: Arc<str>, ctx: egui::Context) -> std::io::Result<Receiver<ControlRequest>> {
-    serve_listener_with(listener, token, ctx, AUTH_LIMITS)
+fn serve_listener(listener: TcpListener, token: Arc<str>, ctx: egui::Context, agents: AgentHub) -> std::io::Result<Receiver<ControlRequest>> {
+    serve_listener_with(listener, token, ctx, agents, AUTH_LIMITS)
 }
 
-fn serve_listener_with(listener: TcpListener, token: Arc<str>, ctx: egui::Context, limits: AuthLimits) -> std::io::Result<Receiver<ControlRequest>> {
+fn serve_listener_with(
+    listener: TcpListener,
+    token: Arc<str>,
+    ctx: egui::Context,
+    agents: AgentHub,
+    limits: AuthLimits,
+) -> std::io::Result<Receiver<ControlRequest>> {
     let (tx, rx) = channel();
     let waiting = Arc::new(AtomicUsize::new(0));
     std::thread::Builder::new().name("control".into()).spawn(move || {
@@ -100,8 +107,10 @@ fn serve_listener_with(listener: TcpListener, token: Arc<str>, ctx: egui::Contex
             let tx = tx.clone();
             let ctx = ctx.clone();
             let token = Arc::clone(&token);
-            let _ =
-                std::thread::Builder::new().name("control-conn".into()).spawn(move || serve(stream, &token, tx, ctx, limits.timeout, Some(place)));
+            let agents = agents.clone();
+            let _ = std::thread::Builder::new()
+                .name("control-conn".into())
+                .spawn(move || serve(stream, &token, tx, ctx, &agents, limits.timeout, Some(place)));
         }
     })?;
     Ok(rx)
@@ -123,6 +132,29 @@ fn authenticate(reader: &mut BufReader<TcpStream>, out: &mut TcpStream, token: &
     let _ = writeln!(out, "{reply}");
     let _ = reader.get_ref().set_read_timeout(None);
     allowed
+}
+
+fn peer_open(s: &TcpStream) -> bool {
+    if s.set_nonblocking(true).is_err() {
+        return true;
+    }
+    let mut b = [0u8; 1];
+    let r = s.peek(&mut b);
+    let _ = s.set_nonblocking(false);
+    matches!(r, Ok(n) if n > 0) || matches!(r, Err(e) if e.kind() == std::io::ErrorKind::WouldBlock)
+}
+
+/// A number for each control connection, for Ask Agent's ownership rule.
+fn next_connection() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+struct Leaving<'a>(&'a AgentHub, u64);
+impl Drop for Leaving<'_> {
+    fn drop(&mut self) {
+        self.0.disconnect(self.1);
+    }
 }
 
 /// Read the first line, at most [`control_auth::MAX_AUTH_LINE`] bytes, by `deadline`.
@@ -219,8 +251,16 @@ fn is_http_request_line(text: &str) -> bool {
         || text.rsplit_once(' ').is_some_and(|(_, version)| version.starts_with("HTTP/"))
 }
 
-fn serve(stream: TcpStream, token: &str, tx: Sender<ControlRequest>, ctx: egui::Context, auth_timeout: Duration, place: Option<Pending>) {
-    let Ok(read) = stream.try_clone() else { return };
+fn serve(
+    stream: TcpStream,
+    token: &str,
+    tx: Sender<ControlRequest>,
+    ctx: egui::Context,
+    agents: &AgentHub,
+    auth_timeout: Duration,
+    place: Option<Pending>,
+) {
+    let (Ok(read), Ok(probe)) = (stream.try_clone(), stream.try_clone()) else { return };
     let mut out = stream;
     let mut reader = BufReader::new(read);
     let allowed = authenticate(&mut reader, &mut out, token, auth_timeout);
@@ -229,6 +269,9 @@ fn serve(stream: TcpStream, token: &str, tx: Sender<ControlRequest>, ctx: egui::
     if !allowed {
         return;
     }
+    let conn = next_connection();
+    let _leaving = Leaving(agents, conn);
+    let mut request: Option<u64> = None;
     let mut buf = Vec::new();
     loop {
         let reject = match read_bounded_line(&mut reader, &mut buf, MAX_LINE) {
@@ -239,7 +282,69 @@ fn serve(stream: TcpStream, token: &str, tx: Sender<ControlRequest>, ctx: egui::
             Ok(true) => match parse_line(&buf) {
                 Line::Blank => continue,
                 Line::Reject(e) => e,
-                Line::Request { id, method, params } => {
+                Line::Request { id, method, mut params } => {
+                    // Ask Agent: answered here, on the connection's own thread.
+                    if let Some(mut reply) =
+                        (method == "agent.listen").then(|| agents.handle(conn, &method, &params, || peer_open(&probe), |_| None)).flatten()
+                    {
+                        match (method.as_str(), reply["result"]["id"].as_u64()) {
+                            ("agent.listen", taken) => request = taken,
+                            ("agent.reply", Some(done)) if reply["result"]["done"] == true && Some(done) == request => request = None,
+                            _ => {}
+                        }
+                        reply["id"] = id;
+                        ctx.request_repaint();
+                        if writeln!(out, "{reply}").is_err() {
+                            break;
+                        }
+                        continue;
+                    }
+
+                    if params.is_null() {
+                        params = json!({});
+                    }
+                    if !params.is_object() {
+                        let _ = writeln!(
+                            out,
+                            "{}",
+                            json!({"id": id, "ok": false, "error": "control params must be an object", "errorCode": "INVALID_PARAMS"})
+                        );
+                        break;
+                    }
+
+                    if params.get("request").is_some_and(|value| value.as_u64().is_none()) {
+                        let _ = writeln!(
+                            out,
+                            "{}",
+                            json!({"id": id, "ok": false, "error": "request must be a non-negative integer", "errorCode": "INVALID_PARAMS"})
+                        );
+                        continue;
+                    }
+
+                    let command = if matches!(method.as_str(), "engine.execute" | "command" | "ui.menu.invoke") {
+                        params.get("command").or_else(|| params.get("id")).and_then(Json::as_str).unwrap_or("")
+                    } else {
+                        method.as_str()
+                    };
+
+                    let request_id = if command == "ui.askAgent"
+                        || matches!(method.as_str(), "ui.inspect" | "ui.screenshot" | "engine.commands" | "engine.journal")
+                    {
+                        None
+                    } else {
+                        params.get("request").and_then(Json::as_u64).or(request)
+                    };
+
+                    if let Some(p) = params.as_object_mut() {
+                        if let Some(request_id) = request_id {
+                            p.insert("request".into(), json!(request_id));
+                        }
+                        p.insert("_agentConnection".into(), json!(conn));
+                        p.insert("_externalAgent".into(), json!(true));
+                    }
+
+                    let sent_request = if method == "agent.reply" { params.get("id").and_then(Json::as_u64) } else { request_id };
+                    let replying = method == "agent.reply";
                     let (req, rx) = ControlRequest::new(method, params);
                     let state = std::sync::Arc::clone(&req.state);
                     if tx.send(req).is_err() {
@@ -260,6 +365,23 @@ fn serve(stream: TcpStream, token: &str, tx: Sender<ControlRequest>, ctx: egui::
                     });
                     if let Some(o) = reply.as_object_mut() {
                         o.insert("id".into(), id);
+                        if o.get("ok") == Some(&Json::Bool(false)) && !o.contains_key("errorCode") {
+                            let raw = o.get("error").and_then(Json::as_str).unwrap_or("operation failed").to_owned();
+                            // Only a real code prefixes the message: "Cell A1: bad ref" is one
+                            // message, not the code "Cell A1".
+                            let (code, message) = raw
+                                .split_once(": ")
+                                .filter(|(c, _)| !c.is_empty() && c.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_'))
+                                .unwrap_or(("APPLY_FAILED", &raw));
+                            o.insert("errorCode".into(), json!(code));
+                            o.insert("error".into(), json!(message));
+                        }
+                    }
+                    if request == sent_request
+                        && (matches!(reply["errorCode"].as_str(), Some("NO_REQUEST" | "NOT_OWNER" | "READ_ONLY_REQUEST" | "STALE_REQUEST"))
+                            || replying && reply["ok"] == true && reply["result"]["done"] == true)
+                    {
+                        request = None;
                     }
                     if writeln!(out, "{reply}").is_err() {
                         break;
@@ -298,7 +420,7 @@ mod tests {
     fn serve_on_loopback() -> (std::net::SocketAddr, Receiver<ControlRequest>) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let addr = listener.local_addr().unwrap();
-        (addr, serve_listener(listener, TOKEN.into(), egui::Context::default()).unwrap())
+        (addr, serve_listener(listener, TOKEN.into(), egui::Context::default(), AgentHub::default()).unwrap())
     }
 
     /// A browser can POST to the port: its request line closes the connection before the JSON
@@ -368,7 +490,7 @@ mod tests {
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
                 let tx = tx.clone();
-                std::thread::spawn(move || serve(stream, TOKEN, tx, egui::Context::default(), AUTH_TIMEOUT, None));
+                std::thread::spawn(move || serve(stream, TOKEN, tx, egui::Context::default(), &AgentHub::default(), AUTH_TIMEOUT, None));
             }
         });
         addr
@@ -446,7 +568,7 @@ mod tests {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let addr = listener.local_addr().unwrap();
         let limits = AuthLimits { timeout: Duration::from_millis(300), max_pending: MAX_PENDING_AUTH };
-        let _rx = serve_listener_with(listener, TOKEN.into(), egui::Context::default(), limits).unwrap();
+        let _rx = serve_listener_with(listener, TOKEN.into(), egui::Context::default(), AgentHub::default(), limits).unwrap();
 
         let silent = TcpStream::connect(addr).unwrap();
         let mut slow = TcpStream::connect(addr).unwrap();
@@ -473,7 +595,7 @@ mod tests {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let addr = listener.local_addr().unwrap();
         let limits = AuthLimits { timeout: Duration::from_secs(20), max_pending: 2 };
-        let _rx = serve_listener_with(listener, TOKEN.into(), egui::Context::default(), limits).unwrap();
+        let _rx = serve_listener_with(listener, TOKEN.into(), egui::Context::default(), AgentHub::default(), limits).unwrap();
 
         let mut first = TcpStream::connect(addr).unwrap();
         let _second = TcpStream::connect(addr).unwrap();
@@ -499,5 +621,118 @@ mod tests {
     fn a_chosen_token_must_be_long_enough() {
         assert!(make_token(1, Some("short".into())).is_err());
         assert_eq!(make_token(1, Some(format!(" {TOKEN} "))).unwrap(), TOKEN);
+    }
+    #[test]
+    fn control_token_and_mcp_socket_request_grouped_undo() {
+        assert!(make_token(1, Some("short".into())).is_err() && make_token(1, Some(format!(" {TOKEN} "))).unwrap() == TOKEN);
+
+        let (hub, listener) = (AgentHub::default(), TcpListener::bind(("127.0.0.1", 0)).unwrap());
+        let (addr, (tx, rx), (rtx, rrx)) = (listener.local_addr().unwrap(), channel::<ControlRequest>(), channel());
+        let (ui_hub, server_hub) = (hub.clone(), hub.clone());
+        std::thread::spawn(move || {
+            let mut app = gridcraft_ui_egui::SheetApp::new(gridcraft_engine::Session::new(), Default::default()).with_agent_hub(ui_hub);
+            app.session.new_workbook();
+            let c = next_connection();
+            let _ = app.ask_agent.hub.as_ref().unwrap().listen(c, None, Duration::ZERO, || true);
+            rtx.send(app.run("ui.askAgent", json!({"instruction":"test"})).unwrap()["id"].as_u64().unwrap()).unwrap();
+            for r in rx {
+                let _ = r.reply.send(match gridcraft_ui_egui::control::handle(&mut app, &egui::Context::default(), &r.method, &r.params) {
+                    gridcraft_ui_egui::control::Outcome::Done(res) => res,
+                    _ => json!({"ok": false}),
+                });
+            }
+        });
+        std::thread::spawn(move || {
+            for s in listener.incoming().flatten() {
+                let (tx, hub) = (tx.clone(), server_hub.clone());
+                std::thread::spawn(move || serve(s, TOKEN, tx, egui::Context::default(), &hub, AUTH_TIMEOUT, None));
+            }
+        });
+        let req = rrx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let mut mcp = gridcraft_mcp::Server::new(Box::new(gridcraft_mcp::Remote::connect_with_token(&addr.to_string(), TOKEN.into()).unwrap()));
+        let mut call = |name: &str, args: Json| -> Json {
+            let line = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}}).to_string();
+            let reply: Json = serde_json::from_str(&mcp.handle_line(&line).unwrap()).unwrap();
+            serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
+        };
+        assert_eq!(call("wait_for_request", json!({"timeout_s": 0}))["id"], req);
+        call("reply_to_request", json!({"id": req, "text": "...", "done": false}));
+        call("set_cell", json!({"cell": "A1", "input": "7"}));
+        call("reply_to_request", json!({"id": req, "text": "Done"}));
+        assert_eq!(call("get_cell", json!({"cell": "A1"}))["text"], "7");
+        call("undo", json!({}));
+        assert_eq!(call("get_cell", json!({"cell": "A1"}))["text"], "");
+        call("redo", json!({}));
+        assert_eq!(call("get_cell", json!({"cell": "A1"}))["text"], "7");
+    }
+    /// Exercise authenticated TCP calls and the real document-owner dispatch, not a mocked Hub.
+    #[test]
+    fn request_scope_is_enforced_on_the_ui_owner_over_tcp() {
+        let hub = AgentHub::default();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = channel::<ControlRequest>();
+        let (ready, queued) = channel();
+        let ui_hub = hub.clone();
+        std::thread::spawn(move || {
+            let mut session = gridcraft_engine::Session::new();
+            session.new_workbook();
+            let mut app = gridcraft_ui_egui::SheetApp::new(session, Default::default()).with_agent_hub(ui_hub);
+            let id = app.run("ui.askAgent", json!({"instruction":"Fill the selected cell"})).unwrap()["id"].as_u64().unwrap();
+            ready.send(id).unwrap();
+            for req in rx {
+                let response = match gridcraft_ui_egui::control::handle(&mut app, &egui::Context::default(), &req.method, &req.params) {
+                    gridcraft_ui_egui::control::Outcome::Done(value) => value,
+                    _ => json!({"ok":false,"error":"unexpected screenshot"}),
+                };
+                let _ = req.reply.send(response);
+            }
+        });
+        let human_tx = tx.clone();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            serve(stream, TOKEN, tx, egui::Context::default(), &hub, AUTH_TIMEOUT, None);
+        });
+        let id = queued.recv_timeout(Duration::from_secs(5)).unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut out = stream.try_clone().unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        writeln!(out, "{}", control_auth::auth_line(1, TOKEN)).unwrap();
+        reader.read_line(&mut line).unwrap();
+        assert_eq!(serde_json::from_str::<Json>(&line).unwrap()["ok"], true);
+        let mut call = |method: &str, params: Json| {
+            writeln!(out, "{}", json!({"id":7,"method":method,"params":params})).unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            serde_json::from_str::<Json>(&line).unwrap()
+        };
+        assert_eq!(call("agent.listen", json!({"agent":"worker","timeoutMs":0}))["result"]["id"], id);
+        let outside = call("engine.execute", json!({"command":"cell.set","params":{"cell":"Z99","input":"forbidden"}}));
+        assert_eq!(outside["errorCode"], "OUTSIDE_SELECTION", "the real command must stay inside the captured selection");
+        assert_eq!(call("ui.edit.begin", json!({"text":"bypass"}))["errorCode"], "OUTSIDE_SELECTION");
+        // An error about some other explicit request cannot unbind this connection's claim.
+        assert_eq!(
+            call("engine.execute", json!({"request":id + 999,"command":"cell.set","params":{"cell":"A1","input":"bad"}}))["errorCode"],
+            "NO_REQUEST"
+        );
+        // Malformed explicit tags must be rejected before the sticky claim is substituted.
+        for malformed in [json!("invalid"), Json::Null, json!(true), json!([]), json!({}), json!(-1), json!(1.5)] {
+            let invalid = call("engine.execute", json!({"request":malformed,"command":"cell.set","params":{"cell":"A1","input":"invalid tag"}}));
+            assert_eq!(invalid["errorCode"], "INVALID_PARAMS", "a malformed tag must not turn into a valid sticky request");
+            assert_eq!(call("cell.get", json!({"cell":"A1"}))["result"]["text"], "", "rejection precedes every document edit");
+        }
+        for value in ["first", "second"] {
+            assert_eq!(call("engine.execute", json!({"command":"cell.set","params":{"cell":"A1","input":value}}))["ok"], true);
+        }
+        // A person's outside edit advances the real revision while the agent still owns its request.
+        let (req, reply) = ControlRequest::new("cell.set", json!({"cell":"Z1","input":"human"}));
+        human_tx.send(req).unwrap();
+        assert_eq!(reply.recv_timeout(Duration::from_secs(5)).unwrap()["ok"], true);
+        let stale = call("agent.reply", json!({"id":id,"text":"late reply"}));
+        assert!(matches!(stale["errorCode"].as_str(), Some("STALE_REQUEST" | "READ_ONLY_REQUEST")), "{stale}");
+        assert_eq!(call("cell.get", json!({"cell":"A1"}))["result"]["text"], "second", "the stale sticky binding was cleared");
     }
 }

@@ -6,12 +6,24 @@ use super::{
 impl SheetApp {
     /// Runs an engine command (or a UI command) and handles UI requests it makes.
     pub fn run(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        let target = params.get("range").and_then(Json::as_str).and_then(gridcraft_engine::core::RangeRef::parse).or_else(|| {
+            params.get("cell").and_then(Json::as_str).and_then(gridcraft_engine::core::CellRef::parse).map(gridcraft_engine::core::RangeRef::cell)
+        });
+        if let Some(why) = crate::ask_agent::held_for(self, id, target) {
+            self.toast = Some((why.clone(), crate::now_ms()));
+            return Err(why);
+        }
         let r = self.run_command(id, params);
         // This copy leaves the system clipboard alone: note what it holds, so Paste can tell
         // that GridCraft's copy is newer while that text is still there.
         if matches!(id, "edit.copy" | "edit.cut") && r.is_ok() {
             self.clipboard_text_at_copy = self.system_clipboard_text();
             self.cut_text = if id == "edit.cut" { self.clipboard_text_at_copy.clone() } else { None };
+        }
+        if !self.ask_agent.agent_turn_active()
+            && let (Some(hub), Some(current)) = (&self.ask_agent.hub, crate::ask_agent::current_target(self))
+        {
+            hub.invalidate(&current);
         }
         r
     }
@@ -152,6 +164,7 @@ impl SheetApp {
                 self.check_for_updates();
                 Ok(Json::Null)
             }
+            "ui.askAgent" => crate::ask_agent::command(self, p),
             "ui.printSettings" => printing::settings(&mut self.printing, p, self.services.printers.as_ref()),
             "ui.printSubmit" => self.submit_print(p.clone()),
             "ui.ribbonTab" => {
