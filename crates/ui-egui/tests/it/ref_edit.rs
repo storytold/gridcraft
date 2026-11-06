@@ -16,7 +16,7 @@ fn control(h: &mut H, method: &str, params: serde_json::Value) -> serde_json::Va
     let ctx = h.ctx.clone();
     let r = match handle(h.state_mut(), &ctx, method, &params) {
         Outcome::Done(v) => v,
-        Outcome::Screenshot { .. } => json!(null),
+        Outcome::Screenshot { .. } | Outcome::Hold(_) => json!(null),
     };
     h.run_steps(3);
     r

@@ -697,7 +697,7 @@ fn control_requests_route_to_a_window_and_list_windows() {
     let ctx = h.ctx.clone();
     let call = |h: &mut egui_kittest::Harness<'static, SheetApp>, method: &str, p: serde_json::Value| match handle(h.state_mut(), &ctx, method, &p) {
         Outcome::Done(v) => v,
-        Outcome::Screenshot { .. } => serde_json::Value::Null,
+        Outcome::Screenshot { .. } | Outcome::Hold(_) => serde_json::Value::Null,
     };
     let r = call(&mut h, "engine.execute", serde_json::json!({"command": "cell.set", "params": {"cell": "A1", "input": "one"}, "window": first}));
     assert_eq!(r["ok"], true, "{r}");
