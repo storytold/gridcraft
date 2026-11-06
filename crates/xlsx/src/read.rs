@@ -37,6 +37,9 @@ pub struct Ctx<'a> {
     pub cf_ext_ids: Vec<(String, usize)>,
     /// Chart parts associated with charts read from the current sheet.
     pub chart_parts: Vec<(u32, String, bool, Option<String>)>,
+    /// Bytes charged so far for shared formulas expanded into dependent cells (see
+    /// [`crate::sheet_read::MAX_SHARED_FORMULA_BYTES`]).
+    pub shared_formula_bytes: u64,
     /// Whether GridCraft calculates a function, when the caller says: cell formulas wrapped by
     /// Google Sheets' export are then read as the formula inside (see [`crate::read_xlsx_with`]).
     pub known_function: Option<&'a dyn Fn(&str) -> bool>,
@@ -258,6 +261,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         cell_pictures: vec![],
         cf_ext_ids: vec![],
         chart_parts: vec![],
+        shared_formula_bytes: 0,
         known_function,
         python: Default::default(),
     };
