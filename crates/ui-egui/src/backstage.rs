@@ -122,8 +122,12 @@ pub struct Backstage {
     pub fit_to_page: bool,
     /// Print: the previewed page (0-based).
     preview_page: usize,
-    /// Print: the preview for (document, revision, whole workbook, fit to page).
-    preview: Option<((u64, u64, bool, bool), Json)>,
+    /// Print: view the paper at its actual size or fit it into the pane.
+    preview_actual_size: bool,
+    /// Print: draw guides for the printed page's margins.
+    preview_margins: bool,
+    /// Print: page metadata for the current document, sheet, revision and print options.
+    preview: Option<(print::PreviewKey, Json)>,
     /// Save As: the chosen file type (an extension from [`SAVE_TYPES`]).
     pub save_format: &'static str,
     /// Home and Open: when the recent workbooks were last changed.
@@ -144,6 +148,8 @@ impl Backstage {
             print_all: false,
             fit_to_page: false,
             preview_page: 0,
+            preview_actual_size: false,
+            preview_margins: false,
             preview: None,
             save_format: "xlsx",
             recent: RecentFiles::default(),
@@ -213,6 +219,10 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             });
         });
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon)).show(ui, |ui| {
+        if bs.page == Page::Print {
+            print(app, ui, &mut bs, &mut out);
+            return;
+        }
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             egui::Frame::NONE.inner_margin(egui::Margin { left: 44, right: 32, top: 26, bottom: 32 }).show(ui, |ui| {
                 ui.set_max_width(CONTENT_W);
@@ -224,7 +234,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     Page::Open => open_page(app, ui, &mut bs, &mut out),
                     Page::Info => info(app, ui, &mut bs),
                     Page::SaveAs => save_as(app, ui, &mut bs, &mut out),
-                    Page::Print => print(app, ui, &mut bs, &mut out),
+                    Page::Print => {}
                     Page::Export => export(app, ui, &mut out),
                     Page::Options => options(app, ui),
                     Page::Account => account(app, ui),

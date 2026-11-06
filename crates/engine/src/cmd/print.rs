@@ -69,7 +69,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Print Preview",
             ["File"],
             None,
-            "{page? (1-based), sheets?: active|all, range?, fitToPage?} → {pages, pageList: [{page, sheet, range, rows, columns, scale, paper, orientation, pageOrder, width, height}]} in print order",
+            "{page? (1-based), sheets?: active|all, range?, fitToPage?} → {pages, pageList: [{page, sheet, range, rows, columns, scale, paper, orientation, pageOrder, width, height, marginsPt}]} in print order",
             has_doc,
             print_preview
         ),
@@ -225,6 +225,7 @@ fn print_preview(s: &mut Session, p: &Json) -> Result<Json> {
                 "pageOrder": lay.settings.page_order.id(),
                 "width": lay.page_w,
                 "height": lay.page_h,
+                "marginsPt": lay.margins,
             }));
         }
     }
