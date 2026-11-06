@@ -22,6 +22,7 @@ use crate::theme::{self, Tokens};
 
 mod options;
 mod print;
+mod python;
 
 use options::{options, platform};
 use print::print;
@@ -30,6 +31,14 @@ use print::print;
 const NAV_W: f32 = 196.0;
 /// Width of the content column (pages are left-aligned like a document, not stretched).
 const CONTENT_W: f32 = 760.0;
+
+/// What File › Options shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OptionsTab {
+    #[default]
+    General,
+    Python,
+}
 
 /// A Backstage page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,6 +137,8 @@ pub struct Backstage {
     pub save_format: &'static str,
     /// Home and Open: when the recent workbooks were last changed.
     recent: RecentFiles,
+    /// Options: which of its pages shows.
+    pub options_tab: OptionsTab,
 }
 
 /// Save As file types: (extension, label). The first is the workbook itself; the others are
@@ -147,6 +158,7 @@ impl Backstage {
             preview: None,
             save_format: "xlsx",
             recent: RecentFiles::default(),
+            options_tab: OptionsTab::default(),
         }
     }
 }
@@ -215,7 +227,8 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon)).show(ui, |ui| {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             egui::Frame::NONE.inner_margin(egui::Margin { left: 44, right: 32, top: 26, bottom: 32 }).show(ui, |ui| {
-                ui.set_max_width(CONTENT_W);
+                // Narrower in a narrow window: the page wraps instead of running off its edge.
+                ui.set_max_width(CONTENT_W.min(ui.available_width()));
                 ui.label(RichText::new(lang.tr(bs.page.label())).font(theme::ui_font(28.0)).color(t.text));
                 ui.add_space(18.0);
                 match bs.page {
@@ -226,7 +239,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     Page::SaveAs => save_as(app, ui, &mut bs, &mut out),
                     Page::Print => print(app, ui, &mut bs, &mut out),
                     Page::Export => export(app, ui, &mut out),
-                    Page::Options => options(app, ui),
+                    Page::Options => options_page(app, ui, &mut bs),
                     Page::Account => account(app, ui),
                 }
             });
@@ -249,6 +262,23 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         app.backstage = None;
     } else if app.backstage.is_none() {
         app.backstage = Some(bs);
+    }
+}
+
+/// File › Options: its pages, as tabs across the top.
+fn options_page(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage) {
+    let lang = app.ui.language;
+    ui.horizontal(|ui| {
+        for (tab, label) in [(OptionsTab::General, "Options|General"), (OptionsTab::Python, "Python")] {
+            if ui.selectable_label(bs.options_tab == tab, lang.tr(label)).clicked() {
+                bs.options_tab = tab;
+            }
+        }
+    });
+    ui.add_space(12.0);
+    match bs.options_tab {
+        OptionsTab::General => options(app, ui),
+        OptionsTab::Python => python::python_options(app, ui),
     }
 }
 
@@ -700,10 +730,11 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
     let label = if web { format!("{} (.{fmt})", lang.tr("Download")) } else { lang.tr("Browse…").to_string() };
     if square_button(ui, Icon::OpenFolder, &label).clicked() && app.commit_edit(0, 0, false, false) {
         if fmt == "xlsx" {
-            let before = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
+            // A save that now waits for Python cells is on its way too: the sheet shows the bar.
+            let state = |app: &SheetApp| app.session.active().map(|d| (d.path.clone(), d.is_dirty(), app.save_waits.saves_of(d.uid)));
+            let before = state(app);
             app.open_dialog("saveAs", json!({}));
-            let after = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
-            if after != before || app.services.pick_save.is_none() {
+            if state(app) != before || app.services.pick_save.is_none() {
                 out.close = true;
             }
         } else if export_as(app, fmt) {
