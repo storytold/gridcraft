@@ -658,4 +658,65 @@ mod tests {
         call("redo", json!({}));
         assert_eq!(call("get_cell", json!({"cell": "A1"}))["text"], "7");
     }
+    /// Exercise authenticated TCP calls and the real document-owner dispatch, not a mocked Hub.
+    #[test]
+    fn request_scope_is_enforced_on_the_ui_owner_over_tcp() {
+        let hub = AgentHub::default();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = channel::<ControlRequest>();
+        let (ready, queued) = channel();
+        let ui_hub = hub.clone();
+        std::thread::spawn(move || {
+            let mut session = gridcraft_engine::Session::new();
+            session.new_workbook();
+            let mut app = gridcraft_ui_egui::SheetApp::new(session, Default::default()).with_agent_hub(ui_hub);
+            let id = app.run("ui.askAgent", json!({"instruction":"Fill the selected cell"})).unwrap()["id"].as_u64().unwrap();
+            ready.send(id).unwrap();
+            for req in rx {
+                let response = match gridcraft_ui_egui::control::handle(&mut app, &egui::Context::default(), &req.method, &req.params) {
+                    gridcraft_ui_egui::control::Outcome::Done(value) => value,
+                    _ => json!({"ok":false,"error":"unexpected screenshot"}),
+                };
+                let _ = req.reply.send(response);
+            }
+        });
+        let human_tx = tx.clone();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            serve(stream, TOKEN, tx, egui::Context::default(), &hub, AUTH_TIMEOUT, None);
+        });
+        let id = queued.recv_timeout(Duration::from_secs(5)).unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut out = stream.try_clone().unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        writeln!(out, "{}", json!({"token":TOKEN})).unwrap();
+        reader.read_line(&mut line).unwrap();
+        assert_eq!(serde_json::from_str::<Json>(&line).unwrap()["ok"], true);
+        let mut call = |method: &str, params: Json| {
+            writeln!(out, "{}", json!({"id":7,"method":method,"params":params})).unwrap();
+            line.clear(); reader.read_line(&mut line).unwrap();
+            serde_json::from_str::<Json>(&line).unwrap()
+        };
+        assert_eq!(call("agent.listen", json!({"agent":"worker","timeoutMs":0}))["result"]["id"], id);
+        let outside = call("engine.execute", json!({"command":"cell.set","params":{"cell":"Z99","input":"forbidden"}}));
+        assert_eq!(outside["errorCode"], "OUTSIDE_SELECTION", "the real command must stay inside the captured selection");
+        assert_eq!(call("ui.edit.begin", json!({"text":"bypass"}))["errorCode"], "OUTSIDE_SELECTION");
+        // An error about some other explicit request cannot unbind this connection's claim.
+        assert_eq!(call("engine.execute", json!({"request":id + 999,"command":"cell.set","params":{"cell":"A1","input":"bad"}}))["errorCode"], "NO_REQUEST");
+        for value in ["first", "second"] {
+            assert_eq!(call("engine.execute", json!({"command":"cell.set","params":{"cell":"A1","input":value}}))["ok"], true);
+        }
+        // A person's outside edit advances the real revision while the agent still owns its request.
+        let (req, reply) = ControlRequest::new("cell.set".into(), json!({"cell":"Z1","input":"human"}));
+        human_tx.send(req).unwrap();
+        assert_eq!(reply.recv_timeout(Duration::from_secs(5)).unwrap()["ok"], true);
+        let stale = call("agent.reply", json!({"id":id,"text":"late reply"}));
+        assert!(matches!(stale["errorCode"].as_str(), Some("STALE_REQUEST" | "READ_ONLY_REQUEST")), "{stale}");
+        assert_eq!(call("cell.get", json!({"cell":"A1"}))["result"]["text"], "second", "the stale sticky binding was cleared");
+    }
+
 }
