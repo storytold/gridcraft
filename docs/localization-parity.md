@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (correct review findings in catalogs, native menus and regional formats) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-06 · **Change:** minor (correct review findings in catalogs, native menus and regional formats) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -133,9 +133,7 @@ include the rest of the catalog work below (10–20 h, counted once), localized 
 separators, number/date formats, machine translation with agent review, and script work.
 
 | Language | Code | UI strings translated | Dialogs / tooltips / help | Script support | Native review | Status | Estimate to full |
-|---|---|---|
-| 2026-11-05 | minor | Complete the Czech 2,427-key interface inventory and review all 762 Czech help rows; correct mathematical and financial terms and synchronize the clarified F-test help key across all 19 translated tables |---|---|---|---|
-| 2026-11-05 | minor | Complete the Czech 2,427-key interface inventory and review all 762 Czech help rows; correct mathematical and financial terms and synchronize the clarified F-test help key across all 19 translated tables |---|
+|---|---|---|---|---|---|---|---|
 | English | en | ~2,200 / ~2,200 (100%, source) | yes | Latin: yes | yes | full | — |
 | Simplified Chinese (Mandarin) | zh-Hans | 266 (~12%) | no | CJK system-font fallback (#38); IME unverified; PDF can't export | no | menus only | 8–13 h |
 | Spanish | es | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
@@ -152,9 +150,9 @@ separators, number/date formats, machine translation with agent review, and scri
 | Korean | ko | 266 (~12%) | no | Hangul via the CJK fallback; IME unverified | no | menus only | 6–10 h |
 | Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
 | Turkish | tr | 382 (~17%) | no | Latin: yes | yes | menus only | 4–8 h |
+| Vietnamese | vi | 398 (~18%) | no | Latin with stacked diacritics: unverified | no | menus, File view | 5–9 h |
 
 Russian is described in the current update above. Other shipped languages in this historical table include German (de), Czech (cs), French (fr) and Turkish (tr).
-| Vietnamese | vi | 398 (~18%) | no | Latin with stacked diacritics: unverified | no | menus, File view | 5–9 h |
 Russian is described in the current update above. Historical counts for German (de) and Dutch (nl) below predate the current Russian catalog.
 
 **Total:** catalog work 10–20 h + languages 92–144 h ≈ **100–165 h**. Parallelizes almost fully
@@ -178,6 +176,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | minor | Preserve regional output alongside main display-precision helpers; align Czech logical tokens with its formula syntax, correct Chinese help labels and Traditional Chinese terms, and repair the Languages table |
 | 2026-11-05 | minor | Complete the Czech 2,427-key interface inventory and review all 762 Czech help rows; correct mathematical and financial terms and synchronize the clarified F-test help key across all 19 translated tables |
 | 2026-11-05 | minor | Search translated command paths with contextual ribbon-tab names; localize Boolean/error format samples and numeric filter captions without changing canonical filter values; correct French agreement and replace 100 English fallback entries in the Ukrainian interface |
 | 2026-11-05 | minor | Localize the initial desktop workbook after preference loading, enforce Unicode-aware sheet uniqueness, print totals formulas through the shared structured-reference printer and correct Traditional Chinese rate-series help |

@@ -63,6 +63,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Opmaak-\nvenster",
         "Format" => "Opmaak",
         "Insert" => "Invoegen",
+        "Header Menu|Insert" => "Invoegen",
         "Insert Cells…" => "Cellen invoegen…",
         "Delete" => "Verwijderen",
         "Delete Cells…" => "Cellen verwijderen…",

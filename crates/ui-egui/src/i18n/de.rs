@@ -896,6 +896,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Format-\nbereich",
         "Format" => "Format",
         "Insert" => "Einfügen",
+        "Header Menu|Insert" => "Zellen einfügen",
         "Insert Cells…" => "Zellen einfügen…",
         "Delete" => "Löschen",
         "Select Data…" => "Daten auswählen…",
@@ -1316,7 +1317,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         // grid.rs cell and row/column header context menus.
         "Cut" => "Ausschneiden",
         "Copy" => "Kopieren",
-        "Insert…" => "Einfügen…",
+        "Insert…" => "Zellen einfügen…",
         "Delete…" => "Löschen…",
         "Filter by Selected Cell's Value" => "Nach Wert der gewählten Zelle filtern",
         "New Comment" => "Neuer Kommentar",

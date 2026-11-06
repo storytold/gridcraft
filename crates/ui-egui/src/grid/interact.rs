@@ -350,6 +350,7 @@ fn handle_column_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, 
             return;
         }
         let range = if mods.shift { RangeRef::cols(sel.anchor.col.min(c), sel.anchor.col.max(c)) } else { RangeRef::cols(c, c) };
+        note_selecting_press(app);
         select_ranges(app, range, mods.command, CellRef::new(geo.row_at(sh, geo.cells.top() + 1.0), c));
         app.grid.drag = Drag::Cols(if mods.shift { sel.anchor.col } else { c });
     }
@@ -370,6 +371,7 @@ fn handle_row_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, p: 
             return;
         }
         let range = if mods.shift { RangeRef::rows(sel.anchor.row.min(r), sel.anchor.row.max(r)) } else { RangeRef::rows(r, r) };
+        note_selecting_press(app);
         select_ranges(app, range, mods.command, CellRef::new(r, geo.col_at(sh, geo.cells.left() + 1.0)));
         app.grid.drag = Drag::Rows(if mods.shift { sel.anchor.row } else { r });
     }
@@ -401,6 +403,7 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         return;
     }
     if in_corner {
+        note_selecting_press(app);
         let _ = app.session.run("selection.set", json!({"range": RangeRef::all().a1()}));
         return;
     }
@@ -486,11 +489,16 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         return;
     }
     let now = crate::now_ms();
-    if handle_cell_double_click(app, input, c, now) {
+    // While a reference box picks, a click only picks: a second click on a cell does not edit it,
+    // and a link is not followed nor a checkbox toggled.
+    let ref_box_picks = app.dialog.as_ref().is_some_and(|d| d.ref_box_picks());
+    let acts = primary_clicked && !ref_box_picks;
+    if !ref_box_picks && handle_cell_double_click(app, input, c, now) {
         return;
     }
     app.grid.last_click = Some((c, now));
     if mods.shift {
+        note_selecting_press(app);
         let _ = app.session.run("selection.set", json!({"range": RangeRef::new(sel.anchor, c).a1(), "active": sel.active.a1()}));
         if let Some(d) = app.session.active_mut() {
             d.selection.anchor = sel.anchor;
@@ -498,22 +506,24 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
     } else if mods.command {
         // Ctrl+click (without Alt) on a hyperlink's text follows it instead of adding the cell to the selection.
         if let Some(h) = sh.hyperlinks.get(&c).cloned()
-            && primary_clicked
+            && acts
             && !mods.alt
             && p.x < geo.cell_rect(sh, c).left() + geo.cell_rect(sh, c).width() * 0.8
         {
             follow_link(app, &h.target);
         } else {
+            note_selecting_press(app);
             select_ranges(app, RangeRef::cell(c), true, c);
         }
     } else {
+        note_selecting_press(app);
         let _ = app.session.run("selection.set", json!({"cell": c.a1()}));
-        if primary_clicked && wb.styles.get(sh.style_id(c)).num_fmt.as_str() == "checkbox" {
+        if acts && wb.styles.get(sh.style_id(c)).num_fmt.as_str() == "checkbox" {
             let _ = app.run("cell.toggleCheckbox", json!({"cell": c.a1()}));
         }
         // A click on a hyperlink's text follows it (like Excel); elsewhere in the cell selects.
         if let Some(h) = sh.hyperlinks.get(&c).cloned()
-            && primary_clicked
+            && acts
             && !mods.any()
         {
             let r = geo.cell_rect(sh, c);
@@ -529,6 +539,15 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
     {
         // The first recognised drag already includes movement away from the press.
         select_to_pointer(app, geo, sh, wb, p);
+    }
+}
+
+/// Tells the open dialog that a press on the grid selects: the reference box being picked into
+/// takes the selection even when the press leaves it as it was (a click on the cell already
+/// selected), as a deliberate pick.
+fn note_selecting_press(app: &mut SheetApp) {
+    if let Some(d) = app.dialog.as_mut() {
+        d.note_selecting_press();
     }
 }
 
