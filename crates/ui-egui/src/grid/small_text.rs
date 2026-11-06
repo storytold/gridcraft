@@ -313,12 +313,11 @@ fn small_size(ctx: &Context, font_id: &FontId) -> Option<u32> {
     (px >= 1.0 && px <= UP_TO as f32).then_some(px as u32)
 }
 
-/// Where the baseline goes, in pixels, for a line box `height` pixels tall whose top is at `top`, as
-/// the cell's own font lays it out. The glyphs drawn are larger, and maybe of another face, so their
-/// line is placed in that box as the cell aligns it: for bottom alignment descenders end where the
-/// cell font's do, above the gridline; for top, capitals start where its capitals do; for centre,
-/// capitals and digits are centred in the box, as Excel centres them whatever the font.
-fn baseline(face: &Face, px: u32, top: f32, (valign, height): (VAlign, f32)) -> i32 {
+/// Where the baseline goes, in pixels. The glyphs drawn are larger than the cell font's, and maybe of
+/// another face, so their line is placed as the cell aligns it: for bottom alignment descenders end
+/// where the cell font's do, above the gridline; for top, capitals start where its capitals do; for
+/// centre, capitals and digits are centred in the cell, as Excel centres them whatever the font.
+fn baseline(face: &Face, px: u32, place: &Place, ppp: f32) -> i32 {
     // Ascent, descent and capital height, in pixels.
     let metrics = |data: &FontData, size: u32| {
         font_ref(data).map_or((0.0, 0.0, 0.0), |f| {
@@ -328,15 +327,19 @@ fn baseline(face: &Face, px: u32, top: f32, (valign, height): (VAlign, f32)) -> 
     };
     let (own_ascent, own_descent, own_cap) = metrics(&face.own, px);
     let (_, descent, cap) = metrics(&face.data, drawn_size(px));
-    let own = top + own_ascent.round();
-    let at = match valign {
+    let own = (place.top * ppp).round() + own_ascent.round();
+    let at = match place.valign {
         // A pixel up: the cell font's descenders end on the row's last pixel, where its gridline is.
         VAlign::Bottom => own + own_descent.round() - descent.round() - 1.0,
         // Capitals start where the cell font's would.
         VAlign::Top => own - own_cap + cap,
-        // Capitals and digits centred in the line box, descenders below, as Excel centres them
-        // whatever the font. The faces' ascents differ, so they can't be what is centred.
-        VAlign::Center | VAlign::Justify | VAlign::Distributed => top + height / 2.0 + cap / 2.0,
+        // Capitals and digits centred in the cell, between its top and its gridline (the row's last
+        // pixel), descenders below, as Excel centres them whatever the font. The faces' ascents
+        // differ, so they can't be what is centred.
+        VAlign::Center | VAlign::Justify | VAlign::Distributed => {
+            let (top, bottom) = ((place.cell.0 * ppp).round(), (place.cell.1 * ppp).round() - 1.0);
+            (top + bottom) / 2.0 + cap / 2.0
+        }
     };
     at.round() as i32
 }
@@ -356,17 +359,24 @@ pub(super) fn width(ctx: &Context, font_id: &FontId, text: &str) -> Option<f32> 
     Some(pen / ctx.pixels_per_point())
 }
 
-/// Draws one line of `text` with its line box's top left at `at`, the box `line.1` points tall and
-/// aligned in its cell by `line.0`. Returns false, having drawn
+/// Draws one line of `text` starting at `x`, placed vertically by `line`. Returns false, having drawn
 /// nothing, when it leaves the text to the usual drawing.
-pub(super) fn paint(p: &Painter, font_id: &FontId, text: &str, at: Pos2, line: (VAlign, f32), color: Color32) -> bool {
+/// Where a line goes vertically: the cell's alignment, the top of the cell font's line box, and the
+/// cell's top and bottom edges, in points.
+pub(super) struct Place {
+    pub valign: VAlign,
+    pub top: f32,
+    pub cell: (f32, f32),
+}
+
+pub(super) fn paint(p: &Painter, font_id: &FontId, text: &str, x: f32, line: &Place, color: Color32) -> bool {
     let ctx = p.ctx();
     let ppp = ctx.pixels_per_point();
     let Some(px) = small_size(ctx, font_id) else { return false };
     let Some(face) = face(ctx, &font_id.family) else { return false };
     let Some(font) = font_ref(&face.data) else { return false };
     // The baseline stays where the cell's own font puts it, also when a face for small sizes stands in.
-    let baseline = baseline(&face, px, (at.y * ppp).round(), (line.0, line.1 * ppp));
+    let baseline = baseline(&face, px, line, ppp);
     let pass = ctx.cumulative_pass_nr();
     let shared = cache(ctx);
     let mut c = shared.lock();
@@ -388,7 +398,7 @@ pub(super) fn paint(p: &Painter, font_id: &FontId, text: &str, at: Pos2, line: (
         })
         .id();
     let mut mesh = Mesh::with_texture(texture);
-    let mut pen = (at.x * ppp).round();
+    let mut pen = (x * ppp).round();
     for (gid, g) in glyphs {
         if g.w > 0 {
             // The atlas is full for this frame: nothing is drawn yet, so the usual drawing takes over.
