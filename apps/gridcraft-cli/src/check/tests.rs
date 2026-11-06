@@ -400,6 +400,7 @@ fn unopenable_files_are_reported() {
 }
 
 #[test]
+/// Check the machine-readable audit has exactly the expected keys and fidelity categories.
 fn json_schema_keys() {
     let wb = book(&[("A1", "=1+1", n(3.0))]);
     let reports = vec![check(&wb, &Options::default()), check_bytes("bad.xlsx", b"", &Options::default())];
@@ -506,6 +507,7 @@ fn book_with_core(props: &str) -> Vec<u8> {
 const ALL_CORE_PROPERTIES: &str = r#"<dc:title>Title &amp; more</dc:title><dc:subject>Subject</dc:subject><dc:creator>Author A</dc:creator><cp:keywords>k1; k2</cp:keywords><dc:description>Description</dc:description><cp:lastModifiedBy>Author B</cp:lastModifiedBy><cp:lastPrinted>2025-06-01T08:00:00Z</cp:lastPrinted><dcterms:created xsi:type="dcterms:W3CDTF">2024-01-15T09:30:00Z</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">2025-06-30T17:45:00Z</dcterms:modified><cp:category>Configuration</cp:category><cp:contentStatus>Draft</cp:contentStatus><cp:revision>7</cp:revision><cp:version>1.0</cp:version><dc:identifier>id-1</dc:identifier><dc:language>en-US</dc:language>"#;
 
 #[test]
+/// Check the XLSX audit preserves every recognized core property in a full workbook round trip.
 fn round_trip_keeps_every_core_property() {
     let r = check_bytes("props.xlsx", &book_with_core(ALL_CORE_PROPERTIES), &Options::default());
     assert_eq!(r.error, None);
@@ -515,6 +517,7 @@ fn round_trip_keeps_every_core_property() {
 }
 
 #[test]
+/// Check removed and changed nonempty core properties produce separate, bounded audit differences.
 fn a_core_property_lost_or_changed_is_reported() {
     let source = book_with_core(ALL_CORE_PROPERTIES);
     let written = book_with_core(
@@ -536,6 +539,7 @@ fn a_core_property_lost_or_changed_is_reported() {
 }
 
 #[test]
+/// Check literal CDATA, mixed text and entity text compare semantically and cannot hide a lost property.
 fn core_properties_cdata_is_compared_as_text() {
     for (content, expected, escaped) in
         [("<![CDATA[A]]>", "A", "A"), ("before <![CDATA[<&]]> after &amp; end", "before <& after & end", "before &lt;&amp; after &amp; end")]

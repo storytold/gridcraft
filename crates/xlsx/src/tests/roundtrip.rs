@@ -17,6 +17,7 @@ fn rr(a: &str) -> RangeRef {
     RangeRef::parse(a).unwrap()
 }
 
+/// Build a workbook fixture with cell content, formatting and document-property coverage.
 fn sample() -> Workbook {
     let mut wb = Workbook::new();
     wb.date_system = DateSystem::D1904;
@@ -1499,6 +1500,7 @@ fn solid_data_bar_survives_with_sparklines_and_gradient_neighbours() {
 }
 
 #[test]
+/// Check leading and trailing whitespace survives serialization of document properties.
 fn doc_props_keep_boundary_whitespace() {
     let mut wb = Workbook::new();
     wb.props = DocProps {

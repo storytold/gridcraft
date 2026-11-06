@@ -106,6 +106,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     )
 }
 
+/// Serialize to the selected path, committing save timestamps and last editor only after a successful full-fidelity write.
 fn save(s: &mut Session, p: &Json) -> Result<Json> {
     let path = match str_param(p, "path").map(str::to_string).or_else(|| s.active().and_then(|d| d.path.clone())) {
         Some(p) => p,
