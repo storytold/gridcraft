@@ -93,6 +93,14 @@ fn small_faces() -> &'static [Option<Arc<FontData>>; 2] {
     })
 }
 
+/// Whether `family` is one of the italic cell roles: `cell-italic`, `cell-bold-italic`, or an
+/// installed family's `…:ni` and `…:bi` (see `fonts::role_key`). Its face may still be upright, when
+/// the family has no italic.
+fn asks_italic(family: &FontFamily) -> bool {
+    let FontFamily::Name(name) = family else { return false };
+    name.ends_with("-italic") || (name.starts_with("fnt:") && name.rsplit(':').next().is_some_and(|style| style.ends_with('i')))
+}
+
 fn face(ctx: &Context, family: &FontFamily) -> Option<Face> {
     let (key, own) = ctx.fonts_mut(|f| {
         let defs = f.definitions();
@@ -100,8 +108,11 @@ fn face(ctx: &Context, family: &FontFamily) -> Option<Face> {
         let data = defs.font_data.get(&key)?.clone();
         Some((key, data))
     })?;
-    let bold = font_ref(&own).is_some_and(|f| f.attributes().weight.value() >= 600.0);
-    if let Some(small) = small_faces().get(usize::from(bold)).cloned().flatten() {
+    let attributes = font_ref(&own).map(|f| f.attributes());
+    let bold = attributes.is_some_and(|a| a.weight.value() >= 600.0);
+    // The small face has no italic: italic text keeps the cell's font, slanted as it is.
+    let italic = asks_italic(family) || attributes.is_some_and(|a| a.style != skrifa::attribute::Style::Normal);
+    if !italic && let Some(small) = small_faces().get(usize::from(bold)).cloned().flatten() {
         return Some(Face { key: format!("small:{}", u8::from(bold)), data: small, own, widen_bold: false });
     }
     Some(Face { key, data: own.clone(), own, widen_bold: bold })
@@ -462,6 +473,18 @@ mod tests {
         ring.extend(rect(2.0, 2.0, 4.0, 4.0).into_iter().map(|(a, b)| (b, a)));
         let mask = bilevel(&ring, 0, 0, 6, 6);
         assert_eq!(on(&mask, 6), ["######", "######", "##..##", "##..##", "######", "######"]);
+    }
+
+    #[test]
+    fn italic_roles_are_recognised() {
+        let named = |n: &str| FontFamily::Name(n.into());
+        for italic in ["cell-italic", "cell-bold-italic", "fnt:Arial:ni", "fnt:Arial:bi"] {
+            assert!(asks_italic(&named(italic)), "{italic}");
+        }
+        for upright in ["cell", "cell-bold", "fnt:Arial:nn", "fnt:Arial:bn", "fnt:Times New Roman:bn", "ui"] {
+            assert!(!asks_italic(&named(upright)), "{upright}");
+        }
+        assert!(!asks_italic(&FontFamily::Proportional));
     }
 
     #[test]
