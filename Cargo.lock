@@ -2090,6 +2090,7 @@ dependencies = [
  "gridcraft-core",
  "gridcraft-engine",
  "gridcraft-model",
+ "gridcraft-xlsx",
  "serde",
  "serde_json",
 ]

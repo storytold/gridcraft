@@ -40,18 +40,18 @@ pub struct Room {
     epoch: u64,
     seen: HashMap<String, Applied>,
     order: VecDeque<String>,
-    actor: String,
 }
 
 impl Room {
-    /// A room over the session's active workbook. The actor is the participant the session speaks
-    /// for (`sub` of its JWT); the transport passes it on every `hello`.
-    pub fn new(session: &Session, actor: impl Into<String>) -> Room {
+    /// A room over the session's active workbook. The actor of each operation comes with the
+    /// operation: one room may serve several participants only through the hub, but a test drives
+    /// it directly.
+    pub fn new(session: &Session) -> Room {
         let mut keys = SheetKeys::new();
         if let Some(d) = session.active() {
             keys.sync(&d.wb);
         }
-        Room { keys, version: 0, epoch: 0, seen: HashMap::new(), order: VecDeque::new(), actor: actor.into() }
+        Room { keys, version: 0, epoch: 0, seen: HashMap::new(), order: VecDeque::new() }
     }
 
     pub fn version(&self) -> u64 {
@@ -77,7 +77,7 @@ impl Room {
     /// Applies one operation. A repeated `opId` returns the first answer without touching the
     /// document (ADR-0003); a structural command whose `base_version` is not the head is refused
     /// as `stale` with `retryable: true`, because resending against the new head can work.
-    pub fn apply(&mut self, session: &mut Session, op: ClientOp) -> Result<Applied, RoomError> {
+    pub fn apply(&mut self, session: &mut Session, op: ClientOp, actor: &str) -> Result<Applied, RoomError> {
         if let Some(done) = self.seen.get(&op.op_id) {
             return Ok(done.clone());
         }
@@ -112,7 +112,7 @@ impl Room {
             op_id: op.op_id.clone(),
             version: self.version,
             epoch: self.epoch,
-            actor: self.actor.clone(),
+            actor: actor.to_string(),
             result: Outcome { command: Some(CommandEcho { id: op.payload.cmd.clone(), params }), delta: Some(delta) },
         };
         self.remember(applied.clone());

@@ -14,12 +14,14 @@
 #![forbid(unsafe_code)]
 
 mod delta;
+mod hub;
 mod keys;
 mod ops;
 mod protocol;
 mod room;
 
 pub use delta::delta_for;
+pub use hub::{Hub, HubError, Participant, Presence, Role, Viewport, viewer_rejection};
 pub use keys::SheetKeys;
 pub use ops::{Class, classify};
 pub use protocol::{Applied, CellChange, ClientOp, CommandEcho, Hint, Kind, Outcome, Payload, RejectCode, Rejected, SheetDelta, Target};

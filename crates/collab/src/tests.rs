@@ -34,9 +34,9 @@ fn op(op_id: &str, cmd: &str, params: Json, sheet: &str, a1: &str) -> ClientOp {
 #[test]
 fn a_cell_operation_comes_back_as_an_authoritative_delta() {
     let mut s = session();
-    let mut room = Room::new(&s, "alice");
+    let mut room = Room::new(&s);
     let sheet = key_of(&room, &s);
-    let applied = room.apply(&mut s, op("op-1", "cell.set", json!({"input": 2}), &sheet, "A1")).unwrap();
+    let applied = room.apply(&mut s, op("op-1", "cell.set", json!({"input": 2}), &sheet, "A1"), "alice").unwrap();
     assert_eq!(applied.version, 1);
     let delta = applied.result.delta.expect("cells changed");
     let cell = delta.iter().flat_map(|d| &d.cells).find(|c| c.a1 == "A1").expect("A1 is reported");
@@ -48,10 +48,10 @@ fn a_cell_operation_comes_back_as_an_authoritative_delta() {
 #[test]
 fn a_repeated_op_id_is_not_applied_twice() {
     let mut s = session();
-    let mut room = Room::new(&s, "alice");
+    let mut room = Room::new(&s);
     let sheet = key_of(&room, &s);
-    let first = room.apply(&mut s, op("same", "cell.set", json!({"input": 1}), &sheet, "A1")).unwrap();
-    let again = room.apply(&mut s, op("same", "cell.set", json!({"input": 9}), &sheet, "A1")).unwrap();
+    let first = room.apply(&mut s, op("same", "cell.set", json!({"input": 1}), &sheet, "A1"), "alice").unwrap();
+    let again = room.apply(&mut s, op("same", "cell.set", json!({"input": 9}), &sheet, "A1"), "alice").unwrap();
     assert_eq!(first, again);
     assert_eq!(room.version(), 1);
     assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::parse("A1").unwrap()).as_f64(), Some(1.0));
@@ -60,11 +60,11 @@ fn a_repeated_op_id_is_not_applied_twice() {
 #[test]
 fn a_dependent_formula_value_travels_with_the_delta() {
     let mut s = session();
-    let mut room = Room::new(&s, "alice");
+    let mut room = Room::new(&s);
     let sheet = key_of(&room, &s);
-    room.apply(&mut s, op("a", "cell.set", json!({"input": 2}), &sheet, "A1")).unwrap();
-    room.apply(&mut s, op("b", "cell.set", json!({"input": "=A1*3"}), &sheet, "B2")).unwrap();
-    let applied = room.apply(&mut s, op("c", "cell.set", json!({"input": 5}), &sheet, "A1")).unwrap();
+    room.apply(&mut s, op("a", "cell.set", json!({"input": 2}), &sheet, "A1"), "alice").unwrap();
+    room.apply(&mut s, op("b", "cell.set", json!({"input": "=A1*3"}), &sheet, "B2"), "alice").unwrap();
+    let applied = room.apply(&mut s, op("c", "cell.set", json!({"input": 5}), &sheet, "A1"), "alice").unwrap();
     let delta = applied.result.delta.expect("cells changed");
     let addresses: Vec<&str> = delta.iter().flat_map(|d| d.cells.iter().map(|c| c.a1.as_str())).collect();
     assert!(addresses.contains(&"A1"), "{addresses:?}");
@@ -77,13 +77,13 @@ fn a_dependent_formula_value_travels_with_the_delta() {
 #[test]
 fn a_structural_operation_needs_the_head_version() {
     let mut s = session();
-    let mut room = Room::new(&s, "alice");
+    let mut room = Room::new(&s);
     let sheet = key_of(&room, &s);
-    room.apply(&mut s, op("one", "cell.set", json!({"input": 1}), &sheet, "A1")).unwrap();
+    room.apply(&mut s, op("one", "cell.set", json!({"input": 1}), &sheet, "A1"), "alice").unwrap();
     let mut structural = op("two", "home.insertRows", json!({"rows": "2"}), &sheet, "A2");
     structural.kind = Kind::Structural;
     structural.base_version = 0;
-    let refused = room.apply(&mut s, structural).expect_err("stale base is refused");
+    let refused = room.apply(&mut s, structural, "alice").expect_err("stale base is refused");
     match refused.rejected().code {
         RejectCode::Stale => {}
         other => panic!("expected stale, got {other:?}"),
@@ -95,12 +95,12 @@ fn a_structural_operation_needs_the_head_version() {
 #[test]
 fn a_structural_operation_at_the_head_bumps_the_epoch() {
     let mut s = session();
-    let mut room = Room::new(&s, "alice");
+    let mut room = Room::new(&s);
     let sheet = key_of(&room, &s);
     let mut structural = op("ins", "home.insertRows", json!({"rows": "2", "count": 1}), &sheet, "A2");
     structural.kind = Kind::Structural;
     structural.base_version = 0;
-    let applied = room.apply(&mut s, structural).unwrap();
+    let applied = room.apply(&mut s, structural, "alice").unwrap();
     assert_eq!(applied.version, 1);
     assert_eq!(applied.epoch, 1);
 }
@@ -108,10 +108,10 @@ fn a_structural_operation_at_the_head_bumps_the_epoch() {
 #[test]
 fn commands_outside_the_allowlist_are_refused() {
     let mut s = session();
-    let mut room = Room::new(&s, "alice");
+    let mut room = Room::new(&s);
     let sheet = key_of(&room, &s);
     for (id, cmd) in [("f", "file.save"), ("u", "edit.undo"), ("m", "macro.run")] {
-        let refused = room.apply(&mut s, op(id, cmd, json!({}), &sheet, "A1")).expect_err("refused");
+        let refused = room.apply(&mut s, op(id, cmd, json!({}), &sheet, "A1"), "alice").expect_err("refused");
         assert_eq!(refused.rejected().code, RejectCode::Forbidden, "{cmd}");
     }
     assert_eq!(room.version(), 0);
@@ -135,7 +135,7 @@ fn a_deleted_sheet_key_is_a_tombstone() {
     let mut s = session();
     s.execute("home.insertSheet", json!({})).unwrap();
     s.execute("home.insertSheet", json!({})).unwrap();
-    let mut room = Room::new(&s, "alice");
+    let mut room = Room::new(&s);
     let first = {
         let d = s.doc().unwrap();
         room.sheet_keys().key_for_index(&d.wb, 0).unwrap()
@@ -145,4 +145,47 @@ fn a_deleted_sheet_key_is_a_tombstone() {
     let d = s.doc().unwrap();
     assert!(room.sheet_keys().is_dead(first), "the key of a deleted sheet stays dead");
     assert!(room.sheet_keys().index_for_key(&d.wb, first).is_none());
+}
+
+#[test]
+fn a_viewer_cannot_write_even_with_a_valid_operation() {
+    let s = session();
+    let mut hub = crate::Hub::new();
+    assert!(hub.open("book", s));
+    hub.join("book", "ann", "Ann", crate::Role::Viewer).unwrap();
+    let sheet = hub.sheet_key("book", 0).unwrap();
+    let refused = hub.apply("book", "ann", op("v1", "cell.set", json!({"input": 1}), &sheet, "A1")).expect_err("viewer is refused");
+    match refused {
+        crate::HubError::Forbidden => {}
+        other => panic!("expected forbidden, got {other:?}"),
+    }
+    assert_eq!(hub.version("book"), Some(0));
+}
+
+#[test]
+fn an_editor_changes_the_document_and_presence_is_returned_to_others() {
+    let s = session();
+    let mut hub = crate::Hub::new();
+    assert!(hub.open("book", s));
+    hub.join("book", "ann", "Ann", crate::Role::Editor).unwrap();
+    hub.join("book", "bob", "Bob", crate::Role::Viewer).unwrap();
+    let sheet = hub.sheet_key("book", 0).unwrap();
+    let applied = hub.apply("book", "ann", op("e1", "cell.set", json!({"input": 4}), &sheet, "A1")).unwrap();
+    assert_eq!(applied.version, 1);
+    assert_eq!(applied.actor, "ann");
+    let presence = crate::Presence { sheet: sheet.clone(), active: "A1".into(), ranges: vec![], viewport: None };
+    let all = hub.presence("book", "bob", Some(presence)).unwrap();
+    let bob = all.iter().find(|p| p.actor == "bob").unwrap();
+    assert_eq!(bob.presence.as_ref().unwrap().active, "A1");
+    assert_eq!(all.len(), 2, "both participants are listed");
+}
+
+#[test]
+fn commit_writes_the_authoritative_workbook_as_a_zip_package() {
+    let s = session();
+    let mut hub = crate::Hub::new();
+    assert!(hub.open("book", s));
+    hub.join("book", "ann", "Ann", crate::Role::Owner).unwrap();
+    let bytes = hub.commit("book").unwrap();
+    assert!(bytes.starts_with(b"PK"), "an .xlsx is a zip package");
 }
