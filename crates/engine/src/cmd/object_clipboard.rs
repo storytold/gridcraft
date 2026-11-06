@@ -111,7 +111,7 @@ fn picture_param(s: &Session, p: &Json, command: &str) -> Result<(usize, Image)>
 }
 
 /// Sheet protection locks drawing objects, as for `shape.setText`.
-fn refuse_when_protected(s: &Session, sheet: usize) -> Result<()> {
+pub(super) fn refuse_when_protected(s: &Session, sheet: usize) -> Result<()> {
     if s.doc()?.wb.sheet(sheet).is_some_and(Sheet::is_protected) {
         return Err(EngineError::Other(PROTECTED.into()));
     }

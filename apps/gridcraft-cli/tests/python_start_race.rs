@@ -14,6 +14,14 @@ fn workers_started_together_are_not_refused() {
     if !cfg!(any(target_os = "linux", target_os = "macos")) {
         return;
     }
+    // Every worker starts through the launcher, which a machine that doesn't confine refuses. On CI
+    // the machine must confine, so a failure there is never skipped.
+    let check = std::process::Command::new(env!("CARGO_BIN_EXE_gridcraft-cli")).arg("sandbox-check").output().unwrap();
+    let said = format!("{}{}", String::from_utf8_lossy(&check.stdout), String::from_utf8_lossy(&check.stderr));
+    if (said.contains("sandbox: unsupported") || said.contains("Landlock is not enforced")) && std::env::var_os("CI").is_none() {
+        println!("skipped: this machine doesn't confine programs:\n{said}");
+        return;
+    }
     let Detection::Found { path, .. } = interp::detect(&SearchEnv::from_process(), None, interp::PROBE_TIMEOUT) else {
         assert!(std::env::var_os("CI").is_none(), "CI has no Python 3.11 or newer");
         println!("skipped: no Python 3.11 or newer found");

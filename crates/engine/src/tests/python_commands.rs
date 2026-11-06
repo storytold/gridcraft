@@ -136,12 +136,14 @@ fn undo_depth(s: &mut crate::Session) -> Option<usize> {
 #[test]
 fn output_switches_the_return_type_and_drops_a_result_of_the_other_type() {
     let mut s = cached_spill_with_a_reader();
-    // The mode it already has changes nothing and adds no undo step.
-    let undo = undo_depth(&mut s);
+    // The mode it already has keeps the result, and is now a choice. Once chosen, it changes nothing
+    // and adds no undo step.
     let r = s.execute("python.output", json!({"cell": "A1", "mode": "value"})).unwrap();
     assert_eq!(r["output"], "value");
-    assert_eq!(undo_depth(&mut s), undo);
     assert_eq!(v(&s, "A3"), Value::Number(3.0), "the kept result still spills");
+    let undo = undo_depth(&mut s);
+    s.execute("python.output", json!({"cell": "A1", "mode": "value"})).unwrap();
+    assert_eq!(undo_depth(&mut s), undo);
     // Without `mode` it switches. The cached list is an Excel value's result: as with python.set
     // and a new return type, the cell has no result until it runs, and its old spill goes with
     // its readers recalculated.
@@ -203,6 +205,10 @@ fn output_refuses_table_headers_and_locked_cells_as_set_does() {
     let e = s.execute("python.output", json!({"cell": "F1"})).unwrap_err();
     assert!(e.to_string().contains("protected"), "{e}");
     assert_eq!(output_of(&mut s, "F1"), "value");
+    // So is choosing the return type already in effect, which keeps the result and changes the cell.
+    let e = s.execute("python.output", json!({"cell": "F1", "mode": "value"})).unwrap_err();
+    assert!(e.to_string().contains("protected"), "{e}");
+    assert!(!py_at(&s, "F1").output_chosen);
     s.execute("python.set", json!({"cell": "G1", "code": "2"})).unwrap();
     s.execute("python.output", json!({"cell": "G1"})).unwrap();
     assert_eq!(output_of(&mut s, "G1"), "object");
@@ -452,4 +458,146 @@ fn clear_keeps_a_mixed_spill_and_empties_its_python_errors() {
         assert_eq!(v(&s, &c), want, "{c}");
     }
     assert!(s.doc().unwrap().wb.sheet(0).unwrap().spill_ranges.is_empty());
+}
+
+fn py_at(s: &crate::Session, cell: &str) -> gridcraft_model::PyCode {
+    let at = gridcraft_core::CellRef::parse(cell).unwrap();
+    s.doc().unwrap().wb.active().unwrap().cell(at).unwrap().py.as_deref().unwrap().clone()
+}
+
+/// The cell's last run gave a picture.
+fn cache_picture(s: &mut crate::Session, cell: &str) {
+    let at = gridcraft_core::CellRef::parse(cell).unwrap();
+    let d = s.doc_mut().unwrap();
+    let wb = std::sync::Arc::make_mut(&mut d.wb);
+    let c = wb.sheet_mut(0).unwrap().cells.get_mut(at).unwrap();
+    c.value = Value::text("Image");
+    let picture = gridcraft_model::CellPicture { data: vec![1, 2, 3], mime: "image/png".into(), alt: "plot".into() };
+    let image = gridcraft_model::PyImage { picture: std::sync::Arc::new(picture), width: 4, height: 4, density: 1, floor: None, fitted: None };
+    std::sync::Arc::make_mut(c.py.as_mut().unwrap()).output = Some(gridcraft_model::PyOutput {
+        value: Value::text("Image"),
+        type_name: "Image".into(),
+        preview: "Image".into(),
+        image: Some(image),
+        ..Default::default()
+    });
+}
+
+#[test]
+fn a_return_type_asked_for_is_a_choice_though_it_is_already_in_effect() {
+    let mut s = s();
+    set(&mut s, "A1", "plot()");
+    assert!(!py_at(&s, "A1").output_chosen);
+    s.execute("python.output", json!({"cell": "A1", "mode": "value"})).unwrap();
+    assert!(py_at(&s, "A1").output_chosen);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(!py_at(&s, "A1").output_chosen, "undo takes the choice back");
+    s.execute("edit.redo", json!({})).unwrap();
+    // So a picture from a later run goes in the cell, rather than behaving as a Python Object.
+    cache_picture(&mut s, "A1");
+    let py = py_at(&s, "A1");
+    assert!(!py.shows_object() && py.image_in_cell().is_some());
+}
+
+#[test]
+fn python_set_records_a_return_type_it_is_given_and_keeps_an_earlier_choice() {
+    let mut s = s();
+    set(&mut s, "A1", "1");
+    assert!(!py_at(&s, "A1").output_chosen, "code alone is no choice");
+    s.execute("python.set", json!({"cell": "A1", "code": "1", "output": "value"})).unwrap();
+    assert!(py_at(&s, "A1").output_chosen);
+    set(&mut s, "A1", "2");
+    assert!(py_at(&s, "A1").output_chosen, "new code keeps it");
+    s.execute("python.set", json!({"cell": "B1", "code": "1", "output": "object"})).unwrap();
+    let py = py_at(&s, "B1");
+    assert!(py.object && py.output_chosen);
+}
+
+#[test]
+fn a_new_return_type_or_new_code_keeps_what_a_text_does_with_its_lines() {
+    let mut s = s();
+    set(&mut s, "A1", "text");
+    {
+        let at = gridcraft_core::CellRef::parse("A1").unwrap();
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        let c = wb.sheet_mut(0).unwrap().cells.get_mut(at).unwrap();
+        std::sync::Arc::make_mut(c.py.as_mut().unwrap()).spill_lines = true;
+    }
+    s.execute("python.output", json!({"cell": "A1", "mode": "object"})).unwrap();
+    assert!(py_at(&s, "A1").spill_lines, "python.output");
+    set(&mut s, "A1", "other");
+    assert!(py_at(&s, "A1").spill_lines, "python.set");
+}
+
+#[test]
+fn a_picture_with_no_choice_keeps_its_result_when_its_return_type_becomes_a_choice() {
+    // It behaves as a Python Object, so a switch moves it into the cell, with no new run.
+    let mut s = s();
+    set(&mut s, "A1", "plot()");
+    cache_picture(&mut s, "A1");
+    assert!(py_at(&s, "A1").shows_object());
+    let r = s.execute("python.output", json!({"cell": "A1"})).unwrap();
+    assert_eq!(r["output"], "value");
+    let py = py_at(&s, "A1");
+    assert!(py.output_chosen && !py.shows_object() && py.image_in_cell().is_some());
+
+    // Asking for the Python Object it already behaves as leaves it showing, with its result.
+    set(&mut s, "B1", "plot()");
+    cache_picture(&mut s, "B1");
+    let r = s.execute("python.output", json!({"cell": "B1", "mode": "object"})).unwrap();
+    assert_eq!(r["output"], "object");
+    let py = py_at(&s, "B1");
+    assert!(py.object && py.output_chosen && py.shows_object() && py.image().is_some());
+    assert_eq!(v(&s, "B1"), Value::text("Image"));
+}
+
+#[test]
+fn replace_keeps_what_the_cell_chose() {
+    let mut s = s();
+    s.execute("python.set", json!({"cell": "A1", "code": "x = 1", "output": "value"})).unwrap();
+    {
+        let at = gridcraft_core::CellRef::parse("A1").unwrap();
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        let c = wb.sheet_mut(0).unwrap().cells.get_mut(at).unwrap();
+        std::sync::Arc::make_mut(c.py.as_mut().unwrap()).spill_lines = true;
+    }
+    assert_eq!(s.execute("edit.replace", json!({"what": "x", "with": "y"})).unwrap()["replaced"], 1);
+    let py = py_at(&s, "A1");
+    assert_eq!(py.code, "y = 1");
+    assert!(py.output_chosen, "the return type stays a choice");
+    assert!(py.spill_lines, "what a text does with its lines stays");
+}
+
+#[test]
+fn clear_leaves_no_python_only_error_behind() {
+    use CellError::{Blocked, Busy, Connect, Python, Timeout};
+    for error in [Blocked, Busy, Connect, Python, Timeout] {
+        let mut s = s();
+        set(&mut s, "A1", "1");
+        {
+            let at = gridcraft_core::CellRef::parse("A1").unwrap();
+            let d = s.doc_mut().unwrap();
+            std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap().cells.get_mut(at).unwrap().value = Value::Error(error);
+        }
+        s.execute("python.clear", json!({"cell": "A1"})).unwrap();
+        assert_eq!(v(&s, "A1"), Value::Empty, "{error:?}");
+    }
+}
+
+#[test]
+fn a_protected_sheet_refuses_a_new_linked_picture() {
+    let mut s = s();
+    set(&mut s, "A1", "plot()");
+    cache_picture(&mut s, "A1");
+    let image = s.execute("python.displayOverCells", json!({"cell": "A1", "at": "C1"})).unwrap()["image"].clone();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let count = |s: &crate::Session| s.doc().unwrap().wb.active().unwrap().images.len();
+    let before = count(&s);
+    let e = s.execute("python.displayOverCells", json!({"cell": "A1", "at": "E1"})).unwrap_err();
+    assert!(e.to_string().contains("protected"), "{e}");
+    let e = s.execute("python.createReference", json!({"id": image})).unwrap_err();
+    assert!(e.to_string().contains("protected"), "{e}");
+    assert_eq!(count(&s), before, "no picture was added");
 }

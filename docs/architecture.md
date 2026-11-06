@@ -21,9 +21,7 @@ including tests, 2026-10-10.
 | L2 | `calc` | ~2.9k | Evaluator (references, names, tables, LET/LAMBDA, special forms like OFFSET/INDIRECT/SUBTOTAL) and dependency-graph recalculation with dynamic arrays, spills and cycle detection; single-threaded |
 | L2 | `xlsx` | ~10.7k | XLSX read/write (transitional and strict read), CSV/TSV, XLSB and ODS data import, PivotTable caches, DrawingML charts and drawings; byte slices only (WASM-safe); lenient reader that reports warnings |
 | L0 | `sandbox` | ~0.6k | Confined launcher for helper processes: Landlock and seccomp on Linux, `sandbox-exec` on macOS, refused elsewhere; checks the confinement before the program runs ([sandbox.md](sandbox.md)); used by the `python` crate and the apps |
-| L2 | `python` | ~1k | Python in cells: the JSON-lines protocol between GridCraft and the worker that runs the user's Python, with a cap on every field, and the limits, outcomes and transport trait a client uses; starts no process; depends only on `core` |
-| L2 | `python` | ~2.1k | Python in cells: interpreter detection, the worker shim (`shim.py`, the one non-Rust source file, run by the user's Python), the JSON-lines protocol with its caps, the limits and outcomes of a request, and the process launch (not in the web build); depends only on `core` |
-| L2 | `python` | ~3.1k | Python in cells, off wasm (the web build has a stand-in that reports Python as unavailable): interpreter detection, the worker shim (`shim.py`, the one non-Rust source file, run by the user's Python), the JSON-lines protocol with its caps, the client with deadlines and kills, the process launch and a fake worker for tests; depends only on `core` |
+| L2 | `python` | ~3.1k | Python in cells, off wasm (the web build has a stand-in that reports Python as unavailable): interpreter detection, the worker shim (`shim.py`, the one non-Rust source file, run by the user's Python), the JSON-lines protocol with its caps, the client with deadlines and kills, the process launch and a fake worker for tests; depends on `core` and, off wasm, `sandbox` |
 | L2 | `pdf` | ~1k | Small PDF 1.7 writer (14 standard fonts, vectors, images) for print and export |
 | L3 | `chart` | ~2.9k | Toolkit-free chart layout to drawing primitives, a rasterizer, sparklines |
 | L5 | `engine` | ~17.7k | `Session`: open workbooks, selection, history (COW snapshots), clipboard, fill, sort, filter, PivotTables, what-if, print, file I/O (`io.rs`), and the command registry (`cmd/*`, 313 commands) with the Excel ribbon catalog (`catalog.rs`) |
@@ -273,8 +271,6 @@ in view. What the interface asks every frame is cheap: `python_state` copies not
 reads the request in flight, and `python_has_cells` is kept from what each change touched, so a
 workbook without Python cells is scanned once.
 
-Nothing blocks the caller, but for `file.save` with `wait` (below), which the interface never lets
-through. A command only marks what is due, at the end of the outermost `execute`;
 A Python object's size and table come from the worker only with the Python Object return type, each
 inside the protocol's caps (`MAX_SIZE_DIMS`, `MAX_TABLE_ROWS`, `MAX_TABLE_COLS`, `MAX_TABLE_TEXT_BYTES`,
 `MAX_TABLE_BYTES`), and `Reply::parse` refuses a line that breaks one or whose shape doesn't match its
@@ -294,7 +290,8 @@ to go back to; calculation lays out the result as any array. It is serialized in
 Python part of an xlsx file has no place for it, and a hidden name was rejected, since it would make
 this workbook's Python data depend on a defined name another application shows and may drop.
 
-Nothing blocks the caller. A command only marks what is due, at the end of the outermost `execute`;
+Nothing blocks the caller, but for `file.save` with `wait` (below), which the interface never lets
+through. A command only marks what is due, at the end of the outermost `execute`;
 `Session::python_poll`, called each frame, takes at most one finished result, writes it through the
 normal commit path with no undo step, recalculates and submits the next cell. Each open workbook has
 one `Client`, made when first needed and dropped with the workbook, which stops its worker.
@@ -407,15 +404,15 @@ the request's reply to send when the save has happened. AutoSave reads `python_w
 The Python editor window also edits the initialization code (`python_window::Target::initialization`,
 `PyWindow::initialization`), so the code, its checks, its questions and how it follows its workbook are
 one path: Apply runs `python.initialization`, and there is no sheet to follow, so `stale` compares the
-workbook's code with what the window loaded. `python_ui::checks::update_initialization` gives its problems
-strip the failure. A cell's editor leaves the failure's line out, since it counts in the other code.
+workbook's code with what the window loaded. `python_ui::checks::update_initialization` gives its problems, and the
+window's strip shows the failure. A cell's editor leaves the failure's line out, since it counts in the other code.
 
 ## Sandbox
 
 `crates/sandbox` runs a helper process confined. The parent spawns `launch_command`, which runs the
 application's own executable with `--sandbox-launch` and the `Policy` (read paths, executable
 paths) and a `Canary` path; both apps pass their arguments to `gridcraft_sandbox::handle_args`
-first thing in `main`. The launcher confines itself (Linux: Landlock, then two seccomp filters) or
+first thing in `main`. The launcher confines itself (Linux: Landlock, then its seccomp filters) or
 already runs confined (macOS: `sandbox-exec` with a deny-by-default profile built from the policy),
 then must be refused reading the canary, writing, a TCP connection and starting a process before
 it `exec`s the program; otherwise it exits with code 97 and the program never runs. Other systems
@@ -438,8 +435,9 @@ only other callers, through the same guarded entry points. The gate that admitte
 recorded in [`decisions.md`](decisions.md) and re-run by `crates/math/tests/gate.rs`.
 
 `gridcraft-python` (L2, used by the engine and the CLI) holds the worker. `interp` finds an interpreter:
-`$VIRTUAL_ENV/bin`, `$CONDA_PREFIX/bin`, then `python3` and `python` on `PATH`, absolute paths to
-existing files only, Python 3.11 or newer, each asked its version with `<python> -I -S -E -c
+the recommended `~/.gridcraft/python` environment, the active virtual environment, uv's own Pythons
+(newest first), conda, `python3` and `python` on `PATH`, then the usual install folders outside
+`PATH`, absolute paths to existing files only, Python 3.11 or newer, each asked its version with `<python> -I -S -E -c
 <script>` under a deadline and a bounded read. `process::ProcessTransport` starts `<python> -I -S -E
 <shim>` with an empty environment (`OPENBLAS_NUM_THREADS=1` only) in a fresh private folder holding
 a read-only copy of `shim.py` and an empty working directory; `process::Launch` is the seam where a
@@ -500,9 +498,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 | 2026-11-01 | trivial | Equations: the layout cache answers for a source over the cap by its length alone, without hashing it |
 | 2026-11-01 | minor | Equations: the `math` crate (L1), the layout cache and code editor marks |
 | 2026-11-01 | minor | The Python editor window (`python_window.rs`) and its questions as state |
-| 2026-11-01 | minor | The Python editor window (`python_window.rs`): the code field's gutter and `accept` check, the window's questions as state, and the window following its sheet by `model::SheetUid` |
 | 2026-11-01 | minor | Python cells in the interface: Python mode on the shared editor, `code_field` and its stop keys, `python_card.rs`, `python.output`; drafts follow their sheet by `model::SheetUid` |
-| 2026-11-01 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references; edits that would push code past the limit are refused |
 | 2026-10-31 | minor | Recently used functions (`recent.rs`, `Prefs::recent_functions`) behind `formulas.recentlyUsed` |
 | 2026-10-31 | minor | Function Library module (`function_library.rs`); accent icons (`icons::paint_accent`, `widgets::small_button_accent`) |
 | 2026-10-25 | trivial | The hidden names that hold macros are `_gc_macro_<n>_<k>` |
@@ -510,7 +506,6 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 | 2026-10-26 | minor | The `python` crate: the client, its threads, deadlines and kills, and the fake worker |
 | 2026-10-26 | minor | The `python` crate: interpreter detection, the worker shim and the process launch |
 | 2026-10-26 | minor | The `python` crate (L2): the worker protocol and its caps, limits and outcomes |
-| 2026-10-25 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, and the limits on open |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |
