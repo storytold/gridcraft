@@ -148,6 +148,55 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Trace Error" => "Εντοπισμός σφάλματος",
         "Circular References" => "Κυκλικές αναφορές",
         "Python Mode" => "Λειτουργία Python",
+        "Python Object" => "Αντικείμενο Python",
+        "Excel Value" => "Τιμή Excel",
+        "Copy as CSV" => "Αντιγραφή ως CSV",
+        "Copy as Markdown" => "Αντιγραφή ως Markdown",
+        "Save as .csv…" => "Αποθήκευση ως .csv…",
+        "Spill Here" => "Έκχυση εδώ",
+        "Spill One Line per Row" => "Έκχυση μίας γραμμής κειμένου ανά γραμμή",
+        "The table isn't kept in the file. Run the cell to see it." => "Ο πίνακας δεν διατηρείται στο αρχείο. Εκτελέστε το κελί για να τον δείτε.",
+        "This table is empty." => "Αυτός ο πίνακας είναι κενός.",
+        "This table has no rows." => "Αυτός ο πίνακας δεν έχει γραμμές.",
+        "Copied only what is shown: the rest of the table isn't in the copy." => {
+            "Αντιγράφηκε μόνο ό,τι εμφανίζεται: το υπόλοιπο του πίνακα δεν είναι στο αντίγραφο."
+        }
+        "Saved only what is shown: the rest of the table isn't in the file." => {
+            "Αποθηκεύτηκε μόνο ό,τι εμφανίζεται: το υπόλοιπο του πίνακα δεν είναι στο αρχείο."
+        }
+        "The table is saved." => "Ο πίνακας αποθηκεύτηκε.",
+        "Only the first {rows} of {total} rows are shown." => "Εμφανίζονται μόνο οι πρώτες {rows} από {total} γραμμές.",
+        "Only the first {cols} of {total} columns are shown." => "Εμφανίζονται μόνο οι πρώτες {cols} από {total} στήλες.",
+        "Some long text is cut." => "Μέρος του μεγάλου κειμένου είναι κομμένο.",
+        "Copying and saving take only what is shown. Spill Here gives the whole table." => {
+            "Η αντιγραφή και η αποθήκευση παίρνουν μόνο ό,τι εμφανίζεται. Η Έκχυση εδώ δίνει ολόκληρο τον πίνακα."
+        }
+        "Save Python Table as CSV" => "Αποθήκευση πίνακα Python ως CSV",
+        "Python Table" => "Πίνακας Python",
+        "Convert to Normal Cell" => "Μετατροπή σε κανονικό κελί",
+        "Show Card" => "Εμφάνιση κάρτας",
+        "Insert\nPython" => "Εισαγωγή\nPython",
+        "Insert Python (Ctrl+Alt+Shift+P)" => "Εισαγωγή Python (Ctrl+Alt+Shift+P)",
+        "Python Editor" => "Πρόγραμμα επεξεργασίας Python",
+        "Edit in Python Editor" => "Επεξεργασία στο πρόγραμμα επεξεργασίας Python",
+        "Unsaved changes" => "Μη αποθηκευμένες αλλαγές",
+        "The code for {cell} has unsaved changes." => "Ο κώδικας για το {cell} έχει μη αποθηκευμένες αλλαγές.",
+        "The code for {cell} in {workbook} has unsaved changes." => "Ο κώδικας για το {cell} στο {workbook} έχει μη αποθηκευμένες αλλαγές.",
+        "The code can't be longer: a Python cell holds {max} characters, counted as a PY formula." => {
+            "Ο κώδικας δεν μπορεί να γίνει μεγαλύτερος: ένα κελί Python χωρά {max} χαρακτήρες, μετρημένους ως τύπος PY."
+        }
+        "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell." => {
+            "Το κελί {cell} άλλαξε ενώ ήταν ανοιχτό στο πρόγραμμα επεξεργασίας Python. Αντιγράψτε τον κώδικα ή κλείστε το πρόγραμμα επεξεργασίας και ανοίξτε το ξανά στο κελί."
+        }
+        "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
+            "Το κελί {cell} άλλαξε ενώ ήταν ανοιχτό στο πρόγραμμα επεξεργασίας Python, επομένως ο κώδικας δεν εφαρμόστηκε. Αντιγράψτε τον κώδικα ή κλείστε το πρόγραμμα επεξεργασίας και ανοίξτε το ξανά στο κελί."
+        }
+        "{apply} applies the code. Esc closes the editor." => "Το {apply} εφαρμόζει τον κώδικα. Το Esc κλείνει το πρόγραμμα επεξεργασίας.",
+        "The Python editor's unsaved code was copied to the clipboard." => {
+            "Ο μη αποθηκευμένος κώδικας του προγράμματος επεξεργασίας Python αντιγράφηκε στο πρόχειρο."
+        }
+        "Apply" => "Εφαρμογή",
+        "Discard" => "Απόρριψη",
         "Evaluate Formula" => "Αξιολόγηση τύπου",
         "Watch Window" => "Παράθυρο παρακολούθησης",
         "Calculation\nOptions" => "Επιλογές\nυπολογισμού",
@@ -1010,6 +1059,288 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Εμφάνιση",
         "Collapse dialog" => "Σύμπτυξη παραθύρου διαλόγου",
         "Expand dialog" => "Ανάπτυξη παραθύρου διαλόγου",
+        "Python|Off" => "Ανενεργό",
+        "Python|Not Set Up" => "Δεν έχει ρυθμιστεί",
+        "Python|Ready" => "Έτοιμο",
+        "Python|Running" => "Εκτελείται",
+        "Python|Blocked" => "Αποκλείστηκε",
+        "Enable Python in cells" => "Ενεργοποίηση της Python στα κελιά",
+        "Waiting for Python cells to finish before saving..." => "Αναμονή για την ολοκλήρωση των κελιών Python πριν από την αποθήκευση...",
+        "Save Now" => "Αποθήκευση τώρα",
+        "The workbook was saved, but these Python cells weren't finished, so the file has their last results, if they had any: {cells}" => {
+            "Το βιβλίο εργασίας αποθηκεύτηκε, αλλά αυτά τα κελιά Python δεν ολοκληρώθηκαν, οπότε το αρχείο έχει τα τελευταία τους αποτελέσματα, αν υπήρχαν: {cells}"
+        }
+        "{cells} and {count} more" => "{cells} και {count} ακόμη",
+        "{version}, too old: Python cells need 3.11 or newer" => "{version}, πολύ παλιά: τα κελιά Python απαιτούν έκδοση 3.11 ή νεότερη",
+        "Looking for Python…" => "Αναζήτηση για Python…",
+        "Copied to the clipboard." => "Αντιγράφηκε στο πρόχειρο.",
+        "This workbook has Python code. Enable it to run its cells; until then they keep the values saved in the file." => {
+            "Αυτό το βιβλίο εργασίας περιέχει κώδικα Python. Ενεργοποιήστε τον για να εκτελούνται τα κελιά του· μέχρι τότε διατηρούν τις τιμές που είναι αποθηκευμένες στο αρχείο."
+        }
+        "Enable" => "Ενεργοποίηση",
+        "Python: running {cell}, {seconds} s" => "Python: εκτελείται το {cell}, {seconds} δ",
+        "Python: {state}" => "Python: {state}",
+        "Open the Python environment" => "Άνοιγμα του περιβάλλοντος Python",
+        "Nothing on this system: Python doesn't run here" => "Τίποτα σε αυτό το σύστημα: η Python δεν εκτελείται εδώ",
+        "GridCraft starts Python with an empty environment" => "Το GridCraft εκκινεί την Python με κενό περιβάλλον",
+        "macOS sandbox profile" => "Προφίλ sandbox macOS",
+        "Linux Landlock" => "Linux Landlock",
+        "Linux seccomp filter" => "Φίλτρο Linux seccomp",
+        "Open Python Settings" => "Άνοιγμα ρυθμίσεων Python",
+        "Choose Interpreter" => "Επιλογή διερμηνέα",
+        "Copy Install Command" => "Αντιγραφή εντολής εγκατάστασης",
+        "Run Again" => "Εκτέλεση ξανά",
+        "Reset" => "Επαναφορά",
+        "Python Environment" => "Περιβάλλον Python",
+        "Python Packages" => "Πακέτα Python",
+        "Python Problems" => "Προβλήματα Python",
+        "Python Run Log" => "Αρχείο καταγραφής εκτελέσεων Python",
+        "What Python Can Do" => "Τι μπορεί να κάνει η Python",
+        "GridCraft is checking Python." => "Το GridCraft ελέγχει την Python.",
+        "Check Again" => "Έλεγχος ξανά",
+        "Interpreter" => "Διερμηνέας",
+        "Chosen by you:" => "Επιλέχθηκε από εσάς:",
+        "Automatic found:" => "Αυτόματα βρέθηκε:",
+        "What runs:" => "Τι εκτελείται:",
+        "None found yet." => "Δεν βρέθηκε τίποτα ακόμη.",
+        "Sandbox" => "Sandbox",
+        "Package folders" => "Φάκελοι πακέτων",
+        "What Python can read" => "Τι μπορεί να διαβάσει η Python",
+        "uv manages Python versions and packages. To get it, run:" => {
+            "Το uv διαχειρίζεται εκδόσεις και πακέτα της Python. Για να το αποκτήσετε, εκτελέστε:"
+        }
+        "Reading files outside Python: blocked" => "Ανάγνωση αρχείων εκτός Python: αποκλείεται",
+        "Writing files: blocked" => "Εγγραφή αρχείων: αποκλείεται",
+        "Using the network: blocked" => "Χρήση του δικτύου: αποκλείεται",
+        "Starting other programs: blocked" => "Εκκίνηση άλλων προγραμμάτων: αποκλείεται",
+        "Each time Python starts, GridCraft tries each of these first, and doesn't run Python unless every one is refused." => {
+            "Κάθε φορά που ξεκινά η Python, το GridCraft δοκιμάζει πρώτα καθεμία από αυτές τις ενέργειες και δεν εκτελεί την Python εκτός αν απορριφθούν όλες."
+        }
+        "Install a package with uv. GridCraft only copies the command; you run it in a terminal, then choose Check Again." => {
+            "Εγκαταστήστε ένα πακέτο με το uv. Το GridCraft απλώς αντιγράφει την εντολή· εσείς την εκτελείτε σε ένα τερματικό και μετά επιλέγετε Έλεγχος ξανά."
+        }
+        "Package name" => "Όνομα πακέτου",
+        "Other package managers" => "Άλλοι διαχειριστές πακέτων",
+        "For people who manage Python another way: choose any interpreter by path in File › Options › Python. With pip:" => {
+            "Για όσους διαχειρίζονται την Python αλλιώς: επιλέξτε οποιονδήποτε διερμηνέα με διαδρομή στο Αρχείο › Επιλογές › Python. Με το pip:"
+        }
+        "Packages: {count}" => "Πακέτα: {count}",
+        "No problems." => "Δεν υπάρχουν προβλήματα.",
+        "No runs yet." => "Καμία εκτέλεση ακόμη.",
+        "Go To Cell" => "Μετάβαση σε κελί",
+        "This run printed nothing." => "Αυτή η εκτέλεση δεν εκτύπωσε τίποτα.",
+        "Python cells can" => "Τα κελιά Python μπορούν να",
+        "Read cells through xl()" => "Διαβάζουν κελιά μέσω του xl()",
+        "GridCraft sends only the cells that xl() names" => "Το GridCraft στέλνει μόνο τα κελιά που ονομάζει το xl()",
+        "Import installed packages" => "Εισάγουν εγκατεστημένα πακέτα",
+        "The sandbox lets Python read its own installation" => "Το sandbox επιτρέπει στην Python να διαβάζει τη δική της εγκατάσταση",
+        "Compute" => "Υπολογίζουν",
+        "Within the time and memory limits in File › Options › Python" => "Εντός των ορίων χρόνου και μνήμης στο Αρχείο › Επιλογές › Python",
+        "Printed output is kept in the Run Log" => "Η εκτυπωμένη έξοδος διατηρείται στο αρχείο καταγραφής εκτελέσεων",
+        "Use threads" => "Χρησιμοποιούν νήματα",
+        "Threads stay inside the one Python process" => "Τα νήματα παραμένουν μέσα στη μία διεργασία Python",
+        "Python cells cannot" => "Τα κελιά Python δεν μπορούν να",
+        "Read your files" => "Διαβάζουν τα αρχεία σας",
+        "Write files" => "Γράφουν αρχεία",
+        "Use the network" => "Χρησιμοποιούν το δίκτυο",
+        "Start programs" => "Εκκινούν προγράμματα",
+        "See environment variables" => "Βλέπουν μεταβλητές περιβάλλοντος",
+        "Open windows" => "Ανοίγουν παράθυρα",
+        "Draw plots. The data goes to a sheet and a chart is built from it." => {
+            "Σχεδιάζουν γραφήματα. Τα δεδομένα πηγαίνουν σε ένα φύλλο και από αυτά δημιουργείται ένα γράφημα."
+        }
+        "Run this workbook's Python cells" => "Εκτέλεση των κελιών Python αυτού του βιβλίου εργασίας",
+        "Off by default. Only you can turn this on, here: no file, macro or agent can. A workbook opened from a file also needs its own Enable." => {
+            "Ανενεργό από προεπιλογή. Μόνο εσείς μπορείτε να το ενεργοποιήσετε, εδώ: κανένα αρχείο, μακροεντολή ή πράκτορας δεν μπορεί. Ένα βιβλίο εργασίας που ανοίγει από αρχείο χρειάζεται και τη δική του Ενεργοποίηση."
+        }
+        "Limits" => "Όρια",
+        "While Python is off, GridCraft starts nothing, so it can't yet say which version it would use." => {
+            "Όσο η Python είναι ανενεργή, το GridCraft δεν ξεκινά τίποτα, επομένως δεν μπορεί ακόμη να πει ποια έκδοση θα χρησιμοποιούσε."
+        }
+        "Automatic would try first:" => "Το Αυτόματα θα δοκίμαζε πρώτα:",
+        "Set up Python with uv" => "Ρύθμιση της Python με το uv",
+        "Run these in a terminal, in order. GridCraft looks in this environment first, so there is nothing more to choose. It only copies the commands; it never runs them." => {
+            "Εκτελέστε αυτές τις εντολές σε ένα τερματικό, με τη σειρά. Το GridCraft ψάχνει πρώτα σε αυτό το περιβάλλον, επομένως δεν χρειάζεται να επιλέξετε κάτι άλλο. Απλώς αντιγράφει τις εντολές, δεν τις εκτελεί ποτέ."
+        }
+        "Any Python 3.11 or newer can be chosen by path with Browse…. To add packages to it with pip:" => {
+            "Οποιαδήποτε Python 3.11 ή νεότερη μπορεί να επιλεγεί με διαδρομή μέσω του Περιήγηση…. Για να προσθέσετε πακέτα σε αυτήν με το pip:"
+        }
+        "Time limit for one cell" => "Όριο χρόνου για ένα κελί",
+        " seconds" => " δευτερόλεπτα",
+        "Memory limit" => "Όριο μνήμης",
+        " MB" => " MB",
+        "At a limit Python is restarted and its variables are cleared; the next run starts fresh." => {
+            "Όταν φτάσει σε όριο, η Python επανεκκινείται και οι μεταβλητές της διαγράφονται· η επόμενη εκτέλεση ξεκινά από την αρχή."
+        }
+        "On macOS the memory limit is a check twice a second, not a hard cap." => {
+            "Στο macOS το όριο μνήμης είναι έλεγχος δύο φορές το δευτερόλεπτο, όχι αυστηρό όριο."
+        }
+        "Editor" => "Επεξεργαστής",
+        "Initialization" => "Αρχικοποίηση",
+        "The code that runs before this workbook's Python cells" => "Ο κώδικας που εκτελείται πριν από τα κελιά Python αυτού του βιβλίου εργασίας",
+        "Open Initialization" => "Άνοιγμα αρχικοποίησης",
+        "The initialization code has unsaved changes." => "Ο κώδικας αρχικοποίησης έχει μη αποθηκευμένες αλλαγές.",
+        "The initialization code of {workbook} has unsaved changes." => "Ο κώδικας αρχικοποίησης του {workbook} έχει μη αποθηκευμένες αλλαγές.",
+        "The code can't be longer: initialization code holds {max} characters." => {
+            "Ο κώδικας δεν μπορεί να γίνει μεγαλύτερος: ο κώδικας αρχικοποίησης χωρά {max} χαρακτήρες."
+        }
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "Ο κώδικας αρχικοποίησης άλλαξε ενώ ήταν ανοιχτός στον επεξεργαστή. Αντιγράψτε τον κώδικά σας ή κλείστε τον επεξεργαστή και ανοίξτε τον ξανά."
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "Ο κώδικας αρχικοποίησης άλλαξε ενώ ήταν ανοιχτός στον επεξεργαστή, οπότε ο κώδικάς σας δεν εφαρμόστηκε. Αντιγράψτε τον ή κλείστε τον επεξεργαστή και ανοίξτε τον ξανά."
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "Ο κώδικας αρχικοποίησης χρησιμοποιεί ένα πακέτο που δεν έχει αυτή η Python. Το GridCraft παρέλειψε τις γραμμές που το χρειάζονται και εκτέλεσε τις υπόλοιπες."
+        }
+        "Select a Python cell first." => "Επιλέξτε πρώτα ένα κελί Python.",
+        "Output As" => "Έξοδος ως",
+        "Run\nCell" => "Εκτέλεση\nκελιού",
+        "Run the selected Python cell" => "Εκτέλεση του επιλεγμένου κελιού Python",
+        "Run\nAll" => "Εκτέλεση\nόλων",
+        "Run every Python cell in the workbook, in order" => "Εκτέλεση όλων των κελιών Python του βιβλίου εργασίας, με τη σειρά",
+        "Nothing is running." => "Τίποτα δεν εκτελείται.",
+        "Stop the running cell" => "Διακοπή του κελιού που εκτελείται",
+        "Clear Python's variables and run every cell again" => "Απαλοιφή των μεταβλητών της Python και εκ νέου εκτέλεση όλων των κελιών",
+        "Python Calculation" => "Υπολογισμός Python",
+        "When this workbook's Python cells run" => "Πότε εκτελούνται τα κελιά Python αυτού του βιβλίου εργασίας",
+        "A Python cell is running." => "Ένα κελί Python εκτελείται.",
+        "Python is ready." => "Η Python είναι έτοιμη.",
+        "Which Python runs cells" => "Ποια Python εκτελεί τα κελιά",
+        "Packages" => "Πακέτα",
+        "What this Python has installed" => "Τι έχει εγκατεστημένο αυτή η Python",
+        "Check Sandbox" => "Έλεγχος sandbox",
+        "Check Python and the sandbox again, and show the report" => "Νέος έλεγχος της Python και του sandbox και εμφάνιση της αναφοράς",
+        "What Python\nCan Do" => "Τι μπορεί\nη Python",
+        "What Python cells can and can't do here" => "Τι μπορούν και τι δεν μπορούν να κάνουν εδώ τα κελιά Python",
+        "This Workbook: Enabled" => "Αυτό το βιβλίο εργασίας: ενεργό",
+        "This Workbook: Disabled" => "Αυτό το βιβλίο εργασίας: ανενεργό",
+        "Only a person can change this." => "Μόνο ένας άνθρωπος μπορεί να το αλλάξει.",
+        "Run Log" => "Αρχείο καταγραφής εκτελέσεων",
+        "Each run's cell, time and printed output" => "Το κελί, ο χρόνος και η εκτυπωμένη έξοδος κάθε εκτέλεσης",
+        "Clear the Run Log" => "Απαλοιφή του αρχείου καταγραφής εκτελέσεων",
+        "Problems" => "Προβλήματα",
+        "Every Python cell with something to say" => "Κάθε κελί Python με κάτι να αναφέρει",
+        "Diagnostics" => "Διαγνωστικά",
+        "uv environment" => "περιβάλλον uv",
+        "uv Python" => "Python uv",
+        "virtual environment" => "εικονικό περιβάλλον",
+        "conda environment" => "περιβάλλον conda",
+        "system" => "σύστημα",
+        "Python cells need a sandbox, and GridCraft has none for this system." => {
+            "Τα κελιά Python χρειάζονται sandbox και το GridCraft δεν έχει κανένα για αυτό το σύστημα."
+        }
+        "The sandbox didn't hold when GridCraft checked it, so Python won't run." => {
+            "Το sandbox δεν άντεξε όταν το έλεγξε το GridCraft, επομένως η Python δεν θα εκτελεστεί."
+        }
+        "Python is off. Turn it on in Settings to run Python cells." => {
+            "Η Python είναι ανενεργή. Ενεργοποιήστε την στις Ρυθμίσεις για να εκτελείτε κελιά Python."
+        }
+        "GridCraft can't find Python 3.11 or newer. Set one up with uv, or choose one." => {
+            "Το GridCraft δεν βρίσκει Python 3.11 ή νεότερη. Ρυθμίστε μία με το uv ή επιλέξτε μία."
+        }
+        "This Python is too old: Python cells need 3.11 or newer." => {
+            "Αυτή η Python είναι πολύ παλιά: τα κελιά Python απαιτούν έκδοση 3.11 ή νεότερη."
+        }
+        "This is Apple's placeholder for Python, which GridCraft doesn't use. Set up Python with uv, or choose another." => {
+            "Αυτό είναι το προσωρινό σύμβολο κράτησης θέσης της Apple για την Python, το οποίο το GridCraft δεν χρησιμοποιεί. Ρυθμίστε την Python με το uv ή επιλέξτε άλλη."
+        }
+        "GridCraft couldn't work out what this Python needs to run." => {
+            "Το GridCraft δεν μπόρεσε να εντοπίσει τι χρειάζεται αυτή η Python για να εκτελεστεί."
+        }
+        "Python didn't start." => "Η Python δεν ξεκίνησε.",
+        "Python isn't on for this workbook, so its cells keep the values saved in the file." => {
+            "Η Python δεν είναι ενεργή για αυτό το βιβλίο εργασίας, επομένως τα κελιά του διατηρούν τις τιμές που είναι αποθηκευμένες στο αρχείο."
+        }
+        "This session doesn't run Python: cells keep the values saved in the file." => {
+            "Αυτή η συνεδρία δεν εκτελεί Python: τα κελιά διατηρούν τις τιμές που είναι αποθηκευμένες στο αρχείο."
+        }
+        "This workbook imports packages this Python doesn't have." => "Αυτό το βιβλίο εργασίας εισάγει πακέτα που δεν έχει αυτή η Python.",
+        "pandas isn't installed in this Python, so ranges come back as lists of rows." => {
+            "Το pandas δεν είναι εγκατεστημένο σε αυτήν την Python, επομένως οι περιοχές επιστρέφονται ως λίστες γραμμών."
+        }
+        "The initialization code failed, so Python cells can't run." => {
+            "Ο κώδικας αρχικοποίησης απέτυχε, επομένως τα κελιά Python δεν μπορούν να εκτελεστούν."
+        }
+        "This code isn't valid Python." => "Αυτός ο κώδικας δεν είναι έγκυρη Python.",
+        "The code raised an error." => "Ο κώδικας προκάλεσε σφάλμα.",
+        "The code uses a name that isn't defined." => "Ο κώδικας χρησιμοποιεί όνομα που δεν έχει οριστεί.",
+        "This name is defined in a later cell. Python cells run in row order, sheet by sheet." => {
+            "Αυτό το όνομα ορίζεται σε μεταγενέστερο κελί. Τα κελιά Python εκτελούνται με τη σειρά των γραμμών, φύλλο προς φύλλο."
+        }
+        "This Python doesn't have that package." => "Αυτή η Python δεν έχει αυτό το πακέτο.",
+        "This package needs a library outside what the sandbox lets Python read." => {
+            "Αυτό το πακέτο χρειάζεται μια βιβλιοθήκη εκτός όσων επιτρέπει το sandbox να διαβάσει η Python."
+        }
+        "Python cells can't read or write files on your computer. Put the data on a sheet and read it with xl()." => {
+            "Τα κελιά Python δεν μπορούν να διαβάσουν ή να γράψουν αρχεία στον υπολογιστή σας. Τοποθετήστε τα δεδομένα σε ένα φύλλο και διαβάστε τα με το xl()."
+        }
+        "Python cells can't use the network. Put the data on a sheet and read it with xl()." => {
+            "Τα κελιά Python δεν μπορούν να χρησιμοποιήσουν το δίκτυο. Τοποθετήστε τα δεδομένα σε ένα φύλλο και διαβάστε τα με το xl()."
+        }
+        "Python cells can't start other programs or processes." => "Τα κελιά Python δεν μπορούν να εκκινήσουν άλλα προγράμματα ή διεργασίες.",
+        "This picture is too large to draw. Make figsize or dpi smaller." => "Η εικόνα είναι πολύ μεγάλη για σχεδίαση. Μειώστε το figsize ή το dpi.",
+        "The picture appears in the cell by itself. Python cells can't write files, so this line would fail." => {
+            "Η εικόνα εμφανίζεται από μόνη της στο κελί. Τα κελιά Python δεν μπορούν να γράψουν αρχεία, επομένως αυτή η γραμμή θα αποτύχει."
+        }
+        "This package draws in a web browser, which Python cells can't open. Use matplotlib or seaborn." => {
+            "Αυτό το πακέτο σχεδιάζει σε πρόγραμμα περιήγησης ιστού, το οποίο τα κελιά Python δεν μπορούν να ανοίξουν. Χρησιμοποιήστε matplotlib ή seaborn."
+        }
+        "Python Output" => "Έξοδος Python",
+        "Display Plot over Cells" => "Εμφάνιση γραφήματος πάνω από κελιά",
+        "Create Reference" => "Δημιουργία αναφοράς",
+        "Copy Image" => "Αντιγραφή εικόνας",
+        "Save Image…" => "Αποθήκευση εικόνας…",
+        "The image is saved." => "Η εικόνα αποθηκεύτηκε.",
+        "The image is on the clipboard." => "Η εικόνα βρίσκεται στο πρόχειρο.",
+        "Image" => "Εικόνα",
+        "size" => "μέγεθος",
+        "Resize" => "Αλλαγή μεγέθους",
+        "This picture shows the last result that cell gave." => "Αυτή η εικόνα δείχνει το τελευταίο αποτέλεσμα αυτού του κελιού.",
+        "Select a Python cell that gave a picture first." => "Επιλέξτε πρώτα ένα κελί Python που επέστρεψε εικόνα.",
+        "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
+            "Το xl() χρειάζεται την αναφορά του γραμμένη ως κείμενο στον κώδικα, όπως xl(\"A1:B5\")."
+        }
+        "This range is too large to send to Python." => "Αυτή η περιοχή είναι πολύ μεγάλη για να σταλεί στην Python.",
+        "xl() names something that isn't a cell, range, table or defined name here." => {
+            "Το xl() ονομάζει κάτι που εδώ δεν είναι κελί, περιοχή, πίνακας ή καθορισμένο όνομα."
+        }
+        "The code ran past the time limit. Python was restarted, so its variables were cleared." => {
+            "Ο κώδικας ξεπέρασε το όριο χρόνου. Η Python επανεκκινήθηκε, επομένως οι μεταβλητές της διαγράφηκαν."
+        }
+        "The code went over the memory limit. Python was restarted, so its variables were cleared." => {
+            "Ο κώδικας ξεπέρασε το όριο μνήμης. Η Python επανεκκινήθηκε, επομένως οι μεταβλητές της διαγράφηκαν."
+        }
+        "The result is too large to bring back to the sheet." => "Το αποτέλεσμα είναι πολύ μεγάλο για να επιστρέψει στο φύλλο.",
+        "The printed output was cut off at its limit." => "Η εκτυπωμένη έξοδος περικόπηκε στο όριό της.",
+        "Python stopped unexpectedly and was restarted, so its variables were cleared." => {
+            "Η Python σταμάτησε απροσδόκητα και επανεκκινήθηκε, επομένως οι μεταβλητές της διαγράφηκαν."
+        }
+        "The result is empty." => "Το αποτέλεσμα είναι κενό.",
+        "The result needs cells that aren't empty." => "Το αποτέλεσμα χρειάζεται κελιά που δεν είναι κενά.",
+        "The result isn't a number a cell can hold." => "Το αποτέλεσμα δεν είναι αριθμός που μπορεί να περιέχει ένα κελί.",
+        "This date or length of time is outside what a cell can hold." => {
+            "Αυτή η ημερομηνία ή χρονική διάρκεια είναι εκτός όσων μπορεί να περιέχει ένα κελί."
+        }
+        "This cell is running." => "Αυτό το κελί εκτελείται.",
+        "What this cell reads has changed since it last ran." => "Αυτό που διαβάζει αυτό το κελί έχει αλλάξει από την τελευταία του εκτέλεση.",
+        "This cell was stopped before it finished." => "Αυτό το κελί διακόπηκε πριν ολοκληρωθεί.",
+        "xl() needs its reference written as text, such as xl(\"A1:B5\"). A computed reference can't be read." => {
+            "Το xl() χρειάζεται την αναφορά του γραμμένη ως κείμενο, όπως xl(\"A1:B5\"). Μια υπολογιζόμενη αναφορά δεν μπορεί να διαβαστεί."
+        }
+        "This module needs the network or other programs, which Python cells can't use." => {
+            "Αυτή η μονάδα χρειάζεται το δίκτυο ή άλλα προγράμματα, τα οποία τα κελιά Python δεν μπορούν να χρησιμοποιήσουν."
+        }
+        "This Python doesn't have this package." => "Αυτή η Python δεν έχει αυτό το πακέτο.",
+        "Python cells can't open windows or ask for input." => "Τα κελιά Python δεν μπορούν να ανοίξουν παράθυρα ή να ζητήσουν είσοδο.",
+        "Python cells don't see your environment variables." => "Τα κελιά Python δεν βλέπουν τις μεταβλητές περιβάλλοντος σας.",
+        "Open Settings" => "Άνοιγμα ρυθμίσεων",
+        "Show Printed Output" => "Εμφάνιση εκτυπωμένης εξόδου",
+        "Hide Printed Output" => "Απόκρυψη εκτυπωμένης εξόδου",
+        "Line {line}" => "Γραμμή {line}",
+        "Line {line}: {message}" => "Γραμμή {line}: {message}",
+        "Python {version}, ready" => "Python {version}, έτοιμο",
+        "Python {version}, running" => "Python {version}, εκτελείται",
         _ => return None,
     })
 }

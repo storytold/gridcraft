@@ -151,6 +151,50 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Trace Error" => "Hatayı İzle",
         "Circular References" => "Döngüsel Başvurular",
         "Python Mode" => "Python Modu",
+        "Python Object" => "Python Nesnesi",
+        "Excel Value" => "Excel Değeri",
+        "Copy as CSV" => "CSV olarak kopyala",
+        "Copy as Markdown" => "Markdown olarak kopyala",
+        "Save as .csv…" => ".csv olarak kaydet…",
+        "Spill Here" => "Buraya taşır",
+        "Spill One Line per Row" => "Her metin satırını bir satıra taşır",
+        "The table isn't kept in the file. Run the cell to see it." => "Tablo dosyada tutulmaz. Görmek için hücreyi çalıştırın.",
+        "This table is empty." => "Bu tablo boş.",
+        "This table has no rows." => "Bu tabloda satır yok.",
+        "Copied only what is shown: the rest of the table isn't in the copy." => "Yalnızca gösterilen kopyalandı: tablonun geri kalanı kopyada yok.",
+        "Saved only what is shown: the rest of the table isn't in the file." => "Yalnızca gösterilen kaydedildi: tablonun geri kalanı dosyada yok.",
+        "The table is saved." => "Tablo kaydedildi.",
+        "Only the first {rows} of {total} rows are shown." => "Yalnızca ilk {rows} satır gösteriliyor (toplam {total}).",
+        "Only the first {cols} of {total} columns are shown." => "Yalnızca ilk {cols} sütun gösteriliyor (toplam {total}).",
+        "Some long text is cut." => "Uzun metnin bir kısmı kesildi.",
+        "Copying and saving take only what is shown. Spill Here gives the whole table." => {
+            "Kopyalama ve kaydetme yalnızca gösterileni alır. Buraya taşır tüm tabloyu verir."
+        }
+        "Save Python Table as CSV" => "Python tablosunu CSV olarak kaydet",
+        "Python Table" => "Python tablosu",
+        "Convert to Normal Cell" => "Normal Hücreye Dönüştür",
+        "Show Card" => "Kartı göster",
+        "Insert\nPython" => "Python\nEkle",
+        "Insert Python (Ctrl+Alt+Shift+P)" => "Python Ekle (Ctrl+Alt+Shift+P)",
+        "Python Editor" => "Python Düzenleyicisi",
+        "Edit in Python Editor" => "Python Düzenleyicisinde Düzenle",
+        "Unsaved changes" => "Kaydedilmemiş değişiklikler",
+        "The code for {cell} has unsaved changes." => "{cell} kodunda kaydedilmemiş değişiklikler var.",
+        "The code for {cell} in {workbook} has unsaved changes." => "{cell} ({workbook}) kodunda kaydedilmemiş değişiklikler var.",
+        "The code can't be longer: a Python cell holds {max} characters, counted as a PY formula." => {
+            "Kod daha uzun olamaz: bir Python hücresi, PY formülü olarak sayılan {max} karakter tutar."
+        }
+        "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell}, Python Düzenleyicisi'nde açıkken değişti. Kodu kopyalayın veya düzenleyiciyi kapatıp hücrede yeniden açın."
+        }
+        "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell}, Python Düzenleyicisi'nde açıkken değişti. Bu nedenle kod uygulanmadı. Kodu kopyalayın veya düzenleyiciyi kapatıp hücrede yeniden açın."
+        }
+        "{apply} applies the code. Esc closes the editor." => "{apply} kodu uygular. Esc düzenleyiciyi kapatır.",
+        "The Python editor's unsaved code was copied to the clipboard." => "Python düzenleyicisinin kaydedilmemiş kodu panoya kopyalandı.",
+        "Apply" => "Uygula",
+        "Discard" => "At",
+        "Cancel" => "İptal",
         "Evaluate Formula" => "Formülü Değerlendir",
         "Watch Window" => "Gözcü Penceresi",
         "Calculation\nOptions" => "Hesaplama\nSeçenekleri",
@@ -446,6 +490,281 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Göster",
         "Collapse dialog" => "İletişim kutusunu daralt",
         "Expand dialog" => "İletişim kutusunu genişlet",
+        "Python|Off" => "Kapalı",
+        "Python|Not Set Up" => "Kurulmadı",
+        "Python|Ready" => "Hazır",
+        "Python|Running" => "Çalışıyor",
+        "Python|Blocked" => "Engellendi",
+        "Enable Python in cells" => "Hücrelerde Python'u etkinleştir",
+        "Waiting for Python cells to finish before saving..." => "Kaydetmeden önce Python hücrelerinin bitmesi bekleniyor...",
+        "Save Now" => "Şimdi Kaydet",
+        "The workbook was saved, but these Python cells weren't finished, so the file has their last results, if they had any: {cells}" => {
+            "Çalışma kitabı kaydedildi, ancak bu Python hücreleri bitmedi, bu yüzden dosyada varsa son sonuçları bulunuyor: {cells}"
+        }
+        "{cells} and {count} more" => "{cells} ve {count} tane daha",
+        "{version}, too old: Python cells need 3.11 or newer" => "{version}, çok eski: Python hücreleri 3.11 veya daha yenisini gerektirir",
+        "Looking for Python…" => "Python aranıyor…",
+        "Copied to the clipboard." => "Panoya kopyalandı.",
+        "This workbook has Python code. Enable it to run its cells; until then they keep the values saved in the file." => {
+            "Bu çalışma kitabında Python kodu var. Hücrelerini çalıştırmak için etkinleştirin; o zamana kadar hücreler dosyada kayıtlı değerleri korur."
+        }
+        "Enable" => "Etkinleştir",
+        "Python: running {cell}, {seconds} s" => "Python: {cell} çalışıyor, {seconds} sn",
+        "Python: {state}" => "Python: {state}",
+        "Open the Python environment" => "Python ortamını aç",
+        "Nothing on this system: Python doesn't run here" => "Bu sistemde hiçbir şey yok: Python burada çalışmaz",
+        "GridCraft starts Python with an empty environment" => "GridCraft, Python'u boş bir ortamla başlatır",
+        "macOS sandbox profile" => "macOS korumalı alan profili",
+        "Linux Landlock" => "Linux Landlock",
+        "Linux seccomp filter" => "Linux seccomp filtresi",
+        "Open Python Settings" => "Python Ayarlarını Aç",
+        "Choose Interpreter" => "Yorumlayıcı Seç",
+        "Copy Install Command" => "Kurulum Komutunu Kopyala",
+        "Run Again" => "Yeniden Çalıştır",
+        "Reset" => "Sıfırla",
+        "Python Environment" => "Python Ortamı",
+        "Python Packages" => "Python Paketleri",
+        "Python Problems" => "Python Sorunları",
+        "Python Run Log" => "Python Çalıştırma Günlüğü",
+        "What Python Can Do" => "Python Neler Yapabilir",
+        "GridCraft is checking Python." => "GridCraft Python'u denetliyor.",
+        "Check Again" => "Yeniden Denetle",
+        "Interpreter" => "Yorumlayıcı",
+        "Chosen by you:" => "Sizin seçtiğiniz:",
+        "Automatic found:" => "Otomatik bulunan:",
+        "What runs:" => "Çalışan:",
+        "None found yet." => "Henüz bulunamadı.",
+        "Sandbox" => "Korumalı alan",
+        "Package folders" => "Paket klasörleri",
+        "What Python can read" => "Python'un okuyabilecekleri",
+        "uv manages Python versions and packages. To get it, run:" => "uv, Python sürümlerini ve paketlerini yönetir. Edinmek için şunu çalıştırın:",
+        "Reading files outside Python: blocked" => "Python dışındaki dosyaları okuma: engellendi",
+        "Writing files: blocked" => "Dosya yazma: engellendi",
+        "Using the network: blocked" => "Ağı kullanma: engellendi",
+        "Starting other programs: blocked" => "Başka programları başlatma: engellendi",
+        "Each time Python starts, GridCraft tries each of these first, and doesn't run Python unless every one is refused." => {
+            "Python her başladığında GridCraft önce bunların her birini dener ve hepsi reddedilmedikçe Python'u çalıştırmaz."
+        }
+        "Install a package with uv. GridCraft only copies the command; you run it in a terminal, then choose Check Again." => {
+            "Paketi uv ile kurun. GridCraft yalnızca komutu kopyalar; siz bir terminalde çalıştırın, ardından Yeniden Denetle'yi seçin."
+        }
+        "Package name" => "Paket adı",
+        "Other package managers" => "Diğer paket yöneticileri",
+        "For people who manage Python another way: choose any interpreter by path in File › Options › Python. With pip:" => {
+            "Python'u başka bir yolla yönetenler için: Dosya › Seçenekler › Python bölümünde yolla herhangi bir yorumlayıcı seçin. pip ile:"
+        }
+        "Packages: {count}" => "Paketler: {count}",
+        "No problems." => "Sorun yok.",
+        "This workbook" => "Bu çalışma kitabı",
+        "No runs yet." => "Henüz çalıştırma yok.",
+        "Go To Cell" => "Hücreye Git",
+        "This run printed nothing." => "Bu çalıştırma hiçbir şey yazdırmadı.",
+        "Python cells can" => "Python hücreleri şunları yapabilir",
+        "Read cells through xl()" => "xl() ile hücreleri okuma",
+        "GridCraft sends only the cells that xl() names" => "GridCraft yalnızca xl() ile adı verilen hücreleri gönderir",
+        "Import installed packages" => "Kurulu paketleri içe aktarma",
+        "The sandbox lets Python read its own installation" => "Korumalı alan, Python'un kendi kurulumunu okumasına izin verir",
+        "Compute" => "Hesaplama",
+        "Within the time and memory limits in File › Options › Python" => {
+            "Dosya › Seçenekler › Python içindeki süre ve bellek sınırları dahilinde"
+        }
+        "Printed output is kept in the Run Log" => "Yazdırılan çıktı Çalıştırma Günlüğü'nde tutulur",
+        "Use threads" => "İş parçacığı kullanma",
+        "Threads stay inside the one Python process" => "İş parçacıkları tek Python işleminin içinde kalır",
+        "Python cells cannot" => "Python hücreleri şunları yapamaz",
+        "Read your files" => "Dosyalarınızı okuma",
+        "Write files" => "Dosya yazma",
+        "Use the network" => "Ağı kullanma",
+        "Start programs" => "Program başlatma",
+        "See environment variables" => "Ortam değişkenlerini görme",
+        "Open windows" => "Pencere açma",
+        "Draw plots. The data goes to a sheet and a chart is built from it." => {
+            "Grafik çizme. Veriler bir sayfaya aktarılır ve grafik oradan oluşturulur."
+        }
+        "Run this workbook's Python cells" => "Bu çalışma kitabının Python hücrelerini çalıştır",
+        "Off by default. Only you can turn this on, here: no file, macro or agent can. A workbook opened from a file also needs its own Enable." => {
+            "Varsayılan olarak kapalıdır. Bunu yalnızca siz burada açabilirsiniz: hiçbir dosya, makro veya aracı açamaz. Dosyadan açılan bir çalışma kitabı ayrıca kendi Etkinleştir işlemini de gerektirir."
+        }
+        "Limits" => "Sınırlar",
+        "While Python is off, GridCraft starts nothing, so it can't yet say which version it would use." => {
+            "Python kapalıyken GridCraft hiçbir şey başlatmaz, bu yüzden hangi sürümü kullanacağını henüz söyleyemez."
+        }
+        "Automatic would try first:" => "Otomatik önce şunu dener:",
+        "Set up Python with uv" => "Python'u uv ile kur",
+        "Run these in a terminal, in order. GridCraft looks in this environment first, so there is nothing more to choose. It only copies the commands; it never runs them." => {
+            "Bunları bir terminalde sırayla çalıştırın. GridCraft önce bu ortama bakar, dolayısıyla başka bir şey seçmenize gerek kalmaz. Komutları yalnızca kopyalar, hiçbir zaman çalıştırmaz."
+        }
+        "Any Python 3.11 or newer can be chosen by path with Browse…. To add packages to it with pip:" => {
+            "3.11 veya daha yeni herhangi bir Python, Gözat… ile yol belirtilerek seçilebilir. Ona pip ile paket eklemek için:"
+        }
+        "Time limit for one cell" => "Bir hücre için süre sınırı",
+        " seconds" => " saniye",
+        "Memory limit" => "Bellek sınırı",
+        " MB" => " MB",
+        "At a limit Python is restarted and its variables are cleared; the next run starts fresh." => {
+            "Sınıra ulaşıldığında Python yeniden başlatılır ve değişkenleri temizlenir; sonraki çalıştırma sıfırdan başlar."
+        }
+        "On macOS the memory limit is a check twice a second, not a hard cap." => {
+            "macOS'ta bellek sınırı saniyede iki kez yapılan bir denetimdir, kesin bir üst sınır değildir."
+        }
+        "Editor" => "Düzenleyici",
+        "Initialization" => "Başlatma",
+        "The code that runs before this workbook's Python cells" => "Bu çalışma kitabının Python hücrelerinden önce çalışan kod",
+        "Open Initialization" => "Başlatmayı Aç",
+        "The initialization code has unsaved changes." => "Başlatma kodunda kaydedilmemiş değişiklikler var.",
+        "The initialization code of {workbook} has unsaved changes." => "{workbook} başlatma kodunda kaydedilmemiş değişiklikler var.",
+        "The code can't be longer: initialization code holds {max} characters." => {
+            "Kod daha uzun olamaz: başlatma kodu en fazla {max} karakter alır."
+        }
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "Başlatma kodu düzenleyicide açıkken değişti. Kodunuzu kopyalayın ya da düzenleyiciyi kapatıp yeniden açın."
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "Başlatma kodu düzenleyicide açıkken değiştiği için kodunuz uygulanmadı. Kodu kopyalayın ya da düzenleyiciyi kapatıp yeniden açın."
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "Başlatma kodu, bu Python'da olmayan bir paketi kullanıyor. GridCraft ona ihtiyaç duyan satırları atladı ve kalanını çalıştırdı."
+        }
+        "Select a Python cell first." => "Önce bir Python hücresi seçin.",
+        "Output As" => "Çıktı Biçimi",
+        "Run\nCell" => "Hücreyi\nÇalıştır",
+        "Run the selected Python cell" => "Seçili Python hücresini çalıştır",
+        "Run\nAll" => "Tümünü\nÇalıştır",
+        "Run every Python cell in the workbook, in order" => "Çalışma kitabındaki tüm Python hücrelerini sırayla çalıştır",
+        "Nothing is running." => "Çalışan bir şey yok.",
+        "Stop the running cell" => "Çalışan hücreyi durdur",
+        "Clear Python's variables and run every cell again" => "Python'un değişkenlerini temizle ve tüm hücreleri yeniden çalıştır",
+        "Python Calculation" => "Python Hesaplaması",
+        "When this workbook's Python cells run" => "Bu çalışma kitabının Python hücrelerinin ne zaman çalışacağı",
+        "A Python cell is running." => "Bir Python hücresi çalışıyor.",
+        "Python is ready." => "Python hazır.",
+        "Which Python runs cells" => "Hücreleri hangi Python çalıştırır",
+        "Packages" => "Paketler",
+        "What this Python has installed" => "Bu Python'da kurulu olanlar",
+        "Check Sandbox" => "Korumalı Alanı Denetle",
+        "Check Python and the sandbox again, and show the report" => "Python'u ve korumalı alanı yeniden denetle ve raporu göster",
+        "What Python\nCan Do" => "Python'un\nYapabilecekleri",
+        "What Python cells can and can't do here" => "Python hücrelerinin burada yapabilecekleri ve yapamayacakları",
+        "This Workbook: Enabled" => "Bu Çalışma Kitabı: Etkin",
+        "This Workbook: Disabled" => "Bu Çalışma Kitabı: Devre Dışı",
+        "Only a person can change this." => "Bunu yalnızca bir kişi değiştirebilir.",
+        "Run Log" => "Çalıştırma Günlüğü",
+        "Each run's cell, time and printed output" => "Her çalıştırmanın hücresi, zamanı ve yazdırılan çıktısı",
+        "Clear the Run Log" => "Çalıştırma Günlüğünü Temizle",
+        "Problems" => "Sorunlar",
+        "Every Python cell with something to say" => "Bildirimi olan her Python hücresi",
+        "Diagnostics" => "Tanılama",
+        "uv environment" => "uv ortamı",
+        "uv Python" => "uv Python",
+        "virtual environment" => "sanal ortam",
+        "conda environment" => "conda ortamı",
+        "system" => "sistem",
+        "Python cells need a sandbox, and GridCraft has none for this system." => {
+            "Python hücreleri bir korumalı alan gerektirir ve GridCraft'ın bu sistem için bir korumalı alanı yok."
+        }
+        "The sandbox didn't hold when GridCraft checked it, so Python won't run." => {
+            "GridCraft denetlediğinde korumalı alan dayanmadı, bu yüzden Python çalışmayacak."
+        }
+        "Python is off. Turn it on in Settings to run Python cells." => "Python kapalı. Python hücrelerini çalıştırmak için Ayarlar'dan açın.",
+        "GridCraft can't find Python 3.11 or newer. Set one up with uv, or choose one." => {
+            "GridCraft, Python 3.11 veya daha yenisini bulamıyor. uv ile bir tane kurun veya birini seçin."
+        }
+        "This Python is too old: Python cells need 3.11 or newer." => "Bu Python çok eski: Python hücreleri 3.11 veya daha yenisini gerektirir.",
+        "This is Apple's placeholder for Python, which GridCraft doesn't use. Set up Python with uv, or choose another." => {
+            "Bu, Apple'ın Python için yer tutucusudur ve GridCraft onu kullanmaz. Python'u uv ile kurun veya başka birini seçin."
+        }
+        "GridCraft couldn't work out what this Python needs to run." => "GridCraft, bu Python'un çalışmak için neye ihtiyaç duyduğunu belirleyemedi.",
+        "Python didn't start." => "Python başlamadı.",
+        "Python isn't on for this workbook, so its cells keep the values saved in the file." => {
+            "Python bu çalışma kitabı için açık değil, bu yüzden hücreleri dosyada kayıtlı değerleri korur."
+        }
+        "This session doesn't run Python: cells keep the values saved in the file." => {
+            "Bu oturum Python çalıştırmıyor: hücreler dosyada kayıtlı değerleri korur."
+        }
+        "This workbook imports packages this Python doesn't have." => "Bu çalışma kitabı, bu Python'da bulunmayan paketleri içe aktarıyor.",
+        "pandas isn't installed in this Python, so ranges come back as lists of rows." => {
+            "Bu Python'da pandas kurulu değil, bu yüzden aralıklar satır listeleri olarak döner."
+        }
+        "The initialization code failed, so Python cells can't run." => "Başlatma kodu başarısız oldu, bu yüzden Python hücreleri çalışamaz.",
+        "This code isn't valid Python." => "Bu kod geçerli bir Python değil.",
+        "The code raised an error." => "Kod bir hata verdi.",
+        "The code uses a name that isn't defined." => "Kod tanımlı olmayan bir ad kullanıyor.",
+        "This name is defined in a later cell. Python cells run in row order, sheet by sheet." => {
+            "Bu ad sonraki bir hücrede tanımlanmış. Python hücreleri satır sırasıyla, sayfa sayfa çalışır."
+        }
+        "This Python doesn't have that package." => "Bu Python'da o paket yok.",
+        "This package needs a library outside what the sandbox lets Python read." => {
+            "Bu paket, korumalı alanın Python'un okumasına izin verdiği alanın dışında bir kitaplık gerektiriyor."
+        }
+        "Python cells can't read or write files on your computer. Put the data on a sheet and read it with xl()." => {
+            "Python hücreleri bilgisayarınızdaki dosyaları okuyamaz veya yazamaz. Verileri bir sayfaya koyun ve xl() ile okuyun."
+        }
+        "Python cells can't use the network. Put the data on a sheet and read it with xl()." => {
+            "Python hücreleri ağı kullanamaz. Verileri bir sayfaya koyun ve xl() ile okuyun."
+        }
+        "Python cells can't start other programs or processes." => "Python hücreleri başka programları veya işlemleri başlatamaz.",
+        "This picture is too large to draw. Make figsize or dpi smaller." => {
+            "Bu resim çizilemeyecek kadar büyük. figsize veya dpi değerini küçültün."
+        }
+        "The picture appears in the cell by itself. Python cells can't write files, so this line would fail." => {
+            "Resim hücrede kendiliğinden görünür. Python hücreleri dosya yazamaz, bu yüzden bu satır başarısız olur."
+        }
+        "This package draws in a web browser, which Python cells can't open. Use matplotlib or seaborn." => {
+            "Bu paket bir web tarayıcısında çizim yapar, Python hücreleri ise tarayıcı açamaz. matplotlib veya seaborn kullanın."
+        }
+        "Python Output" => "Python Çıktısı",
+        "Display Plot over Cells" => "Grafiği Hücrelerin Üzerinde Göster",
+        "Create Reference" => "Başvuru Oluştur",
+        "Copy Image" => "Resmi Kopyala",
+        "Save Image…" => "Resmi Kaydet…",
+        "The image is saved." => "Resim kaydedildi.",
+        "The image is on the clipboard." => "Resim panoda.",
+        "Image" => "Resim",
+        "size" => "boyut",
+        "Resize" => "Yeniden Boyutlandır",
+        "This picture shows the last result that cell gave." => "Bu resim, o hücrenin verdiği son sonucu gösterir.",
+        "Select a Python cell that gave a picture first." => "Önce resim veren bir Python hücresi seçin.",
+        "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
+            "xl() başvurusunun koda xl(\"A1:B5\") gibi metin olarak yazılması gerekir."
+        }
+        "This range is too large to send to Python." => "Bu aralık Python'a gönderilemeyecek kadar büyük.",
+        "xl() names something that isn't a cell, range, table or defined name here." => {
+            "xl() burada bir hücre, aralık, tablo veya tanımlı ad olmayan bir şeyi belirtiyor."
+        }
+        "The code ran past the time limit. Python was restarted, so its variables were cleared." => {
+            "Kod süre sınırını aştı. Python yeniden başlatıldı, bu yüzden değişkenleri temizlendi."
+        }
+        "The code went over the memory limit. Python was restarted, so its variables were cleared." => {
+            "Kod bellek sınırını aştı. Python yeniden başlatıldı, bu yüzden değişkenleri temizlendi."
+        }
+        "The result is too large to bring back to the sheet." => "Sonuç, sayfaya geri getirilemeyecek kadar büyük.",
+        "The printed output was cut off at its limit." => "Yazdırılan çıktı sınırında kesildi.",
+        "Python stopped unexpectedly and was restarted, so its variables were cleared." => {
+            "Python beklenmedik şekilde durdu ve yeniden başlatıldı, bu yüzden değişkenleri temizlendi."
+        }
+        "The result is empty." => "Sonuç boş.",
+        "The result needs cells that aren't empty." => "Sonuç, boş olmayan hücreler gerektiriyor.",
+        "The result isn't a number a cell can hold." => "Sonuç, bir hücrenin tutabileceği bir sayı değil.",
+        "This date or length of time is outside what a cell can hold." => "Bu tarih veya süre, bir hücrenin tutabileceği aralığın dışında.",
+        "This cell is running." => "Bu hücre çalışıyor.",
+        "What this cell reads has changed since it last ran." => "Bu hücrenin okuduğu şey son çalıştırmadan beri değişti.",
+        "This cell was stopped before it finished." => "Bu hücre tamamlanmadan önce durduruldu.",
+        "xl() needs its reference written as text, such as xl(\"A1:B5\"). A computed reference can't be read." => {
+            "xl() başvurusunun xl(\"A1:B5\") gibi metin olarak yazılması gerekir. Hesaplanmış bir başvuru okunamaz."
+        }
+        "This module needs the network or other programs, which Python cells can't use." => {
+            "Bu modül ağı veya başka programları gerektiriyor; Python hücreleri bunları kullanamaz."
+        }
+        "This Python doesn't have this package." => "Bu Python'da bu paket yok.",
+        "Python cells can't open windows or ask for input." => "Python hücreleri pencere açamaz veya girdi isteyemez.",
+        "Python cells don't see your environment variables." => "Python hücreleri ortam değişkenlerinizi göremez.",
+        "Open Settings" => "Ayarları aç",
+        "Show Printed Output" => "Yazdırılan çıktıyı göster",
+        "Hide Printed Output" => "Yazdırılan çıktıyı gizle",
+        "Line {line}" => "Satır {line}",
+        "Line {line}: {message}" => "Satır {line}: {message}",
+        "Python {version}, ready" => "Python {version}, hazır",
+        "Python {version}, running" => "Python {version}, çalışıyor",
         _ => return None,
     })
 }
