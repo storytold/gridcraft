@@ -25,8 +25,10 @@ other programs. The sandbox's job is that it can do none of these:
 - **Programs:** it can execute only the programs its policy lists, and it can't start a new
   process at all, so even those only replace itself.
 - **Network:** no sockets, no connections and no listeners.
-- **Other processes and the system:** no debugging or reading another process, no mounts or
-  namespaces, no kernel modules, BPF, keyrings or performance counters.
+- **Other processes and the system:** no debugging or reading another process, no signals to
+  another process, no typing into a terminal it inherited, no mounts or namespaces, no kernel
+  modules, BPF, keyrings or performance counters. On Linux it also can't change another process's
+  limits, priority or scheduling.
 
 Data reaches the code only through its command-line arguments (which the parent chooses), its
 standard input and output (which the parent holds), and the files its policy lets it read. Nothing
@@ -93,7 +95,15 @@ The launcher applies two layers, then runs the check.
     - `socket` of every family (a Unix datagram socket can send without `connect`), and
       `socketpair`, `connect`, `bind`, `listen`, `accept` and `accept4`;
     - io_uring (it runs operations outside the filter);
-    - `ptrace`, `process_vm_readv`/`writev`, `pidfd_getfd`;
+    - `ptrace`, `process_vm_readv`/`writev`, `pidfd_getfd`, `pidfd_open`, `pidfd_send_signal`,
+      `kcmp`;
+    - signals to any process but the program itself, whose process ID `exec` keeps (`kill`,
+      `tkill`, `tgkill`, `rt_sigqueueinfo`, `rt_tgsigqueueinfo`), so this holds on a kernel without
+      Landlock's signal scope;
+    - changes to any process but the program itself (`prlimit64`, `setpriority`, `ioprio_set`,
+      `sched_setaffinity`, `sched_setscheduler`, `sched_setparam`, `sched_setattr`);
+    - `ioctl` with `TIOCSTI` or `TIOCLINUX`, which type into a terminal the program inherited, as
+      when `sandbox-check` runs a program from a shell;
     - mounts, namespaces and file handles (`mount`, `umount2`, `pivot_root`, `chroot`,
       `unshare`, `setns`, `open_by_handle_at`, `name_to_handle_at`, the new mount API);
     - `bpf`, `perf_event_open`, `userfaultfd`, keyrings, kernel modules, `kexec`, swap,

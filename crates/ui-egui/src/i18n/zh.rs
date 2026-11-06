@@ -572,7 +572,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Using the network: blocked" => "使用网络：已阻止",
         "Starting other programs: blocked" => "启动其他程序：已阻止",
         "Each time Python starts, GridCraft tries each of these first, and doesn't run Python unless every one is refused." => {
-            "每次启动 Python 时，GridCraft 会先逐项尝试这些限制，只要有一项被拒绝，就不会运行 Python。"
+            "每次启动 Python 时，GridCraft 会先逐项尝试这些限制，只有全部被拒绝，才会运行 Python。"
         }
         "Install a package with uv. GridCraft only copies the command; you run it in a terminal, then choose Check Again." => {
             "使用 uv 安装包。GridCraft 只复制命令；请在终端中运行，然后选择“重新检查”。"

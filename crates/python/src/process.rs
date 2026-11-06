@@ -13,6 +13,7 @@ use std::io::{Read, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -30,6 +31,10 @@ pub const PYTHON_FLAGS: [&str; 3] = ["-I", "-S", "-E"];
 pub const WORKER_ENV: [(&str, &str); 1] = [("OPENBLAS_NUM_THREADS", "1")];
 /// Bytes of the worker's standard error kept (its end).
 const STDERR_TAIL: usize = 8 * 1024;
+
+/// How long the last words of a child wait for the thread reading them. A child that has exited has
+/// closed the pipe, so this runs out only when something else still holds it open.
+const LAST_WORDS_WAIT: Duration = Duration::from_millis(200);
 
 /// How to start one worker: everything the command uses. A wrapper set with
 /// [`ProcessTransport::with_wrap`] can replace it with another.
@@ -127,7 +132,7 @@ pub struct ProcessTransport {
 struct Running {
     child: Child,
     dir: PrivateDir,
-    stderr: Arc<Mutex<Vec<u8>>>,
+    stderr: ErrorTail,
     _guard: Option<Box<dyn Any + Send>>,
 }
 
@@ -186,13 +191,9 @@ impl Transport for ProcessTransport {
             reap(child, dir);
             return Err("Python started without its pipes".into());
         };
-        let stderr = Arc::new(Mutex::new(Vec::new()));
-        if let Some(err) = child.stderr.take() {
-            let tail = stderr.clone();
-            // Without the drain the worker could fill its error pipe and stall; it would then hit
-            // its deadline, which is still safe.
-            let _ = std::thread::Builder::new().name("python-stderr".into()).spawn(move || drain_tail(err, &tail));
-        }
+        // Without the drain the worker could fill its error pipe and stall; it would then hit its
+        // deadline, which is still safe.
+        let stderr = ErrorTail::start(child.stderr.take());
         let memory = memory_probe(child.id());
         self.running = Some(Running { child, dir, stderr, _guard: guard });
         Ok(Pipes { stdin: Box::new(stdin), stdout: Box::new(stdout), memory })
@@ -206,9 +207,7 @@ impl Transport for ProcessTransport {
     }
 
     fn last_words(&mut self) -> String {
-        let Some(r) = self.running.as_ref() else { return String::new() };
-        let bytes = r.stderr.lock().map(|b| b.clone()).unwrap_or_default();
-        String::from_utf8_lossy(&bytes).into_owned()
+        self.running.as_ref().map_or_else(String::new, |r| r.stderr.words())
     }
 }
 
@@ -229,6 +228,40 @@ fn reap(mut child: Child, dir: PrivateDir) {
     });
     // Without a thread the child is left to the system to reap; the folder was removed above.
     drop(spawned);
+}
+
+/// The end of a child's standard error, kept by a thread of its own.
+struct ErrorTail {
+    bytes: Arc<Mutex<Vec<u8>>>,
+    /// Closes when the thread has read to the end of the pipe.
+    read_all: Option<Receiver<()>>,
+}
+
+impl ErrorTail {
+    fn start(input: Option<impl Read + Send + 'static>) -> ErrorTail {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let read_all = input.and_then(|input| {
+            let tail = bytes.clone();
+            let (done, read_all) = std::sync::mpsc::channel();
+            let drain = move || {
+                drain_tail(input, &tail);
+                drop(done);
+            };
+            std::thread::Builder::new().name("python-stderr".into()).spawn(drain).ok().map(|_| read_all)
+        });
+        ErrorTail { bytes, read_all }
+    }
+
+    /// What it has read. The pipe closes when the child exits, at the same moment as its standard
+    /// output, so whoever saw that output end may get here before the thread has the last line, and
+    /// the launcher's refusal is that line. So this waits for the thread, a little.
+    fn words(&self) -> String {
+        if let Some(read_all) = &self.read_all {
+            let _ = read_all.recv_timeout(LAST_WORDS_WAIT);
+        }
+        let bytes = self.bytes.lock().map(|b| b.clone()).unwrap_or_default();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
 }
 
 /// Keeps the last [`STDERR_TAIL`] bytes of `input`.
@@ -503,5 +536,42 @@ mod tests {
     fn a_relative_interpreter_path_is_refused() {
         let mut t = ProcessTransport::new(PathBuf::from("python3"));
         assert!(t.start().is_err());
+    }
+
+    /// Bytes a little later, as from a pipe whose reading thread hasn't run yet.
+    struct Late(Option<&'static [u8]>);
+
+    impl Read for Late {
+        fn read(&mut self, into: &mut [u8]) -> std::io::Result<usize> {
+            std::thread::sleep(Duration::from_millis(20));
+            let Some(bytes) = self.0.take() else { return Ok(0) };
+            into[..bytes.len()].copy_from_slice(bytes);
+            Ok(bytes.len())
+        }
+    }
+
+    #[test]
+    fn the_last_words_wait_for_the_line_still_on_its_way() {
+        let tail = ErrorTail::start(Some(Late(Some(b"gridcraft-sandbox: refused: no Landlock\n"))));
+        assert_eq!(tail.words(), "gridcraft-sandbox: refused: no Landlock\n");
+    }
+
+    #[test]
+    fn the_last_words_dont_wait_long_for_a_pipe_something_else_holds_open() {
+        struct Open;
+        impl Read for Open {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                std::thread::sleep(Duration::from_secs(5));
+                Ok(0)
+            }
+        }
+        let started = std::time::Instant::now();
+        assert_eq!(ErrorTail::start(Some(Open)).words(), "");
+        assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn no_pipe_has_no_last_words() {
+        assert_eq!(ErrorTail::start(None::<std::io::Empty>).words(), "");
     }
 }

@@ -471,7 +471,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enable iterative calculation" => "Увімкнути ітеративні обчислення",
         "Calculation settings are saved with the workbook." => "Параметри обчислень зберігаються разом із книгою.",
         "OK" => "OK",
-        "Cancel" => "Cancel",
+        "Cancel" => "Скасувати",
         "Don't Save" => "Don't Save",
         "Open…" => "Open…",
         "Show password" => "Show password",

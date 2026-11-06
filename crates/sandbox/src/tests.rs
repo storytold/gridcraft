@@ -90,6 +90,8 @@ fn the_launcher_reads_its_arguments_back() {
     assert!(bad_policy(Checked::from_args(&os(&["--exec"]))).contains("needs a path"));
     // A second canary isn't taken.
     assert!(bad_policy(Checked::from_args(&os(&["--exec", &p, "--probe", &c, "--probe", &c, "--", &p]))).contains("unknown"));
+    // The enforcement check starts the current executable, so a hand-built list must let it.
+    assert!(bad_policy(Checked::from_args(&os(&["--exec", &p, "--probe", &c, "--", &p]))).contains("current executable"));
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -98,8 +100,20 @@ fn only_the_sandbox_flags_are_handled() {
     assert_eq!(handle_args(&[]), None);
     assert_eq!(handle_args(&os(&["--control", "7979"])), None);
     assert_eq!(handle_args(&os(&[PROBE_CHILD_FLAG])), Some(0));
-    // A launch without a valid policy refuses rather than running anything.
+}
+
+/// A launch whose arguments are refused runs nothing and leaves the process's descriptors alone:
+/// closing them here would pull files out from under the tests running beside this one.
+#[test]
+fn a_launch_refused_for_its_arguments_closes_nothing() {
+    use std::io::Read as _;
+    let (_canary, dir) = scratch();
+    let mut held = std::fs::File::open(dir.join("data.txt")).unwrap();
     assert_eq!(handle_args(&os(&[crate::LAUNCH_FLAG, "--", "/bin/sh"])), Some(crate::REFUSED_EXIT_CODE));
+    let mut text = String::new();
+    held.read_to_string(&mut text).unwrap();
+    assert_eq!(text, "data");
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

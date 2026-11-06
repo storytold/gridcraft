@@ -48,8 +48,16 @@ const ALLOWED: &[&str] = &["file.properties"];
 const READS_FILES: &[&str] = &["data.getData", "data.fromTextCsv", "insert.picture", "pageLayout.background"];
 
 /// Commands that only produce bytes, or an error, unless given a `path` (then they write a file).
-const EXPORTS: &[&str] =
-    &["file.exportPdf", "file.exportCsv", "file.exportHtml", "file.print", "file.printPreview", "file.saveBytes", "python.saveCsv"];
+const EXPORTS: &[&str] = &[
+    "file.exportPdf",
+    "file.exportCsv",
+    "file.exportHtml",
+    "file.print",
+    "file.printPreview",
+    "file.saveBytes",
+    "python.saveCsv",
+    "python.saveImage",
+];
 
 /// Whether command `id` with `params` writes a file (an export or print given a `path`).
 pub fn writes_file(id: &str, params: &Json) -> bool {
@@ -128,6 +136,7 @@ mod tests {
             "file.print",
             "file.exportCsv",
             "python.saveCsv",
+            "python.saveImage",
         ] {
             assert!(matches!(macro_policy(id, &path, Trust::Local), Policy::NeedsPermission(_)), "{id}");
             assert!(matches!(macro_policy(id, &path, Trust::FromFile), Policy::NeedsPermission(_)), "{id}");

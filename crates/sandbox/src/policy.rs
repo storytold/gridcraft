@@ -203,6 +203,12 @@ impl Checked {
         if read.iter().chain(&exec).any(|p| probe.starts_with(p)) {
             return Err(SandboxError::BadPolicy(format!("the canary {} is inside an allowed path", probe.display())));
         }
+        // The enforcement check starts the current executable. Outside the executable paths, the file
+        // rules would refuse that start, and the check would prove nothing about new processes.
+        let exe = canonical(&std::env::current_exe()?)?;
+        if !exec.iter().any(|p| exe.starts_with(p)) {
+            return Err(SandboxError::BadPolicy(format!("the current executable {} is not an executable path of the policy", exe.display())));
+        }
         Ok((Checked { read, exec, program, args: it.cloned().collect() }, probe))
     }
 }
