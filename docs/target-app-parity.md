@@ -285,7 +285,8 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
   elapsed time, fractions, scientific, accounting fill), General narrowing to column width.
 - Files: XLSX read/write (styles, themes, merges, CF, validation, tables, comments, hyperlinks,
   charts, pictures, sparklines, print settings, defined names, shared/array/dynamic formulas),
-  CSV/TSV with encoding and delimiter detection, HTML export, JSON; XLSB and ODS data import (values only, 10-10).
+  CSV/TSV with encoding and delimiter detection, HTML export, JSON; XLSB values-only data import
+  (10-10) and ODS import with formulas (#711).
 - Editing: cell entry with type detection and auto-formats, in-cell and formula-bar editing,
   point mode (click/drag/arrow references), reference colouring, F4 anchor cycling, function
   autocomplete and argument hints, copy/cut/paste and Paste Special (values, formats, transpose,
@@ -334,6 +335,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-12 | minor | ODS: formulas import live with OpenFormula→Excel translation and cached-result fallback (#711); file-formats evidence and shipped-features list updated |
 | 2026-11-02 | minor | Form controls (buttons, scroll bars, spin buttons) in Insert objects and Automation; catalog 277 / 292 → 281 / 296 (Developer › Controls) |
 | 2026-11-02 | minor | Insert objects: equations; catalog count 277 / 292 (no score change) |
 | 2026-11-02 | minor | What-if and analysis: Solver Sensitivity report (no score change) |

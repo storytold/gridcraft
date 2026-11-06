@@ -1,5 +1,7 @@
-//! Data-only OpenDocument Spreadsheet import. Formula caches become constants; styles and
-//! other ODF features are deliberately not translated. All fixtures are authored in Rust.
+//! OpenDocument Spreadsheet import with live formulas: `table:formula` text that maps exactly
+//! to Excel syntax is translated and recalculates, keeping its cached result as the initial
+//! value; anything else keeps today's constant behaviour. Styles and other ODF features are
+//! deliberately not translated. All fixtures are authored in Rust.
 //! Format reference: ODF 1.3, part 3, sections 6.1 and 9.1:
 //! <https://docs.oasis-open.org/office/OpenDocument/v1.3/os/part3-schema/OpenDocument-v1.3-os-part3-schema.html>.
 
@@ -7,8 +9,8 @@ use std::io::{Cursor, Read};
 use std::sync::Arc;
 
 use gridcraft_core::date::{days_in_month, serial_from_ymd};
-use gridcraft_core::{CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
-use gridcraft_model::{Cell, NumFmt, Sheet, StyleId, Workbook};
+use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
+use gridcraft_model::{Cell, Formula, NumFmt, Sheet, StyleId, Workbook};
 use quick_xml::NsReader;
 use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
@@ -44,10 +46,21 @@ pub(crate) fn has_mimetype(bytes: &[u8]) -> bool {
     (&mut file).take(MIME.len() as u64 + 1).read_to_end(&mut value).is_ok() && value == MIME
 }
 
-/// Imports ODS sheets, typed values, displayed text and merges. Cached formula results are
-/// imported as constants, so editing their inputs does not recalculate the original formula.
-/// Always inspect the returned warnings. Saving to ODS is not supported.
+/// Imports ODS sheets, typed values, displayed text, merges and formulas. A formula cell keeps
+/// its cached result as the initial value and recalculates; a formula that cannot be translated
+/// exactly stays a constant. Always inspect the returned warnings. Saving to ODS is not
+/// supported.
 pub fn read_ods(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
+    // Without a caller's contract every syntactically valid call translates (this is the shape
+    // tests and tools use); the engine passes the evaluator's real contract through the
+    // `read_ods_with` variant.
+    read_ods_with(bytes, &|_| true)
+}
+
+/// [`read_ods`] with the caller's known-function contract: a call neither it nor the syntax
+/// accepts keeps the file's cached constant instead of opening as a live `#NAME?` formula. The
+/// engine passes the evaluator's complete contract (its special functions included).
+pub fn read_ods_with(bytes: &[u8], known: &dyn Fn(&str) -> bool) -> Result<(Workbook, ReadReport), IoError> {
     let mut package = Package::open(bytes)?;
     if !has_mimetype(bytes) {
         return Err(IoError::Format("missing or invalid ODS mimetype".into()));
@@ -57,10 +70,12 @@ pub fn read_ods(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     }
     let content = package.read("content.xml")?.ok_or_else(|| IoError::Format("ODS content.xml is missing".into()))?;
     let mut import = Import::new();
+    import.known = Some(known);
     import.parse(&content)?;
     if import.wb.sheets.is_empty() {
         return Err(IoError::Format("ODS contains no worksheets".into()));
     }
+    import.rewrite_renamed_refs();
     Ok((import.wb, import.report))
 }
 
@@ -192,6 +207,10 @@ struct SheetDraft {
     sheet: Sheet,
     depth: usize,
     row: u32,
+    /// The legacy-array range being imported (its anchor already written): covered cells inside
+    /// it drop their cached values, so recalculation — which reads the anchor — is the only
+    /// truth left, as it is for every other formula.
+    matrix: Option<RangeRef>,
 }
 struct RowDraft {
     depth: usize,
@@ -204,6 +223,8 @@ struct RepeatedCell {
     repeat: u32,
     width: u32,
     height: u32,
+    matrix_cols: u32,
+    matrix_rows: u32,
     cell: Cell,
 }
 struct CellDraft {
@@ -211,19 +232,28 @@ struct CellDraft {
     repeat: u32,
     width: u32,
     height: u32,
+    matrix_cols: u32,
+    matrix_rows: u32,
     covered: bool,
     kind: Option<String>,
     raw: Option<String>,
-    formula: bool,
+    formula: Option<String>,
     text: String,
     paragraph: Option<usize>,
     paragraphs: usize,
     paragraph_started: bool,
     pending_space: bool,
 }
-struct Import {
+struct Import<'k> {
     wb: Workbook,
     report: ReadReport,
+    /// Sheet names the importer changed (invalid or duplicated in XLSX, both legal in ODS):
+    /// original → final. Formulas copy names from the file's text, so after reading they are
+    /// rewritten to the final names — a live formula naming a sheet that no longer exists
+    /// recalculates to #REF!.
+    renames: Vec<(String, String)>,
+    /// The caller's known-function contract for translated calls (see [`read_ods_with`]).
+    known: Option<&'k dyn Fn(&str) -> bool>,
     stack: Vec<Tag>,
     sheet: Option<SheetDraft>,
     row: Option<RowDraft>,
@@ -235,13 +265,56 @@ struct Import {
     spreadsheet_seen: bool,
 }
 
-impl Import {
+impl<'k> Import<'k> {
     fn new() -> Self {
         let mut wb = Workbook::new();
         wb.sheets.clear();
         let mut report = ReadReport::default();
-        report.warn("ODS data-only import: formulas become their saved results and will not recalculate. Source formatting, charts, images and other features are not imported. Save a new .xlsx file; ODS saving is not supported.");
-        Self { wb, report, stack: vec![], sheet: None, row: None, cell: None, cells: 0, merges: 0, text: 0, formats: vec![], spreadsheet_seen: false }
+        report.warn("ODS import: formulas are imported and recalculate; ones that cannot be translated keep their saved result as a constant. Source formatting, charts, images and other features are not imported. Save a new .xlsx file; ODS saving is not supported.");
+        Self {
+            wb,
+            report,
+            renames: vec![],
+            known: None,
+            stack: vec![],
+            sheet: None,
+            row: None,
+            cell: None,
+            cells: 0,
+            merges: 0,
+            text: 0,
+            formats: vec![],
+            spreadsheet_seen: false,
+        }
+    }
+
+    /// Rewrites every formula's sheet-qualified references through the importer's sheet renames
+    /// (`original → final`), with the engine's own rename adjustment. Only formulas are touched:
+    /// names, table sources and the rest of the model were built with the final names already.
+    fn rewrite_renamed_refs(&mut self) {
+        if self.renames.is_empty() {
+            return;
+        }
+        let renames = std::mem::take(&mut self.renames);
+        for sheet in self.wb.sheets.iter_mut() {
+            let sheet = std::sync::Arc::make_mut(sheet);
+            let mut cells = Vec::new();
+            for (at, cell) in sheet.cells.iter() {
+                if cell.formula.is_some() {
+                    cells.push(at);
+                }
+            }
+            for at in cells {
+                let Some(cell) = sheet.cells.get_mut(at) else { continue };
+                let Some(f) = cell.formula.as_mut() else { continue };
+                let Some(expr) = f.expr() else { continue };
+                let mut renamed = expr;
+                for (old, new) in &renames {
+                    renamed = gridcraft_formula::adjust::rename_sheet(renamed, old, new);
+                }
+                cell.formula = Some(std::sync::Arc::new(gridcraft_model::Formula::from_expr(renamed)));
+            }
+        }
     }
 
     fn parse(&mut self, bytes: &[u8]) -> Result<(), IoError> {
@@ -323,8 +396,9 @@ impl Import {
                 }
                 if name != original {
                     self.report.warn("Some ODS sheet names were shortened or renamed to valid, unique XLSX sheet names.");
+                    self.renames.push((original.clone(), name.clone()));
                 }
-                self.sheet = Some(SheetDraft { sheet: Sheet::new(name), depth, row: 0 });
+                self.sheet = Some(SheetDraft { sheet: Sheet::new(name), depth, row: 0, matrix: None });
             }
             Tag::Row if self.sheet.as_ref().is_some_and(|s| self.stack.get(s.depth + 1..).is_some_and(|p| p.iter().all(|t| *t == Tag::Rows))) => {
                 self.row =
@@ -348,10 +422,12 @@ impl Import {
                     repeat: positive(attr(reader, e, TABLE, b"number-columns-repeated")?, 1, u32::MAX)?,
                     width: positive(attr(reader, e, TABLE, b"number-columns-spanned")?, 1, MAX_COLS)?,
                     height: positive(attr(reader, e, TABLE, b"number-rows-spanned")?, 1, MAX_ROWS)?,
+                    matrix_cols: positive(attr(reader, e, TABLE, b"number-matrix-columns-spanned")?, 1, MAX_COLS)?,
+                    matrix_rows: positive(attr(reader, e, TABLE, b"number-matrix-rows-spanned")?, 1, MAX_ROWS)?,
                     covered: t == Tag::Covered,
                     kind,
                     raw: attr(reader, e, OFFICE, key)?,
-                    formula: attr(reader, e, TABLE, b"formula")?.is_some(),
+                    formula: attr(reader, e, TABLE, b"formula")?,
                     text: String::new(),
                     paragraph: None,
                     paragraphs: 0,
@@ -478,7 +554,23 @@ impl Import {
                     return Err(IoError::TooLarge("ODS expands beyond the import limit (64 MiB of text)".into()));
                 }
             }
-            row.cells.push(RepeatedCell { col: row.col, repeat: draft.repeat, width, height, cell });
+            // A covered cell inside the matrix span being imported keeps no cached value: the
+            // anchor's array recalculation owns the range, and a follower constant left in the
+            // store could still be read where a legacy array's followers are not resolved.
+            let cell = if draft.covered && self.sheet.as_ref().is_some_and(|sh| sh.matrix.is_some_and(|r| r.contains(pos_of(sh.row, row.col)))) {
+                Cell::default()
+            } else {
+                cell
+            };
+            row.cells.push(RepeatedCell {
+                col: row.col,
+                repeat: draft.repeat,
+                width,
+                height,
+                matrix_cols: draft.matrix_cols,
+                matrix_rows: draft.matrix_rows,
+                cell,
+            });
         }
         row.col = end;
         Ok(())
@@ -486,6 +578,14 @@ impl Import {
 
     fn convert(&mut self, draft: &CellDraft) -> Cell {
         let raw = draft.raw.as_deref();
+        let formula = draft
+            .formula
+            .as_deref()
+            .and_then(|t| match self.known {
+                Some(known) => crate::ods_formula::translate(t, known),
+                None => crate::ods_formula::translate(t, &|_: &str| false),
+            })
+            .map(|text| Formula::new(&text));
         let mut format = None;
         let value = match draft.kind.as_deref() {
             Some("float" | "percentage" | "currency") => raw.and_then(|s| s.parse::<f64>().ok()).filter(|n| n.is_finite()).map(|n| {
@@ -499,8 +599,17 @@ impl Import {
                 Some("false" | "0") => Some(Value::Bool(false)),
                 _ => None,
             },
-            Some("string") if raw.is_some() || draft.paragraphs > 0 || !draft.formula => Some(Value::Text(Arc::from(raw.unwrap_or(&draft.text)))),
-            Some("void") if !draft.formula => Some(Value::Empty),
+            // A calcext error cache maps to the error itself; its placeholder raw value
+            // (often 0) never parses, so the cell falls through and recalculates instead.
+            Some("error") => CellError::parse(raw.unwrap_or(&draft.text)).map(Value::Error),
+            Some("string") if raw.is_some() || draft.paragraphs > 0 || draft.formula.is_none() => {
+                let text = raw.unwrap_or(&draft.text);
+                // Writers without the calcext extension cache a formula error as a string
+                // cell holding the error's spelling.
+                let error = if formula.is_some() { CellError::parse(text) } else { None };
+                Some(error.map_or_else(|| Value::Text(Arc::from(text)), Value::Error))
+            }
+            Some("void") if draft.formula.is_none() => Some(Value::Empty),
             Some("date") => raw.and_then(parse_date).map(|(n, f)| {
                 format = Some(f);
                 Value::Number(n)
@@ -509,12 +618,15 @@ impl Import {
                 format = Some("[h]:mm:ss.000");
                 Value::Number(n)
             }),
-            None if !draft.formula => Some(if draft.text.is_empty() { Value::Empty } else { Value::Text(Arc::from(draft.text.as_str())) }),
+            None if draft.formula.is_none() => Some(if draft.text.is_empty() { Value::Empty } else { Value::Text(Arc::from(draft.text.as_str())) }),
             _ => None,
         };
         let value = value.unwrap_or_else(|| {
-            self.report.warn("Some ODS values or formula caches were unsupported or missing; their displayed text (or raw value) was kept as text. A formula without either is marked [Unavailable ODS formula result].");
-            let text = if !draft.text.is_empty() { draft.text.as_str() } else if let Some(raw) = raw { raw } else if draft.formula { "[Unavailable ODS formula result]" } else { "[Unsupported ODS value]" };
+            if formula.is_some() {
+                return Value::Empty; // no usable cache: recalculation fills the cell
+            }
+            self.report.warn("Some ODS values or formulas that cannot be translated were unsupported or missing; their displayed text (or raw value) was kept as text. A formula without either is marked [Unavailable ODS formula result].");
+            let text = if !draft.text.is_empty() { draft.text.as_str() } else if let Some(raw) = raw { raw } else if draft.formula.is_some() { "[Unavailable ODS formula result]" } else { "[Unsupported ODS value]" };
             Value::Text(Arc::from(text))
         });
         let style = match format {
@@ -528,7 +640,7 @@ impl Import {
             },
             None => StyleId::DEFAULT,
         };
-        Cell { style, ..Cell::value(value) }
+        Cell { value, formula: formula.map(Arc::new), style, py: None }
     }
 
     fn finish_row(&mut self) -> Result<(), IoError> {
@@ -564,11 +676,33 @@ impl Import {
             if merged && ((entry.repeat > 1 && entry.width > 1) || (row.repeat > 1 && entry.height > 1)) {
                 return Err(IoError::Format("repeated ODS cells have overlapping merges".into()));
             }
+            // A matrix span is not a merge: the checks above do not cover it, so bound it
+            // independently. A repeated matrix cell would tile overlapping arrays, so only a
+            // single cell carries the legacy array; repeats import as plain formulas.
+            let matrix = entry.cell.formula.is_some() && entry.repeat == 1 && row.repeat == 1 && (entry.matrix_cols > 1 || entry.matrix_rows > 1);
+            let matrix_last = if matrix {
+                match sheet
+                    .row
+                    .checked_add(entry.matrix_rows - 1)
+                    .filter(|r| *r < MAX_ROWS)
+                    .zip(entry.col.checked_add(entry.matrix_cols - 1).filter(|c| *c < MAX_COLS))
+                {
+                    Some((r, c)) => Some(CellRef::new(r, c)),
+                    None => return Err(IoError::TooLarge("ODS matrix formula exceeds worksheet bounds".into())),
+                }
+            } else {
+                None
+            };
             for r in sheet.row..end {
                 for c in entry.col..entry.col + entry.repeat {
                     let pos = CellRef::new(r, c);
                     if !entry.cell.is_blank() {
-                        sheet.sheet.cells.set(pos, entry.cell.clone());
+                        let mut cell = entry.cell.clone();
+                        if let (Some(last), Some(f)) = (matrix_last, cell.formula.as_mut()) {
+                            Arc::make_mut(f).array = Some(RangeRef::new(pos, last));
+                            sheet.matrix = Some(RangeRef::new(pos, last));
+                        }
+                        sheet.sheet.cells.set(pos, cell);
                     }
                     if merged {
                         sheet.sheet.merges.push(RangeRef::new(pos, CellRef::new(r + entry.height - 1, c + entry.width - 1)));
@@ -579,6 +713,10 @@ impl Import {
         sheet.row = end;
         Ok(())
     }
+}
+
+fn pos_of(row: u32, col: u32) -> CellRef {
+    CellRef::new(row, col)
 }
 
 fn push_text(out: &mut String, text: &str) -> Result<(), IoError> {

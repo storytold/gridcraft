@@ -93,7 +93,7 @@ past the parser's limit, and a wrapper inside the text. **Saving writes the real
 | `.xlt` Excel 97-2003 template | R/W | yes (read as `.xls`) | no | | — |
 | `.xlam` / `.xla` add-ins | R/W | no | no | VBA; out of scope | — |
 | `.xml` XML Spreadsheet 2003 | R/W | no | no | Simple to support | — |
-| `.ods` OpenDocument Spreadsheet | R/W | **values only** (#100) | no | Sheets, values, dates, merges, repeated cells, cached formula results; no formulas, formatting, charts; encrypted ODS refused | `ods_tests.rs` |
+| `.ods` OpenDocument Spreadsheet | R/W | **yes, partial** (#100, #711) | no | Sheets, values, dates, merges, repeated cells; formulas imported live via OpenFormula→Excel translation (prefixes, `;` separators, bracketed and quoted-sheet references, `COM.MICROSOFT.*` names; anything without an exact Excel spelling keeps its cached result as a constant, with a warning); error results become error values, matrix formulas become array formulas; no formatting, charts or other features; encrypted ODS refused | `ods_tests.rs` |
 | Password-encrypted workbooks (Agile/Standard encryption) | R | **yes** (#11): asks for the password on open; Agile (AES-128/192/256, SHA-1/256/384/512) and Standard (AES, SHA-1) | no (opens with no save path; Save As writes it without the password) | Clean-room from [MS-OFFCRYPTO] on the CFB reader. RC4, Extensible and certificate-only encryption refused with a message. Data-integrity HMAC not checked | `crypto/tests.rs`, `encrypted_tests.rs` |
 | `.xlw` Excel 4.0 workbook, `.wk*`, `.dbf` | open only (some) | no | no | Rare | — |
 
@@ -158,6 +158,8 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | ODS review fixes: formulas follow importer sheet renames (a >31-char or XLSX-invalid sheet name no longer leaves live #REF! formulas), unknown calls keep their cached constant against the evaluator's contract, and matrix followers drop their cached values for the anchor's recalculation (#711) |
+| 2026-10-12 | minor | ODS: formulas import live (OpenFormula→Excel translation with fallback to the cached constant, #711) |
 | 2026-11-02 | minor | XLSX: buttons, scroll bars and spin buttons read and written (control properties parts, `<controls>`, VML `x:ClientData`); other form controls stay with pass-through; a button's command, fixed input or output cell travels in a hidden defined name and comes back only while the file still assigns the button's macro (or none, for a command) |
 | 2026-11-03 | minor | SYLK (`.slk`) import: values, R1C1 formulas as A1 (shared formulas too) with cached results, number formats and column widths; import only (#1481) |
 | 2026-11-03 | minor | Opening a web page (HTML) reads its first table as a sheet, whatever the file is called: a web app's "Export to Excel" saved as `.xls` no longer opens as lines of markup. Values read as in a CSV (or as text with `csvAsText`), `<th>` cells are bold and centred, `<x:Name>` names the sheet, and a page not named `.htm`/`.html` opens with a warning (#3166) |
@@ -223,4 +225,3 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-10-11 | minor | XLSX: threaded comments and persons parts written (they came back as notes before); note visibility read from VML (#300) |
 | 2026-10-11 | minor | XLSX: Allow Edit Ranges (`protectedRanges`) read and written with their password hashes (#307) |
 | 2026-10-10 | minor | Encrypted and `.xls` files are now recognised and refused with a message (#17) |
-| 2026-10-10 | major | Created: every Excel format with our read/write support; XLSB and ODS values-only imports recorded; `.xls`, encryption and large files flagged as beta gates |

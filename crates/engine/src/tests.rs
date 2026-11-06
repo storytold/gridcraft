@@ -2467,7 +2467,7 @@ fn ods_fixture() -> Vec<u8> {
         ),
         (
             "content.xml",
-            r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:of="urn:oasis:names:tc:opendocument:xmlns:of:1.2" office:version="1.3"><office:body><office:spreadsheet><table:table table:name="Data"><table:table-row><table:table-cell office:value-type="float" office:value="42" table:formula="of:=SUM([.B1:.B2])"/><table:table-cell office:value-type="string"><text:p>Original data</text:p></table:table-cell></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>"#,
+            r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:of="urn:oasis:names:tc:opendocument:xmlns:of:1.2" office:version="1.3"><office:body><office:spreadsheet><table:table table:name="Data"><table:table-row><table:table-cell office:value-type="float" office:value="42" table:formula="of:=SUM([.B1:.B2])"/><table:table-cell office:value-type="string"><text:p>Original data</text:p></table:table-cell></table:table-row><table:table-row><table:table-cell/><table:table-cell office:value-type="float" office:value="42"/></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>"#,
         ),
     ] {
         zip.start_file(name, options).unwrap();
@@ -2489,7 +2489,10 @@ fn ods_import_keeps_cached_values_and_reports_limits() {
         assert!(s.doc().unwrap().display_title().ends_with(".xlsx"));
         assert_eq!(v(&s, "A1"), Value::Number(42.0));
         assert_eq!(v(&s, "B1"), Value::from("Original data"));
-        assert!(s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().formula.is_none());
+        // The formula imports live (SUM ignores B1's text, so the cached 42 is also the true
+        // result); the cache is its initial value, not a replacement for it.
+        let cell = s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("A1").unwrap()).unwrap();
+        assert_eq!(cell.formula.as_ref().unwrap().text, "SUM(B1:B2)");
         let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
         s.execute("file.open", json!({"name": "imported.xlsx", "base64": saved["base64"]})).unwrap();
         assert_eq!(v(&s, "A1"), Value::Number(42.0));

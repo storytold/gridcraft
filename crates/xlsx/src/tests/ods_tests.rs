@@ -1,9 +1,10 @@
 //! Original ODS packages assembled in Rust, not files from another spreadsheet application.
 
-use gridcraft_core::{CellRef, RangeRef, Value};
+use gridcraft_core::{CellError, CellRef, MAX_ROWS, RangeRef, Value};
+use std::io::Write as _;
 
 use super::make_zip;
-use crate::{Format, IoError, read_ods, read_xlsx, sniff, write_xlsx};
+use crate::{Format, IoError, read_ods, read_ods_with, read_xlsx, sniff, write_xlsx};
 
 const MIME: &[u8] = b"application/vnd.oasis.opendocument.spreadsheet";
 const MANIFEST: &[u8] = br#"<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.spreadsheet"/><manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/></manifest:manifest>"#;
@@ -18,6 +19,12 @@ fn ods(tables: &str) -> Vec<u8> {
 }
 fn row(cells: &str) -> Vec<u8> {
     ods(&format!(r#"<table:table table:name="Data"><table:table-row>{cells}</table:table-row></table:table>"#))
+}
+
+fn two_row_sheet(first: &str, second: &str) -> Vec<u8> {
+    ods(&format!(
+        r#"<table:table table:name="Data"><table:table-row>{first}</table:table-row><table:table-row>{second}</table:table-row></table:table>"#
+    ))
 }
 fn text(s: &str) -> Value {
     Value::Text(s.into())
@@ -40,21 +47,17 @@ fn ods_namespace_declaration_bomb_is_rejected() {
 }
 
 #[test]
-fn ods_typed_values_and_formula_caches_are_constants_and_survive_xlsx() {
+fn ods_typed_value_constants_survive_xlsx() {
     let bytes = row(r#"
         <table:table-cell office:value-type="float" office:value="42.5"/>
         <table:table-cell office:value-type="boolean" office:boolean-value="true"/>
         <table:table-cell office:value-type="percentage" office:value="0.25"/>
         <table:table-cell office:value-type="currency" office:currency="USD" office:value="19.99"/>
         <table:table-cell office:value-type="string" office:string-value="literal =1+1"/>
-        <table:table-cell table:formula="of:=A1*2" office:value-type="float" office:value="85"><text:p>85</text:p></table:table-cell>
-        <table:table-cell table:formula="of:=1/0" office:value-type="string"><text:p>#DIV/0!</text:p></table:table-cell>
-        <table:table-cell table:formula="of:=UNKNOWN()"/>
         <table:table-cell office:value-type="float" office:value="NaN"><text:p>unavailable</text:p></table:table-cell>
         <table:table-cell office:value-type="boolean" office:boolean-value="0"/>
     "#);
     let (wb, report) = read_ods(&bytes).unwrap();
-    assert!(report.warnings.iter().any(|w| w.contains("data-only") && w.contains("will not recalculate")));
     assert!(report.warnings.iter().any(|w| w.contains("unsupported or missing")));
     let expected = [
         Value::Number(42.5),
@@ -62,9 +65,6 @@ fn ods_typed_values_and_formula_caches_are_constants_and_survive_xlsx() {
         Value::Number(0.25),
         Value::Number(19.99),
         text("literal =1+1"),
-        Value::Number(85.0),
-        text("#DIV/0!"),
-        text("[Unavailable ODS formula result]"),
         text("unavailable"),
         Value::Bool(false),
     ];
@@ -243,8 +243,10 @@ fn ods_extension_error_cache_never_imports_its_placeholder_zero() {
         r#"<table:table-cell xmlns:calcext="urn:org:documentfoundation:names:experimental:calc:xmlns:calcext:1.0" calcext:value-type="error" office:value-type="float" office:value="0" table:formula="of:=1/0"><text:p>#DIV/0!</text:p></table:table-cell>"#,
     );
     let (wb, report) = read_ods(&bytes).unwrap();
-    assert_eq!(wb.sheets[0].value(CellRef::new(0, 0)), text("#DIV/0!"));
-    assert!(report.warnings.iter().any(|w| w.contains("unsupported or missing")));
+    // The placeholder 0 never becomes the value: the live formula recalculates to #DIV/0!.
+    assert_eq!(wb.sheets[0].value(CellRef::new(0, 0)), Value::Empty);
+    assert_eq!(wb.sheets[0].cell(CellRef::new(0, 0)).unwrap().formula.as_ref().unwrap().text, "1/0");
+    assert!(report.warnings.iter().all(|w| !w.contains("unsupported or missing")));
 }
 
 #[test]
@@ -263,4 +265,189 @@ fn ods_blank_repeats_past_the_sheet_edge_are_clipped() {
         r#"<table:table table:name="Data"><table:table-row table:number-rows-repeated="1048576"><table:table-cell/></table:table-row><table:table-row><table:table-cell office:value-type="float" office:value="1"/></table:table-row></table:table>"#,
     );
     assert!(matches!(read_ods(&late), Err(IoError::TooLarge(_))));
+}
+
+#[test]
+fn ods_formulas_import_live_and_survive_xlsx() {
+    let bytes = row(r#"
+        <table:table-cell table:formula="of:=A1*2" office:value-type="float" office:value="85"><text:p>85</text:p></table:table-cell>
+        <table:table-cell table:formula="of:=1/0" office:value-type="string"><text:p>#DIV/0!</text:p></table:table-cell>
+        <table:table-cell xmlns:calcext="urn:org:documentfoundation:names:experimental:calc:xmlns:calcext:1.0" table:formula="of:=1/0" office:value-type="string" calcext:value-type="error"><text:p>#DIV/0!</text:p></table:table-cell>
+        <table:table-cell table:formula="of:=UNKNOWN()"/>
+    "#);
+    let (wb, report) = read_ods_with(&bytes, &|n| n != "UNKNOWN").unwrap();
+    assert!(report.warnings.iter().any(|w| w.contains("formulas are imported and recalculate")));
+    assert!(report.warnings.iter().all(|w| !w.contains("will not recalculate")));
+    let s = &wb.sheets[0];
+    let formula = |c: u32| s.cell(CellRef::new(0, c)).unwrap().formula.clone().unwrap().text.clone();
+    assert_eq!(formula(0), "A1*2");
+    assert_eq!(s.value(CellRef::new(0, 0)), Value::Number(85.0));
+    // Both spellings of an error cache — a string cell holding the error's text, and the
+    // calcext error extension — become the error itself on a live formula.
+    for c in 1..=2u32 {
+        assert_eq!(s.value(CellRef::new(0, c)), Value::Error(CellError::Div0), "col {c}");
+        assert_eq!(formula(c), "1/0");
+    }
+    // An unknown call cannot be guaranteed to recalculate to the saved result, so it keeps its
+    // cached constant (here the unavailable-result text) instead of a live #NAME? formula.
+    assert_eq!(s.value(CellRef::new(0, 3)), Value::Text("[Unavailable ODS formula result]".into()));
+    assert!(s.cell(CellRef::new(0, 3)).unwrap().formula.is_none());
+    let (reopened, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let s = &reopened.sheets[0];
+    assert_eq!(s.cell(CellRef::new(0, 0)).unwrap().formula.clone().unwrap().text, "A1*2");
+    assert_eq!(s.value(CellRef::new(0, 0)), Value::Number(85.0));
+    assert_eq!(s.value(CellRef::new(0, 1)), Value::Error(CellError::Div0));
+    assert_eq!(s.value(CellRef::new(0, 3)), Value::Text("[Unavailable ODS formula result]".into()));
+}
+
+#[test]
+fn ods_translated_formula_shapes() {
+    let bytes = ods(r#"
+      <table:table table:name="Main"><table:table-row>
+        <table:table-cell table:formula="of:=SUM([.A1]:[.B2])" office:value-type="float" office:value="10"/>
+        <table:table-cell table:formula="of:=IF([.A1]>1;&quot;y&quot;;&quot;n&quot;)" office:value-type="string"><text:p>y</text:p></table:table-cell>
+        <table:table-cell table:formula="of:=['My Sheet'.A1]" office:value-type="float" office:value="7"/>
+        <table:table-cell table:formula="of:=COM.MICROSOFT.XLOOKUP(1;[.A1];[.B1])" office:value-type="float" office:value="1"/>
+      </table:table-row></table:table>
+      <table:table table:name="My Sheet"><table:table-row><table:table-cell office:value-type="float" office:value="7"/></table:table-row></table:table>
+    "#);
+    let (wb, _) = read_ods(&bytes).unwrap();
+    let s = &wb.sheets[0];
+    let text = |c: u32| s.cell(CellRef::new(0, c)).unwrap().formula.clone().unwrap().text.clone();
+    assert_eq!(text(0), "SUM(A1:B2)");
+    assert_eq!(text(1), r#"IF(A1>1,"y","n")"#);
+    assert_eq!(text(2), "'My Sheet'!A1");
+    assert_eq!(text(3), "XLOOKUP(1,A1,B1)");
+    assert_eq!(wb.sheets[1].value(CellRef::new(0, 0)), Value::Number(7.0));
+}
+
+#[test]
+fn ods_untranslatable_formulas_keep_cached_constants() {
+    let bytes = row(r#"
+        <table:table-cell table:formula="of:=ORG.OPENOFFICE.FOO(1)" office:value-type="float" office:value="11"/>
+        <table:table-cell table:formula="of:=['file:///report.ods'#Data.A1]" office:value-type="string"><text:p>from file</text:p></table:table-cell>
+        <table:table-cell table:formula="of:=[.A1]~[.B1]" office:value-type="float" office:value="3"/>
+        <table:table-cell table:formula="of:=ORG.OPENOFFICE.NOCACHE()"/>
+    "#);
+    let (wb, report) = read_ods(&bytes).unwrap();
+    let s = &wb.sheets[0];
+    assert_eq!(s.value(CellRef::new(0, 0)), Value::Number(11.0));
+    assert_eq!(s.value(CellRef::new(0, 1)), text("from file"));
+    assert_eq!(s.value(CellRef::new(0, 2)), Value::Number(3.0));
+    // A formula that neither translates nor has a cache is marked, never silently dropped.
+    assert_eq!(s.value(CellRef::new(0, 3)), text("[Unavailable ODS formula result]"));
+    for c in 0..4u32 {
+        assert!(s.cell(CellRef::new(0, c)).unwrap().formula.is_none(), "col {c}");
+    }
+    assert!(report.warnings.iter().any(|w| w.contains("or formulas that cannot be translated")));
+}
+
+#[test]
+fn ods_matrix_formula_marks_legacy_array() {
+    let bytes = row(
+        r#"<table:table-cell table:formula="of:=TRANSPOSE([.A1:.B2])" table:number-matrix-columns-spanned="2" table:number-matrix-rows-spanned="2" office:value-type="float" office:value="5"/>"#,
+    );
+    let (wb, _) = read_ods(&bytes).unwrap();
+    let cell = wb.sheets[0].cell(CellRef::new(0, 0)).unwrap();
+    assert_eq!(cell.formula.as_ref().unwrap().text, "TRANSPOSE(A1:B2)");
+    assert_eq!(cell.formula.as_ref().unwrap().array, Some(RangeRef::new(CellRef::new(0, 0), CellRef::new(1, 1))));
+    assert_eq!(cell.value, Value::Number(5.0));
+    // The legacy array survives an XLSX round trip: both the text and the array range.
+    let (reopened, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let cell = reopened.sheets[0].cell(CellRef::new(0, 0)).unwrap();
+    assert_eq!(cell.formula.as_ref().unwrap().text, "TRANSPOSE(A1:B2)");
+    assert_eq!(cell.formula.as_ref().unwrap().array, Some(RangeRef::new(CellRef::new(0, 0), CellRef::new(1, 1))));
+    // A repeated matrix cell would cover overlapping ranges: it imports as a plain formula.
+    let bytes = row(
+        r#"<table:table-cell table:number-columns-repeated="3" table:formula="of:=TRANSPOSE([.A1:.B2])" table:number-matrix-columns-spanned="2" table:number-matrix-rows-spanned="2" office:value-type="float" office:value="5"/>"#,
+    );
+    let (wb, _) = read_ods(&bytes).unwrap();
+    for c in 0..3u32 {
+        let cell = wb.sheets[0].cell(CellRef::new(0, c)).unwrap();
+        assert_eq!(cell.formula.as_ref().unwrap().text, "TRANSPOSE(A1:B2)");
+        assert_eq!(cell.formula.as_ref().unwrap().array, None, "col {c}");
+    }
+}
+
+/// A matrix span that would run past the last row is refused rather than clipped: the legacy
+/// array would cover cells that do not exist.
+#[test]
+fn ods_matrix_formula_spanning_past_the_last_row_is_refused() {
+    let bytes = ods(&format!(
+        r#"<table:table table:name="Data"><table:table-row/><table:table-row><table:table-cell table:formula="of:=TRANSPOSE([.A1:.B2])" table:number-matrix-rows-spanned="{MAX_ROWS}" office:value-type="float" office:value="5"/></table:table-row></table:table>"#
+    ));
+    assert_eq!(read_ods(&bytes).unwrap_err().to_string(), "the file is too large: ODS matrix formula exceeds worksheet bounds");
+}
+
+#[test]
+fn ods_repeated_formula_cells() {
+    let bytes = row(r#"<table:table-cell table:number-columns-repeated="3" table:formula="of:=A1*2" office:value-type="float" office:value="10"/>"#);
+    let (wb, _) = read_ods(&bytes).unwrap();
+    for c in 0..3u32 {
+        assert_eq!(wb.sheets[0].value(CellRef::new(0, c)), Value::Number(10.0));
+        assert_eq!(wb.sheets[0].cell(CellRef::new(0, c)).unwrap().formula.as_ref().unwrap().text, "A1*2");
+    }
+}
+
+#[test]
+fn ods_formula_attribute_size_cap_still_rejected() {
+    let formula = format!("of:={}", "1".repeat(1024 * 1024 + 1));
+    let cells = format!(r#"<table:table-cell table:formula="{formula}" office:value-type="float" office:value="1"/>"#);
+    assert!(matches!(read_ods(&row(&cells)), Err(IoError::TooLarge(_))));
+}
+
+/// A sheet name ODS allows and XLSX forbids (over 31 characters) is renamed on import; a
+/// cross-sheet formula naming it follows the rename instead of recalculating to #REF!.
+#[test]
+fn ods_formulas_follow_sheet_renames() {
+    let long = "A very long sheet name over 31 chars";
+    let cells = r#"<table:table-cell table:formula="of:=['A very long sheet name over 31 chars'.A1]+1" office:value-type="float" office:value="2"/>"#;
+    let long_esc = long.replace('"', "&quot;");
+    let xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?><office:document-content ")
+        + "xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" "
+        + "xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\">"
+        + "<office:body><office:spreadsheet>"
+        + &format!(
+            "<table:table table:name=\"{long_esc}\"><table:table-row><table:table-cell office:value-type=\"float\" office:value=\"1\"/></table:table-row></table:table>"
+        )
+        + &format!("<table:table table:name=\"Summary\"><table:table-row>{cells}</table:table-row></table:table>")
+        + "</office:spreadsheet></office:body></office:document-content>";
+    let _ = xml;
+    let content = xml;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    zip.start_file("mimetype", zip::write::SimpleFileOptions::default()).unwrap();
+    zip.write_all(b"application/vnd.oasis.opendocument.spreadsheet").unwrap();
+    zip.start_file("content.xml", zip::write::SimpleFileOptions::default()).unwrap();
+    zip.write_all(content.as_bytes()).unwrap();
+    let bytes = zip.finish().unwrap().into_inner();
+    let (wb, rep) = read_ods(&bytes).unwrap();
+    assert!(rep.warnings.iter().any(|w| w.contains("renamed")), "{:?}", rep.warnings);
+    let renamed = &wb.sheets[0].name;
+    assert_ne!(renamed, long);
+    let formula = wb.sheets[1].cell(CellRef::new(0, 0)).unwrap().formula.as_ref().unwrap().text.clone();
+    assert!(formula.contains(&format!("'{}'", renamed)) || formula.contains(renamed.as_str()), "names the renamed sheet: {formula}");
+    assert!(!formula.contains(long), "the original name is gone: {formula}");
+}
+
+/// An unknown call keeps its cached constant instead of opening as a live `#NAME?`.
+#[test]
+fn ods_unknown_call_keeps_its_cached_constant() {
+    let bytes = row(r#"<table:table-cell table:formula="of:=NOSUCHFUNCTION(1)" office:value-type="float" office:value="41"/>"#);
+    let (wb, rep) = read_ods_with(&bytes, &|n| n != "NOSUCHFUNCTION").unwrap();
+    let cell = wb.sheets[0].cell(CellRef::new(0, 0)).unwrap();
+    assert!(cell.formula.is_none(), "not a live formula: {:?}", cell.formula);
+    assert_eq!(cell.value, Value::Number(41.0));
+    assert!(rep.warnings.iter().any(|w| w.contains("recalculate") || w.contains("constant")), "{:?}", rep.warnings);
+}
+
+/// Cached values in a matrix span's covered cells are dropped: the anchor's array recalculation
+/// owns the range, and a follower constant left in the store could still be read.
+#[test]
+fn ods_matrix_followers_lose_their_cached_values() {
+    let anchor = r#"<table:table-cell table:formula="of:=TRANSPOSE([.A1:.A2])" table:number-matrix-columns-spanned="1" table:number-matrix-rows-spanned="2" office:value-type="float" office:value="7"/>"#;
+    let covered = r#"<table:covered-table-cell office:value-type="float" office:value="999"/>"#;
+    let bytes = two_row_sheet(anchor, covered);
+    let (wb, _) = read_ods(&bytes).unwrap();
+    assert_eq!(wb.sheets[0].value(CellRef::new(0, 0)), Value::Number(7.0), "the anchor keeps its cached value");
+    assert_eq!(wb.sheets[0].cell(CellRef::new(1, 0)), None, "the follower's cached constant is gone");
 }
