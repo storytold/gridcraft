@@ -75,9 +75,18 @@ fn font_ref(data: &FontData) -> Option<FontRef<'_>> {
     FontRef::from_index(data.font.as_ref().as_ref(), data.index).ok()
 }
 
-fn small_faces() -> &'static [Option<Arc<FontData>>; 2] {
+/// The face for small sizes, regular and bold, once the installed fonts have been scanned. The scan
+/// runs in the background from startup, so until it ends nothing is remembered and the cell's font
+/// draws meanwhile.
+fn small_faces() -> Option<&'static [Option<Arc<FontData>>; 2]> {
     static FACES: OnceLock<[Option<Arc<FontData>>; 2]> = OnceLock::new();
-    FACES.get_or_init(|| {
+    if let Some(faces) = FACES.get() {
+        return Some(faces);
+    }
+    if !crate::fonts::scan_done() {
+        return None;
+    }
+    Some(FACES.get_or_init(|| {
         let faces = crate::fonts::faces_of(SMALL_FACE);
         let load = |bold: bool| {
             let face = faces.iter().find(|f| !f.italic && (f.weight >= 600.0) == bold)?;
@@ -86,7 +95,7 @@ fn small_faces() -> &'static [Option<Arc<FontData>>; 2] {
             Some(Arc::new(data))
         };
         [load(false), load(true)]
-    })
+    }))
 }
 
 fn face(ctx: &Context, family: &FontFamily) -> Option<Face> {
@@ -97,7 +106,7 @@ fn face(ctx: &Context, family: &FontFamily) -> Option<Face> {
         Some((key, data))
     })?;
     let bold = font_ref(&own).is_some_and(|f| f.attributes().weight.value() >= 600.0);
-    if let Some(small) = small_faces().get(usize::from(bold)).cloned().flatten() {
+    if let Some(small) = small_faces().and_then(|faces| faces.get(usize::from(bold)).cloned().flatten()) {
         return Some(Face { key: format!("small:{}", u8::from(bold)), data: small, own, widen_bold: false });
     }
     Some(Face { key, data: own.clone(), own, widen_bold: bold })
