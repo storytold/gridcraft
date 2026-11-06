@@ -78,6 +78,17 @@ fn set(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"cell": at.a1(), "value": crate::cmd::inspect::value_json(&shown)}))
 }
 
+/// A table header is the column's name, never a formula or code (as in Excel), and the header
+/// row would take it over.
+fn refuse_table_header(s: &Session, sheet: usize, at: CellRef) -> Result<()> {
+    let header =
+        s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.tables.iter().any(|t| t.header_row && t.range.start.row == at.row && t.range.contains(at)));
+    if header {
+        return Err(EngineError::Other(format!("{} is a table header; Python cells can't go in a table's header row", at.a1())));
+    }
+    Ok(())
+}
+
 /// Writes `py` into the cell, which held `old`: what `python.set` and `python.output` share. The
 /// code must fit in one cell and a table header takes none; a locked cell on a protected sheet is
 /// refused by the edit itself.
@@ -88,24 +99,20 @@ fn store(s: &mut Session, cmd: &str, sheet: usize, at: CellRef, mut py: PyCode, 
             format!("the code doesn't fit in one cell: written as PY(…) it would be longer than Excel's {MAX_FORMULA_CHARS}-character formula limit"),
         ));
     }
-    // A table header is the column's name, never a formula or code (as in Excel).
-    let header =
-        s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.tables.iter().any(|t| t.header_row && t.range.start.row == at.row && t.range.contains(at)));
-    if header {
-        return Err(EngineError::Other(format!("{} is a table header; Python cells can't go in a table's header row", at.a1())));
-    }
+    refuse_table_header(s, sheet, at)?;
     // What a text does with its lines is the cell's choice, whatever the code gives.
     if let Some(o) = &old {
         py.spill_lines = o.spill_lines;
     }
     // Unchanged code with the same return type keeps its result (and its value); new code, or a
     // new return type, has none until it runs: a result of the other type would show a value and
-    // preview that don't belong to the cell.
-    let keep = old.filter(|o| o.code == py.code && o.object == py.object);
+    // preview that don't belong to the cell. A picture with no choice is both, so any choice keeps it.
+    let keep = old.filter(|o| o.code == py.code && (o.object == py.object || (!o.output_chosen && o.image().is_some())));
     let value = match &keep {
         Some(o) => {
             py.output = o.output.clone();
             py.stale = o.stale;
+            py.busy = o.busy;
             None
         }
         None => Some(gridcraft_model::python::BLOCKED),
@@ -126,6 +133,7 @@ fn store(s: &mut Session, cmd: &str, sheet: usize, at: CellRef, mut py: PyCode, 
 /// behaves as a Python Object, and needs no new run to move into the cell. A locked cell on a
 /// protected sheet is refused here, as the choice isn't what the edit itself compares.
 fn set_output_choice(s: &mut Session, sheet: usize, at: CellRef, object: bool) -> Result<()> {
+    refuse_table_header(s, sheet, at)?;
     if let Some(m) = s.locked_cell_message(sheet, at) {
         return Err(EngineError::Other(m));
     }

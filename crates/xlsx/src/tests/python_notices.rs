@@ -193,6 +193,20 @@ fn the_persons_properties_stay_when_the_notices_go() {
 }
 
 #[test]
+fn an_element_beside_the_notices_keeps_the_part_when_they_go() {
+    use crate::custom_props::{Stripped, without_notices};
+    let notice = format!(r#"<property fmtid="{{1}}" pid="2" name="{NOTICE_NAME}"><vt:lpwstr>x</vt:lpwstr></property>"#);
+    match without_notices(format!("<Properties>{notice}<extra/></Properties>").as_bytes()) {
+        Stripped::Part(part) => {
+            let part = String::from_utf8(part).unwrap();
+            assert!(part.contains("<extra/>") && !part.contains(NOTICE_NAME), "{part}");
+        }
+        _ => panic!("the part stays"),
+    }
+    assert!(matches!(without_notices(format!("<Properties>\n{notice}\n</Properties>").as_bytes()), Stripped::Nothing));
+}
+
+#[test]
 fn any_shape_of_root_takes_the_notices() {
     // Self-closed, as an empty list can be.
     let empty = format!(r#"<Properties xmlns="{NS}"/>"#);

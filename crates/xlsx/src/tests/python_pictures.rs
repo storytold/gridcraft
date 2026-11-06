@@ -343,6 +343,52 @@ fn an_excel_value_with_a_fitted_copy_keeps_its_picture_and_density_through_a_fil
     assert_eq!(image.picture.data, full);
 }
 
+/// The word `Image` from an Excel Value is a text the code gave, unless the file says it stands in for
+/// a picture with no room for a rich value.
+#[test]
+fn an_excel_value_whose_result_is_the_word_keeps_it_and_the_old_companion_floats() {
+    let mut sheet = Sheet::new("Data");
+    image_cell(&mut sheet, "H7", false, image_of(&png(80, 60), 2));
+    let bytes = write_xlsx(&book(vec![sheet])).unwrap();
+    let was = r#"<c r="H7" vm="1" t="e"><f>_xlfn._xlws.PY(0,0)</f><v>#VALUE!</v></c>"#;
+    let bytes = with_text_changed(&bytes, "xl/worksheets/sheet1.xml", was, r#"<c r="H7" t="str"><f>_xlfn._xlws.PY(0,0)</f><v>Image</v></c>"#);
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    let sheet = &back.sheets[0];
+    assert!(py_at(sheet, "H7").image().is_none());
+    assert_eq!(sheet.cell(at("H7")).unwrap().value, Value::text("Image"));
+    assert_eq!(sheet.images.len(), 1, "the picture isn't lost");
+    assert!(report.warnings.iter().any(|w| w.contains("don't go with what that cell holds")), "{:?}", report.warnings);
+}
+
+#[test]
+fn a_follower_of_a_shared_python_formula_stays_a_python_cell() {
+    let data = png(80, 60);
+    let mut sheet = Sheet::new("Data");
+    image_cell(&mut sheet, "H7", false, image_of(&data, 2));
+    image_cell(&mut sheet, "H8", false, image_of(&data, 2));
+    let bytes = write_xlsx(&book(vec![sheet])).unwrap();
+    let part = "xl/worksheets/sheet1.xml";
+    let bytes = with_text_changed(&bytes, part, "<f>_xlfn._xlws.PY(0,0)</f>", r#"<f t="shared" ref="H7:H8" si="0">_xlfn._xlws.PY(0,0)</f>"#);
+    let bytes = with_text_changed(&bytes, part, "<f>_xlfn._xlws.PY(1,0)</f>", r#"<f t="shared" si="0"/>"#);
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    let sheet = &back.sheets[0];
+    assert!(sheet.cell_pictures.is_empty(), "no cell became a static picture");
+    assert_eq!(py_at(sheet, "H8").code, "plot()");
+    assert_eq!(py_at(sheet, "H8").image().unwrap().picture.data, data);
+}
+
+/// A file past the limit on what reading is charged doesn't open, and linked copies of one plot are
+/// charged once each.
+#[test]
+fn floating_pictures_come_out_of_the_room_for_python_cells_pictures() {
+    let mut sheet = Sheet::new("Data");
+    for id in 1..=3 {
+        sheet.images.push(linked_picture(id, "Data!A1", "plot", &[0u8; 1024]));
+    }
+    let room = crate::write::python_image_room(&book(vec![sheet]));
+    assert_eq!(room, crate::write::MAX_PYTHON_IMAGE_BYTES - 3 * 1024);
+}
+
 #[test]
 fn a_picture_with_the_density_of_one_keeps_its_size() {
     let mut sheet = Sheet::new("Data");
