@@ -102,7 +102,8 @@ and series counts), `comments`, `hyperlinks`, `pivots`, `properties`. `#SPILL!`/
 (title, subject, creator, keywords, description, lastModifiedBy, lastPrinted, created, modified, category,
 contentStatus, revision, version, identifier, language): one the source sets that the written file lacks is reported
 as `property dcterms:created lost`, a different text as `property cp:lastModifiedBy changed: "A" → "B"`. The round trip
-writes the file as it is, without the save time and user name a Save records.
+writes the file as it is, without the save time and user name a Save records. XML text and CDATA carry the same
+property value; changing between them is not a difference, while losing their content is.
 
 Files that fail to open are reported with GridCraft's error and don't stop the run. Unreadable directories,
 directory-entry/metadata errors, and subtrees or files omitted by the depth (32) and file (100,000) limits appear

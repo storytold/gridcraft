@@ -452,6 +452,11 @@ pub(super) fn core_properties(bytes: &[u8]) -> Result<BTreeMap<String, String>, 
                     v.push_str(&t.xml_content(quick_xml::XmlVersion::Explicit1_0).map_err(|e| format!("{name}: {e}"))?);
                 }
             }
+            Event::CData(t) => {
+                if let Some(v) = current.as_ref().and_then(|c| out.get_mut(c)) {
+                    v.push_str(&String::from_utf8_lossy(&t));
+                }
+            }
             Event::GeneralRef(r) => {
                 if let Some(v) = current.as_ref().and_then(|c| out.get_mut(c)) {
                     let named = match r.as_ref() {

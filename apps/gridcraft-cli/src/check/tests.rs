@@ -537,10 +537,9 @@ fn a_core_property_lost_or_changed_is_reported() {
 
 #[test]
 fn core_properties_cdata_is_compared_as_text() {
-    for (content, expected, escaped) in [
-        ("<![CDATA[A]]>", "A", "A"),
-        ("before <![CDATA[<&]]> after &amp; end", "before <& after & end", "before &lt;&amp; after &amp; end"),
-    ] {
+    for (content, expected, escaped) in
+        [("<![CDATA[A]]>", "A", "A"), ("before <![CDATA[<&]]> after &amp; end", "before <& after & end", "before &lt;&amp; after &amp; end")]
+    {
         let source = book_with_core(&format!("<dc:title>{content}</dc:title>"));
         let actual = core_properties(&source).unwrap();
         assert_eq!(actual.get("title").map(String::as_str), Some(expected));
