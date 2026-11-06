@@ -159,12 +159,20 @@ fn area(geo: &Geo, sh: &Sheet, c: CellRef) -> Rect {
     }
 }
 
-/// The PY tag of the Python cell at `c` (logical coordinates), when `c` holds Python code.
-pub fn tag_at(geo: &Geo, wb: &Workbook, sh: &Sheet, c: CellRef) -> Option<Rect> {
+/// What opens the card of the Python cell at `c` (logical coordinates), when `c` holds Python code:
+/// its PY tag, or the double square that stands there when the cell says `Image` and is ready. The
+/// area is the one that is painted.
+pub fn tag_at(session: &Session, geo: &Geo, wb: &Workbook, sh: &Sheet, c: CellRef) -> Option<Rect> {
     let c = sh.merge_at(c).map(|m| m.start).unwrap_or(c);
-    let cell = sh.cell(c).filter(|x| x.py.is_some())?;
+    let cell = sh.cell(c)?;
+    let py = cell.py.as_deref()?;
     let rect = area(geo, sh, c);
-    tag_rect(rect, rect.left(), geo.z, wb.styles.get(cell.style).align.v)
+    let style = wb.styles.get(cell.style);
+    if tag_state(session, wb.active_sheet(), c, py, &cell.value) == TagState::Ready && crate::python_plots::says_image(py, &cell.value) {
+        crate::python_plots::mark_rect(rect, rect.left(), style.font.size, geo.z, style.align.v)
+    } else {
+        tag_rect(rect, rect.left(), geo.z, style.align.v)
+    }
 }
 
 /// The Python cell the active cell shows: itself, or the one whose result spills over it.
@@ -282,7 +290,7 @@ pub fn command(app: &mut SheetApp, p: &Json) -> Result<Json, String> {
 }
 
 /// Draws the open card under its cell (beside it on the screen's side the cell starts on, so it is
-/// mirrored on a right-to-left sheet), and closes it when its cell is no longer a Python cell in
+/// mirrored on a right-to-left sheet; a picture's card beside the cell), and closes it when its cell is no longer a Python cell in
 /// view, the selection leaves the cell, an edit starts, or the user clicks elsewhere or presses Esc.
 pub fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_open: bool) {
     let Some(card) = app.grid.py_card else { return };
@@ -317,14 +325,19 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, was_op
     let dragged = app.python.card_image_width.is_some();
     let mut action = None;
     let mut convert = false;
-    let (at, pivot) = if geo.rtl { (screen.right_bottom(), Align2::RIGHT_TOP) } else { (screen.left_bottom(), Align2::LEFT_TOP) };
+    // A picture's card is tall, so it goes beside the cell. Another card goes under it.
+    let (at, pivot) = match picture_width {
+        Some(w) => crate::python_plots::card_place(screen, w, ui.ctx().content_rect(), geo.rtl),
+        None if geo.rtl => (screen.right_bottom() + vec2(0.0, 2.0), Align2::RIGHT_TOP),
+        None => (screen.left_bottom() + vec2(0.0, 2.0), Align2::LEFT_TOP),
+    };
     let mut close = false;
     let mut toggle_output = false;
     let output_open = app.python.card_output == Some(card);
     let area = egui::Area::new(egui::Id::unique("python_card"))
         .order(egui::Order::Foreground)
         .pivot(pivot)
-        .fixed_pos(at + vec2(0.0, 2.0))
+        .fixed_pos(at)
         .constrain_to(ui.ctx().content_rect());
     let resp = area.show(ui.ctx(), |ui| {
         let framed = egui::Frame::popup(ui.style()).inner_margin(8.0).show(ui, |ui| {

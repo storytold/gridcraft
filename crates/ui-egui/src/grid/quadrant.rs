@@ -314,12 +314,19 @@ fn paint_checkbox(p: &egui::Painter, rect: Rect, z: f32, on: bool) {
     }
 }
 
-/// A Python cell carries a PY tag at its start, and its text goes in the rest of the cell: paints
-/// the tag when there is room and moves `text_left` past it. Whether the cell is a Python cell.
+/// A Python cell carries a PY tag at its start, or a double square when it says `Image` and is ready,
+/// and its text goes in the rest of the cell: paints it when there is room and moves `text_left` past
+/// it. Whether the cell is a Python cell.
 fn paint_python_tag(q: &QuadrantPaint<'_>, c: CellRef, rect: Rect, lk: &Look, text_left: &mut f32) -> bool {
     let Some((cell, py)) = q.sheet.cell(c).and_then(|x| x.py.as_deref().map(|py| (x, py))) else { return false };
-    if let Some(tag) = crate::python_card::tag_rect(rect, *text_left, q.geo.z, lk.style.align.v) {
-        let state = crate::python_card::tag_state(q.session, q.sheet_index, c, py, &cell.value);
+    let state = crate::python_card::tag_state(q.session, q.sheet_index, c, py, &cell.value);
+    let (z, v) = (q.geo.z, lk.style.align.v);
+    if state == crate::python_card::TagState::Ready && crate::python_plots::says_image(py, &cell.value) {
+        if let Some(mark) = crate::python_plots::mark_rect(rect, *text_left, lk.style.font.size, z, v) {
+            crate::icons::paint_on_sheet(q.painter, mark, crate::icons::Icon::PythonPicture, lk.text_color);
+            *text_left = mark.right();
+        }
+    } else if let Some(tag) = crate::python_card::tag_rect(rect, *text_left, z, v) {
         crate::python_card::paint_tag(q.painter, tag, q.tokens, state);
         *text_left = tag.right();
     }
@@ -348,6 +355,20 @@ fn should_expand_text(filter_space: f32, overflows: bool, across_end: u32, col: 
 ///
 /// Handles text layout, wrapping, alignment, overflow into neighbouring cells,
 /// and clipping, while preserving cell decoration and merged-cell constraints.
+/// The font of a cell's text at `size`: the cell's own, or for the word `Image` of a Python cell the one
+/// that word has. `python` says the cell has its Python tag or double square.
+fn cell_text_font(q: &QuadrantPaint<'_>, c: CellRef, python: bool, v: &Value, lk: &Look, size: f32) -> FontId {
+    let font = &lk.style.font;
+    let family = theme::cell_family(&font.name, font.bold, font.italic);
+    let py = if python { q.sheet.cell(c).and_then(|x| x.py.as_deref()) } else { None };
+    match v {
+        Value::Text(word) if py.is_some_and(|py| crate::python_plots::says_image(py, v)) => {
+            crate::python_plots::word_font(q.painter, word, size, font.bold, family)
+        }
+        _ => FontId::new(size, family),
+    }
+}
+
 fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLook>), merges: &[RangeRef]) {
     let (cell, rect, lk, cfl) = painted;
     let c = *cell;
@@ -386,8 +407,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     let rect = &text_rect;
     let st = &lk.style;
     let size = st.font.size * 96.0 / 72.0 * z;
-    let fam = theme::cell_family(&st.font.name, st.font.bold, st.font.italic);
-    let font = FontId::new(size, fam);
+    let font = cell_text_font(q, c, python, &v, lk, size);
     // Digits fit by the cell's own font and size, not the default 11pt (9pt marks in narrow columns).
     let char_w = p.layout_no_wrap("0".to_string(), font.clone(), Color32::PLACEHOLDER).size().x.max(1.0);
     let avail_w = rect.right() - text_left;

@@ -83,7 +83,7 @@ fn on_screen(h: &Harness, cell: &str) -> (Rect, Option<Rect>) {
     let sh = d.wb.active().unwrap();
     let geo = app.grid.geo.as_ref().unwrap();
     let c = CellRef::parse(cell).unwrap();
-    (geo.screen_cell_rect(sh, c), python_card::tag_at(geo, &d.wb, sh, c).map(|t| geo.mirror_rect(t)))
+    (geo.screen_cell_rect(sh, c), python_card::tag_at(&app.session, geo, &d.wb, sh, c).map(|t| geo.mirror_rect(t)))
 }
 
 fn card(h: &Harness) -> Option<CellRef> {

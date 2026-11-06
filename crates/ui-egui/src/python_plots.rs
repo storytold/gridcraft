@@ -3,9 +3,9 @@
 //! has a problem. The commands behind them live in the engine: `python.output`, `python.image`,
 //! `python.saveImage`, `python.displayOverCells` and `python.createReference`.
 
-use egui::{Rect, Sense, Vec2, pos2, vec2};
-use gridcraft_engine::core::CellRef;
-use gridcraft_engine::model::{ObjKind, ObjRef, PyImage, Sheet};
+use egui::{Align2, Color32, FontFamily, FontId, Painter, Pos2, Rect, Sense, Vec2, pos2, vec2};
+use gridcraft_engine::core::{CellRef, Value};
+use gridcraft_engine::model::{ObjKind, ObjRef, PyCode, PyImage, Sheet, VAlign};
 use serde_json::json;
 
 use crate::SheetApp;
@@ -24,6 +24,68 @@ pub const IMAGE_COPIED: &str = "The image is on the clipboard.";
 /// The card's width before anyone drags its corner, and the limits of the drag.
 const CARD_WIDTH: f32 = 320.0;
 const CARD_MIN_WIDTH: f32 = 200.0;
+
+/// The side of the double square for each unit of its cell's text size. Its drawing takes 13/16 of
+/// the side, so it is a little taller than the text and fills a row of the default height.
+const MARK_PER_TEXT_SIZE: f32 = 1.25;
+
+/// How far the word in a cell may be scaled to match the cell's typeface, so that a very narrow or a
+/// very wide cell font does not make it too small or too large.
+const WORD_SCALE: (f32, f32) = (0.9, 1.1);
+
+/// The gap between a picture's card and its cell.
+const CARD_GAP: f32 = 2.0;
+/// What a card's frame adds to its width: its margin on both sides.
+const CARD_FRAME: f32 = 16.0;
+
+/// Whether a Python cell says `Image`: its result is a picture, kept as a Python object. An error or
+/// `#BUSY!` in the cell is not that word.
+pub fn says_image(py: &PyCode, value: &Value) -> bool {
+    py.image().is_some() && py.shows_object() && matches!(value, Value::Text(_))
+}
+
+/// The double square of a cell that says `Image`, in place of its ready PY tag, in the cell `rect`
+/// (logical coordinates) from `left`: it opens the card as the tag does. It follows the size of the
+/// cell's text, `points`, and is never taller than the cell. `None` when the cell is too small to
+/// hold it.
+pub fn mark_rect(rect: Rect, left: f32, points: f32, z: f32, v: VAlign) -> Option<Rect> {
+    // Clear of the cell's edges, where a selected cell has its border. At the default size this
+    // centres it in a row of the default height.
+    let inset = 0.8 * z;
+    let side = (points * 96.0 / 72.0 * z * MARK_PER_TEXT_SIZE).min(rect.height() - 2.0 * inset);
+    let top = match v {
+        VAlign::Top => rect.top() + inset,
+        VAlign::Bottom => rect.bottom() - inset - side,
+        _ => rect.center().y - side / 2.0,
+    };
+    (side >= 6.0 && rect.right() - left >= side + 12.0 * z).then(|| Rect::from_min_size(pos2(left + z, top), vec2(side, side)))
+}
+
+/// The font of the word `Image` in a cell: the ribbon's typeface and the cell's bold, at the size that
+/// gives `word` the width it has as any other text in that cell. `size` and `cell` are that text's size
+/// and typeface. The same number is not the same size across typefaces: on macOS the ribbon's letters
+/// are about 7% narrower than the cell's, and on a display of scale 1 they can round to a pixel shorter.
+pub fn word_font(p: &Painter, word: &str, size: f32, bold: bool, cell: FontFamily) -> FontId {
+    let ribbon = |size| if bold { theme::ui_bold(size) } else { theme::ui_font(size) };
+    let width = |font| p.layout_no_wrap(word.to_string(), font, Color32::PLACEHOLDER).size().x;
+    ribbon(size * word_scale(width(FontId::new(size, cell)), width(ribbon(size))))
+}
+
+/// The scale of the ribbon's typeface for a word as wide as it is in the cell's.
+fn word_scale(in_cell: f32, in_ribbon: f32) -> f32 {
+    if in_ribbon > 0.0 { (in_cell / in_ribbon).clamp(WORD_SCALE.0, WORD_SCALE.1) } else { 1.0 }
+}
+
+/// Where a picture's card goes: beside its cell, level with the cell's top, so the cell stays in view
+/// whatever the picture's height. It takes the side the sheet reads towards, or the other side when
+/// it fits only there. `width` is the card's content width.
+pub(crate) fn card_place(cell: Rect, width: f32, window: Rect, rtl: bool) -> (Pos2, Align2) {
+    let wanted = width + CARD_FRAME + CARD_GAP;
+    let fits_after = cell.right() + wanted <= window.right();
+    let fits_before = cell.left() - wanted >= window.left();
+    let after = if rtl { fits_after && !fits_before } else { fits_after || !fits_before };
+    if after { (cell.right_top() + vec2(CARD_GAP, 0.0), Align2::LEFT_TOP) } else { (cell.left_top() - vec2(CARD_GAP, 0.0), Align2::RIGHT_TOP) }
+}
 
 /// The Python Output menu, between the Enter button and the PY badge: the return type of the active
 /// Python cell. Greyed on a draft, which has no return type yet. Returns its rect.
@@ -219,5 +281,84 @@ pub fn picture_chrome(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &She
         .inner;
     if clicked {
         app.run_or_alert("python.createReference", json!({"id": id}));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const WINDOW: Rect = Rect { min: pos2(0.0, 0.0), max: pos2(1000.0, 700.0) };
+
+    fn cell(left: f32) -> Rect {
+        Rect::from_min_size(pos2(left, 300.0), vec2(64.0, 20.0))
+    }
+
+    #[test]
+    fn a_pictures_card_goes_beside_its_cell_on_the_side_that_has_room() {
+        let (at, pivot) = card_place(cell(100.0), 320.0, WINDOW, false);
+        assert_eq!((at, pivot), (pos2(166.0, 300.0), Align2::LEFT_TOP), "after the cell, level with its top");
+        let (at, pivot) = card_place(cell(800.0), 320.0, WINDOW, false);
+        assert_eq!((at, pivot), (pos2(798.0, 300.0), Align2::RIGHT_TOP), "no room after it, so before it");
+        let (at, pivot) = card_place(cell(800.0), 320.0, WINDOW, true);
+        assert_eq!((at, pivot), (pos2(798.0, 300.0), Align2::RIGHT_TOP), "a right-to-left sheet reads towards the left");
+        let (at, pivot) = card_place(cell(100.0), 320.0, WINDOW, true);
+        assert_eq!((at, pivot), (pos2(166.0, 300.0), Align2::LEFT_TOP), "no room before it, so after it");
+    }
+
+    #[test]
+    fn a_card_that_fits_on_neither_side_keeps_the_reading_side() {
+        let narrow = Rect::from_min_max(pos2(0.0, 0.0), pos2(300.0, 700.0));
+        assert_eq!(card_place(cell(100.0), 320.0, narrow, false).1, Align2::LEFT_TOP);
+        assert_eq!(card_place(cell(100.0), 320.0, narrow, true).1, Align2::RIGHT_TOP);
+    }
+
+    #[test]
+    fn the_word_takes_the_width_it_has_in_the_cells_typeface_within_limits() {
+        assert_eq!(word_scale(30.0, 30.0), 1.0, "the same width needs no scale");
+        assert_eq!(word_scale(33.0, 30.0), 1.1, "a narrower ribbon grows");
+        assert_eq!(word_scale(28.5, 30.0), 0.95, "a wider ribbon shrinks");
+        assert_eq!(word_scale(90.0, 30.0), WORD_SCALE.1, "a very wide cell font");
+        assert_eq!(word_scale(3.0, 30.0), WORD_SCALE.0, "a very narrow cell font");
+        assert_eq!(word_scale(30.0, 0.0), 1.0, "nothing to measure");
+        assert_eq!(word_scale(0.0, 0.0), 1.0);
+    }
+
+    #[test]
+    fn the_mark_fills_a_row_of_the_default_height_and_follows_the_text() {
+        let row = Rect::from_min_size(pos2(10.0, 20.0), vec2(64.0, 20.0));
+        let mark = mark_rect(row, row.left(), 11.0, 1.0, VAlign::Bottom).unwrap();
+        assert_eq!(mark.width(), mark.height(), "square");
+        assert!(mark.height() > 0.9 * row.height() && row.contains_rect(mark), "{mark:?} fills {row:?}");
+        assert_eq!(mark.left(), row.left() + 1.0);
+
+        // It grows with the zoom and the cell's font size, and stays inside the cell.
+        let zoomed_row = Rect::from_min_size(row.min, row.size() * 2.0);
+        let zoomed = mark_rect(zoomed_row, zoomed_row.left(), 11.0, 2.0, VAlign::Bottom).unwrap();
+        assert_eq!(zoomed.height(), 2.0 * mark.height());
+        assert!(zoomed_row.contains_rect(zoomed), "{zoomed:?} in {zoomed_row:?}");
+        let too_short = mark_rect(row, row.left(), 22.0, 1.0, VAlign::Bottom).unwrap();
+        assert!(row.contains_rect(too_short), "a row shorter than the text holds it: {too_short:?} in {row:?}");
+        let tall = Rect::from_min_size(row.min, vec2(200.0, 60.0));
+        let large = mark_rect(tall, tall.left(), 22.0, 1.0, VAlign::Bottom).unwrap();
+        assert_eq!(large.height(), 2.0 * mark.height());
+        assert!(tall.contains_rect(large));
+    }
+
+    #[test]
+    fn the_mark_stands_where_the_cells_text_is_aligned() {
+        let tall = Rect::from_min_size(pos2(10.0, 20.0), vec2(64.0, 60.0));
+        let at = |v| mark_rect(tall, tall.left(), 11.0, 1.0, v).unwrap();
+        assert_eq!(at(VAlign::Top).top(), tall.top() + 0.8);
+        assert_eq!(at(VAlign::Center).center().y, tall.center().y);
+        assert_eq!(at(VAlign::Bottom).bottom(), tall.bottom() - 0.8);
+    }
+
+    #[test]
+    fn a_cell_too_small_for_the_mark_has_none() {
+        let narrow = Rect::from_min_size(pos2(10.0, 20.0), vec2(20.0, 20.0));
+        assert!(mark_rect(narrow, narrow.left(), 11.0, 1.0, VAlign::Bottom).is_none());
+        let short = Rect::from_min_size(pos2(10.0, 20.0), vec2(64.0, 5.0));
+        assert!(mark_rect(short, short.left(), 11.0, 1.0, VAlign::Bottom).is_none());
     }
 }

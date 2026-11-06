@@ -436,7 +436,7 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         && app.editor.is_none()
         && app.dialog.is_none()
         && !mods.any()
-        && crate::python_card::tag_at(geo, wb, sh, c).is_some_and(|tag| tag.contains(p))
+        && crate::python_card::tag_at(&app.session, geo, wb, sh, c).is_some_and(|tag| tag.contains(p))
     {
         let _ = app.session.run("selection.set", json!({"cell": c.a1()}));
         let _ = crate::python_card::open(app);

@@ -25,6 +25,8 @@ struct Entry {
     // creates another allocation. No source bytes are cloned or hashed per frame.
     source: Weak<CellPicture>,
     texture: Option<TextureHandle>,
+    /// Reduced copies by how many times they are halved, made when one is first needed.
+    reduced: Vec<(u32, TextureHandle)>,
     bytes: usize,
     used: u64,
 }
@@ -65,9 +67,53 @@ impl Cache {
         let bytes = decoded.as_ref().map_or(0, |image| image.pixels.len() * 4);
         let texture = decoded.map(|image| ctx.load_texture("cell picture", image, egui::TextureOptions::LINEAR));
         self.bytes += bytes;
-        self.entries.insert(key, Entry { source: Arc::downgrade(picture), texture: texture.clone(), bytes, used: frame });
+        self.entries.insert(key, Entry { source: Arc::downgrade(picture), texture: texture.clone(), reduced: Vec::new(), bytes, used: frame });
         texture
     }
+
+    /// The picture's texture for drawing it inside `room` pixels: a reduced copy when it would
+    /// otherwise shrink by more than half, because the renderer samples a texture without mipmaps and
+    /// thin lines would break into dots.
+    fn texture_for(&mut self, ctx: &egui::Context, picture: &Arc<CellPicture>, room: egui::Vec2) -> Option<TextureHandle> {
+        let full = self.texture(ctx, picture)?;
+        let halvings = halvings_to_fit(full.size(), room);
+        if halvings == 0 {
+            return Some(full);
+        }
+        let Some(entry) = self.entries.get_mut(&(Arc::as_ptr(picture) as usize)) else { return Some(full) };
+        if let Some((_, texture)) = entry.reduced.iter().find(|(n, _)| *n == halvings) {
+            return Some(texture.clone());
+        }
+        // One that can't be made falls back to the whole picture, and isn't tried again each frame.
+        let (texture, bytes) = match reduced(picture, halvings) {
+            Some(image) => {
+                let bytes = image.pixels.len() * 4;
+                (ctx.load_texture("cell picture, reduced", image, egui::TextureOptions::LINEAR), bytes)
+            }
+            None => (full, 0),
+        };
+        entry.reduced.push((halvings, texture.clone()));
+        entry.bytes += bytes;
+        self.bytes += bytes;
+        Some(texture)
+    }
+}
+
+/// How many times a picture of `size` pixels can be halved and still be at least as large as it is
+/// drawn, fitted inside `room` pixels.
+fn halvings_to_fit(size: [usize; 2], room: egui::Vec2) -> u32 {
+    if size.contains(&0) || room.x < 1.0 || room.y < 1.0 {
+        return 0;
+    }
+    let scale = (room.x / size[0] as f32).min(room.y / size[1] as f32);
+    if scale >= 0.5 { 0 } else { ((1.0 / scale).log2().floor() as u32).min(usize::BITS - 1 - size[0].min(size[1]).leading_zeros()) }
+}
+
+/// The picture halved `halvings` times, each pixel an average of those it covers.
+fn reduced(picture: &CellPicture, halvings: u32) -> Option<egui::ColorImage> {
+    let rgba = rgba(picture)?;
+    let small = image::imageops::thumbnail(&rgba, (rgba.width() >> halvings).max(1), (rgba.height() >> halvings).max(1));
+    Some(egui::ColorImage::from_rgba_unmultiplied([small.width() as usize, small.height() as usize], small.as_raw()))
 }
 
 fn dimensions(picture: &CellPicture) -> Option<(image::ImageFormat, (u32, u32))> {
@@ -136,7 +182,8 @@ pub(crate) fn paint(painter: &Painter, cell: Rect, picture: &Arc<CellPicture>) {
     // Context-local handles must never leak between offscreen, native or browser
     // egui contexts, even when a workbook shares its Arc payload with another view.
     let cache = painter.ctx().data_mut(|data| data.get_temp_mut_or_default::<Arc<Mutex<Cache>>>(egui::Id::unique("gridcraft.cell_pictures")).clone());
-    let texture = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).texture(painter.ctx(), picture);
+    let room = cell.size() * painter.ctx().pixels_per_point();
+    let texture = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).texture_for(painter.ctx(), picture, room);
     let painter = painter.with_clip_rect(cell.intersect(painter.clip_rect()));
     if let Some(texture) = texture {
         if let Some(rect) = fitted_rect(cell, texture.size()) {
@@ -196,6 +243,55 @@ mod tests {
         assert!(cache.bytes <= MAX_CACHE_BYTES);
         assert!(decode(&CellPicture { data: vec![], mime: "image/png".into(), alt: String::new() }).is_none());
         assert_eq!(decode(&red).ok_or("decode failed")?.pixels.first(), Some(&Color32::RED));
+        Ok(())
+    }
+
+    /// Black lines one pixel wide, every fourth pixel, on white.
+    fn thin_lines(width: u32, height: u32) -> Result<Arc<CellPicture>, image::ImageError> {
+        let image = image::RgbaImage::from_fn(width, height, |x, _| if x % 4 == 0 { image::Rgba([0, 0, 0, 255]) } else { image::Rgba([255; 4]) });
+        let mut bytes = Cursor::new(Vec::new());
+        image.write_to(&mut bytes, image::ImageFormat::Png)?;
+        Ok(Arc::new(CellPicture { data: bytes.into_inner(), mime: "image/png".into(), alt: "Thin lines".into() }))
+    }
+
+    #[test]
+    fn a_picture_is_halved_only_while_it_stays_at_least_as_large_as_it_is_drawn() {
+        assert_eq!(halvings_to_fit([100, 100], vec2(100.0, 100.0)), 0);
+        assert_eq!(halvings_to_fit([100, 100], vec2(50.0, 50.0)), 0, "shrinking by up to half samples cleanly");
+        assert_eq!(halvings_to_fit([100, 100], vec2(49.0, 49.0)), 1);
+        assert_eq!(halvings_to_fit([1136, 868], vec2(64.0, 20.0)), 5, "the fitted size decides: 868 to 20 is 43 times");
+        assert_eq!(halvings_to_fit([8192, 1], vec2(10.0, 10.0)), 0, "a side of one pixel can't be halved");
+        assert_eq!(halvings_to_fit([0, 10], vec2(10.0, 10.0)), 0);
+        assert_eq!(halvings_to_fit([100, 100], vec2(0.0, 10.0)), 0);
+    }
+
+    #[test]
+    fn thin_lines_stay_lines_when_a_picture_is_drawn_small() -> Result<(), Box<dyn std::error::Error>> {
+        let picture = thin_lines(512, 256)?;
+        let small = reduced(&picture, 4).ok_or("not reduced")?;
+        assert_eq!(small.size, [32, 16]);
+        // Sampling the whole picture would give black or white. An average of what each pixel covers
+        // gives the same grey everywhere: a quarter black.
+        for pixel in &small.pixels {
+            assert!((pixel.r() as i32 - 191).abs() <= 2, "{pixel:?}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_small_drawing_uses_a_small_texture_once_and_counts_its_memory() -> Result<(), Box<dyn std::error::Error>> {
+        let ctx = egui::Context::default();
+        let mut cache = Cache::default();
+        let picture = thin_lines(512, 256)?;
+        let full = cache.texture_for(&ctx, &picture, vec2(512.0, 256.0)).ok_or("no texture")?;
+        assert_eq!(full.size(), [512, 256]);
+        let whole = cache.bytes;
+        let small = cache.texture_for(&ctx, &picture, vec2(64.0, 32.0)).ok_or("no texture")?;
+        assert_eq!(small.size(), [64, 32]);
+        assert_eq!(cache.bytes, whole + 64 * 32 * 4);
+        assert_eq!(cache.texture_for(&ctx, &picture, vec2(64.0, 32.0)).ok_or("no texture")?.id(), small.id(), "made once");
+        assert_eq!(cache.bytes, whole + 64 * 32 * 4);
+        assert_eq!(cache.texture_for(&ctx, &picture, vec2(512.0, 256.0)).ok_or("no texture")?.id(), full.id());
         Ok(())
     }
 }

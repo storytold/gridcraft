@@ -1,6 +1,6 @@
 # Python in cells
 
-> **Last updated:** 2026-11-06 · **Change:** minor (reading a saved file with openpyxl; earlier: the formula bar's PY badge and Run Cell; earlier: saving while cells run; earlier: dates and times, in and out of Python; earlier: what tells you what is wrong: PY tags, the card, the code checks; earlier: the Python tab is contextual; earlier: first version: how to turn Python on, how to set it up with uv, what cells can and can't do, and the limits)
+> **Last updated:** 2026-11-06 · **Change:** minor (a cell that says `Image` has a double square that opens the card beside it; earlier: reading a saved file with openpyxl; earlier: the formula bar's PY badge and Run Cell; earlier: saving while cells run; earlier: dates and times, in and out of Python; earlier: what tells you what is wrong: PY tags, the card, the code checks; earlier: the Python tab is contextual; earlier: first version: how to turn Python on, how to set it up with uv, what cells can and can't do, and the limits)
 
 A Python cell runs code you write, in your own Python, on your computer. GridCraft never downloads
 Python and never installs packages. It finds the Python you have, and it runs your code in a sandbox
@@ -181,11 +181,14 @@ picture to give, and the editor says so.
 
 One cell gives one picture. An object that can only give SVG or HTML stays an ordinary Python object.
 
-**How it shows.** The cell says `Image`, and its card shows the picture and its size. The Python Output
-menu in the formula bar, or Ctrl+Alt+Shift+M, switches between the two return types:
+**How it shows.** The cell shows a double square that fills the row and the word `Image`, in the ribbon's
+typeface and as large as the cell's text: it takes the width it would have in the cell's own font. Click the double square, or press Ctrl+Shift+F5, and the card opens beside the cell with the picture and
+its size. The Python Output menu in the formula bar, or Ctrl+Alt+Shift+M, switches between the two return
+types:
 
 - **Python Object:** the cell says `Image`. This is what a picture does until you choose.
-- **Excel Value:** the picture is drawn inside the cell, so the cell's size limits it.
+- **Excel Value:** the picture is drawn inside the cell, so the cell's size limits it. Widen the column and
+  raise the row to see it larger.
 
 A new cell is an Excel Value, so that tables spill. A picture in a cell where nobody chose a type
 behaves as a Python Object, and if the code later gives a table, the table spills.
@@ -427,14 +430,14 @@ cell runs, the cell and how long it has run. A click on it opens the Environment
 
 **The PY tag** at the start of a Python cell shows its state, in its shape as well as its colour:
 
-- filled, the plain tag: the result is up to date;
+- filled, the plain tag: the result is up to date (a cell that says `Image` has a double square instead);
 - filled, with an open ring: it is running or waiting its turn;
 - hollow: it keeps a value it didn't just work out, because what it reads changed, it was stopped, or
   Python isn't on;
 - red, with an exclamation mark: it failed;
 - grey, with a lock: Python can't run here.
 
-**The card** opens from the tag, or with Ctrl+Shift+F5. It says what happened in one sentence, then
+**The card** opens from the tag or the double square, or with Ctrl+Shift+F5. It says what happened in one sentence, then
 Python's own message with its line, and has a button for what to do: Open Settings, Choose
 Interpreter, Copy Install Command, Enable, Run Again, Open Initialization with Reset, or Go To Cell. A failed run that printed
 something has Show Printed Output. A result keeps its type and preview, or its table

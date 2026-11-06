@@ -18,7 +18,7 @@ use gridcraft_python::protocol::Output;
 use gridcraft_python::{Picture, PyError};
 use gridcraft_ui_egui::published_picture::{self, PICTURE_COPIED_TEXT, color_image_hash, rgba_hash};
 use gridcraft_ui_egui::python_plots::{COPY_IMAGE, CREATE_REFERENCE, DISPLAY_OVER_CELLS, IMAGE_COPIED, IMAGE_SAVED, OUTPUT_MENU, SAVE_IMAGE};
-use gridcraft_ui_egui::{Services, SheetApp};
+use gridcraft_ui_egui::{Services, SheetApp, theme};
 use serde_json::json;
 
 use crate::common::Harness;
@@ -59,6 +59,10 @@ fn report() -> PythonEnvironment {
 }
 
 fn harness_with(services: Services) -> Harness {
+    harness_sized(services, vec2(1300.0, 900.0))
+}
+
+fn harness_sized(services: Services, size: egui::Vec2) -> Harness {
     let t = FakeTransport::answering(|code, _| answer(code));
     let mut s = Session::new();
     s.new_workbook();
@@ -67,7 +71,7 @@ fn harness_with(services: Services) -> Harness {
     app.python.set_sandbox(Ok("a test sandbox".into()));
     app.python.report = Some(report());
     app.python.transport = Some(Arc::new(move || Box::new(t.sharing())));
-    let mut h = crate::common::harness_with(crate::common::builder().with_size(vec2(1300.0, 900.0)), app, 3);
+    let mut h = crate::common::harness_with(crate::common::builder().with_size(size), app, 3);
     h.ctx.all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
     h.run_steps(2);
     h
@@ -877,4 +881,214 @@ fn the_note_file_round_trips_and_ignores_anything_else() {
         assert_eq!(published_picture::read(&path), Some(9));
     }
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A cell's area on the screen, and what opens its card.
+fn on_screen(h: &Harness, cell: &str) -> (Rect, Rect) {
+    let app = h.state();
+    let d = app.session.active().unwrap();
+    let sh = d.wb.active().unwrap();
+    let geo = app.grid.geo.as_ref().unwrap();
+    let at = c(cell);
+    (geo.screen_cell_rect(sh, at), geo.mirror_rect(gridcraft_ui_egui::python_card::tag_at(&app.session, geo, &d.wb, sh, at).unwrap()))
+}
+
+/// The texts painted starting in a cell, with their fonts.
+fn texts_in(h: &Harness, cell: &str) -> Vec<(String, egui::FontId)> {
+    let app = h.state();
+    let area = app.grid.geo.as_ref().unwrap().screen_cell_rect(app.session.active().unwrap().wb.active().unwrap(), c(cell));
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Text(t) if area.contains(Rect::from_min_size(t.pos, t.galley.size()).left_center()) => {
+                Some((t.galley.job.text.clone(), t.galley.job.sections.first()?.format.font_id.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The first text painted starting in a cell: its font and its width.
+fn word_in(h: &Harness, cell: &str) -> (egui::FontId, f32) {
+    let app = h.state();
+    let area = app.grid.geo.as_ref().unwrap().screen_cell_rect(app.session.active().unwrap().wb.active().unwrap(), c(cell));
+    h.output()
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if area.contains(Rect::from_min_size(t.pos, t.galley.size()).left_center()) => {
+                Some((t.galley.job.sections.first()?.format.font_id.clone(), t.galley.size().x))
+            }
+            _ => None,
+        })
+        .unwrap()
+}
+
+/// The test fonts with the cell's typeface `scale` times the ribbon's, as two different typefaces
+/// are on a real machine. The fonts of the tests otherwise have one face for both.
+fn cell_typeface_scaled(h: &mut Harness, scale: f32) {
+    let mut fonts = theme::pinned_font_definitions();
+    let family = |name: &str| egui::FontFamily::Name(name.into());
+    let first = fonts.families[&family(theme::CELL)][0].clone();
+    let mut face = (*fonts.font_data[&first]).clone();
+    face.tweak.scale = scale;
+    fonts.font_data.insert("scaled cell face".to_string(), Arc::new(face));
+    for name in [theme::CELL, theme::CELL_BOLD] {
+        fonts.families.get_mut(&family(name)).unwrap().insert(0, "scaled cell face".to_string());
+    }
+    h.ctx.set_fonts(fonts);
+    h.run_steps(2);
+}
+
+/// Whether lines are painted inside `rect`.
+fn lines_in(h: &Harness, rect: Rect) -> bool {
+    h.output()
+        .shapes
+        .iter()
+        .any(|s| !matches!(s.shape, egui::Shape::Text(_) | egui::Shape::Noop) && rect.contains_rect(s.shape.visual_bounding_rect()))
+}
+
+fn point_at(h: &mut Harness, at: egui::Pos2) {
+    h.input_mut().events.push(Event::PointerMoved(at));
+    h.run_steps(2);
+}
+
+fn click_at(h: &mut Harness, at: egui::Pos2) {
+    for event in [
+        Event::PointerMoved(at),
+        Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
+        Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+    ] {
+        h.input_mut().events.push(event);
+        h.run_steps(1);
+    }
+    h.run_steps(3);
+}
+
+#[test]
+fn a_cell_that_says_image_has_a_double_square_that_fills_it_and_the_ribbons_typeface_at_the_cells_size() {
+    let mut h = harness();
+    h.state_mut().session.execute("cell.set", json!({"cell": "C2", "input": "plain"})).unwrap();
+    plot_at(&mut h, "B2");
+    let plain = texts_in(&h, "C2")[0].1.size;
+    assert_eq!(texts_in(&h, "B2"), [("Image".to_string(), theme::ui_font(plain))], "the size of any other cell's text, and no PY tag");
+    assert_ne!(texts_in(&h, "C2")[0].1.family, theme::ui_font(plain).family, "another cell's text has the cell's typeface");
+
+    let (cell, mark) = on_screen(&h, "B2");
+    assert!(lines_in(&h, mark.expand(1.0)), "the double square is painted where a click opens the card");
+    assert!(mark.height() > 0.9 * cell.height() && cell.contains_rect(mark), "it fills the cell: {mark:?} in {cell:?}");
+
+    // Bold in the cell makes the word bold, and a larger size a larger word and a larger square.
+    h.state_mut().run("home.bold", json!({"range": "B2"})).unwrap();
+    h.run_steps(2);
+    assert_eq!(texts_in(&h, "B2"), [("Image".to_string(), theme::ui_bold(plain))]);
+    h.state_mut().run("home.fontSize", json!({"range": "B2", "size": 22})).unwrap();
+    h.run_steps(2);
+    assert_eq!(texts_in(&h, "B2"), [("Image".to_string(), theme::ui_bold(2.0 * plain))]);
+    let (cell, larger) = on_screen(&h, "B2");
+    assert!(larger.height() > mark.height() && cell.contains_rect(larger), "{larger:?} in {cell:?}");
+}
+
+#[test]
+fn the_word_is_as_wide_as_the_same_word_in_another_cell_when_the_ribbons_typeface_is_narrower() {
+    let mut h = harness();
+    h.state_mut().session.execute("cell.set", json!({"cell": "C2", "input": "Image"})).unwrap();
+    cell_typeface_scaled(&mut h, 1.07);
+    plot_at(&mut h, "B2");
+    let (word, word_w) = word_in(&h, "B2");
+    let (plain, plain_w) = word_in(&h, "C2");
+    assert_eq!(word.family, theme::ui_font(1.0).family, "the ribbon's typeface");
+    assert_eq!(plain.family, theme::cell_family("Calibri", false, false), "the cell's typeface");
+    assert!(word.size > plain.size, "{word:?} against {plain:?}");
+    assert!((word_w - plain_w).abs() < 1.0, "the word is {word_w} wide and the other cell's is {plain_w}");
+
+    // So it is in bold, at another size and at another zoom.
+    h.state_mut().run("home.bold", json!({"range": "B2:C2"})).unwrap();
+    h.state_mut().run("home.fontSize", json!({"range": "B2:C2", "size": 22})).unwrap();
+    h.run_steps(2);
+    let (word, word_w) = word_in(&h, "B2");
+    let (_, plain_w) = word_in(&h, "C2");
+    assert_eq!(word.family, theme::ui_bold(1.0).family);
+    assert!((word_w - plain_w).abs() < 1.5, "the word is {word_w} wide and the other cell's is {plain_w}");
+}
+
+#[test]
+fn a_very_wide_cell_typeface_does_not_make_the_word_much_larger() {
+    let mut h = harness();
+    h.state_mut().session.execute("cell.set", json!({"cell": "C2", "input": "Image"})).unwrap();
+    cell_typeface_scaled(&mut h, 1.6);
+    plot_at(&mut h, "B2");
+    let (word, _) = word_in(&h, "B2");
+    let (plain, _) = word_in(&h, "C2");
+    assert!((word.size / plain.size - 1.1).abs() < 0.001, "{word:?} against {plain:?}");
+}
+
+#[test]
+fn only_a_ready_picture_kept_as_an_object_has_the_double_square() {
+    let mut h = harness();
+    plot_at(&mut h, "B2");
+    let ribbon = theme::ui_font(1.0).family;
+
+    // Excel Value: the picture is in the cell, in place of the word.
+    h.state_mut().run("python.output", json!({"cell": "B2", "mode": "value"})).unwrap();
+    settle(&mut h);
+    assert!(in_cell(&h, "B2"));
+    assert_eq!(texts_in(&h, "B2"), []);
+
+    // An ordinary result keeps the tag and the cell's font.
+    h.state_mut().run("python.set", json!({"cell": "C2", "code": "x"})).unwrap();
+    settle(&mut h);
+    let texts = texts_in(&h, "C2");
+    assert!(texts.iter().any(|(text, _)| text == "PY"), "{texts:?}");
+    assert!(texts.iter().all(|(text, font)| text == "PY" || font.family != ribbon), "{texts:?}");
+
+    // An error says so on the tag.
+    h.state_mut().run("python.set", json!({"cell": "D2", "code": "plot"})).unwrap();
+    settle(&mut h);
+    assert_eq!(texts_in(&h, "D2")[0].0, "Image");
+    h.state_mut().run("python.set", json!({"cell": "D2", "code": "fail"})).unwrap();
+    settle(&mut h);
+    let texts = texts_in(&h, "D2");
+    assert!(texts.iter().any(|(text, _)| text == "PY"), "{texts:?}");
+    assert!(texts.iter().all(|(_, font)| font.family != ribbon), "{texts:?}");
+}
+
+#[test]
+fn a_click_on_the_double_square_shows_the_picture_beside_the_cell() {
+    let mut h = harness_sized(Services::default(), vec2(760.0, 620.0));
+    h.state_mut().session.execute("selection.set", json!({"cell": "A32"})).unwrap();
+    h.state_mut().run("python.set", json!({"cell": "A32", "code": "plot"})).unwrap();
+    settle(&mut h);
+    // Away from the cell, so a click on the mark is what selects it.
+    h.state_mut().grid.ensure_visible = true;
+    h.run_steps(6);
+    h.state_mut().session.execute("selection.set", json!({"cell": "C30"})).unwrap();
+    h.run_steps(2);
+    let (cell, tag) = on_screen(&h, "A32");
+    let view = h.state().grid.geo.as_ref().unwrap().cells;
+    assert!(view.contains_rect(cell), "the cell is low in the window, in view: {cell:?} in {view:?}");
+
+    // It says it can be clicked, and only there.
+    point_at(&mut h, tag.center());
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand);
+    point_at(&mut h, cell.right_center() - vec2(4.0, 0.0));
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Cell);
+
+    // Anywhere on the square, up to its top corner, which is above where a PY tag would end.
+    let corner = tag.left_top() + vec2(1.0, 1.0);
+    point_at(&mut h, corner);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand);
+    click_at(&mut h, corner);
+    assert_eq!(h.state().grid.py_card.map(|card| card.cell), Some(c("A32")));
+    assert_eq!(h.state().session.active().map(|d| d.selection.active), Some(c("A32")));
+    assert!(h.query_by_label("40, 30").is_some(), "the card is the picture's");
+    let card = h.ctx.memory(|m| m.area_rect(egui::Id::unique("python_card"))).expect("the card is shown");
+    assert!((card.left() - cell.right()).abs() < 3.0, "beside the cell: {card:?}, {cell:?}");
+    assert!(!card.intersects(cell), "and the cell stays in view: {card:?}, {cell:?}");
+    let window = h.ctx.content_rect();
+    assert!(window.contains_rect(card), "in the window, however low the cell is: {card:?} in {window:?}");
+    let picture =
+        h.output().shapes.iter().any(|s| s.shape.texture_id() != egui::TextureId::default() && card.contains_rect(s.shape.visual_bounding_rect()));
+    assert!(picture, "the picture itself is painted on the card");
 }

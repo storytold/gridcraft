@@ -207,6 +207,8 @@ pub enum Icon {
     PythonInit,
     /// Output As: an arrow into a cell.
     PythonOutput,
+    /// A picture kept as a Python object in its cell: two squares, one behind the other.
+    PythonPicture,
     /// An interpreter: a terminal window with a prompt.
     PythonInterpreter,
     /// Packages: a box.
@@ -964,6 +966,7 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
         | Icon::PythonReset
         | Icon::PythonInit
         | Icon::PythonOutput
+        | Icon::PythonPicture
         | Icon::PythonInterpreter
         | Icon::PythonPackages
         | Icon::PythonShield
@@ -1034,6 +1037,11 @@ fn paint_python_tab(g: &G<'_>, icon: Icon, c: Color32, light: Color32, paper: Co
             g.rect(8.0, 3.5, 6.5, 9.0, Some(paper), Some(c));
             g.line(&[(1.5, 8.0), (6.5, 8.0)], green, 1.5);
             g.poly(&[(5.5, 5.4), (9.2, 8.0), (5.5, 10.6)], green);
+        }
+        // No fill: it sits on whatever fill its cell has.
+        Icon::PythonPicture => {
+            g.closed(&[(1.5, 5.5), (10.5, 5.5), (10.5, 14.5), (1.5, 14.5)], c, 1.2);
+            g.line(&[(5.5, 5.5), (5.5, 1.5), (14.5, 1.5), (14.5, 10.5), (10.5, 10.5)], c, 1.2);
         }
         Icon::PythonInterpreter => {
             g.rect(1.5, 2.5, 13.0, 11.0, Some(paper), Some(c));
