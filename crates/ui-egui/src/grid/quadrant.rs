@@ -513,11 +513,13 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         shape.angle = angle;
         cp.add(shape);
     } else {
-        // What must fit its cell (numbers, which otherwise show ####, and shrunk text) gets no wider.
-        let must_fit = shrunk || numeric || matches!(v, Value::Number(_));
+        // The text as laid out, which may be #### or carry repeat-fill characters. What must fit its
+        // cell gets no wider: numbers, which otherwise show ####, the #### itself, shrunk text, and a
+        // fill sized by egui's widths.
+        let must_fit = shrunk || hashed || fill_char.is_some() || numeric || matches!(v, Value::Number(_));
         let line = Line {
             font: &font,
-            text: &first_line,
+            text: &galley.job.text,
             galley: &galley,
             color,
             at: pos2(x, y),

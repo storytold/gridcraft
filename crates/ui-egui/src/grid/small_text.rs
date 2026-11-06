@@ -339,9 +339,9 @@ pub(super) fn paint(p: &Painter, font_id: &FontId, text: &str, at: Pos2, color: 
     let mut mesh = Mesh::with_texture(texture);
     let mut pen = (at.x * ppp).round();
     for (gid, g) in glyphs {
-        if g.w > 0
-            && let Some(spot) = place(&mut c, (face.key.clone(), px, gid, color.to_array()), &g, pass)
-        {
+        if g.w > 0 {
+            // The atlas is full for this frame: nothing is drawn yet, so the usual drawing takes over.
+            let Some(spot) = place(&mut c, (face.key.clone(), px, gid, color.to_array()), &g, pass) else { return false };
             let min = pos2((pen as i32 + g.left) as f32 / ppp, (baseline + g.top) as f32 / ppp);
             let rect = Rect::from_min_size(min, vec2(g.w as f32 / ppp, g.h as f32 / ppp));
             let uv = Rect::from_min_size(
