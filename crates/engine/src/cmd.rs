@@ -406,7 +406,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         edits: Vec::new(),
     };
     let r = f(&mut ctx)?;
-    let Ctx { mut wb, changed, structural, mut fit_rows, protection_checked, edits, .. } = ctx;
+    let Ctx { mut wb, mut changed, structural, mut fit_rows, protection_checked, edits, .. } = ctx;
     // Equations whose source changed (or that arrived without a layout, as from a paste) are
     // laid out here, so painting only ever reads the cache.
     wb.refresh_equations();
@@ -416,6 +416,9 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     if !structural {
         check_arrays(&d.wb, &wb)?;
         forget_ignored_errors(&d.wb, &mut wb, &changed);
+    }
+    if wb.calc.precision_as_displayed {
+        round_edited_as_displayed(&d.wb, &mut wb, &mut changed, structural);
     }
     if let Some(log) = d.touched.as_mut() {
         for (si, c) in changed.iter().take(TOUCH_LOG_LIMIT.saturating_sub(log.len())) {
