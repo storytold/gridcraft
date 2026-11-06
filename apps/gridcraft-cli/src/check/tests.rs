@@ -534,3 +534,21 @@ fn a_core_property_lost_or_changed_is_reported() {
     // The output losing its whole core part is reported property by property.
     assert_eq!(diff_core_properties(&source, &zip_of(&[("a.xml", "<a/>")]), 20).diffs, CORE_PROPERTIES.len());
 }
+
+#[test]
+fn core_properties_cdata_is_compared_as_text() {
+    for (content, expected, escaped) in [
+        ("<![CDATA[A]]>", "A", "A"),
+        ("before <![CDATA[<&]]> after &amp; end", "before <& after & end", "before &lt;&amp; after &amp; end"),
+    ] {
+        let source = book_with_core(&format!("<dc:title>{content}</dc:title>"));
+        let actual = core_properties(&source).unwrap();
+        assert_eq!(actual.get("title").map(String::as_str), Some(expected));
+        let equivalent = book_with_core(&format!("<dc:title>{escaped}</dc:title>"));
+        assert_eq!(diff_core_properties(&source, &equivalent, 20).diffs, 0, "CDATA is text, not a format change");
+        let lost = diff_core_properties(&source, &book_with_core(""), 20);
+        assert_eq!(lost.examples, ["property dc:title lost"]);
+        let changed = diff_core_properties(&source, &book_with_core("<dc:title>Different</dc:title>"), 20);
+        assert_eq!(changed.diffs, 1, "a CDATA property must not be silently ignored");
+    }
+}
