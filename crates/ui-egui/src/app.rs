@@ -194,6 +194,8 @@ impl SheetApp {
             return;
         }
         let t0 = now_ms();
+        // Captured before the panels claim their strips, so the resize bands use the whole window.
+        let window = ui.max_rect();
         // A script may have switched windows since the last frame.
         self.follow_active_window();
         // This window's key tip request that waited for this frame (its tab or ribbon was just
@@ -276,6 +278,9 @@ impl SheetApp {
             self.synthetic_pending = false;
             self.synthetic_injected_at_pass = None;
         }
+        // After the panels, so a drag on the window edge resizes it instead of selecting cells.
+        // Windows only: that is the build whose native frame is off.
+        crate::ribbon::resize_frame(ui, window);
     }
 
     /// Current selection's top-left cell text as A1 (for the Name Box).
