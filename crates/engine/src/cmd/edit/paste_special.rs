@@ -335,7 +335,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         }
         let pasted = RangeRef::new(at, at.offset_clamped(i64::from(tiles_r * h) - 1, i64::from(tiles_c * w) - 1));
         if !link && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
-            paste_validations(cx, src_sheet, src, dest_sheet, pasted, transpose, skip_blanks)?;
+            paste_validations(cx, src_sheet, src, dest_sheet, pasted, transpose, skip_blanks, &skip_rows)?;
         }
         if what == What::ColumnWidths {
             // Each pasted column takes the width of the column copied to it (transposed, the
@@ -403,6 +403,22 @@ const MAX_PASTE_LINK_CELLS: u64 = 1_048_576;
 /// selection makes one range per tile).
 const MAX_PASTE_VALIDATION_RANGES: usize = 100_000;
 
+/// `range` less the rows in `skip`: the runs of rows between them, as ranges of its columns.
+fn without_rows(range: RangeRef, skip: &std::collections::BTreeSet<u32>) -> Vec<RangeRef> {
+    let mut out = Vec::new();
+    let mut next = range.start.row;
+    for &row in skip.range(range.start.row..=range.end.row) {
+        if row > next {
+            out.push(RangeRef::new(CellRef::new(next, range.start.col), CellRef::new(row - 1, range.end.col)));
+        }
+        next = row + 1;
+    }
+    if next <= range.end.row {
+        out.push(RangeRef::new(CellRef::new(next, range.start.col), CellRef::new(range.end.row, range.end.col)));
+    }
+    out
+}
+
 /// Pasting validation works on ranges, as Excel stores it: the pasted rectangle is cut out of the
 /// destination's rules (cells whose source had no rule end up with none), then each source rule
 /// that covers part of the copied block `src` comes along as one rule over the translated parts.
@@ -415,6 +431,7 @@ fn paste_validations(
     pasted: RangeRef,
     transpose: bool,
     skip_blanks: bool,
+    skip_rows: &std::collections::BTreeSet<u32>,
 ) -> Result<()> {
     let (h, w) = if transpose { (src.width(), src.height()) } else { (src.height(), src.width()) };
     let (tiles_r, tiles_c) = (pasted.height() / h.max(1), pasted.width() / w.max(1));
@@ -435,7 +452,9 @@ fn paste_validations(
             let (r, c) = if transpose { (c, r) } else { (r, c) };
             for tr in 0..tiles_r {
                 for tc in 0..tiles_c {
-                    if let Some(d) = pasted.start.offset(i64::from(tr * h + r), i64::from(tc * w + c)) {
+                    if let Some(d) = pasted.start.offset(i64::from(tr * h + r), i64::from(tc * w + c))
+                        && !skip_rows.contains(&d.row)
+                    {
                         cells.push((d.row, d.col));
                     }
                 }
@@ -499,6 +518,8 @@ fn paste_validations(
                 }
             }
         }
+        // The rows a filter hides keep what they have.
+        let ranges: Vec<RangeRef> = ranges.into_iter().flat_map(|r| without_rows(r, skip_rows)).collect();
         let Some(anchor) = ranges.first().map(|r| r.start) else { continue };
         let mut rule = dv.clone();
         // Relative references move with the rule, as pasted formulas do: they are written for the
@@ -516,7 +537,7 @@ fn paste_validations(
         cleared.extend(rules.iter().flat_map(|r| r.ranges.iter().copied()));
         super::super::data::remove_validation_cells(&mut sh.validations, &cleared);
     } else {
-        super::super::data::remove_validation_cells(&mut sh.validations, &[pasted]);
+        super::super::data::remove_validation_cells(&mut sh.validations, &without_rows(pasted, skip_rows));
     }
     sh.validations.extend(rules);
     Ok(())

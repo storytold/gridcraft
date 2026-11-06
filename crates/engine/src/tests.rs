@@ -5092,6 +5092,54 @@ v11	keep	11
     assert_eq!(v(&s, "A2"), Value::from("Z"));
 }
 
+/// A table of ten rows (A1:B11) with a link on every value cell, four of its rows hidden by a
+/// filter (3, 5, 7, 9), and a spare corner at E1 to copy from.
+fn filtered_rows_with_links() -> Session {
+    let mut s = s();
+    let mut rows = vec![json!(["Val", "Tag"])];
+    for i in 2..=11 {
+        rows.push(json!([format!("v{i}"), if [3, 5, 7, 9].contains(&i) { "hide" } else { "keep" }]));
+    }
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("range.setValues", json!({"range": "E1", "values": [["X"]]})).unwrap();
+    let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+    for r in 2..=11u32 {
+        sh.hyperlinks.insert(CellRef::new(r - 1, 0), gridcraft_model::Hyperlink { target: format!("https://example.com/{r}"), tooltip: None, external: true });
+    }
+    s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+    s.execute("data.filter", json!({})).unwrap();
+    s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap();
+    s
+}
+
+fn cell_link_target(s: &Session, cell: &str) -> Option<String> {
+    s.doc().unwrap().wb.active().unwrap().hyperlinks.get(&CellRef::parse(cell).unwrap()).map(|h| h.target.clone())
+}
+
+fn cell_validation(s: &Session, cell: &str) -> Option<String> {
+    let c = CellRef::parse(cell).unwrap();
+    s.doc().unwrap().wb.active().unwrap().validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(c))).map(|d| d.f1.clone())
+}
+
+/// One cell pasted over a filtered column leaves the rules of the rows the filter hides alone, and
+/// does not give them the copied rule, with or without Skip Blanks.
+#[test]
+fn single_row_paste_over_filtered_rows_leaves_their_validation_alone() {
+    for skip_blanks in [false, true] {
+        let mut s = filtered_rows_with_links();
+        s.execute("data.validation", json!({"range": "E1", "type": "list", "formula1": "\"copied\""})).unwrap();
+        s.execute("data.validation", json!({"range": "A2:A5", "type": "list", "formula1": "\"old\""})).unwrap();
+        s.execute("edit.copy", json!({"range": "E1"})).unwrap();
+        s.execute("selection.set", json!({"range": "A2:A11"})).unwrap();
+        s.execute("edit.pasteSpecial", json!({"what": "all", "skipBlanks": skip_blanks})).unwrap();
+        let rules: Vec<Option<String>> = (2..=11).map(|r| cell_validation(&s, &format!("A{r}"))).collect();
+        let showing = Some("\"copied\"".to_string());
+        let old = Some("\"old\"".to_string());
+        assert_eq!(rules, [showing.clone(), old.clone(), showing.clone(), old, showing.clone(), None, showing.clone(), None, showing.clone(), showing], "skip blanks: {skip_blanks}");
+    }
+}
+
+
 #[test]
 fn editing_quote_prefixed_text_keeps_it_text() {
     let mut s = s();
