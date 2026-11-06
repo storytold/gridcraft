@@ -199,13 +199,12 @@ fn read_trendline(t: &El) -> Option<Trendline> {
     })
 }
 
-/// A chart part's text style: its `txPr`, or for a title the first run of its rich text over the
-/// paragraph's defaults.
+/// A chart part's text style. Each property is taken from the nearest place that sets it: a title's
+/// first run of rich text, then its rich paragraph's defaults, then the part's `txPr`.
 fn text_style(e: Option<&El>) -> ChartTextStyle {
     let Some(e) = e else { return ChartTextStyle::default() };
-    let run = e.path(&["tx", "rich", "p", "r", "rPr"]);
-    let defaults = e.path(&["txPr", "p", "pPr", "defRPr"]).or_else(|| e.path(&["tx", "rich", "p", "pPr", "defRPr"]));
-    let attr = |k: &str| run.and_then(|r| r.attr(k)).or_else(|| defaults.and_then(|d| d.attr(k)));
+    let layers = [e.path(&["tx", "rich", "p", "r", "rPr"]), e.path(&["tx", "rich", "p", "pPr", "defRPr"]), e.path(&["txPr", "p", "pPr", "defRPr"])];
+    let attr = |k: &str| layers.iter().flatten().find_map(|l| l.attr(k));
     ChartTextStyle {
         size: attr("sz").and_then(|v| v.trim().parse::<f32>().ok()).map(|v| v / 100.0).filter(|v| (1.0..=400.0).contains(v)),
         bold: attr("b").map(|v| matches!(v.trim(), "1" | "true")),

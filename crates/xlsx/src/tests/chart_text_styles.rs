@@ -37,6 +37,17 @@ fn each_part_takes_its_own_text_style() {
     assert_eq!(c.text.value_axis, style(7.0, None, false));
 }
 
+/// A title with both rich text and `txPr`: each property from the nearest place that sets it.
+#[test]
+fn a_titles_run_paragraph_and_txpr_each_give_what_they_set() {
+    let title = format!(
+        "<c:title><c:tx><c:rich><a:bodyPr {A}/><a:p {A}><a:pPr><a:defRPr b=\"1\"/></a:pPr>        <a:r><a:rPr sz=\"1600\"/><a:t>Sales</a:t></a:r></a:p></c:rich></c:tx>{}</c:title>",
+        tx_pr("sz=\"1200\" b=\"0\" cap=\"all\"")
+    );
+    let c = chart(&title, "", "", "", "");
+    assert_eq!(c.text.title, ChartTextStyle { size: Some(16.0), bold: Some(true), caps: true });
+}
+
 #[test]
 fn text_the_file_leaves_out_keeps_the_defaults() {
     let c = chart("", "<c:legend><c:legendPos val=\"r\"/></c:legend>", "", "", "");
