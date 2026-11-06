@@ -481,6 +481,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ),
     ("Header (in):", "頁首 (英吋)："),
     ("Header Margin", "頁首邊界"),
+    ("Header Menu|Insert", "插入"),
     ("Heading 1", "標題 1"),
     ("Heading 2", "標題 2"),
     ("Heading 3", "標題 3"),
