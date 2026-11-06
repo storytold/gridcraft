@@ -2021,6 +2021,7 @@ dependencies = [
  "egui",
  "fmv-macos-events",
  "getrandom 0.4.3",
+ "gridcraft-cursor",
  "gridcraft-engine",
  "gridcraft-mcp",
  "gridcraft-ui-egui",
@@ -2081,6 +2082,10 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "gridcraft-cursor"
+version = "0.14.2"
 
 [[package]]
 name = "gridcraft-engine"
@@ -2169,6 +2174,7 @@ version = "0.16.0"
 name = "gridcraft-ui-egui"
 version = "0.16.0"
 dependencies = [
+ "chrono",
  "craft-ui",
  "craft-update",
  "craft-window",

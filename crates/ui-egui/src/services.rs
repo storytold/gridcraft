@@ -9,6 +9,9 @@ type PrintPdf = Box<dyn Fn(&[u8])>;
 /// Host services the platform shell provides (file pickers, opening URLs).
 #[derive(Default)]
 pub struct Services {
+    /// Desktop: the OS cursor in physical pixels. egui reports the pointer per viewport, so a
+    /// tab dragged over another window needs the system cursor to know where it landed.
+    pub cursor_px: Option<fn() -> Option<(f32, f32)>>,
     /// Desktop: discover configured printers on a worker.
     pub printers: Option<printing::Discover>,
     /// Desktop: submit the PDF with the chosen settings on a worker.

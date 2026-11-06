@@ -32,6 +32,8 @@ impl SheetApp {
             session,
             ui: UiState::default(),
             chrome: Chrome::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            doc_tabs: None,
             views: HashMap::new(),
             editor: None,
             text_box_editor: None,
