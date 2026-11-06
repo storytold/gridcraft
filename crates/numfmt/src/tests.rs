@@ -1,5 +1,18 @@
 use super::*;
 
+#[test]
+fn format_colors_resolve_named_and_indexed_rgb_safely() {
+    assert_eq!(FormatColor::Green.rgb(), Some([0, 255, 0]));
+    assert_eq!(FormatColor::Black.rgb(), Some([0, 0, 0]));
+    assert_eq!(FormatColor::Indexed(1).rgb(), Some([0, 0, 0]));
+    assert_eq!(FormatColor::Indexed(10).rgb(), Some([0, 128, 0]));
+    assert_eq!(FormatColor::Indexed(46).rgb(), Some([255, 102, 0]));
+    assert_eq!(FormatColor::Indexed(56).rgb(), Some([51, 51, 51]));
+    for index in [0, 57, 255] {
+        assert_eq!(FormatColor::Indexed(index).rgb(), None);
+    }
+}
+
 const S: DateSystem = DateSystem::D1900;
 
 fn f(code: &str, n: f64) -> String {
@@ -145,6 +158,18 @@ fn fractions() {
     assert_eq!(f("# ???/???", 0.5), "   1/2  ");
 }
 
+/// A fraction without a whole part puts the whole value in the numerator; large values must
+/// not saturate at u64::MAX.
+#[test]
+fn fraction_numerator_beyond_u64() {
+    assert_eq!(f("?/1000000000", 2e10), "20000000000000000000/1000000000");
+    assert_eq!(f("?/?", 1e20), "100000000000000000000/1");
+    assert_eq!(f("?/100", 1e18), "100000000000000000000/100");
+    assert_eq!(f("??/??", 1e25), "10000000000000000000000000/1 ");
+    assert!(!f("?/10", 1e300).contains("18446744073709551615"));
+    assert_eq!(f("?/1000000000", 2.5), "2500000000/1000000000");
+}
+
 /// Fraction sections with literal text, as Excel renders them (observed `TEXT()` results).
 #[test]
 fn fractions_with_literals() {
@@ -222,7 +247,7 @@ fn question_mark_pads_thousands_separator() {
 }
 
 #[test]
-fn literals_and_fill() {
+fn literals_and_fill() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(f("\"$\"#,##0.00", 3.0), "$3.00");
     assert_eq!(f("$#,##0.00", -3.0), "-$3.00");
     assert_eq!(f("[$€-407]#,##0.00", 1234.5), "€1,234.50");
@@ -231,7 +256,7 @@ fn literals_and_fill() {
     assert_eq!(f("(0)", 5.0), "(5)");
     let r = full("*-0", Value::Number(5.0));
     assert_eq!((r.text.as_str(), r.fill), ("5", Some(('-', 0))));
-    let acct = builtin_format(44).unwrap();
+    let acct = builtin_format(44).ok_or("none")?;
     let r = full(acct, Value::Number(0.0));
     assert_eq!((r.text.as_str(), r.fill), (" $-   ", Some((' ', 2))));
     let r = full(acct, Value::Number(1234.5));
@@ -242,6 +267,7 @@ fn literals_and_fill() {
     assert_eq!((r.text.as_str(), r.numeric), (" abc ", false));
     let r = full("-* 0", Value::Number(-5.0));
     assert_eq!((r.text.as_str(), r.fill), ("--5", Some((' ', 2))));
+    Ok(())
 }
 
 #[test]
@@ -254,6 +280,10 @@ fn dates_and_times() {
     assert_eq!(f("d-mmm-yy", 46302.0), "7-Oct-26");
     assert_eq!(f("e", 46302.0), "2026");
     assert_eq!(f("YYYY-MM-DD", 46302.0), "2026-10-07");
+}
+
+#[test]
+fn time_formats() {
     assert_eq!(f("yyyy-mm-dd hh:mm:ss", 46302.5), "2026-10-07 12:00:00");
     assert_eq!(f("h:mm AM/PM", 0.75), "6:00 PM");
     assert_eq!(f("h AM/PM", 0.0), "12 AM");
@@ -265,6 +295,10 @@ fn dates_and_times() {
     assert_eq!(f("[s]", 1.0 / 1440.0), "60");
     assert_eq!(f("mm:ss.0", 61.2 / 86400.0), "01:01.2");
     assert_eq!(f("mm:ss.00", 61.25 / 86400.0), "01:01.25");
+}
+
+#[test]
+fn date_serial_boundaries() {
     assert_eq!(f("h:mm:ss", 0.5 + 59.6 / 86400.0), "12:01:00");
     assert_eq!(f("h:mm", 0.5 + 40.0 / 86400.0), "12:00");
     assert_eq!(f("m/d/yyyy", 60.0), "2/29/1900");
@@ -317,12 +351,12 @@ fn general() {
 }
 
 #[test]
-fn kinds() {
+fn kinds() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(NumberFormat::general().kind(), FormatKind::General);
     assert_eq!(NumberFormat::parse("0.00").kind(), FormatKind::Number);
     assert_eq!(NumberFormat::parse("#,##0.00;[Red](#,##0.00)").kind(), FormatKind::Number);
     assert_eq!(NumberFormat::parse("\"$\"#,##0.00").kind(), FormatKind::Currency);
-    assert_eq!(NumberFormat::parse(builtin_format(44).unwrap()).kind(), FormatKind::Accounting);
+    assert_eq!(NumberFormat::parse(builtin_format(44).ok_or("none")?).kind(), FormatKind::Accounting);
     assert_eq!(NumberFormat::parse("m/d/yyyy").kind(), FormatKind::Date);
     assert_eq!(NumberFormat::parse("h:mm AM/PM").kind(), FormatKind::Time);
     assert_eq!(NumberFormat::parse("0%").kind(), FormatKind::Percentage);
@@ -331,10 +365,11 @@ fn kinds() {
     assert_eq!(NumberFormat::parse("@").kind(), FormatKind::Text);
     assert_eq!(NumberFormat::parse("00000").kind(), FormatKind::Special);
     assert_eq!(NumberFormat::parse("\"hello\"").kind(), FormatKind::Custom);
+    Ok(())
 }
 
 #[test]
-fn builtins() {
+fn builtins() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(builtin_format(0), Some("General"));
     assert_eq!(builtin_format(14), Some("m/d/yyyy"));
     assert_eq!(builtin_format(49), Some("@"));
@@ -350,9 +385,10 @@ fn builtins() {
             assert_eq!(builtin_id(code), Some(id));
         }
     }
-    assert_eq!(f(builtin_format(5).unwrap(), -1234.0), "($1,234)");
-    assert_eq!(f(builtin_format(12).unwrap(), 0.5), " 1/2");
-    assert_eq!(f(builtin_format(47).unwrap(), 61.2 / 86400.0), "0101.2");
+    assert_eq!(f(builtin_format(5).ok_or("none")?, -1234.0), "($1,234)");
+    assert_eq!(f(builtin_format(12).ok_or("none")?, 0.5), " 1/2");
+    assert_eq!(f(builtin_format(47).ok_or("none")?, 61.2 / 86400.0), "0101.2");
+    Ok(())
 }
 
 #[test]
@@ -819,28 +855,29 @@ fn format_codes_are_capped_at_255_characters() {
     assert_eq!(f(&huge, 0.5), "0.5");
 }
 
-/// Parses and renders `code` on a worker thread; panics if that takes more than 20 s, so a quadratic
+/// Parses and renders `code` on a worker thread; errors if that takes more than 20 s, so a quadratic
 /// parser fails the test instead of hanging CI. Not a benchmark: at this size an O(n^2) pass takes
 /// minutes and an O(n) pass milliseconds, so the margin is decades wide.
-fn finishes_in_time(code: String) -> String {
+fn finishes_in_time(code: String) -> Result<String, std::sync::mpsc::RecvTimeoutError> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         // Uncapped: `parse` turns a code past 255 characters into General before the parser sees it.
         let _ = tx.send(format_value(&Value::Number(1234.5), &NumberFormat::parse_uncapped(&code), S).text);
     });
-    rx.recv_timeout(std::time::Duration::from_secs(20)).expect("format code did not parse and render in time")
+    rx.recv_timeout(std::time::Duration::from_secs(20))
 }
 
 #[test]
-fn hostile_codes_parse_in_linear_time() {
+fn hostile_codes_parse_in_linear_time() -> Result<(), std::sync::mpsc::RecvTimeoutError> {
     let n = 1_000_000;
     // Unclosed brackets, a run of commas after a digit, a run of fraction bars.
-    assert!(finishes_in_time("[".repeat(n)).starts_with('['));
-    finishes_in_time(format!("0{}", ",".repeat(n)));
-    finishes_in_time(format!("0{}", "/".repeat(n)));
-    finishes_in_time(format!("0{}0", ",".repeat(n)));
+    assert!(finishes_in_time("[".repeat(n))?.starts_with('['));
+    finishes_in_time(format!("0{}", ",".repeat(n)))?;
+    finishes_in_time(format!("0{}", "/".repeat(n)))?;
+    finishes_in_time(format!("0{}0", ",".repeat(n)))?;
     // Unclosed brackets mixed with semicolons: each is a literal and a section separator stays one.
-    finishes_in_time("[;".repeat(n / 2));
+    finishes_in_time("[;".repeat(n / 2))?;
+    Ok(())
 }
 
 #[test]
@@ -863,4 +900,121 @@ fn closed_brackets_still_hold_their_semicolons() {
     assert_eq!(parse::parse_sections("[unknown;x]0;0").len(), 2);
     assert_eq!(f("0\\[0", 5.0), "0[5");
     assert_eq!(f("\"[\"0;0", 5.0), "[5");
+}
+
+/// "Set precision as displayed": the value each format stores. Expected values observed in Excel
+/// (COM, `Workbook.PrecisionAsDisplayed = True`) with synthetic values.
+#[test]
+fn round_as_displayed_matches_excel() {
+    let r = |code: &str, n: f64| NumberFormat::parse(code).round_as_displayed(n);
+    let cases: &[(&str, f64, f64)] = &[
+        ("0", 527.91, 528.0),
+        ("0", 2.5, 3.0),
+        ("0", -2.5, -3.0),
+        ("0.00", 1.005, 1.01),
+        ("0.00", 1.23456, 1.23),
+        ("#.##", 1.23456, 1.23),
+        ("#.##", 1.2, 1.2),
+        ("?.??", 1.23456, 1.23),
+        ("0.0??", 1.23456, 1.235),
+        ("0%", 0.123456, 0.12),
+        ("0.0%", 0.123456, 0.123),
+        ("0.00%", 0.123456, 0.1235),
+        ("$#,##0.00", 1234.5678, 1234.57),
+        ("#,##0", 1234.5678, 1235.0),
+        ("0.0,,", 1234567.891, 1200000.0),
+        ("#,##0,", 1234567.891, 1235000.0),
+        ("0.0,", 1234567.891, 1234600.0),
+        ("# ?/?", 0.3333333, 1.0 / 3.0),
+        ("# ??/??", 0.3333333, 1.0 / 3.0),
+        ("# ?/8", 0.3, 0.25),
+        ("# ?/4", 2.71829, 2.75),
+        ("?/?", 0.123, 0.125),
+        ("0.00E+00", 123456.789, 123000.0),
+        ("##0.0E+0", 123456.789, 120000.0),
+        ("0.0E+0", 0.000123456, 0.00012),
+        ("##0.E+0", 98765.4, 100000.0),
+        ("###.00E+0", 98765.4, 98800.0),
+        ("000.0E+0", 0.0123456, 0.012),
+        ("0.00E+0\" u\"", 98765.4, 98800.0),
+        ("0.0%E+0", 12345.0, 12345.0),
+        ("0.00;(0.00)", -1.23456, -1.23),
+        ("0.00;(0.0)", -1.23456, -1.2),
+        ("0.0 \"kg\"", 1.23456, 1.2),
+        ("0.00;-0.00;\"zero\"", 0.001, 0.0),
+        ("0.00_);(0.00)", 1.23456, 1.23),
+        ("#,##0.0_);[Red](#,##0.0)", 2.345, 2.3),
+        // Kept at full precision.
+        ("General", 1.0 / 3.0, 1.0 / 3.0),
+        ("m/d/yyyy", 45000.75, 45000.75),
+        ("h:mm", 45000.123456, 45000.123456),
+        ("h:mm:ss", 45000.123456, 45000.123456),
+        ("[h]:mm", 1.2345678, 1.2345678),
+        ("mm:ss.0", 0.0001234567, 0.0001234567),
+        ("d", 45000.6, 45000.6),
+        ("@", 1.23456, 1.23456),
+        ("\"x\"", 1.23456, 1.23456),
+        (";;;", 1.23456, 1.23456),
+        // Conditions are ignored: the sign picks the section (first for positives, second for
+        // negatives), whatever section displays the number.
+        ("[<1]0.00;0", 1.0 / 3.0, 0.33),
+        ("[<1]0.00;0", 2.0 + 1.0 / 3.0, 2.33),
+        ("[<1]0.00;0", 12345.678, 12345.68),
+        ("[<1]0.00;0", -10.0 / 3.0, -3.0),
+        ("[<1]0.00;0", -1.0 / 3.0, 0.0),
+        ("[>1]0.0;0.000", 1.0 / 3.0, 0.3),
+        ("[>1]0.0;0.000", -10.0 / 3.0, -3.333),
+        ("[>=100]0;0.000", 2.0 + 1.0 / 3.0, 2.0),
+        ("[>=100]0;0.000", -200.0 - 1.0 / 3.0, -200.333),
+        ("[<0]0.0;0.000", -2.0 - 1.0 / 3.0, -2.333),
+        ("[>100]0;[<-100]0.0;0.000", -2.0 - 1.0 / 3.0, -2.3),
+        ("[<=-1]0.0;[>=1]0.000;0.00000", -2.0 - 1.0 / 3.0, -2.333),
+        ("0.0;[<-5]0.000", -2.0 - 1.0 / 3.0, -2.333),
+        ("[<1]0.00%;0", 2.0 + 1.0 / 3.0, 2.3333),
+        ("[<1]0.00;0.0,", -2345.6789, -2300.0),
+        ("[<1]0.0E+0;0", 1.0 / 3.0, 0.33),
+        ("[<1]# ?/?;0", 2.3, 16.0 / 7.0),
+        ("[<1]0.00;?/8", -2.0 - 1.0 / 3.0, -2.375),
+        ("[<1]0.00;0.0;0.000;@", -2.0 - 1.0 / 3.0, -2.3),
+        ("[<1]\"x\";0.0", 2.0 + 1.0 / 3.0, 2.0 + 1.0 / 3.0),
+        ("[<1]\"x\";0.0", -2.0 - 1.0 / 3.0, -2.3),
+        ("[<1]m/d/yyyy;0.0", 2.0 + 1.0 / 3.0, 2.0 + 1.0 / 3.0),
+        ("[<1]0.0;m/d/yyyy", -2.0 - 1.0 / 3.0, -2.0 - 1.0 / 3.0),
+        // One section with a condition: negatives keep the full value, unless an `@` section
+        // follows (then the first section applies, as without a condition).
+        ("[<1]0.00", 2.0 + 1.0 / 3.0, 2.33),
+        ("[<1]0.00", -2.0 - 1.0 / 3.0, -2.0 - 1.0 / 3.0),
+        ("[>=-100]0.0", -2.0 - 1.0 / 3.0, -2.0 - 1.0 / 3.0),
+        ("[<1]0.00;@", -2.0 - 1.0 / 3.0, -2.33),
+        ("[<1]0.0%;@", -2.0 - 1.0 / 3.0, -2.333),
+        ("0.00;@", -2.0 - 1.0 / 3.0, -2.33),
+        // A completely empty section passes to the next; a colour or a literal doesn't.
+        ("0.0;;0.000", -2.0 - 1.0 / 3.0, -2.333),
+        ("[<1]0.0;;0.000", -2.0 - 1.0 / 3.0, -2.333),
+        ("[<1]0.0;;0.0%", -2.0 - 1.0 / 3.0, -2.333),
+        (";0.0", 2.0 + 1.0 / 3.0, 2.3),
+        (";;0.0", 2.0 + 1.0 / 3.0, 2.3),
+        (";;0.0", -2.0 - 1.0 / 3.0, -2.3),
+        ("0.0;;", -2.0 - 1.0 / 3.0, -2.0 - 1.0 / 3.0),
+        ("0.0;;@", -2.0 - 1.0 / 3.0, -2.0 - 1.0 / 3.0),
+        ("[<1]0.00;", -2.0 - 1.0 / 3.0, -2.0 - 1.0 / 3.0),
+        ("0.0;[Red];0.000", -2.0 - 1.0 / 3.0, -2.0 - 1.0 / 3.0),
+        ("[<1]0.0;\" \";0.000", -2.0 - 1.0 / 3.0, -2.0 - 1.0 / 3.0),
+        ("[<1];0.0;0.00", 2.0 + 1.0 / 3.0, 2.0 + 1.0 / 3.0),
+    ];
+    for &(code, n, want) in cases {
+        assert_eq!(r(code, n), want, "{code} with {n}");
+    }
+    // A negative that rounds to zero stores 0, not -0.
+    let z = r("0.00", -0.004);
+    assert!(z == 0.0 && z.is_sign_positive());
+    // Non-finite and extreme inputs come back unchanged or finite, never a panic.
+    assert!(r("0.00", f64::NAN).is_nan());
+    assert_eq!(r("0.00", f64::INFINITY), f64::INFINITY);
+    assert_eq!(r("0", 1e300 * 10.0), 1e301);
+    assert_eq!(r("0.0,,,,,,,,,,", 1.234e35), 1.234e35);
+    assert_eq!(r("0.000000000000000000000000000000", 1.0 / 3.0), 0.333333333333333);
+    assert_eq!(r("0%%%%%%%%%%%%%%%%%%%%%%%%", f64::MAX), f64::MAX);
+    assert_eq!(r("0", f64::MAX), f64::MAX);
+    assert_eq!(r("0.0E+0", f64::MIN_POSITIVE), 2.2e-308);
 }

@@ -35,10 +35,11 @@ fn field_index(db: &Array, a: &[Arg]) -> R<Option<usize>> {
     match v {
         Value::Number(n) => {
             let i = n.trunc();
-            if i < 1.0 || i > db.cols as f64 {
+            // NaN too: it would pass both comparisons and become index 0 (#2163).
+            if i.is_nan() || i < 1.0 || i > db.cols as f64 {
                 return Err(CellError::Value);
             }
-            Ok(Some(i as usize - 1))
+            Ok(Some((i as usize).saturating_sub(1)))
         }
         Value::Text(t) => find_column(db, &t).map(Some).ok_or(CellError::Value),
         Value::Bool(_) => Err(CellError::Value),
@@ -65,11 +66,15 @@ fn cell_criterion(v: &Value) -> Option<Criterion> {
     }
 }
 
+/// A criteria row: its index and its conditions (criteria column, database column or `None`
+/// when the label is unknown, criterion).
+type CriteriaRow = (usize, Vec<(usize, Option<usize>, Criterion)>);
+
 /// Rows (1-based within the database, excluding the header) of matching records.
 fn matching_records(db: &Array, crit: &Array, ctx: &mut dyn Ctx) -> Vec<usize> {
     // Per criteria row: its index and a list of (criteria column, database column or None when
     // the label is unknown, criterion).
-    let mut rows: Vec<(usize, Vec<(usize, Option<usize>, Criterion)>)> = Vec::new();
+    let mut rows: Vec<CriteriaRow> = Vec::new();
     for r in 1..crit.rows {
         let mut conds = Vec::new();
         for c in 0..crit.cols {
