@@ -129,8 +129,8 @@ past the parser's limit, and a wrapper inside the text. **Saving writes the real
 Excel's Get Data reaches files (Excel, CSV, XML, JSON, PDF, Parquet, folders), databases (SQL
 Server, Access, ODBC, …), web pages, SharePoint and online services, through Power Query.
 GridCraft imports CSV/TSV, JSON and HTML tables, and the result of one SQL query from PostgreSQL,
-MySQL/MariaDB, SQLite or ODBC (Data ▸ From Database, desktop and CLI). The imported table keeps its
-query in `customXml/gridcraftDbQueries.xml` (never a password; Excel keeps the part), so Data ▸ Refresh
+MySQL/MariaDB or SQLite, and from ODBC in builds with the `odbc` feature (off by default; it needs the system's ODBC driver manager, such as unixODBC on Linux and macOS) (Data ▸ From Database, desktop and CLI). The imported table keeps its
+query in `customXml/gridcraftDbQueries.xml` (the connection password is never saved; the SQL is saved as written, so don't put passwords or other secrets in it before sharing the workbook; Excel keeps the part), so Data ▸ Refresh
 runs it again; no query editor. Counted under features (Get & Transform, ~10% ready), not here.
 
 ## Python cells

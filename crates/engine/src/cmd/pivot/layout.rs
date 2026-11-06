@@ -211,7 +211,8 @@ pub(super) fn refresh(s: &mut Session, p: &Json) -> Result<Json> {
 pub(super) fn refresh_all(s: &mut Session, p: &Json) -> Result<Json> {
     let replace = bool_param(p, "replace").unwrap_or(false);
     // Database tables first: PivotTables may summarise them.
-    let db = super::super::database::refresh_all(s, bool_param(p, "trust") == Some(true))?;
+    let answer = str_param(p, "table").zip(str_param(p, "password").filter(|pw| !pw.is_empty()));
+    let db = super::super::database::refresh_all(s, bool_param(p, "trust") == Some(true), answer)?;
     let mut r = edit(s, |cx| {
         let mut n = 0;
         let mut errors = vec![];

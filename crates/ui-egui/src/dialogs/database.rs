@@ -46,7 +46,7 @@ pub(super) fn open(app: &SheetApp, name: &str, params: &Json) -> Option<Dialog> 
             Dialog::form(
                 "dbPassword",
                 "Database Password",
-                "data.refresh",
+                refresh_command(params),
                 vec![Note(text), Password { key: "password", label: "Password:" }],
                 values,
             )
@@ -57,11 +57,17 @@ pub(super) fn open(app: &SheetApp, name: &str, params: &Json) -> Option<Dialog> 
             let fields = trust_fields(p("queries").as_array().map(Vec::as_slice).unwrap_or_default());
             let mut values = params.clone();
             values["trust"] = json!(true);
-            Dialog::form("dbTrust", "Security Warning", "data.refresh", fields, values)
+            Dialog::form("dbTrust", "Security Warning", refresh_command(params), fields, values)
         }
         _ => return None,
     };
     Some(d)
+}
+
+/// What OK runs with the answer: Refresh All again when Refresh All asked (`then`), so the
+/// table it asked about is not fetched once more on its own; else Refresh of that table.
+fn refresh_command(params: &Json) -> &'static str {
+    if params.get("then").and_then(Json::as_str) == Some("refreshAll") { "data.refreshAll" } else { "data.refresh" }
 }
 
 fn db_str(d: &Dialog, k: &str) -> String {
@@ -206,9 +212,9 @@ pub(super) fn run_confirmed(app: &mut SheetApp, d: &mut Dialog, confirm: &mut bo
         return None;
     };
     d.values.remove("busy");
-    // The password or the trust asked for by Refresh All: the other tables follow.
-    if r.is_ok() && matches!(d.name.as_str(), "dbPassword" | "dbTrust") && d.values.get("then").and_then(Json::as_str) == Some("refreshAll") {
-        crate::refresh_all(app);
+    if cmd == "data.refreshAll" {
+        // Refresh All answered: report as Refresh All does (errors, or how many were refreshed).
+        crate::refresh_all_result(app, r.clone());
     }
     Some(r)
 }
@@ -569,5 +575,95 @@ mod tests {
         assert!(result.is_some_and(|r| r.is_ok()));
         assert_eq!(app.session.active().map(|doc| doc.wb.sheets.len()), sheets.map(|n| n + 1));
         assert!(db_str(&d, "busy").is_empty());
+    }
+
+    /// An app with a sqlite table and a mysql table that needs a password, the file reopened
+    /// (no password known); the data source records each request and answers after a moment.
+    fn reopened() -> (SheetApp, std::sync::Arc<std::sync::Mutex<Vec<gridcraft_engine::datasource::DbRequest>>>) {
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+
+        use gridcraft_engine::datasource::{DbRequest, DbTable, DbValue};
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        session.data_source = Some(Arc::new(move |r: &DbRequest| {
+            log.lock().unwrap().push(r.clone());
+            std::thread::sleep(Duration::from_millis(30));
+            Ok(DbTable { columns: vec!["a".into()], rows: vec![vec![DbValue::Int(1)]], truncated: false })
+        }));
+        session.execute("data.fromDatabase", json!({"driver": "sqlite", "connection": "/x.db", "query": "open"})).unwrap();
+        session
+            .execute("data.fromDatabase", json!({"driver": "mysql", "connection": "mysql://h/db", "user": "u", "password": "pw", "query": "locked"}))
+            .unwrap();
+        session.db_passwords.clear();
+        seen.lock().unwrap().clear();
+        let mut app = SheetApp::new(session, crate::Services::default());
+        app.install_db_jobs(&egui::Context::default());
+        (app, seen)
+    }
+
+    /// Presses OK as frames do until the dialog's command has run.
+    fn ok(app: &mut SheetApp, d: &mut Dialog) -> Result<Json, String> {
+        let mut confirm = true;
+        for _ in 0..300 {
+            if let Some(r) = run_confirmed(app, d, &mut confirm) {
+                return r;
+            }
+            confirm = false;
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("the dialog's command never finished");
+    }
+
+    #[test]
+    fn a_password_asked_by_refresh_all_runs_refresh_all_once() {
+        let (mut app, seen) = reopened();
+        crate::refresh_all(&mut app);
+        assert!(seen.lock().unwrap().is_empty(), "nothing runs while a password is missing");
+        let mut d = app.dialog.take().expect("the password dialog");
+        assert_eq!((d.name.as_str(), d.command), ("dbPassword", Some("data.refreshAll")));
+        d.values.insert("password".into(), json!("pw"));
+        let r = ok(&mut app, &mut d).unwrap();
+        assert_eq!(r["refreshed"], 2, "{r}");
+        let ran: Vec<(String, Option<String>)> = seen.lock().unwrap().iter().map(|q| (q.query.clone(), q.password.clone())).collect();
+        assert_eq!(ran, [("open".into(), None), ("locked".into(), Some("pw".into()))], "each query once");
+        assert!(app.message.is_none(), "{:?}", app.message);
+        assert!(app.toast.is_some(), "Refresh All reports what it refreshed");
+        assert!(app.session.journal.iter().all(|(_, p)| p.get("password").is_none()));
+    }
+
+    #[test]
+    fn trust_asked_by_refresh_all_runs_refresh_all_once_and_reports_errors() {
+        let (mut app, seen) = reopened();
+        app.session.db_passwords.insert("mysql\nmysql://h/db\nu".into(), "pw".into());
+        {
+            let doc = app.session.doc_mut().unwrap();
+            for q in &mut std::sync::Arc::make_mut(&mut doc.wb).db_queries {
+                q.trusted = false;
+            }
+        }
+        crate::refresh_all(&mut app);
+        let mut d = app.dialog.take().expect("the security warning");
+        assert_eq!((d.name.as_str(), d.command), ("dbTrust", Some("data.refreshAll")));
+        let r = ok(&mut app, &mut d).unwrap();
+        assert_eq!(r["refreshed"], 2, "{r}");
+        assert_eq!(seen.lock().unwrap().iter().map(|q| q.query.as_str()).collect::<Vec<_>>(), ["open", "locked"]);
+        // A failing query: the answer's Refresh All shows the error as Refresh All does.
+        app.session.data_source = Some(std::sync::Arc::new(|_: &gridcraft_engine::datasource::DbRequest| Err("server down".to_string())));
+        app.db_jobs = None;
+        app.install_db_jobs(&egui::Context::default());
+        {
+            let doc = app.session.doc_mut().unwrap();
+            for q in &mut std::sync::Arc::make_mut(&mut doc.wb).db_queries {
+                q.trusted = false;
+            }
+        }
+        crate::refresh_all(&mut app);
+        let mut d = app.dialog.take().expect("the security warning");
+        ok(&mut app, &mut d).unwrap();
+        assert!(app.message.as_ref().is_some_and(|(_, m)| m.contains("server down")), "{:?}", app.message);
     }
 }

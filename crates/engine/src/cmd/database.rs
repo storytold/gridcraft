@@ -365,6 +365,18 @@ fn refresh(s: &mut Session, p: &Json) -> Result<Json> {
     refresh_query(s, &q, &tname, str_param(p, "password"))
 }
 
+/// Keeps for the session the password typed for `table`'s query, under its connection.
+fn remember_password(s: &mut Session, table: &str, password: &str) -> Result<()> {
+    const ID: &str = "data.refreshAll";
+    let d = s.doc()?;
+    let tid = d.wb.sheets.iter().flat_map(|sh| sh.tables.iter()).find(|t| t.name.eq_ignore_ascii_case(table)).map(|t| t.id);
+    let Some(q) = tid.and_then(|tid| d.wb.db_queries.iter().find(|q| q.table_id == tid)).cloned() else {
+        return Err(bad(ID, format!("table `{table}` was not imported from a database")));
+    };
+    conn_params(s, ID, &json!({"driver": q.driver, "connection": q.connection, "user": q.user, "password": password}))?;
+    Ok(())
+}
+
 /// Enables every database query of the active workbook (the user trusts the file's source).
 fn trust_queries(s: &mut Session) -> Result<()> {
     let d = s.doc_mut()?;
@@ -547,19 +559,23 @@ pub(crate) struct RefreshAll {
 }
 
 /// Refreshes every database query of the workbook (Data › Refresh All). `trust` enables the
-/// queries read from the file first; without it, they wait and the host is asked once. Every
-/// query runs before any table changes, so a request still running in the background
-/// ([`crate::datasource::PENDING`]) fails the command with nothing changed (and the other
-/// requests started meanwhile).
-pub(crate) fn refresh_all(s: &mut Session, trust: bool) -> Result<RefreshAll> {
+/// queries read from the file first; without it, they wait and the host is asked once.
+/// `answer` is the password the host was asked for, with its table (it is kept for the session
+/// like any other). Nothing runs while a query still waits for trust or a password, so each
+/// answer leads to one more pass and no query runs twice. Every query runs before any table
+/// changes, so a request still running in the background ([`crate::datasource::PENDING`]) fails
+/// the command with nothing changed (and the other requests started meanwhile).
+pub(crate) fn refresh_all(s: &mut Session, trust: bool, answer: Option<(&str, &str)>) -> Result<RefreshAll> {
     if trust {
         trust_queries(s)?;
+    }
+    if let Some((table, password)) = answer {
+        remember_password(s, table, password)?;
     }
     let queries = s.doc()?.wb.db_queries.clone();
     let asked_before = s.ui_requests.len();
     let mut out = RefreshAll { refreshed: 0, errors: vec![], need_password: vec![], need_trust: vec![] };
-    let mut fetched = vec![];
-    let mut pending = false;
+    let mut runnable = vec![];
     for q in queries {
         let Some(tname) = s.doc()?.wb.sheets.iter().flat_map(|sh| sh.tables.iter()).find(|t| t.id == q.table_id).map(|t| t.name.clone()) else {
             continue;
@@ -588,11 +604,19 @@ pub(crate) fn refresh_all(s: &mut Session, trust: bool) -> Result<RefreshAll> {
                 }
                 out.need_password.push(tname);
             }
-            Ok(Ready::Run(c, max_rows)) => match fetch(s, &q, &c, max_rows) {
-                Err(e) if is_pending(&e) => pending = true,
-                r => fetched.push((q, tname, max_rows, r)),
-            },
+            Ok(Ready::Run(c, max_rows)) => runnable.push((q, tname, c, max_rows)),
             Err(e) => out.errors.push(json!({"table": tname, "error": e.to_string()})),
+        }
+    }
+    if !out.need_password.is_empty() || !out.need_trust.is_empty() {
+        return Ok(out);
+    }
+    let mut fetched = vec![];
+    let mut pending = false;
+    for (q, tname, c, max_rows) in runnable {
+        match fetch(s, &q, &c, max_rows) {
+            Err(e) if is_pending(&e) => pending = true,
+            r => fetched.push((q, tname, max_rows, r)),
         }
     }
     if pending {
@@ -976,6 +1000,109 @@ mod tests {
         ] {
             s.execute("data.fromDatabase", json!({"driver": driver, "connection": connection, "query": "select 1"})).unwrap();
         }
+    }
+
+    fn queries(s: &Session) -> Vec<u32> {
+        s.active().unwrap().wb.db_queries.iter().map(|q| q.table_id).collect()
+    }
+
+    fn table_ids(s: &Session) -> Vec<u32> {
+        s.active().unwrap().wb.sheets.iter().flat_map(|sh| sh.tables.iter().map(|t| t.id)).collect()
+    }
+
+    #[test]
+    fn removed_tables_take_their_queries_with_them() {
+        let (mut s, next, seen) = swappable();
+        *next.lock().unwrap() = ints(&["a"], &[&[1], &[2]]);
+        s.execute("data.fromDatabase", json!({"driver": "sqlite", "connection": "/x.db", "query": "kept", "sheet": "Kept"})).unwrap();
+        s.execute("data.fromDatabase", json!({"driver": "sqlite", "connection": "/x.db", "query": "gone", "sheet": "Gone"})).unwrap();
+        let (kept, gone) = (queries(&s)[0], queries(&s)[1]);
+        // Deleting the sheet drops its table's query in the same edit; undo and redo bring both
+        // back or take both away.
+        s.execute("home.deleteSheet", json!({"sheet": "Gone"})).unwrap();
+        assert_eq!(queries(&s), [kept]);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(queries(&s), [kept, gone]);
+        assert!(table_ids(&s).contains(&gone));
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(queries(&s), [kept]);
+        // A table made afterwards never gets the old id, and nothing refreshes it.
+        s.execute("range.setValues", json!({"range": "D1", "values": [["h"], [1]]})).unwrap();
+        s.execute("insert.table", json!({"range": "D1:D2", "header": true})).unwrap();
+        let before = seen.lock().unwrap().len();
+        let r = s.execute("data.refreshAll", json!({})).unwrap();
+        assert_eq!(r["refreshed"], 1, "{r}");
+        let ran: Vec<String> = seen.lock().unwrap()[before..].iter().map(|q| q.query.clone()).collect();
+        assert_eq!(ran, ["kept"]);
+        // Converting to a range and deleting the table's rows drop the query too.
+        s.execute(
+            "table.convertToRange",
+            json!({"table": s.active().unwrap().wb.sheets.iter().find(|sh| sh.name == "Kept").unwrap().tables[0].name.clone()}),
+        )
+        .unwrap();
+        assert!(queries(&s).is_empty());
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(queries(&s), [kept]);
+        s.execute("sheet.activate", json!({"sheet": "Kept"})).unwrap();
+        s.execute("selection.set", json!({"range": "A1:A3"})).unwrap();
+        s.execute("home.deleteRows", json!({})).unwrap();
+        assert!(queries(&s).is_empty(), "{:?}", queries(&s));
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(queries(&s), [kept]);
+    }
+
+    #[test]
+    fn refresh_all_runs_nothing_until_every_answer_is_in() {
+        let (mut s, next, seen) = swappable();
+        *next.lock().unwrap() = ints(&["a"], &[&[1]]);
+        s.execute("data.fromDatabase", json!({"driver": "sqlite", "connection": "/x.db", "query": "open"})).unwrap();
+        s.execute("data.fromDatabase", json!({"driver": "mysql", "connection": "mysql://h/one", "user": "u", "password": "p1", "query": "one"}))
+            .unwrap();
+        s.execute("data.fromDatabase", json!({"driver": "mysql", "connection": "mysql://h/two", "user": "u", "password": "p2", "query": "two"}))
+            .unwrap();
+        let names: Vec<String> = s.active().unwrap().wb.sheets.iter().flat_map(|sh| sh.tables.iter().map(|t| t.name.clone())).collect();
+        // The file reopened: no password known.
+        s.db_passwords.clear();
+        s.take_ui_requests();
+        let before = seen.lock().unwrap().len();
+        let r = s.execute("data.refreshAll", json!({})).unwrap();
+        assert_eq!(r["needPassword"], json!([names[1], names[2]]), "{r}");
+        assert_eq!(r["refreshed"], 0);
+        assert_eq!(seen.lock().unwrap().len(), before, "the query that needs nothing waits too");
+        let asked = s.take_ui_requests();
+        let Some(crate::UiRequest::Dialog(name, p)) = asked.first() else { panic!("{asked:?}") };
+        assert_eq!((name.as_str(), p["table"].as_str(), p["then"].as_str()), ("dbPassword", Some(names[1].as_str()), Some("refreshAll")));
+        // The first answer: still one password missing, still nothing runs.
+        let r = s.execute("data.refreshAll", json!({"table": names[1], "password": "p1"})).unwrap();
+        assert_eq!(r["needPassword"], json!([names[2]]), "{r}");
+        assert_eq!(seen.lock().unwrap().len(), before);
+        // The last answer: every query runs once.
+        let r = s.execute("data.refreshAll", json!({"table": names[2], "password": "p2"})).unwrap();
+        assert_eq!(r["refreshed"], 3, "{r}");
+        let ran: Vec<(String, Option<String>)> = seen.lock().unwrap()[before..].iter().map(|q| (q.query.clone(), q.password.clone())).collect();
+        assert_eq!(ran, [("open".into(), None), ("one".into(), Some("p1".into())), ("two".into(), Some("p2".into()))]);
+        // The answers are never journaled (a recorded script would replay them).
+        assert!(s.journal.iter().all(|(_, p)| p.get("password").is_none()), "{:?}", s.journal);
+        // A password for a table that wasn't imported is refused.
+        assert!(s.execute("data.refreshAll", json!({"table": "Nope", "password": "x"})).is_err());
+    }
+
+    #[test]
+    fn trust_answered_from_refresh_all_runs_each_query_once() {
+        let (mut s, next, seen) = swappable();
+        *next.lock().unwrap() = ints(&["a"], &[&[1]]);
+        s.execute("data.fromDatabase", json!({"driver": "sqlite", "connection": "/x.db", "query": "q1"})).unwrap();
+        s.execute("data.fromDatabase", json!({"driver": "sqlite", "connection": "/y.db", "query": "q2"})).unwrap();
+        as_if_opened(&mut s);
+        s.take_ui_requests();
+        let before = seen.lock().unwrap().len();
+        s.execute("data.refreshAll", json!({})).unwrap();
+        let asked = s.take_ui_requests();
+        assert!(matches!(asked.first(), Some(crate::UiRequest::Dialog(n, p)) if n == "dbTrust" && p["then"] == "refreshAll"), "{asked:?}");
+        // What the dialog sends back.
+        let r = s.execute("data.refreshAll", json!({"table": "Table1", "trust": true})).unwrap();
+        assert_eq!(r["refreshed"], 2, "{r}");
+        assert_eq!(seen.lock().unwrap()[before..].iter().map(|q| q.query.as_str()).collect::<Vec<_>>(), ["q1", "q2"]);
     }
 
     #[test]
