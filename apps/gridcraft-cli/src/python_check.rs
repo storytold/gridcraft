@@ -121,7 +121,10 @@ fn list_packages(client: &mut Client) -> bool {
             outln!("python: didn't start: {}", describe_outcome(&other));
             false
         }
-        Err(_) => false,
+        Err(e) => {
+            outln!("python: couldn't ask: {e:?}");
+            false
+        }
     }
 }
 
@@ -144,7 +147,10 @@ fn run_code(client: &mut Client, code: &str) -> bool {
             outln!("failed ({kind}): {}", describe_outcome(&other));
             false
         }
-        Err(_) => false,
+        Err(e) => {
+            outln!("failed: couldn't ask: {e:?}");
+            false
+        }
     }
 }
 
