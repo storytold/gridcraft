@@ -199,7 +199,13 @@ pub(super) fn craft_font_faces() -> Vec<(String, &'static CraftFont)> {
 fn add_craft_fonts(fonts: &mut FontDefinitions) -> Vec<String> {
     let mut keys = Vec::new();
     for (key, font) in craft_font_faces() {
-        fonts.font_data.insert(key.clone(), Arc::new(FontData::from_static(font.bytes)));
+        let mut data = FontData::from_static(font.bytes);
+        // Script faces share the baseline of the face they interrupt (see `load_fallback`); only
+        // the symbol faces (`Zsym`) fill their row and stay centred.
+        if !font.scripts.contains(&"Zsym") {
+            data.tweak.set_baseline_fallback(true);
+        }
+        fonts.font_data.insert(key.clone(), Arc::new(data));
         keys.push(key);
     }
     keys
