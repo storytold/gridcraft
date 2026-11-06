@@ -19,6 +19,10 @@
 //! - `gridcraft:dirty` whenever unsaved changes appear or go away, `gridcraft:failed` when the
 //!   app couldn't start.
 //!
+//! `?mode=view|comment|edit` sets what the user may change (see the `access` module): in view
+//! mode nothing, in comment mode only their own notes and comments. A change the mode doesn't
+//! allow is put back after the frame that made it; in view mode Save hands no workbook to the host.
+//!
 //! In both host modes the page starts with an empty workbook instead of a sample, saves and PDF
 //! exports are handed to the page rather than downloaded, and `?author=` names the user for new
 //! notes and comments.
@@ -29,6 +33,7 @@ use std::rc::Rc;
 use craft_web_host::web::{FileData, Host, Message};
 use gridcraft_ui_egui::{Inbox, Services, SheetApp};
 
+use crate::access::{Gate, Mode};
 use crate::hostmode::open_name;
 
 /// The app id in the host messages (`gridcraft:ready`).
@@ -48,6 +53,8 @@ pub struct Bridge {
     host: Rc<Host>,
     /// Names of the files handed to the host since the last frame.
     saved: Rc<RefCell<Vec<String>>>,
+    /// The access mode (`?mode=`) and what it last allowed.
+    gate: Rc<RefCell<Gate>>,
 }
 
 impl Bridge {
@@ -55,7 +62,14 @@ impl Bridge {
     /// `data-host="page"` on the canvas, an unframed `?host=parent` page (it stays the normal app
     /// with downloads), or a parent on another origin.
     pub fn detect(canvas: &web_sys::HtmlCanvasElement) -> Option<Self> {
-        Some(Self { host: Rc::new(Host::connect(APP, canvas)?), saved: Rc::default() })
+        let host = Rc::new(Host::connect(APP, canvas)?);
+        let mode = web_sys::window()
+            .and_then(|w| w.location().search().ok())
+            .and_then(|search| web_sys::UrlSearchParams::new_with_str(&search).ok())
+            .and_then(|params| params.get("mode"))
+            .and_then(|mode| Mode::parse(&mode))
+            .unwrap_or_default();
+        Some(Self { host, saved: Rc::default(), gate: Rc::new(RefCell::new(Gate::new(mode))) })
     }
 
     /// Send saved and exported files to the host instead of downloading them, and hear files
@@ -90,6 +104,7 @@ impl Bridge {
     /// name it was saved as, and the host hears when unsaved changes appear or go away (the
     /// crate does not repeat a state it already reported).
     pub fn sync(&self, app: &mut SheetApp) {
+        self.gate.borrow_mut().enforce(app);
         let saved = std::mem::take(&mut *self.saved.borrow_mut());
         if let Some(name) = saved.iter().rev().find(|name| is_workbook(name))
             && let Some(doc) = app.session.active_mut()
@@ -104,6 +119,10 @@ impl Bridge {
 
     fn post_save(&self, path: &str, bytes: &[u8]) -> Result<(), String> {
         let name = file_name(path);
+        // In view mode a workbook is never handed over (exports such as PDF still are).
+        if is_workbook(&name) && !self.gate.borrow().mode().saves() {
+            return Ok(());
+        }
         self.host.post_save(&name, bytes, None, false)?;
         self.saved.borrow_mut().push(name);
         Ok(())
