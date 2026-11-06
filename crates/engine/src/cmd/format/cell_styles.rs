@@ -173,15 +173,109 @@ pub const CELL_STYLE_NAMES: &[&str] = &[
     "Percent",
 ];
 
+/// The built-in style called `name` (in any case), as [`CELL_STYLE_NAMES`] spells it.
+pub fn builtin_style_name(name: &str) -> Option<&'static str> {
+    CELL_STYLE_NAMES.iter().find(|b| b.eq_ignore_ascii_case(name)).copied()
+}
+
+/// The cell style called `name` in `wb`: the workbook's own definition (a custom style, or a
+/// built-in it changed), else the built-in one. Names are compared ignoring case.
+pub fn named_cell_style(wb: &gridcraft_model::Workbook, name: &str) -> Option<Style> {
+    wb.cell_styles.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, s)| s.clone()).or_else(|| builtin_cell_style(name, &wb.theme))
+}
+
+/// What Merge Styles makes of a workbook's named styles ([`merge_cell_styles`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StyleMerge {
+    /// The target's named styles after the merge.
+    pub styles: Vec<(String, Style)>,
+    /// Custom styles the target didn't have.
+    pub added: Vec<String>,
+    /// Styles whose definition in the target became the source's (a built-in the source leaves
+    /// as it comes goes back to the built-in definition).
+    pub replaced: Vec<String>,
+    /// Styles both define differently that the target kept (`keep_same`).
+    pub kept: Vec<String>,
+}
+
+impl StyleMerge {
+    /// Whether the merge changes the target's styles.
+    pub fn changes(&self) -> bool {
+        !self.added.is_empty() || !self.replaced.is_empty()
+    }
+}
+
+/// Home › Cell Styles › Merge Styles: the source's named styles merged into the target's.
+///
+/// Every style of the source comes over. A style both define (names compared ignoring case) takes
+/// the source's definition, or keeps the target's with `keep_same`; styles only the target defines
+/// stay. Each workbook has every built-in style, so the source's version of each built-in
+/// replaces the target's: one the source changed comes over, and one the target changed but the
+/// source didn't goes back to the built-in definition, as Excel does it. A style whose definition
+/// is the same in both counts as neither replaced nor kept.
+///
+/// `theme` is the target's, for the built-in definitions. The target's styles keep their order,
+/// and the ones it gains follow in the source's.
+pub fn merge_cell_styles(target: &[(String, Style)], source: &[(String, Style)], theme: &Theme, keep_same: bool) -> StyleMerge {
+    let key = |name: &str| name.to_ascii_lowercase();
+    // The first of several styles with the same name is the one the workbook uses.
+    let index = |list: &[(String, Style)]| {
+        let mut map = std::collections::HashMap::with_capacity(list.len());
+        for (i, (name, _)) in list.iter().enumerate() {
+            map.entry(key(name)).or_insert(i);
+        }
+        map
+    };
+    let builtin = |name: &str| builtin_style_name(name).and_then(|b| builtin_cell_style(b, theme));
+    let (in_target, in_source) = (index(target), index(source));
+    let mut m = StyleMerge::default();
+    for (i, (name, style)) in target.iter().enumerate() {
+        let k = key(name);
+        if in_target.get(&k) != Some(&i) {
+            continue;
+        }
+        let theirs = in_source.get(&k).and_then(|&j| source.get(j));
+        let Some(their_style) = theirs.map(|(_, s)| s.clone()).or_else(|| builtin(name)) else {
+            // A custom style only the target has.
+            m.styles.push((name.clone(), style.clone()));
+            continue;
+        };
+        if their_style == *style {
+            m.styles.push((name.clone(), style.clone()));
+        } else if keep_same {
+            m.kept.push(name.clone());
+            m.styles.push((name.clone(), style.clone()));
+        } else {
+            m.replaced.push(name.clone());
+            // Without a definition of its own in the source, the built-in definition comes back.
+            m.styles.extend(theirs.cloned());
+        }
+    }
+    for (j, (name, style)) in source.iter().enumerate() {
+        let k = key(name);
+        if in_source.get(&k) != Some(&j) || in_target.contains_key(&k) {
+            continue;
+        }
+        match builtin(name) {
+            None => {
+                m.added.push(name.clone());
+                m.styles.push((name.clone(), style.clone()));
+            }
+            Some(ours) if ours == *style => {}
+            Some(_) if keep_same => m.kept.push(name.clone()),
+            Some(_) => {
+                m.replaced.push(name.clone());
+                m.styles.push((name.clone(), style.clone()));
+            }
+        }
+    }
+    m
+}
+
 pub(super) fn cell_style(s: &mut Session, p: &Json) -> Result<Json> {
     let name = str_param(p, "name").unwrap_or("Normal").to_string();
     let d = s.doc()?;
-    let style =
-        d.wb.cell_styles
-            .iter()
-            .find(|(n, _)| n.eq_ignore_ascii_case(&name))
-            .map(|(_, s)| s.clone())
-            .or_else(|| builtin_cell_style(&name, &d.wb.theme));
+    let style = named_cell_style(&d.wb, &name);
     let Some(style) = style else { return Err(bad("home.cellStyle", format!("unknown cell style `{name}`"))) };
     // Number-format styles only change the number format.
     let only_fmt = matches!(name.as_str(), "Comma" | "Comma [0]" | "Currency" | "Currency [0]" | "Percent");
