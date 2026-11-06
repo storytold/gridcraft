@@ -319,6 +319,9 @@ fn a_worker_lost_and_rebuilt_runs_it_again() {
     py(&mut s, "A1", "setdie a 1");
     settle(&mut s);
     assert_eq!(h.starts(), 1);
+    // It has replied and is on its way out: a cell sent in that moment goes down with it, which is
+    // the case above.
+    std::thread::sleep(std::time::Duration::from_millis(200));
     py(&mut s, "A2", "get rate");
     settle(&mut s);
     assert_eq!(v(&s, "A2"), NUM(2.0));
