@@ -2168,6 +2168,16 @@ name = "gridcraft-pdf"
 version = "0.16.0"
 
 [[package]]
+name = "gridcraft-python"
+version = "0.16.0"
+dependencies = [
+ "gridcraft-core",
+ "gridcraft-sandbox",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "gridcraft-sandbox"
 version = "0.16.0"
 dependencies = [
