@@ -16,7 +16,6 @@ mod tabs;
 
 use tabs::{activate, delete_sheet, hide_sheet, insert_sheet, move_sheet, rename_sheet, step_sheet, tab_color, unhide_sheet};
 /// Register structural and sheet commands, including observable insertion-format budgets.
-
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -447,7 +446,6 @@ fn check_push_off_sheet(s: &Session, sheet: usize, axis: Axis, at: u32, count: u
     Ok(())
 }
 /// Insert whole rows or columns after protection and push-off checks; report skipped format copying.
-
 fn insert_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
     let (at, count) = lines(s, p, axis)?;
     let limit = if axis == Axis::Rows { MAX_ROWS } else { MAX_COLS };
@@ -652,7 +650,6 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(out)
 }
 /// Shift cells within the target block and copy the preceding effective formats within the budgets.
-
 fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
     let shift = str_param(p, "shift").unwrap_or("down");
     let r = target_range(s, p)?;
@@ -796,7 +793,6 @@ fn insert_copied_cells(s: &mut Session, p: &Json) -> Result<Json> {
     }
 }
 /// Insert space, paste the captured clipboard and finish a cut move inside the caller's undo transaction.
-
 fn insert_copied_steps(s: &mut Session, clip: &crate::Clipboard, sheet: usize, at: CellRef, shift: &str, cut: bool) -> Result<(RangeRef, Json)> {
     let sel = clip.selected;
     let rows = sel.is_full_rows();
@@ -868,12 +864,10 @@ fn insert_copied_steps(s: &mut Session, clip: &crate::Clipboard, sheet: usize, a
 fn copy_inserted_formats(s: &mut Session, clip: &crate::Clipboard, sheet: usize, inserted: RangeRef) -> Result<()> {
     let src = if clip.selected.is_full_rows() || clip.selected.is_full_cols() { clip.selected } else { clip.range };
     let source = clip.wb.sheet(clip.sheet).ok_or_else(|| EngineError::Other("The copied sheet no longer exists.".into()))?;
-    let same_doc = s.doc()?.uid == clip.doc_uid;
     edit(s, |cx| {
+        // Undo can recycle identifiers even in the same document; the clipboard owns a snapshot.
         let mut styles = std::collections::HashMap::new();
-        let mut mapped = |id| {
-            if same_doc { id } else { *styles.entry(id).or_insert_with(|| cx.wb.styles.intern(clip.wb.styles.get(id).clone())) }
-        };
+        let mut mapped = |id| *styles.entry(id).or_insert_with(|| cx.wb.styles.intern(clip.wb.styles.get(id).clone()));
         // Re-intern before borrowing the destination. Include inherited styles, not only cells.
         let mut map = std::collections::HashMap::new();
         for id in source

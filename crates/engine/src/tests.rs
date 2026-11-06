@@ -1140,7 +1140,6 @@ fn inserted_rows_columns_and_cells_take_the_format_of_the_cells_before() {
     assert_eq!(sh.cells.iter_range(gridcraft_core::RangeRef::cols(0, 0)).count(), 0);
 }
 /// Build a filled, bordered list for insertion edge tests.
-
 fn boxed_insert_session() -> Session {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2, 3], [4, 5, 6], [7, 8, 9]]})).unwrap();
@@ -1151,7 +1150,6 @@ fn boxed_insert_session() -> Session {
     s
 }
 /// Resolve a cell's complete effective style for border assertions.
-
 fn cell_style(s: &Session, a: &str) -> gridcraft_model::Style {
     let wb = &s.doc().unwrap().wb;
     wb.styles.get(wb.active().unwrap().style_id(CellRef::parse(a).unwrap())).clone()

@@ -212,7 +212,6 @@ pub(super) fn outline_settings(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 /// Insert subtotal rows with the preceding formats, bolding only each summary label.
-
 pub(super) fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
     let (sheet, r) = data_target(s, p, "data.subtotal")?;
     let header = bool_param(p, "header").unwrap_or(true);

@@ -4,19 +4,16 @@ use gridcraft_engine::Session;
 use gridcraft_model::StyleId;
 use serde_json::json;
 /// Create an empty workbook for insertion regression tests.
-
 fn book() -> Session {
     let mut s = Session::new();
     s.new_workbook();
     s
 }
 /// Read the effective style, including inherited row and column formatting.
-
 fn style(s: &Session, address: &str) -> StyleId {
     s.doc().unwrap().wb.active().unwrap().style_id(CellRef::parse(address).unwrap())
 }
 /// Check that an empty explicit default override survives both XLSX and JSON serialization.
-
 fn check_round_trips(s: &mut Session, address: &str) {
     for format in ["xlsx", "json"] {
         let saved = s.execute("file.saveBytes", json!({"format": format})).unwrap();
