@@ -39,7 +39,8 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
             ("Arrow", "arrow"),
             ("Text Box", "textBox"),
         ] {
-            if ui.button(app.ui.language.tr(label)).clicked() {
+            // "Shape|" keeps these apart from the chart words ("Line" is a line chart elsewhere).
+            if ui.button(app.ui.language.tr(&format!("Shape|{label}"))).clicked() {
                 act(app, "insert.shape", json!({"kind": kind}));
             }
         }
