@@ -599,3 +599,59 @@ fn invalid_reorder_still_invalidates_references() -> Result<(), Box<dyn std::err
     assert_eq!(print(&adjust(parse("XFD1")?, "S", "S", &invalid)), "#REF!");
     Ok(())
 }
+
+#[test]
+fn reorder_partial_ranges_match_the_same_shape_away_from_sheet_edges() {
+    for axis in [Axis::Rows, Axis::Cols] {
+        let limit = if axis == Axis::Rows { gridcraft_core::MAX_ROWS } else { gridcraft_core::MAX_COLS };
+        let offset = limit - 10;
+        let (dr, dc) = if axis == Axis::Rows { (offset as i64, 0) } else { (0, offset as i64) };
+        for whole_lines in [false, true] {
+            let reference = |first, last| {
+                let anchor = |line| Anchor {
+                    row: if axis == Axis::Rows { line } else { 0 },
+                    col: if axis == Axis::Cols { line } else { 0 },
+                    row_abs: false,
+                    col_abs: false,
+                };
+                let kind = if whole_lines {
+                    if axis == Axis::Rows { RefKind::Rows(first, false, last, false) } else { RefKind::Cols(first, false, last, false) }
+                } else {
+                    RefKind::Range(anchor(first), anchor(last))
+                };
+                Expr::Ref(Reference { sheet: SheetSel::Current, kind })
+            };
+            for count in [1, 2] {
+                for from in 0..=10 - count {
+                    for before in 0..=10 - count {
+                        for first in 0..10 {
+                            for last in 0..10 {
+                                let middle = adjust(reference(first, last), "S", "S", &Edit::Reorder { axis, from, count, before });
+                                let edge = adjust(
+                                    reference(first + offset, last + offset),
+                                    "S",
+                                    "S",
+                                    &Edit::Reorder { axis, from: from + offset, count, before: before + offset },
+                                );
+                                assert_eq!(
+                                    edge,
+                                    shift_relative(middle, dr, dc),
+                                    "{axis:?} whole={whole_lines} from={from} count={count} before={before} span={first}:{last}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn reorder_reversed_ranges_keep_endpoint_order_and_absolute_flags() -> Result<(), Box<dyn std::error::Error>> {
+    let rows = Edit::Reorder { axis: Axis::Rows, from: 1, count: 2, before: 9 };
+    assert_eq!(print(&adjust(parse("$A$1048576:B5+SUM($1048576:5)")?, "S", "S", &rows)), "$A$1048576:B3+SUM($1048576:3)");
+    let cols = Edit::Reorder { axis: Axis::Cols, from: 1, count: 2, before: 9 };
+    assert_eq!(print(&adjust(parse("$XFD$1:E2+SUM($XFD:E)")?, "S", "S", &cols)), "$XFD$1:C2+SUM($XFD:C)");
+    Ok(())
+}

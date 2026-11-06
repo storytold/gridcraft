@@ -170,60 +170,6 @@ fn map_span(lo: u32, hi: u32, at: u32, count: u32, insert: bool, max: u32) -> Op
     }
 }
 
-/// Temporarily shift references in the last `count` lines before the intermediate Insert in a
-/// reorder, then restore their exact coordinates. References to these untouched lines would
-/// otherwise overflow before the later Delete cancels the Insert. Source-line references are
-/// handled separately so a moved edge line follows its block.
-fn protect_reorder_boundary_lines(r: &mut Reference, axis: Axis, limit: u32, count: u32, from: u32, end: u32) -> [Option<u32>; 2] {
-    let protect = |line: &mut u32| {
-        if *line >= limit - count && !(*line >= from && *line < end) {
-            let original = *line;
-            *line -= count;
-            Some(original)
-        } else {
-            None
-        }
-    };
-    match (&mut r.kind, axis) {
-        (RefKind::Cell(a), Axis::Rows) => [protect(&mut a.row), None],
-        (RefKind::Cell(a), Axis::Cols) => [protect(&mut a.col), None],
-        (RefKind::Range(a, b), Axis::Rows) => [protect(&mut a.row), protect(&mut b.row)],
-        (RefKind::Range(a, b), Axis::Cols) => [protect(&mut a.col), protect(&mut b.col)],
-        (RefKind::Rows(a, _, b, _), Axis::Rows) => [protect(a), protect(b)],
-        (RefKind::Cols(a, _, b, _), Axis::Cols) => [protect(a), protect(b)],
-        _ => [None; 2],
-    }
-}
-
-fn restore_reorder_boundary_lines(r: &mut Reference, axis: Axis, restore: [Option<u32>; 2]) {
-    let set = |line: &mut u32, original: Option<u32>| {
-        if let Some(original) = original {
-            *line = original;
-        }
-    };
-    match (&mut r.kind, axis) {
-        (RefKind::Cell(a), Axis::Rows) => set(&mut a.row, restore[0]),
-        (RefKind::Cell(a), Axis::Cols) => set(&mut a.col, restore[0]),
-        (RefKind::Range(a, b), Axis::Rows) => {
-            set(&mut a.row, restore[0]);
-            set(&mut b.row, restore[1]);
-        }
-        (RefKind::Range(a, b), Axis::Cols) => {
-            set(&mut a.col, restore[0]);
-            set(&mut b.col, restore[1]);
-        }
-        (RefKind::Rows(a, _, b, _), Axis::Rows) => {
-            set(a, restore[0]);
-            set(b, restore[1]);
-        }
-        (RefKind::Cols(a, _, b, _), Axis::Cols) => {
-            set(a, restore[0]);
-            set(b, restore[1]);
-        }
-        _ => {}
-    }
-}
-
 /// A reference wholly inside the moved lines follows those lines directly. This also covers a
 /// source block at the sheet edge, which cannot be represented by the intermediate Insert.
 fn move_reorder_source_ref(r: &Reference, axis: Axis, from: u32, end: u32, to: u32) -> Option<Reference> {
@@ -275,27 +221,43 @@ fn adjust_ref(r: &Reference, edit: &Edit) -> Option<Reference> {
             if let Some(moved) = move_reorder_source_ref(r, *axis, *from, end, final_start) {
                 return Some(moved);
             }
-            // Preserve the existing cut/insert semantics for partially overlapping ranges.
+            // Fully contained references followed their source above. All remaining references
+            // use the existing partial-overlap Insert/Delete semantics, with enough temporary
+            // capacity for the Insert. Do not clamp or relocate sheet-edge endpoints before the
+            // Delete restores the real sheet extent: that could change range containment.
             let moved_from = if before <= from { from.checked_add(*count)? } else { *from };
-            let source_end = moved_from.checked_add(*count)?.checked_sub(1)?;
-            let source = if *axis == Axis::Rows { RangeRef::rows(moved_from, source_end) } else { RangeRef::cols(moved_from, source_end) };
-            // The later Delete cancels the Insert for sheet-tail coordinates. Shift every untouched
-            // endpoint in the last `count` lines back temporarily, even when it intersects the
-            // intermediate Move/Delete span, then restore its exact original line afterward.
-            let mut working = r.clone();
-            let restore_edge = protect_reorder_boundary_lines(&mut working, *axis, limit, *count, *from, end);
-            let inserted = adjust_ref(&working, &Edit::Insert { axis: *axis, at: *before, count: *count })?;
-            let moved = adjust_ref(
-                &inserted,
-                &Edit::Move {
-                    from: source,
-                    to_row: if *axis == Axis::Rows { *before } else { 0 },
-                    to_col: if *axis == Axis::Cols { *before } else { 0 },
-                },
-            )?;
-            let mut adjusted = adjust_ref(&moved, &Edit::Delete { axis: *axis, at: moved_from, count: *count })?;
-            restore_reorder_boundary_lines(&mut adjusted, *axis, restore_edge);
-            Some(adjusted)
+            let temporary_limit = limit.checked_add(*count)?;
+            let line = |v| {
+                let inserted = map_index(v, *before, *count, true, temporary_limit)?;
+                map_index(inserted, moved_from, *count, false, limit)
+            };
+            let span = |a: u32, b: u32| {
+                let (lo, hi) = map_span(a.min(b), a.max(b), *before, *count, true, temporary_limit)?;
+                let (lo, hi) = map_span(lo, hi, moved_from, *count, false, limit)?;
+                Some(if a <= b { (lo, hi) } else { (hi, lo) })
+            };
+            let kind = match (&r.kind, axis) {
+                (RefKind::Cell(a), Axis::Rows) => RefKind::Cell(Anchor { row: line(a.row)?, ..*a }),
+                (RefKind::Cell(a), Axis::Cols) => RefKind::Cell(Anchor { col: line(a.col)?, ..*a }),
+                (RefKind::Range(a, b), Axis::Rows) => {
+                    let (first, last) = span(a.row, b.row)?;
+                    RefKind::Range(Anchor { row: first, ..*a }, Anchor { row: last, ..*b })
+                }
+                (RefKind::Range(a, b), Axis::Cols) => {
+                    let (first, last) = span(a.col, b.col)?;
+                    RefKind::Range(Anchor { col: first, ..*a }, Anchor { col: last, ..*b })
+                }
+                (RefKind::Rows(a, a_abs, b, b_abs), Axis::Rows) => {
+                    let (first, last) = span(*a, *b)?;
+                    RefKind::Rows(first, *a_abs, last, *b_abs)
+                }
+                (RefKind::Cols(a, a_abs, b, b_abs), Axis::Cols) => {
+                    let (first, last) = span(*a, *b)?;
+                    RefKind::Cols(first, *a_abs, last, *b_abs)
+                }
+                (kind, _) => kind.clone(),
+            };
+            Some(Reference { sheet: r.sheet.clone(), kind })
         }
         Edit::Insert { axis, at, count } | Edit::Delete { axis, at, count } => {
             let insert = matches!(edit, Edit::Insert { .. });
