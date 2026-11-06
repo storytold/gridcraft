@@ -186,7 +186,12 @@ impl Language {
     }
 
     pub fn formula_locale(self) -> gridcraft_engine::formula::FormulaLocale {
-        if self == Self::Es { gridcraft_engine::formula::FormulaLocale::Es } else { gridcraft_engine::formula::FormulaLocale::En }
+        use gridcraft_engine::formula::FormulaLocale;
+        match self {
+            Self::Es => FormulaLocale::Es,
+            Self::De => FormulaLocale::De,
+            _ => FormulaLocale::En,
+        }
     }
 
     /// Translates an interface label; untranslated labels fall back to English.
@@ -430,6 +435,15 @@ mod tests {
         assert_eq!(Language::from_tag("RU_ru"), Some(Language::Ru));
         assert_eq!(Language::from_tag("de-DE"), Some(Language::De));
         assert_eq!(Language::from_tag("de_AT"), Some(Language::De));
+    }
+
+    #[test]
+    fn formula_syntax_follows_the_languages_with_a_table() {
+        use gridcraft_engine::formula::FormulaLocale;
+        assert_eq!(Language::De.formula_locale(), FormulaLocale::De);
+        assert_eq!(Language::Es.formula_locale(), FormulaLocale::Es);
+        assert_eq!(Language::En.formula_locale(), FormulaLocale::En);
+        assert_eq!(Language::Fr.formula_locale(), FormulaLocale::En);
     }
 
     #[test]
