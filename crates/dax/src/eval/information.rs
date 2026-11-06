@@ -258,27 +258,29 @@ fn has_one_value(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> R
 
 /// Compares the `Value1`/`Value2` groups of ISAFTER/ISONORAFTER.
 ///
-/// The optional `Order` flag can follow every pair. The evaluator identifies it by the argument
-/// itself (a Boolean, or the documented `0`/`1` shorthand), matching the DAX parameter type.
+/// The optional `Order` flag can follow every pair, which makes the argument sequence ambiguous:
+/// in `ISAFTER(1, 1, 0, 1)` the `0` is the first value of the second pair, not a flag. The split is
+/// decided before any comparison: a flag is taken only when the arguments that follow it still form
+/// complete groups, so a flag after each of two pairs (`1, 1, "DESC", 2, 3, "DESC"`) also parses.
 fn compare_groups(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, strictly_after: bool) -> Result<Scalar, EvalError> {
     if args.len() < 2 {
         return Err(EvalError::new("ISAFTER/ISONORAFTER need at least two values"));
     }
+    let mut possible = vec![None; args.len() + 1];
+    let mut flags = vec![None; args.len()];
+    if !groups(args, 0, ev, ctx, &mut possible, &mut flags)? {
+        return Err(EvalError::new("ISAFTER/ISONORAFTER need value pairs"));
+    }
     let mut index = 0;
-    loop {
-        if index + 1 >= args.len() {
-            return Err(EvalError::new("ISAFTER/ISONORAFTER need value pairs"));
-        }
+    while index < args.len() {
         let left = ev.eval(&args[index], ctx)?;
         let right = ev.eval(&args[index + 1], ctx)?;
         index += 2;
-        let ascending = match args.get(index) {
-            Some(argument) if is_order_flag(ev, argument, ctx)? => {
-                index += 1;
-                order_flag_value(ev, argument, ctx)?
-            }
-            _ => true,
-        };
+        let mut ascending = true;
+        if index < args.len() && flag_candidate(ev, args, index, ctx, &mut flags)? && groups(args, index + 1, ev, ctx, &mut possible, &mut flags)? {
+            ascending = order_flag_value(ev, &args[index], ctx)?;
+            index += 1;
+        }
         let ordering = ordering_with_blanks(&left, &right)?;
         let ordering = if ascending { ordering } else { ordering.reverse() };
         if ordering == Ordering::Greater {
@@ -288,12 +290,52 @@ fn compare_groups(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, str
             return Ok(Scalar::Boolean(false));
         }
         // The pairs are equal so far: the next group decides.
-        if index >= args.len() {
-            return Ok(Scalar::Boolean(!strictly_after));
-        }
     }
+    Ok(Scalar::Boolean(!strictly_after))
 }
 
+/// Whether `args[start..]` splits into two-argument pairs, each optionally followed by an `Order`
+/// flag. Memoised per start position, and the flag test of every argument is evaluated at most
+/// once, so a long argument list cannot make the split exponential or repeat work.
+fn groups(
+    args: &[BoundExpr],
+    start: usize,
+    ev: &Evaluator<'_>,
+    ctx: &mut Context,
+    possible: &mut [Option<bool>],
+    flags: &mut [Option<bool>],
+) -> Result<bool, EvalError> {
+    if start == args.len() {
+        return Ok(true);
+    }
+    if start + 2 > args.len() {
+        return Ok(false);
+    }
+    if let Some(known) = possible[start] {
+        return Ok(known);
+    }
+    // A flag is preferred when the arguments after it still group, so an optional `Order` is not
+    // mistaken for the first value of the next pair.
+    let mut splits = false;
+    if start + 2 < args.len() && flag_candidate(ev, args, start + 2, ctx, flags)? {
+        splits = groups(args, start + 3, ev, ctx, possible, flags)?;
+    }
+    if !splits {
+        splits = groups(args, start + 2, ev, ctx, possible, flags)?;
+    }
+    possible[start] = Some(splits);
+    Ok(splits)
+}
+
+/// Whether the argument at `index` can be an `Order` flag, evaluated at most once per call.
+fn flag_candidate(ev: &Evaluator<'_>, args: &[BoundExpr], index: usize, ctx: &mut Context, flags: &mut [Option<bool>]) -> Result<bool, EvalError> {
+    if let Some(known) = flags[index] {
+        return Ok(known);
+    }
+    let candidate = is_order_flag(ev, &args[index], ctx)?;
+    flags[index] = Some(candidate);
+    Ok(candidate)
+}
 /// Recognises an optional `Order` argument of `ISAFTER`/`ISONORAFTER`: a Boolean, an
 /// `ASC`/`DESC` keyword, or the documented `0`/`1` shorthand.
 fn is_order_flag(ev: &Evaluator<'_>, argument: &BoundExpr, ctx: &mut Context) -> Result<bool, EvalError> {

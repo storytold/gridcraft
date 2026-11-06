@@ -812,6 +812,34 @@ fn distinct_values_fold_text_case() {
     assert_eq!(row[4], Scalar::Integer(1), "Cardinality must fold text case");
 }
 #[test]
+fn isafter_keeps_value_pairs_that_look_like_order_flags() {
+    // `0` and `1` are the documented `Order` shorthands, but here they are the second pair's
+    // values: the first pair is equal, so the second one decides.
+    assert!(!boolean("ISAFTER(1, 1, 0, 1)"), "0 < 1, so the pair is not after");
+    assert!(boolean("ISAFTER(1, 1, 2, 1)"), "2 > 1, so the pair is after");
+    // ISONORAFTER also includes equality, and the pair here is strictly before.
+    assert!(!boolean("ISONORAFTER(1, 1, 0, 1)"));
+    assert!(boolean("ISONORAFTER(1, 1, 1, 1)"));
+    assert!(boolean("ISONORAFTER(1, 1, 2, 1)"));
+}
+
+#[test]
+fn isafter_accepts_a_flag_after_every_pair() {
+    // A flag after each pair must still split into pairs, not into a pair plus a dangling value.
+    assert!(boolean("ISAFTER(1, 1, TRUE, 2, 3, FALSE)"));
+    assert!(boolean("ISAFTER(1, 1, TRUE, 3, 2)"));
+    assert!(!boolean("ISAFTER(1, 1, TRUE, 2, 3)"));
+    assert!(boolean("ISONORAFTER(1, 1, TRUE, 2, 2)"));
+}
+
+#[test]
+fn isafter_rejects_an_odd_argument_count() {
+    assert!(eval("ISAFTER(1)").is_err());
+    // `ISAFTER(1, 1, 0)` is a pair plus the `0` shorthand flag, so only a leftover value is an
+    // error: here the `3` after the second pair is neither a flag nor paired.
+    assert!(eval("ISONORAFTER(1, 1, 2, 2, 3)").is_err());
+}
+#[test]
 fn contains_row_needs_one_value_per_column() {
     // `Sales` has four columns: a short value list is an error, not a leading-prefix match.
     assert!(eval("CONTAINSROW(Sales, \"East\")").is_err());
