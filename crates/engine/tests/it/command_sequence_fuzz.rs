@@ -18,6 +18,8 @@
 //!   (catches stale dependency graphs);
 //! - every few steps and at the end, an XLSX save and reload (with the recalculation opening does)
 //!   gives the same sheets, formulas and values;
+//! - after every step, the oldest undo snapshot (what undoing everything returns to) still holds
+//!   the starting sheets and cells, so the step that loses the start is the one reported;
 //! - at the end, undoing everything gives back the starting workbook and redoing everything the
 //!   final one (view state aside), and both keep the Watch Window list, which isn't an edit.
 //!
@@ -270,6 +272,7 @@ impl Harness {
             return Err(fail(i, "not undoable", format!("non-undoable `{id}` changed cell content: {diff}")));
         }
         self.check_state(i)?;
+        self.check_history_base(i, id)?;
         if (i + 1).is_multiple_of(ROUNDTRIP_EVERY) {
             guarded(i, "xlsx roundtrip", || roundtrip_diff(&after))?;
         }
@@ -287,6 +290,24 @@ impl Harness {
         }
         let wb = d.wb.clone();
         guarded(i, "recalc", || recalc_diff(&wb))
+    }
+
+    /// Undo history is a stack of whole-workbook snapshots, so undoing everything ends on the
+    /// oldest snapshot (or on the live workbook when there is no history). That snapshot must hold
+    /// the episode's starting sheets and cells after every step. Checked here, a step that drops
+    /// or replaces the start is named as it happens (#3400); the end-of-episode check can only
+    /// report the difference it left.
+    fn check_history_base(&self, i: usize, id: &str) -> Result<(), Failure> {
+        let d = self.s.doc().expect("document");
+        let oldest: &Workbook = d.undo.first().map_or(&*d.wb, |e| &*e.wb);
+        match content_diff(&self.base, oldest) {
+            Some(diff) => Err(fail(
+                i,
+                "undo",
+                format!("after `{id}`, undoing everything ({} steps) would no longer give back the starting workbook: {diff}", d.undo.len()),
+            )),
+            None => Ok(()),
+        }
     }
 
     /// Undo everything, compare with the start, redo everything, compare with the end, then save
@@ -1134,4 +1155,41 @@ fn view_mode_switch_is_not_an_undo_difference() {
         let failure = replay("sales", &[(id.to_string(), json!({"sheet": 0}))]);
         assert!(failure.is_none(), "`{id}`: {failure:?}");
     }
+}
+
+/// #3400: sheet copies, moves and renames mixed with a column delete and partial undo/redo. Each
+/// step's undo snapshot must keep the starting workbook reachable: after undoing everything the
+/// sheets are `["Budget"]` again and Budget!C4 holds "Budget" (the column delete shifts "Actual"
+/// into it). The replay checks the oldest snapshot after every step, then undo-all and redo-all.
+#[test]
+fn sheet_copies_moves_and_renames_undo_back_to_the_start() {
+    let steps: Vec<Step> = [
+        ("sheet.rename", json!({"sheet": 0, "name": "Data"})),
+        ("sheet.move", json!({"sheet": "Data", "to": 0, "copy": true})),
+        ("sheet.activate", json!({"sheet": "Data"})),
+        ("home.deleteColumns", json!({"cols": "C:C"})),
+        ("sheet.move", json!({"sheet": "Data", "to": 0})),
+        ("edit.undo", json!({"steps": 2})),
+        ("sheet.rename", json!({"sheet": "Data (2)", "name": "Sheet9"})),
+        ("sheet.move", json!({"sheet": "Sheet9", "to": 2, "copy": true})),
+        ("cell.set", json!({"sheet": "Sheet9 (2)", "cell": "C4", "input": "copy"})),
+        ("edit.undo", json!({})),
+        ("edit.redo", json!({})),
+        ("home.deleteSheet", json!({"sheet": "Data"})),
+        ("sheet.move", json!({"sheet": 1, "to": 0})),
+        ("home.insertSheet", json!({"name": "Summary", "before": 0})),
+        ("sheet.rename", json!({"sheet": "Sheet9", "name": "Budget"})),
+        ("edit.undo", json!({"steps": 3})),
+        ("edit.redo", json!({"steps": 1})),
+    ]
+    .into_iter()
+    .map(|(id, p)| (id.to_string(), p))
+    .collect();
+    let failure = replay("budget", &steps);
+    assert!(failure.is_none(), "{failure:?}");
+    // The start the replay compares against: one sheet, with the header row as built.
+    let h = Harness::new("budget");
+    let names: Vec<&str> = h.base.sheets.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["Budget"]);
+    assert_eq!(h.base.sheets[0].value(CellRef::new(3, 2)), Value::from("Budget"));
 }
