@@ -2064,8 +2064,10 @@ dependencies = [
 name = "gridcraft-cli"
 version = "0.16.0"
 dependencies = [
+ "gridcraft-core",
  "gridcraft-engine",
  "gridcraft-mcp",
+ "gridcraft-python",
  "gridcraft-sandbox",
  "log",
  "quick-xml 0.41.0",
@@ -2097,6 +2099,7 @@ dependencies = [
  "gridcraft-model",
  "gridcraft-numfmt",
  "gridcraft-pdf",
+ "gridcraft-python",
  "gridcraft-xlsx",
  "image",
  "log",
