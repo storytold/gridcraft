@@ -634,3 +634,23 @@ fn python_set_with_the_same_code_keeps_a_picture_with_no_choice_for_either_retur
         assert_eq!((py.output_chosen, py.shows_object()), (true, object), "{output}");
     }
 }
+
+/// A linked picture names its source by a reference, which goes on naming it when the sheet is renamed;
+/// and it exists only while the source can give it a picture.
+#[test]
+fn a_linked_picture_follows_a_renamed_sheet_and_goes_with_its_source() {
+    let mut s = s();
+    set(&mut s, "A1", "plot()");
+    cache_picture(&mut s, "A1");
+    s.execute("python.displayOverCells", json!({"cell": "A1", "at": "C1"})).unwrap();
+    let sources = |s: &crate::Session| -> Vec<Option<String>> {
+        s.doc().unwrap().wb.active().unwrap().images.iter().map(|o| o.python_source.clone()).collect()
+    };
+    assert_eq!(sources(&s), [Some("Sheet1!$A$1".to_string())]);
+    s.execute("sheet.rename", json!({"name": "My Data"})).unwrap();
+    assert_eq!(sources(&s), [Some("'My Data'!$A$1".to_string())], "the reference follows the name");
+    s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+    assert_eq!(sources(&s), Vec::<Option<String>>::new(), "the picture goes when the cell stops being a Python cell");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(sources(&s).len(), 1, "and undo brings it back");
+}
