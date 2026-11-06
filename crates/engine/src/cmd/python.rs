@@ -71,7 +71,8 @@ fn set(s: &mut Session, p: &Json) -> Result<Json> {
     let mode = output_mode("python.set", p, "output")?;
     let old = existing(s, sheet, at)?;
     let object = mode.or(old.as_ref().map(|o| o.object)).unwrap_or(false);
-    store(s, "python.set", sheet, at, PyCode { object, ..PyCode::new(code) }, old)?;
+    let output_chosen = mode.is_some() || old.as_ref().is_some_and(|o| o.output_chosen);
+    store(s, "python.set", sheet, at, PyCode { object, output_chosen, ..PyCode::new(code) }, old)?;
     let d = s.doc()?;
     let shown = d.wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default();
     Ok(json!({"cell": at.a1(), "value": crate::cmd::inspect::value_json(&shown)}))
@@ -92,6 +93,10 @@ fn store(s: &mut Session, cmd: &str, sheet: usize, at: CellRef, mut py: PyCode, 
         s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.tables.iter().any(|t| t.header_row && t.range.start.row == at.row && t.range.contains(at)));
     if header {
         return Err(EngineError::Other(format!("{} is a table header; Python cells can't go in a table's header row", at.a1())));
+    }
+    // What a text does with its lines is the cell's choice, whatever the code gives.
+    if let Some(o) = &old {
+        py.spill_lines = o.spill_lines;
     }
     // Unchanged code with the same return type keeps its result (and its value); new code, or a
     // new return type, has none until it runs: a result of the other type would show a value and
@@ -117,6 +122,23 @@ fn store(s: &mut Session, cmd: &str, sheet: usize, at: CellRef, mut py: PyCode, 
     })
 }
 
+/// The return type in effect stays, with its result, and is now a choice: a picture with no choice
+/// behaves as a Python Object, and needs no new run to move into the cell. A locked cell on a
+/// protected sheet is refused here, as the choice isn't what the edit itself compares.
+fn set_output_choice(s: &mut Session, sheet: usize, at: CellRef, object: bool) -> Result<()> {
+    if let Some(m) = s.locked_cell_message(sheet, at) {
+        return Err(EngineError::Other(m));
+    }
+    edit(s, |cx| {
+        let Some(py) = cx.sheet_mut(sheet)?.cells.get_mut(at).and_then(|c| c.py.as_mut()) else { return Ok(()) };
+        let py = Arc::make_mut(py);
+        py.object = object;
+        py.output_chosen = true;
+        cx.touch(sheet, at);
+        Ok(())
+    })
+}
+
 /// `python.output`: the cell's return type. The code stays; a cached result belongs to the old
 /// return type, so it goes, as with `python.set` and a new return type: the cell shows
 /// `#BLOCKED!` until it runs, and its old spill goes with its readers recalculated.
@@ -125,11 +147,14 @@ fn output(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(old) = existing(s, sheet, at)? else {
         return Err(EngineError::Other(format!("{} isn't a Python cell, so it has no Python output to change", at.a1())));
     };
-    let object = output_mode("python.output", p, "mode")?.unwrap_or(!old.object);
+    let current = old.shows_object();
+    let object = output_mode("python.output", p, "mode")?.unwrap_or(!current);
     let mode = |object: bool| if object { "object" } else { "value" };
-    if object != old.object {
-        let py = PyCode { code: old.code.clone(), object, output: None, stale: false, ..PyCode::default() };
+    if object != old.object && object != current {
+        let py = PyCode { code: old.code.clone(), object, output_chosen: true, ..PyCode::default() };
         store(s, "python.output", sheet, at, py, Some(old))?;
+    } else if object != old.object || !old.output_chosen {
+        set_output_choice(s, sheet, at, object)?;
     }
     let d = s.doc()?;
     let shown = d.wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default();

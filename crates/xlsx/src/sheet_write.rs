@@ -776,7 +776,9 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
     if let Some(image) = image {
         out.python_images.push((c, image.clone()));
     }
-    let in_cell = py.and_then(gridcraft_model::PyCode::image_in_cell).filter(|_| image.is_some());
+    // The rich value holds the picture itself, not a copy fitted to the cell: a reader takes the
+    // companion, with the density only it holds, by its having the same bytes.
+    let in_cell = image.filter(|_| py.is_some_and(|p| !p.shows_object())).map(|i| &i.picture);
     let rich_value = in_cell.and_then(|p| out.cell_pictures.python_index(p));
     let value: Value = match (ov, extra) {
         (Some(t), _) => Value::text(t.as_str()),
