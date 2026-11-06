@@ -36,7 +36,7 @@ body with a transparent margin.
 |---|---|
 | `gridcraft.svg` | Canonical artwork; also `hicolor/scalable` |
 | `gridcraft-1024.png` | 1024 px render of the full tile |
-| `gridcraft-macos-512.png` | Runtime Dock icon on macOS (for `apps/gridcraft` to embed) |
+| `gridcraft-macos-512.png` | Runtime Dock icon when GridCraft runs unbundled on macOS (`cargo run`); inside `GridCraft.app` the Dock keeps `gridcraft.icns` |
 | `gridcraft.icns` | macOS bundle icon (`CFBundleIconFile`) |
 | `gridcraft.ico` | Windows exe icon, 16–256 px (embedded by `apps/gridcraft/build.rs`) |
 | `hicolor/<size>/apps/ai.storyteller.gridcraft.png` | Linux icon theme, 16–512 px; the 256 px one is also the runtime window icon on Windows and Linux |
