@@ -557,6 +557,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // the clock: this module exists only off wasm
     fn the_last_words_dont_wait_long_for_a_pipe_something_else_holds_open() {
         struct Open;
         impl Read for Open {
