@@ -74,15 +74,21 @@ impl Default for Recorder {
 
 /// `params` with the state a toggle set (Bold's `on`, from the command's result), as Excel
 /// records `Bold = True`: playing the step back sets that state rather than flipping it again.
-pub(crate) fn with_toggle_state(mut params: Json, result: &Json) -> Json {
-    if let Some(on @ Json::Bool(_)) = result.get("on") {
+/// `python.output` without `mode` is a toggle too: it keeps the return type it set (the result's
+/// `output`) as its `mode`.
+pub(crate) fn with_toggle_state(id: &str, mut params: Json, result: &Json) -> Json {
+    let state = match id {
+        "python.output" => result.get("output").filter(|o| o.is_string()).map(|o| ("mode", o)),
+        _ => result.get("on").filter(|o| o.is_boolean()).map(|o| ("on", o)),
+    };
+    if let Some((key, state)) = state {
         if params.is_null() {
             params = Json::Object(serde_json::Map::new());
         }
         if let Json::Object(p) = &mut params
-            && !p.contains_key("on")
+            && p.get(key).is_none_or(Json::is_null)
         {
-            p.insert("on".into(), on.clone());
+            p.insert(key.into(), state.clone());
         }
     }
     params
