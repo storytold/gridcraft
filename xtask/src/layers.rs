@@ -36,6 +36,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("model", Class::Layer(2)),
     ("calc", Class::Layer(2)),
     ("xlsx", Class::Layer(2)),
+    // VBA projects (vbaProject.bin) read from [MS-OVBA]; core only, never runs VBA.
+    ("vba", Class::Layer(2)),
     ("chart", Class::Layer(3)),
     ("engine", Class::Layer(5)),
     ("ui-egui", Class::Layer(6)),
@@ -224,6 +226,7 @@ mod tests {
     }
     use DepKind::*;
 
+    /// A graph where every crate depends only on lower layers (including `vba` on `core`) has no violations.
     #[test]
     fn clean_downward_graph_passes() {
         let g = [
@@ -234,6 +237,7 @@ mod tests {
             c("gridcraft-model", &[("gridcraft-formula", Normal, true)]),
             c("gridcraft-calc", &[("gridcraft-model", Normal, true), ("gridcraft-functions", Normal, true), ("gridcraft-numfmt", Normal, true)]),
             c("gridcraft-xlsx", &[("gridcraft-core", Normal, true), ("gridcraft-formula", Normal, true), ("gridcraft-model", Normal, true)]),
+            c("gridcraft-vba", &[("gridcraft-core", Normal, true)]),
             c("gridcraft-chart", &[("gridcraft-model", Normal, true)]),
             c("gridcraft-engine", &[("gridcraft-calc", Normal, true), ("gridcraft-xlsx", Normal, true), ("gridcraft-chart", Normal, true)]),
             c("gridcraft-ui-egui", &[("gridcraft-engine", Normal, true), ("egui", Normal, false), ("wgpu", Normal, false)]),
@@ -248,12 +252,16 @@ mod tests {
         assert!(matches!(v[..], [Violation::Upward { from: 1, to: 5, .. }]));
     }
 
+    /// A dependency between two crates of the same layer that are not in one allowed chain is flagged, including `vba` reaching into `xlsx`.
     #[test]
     fn sideways_dependency_flagged() {
         let v = check(&[c("gridcraft-xlsx", &[("gridcraft-calc", Normal, true)])]);
         assert!(v.iter().any(|x| matches!(x, Violation::Upward { from: 2, to: 2, .. })), "{v:?}");
         let v = check(&[c("gridcraft-ui-egui", &[("gridcraft-mcp", Normal, true)])]);
         assert!(matches!(v[..], [Violation::Upward { from: 6, to: 6, .. }]));
+        // vba reads streams through a trait; it must not reach into xlsx for the CFB reader.
+        let v = check(&[c("gridcraft-vba", &[("gridcraft-xlsx", Normal, true)])]);
+        assert!(matches!(v[..], [Violation::Upward { from: 2, to: 2, .. }]), "{v:?}");
     }
 
     #[test]
