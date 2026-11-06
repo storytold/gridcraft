@@ -465,11 +465,10 @@ ranges come back as lists of rows.
 
 Agents can read all of this and run cells, once a person has turned Python on: `python.environment`,
 `python.diagnostics`, `python.runLog`, `python.run`, `python.runAll`, `python.initialization`,
-`ui.pythonInitialization`, `ui.inspect`. `file.save` with `wait` holds its reply until the save has
+`python.table`, `python.saveCsv`, `ui.pythonInitialization`, `ui.inspect`. `file.save` with `wait` holds its reply until the save has
 happened, and the reply says which cells weren't finished; `engine.execute` with `wait` holds it until
 Python is idle. See [control-protocol.md](control-protocol.md#saving-and-waiting-for-python-cells).
-`python.table`, `python.saveCsv`, `ui.pythonInitialization`, `ui.inspect`. See
-[control-protocol.md](control-protocol.md). For pictures: `python.image` gives a cell's picture as base64
+For pictures: `python.image` gives a cell's picture as base64
 with its size, `python.saveImage` writes it to a path, `python.output` sets the return type,
 `python.displayOverCells` and `python.createReference` make linked pictures, and `object.move` resizes
 one, which draws a free figure again. None of them opens a dialog.
