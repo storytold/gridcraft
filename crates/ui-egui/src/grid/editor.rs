@@ -2,6 +2,18 @@ use super::cell_paint::ink_on;
 use super::geo::Geo;
 use super::{Align2, CellRef, Color32, FontId, PatternType, Rect, Sheet, SheetApp, Stroke, StrokeKind, Tokens, Workbook, json, pos2, theme, vec2};
 
+/// Where the in-cell editor leaves its text colour for the formula-bar editor widget it hosts.
+fn cell_editor_ink_id() -> egui::Id {
+    egui::Id::unique("gridcraft.cell_editor.ink")
+}
+
+/// The plain-text colour of the in-cell editor this frame: the automatic text colour held legible
+/// on the cell's painted fill (black on the light sheet; on the dark sheet white, or dark on a
+/// light fill). Falls back to the sheet's automatic text.
+pub(crate) fn cell_editor_ink(ctx: &egui::Context) -> Color32 {
+    ctx.data(|d| d.get_temp::<Color32>(cell_editor_ink_id())).unwrap_or_else(|| Tokens::get(ctx).cell_text)
+}
+
 /// Room the in-cell editor keeps right of its text. It is sized from the text of the last frame, so
 /// the next typed character must still fit: a fixed 14 px was less than one glyph at high zoom,
 /// and the field scrolled and snapped back on every key (#2336). `size` is the font size in px.
@@ -49,10 +61,16 @@ pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, s
     };
     // Grows to the left on a right-to-left sheet.
     let erect = geo.mirror_rect(Rect::from_min_size(rect.min, vec2(w, h)));
-    let fill = match st.fill.pattern {
-        PatternType::Solid => st.fill.fg.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::WHITE),
-        _ => Color32::WHITE,
+    // The cell's own fill (authored), or the sheet; painted mapped on the dark sheet, with the
+    // automatic text colour held legible on it.
+    let t = Tokens::get(ui.ctx());
+    let authored = match st.fill.pattern {
+        PatternType::Solid => st.fill.fg.resolve(&wb.theme).map(theme::color32),
+        _ => None,
     };
+    let fill = authored.map_or(t.grid_bg, |f| t.on_sheet(f));
+    let ink = t.on_sheet_over(Color32::BLACK, authored.unwrap_or(Color32::WHITE), theme::INK_TEXT_MIN);
+    ui.ctx().data_mut(|d| d.insert_temp(cell_editor_ink_id(), ink));
     let split = pos2(geo.cells.left() + geo.frozen_w, geo.cells.top() + geo.frozen_h);
     let quadrant = Rect::from_min_max(
         pos2(if cell.col >= geo.fc { split.x } else { geo.cells.left() }, if cell.row >= geo.fr { split.y } else { geo.cells.top() }),
@@ -72,7 +90,7 @@ pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, s
     let clip = if on_screen { ui.clip_rect().intersect(screen_quadrant) } else { Rect::NOTHING };
     let painter = ui.painter().with_clip_rect(clip);
     painter.rect_filled(erect, 0.0, fill);
-    painter.rect_stroke(erect.expand(1.0), 0.0, Stroke::new(2.0, Tokens::get(ui.ctx()).sel_border), StrokeKind::Middle);
+    painter.rect_stroke(erect.expand(1.0), 0.0, Stroke::new(2.0, t.sel_border), StrokeKind::Middle);
     let id = egui::Id::unique("gridcraft.cell_editor");
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(erect.shrink2(vec2(2.0, 1.0))));
     child.set_clip_rect(clip);

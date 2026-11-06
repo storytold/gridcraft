@@ -1,7 +1,7 @@
 use super::active_row::paint_active_row;
 use super::cell_paint::{
-    Look, MergedArea, cell_text_y, center_across_end, col32, display_text, look, merged_edges, paint_border, paint_cf_icon, painted_halign,
-    rotated_text_pos, shrink_font, wrapped_cell_text_y,
+    Look, MergedArea, cell_text_y, center_across_end, col32, display_text, look, merged_edges, paint_border, paint_cf_icon, painted_fill,
+    painted_halign, rotated_text_pos, shrink_font, wrapped_cell_text_y,
 };
 use super::geo::Geo;
 use super::tables::{filter_button_rect, paint_filter_button};
@@ -201,11 +201,11 @@ fn paint_backgrounds(q: &mut QuadrantPaint<'_>, cells: &[CellRef], merges: &[Ran
             Some(m) => (geo.range_rect(sh, m), m.start),
             None => (geo.cell_rect(sh, c), c),
         };
-        let (lk, cfl) = look(wb, si, sh, anchor, cf);
+        let (lk, cfl) = look(wb, si, sh, anchor, cf, q.tokens.dark_sheet);
         if let Some(f) = lk.fill {
             p.rect_filled(rect.expand(0.0), 0.0, f);
         } else if in_merge(c).is_some() {
-            p.rect_filled(rect.shrink(0.5), 0.0, Color32::WHITE);
+            p.rect_filled(rect.shrink(0.5), 0.0, q.tokens.grid_bg);
         }
         looks.push((anchor, rect, lk, cfl));
     }
@@ -218,6 +218,7 @@ fn outside_text_cells(q: &mut QuadrantPaint<'_>, merges: &[RangeRef]) -> Vec<(Ce
     let si = q.sheet_index;
     let sh = q.sheet;
     let cf = &mut *q.cf;
+    let dark = q.tokens.dark_sheet;
     let (r0, r1) = q.rows;
     let (c0, c1) = q.cols;
     let in_merge = |c: CellRef| merges.iter().find(|m| m.contains(c)).copied();
@@ -233,7 +234,7 @@ fn outside_text_cells(q: &mut QuadrantPaint<'_>, merges: &[RangeRef]) -> Vec<(Ce
         let right = (c1.saturating_add(1)..=c1.saturating_add(20).min(MAX_COLS - 1)).map(|col| CellRef::new(r, col)).find(|&n| !empty_ok(n));
         for n in [left, right].into_iter().flatten() {
             if geo.same_col_pane(n.col, c0) && sh.col_width(n.col) > 0.0 && in_merge(n).is_none() {
-                let (lk, cfl) = look(wb, si, sh, n, cf);
+                let (lk, cfl) = look(wb, si, sh, n, cf, dark);
                 outside.push((n, geo.cell_rect(sh, n), lk, cfl));
             }
         }
@@ -263,7 +264,7 @@ fn paint_cell_decorations(q: &QuadrantPaint<'_>, c: CellRef, rect: Rect, lk: &Lo
     if let Some(l) = cfl
         && let Some((frac, rgb, gradient)) = l.bar
     {
-        paint_data_bar(p, rect, frac, rgb, gradient);
+        paint_data_bar(p, rect, frac, rgb, gradient, lk.dark);
     }
     if let Some(l) = cfl
         && let Some((set, idx)) = &l.icon
@@ -281,13 +282,16 @@ fn paint_cell_decorations(q: &QuadrantPaint<'_>, c: CellRef, rect: Rect, lk: &Lo
 /// Most repeats of a fill character laid out in one cell.
 const MAX_FILL_REPEATS: usize = 8192;
 
-fn paint_data_bar(p: &egui::Painter, rect: Rect, frac: f32, rgb: [u8; 3], gradient: bool) {
+/// A conditional-format data bar; on the dark sheet its colours go through the colour rule.
+fn paint_data_bar(p: &egui::Painter, rect: Rect, frac: f32, rgb: [u8; 3], gradient: bool, dark: bool) {
     let bar = Rect::from_min_size(pos2(rect.left() + 2.0, rect.top() + 2.0), vec2((rect.width() - 4.0) * frac, rect.height() - 4.0));
-    let col = theme::color32(rgb);
+    let col = painted_fill(theme::color32(rgb), dark);
     if gradient {
         let mut mesh = egui::Mesh::default();
-        let light =
-            Color32::from_rgb(((rgb[0] as u16 + 255 * 3) / 4) as u8, ((rgb[1] as u16 + 255 * 3) / 4) as u8, ((rgb[2] as u16 + 255 * 3) / 4) as u8);
+        let light = painted_fill(
+            Color32::from_rgb(((rgb[0] as u16 + 255 * 3) / 4) as u8, ((rgb[1] as u16 + 255 * 3) / 4) as u8, ((rgb[2] as u16 + 255 * 3) / 4) as u8),
+            dark,
+        );
         let i = mesh.vertices.len() as u32;
         for (pt, cc) in [(bar.left_top(), col), (bar.right_top(), light), (bar.right_bottom(), light), (bar.left_bottom(), col)] {
             mesh.colored_vertex(pt, cc);
@@ -372,7 +376,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     if text.is_empty() {
         return;
     }
-    let color = ncolor.unwrap_or(lk.text_color);
+    let color = ncolor.map_or(lk.text_color, |c| lk.text_ink(c));
     let halign = match st.align.h {
         HAlign::General => match v {
             Value::Number(_) => HAlign::Right,
@@ -579,14 +583,14 @@ fn paint_borders(q: &mut QuadrantPaint<'_>, looks: &[(CellRef, Rect, Look, Optio
             if line.is_none() {
                 continue;
             }
-            let col = col32(line.color, wb, Color32::BLACK);
+            let col = lk.line_ink(col32(line.color, wb, Color32::BLACK));
             paint_border(p, pts, line.style, col);
         }
         if !b.diag_down.is_none() {
-            paint_border(p, [rect.left_top(), rect.right_bottom()], b.diag_down.style, col32(b.diag_down.color, wb, Color32::BLACK));
+            paint_border(p, [rect.left_top(), rect.right_bottom()], b.diag_down.style, lk.line_ink(col32(b.diag_down.color, wb, Color32::BLACK)));
         }
         if !b.diag_up.is_none() {
-            paint_border(p, [rect.left_bottom(), rect.right_top()], b.diag_up.style, col32(b.diag_up.color, wb, Color32::BLACK));
+            paint_border(p, [rect.left_bottom(), rect.right_top()], b.diag_up.style, lk.line_ink(col32(b.diag_up.color, wb, Color32::BLACK)));
         }
         // Comment / note indicator.
         if let Some(cm) = sh.comments.get(c) {

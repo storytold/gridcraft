@@ -144,12 +144,83 @@ fn conditional_number_format_reaches_the_cell_text() {
     let mut cf = CfCache::new();
     let text = |row: u32, cf: &mut CfCache| {
         let c = CellRef::new(row, 0);
-        let (lk, _) = look(&wb, 0, sh, c, cf);
+        let (lk, _) = look(&wb, 0, sh, c, cf, false);
         display_text(&wb, sh, c, &sh.value(c), &lk.style, 200.0, 7.0).0
     };
     assert_eq!(text(0, &mut cf), "1");
     assert_eq!(text(1, &mut cf), "3.00");
     assert_eq!(text(2, &mut cf), "4.00");
+}
+
+#[test]
+fn cell_colours_are_authored_on_the_light_sheet_and_mapped_on_the_dark_one() {
+    use crate::theme::{INK_TEXT_MIN, contrast, ink};
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    session.execute("range.setValues", json!({"range": "A1:A5", "values": [["auto"], ["on yellow"], ["blue"], ["heading"], [-5]]})).unwrap();
+    session.execute("home.fillColor", json!({"range": "A2", "color": "#FFFF00"})).unwrap();
+    session.execute("home.fontColor", json!({"range": "A3", "color": "#0000FF"})).unwrap();
+    session.execute("home.fontColor", json!({"range": "A4", "color": "#1F4E79"})).unwrap();
+    session.execute("home.fillColor", json!({"range": "A4", "color": "#DDEBF7"})).unwrap();
+    session.execute("home.numberFormat", json!({"range": "A5", "code": "0;[Red]-0"})).unwrap();
+    let wb = session.active().unwrap().wb.clone();
+    let sh = wb.sheet(0).unwrap();
+    let mut cf = CfCache::new();
+    let mut at = |row: u32, dark: bool| look(&wb, 0, sh, CellRef::new(row, 0), &mut cf, dark).0;
+    let rgb = |hex: u32| Color32::from_rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8);
+    let sheet = ink(Color32::WHITE);
+
+    // Light sheet: exactly as authored (today's look).
+    assert_eq!((at(0, false).text_color, at(0, false).fill), (Color32::BLACK, None));
+    assert_eq!((at(1, false).text_color, at(1, false).fill), (Color32::BLACK, Some(rgb(0xFFFF00))));
+    assert_eq!(at(2, false).text_color, rgb(0x0000FF));
+    assert_eq!((at(3, false).text_color, at(3, false).fill), (rgb(0x1F4E79), Some(rgb(0xDDEBF7))));
+
+    // Dark sheet: automatic text is white on the sheet.
+    assert_eq!((at(0, true).text_color, at(0, true).fill), (Color32::WHITE, None));
+    // Automatic text on a pure yellow fill: the fill keeps its hue, the text is guarded dark.
+    let y = at(1, true);
+    assert_eq!(y.fill, Some(ink(rgb(0xFFFF00))));
+    assert!(contrast(y.text_color, ink(rgb(0xFFFF00))) >= INK_TEXT_MIN, "{:?}", y.text_color);
+    // Explicit blue text is lifted to 4.5:1 on the sheet.
+    assert!(contrast(at(2, true).text_color, sheet) >= INK_TEXT_MIN);
+    // A dark heading on a pale fill becomes light on deep: the design note's pair.
+    let h = at(3, true);
+    assert_eq!((h.text_color, h.fill), (rgb(0x9EC3E6), Some(rgb(0x39444E))));
+    // A number format's [Red] goes through the same guard as the cell's text.
+    let n = at(4, true);
+    let red = n.text_ink(rgb(0xFF0000));
+    assert_ne!(red, rgb(0xFF0000));
+    assert!(contrast(red, sheet) >= contrast(rgb(0xFF0000), Color32::WHITE) - 0.01);
+    assert_eq!(at(4, false).text_ink(rgb(0xFF0000)), rgb(0xFF0000));
+    // Automatic borders: black on white, white on the dark sheet.
+    assert_eq!((n.line_ink(Color32::BLACK), at(4, false).line_ink(Color32::BLACK)), (Color32::WHITE, Color32::BLACK));
+}
+
+#[test]
+fn pattern_fill_text_is_guarded_against_the_blend_actually_painted() {
+    use crate::theme::{INK_TEXT_MIN, contrast};
+    use gridcraft_engine::model::{Color, PatternType};
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    session.execute("cell.set", json!({"cell": "A1", "input": "pattern"})).unwrap();
+    let mut wb = (*session.active().unwrap().wb).clone();
+    let mut style = wb.styles.get(wb.sheet(0).unwrap().style_id(CellRef::new(0, 0))).clone();
+    // Red on green: ink() of the authored blend is far lighter than the blend of the mapped colours.
+    style.fill.pattern = PatternType::Gray25;
+    style.fill.fg = Color::Rgb(0xFF0000);
+    style.fill.bg = Color::Rgb(0x00FF00);
+    let id = wb.styles.intern(style);
+    wb.sheet_mut(0).unwrap().set_style(CellRef::new(0, 0), id);
+    let sh = wb.sheet(0).unwrap();
+    let lk = look(&wb, 0, sh, CellRef::new(0, 0), &mut CfCache::new(), true).0;
+    let painted = lk.fill.unwrap();
+    assert_eq!(lk.behind, painted);
+    let target = INK_TEXT_MIN.min(contrast(Color32::BLACK, lk.paper));
+    assert!(contrast(lk.text_color, painted) >= target - 0.05, "{:?} on {painted:?}", lk.text_color);
+    // The light sheet is untouched.
+    let light = look(&wb, 0, sh, CellRef::new(0, 0), &mut CfCache::new(), false).0;
+    assert_eq!(light.text_color, Color32::BLACK);
 }
 
 #[test]
