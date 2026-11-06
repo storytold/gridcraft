@@ -408,6 +408,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Previous page" => "Poprzednia strona",
         "Next page" => "Następna strona",
         "Create PDF" => "Utwórz plik PDF",
+        "Nothing to export." => "Nie ma nic do wyeksportowania.",
         "Save the sheet as a PDF document that keeps its page layout." => "Zapisz arkusz jako dokument PDF z zachowaniem układu strony.",
         "Change File Type" => "Zmień typ pliku",
         "CSV (Comma delimited)" => "CSV (rozdzielany przecinkami)",

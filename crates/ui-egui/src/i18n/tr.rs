@@ -329,6 +329,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Previous page" => "Önceki sayfa",
         "Next page" => "Sonraki sayfa",
         "Create PDF" => "PDF Oluştur",
+        "Nothing to export." => "Dışarı aktarılacak bir şey yok.",
         "Save the sheet as a PDF document that keeps its page layout." => "Sayfayı, sayfa düzenini koruyan bir PDF belgesi olarak kaydedin.",
         "Change File Type" => "Dosya Türünü Değiştir",
         "CSV (Comma delimited)" => "CSV (Virgülle ayrılmış)",
