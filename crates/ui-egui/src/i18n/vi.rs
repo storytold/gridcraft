@@ -186,8 +186,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Chỉ lưu phần đang hiển thị: phần còn lại của bảng không có trong tệp."
         }
         "The table is saved." => "Đã lưu bảng.",
-        "Only the first {rows} of {total} rows are shown." => "Chỉ hiển thị {rows} trong {total} hàng đầu tiên.",
-        "Only the first {cols} of {total} columns are shown." => "Chỉ hiển thị {cols} trong {total} cột đầu tiên.",
+        "Only the first {rows} of {total} rows are shown." => "Chỉ hiển thị {rows} hàng đầu tiên trong số {total} hàng.",
+        "Only the first {cols} of {total} columns are shown." => "Chỉ hiển thị {cols} cột đầu tiên trong số {total} cột.",
         "Some long text is cut." => "Một phần văn bản dài đã bị cắt.",
         "Copying and saving take only what is shown. Spill Here gives the whole table." => {
             "Sao chép và lưu chỉ lấy phần đang hiển thị. Tràn tại đây cho toàn bộ bảng."
