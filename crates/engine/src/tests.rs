@@ -5383,6 +5383,35 @@ fn a_protected_sheet_allows_sorting_and_filtering_only_when_it_says_so() {
     assert_eq!(order(&s), (Value::Number(2.0), Value::Number(1.0)));
 }
 
+/// As observed in Excel: every error a formula evaluates to is flagged, also one passed on from
+/// another cell, except `#N/A`; constants and formulas that handle the error are not.
+#[test]
+fn formulas_that_evaluate_to_an_error_are_flagged_except_na() {
+    use crate::cmd::formulas::formula_evaluates_to_error;
+    use gridcraft_core::CellError;
+    let mut s = s();
+    let inputs = [
+        ("A1", "=1/0", Some(CellError::Div0)),
+        ("A2", "=A1", Some(CellError::Div0)),
+        ("A3", "=SUM(A1:A2)", Some(CellError::Div0)),
+        ("A4", "=SQRT(-1)", Some(CellError::Num)),
+        ("A5", "=\"x\"*1", Some(CellError::Value)),
+        ("A6", "=NA()", None),
+        ("A7", "#N/A", None),
+        ("A8", "#DIV/0!", None),
+        ("A9", "=IFERROR(1/0,0)", None),
+        ("A10", "=ISERROR(A1)", None),
+    ];
+    for (cell, input, _) in inputs {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+    }
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    for (cell, input, want) in inputs {
+        let c = sh.cell(CellRef::parse(cell).unwrap()).unwrap();
+        assert_eq!(formula_evaluates_to_error(c), want, "{cell} {input}");
+    }
+}
+
 #[test]
 fn convert_to_number_turns_numbers_stored_as_text_into_numbers() {
     let mut s = s();

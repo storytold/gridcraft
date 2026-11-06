@@ -598,8 +598,9 @@ fn paint_borders(q: &mut QuadrantPaint<'_>, looks: &[(CellRef, Rect, Look, Optio
                 Stroke::NONE,
             ));
         }
-        // Background error checking: a number stored as text gets Excel's green corner (#1994).
-        if !sh.show_formulas && sh.cell(*c).and_then(gridcraft_engine::cmd::formulas::number_stored_as_text).is_some() {
+        // Background error checking: a number stored as text, or a formula that evaluates to an
+        // error, gets Excel's green corner (#1994).
+        if !sh.show_formulas && sh.cell(*c).is_some_and(flagged) {
             let s = 6.0 * z.max(0.7);
             p.add(egui::Shape::convex_polygon(
                 vec![rect.left_top(), pos2(rect.left() + s, rect.top()), pos2(rect.left(), rect.top() + s)],
@@ -608,6 +609,12 @@ fn paint_borders(q: &mut QuadrantPaint<'_>, looks: &[(CellRef, Rect, Look, Optio
             ));
         }
     }
+}
+
+/// Whether background error checking flags a cell.
+pub(super) fn flagged(cell: &gridcraft_engine::model::Cell) -> bool {
+    use gridcraft_engine::cmd::formulas::{formula_evaluates_to_error, number_stored_as_text};
+    number_stored_as_text(cell).is_some() || formula_evaluates_to_error(cell).is_some()
 }
 
 fn paint_sparklines(q: &QuadrantPaint<'_>, range: RangeRef) {

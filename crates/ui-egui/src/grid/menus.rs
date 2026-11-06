@@ -438,16 +438,32 @@ pub(super) fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     }
 }
 
-/// The warning button beside an active cell holding a number stored as text, as in Excel: its
-/// menu names the problem and offers Convert to Number for the selection (#1994).
+/// What background error checking calls an error a formula evaluates to, in GridCraft's words.
+fn error_name(e: gridcraft_engine::core::CellError) -> &'static str {
+    use gridcraft_engine::core::CellError as E;
+    match e {
+        E::Div0 => "Division by Zero",
+        E::Value => "Wrong Type of Value",
+        E::Name => "Unrecognized Name",
+        E::Num => "Invalid Number",
+        E::Ref => "Invalid Cell Reference",
+        E::Null => "Ranges Don't Intersect",
+        E::Spill => "Result Can't Spill",
+        E::Calc => "Result Can't Be Calculated",
+        _ => "Formula Returns an Error",
+    }
+}
+
+/// The warning button beside an active cell that background error checking flags, as in Excel:
+/// its menu names the problem and offers Convert to Number for a number stored as text, or
+/// Show Calculation Steps for a formula that evaluates to an error (#1994).
 pub(super) fn error_check_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet) {
     if app.editor.is_some() || app.dialog.is_some() || sh.show_formulas || app.grid.drag != Drag::None {
         return;
     }
     let Some(active) = app.session.active().map(|d| d.selection.active) else { return };
-    if sh.cell(active).and_then(gridcraft_engine::cmd::formulas::number_stored_as_text).is_none() {
-        return;
-    }
+    let Some(flagged) = sh.cell(active).filter(|c| super::quadrant::flagged(c)) else { return };
+    let error = gridcraft_engine::cmd::formulas::formula_evaluates_to_error(flagged);
     let cell = geo.cell_rect(sh, active);
     let size = vec2(18.0, 18.0);
     // Left of the cell, or right of it when that would cover the row headings.
@@ -457,7 +473,11 @@ pub(super) fn error_check_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, 
         return;
     }
     let lang = crate::i18n::current(ui.ctx());
-    let resp = ui.interact(tag, egui::Id::unique("gridcraft.error_check_tag"), Sense::click()).on_hover_text(lang.tr("Number Stored as Text"));
+    let title = match error {
+        Some(e) => format!("{} ({})", lang.tr(error_name(e)), e.as_str()),
+        None => lang.tr("Number Stored as Text").to_string(),
+    };
+    let resp = ui.interact(tag, egui::Id::unique("gridcraft.error_check_tag"), Sense::click()).on_hover_text(&title);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, lang.tr("Error checking options")));
     let t = Tokens::get(ui.ctx());
     let p = ui.painter();
@@ -473,9 +493,14 @@ pub(super) fn error_check_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, 
     ));
     p.text(c, egui::Align2::CENTER_CENTER, "!", egui::FontId::proportional(10.0), t.warning_ink);
     egui::Popup::menu(&resp).show(|ui| {
-        ui.label(egui::RichText::new(lang.tr("Number Stored as Text")).strong());
+        ui.label(egui::RichText::new(&title).strong());
         ui.separator();
-        if ui.button(lang.tr("Convert to Number")).clicked() {
+        if error.is_some() {
+            if ui.button(lang.tr("Show Calculation Steps…")).clicked() {
+                app.open_dialog("evaluateFormula", json!({}));
+                ui.close();
+            }
+        } else if ui.button(lang.tr("Convert to Number")).clicked() {
             app.run_or_alert("formulas.convertToNumber", json!({}));
             ui.close();
         }
