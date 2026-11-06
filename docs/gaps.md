@@ -1,5 +1,7 @@
 # Gaps
 
+> **Automation confinement update:** 2026-10-30 · Headless MCP accepts operator-selected read/write roots, applied before `--in` and at file I/O. Native reads and atomic saves bind their operations to open authorized directory handles; exclusive random temporary names prevent stale `.sctmp` files from blocking saves. Desktop `--connect` confinement and process-wide OS sandboxing remain outside this change. Readiness estimates unchanged. See [MCP file access](mcp.md#restrict-file-access-to-a-folder).
+>
 > **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-02 · **Change:** minor (§17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
@@ -186,6 +188,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | Align root flags with DeckCraft, cover nested write roots and macOS case aliases; desktop scope and readiness estimates unchanged |
+| 2026-10-27 | minor | Headless MCP filesystem roots, initial `--in` confinement and regression tests; desktop control scope and readiness estimates unchanged |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |
 | 2026-11-02 | minor | §13: Solver Sensitivity report: shadow prices, reduced costs and allowable ranges for Simplex LP; Lagrange multipliers and reduced gradients for GRG Nonlinear |
 | 2026-11-02 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |

@@ -9,7 +9,7 @@
 //! gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl] [--out FILE] [--print RANGE] [--quiet]
 //! gridcraft-cli commands [--json] [--search X]
 //! gridcraft-cli functions [--json] [--search X] [--category C]
-//! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
+//! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME] [--automation-read-root DIR] [--automation-write-root DIR]
 //! gridcraft-cli send <port> <method> [json]
 //! gridcraft-cli version | --version
 //! ```
@@ -47,7 +47,7 @@ const USAGE: &str = "usage:
                      blank lines and lines starting with # or // are skipped
   gridcraft-cli commands [--json] [--search X]
   gridcraft-cli functions [--json] [--search X] [--category C]
-  gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
+  gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME] [--automation-read-root DIR] [--automation-write-root DIR]
   gridcraft-cli send <port> <method> [json]
   gridcraft-cli version";
 
@@ -522,12 +522,38 @@ fn functions(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate MCP arguments without opening files, connecting or starting a server.
+fn mcp_args(args: &[String]) -> Result<Args, String> {
+    let a = Args::parse(args, &["connect", "in", "sample", "automation-read-root", "automation-write-root"], &[])?;
+    a.no_extra(0)?;
+    for option in ["automation-read-root", "automation-write-root"] {
+        if a.opts.iter().filter(|(name, _)| name == option).count() > 1 {
+            return Err(format!("--{option} may be given only once"));
+        }
+        if a.opt(option) == Some("") {
+            return Err(format!("--{option} must name an existing directory"));
+        }
+    }
+    if a.opt("connect").is_some() && (a.opt("automation-read-root").is_some() || a.opt("automation-write-root").is_some()) {
+        return Err("automation roots require headless MCP; --connect cannot enforce them in the desktop app".into());
+    }
+    Ok(a)
+}
+
 /// `mcp` (headless, in-process engine) or `mcp --connect PORT|HOST:PORT` (drive a running app
 /// started with `gridcraft --control PORT`). JSON-RPC on stdin/stdout; logs on stderr.
 fn mcp(args: &[String]) -> Result<(), String> {
     use gridcraft_mcp::{Backend, Headless, Remote, Server, control_addr};
-    let a = Args::parse(args, &["connect", "in", "sample"], &[])?;
-    a.no_extra(0)?;
+    let a = mcp_args(args)?;
+    let read_root = a.opt("automation-read-root");
+    let write_root = a.opt("automation-write-root");
+    let roots = gridcraft_engine::file_access::AutomationRoots::new(read_root.map(std::path::Path::new), write_root.map(std::path::Path::new))?;
+    // Apply before --in, and to worker threads as well as calls arriving over MCP.
+    if let Some(roots) = &roots
+        && !gridcraft_engine::file_access::confine_process(roots.clone())
+    {
+        return Err("automation roots were already configured for this process".into());
+    }
     let backend: Box<dyn Backend> = match a.opt("connect") {
         Some(c) => {
             let addr = control_addr(c);
@@ -546,7 +572,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
                 }
                 (None, None) => blank(),
             };
-            Box::new(Headless::with_session(session))
+            Box::new(Headless::with_session(session).with_automation_roots(roots))
         }
     };
     eprintln!("gridcraft-cli: MCP server on stdio ({})", backend.describe());
@@ -611,6 +637,43 @@ mod tests {
             parse_command(r#"{"command":"home.insertSheet","params":{"name":"R"}}"#).unwrap(),
             Some(("home.insertSheet".into(), json!({"name": "R"})))
         );
+    }
+
+    /// Root parsing is independent of the filesystem and never starts a server.
+    #[test]
+    fn mcp_root_arguments_are_independent() {
+        for (flags, read, write) in [
+            (vec![], None, None),
+            (vec!["--automation-read-root", "/selected"], Some("/selected"), None),
+            (vec!["--automation-write-root=/selected/out"], None, Some("/selected/out")),
+            (vec!["--automation-read-root=/selected", "--automation-write-root", "/selected/out"], Some("/selected"), Some("/selected/out")),
+            (vec!["--automation-read-root", "/selected", "--automation-write-root", "/selected"], Some("/selected"), Some("/selected")),
+        ] {
+            let args: Vec<String> = flags.iter().map(|s| s.to_string()).collect();
+            let parsed = mcp_args(&args).unwrap();
+            assert_eq!(parsed.opt("automation-read-root"), read);
+            assert_eq!(parsed.opt("automation-write-root"), write);
+        }
+    }
+
+    /// Invalid policy options fail before a backend or process policy is installed.
+    #[test]
+    fn mcp_root_arguments_reject_alias_and_invalid_combinations() {
+        for flags in [
+            vec!["--root", "/selected"],
+            vec!["--root=/selected"],
+            vec!["--automation-read-root", "/selected", "--automation-read-root", "/other"],
+            vec!["--automation-write-root=/selected/out", "--automation-write-root=/other"],
+            vec!["--automation-read-root", ""],
+            vec!["--automation-write-root="],
+            vec!["--automation-read-root"],
+            vec!["--automation-write-root"],
+            vec!["--connect", "7979", "--automation-read-root", "/selected"],
+            vec!["--connect", "7979", "--automation-write-root", "/selected/out"],
+        ] {
+            let args: Vec<String> = flags.iter().map(|s| s.to_string()).collect();
+            assert!(mcp_args(&args).is_err(), "{flags:?}");
+        }
     }
 
     #[test]

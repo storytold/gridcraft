@@ -30,7 +30,7 @@ cargo install --path apps/gridcraft-cli     # or: cargo run -p gridcraft-cli -- 
 | `run …` | see below |
 | `commands [--json] [--search X]` | `gridcraft-cli commands --search border` — every command with its parameter docs. |
 | `functions [--json] [--search X] [--category C]` | `gridcraft-cli functions --search lookup` |
-| `mcp [--connect PORT] [--in FILE \| --sample NAME]` | MCP server on stdio ([mcp.md](mcp.md)). |
+| `mcp [--connect PORT] [--in FILE \| --sample NAME] [root options]` | MCP server on stdio. Headless root options: `--automation-read-root DIR` and `--automation-write-root DIR`; either option can be supplied alone ([folder access](mcp.md#restrict-file-access-to-a-folder)). |
 | `send <port> <method> [json]` | `gridcraft-cli send 7979 engine.execute '{"command":"home.bold","params":{"range":"A1:C1"}}'` — one control-channel request to a running app (`gridcraft --control 7979`). |
 | `version` | Prints `gridcraft-cli <version>`. |
 
