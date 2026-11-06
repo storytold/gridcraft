@@ -29,6 +29,8 @@ impl SheetApp {
         for action in actions {
             match action {
                 keytips::Action::Tab("File") => self.open_backstage(backstage::Page::Home),
+                // A tab the user hid has no keytip.
+                keytips::Action::Tab(tab) if self.ui.ribbon.hidden.iter().any(|h| h == tab) => {}
                 keytips::Action::Tab(tab) => {
                     self.run_or_alert("ui.ribbonTab", json!({"tab": tab}));
                     self.ui.ribbon_collapsed = false;
