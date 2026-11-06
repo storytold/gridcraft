@@ -126,6 +126,9 @@ pub struct Backstage {
     preview: Option<((u64, u64, bool, bool), Json)>,
     /// Save As: the chosen file type (an extension from [`SAVE_TYPES`]).
     pub save_format: &'static str,
+    /// Save As › File name: what was typed, `None` until then, so the field follows the workbook's
+    /// name. Empty or unusable text also gives way to that name.
+    pub save_name: Option<String>,
     /// Home and Open: when the recent workbooks were last changed.
     recent: RecentFiles,
 }
@@ -146,6 +149,7 @@ impl Backstage {
             preview_page: 0,
             preview: None,
             save_format: "xlsx",
+            save_name: None,
             recent: RecentFiles::default(),
         }
     }
@@ -679,7 +683,15 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
     ui.add_space(14.0);
     let fmt = bs.save_format;
     let current = SAVE_TYPES.iter().find(|(ext, _)| *ext == fmt).map_or("Excel Workbook (*.xlsx)", |(_, label)| *label);
-    ui.horizontal(|ui| {
+    // The name the file gets (#3497): the system Save dialog opens with it, a web download uses it.
+    // A grid, so the field and the type list start at the same edge.
+    egui::Grid::new("backstage_save_as").num_columns(2).spacing(vec2(12.0, 8.0)).show(ui, |ui| {
+        let name_label = ui.label(lang.tr("File name"));
+        let mut text = bs.save_name.clone().unwrap_or_else(|| workbook_stem(app));
+        if ui.add(egui::TextEdit::singleline(&mut text).desired_width(280.0)).labelled_by(name_label.id).changed() {
+            bs.save_name = Some(text);
+        }
+        ui.end_row();
         let label = ui.label(lang.tr("Save as type"));
         craft_ui::ComboBox::from_id_salt("backstage_save_type")
             .width(280.0)
@@ -693,6 +705,7 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
             })
             .response
             .labelled_by(label.id);
+        ui.end_row();
     });
     ui.add_space(14.0);
     // Desktop: the system Save dialog. Web: the file downloads.
@@ -701,12 +714,12 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
     if square_button(ui, Icon::OpenFolder, &label).clicked() && app.commit_edit(0, 0, false, false) {
         if fmt == "xlsx" {
             let before = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
-            app.open_dialog("saveAs", json!({}));
+            app.open_dialog("saveAs", bs.save_name.as_ref().map_or_else(|| json!({}), |n| json!({"fileName": n})));
             let after = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
             if after != before || app.services.pick_save.is_none() {
                 out.close = true;
             }
-        } else if export_as(app, fmt) {
+        } else if export_as_named(app, fmt, bs.save_name.as_deref()) {
             out.close = true;
         }
     }
@@ -733,9 +746,35 @@ fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
     }
 }
 
+/// The workbook's name without its extension: what Save As › File name starts with.
+fn workbook_stem(app: &SheetApp) -> String {
+    let title = app.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
+    std::path::Path::new(&title).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1").to_string()
+}
+
+/// The file name typed on Save As, ready to use before `ext`: control characters are dropped, a
+/// folder separator (a name can't hold one) becomes a space, spaces at both ends go, and a
+/// trailing `.ext` is cut so "Budget.xlsx" doesn't save as "Budget.xlsx.xlsx". `None` when
+/// nothing is left, so the workbook's own name is used instead.
+pub fn clean_file_stem(typed: &str, ext: &str) -> Option<String> {
+    let mut name: String = typed.chars().filter(|c| !c.is_control()).map(|c| if matches!(c, '/' | '\\') { ' ' } else { c }).collect();
+    name = name.trim().to_string();
+    let suffix = format!(".{ext}");
+    if name.len() >= suffix.len() && name.to_ascii_lowercase().ends_with(&suffix) {
+        name.truncate(name.len() - suffix.len());
+        name = name.trim().to_string();
+    }
+    (!name.is_empty() && name != "." && name != "..").then_some(name)
+}
+
 /// Exports the active workbook as `pdf`, `csv` or `html`: through the save picker on the desktop,
 /// as a browser download on the web. Returns whether a file was written or handed over.
 pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
+    export_as_named(app, fmt, None)
+}
+
+/// [`export_as`] under the file name typed on Save As, when there is one (see [`clean_file_stem`]).
+pub fn export_as_named(app: &mut SheetApp, fmt: &str, typed: Option<&str>) -> bool {
     if !app.commit_edit(0, 0, false, false) {
         return false;
     }
@@ -745,8 +784,8 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
         "html" => "file.exportHtml",
         _ => return false,
     };
-    let title = app.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
-    let stem = std::path::Path::new(&title).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1").to_string();
+    let typed = typed.and_then(|t| clean_file_stem(t, fmt));
+    let stem = typed.clone().unwrap_or_else(|| workbook_stem(app));
     if let Some(pick) = &app.services.pick_save {
         let Some(path) = pick(&format!("{stem}.{fmt}")) else { return false };
         // The picker may suggest a workbook extension; the export writes the chosen format.
@@ -765,7 +804,8 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
     }
     if fmt == "pdf" {
         // Without a path the PDF comes back as bytes, which `SheetApp::run` hands to the browser.
-        return match app.run(id, json!({})) {
+        let params = typed.map_or_else(|| json!({}), |s| json!({"fileName": format!("{s}.pdf")}));
+        return match app.run(id, params) {
             Ok(_) => true,
             Err(e) => {
                 app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
@@ -777,7 +817,10 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
     match app.session.run("file.saveBytes", json!({"format": fmt})) {
         Ok(r) => {
             let bytes = r.get("base64").and_then(Json::as_str).and_then(gridcraft_engine::io::base64_decode);
-            let name = r.get("name").and_then(Json::as_str).map_or_else(|| format!("{stem}.{fmt}"), str::to_string);
+            let name = match typed {
+                Some(s) => format!("{s}.{fmt}"),
+                None => r.get("name").and_then(Json::as_str).map_or_else(|| format!("{stem}.{fmt}"), str::to_string),
+            };
             match (bytes, &app.services.download) {
                 (Some(b), Some(dl)) => {
                     dl(&name, &b);
