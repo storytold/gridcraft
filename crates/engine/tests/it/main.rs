@@ -7,6 +7,7 @@ mod chart_workbook_names;
 mod command_sequence_fuzz;
 mod cross_sheet_cut;
 mod csv_export_budget;
+mod ctrl_shift_whole_column;
 mod custom_filter_blanks;
 mod custom_view_freeze;
 mod dynamicmetadata;
