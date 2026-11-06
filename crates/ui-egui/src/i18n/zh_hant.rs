@@ -1049,7 +1049,7 @@ pub(crate) const CATALOG: &[(&str, &str)] = &[
     ("Title:", "標題："),
     ("Titles and Headings", "標題與標題列"),
     ("To value:", "目標值："),
-    ("To:", "收件者："),
+    ("To:", "至："),
     ("Today", "今天"),
     ("Tomorrow", "明天"),
     ("Top", "上方"),
