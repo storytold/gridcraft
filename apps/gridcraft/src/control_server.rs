@@ -693,7 +693,7 @@ mod tests {
         let mut out = stream.try_clone().unwrap();
         let mut reader = BufReader::new(stream);
         let mut line = String::new();
-        writeln!(out, "{}", json!({"token":TOKEN})).unwrap();
+        writeln!(out, "{}", control_auth::auth_line(1, TOKEN)).unwrap();
         reader.read_line(&mut line).unwrap();
         assert_eq!(serde_json::from_str::<Json>(&line).unwrap()["ok"], true);
         let mut call = |method: &str, params: Json| {
@@ -711,7 +711,7 @@ mod tests {
             assert_eq!(call("engine.execute", json!({"command":"cell.set","params":{"cell":"A1","input":value}}))["ok"], true);
         }
         // A person's outside edit advances the real revision while the agent still owns its request.
-        let (req, reply) = ControlRequest::new("cell.set".into(), json!({"cell":"Z1","input":"human"}));
+        let (req, reply) = ControlRequest::new("cell.set", json!({"cell":"Z1","input":"human"}));
         human_tx.send(req).unwrap();
         assert_eq!(reply.recv_timeout(Duration::from_secs(5)).unwrap()["ok"], true);
         let stale = call("agent.reply", json!({"id":id,"text":"late reply"}));
