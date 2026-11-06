@@ -213,6 +213,7 @@ fn kept_xml(bytes: &[u8]) -> Option<PyEnvironmentXml> {
     let text = std::str::from_utf8(&data).ok()?;
     let mut reader = Reader::from_str(text);
     let mut kept = PyEnvironmentXml::default();
+    let mut inherited: Option<String> = None;
     let mut place = In::Part;
     let (mut seen_environment, mut seen_initialization) = (false, false);
     loop {
@@ -235,6 +236,12 @@ fn kept_xml(bytes: &[u8]) -> Option<PyEnvironmentXml> {
         match (place, local.as_slice()) {
             (In::Part, _) => {
                 kept.root_attrs = attrs_besides(&e, b"xmlns");
+                inherited = e
+                    .attributes()
+                    .flatten()
+                    .find(|a| a.key.as_ref() == b"xmlns")
+                    .map(|a| String::from_utf8_lossy(&a.value).into_owned())
+                    .filter(|ns| ns != NS);
                 if !open {
                     break;
                 }
@@ -271,15 +278,31 @@ fn kept_xml(bytes: &[u8]) -> Option<PyEnvironmentXml> {
             continue;
         }
         let fragment = text.get(start..usize::try_from(reader.buffer_position()).ok()?)?;
+        let fragment = with_namespace(fragment, &e, inherited.as_deref());
         match place {
-            In::Root => kept.root_elements.push_str(fragment),
-            In::Environment => kept.environment_elements.push_str(fragment),
-            In::Initialization => kept.initialization_elements.push_str(fragment),
+            In::Root => kept.root_elements.push_str(&fragment),
+            In::Environment => kept.environment_elements.push_str(&fragment),
+            In::Initialization => kept.initialization_elements.push_str(&fragment),
             In::Part => {}
         }
     }
     kept.no_initialization = seen_environment && !seen_initialization;
+    kept.definition = seen_environment;
     Some(kept)
+}
+
+/// A kept element as written. The saved root declares the part's namespace as its default, so an
+/// element with no prefix that took another default from a prefixed root says so itself.
+fn with_namespace<'a>(fragment: &'a str, e: &BytesStart<'_>, inherited: Option<&str>) -> std::borrow::Cow<'a, str> {
+    let name = e.name();
+    let declares = e.attributes().flatten().any(|a| a.key.as_ref() == b"xmlns");
+    match (inherited, std::str::from_utf8(name.as_ref())) {
+        (Some(ns), Ok(name)) if !declares && !name.contains(':') => match fragment.strip_prefix('<').and_then(|f| f.strip_prefix(name)) {
+            Some(rest) => format!("<{name} xmlns=\"{}\"{rest}", ns.replace('"', "&quot;")).into(),
+            None => fragment.into(),
+        },
+        _ => fragment.into(),
+    }
 }
 
 /// An element's attributes as written, each with a space before it, leaving out `skip`.
@@ -413,12 +436,13 @@ fn defines_environment(env: &PyEnvironment) -> bool {
     env.has_code()
         || env.user_modified
         || env.id.is_some()
-        || env.kept.as_deref().is_some_and(|k| !k.environment_attrs.is_empty() || !k.environment_elements.is_empty())
+        || env.kept.as_deref().is_some_and(|k| k.definition || !k.environment_attrs.is_empty() || !k.environment_elements.is_empty())
 }
 
 /// Whether the workbook needs a Python part: it has scripts, or an environment with something in it.
 pub fn needs_part(scripts: &[String], env: Option<&PyEnvironment>) -> bool {
-    !scripts.is_empty() || env.is_some_and(|e| defines_environment(e) || e.kept.as_deref().is_some_and(|k| !k.root_elements.is_empty()))
+    !scripts.is_empty()
+        || env.is_some_and(|e| defines_environment(e) || e.kept.as_deref().is_some_and(|k| !k.root_elements.is_empty() || !k.root_attrs.is_empty()))
 }
 
 /// The Python part holding the environment, when there is one, and `scripts`, in order. The format
@@ -534,6 +558,24 @@ mod tests {
     fn read_back(xml: &str) -> (El, PyEnvironmentXml) {
         let root = xml::parse_streaming(xml.as_bytes(), &["pythonScript"], &mut |_| Ok(())).unwrap();
         (root, kept_xml(xml.as_bytes()).unwrap())
+    }
+
+    #[test]
+    fn an_element_keeps_the_default_namespace_it_had_under_a_prefixed_root() {
+        let part = format!("<p:python xmlns:p=\"{NS}\" xmlns=\"urn:other\"><extra a=\"1\"/><own xmlns=\"urn:own\"/><p:more/></p:python>");
+        let (_, kept) = read_back(&part);
+        assert_eq!(kept.root_elements, "<extra xmlns=\"urn:other\" a=\"1\"/><own xmlns=\"urn:own\"/><p:more/>");
+    }
+
+    #[test]
+    fn what_a_part_holds_besides_code_keeps_it_and_its_environment() {
+        let env = |kept: PyEnvironmentXml| PyEnvironment { kept: Some(kept.into()), ..PyEnvironment::default() };
+        let attributes = env(PyEnvironmentXml { root_attrs: " xmlns:a=\"urn:a\"".into(), ..Default::default() });
+        assert!(needs_part(&[], Some(&attributes)));
+        // A definition whose GUID couldn't be read, with an empty initialization.
+        let definition = env(PyEnvironmentXml { definition: true, ..Default::default() });
+        assert!(defines_environment(&definition));
+        assert!(!needs_part(&[], Some(&env(PyEnvironmentXml::default()))));
     }
 
     #[test]

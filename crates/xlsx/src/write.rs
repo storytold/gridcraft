@@ -135,7 +135,7 @@ pub struct Out {
     /// The code of the Python cells written so far, in order: script `i` of the Python part.
     pub python_scripts: Vec<String>,
     /// The pictures of the Python cells of the sheet being written, which its drawing part holds.
-    pub python_images: Vec<(gridcraft_core::CellRef, gridcraft_model::PyImage)>,
+    pub python_images: Vec<PythonImage>,
     /// Bytes of pictures Python cells may still save.
     python_image_room: usize,
     /// `xl/media` parts by a hash of their extension and bytes, as places in `parts`. A workbook can
@@ -211,6 +211,22 @@ pub fn person_guid(i: usize) -> String {
 /// a part. Reading charges each to [`crate::package::MAX_TOTAL`], and a file past that doesn't open.
 /// This leaves room for everything else a file holds, and a cell past it has its code and can run again.
 pub(crate) const MAX_PYTHON_IMAGE_BYTES: usize = 512 * 1024 * 1024;
+
+/// The room for Python cells' pictures in the file of `wb`. Floating pictures are charged the same way
+/// when it opens, each one, though many can share a part as the linked copies of a plot do. They come
+/// first: they have nowhere else to be, while a Python cell past the room can run again.
+pub(crate) fn python_image_room(wb: &Workbook) -> usize {
+    let floating = wb.sheets.iter().flat_map(|sh| &sh.images).fold(0usize, |n, image| n.saturating_add(image.data.len()));
+    MAX_PYTHON_IMAGE_BYTES.saturating_sub(floating)
+}
+
+/// A picture a Python cell gave, for the sheet's drawing.
+pub struct PythonImage {
+    pub at: gridcraft_core::CellRef,
+    pub image: gridcraft_model::PyImage,
+    /// The cell has an Excel Value but no rich value, so its text stands in for the picture.
+    pub stands_in: bool,
+}
 
 /// `$A$1:$D$20` (or `$1:$3` / `$A:$C`).
 pub fn abs_range(r: &RangeRef) -> String {
@@ -314,7 +330,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         kept: Default::default(),
         python_scripts: vec![],
         python_images: vec![],
-        python_image_room: MAX_PYTHON_IMAGE_BYTES,
+        python_image_room: python_image_room(wb),
         media: HashMap::new(),
     };
     out.kept.reserve_vml_blocks(wb);

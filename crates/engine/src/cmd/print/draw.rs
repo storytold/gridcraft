@@ -342,7 +342,7 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
         if w <= 0.0 || h <= 0.0 {
             continue;
         }
-        if let Some(picture) = sh.cell_pictures.get(c) {
+        if let Some(picture) = sh.picture_at(*c) {
             draw_cell_picture(pg, &picture.data, (x, y, w, h), b.k);
         } else if let Some(on) = checkbox_state(l, &sh.value(*c)) {
             draw_checkbox(pg, (x, y, w, h), b.k, on);
