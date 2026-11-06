@@ -186,7 +186,7 @@ pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
                     // The full output footprint was checked above.
                     let to = CellRef::new(dest.row + i as u32, dest.col + c - list.start.col);
                     let style = sh.style_id(src);
-                    (to, Cell { value: sh.value(src), formula: None, style })
+                    (to, Cell { value: sh.value(src), formula: None, style, py: None })
                 })
             })
             .collect();

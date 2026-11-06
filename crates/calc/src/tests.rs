@@ -615,6 +615,25 @@ fn lambda_calls_spend_one_work_budget_per_cell() {
 }
 
 #[test]
+fn lifted_lookups_stop_past_their_work_budget() {
+    // Security: each needle searched the whole lookup vector, so this one cell ran for hours
+    // (about 1.1e12 compares) and hung opening the file that held it. It is #NUM! at once now.
+    let mut t = T::new();
+    t.set("A1", "=ROWS(XMATCH(SEQUENCE(1048576),-SEQUENCE(1048576)))");
+    assert_eq!(t.get("A1"), Value::Error(CellError::Num));
+    // Ordinary lifted lookups are unaffected.
+    for (i, k) in [10, 20, 30, 40, 50].into_iter().enumerate() {
+        t.set(&format!("B{}", i + 1), &k.to_string());
+        t.set(&format!("C{}", i + 1), &(i + 1).to_string());
+    }
+    t.set("D1", "=SUM(XMATCH({30;50;10},B1:B5))");
+    t.set("D2", "=SUM(XLOOKUP({20;40},B1:B5,C1:C5))");
+    t.set("D3", "=SUM(VLOOKUP({30,10},B1:C5,2,FALSE))");
+    t.set("D4", "=SUM(MATCH({25,50},B1:B5))");
+    assert_eq!([t.num("D1"), t.num("D2"), t.num("D3"), t.num("D4")], [9.0, 6.0, 4.0, 7.0]);
+}
+
+#[test]
 fn accounting_negative_text_coerces() {
     let mut t = T::new();
     t.set("A1", "'$(1,234)");
@@ -1230,6 +1249,25 @@ fn array_broadcast_result_is_capped() {
     assert_eq!(t.num("C2"), 6.0);
     t.set("C3", "=COLUMNS(TEXT(SEQUENCE(2),SEQUENCE(1,5)))");
     assert_eq!(t.num("C3"), 5.0);
+}
+
+/// MAP refuses a result past `MAX_CELLS` by its checked product, before allocating it (the
+/// 2^32-cell wrap that a 32-bit `usize` product would turn into 0 is pinned in
+/// `broadcast_len_rejects_a_product_that_wraps_to_zero_on_32_bits`; `SEQUENCE` tops out at
+/// 16384 columns, so the widest product it can build is 16384 squared).
+#[test]
+fn map_caps_its_result_size() {
+    let mut t = T::new();
+    for (at, formula) in
+        [("A1", "=MAP(SEQUENCE(4001),SEQUENCE(1,4000),LAMBDA(a,b,a))"), ("A2", "=MAP(SEQUENCE(16384),SEQUENCE(1,16384),LAMBDA(a,b,a))")]
+    {
+        t.set(at, formula);
+        assert_eq!(t.get(at), Value::Error(CellError::Num), "{formula}");
+    }
+    // Within the cap the broadcast shape is unchanged.
+    t.set("A3", "=ROWS(MAP(SEQUENCE(3),SEQUENCE(1,2),LAMBDA(a,b,a+b)))");
+    t.set("A4", "=COLUMNS(MAP(SEQUENCE(3),SEQUENCE(1,2),LAMBDA(a,b,a+b)))");
+    assert_eq!((t.num("A3"), t.num("A4")), (3.0, 2.0));
 }
 
 #[test]
@@ -1884,6 +1922,72 @@ fn offset_extreme_arguments_return_ref() {
     }
 }
 
+/// "Set precision as displayed": results are rounded to their cell's format before they are
+/// stored and before other formulas read them. Values observed in Excel (COM,
+/// `Workbook.PrecisionAsDisplayed = True`) with the same synthetic formulas.
+#[test]
+fn precision_as_displayed_rounds_results_by_cell_format() {
+    let fmt = |t: &mut T, at: &str, code: &str| {
+        let id = t.wb.styles.intern(gridcraft_model::Style { num_fmt: gridcraft_model::NumFmt::new(code), ..Default::default() });
+        t.wb.sheet_mut(0).unwrap().set_style(c(at), id);
+    };
+    let mut t = T::new();
+    t.set("A1", "=-130+657.91");
+    t.set("A2", "=A1*10");
+    t.set("A3", "=A1/7");
+    // Cross-cell: E2 rounds what it reads from E1; E1 itself (General) keeps full precision.
+    t.set("E1", "=10/3");
+    t.set("E2", "=E1");
+    t.set("E3", "=E2*10");
+    t.set("E4", "=E1*10");
+    // A spill: each element takes the format of the cell it lands in.
+    t.set("F1", "=SEQUENCE(3,1,0.123,0.111)");
+    t.set("G4", "=SUM(F1:F3)");
+    t.set("H1", "=TRUE");
+    t.set("H2", "=\"1.5\"");
+    // A conditional format rounds by the sign's section, not the one displayed: `[<1]0.00;0`
+    // shows 2+1/3 as `2` but stores 2.33, and stores -10/3 as -3.
+    t.set("J1", "=2+1/3");
+    t.set("J2", "=-10/3");
+    t.set("K1", "=J1*3");
+    t.set("K2", "=J2*3");
+    fmt(&mut t, "J1", "[<1]0.00;0");
+    fmt(&mut t, "J2", "[<1]0.00;0");
+    fmt(&mut t, "A1", "0");
+    fmt(&mut t, "A3", "0.0000");
+    fmt(&mut t, "E2", "0");
+    fmt(&mut t, "F1", "0.0");
+    fmt(&mut t, "F2", "0.0");
+    fmt(&mut t, "H1", "0");
+    fmt(&mut t, "H2", "0");
+    // Off: formats don't change values.
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A1"), -130.0 + 657.91);
+    assert_eq!(t.num("E2"), 10.0 / 3.0);
+    t.wb.calc.precision_as_displayed = true;
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.num("A1"), t.num("A2"), t.num("A3")), (528.0, 5280.0, 75.4286));
+    assert_eq!((t.num("E1"), t.num("E2"), t.num("E3"), t.num("E4")), (10.0 / 3.0, 3.0, 30.0, 10.0 / 3.0 * 10.0));
+    let sh = t.wb.sheet(0).unwrap();
+    assert_eq!(
+        (sh.value(c("F1")), sh.value(c("F2")), sh.value(c("F3"))),
+        (Value::Number(0.1), Value::Number(0.2), Value::Number(0.123 + 0.111 * 2.0))
+    );
+    assert_eq!(t.num("G4"), 0.1 + 0.2 + (0.123 + 0.111 * 2.0));
+    assert_eq!((t.num("J1"), t.num("J2"), t.num("K1"), t.num("K2")), (2.33, -3.0, 2.33 * 3.0, -9.0));
+    // Booleans and text are left alone.
+    assert_eq!((t.get("H1"), t.get("H2")), (Value::Bool(true), Value::from("1.5")));
+    // An edit recalculates through the rounded values too.
+    t.set("A1", "=-130+657.41");
+    fmt(&mut t, "A1", "0");
+    t.calc.cells_changed(&mut t.wb, &[(0, c("A1"))]);
+    assert_eq!((t.num("A1"), t.num("A2")), (527.0, 5270.0));
+    // Off again: a recalculation brings back full precision.
+    t.wb.calc.precision_as_displayed = false;
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A2"), (-130.0 + 657.41) * 10.0);
+}
+
 #[test]
 fn analysis_toolpak_value_params_reject_multi_cell_references() {
     // Excel 365 (observed): EOMONTH, WORKDAY, COUPDAYS, BIN2DEC... give #VALUE! for a reference to more
@@ -2273,4 +2377,64 @@ fn loan_schedule_residue_keeps_excels_sign() {
         other => panic!("O7: expected a number, got {other:?}"),
     }
     assert_eq!(t.get("P7"), Value::Text("".into()));
+}
+
+/// Makes `at` a Python cell showing `cached` (its value before this calculation), with `result`
+/// as its kept result, and returns the cell's key for `Calc::cells_changed`.
+fn plant_python(t: &mut T, at: &str, cached: Value, result: Value) -> (usize, CellRef) {
+    use gridcraft_model::python::{PyCode, PyOutput};
+    let output = PyOutput { value: result, type_name: "list".into(), preview: String::new(), convertible: true };
+    let py = PyCode { output: Some(output), ..PyCode::new("[5, 6]") };
+    let cell = Cell { value: cached, formula: None, style: gridcraft_model::StyleId::default(), py: Some(std::sync::Arc::new(py)) };
+    t.wb.sheet_mut(0).unwrap().cells.set(c(at), cell);
+    (0, c(at))
+}
+
+fn column(values: &[f64]) -> Value {
+    let data = values.iter().map(|v| Value::Number(*v)).collect();
+    Value::Array(std::sync::Arc::new(gridcraft_core::Array::new(values.len(), 1, data).unwrap()))
+}
+
+#[test]
+fn formulas_read_a_dirty_python_cell_after_it_is_laid_out() {
+    // B1's result can't spill (B2 holds a value), so it is #SPILL!. A1, A2 and A3 come before
+    // it in the pass; each must lay it out first rather than read its old value, 1.
+    let build = |t: &mut T| {
+        t.set("B2", "10");
+        t.set("B3", "100");
+        t.set("A1", "=B1");
+        t.set("A2", "=MAX(B1:B3)");
+        t.set("A3", "=SUM(B1:B3)");
+        t.set("A4", "=COUNTA(B1:B3)");
+        t.set("A5", "=SUMPRODUCT(--ISERROR(B1:B3))");
+    };
+    let check = |t: &T, how: &str| {
+        assert_eq!(t.get("B1"), Value::Error(CellError::Spill), "{how}");
+        assert_eq!(t.get("A1"), Value::Error(CellError::Spill), "{how}: a reference");
+        assert_eq!(t.get("A2"), Value::Error(CellError::Spill), "{how}: a range read");
+        assert_eq!(t.get("A3"), Value::Error(CellError::Spill), "{how}: a range walked cell by cell");
+        assert_eq!(t.num("A4"), 3.0, "{how}");
+        assert_eq!(t.num("A5"), 1.0, "{how}: the error is seen in the range");
+    };
+
+    // A full recalculation.
+    let mut t = T::new();
+    build(&mut t);
+    plant_python(&mut t, "B1", Value::Number(1.0), column(&[5.0, 6.0]));
+    t.calc.recalc_all(&mut t.wb);
+    check(&t, "full");
+
+    // An incremental one: B1 becomes a Python cell after its readers.
+    let mut t = T::new();
+    t.set("B1", "1");
+    build(&mut t);
+    assert_eq!((t.num("A1"), t.num("A3")), (1.0, 111.0));
+    let k = plant_python(&mut t, "B1", Value::Number(1.0), column(&[5.0, 6.0]));
+    t.calc.cells_changed(&mut t.wb, &[k]);
+    check(&t, "incremental");
+
+    // Unblocked, the readers see the new array.
+    t.set("B2", "");
+    assert_eq!((t.num("B1"), t.num("B2")), (5.0, 6.0));
+    assert_eq!((t.num("A1"), t.num("A2"), t.num("A3")), (5.0, 100.0, 111.0));
 }
