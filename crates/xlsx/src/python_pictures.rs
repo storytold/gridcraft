@@ -11,7 +11,8 @@
 //! The picture a Python cell gave, for either return type, is a companion picture: hidden, anchored to
 //! one cell, on that cell, named `Python G5`, with the description
 //! `gridcraft:pythonCell:<cell>:<density>:<alt>`. The density is what the file holds nowhere else, as
-//! the pixels come from the image's header. A reopened workbook then shows its saved plots without
+//! the pixels come from the image's header, and a density written `2s` says the cell's text stands in
+//! for the picture of an Excel Value with no room for a rich value. A reopened workbook then shows its saved plots without
 //! running code. Reading goes by the anchor, as that moves with its cell when another application
 //! inserts a row and the description doesn't. With no Python cell there, as after a save through
 //! openpyxl, the companion is an ordinary floating picture, so that no picture is lost.
@@ -110,14 +111,16 @@ pub fn settle_links(wb: &mut Workbook) -> usize {
 }
 
 /// The description of the companion picture of the cell `at`.
-pub fn cell_descr(at: CellRef, image: &PyImage) -> String {
-    format!("{CELL}{}:{}:{}", at.a1(), image.density, image.picture.alt)
+pub fn cell_descr(at: CellRef, image: &PyImage, stands_in: bool) -> String {
+    format!("{CELL}{}:{}{}:{}", at.a1(), image.density, if stands_in { "s" } else { "" }, image.picture.alt)
 }
 
 /// What a companion picture's description says, past its cell.
 #[derive(Debug, PartialEq, Eq)]
 pub struct CellMarker<'a> {
     pub density: u32,
+    /// The cell's text stands in for the picture, though its return type is Excel Value.
+    pub stands_in: bool,
     pub alt: &'a str,
 }
 
@@ -127,12 +130,14 @@ pub fn read_cell_marker(descr: &str) -> Option<CellMarker<'_>> {
     let (cell, rest) = descr.strip_prefix(CELL)?.split_once(':')?;
     CellRef::parse(cell)?;
     let (density, alt) = rest.split_once(':')?;
-    let density = match density {
-        "1" => 1,
-        "2" => 2,
+    let (density, stands_in) = match density {
+        "1" => (1, false),
+        "2" => (2, false),
+        "1s" => (1, true),
+        "2s" => (2, true),
         _ => return None,
     };
-    Some(CellMarker { density, alt })
+    Some(CellMarker { density, stands_in, alt })
 }
 
 /// `picture` as a Python cell's image, its size worked out as a run works it out. `None` for bytes
@@ -175,10 +180,14 @@ pub fn take_for_cell(sheet: &mut Sheet, at: CellRef, marker: &CellMarker<'_>, da
     let image = match py.image() {
         Some(kept) if kept.picture.data != data => return false,
         Some(kept) => saved_image(kept.picture.clone(), marker.density),
-        None if matches!(&cell.value, Value::Text(text) if &**text == IMAGE) => crate::richdata::picture_size(data).and_then(|(_, _, mime)| {
-            let picture = CellPicture { data: data.to_vec(), mime: mime.to_string(), alt: marker.alt.to_string() };
-            saved_image(Arc::new(picture), marker.density)
-        }),
+        // The word from a Python Object, or from an Excel Value saved with no room for a rich value. For
+        // any other Excel Value it is a text the code gave, newer than the companion.
+        None if (py.object || marker.stands_in) && matches!(&cell.value, Value::Text(text) if &**text == IMAGE) => {
+            crate::richdata::picture_size(data).and_then(|(_, _, mime)| {
+                let picture = CellPicture { data: data.to_vec(), mime: mime.to_string(), alt: marker.alt.to_string() };
+                saved_image(Arc::new(picture), marker.density)
+            })
+        }
         None => return false,
     };
     let Some(image) = image else { return false };

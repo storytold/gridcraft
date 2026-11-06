@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS};
-use gridcraft_model::{Anchor, AnchorMode, Color, Image, PyImage, Shape, ShapeFormat, ShapeKind, ShapeTextAlign, ShapeTextAnchor, Sheet, Theme};
+use gridcraft_model::{Anchor, AnchorMode, Color, Image, Shape, ShapeFormat, ShapeKind, ShapeTextAlign, ShapeTextAnchor, Sheet, Theme};
 
 use crate::IoError;
 use crate::read::Ctx;
@@ -472,7 +472,7 @@ pub enum Obj<'a> {
     Chart(&'a gridcraft_model::Chart, String),
     Shape(&'a Shape),
     /// The companion picture of the Python cell at a place.
-    PythonCell(CellRef, &'a PyImage, String),
+    PythonCell(&'a crate::write::PythonImage, String),
 }
 
 /// The drawing part for a sheet's objects (relationship ids already assigned).
@@ -497,7 +497,8 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                     xfrm(&img.anchor, "a:xfrm")
                 );
             }
-            Obj::PythonCell(at, image, rid) => {
+            Obj::PythonCell(python, rid) => {
+                let (at, image) = (&python.at, &python.image);
                 let anchor =
                     Anchor { cell: *at, dx: 0.0, dy: 0.0, width: image.width as f32, height: image.height as f32, mode: AnchorMode::MoveOnly };
                 let emu = |v: f32| (f64::from(v) * EMU_PER_PX).round() as i64;
@@ -514,7 +515,7 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                     s,
                     "<xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"{id}\" name=\"Python {}\" descr=\"{}\" hidden=\"1\"/><xdr:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed=\"{rid}\"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>{}<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>",
                     at.a1(),
-                    esc_attr(&crate::python_pictures::cell_descr(*at, image)),
+                    esc_attr(&crate::python_pictures::cell_descr(*at, image, python.stands_in)),
                     xfrm(&anchor, "a:xfrm")
                 );
             }

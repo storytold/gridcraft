@@ -370,15 +370,15 @@ fn write_sheet_drawing(s: &mut String, wb: &Workbook, si: usize, sheet: &Sheet, 
         for sh in &sheet.shapes {
             objs.push(Obj::Shape(sh));
         }
-        for (at, image) in &python_images {
-            if image.picture.data.is_empty() {
+        for python in &python_images {
+            if python.image.picture.data.is_empty() {
                 continue;
             }
-            let ext = image_ext(&image.picture.mime, &image.picture.data);
+            let ext = image_ext(&python.image.picture.mime, &python.image.picture.data);
             out.default_type(ext, image_content_type(ext));
-            let file = out.image_part(ext, &image.picture.data);
+            let file = out.image_part(ext, &python.image.picture.data);
             let rid = drels.add("image", &format!("../media/{file}"));
-            objs.push(Obj::PythonCell(*at, image, rid));
+            objs.push(Obj::PythonCell(python, rid));
         }
         out.part(&format!("xl/drawings/drawing{dn}.xml"), Some(CT_DRAWING), crate::drawing::write_drawing(sheet, &wb.theme, &objs).into_bytes());
         if !drels.is_empty() {
@@ -773,13 +773,15 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
     // the cell also holds the rich value plain cell pictures have, and without room for one it holds
     // what a Python Object does.
     let image = py.and_then(gridcraft_model::PyCode::image).filter(|image| out.take_python_image_room(image.picture.data.len()));
-    if let Some(image) = image {
-        out.python_images.push((c, image.clone()));
-    }
     // The rich value holds the picture itself, not a copy fitted to the cell: a reader takes the
     // companion, with the density only it holds, by its having the same bytes.
     let in_cell = image.filter(|_| py.is_some_and(|p| !p.shows_object())).map(|i| &i.picture);
     let rich_value = in_cell.and_then(|p| out.cell_pictures.python_index(p));
+    if let Some(image) = image {
+        // An Excel Value with no room for a rich value: its text stands in for the picture, and the
+        // companion says so, since that text could also be a result of its own.
+        out.python_images.push(crate::write::PythonImage { at: c, image: image.clone(), stands_in: in_cell.is_some() && rich_value.is_none() });
+    }
     let value: Value = match (ov, extra) {
         (Some(t), _) => Value::text(t.as_str()),
         (None, Some(v)) => v.clone(),

@@ -28,7 +28,7 @@ pub struct PyTable {
 impl PyTable {
     /// The cell at `row`, `col`.
     pub fn cell(&self, row: usize, col: usize) -> Option<&Value> {
-        if col >= self.cols {
+        if row >= self.rows || col >= self.cols {
             return None;
         }
         self.data.get(row.checked_mul(self.cols)?.checked_add(col)?)

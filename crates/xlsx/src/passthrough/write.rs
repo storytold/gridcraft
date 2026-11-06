@@ -334,12 +334,26 @@ pub fn workbook_elements(wb: &Workbook, slot: &str) -> String {
     p.elements.iter().filter(|e| e.slot == slot).map(|e| e.xml.as_str()).collect()
 }
 
+/// Each relationship once. One to an outside address and one to a part of the same name are two.
+fn distinct_rels(rels: Vec<(String, String, bool)>) -> Vec<(String, String, bool)> {
+    let mut seen = HashSet::new();
+    rels.into_iter().filter(|rel| seen.insert(rel.clone())).collect()
+}
+
 /// Adds the kept package-root relationships (custom properties…) to `_rels/.rels`.
 pub fn write_package_rels(root: &mut Rels, out: &mut Out) {
-    let mut seen = HashSet::new();
-    for (ty, target, external) in std::mem::take(&mut out.kept.root) {
-        if seen.insert((ty.clone(), target.clone())) {
-            root.add_raw(&ty, &target, external);
-        }
+    for (ty, target, external) in distinct_rels(std::mem::take(&mut out.kept.root)) {
+        root.add_raw(&ty, &target, external);
+    }
+}
+
+#[cfg(test)]
+mod distinct_rels_tests {
+    use super::distinct_rels;
+
+    #[test]
+    fn a_target_inside_and_outside_the_file_are_two_relationships() {
+        let rel = |external| ("type".to_string(), "docProps/custom.xml".to_string(), external);
+        assert_eq!(distinct_rels(vec![rel(false), rel(true), rel(false)]), vec![rel(false), rel(true)]);
     }
 }
