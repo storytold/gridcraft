@@ -288,3 +288,23 @@ fn typed_multibyte_formula_keeps_its_explicit_namespace() {
     let xml = saved_xml(&mut s);
     assert!(xml.contains("_xlfn.SYNTHETICUNICODE"));
 }
+
+/// Sparse block paste clears held destinations and retains namespaces through arithmetic and save.
+#[test]
+fn sparse_paste_keeps_imported_namespaces_and_clears_blank_source_destinations() {
+    let mut s = session();
+    s.execute("cell.set", json!({"cell":"D500","input":"77"})).unwrap();
+    s.execute("edit.copy", json!({"range":"B1:B1000"})).unwrap();
+    s.execute("edit.paste", json!({"at":"D1"})).unwrap();
+    let xml = saved_xml(&mut s);
+    assert!(xml.contains("_xlfn.SYNTHETICFUTURE(C1)"), "{xml}");
+    assert!(!xml.contains("<v>77</v>"), "Blank source must clear the held destination: {xml}");
+    s.execute("edit.copy", json!({"range":"A1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"at":"D1","operation":"multiply"})).unwrap();
+    let saved = s.execute("file.saveBytes", json!({"format":"xlsx"})).unwrap();
+    let mut reopened = Session::new();
+    reopened.execute("file.open", json!({"name":"synthetic-sparse-prefixes.xlsx","base64":saved["base64"]})).unwrap();
+    let xml = saved_xml(&mut reopened);
+    assert!(xml.contains("_xlfn.SYNTHETICFUTURE(C1)"), "{xml}");
+    assert_eq!(xml.matches("_xlfn.SYNTHETICFUTURE(").count(), 2);
+}
