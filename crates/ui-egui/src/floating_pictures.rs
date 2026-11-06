@@ -29,6 +29,9 @@ const MAX_CACHE_ITEMS: usize = 4096;
 struct Key {
     doc: u64,
     id: u32,
+    /// Where its bytes are: a linked picture gets new ones when its cell's result changes, which can
+    /// be the same length. A workbook's copies for undo share them, so this stays put otherwise.
+    at: usize,
     len: usize,
 }
 
@@ -122,6 +125,17 @@ fn texture_side(want: u32, gpu_max: usize) -> u32 {
 /// Decodes a picture to fit a `side` × `side` square, and says whether that is the whole picture
 /// (it was no larger, or `side` is as large as a texture may be).
 fn decode(data: &[u8], side: u32) -> Option<(egui::ColorImage, bool)> {
+    let (mut picture, w, h) = decode_whole(data)?;
+    let complete = w.max(h) <= side || side >= MAX_TEXTURE_SIDE;
+    if w.max(h) > side {
+        picture = picture.thumbnail(side, side);
+    }
+    let rgba = picture.into_rgba8();
+    Some((egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw()), complete))
+}
+
+/// The whole picture and its size, unless it is too large to decode: see the limits above.
+fn decode_whole(data: &[u8]) -> Option<(image::DynamicImage, u32, u32)> {
     let format = image::guess_format(data).ok()?;
     let (w, h) = image::ImageReader::with_format(Cursor::new(data), format).into_dimensions().ok()?;
     if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE || u64::from(w) * u64::from(h) > MAX_PIXELS {
@@ -133,13 +147,12 @@ fn decode(data: &[u8], side: u32) -> Option<(egui::ColorImage, bool)> {
     limits.max_image_height = Some(MAX_SIDE);
     limits.max_alloc = Some(MAX_DECODE_BYTES);
     reader.limits(limits);
-    let mut picture = reader.decode().ok()?;
-    let complete = w.max(h) <= side || side >= MAX_TEXTURE_SIDE;
-    if w.max(h) > side {
-        picture = picture.thumbnail(side, side);
-    }
-    let rgba = picture.into_rgba8();
-    Some((egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw()), complete))
+    Some((reader.decode().ok()?, w, h))
+}
+
+/// All of a floating picture's pixels, for the system clipboard.
+pub(crate) fn rgba(data: &[u8]) -> Option<image::RgbaImage> {
+    Some(decode_whole(data)?.0.into_rgba8())
 }
 
 /// Returns the context-local shared cache of floating-picture textures.
@@ -159,7 +172,7 @@ pub(crate) fn forget_closed(ctx: &egui::Context, open: &[u64]) {
 pub(crate) fn texture(ctx: &egui::Context, doc: u64, image: &Image, rect: egui::Rect) -> Option<TextureHandle> {
     let px = (rect.width().max(rect.height()) * ctx.pixels_per_point()).ceil();
     let want = if px.is_finite() && px > 0.0 { px.min(u32::MAX as f32) as u32 } else { 1 };
-    let key = Key { doc, id: image.id, len: image.data.len() };
+    let key = Key { doc, id: image.id, at: std::sync::Arc::as_ptr(&image.data) as usize, len: image.data.len() };
     cache(ctx).lock().unwrap_or_else(std::sync::PoisonError::into_inner).texture(ctx, key, &image.data, want)
 }
 
@@ -175,13 +188,23 @@ mod tests {
     }
 
     fn key(doc: u64, id: u32, data: &[u8]) -> Key {
-        Key { doc, id, len: data.len() }
+        Key { doc, id, at: 0, len: data.len() }
     }
 
     /// Runs one frame, so the frame number moves on as it does when the app paints.
     fn frame(ctx: &egui::Context) {
         let mut out = ctx.run_ui(Default::default(), |_| {});
         out.textures_delta.clear(); // nothing consumes the uploads in a headless test
+    }
+
+    #[test]
+    fn the_clipboard_gets_all_of_a_pictures_pixels_within_the_same_limits() {
+        // Larger than a picture in a cell may be, and smaller than a floating one may.
+        let large = rgba(&png(5000, 4000, [10, 120, 200, 255])).unwrap();
+        assert_eq!(large.dimensions(), (5000, 4000));
+        assert_eq!(rgba(&png(40, 20, [1, 2, 3, 128])).unwrap().get_pixel(0, 0).0, [1, 2, 3, 128]);
+        assert!(rgba(&png(MAX_SIDE + 1, 1, [0, 0, 0, 255])).is_none());
+        assert!(rgba(b"not a picture").is_none());
     }
 
     #[test]

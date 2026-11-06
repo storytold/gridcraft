@@ -90,6 +90,18 @@ fn dimensions(picture: &CellPicture) -> Option<(image::ImageFormat, (u32, u32))>
     Some((format, dimensions))
 }
 
+/// The picture's pixels, within the same limits as for drawing it.
+pub(crate) fn rgba(picture: &CellPicture) -> Option<image::RgbaImage> {
+    let (format, _) = dimensions(picture)?;
+    let mut reader = image::ImageReader::with_format(Cursor::new(&picture.data), format);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(8192);
+    limits.max_image_height = Some(8192);
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    reader.limits(limits);
+    Some(reader.decode().ok()?.into_rgba8())
+}
+
 #[cfg(test)]
 fn decode(picture: &CellPicture) -> Option<egui::ColorImage> {
     let (format, _) = dimensions(picture)?;
