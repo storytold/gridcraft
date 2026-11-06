@@ -58,6 +58,7 @@ pub(crate) struct HtmlStyle {
 }
 
 impl HtmlStyle {
+    /// Whether the cell carries no formatting at all.
     pub fn is_empty(&self) -> bool {
         *self == HtmlStyle::default()
     }
@@ -292,6 +293,7 @@ pub(crate) fn r1c1_to_a1(formula: &str, at: CellRef) -> Option<String> {
     Some(out)
 }
 
+/// Whether `c` can be part of a function or name in a formula (a word to copy, not to convert).
 fn is_name_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_' || c == '.'
 }
