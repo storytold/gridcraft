@@ -71,7 +71,7 @@ pub struct PyEnvironmentXml {
     /// `environmentDefinition` had no `initialization`, which a save doesn't add while there is no
     /// code.
     pub no_initialization: bool,
-    /// The file had an `environmentDefinition`, so a save has one too, whatever it held.
+    /// The file had an `environmentDefinition` with no readable GUID, which a save has too.
     pub definition: bool,
     /// Attributes of `initialization` besides `userModified`.
     pub initialization_attrs: String,
