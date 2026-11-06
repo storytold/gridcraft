@@ -54,6 +54,7 @@ fn subtotal_puts_summary_rows_below_their_detail() {
 }
 
 #[test]
+/// Check inherited total-row formats without making numeric amount cells bold.
 fn subtotal_rows_take_the_formats_above_and_bold_only_the_label() {
     // Excel 365 (Windows), @Harrison-Booth: total rows keep the fill, number format and borders of
     // the row above; only the label cell ("East Total", "Grand Total") is bold.

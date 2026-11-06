@@ -1069,6 +1069,7 @@ fn insert_delete_cells_adjust() {
 }
 
 #[test]
+/// Check default insertion formatting for rows, columns, partial shifts and history.
 fn inserted_rows_columns_and_cells_take_the_format_of_the_cells_before() {
     // Excel's "Format Same As Above" (Range.Insert's default CopyOrigin, xlFormatFromLeftOrAbove):
     // inserted cells take the formats of the cells above, or to the left, and nothing else.
@@ -1138,6 +1139,7 @@ fn inserted_rows_columns_and_cells_take_the_format_of_the_cells_before() {
     assert_eq!(sh.cells.iter_range(gridcraft_core::RangeRef::rows(0, 0)).count(), 0);
     assert_eq!(sh.cells.iter_range(gridcraft_core::RangeRef::cols(0, 0)).count(), 0);
 }
+/// Build a filled, bordered list for insertion edge tests.
 
 fn boxed_insert_session() -> Session {
     let mut s = s();
@@ -1148,6 +1150,7 @@ fn boxed_insert_session() -> Session {
     s.execute("home.italic", json!({"range": "A1:C3", "on": true})).unwrap();
     s
 }
+/// Resolve a cell's complete effective style for border assertions.
 
 fn cell_style(s: &Session, a: &str) -> gridcraft_model::Style {
     let wb = &s.doc().unwrap().wb;
@@ -1155,6 +1158,7 @@ fn cell_style(s: &Session, a: &str) -> gridcraft_model::Style {
 }
 
 #[test]
+/// Check insertion inside a bordered list retains all shared and continuing borders.
 fn inserting_in_a_box_keeps_all_four_borders() {
     // Excel 365 (Windows), @Harrison-Booth: middle row/column inserts keep all edges.
     for (command, params, source, target) in [
@@ -1172,6 +1176,7 @@ fn inserting_in_a_box_keeps_all_four_borders() {
 }
 
 #[test]
+/// Check insertion below a list retains its shared top edge without extending outer borders.
 fn inserting_below_a_box_keeps_only_its_shared_top_border() {
     for (command, params) in [("home.insertRows", json!({"rows": "4:4"})), ("home.insertCells", json!({"range": "B4", "shift": "down"}))] {
         let mut s = boxed_insert_session();
@@ -1184,6 +1189,7 @@ fn inserting_below_a_box_keeps_only_its_shared_top_border() {
 }
 
 #[test]
+/// Check insertion right of a list retains its shared left edge without extending outer borders.
 fn inserting_right_of_a_box_keeps_only_its_shared_left_border() {
     for (command, params) in [("home.insertColumns", json!({"cols": "D:D"})), ("home.insertCells", json!({"range": "D2", "shift": "right"}))] {
         let mut s = boxed_insert_session();
@@ -1196,6 +1202,7 @@ fn inserting_right_of_a_box_keeps_only_its_shared_left_border() {
 }
 
 #[test]
+/// Check a thick outer right border does not continue below the list.
 fn inserting_below_a_box_does_not_copy_its_thick_right_border() {
     let mut s = boxed_insert_session();
     let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
@@ -1210,6 +1217,7 @@ fn inserting_below_a_box_does_not_copy_its_thick_right_border() {
 }
 
 #[test]
+/// Check model-derived border continuity separately on each opposite side.
 fn inserted_border_model_uses_shared_edges_and_checks_each_far_side() {
     // Model-only: mixed weights/colors, missing individual far edges, multiple inserted lines.
     // The far edge gates the source's edge; it does not supply its own weight/color.
@@ -1257,6 +1265,7 @@ fn inserted_border_model_uses_shared_edges_and_checks_each_far_side() {
 }
 
 #[test]
+/// Check inherited row and column borders follow the same insertion edge rules.
 fn insert_border_model_also_filters_inherited_line_formats() {
     for rows in [true, false] {
         let mut s = boxed_insert_session();
@@ -1280,6 +1289,7 @@ fn insert_border_model_also_filters_inherited_line_formats() {
 }
 
 #[test]
+/// Check the stored-style cap prevents materializing an oversized insertion rectangle.
 fn inserting_many_rows_under_a_wide_formatted_row_stays_bounded() {
     // A row formatted cell by cell across the sheet (not as a whole row). Ten new rows take its
     // formats; a thousand would store 16 million cells, so they are left unformatted.
@@ -1300,6 +1310,7 @@ fn inserting_many_rows_under_a_wide_formatted_row_stays_bounded() {
 }
 
 #[test]
+/// Check already inherited formats consume no stored-cell budget.
 fn insert_format_cap_counts_only_styles_not_already_inherited() {
     for columns in [false, true] {
         let mut s = s();
@@ -1327,6 +1338,7 @@ fn insert_format_cap_counts_only_styles_not_already_inherited() {
 }
 
 #[test]
+/// Check a partial insertion reports when its format copies exceed the storage cap.
 fn inserted_cells_report_when_formatting_exceeds_the_storage_cap() {
     for right in [false, true] {
         let mut s = s();

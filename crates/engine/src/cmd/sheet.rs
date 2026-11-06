@@ -15,6 +15,7 @@ use super::{
 mod tabs;
 
 use tabs::{activate, delete_sheet, hide_sheet, insert_sheet, move_sheet, rename_sheet, step_sheet, tab_color, unhide_sheet};
+/// Register structural and sheet commands, including observable insertion-format budgets.
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -23,7 +24,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Insert Sheet Rows",
             ["Home", "Cells", "Insert"],
             Some("Ctrl+Shift+="),
-            "{rows?: \"3:5\", count?}: the new rows take the formats of the row above (Format Same As Above); returns formattingSkipped: true and formattingCellLimit if more than 1,000,000 cells would need stored styles",
+            "{rows?: \"3:5\", count?}: the new rows take the formats of the row above (Format Same As Above); returns formattingSkipped: true with formattingCellLimit (1,000,000) and formattingComparisonLimit (4,000,000) when either budget is exceeded",
             has_doc,
             |s, p| insert_lines(s, p, Axis::Rows)
         ),
@@ -32,7 +33,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Insert Sheet Columns",
             ["Home", "Cells", "Insert"],
             None,
-            "{cols?: \"B:C\"}: the new columns take the formats of the column to the left; returns formattingSkipped: true and formattingCellLimit if more than 1,000,000 cells would need stored styles",
+            "{cols?: \"B:C\"}: the new columns take the formats of the column to the left; returns formattingSkipped: true with formattingCellLimit (1,000,000) and formattingComparisonLimit (4,000,000) when either budget is exceeded",
             has_doc,
             |s, p| insert_lines(s, p, Axis::Cols)
         ),
@@ -52,7 +53,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Insert Cells…",
             ["Home", "Cells", "Insert"],
             None,
-            "{range?, shift: right|down|row|column}: the new cells take the formats of the cells above (down) or to the left (right); returns formattingSkipped: true and formattingCellLimit if more than 1,000,000 cells would need stored styles",
+            "{range?, shift: right|down|row|column}: the new cells take the formats of the cells above (down) or to the left (right); returns formattingSkipped: true with formattingCellLimit (1,000,000) and formattingComparisonLimit (4,000,000) when either budget is exceeded",
             has_doc,
             insert_cells
         ),
@@ -275,6 +276,8 @@ fn cancel_copy_mode(s: &mut Session) {
 /// formatted cell by cell across the sheet), the inserted cells are left unformatted rather than
 /// storing millions of them; whole rows and columns still take the line's own format.
 const MAX_FORMAT_SAME_AS_ABOVE: u64 = 1_000_000;
+/// Maximum preparatory format comparisons for one insertion or copied-style transfer.
+const MAX_FORMAT_COMPARISONS: u64 = 4_000_000;
 
 /// Gives the cells inserted at lines `at..at + count` the formats of the cells in line `at - 1`,
 /// over `k0..=k1` across (Excel's "Format Same As Above", `Range.Insert`'s default `CopyOrigin`).
@@ -319,6 +322,9 @@ fn format_same_as_before(wb: &mut Workbook, sheet: usize, axis: Axis, at: u32, c
         v.dedup();
         v
     };
+    // Sparse line formats can span the whole sheet. Derive each distinct border
+    // transition once instead of cloning and interning a style for every row.
+    let mut derived = std::collections::HashMap::new();
     let styled: Vec<_> = across
         .into_iter()
         .map(|k| {
@@ -329,7 +335,7 @@ fn format_same_as_before(wb: &mut Workbook, sheet: usize, axis: Axis, at: u32, c
             } else {
                 gridcraft_model::StyleId::DEFAULT
             };
-            (k, inserted_style(styles, source, far, axis))
+            (k, *derived.entry((source, far)).or_insert_with(|| inserted_style(styles, source, far, axis)))
         })
         .collect();
     // New cells are empty after the shift. Group destination lines by their inherited style,
@@ -347,6 +353,11 @@ fn format_same_as_before(wb: &mut Workbook, sheet: usize, axis: Axis, at: u32, c
     }
     if unstyled_lines > 0 {
         groups.insert(None, unstyled_lines);
+    }
+    // Bound preparatory comparisons independently of the number of stored results.
+    // Otherwise many line-style groups can repeatedly scan a mostly inherited column.
+    if (styled.len() as u64).saturating_mul(groups.len() as u64 + 1) > MAX_FORMAT_COMPARISONS {
+        return true;
     }
     let mut work = std::collections::BTreeMap::new();
     let mut copies = 0_u64;
@@ -435,6 +446,7 @@ fn check_push_off_sheet(s: &Session, sheet: usize, axis: Axis, at: u32, count: u
     }
     Ok(())
 }
+/// Insert whole rows or columns after protection and push-off checks; report skipped format copying.
 
 fn insert_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
     let (at, count) = lines(s, p, axis)?;
@@ -463,7 +475,11 @@ fn insert_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
         let formatting_skipped = format_same_as_before(&mut cx.wb, sheet, axis, at, count, (0, across - 1), true);
         rewrite(cx, &name, &Edit::Insert { axis, at, count })?;
         cx.structural = true;
-        Ok(if formatting_skipped { json!({"formattingSkipped": true, "formattingCellLimit": MAX_FORMAT_SAME_AS_ABOVE}) } else { Json::Null })
+        Ok(if formatting_skipped {
+            json!({"formattingSkipped": true, "formattingCellLimit": MAX_FORMAT_SAME_AS_ABOVE, "formattingComparisonLimit": MAX_FORMAT_COMPARISONS})
+        } else {
+            Json::Null
+        })
     })?;
     cancel_copy_mode(s);
     Ok(out)
@@ -635,6 +651,7 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
     cancel_copy_mode(s);
     Ok(out)
 }
+/// Shift cells within the target block and copy the preceding effective formats within the budgets.
 
 fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
     let shift = str_param(p, "shift").unwrap_or("down");
@@ -676,7 +693,11 @@ fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
         let name = cx.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default();
         rewrite(cx, &name, &e)?;
         cx.structural = true;
-        Ok(if formatting_skipped { json!({"formattingSkipped": true, "formattingCellLimit": MAX_FORMAT_SAME_AS_ABOVE}) } else { Json::Null })
+        Ok(if formatting_skipped {
+            json!({"formattingSkipped": true, "formattingCellLimit": MAX_FORMAT_SAME_AS_ABOVE, "formattingComparisonLimit": MAX_FORMAT_COMPARISONS})
+        } else {
+            Json::Null
+        })
     })?;
     cancel_copy_mode(s);
     Ok(out)
@@ -774,6 +795,7 @@ fn insert_copied_cells(s: &mut Session, p: &Json) -> Result<Json> {
         }
     }
 }
+/// Insert space, paste the captured clipboard and finish a cut move inside the caller's undo transaction.
 
 fn insert_copied_steps(s: &mut Session, clip: &crate::Clipboard, sheet: usize, at: CellRef, shift: &str, cut: bool) -> Result<(RangeRef, Json)> {
     let sel = clip.selected;
@@ -882,7 +904,7 @@ fn copy_inserted_formats(s: &mut Session, clip: &crate::Clipboard, sheet: usize,
         let mut visits = 0u64;
         let mut add = |r, c| -> Result<()> {
             visits += 1;
-            if visits > 4_000_000 {
+            if visits > MAX_FORMAT_COMPARISONS {
                 return Err(EngineError::Other("Too many cell formats to compare at once (limit: 4,000,000).".into()));
             }
             let from = CellRef::new(src.start.row + r, src.start.col + c);

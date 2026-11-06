@@ -3,16 +3,19 @@ use gridcraft_core::{CellRef, Value};
 use gridcraft_engine::Session;
 use gridcraft_model::StyleId;
 use serde_json::json;
+/// Create an empty workbook for insertion regression tests.
 
 fn book() -> Session {
     let mut s = Session::new();
     s.new_workbook();
     s
 }
+/// Read the effective style, including inherited row and column formatting.
 
 fn style(s: &Session, address: &str) -> StyleId {
     s.doc().unwrap().wb.active().unwrap().style_id(CellRef::parse(address).unwrap())
 }
+/// Check that an empty explicit default override survives both XLSX and JSON serialization.
 
 fn check_round_trips(s: &mut Session, address: &str) {
     for format in ["xlsx", "json"] {
@@ -25,6 +28,7 @@ fn check_round_trips(s: &mut Session, address: &str) {
 }
 
 #[test]
+/// Check partial shifts, history and serialization of explicit default-format overrides.
 fn partial_insert_preserves_explicit_default_formats() {
     for (formatted_lines, at, shift, moved) in [("3:4", "B3", "down", "B4"), ("C:D", "C2", "right", "D2")] {
         let mut s = book();
@@ -47,6 +51,7 @@ fn partial_insert_preserves_explicit_default_formats() {
 }
 
 #[test]
+/// Check full-axis insertion when a source cell overrides its inherited format with the default.
 fn whole_line_insert_preserves_a_default_override_in_the_source_line() {
     for (line, command, params, at, ordinary) in
         [("2:2", "home.insertRows", json!({"rows": "3:3"}), "B3", "A3"), ("B:B", "home.insertColumns", json!({"cols": "C:C"}), "C2", "C1")]
@@ -64,6 +69,7 @@ fn whole_line_insert_preserves_a_default_override_in_the_source_line() {
 }
 
 #[test]
+/// Check absent source cells reset inherited destination formats without densifying ordinary defaults.
 fn implicit_default_source_clears_a_formatted_destination_line() {
     for (line, at, shift) in [("3:3", "B3", "down"), ("C:C", "C2", "right")] {
         let mut s = book();
@@ -86,6 +92,7 @@ fn implicit_default_source_clears_a_formatted_destination_line() {
 }
 
 #[test]
+/// Check cross-sheet block and whole-axis formats, history, persistence and independent destination sizes.
 fn copied_cells_carry_inherited_formats_between_sheets() {
     for (source, at, line, formatted, outside) in
         [("B2:C3", "E5", "2:2", "E5", "D5"), ("2:2", "A5", "2:2", "XFD5", "A4"), ("B:B", "E1", "B:B", "E1000000", "D1")]
@@ -128,6 +135,7 @@ fn copied_cells_carry_inherited_formats_between_sheets() {
 }
 
 #[test]
+/// Check oversized inherited-format transfers leave the workbook, undo stack and clipboard intact.
 fn copied_format_limit_rolls_back_the_whole_insertion() {
     let mut s = book();
     s.execute("home.bold", json!({"range": "2:70"})).unwrap();
@@ -139,4 +147,35 @@ fn copied_format_limit_rolls_back_the_whole_insertion() {
     assert_eq!(s.doc().unwrap().wb, before, "an oversized formatting transfer must leave no partial insertion");
     assert_eq!(s.doc().unwrap().undo.len(), depth);
     assert!(s.clipboard.is_some(), "a refused insertion must retain its source copy");
+}
+
+#[test]
+/// Check the comparison budget stops repeated scans even when inherited styles need no stored overrides.
+fn insertion_bounds_preparation_even_when_no_new_styles_are_needed() {
+    let mut s = book();
+    let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+    let row_style = wb.styles.intern(gridcraft_model::Style { num_fmt: gridcraft_model::NumFmt::new("0.00"), ..Default::default() });
+    let columns: Vec<_> = (1..=2001)
+        .map(|i| {
+            wb.styles.intern(gridcraft_model::Style {
+                num_fmt: gridcraft_model::NumFmt::new(&format!("0.{}", "0".repeat(i as usize))),
+                ..Default::default()
+            })
+        })
+        .collect();
+    let sh = wb.sheet_mut(0).unwrap();
+    for row in 0..2000 {
+        sh.rows.entry(row).or_default().style = Some(row_style);
+    }
+    for (col, style) in columns.into_iter().enumerate() {
+        sh.cols.entry(col as u32 + 1).or_default().style = Some(style);
+    }
+    // All cells already inherit the common row style, so the stored-cell budget alone
+    // would never stop scanning 2,001 distinct column groups across 2,000 rows.
+    let range = gridcraft_core::RangeRef::new(CellRef::new(0, 1), CellRef::new(1999, 2001));
+    let out = s.execute("home.insertCells", json!({"range": range.a1(), "shift": "right"})).unwrap();
+    assert_eq!(out["formattingSkipped"], true);
+    assert_eq!(out["formattingComparisonLimit"], 4_000_000);
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().cells.len(), 0);
+    assert_eq!(style(&s, "B1"), row_style);
 }
