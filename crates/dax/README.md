@@ -330,7 +330,7 @@ returns, what its arguments mean and which edge case it handles, in the project'
 | `COUNTROWS` | 0–1 | no | — | BLANK | yes\* | \*The zero-argument form is rejected by Excel's embedded engine; pass a table there. |
 | `COUNTX` | 2 | yes | — | BLANK | yes | Row context; booleans are not counted. |
 | `DISTINCTCOUNT` | 1 | no | — | BLANK | yes | BLANK is one distinct value; totals are non-additive. |
-| `DISTINCTCOUNTNOBLANK` | 1 | no | `DISTINCTCOUNT` | unspecified | no | Excludes BLANK; rejected by Excel's embedded engine. |
+| `DISTINCTCOUNTNOBLANK` | 1 | no | — | unspecified | no | Excludes BLANK, so it is not sugar for `DISTINCTCOUNT` (which counts it); rejected by Excel's embedded engine. |
 | `MAX` | 1–2 | no | `MAXX`\* | unspecified | yes | \*Only the one-argument column overload is sugar. Two scalars treat BLANK as significant per dax.guide, as 0 per Microsoft Learn. |
 | `MAXA` | 1 | no | — | unspecified | yes | TRUE/FALSE become 1/0; empty result conflicts across sources. |
 | `MAXX` | 2–3 | yes | — | unspecified | yes | Optional third `Variant` compares mixed types per `ORDER BY DESC`. |
