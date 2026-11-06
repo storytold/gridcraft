@@ -160,6 +160,10 @@ pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
         let x = geo.x(sh, *before);
         p.line_segment([pos2(x, geo.rect.top()), pos2(x, geo.rect.bottom())], Stroke::new(3.0, t.accent));
     }
+    if let crate::grid::Drag::MoveRows { before: Some(before), .. } = &app.grid.drag {
+        let y = geo.y(sh, *before);
+        p.line_segment([pos2(geo.rect.left(), y), pos2(geo.rect.right(), y)], Stroke::new(3.0, t.accent));
+    }
     // Marching ants around the copied range.
     if let Some(clip) = &app.session.clipboard
         && app.session.active().is_some_and(|d| d.uid == clip.doc_uid && d.wb.active_sheet() == clip.sheet)

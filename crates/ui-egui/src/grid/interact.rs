@@ -370,6 +370,16 @@ fn handle_row_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, p: 
             point_header_first_move(app, input);
             return;
         }
+        if input.response.drag_started()
+            && !mods.any()
+            && app.session.format_painter.is_none()
+            && sel.ranges.len() == 1
+            && sel.current().is_full_rows()
+            && sel.current().contains(CellRef::new(r, 0))
+        {
+            app.grid.drag = Drag::MoveRows { source: sel.current(), before: None };
+            return;
+        }
         let range = if mods.shift { RangeRef::rows(sel.anchor.row.min(r), sel.anchor.row.max(r)) } else { RangeRef::rows(r, r) };
         note_selecting_press(app);
         select_ranges(app, range, mods.command, CellRef::new(r, geo.col_at(sh, geo.cells.left() + 1.0)));
@@ -682,6 +692,11 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 app.grid.drag = Drag::MoveCols { source, before };
                 scroll_by(app, vec2(auto.x, 0.0));
             }
+            Drag::MoveRows { source, .. } => {
+                let before = row_move_boundary(geo, sh, p, source);
+                app.grid.drag = Drag::MoveRows { source, before };
+                scroll_by(app, vec2(0.0, auto.y));
+            }
             Drag::ResizeCol { col, start, orig } => {
                 let w = (orig + (p.x - start) / geo.z).max(0.0);
                 app.toast =
@@ -732,6 +747,14 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
             Drag::None => {}
         }
     }
+}
+
+/// A drop inserts at the nearest visible row boundary; the source and its end are no-ops.
+fn row_move_boundary(geo: &Geo, sh: &Sheet, p: Pos2, source: RangeRef) -> Option<u32> {
+    let row = geo.row_at(sh, p.y.clamp(geo.cells.top() + 1.0, geo.cells.bottom() - 1.0));
+    let midpoint = geo.y(sh, row) + sh.row_height(row) * geo.z * 0.5;
+    let before = row.saturating_add(u32::from(p.y >= midpoint)).min(MAX_ROWS - 1);
+    (!(source.start.row..=source.end.row.saturating_add(1)).contains(&before)).then_some(before)
 }
 
 fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
@@ -792,6 +815,15 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 // Dropping on cells that hold data asks first, as in Excel.
                 if to != src.start {
                     crate::macro_ui::call(app, "GridCraft", "range.move", json!({"range": src.a1(), "to": to.a1()}));
+                }
+            }
+            Drag::MoveRows { source, .. } => {
+                // Use the release position, which can arrive without a final move frame.
+                if !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                    && let Some(p) = pos.filter(|_| resp.drag_stopped())
+                    && let Some(before) = row_move_boundary(geo, sh, p, source)
+                {
+                    app.run_or_alert("sheet.moveRows", json!({"rows": source.a1(), "before": before}));
                 }
             }
             Drag::MoveCols { source, before: Some(before) } => {

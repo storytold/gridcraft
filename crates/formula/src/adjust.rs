@@ -83,6 +83,8 @@ pub enum Edit {
     Insert { axis: Axis, at: u32, count: u32 },
     /// Delete `count` rows/cols starting at `at`.
     Delete { axis: Axis, at: u32, count: u32 },
+    /// Reorder whole lines as one reference edit. Ranges enclosing the affected interval stay intact.
+    Reorder { axis: Axis, from: u32, count: u32, before: u32 },
     /// Cut-paste of a block: references into `from` now point into the block at `to` (top-left).
     Move { from: RangeRef, to_row: u32, to_col: u32 },
     /// Insert Cells shifting down (`Rows`) or right (`Cols`): the cells of `range` and those
@@ -170,6 +172,37 @@ fn map_span(lo: u32, hi: u32, at: u32, count: u32, insert: bool, max: u32) -> Op
 
 fn adjust_ref(r: &Reference, edit: &Edit) -> Option<Reference> {
     match edit {
+        Edit::Reorder { axis, from, count, before } => {
+            let limit = if *axis == Axis::Rows { MAX_ROWS } else { MAX_COLS };
+            let end = from.checked_add(*count).filter(|end| *end <= limit)?;
+            if *before >= limit || before.checked_add(*count).is_none_or(|end| end > limit) {
+                return None;
+            }
+            if *count == 0 || (*from..=end).contains(before) {
+                return Some(r.clone());
+            }
+            let span = r.range();
+            let (lo, hi) = if *axis == Axis::Rows { (span.start.row, span.end.row) } else { (span.start.col, span.end.col) };
+            // Reordering inside a referenced interval changes no member of that interval.
+            // Applying delete separately would wrongly shrink a range ending at the drop boundary.
+            if lo <= (*from).min(*before) && hi >= end.max(*before) - 1 {
+                return Some(r.clone());
+            }
+            // Preserve the existing cut/insert semantics for partially overlapping ranges.
+            let moved_from = if before <= from { from.checked_add(*count)? } else { *from };
+            let source_end = moved_from.checked_add(*count)?.checked_sub(1)?;
+            let source = if *axis == Axis::Rows { RangeRef::rows(moved_from, source_end) } else { RangeRef::cols(moved_from, source_end) };
+            let inserted = adjust_ref(r, &Edit::Insert { axis: *axis, at: *before, count: *count })?;
+            let moved = adjust_ref(
+                &inserted,
+                &Edit::Move {
+                    from: source,
+                    to_row: if *axis == Axis::Rows { *before } else { 0 },
+                    to_col: if *axis == Axis::Cols { *before } else { 0 },
+                },
+            )?;
+            adjust_ref(&moved, &Edit::Delete { axis: *axis, at: moved_from, count: *count })
+        }
         Edit::Insert { axis, at, count } | Edit::Delete { axis, at, count } => {
             let insert = matches!(edit, Edit::Insert { .. });
             let kind = match (&r.kind, axis) {
