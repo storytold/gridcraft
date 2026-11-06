@@ -41,7 +41,24 @@ pub fn enforcement(canary: &Path, exe: &Path) -> Vec<Check> {
         Check { name: "write in the temporary directory", outcome: write_probe(&std::env::temp_dir()) },
         Check { name: "TCP connection", outcome: denied(tcp_probe()) },
         Check { name: "start a process", outcome: spawn_probe(exe) },
+        Check { name: "signal another process", outcome: signal_probe() },
     ]
+}
+
+/// Signal 0 to the launcher's parent, which delivers nothing: it only asks whether a signal would be
+/// allowed. The parent has this user's account, so outside the sandbox it would be.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn signal_probe() -> Outcome {
+    match i32::try_from(std::os::unix::process::parent_id()) {
+        Ok(parent) => denied(nix::sys::signal::kill(nix::unistd::Pid::from_raw(parent), None).map_err(std::io::Error::from)),
+        Err(e) => Outcome::Allowed(format!("no process to try it on: {e}")),
+    }
+}
+
+/// Other systems have no confinement, so no launch gets this far.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn signal_probe() -> Outcome {
+    Outcome::Allowed("this system has no sandbox".into())
 }
 
 /// `Denied` when `r` failed with "permission denied" (`EACCES` or `EPERM`), else what happened.
