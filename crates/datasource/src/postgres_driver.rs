@@ -10,6 +10,7 @@ use postgres::types::{FromSql, Type};
 use postgres::{Config, Row};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
+/// Runs the request on PostgreSQL, with TLS as `sslmode` asks and at most `max_rows` rows.
 pub fn run(req: &DbRequest) -> Result<DbTable, String> {
     let (connection, verify) = crate::tls::postgres_ssl_mode(&req.connection);
     let mut cfg = Config::from_str(&connection).map_err(|e| format!("Invalid PostgreSQL connection: {e}"))?;
@@ -49,6 +50,7 @@ fn get<'a, T: FromSql<'a>>(row: &'a Row, i: usize, f: impl FnOnce(T) -> DbValue)
     }
 }
 
+/// Column `i` of `row` as a database value, by its PostgreSQL type; types without a mapping are read as text.
 fn value(row: &Row, i: usize) -> DbValue {
     let Some(col) = row.columns().get(i) else { return DbValue::Null };
     let ty = col.type_();
@@ -81,10 +83,12 @@ fn value(row: &Row, i: usize) -> DbValue {
 struct Numeric(String);
 
 impl<'a> FromSql<'a> for Numeric {
+    /// Decodes the binary `NUMERIC` value into its exact decimal text.
     fn from_sql(_: &Type, raw: &'a [u8]) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
         numeric_text(raw).map(Numeric).ok_or_else(|| "malformed NUMERIC".into())
     }
 
+    /// Only `NUMERIC` columns are read this way.
     fn accepts(ty: &Type) -> bool {
         *ty == Type::NUMERIC
     }
@@ -144,19 +148,23 @@ fn with_causes(e: &dyn std::error::Error) -> String {
     s
 }
 
+/// A `date` as a database date.
 fn date(d: NaiveDate) -> DbValue {
     DbValue::Date(d.year(), d.month(), d.day())
 }
 
+/// A `timestamp` as a database date and time.
 fn datetime(d: NaiveDateTime) -> DbValue {
     let t = d.time();
     DbValue::DateTime(d.year(), d.month(), d.day(), t.hour(), t.minute(), seconds(t))
 }
 
+/// A `time` as a database time of day.
 fn time(t: NaiveTime) -> DbValue {
     DbValue::Time(t.hour(), t.minute(), seconds(t))
 }
 
+/// The seconds of `t` with their fraction.
 fn seconds(t: NaiveTime) -> f64 {
     f64::from(t.second()) + f64::from(t.nanosecond().min(999_999_999)) / 1e9
 }

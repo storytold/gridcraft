@@ -7,6 +7,7 @@ use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags};
 
+/// Runs the request on a SQLite file, opened read-only, waiting up to the timeout for a locked database.
 pub fn run(req: &DbRequest) -> Result<DbTable, String> {
     let path = req.connection.strip_prefix("sqlite://").or_else(|| req.connection.strip_prefix("sqlite:")).unwrap_or(&req.connection);
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
@@ -41,6 +42,7 @@ pub fn run(req: &DbRequest) -> Result<DbTable, String> {
     Ok(table)
 }
 
+/// One SQLite value as a database value; integers in a column declared `BOOL…` are booleans.
 fn value(v: ValueRef<'_>, decl: &str) -> DbValue {
     match v {
         ValueRef::Null => DbValue::Null,
@@ -69,6 +71,7 @@ fn authorize(ctx: AuthContext<'_>) -> Authorization {
 mod tests {
     use super::*;
 
+    /// A fresh database file with one table of every kind of value, in a folder of its own per test thread.
     fn db() -> (std::path::PathBuf, Connection) {
         let dir = std::env::temp_dir().join(format!("gridcraft-ds-{}-{:?}", std::process::id(), std::thread::current().id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -85,6 +88,7 @@ mod tests {
         (path, c)
     }
 
+    /// A query request on the file at `path`.
     fn req(path: &std::path::Path, q: &str, max_rows: usize) -> DbRequest {
         DbRequest {
             driver: "sqlite".into(),

@@ -21,6 +21,7 @@ fn batch_size(lens: impl IntoIterator<Item = Option<usize>>) -> usize {
     (BUFFER_BYTES / row.max(1)).clamp(1, BATCH)
 }
 
+/// Runs the request through the ODBC driver manager: the user and password are added to the connection string, catalog requests use the driver's own catalog functions.
 pub fn run(req: &DbRequest) -> Result<DbTable, String> {
     let env = odbc_api::environment().map_err(|e| format!("ODBC: {e}"))?;
     let mut conn_str = req.connection.trim().trim_end_matches(';').to_string();
@@ -100,6 +101,7 @@ fn braced(s: &str) -> String {
     format!("{{{}}}", s.replace('}', "}}"))
 }
 
+/// One ODBC value, read as text, as a database value by the column's type.
 fn value(s: &str, ty: &DataType) -> DbValue {
     let text = || DbValue::Text(s.to_string());
     match ty {

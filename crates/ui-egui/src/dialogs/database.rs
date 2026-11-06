@@ -70,6 +70,7 @@ fn refresh_command(params: &Json) -> &'static str {
     if params.get("then").and_then(Json::as_str) == Some("refreshAll") { "data.refreshAll" } else { "data.refresh" }
 }
 
+/// Text field `k` of the dialog ("" when absent).
 fn db_str(d: &Dialog, k: &str) -> String {
     d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string()
 }
@@ -231,6 +232,7 @@ fn resumed(app: &SheetApp, d: &Dialog) -> String {
     if app.db_running() { String::new() } else { db_str(d, "busy") }
 }
 
+/// Draws the From Database dialog: connection, saved connections, table and columns or SQL, and the new sheet's name.
 pub(super) fn from_database(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     let waiting = !db_str(d, "busy").is_empty();
     let resume = resumed(app, d);

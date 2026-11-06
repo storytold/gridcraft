@@ -149,6 +149,7 @@ impl SheetApp {
         }
     }
 
+    /// Shows the result of a database command that waited in the background: Refresh All's summary, or the error.
     fn after_db(&mut self, id: &str, r: Result<Json, String>) {
         match (id, r) {
             ("data.refreshAll", r) => crate::refresh_all_result(self, r),

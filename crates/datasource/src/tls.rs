@@ -57,6 +57,7 @@ pub fn client_config(verify: Verify) -> Result<ClientConfig, String> {
     Ok(builder.dangerous().with_custom_certificate_verifier(verifier).with_no_client_auth())
 }
 
+/// Trusted roots: the Mozilla set bundled with the build, plus the system's certificates.
 fn roots() -> RootCertStore {
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
@@ -72,6 +73,7 @@ fn roots() -> RootCertStore {
 struct EncryptOnly(Arc<CryptoProvider>);
 
 impl ServerCertVerifier for EncryptOnly {
+    /// Any certificate is accepted: the connection is encrypted, not authenticated.
     fn verify_server_cert(
         &self,
         _: &CertificateDer<'_>,
@@ -83,6 +85,7 @@ impl ServerCertVerifier for EncryptOnly {
         Ok(ServerCertVerified::assertion())
     }
 
+    /// Checks a TLS 1.2 handshake signature with the provider's algorithms.
     fn verify_tls12_signature(
         &self,
         message: &[u8],
@@ -92,6 +95,7 @@ impl ServerCertVerifier for EncryptOnly {
         verify_tls12_signature(message, cert, dss, &self.0.signature_verification_algorithms)
     }
 
+    /// Checks a TLS 1.3 handshake signature with the provider's algorithms.
     fn verify_tls13_signature(
         &self,
         message: &[u8],
@@ -101,6 +105,7 @@ impl ServerCertVerifier for EncryptOnly {
         verify_tls13_signature(message, cert, dss, &self.0.signature_verification_algorithms)
     }
 
+    /// The signature schemes the provider can check.
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
         self.0.signature_verification_algorithms.supported_schemes()
     }
@@ -111,6 +116,7 @@ impl ServerCertVerifier for EncryptOnly {
 struct AnyHost(Arc<WebPkiServerVerifier>);
 
 impl ServerCertVerifier for AnyHost {
+    /// Checks the chain against the trusted roots, accepting a certificate issued for another host name.
     fn verify_server_cert(
         &self,
         end_entity: &CertificateDer<'_>,
@@ -127,6 +133,7 @@ impl ServerCertVerifier for AnyHost {
         }
     }
 
+    /// Checks a TLS 1.2 handshake signature as the WebPKI verifier does.
     fn verify_tls12_signature(
         &self,
         message: &[u8],
@@ -136,6 +143,7 @@ impl ServerCertVerifier for AnyHost {
         self.0.verify_tls12_signature(message, cert, dss)
     }
 
+    /// Checks a TLS 1.3 handshake signature as the WebPKI verifier does.
     fn verify_tls13_signature(
         &self,
         message: &[u8],
@@ -145,6 +153,7 @@ impl ServerCertVerifier for AnyHost {
         self.0.verify_tls13_signature(message, cert, dss)
     }
 
+    /// The signature schemes the WebPKI verifier can check.
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
         self.0.supported_verify_schemes()
     }

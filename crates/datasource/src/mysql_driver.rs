@@ -76,6 +76,7 @@ fn tls_opts(mode: Option<SslMode>, from_url: Option<SslOpts>) -> Result<(Option<
     })
 }
 
+/// Runs the request on MySQL or MariaDB: TLS as `ssl-mode` asks, the timeout on connect, read and write, and at most `max_rows` rows.
 pub fn run(req: &DbRequest) -> Result<DbTable, String> {
     let (url, mode) = split_ssl_mode(&req.connection)?;
     let opts = Opts::from_url(&url).map_err(|e| format!("Invalid MySQL connection URL: {e}"))?;
@@ -116,6 +117,7 @@ pub fn run(req: &DbRequest) -> Result<DbTable, String> {
     collect(result, req.max_rows, stop)
 }
 
+/// Reads the first result set into a table, at most `max_rows` rows; past them, `stop` ends the query on the server.
 fn collect<P: mysql::prelude::Protocol>(
     mut result: mysql::QueryResult<'_, '_, '_, P>,
     max_rows: usize,
@@ -138,6 +140,8 @@ fn collect<P: mysql::prelude::Protocol>(
     Ok(table)
 }
 
+/// One MySQL value as a database value: unsigned integers beyond `i64` and times outside a day as
+/// text, a midnight date-time stays a date-time, bytes by the column's type (see `bytes`).
 fn value(v: Value, ty: Option<ColumnType>) -> DbValue {
     match v {
         Value::NULL => DbValue::Null,

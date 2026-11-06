@@ -18,6 +18,7 @@ const MAX_EXACT_INT: i64 = 1 << 53;
 /// Timeout of a look at tables or columns, in seconds.
 const CATALOG_TIMEOUT_SECS: u64 = 15;
 
+/// The Data › From Database commands: import, the catalog lookups behind the dialog, Refresh.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -68,6 +69,7 @@ struct Conn {
     password: Option<String>,
 }
 
+/// Reads and checks the connection parameters of `p` (driver, connection, user). A password given is kept for the session under that connection; without one, the session's is used.
 fn conn_params(s: &mut Session, id: &'static str, p: &Json) -> Result<Conn> {
     let driver = str_param(p, "driver").map(|d| d.trim().to_ascii_lowercase()).unwrap_or_default();
     if !DRIVERS.contains(&driver.as_str()) {
@@ -128,14 +130,17 @@ fn check_connection(id: &'static str, driver: &str, connection: &str) -> Result<
     Ok(())
 }
 
+/// The key under which the session keeps a connection's password.
 fn password_key(driver: &str, connection: &str, user: Option<&str>) -> String {
     format!("{driver}\n{connection}\n{}", user.unwrap_or(""))
 }
 
+/// The host's data source, or an error when this build has none (the web).
 fn source(s: &Session) -> Result<crate::datasource::DataSource> {
     s.data_source.clone().ok_or_else(|| EngineError::Other("Database connections are not available in this build.".into()))
 }
 
+/// Sends one request to the data source on `c`'s connection and returns its answer.
 fn run_op(s: &Session, c: &Conn, op: DbOp, query: String, max_rows: usize, timeout_secs: u64) -> Result<DbTable> {
     let req = DbRequest {
         driver: c.driver.clone(),
@@ -160,6 +165,7 @@ fn cell_text(v: Option<&DbValue>) -> String {
     }
 }
 
+/// `data.databaseTables`: the tables and views of a connection, for the dialog's picker.
 fn database_tables(s: &mut Session, p: &Json) -> Result<Json> {
     let c = conn_params(s, "data.databaseTables", p)?;
     let t = run_op(s, &c, DbOp::Tables, String::new(), 100_000, CATALOG_TIMEOUT_SECS)?;
@@ -168,6 +174,7 @@ fn database_tables(s: &mut Session, p: &Json) -> Result<Json> {
     ))
 }
 
+/// `data.databaseColumns`: the columns of one table, for the dialog's picker.
 fn database_columns(s: &mut Session, p: &Json) -> Result<Json> {
     const ID: &str = "data.databaseColumns";
     let c = conn_params(s, ID, p)?;
@@ -177,6 +184,7 @@ fn database_columns(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(Json::Array(t.rows.iter().map(|r| json!({"name": cell_text(r.first()), "type": cell_text(r.get(1))})).collect()))
 }
 
+/// `data.fromDatabase`: runs a query (or reads a table's chosen columns) into a new table sheet and keeps the query for Refresh. Without parameters it opens the dialog.
 fn from_database(s: &mut Session, p: &Json) -> Result<Json> {
     const ID: &str = "data.fromDatabase";
     if ["driver", "connection", "query", "table"].iter().all(|k| str_param(p, k).is_none_or(|v| v.trim().is_empty())) {
@@ -343,6 +351,7 @@ fn target_table(s: &Session, p: &Json) -> Result<Option<(usize, usize)>> {
     Ok(d.wb.sheet(si).and_then(|sh| sh.tables.iter().position(|t| t.range.contains(d.selection.active))).map(|ti| (si, ti)))
 }
 
+/// `data.refresh`: runs again the query of the table at the selection (or named by `table`), or refreshes the PivotTable there.
 fn refresh(s: &mut Session, p: &Json) -> Result<Json> {
     const ID: &str = "data.refresh";
     if bool_param(p, "trust") == Some(true) {
@@ -441,6 +450,7 @@ fn ready(s: &mut Session, q: &DbQuery, tname: &str, password: Option<&str>) -> R
     Ok(Ready::Run(c, q.max_rows.unwrap_or(DEFAULT_MAX_ROWS).clamp(1, DEFAULT_MAX_ROWS)))
 }
 
+/// Runs `q` on `c`'s connection, with its row limit and timeout.
 fn fetch(s: &Session, q: &DbQuery, c: &Conn, max_rows: usize) -> Result<DbTable> {
     run_op(s, c, DbOp::Query, q.query.clone(), max_rows, q.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS))
 }
@@ -632,6 +642,7 @@ pub(crate) fn refresh_all(s: &mut Session, trust: bool, answer: Option<(&str, &s
     Ok(out)
 }
 
+/// A database value as a cell value: text cut to the cell limit, integers beyond 2^53 as text, dates and times as serial numbers of the workbook's date system.
 fn cell_value(v: &DbValue, sys: gridcraft_core::date::DateSystem) -> Value {
     let text = |t: &str| Value::text(t.chars().take(MAX_TEXT).collect::<String>());
     let time = |h: u32, m: u32, sec: f64| (f64::from(h) * 3600.0 + f64::from(m) * 60.0 + sec) / 86_400.0;
@@ -659,6 +670,7 @@ mod tests {
     use super::*;
     use crate::datasource::{DataSource, DbOp};
 
+    /// A session whose data source answers every request with `table` and records the requests.
     fn session_with(table: DbTable) -> (Session, Arc<Mutex<Vec<DbRequest>>>) {
         let mut s = Session::new();
         s.execute("file.new", json!({})).unwrap();
@@ -672,6 +684,8 @@ mod tests {
         (s, seen)
     }
 
+    /// A result with an integer past 2^53, text that looks like a number, a date, NaN, a blank
+    /// header and a repeated one.
     fn sample() -> DbTable {
         DbTable {
             columns: vec!["id".into(), "name".into(), "born".into(), "".into(), "name".into()],
@@ -683,6 +697,7 @@ mod tests {
         }
     }
 
+    /// The displayed text of cell `a1` on the active sheet.
     fn text_at(s: &Session, a1: &str) -> String {
         let d = s.active().unwrap();
         let sh = d.wb.active().unwrap();
@@ -778,6 +793,7 @@ mod tests {
         (s, next, seen)
     }
 
+    /// A result of integer columns.
     fn ints(cols: &[&str], rows: &[&[i64]]) -> DbTable {
         DbTable {
             columns: cols.iter().map(|c| c.to_string()).collect(),
@@ -1002,10 +1018,12 @@ mod tests {
         }
     }
 
+    /// The table ids of the active workbook's queries, in order.
     fn queries(s: &Session) -> Vec<u32> {
         s.active().unwrap().wb.db_queries.iter().map(|q| q.table_id).collect()
     }
 
+    /// The ids of every table of the active workbook.
     fn table_ids(s: &Session) -> Vec<u32> {
         s.active().unwrap().wb.sheets.iter().flat_map(|sh| sh.tables.iter().map(|t| t.id)).collect()
     }

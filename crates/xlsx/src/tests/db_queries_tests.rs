@@ -7,6 +7,7 @@ use crate::db_queries::{MAX_PART, NS_DB_QUERIES, Stored, attach};
 use crate::package::Package;
 use crate::{read_xlsx, write_xlsx};
 
+/// A one-column table with a header row.
 fn table(id: u32, name: &str, range: &str) -> Table {
     Table {
         id,
@@ -27,6 +28,7 @@ fn table(id: u32, name: &str, range: &str) -> Table {
     }
 }
 
+/// A query as the import keeps it, with characters XML has to escape.
 fn query(table_id: u32) -> DbQuery {
     DbQuery {
         table_id,
@@ -112,6 +114,7 @@ fn workbook_with(sheet: &str, name: &str, range: &str, id: u32) -> Workbook {
     wb
 }
 
+/// A query as read from the part, naming its table by `table` and by `sheet` and `anchor`.
 fn stored(table: Option<&str>, sheet: &str, anchor: &str) -> Stored {
     Stored { table: table.map(str::to_string), sheet: sheet.into(), anchor: anchor.into(), query: query(0) }
 }
@@ -183,6 +186,7 @@ fn keeping(mut wb: Workbook, name: &str, data: &[u8]) -> Workbook {
     wb
 }
 
+/// The bytes of kept part `name`, if the workbook keeps it.
 fn kept_data(wb: &Workbook, name: &str) -> Option<Vec<u8>> {
     wb.preserved.as_ref()?.parts.iter().find(|p| p.name == name).map(|p| p.data.to_vec())
 }
