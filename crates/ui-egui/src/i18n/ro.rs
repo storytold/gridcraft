@@ -1192,6 +1192,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Arrange\nAll" => "Aranjare\ntoate",
         "Switch Windows" => "Comutare ferestre",
         "Switch\nWindows" => "Comutare\nferestre",
+        "Greater Than…" => "Mai mare decât…",
+        "Less Than…" => "Mai mic decât…",
+        "Between…" => "Între…",
+        "Equal To…" => "Egal cu…",
         _ => return None,
     })
 }
