@@ -572,11 +572,14 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
         }
         picture
     });
-    if let Some(picture) = picture {
+    // A rich value on a Python cell is the picture its code gave. A plain cell picture is one with no
+    // code: `Sheet::input_text`, the formula bar and editing take it to be that.
+    let python = c.child("f").is_some_and(|f| gridcraft_model::python::is_py_formula(&f.text));
+    if let Some(picture) = picture.as_ref().filter(|_| !python) {
         if c.child("f").is_some() {
             cx.warn("formula-generated cell pictures were imported as static pictures; their formulas were not retained");
         }
-        sheet.set_picture(pos, picture);
+        sheet.set_picture(pos, picture.clone());
         sheet.set_style(pos, style);
         return;
     }
@@ -598,6 +601,25 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
             (None, None)
         }
     };
+    // With code that can't stay, as with no code, the picture is what is left of the cell.
+    let in_cell = match (&py, &picture) {
+        (Some(py), Some(picture)) => Some(py).filter(|py| py.fits()).and_then(|py| crate::python_pictures::with_cell_picture(py, picture.clone())),
+        _ => None,
+    };
+    if let Some(picture) = picture.filter(|_| in_cell.is_none()) {
+        cx.warn("formula-generated cell pictures were imported as static pictures; their formulas were not retained");
+        forget_dynamic(st, pos);
+        sheet.set_picture(pos, picture);
+        sheet.set_style(pos, style);
+        return;
+    }
+    if let Some(py) = in_cell {
+        // A picture is the whole result: a range the file declares for it spills nothing.
+        forget_dynamic(st, pos);
+        let value = Value::text(crate::python_pictures::IMAGE);
+        sheet.cells.set(pos, Cell { value, formula: None, style, py: Some(Arc::new(py)) });
+        return;
+    }
     if py.is_some() {
         record_python_spill(st, sheet, pos);
     }

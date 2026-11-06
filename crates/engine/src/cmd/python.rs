@@ -128,7 +128,7 @@ fn output(s: &mut Session, p: &Json) -> Result<Json> {
     let object = output_mode("python.output", p, "mode")?.unwrap_or(!old.object);
     let mode = |object: bool| if object { "object" } else { "value" };
     if object != old.object {
-        let py = PyCode { code: old.code.clone(), object, output: None, stale: false };
+        let py = PyCode { code: old.code.clone(), object, output: None, stale: false, ..PyCode::default() };
         store(s, "python.output", sheet, at, py, Some(old))?;
     }
     let d = s.doc()?;
