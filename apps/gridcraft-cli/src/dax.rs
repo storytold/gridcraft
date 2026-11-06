@@ -118,8 +118,8 @@ fn pivot_cmd(args: &[String]) -> Result<(), String> {
     let json = std::fs::read_to_string(path).map_err(|e| format!("can't read {path}: {e}"))?;
     let mut model: DataModel = serde_json::from_str(&json).map_err(|e| format!("invalid model JSON: {e}"))?;
     model.parse_formulas().map_err(|e| e.to_string())?;
-    let fields = pivot_fields(&model, &split_fields(&rows)).map_err(|e| e.to_string())?;
-    let columns = parsed.opt("columns").map(|columns| pivot_fields(&model, &split_fields(&columns)));
+    let fields = pivot_fields(&model, &split_fields(rows)).map_err(|e| e.to_string())?;
+    let columns = parsed.opt("columns").map(|columns| pivot_fields(&model, &split_fields(columns)));
     let column_fields = match columns {
         Some(Ok(fields)) => fields,
         Some(Err(error)) => return Err(error.to_string()),
