@@ -421,6 +421,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Previous page", "前のページ"),
     ("Next page", "次のページ"),
     ("Create PDF", "PDF の作成"),
+    ("Nothing to export.", "エクスポートする内容がありません。"),
     ("Save the sheet as a PDF document that keeps its page layout.", "ページ レイアウトを保ったまま、シートを PDF ドキュメントとして保存します。"),
     ("Change File Type", "ファイルの種類の変更"),
     ("CSV (Comma delimited)", "CSV (コンマ区切り)"),

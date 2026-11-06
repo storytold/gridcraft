@@ -431,6 +431,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Previous page" => "이전 페이지",
         "Next page" => "다음 페이지",
         "Create PDF" => "PDF 만들기",
+        "Nothing to export." => "내보낼 내용이 없습니다.",
         "Save the sheet as a PDF document that keeps its page layout." => "페이지 레이아웃을 유지한 채 시트를 PDF 문서로 저장합니다.",
         "Change File Type" => "파일 형식 변경",
         "CSV (Comma delimited)" => "CSV(쉼표로 분리)",

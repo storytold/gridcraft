@@ -418,6 +418,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Previous page" => "Vorige pagina",
         "Next page" => "Volgende pagina",
         "Create PDF" => "PDF maken",
+        "Nothing to export." => "Niets om te exporteren.",
         "Save the sheet as a PDF document that keeps its page layout." => "Het blad opslaan als PDF-document met behoud van de pagina-indeling.",
         "Change File Type" => "Bestandstype wijzigen",
         "CSV (Comma delimited)" => "CSV (door komma's gescheiden)",

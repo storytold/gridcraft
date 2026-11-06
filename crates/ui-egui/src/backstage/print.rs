@@ -4,7 +4,6 @@ use super::{
 
 /// Builds the print scope and fit-to-page parameters, caches `file.printPreview` per document revision/options, and draws page thumbnails with navigation plus the print settings and Print action.
 pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
-    let t = Tokens::get(ui.ctx());
     let lang = app.ui.language;
     let Some((uid, revision)) = app.session.active().map(|d| (d.uid, d.revision)) else {
         dim(ui, lang.tr("No workbook is open."));
@@ -58,45 +57,50 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
             }
         });
         ui.add_space(24.0);
-        ui.vertical(|ui| {
-            if pages.is_empty() {
-                dim(ui, lang.tr("Nothing to print."));
-                return;
-            }
-            let last = pages.len().saturating_sub(1);
-            bs.preview_page = bs.preview_page.min(last);
-            let Some(page) = pages.get(bs.preview_page) else { return };
-            // Paper proportions from the preview (points); hostile sizes fall back to Letter.
-            let w = page.get("width").and_then(Json::as_f64).filter(|w| w.is_finite() && *w > 1.0).unwrap_or(612.0) as f32;
-            let h = page.get("height").and_then(Json::as_f64).filter(|h| h.is_finite() && *h > 1.0).unwrap_or(792.0) as f32;
-            let scale = (520.0 / h).min(440.0 / w);
-            let (rect, _) = ui.allocate_exact_size(vec2(w * scale, h * scale), Sense::hover());
-            let p = ui.painter();
-            p.rect_filled(rect.translate(vec2(2.0, 3.0)), 2.0, t.shadow);
-            p.rect_filled(rect, 2.0, t.grid_bg);
-            p.rect_stroke(rect, 2.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
-            if let Some(d) = app.session.active() {
-                paint_page(p, rect, w, page, &d.wb, &t);
-            }
-            let sheet = page.get("sheet").and_then(Json::as_str).unwrap_or("");
-            let range = page.get("range").and_then(Json::as_str).unwrap_or("");
-            ui.add_space(4.0);
-            dim(ui, &format!("{sheet} · {range}"));
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.add_enabled(bs.preview_page > 0, egui::Button::new("◀")).on_hover_text(lang.tr("Previous page")).clicked() {
-                    bs.preview_page = bs.preview_page.saturating_sub(1);
-                }
-                let text = lang
-                    .tr("Page {page} of {pages}")
-                    .replace("{page}", &(bs.preview_page + 1).to_string())
-                    .replace("{pages}", &pages.len().to_string());
-                ui.label(text);
-                if ui.add_enabled(bs.preview_page < last, egui::Button::new("▶")).on_hover_text(lang.tr("Next page")).clicked() {
-                    bs.preview_page = (bs.preview_page + 1).min(last);
-                }
-            });
-        });
+        ui.vertical(|ui| preview_pane(app, ui, &pages, &mut bs.preview_page, vec2(440.0, 520.0), lang.tr("Nothing to print.")));
+    });
+}
+
+/// Draws page `*index` of a `file.printPreview` page list in miniature, with its sheet and range
+/// and the previous/next page buttons; the paper is scaled to fit in `max`. `empty`
+/// shows when there is no page. File › Print and File › Export › Create PDF both preview
+/// through here, so they show the same page. `*index` is kept inside the list.
+pub(super) fn preview_pane(app: &SheetApp, ui: &mut Ui, pages: &[Json], index: &mut usize, max: egui::Vec2, empty: &str) {
+    let t = Tokens::get(ui.ctx());
+    let lang = app.ui.language;
+    if pages.is_empty() {
+        dim(ui, empty);
+        return;
+    }
+    let last = pages.len().saturating_sub(1);
+    *index = (*index).min(last);
+    let Some(page) = pages.get(*index) else { return };
+    // Paper proportions from the preview (points); hostile sizes fall back to Letter.
+    let w = page.get("width").and_then(Json::as_f64).filter(|w| w.is_finite() && *w > 1.0).unwrap_or(612.0) as f32;
+    let h = page.get("height").and_then(Json::as_f64).filter(|h| h.is_finite() && *h > 1.0).unwrap_or(792.0) as f32;
+    let scale = (max.y.max(1.0) / h).min(max.x.max(1.0) / w);
+    let (rect, _) = ui.allocate_exact_size(vec2(w * scale, h * scale), Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(rect.translate(vec2(2.0, 3.0)), 2.0, t.shadow);
+    p.rect_filled(rect, 2.0, t.grid_bg);
+    p.rect_stroke(rect, 2.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
+    if let Some(d) = app.session.active() {
+        paint_page(p, rect, w, page, &d.wb, &t);
+    }
+    let sheet = page.get("sheet").and_then(Json::as_str).unwrap_or("");
+    let range = page.get("range").and_then(Json::as_str).unwrap_or("");
+    ui.add_space(4.0);
+    dim(ui, &format!("{sheet} · {range}"));
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        if ui.add_enabled(*index > 0, egui::Button::new("◀")).on_hover_text(lang.tr("Previous page")).clicked() {
+            *index = index.saturating_sub(1);
+        }
+        let text = lang.tr("Page {page} of {pages}").replace("{page}", &(*index + 1).to_string()).replace("{pages}", &pages.len().to_string());
+        ui.label(text);
+        if ui.add_enabled(*index < last, egui::Button::new("▶")).on_hover_text(lang.tr("Next page")).clicked() {
+            *index = (*index + 1).min(last);
+        }
     });
 }
 

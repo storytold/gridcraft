@@ -111,7 +111,8 @@ impl SheetApp {
         // Menu-style Export as PDF with no file named: ask where to save, like Save As does.
         // Programmatic callers use `run` and keep getting the PDF bytes back.
         if id == "file.exportPdf" && self.services.pick_save.is_some() && params.get("path").and_then(Json::as_str).is_none_or(str::is_empty) {
-            return self.export_pdf_with_picker(params);
+            self.export_pdf_with_picker(params);
+            return;
         }
         // Recommended Charts with no chart type named (ribbon button, keytip, command search) asks
         // which chart to insert; programmatic callers of `run` still get the first recommendation.

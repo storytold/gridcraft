@@ -338,6 +338,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Previous page" => "Předchozí stránka",
         "Next page" => "Další stránka",
         "Create PDF" => "Vytvořit PDF",
+        "Nothing to export." => "Není co exportovat.",
         "Save the sheet as a PDF document that keeps its page layout." => "Uloží list jako dokument PDF se zachováním rozložení stránky.",
         "Change File Type" => "Změnit typ souboru",
         "CSV (Comma delimited)" => "CSV (oddělený čárkami)",
