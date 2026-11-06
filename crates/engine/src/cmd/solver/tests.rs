@@ -1819,3 +1819,133 @@ fn hostile_models_are_refused_without_panicking() {
     let r = s.execute("data.solver", json!({"objective": "D1", "variables": "A1", "maxEvaluations": 1e300})).unwrap();
     assert_ne!(r["status"], "converged");
 }
+
+#[test]
+fn a_comma_inside_a_quoted_sheet_name_does_not_split_a_reference() {
+    // Wyndor Glass on sheets whose names hold a comma (and, for the second, a doubled quote),
+    // solved from Sheet1 with references that carry those names.
+    for (name, quoted) in [("Sales, West", "'Sales, West'"), ("O'Brien, Jr", "'O''Brien, Jr'")] {
+        let mut s = s();
+        s.execute("home.insertSheet", json!({"name": name, "before": 1})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+        set(&mut s, &[("A1", "0"), ("A2", "0"), ("B1", "=3*A1+5*A2"), ("B2", "=2*A2"), ("B3", "=3*A1+2*A2")]);
+        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        let r = s
+            .execute(
+                "data.solver",
+                json!({
+                    "objective": format!("{quoted}!$B$1"),
+                    "goal": "max",
+                    "variables": format!("{quoted}!$A$1,{quoted}!$A$2"),
+                    "constraints": [format!("{quoted}!$A$1 <= 4"), format!("{quoted}!$B$2 <= 12"), format!("{quoted}!$B$3 <= 18")],
+                    "method": "simplex",
+                }),
+            )
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(r["status"], "optimal", "{name}: {r}");
+        let sheet = &s.doc().unwrap().wb.sheets[1];
+        let v = |a: &str| sheet.value(CellRef::parse(a).unwrap()).as_f64().unwrap_or(f64::NAN);
+        assert!((v("A1") - 2.0).abs() < 1e-9 && (v("A2") - 6.0).abs() < 1e-9, "{name}");
+        assert!((v("B1") - 36.0).abs() < 1e-9, "{name}");
+        // The saved model keeps both variable cells, and loads back as the same model.
+        let model = super::saved_model(&s.doc().unwrap().wb, 1).unwrap_or_else(|| panic!("{name}: no saved model"));
+        assert_eq!(model["objective"], "B1", "{name}: {model}");
+        assert_eq!(model["variables"], "A1,A2", "{name}: {model}");
+        assert_eq!(model["constraints"][0], "A1 <= 4", "{name}: {model}");
+    }
+}
+
+#[test]
+fn a_relation_inside_a_quoted_sheet_name_does_not_split_a_constraint() {
+    // Wyndor Glass with a third, binary variable (Z = 37 at 2, 6, 1) on sheets whose names hold
+    // a relation, solved from Sheet1 with references that carry those names, under every
+    // relation. One name holds a doubled quote as well, and two the text that marks an integer
+    // or a binary constraint in a model written on cells.
+    for name in ["A<=B", "A>=B", "A=B", "Q1=<Q2", "x≤y", "O'Brien<=1", "n=INT(1", "n=0)+(1"] {
+        let q = gridcraft_core::quote_sheet(name);
+        let mut s = s();
+        s.execute("home.insertSheet", json!({"name": name, "before": 1})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+        set(&mut s, &[("A1", "0"), ("A2", "0"), ("A3", "0"), ("B1", "=3*A1+5*A2+A3"), ("B2", "=2*A2"), ("B3", "=3*A1+2*A2")]);
+        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        let constraints = [
+            format!("{q}!$A$1 <= 4"),
+            format!("{q}!$B$2 <= 12"),
+            format!("{q}!$B$3 <= 18"),
+            format!("{q}!$A$1 >= 1"),
+            format!("{q}!$A$1 = 2"),
+            format!("{q}!$A$1:$A$2 int"),
+            format!("{q}!$A$3 bin"),
+        ];
+        let model = json!({"objective": format!("{q}!$B$1"), "goal": "max", "variables": format!("{q}!$A$1:$A$3"), "constraints": constraints, "method": "simplex"});
+        let r = s.execute("data.solver", model).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(r["status"], "optimal", "{name}: {r}");
+        assert!((at(&s, name, "B1").as_f64().unwrap_or(f64::NAN) - 37.0).abs() < 1e-9, "{name}");
+        // The saved model holds every constraint whole, and solves again from its sheet.
+        let saved = super::saved_model(&s.doc().unwrap().wb, 1).unwrap_or_else(|| panic!("{name}: no saved model"));
+        assert_eq!(saved["constraints"], json!(["A1 <= 4", "B2 <= 12", "B3 <= 18", "A1 >= 1", "A1 = 2", "A1:A2 int", "A3 bin"]), "{name}: {saved}");
+        s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+        set(&mut s, &[("A1", "0"), ("A2", "0"), ("A3", "0")]);
+        let r = s.execute("data.solver", json!({"saved": true})).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(r["status"], "optimal", "{name}: {r}");
+        assert!((n(&s, "B1") - 37.0).abs() < 1e-9, "{name}");
+        // An integer constraint is still one, so no Sensitivity report is offered.
+        let p = json!({"method": "simplex", "constraints": [format!("{q}!$A$1 int")]});
+        assert!(!super::sensitivity_applies(&p), "{name}");
+        // A model written on cells with references that carry the name loads whole, a Value Of
+        // goal included.
+        let rows = [
+            format!("=MAX({q}!$B$1)"),
+            format!("=COUNT({q}!$A$1:$A$3)"),
+            format!("=AND({q}!$B$3<=18)"),
+            format!("=AND({q}!$A$1:$A$2=INT({q}!$A$1:$A$2))"),
+            format!("=AND(({q}!$A$3=0)+({q}!$A$3=1))"),
+            "={2,1,100,0.075,0,1,0.0001,50,20000,0}".to_string(),
+        ];
+        for (k, f) in rows.iter().enumerate() {
+            set(&mut s, &[(&format!("H{}", k + 1), f)]);
+        }
+        let m = s.execute("data.solverLoadModel", json!({"from": "H1"})).unwrap_or_else(|e| panic!("{name}: {e}"))["model"].clone();
+        assert_eq!(m["objective"], "B1", "{name}: {m}");
+        assert_eq!(m["constraints"], json!(["B3 <= 18", "A1:A2 int", "A3 bin"]), "{name}: {m}");
+        set(&mut s, &[("J1", &format!("={q}!$B$1=37")), ("J2", &format!("=COUNT({q}!$A$1:$A$3)")), ("J3", &rows[5])]);
+        let m = s.execute("data.solverLoadModel", json!({"from": "J1"})).unwrap_or_else(|e| panic!("{name}: {e}"))["model"].clone();
+        assert_eq!((m["objective"].as_str(), m["goal"].as_str(), m["value"].as_f64()), (Some("B1"), Some("value"), Some(37.0)), "{name}: {m}");
+    }
+}
+
+#[test]
+fn save_model_counts_areas_outside_quoted_sheet_names() {
+    // Wyndor Glass on a sheet whose name holds a comma (and, for the second, a doubled quote),
+    // saved on cells with references that carry the name.
+    for name in ["Sales, West", "O'Brien, Jr"] {
+        let q = gridcraft_core::quote_sheet(name);
+        let mut s = s();
+        s.execute("home.insertSheet", json!({"name": name, "before": 1})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+        set(&mut s, &[("A1", "0"), ("A2", "0"), ("B1", "=3*A1+5*A2"), ("B2", "=2*A2"), ("B3", "=3*A1+2*A2"), ("C3", "18")]);
+        let constraints = [
+            format!("{q}!$A$1 <= 4"),
+            format!("{q}!$B$2 <= 12"),
+            format!("{q}!$B$3 <= {q}!$C$3"),
+            format!("{q}!$A$1:$A$2 int"),
+            // A number with a thousands separator is one value, not two areas.
+            format!("{q}!$B$1 <= 1,000"),
+        ];
+        let model = json!({"objective": format!("{q}!$B$1"), "variables": format!("{q}!$A$1:$A$2"), "constraints": constraints, "method": "simplex"});
+        let out = s.execute("data.solverSaveModel", json!({"to": "H1", "model": model})).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(out["range"], "H1:H8", "{name}: {out}");
+        let rows: Vec<String> = (3..=7).map(|r| formula(&s, &format!("H{r}"))).collect();
+        assert_eq!(rows, ["AND($A$1<=4)", "AND($B$2<=12)", "AND($B$3<=$C$3)", "AND($A$1:$A$2=INT($A$1:$A$2))", "AND($B$1<=1000)"], "{name}");
+        // The model loads back from the cells and solves.
+        let loaded = s.execute("data.solverLoadModel", json!({"from": "H1"})).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(loaded["model"]["constraints"], json!(["A1 <= 4", "B2 <= 12", "B3 <= C3", "A1:A2 int", "B1 <= 1000"]), "{name}: {loaded}");
+        let r = s.execute("data.solver", json!({"saved": true})).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(r["status"], "optimal", "{name}: {r}");
+        assert!((n(&s, "B1") - 36.0).abs() < 1e-9, "{name}");
+        // A side of two areas, each carrying the name, is still refused.
+        let two = json!({"objective": format!("{q}!$B$1"), "variables": format!("{q}!$A$1:$A$2"), "constraints": [format!("{q}!$A$1:$A$2 <= {q}!$C$1,{q}!$C$2")]});
+        let e = s.execute("data.solverSaveModel", json!({"to": "J1", "model": two})).unwrap_err().to_string();
+        assert!(e.contains("one range"), "{name}: {e}");
+    }
+}
