@@ -31,6 +31,7 @@ macro_rules! outln {
 }
 
 mod check;
+mod python_check;
 mod sandbox_check;
 
 use gridcraft_engine::Session;
@@ -89,6 +90,7 @@ fn main() -> ExitCode {
         Some("run") => run(rest),
         Some("check") => return check::main(rest),
         Some("sandbox-check") => return sandbox_check::main(rest),
+        Some("python-check") => return python_check::main(rest),
         Some("commands") => commands(rest),
         Some("functions") => functions(rest),
         Some("mcp") => mcp(rest),
