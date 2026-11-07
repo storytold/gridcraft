@@ -229,6 +229,9 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
                 let c = geo.cell_at(sh, p);
                 let sx = sh.col_left(c.col) as f32 + (p.x - geo.x(sh, c.col)) / geo.z;
                 let sy = sh.row_top(c.row) as f32 + (p.y - geo.y(sh, c.row)) / geo.z;
+                if app.grid.ink.is_empty() {
+                    app.grid.ink_started = Some(crate::clock::monotonic_ms());
+                }
                 app.grid.ink.push([sx, sy]);
             }
             if !app.grid.ink.is_empty() {
@@ -252,11 +255,14 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
             }
             if resp.drag_stopped() {
                 let pts: Vec<[f32; 2]> = std::mem::take(&mut app.grid.ink);
+                let ended = crate::clock::monotonic_ms();
+                let started = app.grid.ink_started.take().unwrap_or(ended);
                 if app.session.draw_tool == "actionPen" {
                     // One stroke in, one typed value out; a refusal (no model, protected cell)
-                    // is shown to the person rather than swallowed.
+                    // is shown to the person rather than swallowed. The stroke's own times let
+                    // the engine tell a real pause from time spent recognising.
                     if !pts.is_empty() {
-                        app.run_or_alert("draw.actionPenInk", json!({"points": pts}));
+                        app.run_or_alert("draw.actionPenInk", json!({"points": pts, "startedAt": started, "endedAt": ended}));
                     }
                 } else if pts.len() >= 2 {
                     let _ = app.run("draw.stroke", json!({"points": pts}));

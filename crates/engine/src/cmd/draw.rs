@@ -30,7 +30,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Action Pen Ink",
             [],
             None,
-            "{points: [[x,y],…] in sheet points, cell?: \"B2\"} recognizes the stroke and types it into the cell",
+            "{points: [[x,y],…], cell?, startedAt?, endedAt?} adds a stroke to the handwriting entry and types the result into the cell",
             always,
             action_pen_ink
         ),
@@ -148,6 +148,10 @@ pub struct InkEntry {
     /// When the last stroke landed (`None` where there is no clock, as on the web: the entry then
     /// never ends on a pause — the web app has no Action Pen, since it has no model directory).
     pub last: Option<Instant>,
+    /// The caller's timestamp of that stroke's pen-up, in milliseconds on the caller's own
+    /// clock (`endedAt`). When both ends of the pause are reported, the pause is measured from
+    /// pen-up to pen-down, so recognising the previous stroke does not count against it.
+    pub ended_at: Option<f64>,
 }
 
 /// `draw.actionPen {on?}`: turns the handwriting tool on or off. Turning it on without a model
@@ -171,7 +175,10 @@ fn action_pen(s: &mut Session, p: &Json) -> Result<Json> {
 ///
 /// Consecutive strokes into the same cell are one entry (see [`InkEntry`]), so a digit or a word
 /// written in several strokes is not cut in half; the strokes are rasterised side by side, never
-/// joined.
+/// joined. The caller may report each stroke's pen-down and pen-up times (`startedAt`, `endedAt`,
+/// milliseconds on any monotonic clock): the pause that ends an entry is then the time the pen was
+/// up, so recognising the previous stroke is not mistaken for a pause. Without them the time
+/// between commands is used.
 fn action_pen_ink(s: &mut Session, p: &Json) -> Result<Json> {
     let pts = points_param(p);
     if pts.is_empty() {
@@ -196,23 +203,34 @@ fn action_pen_ink(s: &mut Session, p: &Json) -> Result<Json> {
     let pen = if s.draw_width <= 0.0 { 2.0 } else { s.draw_width }.clamp(0.5, 40.0);
     let now = now();
     let total = pts.len();
-    // Continue the entry when it is the same document, sheet and cell and the last stroke is
-    // recent; anything else starts a fresh one, so unrelated writing never merges.
+    // The caller's own stroke times (milliseconds, any monotonic clock). They make the pause the
+    // time the pen was up: recognition and drawing the next stroke take real time, and counting
+    // that as a pause would split a character in two.
+    let started_at = f64_param(p, "startedAt").filter(|v| v.is_finite());
+    let ended_at = f64_param(p, "endedAt").filter(|v| v.is_finite());
+    let gap_ms = INK_ENTRY_GAP.as_millis() as f64;
+    // Continue the entry when it is the same document, sheet and cell and no real pause has
+    // happened; anything else starts a fresh one, so unrelated writing never merges.
     let continues = s.ink_entry.as_ref().is_some_and(|e| {
-        let recent = match (now, e.last) {
-            (Some(now), Some(last)) => now.checked_duration_since(last).is_some_and(|gap| gap <= INK_ENTRY_GAP),
-            // No clock (the web): the entry only ends on a different cell, sheet or document.
-            _ => true,
+        let recent = match (started_at, e.ended_at) {
+            (Some(started), Some(ended)) => started - ended <= gap_ms,
+            // Without the caller's times, the gap between commands is all there is.
+            _ => match (now, e.last) {
+                (Some(now), Some(last)) => now.checked_duration_since(last).is_some_and(|gap| gap <= INK_ENTRY_GAP),
+                // No clock (the web): the entry only ends on a different cell, sheet or document.
+                _ => true,
+            },
         };
         e.doc == doc && e.sheet == si && e.cell == at && e.strokes.len() < MAX_ENTRY_STROKES && e.points + total <= MAX_ENTRY_POINTS && recent
     });
     let mut entry = match s.ink_entry.take() {
         Some(entry) if continues => entry,
-        _ => InkEntry { doc, sheet: si, cell: at, strokes: Vec::new(), points: 0, last: now },
+        _ => InkEntry { doc, sheet: si, cell: at, strokes: Vec::new(), points: 0, last: now, ended_at: None },
     };
     entry.strokes.push(pts.iter().map(|q| [q[0] as f32, q[1] as f32]).collect());
     entry.points += total;
     entry.last = now;
+    entry.ended_at = ended_at;
     let image = {
         let strokes: Vec<&[[f32; 2]]> = entry.strokes.iter().map(Vec::as_slice).collect();
         gridcraft_ink::raster::rasterize_strokes(&strokes, pen).map_err(|e| bad("draw.actionPenInk", e.to_string()))

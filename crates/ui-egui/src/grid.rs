@@ -276,6 +276,9 @@ pub struct GridState {
     pub pane: Option<String>,
     /// Ink stroke being drawn (sheet points).
     pub ink: Vec<[f32; 2]>,
+    /// Monotonic time the stroke being drawn started (pen-down), in milliseconds: the Action Pen
+    /// sends it with the stroke so the engine measures the pause between strokes.
+    pub ink_started: Option<f64>,
     /// Draw › Action Pen: the model panel is open, its latest `ink.status` answer, the worker
     /// job it is waiting for (download or load) and the last error that job or an import gave.
     pub ink_panel: bool,

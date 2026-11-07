@@ -8,8 +8,10 @@
 //! This crate is native only (`crates/ink-rten` sits at layer 6, so `cargo xtask wasm` skips it):
 //! `rten` reads model files with the standard library and is not built for the web app.
 //!
-//! Inference is greedy decoding, one line at a time: start token [`START`], stop at [`EOS`] or
-//! after [`MAX_STEPS`] steps. On this machine one line takes about 0.27 s (CPU, release).
+//! Inference is greedy decoding, one line at a time: start token [`START`], stop at [`EOS`]. A
+//! line that reaches [`MAX_STEPS`] tokens without one does not fit the model's input and is a
+//! [`Error::Recognize`], never truncated text. On this machine one line takes about 0.27 s (CPU,
+//! release).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -39,6 +41,27 @@ pub struct RtenRecognizer {
     /// pipeline does.
     tokenizer: Tokenizer,
     id: &'static str,
+}
+
+/// Greedy decoding: asks `next` for a token until it emits [`EOS`] (or [`PAD`], which a decode
+/// step should not emit), appending each token to `ids` and returning what it produced.
+///
+/// Reaching [`MAX_STEPS`] without a stop token means the writing does not fit one line. The
+/// tokens so far are a prefix of the real text, so returning them would type a truncated value
+/// into the cell: this is an error instead.
+fn greedy(mut next: impl FnMut(&[i32]) -> Result<i32, Error>, ids: &mut Vec<i32>) -> Result<Vec<i32>, Error> {
+    let mut produced = Vec::new();
+    for _ in 0..MAX_STEPS {
+        let token = next(ids)?;
+        if token == EOS || token == PAD {
+            return Ok(produced);
+        }
+        ids.push(token);
+        produced.push(token);
+    }
+    Err(Error::Recognize(format!(
+        "The handwriting is too long to recognise in one entry: the model reached its limit of {MAX_STEPS} tokens. Write less at a time."
+    )))
 }
 
 impl RtenRecognizer {
@@ -129,15 +152,7 @@ impl RtenRecognizer {
             .map_err(|e| Error::Recognize(format!("input image: {e}")))?;
         let encoder = self.encoder.run_one(rten::ValueOrView::Value(tensor), None).map_err(|e| Error::Recognize(format!("encoder: {e}")))?;
         let mut ids: Vec<i32> = vec![START];
-        let mut produced: Vec<i32> = Vec::new();
-        for _ in 0..MAX_STEPS {
-            let next = self.next_token(&ids, &encoder)?;
-            if next == EOS || next == PAD {
-                break;
-            }
-            ids.push(next);
-            produced.push(next);
-        }
+        let produced = greedy(|ids| self.next_token(ids, &encoder), &mut ids)?;
         self.decode(&produced)
     }
 }
@@ -158,6 +173,29 @@ impl Recognizer for RtenRecognizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_line_that_hits_the_step_limit_is_an_error_not_truncated_text() {
+        // A model that never emits a stop token: the line does not fit, so decoding fails.
+        let mut ids = vec![START];
+        let endless = greedy(|_| Ok(7), &mut ids);
+        assert!(matches!(endless, Err(Error::Recognize(_))), "{endless:?}");
+        assert_eq!(ids.len(), 1 + MAX_STEPS, "every token was consumed before failing");
+
+        // A stop token after two words ends the decode normally, with just those tokens.
+        let mut ids = vec![START];
+        let mut asked = 0;
+        let produced = greedy(
+            |_| {
+                asked += 1;
+                Ok(if asked == 3 { EOS } else { 7 })
+            },
+            &mut ids,
+        )
+        .expect("the stop token ends the decode");
+        assert_eq!(produced, vec![7, 7]);
+        assert_eq!(ids, vec![START, 7, 7]);
+    }
 
     /// The model directory when this machine has one (never committed, so CI skips these
     /// checks). Looks where the app would.

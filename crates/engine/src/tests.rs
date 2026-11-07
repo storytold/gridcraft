@@ -6211,6 +6211,19 @@ fn action_pen_targets_the_cell_under_the_strokes_first_point() {
 }
 
 #[test]
+fn the_pause_between_strokes_is_the_time_the_pen_was_up() {
+    let mut s = ink_session("1");
+    let at = json!([[10.0, 10.0], [20.0, 20.0]]);
+    // The commands arrive back to back, but the person paused for ten seconds between strokes.
+    s.execute("draw.actionPenInk", json!({"points": at, "cell": "B2", "startedAt": 1_000.0, "endedAt": 1_400.0})).unwrap();
+    s.execute("draw.actionPenInk", json!({"points": at.clone(), "cell": "B2", "startedAt": 11_000.0, "endedAt": 11_300.0})).unwrap();
+    assert_eq!(s.ink_entry.as_ref().map(|e| e.strokes.len()), Some(1), "a ten-second pen-up pause starts a new entry");
+    // Half a second of pen-up time keeps the entry, however long recognising the last one took.
+    s.execute("draw.actionPenInk", json!({"points": at, "cell": "B2", "startedAt": 11_800.0, "endedAt": 12_100.0})).unwrap();
+    assert_eq!(s.ink_entry.as_ref().map(|e| e.strokes.len()), Some(2), "the pause is pen-up time");
+}
+
+#[test]
 fn a_handwriting_entry_ends_on_a_pause_a_new_cell_or_leaving_the_tool() {
     let mut s = ink_session("1");
     let at = json!([[10.0, 10.0], [20.0, 20.0]]);

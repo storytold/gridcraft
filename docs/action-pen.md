@@ -86,7 +86,7 @@ structured error naming the folder to fill.
 | Command | Kind | What it does |
 |---|---|---|
 | `draw.actionPen` | toggle (no undo) | `{on?: bool}` turns the tool on or off. Turning it on without a model is refused with the folder to install it in. |
-| `draw.actionPenInk` | edit (one undo step per stroke) | `{points: [[x,y],…], cell?}` adds one stroke in sheet points to the handwriting entry and types its recognised text into the cell under the stroke's first point (or `cell`). Returns `{cell, text, value}`. |
+| `draw.actionPenInk` | edit (one undo step per stroke) | `{points: [[x,y],…], cell?, startedAt?, endedAt?}` adds one stroke in sheet points to the handwriting entry and types its recognised text into the cell under the stroke's first point (or `cell`). The optional `startedAt`/`endedAt` (milliseconds) say when the pen went down and up, so the pause that ends an entry is the time the pen was up. Returns `{cell, text, value}`. |
 | `ink.status` | query | `{accelerator?}` reports `installed`/`filesPresent`, `ready`, the model id, name, revision, licence, source, size, runtime, the folder, missing files, a one-line hint, and the accelerator fields below. |
 | `ink.modelImport` | native | `{path}` copies one model file or a folder of them into the model folder, verifying each, and reports what is still missing. |
 | `ink.modelRemove` | native | `{}` deletes the model folder, turns the tool off and detaches the recognizer. |
@@ -102,8 +102,16 @@ drawn side by side and never joined: an "i", a crossed "t" or a "4" written in t
 that character, and every stroke stays one undo step. The entry ends after a pause of 1.5 s, when
 the next stroke lands in a different cell, sheet or document, or when the tool is turned off; the
 next stroke then starts a fresh entry. A new entry **replaces** the cell's value — it never appends
-to it — so writing in the same cell again does not concatenate the two, and one Undo brings the
-earlier value back.
+to it — so writing in the same cell again does not concatenate the two.
+
+Every successful stroke is its own undo step, so after a two-stroke entry the first Undo brings
+back the first stroke's result, not the value from before the entry: undo each stroke to get back
+to that value.
+
+The pause is measured **while the pen is up**: the desktop app sends each stroke's pen-down and
+pen-up times (`startedAt`, `endedAt` in milliseconds on a monotonic clock), so the second spent
+recognising a stroke, or drawing the next one slowly, never ends the entry. Without those times
+(a command from a script, MCP or the control channel) the gap between commands is used.
 
 The target cell is the explicit `cell` when the command names one, otherwise the cell under the
 stroke's **first point** — a cell the stroke actually crosses, unlike an extreme of its bounding
@@ -120,7 +128,9 @@ and 20,000 points; past that the next stroke starts a fresh entry.
 2. **Normalise.** The image is stretched (not letterboxed) to 384 × 384, three channels in CHW
    order, each value `(pixel / 255 - 0.5) / 0.5`: -1 is ink, +1 is paper.
 3. **Encode and decode.** `gridcraft-ink-rten` runs the encoder once, then greedy-decodes up to 32
-   steps from start token 2, stopping at 2 (or padding), batch 1.
+   steps from start token 2, stopping at 2 (or padding), batch 1. A line that reaches the 32-step
+   limit without a stop token does not fit the model's input and is refused with an error naming
+   the limit, never written as truncated text.
 4. **Detokenise.** The model's own `tokenizer.json`, loaded with the `tokenizers` crate (default
    features off; `fancy-regex` instead of the C `onig`), decodes the ids.
 5. **Type it.** The text goes through `cmd::edit::input_to_cell`, the same path as typing: numbers,
