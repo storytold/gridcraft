@@ -461,4 +461,35 @@ mod tests {
         assert_eq!(h.state().chart_cache.lock().unwrap().docs(), 1);
         assert_eq!(n, 0, "the remaining document's charts were cached too");
     }
+
+    #[test]
+    fn a_chart_with_a_volatile_series_is_rendered_on_every_frame() {
+        let mut h = harness(two_charts());
+        {
+            let d = h.state_mut().session.active_mut().unwrap();
+            let sh = Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap();
+            sh.charts[0].series[0].values = "=RAND()".into();
+        }
+        h.run_steps(4);
+        let n = rendered_after(&mut h, |h| h.run_steps(6));
+        assert!(n >= 6, "the volatile chart is resolved again on each frame, got {n}");
+        assert!(n < 12, "the other chart still comes from the cache, got {n}");
+    }
+
+    #[test]
+    fn closed_documents_are_forgotten_without_painting_a_chart() {
+        let mut h = harness(two_charts());
+        assert_eq!(h.state().chart_cache.lock().unwrap().docs(), 1);
+        exec(&mut h, "file.new", json!({}));
+        h.run_steps(4);
+        assert_eq!(h.state().session.documents().len(), 2);
+        // The charts' document is no longer shown, but still open.
+        assert_eq!(h.state().chart_cache.lock().unwrap().docs(), 1);
+        h.state_mut().session.set_active(0);
+        h.run_steps(2);
+        exec(&mut h, "file.close", json!({"force": true, "document": true}));
+        h.run_steps(2);
+        assert_eq!(h.state().session.documents().len(), 1);
+        assert_eq!(h.state().chart_cache.lock().unwrap().docs(), 0, "no chart is painted, yet the closed document's entries are gone");
+    }
 }

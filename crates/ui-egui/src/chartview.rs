@@ -258,8 +258,11 @@ fn chart_prims(app: &SheetApp, p: &Painter, z: f32, wb: &Arc<Workbook>, si: usiz
     let Some(d) = app.session.active().filter(|d| Arc::ptr_eq(&d.wb, wb)) else {
         return render_chart(p, z, wb, si, ch).into();
     };
+    // A series that calls NOW or RAND must be evaluated again on every paint.
+    if gridcraft_chart::has_volatile_series(ch) {
+        return render_chart(p, z, wb, si, ch).into();
+    }
     let mut cache = app.chart_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    cache.retain_docs(app.session.documents().iter().map(|d| d.uid));
     cache.get(d.uid, wb, si, ci, (z, p.ctx().pixels_per_point()), || render_chart(p, z, wb, si, ch))
 }
 
