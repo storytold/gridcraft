@@ -2,7 +2,8 @@ use super::{Json, SheetApp, json, now_ms, printing};
 
 impl SheetApp {
     /// Web: `file.exportPdf` without a path returns the PDF as base64; hand it to the browser as a download.
-    pub(super) fn deliver_pdf(&self, result: &Json) {
+    /// `typed` is the download's name when the export came from Save As › File name.
+    pub(super) fn deliver_pdf(&self, result: &Json, typed: Option<String>) {
         if result.get("path").is_some() {
             return;
         }
@@ -10,7 +11,8 @@ impl SheetApp {
             && let Some(b) = result.get("base64").and_then(Json::as_str).and_then(gridcraft_engine::io::base64_decode)
         {
             let title = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
-            dl(&std::path::Path::new(&title).with_extension("pdf").to_string_lossy(), &b);
+            let name = typed.unwrap_or_else(|| std::path::Path::new(&title).with_extension("pdf").to_string_lossy().into_owned());
+            dl(&name, &b);
         }
     }
 
