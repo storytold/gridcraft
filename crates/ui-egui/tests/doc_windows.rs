@@ -6,10 +6,17 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::cell::RefCell;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use egui::{Context, RawInput, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
-use gridcraft_engine::{Session, core::CellRef, core::Value};
+use gridcraft_engine::python::{Interpreter, InterpreterKind, Version};
+use gridcraft_engine::{PythonEnvironment, PythonState, Session, core::CellRef, core::Value};
+use gridcraft_python::fake::FakeTransport;
+use gridcraft_python::protocol::Output;
 use gridcraft_ui_egui::doc_windows::DocWindows;
+use gridcraft_ui_egui::python_window::{self, Answer, Pending};
 use gridcraft_ui_egui::{SaveAnswer, SheetApp};
 use serde_json::json;
 
@@ -574,4 +581,285 @@ fn quit_with_a_draft_in_one_window_and_unsaved_cells_in_another_asks_in_order_an
     assert_eq!(desk.app.dialog.as_ref().map(|d| d.name()), Some("macroEditor"), "no Save Changes question followed");
     assert_eq!(desk.app.session.documents().len(), 2);
     assert_eq!(desk.windows.shown_windows(), [w1, w2]);
+}
+
+/// Opens the Python editor on A1 with unsaved code in it.
+fn unsaved_editor_code(desk: &mut Desk) {
+    desk.app.run("ui.pythonEditor", json!({"on": true})).unwrap();
+    if let Some(w) = desk.app.py_window.as_mut() {
+        w.text = "q = 1".into();
+    }
+    desk.frames(2);
+    assert!(gridcraft_ui_egui::python_window::is_dirty(&desk.app));
+}
+
+fn answer_editor(desk: &mut Desk, a: Answer) -> Vec<(ViewportId, ViewportCommand)> {
+    let mut sent = desk.frame_with(|app, ctx| python_window::answer(app, ctx, a));
+    sent.extend(desk.frames(2));
+    sent
+}
+
+fn editor_pending(desk: &Desk) -> Option<Pending> {
+    desk.app.py_window.as_ref().and_then(|w| w.pending.clone())
+}
+
+#[test]
+fn closing_the_last_window_with_unsaved_editor_code_asks_first() {
+    let mut desk = Desk::new(true);
+    unsaved_editor_code(&mut desk);
+    let w = desk.window_of(0);
+    assert!(!desk.app.session.documents()[0].is_dirty(), "only the editor has unsaved work");
+    // A programmatic close is refused.
+    let e = desk.app.run("window.close", json!({"window": w})).unwrap_err();
+    assert!(e.contains("Python editor"), "{e}");
+    // The close button asks in the window, which stays open.
+    let sent = desk.close(w);
+    assert!(matches!(editor_pending(&desk), Some(Pending::CloseWindow(_))), "{:?}", editor_pending(&desk));
+    assert_eq!(desk.app.session.documents().len(), 1);
+    assert!(!sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close), "{sent:?}");
+    let sent = answer_editor(&mut desk, Answer::Cancel);
+    assert!(!sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close), "Cancel keeps it open: {sent:?}");
+    assert!(desk.app.py_window.as_ref().is_some_and(|x| x.text == "q = 1" && x.pending.is_none()));
+    // Discard goes on: the clean workbook closes with its last window, and the app quits.
+    desk.close(w);
+    let sent = answer_editor(&mut desk, Answer::Discard);
+    assert!(desk.app.py_window.is_none());
+    assert!(desk.app.session.documents().is_empty());
+    assert!(sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close), "{sent:?}");
+}
+
+#[test]
+fn closing_one_of_two_windows_on_the_editors_workbook_does_not_ask() {
+    let mut desk = Desk::new(true);
+    desk.app.run("view.newWindow", json!({})).unwrap();
+    desk.frames(3);
+    unsaved_editor_code(&mut desk);
+    let child = desk.windows.shown_windows().into_iter().find(|w| Some(*w) != desk.windows.root_window()).unwrap();
+    desk.close(child);
+    assert_eq!(editor_pending(&desk), None, "the workbook stays open in its other window");
+    assert_eq!(desk.app.session.windows().len(), 1);
+}
+
+#[test]
+fn quit_with_unsaved_editor_code_asks_first_and_goes_on_after() {
+    let mut desk = Desk::new(true);
+    unsaved_editor_code(&mut desk);
+    // Quit (⌘Q, the menu bar's Quit, the Dock) with no unsaved workbook.
+    let sent = desk.frame_with(|app, ctx| app.request_quit(ctx));
+    assert_eq!(editor_pending(&desk), Some(Pending::Quit));
+    assert!(!sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close), "{sent:?}");
+    assert!(!desk.app.allow_close);
+    let sent = answer_editor(&mut desk, Answer::Cancel);
+    assert!(!sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close), "Cancel stops the quit: {sent:?}");
+    assert!(desk.app.py_window.as_ref().is_some_and(|x| x.text == "q = 1"));
+    // Discard goes on with the quit, asking about each unsaved workbook next.
+    desk.app.run("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    desk.frame_with(|app, ctx| app.request_quit(ctx));
+    answer_editor(&mut desk, Answer::Discard);
+    assert!(desk.app.py_window.is_none());
+    assert_eq!(desk.app.dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    let sent = desk.answer(SaveAnswer::DontSave);
+    assert!(sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close), "{sent:?}");
+}
+
+#[test]
+fn the_editor_stays_in_its_workbooks_window_while_another_workbooks_window_is_drawn() {
+    let mut desk = Desk::new(true);
+    desk.app.run("file.new", json!({})).unwrap();
+    desk.frames(3);
+    let (w1, w2) = (desk.window_of(0), desk.window_of(1));
+    desk.app.enter_window(w1);
+    desk.app.run("ui.pythonEditor", json!({"on": true})).unwrap();
+    desk.frames(3);
+    let book1 = desk.app.session.documents()[0].uid;
+    assert_eq!(desk.app.py_window.as_ref().map(|w| w.doc), Some(book1), "drawing Book2's window doesn't close Book1's editor");
+    if let Some(w) = desk.app.py_window.as_mut() {
+        w.text = "q = 1".into();
+    }
+    desk.frames(3);
+    assert_eq!(editor_pending(&desk), None, "nor is drawing it a switch to another workbook");
+    assert!(desk.app.py_window.as_ref().is_some_and(|w| w.text == "q = 1" && w.rect.is_some()));
+
+    // Opening the editor from Book2's window asks in Book1's, which comes forward; after the
+    // answer the editor opens on Book2's cell, in Book2's window.
+    desk.app.enter_window(w2);
+    desk.frame_with(|app, _| {
+        let t = python_window::target(app, 0, CellRef::new(0, 0)).unwrap();
+        python_window::request_open(app, t, None, true, false).unwrap();
+    });
+    desk.frames(2);
+    assert!(matches!(editor_pending(&desk), Some(Pending::Open { .. })), "{:?}", editor_pending(&desk));
+    assert_eq!(desk.app.session.active_window(), Some(w1), "the question shows in the editor's window");
+    answer_editor(&mut desk, Answer::Discard);
+    let book2 = desk.app.session.documents()[1].uid;
+    assert_eq!(desk.app.py_window.as_ref().map(|w| (w.doc, w.pending.is_none())), Some((book2, true)));
+    assert_eq!(desk.app.session.active_window(), Some(w2), "and comes forward in Book2's window");
+    // Closing Book2 from its window closes the clean editor with it.
+    desk.app.run("file.close", json!({})).unwrap();
+    desk.frames(3);
+    assert!(desk.app.py_window.is_none());
+}
+
+// ---------------------------------------------------------------- a save that waits for Python cells
+
+/// Python on, with a fake worker whose cells answer once the gate is opened.
+fn with_python(desk: &mut Desk) -> Arc<AtomicBool> {
+    let gate = Arc::new(AtomicBool::new(false));
+    let opened = gate.clone();
+    let t = FakeTransport::new(move |mut w| {
+        w.ready();
+        while let Some(req) = w.next_request() {
+            while !opened.load(Ordering::SeqCst) && !w.killed() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            if !w.done(req.id(), Ok(Output::Value(Value::Number(7.0)))) {
+                return;
+            }
+        }
+    });
+    let python = std::path::PathBuf::from("/home/you/python");
+    desk.app.ui.python.enabled = true;
+    desk.app.python.set_sandbox(Ok("a test sandbox".into()));
+    desk.app.python.report = Some(PythonEnvironment {
+        state: PythonState::Ready,
+        diagnostic: None,
+        sandbox: "a test sandbox".into(),
+        uv: None,
+        interpreter: Some(Interpreter {
+            path: python.clone(),
+            run_as: python,
+            version: Version { major: 3, minor: 12, patch: 7 },
+            kind: InterpreterKind::UvEnvironment,
+            site_dirs: Vec::new(),
+            read_paths: Vec::new(),
+        }),
+        packages: Vec::new(),
+    });
+    desk.app.python.transport = Some(Arc::new(move || Box::new(t.sharing())));
+    desk.frames(2);
+    gate
+}
+
+fn temp_book(name: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!("gridcraft-doc-windows-{}-{name}.xlsx", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    path
+}
+
+impl Desk {
+    fn until_saved(&mut self) {
+        for _ in 0..2_000 {
+            if !self.app.save_waits.any() {
+                self.frames(2);
+                return;
+            }
+            self.frames(1);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        panic!("the wait never ended");
+    }
+}
+
+#[test]
+fn closing_the_last_window_during_a_wait_asks_and_cancel_keeps_the_save_coming() {
+    let mut desk = Desk::new(true);
+    let gate = with_python(&mut desk);
+    let path = temp_book("close");
+    desk.app.run("python.set", json!({"cell": "A1", "code": "x"})).unwrap();
+    desk.frames(2);
+    desk.app.run("file.save", json!({"path": path})).unwrap();
+    assert!(!desk.app.session.documents()[0].is_dirty(), "clean, with the cell still running");
+    desk.app.run_or_alert("file.save", json!({}));
+    let doc = desk.app.session.documents()[0].uid;
+    assert!(desk.app.save_waits.waiting(doc));
+
+    desk.close(desk.window_of(0));
+    assert_eq!(desk.app.dialog.as_ref().map(|d| d.name()), Some("saveChanges"), "it asks, though nothing is unsaved");
+    desk.answer(SaveAnswer::Cancel);
+    assert_eq!(desk.app.session.documents().len(), 1);
+    assert!(desk.app.save_waits.waiting(doc));
+
+    desk.close(desk.window_of(0));
+    let mut sent = desk.answer(SaveAnswer::Save);
+    assert_eq!(desk.app.session.documents().len(), 1, "it saves first");
+    assert!(!sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close));
+    gate.store(true, Ordering::SeqCst);
+    for _ in 0..2_000 {
+        if desk.app.session.documents().is_empty() {
+            break;
+        }
+        sent.extend(desk.frames(1));
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(desk.app.session.documents().is_empty());
+    sent.extend(desk.frames(2));
+    assert!(sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close), "the last window closed: the app quits: {sent:?}");
+    assert!(path.exists());
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Each native window has its own bar; Save and Close comes back to the window the person came from,
+/// not the neighbour, and a save behind them leaves their window in front.
+#[test]
+fn a_save_and_close_during_a_wait_goes_back_to_the_window_the_person_came_from() {
+    let mut desk = Desk::new(true);
+    let gate = with_python(&mut desk);
+    let path = temp_book("three");
+    desk.app.run("file.new", json!({})).unwrap();
+    desk.app.run("file.new", json!({})).unwrap();
+    desk.frames(3);
+    let (a, b) = (desk.window_of(0), desk.window_of(1));
+    desk.app.enter_window(a);
+    desk.frames(2);
+    desk.app.enter_window(b);
+    desk.frames(2);
+    desk.app.run("python.set", json!({"cell": "A1", "code": "x"})).unwrap();
+    desk.frames(2);
+    desk.app.run("file.save", json!({"path": path})).unwrap();
+    desk.app.run_or_alert("file.save", json!({}));
+    desk.app.run_or_alert("file.close", json!({}));
+    desk.frames(2);
+    desk.answer(SaveAnswer::Save);
+    assert_eq!(desk.app.session.documents().len(), 3);
+    gate.store(true, Ordering::SeqCst);
+    desk.until_saved();
+    assert_eq!(desk.app.session.documents().len(), 2);
+    assert_eq!(desk.app.session.active_window(), Some(a), "back where the person came from");
+    assert_eq!(desk.windows.focused_viewport(), desk.viewport(a));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A workbook in another window saves behind the person: their window stays in front, its message
+/// waits in its own window, and what they came through stays in order.
+#[test]
+fn a_save_behind_the_person_keeps_their_window_in_front() {
+    let mut desk = Desk::new(true);
+    let gate = with_python(&mut desk);
+    let blocker = temp_book("blocker");
+    std::fs::write(&blocker, "a file").unwrap();
+    desk.app.run("file.new", json!({})).unwrap();
+    desk.app.run("file.new", json!({})).unwrap();
+    desk.frames(3);
+    let (a, b, c) = (desk.window_of(0), desk.window_of(1), desk.window_of(2));
+    desk.app.enter_window(b);
+    desk.frames(2);
+    desk.app.run("python.set", json!({"cell": "A1", "code": "x"})).unwrap();
+    desk.app.run_or_alert("file.save", json!({"path": blocker.join("book.xlsx")}));
+    desk.frames(2);
+    desk.app.enter_window(a);
+    desk.frames(2);
+    desk.app.enter_window(c);
+    desk.frames(2);
+    gate.store(true, Ordering::SeqCst);
+    desk.until_saved();
+    assert_eq!(desk.app.session.active_window(), Some(c));
+    assert_eq!(desk.windows.focused_viewport(), desk.viewport(c));
+    assert_eq!(desk.app.message, None, "the failure is in its own window");
+    desk.app.show_window(b);
+    assert!(desk.app.message.is_some(), "and shows there");
+    desk.app.show_window(c);
+    desk.app.run_or_alert("file.close", json!({}));
+    desk.frames(2);
+    assert_eq!(desk.app.session.active_window(), Some(a), "the order they came through is what it was");
+    let _ = std::fs::remove_file(&blocker);
 }

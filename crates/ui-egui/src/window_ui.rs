@@ -179,4 +179,9 @@ impl SheetApp {
     pub fn parked_window_with_draft(&self) -> Option<u64> {
         self.parked.iter().filter(|(_, w)| w.editor.is_some() || w.text_box_editor.is_some()).map(|(id, _)| *id).min()
     }
+
+    /// Whether this parked window has a cell or text-box draft open.
+    pub(crate) fn parked_has_draft(&self, id: u64) -> bool {
+        self.parked.get(&id).is_some_and(|w| w.editor.is_some() || w.text_box_editor.is_some())
+    }
 }

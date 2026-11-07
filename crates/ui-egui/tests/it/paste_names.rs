@@ -81,7 +81,7 @@ fn the_control_channel_confirms_the_dialog_like_ok() {
     {
         match handle(h.state_mut(), &ctx, method, &params) {
             Outcome::Done(v) => assert_eq!(v["ok"], json!(true), "{method}: {v}"),
-            Outcome::Screenshot { .. } => panic!("{method} took a screenshot"),
+            Outcome::Screenshot { .. } | Outcome::Hold(_) => panic!("{method} took a screenshot"),
         }
     }
     h.run_steps(2);

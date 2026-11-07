@@ -186,7 +186,8 @@ fn trace_harness(language: Language) -> Harness {
     let mut app = crate::common::app(s);
     app.ui.language = language;
     app.ui.ribbon_tab = "Formulas".into();
-    let mut h = crate::common::builder().with_size(vec2(1400.0, 800.0)).build_ui_state(
+    // Wide enough for Formulas' long labels in German.
+    let mut h = crate::common::builder().with_size(vec2(1600.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);

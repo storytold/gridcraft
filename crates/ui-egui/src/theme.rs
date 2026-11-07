@@ -132,6 +132,9 @@ pub struct Tokens {
     /// both themes.
     pub sheet_py_tag: Color32,
     pub on_sheet_py_tag: Color32,
+    /// The PY tag of a cell that failed, and of one that can't run at all.
+    pub sheet_py_tag_error: Color32,
+    pub sheet_py_tag_blocked: Color32,
     /// Trace arrows on the sheet: precedents and dependents, and the links Trace Error follows
     /// between cells showing an error. Sheet colours.
     pub sheet_trace_arrow: Color32,
@@ -286,6 +289,8 @@ impl Tokens {
             on_badge: pick(dark, Color32::WHITE, rgb(0x0B1F17)),
             sheet_py_tag: SHEET_PY_TAG,
             on_sheet_py_tag: Color32::WHITE,
+            sheet_py_tag_error: rgb(0xB3261E),
+            sheet_py_tag_blocked: rgb(0x55606E),
             sheet_trace_arrow: SHEET_TRACE_ARROW,
             sheet_trace_error: SHEET_TRACE_ERROR,
         }
@@ -458,6 +463,10 @@ mod contrast_tests {
         add("PY badge on input", t.badge_py, t.input_bg, GLYPH);
         add("PY tag text", t.on_sheet_py_tag, t.sheet_py_tag, TEXT);
         add("PY tag on sheet", t.sheet_py_tag, t.grid_bg, GLYPH);
+        add("PY error tag text", t.on_sheet_py_tag, t.sheet_py_tag_error, TEXT);
+        add("PY error tag on sheet", t.sheet_py_tag_error, t.grid_bg, GLYPH);
+        add("PY blocked tag text", t.on_sheet_py_tag, t.sheet_py_tag_blocked, TEXT);
+        add("PY blocked tag on sheet", t.sheet_py_tag_blocked, t.grid_bg, GLYPH);
         v
     }
 

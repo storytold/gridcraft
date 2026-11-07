@@ -11,7 +11,10 @@ use std::fs;
 use std::path::Path;
 
 /// "File" is not a ribbon tab: its sequence opens the Backstage view.
-const TABS: &[&str] = &["File", "Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
+const TABS: &[&str] = &["File", "Home", "Insert", "Draw", "Page Layout", "Formulas", "Python", "Data", "Review", "View", "Automate"];
+/// The Python tab's letter. It is contextual, so its sequences are tested on a Python cell, where
+/// the tab is up.
+const PYTHON_TAB_KEY: char = 'Y';
 
 /// Commands whose empty-params behaviour depends on the host machine (e.g. the
 /// system dictionary). These are never probed; their tests assert "invoked
@@ -344,7 +347,8 @@ fn render_tests(entries: &[Entry], probe: &Probe) -> String {
             // All kinds are validated during parse; anything else cannot occur.
             _ => String::new(),
         };
-        out.push_str(&format!("\n#[test]\nfn {}() {{\n    let mut h = harness(blank());\n    {body}\n}}\n", test_name(&e.seq)));
+        let session = if e.seq.starts_with(PYTHON_TAB_KEY) { "python_cell()" } else { "blank()" };
+        out.push_str(&format!("\n#[test]\nfn {}() {{\n    let mut h = harness({session});\n    {body}\n}}\n", test_name(&e.seq)));
     }
     out.push_str(&format!(
         "\n#[test]\nfn generated_test_count_matches_the_table() {{\n    const EXPECTED: usize = {};\n    assert_eq!(gridcraft_ui_egui::keytips::keytip_table::SEQUENCES.len(), EXPECTED);\n}}\n",
@@ -376,6 +380,13 @@ fn harness(session: Session) -> Harness {
 fn blank() -> Session {
     let mut s = Session::new();
     s.new_workbook();
+    s
+}
+
+/// The active cell is a Python cell, so the Python tab is up.
+fn python_cell() -> Session {
+    let mut s = blank();
+    s.execute("python.set", serde_json::json!({"cell": "A1", "code": "1"})).unwrap();
     s
 }
 

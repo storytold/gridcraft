@@ -40,6 +40,12 @@ impl KeyTips {
         self.prefix.as_deref()
     }
 
+    /// Puts the prefix back: the letter just typed led nowhere, and is consumed like any other that
+    /// does, as Excel does.
+    pub fn restore(&mut self, prefix: Option<String>) {
+        self.prefix = prefix;
+    }
+
     pub fn clear(&mut self) {
         self.prefix = None;
         self.alt_armed = false;

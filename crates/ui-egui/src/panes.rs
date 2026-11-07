@@ -29,9 +29,9 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 "watch" => "Watch Window",
                 "selection" => "Selection",
                 "formatChart" => "Format Chart Area",
-                _ => "",
+                other => crate::python_ui::panes::title(other).unwrap_or(""),
             };
-            ui.label(egui::RichText::new(title).font(theme::ui_bold(15.0)));
+            ui.label(egui::RichText::new(app.ui.language.tr(title)).font(theme::ui_bold(15.0)));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if crate::widgets::icon_button(ui, crate::icons::Icon::Close, t.text_dim, "Close", vec2(22.0, 22.0)).clicked() {
                     if pane == "comments" {
@@ -42,6 +42,11 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             });
         });
         ui.separator();
+        // The Python panes scroll on their own, so that a long list draws only the rows in view.
+        if crate::python_ui::panes::title(&pane).is_some() {
+            crate::python_ui::panes::body(app, ui, &pane);
+            return;
+        }
         egui::ScrollArea::vertical().show(ui, |ui| match pane.as_str() {
             "comments" => comments(app, ui),
             "watch" => watch(app, ui),

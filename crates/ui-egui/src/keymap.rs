@@ -41,6 +41,12 @@ pub enum Shortcut {
     Zoom(i32),
     /// Ctrl+Alt+Shift+P: edit the active cell as Python code (Python mode).
     PythonMode,
+    /// Ctrl+Alt+Shift+M: the active Python cell's return type, Python Object or Excel Value.
+    PythonOutput,
+    /// Ctrl+Alt+Shift+C: Display Plot over Cells, on a Python cell that gave a picture.
+    PythonDisplayOverCells,
+    /// Ctrl+Shift+F5: the active Python cell's card.
+    PythonCard,
 }
 
 fn run(id: &'static str) -> Shortcut {
@@ -225,6 +231,9 @@ fn lookup_control_alt_shortcuts(ctx: LookupContext) -> Option<Shortcut> {
         F9 if ctrl_alt => run("formulas.calculateNow"),
         // Python in cells (Cmd+Option on macOS too).
         P if ctrl_alt && s => Shortcut::PythonMode,
+        M if ctrl_alt && s => Shortcut::PythonOutput,
+        C if ctrl_alt && s => Shortcut::PythonDisplayOverCells,
+        F5 if (ctrl || cmd) && s => Shortcut::PythonCard,
         R if ctrl_alt && mac => run("view.collapseRibbon"),
         Num0 if ctrl_alt && mac => borders("outside"),
         Minus if ctrl_alt && mac => borders("none"),
@@ -349,6 +358,12 @@ pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physic
         }
         Shortcut::Edit => app.begin_edit(None, false),
         Shortcut::PythonMode => app.toggle_python_mode(),
+        Shortcut::PythonOutput => crate::python_card::switch_output(app),
+        Shortcut::PythonDisplayOverCells => crate::python_plots::display_over_cells(app),
+        Shortcut::PythonCard => {
+            // On another cell the shortcut does nothing, as in Excel.
+            let _ = crate::python_card::open(app);
+        }
         Shortcut::ContextMenu => app.grid.context_menu = Some(geo.cell_rect(sh, active).center()),
         Shortcut::DropDown => {
             if sh.validations.iter().any(|d| d.in_cell_dropdown && d.ranges.iter().any(|r| r.contains(active))) {

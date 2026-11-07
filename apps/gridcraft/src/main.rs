@@ -97,6 +97,13 @@ fn prefs_enabled() -> bool {
 }
 
 /// Where the log files live: `logs` in the settings folder, next to `ui.json` (see `logging`).
+/// `X,Y` for `--window-pos`.
+fn parse_window_pos(v: &str) -> Option<[f32; 2]> {
+    let (x, y) = v.split_once(',')?;
+    let (x, y): (f32, f32) = (x.trim().parse().ok()?, y.trim().parse().ok()?);
+    (x.is_finite() && y.is_finite()).then_some([x, y])
+}
+
 fn log_dir() -> Option<std::path::PathBuf> {
     Some(config_dir()?.join("logs"))
 }
@@ -151,10 +158,20 @@ fn read_clipboard<T>(
     read(clipboard.as_mut()?).ok()
 }
 
+/// Where this user's running GridCraft processes tell each other which floating picture is on the
+/// clipboard. Not the system's temporary folder: `/tmp` on Linux is shared, and a note another user
+/// left there can't be replaced, so this user's notes would fail and that user's would be read. So
+/// with no folder of this user's (`dir`), or one that can't be made, there is no note.
+fn published_picture_note(dir: Option<std::path::PathBuf>) -> Option<std::path::PathBuf> {
+    let dir = dir.filter(|dir| std::fs::create_dir_all(dir).is_ok())?;
+    Some(dir.join(gridcraft_ui_egui::published_picture::NOTE_FILE))
+}
+
 fn services() -> Services {
     // Keep the owner alive: X11/Wayland serve clipboard data from this handle.
     let clipboard: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
-    let (html_clipboard, text_clipboard, image_clipboard) = (clipboard.clone(), clipboard.clone(), clipboard.clone());
+    let (html_clipboard, text_clipboard, image_clipboard, copy_clipboard) =
+        (clipboard.clone(), clipboard.clone(), clipboard.clone(), clipboard.clone());
     Services {
         copy_html: Some(Box::new(move |html, text| {
             let mut clipboard = clipboard.borrow_mut();
@@ -169,6 +186,30 @@ fn services() -> Services {
             let image = read_clipboard(&image_clipboard, |clipboard| clipboard.get_image())?;
             image::RgbaImage::from_raw(u32::try_from(image.width).ok()?, u32::try_from(image.height).ok()?, image.bytes.into_owned())
         })),
+        copy_image: Some(Box::new(move |image| {
+            let mut clipboard = copy_clipboard.borrow_mut();
+            if clipboard.is_none() {
+                *clipboard = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);
+            }
+            let data = arboard::ImageData {
+                width: image.width() as usize,
+                height: image.height() as usize,
+                bytes: std::borrow::Cow::Borrowed(image.as_raw()),
+            };
+            clipboard.as_mut().ok_or("clipboard unavailable")?.set_image(data).map_err(|e| e.to_string())
+        })),
+        note_published_picture: Some(Box::new(|hash| {
+            let Some(note) = published_picture_note(gridcraft_mcp::control_auth::user_dir()) else {
+                log::warn!("Can't note the published picture: this user has no folder for it");
+                return;
+            };
+            if let Err(e) = gridcraft_ui_egui::published_picture::write(&note, hash) {
+                log::warn!("Can't note the published picture: {e}");
+            }
+        })),
+        read_published_picture: Some(Box::new(|| {
+            published_picture_note(gridcraft_mcp::control_auth::user_dir()).and_then(|note| gridcraft_ui_egui::published_picture::read(&note))
+        })),
         pick_open: Some(Box::new(|| {
             rfd::FileDialog::new()
                 .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "slk", "json"])
@@ -180,6 +221,7 @@ fn services() -> Services {
                 .pick_file()
                 .and_then(|p| p.to_str().map(str::to_string))
         })),
+        pick_interpreter: Some(Box::new(|| rfd::FileDialog::new().pick_file().and_then(|p| p.to_str().map(str::to_string)))),
         pick_picture: Some(Box::new(|| {
             rfd::FileDialog::new()
                 .add_filter("Pictures (PNG, JPEG)", &["png", "jpg", "jpeg"])
@@ -238,6 +280,12 @@ fn icon() -> Option<egui::IconData> {
 }
 
 fn main() -> eframe::Result<()> {
+    // A confined launcher run (`gridcraft_sandbox::launch_command`) comes before everything else:
+    // it opens no window, writes no log, and becomes the program it confines.
+    let raw: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if let Some(code) = gridcraft_sandbox::handle_args(&raw) {
+        std::process::exit(code);
+    }
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     // Commands catch their panics (`Session::execute`), but the default hook only prints to
@@ -274,10 +322,19 @@ fn main() -> eframe::Result<()> {
     let mut control_port: Option<u16> = std::env::var("GRIDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
     let mut control_token: Option<String> = std::env::var("GRIDCRAFT_CONTROL_TOKEN").ok();
     let mut sample: Option<String> = None;
+    let mut window_pos: Option<[f32; 2]> = None;
     let mut files: Vec<String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            // For test runs: where the window opens, in points from the main display's top left.
+            "--window-pos" => {
+                i += 1;
+                window_pos = args.get(i).and_then(|v| parse_window_pos(v));
+                if window_pos.is_none() {
+                    eprintln!("--window-pos takes X,Y");
+                }
+            }
             "--control" => {
                 i += 1;
                 control_port = args.get(i).and_then(|p| p.parse().ok());
@@ -337,6 +394,9 @@ fn main() -> eframe::Result<()> {
         .with_min_inner_size([640.0, 420.0])
         .with_app_id("ai.storyteller.gridcraft")
         .with_drag_and_drop(true);
+    if let Some(at) = window_pos {
+        viewport = viewport.with_position(at);
+    }
     if cfg!(target_os = "macos") {
         viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
     }
@@ -428,6 +488,19 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod packaging_tests {
     use gridcraft_engine::io::FileKind;
+
+    #[test]
+    fn the_published_picture_note_is_in_this_users_folder_or_nowhere() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-note-test-{}", std::process::id()));
+        let note = super::published_picture_note(Some(dir.clone()));
+        assert_eq!(note.as_deref().and_then(|note| note.parent()), Some(dir.as_path()));
+        // No folder, or one that can't be made: no note, rather than one in a shared folder.
+        assert_eq!(super::published_picture_note(None), None);
+        let file = dir.join("a file");
+        std::fs::write(&file, b"").unwrap();
+        assert_eq!(super::published_picture_note(Some(file.join("below"))), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     /// The text between `start` and `end` that follows each `marker` in `text`, sorted (e.g. the
     /// `xlsb` in `Classes\.xlsb\OpenWithProgids`).

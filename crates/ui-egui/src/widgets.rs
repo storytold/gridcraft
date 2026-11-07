@@ -638,14 +638,55 @@ pub fn toast(app: &mut SheetApp, ctx: &egui::Context) {
 /// optional action button and a dismiss ✕. Returns nothing; dismissing clears `app.notice`.
 pub fn notice_bar(app: &mut SheetApp, ui: &mut Ui) {
     let Some(notice) = app.notice.clone() else { return };
+    let button = notice.action.as_ref().map(|(label, _)| label.as_str());
+    let (clicked, dismiss) = message_bar(ui, "notice_bar", notice.kind, &notice.text, button);
+    if clicked && let Some((_, dialog)) = &notice.action {
+        app.open_dialog(dialog, serde_json::json!({}));
+    }
+    if dismiss {
+        app.notice = None;
+    }
+}
+
+/// A message bar under the ribbon: an icon, the text (which wraps in a narrow window, ahead of the
+/// buttons), an optional button and a dismiss button. Returns whether each was clicked.
+pub(crate) fn message_bar(ui: &mut Ui, id: &'static str, kind: crate::NoticeKind, text: &str, button: Option<&str>) -> (bool, bool) {
     let t = Tokens::get(ui.ctx());
-    let (bg, border) = match notice.kind {
+    let mut clicked = false;
+    let mut dismiss = false;
+    bar(ui, id, kind, text, |ui| {
+        if icon_button(ui, Icon::Close, t.text_dim, "Dismiss", vec2(20.0, 20.0)).clicked() {
+            dismiss = true;
+        }
+        if let Some(label) = button
+            && ui.button(egui::RichText::new(label).font(theme::ui_font(12.5))).clicked()
+        {
+            clicked = true;
+        }
+    });
+    (clicked, dismiss)
+}
+
+/// A message bar with two buttons and no way to dismiss it, for what stays until it is answered.
+/// Returns whether each was clicked.
+pub(crate) fn choice_bar(ui: &mut Ui, id: &'static str, kind: crate::NoticeKind, text: &str, first: &str, second: &str) -> (bool, bool) {
+    let mut clicked = (false, false);
+    bar(ui, id, kind, text, |ui| {
+        let button = |ui: &mut Ui, label: &str| ui.button(egui::RichText::new(label).font(theme::ui_font(12.5))).clicked();
+        clicked.1 = button(ui, second);
+        clicked.0 = button(ui, first);
+    });
+    clicked
+}
+
+/// The bar itself; `buttons` adds its buttons from the right.
+fn bar(ui: &mut Ui, id: &'static str, kind: crate::NoticeKind, text: &str, buttons: impl FnOnce(&mut Ui)) {
+    let t = Tokens::get(ui.ctx());
+    let (bg, border) = match kind {
         crate::NoticeKind::Warning => (t.notice_warn_bg, t.notice_warn_border),
         crate::NoticeKind::Info => (t.notice_info_bg, t.notice_info_border),
     };
-    let mut dismiss = false;
-    let mut action: Option<(String, String)> = None;
-    egui::Panel::top("notice_bar").frame(egui::Frame::NONE.fill(bg).inner_margin(egui::Margin::symmetric(12, 0))).show(ui, |ui| {
+    egui::Panel::top(id).frame(egui::Frame::NONE.fill(bg).inner_margin(egui::Margin::symmetric(12, 3))).show(ui, |ui| {
         // Bottom border as a 1px strip spanning the bar.
         let bar = ui.max_rect();
         ui.painter().rect_stroke(bar, 0.0, Stroke::new(1.0, border), StrokeKind::Inside);
@@ -654,32 +695,21 @@ pub fn notice_bar(app: &mut SheetApp, ui: &mut Ui) {
             icons::paint(
                 ui.painter(),
                 r,
-                match notice.kind {
+                match kind {
                     crate::NoticeKind::Warning => Icon::Lock,
                     crate::NoticeKind::Info => Icon::Note,
                 },
                 border,
             );
             ui.add_space(6.0);
-            ui.label(egui::RichText::new(&notice.text).font(theme::ui_font(12.5)).color(t.text));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if icon_button(ui, Icon::Close, t.text_dim, "Dismiss", vec2(20.0, 20.0)).clicked() {
-                    dismiss = true;
-                }
-                if let Some((label, dialog)) = &notice.action
-                    && ui.button(egui::RichText::new(label).font(theme::ui_font(12.5))).clicked()
-                {
-                    action = Some((label.clone(), dialog.clone()));
-                }
+                buttons(ui);
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.add(egui::Label::new(egui::RichText::new(text).font(theme::ui_font(12.5)).color(t.text)).wrap());
+                });
             });
         });
     });
-    if let Some((_, dialog)) = action {
-        app.open_dialog(&dialog, serde_json::json!({}));
-    }
-    if dismiss {
-        app.notice = None;
-    }
 }
 
 #[cfg(test)]

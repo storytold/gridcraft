@@ -29,6 +29,8 @@ impl SheetApp {
         for action in actions {
             match action {
                 keytips::Action::Tab("File") => self.open_backstage(backstage::Page::Home),
+                // A contextual tab that isn't up has no letter to answer to.
+                keytips::Action::Tab(tab) if !crate::ribbon::tab_is_up(self, tab) => self.keytips.restore(before.clone()),
                 keytips::Action::Tab(tab) => {
                     self.run_or_alert("ui.ribbonTab", json!({"tab": tab}));
                     self.ui.ribbon_collapsed = false;

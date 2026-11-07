@@ -21,6 +21,7 @@ mod galleries;
 mod home;
 mod insert;
 mod page_layout;
+mod python;
 mod review;
 mod shortcuts;
 mod title_bar;
@@ -36,6 +37,7 @@ pub use home::FONTS;
 use home::home;
 use insert::{draw, insert};
 use page_layout::page_layout;
+use python::python;
 use review::review;
 pub use shortcuts::shortcut;
 pub use title_bar::{MAC_CONTENT_LEFT, MAC_TITLE_BAR, TITLE_LEFT_PAD, title_bar};
@@ -59,56 +61,32 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         .exact_size(h)
         .frame(egui::Frame::NONE.fill(t.window).inner_margin(egui::Margin { left: 10, right: 10, top: 0, bottom: 6 }))
         .show(ui, |ui| {
-            // Tabs row.
+            // Tabs row. In a narrow window the contextual tabs stay in view at its end, and the others
+            // scroll beside them: a tab that comes and goes with what is selected must be reachable.
             let tabs_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 32.0));
             ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     ui.add_space(8.0);
-                    if app.chrome.file_tab {
-                        file_menu(app, ui);
-                    }
-                    let mut tabs: Vec<&str> = TABS.to_vec();
                     let ctx_tabs = contextual_tabs(app);
-                    tabs.extend(ctx_tabs.iter());
-                    for tab in tabs {
-                        let active = app.ui.ribbon_tab == tab;
-                        let contextual = ctx_tabs.contains(&tab);
-                        let font = theme::ui_font(13.5);
-                        let label = app.ui.language.tr(tab);
-                        let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
-                        let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
-                        if resp.hovered() && !active {
-                            ui.painter().rect_filled(r.shrink2(vec2(2.0, 4.0)), 5.0, t.hover);
-                        }
-                        let color = if contextual {
-                            t.accent
-                        } else if active {
-                            t.text
-                        } else {
-                            t.text_dim
-                        };
-                        ui.painter().text(r.center(), Align2::CENTER_CENTER, label, if active { theme::ui_bold(13.5) } else { font }, color);
-                        if active {
-                            let ul = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.clamp(20.0, 40.0), 3.0));
-                            ui.painter().rect_filled(ul, 1.5, t.accent);
-                        }
-                        if resp.clicked() {
-                            if active && !collapsed {
-                                app.ui.ribbon_collapsed = true;
-                            } else {
-                                app.ui.ribbon_tab = tab.to_string();
-                                app.ui.ribbon_collapsed = false;
-                            }
-                        }
-                        if resp.double_clicked() {
-                            app.ui.ribbon_collapsed = !collapsed;
-                        }
-                        if app.keytips.prefix() == Some("")
-                            && let Some(sequence) = keytip_table::tab_sequence(tab)
-                        {
-                            keytip(app, ui, sequence, pos2(r.center().x, r.bottom() - 1.0));
-                        }
+                    let pinned: f32 = ctx_tabs.iter().map(|tab| tab_width(app, ui, tab) + ui.spacing().item_spacing.x).sum();
+                    egui::ScrollArea::horizontal()
+                        .id_salt("ribbon_tab_row")
+                        .max_width((ui.available_width() - pinned).max(0.0))
+                        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 2.0;
+                                if app.chrome.file_tab {
+                                    file_menu(app, ui);
+                                }
+                                for tab in TABS {
+                                    tab_button(app, ui, tab, false, collapsed);
+                                }
+                            });
+                        });
+                    for tab in ctx_tabs {
+                        tab_button(app, ui, tab, true, collapsed);
                     }
                 });
             });
@@ -149,6 +127,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             "Draw" => draw(app, ui),
                             "Page Layout" => page_layout(app, ui),
                             "Formulas" => formulas(app, ui),
+                            PYTHON_TAB => python(app, ui),
                             "Data" => data(app, ui),
                             "Review" => review(app, ui),
                             "View" => view(app, ui),
@@ -163,6 +142,56 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 scroll_arrows(ui, &t, tab.as_str(), scroll);
             });
         });
+}
+
+/// A tab's width in the row, by its label in the interface language.
+fn tab_width(app: &SheetApp, ui: &Ui, tab: &str) -> f32 {
+    let t = Tokens::get(ui.ctx());
+    ui.painter().layout_no_wrap(app.ui.language.tr(tab).to_string(), theme::ui_font(13.5), t.text).size().x + 22.0
+}
+
+/// One tab of the row: clicking it shows it, and clicking the active one collapses the ribbon.
+fn tab_button(app: &mut SheetApp, ui: &mut Ui, tab: &str, contextual: bool, collapsed: bool) {
+    let t = Tokens::get(ui.ctx());
+    let active = app.ui.ribbon_tab == tab;
+    let label = app.ui.language.tr(tab);
+    let width = tab_width(app, ui, tab);
+    let (r, resp) = ui.allocate_exact_size(vec2(width, 30.0), Sense::click());
+    if contextual {
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, active, label));
+    }
+    if resp.hovered() && !active {
+        ui.painter().rect_filled(r.shrink2(vec2(2.0, 4.0)), 5.0, t.hover);
+    }
+    let color = if contextual {
+        t.accent
+    } else if active {
+        t.text
+    } else {
+        t.text_dim
+    };
+    let font = if active { theme::ui_bold(13.5) } else { theme::ui_font(13.5) };
+    ui.painter().text(r.center(), Align2::CENTER_CENTER, label, font, color);
+    if active {
+        let ul = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2((width - 22.0).clamp(20.0, 40.0), 3.0));
+        ui.painter().rect_filled(ul, 1.5, t.accent);
+    }
+    if resp.clicked() {
+        if active && !collapsed {
+            app.ui.ribbon_collapsed = true;
+        } else {
+            app.ui.ribbon_tab = tab.to_string();
+            app.ui.ribbon_collapsed = false;
+        }
+    }
+    if resp.double_clicked() {
+        app.ui.ribbon_collapsed = !collapsed;
+    }
+    if app.keytips.prefix() == Some("")
+        && let Some(sequence) = keytip_table::tab_sequence(tab)
+    {
+        keytip(app, ui, sequence, pos2(r.center().x, r.bottom() - 1.0));
+    }
 }
 
 /// How much of the active tab's groups the ribbon card shows, recorded each frame for the scroll
@@ -274,9 +303,18 @@ fn theme_choices(app: &mut SheetApp, ui: &mut Ui) {
     }
 }
 
-const CONTEXTUAL_TABS: [&str; 3] = ["Table Design", "Chart Design", crate::paper_view::TAB];
+/// The Python tab: up while the person is on or working with a Python cell ([`crate::python_ui::tab_shows`]).
+pub const PYTHON_TAB: &str = "Python";
 
-fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
+const CONTEXTUAL_TABS: [&str; 4] = ["Table Design", "Chart Design", crate::paper_view::TAB, PYTHON_TAB];
+
+/// Whether a key tip can show this tab now: every tab can, except a contextual one that isn't up.
+pub(crate) fn tab_is_up(app: &SheetApp, tab: &str) -> bool {
+    !CONTEXTUAL_TABS.contains(&tab) || contextual_tabs(app).contains(&tab)
+}
+
+/// The contextual tabs showing now, left to right. They follow the regular tabs.
+pub fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
     let mut v = Vec::new();
     if let Some(d) = app.session.active()
         && let Some(sh) = d.wb.active()
@@ -290,6 +328,10 @@ fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
         if app.grid.hf_edit.is_some() {
             v.push(crate::paper_view::TAB);
         }
+    }
+    // Last, so that it is always the rightmost.
+    if crate::python_ui::tab_shows(app) {
+        v.push(PYTHON_TAB);
     }
     v
 }
@@ -312,6 +354,7 @@ mod tooltip_tests {
             include_str!("ribbon/home.rs"),
             include_str!("ribbon/insert.rs"),
             include_str!("ribbon/page_layout.rs"),
+            include_str!("ribbon/python.rs"),
             include_str!("ribbon/review.rs"),
             include_str!("ribbon/shortcuts.rs"),
             include_str!("ribbon/title_bar.rs"),

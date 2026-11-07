@@ -15,6 +15,7 @@ pub mod formulas;
 pub mod insert;
 pub mod inspect;
 pub mod macros;
+pub mod object_clipboard;
 pub mod pivot;
 pub mod print;
 pub mod python;
@@ -166,6 +167,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(format::specs());
         v.extend(sheet::specs());
         v.extend(insert::specs());
+        v.extend(object_clipboard::specs());
         v.extend(controls::specs());
         v.extend(equation::specs());
         v.extend(data::specs());
@@ -405,6 +407,9 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         protection_checked: false,
         edits: Vec::new(),
     };
+    if let Some(held) = &d.held_link {
+        held.seed(&mut ctx.wb);
+    }
     let r = f(&mut ctx)?;
     let Ctx { mut wb, mut changed, structural, mut fit_rows, protection_checked, edits, .. } = ctx;
     // Equations whose source changed (or that arrived without a layout, as from a paste) are

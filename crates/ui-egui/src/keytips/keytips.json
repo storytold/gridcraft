@@ -46,6 +46,12 @@
    "target": "Formulas"
   },
   {
+   "seq": "Y",
+   "kind": "tab",
+   "target": "Python",
+   "note": "A contextual tab of GridCraft's own (Excel keeps these in Formulas, M Y): the letter answers only while the tab is up. Its letters are below, after M."
+  },
+  {
    "seq": "A",
    "kind": "tab",
    "target": "Data"
@@ -1803,6 +1809,153 @@
    "target": "formulas.calculationOptions",
    "excel": "Partial Calculation",
    "note": "Calculation options: Partial"
+  },
+  {
+   "seq": "MY",
+   "kind": "control",
+   "target": "python.insert",
+   "excel": "Insert Python",
+   "note": "Python group: starts Python mode on the active cell"
+  },
+  {
+   "seq": "MZR",
+   "kind": "command",
+   "target": "python.reset",
+   "excel": "Reset",
+   "note": "Python group"
+  },
+  {
+   "seq": "MZI",
+   "kind": "control",
+   "target": "python.initializationEditor",
+   "excel": "Initialization",
+   "note": "Python group: opens the Initialization editor"
+  },
+  {
+   "seq": "MZD",
+   "kind": "control",
+   "target": "python.problems",
+   "excel": "Diagnostics",
+   "note": "Python group: opens the Problems pane"
+  },
+  {
+   "seq": "YA",
+   "kind": "command",
+   "target": "python.runAll",
+   "excel": "",
+   "note": "Python tab, Run: Run All"
+  },
+  {
+   "seq": "YB",
+   "kind": "control",
+   "target": "python.problems",
+   "excel": "",
+   "note": "Python tab, Diagnostics: Problems"
+  },
+  {
+   "seq": "YC",
+   "kind": "command",
+   "target": "python.run",
+   "excel": "",
+   "note": "Python tab, Run: Run Cell"
+  },
+  {
+   "seq": "YE",
+   "kind": "control",
+   "target": "python.editor",
+   "excel": "",
+   "note": "Python tab, Code: Editor"
+  },
+  {
+   "seq": "YI",
+   "kind": "control",
+   "target": "python.insert",
+   "excel": "",
+   "note": "Python tab, Code: Insert Python"
+  },
+  {
+   "seq": "YK",
+   "kind": "control",
+   "target": "python.checkSandbox",
+   "excel": "",
+   "note": "Python tab, Environment: Check Sandbox"
+  },
+  {
+   "seq": "YL",
+   "kind": "control",
+   "target": "python.runLogPane",
+   "excel": "",
+   "note": "Python tab, Diagnostics: Run Log"
+  },
+  {
+   "seq": "YM",
+   "kind": "control",
+   "target": "python.calculationMenu",
+   "excel": "",
+   "note": "Python tab, Run: Python Calculation"
+  },
+  {
+   "seq": "YN",
+   "kind": "control",
+   "target": "python.state",
+   "excel": "",
+   "note": "Python tab, Environment: the state button"
+  },
+  {
+   "seq": "YO",
+   "kind": "control",
+   "target": "python.outputAs",
+   "excel": "",
+   "note": "Python tab, Code: Output As"
+  },
+  {
+   "seq": "YP",
+   "kind": "control",
+   "target": "python.packages",
+   "excel": "",
+   "note": "Python tab, Environment: Packages"
+  },
+  {
+   "seq": "YR",
+   "kind": "command",
+   "target": "python.reset",
+   "excel": "",
+   "note": "Python tab, Run: Reset"
+  },
+  {
+   "seq": "YS",
+   "kind": "command",
+   "target": "python.stop",
+   "excel": "",
+   "note": "Python tab, Run: Stop"
+  },
+  {
+   "seq": "YT",
+   "kind": "control",
+   "target": "python.initializationEditor",
+   "excel": "",
+   "note": "Python tab, Code: Initialization"
+  },
+  {
+   "seq": "YV",
+   "kind": "control",
+   "target": "python.interpreter",
+   "excel": "",
+   "note": "Python tab, Environment: Interpreter; its items are widgets, with no letters"
+  },
+  {
+   "seq": "YW",
+   "kind": "control",
+   "target": "python.permissions",
+   "excel": "",
+   "note": "Python tab, Permissions: What Python Can Do"
+  },
+  {
+   "seq": "YX",
+   "kind": "command",
+   "target": "python.clearRunLog",
+   "excel": "",
+   "note": "Python tab, Diagnostics: Clear"
   },
   {
    "seq": "AB",

@@ -72,14 +72,19 @@ pub fn check_first_line(line: &str, token: &str) -> Result<Value, Value> {
 /// only the user can open (`$XDG_RUNTIME_DIR/gridcraft`, else `~/.cache/gridcraft`; on Windows
 /// `%USERPROFILE%\.gridcraft`), file `control-<port>.token`. `None` when no such folder is known.
 pub fn token_path(port: u16) -> Option<PathBuf> {
-    let dir = if cfg!(windows) {
+    Some(user_dir()?.join(format!("control-{port}.token")))
+}
+
+/// GridCraft's folder for this user's running processes: the one [`token_path`] describes. Unlike the
+/// system's temporary folder, which is `/tmp` on Linux, other users' processes have no part in it.
+pub fn user_dir() -> Option<PathBuf> {
+    Some(if cfg!(windows) {
         PathBuf::from(std::env::var_os("USERPROFILE").filter(|v| !v.is_empty())?).join(".gridcraft")
     } else if let Some(run) = std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()) {
         PathBuf::from(run).join("gridcraft")
     } else {
         PathBuf::from(std::env::var_os("HOME").filter(|v| !v.is_empty())?).join(".cache").join("gridcraft")
-    };
-    Some(dir.join(format!("control-{port}.token")))
+    })
 }
 
 /// The port of a control address (`127.0.0.1:7979` → 7979).

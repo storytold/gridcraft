@@ -240,6 +240,7 @@ fn serve(stream: TcpStream, token: &str, tx: Sender<ControlRequest>, ctx: egui::
                 Line::Blank => continue,
                 Line::Reject(e) => e,
                 Line::Request { id, method, params } => {
+                    let timeout = gridcraft_ui_egui::control::reply_timeout(&params);
                     let (req, rx) = ControlRequest::new(method, params);
                     let state = std::sync::Arc::clone(&req.state);
                     if tx.send(req).is_err() {
@@ -247,7 +248,7 @@ fn serve(stream: TcpStream, token: &str, tx: Sender<ControlRequest>, ctx: egui::
                     }
                     // Wake the UI thread: egui only runs frames when something happens.
                     ctx.request_repaint();
-                    let mut reply = rx.recv_timeout(Duration::from_secs(60)).unwrap_or_else(|_| {
+                    let mut reply = rx.recv_timeout(timeout).unwrap_or_else(|_| {
                         // Give up on the request as well as on its reply. While it is still
                         // queued this keeps it from running late -- the client was told it had
                         // failed, and an agent that retried after the error ran it twice (#1914);

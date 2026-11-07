@@ -61,6 +61,11 @@ fn drag_cursor(drag: &Drag, rtl: bool) -> Option<CursorIcon> {
     }
 }
 
+/// Whether `p` is on what opens a Python cell's card, which a click there does.
+fn on_python_tag(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> bool {
+    app.session.active().and_then(|d| crate::python_card::tag_at(&app.session, geo, &d.wb, sh, geo.cell_at(sh, p))).is_some_and(|tag| tag.contains(p))
+}
+
 /// The cursor over the grid when no drag owns it: freeze bars, header edges, the fill handle, cells.
 fn hover_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, pointer: &egui::PointerState, geo: &Geo, sh: &Sheet, p: Pos2) {
     let (freeze_cols, freeze_rows) = freeze_handles(geo);
@@ -102,6 +107,8 @@ fn hover_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, poin
         }
     } else if in_cells && app.editor.is_none() && on_cur_border {
         ctx.set_cursor_icon(CursorIcon::Move);
+    } else if in_cells && app.editor.is_none() && app.dialog.is_none() && !mods.any() && on_python_tag(app, geo, sh, p) {
+        ctx.set_cursor_icon(CursorIcon::PointingHand);
     } else if in_cells {
         ctx.set_cursor_icon(CursorIcon::Cell);
     } else if in_col_header {

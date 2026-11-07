@@ -49,7 +49,13 @@ pub mod panes;
 pub mod paper_view;
 pub mod pivot_pane;
 pub mod printing;
+pub mod published_picture;
+pub mod python_card;
+pub mod python_plots;
+pub mod python_ui;
+pub mod python_window;
 pub mod ribbon;
+pub mod save_wait;
 pub mod selection_glide;
 pub mod tabs;
 pub mod text_box;
@@ -125,6 +131,9 @@ pub struct UiState {
     /// [`INTERFACE_SCALE_MIN`]..=[`INTERFACE_SCALE_MAX`]; a malformed saved value reads as 100.
     #[serde(deserialize_with = "lenient_interface_scale")]
     pub interface_scale: u16,
+    /// Python in cells (File ▸ Options ▸ Python). Only widget code writes this (see [`python_ui`]).
+    #[serde(deserialize_with = "python_ui::lenient_prefs")]
+    pub python: python_ui::PythonPrefs,
 }
 
 pub const INTERFACE_SCALE_MIN: u16 = 75;
@@ -160,6 +169,7 @@ impl Default for UiState {
             keytip_invoke_next: None,
             language: i18n::Language::En,
             interface_scale: 100,
+            python: python_ui::PythonPrefs::default(),
         }
     }
 }
@@ -226,6 +236,12 @@ pub struct SheetApp {
     pub views: HashMap<(u64, usize), SheetView>,
     pub editor: Option<editor::EditState>,
     pub text_box_editor: Option<text_box::EditState>,
+    /// The Python editor window, when open (one at a time, for one cell of one workbook).
+    pub py_window: Option<python_window::PyWindow>,
+    /// Python: what the session was given, the panes' state (see [`python_ui`]).
+    pub python: python_ui::PythonUi,
+    /// Saves waiting for Python cells, and control replies held for them (see [`save_wait`]).
+    pub save_waits: save_wait::SaveWaits,
     pub dialog: Option<dialogs::Dialog>,
     /// The File tab's Backstage view, when open (UI-only; replaces the ribbon, grid and tabs).
     pub backstage: Option<backstage::Backstage>,
@@ -293,6 +309,13 @@ pub struct SheetApp {
     /// text noted for an unpublished cut); `None` after a copy, or once the clipboard is seen
     /// holding other text. Once the cut has been pasted, Paste leaves this text alone.
     cut_text: Option<String>,
+    /// While the object clipboard holds a floating picture: the hash of the picture on the system
+    /// clipboard that stands for it ([`published_picture`]). While the system clipboard holds that
+    /// picture, the object clipboard decides what Paste does.
+    published_picture: Option<u64>,
+    /// The hash of what Copy Image last put on the clipboard, and the workbook it came from. That is a
+    /// plain picture, for other applications and its own workbook: it stays out of any other workbook.
+    copied_image: Option<(u64, u64)>,
     /// A run of Tabs: (doc uid, sheet, column it started in, cell the last Tab landed on).
     /// Enter on that cell goes to the next row in the starting column, as in Excel (#911).
     tab_run: Option<(u64, usize, u32, CellRef)>,

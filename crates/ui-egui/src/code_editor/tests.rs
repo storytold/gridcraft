@@ -337,6 +337,57 @@ fn tab_and_enter_under_modifiers_never_reach_the_field() {
 }
 
 #[test]
+fn a_refused_edit_is_undone_on_its_own_and_the_pass_goes_on() {
+    // At most five characters: each edit is checked by itself, in order.
+    let five = |new: &str, _old: &str| new.chars().count() <= 5;
+    let mut events = vec![
+        egui::Event::Text("ab".into()),
+        egui::Event::Paste("cdef".into()),
+        egui::Event::Text("é".into()),
+        key(Key::Backspace, Modifiers::NONE),
+        egui::Event::Text("字字".into()),
+    ];
+    let (mut s, mut sel) = (String::new(), (0, 0));
+    let out = apply_in_order_within(&mut events, &mut s, &mut sel, Lang::Python, &|_| false, Some(&five));
+    // "ab", the paste refused whole, "é", Backspace, then "字字".
+    assert_eq!(s, "ab字字");
+    assert_eq!(sel, (4, 4), "the selection is a char index after the last accepted edit");
+    assert!(out.refused && out.edited);
+    // An edit that shortens text already past the limit is taken.
+    let mut s = "abcdefg".to_string();
+    let mut sel = (7, 7);
+    let shrink = |new: &str, old: &str| new.chars().count() <= 5 || new.len() <= old.len();
+    let mut events = vec![key(Key::Backspace, Modifiers::NONE), egui::Event::Text("x".into())];
+    let out = apply_in_order_within(&mut events, &mut s, &mut sel, Lang::Python, &|_| false, Some(&shrink));
+    assert_eq!(s, "abcdef", "Backspace is taken, the letter after it is not");
+    assert!(out.refused && out.edited);
+    // Without a check nothing is refused.
+    let mut events = vec![egui::Event::Text("y".repeat(50))];
+    let out = apply_in_order_until(&mut events, &mut s, &mut sel, Lang::Python, &|_| false);
+    assert!(!out.refused && s.len() == 56);
+}
+
+#[test]
+fn pasted_line_breaks_become_newlines() {
+    let mut events = vec![egui::Event::Paste("a\r\nb\rc\n".into())];
+    let (mut s, mut sel) = ("é".to_string(), (1, 1));
+    apply_in_order(&mut events, &mut s, &mut sel, Lang::Python);
+    assert_eq!(s, "éa\nb\nc\n");
+    assert_eq!(sel, (7, 7));
+}
+
+#[test]
+fn the_gutter_counts_lines_and_digits() {
+    assert_eq!(line_count(""), 1);
+    assert_eq!(line_count("a\nb"), 2);
+    assert_eq!(line_count("a\n"), 2, "a line break starts a line, as the editor shows it");
+    assert_eq!(line_count("é\n字\n\u{1F600}"), 3);
+    for (lines, digits) in [(0, 1), (1, 1), (9, 1), (10, 2), (99, 2), (100, 3), (999, 3), (1000, 4), (usize::MAX, 20)] {
+        assert_eq!(gutter_digits(lines), digits, "{lines}");
+    }
+}
+
+#[test]
 fn a_stop_key_ends_the_pass_in_input_order() {
     let stop = |ev: &egui::Event| matches!(ev, egui::Event::Key { key: Key::Enter, pressed: true, modifiers, .. } if modifiers.command);
     // The typing before it is applied; the keys after it are dropped, other input stays.

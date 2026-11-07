@@ -9,8 +9,8 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(noundo "file.new", "New Workbook", ["File"], Some("Cmd+N"), "{sample?: \"budget\"|\"sales\"|\"grades\"}", always, new_workbook),
         cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path} | {name, base64}, plus {password} for a password-protected workbook and {csvAsText?: bool} to keep every csv/tsv/txt field as text, with no number or date conversion (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json)", always, open),
-        cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension)", has_doc, save),
-        cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet)", has_doc, save_as),
+        cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?, wait?: bool, waitSeconds?: number} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension); `wait` saves once the workbook's running or queued Python cells have finished, at most for as long as they may take and never past 120 s, and `waitSeconds` sets that bound; the reply lists what wasn't finished as `unfinished`", has_doc, save),
+        cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path, wait?: bool, waitSeconds?: number} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet); `wait` and `waitSeconds` as for file.save", has_doc, save_as),
         cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html} → {base64}", has_doc, save_bytes),
         cmd!(noundo "file.close", "Close", ["File"], Some("Cmd+W"), "{force?: bool, document?: bool} (closes the active window, or with `document` the workbook and all its windows; the workbook closes with its last window)", has_doc, close),
         cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?, values?: bool} → {path, bytes}: writes the cells as displayed, like Excel's Save As CSV; `values: true` writes raw values instead (full-precision numbers, ISO 8601 dates and times, TRUE/FALSE)", has_doc, |s, p| export(s, p, "csv")),
@@ -107,6 +107,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn save(s: &mut Session, p: &Json) -> Result<Json> {
+    let bound = crate::python::wait_asked(p).map_err(|e| bad("file.save", e))?;
     let path = match str_param(p, "path").map(str::to_string).or_else(|| s.active().and_then(|d| d.path.clone())) {
         Some(p) => p,
         None => {
@@ -114,6 +115,14 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
             return ok();
         }
     };
+    let unfinished = s.python_settle_for_save(bound);
+    let mut reply = write_workbook(s, path)?;
+    crate::python::note_unfinished(&mut reply, bound.is_some(), &unfinished);
+    Ok(reply)
+}
+
+/// Writes the active workbook to `path`.
+fn write_workbook(s: &mut Session, path: String) -> Result<Json> {
     // A PDF is a print of the sheet (Page Setup applies), not a copy of the workbook: the
     // document keeps its file and its unsaved changes.
     if std::path::Path::new(&path).extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {

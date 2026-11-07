@@ -98,6 +98,14 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         });
     }
     sep(ui);
+    // Python: Insert Python starts Python mode on the active cell.
+    let insert_python = big_button(ui, Icon::Python, "Insert\nPython", "Insert Python (Ctrl+Alt+Shift+P)", false);
+    control_keytip(app, ui, &insert_python, "python.insert");
+    if insert_python.clicked() | invoke(app, "python.insert") {
+        app.insert_python();
+    }
+    super::python::formulas_group(app, ui);
+    sep(ui);
     let __k = big_button(ui, Icon::Name, "Name\nManager", "Name Manager", false);
     control_keytip(app, ui, &__k, "dialog:nameManager");
     if __k.clicked() {

@@ -328,7 +328,7 @@ impl<F: Fn(&mut SheetApp, egui::Vec2) -> Geo> ActiveCellVisibility<'_, F> {
 }
 
 fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
-    let previous_popups = (app.grid.filter_menu, app.grid.list_picker, app.grid.header_menu, app.grid.fill_menu);
+    let previous_popups = (app.grid.filter_menu, app.grid.list_picker, app.grid.header_menu, app.grid.fill_menu, app.grid.py_card);
     // A pan the grid never saw end (it was hidden mid-drag) must not swallow the next press.
     if app.grid.touch_pan && !resp.dragged() && !resp.drag_stopped() {
         app.grid.touch_pan = false;
@@ -355,6 +355,8 @@ fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Re
     fill_options_tag(app, ui, geo, sh);
     object_menu(app, ui);
     error_check_tag(app, ui, geo, sh);
+    crate::python_plots::picture_chrome(app, ui, geo, sh);
+    crate::python_card::show(app, ui, geo, sh, previous_popups.4 == app.grid.py_card);
 }
 
 fn update_zoom_glide(app: &mut SheetApp, ui: &egui::Ui, place: (u64, usize), zoom: u16, now: f64) {
@@ -415,6 +417,7 @@ fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
             painter: &p,
             geo,
             workbook: wb,
+            session: &app.session,
             sheet_index: si,
             sheet: sh,
             rows: *rows,

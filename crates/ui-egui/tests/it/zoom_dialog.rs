@@ -18,7 +18,7 @@ fn control(h: &mut egui_kittest::Harness<'static, SheetApp>, method: &str, param
     let ctx = h.ctx.clone();
     match handle(h.state_mut(), &ctx, method, &params) {
         Outcome::Done(v) => v,
-        Outcome::Screenshot { .. } => json!(null),
+        Outcome::Screenshot { .. } | Outcome::Hold(_) => json!(null),
     }
 }
 

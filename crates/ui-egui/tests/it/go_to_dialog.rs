@@ -33,7 +33,7 @@ fn control(h: &mut Harness, method: &str, params: Json) -> Json {
     let ctx = h.ctx.clone();
     let out = match handle(h.state_mut(), &ctx, method, &params) {
         Outcome::Done(v) => v,
-        Outcome::Screenshot { .. } => json!(null),
+        Outcome::Screenshot { .. } | Outcome::Hold(_) => json!(null),
     };
     h.run_steps(2);
     out

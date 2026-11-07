@@ -51,7 +51,7 @@ pub(crate) fn tick(app: &mut SheetApp, ctx: &egui::Context) {
 
 pub(crate) fn show(app: &mut SheetApp, ctx: &egui::Context) {
     // The restart helper is scheduled before the app closes, so no update starts over unsaved work.
-    let clean = !app.session.documents().iter().any(|d| d.is_dirty());
+    let clean = !app.session.documents().iter().any(|d| d.is_dirty()) && !crate::python_window::is_dirty(app);
     match app.updates_rt.updater.show_if(ctx, clean) {
         Action::OpenUrl(url) => {
             if let Some(open) = &app.services.open_url {
