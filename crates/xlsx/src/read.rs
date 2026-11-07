@@ -432,6 +432,11 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         wb.props.author = get("creator");
         wb.props.keywords = get("keywords");
         wb.props.description = get("description");
+        wb.props.category = get("category");
+        wb.props.last_modified_by = get("lastModifiedBy");
+        wb.props.created = get("created");
+        wb.props.modified = get("modified");
+        wb.props.last_printed = get("lastPrinted");
     }
     if let Some(r) = find_rel(&root_rels, "extended-properties").cloned()
         && let Ok(Some(x)) = cx.pkg.read_xml(&r.target)

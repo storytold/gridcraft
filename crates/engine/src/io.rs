@@ -1043,5 +1043,53 @@ pub fn image_size(data: &[u8]) -> Option<(u32, u32)> {
     None
 }
 
+/// Record a save in the core properties: modified now, by `user`; created now if the file never
+/// said (a new workbook).
+pub fn stamp_saved(props: &mut gridcraft_model::DocProps, user: &str, now: &str) {
+    if props.created.trim().is_empty() {
+        props.created = now.to_string();
+    }
+    props.modified = now.to_string();
+    if !user.trim().is_empty() {
+        props.last_modified_by = user.to_string();
+    }
+}
+
+/// The current time as a W3CDTF date-time in UTC to the second (`2026-10-14T08:30:00Z`).
+pub fn w3cdtf_now() -> String {
+    w3cdtf(gridcraft_core::date::unix_now_ms().map_or(0, |ms| (ms / 1000.0).max(0.0) as u64))
+}
+
+/// Seconds since 1970-01-01 UTC as W3CDTF.
+pub fn w3cdtf(secs: u64) -> String {
+    let (y, m, d) = gridcraft_core::date::civil_from_days((secs / 86_400) as i64);
+    let rem = secs % 86_400;
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem / 60 % 60, rem % 60)
+}
+
+#[cfg(test)]
+mod w3cdtf_tests {
+    use super::*;
+
+    #[test]
+    fn dates_are_w3cdtf_utc() {
+        assert_eq!(w3cdtf(0), "1970-01-01T00:00:00Z");
+        assert_eq!(w3cdtf(951_782_400), "2000-02-29T00:00:00Z");
+        assert_eq!(w3cdtf(1_653_627_420), "2022-05-27T04:57:00Z");
+        assert_eq!(w3cdtf(4_102_444_799), "2099-12-31T23:59:59Z");
+    }
+
+    #[test]
+    fn a_save_keeps_the_creation_and_records_who_and_when() {
+        let mut p =
+            gridcraft_model::DocProps { created: "2022-05-27T04:57:00Z".into(), last_modified_by: "Nguyễn An".into(), ..Default::default() };
+        stamp_saved(&mut p, "Sam", "2026-10-14T08:00:00Z");
+        assert_eq!((p.created.as_str(), p.modified.as_str(), p.last_modified_by.as_str()), ("2022-05-27T04:57:00Z", "2026-10-14T08:00:00Z", "Sam"));
+        let mut new = gridcraft_model::DocProps::default();
+        stamp_saved(&mut new, "", "2026-10-14T08:00:00Z");
+        assert_eq!((new.created.as_str(), new.last_modified_by.as_str()), ("2026-10-14T08:00:00Z", ""));
+    }
+}
+
 #[cfg(test)]
 mod tests;
