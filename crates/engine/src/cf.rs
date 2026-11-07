@@ -4,7 +4,9 @@
 use std::collections::HashMap;
 
 use gridcraft_core::{CellRef, RangeRef, Value, compare};
-use gridcraft_model::{CfOperator, CfRule, CfValueKind, Color, CondFormat, PatternType, Sheet, Style, Underline, Workbook, default_icon_thresholds};
+use gridcraft_model::{
+    CfOperator, CfRule, CfValueKind, Color, CondFormat, PatternType, Sheet, Style, Table, Underline, Workbook, default_icon_thresholds,
+};
 
 /// The conditional look of one cell.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -20,10 +22,12 @@ pub struct CfLook {
     pub hide_value: bool,
 }
 
-/// Precomputed statistics per rule (min/max/percentiles/top-N thresholds/duplicates).
+/// Precomputed statistics per rule (min/max/percentiles/top-N thresholds/duplicates), and each
+/// table's visible edges. The grid and print keep one per paint.
 #[derive(Default)]
 pub struct CfCache {
     stats: HashMap<usize, RuleStats>,
+    table_edges: HashMap<RangeRef, crate::tables::ShownEdges>,
 }
 
 #[derive(Default, Clone)]
@@ -228,6 +232,11 @@ fn time_period_matches(wb: &Workbook, period: &str, serial: f64) -> bool {
 impl CfCache {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// [`crate::tables::shown_edges`] of `t`, found once per cache.
+    pub fn table_edges(&mut self, sh: &Sheet, t: &Table) -> crate::tables::ShownEdges {
+        *self.table_edges.entry(t.range).or_insert_with(|| crate::tables::shown_edges(sh, t))
     }
 
     /// Conditional look of `c`, or `None` when no rule applies.
