@@ -761,3 +761,12 @@ fn sylk_survives_huge_relative_offsets_and_width_floods() {
     let (wb, _) = open_bytes("widths.slk", &flood).unwrap();
     assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::Number(1.0));
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn read_bounded_enforces_the_limit_while_reading() {
+    assert_eq!(read_bounded(&[1u8; 15][..], 16).unwrap().map(|b| b.len()), Some(15));
+    assert_eq!(read_bounded(&[1u8; 16][..], 16).unwrap().map(|b| b.len()), Some(16));
+    assert_eq!(read_bounded(&[1u8; 17][..], 16).unwrap(), None);
+    assert_eq!(read_bounded(std::io::repeat(1), 16).unwrap(), None);
+}
