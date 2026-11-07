@@ -254,9 +254,15 @@ fn read_user_shapes(cx: &mut Ctx<'_>, chart_part: &str, chart_xml: &El, chart_an
             match obj.name.as_str() {
                 "pic" => {
                     let Some(prid) = obj.path(&["blipFill", "blip"]).and_then(|b| b.attr("embed")) else { continue };
-                    let Some(prel) = us_rels.iter().find(|r| r.id == prid && !r.external) else { continue };
+                    let Some(prel) = us_rels.iter().find(|r| r.id == prid && !r.external) else {
+                        cx.warn("a picture with a missing or external relationship in a chart drawing was skipped");
+                        continue;
+                    };
                     let target = prel.target.clone();
-                    let Some(data) = cx.pkg.read(&target)? else { continue };
+                    let Some(data) = cx.pkg.read(&target)? else {
+                        cx.warn(format!("missing picture {target}"));
+                        continue;
+                    };
                     let alt = obj.path(&["nvPicPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("").to_string();
                     let id = cx.next_object_id();
                     sheet.images.push(Image { id, anchor: sub_anchor, data: data.into(), mime: mime_for(&target).to_string(), alt });
