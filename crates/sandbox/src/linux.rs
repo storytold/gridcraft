@@ -46,7 +46,9 @@ fn not_enforced(e: impl std::fmt::Display) -> SandboxError {
     SandboxError::NotEnforced(e.to_string())
 }
 
-/// A kernel without Landlock fails while the rules are made, with the Landlock crate's own text.
+/// A kernel without Landlock fails while the ruleset is made, with the Landlock crate's own text. A
+/// later failure, such as too many layers, isn't this: a machine that has it must not be taken for one
+/// that doesn't.
 fn landlock_not_enforced(e: impl std::fmt::Display) -> SandboxError {
     SandboxError::NotEnforced(format!("Landlock is not enforced: {e}"))
 }
@@ -70,8 +72,8 @@ fn landlock(policy: &Checked) -> Result<()> {
         .add_rules(path_beneath_rules(&policy.read, read))
         .and_then(|r| r.add_rules(path_beneath_rules(&policy.exec, read | AccessFs::Execute)))
         .and_then(|r| r.add_rules(path_beneath_rules(["/dev/null"], AccessFs::ReadFile | AccessFs::WriteFile)))
-        .map_err(landlock_not_enforced)?;
-    let status = ruleset.restrict_self().map_err(landlock_not_enforced)?;
+        .map_err(not_enforced)?;
+    let status = ruleset.restrict_self().map_err(not_enforced)?;
     if !status.no_new_privs {
         return Err(SandboxError::NotEnforced("no_new_privs is not set".into()));
     }
@@ -115,6 +117,20 @@ fn denied_calls() -> Vec<libc::c_long> {
         libc::SYS_pidfd_open,
         libc::SYS_pidfd_send_signal,
         libc::SYS_kcmp,
+        // System V shared memory, message queues and semaphores: a segment or queue this user can
+        // open holds what another process put there, and no path rule covers them.
+        libc::SYS_shmget,
+        libc::SYS_shmat,
+        libc::SYS_shmctl,
+        libc::SYS_shmdt,
+        libc::SYS_msgget,
+        libc::SYS_msgsnd,
+        libc::SYS_msgrcv,
+        libc::SYS_msgctl,
+        libc::SYS_semget,
+        libc::SYS_semop,
+        libc::SYS_semctl,
+        libc::SYS_semtimedop,
         // Mounts, namespaces and file handles (ways around path-based rules).
         libc::SYS_mount,
         libc::SYS_umount2,
@@ -275,7 +291,9 @@ mod tests {
         ] {
             assert_eq!(rules.get(&nr).map(Vec::len), Some(if nr == libc::SYS_setpriority || nr == libc::SYS_ioprio_set { 2 } else { 1 }), "{nr}");
         }
-        for nr in [libc::SYS_pidfd_open, libc::SYS_pidfd_send_signal, libc::SYS_kcmp] {
+        for nr in
+            [libc::SYS_pidfd_open, libc::SYS_pidfd_send_signal, libc::SYS_kcmp, libc::SYS_shmget, libc::SYS_shmat, libc::SYS_msgget, libc::SYS_semget]
+        {
             assert_eq!(rules.get(&nr).map(Vec::len), Some(0), "{nr} is refused outright");
         }
         assert_eq!(rules.get(&libc::SYS_ioctl).map(Vec::len), Some(2));

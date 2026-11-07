@@ -591,7 +591,7 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     // values, its own and its spill's, as plain values.
     let py = match (&formula, c.child("f")) {
         // A follower of a shared formula has no text of its own.
-        (Some(fm), Some(f)) => crate::python_part::cell_code(&mut cx.python, fm, if f.text.is_empty() { &fm.text } else { &f.text }),
+        (Some(fm), Some(f)) => crate::python_part::cell_code(&mut cx.python, fm, if f.text.trim().is_empty() { &fm.text } else { &f.text }),
         _ => crate::python_part::PyFormula::Not,
     };
     let (formula, py) = match py {
@@ -649,7 +649,7 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
 /// The text a cell's formula element stands for: its own, or for a follower of a shared formula, that
 /// of the master cell.
 fn formula_text<'a>(st: &'a RowState, f: &'a El) -> &'a str {
-    if !f.text.is_empty() {
+    if !f.text.trim().is_empty() {
         return &f.text;
     }
     let master = (f.attr("t") == Some("shared")).then(|| f.attr_u32("si")).flatten().and_then(|si| st.shared.get(&si));
