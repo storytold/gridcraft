@@ -297,7 +297,6 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-26 | minor | Progress log: the Python worker's client |
 | 2026-10-26 | minor | Progress log: finding the user's Python and the worker shim |
 | 2026-10-26 | minor | Progress log: the Python worker protocol and `#CONNECT!` |
-| 2026-10-25 | minor | Progress log: Python cells as data |
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
 | 2026-10-24 | minor | Macro interface on the Automate tab; progress log row |
 | 2026-10-24 | minor | Macro engine and `macro.*` commands; catalog 275 / 291 → 276 / 292 (View › Macros › Record Macro); progress log row |
