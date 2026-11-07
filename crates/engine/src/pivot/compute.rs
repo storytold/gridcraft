@@ -1,8 +1,8 @@
-use super::items::{Acc, FieldItems, build_tree, collect_siblings, is_collapsed, item_label};
+use super::items::{Acc, FieldItems, Grouping, build_tree, collect_siblings, is_collapsed, item_label};
 use super::output::{AggMap, CellKind, ColKind, ColSpec, Ctx, Grid, Line, LineKind, Output, RowKind, ValSrc, data_cols_exceed_sheet, flatten_cols};
 use super::{
-    CalcSet, CellError, CellRef, HashMap, HashSet, MAX_AXIS_FIELDS, MAX_COLS, MAX_VALUE_FIELDS, PivotDateGroup, PivotField, PivotFilter, PivotFunc,
-    PivotLayout, PivotShowAs, PivotTable, PivotValue, Source, Value, Workbook, read_source,
+    CalcSet, CellError, CellRef, HashMap, HashSet, MAX_AXIS_FIELDS, MAX_COLS, MAX_VALUE_FIELDS, PivotField, PivotFilter, PivotFunc, PivotLayout,
+    PivotShowAs, PivotTable, PivotValue, Source, Value, Workbook, read_source,
 };
 
 /// Why Show Details turns a cell down when it isn't a value cell of a PivotTable (the front end
@@ -75,7 +75,7 @@ struct AggregateInput<'a> {
     cols: &'a [(usize, &'a PivotField)],
     vals: &'a [(ValSrc, &'a PivotValue)],
     extra: &'a [usize],
-    filters: &'a [(usize, &'a PivotFilter, PivotDateGroup, bool)],
+    filters: &'a [ReportFilter<'a>],
     filter_fmts: &'a [String],
     /// Each filter's selected labels, ASCII-lowercased, so a record's test is one probe.
     filter_sets: &'a [Option<HashSet<String>>],
@@ -94,6 +94,8 @@ struct AggregateData {
     col_leaves: HashSet<Vec<u32>>,
 }
 
+/// Counts one source record: skips it when a filter hides it, interns its row and column items
+/// (under each field's grouping) and adds its values to every subtotal it belongs to.
 fn aggregate_record(
     input: &AggregateInput<'_>,
     data: &mut AggregateData,
@@ -114,11 +116,11 @@ fn aggregate_record(
     }
     let mut row_path = Vec::with_capacity(input.rows.len());
     for (((column, field), items), fmt) in input.rows.iter().zip(data.row_items.iter_mut()).zip(input.row_fmts) {
-        row_path.push(items.intern(input.wb, rec.get(*column).unwrap_or(&Value::Empty), field.date_group, fmt, ri));
+        row_path.push(items.intern(input.wb, rec.get(*column).unwrap_or(&Value::Empty), Grouping::of(field), fmt, ri));
     }
     let mut col_path = Vec::with_capacity(input.cols.len());
     for (((column, field), items), fmt) in input.cols.iter().zip(data.col_items.iter_mut()).zip(input.col_fmts) {
-        col_path.push(items.intern(input.wb, rec.get(*column).unwrap_or(&Value::Empty), field.date_group, fmt, ri));
+        col_path.push(items.intern(input.wb, rec.get(*column).unwrap_or(&Value::Empty), Grouping::of(field), fmt, ri));
     }
     for row_depth in 0..=row_path.len() {
         for col_depth in 0..=col_path.len() {
@@ -383,11 +385,14 @@ fn show_value(definition: &PivotValue, raw: Value, lookup: &ValueLookup<'_>, con
     }
 }
 
-type ReportFilter<'a> = (usize, &'a PivotFilter, PivotDateGroup, bool);
+/// (source column, filter, grouping of the labels it selects, shown as a report filter). A
+/// filter on a row or column field selects that field's items, so it takes the field's grouping.
+type ReportFilter<'a> = (usize, &'a PivotFilter, Grouping, bool);
 
+/// The filters that apply to the report (those on fields of the source), and the ones shown above it
+/// as report filters (not on a row or column field).
 fn report_filters<'a>(pt: &'a PivotTable, src: &Source) -> (Vec<ReportFilter<'a>>, Vec<ReportFilter<'a>>) {
-    let axis_group =
-        |name: &str| pt.rows.iter().chain(pt.columns.iter()).find(|field| field.source_col.eq_ignore_ascii_case(name)).map(|field| field.date_group);
+    let axis_group = |name: &str| pt.rows.iter().chain(pt.columns.iter()).find(|field| field.source_col.eq_ignore_ascii_case(name)).map(Grouping::of);
     let filters: Vec<_> = pt
         .filters
         .iter()

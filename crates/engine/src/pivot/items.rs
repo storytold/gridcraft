@@ -1,4 +1,7 @@
-use super::{CellError, HashMap, MONTHS, Ordering, PivotDateGroup, PivotField, PivotFunc, PivotSort, Source, Value, Workbook, datetime_from_serial};
+use super::{
+    CellError, HashMap, MONTHS, NumberBucket, Ordering, PivotDateGroup, PivotField, PivotFunc, PivotNumberGroup, PivotSort, Source, Value, Workbook,
+    datetime_from_serial,
+};
 
 // ---------------------------------------------------------------- items
 
@@ -20,12 +23,72 @@ pub(super) struct FieldItems {
     index: HashMap<String, u32>,
 }
 
+/// How a field turns source values into items: numbers into ranges, else date serials into date
+/// or time parts, else each value is its own item.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Grouping {
+    pub dates: PivotDateGroup,
+    pub numbers: Option<PivotNumberGroup>,
+}
+
+impl Grouping {
+    /// The grouping of a row or column field.
+    pub fn of(field: &PivotField) -> Self {
+        Grouping { dates: field.date_group, numbers: field.number_group }
+    }
+}
+
+impl From<PivotDateGroup> for Grouping {
+    /// A date grouping alone.
+    fn from(dates: PivotDateGroup) -> Self {
+        Grouping { dates, numbers: None }
+    }
+}
+
 fn cmp_items(a: &Item, b: &Item) -> Ordering {
     a.class.cmp(&b.class).then(a.num.total_cmp(&b.num)).then_with(|| a.text.cmp(&b.text))
 }
 
-/// (identity key, item) for a source value under a field's date grouping.
-fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: usize) -> (String, Item) {
+/// The caption and sort key of a date serial's part under a date grouping; `None` when the number
+/// isn't a date.
+fn date_part(wb: &Workbook, n: f64, group: PivotDateGroup) -> Option<(String, f64)> {
+    let dt = datetime_from_serial(wb.date_system, n)?;
+    let month = MONTHS.get(dt.month.saturating_sub(1) as usize).copied().unwrap_or("Jan");
+    Some(match group {
+        PivotDateGroup::None => return None,
+        PivotDateGroup::Years => (dt.year.to_string(), f64::from(dt.year)),
+        PivotDateGroup::Quarters => {
+            let q = dt.month.saturating_sub(1) / 3 + 1;
+            (format!("Qtr{q}"), f64::from(q))
+        }
+        PivotDateGroup::Months => (month.to_string(), f64::from(dt.month)),
+        PivotDateGroup::Days => (format!("{}-{month}", dt.day), f64::from(dt.month * 100 + dt.day)),
+        PivotDateGroup::Hours => (hour_caption(dt.hour), f64::from(dt.hour)),
+        PivotDateGroup::Minutes => (format!(":{:02}", dt.minute), f64::from(dt.minute)),
+        PivotDateGroup::Seconds => (format!(":{:02}", dt.second), f64::from(dt.second)),
+    })
+}
+
+/// "12 AM", "1 AM" … "11 PM", as Excel captions grouped hours.
+pub fn hour_caption(hour: u32) -> String {
+    let twelve = match hour % 12 {
+        0 => 12,
+        h => h,
+    };
+    format!("{twelve} {}", if hour % 24 < 12 { "AM" } else { "PM" })
+}
+
+/// The sort key of a number range: "<start" first, the ranges in order, ">end" last.
+fn bucket_order(bucket: NumberBucket) -> f64 {
+    match bucket {
+        NumberBucket::Below => f64::NEG_INFINITY,
+        NumberBucket::Range(k) => f64::from(k),
+        NumberBucket::Above => f64::INFINITY,
+    }
+}
+
+/// (identity key, item) for a source value under a field's grouping.
+fn make_item(wb: &Workbook, v: &Value, grouping: Grouping, fmt: &str, first: usize) -> (String, Item) {
     let it = |value: Value, label: String, class: u8, num: f64, formatted: bool| Item {
         text: label.to_lowercase(),
         value,
@@ -38,19 +101,13 @@ fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: 
     match v {
         Value::Empty => ("b".into(), it(Value::text("(blank)"), "(blank)".into(), 4, 0.0, false)),
         Value::Number(n) => {
-            if group != PivotDateGroup::None
-                && let Some(dt) = datetime_from_serial(wb.date_system, *n)
-            {
-                let mon = MONTHS.get(dt.month.saturating_sub(1) as usize).copied().unwrap_or("Jan");
-                let (label, key) = match group {
-                    PivotDateGroup::Years => (dt.year.to_string(), dt.year as f64),
-                    PivotDateGroup::Quarters => {
-                        let q = (dt.month.saturating_sub(1)) / 3 + 1;
-                        (format!("Qtr{q}"), q as f64)
-                    }
-                    PivotDateGroup::Months => (mon.to_string(), dt.month as f64),
-                    _ => (format!("{}-{mon}", dt.day), (dt.month * 100 + dt.day) as f64),
-                };
+            if let Some(numbers) = grouping.numbers {
+                let bucket = numbers.bucket(*n);
+                let label = numbers.label(bucket);
+                let order = bucket_order(bucket);
+                return (format!("r{}", order.to_bits()), it(Value::text(label.as_str()), label, 0, order, false));
+            }
+            if let Some((label, key)) = date_part(wb, *n, grouping.dates) {
                 return (format!("g{key}"), it(Value::text(label.as_str()), label, 0, key, false));
             }
             let label = crate::display::format(v, fmt, wb).text;
@@ -62,13 +119,14 @@ fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: 
             (format!("l{l}"), it(Value::Bool(*b), l.into(), 2, *b as u8 as f64, false))
         }
         Value::Error(e) => (format!("e{}", e.as_str()), it(v.clone(), e.as_str().into(), 3, 0.0, false)),
-        Value::Array(_) => make_item(wb, &v.scalar(), group, fmt, first),
+        Value::Array(_) => make_item(wb, &v.scalar(), grouping, fmt, first),
     }
 }
 
 impl FieldItems {
-    pub(super) fn intern(&mut self, wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: usize) -> u32 {
-        let (key, item) = make_item(wb, v, group, fmt, first);
+    /// The item id of a source value under `grouping`, adding the item the first time it appears.
+    pub(super) fn intern(&mut self, wb: &Workbook, v: &Value, grouping: Grouping, fmt: &str, first: usize) -> u32 {
+        let (key, item) = make_item(wb, v, grouping, fmt, first);
         if let Some(i) = self.index.get(&key) {
             return *i;
         }
@@ -85,18 +143,19 @@ impl FieldItems {
     }
 }
 
-/// The label of a source value under a date grouping (for filters and field lists).
-pub fn item_label(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str) -> String {
-    make_item(wb, v, group, fmt, 0).1.label
+/// The label of a source value under a grouping (for filters and field lists).
+pub fn item_label(wb: &Workbook, v: &Value, grouping: impl Into<Grouping>, fmt: &str) -> String {
+    make_item(wb, v, grouping.into(), fmt, 0).1.label
 }
 
 /// Distinct item labels of a source column, sorted like the field list shows them.
-pub fn distinct_labels(wb: &Workbook, src: &Source, col: usize, group: PivotDateGroup, limit: usize) -> Vec<String> {
+pub fn distinct_labels(wb: &Workbook, src: &Source, col: usize, grouping: impl Into<Grouping>, limit: usize) -> Vec<String> {
+    let grouping = grouping.into();
     let mut fi = FieldItems::default();
     let fmt = src.formats.get(col).map(String::as_str).unwrap_or("General");
     for (i, r) in src.rows.iter().enumerate() {
         if let Some(v) = r.get(col) {
-            fi.intern(wb, v, group, fmt, i);
+            fi.intern(wb, v, grouping, fmt, i);
         }
         if fi.items.len() > 100_000 {
             break;

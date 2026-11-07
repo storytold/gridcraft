@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-02 · **Change:** minor (§17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-04 · **Change:** minor (§8: number grouping and hour/minute/second grouping; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -88,7 +88,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   and values on rows done). Show Details (double-click a value, subtotal or grand total cell) lists
   its source records on a new sheet. The "Enable show details" option (`pivot.options`
   `enableShowDetails`, saved as `enableDrill`) turns it off; it has no PivotTable Options dialog
-  yet (command only).
+  yet (command only). Fields group into number ranges (Starting at, Ending at, By, with "<start"
+  and ">end" items) and by hours, minutes and seconds as well as years to days, read and written
+  in XLSX; manual (selection) grouping is still missing.
 - **Impact:** pivots are the analyst's main tool.
 - **Estimate:** 20–30 h for beta (25–40 h full).
 
@@ -186,6 +188,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | §8: PivotTable number grouping (`pivot.group` `by: numbers`, `start`, `end`, `interval`) and hour, minute and second grouping, with XLSX round-trip; regrouping clears the field's hidden and collapsed items |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |
 | 2026-11-02 | minor | §13: Solver Sensitivity report: shadow prices, reduced costs and allowable ranges for Simplex LP; Lagrange multipliers and reduced gradients for GRG Nonlinear |
 | 2026-11-02 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |

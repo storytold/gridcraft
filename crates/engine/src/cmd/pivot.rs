@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use gridcraft_core::{CellRef, RangeRef};
 use gridcraft_model::{
-    Anchor, Cell, Chart, ChartKind, LegendPos, NumFmt, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs,
-    PivotSort, PivotTable, PivotValue, Sheet, StyleId, Workbook,
+    Anchor, Cell, Chart, ChartKind, LegendPos, NumFmt, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout,
+    PivotNumberGroup, PivotShowAs, PivotSort, PivotTable, PivotValue, Sheet, StyleId, Workbook,
 };
 use serde_json::{Value as Json, json};
 
@@ -31,6 +31,7 @@ use create::{insert_pivot, options, show_details, summarize_table};
 use fields::{add_field, calculated_field, fields, list, move_field, remove_field, value_settings};
 use layout::{change_source, collapse, delete, filter, grand_totals, group, layout, refresh, refresh_all, sort};
 
+/// The PivotTable commands: ids, labels, ribbon places and the parameters each one takes.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -124,7 +125,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Group Field",
             ["PivotTable Analyze", "Group"],
             None,
-            "{pivot?, field, by: years|quarters|months|days|none, replace?}",
+            "{pivot?, field, by: years|quarters|months|days|hours|minutes|seconds|numbers|none, start?, end?, interval? (by numbers: ranges `interval` wide (default 10) from `start` to `end` (default: the field's smallest and largest number); numbers outside fall into \"<start\" and \">end\"), replace?} (the field's collapsed and hidden items are cleared: their labels change)",
             has_doc,
             group
         ),

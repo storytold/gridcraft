@@ -1,6 +1,7 @@
 use super::{
     CellRef, Ctx, DateSystem, El, HashMap, IoError, MAX_FIELDS, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout,
-    PivotShowAs, PivotSort, PivotTable, PivotValue, RangeRef, abs_range, func_caption, func_from, number_to_text, quote_sheet, same,
+    PivotNumberGroup, PivotShowAs, PivotSort, PivotTable, PivotValue, RangeRef, abs_range, func_caption, func_from, number_to_text, quote_sheet,
+    same,
 };
 
 // ================================================================ reading
@@ -12,18 +13,41 @@ struct FieldIn {
     database: bool,
     /// Shared item captions.
     items: Vec<String>,
-    /// (base field, grouping, group item captions); grouping `None` = unsupported grouping.
-    group: Option<(Option<usize>, Option<PivotDateGroup>, Vec<String>)>,
+    group: Option<GroupIn>,
     /// A calculated field's formula.
     formula: Option<String>,
 }
 
+/// A cache field's `fieldGroup`.
+#[derive(Clone, Debug, Default)]
+struct GroupIn {
+    base: Option<usize>,
+    /// `None`: a grouping we don't model (manual groups, an invalid range).
+    kind: Option<GroupKindIn>,
+    /// Group item captions.
+    items: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum GroupKindIn {
+    Dates(PivotDateGroup),
+    Numbers(PivotNumberGroup),
+}
+
 impl FieldIn {
+    /// The captions the table's `<item x>` indices refer to: the group items of a grouped field, else
+    /// its shared items.
     fn labels(&self) -> &[String] {
         match &self.group {
-            Some((_, _, items)) if !items.is_empty() => items,
+            Some(g) if !g.items.is_empty() => &g.items,
             _ => &self.items,
         }
+    }
+
+    /// Whether the report can use the table's item references: not for a grouping we don't model
+    /// (the field reads ungrouped, and its `<item x>` name group items it no longer has).
+    fn items_usable(&self) -> bool {
+        self.group.as_ref().is_none_or(|g| g.kind.is_some())
     }
 }
 
@@ -68,6 +92,8 @@ fn item_label_el(e: &El, sys: DateSystem) -> String {
     }
 }
 
+/// Reads a cache definition: its worksheet source and fields, with their shared items and groupings
+/// (dates, number ranges, or a kind we don't model); `None` with a warning for unusable caches.
 fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn> {
     let x = cx.optional_xml(part).ok().flatten()?;
     if x.name != "pivotCacheDefinition" {
@@ -106,16 +132,23 @@ fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn>
         for f in cf.kids("cacheField").take(MAX_FIELDS) {
             let items = f.child("sharedItems").map(|si| si.children.iter().map(|e| item_label_el(e, sys)).collect()).unwrap_or_default();
             let group = f.child("fieldGroup").map(|g| {
-                let base = g.attr_u32("base").map(|b| b as usize);
-                let by = match g.child("rangePr").map(|r| r.attr("groupBy").unwrap_or("range")) {
-                    Some("years") => Some(PivotDateGroup::Years),
-                    Some("quarters") => Some(PivotDateGroup::Quarters),
-                    Some("months") => Some(PivotDateGroup::Months),
-                    Some("days") => Some(PivotDateGroup::Days),
+                let range = g.child("rangePr");
+                let kind = match range.map(|r| r.attr("groupBy").unwrap_or("range")) {
+                    Some("years") => Some(GroupKindIn::Dates(PivotDateGroup::Years)),
+                    Some("quarters") => Some(GroupKindIn::Dates(PivotDateGroup::Quarters)),
+                    Some("months") => Some(GroupKindIn::Dates(PivotDateGroup::Months)),
+                    Some("days") => Some(GroupKindIn::Dates(PivotDateGroup::Days)),
+                    Some("hours") => Some(GroupKindIn::Dates(PivotDateGroup::Hours)),
+                    Some("minutes") => Some(GroupKindIn::Dates(PivotDateGroup::Minutes)),
+                    Some("seconds") => Some(GroupKindIn::Dates(PivotDateGroup::Seconds)),
+                    Some("range") => range.and_then(|r| {
+                        let num = |name: &str| r.attr(name).and_then(|v| v.parse::<f64>().ok());
+                        PivotNumberGroup::new(num("startNum")?, num("endNum")?, num("groupInterval")?).map(GroupKindIn::Numbers)
+                    }),
                     _ => None,
                 };
-                let gi = g.child("groupItems").map(|gi| gi.children.iter().map(|e| item_label_el(e, sys)).collect()).unwrap_or_default();
-                (base, by, gi)
+                let items = g.child("groupItems").map(|gi| gi.children.iter().map(|e| item_label_el(e, sys)).collect()).unwrap_or_default();
+                GroupIn { base: g.attr_u32("base").map(|b| b as usize), kind, items }
             });
             fields.push(FieldIn {
                 name: f.attr("name").unwrap_or("").to_string(),
@@ -176,33 +209,36 @@ fn items_of(e: &El) -> Vec<&El> {
     e.child("items").map(|it| it.kids("item").filter(|i| i.attr("t").is_none_or(|t| t == "data")).collect()).unwrap_or_default()
 }
 
-/// (source column name, date grouping) of a cache field used on an axis.
-fn field_ref(cx: &mut Ctx<'_>, cache: &CacheIn, i: usize) -> Option<(String, PivotDateGroup)> {
+/// (source column name, date grouping, number grouping) of a cache field used on an axis.
+fn field_ref(cx: &mut Ctx<'_>, cache: &CacheIn, i: usize) -> Option<(String, PivotDateGroup, Option<PivotNumberGroup>)> {
     let f = cache.fields.get(i)?;
     if f.formula.is_some() {
         cx.warn("calculated PivotTable fields are not supported");
         return None;
     }
     match &f.group {
-        Some((base, by, _)) => {
-            let by = match by {
-                Some(b) => *b,
+        Some(g) => {
+            let (dates, numbers) = match g.kind {
+                Some(GroupKindIn::Dates(by)) => (by, None),
+                Some(GroupKindIn::Numbers(range)) => (PivotDateGroup::None, Some(range)),
                 None => {
                     cx.warn(format!("PivotTable grouping of \"{}\" is not supported; the field is ungrouped", f.name));
-                    PivotDateGroup::None
+                    (PivotDateGroup::None, None)
                 }
             };
-            let base_name = if f.database { f.name.clone() } else { base.and_then(|b| cache.fields.get(b))?.name.clone() };
-            Some((base_name, by))
+            let base_name = if f.database { f.name.clone() } else { g.base.and_then(|b| cache.fields.get(b))?.name.clone() };
+            Some((base_name, dates, numbers))
         }
         None if !f.database => {
             cx.warn(format!("PivotTable field \"{}\" (grouped items) is not supported", f.name));
             None
         }
-        None => Some((f.name.clone(), PivotDateGroup::None)),
+        None => Some((f.name.clone(), PivotDateGroup::None, None)),
     }
 }
 
+/// Reads one PivotTable definition into the model, against its cache; `None` (with a warning)
+/// when the table can't be used, such as one without a valid location.
 fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<PivotTable> {
     let mut pt = PivotTable { id, ..PivotTable::default() };
     if let Some(n) = x.attr("name").filter(|n| !n.trim().is_empty()) {
@@ -265,9 +301,12 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 continue;
             }
             let i = i as usize;
-            let Some((name, group)) = field_ref(cx, cache, i) else { continue };
-            let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
-            let mut f = PivotField { source_col: name.clone(), date_group: group, sort: PivotSort::None, collapsed_items: vec![] };
+            let Some((name, date_group, number_group)) = field_ref(cx, cache, i) else { continue };
+            // Hidden and collapsed items of an ungrouped field read from its group items would name
+            // items the report doesn't have (and hide everything): they are dropped.
+            let usable = cache.fields.get(i).is_some_and(FieldIn::items_usable);
+            let labels = if usable { cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default() } else { vec![] };
+            let mut f = PivotField { source_col: name.clone(), date_group, number_group, sort: PivotSort::None, collapsed_items: vec![] };
             if let Some(e) = pf(i) {
                 f.sort = match e.attr("sortType") {
                     Some("ascending") => PivotSort::Asc,
@@ -277,7 +316,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 let items = items_of(e);
                 let lab = |it: &El| it.attr_u32("x").and_then(|k| labels.get(k as usize)).cloned();
                 f.collapsed_items = items.iter().filter(|it| !it.flag("sd", true)).filter_map(|it| lab(it)).collect();
-                if items.iter().any(|it| it.flag("h", false)) {
+                if usable && items.iter().any(|it| it.flag("h", false)) {
                     let shown: Vec<String> = items.iter().filter(|it| !it.flag("h", false)).filter_map(|it| lab(it)).collect();
                     if !filters.iter().any(|ff| same(&ff.source_col, &name)) {
                         filters.push(PivotFilter { source_col: name.clone(), selected: Some(shown) });
@@ -291,9 +330,11 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
     let mut page_filters = Vec::new();
     for p in &pages {
         let Some(i) = p.attr_i64("fld").filter(|i| *i >= 0).map(|i| i as usize) else { continue };
-        let Some((name, _)) = field_ref(cx, cache, i) else { continue };
+        let Some((name, _, _)) = field_ref(cx, cache, i) else { continue };
         let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
-        let selected = if let Some(k) = p.attr_u32("item") {
+        let selected = if !cache.fields.get(i).is_some_and(FieldIn::items_usable) {
+            None
+        } else if let Some(k) = p.attr_u32("item") {
             labels.get(k as usize).map(|l| vec![l.clone()])
         } else {
             pf(i).and_then(|e| {
