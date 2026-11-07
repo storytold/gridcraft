@@ -44,7 +44,12 @@ characters of code.
 root is `$GRIDCRAFT_MODELS`, the platform settings folder's `models`, `models` beside the
 executable, or `models` in the working directory.
 
-Automate ▸ Office Scripts shows what was found and its version. **Download Bun…** opens Bun's page
+On Windows, the npm `bun.cmd` shim is not used: it is a batch file, which a child process
+cannot start directly. `$GRIDCRAFT_BUN` must point at `bun.exe` (`...\node_modules\bun\bin\bun.exe`),
+and the `PATH` search looks for `bun.exe`, not `bun.cmd`.
+
+Automate ▸ Office Scripts shows what was found and its version. The Automate tab's access key is
+`U`, as in Excel. **Download Bun…** opens Bun's page
 when the shell cannot fetch; **Import Bun…** copies an executable into the runtime folder and picks
 it up without a restart. Without Bun, Run is disabled and `script.runtime` says what to install.
 
@@ -123,6 +128,11 @@ editor, where it can be edited, run, saved and exported.
 - Excel needs a Microsoft 365 commercial/education account signed in for the Automate tab. When it
   is unavailable, Excel interop is verified by format round-trip and by pasting the exported body
   into Excel's editor; the PR states which path was used.
+- Excel round-trip checked with Excel 16.0 COM: a workbook with values, a formula, number
+  formats, a merge, a table, a comment, validation and a chart opened and saved by GridCraft
+  re-opens in Excel without a repair prompt, and value/formula/number-format/table/comment/
+  validation/merge/chart facts match. The only package part not carried was the optional
+  `xl/calcChain.xml` (follow-up issue #3565).
 - Known limits: no events, no `getUsedRange` outside the worksheet, no async API; chart and table
   operations are on the active worksheet; `setValue` on a multi-cell range sets the top-left cell
   (use `setValues`); runtime-reported line numbers can be off by the transpiler wrapper's few
