@@ -142,10 +142,42 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         let under = at.and_then(|p| object_under(app, geo, sh, p));
         let handle = under.and_then(|(.., h)| h);
         if let Some(p) = at
+            && let Some((obj, rect)) = on_handle.map(|(o, r, _)| (o, r)).or_else(|| crate::chartview::hit(app, geo, sh, p))
             && let Some((obj, _, _)) = under
         {
             app.selected_object = Some(obj);
+            let mut label_drag = None;
+            if obj.kind == ObjKind::Chart
+                && let Some(chart) = sh.charts.iter().find(|c| c.id == obj.id)
+            {
+                let element = crate::chartview::element_at(input.ui, wb, wb.active_sheet(), chart, rect, p);
+                crate::chartview::select_element(input.ui.ctx(), obj.id, element);
+                use crate::chartview::ChartElement;
+                let legend = element == ChartElement::Legend;
+                if primary_drag && handle.is_none() && (element == ChartElement::TrendlineText || (legend && chart.format.legend_overlay)) {
+                    let bounds = input
+                        .ui
+                        .ctx()
+                        .data_mut(|d| d.get_temp::<(ChartElement, Rect)>(egui::Id::unique(("chart_element_bounds", obj.id))))
+                        .map(|(_, r)| r.min)
+                        .unwrap_or_default();
+                    let position = if legend { chart.format.legend_position } else { chart.format.trendline_label_position }
+                        .unwrap_or([bounds.x / chart.anchor.width.max(1.0), bounds.y / chart.anchor.height.max(1.0)]);
+                    label_drag = Some(Drag::ChartLabel {
+                        id: obj.id,
+                        legend,
+                        start: p,
+                        position,
+                        size: [rect.width().max(1.0), rect.height().max(1.0)],
+                        edited: false,
+                    });
+                }
+            }
             if resp.double_clicked() && app.open_object(obj) != crate::objects::OpenAction::Select {
+                return;
+            }
+            if let Some(drag) = label_drag {
+                app.grid.drag = drag;
                 return;
             }
             if primary_drag && let Some(a) = sh.object_anchor(obj) {
@@ -165,9 +197,14 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
     let secondary_drag = resp.drag_started_by(egui::PointerButton::Secondary);
     if (resp.secondary_clicked() || secondary_drag)
         && let Some(p) = if secondary_drag { pointer.press_origin().map(|p| geo.mirror_pos(p)).or(pos) } else { pos }
-        && let Some((obj, _)) = crate::chartview::hit(app, geo, sh, p)
+        && let Some((obj, rect)) = crate::chartview::hit(app, geo, sh, p)
     {
         app.selected_object = Some(obj);
+        if obj.kind == ObjKind::Chart
+            && let Some(chart) = sh.charts.iter().find(|c| c.id == obj.id)
+        {
+            let element = crate::chartview::element_at(input.ui, wb, wb.active_sheet(), chart, rect, p);
+            crate::chartview::select_element(input.ui.ctx(), obj.id, element);
         if obj.kind == ObjKind::Control {
             app.grid.focused_control = None;
         }
@@ -599,6 +636,7 @@ fn handle_context_menu_and_keyboard(app: &mut SheetApp, input: &InteractionInput
     if resp.secondary_clicked()
         && let Some(p) = pos
     {
+        app.selected_object = None;
         if in_cells && !sel.contains(geo.cell_at(sh, p)) {
             let _ = app.session.run("selection.set", json!({"cell": geo.cell_at(sh, p).a1()}));
         }
@@ -727,6 +765,24 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 let dc = pc.col as i64 - grab.col as i64;
                 app.grid.drag = Drag::Move { grab, to: Some(src.start.offset_clamped(dr, dc)) };
                 scroll_by(app, auto);
+            }
+            Drag::ChartLabel { id, legend, start, position, size, edited } => {
+                if let Some(chart) = sh.charts.iter().find(|c| c.id == id) {
+                    let delta = p - start;
+                    let new = [(position[0] + delta.x / size[0]).clamp(0.0, 1.0), (position[1] + delta.y / size[1]).clamp(0.0, 1.0)];
+                    let mut format = chart.format.clone();
+                    if legend {
+                        format.legend_position = Some(new);
+                    } else {
+                        format.trendline_label_position = Some(new);
+                    }
+                    if app.run("chart.set", json!({"chart":id,"format":format})).is_ok() {
+                        if edited {
+                            coalesce_last_undo(app);
+                        }
+                        app.grid.drag = Drag::ChartLabel { id, legend, start, position, size, edited: true };
+                    }
+                }
             }
             Drag::Object { .. } => drag_object(app, geo, sh, p),
             Drag::None => {}
@@ -1069,6 +1125,40 @@ pub(super) fn hidden_col_edge(geo: &Geo, sh: &Sheet, x: f32) -> Option<u32> {
 
 pub(super) fn hidden_row_edge(geo: &Geo, sh: &Sheet, y: f32) -> Option<u32> {
     row_edge(geo, sh, y).map(|(r, _)| r).filter(|&r| sh.row_height(r) <= 0.0)
+}
+
+/// Deletes a selected chart subelement without falling through to whole-object deletion.
+pub(super) fn delete_selected_object(app: &mut SheetApp, ctx: &egui::Context, sh: &Sheet) -> bool {
+    let Some(id) = app.selected_chart() else { return app.delete_selected_object() };
+    if let Some(chart) = sh.charts.iter().find(|c| c.id == id) {
+        use crate::chartview::ChartElement;
+        match crate::chartview::selected_element(ctx, id) {
+            ChartElement::ChartArea => {}
+            ChartElement::Title => app.run_or_alert("chart.set", json!({"chart":id,"title":""})),
+            ChartElement::Legend => app.run_or_alert("chart.set", json!({"chart":id,"legend":"none"})),
+            ChartElement::XAxisTitle => app.run_or_alert("chart.set", json!({"chart":id,"xTitle":null})),
+            ChartElement::YAxisTitle => app.run_or_alert("chart.set", json!({"chart":id,"yTitle":null})),
+            ChartElement::Gridlines => {
+                let mut format = chart.format.clone();
+                format.vertical_gridlines = false;
+                app.run_or_alert("chart.set", json!({"chart":id,"gridlines":false,"format":format}));
+            }
+            ChartElement::Series(i) if chart.series.len() > 1 => app.run_or_alert("chart.selectData", json!({"chart":id,"removeSeries":[i]})),
+            ChartElement::Series(_) => {
+                app.message = Some(("Data Series".into(), "The last series cannot be removed. To delete the entire chart, select Chart Area.".into()))
+            }
+            ChartElement::XAxis | ChartElement::YAxis | ChartElement::PlotArea | ChartElement::DataLabels | ChartElement::TrendlineText => {
+                app.message = Some(("Chart Element".into(), "Deleting this element is not supported yet. The chart was kept.".into()))
+            }
+        }
+        if crate::chartview::selected_element(ctx, id) != ChartElement::ChartArea {
+            // Keep the element selected: a repeated Delete must not fall through to deleting
+            // the entire chart after the first key press removed its title or legend.
+            ctx.data_mut(|d| d.remove::<(ChartElement, Rect)>(egui::Id::unique(("chart_element_bounds", id))));
+            return true;
+        }
+    }
+    app.delete_selected_object()
 }
 
 /// Moves the dragged object, or resizes it from the grabbed handle, to follow the pointer at `p`

@@ -336,6 +336,20 @@ mod tests {
     }
 
     #[test]
+    fn chart_format_terms_use_their_own_translation_context() {
+        for (key, english, japanese, portuguese) in
+            [("Chart|Series", "Series", "系列", "Série"), ("Chart|Line", "Line", "線", "Linha"), ("Chart|Border", "Border", "枠線", "Borda")]
+        {
+            assert_eq!(Language::En.tr(key), english);
+            assert_eq!(Language::Ja.tr(key), japanese);
+            assert_eq!(Language::PtBr.tr(key), portuguese);
+        }
+        assert_ne!(Language::Ja.tr("Chart|Series"), Language::Ja.tr("Series"));
+        assert_ne!(Language::Ja.tr("Chart|Line"), Language::Ja.tr("Line"));
+        assert_ne!(Language::Ja.tr("Chart|Border"), Language::Ja.tr("Border"));
+    }
+
+    #[test]
     fn untranslated_text_falls_back_to_english() {
         let label = |key: &'static str| key.rsplit_once('|').map_or(key, |(_, label)| label);
         for (english, _) in ja::CORE {

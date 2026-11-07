@@ -79,7 +79,7 @@ fn open_size_fields(h: &mut Harness, id: u32) -> egui::Rect {
     h.state_mut().select_object_id(Some(id));
     h.state_mut().grid.pane = Some("formatChart".into());
     h.run_steps(2);
-    h.get_by_role_and_label(Role::DisclosureTriangle, "Size").click();
+    h.get_by_role_and_label(Role::Button, "Size & Properties").click();
     h.run_steps(2);
     h.get_all_by_role(Role::SpinButton).next().unwrap().rect()
 }
@@ -197,11 +197,7 @@ fn right_clicking_a_chart_opens_its_menu_not_the_cells() {
     let (mut h, id) = fixture();
     let inside = corner(&h, id) - vec2(100.0, 80.0);
     right_click(&mut h, inside, vec2(0.0, 0.0));
-    // Home › Cells has a Delete button too: take the one in the chart's menu, by the click.
-    h.query_all_by_label("Delete")
-        .min_by(|a, b| a.rect().center().distance(inside).total_cmp(&b.rect().center().distance(inside)))
-        .expect("the chart menu has Delete")
-        .click();
+    h.get_by_label("Delete Chart").click();
     h.run_steps(3);
     assert!(h.state().session.doc().unwrap().wb.active().unwrap().charts.is_empty());
     assert!(h.state().grid.object_menu.is_none());

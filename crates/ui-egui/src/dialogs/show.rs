@@ -183,6 +183,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             }
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
+                "chartExport" | "saveChartTemplate" => chart_dialog(ui, &mut d, &mut confirm, &mut open),
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
                 "dataValidation" => data_validation_form(app, ui, &mut d, &mut confirm, &mut open),
                 "advancedFilter" => advanced_filter_form(app, ui, &mut d, &mut confirm, &mut open),
@@ -429,7 +430,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         app.message = Some((d.title.clone(), crate::clean_error(&e)));
         confirm = false;
     }
-    if confirm && let Some(cmd) = d.command {
+    if confirm && matches!(d.name.as_str(), "saveChartTemplate" | "chartExport") {
+        confirm_chart_dialog(app, &d, &mut open);
+    } else if confirm && let Some(cmd) = d.command {
         let params = build_params(&d);
         match app.run(cmd, params) {
             Ok(r) => {
@@ -495,6 +498,58 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     }
 }
 
+fn chart_dialog(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    if d.name == "chartExport" {
+        ui.label(crate::widgets::tr(ui, "Image Format"));
+        let mut format = d.values.get("format").and_then(Json::as_str).unwrap_or("png").to_string();
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut format, "png".into(), "PNG");
+            ui.selectable_value(&mut format, "svg".into(), "SVG");
+        });
+        d.values.insert("format".into(), json!(format));
+        if format == "png" {
+            ui.label(crate::widgets::tr(ui, "Resolution"));
+            let mut scale = d.values.get("scale").and_then(Json::as_u64).unwrap_or(2);
+            ui.horizontal(|ui| {
+                for v in [1, 2, 4] {
+                    ui.selectable_value(&mut scale, v, format!("{v}×"));
+                }
+            });
+            d.values.insert("scale".into(), json!(scale));
+            ui.label(crate::widgets::tr(ui, "Lossless PNG; higher resolution creates a larger image."));
+        } else {
+            ui.label(crate::widgets::tr(ui, "SVG stays sharp at any size. Fonts are not embedded."));
+        }
+        let mut transparent = d.values.get("transparent").and_then(Json::as_bool).unwrap_or(false);
+        ui.checkbox(&mut transparent, crate::widgets::tr(ui, "Transparent Background"));
+        d.values.insert("transparent".into(), json!(transparent));
+    } else {
+        ui.label(crate::widgets::tr(ui, "Template name"));
+        let mut name = d.values.get("name").and_then(Json::as_str).unwrap_or("").to_string();
+        if ui.text_edit_singleline(&mut name).changed() {
+            d.values.insert("name".into(), json!(name));
+        }
+        ui.label(crate::widgets::tr(ui, "Templates are saved in this GridCraft installation and apply to charts of the same type."));
+    }
+    ok_cancel(ui, confirm, open);
+}
+
+fn confirm_chart_dialog(app: &mut SheetApp, d: &Dialog, open: &mut bool) {
+    if d.name == "saveChartTemplate" {
+        let chart = d.values.get("chart").and_then(Json::as_u64).and_then(|id| u32::try_from(id).ok()).unwrap_or_default();
+        let name = d.values.get("name").and_then(Json::as_str).unwrap_or("");
+        if let Err(error) = crate::chart_tools::save_template(app, chart, name) {
+            app.message = Some((d.title.clone(), error));
+            *open = true;
+        } else {
+            *open = false;
+        }
+    } else {
+        match app.save_chart_image(build_params(d)) {
+            Ok(saved) => *open = !saved,
+            Err(e) => app.message = Some((d.title.clone(), crate::clean_error(&e))),
+        }
+    }
 /// OK in Open Hyperlink; returns whether the prompt closes. A pass that carries control-channel
 /// input (`ui.key`, `ui.click`, `ui.drag`) can't say yes for the user (#2181): the link stays
 /// unopened and the prompt open, with a message. Real input in that same pass is refused too, so

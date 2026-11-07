@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 mod axis;
+mod export;
 mod raster;
 mod render;
 mod resolve;
@@ -24,6 +25,7 @@ pub use gridcraft_model::{Chart, ChartKind, LegendPos, SparklineKind, Trendline,
 use serde::{Deserialize, Serialize};
 
 pub use axis::{Scale, format_number, nice_scale};
+pub use export::{export_png, export_svg};
 pub use raster::rasterize;
 pub use render::{Swatch, legend_entries, render, supports_trendline};
 pub use resolve::{default_palette, resolve, series_color, series_plot_kind};
@@ -91,6 +93,12 @@ pub enum Prim {
     },
     /// Text anchored at `(x, y)` per `align`/`valign`, rotated by `rotation` radians about the anchor.
     Text {
+        /// Element used to select and format the text (title, legend, axes, data labels, trendline).
+        #[serde(default)]
+        role: String,
+        /// Effective text style after inheriting the whole-chart defaults.
+        #[serde(default)]
+        format: gridcraft_model::ChartTextFormat,
         x: f32,
         y: f32,
         text: String,

@@ -11,7 +11,9 @@ use super::{
     keytips, macro_ui, panes, pivot_pane, printing, ribbon, tabs, text_box, theme, widgets,
 };
 
+mod chart_font;
 mod clipboard;
+pub(crate) use clipboard::check_picture_size;
 mod commands;
 mod editing;
 #[cfg(test)]
@@ -71,6 +73,8 @@ impl SheetApp {
             capture_geometry: None,
             capture_geometry_from_raw: false,
             selected_object: None,
+            chart_context: None,
+            chart_clipboard: None,
             clipboard_text_at_copy: None,
             cut_text: None,
             tab_run: None,
@@ -106,6 +110,7 @@ impl SheetApp {
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
         self.ensure_text_width(ctx);
+        self.chart_context = Some(ctx.clone());
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped. One
         // made with a switch to the control's tab waits, with its window, for the next `ui` of

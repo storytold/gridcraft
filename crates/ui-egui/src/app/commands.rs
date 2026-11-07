@@ -17,6 +17,9 @@ impl SheetApp {
     }
 
     pub(super) fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        if let Some(result) = self.format_chart_font(id, &params) {
+            return result;
+        }
         let switches_window = id.starts_with("window.")
             || matches!(id, "view.newWindow" | "view.hideWindow" | "view.unhideWindow")
             || (id == "view.switchWindows" && ["window", "doc"].iter().any(|k| params.get(*k).is_some_and(|d| !d.is_null())));
@@ -56,7 +59,48 @@ impl SheetApp {
         }
         let before = self.session.active_window();
         let zoom_from = matches!(id, "view.zoom" | "view.zoom100" | "view.zoomToSelection").then(|| crate::grid::Trace::key(self));
-        let r = self.session.run(id, params);
+        let template = if id == "insert.chart" && self.ui.chart_templates.iter().any(|template| template.use_for_new) {
+            gridcraft_engine::cmd::insert::build_chart(&self.session, &params)
+                .ok()
+                .and_then(|(_, chart)| self.ui.chart_templates.iter().find(|template| template.use_for_new && template.kind == chart.kind).cloned())
+        } else {
+            None
+        };
+        let mut resolved = params.clone();
+        if let Some(template) = &template {
+            let legend = match template.legend {
+                gridcraft_engine::model::LegendPos::None => "none",
+                gridcraft_engine::model::LegendPos::Top => "top",
+                gridcraft_engine::model::LegendPos::Left => "left",
+                gridcraft_engine::model::LegendPos::Bottom => "bottom",
+                gridcraft_engine::model::LegendPos::Right => "right",
+            };
+            if !resolved.is_object() {
+                resolved = json!({});
+            }
+            // Resolve local defaults into the single engine command. Undo and journal/script
+            // replay must see exactly the same operation, even at the history cap.
+            if let Some(map) = resolved.as_object_mut() {
+                for (key, value) in [
+                    ("style", json!(template.style)),
+                    ("legend", json!(legend)),
+                    ("dataLabels", json!(template.data_labels)),
+                    ("gridlines", json!(template.gridlines)),
+                    ("format", json!(template.format)),
+                ] {
+                    map.entry(key).or_insert(value);
+                }
+            }
+        }
+        let r = match self.session.run(id, resolved) {
+            Err(error) if template.is_some() => {
+                // A malformed saved preference must be visible, but should not prevent inserting
+                // the ordinary chart. Engine validation happens before any workbook mutation.
+                self.alert(error);
+                self.session.run(id, params)
+            }
+            result => result,
+        };
         if let Some(from) = zoom_from {
             crate::grid::Trace::keep_through_zoom(self, from);
         }
@@ -85,7 +129,7 @@ impl SheetApp {
             self.arrange_windows = Some((arrange, windows));
         }
         // The new chart is selected, as after inserting any object, so Delete removes it, not its data.
-        if id == "insert.chart"
+        if matches!(id, "insert.chart" | "chart.paste" | "chart.duplicate")
             && let Ok(r) = &r
             && let Some(chart) = r.get("chart").and_then(Json::as_u64).and_then(|id| u32::try_from(id).ok())
         {
@@ -135,7 +179,7 @@ impl SheetApp {
     }
 
     /// Shows a command error: a toast for an unavailable command, else a message box.
-    pub(super) fn alert(&mut self, e: String) {
+    pub(crate) fn alert(&mut self, e: String) {
         // Shown in the window the user ends up in, also after a command that switched windows.
         self.follow_active_window();
         if e.contains("is not available right now") {

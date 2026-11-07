@@ -68,7 +68,7 @@ fn prims_svg(prims: &[Prim], w: f32, h: f32, style: &str) -> String {
                 paint(&mut out, *fill, *stroke);
                 out.push_str("/>");
             }
-            Prim::Text { x, y, text, size, color, bold, align, valign, rotation } => {
+            Prim::Text { x, y, text, size, color, bold, format, align, valign, rotation, .. } => {
                 // Baseline offsets as in the PDF export.
                 let dy = match valign {
                     VAlign::Top => size * 0.78,
@@ -83,6 +83,12 @@ fn prims_svg(prims: &[Prim], w: f32, h: f32, style: &str) -> String {
                 let _ = write!(out, "<text x=\"{}\" y=\"{}\" font-size=\"{}\" text-anchor=\"{anchor}\"", num(*x), num(y + dy), num(*size));
                 if *bold {
                     out.push_str(" font-weight=\"bold\"");
+                }
+                if let Some(name) = &format.name {
+                    let _ = write!(out, " font-family=\"{}\"", esc(name));
+                }
+                if format.italic.unwrap_or(false) {
+                    out.push_str(" font-style=\"italic\"");
                 }
                 if rotation.is_finite() && *rotation != 0.0 {
                     let _ = write!(out, " transform=\"rotate({} {} {})\"", num(rotation.to_degrees()), num(*x), num(*y));
@@ -159,6 +165,8 @@ mod tests {
             Prim::Wedge { cx: 10.0, cy: 10.0, r_outer: 5.0, r_inner: 2.0, a0: 0.0, a1: 1.0, fill: red, stroke: None },
             Prim::Circle { cx: 1.0, cy: 1.0, r: 2.0, fill: Some([0, 0, 255, 128]), stroke: None },
             Prim::Text {
+                role: "title".into(),
+                format: Default::default(),
                 x: 5.0,
                 y: 6.0,
                 text: "A<B".into(),
