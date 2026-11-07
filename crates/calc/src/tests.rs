@@ -2583,6 +2583,7 @@ fn lookups_compare_numbers_exactly() {
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
 
 /// `rebuild` and `cells_changed` read formulas through `Formula::with_expr`, which borrows the
 /// cached tree or parses on the fly. The dependency graph must come out the same for formulas that
