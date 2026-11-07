@@ -6,6 +6,7 @@ use gridcraft_model::{Chart, ChartKind, ErrorBarDirection, LineDash, QuartileMet
 
 use crate::axis::{Fmt, Scale, clean, fixed_scale, nice_scale};
 use crate::errbars::error_spans;
+use crate::axis::{Fmt, Scale, clean, nice_scale};
 use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, series_color};
 use crate::trend::{auto_name, fit_trendline, moving_average};
 use crate::{ChartData, ErrorBarData, HAlign, Measure, Prim, Rgba, SeriesData, VAlign};
