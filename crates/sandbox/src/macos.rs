@@ -33,10 +33,10 @@ pub fn command(policy: &Checked, exe: &Path, launch: &[OsString]) -> Result<Comm
 
 /// Runs the launcher again under `sandbox-exec`, with the profile applied before it starts; the
 /// enforcement check of that run proves it. Returns only on failure.
-pub fn confine(policy: &Checked, args: &[OsString]) -> Result<()> {
+pub fn confine(policy: &Checked, target: u32, args: &[OsString]) -> Result<()> {
     let exe = std::env::current_exe()?;
     let mut c = Command::new(SANDBOX_EXEC);
-    c.arg("-p").arg(profile(policy)?).arg(exe).arg(CONFINED_FLAG).args(args);
+    c.arg("-p").arg(profile(policy)?).arg(exe).arg(CONFINED_FLAG).arg(target.to_string()).args(args);
     Err(SandboxError::Io(c.exec()))
 }
 

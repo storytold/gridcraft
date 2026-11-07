@@ -31,33 +31,62 @@ pub struct Check {
 /// is not a denial; confined, creating the socket or connecting is denied.
 const TCP_TARGET: ([u8; 4], u16) = ([127, 0, 0, 1], 9);
 
-/// Every attempt that must be denied, against `canary` (a file outside the policy) and `exe` (the
-/// current executable, which the process check tries to start). Each must report
-/// [`Outcome::Denied`] before the launcher runs its program.
-pub fn enforcement(canary: &Path, exe: &Path) -> Vec<Check> {
+/// Every attempt that must be denied, against `canary` (a file outside the policy), `exe` (the
+/// current executable, which the process check tries to start) and `target` (from
+/// [`signal_target`]). Each must report [`Outcome::Denied`] before the launcher runs its program.
+pub fn enforcement(canary: &Path, exe: &Path, target: u32) -> Vec<Check> {
     vec![
         Check { name: "read the canary", outcome: denied(std::fs::read(canary).map(drop)) },
         Check { name: "write next to the canary", outcome: write_probe(canary.parent().unwrap_or(canary)) },
         Check { name: "write in the temporary directory", outcome: write_probe(&std::env::temp_dir()) },
         Check { name: "TCP connection", outcome: denied(tcp_probe()) },
         Check { name: "start a process", outcome: spawn_probe(exe) },
-        Check { name: "signal another process", outcome: signal_probe() },
+        Check { name: "signal another process", outcome: signal_probe(target) },
     ]
 }
 
-/// Signal 0 to the launcher's parent, which delivers nothing: it only asks whether a signal would be
-/// allowed. The parent has this user's account, so outside the sandbox it would be.
+/// Signal 0 to `process`, which delivers nothing: it only asks whether a signal would be allowed.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn signal_probe() -> Outcome {
-    match i32::try_from(std::os::unix::process::parent_id()) {
-        Ok(parent) => denied(nix::sys::signal::kill(nix::unistd::Pid::from_raw(parent), None).map_err(std::io::Error::from)),
-        Err(e) => Outcome::Allowed(format!("no process to try it on: {e}")),
+fn signal_zero(process: u32) -> std::io::Result<()> {
+    let pid = i32::try_from(process).map_err(|e| std::io::Error::new(ErrorKind::InvalidInput, e))?;
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).map_err(std::io::Error::from)
+}
+
+/// The process the check tries a signal on: this launcher's parent, if a signal to it is allowed
+/// now, before any confinement. One that refuses already (PID 1, another user's process) would be
+/// refused afterwards too, which would prove nothing, so the launch is refused instead.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub fn signal_target() -> std::result::Result<u32, String> {
+    signalable(std::os::unix::process::parent_id())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn signalable(process: u32) -> std::result::Result<u32, String> {
+    signal_zero(process)
+        .map(|()| process)
+        .map_err(|e| format!("a signal to process {process} fails before any confinement, so its refusal would prove nothing: {e}"))
+}
+
+/// Whether a signal to `target` is refused now. A parent that changed since [`signal_target`] looked
+/// is another process, which may refuse for its own reasons (a launcher whose parent exited has PID 1
+/// for a parent).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn signal_probe(target: u32) -> Outcome {
+    if std::os::unix::process::parent_id() != target {
+        return Outcome::Allowed(format!("this launcher's parent is no longer process {target}"));
     }
+    denied(signal_zero(target))
 }
 
 /// Other systems have no confinement, so no launch gets this far.
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn signal_probe() -> Outcome {
+pub fn signal_target() -> std::result::Result<u32, String> {
+    Err("this system has no sandbox".into())
+}
+
+/// Other systems have no confinement, so no launch gets this far.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn signal_probe(_: u32) -> Outcome {
     Outcome::Allowed("this system has no sandbox".into())
 }
 
@@ -107,7 +136,12 @@ pub fn report(args: &[OsString]) -> i32 {
     };
     let exe = std::env::current_exe().unwrap_or_default();
     let mut ok = true;
-    let mut checks = enforcement(Path::new(canary), &exe);
+    // The launcher looked at this process's parent before it confined itself, and `exec` keeps it.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let target = std::os::unix::process::parent_id();
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let target = 0;
+    let mut checks = enforcement(Path::new(canary), &exe, target);
     checks.push(Check { name: "UDP socket", outcome: denied(UdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], 0))).map(drop)) });
     // The person's own files: not part of the launch check, since a policy may allow a directory
     // under the home directory (a Python installed there), but no policy here allows the home
@@ -143,4 +177,28 @@ fn worked(name: &str, ok: bool, err: Option<String>) -> bool {
         println!("broken: {name} ({})", err.unwrap_or_default());
     }
     ok
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_signal_that_fails_before_any_confinement_proves_nothing_after_it() {
+        // This test isn't confined, and its parent has the same user.
+        let parent = std::os::unix::process::parent_id();
+        assert_eq!(signal_target(), Ok(parent));
+        assert!(matches!(signal_probe(parent), Outcome::Allowed(_)), "allowed unconfined, so no denial");
+        // No such process: there is nothing to compare a refusal with, so the launch is refused.
+        for process in [u32::MAX, i32::MAX as u32] {
+            let e = signalable(process).unwrap_err();
+            assert!(e.contains("before any confinement"), "{e}");
+        }
+    }
+
+    #[test]
+    fn a_parent_that_changed_is_not_taken_for_the_one_looked_at() {
+        let other = std::os::unix::process::parent_id().wrapping_add(1);
+        assert!(matches!(signal_probe(other), Outcome::Allowed(detail) if detail.contains("no longer")));
+    }
 }

@@ -499,7 +499,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 | 2026-11-01 | trivial | Equations: the layout cache answers for a source over the cap by its length alone, without hashing it |
 | 2026-11-01 | minor | Equations: the `math` crate (L1), the layout cache and code editor marks |
 | 2026-11-01 | minor | The Python editor window (`python_window.rs`) and its questions as state |
-| 2026-11-01 | minor | Python cells in the interface: Python mode on the shared editor, `code_field` and its stop keys, `python_card.rs`, `python.output`; drafts follow their sheet by `model::SheetUid` |
+| 2026-11-01 | minor | Python cells in the interface: Python mode on the shared editor, `code_field` and its stop keys; drafts follow their sheet by `model::SheetUid` |
 | 2026-10-31 | minor | Recently used functions (`recent.rs`, `Prefs::recent_functions`) behind `formulas.recentlyUsed` |
 | 2026-10-31 | minor | Function Library module (`function_library.rs`); accent icons (`icons::paint_accent`, `widgets::small_button_accent`) |
 | 2026-10-25 | trivial | The hidden names that hold macros are `_gc_macro_<n>_<k>` |
