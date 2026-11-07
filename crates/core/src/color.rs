@@ -18,3 +18,40 @@ pub fn indexed_color(index: u8) -> Option<[u8; 3]> {
     let rgb = *INDEXED.get(slot as usize)?;
     Some([(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8])
 }
+
+/// The `ColorIndex` (1 to 56) of the palette colour nearest to `rgb` by distance in RGB, the
+/// lowest index on a tie: how Excel snaps a colour given as RGB to the palette (a gridline
+/// colour of `123456` becomes 49, `003366`; `FF0100` becomes 3, `FF0000`).
+pub fn nearest_indexed(rgb: [u8; 3]) -> u8 {
+    let mut best = (u32::MAX, 1);
+    for index in 1..=56 {
+        let Some(c) = indexed_color(index) else { continue };
+        let d: u32 = c.iter().zip(rgb).map(|(&a, b)| u32::from(a.abs_diff(b)).pow(2)).sum();
+        if d < best.0 {
+            best = (d, index);
+        }
+    }
+    best.1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rgb_snaps_to_the_nearest_palette_colour() {
+        // Measured in Excel: `GridlineColor` 123456 reads back as ColorIndex 49, FF0100 as 3.
+        assert_eq!(nearest_indexed([0x12, 0x34, 0x56]), 49);
+        assert_eq!(indexed_color(49), Some([0x00, 0x33, 0x66]));
+        assert_eq!(nearest_indexed([0xFF, 0x01, 0x00]), 3);
+        // Every palette colour finds itself, or the first index holding the same colour.
+        for index in 1..=56 {
+            let rgb = indexed_color(index).unwrap();
+            let found = nearest_indexed(rgb);
+            assert!(found <= index && indexed_color(found) == Some(rgb), "{index} → {found}");
+        }
+        assert_eq!(nearest_indexed([0, 0, 0xFF]), 5, "0000FF is both 5 and 32: the lower wins");
+        assert_eq!(indexed_color(0), None);
+        assert_eq!(indexed_color(57), None);
+    }
+}

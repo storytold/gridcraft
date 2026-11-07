@@ -35,10 +35,23 @@ pub fn specs() -> Vec<CommandSpec> {
             target_sheet(s, p)?,
             None
         )),
-        cmd!("view.gridlines", "Gridlines", ["View", "Show"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "gridlines")),
-        cmd!("view.headings", "Headings", ["View", "Show"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "headings")),
-        cmd!("view.showZeros", "Show Zeros", [], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "zeros")),
-        cmd!("view.showOutlineSymbols", "Show Outline Symbols", [], Some("Ctrl+8"), "{on?}", has_doc, |s, p| sheet_flag(s, p, "outlineSymbols")),
+        cmd!("view.gridlines", "Gridlines", ["View", "Show"], None, "{sheet?, on?}", has_doc, |s, p| sheet_flag(s, p, "gridlines")),
+        cmd!(
+            "view.gridlineColor",
+            "Gridline Color",
+            [],
+            None,
+            "{sheet?, colorIndex?: 1..56 | \"automatic\" (0 is Automatic too), color?: \"#RRGGBB\" (snaps to the nearest of the 56 palette colours) | \"automatic\"} (File › Options › Advanced, this worksheet; without either, reports) → {colorIndex: 1..56 | \"automatic\", color: \"#RRGGBB\" | null}",
+            has_doc,
+            gridline_color
+        ),
+        cmd!("view.headings", "Headings", ["View", "Show"], None, "{sheet?, on?}", has_doc, |s, p| sheet_flag(s, p, "headings")),
+        cmd!("view.showZeros", "Show Zeros", [], None, "{sheet?, on?}", has_doc, |s, p| sheet_flag(s, p, "zeros")),
+        cmd!("view.showOutlineSymbols", "Show Outline Symbols", [], Some("Ctrl+8"), "{sheet?, on?}", has_doc, |s, p| sheet_flag(
+            s,
+            p,
+            "outlineSymbols"
+        )),
         cmd!("view.showObjects", "Show Objects", [], Some("Ctrl+6"), "{on?}", has_doc, show_objects),
         cmd!(
             "view.showSheetTabs",
@@ -61,7 +74,9 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("view.showVerticalScrollBar", "Show Vertical Scroll Bar", [], None, "{on?} (this workbook; toggles without `on`)", has_doc, |s, p| {
             workbook_view_flag(s, p, "vertical")
         }),
-        cmd!("view.rightToLeft", "Sheet Right-to-Left", ["Page Layout", "Sheet Options"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "rtl")),
+        cmd!("view.rightToLeft", "Sheet Right-to-Left", ["Page Layout", "Sheet Options"], None, "{sheet?, on?}", has_doc, |s, p| sheet_flag(
+            s, p, "rtl"
+        )),
         cmd!("view.zoom", "Zoom", ["View", "Zoom"], None, "{percent: 10..400}", has_doc, zoom),
         cmd!("view.zoom100", "100%", ["View", "Zoom"], None, "{}", has_doc, |s, _| zoom(s, &json!({"percent": 100}))),
         cmd!(query "view.formulaBar", "Formula Bar", ["View", "Show"], None, "{on?: bool}", always, |s, p| {
@@ -124,12 +139,12 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             scale_fit
         ),
-        cmd!("pageLayout.printGridlines", "Print Gridlines", ["Page Layout", "Sheet Options"], None, "{on?}", has_doc, |s, p| sheet_flag(
+        cmd!("pageLayout.printGridlines", "Print Gridlines", ["Page Layout", "Sheet Options"], None, "{sheet?, on?}", has_doc, |s, p| sheet_flag(
             s,
             p,
             "printGridlines"
         )),
-        cmd!("pageLayout.printHeadings", "Print Headings", ["Page Layout", "Sheet Options"], None, "{on?}", has_doc, |s, p| sheet_flag(
+        cmd!("pageLayout.printHeadings", "Print Headings", ["Page Layout", "Sheet Options"], None, "{sheet?, on?}", has_doc, |s, p| sheet_flag(
             s,
             p,
             "printHeadings"
@@ -192,9 +207,11 @@ fn set_freeze(s: &mut Session, si: usize, f: Option<(u32, u32)>) -> Result<Json>
     })
 }
 
+/// A sheet's display or print flag, on the sheet the call names (`sheet`) or the active one;
+/// toggles without `on`.
 fn sheet_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json> {
+    let si = target_sheet(s, p)?;
     edit(s, |cx| {
-        let si = cx.sheet_index();
         let sh = cx.sheet_mut(si)?;
         let slot = match which {
             "gridlines" => &mut sh.show_gridlines,
@@ -207,6 +224,46 @@ fn sheet_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json> {
         };
         *slot = bool_param(p, "on").unwrap_or(!*slot);
         Ok(json!({"on": *slot}))
+    })
+}
+
+/// File › Options › Advanced › Display options for this worksheet › Gridline color (#3100): a
+/// palette `ColorIndex` from 1 to 56, or Automatic (the theme's gridline colour). A colour given
+/// as RGB snaps to the nearest palette colour, as Excel's `GridlineColor` does. 0 is Automatic,
+/// as in Excel, which refuses 57 and other values; so does this, changing nothing. Without
+/// `colorIndex` or `color` it only reports.
+fn gridline_color(s: &mut Session, p: &Json) -> Result<Json> {
+    const ID: &str = "view.gridlineColor";
+    let si = target_sheet(s, p)?;
+    let given = |key: &str| p.get(key).filter(|v| !v.is_null());
+    // `Some(new)` to set, `new` being `None` for Automatic.
+    let set = match (given("colorIndex"), given("color")) {
+        (Some(_), Some(_)) => return Err(bad(ID, "give `colorIndex` or `color`, not both")),
+        (Some(Json::String(t)), None) if t.trim().eq_ignore_ascii_case("automatic") => Some(None),
+        (Some(v), None) => match v.as_i64().and_then(|i| u8::try_from(i).ok()).filter(|i| *i <= 56) {
+            Some(0) => Some(None),
+            Some(index) => Some(Some(index)),
+            None => return Err(bad(ID, format!("`colorIndex` must be 1 to 56, 0 or \"automatic\", not {v}"))),
+        },
+        (None, Some(v)) => {
+            let color =
+                super::format::color_param(Some(v)).ok_or_else(|| bad(ID, format!("`color` must be \"#RRGGBB\" or \"automatic\", not {v}")))?;
+            Some(color.resolve(&s.doc()?.wb.theme).map(gridcraft_core::color::nearest_indexed))
+        }
+        (None, None) => None,
+    };
+    if let Some(new) = set
+        && s.doc()?.wb.sheet(si).is_some_and(|sh| sh.gridline_color != new)
+    {
+        edit(s, |cx| {
+            cx.sheet_mut(si)?.gridline_color = new;
+            Ok(())
+        })?;
+    }
+    let sh = s.doc()?.wb.sheet(si).ok_or_else(|| bad("sheet", "no such sheet"))?;
+    Ok(match sh.gridline_color.zip(sh.gridline_rgb()) {
+        Some((index, [r, g, b])) => json!({"colorIndex": index, "color": format!("#{r:02X}{g:02X}{b:02X}")}),
+        None => json!({"colorIndex": "automatic", "color": null}),
     })
 }
 

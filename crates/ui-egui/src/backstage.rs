@@ -128,6 +128,9 @@ pub struct Backstage {
     pub save_format: &'static str,
     /// Home and Open: when the recent workbooks were last changed.
     recent: RecentFiles,
+    /// Options: the sheet picked for the display options for this worksheet (its
+    /// [`SheetUid`](gridcraft_engine::model::SheetUid)); the active sheet until one is picked.
+    options_sheet: Option<u64>,
 }
 
 /// Save As file types: (extension, label). The first is the workbook itself; the others are
@@ -147,6 +150,7 @@ impl Backstage {
             preview: None,
             save_format: "xlsx",
             recent: RecentFiles::default(),
+            options_sheet: None,
         }
     }
 }
@@ -226,7 +230,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     Page::SaveAs => save_as(app, ui, &mut bs, &mut out),
                     Page::Print => print(app, ui, &mut bs, &mut out),
                     Page::Export => export(app, ui, &mut out),
-                    Page::Options => options(app, ui),
+                    Page::Options => options(app, ui, &mut bs.options_sheet),
                     Page::Account => account(app, ui),
                 }
             });

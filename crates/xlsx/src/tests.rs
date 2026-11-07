@@ -13,6 +13,7 @@ mod encrypted_tests;
 mod equation_tests;
 mod fixtures;
 mod google_sheets_dummy;
+mod gridline_color;
 mod ink_roundtrip;
 mod literal_category_roundtrip;
 mod locale_numfmt;

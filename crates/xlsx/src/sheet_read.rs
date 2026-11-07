@@ -417,6 +417,14 @@ fn read_protected_ranges(e: &El, sheet: &mut Sheet) {
 fn read_views(e: &El, sheet: &mut Sheet) {
     let Some(v) = e.child("sheetView") else { return };
     sheet.show_gridlines = v.flag("showGridLines", true);
+    // A gridline colour is `colorId` 8 to 63 (ColorIndex 1 to 56) under `defaultGridColor="0"`.
+    // Without that flag, without `colorId` or with 64 (the default) it is Automatic, as Excel
+    // opens it; Excel refuses the file for other values, which are ignored here.
+    sheet.gridline_color = if v.flag("defaultGridColor", true) {
+        None
+    } else {
+        v.attr_u32("colorId").filter(|id| (8..=63).contains(id)).and_then(|id| u8::try_from(id.checked_sub(7)?).ok())
+    };
     sheet.show_headings = v.flag("showRowColHeaders", true);
     sheet.show_formulas = v.flag("showFormulas", false);
     sheet.show_zeros = v.flag("showZeros", true);

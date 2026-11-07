@@ -692,6 +692,10 @@ fn write_sheet_views(s: &mut String, sheet: &Sheet, selected: bool) {
     if sheet.right_to_left {
         s.push_str(" rightToLeft=\"1\"");
     }
+    // A gridline colour, also while the gridlines are hidden; Automatic writes neither attribute.
+    if let Some(index) = sheet.gridline_color.filter(|_| sheet.gridline_rgb().is_some()) {
+        let _ = write!(s, " defaultGridColor=\"0\" colorId=\"{}\"", u32::from(index) + 7);
+    }
     if sheet.view != gridcraft_model::SheetViewMode::Normal {
         let _ = write!(s, " view=\"{}\"", sheet.view.as_str());
     }
