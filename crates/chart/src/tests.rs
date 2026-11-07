@@ -1679,3 +1679,32 @@ fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
 }
+
+#[test]
+fn volatile_series_formulas_are_detected() {
+    let with = |values: &str, name: Option<&str>| {
+        let mut c = chart(ChartKind::Line);
+        c.series.push(Series {
+            name: name.map(Into::into),
+            categories: None,
+            values: values.into(),
+            bubble_sizes: None,
+            color: None,
+            secondary: false,
+            kind: None,
+            smooth: false,
+            quartiles: Default::default(),
+            trendlines: vec![],
+        });
+        c
+    };
+    assert!(has_volatile_series(&with("=NOW()", None)));
+    assert!(has_volatile_series(&with("=SUM(A1:A3)*rand ()", None)));
+    assert!(has_volatile_series(&with("Sheet1!$B$2:$B$9", Some("=TODAY()"))));
+    assert!(has_volatile_series(&with("=RANDARRAY(5)", None)));
+    assert!(has_volatile_series(&with("=_xlfn.RANDARRAY(5)", None)));
+    assert!(!has_volatile_series(&with("Sheet1!$B$2:$B$9", Some("Sheet1!$B$1"))));
+    assert!(!has_volatile_series(&with("=MYRAND(A1)", None)));
+    assert!(!has_volatile_series(&with("=Sheet1!$NOW", None)));
+    assert!(!has_volatile_series(&chart(ChartKind::Line)));
+}

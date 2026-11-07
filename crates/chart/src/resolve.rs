@@ -104,6 +104,26 @@ fn eval_list_in(wb: &Workbook, sheet: usize, formula: &str, depth: u32) -> Vec<V
     }
 }
 
+/// Whether a series formula of `ch` calls a function whose result changes between evaluations
+/// (`NOW`, `TODAY`, `RAND`, `RANDBETWEEN`, `RANDARRAY`), so a result resolved earlier is stale.
+pub fn has_volatile_series(ch: &Chart) -> bool {
+    const VOLATILE: [&str; 5] = ["NOW", "TODAY", "RAND", "RANDBETWEEN", "RANDARRAY"];
+    let calls_volatile = |f: &str| {
+        // Formulas read from a file may carry the `_xlfn.` prefix of newer functions.
+        let up = f.to_ascii_uppercase().replace("_XLFN.", "");
+        VOLATILE.iter().any(|name| {
+            up.match_indices(name).any(|(i, _)| {
+                let before = up[..i].chars().next_back();
+                let after = up[i + name.len()..].trim_start();
+                before.is_none_or(|c| !(c.is_alphanumeric() || c == '_' || c == '.')) && after.starts_with('(')
+            })
+        })
+    };
+    ch.series.iter().any(|s| {
+        [s.name.as_deref(), s.categories.as_deref(), Some(s.values.as_str()), s.bubble_sizes.as_deref()].into_iter().flatten().any(calls_volatile)
+    })
+}
+
 fn to_num(v: &Value) -> Option<f64> {
     match v {
         Value::Number(n) if n.is_finite() => Some(*n),
