@@ -104,6 +104,12 @@ struct OpenGroup {
     start: usize,
     wb: Arc<Workbook>,
     selection: Selection,
+    /// The data-model state when the group began. `dataModel.*` edits change the model, its
+    /// metadata and the Data View without an undo step, so a rollback must put them back itself;
+    /// otherwise a failed group would leave the model changed while the workbook reverted.
+    dax_model: Option<gridcraft_dax::DataModel>,
+    dax_metadata: gridcraft_dax::model::ModelMetadata,
+    dax_view: cmd::dax::ModelView,
     /// The redo stack when the group began (a rollback puts it back).
     redo: Vec<HistoryEntry>,
     /// Where the recording was when the group began (`None` when nothing was recording): a
@@ -939,6 +945,9 @@ impl Session {
             start: d.undo.len(),
             wb: d.wb.clone(),
             selection: d.selection.clone(),
+            dax_model: self.dax_model.clone(),
+            dax_metadata: self.dax_metadata.clone(),
+            dax_view: self.dax_view.clone(),
             redo: d.redo.clone(),
             recorded: self.recorder.as_ref().map(record::Recorder::mark),
         };
@@ -1028,6 +1037,13 @@ impl Session {
     /// were when it began.
     pub fn group_rollback(&mut self, token: GroupToken) -> Result<()> {
         let g = self.take_group(&token)?;
+        // `dataModel.*` edits change the model, its metadata and the Data View without an undo
+        // step, so the group puts back what it captured; otherwise a failed group would revert the
+        // workbook and leave the model changed. They are session state, not the document's, so
+        // they come back even when the group's document closed.
+        self.dax_model = g.dax_model;
+        self.dax_metadata = g.dax_metadata;
+        self.dax_view = g.dax_view;
         let Some(d) = self.docs.iter_mut().find(|d| d.uid == g.doc) else { return Ok(()) };
         if !Arc::ptr_eq(&d.wb, &g.wb) {
             d.wb = g.wb;

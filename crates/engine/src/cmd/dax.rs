@@ -1701,6 +1701,47 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    #[test]
+    fn a_failed_group_rolls_back_the_data_model_state() {
+        // The model, its metadata and the Data View are session state, edited without an undo
+        // step: a group that rolls back must put them back too, or a failed group leaves the model
+        // changed while the workbook and selection revert (CodeRabbit, #3422).
+        let (path, dir) = write_model(
+            "group-rollback",
+            r#"{
+                "tables": [{"name":"Sales","columns":[{"name":"Region"},{"name":"Amount"}],
+                            "rows":[["East",10],["West",20]]}],
+                "relationships": [],
+                "measures": [{"name":"Total Sales","formula":"SUM(Sales[Amount])","table":"Sales"}]
+            }"#,
+        );
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("dataModel.load", json!({"path": path.to_string_lossy()})).expect("load");
+        let wb_before = s.doc().expect("doc").wb.clone();
+        let selection_before = s.doc().expect("doc").selection.clone();
+        let model_before = s.dax_model.clone();
+        let metadata_before = s.dax_metadata.clone();
+        let view_before = s.dax_view.clone();
+
+        let token = s.group_begin("Doomed").expect("group");
+        s.execute("dataModel.addMeasure", json!({"name": "Double Sales", "formula": "1", "table": "Sales"})).expect("first command");
+        s.execute("dataModel.setColumnHidden", json!({"table": "Sales", "column": "Region"})).expect("metadata edit");
+        s.execute("dataModel.sortTable", json!({"table": "Sales", "column": "Amount"})).expect("view edit");
+        s.execute("home.insertSheet", json!({})).expect("workbook edit");
+        // The second model command fails; the group's rollback takes back the first.
+        assert!(s.execute("dataModel.addMeasure", json!({"name": "Double Sales", "formula": "2"})).is_err(), "duplicate measure");
+        s.group_rollback(token).expect("rollback");
+
+        assert_eq!(s.dax_model, model_before, "the model is back as it was");
+        assert_eq!(s.dax_metadata, metadata_before, "the metadata is back as it was");
+        assert_eq!(s.dax_view, view_before, "the Data View is back as it was");
+        assert!(std::sync::Arc::ptr_eq(&s.doc().expect("doc").wb, &wb_before), "the workbook is back as it was");
+        assert_eq!(s.doc().expect("doc").selection, selection_before, "the selection is back as it was");
+        assert_eq!(s.execute("dataModel.evaluate", json!({"measure": "Total Sales"})).expect("eval")["value"], 30.0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     fn measure<'a>(status: &'a Json, name: &str) -> &'a Json {
         status["measures"].as_array().expect("measures").iter().find(|m| m["name"] == name).expect("measure")
     }
