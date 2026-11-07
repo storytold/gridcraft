@@ -6114,3 +6114,18 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
     }
     assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
 }
+
+#[test]
+fn hyperlink_function_makes_a_cell_link() {
+    let mut s = s();
+    s.link_policy = crate::links::LinkPolicy::Allow;
+    s.execute("cell.set", json!({"cell": "A1", "input": "https://example.com/x"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "=HYPERLINK(A1,\"Go\")"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C3", "input": "=HYPERLINK(\"google.com\")"})).unwrap();
+    s.take_ui_requests();
+    s.execute("link.open", json!({"cell": "B2"})).unwrap();
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl("https://example.com/x".into())]);
+    s.execute("link.open", json!({"cell": "C3"})).unwrap();
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl("https://google.com".into())]);
+    assert!(s.execute("link.open", json!({"cell": "A1"})).is_err());
+}

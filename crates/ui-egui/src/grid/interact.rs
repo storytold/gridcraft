@@ -505,7 +505,7 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         }
     } else if mods.command {
         // Ctrl+click (without Alt) on a hyperlink's text follows it instead of adding the cell to the selection.
-        if let Some(h) = sh.hyperlinks.get(&c).cloned()
+        if let Some(h) = gridcraft_engine::links::cell_link(wb, wb.active_sheet(), c)
             && acts
             && !mods.alt
             && p.x < geo.cell_rect(sh, c).left() + geo.cell_rect(sh, c).width() * 0.8
@@ -522,7 +522,7 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
             let _ = app.run("cell.toggleCheckbox", json!({"cell": c.a1()}));
         }
         // A click on a hyperlink's text follows it (like Excel); elsewhere in the cell selects.
-        if let Some(h) = sh.hyperlinks.get(&c).cloned()
+        if let Some(h) = gridcraft_engine::links::cell_link(wb, wb.active_sheet(), c)
             && acts
             && !mods.any()
         {
