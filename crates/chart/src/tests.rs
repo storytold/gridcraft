@@ -1746,3 +1746,30 @@ fn a_hand_placed_plot_moves_right_to_make_room_for_its_labels() {
         assert!(left > rect.x * w + 20.0, "{kind:?}: the plot moved right, its bars start at {left}");
     }
 }
+
+/// A wide plot placed by hand that moves right for its value labels still leaves room for the
+/// secondary axis's labels on its right: it narrows rather than push them off the chart.
+#[test]
+fn a_moved_plot_keeps_room_for_its_secondary_axis_labels() {
+    use gridcraft_model::{ChartLayout, ChartRect};
+    let (w, h) = (600.0, 400.0);
+    let d = sample(ChartKind::Combo);
+    let mut c = chart(ChartKind::Combo);
+    c.legend = LegendPos::None;
+    c.layout = ChartLayout { plot: Some(ChartRect { x: 0.005, y: 0.1, w: 0.99, h: 0.8 }), plot_inner: true, title: None };
+    let prims = render(&c, &d, w, h, &ApproxMeasure);
+    let mut right_labels = 0;
+    for p in &prims {
+        if let Prim::Text { x, text, size, bold, align: HAlign::Left, rotation: 0.0, .. } = p
+            && *x > w / 2.0
+        {
+            right_labels += 1;
+            let end = x + ApproxMeasure.text_width(text, *size, *bold);
+            assert!(end <= w + 0.5, "{text:?} ends at {end}");
+        }
+    }
+    assert!(right_labels > 0, "the secondary axis has labels");
+    for (left, t) in left_ends(&prims) {
+        assert!(left >= -0.5, "{t:?} starts at {left}");
+    }
+}
