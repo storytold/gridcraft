@@ -48,6 +48,7 @@ pub mod outline;
 pub mod panes;
 pub mod paper_view;
 pub mod pivot_pane;
+pub mod power_query;
 pub mod printing;
 pub mod ribbon;
 pub mod selection_glide;
@@ -234,6 +235,10 @@ pub struct SheetApp {
     pub toast: Option<(String, f64)>,
     /// Dismissible info bar under the ribbon (open-time notices).
     pub notice: Option<Notice>,
+    /// The Power Query Editor, when open (Data › Get Data › Launch Power Query Editor).
+    pub power_query: Option<power_query::Editor>,
+    /// When scheduled query refreshes ("refresh every N minutes") were last looked for.
+    refresh_checked: f64,
     pub services: Services,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,

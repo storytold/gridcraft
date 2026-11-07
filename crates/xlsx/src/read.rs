@@ -452,7 +452,12 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
             Err(e) => cx.warn(format!("macros (VBA project) could not be read and were dropped: {e}")),
         }
     }
+    let (queries, query_parts) = crate::queries::read(&mut cx, &wb_rels);
+    wb.queries = queries;
+    // Excel's own queries are listed read-only; their parts stay in the kept content.
+    wb.excel_queries = crate::mashup::read(&mut cx, &wb_rels, &wb);
     wb.preserved = kept.workbook(&mut cx, &wb_part, &wb_xml, &file_to_model);
+    crate::queries::unkeep(&mut wb.preserved, &query_parts);
     if let Some(w) = cx.python.warning() {
         cx.warn(w);
     }

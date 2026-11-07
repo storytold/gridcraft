@@ -31,6 +31,15 @@ impl SheetApp {
         // The opened workbook's window shows them, however it was opened (a script may have run
         // `file.open` on the session directly).
         self.follow_active_window();
+        // Queries or WEBSERVICE calls in the file: Excel's message bar, with Enable Content.
+        if r.get("externalBlocked").and_then(Json::as_bool) == Some(true) {
+            self.notice = Some(Notice {
+                text: self.ui.language.tr("SECURITY WARNING  External data connections have been disabled").into(),
+                kind: NoticeKind::Warning,
+                action: Some((self.ui.language.tr("Enable Content").into(), "cmd:data.enableContent".into())),
+            });
+            return;
+        }
         let Some(list) = r.get("warnings").and_then(Json::as_array) else {
             self.notice = None;
             return;
