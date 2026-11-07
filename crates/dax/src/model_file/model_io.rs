@@ -627,13 +627,13 @@ fn load_dictionary_bytes(base: &Base<'_>, name: &str) -> Result<Vec<u8>> {
 ///
 /// The writer derives ids from a sorted dictionary, but a column whose values did not change keeps
 /// Excel's own payload on disk, and Excel's ids need not follow sorted value order.
-fn stored_column_ids(base: &Base<'_>, column: &ColumnMeta) -> Result<Option<Vec<u32>>> {
+fn stored_column_ids(base: &Base<'_>, column: &ColumnMeta, row_count: usize) -> Result<Option<Vec<u32>>> {
     let Some(idf_name) = &column.idf else {
         return Ok(None);
     };
     let index = base.find(idf_name).ok_or_else(|| ModelFileError::Corrupt(format!("missing column data file {idf_name}")))?;
     let idf = base.decode(index)?;
-    Ok(Some(decode_column_ids(&idf, &column.segments)?))
+    Ok(Some(decode_column_ids(&idf, &column.segments, row_count)?))
 }
 
 fn read_column_values(base: &Base<'_>, column: &ColumnMeta, row_count: usize) -> Result<(Vec<Scalar>, Vec<u32>, usize, usize)> {
@@ -643,7 +643,7 @@ fn read_column_values(base: &Base<'_>, column: &ColumnMeta, row_count: usize) ->
     };
     let idf_index = base.find(idf_name).ok_or_else(|| ModelFileError::Corrupt(format!("missing column data file {idf_name}")))?;
     let idf = base.decode(idf_index)?;
-    let ids = decode_column_ids(&idf, &column.segments)?;
+    let ids = decode_column_ids(&idf, &column.segments, row_count)?;
     if ids.len() != row_count {
         return Err(ModelFileError::Corrupt(format!("column {} decodes {} rows but the metadata declares {row_count}", column.storage, ids.len())));
     }
@@ -828,7 +828,7 @@ pub fn column_metrics(data: &[u8]) -> Result<Vec<ModelColumnMetrics>> {
             let Some(idf_name) = &column.idf else { continue };
             let idf_index = base.find(idf_name).ok_or_else(|| ModelFileError::Corrupt(format!("missing column data file {idf_name}")))?;
             let idf = base.decode(idf_index)?;
-            let ids = decode_column_ids(&idf, &column.segments)?;
+            let ids = decode_column_ids(&idf, &column.segments, row_count)?;
             let nulls = ids.contains(&2);
             let dictionary_bytes = match &column.encoding {
                 ColumnEncoding::HashString { dictionary, .. } | ColumnEncoding::HashNumeric { dictionary, .. } => {
@@ -1055,7 +1055,7 @@ fn build_write_plan(base: &Base<'_>, layout: &ModelLayout, model: &ModelData, pr
             });
             let mut write = build_column_write(layout, column, model_column, rows, unchanged)?;
             write.unchanged = unchanged;
-            if unchanged && let Some(ids) = stored_column_ids(base, column)? {
+            if unchanged && let Some(ids) = stored_column_ids(base, column, rows)? {
                 // An unchanged column keeps Excel's own payload, and its ids are not guaranteed to
                 // follow the sorted dictionary this writer would produce. A relationship index
                 // rebuilt from recomputed ids would map foreign rows to the wrong primary row.
@@ -1889,6 +1889,12 @@ mod tests {
     const DEFAULT_HEADER: &str = "<BackupLog><BackupRestoreSyncVersion>150</BackupRestoreSyncVersion><Fault>false</Fault><faultcode>43981</faultcode><ErrorCode>true</ErrorCode><EncryptionFlag>false</EncryptionFlag><EncryptionKey>6</EncryptionKey><ApplyCompression>true</ApplyCompression><m_cbOffsetHeader>4096</m_cbOffsetHeader><DataSize>0</DataSize><Files>2</Files><ObjectID>00000000-0000-0000-0000-000000000000</ObjectID><m_cbOffsetData>4096</m_cbOffsetData></BackupLog>";
 
     fn empty_container() -> Vec<u8> {
+        container_with_files(&[])
+    }
+
+    /// A container holding the two mandatory documents plus the given logical files, compressed as
+    /// Excel stores them.
+    fn container_with_files(files: &[(&str, &[u8])]) -> Vec<u8> {
         let header = super::super::Header {
             xml: DEFAULT_HEADER.to_string(),
             error_code: true,
@@ -1898,33 +1904,87 @@ mod tests {
             vdir_size: 0,
             files: 2,
         };
-        let entries = vec![
-            super::super::VdirEntry {
-                path: "PARTITIONS".into(),
-                size: 0,
-                offset: 4096,
-                delete: "false".into(),
-                created: "0".into(),
-                access: "0".into(),
-                last_write: "0".into(),
-            },
-            super::super::VdirEntry {
-                path: "LOG".into(),
-                size: 0,
-                offset: 4096,
-                delete: "false".into(),
-                created: "0".into(),
-                access: "0".into(),
-                last_write: "0".into(),
-            },
-        ];
+        let entry = |path: &str| super::super::VdirEntry {
+            path: path.to_string(),
+            size: 0,
+            offset: 4096,
+            delete: "false".into(),
+            created: "0".into(),
+            access: "0".into(),
+            last_write: "0".into(),
+        };
+        let mut entries = vec![entry("PARTITIONS"), entry("LOG")];
         let partitions = utf16_bom("<Partitions></Partitions>");
         let log = utf16_bom("<BackupLog><CompressionFlag>true</CompressionFlag><FileGroups></FileGroups></BackupLog>");
-        let blobs = vec![
+        let mut blobs = vec![
             super::super::encode_file(&partitions, false, true).expect("partitions"),
             super::super::encode_file(&log, false, true).expect("log"),
         ];
+        for (path, content) in files {
+            entries.push(entry(path));
+            blobs.push(super::super::encode_file(content, true, true).expect("file"));
+        }
         super::super::rebuild(&header, &entries, &blobs).expect("rebuild")
+    }
+
+    /// Table metadata with one integer column whose segment claims `records` rows while the
+    /// column statistics declare `row_count`.
+    fn table_with_segment(row_count: i64, records: i64) -> String {
+        format!(
+            concat!(
+                r#"<Table name="Sales">"#,
+                r#"<Collections><Collection><Name>Columns</Name>"#,
+                r#"<XMObject class="XMRawColumn" name="C">"#,
+                r#"<Members><Member><Name>ColumnStats</Name><XMObject class="XMColumnStats"><Properties>"#,
+                r#"<RowCount>{row_count}</RowCount><DBType>2</DBType><XMType>1</XMType>"#,
+                r#"<MaxDataID>4</MaxDataID><DistinctStates>0</DistinctStates>"#,
+                r#"</Properties></XMObject></Member></Members>"#,
+                r#"<Collections><Collection><Name>Segments</Name>"#,
+                r#"<XMObject class="XMColumnSegment"><Properties><Records>{records}</Records></Properties>"#,
+                r#"<Members><Member><Name>SubSegment</Name><XMObject class="XMSubSegment">"#,
+                r#"<Properties><Records>{records}</Records></Properties>"#,
+                r#"<Members><Member><Name>CompressionInfo</Name>"#,
+                r#"<XMObject class="XMRENoSplitCompressionInfo<1>"><Properties><Min>3</Min></Properties></XMObject>"#,
+                r#"</Member></Members></XMObject></Member></Members></XMObject>"#,
+                r#"</Collection></Collections>"#,
+                r#"<DataObjects><DataObject><XMObject class="XMRawColumnPartitionDataObject" name="C.dat"/></DataObject></DataObjects>"#,
+                r#"</XMObject></Collection></Collections></Table>"#,
+            ),
+            row_count = row_count,
+            records = records,
+        )
+    }
+
+    #[test]
+    fn a_column_segment_cannot_claim_more_rows_than_the_table_declares() {
+        let ids = [3u32; 4];
+        let idf = encode_column_ids(&ids, 3, 1).expect("encode").bytes;
+        // A valid file: the segment and the column statistics agree on four rows.
+        let valid = container_with_files(&[("Sales.tbl.xml", table_with_segment(4, 4).as_bytes()), ("C.dat", &idf)]);
+        let model = read_model(&valid).expect("valid model reads");
+        let table = model.tables.first().expect("one table");
+        assert_eq!(table.name, "Sales");
+        assert_eq!(table.columns.len(), 1);
+        assert_eq!(table.columns[0].name, "C");
+        assert_eq!(table.columns[0].values.len(), 4);
+
+        // The same payload with a segment that claims one row more than RowCount is corrupt: the
+        // eager decode must not run past the row count the metadata declares.
+        let crafted = container_with_files(&[("Sales.tbl.xml", table_with_segment(3, 4).as_bytes()), ("C.dat", &idf)]);
+        match read_model(&crafted) {
+            Err(ModelFileError::Corrupt(message)) => {
+                assert_eq!(message, "idf segment at row 0 declares 4 records but the table has 3 rows");
+            }
+            other => panic!("expected Corrupt, got {other:?}"),
+        }
+        // `column_metrics` has no length check of its own: before the bound it decoded the
+        // oversized segment and reported the metrics as if the file were sound.
+        match column_metrics(&crafted) {
+            Err(ModelFileError::Corrupt(message)) => {
+                assert_eq!(message, "idf segment at row 0 declares 4 records but the table has 3 rows");
+            }
+            other => panic!("expected Corrupt from column_metrics, got {other:?}"),
+        }
     }
 
     fn set_header_tag(data: &mut [u8], tag: &str, value: &str) {

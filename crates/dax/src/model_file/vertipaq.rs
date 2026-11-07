@@ -112,7 +112,12 @@ const MAX_SEGMENT_RECORDS: usize = 64 * 1024 * 1024;
 const MAX_COLUMN_RECORDS: usize = 128 * 1024 * 1024;
 
 /// Decodes one column-data `.idf` into exactly `segments[i].records` ids per segment.
-pub fn decode_column_ids(data: &[u8], segments: &[SegmentInfo]) -> Result<Vec<u32>> {
+///
+/// `row_count` is the table's declared row count. Both it and the per-segment record counts come
+/// from the file's metadata, so a segment is checked against the rows left in the table *before*
+/// any eager expansion: a crafted segment that claims more rows than the table holds is rejected
+/// as corrupt instead of driving the decode past the declared count.
+pub fn decode_column_ids(data: &[u8], segments: &[SegmentInfo], row_count: usize) -> Result<Vec<u32>> {
     let mut position = 0usize;
     let mut output = Vec::new();
     let mut total = 0usize;
@@ -122,9 +127,18 @@ pub fn decode_column_ids(data: &[u8], segments: &[SegmentInfo]) -> Result<Vec<u3
         if segment.records > MAX_SEGMENT_RECORDS {
             return Err(ModelFileError::Corrupt("segment declares too many records".into()));
         }
+        let offset = total;
         total = total.checked_add(segment.records).ok_or(ModelFileError::TooLarge)?;
         if total > MAX_COLUMN_RECORDS {
             return Err(ModelFileError::Corrupt("column declares too many records".into()));
+        }
+        // The segments partition the column's rows: one starting at `offset` may not reach past
+        // the table's `row_count`.
+        if segment.records > row_count.saturating_sub(offset) {
+            return Err(ModelFileError::Corrupt(format!(
+                "idf segment at row {offset} declares {} records but the table has {row_count} rows",
+                segment.records
+            )));
         }
         let primary = read_record(data, &mut position)?;
         let subsegment = read_record(data, &mut position)?;
@@ -142,9 +156,11 @@ pub fn decode_column_ids(data: &[u8], segments: &[SegmentInfo]) -> Result<Vec<u3
             if marker >= 0 {
                 let repeat = usize::try_from(second).map_err(|_| ModelFileError::TooLarge)?;
                 let remaining = segment.records - produced;
-                let count = repeat.min(remaining);
-                output.extend(std::iter::repeat_n(marker as u32, count));
-                produced += count;
+                if repeat > remaining {
+                    return Err(ModelFileError::Corrupt(format!("idf run declares {repeat} rows but the segment has {remaining} left")));
+                }
+                output.extend(std::iter::repeat_n(marker as u32, repeat));
+                produced += repeat;
             } else {
                 let expected_marker = -(1i64 + i64::try_from(taken).map_err(|_| ModelFileError::TooLarge)?);
                 if i64::from(marker) != expected_marker {
@@ -152,7 +168,9 @@ pub fn decode_column_ids(data: &[u8], segments: &[SegmentInfo]) -> Result<Vec<u3
                 }
                 let count = usize::try_from(second).map_err(|_| ModelFileError::TooLarge)?;
                 let remaining = segment.records - produced;
-                let count = count.min(remaining);
+                if count > remaining {
+                    return Err(ModelFileError::Corrupt(format!("idf bit-packed entry declares {count} rows but the segment has {remaining} left")));
+                }
                 let values = decode_bitpacked(subsegment, taken, count, segment.width, segment.min)?;
                 taken = taken.checked_add(count).ok_or(ModelFileError::TooLarge)?;
                 output.extend(values);
@@ -763,7 +781,7 @@ mod tests {
         assert_eq!(encoded.rle_runs, 2);
         assert!(encoded.packed_entries >= 1);
         let segments = [SegmentInfo { records: ids.len(), min: 2, width: 4 }];
-        let decoded = decode_column_ids(&encoded.bytes, &segments)?;
+        let decoded = decode_column_ids(&encoded.bytes, &segments, ids.len())?;
         assert_eq!(decoded, ids);
         Ok(())
     }
@@ -986,7 +1004,52 @@ mod tests {
         let encoded = encode_column_ids(&ids, 3, 1).expect("encode");
         for end in 0..encoded.bytes.len() {
             let segments = [SegmentInfo { records: ids.len(), min: 3, width: 1 }];
-            assert!(decode_column_ids(&encoded.bytes[..end], &segments).is_err(), "prefix {end}");
+            assert!(decode_column_ids(&encoded.bytes[..end], &segments, ids.len()).is_err(), "prefix {end}");
         }
+    }
+
+    #[test]
+    fn a_segment_claiming_more_rows_than_the_table_has_is_rejected() -> Result<()> {
+        let ids = vec![3u32; 10];
+        let encoded = encode_column_ids(&ids, 3, 1)?;
+        let segments = [SegmentInfo { records: ids.len(), min: 3, width: 1 }];
+        // The same bytes decode identically while the metadata agrees with the table's row count.
+        assert_eq!(decode_column_ids(&encoded.bytes, &segments, ids.len())?, ids);
+        // A segment that claims more records than the table holds is refused before the eager
+        // expansion, rather than decoding past the declared row count.
+        let error = decode_column_ids(&encoded.bytes, &segments, ids.len() - 1).expect_err("an oversized segment must be rejected");
+        assert!(
+            matches!(&error, ModelFileError::Corrupt(message)
+                if message == "idf segment at row 0 declares 10 records but the table has 9 rows"),
+            "{error}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_later_segment_past_the_row_count_is_rejected() -> Result<()> {
+        // Two segments partition the column's rows: the second may not start past the table's end.
+        let mut bytes = encode_column_ids(&[3u32; 4], 3, 1)?.bytes;
+        bytes.extend_from_slice(&encode_column_ids(&[4u32; 7], 3, 1)?.bytes);
+        let segments = [SegmentInfo { records: 4, min: 3, width: 1 }, SegmentInfo { records: 7, min: 3, width: 1 }];
+        // Ten rows can only hold four of the second segment's seven records.
+        let error = decode_column_ids(&bytes, &segments, 10).expect_err("a segment past the row count must be rejected");
+        assert!(
+            matches!(&error, ModelFileError::Corrupt(message)
+                if message == "idf segment at row 4 declares 7 records but the table has 10 rows"),
+            "{error}"
+        );
+        // With the table's row count covering both segments the same bytes decode.
+        assert_eq!(decode_column_ids(&bytes, &segments, 11)?.len(), 11);
+        Ok(())
+    }
+
+    #[test]
+    fn an_entry_declaring_more_rows_than_its_segment_is_rejected() {
+        // A run whose count overflows the segment used to be clamped, hiding corrupt metadata.
+        let encoded = encode_column_ids(&[3u32; 5], 3, 1).expect("encode");
+        let segments = [SegmentInfo { records: 3, min: 3, width: 1 }];
+        let error = decode_column_ids(&encoded.bytes, &segments, 3).expect_err("an oversized run must be rejected");
+        assert!(matches!(&error, ModelFileError::Corrupt(message) if message.contains("but the segment has")), "{error}");
     }
 }
