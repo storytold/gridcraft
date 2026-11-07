@@ -1,6 +1,6 @@
 # The sandbox for helper processes
 
-> **Last updated:** 2026-11-07 · **Change:** minor (no file changes by any route on Linux: Landlock's truncation right is required, and seccomp refuses what Landlock has no right for; earlier: more is refused on Linux: other processes, System V and POSIX queues, the terminal; earlier: the app turns Python on, so cells run through the sandbox; earlier: the engine runs Python cells through the sandbox; earlier: first version: the `sandbox` crate and `gridcraft-cli sandbox-check`)
+> **Last updated:** 2026-11-07 · **Change:** minor (no file changes by any route on Linux: Landlock's truncation right is required, and seccomp refuses what Landlock has no right for; earlier: more is refused on Linux: other processes, System V and POSIX queues, the terminal; earlier: first version: the `sandbox` crate and `gridcraft-cli sandbox-check`)
 
 The sandbox is the layer GridCraft is to run code it doesn't trust in, such as a workbook's
 Python cells: a separate process that confines itself before the code starts. Here only
@@ -11,13 +11,11 @@ checked, and where it is available.
 
 ## Threat model
 
-The code comes from a workbook, which may come from anyone. It runs in the person's own Python
-(an interpreter GridCraft found or was given, never one it downloads), with the person's user
-account. Without a sandbox it could read and change the person's files, use the network and start
+The code is a program GridCraft doesn't trust, which may come from anyone. It runs with the person's
+user account. Without a sandbox it could read and change the person's files, use the network and start
 other programs. The sandbox's job is that it can do none of these:
 
-- **Files:** it can read only the paths its policy lists (the interpreter's installation, the
-  system's shared libraries and font folders) and write no file except `/dev/null`. Nor can it change
+- **Files:** it can read only the paths its policy lists and write no file except `/dev/null`. Nor can it change
   a file any other way: not its length, permissions, owner, extended attributes, times or flags, even
   one it can read. The exception is a standard stream the parent made a file (see below). The home
   directory, documents and other workbooks are out of reach. So `tempfile` finds no folder it can use.
@@ -42,9 +40,8 @@ program inherits no environment: the launcher clears it and keeps only the local
 (`LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`), with `PATH` set to `/usr/bin:/bin`, so tokens and credentials
 in the parent's environment don't reach it.
 
-The sandbox doesn't limit time, memory or output size; the client that talks to the worker owns
-those limits. The files it may read (the interpreter's installation) can be read, and the code can
-use the CPU while it runs.
+The sandbox doesn't limit time, memory or output size; whoever starts the program owns those limits.
+The files it may read can be read, and the code can use the CPU while it runs.
 
 ## How a launch works
 
