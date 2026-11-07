@@ -251,7 +251,7 @@ pub(crate) fn active_python(app: &SheetApp) -> Option<(usize, gridcraft_engine::
     sh.cell(at).and_then(|c| c.py.clone()).map(|py| (d.wb.active_sheet(), at, py))
 }
 
-fn active_input(app: &SheetApp) -> String {
+pub(crate) fn active_input(app: &SheetApp) -> String {
     let Some(d) = app.session.active() else { return String::new() };
     let Some(sh) = d.wb.active() else { return String::new() };
     let a = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);

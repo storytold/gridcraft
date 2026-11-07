@@ -485,6 +485,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "표시",
         "Collapse dialog" => "대화 상자 축소",
         "Expand dialog" => "대화 상자 확장",
+        "has formula" => "수식 있음",
         _ => return None,
     })
 }

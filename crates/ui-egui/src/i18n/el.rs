@@ -1010,6 +1010,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Εμφάνιση",
         "Collapse dialog" => "Σύμπτυξη παραθύρου διαλόγου",
         "Expand dialog" => "Ανάπτυξη παραθύρου διαλόγου",
+        "has formula" => "έχει τύπο",
         _ => return None,
     })
 }

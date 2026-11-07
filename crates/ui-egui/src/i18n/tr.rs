@@ -446,6 +446,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Göster",
         "Collapse dialog" => "İletişim kutusunu daralt",
         "Expand dialog" => "İletişim kutusunu genişlet",
+        "has formula" => "formül içeriyor",
         _ => return None,
     })
 }
