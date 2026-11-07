@@ -138,11 +138,18 @@ impl Session {
     fn restore_copy(&mut self, id: &str) -> Result<Json> {
         let r = self.recovery.as_mut().ok_or_else(disabled)?;
         let (info, bytes) = r.read(id).map_err(crate::EngineError::Other)?;
-        let (wb, warnings) = crate::io::open_bytes("recovered.xlsx", &bytes)?;
+        // A copy is always written as .xlsx: anything else in its place is damage, never a file
+        // to import as text. Errors name the copy as the list shows it.
+        if gridcraft_xlsx::sniff(&bytes) != gridcraft_xlsx::Format::Xlsx {
+            return Err(crate::EngineError::Other(format!("We can't open '{}': the recovery copy is damaged.", info.name)));
+        }
+        let (wb, warnings) = crate::io::open_bytes(&info.name, &bytes)?;
         if self.only_untouched_blank() {
             self.close_document(0);
         }
         let stem = std::path::Path::new(&info.name).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book");
+        // A copy of a restored workbook already carries the mark.
+        let stem = stem.strip_suffix(" (Recovered)").unwrap_or(stem);
         // Read from bytes, like any file: its active content asks before it runs.
         let mut doc = crate::DocState::new(wb, None, format!("{stem} (Recovered)"), crate::Trust::FromFile);
         // Unsaved until the person saves it.
@@ -602,6 +609,10 @@ pub(crate) mod desktop {
                     continue;
                 }
                 let dir = self.root.join(&id);
+                // A write the crash cut short (the copy before it is whole); it can be as large as a copy.
+                for tmp in [format!("{COPY}.tmp"), format!("{INFO}.tmp")] {
+                    let _ = fs::remove_file(dir.join(tmp));
+                }
                 let copy_ok = fs::metadata(dir.join(COPY)).is_ok_and(|m| m.is_file() && m.len() <= MAX_COPY_BYTES);
                 if !copy_ok {
                     if let Err(e) = self.discard(&id) {
@@ -896,8 +907,7 @@ mod tests {
 
     /// Makes record `id`'s copy undeletable (a folder where the file was), or deletable again.
     fn jam(dir: &Path, on: bool) {
-        let rec = std::fs::read_dir(dir).unwrap().flatten().find(|e| e.path().is_dir()).unwrap().path();
-        let copy = rec.join("copy.xlsx");
+        let copy = record(dir).join("copy.xlsx");
         if on {
             std::fs::remove_file(&copy).unwrap();
             std::fs::create_dir_all(copy.join("held")).unwrap();
@@ -977,6 +987,72 @@ mod tests {
         b.recovery_worker().unwrap().settle();
         assert!(b.recovery_copies().is_empty(), "the retry removed it, and the list follows");
         assert_eq!(records(&dir), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The record of the one copy in `dir`.
+    fn record(dir: &Path) -> PathBuf {
+        std::fs::read_dir(dir).unwrap().flatten().find(|e| e.path().is_dir()).unwrap().path()
+    }
+
+    /// An app that crashed with unsaved candy in `dir`, and the next launch.
+    fn crashed_then_relaunched(dir: &Path) -> (Session, String) {
+        let mut a = app(dir);
+        type_candy(&mut a);
+        a.recovery_tick_at(Instant::now() + INTERVAL);
+        a.recovery_worker().unwrap().crash();
+        let b = app(dir);
+        let id = b.recovery_copies()[0].id.clone();
+        (b, id)
+    }
+
+    /// The bug this prevents: restoring, crashing and restoring again titled the workbook
+    /// "Book1 (Recovered) (Recovered)".
+    #[test]
+    fn a_copy_restored_twice_is_marked_once() {
+        let dir = folder("twice");
+        let (mut b, id) = crashed_then_relaunched(&dir);
+        b.execute("file.recover", json!({"restore": id})).unwrap();
+        b.recovery_tick_at(Instant::now() + INTERVAL);
+        b.recovery_worker().unwrap().crash();
+        let mut c = app(&dir);
+        let id = c.recovery_copies()[0].id.clone();
+        let r = c.execute("file.recover", json!({"restore": id})).unwrap();
+        assert_eq!(r["title"], "Book1 (Recovered)");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The bug this prevents: a copy holding text restored as a text import instead of failing,
+    /// and a damaged copy's error named `recovered.xlsx`, a file the person never sees.
+    #[test]
+    fn a_damaged_copy_is_refused_by_its_listed_name() {
+        let dir = folder("damaged");
+        let (mut b, id) = crashed_then_relaunched(&dir);
+        let copy = record(&dir).join("copy.xlsx");
+        for junk in [&b"Peanut butter cups,12\n"[..], b"PK\x03\x04 cut short"] {
+            std::fs::write(&copy, junk).unwrap();
+            let e = b.execute("file.recover", json!({"restore": id.clone()})).unwrap_err().to_string();
+            assert!(e.contains("'Book1'") && !e.contains("recovered.xlsx"), "{e}");
+            assert_eq!(b.documents().len(), 1, "the blank Book1 stays");
+            assert_eq!(b.recovery_copies().len(), 1, "still listed, to discard");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The bug this prevents: a crash mid-write left `copy.xlsx.tmp`, as large as a copy, in the
+    /// record for as long as the record stayed.
+    #[test]
+    fn a_write_a_crash_cut_short_is_cleared_at_the_next_start() {
+        let dir = folder("tmp");
+        let mut a = app(&dir);
+        type_candy(&mut a);
+        a.recovery_tick_at(Instant::now() + INTERVAL);
+        a.recovery_worker().unwrap().crash();
+        let tmp = record(&dir).join("copy.xlsx.tmp");
+        std::fs::write(&tmp, b"half a copy").unwrap();
+        let b = app(&dir);
+        assert!(!tmp.exists());
+        assert_eq!(b.recovery_copies().len(), 1, "the last whole copy is still offered");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
