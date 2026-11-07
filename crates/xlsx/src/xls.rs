@@ -25,7 +25,7 @@ use gridcraft_model::{CalcMode, CalcSettings, Cell, DefinedName, Formula, LineIn
 use crate::cfb::Compound;
 use crate::tables::{col_width_to_px, pt_to_px};
 use crate::{IoError, ReadReport};
-use formula::{Links, Mode, SupBook, Unsupported, Xti, cell_error, decode};
+use formula::{Links, Mode, SupBook, Unsupported, Xti, cell_error, decode, decode_with_names};
 use records::{Cursor, Record, Records};
 
 const MAX_CELLS: usize = 4_000_000;
@@ -46,6 +46,9 @@ const BIFF8: u16 = 0x0600;
 /// WsBool (MS-XLS 2.4.351): its first byte's `fDialog` bit marks a dialog sheet, whose BOF says worksheet.
 const WSBOOL: u16 = 0x0081;
 const WSBOOL_DIALOG: u8 = 0x10;
+/// Dimensions and Row (MS-XLS 2.4.90, 2.4.221): the first records of a sheet's cell table.
+const DIMENSIONS: u16 = 0x0200;
+const ROW: u16 = 0x0208;
 
 pub(crate) fn invalid(msg: impl Into<String>) -> IoError {
     IoError::Format(format!("XLS: {}", msg.into()))
@@ -129,6 +132,14 @@ struct Lbl {
     rgcb: Vec<u8>,
 }
 
+impl Lbl {
+    /// Whether `defined_names` can make this label a workbook name: built-in names become
+    /// sheet settings or are dropped, macro names are dropped.
+    fn imported_as_name(&self) -> bool {
+        self.builtin.is_none() && !self.macro_name
+    }
+}
+
 #[derive(Default)]
 struct Globals {
     sheets: Vec<BoundSheet>,
@@ -159,7 +170,7 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
         }
     };
     let mut report = ReadReport::default();
-    let g = globals(&stream, &mut budget, &mut report)?;
+    let mut g = globals(&stream, &mut budget, &mut report)?;
 
     let mut wb = Workbook::new();
     wb.sheets.clear();
@@ -170,10 +181,24 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
         report.warn("Some cell formatting records were shorter than expected; the formatting present was kept.");
     }
 
+    // Which BoundSheet8 entries become worksheets has to be known before any cell formula is
+    // decoded: a defined name scoped to a sheet that is not imported is dropped, so formulas
+    // on every other sheet that use it keep their saved results (#2306).
+    let mut imported = Vec::with_capacity(g.sheets.len());
+    for bs in &g.sheets {
+        imported.push(bs.kind == 0 && is_worksheet(&stream, bs, &mut budget)?);
+    }
+    skip_names(&mut g, &imported);
+
     // BoundSheet8 index → model sheet index.
     let mut model_index: Vec<Option<usize>> = Vec::with_capacity(g.sheets.len());
-    for bs in &g.sheets {
-        if bs.kind != 0 {
+    for (bs, &imported) in g.sheets.iter().zip(&imported) {
+        if !imported {
+            if bs.kind == 0 {
+                report.warn("Dialog sheets and unreadable sheets were skipped.");
+                model_index.push(None);
+                continue;
+            }
             report.warn(match bs.kind {
                 2 => "Chart sheets in .xls files are not imported yet and were skipped.",
                 1 => "Excel 4.0 macro sheets were skipped.",
@@ -184,6 +209,7 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
         }
         wb.check_sheet_name(&bs.name, None).map_err(invalid)?;
         let Some((mut sheet, calc)) = worksheet(&stream, bs, &g, &styles, &mut budget, &mut report)? else {
+            // `is_worksheet` said yes, so this does not happen.
             report.warn("Dialog sheets and unreadable sheets were skipped.");
             model_index.push(None);
             continue;
@@ -317,10 +343,79 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut ReadReport) -> Resul
             _ => {}
         }
     }
-    // The same test `defined_names` applies, before any cell formula is decoded.
-    let skipped = g.names.iter().map(|l| !l.rgce.is_empty() && decode(&l.rgce, &l.rgcb, CellRef::new(0, 0), Mode::Name, &g.links).is_err()).collect();
-    g.links.skipped = skipped;
     Ok(g)
+}
+
+/// Whether a worksheet-kind BoundSheet8 entry is read as a worksheet: BIFF8, a worksheet BOF
+/// and no dialog flag in WSBOOL. Must agree with `worksheet`, which checks the same things
+/// while reading. Only the records before the cell table are looked at.
+fn is_worksheet(stream: &[u8], bs: &BoundSheet, budget: &mut Budget) -> Result<bool, IoError> {
+    if bs.pos >= stream.len() {
+        return Err(invalid(format!("sheet '{}' points outside the Workbook stream", bs.name)));
+    }
+    let mut recs = Records::new(stream, bs.pos);
+    let Some(first) = recs.next_record()? else { return Ok(false) };
+    let (vers, dt) = bof(&first)?;
+    if vers != BIFF8 || dt != 0x0010 {
+        return Ok(false);
+    }
+    while let Some(rec) = recs.next_record()? {
+        budget.record()?;
+        match rec.id {
+            WSBOOL => return Ok(!rec.parts.first().and_then(|p| p.first()).is_some_and(|b| b & WSBOOL_DIALOG != 0)),
+            // The cell table (DIMENSIONS, then rows and cells) comes after WSBOOL.
+            EOF | BOF | DIMENSIONS | ROW => return Ok(true),
+            _ => {}
+        }
+    }
+    Ok(true)
+}
+
+/// Marks the defined names that `defined_names` will not import as workbook names, so that
+/// cell formulas using them keep their saved results (#2192, #2306). `imported[i]` says
+/// whether BoundSheet8 entry `i` becomes a worksheet.
+fn skip_names(g: &mut Globals, imported: &[bool]) {
+    // The same test `defined_names` applies, before any cell formula is decoded: a name whose
+    // formula can't be decoded is skipped, and so is every name that uses one, through any chain
+    // of names and whichever order they were defined in (#2192).
+    let n = g.names.len();
+    let mut skipped = vec![false; n];
+    // users[j]: the names whose formula refers to name j (by its Lbl index, so two scopes'
+    // names with the same text are told apart)
+    let mut users: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, l) in g.names.iter().enumerate() {
+        // A name without a formula is not imported either, nor is a macro or built-in name
+        // (`defined_names` drops those whatever their formula), nor a name scoped to a sheet
+        // that is not imported (a chart or macro sheet, a dialog sheet, a bad index), so
+        // neither are their users.
+        let scope_imported = l.itab == 0 || imported.get(usize::from(l.itab) - 1).copied().unwrap_or(false);
+        if l.rgce.is_empty() || !l.imported_as_name() || !scope_imported {
+            skipped[i] = true;
+            continue;
+        }
+        match decode_with_names(&l.rgce, &l.rgcb, CellRef::new(0, 0), Mode::Name, &g.links) {
+            Err(_) => skipped[i] = true,
+            Ok((_, used)) => {
+                for j in used {
+                    if j != i
+                        && let Some(u) = users.get_mut(j)
+                    {
+                        u.push(i);
+                    }
+                }
+            }
+        }
+    }
+    let mut todo: Vec<usize> = (0..n).filter(|&i| skipped[i]).collect();
+    while let Some(j) = todo.pop() {
+        for &i in &users[j] {
+            if !skipped[i] {
+                skipped[i] = true;
+                todo.push(i);
+            }
+        }
+    }
+    g.links.skipped = skipped;
 }
 
 /// Built-in defined names ([MS-XLS] 2.4.150, Lbl.Name).
