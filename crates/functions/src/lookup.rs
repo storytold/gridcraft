@@ -46,6 +46,16 @@ fn find_exact(x: &Value, hay: &[Value], wild: bool, reverse: bool) -> Option<usi
     if reverse { hay.iter().rposition(|v| lookup_equal(x, v, wild)) } else { hay.iter().position(|v| lookup_equal(x, v, wild)) }
 }
 
+fn find_exact_in_array(x: &Value, arr: &Array, wild: bool, reverse: bool) -> Option<usize> {
+    if let Value::Text(t) = x
+        && !(wild && has_wildcards(t))
+        && let Some(pos) = arr.text_positions(t)
+    {
+        return if reverse { pos.last().map(|&i| i as usize) } else { pos.first().map(|&i| i as usize) };
+    }
+    find_exact(x, &arr.data, wild, reverse)
+}
+
 /// Approximate match of VLOOKUP, HLOOKUP, LOOKUP and MATCH: the position of the largest entry
 /// `<= x` in data sorted ascending (`desc = false`), or of the smallest entry `>= x` in data
 /// sorted descending. Like Excel this is a bisection over the whole vector, so on unsorted data
@@ -120,8 +130,8 @@ fn bsearch_upto(x: &Value, hay: &[Value], desc: bool) -> Option<usize> {
 }
 
 /// A 1-D view of an array (row or column), `None` when it is 2-D.
-fn vector(a: &Array) -> Option<Vec<Value>> {
-    if a.rows == 1 || a.cols == 1 { Some(a.data.clone()) } else { None }
+fn vector(a: &Array) -> Option<&[Value]> {
+    if a.rows == 1 || a.cols == 1 { Some(&a.data) } else { None }
 }
 
 fn column(a: &Array, c: usize) -> Vec<Value> {
@@ -214,14 +224,15 @@ fn match_fn(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     if let Value::Error(e) = av {
         return Err(*e);
     }
-    let hay = vector(&as_array(av)).ok_or(CellError::NA)?;
+    let arr = as_array(av);
+    let hay = vector(&arr).ok_or(CellError::NA)?;
     let mt = opt_num(args, 2, 1.0)?;
     let pos = if mt == 0.0 {
-        find_exact(&x, &hay, true, false)
+        find_exact_in_array(&x, &arr, true, false)
     } else if mt > 0.0 {
-        bsearch_last(&x, &hay, false)
+        bsearch_last(&x, hay, false)
     } else {
-        bsearch_last(&x, &hay, true)
+        bsearch_last(&x, hay, true)
     };
     pos.map(|p| Value::Number((p + 1) as f64)).ok_or(CellError::NA)
 }
@@ -230,7 +241,7 @@ fn match_fn(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 // XLOOKUP / XMATCH
 
 /// Core XMATCH search: 0-based position in `hay`.
-fn xsearch(x: &Value, hay: &[Value], match_mode: i64, search_mode: i64) -> R<Option<usize>> {
+fn xsearch(x: &Value, arr: &Array, hay: &[Value], match_mode: i64, search_mode: i64) -> R<Option<usize>> {
     if !matches!(match_mode, -1..=2) || !matches!(search_mode, -2 | -1 | 1 | 2) {
         return Err(CellError::Value);
     }
@@ -261,7 +272,7 @@ fn xsearch(x: &Value, hay: &[Value], match_mode: i64, search_mode: i64) -> R<Opt
         });
     }
     let reverse = search_mode == -1;
-    if let Some(p) = find_exact(x, hay, match_mode == 2, reverse) {
+    if let Some(p) = find_exact_in_array(x, arr, match_mode == 2, reverse) {
         return Ok(Some(p));
     }
     if match_mode == 0 || match_mode == 2 {
@@ -320,7 +331,7 @@ fn xlookup(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
     let mm = if has(args, 4) { opt_int(args, 4, 0)? } else { 0 };
     let sm = if has(args, 5) { opt_int(args, 5, 1)? } else { 1 };
-    match xsearch(&x, &hay, mm, sm)? {
+    match xsearch(&x, &la, hay, mm, sm)? {
         Some(p) => {
             if vertical {
                 let r = row(&ra, p);
@@ -352,10 +363,11 @@ fn xmatch(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     if let Value::Error(e) = lv {
         return Err(*e);
     }
-    let hay = vector(&as_array(lv)).ok_or(CellError::Value)?;
+    let arr = as_array(lv);
+    let hay = vector(&arr).ok_or(CellError::Value)?;
     let mm = if has(args, 2) { int(args, 2)? } else { 0 };
     let sm = if has(args, 3) { int(args, 3)? } else { 1 };
-    xsearch(&x, &hay, mm, sm)?.map(|p| Value::Number((p + 1) as f64)).ok_or(CellError::NA)
+    xsearch(&x, &arr, hay, mm, sm)?.map(|p| Value::Number((p + 1) as f64)).ok_or(CellError::NA)
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -54,7 +54,7 @@ fn date(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 fn time(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let h = num(a, 0)?.trunc();
     let m = num(a, 1)?.trunc();
-    let s = num(a, 2)?.trunc();
+    let s = num(a, 2)?.floor();
     if h > 32767.0 || m > 32767.0 || s > 32767.0 {
         return Err(CellError::Num);
     }
@@ -621,6 +621,7 @@ mod tests {
     fn time_negative() {
         is_err(ev("TIME", vec![n(0.0), n(0.0), n(-1.0)]), CellError::Num);
         close(ev("TIME", vec![n(1.0), n(-30.0), n(0.0)]), 1.0 / 48.0);
+        close(ev("TIME", vec![n(6.0), n(0.0), n(-0.25)]), 21599.0 / 86400.0);
     }
 
     #[test]
