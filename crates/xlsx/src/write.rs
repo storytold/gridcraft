@@ -410,34 +410,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     }
     out.part("xl/_rels/workbook.xml.rels", None, wb_rels.xml().into_bytes());
 
-    // Document properties.
-    let p = &wb.props;
-    // "Remove personal information on save": the author and company are not saved (#3089).
-    let private = |v: &String| if wb.remove_personal_info { String::new() } else { v.clone() };
-    let (author, company) = (private(&p.author), private(&p.company));
-    let mut core = format!(
-        "{XML_DECL}<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:dcmitype=\"http://purl.org/dc/dcmitype/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">"
-    );
-    for (tag, v) in [
-        ("dc:title", &p.title),
-        ("dc:subject", &p.subject),
-        ("dc:creator", &author),
-        ("cp:keywords", &p.keywords),
-        ("dc:description", &p.description),
-    ] {
-        if !v.is_empty() {
-            let _ = write!(core, "<{tag}>{}</{tag}>", esc(v));
-        }
-    }
-    core.push_str("</cp:coreProperties>");
-    out.part("docProps/core.xml", Some("application/vnd.openxmlformats-package.core-properties+xml"), core.into_bytes());
-    let mut app = String::from(XML_DECL);
-    app.push_str("<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\" xmlns:vt=\"http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes\"><Application>GridCraft</Application>");
-    if !company.is_empty() {
-        let _ = write!(app, "<Company>{}</Company>", esc(&company));
-    }
-    app.push_str("</Properties>");
-    out.part("docProps/app.xml", Some("application/vnd.openxmlformats-officedocument.extended-properties+xml"), app.into_bytes());
+    write_document_properties(&mut out, wb);
     let mut root = Rels::default();
     root.add("officeDocument", "xl/workbook.xml");
     root.add("core-properties", "docProps/core.xml");
@@ -578,3 +551,50 @@ fn write_defined_names(wb: &Workbook, kept: &crate::passthrough::WorkbookKept, c
 
 /// Cell metadata declaring dynamic-array formulas (MS-XLSX `XLDAPR`).
 const METADATA: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<metadata xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:xda=\"http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray\"><metadataTypes count=\"1\"><metadataType name=\"XLDAPR\" minSupportedVersion=\"120000\" copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" clearFormats=\"1\" clearComments=\"1\" assign=\"1\" coerce=\"1\" cellMeta=\"1\"/></metadataTypes><futureMetadata name=\"XLDAPR\" count=\"1\"><bk><extLst><ext uri=\"{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}\"><xda:dynamicArrayProperties fDynamic=\"1\" fCollapsed=\"0\"/></ext></extLst></bk></futureMetadata><cellMetadata count=\"1\"><bk><rc t=\"1\" v=\"0\"/></bk></cellMetadata></metadata>";
+
+/// Writes the core and extended properties, including the workbook's privacy policy.
+fn write_document_properties(out: &mut Out, wb: &Workbook) {
+    // Document properties.
+    let p = &wb.props;
+    // "Remove personal information on save": author, last editor, manager and company are not saved.
+    let private = |v: &String| if wb.remove_personal_info { String::new() } else { v.clone() };
+    let (author, company) = (private(&p.author), private(&p.company));
+    let (last_modified_by, manager) = (private(&p.last_modified_by), private(&p.manager));
+    let mut core = format!(
+        "{XML_DECL}<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:dcmitype=\"http://purl.org/dc/dcmitype/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">"
+    );
+    for (tag, v) in [
+        ("dc:title", &p.title),
+        ("dc:subject", &p.subject),
+        ("dc:creator", &author),
+        ("cp:keywords", &p.keywords),
+        ("dc:description", &p.description),
+        ("cp:lastModifiedBy", &last_modified_by),
+        ("cp:revision", &p.revision),
+        ("cp:lastPrinted", &p.last_printed),
+        ("dcterms:created", &p.created),
+        ("dcterms:modified", &p.modified),
+        ("cp:category", &p.category),
+        ("dc:identifier", &p.identifier),
+        ("cp:contentStatus", &p.content_status),
+        ("dc:language", &p.language),
+        ("cp:version", &p.version),
+    ] {
+        if !v.is_empty() {
+            // The schema types the Dublin Core dates by attribute (`xsi:type`), not by element.
+            let ty = if tag.starts_with("dcterms:") { " xsi:type=\"dcterms:W3CDTF\"" } else { "" };
+            let _ = write!(core, "<{tag}{ty}>{}</{tag}>", esc(v));
+        }
+    }
+    core.push_str("</cp:coreProperties>");
+    out.part("docProps/core.xml", Some("application/vnd.openxmlformats-package.core-properties+xml"), core.into_bytes());
+    let mut app = String::from(XML_DECL);
+    app.push_str("<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\" xmlns:vt=\"http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes\"><Application>GridCraft</Application>");
+    for (tag, value) in [("Manager", &manager), ("Company", &company), ("HyperlinkBase", &p.hyperlink_base)] {
+        if !value.is_empty() {
+            let _ = write!(app, "<{tag}>{}</{tag}>", esc(value));
+        }
+    }
+    app.push_str("</Properties>");
+    out.part("docProps/app.xml", Some("application/vnd.openxmlformats-officedocument.extended-properties+xml"), app.into_bytes());
+}

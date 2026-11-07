@@ -432,11 +432,24 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         wb.props.author = get("creator");
         wb.props.keywords = get("keywords");
         wb.props.description = get("description");
+        wb.props.last_modified_by = get("lastModifiedBy");
+        wb.props.created = get("created");
+        wb.props.modified = get("modified");
+        wb.props.last_printed = get("lastPrinted");
+        wb.props.category = get("category");
+        wb.props.content_status = get("contentStatus");
+        wb.props.revision = get("revision");
+        wb.props.version = get("version");
+        wb.props.identifier = get("identifier");
+        wb.props.language = get("language");
     }
     if let Some(r) = find_rel(&root_rels, "extended-properties").cloned()
         && let Ok(Some(x)) = cx.pkg.read_xml(&r.target)
     {
-        wb.props.company = x.child("Company").map(|e| e.text.clone()).unwrap_or_default();
+        let get = |n: &str| x.child(n).map(|e| e.text.clone()).unwrap_or_default();
+        wb.props.manager = get("Manager");
+        wb.props.company = get("Company");
+        wb.props.hyperlink_base = get("HyperlinkBase");
     }
 
     // A VBA project is carried through unchanged: GridCraft never runs macros, but preserving the
