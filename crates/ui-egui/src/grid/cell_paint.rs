@@ -129,28 +129,46 @@ pub(super) fn display_text(
     (f.text, f.color.map(numfmt_color), f.numeric, f.fill)
 }
 
-pub(crate) fn wrapped_cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
-    let pad_v = 1.5 * z;
-    let y_top = rect.top() + pad_v;
-    // Not clamped to `y_top`: text taller than the row overflows upward (Bottom) or both ways
-    // (Center), and the cell's clip rect trims it, so Middle and Bottom stay distinct from Top.
-    let y_bottom = rect.bottom() - gh - pad_v;
-    match valign {
-        VAlign::Top => y_top,
-        VAlign::Center | VAlign::Justify | VAlign::Distributed => (y_top + y_bottom) / 2.0,
-        VAlign::Bottom => y_bottom,
-    }
+/// The descent Excel's cell text box leaves under the last baseline, as a share of the font size
+/// (Calibri and Aptos: about a quarter of the em). egui's font metrics don't expose the descent.
+const CELL_TEXT_DESCENT_EM: f32 = 0.25;
+
+/// The gridline drawn along a cell's bottom edge, inside the cell (see the gridline pass).
+const GRIDLINE_W: f32 = 1.0;
+
+/// How far to move a cell's galley down so it sits in its line box the way Excel's does.
+///
+/// Excel's line box is the font's full line height with the extra leading above the ascender:
+/// the baseline sits one descent above the box's bottom. egui's galley rows put that leading
+/// under the descender instead, so text drawn at the galley's top rides high in the box (top
+/// aligned text touches the top border, bottom aligned text floats above the bottom one).
+pub(crate) fn cell_text_lead(galley: &egui::Galley, font_size: f32) -> f32 {
+    galley
+        .rows
+        .iter()
+        .find_map(|row| row.glyphs.first())
+        .map(|g| g.font_height - g.font_ascent - CELL_TEXT_DESCENT_EM * font_size)
+        .filter(|lead| lead.is_finite())
+        .map_or(0.0, |lead| lead.clamp(0.0, font_size.max(0.0)))
 }
 
-pub(crate) fn cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
-    let top_inset = 1.0 * z;
-    let y_top = rect.top() - top_inset;
-    let y_bottom = (rect.bottom() - gh - 0.5 * z).max(y_top);
-    match valign {
+/// The top of a cell's text galley of height `gh` (one row or wrapped) aligned `valign` in
+/// `rect`, its line box moved down by `lead` (see [`cell_text_lead`]).
+///
+/// As in Excel, the line box sits half a point below the top border when top aligned and right on
+/// the bottom gridline (the cell's last point) when bottom aligned, so a tall row shows the text
+/// where a standard row does.
+pub(crate) fn cell_text_y(valign: VAlign, rect: Rect, gh: f32, lead: f32, z: f32) -> f32 {
+    let y_top = rect.top() + 0.5 * z;
+    // Not clamped to `y_top`: text taller than the row overflows upward (Bottom) or both ways
+    // (Center), and the cell's clip rect trims it, so Middle and Bottom stay distinct from Top.
+    let y_bottom = rect.bottom() - GRIDLINE_W - gh;
+    let y = match valign {
         VAlign::Top => y_top,
         VAlign::Center | VAlign::Justify | VAlign::Distributed => (y_top + y_bottom) / 2.0,
         VAlign::Bottom => y_bottom,
-    }
+    };
+    y + lead
 }
 
 /// Where to put a `TextShape` holding a galley of `size` turned by `angle` (egui radians, so

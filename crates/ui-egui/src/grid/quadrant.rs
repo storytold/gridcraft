@@ -1,7 +1,7 @@
 use super::active_row::paint_active_row;
 use super::cell_paint::{
-    Look, MergedArea, cell_text_y, center_across_end, col32, display_text, look, merged_edges, paint_border, paint_cf_icon, painted_halign,
-    rotated_text_pos, shrink_font, wrapped_cell_text_y,
+    Look, MergedArea, cell_text_lead, cell_text_y, center_across_end, col32, display_text, look, merged_edges, paint_border, paint_cf_icon,
+    painted_halign, rotated_text_pos, shrink_font,
 };
 use super::geo::Geo;
 use super::tables::{filter_button_rect, paint_filter_button};
@@ -400,7 +400,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
             HAlign::Right => rect.right() - pad,
             _ => text_left + pad + indent,
         };
-        let y = wrapped_cell_text_y(st.align.v, *rect, galley.size().y, z);
+        let y = cell_text_y(st.align.v, *rect, galley.size().y, cell_text_lead(&galley, font.size), z);
         let text_clip = wrapped_text_clip(p, *rect, &galley, y, st.align.v);
         p.with_clip_rect(text_clip).galley(pos2(x, y), galley, color);
         return;
@@ -499,7 +499,8 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         _ => text_left + pad + indent,
     };
     let gh = galley.size().y;
-    let y = cell_text_y(st.align.v, *rect, gh, z);
+    let lead = if rotated { 0.0 } else { cell_text_lead(&galley, font.size) };
+    let y = cell_text_y(st.align.v, *rect, gh, lead, z);
     let cp = p.with_clip_rect(clip.intersect(p.clip_rect()));
     if rotated {
         let angle = -(st.align.rotation as f32).to_radians();

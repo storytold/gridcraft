@@ -232,54 +232,57 @@ fn cell_text_y_moves_monotonically_in_standard_and_tall_rows() {
     let gh = 18.5;
     let z = 1.0;
 
-    let y_top_std = cell_text_y(VAlign::Top, rect_std, gh, z);
-    let y_center_std = cell_text_y(VAlign::Center, rect_std, gh, z);
-    let y_bottom_std = cell_text_y(VAlign::Bottom, rect_std, gh, z);
+    let y_top_std = cell_text_y(VAlign::Top, rect_std, gh, 0.0, z);
+    let y_center_std = cell_text_y(VAlign::Center, rect_std, gh, 0.0, z);
+    let y_bottom_std = cell_text_y(VAlign::Bottom, rect_std, gh, 0.0, z);
 
-    assert!(y_top_std < y_center_std, "Top ({y_top_std}) must be higher than Center ({y_center_std})");
-    assert!(y_center_std < y_bottom_std, "Center ({y_center_std}) must be higher than Bottom ({y_bottom_std})");
+    // A standard row is about one line tall: as in Excel, the alignments differ by a pixel at most.
+    assert!(y_top_std <= y_center_std, "Top ({y_top_std}) must not be lower than Center ({y_center_std})");
+    assert!(y_center_std <= y_bottom_std, "Center ({y_center_std}) must not be lower than Bottom ({y_bottom_std})");
+    assert!(y_bottom_std - y_top_std <= 1.0, "Top ({y_top_std}) and Bottom ({y_bottom_std}) stay within a pixel");
 
     // Verify tall row (e.g. 40px)
     let rect_tall = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 40.0));
-    let y_top_tall = cell_text_y(VAlign::Top, rect_tall, gh, z);
-    let y_center_tall = cell_text_y(VAlign::Center, rect_tall, gh, z);
-    let y_bottom_tall = cell_text_y(VAlign::Bottom, rect_tall, gh, z);
+    let y_top_tall = cell_text_y(VAlign::Top, rect_tall, gh, 0.0, z);
+    let y_center_tall = cell_text_y(VAlign::Center, rect_tall, gh, 0.0, z);
+    let y_bottom_tall = cell_text_y(VAlign::Bottom, rect_tall, gh, 0.0, z);
 
     assert!(y_top_tall < y_center_tall, "Top ({y_top_tall}) must be higher than Center ({y_center_tall})");
     assert!(y_center_tall < y_bottom_tall, "Center ({y_center_tall}) must be higher than Bottom ({y_bottom_tall})");
 }
 
 #[test]
-fn wrapped_cell_text_y_positions_correctly_and_safeguards_overflow() {
+fn cell_text_y_positions_wrapped_text_correctly_and_safeguards_overflow() {
     let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 40.0));
     let gh = 30.0;
     let z = 1.0;
 
-    let y_top = wrapped_cell_text_y(VAlign::Top, rect, gh, z);
-    let y_center = wrapped_cell_text_y(VAlign::Center, rect, gh, z);
-    let y_bottom = wrapped_cell_text_y(VAlign::Bottom, rect, gh, z);
+    let y_top = cell_text_y(VAlign::Top, rect, gh, 0.0, z);
+    let y_center = cell_text_y(VAlign::Center, rect, gh, 0.0, z);
+    let y_bottom = cell_text_y(VAlign::Bottom, rect, gh, 0.0, z);
 
     assert!(y_top < y_center);
     assert!(y_center < y_bottom);
 
     // Overflow case: gh exceeds rect height; Top still starts inside the cell.
     let gh_overflow = 60.0;
-    let y_top_ovf = wrapped_cell_text_y(VAlign::Top, rect, gh_overflow, z);
+    let y_top_ovf = cell_text_y(VAlign::Top, rect, gh_overflow, 0.0, z);
     assert!(y_top_ovf >= rect.top());
 }
 
 #[test]
-fn wrapped_cell_text_y_keeps_vertical_alignment_when_text_is_taller_than_the_row() {
+fn cell_text_y_keeps_vertical_alignment_when_text_is_taller_than_the_row() {
     // A default-height row holding three wrapped lines.
     let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 20.0));
     let (gh, z) = (60.0, 1.0);
-    let y_top = wrapped_cell_text_y(VAlign::Top, rect, gh, z);
-    let y_center = wrapped_cell_text_y(VAlign::Center, rect, gh, z);
-    let y_bottom = wrapped_cell_text_y(VAlign::Bottom, rect, gh, z);
+    let y_top = cell_text_y(VAlign::Top, rect, gh, 0.0, z);
+    let y_center = cell_text_y(VAlign::Center, rect, gh, 0.0, z);
+    let y_bottom = cell_text_y(VAlign::Bottom, rect, gh, 0.0, z);
     // Taller text overflows upward for Bottom and both ways for Center (the cell clips it).
-    assert!((y_top - 1.5).abs() < 0.01, "Top starts at the top edge, got {y_top}");
-    assert!((y_center + gh / 2.0 - rect.center().y).abs() < 0.01, "Center is centred, got {y_center}");
-    assert!((y_bottom + gh - (rect.bottom() - 1.5)).abs() < 0.01, "Bottom ends at the bottom edge, got {y_bottom}");
+    assert!((y_top - 0.5).abs() < 0.01, "Top starts at the top edge, got {y_top}");
+    // Centred between the top inset (0.5) and the bottom gridline (rect.bottom() - 1).
+    assert!((y_center + gh / 2.0 - 9.75).abs() < 0.01, "Center is centred, got {y_center}");
+    assert!((y_bottom + gh - (rect.bottom() - 1.0)).abs() < 0.01, "Bottom ends at the bottom edge, got {y_bottom}");
 }
 
 /// The screen box of a galley of `size` drawn at `pos` turned by `angle` about `pos`, as egui
