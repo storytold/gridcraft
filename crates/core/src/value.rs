@@ -412,6 +412,31 @@ pub fn sci_text(n: f64, sig: usize) -> String {
     format!("{}E{}{:02}", mant, if e < 0 { '-' } else { '+' }, e.abs())
 }
 
+/// Longest text a cell can hold, in UTF-16 code units.
+pub const MAX_TEXT_CHARS: usize = 32_767;
+
+/// `s` cut to [`MAX_TEXT_CHARS`] UTF-16 code units without splitting a Unicode scalar value.
+pub fn cap_text(mut s: String) -> String {
+    if s.len() > MAX_TEXT_CHARS {
+        let mut units = 0;
+        if let Some((i, _)) = s.char_indices().find(|(_, c)| {
+            units += c.len_utf16();
+            units > MAX_TEXT_CHARS
+        }) {
+            s.truncate(i);
+        }
+    }
+    s
+}
+
+/// `v` with text cut to [`MAX_TEXT_CHARS`] UTF-16 code units; other values pass through.
+pub fn cap_value(v: Value) -> Value {
+    match v {
+        Value::Text(t) if t.len() > MAX_TEXT_CHARS => Value::text(cap_text(t.to_string())),
+        v => v,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,6 +480,16 @@ mod tests {
         assert_eq!(compare(&Value::from("z"), &Value::Bool(false)), Ordering::Less);
         assert_eq!(compare(&Value::Empty, &Value::Number(0.0)), Ordering::Equal);
         assert_eq!(sort_compare(&Value::Empty, &Value::Number(1.0)), Ordering::Greater);
+    }
+
+    #[test]
+    fn cap_text_uses_utf16_units_without_splitting_surrogate_pairs() {
+        let face = "😀";
+        assert_eq!(cap_text("x".repeat(MAX_TEXT_CHARS)), "x".repeat(MAX_TEXT_CHARS));
+        assert_eq!(cap_text("x".repeat(MAX_TEXT_CHARS + 1)), "x".repeat(MAX_TEXT_CHARS));
+        assert_eq!(cap_text(format!("{}{}", "x".repeat(MAX_TEXT_CHARS - 2), face)), format!("{}{}", "x".repeat(MAX_TEXT_CHARS - 2), face));
+        assert_eq!(cap_text(format!("{}{}", "x".repeat(MAX_TEXT_CHARS - 1), face)), "x".repeat(MAX_TEXT_CHARS - 1));
+        assert_eq!(cap_text(face.repeat(16_384)), face.repeat(16_383));
     }
 
     #[test]

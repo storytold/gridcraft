@@ -523,9 +523,9 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
                     },
                     None => StyleId::DEFAULT,
                 };
-                Cell { value: p.value, formula: None, style, py: None }
+                Cell { value: gridcraft_core::cap_value(p.value), formula: None, style, py: None }
             } else {
-                Cell::value(Value::Text(Arc::from(f)))
+                Cell::value(Value::Text(Arc::from(gridcraft_core::cap_text(f))))
             };
             sheet.cells.set(pos, cell);
         }

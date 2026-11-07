@@ -2379,6 +2379,19 @@ fn loan_schedule_residue_keeps_excels_sign() {
     assert_eq!(t.get("P7"), Value::Text("".into()));
 }
 
+#[test]
+fn concat_operator_cuts_at_the_cell_limit() {
+    // Excel: LEN(REPT("x",20000)&REPT("x",20000)) is 32767, and REPT("x",32767)&"y" is 32767.
+    let mut t = T::new();
+    t.set("A1", "=LEN(REPT(\"x\",20000)&REPT(\"x\",20000))");
+    t.set("A2", "=LEN(REPT(\"x\",32767)&\"y\")");
+    t.set("A3", "=LEN(\"é\"&REPT(\"é\",32767))");
+    t.set("A4", "=LEN(REPT(UNICHAR(128512),16383)&\"x\")");
+    t.set("A5", "=LEN(REPT(UNICHAR(128512),16384))");
+    assert_eq!((t.num("A1"), t.num("A2"), t.num("A3"), t.num("A4")), (32767.0, 32767.0, 32767.0, 16384.0));
+    assert_eq!(t.get("A5"), Value::Error(CellError::Value));
+}
+
 /// `rebuild` and `cells_changed` read formulas through `Formula::with_expr`, which borrows the
 /// cached tree or parses on the fly. The dependency graph must come out the same for formulas that
 /// carry their tree and for formulas that only carry their text (as after loading a file).
