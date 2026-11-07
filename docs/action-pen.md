@@ -3,7 +3,7 @@
 > **Last reviewed:** 2026-11-07 · **Change:** created with the feature (#1777) · **Target:** Microsoft Excel (Microsoft 365) · Part of [target-app-parity.md](target-app-parity.md) and [hardware-parity.md](hardware-parity.md)
 
 Draw › Action Pen turns handwriting into a cell value. The person picks the tool, writes one
-line in a cell, and releases: the stroke is recognised, the writing is typed into the cell under
+line in a cell, and releases: the strokes are recognised, the writing is typed into the cell under
 it (or a `cell` the command names) exactly as if it had been typed — so `42` is a number,
 `3/4/2024` is a date, `=SUM(A1:A3)` is a formula — as **one undo step**, with no ink shape left
 on the sheet.
@@ -86,7 +86,7 @@ structured error naming the folder to fill.
 | Command | Kind | What it does |
 |---|---|---|
 | `draw.actionPen` | toggle (no undo) | `{on?: bool}` turns the tool on or off. Turning it on without a model is refused with the folder to install it in. |
-| `draw.actionPenInk` | edit (one undo step) | `{points: [[x,y],…], cell?}` recognises one stroke in sheet points and types the text into the cell under the stroke (or `cell`). Returns `{cell, text, value}`. |
+| `draw.actionPenInk` | edit (one undo step per stroke) | `{points: [[x,y],…], cell?}` adds one stroke in sheet points to the handwriting entry and types its recognised text into the cell under the stroke's first point (or `cell`). Returns `{cell, text, value}`. |
 | `ink.status` | query | `{accelerator?}` reports `installed`/`filesPresent`, `ready`, the model id, name, revision, licence, source, size, runtime, the folder, missing files, a one-line hint, and the accelerator fields below. |
 | `ink.modelImport` | native | `{path}` copies one model file or a folder of them into the model folder, verifying each, and reports what is still missing. |
 | `ink.modelRemove` | native | `{}` deletes the model folder, turns the tool off and detaches the recognizer. |
@@ -95,13 +95,27 @@ The engine never loads a model itself: `Session::ink` holds an `Arc<dyn gridcraf
 and `Session::models_dir` the folder, both set by the host. CLI and MCP sessions have neither, so
 they can still report `ink.status` and get a structured error from the tool.
 
+### Entries: a letter can take several strokes
+
+An **entry** is the ink written into one cell without a break. Its strokes are recognised together,
+drawn side by side and never joined: an "i", a crossed "t" or a "4" written in two strokes stays
+that character, and every stroke stays one undo step. The entry ends after a pause of 1.5 s, when
+the next stroke lands in a different cell, sheet or document, or when the tool is turned off; the
+next stroke then starts a fresh entry. Writing in the same cell later therefore does not replace
+an old value with a concatenation of both.
+
+The target cell is the explicit `cell` when the command names one, otherwise the cell under the
+stroke's **first point** — a cell the stroke actually crosses, unlike an extreme of its bounding
+box (a diagonal from A2 to B1 covers neither A1 nor B2 alone). An entry keeps at most 32 strokes
+and 20,000 points; past that the next stroke starts a fresh entry.
+
 ## How a stroke becomes text
 
-1. **Rasterise.** `gridcraft-ink` computes the stroke's bounding box and draws it anti-aliased
-   into a grey line image: paper white, ink black, the pen's width from the existing `ink_width`
-   encoding (0.5–40 pt), paper padding all round, at most 1024 px on the long side and with a
-   bounded number of segments and pixel visits, so a hostile stroke cannot make the rasteriser
-   expensive.
+1. **Rasterise.** `gridcraft-ink` computes the entry's bounding box and draws every stroke
+   anti-aliased into one grey line image — no segment joins one stroke to the next: paper white,
+   ink black, the pen's width from the existing `ink_width` encoding (0.5–40 pt), paper padding all
+   round, at most 1024 px on the long side and with a bounded number of segments and pixel visits,
+   so a hostile stroke cannot make the rasteriser expensive.
 2. **Normalise.** The image is stretched (not letterboxed) to 384 × 384, three channels in CHW
    order, each value `(pixel / 255 - 0.5) / 0.5`: -1 is ink, +1 is paper.
 3. **Encode and decode.** `gridcraft-ink-rten` runs the encoder once, then greedy-decodes up to 32

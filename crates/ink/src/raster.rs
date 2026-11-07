@@ -21,6 +21,9 @@ pub const MAX_POINTS: usize = 20_000;
 /// thousands of tiny segments (a slowed-down pen) costs the same as a decimated one.
 const MAX_SEGMENTS: usize = 2_000;
 
+/// Most segments one image may hold across all its strokes.
+const MAX_SEGMENTS_TOTAL: usize = 8 * MAX_SEGMENTS;
+
 /// Pixels the rasteriser visits before it stops adding segments. A stroke whose segments each
 /// span the whole image (a hostile input) is cut short instead of taking seconds.
 const MAX_WORK: usize = 40_000_000;
@@ -92,14 +95,26 @@ impl LineImage {
     }
 }
 
-/// Rasterises one stroke into a [`LineImage`].
-///
-/// `pen_width` is the stroke's width in points, as ink shapes store it (`ink_width`: 0.5–40,
-/// whole). The image keeps the stroke's aspect ratio, has paper padding around the ink and is
-/// anti-aliased: each pixel's darkness is its distance to the segment's centre line, so a thin
-/// stroke fades rather than aliases.
+/// Rasterises one stroke into a [`LineImage`]. See [`rasterize_strokes`].
 pub fn rasterize(points: &[[f32; 2]], pen_width: f32) -> Result<LineImage, Error> {
-    let points: Vec<[f32; 2]> = points.iter().copied().filter(|p| p[0].is_finite() && p[1].is_finite()).take(MAX_POINTS).collect();
+    rasterize_strokes(&[points], pen_width)
+}
+
+/// Rasterises several strokes into one [`LineImage`], as one line of handwriting.
+///
+/// Each stroke is drawn on its own: no segment joins the end of one stroke to the start of the
+/// next, so a letter written in two strokes (an "i", a crossed "t", a "4") stays that letter. The
+/// box, the paper padding and the work limits cover all the strokes together.
+pub fn rasterize_strokes(strokes: &[&[[f32; 2]]], pen_width: f32) -> Result<LineImage, Error> {
+    let mut points: Vec<[f32; 2]> = Vec::new();
+    for stroke in strokes {
+        for p in stroke.iter().copied().filter(|p| p[0].is_finite() && p[1].is_finite()) {
+            if points.len() >= MAX_POINTS {
+                break;
+            }
+            points.push(p);
+        }
+    }
     let bbox = Bbox::of(&points).ok_or_else(|| Error::Ink("The stroke has no points to recognise.".to_string()))?;
     let pen = if pen_width.is_finite() { pen_width.clamp(0.5, 40.0) } else { 2.0 };
     let pad = (PADDING_SHARE * bbox.width().max(bbox.height())).max(PADDING_MIN);
@@ -118,16 +133,23 @@ pub fn rasterize(points: &[[f32; 2]], pen_width: f32) -> Result<LineImage, Error
 
     let mut coverage = vec![0.0f32; width * height];
     let map = |p: [f32; 2]| [(p[0] - bbox.min_x + pad) * scale, (p[1] - bbox.min_y + pad) * scale];
-    // Decimate first: consecutive points closer than a pixel add nothing to the image.
-    let step = points.len().div_ceil(MAX_SEGMENTS).max(1);
-    let kept: Vec<[f32; 2]> = points.iter().step_by(step).copied().collect();
-    let segments: Vec<([f32; 2], [f32; 2])> = if kept.len() == 1 {
-        // A click: one round dot.
-        let p = map(kept[0]);
-        vec![(p, p)]
-    } else {
-        kept.windows(2).map(|w| (map(w[0]), map(w[1]))).collect()
-    };
+    // Each stroke is decimated and mapped on its own, so no segment spans two strokes. A stroke
+    // with one point is a click: one round dot.
+    let mut segments: Vec<([f32; 2], [f32; 2])> = Vec::new();
+    for stroke in strokes {
+        let finite: Vec<[f32; 2]> = stroke.iter().copied().filter(|p| p[0].is_finite() && p[1].is_finite()).take(MAX_POINTS).collect();
+        let step = finite.len().div_ceil(MAX_SEGMENTS).max(1);
+        let kept: Vec<[f32; 2]> = finite.iter().step_by(step).copied().collect();
+        if segments.len() >= MAX_SEGMENTS_TOTAL {
+            break;
+        }
+        if kept.len() == 1 {
+            let p = map(kept[0]);
+            segments.push((p, p));
+        } else {
+            segments.extend(kept.windows(2).map(|w| (map(w[0]), map(w[1]))));
+        }
+    }
     let mut work = 0usize;
     for (a, b) in segments {
         let (lo_x, hi_x) = (a[0].min(b[0]) - radius - 1.0, a[0].max(b[0]) + radius + 1.0);
@@ -235,6 +257,20 @@ mod tests {
         // The aspect ratio follows the stroke (30 x 30 points, equal padding): near square.
         let ratio = img.width as f32 / img.height as f32;
         assert!((0.9..=1.1).contains(&ratio), "ratio {ratio}");
+    }
+
+    /// Two strokes in one entry: both are drawn, and no segment joins them (a joined pair would
+    /// put ink between them, where a person wrote nothing).
+    #[test]
+    fn separate_strokes_are_rasterised_together_without_being_joined() {
+        let left = [[0.0f32, 0.0], [0.0, 40.0]];
+        let right = [[100.0f32, 0.0], [100.0, 40.0]];
+        let img = rasterize_strokes(&[&left, &right], 2.0).expect("rasterised");
+        let column_dark = |x: usize| (0..img.height).filter(|y| img.pixel(x, *y).is_some_and(|p| p < 128)).count();
+        // 0..40 under the left stroke, 440..480 under the right one (4 px per point, 10 pt pad).
+        assert!(column_dark(img.width / 12) > 0, "the left stroke is missing");
+        assert!(column_dark(img.width * 11 / 12) > 0, "the right stroke is missing");
+        assert_eq!(column_dark(img.width / 2), 0, "the strokes were joined");
     }
 
     /// The documented shape: a 100-point horizontal stroke with a 2 pt pen is rasterised at 4 px

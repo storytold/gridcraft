@@ -6,6 +6,7 @@ use gridcraft_ink::{Accelerator, InstallState, ModelFile, TROCR_SMALL_HANDWRITTE
 use gridcraft_model::{Anchor, Color, Shape, ShapeKind};
 use serde_json::{Value as Json, json};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use super::{
     CommandSpec, EngineError, Result, Session, always, bad, bool_param, cell_param_on, cmd, edit, f64_param, has_doc, ok, str_param, u32_param,
@@ -108,6 +109,47 @@ fn no_recognizer(s: &Session, cmd: &'static str) -> EngineError {
     )
 }
 
+/// The current instant, or `None` where there is no clock: `Instant::now` traps on wasm, so the
+/// web build (which has no Action Pen) reads nothing.
+fn now() -> Option<Instant> {
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::disallowed_methods)] // never on wasm (see above)
+    let now = Some(Instant::now());
+    #[cfg(target_arch = "wasm32")]
+    let now = None;
+    now
+}
+
+/// How long a handwriting entry stays open: a stroke into the same cell within this gap is part
+/// of the same entry, so a letter written in several strokes is recognised as one.
+pub const INK_ENTRY_GAP: Duration = Duration::from_millis(1_500);
+
+/// Most strokes one entry keeps. Past it the next stroke starts a fresh entry.
+pub const MAX_ENTRY_STROKES: usize = 32;
+
+/// Most points one entry keeps, across all its strokes.
+pub const MAX_ENTRY_POINTS: usize = 20_000;
+
+/// A handwriting entry: the strokes written into one cell since the entry started. Consecutive
+/// strokes are recognised together (without joining them), so multi-stroke letters work; the
+/// entry ends on a pause longer than [`INK_ENTRY_GAP`], a different cell, sheet or document, or
+/// the tool being turned off.
+#[derive(Clone, Debug)]
+pub struct InkEntry {
+    /// The workbook the entry belongs to (`DocState::uid`).
+    pub doc: u64,
+    pub sheet: usize,
+    /// The cell the recognised text goes into.
+    pub cell: CellRef,
+    /// Each stroke's points, in sheet points, in the order they were written.
+    pub strokes: Vec<Vec<[f32; 2]>>,
+    /// Points across all strokes, so a hostile stream of strokes stays bounded.
+    pub points: usize,
+    /// When the last stroke landed (`None` where there is no clock, as on the web: the entry then
+    /// never ends on a pause — the web app has no Action Pen, since it has no model directory).
+    pub last: Option<Instant>,
+}
+
 /// `draw.actionPen {on?}`: turns the handwriting tool on or off. Turning it on without a model
 /// is refused with the directory to install it in (never a panic, never a silent no-op).
 fn action_pen(s: &mut Session, p: &Json) -> Result<Json> {
@@ -116,31 +158,69 @@ fn action_pen(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(no_recognizer(s, "draw.actionPen"));
     }
     s.draw_tool = if on { "actionPen".into() } else { String::new() };
+    if !on {
+        // Leaving the tool ends the entry: the next time it is used starts a fresh one.
+        s.ink_entry = None;
+    }
     Ok(json!({"tool": s.draw_tool, "ready": s.ink.is_some()}))
 }
 
-/// `draw.actionPenInk {points, cell?}`: recognises one stroke and types the result into the cell
-/// under it (or `cell`). One undo step, through the same input path as typing, so "42" is a
-/// number and "3/4/2024" a date; no ink shape is kept.
+/// `draw.actionPenInk {points, cell?}`: recognises the strokes of the handwriting entry being
+/// written and types the result into the cell under them (or `cell`). One undo step, through the
+/// same input path as typing, so "42" is a number and "3/4/2024" a date; no ink shape is kept.
+///
+/// Consecutive strokes into the same cell are one entry (see [`InkEntry`]), so a digit or a word
+/// written in several strokes is not cut in half; the strokes are rasterised side by side, never
+/// joined.
 fn action_pen_ink(s: &mut Session, p: &Json) -> Result<Json> {
     let pts = points_param(p);
     if pts.is_empty() {
         return Err(bad("draw.actionPenInk", "a stroke needs at least one point in `points`"));
     }
     let Some(recognizer) = s.ink.clone() else { return Err(no_recognizer(s, "draw.actionPenInk")) };
-    let si = s.doc()?.wb.active_sheet();
+    let (doc, si) = {
+        let d = s.doc()?;
+        (d.uid, d.wb.active_sheet())
+    };
+    // The target: the explicit `cell`, else the cell under the stroke's first point — a cell the
+    // stroke actually crosses. An extreme of the bounding box need not be one (a diagonal from
+    // A2 to B1 covers neither A1 nor the stroke's own corner).
     let at = match cell_param_on(s, p, "cell", si)? {
         Some(c) => c,
         None => {
             let sh = s.doc()?.wb.sheet(si).ok_or(EngineError::NoDocument)?;
-            let minx = pts.iter().map(|q| q[0]).fold(f64::INFINITY, f64::min).max(0.0);
-            let miny = pts.iter().map(|q| q[1]).fold(f64::INFINITY, f64::min).max(0.0);
-            CellRef::new(sh.row_at(miny), sh.col_at(minx))
+            let first = pts.first().copied().unwrap_or([0.0, 0.0]);
+            CellRef::new(sh.row_at(first[1].max(0.0)), sh.col_at(first[0].max(0.0)))
         }
     };
     let pen = if s.draw_width <= 0.0 { 2.0 } else { s.draw_width }.clamp(0.5, 40.0);
-    let points: Vec<[f32; 2]> = pts.iter().map(|q| [q[0] as f32, q[1] as f32]).collect();
-    let image = gridcraft_ink::raster::rasterize(&points, pen).map_err(|e| bad("draw.actionPenInk", e.to_string()))?;
+    let now = now();
+    let total = pts.len();
+    // Continue the entry when it is the same document, sheet and cell and the last stroke is
+    // recent; anything else starts a fresh one, so unrelated writing never merges.
+    let continues = s.ink_entry.as_ref().is_some_and(|e| {
+        let recent = match (now, e.last) {
+            (Some(now), Some(last)) => now.checked_duration_since(last).is_some_and(|gap| gap <= INK_ENTRY_GAP),
+            // No clock (the web): the entry only ends on a different cell, sheet or document.
+            _ => true,
+        };
+        e.doc == doc && e.sheet == si && e.cell == at && e.strokes.len() < MAX_ENTRY_STROKES && e.points + total <= MAX_ENTRY_POINTS && recent
+    });
+    let mut entry = match s.ink_entry.take() {
+        Some(entry) if continues => entry,
+        _ => InkEntry { doc, sheet: si, cell: at, strokes: Vec::new(), points: 0, last: now },
+    };
+    entry.strokes.push(pts.iter().map(|q| [q[0] as f32, q[1] as f32]).collect());
+    entry.points += total;
+    entry.last = now;
+    let image = {
+        let strokes: Vec<&[[f32; 2]]> = entry.strokes.iter().map(Vec::as_slice).collect();
+        gridcraft_ink::raster::rasterize_strokes(&strokes, pen).map_err(|e| bad("draw.actionPenInk", e.to_string()))
+    };
+    // The ink has been written whether or not it can be recognised: keep it, so the next stroke
+    // completes the character.
+    s.ink_entry = Some(entry);
+    let image = image?;
     let text = recognizer.recognize(&image).map_err(|e| bad("draw.actionPenInk", e.to_string()))?.trim().to_string();
     if text.is_empty() {
         return Err(bad("draw.actionPenInk", "Nothing was recognized in that stroke. Write larger, or try again."));
@@ -338,6 +418,7 @@ fn model_remove(s: &mut Session, _p: &Json) -> Result<Json> {
     }
     std::fs::remove_dir_all(&dir).map_err(|e| bad("ink.modelRemove", format!("{}: {e}", dir.display())))?;
     s.ink = None;
+    s.ink_entry = None;
     if s.draw_tool == "actionPen" {
         s.draw_tool = String::new();
     }

@@ -116,7 +116,7 @@ impl SheetApp {
         floating_pictures::forget_closed(ctx, &open);
         self.apply_font_state(ctx);
         // Draw › Action Pen: a finished model download or load is picked up here.
-        crate::inkpanel::poll(self);
+        crate::inkpanel::poll(self, ctx);
         if let Some(answer) = self.desktop_theme.take_change() {
             self.desktop_dark = Some(answer);
         }

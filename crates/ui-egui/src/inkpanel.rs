@@ -67,8 +67,13 @@ fn spawn<F: FnOnce() -> Job + Send + 'static>(_job: F) -> Option<Receiver<Job>> 
 }
 
 /// Answers a finished worker job. Called every frame; cheap when nothing is running.
-pub fn poll(app: &mut SheetApp) {
+///
+/// A worker runs outside the frame loop, so while a job is in flight the UI is kept awake: with
+/// the model panel closed nothing else would repaint, and a finished download would wait for an
+/// unrelated event before the recognizer starts loading.
+pub fn poll(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(rx) = app.grid.ink_job.take() else { return };
+    ctx.request_repaint_after(std::time::Duration::from_millis(100));
     let answer = match rx.try_recv() {
         Ok(job) => job,
         Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -77,9 +82,11 @@ pub fn poll(app: &mut SheetApp) {
         }
         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
             app.grid.ink_error = Some("The handwriting model download stopped unexpectedly. Try again.".to_string());
+            ctx.request_repaint();
             return;
         }
     };
+    ctx.request_repaint();
     match answer {
         Job::Downloaded(Ok(())) => {
             app.grid.ink_error = None;

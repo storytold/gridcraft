@@ -518,6 +518,10 @@ pub struct Session {
     /// folder), set by the host. Commands use it to find, verify, import and remove the model;
     /// `None` when the host never set one.
     pub models_dir: Option<String>,
+    /// The Action Pen handwriting entry being written: the strokes so far and the cell they
+    /// replace (`cmd::draw::InkEntry`). `None` when no entry is open; it ends on a pause, a
+    /// different cell, sheet or document, or the tool being turned off.
+    pub ink_entry: Option<cmd::draw::InkEntry>,
     /// Review › Show Comments: the Comments pane is open.
     pub comments_pane: bool,
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting

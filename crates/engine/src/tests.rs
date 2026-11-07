@@ -6163,6 +6163,74 @@ fn action_pen_writes_words_as_text() {
     assert_eq!(v(&s, "C7"), Value::text("hello"));
 }
 
+/// Answers with the number of dark pixels in the middle third of the image: zero only when no
+/// ink crosses the centre, which proves two far-apart strokes were drawn without a segment
+/// joining them (and that both reached the image rather than only the last one).
+struct MiddleInk;
+
+impl gridcraft_ink::Recognizer for MiddleInk {
+    fn recognize(&self, image: &gridcraft_ink::raster::LineImage) -> std::result::Result<String, gridcraft_ink::Error> {
+        let (from, to) = (image.width / 3, 2 * image.width / 3);
+        let dark =
+            (0..image.height).flat_map(|y| (from..to).map(move |x| (x, y))).filter(|(x, y)| image.pixel(*x, *y).is_some_and(|p| p < 128)).count();
+        Ok(dark.to_string())
+    }
+    fn model_id(&self) -> &'static str {
+        gridcraft_ink::TROCR_SMALL_HANDWRITTEN.id
+    }
+}
+
+#[test]
+fn action_pen_recognises_consecutive_strokes_as_one_entry() {
+    let mut s = s();
+    s.ink = Some(std::sync::Arc::new(MiddleInk));
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let y = sh.row_top(1) + 6.0;
+    let left = sh.col_left(1) + 2.0;
+    let right = left + 60.0;
+    s.execute("draw.actionPenInk", json!({"points": [[left, y], [left, y + 30.0]], "cell": "B2"})).unwrap();
+    assert_eq!(s.ink_entry.as_ref().map(|e| e.strokes.len()), Some(1));
+    // The second stroke is part of the entry: the centre stays paper only when both strokes are
+    // in the image and no segment joins them (recognising the last stroke alone would put ink in
+    // the middle; joining the two would too).
+    let r = s.execute("draw.actionPenInk", json!({"points": [[right, y], [right, y + 30.0]], "cell": "B2"})).unwrap();
+    assert_eq!(r["text"], json!("0"), "the strokes were joined, or the first one was dropped");
+    assert_eq!(s.ink_entry.as_ref().map(|e| e.strokes.len()), Some(2));
+}
+
+#[test]
+fn action_pen_targets_the_cell_under_the_strokes_first_point() {
+    let mut s = ink_session("7");
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let (x, y) = (sh.col_left(1) + 8.0, sh.row_top(1) + 6.0);
+    let (up, left) = (sh.row_top(0) + 6.0, sh.col_left(0) + 8.0);
+    // B2 -> B1 -> A2. The bounding box's top-left corner is A1, which the stroke never enters.
+    s.execute("draw.actionPenInk", json!({"points": [[x, y], [x, up], [left, y]]})).unwrap();
+    assert_eq!(v(&s, "B2"), Value::Number(7.0));
+    assert!(v(&s, "A1").is_empty(), "the stroke never enters A1");
+}
+
+#[test]
+fn a_handwriting_entry_ends_on_a_pause_a_new_cell_or_leaving_the_tool() {
+    let mut s = ink_session("1");
+    let at = json!([[10.0, 10.0], [20.0, 20.0]]);
+    s.execute("draw.actionPenInk", json!({"points": at, "cell": "B2"})).unwrap();
+    s.execute("draw.actionPenInk", json!({"points": at.clone(), "cell": "B2"})).unwrap();
+    assert_eq!(s.ink_entry.as_ref().map(|e| e.strokes.len()), Some(2), "consecutive strokes share an entry");
+    // A different cell starts a new entry.
+    s.execute("draw.actionPenInk", json!({"points": at.clone(), "cell": "C3"})).unwrap();
+    assert_eq!(s.ink_entry.as_ref().map(|e| e.strokes.len()), Some(1));
+    // A pause longer than the entry gap starts a new entry.
+    if let Some(entry) = s.ink_entry.as_mut() {
+        entry.last = entry.last.map(|last| last - crate::cmd::draw::INK_ENTRY_GAP - std::time::Duration::from_millis(1));
+    }
+    s.execute("draw.actionPenInk", json!({"points": at, "cell": "C3"})).unwrap();
+    assert_eq!(s.ink_entry.as_ref().map(|e| e.strokes.len()), Some(1), "a pause ends the entry");
+    // Turning the tool off ends it too.
+    s.execute("draw.actionPen", json!({"on": false})).unwrap();
+    assert!(s.ink_entry.is_none());
+}
+
 #[test]
 fn action_pen_writes_under_the_stroke_when_no_cell_is_given() {
     let mut s = ink_session("7");
