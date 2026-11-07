@@ -239,6 +239,11 @@ fn stored_spill_in<'s>(sheet: &'s gridcraft_model::Sheet, range: RangeRef, f: &m
 }
 
 impl PassHost<'_> {
+    fn clear_range_cache(&mut self) {
+        self.range_cache.clear();
+        self.range_cache_cells = 0;
+        self.range_cache_spills = self.spills.len();
+    }
     /// Calculates `k` (and the formulas it reads) with bounded stack: when [`Self::compute`] would
     /// go deeper than [`MAX_NESTED`], it suspends what is in progress, the formula it needed is
     /// calculated from here, then the suspended ones again (reading the results kept so far).
@@ -509,8 +514,7 @@ impl PassHost<'_> {
                 self.spills.remove(&a);
                 self.spill_index.remove(a);
             }
-            self.range_cache.clear();
-            self.range_cache_spills = self.spills.len();
+            self.clear_range_cache();
             for k in &again {
                 self.calculate(*k);
             }
@@ -690,9 +694,7 @@ impl Host for PassHost<'_> {
     }
     fn range_array(&mut self, sheet: usize, range: RangeRef) -> Option<std::sync::Arc<Array>> {
         if self.spills.len() != self.range_cache_spills {
-            self.range_cache.clear();
-            self.range_cache_cells = 0;
-            self.range_cache_spills = self.spills.len();
+            self.clear_range_cache();
         }
         if !self.iterate
             && let Some(arr) = self.range_cache.get(&(sheet, range))
@@ -710,9 +712,7 @@ impl Host for PassHost<'_> {
             && !self.waiting.iter().any(|&(s, c)| s == sheet && range.contains(c))
         {
             if self.spills.len() != self.range_cache_spills {
-                self.range_cache.clear();
-                self.range_cache_cells = 0;
-                self.range_cache_spills = self.spills.len();
+                self.clear_range_cache();
             }
             if self.range_cache_cells.saturating_add(cells) > MAX_RANGE_CACHE_CELLS {
                 self.range_cache.clear();

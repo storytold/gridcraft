@@ -161,7 +161,8 @@ fn if_numbers(a: &[Arg]) -> R<Vec<f64>> {
     let c = Criterion::parse_arg(&crate::util::arg(a, 1)?.value.scalar())?;
     let sum_range = if has(a, 2) { Some(as_array(&crate::util::arg(a, 2)?.value)) } else { None };
     let mut out = Vec::new();
-    if let Some(pat) = c.exact_text()
+    if range.cols != 0
+        && let Some(pat) = c.exact_text()
         && let Some(positions) = range.text_positions(pat)
     {
         for &pos in positions {
