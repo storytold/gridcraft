@@ -181,6 +181,8 @@ pub(super) fn read(obj: &El, anchor: Anchor) -> Option<Shape> {
     let text = parse_points(path, &anchor, w, h)?;
     Some(Shape {
         id: 0,
+        name: None,
+        text_link: None,
         kind: ShapeKind::Ink,
         anchor,
         fill: Color::Rgb((width as u32) << 16),
