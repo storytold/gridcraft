@@ -421,6 +421,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Previous page" => "上一页",
         "Next page" => "下一页",
         "Create PDF" => "创建 PDF",
+        "Nothing to export." => "没有可导出的内容。",
         "Save the sheet as a PDF document that keeps its page layout." => "将工作表另存为保留页面布局的 PDF 文档。",
         "Change File Type" => "更改文件类型",
         "CSV (Comma delimited)" => "CSV (逗号分隔)",

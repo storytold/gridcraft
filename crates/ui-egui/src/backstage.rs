@@ -24,7 +24,7 @@ mod options;
 mod print;
 
 use options::{options, platform};
-use print::print;
+use print::{preview_pane, print};
 
 /// Width of the navigation column.
 const NAV_W: f32 = 196.0;
@@ -124,11 +124,20 @@ pub struct Backstage {
     preview_page: usize,
     /// Print: the preview for (document, revision, whole workbook, fit to page).
     preview: Option<((u64, u64, bool, bool), Json)>,
+    /// Export › Create PDF: the previewed page (0-based).
+    export_page: usize,
+    /// Export › Create PDF: the pages it would export, or why they couldn't be laid out.
+    export_preview: Option<(ExportKey, Result<Vec<Json>, String>)>,
     /// Save As: the chosen file type (an extension from [`SAVE_TYPES`]).
     pub save_format: &'static str,
     /// Home and Open: when the recent workbooks were last changed.
     recent: RecentFiles,
 }
+
+/// What the Create PDF preview was laid out for: (document, revision, active sheet, the
+/// `file.exportPdf` parameters). The active sheet is part of it because Create PDF exports that
+/// sheet, and a workbook's revision does not change when another sheet is activated.
+type ExportKey = (u64, u64, usize, Json);
 
 /// Save As file types: (extension, label). The first is the workbook itself; the others are
 /// exports that leave the workbook's own file and unsaved state alone.
@@ -145,6 +154,8 @@ impl Backstage {
             fit_to_page: false,
             preview_page: 0,
             preview: None,
+            export_page: 0,
+            export_preview: None,
             save_format: "xlsx",
             recent: RecentFiles::default(),
         }
@@ -225,7 +236,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     Page::Info => info(app, ui, &mut bs),
                     Page::SaveAs => save_as(app, ui, &mut bs, &mut out),
                     Page::Print => print(app, ui, &mut bs, &mut out),
-                    Page::Export => export(app, ui, &mut out),
+                    Page::Export => export(app, ui, &mut bs, &mut out),
                     Page::Options => options(app, ui),
                     Page::Account => account(app, ui),
                 }
@@ -714,13 +725,29 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
     dim(ui, lang.tr("A CSV file, web page or PDF is a copy: the workbook keeps its own file."));
 }
 
-fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
+/// File › Export. Beside Create PDF, its pages are previewed through `file.printPreview` with
+/// the parameters it exports with; `file.printPreview` lays pages out as `file.exportPdf` does,
+/// so the preview shows the pages the PDF will hold.
+fn export(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
     let lang = app.ui.language;
+    let params = pdf_params();
     if action_row(ui, Icon::Paper, lang.tr("Create PDF"), lang.tr("Save the sheet as a PDF document that keeps its page layout.")).clicked()
-        && export_as(app, "pdf")
+        && export_pdf(app, params.clone())
     {
         out.close = true;
     }
+    ui.horizontal_top(|ui| {
+        // In line with the row's title, under its icon.
+        ui.add_space(52.0);
+        ui.vertical(|ui| {
+            refresh_export_preview(app, bs, params);
+            match bs.export_preview.as_ref().map(|(_, pages)| pages) {
+                Some(Ok(pages)) => preview_pane(app, ui, pages, &mut bs.export_page, vec2(300.0, 380.0), lang.tr("Nothing to export.")),
+                Some(Err(e)) => dim(ui, e),
+                None => dim(ui, lang.tr("No workbook is open.")),
+            }
+        });
+    });
     ui.add_space(14.0);
     section(ui, lang, "Change File Type");
     for (fmt, icon, title, detail) in [
@@ -733,14 +760,65 @@ fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
     }
 }
 
+/// The `file.exportPdf` parameters of Create PDF, which its preview lays out with too: the active
+/// sheet.
+fn pdf_params() -> Json {
+    json!({"sheets": "active"})
+}
+
+/// Lays out Create PDF's pages for `params` again only when the document, its revision, its
+/// active sheet or `params` changed since the last frame; with no workbook open there is no
+/// preview.
+fn refresh_export_preview(app: &mut SheetApp, bs: &mut Backstage, params: Json) {
+    let Some(key) = app.session.active().map(|d| (d.uid, d.revision, d.wb.active_sheet(), params)) else {
+        bs.export_preview = None;
+        return;
+    };
+    if bs.export_preview.as_ref().is_some_and(|(k, _)| *k == key) {
+        return;
+    }
+    let pages = app
+        .session
+        .run("file.printPreview", key.3.clone())
+        .map_err(|e| crate::clean_error(&e))
+        .map(|r| r.get("pageList").and_then(Json::as_array).cloned().unwrap_or_default());
+    bs.export_preview = Some((key, pages));
+}
+
+/// Create PDF: writes `file.exportPdf` with `params` through the save picker on the desktop, or
+/// hands it to the browser as a download on the web. Returns whether a file was written or
+/// handed over; a failure shows its message.
+fn export_pdf(app: &mut SheetApp, params: Json) -> bool {
+    if !app.commit_edit(0, 0, false, false) {
+        return false;
+    }
+    if app.services.pick_save.is_some() {
+        return app.export_pdf_with_picker(params);
+    }
+    if app.services.download.is_none() {
+        app.message = Some(("GridCraft".into(), "Exporting needs a file picker, which this window doesn't have.".into()));
+        return false;
+    }
+    // Without a path the PDF comes back as bytes, which `SheetApp::run` hands to the browser.
+    match app.run("file.exportPdf", params) {
+        Ok(_) => true,
+        Err(e) => {
+            app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
+            false
+        }
+    }
+}
+
 /// Exports the active workbook as `pdf`, `csv` or `html`: through the save picker on the desktop,
 /// as a browser download on the web. Returns whether a file was written or handed over.
 pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
+    if fmt == "pdf" {
+        return export_pdf(app, json!({}));
+    }
     if !app.commit_edit(0, 0, false, false) {
         return false;
     }
     let id = match fmt {
-        "pdf" => "file.exportPdf",
         "csv" => "file.exportCsv",
         "html" => "file.exportHtml",
         _ => return false,
@@ -762,16 +840,6 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
     if app.services.download.is_none() {
         app.message = Some(("GridCraft".into(), "Exporting needs a file picker, which this window doesn't have.".into()));
         return false;
-    }
-    if fmt == "pdf" {
-        // Without a path the PDF comes back as bytes, which `SheetApp::run` hands to the browser.
-        return match app.run(id, json!({})) {
-            Ok(_) => true,
-            Err(e) => {
-                app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
-                false
-            }
-        };
     }
     app.store_view_state();
     match app.session.run("file.saveBytes", json!({"format": fmt})) {
