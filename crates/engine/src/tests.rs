@@ -6114,3 +6114,31 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
     }
     assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
 }
+
+/// `file.open` refused after a workbook was offered leaves nothing behind: the next one reads the file.
+#[test]
+fn a_discarded_prepared_workbook_is_not_used_by_a_later_open() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-prepared-open-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("book.csv");
+    let text = path.to_string_lossy().into_owned();
+    std::fs::write(
+        &path, "1
+",
+    )
+    .unwrap();
+    let prepared = crate::cmd::file::prepare_open(&json!({"path": text}), &Default::default()).unwrap();
+    std::fs::write(
+        &path, "2
+",
+    )
+    .unwrap();
+    let mut s = Session::new();
+    s.new_workbook();
+    s.offer_prepared_open(text.clone(), prepared);
+    s.discard_prepared_open();
+    s.execute("file.open", json!({"path": text})).unwrap();
+    let value = s.doc().unwrap().wb.active().unwrap().value(gridcraft_core::CellRef::new(0, 0));
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(value, gridcraft_core::Value::Number(2.0));
+}

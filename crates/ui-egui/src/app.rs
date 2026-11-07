@@ -20,8 +20,12 @@ mod files;
 mod fonts;
 mod input;
 mod keys;
+#[cfg(not(target_arch = "wasm32"))]
+mod opening;
 mod prefs;
 mod print;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use opening::Opening;
 mod quit;
 mod view;
 
@@ -82,6 +86,11 @@ impl SheetApp {
             ui_window: None,
             parked: HashMap::new(),
             native_windows: false,
+            background_open: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            opening: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            open_queue: Default::default(),
             arrange_windows: None,
             #[cfg(not(target_arch = "wasm32"))]
             updates_rt: Default::default(),
@@ -141,6 +150,8 @@ impl SheetApp {
         // Files read asynchronously (web file picker, dropped files).
         self.poll_async_opens();
         self.autosave(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_opening(ctx);
         self.update_title(ctx);
         self.request_hidden_paint(ctx);
         // One window always shows a workbook, unless each workbook has a native window of its own
@@ -249,6 +260,8 @@ impl SheetApp {
         macro_ui::forget_closed_editor(self);
         macro_ui::question_box(self, &ctx);
         widgets::message_box(self, &ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        opening::progress_card(self, &ctx);
         widgets::toast(self, &ctx);
         // Requests are admitted in `logic`, for the root viewport, so only its pass issues them.
         if ctx.viewport_id() == egui::ViewportId::ROOT {
