@@ -130,6 +130,19 @@ fn the_canary_is_a_fresh_file_removed_on_drop() {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn a_directory_of_programs_is_a_subpath_in_both_of_its_rules() {
+    let (canary, dir) = scratch();
+    let exe = std::env::current_exe().unwrap();
+    let checked = Policy::new().exec(&dir).checked(&exe, &dir.join("data.txt"), &canary).unwrap();
+    let profile = crate::macos::profile(&checked).unwrap();
+    let rule = format!("(subpath \"{}\")", dir.display());
+    assert_eq!(profile.matches(&rule).count(), 2, "{profile}");
+    assert!(!profile.contains(&format!("(literal \"{}\")", dir.display())), "{profile}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn profile_strings_are_escaped() {
     assert_eq!(crate::macos::quoted(Path::new("/a/b c")).unwrap(), "\"/a/b c\"");
     assert_eq!(crate::macos::quoted(Path::new("/a\"b\\c")).unwrap(), "\"/a\\\"b\\\\c\"");
