@@ -427,6 +427,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enable AutoComplete for cell values" => "Activare completare automată pentru valorile din celule",
         "Save .xlsx workbooks automatically after every change" => "Salvează automat registrele .xlsx după fiecare modificare",
         "Workbook calculation" => "Calculul registrului",
+        "Recalculate workbook before saving" => "Recalculare registru înainte de salvare",
         "Enable iterative calculation" => "Activare calcul iterativ",
         "Calculation settings are saved with the workbook." => "Setările de calcul se salvează împreună cu registrul.",
         "OK" => "OK",

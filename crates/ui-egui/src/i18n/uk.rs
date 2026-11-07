@@ -425,6 +425,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enable AutoComplete for cell values" => "Увімкнути автозавершення значень комірок",
         "Save .xlsx workbooks automatically after every change" => "Автоматично зберігати книги .xlsx після кожної зміни",
         "Workbook calculation" => "Обчислення в книзі",
+        "Recalculate workbook before saving" => "Переобчислювати книгу перед збереженням",
         "Enable iterative calculation" => "Увімкнути ітеративні обчислення",
         "Calculation settings are saved with the workbook." => "Параметри обчислень зберігаються разом із книгою.",
         "OK" => "OK",

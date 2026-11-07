@@ -93,7 +93,8 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
     });
 }
 
-/// The calculation mode, and iterative calculation, of the active workbook.
+/// The calculation mode (with Recalculate workbook before saving under Manual), and iterative
+/// calculation, of the active workbook.
 fn calc_options(app: &mut SheetApp, ui: &mut Ui, lang: Language, calc: &gridcraft_engine::model::CalcSettings) {
     use gridcraft_engine::model::CalcMode;
     for (mode, id, label) in [
@@ -105,6 +106,16 @@ fn calc_options(app: &mut SheetApp, ui: &mut Ui, lang: Language, calc: &gridcraf
             app.run_or_alert("formulas.calculationOptions", json!({"mode": id}));
         }
     }
+    // Only a manual-mode save recalculates, so the checkbox is live only while Manual is chosen.
+    ui.add_enabled_ui(calc.mode == CalcMode::Manual, |ui| {
+        ui.horizontal(|ui| {
+            ui.add_space(24.0);
+            let mut before_save = calc.recalculate_before_save;
+            if ui.checkbox(&mut before_save, lang.tr("Recalculate workbook before saving")).changed() {
+                app.run_or_alert("formulas.calculationOptions", json!({"recalculateBeforeSave": before_save}));
+            }
+        });
+    });
     ui.add_space(4.0);
     let mut iterative = calc.iterative;
     if ui.checkbox(&mut iterative, lang.tr("Enable iterative calculation")).changed() {

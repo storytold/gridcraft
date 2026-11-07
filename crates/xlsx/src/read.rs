@@ -227,6 +227,7 @@ fn read_workbook_properties(cx: &mut Ctx<'_>, wb: &mut Workbook, xml: &El) {
         }
         wb.calc.precision_as_displayed = !c.flag("fullPrecision", true);
         wb.calc.r1c1 = c.attr("refMode") == Some("R1C1");
+        wb.calc.recalculate_before_save = c.flag("calcOnSave", true);
     }
     if let Some(p) = xml.child("workbookProtection") {
         wb.protected_structure = p.flag("lockStructure", false);
