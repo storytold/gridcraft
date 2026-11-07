@@ -938,3 +938,514 @@ fn equations_print_with_the_symbol_font() {
     // A glyph no standard font has is a [?] box.
     assert!(contains(&pdf, "(?) Tj"));
 }
+
+// ---------------------------------------------------------------- header/footer pictures (#1257)
+
+/// A `w` × `h` PNG of one colour.
+fn png(w: u32, h: u32) -> Vec<u8> {
+    let img = image::RgbaImage::from_pixel(w, h, image::Rgba([20, 90, 160, 255]));
+    let mut out = Vec::new();
+    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+    out
+}
+
+/// Gives the first sheet a kept header/footer VML drawing (as reading an Excel file does) with
+/// one shape per `(id, style, image)`.
+fn keep_hf_pictures(s: &mut Session, shapes: &[(&str, &str, Vec<u8>)]) {
+    use gridcraft_model::{Preserved, PreservedPart, PreservedRel, PreservedXml};
+    let rel = |id: String, target: String| PreservedRel { id, rel_type: "x/image".into(), target, external: false };
+    let mut vml = String::from("<xml>");
+    let mut parts = vec![];
+    let mut vml_rels = vec![];
+    for (i, (id, style, data)) in shapes.iter().enumerate() {
+        vml.push_str(&format!(r##"<v:shape id="{id}" type="#_x0000_t75" style="{style}"><v:imagedata o:relid="rId{i}"/></v:shape>"##));
+        let name = format!("xl/media/image{i}.png");
+        vml_rels.push(rel(format!("rId{i}"), name.clone()));
+        parts.push(PreservedPart { name, content_type: "image/png".into(), data: data.as_slice().into(), rels: vec![] });
+    }
+    vml.push_str("</xml>");
+    parts.push(PreservedPart { name: "xl/drawings/hf.vml".into(), content_type: String::new(), data: vml.as_bytes().into(), rels: vml_rels });
+    let kept = Preserved {
+        rels: vec![rel("rId9".into(), "xl/drawings/hf.vml".into())],
+        elements: vec![PreservedXml { slot: "legacyDrawingHF".into(), xml: "<legacyDrawingHF r:id=\"rId9\"/>".into() }],
+        parts,
+        ..Preserved::default()
+    };
+    let d = s.doc_mut().unwrap();
+    std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap().preserved = Some(std::sync::Arc::new(kept));
+}
+
+/// Kept header and footer pictures print at their `&G`, at their size, on the header and footer
+/// margins.
+#[test]
+fn header_and_footer_pictures_print_where_their_g_is() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "Invoice"})).unwrap();
+    s.execute("pageLayout.headerFooter", json!({"header": "&L&G&CInvoice", "footer": "&CPage &P &G"})).unwrap();
+    keep_hf_pictures(&mut s, &[("LH", "width:120pt;height:40pt", png(30, 10)), ("CF", "width:80pt;height:20pt", png(8, 2))]);
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    let text = String::from_utf8_lossy(&pdf);
+    assert_eq!(text.matches("/Subtype /Image").count(), 2, "{text}");
+    // Letter paper, default margins (left 0.7 in, header and footer 0.3 in): the letterhead's top
+    // sits on the header margin, the footer picture's bottom on the footer margin.
+    assert!(text.contains("q 120 0 0 40 50.4 730.4 cm /Sh"), "{text}");
+    assert!(text.contains(" 21.6 cm /Sh") && text.contains("q 80 0 0 20 "), "{text}");
+    assert!(text.contains("(Invoice) Tj") && text.contains("(Page 1 ) Tj"));
+}
+
+/// A kept picture prints only where its section has `&G`, and an unreadable or oversized image is
+/// left out.
+#[test]
+fn header_pictures_need_their_g_and_a_readable_image() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    // No &G: the kept picture isn't printed.
+    s.execute("pageLayout.headerFooter", json!({"header": "&LNo picture"})).unwrap();
+    keep_hf_pictures(&mut s, &[("LH", "width:120pt;height:40pt", png(4, 4))]);
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    assert!(!contains(&pdf, "/Subtype /Image"));
+    assert!(contains(&pdf, "(No picture) Tj"));
+    // An image that isn't one, and a huge one: left out, the text still prints.
+    s.execute("pageLayout.headerFooter", json!({"header": "&LBefore&G after&R&G"})).unwrap();
+    keep_hf_pictures(
+        &mut s,
+        &[("LH", "width:10pt;height:10pt", b"\x89PNG\r\n\x1a\nbroken".to_vec()), ("RH", "width:10pt;height:10pt", png(9000, 1))],
+    );
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    assert!(!contains(&pdf, "/Subtype /Image"));
+    assert!(contains(&pdf, "(Before after) Tj"));
+}
+
+/// With Different First Page, the first-page picture prints on page 1 only.
+#[test]
+fn first_page_pictures_print_on_the_first_page_only() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "one"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A200", "input": "two"})).unwrap();
+    s.execute("pageLayout.headerFooter", json!({"header": "&C&G", "firstHeader": "&C&G", "differentFirst": true})).unwrap();
+    keep_hf_pictures(&mut s, &[("CHFIRST", "width:50pt;height:50pt", png(5, 5))]);
+    let (pdf, pages) = pdf_of(&mut s, json!({}));
+    assert!(pages > 1);
+    assert_eq!(String::from_utf8_lossy(&pdf).matches(" cm /Sh").count(), 1);
+}
+
+/// `expand_header_footer` records where in its section's text the first `&G` is.
+#[test]
+fn g_marks_where_the_picture_goes() {
+    let cx = HfContext::default();
+    let [l, c, r] = expand_header_footer("&LAB&GCD&G&C&G&RNone", &cx);
+    assert_eq!((l.text.as_str(), l.picture), ("ABCD", Some(2)));
+    assert_eq!((c.text.as_str(), c.picture), ("", Some(0)));
+    assert_eq!(r.picture, None);
+}
+
+/// Like [`keep_hf_pictures`], but every shape shows the same image part.
+fn keep_one_hf_image(s: &mut Session, ids: &[&str], style: &str, data: Vec<u8>) {
+    use gridcraft_model::{Preserved, PreservedPart, PreservedRel, PreservedXml};
+    let rel = |id: &str, target: &str| PreservedRel { id: id.into(), rel_type: "x/image".into(), target: target.into(), external: false };
+    let vml: String = ids.iter().map(|id| format!(r##"<v:shape id="{id}" style="{style}"><v:imagedata o:relid="rId1"/></v:shape>"##)).collect();
+    let kept = Preserved {
+        rels: vec![rel("rId9", "xl/drawings/hf.vml")],
+        elements: vec![PreservedXml { slot: "legacyDrawingHF".into(), xml: "<legacyDrawingHF r:id=\"rId9\"/>".into() }],
+        parts: vec![
+            PreservedPart { name: "xl/media/logo.png".into(), content_type: "image/png".into(), data: data.as_slice().into(), rels: vec![] },
+            PreservedPart {
+                name: "xl/drawings/hf.vml".into(),
+                content_type: String::new(),
+                data: vml.as_bytes().into(),
+                rels: vec![rel("rId1", "xl/media/logo.png")],
+            },
+        ],
+        ..Preserved::default()
+    };
+    let d = s.doc_mut().unwrap();
+    std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap().preserved = Some(std::sync::Arc::new(kept));
+}
+
+/// A header picture on many pages is one image object the PDF draws on each page.
+#[test]
+fn a_header_picture_is_one_image_object_for_every_page() {
+    let mut s = s();
+    for r in [1, 100, 200] {
+        s.execute("cell.set", json!({"cell": format!("A{r}"), "input": "x"})).unwrap();
+    }
+    // The same logo in all six sections.
+    s.execute("pageLayout.headerFooter", json!({"header": "&L&G&C&G&R&G", "footer": "&L&G&C&G&R&G"})).unwrap();
+    keep_one_hf_image(&mut s, &["LH", "CH", "RH", "LF", "CF", "RF"], "width:20pt;height:20pt", png(6, 6));
+    let (pdf, pages) = pdf_of(&mut s, json!({}));
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(pages >= 3);
+    assert_eq!(text.matches("/Subtype /Image").count(), 1, "decoded and written once");
+    assert_eq!(text.matches("/Sh1 Do").count(), 6 * pages as usize, "drawn six times on every page");
+}
+
+/// Pictures no printed page shows (no `&G`, or a page kind not used) are not decoded.
+#[test]
+fn only_header_pictures_a_page_prints_are_decoded() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    // RH has no &G; the first-page and even-page pictures belong to options that are off.
+    s.execute("pageLayout.headerFooter", json!({"header": "&L&G&RRight", "firstHeader": "&C&G", "evenHeader": "&C&G"})).unwrap();
+    keep_hf_pictures(
+        &mut s,
+        &[
+            ("LH", "width:20pt;height:20pt", png(4, 4)),
+            ("RH", "width:20pt;height:20pt", png(5, 5)),
+            ("CHFIRST", "width:20pt;height:20pt", png(6, 6)),
+            ("CHEVEN", "width:20pt;height:20pt", png(7, 7)),
+        ],
+    );
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    let text = String::from_utf8_lossy(&pdf);
+    assert_eq!(text.matches("/Subtype /Image").count(), 1, "{text}");
+    assert!(text.contains("/Width 4 /Height 4"));
+}
+
+/// Large pictures share one decoding budget per export: those past it are left out, the rest print.
+#[test]
+fn header_pictures_share_a_decoding_budget() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    s.execute("pageLayout.headerFooter", json!({"header": "&L&G&C&G&R&G", "footer": "&C&G"})).unwrap();
+    // Four distinct 4000 × 4000 pictures printed 22 in wide: decoded at 150 dpi (3300 px, about
+    // 44 MB each), so the 128 MB budget takes three of them and leaves the fourth out.
+    let big = |c: u8| {
+        let img = image::RgbaImage::from_pixel(4000, 4000, image::Rgba([c, 0, 0, 255]));
+        let mut out = Vec::new();
+        image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+        out
+    };
+    let style = "width:1584pt;height:1584pt";
+    keep_hf_pictures(&mut s, &[("LH", style, big(10)), ("CH", style, big(20)), ("RH", style, big(30)), ("CF", style, big(40))]);
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    assert_eq!(String::from_utf8_lossy(&pdf).matches("/Subtype /Image").count(), 3);
+}
+
+// ---------------------------------------------------------------- header/footer pictures from a real XLSX package
+
+/// A one-sheet XLSX package as Excel lays it out: `header`/`footer` text, a VML drawing named by
+/// `<legacyDrawingHF>` with one picture-frame shape per `(shape id, style, image part)`, and the
+/// image parts in `images` (a shape may name a part that isn't there).
+fn hf_package(header: &str, footer: &str, shapes: &[(&str, &str, &str)], images: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    use std::io::Write;
+    let esc = |t: &str| t.replace('&', "&amp;");
+    let ns = r#"xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
+    let rels = |items: &[(String, &str, String)]| {
+        let mut s = String::from(r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#);
+        for (id, kind, target) in items {
+            s.push_str(&format!(
+                r#"<Relationship Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{kind}" Target="{target}"/>"#
+            ));
+        }
+        s + "</Relationships>"
+    };
+    let mut vml = String::from(
+        r#"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="1"/></o:shapelayout>"#,
+    );
+    let mut vml_rels = vec![];
+    for (i, (id, style, part)) in shapes.iter().enumerate() {
+        vml.push_str(&format!(
+            r##"<v:shape id="{id}" o:spid="_x0000_s{}" type="#_x0000_t75" style="{style}"><v:imagedata o:relid="rId{}" o:title="{id}"/></v:shape>"##,
+            1025 + i,
+            i + 1
+        ));
+        vml_rels.push((format!("rId{}", i + 1), "image", format!("../media/{part}")));
+    }
+    vml.push_str("</xml>");
+    let sheet = format!(
+        r#"<?xml version="1.0"?><worksheet {ns}><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Quote</t></is></c></row></sheetData><pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><headerFooter><oddHeader>{}</oddHeader><oddFooter>{}</oddFooter></headerFooter><legacyDrawingHF r:id="rId1"/></worksheet>"#,
+        esc(header),
+        esc(footer)
+    );
+    let mut parts: Vec<(String, Vec<u8>)> = vec![
+        (
+            "[Content_Types].xml".into(),
+            br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#.to_vec(),
+        ),
+        ("_rels/.rels".into(), rels(&[("rId1".into(), "officeDocument", "xl/workbook.xml".into())]).into_bytes()),
+        ("xl/workbook.xml".into(), format!(r#"<?xml version="1.0"?><workbook {ns}><sheets><sheet name="Quote" sheetId="1" r:id="rId1"/></sheets></workbook>"#).into_bytes()),
+        ("xl/_rels/workbook.xml.rels".into(), rels(&[("rId1".into(), "worksheet", "worksheets/sheet1.xml".into())]).into_bytes()),
+        ("xl/worksheets/sheet1.xml".into(), sheet.into_bytes()),
+        ("xl/worksheets/_rels/sheet1.xml.rels".into(), rels(&[("rId1".into(), "vmlDrawing", "../drawings/vmlDrawing1.vml".into())]).into_bytes()),
+        ("xl/drawings/vmlDrawing1.vml".into(), vml.into_bytes()),
+        ("xl/drawings/_rels/vmlDrawing1.vml.rels".into(), rels(&vml_rels).into_bytes()),
+    ];
+    parts.extend(images.iter().map(|(name, data)| (format!("xl/media/{name}"), data.clone())));
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, data) in &parts {
+        z.start_file(name.as_str(), zip::write::SimpleFileOptions::default()).unwrap();
+        z.write_all(data).unwrap();
+    }
+    z.finish().unwrap().into_inner()
+}
+
+/// A session with `bytes` opened as an XLSX file.
+fn open_xlsx(bytes: &[u8]) -> Session {
+    let (wb, _) = gridcraft_xlsx::read_xlsx(bytes).unwrap();
+    let mut s = Session::new();
+    s.add_document(crate::DocState::new(wb, None, "Quote.xlsx".into(), crate::Trust::FromFile));
+    s
+}
+
+/// The `q w 0 0 h x y cm /…` placements of the images a PDF draws, as text.
+fn image_placements(pdf: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(pdf);
+    text.lines().filter(|l| l.starts_with("q ") && l.contains(" cm /")).map(|l| l.split(" cm ").next().unwrap_or("").to_string()).collect()
+}
+
+/// An XLSX with a logo in the left header and another picture in the right footer prints both at
+/// their size and place, and prints the same after one and two saves.
+#[test]
+fn an_xlsx_letterhead_and_footer_picture_print_and_survive_a_save() {
+    // A logo in the left header and a different picture in the right footer, as Excel saves them.
+    let (logo, stamp) = (png(30, 10), png(6, 2));
+    let bytes = hf_package(
+        "&L&G&CQuote",
+        "&R&G",
+        &[("LH", "position:absolute;width:120pt;height:40pt;z-index:1", "image1.png"), ("RF", "width:60pt;height:20pt", "image2.png")],
+        &[("image1.png", logo.clone()), ("image2.png", stamp.clone())],
+    );
+    let mut s = open_xlsx(&bytes);
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    let text = String::from_utf8_lossy(&pdf);
+    // Two distinct pictures, each at its own size and place: the logo's top on the header margin
+    // at the left margin (Letter, 0.7 in sides, 0.3 in header), the stamp's bottom on the footer
+    // margin against the right margin.
+    assert_eq!(text.matches("/Subtype /Image").count(), 2, "{text}");
+    assert!(text.contains("/Width 30 /Height 10") && text.contains("/Width 6 /Height 2"), "{text}");
+    assert_eq!(image_placements(&pdf), ["q 120 0 0 40 50.4 730.4", "q 60 0 0 20 501.6 21.6"]);
+    assert!(text.contains("(Quote) Tj"));
+    // Saved and opened again, the same pictures print in the same places (twice: what one save
+    // wrote is what the next one keeps).
+    let wb = s.doc().unwrap().wb.clone();
+    let once = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let (again, _) = gridcraft_xlsx::read_xlsx(&once).unwrap();
+    let twice = gridcraft_xlsx::write_xlsx(&again).unwrap();
+    for saved in [once, twice] {
+        let mut t = open_xlsx(&saved);
+        let (pdf2, _) = pdf_of(&mut t, json!({}));
+        assert_eq!(image_placements(&pdf2), image_placements(&pdf));
+        assert_eq!(String::from_utf8_lossy(&pdf2).matches("/Subtype /Image").count(), 2);
+    }
+}
+
+/// `&LBefore&Gafter`: the picture sits right after "Before" and "after" right after the picture, on
+/// one line.
+#[test]
+fn a_picture_sits_between_the_text_around_its_g() {
+    let bytes = hf_package("&LBefore&Gafter", "", &[("LH", "width:20pt;height:10pt", "image1.png")], &[("image1.png", png(4, 2))]);
+    let mut s = open_xlsx(&bytes);
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    let text = String::from_utf8_lossy(&pdf);
+    // The x of a text run: the `… x y Tm` line of the text object that draws it.
+    let run_x = |run: &str| -> f32 {
+        let at = text.find(&format!("({run}) Tj")).unwrap_or_else(|| panic!("no {run} in {text}"));
+        let tm = text[..at].rfind(" Tm").unwrap();
+        let line = text[..tm].rsplit('\n').next().unwrap();
+        line.split(' ').nth(4).unwrap().parse().unwrap()
+    };
+    let placed = image_placements(&pdf);
+    assert_eq!(placed.len(), 1, "{text}");
+    let image_x: f32 = placed[0].split(' ').nth(5).unwrap().parse().unwrap();
+    let (before, after) = (run_x("Before"), run_x("after"));
+    // One line: "Before", the picture right after it, then "after" right after the picture.
+    let w = gridcraft_pdf::text_width(Font::styled(gridcraft_pdf::Family::Sans, false, false), 10.0, "Before");
+    assert!((before - 50.4).abs() < 0.01, "{before}");
+    assert!((image_x - (before + w)).abs() < 0.01, "picture at {image_x}, text ends at {}", before + w);
+    assert!((after - (image_x + 20.0)).abs() < 0.01, "after at {after}");
+}
+
+/// A picture relationship naming a missing image part: the workbook opens and prints its text, the
+/// drawing is reported as dropped, and the saved file has no dangling relationship.
+#[test]
+fn a_missing_picture_part_is_reported_and_the_rest_prints_and_saves() {
+    // The logo's relationship names a part the package doesn't have; the footer picture is fine.
+    let bytes = hf_package(
+        "&L&G&CQuote",
+        "&R&G",
+        &[("LH", "width:120pt;height:40pt", "missing.png"), ("RF", "width:60pt;height:20pt", "image2.png")],
+        &[("image2.png", png(6, 2))],
+    );
+    let (wb, report) = gridcraft_xlsx::read_xlsx(&bytes).expect("the workbook still opens");
+    assert_eq!(wb.sheet(0).unwrap().print.header, "&L&G&CQuote");
+    let mut s = Session::new();
+    s.add_document(crate::DocState::new(wb, None, "Quote.xlsx".into(), crate::Trust::FromFile));
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    let text = String::from_utf8_lossy(&pdf);
+    // The header and cell text print and nothing crashes. A drawing with a part missing isn't
+    // kept (writing it back would leave a dangling relationship Excel offers to repair), so no
+    // picture of it prints, and the report says so.
+    assert!(text.contains("(Quote) Tj"));
+    assert!(!text.contains("/Subtype /Image"), "{text}");
+    assert!(
+        report.warnings.iter().any(|w| w.contains("header and footer pictures were dropped") && w.contains("missing.png")),
+        "{:?}",
+        report.warnings
+    );
+    // Saving keeps the sheet and its header text, and opens again.
+    let saved = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+    let (back, _) = gridcraft_xlsx::read_xlsx(&saved).unwrap();
+    assert_eq!(back.sheet(0).unwrap().print.header, "&L&G&CQuote");
+    assert_eq!(back.sheet(0).unwrap().print.footer, "&R&G");
+    let mut t = Session::new();
+    t.add_document(crate::DocState::new(back, None, "Quote.xlsx".into(), crate::Trust::FromFile));
+    let (pdf2, _) = pdf_of(&mut t, json!({}));
+    assert!(!contains(&pdf2, "/Subtype /Image"));
+    // The saved package has no relationship to the missing part.
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(saved)).unwrap();
+    for i in 0..zip.len() {
+        let mut f = zip.by_index(i).unwrap();
+        let mut body = String::new();
+        if f.name().ends_with(".rels") && std::io::Read::read_to_string(&mut f, &mut body).is_ok() {
+            assert!(!body.contains("missing.png"), "{body}");
+        }
+    }
+}
+
+/// Only the page kinds the printed pages use are decoded: a one-page sheet with first and even
+/// pages on decodes only its first-page picture.
+#[test]
+fn only_page_kinds_the_printed_pages_use_are_decoded() {
+    let mut s = s();
+    // One page, Different First Page and Different Odd & Even Pages on: that page is the first
+    // page, so neither the odd-page nor the even-page picture prints.
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    s.execute(
+        "pageLayout.headerFooter",
+        json!({"header": "&L&G", "firstHeader": "&C&G", "evenHeader": "&R&G", "differentFirst": true, "differentOddEven": true}),
+    )
+    .unwrap();
+    keep_hf_pictures(
+        &mut s,
+        &[
+            ("LH", "width:20pt;height:20pt", png(4, 4)),
+            ("CHFIRST", "width:20pt;height:20pt", png(5, 5)),
+            ("RHEVEN", "width:20pt;height:20pt", png(6, 6)),
+        ],
+    );
+    let (pdf, pages) = pdf_of(&mut s, json!({}));
+    let text = String::from_utf8_lossy(&pdf);
+    assert_eq!(pages, 1);
+    assert_eq!(text.matches("/Subtype /Image").count(), 1, "{text}");
+    assert!(text.contains("/Width 5 /Height 5"), "only the first-page picture");
+}
+
+/// The same picture on several sheets is decoded once and is one image object in the PDF.
+#[test]
+fn the_same_picture_on_several_sheets_is_one_image_object() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "one"})).unwrap();
+    s.execute("pageLayout.headerFooter", json!({"header": "&L&G"})).unwrap();
+    let logo = png(8, 4);
+    keep_hf_pictures(&mut s, &[("LH", "width:40pt;height:20pt", logo.clone())]);
+    // A second sheet with the same logo, read from its own part (bytes equal, not shared).
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "two"})).unwrap();
+    s.execute("pageLayout.headerFooter", json!({"header": "&L&G"})).unwrap();
+    let d = s.doc_mut().unwrap();
+    let wb = std::sync::Arc::make_mut(&mut d.wb);
+    let mut kept = wb.sheet(0).unwrap().preserved.as_deref().unwrap().clone();
+    for p in &mut kept.parts {
+        p.data = std::sync::Arc::from(p.data.to_vec());
+    }
+    let two = wb.sheet_index("Two").unwrap();
+    wb.sheet_mut(two).unwrap().preserved = Some(std::sync::Arc::new(kept));
+    let (pdf, pages) = pdf_of(&mut s, json!({"sheets": "all"}));
+    let text = String::from_utf8_lossy(&pdf);
+    assert_eq!(pages, 2);
+    assert_eq!(text.matches("/Subtype /Image").count(), 1, "decoded and written once for both sheets");
+    assert_eq!(text.matches(" cm /Sh1 Do").count(), 2, "drawn on both sheets' pages");
+}
+
+/// A picture over the budget at one size is still tried at a smaller size, while an unreadable one
+/// is tried only once.
+#[test]
+fn a_picture_over_the_budget_at_one_size_still_prints_smaller() {
+    use super::header_footer::HfImageCache;
+    let mut doc = PdfDoc::new();
+    let data: std::sync::Arc<[u8]> = png(200, 200).into();
+    // Room for 60 × 60 pixels: 200 × 200 doesn't fit, 50 × 50 does.
+    let mut cache = HfImageCache::with_budget(60 * 60 * 4);
+    assert!(cache.image(&mut doc, &data, (200, 200)).is_none(), "over the budget");
+    assert!(cache.image(&mut doc, &data, (300, 300)).is_none(), "larger still: not tried again");
+    assert_eq!(cache.tries(), 1);
+    let small = cache.image(&mut doc, &data, (50, 50)).expect("a smaller size fits what is left");
+    assert_eq!(cache.image(&mut doc, &data, (40, 40)), Some(small), "a smaller request reuses it");
+    assert_eq!(cache.tries(), 2);
+    // An image that can't be decoded is tried once, whatever the size.
+    let broken: std::sync::Arc<[u8]> = b"\x89PNG\r\n\x1a\nbroken".to_vec().into();
+    assert!(cache.image(&mut doc, &broken, (100, 100)).is_none());
+    assert!(cache.image(&mut doc, &broken, (10, 10)).is_none());
+    assert_eq!(cache.tries(), 3);
+}
+
+/// A picture whose pixels at the printed size don't fit the budget is refused from its header
+/// alone, before decoding.
+#[test]
+fn a_picture_over_the_budget_is_refused_before_decoding() {
+    use super::header_footer::{Outcome, decode_limited};
+    // Only the PNG header: its size is known, but decoding it would fail.
+    let mut head = png(4000, 3000);
+    head.truncate(33);
+    let pixels = 4000 * 3000 * 4;
+    assert_eq!(decode_limited(&head, 4000, 3000, pixels - 1).err(), Some(Outcome::OverBudget), "refused from the header alone");
+    assert_eq!(decode_limited(&head, 4000, 3000, pixels).err(), Some(Outcome::Unreadable), "within the budget it is decoded, and fails");
+    // The budget counts the size it prints at, not the source's.
+    assert_eq!(decode_limited(&head, 400, 400, 400 * 300 * 4).err(), Some(Outcome::Unreadable));
+    assert_eq!(decode_limited(&head, 400, 400, 400 * 300 * 4 - 1).err(), Some(Outcome::OverBudget));
+    // A whole image right at the budget decodes.
+    let (rgba, w, h) = decode_limited(&png(300, 200), 150, 150, 150 * 100 * 4).expect("fits exactly");
+    assert_eq!((rgba.len(), w, h), (150 * 100 * 4, 150, 100));
+}
+
+/// The size checked against the budget is the size `thumbnail` gives, over awkward ratios.
+#[test]
+fn the_size_checked_against_the_budget_is_the_size_decoding_gives() {
+    use super::header_footer::thumbnail_size;
+    for (src, max) in [
+        ((300, 200), (150, 150)),
+        ((1001, 333), (97, 500)),
+        ((7, 4000), (3, 101)),
+        ((2049, 1365), (640, 427)),
+        ((5, 5), (1, 1)),
+        ((8192, 3), (100, 100)),
+    ] {
+        let img = image::DynamicImage::new_rgba8(src.0, src.1).thumbnail(max.0, max.1);
+        assert_eq!(thumbnail_size(src, max), (img.width(), img.height()), "{src:?} into {max:?}");
+    }
+}
+
+/// A picture smaller than its box keeps its own pixels, which serve a larger box too: the same
+/// logo asked for at two sizes it fits in is decoded once and is one PDF image, while a picture
+/// that was shrunk is decoded again for a larger box.
+#[test]
+fn a_picture_decoded_at_its_own_size_serves_every_larger_box() {
+    use super::header_footer::HfImageCache;
+    let mut doc = PdfDoc::new();
+    let mut cache = HfImageCache::new();
+    let logo: std::sync::Arc<[u8]> = png(200, 100).into();
+    let first = cache.image(&mut doc, &logo, (230, 230)).expect("decodes");
+    assert_eq!(cache.image(&mut doc, &logo, (250, 250)), Some(first), "the same image for a larger box");
+    assert_eq!(cache.tries(), 1);
+    let big: std::sync::Arc<[u8]> = png(400, 200).into();
+    let small = cache.image(&mut doc, &big, (100, 100)).expect("decodes shrunk");
+    let larger = cache.image(&mut doc, &big, (300, 300)).expect("decodes larger");
+    assert_ne!(small, larger, "a shrunk picture is decoded again for a larger box");
+    assert_eq!(cache.tries(), 3);
+}
+
+/// A section's lines split around its `&G`, and `&G` takes no room when there is no picture to
+/// draw.
+#[test]
+fn section_lines_split_around_the_picture() {
+    let cx = HfContext::default();
+    let [l, _, r] = expand_header_footer("&LTop\nA&GB&RNo&G", &cx);
+    let lines = section_lines(&l, true);
+    assert_eq!(
+        lines,
+        [HfLine { before: "Top".into(), after: String::new(), picture: false }, HfLine { before: "A".into(), after: "B".into(), picture: true },]
+    );
+    // Without a picture to draw, &G takes no room.
+    assert_eq!(section_lines(&l, false)[1], HfLine { before: "AB".into(), after: String::new(), picture: false });
+    assert_eq!(section_lines(&r, true), [HfLine { before: "No".into(), after: String::new(), picture: true }]);
+}
