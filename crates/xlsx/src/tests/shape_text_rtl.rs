@@ -85,3 +85,39 @@ fn shape_text_without_rtl_writes_unchanged_ppr() {
     let xml = written_drawing(&text_box("plain", ShapeFormat::default()));
     assert!(!xml.contains("<a:pPr"), "no paragraph properties without alignment or direction: {xml}");
 }
+
+#[test]
+fn word_art_keeps_right_to_left_paragraphs() {
+    let mut wb = text_box("مرحبا\nبالعالم", ShapeFormat { rtl: true, align: Some(ShapeTextAlign::Right), ..Default::default() });
+    wb.sheet_mut(0).unwrap().shapes[0].kind = ShapeKind::WordArt;
+    let xml = written_drawing(&wb);
+    assert!(xml.contains(r#"<a:prstTxWarp prst="textNoShape">"#));
+    assert_eq!(xml.matches(r#"<a:pPr algn="r" rtl="1"/>"#).count(), 2);
+    let (reopened, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let shape = &reopened.sheet(0).unwrap().shapes[0];
+    assert_eq!(shape.kind, ShapeKind::WordArt);
+    assert!(shape.format.rtl);
+    assert_eq!(shape.format.align, Some(ShapeTextAlign::Right));
+    assert_eq!(shape.text, "مرحبا\nبالعالم");
+}
+
+#[test]
+fn word_art_with_empty_text_keeps_its_kind() {
+    let mut wb = text_box("", ShapeFormat::default());
+    wb.sheet_mut(0).unwrap().shapes[0].kind = ShapeKind::WordArt;
+    let (reopened, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(reopened.sheet(0).unwrap().shapes[0].kind, ShapeKind::WordArt);
+}
+
+#[test]
+fn a_text_warp_on_a_filled_ellipse_does_not_make_it_word_art() {
+    let drawing = ARABIC_TEXT_BOX
+        .replace(r#"<xdr:cNvSpPr txBox="1"/>"#, "<xdr:cNvSpPr/>")
+        .replace(r#"prst="rect""#, r#"prst="ellipse""#)
+        .replace(r#"anchor="t"/>"#, r#"anchor="t"><a:prstTxWarp prst="textTriangle"><a:avLst/></a:prstTxWarp></a:bodyPr>"#);
+    let wb = read_drawing(&drawing);
+    assert_eq!(wb.sheet(0).unwrap().shapes[0].kind, ShapeKind::Ellipse);
+    // The marker the writer uses still reads back as WordArt.
+    let marked = drawing.replace("textTriangle", "textNoShape");
+    assert_eq!(read_drawing(&marked).sheet(0).unwrap().shapes[0].kind, ShapeKind::WordArt);
+}
