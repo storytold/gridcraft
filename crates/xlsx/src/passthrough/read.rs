@@ -16,7 +16,7 @@ fn raw_rels(cx: &mut Ctx<'_>, part: &str) -> Result<Vec<PreservedRel>, String> {
         if out.len() >= MAX_RELS {
             return Err(format!("{name}: too many relationships"));
         }
-        let (Some(id), Some(target)) = (r.attr("Id"), r.attr("Target")) else { continue };
+        let (Some(id), Some(target)) = (r.attr("Id").filter(|s| !s.is_empty()), r.attr("Target").filter(|s| !s.is_empty())) else { continue };
         let external = r.attr("TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External"));
         out.push(PreservedRel {
             id: id.to_string(),

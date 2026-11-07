@@ -1003,3 +1003,52 @@ fn a_sheet_of_modelled_controls_keeps_nothing_for_them() {
     assert_eq!(sh.controls.len(), 2);
     assert!(sh.preserved.is_none(), "{:?}", sh.preserved);
 }
+
+#[test]
+fn sheet_document_tasks_survive_a_save() {
+    let task_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Tasks xmlns="http://schemas.microsoft.com/office/spreadsheetml/2019/documenttasks"><Task id="{11111111-2222-3333-4444-555555555555}"/></Tasks>"#;
+    let ct = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/documentTasks/task1.xml" ContentType="application/vnd.ms-excel.documentAdapter+xml"/>
+</Types>"#;
+    let root_rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"#;
+    let wb_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets><sheet name="TasksSheet" sheetId="1" r:id="rId1"/></sheets>
+</workbook>"#;
+    let wb_rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"#;
+    let sheet_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData><row r="1"><c r="A1"><v>42</v></c></row></sheetData>
+</worksheet>"#;
+    let sheet_rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.microsoft.com/office/2019/05/relationships/documenttask" Target="../documentTasks/task1.xml"/>
+</Relationships>"#;
+    let bytes = make_zip(&[
+        ("[Content_Types].xml", ct.as_bytes()),
+        ("_rels/.rels", root_rels.as_bytes()),
+        ("xl/workbook.xml", wb_xml.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", wb_rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", sheet_xml.as_bytes()),
+        ("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels.as_bytes()),
+        ("xl/documentTasks/task1.xml", task_xml.as_bytes()),
+    ]);
+    let (wb, rep) = read_xlsx(&bytes).unwrap();
+    assert!(!rep.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep.warnings);
+    let saved = write_xlsx(&wb).unwrap();
+    let u = Unpacked::new(&saved);
+    u.assert_valid();
+    let sheet = sheet_part(&u, "TasksSheet");
+    assert!(u.rels(&sheet).iter().any(|r| r.1.ends_with("/documenttask") && u.parts.get(&r.2).is_some_and(|b| b == task_xml.as_bytes())));
+}
