@@ -24,7 +24,7 @@ mod options;
 mod print;
 
 use options::{options, platform};
-use print::print;
+use print::{MarginDraft, print};
 
 /// Width of the navigation column.
 const NAV_W: f32 = 196.0;
@@ -124,6 +124,12 @@ pub struct Backstage {
     preview_page: usize,
     /// Print: the preview for (document, revision, whole workbook, fit to page).
     preview: Option<((u64, u64, bool, bool), Json)>,
+    /// Print: margins and the table's place are drawn on the preview and can be dragged.
+    pub show_margins: bool,
+    /// Print: margins being dragged, shown live until the drag ends.
+    margin_draft: Option<MarginDraft>,
+    /// Print: margins in centimetres (else inches); decided on first show.
+    metric: Option<bool>,
     /// Save As: the chosen file type (an extension from [`SAVE_TYPES`]).
     pub save_format: &'static str,
     /// Home and Open: when the recent workbooks were last changed.
@@ -145,6 +151,9 @@ impl Backstage {
             fit_to_page: false,
             preview_page: 0,
             preview: None,
+            show_margins: false,
+            margin_draft: None,
+            metric: None,
             save_format: "xlsx",
             recent: RecentFiles::default(),
         }
