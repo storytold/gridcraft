@@ -745,7 +745,7 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
         let _ = write!(s, " s=\"{style}\"");
     }
     if let Some(picture) = picture {
-        let vm = out.cell_pictures.index(picture);
+        let vm = out.rich_values.picture(picture);
         let _ = write!(s, " t=\"e\" vm=\"{vm}\"><v>#VALUE!</v></c>");
         return;
     }
@@ -773,8 +773,10 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
     let value = match value {
         Value::Error(CellError::Circ) => Value::Number(0.0),
         // #SPILL! and #CALC! are not error codes of the file format (Excel refuses a file that
-        // caches them); Excel itself caches them as #VALUE!. The Python errors are the same kind.
-        Value::Error(CellError::Spill | CellError::Calc | CellError::Python | CellError::Busy | CellError::Timeout | CellError::Blocked) => {
+        // Excel caches these errors as #VALUE! and keeps the original error in rich metadata.
+        Value::Error(e) if crate::richdata::is_rich_error(e) => {
+            let vm = out.rich_values.error(e);
+            let _ = write!(s, " vm=\"{vm}\"");
             Value::Error(CellError::Value)
         }
         v => v,

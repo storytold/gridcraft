@@ -4,9 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gridcraft_core::{DateSystem, RangeRef};
-use gridcraft_model::{
-    CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook, WorkbookView,
-};
+use gridcraft_model::{CalcMode, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook, WorkbookView};
 
 use crate::package::{Package, Rel};
 use crate::styles::{StylesIn, read_styles};
@@ -32,7 +30,7 @@ pub struct Ctx<'a> {
     /// Custom number formats from the styles part, by id.
     pub num_fmts: std::collections::HashMap<u32, String>,
     /// Value metadata blocks, indexed by the worksheet's one-based `vm` attribute.
-    pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
+    pub rich_values: Vec<Option<crate::richdata::RichCell>>,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
     /// Bytes charged so far for shared formulas expanded into dependent cells (see
@@ -256,7 +254,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         persons: Default::default(),
         next_id: 1,
         num_fmts: Default::default(),
-        cell_pictures: vec![],
+        rich_values: vec![],
         cf_ext_ids: vec![],
         shared_formula_bytes: 0,
         known_function,
@@ -267,7 +265,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
     let wb_xml = workbook_xml(&mut cx.pkg, &wb_part)?;
     let wb_rels = cx.pkg.rels(&wb_part)?;
     let mut kept = crate::passthrough::KeptReader::new(&mut cx);
-    cx.cell_pictures = match crate::richdata::read(&mut cx, &wb_rels) {
+    cx.rich_values = match crate::richdata::read(&mut cx, &wb_rels) {
         Ok(pictures) => pictures,
         Err(error) => {
             cx.warn(format!("cell-picture data could not be read ({error}); scalar fallbacks were retained"));
