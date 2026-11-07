@@ -182,7 +182,8 @@ the code and the environment (`xlsx::python_part`, [MS-XLSX] 2.3.10); `io::adopt
 bound what a file can make the app hold (result size, spill ranges, total rebuilt cells, code
 size). `python.set` stores code; where Python doesn't run (see Running Python cells below) new or
 changed code shows `#BLOCKED!`. `python.output` switches a cell's return type; as with a new return type through `python.set`,
-a cached result of the old type goes, so the cell has no result until it runs. `python.clear`
+a cached result of the old type goes, so the cell has no result until it runs, unless the type asked for
+is already in effect or the cell holds a picture with no choice. `python.clear`
 (Convert to Normal Cell) removes the code and keeps the cell's value; the values its result spilled
 become plain values (`Sheet::settle_spill`). A Python-only error (`#BLOCKED!`, `#BUSY!`,
 `#PYTHON!`, `#TIMEOUT!`) is no result and no ordinary cell's value, so a cell that shows one is left
