@@ -30,6 +30,29 @@ fn page(h: &egui_kittest::Harness<'static, SheetApp>) -> Option<&'static str> {
 }
 
 #[test]
+fn calculated_column_option_controls_real_cell_entry_in_both_themes() {
+    for dark in [false, true] {
+        let mut h = harness(Services::default());
+        h.state_mut().ui.dark = dark;
+        h.state_mut().run("file.options", serde_json::json!({})).unwrap();
+        h.run_steps(4);
+        h.get_by_label("Fill formulas in tables to create calculated columns").click();
+        h.run_steps(3);
+        assert!(!h.state().session.prefs.fill_table_formulas);
+        if let Some(dir) = std::env::var_os("GRIDCRAFT_TABLE_COLUMN_SCREENSHOTS") {
+            let path = std::path::PathBuf::from(dir).join(if dark { "options-dark.png" } else { "options-light.png" });
+            h.render().unwrap().save(path).unwrap();
+        }
+        h.state_mut().run("ui.backstage", serde_json::json!({"page":"close"})).unwrap();
+        let s = &mut h.state_mut().session;
+        s.execute("range.setValues", serde_json::json!({"range":"A1", "values":[["Input","Total"],[2,null],[3,null]]})).unwrap();
+        s.execute("insert.table", serde_json::json!({"range":"A1:B3", "header":true})).unwrap();
+        s.execute("cell.set", serde_json::json!({"cell":"B2", "input":"=A2*2"})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::parse("B3").unwrap()), Value::Empty);
+    }
+}
+
+#[test]
 fn new_and_open_from_the_file_tab_keep_the_ribbon_as_it_was() {
     let opened = Arc::new(Mutex::new(0));
     let capture = opened.clone();
