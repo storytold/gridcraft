@@ -175,8 +175,8 @@ fn text_to_columns_keeps_a_py_piece_as_text() {
     s.execute("cell.set", json!({"cell": "A1", "input": "'=PY(\"x\");7"})).unwrap();
     assert_eq!(super::v(&s, "A1"), Value::text("=PY(\"x\");7"));
     s.execute("data.textToColumns", json!({"range": "A1", "delimiters": [";"]})).unwrap();
-    // The default text qualifier takes the quotes away, as in Excel.
-    assert_eq!(super::v(&s, "A1"), Value::text("=PY(x)"), "the piece is kept, not cleared");
+    // A quote in the middle of a field is kept, as in Excel.
+    assert_eq!(super::v(&s, "A1"), Value::text("=PY(\"x\")"), "the piece is kept, not cleared");
     assert_eq!(code(&s, 0, "A1"), None, "and it is not a Python cell");
     assert_eq!(super::v(&s, "B1"), Value::Number(7.0));
 }
