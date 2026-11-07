@@ -1283,7 +1283,11 @@ fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
     let (sheet, o) = object_param(s, p, "object.move")?;
     let at = cell_param(s, p, "at")?;
     edit(s, |cx| {
-        let Some(a) = cx.sheet_mut(sheet)?.object_anchor_mut(o) else { return Err(bad("object.move", "no such object")) };
+        let sh = cx.sheet_mut(sheet)?;
+        // An ink stroke's points scale with its height, so a zero height would flatten them for good.
+        let is_ink = o.kind == ObjKind::Shape && sh.shapes.iter().any(|x| x.id == o.id && x.kind == ShapeKind::Ink);
+        let Some(a) = sh.object_anchor_mut(o) else { return Err(bad("object.move", "no such object")) };
+        let old = (a.width, a.height);
         if let Some(at) = at {
             a.cell = at;
         }
@@ -1297,7 +1301,15 @@ fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
             a.width = v.clamp(1.0, size_cap(a.width)) as f32;
         }
         if let Some(v) = f64_param(p, "height") {
-            a.height = v.clamp(0.0, size_cap(a.height)) as f32;
+            a.height = v.clamp(if is_ink { 1.0 } else { 0.0 }, size_cap(a.height)) as f32;
+        }
+        let new = (a.width, a.height);
+        // An ink stroke's points are relative to its anchor size: resizing scales them (#3289).
+        if o.kind == ObjKind::Shape
+            && new != old
+            && let Some(ink) = sh.shapes.iter_mut().find(|x| x.id == o.id && x.kind == ShapeKind::Ink)
+        {
+            super::draw::scale_ink(ink, old, new);
         }
         Ok(Json::Null)
     })
