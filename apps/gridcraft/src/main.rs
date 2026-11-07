@@ -160,10 +160,11 @@ fn read_clipboard<T>(
 
 /// Where this user's running GridCraft processes tell each other which floating picture is on the
 /// clipboard. Not the system's temporary folder: `/tmp` on Linux is shared, and a note another user
-/// left there can't be replaced, so this user's notes would fail and that user's would be read.
-fn published_picture_note() -> std::path::PathBuf {
-    let dir = gridcraft_mcp::control_auth::user_dir().filter(|dir| std::fs::create_dir_all(dir).is_ok());
-    dir.unwrap_or_else(std::env::temp_dir).join(gridcraft_ui_egui::published_picture::NOTE_FILE)
+/// left there can't be replaced, so this user's notes would fail and that user's would be read. So
+/// with no folder of this user's (`dir`), or one that can't be made, there is no note.
+fn published_picture_note(dir: Option<std::path::PathBuf>) -> Option<std::path::PathBuf> {
+    let dir = dir.filter(|dir| std::fs::create_dir_all(dir).is_ok())?;
+    Some(dir.join(gridcraft_ui_egui::published_picture::NOTE_FILE))
 }
 
 fn services() -> Services {
@@ -198,11 +199,17 @@ fn services() -> Services {
             clipboard.as_mut().ok_or("clipboard unavailable")?.set_image(data).map_err(|e| e.to_string())
         })),
         note_published_picture: Some(Box::new(|hash| {
-            if let Err(e) = gridcraft_ui_egui::published_picture::write(&published_picture_note(), hash) {
+            let Some(note) = published_picture_note(gridcraft_mcp::control_auth::user_dir()) else {
+                log::warn!("Can't note the published picture: this user has no folder for it");
+                return;
+            };
+            if let Err(e) = gridcraft_ui_egui::published_picture::write(&note, hash) {
                 log::warn!("Can't note the published picture: {e}");
             }
         })),
-        read_published_picture: Some(Box::new(|| gridcraft_ui_egui::published_picture::read(&published_picture_note()))),
+        read_published_picture: Some(Box::new(|| {
+            published_picture_note(gridcraft_mcp::control_auth::user_dir()).and_then(|note| gridcraft_ui_egui::published_picture::read(&note))
+        })),
         pick_open: Some(Box::new(|| {
             rfd::FileDialog::new()
                 .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "slk", "json"])
@@ -483,11 +490,16 @@ mod packaging_tests {
     use gridcraft_engine::io::FileKind;
 
     #[test]
-    fn the_published_picture_note_is_in_this_users_folder() {
-        let Some(dir) = gridcraft_mcp::control_auth::user_dir() else { return };
-        let note = super::published_picture_note();
-        assert_eq!(note.parent(), Some(dir.as_path()));
-        assert_ne!(note.parent(), Some(std::env::temp_dir().as_path()));
+    fn the_published_picture_note_is_in_this_users_folder_or_nowhere() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-note-test-{}", std::process::id()));
+        let note = super::published_picture_note(Some(dir.clone()));
+        assert_eq!(note.as_deref().and_then(|note| note.parent()), Some(dir.as_path()));
+        // No folder, or one that can't be made: no note, rather than one in a shared folder.
+        assert_eq!(super::published_picture_note(None), None);
+        let file = dir.join("a file");
+        std::fs::write(&file, b"").unwrap();
+        assert_eq!(super::published_picture_note(Some(file.join("below"))), None);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// The text between `start` and `end` that follows each `marker` in `text`, sorted (e.g. the
