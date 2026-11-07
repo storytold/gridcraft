@@ -88,11 +88,33 @@ pub fn bool_cached_as_number(expected: &Value, actual: &Value) -> bool {
     matches!((expected, actual), (Value::Number(n), Value::Bool(b)) if *n == if *b { 1.0 } else { 0.0 })
 }
 
-/// Whether GridCraft's `actual` agrees with the producer's `expected`.
+/// Whether a text cache entry uses the error spelling emitted by Google Sheets and older writers.
+fn cached_error_text(s: &str) -> Option<&'static str> {
+    match s.trim() {
+        "#DIV/0!" => Some("#DIV/0!"),
+        "#N/A" => Some("#N/A"),
+        "#VALUE!" => Some("#VALUE!"),
+        "#REF!" => Some("#REF!"),
+        "#NAME?" => Some("#NAME?"),
+        "#NUM!" => Some("#NUM!"),
+        "#NULL!" => Some("#NULL!"),
+        "#GETTING_DATA" => Some("#GETTING_DATA"),
+        "#CALC!" => Some("#CALC!"),
+        "#SPILL!" => Some("#SPILL!"),
+        _ => None,
+    }
+}
+
+/// Whether a cached string error literal agrees with the evaluated error value.
+fn cached_error_matches(s: &str, err: &CellError) -> bool {
+    cached_error_text(s).is_some_and(|literal| literal.eq_ignore_ascii_case(err.as_str()))
+}
+
 pub fn values_match(expected: &Value, actual: &Value, tolerance: f64) -> bool {
     match (expected, actual) {
         (Value::Number(a), Value::Number(b)) => (a - b).abs() <= tolerance * a.abs().max(b.abs()).max(1.0),
         (Value::Text(a), Value::Text(b)) => a == b,
+        (Value::Text(a), Value::Error(b)) => cached_error_matches(a, b),
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Error(a), Value::Error(b)) => a == b,
         _ => false,

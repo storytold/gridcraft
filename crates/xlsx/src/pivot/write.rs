@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Stats {
     blank: bool,
     text: bool,
@@ -50,7 +50,7 @@ impl Stats {
     }
 }
 
-/// Date grouping of a cache field.
+#[derive(Clone)]
 struct Group {
     by: PivotDateGroup,
     /// The database field the grouping applies to.
@@ -63,6 +63,7 @@ struct Group {
     items: Vec<String>,
 }
 
+#[derive(Clone)]
 struct CField {
     name: String,
     /// Column offset in the source (database fields only).
@@ -87,7 +88,7 @@ impl CField {
     }
 }
 
-/// A cache built from a PivotTable's source.
+#[derive(Clone)]
 struct Cache {
     fields: Vec<CField>,
     /// Pivot field → cache field, by the pivot field's position in rows, then columns.
@@ -96,12 +97,32 @@ struct Cache {
     records: Option<(u64, String)>,
 }
 
+fn cache_compatible(a: &Cache, b: &Cache) -> bool {
+    a.source_xml == b.source_xml
+        && a.fields.len() == b.fields.len()
+        && a.fields.iter().zip(&b.fields).all(|(x, y)| {
+            x.name == y.name
+                && x.col == y.col
+                && x.itemized == y.itemized
+                && x.items == y.items
+                && x.formula == y.formula
+                && match (&x.group, &y.group) {
+                    (None, None) => true,
+                    (Some(g), Some(h)) => {
+                        g.by == h.by && g.base == h.base && g.par == h.par && g.start == h.start && g.end == h.end && g.items == h.items
+                    }
+                    _ => false,
+                }
+        })
+}
 /// PivotTables being written; the tables themselves are finished after the styles part (their
 /// value number formats need style number-format ids).
 #[derive(Default)]
 pub struct PivotWriter {
     /// (cache id, workbook-relative part name).
     caches: Vec<(u32, String)>,
+    /// Definitions already written, used to share one cache across compatible PivotTables.
+    cache_defs: Vec<Cache>,
     pending: Vec<Pending>,
     tables: u32,
 }
@@ -121,20 +142,27 @@ impl PivotWriter {
         let Some(sheet) = wb.sheet(si) else { return };
         for (idx, pt) in sheet.pivots.iter().enumerate() {
             let Some(cache) = build_cache(wb, pt, si) else { continue };
-            let n = self.caches.len() as u32 + 1;
-            let cache_part = format!("xl/pivotCache/pivotCacheDefinition{n}.xml");
-            let rec_rid = if let Some((count, xml)) = &cache.records {
-                let mut r = Rels::default();
-                let rid = r.add("pivotCacheRecords", &format!("pivotCacheRecords{n}.xml"));
-                out.part(&format!("xl/pivotCache/_rels/pivotCacheDefinition{n}.xml.rels"), None, r.xml().into_bytes());
-                let s = format!("{XML_DECL}<pivotCacheRecords xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\" count=\"{count}\">{xml}</pivotCacheRecords>");
-                out.part(&format!("xl/pivotCache/pivotCacheRecords{n}.xml"), Some(CT_PIVOT_CACHE_REC), s.into_bytes());
-                Some(rid)
+            let n = if let Some(existing) = self.cache_defs.iter().position(|c| cache_compatible(c, &cache)) {
+                existing as u32 + 1
             } else {
-                None
+                let n = self.caches.len() as u32 + 1;
+                let cache_part = format!("xl/pivotCache/pivotCacheDefinition{n}.xml");
+                let rec_rid = if let Some((count, xml)) = &cache.records {
+                    let mut r = Rels::default();
+                    let rid = r.add("pivotCacheRecords", &format!("pivotCacheRecords{n}.xml"));
+                    out.part(&format!("xl/pivotCache/_rels/pivotCacheDefinition{n}.xml.rels"), None, r.xml().into_bytes());
+                    let s =
+                        format!("{XML_DECL}<pivotCacheRecords xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\" count=\"{count}\">{xml}</pivotCacheRecords>");
+                    out.part(&format!("xl/pivotCache/pivotCacheRecords{n}.xml"), Some(CT_PIVOT_CACHE_REC), s.into_bytes());
+                    Some(rid)
+                } else {
+                    None
+                };
+                out.part(&cache_part, Some(CT_PIVOT_CACHE_DEF), cache_xml(&cache, rec_rid.as_deref(), wb.date_system).into_bytes());
+                self.caches.push((n, format!("pivotCache/pivotCacheDefinition{n}.xml")));
+                self.cache_defs.push(cache.clone());
+                n
             };
-            out.part(&cache_part, Some(CT_PIVOT_CACHE_DEF), cache_xml(&cache, rec_rid.as_deref(), wb.date_system).into_bytes());
-            self.caches.push((n, format!("pivotCache/pivotCacheDefinition{n}.xml")));
             self.tables += 1;
             let t = self.tables;
             rels.add("pivotTable", &format!("../pivotTables/pivotTable{t}.xml"));

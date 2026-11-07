@@ -97,6 +97,25 @@ fn errors_compare_by_kind() {
     assert!(values_match(&Value::Error(CellError::NA), &Value::Error(CellError::NA), 0.0));
     assert!(!values_match(&Value::Error(CellError::NA), &Value::Error(CellError::Value), 0.0));
 }
+#[test]
+fn cached_error_text_literals_match_evaluated_errors() {
+    for (literal, error) in [
+        ("#DIV/0!", CellError::Div0),
+        (" #N/A ", CellError::NA),
+        ("#VALUE!", CellError::Value),
+        ("#REF!", CellError::Ref),
+        ("#NAME?", CellError::Name),
+        ("#NUM!", CellError::Num),
+        ("#NULL!", CellError::Null),
+        ("#GETTING_DATA", CellError::GettingData),
+        ("#CALC!", CellError::Calc),
+        ("#SPILL!", CellError::Spill),
+    ] {
+        let expected = Value::text(literal);
+        assert!(values_match(&expected, &Value::Error(error), 0.0), "{literal}");
+    }
+    assert!(!values_match(&Value::text("#N/A"), &Value::Error(CellError::Value), 0.0));
+}
 
 #[test]
 fn numbers_compare_within_tolerance() {

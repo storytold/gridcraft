@@ -94,7 +94,7 @@ const PACKAGE_ROOTS: &[&str] = &["custom-properties", "extensibility", "webexten
 /// Relationship kinds kept from the workbook without a workbook element.
 const WORKBOOK_ROOTS: &[&str] = &["customXml", "connections", "xmlMaps"];
 /// Relationship kinds kept from a sheet without a sheet element.
-const SHEET_ROOTS: &[&str] = &["queryTable", "tableSingleCells"];
+const SHEET_ROOTS: &[&str] = &["queryTable", "tableSingleCells", "documenttask"];
 /// Sheet relationship kinds that mean the sheet XML may hold elements worth keeping.
 const SHEET_ELEMENT_KINDS: &[&str] = &["oleObject", "ctrlProp", "control", "image", "package", "printerSettings"];
 /// Attributes of `<fileVersion>` (CT_FileVersion).
@@ -169,6 +169,7 @@ const OWN_DIRS: &[&str] = &[
     "xl/activex/",
     "xl/webextensions/",
     "xl/printersettings/",
+    "xl/documenttasks/",
 ];
 
 fn kind(rel_type: &str) -> &str {
