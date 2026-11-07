@@ -1,7 +1,7 @@
 //! LaTeX to OMML, the open Office Math Markup of ECMA-376 Part 1 §22.1, for the common subset:
 //! runs, fractions and binomials, roots, scripts, big operators with limits, functions and
-//! limits, delimiters, matrices, accents, bars, braces and font styles. Anything else is an
-//! error, and the caller saves the equation as text only.
+//! limits, delimiters, matrices, accents, bars, braces, font styles and text colour (`\color`,
+//! `\textcolor`). Anything else is an error, and the caller saves the equation as text only.
 
 use ratex_parser::ParseNode;
 use ratex_parser::parse_node::Mode;
@@ -19,7 +19,7 @@ pub fn to_omml(latex: &str, size_pt: f32, ink: Option<[u8; 3]>) -> Result<String
     crate::guarded(|| {
         let nodes = crate::parse(latex)?;
         let sz = if size_pt.is_finite() { (size_pt * 100.0).round().clamp(100.0, 400_000.0) as u32 } else { 1100 };
-        let fill = ink.map(|[r, g, b]| format!("<a:solidFill><a:srgbClr val=\"{r:02X}{g:02X}{b:02X}\"/></a:solidFill>")).unwrap_or_default();
+        let fill = ink.map(fill_of).unwrap_or_default();
         let mut w = Writer { out: String::from("<m:oMath>"), sz, fill };
         w.seq(&nodes, &Style::default(), 0)?;
         w.out.push_str("</m:oMath>");
@@ -35,6 +35,11 @@ struct Style {
     sty: Option<&'static str>,
     /// Ordinary text (`\text`): `m:nor`.
     normal: bool,
+    /// An explicit text colour (`\color`), which wins over the ink colour. Black is a colour
+    /// like another here: `{\color{black}x}` stays black on a dark theme (the layout maps black
+    /// to "automatic", which a painter can follow; a file has no such second chance). Only runs
+    /// carry it: fraction bars, radical signs and brackets take the paragraph's colour.
+    color: Option<[u8; 3]>,
 }
 
 struct Writer {
@@ -42,6 +47,11 @@ struct Writer {
     sz: u32,
     /// The DrawingML fill of every run (`<a:solidFill>…</a:solidFill>`), or empty.
     fill: String,
+}
+
+/// The DrawingML fill for a colour.
+fn fill_of([r, g, b]: [u8; 3]) -> String {
+    format!("<a:solidFill><a:srgbClr val=\"{r:02X}{g:02X}{b:02X}\"/></a:solidFill>")
 }
 
 fn unsupported(what: &str) -> MathError {
@@ -140,10 +150,18 @@ impl Writer {
         // Word trims a run's text unless it is marked, so a run that is or ends in whitespace
         // (the space after `\text{if }`) says so.
         let space = if text.starts_with(char::is_whitespace) || text.ends_with(char::is_whitespace) { " xml:space=\"preserve\"" } else { "" };
+        let own_fill;
+        let fill = match st.color {
+            Some(rgb) => {
+                own_fill = fill_of(rgb);
+                &own_fill
+            }
+            None => &self.fill,
+        };
         self.out.push_str(&format!(
             "<a:rPr lang=\"en-US\" sz=\"{}\">{}<a:latin typeface=\"Cambria Math\"/></a:rPr><m:t{}>{}</m:t></m:r>",
             self.sz,
-            self.fill,
+            fill,
             space,
             esc(text)
         ));
@@ -230,14 +248,32 @@ impl Writer {
                 self.run(t, st);
             }
             ParseNode::Kern { .. } => {}
-            ParseNode::OrdGroup { body, .. }
-            | ParseNode::Styling { body, .. }
-            | ParseNode::Sizing { body, .. }
-            | ParseNode::MClass { body, .. }
-            | ParseNode::Href { body, .. }
-            | ParseNode::HBox { body, .. }
-            | ParseNode::Pmb { body, .. } => self.seq(body, st, depth)?,
-            ParseNode::Color { body, .. } => self.seq(body, st, depth)?,
+            ParseNode::OrdGroup { body, .. } | ParseNode::MClass { body, .. } => self.seq(body, st, depth)?,
+            // `\displaystyle` and `\textstyle` are Office Math's own call; the script styles shrink
+            // what follows, which a run here cannot carry.
+            ParseNode::Styling { style, body, .. } => {
+                if matches!(style, ratex_parser::parse_node::StyleStr::Script | ratex_parser::parse_node::StyleStr::Scriptscript) {
+                    return Err(unsupported("A script style command"));
+                }
+                self.seq(body, st, depth)?;
+            }
+            // Text in a box is ordinary text, and a poor man's bold is bold.
+            ParseNode::HBox { body, .. } => self.seq(body, &Style { normal: true, ..st.clone() }, depth)?,
+            ParseNode::Pmb { body, .. } => self.seq(body, &Style { sty: Some("b"), ..st.clone() }, depth)?,
+            ParseNode::Color { color, body, .. } => {
+                let c = ratex_types::color::Color::parse(color).ok_or_else(|| unsupported(&format!("The colour {color}")))?;
+                // A run carries RGB only; `transparent` and alpha hex would be written opaque.
+                if c.a < 1.0 {
+                    return Err(unsupported(&format!("The translucent colour {color}")));
+                }
+                let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                let s = Style { color: Some([q(c.r), q(c.g), q(c.b)]), ..st.clone() };
+                self.seq(body, &s, depth)?;
+            }
+            // These change the size or make a link, which a run here cannot carry; saying so
+            // beats saving the equation without them.
+            ParseNode::Sizing { .. } => return Err(unsupported("A text size command")),
+            ParseNode::Href { .. } => return Err(unsupported("A link")),
             ParseNode::Text { body, font, .. } => {
                 let mut s = Style { normal: true, ..st.clone() };
                 if let Some(f) = font {
@@ -602,6 +638,44 @@ mod tests {
         assert!(to_omml(&"x".repeat(5000), 11.0, None).is_err());
         assert!(om("x").starts_with("<m:oMath>"));
         assert!(to_omml("x", f32::NAN, None).unwrap().contains("sz=\"1100\""));
+    }
+
+    #[test]
+    fn colours_are_kept_and_size_and_links_are_errors() {
+        let red = "<a:solidFill><a:srgbClr val=\"FF0000\"/></a:solidFill>";
+        let o = om("{\\color{red}x}y\\textcolor{blue}{z}");
+        assert_eq!(o.matches(red).count(), 1, "{o}");
+        assert_eq!(o.matches("<a:solidFill>").count(), 2, "only x and z are coloured: {o}");
+        assert!(o.contains("val=\"0000FF\""), "{o}");
+        // A colour applies to what follows it in the group, through scripts and fractions.
+        let o = om("\\color{#00ff00}\\frac{a}{b}^2");
+        assert_eq!(o.matches("val=\"00FF00\"").count(), o.matches("<m:r>").count(), "{o}");
+        // An explicit black is black, not the paragraph's colour, and wins over the ink.
+        let o = to_omml("{\\color{black}x}y", 11.0, Some([0xFF, 0xFF, 0xFF])).unwrap();
+        assert!(o.find("000000").is_some_and(|b| o.find("FFFFFF").is_some_and(|w| b < w)), "{o}");
+        assert!(om("{\\color{black}x}y").contains("val=\"000000\""), "black without an ink colour is still written");
+        // The inner colour wins and the outer one returns after the group.
+        let o = om("\\color{red}a{\\color{blue}b}c");
+        let fills: Vec<&str> = o.matches("srgbClr val=\"").map(|_| "").collect();
+        assert_eq!(fills.len(), 3, "{o}");
+        let (r1, b, r2) = (o.find("FF0000"), o.find("0000FF"), o.rfind("FF0000"));
+        assert!(r1 < b && b < r2, "{o}");
+        for (s, what) in [
+            ("\\large x", "text size"),
+            ("\\frac{\\tiny a}{b}", "text size"),
+            ("\\scriptstyle x", "script style"),
+            ("\\href{https://example.org}{x}", "link"),
+            ("\\color{nocolour}x", "colour"),
+            ("\\color{transparent}x", "translucent colour"),
+            ("\\textcolor{#ff000080}{x}", "translucent colour"),
+        ] {
+            let e = to_omml(s, 11.0, None).unwrap_err();
+            assert!(e.message.contains(what), "{s}: {e}");
+        }
+        // Boxed text is ordinary text, `\pmb` is bold.
+        assert!(bare("\\hbox{ab}").contains("<m:nor/>"));
+        assert!(bare("\\pmb{x}").contains("<m:sty m:val=\"b\"/>"));
+        assert!(to_omml("\\displaystyle x", 11.0, None).is_ok());
     }
 
     #[test]
