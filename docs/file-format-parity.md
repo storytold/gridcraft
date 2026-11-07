@@ -152,12 +152,13 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | Encrypted workbooks: save with password (#11) | 4–6 |
 | XLSB and ODS: formulas and formatting on import; then write | 10–15 |
 | CSV/text: encoding choice, `.prn`, `.dif`, XML Spreadsheet 2003 | 4–7 |
-| PDF: embed subsetted system fonts so every script exports | (counted in [localization](localization-parity.md) script work) |
+| PDF: broaden script coverage beyond Thai, using pinned or explicitly supplied embeddable fonts | (counted in [localization](localization-parity.md) script work) |
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | minor | PDF Unicode export uses HarfRust shaping and deterministic font selection from the pinned craft-fonts bundle or explicit `pdfFonts`; embedding checks OS/2 fsType, and host system fonts are never scanned |
 | 2026-11-02 | minor | XLSX: buttons, scroll bars and spin buttons read and written (control properties parts, `<controls>`, VML `x:ClientData`); other form controls stay with pass-through; a button's command, fixed input or output cell travels in a hidden defined name and comes back only while the file still assigns the button's macro (or none, for a command) |
 | 2026-11-03 | minor | SYLK (`.slk`) import: values, R1C1 formulas as A1 (shared formulas too) with cached results, number formats and column widths; import only (#1481) |
 | 2026-11-03 | minor | Opening a web page (HTML) reads its first table as a sheet, whatever the file is called: a web app's "Export to Excel" saved as `.xls` no longer opens as lines of markup. Values read as in a CSV (or as text with `csvAsText`), `<th>` cells are bold and centred, `<x:Name>` names the sheet, and a page not named `.htm`/`.html` opens with a warning (#3166) |

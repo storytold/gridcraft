@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-02 · **Change:** minor (§17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-03 · **Change:** minor (§5: Thai PDF shaping and permitted font embedding; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -53,11 +53,13 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Impact:** charts are in most business workbooks.
 - **Estimate:** 25–35 h for beta (40–60 h full). [chart-parity.md](chart-parity.md)
 
-### 5. Text in non-Latin scripts doesn't render or export (L)
-- **Missing:** CJK font fallback, complex shaping (Arabic, Devanagari, Thai), bidi, non-Latin PDF.
+### 5. Text in non-Latin scripts doesn't fully render or export (L)
+- **Missing:** CJK font fallback, complex shaping for Arabic and Devanagari, bidi, and physical-printer validation. Thai PDF shaping and Unicode text extraction are supported when an embeddable covering TrueType face is available.
 - **Evidence:** system-font fallback for CJK, Thai and Hebrew landed in #38 (closed #32); #142
   (Chinese text) awaits confirmation; #54 (symbols as boxes on Fedora); no shaping for Arabic or
-  Devanagari; PDF writer uses 14 standard fonts only.
+  Devanagari. PDF export uses HarfRust for Thai and embeds permitted TrueType faces, with a
+  Standard/CID fallback when no face covers the text. Installed-font fallback can vary by host;
+  pinned craft-fonts provides a reproducible font source for CI and packaged builds that include it.
 - **Impact:** blocks most of the world's users even with an English UI.
 - **Estimate:** 12–20 h. [localization-parity.md](localization-parity.md)
 
@@ -191,6 +193,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-11-02 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |
 | 2026-11-01 | minor | §13: the Analysis ToolPak has all 19 of Excel's tools (two-factor Anova with and without replication, z-Test, Fourier Analysis, Random Number Generation, Sampling); its chart output remains. The stale "`data.solver`, `data.analysisToolPak` missing" and "no Forecast Start" sentences removed |
 | 2026-11-01 | minor | §4: chart data tables implemented for column, bar, line, area and compatible combo charts, with legend keys and border settings, live source values, XLSX round-trip and print/PDF; other chart gaps remain. |
+| 2026-11-03 | minor | §5: Thai PDF shaping, Unicode extraction and permitted TrueType embedding; Arabic/Devanagari shaping, CJK coverage and bidi remain open. |
 | 2026-10-31 | minor | §13: Solver Options (Max Evaluations, Integer Optimality and the Evolutionary options), saved with the model |
 | 2026-10-31 | minor | §13: Solver Load/Save Model (`data.solverSaveModel`, `data.solverLoadModel`) and Reset All (`data.solverReset`), with buttons in the Solver Parameters dialog |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
