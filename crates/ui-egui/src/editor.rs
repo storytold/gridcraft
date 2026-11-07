@@ -166,12 +166,14 @@ impl EditState {
         self.sync_caret = true;
     }
 
-    /// Whether the text is a formula (never in Python mode: there it is code).
+    /// Whether the text is a formula (never in Python mode: there it is code). As in Excel, a lone
+    /// `+` or `-` already starts one, so clicking a cell or pressing an arrow key next inserts a
+    /// reference (`+A1`).
     pub fn is_formula(&self) -> bool {
         !self.python
             && (self.text.starts_with('=')
-                || (self.text.starts_with('+') && self.text.len() > 1)
-                || (self.text.starts_with('-') && self.text.len() > 1 && !self.text[1..].starts_with(|c: char| c.is_ascii_digit())))
+                || self.text.starts_with('+')
+                || (self.text.starts_with('-') && !self.text[1..].starts_with(|c: char| c.is_ascii_digit())))
     }
 
     fn byte_caret(&self) -> usize {
@@ -493,6 +495,23 @@ mod tests {
         assert!(e.can_point());
         let e2 = EditState::new(1, 0, CellRef::new(0, 0), "hello".into(), true, false);
         assert!(!e2.can_point());
+    }
+
+    #[test]
+    fn a_lone_plus_or_minus_starts_pointing() {
+        // As in Excel, typing `+` (or `-`) and then clicking a cell or pressing an arrow key
+        // inserts its reference: `+A1`, not a move to that cell.
+        for sign in ["+", "-"] {
+            let mut e = EditState::new(1, 0, CellRef::new(0, 0), sign.into(), true, false);
+            assert!(e.is_formula() && e.can_point(), "{sign}");
+            e.insert_ref("A1");
+            assert_eq!(e.text, format!("{sign}A1"));
+        }
+        // A signed number being typed is not a formula, and nothing follows a digit to point at.
+        let e = EditState::new(1, 0, CellRef::new(0, 0), "-5".into(), true, false);
+        assert!(!e.is_formula() && !e.can_point());
+        let e = EditState::new(1, 0, CellRef::new(0, 0), "+5".into(), true, false);
+        assert!(!e.can_point());
     }
 
     #[test]
