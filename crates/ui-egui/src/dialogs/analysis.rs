@@ -6,16 +6,16 @@ use super::{Dialog, Field, Json, Map, SheetApp, json, vec2};
 /// the shared buttons do, so cancelling is never taken for a confirmation.
 pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     egui::Grid::new("gs").show(ui, |ui| {
-        let l = ui.label("Set cell:");
+        let l = ui.label(crate::i18n::current(ui.ctx()).tr("Set cell:"));
         ref_edit(app, ui, d, "set", RefLabel::By(l.id), 200.0);
         ui.end_row();
-        let l = ui.label("To value:");
+        let l = ui.label(crate::i18n::current(ui.ctx()).tr("To value:"));
         let mut to = d.values.get("to").and_then(Json::as_str).unwrap_or("").to_string();
         if ui.add(egui::TextEdit::singleline(&mut to).desired_width(170.0)).labelled_by(l.id).changed() {
             d.values.insert("to".into(), json!(to));
         }
         ui.end_row();
-        let l = ui.label("By changing cell:");
+        let l = ui.label(crate::i18n::current(ui.ctx()).tr("By changing cell:"));
         ref_edit(app, ui, d, "changing", RefLabel::By(l.id), 200.0);
         ui.end_row();
     });
@@ -228,14 +228,14 @@ const TOOLPAK_CHROME: f32 = 240.0;
 pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     use gridcraft_engine::cmd::analysis::TOOLS;
     if d.values.get("askOverwrite").and_then(Json::as_bool) == Some(true) {
-        ui.label("The output range already holds data. Replace it with the report?");
+        ui.label(crate::i18n::current(ui.ctx()).tr("The output range already holds data. Replace it with the report?"));
         ui.horizontal(|ui| {
-            if ui.button("Replace").clicked() {
+            if ui.button(crate::i18n::current(ui.ctx()).tr("Replace")).clicked() {
                 d.values.remove("askOverwrite");
                 d.values.insert("overwrite".into(), json!(true));
                 *confirm = true;
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button(crate::i18n::current(ui.ctx()).tr("Cancel")).clicked() {
                 d.values.remove("askOverwrite");
             }
         });
@@ -243,7 +243,7 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
     }
     let tool = d.values.get("tool").and_then(Json::as_str).unwrap_or("").to_string();
     let Some((_, label)) = TOOLS.iter().find(|(id, _)| *id == tool) else {
-        ui.label(egui::RichText::new("Analysis Tools").strong());
+        ui.label(egui::RichText::new(crate::i18n::current(ui.ctx()).tr("Analysis Tools")).strong());
         let pick = d.values.get("pick").and_then(Json::as_str).unwrap_or("").to_string();
         let mut chosen = false;
         egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
@@ -275,7 +275,7 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
     let room = (ui.ctx().content_rect().height() - TOOLPAK_CHROME).max(120.0);
     egui::ScrollArea::vertical().id_salt("toolpakForm").max_height(room).show(ui, |ui| form_fields(app, ui, d));
     ui.separator();
-    ui.label(egui::RichText::new("Output options").strong());
+    ui.label(egui::RichText::new(crate::i18n::current(ui.ctx()).tr("Output options")).strong());
     let to = d.values.get("outputTo").and_then(Json::as_str).unwrap_or("newSheet").to_string();
     for (key, choice, text_label) in [("output", "range", "Output Range:"), ("newSheet", "newSheet", "New Worksheet Ply:")] {
         ui.horizontal(|ui| {
@@ -326,17 +326,17 @@ fn solver_options(ui: &mut egui::Ui, d: &mut Dialog, edit: impl Fn(&mut egui::Ui
     let mut done = false;
     egui::Grid::new("solverOptions").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
         for (title, keys) in [("All Methods", &SOLVER_OPTIONS[..2]), ("Evolutionary", &SOLVER_OPTIONS[2..])] {
-            ui.label(egui::RichText::new(title).strong());
+            ui.label(egui::RichText::new(crate::i18n::current(ui.ctx()).tr(title)).strong());
             ui.end_row();
             for (key, label, _) in keys {
-                ui.label(*label);
+                ui.label(crate::i18n::current(ui.ctx()).tr(label));
                 edit(ui, d, key, 100.0, label);
                 ui.end_row();
             }
         }
     });
     let mut bounds = d.values.get("requireBounds").and_then(Json::as_bool).unwrap_or(true);
-    if ui.checkbox(&mut bounds, "Require Bounds on Variables").changed() {
+    if ui.checkbox(&mut bounds, crate::i18n::current(ui.ctx()).tr("Require Bounds on Variables")).changed() {
         d.values.insert("requireBounds".into(), json!(bounds));
     }
     ui.add_space(8.0);
@@ -344,10 +344,10 @@ fn solver_options(ui: &mut egui::Ui, d: &mut Dialog, edit: impl Fn(&mut egui::Ui
     // window takes all the height it is offered.
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button(" Cancel ").clicked() {
+            if ui.button(crate::i18n::current(ui.ctx()).tr(" Cancel ")).clicked() {
                 cancel_solver_options(d);
             }
-            if ui.button("  OK  ").clicked() {
+            if ui.button(crate::i18n::current(ui.ctx()).tr("  OK  ")).clicked() {
                 done = true;
             }
         });
@@ -455,22 +455,22 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
         return;
     }
     ui.horizontal(|ui| {
-        let l = ui.label("Set Objective:");
+        let l = ui.label(crate::i18n::current(ui.ctx()).tr("Set Objective:"));
         ref_edit(app, ui, d, "objective", RefLabel::By(l.id), 230.0);
     });
     let goal = text(d, "goal");
     ui.horizontal(|ui| {
-        ui.label("To:");
+        ui.label(crate::i18n::current(ui.ctx()).tr("To:"));
         for (g, label) in [("max", "Max"), ("min", "Min"), ("value", "Value Of:")] {
-            if ui.radio(goal == g, label).clicked() {
+            if ui.radio(goal == g, crate::i18n::current(ui.ctx()).tr(label)).clicked() {
                 d.values.insert("goal".into(), json!(g));
             }
         }
         edit(ui, d, "value", 80.0, "Value Of:");
     });
-    let l = ui.label("By Changing Variable Cells:");
+    let l = ui.label(crate::i18n::current(ui.ctx()).tr("By Changing Variable Cells:"));
     ref_edit(app, ui, d, "variables", RefLabel::By(l.id), 420.0);
-    ui.label("Subject to the Constraints:");
+    ui.label(crate::i18n::current(ui.ctx()).tr("Subject to the Constraints:"));
     let list: Vec<String> = d
         .values
         .get("constraints")
@@ -505,7 +505,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
         if !matches!(op.as_str(), "int" | "bin") {
             ref_edit(app, ui, d, "newRhs", RefLabel::Named("Constraint Value"), 130.0);
         }
-        if ui.button("Add").clicked() {
+        if ui.button(crate::i18n::current(ui.ctx()).tr("Add")).clicked() {
             let lhs = text(d, "newLhs");
             if !lhs.trim().is_empty() {
                 let rhs = if matches!(op.as_str(), "int" | "bin") { String::new() } else { format!(" {}", text(d, "newRhs").trim()) };
@@ -516,7 +516,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
                 d.values.insert("newRhs".into(), json!(""));
             }
         }
-        if ui.add_enabled(d.list_index < list.len(), egui::Button::new("Delete")).clicked() {
+        if ui.add_enabled(d.list_index < list.len(), egui::Button::new(crate::i18n::current(ui.ctx()).tr("Delete"))).clicked() {
             let mut list = list.clone();
             if d.list_index < list.len() {
                 list.remove(d.list_index);
@@ -525,16 +525,19 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
         }
     });
     let mut nonneg = d.values.get("nonNegative").and_then(Json::as_bool).unwrap_or(true);
-    if ui.checkbox(&mut nonneg, "Make Unconstrained Variables Non-Negative").changed() {
+    if ui.checkbox(&mut nonneg, crate::i18n::current(ui.ctx()).tr("Make Unconstrained Variables Non-Negative")).changed() {
         d.values.insert("nonNegative".into(), json!(nonneg));
     }
     let method = text(d, "method");
     ui.horizontal(|ui| {
-        ui.label("Select a Solving Method:");
-        let label = |m: &str| match m {
-            "simplex" => "Simplex LP",
-            "evolutionary" => "Evolutionary",
-            _ => "GRG Nonlinear",
+        ui.label(crate::i18n::current(ui.ctx()).tr("Select a Solving Method:"));
+        let lang = crate::i18n::current(ui.ctx());
+        let label = |m: &str| {
+            lang.tr(match m {
+                "simplex" => "Simplex LP",
+                "evolutionary" => "Evolutionary",
+                _ => "GRG Nonlinear",
+            })
         };
         craft_ui::ComboBox::from_id_salt("solverMethod")
             .selected_text(label(&method))
@@ -549,16 +552,16 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
             .accessible_name(lang.tr("Select a Solving Method:"));
     });
     ui.label(
-        egui::RichText::new(match method.as_str() {
+        egui::RichText::new(crate::i18n::current(ui.ctx()).tr(match method.as_str() {
             "simplex" => "Simplex LP: for linear models; integer and binary constraints by branch and bound.",
             "evolutionary" => "Evolutionary: a genetic search for models that aren't smooth; every variable cell needs bounds.",
             _ => "GRG Nonlinear: a local optimum of a smooth model, from the current values.",
-        })
+        }))
         .small(),
     );
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        if ui.button("Reset All").clicked() && at_home(app, d) {
+        if ui.button(crate::i18n::current(ui.ctx()).tr("Reset All")).clicked() && at_home(app, d) {
             match app.run("data.solverReset", json!({})) {
                 Ok(_) => {
                     for (k, v) in [
@@ -586,20 +589,20 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
         let shown = d.values.get("modelArea").and_then(Json::as_bool).unwrap_or(false);
         // Hiding the area ends picking into Model Range, as a box that is not drawn is no longer
         // picked into (`ref_edit::window_shown`).
-        if ui.selectable_label(shown, "Load/Save").clicked() {
+        if ui.selectable_label(shown, crate::i18n::current(ui.ctx()).tr("Load/Save")).clicked() {
             d.values.insert("modelArea".into(), json!(!shown));
         }
-        if ui.button("Options").clicked() {
+        if ui.button(crate::i18n::current(ui.ctx()).tr("Options")).clicked() {
             open_solver_options(d);
         }
     });
     if d.values.get("modelArea").and_then(Json::as_bool) == Some(true) {
         ui.horizontal(|ui| {
-            let l = ui.label("Model Range:");
+            let l = ui.label(crate::i18n::current(ui.ctx()).tr("Model Range:"));
             ref_edit(app, ui, d, "modelRange", RefLabel::By(l.id), 170.0);
             let range = text(d, "modelRange");
             let ready = !range.trim().is_empty();
-            if ui.add_enabled(ready, egui::Button::new("Load")).clicked() && at_home(app, d) {
+            if ui.add_enabled(ready, egui::Button::new(crate::i18n::current(ui.ctx()).tr("Load"))).clicked() && at_home(app, d) {
                 d.values.remove("askModelOverwrite");
                 match app.run("data.solverLoadModel", json!({"from": range.trim()})) {
                     Ok(r) => {
@@ -617,7 +620,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
                     }
                 }
             }
-            if ui.add_enabled(ready, egui::Button::new("Save")).clicked() && at_home(app, d) {
+            if ui.add_enabled(ready, egui::Button::new(crate::i18n::current(ui.ctx()).tr("Save"))).clicked() && at_home(app, d) {
                 save_solver_model(app, d, &range, false);
             }
         });
@@ -629,11 +632,13 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
             d.values.remove("modelNote");
         } else if let Some(asked) = asked {
             ui.horizontal_wrapped(|ui| {
-                ui.label(format!("{asked} already holds data. Replace it with the model?"));
-                if ui.button("Replace").clicked() && at_home(app, d) {
+                ui.label(
+                    crate::i18n::current(ui.ctx()).tr_fill("{asked} already holds data. Replace it with the model?", &[("asked", asked.as_str())]),
+                );
+                if ui.button(crate::i18n::current(ui.ctx()).tr("Replace")).clicked() && at_home(app, d) {
                     save_solver_model(app, d, &asked, true);
                 }
-                if ui.button("Don't Replace").clicked() {
+                if ui.button(crate::i18n::current(ui.ctx()).tr("Don't Replace")).clicked() {
                     d.values.remove("askModelOverwrite");
                     d.values.remove("modelNote");
                 }
@@ -651,11 +656,12 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let t = crate::theme::Tokens::get(ui.ctx());
-            let solve = ui.add(egui::Button::new(egui::RichText::new("  Solve  ").color(t.on_accent)).fill(t.accent));
+            let solve =
+                ui.add(egui::Button::new(egui::RichText::new(crate::i18n::current(ui.ctx()).tr("  Solve  ")).color(t.on_accent)).fill(t.accent));
             if solve.clicked() && !text(d, "objective").trim().is_empty() {
                 *confirm = true;
             }
-            if ui.button(" Close ").clicked() {
+            if ui.button(crate::i18n::current(ui.ctx()).tr(" Close ")).clicked() {
                 *open = false;
             }
         });
@@ -670,10 +676,10 @@ pub(super) fn solver_results(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     let restore = d.values.get("restore").and_then(Json::as_bool).unwrap_or(false);
     if changed {
         ui.add_space(4.0);
-        if ui.radio(!restore, "Keep Solver Solution").clicked() {
+        if ui.radio(!restore, crate::i18n::current(ui.ctx()).tr("Keep Solver Solution")).clicked() {
             d.values.insert("restore".into(), json!(false));
         }
-        if ui.radio(restore, "Restore Original Values").clicked() {
+        if ui.radio(restore, crate::i18n::current(ui.ctx()).tr("Restore Original Values")).clicked() {
             d.values.insert("restore".into(), json!(true));
         }
     }
@@ -686,17 +692,18 @@ pub(super) fn solver_results(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     let optimum = d.values.get("status").and_then(Json::as_str).is_some_and(gridcraft_engine::cmd::solver::sensitivity_status);
     let sensitivity = model_allows && optimum;
     let why_not = if model_allows {
-        "Needs an optimal or converged solution: Solver stopped before reaching one."
+        crate::i18n::current(ui.ctx()).tr("Needs an optimal or converged solution: Solver stopped before reaching one.")
     } else {
-        "Needs Simplex LP or GRG Nonlinear, a Max or Min objective and no integer constraints."
+        crate::i18n::current(ui.ctx()).tr("Needs Simplex LP or GRG Nonlinear, a Max or Min objective and no integer constraints.")
     };
     let offered = |key: &str| key != "sensitivityReport" || sensitivity;
     if solved {
         ui.add_space(4.0);
-        ui.label("Reports:");
+        ui.label(crate::i18n::current(ui.ctx()).tr("Reports:"));
         for (key, label) in [("answerReport", "Answer"), ("sensitivityReport", "Sensitivity"), ("limitsReport", "Limits")] {
             let mut on = offered(key) && d.values.get(key).and_then(Json::as_bool).unwrap_or(false);
-            let check = ui.add_enabled(offered(key), egui::Checkbox::new(&mut on, label)).on_disabled_hover_text(why_not);
+            let check =
+                ui.add_enabled(offered(key), egui::Checkbox::new(&mut on, crate::i18n::current(ui.ctx()).tr(label))).on_disabled_hover_text(why_not);
             if check.changed() {
                 d.values.insert(key.into(), json!(on));
             }

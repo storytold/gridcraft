@@ -684,8 +684,16 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
             }
             Drag::ResizeCol { col, start, orig } => {
                 let w = (orig + (p.x - start) / geo.z).max(0.0);
-                app.toast =
-                    Some((format!("Width: {:.2} ({} pixels)", gridcraft_engine::cmd::format::points_to_chars(w as f64), w.round()), crate::now_ms()));
+                app.toast = Some((
+                    format!(
+                        "{}: {:.2} ({} {})",
+                        app.ui.language.tr("Width"),
+                        gridcraft_engine::cmd::format::points_to_chars(w as f64),
+                        w.round(),
+                        app.ui.language.tr("pixels")
+                    ),
+                    crate::now_ms(),
+                ));
                 // Inside a selection of whole columns, every selected column takes the new width
                 // (Ctrl-selected areas included); otherwise only the dragged one.
                 let cols = if sel.ranges.iter().any(|r| r.is_full_cols() && col >= r.start.col && col <= r.end.col) {
@@ -698,7 +706,10 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
             }
             Drag::ResizeRow { row, start, orig } => {
                 let h = (orig + (p.y - start) / geo.z).max(0.0);
-                app.toast = Some((format!("Height: {:.2} ({} pixels)", h * 0.75, h.round()), crate::now_ms()));
+                app.toast = Some((
+                    format!("{}: {:.2} ({} {})", app.ui.language.tr("Height"), h * 0.75, h.round(), app.ui.language.tr("pixels")),
+                    crate::now_ms(),
+                ));
                 let rows = if sel.ranges.iter().any(|r| r.is_full_rows() && row >= r.start.row && row <= r.end.row) {
                     sel.ranges
                         .iter()
@@ -1125,7 +1136,7 @@ pub fn follow_link(app: &mut SheetApp, target: &str) {
             app.grid.ensure_visible = true;
         }
         LinkKind::External(url) => app.open_dialog("openLink", json!({"url": url})),
-        LinkKind::Refused(why) => app.message = Some(("Hyperlink".into(), why)),
+        LinkKind::Refused(why) => app.message = Some((app.ui.language.tr("Hyperlink").to_string(), why)),
     }
 }
 

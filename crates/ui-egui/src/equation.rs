@@ -139,14 +139,14 @@ pub fn editor(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &m
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
         for (label, snippet, tip) in QUICK {
-            let b = ui.add(egui::Button::new(*label).min_size(vec2(30.0, 22.0))).on_hover_text(*tip);
+            let b = ui.add(egui::Button::new(*label).min_size(vec2(30.0, 22.0))).on_hover_text(crate::i18n::current(ui.ctx()).tr(tip));
             if b.clicked() {
                 insert_snippet(ui.ctx(), edit_id, &mut text, snippet);
             }
         }
     });
     ui.add_space(6.0);
-    ui.label("LaTeX:");
+    ui.label(crate::i18n::current(ui.ctx()).tr("LaTeX:"));
     let pv = preview(ui.ctx(), ui.scope_id().with("equation-preview"), &text);
     let mark = pv.result.as_ref().err().and_then(|e| e.span.clone()).or_else(|| pv.result.as_ref().err().map(|_| text.len()..text.len()));
     let mark = mark.filter(|_| !text.trim().is_empty());
@@ -171,7 +171,7 @@ pub fn editor(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &m
             ui.colored_label(t.danger, msg);
         }
         _ => {
-            ui.label(egui::RichText::new("Preview").color(t.text_dim));
+            ui.label(egui::RichText::new(crate::i18n::current(ui.ctx()).tr("Preview")).color(t.text_dim));
         }
     }
     // The preview card is the sheet's colour, with the sheet's ink, in both themes.
@@ -194,15 +194,21 @@ pub fn editor(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &m
     let valid = pv.result.as_ref().is_ok_and(|l| !l.items.is_empty());
     let cmd_enter = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::Enter));
     ui.allocate_ui_with_layout(vec2(ui.available_width(), 28.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        let ok = ui.add_enabled(valid, egui::Button::new(egui::RichText::new("OK").color(t.on_accent)).fill(t.accent).min_size(vec2(64.0, 0.0)));
+        let ok = ui.add_enabled(
+            valid,
+            egui::Button::new(egui::RichText::new(crate::i18n::current(ui.ctx()).tr("OK")).color(t.on_accent))
+                .fill(t.accent)
+                .min_size(vec2(64.0, 0.0)),
+        );
         if ok.clicked() || (valid && cmd_enter) {
             *confirm = true;
         }
-        if ui.add(egui::Button::new("Cancel").min_size(vec2(64.0, 0.0))).clicked() {
+        if ui.add(egui::Button::new(crate::i18n::current(ui.ctx()).tr("Cancel")).min_size(vec2(64.0, 0.0))).clicked() {
             *open = false;
         }
         let verb = if d.command == Some("equation.edit") { "apply" } else { "insert" };
-        ui.label(egui::RichText::new(format!("\u{2318}/Ctrl+Enter to {verb}")).small().color(t.text_dim));
+        let verb = crate::i18n::current(ui.ctx()).tr(verb);
+        ui.label(egui::RichText::new(crate::i18n::current(ui.ctx()).tr_fill("⌘/Ctrl+Enter to {verb}", &[("verb", verb)])).small().color(t.text_dim));
     });
 }
 
@@ -222,7 +228,8 @@ pub fn gallery(ui: &mut egui::Ui) -> Option<&'static str> {
         if resp.hovered() {
             ui.painter().rect_filled(r, 4.0, t.hover);
         }
-        ui.painter().text(r.left_top() + vec2(6.0, 4.0), egui::Align2::LEFT_TOP, *name, theme::ui_font(12.0), t.text);
+        let name = crate::i18n::current(ui.ctx()).tr(name);
+        ui.painter().text(r.left_top() + vec2(6.0, 4.0), egui::Align2::LEFT_TOP, name, theme::ui_font(12.0), t.text);
         let card = Rect::from_min_max(r.left_top() + vec2(6.0, 21.0), r.right_bottom() - vec2(6.0, 3.0));
         ui.painter().rect_filled(card, 3.0, t.grid_bg);
         if let Some(list) = list {

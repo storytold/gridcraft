@@ -116,13 +116,13 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
             ui.spacing_mut().item_spacing.x = 0.0;
             ui.add_space(8.0);
             if view.show_sheet_tabs {
-                if crate::widgets::icon_button(ui, Icon::Left, t.text_dim, app.ui.language.tr("Previous sheet"), vec2(24.0, 24.0)).clicked() {
+                if crate::widgets::icon_button(ui, Icon::Left, t.text_dim, "Previous sheet", vec2(24.0, 24.0)).clicked() {
                     app.run_or_alert("sheet.previous", json!({}));
                 }
-                if crate::widgets::icon_button(ui, Icon::Right, t.text_dim, app.ui.language.tr("Next sheet"), vec2(24.0, 24.0)).clicked() {
+                if crate::widgets::icon_button(ui, Icon::Right, t.text_dim, "Next sheet", vec2(24.0, 24.0)).clicked() {
                     app.run_or_alert("sheet.next", json!({}));
                 }
-                let all = crate::widgets::icon_button(ui, Icon::SheetList, t.text_dim, app.ui.language.tr("All sheets"), vec2(24.0, 24.0));
+                let all = crate::widgets::icon_button(ui, Icon::SheetList, t.text_dim, "All sheets", vec2(24.0, 24.0));
                 all.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, app.ui.language.tr("All sheets")));
                 let items = app.session.active().map(|d| navigator_items(&d.wb.sheets)).unwrap_or_default();
                 let active = app.session.active().map(|d| d.wb.active_sheet().to_string()).unwrap_or_default();
@@ -315,7 +315,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                         });
                 });
                 ui.add_space(6.0);
-                if crate::widgets::icon_button(ui, Icon::Plus, t.text_dim, app.ui.language.tr("New sheet (⇧F11)"), vec2(26.0, 26.0)).clicked() {
+                if crate::widgets::icon_button(ui, Icon::Plus, t.text_dim, "New sheet (⇧F11)", vec2(26.0, 26.0)).clicked() {
                     app.run_or_alert("home.insertSheet", json!({}));
                 }
             }
@@ -368,7 +368,12 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                 if let Some(d) = app.session.active() {
                     if d.wb.vba_project.is_some() {
                         ui.add_space(12.0);
-                        text(ui, egui::RichText::new("Macros preserved (not executed)").font(theme::ui_font(12.5)).color(t.danger));
+                        text(
+                            ui,
+                            egui::RichText::new(crate::i18n::current(ui.ctx()).tr("Macros preserved (not executed)"))
+                                .font(theme::ui_font(12.5))
+                                .color(t.danger),
+                        );
                     }
                     if d.wb.calc.mode == gridcraft_engine::model::CalcMode::Manual {
                         ui.add_space(12.0);
@@ -378,8 +383,8 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                         ui.add_space(12.0);
                         // Only a loop on the active sheet is named, so the address needs no sheet.
                         let label = match d.calc.circular.iter().find(|(si, _)| *si == d.wb.active_sheet()) {
-                            Some((_, c)) => format!("Circular References: {}", c.a1()),
-                            None => "Circular References".to_owned(),
+                            Some((_, c)) => app.ui.language.tr_fill("Circular References: {range}", &[("range", &c.a1())]),
+                            None => app.ui.language.tr("Circular References").to_owned(),
                         };
                         text(ui, egui::RichText::new(label).font(theme::ui_font(12.5)).color(t.danger));
                     }
@@ -433,7 +438,7 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                             ui.painter().rect_filled(r, 3.0, t.hover);
                         }
                         icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), icon, t.text_dim);
-                        if resp.on_hover_text(tip).clicked() {
+                        if resp.on_hover_text(app.ui.language.tr(tip)).clicked() {
                             app.run_or_alert(cmd, json!({}));
                         }
                     }
@@ -441,7 +446,10 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     // The layout runs right to left, so the last statistic is drawn first.
                     // Clicking a statistic copies its value (without the label) to the clipboard.
                     for p in selection_statistics(app).into_iter().rev() {
-                        let value = p.split_once(": ").map_or(p.as_str(), |(_, v)| v).to_owned();
+                        // Localized statistics use a full-width colon (`平均值：4`): copy just
+                        // the value after either separator, or the whole text when neither is
+                        // there.
+                        let value = p.split_once(": ").or_else(|| p.split_once('：')).map_or(p.as_str(), |(_, v)| v).to_owned();
                         let resp = ui.add(
                             egui::Label::new(egui::RichText::new(p).font(theme::ui_font(12.5)).color(t.text_dim))
                                 .selectable(false)
@@ -477,26 +485,27 @@ pub(crate) fn selection_statistics(app: &SheetApp) -> Vec<String> {
         let code = if code == "General" { "#,##0.##########".to_string() } else { code };
         gridcraft_engine::display::format(&gridcraft_engine::core::Value::Number(v), &code, &d.wb).text.trim_end_matches('.').to_string()
     };
+    let lang = app.ui.language;
     let mut parts = Vec::new();
     if on.average
         && let Some(a) = st.average
     {
-        parts.push(format!("Average: {}", fmt(a)));
+        parts.push(lang.tr_fill("Average: {value}", &[("value", &fmt(a))]));
     }
     if on.count && st.count > 0 {
-        parts.push(format!("Count: {}", st.count));
+        parts.push(lang.tr_fill("Count: {value}", &[("value", &st.count.to_string())]));
     }
     if on.numerical_count && st.count > 0 {
-        parts.push(format!("Numerical Count: {}", st.numeric));
+        parts.push(lang.tr_fill("Numerical Count: {value}", &[("value", &st.numeric.to_string())]));
     }
     if on.minimum && st.numeric > 0 {
-        parts.push(format!("Minimum: {}", fmt(st.min)));
+        parts.push(lang.tr_fill("Minimum: {value}", &[("value", &fmt(st.min))]));
     }
     if on.maximum && st.numeric > 0 {
-        parts.push(format!("Maximum: {}", fmt(st.max)));
+        parts.push(lang.tr_fill("Maximum: {value}", &[("value", &fmt(st.max))]));
     }
     if on.sum && st.numeric > 0 {
-        parts.push(format!("Sum: {}", fmt(st.sum)));
+        parts.push(lang.tr_fill("Sum: {value}", &[("value", &fmt(st.sum))]));
     }
     parts
 }
