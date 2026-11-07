@@ -4,7 +4,7 @@ use super::lines::{decimate_area, draw_markers, draw_runs};
 use super::trend::{draw_trend_labels, draw_trendlines, max_backward, max_forward, max_forward_slots, supports_trendline};
 use super::{
     Chart, ChartData, ChartKind, Ctx, ErrSeg, ErrorBarData, ErrorBarDirection, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_ERR_BARS, MAX_LABELS,
-    MAX_LINE_PTS, MAX_MARKERS, Prim, Scale, SeriesData, TEXT, VAlign, WHITE, clean, draw_error_bar, error_segments, fixed_scale, nice_scale,
+    MAX_LINE_PTS, MAX_MARKERS, Prim, Scale, SeriesData, TEXT, VAlign, WHITE, clean, draw_error_bar, error_segments, nice_scale,
 };
 use crate::errbars::supports_error_bars;
 
