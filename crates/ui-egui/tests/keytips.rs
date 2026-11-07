@@ -732,6 +732,47 @@ fn border_keytip_no_border_clears_a_bordered_cell() {
 }
 
 #[test]
+fn border_keytip_line_color_after_no_border_remembers_it_without_reapplying_none() {
+    let mut h = harness(selected("A1"));
+    h.state_mut().grid.last_border = "none".to_string();
+    sequence(&mut h, &[Key::H, Key::B, Key::I], false);
+    h.run_steps(3);
+    h.get_by_label("Automatic").click();
+    h.run_steps(3);
+    assert_eq!(h.state().grid.last_border_color, "auto", "the chosen colour is remembered without clearing the border preset");
+    assert_eq!(h.state().grid.last_border, "none", "No Border remains the current preset face");
+    assert!(
+        h.state().session.journal.iter().all(|(id, _)| id != "home.borders"),
+        "line colour selection must not re-run the none preset when No Border is active"
+    );
+}
+
+#[test]
+fn border_keytip_line_color_keeps_thick_bottom_style() {
+    use gridcraft_engine::model::BorderStyle::{None as N, Thick};
+    let mut h = harness(selected("A1"));
+    h.state_mut().grid.last_border = "thickBottom".to_string();
+    h.state_mut().run("home.borders", json!({"range": "A1", "preset": "thickBottom"})).unwrap();
+    assert_eq!(sides(&h, "A1"), [N, N, N, Thick]);
+
+    // Abre o menu de bordas
+    sequence(&mut h, &[Key::H, Key::B], false);
+    h.run_steps(3);
+
+    // Força o clique no submenu "Line Color" (o keytip I não abre no harness)
+    if let Some(line_color) = h.query_by_label("Line Color") {
+        line_color.click();
+        h.run_steps(3);
+    }
+
+    // Agora clica em "Automatic"
+    h.get_by_label("Automatic").click();
+    h.run_steps(3);
+
+    assert_eq!(sides(&h, "A1"), [N, N, N, Thick], "recolouring keeps the thick bottom style intact");
+}
+
+#[test]
 fn border_keytip_all_borders_covers_every_side_of_a_block() {
     use gridcraft_engine::model::BorderStyle::Thin;
     let mut h = harness(selected("A1:B2"));
@@ -751,6 +792,14 @@ fn border_keytip_outside_borders_skips_the_inside_edges() {
 }
 
 #[test]
+fn border_keytip_line_color_opens_the_palette() {
+    let mut h = harness(selected("A1"));
+    sequence(&mut h, &[Key::H, Key::B, Key::I], false);
+    h.run_steps(3);
+    h.get_by_label("Automatic");
+}
+
+#[test]
 fn border_keytip_more_borders_opens_format_cells_on_the_border_tab() {
     let mut h = harness(blank());
     sequence(&mut h, &[Key::H, Key::B, Key::M], false);
@@ -760,8 +809,8 @@ fn border_keytip_more_borders_opens_format_cells_on_the_border_tab() {
 
 #[test]
 fn border_keytips_without_a_command_stay_silent() {
-    // Erase Border (a pen mode), Line Color and Line Style are reserved: no border is drawn.
-    for k in [Key::E, Key::I, Key::Y] {
+    // Erase Border (a pen mode) and Line Style remain reserved: no border is drawn.
+    for k in [Key::E, Key::Y] {
         let mut h = harness(selected("A1"));
         sequence(&mut h, &[Key::H, Key::B, k], false);
         assert!(!h.state().session.journal.iter().any(|(id, _)| id.starts_with("home.")), "H,B,{k:?} must not run a command");

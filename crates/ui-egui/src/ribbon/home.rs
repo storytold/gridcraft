@@ -23,6 +23,15 @@ const ACCOUNTING_SYMBOLS: &[(&str, &str)] = &[
     ("₽ Russian", "_-[$₽-419]* #,##0.00_-;-[$₽-419]* #,##0.00_-;_-[$₽-419]* \"-\"??_-;_-@_-"),
 ];
 
+fn consume_border_line_color_open(ctx: &egui::Context, id: egui::Id, forced: bool) -> bool {
+    let open = ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+    let should_open = open || forced;
+    // The HBI flag is a one-shot request for the current pass; if it is left as `true` then the
+    // popup keeps receiving Bool(true) on later passes and reopens after closing.
+    ctx.data_mut(|d| d.insert_temp(id, false));
+    should_open
+}
+
 /// Draws the Home tab: clipboard/paste menu, font, alignment, number, style, cell and editing commands with keytips.
 pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
@@ -155,48 +164,108 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             let (b, ba) = split_button(ui, Icon::Borders, None, "Borders");
             control_keytip(app, ui, &ba, "home.borders");
             if b {
-                act(app, "home.borders", json!({"preset": app.grid.last_border.clone()}));
+                act(app, "home.borders", json!({"preset": app.grid.last_border.clone(), "color": app.grid.last_border_color.clone()}));
             }
             ba.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Border presets"));
-            // Alt, H, B opens the menu with each item's letter, as Excel's does (#2964); a letter
-            // or Esc changes the prefix, which closes it again (`ribbon_keys`).
+            let border_line_color_id = egui::Id::unique("gridcraft.home.borderLineColor");
+            let border_line_color_forced = app.ui.keytip_invoke == Some("home.borderLineColor");
+            let border_line_color_open = consume_border_line_color_open(ui.ctx(), border_line_color_id, border_line_color_forced);
+
+            // Alt+H,B support (#2964)
             let prefix = app.keytips.prefix().unwrap_or_default().to_owned();
             let keyed = keytip_table::opens_menu(&prefix, "home.borders");
-            egui::Popup::menu(&ba).open_memory(popup_command(keyed, ba.clicked())).show(|ui| {
-                for (label, preset) in [
-                    ("Bottom Border", "bottom"),
-                    ("Top Border", "top"),
-                    ("Left Border", "left"),
-                    ("Right Border", "right"),
-                    ("No Border", "none"),
-                    ("All Borders", "all"),
-                    ("Outside Borders", "outside"),
-                    ("Thick Outside Borders", "thickOutside"),
-                    ("Bottom Double Border", "doubleBottom"),
-                    ("Thick Bottom Border", "thickBottom"),
-                    ("Top and Bottom Border", "topBottom"),
-                    ("Top and Thick Bottom Border", "topThickBottom"),
-                    ("Top and Double Bottom Border", "topDoubleBottom"),
-                    ("Inside Borders", "inside"),
-                ] {
-                    let item = crate::border_preview::preset_button(ui, label, preset);
-                    if let Some(sequence) = keytip_table::item_letter_with(&prefix, "home.borders", &json!({"preset": preset})) {
-                        keytip(app, ui, sequence, egui::pos2(item.rect.right() - 10.0, item.rect.center().y));
+
+            let border_keytip =
+                keyed || app.keytips.prefix().is_some_and(|prefix| prefix.starts_with("HB")) || border_line_color_open || border_line_color_forced;
+
+            egui::Popup::menu(&ba)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .open_memory(if border_keytip { Some(egui::SetOpenCommand::Bool(true)) } else { popup_command(false, ba.clicked()) })
+                .show(|ui| {
+                    for (label, preset) in [
+                        ("Bottom Border", "bottom"),
+                        ("Top Border", "top"),
+                        ("Left Border", "left"),
+                        ("Right Border", "right"),
+                        ("No Border", "none"),
+                        ("All Borders", "all"),
+                        ("Outside Borders", "outside"),
+                        ("Thick Outside Borders", "thickOutside"),
+                        ("Bottom Double Border", "doubleBottom"),
+                        ("Thick Bottom Border", "thickBottom"),
+                        ("Top and Bottom Border", "topBottom"),
+                        ("Top and Thick Bottom Border", "topThickBottom"),
+                        ("Top and Double Bottom Border", "topDoubleBottom"),
+                        ("Inside Borders", "inside"),
+                    ] {
+                        let item = crate::border_preview::preset_button(ui, label, preset);
+
+                        if let Some(sequence) = keytip_table::item_letter_with(&prefix, "home.borders", &json!({"preset": preset})) {
+                            keytip(app, ui, sequence, egui::pos2(item.rect.right() - 10.0, item.rect.center().y));
+                        }
+
+                        if item.clicked() {
+                            app.grid.last_border = preset.to_string();
+                            act(
+                                app,
+                                "home.borders",
+                                json!({
+                                    "preset": preset,
+                                    "color": app.grid.last_border_color.clone()
+                                }),
+                            );
+                            ui.close();
+                        }
                     }
-                    if item.clicked() {
-                        app.grid.last_border = preset.to_string();
-                        act(app, "home.borders", json!({"preset": preset}));
+
+                    ui.separator();
+
+                    let forced = invoke(app, "home.borderLineColor");
+                    let (line_color, _) = egui::containers::menu::SubMenuButton::new("Line Color").ui(ui, |ui| {
+                        if let Some(c) = crate::widgets::color_palette_fixed(ui, &theme_colors(app), "Automatic") {
+                            let c = if c == "none" { "auto".to_string() } else { c };
+                            app.grid.last_border_color = c.clone();
+
+                            // A line colour picked while the Borders button still shows "No Border"
+                            // should only remember the colour for later preset picks. Reapplying the
+                            // stored preset would call `home.borders` with `preset: "none"` and remove
+                            // borders again.
+                            if app.grid.last_border != "none" {
+                                act(
+                                    app,
+                                    "home.borders",
+                                    json!({
+                                        "preset": app.grid.last_border.clone(),
+                                        "color": c
+                                    }),
+                                );
+                            }
+
+                            ui.close();
+                        }
+                    });
+                    control_keytip(app, ui, &line_color, "home.borderLineColor");
+
+                    if forced {
+                        let menu_id = egui::containers::menu::find_menu_root(ui).unique_id;
+                        let submenu_id = egui::containers::menu::SubMenu::id_from_widget_id(line_color.id);
+
+                        egui::containers::menu::MenuState::from_id(ui.ctx(), menu_id, |state| {
+                            state.open_item = Some(submenu_id);
+                        });
                     }
-                }
-                ui.separator();
-                let more = ui.button("More Borders…");
-                if let Some(sequence) = keytip_table::item_letter(&prefix, "dialog:formatCells") {
-                    keytip(app, ui, sequence, egui::pos2(more.rect.right() - 10.0, more.rect.center().y));
-                }
-                if more.clicked() {
-                    app.open_dialog("formatCells", json!({"tab": "Border"}));
-                }
-            });
+
+                    let more = ui.button("More Borders…");
+
+                    if let Some(sequence) = keytip_table::item_letter(&prefix, "dialog:formatCells") {
+                        keytip(app, ui, sequence, egui::pos2(more.rect.right() - 10.0, more.rect.center().y));
+                    }
+
+                    if more.clicked() {
+                        app.open_dialog("formatCells", json!({"tab": "Border"}));
+                        ui.close();
+                    }
+                });
             let fill = app.grid.last_fill.clone();
             let fill_c = gridcraft_engine::model::Color::from_hex(&fill).and_then(|c| c.resolve(&Default::default())).map(theme::color32);
             let (f, fa) = split_button(ui, Icon::Fill, fill_c, "Fill Color");
@@ -812,5 +881,25 @@ mod accounting_symbol_tests {
             let symbol = tag.trim_start_matches("[$").split('-').next().unwrap_or_default();
             assert_eq!(out.fill.map(|(c, at)| (c, out.text[..at].trim_start())), Some((' ', symbol)), "{label}");
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(deprecated)]
+mod popup_open_flag_tests {
+    use super::consume_border_line_color_open;
+
+    #[test]
+    fn border_line_color_flag_is_consumed_after_opening_pass() {
+        let id = egui::Id::new("gridcraft.home.borderLineColor");
+        let ctx = egui::Context::default();
+
+        ctx.data_mut(|d| d.insert_temp(id, true));
+        assert!(consume_border_line_color_open(&ctx, id, false));
+        assert!(!ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false));
+        assert!(!consume_border_line_color_open(&ctx, id, false));
+
+        assert!(consume_border_line_color_open(&ctx, id, true));
+        assert!(!ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false));
     }
 }

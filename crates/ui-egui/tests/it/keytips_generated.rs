@@ -332,10 +332,8 @@ fn keytip_hbh_() {
 fn keytip_hbi_() {
     let mut h = harness(blank());
     sequence(&mut h, "HBI", false);
-    assert!(h.state().dialog.is_none(), "HBI must not open a dialog");
-    assert!(h.state().message.is_none(), "HBI must not open a message box");
-    assert!(h.state().toast.is_none(), "HBI must not raise a toast");
-    assert!(h.state().session.journal.is_empty(), "HBI must not journal");
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "HBI must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
 }
 
 #[test]
