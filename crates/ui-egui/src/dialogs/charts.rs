@@ -160,6 +160,12 @@ pub(super) fn select_data(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog,
     d.values.insert("remove".into(), json!(remove));
     ui.add_space(6.0);
     edit(ui, d, "categories", "Horizontal (Category) Axis Labels:");
+    ui.add_space(6.0);
+    let flag = |d: &Dialog, k: &str| d.values.get(k).and_then(Json::as_bool).unwrap_or(false);
+    let mut hidden = flag(d, "hidden");
+    if ui.checkbox(&mut hidden, "Show data in hidden rows and columns").changed() {
+        d.values.insert("hidden".into(), json!(hidden));
+    }
     ok_cancel(ui, confirm, open);
     if *confirm {
         *confirm = false;
@@ -174,6 +180,9 @@ pub(super) fn select_data(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog,
         }
         if text(d, "categories") != text(d, "categories0") || (range_changed && !text(d, "categories").is_empty()) {
             params.insert("categories".into(), json!(text(d, "categories")));
+        }
+        if flag(d, "hidden") != flag(d, "hidden0") {
+            params.insert("showHiddenData".into(), json!(flag(d, "hidden")));
         }
         if params.len() == 1 {
             *open = false;

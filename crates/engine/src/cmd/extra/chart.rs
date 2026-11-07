@@ -209,8 +209,9 @@ pub(super) fn select_data(s: &mut Session, p: &Json) -> Result<Json> {
         .unwrap_or_default();
     remove.sort_unstable();
     remove.dedup();
-    if rebuilt.is_none() && categories.is_none() && remove.is_empty() {
-        return Err(bad("chart.selectData", "missing `range`, `categories` or `removeSeries`"));
+    let show_hidden = bool_param(p, "showHiddenData");
+    if rebuilt.is_none() && categories.is_none() && remove.is_empty() && show_hidden.is_none() {
+        return Err(bad("chart.selectData", "missing `range`, `categories`, `removeSeries` or `showHiddenData`"));
     }
     with_chart(s, p, move |c| {
         if let Some((series, source, by_rows)) = rebuilt {
@@ -223,6 +224,20 @@ pub(super) fn select_data(s: &mut Session, p: &Json) -> Result<Json> {
             if *i < c.series.len() && c.series.len() > 1 {
                 c.series.remove(*i);
             }
+        }
+        if let Some(v) = show_hidden {
+            if v && matches!(
+                c.kind,
+                gridcraft_model::ChartKind::Histogram
+                    | gridcraft_model::ChartKind::Waterfall
+                    | gridcraft_model::ChartKind::Funnel
+                    | gridcraft_model::ChartKind::Treemap
+                    | gridcraft_model::ChartKind::Sunburst
+                    | gridcraft_model::ChartKind::BoxWhisker
+            ) {
+                return Err(bad("chart.selectData", "`showHiddenData` is unsupported for this chart type"));
+            }
+            c.show_hidden_data = v;
         }
         if let Some(cats) = categories {
             for se in &mut c.series {
