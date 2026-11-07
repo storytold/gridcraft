@@ -393,6 +393,7 @@ const MAX_ALIGNAT_PAIRS: usize = 50;
 /// N of `{alignat}{N}`, `{alignat*}{N}` or `{alignedat}{N}` at the start of `rest` (just after
 /// `\begin`). `usize::MAX` when the count is present but is not a plain digit string RaTeX reads
 /// the same way (too long, or hidden by a comment, inner spaces or a macro): refused, not skipped.
+/// An environment name that is computed (contains `\` or `{`) is refused the same way.
 ///
 /// RaTeX reads the environment name and the count through its lexer, which drops comments and
 /// spaces, so they are dropped here too before the two groups are compared.
@@ -415,7 +416,16 @@ fn alignat_columns(rest: &str) -> Option<usize> {
             Some(c) => kept.push(c),
         }
     }
-    let (name, after) = kept.strip_prefix('{')?.split_once('}')?;
+    let group = kept.strip_prefix('{')?;
+    // A name that does not close inside the window cannot be read, so it is refused.
+    let Some((name, after)) = group.split_once('}') else {
+        return Some(usize::MAX);
+    };
+    // A computed name (`align\@char{97}t` reads as `alignat`) cannot be resolved here: refused
+    // too. Every real environment name is letters, optionally with a trailing `*`.
+    if name.contains(['\\', '{']) {
+        return Some(usize::MAX);
+    }
     if !matches!(name, "alignat" | "alignat*" | "alignedat") {
         return None;
     }
@@ -756,6 +766,14 @@ mod tests {
         ] {
             assert!(check_caps(hidden).is_err_and(|e| e.message.contains("matrix cells")), "{hidden}");
         }
+        // A computed environment name reads as `alignat` to the parser, so it is capped too.
+        for name in ["align\\@char{97}t", "alignedat\\relax", "al\\@char{105}gnat*"] {
+            let over = format!("\\begin{{{name}}}{{51}}a\\end{{alignat}}");
+            assert!(check_caps(&over).is_err_and(|e| e.message.contains("matrix cells")), "{over}");
+        }
+        let long = format!("\\begin{{{}}}{{51}}a\\end{{alignat}}", "a".repeat(80));
+        assert!(check_caps(&long).is_err_and(|e| e.message.contains("matrix cells")));
+        assert!(check_caps("\\begin{alignat}{50}a\\end{alignat}").is_ok());
         assert!(check_caps("\\begin{alignedat} {2} % two pairs\na&b&c&d\\end{alignedat}").is_ok());
         assert!(layout("\\begin{CD}A @>f>> B \\\\ @VVV @VVV \\\\ C @>>> D\\end{CD}").is_ok());
         assert!(check_caps("\\operatorname{curl} 50\\%").is_ok());
