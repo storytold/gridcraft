@@ -10,12 +10,15 @@ pub enum FormulaLocale {
     En,
     Es,
     /// Russian: localized function names (translated, as in real Russian-interface Excel),
-    /// plus the `;` / `,` / `\` separators shared with the other locales below.
+    /// plus the `;` argument / `,` decimal / `;` array-column / `:` array-row separators (see
+    /// [`Self::array_row_separator`] - Russian's array syntax is not the same scheme as
+    /// Spanish's).
     Ru,
     /// Ukrainian: Ukrainian Excel has never shipped its own translated function-name table
     /// (unlike Russian) - formulas stay in English even under a Ukrainian interface. Only the
-    /// separators differ from English: `;` for arguments, `,` for decimals, `\` for array rows,
-    /// same as Russian. See docs/localization-parity.md for sourcing.
+    /// separators differ from English: `;` for arguments, `,` for decimals, `;` for array
+    /// columns, `:` for array rows - same as Russian. See docs/localization-parity.md for
+    /// sourcing.
     Uk,
 }
 
