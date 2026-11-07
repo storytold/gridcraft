@@ -13,6 +13,10 @@ workspace = true
 [dependencies]
 gridcraft-engine = { workspace = true }
 gridcraft-ui-egui = { workspace = true }
+gridcraft-translate = { workspace = true }
+gridcraft-translate-rten = { workspace = true }
+# The single user-initiated model download transport (HTTPS). Never used by inference.
+ureq = "3"
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "clipboard"] }
 egui = { workspace = true }
 serde_json = { workspace = true }

@@ -24,6 +24,7 @@ pub mod slicer;
 pub mod solver;
 pub mod spelling;
 pub mod stash;
+pub mod translate;
 pub mod view;
 pub mod whatif;
 
@@ -171,6 +172,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(data::specs());
         v.extend(formulas::specs());
         v.extend(review::specs());
+        v.extend(translate::specs());
         v.extend(view::specs());
         v.extend(inspect::specs());
         v.extend(extra::specs());

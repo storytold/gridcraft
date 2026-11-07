@@ -326,7 +326,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("RC", Entry::Finish(Action::Dialog("comment"))),               // Excel: New Comment
     ("RD", Entry::Finish(Action::Command("review.deleteComment"))), // Excel: Delete Comment
     ("RG", Entry::Finish(Action::Pending("review.showChanges"))),   // pending; Excel: Track Changes; reserved until the command lands
-    ("RL", Entry::Finish(Action::Pending("review.translate"))),     // pending; Excel: Translate; feature gap; reserved until the command lands
+    ("RL", Entry::Finish(Action::Command("review.translate"))),     // Excel: Translate
     ("RN", Entry::Finish(Action::Command("review.nextComment"))),   // Excel: Next Comment
     ("RO", Entry::Finish(Action::Command("review.protectWorkbook"))), // Excel: Protect and Share Workbook
     ("RPS", Entry::Finish(Action::Dialog("protectSheet"))),         // Excel: Protect Sheet

@@ -556,6 +556,40 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Weergeven",
         "Collapse dialog" => "Dialoogvenster samenvouwen",
         "Expand dialog" => "Dialoogvenster uitvouwen",
+        "Installed — verified on first use" => "Geïnstalleerd — wordt bij eerste gebruik geverifieerd",
+        "Incomplete — download it again" => "Onvolledig — download opnieuw",
+        "Not installed" => "Niet geïnstalleerd",
+        "local, offline" => "lokaal, offline",
+        "Hide details" => "Details verbergen",
+        "Source, licence and hashes" => "Bron, licentie en hashes",
+        "I agree to the source, size, licence and SHA-256 shown above" => {
+            "Ik ga akkoord met de hierboven getoonde bron, grootte, licentie en SHA-256"
+        }
+        "Import folder…" => "Map importeren…",
+        "Import" => "Importeren",
+        "Remove" => "Verwijderen",
+        "Place the files in the model folder by hand; this build cannot download." => {
+            "Plaats de bestanden handmatig in de modelmap; deze versie kan niet downloaden."
+        }
+        "From" => "Van",
+        "Swap languages" => "Talen omwisselen",
+        "To" => "Naar",
+        "Auto-detect" => "Automatisch detecteren",
+        "cells selected" => "cellen geselecteerd",
+        "Translate selection" => "Selectie vertalen",
+        "The translation did not finish; nothing was written." => "De vertaling is niet voltooid; er is niets geschreven.",
+        "translated" => "vertaald",
+        "skipped" => "overgeslagen",
+        "failed" => "mislukt",
+        "cells inserted" => "cellen ingevoegd",
+        "formula" => "formule",
+        "number" => "getal",
+        "date" => "datum",
+        "boolean" => "booleaans",
+        "error" => "fout",
+        "empty" => "leeg",
+        "tooLong" => "te lang",
+        "Translate" => "Vertalen",
         _ => return None,
     })
 }

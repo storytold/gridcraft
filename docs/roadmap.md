@@ -1,6 +1,6 @@
 # Roadmap detail
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (test command) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-07 · **Change:** minor (Review › Language › Translate landed) · **Target:** Microsoft Excel (Microsoft 365)
 
 Forward-looking plan. The one-page summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work
 list is [`gaps.md`](gaps.md); numbers and method are in
@@ -14,6 +14,8 @@ list is [`gaps.md`](gaps.md); numbers and method are in
    15-digit comparison (#187). 8–15 h. Language work should extend the new `i18n` catalog past the
    ribbon rather than add scattered literals.
 2. **XLSX on real files** (gaps #1, #3): corpus run plus Excel opening our output.
+   The Translate pane (#2211) now exercises the local-model path end to end; worksheet
+   `TRANSLATE()`/`DETECTLANGUAGE()` remain separate follow-ups over the same engine.
 3. **Large workbooks and multi-threaded recalc** (gap #2).
 
 ## Alpha gate
