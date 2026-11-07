@@ -157,6 +157,12 @@ impl Out {
         self.part(&format!("xl/media/{file}"), None, data.to_vec());
         file
     }
+    /// Replaces the bytes of a part already added.
+    pub fn replace(&mut self, name: &str, data: Vec<u8>) {
+        if let Some(p) = self.parts.iter_mut().find(|(n, _)| n == name) {
+            p.1 = data;
+        }
+    }
     pub fn default_type(&mut self, ext: &str, ct: &str) {
         self.defaults.entry(ext.to_string()).or_insert_with(|| ct.to_string());
     }
@@ -238,14 +244,18 @@ fn workbook_view_attrs(wb: &Workbook) -> String {
 
 /// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
 /// PivotTable in Excel only when its link starts with the workbook in brackets.
-pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
+fn validate_xlsx_workbook(wb: &Workbook) -> Result<(), IoError> {
     if wb.sheets.is_empty() {
         return Err(IoError::Format("a workbook needs at least one sheet".into()));
     }
     if wb.sheets.iter().any(|sheet| sheet.cell_pictures.keys().any(|c| sheet.cell(*c).is_some_and(|cell| cell.formula.is_some()))) {
         return Err(IoError::Format("a static cell picture cannot also contain a formula".into()));
     }
-    check_sheet_names(wb)?;
+    check_sheet_names(wb)
+}
+
+pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
+    validate_xlsx_workbook(wb)?;
     let mut out = Out {
         parts: vec![],
         overrides: vec![],
@@ -282,77 +292,23 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     };
 
     let mut wb_rels = Rels::default();
-    let (sheets_xml, kept, pivots) = write_sheets(wb, &mut out, active, &mut wb_rels);
+    let (sheets_xml, kept, mut pivots) = write_sheets(wb, &mut out, active, &mut wb_rels);
 
     let names = write_defined_names(wb, &kept, &out.chart_names);
 
-    let mut w = format!("{XML_DECL}<workbook xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\">");
-    // A workbook read from a file keeps its <fileVersion> as it was: Excel trusts the saved values
-    // only when appName is "xl" (#799). One without names GridCraft (#1699), and Excel recalculates it.
-    let file_version = crate::passthrough::workbook_elements(wb, "fileVersion");
-    w.push_str(if file_version.is_empty() { "<fileVersion appName=\"gridcraft\"/>" } else { &file_version });
-    w.push_str("<workbookPr");
-    match wb.show_objects {
-        ShowObjects::All => {}
-        ShowObjects::Placeholders => w.push_str(" showObjects=\"placeholders\""),
-        ShowObjects::None => w.push_str(" showObjects=\"none\""),
-    }
-    if wb.date_system == gridcraft_core::DateSystem::D1904 {
-        w.push_str(" date1904=\"1\"");
-    }
-    if wb.remove_personal_info {
-        w.push_str(" filterPrivacy=\"1\"");
-    }
-    w.push_str("/>");
-    if wb.protected_structure {
-        let pw = wb.structure_password.as_ref().map(|h| crate::sheet_write::password_attrs(h, "workbook")).unwrap_or_default();
-        let _ = write!(w, "<workbookProtection{pw} lockStructure=\"1\"/>");
-    }
-    let _ = write!(w, "<bookViews><workbookView activeTab=\"{}\"", kept.file_index(active));
-    w.push_str(&workbook_view_attrs(wb));
-    let _ = write!(w, "/></bookViews><sheets>{sheets_xml}</sheets>");
-    w.push_str(&kept.elements);
-    if !names.is_empty() {
-        let _ = write!(w, "<definedNames>{names}</definedNames>");
-    }
-    w.push_str("<calcPr calcId=\"191029\"");
-    match wb.calc.mode {
-        CalcMode::Automatic => {}
-        CalcMode::Manual => w.push_str(" calcMode=\"manual\""),
-        CalcMode::AutomaticExceptTables => w.push_str(" calcMode=\"autoNoTable\""),
-    }
-    // CT_CalcPr defaults: iterate off, 100 iterations, 0.001 maximum change. The limits are kept
-    // while iteration is off, as Options keeps them.
-    let calc = &wb.calc;
-    if calc.iterative {
-        w.push_str(" iterate=\"1\"");
-    }
-    if calc.iterative || calc.max_iterations != CalcSettings::DEFAULT_ITERATIONS {
-        let _ = write!(w, " iterateCount=\"{}\"", calc.max_iterations);
-    }
-    if calc.iterative || calc.max_change != CalcSettings::DEFAULT_CHANGE {
-        let _ = write!(w, " iterateDelta=\"{}\"", crate::xml::num(calc.max_change));
-    }
-    if wb.calc.precision_as_displayed {
-        w.push_str(" fullPrecision=\"0\"");
-    }
-    if wb.calc.r1c1 {
-        w.push_str(" refMode=\"R1C1\"");
-    }
-    if out.needs_calc {
-        w.push_str(" fullCalcOnLoad=\"1\"");
-    }
-    w.push_str("/>");
-    w.push_str(&pivots.workbook_xml(&mut wb_rels));
-    let exts = crate::passthrough::workbook_elements(wb, "ext");
-    if !exts.is_empty() {
-        let _ = write!(w, "<extLst>{exts}</extLst>");
-    }
-    w.push_str("</workbook>");
+    let w = write_workbook_xml(WorkbookHeader { wb, active }, &sheets_xml, &names, &kept, &mut pivots, &mut wb_rels, out.needs_calc);
 
     // Workbook-level parts.
-    let (styles, fmt_ids) = crate::styles::write_styles(wb, &out.dxfs, &pivots.number_formats(wb));
-    pivots.finish(wb, &mut out, &|code: &str| crate::tables::builtin_id(code).or_else(|| fmt_ids.get(code).copied()));
+    let mut extra_fmts = pivots.number_formats(wb);
+    for code in out.kept.num_fmt_codes() {
+        if !extra_fmts.contains(&code) {
+            extra_fmts.push(code);
+        }
+    }
+    let (styles, fmt_ids) = crate::styles::write_styles(wb, &out.dxfs, &extra_fmts);
+    let fmt_id = |code: &str| crate::tables::builtin_id(code).or_else(|| fmt_ids.get(code).copied());
+    pivots.finish(wb, &mut out, &fmt_id);
+    crate::passthrough::finish_style_ids(&mut out, &fmt_id);
     out.part("xl/styles.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"), styles.into_bytes());
     wb_rels.add("styles", "styles.xml");
     if !out.python_scripts.is_empty() {
@@ -475,6 +431,87 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     zip.finish()
 }
 
+struct WorkbookHeader<'a> {
+    wb: &'a Workbook,
+    active: usize,
+}
+
+fn write_workbook_xml(
+    header: WorkbookHeader<'_>,
+    sheets_xml: &str,
+    names: &str,
+    kept: &crate::passthrough::WorkbookKept,
+    pivots: &mut crate::pivot::PivotWriter,
+    wb_rels: &mut Rels,
+    needs_calc: bool,
+) -> String {
+    let WorkbookHeader { wb, active } = header;
+    let mut w = format!("{XML_DECL}<workbook xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\">");
+    // A workbook read from a file keeps its <fileVersion> as it was: Excel trusts the saved values
+    // only when appName is "xl" (#799). One without names GridCraft (#1699), and Excel recalculates it.
+    let file_version = crate::passthrough::workbook_elements(wb, "fileVersion");
+    w.push_str(if file_version.is_empty() { "<fileVersion appName=\"gridcraft\"/>" } else { &file_version });
+    w.push_str("<workbookPr");
+    match wb.show_objects {
+        ShowObjects::All => {}
+        ShowObjects::Placeholders => w.push_str(" showObjects=\"placeholders\""),
+        ShowObjects::None => w.push_str(" showObjects=\"none\""),
+    }
+    if wb.date_system == gridcraft_core::DateSystem::D1904 {
+        w.push_str(" date1904=\"1\"");
+    }
+    if wb.remove_personal_info {
+        w.push_str(" filterPrivacy=\"1\"");
+    }
+    w.push_str("/>");
+    if wb.protected_structure {
+        let pw = wb.structure_password.as_ref().map(|h| crate::sheet_write::password_attrs(h, "workbook")).unwrap_or_default();
+        let _ = write!(w, "<workbookProtection{pw} lockStructure=\"1\"/>");
+    }
+    let _ = write!(w, "<bookViews><workbookView activeTab=\"{}\"", kept.file_index(active));
+    w.push_str(&workbook_view_attrs(wb));
+    let _ = write!(w, "/></bookViews><sheets>{sheets_xml}</sheets>");
+    w.push_str(&kept.elements);
+    if !names.is_empty() {
+        let _ = write!(w, "<definedNames>{names}</definedNames>");
+    }
+    w.push_str("<calcPr calcId=\"191029\"");
+    match wb.calc.mode {
+        CalcMode::Automatic => {}
+        CalcMode::Manual => w.push_str(" calcMode=\"manual\""),
+        CalcMode::AutomaticExceptTables => w.push_str(" calcMode=\"autoNoTable\""),
+    }
+    // CT_CalcPr defaults: iterate off, 100 iterations, 0.001 maximum change. The limits are kept
+    // while iteration is off, as Options keeps them.
+    let calc = &wb.calc;
+    if calc.iterative {
+        w.push_str(" iterate=\"1\"");
+    }
+    if calc.iterative || calc.max_iterations != CalcSettings::DEFAULT_ITERATIONS {
+        let _ = write!(w, " iterateCount=\"{}\"", calc.max_iterations);
+    }
+    if calc.iterative || calc.max_change != CalcSettings::DEFAULT_CHANGE {
+        let _ = write!(w, " iterateDelta=\"{}\"", crate::xml::num(calc.max_change));
+    }
+    if wb.calc.precision_as_displayed {
+        w.push_str(" fullPrecision=\"0\"");
+    }
+    if wb.calc.r1c1 {
+        w.push_str(" refMode=\"R1C1\"");
+    }
+    if needs_calc {
+        w.push_str(" fullCalcOnLoad=\"1\"");
+    }
+    w.push_str("/>");
+    w.push_str(&pivots.workbook_xml(wb_rels));
+    let exts = crate::passthrough::workbook_elements(wb, "ext");
+    if !exts.is_empty() {
+        let _ = write!(w, "<extLst>{exts}</extLst>");
+    }
+    w.push_str("</workbook>");
+    w
+}
+
 fn write_sheets(
     wb: &Workbook,
     out: &mut Out,
@@ -483,7 +520,7 @@ fn write_sheets(
 ) -> (String, crate::passthrough::WorkbookKept, crate::pivot::PivotWriter) {
     // Kept content first: the chart sheets among the worksheets need their relationship ids.
     let kept = crate::passthrough::write_workbook(wb, wb_rels, out);
-    let mut pivots = crate::pivot::PivotWriter::default();
+    let mut pivots = crate::pivot::PivotWriter::new(kept.pivot_cache_ids(), kept.pivot_cache_entries());
     let mut sheets_xml = String::new();
     let any_visible = wb.sheets.iter().any(|s| s.visibility == Visibility::Visible);
     let mut ids = crate::passthrough::SheetIds::new(wb, &kept);

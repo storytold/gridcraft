@@ -310,6 +310,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
     // Sheets. `file_to_model[i]` maps the i-th <sheet> to a model sheet index.
     let mut file_to_model: Vec<Option<usize>> = vec![];
     let mut pivot_caches = crate::pivot::CachesIn::new(&wb_xml, &wb_rels);
+    pivot_caches.read_connections(&mut cx, &wb_rels);
     let sheet_els: Vec<El> = wb_xml.child("sheets").map(|s| s.kids("sheet").cloned().collect()).unwrap_or_default();
     let mut names = SheetNames::default();
     for (i, se) in sheet_els.iter().enumerate() {
@@ -339,12 +340,16 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
                 (Sheet::new(name.clone()), Default::default())
             }
         };
+        let mut external_pivots = vec![];
         match crate::pivot::read_pivots(&mut cx, &mut pivot_caches, &rel.target, &name) {
-            Ok(p) => sheet.pivots = p,
+            Ok(p) => {
+                sheet.pivots = p.tables;
+                external_pivots = p.external;
+            }
             Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
             Err(e) => cx.warn(format!("PivotTables on sheet \"{name}\" could not be read: {e}")),
         }
-        sheet.preserved = kept.sheet(&mut cx, &rel.target, &name, &read_controls);
+        sheet.preserved = kept.sheet(&mut cx, &rel.target, &name, &external_pivots, &read_controls);
         sheet.file_id = se.attr_u32("sheetId").unwrap_or(0);
         sheet.visibility = match se.attr("state") {
             Some("hidden") => Visibility::Hidden,
