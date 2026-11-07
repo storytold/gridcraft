@@ -464,13 +464,40 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
 /// The statistics the status bar shows for a selection of more than one cell, left to right: Average, Count,
 /// Numerical Count, Minimum, Maximum, Sum. Each one shows when it is turned on (`view.statusBar`)
 /// and the selection has a value for it.
+///
+/// The scan covers every selected cell, so the answer is kept until the selection, the workbook
+/// (its revision), the active sheet or the status bar choices change.
 pub(crate) fn selection_statistics(app: &SheetApp) -> Vec<String> {
+    let Some(d) = app.session.active() else { return vec![] };
+    let key = (d.uid, d.revision, d.wb.active_sheet(), d.selection.active, d.selection.ranges.clone(), app.session.prefs.status_bar);
+    let mut cache = app.stats_cache.borrow_mut();
+    if cache.key.as_ref() != Some(&key) {
+        cache.parts = compute_statistics(app);
+        cache.key = Some(key);
+        cache.computed += 1;
+    }
+    cache.parts.clone()
+}
+
+/// The last statistics shown, with the inputs they were computed from.
+#[derive(Default)]
+pub(crate) struct StatsCache {
+    key: Option<(u64, u64, usize, gridcraft_engine::core::CellRef, Vec<gridcraft_engine::core::RangeRef>, gridcraft_engine::StatusBarStats)>,
+    parts: Vec<String>,
+    /// How many times the selection was scanned.
+    pub(crate) computed: u64,
+}
+
+fn compute_statistics(app: &SheetApp) -> Vec<String> {
     let Some(d) = app.session.active() else { return vec![] };
     let Some(sh) = d.wb.active() else { return vec![] };
     if d.selection.is_single_cell() {
         return vec![];
     }
     let on = app.session.prefs.status_bar;
+    if !(on.average || on.count || on.numerical_count || on.minimum || on.maximum || on.sum) {
+        return vec![];
+    }
     let st = gridcraft_engine::display::stats(sh, &d.selection.ranges);
     let fmt = |v: f64| {
         let code = d.wb.styles.get(sh.style_id(d.selection.active)).num_fmt.as_str().to_string();
@@ -566,8 +593,51 @@ mod tests {
         app.run("cell.set", json!({"cell": "B2", "input": "b"})).unwrap();
         app.run("selection.set", json!({"range": "B1:B2"})).unwrap();
         assert_eq!(super::selection_statistics(&app), ["Count: 2", "Numerical Count: 0"]);
+        // Everything turned off: nothing to show (and no scan of the selection).
+        app.run(
+            "view.statusBar",
+            json!({"average": false, "count": false, "numericalCount": false, "minimum": false, "maximum": false, "sum": false}),
+        )
+        .unwrap();
+        assert!(super::selection_statistics(&app).is_empty());
         app.run("selection.set", json!({"range": "A1"})).unwrap();
         assert!(super::selection_statistics(&app).is_empty(), "one cell shows no statistics");
+    }
+
+    #[test]
+    fn status_bar_statistics_are_scanned_once_per_selection_and_data_change() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("range.setValues", json!({"range": "A1", "values": [[1], [2], [3]]})).unwrap();
+        app.run("selection.set", json!({"range": "A1:A3"})).unwrap();
+        for _ in 0..5 {
+            assert_eq!(super::selection_statistics(&app), ["Average: 2", "Count: 3", "Sum: 6"]);
+        }
+        assert_eq!(app.stats_cache.borrow().computed, 1, "repeated frames reuse the answer");
+        app.run("cell.set", json!({"cell": "A3", "input": "5"})).unwrap();
+        assert_eq!(super::selection_statistics(&app), ["Average: 2.6666666667", "Count: 3", "Sum: 8"]);
+        assert_eq!(app.stats_cache.borrow().computed, 2, "an edit recomputes");
+        app.run("selection.set", json!({"range": "A1:A2"})).unwrap();
+        assert_eq!(super::selection_statistics(&app), ["Average: 1.5", "Count: 2", "Sum: 3"]);
+        assert_eq!(app.stats_cache.borrow().computed, 3, "a new selection recomputes");
+    }
+
+    #[test]
+    fn status_bar_statistics_follow_a_manual_recalculation() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("range.setValues", json!({"range": "A1", "values": [[1], [2]]})).unwrap();
+        app.run("cell.set", json!({"cell": "B1", "input": "=A1"})).unwrap();
+        app.run("cell.set", json!({"cell": "B2", "input": "=A2"})).unwrap();
+        app.run("formulas.calculationOptions", json!({"mode": "manual"})).unwrap();
+        app.run("selection.set", json!({"range": "B1:B2"})).unwrap();
+        assert_eq!(super::selection_statistics(&app), ["Average: 1.5", "Count: 2", "Sum: 3"]);
+        app.run("cell.set", json!({"cell": "A1", "input": "11"})).unwrap();
+        assert_eq!(super::selection_statistics(&app), ["Average: 1.5", "Count: 2", "Sum: 3"], "stale until recalculated");
+        app.run("formulas.calculateNow", json!({})).unwrap();
+        assert_eq!(super::selection_statistics(&app), ["Average: 6.5", "Count: 2", "Sum: 13"]);
     }
 
     #[test]

@@ -188,16 +188,35 @@ pub struct Stats {
     pub average: Option<f64>,
 }
 
+/// Whether a cell can be visited twice: two selected ranges overlap, or a spill sits in a selected range.
+fn may_visit_twice(sheet: &Sheet, ranges: &[RangeRef], used: Option<RangeRef>) -> bool {
+    // Pairwise checks are quadratic; a selection of this many ranges just tracks.
+    if ranges.len() > 64 {
+        return true;
+    }
+    let overlap = ranges.iter().enumerate().any(|(i, a)| ranges.iter().skip(i + 1).any(|b| a.intersection(b).is_some()));
+    if overlap || sheet.spill.is_empty() {
+        return overlap;
+    }
+    // Clip to the used range first, as `stats` does: the spill scan walks every row-major key between the corners.
+    let Some(used) = used else { return false };
+    ranges.iter().filter_map(|r| r.intersection(&used)).any(|r| sheet.spill.range(r.start..=r.end).any(|(c, _)| r.contains(*c)))
+}
+
 pub fn stats(sheet: &Sheet, ranges: &[RangeRef]) -> Stats {
     let mut s = Stats { min: f64::INFINITY, max: f64::NEG_INFINITY, ..Default::default() };
+    // Cells are only visited twice when ranges overlap or a spill sits on a cell, so a single plain range
+    // skips the per-cell set (it costs time and memory on selections of millions of cells).
+    let used = sheet.used_range();
+    let track = may_visit_twice(sheet, ranges, used);
     let mut seen = std::collections::HashSet::new();
     for r in ranges {
-        let r = match sheet.used_range().and_then(|u| r.intersection(&u)) {
+        let r = match used.and_then(|u| r.intersection(&u)) {
             Some(x) => x,
             None => continue,
         };
         let mut visit = |c: CellRef, v: &Value| {
-            if !seen.insert(c) || sheet.is_row_hidden(c.row) {
+            if (track && !seen.insert(c)) || sheet.is_row_hidden(c.row) {
                 return;
             }
             if v.is_empty() {
@@ -227,4 +246,39 @@ pub fn stats(sheet: &Sheet, ranges: &[RangeRef]) -> Stats {
         s.max = 0.0;
     }
     s
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+
+    #[test]
+    fn stats_count_each_cell_once_for_one_range_and_for_overlapping_ranges() {
+        let mut sh = Sheet::new("S");
+        for (i, n) in [4.0, -1.0, 9.0, 2.0].into_iter().enumerate() {
+            sh.set_value(CellRef::new(i as u32, 0), Value::Number(n));
+        }
+        let one = stats(&sh, &[RangeRef::parse("A1:A4").unwrap()]);
+        assert_eq!((one.count, one.numeric, one.sum, one.min, one.max), (4, 4, 14.0, -1.0, 9.0));
+        // A2:A3 lies inside A1:A4 and must not be counted again.
+        let two = stats(&sh, &[RangeRef::parse("A1:A4").unwrap(), RangeRef::parse("A2:A3").unwrap()]);
+        assert_eq!((two.count, two.numeric, two.sum, two.min, two.max), (4, 4, 14.0, -1.0, 9.0));
+    }
+
+    #[test]
+    fn duplicates_are_only_tracked_for_overlapping_ranges_or_spills_in_range() {
+        let mut sh = Sheet::new("S");
+        sh.spill.insert(CellRef::new(0, 5), Value::Number(1.0));
+        sh.spill_ranges.insert(CellRef::new(0, 5), RangeRef::parse("F1:F2").unwrap());
+        let r = |a: &str| RangeRef::parse(a).unwrap();
+        let used = sh.used_range();
+        assert!(!may_visit_twice(&sh, &[r("A1:A4"), r("C1:C4")], used), "disjoint ranges, spill elsewhere");
+        assert!(may_visit_twice(&sh, &[r("A1:A4"), r("A4:B4")], used));
+        assert!(may_visit_twice(&sh, &[r("F1:F2"), r("A1:A4")], used), "a spill cell inside a range");
+        // A spill value outside the used range is never visited, so it needs no tracking.
+        let mut outside = Sheet::new("S");
+        outside.set_value(CellRef::new(0, 0), Value::Number(1.0));
+        outside.spill.insert(CellRef::new(0, 5), Value::Number(1.0));
+        assert!(!may_visit_twice(&outside, &[r("A1:G2")], outside.used_range()));
+    }
 }

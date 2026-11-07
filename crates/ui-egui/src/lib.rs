@@ -249,6 +249,8 @@ pub struct SheetApp {
     pub(crate) synthetic_injected_at_pass: Option<u64>,
     pub control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
     pub grid: grid::GridState,
+    /// The status bar's selection statistics, kept between frames (see `tabs::selection_statistics`).
+    pub(crate) stats_cache: std::cell::RefCell<tabs::StatsCache>,
     pub perf: Perf,
     pub fonts_ready: bool,
     fonts_set: bool,
