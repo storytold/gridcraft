@@ -257,7 +257,7 @@ impl Discovery {
 /// (`~$…`) are skipped.
 fn collect_inputs(inputs: &[String]) -> Discovery {
     let mut out = Discovery::default();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     for i in inputs {
         let p = PathBuf::from(i);
         if p.is_dir() {
@@ -278,7 +278,12 @@ fn collect_inputs(inputs: &[String]) -> Discovery {
 }
 
 /// Returns false only when the global file budget stops traversal.
-fn walk(dir: &Path, depth: usize, out: &mut Discovery, seen: &mut std::collections::HashSet<u64>) -> bool {
+fn walk(dir: &Path, depth: usize, out: &mut Discovery, seen: &mut HashSet<u64>) -> bool {
+    // Non-Unix targets keep this shared recursive signature, while their traversal relies on the
+    // depth and file limits because directory identity is only available through Unix metadata.
+    #[cfg(not(unix))]
+    let _ = seen;
+
     // A directory is visited once by identity (dev+inode on unix): several links to the same
     // directory are aliases, not exponential branches of the scan. Other platforms keep the
     // depth cap only.
