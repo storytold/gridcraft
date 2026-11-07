@@ -449,7 +449,13 @@ fn defines_environment(env: &PyEnvironment) -> bool {
     env.has_code()
         || env.user_modified
         || env.id.is_some()
-        || env.kept.as_deref().is_some_and(|k| k.definition || !k.environment_attrs.is_empty() || !k.environment_elements.is_empty())
+        || env.kept.as_deref().is_some_and(|k| {
+            k.definition
+                || !k.environment_attrs.is_empty()
+                || !k.environment_elements.is_empty()
+                || !k.initialization_attrs.is_empty()
+                || !k.initialization_elements.is_empty()
+        })
 }
 
 /// Whether the workbook needs a Python part: it has scripts, or an environment with something in it.
@@ -616,6 +622,17 @@ mod tests {
         // A definition whose GUID couldn't be read, with an empty initialization.
         let definition = env(PyEnvironmentXml { definition: true, ..Default::default() });
         assert!(defines_environment(&definition));
+        // Whatever an initialization holds besides code needs a definition around it.
+        for kept in [
+            PyEnvironmentXml { initialization_attrs: " a:i=\"1\"".into(), ..Default::default() },
+            PyEnvironmentXml { initialization_elements: "<a:x/>".into(), ..Default::default() },
+        ] {
+            let held = kept.initialization_attrs.clone() + &kept.initialization_elements;
+            let env = env(kept);
+            assert!(needs_part(&[], Some(&env)), "{held}");
+            let part = write(&[], Some(&env));
+            assert!(part.contains("<environmentDefinition") && part.contains(held.trim()), "{part}");
+        }
         assert!(!needs_part(&[], Some(&env(PyEnvironmentXml::default()))));
         // A readable GUID is enough by itself, and adds nothing to keep.
         let (_, kept) =
