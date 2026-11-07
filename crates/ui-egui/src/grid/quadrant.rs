@@ -150,12 +150,12 @@ fn paint_gridlines(q: &QuadrantPaint<'_>) {
         let bottom = geo.y_end(sh, r1);
         let left = geo.x(sh, c0);
         let right = geo.x_end(sh, c1);
-        let xs = (c0..=c1).filter(|&c| sh.col_width(c) > 0.0).map(|c| geo.x(sh, c)).chain([right]);
+        let xs = geo.shown_cols(c0, c1).map(|c| geo.x(sh, c)).chain([right]);
         for x in xs {
             let x = x.round() - 0.5;
             p.line_segment([pos2(x, top), pos2(x, bottom)], stroke);
         }
-        let ys = (r0..=r1).filter(|&r| sh.row_height(r) > 0.0).map(|r| geo.y(sh, r)).chain([bottom]);
+        let ys = geo.shown_rows(r0, r1).map(|r| geo.y(sh, r)).chain([bottom]);
         for y in ys {
             let y = y.round() - 0.5;
             p.line_segment([pos2(left, y), pos2(right, y)], stroke);
@@ -164,21 +164,14 @@ fn paint_gridlines(q: &QuadrantPaint<'_>) {
 }
 
 fn visible_cells(q: &QuadrantPaint<'_>) -> Vec<CellRef> {
-    let sh = q.sheet;
+    let geo = q.geo;
     let (r0, r1) = q.rows;
     let (c0, c1) = q.cols;
     // Merged areas: blank them (no inner gridlines) and paint as one cell.
+    let cols: Vec<u32> = geo.shown_cols(c0, c1).collect();
     let mut cells: Vec<CellRef> = Vec::new();
-    for r in r0..=r1 {
-        if sh.row_height(r) == 0.0 {
-            continue;
-        }
-        for c in c0..=c1 {
-            if sh.col_width(c) == 0.0 {
-                continue;
-            }
-            cells.push(CellRef::new(r, c));
-        }
+    for r in geo.shown_rows(r0, r1) {
+        cells.extend(cols.iter().map(|&c| CellRef::new(r, c)));
     }
     cells
 }
@@ -225,10 +218,7 @@ fn outside_text_cells(q: &mut QuadrantPaint<'_>, merges: &[RangeRef]) -> Vec<(Ce
     // Text cells just outside the quadrant whose text may overflow into it: the nearest non-empty
     // cell left of `c0` and right of `c1` in each row (within the same frozen / scrolled pane).
     let mut outside: Vec<(CellRef, Rect, Look, Option<CfLook>)> = Vec::new();
-    for r in r0..=r1 {
-        if sh.row_height(r) == 0.0 {
-            continue;
-        }
+    for r in geo.shown_rows(r0, r1) {
         let left = (c0.saturating_sub(20)..c0).rev().map(|col| CellRef::new(r, col)).find(|&n| !empty_ok(n));
         let right = (c1.saturating_add(1)..=c1.saturating_add(20).min(MAX_COLS - 1)).map(|col| CellRef::new(r, col)).find(|&n| !empty_ok(n));
         for n in [left, right].into_iter().flatten() {

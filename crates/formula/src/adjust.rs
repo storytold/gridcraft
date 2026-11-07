@@ -8,7 +8,7 @@ use crate::ast::{Anchor, Expr, RefKind, Reference, SheetSel, clamp_anchor};
 /// Copy/fill: relative parts move by `(dr, dc)`. References pushed off the sheet become `#REF!`.
 pub fn shift_relative(e: Expr, dr: i64, dc: i64) -> Expr {
     e.map(&mut |x| match x {
-        Expr::Ref(r) => match shift_ref(&r, dr, dc) {
+        Expr::Ref(r) => match shift_ref(r, dr, dc) {
             Some(r) => Expr::Ref(r),
             None => Expr::Error(CellError::Ref),
         },
@@ -60,14 +60,14 @@ fn shift_line(v: u32, abs: bool, d: i64, max: u32) -> Option<u32> {
     if (0..max as i64).contains(&n) { Some(n as u32) } else { None }
 }
 
-fn shift_ref(r: &Reference, dr: i64, dc: i64) -> Option<Reference> {
+fn shift_ref(r: Reference, dr: i64, dc: i64) -> Option<Reference> {
     let kind = match &r.kind {
         RefKind::Cell(a) => RefKind::Cell(shift_anchor(a, dr, dc)?),
         RefKind::Range(a, b) => RefKind::Range(shift_anchor(a, dr, dc)?, shift_anchor(b, dr, dc)?),
         RefKind::Rows(r0, a0, r1, a1) => RefKind::Rows(shift_line(*r0, *a0, dr, MAX_ROWS)?, *a0, shift_line(*r1, *a1, dr, MAX_ROWS)?, *a1),
         RefKind::Cols(c0, a0, c1, a1) => RefKind::Cols(shift_line(*c0, *a0, dc, MAX_COLS)?, *a0, shift_line(*c1, *a1, dc, MAX_COLS)?, *a1),
     };
-    Some(Reference { sheet: r.sheet.clone(), kind })
+    Some(Reference { sheet: r.sheet, kind })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -95,25 +95,52 @@ pub enum Edit {
     MoveToSheet { from: RangeRef, to_sheet: String, to_row: u32, to_col: u32 },
 }
 
+/// Whether `r`, in a formula living on sheet `host`, points into sheet `target`.
+fn on_target(r: &Reference, host: &str, target: &str) -> bool {
+    match &r.sheet {
+        SheetSel::Current => host.eq_ignore_ascii_case(target),
+        SheetSel::Named(n) => n.eq_ignore_ascii_case(target),
+        SheetSel::Span(..) => false,
+    }
+}
+
+/// Whether [`adjust`] would change `r`. It runs the same [`adjust_ref`] on a copy without the
+/// sheet name, so no name is copied: the adjustment reads only the position, and the sheet a cut
+/// to another sheet assigns is compared afterwards.
+fn ref_changes(r: &Reference, edit: &Edit) -> bool {
+    let probe = Reference { sheet: SheetSel::Current, kind: r.kind.clone() };
+    match adjust_ref(probe, edit) {
+        None => true,
+        Some(p) => p.kind != r.kind || (p.sheet != SheetSel::Current && p.sheet != r.sheet),
+    }
+}
+
+/// Whether [`adjust`] would change the formula `e` at all, without copying or rebuilding it.
+fn changes(e: &Expr, host: &str, target: &str, edit: &Edit) -> bool {
+    let mut changed = false;
+    e.walk(&mut |x| {
+        if !changed && let Expr::Ref(r) = x {
+            changed = on_target(r, host, target) && ref_changes(r, edit);
+        }
+    });
+    changed
+}
+
 /// Adjusts a formula living on sheet `host` after `edit` on sheet `target`.
 pub fn adjust(e: Expr, host: &str, target: &str, edit: &Edit) -> Expr {
     e.map(&mut |x| match x {
-        Expr::Ref(r) => {
-            let on_target = match &r.sheet {
-                SheetSel::Current => host.eq_ignore_ascii_case(target),
-                SheetSel::Named(n) => n.eq_ignore_ascii_case(target),
-                SheetSel::Span(..) => false,
-            };
-            if !on_target {
-                return Expr::Ref(r);
-            }
-            match adjust_ref(&r, edit) {
-                Some(r) => Expr::Ref(r),
-                None => Expr::Error(CellError::Ref),
-            }
-        }
+        Expr::Ref(r) if on_target(&r, host, target) => match adjust_ref(r, edit) {
+            Some(r) => Expr::Ref(r),
+            None => Expr::Error(CellError::Ref),
+        },
         other => other,
     })
+}
+
+/// [`adjust`] for a borrowed formula: `None` when the edit leaves it exactly as it is, so a
+/// caller can skip unaffected formulas without copying, rebuilding or printing them.
+pub fn adjust_if_changed(e: &Expr, host: &str, target: &str, edit: &Edit) -> Option<Expr> {
+    changes(e, host, target, edit).then(|| adjust(e.clone(), host, target, edit))
 }
 
 /// New position of an index after an insert (`None` never) or delete (`None` = deleted).
@@ -168,7 +195,7 @@ fn map_span(lo: u32, hi: u32, at: u32, count: u32, insert: bool, max: u32) -> Op
     }
 }
 
-fn adjust_ref(r: &Reference, edit: &Edit) -> Option<Reference> {
+fn adjust_ref(r: Reference, edit: &Edit) -> Option<Reference> {
     match edit {
         Edit::Insert { axis, at, count } | Edit::Delete { axis, at, count } => {
             let insert = matches!(edit, Edit::Insert { .. });
@@ -193,7 +220,7 @@ fn adjust_ref(r: &Reference, edit: &Edit) -> Option<Reference> {
                 }
                 (k, _) => k.clone(),
             };
-            Some(Reference { sheet: r.sheet.clone(), kind })
+            Some(Reference { sheet: r.sheet, kind })
         }
         Edit::InsertCells { axis, range } | Edit::DeleteCells { axis, range } => {
             // Like inserting/deleting lines, for references that lie within the shifted
@@ -204,7 +231,7 @@ fn adjust_ref(r: &Reference, edit: &Edit) -> Option<Reference> {
                 Axis::Cols => (range.start.row <= span.start.row && span.end.row <= range.end.row, range.start.col, range.width()),
             };
             if !inside {
-                return Some(r.clone());
+                return Some(r);
             }
             let axis = *axis;
             let lines = if matches!(edit, Edit::InsertCells { .. }) { Edit::Insert { axis, at, count } } else { Edit::Delete { axis, at, count } };
@@ -215,7 +242,7 @@ fn adjust_ref(r: &Reference, edit: &Edit) -> Option<Reference> {
             let dc = *to_col as i64 - from.start.col as i64;
             let range = r.range();
             if !from.contains_range(&range) {
-                return Some(r.clone());
+                return Some(r);
             }
             let mv = |a: &Anchor| -> Option<Anchor> {
                 let (row, col) = clamp_anchor(a.row as i64 + dr, a.col as i64 + dc)?;
@@ -233,11 +260,11 @@ fn adjust_ref(r: &Reference, edit: &Edit) -> Option<Reference> {
                     RefKind::Cols(shift_line(*a, false, dc, MAX_COLS)?, *aa, shift_line(*b, false, dc, MAX_COLS)?, *ba)
                 }
             };
-            Some(Reference { sheet: r.sheet.clone(), kind })
+            Some(Reference { sheet: r.sheet, kind })
         }
         Edit::MoveToSheet { from, to_sheet, to_row, to_col } => {
             if !from.contains_range(&r.range()) {
-                return Some(r.clone());
+                return Some(r);
             }
             let mut moved = adjust_ref(r, &Edit::Move { from: *from, to_row: *to_row, to_col: *to_col })?;
             moved.sheet = SheetSel::Named(to_sheet.clone());
