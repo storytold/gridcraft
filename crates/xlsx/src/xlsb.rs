@@ -18,8 +18,8 @@ const MAIN: &str = "application/vnd.ms-excel.main";
 const BINARY_MAIN: &str = "application/vnd.ms-excel.sheet.binary.macroEnabled.main";
 const WORKSHEET: &str = "application/vnd.ms-excel.worksheet";
 const STRINGS: &str = "application/vnd.ms-excel.sharedStrings";
-const CT_NS: &[u8] = b"http://schemas.openxmlformats.org/package/2006/content-types";
-const REL_NS: &[u8] = b"http://schemas.openxmlformats.org/package/2006/relationships";
+const CT_NS: &str = "http://schemas.openxmlformats.org/package/2006/content-types";
+const REL_NS: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
 const REL_TYPE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
 const STRICT_REL_TYPE: &str = "http://purl.oclc.org/ooxml/officeDocument/relationships/";
 const MS_REL_TYPE: &str = "http://schemas.microsoft.com/office/2006/relationships/";
@@ -152,7 +152,7 @@ impl Entry {
 
 /// The two package metadata parts are flat, namespace-qualified XML documents. Keep only
 /// direct child entries, and reject truncated XML instead of guessing a partial relationship.
-fn metadata(bytes: &[u8], ns: &[u8], root_name: &[u8]) -> Result<Vec<Entry>, IoError> {
+fn metadata(bytes: &[u8], ns: &str, root_name: &str) -> Result<Vec<Entry>, IoError> {
     let mut reader = NsReader::from_reader(bytes);
     let mut depth = 0usize;
     let mut seen = false;
@@ -172,14 +172,14 @@ fn metadata(bytes: &[u8], ns: &[u8], root_name: &[u8]) -> Result<Vec<Entry>, IoE
                     let mut attrs = vec![];
                     for a in e.attributes() {
                         let a = a.map_err(|e| IoError::Xml(e.to_string()))?;
-                        if !a.key.as_ref().contains(&b':') {
+                        if !a.key.as_ref().contains(':') {
                             attrs.push((
-                                String::from_utf8_lossy(a.key.as_ref()).into_owned(),
+                                a.key.as_ref().to_string(),
                                 a.normalized_value(XmlVersion::Explicit1_0).map_err(|e| IoError::Xml(e.to_string()))?.into_owned(),
                             ));
                         }
                     }
-                    entries.push(Entry { name: String::from_utf8_lossy(local.as_ref()).into_owned(), attrs });
+                    entries.push(Entry { name: local.as_ref().to_string(), attrs });
                 }
                 if matches!(event, Event::Start(_)) {
                     depth += 1;
@@ -189,7 +189,7 @@ fn metadata(bytes: &[u8], ns: &[u8], root_name: &[u8]) -> Result<Vec<Entry>, IoE
                 }
             }
             Event::End(_) => depth = depth.checked_sub(1).ok_or_else(|| invalid("unexpected metadata end"))?,
-            Event::Text(t) if depth == 0 && !t.xml_content(XmlVersion::Explicit1_0).map_err(|e| IoError::Xml(e.to_string()))?.trim().is_empty() => {
+            Event::Text(t) if depth == 0 && !t.xml_content(XmlVersion::Explicit1_0).trim().is_empty() => {
                 return Err(invalid("text outside package metadata"));
             }
             Event::DocType(_) => return Err(invalid("DOCTYPE in package metadata is unsupported")),
@@ -205,7 +205,7 @@ fn metadata(bytes: &[u8], ns: &[u8], root_name: &[u8]) -> Result<Vec<Entry>, IoE
 
 fn content_types(package: &mut Package<'_>) -> Result<Vec<Entry>, IoError> {
     let data = package.read_limited("[Content_Types].xml", MAX_META)?.ok_or_else(|| invalid("missing content types"))?;
-    metadata(&data, CT_NS, b"Types")
+    metadata(&data, CT_NS, "Types")
 }
 
 fn check_type(types: &[Entry], path: &str, expected: &str) -> Result<(), IoError> {
@@ -226,7 +226,7 @@ fn relationships(package: &mut Package<'_>, path: &str) -> Result<Vec<Rel>, IoEr
     let relpath = if dir.is_empty() { format!("_rels/{file}.rels") } else { format!("{dir}/_rels/{file}.rels") };
     let data = package.read_limited(&relpath, MAX_META)?.ok_or_else(|| invalid(format!("missing relationships for {path}")))?;
     let mut out: Vec<Rel> = vec![];
-    for e in metadata(&data, REL_NS, b"Relationships")? {
+    for e in metadata(&data, REL_NS, "Relationships")? {
         if e.name != "Relationship" {
             continue;
         }
