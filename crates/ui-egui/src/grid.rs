@@ -314,6 +314,8 @@ pub struct GridState {
     pub tab_shares: std::collections::HashMap<u64, f32>,
     /// Ctrl+wheel zoom in progress (see [`WheelZoom`]).
     pub wheel_zoom: Option<WheelZoom>,
+    /// The last wheel event came in lines, as a mouse wheel's do, not in points like a trackpad's.
+    pub wheel_by_line: bool,
     /// A one-finger touch drag in progress: it pans the sheet instead of selecting.
     pub touch_pan: bool,
     /// What the macro step editor shows on the grid (Check, debugging).
