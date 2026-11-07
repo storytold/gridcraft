@@ -60,6 +60,34 @@ fn save_keeps_the_destination_access_restrictions() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(unix)]
+#[test]
+fn fresh_save_drops_group_and_other_write_under_a_permissive_umask() {
+    use std::os::unix::fs::PermissionsExt;
+    if std::env::var_os("GRIDCRAFT_UMASK_CHILD").is_none() {
+        // Re-run this test in a child shell whose umask is 0002.
+        let exe = std::env::current_exe().unwrap();
+        let status = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("umask 0002 && exec \"$0\" --exact io::tests::fresh_save_drops_group_and_other_write_under_a_permissive_umask")
+            .arg(exe)
+            .env("GRIDCRAFT_UMASK_CHILD", "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-umask-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let fresh = dir.join("new.xlsx");
+    write_file(fresh.to_str().unwrap(), b"v").unwrap();
+    let mode = std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777;
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(mode & 0o022 == 0, "mode {mode:o}");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn open_refuses_directories_and_unknowable_lengths() {
     let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-open-{}", std::process::id()));
