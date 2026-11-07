@@ -1,0 +1,63 @@
+name: Bug report
+description: Report a reproducible problem in GridCraft.
+title: "fix(area): "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues and PRs first. Replace `area` in the title with the affected component.
+        Use synthetic data only; do not attach real customer files, personal data, credentials or confidential material.
+  - type: input
+    id: version
+    attributes:
+      label: GridCraft version
+      description: Release version or source commit SHA.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Operating system and platform
+      description: Include the OS version; for the web build, also include browser and version.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem description
+      description: What goes wrong? Include a suspected code location if you know it.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction-steps
+    attributes:
+      label: Steps to reproduce
+      description: List the smallest sequence of actions, cell values and formulas that reproduces the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs-screenshots
+    attributes:
+      label: Logs or screenshots
+      description: Optional error output or GridCraft screenshots. Remove sensitive information before attaching.
+    validations:
+      required: false
+  - type: textarea
+    id: minimal-reproduction
+    attributes:
+      label: Minimal reproduction material
+      description: Optional small workbook created with invented data, or a short script. Do not attach vendor templates or assets.
+    validations:
+      required: false

@@ -1,0 +1,44 @@
+name: Feature request
+description: Suggest an improvement or new capability for GridCraft.
+title: "feat(area): "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues and PRs first. Replace `area` in the title with the affected component.
+        Keep examples synthetic and remove personal or confidential information from attachments.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: What is difficult or missing in your workflow?
+    validations:
+      required: true
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Proposed behavior
+      description: What should GridCraft do?
+    validations:
+      required: true
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: Who would use this, and when?
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Existing commands or other approaches you have tried.
+    validations:
+      required: false
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Optional examples, links or mockups. Do not attach proprietary templates or vendor assets.
+    validations:
+      required: false
