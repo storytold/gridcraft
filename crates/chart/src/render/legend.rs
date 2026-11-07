@@ -64,7 +64,7 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
         // of their own: one entry per point, as Excel lists them.
         _ if data.legend_by_point && data.series.len() == 1 => {
             let Some(s) = data.series.first() else { return vec![] };
-            let sw = swatch_of(plot_kind(chart, s));
+            let sw = swatch_of(plot_kind(chart, s, 0));
             let n = s.values.len().max(data.categories.len()).min(MAX_CATS);
             (0..n)
                 .map(|j| {
@@ -79,7 +79,7 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
         }
         _ => {
             let series = data.series.iter().take(MAX_SERIES);
-            let mut out: Vec<(String, Rgba, Swatch)> = series.clone().map(|s| (s.name.clone(), s.color, swatch_of(plot_kind(chart, s)))).collect();
+            let mut out: Vec<(String, Rgba, Swatch)> = series.clone().enumerate().map(|(i, s)| (s.name.clone(), s.color, swatch_of(plot_kind(chart, s, i)))).collect();
             // Trendlines follow the series, named "Linear (Sales)" unless given a name.
             for (_, s) in series.enumerate().filter(|(i, s)| supports_trendline(plot_kind(chart, s, *i))) {
                 for t in s.trendlines.iter().take(MAX_TRENDLINES) {
