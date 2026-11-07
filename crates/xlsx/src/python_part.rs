@@ -21,14 +21,21 @@
 //! Python cells keeps its environment too: `pythonScripts` is optional, and is left out when there
 //! are no scripts, since the format requires one `pythonScript` in it. The code is cut when read
 //! ([`gridcraft_model::python::MAX_INIT_CHARS_KEPT`]), as a script is.
+//!
+//! An element is one of the part's only in the part's namespace, whatever its prefix, and an attribute
+//! only without a prefix. So a `v:code` of another namespace beside the real `code` is kept with the
+//! rest, and neither is taken for the other. A save writes one script per cell, so a script has no
+//! place for anything else: what `pythonScripts` and `pythonScript` hold besides scripts and code goes,
+//! with a warning.
 
 use std::fmt::Write as _;
 
 use gridcraft_formula::Expr;
 use gridcraft_model::python::{FILE_PREFIX, MAX_FORMULA_CHARS, MAX_INIT_CHARS, MAX_INIT_CHARS_KEPT, environment_id, is_guid};
 use gridcraft_model::{PyCode, PyEnvironment, PyEnvironmentXml};
-use quick_xml::Reader;
+use quick_xml::NsReader;
 use quick_xml::events::{BytesStart, Event};
+use quick_xml::name::{Namespace, ResolveResult};
 
 use crate::IoError;
 use crate::read::Ctx;
@@ -106,7 +113,7 @@ pub fn read(cx: &mut Ctx<'_>, rels: &[crate::package::Rel]) -> Result<ScriptsIn,
         }
     };
     let mut over = 0usize;
-    let parsed = xml::parse_streaming(&bytes, &["pythonScript"], &mut |el: El| {
+    let parsed = xml::parse_streaming_in(&bytes, NS, &["pythonScript"], &mut |el: El| {
         if out.scripts.len() < MAX_SCRIPTS {
             out.scripts.push(script_code(&el));
         } else {
@@ -169,9 +176,13 @@ fn read_environment(cx: &mut Ctx<'_>, root: &El, bytes: &[u8]) -> Option<PyEnvir
             "the Python initialization code is longer than {MAX_INIT_CHARS} characters: its start was kept, it doesn't run until it is shortened, and a save writes only what was kept"
         ));
     }
-    let kept = kept_xml(bytes);
-    if kept.is_none() {
+    let scanned = kept_xml(bytes);
+    if scanned.is_none() {
         cx.warn("the Python part holds XML that isn't well formed around its environment; a save leaves what GridCraft doesn't read out");
+    }
+    let (kept, unkept) = scanned.map_or((None, 0), |(kept, unkept)| (Some(kept), unkept));
+    if unkept > 0 {
+        cx.warn(format!("the Python part holds {unkept} attribute(s) or element(s) on its code or among its scripts that a save leaves out"));
     }
     let size = kept.as_ref().map_or(0, |k| {
         [&k.root_attrs, &k.root_elements, &k.environment_attrs, &k.environment_elements, &k.initialization_attrs, &k.initialization_elements]
@@ -199,33 +210,40 @@ fn read_environment(cx: &mut Ctx<'_>, root: &El, bytes: &[u8]) -> Option<PyEnvir
     })
 }
 
-/// What the part holds around what GridCraft reads, as it came. `None` for a part the scan can't
-/// follow, whose unread content then goes with a save.
-fn kept_xml(bytes: &[u8]) -> Option<PyEnvironmentXml> {
+/// What the part holds around what GridCraft reads, as it came, and how many attributes and elements
+/// it holds where a save has no place for them. `None` for a part the scan can't follow, whose unread
+/// content then goes with a save.
+fn kept_xml(bytes: &[u8]) -> Option<(PyEnvironmentXml, usize)> {
     #[derive(Clone, Copy, PartialEq)]
     enum In {
         Part,
         Root,
         Environment,
         Initialization,
+        Scripts,
+        Script,
     }
     let data = xml::to_utf8(bytes);
     let text = std::str::from_utf8(&data).ok()?;
-    let mut reader = Reader::from_str(text);
+    let mut reader = NsReader::from_str(text);
     let mut kept = PyEnvironmentXml::default();
+    let mut unkept = 0usize;
     // The default namespace each kept element takes from where it was.
     let (mut in_root, mut in_environment, mut in_initialization): (Option<String>, Option<String>, Option<String>) = (None, None, None);
     let mut place = In::Part;
     let (mut seen_environment, mut seen_initialization) = (false, false);
     loop {
         let start = usize::try_from(reader.buffer_position()).ok()?;
-        let (e, open) = match reader.read_event().ok()? {
+        let (namespace, event) = reader.read_resolved_event().ok()?;
+        let in_part = matches!(namespace, ResolveResult::Bound(Namespace(n)) if n == NS.as_bytes());
+        let (e, open) = match event {
             Event::Eof => break,
             Event::End(_) => {
                 place = match place {
                     In::Part | In::Root => break,
-                    In::Environment => In::Root,
+                    In::Environment | In::Scripts => In::Root,
                     In::Initialization => In::Environment,
+                    In::Script => In::Scripts,
                 };
                 continue;
             }
@@ -233,8 +251,10 @@ fn kept_xml(bytes: &[u8]) -> Option<PyEnvironmentXml> {
             Event::Empty(e) => (e, false),
             _ => continue,
         };
-        let local = e.local_name().as_ref().to_vec();
-        match (place, local.as_slice()) {
+        // The part's own names are only names in the part's namespace: another's `code` isn't its code.
+        let local = e.local_name();
+        let name: &[u8] = if in_part { local.as_ref() } else { b"" };
+        match (place, name) {
             (In::Part, _) => {
                 kept.root_attrs = attrs_besides(&e, &[b"xmlns"]);
                 in_root = declared_namespace(&e);
@@ -267,35 +287,53 @@ fn kept_xml(bytes: &[u8]) -> Option<PyEnvironmentXml> {
                 }
                 continue;
             }
+            (In::Root, b"pythonScripts") | (In::Scripts, b"pythonScript") => {
+                unkept += usize::from(has_attributes(&e));
+                if open {
+                    place = if place == In::Root { In::Scripts } else { In::Script };
+                }
+                continue;
+            }
             _ => {}
         }
         if open {
             reader.read_to_end(e.name()).ok()?;
         }
-        let read = (place, local.as_slice());
-        // Read already, or a second one the format doesn't allow.
-        if matches!(
-            read,
-            (In::Root, b"environmentDefinition" | b"pythonScripts") | (In::Environment, b"initialization") | (In::Initialization, b"code")
-        ) {
+        if matches!((place, name), (In::Initialization | In::Script, b"code")) {
+            unkept += usize::from(has_attributes(&e));
+            continue;
+        }
+        // A second one, which the format doesn't allow.
+        if matches!((place, name), (In::Root, b"environmentDefinition") | (In::Environment, b"initialization")) {
+            continue;
+        }
+        if matches!(place, In::Scripts | In::Script) {
+            unkept += 1;
             continue;
         }
         let fragment = text.get(start..usize::try_from(reader.buffer_position()).ok()?)?;
         let in_scope = match place {
             In::Environment => &in_environment,
             In::Initialization => &in_initialization,
-            In::Root | In::Part => &in_root,
+            In::Root | In::Part | In::Scripts | In::Script => &in_root,
         };
         let fragment = with_namespace(fragment, &e, in_scope.as_deref());
         match place {
             In::Root => kept.root_elements.push_str(&fragment),
             In::Environment => kept.environment_elements.push_str(&fragment),
             In::Initialization => kept.initialization_elements.push_str(&fragment),
-            In::Part => {}
+            In::Part | In::Scripts | In::Script => {}
         }
     }
     kept.no_initialization = seen_environment && !seen_initialization;
-    Some(kept)
+    Some((kept, unkept))
+}
+
+/// Whether an element has attributes that say something a save would lose. Names starting with `xml`
+/// are the XML specification's own: namespace declarations, and `xml:space`, since code is read with
+/// its spaces either way.
+fn has_attributes(e: &BytesStart<'_>) -> bool {
+    e.attributes().flatten().any(|a| !a.key.as_ref().starts_with(b"xml"))
 }
 
 /// The default namespace an element declares itself.
@@ -575,8 +613,136 @@ mod tests {
 
     /// The environment `write` puts in the part, read back through the part's own scan.
     fn read_back(xml: &str) -> (El, PyEnvironmentXml) {
-        let root = xml::parse_streaming(xml.as_bytes(), &["pythonScript"], &mut |_| Ok(())).unwrap();
-        (root, kept_xml(xml.as_bytes()).unwrap())
+        let root = xml::parse_streaming_in(xml.as_bytes(), NS, &["pythonScript"], &mut |_| Ok(())).unwrap();
+        (root, kept_xml(xml.as_bytes()).unwrap().0)
+    }
+
+    /// The scripts' code a part's own reading finds.
+    fn scripts_of(xml: &str) -> Vec<String> {
+        let mut read = Vec::new();
+        xml::parse_streaming_in(xml.as_bytes(), NS, &["pythonScript"], &mut |el| {
+            read.push(script_code(&el));
+            Ok(())
+        })
+        .unwrap();
+        read
+    }
+
+    #[test]
+    fn another_namespaces_element_with_a_python_name_stays_and_is_not_read() {
+        const GUID: &str = "{AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE}";
+        // Before and after the real one, prefixed and by a default of its own, at every level.
+        let part = format!(
+            "<python xmlns=\"{NS}\" xmlns:v=\"urn:vendor\">\
+             <v:environmentDefinition id=\"v-e\"><initialization><code>not the environment</code></initialization></v:environmentDefinition>\
+             <environmentDefinition id=\"{GUID}\">\
+             <v:initialization userModified=\"1\"><code>not the initialization</code></v:initialization>\
+             <initialization>\
+             <v:code>before</v:code><code xmlns=\"urn:other\">other</code><code>x = 1</code><v:code>after</v:code>\
+             </initialization></environmentDefinition>\
+             <v:pythonScripts><pythonScript><code>not a script</code></pythonScript></v:pythonScripts>\
+             <pythonScripts><pythonScript><code>2</code></pythonScript></pythonScripts></python>"
+        );
+        let (root, kept) = read_back(&part);
+        let definition = root.child("environmentDefinition").unwrap();
+        assert_eq!(definition.attr("id"), Some(GUID));
+        let init = definition.child("initialization").unwrap();
+        assert_eq!(decoded_code(init, MAX_INIT_CHARS_KEPT), "x = 1");
+        assert!(!init.flag("userModified", false), "the flag was on another namespace's element");
+        assert_eq!(scripts_of(&part), ["2"]);
+        assert_eq!(
+            kept.root_elements,
+            "<v:environmentDefinition id=\"v-e\"><initialization><code>not the environment</code></initialization></v:environmentDefinition>\
+             <v:pythonScripts><pythonScript><code>not a script</code></pythonScript></v:pythonScripts>"
+        );
+        assert_eq!(kept.environment_elements, "<v:initialization userModified=\"1\"><code>not the initialization</code></v:initialization>");
+        assert_eq!(kept.initialization_elements, "<v:code>before</v:code><code xmlns=\"urn:other\">other</code><v:code>after</v:code>");
+        // Written and read again, it says the same, twice over.
+        let env = PyEnvironment { code: "x = 1".into(), id: Some(GUID.into()), kept: Some(std::sync::Arc::new(kept.clone())), ..Default::default() };
+        let written = write(&["2".to_string()], Some(&env));
+        let (again, kept_again) = read_back(&written);
+        assert_eq!(kept_again, kept, "{written}");
+        assert_eq!(decoded_code(again.path(&["environmentDefinition", "initialization"]).unwrap(), MAX_INIT_CHARS_KEPT), "x = 1");
+        assert_eq!(scripts_of(&written), ["2"]);
+        assert_eq!(write(&["2".to_string()], Some(&PyEnvironment { kept: Some(kept_again.into()), ..env })), written);
+    }
+
+    #[test]
+    fn the_parts_own_names_read_whatever_prefix_they_have() {
+        let part = format!(
+            "<p:python xmlns:p=\"{NS}\" xmlns:v=\"urn:vendor\"><p:environmentDefinition><q:initialization xmlns:q=\"{NS}\">\
+             <v:code>theirs</v:code><q:code>x = 1</q:code></q:initialization></p:environmentDefinition>\
+             <p:pythonScripts><v:pythonScript><p:code>not a script</p:code></v:pythonScript><p:pythonScript><v:code>theirs</v:code>\
+             <p:code>2</p:code></p:pythonScript></p:pythonScripts></p:python>"
+        );
+        let (root, kept) = read_back(&part);
+        assert_eq!(decoded_code(root.path(&["environmentDefinition", "initialization"]).unwrap(), MAX_INIT_CHARS_KEPT), "x = 1");
+        // The script of another namespace takes no index, so `PY(0,…)` still names the real one.
+        assert_eq!(scripts_of(&part), ["2"]);
+        // Under a saved root it would take the part's default, so it says it has none.
+        assert_eq!(kept.initialization_elements, "<v:code xmlns=\"\">theirs</v:code>");
+    }
+
+    #[test]
+    fn an_attribute_with_a_prefix_is_not_the_parts_attribute() {
+        const GUID: &str = "{AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE}";
+        const THEIRS: &str = "{11111111-2222-4333-8444-555555555555}";
+        let part = format!(
+            "<python xmlns=\"{NS}\" xmlns:v=\"urn:vendor\"><environmentDefinition v:id=\"{THEIRS}\" id=\"{GUID}\">\
+             <initialization v:userModified=\"1\"/></environmentDefinition></python>"
+        );
+        let (root, kept) = read_back(&part);
+        let definition = root.child("environmentDefinition").unwrap();
+        assert_eq!(definition.attr("id"), Some(GUID));
+        assert!(!definition.child("initialization").unwrap().flag("userModified", false));
+        assert_eq!(kept.environment_attrs, format!(" v:id=\"{THEIRS}\""));
+        assert_eq!(kept.initialization_attrs, " v:userModified=\"1\"");
+    }
+
+    #[test]
+    fn a_root_in_another_namespace_is_not_the_python_part() {
+        for part in [
+            "<python><pythonScripts><pythonScript><code>1</code></pythonScript></pythonScripts></python>".to_string(),
+            "<python xmlns=\"urn:other\"><pythonScripts><pythonScript><code>1</code></pythonScript></pythonScripts></python>".to_string(),
+            format!(
+                "<v:python xmlns:v=\"urn:other\" xmlns=\"{NS}\"><pythonScripts><pythonScript><code>1</code></pythonScript></pythonScripts></v:python>"
+            ),
+        ] {
+            let mut scripts = 0;
+            let parsed = xml::parse_streaming_in(part.as_bytes(), NS, &["pythonScript"], &mut |_| {
+                scripts += 1;
+                Ok(())
+            });
+            assert!(parsed.is_err(), "{part}");
+            assert_eq!(scripts, 0, "{part}");
+        }
+    }
+
+    #[test]
+    fn what_a_save_has_no_place_for_is_counted() {
+        let unkept = |part: String| kept_xml(part.as_bytes()).unwrap().1;
+        // A script and its code as the format has them, and the declarations a part may carry.
+        assert_eq!(
+            unkept(format!(
+                "<python xmlns=\"{NS}\"><pythonScripts xmlns:v=\"urn:v\"><pythonScript><code xml:space=\"preserve\">1</code></pythonScript></pythonScripts></python>"
+            )),
+            0
+        );
+        // One each: an attribute of `pythonScripts`, of a script and of its code, an element beside the
+        // scripts and one beside the code, and an attribute of the initialization's code.
+        let part = format!(
+            "<python xmlns=\"{NS}\" xmlns:v=\"urn:v\"><environmentDefinition><initialization><code v:a=\"1\">x</code></initialization></environmentDefinition>\
+             <pythonScripts v:a=\"1\"><v:note/><pythonScript v:a=\"1\"><code v:a=\"1\">1</code><v:code>theirs</v:code></pythonScript></pythonScripts></python>"
+        );
+        assert_eq!(unkept(part), 6);
+    }
+
+    #[test]
+    fn another_namespaces_elements_nested_without_end_are_refused() {
+        // The namespace reader's depth is a 16-bit count, which a part this deep would run past.
+        let deep = format!("<python xmlns=\"{NS}\"><v:a xmlns:v=\"urn:v\">{}</v:a></python>", "<v:a>".repeat(70_000));
+        let e = xml::parse_streaming_in(deep.as_bytes(), NS, &["pythonScript"], &mut |_| Ok(())).unwrap_err();
+        assert!(e.to_string().contains("nested too deeply"), "{e}");
     }
 
     #[test]
