@@ -16,6 +16,10 @@ impl SheetApp {
         r
     }
 
+    /// Runs the command itself: settles the drafts it depends on, lets the UI commands answer
+    /// first, runs the engine command, and applies the UI effects it implies (the Backstage
+    /// closing, the active window, the chart or selection it leaves). [`run`](Self::run) adds the
+    /// bookkeeping that every caller needs.
     pub(super) fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
         let switches_window = id.starts_with("window.")
             || matches!(id, "view.newWindow" | "view.hideWindow" | "view.unhideWindow")
