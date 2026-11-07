@@ -874,6 +874,18 @@ fn cjk_text_is_not_replaced_by_question_marks() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn many_alternating_runs_share_one_text_matrix() {
+    let mut doc = PdfDoc::new();
+    let p = doc.add_page(612.0, 792.0);
+    p.text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], &"a\u{4e2d}".repeat(2000));
+    let pdf = doc.finish();
+    let count = |needle: &[u8]| pdf.windows(needle.len()).filter(|w| *w == needle).count();
+    assert_eq!(count(b" Tm\n"), 1, "the position is set once, before the first run");
+    assert_eq!(count(b" Tf\n"), 4000, "every run selects its font");
+    assert_eq!(count(b" Tj\n"), 4000);
+}
+
+#[test]
 fn symbol_font_draws_maths_in_its_own_encoding() {
     let mut doc = PdfDoc::new();
     let p = doc.add_page(200.0, 200.0);

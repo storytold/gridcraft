@@ -743,8 +743,9 @@ impl Page {
             if let Some(f) = self.fonts.get_mut(slot) {
                 *f = true;
             }
+            let first_run = runs.is_empty();
             let _ = writeln!(runs, "/F{} {} Tf", slot + 1, size);
-            if runs.matches("Tf\n").count() == 1 {
+            if first_run {
                 runs.push_str(&tm);
             }
             let _ = writeln!(runs, "{string} Tj");
