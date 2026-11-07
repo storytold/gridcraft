@@ -491,6 +491,39 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Compact" => "Compacto",
         "Outline" => "Esquema",
         "Tabular" => "Tabular",
+        "Options|Data" => "Datos",
+        "Automatic data conversion" => "Conversión automática de datos",
+        "Enable all default data conversions below when entering, pasting, or opening text files" => {
+            "Habilitar todas las conversiones de datos predeterminadas siguientes al escribir, pegar o abrir archivos de texto"
+        }
+        "Remove leading zeros and convert to a number" => "Quitar ceros iniciales y convertir en número",
+        "Off: 0123 stays text, leading zeros included." => "Desactivado: 0123 se queda como texto, con los ceros iniciales.",
+        "Keep first 15 digits of long numbers and display in scientific notation" => {
+            "Conservar los primeros 15 dígitos de los números largos y mostrarlos en notación científica"
+        }
+        "Off: no number is cut short or turned into scientific notation. What General format can't show as written stays text." => {
+            "Desactivado: ningún número se recorta ni se pasa a notación científica. Lo que el formato General no puede mostrar tal como se escribió se queda como texto."
+        }
+        "Keep numbers with more than" => "Conservar como texto los números de más de",
+        "11 (default): only numbers General format shows exactly as written convert, so 12-digit codes and barcodes stay text. 12 to 15 allows scientific display, like 1.24412E+11, for numbers up to that many digits; no digit is ever lost." => {
+            "11 (predeterminado): solo se convierten los números que el formato General muestra exactamente como se escribieron, así que los códigos de 12 dígitos y los códigos de barras se quedan como texto. De 12 a 15 permite la presentación científica, como 1.24412E+11, para números de hasta esa cantidad de dígitos; nunca se pierde ningún dígito."
+        }
+        "digits as text" => "dígitos",
+        "Convert digits surrounding the letter \"E\" to a number in scientific notation" => {
+            "Convertir los dígitos alrededor de la letra \"E\" en un número en notación científica"
+        }
+        "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => {
+            "Desactivado: 1244121406E6 se queda como texto en lugar de convertirse en 1.24412E+15."
+        }
+        "Convert continuous letters and numbers to a date" => "Convertir letras y números continuos en una fecha",
+        "GridCraft never makes this conversion: 12JAN2026 stays text." => "GridCraft nunca hace esta conversión: 12JAN2026 se queda como texto.",
+        "Data conversion settings apply to every workbook; they are not saved in the file." => {
+            "La configuración de conversión de datos se aplica a todos los libros; no se guarda en el archivo."
+        }
+        "Remove trailing zeros after the decimal separator" => "Quitar los ceros finales después del separador decimal",
+        "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
+            "Desactivado: 720.0 se muestra y se guarda como 720.0, y 3.10 como 3.10 (la celda recibe el formato de número 0.0 o 0.00). Sigue siendo un número. No es una opción de Excel."
+        }
         "Insert Sheet" => "Insertar hoja",
         "Rename" => "Cambiar nombre",
         "Move or Copy…" => "Mover o copiar…",

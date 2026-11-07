@@ -574,6 +574,37 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Zoom Out" => "Oddálit",
         // widgets.rs (alphabetical keys).
         "Dismiss" => "Zavřít",
+        "Options|Data" => "Data",
+        "Automatic data conversion" => "Automatický převod dat",
+        "Enable all default data conversions below when entering, pasting, or opening text files" => {
+            "Povolit všechny níže uvedené výchozí převody dat při zadávání, vkládání nebo otevírání textových souborů"
+        }
+        "Remove leading zeros and convert to a number" => "Odebrat úvodní nuly a převést na číslo",
+        "Off: 0123 stays text, leading zeros included." => "Vypnuto: 0123 zůstane textem včetně úvodních nul.",
+        "Keep first 15 digits of long numbers and display in scientific notation" => {
+            "Zachovat prvních 15 číslic dlouhých čísel a zobrazit je v exponenciálním tvaru"
+        }
+        "Off: no number is cut short or turned into scientific notation. What General format can't show as written stays text." => {
+            "Vypnuto: žádné číslo se nezkrátí ani nepřevede do exponenciálního tvaru. Co formát Obecný nedokáže zobrazit tak, jak bylo zapsáno, zůstane textem."
+        }
+        "Keep numbers with more than" => "Ponechat jako text čísla s více než",
+        "11 (default): only numbers General format shows exactly as written convert, so 12-digit codes and barcodes stay text. 12 to 15 allows scientific display, like 1.24412E+11, for numbers up to that many digits; no digit is ever lost." => {
+            "11 (výchozí): převedou se jen čísla, která formát Obecný zobrazí přesně tak, jak byla zapsána, takže 12místné kódy a čárové kódy zůstanou textem. Hodnoty 12 až 15 povolí exponenciální zobrazení, např. 1.24412E+11, u čísel s nejvýše tolika číslicemi; žádná číslice se neztratí."
+        }
+        "digits as text" => "číslicemi",
+        "Convert digits surrounding the letter \"E\" to a number in scientific notation" => {
+            "Převést číslice kolem písmene „E“ na číslo v exponenciálním tvaru"
+        }
+        "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "Vypnuto: 1244121406E6 zůstane textem a nezmění se na 1.24412E+15.",
+        "Convert continuous letters and numbers to a date" => "Převést souvislá písmena a čísla na datum",
+        "GridCraft never makes this conversion: 12JAN2026 stays text." => "GridCraft tento převod nikdy neprovádí: 12JAN2026 zůstane textem.",
+        "Data conversion settings apply to every workbook; they are not saved in the file." => {
+            "Nastavení převodu dat platí pro všechny sešity; neukládá se do souboru."
+        }
+        "Remove trailing zeros after the decimal separator" => "Odebrat koncové nuly za desetinným oddělovačem",
+        "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
+            "Vypnuto: 720.0 se zobrazí i uloží jako 720.0 a 3.10 jako 3.10 (buňka dostane číselný formát 0.0 nebo 0.00). Zůstane číslem. Nejde o možnost Excelu."
+        }
         "Rename" => "Přejmenovat",
         "Move or Copy…" => "Přesunout nebo kopírovat…",
         "Duplicate" => "Duplikovat",
