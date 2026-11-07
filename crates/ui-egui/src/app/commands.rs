@@ -16,6 +16,10 @@ impl SheetApp {
         r
     }
 
+    /// Runs the command itself: settles the drafts it depends on, lets the UI commands answer
+    /// first, runs the engine command, and applies the UI effects it implies (the Backstage
+    /// closing, the active window, the chart or selection it leaves). [`run`](Self::run) adds the
+    /// bookkeeping that every caller needs.
     pub(super) fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
         let switches_window = id.starts_with("window.")
             || matches!(id, "view.newWindow" | "view.hideWindow" | "view.unhideWindow")
@@ -57,6 +61,17 @@ impl SheetApp {
         let before = self.session.active_window();
         let zoom_from = matches!(id, "view.zoom" | "view.zoom100" | "view.zoomToSelection").then(|| crate::grid::Trace::key(self));
         let r = self.session.run(id, params);
+        // A workbook the user saved is a workbook they worked with, so it joins the Recent list
+        // the same way an opened one does (#3519). Only the document's own file counts: a PDF is
+        // a print and a CSV copy leaves the workbook without a file of its own, and AutoSave
+        // calls the session directly, so it never reorders the list.
+        if matches!(id, "file.save" | "file.saveAs")
+            && let Ok(saved) = &r
+            && let Some(path) = saved.get("path").and_then(Json::as_str)
+            && self.session.documents().iter().any(|d| d.path.as_deref() == Some(path))
+        {
+            self.record_recent(path);
+        }
         if let Some(from) = zoom_from {
             crate::grid::Trace::keep_through_zoom(self, from);
         }
