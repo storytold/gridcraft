@@ -355,7 +355,13 @@ fn sqrtpi(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     unary(a, |x| if x < 0.0 { Err(CellError::Num) } else { Ok((x * PI).sqrt()) })
 }
 
-fn power_of(x: f64, y: f64) -> R<f64> {
+/// `x` raised to `y`, as Excel's `^` operator and POWER compute it.
+///
+/// A negative base with a fractional power is a real root when the power is the reciprocal of an
+/// odd whole number: `(-8)^(1/3)` is -2 and `(-8)^(-1/5)` is about -0.66. Excel reads the
+/// reciprocal at 15 significant digits (so `1/3` typed as 0.333333333333333 still counts) and
+/// accepts odd numbers below 2147483647. Every other fractional power of a negative base is `#NUM!`.
+pub fn power_of(x: f64, y: f64) -> R<f64> {
     if x == 0.0 {
         if y == 0.0 {
             return Err(CellError::Num);
@@ -366,7 +372,13 @@ fn power_of(x: f64, y: f64) -> R<f64> {
         return Ok(0.0);
     }
     if x < 0.0 && y.fract() != 0.0 {
-        return Err(CellError::Num);
+        let n = crate::util::to_sig_digits(1.0 / y, 15);
+        let odd = n.fract() == 0.0 && n.abs() < 2_147_483_647.0 && n.rem_euclid(2.0) == 1.0;
+        if !odd {
+            return Err(CellError::Num);
+        }
+        let r = -(-x).powf(y);
+        return if r.is_finite() { Ok(r) } else { Err(CellError::Num) };
     }
     let r = x.powf(y);
     if r.is_finite() { Ok(r) } else { Err(CellError::Num) }

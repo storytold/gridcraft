@@ -3,6 +3,18 @@ use super::{Arg, Array, CellError, Criterion, Ctx, R, Value, as_array, has, num_
 // ---------------------------------------------------------------------------------------------
 // Criteria aggregates
 
+/// A range argument of the criteria functions (COUNTIF's range, SUMIFS's sum and criteria ranges, ...).
+/// These take references, so an error that didn't come from a cell, like the `#REF!` left when the
+/// range was deleted, is the result (Excel returns `#REF!`), not a one-cell range holding the error.
+fn criteria_range(arg: &Arg) -> R<std::borrow::Cow<'_, Array>> {
+    if !arg.from_ref
+        && let Value::Error(e) = &arg.value
+    {
+        return Err(*e);
+    }
+    Ok(as_array(&arg.value))
+}
+
 /// Values at the matched positions of `target` for every (range, criteria) pair.
 fn criteria_mask(a: &[Arg], first_pair: usize, rows: usize, cols: usize) -> R<Vec<bool>> {
     let rest = a.get(first_pair..).unwrap_or(&[]);
@@ -15,7 +27,7 @@ fn criteria_mask(a: &[Arg], first_pair: usize, rows: usize, cols: usize) -> R<Ve
     let mut mask = vec![true; rows.saturating_mul(cols)];
     for pair in rest.chunks(2) {
         let (Some(range), Some(crit)) = (pair.first(), pair.get(1)) else { return Err(CellError::Value) };
-        let r = as_array(&range.value);
+        let r = criteria_range(range)?;
         if r.rows != rows || r.cols != cols {
             return Err(CellError::Value);
         }
@@ -47,14 +59,14 @@ fn masked_numbers(target: &Array, mask: &[bool]) -> R<Vec<f64>> {
 }
 
 pub(super) fn countifs(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let first = as_array(&crate::util::arg(a, 0)?.value);
+    let first = criteria_range(crate::util::arg(a, 0)?)?;
     let mask = criteria_mask(a, 0, first.rows, first.cols)?;
     num_val(mask.iter().filter(|m| **m).count() as f64)
 }
 
 /// The values of the `*IFS` target range with the mask from its pairs.
 fn ifs_numbers(a: &[Arg]) -> R<Vec<f64>> {
-    let target = as_array(&crate::util::arg(a, 0)?.value);
+    let target = criteria_range(crate::util::arg(a, 0)?)?;
     let mask = criteria_mask(a, 1, target.rows, target.cols)?;
     masked_numbers(&target, &mask)
 }
@@ -82,7 +94,7 @@ pub(super) fn minifs(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 pub(super) fn countif(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let range = as_array(&crate::util::arg(a, 0)?.value);
+    let range = criteria_range(crate::util::arg(a, 0)?)?;
     let c = Criterion::parse_arg(&crate::util::arg(a, 1)?.value.scalar())?;
     num_val(range.iter().filter(|v| c.matches(v)).count() as f64)
 }
@@ -91,9 +103,9 @@ pub(super) fn countif(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 /// Excel sizes a sum range reference like the criteria range, anchored at its own top-left cell;
 /// the evaluator does that resizing (it has the references), so cells line up one to one here.
 fn if_numbers(a: &[Arg]) -> R<Vec<f64>> {
-    let range = as_array(&crate::util::arg(a, 0)?.value);
+    let range = criteria_range(crate::util::arg(a, 0)?)?;
     let c = Criterion::parse_arg(&crate::util::arg(a, 1)?.value.scalar())?;
-    let sum_range = if has(a, 2) { Some(as_array(&crate::util::arg(a, 2)?.value)) } else { None };
+    let sum_range = if has(a, 2) { Some(criteria_range(crate::util::arg(a, 2)?)?) } else { None };
     let mut out = Vec::new();
     for r in 0..range.rows {
         for col in 0..range.cols {
