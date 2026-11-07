@@ -217,11 +217,31 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
     }
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);
-    if *confirm && let Some(style) = d.values.get("style").cloned() {
-        app.run_or_alert("home.formatCells", json!({"style": style}));
+    if *confirm && let Some(style) = d.values.get("style") {
+        // Only what the user changed: the rest of the active cell's style must not be stamped
+        // onto every selected cell (#2534).
+        let patch = d.values.get("baseStyle").map_or_else(|| style.clone(), |base| style_patch(base, style));
+        if patch.as_object().is_none_or(|m| !m.is_empty()) {
+            app.run_or_alert("home.formatCells", json!({"style": patch}));
+        }
     }
     if !open {
         app.dialog = None;
         *confirm = true; // closes
+    }
+}
+
+/// The part of `new` that differs from `base`. Objects with the same keys (style structs) are
+/// compared field by field; anything else that changed is sent whole.
+fn style_patch(base: &serde_json::Value, new: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value as Json;
+    match (base, new) {
+        (Json::Object(b), Json::Object(n)) if b.len() == n.len() && n.keys().all(|k| b.contains_key(k)) => Json::Object(
+            n.iter()
+                .filter(|(k, v)| b.get(*k) != Some(*v))
+                .map(|(k, v)| (k.clone(), b.get(k).map_or_else(|| v.clone(), |bv| style_patch(bv, v))))
+                .collect(),
+        ),
+        _ => new.clone(),
     }
 }
