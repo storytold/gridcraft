@@ -2477,3 +2477,17 @@ fn formulas_read_a_dirty_python_cell_after_it_is_laid_out() {
     assert_eq!((t.num("B1"), t.num("B2")), (5.0, 6.0));
     assert_eq!((t.num("A1"), t.num("A2"), t.num("A3")), (5.0, 100.0, 111.0));
 }
+
+#[test]
+fn disjoint_spills_do_not_scan_every_spill_owner() {
+    // Many independent two-cell arrays: write-back must not walk all earlier owners for each one.
+    let mut t = T::new();
+    for i in 1..=2000 {
+        t.wb.sheet_mut(0).unwrap().cells.set(c(&format!("A{}", i * 2 - 1)), Cell::formula(Formula::new("=SEQUENCE(2)")));
+    }
+    crate::recalc::OWNER_SCANS.with(|n| n.set(0));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.num("A2"), t.num("A4000")), (2.0, 2.0));
+    let scans = crate::recalc::OWNER_SCANS.with(|n| n.get());
+    assert!(scans < 10, "{scans} owner scans for 2000 disjoint spills");
+}
