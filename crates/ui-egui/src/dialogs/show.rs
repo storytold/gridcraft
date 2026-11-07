@@ -337,6 +337,40 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         }
                     }
                 }
+                // A text file's encoding can't hold some characters (`file.save` /
+                // `file.exportCsv` wrote nothing): pick another, UTF-8 suggested, and save again.
+                "textEncoding" => {
+                    use gridcraft_engine::model::TextEncoding;
+                    let get = |k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
+                    let (own, suggested, command) = (get("encoding"), get("suggested"), get("command"));
+                    let lost = get("unencodable").chars().map(String::from).collect::<Vec<_>>().join(", ");
+                    ui.label(format!("This file is in {}, which can't hold {lost}.", get("encodingName")));
+                    ui.label("Which encoding should it be saved in?");
+                    ui.add_space(4.0);
+                    let mut choice = d.values.get("choice").and_then(Json::as_str).map_or_else(|| suggested.clone(), str::to_string);
+                    for e in TextEncoding::ALL {
+                        let label = if e.id() == own {
+                            format!("{}: {lost} become ?", e.name())
+                        } else if e.id() == suggested {
+                            format!("{} (suggested: holds every character)", e.name())
+                        } else {
+                            e.name().to_string()
+                        };
+                        ui.radio_value(&mut choice, e.id().to_string(), label);
+                    }
+                    d.values.insert("choice".into(), json!(choice));
+                    ok_cancel(ui, &mut confirm, &mut open);
+                    if confirm {
+                        let mut params = d.values.get("params").cloned().unwrap_or_else(|| json!({}));
+                        if let Some(o) = params.as_object_mut() {
+                            o.insert("encoding".into(), json!(choice));
+                        }
+                        match command.as_str() {
+                            "file.exportCsv" => app.run_or_alert("file.exportCsv", params),
+                            _ => app.run_or_alert("file.save", params),
+                        }
+                    }
+                }
                 "saveChanges" => {
                     ui.label(format!("Do you want to save the changes you made to {}?", d.values.get("title").and_then(Json::as_str).unwrap_or("this workbook")));
                     let quitting = d.values.get("quit").and_then(Json::as_bool) == Some(true);
