@@ -43,15 +43,17 @@ impl crate::DocState {
             return;
         }
         let cur = self.wb.active_sheet();
-        if self.sheet_selections.len() < self.wb.sheets.len() {
-            self.sheet_selections.resize(self.wb.sheets.len(), crate::Selection::default());
+        // A sheet not visited yet opens as saved with the file, as Excel shows it.
+        while self.sheet_selections.len() < self.wb.sheets.len() {
+            let opening = crate::Selection::opening(self.wb.sheet(self.sheet_selections.len()));
+            self.sheet_selections.push(opening);
         }
         if let Some(slot) = self.sheet_selections.get_mut(cur) {
             *slot = self.selection.clone();
         }
         // View state: set in place, so the workbook is neither copied nor made dirty.
         self.wb.set_active_sheet(i);
-        self.selection = self.sheet_selections.get(i).cloned().unwrap_or_default();
+        self.selection = self.sheet_selections.get(i).cloned().unwrap_or_else(|| crate::Selection::opening(self.wb.sheet(i)));
     }
 }
 

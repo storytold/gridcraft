@@ -5865,6 +5865,36 @@ fn a_saved_workbook_keeps_its_values_until_an_edit_reaches_them() {
     assert_eq!(v(&saved, "C1"), Value::Number(7.0));
 }
 
+/// A sheet opens with the active cell saved with it and the merged cells it touches whole, as
+/// Excel shows it: a title merged across A1:F1 opens selected as A1:F1, and a sheet visited for
+/// the first time opens at its own saved cell (observed in Excel, which also keeps a saved range).
+#[test]
+fn a_sheet_opens_with_its_saved_cell_and_merges_whole() {
+    use gridcraft_model::{Sheet, Workbook};
+    let r = |a: &str| gridcraft_core::RangeRef::parse(a).unwrap();
+    let mut wb = Workbook::new();
+    let first = std::sync::Arc::make_mut(&mut wb.sheets[0]);
+    first.merges.push(r("A1:F1"));
+    let mut second = Sheet::new("Sheet2");
+    second.merges.push(r("B5:C6"));
+    second.view_active = CellRef::parse("C6").unwrap();
+    wb.sheets.push(std::sync::Arc::new(second));
+    wb.sheets.push(std::sync::Arc::new(Sheet::new("Sheet3")));
+    let mut s = Session::new();
+    s.add_document(crate::DocState::from_saved(wb, None, "saved".into(), crate::Trust::FromFile));
+    let sel = |s: &Session| (s.doc().unwrap().selection.a1(), s.doc().unwrap().selection.active.a1());
+    assert_eq!(sel(&s), ("A1:F1".to_string(), "A1".to_string()));
+    s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    assert_eq!(sel(&s), ("B5:C6".to_string(), "C6".to_string()));
+    s.execute("sheet.activate", json!({"sheet": 2})).unwrap();
+    assert_eq!(sel(&s), ("A1".to_string(), "A1".to_string()));
+    // A sheet visited already comes back as it was left.
+    s.execute("selection.set", json!({"range": "D4"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 2})).unwrap();
+    assert_eq!(sel(&s), ("D4".to_string(), "D4".to_string()));
+}
+
 /// A per-test unique suffix for temp dir names.
 #[cfg(not(target_arch = "wasm32"))]
 fn unique_nonce() -> u64 {
