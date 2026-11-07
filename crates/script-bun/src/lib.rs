@@ -23,6 +23,7 @@ mod shim;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -148,7 +149,8 @@ impl ScriptHost for BunHost {
 
         let child = Arc::new(Mutex::new(child));
         let finished = Arc::new((Mutex::new(false), Condvar::new()));
-        let watchdog = watchdog(child.clone(), finished.clone(), limits.timeout);
+        let timed_out = Arc::new(AtomicBool::new(false));
+        let watchdog = watchdog(child.clone(), finished.clone(), timed_out.clone(), limits.timeout);
         let stderr_reader = read_stderr(stderr);
 
         let init = serde_json::json!({
@@ -158,10 +160,17 @@ impl ScriptHost for BunHost {
                 "maxOutputBytes": limits.max_output_bytes,
             }
         });
-        let result = (|| {
+        let pumped = (|| {
             write_line(&mut stdin, &init.to_string())?;
             pump(BufReader::new(stdout), &mut stdin, exec, limits)
         })();
+        // The watchdog killed the child: the empty EOF the pump saw is the timeout, not a
+        // finished script.
+        let result = if timed_out.load(Ordering::Relaxed) {
+            Err(ScriptError::timeout(limits.timeout.as_millis().min(u128::from(u64::MAX)) as u64))
+        } else {
+            pumped
+        };
         // Whatever happened, the child is stopped before its pipes are joined.
         if let Ok(mut done) = finished.0.lock() {
             *done = true;
@@ -274,17 +283,22 @@ fn read_stderr(stderr: std::process::ChildStderr) -> std::thread::JoinHandle<Str
 
 /// Kills the child once `timeout` passes without the run finishing. The main thread signals
 /// `finished` when it is done so the watchdog leaves without a kill.
-fn watchdog(child: Arc<Mutex<Child>>, finished: Arc<(Mutex<bool>, Condvar)>, timeout: Duration) -> std::thread::JoinHandle<()> {
+fn watchdog(
+    child: Arc<Mutex<Child>>,
+    finished: Arc<(Mutex<bool>, Condvar)>,
+    timed_out: Arc<AtomicBool>,
+    timeout: Duration,
+) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let Ok(done) = finished.0.lock() else { return };
-        let Ok((guard, timed_out)) = finished.1.wait_timeout_while(done, timeout, |done| !*done) else { return };
-        let still_free = *guard;
+        let Ok((guard, wait)) = finished.1.wait_timeout_while(done, timeout, |done| !*done) else { return };
+        let unfinished = !*guard;
         drop(guard);
-        if timed_out.timed_out()
-            && still_free
-            && let Ok(mut child) = child.lock()
-        {
-            let _ = child.kill();
+        if wait.timed_out() && unfinished {
+            timed_out.store(true, Ordering::Relaxed);
+            if let Ok(mut child) = child.lock() {
+                let _ = child.kill();
+            }
         }
     })
 }

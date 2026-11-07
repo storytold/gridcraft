@@ -51,7 +51,7 @@ function main(workbook: ExcelScript.Workbook) {
     let mut calls = Calls { calls: Vec::new() };
     let report = host.run(script, &Limits::default(), &mut calls).expect("the script runs");
     let methods: Vec<&str> = calls.calls.iter().map(|c| c.method.as_str()).collect();
-    assert_eq!(methods, ["range.setValues", "range.setValue", "range.setNumberFormat", "range.format.font.setBold"]);
+    assert_eq!(methods, ["Range.setValues", "Range.setValue", "Range.setNumberFormat", "RangeFont.setBold"]);
     assert_eq!(calls.calls[1].params["value"], json!(42));
     assert_eq!(calls.calls[0].params["sheet"], json!("Data"));
     assert_eq!(report.output, vec!["done 42".to_string()]);

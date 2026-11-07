@@ -26,6 +26,7 @@ pub struct Pane {
     pub code: String,
     pub dirty: bool,
     pub runtime: Option<RuntimeInfo>,
+    pub folder: Option<String>,
     pub recording: bool,
     pub calls: usize,
     pub output: Vec<String>,
@@ -63,12 +64,14 @@ pub fn refresh(app: &mut SheetApp) {
     ensure_host(app);
     let list = app.session.run("script.list", json!({})).ok().and_then(|v| serde_json::from_value::<Vec<ScriptRecord>>(v).ok()).unwrap_or_default();
     let runtime = app.session.run("script.runtime", json!({})).ok().and_then(|v| serde_json::from_value::<RuntimeInfo>(v).ok());
+    let folder = app.session.run("script.folder", json!({})).ok().and_then(|v| v.get("folder").and_then(Json::as_str).map(str::to_string));
     let pane = &mut app.office_scripts;
     pane.list = list;
     if pane.selected.as_ref().is_some_and(|id| !pane.list.iter().any(|r| &r.id == id)) {
         pane.selected = None;
     }
     pane.runtime = runtime;
+    pane.folder = folder;
     pane.loaded = true;
 }
 
@@ -220,6 +223,7 @@ fn editor(app: &mut SheetApp, ui: &mut Ui, open: &mut bool) {
     });
 
     runtime_row(app, ui);
+    folder_row(app, ui);
     ui.separator();
 
     let mark = app.office_scripts.error_line.and_then(|line| line_range(&app.office_scripts.code, line));
@@ -290,6 +294,66 @@ fn runtime_row(app: &mut SheetApp, ui: &mut Ui) {
     {
         ui.label(RichText::new(format!("Expected at {}", info.expected_path)).small().color(Tokens::get(ui.ctx()).text_dim));
     }
+}
+
+fn folder_row(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = app.ui.language;
+    ui.horizontal_wrapped(|ui| {
+        let folder = app.office_scripts.folder.clone().unwrap_or_default();
+        ui.label(format!("{}: {folder}", lang.tr("Scripts")));
+        if ui.button(lang.tr("Change Folder…")).clicked()
+            && let Some(pick) = &app.services.pick_folder
+            && let Some(path) = pick()
+        {
+            match app.session.run("script.folder", json!({"path": path})) {
+                Ok(_) => {
+                    refresh(app);
+                    app.office_scripts.status = Some(Status::ok("Scripts folder changed."));
+                }
+                Err(e) => app.office_scripts.status = Some(Status::failed(clean_error(&e))),
+            }
+        }
+        if ui.button(lang.tr("Reset Folder")).clicked() {
+            match app.session.run("script.folder", json!({"path": ""})) {
+                Ok(_) => {
+                    refresh(app);
+                    app.office_scripts.status = Some(Status::ok("Scripts folder reset."));
+                }
+                Err(e) => app.office_scripts.status = Some(Status::failed(clean_error(&e))),
+            }
+        }
+        if ui.button(lang.tr("Import Script…")).clicked()
+            && let Some(pick) = &app.services.pick_open
+            && let Some(path) = pick()
+        {
+            match app.session.run("script.import", json!({"path": path})) {
+                Ok(record) => {
+                    if let Some(id) = record.get("id").and_then(Json::as_str).map(str::to_string) {
+                        refresh(app);
+                        select(app, &id);
+                    }
+                    app.office_scripts.status = Some(Status::ok("Script imported."));
+                }
+                Err(e) => app.office_scripts.status = Some(Status::failed(clean_error(&e))),
+            }
+        }
+        let exportable = app.office_scripts.selected.clone();
+        if ui.add_enabled(exportable.is_some(), egui::Button::new(lang.tr("Export Script…"))).clicked()
+            && let (Some(id), Some(pick)) = (exportable, app.services.pick_save.as_ref())
+        {
+            let name = app.office_scripts.name.clone();
+            let suggested = if name.trim().is_empty() { "Script.osts".to_string() } else { format!("{}.osts", name.trim()) };
+            if let Some(mut path) = pick(&suggested) {
+                if std::path::Path::new(&path).extension().is_none() {
+                    path.push_str(".osts");
+                }
+                match app.session.run("script.export", json!({"id": id, "path": path})) {
+                    Ok(_) => app.office_scripts.status = Some(Status::ok("Script exported.")),
+                    Err(e) => app.office_scripts.status = Some(Status::failed(clean_error(&e))),
+                }
+            }
+        }
+    });
 }
 
 fn download_bun(app: &mut SheetApp) {

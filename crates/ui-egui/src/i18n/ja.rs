@@ -1177,6 +1177,10 @@ pub(super) const EXTRA: &[(&str, &str)] = &[
     ("Download Bun…", "Bun をダウンロード…"),
     ("Import Bun…", "Bun をインポート…"),
     ("Check Again", "再確認"),
+    ("Change Folder…", "フォルダーの変更…"),
+    ("Reset Folder", "フォルダーをリセット"),
+    ("Import Script…", "スクリプトのインポート…"),
+    ("Export Script…", "スクリプトのエクスポート…"),
 ];
 
 /// Translates an interface label; `None` for a label the catalog does not know, so `i18n.rs` can

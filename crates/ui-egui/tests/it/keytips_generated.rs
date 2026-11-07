@@ -116,6 +116,13 @@ fn keytip_w_() {
 }
 
 #[test]
+fn keytip_u_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "U", false);
+    assert_eq!(h.state().ui.ribbon_tab, "Automate", "U must switch to the Automate tab");
+}
+
+#[test]
 fn keytip_e_() {
     let mut h = harness(blank());
     sequence(&mut h, "E", false);
@@ -3089,7 +3096,7 @@ fn keytip_q_() {
 
 #[test]
 fn generated_test_count_matches_the_table() {
-    const EXPECTED: usize = 413;
+    const EXPECTED: usize = 414;
     assert_eq!(gridcraft_ui_egui::keytips::keytip_table::SEQUENCES.len(), EXPECTED);
 }
 

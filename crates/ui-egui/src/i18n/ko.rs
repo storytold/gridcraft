@@ -493,6 +493,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Download Bun…" => "Bun 다운로드…",
         "Import Bun…" => "Bun 가져오기…",
         "Check Again" => "다시 확인",
+        "Change Folder…" => "폴더 변경…",
+        "Reset Folder" => "폴더 재설정",
+        "Import Script…" => "스크립트 가져오기…",
+        "Export Script…" => "스크립트 내보내기…",
         _ => return None,
     })
 }

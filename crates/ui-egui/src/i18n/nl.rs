@@ -564,6 +564,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Download Bun…" => "Bun downloaden…",
         "Import Bun…" => "Bun importeren…",
         "Check Again" => "Opnieuw controleren",
+        "Change Folder…" => "Map wijzigen…",
+        "Reset Folder" => "Map herstellen",
+        "Import Script…" => "Script importeren…",
+        "Export Script…" => "Script exporteren…",
         _ => return None,
     })
 }

@@ -2078,6 +2078,8 @@ version = "0.16.0"
 dependencies = [
  "gridcraft-engine",
  "gridcraft-mcp",
+ "gridcraft-script",
+ "gridcraft-script-bun",
  "log",
  "quick-xml 0.41.0",
  "serde_json",

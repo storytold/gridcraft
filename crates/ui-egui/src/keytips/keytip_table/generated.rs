@@ -15,6 +15,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("A", Entry::Tab("Data")),
     ("R", Entry::Tab("Review")),
     ("W", Entry::Tab("View")),
+    ("U", Entry::Tab("Automate")),
     ("E", Entry::Tab("Home")), // Legacy Edit-menu path (Excel 2003); leads to the same Home menus.
     ("O", Entry::Tab("Home")), // Legacy Format-menu path (Excel 2003); leads to the same Home menus.
     ("HAR", Entry::Finish(Action::Command("home.alignRight"))),

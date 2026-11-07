@@ -112,6 +112,33 @@ impl ScriptStore {
                 Err(e) => log::warn!("ignoring damaged script file {}: {e}", path.display()),
             }
         }
+        // `.osts` files put in the folder by Excel (or a synced OneDrive folder) are scripts
+        // too: they appear in the list and run from there, without an import step. A record with
+        // the same name or id wins, so saving a script never shadows itself twice.
+        let mut seen_names: Vec<String> = out.iter().map(|r| r.name.to_lowercase()).collect();
+        let mut seen_ids: Vec<String> = out.iter().map(|r| r.id.clone()).collect();
+        if let Ok(dir) = std::fs::read_dir(&self.root) {
+            for entry in dir.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("osts") {
+                    continue;
+                }
+                let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else { continue };
+                let id = slug(stem);
+                if !valid_id(&id) || seen_ids.iter().any(|x| x == &id) {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&path) else { continue };
+                let Ok(file) = crate::osts::OstsFile::parse(&text) else { continue };
+                let name = if file.description.trim().is_empty() { stem.to_string() } else { file.description.clone() };
+                if seen_names.iter().any(|n| n.eq_ignore_ascii_case(&name)) {
+                    continue;
+                }
+                seen_names.push(name.to_lowercase());
+                seen_ids.push(id.clone());
+                out.push(ScriptRecord { id, name, code: file.code(), created: 0, modified: 0, osts: Some(crate::osts::OstsMeta::from_file(&file)) });
+            }
+        }
         out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.id.cmp(&b.id)));
         Ok(out)
     }
@@ -119,7 +146,8 @@ impl ScriptStore {
     pub fn load(&self, id: &str) -> Result<ScriptRecord, StoreError> {
         let path = self.path_for(id)?;
         if !path.exists() {
-            return Err(StoreError::NotFound(id.to_string()));
+            // A `.osts` file in the folder (from Excel) is a script too; its id is its slug.
+            return self.list()?.into_iter().find(|r| r.id == id).ok_or_else(|| StoreError::NotFound(id.to_string()));
         }
         read_record(&path)
     }
@@ -357,6 +385,31 @@ mod tests {
         assert_eq!(s.free_name("Recorded Script").unwrap(), "Recorded Script 2");
         s.save("recorded script 2", &code("2")).unwrap();
         assert_eq!(s.free_name("Recorded Script").unwrap(), "Recorded Script 3");
+    }
+
+    #[test]
+    fn an_osts_file_in_the_folder_is_a_script() {
+        let s = store("osts");
+        std::fs::create_dir_all(s.root()).unwrap();
+        let text = serde_json::json!({
+            "version": "0.3.0",
+            "body": "function main(workbook: ExcelScript.Workbook) {\r\n}\r\n",
+            "description": "From Excel",
+            "noCodeMetadata": "",
+            "parameterInfo": "{\"version\":1}",
+            "apiInfo": "{\"variant\":\"synchronous\"}"
+        })
+        .to_string();
+        std::fs::write(s.root().join("Excel Script.osts"), text).unwrap();
+        let list = s.list().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "From Excel");
+        assert_eq!(list[0].id, "excel-script");
+        assert!(list[0].code.contains("function main"));
+        assert!(s.load("excel-script").is_ok());
+        // A GridCraft record with the same id wins (it is ours to manage).
+        s.save("From Excel", &code("1")).unwrap();
+        assert_eq!(s.list().unwrap().len(), 1);
     }
 
     #[test]
