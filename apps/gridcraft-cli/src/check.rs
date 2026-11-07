@@ -278,6 +278,9 @@ fn collect_inputs(inputs: &[String]) -> Discovery {
 }
 
 /// Returns false only when the global file budget stops traversal.
+// `seen` is read only by the unix directory-identity check below; on other targets it is threaded
+// through recursion unchanged, which clippy reports as "only used in recursion".
+#[allow(clippy::only_used_in_recursion)]
 fn walk(dir: &Path, depth: usize, out: &mut Discovery, seen: &mut std::collections::HashSet<u64>) -> bool {
     // A directory is visited once by identity (dev+inode on unix): several links to the same
     // directory are aliases, not exponential branches of the scan. Other platforms keep the
