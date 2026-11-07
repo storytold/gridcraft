@@ -27,7 +27,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Python Output",
             [],
             Some("Ctrl+Alt+Shift+M"),
-            "{cell?, mode?: object|value} sets the return type of a Python cell (default: the active cell): `object` (a Python object) or `value` (an Excel value). Without `mode` it switches from the return type in effect to the other one. The cell keeps its code; a cached result of the old return type goes, as with `python.set`, so the cell shows #BLOCKED! until it runs A return type asked for is a choice, and when it is already the type in effect the cell keeps its result: a picture with no choice behaves as a Python Object, and moves into the cell with no new run.",
+            "{cell?, mode?: object|value} sets the return type of a Python cell (default: the active cell): `object` (a Python object) or `value` (an Excel value). Without `mode` it switches from the return type in effect to the other one. The cell keeps its code; a cached result of the old return type goes, as with `python.set`, so the cell shows #BLOCKED! until it runs. A return type asked for is a choice, and when it is already the type in effect the cell keeps its result: a picture with no choice behaves as a Python Object, and moves into the cell with no new run.",
             has_doc,
             output
         ),
