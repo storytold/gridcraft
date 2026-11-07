@@ -302,6 +302,91 @@ fn wildcards() {
     assert!(wildcard("", "*"));
 }
 
+/// The backtracking matcher `wildcard` replaced, as the reference for its results.
+fn wildcard_backtracking(text: &str, pat: &str) -> bool {
+    let t: Vec<char> = text.chars().collect();
+    let mut p: Vec<(char, bool)> = Vec::new();
+    let mut it = pat.chars();
+    while let Some(c) = it.next() {
+        if c == '~' {
+            if let Some(n) = it.next() {
+                p.push((n, true));
+            }
+        } else {
+            p.push((c, false));
+        }
+    }
+    let (mut ti, mut pi) = (0usize, 0usize);
+    let (mut star, mut mark) = (None, 0usize);
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == ('?', false) || (p[pi].0 == t[ti] && p[pi] != ('*', false))) {
+            ti += 1;
+            pi += 1;
+        } else if pi < p.len() && p[pi] == ('*', false) {
+            star = Some(pi);
+            mark = ti;
+            pi += 1;
+        } else if let Some(sp) = star {
+            pi = sp + 1;
+            mark += 1;
+            ti = mark;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == ('*', false) {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+#[test]
+fn wildcard_agrees_with_backtracking() {
+    // Every text up to 5 characters over a small alphabet against every pattern up to 4 items.
+    let alphabet = ['a', 'b', '*', '?', '~'];
+    let all = |n: usize, chars: &[char]| -> Vec<String> {
+        let mut out = vec![String::new()];
+        let mut level = vec![String::new()];
+        for _ in 0..n {
+            level = level.iter().flat_map(|s| chars.iter().map(move |c| format!("{s}{c}"))).collect();
+            out.extend(level.iter().cloned());
+        }
+        out
+    };
+    let texts = all(5, &['a', 'b', '*']);
+    for pat in all(4, &alphabet) {
+        for text in &texts {
+            assert_eq!(wildcard(text, &pat), wildcard_backtracking(text, &pat), "{text:?} ~ {pat:?}");
+        }
+    }
+    // Patterns longer than one 64-bit word.
+    let long = format!("*{}*b?", "a".repeat(70));
+    for text in [format!("x{}yb1", "a".repeat(70)), format!("{}b", "a".repeat(71)), "a".repeat(200)] {
+        assert_eq!(wildcard(&text, &long), wildcard_backtracking(&text, &long), "{text}");
+    }
+}
+
+#[test]
+fn wildcard_with_many_distinct_literals_agrees_with_backtracking() {
+    // 600 distinct characters in the pattern: more than the masks kept, so the rest are rebuilt.
+    let chars: Vec<char> = (0x4E00u32..0x4E00 + 600).filter_map(char::from_u32).collect();
+    let word: String = chars.iter().collect();
+    let pat = format!("*{word}?{}", chars[3]);
+    for text in [format!("x{word}yq{}", chars[3]), word.clone(), format!("{word}{word}"), chars.iter().rev().collect::<String>()] {
+        assert_eq!(wildcard(&text, &pat), wildcard_backtracking(&text, &pat), "{} chars", text.chars().count());
+    }
+    assert!(wildcard(&format!("{word}zz{}", chars[3]).replace("zz", "z"), &pat));
+}
+
+#[test]
+fn wildcard_on_long_repetitive_text_is_linear() {
+    // The backtracking matcher compared about text × pattern characters here (10^8).
+    let text = "a".repeat(20_000);
+    let pat = format!("*{}b", "a".repeat(5_000));
+    assert!(!wildcard(&text, &pat));
+    assert!(wildcard(&format!("{text}b"), &pat));
+}
+
 #[test]
 fn tsv() {
     assert_eq!(parse_tsv("a\tb\n1\t2\n"), vec![vec!["a", "b"], vec!["1", "2"]]);

@@ -14,8 +14,13 @@ fn matches(hay: &str, what: &str, case: bool, whole: bool) -> bool {
 }
 
 /// `*`/`?` wildcard match with `~` escapes.
+///
+/// The pattern runs as a bit-parallel automaton over the text: one pass, each character costing
+/// one step per 64 pattern positions. Backtracking to the last `*` after a mismatch rescans the
+/// text and costs text × pattern comparisons on a long, repetitive cell, for every cell a
+/// filter or Find visits.
 pub(crate) fn wildcard(text: &str, pat: &str) -> bool {
-    let t: Vec<char> = text.chars().collect();
+    // The pattern as (character, escaped) items, runs of `*` folded into one.
     let mut p: Vec<(char, bool)> = Vec::new();
     let mut it = pat.chars();
     while let Some(c) = it.next() {
@@ -23,32 +28,78 @@ pub(crate) fn wildcard(text: &str, pat: &str) -> bool {
             if let Some(n) = it.next() {
                 p.push((n, true));
             }
-        } else {
+        } else if c != '*' || p.last() != Some(&('*', false)) {
             p.push((c, false));
         }
     }
-    let (mut ti, mut pi) = (0usize, 0usize);
-    let (mut star, mut mark) = (None, 0usize);
-    while ti < t.len() {
-        if pi < p.len() && (p[pi] == ('?', false) || (p[pi].0 == t[ti] && p[pi] != ('*', false))) {
-            ti += 1;
-            pi += 1;
-        } else if pi < p.len() && p[pi] == ('*', false) {
-            star = Some(pi);
-            mark = ti;
-            pi += 1;
-        } else if let Some(sp) = star {
-            pi = sp + 1;
-            mark += 1;
-            ti = mark;
-        } else {
-            return false;
+    let words = (p.len() + 1).div_ceil(64);
+    let bit = |set: &mut [u64], i: usize| set[i / 64] |= 1 << (i % 64);
+    // Positions holding a `*` and a `?`, and where each literal character sits in the pattern.
+    let mut stars = vec![0u64; words];
+    let mut any = vec![0u64; words];
+    let mut at: std::collections::HashMap<char, Vec<usize>> = std::collections::HashMap::new();
+    for (i, item) in p.iter().enumerate() {
+        match item {
+            ('*', false) => bit(&mut stars, i),
+            ('?', false) => bit(&mut any, i),
+            (c, _) => at.entry(*c).or_default().push(i),
         }
     }
-    while pi < p.len() && p[pi] == ('*', false) {
-        pi += 1;
+    // A literal's bit mask is built when the text first reads it, and kept for the first
+    // `MAX_CACHED_MASKS` literals: a long pattern of mostly distinct characters would otherwise
+    // allocate a mask of the pattern's width for each one up front. Past the cap the mask is
+    // rebuilt in `scratch` from the character's positions, which costs about one step of the scan.
+    const MAX_CACHED_MASKS: usize = 256;
+    let mut masks: std::collections::HashMap<char, Vec<u64>> = std::collections::HashMap::new();
+    let mut scratch = vec![0u64; words];
+    // A set bit i: the text read so far matches the first i pattern items. A `*` matches nothing
+    // as well, so a state at a `*` is also at the item after it.
+    let close = |set: &mut Vec<u64>| {
+        let mut carry = 0u64;
+        for w in 0..words {
+            let s = set[w] & stars[w];
+            let next = (s << 1) | carry;
+            carry = s >> 63;
+            set[w] |= next;
+        }
+    };
+    let mut state = vec![0u64; words];
+    bit(&mut state, 0);
+    close(&mut state);
+    let mut next = vec![0u64; words];
+    for ch in text.chars() {
+        let lit: Option<&[u64]> = match at.get(&ch) {
+            None => None,
+            Some(positions) if masks.contains_key(&ch) || masks.len() < MAX_CACHED_MASKS => {
+                let mask = masks.entry(ch).or_insert_with(|| {
+                    let mut m = vec![0u64; words];
+                    positions.iter().for_each(|&i| bit(&mut m, i));
+                    m
+                });
+                Some(mask)
+            }
+            Some(positions) => {
+                scratch.fill(0);
+                positions.iter().for_each(|&i| bit(&mut scratch, i));
+                Some(&scratch)
+            }
+        };
+        let mut carry = 0u64;
+        let mut alive = 0u64;
+        for w in 0..words {
+            // Items that read `ch` advance; a `*` reads it and stays.
+            let m = state[w] & (any[w] | lit.map_or(0, |l| l[w]));
+            next[w] = (m << 1) | carry | (state[w] & stars[w]);
+            carry = m >> 63;
+            alive |= next[w];
+        }
+        if alive == 0 {
+            return false;
+        }
+        std::mem::swap(&mut state, &mut next);
+        close(&mut state);
     }
-    pi == p.len()
+    state[p.len() / 64] & (1 << (p.len() % 64)) != 0
 }
 
 pub(super) fn find(s: &mut Session, p: &Json) -> Result<Json> {
