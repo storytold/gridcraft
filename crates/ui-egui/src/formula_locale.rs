@@ -160,6 +160,11 @@ mod tests {
         assert_eq!(sig("IF", En, Language::Es), "IF(prueba_lógica, [valor_si_verdadero], [valor_si_falso])");
         assert_eq!(sig("SUM", En, Language::Es), "SUM(número1, [número2], ...)");
         assert_eq!(description("IF", En, Language::Es).as_deref(), Some("Devuelve un valor según una condición."));
+        // Portuguese help, including brackets that open and close on different arguments.
+        assert_eq!(sig("IF", En, Language::PtBr), "IF(teste_lógico, [valor_se_verdadeiro], [valor_se_falso])");
+        assert_eq!(description("IF", En, Language::PtBr).as_deref(), Some("Retorna um valor quando uma condição é TRUE e outro quando é FALSE."));
+        assert_eq!(sig("SWITCH", En, Language::PtBr), "SWITCH(expressão, valor1, resultado1, [padrão_ou_valor2, resultado2], ...)");
+        assert_eq!(sig("LAMBDA", En, Language::PtBr), "LAMBDA([parâmetro1, ...], cálculo)");
         // Spanish names and separators, from a localized name.
         assert_eq!(sig("suma", Es, Language::Es), "SUMA(número1; [número2]; ...)");
         assert_eq!(description("SUMA", Es, Language::Es).as_deref(), Some("Suma los números."));
