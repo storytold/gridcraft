@@ -350,3 +350,86 @@ fn upward_text_with_middle_align_is_centred_in_a_merged_block() {
     assert!((bb.center().y - rect.center().y).abs() < 0.01, "{bb:?} not centred in {rect:?}");
     assert!((bb.center().x - rect.center().x).abs() < 0.01, "{bb:?} not centred in {rect:?}");
 }
+
+/// One grid frame of `app` in a headless context.
+fn grid_frame(app: &mut crate::SheetApp) {
+    let ctx = egui::Context::default();
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1200.0, 800.0));
+    let mut out = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| super::show(app, ui));
+    out.textures_delta.clear(); // nothing consumes the uploads in a headless test
+}
+
+/// The line positions, used range and conditional formatting statistics the grid keeps between
+/// frames are rebuilt after every change of the sheet, whichever way it is changed, and match
+/// what a fresh build gives.
+#[test]
+fn kept_sheet_geometry_and_cf_statistics_follow_every_change() {
+    use gridcraft_engine::cf::CfCache;
+    use gridcraft_engine::core::CellRef;
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    let mut app = crate::SheetApp::new(session, Default::default());
+    app.run("range.setValues", json!({"range": "A1:A3", "values": [[1], [2], [3]]})).unwrap();
+    app.run("home.conditionalFormat", json!({"range": "A:A", "rule": {"type": "colorScale", "colors": ["#FFFFFF", "#FF0000"]}})).unwrap();
+    let kept = |app: &crate::SheetApp| app.grid.lines.as_ref().map(|(_, l)| (Arc::clone(&l.ri), l.used)).unwrap();
+    // The kept statistics give the look a fresh cache gives.
+    let check_cf = |app: &mut crate::SheetApp| {
+        let wb = app.session.active().unwrap().wb.clone();
+        for row in 0..4 {
+            let c = CellRef::new(row, 0);
+            let kept = app.grid.cf.as_mut().map(|(_, cf)| cf.look(&wb, 0, c));
+            assert_eq!(kept, Some(CfCache::new().look(&wb, 0, c)), "A{}", row + 1);
+        }
+    };
+    grid_frame(&mut app);
+    let (ri, used) = kept(&app);
+    assert_eq!(used.map(|r| r.a1()).as_deref(), Some("A1:A3"));
+    check_cf(&mut app);
+    grid_frame(&mut app);
+    assert!(Arc::ptr_eq(&kept(&app).0, &ri), "an unchanged sheet keeps its line positions");
+
+    // A command: the new value moves the colour scale's maximum and the used range.
+    app.run("cell.set", json!({"cell": "A5", "input": "30"})).unwrap();
+    grid_frame(&mut app);
+    assert_eq!(kept(&app).1.map(|r| r.a1()).as_deref(), Some("A1:A5"));
+    check_cf(&mut app);
+    // Hiding a row moves the rows under it.
+    app.run("selection.set", json!({"range": "A2"})).unwrap();
+    app.run("home.hideRows", json!({})).unwrap();
+    grid_frame(&mut app);
+    let geo = app.grid.geo.clone().unwrap();
+    let sh = app.session.active().unwrap().wb.sheet(0).unwrap().clone();
+    assert_eq!(geo.y(&sh, 2), geo.y(&sh, 1), "row 2 is hidden");
+    assert!(!Arc::ptr_eq(&kept(&app).0, &ri));
+    // Undo brings the row back.
+    app.run("edit.undo", json!({})).unwrap();
+    grid_frame(&mut app);
+    let geo = app.grid.geo.clone().unwrap();
+    let sh = app.session.active().unwrap().wb.sheet(0).unwrap().clone();
+    assert!(geo.y(&sh, 2) > geo.y(&sh, 1), "row 2 is shown again");
+    let fresh = super::geo::SheetLines::of(&sh);
+    for row in [0, 1, 2, 3, 100, 1_048_575] {
+        assert_eq!(kept(&app).0.start(row), fresh.ri.start(row), "row {row}");
+    }
+    assert_eq!(kept(&app).1, fresh.used);
+
+    // A change with nothing else holding the sheet (no undo step, no saved copy): the grid's weak
+    // reference makes `Arc::make_mut` move the sheet to a new allocation, and the grid notices.
+    let ri = kept(&app).0;
+    {
+        let d = app.session.active_mut().unwrap();
+        d.undo.clear();
+        d.redo.clear();
+        d.saved = Arc::new(gridcraft_engine::model::Workbook::default());
+        let sheet = Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap();
+        sheet.rows.entry(0).or_default().hidden = true;
+        sheet.rows.entry(1).or_default().hidden = true;
+        sheet.set_value(CellRef::new(2, 0), gridcraft_engine::core::Value::Number(300.0));
+    }
+    grid_frame(&mut app);
+    let geo = app.grid.geo.clone().unwrap();
+    let sh = app.session.active().unwrap().wb.sheet(0).unwrap().clone();
+    assert_eq!(geo.y(&sh, 2), geo.y(&sh, 0), "rows 1 and 2 are hidden");
+    assert!(!Arc::ptr_eq(&kept(&app).0, &ri));
+    check_cf(&mut app);
+}
