@@ -278,9 +278,11 @@ fn copy_executable(source: &std::path::Path, target: &std::path::Path) -> Result
     Ok(())
 }
 
-/// Replaces `target` with `staged`. Windows refuses to rename over an existing file, so the old
-/// executable is removed first; a failure leaves no partial file where discovery looks.
+/// Replaces `target` with `staged`. Windows refuses to rename over an existing file, so there the
+/// old executable is removed first; Unix renames over it atomically, so the working runtime stays
+/// in place until the new one is there.
 fn replace_file(staged: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
+    #[cfg(windows)]
     if target.exists() {
         std::fs::remove_file(target).map_err(|e| format!("could not replace {}: {e}", target.display()))?;
     }

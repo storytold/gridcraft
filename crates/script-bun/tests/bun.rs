@@ -23,6 +23,7 @@ impl BridgeExecutor for Calls {
             // Far past the shim's 64 KiB read, in three-byte characters: the read boundary falls
             // inside one of them.
             "Range.getValues" => json!([["€".repeat(30_000)]]),
+            "Worksheet.getVisibility" => Json::String("visible".into()),
             _ => Json::Null,
         })
     }
@@ -160,4 +161,20 @@ function main(workbook: ExcelScript.Workbook) {
     let mut calls = Calls { calls: Vec::new() };
     let report = host.run(script, &Limits::default(), &mut calls).expect("the script runs");
     assert_eq!(report.output, vec!["len 30000 replacement false".to_string()]);
+}
+
+#[test]
+#[ignore = "needs Bun; set GRIDCRAFT_BUN"]
+fn worksheet_visibility_reads_back_in_the_excel_script_casing() {
+    let Some(host) = host() else { return };
+    // The engine answers `visible`; ExcelScript compares against `WorksheetVisibility.visible`.
+    let script = r#"
+function main(workbook: ExcelScript.Workbook) {
+  const sheet = workbook.getWorksheet("Data");
+  console.log(sheet.getVisibility(), sheet.getVisible(), sheet.getVisibility() === ExcelScript.WorksheetVisibility.visible);
+}
+"#;
+    let mut calls = Calls { calls: Vec::new() };
+    let report = host.run(script, &Limits::default(), &mut calls).expect("the script runs");
+    assert_eq!(report.output, vec!["Visible true true".to_string()]);
 }

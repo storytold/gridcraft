@@ -234,13 +234,14 @@ class Worksheet {
     return Number(bridge("Worksheet.getIndex", sheetParams(this.sheetName)));
   }
   getVisibility(): string {
-    return String(bridge("Worksheet.getVisibility", sheetParams(this.sheetName)));
+    // The engine answers lowercase; ExcelScript's `WorksheetVisibility` values are capitalised.
+    return String(bridge("Worksheet.getVisibility", sheetParams(this.sheetName))) === "visible" ? "Visible" : "Hidden";
   }
   setVisibility(visibility: string): void {
     bridge("Worksheet.setVisibility", { ...sheetParams(this.sheetName), visibility });
   }
   getVisible(): boolean {
-    return this.getVisibility() === "visible";
+    return this.getVisibility() === "Visible";
   }
   setVisible(visible: boolean): void {
     this.setVisibility(visible ? "visible" : "hidden");
