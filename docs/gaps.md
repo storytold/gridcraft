@@ -170,6 +170,13 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 ### 21. Automation and add-ins (F)
 - VBA out of scope (dropped on open, #6); no Office Scripts compatibility; no plugin or custom
   function API. **Estimate:** 25–40 h plus an owner decision.
+- The Developer ribbon tab is a UI skeleton (#2960): it follows Excel's observed groups and order,
+  with Macros opening the Macros dialog and every other entry — Visual Basic, Record Macro, Use
+  Relative References, Macro Security, Add-ins, Excel Add-ins, COM Add-ins, Insert, Design Mode,
+  Properties, View Code, Run Dialog, Source, Map Properties, Expansion Packs, Refresh Data, Import
+  and Export — disabled and naming the issue. Office Scripts are the implemented scripting engine
+  and live in the Automate tab (#3527); Python, Rust and VBA are reserved. See
+  [developer-tab.md](developer-tab.md).
 
 ### 22. AI features (F)
 - No in-app assistant, natural-language formulas or Analyze Data; agent control via MCP is

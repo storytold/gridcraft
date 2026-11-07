@@ -61,6 +61,13 @@
    "target": "View"
   },
   {
+   "seq": "L",
+   "kind": "tab",
+   "target": "Developer",
+   "excel": "Developer tab",
+   "note": "Excel's documented Developer tab access key (Alt+L); deeper Developer letters are not wired yet."
+  },
+  {
    "seq": "E",
    "kind": "tab",
    "target": "Home",

@@ -15,8 +15,9 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("A", Entry::Tab("Data")),
     ("R", Entry::Tab("Review")),
     ("W", Entry::Tab("View")),
-    ("E", Entry::Tab("Home")), // Legacy Edit-menu path (Excel 2003); leads to the same Home menus.
-    ("O", Entry::Tab("Home")), // Legacy Format-menu path (Excel 2003); leads to the same Home menus.
+    ("L", Entry::Tab("Developer")), // Excel: Developer tab; Excel's documented Developer tab access key (Alt+L); deeper Developer letters are not wired yet.
+    ("E", Entry::Tab("Home")),      // Legacy Edit-menu path (Excel 2003); leads to the same Home menus.
+    ("O", Entry::Tab("Home")),      // Legacy Format-menu path (Excel 2003); leads to the same Home menus.
     ("HAR", Entry::Finish(Action::Command("home.alignRight"))),
     ("HAT", Entry::Finish(Action::Command("home.alignTop"))),    // Excel: Excel: Top Align
     ("HAM", Entry::Finish(Action::Command("home.alignMiddle"))), // Excel: Excel: Middle Align

@@ -54,13 +54,13 @@ long `.xls` track, so about half parallelizes (≈30–50 wall-clock hours with 
   COPILOT and PY: **523 functions**. Ours: every `f!(…)` spec in `crates/functions/src/*.rs` plus
   `SPECIAL_FUNCTIONS` in `crates/calc/src/eval.rs` (evaluator special forms), minus the test-only
   `ADD2`: **505**, all of them Excel names.
-- **Ribbon catalog:** `crates/engine/src/catalog.rs` (296 unique ids across 16 tabs) against the
+- **Ribbon catalog:** `crates/engine/src/catalog.rs` (313 unique ids across 16 tabs) against the
   321 command ids registered in `crates/engine/src/cmd/*.rs`, recomputed from source by script and
   identical to the committed `parity-checklist.md`. The catalog is our own transcription of
   Excel's main ribbon tabs; it leaves out most contextual tabs (Picture Format, Shape Format,
-  Header & Footer, Sparkline, Slicer, Timeline), most of the Developer tab (its form controls are
-  in), the Help tab and sub-menu items, so
-  89% of it is roughly **60–65% of Excel's full command surface** (estimated).
+  Header & Footer, Sparkline, Slicer, Timeline), the Help tab and sub-menu items. The Developer tab
+  is at Excel's observed granularity (21 entries, 4 implemented, the rest ribbon stubs), so
+  89.8% of it is roughly **60–65% of Excel's full command surface** (estimated).
 - **Depth and readiness:** source reading (the model types in `crates/model/src/features.rs`,
   readers and writers in `crates/xlsx/src`, the evaluator), 478 `#[test]` functions, and the
   issue tracker: 60 open issues and 50 open PRs on 2026-10-10, 82 issues filed in total.
@@ -334,6 +334,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | minor | Developer ribbon tab at Excel's observed granularity (Code, Add-ins, Controls, XML; 21 catalog entries, 4 implemented, the rest stubs); catalog 281 / 296 → 281 / 313 (no score change) |
 | 2026-11-02 | minor | Form controls (buttons, scroll bars, spin buttons) in Insert objects and Automation; catalog 277 / 292 → 281 / 296 (Developer › Controls) |
 | 2026-11-02 | minor | Insert objects: equations; catalog count 277 / 292 (no score change) |
 | 2026-11-02 | minor | What-if and analysis: Solver Sensitivity report (no score change) |
