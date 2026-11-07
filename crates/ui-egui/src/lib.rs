@@ -105,6 +105,8 @@ pub struct UiState {
     /// AutoSave (the title-bar switch): save saved-to-file .xlsx workbooks shortly after every
     /// change. A preference like the rest of this struct — it stays on across restarts (#1901).
     pub autosave: bool,
+    /// Number format code used by the Accounting Number Format split button.
+    pub accounting_format: String,
     pub recent: Vec<String>,
     /// One-shot keytip request for a ribbon control: set when a keytip action resolves to
     /// [`keytips::Action::Control`], consumed (and cleared) by the control's render site.
@@ -155,6 +157,7 @@ impl Default for UiState {
             autocomplete: true,
             highlight_active_row: false,
             autosave: false,
+            accounting_format: "_(\"$\"* #,##0.00_);_(\"$\"* \\(#,##0.00\\);_(\"$\"* \"-\"??_);_(@_)".into(),
             recent: vec![],
             keytip_invoke: None,
             keytip_invoke_next: None,

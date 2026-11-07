@@ -262,6 +262,29 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
     (m.on_hover_text(tip_text(ui, tip)).clicked(), a)
 }
 
+/// A split button whose main glyph is a short text symbol, such as the active currency.
+pub fn split_button_symbol(ui: &mut Ui, symbol: &str, tip: &str) -> (bool, Response) {
+    let t = Tokens::get(ui.ctx());
+    let main_width = 38.0;
+    let (rect, _) = ui.allocate_exact_size(vec2(52.0, 24.0), Sense::hover());
+    let main = Rect::from_min_size(rect.min, vec2(main_width, 24.0));
+    let arrow = Rect::from_min_max(pos2(main.right(), rect.top()), rect.max);
+    let m = ui.interact(main, ui.scope_id().with((tip, "main")), Sense::click());
+    let a = ui.interact(arrow, ui.scope_id().with((tip, "arrow")), Sense::click());
+    if m.hovered() || m.is_pointer_button_down_on() {
+        ui.painter().rect_filled(main, 4.0, t.hover);
+    }
+    let popup_open = egui::Popup::is_id_open(ui.ctx(), a.id.with("popup"));
+    if a.hovered() || a.is_pointer_button_down_on() || popup_open {
+        ui.painter().rect_filled(arrow, 4.0, t.hover);
+    }
+    ui.painter().line_segment([pos2(main.right(), rect.top() + 3.0), pos2(main.right(), rect.bottom() - 3.0)], Stroke::new(1.0, t.separator));
+    ui.painter().text(main.center() - vec2(0.0, 2.0), Align2::CENTER_CENTER, symbol, theme::ui_font(14.0), t.text);
+    icons::paint(ui.painter(), Rect::from_center_size(arrow.center(), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
+    let hover_tip = tip_text(ui, tip);
+    (m.on_hover_text(&hover_tip).clicked(), a.on_hover_text(&hover_tip))
+}
+
 /// A small ribbon split button with a label (Error Checking): the icon and label run the default
 /// action, the arrow at the right opens a menu. Returns (main response, arrow response).
 pub fn small_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> (Response, Response) {
