@@ -51,12 +51,31 @@ fn save_keeps_the_destination_access_restrictions() {
     write_file(dest.to_str().unwrap(), b"v2").unwrap();
     let mode = std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
+    // The mode is set outright from the old file's, not through the umask: group and other access
+    // it had stay as they were.
+    for old in [0o640, 0o664] {
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(old)).unwrap();
+        write_file(dest.to_str().unwrap(), b"v3").unwrap();
+        assert_eq!(std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777, old);
+    }
+    assert!(!dir.join("private.xlsx.sctmp").exists());
     // And a brand-new file is created with the restrictive, not permissive, default.
     let fresh = dir.join("new.xlsx");
     write_file(fresh.to_str().unwrap(), b"v").unwrap();
     let mode = std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777;
     assert!(mode & 0o022 == 0, "mode {mode:o}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Without the old group, a saved file keeps the old owner and other bits and nothing for a group.
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(unix)]
+#[test]
+fn restored_mode_drops_the_group_and_special_bits_when_the_group_is_lost() {
+    assert_eq!(super::restored_mode(0o100_664, true), 0o664);
+    assert_eq!(super::restored_mode(0o100_664, false), 0o604);
+    assert_eq!(super::restored_mode(0o102_444, false), 0o404, "an original read-only file stays read-only, setgid is dropped");
+    assert_eq!(super::restored_mode(0o104_755, false), 0o705, "setuid is dropped");
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -760,4 +779,21 @@ fn sylk_survives_huge_relative_offsets_and_width_floods() {
     flood.extend_from_slice(b"C;Y1;X1;K1\nE\n");
     let (wb, _) = open_bytes("widths.slk", &flood).unwrap();
     assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::Number(1.0));
+}
+
+/// A FIFO with no writer would block an open forever: it is refused before it is opened.
+#[cfg(unix)]
+#[test]
+fn reading_a_fifo_is_refused_without_blocking() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-fifo-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let fifo = dir.join("pipe.xlsx");
+    if !std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|s| s.success()) {
+        let _ = std::fs::remove_dir_all(&dir);
+        return; // no mkfifo here
+    }
+    let err = read_file(fifo.to_str().unwrap()).unwrap_err().to_string();
+    assert!(err.contains("only regular files"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
