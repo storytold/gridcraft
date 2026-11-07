@@ -7,69 +7,146 @@ use unicode_segmentation::UnicodeSegmentation;
 
 const PAD_PX: f32 = 2.0;
 
+/// Most lines [`wrap_lines`] returns (it may return one more, the rest of a paragraph).
+const MAX_WRAP_LINES: usize = 2000;
+
 pub(super) struct TextLine {
     pub(super) text: String,
     pub(super) direction: TextDirection,
 }
 
-/// Word-wraps paragraphs, keeping their base direction on every continuation line.
+/// Word-wraps `text` to `width` points, keeping each paragraph's base direction on every
+/// continuation line.
+///
+/// Widths are kept as running sums of glyph widths (the sum `text_width` makes), so each
+/// character is measured once: re-measuring the line for every word, or the rest of an
+/// over-long word for every piece cut from it, made a long paragraph or word quadratic.
+/// A paragraph whose width is not that sum is measured as drawn by [`wrap_measured_paragraph`].
 pub(super) fn wrap_lines(text: &str, font: Font, size: f32, width: f32, direction: TextDirection) -> Vec<TextLine> {
     let mut out = Vec::new();
     for para in text.split('\n') {
         let direction = direction.resolve(para);
-        let measured = |text: &str| gridcraft_pdf::text_width_with_direction(font, size, text, direction);
-        let mut line = String::new();
-        for word in para.split(' ') {
-            let cand = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-            if line.is_empty() || measured(&cand) <= width {
-                line = cand;
-            } else {
-                out.push(TextLine { text: std::mem::take(&mut line), direction });
-                line = word.to_string();
-            }
-            // Keep marks with their base letter. Each line's split is searched from its own start,
-            // so a long word costs about its emitted lines, each measured in its final joined form.
-            if measured(&line) > width {
-                let boundaries: Vec<usize> = line.grapheme_indices(true).map(|(i, _)| i).chain(std::iter::once(line.len())).collect();
-                let graphemes = boundaries.len().saturating_sub(1);
-                let piece =
-                    |from: usize, to: usize| boundaries.get(from).zip(boundaries.get(to)).and_then(|(&a, &b)| line.get(a..b)).unwrap_or_default();
-                let mut start = 0;
-                while graphemes - start > 1 {
-                    let left = graphemes - start;
-                    let fits = |n: usize| measured(piece(start, start + n)) <= width;
-                    let mut split = 1;
-                    while split < left && fits((split * 2).min(left)) {
-                        split = (split * 2).min(left);
-                    }
-                    if split == left {
-                        break;
-                    }
-                    let (mut low, mut high) = (split + 1, (split * 2).min(left) - 1);
-                    while low <= high {
-                        let mid = low + (high - low) / 2;
-                        if fits(mid) {
-                            split = mid;
-                            low = mid + 1;
-                        } else {
-                            high = mid - 1;
-                        }
-                    }
-                    out.push(TextLine { text: piece(start, start + split).to_string(), direction });
-                    start += split;
-                    if out.len() > 2000 {
-                        return out;
-                    }
-                }
-                line = piece(start, graphemes).to_string();
-            }
-            if out.len() > 2000 {
-                return out;
-            }
+        if gridcraft_pdf::width_is_char_sum(font, para, direction) {
+            wrap_summed_paragraph(para, font, size, width, direction, &mut out);
+        } else {
+            let fits = |s: &str| gridcraft_pdf::text_width_with_direction(font, size, s, direction) <= width;
+            wrap_measured_paragraph(para, &fits, direction, &mut out);
         }
-        out.push(TextLine { text: line, direction });
+        if out.len() > MAX_WRAP_LINES {
+            return out;
+        }
     }
     out
+}
+
+fn wrap_summed_paragraph(para: &str, font: Font, size: f32, width: f32, direction: TextDirection, out: &mut Vec<TextLine>) {
+    let units_of = |s: &str| -> u64 { s.chars().map(|c| u64::from(font.char_width(c))).sum() };
+    let fits = |units: u64| units as f32 * size / 1000.0 <= width;
+    let space = units_of(" ");
+    let mut line = String::new();
+    let mut line_units: u64 = 0;
+    for word in para.split(' ') {
+        let word_units = units_of(word);
+        if line.is_empty() {
+            line.push_str(word);
+            line_units = word_units;
+        } else if fits(line_units + space + word_units) {
+            line.push(' ');
+            line.push_str(word);
+            line_units += space + word_units;
+        } else {
+            out.push(TextLine { text: std::mem::take(&mut line), direction });
+            line.push_str(word);
+            line_units = word_units;
+        }
+        // Break a single over-long word by graphemes, keeping marks with their base letter:
+        // each piece is the longest that fits (at least one grapheme).
+        if !fits(line_units) && line.graphemes(true).nth(1).is_some() {
+            let mut piece = String::new();
+            let mut units: u64 = 0;
+            for g in line.graphemes(true) {
+                let w = units_of(g);
+                if !piece.is_empty() && !fits(units + w) {
+                    out.push(TextLine { text: std::mem::take(&mut piece), direction });
+                    units = 0;
+                    if out.len() > MAX_WRAP_LINES {
+                        return;
+                    }
+                }
+                piece.push_str(g);
+                units += w;
+            }
+            line = piece;
+            line_units = units;
+        }
+        if out.len() > MAX_WRAP_LINES {
+            return;
+        }
+    }
+    out.push(TextLine { text: line, direction });
+}
+
+/// One paragraph of [`wrap_lines`] whose width is not a sum of character widths (shaped Arabic,
+/// right-to-left reordering or bidi controls), measuring each candidate line as drawn.
+fn wrap_measured_paragraph(para: &str, fits: &impl Fn(&str) -> bool, direction: TextDirection, out: &mut Vec<TextLine>) {
+    let mut line = String::new();
+    for word in para.split(' ') {
+        if !line.is_empty() {
+            let candidate = format!("{line} {word}");
+            if fits(&candidate) {
+                line = candidate;
+                continue;
+            }
+            out.push(TextLine { text: std::mem::take(&mut line), direction });
+        }
+        line = if fits(word) { word.to_string() } else { break_measured_word(word, fits, direction, out) };
+        if out.len() > MAX_WRAP_LINES {
+            return;
+        }
+    }
+    out.push(TextLine { text: line, direction });
+}
+
+/// Cuts `word` into the longest grapheme prefixes that fit (at least one grapheme each), pushes
+/// all but the last to `out` and returns the last. Each cut gallops from one grapheme, so it
+/// measures prefixes about as long as the piece rather than the rest of the word.
+fn break_measured_word(word: &str, fits: &impl Fn(&str) -> bool, direction: TextDirection, out: &mut Vec<TextLine>) -> String {
+    let ends: Vec<usize> = word.grapheme_indices(true).map(|(i, g)| i + g.len()).collect();
+    let (mut start, mut first) = (0, 0);
+    loop {
+        let len = ends.len().saturating_sub(first);
+        let end = |count: usize| ends.get(first + count.saturating_sub(1)).copied().unwrap_or(word.len());
+        let fits_prefix = |count: usize| fits(word.get(start..end(count)).unwrap_or_default());
+        let (mut fit, mut over, mut probe) = (1, len + 1, 2);
+        while fit < len {
+            let count = probe.min(len);
+            if fits_prefix(count) {
+                fit = count;
+                probe = count.saturating_mul(2);
+            } else {
+                over = count;
+                break;
+            }
+        }
+        if fit >= len {
+            return word.get(start..).unwrap_or_default().to_string();
+        }
+        while over - fit > 1 {
+            let mid = fit + (over - fit) / 2;
+            if fits_prefix(mid) {
+                fit = mid;
+            } else {
+                over = mid;
+            }
+        }
+        let cut = end(fit);
+        out.push(TextLine { text: word.get(start..cut).unwrap_or_default().to_string(), direction });
+        start = cut;
+        first += fit;
+        if out.len() > MAX_WRAP_LINES {
+            return word.get(start..).unwrap_or_default().to_string();
+        }
+    }
 }
 
 fn font_for(style: &Style) -> Font {

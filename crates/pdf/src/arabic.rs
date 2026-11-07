@@ -323,9 +323,14 @@ fn cid_covers(ch: char) -> bool {
     matches!(ch, '\u{3000}'..='\u{312F}' | '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}' | '\u{F900}'..='\u{FAFF}' | '\u{FF00}'..='\u{FFEF}')
 }
 
+/// Whether standard-font `text` is drawn in its logical order, unchanged.
+pub(crate) fn is_logical_order(text: &str, direction: TextDirection) -> bool {
+    direction != TextDirection::RightToLeft && !text.chars().any(is_control)
+}
+
 /// Bidi reordering for standard-font text requires no optional Arabic font.
 pub(crate) fn latin_visual(text: &str, direction: TextDirection) -> Result<Cow<'_, str>, Error> {
-    if direction != TextDirection::RightToLeft && !text.chars().any(is_control) {
+    if is_logical_order(text, direction) {
         return Ok(Cow::Borrowed(text));
     }
     if text.len() > MAX_TEXT_BYTES {

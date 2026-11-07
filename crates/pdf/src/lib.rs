@@ -250,6 +250,13 @@ impl Font {
     }
 }
 
+/// Whether [`text_width_with_direction`] is the sum of `text`'s character widths: not shaped,
+/// not reordered right to left and holding no bidi controls. A prefix's width is then a running sum.
+pub fn width_is_char_sum(font: Font, text: &str, direction: TextDirection) -> bool {
+    let direction = if direction == TextDirection::Context { direction.resolve(text) } else { direction };
+    !arabic::shaped(font, text) && arabic::is_logical_order(text, direction)
+}
+
 /// Width of `text` in points when set in `font` at `size` points.
 /// Arabic uses shaped advances. If its font cannot render the text, measurement returns zero
 /// and drawing that text causes [`PdfDoc::finish`] to return the rendering error.
