@@ -100,6 +100,9 @@ impl<'h> Evaluator<'h> {
                 if l.params.len() != arrays.len() {
                     return err(CellError::Value);
                 }
+                if !self.charge_cells(n as u64) {
+                    return err(CellError::Calc);
+                }
                 let mut out = Vec::with_capacity(n);
                 for r in 0..rows {
                     for c in 0..cols {
@@ -120,6 +123,9 @@ impl<'h> Evaluator<'h> {
                 let Some(l) = self.lambda_arg(args.get(2), 2) else { return err(CellError::Value) };
                 if l.params.len() != 2 {
                     return err(CellError::Value);
+                }
+                if name == "SCAN" && !self.charge_cells(arr.data.len() as u64) {
+                    return err(CellError::Calc);
                 }
                 let mut scan = Vec::with_capacity(arr.data.len());
                 for v in arr.data.iter() {
@@ -149,6 +155,9 @@ impl<'h> Evaluator<'h> {
                 }
                 let by_row = name == "BYROW";
                 let n = if by_row { arr.rows } else { arr.cols };
+                if !self.charge_cells(n as u64) {
+                    return err(CellError::Calc);
+                }
                 let mut out = Vec::with_capacity(n);
                 for i in 0..n {
                     let slice: Vec<Value> = if by_row {
@@ -180,7 +189,11 @@ impl<'h> Evaluator<'h> {
                     return err(CellError::Value);
                 }
                 let (rows, cols) = (rows as usize, cols as usize);
-                let mut out = Vec::with_capacity(rows * cols);
+                let Some(n) = rows.checked_mul(cols).filter(|&n| (n as u64) <= MAX_CELLS) else { return err(CellError::Num) };
+                if !self.charge_cells(n as u64) {
+                    return err(CellError::Calc);
+                }
+                let mut out = Vec::with_capacity(n);
                 for r in 0..rows {
                     for c in 0..cols {
                         let bound = vec![

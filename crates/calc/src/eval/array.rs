@@ -123,6 +123,20 @@ pub(super) fn broadcast_len(rows: usize, cols: usize) -> Option<usize> {
     usize::try_from(cells).ok()
 }
 
+/// Size of an elementwise result, when either operand is an array and the broadcast fits.
+pub(super) fn binary_output_len(a: &Value, b: &Value) -> Option<usize> {
+    let dims = |v: &Value| match v {
+        Value::Array(a) => (a.rows, a.cols),
+        _ => (1, 1),
+    };
+    if !matches!(a, Value::Array(_)) && !matches!(b, Value::Array(_)) {
+        return None;
+    }
+    let (ar, ac) = dims(a);
+    let (br, bc) = dims(b);
+    broadcast_len(ar.max(br), ac.max(bc))
+}
+
 fn broadcast_dim(a: usize, b: usize) -> usize {
     if a == 1 {
         b
