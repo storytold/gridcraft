@@ -1,6 +1,6 @@
 # The sandbox for helper processes
 
-> **Last updated:** 2026-11-05 · **Change:** minor (the app turns Python on, so cells run through the sandbox; earlier: the engine runs Python cells through the sandbox; earlier: first version: the `sandbox` crate and `gridcraft-cli sandbox-check`)
+> **Last updated:** 2026-11-06 · **Change:** minor (more is refused on Linux: other processes, System V and POSIX queues, the terminal; earlier: the app turns Python on, so cells run through the sandbox; earlier: the engine runs Python cells through the sandbox; earlier: first version: the `sandbox` crate and `gridcraft-cli sandbox-check`)
 
 The sandbox is the layer GridCraft is to run code it doesn't trust in, such as a workbook's
 Python cells: a separate process that confines itself before the code starts. The engine runs
