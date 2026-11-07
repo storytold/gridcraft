@@ -31,6 +31,7 @@ fn literal_category_with_separators_survives_save() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            error_bars: Vec::new(),
         })
         .collect();
     s.charts.push(Chart {

@@ -5,7 +5,10 @@ use std::fmt::Write as _;
 
 use gridcraft_core::{RangeRef, Value, category_levels};
 use gridcraft_formula::{Expr, SheetSel};
-use gridcraft_model::{Chart, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
+use gridcraft_model::{
+    Chart, ChartKind, Color, DefinedName, ErrorAmount, ErrorBarDirection, ErrorBarSides, ErrorBars, LegendPos, LineDash, Series, Trendline,
+    TrendlineKind, Workbook,
+};
 
 use crate::drawing::{dml_color, srgb};
 use crate::xml::{El, esc, num};
@@ -101,6 +104,9 @@ pub(crate) fn chart_ref_from_file(text: &str) -> String {
     out
 }
 
+/// Most points kept of a literal list in a file (hostile `ptCount` and `idx` are cut here).
+const MAX_LITERAL: usize = 65_536;
+
 fn data_ref(e: Option<&El>) -> Option<String> {
     let e = e?;
     for k in ["numRef", "strRef", "multiLvlStrRef"] {
@@ -108,14 +114,29 @@ fn data_ref(e: Option<&El>) -> Option<String> {
             return Some(chart_ref_from_file(&f.text));
         }
     }
-    // Literal values become an array constant.
+    // Literal values become an array constant. Points keep their `idx` and the list its `ptCount`: a gap (a point the file leaves
+    // out) is written `""`, which reads back as no value and is skipped again on save, so later points stay on their own index.
     for k in ["numLit", "strLit"] {
         if let Some(l) = e.child(k) {
-            let pts: Vec<String> = l
-                .kids("pt")
-                .filter_map(|p| p.child("v"))
-                .map(|v| if k == "numLit" { v.text.trim().to_string() } else { format!("\"{}\"", v.text.replace('"', "\"\"")) })
-                .collect();
+            let mut pts: Vec<Option<String>> = Vec::new();
+            for (pos, p) in l.kids("pt").enumerate() {
+                let Some(v) = p.child("v") else { continue };
+                let idx = p.attr("idx").and_then(|i| i.trim().parse::<usize>().ok()).unwrap_or(pos);
+                if idx >= MAX_LITERAL {
+                    continue;
+                }
+                if pts.len() <= idx {
+                    pts.resize(idx + 1, None);
+                }
+                if let Some(slot) = pts.get_mut(idx) {
+                    *slot = Some(if k == "numLit" { v.text.trim().to_string() } else { format!("\"{}\"", v.text.replace('"', "\"\"")) });
+                }
+            }
+            let count = l.child("ptCount").and_then(|c| c.attr("val")).and_then(|c| c.trim().parse::<usize>().ok()).unwrap_or(0);
+            if pts.len() < count.min(MAX_LITERAL) {
+                pts.resize(count.min(MAX_LITERAL), None);
+            }
+            let pts: Vec<String> = pts.into_iter().map(|v| v.unwrap_or_else(|| "\"\"".into())).collect();
             return Some(format!("{{{}}}", pts.join(",")));
         }
     }
@@ -143,6 +164,7 @@ fn read_series(s: &El) -> Series {
         quartiles: Default::default(),
         smooth: bool_val(s, "smooth"),
         trendlines: s.kids("trendline").filter_map(read_trendline).collect(),
+        error_bars: read_series_error_bars(s),
     }
 }
 
@@ -182,7 +204,7 @@ fn read_trendline(t: &El) -> Option<Trendline> {
         "movingAvg" => TrendlineKind::MovingAverage(t.child_val("period").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(2).clamp(2, 255)),
         _ => return None,
     };
-    let ln = t.path(&["spPr", "ln"]);
+    let (color, width, dash) = read_ln(t);
     Some(Trendline {
         kind,
         name: t.child("name").map(|n| n.text.clone()),
@@ -191,9 +213,63 @@ fn read_trendline(t: &El) -> Option<Trendline> {
         intercept: f64_val(t, "intercept"),
         display_equation: bool_val(t, "dispEq"),
         display_r_squared: bool_val(t, "dispRSqr"),
-        color: ln.and_then(|l| l.child("solidFill")).and_then(dml_color),
-        width: ln.and_then(|l| l.attr_f64("w")).map(|w| (w / EMU_PER_PT) as f32).filter(|w| w.is_finite() && *w >= 0.0),
-        dash: ln.and_then(|l| l.child("prstDash")).and_then(|d| d.attr("val")).and_then(|v| DASHES.iter().find(|(_, n)| *n == v).map(|(d, _)| *d)),
+        color,
+        width,
+        dash,
+    })
+}
+
+/// Colour, width (points) and preset dash of an element's `c:spPr/a:ln`.
+fn read_ln(e: &El) -> (Option<Color>, Option<f32>, Option<LineDash>) {
+    let ln = e.path(&["spPr", "ln"]);
+    (
+        ln.and_then(|l| l.child("solidFill")).and_then(dml_color),
+        ln.and_then(|l| l.attr_f64("w")).map(|w| (w / EMU_PER_PT) as f32).filter(|w| w.is_finite() && *w >= 0.0),
+        ln.and_then(|l| l.child("prstDash")).and_then(|d| d.attr("val")).and_then(|v| DASHES.iter().find(|(_, n)| *n == v).map(|(d, _)| *d)),
+    )
+}
+
+/// A series' `<c:errBars>`: at most one set per direction (the first wins); unknown value
+/// types are dropped.
+fn read_series_error_bars(s: &El) -> Vec<ErrorBars> {
+    let mut out: Vec<ErrorBars> = Vec::new();
+    for e in s.kids("errBars").filter_map(read_error_bars) {
+        if !out.iter().any(|o| o.direction == e.direction) {
+            out.push(e);
+        }
+    }
+    out
+}
+
+/// `c:val` when a file leaves it out.
+const DEFAULT_FIXED: f64 = 1.0;
+const DEFAULT_PERCENT: f64 = 5.0;
+const DEFAULT_STD_DEV: f64 = 1.0;
+
+/// `<c:errBars>` (ECMA-376 Part 1, 21.2.2.55).
+fn read_error_bars(e: &El) -> Option<ErrorBars> {
+    let val = f64_val(e, "val").filter(|v| v.is_finite());
+    let amount = match e.child_val("errValType").unwrap_or("fixedVal") {
+        "fixedVal" => ErrorAmount::Fixed(val.unwrap_or(DEFAULT_FIXED)),
+        "percentage" => ErrorAmount::Percentage(val.unwrap_or(DEFAULT_PERCENT)),
+        "stdDev" => ErrorAmount::StdDev(val.unwrap_or(DEFAULT_STD_DEV)),
+        "stdErr" => ErrorAmount::StdErr,
+        "cust" => ErrorAmount::Custom { plus: data_ref(e.child("plus")), minus: data_ref(e.child("minus")) },
+        _ => return None,
+    };
+    let (color, width, dash) = read_ln(e);
+    Some(ErrorBars {
+        direction: if e.child_val("errDir") == Some("x") { ErrorBarDirection::X } else { ErrorBarDirection::Y },
+        sides: match e.child_val("errBarType") {
+            Some("plus") => ErrorBarSides::Plus,
+            Some("minus") => ErrorBarSides::Minus,
+            _ => ErrorBarSides::Both,
+        },
+        amount,
+        no_end_cap: bool_val(e, "noEndCap"),
+        color,
+        width,
+        dash,
     })
 }
 
@@ -576,6 +652,7 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
         for t in &s.trendlines {
             x.push_str(&trendline_xml(t, wb));
         }
+        x.push_str(&series_error_bars_xml(s, g, wb, si));
     }
     match g {
         G::Scatter { .. } | G::Bubble => {
@@ -611,22 +688,7 @@ fn trendline_xml(t: &Trendline, wb: &Workbook) -> String {
     if let Some(n) = &t.name {
         let _ = write!(x, "<c:name>{}</c:name>", esc(n));
     }
-    let color = t.color.as_ref().and_then(|c| srgb(c, &wb.theme));
-    if color.is_some() || t.width.is_some() || t.dash.is_some() {
-        x.push_str("<c:spPr><a:ln");
-        if let Some(w) = t.width.filter(|w| w.is_finite()) {
-            // ST_LineWidth: 0..=20116800 EMU.
-            let _ = write!(x, " w=\"{}\"", (f64::from(w) * EMU_PER_PT).round().clamp(0.0, 20_116_800.0) as i64);
-        }
-        x.push_str(" cap=\"rnd\">");
-        if let Some(c) = &color {
-            let _ = write!(x, "<a:solidFill>{c}</a:solidFill>");
-        }
-        if let Some(d) = t.dash.and_then(|d| DASHES.iter().find(|(k, _)| *k == d)) {
-            let _ = write!(x, "<a:prstDash val=\"{}\"/>", d.1);
-        }
-        x.push_str("</a:ln></c:spPr>");
-    }
+    x.push_str(&ln_xml(t.color.as_ref(), t.width, t.dash, wb));
     let ty = match t.kind {
         TrendlineKind::Linear => "linear",
         TrendlineKind::Exponential => "exp",
@@ -658,6 +720,96 @@ fn trendline_xml(t: &Trendline, wb: &Workbook) -> String {
         x.push_str("<c:trendlineLbl><c:numFmt formatCode=\"General\" sourceLinked=\"0\"/></c:trendlineLbl>");
     }
     x.push_str("</c:trendline>");
+    x
+}
+
+/// DrawingML scheme colour names by `Color::Theme` index.
+const SCHEME_NAMES: [&str; 12] = ["bg1", "tx1", "bg2", "tx2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6", "hlink", "folHlink"];
+
+/// `<c:spPr><a:ln>` with the given colour, width and dash; empty when all are automatic.
+fn ln_xml(color: Option<&Color>, width: Option<f32>, dash: Option<LineDash>, wb: &Workbook) -> String {
+    // A plain theme colour keeps its scheme name, so a later theme change still reaches the line.
+    let color = color.and_then(|c| match c {
+        Color::Theme(i, 0) => SCHEME_NAMES.get(usize::from(*i)).map(|n| format!("<a:schemeClr val=\"{n}\"/>")),
+        _ => srgb(c, &wb.theme),
+    });
+    if color.is_none() && width.is_none() && dash.is_none() {
+        return String::new();
+    }
+    let mut x = String::from("<c:spPr><a:ln");
+    if let Some(w) = width.filter(|w| w.is_finite()) {
+        // ST_LineWidth: 0..=20116800 EMU.
+        let _ = write!(x, " w=\"{}\"", (f64::from(w) * EMU_PER_PT).round().clamp(0.0, 20_116_800.0) as i64);
+    }
+    x.push_str(" cap=\"rnd\">");
+    if let Some(c) = &color {
+        let _ = write!(x, "<a:solidFill>{c}</a:solidFill>");
+    }
+    if let Some(d) = dash.and_then(|d| DASHES.iter().find(|(k, _)| *k == d)) {
+        let _ = write!(x, "<a:prstDash val=\"{}\"/>", d.1);
+    }
+    x.push_str("</a:ln></c:spPr>");
+    x
+}
+
+/// The series' error bars as its chart group allows them: CT_BarSer and CT_LineSer (also
+/// stock) hold one set, in Y; CT_AreaSer, CT_ScatterSer and CT_BubbleSer one per direction.
+fn series_error_bars_xml(s: &Series, g: G, wb: &Workbook, si: usize) -> String {
+    let two = matches!(g, G::Area { .. } | G::Scatter { .. } | G::Bubble);
+    let mut x = String::new();
+    let mut seen: Vec<ErrorBarDirection> = Vec::new();
+    for e in &s.error_bars {
+        if seen.contains(&e.direction) || (!two && (e.direction == ErrorBarDirection::X || !seen.is_empty())) {
+            continue;
+        }
+        if let ErrorAmount::Custom { plus, minus } = &e.amount
+            && !plus.iter().chain(minus).any(|f| custom_amount_ok(f))
+        {
+            continue;
+        }
+        seen.push(e.direction);
+        x.push_str(&error_bars_xml(e, matches!(g, G::Bar { .. }), wb, si));
+    }
+    x
+}
+
+/// Whether a custom error amount can be written: a reference, a defined name or an array
+/// constant.
+fn custom_amount_ok(f: &str) -> bool {
+    let f = f.trim();
+    (f.starts_with('{') && f.ends_with('}')) || matches!(gridcraft_formula::parse(f), Ok(Expr::Ref(_) | Expr::Name(_)))
+}
+
+/// `<c:errBars>` with children in schema order: errDir, errBarType, errValType, noEndCap,
+/// plus, minus, val, spPr. Column and bar series leave errDir out, as Excel writes them.
+fn error_bars_xml(e: &ErrorBars, bar: bool, wb: &Workbook, si: usize) -> String {
+    let dir = if e.direction == ErrorBarDirection::X { "x" } else { "y" };
+    let dir = if bar { String::new() } else { format!("<c:errDir val=\"{dir}\"/>") };
+    let sides = match e.sides {
+        ErrorBarSides::Both => "both",
+        ErrorBarSides::Plus => "plus",
+        ErrorBarSides::Minus => "minus",
+    };
+    let (ty, val) = match &e.amount {
+        ErrorAmount::Fixed(v) => ("fixedVal", Some(*v)),
+        ErrorAmount::Percentage(v) => ("percentage", Some(*v)),
+        ErrorAmount::StdDev(v) => ("stdDev", Some(*v)),
+        ErrorAmount::StdErr => ("stdErr", None),
+        ErrorAmount::Custom { .. } => ("cust", None),
+    };
+    let mut x = format!("<c:errBars>{dir}<c:errBarType val=\"{sides}\"/><c:errValType val=\"{ty}\"/><c:noEndCap val=\"{}\"/>", e.no_end_cap as u8);
+    if let ErrorAmount::Custom { plus, minus } = &e.amount {
+        for (tag, f) in [("plus", plus), ("minus", minus)] {
+            if let Some(f) = f.as_deref().filter(|f| custom_amount_ok(f)) {
+                x.push_str(&num_data(tag, Some(f), wb, si));
+            }
+        }
+    }
+    if let Some(v) = val.filter(|v| v.is_finite()) {
+        let _ = write!(x, "<c:val val=\"{}\"/>", num(v));
+    }
+    x.push_str(&ln_xml(e.color.as_ref(), e.width, e.dash, wb));
+    x.push_str("</c:errBars>");
     x
 }
 

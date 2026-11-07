@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-02 · **Change:** minor (form controls: buttons, sliders and spin buttons; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis take ranges by selection on the grid; earlier: Python mode in the formula bar; earlier: Python cells stored and kept in files; earlier: equations: Insert › Equation, editor, gridcraft-math; earlier: What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear; earlier: floating objects: one selection, eight resize handles, keyboard delete; earlier: Chart data tables: live source values beneath column, bar, line, area and compatible combo charts; legend keys and borders; XLSX round-trip and print/PDF; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-02 · **Change:** minor (RefEdit reference boxes in dialogs; form controls: buttons, sliders and spin buttons; charts resize from eight handles; doughnut chart rings, hole size, first slice angle, and category legends; earlier: Python mode in the formula bar; Python cells stored and kept in files; equations; Solver Sensitivity report; floating objects; Chart data tables, legend keys and borders, XLSX round-trip and print/PDF; error bars; Function Library; workbook-view selection; CSV date order) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -186,6 +186,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-14 | XLSX: formulas opened with dynamic-array metadata (`cm`) keep it on save, with `xl/metadata.xml`. Before, a formula returning one value lost it (11 of 40 corpus files that have the part lost it entirely), and Excel recalculated some of them with implicit intersection (`SUMPRODUCT(IFERROR(...))` changed value) |
 | 2026-10-14 | Recalculation: a dynamic array's anchor given a new formula that reads its old spill area (`A1` was `=SEQUENCE(3)`, becomes `=SUM(A2:A3)+1` or `=SEQUENCE(1,A2+1)`) sees that area empty instead of the old values |
 | 2026-10-14 | Recalculation: when two arrays of one recalculation want the same empty cells, the formulas that read the one laid out second (at its anchor or over the cells it would have spilled into) read `#SPILL!` and empty cells instead of its values |
+| 2026-10-14 | Chart error bars: fixed value, percentage, standard deviation, standard error and custom plus/minus ranges, in X and Y, plus/minus/both, cap or no cap, line colour, width and dash; read and written as `c:errBars` in schema order, drawn on 2-D column, bar, line, area (stacked too), scatter and bubble series with the value axis widened to hold them; `chart.addElement` `errorBars` adds, replaces and removes them |
 | 2026-10-14 | Border keytips: each Alt, H, B letter applies the preset Excel's Borders menu gives it (H,B,O bottom, H,B,B bottom double, H,B,N no border, H,B,A all borders and the rest); they all drew a bottom border before. H,B,M opens Format Cells on the Border tab |
 | 2026-10-13 | Formula-entry Command/Ctrl-click inserts another reference with the locale's argument separator; Shift-click extends from a stable, sheet-aware anchor. Pointer tests cover repeated clicks, reversed ranges, ordinary replacement, typed separators, Spanish syntax, sheet switches and keyboard continuation. Readiness estimates unchanged. |
 | 2026-10-13 | `formulas.evaluate` (`gridcraft-cli eval`, MCP `evaluate_formula`) refuses what entering the formula in a cell refuses, with the reason (`=SUM(1;2)`: "expected `,` or `)`"), instead of `#NAME?` for any formula that doesn't parse |
@@ -299,6 +300,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-14 | minor | XLSX dynamic-array `cm` metadata kept on save; progress log row |
 | 2026-10-14 | minor | Progress log: spill anchor reading its old spill area |
 | 2026-10-14 | minor | Progress log: formulas reading an array that loses a spill conflict |
+| 2026-10-14 | minor | Progress log: chart error bars |
 | 2026-10-13 | trivial | Progress log: More Colors… and Recent Colors in the colour menus (#928) |
 | 2026-10-13 | minor | Multi-level category axes (read, drawn, written); progress log row |
 | 2026-10-13 | trivial | Progress log: shared pictures written once on XLSX export (#985) |

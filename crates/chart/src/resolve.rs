@@ -2,10 +2,10 @@
 
 use gridcraft_calc::evaluate;
 use gridcraft_core::{CellRef, RangeRef, Value, category_levels, number_to_text};
-use gridcraft_model::{Chart, ChartKind, Theme, Workbook, style::apply_tint};
+use gridcraft_model::{Chart, ChartKind, ErrorAmount, Theme, Workbook, style::apply_tint};
 use gridcraft_numfmt::{NumberFormat, format_value};
 
-use crate::{ChartData, Rgba, SeriesData, TrendlineData};
+use crate::{ChartData, ErrorBarData, Rgba, SeriesData, TrendlineData};
 
 /// Cap on points per series (keeps whole-column references from exploding).
 pub(crate) const MAX_POINTS: usize = 100_000;
@@ -13,6 +13,8 @@ pub(crate) const MAX_POINTS: usize = 100_000;
 pub(crate) const MAX_SERIES: usize = 255;
 /// Cap on trendlines drawn per series.
 pub(crate) const MAX_TRENDLINES: usize = 16;
+/// Automatic error bar colour (a dark grey, like the axis text).
+pub(crate) const ERROR_BAR_GREY: Rgba = [0x59, 0x59, 0x59, 0xFF];
 
 /// Tints used for series beyond the six theme accents: lighter, darker, lighter still…
 const CYCLE_TINTS: [f64; 6] = [0.0, 0.4, -0.25, 0.6, -0.5, 0.2];
@@ -265,6 +267,26 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
                 color: t.color.as_ref().and_then(|c| c.resolve(&wb.theme)).map(|[r, g, b]| [r, g, b, 0xFF]).unwrap_or(color),
             })
             .collect();
+        let error_bars = s
+            .error_bars
+            .iter()
+            .take(2)
+            .map(|e| {
+                let (plus, minus) = match &e.amount {
+                    ErrorAmount::Custom { plus, minus } => {
+                        let eval = |f: &Option<String>| f.as_deref().map(|f| nums(wb, sheet, f)).unwrap_or_default();
+                        (eval(plus), eval(minus))
+                    }
+                    _ => (Vec::new(), Vec::new()),
+                };
+                ErrorBarData {
+                    spec: e.clone(),
+                    color: e.color.as_ref().and_then(|c| c.resolve(&wb.theme)).map(|[r, g, b]| [r, g, b, 0xFF]).unwrap_or(ERROR_BAR_GREY),
+                    plus,
+                    minus,
+                }
+            })
+            .collect();
         series.push(SeriesData {
             name,
             values,
@@ -275,6 +297,7 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
             secondary: s.secondary,
             smooth: s.smooth,
             trendlines,
+            error_bars,
             number_format: ref_format(wb, sheet, &s.values),
         });
     }

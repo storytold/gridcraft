@@ -2,12 +2,13 @@
 
 use std::f32::consts::{PI, TAU};
 
-use gridcraft_model::{Chart, ChartKind, LineDash, QuartileMethod, Theme, TrendlineKind};
+use gridcraft_model::{Chart, ChartKind, ErrorBarDirection, LineDash, QuartileMethod, Theme, TrendlineKind};
 
 use crate::axis::{Fmt, Scale, clean, nice_scale};
+use crate::errbars::error_spans;
 use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, series_color};
 use crate::trend::{auto_name, fit_trendline, moving_average};
-use crate::{ChartData, HAlign, Measure, Prim, Rgba, SeriesData, VAlign};
+use crate::{ChartData, ErrorBarData, HAlign, Measure, Prim, Rgba, SeriesData, VAlign};
 
 mod cartesian;
 mod frame;
@@ -42,6 +43,8 @@ const MAX_CATS: usize = 20_000;
 const MAX_LINE_PTS: usize = 2000;
 /// Most markers per series (after de-duplicating by pixel).
 const MAX_MARKERS: usize = 5000;
+/// Error bars drawn per chart, over every series and direction (axis bounds still use them all).
+const MAX_ERR_BARS: usize = 20_000;
 /// Data labels are skipped when a series has more points than this.
 const MAX_LABELS: usize = 200;
 /// Most wedges a doughnut draws for the whole chart. The per-series and per-category limits do not
@@ -120,6 +123,12 @@ fn sanitize(d: &ChartData) -> ChartData {
                 secondary: s.secondary,
                 smooth: s.smooth,
                 trendlines: s.trendlines.iter().take(MAX_TRENDLINES).cloned().collect(),
+                error_bars: s
+                    .error_bars
+                    .iter()
+                    .take(2)
+                    .map(|e| ErrorBarData { spec: e.spec.clone(), color: e.color, plus: sanitize_vals(&e.plus), minus: sanitize_vals(&e.minus) })
+                    .collect(),
                 number_format: s.number_format.clone(),
             })
             .collect(),
@@ -256,4 +265,73 @@ pub(crate) fn finalize(prims: Vec<Prim>, w: f32, h: f32) -> Vec<Prim> {
             }
         })
         .collect()
+}
+
+// ---------------------------------------------------------------- error bars
+
+/// Half the length of an error bar's end cap.
+const CAP: f32 = 2.5;
+
+/// One drawn error bar in data units along its axis: the point index, the low and high ends,
+/// and whether each end gets a cap (the start of a one-sided bar has none).
+#[derive(Clone, Copy, Debug)]
+struct ErrSeg {
+    j: usize,
+    lo: f64,
+    hi: f64,
+    cap_lo: bool,
+    cap_hi: bool,
+}
+
+/// Error bar segments of `eb` for the points `values` (their own values along the bar axis)
+/// drawn at `anchors` (the plotted positions: the value, or the stack top).
+fn error_segments(eb: &ErrorBarData, values: &[Option<f64>], anchors: &[Option<f64>]) -> Vec<ErrSeg> {
+    error_spans(eb, values)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(j, sp)| {
+            let sp = sp?;
+            let at = anchors.get(j).copied().flatten()?;
+            let v = values.get(j).copied().flatten()?;
+            let c = sp.center.map(|m| m + (at - v)).unwrap_or(at);
+            let (lo, hi) = (c - sp.minus, c + sp.plus);
+            // Excel caps only the ends away from the start: a plus-only standard deviation bar
+            // runs up from the mean with no cap at the mean.
+            (lo.is_finite() && hi.is_finite() && (sp.minus > 0.0 || sp.plus > 0.0)).then_some(ErrSeg {
+                j,
+                lo,
+                hi,
+                cap_lo: sp.minus > 0.0,
+                cap_hi: sp.plus > 0.0,
+            })
+        })
+        .collect()
+}
+
+/// Draws one error bar from `a` to `b` (pixels), capped across its direction at the ends
+/// asked for, clipped to the plot.
+fn draw_error_bar(ctx: &mut Ctx, plot: Bx, a: [f32; 2], b: [f32; 2], caps: (bool, bool), eb: &ErrorBarData, cap_on: bool) {
+    if !(fin(a[0]) && fin(a[1]) && fin(b[0]) && fin(b[1])) {
+        return;
+    }
+    let clamp = |p: [f32; 2]| [p[0].clamp(plot.x, plot.right()), p[1].clamp(plot.y, plot.bottom())];
+    // Excel's automatic error bar line is 0.75 pt.
+    let width = eb.spec.width.filter(|w| w.is_finite()).unwrap_or(0.75).clamp(0.25, 12.0);
+    let dash = eb.spec.dash.is_some_and(|d| d != LineDash::Solid);
+    let (ca, cb) = (clamp(a), clamp(b));
+    if ca != cb {
+        ctx.out.push(Prim::Line { pts: vec![ca, cb], color: eb.color, width, dash });
+    }
+    if !cap_on {
+        return;
+    }
+    let vertical = (a[0] - b[0]).abs() < (a[1] - b[1]).abs();
+    for (p, on, cp) in [(a, caps.0, ca), (b, caps.1, cb)] {
+        // A cap past the plot edge is clipped away with its end.
+        if !on || p != cp {
+            continue;
+        }
+        let (p0, p1) = if vertical { ([p[0] - CAP, p[1]], [p[0] + CAP, p[1]]) } else { ([p[0], p[1] - CAP], [p[0], p[1] + CAP]) };
+        ctx.out.push(Prim::Line { pts: vec![p0, p1], color: eb.color, width, dash: false });
+    }
 }

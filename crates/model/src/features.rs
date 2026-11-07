@@ -470,6 +470,59 @@ pub struct Series {
     /// Trendlines fitted to this series (Excel allows several per series).
     #[serde(default)]
     pub trendlines: Vec<Trendline>,
+    /// Error bars: at most one set per direction (Y only on column, bar and line series).
+    #[serde(default)]
+    pub error_bars: Vec<ErrorBars>,
+}
+
+/// Which axis error bars run along (`c:errDir`). On a bar chart, `Y` bars run along the
+/// horizontal value axis.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ErrorBarDirection {
+    X,
+    #[default]
+    Y,
+}
+
+/// Which sides of the point error bars extend to (`c:errBarType`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ErrorBarSides {
+    #[default]
+    Both,
+    Plus,
+    Minus,
+}
+
+/// How long error bars are (`c:errValType` with `c:val`, `c:plus`, `c:minus`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum ErrorAmount {
+    /// The same amount for every point.
+    Fixed(f64),
+    /// This percentage of each point's value.
+    Percentage(f64),
+    /// This many standard deviations of the series, centred on the series mean.
+    StdDev(f64),
+    /// The standard error of the series.
+    #[default]
+    StdErr,
+    /// Per-point amounts from references (`Sheet1!$C$2:$C$9`) or array constants (`{1,2}`).
+    Custom { plus: Option<String>, minus: Option<String> },
+}
+
+/// A series' error bars (Add Chart Element ▸ Error Bars, Format Error Bars pane).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ErrorBars {
+    pub direction: ErrorBarDirection,
+    pub sides: ErrorBarSides,
+    pub amount: ErrorAmount,
+    /// End Style: No Cap.
+    pub no_end_cap: bool,
+    /// Line colour; `None` = automatic (dark grey).
+    pub color: Option<Color>,
+    /// Line width in points; `None` = default.
+    pub width: Option<f32>,
+    /// Line dash; `None` = solid.
+    pub dash: Option<LineDash>,
 }
 
 /// Regression a trendline fits (`c:trendlineType`).

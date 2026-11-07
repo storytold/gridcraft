@@ -37,6 +37,7 @@ fn workbook(categories: &str, values: &str) -> Workbook {
             kind: None,
             smooth: false,
             trendlines: Vec::new(),
+            error_bars: Vec::new(),
             quartiles: Default::default(),
         }],
         legend: LegendPos::Bottom,

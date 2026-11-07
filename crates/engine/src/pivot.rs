@@ -330,3 +330,34 @@ mod fit_tests {
         assert!(data_cols_exceed_sheet(16_385, false, 0));
     }
 }
+
+#[cfg(test)]
+mod carry_error_bars_tests {
+    use super::charts::carry_error_bars;
+    use super::*;
+
+    fn series(name: &str, bars: usize) -> Series {
+        Series {
+            name: Some(name.into()),
+            categories: None,
+            values: String::new(),
+            bubble_sizes: None,
+            color: None,
+            secondary: false,
+            kind: None,
+            quartiles: Default::default(),
+            smooth: false,
+            trendlines: Vec::new(),
+            error_bars: vec![Default::default(); bars],
+        }
+    }
+
+    #[test]
+    fn duplicate_names_take_distinct_old_series() {
+        let old = [series("a", 1), series("a", 0)];
+        let mut new = [series("a", 0), series("a", 0), series("a", 0)];
+        carry_error_bars(&old, &mut new);
+        let counts: Vec<usize> = new.iter().map(|s| s.error_bars.len()).collect();
+        assert_eq!(counts, [1, 0, 0]);
+    }
+}

@@ -1,6 +1,6 @@
 # Roadmap detail
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (test command) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (test command; M7: chart error bars landed) · **Target:** Microsoft Excel (Microsoft 365)
 
 Forward-looking plan. The one-page summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work
 list is [`gaps.md`](gaps.md); numbers and method are in
@@ -69,7 +69,7 @@ to check our files, and Windows machines with the reported GPU drivers.
 | M4 | Data (advanced filter, consolidate, what-if) | most; Solver, ToolPak and Power Query remain |
 | M5 | Formulas tab (trace arrows, watch window, evaluate, error checking) | done |
 | M6 | Conditional formatting manager parity | done |
-| M7 | Charts parity | partial; Format pane in; axes, trendlines, error bars, round-trip remain |
+| M7 | Charts parity | partial; Format pane, trendlines and error bars in; axes, round-trip remain |
 | M8 | Insert & Review | partial; ink, icons, comments pane in |
 | M9 | Page layout & print | most; Page Layout view remains |
 | M10 | PivotTables, Solver, Analysis ToolPak | PivotTables in; slicers, Solver, ToolPak remain |
@@ -114,6 +114,7 @@ to check our files, and Windows machines with the reported GPU drivers.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-23 | minor | Measuring: tests run through `cargo xtask test` |
+| 2026-10-14 | minor | M7: trendlines and error bars landed |
 | 2026-10-11 | minor | PivotTable calculated fields landed |
 | 2026-10-10 | minor | Current focus and M15 updated for the 10-10 merges |
 | 2026-10-10 | minor | Added the alpha gate table (six core workflows; passes, stays alpha) |

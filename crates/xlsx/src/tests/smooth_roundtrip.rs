@@ -20,6 +20,7 @@ fn smooth_line_setting_round_trips() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        error_bars: Vec::new(),
     };
     s.charts.push(Chart {
         id: 1,

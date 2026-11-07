@@ -76,9 +76,22 @@ pub fn chart_series(sheet: &str, origin: CellRef, out: &Output) -> Vec<Series> {
                 quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
+                error_bars: Vec::new(),
             })
         })
         .collect()
+}
+
+/// Error bars stay with the series of the same name; duplicate names pair up in order, each old series used once.
+pub(super) fn carry_error_bars(old: &[Series], new: &mut [Series]) {
+    let mut used = vec![false; old.len()];
+    for s in new {
+        let hit = old.iter().enumerate().find(|(i, o)| !used[*i] && o.name == s.name).map(|(i, _)| i);
+        if let Some(i) = hit {
+            used[i] = true;
+            s.error_bars = old[i].error_bars.clone();
+        }
+    }
 }
 
 /// Rebuilds the series of every PivotChart of a PivotTable after its report was written.
@@ -92,7 +105,9 @@ pub(super) fn rebind_charts(wb: &mut Workbook, sheet: &str, pivot: &str, origin:
     for i in hits {
         let Some(sh) = wb.sheet_mut(i) else { continue };
         for ch in sh.charts.iter_mut().filter(|c| linked(c)) {
+            let old = std::mem::take(&mut ch.series);
             ch.series = series.clone();
+            carry_error_bars(&old, &mut ch.series);
         }
     }
 }

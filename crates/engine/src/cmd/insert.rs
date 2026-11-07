@@ -672,6 +672,7 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
                 quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
+                error_bars: Vec::new(),
             });
         }
     } else {
@@ -688,6 +689,7 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
                 quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
+                error_bars: Vec::new(),
             });
         }
     }
@@ -897,6 +899,13 @@ fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         let Some(c) = sh.charts.get_mut(ci) else { return Ok(Json::Null) };
         if let Some(t) = str_param(p, "type") {
             c.kind = chart_kind(t, str_param(p, "subtype").unwrap_or(""));
+            let kinds: Vec<ChartKind> = (0..c.series.len()).map(|i| gridcraft_chart::series_plot_kind(c, i)).collect();
+            for (series, kind) in c.series.iter_mut().zip(kinds) {
+                let xy = matches!(kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble);
+                let saved = gridcraft_chart::supports_error_bars(kind)
+                    || matches!(kind, ChartKind::ColumnStacked100 | ChartKind::BarStacked100 | ChartKind::Stock);
+                series.error_bars.retain(|bar| saved && (xy || bar.direction == gridcraft_model::ErrorBarDirection::Y));
+            }
             if !c.supports_data_table() {
                 c.data_table = None;
             }

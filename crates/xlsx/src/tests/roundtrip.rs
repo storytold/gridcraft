@@ -408,6 +408,7 @@ fn sample() -> Workbook {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            error_bars: Vec::new(),
         }],
         legend: LegendPos::Bottom,
         data_labels: true,

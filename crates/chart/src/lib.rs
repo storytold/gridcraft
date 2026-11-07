@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 mod axis;
+mod errbars;
 mod raster;
 mod render;
 mod resolve;
@@ -20,10 +21,13 @@ mod trend;
 #[cfg(test)]
 mod tests;
 
-pub use gridcraft_model::{Chart, ChartKind, LegendPos, SparklineKind, Trendline, TrendlineKind};
+pub use gridcraft_model::{
+    Chart, ChartKind, ErrorAmount, ErrorBarDirection, ErrorBarSides, ErrorBars, LegendPos, SparklineKind, Trendline, TrendlineKind,
+};
 use serde::{Deserialize, Serialize};
 
 pub use axis::{Scale, format_number, nice_scale};
+pub use errbars::{ErrorSpan, error_spans, supports_error_bars};
 pub use raster::rasterize;
 pub use render::{Swatch, legend_entries, render, supports_trendline};
 pub use resolve::{default_palette, resolve, series_color, series_plot_kind};
@@ -151,6 +155,9 @@ pub struct SeriesData {
     pub smooth: bool,
     /// Trendlines to fit and draw over this series.
     pub trendlines: Vec<TrendlineData>,
+    /// Error bars to draw on this series.
+    #[serde(default)]
+    pub error_bars: Vec<ErrorBarData>,
     /// Number format code of the source values ("General" by default).
     pub number_format: String,
 }
@@ -160,6 +167,16 @@ pub struct SeriesData {
 pub struct TrendlineData {
     pub spec: Trendline,
     pub color: Rgba,
+}
+
+/// Error bars to draw: the model settings, the line colour resolved against the theme, and the
+/// evaluated plus/minus amounts of custom error bars (empty for the other amount types).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ErrorBarData {
+    pub spec: ErrorBars,
+    pub color: Rgba,
+    pub plus: Vec<Option<f64>>,
+    pub minus: Vec<Option<f64>>,
 }
 
 impl Default for SeriesData {
@@ -174,6 +191,7 @@ impl Default for SeriesData {
             secondary: false,
             smooth: false,
             trendlines: vec![],
+            error_bars: Vec::new(),
             number_format: "General".into(),
         }
     }

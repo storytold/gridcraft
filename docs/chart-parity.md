@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-02 · **Change:** minor (doughnut charts: every series is a concentric ring, the first series innermost; hole size and first slice angle kept; rotated slices cover their own sweep; legend names categories; earlier: charts resize from eight handles, chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-02 · **Change:** minor (charts resize from eight handles; doughnut chart rings, hole size, first slice angle, and category legends; chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; error bars; selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -50,7 +50,7 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Doughnut hole size, first slice angle | 10–90% hole (Excel default 75%), 0–359° first slice | Format Chart pane sliders; read from and written to `c:holeSize` / `c:firstSliceAng`; documents saved before the setting existed keep their old 50% hole |
 | Secondary axis | any series | line series in combo charts |
 | Trendlines | linear, exponential, logarithmic, polynomial, power, moving average, equation and R² | all six types, several per series, name, forward/backward forecast, set intercept, equation and R² label, line colour/width/dash; read, written and drawn on 2-D column, bar, line, area, scatter and bubble series; `chart.addElement` `trendline` adds/removes them. No Format Trendline pane, label position/number format not kept |
-| Error bars | fixed, %, standard deviation/error, custom | **missing** |
+| Error bars | fixed, %, standard deviation/error, custom | fixed value, percentage, standard deviation (centred on the series mean, as Excel draws it), standard error (sample deviation / √n at each point) and custom plus/minus references or arrays; X and Y, plus/minus/both, cap or no cap, line colour/width/dash; read and written as `c:errBars`, drawn on 2-D column, bar, line, area (stacked too), scatter and bubble series, the value axis grows to hold them; `chart.addElement` `errorBars` adds, replaces and removes them. No Format Error Bars pane; 100% stacked series keep theirs in the file but don't draw them |
 | Up/down bars, high-low lines, drop lines, series lines | yes | **missing** |
 | Data table under the chart | yes | yes for column, bar, line, area and compatible combo charts: live formatted values, blank cells, grouped category headers, optional legend keys, horizontal/vertical borders and outline; native `c:dTable` XLSX round-trip; shared UI/print/PDF rendering |
 | Per-series / per-point fill, line, marker, effects | Format pane for every element | series colour only; Format Chart pane covers chart-level options |
@@ -82,7 +82,7 @@ Format reference: [Microsoft's DrawingML data table documentation](https://learn
 ## XLSX round-trip
 
 Charts are read from and written to DrawingML chart parts, but only the fields the model holds
-survive: anything else (axis scaling, label options, error bars, per-point formats, chartex
+survive: anything else (axis scaling, label options, per-point formats, chartex
 extensions) is lost when GridCraft saves a workbook it opened. That is the main reason charts are
 **~30% ready**: a user who opens an Excel workbook with charts and saves it gets simpler charts
 back.
@@ -96,12 +96,13 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 ## Work (40–60 h)
 
-1. Preserve unmodelled chart XML on round-trip (keep the original part, patch only edited fields): 6–10 h.
-2. Axis options, label options, gridlines per axis, legend formatting: 10–15 h.
-3. Error bars; Format Trendline pane (trendlines landed): 4–6 h.
-4. Per-element Format pane parity, smoothed lines, exploded pie, pie/bar of pie, 100% variants: 8–12 h.
-5. 3-D column/bar/pie/area, surface and contour, Pareto: 8–12 h.
-6. Chart sheets, templates and PivotChart field buttons: 5–8 h. Filled map: owner decision on boundary data.
+1. Chart resizing (#190): 1–2 h.
+2. Preserve unmodelled chart XML on round-trip (keep the original part, patch only edited fields): 6–10 h.
+3. Axis options, label options, gridlines per axis, legend formatting: 10–15 h.
+4. Format Trendline and Format Error Bars panes (trendlines and error bars landed): 3–4 h.
+5. Per-element Format pane parity, smoothed lines, exploded pie, pie/bar of pie, 100% variants: 8–12 h.
+6. 3-D column/bar/pie/area, surface and contour, Pareto: 8–12 h.
+7. Chart sheets, templates and PivotChart field buttons: 5–8 h. Filled map: owner decision on boundary data.
 
 ## Revision history
 
@@ -115,6 +116,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 | 2026-10-18 | minor | Doughnut charts: every series is a ring (first series innermost), hole size and first slice angle modelled, editable and round-tripped; rotated slices split at 12 o'clock without overlap; legend names categories like Excel's default (#1823) |
 | 2026-10-16 | trivial | Series that refer to defined names (`[0]!Name`, `Sheet!Name`) resolve instead of showing `#NAME?`, and are saved qualified, as Excel needs (#1686) |
 | 2026-10-16 | minor | Box & whisker quartiles default to exclusive, honor each series on draw and XLSX round-trip; `chart.set {quartiles}` changes the method (#1453) |
+| 2026-10-14 | minor | Error bars: all five amount types modelled, round-tripped through `c:errBars`, drawn on 2-D column, bar, line, area, scatter and bubble series; `chart.addElement` `errorBars` |
 | 2026-10-13 | minor | Multi-level category axes: read, drawn (outer levels under or beside the labels), written back with level caches |
 | 2026-10-12 | trivial | chart sheets are kept on save, still not editable (#727) |
 | 2026-10-11 | minor | Trendlines: all six types modelled, round-tripped through `c:trendline`, drawn with forecast and equation/R² labels; `chart.addElement` `trendline` |

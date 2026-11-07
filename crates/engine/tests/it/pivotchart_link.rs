@@ -39,3 +39,18 @@ fn pivot_chart_link_names_the_workbook_in_brackets() {
     let link = reopened.doc().unwrap().wb.sheets.iter().flat_map(|sh| sh.charts.iter()).find_map(|c| c.pivot.clone());
     assert_eq!(link.as_deref(), Some("Sheet2!PivotTable1"));
 }
+
+#[test]
+fn refreshing_a_pivot_chart_keeps_its_error_bars() {
+    let mut s = source();
+    run(&mut s, "selection.set", json!({"range": "A1"}));
+    run(&mut s, "insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]}));
+    run(&mut s, "insert.pivotChart", json!({}));
+    run(&mut s, "chart.addElement", json!({"element": "errorBars", "type": "fixed", "value": 2}));
+    let bars = |s: &Session| -> Vec<usize> {
+        s.doc().unwrap().wb.sheets.iter().flat_map(|sh| sh.charts.iter()).flat_map(|c| c.series.iter().map(|se| se.error_bars.len())).collect()
+    };
+    assert_eq!(bars(&s), vec![1]);
+    run(&mut s, "pivot.refresh", json!({"pivot": "PivotTable1"}));
+    assert_eq!(bars(&s), vec![1]);
+}

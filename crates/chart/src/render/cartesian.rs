@@ -3,9 +3,10 @@ use super::legend::{cat_label, plot_kind};
 use super::lines::{decimate_area, draw_markers, draw_runs};
 use super::trend::{draw_trend_labels, draw_trendlines, max_backward, max_forward, max_forward_slots, supports_trendline};
 use super::{
-    Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_LINE_PTS, MAX_MARKERS, Prim, Scale, SeriesData, TEXT,
-    VAlign, WHITE, clean, nice_scale,
+    Chart, ChartData, ChartKind, Ctx, ErrSeg, ErrorBarData, ErrorBarDirection, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_ERR_BARS, MAX_LABELS,
+    MAX_LINE_PTS, MAX_MARKERS, Prim, Scale, SeriesData, TEXT, VAlign, WHITE, clean, draw_error_bar, error_segments, nice_scale,
 };
+use crate::errbars::supports_error_bars;
 
 // ---------------------------------------------------------------- cartesian (column/bar/line/area/combo)
 
@@ -129,7 +130,13 @@ fn series_spans(data: &ChartData, fams: &[Fam], sec: &[bool], ncat: usize) -> Ve
     spans
 }
 
-fn axis_scales(data: &ChartData, fams: &[Fam], sec: &[bool], spans: &[Vec<Option<(f64, f64)>>]) -> Vec<(Scale, Fmt)> {
+fn axis_scales(
+    data: &ChartData,
+    fams: &[Fam],
+    sec: &[bool],
+    spans: &[Vec<Option<(f64, f64)>>],
+    err_segs: &[Option<(&ErrorBarData, Vec<ErrSeg>)>],
+) -> Vec<(Scale, Fmt)> {
     // Axis scales.
     let mut axes: Vec<(Scale, Fmt)> = Vec::new();
     for axis in [false, true] {
@@ -139,10 +146,15 @@ fn axis_scales(data: &ChartData, fams: &[Fam], sec: &[bool], spans: &[Vec<Option
         }
         let force_zero = members.iter().any(|i| fams.get(*i).is_some_and(|f| !is_line(*f)));
         let all100 = members.iter().all(|i| fams.get(*i).is_some_and(|f| is_100(*f)));
-        let range = value_range(members.iter().flat_map(|i| {
-            let line = fams.get(*i).is_some_and(|f| is_line(*f));
-            spans.get(*i).into_iter().flatten().flatten().flat_map(move |(b, t)| if line { vec![*t] } else { vec![*b, *t] })
-        }));
+        let range = value_range(
+            members
+                .iter()
+                .flat_map(|i| {
+                    let line = fams.get(*i).is_some_and(|f| is_line(*f));
+                    spans.get(*i).into_iter().flatten().flatten().flat_map(move |(b, t)| if line { vec![*t] } else { vec![*b, *t] })
+                })
+                .chain(members.iter().filter_map(|i| err_segs.get(*i)?.as_ref()).flat_map(|(_, segs)| segs.iter().flat_map(|e| [e.lo, e.hi]))),
+        );
         let (lo, hi) = range.unwrap_or((0.0, 0.0));
         let (scale, fmt) = if all100 {
             (Scale { min: if lo < -1e-9 { -1.0 } else { 0.0 }, max: if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, step: 0.2 }, Fmt::new("0%"))
@@ -182,6 +194,7 @@ fn column_slots(fams: &[Fam], sec: &[bool]) -> (Vec<usize>, f32) {
     (slot_of, slot_keys.len().max(1) as f32)
 }
 
+#[allow(clippy::cognitive_complexity)] // One renderer coordinates the shared axes and layered series passes.
 pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizontal: bool) {
     let ncat = data.categories.len().max(data.series.iter().map(|s| s.values.len()).max().unwrap_or(0)).min(MAX_CATS);
     if ncat == 0 {
@@ -193,8 +206,24 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     let sec: Vec<bool> = data.series.iter().map(|s| s.secondary && any_primary && !horizontal).collect();
 
     let spans = series_spans(data, &fams, &sec, ncat);
+    let err_segs: Vec<Option<(&ErrorBarData, Vec<ErrSeg>)>> = data
+        .series
+        .iter()
+        .enumerate()
+        .map(|(i, series)| {
+            let family = fams.get(i).copied()?;
+            let kind = kinds.get(i).copied()?;
+            if is_100(family) || !supports_error_bars(kind) {
+                return None;
+            }
+            let bars = series.error_bars.iter().find(|bar| bar.spec.direction == ErrorBarDirection::Y)?;
+            let anchors: Vec<Option<f64>> = spans.get(i)?.iter().map(|span| span.map(|(_, top)| top)).collect();
+            let values: Vec<Option<f64>> = series.values.iter().take(ncat).copied().collect();
+            Some((bars, error_segments(bars, &values, &anchors)))
+        })
+        .collect();
 
-    let axes = axis_scales(data, &fams, &sec, &spans);
+    let axes = axis_scales(data, &fams, &sec, &spans, &err_segs);
     let Some((s1, f1)) = axes.first() else { return };
     let y1 = ValAxis { scale: *s1, fmt: f1 };
     let y2 = axes.get(1).map(|(s, f)| ValAxis { scale: *s, fmt: f });
@@ -357,10 +386,36 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         draw_trendlines(ctx, s, &pts, &frac, &px, &mut trend_labels, (0.5, ncat_slots as f64 + 0.5));
     }
     draw_trend_labels(ctx, plot, &trend_labels);
+    // Error bars over everything, at the column's slot or the line/area point.
+    let mut budget = MAX_ERR_BARS;
+    for (i, segs) in err_segs.iter().enumerate() {
+        let Some((eb, segs)) = segs else { continue };
+        let fam = fams.get(i).copied().unwrap_or(Fam::Col);
+        let sc = scale_of(i);
+        let k = slot_of.get(i).copied().unwrap_or(0) as f32;
+        let n = segs.len().min(budget);
+        budget = budget.saturating_sub(n);
+        for e in segs.iter().take(n) {
+            let mut c = center(e.j);
+            if is_col(fam) {
+                c = if horizontal { c + nslots * bw / 2.0 - (k + 0.5) * bw } else { c - nslots * bw / 2.0 + (k + 0.5) * bw };
+            }
+            let (a, b) = (vpos(e.lo, &sc), vpos(e.hi, &sc));
+            let (pa, pb) = if horizontal { ([a, c], [b, c]) } else { ([c, a], [c, b]) };
+            draw_error_bar(ctx, plot, pa, pb, (e.cap_lo, e.cap_hi), eb, !eb.spec.no_end_cap);
+        }
+    }
     super::table::draw(ctx, chart, data, plot, table.as_ref());
 }
 
 // ---------------------------------------------------------------- scatter & bubble
+
+/// The size of bubble `j`, `None` when it is not drawn (a missing or non-positive size; no sizes at all means 1).
+fn bubble_size(s: &SeriesData, j: usize) -> Option<f64> {
+    let sizes = s.sizes.as_deref().unwrap_or(&[]);
+    let sz = if sizes.is_empty() { Some(1.0) } else { sizes.get(j).copied().flatten() };
+    sz.filter(|sz| *sz > 0.0)
+}
 
 pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let pts_of = |s: &SeriesData| -> Vec<Option<(f64, f64)>> {
@@ -388,7 +443,55 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
             xhi = xhi.max(hi + max_forward(s));
         }
     }
-    let Some((ylo, yhi)) = value_range(all.iter().flatten().flatten().map(|p| p.1)) else { return };
+    let Some((mut ylo, mut yhi)) = value_range(all.iter().flatten().flatten().map(|p| p.1)) else { return };
+    // Error bars, X and Y, widen the axes to their ends.
+    let bubble_chart = chart.kind == ChartKind::Bubble;
+    let err: Vec<Vec<(ErrorBarDirection, &ErrorBarData, Vec<ErrSeg>)>> = data
+        .series
+        .iter()
+        .zip(&all)
+        .map(|(s, pts)| {
+            // A bubble that is not drawn (no or non-positive size, or past the marker cap) carries no error bar either.
+            let mut room = MAX_MARKERS;
+            let shown: Vec<bool> = pts
+                .iter()
+                .enumerate()
+                .map(|(j, p)| {
+                    let drawn = !bubble_chart || (p.is_some() && bubble_size(s, j).is_some() && room > 0);
+                    if bubble_chart && drawn {
+                        room -= 1;
+                    }
+                    drawn
+                })
+                .collect();
+            let xs: Vec<Option<f64>> = pts.iter().zip(&shown).map(|(p, on)| p.filter(|_| *on).map(|p| p.0)).collect();
+            let ys: Vec<Option<f64>> = pts.iter().zip(&shown).map(|(p, on)| p.filter(|_| *on).map(|p| p.1)).collect();
+            let mut seen = Vec::new();
+            s.error_bars
+                .iter()
+                .filter(|e| {
+                    let new = !seen.contains(&e.spec.direction);
+                    seen.push(e.spec.direction);
+                    new
+                })
+                .map(|e| {
+                    let v = if e.spec.direction == ErrorBarDirection::X { &xs } else { &ys };
+                    (e.spec.direction, e, error_segments(e, v, v))
+                })
+                .collect()
+        })
+        .collect();
+    for (dir, _, segs) in err.iter().flatten() {
+        if let Some((lo, hi)) = value_range(segs.iter().flat_map(|e| [e.lo, e.hi])) {
+            if *dir == ErrorBarDirection::X {
+                xlo = xlo.min(lo);
+                xhi = xhi.max(hi);
+            } else {
+                ylo = ylo.min(lo);
+                yhi = yhi.max(hi);
+            }
+        }
+    }
     let xs = nice_scale(xlo, xhi, false);
     let ys = nice_scale(ylo, yhi, false);
     let fx = Fmt::new("General");
@@ -405,18 +508,8 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
         if bubble {
             let sizes = s.sizes.as_deref().unwrap_or(&[]);
             let smax = sizes.iter().flatten().fold(0.0f64, |a, b| a.max(*b));
-            let mut bubbles: Vec<([f32; 2], f64)> = px
-                .iter()
-                .enumerate()
-                .filter_map(|(j, p)| {
-                    let sz = if sizes.is_empty() { Some(1.0) } else { sizes.get(j).copied().flatten() };
-                    match (p, sz) {
-                        (Some(p), Some(sz)) if sz > 0.0 => Some((*p, sz)),
-                        _ => None,
-                    }
-                })
-                .take(MAX_MARKERS)
-                .collect();
+            let mut bubbles: Vec<([f32; 2], f64)> =
+                px.iter().enumerate().filter_map(|(j, p)| Some(((*p)?, bubble_size(s, j)?))).take(MAX_MARKERS).collect();
             bubbles.sort_by(|a, b| b.1.total_cmp(&a.1));
             let smax = if sizes.is_empty() { 1.0 } else { smax };
             let fill = [s.color[0], s.color[1], s.color[2], 0xC0];
@@ -452,6 +545,18 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
         draw_trendlines(ctx, s, &pts, &frac, &px, &mut trend_labels, (xs.min, xs.max));
     }
     draw_trend_labels(ctx, plot, &trend_labels);
+    let mut budget = MAX_ERR_BARS;
+    for (pts, bars) in all.iter().zip(&err) {
+        for (dir, eb, segs) in bars {
+            let n = segs.len().min(budget);
+            budget = budget.saturating_sub(n);
+            for e in segs.iter().take(n) {
+                let Some((x, y)) = pts.get(e.j).copied().flatten() else { continue };
+                let (a, b) = if *dir == ErrorBarDirection::X { (map((e.lo, y)), map((e.hi, y))) } else { (map((x, e.lo)), map((x, e.hi))) };
+                draw_error_bar(ctx, plot, a, b, (e.cap_lo, e.cap_hi), eb, !eb.spec.no_end_cap);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

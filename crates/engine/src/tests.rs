@@ -3399,6 +3399,108 @@ fn trendlines_are_refused_on_charts_that_cannot_show_them() {
 }
 
 #[test]
+fn chart_error_bars_are_added_replaced_saved_and_removed() {
+    use gridcraft_model::{ErrorAmount, ErrorBarDirection, ErrorBarSides};
+    let mut s = s();
+    chart_data(&mut s);
+    s.execute("insert.chart", json!({"type": "column", "range": "A1:E7"})).unwrap();
+    let chart = |s: &Session| s.doc().unwrap().wb.active().unwrap().charts[0].clone();
+    // Add Chart Element > Error Bars > Standard Error on every series.
+    s.execute("chart.addElement", json!({"element": "errorBars"})).unwrap();
+    let c = chart(&s);
+    assert!(c.series.iter().all(|se| se.error_bars.len() == 1 && se.error_bars[0].amount == ErrorAmount::StdErr));
+    // Format Error Bars on one series replaces its Y bars.
+    s.execute(
+        "chart.addElement",
+        json!({"element": "errorBars", "series": 1, "type": "percentage", "value": 10, "display": "plus", "endStyle": "noCap", "color": "#C00000", "width": 2}),
+    )
+    .unwrap();
+    s.execute("chart.addElement", json!({"element": "errorBars", "series": 2, "type": "custom", "plus": "=Sheet1!$C$2:$C$7", "minus": "{1}"}))
+        .unwrap();
+    let c = chart(&s);
+    let e = &c.series[1].error_bars;
+    assert_eq!(e.len(), 1);
+    assert_eq!((e[0].amount.clone(), e[0].sides, e[0].no_end_cap, e[0].width), (ErrorAmount::Percentage(10.0), ErrorBarSides::Plus, true, Some(2.0)));
+    assert_eq!(e[0].color, Some(gridcraft_model::Color::Rgb(0xC00000)));
+    assert_eq!(c.series[2].error_bars[0].amount, ErrorAmount::Custom { plus: Some("Sheet1!$C$2:$C$7".into()), minus: Some("{1}".into()) });
+    let info = s.execute("document.inspect", json!({})).unwrap();
+    assert_eq!(info["sheets"][0]["charts"][0]["errorBars"][1], json!("Y Percentage(10.0)"));
+    // Refusals: X bars on a column chart, custom without amounts, unknown names, no such series.
+    assert!(s.execute("chart.addElement", json!({"element": "errorBars", "direction": "x"})).is_err());
+    assert!(s.execute("chart.addElement", json!({"element": "errorBars", "type": "custom"})).is_err());
+    assert!(s.execute("chart.addElement", json!({"element": "errorBars", "type": "custom", "plus": "SUM(A1:A2)"})).is_err());
+    assert!(s.execute("chart.addElement", json!({"element": "errorBars", "type": "custom", "plus": "{1;2}"})).is_err());
+    assert!(s.execute("chart.addElement", json!({"element": "errorBars", "type": "range"})).is_err());
+    assert!(s.execute("chart.addElement", json!({"element": "errorBars", "display": "up"})).is_err());
+    assert!(s.execute("chart.addElement", json!({"element": "errorBars", "series": 9})).is_err());
+    // A present but unusable value, colour or width is refused, not swapped for a default; null means absent.
+    for case in [
+        json!({"type": "percentage", "value": -5}),
+        json!({"type": "fixed", "value": "abc"}),
+        json!({"color": "#GGG"}),
+        json!({"color": 7}),
+        json!({"width": -1}),
+        json!({"width": "wide"}),
+        json!({"type": 7}),
+        json!({"direction": true}),
+        json!({"display": 1}),
+        json!({"endStyle": []}),
+        json!({"series": "1", "on": false}),
+        json!({"series": -1}),
+        json!({"series": 1.5}),
+        json!({"series": true}),
+        json!({"type": "custom", "plus": 7, "minus": "B2:B7"}),
+        json!({"type": "custom", "plus": "B2:B7", "minus": false}),
+    ] {
+        let mut p = json!({"element": "errorBars"});
+        p.as_object_mut().unwrap().extend(case.as_object().unwrap().clone());
+        assert!(s.execute("chart.addElement", p).is_err(), "{case}");
+    }
+    assert_eq!(chart(&s), c, "refused calls change nothing");
+    s.execute("chart.addElement", json!({"element": "errorBars", "series": 3, "type": "fixed", "value": null, "color": null, "width": null}))
+        .unwrap();
+    assert_eq!(chart(&s).series[3].error_bars[0].amount, ErrorAmount::Fixed(1.0));
+    let c = chart(&s);
+    reopen(&mut s);
+    let after = chart(&s);
+    for i in 0..c.series.len() {
+        assert_eq!(after.series[i].error_bars, c.series[i].error_bars, "series {i}");
+    }
+    s.execute("chart.addElement", json!({"element": "errorBars", "on": false})).unwrap();
+    assert!(chart(&s).series.iter().all(|se| se.error_bars.is_empty()));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(chart(&s).series[1].error_bars.len(), 1);
+    assert_eq!(chart(&s).series[1].error_bars[0].direction, ErrorBarDirection::Y);
+}
+
+#[test]
+fn scatter_charts_take_x_and_y_error_bars_and_pies_take_none() {
+    use gridcraft_model::{ErrorAmount, ErrorBarDirection};
+    let mut s = s();
+    chart_data(&mut s);
+    s.execute("insert.chart", json!({"type": "scatter", "range": "B2:C7"})).unwrap();
+    s.execute("chart.addElement", json!({"element": "errorBars", "type": "fixed", "value": 0.5, "direction": "x"})).unwrap();
+    s.execute("chart.addElement", json!({"element": "errorBars", "type": "standardDeviation", "value": 2})).unwrap();
+    let c = s.doc().unwrap().wb.active().unwrap().charts[0].clone();
+    let e = &c.series[0].error_bars;
+    assert_eq!(e.iter().map(|e| e.direction).collect::<Vec<_>>(), vec![ErrorBarDirection::X, ErrorBarDirection::Y]);
+    assert_eq!(e[1].amount, ErrorAmount::StdDev(2.0));
+    reopen(&mut s);
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().charts[0].series[0].error_bars, *e);
+    // A column series has no X bars, a pie none at all: a type change drops what can't be kept.
+    s.execute("chart.set", json!({"type": "column"})).unwrap();
+    let kept = s.doc().unwrap().wb.active().unwrap().charts[0].series[0].error_bars.clone();
+    assert_eq!(kept, vec![e[1].clone()]);
+    s.execute("chart.set", json!({"type": "pie"})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().charts[0].series[0].error_bars.is_empty());
+
+    let mut s = crate::tests::s();
+    chart_data(&mut s);
+    s.execute("insert.chart", json!({"type": "pie", "range": "A1:B7"})).unwrap();
+    assert!(s.execute("chart.addElement", json!({"element": "errorBars"})).is_err());
+}
+
+#[test]
 fn switch_row_column_with_whole_column_refs_is_bounded() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["", "North", "South"], ["Mon", 10, 14], ["Tue", 12, 15], ["Wed", 14, 16]]}))
