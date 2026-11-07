@@ -44,8 +44,8 @@ impl Tab {
 
 #[derive(Default)]
 pub struct State {
-    /// The selection the popup was opened for; it closes when the selection changes.
-    pub open: Option<RangeRef>,
+    /// The sheet (by index) and selection the popup was opened for; it closes when either changes.
+    pub open: Option<(usize, RangeRef)>,
     pub tab: Tab,
     /// Totals by row (results to the right) instead of by column (results below).
     pub by_rows: bool,
@@ -145,13 +145,14 @@ pub fn toggle(app: &mut SheetApp, on: Option<bool>) -> Result<Json, String> {
         return Err("Quick Analysis works on one block of cells; select a single contiguous range.".into());
     }
     let sel = d.selection.current();
+    let sheet = d.wb.active_sheet();
     let want = on.unwrap_or(app.grid.quick_analysis.open.is_none());
     if !want {
         app.grid.quick_analysis.open = None;
     } else if sel.is_single() {
         return Err("Select at least two cells to use Quick Analysis.".into());
     } else {
-        app.grid.quick_analysis.open = Some(sel);
+        app.grid.quick_analysis.open = Some((sheet, sel));
     }
     Ok(json!({"open": app.grid.quick_analysis.open.is_some()}))
 }
@@ -187,9 +188,10 @@ pub fn button_rect(geo: &Geo, sh: &Sheet, sel: RangeRef) -> (Rect, bool) {
 pub fn show(app: &mut SheetApp, ui: &mut Ui, geo: &Geo, sh: &Sheet) {
     let Some(d) = app.session.active() else { return };
     let sel = d.selection.current();
+    let sheet = d.wb.active_sheet();
     let hidden = is_hidden(app, geo, sh);
-    // The popup belongs to one selection; a new one (or editing) closes it.
-    if hidden || app.grid.quick_analysis.open.is_some_and(|r| r != sel) {
+    // The popup belongs to one selection on one sheet; a new one (or editing) closes it.
+    if hidden || app.grid.quick_analysis.open.is_some_and(|(opened_on, r)| opened_on != sheet || r != sel) {
         app.grid.quick_analysis.open = None;
     }
     if hidden {
@@ -226,7 +228,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui, geo: &Geo, sh: &Sheet) {
             let _ = toggle(app, None);
         }
     }
-    let Some(opened_for) = app.grid.quick_analysis.open else { return };
+    let Some((_, opened_for)) = app.grid.quick_analysis.open else { return };
     let pos = pos2(button.left(), button.bottom() + 4.0);
     let mut picked: Option<Action> = None;
     let resp = egui::Area::new(Id::unique("quick_analysis_popup")).fixed_pos(pos).order(Order::Foreground).constrain(true).show(&ctx, |ui| {

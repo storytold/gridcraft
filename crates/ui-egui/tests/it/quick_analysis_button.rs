@@ -82,3 +82,26 @@ fn hidden_for_areas(app: &SheetApp) -> bool {
     let g = geo(app);
     is_hidden(app, &g, app.session.active().unwrap().wb.active().unwrap())
 }
+
+/// The popup is tied to the sheet it was opened on: a sheet that remembers the same selection
+/// must not inherit it, or the tiles would act on the wrong sheet.
+#[test]
+fn switching_sheets_closes_the_popup_even_for_the_same_selection() {
+    let mut app = app();
+    app.run("home.insertSheet", json!({})).unwrap();
+    app.run("sheet.activate", json!({"sheet": 0})).unwrap();
+    app.run("selection.set", json!({"range": "B2:D5"})).unwrap();
+    toggle(&mut app, Some(true)).unwrap();
+    let frame = |app: &mut SheetApp| {
+        let sh = app.session.active().unwrap().wb.active().unwrap().clone();
+        let g = Geo::new(&sh, Rect::from_min_max(pos2(0.0, 0.0), pos2(1200.0, 800.0)), Vec2::ZERO);
+        let ctx = egui::Context::default();
+        ctx.run_ui(egui::RawInput::default(), |ui| gridcraft_ui_egui::quick_analysis::show(app, ui, &g, &sh)).drop_without_applying_deltas();
+    };
+    frame(&mut app);
+    assert!(app.grid.quick_analysis.open.is_some(), "the popup stays open on its own sheet");
+    app.run("sheet.activate", json!({"sheet": 1})).unwrap();
+    app.run("selection.set", json!({"range": "B2:D5"})).unwrap();
+    frame(&mut app);
+    assert!(app.grid.quick_analysis.open.is_none(), "another sheet with the same selection closes it");
+}
