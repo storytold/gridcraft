@@ -699,15 +699,72 @@ fn check_lines_protection(s: &Session, p: &Json, axis: Axis, at: u32, count: u32
         return Ok(());
     }
     let end = at.saturating_add(count - 1).min(if axis == Axis::Rows { MAX_ROWS - 1 } else { MAX_COLS - 1 });
-    let infos = if axis == Axis::Rows { &sh.rows } else { &sh.cols };
-    if (at..=end).any(|i| locked(infos.get(&i).and_then(|x| x.style).unwrap_or_default())) {
-        return Err(refuse());
-    }
-    let block = if axis == Axis::Rows { RangeRef::rows(at, end) } else { RangeRef::cols(at, end) };
-    if sh.cells.iter_range(block).any(|(_, cell)| locked(cell.style)) {
+    let lines = LockedLines::of(sh, axis, &locked);
+    if !(at..=end).all(|i| lines.unlocked(sh, i, &locked)) {
         return Err(refuse());
     }
     Ok(())
+}
+
+/// Whether every cell of a row or column is unlocked, which Excel requires before it deletes the
+/// line on a protected sheet ("You are trying to delete a row that contains a locked cell"),
+/// however the Delete Rows or Delete Columns permission is set.
+///
+/// A cell the sheet does not store is judged by the style `Sheet::style_id` gives it: its row's
+/// format, then its column's, then the default, which is locked. Reading a line with no format of
+/// its own as the default refused every delete, even over a row the user had unlocked through
+/// its columns; reading it as unlocked passed a blank row whose cells are all locked by default.
+/// The cross lines' formats are summarised once here, since a delete can span a million rows.
+struct LockedLines {
+    axis: Axis,
+    /// Cross lines (columns for a row, rows for a column) whose own format is locked.
+    locked_cross: Vec<u32>,
+    /// How many cross lines have no format of their own, and so no say over a cell they cross.
+    plain_count: u32,
+}
+
+impl LockedLines {
+    fn of(sh: &Sheet, axis: Axis, locked: &impl Fn(gridcraft_model::StyleId) -> bool) -> Self {
+        let (cross, cross_len) = if axis == Axis::Rows { (&sh.cols, MAX_COLS) } else { (&sh.rows, MAX_ROWS) };
+        let styled: Vec<_> = cross.iter().filter_map(|(k, x)| x.style.map(|st| (*k, st))).collect();
+        let locked_cross = styled.iter().filter(|(_, st)| locked(*st)).map(|(k, _)| *k).collect();
+        Self { axis, locked_cross, plain_count: cross_len - styled.len() as u32 }
+    }
+
+    fn unlocked(&self, sh: &Sheet, i: u32, locked: &impl Fn(gridcraft_model::StyleId) -> bool) -> bool {
+        let rows = self.axis == Axis::Rows;
+        let (line, cross_len) = if rows { (RangeRef::rows(i, i), MAX_COLS) } else { (RangeRef::cols(i, i), MAX_ROWS) };
+        let mut stored = std::collections::HashSet::new();
+        for (at, cell) in sh.cells.iter_range(line) {
+            if locked(cell.style) {
+                return false;
+            }
+            stored.insert(if rows { at.col } else { at.row });
+        }
+        if stored.len() as u32 == cross_len {
+            return true;
+        }
+        let (own_lines, cross) = if rows { (&sh.rows, &sh.cols) } else { (&sh.cols, &sh.rows) };
+        let own = own_lines.get(&i).and_then(|x| x.style);
+        // A row's own format is the first one its empty cells take, so it decides alone.
+        if rows && let Some(st) = own {
+            return !locked(st);
+        }
+        // Otherwise a cross line's locked format reaches every cell of this line it crosses
+        // (for a column, a row's format comes before the column's own).
+        if self.locked_cross.iter().any(|k| !stored.contains(k)) {
+            return false;
+        }
+        // The cells left are those under a cross line with no format. Deleting a column, they take
+        // the column's own format, which may unlock them all. Deleting a row, neither line has a
+        // format, so they take the default, which is locked: each has to be a stored cell, and
+        // the stored ones were all checked above.
+        if !rows && own.is_some_and(|st| !locked(st)) {
+            return true;
+        }
+        let plain = stored.iter().filter(|k| !cross.get(k).is_some_and(|x| x.style.is_some())).count();
+        plain as u32 == self.plain_count
+    }
 }
 
 /// Where a range of the edited sheet goes after a structural edit (`None` = deleted).
