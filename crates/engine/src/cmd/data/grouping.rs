@@ -252,36 +252,41 @@ pub(super) fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
             start = row;
         }
     }
-    // The totals go below each group, so the outline puts summary rows below their detail (the
-    // Subtotal dialog's "Summary below data"), in the same undo step.
-    if !sh.summary_below {
-        s.execute("data.outlineSettings", json!({"sheet": sheet, "summaryBelow": true}))?;
-    }
-    // Insert a total row after each group, bottom-up so indices stay valid.
-    let mut inserted = 0;
-    for (g0, g1, name) in groups.iter().rev() {
-        s.execute("home.insertRows", json!({"sheet": sheet, "rows": format!("{}:{}", g1 + 2, g1 + 2)}))?;
-        let row = g1 + 1;
-        let lbl = CellRef::new(row, group_col).a1();
-        s.execute("cell.set", json!({"sheet": sheet, "cell": lbl, "input": format!("{name} {label}")}))?;
-        for c in &cols {
-            let range = RangeRef::new(CellRef::new(*g0, *c), CellRef::new(*g1, *c)).a1();
-            s.execute("cell.set", json!({"sheet": sheet, "cell": CellRef::new(row, *c).a1(), "input": format!("=SUBTOTAL({code},{range})")}))?;
+    let summary_below = sh.summary_below;
+    // The steps run in one undo group: a step that fails part way (the grand total past the last
+    // row, say) restores the sheet, so nothing is left changed that the journal doesn't hold.
+    s.grouped("Subtotal", |s| {
+        // The totals go below each group, so the outline puts summary rows below their detail (the
+        // Subtotal dialog's "Summary below data"), in the same undo step.
+        if !summary_below {
+            s.execute("data.outlineSettings", json!({"sheet": sheet, "summaryBelow": true}))?;
         }
-        s.execute(
-            "home.bold",
-            json!({"sheet": sheet, "range": RangeRef::new(CellRef::new(row, r.start.col), CellRef::new(row, r.end.col)).a1(), "on": true}),
-        )?;
-        s.execute("data.group", json!({"sheet": sheet, "rows": format!("{}:{}", g0 + 1, g1 + 1)}))?;
-        inserted += 1;
-    }
-    let last = r.end.row + inserted + 1;
-    let lbl = CellRef::new(last, group_col).a1();
-    s.execute("home.insertRows", json!({"sheet": sheet, "rows": format!("{}:{}", last + 1, last + 1)}))?;
-    s.execute("cell.set", json!({"sheet": sheet, "cell": lbl, "input": format!("Grand {label}")}))?;
-    for c in &cols {
-        let range = RangeRef::new(CellRef::new(first, *c), CellRef::new(last - 1, *c)).a1();
-        s.execute("cell.set", json!({"sheet": sheet, "cell": CellRef::new(last, *c).a1(), "input": format!("=SUBTOTAL({code},{range})")}))?;
-    }
-    Ok(json!({"groups": inserted}))
+        // Insert a total row after each group, bottom-up so indices stay valid.
+        let mut inserted = 0;
+        for (g0, g1, name) in groups.iter().rev() {
+            s.execute("home.insertRows", json!({"sheet": sheet, "rows": format!("{}:{}", g1 + 2, g1 + 2)}))?;
+            let row = g1 + 1;
+            let lbl = CellRef::new(row, group_col).a1();
+            s.execute("cell.set", json!({"sheet": sheet, "cell": lbl, "input": format!("{name} {label}")}))?;
+            for c in &cols {
+                let range = RangeRef::new(CellRef::new(*g0, *c), CellRef::new(*g1, *c)).a1();
+                s.execute("cell.set", json!({"sheet": sheet, "cell": CellRef::new(row, *c).a1(), "input": format!("=SUBTOTAL({code},{range})")}))?;
+            }
+            s.execute(
+                "home.bold",
+                json!({"sheet": sheet, "range": RangeRef::new(CellRef::new(row, r.start.col), CellRef::new(row, r.end.col)).a1(), "on": true}),
+            )?;
+            s.execute("data.group", json!({"sheet": sheet, "rows": format!("{}:{}", g0 + 1, g1 + 1)}))?;
+            inserted += 1;
+        }
+        let last = r.end.row + inserted + 1;
+        let lbl = CellRef::new(last, group_col).a1();
+        s.execute("home.insertRows", json!({"sheet": sheet, "rows": format!("{}:{}", last + 1, last + 1)}))?;
+        s.execute("cell.set", json!({"sheet": sheet, "cell": lbl, "input": format!("Grand {label}")}))?;
+        for c in &cols {
+            let range = RangeRef::new(CellRef::new(first, *c), CellRef::new(last - 1, *c)).a1();
+            s.execute("cell.set", json!({"sheet": sheet, "cell": CellRef::new(last, *c).a1(), "input": format!("=SUBTOTAL({code},{range})")}))?;
+        }
+        Ok(json!({"groups": inserted}))
+    })
 }

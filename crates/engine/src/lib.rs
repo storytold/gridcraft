@@ -494,6 +494,9 @@ pub struct Session {
     pub recorder: Option<record::Recorder>,
     /// How many `execute` calls are running (0 between top-level commands).
     depth: u32,
+    /// How many journaled commands are running. Only the outermost one is journaled; Run Script
+    /// stores its steps together so replay preserves its single undo boundary.
+    journal_nesting: u32,
     /// The steps the last successful `automate.runScript` or `macro.run` ran while a recorder was
     /// on, for the recorder to keep with that step (see [`record::Recorder::ran`]); taken by the
     /// recording hook.
@@ -667,11 +670,22 @@ impl Session {
     /// Runs a command by id. Undoable commands record a history step when the workbook changed,
     /// unless an undo group is open on the document (the group then makes the step).
     /// Panics inside commands are caught and reported; the workbook is restored.
-    pub fn execute(&mut self, id: &str, params: Json) -> Result<Json> {
-        let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
-        if let Err(why) = (spec.enabled)(self) {
-            return Err(EngineError::Disabled(id.to_string(), why));
+    fn ensure_command_enabled(&self, id: &str, spec: &CommandSpec) -> Result<()> {
+        (spec.enabled)(self).map_err(|why| EngineError::Disabled(id.to_string(), why))
+    }
+
+    fn ensure_command_unlocked(&self, id: &str, query: bool) -> Result<()> {
+        let locked = self.active().is_some_and(|d| self.macro_debug.as_ref().is_some_and(|m| m.locks(d.uid) && !m.stepping()));
+        if locked && !macros::debug::runs_while_locked(id, query) {
+            Err(EngineError::Disabled(id.to_string(), macros::debug::BUSY.into()))
+        } else {
+            Ok(())
         }
+    }
+
+    fn prepare_command(&mut self, id: &str) -> Result<(&'static CommandSpec, bool)> {
+        let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        self.ensure_command_enabled(id, spec)?;
         // A debugger whose undo group something else ended locks nothing any more (`macro.debug`
         // itself says that the run had ended).
         if id != "macro.debug" {
@@ -683,10 +697,49 @@ impl Session {
         // (`macros::debug::LOOKS_AROUND`). Anything else waits, undoable or not (saving, view
         // modes, stopping Record Actions, which saves a script), also when another command runs
         // it. Only the run's own steps go ahead. Other workbooks stay editable.
-        let locked = self.active().is_some_and(|d| self.macro_debug.as_ref().is_some_and(|m| m.locks(d.uid) && !m.stepping()));
-        if locked && !macros::debug::runs_while_locked(id, query) {
-            return Err(EngineError::Disabled(id.to_string(), macros::debug::BUSY.into()));
+        self.ensure_command_unlocked(id, query)?;
+        Ok((spec, query))
+    }
+
+    fn record_and_journal(
+        &mut self,
+        id: &str,
+        params: &Json,
+        result: &Result<Json>,
+        journal_recording: (bool, bool),
+        recording_context: (Option<(u64, usize, String, Selection)>, usize),
+        before: Option<&(u64, Arc<Workbook>, Selection)>,
+    ) {
+        let (journals, records_script) = journal_recording;
+        let (place, requests_before) = recording_context;
+        if !(journals || records_script) || result.is_err() {
+            return;
         }
+        let opened_dialog = self.ui_requests.get(requests_before..).is_some_and(|new| new.iter().any(|q| matches!(q, UiRequest::Dialog(..))));
+        let changed = before.is_some_and(|(uid, wb, _)| self.docs.iter().any(|d| d.uid == *uid && !Arc::ptr_eq(&d.wb, wb)));
+        if let Some((doc, sheet, sheet_name, selection)) = place.filter(|_| (!opened_dialog || changed) && !record::NOT_RECORDED.contains(&id))
+            && let Some(rec) = self.recorder.as_mut()
+        {
+            let params = match result {
+                Ok(r) if params.is_object() => record::with_toggle_state(id, cmd::journal_params(params), r),
+                _ => cmd::journal_params(params),
+            };
+            let kept = rec.push(record::RecordedStep { doc, sheet, sheet_name, selection, id: id.to_string(), params });
+            if let Some(ran) = self.script_ran.take()
+                && kept
+                && matches!(id, "automate.runScript" | "macro.run")
+            {
+                rec.attach_ran(ran);
+            }
+        }
+        if journals && self.journal_paused == 0 {
+            self.push_journal(id, cmd::journal_params(params));
+            recent::note(&mut self.prefs.recent_functions, id, params);
+        }
+    }
+
+    pub fn execute(&mut self, id: &str, params: Json) -> Result<Json> {
+        let (spec, query) = self.prepare_command(id)?;
         let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
         // A dry run inside this command that a panic cuts short leaves journaling paused and its
         // touch log open; the panic branch puts both back.
@@ -713,7 +766,7 @@ impl Session {
             None => Vec::new(),
         };
         // The recorder keeps top-level calls with the place they ran in.
-        let place = (self.depth == 0 && self.recorder.is_some()).then(|| match self.active() {
+        let place = (self.journal_nesting == 0 && self.recorder.is_some()).then(|| match self.active() {
             Some(d) => (d.uid, d.wb.active_sheet(), d.wb.active().map(|sh| sh.name.clone()).unwrap_or_default(), d.selection.clone()),
             None => (0, 0, String::new(), Selection::default()),
         });
@@ -721,9 +774,21 @@ impl Session {
         let requests_before = self.ui_requests.len();
         let marked = doc_uid.zip(start).map(|(uid, (_, len))| (uid, len));
         self.marks.extend(marked);
+        // Only the outermost command is journaled: the commands it runs for itself are part of it,
+        // so replaying the journal or a recorded script doesn't run them and then the command again.
+        let journals = spec.journal && self.journal_nesting == 0;
+        // Run Script writes its own composite journal entry, but remains one recorder step with
+        // the exact commands it ran attached for the macro recorder.
+        let records_script = id == "automate.runScript" && self.journal_nesting == 0;
         self.depth = self.depth.saturating_add(1);
+        if spec.journal {
+            self.journal_nesting = self.journal_nesting.saturating_add(1);
+        }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &params)));
         self.depth = self.depth.saturating_sub(1);
+        if spec.journal {
+            self.journal_nesting = self.journal_nesting.saturating_sub(1);
+        }
         if marked.is_some() {
             self.marks.pop();
         }
@@ -782,40 +847,7 @@ impl Session {
         if result.is_err() {
             self.rollback_groups_from(first_group);
         }
-        if spec.journal && result.is_ok() {
-            // A command that started recording is not part of the recording; one that stopped it
-            // finds no recorder. A menu-style call that only opened a dialog (`file.open` with no
-            // file, `home.formatCells` with no style) is not recorded either: the dialog's own
-            // call is, so playing the recording back runs the command once, with its parameters.
-            // A call that opened a dialog and changed the workbook too (a script with an edit before
-            // a menu-style step) is recorded: the edit happened, and the dialog's confirming call
-            // is a step of its own.
-            let opened_dialog = self.ui_requests.get(requests_before..).is_some_and(|new| new.iter().any(|q| matches!(q, UiRequest::Dialog(..))));
-            let changed = before.as_ref().is_some_and(|(uid, wb, _)| self.docs.iter().any(|d| d.uid == *uid && !Arc::ptr_eq(&d.wb, wb)));
-            if let Some((doc, sheet, sheet_name, selection)) = place.filter(|_| (!opened_dialog || changed) && !record::NOT_RECORDED.contains(&id))
-                && let Some(rec) = self.recorder.as_mut()
-            {
-                // A toggle (Bold) is recorded with the state it set, as Excel records
-                // `Bold = True`: playing it back sets that state rather than flipping it again.
-                let params = match &result {
-                    Ok(r) if params.is_object() => record::with_toggle_state(id, cmd::journal_params(&params), r),
-                    _ => cmd::journal_params(&params),
-                };
-                let kept = rec.push(record::RecordedStep { doc, sheet, sheet_name, selection, id: id.to_string(), params });
-                // A script or macro run is kept with the steps it ran, so editing or deleting the
-                // script or macro before the recording stops does not change what was recorded.
-                if let Some(ran) = self.script_ran.take()
-                    && kept
-                    && matches!(id, "automate.runScript" | "macro.run")
-                {
-                    rec.attach_ran(ran);
-                }
-            }
-            if self.journal_paused == 0 {
-                self.push_journal(id, cmd::journal_params(&params));
-                recent::note(&mut self.prefs.recent_functions, id, &params);
-            }
-        }
+        self.record_and_journal(id, &params, &result, (journals, records_script), (place, requests_before), before.as_ref());
         // Inside an undo group the group owns the step. A command that ended a group open before
         // it leaves the group its step and makes one of its own for what it changed after the end.
         // A command that opened and closed its own groups makes one step of its own, which
@@ -866,6 +898,10 @@ impl Session {
                     {
                         label = last.label.clone();
                     }
+                }
+                // A command that runs other commands (Subtotal, From Text/CSV, Remove Duplicates)
+                // is one step: the steps its nested commands made are taken back here.
+                if let Some((_, len)) = start {
                     d.undo.truncate(len);
                 }
                 push_entry(&mut d.undo, label, wb, &d.wb, sel);
