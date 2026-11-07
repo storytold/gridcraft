@@ -344,6 +344,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 | 2026-10-31 | minor | The Insert Function dialog is named as in Excel (it was called Formula Builder); no score change |
 | 2026-10-31 | minor | What-if and analysis: Solver Options (no score change) |
 | 2026-10-31 | minor | What-if and analysis: Solver Load/Save Model and Reset All; Forecast Sheet moved from Missing to the list of tools, as gaps.md §13 records (no score change) |
+| 2026-10-26 | minor | Conditional-formatting colour scales: a value between two stops takes the colour Excel paints, each channel moving from the earlier stop's byte and dropping the fraction (red → green halfway is 128,127,0 where rounding gave 128,128,0); no score change |
 | 2026-10-25 | minor | Automation: macro interface (Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts) (no score change) |
 | 2026-10-25 | trivial | Catalog count 276 / 292 in the summary table and the method, as `cargo xtask parity` measures (no score change) |
 | 2026-10-22 | minor | Several windows on the desktop: a native window per workbook window, New Window on the same workbook, Switch Windows and Arrange All; "one window" removed from UI/UX fidelity, Hardware and the interaction-fidelity discount; no score change |
