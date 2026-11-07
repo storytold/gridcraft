@@ -27,22 +27,20 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             |s, p| insert_lines(s, p, Axis::Rows)
         ),
-        cmd!("home.insertColumns", "Insert Sheet Columns", ["Home", "Cells", "Insert"], None, "{cols?: \"B:C\"}", has_doc, |s, p| insert_lines(
-            s,
-            p,
-            Axis::Cols
-        )),
-        cmd!("home.deleteRows", "Delete Sheet Rows", ["Home", "Cells", "Delete"], Some("Cmd+-"), "{rows?}", has_doc, |s, p| delete_lines(
+        cmd!("home.insertColumns", "Insert Sheet Columns", ["Home", "Cells", "Insert"], None, "{cols?: \"B:C\", count?}", has_doc, |s, p| {
+            insert_lines(s, p, Axis::Cols)
+        }),
+        cmd!("home.deleteRows", "Delete Sheet Rows", ["Home", "Cells", "Delete"], Some("Cmd+-"), "{rows?, count?}", has_doc, |s, p| delete_lines(
             s,
             p,
             Axis::Rows
         )),
-        cmd!("home.deleteColumns", "Delete Sheet Columns", ["Home", "Cells", "Delete"], None, "{cols?}", has_doc, |s, p| delete_lines(
+        cmd!("home.deleteColumns", "Delete Sheet Columns", ["Home", "Cells", "Delete"], None, "{cols?, count?}", has_doc, |s, p| delete_lines(
             s,
             p,
             Axis::Cols
         )),
-        cmd!("sheet.moveColumns", "Move Columns", [], None, "{cols?: \"B:C\", before: zero-based column index}", has_doc, move_columns),
+        cmd!("sheet.moveColumns", "Move Columns", [], None, "{cols?: \"B:C\", before: zero-based column index, count?}", has_doc, move_columns),
         cmd!("home.insertCells", "Insert Cells…", ["Home", "Cells", "Insert"], None, "{range?, shift: right|down|row|column}", has_doc, insert_cells),
         cmd!(
             "home.insertCopiedCells",

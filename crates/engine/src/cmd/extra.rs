@@ -206,7 +206,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Get Data",
             ["Data", "Get & Transform Data"],
             None,
-            "{path | text} (CSV/TSV/JSON array of objects) → new sheet table",
+            "{path | text, delimiter?, sheet?} (CSV/TSV/JSON array of objects) → new sheet table",
             has_doc,
             from_csv
         ),
