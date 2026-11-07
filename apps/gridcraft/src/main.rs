@@ -180,6 +180,13 @@ fn services() -> Services {
                 .pick_file()
                 .and_then(|p| p.to_str().map(str::to_string))
         })),
+        pick_text: Some(Box::new(|| {
+            rfd::FileDialog::new()
+                .add_filter("Text files", &["csv", "tsv", "txt", "json"])
+                .add_filter("CSV", &["csv"])
+                .pick_file()
+                .and_then(|p| p.to_str().map(str::to_string))
+        })),
         pick_picture: Some(Box::new(|| {
             rfd::FileDialog::new()
                 .add_filter("Pictures (PNG, JPEG)", &["png", "jpg", "jpeg"])

@@ -14,6 +14,8 @@ pub struct Services {
     /// Desktop: submit the PDF with the chosen settings on a worker.
     pub print_native: Option<printing::Submit>,
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
+    /// Native picker for Data › Get Data (Text/CSV): text formats only (csv, tsv, txt, json).
+    pub pick_text: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<PickSave>,
     /// Native picture picker (PNG/JPEG), separate from workbook opening.
     pub pick_picture: Option<Box<dyn Fn() -> Option<String>>>,
