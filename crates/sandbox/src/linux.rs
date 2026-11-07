@@ -117,6 +117,20 @@ fn denied_calls() -> Vec<libc::c_long> {
         libc::SYS_pidfd_open,
         libc::SYS_pidfd_send_signal,
         libc::SYS_kcmp,
+        // System V shared memory, message queues and semaphores: a segment or queue this user can
+        // open holds what another process put there, and no path rule covers them.
+        libc::SYS_shmget,
+        libc::SYS_shmat,
+        libc::SYS_shmctl,
+        libc::SYS_shmdt,
+        libc::SYS_msgget,
+        libc::SYS_msgsnd,
+        libc::SYS_msgrcv,
+        libc::SYS_msgctl,
+        libc::SYS_semget,
+        libc::SYS_semop,
+        libc::SYS_semctl,
+        libc::SYS_semtimedop,
         // Mounts, namespaces and file handles (ways around path-based rules).
         libc::SYS_mount,
         libc::SYS_umount2,
@@ -277,7 +291,9 @@ mod tests {
         ] {
             assert_eq!(rules.get(&nr).map(Vec::len), Some(if nr == libc::SYS_setpriority || nr == libc::SYS_ioprio_set { 2 } else { 1 }), "{nr}");
         }
-        for nr in [libc::SYS_pidfd_open, libc::SYS_pidfd_send_signal, libc::SYS_kcmp] {
+        for nr in
+            [libc::SYS_pidfd_open, libc::SYS_pidfd_send_signal, libc::SYS_kcmp, libc::SYS_shmget, libc::SYS_shmat, libc::SYS_msgget, libc::SYS_semget]
+        {
             assert_eq!(rules.get(&nr).map(Vec::len), Some(0), "{nr} is refused outright");
         }
         assert_eq!(rules.get(&libc::SYS_ioctl).map(Vec::len), Some(2));
