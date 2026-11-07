@@ -50,6 +50,12 @@ fn parse_ref(wb: &Workbook, sheet: usize, formula: &str) -> Option<(usize, Range
     Some((sh, r))
 }
 
+/// The cells a series formula stands for: a reference, or a defined name (static, or `OFFSET`
+/// and the like) that evaluates to one. Number formats come from these cells.
+fn target(wb: &Workbook, sheet: usize, formula: &str) -> Option<(usize, RangeRef)> {
+    parse_ref(wb, sheet, formula).or_else(|| gridcraft_calc::evaluate_area(wb, sheet, formula).map(|a| (a.sheet, a.range)))
+}
+
 /// The parts of a union reference `(Sheet1!$A$1:$A$3,Sheet1!$A$5)`, or `None`.
 fn union_parts(f: &str) -> Option<Vec<&str>> {
     let inner = f.strip_prefix('(')?.strip_suffix(')')?;
@@ -115,9 +121,9 @@ fn nums(wb: &Workbook, sheet: usize, formula: &str) -> Vec<Option<f64>> {
     eval_list(wb, sheet, formula).iter().map(to_num).collect()
 }
 
-/// Number format code of the first cell of a reference ("General" when not a reference).
+/// Number format code of the first cell of a reference or a name for one ("General" otherwise).
 fn ref_format(wb: &Workbook, sheet: usize, formula: &str) -> String {
-    parse_ref(wb, sheet, formula)
+    target(wb, sheet, formula)
         .and_then(|(sh, r)| wb.sheet(sh).map(|s| wb.styles.get(s.style_id(r.start)).num_fmt.0.to_string()))
         .unwrap_or_else(|| "General".into())
 }
@@ -139,7 +145,7 @@ fn value_text(v: &Value) -> String {
 /// has one entry per category, non-empty where a group starts, as the cells are.
 fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str) -> (Vec<String>, Vec<Vec<String>>) {
     let vals = eval_list(wb, sheet, formula);
-    let cells: Option<(usize, RangeRef)> = parse_ref(wb, sheet, formula);
+    let cells: Option<(usize, RangeRef)> = target(wb, sheet, formula);
     let src = cells.and_then(|(sh, r)| wb.sheet(sh).map(|s| (s, r)));
     let texts: Vec<String> = vals
         .iter()
@@ -159,7 +165,7 @@ fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str) -> (
         })
         .collect();
     let Some((_, r)) = src else { return (texts, vec![]) };
-    let value_range = parse_ref(wb, sheet, values).map(|(_, r)| r);
+    let value_range = target(wb, sheet, values).map(|(_, r)| r);
     let Some(levels) = category_levels(&r, value_range.as_ref()) else { return (texts, vec![]) };
     let (w, h) = (r.width().max(1) as usize, r.height().max(1) as usize);
     if texts.len() != w.saturating_mul(h) {

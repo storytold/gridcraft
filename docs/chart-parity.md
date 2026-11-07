@@ -2,6 +2,7 @@
 
 > **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-02 · **Change:** minor (doughnut charts: every series is a concentric ring, the first series innermost; hole size and first slice angle kept; rotated slices cover their own sweep; legend names categories; earlier: charts resize from eight handles, chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
+
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
 
@@ -92,7 +93,10 @@ Excel writes a workbook-scoped name as `[0]!Name` in `<c:f>`. GridCraft reads it
 name and writes it back with `[0]!`; a sheet-scoped name is written `Sheet!Name`. Excel needs the
 qualifier: with a bare name in `<c:f>` it draws the whole chart blank, without a repair prompt
 (observed in Excel for Windows, Microsoft 365). External books (`[1]Sheet1!…`) are kept as they
-are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
+are (#1686). Series through a name are saved with the same `numCache`/`strCache` as the plain
+reference, `formatCode` from the first cell (#1690), and the chart reads number formats and date
+categories through the name (#1689). The file writer can't calculate, so a name whose size comes
+from a calculation (`OFFSET(…,COUNTA(…))`) is saved without a cache; Excel recalculates it on open.
 
 ## Work (40–60 h)
 
@@ -110,6 +114,8 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 | 2026-11-02 | minor | Charts move and resize from eight handles, each moving only its own edges (#190); resizing leaves the work list (1–2 h, within the 40–60 h rounding) |
 | 2026-11-01 | minor | Chart data tables for column, bar, line, area and compatible combo charts: command/UI controls, formatted source values, blanks, grouped category headers, legend keys, independent borders, shared print/PDF rendering and native c:dTable import/export. Dense tables show a space notice; no readiness score change. |
 | 2026-10-29 | minor | Selected charts highlight their source cells beneath floating objects, so the blue outline no longer crosses the chart; uncovered source cells remain highlighted (#2861) |
+| 2026-10-26 | minor | Series through defined names (static and `OFFSET` with literal arguments) are saved with `numCache`/`strCache` and the first cell's `formatCode`; the chart reads number formats and date categories through names; all-number categories are written as `numRef` (#1689, #1690) |
+
 | 2026-10-24 | minor | 100% Stacked Area: inserted from the ribbon and All Charts, drawn as shares of each category's total, read and written as `percentStacked` |
 | 2026-10-18 | trivial | Stale notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip (PRs #158, #161) |
 | 2026-10-18 | minor | Doughnut charts: every series is a ring (first series innermost), hole size and first slice angle modelled, editable and round-tripped; rotated slices split at 12 o'clock without overlap; legend names categories like Excel's default (#1823) |
