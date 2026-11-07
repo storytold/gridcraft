@@ -56,6 +56,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Παράθυρο\nμορφοποίησης",
         "Format" => "Μορφοποίηση",
         "Insert" => "Εισαγωγή",
+        "Header Menu|Insert" => "Εισαγωγή",
         "Insert Cells…" => "Εισαγωγή κελιών…",
         "Delete" => "Διαγραφή",
         "Delete Cells…" => "Διαγραφή κελιών…",

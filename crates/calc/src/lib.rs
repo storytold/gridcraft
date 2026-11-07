@@ -5,10 +5,12 @@
 
 pub mod eval;
 mod pivotdata;
+mod precision;
 pub mod recalc;
 mod trimrange;
 
 pub use eval::{Area, SPECIAL_FUNCTIONS, is_known_function};
+pub use precision::DisplayedPrecision;
 pub use recalc::{Calc, Key, evaluate, now_serial};
 
 #[cfg(test)]
