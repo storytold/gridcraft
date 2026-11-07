@@ -47,6 +47,7 @@ fn series(name: &str, values: &str) -> Series {
         smooth: false,
         trendlines: Vec::new(),
         quartiles: Default::default(),
+        ..Default::default()
     }
 }
 
@@ -78,6 +79,7 @@ fn chart_names_are_written_qualified() {
         data_table: None,
         gridlines: true,
         style: 2,
+        vary_colors: None,
         hole_size: 75,
         first_slice_angle: 0,
         x_title: None,
@@ -166,6 +168,7 @@ fn chart_names_keep_spaces_around_a_quoted_sheet_name() {
         source: None,
         by_rows: false,
         pivot: None,
+        vary_colors: None,
     });
     wb.sheets = vec![Arc::new(s), Arc::new(Sheet::new(" Sales "))];
     wb.names = vec![

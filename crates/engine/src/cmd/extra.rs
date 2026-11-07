@@ -77,7 +77,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Format Selection",
             ["Format", "Current Selection"],
             None,
-            "{chart?, series?: index, color?: hex}",
+            "{chart?, series?: index, color?: hex (fill; omitted with nothing else resets it), invertIfNegative?: bool, invertColor?: hex, varyColors?: bool (chart-wide); point?: index (Format Data Point: color?, line?: hex, marker?: auto|none|circle|square|diamond|triangle|x|star|dot|dash|plus, markerSize?: 2..72, markerColor?, markerLine?: hex, explosion?: 0..400 (pie), invertIfNegative?: bool; reset?: true or no settings clears the point)}",
             has_doc,
             format_series
         ),
@@ -86,7 +86,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Shape Fill",
             ["Format", "Shape Styles"],
             None,
-            "{chart? | kind: shape, id?, series?, color: hex}",
+            "{chart? | kind: shape, id?, series?, point?: index, color: hex}",
             has_doc,
             shape_fill
         ),

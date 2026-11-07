@@ -18,7 +18,8 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Column | clustered, stacked, 100% stacked, 3-D clustered/stacked/100%, 3-D column | 3 of 7 | no 3-D |
 | Bar | clustered, stacked, 100%, 3-D ×3 | 3 of 6 | no 3-D |
 | Line | line, stacked, 100% stacked, with markers ×3, 3-D line | 3 of 7 (line, with markers, stacked) | no 100% stacked; smoothed lines landed (#62) |
-| Pie | pie, 3-D pie, pie of pie, bar of pie, doughnut | 2 of 5 (pie, doughnut) | no exploded, pie of pie, bar of pie; doughnut draws every series as a concentric ring, first series innermost; its legend names categories, matching Excel's default vary-by-category colours |
+| Pie | pie, 3-D pie, pie of pie, bar of pie, doughnut | 2 of 5 (pie, doughnut) | exploded slices per point (Format Data Point); no exploded-pie subtype, pie of pie, bar of pie |
+
 | Area | area, stacked, 100%, 3-D ×3 | 3 of 6 | no 3-D; 100% stacked drawn as shares of each category's total and kept as `percentStacked` in XLSX |
 | X Y (scatter) | markers, smooth lines (±markers), straight lines (±markers) | 2 of 5 | no smooth lines |
 | Bubble | bubble, 3-D bubble | 1 of 2 | |
@@ -52,6 +53,8 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Trendlines | linear, exponential, logarithmic, polynomial, power, moving average, equation and R² | all six types, several per series, name, forward/backward forecast, set intercept, equation and R² label, line colour/width/dash; read, written and drawn on 2-D column, bar, line, area, scatter and bubble series; `chart.addElement` `trendline` adds/removes them. No Format Trendline pane, label position/number format not kept |
 | Error bars | fixed, %, standard deviation/error, custom | **missing** |
 | Up/down bars, high-low lines, drop lines, series lines | yes | **missing** |
+| Data table under the chart | yes | **missing** |
+| Per-series / per-point fill, line, marker, effects | Format pane for every element | series colour; per point (`c:dPt`): solid fill, line colour (bar or slice border, the segment ending at the point on a line), marker shape, size, fill and line, pie explosion, the point's own Invert if Negative; Invert if Negative per series with the c14 inverted fill; vary colors by point. Read, written in schema order and drawn on 2-D column, bar, line, pie, doughnut, scatter and bubble charts; `chart.formatSelection` / `chart.shapeFill` with `point` (Format Data Point), `invertIfNegative`, `invertColor`, `varyColors`. No Format pane UI; gradient, pattern and picture fills, effects, 3-D and per-point labels are not kept; radar and area points are kept in the file but not drawn; a smoothed line keeps the series colour. Format Chart pane covers chart-level options |
 | Data table under the chart | yes | yes for column, bar, line, area and compatible combo charts: live formatted values, blank cells, grouped category headers, optional legend keys, horizontal/vertical borders and outline; native `c:dTable` XLSX round-trip; shared UI/print/PDF rendering |
 | Per-series / per-point fill, line, marker, effects | Format pane for every element | series colour only; Format Chart pane covers chart-level options |
 | Chart styles and colour palettes | ~16 styles × colour sets | style number stored, own palettes |
@@ -82,8 +85,8 @@ Format reference: [Microsoft's DrawingML data table documentation](https://learn
 ## XLSX round-trip
 
 Charts are read from and written to DrawingML chart parts, but only the fields the model holds
-survive: anything else (axis scaling, label options, error bars, per-point formats, chartex
-extensions) is lost when GridCraft saves a workbook it opened. That is the main reason charts are
+survive: anything else (axis scaling, label options, error bars, per-point gradient/pattern fills
+and effects, chartex extensions) is lost when GridCraft saves a workbook it opened. That is the main reason charts are
 **~30% ready**: a user who opens an Excel workbook with charts and saves it gets simpler charts
 back.
 
@@ -94,8 +97,36 @@ qualifier: with a bare name in `<c:f>` it draws the whole chart blank, without a
 (observed in Excel for Windows, Microsoft 365). External books (`[1]Sheet1!…`) are kept as they
 are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
+### Point formats: how Excel draws them
+
+Observed in Excel 365 on synthetic charts built through COM (exported pictures sampled per point):
+
+- A negative bar with Invert if Negative is white with a dark outline when the series fill is
+  automatic, whatever the c14 inverted colour says. With a series fill of its own it takes the
+  inverted colour (Excel writes white when none was picked). The inversion also beats a point's own
+  fill, unless the point turns Invert if Negative off. GridCraft's outline grey is its own.
+- Vary colors by point colours each point from the palette for pie and doughnut charts (on when
+  the file leaves `varyColors` out), and for a chart whose only series is a bar, line, scatter,
+  bubble or radar series. With two or more series in the chart (also when a combo's group has a
+  single series), and for area charts, Excel keeps the setting in the file but draws one colour per
+  series. A series fill of its own wins over it.
+- On a line, a point's line colour is the segment that ends at that point, and outlines its
+  marker. Vary colors colours each segment and marker the same way.
+- The legend of a single-series chart lists its points (one entry per category) when vary colors is
+  on or any point has a format of its own.
+- Point formats are positional (`c:idx`): like Excel, GridCraft doesn't move them when rows are
+  inserted, and Select Data or Switch Row/Column, which rebuild the series, drop them. A combo
+  chart keeps vary colors on its first group only, the one it is read from.
+
 ## Work (40–60 h)
 
+1. Chart resizing (#190): 1–2 h.
+2. Preserve unmodelled chart XML on round-trip (keep the original part, patch only edited fields): 6–10 h.
+3. Axis options, label options, gridlines per axis, legend formatting: 10–15 h.
+4. Error bars; Format Trendline pane (trendlines landed): 4–6 h.
+5. Per-element Format pane parity, smoothed lines, pie/bar of pie, 100% variants: 8–12 h (point formats landed; a Format Data Point pane remains).
+6. 3-D column/bar/pie/area, surface and contour, Pareto: 8–12 h.
+7. Chart sheets, templates and PivotChart field buttons: 5–8 h. Filled map: owner decision on boundary data.
 1. Preserve unmodelled chart XML on round-trip (keep the original part, patch only edited fields): 6–10 h.
 2. Axis options, label options, gridlines per axis, legend formatting: 10–15 h.
 3. Error bars; Format Trendline pane (trendlines landed): 4–6 h.
@@ -115,6 +146,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 | 2026-10-18 | minor | Doughnut charts: every series is a ring (first series innermost), hole size and first slice angle modelled, editable and round-tripped; rotated slices split at 12 o'clock without overlap; legend names categories like Excel's default (#1823) |
 | 2026-10-16 | trivial | Series that refer to defined names (`[0]!Name`, `Sheet!Name`) resolve instead of showing `#NAME?`, and are saved qualified, as Excel needs (#1686) |
 | 2026-10-16 | minor | Box & whisker quartiles default to exclusive, honor each series on draw and XLSX round-trip; `chart.set {quartiles}` changes the method (#1453) |
+| 2026-10-15 | minor | Per-point formatting (`c:dPt` fill, line, marker, explosion, point invert), Invert if Negative with the c14 inverted fill, vary colors by point: modelled, round-tripped and drawn as Excel draws them; Format Data Point through `chart.formatSelection` `point` |
 | 2026-10-13 | minor | Multi-level category axes: read, drawn (outer levels under or beside the labels), written back with level caches |
 | 2026-10-12 | trivial | chart sheets are kept on save, still not editable (#727) |
 | 2026-10-11 | minor | Trendlines: all six types modelled, round-tripped through `c:trendline`, drawn with forecast and equation/R² labels; `chart.addElement` `trendline` |

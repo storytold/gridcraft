@@ -24,6 +24,7 @@ mod page_order;
 mod passthrough_tests;
 mod phonetic_tests;
 mod pivot_tests;
+mod points;
 mod richdata_tests;
 mod roundtrip;
 mod shape_text_rtl;
