@@ -2,6 +2,44 @@ use super::geo::Geo;
 use super::menus::is_checkbox;
 use super::{CellRef, Drag, Sheet, SheetApp, json};
 
+fn other_ui_owns_keys(app: &SheetApp) -> bool {
+    app.dialog.is_some()
+        || app.message.is_some()
+        || app.grid.filter_menu.is_some()
+        || app.grid.fill_menu.is_some()
+        || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
+        || app.macros.question.is_some()
+}
+
+fn handle_object_key(app: &mut SheetApp, key: egui::Key) -> bool {
+    match key {
+        egui::Key::Delete | egui::Key::Backspace => app.delete_selected_object(),
+        egui::Key::Escape => app.selected_object.take().is_some(),
+        _ => false,
+    }
+}
+
+fn fill_owns_navigation(ctx: &egui::Context, key: egui::Key, physical: Option<egui::Key>, modifiers: egui::Modifiers) -> bool {
+    use crate::keymap::Shortcut;
+    use egui::Key;
+    let mac = ctx.os() == egui::os::OperatingSystem::Mac;
+    if crate::keymap::altgr_text(ctx, modifiers, mac) {
+        return false;
+    }
+    // Keep the shortcut table's platform-specific distinction between selection and sheet changes.
+    match crate::keymap::lookup(key, physical, modifiers, mac) {
+        Some(Shortcut::Run("sheet.next" | "sheet.previous", _)) => false,
+        Some(Shortcut::Run(id, _)) if id.starts_with("selection.") || id == "edit.selectAll" => true,
+        Some(Shortcut::ExtendToStart | Shortcut::ExtendToEnd | Shortcut::ExtendToRowStart | Shortcut::ScreenRight | Shortcut::ScreenLeft) => true,
+        _ => match key {
+            Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight | Key::Home | Key::End | Key::Tab | Key::Enter => true,
+            Key::PageUp | Key::PageDown => !modifiers.command,
+            Key::A => modifiers.command && !modifiers.alt,
+            _ => false,
+        },
+    }
+}
+
 /// Grid keyboard handling when no text field has focus.
 pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
     // Focus left on an editor that no longer exists goes back to the grid.
@@ -14,15 +52,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     // An open filter menu owns the keyboard even when a click inside it left focus on nothing (#1516).
     // So do the fill menu (its Esc closes it, not the copy) and the right-drag that opens it (an
     // arrow key would move the selection the menu fills from), and a macro's question.
-    if editing
-        || app.dialog.is_some()
-        || other_focus
-        || app.message.is_some()
-        || app.grid.filter_menu.is_some()
-        || app.grid.fill_menu.is_some()
-        || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
-        || app.macros.question.is_some()
-    {
+    if editing || other_focus || other_ui_owns_keys(app) {
         return;
     }
     if ctx.memory(|m| m.focused()).is_none() {
@@ -65,6 +95,9 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                 }
                 return;
             }
+            // A primary fill owns selection navigation until the drag ends.
+            egui::Event::Key { key, physical_key, pressed: true, modifiers, .. }
+                if matches!(app.grid.drag, Drag::Fill { menu: false, .. }) && fill_owns_navigation(ctx, key, physical_key, modifiers) => {}
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
                 use egui::Key;
                 if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
@@ -121,10 +154,8 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                     }
                     Key::Tab => app.move_after_enter(0, if shift { -1 } else { 1 }),
                     Key::F2 => app.begin_edit(None, false),
-                    // With an object selected, Delete and Backspace delete it, not the cells.
-                    Key::Delete if app.delete_selected_object() => {}
+                    key if handle_object_key(app, key) => {}
                     Key::Delete => app.run_or_alert("edit.clearContents", json!({})),
-                    Key::Backspace if app.delete_selected_object() => {}
                     Key::Backspace => {
                         // Excel for Mac: Delete clears the cell and starts editing it.
                         app.run_or_alert("edit.clearContents", json!({}));
@@ -132,7 +163,6 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                             app.begin_edit(Some(String::new()), false);
                         }
                     }
-                    Key::Escape if app.selected_object.is_some() => app.selected_object = None,
                     Key::Escape => {
                         app.session.clipboard = None;
                         app.session.format_painter = None;

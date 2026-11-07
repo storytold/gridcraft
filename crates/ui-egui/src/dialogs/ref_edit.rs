@@ -235,7 +235,8 @@ fn arrows_move_selection(app: &mut SheetApp, ctx: &egui::Context) {
             _ => true,
         });
     });
-    if moves.is_empty() {
+    // A fill keeps its source until release, including while a collapsed picker has the keyboard.
+    if moves.is_empty() || matches!(app.grid.drag, crate::grid::Drag::Fill { .. }) {
         return;
     }
     // Arrows follow the screen: on a right-to-left sheet Left goes to the next column.
