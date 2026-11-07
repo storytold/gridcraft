@@ -82,7 +82,7 @@ not implemented throw a typed `OfficeScriptsError` whose message names the class
 | `DataValidation` | `script.validation`, `data.validation` | type, rule, error alert, prompt, ignore blanks (get and set), clear |
 | `NamedItem` | `formulas.nameManager` | name, formula/refers-to, scope, comment, type, visible |
 | global `console` | bridge `console.log` | log/info/warn/error, bounded |
-|global `ExcelScript`|the shim's enum namespace|`BorderIndex`, `BorderLineStyle`, `BorderWeight`, `ChartType`, `ClearApplyTo`, `DataValidationType`/`DataValidationOperator`, `InsertShiftDirection`/`DeleteShiftDirection`, `WorksheetVisibility`; an unknown family or member throws `notSupported` |
+|global `ExcelScript`|the shim's enum namespace|`BorderIndex`, `BorderLineStyle`, `BorderWeight`, `ChartType`, `ClearApplyTo`, `DataValidationType`/`DataValidationOperator`, `InsertShiftDirection`/`DeleteShiftDirection`, `SheetVisibility`; an unknown family or member throws `notSupported` |
 
 Exact per-member status is generated: [office-scripts-coverage.md](office-scripts-coverage.md).
 Run `cargo xtask office-scripts-coverage --check`; the test in `gridcraft-script` fails when the

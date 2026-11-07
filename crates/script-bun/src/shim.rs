@@ -234,7 +234,7 @@ class Worksheet {
     return Number(bridge("Worksheet.getIndex", sheetParams(this.sheetName)));
   }
   getVisibility(): string {
-    // The engine answers lowercase; ExcelScript's `WorksheetVisibility` values are capitalised.
+    // The engine answers lowercase; ExcelScript's `SheetVisibility` values are capitalised.
     return String(bridge("Worksheet.getVisibility", sheetParams(this.sheetName))) === "visible" ? "Visible" : "Hidden";
   }
   setVisibility(visibility: string): void {
@@ -991,7 +991,8 @@ const ExcelScriptNs = guarded("ExcelScript", {
   }),
   DeleteShiftDirection: guarded("ExcelScript.DeleteShiftDirection", { up: "Up", left: "Left" }),
   InsertShiftDirection: guarded("ExcelScript.InsertShiftDirection", { down: "Down", right: "Right" }),
-  WorksheetVisibility: guarded("ExcelScript.WorksheetVisibility", { visible: "Visible", hidden: "Hidden" }),
+  // The documented ExcelScript name is `SheetVisibility` (not `WorksheetVisibility`).
+  SheetVisibility: guarded("ExcelScript.SheetVisibility", { visible: "Visible", hidden: "Hidden" }),
 });
 
 function describe(error: any): any {

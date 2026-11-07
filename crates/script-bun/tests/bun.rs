@@ -167,11 +167,11 @@ function main(workbook: ExcelScript.Workbook) {
 #[ignore = "needs Bun; set GRIDCRAFT_BUN"]
 fn worksheet_visibility_reads_back_in_the_excel_script_casing() {
     let Some(host) = host() else { return };
-    // The engine answers `visible`; ExcelScript compares against `WorksheetVisibility.visible`.
+    // The engine answers `visible`; ExcelScript compares against `SheetVisibility.visible`.
     let script = r#"
 function main(workbook: ExcelScript.Workbook) {
   const sheet = workbook.getWorksheet("Data");
-  console.log(sheet.getVisibility(), sheet.getVisible(), sheet.getVisibility() === ExcelScript.WorksheetVisibility.visible);
+  console.log(sheet.getVisibility(), sheet.getVisible(), sheet.getVisibility() === ExcelScript.SheetVisibility.visible);
 }
 "#;
     let mut calls = Calls { calls: Vec::new() };
