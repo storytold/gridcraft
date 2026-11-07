@@ -2068,6 +2068,19 @@ fn formula_at(s: &Session, a: &str) -> Option<String> {
 }
 
 #[test]
+fn autosum_of_a_single_cell_stops_at_a_blank_cell() {
+    // #3291: a blank row between two blocks of numbers ended the guess one block too late, so the
+    // second total summed the first block (and its total) as well.
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "B4", "values": [[1], [2], [3]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "B7", "input": "=SUM(B4:B6)"})).unwrap();
+    s.execute("range.setValues", json!({"range": "B9", "values": [[10], [20]]})).unwrap();
+    s.execute("selection.set", json!({"cell": "B11"})).unwrap();
+    s.execute("formulas.autoSum", json!({})).unwrap();
+    assert_eq!(v(&s, "B11"), Value::Number(30.0));
+}
+
+#[test]
 fn autosum_over_a_row_totals_it_to_the_right() {
     // As in Excel: a row selected and AutoSum puts one total to its right, not a one-cell total
     // under each of its cells.
