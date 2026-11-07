@@ -138,6 +138,7 @@ pub(crate) fn paint_pages(input: PagePaintInput<'_>, cf: &mut CfCache) -> Vec<gr
     let Some(pg) = geo.paper.clone() else { return quads };
     p.rect_filled(geo.cells, 0.0, t.desk);
     let cells = p.with_clip_rect(geo.cells);
+    crate::thai_layout::begin_frame_budget(p.ctx());
     let mut painted = 0usize;
     for (i, j) in pages_iter(geo, &pg) {
         let page = screen_rect(geo, pg.page_rect(i, j));
