@@ -9,7 +9,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use gridcraft_ink::{Manifest, Recognizer, TROCR_SMALL_HANDWRITTEN};
+use gridcraft_ink::{Manifest, ModelFile, Recognizer, TROCR_SMALL_HANDWRITTEN};
 use gridcraft_ui_egui::ModelHost;
 
 /// The desktop's [`ModelHost`]: a download per model id, plus the recognizer loader the UI hooks
@@ -49,9 +49,10 @@ impl ModelHost for Models {
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         for file in manifest.files {
             let dest = dir.join(file.path);
-            // Already there and the right size: a previous download finished (every file is
-            // hash-checked before it is moved into place, so size is enough here).
-            if std::fs::metadata(&dest).is_ok_and(|m| m.is_file() && m.len() == file.bytes) {
+            // Already there with the right size and hash: a previous download finished. Size
+            // alone is not enough — a damaged file of the right length would otherwise survive
+            // the download the error hint advises.
+            if up_to_date(&dest, file) {
                 continue;
             }
             if let Some(parent) = dest.parent() {
@@ -82,6 +83,13 @@ impl ModelHost for Models {
         }
         Ok(())
     }
+}
+
+/// Whether `dest` already holds `file`: its exact size and its SHA-256. A file of the right size
+/// with the wrong contents is not complete, so a Download repairs it instead of skipping it.
+fn up_to_date(dest: &Path, file: &ModelFile) -> bool {
+    std::fs::metadata(dest).is_ok_and(|m| m.is_file() && m.len() == file.bytes)
+        && gridcraft_ink::manifest::sha256_file(dest).is_ok_and(|hash| hash.eq_ignore_ascii_case(file.sha256))
 }
 
 /// Streams one file to `dest`, stopping as soon as it holds more than `limit` bytes (the size the
@@ -151,6 +159,26 @@ mod tests {
         assert!(err.is_err(), "an oversized body must fail");
         let written = std::fs::metadata(&big).map(|m| m.len()).unwrap_or(u64::MAX);
         assert!(written <= 100_000, "wrote {written} bytes past a 100000-byte limit");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_of_the_right_size_with_the_wrong_hash_is_not_up_to_date() {
+        let dir = scratch("hash");
+        // "abc" has this SHA-256.
+        let file = ModelFile {
+            path: "m.onnx",
+            bytes: 3,
+            sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            url: "https://example.invalid/m.onnx",
+        };
+        let dest = dir.join("m.onnx");
+        std::fs::write(&dest, b"abc").ok();
+        assert!(up_to_date(&dest, &file), "the manifest's file counts as complete");
+        // Same size, different bytes: the size check alone would have skipped it.
+        std::fs::write(&dest, b"abd").ok();
+        assert!(!up_to_date(&dest, &file), "a wrong-hash file must be downloaded again");
+        assert!(!up_to_date(&dir.join("absent.onnx"), &file), "a missing file is not complete");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
