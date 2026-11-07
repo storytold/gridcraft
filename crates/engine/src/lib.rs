@@ -1154,6 +1154,14 @@ impl Session {
         for change in changes {
             daxstate::revert(change, &mut self.dax_model, &mut self.dax_metadata, &mut self.dax_view);
         }
+        // The steps recorded while the group was open go with their edits (all of them when the
+        // recording started inside the group). This runs before the closed-document returns
+        // below: the recording outlives the close, so a step whose edit the rollback just took
+        // back would otherwise stay available for replay, and replaying it would make an edit the
+        // model no longer has (CodeRabbit, #3412).
+        if let Some(rec) = self.recorder.as_mut() {
+            rec.cut_back(g.recorded.unwrap_or((0, 0)), g.doc);
+        }
         let Some(doc_state) = g.doc_state else { return Ok(()) };
         let Some(d) = self.docs.iter_mut().find(|d| d.uid == g.doc) else { return Ok(()) };
         if !Arc::ptr_eq(&d.wb, &doc_state.wb) {
@@ -1164,11 +1172,6 @@ impl Session {
         d.undo.truncate(g.start);
         d.redo = doc_state.redo;
         d.revision += 1;
-        // The steps recorded while the group was open go with their edits (all of them when the
-        // recording started inside the group).
-        if let Some(rec) = self.recorder.as_mut() {
-            rec.cut_back(g.recorded.unwrap_or((0, 0)), g.doc);
-        }
         // The record of the last group step stays when the document is back exactly where that
         // step left it (this group began there); otherwise the rollback is where the group ended.
         let kept = self.group_step.as_ref().is_some_and(|st| st.doc == g.doc && st.len == g.start && Arc::ptr_eq(&st.after, &d.wb));

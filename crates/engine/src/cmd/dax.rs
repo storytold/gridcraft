@@ -1848,6 +1848,36 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// A group that closes its document and then fails takes back the steps its recording kept
+    /// for it, not just the edits.
+    #[test]
+    fn a_failed_group_that_closed_its_document_takes_back_its_recorded_steps() {
+        // The recording outlives the document close, so the editor's buffer still holds the
+        // `dataModel.*` step. Rolling the group back reverts the edit; a step left behind would be
+        // replayed onto a model that no longer has the change, so it goes with the edit
+        // (CodeRabbit, #3412).
+        let (path, dir) = fixture("group-close-fails-recording");
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("dataModel.load", json!({"path": path.to_string_lossy()})).expect("load");
+        let uid = s.documents()[0].uid;
+        let model_before = s.dax_model.clone();
+
+        s.start_recording();
+        let failed: Result<()> = s.grouped("Doomed", |s| {
+            s.execute("dataModel.addMeasure", json!({"name": "Double Sales", "formula": "1", "table": "Sales"}))?;
+            s.execute("file.close", json!({"force": true, "document": true}))?;
+            Err(EngineError::Other("the step after the close failed".into()))
+        });
+        assert!(failed.is_err(), "the closure's error is the one reported");
+        assert!(s.documents().is_empty(), "the document closed");
+        assert!(!s.in_group(uid), "the group ended with its rollback");
+        assert_eq!(s.dax_model, model_before, "the model is back as it was");
+        let recorded: Vec<String> = s.recorder.as_ref().expect("the recording is still running").steps.iter().map(|step| step.id.clone()).collect();
+        assert!(recorded.is_empty(), "no step of the failed group is left to replay: {recorded:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// A group that closes its document and succeeds keeps its data-model edits and leaves no
     /// group open.
     #[test]
