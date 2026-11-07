@@ -1,4 +1,6 @@
+use super::descriptive::{kth, median, percentile_exc, percentile_inc, sorted};
 use super::{MAX_REGRESSORS, aggregate_values, aggregate_values_k, check_regression_size};
+use crate::util::R;
 use crate::util::testutil::*;
 use gridcraft_core::{CellError, Value};
 
@@ -198,6 +200,126 @@ fn min_max_order() {
     close(ev("RANK.EQ", vec![n(7.0), r2.clone(), n(1.0)]), 5.0);
     close(ev("RANK.EQ", vec![n(3.5), r2.clone(), n(1.0)]), 3.0);
     close(ev("RANK.AVG", vec![n(3.5), r2, n(1.0)]), 3.5);
+}
+
+// Reference implementations: the previous full-sort versions, as the oracle for the selection ones.
+fn old_interp(s: &[f64], pos: f64) -> R<f64> {
+    let i = pos.floor();
+    let frac = pos - i;
+    let i = i as usize;
+    let lo = *s.get(i).ok_or(CellError::Num)?;
+    match s.get(i + 1) {
+        Some(hi) if frac > 0.0 => Ok(lo + frac * (hi - lo)),
+        _ => Ok(lo),
+    }
+}
+
+fn old_median(v: Vec<f64>) -> R<f64> {
+    if v.is_empty() {
+        return Err(CellError::Num);
+    }
+    let s = sorted(v);
+    let n = s.len();
+    let hi = s.get(n / 2).copied().unwrap_or(0.0);
+    if n % 2 == 1 { Ok(hi) } else { Ok(s.get(n / 2 - 1).copied().unwrap_or(0.0).midpoint(hi)) }
+}
+
+fn old_kth(v: Vec<f64>, k: f64, largest: bool) -> R<f64> {
+    let k = k.ceil();
+    if k.is_nan() || k < 1.0 || k > v.len() as f64 {
+        return Err(CellError::Num);
+    }
+    let s = sorted(v);
+    let k = k as usize;
+    let idx = if largest { s.len() - k } else { k - 1 };
+    s.get(idx).copied().ok_or(CellError::Num)
+}
+
+fn old_percentile_inc(v: Vec<f64>, k: f64) -> R<f64> {
+    if v.is_empty() || !(0.0..=1.0).contains(&k) {
+        return Err(CellError::Num);
+    }
+    let s = sorted(v);
+    old_interp(&s, k * (s.len() - 1) as f64)
+}
+
+fn old_percentile_exc(v: Vec<f64>, k: f64) -> R<f64> {
+    let n = v.len() as f64;
+    if v.is_empty() || !(k > 0.0 && k < 1.0) {
+        return Err(CellError::Num);
+    }
+    let pos = k * (n + 1.0);
+    if pos < 1.0 || pos > n {
+        return Err(CellError::Num);
+    }
+    let s = sorted(v);
+    old_interp(&s, pos - 1.0)
+}
+
+/// Same Ok bit pattern or same error.
+fn same(a: R<f64>, b: R<f64>) -> bool {
+    match (a, b) {
+        (Ok(x), Ok(y)) => x.to_bits() == y.to_bits(),
+        (Err(x), Err(y)) => x == y,
+        _ => false,
+    }
+}
+
+#[test]
+fn selection_matches_full_sort_bit_for_bit() {
+    let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    let specials = [0.0, -0.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN, -f64::NAN, f64::MAX, f64::MIN_POSITIVE, 1.0, -1.0];
+    for len in (0..=40).chain([63, 64, 65, 100, 257, 1000, 4096]) {
+        for round in 0..24 {
+            let mut v: Vec<f64> = (0..len)
+                .map(|_| match (round % 4, next() % 8) {
+                    // Few distinct values: many ties.
+                    (0, r) => (r % 3) as f64,
+                    // Specials, including both zeros and NaNs.
+                    (1, r) => specials[(next() as usize).wrapping_add(r as usize) % specials.len()],
+                    // Wide random range.
+                    (2, _) => (next() as i64 as f64) / 1e3,
+                    // Integers with some specials mixed in.
+                    (_, 0) => specials[next() as usize % specials.len()],
+                    _ => (next() % 50) as f64,
+                })
+                .collect();
+            // Rounds 12..24 repeat the data as already ascending, already descending and nearly
+            // ascending (ends swapped): the monotone shortcut and its fallback to selection.
+            match round / 4 {
+                3 => v.sort_by(f64::total_cmp),
+                4 => {
+                    v.sort_by(f64::total_cmp);
+                    v.reverse();
+                }
+                5 => {
+                    v.sort_by(f64::total_cmp);
+                    if let Some(last) = v.len().checked_sub(1) {
+                        v.swap(0, last);
+                    }
+                }
+                _ => {}
+            }
+            assert!(same(median(v.clone()), old_median(v.clone())), "median len={len} round={round}");
+            let ks = [-1.0, 0.0, 0.2, 1.0, 1.5, 2.0, len as f64 / 2.0, len as f64 - 0.5, len as f64, len as f64 + 1.0, f64::NAN];
+            for &k in &ks {
+                for largest in [true, false] {
+                    assert!(same(kth(v.clone(), k, largest), old_kth(v.clone(), k, largest)), "kth len={len} k={k}");
+                }
+            }
+            let ps = [-0.1, 0.0, 0.01, 0.1, 0.25, 0.3, 0.5, 0.75, 0.9, 0.99, 1.0, 1.1, f64::NAN, (next() % 1001) as f64 / 1000.0];
+            for &p in &ps {
+                assert!(same(percentile_inc(v.clone(), p), old_percentile_inc(v.clone(), p)), "pinc len={len} p={p}");
+                assert!(same(percentile_exc(v.clone(), p), old_percentile_exc(v.clone(), p)), "pexc len={len} p={p}");
+            }
+        }
+    }
 }
 
 #[test]
@@ -786,4 +908,24 @@ fn aggregate_helper() {
     close(aggregate_values_k(19, &vals, &nv(2.0)), 2.0);
     close(aggregate_values_k(9, &vals, &nv(2.0)), 9.0);
     is_err(aggregate_values_k(14, &vals, &nv(10.0)), CellError::Num);
+}
+
+/// Security: FREQUENCY finds each value's bin by binary search, and MODE counts distinct numbers
+/// through an index, so neither is quadratic in its inputs. Results are as before: unsorted and
+/// duplicate bins keep their positions (a value goes to the first of equal bins), and tied modes
+/// come in first-occurrence order.
+#[test]
+fn frequency_and_mode_scale_with_their_inputs() {
+    let f = ev("FREQUENCY", vec![c(&[1.0, 2.0, 2.0, 3.0, 5.0, 9.0, -1.0]), c(&[3.0, 2.0, 2.0, 0.0])]);
+    assert_eq!(rows_of(&f), vec![vec![nv(1.0)], vec![nv(3.0)], vec![nv(0.0)], vec![nv(1.0)], vec![nv(2.0)]]);
+    // NaN data goes to the overflow bin, and a NaN bin takes nothing
+    let f = ev("FREQUENCY", vec![c(&[f64::NAN, 0.5, 2.0]), c(&[f64::NAN, 1.0])]);
+    assert_eq!(rows_of(&f), vec![vec![nv(0.0)], vec![nv(1.0)], vec![nv(2.0)]]);
+    let data: Vec<f64> = (0..200_000).map(|i| f64::from(i) + 1e6).collect();
+    let bins: Vec<f64> = (0..200_000).map(f64::from).collect();
+    let f = ev("FREQUENCY", vec![c(&data), c(&bins)]);
+    assert_eq!(rows_of(&f).last(), Some(&vec![nv(200_000.0)]));
+    let distinct = ev("MODE", vec![c(&data)]);
+    is_err(distinct, CellError::NA);
+    assert_eq!(rows_of(&ev("MODE.MULT", vec![c(&[3.0, 0.0, 1.0, -0.0, 3.0, 1.0])])), vec![vec![nv(3.0)], vec![nv(0.0)], vec![nv(1.0)]]);
 }
