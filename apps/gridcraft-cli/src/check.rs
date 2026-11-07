@@ -279,6 +279,11 @@ fn collect_inputs(inputs: &[String]) -> Discovery {
 
 /// Returns false only when the global file budget stops traversal.
 fn walk(dir: &Path, depth: usize, out: &mut Discovery, seen: &mut std::collections::HashSet<u64>) -> bool {
+    // Windows does not expose the Unix dev+inode identity check below; keep the shared
+    // traversal signature while making that platform-specific intent explicit to Clippy.
+    #[cfg(not(unix))]
+    let _ = seen;
+
     // A directory is visited once by identity (dev+inode on unix): several links to the same
     // directory are aliases, not exponential branches of the scan. Other platforms keep the
     // depth cap only.
