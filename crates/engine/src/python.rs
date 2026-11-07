@@ -341,6 +341,12 @@ impl Session {
         self.python.env.checking() || self.python.docs.values().any(|r| r.requesting() || r.due > 0 || r.render_waiting)
     }
 
+    /// Whether a client holds a worker. One that stopped counts until its client has seen that.
+    #[cfg(test)]
+    pub(crate) fn python_worker_alive(&self) -> bool {
+        self.python.docs.values().any(|r| r.client.as_ref().is_some_and(gridcraft_python::Client::alive))
+    }
+
     /// What is wrong, or worth saying, about a Python cell of the active workbook. `None` for a
     /// cell with nothing to say, and for a cell that isn't a Python cell.
     pub fn python_diagnostic(&self, sheet: usize, cell: CellRef) -> Option<&Diagnostic> {

@@ -87,6 +87,20 @@ fn set_refuses_bad_params_long_code_headers_and_protected_cells() {
 }
 
 #[test]
+fn set_refuses_a_new_choice_of_return_type_on_a_locked_cell() {
+    let mut s = s();
+    set(&mut s, "H1", "1");
+    s.execute("review.protectSheet", json!({})).unwrap();
+    // The same code and return type, so the edit itself finds nothing to refuse; only the choice is new.
+    let e = s.execute("python.set", json!({"cell": "H1", "code": "1", "output": "value"})).unwrap_err();
+    assert!(e.to_string().contains("protected"), "{e}");
+    assert!(!py_at(&s, "H1").output_chosen, "the cell is as it was");
+    // Nothing new stays nothing to refuse.
+    set(&mut s, "H1", "1");
+    assert!(!py_at(&s, "H1").output_chosen);
+}
+
+#[test]
 fn set_over_a_spilling_formula_takes_the_spill_away() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(3)"})).unwrap();

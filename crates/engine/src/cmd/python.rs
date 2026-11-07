@@ -258,7 +258,7 @@ fn refuse_table_header(s: &Session, sheet: usize, at: CellRef) -> Result<()> {
 
 /// Writes `py` into the cell, which held `old`: what `python.set` and `python.output` share. The
 /// code must fit in one cell and a table header takes none; a locked cell on a protected sheet is
-/// refused by the edit itself.
+/// refused by the edit itself, and here for the choice alone, which the edit doesn't compare.
 fn store(s: &mut Session, cmd: &str, sheet: usize, at: CellRef, mut py: PyCode, old: Option<PyCode>) -> Result<()> {
     if !py.fits() {
         return Err(bad(
@@ -267,6 +267,11 @@ fn store(s: &mut Session, cmd: &str, sheet: usize, at: CellRef, mut py: PyCode, 
         ));
     }
     refuse_table_header(s, sheet, at)?;
+    if old.as_ref().is_some_and(|o| o.output_chosen != py.output_chosen)
+        && let Some(m) = s.locked_cell_message(sheet, at)
+    {
+        return Err(EngineError::Other(m));
+    }
     // Unchanged code with the same return type keeps its result (and its value); new code, or a
     // new return type, has none until it runs: a result of the other type would show a value and
     // preview that don't belong to the cell. A picture with no choice is both, so any choice keeps it.
