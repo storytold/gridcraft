@@ -6,6 +6,131 @@ pub(super) fn sep(ui: &mut Ui) {
     ui.painter().line_segment([pos2(r.center().x, r.top() + 6.0), pos2(r.center().x, r.bottom() - 6.0)], Stroke::new(1.0, t.separator));
 }
 
+/// Height of the caption under every ribbon group. Fixed, and smaller than the
+/// control row, so the words sit on one quiet line and never cover a command.
+pub(crate) const GROUP_CAPTION_H: f32 = 16.0;
+
+/// The control row above the caption. Big buttons and the group separator are
+/// this tall; a shorter cluster keeps that height so every caption shares a baseline.
+const GROUP_CONTROLS_H: f32 = 72.0;
+
+/// Caption size. Big-button labels are 11.5 px.
+const GROUP_CAPTION_PT: f32 = 10.0;
+
+/// Translation keys for the caption under each group, in the order the tab draws
+/// the groups. English shows the part after `|`. The words name what the group
+/// does; they are not copied from another spreadsheet's group titles.
+pub(crate) const HOME_CAPTIONS: [&str; 7] = [
+    "Ribbon group|Copies",
+    "Ribbon group|Type format",
+    "Ribbon group|Align",
+    "Ribbon group|Number format",
+    "Ribbon group|Presets",
+    "Ribbon group|Build",
+    "Ribbon group|Prepare",
+];
+pub(crate) const FORMULAS_CAPTIONS: [&str; 4] = ["Ribbon group|Functions", "Ribbon group|Names", "Ribbon group|Check", "Ribbon group|Compute"];
+pub(crate) const DATA_CAPTIONS: [&str; 7] = [
+    "Ribbon group|Import",
+    "Ribbon group|Order",
+    "Ribbon group|Clean",
+    "Ribbon group|Projection",
+    "Ribbon group|Levels",
+    "Ribbon group|Examine",
+    "Ribbon group|Solve",
+];
+pub(crate) const VIEW_CAPTIONS: [&str; 5] =
+    ["Ribbon group|Look", "Ribbon group|Reveal", "Ribbon group|Scale", "Ribbon group|Workspace", "Ribbon group|Interface"];
+pub(crate) const INSERT_CAPTIONS: [&str; 10] = [
+    "Ribbon group|Lists",
+    "Ribbon group|Artwork",
+    "Ribbon group|Graphs",
+    "Ribbon group|Slice",
+    "Ribbon group|Sparks",
+    "Ribbon group|Switches",
+    "Ribbon group|Ticks",
+    "Ribbon group|Attach",
+    "Ribbon group|Wording",
+    "Ribbon group|Glyphs",
+];
+pub(crate) const DRAW_CAPTIONS: [&str; 3] = ["Ribbon group|Grab", "Ribbon group|Strokes", "Ribbon group|Reshape"];
+pub(crate) const PAGE_LAYOUT_CAPTIONS: [&str; 3] = ["Ribbon group|Palettes", "Ribbon group|Paper", "Ribbon group|Sheet face"];
+pub(crate) const REVIEW_CAPTIONS: [&str; 3] = ["Ribbon group|Corrections", "Ribbon group|Remarks", "Ribbon group|Lock"];
+pub(crate) const AUTOMATE_CAPTIONS: [&str; 2] = ["Ribbon group|Scripts", "Ribbon group|App"];
+pub(crate) const TABLE_CAPTIONS: [&str; 5] =
+    ["Ribbon group|Identity", "Ribbon group|Tidy", "Ribbon group|Slice", "Ribbon group|Traits", "Ribbon group|Swatches"];
+pub(crate) const CHART_CAPTIONS: [&str; 1] = ["Ribbon group|Graph"];
+pub(crate) const HEADER_FOOTER_CAPTIONS: [&str; 4] = ["Ribbon group|Samples", "Ribbon group|Fields", "Ribbon group|Jump", "Ribbon group|Page rules"];
+
+/// One ribbon cluster. `body` lays out the controls as before (same spacing, no
+/// width change). A short caption is painted in a fixed band underneath, centred,
+/// in the theme's dim text. A caption wider than the cluster ends in an ellipsis
+/// between characters, and the hover text is the full name.
+pub(crate) fn group(ui: &mut Ui, caption: &str, body: impl FnOnce(&mut Ui)) {
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        let controls = ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+            body(ui);
+        });
+        let width = controls.response.rect.width().max(1.0);
+        let short = GROUP_CONTROLS_H - controls.response.rect.height();
+        if short > 0.5 {
+            ui.add_space(short);
+        }
+        let (band, resp) = ui.allocate_exact_size(vec2(width, GROUP_CAPTION_H), Sense::hover());
+        let t = Tokens::get(ui.ctx());
+        let font = theme::ui_font(GROUP_CAPTION_PT);
+        let shown =
+            fit_caption(caption, (width - 4.0).max(0.0), |sample| ui.painter().layout_no_wrap(sample.to_string(), font.clone(), t.text_dim).size().x);
+        let galley = ui.painter().layout_no_wrap(shown, font, t.text_dim);
+        let pos = pos2(band.center().x - galley.size().x * 0.5, band.center().y - galley.size().y * 0.5);
+        ui.painter().galley(pos, galley, t.text_dim);
+        let resp = if caption.is_empty() { resp } else { resp.on_hover_text(caption) };
+        let enabled = ui.is_enabled();
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, enabled, caption));
+    });
+}
+
+/// Shorten `text` with a trailing ellipsis so `width_of` stays within `max_width`.
+/// The cut is between characters, so a narrow group never slices a glyph in half.
+pub(crate) fn fit_caption(text: &str, max_width: f32, width_of: impl Fn(&str) -> f32) -> String {
+    if text.is_empty() || max_width <= 0.0 {
+        return String::new();
+    }
+    if width_of(text) <= max_width {
+        return text.to_string();
+    }
+    let ellipsis = "…";
+    let mut end = text.chars().count();
+    while end > 0 {
+        end -= 1;
+        let mut cut: String = text.chars().take(end).collect();
+        cut.push_str(ellipsis);
+        if width_of(&cut) <= max_width {
+            return cut;
+        }
+    }
+    if width_of(ellipsis) <= max_width { ellipsis.to_string() } else { String::new() }
+}
+
+#[cfg(test)]
+pub(crate) fn caption_keys() -> impl Iterator<Item = &'static str> {
+    HOME_CAPTIONS
+        .into_iter()
+        .chain(FORMULAS_CAPTIONS)
+        .chain(DATA_CAPTIONS)
+        .chain(VIEW_CAPTIONS)
+        .chain(INSERT_CAPTIONS)
+        .chain(DRAW_CAPTIONS)
+        .chain(PAGE_LAYOUT_CAPTIONS)
+        .chain(REVIEW_CAPTIONS)
+        .chain(AUTOMATE_CAPTIONS)
+        .chain(TABLE_CAPTIONS)
+        .chain(CHART_CAPTIONS)
+        .chain(HEADER_FOOTER_CAPTIONS)
+}
+
 pub(super) fn active_style(app: &SheetApp) -> Style {
     app.session
         .active()
@@ -309,4 +434,111 @@ mod checkbox_on_tests {
         assert!(checkbox_on(false, false));
         assert!(!checkbox_on(false, true));
     }
+}
+
+#[cfg(test)]
+mod caption_tests {
+    use super::{caption_keys, fit_caption};
+    use crate::i18n::Language;
+
+    #[test]
+    fn a_narrow_caption_ends_in_an_ellipsis() {
+        let width = |s: &str| s.chars().count() as f32;
+        assert_eq!(fit_caption("Zahlenformat", 100.0, width), "Zahlenformat");
+        assert_eq!(fit_caption("Zahlenformat", 6.0, width), "Zahle…");
+        assert_eq!(fit_caption("Zahlenformat", 1.0, width), "…");
+        assert_eq!(fit_caption("Zahlenformat", 0.0, width), "");
+        let cut = fit_caption("Schriftformat", 8.0, width);
+        assert!(cut.ends_with('…'));
+        assert!(cut.chars().count() <= 8);
+    }
+
+    #[test]
+    fn every_group_caption_has_its_own_short_name() {
+        fn english(key: &str) -> &str {
+            match key.rsplit_once('|') {
+                Some((_, label)) => label,
+                None => key,
+            }
+        }
+        assert_eq!(Language::De.tr("Ribbon group|Type format"), "Schriftformat");
+        assert_eq!(Language::De.tr("Ribbon group|Number format"), "Zahlenformat");
+        for (key, _) in GERMAN {
+            assert!(caption_keys().any(|candidate| candidate == *key), "{key} is not a ribbon group");
+        }
+        for key in caption_keys() {
+            let de = GERMAN.iter().find_map(|(candidate, value)| (*candidate == key).then_some(*value)).unwrap_or("");
+            assert!(!de.is_empty(), "missing German caption for {key}");
+            assert_eq!(Language::De.tr(key), de, "{key}");
+            for language in Language::ALL {
+                let shown = language.tr(key);
+                assert!(!shown.is_empty(), "{language:?} {key}");
+                assert!(!shown.contains('\n'), "{language:?} {key} => {shown}");
+                assert!(!shown.contains('|'), "{language:?} {key} => {shown}");
+                if language == Language::En {
+                    assert_eq!(shown, english(key));
+                } else {
+                    assert_ne!(shown, english(key), "{language:?} falls back to English for {key}");
+                }
+            }
+        }
+    }
+
+    /// German caption for every group key, in `caption_keys` order.
+    const GERMAN: &[(&str, &str)] = &[
+        ("Ribbon group|Copies", "Ablage"),
+        ("Ribbon group|Type format", "Schriftformat"),
+        ("Ribbon group|Align", "Ausrichten"),
+        ("Ribbon group|Number format", "Zahlenformat"),
+        ("Ribbon group|Presets", "Vorlagen"),
+        ("Ribbon group|Build", "Aufbau"),
+        ("Ribbon group|Prepare", "Aufbereiten"),
+        ("Ribbon group|Functions", "Funktionen"),
+        ("Ribbon group|Names", "Namen"),
+        ("Ribbon group|Check", "Prüfen"),
+        ("Ribbon group|Compute", "Rechnen"),
+        ("Ribbon group|Import", "Holen"),
+        ("Ribbon group|Order", "Ordnen"),
+        ("Ribbon group|Clean", "Bereinigen"),
+        ("Ribbon group|Projection", "Ausblick"),
+        ("Ribbon group|Levels", "Ebenen"),
+        ("Ribbon group|Examine", "Auswerten"),
+        ("Ribbon group|Solve", "Lösen"),
+        ("Ribbon group|Look", "Blick"),
+        ("Ribbon group|Reveal", "Einblenden"),
+        ("Ribbon group|Scale", "Maßstab"),
+        ("Ribbon group|Workspace", "Umgebung"),
+        ("Ribbon group|Interface", "Oberfläche"),
+        ("Ribbon group|Lists", "Listen"),
+        ("Ribbon group|Artwork", "Grafik"),
+        ("Ribbon group|Graphs", "Schaubilder"),
+        ("Ribbon group|Slice", "Ausschnitt"),
+        ("Ribbon group|Sparks", "Minikurven"),
+        ("Ribbon group|Switches", "Schalter"),
+        ("Ribbon group|Ticks", "Häkchen"),
+        ("Ribbon group|Attach", "Beifügen"),
+        ("Ribbon group|Wording", "Beschriften"),
+        ("Ribbon group|Glyphs", "Zeichen"),
+        ("Ribbon group|Grab", "Greifen"),
+        ("Ribbon group|Strokes", "Striche"),
+        ("Ribbon group|Reshape", "Umwandeln"),
+        ("Ribbon group|Palettes", "Farbwelt"),
+        ("Ribbon group|Paper", "Papier"),
+        ("Ribbon group|Sheet face", "Blattlage"),
+        ("Ribbon group|Corrections", "Korrektur"),
+        ("Ribbon group|Remarks", "Anmerkungen"),
+        ("Ribbon group|Lock", "Sperren"),
+        ("Ribbon group|Scripts", "Abläufe"),
+        ("Ribbon group|App", "Programm"),
+        ("Ribbon group|Identity", "Kennung"),
+        ("Ribbon group|Tidy", "Säubern"),
+        ("Ribbon group|Slice", "Ausschnitt"),
+        ("Ribbon group|Traits", "Merkmale"),
+        ("Ribbon group|Swatches", "Muster"),
+        ("Ribbon group|Graph", "Schaubild"),
+        ("Ribbon group|Samples", "Vorgaben"),
+        ("Ribbon group|Fields", "Felder"),
+        ("Ribbon group|Jump", "Wechseln"),
+        ("Ribbon group|Page rules", "Seitenregeln"),
+    ];
 }
