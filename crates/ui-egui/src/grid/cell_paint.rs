@@ -142,10 +142,17 @@ pub(crate) fn wrapped_cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -
     }
 }
 
+/// Inset of single-line top- and bottom-aligned text from the cell edge, in sheet pixels
+/// at 100% zoom. The same on both edges, so Top stays at the top (it is not centred) with
+/// a gap of the size Bottom already had. Callers multiply by the sheet zoom.
+pub(crate) const LINE_EDGE_INSET: f32 = 0.5;
+
 pub(crate) fn cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
-    let top_inset = 1.0 * z;
-    let y_top = rect.top() - top_inset;
-    let y_bottom = (rect.bottom() - gh - 0.5 * z).max(y_top);
+    let inset = LINE_EDGE_INSET * z;
+    let y_top = rect.top() + inset;
+    // Clamped so a line taller than the row cannot start above the top inset. The cell's
+    // clip rect still trims whatever does not fit.
+    let y_bottom = (rect.bottom() - gh - inset).max(y_top);
     match valign {
         VAlign::Top => y_top,
         VAlign::Center | VAlign::Justify | VAlign::Distributed => (y_top + y_bottom) / 2.0,

@@ -38,7 +38,7 @@ mod tables;
 
 pub(crate) use cell_paint::paint_border;
 #[cfg(test)]
-pub(crate) use cell_paint::{cell_text_y, rotated_text_pos, wrapped_cell_text_y};
+pub(crate) use cell_paint::{LINE_EDGE_INSET, cell_text_y, rotated_text_pos, wrapped_cell_text_y};
 #[cfg(test)]
 use cell_paint::{center_across_end, display_text, look, numfmt_color, painted_halign};
 pub use editor::validation_arrow;
@@ -56,9 +56,15 @@ use tables::filter_table_range;
 pub use tables::{TableHeading, filter_button_rect, heading_table, table_headings};
 
 pub const COL_HEADER_H: f32 = 21.0;
-/// Sheet units are 96-dpi pixels (as in XLSX); on screen one unit is drawn at this many points,
-/// which matches desktop spreadsheet density (a default 20 px row is 16 pt tall).
-pub const DISPLAY_SCALE: f32 = 0.8;
+/// Sheet units are pixels at 96 dpi (column widths, row heights). At 100% sheet zoom one of
+/// those pixels is one egui point. The monitor's own scale is `pixels_per_point`, and
+/// View › Interface size is `ctx.zoom_factor`; neither is this factor.
+///
+/// It used to be 0.8, so a default 20 px row was drawn 16 pt tall. That was not undoing
+/// another scale: font points become pixels once (`* 96/72`), print uses its own
+/// `PX_TO_PT` (0.75), and Page Layout multiplies by this same factor. 0.8 therefore drew
+/// 100% zoom at 80% of a 1:1 sheet, which fits more columns and makes the type too small.
+pub const DISPLAY_SCALE: f32 = 1.0;
 
 /// The zoom percentages a Ctrl+wheel notch steps between: four per doubling (about 20% apart),
 /// so 25, 50, 100, 200 and 400 are on it. Excel steps 15 points a notch instead; the status bar's
