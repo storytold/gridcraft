@@ -1,10 +1,10 @@
 use super::frame::{Bx, CatAxis, ValAxis, frame, on, value_range};
 use super::legend::{cat_label, plot_kind};
-use super::lines::{decimate, draw_markers, draw_runs};
+use super::lines::{decimate_area, draw_markers, draw_runs};
 use super::trend::{draw_trend_labels, draw_trendlines, max_backward, max_forward, max_forward_slots, supports_trendline};
 use super::{
     Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_LINE_PTS, MAX_MARKERS, Prim, Scale, SeriesData, TEXT,
-    VAlign, WHITE, clean, fixed_scale, nice_scale,
+    VAlign, WHITE, clean, nice_scale,
 };
 
 // ---------------------------------------------------------------- cartesian (column/bar/line/area/combo)
@@ -96,8 +96,11 @@ fn series_spans(data: &ChartData, fams: &[Fam], sec: &[bool], ncat: usize) -> Ve
         } else {
             None
         };
-        let mut row = Vec::with_capacity(ncat);
-        for j in 0..ncat {
+        // A series without values has no spans: 255 empty series over 20,000 categories would
+        // otherwise fill ~5 million entries.
+        let n = if s.values.is_empty() { 0 } else { ncat };
+        let mut row = Vec::with_capacity(n);
+        for j in 0..n {
             let v = s.values.get(j).copied().flatten();
             let span = match (si.and_then(|p| stacks.get_mut(p)), fam) {
                 (Some((_, pos, neg)), Fam::ColStack | Fam::Col100) => v.and_then(|v| {
@@ -142,7 +145,7 @@ fn axis_scales(data: &ChartData, fams: &[Fam], sec: &[bool], spans: &[Vec<Option
         }));
         let (lo, hi) = range.unwrap_or((0.0, 0.0));
         let (scale, fmt) = if all100 {
-            (fixed_scale(if lo < -1e-9 { -1.0 } else { 0.0 }, if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, 0.2), Fmt::new("0%"))
+            (Scale { min: if lo < -1e-9 { -1.0 } else { 0.0 }, max: if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, step: 0.2 }, Fmt::new("0%"))
         } else {
             let code = members.first().and_then(|i| data.series.get(*i)).map(|s| s.number_format.as_str()).unwrap_or("General");
             (nice_scale(lo, hi, force_zero), Fmt::new(code))
@@ -184,7 +187,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     if ncat == 0 {
         return;
     }
-    let kinds: Vec<ChartKind> = data.series.iter().map(|s| if horizontal { chart.kind } else { plot_kind(chart, s) }).collect();
+    let kinds: Vec<ChartKind> = data.series.iter().enumerate().map(|(i, s)| if horizontal { chart.kind } else { plot_kind(chart, s, i) }).collect();
     let fams: Vec<Fam> = kinds.iter().map(|k| family(*k)).collect();
     let any_primary = data.series.iter().any(|s| !s.secondary);
     let sec: Vec<bool> = data.series.iter().map(|s| s.secondary && any_primary && !horizontal).collect();
@@ -268,10 +271,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                             base = vec![[b[0] - cw * 0.3, b[1]], [b[0] + cw * 0.3, b[1]]];
                         }
                     }
-                    let top = decimate(top, MAX_LINE_PTS * 2);
-                    let base = decimate(base, MAX_LINE_PTS * 2);
-                    let mut poly = top;
-                    poly.extend(base.into_iter().rev());
+                    let poly = decimate_area(top, base, MAX_LINE_PTS * 2);
                     if poly.len() >= 3 {
                         ctx.out.push(Prim::Polygon { pts: poly, fill: s.color, stroke: None });
                     }
@@ -452,4 +452,19 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
         draw_trendlines(ctx, s, &pts, &frac, &px, &mut trend_labels, (xs.min, xs.max));
     }
     draw_trend_labels(ctx, plot, &trend_labels);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_series_get_no_span_entries() {
+        let empty = SeriesData::default();
+        let full = SeriesData { values: vec![Some(1.0); 3], ..SeriesData::default() };
+        let data = ChartData { series: vec![empty.clone(), full, empty], ..ChartData::default() };
+        let fams = [Fam::Col; 3];
+        let spans = series_spans(&data, &fams, &[false; 3], MAX_CATS);
+        assert_eq!(spans.iter().map(Vec::len).collect::<Vec<_>>(), [0, MAX_CATS, 0]);
+    }
 }
