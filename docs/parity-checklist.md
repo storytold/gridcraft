@@ -16,7 +16,7 @@ Each entry is an Excel ribbon or menu command (feature names only). It counts as
 | Formulas | 23 | 23 | 100% |
 | Data | 23 | 28 | 82% |
 | Review | 15 | 18 | 83% |
-| View | 21 | 21 | 100% |
+| View | 23 | 23 | 100% |
 | Automate | 4 | 4 | 100% |
 | Developer | 4 | 4 | 100% |
 | Table Design | 13 | 13 | 100% |
@@ -300,7 +300,7 @@ Missing:
 - `review.translate` Translate (Language)
 - `review.showChanges` Show Changes (Changes)
 
-## View (21 / 21, 100%)
+## View (23 / 23, 100%)
 
 Implemented:
 
@@ -310,6 +310,8 @@ Implemented:
 - `view.customViews` Custom Views (Workbook Views)
 - `view.ruler` Ruler (Show)
 - `view.formulaBar` Formula Bar (Show)
+- `view.focusCell` Focus Cell (Show)
+- `view.focusCellColor` Focus Cell Color (Show)
 - `view.zoom` Zoom (Zoom)
 - `view.zoom100` 100% (Zoom)
 - `view.zoomToSelection` Zoom to Selection (Zoom)
