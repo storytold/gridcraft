@@ -22,7 +22,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
     let page_layout =
         app.session.active().and_then(|d| d.wb.active().map(|s| s.view == gridcraft_engine::model::SheetViewMode::PageLayout)).unwrap_or(false);
     // Two columns of two, as in Excel's Show group: four stacked rows overflow the ribbon body.
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         // Rulers exist only in Page Layout view.
         let mut ruler = !app.session.hide_ruler;
         let ruler_resp = ui.add_enabled(page_layout, egui::Checkbox::new(&mut ruler, lang.tr("Ruler")));
@@ -31,22 +31,22 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
             act(app, "view.ruler", json!({"on": ruler}));
         }
         let mut g = s.0;
-        let resp = ui.checkbox(&mut g, lang.tr("Gridlines"));
+        let resp = crate::rtl::checkbox(ui, &mut g, lang.tr("Gridlines"));
         control_keytip(app, ui, &resp, "view.gridlines");
         if resp.changed() {
             act(app, "view.gridlines", json!({"on": g}));
         }
     });
     ui.add_space(6.0);
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         let mut fb = app.session.prefs.formula_bar;
-        let resp = ui.checkbox(&mut fb, lang.tr("Formula Bar"));
+        let resp = crate::rtl::checkbox(ui, &mut fb, lang.tr("Formula Bar"));
         control_keytip(app, ui, &resp, "view.formulaBar");
         if resp.changed() || invoke(app, "view.formulaBar") {
             act(app, "view.formulaBar", json!({"on": checkbox_on(resp.changed(), fb)}));
         }
         let mut h = s.1;
-        let resp = ui.checkbox(&mut h, lang.tr("Headings"));
+        let resp = crate::rtl::checkbox(ui, &mut h, lang.tr("Headings"));
         control_keytip(app, ui, &resp, "view.headings");
         if resp.changed() {
             act(app, "view.headings", json!({"on": h}));
@@ -86,7 +86,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
     {
         keytip(app, ui, sequence, fp.rect.center_bottom());
     }
-    egui::Popup::menu(&fp).show(|ui| {
+    crate::rtl::menu(&fp).show(|ui| {
         menu_items(
             app,
             ui,
@@ -99,7 +99,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
         );
     });
     switch_windows(app, ui);
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         let label_response = ui.label(lang.tr("Display theme"));
         let mode = app.ui.theme_mode();
         let label = match mode {
@@ -121,13 +121,13 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
             .labelled_by(label_response.id);
         let mut animations = app.ui.animations;
         let hint = lang.tr("Glide the selection outline to the cell you move to instead of jumping there");
-        if ui.checkbox(&mut animations, lang.tr("Animations")).on_hover_text(hint).changed() {
+        if crate::rtl::checkbox(ui, &mut animations, lang.tr("Animations")).on_hover_text(hint).changed() {
             act(app, "view.animations", json!({"on": animations}));
         }
     });
     sep(ui);
     // Interface size (issue #230): scales the whole window on top of the desktop's scale.
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         let label = ui.label(egui::RichText::new(lang.tr("Interface size")).font(theme::ui_font(11.5)).color(t.text_dim));
         let current = app.ui.interface_scale;
         let text = |v: u16| if v == 100 { lang.tr("Auto").to_string() } else { format!("{v}%") };
@@ -146,7 +146,7 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
     });
     // Interface language: settings live in the View tab, like Excel's Options. The label follows
     // the current language so it stays readable; the choices are always shown in their own script.
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         let label = ui.label(egui::RichText::new(lang.tr("Interface language")).font(theme::ui_font(11.5)).color(t.text_dim));
         craft_ui::ComboBox::from_id_salt("ui_language")
             .width(120.0)
@@ -170,7 +170,7 @@ fn switch_windows(app: &mut SheetApp, ui: &mut Ui) {
     anchor.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Switch Windows"));
     control_keytip(app, ui, &anchor, "view.switchWindows");
     let forced = std::mem::take(&mut app.open_switch_windows) | invoke(app, "view.switchWindows");
-    egui::Popup::menu(&anchor).open_memory(popup_command(forced, anchor.clicked())).show(|ui| {
+    crate::rtl::menu(&anchor).open_memory(popup_command(forced, anchor.clicked())).show(|ui| {
         for w in app.open_windows() {
             let label = theme::available_text(ui, &format!("{}{}", if w.active { "✓ " } else { "    " }, w.label()));
             if ui.add(egui::Button::selectable(w.active, label).min_size(vec2(220.0, 22.0))).clicked() {

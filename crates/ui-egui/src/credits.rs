@@ -211,41 +211,49 @@ impl Default for View {
 
 /// About ▸ Contributors: a name toggle, a sort, and the list as a grab bag or a table.
 pub fn contributors_ui(ui: &mut egui::Ui) {
+    let lang = crate::i18n::current(ui.ctx());
     let id = egui::Id::unique("credits_view");
     let mut v = ui.data_mut(|d| d.get_temp::<View>(id)).unwrap_or_default();
     ui.horizontal_wrapped(|ui| {
-        ui.label("Show");
+        ui.label(lang.tr("Show"));
         for m in NameMode::ALL {
-            if ui.selectable_label(v.names == m, m.label()).clicked() {
+            if ui.selectable_label(v.names == m, lang.tr(m.label())).clicked() {
                 v.names = m;
             }
         }
         ui.separator();
-        ui.label("Sort");
-        craft_ui::ComboBox::from_id_salt("credits_sort").selected_text(v.key.label().0).show_ui(ui, |ui| {
+        ui.label(lang.tr("Sort"));
+        craft_ui::ComboBox::from_id_salt("credits_sort").selected_text(lang.tr(v.key.label().0)).show_ui(ui, |ui| {
             for k in SortKey::ALL {
-                if ui.selectable_label(v.key == k, k.label().0).clicked() {
+                if ui.selectable_label(v.key == k, lang.tr(k.label().0)).clicked() {
                     v.key = k;
                     v.ascending = k.default_ascending();
                 }
             }
         });
-        if ui.button(if v.ascending { "▲" } else { "▼" }).on_hover_text("Reverse the order").clicked() {
+        if ui.button(if v.ascending { "▲" } else { "▼" }).on_hover_text(lang.tr("Reverse the order")).clicked() {
             v.ascending = !v.ascending;
         }
         ui.separator();
-        if ui.selectable_label(!v.table, "Grab bag").clicked() {
+        if ui.selectable_label(!v.table, lang.tr("Grab bag")).clicked() {
             v.table = false;
         }
-        if ui.selectable_label(v.table, "Table").clicked() {
+        if ui.selectable_label(v.table, lang.tr("Table")).clicked() {
             v.table = true;
         }
     });
     let list = sorted(CONTRIBUTORS, v.names, v.key, v.ascending);
-    ui.label(RichText::new(format!("{} contributors · {} commits", list.len(), group(TOTAL_COMMITS))).small().weak());
+    ui.label(
+        RichText::new(lang.tr_with(
+            "{contributors} contributors · {commits} commits",
+            &[("contributors", &list.len().to_string()), ("commits", &group(TOTAL_COMMITS))],
+        ))
+        .small()
+        .weak(),
+    );
     ui.separator();
     if list.is_empty() {
-        ui.label("No contributor data was built into this copy.");
+        ui.label(lang.tr("No contributor data was built into this copy."));
     } else if v.table {
         // The table scrolls vertically itself, under a fixed header; it only scrolls sideways
         // once its columns are dragged wider than the dialog.
@@ -363,8 +371,8 @@ fn cells(c: &Contributor) -> [String; 9] {
 
 /// A contributor-table header. The sorted column is highlighted; its direction shows on the
 /// toolbar's sort-order button, so no arrow widens the column.
-fn header_text(k: SortKey) -> RichText {
-    RichText::new(k.label().1).strong()
+fn header_text(ui: &egui::Ui, k: SortKey) -> RichText {
+    RichText::new(crate::i18n::current(ui.ctx()).tr(k.label().1)).strong()
 }
 
 fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View) {
@@ -374,15 +382,16 @@ fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View) {
         .iter()
         .enumerate()
         .map(|(i, &k)| match i.checked_sub(1) {
-            None => natural(ui, header_text(k), list.iter().map(|c| c.name(v.names))),
-            Some(col) => natural(ui, header_text(k), rows.iter().filter_map(|r| r.get(col).cloned())),
+            None => natural(ui, header_text(ui, k), list.iter().map(|c| c.name(v.names))),
+            Some(col) => natural(ui, header_text(ui, k), rows.iter().filter_map(|r| r.get(col).cloned())),
         })
         .collect();
     fitted_table(ui, "credits_table", &widths, &CONTRIBUTOR_GROW)
         .header(h + 4.0, |mut header| {
             for k in SortKey::ALL {
                 header.col(|ui| {
-                    let r = aligned(ui, k != SortKey::Name, |ui| ui.selectable_label(v.key == k, header_text(k))).on_hover_text(k.label().0);
+                    let r = aligned(ui, k != SortKey::Name, |ui| ui.selectable_label(v.key == k, header_text(ui, k)))
+                        .on_hover_text(crate::i18n::current(ui.ctx()).tr(k.label().0));
 
                     if r.clicked() {
                         if v.key == k {
@@ -414,13 +423,14 @@ fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View) {
 
 /// About ▸ Models: AI models credited in Co-Authored-By trailers.
 pub fn models_ui(ui: &mut egui::Ui) {
+    let lang = crate::i18n::current(ui.ctx());
     if MODELS.is_empty() {
-        ui.label("No model credits were built into this copy.");
+        ui.label(lang.tr("No model credits were built into this copy."));
         return;
     }
     let assisted: u64 = MODELS.iter().map(|m| m.commits).max().unwrap_or(0).max(1);
     let h = row_height(ui);
-    let titles = ["Company", "Model", "Version", "Commits", "% of all commits", "Lines +/−"];
+    let titles = ["Company", "Model", "Version", "Commits", "% of all commits", "Lines +/−"].map(|t| lang.tr(t));
     // Company, Model and Version read as text; the counts line up on the right.
     let right = [false, false, false, true, true, true];
     let rows: Vec<[String; 6]> = MODELS

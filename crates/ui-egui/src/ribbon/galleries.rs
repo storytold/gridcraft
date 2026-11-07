@@ -7,7 +7,7 @@ pub(super) fn table_gallery(app: &mut SheetApp, ui: &mut Ui, cmd: &str) {
     let Some(wb) = app.session.active().map(|d| d.wb.clone()) else { return };
     for (fam, n) in [("Light", 21u32), ("Medium", 28), ("Dark", 11)] {
         ui.label(egui::RichText::new(fam).strong());
-        egui::Grid::new(("tg", fam)).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
+        crate::rtl::grid(ui, egui::Grid::new(("tg", fam)).spacing(vec2(4.0, 4.0)), |ui| {
             for i in 1..=n {
                 let name = format!("TableStyle{fam}{i}");
                 let (r, resp) = ui.allocate_exact_size(vec2(54.0, 38.0), Sense::click());
@@ -100,7 +100,7 @@ pub(super) fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
     ];
     for (g, names) in groups {
         ui.label(egui::RichText::new(*g).strong());
-        egui::Grid::new(("csg", *g)).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
+        crate::rtl::grid(ui, egui::Grid::new(("csg", *g)).spacing(vec2(4.0, 4.0)), |ui| {
             for (i, n) in names.iter().enumerate() {
                 let st = gridcraft_engine::cmd::format::builtin_cell_style(n, &wb.theme).unwrap_or_default();
                 let (r, resp) = ui.allocate_exact_size(vec2(82.0, 24.0), Sense::click());

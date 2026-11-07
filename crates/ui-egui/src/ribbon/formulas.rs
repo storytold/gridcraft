@@ -65,7 +65,7 @@ fn library_button(app: &mut SheetApp, ui: &mut Ui, item: &LibraryItem) {
     let anchor = small_button_accent(ui, Icon::FnBook(glyph), accent, item.label, item.label, true);
     control_keytip(app, ui, &anchor, item.keytip);
     let forced = invoke(app, item.keytip);
-    egui::Popup::menu(&anchor).open_memory(popup_command(forced, anchor.clicked())).show(|ui| match item.menu {
+    crate::rtl::menu(&anchor).open_memory(popup_command(forced, anchor.clicked())).show(|ui| match item.menu {
         LibraryMenu::Recent => function_library::recent_menu(app, ui),
         LibraryMenu::Category(id) => function_library::category_menu(app, ui, id),
         LibraryMenu::More => function_library::more_menu(app, ui),
@@ -89,9 +89,9 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         act(app, "formulas.autoSum", json!({}));
     }
     let forced = invoke(app, "formulas.autoSum");
-    egui::Popup::menu(&sum_arrow).open_memory(popup_command(forced, sum_arrow.clicked())).show(|ui| function_library::auto_sum_menu(app, ui));
+    crate::rtl::menu(&sum_arrow).open_memory(popup_command(forced, sum_arrow.clicked())).show(|ui| function_library::auto_sum_menu(app, ui));
     for column in LIBRARY.chunks(3) {
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             for item in column {
                 library_button(app, ui, item);
             }
@@ -103,7 +103,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.open_dialog("nameManager", json!({}));
     }
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         let __k = small_button(ui, Icon::Name, "Define Name", "Define Name", false);
         control_keytip(app, ui, &__k, "dialog:defineName");
         if __k.clicked() {
@@ -111,7 +111,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         }
         let use_in = small_button(ui, Icon::Function, "Use in Formula", "Use in Formula", true);
         anchor_keytip(app, ui, &use_in, &["dialog:pasteName"]);
-        egui::Popup::menu(&use_in).show(|ui| {
+        crate::rtl::menu(&use_in).show(|ui| {
             // The menu lists the names Paste Names lists; clicking one runs `formulas.useInFormula`, which puts it at the caret.
             // Listed when the menu opens, and again only after the workbook changes.
             let cache = egui::Id::unique("gridcraft.use_in_formula_names");
@@ -149,7 +149,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui);
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         if small_button(ui, Icon::Trace, "Trace Precedents", "Trace Precedents", false).clicked()
             && let Ok(r) = app.run("formulas.tracePrecedents", json!({}))
         {
@@ -164,7 +164,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
             app.grid.trace = None;
         }
     });
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         let __k = small_button(ui, Icon::Fx, "Show Formulas", "Show Formulas", false);
         control_keytip(app, ui, &__k, "formulas.showFormulas");
         if __k.clicked() {
@@ -175,7 +175,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         if ec.clicked() {
             app.open_dialog("errorChecking", json!({}));
         }
-        egui::Popup::menu(&ec_arrow).show(|ui| {
+        crate::rtl::menu(&ec_arrow).show(|ui| {
             let lang = app.ui.language;
             if ui.button(format!("{}…", lang.tr("Error Checking"))).clicked() {
                 app.open_dialog("errorChecking", json!({}));
@@ -216,7 +216,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
     for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["formulas.calculationOptions"]) {
         keytip(app, ui, sequence, co.rect.center_bottom());
     }
-    egui::Popup::menu(&co).show(|ui| {
+    crate::rtl::menu(&co).show(|ui| {
         menu_items(
             app,
             ui,
@@ -227,7 +227,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         let __k = small_button(ui, Icon::Calc, "Calculate Now", "Calculate Now (F9)", false);
         control_keytip(app, ui, &__k, "formulas.calculateNow");
         if __k.clicked() {

@@ -35,133 +35,141 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let ch = TITLE_CONTROL_H;
     egui::Panel::top("title_bar").exact_size(TITLE_BAR_H).frame(egui::Frame::NONE.fill(t.window)).show(ui, |ui| {
-        let rect = ui.max_rect();
-        // Dragging the empty title area moves the window.
-        let bg = ui.interact(rect, ui.scope_id().with("drag_title"), Sense::click_and_drag());
-        if bg.drag_started() {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-        }
-        if bg.double_clicked() {
-            let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
-        }
-        ui.horizontal_centered(|ui| {
-            ui.add_space(TITLE_LEFT_PAD);
-            // AutoSave toggle (saves after each change when the workbook has a file).
-            ui.label(egui::RichText::new(app.ui.language.tr("AutoSave")).font(theme::ui_font(12.5)).color(t.text_dim));
-            let on = app.ui.autosave;
-            let (r, resp) = ui.allocate_exact_size(vec2(30.0, 16.0), Sense::click());
-            ui.painter().rect_filled(r, 8.0, if on { t.accent } else { Color32::TRANSPARENT });
-            ui.painter().rect_stroke(r, 8.0, Stroke::new(1.0, if on { t.accent } else { t.text_dim }), StrokeKind::Inside);
-            let knob = if on { pos2(r.right() - 8.0, r.center().y) } else { pos2(r.left() + 8.0, r.center().y) };
-            ui.painter().circle_filled(knob, 5.0, if on { t.on_accent } else { t.text_dim });
-            if resp.on_hover_text(app.ui.language.tr("AutoSave: save after every change (workbooks saved to a file)")).clicked() {
-                app.toggle_autosave();
+        crate::rtl::root(ui, |ui| {
+            let rect = ui.max_rect();
+            let rtl = crate::rtl::on(ui.ctx());
+            let lang = app.ui.language;
+            // Dragging the empty title area moves the window.
+            let bg = ui.interact(rect, ui.scope_id().with("drag_title"), Sense::click_and_drag());
+            if bg.drag_started() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
-            ui.add_space(6.0);
-            let __k = icon_button(ui, Icon::Home, t.text_dim, "Home", vec2(26.0, ch));
-            control_keytip(app, ui, &__k, "start");
-            if __k.clicked() {
-                app.open_dialog("start", json!({}));
+            if bg.double_clicked() {
+                let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
             }
-            if icon_button(ui, Icon::Save, t.text_dim, "Save", vec2(26.0, ch)).clicked()
+            ui.horizontal_centered(|ui| {
+                // The macOS traffic lights stay at the left edge, which is the far end when mirrored.
+                ui.add_space(if rtl { 8.0 } else { TITLE_LEFT_PAD });
+                // AutoSave toggle (saves after each change when the workbook has a file).
+                ui.label(egui::RichText::new(lang.tr("AutoSave")).font(theme::ui_font(12.5)).color(t.text_dim));
+                let on = app.ui.autosave;
+                let (r, resp) = ui.allocate_exact_size(vec2(30.0, 16.0), Sense::click());
+                ui.painter().rect_filled(r, 8.0, if on { t.accent } else { Color32::TRANSPARENT });
+                ui.painter().rect_stroke(r, 8.0, Stroke::new(1.0, if on { t.accent } else { t.text_dim }), StrokeKind::Inside);
+                let knob_on = crate::rtl::lead_x(!rtl, r, 8.0);
+                let knob_off = crate::rtl::lead_x(rtl, r, 8.0);
+                let knob = pos2(if on { knob_on } else { knob_off }, r.center().y);
+                ui.painter().circle_filled(knob, 5.0, if on { t.on_accent } else { t.text_dim });
+                if resp.on_hover_text(app.ui.language.tr("AutoSave: save after every change (workbooks saved to a file)")).clicked() {
+                    app.toggle_autosave();
+                }
+                ui.add_space(6.0);
+                let __k = icon_button(ui, Icon::Home, t.text_dim, "Home", vec2(26.0, ch));
+                control_keytip(app, ui, &__k, "start");
+                if __k.clicked() {
+                    app.open_dialog("start", json!({}));
+                }
+                if icon_button(ui, Icon::Save, t.text_dim, "Save", vec2(26.0, ch)).clicked()
                 // File operations must include the cell the user is still editing (as the File > Save menu item already does).
                 && app.commit_edit(0, 0, false, false)
-            {
-                app.run_or_alert("file.save", json!({}));
-            }
-            // The commands' own availability: there must be a step, and no undo group may be open on
-            // the document (an action that spans several calls is still running).
-            let can_undo = gridcraft_engine::cmd::can_undo(&app.session).is_ok();
-            let can_redo = gridcraft_engine::cmd::can_redo(&app.session).is_ok();
-            // Named and marked enabled or not for assistive technology (and the UI tests).
-            let undo = icon_button(ui, Icon::Undo, if can_undo { t.text_dim } else { t.text_disabled }, "Undo", vec2(26.0, ch));
-            undo.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, can_undo, "Undo"));
-            if undo.clicked() && can_undo {
-                app.run_or_alert("edit.undo", json!({}));
-            }
-            let undo_list = icon_button(ui, Icon::Chevron, t.text_dim, "Undo list", vec2(14.0, ch));
-            egui::Popup::menu(&undo_list).show(|ui| {
-                let labels: Vec<String> = if can_undo {
-                    app.session.active().map(|d| d.undo.iter().rev().take(20).map(|e| e.label.clone()).collect()).unwrap_or_default()
-                } else {
-                    Vec::new()
-                };
-                if labels.is_empty() {
-                    ui.label("Can't Undo");
+                {
+                    app.run_or_alert("file.save", json!({}));
                 }
-                for (i, l) in labels.iter().enumerate() {
-                    if ui.button(format!("Undo {l}")).clicked() {
-                        app.run_or_alert("edit.undo", json!({"steps": i + 1}));
+                // The commands' own availability: there must be a step, and no undo group may be open on
+                // the document (an action that spans several calls is still running).
+                let can_undo = gridcraft_engine::cmd::can_undo(&app.session).is_ok();
+                let can_redo = gridcraft_engine::cmd::can_redo(&app.session).is_ok();
+                // Named and marked enabled or not for assistive technology (and the UI tests).
+                let undo = icon_button(ui, Icon::Undo, if can_undo { t.text_dim } else { t.text_disabled }, "Undo", vec2(26.0, ch));
+                undo.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, can_undo, "Undo"));
+                if undo.clicked() && can_undo {
+                    app.run_or_alert("edit.undo", json!({}));
+                }
+                let undo_list = icon_button(ui, Icon::Chevron, t.text_dim, "Undo list", vec2(14.0, ch));
+                crate::rtl::menu(&undo_list).show(|ui| {
+                    let labels: Vec<String> = if can_undo {
+                        app.session.active().map(|d| d.undo.iter().rev().take(20).map(|e| e.label.clone()).collect()).unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
+                    if labels.is_empty() {
+                        ui.label(lang.tr("Can't Undo"));
                     }
-                }
-            });
-            let redo = icon_button(ui, Icon::Redo, if can_redo { t.text_dim } else { t.text_disabled }, "Redo", vec2(26.0, ch));
-            redo.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, can_redo, "Redo"));
-            if redo.clicked() && can_redo {
-                app.run_or_alert("edit.redo", json!({}));
-            }
-            let more = icon_button(ui, Icon::More, t.text_dim, "More commands", vec2(26.0, ch));
-            egui::Popup::menu(&more).show(|ui| {
-                for (label, id) in [
-                    ("New Workbook", "file.new"),
-                    ("Open…", "file.open"),
-                    ("Save As…", "file.saveAs"),
-                    ("Sort A to Z", "data.sortAscending"),
-                    ("Calculate Now", "formulas.calculateNow"),
-                ] {
-                    if ui.button(label).clicked() {
-                        app.run_or_alert(id, json!({}));
-                    }
-                }
-                if ui.button("Print…").clicked() {
-                    app.print_now(json!({}));
-                }
-            });
-            let left_end = ui.min_rect().right();
-            let right = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_space(8.0);
-                let __k = icon_button(ui, Icon::Search, t.text_dim, "Search commands", vec2(28.0, ch));
-                control_keytip(app, ui, &__k, "commandSearch");
-                if __k.clicked() {
-                    app.open_dialog("commandSearch", json!({}));
-                }
-                let share = small_button(ui, Icon::Share, "Share", "Share: export or save a copy", true);
-                egui::Popup::menu(&share).show(|ui| {
-                    if ui.button("Export as PDF…").clicked() {
-                        app.run_or_alert("file.exportPdf", json!({}));
-                    }
-                    for (label, fmt) in
-                        [("Save a Copy as Excel Workbook (.xlsx)…", "xlsx"), ("Export as CSV…", "csv"), ("Export as Web Page (.html)…", "html")]
-                    {
-                        if ui.button(label).clicked() {
-                            app.open_dialog("saveCopy", json!({"format": fmt}));
+                    for (i, l) in labels.iter().enumerate() {
+                        if ui.button(lang.tr_with("Undo {label}", &[("label", l)])).clicked() {
+                            app.run_or_alert("edit.undo", json!({"steps": i + 1}));
                         }
                     }
                 });
-                let __k = icon_button(ui, Icon::Comment, t.text_dim, "Comments", vec2(28.0, ch));
-                control_keytip(app, ui, &__k, "comments");
-                if __k.clicked() {
-                    app.open_dialog("comments", json!({}));
+                let redo = icon_button(ui, Icon::Redo, if can_redo { t.text_dim } else { t.text_disabled }, "Redo", vec2(26.0, ch));
+                redo.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, can_redo, "Redo"));
+                if redo.clicked() && can_redo {
+                    app.run_or_alert("edit.redo", json!({}));
                 }
-                // Quick light/dark switch (#194); right-click offers System as well. The same
-                // choice lives in File › Display theme and the View tab.
-                let lang = app.ui.language;
-                let theme = icon_button(ui, Icon::Appearance, t.text_dim, "Dark Mode", vec2(28.0, 26.0));
-                let dark = ui.ctx().theme() == egui::Theme::Dark;
-                theme.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, dark, lang.tr("Dark Mode")));
-                if theme.clicked() {
-                    act(app, "view.darkMode", json!({}));
-                }
-                theme.context_menu(|ui| theme_choices(app, ui));
-                ui.min_rect().left()
+                let more = icon_button(ui, Icon::More, t.text_dim, "More commands", vec2(26.0, ch));
+                crate::rtl::menu(&more).show(|ui| {
+                    for (label, id) in [
+                        ("New Workbook", "file.new"),
+                        ("Open…", "file.open"),
+                        ("Save As…", "file.saveAs"),
+                        ("Sort A to Z", "data.sortAscending"),
+                        ("Calculate Now", "formulas.calculateNow"),
+                    ] {
+                        if ui.button(lang.tr(label)).clicked() {
+                            app.run_or_alert(id, json!({}));
+                        }
+                    }
+                    if ui.button(lang.tr("Print…")).clicked() {
+                        app.print_now(json!({}));
+                    }
+                });
+                // The first cluster ends at `near_edge`; the far cluster (mirrored: the one at the left) runs from `far`.
+                let near_edge = if rtl { ui.min_rect().left() } else { ui.min_rect().right() };
+                let far = ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
+                    ui.add_space(if rtl { TITLE_LEFT_PAD } else { 8.0 });
+                    let __k = icon_button(ui, Icon::Search, t.text_dim, "Search commands", vec2(28.0, ch));
+                    control_keytip(app, ui, &__k, "commandSearch");
+                    if __k.clicked() {
+                        app.open_dialog("commandSearch", json!({}));
+                    }
+                    let share = small_button(ui, Icon::Share, "Share", "Share: export or save a copy", true);
+                    crate::rtl::menu(&share).show(|ui| {
+                        if ui.button(lang.tr("Export as PDF…")).clicked() {
+                            app.run_or_alert("file.exportPdf", json!({}));
+                        }
+                        for (label, fmt) in
+                            [("Save a Copy as Excel Workbook (.xlsx)…", "xlsx"), ("Export as CSV…", "csv"), ("Export as Web Page (.html)…", "html")]
+                        {
+                            if ui.button(lang.tr(label)).clicked() {
+                                app.open_dialog("saveCopy", json!({"format": fmt}));
+                            }
+                        }
+                    });
+                    let __k = icon_button(ui, Icon::Comment, t.text_dim, "Comments", vec2(28.0, ch));
+                    control_keytip(app, ui, &__k, "comments");
+                    if __k.clicked() {
+                        app.open_dialog("comments", json!({}));
+                    }
+                    // Quick light/dark switch (#194); right-click offers System as well. The same
+                    // choice lives in File › Display theme and the View tab.
+                    let theme = icon_button(ui, Icon::Appearance, t.text_dim, "Dark Mode", vec2(28.0, 26.0));
+                    let dark = ui.ctx().theme() == egui::Theme::Dark;
+                    theme.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, dark, lang.tr("Dark Mode")));
+                    if theme.clicked() {
+                        act(app, "view.darkMode", json!({}));
+                    }
+                    crate::rtl::context_menu(&theme, |ui| theme_choices(app, ui));
+                    if rtl { ui.min_rect().right() } else { ui.min_rect().left() }
+                });
+                let (left_end, right_start) = if rtl { (far.inner, near_edge) } else { (near_edge, far.inner) };
+                // Centred title, cut with "…" so it never runs under the controls on either side.
+                let title = app.session.active().map(|d| d.display_title()).unwrap_or_default();
+                let dirty = app.session.active().is_some_and(|d| d.is_dirty());
+                let max_w = title_max_width(rect.center().x, left_end, right_start);
+                paint_title(ui, rect.center(), &title, dirty, max_w, t.text);
             });
-            // Centred title, cut with "…" so it never runs under the controls on either side.
-            let title = app.session.active().map(|d| d.display_title()).unwrap_or_default();
-            let dirty = app.session.active().is_some_and(|d| d.is_dirty());
-            let max_w = title_max_width(rect.center().x, left_end, right.inner);
-            paint_title(ui, rect.center(), &title, dirty, max_w, t.text);
-        });
+        })
     });
 }
 

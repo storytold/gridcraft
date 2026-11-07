@@ -61,6 +61,9 @@ sync_github_name = true
 display_name = "Netter"
 sync_github_name = false
 
+[people.tlomts-dev]
+display_name = "The Legend Of MTS Dev"
+sync_github_name = false
 [people.Shnrqpdr]
 sync_github_name = true
 

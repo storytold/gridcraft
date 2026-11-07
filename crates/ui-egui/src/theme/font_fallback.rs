@@ -57,6 +57,7 @@ pub(super) fn fallback_faces(han: HanOrder) -> Vec<(&'static str, Vec<(String, u
         ("sys-thai", thai()),
         ("sys-lao", lao()),
         ("sys-hebrew", hebrew()),
+        ("sys-arabic", arabic()),
         ("sys-symbols", symbols()),
         ("sys-symbols-2", symbols_more()),
     ]
@@ -240,6 +241,27 @@ pub(super) fn hebrew() -> Vec<(String, u32)> {
         ],
         &["NotoSansHebrew-Regular.ttf", "dejavu/DejaVuSans.ttf", "freefont/FreeSans.ttf"],
         "/usr/share/fonts/google-noto-vf/NotoSansHebrew[wght].ttf",
+    )
+}
+
+/// Arabic faces. Windows has Segoe UI and Tahoma (both carry Arabic) plus Traditional Arabic and
+/// Arabic Typesetting; macOS has Geeza Pro and Al Nile; Linux usually has Noto Sans Arabic, Noto
+/// Naskh Arabic, DejaVu Sans or an Amiri or KACST face. [`load_fallback`] skips a file Hebrew or
+/// Thai already loaded (Tahoma covers all three).
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn arabic() -> Vec<(String, u32)> {
+    script_fonts(
+        // Segoe UI, Tahoma, Traditional Arabic, Arabic Typesetting, Arial
+        &["segoeui.ttf", "tahoma.ttf", "trado.ttf", "arabtype.ttf", "arial.ttf"],
+        &[
+            "/System/Library/Fonts/GeezaPro.ttc",
+            "/System/Library/Fonts/Supplemental/Al Nile.ttc",
+            "/System/Library/Fonts/Supplemental/Baghdad.ttf",
+            "/System/Library/Fonts/Supplemental/Damascus.ttf",
+        ],
+        &["NotoSansArabic-Regular.ttf", "NotoNaskhArabic-Regular.ttf", "dejavu/DejaVuSans.ttf", "amiri/Amiri-Regular.ttf", "kacst/KacstBook.ttf"],
+        // Fedora ships the variable Noto Sans Arabic; its default instance is Regular.
+        "/usr/share/fonts/google-noto-vf/NotoSansArabic[wdth,wght].ttf",
     )
 }
 
