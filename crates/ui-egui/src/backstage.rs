@@ -358,6 +358,35 @@ fn new_tiles(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
             }
         }
     });
+    let folder = app.ui.personal_templates_location.trim();
+    if !folder.is_empty() {
+        ui.add_space(22.0);
+        ui.heading("Personal templates");
+        let mut templates: Vec<std::path::PathBuf> = std::fs::read_dir(folder)
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.is_file()
+                    && p.extension()
+                        .and_then(std::ffi::OsStr::to_str)
+                        .is_some_and(|x| x.eq_ignore_ascii_case("xltx") || x.eq_ignore_ascii_case("xltm"))
+            })
+            .collect();
+        templates.sort();
+        if templates.is_empty() {
+            dim(ui, "No .xltx or .xltm templates found in this folder.");
+        }
+        for path in templates {
+            let label = path.file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Template");
+            if ui.button(label).clicked() {
+                app.run_or_alert("file.open", json!({"path": path.to_string_lossy(), "template": true}));
+                out.close = true;
+            }
+        }
+    }
 }
 
 /// File name and folder of a recent path, split as text.

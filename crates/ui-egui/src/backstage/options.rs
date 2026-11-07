@@ -31,6 +31,16 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
         app.toggle_autosave();
     }
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.label("Default personal templates location:");
+        ui.add(
+            egui::TextEdit::singleline(&mut app.ui.personal_templates_location)
+                .desired_width(360.0)
+                .hint_text("Folder containing .xltx and .xltm files"),
+        );
+    });
+    dim(ui, "Templates create a new workbook; the original template is never overwritten.");
     let Some((calc, view)) = app.session.active().map(|d| (d.wb.calc.clone(), d.wb.view)) else { return };
     ui.add_space(18.0);
     // Excel's Advanced › Display options for this workbook: saved with the workbook (#3101).
