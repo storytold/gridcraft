@@ -205,6 +205,24 @@ fn model_json_deserializes_and_parses_measures() {
 }
 
 #[test]
+fn measure_home_table_must_exist_in_the_model() {
+    let json = r#"{
+        "tables": [{"name":"Sales","columns":[{"name":"Amount","data_type":"Double"}]}],
+        "measures": [{"name":"Total","formula":"SUM(Sales[Amount])","table":"Salez"}]
+    }"#;
+    let mut model: DataModel = serde_json::from_str(json).expect("json loads");
+    let error = model.parse_formulas().expect_err("a measure on a missing table is rejected");
+    assert!(error.message.contains("Salez"), "the error names the unknown table: {}", error.message);
+
+    let valid = r#"{
+        "tables": [{"name":"Sales","columns":[{"name":"Amount","data_type":"Double"}]}],
+        "measures": [{"name":"Total","formula":"SUM(Sales[Amount])","table":"sales"}]
+    }"#;
+    let mut model: DataModel = serde_json::from_str(valid).expect("json loads");
+    model.parse_formulas().expect("a home table matching ignoring case still validates");
+}
+
+#[test]
 fn documented_keyword_arguments_bind_instead_of_resolving_as_names() {
     let model = sample_model();
     // CROSSFILTER's direction words are documented enum values, including the two directional

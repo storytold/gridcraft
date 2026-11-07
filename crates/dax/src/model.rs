@@ -220,7 +220,8 @@ impl DataModel {
     /// Parses every measure formula and validates table/column/relationship names.
     ///
     /// Names are compared case-insensitively. Duplicate table names, duplicate column names
-    /// within a table, and relationships naming missing tables/columns are rejected.
+    /// within a table, a measure naming a table the model does not have, and relationships naming
+    /// missing tables/columns are rejected.
     pub fn parse_formulas(&mut self) -> Result<(), ModelError> {
         let mut tables: BTreeMap<String, usize> = BTreeMap::new();
         for (index, table) in self.tables.iter().enumerate() {
@@ -247,6 +248,13 @@ impl DataModel {
             // silently hide the second formula.
             if names.insert(measure.name.to_ascii_lowercase(), ()).is_some() {
                 return Err(ModelError::new(format!("duplicate measure `{}`", measure.name)));
+            }
+            // A measure's home table is what `COUNTROWS()` and field-list placement resolve, so a
+            // misspelt table must fail here instead of later as a "no home table" evaluation error.
+            if let Some(table) = &measure.table
+                && !tables.contains_key(&table.to_ascii_lowercase())
+            {
+                return Err(ModelError::new(format!("measure `{}` names missing table `{table}`", measure.name)));
             }
             let expr = parse_expression(&measure.formula).map_err(|error| ModelError::new(format!("measure `{}`: {error}", measure.name)))?;
             measure.expr = Some(expr);

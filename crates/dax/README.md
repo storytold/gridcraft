@@ -390,7 +390,8 @@ Variadic overloads repeat their last parameter kind for every additional argumen
 }
 ```
 
-`DataModel::parse_formulas` parses each measure and validates table/column/relationship names.
+`DataModel::parse_formulas` parses each measure and validates table, column, measure home-table and
+relationship names.
 `Binder::bind_expression` resolves `Table[Column]`, measures, variables and function calls;
 `Binder::bind_measure` and `Binder::dependency_graph` expose direct measure dependencies and reject
 cycles. `Evaluator::new` pre-binds the measures and evaluates scalar or table expressions with a
