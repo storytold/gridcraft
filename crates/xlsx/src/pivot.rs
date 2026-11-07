@@ -78,6 +78,9 @@ fn func_name(f: PivotFunc) -> &'static str {
         PivotFunc::Min => "min",
         PivotFunc::Product => "product",
         PivotFunc::CountNumbers => "countNums",
+        // The file format's subtotal list has no distinct count (Excel keeps it in a Data Model
+        // extension), so the nearest function is written and the value field keeps its name.
+        PivotFunc::DistinctCount => "count",
         PivotFunc::StdDev => "stdDev",
         PivotFunc::StdDevP => "stdDevp",
         PivotFunc::Var => "var",
@@ -111,6 +114,7 @@ fn func_caption(f: PivotFunc) -> &'static str {
         PivotFunc::Min => "Min",
         PivotFunc::Product => "Product",
         PivotFunc::CountNumbers => "Count",
+        PivotFunc::DistinctCount => "Distinct Count",
         PivotFunc::StdDev => "StdDev",
         PivotFunc::StdDevP => "StdDevp",
         PivotFunc::Var => "Var",
