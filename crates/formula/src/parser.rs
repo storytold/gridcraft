@@ -66,7 +66,7 @@ fn parse_top(src: &str, locale: crate::FormulaLocale, allow_union: bool) -> Resu
     }
     let toks = tokenize_locale(body, locale).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
     let toks = significant_spaces(toks);
-    let mut p = Parser { toks, i: 0, depth: 0, input: locale == crate::FormulaLocale::Es };
+    let mut p = Parser { toks, i: 0, depth: 0, locale };
     let e = p.expr(0, allow_union)?;
     match p.peek() {
         Tok::Eof => Ok(e),
@@ -106,7 +106,7 @@ struct Parser {
     toks: Vec<Token>,
     i: usize,
     depth: usize,
-    input: bool,
+    locale: crate::FormulaLocale,
 }
 
 fn word_is_cols(w: &str) -> Option<(u32, bool)> {
@@ -434,9 +434,11 @@ impl Parser {
                 },
                 Tok::Text(s) => Expr::Text(Arc::from(s)),
                 Tok::Bool(b) => Expr::Bool(b),
-                Tok::Word(w) if self.input => crate::input::boolean_alias(&w)
-                    .map(Expr::Bool)
-                    .ok_or_else(|| self.err(format!("array constants may only contain constants, found {}", describe(&Tok::Word(w)))))?,
+                Tok::Word(w) if matches!(self.locale, crate::FormulaLocale::Es | crate::FormulaLocale::It) => {
+                    crate::input::boolean_alias(self.locale, &w)
+                        .map(Expr::Bool)
+                        .ok_or_else(|| self.err(format!("array constants may only contain constants, found {}", describe(&Tok::Word(w)))))?
+                }
                 Tok::Error(e) => Expr::Error(e),
                 t => return Err(self.err(format!("array constants may only contain constants, found {}", describe(&t)))),
             };
