@@ -417,6 +417,9 @@ impl PassHost<'_> {
             }
             _ => v,
         };
+        // Waiting for a new result: the cell says so, and its spill stays laid out until then.
+        let busy = self.wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.py.as_ref()).is_some_and(|p| p.busy);
+        let v = if busy { Value::Error(CellError::Busy) } else { v };
         self.results.insert(k, v.clone());
         v
     }

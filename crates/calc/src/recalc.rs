@@ -557,6 +557,16 @@ pub fn evaluate(wb: &Workbook, sheet: usize, at: CellRef, formula: &str) -> Valu
     evaluate_expr(wb, sheet, at, &expr)
 }
 
+/// What a reference expression names as seen from `at`: its areas, or a value when it names none
+/// (a defined name that holds a constant). Names and tables resolve as they do in a formula.
+pub fn evaluate_reference(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr) -> crate::eval::Ev {
+    let exprs = HashMap::default();
+    let mut rng = 0x1234_5678_9ABC_DEF0u64;
+    let mut host = PassHost::new(wb, &exprs, &mut rng, now_serial());
+    let mut ev = Evaluator::new(&mut host, sheet, at);
+    ev.eval(expr)
+}
+
 pub fn evaluate_expr(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr) -> Value {
     let exprs = HashMap::default();
     let mut rng = 0x1234_5678_9ABC_DEF0u64;
