@@ -48,6 +48,19 @@ impl<'h> Evaluator<'h> {
         Ev::R(vec![Area { sheet: base.sheet, range: RangeRef::new(CellRef::new(r0 as u32, c0 as u32), CellRef::new(r1 as u32, c1 as u32)) }])
     }
 
+    /// TAKE/DROP of one reference: the part it keeps, still a reference, as `ISREF(TAKE(A1:A5,3))` is in Excel.
+    pub(super) fn take_drop_area(area: Area, args: &[Arg], take: bool) -> Ev {
+        let (rows, cols) = (area.range.height() as usize, area.range.width() as usize);
+        let (r0, r1, c0, c1) = match gridcraft_functions::take_drop_window(rows, cols, args, take) {
+            Ok(window) => window,
+            Err(e) => return err(e),
+        };
+        let start = area.range.start;
+        let first = CellRef::new(start.row + r0 as u32, start.col + c0 as u32);
+        let last = CellRef::new(start.row + r1 as u32 - 1, start.col + c1 as u32 - 1);
+        Ev::R(vec![Area { sheet: area.sheet, range: RangeRef::new(first, last) }])
+    }
+
     pub(super) fn indirect(&mut self, args: &[Expr]) -> Ev {
         self.host.note_volatile();
         if args.is_empty() || args.len() > 2 {

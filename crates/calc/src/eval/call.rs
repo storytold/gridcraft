@@ -311,12 +311,22 @@ impl<'h> Evaluator<'h> {
             "PIVOTBY" => Some(3),
             _ => None,
         };
+        // TAKE/DROP: the one reference they were given, read only if they don't return a part of it.
+        let mut taken_area = None;
         for (i, a) in args.iter().enumerate() {
             let mut ev = self.eval(a);
             if lambda_at == Some(i)
                 && let Ev::L(l) = &ev
             {
                 lambda = Some(l.clone());
+                ev = Ev::V(Value::Empty);
+            }
+            if i == 0
+                && matches!(name, "TAKE" | "DROP")
+                && let Ev::R(areas) = &ev
+                && let [area] = areas.as_slice()
+            {
+                taken_area = Some(*area);
                 ev = Ev::V(Value::Empty);
             }
             if spec.category == gridcraft_functions::Category::Database
@@ -352,6 +362,15 @@ impl<'h> Evaluator<'h> {
                 ev => self.deref(ev),
             };
             evaluated.push(Arg { value, from_ref });
+        }
+        if let Some(area) = taken_area {
+            // Several counts (`TAKE(A1:A5,{1;2})`) give an array, one count a reference.
+            if !evaluated.iter().any(|a| matches!(&a.value, Value::Array(arr) if arr.data.len() > 1)) {
+                return Self::take_drop_area(area, &evaluated, name == "TAKE");
+            }
+            if let Some(first) = evaluated.first_mut() {
+                *first = Arg { value: self.area_value(&area), from_ref: true };
+            }
         }
         let mut ctx = FnCtx { ev: self, criteria, lambda };
         gridcraft_functions::call(spec, &evaluated, &mut ctx).pipe(Ev::V)

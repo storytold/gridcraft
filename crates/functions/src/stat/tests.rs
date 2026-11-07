@@ -62,6 +62,8 @@ fn averages_and_counts() {
     close(ev("COUNT", vec![e(CellError::Div0)]), 0.0);
     close(ev("COUNTA", vec![rf(mixed.clone())]), 4.0);
     close(ev("COUNTA", vec![n(1.0), t("")]), 2.0);
+    // A blank cell of a reference doesn't count; a blank in an array result does.
+    close(ev("COUNTA", vec![av(mixed.clone())]), 5.0);
     let blanks = arr(vec![vec![Value::Empty, tv(""), nv(0.0), tv(" ")]]);
     close(ev("COUNTBLANK", vec![rf(blanks)]), 2.0);
     close(ev("MEDIAN", vec![c(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])]), 3.5);
