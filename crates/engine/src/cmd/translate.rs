@@ -148,6 +148,9 @@ impl JobState {
 #[derive(Clone, Debug)]
 pub struct SnapCell {
     pub sheet: usize,
+    /// The sheet's identity at snapshot time. Indices shift when sheets are moved or deleted, so
+    /// `translate.insert` resolves this instead of trusting `sheet`.
+    pub sheet_uid: u64,
     pub sheet_name: String,
     pub at: CellRef,
     pub text: String,
@@ -262,7 +265,7 @@ fn snapshot(s: &Session, p: &Json) -> Result<Snapshot> {
         };
         match skip_reason(kind, &text, &limits) {
             Some(reason) => skipped.push(SkippedCell { sheet_name: sh.name.clone(), at, reason }),
-            None => cells.push(SnapCell { sheet, sheet_name: sh.name.clone(), at, text }),
+            None => cells.push(SnapCell { sheet, sheet_uid: sh.uid.get(), sheet_name: sh.name.clone(), at, text }),
         }
     }
     Ok(Snapshot { from, to, cells, skipped })
@@ -732,9 +735,13 @@ fn job_targets(s: &Session, p: &Json, mode: InsertMode) -> Result<(Vec<InsertTar
     let mut skipped = Vec::new();
     for (result, cell) in report.cells.iter().zip(&data.cells) {
         let Some(text) = result.text.clone().filter(|_| result.status.kind() == "translated") else { continue };
-        let Some(sh) = d.wb.sheet(cell.sheet) else { continue };
-        if let Some((sheet, range)) = filter
-            && (sheet != cell.sheet || !range.contains(cell.at))
+        // Sheets can move or be deleted between the snapshot and the insert, and a stale index
+        // would write into whatever sheet now holds that position. Resolve the recorded identity
+        // instead, and drop the result when the sheet is gone.
+        let Some(sheet) = d.wb.sheets.iter().position(|sh| sh.uid.get() == cell.sheet_uid) else { continue };
+        let Some(sh) = d.wb.sheet(sheet) else { continue };
+        if let Some((filter_sheet, range)) = filter
+            && (filter_sheet != sheet || !range.contains(cell.at))
         {
             continue;
         }
@@ -755,7 +762,7 @@ fn job_targets(s: &Session, p: &Json, mode: InsertMode) -> Result<(Vec<InsertTar
             skipped.push(json!({"sheet": cell.sheet_name, "cell": cell.at.a1(), "reason": "changed"}));
             continue;
         }
-        targets.push(InsertTarget { sheet: cell.sheet, at: cell.at, text });
+        targets.push(InsertTarget { sheet, at: cell.at, text });
     }
     Ok((targets, skipped))
 }

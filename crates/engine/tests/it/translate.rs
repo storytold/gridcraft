@@ -114,6 +114,25 @@ fn run_then_insert_writes_text_and_one_undo_restores_every_cell() {
 }
 
 #[test]
+fn insert_follows_the_sheet_when_it_moves() {
+    let mut s = session();
+    run(&mut s, "cell.set", json!({"cell": "A1", "input": "hello"}));
+    // A copy gives a second sheet with its own identity; translate on it.
+    run(&mut s, "sheet.move", json!({"copy": true, "sheet": 0, "to": 1}));
+    let report = run(&mut s, "translate.run", json!({"sheet": 1, "range": "A1", "from": "en", "to": "es"}));
+    let job = report["job"].as_u64().expect("job");
+    // Moving the copy to the front shifts every index: trusting the snapshot's index would now
+    // write the translation into the original sheet.
+    run(&mut s, "sheet.move", json!({"sheet": 1, "to": 0}));
+    let inserted = run(&mut s, "translate.insert", json!({"job": job, "mode": "replace"}));
+    assert_eq!(inserted["cells"], 1, "{inserted}");
+    let doc = s.doc().expect("doc");
+    let at = CellRef::parse("A1").expect("a1");
+    assert_eq!(doc.wb.sheet(0).expect("copy").value(at), Value::Text("hola".into()), "the translation belongs to the copied sheet");
+    assert_eq!(doc.wb.sheet(1).expect("original").value(at), Value::Text("hello".into()), "the original sheet is untouched");
+}
+
+#[test]
 fn a_translation_that_looks_like_a_formula_is_written_as_text() {
     let mut s = session();
     s.translate_backend = Some(Arc::new(FormulaBackend));
