@@ -202,6 +202,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-10-15 | minor | XLSX: formulas and PivotTable sources quote sheet names like Excel (a leading `.`, R1C1-like and cell-like names), so `'.x'!A1` no longer saves as `.x!A1`, which Excel could not open (#1458) |
 | 2026-10-15 | minor | XLSX text preserves CR and CRLF across save/reopen; shared strings use `_x000D_` and other XML text uses `&#13;` (#1488) |
 | 2026-10-15 | minor | XLSX save keeps legacy `INDEX`/`MATCH` formulas scalar instead of marking them as dynamic arrays (#1505) |
+| 2026-10-14 | trivial | XLSX import warns when a pivot cache is missing, malformed or too large instead of dropping its PivotTable silently (#1039) |
 | 2026-10-14 | minor | `.xls` import reads cell formatting from the Font, XF, Palette and Style records: fonts, fills, borders, alignment, protection, the custom palette, the Normal font and user cell styles |
 | 2026-10-14 | trivial | Formula parser: text longer than Excel's 8,192 characters, and postfix chains (`1%%%…`, `f(1)(1)…`) past the 256-level nesting limit, are parse errors (the cell keeps its formula text and cached value) instead of trees deep enough to overflow the stack when a hostile file is opened, saved or dropped |
 | 2026-10-14 | minor | XLSX formulas read with dynamic-array metadata (`cm`) keep it on save, so Excel does not recalculate them with implicit intersection |
