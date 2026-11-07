@@ -996,6 +996,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Mostrar",
         "Collapse dialog" => "Recolher caixa de diálogo",
         "Expand dialog" => "Expandir caixa de diálogo",
+        "has formula" => "contém fórmula",
         _ => return None,
     })
 }

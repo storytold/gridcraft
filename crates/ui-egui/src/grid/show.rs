@@ -868,14 +868,11 @@ fn expose_active_cell(app: &SheetApp, ui: &mut egui::Ui, id: egui::Id, rect: egu
             && !input.is_empty()
             && !gridcraft_engine::display::formula_hidden(wb, sh, at)
             && sh.cell(sh.spill_anchor(at).unwrap_or(at)).is_some_and(|cell| cell.formula.is_some());
-        let description = if formula_cell { "has formula" } else { "" };
+        let has_formula = formula_cell;
         text_child = shown.clone();
         node.set_role(egui::accesskit::Role::Cell);
-        node.set_label(if shown.is_empty() { address } else { format!("{shown} {address}") });
-        node.set_value(shown.clone());
-        if !description.is_empty() {
-            node.set_description(description.to_owned());
-        }
+        let formula = if has_formula { format!("{} ", app.ui.language.tr("has formula")) } else { String::new() };
+        node.set_label(if shown.is_empty() && formula.is_empty() { address } else { format!("{shown} {formula}{address}") });
     });
     if !text_child.is_empty() {
         // AT-SPI doesn't expose a string value for table cells; a child label gives it text.

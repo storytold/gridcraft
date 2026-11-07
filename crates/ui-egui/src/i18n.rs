@@ -390,6 +390,17 @@ mod tests {
     }
 
     #[test]
+    fn accessible_formula_state_is_translated_in_every_catalog() {
+        for language in Language::ALL {
+            let shown = language.tr("has formula");
+            assert!(!shown.contains('\n'), "{}: formula state is not a single-line label", language.code());
+            if language != Language::En {
+                assert_ne!(shown, "has formula", "{} falls back to English", language.code());
+            }
+        }
+    }
+
+    #[test]
     fn translations_never_show_the_context_prefix() {
         // `tr` returns a found translation as it is, so a catalog that keeps `context|` in its
         // value shows it on screen (File › Options read "Options|Général" in French).

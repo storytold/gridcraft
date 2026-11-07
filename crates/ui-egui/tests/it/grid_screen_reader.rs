@@ -7,7 +7,7 @@ use gridcraft_ui_egui::SheetApp;
 use serde_json::json;
 
 #[test]
-fn active_cell_label_reads_value_before_address_and_says_has_formula() {
+fn active_cell_label_reads_value_formula_state_and_address_once() {
     let mut s = Session::new();
     s.new_workbook();
     s.execute("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
@@ -21,19 +21,19 @@ fn active_cell_label_reads_value_before_address_and_says_has_formula() {
         crate::common::app(s),
     );
     h.run_steps(4);
-    let cell = h.get_by_role_and_label(Role::Cell, "6 B2");
+    let cell = h.get_by_role_and_label(Role::Cell, "6 has formula B2");
     let node = cell.accesskit_node();
-    assert_eq!(node.value().as_deref(), Some("6"));
-    assert_eq!(node.data().description(), Some("has formula"));
+    assert_eq!(node.value(), None);
+    assert_eq!(node.data().description(), None);
 
     h.state_mut().run("selection.set", json!({"range": "A1"})).unwrap();
     h.run_steps(2);
     let updated = h.get_by_role_and_label(Role::Cell, "2 A1").accesskit_node();
-    assert_eq!(updated.value().as_deref(), Some("2"));
+    assert_eq!(updated.value(), None);
 }
 
 #[test]
-fn array_formula_is_described_without_reading_the_formula() {
+fn array_formula_label_announces_formula_state_without_reading_the_formula() {
     let mut s = Session::new();
     s.new_workbook();
     s.execute("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
@@ -49,6 +49,6 @@ fn array_formula_is_described_without_reading_the_formula() {
         crate::common::app(s),
     );
     h.run_steps(4);
-    let node = h.get_by_role_and_label(Role::Cell, "4 B1");
-    assert_eq!(node.accesskit_node().data().description(), Some("has formula"));
+    let node = h.get_by_role_and_label(Role::Cell, "4 has formula B1");
+    assert_eq!(node.accesskit_node().data().description(), None);
 }
