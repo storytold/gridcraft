@@ -518,6 +518,8 @@ fn charts_and_images_are_drawn() {
         data: png.into(),
         mime: "image/png".into(),
         alt: String::new(),
+        python_source: None,
+        rendered: None,
     });
     let charts = s.doc().unwrap().wb.active().unwrap().charts.len();
     let (pdf, _) = pdf_of(&mut s, json!({}));
@@ -526,6 +528,27 @@ fn charts_and_images_are_drawn() {
     if charts > 0 {
         assert!(contains(&pdf, "(Apples) Tj") || contains(&pdf, "(Qty) Tj"));
     }
+}
+
+#[test]
+fn a_picture_drawn_in_a_python_cell_prints_there() {
+    let mut s = s();
+    s.execute("python.set", json!({"cell": "A1", "code": "plot()", "output": "value"})).unwrap();
+    let mut png = Vec::new();
+    let img = image::RgbaImage::from_raw(1, 1, vec![255, 0, 0, 255]).unwrap();
+    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    {
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        let cell = wb.sheet_mut(0).unwrap().cells.get_mut(CellRef::new(0, 0)).unwrap();
+        // No cached value and no format: the picture alone is why it prints.
+        cell.value = gridcraft_core::Value::Empty;
+        let picture = gridcraft_model::CellPicture { data: png, mime: "image/png".into(), alt: "plot".into() };
+        let image = gridcraft_model::PyImage { picture: std::sync::Arc::new(picture), width: 1, height: 1, density: 1, floor: None, fitted: None };
+        std::sync::Arc::make_mut(cell.py.as_mut().unwrap()).output = Some(gridcraft_model::PyOutput { image: Some(image), ..Default::default() });
+    }
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    assert!(contains(&pdf, "/Subtype /Image"));
 }
 
 #[test]
