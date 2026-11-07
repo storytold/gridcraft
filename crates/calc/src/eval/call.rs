@@ -69,6 +69,7 @@ impl<'h> Evaluator<'h> {
             "XLOOKUP" => self.xlookup(args),
             "CELL" => self.cell_info(args),
             "TRIMRANGE" => self.trimrange(args),
+            "GETPIVOTDATA" => self.getpivotdata(args),
             "SUBTOTAL" | "AGGREGATE" => self.subtotal(name, args),
             "TEXT" => {
                 if args.len() != 2 {
