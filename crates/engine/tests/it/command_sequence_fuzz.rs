@@ -221,6 +221,9 @@ struct Harness {
     s: Session,
     /// The workbook at the start of the current episode (what undoing everything gives back).
     base: Arc<Workbook>,
+    /// The undo history dropped its oldest steps in this episode (it is bounded by count and by
+    /// the memory its snapshots hold), so undoing everything stops short of `base`.
+    trimmed: bool,
 }
 
 fn fail(step: usize, kind: &'static str, what: impl Into<String>) -> Failure {
@@ -244,7 +247,7 @@ impl Harness {
         let mut s = Session::new();
         s.execute("file.new", json!({"sample": sample})).expect("sample opens");
         let base = s.doc().expect("document").wb.clone();
-        Harness { s, base }
+        Harness { s, base, trimmed: false }
     }
 
     fn wb(&self) -> Arc<Workbook> {
@@ -253,6 +256,7 @@ impl Harness {
 
     fn step(&mut self, i: usize, id: &str, params: &Json) -> Result<(), Failure> {
         let before = self.wb();
+        let depth = self.s.doc().expect("document").undo.len();
         let r = self.s.execute(id, params.clone());
         self.s.take_ui_requests();
         if let Err(EngineError::Internal(_, msg)) = &r {
@@ -263,6 +267,9 @@ impl Harness {
         }
         let after = self.wb();
         let spec = find_command(id).expect("generated ids are registered");
+        if spec.undoable && !Arc::ptr_eq(&before, &after) && self.s.doc().expect("document").undo.len() <= depth {
+            self.trimmed = true;
+        }
         if !spec.undoable
             && !matches!(id, "edit.undo" | "edit.redo")
             && let Some(diff) = content_diff(&before, &after)
@@ -293,6 +300,12 @@ impl Harness {
     /// and reload; the next episode starts from here with an empty history.
     fn end_episode(&mut self, i: usize) -> Result<(), Failure> {
         let end = self.wb();
+        // With steps dropped from the history, undoing everything gives back the state before the
+        // oldest step still in it.
+        let start = match (self.trimmed, self.s.doc().expect("document").undo.first()) {
+            (true, Some(oldest)) => oldest.wb.clone(),
+            _ => self.base.clone(),
+        };
         let mut n = 0;
         while !self.s.doc().expect("document").undo.is_empty() {
             if let Err(EngineError::Internal(_, msg)) = self.s.execute("edit.undo", json!({})) {
@@ -304,7 +317,7 @@ impl Harness {
             }
         }
         let undone = self.wb();
-        if let Some(diff) = workbook_diff(&self.base, &undone) {
+        if let Some(diff) = workbook_diff(&start, &undone) {
             return Err(fail(i, "undo", format!("undoing all {n} steps doesn't give back the starting workbook: {diff}")));
         }
         if watch_list(&end) != watch_list(&undone) {
@@ -326,6 +339,7 @@ impl Harness {
         d.undo.clear();
         d.redo.clear();
         self.base = d.wb.clone();
+        self.trimmed = false;
         Ok(())
     }
 
