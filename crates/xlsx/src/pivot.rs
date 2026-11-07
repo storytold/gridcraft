@@ -48,6 +48,9 @@ const MAX_FIELDS: usize = 16_384;
 const EXT_X14_DATA_FIELD: &str = "{E15A36E0-9728-4e99-A89B-3F7291B0FE68}";
 const EXT_X14_PIVOT_TABLE: &str = "{962EF5D1-5CA2-4c93-8EF4-DBF5C05439D2}";
 const NS_X14: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
+/// SpreadsheetML has separate page and axis field lists, but no combined filter display order.
+const EXT_FILTER_ORDER: &str = "{9189856B-82B7-4F3C-895E-34A918DB704C}";
+const NS_FILTER_ORDER: &str = "https://getartcraft.com/ns/gridcraft/pivot-filter-order/1";
 
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 

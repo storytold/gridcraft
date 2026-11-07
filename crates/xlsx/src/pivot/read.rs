@@ -1,6 +1,6 @@
 use super::{
-    CellRef, Ctx, DateSystem, El, HashMap, IoError, MAX_FIELDS, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout,
-    PivotShowAs, PivotSort, PivotTable, PivotValue, RangeRef, abs_range, func_caption, func_from, number_to_text, quote_sheet, same,
+    CellRef, Ctx, DateSystem, EXT_FILTER_ORDER, El, HashMap, IoError, MAX_FIELDS, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc,
+    PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue, RangeRef, abs_range, func_caption, func_from, number_to_text, quote_sheet, same,
 };
 
 // ================================================================ reading
@@ -321,6 +321,32 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
         if pt.values_on_rows { rows_values.or_else(|| x.attr_u32("dataPosition").map(|p| p as usize)).filter(|p| *p < pt.rows.len()) } else { None };
     filters.extend(page_filters);
     filters.extend(axis_filters);
+    // Native page and axis lists lose their interleaving. Apply the optional GridCraft order
+    // only if it accounts for every native filter exactly once; malformed metadata falls back.
+    if let Some(order) = x
+        .child("extLst")
+        .into_iter()
+        .flat_map(|list| list.kids("ext"))
+        .find(|ext| ext.attr("uri") == Some(EXT_FILTER_ORDER))
+        .and_then(|ext| ext.child("filterOrder"))
+    {
+        // Read at most one item beyond the native count, even from hostile extension XML.
+        let names: Vec<Option<&str>> = order.kids("field").take(filters.len().saturating_add(1)).map(|field| field.attr("name")).collect();
+        if names.len() == filters.len() && names.iter().all(Option::is_some) {
+            let mut remaining = filters.clone();
+            let mut ordered = Vec::with_capacity(filters.len());
+            for name in names {
+                if let Some(pos) = remaining.iter().position(|filter| same(&filter.source_col, name.unwrap_or_default())) {
+                    ordered.push(remaining.remove(pos));
+                } else {
+                    break;
+                }
+            }
+            if remaining.is_empty() {
+                filters = ordered;
+            }
+        }
+    }
     pt.filters = filters;
 
     // Values.
