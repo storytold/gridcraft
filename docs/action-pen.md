@@ -101,8 +101,9 @@ An **entry** is the ink written into one cell without a break. Its strokes are r
 drawn side by side and never joined: an "i", a crossed "t" or a "4" written in two strokes stays
 that character, and every stroke stays one undo step. The entry ends after a pause of 1.5 s, when
 the next stroke lands in a different cell, sheet or document, or when the tool is turned off; the
-next stroke then starts a fresh entry. Writing in the same cell later therefore does not replace
-an old value with a concatenation of both.
+next stroke then starts a fresh entry. A new entry **replaces** the cell's value — it never appends
+to it — so writing in the same cell again does not concatenate the two, and one Undo brings the
+earlier value back.
 
 The target cell is the explicit `cell` when the command names one, otherwise the cell under the
 stroke's **first point** — a cell the stroke actually crosses, unlike an extreme of its bounding
