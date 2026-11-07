@@ -90,6 +90,47 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
             .response
             .labelled_by(label.id);
         ui.end_row();
+
+        let currency = app.session.prefs.default_accounting_currency.clone();
+        let label = ui.label(lang.tr("Default currency"));
+        craft_ui::ComboBox::from_id_salt("backstage_default_accounting_currency")
+            .width(160.0)
+            .selected_text(match currency.as_str() {
+                "EUR" => "EUR (€)",
+                "GBP" => "GBP (£)",
+                "CHF" => "CHF",
+                _ => "USD ($)",
+            })
+            .show_ui(ui, |ui| {
+                for (code, name) in [("USD", "USD ($)"), ("EUR", "EUR (€)"), ("GBP", "GBP (£)"), ("CHF", "CHF")] {
+                    if ui.selectable_label(currency.as_str() == code, name).clicked() {
+                        app.run_or_alert("options.defaultAccounting", json!({"currency": code}));
+                    }
+                }
+            })
+            .response
+            .labelled_by(label.id);
+        ui.end_row();
+
+        let position = app.session.prefs.accounting_symbol_position.clone();
+        let label = ui.label(lang.tr("Currency position"));
+        craft_ui::ComboBox::from_id_salt("backstage_accounting_position")
+            .width(160.0)
+            .selected_text(match position.as_str() {
+                "before" => "Before number",
+                "after" => "After number",
+                _ => "Automatic",
+            })
+            .show_ui(ui, |ui| {
+                for (value, name) in [("auto", "Automatic"), ("before", "Before number"), ("after", "After number")] {
+                    if ui.selectable_label(position.as_str() == value, lang.tr(name)).clicked() {
+                        app.run_or_alert("options.defaultAccounting", json!({"position": value}));
+                    }
+                }
+            })
+            .response
+            .labelled_by(label.id);
+        ui.end_row();
     });
 }
 

@@ -386,6 +386,10 @@ pub struct Prefs {
     pub user_name: String,
     pub default_font: String,
     pub default_font_size: f32,
+    /// ISO currency code used by Home > Accounting when no symbol is given.
+    pub default_accounting_currency: String,
+    /// "auto", "before" or "after" the number.
+    pub accounting_symbol_position: String,
     pub sheets_in_new_workbook: usize,
     pub r1c1: bool,
     /// Words added with Add to Dictionary.
@@ -427,6 +431,8 @@ impl Default for Prefs {
             user_name: "GridCraft User".into(),
             default_font: gridcraft_model::DEFAULT_FONT.into(),
             default_font_size: gridcraft_model::DEFAULT_FONT_SIZE,
+            default_accounting_currency: "USD".into(),
+            accounting_symbol_position: "auto".into(),
             sheets_in_new_workbook: 1,
             r1c1: false,
             user_dictionary: vec![],

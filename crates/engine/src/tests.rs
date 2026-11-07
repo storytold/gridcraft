@@ -1947,6 +1947,50 @@ fn slicer_filters_table() {
 }
 
 #[test]
+fn accounting_default_currency_uses_preference_and_position() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1234.5"})).unwrap();
+
+    let text = |s: &Session| {
+        let d = s.doc().unwrap();
+        crate::display::cell_text(&d.wb, d.wb.active().unwrap(), CellRef::parse("A1").unwrap())
+    };
+
+    // Old preferences keep the historical USD default.
+    let old: crate::Prefs = serde_json::from_str(r#"{"userName":"Old"}"#).unwrap();
+    assert_eq!(old.default_accounting_currency, "USD");
+    assert_eq!(old.accounting_symbol_position, "auto");
+
+    s.prefs.default_accounting_currency = "EUR".into();
+    s.execute("home.accounting", json!({"range": "A1"})).unwrap();
+    assert!(text(&s).contains("1,234.50 €"), "{:?}", text(&s));
+
+    // The Number Format dropdown must use the same saved preference.
+    s.execute("home.numberFormat", json!({"range": "A1", "format": "Accounting"})).unwrap();
+    assert!(text(&s).contains("1,234.50 €"), "{:?}", text(&s));
+
+    // Explicit format codes must take precedence over preferences.
+    s.execute("home.numberFormat", json!({"range": "A1", "code": "\"XYZ\"0.00"})).unwrap();
+    assert!(text(&s).contains("XYZ"), "{:?}", text(&s));
+
+    s.prefs.accounting_symbol_position = "before".into();
+    s.execute("home.accounting", json!({"range": "A1"})).unwrap();
+    assert!(text(&s).contains("€ 1,234.50"), "{:?}", text(&s));
+
+    s.execute("home.numberFormat", json!({"range": "A1", "format": "Accounting"})).unwrap();
+    assert!(text(&s).contains("€ 1,234.50"), "{:?}", text(&s));
+
+    // Explicit symbols remain compatible with existing callers.
+    s.execute("home.accounting", json!({"range": "A1", "symbol": "L"})).unwrap();
+    assert!(text(&s).contains("L 1,234.50"), "{:?}", text(&s));
+
+    let saved = serde_json::to_string(&s.prefs).unwrap();
+    let restored: crate::Prefs = serde_json::from_str(&saved).unwrap();
+    assert_eq!(restored.default_accounting_currency, "EUR");
+    assert_eq!(restored.accounting_symbol_position, "before");
+}
+
+#[test]
 fn accounting_format_takes_the_symbol_it_is_given() {
     // The command documents `symbol`; it used to be dropped, so only `$` was ever reachable
     // from the control channel (asking for lempiras, #1893, changed nothing).

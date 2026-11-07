@@ -142,7 +142,15 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             number_format
         ),
-        cmd!("home.accounting", "Accounting Number Format", ["Home", "Number"], None, "{range?, symbol?: \"$\"}", has_doc, accounting),
+        cmd!(
+            "home.accounting",
+            "Accounting Number Format",
+            ["Home", "Number"],
+            None,
+            "{range?, symbol?: string (defaults to preferred currency)}",
+            has_doc,
+            accounting
+        ),
         cmd!("home.percent", "Percent Style", ["Home", "Number"], Some("Ctrl+Shift+%"), "{range?}", has_doc, |s, p| set_fmt(s, p, "0%")),
         cmd!("home.comma", "Comma Style", ["Home", "Number"], None, "{range?}", has_doc, |s, p| set_fmt(s, p, COMMA)),
         cmd!("home.increaseDecimal", "Increase Decimal", ["Home", "Number"], None, "{range?}", has_doc, |s, p| decimals(s, p, 1)),
@@ -218,18 +226,43 @@ const COMMA: &str = "_(* #,##0.00_);_(* \\(#,##0.00\\);_(* \"-\"??_);_(@_)";
 /// Accounting Number Format with the currency symbol to use (Excel's own button takes the system
 /// currency; `symbol` is how the control channel picks another one, e.g. `"L"` for lempiras).
 fn accounting(s: &mut Session, p: &Json) -> Result<Json> {
-    let symbol = str_param(p, "symbol").unwrap_or("$");
-    // The symbol goes into a quoted literal: a quote or a backslash would end it, and a control
-    // character would reach the format's text as-is.
-    if symbol.contains(['"', '\\']) || symbol.chars().any(char::is_control) {
-        return Err(bad("home.accounting", "the symbol can't contain a quote, a backslash or a control character"));
-    }
-    set_fmt(s, p, &accounting_format(symbol))
+    let code = match str_param(p, "symbol") {
+        Some(symbol) => {
+            // Explicit symbols keep their historical prefix behavior.
+            if symbol.contains(['"', '\\']) || symbol.chars().any(char::is_control) {
+                return Err(bad("home.accounting", "the symbol can't contain a quote, a backslash or a control character"));
+            }
+            accounting_format(symbol)
+        }
+        None => preferred_accounting_format(&s.prefs),
+    };
+    set_fmt(s, p, &code)
 }
 
 fn accounting_format(symbol: &str) -> String {
     let symbol = format!("\"{symbol}\"");
     format!("_({symbol}* #,##0.00_);_({symbol}* \\(#,##0.00\\);_({symbol}* \"-\"??_);_(@_)")
+}
+
+/// Accounting format with the currency written after the amount.
+fn accounting_format_suffix(symbol: &str) -> String {
+    format!(r#"_-* #,##0.00\ "{symbol}"_-;\-* #,##0.00\ "{symbol}"_-;_-* "-"??\ "{symbol}"_-;_-@_-"#)
+}
+
+/// The format used by the Accounting button and Number Format dropdown.
+pub fn preferred_accounting_format(prefs: &crate::Prefs) -> String {
+    let (symbol, auto_suffix) = match prefs.default_accounting_currency.as_str() {
+        "EUR" => ("€", true),
+        "GBP" => ("£", false),
+        "CHF" => ("CHF", false),
+        _ => ("$", false),
+    };
+    let suffix = match prefs.accounting_symbol_position.as_str() {
+        "before" => false,
+        "after" => true,
+        _ => auto_suffix,
+    };
+    if suffix { accounting_format_suffix(symbol) } else { accounting_format(symbol) }
 }
 
 fn with(p: &Json, key: &str, v: Json) -> Json {
@@ -724,10 +757,15 @@ pub fn format_code_for(name: &str) -> &str {
     }
 }
 
+/// Applies a named number format or an explicit format code.
+/// The Accounting preset follows the saved currency preferences unless an explicit code is supplied.
 fn number_format(s: &mut Session, p: &Json) -> Result<Json> {
     let code = str_param(p, "code")
         .map(str::to_string)
-        .or_else(|| str_param(p, "format").map(|f| format_code_for(f).to_string()))
+        .or_else(|| {
+            str_param(p, "format")
+                .map(|format| if format == "Accounting" { preferred_accounting_format(&s.prefs) } else { format_code_for(format).to_string() })
+        })
         .ok_or_else(|| bad("home.numberFormat", "missing `format` or `code`"))?;
     set_fmt(s, p, &code)
 }
