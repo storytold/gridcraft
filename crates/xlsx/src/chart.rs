@@ -781,25 +781,46 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
     let mut secondary: Option<G> = None;
     if ch.kind == ChartKind::Combo {
         // Series without a kind of their own: the first is a column, the others lines (as drawn).
-        let kind = |i: usize, x: &Series| x.kind.filter(|k| *k != ChartKind::Combo).or((i > 0).then_some(ChartKind::Line));
-        let is_line = |k: Option<ChartKind>| matches!(k.map(group_for), Some(G::Line { .. } | G::Area { .. } | G::Radar | G::Scatter { .. }));
-        let bars: Vec<(usize, &Series)> = all.iter().filter(|(i, x)| !x.secondary && !is_line(kind(*i, x))).copied().collect();
-        let lines: Vec<(usize, &Series)> = all.iter().filter(|(i, x)| !x.secondary && is_line(kind(*i, x))).copied().collect();
-        let sec: Vec<(usize, &Series)> = all.iter().filter(|(_, x)| x.secondary).copied().collect();
-        primary_g = G::Bar { bar: false, grouping: "clustered" };
-        if !bars.is_empty() || (lines.is_empty() && sec.is_empty()) {
-            s.push_str(&group_xml(primary_g, &bars, ch, (1, 2), wb, si));
+        let kind_of = |i: usize, x: &Series| {
+            x.kind.filter(|k| *k != ChartKind::Combo).unwrap_or(if i == 0 { ChartKind::ColumnClustered } else { ChartKind::Line })
+        };
+        let group_of = |i: usize, x: &Series| match group_for(kind_of(i, x)) {
+            g @ (G::Bar { .. } | G::Area { .. }) => g,
+            G::Line { stacked, .. } => G::Line { stacked, markers: false },
+            _ => G::Line { stacked: false, markers: false },
+        };
+        let mut prim_groups: Vec<(G, Vec<(usize, &Series)>)> = Vec::new();
+        for &(i, x) in all.iter().filter(|(_, x)| !x.secondary) {
+            let g = group_of(i, x);
+            match prim_groups.iter_mut().find(|(k, _)| *k == g) {
+                Some((_, v)) => v.push((i, x)),
+                None => prim_groups.push((g, vec![(i, x)])),
+            }
         }
-        if !lines.is_empty() {
-            s.push_str(&group_xml(G::Line { stacked: false, markers: false }, &lines, ch, (1, 2), wb, si));
+        primary_g = prim_groups
+            .iter()
+            .map(|(g, _)| *g)
+            .find(|g| matches!(g, G::Bar { bar: true, .. }))
+            .or_else(|| prim_groups.first().map(|(g, _)| *g))
+            .unwrap_or(G::Bar { bar: false, grouping: "clustered" });
+        if prim_groups.is_empty() && all.iter().all(|(_, x)| !x.secondary) {
+            s.push_str(&group_xml(primary_g, &[], ch, (1, 2), wb, si));
+        } else {
+            for (g, sers) in &prim_groups {
+                s.push_str(&group_xml(*g, sers, ch, (1, 2), wb, si));
+            }
         }
-        if !sec.is_empty() {
-            let g = match sec.first().and_then(|(_, x)| x.kind).map(group_for) {
-                Some(b @ G::Bar { .. }) => b,
-                _ => G::Line { stacked: false, markers: false },
-            };
-            s.push_str(&group_xml(g, &sec, ch, (3, 4), wb, si));
-            secondary = Some(g);
+        let mut sec_groups: Vec<(G, Vec<(usize, &Series)>)> = Vec::new();
+        for &(i, x) in all.iter().filter(|(_, x)| x.secondary) {
+            let g = group_of(i, x);
+            match sec_groups.iter_mut().find(|(k, _)| *k == g) {
+                Some((_, v)) => v.push((i, x)),
+                None => sec_groups.push((g, vec![(i, x)])),
+            }
+        }
+        for (g, sers) in &sec_groups {
+            s.push_str(&group_xml(*g, sers, ch, (3, 4), wb, si));
+            secondary.get_or_insert(*g);
         }
     } else {
         primary_g = match group_for(ch.kind) {
