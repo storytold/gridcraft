@@ -227,7 +227,7 @@ fn package_parts(saved: &Json) -> Vec<String> {
 
 struct CountingFetcher(Arc<AtomicUsize>);
 impl gridcraft_engine::translate::ModelFetcher for CountingFetcher {
-    fn fetch(&self, _url: &str) -> Result<Vec<u8>, String> {
+    fn fetch(&self, _url: &str, _dest: &std::path::Path, _max_bytes: u64) -> Result<(), String> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Err("the network is blocked".into())
     }
@@ -255,7 +255,7 @@ fn model_download_requires_consent_and_verifies_every_file() {
     s.translate_models_dir = dir.display().to_string();
     let err = s.execute("translate.modelDownload", json!({"id": "qwen3-1.7b"})).unwrap_err().to_string();
     assert!(err.contains("consent"), "{err}");
-    // A fetcher that lies about the bytes: refused before anything is written.
+    // A fetcher that writes the wrong number of bytes: refused, and the staging folder removed.
     s.translate_fetcher = Some(Arc::new(BadFetcher));
     let err = s.execute("translate.modelDownload", json!({"id": "qwen3-1.7b", "consent": true})).unwrap_err().to_string();
     assert!(err.contains("bytes") || err.contains("SHA-256"), "{err}");
@@ -263,10 +263,12 @@ fn model_download_requires_consent_and_verifies_every_file() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Writes fewer bytes than the manifest declares: the install must refuse it, not install it.
 struct BadFetcher;
 impl gridcraft_engine::translate::ModelFetcher for BadFetcher {
-    fn fetch(&self, _url: &str) -> Result<Vec<u8>, String> {
-        Ok(vec![0u8; 8])
+    fn fetch(&self, _url: &str, dest: &std::path::Path, max_bytes: u64) -> Result<(), String> {
+        assert!(max_bytes > 8, "the manifest size is the download bound");
+        std::fs::write(dest, vec![0u8; 8]).map_err(|e| e.to_string())
     }
 }
 

@@ -1029,20 +1029,14 @@ fn install_from_download(s: &Session, m: &ModelManifest, fetcher: &dyn gridcraft
                 return Err(format!("the manifest path `{}` is unsafe", file.path));
             }
             let url = file.url;
-            let bytes = fetcher.fetch(url).map_err(|e| format!("downloading `{}` failed: {e}", file.path))?;
-            let actual = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-            if actual != file.bytes {
-                return Err(format!("`{}` has {actual} bytes; the manifest says {}", file.path, file.bytes));
-            }
-            let digest = sha256_bytes(&bytes);
-            if !digest.eq_ignore_ascii_case(file.sha256) {
-                return Err(format!("`{}` does not match its SHA-256; the download was rejected", file.path));
-            }
             let to = staging.join(file.path);
             if let Some(parent) = to.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
             }
-            std::fs::write(&to, &bytes).map_err(|e| format!("could not write `{}`: {e}", file.path))?;
+            // The manifest's own size is the download bound: the fetcher refuses a larger body
+            // before it fills the disk, and `verify_file` then checks it exactly.
+            fetcher.fetch(url, &to, file.bytes).map_err(|e| format!("downloading `{}` failed: {e}", file.path))?;
+            verify_file(&to, file, file.path)?;
         }
         write_sidecar(&staging, m)?;
         finalize(&staging, &root.join(m.id))
@@ -1140,13 +1134,6 @@ fn sha256_file(path: &Path) -> std::result::Result<String, String> {
     Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
-fn sha256_bytes(bytes: &[u8]) -> String {
-    use sha2::Digest;
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(bytes);
-    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
-}
-
 // ---------------------------------------------------------------- review.translate
 
 fn review_translate(s: &mut Session, p: &Json) -> Result<Json> {
@@ -1159,6 +1146,10 @@ fn review_translate(s: &mut Session, p: &Json) -> Result<Json> {
         s.translate_to = tag.canonical();
     }
     s.translate_pane = bool_param(p, "on").unwrap_or(!s.translate_pane);
+    // One task pane at a time: showing Translate closes the Comments pane.
+    if s.translate_pane {
+        s.comments_pane = false;
+    }
     let active = s.translate_backend.as_ref().map(|b| b.model_id().to_string());
     let mut out = json!({
         "on": s.translate_pane,
@@ -1194,6 +1185,19 @@ mod tests {
         assert_eq!(out["on"], json!(true));
         let out = s.execute("review.translate", json!({"on": false})).expect("toggle");
         assert_eq!(out["on"], json!(false));
+    }
+
+    #[test]
+    fn the_task_panes_are_mutually_exclusive() {
+        let mut s = session();
+        s.execute("review.showComments", json!({"on": true})).expect("comments");
+        assert!(s.comments_pane);
+        s.execute("review.translate", json!({"on": true})).expect("translate");
+        assert!(s.translate_pane);
+        assert!(!s.comments_pane, "opening Translate closes Comments");
+        s.execute("review.showComments", json!({"on": true})).expect("comments");
+        assert!(s.comments_pane);
+        assert!(!s.translate_pane, "opening Comments closes Translate");
     }
 
     #[test]

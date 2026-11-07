@@ -4,6 +4,7 @@
 //! Native backends load a user-downloaded model; this crate never does I/O. A backend reports the
 //! accelerator it actually uses so the pane can say `cpu` (or, later, `openvino`).
 
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -132,10 +133,13 @@ pub trait Backend: Send + Sync {
 
 /// The transport for a user-initiated model download. The host injects one (the desktop app's
 /// HTTPS client); the engine never creates one, so the web build and headless tests have no
-/// network path. `fetch` returns the whole file; the caller verifies size and SHA-256 before
-/// writing anything. URLs come from the shipped manifest, never from a command parameter.
+/// network path. `fetch` writes the file to `dest` and must refuse a body larger than
+/// `max_bytes` (the manifest's exact size for that file); the caller verifies size and SHA-256
+/// before the staging folder is renamed into place. Streaming instead of returning a `Vec<u8>`
+/// keeps a 1.8 GB model from being held in memory twice. URLs come from the shipped manifest,
+/// never from a command parameter.
 pub trait ModelFetcher: Send + Sync {
-    fn fetch(&self, url: &str) -> Result<Vec<u8>, String>;
+    fn fetch(&self, url: &str, dest: &Path, max_bytes: u64) -> Result<(), String>;
 }
 
 #[cfg(test)]

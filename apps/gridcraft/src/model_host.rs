@@ -6,7 +6,7 @@
 //! it is installed. Nothing here runs at startup beyond resolving a directory; inference never
 //! touches the network.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,8 +16,6 @@ use gridcraft_ui_egui::ModelHost;
 
 /// How long one model file may take; a stalled download is an error, not a hang.
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
-/// A sanity bound before the manifest's exact size check; no model here is near it.
-const MAX_FILE_BYTES: usize = 512 * 1024 * 1024;
 
 pub struct Models {
     root: PathBuf,
@@ -55,19 +53,20 @@ impl ModelHost for Models {
 pub struct HttpFetcher;
 
 impl ModelFetcher for HttpFetcher {
-    fn fetch(&self, url: &str) -> Result<Vec<u8>, String> {
+    fn fetch(&self, url: &str, dest: &Path, max_bytes: u64) -> Result<(), String> {
         let agent = ureq::Agent::config_builder().timeout_global(Some(DOWNLOAD_TIMEOUT)).max_response_header_size(64 * 1024).build().new_agent();
         let mut response = agent.get(url).call().map_err(|e| e.to_string())?;
-        if let Some(length) = response.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<usize>().ok())
-            && length > MAX_FILE_BYTES
+        if let Some(length) = response.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok())
+            && length > max_bytes
         {
-            return Err(format!("the file is larger than {MAX_FILE_BYTES} bytes"));
+            return Err(format!("the file is larger than the {max_bytes} bytes the manifest declares"));
         }
-        let bytes = response.body_mut().read_to_vec().map_err(|e| e.to_string())?;
-        if bytes.len() > MAX_FILE_BYTES {
-            return Err(format!("the file is larger than {MAX_FILE_BYTES} bytes"));
-        }
-        Ok(bytes)
+        // The manifest's size is also the body limit, so a server that lies about the length
+        // cannot stream more than the manifest allows into the staging file.
+        let mut body = response.body_mut().with_config().limit(max_bytes).reader();
+        let mut file = std::fs::File::create(dest).map_err(|e| format!("could not create {}: {e}", dest.display()))?;
+        std::io::copy(&mut body, &mut file).map_err(|e| e.to_string())?;
+        Ok(())
     }
 }
 

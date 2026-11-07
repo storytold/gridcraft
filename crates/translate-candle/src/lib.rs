@@ -108,13 +108,27 @@ impl CandleBackend {
         }
     }
 
-    fn translate_one(&self, loaded: &Loaded, text: &str, to: &gridcraft_translate::LangTag, cancel: &Cancel) -> Result<String, BackendError> {
+    fn translate_one(
+        &self,
+        loaded: &Loaded,
+        text: &str,
+        from: Option<&gridcraft_translate::LangTag>,
+        to: &gridcraft_translate::LangTag,
+        cancel: &Cancel,
+    ) -> Result<String, BackendError> {
         cancel.check()?;
         let target = to.english_name();
+        // Name the real source language: the prompt used to say "English" for every pair, so
+        // `zh -> en` asked for English into English and input already in the target came back
+        // unchanged. With `from: auto` the model detects the source, so the prompt names none.
+        let source = match from {
+            Some(from) => format!("the following {} text", from.english_name()),
+            None => "the following text".to_string(),
+        };
         // Qwen's chat format with thinking forced off: the empty think block is what stops Qwen3
         // emitting a reasoning trace; `/no_think` alone is only a soft switch.
         let prompt = format!(
-            "<|im_start|>user\nTranslate the following English text to {target}. Reply with only the translation, no explanation.\n\n{text} /no_think<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+            "<|im_start|>user\nTranslate {source} to {target}. Reply with only the translation, no explanation.\n\n{text} /no_think<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
         );
         let ids = loaded.tokenizer.encode(prompt.as_str(), true).map_err(|e| BackendError::Input(e.to_string()))?.get_ids().to_vec();
         if ids.is_empty() {
@@ -134,11 +148,13 @@ impl CandleBackend {
         let mut sampler = LogitsProcessor::new(1337, None, None);
         let mut generated: Vec<u32> = Vec::new();
         let mut offset = ids.len();
+        let mut finished = false;
         loop {
             cancel.check()?;
             let row = logits.squeeze(0).map_err(|e| BackendError::Internal(e.to_string()))?;
             let token = sampler.sample(&row).map_err(|e| BackendError::Internal(e.to_string()))?;
             if token == loaded.im_end || token == loaded.eos {
+                finished = true;
                 break;
             }
             generated.push(token);
@@ -148,6 +164,11 @@ impl CandleBackend {
             input = Tensor::new(&[token], &device).and_then(|t| t.unsqueeze(0)).map_err(|e| BackendError::Internal(e.to_string()))?;
             logits = model.forward(&input, offset).map_err(|e| BackendError::Internal(e.to_string()))?;
             offset += 1;
+        }
+        // A decode that hits the cap without its end token is a truncated sentence. Returning it
+        // as `Ok` would mark the cell translated and write text that lost its tail.
+        if !finished {
+            return Err(BackendError::Input(format!("the translation did not finish within {MAX_NEW_TOKENS} tokens; split the cell and try again")));
         }
         let text = loaded.tokenizer.decode(&generated, true).map_err(|e| BackendError::Internal(e.to_string()))?;
         Ok(text.trim_end().to_string())
@@ -190,7 +211,7 @@ impl Backend for CandleBackend {
         let mut out = Vec::with_capacity(req.texts.len());
         for text in req.texts {
             cancel.check()?;
-            out.push(self.translate_one(loaded, text, req.to, cancel)?);
+            out.push(self.translate_one(loaded, text, req.from, req.to, cancel)?);
         }
         Ok(out)
     }
@@ -198,12 +219,14 @@ impl Backend for CandleBackend {
 
 fn load(dir: &Path, manifest: &'static ModelManifest) -> Result<Loaded, ModelError> {
     verify_files(dir, manifest)?;
-    let gguf = dir.join("Qwen3-1.7B-Q8_0.gguf");
-    let mut file = std::fs::File::open(&gguf).map_err(|e| ModelError::Io(format!("Qwen3-1.7B-Q8_0.gguf: {e}")))?;
-    let content =
-        gguf_file::Content::read(&mut file).map_err(|e| ModelError::Format { path: "Qwen3-1.7B-Q8_0.gguf".into(), reason: e.to_string() })?;
-    let model = ModelWeights::from_gguf(content, &mut file, &Device::Cpu)
-        .map_err(|e| ModelError::Format { path: "Qwen3-1.7B-Q8_0.gguf".into(), reason: e.to_string() })?;
+    // The manifest names its own weights (`Qwen3-1.7B-Q8_0.gguf` or `Qwen3-0.6B-Q8_0.gguf`);
+    // a hard-coded name loads the 1.7B file for every model and fails for the 0.6B one.
+    let weights = manifest.weights;
+    let gguf = dir.join(weights);
+    let mut file = std::fs::File::open(&gguf).map_err(|e| ModelError::Io(format!("{weights}: {e}")))?;
+    let content = gguf_file::Content::read(&mut file).map_err(|e| ModelError::Format { path: weights.into(), reason: e.to_string() })?;
+    let model =
+        ModelWeights::from_gguf(content, &mut file, &Device::Cpu).map_err(|e| ModelError::Format { path: weights.into(), reason: e.to_string() })?;
     let tokenizer =
         Tokenizer::from_file(dir.join("tokenizer.json")).map_err(|e| ModelError::Format { path: "tokenizer.json".into(), reason: e.to_string() })?;
     let im_end = tokenizer.token_to_id("<|im_end|>").unwrap_or(151_645);

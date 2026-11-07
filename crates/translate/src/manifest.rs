@@ -182,6 +182,11 @@ pub fn validate(m: &ModelManifest) -> Result<(), String> {
     if m.files.is_empty() {
         return Err(format!("model `{}` has no files", m.id));
     }
+    // The loader opens `weights`; a name that is not one of the listed files means the model
+    // cannot load even though every file verified.
+    if file(m, m.weights).is_none() {
+        return Err(format!("model `{}` names `{}` as its weights, which is not one of its files", m.id, m.weights));
+    }
     for f in m.files {
         if !valid_relative_path(f.path) {
             return Err(format!("model `{}` has an unsafe path `{}`", m.id, f.path));
