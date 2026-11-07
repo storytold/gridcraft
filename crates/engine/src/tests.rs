@@ -495,6 +495,20 @@ fn shape_text_edit_survives_xlsx_roundtrip() {
 }
 
 #[test]
+fn word_art_insert_respects_sheet_protection() {
+    let mut s = s();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    let undo_len = s.doc().unwrap().undo.len();
+    assert!(s.execute("insert.wordArt", json!({})).is_err());
+    assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before));
+    assert_eq!(s.doc().unwrap().undo.len(), undo_len);
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    s.execute("insert.wordArt", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes.len(), 1);
+}
+
+#[test]
 fn word_art_inserts_with_defaults_and_undoes() {
     use gridcraft_model::ShapeKind;
     let mut s = s();

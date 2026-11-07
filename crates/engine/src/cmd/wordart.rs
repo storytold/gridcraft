@@ -180,6 +180,9 @@ fn insert_word_art(s: &mut Session, p: &Json) -> Result<Json> {
     let style = style_param("insert.wordArt", p)?.unwrap_or(&STYLES[0]);
     let text = text_param("insert.wordArt", p)?.unwrap_or_else(|| DEFAULT_TEXT.to_string());
     let d = s.doc()?;
+    if d.wb.active().is_some_and(|sh| sh.is_protected()) {
+        return Err(EngineError::Other(PROTECTED.into()));
+    }
     let id = d.wb.next_object_id();
     let at = cell_param(s, p, "at")?.unwrap_or(d.selection.active);
     let mut shape = Shape {
