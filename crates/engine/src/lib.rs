@@ -258,6 +258,9 @@ const JOURNAL_MAX_ENTRIES: usize = 10_000;
 pub(crate) const JOURNAL_MAX_BYTES: usize = 64 * 1024 * 1024;
 const UNDO_BYTES_LIMIT: usize = 128 * 1024 * 1024;
 
+/// An estimate of the storage a history snapshot of `older` keeps alive that `newer` does not
+/// already share: each sheet the newer workbook no longer points at, its cells' own allocations,
+/// and a macro list the snapshot owns alone.
 fn history_retained_bytes(older: &Workbook, newer: &Workbook) -> usize {
     let mut bytes = std::mem::size_of::<Workbook>();
     for (index, sheet) in older.sheets.iter().enumerate() {
@@ -277,10 +280,13 @@ fn history_retained_bytes(older: &Workbook, newer: &Workbook) -> usize {
     bytes
 }
 
+/// Pushes a history step for the workbook before `wb` became `next`, then enforces the default
+/// undo limits (see [`UNDO_LIMIT`] and [`UNDO_BYTES_LIMIT`]).
 fn push_history(history: &mut Vec<HistoryEntry>, label: String, wb: Arc<Workbook>, next: &Workbook, selection: Selection) {
     push_history_with_budget(history, label, wb, next, selection, UNDO_BYTES_LIMIT);
 }
 
+/// [`push_history`] with an explicit byte budget, for a history that is not the document's own.
 fn push_history_with_budget(
     history: &mut Vec<HistoryEntry>,
     label: String,
@@ -326,6 +332,8 @@ impl DocState {
         calc.rebuild(&wb);
         Self::with_calc(wb, calc, path, title, trust)
     }
+    /// The bookkeeping [`DocState::new`] and [`DocState::from_saved`] share, around a dependency
+    /// graph the caller has already built.
     fn with_calc(mut wb: Workbook, calc: Calc, path: Option<String>, title: String, trust: Trust) -> DocState {
         // Equations arrive without a layout (files never store one); painting reads only the cache.
         wb.refresh_equations();
@@ -353,9 +361,11 @@ impl DocState {
             go_to_recent: vec![],
         }
     }
+    /// Whether the workbook differs from the version the file last held (so Close asks to save).
     pub fn is_dirty(&self) -> bool {
         !Arc::ptr_eq(&self.wb, &self.saved)
     }
+    /// The index of the sheet the document is showing.
     pub fn sheet_index(&self) -> usize {
         self.wb.active_sheet()
     }
@@ -388,6 +398,8 @@ impl DocState {
             self.saved = self.wb.clone();
         }
     }
+    /// The title a window shows: the name of the file the workbook was opened from or saved to,
+    /// else the title it was created with (`Book1`).
     pub fn display_title(&self) -> String {
         self.path
             .as_deref()
@@ -435,12 +447,14 @@ pub struct StatusBarStats {
 }
 
 impl Default for StatusBarStats {
+    /// Excel's defaults: Average, Count and Sum on, the rest off.
     fn default() -> Self {
         StatusBarStats { average: true, count: true, numerical_count: false, minimum: false, maximum: false, sum: true }
     }
 }
 
 impl Default for Prefs {
+    /// The first-run preferences: Enter moves down, autocompletion on, no user name set yet.
     fn default() -> Self {
         Prefs {
             enter_direction: "down".into(),
@@ -568,12 +582,15 @@ pub struct Session {
 }
 
 impl Session {
+    /// A session with no document open and the default preferences.
     pub fn new() -> Session {
         Session::default()
     }
+    /// The open documents, in the order they were opened.
     pub fn documents(&self) -> &[DocState] {
         &self.docs
     }
+    /// Where the active document is in [`Session::documents`].
     pub fn active_index(&self) -> usize {
         self.active
     }
@@ -588,6 +605,7 @@ impl Session {
             self.activate_window(w);
         }
     }
+    /// The active document, `None` when no document is open.
     pub fn active(&self) -> Option<&DocState> {
         self.docs.get(self.active)
     }
@@ -595,12 +613,15 @@ impl Session {
     pub fn document_index(&self, uid: u64) -> Option<usize> {
         self.docs.iter().position(|d| d.uid == uid)
     }
+    /// The active document mutably, `None` when no document is open.
     pub fn active_mut(&mut self) -> Option<&mut DocState> {
         self.docs.get_mut(self.active)
     }
+    /// The active document, or [`EngineError::NoDocument`] for a command that needs one.
     pub fn doc(&self) -> Result<&DocState> {
         self.active().ok_or(EngineError::NoDocument)
     }
+    /// The active document mutably, or [`EngineError::NoDocument`] for a command that needs one.
     pub fn doc_mut(&mut self) -> Result<&mut DocState> {
         self.active_mut().ok_or(EngineError::NoDocument)
     }
@@ -703,6 +724,7 @@ impl Session {
         self.recording = self.recording.map(|r| r.min(self.journal.len()));
     }
 
+    /// Every command with its current label and enabled state, for menus and the command palette.
     pub fn commands(&self) -> Vec<CommandInfo> {
         command_specs().iter().map(|c| c.info(self)).collect()
     }
@@ -1217,10 +1239,12 @@ impl Session {
         Ok(g)
     }
 
+    /// [`Session::execute`] with the error as its message, for hosts that cross an ABI with text.
     pub fn run(&mut self, id: &str, params: Json) -> std::result::Result<Json, String> {
         self.execute(id, params).map_err(|e| e.to_string())
     }
 
+    /// Takes the UI requests (a file dialog, a message) the commands queued since the last call.
     pub fn take_ui_requests(&mut self) -> Vec<UiRequest> {
         std::mem::take(&mut self.ui_requests)
     }
@@ -1252,6 +1276,7 @@ pub fn active_sheet(s: &Session) -> Option<&gridcraft_model::Sheet> {
     s.active().and_then(|d| d.wb.active())
 }
 
+/// A cell reference from zero-based row and column indices.
 pub fn cell(r: u32, c: u32) -> CellRef {
     CellRef::new(r, c)
 }

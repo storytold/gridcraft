@@ -28,6 +28,7 @@ use serde_json::{Value as Json, json};
 
 use super::{CommandSpec, EngineError, Result, Session, always, bad, bool_param, cmd, str_param};
 
+/// The `dataModel.*` command table: each id with its ribbon group, usage line and handler.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "dataModel.status", "Data Model", ["Data", "Data Model"], None, "{} → {tables, measures}", always, status),
@@ -318,6 +319,7 @@ const MAX_FILTER_VALUES: usize = 1_000;
 /// The longest format code `dataModel.setFormat` accepts.
 const MAX_FORMAT_LEN: usize = 128;
 
+/// The `sort` field of a view reply: the table's sort, `null` when it has none.
 fn sort_json(sort: Option<&TableSort>) -> Json {
     match sort {
         None => Json::Null,
@@ -330,6 +332,7 @@ fn sort_json(sort: Option<&TableSort>) -> Json {
     }
 }
 
+/// The `filters` field of a view reply: one `{column, values}` object per filtered column.
 fn filters_json(filters: &[ColumnFilter]) -> Json {
     Json::Array(filters.iter().map(|filter| json!({"column": filter.column, "values": filter.values})).collect())
 }
@@ -384,6 +387,8 @@ enum ModelType {
 }
 
 impl ModelType {
+    /// The type Excel's (or the model's) name for it maps to; `None` for an unknown name. The
+    /// name is compared without punctuation or case, so `Fixed Decimal Number` maps to Currency.
     fn parse(name: &str) -> Option<ModelType> {
         let key: String = name.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_lowercase();
         Some(match key.as_str() {
@@ -398,6 +403,7 @@ impl ModelType {
         })
     }
 
+    /// The name the model stores this type under.
     fn name(self) -> &'static str {
         match self {
             ModelType::Int64 => "Int64",
@@ -717,6 +723,9 @@ fn status(s: &mut Session, _: &Json) -> Result<Json> {
     }))
 }
 
+/// `dataModel.load`: replaces the session's model from a file path, JSON text or model object,
+/// re-parses its formulas and reads its metadata, then resets the Data View (the old sorts and
+/// filters name tables the new model may not have). The status reply of the loaded model follows.
 fn load(s: &mut Session, p: &Json) -> Result<Json> {
     // Native hosts pass a path; browser hosts pass the JSON text or object they read from the
     // file picker (wasm has no filesystem).
@@ -748,6 +757,8 @@ fn load(s: &mut Session, p: &Json) -> Result<Json> {
     status(s, &Json::Null)
 }
 
+/// `dataModel.evaluate`: a scalar for `formula` or `measure`, or with `table: true` the table the
+/// formula evaluates to. A stored measure wins over an implicit one of the same name.
 fn evaluate(s: &mut Session, p: &Json) -> Result<Json> {
     let model = s.dax_model.as_ref().ok_or_else(|| EngineError::Other("no data model loaded".into()))?;
     let evaluator = Evaluator::new(model).map_err(|error| EngineError::Other(error.to_string()))?;
@@ -791,6 +802,8 @@ fn evaluate(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"value": value_json(&value), "display": display_scalar(&value, None)}))
 }
 
+/// `dataModel.pivot`: cross-tabulates `measure` over `rows` (and `columns` when given). The
+/// measure's format is applied to a parallel `display_rows` grid so the numeric rows stay exact.
 fn pivot_cmd(s: &mut Session, p: &Json) -> Result<Json> {
     let model = s.dax_model.as_ref().ok_or_else(|| EngineError::Other("no data model loaded".into()))?;
     let measure = p.get("measure").and_then(Json::as_str).ok_or_else(|| EngineError::Other("dataModel.pivot needs `measure`".into()))?;
@@ -872,6 +885,7 @@ fn known_column(model: &DataModel, cmd: &str, table: &str, column: &str) -> Resu
     Ok(model.tables[table_index].columns[column_index].name.clone())
 }
 
+/// The index of measure `name`, or the command's unknown-measure error.
 fn measure_or_error(model: &DataModel, cmd: &str, name: &str) -> Result<usize> {
     model.measure_index(name).ok_or_else(|| bad(cmd, format!("unknown measure `{name}`")))
 }
@@ -920,6 +934,8 @@ fn references_measure(expr: &Expr, name: &str) -> bool {
     found
 }
 
+/// The error a rename or delete of `target` reports: `action` names what was refused and the
+/// dependents that still reference the measure are listed.
 fn dangling_reference_error(cmd: &str, action: &str, target: &str, dependent: &BTreeSet<String>) -> EngineError {
     let names: Vec<&str> = dependent.iter().map(String::as_str).collect();
     bad(cmd, format!("cannot {action} measure `{target}`: referenced by {}", names.join(", ")))
@@ -933,6 +949,8 @@ fn same_ends(r: &Relationship, from_table: &str, from_column: &str, to_table: &s
         && r.to_column.eq_ignore_ascii_case(to_column)
 }
 
+/// `dataModel.addMeasure`: appends a measure, rejecting a duplicate name, an unknown table and an
+/// unparsable formula (so a rejected add leaves the model as it was).
 fn add_measure(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "dataModel.addMeasure";
     let name = required_str(p, CMD, "name")?;
@@ -956,6 +974,8 @@ fn add_measure(s: &mut Session, p: &Json) -> Result<Json> {
     commit(s, CMD, model)
 }
 
+/// `dataModel.updateMeasure`: renames, re-formats or re-formulas an existing measure. A rename is
+/// refused while another measure's formula still references the old name.
 fn update_measure(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "dataModel.updateMeasure";
     let name = required_str(p, CMD, "name")?;
@@ -987,6 +1007,8 @@ fn update_measure(s: &mut Session, p: &Json) -> Result<Json> {
     commit(s, CMD, model)
 }
 
+/// `dataModel.deleteMeasure`: removes a measure, refusing while another measure's formula still
+/// references it.
 fn delete_measure(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "dataModel.deleteMeasure";
     let name = required_str(p, CMD, "name")?;
@@ -1000,6 +1022,8 @@ fn delete_measure(s: &mut Session, p: &Json) -> Result<Json> {
     commit(s, CMD, model)
 }
 
+/// `dataModel.addRelationship`: appends a relationship between two known columns, in the model's
+/// own spelling, refusing the same four endpoints twice.
 fn add_relationship(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "dataModel.addRelationship";
     let from_table = required_str(p, CMD, "from_table")?;
@@ -1025,6 +1049,8 @@ fn add_relationship(s: &mut Session, p: &Json) -> Result<Json> {
     commit(s, CMD, model)
 }
 
+/// `dataModel.deleteRelationship`: removes the relationship with these four endpoints, refusing
+/// when there is none.
 fn delete_relationship(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "dataModel.deleteRelationship";
     let from_table = required_str(p, CMD, "from_table")?;
@@ -1232,6 +1258,7 @@ fn view_state_json(view: &ModelView, table: &str) -> Json {
     })
 }
 
+/// `dataModel.sortTable`: sets a table's view sort to one of its columns. The model is untouched.
 fn sort_table(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "dataModel.sortTable";
     let table_name = required_str(p, CMD, "table")?;
@@ -1249,6 +1276,7 @@ fn sort_table(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(view_state_json(&s.dax_view, &table))
 }
 
+/// `dataModel.clearSort`: drops a table's view sort, leaving its filters in place.
 fn clear_sort(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "dataModel.clearSort";
     let table = {
@@ -1263,6 +1291,8 @@ fn clear_sort(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(view_state_json(&s.dax_view, &table))
 }
 
+/// `dataModel.setFilter`: keeps only the rows whose value in a column is one of `values`, replacing
+/// that column's earlier filter. An empty or absent `values` clears it.
 fn set_filter(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "dataModel.setFilter";
     let values = filter_values(p, CMD)?;
@@ -1284,6 +1314,7 @@ fn set_filter(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(view_state_json(&s.dax_view, &table))
 }
 
+/// `dataModel.clearFilters`: drops every column filter a table has, leaving its sort in place.
 fn clear_filters(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "dataModel.clearFilters";
     let table = {
@@ -1378,6 +1409,8 @@ fn relationship_candidates(model: &DataModel, table: usize, by_table: usize) -> 
     out
 }
 
+/// `dataModel.setShowHidden`: the Data View's Show Hidden Columns toggle; replies with the status
+/// so the window and the tables agree after one round trip.
 fn set_show_hidden(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "dataModel.setShowHidden";
     let show = p.get("show").and_then(Json::as_bool).ok_or_else(|| bad(CMD, "`show` is required (true or false)"))?;
@@ -1385,6 +1418,8 @@ fn set_show_hidden(s: &mut Session, p: &Json) -> Result<Json> {
     status(s, &Json::Null)
 }
 
+/// `dataModel.setShowImplicitMeasures`: whether the Data View lists a measure for every numeric
+/// column of a table; replies with the status, as [`set_show_hidden`] does.
 fn set_show_implicit_measures(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "dataModel.setShowImplicitMeasures";
     let show = p.get("show").and_then(Json::as_bool).ok_or_else(|| bad(CMD, "`show` is required (true or false)"))?;
@@ -1394,6 +1429,8 @@ fn set_show_implicit_measures(s: &mut Session, p: &Json) -> Result<Json> {
 
 // ---------------------------------------------------------------- model metadata
 
+/// `dataModel.setFormat`: sets a measure's format from a code, one of the presets, or a change to
+/// the current code's decimal places. `format: null` clears it (General).
 fn set_format(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "dataModel.setFormat";
     let name = required_str(p, CMD, "name")?;
@@ -1432,6 +1469,8 @@ fn set_format(s: &mut Session, p: &Json) -> Result<Json> {
     commit(s, CMD, model)
 }
 
+/// `dataModel.setColumnHidden`: hides a column in the Data View (metadata, saved with the model
+/// document). `hidden` defaults to true.
 fn set_column_hidden(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "dataModel.setColumnHidden";
     let table_name = required_str(p, CMD, "table")?;
@@ -1450,6 +1489,8 @@ fn set_column_hidden(s: &mut Session, p: &Json) -> Result<Json> {
     status(s, &Json::Null)
 }
 
+/// `dataModel.setColumnType`: declares a column's model type after proving every stored value can
+/// hold it, so a rejected change leaves the type unchanged. A marked date column must stay DateTime.
 fn set_column_type(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "dataModel.setColumnType";
     let table_name = required_str(p, CMD, "table")?;
@@ -1480,6 +1521,8 @@ fn set_column_type(s: &mut Session, p: &Json) -> Result<Json> {
     commit(s, CMD, model)
 }
 
+/// `dataModel.setSummarizeBy`: sets how a column's values are summarized in a data field
+/// (metadata). `null` resets it to the type's default.
 fn set_summarize_by(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "dataModel.setSummarizeBy";
     let table_name = required_str(p, CMD, "table")?;
@@ -1571,6 +1614,8 @@ fn mark_date_table(s: &mut Session, p: &Json) -> Result<Json> {
     status(s, &Json::Null)
 }
 
+/// `dataModel.unmarkDateTable`: clears the table's date column (metadata), refusing a table that
+/// is not marked.
 fn unmark_date_table(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "dataModel.unmarkDateTable";
     let table = {
@@ -1595,10 +1640,14 @@ fn validate(s: &mut Session, _: &Json) -> Result<Json> {
     serde_json::to_value(gridcraft_dax::validate_model(model)).map_err(|error| bad(CMD, format!("cannot serialize the report: {error}")))
 }
 
+/// A scalar as JSON: its number, string or bool, `null` for BLANK and for a value JSON cannot
+/// carry.
 fn value_json(value: &gridcraft_dax::Scalar) -> Json {
     serde_json::to_value(value).unwrap_or(Json::Null)
 }
 
+/// A table value as `{columns, rows}`: the column names and one array per row, cells through
+/// [`value_json`].
 fn table_json(table: &gridcraft_dax::TableValue) -> Json {
     json!({
         "columns": table.columns.iter().map(|column| column.name.clone()).collect::<Vec<_>>(),
@@ -1633,6 +1682,8 @@ mod tests {
         "measures": [{"name":"Total Sales","formula":"SUM(Sales[Amount])","table":"Sales"}]
     }"#;
 
+    /// `dataModel.load` takes JSON text or a model object; malformed input and no source are
+    /// errors.
     #[test]
     fn load_accepts_json_text_and_objects() {
         let mut s = Session::new();
@@ -1646,6 +1697,8 @@ mod tests {
         assert!(s.execute("dataModel.load", json!({})).is_err());
     }
 
+    /// A loaded model answers status, evaluates a formula and a measure, returns a table and
+    /// pivots it.
     #[test]
     fn load_status_evaluate_and_pivot() {
         let (path, dir) = fixture("load-status-evaluate-pivot");
@@ -1668,6 +1721,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// Evaluating with no model, an unknown table reference or a missing measure is an error.
     #[test]
     fn missing_model_and_bad_formula_report_errors() {
         let mut s = Session::new();
@@ -1679,6 +1733,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// A `dataModel.*` edit adds no workbook undo step, so Undo never discards a measure or a
+    /// relationship.
     #[test]
     fn model_edits_add_no_workbook_undo_steps() {
         // The model lives on the session, not in the workbook, so an edit cannot be an undo step:
@@ -1713,6 +1769,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// A rolled-back group puts the model, its metadata, the Data View, the workbook and the
+    /// selection back as they were.
     #[test]
     fn a_failed_group_rolls_back_the_data_model_state() {
         // The model, its metadata and the Data View are session state, edited without an undo
@@ -1754,10 +1812,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// The status entry for `name`, panicking when the measure is not listed.
     fn measure<'a>(status: &'a Json, name: &str) -> &'a Json {
         status["measures"].as_array().expect("measures").iter().find(|m| m["name"] == name).expect("measure")
     }
 
+    /// A group that closes its document and then fails still takes its data-model edits back.
     #[test]
     fn a_group_that_closes_its_document_and_fails_still_rolls_the_model_back() {
         // Closing the document takes the workbook away, but not the group: the call that opened it
@@ -1788,6 +1848,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// A group that closes its document and succeeds keeps its data-model edits and leaves no
+    /// group open.
     #[test]
     fn a_group_that_closes_its_document_keeps_the_model_edits() {
         // The other half of the same rule: a group that succeeds leaves its data-model edits
@@ -1810,6 +1872,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// A nested group hands its data-model edits to the outer group, whose rollback takes them
+    /// back.
     #[test]
     fn a_nested_group_hands_its_model_edits_to_the_outer_group() {
         // A nested group ends on its own but makes no step of its own: if the outer group rolls
@@ -1829,6 +1893,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// The same handover after the nested group closed its document: the outer rollback still
+    /// takes its edits back.
     #[test]
     fn a_nested_group_that_closed_its_document_still_hands_back_its_edits() {
         // The same rule once the inner group has taken the workbook away: the close leaves no
@@ -1856,6 +1922,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// Rolling back one document's group keeps the edit another document's open group made.
     #[test]
     fn rolling_back_one_documents_group_keeps_another_documents_edit() {
         // The model is session state: rolling back the group open on one document must take back
@@ -1884,7 +1951,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    #[allow(clippy::cognitive_complexity)] // Add, update and delete of a measure, each with its error cases.
+    /// Add, update (rename and format included) and delete a measure, each with its error cases.
+    #[allow(clippy::cognitive_complexity)]
     #[test]
     fn measure_add_update_and_delete() {
         let (path, dir) = write_model(
@@ -1957,6 +2025,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// Add and delete relationships, with the model's spelling and the declared column types in
+    /// the status reply.
     #[test]
     fn relationship_add_and_delete_with_status_types() {
         let (path, dir) = write_model(
@@ -2061,6 +2131,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// A measure with an unparsable formula still blocks a rename or delete of the measure it
+    /// names, while an unrelated broken measure blocks nothing.
     #[test]
     fn broken_formulas_still_protect_their_references() {
         let json = r#"{
@@ -2088,6 +2160,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// A rename or delete is refused while another measure's formula references the target, and
+    /// succeeds once the dependent is gone.
     #[test]
     fn measure_edits_reject_dangling_references() {
         let json = r#"{

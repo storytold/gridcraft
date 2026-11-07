@@ -46,6 +46,8 @@ struct RelKey {
 }
 
 impl RelKey {
+    /// The identity of `relationship` with all four names lowercased, the form
+    /// [`RelKey::matches`] compares against.
     fn of(relationship: &Relationship) -> RelKey {
         RelKey {
             from_table: relationship.from_table.to_ascii_lowercase(),
@@ -55,6 +57,8 @@ impl RelKey {
         }
     }
 
+    /// Whether `relationship` joins these four endpoints, matching names case-insensitively (as
+    /// the model does).
     fn matches(&self, relationship: &Relationship) -> bool {
         self.from_table.eq_ignore_ascii_case(&relationship.from_table)
             && self.from_column.eq_ignore_ascii_case(&relationship.from_column)
@@ -92,6 +96,8 @@ pub(crate) struct Change {
 }
 
 impl Change {
+    /// A change of `key` from `before` to `after`, at position `at` in its collection. `seq`
+    /// starts at 0: the session stamps it when it records the change.
     fn new(key: Key, before: Entity, after: Entity, at: usize) -> Change {
         Change { seq: 0, key, before, after, at }
     }
@@ -127,6 +133,9 @@ pub(crate) fn model_changes(before: &Option<DataModel>, after: Option<&DataModel
     out
 }
 
+/// Appends one change per table, column type, measure and relationship the two models differ in.
+/// A table whose columns and rows match is compared column type by column type; any other
+/// difference is a change of the whole table.
 fn model_entities(before: &DataModel, after: &DataModel, out: &mut Vec<Change>) {
     for name in names_union(before.tables.iter().map(|table| &table.name), after.tables.iter().map(|table| &table.name)) {
         let found = (before.table_index(&name), after.table_index(&name));
@@ -178,6 +187,7 @@ fn same_table_shape(was: &ModelTable, is: &ModelTable) -> bool {
         && was.columns.iter().zip(&is.columns).all(|(was, is)| was.name == is.name)
 }
 
+/// Appends a change for every column of a same-shape table whose declared type differs.
 fn column_types(table: &str, was: &ModelTable, is: &ModelTable, out: &mut Vec<Change>) {
     for (index, (was, is)) in was.columns.iter().zip(&is.columns).enumerate() {
         if was.data_type == is.data_type {
@@ -285,6 +295,7 @@ fn names_union<'a>(before: impl Iterator<Item = &'a String>, after: impl Iterato
     out
 }
 
+/// Every relationship on either side, once, in the order first seen.
 fn relationship_keys(before: &DataModel, after: &DataModel) -> Vec<RelKey> {
     let mut out: Vec<RelKey> = Vec::new();
     for relationship in before.relationships.iter().chain(&after.relationships) {
@@ -296,6 +307,8 @@ fn relationship_keys(before: &DataModel, after: &DataModel) -> Vec<RelKey> {
     out
 }
 
+/// The state's current value for `key`: an absent entity reads as its `None`, the way a rollback
+/// compares it with the value its edit left.
 fn read(model: &Option<DataModel>, metadata: &ModelMetadata, view: &ModelView, key: &Key) -> Entity {
     match key {
         Key::Model => Entity::Model(model.clone()),
@@ -317,6 +330,8 @@ fn read(model: &Option<DataModel>, metadata: &ModelMetadata, view: &ModelView, k
     }
 }
 
+/// Puts `value` back at `key`, inserting a value whose collection lost it at `at`. A key whose
+/// model or metadata side has since gone (no model loaded, table dropped) is left alone.
 fn write(model: &mut Option<DataModel>, metadata: &mut ModelMetadata, view: &mut ModelView, key: &Key, value: Entity, at: usize) {
     match (key, value) {
         (Key::Model, Entity::Model(state)) => *model = state,
@@ -410,14 +425,17 @@ mod tests {
         "measures": [{"name":"Total Sales","formula":"SUM(Sales[Amount])","table":"Sales"}]
     }"#;
 
+    /// The [`MODEL`] fixture parsed as a model.
     fn loaded_model() -> DataModel {
         serde_json::from_str(MODEL).expect("model json")
     }
 
+    /// The metadata [`MODEL`] carries, read the way `dataModel.load` reads it.
     fn loaded_metadata() -> ModelMetadata {
         ModelMetadata::from_model_json(MODEL).expect("metadata json")
     }
 
+    /// A measure with no table, format or parsed expression, for diffs that compare values only.
     fn measure(name: &str, formula: &str) -> Measure {
         Measure { name: name.into(), formula: formula.into(), table: None, format: None, expr: None }
     }
@@ -430,6 +448,7 @@ mod tests {
         }
     }
 
+    /// A measure edit reverts that measure only: one another edit added since stays.
     #[test]
     fn a_measure_edit_reverts_its_own_measure_only() {
         // The state is session-wide, so a rollback must put back what its edit changed and
@@ -455,6 +474,7 @@ mod tests {
         assert_eq!(current, before);
     }
 
+    /// Loading a model over none reverts to no model, no metadata and the empty view.
     #[test]
     fn a_load_reverts_to_no_model_with_its_metadata_and_view() {
         let model = None;
@@ -475,6 +495,7 @@ mod tests {
         assert_eq!(loaded_view, view, "the view is back");
     }
 
+    /// A column type edit reverts that column only: a type another edit set since stays.
     #[test]
     fn a_column_type_edit_reverts_that_column_only() {
         let mut before = Some(loaded_model());
@@ -495,6 +516,7 @@ mod tests {
         assert_eq!(columns[1].data_type.as_deref(), Some("Currency"), "the other group's type stayed");
     }
 
+    /// A view edit reverts that table's sort and filters only: a toggle another edit set stays.
     #[test]
     fn a_view_edit_reverts_its_own_table_only() {
         let mut before = ModelView::default();
