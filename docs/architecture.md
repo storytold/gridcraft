@@ -444,7 +444,8 @@ the recommended `~/.gridcraft/python` environment, the active virtual environmen
 a read-only copy of `shim.py` and an empty working directory; `process::Launch` is the seam where a
 wrapper can change the command. The shim adds site-packages from `sysconfig` without `site`, keeps
 one `__main__` for all cells until `reset`, answers `xl(ref)` from the inputs the parent sent, and
-converts the last expression's value. Only the crate's tests start a process or a client. `protocol`
+converts the last expression's value. The engine's cell runner and its check of the environment, and
+`gridcraft-cli python-check`, start a worker through the sandbox (`ProcessTransport::confined`). `protocol`
 is the JSON-lines protocol (`run {id, code, inputs}`, `reset {id}`; `ready {selfTest}` once, then
 one `done {id, ok, value or error, stdout}` per request) with a byte or character cap on every field
 and array shapes checked on read: every line from the worker is untrusted. `run` holds the limits of
