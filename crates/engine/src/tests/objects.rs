@@ -499,3 +499,17 @@ fn align_refuses_ids_that_are_not_an_array() {
     s.execute("arrange.group", json!({"kind": "shape"})).unwrap();
     assert_eq!((anchor_of(&s, shape), anchor_of(&s, equation)), before, "nothing moved");
 }
+
+#[test]
+fn chart_move_by_id_finds_the_chart_on_an_inactive_sheet() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[3], [5], [2]]})).unwrap();
+    let chart = id_of(&s.execute("insert.chart", json!({"range": "A1:A3", "type": "column"})).unwrap(), "chart");
+    s.execute("home.insertSheet", json!({"name": "Dashboard"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Dashboard"})).unwrap();
+    s.execute("chart.move", json!({"chart": chart, "sheet": "Dashboard", "at": "A40"})).unwrap();
+    assert!(sheet(&s, 0).charts.is_empty());
+    assert_eq!(sheet(&s, 1).charts.len(), 1);
+    assert_eq!(sheet(&s, 1).charts[0].id, chart);
+    assert_eq!(s.doc().unwrap().wb.active_sheet(), 1);
+}
