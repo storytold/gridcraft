@@ -69,7 +69,7 @@ pub(super) fn accrint(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 
 pub(super) fn accrintm(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (issue, settle, rate) = (date(a, 0)?, date(a, 1)?, num(a, 2)?);
-    let par = if has(a, 3) { num(a, 3)? } else { 1000.0 };
+    let par = num(a, 3)?;
     let basis = basis_arg(a, 4)?;
     if issue >= settle || rate <= 0.0 || par <= 0.0 {
         return Err(CellError::Num);
