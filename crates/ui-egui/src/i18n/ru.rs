@@ -459,6 +459,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Maximum Iterations must be a whole number from 1 to 32767." => "Предельное число итераций должно быть целым числом от 1 до 32767.",
         "Maximum Change must be a number of 0 or more." => "Максимальное изменение должно быть числом не меньше 0.",
         "Calculation settings are saved with the workbook." => "Параметры вычислений сохраняются вместе с книгой.",
+        "Use 1904 date system" => "Использовать систему дат 1904",
         "Insert Sheet" => "Вставить лист",
         "Rename" => "Переименовать",
         "Move or Copy…" => "Переместить или скопировать…",
