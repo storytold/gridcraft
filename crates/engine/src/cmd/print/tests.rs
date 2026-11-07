@@ -938,3 +938,38 @@ fn equations_print_with_the_symbol_font() {
     // A glyph no standard font has is a [?] box.
     assert!(contains(&pdf, "(?) Tj"));
 }
+
+/// File › Export previews Create PDF's pages with `file.printPreview` and the parameters it
+/// exports with, so the two must lay out the same pages for each "Publish What": the active
+/// sheet, whichever it is, or every visible sheet.
+#[test]
+fn print_preview_lists_the_pages_the_pdf_export_writes() {
+    let mut s = s();
+    let column = |n: u32| Json::Array((1..=n).map(|i| json!([i])).collect());
+    s.execute("range.setValues", json!({"range": "A1", "values": column(120)})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Two"})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": column(30)})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Hidden"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Hidden"})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": column(200)})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("sheet.hide", json!({"sheet": "Hidden"})).unwrap();
+    let mut counts = Vec::new();
+    for active in ["Sheet1", "Two"] {
+        s.execute("sheet.activate", json!({"sheet": active})).unwrap();
+        for params in [json!({}), json!({"sheets": "active"}), json!({"sheets": "all"})] {
+            let preview = s.execute("file.printPreview", params.clone()).unwrap();
+            let (_, pages) = pdf_of(&mut s, params.clone());
+            assert_eq!(preview["pages"].as_u64(), Some(pages), "{active} {params}: preview and PDF disagree");
+            assert_eq!(preview["pageList"].as_array().map(Vec::len), usize::try_from(pages).ok(), "{active} {params}");
+            counts.push(pages);
+        }
+    }
+    // Sheet1 alone, Two alone and the two visible sheets give three different counts, so the
+    // comparison above covers each scope; the hidden sheet is never laid out.
+    let (one, two, all) = (counts[0], counts[3], counts[2]);
+    assert!(one > two && two >= 1, "Sheet1 {one}, Two {two}");
+    assert_eq!(all, one + two, "the whole workbook is the visible sheets");
+    assert_eq!(counts[5], all, "the whole workbook does not depend on the active sheet");
+}
