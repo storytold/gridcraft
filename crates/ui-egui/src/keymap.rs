@@ -161,6 +161,8 @@ fn lookup_windows_shortcuts(ctx: LookupContext) -> Option<Shortcut> {
     })
 }
 
+/// Maps platform-specific letter shortcuts to existing commands and dialogs.
+/// Returns None when this shortcut group does not handle the key.
 fn lookup_platform_letters(ctx: LookupContext) -> Option<Shortcut> {
     use Key::*;
     let LookupContext { key: k, ctrl, cmd, alt, ctrl_alt, plain, shift: s, mac, .. } = ctx;
@@ -170,6 +172,8 @@ fn lookup_platform_letters(ctx: LookupContext) -> Option<Shortcut> {
     Some(match k {
         // Letters that differ between Windows and Mac.
         L if (cmd || ctrl) && s => run("data.filter"),
+        // Alternative Paste Special shortcut (#2780), alongside Ctrl+Alt+V / Ctrl+Cmd+V.
+        V if cmd && s => Shortcut::Dialog("pasteSpecial", json!({})),
         L if cmd && mac => run("home.alignLeft"),
         L if ctrl && mac => Shortcut::Dialog("defineName", json!({})),
         // Ctrl+Shift+U (Control+Shift+U in Excel for Mac) expands or collapses the formula bar.
