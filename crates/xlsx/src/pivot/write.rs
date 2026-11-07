@@ -121,8 +121,9 @@ fn cache_compatible(a: &Cache, b: &Cache) -> bool {
 pub struct PivotWriter {
     /// (cache id, workbook-relative part name).
     caches: Vec<(u32, String)>,
-    /// Definitions already written, used to share one cache across compatible PivotTables.
-    cache_defs: Vec<Cache>,
+    /// Indices into `pending` of cache definitions already written, used to share one cache across
+    /// compatible PivotTables without cloning `Cache`.
+    cache_defs: Vec<usize>,
     pending: Vec<Pending>,
     tables: u32,
 }
@@ -142,7 +143,7 @@ impl PivotWriter {
         let Some(sheet) = wb.sheet(si) else { return };
         for (idx, pt) in sheet.pivots.iter().enumerate() {
             let Some(cache) = build_cache(wb, pt, si) else { continue };
-            let n = if let Some(existing) = self.cache_defs.iter().position(|c| cache_compatible(c, &cache)) {
+            let n = if let Some(existing) = self.cache_defs.iter().position(|&pi| cache_compatible(&self.pending[pi].cache, &cache)) {
                 existing as u32 + 1
             } else {
                 let n = self.caches.len() as u32 + 1;
@@ -160,7 +161,7 @@ impl PivotWriter {
                 };
                 out.part(&cache_part, Some(CT_PIVOT_CACHE_DEF), cache_xml(&cache, rec_rid.as_deref(), wb.date_system).into_bytes());
                 self.caches.push((n, format!("pivotCache/pivotCacheDefinition{n}.xml")));
-                self.cache_defs.push(cache.clone());
+                self.cache_defs.push(self.pending.len());
                 n
             };
             self.tables += 1;
