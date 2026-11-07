@@ -207,10 +207,12 @@ fn dummy_function_inner(e: &Expr, known: &dyn Fn(&str) -> bool) -> Option<Expr> 
     let mut all_known = true;
     parsed.walk(&mut |x| {
         if let Expr::Call(n, args) = x {
+            let plain_regex = args.get(1).is_some_and(|pattern| matches!(pattern, Expr::Text(s) if !s.contains('(')));
+            let plain_replace = args.get(2).is_some_and(|rep| matches!(rep, Expr::Text(s) if !s.contains('$') && !s.contains('\\')));
             let incompatible = (n.eq_ignore_ascii_case("FILTER") && args.len() > 2)
                 || (n.eq_ignore_ascii_case("SORT") && args.len() > 4)
-                || ((n.eq_ignore_ascii_case("REGEXEXTRACT") || n.eq_ignore_ascii_case("REGEXREPLACE"))
-                    && args.get(1).is_some_and(|pattern| matches!(pattern, Expr::Text(s) if s.contains('('))));
+                || (n.eq_ignore_ascii_case("REGEXEXTRACT") && !plain_regex)
+                || (n.eq_ignore_ascii_case("REGEXREPLACE") && !(plain_regex || plain_replace));
             all_known &= !incompatible && known(n);
         }
     });
@@ -502,7 +504,9 @@ mod google_wrapper_regressions {
         for file in [
             "IFERROR(__xludf.DUMMYFUNCTION(\"FILTER(A1:A3,B1:B3>0,C1:C3>0)\"),0)",
             "IFERROR(__xludf.DUMMYFUNCTION(\"SORT(A1:A3,1,TRUE,2,TRUE)\"),0)",
-            "IFERROR(__xludf.DUMMYFUNCTION(\"REGEXEXTRACT(A1,\\\"(a)\\\")\"),0)",
+            "IFERROR(__xludf.DUMMYFUNCTION(\"REGEXEXTRACT(A1,\"\"(a)\"\")\"),0)",
+            "IFERROR(__xludf.DUMMYFUNCTION(\"REGEXEXTRACT(A1,B1)\"),0)",
+            "IFERROR(__xludf.DUMMYFUNCTION(\"REGEXREPLACE(A1,\"\"(a)\"\",\"\"$1\"\")\"),0)",
         ] {
             let text = read(file);
             assert!(text.contains("DUMMYFUNCTION"), "{file} -> {text}");

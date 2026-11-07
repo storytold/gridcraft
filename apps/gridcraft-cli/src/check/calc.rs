@@ -92,7 +92,7 @@ pub fn bool_cached_as_number(expected: &Value, actual: &Value) -> bool {
 fn cached_error_text(s: &str) -> Option<&'static str> {
     match s.trim() {
         "#DIV/0!" => Some("#DIV/0!"),
-        "#N/A" => Some("#N/A"),
+        "#N/A" | "#N/A!" => Some("#N/A"),
         "#VALUE!" => Some("#VALUE!"),
         "#REF!" => Some("#REF!"),
         "#NAME?" => Some("#NAME?"),
@@ -106,15 +106,15 @@ fn cached_error_text(s: &str) -> Option<&'static str> {
 }
 
 /// Whether a cached string error literal agrees with the evaluated error value.
-fn cached_error_matches(s: &str, err: &CellError) -> bool {
-    cached_error_text(s).is_some_and(|literal| literal.eq_ignore_ascii_case(err.as_str()))
+fn text_cached_as_error(expected: &Value, actual: &Value) -> bool {
+    matches!((expected, actual), (Value::Text(s), Value::Error(err)) if cached_error_text(s).is_some_and(|lit| lit.eq_ignore_ascii_case(err.as_str())))
 }
 
+/// Whether GridCraft's `actual` agrees with the producer's `expected`.
 pub fn values_match(expected: &Value, actual: &Value, tolerance: f64) -> bool {
     match (expected, actual) {
         (Value::Number(a), Value::Number(b)) => (a - b).abs() <= tolerance * a.abs().max(b.abs()).max(1.0),
         (Value::Text(a), Value::Text(b)) => a == b,
-        (Value::Text(a), Value::Error(b)) => cached_error_matches(a, b),
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Error(a), Value::Error(b)) => a == b,
         _ => false,
@@ -222,7 +222,7 @@ pub fn oracle(cached: &Workbook, fresh: &Workbook, calc: &Calc, trust_cache: boo
                 None => vec!["(unparsed)".to_string()],
             };
             let bool_as_number = bool_cached_as_number(&cell.value, &actual);
-            let ok = bool_as_number || values_match(&cell.value, &actual, opts.tolerance);
+            let ok = bool_as_number || text_cached_as_error(&cell.value, &actual) || values_match(&cell.value, &actual, opts.tolerance);
             if bool_as_number {
                 r.bool_as_number += 1;
             }

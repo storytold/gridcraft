@@ -305,6 +305,7 @@ impl DocState {
         calc.rebuild(&wb);
         // Some Google Sheets exports carry refreshOnLoad pivots with an empty location. The XLSX
         // reader marks those reports with no last range; populate them before the document is shown.
+        let mut refreshed = false;
         for si in 0..wb.sheets.len() {
             let count = wb.sheet(si).map(|s| s.pivots.len()).unwrap_or(0);
             for idx in 0..count {
@@ -318,10 +319,13 @@ impl DocState {
                         })
                     })
                     .unwrap_or(false);
-                if needs_refresh {
-                    let _ = crate::pivot::refresh(&mut wb, si, idx, true);
+                if needs_refresh && crate::pivot::refresh(&mut wb, si, idx, false).is_ok() {
+                    refreshed = true;
                 }
             }
+        }
+        if refreshed {
+            calc.recalc_all(&mut wb);
         }
         Self::with_calc(wb, calc, path, title, trust)
     }
