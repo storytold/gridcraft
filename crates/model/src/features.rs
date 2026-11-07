@@ -398,6 +398,17 @@ pub struct Anchor {
     /// How the object follows its anchor cell when rows/columns move (sort, insert, delete).
     #[serde(default)]
     pub mode: AnchorMode,
+    /// The far marker while its row or column is hidden, so unhiding can restore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden_end: Option<AnchorEnd>,
+}
+
+/// Far marker for an object whose end cell is temporarily hidden.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AnchorEnd {
+    pub cell: CellRef,
+    pub dx: f32,
+    pub dy: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]

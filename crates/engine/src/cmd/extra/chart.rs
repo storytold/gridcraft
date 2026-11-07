@@ -242,10 +242,14 @@ pub(super) fn move_chart(s: &mut Session, p: &Json) -> Result<Json> {
     let at = cell_param_on(s, p, "at", target.unwrap_or(si))?;
     edit(s, |cx| {
         let mut chart = cx.sheet_mut(si)?.charts.remove(ci);
+        let moved_cell = at.is_some_and(|cell| cell != chart.anchor.cell);
         if let Some(a) = at {
             chart.anchor.cell = a;
         }
         let dest = target.unwrap_or(si);
+        if dest != si || moved_cell {
+            chart.anchor.hidden_end = None;
+        }
         cx.sheet_mut(dest)?.charts.push(chart);
         Ok(Json::Null)
     })

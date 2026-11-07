@@ -346,7 +346,7 @@ fn sample() -> Workbook {
     s.images.push(Image {
         id: 10,
         // A non-default anchor mode, to prove it survives an xlsx round-trip.
-        anchor: Anchor { cell: at("C10"), dx: 5.0, dy: 4.0, width: 120.0, height: 80.0, mode: AnchorMode::MoveOnly },
+        anchor: Anchor { cell: at("C10"), dx: 5.0, dy: 4.0, width: 120.0, height: 80.0, mode: AnchorMode::MoveOnly, hidden_end: None },
         data: png.into(),
         mime: "image/png".into(),
         alt: "Logo \"x\"".into(),
@@ -355,7 +355,7 @@ fn sample() -> Workbook {
         math: Default::default(),
         id: 11,
         kind: ShapeKind::Ellipse,
-        anchor: Anchor { cell: at("E10"), dx: 0.0, dy: 0.0, width: 64.0, height: 40.0, mode: AnchorMode::Absolute },
+        anchor: Anchor { cell: at("E10"), dx: 0.0, dy: 0.0, width: 64.0, height: 40.0, mode: AnchorMode::Absolute, hidden_end: None },
         fill: Color::Rgb(0x4472C4),
         line: Color::Rgb(0x000000),
         text: "Hi\nthere".into(),
@@ -1425,6 +1425,33 @@ fn japanese_paper_sizes_round_trip() {
     wb.sheet_mut(0).unwrap().print.paper = "B5 (JIS)".into();
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert_eq!(back.sheet(0).unwrap().print.paper, "B5");
+}
+
+#[test]
+fn hidden_two_cell_anchor_survives_xlsx_round_trip() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.rows.insert(8, LineInfo { hidden: true, ..Default::default() });
+    sh.shapes.push(Shape {
+        math: Default::default(),
+        id: 1,
+        kind: ShapeKind::Rectangle,
+        anchor: Anchor {
+            cell: at("C5"),
+            dx: 3.0,
+            dy: 4.0,
+            width: 144.0,
+            height: 57.6,
+            mode: AnchorMode::MoveAndSize,
+            hidden_end: Some(AnchorEnd { cell: at("E9"), dx: 0.0, dy: 0.0 }),
+        },
+        fill: Color::Auto,
+        line: Color::Auto,
+        text: String::new(),
+        format: Default::default(),
+    });
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.sheets[0].shapes[0].anchor.hidden_end, wb.sheets[0].shapes[0].anchor.hidden_end);
 }
 
 /// A table's dropdown filter lives in `sheet.autofilter` (the engine's only live filter state),

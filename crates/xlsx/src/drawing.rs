@@ -9,7 +9,7 @@
 use std::fmt::Write as _;
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS};
-use gridcraft_model::{Anchor, AnchorMode, Color, Image, Shape, ShapeFormat, ShapeKind, ShapeTextAlign, ShapeTextAnchor, Sheet, Theme};
+use gridcraft_model::{Anchor, AnchorEnd, AnchorMode, Color, Image, Shape, ShapeFormat, ShapeKind, ShapeTextAlign, ShapeTextAnchor, Sheet, Theme};
 
 use crate::IoError;
 use crate::read::Ctx;
@@ -54,12 +54,17 @@ fn read_anchor(a: &El, sheet: &Sheet) -> Option<Anchor> {
                 Some("oneCell") => AnchorMode::MoveOnly,
                 _ => AnchorMode::MoveAndSize,
             };
-            Some(Anchor { cell, dx, dy, width: (x2 - x1).max(0.0) as f32, height: (y2 - y1).max(0.0) as f32, mode })
+            let hidden_end = (mode == AnchorMode::MoveAndSize && (sheet.is_row_hidden(to.row) || sheet.is_col_hidden(to.col))).then_some(AnchorEnd {
+                cell: to,
+                dx: tdx,
+                dy: tdy,
+            });
+            Some(Anchor { cell, dx, dy, width: (x2 - x1).max(0.0) as f32, height: (y2 - y1).max(0.0) as f32, mode, hidden_end })
         }
         "oneCellAnchor" => {
             let (cell, dx, dy) = marker(a.child("from")?);
             let (width, height) = ext_px(a.child("ext"));
-            Some(Anchor { cell, dx, dy, width, height, mode: AnchorMode::MoveOnly })
+            Some(Anchor { cell, dx, dy, width, height, mode: AnchorMode::MoveOnly, hidden_end: None })
         }
         "absoluteAnchor" => {
             let pos = a.child("pos");
@@ -75,6 +80,7 @@ fn read_anchor(a: &El, sheet: &Sheet) -> Option<Anchor> {
                 width,
                 height,
                 mode: AnchorMode::Absolute,
+                hidden_end: None,
             })
         }
         _ => None,
@@ -411,12 +417,18 @@ fn anchor_open(sheet: &Sheet, a: &Anchor) -> (String, &'static str) {
     let px = |v: f64| ((v.max(0.0)) * EMU_PER_PX).round() as i64;
     let x1 = sheet.col_left(a.cell.col) + a.dx as f64;
     let y1 = sheet.row_top(a.cell.row) + a.dy as f64;
-    let x2 = x1 + a.width.max(0.0) as f64;
-    let y2 = y1 + a.height.max(0.0) as f64;
-    let tc = sheet.col_at(x2);
-    let tr = sheet.row_at(y2);
-    let tdx = x2 - sheet.col_left(tc);
-    let tdy = y2 - sheet.row_top(tr);
+    let (tc, tr, tdx, tdy) = match a.hidden_end {
+        Some(end) if sheet.is_row_hidden(end.cell.row) || sheet.is_col_hidden(end.cell.col) => {
+            (end.cell.col, end.cell.row, end.dx as f64, end.dy as f64)
+        }
+        _ => {
+            let x2 = x1 + a.width.max(0.0) as f64;
+            let y2 = y1 + a.height.max(0.0) as f64;
+            let tc = sheet.col_at(x2);
+            let tr = sheet.row_at(y2);
+            (tc, tr, x2 - sheet.col_left(tc), y2 - sheet.row_top(tr))
+        }
+    };
     let edit = match a.mode {
         AnchorMode::MoveAndSize => "",
         AnchorMode::MoveOnly => " editAs=\"oneCell\"",

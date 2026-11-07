@@ -60,6 +60,7 @@ pub(super) fn insert_pivot_chart(s: &mut Session, p: &Json) -> Result<Json> {
             width: f64_param(p, "width").unwrap_or(480.0).clamp(10.0, 10_000.0) as f32,
             height: f64_param(p, "height").unwrap_or(288.0).clamp(10.0, 10_000.0) as f32,
             mode: anchor_mode_param(p).unwrap_or_default(),
+            hidden_end: None,
         },
         title,
         series,
