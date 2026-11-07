@@ -172,8 +172,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   function API. **Estimate:** 25–40 h plus an owner decision.
 
 ### 22. AI features (F)
-- Local cell translation landed: Review › Language › Translate runs a user-downloaded OPUS-MT
-  ONNX model on the CPU through `rten`, offline, with consent, SHA-256 verification, cancel and
+- Local cell translation landed: Review › Language › Translate runs a user-downloaded Qwen3
+  GGUF model on the CPU through candle, offline, with consent, SHA-256 verification, cancel and
   one-undo-step insert. It translates text cells only; formulas, numbers, dates, booleans, errors
   and empty cells are skipped and reported.
 - Still missing: an in-app assistant, natural-language formulas, Analyze Data, model-based
@@ -192,7 +192,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-07 | minor | §22: local, offline cell translation with a user-downloaded OPUS-MT model (Review › Language › Translate); the assistant and Analyze Data remain |
+| 2026-11-07 | minor | §22: local, offline cell translation with a user-downloaded Qwen3 model (Review › Language › Translate); the assistant and Analyze Data remain |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |
 | 2026-11-02 | minor | §13: Solver Sensitivity report: shadow prices, reduced costs and allowable ranges for Simplex LP; Lagrange multipliers and reduced gradients for GRG Nonlinear |
 | 2026-11-02 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |

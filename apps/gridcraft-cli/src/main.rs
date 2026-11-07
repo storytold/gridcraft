@@ -183,9 +183,9 @@ fn blank() -> Session {
 /// installed model is injected lazily. There is no download transport here; the app's consent
 /// screen is the download path.
 fn install_translate(session: &mut Session) {
-    let root = gridcraft_translate_rten::models_root();
+    let root = gridcraft_translate_candle::models_root();
     session.translate_models_dir = root.display().to_string();
-    session.translate_backend = gridcraft_translate_rten::installed_backend(&root);
+    session.translate_backend = gridcraft_translate_candle::installed_backend(&root);
 }
 
 fn activate_sheet(s: &mut Session, sheet: Option<&str>) -> Result<(), String> {

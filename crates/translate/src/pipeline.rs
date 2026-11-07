@@ -155,16 +155,18 @@ pub fn run<F: FnMut(Progress)>(
             CellPlan::Planned(planned_cell) => {
                 stats.segments += planned_cell.text_segments();
                 for (seg_index, text) in planned_cell.text_pieces() {
-                    jobs.push(Job { slot, segment: seg_index, from: planned_cell.from.clone(), text });
+                    jobs.push(Job { slot, segment: seg_index, from: planned_cell.from.clone(), auto: planned_cell.auto, text });
                 }
                 planned[slot] = Some(planned_cell);
             }
         }
     }
     // Group jobs by source language; one batch call is always one direction.
-    let mut groups: BTreeMap<String, (LangTag, Vec<usize>)> = BTreeMap::new();
+    let mut groups: BTreeMap<String, (Option<LangTag>, Vec<usize>)> = BTreeMap::new();
     for (job_index, job) in jobs.iter().enumerate() {
-        groups.entry(job.from.canonical()).or_insert_with(|| (job.from.clone(), Vec::new())).1.push(job_index);
+        let key = if job.auto { "auto".to_string() } else { job.from.canonical() };
+        let request_from = if job.auto { None } else { Some(job.from.clone()) };
+        groups.entry(key).or_insert_with(|| (request_from, Vec::new())).1.push(job_index);
     }
     let mut total_batches = 0usize;
     for (_, indexes) in groups.values() {
@@ -178,7 +180,7 @@ pub fn run<F: FnMut(Progress)>(
         let texts: Vec<String> = indexes.iter().map(|i| jobs[*i].text.clone()).collect();
         let group_limits = Limits { max_cells: texts.len().max(1), ..opts.limits };
         let plan = plan(&texts, &group_limits)?;
-        let translations = match private::translate_group(backend, from, &opts.to, &plan, cancel)? {
+        let translations = match private::translate_group(backend, from.as_ref(), &opts.to, &plan, cancel)? {
             Ok(translations) => translations,
             Err(failure) => {
                 for &job_index in indexes {
@@ -233,6 +235,7 @@ mod private {
 
     pub struct PlannedCell {
         pub from: LangTag,
+        pub auto: bool,
         pub tokens: Vec<Token>,
         pub segments: Vec<PlannedSegment>,
         pub failed: Option<Failure>,
@@ -259,6 +262,7 @@ mod private {
         pub slot: usize,
         pub segment: usize,
         pub from: LangTag,
+        pub auto: bool,
         pub text: String,
     }
 
@@ -293,17 +297,24 @@ mod private {
         if cell.text.chars().count() > opts.limits.max_cell_chars {
             return CellPlan::Skipped(SkipReason::TooLong);
         }
-        let (from, _confidence) = match &opts.from {
-            Some(from) => (from.clone(), None),
+        let (from, _confidence, auto) = match &opts.from {
+            Some(from) => (from.clone(), None, false),
             None => {
                 let d = detect(&cell.text);
-                if d.language.language() == "und" || d.confidence < opts.detect_threshold {
-                    return CellPlan::Failed(Failure::LowConfidence { detected: Some(d.language), confidence: d.confidence });
+                if backend.auto_source() {
+                    // A multilingual model gets `from: auto` itself; the detector's answer is
+                    // still reported (and may be uncertain).
+                    (d.language, Some(d.confidence), true)
+                } else {
+                    if d.language.language() == "und" || d.confidence < opts.detect_threshold {
+                        return CellPlan::Failed(Failure::LowConfidence { detected: Some(d.language), confidence: d.confidence });
+                    }
+                    (d.language, Some(d.confidence), false)
                 }
-                (d.language, Some(d.confidence))
             }
         };
-        if !backend.supports(&from, &opts.to) {
+        let supported = if auto { backend.supports_target(&opts.to) } else { backend.supports(&from, &opts.to) };
+        if !supported {
             return CellPlan::Failed(Failure::UnsupportedPair);
         }
         let Protected { masked, tokens } = match protect(&cell.text) {
@@ -347,14 +358,14 @@ mod private {
         if !segments.iter().any(|s| s.literal.is_none()) {
             return CellPlan::Skipped(SkipReason::Empty);
         }
-        CellPlan::Planned(PlannedCell { from, tokens, segments, failed: None })
+        CellPlan::Planned(PlannedCell { from, auto, tokens, segments, failed: None })
     }
 
     /// `Err(failure)` marks every cell in the group failed (an unsupported pair). A model or
     /// cancellation error is returned to abort the whole run.
     pub fn translate_group(
         backend: &dyn Backend,
-        from: &LangTag,
+        from: Option<&LangTag>,
         to: &LangTag,
         plan: &BatchPlan,
         cancel: &Cancel,

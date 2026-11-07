@@ -86,10 +86,11 @@ impl Backend for FixedBackend {
     }
 
     fn translate(&self, req: &BatchRequest<'_>, cancel: &Cancel) -> Result<Vec<String>, BackendError> {
-        if !self.supports(req.from, req.to) {
-            return Err(BackendError::UnsupportedPair { from: req.from.canonical(), to: req.to.canonical() });
+        let from = req.from.ok_or_else(|| BackendError::Input("this backend needs a source language".into()))?;
+        if !self.supports(from, req.to) {
+            return Err(BackendError::UnsupportedPair { from: from.canonical(), to: req.to.canonical() });
         }
-        let table = if req.from.language() == "en" { EN_ES } else { reverse().as_slice() };
+        let table = if from.language() == "en" { EN_ES } else { reverse().as_slice() };
         let mut out = Vec::with_capacity(req.texts.len());
         for text in req.texts {
             cancel.check()?;
@@ -148,9 +149,9 @@ mod tests {
         let b = FixedBackend;
         let cancel = Cancel::new();
         let texts = vec!["Hello, world! The total is 42 dollars.".to_string()];
-        let out = b.translate(&BatchRequest { from: &lang("en"), to: &lang("es"), texts: &texts }, &cancel).expect("translate");
+        let out = b.translate(&BatchRequest { from: Some(&lang("en")), to: &lang("es"), texts: &texts }, &cancel).expect("translate");
         assert_eq!(out[0], "Hola, mundo! El total es 42 dólares.");
-        let back = b.translate(&BatchRequest { from: &lang("es"), to: &lang("en"), texts: &out }, &cancel).expect("back");
+        let back = b.translate(&BatchRequest { from: Some(&lang("es")), to: &lang("en"), texts: &out }, &cancel).expect("back");
         assert_eq!(back[0], "Hello, world! The total is 42 dollars.");
     }
 
@@ -160,7 +161,7 @@ mod tests {
         assert!(!b.supports(&lang("en"), &lang("de")));
         let texts = vec!["x".to_string()];
         assert!(matches!(
-            b.translate(&BatchRequest { from: &lang("en"), to: &lang("de"), texts: &texts }, &Cancel::new()),
+            b.translate(&BatchRequest { from: Some(&lang("en")), to: &lang("de"), texts: &texts }, &Cancel::new()),
             Err(BackendError::UnsupportedPair { .. })
         ));
     }
@@ -171,7 +172,7 @@ mod tests {
         cancel.cancel();
         let texts = vec!["Hello".to_string()];
         assert_eq!(
-            FixedBackend.translate(&BatchRequest { from: &lang("en"), to: &lang("es"), texts: &texts }, &cancel),
+            FixedBackend.translate(&BatchRequest { from: Some(&lang("en")), to: &lang("es"), texts: &texts }, &cancel),
             Err(BackendError::Cancelled)
         );
     }

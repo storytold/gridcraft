@@ -30,7 +30,7 @@ channel, `gridcraft-cli run --cmd` and MCP see, because every action is a normal
 | Crate | Layer | Role |
 |---|---|---|
 | `gridcraft-translate` | L1, pure, wasm-clean | BCP-47 tags and aliases, detection, segmentation, protection, skip rules, batch planning, model manifest, the `Backend` / `ModelFetcher` seams, the deterministic test backend (`test-backend` feature, never in a shipped build) |
-| `gridcraft-translate-rten` | L6, native | The model backend: verifies model files (size + SHA-256), loads the ONNX encoder/decoder with `rten`, builds the sentencepiece tokenizers with `tokenizers`, greedy decoding, CPU only |
+| `gridcraft-translate-candle` | L6, native | The model backend: verifies model files (size + SHA-256), loads a dense Qwen3 GGUF with candle's `quantized_qwen3`, tokenizes with `tokenizers`, greedy chat-format decoding on the CPU |
 | `gridcraft-engine` (`cmd/translate.rs`) | L5 | The eleven commands, the cell snapshot, job state on a worker thread, `translate.insert`'s one-undo-group write, model install/remove and verification |
 | `gridcraft-ui-egui` (`panes.rs`, `ribbon/review.rs`) | L6 | The Translate task pane, Review › Language › Translate and keytip `RL`; strings in ten interface languages |
 
@@ -65,53 +65,46 @@ channel, the CLI and MCP.
 
 ## Model, licence and hashes
 
-The working v1 pair is **OPUS-MT English → Spanish**, the ONNX conversion published by Xenova.
-The candle conversion at `refs/pr/4` was evaluated and rejected (it produced garbage for ordinary
-sentences); the ONNX files reproduce onnxruntime token-for-token under `rten` (see evidence
-below). The manifest records the model card's real licence per pair.
+The working v1 model is **Qwen3 1.7B**, dense and Apache-2.0, quantized to Q8_0. Qwen3.5 is a
+hybrid linear-attention architecture (`qwen3_5`, linear-attention layers with convolution state)
+that candle does not implement; only dense `qwen3`/`quantized_qwen3` exists, so Qwen3.5 is not
+used. The model is multilingual (119 languages), so the same weights serve several pairs.
 
 | File | Bytes | SHA-256 |
 |---|---:|---|
-| `onnx/encoder_model_quantized.onnx` | 52,899,742 | `03434edd1147e6c49e22066e9dc5888235e99cc35a6711d1c4ea5b06455d5da9` |
-| `onnx/decoder_model_quantized.onnx` | 59,842,102 | `2b45074cc819f1d901e40510d7bc0781d99327d16c7eca04518c4ee0c3d6ba10` |
-| `source.spm` | 801,636 | `4dd547c24816a335e7b0b2e63376a8f1b3cbfc671eda5ab808dd44fdadaa8791` |
-| `target.spm` | 825,924 | `e236ee6d866b635c0142114f8647f39831f9d92534aa2aad75c942f6a78ad0e3` |
-| `vocab.json` | 1,720,044 | `b074b4cca0036ade5a39ea97faabd534e1015482c480fc2cb02c6481983eb163` |
-| `config.json` | 1,468 | `499eae1f97eeba63172fc884f92fd727ae803b7ceb79c0f653aa4b011152af2f` |
+| `Qwen3-1.7B-Q8_0.gguf` | 1,834,426,016 | `061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a` |
+| `tokenizer.json` | 11,422,654 | `aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4` |
 
-- Source: `Xenova/opus-mt-en-es`, pinned revision
-  `4b002a4c7edd54a7ced58877258b87f7efd3f892` (immutable commit, not a moving ref).
-- Licence: **Apache-2.0** (model card `Xenova/opus-mt-en-es`; the weights convert
-  `Helsinki-NLP/opus-mt-en-es`, whose card is also Apache-2.0). Recorded in the manifest and shown
+- Weights: `Qwen/Qwen3-1.7B-GGUF` at `90862c4b9d2787eaed51d12237eafdfe7c5f6077`.
+- Tokenizer: `Qwen/Qwen3-1.7B` at `70d244cc86ccca08cf5af4e1e306ecf908b1ad5e` (the GGUF repository
+  does not ship it, so the manifest carries one pinned URL per file).
+- Licence: **Apache-2.0** (weights and tokenizer model cards), recorded in the manifest and shown
   before download.
-- Total download: 116,090,916 bytes (~116 MB, ~111 MiB).
-- The Xenova `vocab.json` differs from the Helsinki main-branch one; all six files must come from
-  the same revision. Mixing them produced different token ids.
-- Minimum memory hint: 512 MB. Nothing is downloaded, read or verified at startup or when the pane
-  opens.
+- Total download: 1,845,848,670 bytes (~1.85 GB, ~1.72 GiB). This is a large model: the pane shows
+  the size and the 3 GB memory hint honestly. It is under the 2 GB-per-model refusal threshold but
+  above the point where a download is casual.
+- Inference is one segment at a time: the chat prompt is capped at 2,048 tokens and new tokens at
+  256; the 1.8 GB GGUF loads once, on the worker's first translation.
+- Nothing is downloaded, read or verified at startup or when the pane opens.
 
-### Pairs considered for later rows
+### Pairs verified in v1
 
-OPUS-MT licences vary by model card, so each row records its own:
+`en → es`, `en → de`, `en → ja` and `zh → en` are in the manifest and were run end to end on this
+machine (see Measured evidence). The model can translate more languages, but a pair is only listed
+as supported after it is run and recorded; do not claim a pair from the model card alone. With
+`from: auto` the heuristic detector's answer is shown but the model performs the translation, so
+an uncertain short string still translates.
 
-| Pair | Repository | Licence |
-|---|---|---|
-| en → de | `Helsinki-NLP/opus-mt-en-de` | CC-BY-4.0 |
-| en → fr | `Helsinki-NLP/opus-mt-en-fr` | Apache-2.0 |
-| en → ru | `Helsinki-NLP/opus-mt-en-ru` | Apache-2.0 |
-| en → zh | `Helsinki-NLP/opus-mt-en-zh` | Apache-2.0 |
-| zh → en | `Helsinki-NLP/opus-mt-zh-en` | CC-BY-4.0 |
-| ar → en | `Helsinki-NLP/opus-mt-ar-en` | Apache-2.0 |
-
-`facebook/nllb-200` is CC-BY-NC-4.0 and is not used. An OPUS-MT pair becomes supported by adding
-a manifest row, its ONNX files and a config in the backend; the command and pane surfaces do not
-change.
+Other models considered: OPUS-MT per-pair models were implemented first (small, ~116 MB) but
+produced narrower output and needed one download per pair; candle + Qwen3 1.7B gives broad
+coverage with one model. `Qwen3-4B` (Q4_K_M) and `Qwen3-0.6B` (Q8, 639 MB) remain the quality/speed
+fallbacks if a future machine cannot spare 1.8 GB.
 
 ## Model directory and lifecycle
 
 ```
-<model root>/opus-mt-en-es/manifest.json   provenance sidecar written after verification
-<model root>/opus-mt-en-es/<files…>        exactly the files the manifest lists
+<model root>/qwen3-1.7b/manifest.json   provenance sidecar written after verification
+<model root>/qwen3-1.7b/<files…>        exactly the files the manifest lists
 ```
 
 The root is the first of:
@@ -132,9 +125,9 @@ does not match a manifest row is refused.
 
 | Platform | Runtime | Status |
 |---|---|---|
-| Windows x86-64 | rten 0.27, pure-Rust CPU | Default and tested here |
-| macOS (Intel/Apple silicon) | rten CPU | Default; no required accelerator |
-| Linux x86-64/ARM64, BSD | rten CPU | Default |
+| Windows x86-64 | candle 0.11, pure-Rust CPU | Default and tested here |
+| macOS (Intel/Apple silicon) | candle CPU | Default; no required accelerator |
+| Linux x86-64/ARM64, BSD | candle CPU | Default |
 | Web (wasm) | — | Translation disabled in v1; no model backend ships |
 
 `translate.models` reports `accelerators: ["cpu"]`. `gridcraft_translate::Accelerator` is the seam
@@ -150,10 +143,10 @@ dependency of this PR.
 |---|---:|
 | Cells per request | 10,000 |
 | Characters per request | 2,000,000 |
-| Model tokens per batch (estimated) | 512,000 |
+| Model tokens per batch (estimated) | 512,000 (each segment is one model call, prompt ≤ 2,048) |
 | Characters per cell | 32,000 |
-| Batch timeout (`translate.run`) | 600,000 ms (10 min), capped at 1 h |
-| Decoder steps | 128 (greedy; stops at EOS) |
+| Job timeout (`translate.run`, default) | 1,800,000 ms (30 min), capped at 1 h; cancellation is authoritative |
+| New tokens per segment | 256 (greedy; stops at `<|im_end|>`/EOS) |
 | Model file (sanity bound before the manifest check) | 512 MB |
 
 Limits are checked before a batch is allocated; they can be lowered with command params
@@ -191,22 +184,30 @@ summarised into an error or a log.
 
 ## Measured evidence (2026-11-07, Windows x64, CPU, test profile with optimised dependencies)
 
-Model: `Xenova/opus-mt-en-es` at `4b002a4c7edd54a7ced58877258b87f7efd3f892`, quantized ONNX,
-rten 0.27, greedy decoding.
+Model: `Qwen3-1.7B-Q8_0.gguf` at the pinned revision, candle 0.11 `quantized_qwen3`, greedy,
+thinking forced off with the empty `<think></think>` block. Times include protection,
+tokenisation and decode for one cell; the first call also includes loading and verifying the
+1.8 GB file. Machine load varied during the run, so treat them as an honest range, not a
+benchmark: 7.5–45.5 s per cell, with most short sentences at 20–30 s.
 
 | Input | Output | Time |
 |---|---|---|
-| The total is 42 dollars. | `El total es de 42 dólares.` | ~1.21 s for both sentences including the 116 MB model load and verification |
-| Good morning, the report is ready for review. | `Buenos días, el informe está listo para su revisión.` | included above |
+| The total is 42 dollars. | `El total es 42 dólares.` | 45.5 s (first call, includes model load); 30.3 s on a later repeat |
+| Good morning, the report is ready for review. | `Guten Morgen, der Bericht ist für die Prüfung bereit.` | 21.2 s |
+| The meeting is on Friday. | `会は金曜日に開催されます。` | 20.0 s |
+| 会议在星期五。 | `The meeting is on Friday.` | 7.6 s |
+| The total is 42 dollars. (auto source) | `El total es 42 dólares.` | 30.3 s |
 
-The first sentence's encoder ids were `[42, 447, 31, 3222, 5624, 3, 0]` and the decoder produced
-`[65000, 54, 447, 43, 4, 3222, 753, 3, 0]`, matching onnxruntime. The number `42` is preserved
-through protection and restoration.
+The number `42` survives protection and restoration in every Spanish output. Reported by the
+maintainer on the same day, also under build load: 1.7B `58 s / 102 s / 47 s` for
+en→es, en→de and en→ja; 0.6B `36 s / 50 s / 27 s` for the same shape, with outputs
+`Total: 42 dólares.`, `Guten Tag, der Bericht ist für die Überprüfung bereit.` and `近い駅の位置？`.
+The 0.6B model is faster and less precise; both are Apache-2.0.
 
 Reproduce:
 
 ```sh
-GRIDCRAFT_TRANSLATE_MODEL=<model dir> cargo test -p gridcraft-translate-rten \
+GRIDCRAFT_TRANSLATE_MODEL=<qwen3-1.7b dir> cargo test -p gridcraft-translate-candle \
   --test real_model -- --ignored --nocapture
 ```
 
@@ -218,5 +219,5 @@ GRIDCRAFT_TRANSLATE_MODEL=<model dir> cargo test -p gridcraft-translate-rten \
 - `crates/engine/tests/it/translate.rs`: run → insert, one undo step, formula cells untouched,
   translated `=…` stays text, cancel/timeout/backend error write nothing, XLSX round-trip with no
   new package parts, consent/permission/hash/path/truncation failures.
-- `crates/translate-rten`: file verification (size, hash, traversal, zero-byte, truncated), a
+- `crates/translate-candle`: file verification (size, hash, traversal, zero-byte, truncated), a
   structured wrong-format error, and ignored real-model tests reading `GRIDCRAFT_TRANSLATE_MODEL`.

@@ -399,7 +399,7 @@ fn translate(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let models = translate_models(app, ui);
     let record = models["models"].as_array().and_then(|a| a.first()).cloned().unwrap_or(Json::Null);
-    let id = record["id"].as_str().unwrap_or("opus-mt-en-es").to_string();
+    let id = record["id"].as_str().unwrap_or("qwen3-1.7b").to_string();
     let pairs = record["pairs"].as_array().cloned().unwrap_or_default();
     let sources: Vec<String> = pairs.iter().filter_map(|p| p["from"].as_str()).map(str::to_string).collect();
     let targets: Vec<String> = pairs.iter().filter_map(|p| p["to"].as_str()).map(str::to_string).collect();

@@ -10,20 +10,20 @@ use serde::Serialize;
 /// One model's metadata and files.
 #[derive(Clone, Copy, Debug)]
 pub struct ModelManifest {
-    /// Stable id and directory name (`opus-mt-en-es`).
+    /// Stable id and directory name (`qwen3-1.7b`).
     pub id: &'static str,
     pub name: &'static str,
     /// Hugging Face repository or other source.
     pub source: &'static str,
     /// Immutable commit revision, never a moving branch or `refs/pr/N`.
     pub revision: &'static str,
-    /// Prefix the file paths are appended to.
-    pub url_base: &'static str,
     /// The model card's licence, recorded per pair (OPUS-MT licences vary).
     pub license: &'static str,
     pub license_url: &'static str,
     pub license_note: &'static str,
     pub files: &'static [ModelFile],
+    /// The GGUF weights inside `files`.
+    pub weights: &'static str,
     pub pairs: &'static [LanguagePair],
     /// Approximate resident memory the loaded backend needs, for pre-flight admission.
     pub min_ram_mb: u32,
@@ -36,6 +36,8 @@ pub struct ModelManifest {
 pub struct ModelFile {
     /// Relative path inside the model directory, with `/` separators.
     pub path: &'static str,
+    /// The exact pinned download URL (a model may span two repositories: weights and tokenizer).
+    pub url: &'static str,
     pub bytes: u64,
     /// Lower-case hex SHA-256 of the file.
     pub sha256: &'static str,
@@ -47,44 +49,80 @@ pub struct LanguagePair {
     pub to: &'static str,
 }
 
-/// The working v1 pair: OPUS-MT English→Spanish, the ONNX conversion, quantized weights.
+/// The working v1 model: Qwen3 1.7B, a dense Apache-2.0 multilingual model quantized to Q8_0.
 ///
-/// The ONNX conversion is pinned to the conversion commit (not to the mutable `refs/pr` ref the
-/// candle example used), and the quantized files are the ones measured token-for-token against
-/// onnxruntime. `vocab.json` and the two sentencepiece models come from the same revision as the
-/// conversion, because the Xenova vocabulary differs from the Helsinki main-branch one.
-pub const OPUS_MT_EN_ES: ModelManifest = ModelManifest {
-    id: "opus-mt-en-es",
-    name: "OPUS-MT English → Spanish",
-    source: "Xenova/opus-mt-en-es",
-    revision: "4b002a4c7edd54a7ced58877258b87f7efd3f892",
-    url_base: "https://huggingface.co/Xenova/opus-mt-en-es/resolve/4b002a4c7edd54a7ced58877258b87f7efd3f892/",
+/// Qwen3.5 is a hybrid linear-attention architecture with no implementation in candle, so the
+/// dense Qwen3 is used. The GGUF weights and the tokenizer are pinned to their own immutable
+/// commits (the GGUF repository does not ship the tokenizer).
+pub const QWEN3_1_7B: ModelManifest = ModelManifest {
+    id: "qwen3-1.7b",
+    name: "Qwen3 1.7B (multilingual translation)",
+    source: "Qwen/Qwen3-1.7B-GGUF + Qwen/Qwen3-1.7B tokenizer",
+    revision: "90862c4b9d2787eaed51d12237eafdfe7c5f6077",
     license: "Apache-2.0",
-    license_url: "https://huggingface.co/Xenova/opus-mt-en-es",
-    license_note: "ONNX conversion of Helsinki-NLP/opus-mt-en-es; the model card is Apache-2.0.",
+    license_url: "https://huggingface.co/Qwen/Qwen3-1.7B",
+    license_note: "Qwen3 1.7B weights and tokenizer, Apache-2.0. Qwen3.5 is a different (hybrid linear-attention) architecture and is not used.",
     files: &[
         ModelFile {
-            path: "onnx/encoder_model_quantized.onnx",
-            bytes: 52_899_742,
-            sha256: "03434edd1147e6c49e22066e9dc5888235e99cc35a6711d1c4ea5b06455d5da9",
+            path: "Qwen3-1.7B-Q8_0.gguf",
+            url: "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/90862c4b9d2787eaed51d12237eafdfe7c5f6077/Qwen3-1.7B-Q8_0.gguf",
+            bytes: 1_834_426_016,
+            sha256: "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
         },
         ModelFile {
-            path: "onnx/decoder_model_quantized.onnx",
-            bytes: 59_842_102,
-            sha256: "2b45074cc819f1d901e40510d7bc0781d99327d16c7eca04518c4ee0c3d6ba10",
+            path: "tokenizer.json",
+            url: "https://huggingface.co/Qwen/Qwen3-1.7B/resolve/70d244cc86ccca08cf5af4e1e306ecf908b1ad5e/tokenizer.json",
+            bytes: 11_422_654,
+            sha256: "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
         },
-        ModelFile { path: "source.spm", bytes: 801_636, sha256: "4dd547c24816a335e7b0b2e63376a8f1b3cbfc671eda5ab808dd44fdadaa8791" },
-        ModelFile { path: "target.spm", bytes: 825_924, sha256: "e236ee6d866b635c0142114f8647f39831f9d92534aa2aad75c942f6a78ad0e3" },
-        ModelFile { path: "vocab.json", bytes: 1_720_044, sha256: "b074b4cca0036ade5a39ea97faabd534e1015482c480fc2cb02c6481983eb163" },
-        ModelFile { path: "config.json", bytes: 1_468, sha256: "499eae1f97eeba63172fc884f92fd727ae803b7ceb79c0f653aa4b011152af2f" },
     ],
-    pairs: &[LanguagePair { from: "en", to: "es" }],
-    min_ram_mb: 512,
-    runtime: "rten 0.27, pure-Rust CPU; runs on Windows, macOS, Linux and BSD; not enabled in the web build",
+    weights: "Qwen3-1.7B-Q8_0.gguf",
+    pairs: &[
+        LanguagePair { from: "en", to: "es" },
+        LanguagePair { from: "en", to: "de" },
+        LanguagePair { from: "en", to: "ja" },
+        LanguagePair { from: "zh", to: "en" },
+    ],
+    min_ram_mb: 3072,
+    runtime: "candle 0.11 quantized Qwen3 (Q8_0), pure-Rust CPU; ~1.8 GB on disk; not enabled in the web build",
+};
+
+/// The small alternative: Qwen3 0.6B Q8_0. Same tokenizer as the 1.7B, its own revision.
+pub const QWEN3_0_6B: ModelManifest = ModelManifest {
+    id: "qwen3-0.6b",
+    name: "Qwen3 0.6B (multilingual translation, small)",
+    source: "Qwen/Qwen3-0.6B-GGUF + Qwen/Qwen3-0.6B tokenizer",
+    revision: "23749fefcc72300e3a2ad315e1317431b06b590a",
+    license: "Apache-2.0",
+    license_url: "https://huggingface.co/Qwen/Qwen3-0.6B",
+    license_note: "Qwen3 0.6B weights and tokenizer, Apache-2.0. Smaller and faster; prefer the 1.7B for quality.",
+    files: &[
+        ModelFile {
+            path: "Qwen3-0.6B-Q8_0.gguf",
+            url: "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/23749fefcc72300e3a2ad315e1317431b06b590a/Qwen3-0.6B-Q8_0.gguf",
+            bytes: 639_446_688,
+            sha256: "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031",
+        },
+        ModelFile {
+            path: "tokenizer.json",
+            url: "https://huggingface.co/Qwen/Qwen3-0.6B/resolve/c1899de289a04d12100db370d81485cdf75e47ca/tokenizer.json",
+            bytes: 11_422_654,
+            sha256: "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
+        },
+    ],
+    weights: "Qwen3-0.6B-Q8_0.gguf",
+    pairs: &[
+        LanguagePair { from: "en", to: "es" },
+        LanguagePair { from: "en", to: "de" },
+        LanguagePair { from: "en", to: "ja" },
+        LanguagePair { from: "zh", to: "en" },
+    ],
+    min_ram_mb: 1536,
+    runtime: "candle 0.11 quantized Qwen3 (Q8_0), pure-Rust CPU; ~639 MB on disk; faster and less precise than 1.7B",
 };
 
 /// Every model this build knows about. More pairs are new rows.
-pub const MANIFESTS: &[ModelManifest] = &[OPUS_MT_EN_ES];
+pub const MANIFESTS: &[ModelManifest] = &[QWEN3_1_7B, QWEN3_0_6B];
 
 pub fn find(id: &str) -> Option<&'static ModelManifest> {
     MANIFESTS.iter().find(|m| m.id == id)
@@ -99,10 +137,13 @@ pub fn total_bytes(m: &ModelManifest) -> u64 {
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
-        && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '.')
         && !id.starts_with('-')
+        && !id.starts_with('.')
         && !id.ends_with('-')
+        && !id.ends_with('.')
         && !id.contains("--")
+        && !id.contains("..")
 }
 
 /// Whether a manifest path is a plain relative path with no traversal, drives or surprising
@@ -177,11 +218,11 @@ mod tests {
 
     #[test]
     fn the_working_pair_is_en_es_and_hashed() {
-        let m = find("opus-mt-en-es").expect("manifest");
-        assert_eq!(m.pairs.len(), 1);
-        assert_eq!((m.pairs[0].from, m.pairs[0].to), ("en", "es"));
+        let m = find("qwen3-1.7b").expect("manifest");
+        assert!(m.pairs.iter().any(|p| (p.from, p.to) == ("en", "es")));
+        assert!(m.pairs.iter().any(|p| (p.from, p.to) == ("zh", "en")));
         assert_eq!(m.license, "Apache-2.0");
-        assert_eq!(total_bytes(m), 116_090_916);
+        assert_eq!(total_bytes(m), 1_845_848_670);
     }
 
     #[test]
@@ -194,7 +235,7 @@ mod tests {
 
     #[test]
     fn ids_are_directory_names() {
-        assert!(valid_id("opus-mt-en-es"));
+        assert!(valid_id("qwen3-1.7b"));
         for bad in ["", "../x", "Opus", "a/b", "-x", "x-", "a--b"] {
             assert!(!valid_id(bad), "{bad}");
         }

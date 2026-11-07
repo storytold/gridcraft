@@ -25,7 +25,7 @@ pub struct Models {
 
 impl Models {
     pub fn new() -> Models {
-        Models { root: gridcraft_translate_rten::models_root() }
+        Models { root: gridcraft_translate_candle::models_root() }
     }
 }
 
@@ -74,8 +74,8 @@ impl ModelFetcher for HttpFetcher {
 /// Resolves the model root, installs the download transport and injects a lazy backend when the
 /// model directory exists. Called once at startup and again after an install/removal.
 pub fn refresh(session: &mut Session) {
-    let root = gridcraft_translate_rten::models_root();
+    let root = gridcraft_translate_candle::models_root();
     session.translate_models_dir = root.display().to_string();
     session.translate_fetcher = Some(Arc::new(HttpFetcher));
-    session.translate_backend = gridcraft_translate_rten::installed_backend(&root);
+    session.translate_backend = gridcraft_translate_candle::installed_backend(&root);
 }

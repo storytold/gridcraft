@@ -253,13 +253,13 @@ fn model_download_requires_consent_and_verifies_every_file() {
     let dir = temp_dir("download");
     let mut s = session();
     s.translate_models_dir = dir.display().to_string();
-    let err = s.execute("translate.modelDownload", json!({"id": "opus-mt-en-es"})).unwrap_err().to_string();
+    let err = s.execute("translate.modelDownload", json!({"id": "qwen3-1.7b"})).unwrap_err().to_string();
     assert!(err.contains("consent"), "{err}");
     // A fetcher that lies about the bytes: refused before anything is written.
     s.translate_fetcher = Some(Arc::new(BadFetcher));
-    let err = s.execute("translate.modelDownload", json!({"id": "opus-mt-en-es", "consent": true})).unwrap_err().to_string();
+    let err = s.execute("translate.modelDownload", json!({"id": "qwen3-1.7b", "consent": true})).unwrap_err().to_string();
     assert!(err.contains("bytes") || err.contains("SHA-256"), "{err}");
-    assert!(!dir.join("opus-mt-en-es").exists());
+    assert!(!dir.join("qwen3-1.7b").exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -275,7 +275,7 @@ fn no_download_transport_and_no_consent_are_actionable() {
     let dir = temp_dir("transport");
     let mut s = session();
     s.translate_models_dir = dir.display().to_string();
-    let err = s.execute("translate.modelDownload", json!({"id": "opus-mt-en-es", "consent": true})).unwrap_err().to_string();
+    let err = s.execute("translate.modelDownload", json!({"id": "qwen3-1.7b", "consent": true})).unwrap_err().to_string();
     assert!(err.contains("no download transport"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -283,9 +283,9 @@ fn no_download_transport_and_no_consent_are_actionable() {
 #[test]
 fn import_of_truncated_files_is_an_error_not_a_panic() {
     let dir = temp_dir("import");
-    let source = dir.join("opus-mt-en-es");
-    let _ = std::fs::create_dir_all(source.join("onnx"));
-    for file in ["onnx/encoder_model_quantized.onnx", "onnx/decoder_model_quantized.onnx", "source.spm", "target.spm", "vocab.json", "config.json"] {
+    let source = dir.join("qwen3-1.7b");
+    let _ = std::fs::create_dir_all(&source);
+    for file in ["Qwen3-1.7B-Q8_0.gguf", "tokenizer.json"] {
         let _ = std::fs::write(source.join(file), b"");
     }
     let mut s = session();
@@ -324,7 +324,7 @@ fn every_translate_command_reports_a_missing_model() {
     assert!(pane["hint"].as_str().unwrap_or_default().contains("no translation model"));
     let models = run(&mut s, "translate.models", json!({}));
     assert_eq!(models["active"], Json::Null);
-    assert_eq!(models["models"][0]["id"], "opus-mt-en-es");
+    assert_eq!(models["models"][0]["id"], "qwen3-1.7b");
     assert_eq!(models["models"][0]["license"], "Apache-2.0");
 }
 

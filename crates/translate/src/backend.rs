@@ -13,7 +13,8 @@ use crate::tag::LangTag;
 /// One model call: all texts are in the same source language.
 #[derive(Clone, Debug)]
 pub struct BatchRequest<'a> {
-    pub from: &'a LangTag,
+    /// `None` lets the model detect the source (the pane's Auto-detect).
+    pub from: Option<&'a LangTag>,
     pub to: &'a LangTag,
     pub texts: &'a [String],
 }
@@ -101,7 +102,7 @@ impl Cancel {
 /// A translation engine. Implementations are injected into the session by the host (the desktop
 /// app or the CLI), never constructed by the engine itself.
 pub trait Backend: Send + Sync {
-    /// The manifest id of the loaded model (`opus-mt-en-es`).
+    /// The manifest id of the loaded model (`qwen3-1.7b`).
     fn model_id(&self) -> &str;
 
     /// Where it runs. CPU today.
@@ -111,6 +112,18 @@ pub trait Backend: Send + Sync {
 
     /// Whether this model has this directed pair, ignoring region and equal scripts.
     fn supports(&self, from: &LangTag, to: &LangTag) -> bool;
+
+    /// Whether this model can translate into `to` without being told the source. Large
+    /// multilingual models can; the small fixed test backend cannot.
+    fn supports_target(&self, to: &LangTag) -> bool {
+        let _ = to;
+        false
+    }
+
+    /// Whether `from: auto` may reach the model instead of being resolved by the detector first.
+    fn auto_source(&self) -> bool {
+        false
+    }
 
     /// Translates `req.texts` in order. Returns one string per input; the caller verifies the
     /// count. Check `cancel` between texts and between decoder steps.

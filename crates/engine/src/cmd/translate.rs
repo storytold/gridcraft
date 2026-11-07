@@ -292,7 +292,7 @@ fn classify(wb: &Workbook, sh: &Sheet, at: CellRef, cell: Option<&Cell>) -> Valu
 fn start(s: &mut Session, p: &Json) -> Result<Json> {
     let snap = snapshot(s, p)?;
     let backend = backend(s)?;
-    let timeout = 600_000u64;
+    let timeout = 1_800_000u64;
     let (handle, cells, skipped) = spawn_job(s, snap, backend, timeout)?;
     Ok(json!({"job": handle.id, "cells": cells, "skipped": skipped}))
 }
@@ -335,13 +335,13 @@ fn models_dir_display(s: &Session) -> String {
     if s.translate_models_dir.trim().is_empty() {
         "the model directory (set GRIDCRAFT_MODELS)".to_string()
     } else {
-        Path::new(&s.translate_models_dir).join("opus-mt-en-es").display().to_string()
+        Path::new(&s.translate_models_dir).join("qwen3-1.7b").display().to_string()
     }
 }
 
 fn timeout_param(p: &Json) -> Result<u64> {
     match p.get("timeoutMs").and_then(Json::as_u64) {
-        None => Ok(600_000),
+        None => Ok(1_800_000),
         Some(0) => Err(bad("translate.run", "`timeoutMs` must be at least 1")),
         Some(ms) => Ok(ms.min(3_600_000)),
     }
@@ -1028,8 +1028,8 @@ fn install_from_download(s: &Session, m: &ModelManifest, fetcher: &dyn gridcraft
             if !manifest::valid_relative_path(file.path) {
                 return Err(format!("the manifest path `{}` is unsafe", file.path));
             }
-            let url = format!("{}{}", m.url_base, file.path);
-            let bytes = fetcher.fetch(&url).map_err(|e| format!("downloading `{}` failed: {e}", file.path))?;
+            let url = file.url;
+            let bytes = fetcher.fetch(url).map_err(|e| format!("downloading `{}` failed: {e}", file.path))?;
             let actual = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
             if actual != file.bytes {
                 return Err(format!("`{}` has {actual} bytes; the manifest says {}", file.path, file.bytes));
