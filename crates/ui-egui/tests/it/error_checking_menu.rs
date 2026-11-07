@@ -186,7 +186,10 @@ fn trace_harness(language: Language) -> Harness {
     let mut app = crate::common::app(s);
     app.ui.language = language;
     app.ui.ribbon_tab = "Formulas".into();
-    let mut h = crate::common::builder().with_size(vec2(1400.0, 800.0)).build_ui_state(
+    // 1800 px keeps the German Formulas row expanded: the responsive ribbon collapses a group
+    // that does not fit (Formula Auditing with its long German label), which would hide the
+    // button this test clicks.
+    let mut h = crate::common::builder().with_size(vec2(1800.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);

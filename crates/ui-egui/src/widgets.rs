@@ -93,6 +93,11 @@ pub fn toggle_button(ui: &mut Ui, icon: Icon, on: bool, tip: &str) -> Response {
         ui.painter().rect_filled(rect, 4.0, t.hover);
     }
     icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, t.text);
+    // An accessible name and state, so tests and assistive technology find the control its tip
+    // names (the shortcut stays in the tooltip, as with the other ribbon controls).
+    let name = tr(ui, tip);
+    let enabled = ui.is_enabled();
+    resp.widget_info(move || egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, on, name));
     resp.on_hover_text(tip_text(ui, tip))
 }
 
@@ -113,6 +118,39 @@ pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: boo
     let enabled = ui.is_enabled();
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, &name));
     resp.on_hover_text(tip_text(ui, tip))
+}
+
+/// The button a collapsed ribbon group renders: like [`big_button`] but without the dropdown
+/// arrow, its accessible name is the group's translated name so tests and assistive technology
+/// find it where the group's label used to be.
+pub fn launcher_button(ui: &mut Ui, icon: Icon, label: &str) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let label = tr(ui, label);
+    let (lines, w) = big_label(ui, label, false);
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 72.0), Sense::click());
+    if resp.is_pointer_button_down_on() {
+        ui.painter().rect_filled(rect, 5.0, t.pressed);
+    } else if resp.hovered() {
+        ui.painter().rect_filled(rect, 5.0, t.hover);
+    }
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.center().x, rect.top() + 21.0), vec2(30.0, 30.0)), icon, t.text);
+    paint_big_label(ui, rect, &lines, false);
+    let name = label.replace('\n', " ");
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, &name));
+    resp.on_hover_text(name)
+}
+
+/// The width a [`big_button`] needs for `label` (translated, no dropdown arrow), measured like
+/// [`big_label`] does but without drawing it: used to size ribbon group launchers.
+pub fn big_button_width(ui: &Ui, label: &str) -> f32 {
+    let label = tr(ui, label);
+    let font = theme::ui_font(11.5);
+    let text_w = label
+        .split('\n')
+        .map(|line| ui.painter().layout_no_wrap(line.to_owned(), font.clone(), Tokens::get(ui.ctx()).text).size().x)
+        .fold(0.0, f32::max);
+    (text_w + 12.0).max(44.0)
 }
 
 /// Large split button (Formulas › AutoSum): the icon runs the default action, the label and its
