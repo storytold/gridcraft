@@ -38,6 +38,9 @@ pub struct Ctx<'a> {
     pub linked_records: Vec<Option<Arc<LinkedRecord>>>,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
+    /// Bytes charged so far for shared formulas expanded into dependent cells (see
+    /// [`crate::sheet_read::MAX_SHARED_FORMULA_BYTES`]).
+    pub shared_formula_bytes: u64,
     /// Whether GridCraft calculates a function, when the caller says: cell formulas wrapped by
     /// Google Sheets' export are then read as the formula inside (see [`crate::read_xlsx_with`]).
     pub known_function: Option<&'a dyn Fn(&str) -> bool>,
@@ -259,6 +262,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         cell_pictures: vec![],
         linked_records: vec![],
         cf_ext_ids: vec![],
+        shared_formula_bytes: 0,
         known_function,
         python: Default::default(),
     };
