@@ -79,7 +79,7 @@ fn skip_reason(step: &JournalStep) -> String {
     }
     match step.id.as_str() {
         "cell.set" if step.params.get("cell").and_then(Json::as_str).is_none() => "it used the active cell, which the recording does not know".into(),
-        "cell.set" if js_literal(step.params.get("input").unwrap_or(&Json::Null)).is_err() => "its value is not a number, text or true/false".into(),
+        "cell.set" if js_literal(step.params.get("input").unwrap_or(&Json::Null)).is_none() => "its value is not a number, text or true/false".into(),
         "range.setValues" if step.params.get("range").and_then(Json::as_str).is_none() => "it used the selection without a range".into(),
         "range.setValues" => "its values are not rows of numbers, text or true/false".into(),
         "home.bold" if step.params.get("range").and_then(Json::as_str).is_none() => "it used the selection without a range".into(),
@@ -97,14 +97,14 @@ fn step_call(step: &JournalStep) -> Option<(BridgeCall, String)> {
         "cell.set" => {
             let cell = p.get("cell").and_then(Json::as_str)?;
             let value = p.get("input")?;
-            let literal = js_literal(value).ok()?;
+            let literal = js_literal(value)?;
             let call = range_call("Range.setValue", step, cell, "value", value.clone());
             Some((call, format!("{}.setValue({literal});", target(step, cell))))
         }
         "range.setValues" => {
             let range = p.get("range").and_then(Json::as_str)?;
             let values = p.get("values")?.as_array()?;
-            let literal = js_rows(values).ok()?;
+            let literal = js_rows(values)?;
             let call = range_call("Range.setValues", step, range, "values", p.get("values")?.clone());
             Some((call, format!("{}.setValues({literal});", target(step, range))))
         }
@@ -188,12 +188,12 @@ fn number_format_code(p: &Json) -> Option<String> {
 
 /// A JavaScript literal for a JSON value: numbers, strings, booleans, null and arrays of those.
 /// `Err` means the value has no straightforward Office Scripts equivalent (an object).
-pub fn js_literal(value: &Json) -> Result<String, ()> {
+pub fn js_literal(value: &Json) -> Option<String> {
     match value {
-        Json::Null => Ok("null".into()),
-        Json::Bool(b) => Ok(b.to_string()),
-        Json::Number(n) => Ok(n.to_string()),
-        Json::String(s) => Ok(js_string(s)),
+        Json::Null => Some("null".into()),
+        Json::Bool(b) => Some(b.to_string()),
+        Json::Number(n) => Some(n.to_string()),
+        Json::String(s) => Some(js_string(s)),
         Json::Array(items) => {
             let mut out = String::from("[");
             for (i, item) in items.iter().enumerate() {
@@ -203,14 +203,14 @@ pub fn js_literal(value: &Json) -> Result<String, ()> {
                 out.push_str(&js_literal(item)?);
             }
             out.push(']');
-            Ok(out)
+            Some(out)
         }
-        Json::Object(_) => Err(()),
+        Json::Object(_) => None,
     }
 }
 
 /// Rows of values, as `setValues` takes them: `[[1, 2], [3, 4]]`.
-fn js_rows(rows: &[Json]) -> Result<String, ()> {
+fn js_rows(rows: &[Json]) -> Option<String> {
     let mut out = String::from("[");
     for (i, row) in rows.iter().enumerate() {
         if i > 0 {
@@ -219,7 +219,7 @@ fn js_rows(rows: &[Json]) -> Result<String, ()> {
         out.push_str(&js_literal(row)?);
     }
     out.push(']');
-    Ok(out)
+    Some(out)
 }
 
 /// A double-quoted JavaScript string, with the escapes a script needs.
@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn objects_have_no_literal() {
-        assert!(js_literal(&json!({"a": 1})).is_err());
+        assert!(js_literal(&json!({"a": 1})).is_none());
         assert_eq!(js_literal(&json!([1, [2, 3]])).unwrap(), "[1, [2, 3]]");
     }
 

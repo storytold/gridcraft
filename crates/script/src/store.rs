@@ -268,6 +268,9 @@ fn slug(name: &str) -> String {
     if trimmed.is_empty() { "script".into() } else { trimmed.to_string() }
 }
 
+// web_time is std's clock on native and the JavaScript clock on wasm, so this call is safe
+// everywhere; the lint that guards std's trapping wasm implementation does not apply.
+#[allow(clippy::disallowed_methods)]
 fn now_millis() -> u64 {
     web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64).unwrap_or(0)
 }
