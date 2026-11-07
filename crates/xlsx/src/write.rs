@@ -294,7 +294,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     };
 
     let mut wb_rels = Rels::default();
-    let (sheets_xml, kept, pivots) = write_sheets(wb, &mut out, active, &mut wb_rels);
+    let (sheets_xml, kept, pivots) = write_sheets(wb, &mut out, active, &mut wb_rels)?;
 
     let names = write_defined_names(wb, &kept, &out.chart_names);
 
@@ -501,16 +501,27 @@ fn pivot_caches_element(pivots: &crate::pivot::PivotWriter, kept: &crate::passth
 }
 
 /// One past the highest `cacheId` the workbook's kept `<pivotCaches>` element uses.
-fn next_kept_cache_id(kept: &crate::passthrough::WorkbookKept, wb: &Workbook) -> u32 {
-    let xml = kept.element(wb, "pivotCaches");
-    let mut next = 1;
-    for (index, _) in xml.match_indices("cacheId=\"") {
-        let digits: String = xml.get(index + "cacheId=\"".len()..).unwrap_or_default().chars().take_while(|c| c.is_ascii_digit()).collect();
-        if let Ok(id) = digits.parse::<u32>() {
-            next = next.max(id.saturating_add(1));
+///
+/// The element is parsed as XML and only the `cacheId` attributes of its `pivotCache` children
+/// count: a `cacheId="` inside a comment, a text node or another attribute is not a cache id, and
+/// treating it as one would allocate an id Excel resolves to the wrong cache.
+fn next_kept_cache_id(xml: &str) -> Result<u32, IoError> {
+    if xml.trim().is_empty() {
+        return Ok(1);
+    }
+    // The kept slot can hold more than one `<pivotCaches>` element (one per kept part), which is
+    // not a well-formed document on its own, so a wrapper gives them a single root.
+    let wrapped = format!("<keptPivotCaches>{xml}</keptPivotCaches>");
+    let root = crate::xml::parse(wrapped.as_bytes())?;
+    let mut next = 1u32;
+    for caches in root.kids("pivotCaches") {
+        for cache in caches.kids("pivotCache") {
+            if let Some(id) = cache.attr_u32("cacheId") {
+                next = next.max(id.saturating_add(1));
+            }
         }
     }
-    next
+    Ok(next)
 }
 
 fn write_sheets(
@@ -518,12 +529,12 @@ fn write_sheets(
     out: &mut Out,
     active: usize,
     wb_rels: &mut Rels,
-) -> (String, crate::passthrough::WorkbookKept, crate::pivot::PivotWriter) {
+) -> Result<(String, crate::passthrough::WorkbookKept, crate::pivot::PivotWriter), IoError> {
     // Kept content first: the chart sheets among the worksheets need their relationship ids.
     let kept = crate::passthrough::write_workbook(wb, wb_rels, out);
     // Kept data-model caches and the range PivotTables written below share the workbook's
     // `<pivotCaches>` element, so the generated ids start above the kept ones.
-    let mut pivots = crate::pivot::PivotWriter::new(next_kept_cache_id(&kept, wb));
+    let mut pivots = crate::pivot::PivotWriter::new(next_kept_cache_id(&kept.element(wb, "pivotCaches"))?);
     let mut sheets_xml = String::new();
     let any_visible = wb.sheets.iter().any(|s| s.visibility == Visibility::Visible);
     let mut ids = crate::passthrough::SheetIds::new(wb, &kept);
@@ -549,7 +560,7 @@ fn write_sheets(
     }
     sheets_xml.push_str(&kept.sheet_entries(wb.sheets.len(), true, &mut ids));
 
-    (sheets_xml, kept, pivots)
+    Ok((sheets_xml, kept, pivots))
 }
 
 fn write_defined_names(wb: &Workbook, kept: &crate::passthrough::WorkbookKept, chart_names: &[String]) -> String {

@@ -428,6 +428,44 @@ fn a_kept_model_pivot_and_a_range_pivot_do_not_collide() {
 }
 
 #[test]
+fn a_cache_id_in_a_comment_is_not_a_cache_id() {
+    // The kept `<pivotCaches>` text is parsed as XML: a `cacheId="` that sits in a comment (or any
+    // other non-cache position) must not push the generated caches' ids past Excel's own.
+    let mut wb = workbook();
+    {
+        let data = wb.sheet_mut(0).expect("the Data sheet");
+        for (c, header) in ["Region", "Sales"].iter().enumerate() {
+            data.cells.set(CellRef::new(0, c as u32), Cell::value(Value::text(*header)));
+        }
+        data.cells.set(CellRef::new(1, 0), Cell::value(Value::text("East")));
+        data.cells.set(CellRef::new(1, 1), Cell::value(Value::number(10.0)));
+    }
+    attach_model_pivot(&mut wb, "Pivot", at("A3"), &spec(), &report(), None).unwrap();
+    {
+        let preserved = Arc::make_mut(wb.preserved.as_mut().expect("the model PivotTable is kept"));
+        let element = preserved.elements.iter_mut().find(|element| element.slot == "pivotCaches").expect("the kept <pivotCaches>");
+        element.xml = element.xml.replacen("<pivotCache ", "<!-- cacheId=\"90\" --><pivotCache ", 1);
+    }
+    wb.sheet_mut(1).expect("the Pivot sheet").pivots.push(PivotTable {
+        id: 1,
+        name: "Range".into(),
+        source: "Data!$A$1:$B$2".into(),
+        anchor: at("H3"),
+        rows: vec![PivotField { source_col: "Region".into(), ..PivotField::default() }],
+        values: vec![PivotValue { source_col: "Sales".into(), func: PivotFunc::Sum, name: "Sum of Sales".into(), ..PivotValue::default() }],
+        ..PivotTable::default()
+    });
+
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = entries(&bytes);
+    let wb_xml = text(&parts, "xl/workbook.xml");
+    assert!(wb_xml.contains("<!-- cacheId=\"90\" -->"), "the kept comment is carried through: {wb_xml}");
+    assert_eq!(wb_xml.matches("cacheId=\"1\"").count(), 1, "the kept model cache keeps id 1: {wb_xml}");
+    assert_eq!(wb_xml.matches("cacheId=\"2\"").count(), 1, "the range cache takes the id above the real one: {wb_xml}");
+    assert!(!wb_xml.contains("cacheId=\"91\""), "a cache id in a comment must not allocate an id: {wb_xml}");
+}
+
+#[test]
 fn an_existing_connections_part_is_reused_and_patched() {
     let mut wb = workbook();
     let kept = "<connections xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><connection id=\"4\" name=\"Query - Sales\" type=\"1\"/></connections>";
