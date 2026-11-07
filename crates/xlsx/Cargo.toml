@@ -24,6 +24,8 @@ zip = { workspace = true }
 aes = { workspace = true }
 sha1 = { workspace = true }
 sha2 = { workspace = true }
+# Inflates the EMF and WMF pictures of .xls files (already in the tree through zip's flate2).
+miniz_oxide = "0.9"
 
 [dev-dependencies]
 # Every registered function name, for the formula file-spelling test.

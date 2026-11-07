@@ -625,6 +625,260 @@ fn a_format_shorter_than_its_count_keeps_its_characters() {
     assert!(report.warnings.iter().any(|w| w.contains("declared length")), "{:?}", report.warnings);
 }
 
+/// Fonts, fills, borders, alignment and a custom palette come through from the Font, XF and
+/// Palette records ([MS-XLS] 2.4.122, 2.4.353, 2.4.188); the default cell format (here the
+/// first XF, as the file has fewer than 16) is the workbook's Normal style.
+#[test]
+fn reads_fonts_fills_borders_and_alignment() {
+    use gridcraft_model::{BorderStyle, Color, HAlign, PatternType, Underline, VAlign};
+    // Font: height (1/20 pt), flags (2 = italic), colour index, weight, script, underline,
+    // family, character set, reserved, then the name as a ShortXLUnicodeString.
+    let font = |name: &str, height: u16, flags: u16, icv: u16, weight: u16, underline: u8| {
+        rec(0x0031, &cat(&[&u16s(&[height, flags, icv, weight, 0]), &[underline, 0, 0, 0], &[name.len() as u8, 0], name.as_bytes()]))
+    };
+    // XF: font, format, protection flags, alignment byte, rotation, indent byte, used flags,
+    // then the border/fill words.
+    let xf = |ifnt: u16, align: u8, rotation: u8, a: u32, b: u32, fill: u16| {
+        rec(0x00E0, &cat(&[&u16s(&[ifnt, 0, 1]), &[align, rotation, 0, 0], &a.to_le_bytes(), &b.to_le_bytes(), &fill.to_le_bytes()]))
+    };
+    // Thin borders on all four sides in colour 8; a solid yellow (13) fill.
+    let boxed = 0x1111 | (8 << 16) | (8 << 23);
+    let solid = 8 | (8 << 7) | (1 << 26);
+    let globals = |pos: u32| {
+        cat(&[
+            &bof(0x0005),
+            &font("Arial", 200, 0, 0x7FFF, 400, 0),
+            &font("Arial", 200, 0, 0x7FFF, 400, 0),
+            &font("Arial", 200, 0, 0x7FFF, 400, 0),
+            &font("Arial", 200, 0, 0x7FFF, 400, 0),
+            // Index 5 (index 4 is never written): bold italic red underlined Times New Roman 13.
+            &font("Times New Roman", 260, 2, 10, 700, 1),
+            // Colour 8 is redefined: 0x112233.
+            &rec(0x0092, &cat(&[&u16s(&[1]), &[0x11, 0x22, 0x33, 0]])),
+            &xf(0, 0x20, 0, 0, 0, 64 | (65 << 7)),
+            // Centred both ways, wrapped, 45 degrees.
+            &xf(5, 0x02 | 0x08 | 0x10, 45, boxed, solid, 13 | (65 << 7)),
+            // 135 is 45 degrees clockwise.
+            &xf(0, 0x20, 135, 0, 0, 64 | (65 << 7)),
+            &rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 6, 0], b"Sheet1"])),
+            &eof(),
+        ])
+    };
+    let sheet = cat(&[
+        &bof(0x0010),
+        &rec(0x0203, &cat(&[&cell(0, 0, 0), &1.0f64.to_le_bytes()])),
+        &rec(0x0203, &cat(&[&cell(1, 1, 1), &2.0f64.to_le_bytes()])),
+        &rec(0x0203, &cat(&[&cell(2, 2, 2), &3.0f64.to_le_bytes()])),
+        &eof(),
+    ]);
+    let stream = cat(&[&globals(globals(0).len() as u32), &sheet]);
+    let (wb, report) = read_xls(&compound("Workbook", &stream)).unwrap();
+    let sh = &wb.sheets[0];
+    let style = |a1: &str| wb.styles.get(sh.style_id(CellRef::parse(a1).unwrap())).clone();
+    // The Normal style is the file's: Arial 10 with the automatic colour.
+    assert_eq!(sh.style_id(CellRef::parse("A1").unwrap()), gridcraft_model::StyleId::DEFAULT);
+    let normal = style("A1");
+    assert_eq!((normal.font.name.as_str(), normal.font.size, normal.font.color), ("Arial", 10.0, Color::Auto));
+    let b2 = style("B2");
+    assert_eq!((b2.font.name.as_str(), b2.font.size), ("Times New Roman", 13.0));
+    assert!(b2.font.bold && b2.font.italic);
+    assert_eq!(b2.font.underline, Underline::Single);
+    assert_eq!(b2.font.color, Color::Rgb(0xFF0000));
+    assert_eq!((b2.fill.pattern, b2.fill.fg, b2.fill.bg), (PatternType::Solid, Color::Rgb(0xFFFF00), Color::Auto));
+    for line in [b2.borders.left, b2.borders.right, b2.borders.top, b2.borders.bottom] {
+        assert_eq!((line.style, line.color), (BorderStyle::Thin, Color::Rgb(0x112233)), "the palette's colour 8");
+    }
+    assert!(b2.borders.diag_down.is_none() && b2.borders.diag_up.is_none());
+    assert_eq!((b2.align.h, b2.align.v, b2.align.wrap, b2.align.rotation), (HAlign::Center, VAlign::Center, true, 45));
+    assert!(b2.protection.locked);
+    assert_eq!(style("C3").align.rotation, -45);
+    assert!(report.warnings.first().is_some_and(|w| w.contains("cell formatting (fonts, fills, borders")), "{:?}", report.warnings);
+}
+
+/// Comments: an Obj record describes a comment object (FtCmo, object type 0x19), the TxO after
+/// it holds the text in Continue records, and the Note record names the cell, the object and the
+/// author ([MS-XLS] 2.4.181, 2.4.329, 2.4.179). Vietnamese text and author come through.
+#[test]
+fn reads_cell_comments() {
+    let wide = |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(u16::to_le_bytes).collect() };
+    // Obj: FtCmo (ft 0x15, cb 0x12, ot 0x19 comment, id, flags, reserved), then FtEnd.
+    let obj = |id: u16| rec(0x005D, &cat(&[&u16s(&[0x15, 0x12, 0x19, id, 0x4011]), &[0; 12], &u16s(&[0, 0])]));
+    // TxO: flags, rotation, reserved, character count, runs length, font, reserved; the text and
+    // the formatting runs follow in Continue records.
+    let txo = |text: &str| {
+        let n = text.encode_utf16().count() as u16;
+        cat(&[
+            &rec(0x01B6, &cat(&[&u16s(&[0x0212, 0]), &[0; 6], &u16s(&[n, 16, 0, 0])])),
+            &rec(0x003C, &cat(&[&[1], &wide(text)])),
+            &rec(0x003C, &[0; 16]),
+        ])
+    };
+    // Note: row, column, flags (0x0002: shown), object id, author (XLUnicodeString, UTF-16).
+    let note = |r: u16, c: u16, flags: u16, id: u16, author: &str| {
+        rec(0x001C, &cat(&[&u16s(&[r, c, flags, id]), &(author.encode_utf16().count() as u16).to_le_bytes(), &[1], &wide(author), &[0]]))
+    };
+    let xf = rec(0x00E0, &cat(&[&u16s(&[0, 0, 0]), &[0; 14]]));
+    let globals = |pos: u32| cat(&[&bof(0x0005), &xf, &rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 6, 0], b"Sheet1"])), &eof()]);
+    let sheet = cat(&[
+        &bof(0x0010),
+        &rec(0x0203, &cat(&[&cell(1, 2, 0), &1.0f64.to_le_bytes()])),
+        &obj(1),
+        &txo("Đỗ Anh Hải Sơn:\nKiểm tra lại số tài khoản"),
+        &obj(2),
+        &txo("Ghi chú"),
+        &note(1, 2, 0x0002, 1, "Đỗ Anh Hải Sơn"),
+        &note(4, 0, 0, 2, "Kế toán"),
+        // A Note for an object with no text, and one outside the grid, don't break anything.
+        &note(5, 0, 0, 9, "x"),
+        &note(0xFFFF, 300, 0, 1, "y"),
+        &eof(),
+    ]);
+    let stream = cat(&[&globals(globals(0).len() as u32), &sheet]);
+    let (wb, report) = read_xls(&compound("Workbook", &stream)).unwrap();
+    let comments = &wb.sheets[0].comments;
+    let c2 = &comments[&CellRef::parse("C2").unwrap()];
+    assert_eq!((c2.author.as_str(), c2.text.as_str(), c2.visible), ("Đỗ Anh Hải Sơn", "Đỗ Anh Hải Sơn:\nKiểm tra lại số tài khoản", true));
+    let a5 = &comments[&CellRef::parse("A5").unwrap()];
+    assert_eq!((a5.author.as_str(), a5.text.as_str(), a5.visible), ("Kế toán", "Ghi chú", false));
+    assert_eq!(comments[&CellRef::parse("A6").unwrap()].text, "", "no text object: an empty comment");
+    assert_eq!(comments.len(), 3);
+    assert!(!report.warnings.iter().any(|w| w.contains("comments in .xls")), "{:?}", report.warnings);
+}
+
+/// Conditional formats: a CondFmt record's ranges, then CF rules ([MS-XLS] 2.4.56, 2.4.42): a
+/// "cell value greater than 100" rule shown bold red on yellow (a DXFN with a font and a pattern
+/// block), and a formula rule whose relative reference is to the range's top-left cell.
+#[test]
+fn reads_conditional_formats() {
+    use gridcraft_model::{CfOperator, CfRule, Color, PatternType};
+    // DXFN: flags (font block 26, pattern block 29; foreground colour unset, bit 17), flags2,
+    // the 118-byte font block, then the pattern block.
+    let mut font = vec![0u8; 118];
+    font[64..68].copy_from_slice(&u32::MAX.to_le_bytes());
+    font[72..74].copy_from_slice(&700u16.to_le_bytes());
+    font[80..84].copy_from_slice(&10u32.to_le_bytes());
+    font[88..92].copy_from_slice(&0x82u32.to_le_bytes());
+    font[92..96].copy_from_slice(&1u32.to_le_bytes());
+    font[96..100].copy_from_slice(&1u32.to_le_bytes());
+    let dxfn = cat(&[&((1u32 << 26) | (1 << 29) | (1 << 17)).to_le_bytes(), &0u16.to_le_bytes(), &font, &u16s(&[1 << 10, 64 | (13 << 7)])]);
+    let greater = cat(&[&[0x1E], &100u16.to_le_bytes()]);
+    // A relative reference (PtgRefN, both offsets 0) to the range's top-left cell, then > 5.
+    let relative = cat(&[&[0x2C], &u16s(&[0, 0xC000]), &[0x1E], &5u16.to_le_bytes(), &[0x0D]]);
+    let cf = |kind: u8, op: u8, rgce: &[u8], dxfn: &[u8]| rec(0x01B1, &cat(&[&[kind, op], &u16s(&[rgce.len() as u16, 0]), dxfn, rgce]));
+    // CondFmt: rule count, flags, bounding range, then the range list (B2:C4).
+    let condfmt = rec(0x01B0, &cat(&[&u16s(&[2, 0]), &u16s(&[1, 3, 1, 2]), &u16s(&[1]), &u16s(&[1, 3, 1, 2])]));
+    let xf = rec(0x00E0, &cat(&[&u16s(&[0, 0, 0]), &[0; 14]]));
+    let globals = |pos: u32| cat(&[&bof(0x0005), &xf, &rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 6, 0], b"Sheet1"])), &eof()]);
+    let sheet = cat(&[
+        &bof(0x0010),
+        &rec(0x0203, &cat(&[&cell(1, 1, 0), &150.0f64.to_le_bytes()])),
+        &condfmt,
+        &cf(1, 5, &greater, &dxfn),
+        &cf(2, 0, &relative, &dxfn),
+        &eof(),
+    ]);
+    let stream = cat(&[&globals(globals(0).len() as u32), &sheet]);
+    let (wb, report) = read_xls(&compound("Workbook", &stream)).unwrap();
+    let cfs = &wb.sheets[0].cond_formats;
+    assert_eq!(cfs.len(), 2, "{:?}", report.warnings);
+    assert_eq!(cfs[0].ranges, vec![RangeRef::parse("B2:C4").unwrap()]);
+    assert_eq!((cfs[0].priority, cfs[1].priority), (1, 2));
+    let CfRule::CellIs { op, a, b, style } = &cfs[0].rule else { panic!("{:?}", cfs[0].rule) };
+    assert_eq!((*op, a.as_str(), b.as_ref()), (CfOperator::Greater, "100", None));
+    assert!(style.font.bold && !style.font.italic);
+    assert_eq!(style.font.color, Color::Rgb(0xFF0000));
+    assert_eq!((style.fill.pattern, style.fill.fg), (PatternType::Solid, Color::Rgb(0xFFFF00)));
+    let CfRule::Expression { formula, .. } = &cfs[1].rule else { panic!("{:?}", cfs[1].rule) };
+    assert_eq!(formula, "B2>5");
+    assert!(report.warnings.first().is_some_and(|w| w.contains("conditional formatting and pictures were read")), "{:?}", report.warnings);
+}
+
+/// Pictures: the workbook's MsoDrawingGroup stores a PNG (a BStore entry), split across a
+/// Continue record as real files do; a sheet's MsoDrawing has a picture shape naming it, anchored
+/// from B2 to D4 ([MS-ODRAW]). An EMF picture (zlib-compressed, as Excel saves it) is read; a
+/// damaged one is skipped with a warning.
+#[test]
+fn reads_pictures() {
+    let od = |vi: u16, ty: u16, body: &[u8]| cat(&[&vi.to_le_bytes(), &ty.to_le_bytes(), &(body.len() as u32).to_le_bytes(), body]);
+    let png = [0x89, b'P', b'N', b'G', 1, 2, 3];
+    let blip = od(0x6E00, 0xF01E, &cat(&[&[0u8; 17], &png]));
+    let emf_bytes = b" EMF the picture's own records".to_vec();
+    let packed = miniz_oxide::deflate::compress_to_vec_zlib(&emf_bytes, 6);
+    let meta_header = cat(&[&(emf_bytes.len() as u32).to_le_bytes(), &[0u8; 24], &(packed.len() as u32).to_le_bytes(), &[0x00, 0xFE]]);
+    let emf = od(0x3D40, 0xF01A, &cat(&[&[0u8; 16], &meta_header, &packed]));
+    let damaged = od(0x3D40, 0xF01A, &[0u8; 60]);
+    let fbse = |b: &[u8]| od(0x0062, 0xF007, &cat(&[&[0u8; 36], b]));
+    let dgg = od(0x000F, 0xF000, &od(0x002F, 0xF001, &cat(&[&fbse(&blip), &fbse(&emf), &fbse(&damaged)])));
+    let (first, second) = dgg.split_at(30);
+    let shape = |pib: u32, anchor: [u16; 8]| {
+        let opt = od(0x0013, 0xF00B, &cat(&[&0x4104u16.to_le_bytes(), &pib.to_le_bytes()]));
+        let a: Vec<u8> = std::iter::once(0u16).chain(anchor).flat_map(u16::to_le_bytes).collect();
+        od(0x000F, 0xF004, &cat(&[&opt, &od(0, 0xF010, &a)]))
+    };
+    let dg = od(
+        0x000F,
+        0xF002,
+        &od(0x000F, 0xF003, &cat(&[&shape(1, [1, 0, 1, 0, 3, 0, 3, 0]), &shape(2, [5, 0, 5, 0, 6, 0, 6, 0]), &shape(3, [7, 0, 7, 0, 8, 0, 8, 0])])),
+    );
+    let xf = rec(0x00E0, &cat(&[&u16s(&[0, 0, 0]), &[0; 14]]));
+    let globals = |pos: u32| {
+        cat(&[
+            &bof(0x0005),
+            &xf,
+            &rec(0x00EB, first),
+            &rec(0x003C, second),
+            &rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 6, 0], b"Sheet1"])),
+            &eof(),
+        ])
+    };
+    let sheet = cat(&[&bof(0x0010), &rec(0x00EC, &dg), &eof()]);
+    let stream = cat(&[&globals(globals(0).len() as u32), &sheet]);
+    let (wb, report) = read_xls(&compound("Workbook", &stream)).unwrap();
+    let sh = &wb.sheets[0];
+    assert_eq!(sh.images.len(), 2, "{:?}", report.warnings);
+    assert_eq!((sh.images[1].data.as_slice(), sh.images[1].mime.as_str()), (&emf_bytes[..], "image/x-emf"));
+    let img = &sh.images[0];
+    assert_eq!((img.data.as_slice(), img.mime.as_str()), (&png[..], "image/png"));
+    assert_eq!(img.anchor.cell, CellRef::parse("B2").unwrap());
+    let width = (sh.col_left(3) - sh.col_left(1)) as f32;
+    let height = (sh.row_top(3) - sh.row_top(1)) as f32;
+    assert!((img.anchor.width - width).abs() < 0.01 && (img.anchor.height - height).abs() < 0.01, "{:?}", img.anchor);
+    assert!(report.warnings.iter().any(|w| w.contains("doesn't show")), "{:?}", report.warnings);
+}
+
+/// AutoFilter: the built-in _FilterDatabase name (13) holds the range, and the sheet's
+/// AutoFilterInfo record says the filter is on; a name left without it turns nothing on.
+#[test]
+fn reads_the_autofilter_range() {
+    let book = |filter_on: bool| {
+        // _FilterDatabase on sheet 1 (hidden, built-in 13) = Sheet1!$A$8:$DH$19 (PtgArea3d).
+        let area = cat(&[&[0x3B], &0u16.to_le_bytes(), &u16s(&[7, 18, 0, 111])]);
+        let lbl = rec(0x0018, &cat(&[&u16s(&[0x0021]), &[0, 1], &u16s(&[area.len() as u16, 0, 1]), &[0; 4], &[0, 13], &area]));
+        let xf = rec(0x00E0, &cat(&[&u16s(&[0, 0, 0]), &[0; 14]]));
+        let globals = |pos: u32| {
+            cat(&[
+                &bof(0x0005),
+                &xf,
+                &rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 6, 0], b"Sheet1"])),
+                &rec(0x01AE, &u16s(&[1, 0x0401])),
+                &rec(0x0017, &cat(&[&u16s(&[1]), &u16s(&[0, 0, 0])])),
+                &lbl,
+                &eof(),
+            ])
+        };
+        let info = if filter_on { rec(0x009D, &u16s(&[112])) } else { vec![] };
+        let sheet = cat(&[&bof(0x0010), &rec(0x0203, &cat(&[&cell(7, 0, 0), &1.0f64.to_le_bytes()])), &info, &eof()]);
+        let stream = cat(&[&globals(globals(0).len() as u32), &sheet]);
+        read_xls(&compound("Workbook", &stream)).unwrap().0
+    };
+    let wb = book(true);
+    let af = wb.sheets[0].autofilter.as_ref().expect("the filter is on");
+    assert_eq!(af.range, RangeRef::parse("A8:DH19").unwrap());
+    assert!(af.criteria.is_empty());
+    assert!(!wb.names.iter().any(|n| n.name == "_FilterDatabase"), "a built-in name, not a user one");
+    assert!(book(false).sheets[0].autofilter.is_none(), "the name alone doesn't turn a filter on");
+}
+
 fn one_sheet_with(sheet_records: &[u8]) -> Vec<u8> {
     let globals = |pos: u32| cat(&[&bof(0x0005), &rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 6, 0], b"Sheet1"])), &eof()]);
     let sheet = cat(&[&bof(0x0010), sheet_records, &rec(0x0203, &cat(&[&cell(0, 0, 0), &7.0f64.to_le_bytes()])), &eof()]);
