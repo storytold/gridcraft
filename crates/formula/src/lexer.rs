@@ -156,13 +156,25 @@ fn structured_ref(src: &str, chars: &[(usize, char)], i: usize, start: usize, ou
     Ok(j)
 }
 
-fn number(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, i: usize, start: usize, out: &mut Vec<Token>) -> Result<usize, LexError> {
+fn number(
+    src: &str,
+    chars: &[(usize, char)],
+    locale: crate::FormulaLocale,
+    array_depth: usize,
+    i: usize,
+    start: usize,
+    out: &mut Vec<Token>,
+) -> Result<usize, LexError> {
     let ch = |index| char_at(chars, index);
     let mut j = i;
     while ch(j).is_some_and(|c| c.is_ascii_digit()) {
         j += 1;
     }
-    let is_row_ref = {
+    // A row-range reference ("2:5") is never meaningful inside an array literal - array
+    // constants can't hold references at all - and Russian/Ukrainian use ':' there as the row
+    // separator instead (`array_row_separator`), so "2:3" in "{1;2:3;4}" is two numbers either
+    // side of a row break, not a reference to rows 2 through 3.
+    let is_row_ref = array_depth == 0 && {
         let mut k = j;
         if ch(k) == Some('.') && ch(k + 1) == Some(':') {
             k += 1;
@@ -309,7 +321,7 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 }
             }
             c if c.is_ascii_digit() || (c == locale.decimal_separator() && ch(i + 1).is_some_and(|d| d.is_ascii_digit())) => {
-                i = number(src, &chars, locale, i, start, &mut out)?;
+                i = number(src, &chars, locale, array_depth, i, start, &mut out)?;
             }
             '(' => {
                 push(&mut out, Tok::LParen, i + 1);
@@ -331,6 +343,13 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
             }
             c if (array_depth == 0 && c == locale.list_separator()) || (array_depth > 0 && c == locale.array_column_separator()) => {
                 push(&mut out, Tok::Comma, i + 1);
+                i += 1;
+            }
+            // Russian/Ukrainian use ':' for this, not ';' (see `array_row_separator`) - checked
+            // before the literal ';' and ':' arms below so it takes over `:` inside an array for
+            // those locales, instead of falling to the Colon/Trim handling further down.
+            c if array_depth > 0 && c == locale.array_row_separator() => {
+                push(&mut out, Tok::Semicolon, i + 1);
                 i += 1;
             }
             ';' => {
