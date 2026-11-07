@@ -55,14 +55,54 @@ fn borders(preset: &str) -> Shortcut {
     Shortcut::Run("home.borders", json!({"preset": preset}))
 }
 
-/// The shortcut for a key press in the grid, if any. `physical` is the key's position on a US
-/// layout (as Excel matches Ctrl+Shift+4 rather than the `$` character); `mac` selects the Excel
-/// for Mac variants where they differ. Navigation keys go by the logical key: with Num Lock off
-/// the numpad's arrows and Page Down report the digit keys (Num6, Num3) as their physical keys.
-pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Option<Shortcut> {
+/// Navigation keys go by the logical key: with Num Lock off the numpad's arrows and Page Down
+/// report the digit keys (Num6, Num3) as their physical keys.
+fn is_navigation(key: Key) -> bool {
     use Key::*;
-    let navigation = matches!(key, ArrowLeft | ArrowRight | ArrowUp | ArrowDown | PageUp | PageDown | Home | End | Insert | Delete);
-    let key = if navigation { key } else { physical.unwrap_or(key) };
+    matches!(key, ArrowLeft | ArrowRight | ArrowUp | ArrowDown | PageUp | PageDown | Home | End | Insert | Delete)
+}
+
+/// The US key and Shift state a symbol or digit key press stands for in the English shortcuts.
+/// Digits go by position (Ctrl+Shift+4 is the currency format wherever `$` is). Punctuation keys
+/// go by the character the layout types, as Excel does: Shift+, types `;` on a Croatian or German
+/// keyboard, so Ctrl+Shift+, is Ctrl+; (today's date) there, and a lone `+` is the US Shift+=.
+/// A character egui has no key for (`č`, `ö`, `<`) arrives as the key's position, which stands
+/// in. `None` for every other key (letters, navigation, function keys).
+pub fn us_key(key: Key, physical: Option<Key>, shift: bool) -> Option<(Key, bool)> {
+    use Key::*;
+    if is_navigation(key) {
+        return None;
+    }
+    let at = physical?;
+    let symbol =
+        |k: Key| matches!(k, Backtick | Minus | Equals | OpenBracket | CloseBracket | Backslash | Semicolon | Quote | Comma | Period | Slash);
+    match at {
+        Num0 | Num1 | Num2 | Num3 | Num4 | Num5 | Num6 | Num7 | Num8 | Num9 => Some((at, shift)),
+        _ if symbol(at) => Some(match key {
+            // Characters a US keyboard types with Shift.
+            Colon => (Semicolon, true),
+            Plus => (Equals, true),
+            Questionmark => (Slash, true),
+            Pipe => (Backslash, true),
+            OpenCurlyBracket => (OpenBracket, true),
+            CloseCurlyBracket => (CloseBracket, true),
+            // An unshifted US character, typed here with or without Shift.
+            _ if key != at && symbol(key) => (key, false),
+            _ => (key, shift),
+        }),
+        _ => None,
+    }
+}
+
+/// The shortcut for a key press in the grid, if any. `physical` is the key's position on a US
+/// layout: digits and letters go by it, punctuation by the character typed ([`us_key`]). `mac`
+/// selects the Excel for Mac variants where they differ. Navigation keys go by the logical key.
+pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Option<Shortcut> {
+    let (key, shift) = match us_key(key, physical, m.shift) {
+        Some(us) => us,
+        None if is_navigation(key) => (key, m.shift),
+        None => (physical.unwrap_or(key), m.shift),
+    };
     let ctx = LookupContext {
         key,
         modifiers: m,
@@ -71,7 +111,7 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         alt: m.alt && !m.ctrl && !m.command,
         ctrl_alt: m.alt && (m.ctrl || m.command),
         plain: !m.ctrl && !m.command && !m.alt,
-        shift: m.shift,
+        shift,
         mac,
     };
     lookup_number_formats(ctx)

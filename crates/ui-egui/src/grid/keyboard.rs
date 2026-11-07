@@ -146,7 +146,9 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                     // Ctrl+Shift+letter (⌘⇧letter) runs the macro with that shortcut, unless GridCraft uses it.
                     _ if cmd && shift && !m.alt && crate::macro_ui::run_shortcut(app, key) => {}
                     _ if cmd && !crate::keymap::altgr_text(ctx, m, ctx.os() == egui::os::OperatingSystem::Mac) => {
-                        crate::ribbon::shortcut(app, key, m)
+                        // The same key the English table reads: Ctrl+Shift+, typing `;` is Ctrl+;.
+                        let (key, shift) = crate::keymap::us_key(key, physical_key, shift).unwrap_or((key, shift));
+                        crate::ribbon::shortcut(app, key, egui::Modifiers { shift, ..m });
                     }
                     _ => {}
                 }
