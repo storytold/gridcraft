@@ -1928,7 +1928,7 @@ fn keytip_ac_() {
 fn keytip_ad_() {
     let mut h = harness(blank());
     sequence(&mut h, "AD", false);
-    assert!(h.state().message.is_some() || h.state().toast.is_some(), "AD must invoke data.consolidate and surface its missing-params error");
+    assert!(h.state().dialog.is_some(), "AD must open the consolidate dialog");
 }
 
 #[test]
@@ -2356,7 +2356,7 @@ fn keytip_aws_() {
 fn keytip_awt_() {
     let mut h = harness(blank());
     sequence(&mut h, "AWT", false);
-    assert!(h.state().message.is_some() || h.state().toast.is_some(), "AWT must invoke data.dataTable and surface its missing-params error");
+    assert!(h.state().dialog.is_some(), "AWT must open the dataTable dialog");
 }
 
 #[test]
@@ -2955,14 +2955,14 @@ fn keytip_ohu_() {
 fn keytip_oe_() {
     let mut h = harness(blank());
     sequence(&mut h, "OE", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "home.formatCells"), "OE must journal home.formatCells");
+    assert!(h.state().dialog.is_some(), "OE must open the formatCells dialog");
 }
 
 #[test]
 fn keytip_od_() {
     let mut h = harness(blank());
     sequence(&mut h, "OD", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "home.conditionalFormat"), "OD must journal home.conditionalFormat");
+    assert!(h.state().dialog.is_some(), "OD must open the manageRules dialog");
 }
 
 #[test]
@@ -3011,14 +3011,14 @@ fn keytip_dgh_() {
 fn keytip_dl_() {
     let mut h = harness(blank());
     sequence(&mut h, "DL", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "data.validation"), "DL must journal data.validation");
+    assert!(h.state().dialog.is_some(), "DL must open the dataValidation dialog");
 }
 
 #[test]
 fn keytip_dt_() {
     let mut h = harness(blank());
     sequence(&mut h, "DT", false);
-    assert!(h.state().message.is_some() || h.state().toast.is_some(), "DT must invoke data.dataTable and surface its missing-params error");
+    assert!(h.state().dialog.is_some(), "DT must open the dataTable dialog");
 }
 
 #[test]
@@ -3088,8 +3088,371 @@ fn keytip_q_() {
 }
 
 #[test]
+fn keytip_d_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "D", false);
+    assert_eq!(h.state().ui.ribbon_tab, "Data", "D must switch to the Data tab");
+}
+
+#[test]
+fn keytip_db_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "DB", false);
+    assert!(h.state().dialog.is_some(), "DB must open the subtotal dialog");
+}
+
+#[test]
+fn keytip_de_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "DE", false);
+    assert!(h.state().dialog.is_some(), "DE must open the textToColumns dialog");
+}
+
+#[test]
+fn keytip_dfa_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "DFA", false);
+    assert!(h.state().dialog.is_some(), "DFA must open the advancedFilter dialog");
+}
+
+#[test]
+fn keytip_dfs_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "DFS", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "data.clearFilter"), "DFS must journal data.clearFilter");
+}
+
+#[test]
+fn keytip_dge_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "DGE", false);
+    assert!(h.state().dialog.is_some(), "DGE must open the outlineSettings dialog");
+}
+
+#[test]
+fn keytip_dic_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "DIC", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "insert.table"), "DIC must journal insert.table");
+}
+
+#[test]
+fn keytip_dir_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "DIR", false);
+    assert!(h.state().dialog.is_some(), "DIR must open the tableResize dialog");
+}
+
+#[test]
+fn keytip_dit_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "DIT", false);
+    assert!(h.state().message.is_some() || h.state().toast.is_some(), "DIT must invoke table.totalRow and surface its missing-params error");
+}
+
+#[test]
+fn keytip_div_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "DIV", false);
+    assert!(h.state().message.is_some() || h.state().toast.is_some(), "DIV must invoke table.convertToRange and surface its missing-params error");
+}
+
+#[test]
+fn keytip_dn_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "DN", false);
+    assert!(h.state().dialog.is_some(), "DN must open the consolidate dialog");
+}
+
+#[test]
+fn keytip_dp_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "DP", false);
+    assert!(h.state().message.is_some() || h.state().toast.is_some(), "DP must invoke insert.pivotTable and surface its missing-params error");
+}
+
+#[test]
+fn keytip_dr_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "DR", false);
+    assert!(h.state().message.is_some() || h.state().toast.is_some(), "DR must invoke pivot.refresh and surface its missing-params error");
+}
+
+#[test]
+fn keytip_eaf_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "EAF", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "edit.clearFormats"), "EAF must journal edit.clearFormats");
+}
+
+#[test]
+fn keytip_ec_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "EC", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "edit.copy"), "EC must journal edit.copy");
+}
+
+#[test]
+fn keytip_ee_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "EE", false);
+    assert!(h.state().dialog.is_some(), "EE must open the find dialog");
+}
+
+#[test]
+fn keytip_eid_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "EID", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "edit.fillDown"), "EID must journal edit.fillDown");
+}
+
+#[test]
+fn keytip_eij_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "EIJ", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "home.justify"), "EIJ must journal home.justify");
+}
+
+#[test]
+fn keytip_eil_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "EIL", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "edit.fillLeft"), "EIL must journal edit.fillLeft");
+}
+
+#[test]
+fn keytip_eir_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "EIR", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "edit.fillRight"), "EIR must journal edit.fillRight");
+}
+
+#[test]
+fn keytip_eis_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "EIS", false);
+    assert!(h.state().dialog.is_some(), "EIS must open the series dialog");
+}
+
+#[test]
+fn keytip_eiu_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "EIU", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "edit.fillUp"), "EIU must journal edit.fillUp");
+}
+
+#[test]
+fn keytip_ep_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "EP", false);
+    assert!(h.state().message.is_some() || h.state().toast.is_some(), "EP must invoke edit.paste and surface its missing-params error");
+}
+
+#[test]
+fn keytip_et_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "ET", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "edit.cut"), "ET must journal edit.cut");
+}
+
+#[test]
+fn keytip_eu_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "EU", false);
+    assert!(h.state().message.is_some() || h.state().toast.is_some(), "EU must invoke edit.undo and surface its missing-params error");
+}
+
+#[test]
+fn keytip_fs_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "FS", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "file.save"), "FS must journal file.save");
+}
+
+#[test]
+fn keytip_fv_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "FV", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "file.print"), "FV must journal file.print");
+}
+
+#[test]
+fn keytip_i_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "I", false);
+    assert_eq!(h.state().ui.ribbon_tab, "Insert", "I must switch to the Insert tab");
+}
+
+#[test]
+fn keytip_ib_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "IB", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "pageLayout.breaks"), "IB must journal pageLayout.breaks");
+}
+
+#[test]
+fn keytip_ih_() {
+    let mut h = harness(blank());
+    // The dialog previews chart types for the selected data, so the sheet needs some.
+    h.state_mut()
+        .session
+        .execute("range.setValues", serde_json::json!({"range": "A1", "values": [["Fruit", "Sales"], ["Apples", 5], ["Pears", 3]]}))
+        .unwrap();
+    h.state_mut().session.execute("selection.set", serde_json::json!({"range": "A1:B3"})).unwrap();
+    sequence(&mut h, "IH", false);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("recommendedCharts"), "IH must open the recommendedCharts dialog");
+}
+
+#[test]
+fn keytip_ii_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "II", false);
+    assert!(h.state().dialog.is_some(), "II must open the insertLink dialog");
+}
+
+#[test]
+fn keytip_im_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "IM", false);
+    assert!(h.state().dialog.is_some(), "IM must open the comment dialog");
+}
+
+#[test]
+fn keytip_inp_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "INP", false);
+    assert!(h.state().dialog.is_some(), "INP must open the pasteName dialog");
+}
+
+#[test]
+fn keytip_ipf_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "IPF", false);
+    assert!(h.state().dialog.is_some(), "IPF must open the insertPicture dialog");
+}
+
+#[test]
+fn keytip_ocs_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "OCS", false);
+    assert!(h.state().dialog.is_some(), "OCS must open the defaultWidth dialog");
+}
+
+#[test]
+fn keytip_tg_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "TG", false);
+    assert!(h.state().dialog.is_some(), "TG must open the goalSeek dialog");
+}
+
+#[test]
+fn keytip_tk_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "TK", false);
+    assert!(h.state().dialog.is_some(), "TK must open the errorChecking dialog");
+}
+
+#[test]
+fn keytip_tmm_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "TMM", false);
+    assert!(h.state().dialog.is_some(), "TMM must open the macros dialog");
+}
+
+#[test]
+fn keytip_tmr_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "TMR", false);
+    assert!(h.state().dialog.is_some(), "TMR must open the recordMacro dialog");
+}
+
+#[test]
+fn keytip_tpa_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "TPA", false);
+    assert!(h.state().dialog.is_some(), "TPA must open the allowEditRanges dialog");
+}
+
+#[test]
+fn keytip_tpp_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "TPP", false);
+    assert!(h.state().dialog.is_some(), "TPP must open the protectSheet dialog");
+}
+
+#[test]
+fn keytip_tpw_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "TPW", false);
+    assert!(h.state().dialog.is_some(), "TPW must open the protectWorkbook dialog");
+}
+
+#[test]
+fn keytip_ts_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "TS", false);
+    assert!(h.state().dialog.is_some(), "TS must open the spelling dialog");
+}
+
+#[test]
+fn keytip_tue_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "TUE", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "TUE must run formulas.traceError cleanly");
+}
+
+#[test]
+fn keytip_tuf_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "TUF", false);
+    assert!(h.state().dialog.is_some(), "TUF must open the evaluateFormula dialog");
+}
+
+#[test]
+fn keytip_tuw_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "TUW", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "TUW must run formulas.watchWindow cleanly");
+}
+
+#[test]
+fn keytip_tv_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "TV", false);
+    assert!(h.state().dialog.is_some(), "TV must open the solver dialog");
+}
+
+#[test]
+fn keytip_v_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "V", false);
+    assert_eq!(h.state().ui.ribbon_tab, "View", "V must switch to the View tab");
+}
+
+#[test]
+fn keytip_vc_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "VC", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "VC must run review.showAllNotes cleanly");
+}
+
+#[test]
+fn keytip_vf_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "VF", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "VF must run view.formulaBar cleanly");
+}
+
+#[test]
+fn keytip_vh_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "VH", false);
+    assert!(h.state().dialog.is_some(), "VH must open the headerFooter dialog");
+}
+
+#[test]
 fn generated_test_count_matches_the_table() {
-    const EXPECTED: usize = 413;
+    const EXPECTED: usize = 464;
     assert_eq!(gridcraft_ui_egui::keytips::keytip_table::SEQUENCES.len(), EXPECTED);
 }
 
