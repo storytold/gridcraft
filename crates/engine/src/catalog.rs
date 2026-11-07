@@ -275,11 +275,30 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("automate.allScripts", "Automate", "Scripting Tools", "All Scripts"),
     ("automate.recordActions", "Automate", "Scripting Tools", "Record Actions"),
     ("automate.trustScripts", "Automate", "Scripting Tools", "Trust Scripts"),
-    // Developer (Insert › Controls in GridCraft)
+    // Developer (Excel's Developer tab; Macros is `view.macros` under View). The four rows under it
+    // are the implemented form controls; the developer.* rows are the tab's remaining Excel
+    // entries, ribbon stubs until their features land (#2960).
     ("insert.button", "Developer", "Controls", "Button (Form Control)"),
     ("insert.spinButton", "Developer", "Controls", "Spin Button (Form Control)"),
     ("insert.slider", "Developer", "Controls", "Scroll Bar (Form Control)"),
     ("control.format", "Developer", "Controls", "Properties"),
+    ("developer.visualBasic", "Developer", "Code", "Visual Basic"),
+    ("developer.recordMacro", "Developer", "Code", "Record Macro"),
+    ("developer.useRelativeReferences", "Developer", "Code", "Use Relative References"),
+    ("developer.macroSecurity", "Developer", "Code", "Macro Security"),
+    ("developer.addIns", "Developer", "Add-ins", "Add-ins"),
+    ("developer.excelAddIns", "Developer", "Add-ins", "Excel Add-ins"),
+    ("developer.comAddIns", "Developer", "Add-ins", "COM Add-ins"),
+    ("developer.insert", "Developer", "Controls", "Insert"),
+    ("developer.designMode", "Developer", "Controls", "Design Mode"),
+    ("developer.viewCode", "Developer", "Controls", "View Code"),
+    ("developer.runDialog", "Developer", "Controls", "Run Dialog"),
+    ("developer.xmlSource", "Developer", "XML", "Source"),
+    ("developer.xmlMapProperties", "Developer", "XML", "Map Properties"),
+    ("developer.expansionPacks", "Developer", "XML", "Expansion Packs"),
+    ("developer.refreshData", "Developer", "XML", "Refresh Data"),
+    ("developer.importXml", "Developer", "XML", "Import"),
+    ("developer.exportXml", "Developer", "XML", "Export"),
     // Table Design
     ("table.rename", "Table Design", "Properties", "Table Name"),
     ("table.resize", "Table Design", "Properties", "Resize Table"),

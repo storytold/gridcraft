@@ -4,7 +4,7 @@
 
 Each entry is an Excel ribbon or menu command (feature names only). It counts as implemented when GridCraft registers a command with the same id. This measures breadth only; the overall assessment (depth, fidelity, effort) is in [target-app-parity.md](target-app-parity.md).
 
-**Overall: 281 / 296 commands implemented (94.9%).**
+**Overall: 281 / 313 commands implemented (89.8%).**
 
 | Tab | Implemented | Total | Parity |
 |---|---|---|---|
@@ -18,7 +18,7 @@ Each entry is an Excel ribbon or menu command (feature names only). It counts as
 | Review | 15 | 18 | 83% |
 | View | 21 | 21 | 100% |
 | Automate | 4 | 4 | 100% |
-| Developer | 4 | 4 | 100% |
+| Developer | 4 | 21 | 19% |
 | Table Design | 13 | 13 | 100% |
 | Chart Design | 8 | 8 | 100% |
 | Format | 3 | 3 | 100% |
@@ -335,7 +335,7 @@ Implemented:
 - `automate.recordActions` Record Actions (Scripting Tools)
 - `automate.trustScripts` Trust Scripts (Scripting Tools)
 
-## Developer (4 / 4, 100%)
+## Developer (4 / 21, 19%)
 
 Implemented:
 
@@ -343,6 +343,26 @@ Implemented:
 - `insert.spinButton` Spin Button (Form Control) (Controls)
 - `insert.slider` Scroll Bar (Form Control) (Controls)
 - `control.format` Properties (Controls)
+
+Missing:
+
+- `developer.visualBasic` Visual Basic (Code)
+- `developer.recordMacro` Record Macro (Code)
+- `developer.useRelativeReferences` Use Relative References (Code)
+- `developer.macroSecurity` Macro Security (Code)
+- `developer.addIns` Add-ins (Add-ins)
+- `developer.excelAddIns` Excel Add-ins (Add-ins)
+- `developer.comAddIns` COM Add-ins (Add-ins)
+- `developer.insert` Insert (Controls)
+- `developer.designMode` Design Mode (Controls)
+- `developer.viewCode` View Code (Controls)
+- `developer.runDialog` Run Dialog (Controls)
+- `developer.xmlSource` Source (XML)
+- `developer.xmlMapProperties` Map Properties (XML)
+- `developer.expansionPacks` Expansion Packs (XML)
+- `developer.refreshData` Refresh Data (XML)
+- `developer.importXml` Import (XML)
+- `developer.exportXml` Export (XML)
 
 ## Table Design (13 / 13, 100%)
 

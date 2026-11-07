@@ -126,6 +126,11 @@ impl SheetApp {
             self.open_switch_windows = true;
             return;
         }
+        // Developer › Macros (also its Alt+F8 analogue) opens the Macros dialog; programmatic
+        // callers of `run` still get the workbook's scripts back from the query.
+        if id == "view.macros" && params.as_object().is_some_and(serde_json::Map::is_empty) {
+            return self.open_dialog("macros", json!({}));
+        }
         match self.run(id, params) {
             // A refused cell draft already shows its own message (with the rule's title).
             Err(e) if self.message.as_ref().is_some_and(|(_, m)| *m == e) => {}

@@ -16,6 +16,7 @@ mod automate;
 mod contextual;
 mod controls;
 mod data;
+mod developer;
 mod formulas;
 mod galleries;
 mod home;
@@ -31,6 +32,7 @@ use contextual::{chart_design, table_design};
 pub(crate) use controls::{ComboResult, editable_combo};
 use controls::{act, keytip};
 use data::data;
+use developer::developer;
 use formulas::formulas;
 pub use home::FONTS;
 use home::home;
@@ -42,7 +44,7 @@ pub use title_bar::{MAC_CONTENT_LEFT, MAC_TITLE_BAR, TITLE_LEFT_PAD, title_bar};
 use title_bar::{TITLE_BAR_H, TITLE_CONTROL_H};
 use view::view;
 
-pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
+pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate", "Developer"];
 const _: () = assert!(TITLE_CONTROL_H < TITLE_BAR_H, "title-bar controls keep a margin above and below");
 
 /// Draws the ribbon tabs and the active tab's horizontally scrollable card, resetting an unavailable contextual tab to Home.
@@ -152,6 +154,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             "Data" => data(app, ui),
                             "Review" => review(app, ui),
                             "View" => view(app, ui),
+                            "Developer" => developer(app, ui),
                             "Automate" => automate(app, ui),
                             "Table Design" => table_design(app, ui),
                             "Chart Design" => chart_design(app, ui),
