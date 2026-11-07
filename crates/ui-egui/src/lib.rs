@@ -252,6 +252,8 @@ pub struct SheetApp {
     pub perf: Perf,
     pub fonts_ready: bool,
     fonts_set: bool,
+    /// Whether the installed-font catalog has become available to paint.
+    fonts_catalog_ready: bool,
     /// Test harness set: rebuilds use the deterministic pinned font set instead of the host scan.
     prepared_fonts: bool,
     /// Workbook fonts bound into the current font set; a change rebinds (installed fonts only).

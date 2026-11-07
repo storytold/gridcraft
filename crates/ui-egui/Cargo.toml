@@ -32,6 +32,9 @@ web-time = { workspace = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "=5.19.0"
 
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 epaint_default_fonts = { workspace = true }
