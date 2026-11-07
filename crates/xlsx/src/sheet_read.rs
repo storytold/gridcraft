@@ -30,7 +30,20 @@ use rules::{read_cf, read_validation};
 struct Shared {
     anchor: CellRef,
     expr: Option<Expr>,
+    /// Printed from the parsed formula, so `0.0` says `0`.
     text: String,
+    /// As the file has it, which is what a literal `PY("…",0)` is read from.
+    raw: String,
+    /// Approximate bytes one dependent cell costs (its printed text plus its expression tree);
+    /// what exceeds [`SHARED_FORMULA_FREE_COST`] is charged against [`MAX_SHARED_FORMULA_BYTES`].
+    cost: u64,
+}
+
+/// What one sheet's hyperlinks have copied so far, across all its `<hyperlinks>` blocks.
+#[derive(Default)]
+struct LinkBudget {
+    cells: u64,
+    bytes: u64,
 }
 
 #[derive(Default)]
@@ -120,10 +133,23 @@ fn settle_python_spills_past_budget(st: &RowState, sheet: &mut Sheet) {
     }
 }
 
-const MAX_HYPERLINK_CELLS: u64 = 10_000;
 /// Target and tooltip bytes kept for hyperlinks of one sheet, over all cells: the same URL is
 /// copied for every cell of its range, so length × cells must stay bounded whatever the file.
 const MAX_HYPERLINK_BYTES: u64 = 8 * 1024 * 1024;
+/// Most cells one sheet's hyperlinks may cover (each cell gets its own copy of the link).
+const MAX_HYPERLINK_CELLS: u64 = 10_000;
+/// Longest hyperlink target kept, in bytes (Excel's own limit is about 2,079 characters).
+const MAX_HYPERLINK_TARGET: usize = 8_192;
+/// Longest hyperlink ScreenTip kept, in characters (Excel's limit).
+const MAX_TOOLTIP_CHARS: usize = 255;
+/// What a dependent of a shared formula may cost for free: an ordinary formula cell's worth (by
+/// [`shared_cost`], a formula of about 40 operators and operands), so a sheet of many ordinary
+/// shared formulas is never cut short however many cells share them.
+const SHARED_FORMULA_FREE_COST: u64 = 4096;
+/// Budget, per workbook, for what shared formulas cost beyond [`SHARED_FORMULA_FREE_COST`] per
+/// dependent cell: a long master copied into many cells is where the expansion multiplies the
+/// file's bytes, and this bounds it to well within a web build's memory.
+pub const MAX_SHARED_FORMULA_BYTES: u64 = 256 << 20;
 const MAX_COLUMN_ASSIGNMENTS: u64 = 1_000_000;
 /// Most dynamic-array and legacy-array ranges of one sheet.
 const MAX_DYNAMIC_RANGES: usize = 65_536;
@@ -182,6 +208,8 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
     drop(bytes);
 
     let mut fit_to_page = false;
+    let mut link_budget = LinkBudget::default();
+    let mut cf_kept_cells = 0u64;
     let mut column_assignments_left = MAX_COLUMN_ASSIGNMENTS;
     cx.cf_ext_ids.clear();
     for e in &root.children {
@@ -208,7 +236,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
                     }
                 }
             }
-            "conditionalFormatting" => read_cf(cx, e, &mut sheet),
+            "conditionalFormatting" => read_cf(cx, e, &mut sheet, &mut cf_kept_cells),
             "dataValidations" => {
                 for v in e.kids("dataValidation") {
                     if let Some(v) = read_validation(v) {
@@ -216,7 +244,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
                     }
                 }
             }
-            "hyperlinks" => read_hyperlinks(cx, name, e, &rels, &mut sheet),
+            "hyperlinks" => read_hyperlinks(cx, name, e, &rels, &mut sheet, &mut link_budget),
             "autoFilter" => sheet.autofilter = read_autofilter(cx, e),
             "printOptions" => {
                 sheet.print.gridlines = e.flag("gridLines", false);
@@ -590,8 +618,9 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     // line breaks in the code. A formula naming a script the part lacks keeps only its cached
     // values, its own and its spill's, as plain values.
     let py = match (&formula, c.child("f")) {
-        // A follower of a shared formula has no text of its own.
-        (Some(fm), Some(f)) => crate::python_part::cell_code(&mut cx.python, fm, if f.text.trim().is_empty() { &fm.text } else { &f.text }),
+        // A follower of a shared formula has no text of its own, and one printed from its parsed
+        // formula can say something else, so it reads the master's.
+        (Some(fm), Some(f)) => crate::python_part::cell_code(&mut cx.python, fm, formula_text(st, f)),
         _ => crate::python_part::PyFormula::Not,
     };
     let (formula, py) = match py {
@@ -646,14 +675,14 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style, py });
 }
 
-/// The text a cell's formula element stands for: its own, or for a follower of a shared formula, that
-/// of the master cell.
+/// The text a cell's formula element stands for, as the file has it: its own, or for a follower of a
+/// shared formula, that of the master cell.
 fn formula_text<'a>(st: &'a RowState, f: &'a El) -> &'a str {
     if !f.text.trim().is_empty() {
         return &f.text;
     }
     let master = (f.attr("t") == Some("shared")).then(|| f.attr_u32("si")).flatten().and_then(|si| st.shared.get(&si));
-    master.map_or("", |shared| shared.text.as_str())
+    master.map_or("", |shared| shared.raw.as_str())
 }
 
 fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {
@@ -674,13 +703,30 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
             let si = f.attr_u32("si")?;
             if !text.is_empty() {
                 let expr = gridcraft_formula::parse(text).ok();
-                st.shared.insert(si, Shared { anchor: pos, expr, text: text.to_string() });
+                let cost = shared_cost(text, expr.as_ref());
+                st.shared.insert(si, Shared { anchor: pos, expr, text: text.to_string(), raw: f.text.clone(), cost });
                 Some(Formula::new(text))
             } else {
                 let Some(sh) = st.shared.get(&si) else {
                     cx.warn("a shared formula refers to a missing master cell; kept the cached value");
                     return None;
                 };
+                // The parser's own test: bytes first (cheap), then characters, so a multibyte
+                // master that failed to parse for another reason gets no false length warning.
+                if sh.expr.is_none()
+                    && sh.text.len() > gridcraft_formula::MAX_FORMULA_LEN
+                    && sh.text.chars().count() > gridcraft_formula::MAX_FORMULA_LEN
+                {
+                    cx.warn(format!(
+                        "a shared formula is longer than {} characters; kept the cached values of the cells that share it",
+                        gridcraft_formula::MAX_FORMULA_LEN
+                    ));
+                    return None;
+                }
+                if !charge(&mut cx.shared_formula_bytes, extra_shared_cost(sh.cost), MAX_SHARED_FORMULA_BYTES) {
+                    cx.warn("shared formulas expand to too much data; kept the cached values of the remaining cells that share them");
+                    return None;
+                }
                 Some(match &sh.expr {
                     Some(e) => {
                         let dr = pos.row as i64 - sh.anchor.row as i64;
@@ -753,6 +799,41 @@ pub fn parse_iso_datetime(s: &str, sys: DateSystem) -> Option<f64> {
     Some(serial)
 }
 
+/// What one dependent of a shared formula costs: its printed text plus its expression tree.
+fn shared_cost(text: &str, expr: Option<&Expr>) -> u64 {
+    let mut nodes = 0u64;
+    if let Some(e) = expr {
+        e.walk(&mut |_| nodes = nodes.saturating_add(1));
+    }
+    let node = std::mem::size_of::<Expr>() as u64;
+    (text.len() as u64).saturating_mul(2).saturating_add(nodes.saturating_mul(node)).saturating_add(64)
+}
+
+/// What one dependent of a shared formula costing `cost` is charged: its cost beyond an ordinary
+/// formula cell's.
+fn extra_shared_cost(cost: u64) -> u64 {
+    cost.saturating_sub(SHARED_FORMULA_FREE_COST)
+}
+
+/// Adds `cost` to `used` when that stays within `cap`; `false` (and `used` unchanged) otherwise.
+fn charge(used: &mut u64, cost: u64, cap: u64) -> bool {
+    match used.checked_add(cost) {
+        Some(total) if total <= cap => {
+            *used = total;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The first `max` characters of `s`.
+fn truncate_chars(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((at, _)) => s.get(..at).unwrap_or(s).to_string(),
+        None => s.to_string(),
+    }
+}
+
 pub fn parse_sqref(s: Option<&str>) -> Vec<RangeRef> {
     s.unwrap_or("").split_whitespace().filter_map(RangeRef::parse).collect()
 }
@@ -812,6 +893,40 @@ fn read_ext(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_formula_budget_stops_expansion() {
+        let expr = gridcraft_formula::parse("SUM(1,2,3)").ok();
+        let cost = shared_cost("SUM(1,2,3)", expr.as_ref());
+        assert!(cost > 64 + 4 * std::mem::size_of::<Expr>() as u64);
+        let cap = cost * 3;
+        let mut used = 0;
+        assert!((0..3).all(|_| charge(&mut used, cost, cap)));
+        assert!(!charge(&mut used, cost, cap));
+        assert_eq!(used, cap);
+        assert!(!charge(&mut used, u64::MAX, u64::MAX));
+    }
+
+    #[test]
+    fn ordinary_shared_formulas_are_free_and_long_ones_pay_their_excess() {
+        let text = r#"IF(AND(A1>0,B1<>""),VLOOKUP(C1,Sheet2!$A$1:$D$500,4,FALSE)*SUM(D1:D10)/COUNT(D1:D10),IFERROR(E1/F1,0))"#;
+        let expr = gridcraft_formula::parse(text).ok();
+        assert!(expr.is_some());
+        assert_eq!(extra_shared_cost(shared_cost(text, expr.as_ref())), 0, "an ordinary formula costs nothing extra");
+        let long = vec![format!("SUM({}1)", "1,".repeat(199)); 10].join("+");
+        let expr = gridcraft_formula::parse(&long).ok();
+        assert!(expr.is_some());
+        let cost = shared_cost(&long, expr.as_ref());
+        assert_eq!(extra_shared_cost(cost), cost - SHARED_FORMULA_FREE_COST);
+        // A few thousand copies of a long master no longer fit the budget.
+        assert!(extra_shared_cost(cost).saturating_mul(10_000) > MAX_SHARED_FORMULA_BYTES);
+    }
+
+    #[test]
+    fn truncate_keeps_whole_characters() {
+        assert_eq!(truncate_chars("ab\u{e9}d", 3), "ab\u{e9}");
+        assert_eq!(truncate_chars("ab", 3), "ab");
+    }
 
     #[test]
     fn iso_dates() {

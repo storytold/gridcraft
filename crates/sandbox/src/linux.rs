@@ -7,7 +7,8 @@ use std::path::Path;
 use std::process::Command;
 
 use landlock::{
-    ABI, Access, AccessFs, AccessNet, CompatLevel, Compatible, Ruleset, RulesetAttr, RulesetCreatedAttr, RulesetStatus, Scope, path_beneath_rules,
+    ABI, Access, AccessFs, AccessNet, CompatLevel, Compatible, CreateRulesetError, Ruleset, RulesetAttr, RulesetCreatedAttr, RulesetError,
+    RulesetStatus, Scope, path_beneath_rules,
 };
 use seccompiler::{BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter, SeccompRule, TargetArch};
 
@@ -46,11 +47,25 @@ fn not_enforced(e: impl std::fmt::Display) -> SandboxError {
     SandboxError::NotEnforced(e.to_string())
 }
 
-/// A kernel without Landlock fails while the ruleset is made, with the Landlock crate's own text. A
-/// later failure, such as too many layers, isn't this: a machine that has it must not be taken for one
-/// that doesn't.
+/// A kernel without Landlock, or with it off, in the Landlock crate's own text. Only that case says
+/// this, since the tests that skip on such a machine look for it: any other failure, such as too many
+/// layers or a refused ruleset, comes from a machine that has Landlock, which must not be taken for
+/// one that doesn't.
 fn landlock_not_enforced(e: impl std::fmt::Display) -> SandboxError {
     SandboxError::NotEnforced(format!("Landlock is not enforced: {e}"))
+}
+
+/// What a failed `landlock_create_ruleset` says about the kernel: `ENOSYS` is one built without
+/// Landlock and `EOPNOTSUPP` one with it off at boot. Anything else, such as `EINVAL` or too many open
+/// files, comes from a kernel that has it.
+fn says_no_landlock(errno: Option<i32>) -> bool {
+    matches!(errno, Some(libc::ENOSYS | libc::EOPNOTSUPP))
+}
+
+fn ruleset_error(e: RulesetError) -> SandboxError {
+    let absent =
+        matches!(&e, RulesetError::CreateRuleset(CreateRulesetError::CreateRulesetCall { source, .. }) if says_no_landlock(source.raw_os_error()));
+    if absent { landlock_not_enforced(e) } else { not_enforced(e) }
 }
 
 /// Filesystem: every right Landlock handles is denied except reading the policy's read paths,
@@ -58,14 +73,18 @@ fn landlock_not_enforced(e: impl std::fmt::Display) -> SandboxError {
 /// 4), TCP binding and connecting are denied too; with scopes (ABI 6), signals to and abstract
 /// Unix sockets of processes outside the sandbox.
 fn landlock(policy: &Checked) -> Result<()> {
+    // The first ABI's rights are refused only where Landlock can't be used at all.
     let ruleset = Ruleset::default()
         .set_compatibility(CompatLevel::HardRequirement)
         .handle_access(AccessFs::from_all(ABI::V1))
-        .and_then(|r| r.set_compatibility(CompatLevel::BestEffort).handle_access(AccessFs::from_all(NEWEST)))
+        .map_err(landlock_not_enforced)?
+        .set_compatibility(CompatLevel::BestEffort)
+        .handle_access(AccessFs::from_all(NEWEST))
         .and_then(|r| r.handle_access(AccessNet::from_all(NEWEST)))
         .and_then(|r| r.scope(Scope::from_all(NEWEST)))
-        .and_then(|r| r.create())
-        .map_err(landlock_not_enforced)?;
+        .map_err(not_enforced)?
+        .create()
+        .map_err(ruleset_error)?;
     let read = AccessFs::ReadFile | AccessFs::ReadDir;
     let ruleset = ruleset
         .set_compatibility(CompatLevel::HardRequirement)
@@ -303,6 +322,19 @@ mod tests {
     fn a_kernel_without_landlock_says_so() {
         // What the tests and a person read to tell this from a sandbox that failed its check.
         assert!(landlock_not_enforced("the crate's text").to_string().contains("Landlock is not enforced: the crate's text"));
+    }
+
+    #[test]
+    fn only_a_missing_or_disabled_landlock_says_it_is_not_enforced() {
+        assert!(says_no_landlock(Some(libc::ENOSYS)));
+        assert!(says_no_landlock(Some(libc::EOPNOTSUPP)));
+        for errno in [libc::EINVAL, libc::E2BIG, libc::EFAULT, libc::EMFILE, libc::ENOMEM, libc::EPERM] {
+            assert!(!says_no_landlock(Some(errno)), "{errno}");
+        }
+        assert!(!says_no_landlock(None));
+        // A ruleset failure of another kind, from the crate itself, on any kernel.
+        let e = Ruleset::default().create().err().map(ruleset_error).map(|e| e.to_string());
+        assert!(e.is_some_and(|e| !e.contains("Landlock is not enforced")));
     }
 
     #[test]
