@@ -227,10 +227,19 @@ fn percentiles() {
     close(ev("PERCENTRANK.EXC", vec![e9.clone(), n(5.43)]), 0.381);
     close(ev("PERCENTRANK.EXC", vec![e9, n(5.43), n(1.0)]), 0.3);
     let t = c(&[1.0, 2.0, 3.0]);
-    close(ev("PERCENTRANK", vec![t.clone(), n(2.0), n(400.0)]), 0.5);
-    close(ev("PERCENTRANK.INC", vec![t.clone(), n(2.0), n(400.0)]), 0.5);
-    close(ev("PERCENTRANK.INC", vec![t.clone(), n(1.0), n(400.0)]), 0.0);
-    close(ev("PERCENTRANK.EXC", vec![t, n(2.0), n(400.0)]), 0.5);
+    // Excel 16: significance 309 and up is #DIV/0!, 308 still works.
+    for name in ["PERCENTRANK", "PERCENTRANK.INC", "PERCENTRANK.EXC"] {
+        is_err(ev(name, vec![t.clone(), n(2.0), n(309.0)]), CellError::Div0);
+        is_err(ev(name, vec![t.clone(), n(1.0), n(400.0)]), CellError::Div0);
+        close(ev(name, vec![t.clone(), n(2.0), n(308.0)]), 0.5);
+    }
+    // From significance 15 up the result has 15 significant digits.
+    let k = c(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
+    for sig in [15.0, 16.0, 308.0] {
+        close_tol(ev("PERCENTRANK.INC", vec![k.clone(), n(2.123_456_789), n(sig)]), 0.187_242_798_166_667, 1e-16);
+    }
+    close_tol(ev("PERCENTRANK.INC", vec![k.clone(), n(2.123_456_789), n(14.0)]), 0.187_242_798_166_66, 1e-15);
+    close(ev("PERCENTRANK.EXC", vec![k, n(2.123_456_789), n(16.0)]), 0.265_432_098_625);
 }
 
 #[test]
@@ -607,4 +616,24 @@ fn aggregate_helper() {
     close(aggregate_values_k(19, &vals, &nv(2.0)), 2.0);
     close(aggregate_values_k(9, &vals, &nv(2.0)), 9.0);
     is_err(aggregate_values_k(14, &vals, &nv(10.0)), CellError::Num);
+}
+
+/// Security: FREQUENCY finds each value's bin by binary search, and MODE counts distinct numbers
+/// through an index, so neither is quadratic in its inputs. Results are as before: unsorted and
+/// duplicate bins keep their positions (a value goes to the first of equal bins), and tied modes
+/// come in first-occurrence order.
+#[test]
+fn frequency_and_mode_scale_with_their_inputs() {
+    let f = ev("FREQUENCY", vec![c(&[1.0, 2.0, 2.0, 3.0, 5.0, 9.0, -1.0]), c(&[3.0, 2.0, 2.0, 0.0])]);
+    assert_eq!(rows_of(&f), vec![vec![nv(1.0)], vec![nv(3.0)], vec![nv(0.0)], vec![nv(1.0)], vec![nv(2.0)]]);
+    // NaN data goes to the overflow bin, and a NaN bin takes nothing
+    let f = ev("FREQUENCY", vec![c(&[f64::NAN, 0.5, 2.0]), c(&[f64::NAN, 1.0])]);
+    assert_eq!(rows_of(&f), vec![vec![nv(0.0)], vec![nv(1.0)], vec![nv(2.0)]]);
+    let data: Vec<f64> = (0..200_000).map(|i| f64::from(i) + 1e6).collect();
+    let bins: Vec<f64> = (0..200_000).map(f64::from).collect();
+    let f = ev("FREQUENCY", vec![c(&data), c(&bins)]);
+    assert_eq!(rows_of(&f).last(), Some(&vec![nv(200_000.0)]));
+    let distinct = ev("MODE", vec![c(&data)]);
+    is_err(distinct, CellError::NA);
+    assert_eq!(rows_of(&ev("MODE.MULT", vec![c(&[3.0, 0.0, 1.0, -0.0, 3.0, 1.0])])), vec![vec![nv(3.0)], vec![nv(0.0)], vec![nv(1.0)]]);
 }
