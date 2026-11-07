@@ -303,3 +303,15 @@ fn ctrl_alt_letter_that_typed_text_is_not_select_all() {
     assert_eq!(h.state().session.active().unwrap().selection.current().a1(), "B2");
     assert_eq!(h.state().editor.as_ref().unwrap().text, "\u{e4}");
 }
+
+/// Only plain Ctrl+Q toggles Quick Analysis; Ctrl+Shift+Q and Ctrl+Alt+Q (AltGr+Q) do not.
+#[test]
+fn only_plain_ctrl_q_toggles_quick_analysis() {
+    let mut h = harness(book("A1:B3"));
+    key(&mut h, Key::Q, CTRL_SHIFT);
+    assert!(h.state().grid.quick_analysis.open.is_none(), "Ctrl+Shift+Q");
+    key(&mut h, Key::Q, Modifiers { alt: true, ..CTRL });
+    assert!(h.state().grid.quick_analysis.open.is_none(), "Ctrl+Alt+Q");
+    key(&mut h, Key::Q, CTRL);
+    assert!(h.state().grid.quick_analysis.open.is_some(), "Ctrl+Q");
+}

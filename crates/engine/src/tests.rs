@@ -4717,6 +4717,124 @@ fn a_decrypted_workbook_never_overwrites_its_encrypted_original() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+fn quick_analysis_block(s: &mut Session) {
+    for (a, t) in [("A1", "Item"), ("B1", "Q1"), ("C1", "Q2"), ("A2", "x"), ("A3", "y"), ("A4", "z")] {
+        s.execute("cell.set", json!({"cell": a, "input": t})).unwrap();
+    }
+    for (r, (q1, q2)) in [(1.0, 10.0), (2.0, 20.0), (3.0, 30.0)].into_iter().enumerate() {
+        s.execute("cell.set", json!({"cell": format!("B{}", r + 2), "input": q1.to_string()})).unwrap();
+        s.execute("cell.set", json!({"cell": format!("C{}", r + 2), "input": q2.to_string()})).unwrap();
+    }
+}
+
+#[test]
+fn analysis_add_total_writes_formulas_in_one_undo_step() {
+    // Issue #791 (Quick Analysis › Totals).
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    let before = s.doc().unwrap().undo.len();
+    // The header row and the text-only column are skipped; the selection is the default range.
+    s.execute("selection.set", json!({"range": "A1:C4"})).unwrap();
+    let r = s.execute("analysis.addTotal", json!({"function": "sum"})).unwrap();
+    assert_eq!(r["output"], "B5:C5");
+    assert_eq!(v(&s, "B5"), Value::Number(6.0));
+    assert_eq!(v(&s, "C5"), Value::Number(60.0));
+    assert_eq!(v(&s, "A5"), Value::Empty, "text columns get no total");
+    s.execute("analysis.addTotal", json!({"range": "B1:C4", "function": "average", "direction": "rows"})).unwrap();
+    assert_eq!(v(&s, "D2"), Value::Number(5.5));
+    s.execute("analysis.addTotal", json!({"range": "B1:C4", "function": "runningTotal", "overwrite": true})).unwrap();
+    assert_eq!(v(&s, "D4"), Value::Number(6.0), "running total down column B");
+    assert_eq!(v(&s, "E4"), Value::Number(60.0));
+    s.execute("analysis.addTotal", json!({"range": "B1:B4", "function": "percentTotal", "overwrite": true})).unwrap();
+    assert_eq!(v(&s, "C4"), Value::Number(0.5), "overwrite replaces the C column cell next to B");
+    assert_eq!(s.doc().unwrap().undo.len(), before + 4, "one undo step per call");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "C4"), Value::Number(30.0));
+    // A second sum into the occupied row is refused rather than overwriting.
+    assert!(s.execute("analysis.addTotal", json!({"range": "A1:C4"})).is_err());
+}
+
+#[test]
+fn analysis_add_total_refuses_bad_and_huge_input() {
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    // Empty params on a single cell, unknown function, no numbers, whole columns, no room.
+    assert!(s.execute("analysis.addTotal", json!({})).is_err());
+    assert!(s.execute("analysis.addTotal", json!({"range": "A1:C4", "function": "median"})).is_err());
+    assert!(s.execute("analysis.addTotal", json!({"range": "A1:A4"})).is_err());
+    let before = s.doc().unwrap().undo.len();
+    let r = s.execute("analysis.addTotal", json!({"range": "B:C"})).unwrap();
+    assert_eq!(r["output"], "B5:C5", "whole columns are clipped to the used range");
+    assert_eq!(s.doc().unwrap().undo.len(), before + 1);
+    s.execute("cell.set", json!({"cell": "B1048575", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1048576", "input": "2"})).unwrap();
+    assert!(s.execute("analysis.addTotal", json!({"range": "B1048575:C1048576"})).is_err(), "no row below the last one");
+    assert!(s.execute("analysis.addTotal", json!({"range": "B1:C1048576", "function": "runningTotal"})).is_err(), "per-cell block over the cap");
+}
+
+#[test]
+fn analysis_results_stay_outside_a_selection_that_extends_past_the_data() {
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    // Data ends in row 4; the selection runs to row 10, so the sum goes in row 11.
+    let r = s.execute("analysis.addTotal", json!({"range": "A1:C10"})).unwrap();
+    assert_eq!(r["output"], "B11:C11");
+    assert_eq!(v(&s, "B11"), Value::Number(6.0));
+    assert_eq!(v(&s, "B5"), Value::Empty);
+    // Per-row blocks and sparklines move out by the selection's size too.
+    let r = s.execute("analysis.addTotal", json!({"range": "B1:C10", "function": "runningTotal", "direction": "rows"})).unwrap();
+    assert_eq!(r["output"], "B12:C14", "per-row block lands below the selection, not inside it");
+    let r = s.execute("analysis.addSparklines", json!({"range": "A1:F4"})).unwrap();
+    assert_eq!(r["output"], "G2:G4");
+    let r = s.execute("analysis.addSparklines", json!({"range": "A1:C8", "direction": "columns"})).unwrap();
+    assert_eq!(r["output"], "B9:C9");
+}
+
+#[test]
+fn analysis_overwrite_keeps_the_target_cell_style() {
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    s.execute("cell.set", json!({"cell": "B5", "input": "1"})).unwrap();
+    s.execute("selection.set", json!({"cell": "B5"})).unwrap();
+    s.execute("home.bold", json!({})).unwrap();
+    s.execute("analysis.addTotal", json!({"range": "A1:C4", "overwrite": true})).unwrap();
+    assert_eq!(v(&s, "B5"), Value::Number(6.0));
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    assert!(d.wb.styles.get(sh.style_id(CellRef::parse("B5").unwrap())).font.bold, "bold survives the overwrite");
+}
+
+#[test]
+fn analysis_commands_refuse_a_multi_area_selection_without_a_range() {
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    s.execute("selection.set", json!({"range": "A1:C4,E1:F4"})).unwrap();
+    for c in ["analysis.addTotal", "analysis.addSparklines"] {
+        let e = s.execute(c, json!({})).unwrap_err().to_string();
+        assert!(e.contains("single contiguous range"), "{c}: {e}");
+    }
+    assert_eq!(v(&s, "B5"), Value::Empty);
+    // An explicit range still works.
+    s.execute("analysis.addTotal", json!({"range": "A1:C4"})).unwrap();
+    assert_eq!(v(&s, "B5"), Value::Number(6.0));
+}
+
+#[test]
+fn analysis_add_sparklines_one_per_row_in_one_undo_step() {
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    let before = s.doc().unwrap().undo.len();
+    let r = s.execute("analysis.addSparklines", json!({"range": "A1:C4", "type": "column"})).unwrap();
+    assert_eq!(r["output"], "D2:D4", "header row and label column are skipped");
+    let sparks = s.doc().unwrap().wb.active().unwrap().sparklines.clone();
+    assert_eq!(sparks.len(), 3);
+    assert!(sparks.iter().any(|x| x.cell == CellRef::parse("D3").unwrap() && x.source == "B3:C3"));
+    assert_eq!(s.doc().unwrap().undo.len(), before + 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().sparklines.is_empty());
+    assert!(s.execute("analysis.addSparklines", json!({"range": "A1:A4"})).is_err());
+}
+
 #[test]
 fn link_open_refuses_every_scheme_but_http_https_and_mailto() {
     let mut s = s();
