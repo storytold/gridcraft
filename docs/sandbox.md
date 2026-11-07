@@ -19,7 +19,7 @@ other programs. The sandbox's job is that it can do none of these:
 - **Files:** it can read only the paths its policy lists (the interpreter's installation, the
   system's shared libraries and font folders) and write no file except `/dev/null`. Nor can it change
   a file any other way: not its length, permissions, owner, extended attributes, times or flags, even
-  one it can read. The home directory, documents and other workbooks are out of reach. So `tempfile` finds no folder it can use. matplotlib,
+  one it can read. The exception is a standard stream the parent made a file (see below). The home directory, documents and other workbooks are out of reach. So `tempfile` finds no folder it can use. matplotlib,
   which asks for a writable folder, is given a path that doesn't exist for that one call: it can't save
   its font list there, keeps it in memory, and nothing is written. A plot comes back as bytes in the
   worker's reply.
@@ -34,7 +34,10 @@ other programs. The sandbox's job is that it can do none of these:
 Data reaches the code only through its command-line arguments (which the parent chooses), its
 standard input and output (which the parent holds), and the files its policy lets it read. Nothing
 else is open: the launcher closes every descriptor it inherited, because the confinement doesn't
-revoke what is already open. The
+revoke what is already open. The three standard streams stay as the parent made them, with the rights
+they were opened with, so a stream that is a file can be written and truncated. A parent gives the
+program pipes, as the Python worker does; `sandbox-check` passes its own streams on, so its output
+sent to a file is such a stream. The
 program inherits no environment: the launcher clears it and keeps only the locale and time zone
 (`LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`), with `PATH` set to `/usr/bin:/bin`, so tokens and credentials
 in the parent's environment don't reach it.

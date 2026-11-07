@@ -89,7 +89,9 @@ pub fn support() -> Support {
 
 /// The command that runs `program` with `args`, confined by `policy`, checked against `canary`.
 /// The parent spawns it like any other command and keeps `canary` alive until the program has
-/// started (its standard streams are the program's). The command runs the current executable
+/// started (its standard streams are the program's). Those stay open with the rights they were
+/// opened with, which the confinement doesn't revoke, so a stream that is a file can be written and
+/// truncated: give the program pipes. The command runs the current executable
 /// again, which must pass its arguments to [`handle_args`] first.
 pub fn launch_command(policy: &Policy, canary: &Canary, program: &Path, args: &[OsString]) -> Result<Command> {
     launch_command_with(&std::env::current_exe()?, policy, canary, program, args)
