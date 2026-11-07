@@ -242,6 +242,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unfreeze Panes" => "Снять закрепление областей",
         "Dark Mode" => "Тёмный режим",
         "Interface language" => "Язык интерфейса",
+        "User name" => "Имя пользователя",
+        "Signs new notes and comments, and is the author of new workbooks." => {
+            "Подписывает новые заметки и комментарии и указывается как автор новых книг."
+        }
         "Interface size" => "Размер интерфейса",
         "Auto" => "Авто",
         "Drag to freeze columns" => "Перетащите, чтобы закрепить столбцы",

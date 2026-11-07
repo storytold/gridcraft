@@ -245,6 +245,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Light" => "Svetla",
         "Dark" => "Tamna",
         "Interface language" => "Jezik interfejsa",
+        "User name" => "Korisničko ime",
+        "Signs new notes and comments, and is the author of new workbooks." => "Potpisuje nove beleške i komentare i autor je novih radnih svezaka.",
         "Interface size" => "Veličina interfejsa",
         "Auto" => "Automatski",
         "Drag to freeze columns" => "Prevuci da zamrzneš kolone",

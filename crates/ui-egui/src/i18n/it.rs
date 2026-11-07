@@ -239,6 +239,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unfreeze Panes" => "Sblocca riquadri",
         "Dark Mode" => "Modalità scura",
         "Interface language" => "Lingua dell'interfaccia",
+        "User name" => "Nome utente",
+        "Signs new notes and comments, and is the author of new workbooks." => {
+            "Firma le nuove note e i nuovi commenti ed è l'autore delle nuove cartelle di lavoro."
+        }
         "Interface size" => "Dimensione dell'interfaccia",
         "Auto" => "Auto",
         "Drag to freeze columns" => "Trascina per bloccare le colonne",

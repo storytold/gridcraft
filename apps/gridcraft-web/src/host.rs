@@ -40,9 +40,6 @@ const WORKBOOK_EXTS: &[&str] = &["xlsx"];
 /// The largest workbook taken from the host page, refused before it is copied.
 const MAX_OPEN_BYTES: u64 = 512 << 20;
 
-/// The longest user name taken from `?author=`.
-const MAX_AUTHOR_CHARS: usize = 200;
-
 #[derive(Clone)]
 pub struct Bridge {
     host: Rc<Host>,
@@ -70,10 +67,10 @@ impl Bridge {
         }));
     }
 
-    /// `?author=`: the host's name for the user signs new notes and comments.
+    /// `?author=`: the host's name for the user signs new notes and comments. It is kept as
+    /// `options.userName` keeps a name (`clean_user_name`); a blank one leaves the user name alone.
     pub fn set_author(app: &mut SheetApp, author: &str) {
-        let author: String = author.trim().chars().take(MAX_AUTHOR_CHARS).collect();
-        if !author.is_empty() {
+        if let Some(author) = gridcraft_engine::cmd::file::clean_user_name(author) {
             app.session.prefs.user_name = author;
         }
     }

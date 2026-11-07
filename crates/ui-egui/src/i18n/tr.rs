@@ -354,6 +354,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unfreeze Panes" => "Bölmeleri Çöz",
         "Dark Mode" => "Koyu Mod",
         "Interface language" => "Arayüz dili",
+        "User name" => "Kullanıcı adı",
+        "Signs new notes and comments, and is the author of new workbooks." => {
+            "Yeni notları ve açıklamaları imzalar ve yeni çalışma kitaplarının yazarı olur."
+        }
         "Command\nPalette" => "Komut\nPaleti",
         "Agent\nControl" => "Ajan\nKontrolü",
         "Action\nJournal" => "İşlem\nGünlüğü",

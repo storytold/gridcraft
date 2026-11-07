@@ -26,6 +26,7 @@ pub enum Policy {
 const DENIED_PREFIXES: &[(&str, &str)] = &[
     ("file.", "macros don't open, save, close or create workbooks"),
     ("app.", "macros don't change the app"),
+    ("options.", "macros don't change the app"),
     ("window.", "macros don't switch windows"),
     ("automate.", "macros don't record or run scripts or other macros"),
     ("macro.", "macros don't record or run other macros"),
@@ -114,6 +115,7 @@ mod tests {
             "view.hideWindow",
             "view.unhideWindow",
             "control.press",
+            "options.userName",
         ] {
             assert!(matches!(macro_policy(id, &none, Trust::Local), Policy::Deny(_)), "{id}");
             assert!(matches!(macro_policy(id, &path, Trust::FromFile), Policy::Deny(_)), "{id}");

@@ -340,6 +340,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unfreeze Panes" => "Κατάργηση σταθεροποίησης παραθύρων",
         "Dark Mode" => "Σκοτεινή λειτουργία",
         "Interface language" => "Γλώσσα περιβάλλοντος",
+        "User name" => "Όνομα χρήστη",
+        "Signs new notes and comments, and is the author of new workbooks." => {
+            "Υπογράφει τις νέες σημειώσεις και τα νέα σχόλια και είναι ο συντάκτης των νέων βιβλίων εργασίας."
+        }
         "Command\nPalette" => "Παλέτα\nεντολών",
         "Agent\nControl" => "Έλεγχος\nπρακτόρων",
         "Action\nJournal" => "Ιστορικό\nενεργειών",

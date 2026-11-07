@@ -255,6 +255,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Light" => "Clair",
         "Dark" => "Sombre",
         "Interface language" => "Langue de l'interface",
+        "User name" => "Nom d'utilisateur",
+        "Signs new notes and comments, and is the author of new workbooks." => {
+            "Signe les nouvelles notes et les nouveaux commentaires, et est l'auteur des nouveaux classeurs."
+        }
         "Interface size" => "Taille de l'interface",
         "Auto" => "Automatique",
         "Drag to freeze columns" => "Faites glisser pour figer les colonnes",

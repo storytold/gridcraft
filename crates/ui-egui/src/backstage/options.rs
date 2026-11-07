@@ -53,7 +53,7 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     dim(ui, lang.tr("Calculation settings are saved with the workbook."));
 }
 
-/// The display theme and interface language controls of the General section.
+/// The display theme, interface language and user name controls of the General section.
 fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
     egui::Grid::new("backstage_options_general").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
         let label = ui.label(lang.tr("Display theme"));
@@ -90,7 +90,31 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
             .response
             .labelled_by(label.id);
         ui.end_row();
+        user_name(app, ui, lang);
     });
+}
+
+/// The User name row (`options.userName`), committed when the field loses focus (Enter or a click
+/// elsewhere), with a note under it saying what the name is for. A blank entry isn't sent: the
+/// field shows the saved name again, with no message (an error raised by Enter would be closed by
+/// the same key press).
+fn user_name(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
+    let label = ui.label(lang.tr("User name"));
+    let id = ui.make_persistent_id("backstage_user_name");
+    let current = app.session.prefs.user_name.clone();
+    let committed = crate::widgets::committed_text(ui, id, &current, Some(240.0));
+    if let Some(response) = ui.ctx().read_response(id) {
+        response.labelled_by(label.id);
+    }
+    if let Some(text) = committed
+        && gridcraft_engine::cmd::file::clean_user_name(&text).is_some_and(|name| name != current)
+    {
+        app.run_or_alert("options.userName", json!({"name": text}));
+    }
+    ui.end_row();
+    ui.allocate_space(vec2(0.0, 0.0));
+    dim(ui, lang.tr("Signs new notes and comments, and is the author of new workbooks."));
+    ui.end_row();
 }
 
 /// The calculation mode, and iterative calculation, of the active workbook.

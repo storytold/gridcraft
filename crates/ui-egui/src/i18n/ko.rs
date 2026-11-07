@@ -240,6 +240,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unfreeze Panes" => "틀 고정 취소",
         "Dark Mode" => "다크 모드",
         "Interface language" => "인터페이스 언어",
+        "User name" => "사용자 이름",
+        "Signs new notes and comments, and is the author of new workbooks." => "새 메모와 댓글의 작성자로 표시되고, 새 통합 문서의 만든 이가 됩니다.",
         "Interface size" => "인터페이스 크기",
         "Auto" => "자동",
         "Drag to freeze columns" => "끌어서 열 고정",
