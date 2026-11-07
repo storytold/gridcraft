@@ -372,7 +372,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
     let unlinked = crate::python_pictures::settle_links(&mut wb);
     if unlinked > 0 {
         cx.warn(format!(
-            "{unlinked} picture(s) were linked to a cell that isn't a Python cell in this file; they kept their images and lost the link"
+            "{unlinked} picture(s) were linked to a cell that isn't a Python cell in this file, or whose code is too long to run; they kept their images and lost the link"
         ));
     }
 
