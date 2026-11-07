@@ -547,12 +547,46 @@ fn format_cells(s: &mut Session, p: &Json) -> Result<Json> {
     let base = serde_json::to_value(active_style(s)?).map_err(|e| EngineError::Other(e.to_string()))?;
     let merged = merge_json(base, &patch);
     let _: Style = serde_json::from_value(merged).map_err(|e| bad("home.formatCells", e.to_string()))?;
-    apply_style(s, p, |st| {
-        if let Ok(cur) = serde_json::to_value(&*st)
-            && let Ok(new) = serde_json::from_value::<Style>(merge_json(cur, &patch))
-        {
-            *st = new;
+    let apply = |s: &mut Session, p: &Json, patch: &Json| {
+        apply_style(s, p, |st| {
+            if let Ok(cur) = serde_json::to_value(&*st)
+                && let Ok(new) = serde_json::from_value::<Style>(merge_json(cur, patch))
+            {
+                *st = new;
+            }
+        })
+    };
+    if bool_param(p, "borderEdges") != Some(true) {
+        return apply(s, p, &patch);
+    }
+    // `borderEdges`: the top/bottom/left/right lines are the selection's outline, so they go on
+    // the cells along that edge only; the rest of the patch applies to every cell.
+    let sheet = target_sheet(s, p)?;
+    let ranges = target_ranges(s, p)?;
+    let mut rest = patch;
+    let mut sides = Vec::new();
+    if let Some(b) = rest.get_mut("borders").and_then(Json::as_object_mut) {
+        for k in ["top", "bottom", "left", "right"] {
+            if let Some(v) = b.remove(k) {
+                sides.push((k, v));
+            }
         }
+    }
+    s.grouped("Format Cells", |s| {
+        apply(s, p, &rest)?;
+        for r in &ranges {
+            for (k, line) in &sides {
+                let edge = match *k {
+                    "top" => RangeRef { start: r.start, end: CellRef::new(r.start.row, r.end.col) },
+                    "bottom" => RangeRef { start: CellRef::new(r.end.row, r.start.col), end: r.end },
+                    "left" => RangeRef { start: r.start, end: CellRef::new(r.end.row, r.start.col) },
+                    _ => RangeRef { start: CellRef::new(r.start.row, r.end.col), end: r.end },
+                };
+                let q = json!({"range": edge.to_string(), "sheet": sheet});
+                apply(s, &q, &json!({"borders": {*k: line}}))?;
+            }
+        }
+        ok()
     })
 }
 
@@ -868,6 +902,27 @@ mod tests {
         // The style's own snake_case keys keep working.
         s.execute("home.formatCells", json!({"range": "A1", "style": {"num_fmt": "0.00"}})).unwrap();
         assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"]["num_fmt"], "0.00");
+    }
+
+    #[test]
+    fn format_cells_border_edges_outline_only_the_range_edge() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let line = json!({"style": "Thin"});
+        let sides = json!({"top": line, "bottom": line, "left": line, "right": line});
+        s.execute("home.formatCells", json!({"range": "A1:C3", "borderEdges": true, "style": {"borders": sides}})).unwrap();
+        let has = |s: &mut crate::Session, a: &str| {
+            let b = s.execute("cell.get", json!({"cell": a})).unwrap()["style"]["borders"].clone();
+            ["top", "bottom", "left", "right"].map(|k| b[k]["style"] == "Thin")
+        };
+        assert_eq!(has(&mut s, "B2"), [false; 4]);
+        assert_eq!(has(&mut s, "A1"), [true, false, true, false]);
+        assert_eq!(has(&mut s, "B1"), [true, false, false, false]);
+        assert_eq!(has(&mut s, "A2"), [false, false, true, false]);
+        assert_eq!(has(&mut s, "C3"), [false, true, false, true]);
+        // A single cell is its own outline.
+        s.execute("home.formatCells", json!({"range": "E5", "borderEdges": true, "style": {"borders": sides}})).unwrap();
+        assert_eq!(has(&mut s, "E5"), [true; 4]);
     }
 
     #[test]
