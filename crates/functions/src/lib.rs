@@ -295,6 +295,23 @@ mod tests {
         assert_eq!(ev("VLOOKUP", vec![n(1.0), table, n(2.0)]), Value::Number(2.0));
     }
 
+    /// #2948: the 32,767 text limit counts UTF-16 units, so an emoji takes two of them.
+    #[test]
+    fn text_limit_counts_utf16_units() {
+        use crate::util::testutil::*;
+        use gridcraft_core::CellError;
+        let emoji = "\u{1F600}";
+        assert_eq!(ev("REPT", vec![t(emoji), n(16383.0)]), Value::text(emoji.repeat(16383)));
+        assert_eq!(ev("REPT", vec![t(emoji), n(16384.0)]), Value::Error(CellError::Value));
+        let xs = "x".repeat(16384);
+        assert_eq!(ev("SUBSTITUTE", vec![t(&xs), t("x"), t(emoji)]), Value::Error(CellError::Value));
+        let xs = "x".repeat(16383);
+        assert_eq!(ev("SUBSTITUTE", vec![t(&xs), t("x"), t(emoji)]), Value::text(emoji.repeat(16383)));
+        let full = emoji.repeat(16383);
+        assert_eq!(ev("CONCAT", vec![t(&full), t("xy")]), Value::Error(CellError::Value));
+        assert_eq!(ev("CONCAT", vec![t(&full), t("x")]), Value::text(format!("{full}x")));
+    }
+
     /// #2162: REGEXREPLACE gives up on a too-long result while building it, and otherwise replaces
     /// as before (every match, `$n` groups).
     #[test]
