@@ -6127,3 +6127,132 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
     }
     assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
 }
+
+// ---------------------------------------------------------------- Action Pen (#1777)
+
+/// A session with a fixed-string recognizer installed, as the desktop app does once the model
+/// is loaded. No model file is involved.
+fn ink_session(text: &str) -> Session {
+    let mut s = s();
+    s.ink = Some(std::sync::Arc::new(gridcraft_ink::FixedRecognizer::new(text)));
+    s
+}
+
+#[test]
+fn action_pen_writes_recognized_digits_as_a_number_in_one_undo_step() {
+    let mut s = ink_session("42");
+    s.execute("range.setValues", json!({"range": "A1", "values": [["keep"]]})).unwrap();
+    let shapes_before = s.doc().unwrap().wb.active().unwrap().shapes.len();
+    let undo_before = s.doc().unwrap().undo.len();
+    let r = s.execute("draw.actionPenInk", json!({"points": [[10.0, 10.0], [40.0, 30.0], [70.0, 12.0]], "cell": "B2"})).unwrap();
+    assert_eq!(r["text"], json!("42"));
+    assert_eq!(v(&s, "B2"), Value::Number(42.0));
+    assert_eq!(v(&s, "A1"), Value::text("keep"));
+    // The stroke leaves no ink shape, and one undo step takes the value away again.
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes.len(), shapes_before);
+    assert_eq!(s.doc().unwrap().undo.len(), undo_before + 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(v(&s, "B2").is_empty());
+    assert_eq!(v(&s, "A1"), Value::text("keep"));
+}
+
+#[test]
+fn action_pen_writes_words_as_text() {
+    let mut s = ink_session("hello");
+    s.execute("draw.actionPenInk", json!({"points": [[5.0, 5.0], [60.0, 20.0]], "cell": "C7"})).unwrap();
+    assert_eq!(v(&s, "C7"), Value::text("hello"));
+}
+
+#[test]
+fn action_pen_writes_under_the_stroke_when_no_cell_is_given() {
+    let mut s = ink_session("7");
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let (x, y) = (sh.col_left(2) + 8.0, sh.row_top(4) + 6.0);
+    s.execute("draw.actionPenInk", json!({"points": [[x, y], [x + 20.0, y + 10.0]]})).unwrap();
+    assert_eq!(v(&s, "C5"), Value::Number(7.0));
+}
+
+#[test]
+fn action_pen_without_a_recognizer_refuses_and_leaves_the_workbook_alone() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["keep"]]})).unwrap();
+    let before = s.doc().unwrap().wb.active().unwrap().cells.len();
+    let err = s.execute("draw.actionPen", json!({"on": true})).unwrap_err().to_string();
+    assert!(err.contains("not installed"), "{err}");
+    assert_ne!(s.draw_tool, "actionPen");
+    let err = s.execute("draw.actionPenInk", json!({"points": [[1.0, 1.0], [20.0, 20.0]]})).unwrap_err().to_string();
+    assert!(err.contains("not installed"), "{err}");
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().cells.len(), before);
+    assert!(v(&s, "A1") == Value::text("keep"));
+}
+
+#[test]
+fn action_pen_refuses_a_protected_cell() {
+    let mut s = ink_session("42");
+    s.execute("review.protectSheet", json!({"password": "pw"})).unwrap();
+    let err = s.execute("draw.actionPenInk", json!({"points": [[1.0, 1.0], [20.0, 20.0]], "cell": "B2"})).unwrap_err().to_string();
+    assert!(err.to_lowercase().contains("protect"), "{err}");
+    assert!(v(&s, "B2").is_empty());
+}
+
+#[test]
+fn action_pen_toggle_needs_the_model_and_leaving_it_does_not() {
+    let mut s = ink_session("1");
+    s.execute("draw.actionPen", json!({"on": true})).unwrap();
+    assert_eq!(s.draw_tool, "actionPen");
+    s.execute("draw.actionPen", json!({"on": false})).unwrap();
+    assert_ne!(s.draw_tool, "actionPen");
+    // A model that goes away: turning the tool off still works.
+    s.ink = None;
+    s.draw_tool = "actionPen".into();
+    s.execute("draw.actionPen", json!({"on": false})).unwrap();
+    assert_ne!(s.draw_tool, "actionPen");
+}
+
+#[test]
+fn ink_status_reports_the_model_contract() {
+    let mut s = s();
+    let st = s.execute("ink.status", json!({})).unwrap();
+    assert_eq!(st["model"], json!("trocr-small-handwritten"));
+    assert_eq!(st["licence"], json!("MIT"));
+    assert_eq!(st["bytes"], json!(87_496_990u64 + 158_814_912 + 4_494_727));
+    assert_eq!(st["ready"], json!(false));
+    assert_eq!(st["filesPresent"], json!(false));
+    assert!(st["hint"].as_str().is_some_and(|h| !h.is_empty()));
+    assert!(st["directory"].as_str().is_some());
+    // The backend seam: CPU is the only accelerator this build has, and it says so.
+    assert_eq!(st["accelerator"], json!("cpu"));
+    assert_eq!(st["accelerators"], json!(["cpu"]));
+    assert!(st["runtime"].as_str().is_some_and(|r| r.contains("rten")));
+    assert!(st["requestedAccelerator"].is_null());
+    assert!(st["acceleratorMessage"].is_null());
+    // Asking for an accelerator the build lacks is an answer, not an error: CPU still works.
+    let asked = s.execute("ink.status", json!({"accelerator": "openvino"})).unwrap();
+    assert_eq!(asked["accelerator"], json!("cpu"));
+    assert_eq!(asked["requestedAccelerator"], json!("openvino"));
+    let msg = asked["acceleratorMessage"].as_str().unwrap_or_default();
+    assert!(msg.contains("CPU") && msg.contains("OpenVINO"), "{msg}");
+    assert!(s.execute("ink.status", json!({"accelerator": "quantum"})).is_err());
+
+    // A configured directory with no files is "not installed" and every command says so.
+    let dir = std::env::temp_dir().join(format!("gridcraft-ink-engine-{}", std::process::id()));
+    s.models_dir = Some(dir.display().to_string());
+    let st = s.execute("ink.status", json!({})).unwrap();
+    assert_eq!(st["filesPresent"], json!(false));
+    assert!(s.execute("ink.modelRemove", json!({})).is_err());
+    assert!(s.execute("ink.modelImport", json!({"path": dir.display().to_string()})).is_err());
+}
+
+#[test]
+fn ink_commands_never_panic_on_empty_or_hostile_params() {
+    let mut s = s();
+    s.models_dir = Some(std::env::temp_dir().display().to_string());
+    for id in ["draw.actionPen", "draw.actionPenInk", "ink.status", "ink.modelImport", "ink.modelRemove"] {
+        for p in [json!({}), json!([]), json!(7), json!("x"), json!({"points": "no", "path": "\u{0}../..", "on": "yes"})] {
+            let r = s.execute(id, p);
+            assert!(!matches!(r, Err(crate::EngineError::Internal(..))), "{id} panicked: {r:?}");
+            let asked = s.execute("ink.status", json!({"accelerator": "openvino"}));
+            assert!(!matches!(asked, Err(crate::EngineError::Internal(..))), "ink.status panicked: {asked:?}");
+        }
+    }
+}
