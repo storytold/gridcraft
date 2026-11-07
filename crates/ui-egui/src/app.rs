@@ -75,6 +75,7 @@ impl SheetApp {
             cut_text: None,
             tab_run: None,
             macros: macro_ui::MacroUi::default(),
+            office_scripts: crate::office_scripts::Pane::default(),
             started: now_ms(),
             allow_close: false,
             bring_forward: false,

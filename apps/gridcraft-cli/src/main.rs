@@ -165,6 +165,35 @@ fn exec(s: &mut Session, id: &str, params: Value) -> Result<Value, String> {
     r
 }
 
+/// Office Scripts: the same local folder and Bun discovery as the app, so the CLI can run and
+/// export scripts. `GRIDCRAFT_SCRIPTS` overrides the folder (tests use a temp one).
+fn scripts_dir() -> Option<String> {
+    if let Some(p) = std::env::var_os("GRIDCRAFT_SCRIPTS") {
+        return Some(std::path::PathBuf::from(p).display().to_string());
+    }
+    let base = if cfg!(windows) {
+        std::env::var_os("APPDATA").map(std::path::PathBuf::from).map(|p| p.join("GridCraft"))
+    } else if cfg!(target_os = "macos") {
+        std::env::var_os("HOME").map(std::path::PathBuf::from).map(|p| p.join("Library/Application Support/GridCraft"))
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
+            .map(|p| p.join("gridcraft"))
+    };
+    base.map(|b| b.join("scripts").display().to_string())
+}
+
+/// Installs the Office Scripts runtime and folder on a session made by the CLI.
+fn with_scripts(mut s: Session) -> Session {
+    s.script_host = Some(gridcraft_script_bun::script_host());
+    if let Some(dir) = scripts_dir() {
+        s.scripts_dir_default = Some(dir.clone());
+        s.scripts_dir = Some(dir);
+    }
+    s
+}
+
 fn open(path: &str) -> Result<Session, String> {
     let mut s = Session::new();
     exec(&mut s, "file.open", json!({"path": path}))?;
@@ -414,7 +443,7 @@ fn parse_command(text: &str) -> Result<Option<(String, Value)>, String> {
 fn run(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &["in", "sample", "cmd", "script", "out", "print", "sheet"], &["quiet", "csv", "formulas"])?;
     a.no_extra(0)?;
-    let mut s = match (a.opt("in"), a.opt("sample")) {
+    let s = match (a.opt("in"), a.opt("sample")) {
         (Some(_), Some(_)) => return Err("give --in or --sample, not both".into()),
         (Some(p), None) => open(p)?,
         (None, Some(name)) => {
@@ -424,6 +453,7 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         (None, None) => blank(),
     };
+    let mut s = with_scripts(s);
     let quiet = a.has("quiet");
     let mut step = 0usize;
     for (name, value) in &a.opts {
@@ -546,7 +576,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
                 }
                 (None, None) => blank(),
             };
-            Box::new(Headless::with_session(session))
+            Box::new(Headless::with_session(with_scripts(session)))
         }
     };
     eprintln!("gridcraft-cli: MCP server on stdio ({})", backend.describe());

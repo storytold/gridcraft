@@ -1169,6 +1169,18 @@ pub(super) const EXTRA: &[(&str, &str)] = &[
         "Drag to fill cells. Drag from inside a cell to select a range.",
         "ドラッグしてセルをオートフィルします。セルの内側からドラッグすると範囲を選択します。",
     ),
+    ("Office Scripts", "Office スクリプト"),
+    ("Scripts", "スクリプト"),
+    ("Run Script", "スクリプトの実行"),
+    ("Record Script", "スクリプトの記録"),
+    ("Bun is not installed", "Bun がインストールされていません"),
+    ("Download Bun…", "Bun をダウンロード…"),
+    ("Import Bun…", "Bun をインポート…"),
+    ("Check Again", "再確認"),
+    ("Change Folder…", "フォルダーの変更…"),
+    ("Reset Folder", "フォルダーをリセット"),
+    ("Import Script…", "スクリプトのインポート…"),
+    ("Export Script…", "スクリプトのエクスポート…"),
 ];
 
 /// Translates an interface label; `None` for a label the catalog does not know, so `i18n.rs` can

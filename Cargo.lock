@@ -2034,6 +2034,8 @@ dependencies = [
  "getrandom 0.4.3",
  "gridcraft-engine",
  "gridcraft-mcp",
+ "gridcraft-script",
+ "gridcraft-script-bun",
  "gridcraft-ui-egui",
  "image",
  "log",
@@ -2076,6 +2078,8 @@ version = "0.16.0"
 dependencies = [
  "gridcraft-engine",
  "gridcraft-mcp",
+ "gridcraft-script",
+ "gridcraft-script-bun",
  "log",
  "quick-xml 0.41.0",
  "serde_json",
@@ -2106,6 +2110,7 @@ dependencies = [
  "gridcraft-model",
  "gridcraft-numfmt",
  "gridcraft-pdf",
+ "gridcraft-script",
  "gridcraft-xlsx",
  "image",
  "log",
@@ -2177,6 +2182,25 @@ name = "gridcraft-pdf"
 version = "0.16.0"
 
 [[package]]
+name = "gridcraft-script"
+version = "0.16.0"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "web-time",
+]
+
+[[package]]
+name = "gridcraft-script-bun"
+version = "0.16.0"
+dependencies = [
+ "gridcraft-script",
+ "serde_json",
+]
+
+[[package]]
 name = "gridcraft-ui-egui"
 version = "0.16.0"
 dependencies = [
@@ -2189,6 +2213,7 @@ dependencies = [
  "epaint_default_fonts",
  "gridcraft-chart",
  "gridcraft-engine",
+ "gridcraft-script",
  "gridcraft-xlsx",
  "image",
  "log",
@@ -6677,6 +6702,7 @@ name = "xtask"
 version = "0.16.0"
 dependencies = [
  "gridcraft-engine",
+ "gridcraft-script",
  "serde_json",
 ]
 

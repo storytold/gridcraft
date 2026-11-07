@@ -485,6 +485,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "표시",
         "Collapse dialog" => "대화 상자 축소",
         "Expand dialog" => "대화 상자 확장",
+        "Office Scripts" => "Office 스크립트",
+        "Scripts" => "스크립트",
+        "Run Script" => "스크립트 실행",
+        "Record Script" => "스크립트 기록",
+        "Bun is not installed" => "Bun이 설치되어 있지 않습니다",
+        "Download Bun…" => "Bun 다운로드…",
+        "Import Bun…" => "Bun 가져오기…",
+        "Check Again" => "다시 확인",
+        "Change Folder…" => "폴더 변경…",
+        "Reset Folder" => "폴더 재설정",
+        "Import Script…" => "스크립트 가져오기…",
+        "Export Script…" => "스크립트 내보내기…",
         _ => return None,
     })
 }

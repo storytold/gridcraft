@@ -278,6 +278,8 @@ fn collect_inputs(inputs: &[String]) -> Discovery {
 }
 
 /// Returns false only when the global file budget stops traversal.
+// `seen` only exists to catch aliases through Unix dev+inode; elsewhere it is passed through.
+#[cfg_attr(not(unix), allow(clippy::only_used_in_recursion))]
 fn walk(dir: &Path, depth: usize, out: &mut Discovery, seen: &mut std::collections::HashSet<u64>) -> bool {
     // A directory is visited once by identity (dev+inode on unix): several links to the same
     // directory are aliases, not exponential branches of the scan. Other platforms keep the

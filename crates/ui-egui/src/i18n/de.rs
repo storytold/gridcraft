@@ -515,6 +515,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Anzeigen",
         "Collapse dialog" => "Dialogfeld reduzieren",
         "Expand dialog" => "Dialogfeld erweitern",
+        "Office Scripts" => "Office-Skripts",
+        "Scripts" => "Skripts",
+        "Run Script" => "Skript ausführen",
+        "Record Script" => "Skript aufzeichnen",
+        "Bun is not installed" => "Bun ist nicht installiert",
+        "Download Bun…" => "Bun herunterladen…",
+        "Import Bun…" => "Bun importieren…",
+        "Check Again" => "Erneut prüfen",
+        "Change Folder…" => "Ordner ändern…",
+        "Reset Folder" => "Ordner zurücksetzen",
+        "Import Script…" => "Skript importieren…",
+        "Export Script…" => "Skript exportieren…",
         _ => return None,
     })
 }

@@ -489,6 +489,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Показать",
         "Collapse dialog" => "Свернуть диалоговое окно",
         "Expand dialog" => "Развернуть диалоговое окно",
+        "Office Scripts" => "Сценарии Office",
+        "Scripts" => "Сценарии",
+        "Run Script" => "Запустить сценарий",
+        "Record Script" => "Записать сценарий",
+        "Bun is not installed" => "Bun не установлен",
+        "Download Bun…" => "Скачать Bun…",
+        "Import Bun…" => "Импортировать Bun…",
+        "Check Again" => "Проверить снова",
+        "Change Folder…" => "Изменить папку…",
+        "Reset Folder" => "Сбросить папку",
+        "Import Script…" => "Импортировать сценарий…",
+        "Export Script…" => "Экспортировать сценарий…",
         _ => return None,
     })
 }

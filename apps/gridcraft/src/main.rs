@@ -122,6 +122,9 @@ fn load_prefs(app: &mut SheetApp) {
         && let Ok(p) = serde_json::from_slice(&b)
     {
         app.session.prefs = p;
+        if let Some(scripts) = app.session.prefs.scripts_dir.clone() {
+            app.session.scripts_dir = Some(scripts);
+        }
     }
 }
 
@@ -180,6 +183,7 @@ fn services() -> Services {
                 .pick_file()
                 .and_then(|p| p.to_str().map(str::to_string))
         })),
+        pick_folder: Some(Box::new(|| rfd::FileDialog::new().pick_folder().and_then(|p| p.to_str().map(str::to_string)))),
         pick_picture: Some(Box::new(|| {
             rfd::FileDialog::new()
                 .add_filter("Pictures (PNG, JPEG)", &["png", "jpg", "jpeg"])
@@ -201,10 +205,31 @@ fn services() -> Services {
             dialog.save_file().and_then(|p| p.to_str().map(str::to_string))
         })),
         open_url: Some(Box::new(|url: &str| open_with_system(url))),
+        bun_host: Some(Box::new(|| Some(gridcraft_script_bun::script_host()))),
+        import_bun: Some(Box::new(|path: &str| install_bun_from(path))),
         printers: Some(print::discover()),
         print_native: Some(print::submit()),
         ..Default::default()
     }
+}
+
+/// Copies a Bun executable the user downloaded into `<model root>/runtimes/bun`.
+fn install_bun_from(path: &str) -> Result<String, String> {
+    let source = std::path::Path::new(path);
+    if !source.is_file() {
+        return Err(format!("{path} is not a file."));
+    }
+    let target = gridcraft_script_bun::discover::expected_path();
+    if let Some(dir) = target.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("could not make {}: {e}", dir.display()))?;
+    }
+    std::fs::copy(source, &target).map_err(|e| format!("could not copy Bun to {}: {e}", target.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755));
+    }
+    Ok(target.display().to_string())
 }
 
 /// Opens a URL or file with the system's default application.
@@ -310,6 +335,14 @@ fn main() -> eframe::Result<()> {
         }
     }
     let mut session = Session::new();
+    // Office Scripts keep their own folder next to the settings (never in the workbook), and use
+    // Bun when this machine has one. The pane can pick one up installed while GridCraft runs.
+    if let Some(dir) = config_dir() {
+        let scripts = dir.join("scripts").display().to_string();
+        session.scripts_dir_default = Some(scripts.clone());
+        session.scripts_dir = Some(scripts);
+    }
+    session.script_host = Some(gridcraft_script_bun::script_host());
     if let Some(s) = &sample
         && let Err(e) = session.execute("file.new", json!({"sample": s}))
     {
