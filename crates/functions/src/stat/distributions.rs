@@ -201,11 +201,14 @@ fn binom_pmf(k: f64, n: f64, p: f64) -> f64 {
         return p.powf(n);
     }
     // A few successes or a few failures: the product form has no large cancelling terms.
-    // (Not for astronomically large n or a power of p near underflow: the saddle-point form
-    // below handles those through logs.)
+    // (Not for astronomically large n, or when either power underflows: the
+    // saddle-point form below handles those through logs.)
     if n < 1e30 && p.powf(k) > 1e-280 {
         if k < 16.0 {
-            return choose_small(n, k) * p.powi(k as i32) * pow_one_minus(p, n - k);
+            let rest = pow_one_minus(p, n - k);
+            if rest >= f64::MIN_POSITIVE {
+                return choose_small(n, k) * p.powi(k as i32) * rest;
+            }
         }
         if n - k < 16.0 {
             return choose_small(n, n - k) * p.powf(k) * pow_one_minus(p, n - k);
