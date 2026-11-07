@@ -335,6 +335,25 @@ fn paste_special_operations_keep_text_errors_and_formulas() {
 }
 
 #[test]
+fn clipboard_paste_cap_is_inclusive_and_reports_the_oversize_error() {
+    let cap = super::clipboard::CLIP_WALK_CAP;
+    assert!(super::paste_special::check_clip_size(cap).is_ok());
+
+    let error = super::paste_special::check_clip_size(cap + 1).unwrap_err();
+    assert!(matches!(error, EngineError::Other(message) if message == "The copied area is too large to paste."));
+}
+
+#[test]
+fn huge_sparse_copy_trims_to_its_used_cells() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    let copied = s.execute("edit.copy", json!({"range": "A1:XFD1000"})).unwrap();
+    assert_eq!(copied["range"], "A1");
+    assert_eq!(s.clipboard.as_ref().map(|clip| clip.range.count()), Some(1));
+}
+
+#[test]
 fn cut_paste_that_overflows_the_grid_moves_nothing() {
     // #997: the source was emptied first and the cells that fell off the grid were skipped.
     let mut s = Session::new();
