@@ -4,6 +4,15 @@
 /// Returns the Portuguese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Regression Type:" => "Tipo de regressão:",
+        "Regression method" => "Método de regressão",
+        "Regression options" => "Opções de regressão",
+        "Exponential" => "Exponencial",
+        "Logarithmic" => "Logarítmica",
+        "Power / Geometric" => "Potencial / Geométrica",
+        "Diagnostics and the intercept use ln(Y); a zero intercept fixes the amplitude to 1." => {
+            "Os diagnósticos e o intercepto usam ln(Y); intercepto zero fixa a amplitude em 1."
+        }
         "Paste" => "Colar",
         "Paste Values" => "Colar Valores",
         "Paste Formulas" => "Colar Fórmulas",

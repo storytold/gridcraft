@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (form controls: buttons, sliders and spin buttons on the sheet; earlier: Highlight the active cell's row, a global preference in File › Options › General; earlier: a linked cell's menu edits, opens or removes the link; earlier: Display options for this workbook: sheet tabs and scroll bars; earlier: dragging over row or column headers in point mode extends the reference; earlier: a picture on the system clipboard pastes as a floating picture at the active cell with Cmd/Ctrl+V or Paste (#699); earlier: frozen columns keep their text, gridlines and merged borders whole while the sheet scrolls (#2544); earlier: every Paste Special option has its access key; earlier: the Draw tab's live stroke preview uses the pen's colour and thickness; earlier: copy quotes only cells with a tab or line break, as Excel does; earlier: Ctrl+. Next Corner of Selection; earlier: dragging the selection's border onto data asks before replacing it; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis use them, the arrow keys select while a dialog is collapsed and F4 cycles a reference's anchors; earlier: Python cells: Python mode in the formula bar; earlier: Insert › Equation and the equation editor; earlier: every floating object selects, resizes from eight handles and deletes with the keyboard; earlier: Formulas › Error Checking › Trace Error; trace arrows stay through a zoom (#3097); earlier: Page Setup sets the page order, Down, then over or Over, then down, which printing, the print preview, Page Break Preview and Page Layout view follow; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (transformed ToolPak regression models using the current shared RefEdit; earlier: form controls: buttons, sliders and spin buttons on the sheet; earlier: Highlight the active cell's row, a global preference in File › Options › General; earlier: a linked cell's menu edits, opens or removes the link; earlier: Display options for this workbook: sheet tabs and scroll bars; earlier: dragging over row or column headers in point mode extends the reference; earlier: a picture on the system clipboard pastes as a floating picture at the active cell with Cmd/Ctrl+V or Paste (#699); earlier: frozen columns keep their text, gridlines and merged borders whole while the sheet scrolls (#2544); earlier: every Paste Special option has its access key; earlier: the Draw tab's live stroke preview uses the pen's colour and thickness; earlier: copy quotes only cells with a tab or line break, as Excel does; earlier: Ctrl+. Next Corner of Selection; earlier: dragging the selection's border onto data asks before replacing it; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis use them, the arrow keys select while a dialog is collapsed and F4 cycles a reference's anchors; earlier: Python cells: Python mode in the formula bar; earlier: Insert › Equation and the equation editor; earlier: every floating object selects, resizes from eight handles and deletes with the keyboard; earlier: Formulas › Error Checking › Trace Error; trace arrows stay through a zoom (#3097); earlier: Page Setup sets the page order, Down, then over or Over, then down, which printing, the print preview, Page Break Preview and Page Layout view follow; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -226,6 +226,20 @@ Data Analysis (input, variable, X and Y, bin and output ranges) use reference bo
 dialogs that take ranges (Forecast Sheet, Allow Edit Ranges, Define Name, Sparklines, Advanced
 Filter) still take typed references.
 
+Data Analysis offers linear, exponential, logarithmic and power regression with a model
+dropdown and separate first-row-label and zero-intercept options. Y, X and Output Range
+reuse the upstream RefEdit boxes described above. The expanded ToolPak catalog and
+dynamic forms remain available. See [regression-analysis.md](regression-analysis.md)
+for fitted-domain semantics, an independently derived benchmark and validation status.
+The reconciled regression candidate passed all ten `cargo xtask ci` gates on
+Fedora 45 against main `c4029538`, including WASM. Separately, the 2026-11-04
+Windows producer at `5a3ed86c` plus local portability fixes passed all ten CI
+gates and four synthetic Excel regression reports, with 17 cell expectations
+per model checked before and after SaveAs. The Windows and Excel results apply
+only to that recorded producer, not to the reconciled candidate. Selected
+GridCraft screenshots were approved on 2026-11-05; they do not establish visual
+equivalence with Excel.
+
 ## Accessibility
 
 AccessKit is enabled, but the grid, ribbon and dialogs are not exposed as an accessible tree with
@@ -249,6 +263,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | Four regression models reconciled with main c4029538 and passed all ten Fedora CI gates, including WASM; the earlier Windows/Excel run remains attributed to its recorded producer |
 | 2026-11-02 | minor | Form controls: buttons, sliders (scroll bars) and spin buttons placed, worked, selected and edited on the sheet (Insert › Controls, Assign Action, Format Control); catalog 281 / 296 |
 | 2026-11-03 | minor | Highlight the active cell's row: a global preference that tints the whole row, off by default |
 | 2026-11-03 | minor | The formula bar's bottom edge is a resize handle: dragging it sets the bar's height in whole lines, up to half the window, and dragging it to one line collapses it; expanding (the chevron, Ctrl+Shift+U) returns to the dragged height, which is kept with the UI preferences. `view.expandFormulaBar {lines}` sets it (#1246) |
