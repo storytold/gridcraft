@@ -203,6 +203,13 @@ fn an_element_beside_the_notices_keeps_the_part_when_they_go() {
         }
         _ => panic!("the part stays"),
     }
+    // A comment or a processing instruction is something the file holds too.
+    for kept in ["<!-- a note -->", "<?app x?>"] {
+        match without_notices(format!("<Properties>{notice}{kept}</Properties>").as_bytes()) {
+            Stripped::Part(part) => assert!(String::from_utf8(part).unwrap().contains(kept), "{kept}"),
+            _ => panic!("{kept} keeps the part"),
+        }
+    }
     assert!(matches!(without_notices(format!("<Properties>\n{notice}\n</Properties>").as_bytes()), Stripped::Nothing));
 }
 
