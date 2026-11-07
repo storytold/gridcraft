@@ -86,8 +86,8 @@ impl Rels {
 /// Shared string table being built.
 #[derive(Default)]
 pub struct Sst {
-    list: Vec<String>,
-    map: HashMap<String, u32>,
+    list: Vec<std::sync::Arc<str>>,
+    map: HashMap<std::sync::Arc<str>, u32>,
     pub count: u64,
 }
 
@@ -98,8 +98,9 @@ impl Sst {
             return i;
         }
         let i = self.list.len() as u32;
-        self.list.push(s.to_string());
-        self.map.insert(s.to_string(), i);
+        let rc: std::sync::Arc<str> = std::sync::Arc::from(s);
+        self.list.push(std::sync::Arc::clone(&rc));
+        self.map.insert(rc, i);
         i
     }
 }
@@ -374,11 +375,14 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     wb_rels.add("theme", "theme/theme1.xml");
     // Phonetic (furigana) data is kept per string text: the table below holds each text once, so
     // the runs of the entry with that text are written next to it (`Workbook::phonetics`).
+    out.sst.map = HashMap::new();
+    let sst_list = std::mem::take(&mut out.sst.list);
     let phonetics: HashMap<&str, &PhoneticString> = wb.phonetics.iter().map(|p| (p.text.as_str(), p)).collect();
-    let mut sst = format!("{XML_DECL}<sst xmlns=\"{NS_MAIN}\" count=\"{}\" uniqueCount=\"{}\">", out.sst.count, out.sst.list.len());
-    for t in &out.sst.list {
-        let _ = write!(sst, "<si>{}</si>", crate::xml::si_body(t, phonetics.get(t.as_str()).copied()));
+    let mut sst = format!("{XML_DECL}<sst xmlns=\"{NS_MAIN}\" count=\"{}\" uniqueCount=\"{}\">", out.sst.count, sst_list.len());
+    for t in sst_list {
+        let _ = write!(sst, "<si>{}</si>", crate::xml::si_body(&t, phonetics.get(t.as_ref()).copied()));
     }
+    drop(phonetics);
     sst.push_str("</sst>");
     out.part("xl/sharedStrings.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"), sst.into_bytes());
     wb_rels.add("sharedStrings", "sharedStrings.xml");
@@ -410,34 +414,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     }
     out.part("xl/_rels/workbook.xml.rels", None, wb_rels.xml().into_bytes());
 
-    // Document properties.
-    let p = &wb.props;
-    // "Remove personal information on save": the author and company are not saved (#3089).
-    let private = |v: &String| if wb.remove_personal_info { String::new() } else { v.clone() };
-    let (author, company) = (private(&p.author), private(&p.company));
-    let mut core = format!(
-        "{XML_DECL}<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:dcmitype=\"http://purl.org/dc/dcmitype/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">"
-    );
-    for (tag, v) in [
-        ("dc:title", &p.title),
-        ("dc:subject", &p.subject),
-        ("dc:creator", &author),
-        ("cp:keywords", &p.keywords),
-        ("dc:description", &p.description),
-    ] {
-        if !v.is_empty() {
-            let _ = write!(core, "<{tag}>{}</{tag}>", esc(v));
-        }
-    }
-    core.push_str("</cp:coreProperties>");
-    out.part("docProps/core.xml", Some("application/vnd.openxmlformats-package.core-properties+xml"), core.into_bytes());
-    let mut app = String::from(XML_DECL);
-    app.push_str("<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\" xmlns:vt=\"http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes\"><Application>GridCraft</Application>");
-    if !company.is_empty() {
-        let _ = write!(app, "<Company>{}</Company>", esc(&company));
-    }
-    app.push_str("</Properties>");
-    out.part("docProps/app.xml", Some("application/vnd.openxmlformats-officedocument.extended-properties+xml"), app.into_bytes());
+    write_doc_props(wb, &mut out);
     let mut root = Rels::default();
     root.add("officeDocument", "xl/workbook.xml");
     root.add("core-properties", "docProps/core.xml");
@@ -469,8 +446,8 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     };
     let mut parts = std::mem::take(&mut out.parts);
     parts.sort_by_key(|(n, _)| rank(n));
-    for (name, data) in &parts {
-        zip.add(name, data)?;
+    for (name, data) in parts {
+        zip.add(&name, &data)?;
     }
     zip.finish()
 }
@@ -574,6 +551,42 @@ fn write_defined_names(wb: &Workbook, kept: &crate::passthrough::WorkbookKept, c
     }
 
     names
+}
+
+fn write_doc_props(wb: &Workbook, out: &mut Out) {
+    let p = &wb.props;
+    // "Remove personal information on save": the author and company are not saved (#3089).
+    let private = |v: &String| if wb.remove_personal_info { String::new() } else { v.clone() };
+    let (author, company, last_modified_by) = (private(&p.author), private(&p.company), private(&p.last_modified_by));
+    let mut core = format!(
+        "{XML_DECL}<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:dcmitype=\"http://purl.org/dc/dcmitype/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">"
+    );
+    for (tag, v) in [
+        ("dc:title", &p.title),
+        ("dc:subject", &p.subject),
+        ("dc:creator", &author),
+        ("cp:keywords", &p.keywords),
+        ("dc:description", &p.description),
+        ("cp:lastModifiedBy", &last_modified_by),
+    ] {
+        if !v.is_empty() {
+            let _ = write!(core, "<{tag}>{}</{tag}>", esc(v));
+        }
+    }
+    for (tag, v) in [("dcterms:created", &p.created), ("dcterms:modified", &p.modified)] {
+        if !v.is_empty() {
+            let _ = write!(core, "<{tag} xsi:type=\"dcterms:W3CDTF\">{}</{tag}>", esc(v));
+        }
+    }
+    core.push_str("</cp:coreProperties>");
+    out.part("docProps/core.xml", Some("application/vnd.openxmlformats-package.core-properties+xml"), core.into_bytes());
+    let mut app = String::from(XML_DECL);
+    app.push_str("<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\" xmlns:vt=\"http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes\"><Application>GridCraft</Application>");
+    if !company.is_empty() {
+        let _ = write!(app, "<Company>{}</Company>", esc(&company));
+    }
+    app.push_str("</Properties>");
+    out.part("docProps/app.xml", Some("application/vnd.openxmlformats-officedocument.extended-properties+xml"), app.into_bytes());
 }
 
 /// Cell metadata declaring dynamic-array formulas (MS-XLSX `XLDAPR`).

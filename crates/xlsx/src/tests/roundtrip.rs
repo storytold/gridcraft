@@ -30,6 +30,9 @@ fn sample() -> Workbook {
         company: "Co".into(),
         keywords: "k".into(),
         description: "d".into(),
+        last_modified_by: "Other".into(),
+        created: "2024-01-15T10:30:00Z".into(),
+        modified: "2024-06-20T14:45:00Z".into(),
     };
     wb.theme.colors[4] = 0x112233;
     wb.theme.minor_font = "Aptos".into();
@@ -1390,6 +1393,9 @@ fn doc_props_keep_boundary_whitespace() {
         company: " Co ".into(),
         keywords: " a, b ".into(),
         description: "\n  d\n".into(),
+        last_modified_by: "  Editor  ".into(),
+        created: "2025-01-01T00:00:00Z".into(),
+        modified: "2025-02-02T12:34:56Z".into(),
     };
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert_eq!(back.props, wb.props);
