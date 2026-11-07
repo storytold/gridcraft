@@ -189,8 +189,29 @@ fn value_text(v: &Value) -> String {
 /// taller than a row of values) groups its innermost labels, year beside month. Each outer level
 /// has one entry per category, non-empty where a group starts, as the cells are.
 fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str, limit: usize) -> (Vec<String>, Vec<Vec<String>>) {
-    let vals = eval_list_in(wb, sheet, formula, limit, 0);
     let cells: Option<(usize, RangeRef)> = parse_ref(wb, sheet, formula);
+    let value_range = parse_ref(wb, sheet, values).map(|(_, r)| r);
+    // Bound the category dimension by `limit` and read only the cells the levels use (the
+    // innermost label line and up to three outer ones), so that every kept category keeps its
+    // cells in every level. Counting raw cells would cut a two-level axis in the middle.
+    let levels = cells.and_then(|(_, r)| category_levels(&r, value_range.as_ref()));
+    let (cells, read) = match (cells, levels) {
+        (Some((sh, r)), Some(lv)) => {
+            let cut = u32::try_from(limit.saturating_sub(1)).unwrap_or(u32::MAX);
+            let outer = lv.outer;
+            let end = if lv.by_columns { CellRef::new(r.end.row.min(r.start.row.saturating_add(cut)), r.end.col) } else { CellRef::new(r.end.row, r.end.col.min(r.start.col.saturating_add(cut))) };
+            let start = if lv.by_columns { CellRef::new(r.start.row, r.start.col.max(end.col.saturating_sub(outer))) } else { CellRef::new(r.start.row.max(end.row.saturating_sub(outer)), r.start.col) };
+            let r = RangeRef::new(start, end);
+            let prefix = formula.rfind('!').and_then(|i| formula.get(..=i)).unwrap_or("");
+            let cap = (r.width() as usize).saturating_mul(r.height() as usize);
+            (Some((sh, r)), Some((format!("{prefix}{r}"), cap)))
+        }
+        (c, _) => (c, None),
+    };
+    let vals = match &read {
+        Some((f, cap)) => eval_list_in(wb, sheet, f, *cap, 0),
+        None => eval_list_in(wb, sheet, formula, limit, 0),
+    };
     let src = cells.and_then(|(sh, r)| wb.sheet(sh).map(|s| (s, r)));
     let texts: Vec<String> = vals
         .iter()
@@ -210,8 +231,7 @@ fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str, limi
         })
         .collect();
     let Some((_, r)) = src else { return (texts, vec![]) };
-    let value_range = parse_ref(wb, sheet, values).map(|(_, r)| r);
-    let Some(levels) = category_levels(&r, value_range.as_ref()) else { return (texts, vec![]) };
+    let Some(levels) = levels else { return (texts, vec![]) };
     let (w, h) = (r.width().max(1) as usize, r.height().max(1) as usize);
     if texts.len() != w.saturating_mul(h) {
         return (texts, vec![]); // truncated or not a plain block: a flat list
@@ -252,7 +272,7 @@ fn series_name(wb: &Workbook, sheet: usize, name: &str) -> String {
     t.to_string()
 }
 
-fn effective_kind(chart_kind: ChartKind, series_kind: Option<ChartKind>, i: usize) -> ChartKind {
+pub(crate) fn effective_kind(chart_kind: ChartKind, series_kind: Option<ChartKind>, i: usize) -> ChartKind {
     match (chart_kind, series_kind) {
         (ChartKind::Combo, Some(k)) if k != ChartKind::Combo => k,
         (ChartKind::Combo, _) => {
@@ -267,9 +287,15 @@ fn effective_kind(chart_kind: ChartKind, series_kind: Option<ChartKind>, i: usiz
     }
 }
 
+/// The kind series `i` is drawn as: its own kind in a combo chart (first series a column, the
+/// rest lines when it has none), else the chart's. The one rule shared by resolving and drawing.
+pub(crate) fn plot_kind(chart_kind: ChartKind, series_kind: Option<ChartKind>, i: usize) -> ChartKind {
+    if chart_kind == ChartKind::Combo { effective_kind(chart_kind, series_kind, i) } else { chart_kind }
+}
+
 /// The kind series `i` of `chart` is drawn as: its own kind in a combo chart, else the chart's.
 pub fn series_plot_kind(chart: &Chart, i: usize) -> ChartKind {
-    if chart.kind == ChartKind::Combo { effective_kind(chart.kind, chart.series.get(i).and_then(|s| s.kind), i) } else { chart.kind }
+    plot_kind(chart.kind, chart.series.get(i).and_then(|s| s.kind), i)
 }
 
 /// Evaluates a chart's series formulas: names, values, categories (default "1", "2", …), X

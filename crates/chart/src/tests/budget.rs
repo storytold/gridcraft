@@ -232,3 +232,48 @@ fn resolve_keeps_every_series_within_the_point_budget() {
     let counts: Vec<usize> = resolve(&wb, 0, &c).series.iter().map(|s| s.trendlines.len()).collect();
     assert_eq!(counts, vec![9, 7, 0, 0]);
 }
+
+/// 100 series lower the per-series cap to 20,000, below the number of category cells of a
+/// two-level axis (#1155). Each kept category keeps its inner label and its outer level.
+fn two_level_chart(n: u32, vertical: bool) -> ChartData {
+    let at = |i: u32, level: u32| if vertical { CellRef::new(i, level) } else { CellRef::new(level, i) };
+    let mut wb = Workbook::new();
+    if let Some(s) = wb.sheet_mut(0) {
+        for i in 0..n {
+            s.set_value(at(i, 0), Value::Text(format!("Y{}", i / 3).into()));
+            s.set_value(at(i, 1), Value::Text(format!("C{i}").into()));
+            s.set_value(at(i, 2), Value::Number(f64::from(i)));
+        }
+    }
+    let cats = format!("{}:{}", at(0, 0), at(n - 1, 1));
+    let values = format!("{}:{}", at(0, 2), at(n - 1, 2));
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.series = (0..100).map(|_| Series { values: values.clone(), categories: Some(cats.clone()), ..Series::default() }).collect();
+    resolve(&wb, 0, &c)
+}
+
+#[test]
+fn multi_level_categories_keep_their_levels_under_the_point_cap() {
+    for vertical in [true, false] {
+        let d = two_level_chart(15_000, vertical);
+        assert_eq!(d.series[0].values.len(), 15_000, "vertical {vertical}");
+        assert_eq!(d.categories.len(), 15_000, "vertical {vertical}");
+        assert_eq!(d.categories[0], "C0");
+        assert_eq!(d.categories[14_999], "C14999");
+        assert_eq!(d.category_levels.len(), 1, "one outer level, vertical {vertical}");
+        assert_eq!(d.category_levels[0].len(), 15_000);
+        assert_eq!(d.category_levels[0][3], "Y1");
+    }
+}
+
+#[test]
+fn multi_level_categories_longer_than_the_cap_are_cut_together_with_their_levels() {
+    // 25,000 categories against a cap of 20,000.
+    let d = two_level_chart(25_000, true);
+    let cap = points_per_series(100);
+    assert_eq!(d.categories.len(), cap);
+    assert_eq!(d.category_levels.len(), 1);
+    assert_eq!(d.category_levels[0].len(), cap);
+    assert_eq!(d.categories[cap - 1], format!("C{}", cap - 1));
+    assert_eq!(d.category_levels[0][cap - 3], format!("Y{}", (cap - 3) / 3));
+}
