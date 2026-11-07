@@ -495,9 +495,12 @@ fn delimited_exports_preserve_general_precision_and_explicit_number_formats() {
     sheet.set_cell(CellRef::new(0, 0), Cell { value: Value::Number(124412140710.0), ..Default::default() });
     sheet.set_cell(CellRef::new(0, 1), Cell { value: Value::Number(1.23456789012345), ..Default::default() });
     sheet.set_cell(CellRef::new(0, 2), Cell { value: Value::Number(124412140710.0), style: scientific, ..Default::default() });
+    // 0.1 + 0.2 is 0.30000000000000004 in f64: Excel's export writes it as 0.3 (15 significant
+    // digits round it back), never the raw value's digits.
+    sheet.set_cell(CellRef::new(0, 3), Cell { value: Value::Number(0.1 + 0.2), ..Default::default() });
     for (path, separator) in [("data.csv", ","), ("data.tsv", "\t")] {
         let output = String::from_utf8(save_bytes(&workbook, path).unwrap()).unwrap();
-        assert_eq!(output, format!("124412140710{separator}1.23456789012345{separator}1.24E+11\r\n"));
+        assert_eq!(output, format!("124412140710{separator}1.23456789012345{separator}1.24E+11{separator}0.3\r\n"));
     }
 }
 
