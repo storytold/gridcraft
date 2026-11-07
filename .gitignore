@@ -3,6 +3,8 @@ plan/
 /target
 /dist
 /corpus
+# Downloaded model weights (Action Pen, Translate): never committed, see docs/action-pen.md.
+/models/
 /log
 .DS_Store
 /.claude/
