@@ -239,10 +239,21 @@ fn range_source_xml(sheet: &str, r: RangeRef) -> String {
     format!("<worksheetSource ref=\"{}\" sheet=\"{}\"/>", r.a1(), esc_attr(&name))
 }
 
+/// The database field named `name`: an exact match first; a name that differs only in its outer
+/// spaces (a pivot read from a file that trimmed its fields) matches when exactly one field does.
+fn find_db_field(fields: &[CField], name: &str) -> Option<usize> {
+    fields.iter().position(|f| f.col.is_some() && same(&f.name, name)).or_else(|| {
+        let mut trimmed = fields.iter().enumerate().filter(|(_, f)| f.col.is_some() && same(f.name.trim(), name.trim()));
+        let i = trimmed.next().map(|(i, _)| i)?;
+        trimmed.next().is_none().then_some(i)
+    })
+}
+
 fn header_text(v: &Value) -> String {
     match v {
         Value::Empty => String::new(),
-        v => label(v).trim().to_string(),
+        // Excel names the cache field by the header as it is, spaces included.
+        v => Some(label(v)).filter(|t| !t.trim().is_empty()).unwrap_or_default(),
     }
 }
 
@@ -279,7 +290,7 @@ fn cache_fields(sh: &gridcraft_model::Sheet, r: RangeRef) -> Vec<CField> {
 }
 
 fn group_cache_fields(fields: &mut Vec<CField>, axis: &[&PivotField], date_system: DateSystem) {
-    let find = |fields: &[CField], name: &str| fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
+    let find = find_db_field;
     let groupable = |f: &CField| {
         let s = &f.stats;
         s.number
@@ -358,7 +369,7 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
     }
     let sh = wb.sheet(si)?;
     let mut fields = cache_fields(sh, r);
-    let find = |fields: &[CField], name: &str| fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
+    let find = find_db_field;
 
     // Records (rows that aren't entirely blank), read once.
     let mut rows: Vec<u32> = Vec::new();
@@ -617,7 +628,7 @@ struct PivotTableLayout<'a> {
 }
 
 fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn Fn(&str) -> Option<u32>) -> String {
-    let find_db = |name: &str| c.fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
+    let find_db = |name: &str| find_db_field(&c.fields, name);
     let row_fields: Vec<usize> = c.axis_map.iter().take(pt.rows.len()).filter_map(|x| *x).collect();
     let column_fields: Vec<usize> = c.axis_map.iter().skip(pt.rows.len()).filter_map(|x| *x).collect();
     // Filters: on an axis field → hidden items there; otherwise a page field.

@@ -1,5 +1,5 @@
 use super::create::source_param;
-use super::fields::{canonical, in_axes, shift_values, update};
+use super::fields::{canonical, in_axes, shift_values, stored_name, update};
 use super::params::{group_param, layout_name};
 use super::{
     Chart, Json, PivotDateGroup, PivotField, PivotFilter, PivotLayout, PivotSort, PivotTable, Result, Session, bad, bool_param, edit, find_pivot,
@@ -72,6 +72,7 @@ pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
         o => return Err(bad(C, format!("unknown order `{o}` (asc|desc|none)"))),
     };
     update(s, p, |pt, _, _| {
+        let field = stored_name(pt, &field, "axes");
         axis_field(C, pt, &field)?.sort = order;
         Ok(json!({}))
     })
@@ -83,6 +84,7 @@ pub(super) fn group(s: &mut Session, p: &Json) -> Result<Json> {
     let raw = str_param(p, "by").unwrap_or("months");
     let by = group_param(Some(raw)).ok_or_else(|| bad(C, format!("unknown grouping `{raw}` (years|quarters|months|days|none)")))?;
     update(s, p, |pt, src, _| {
+        let field = stored_name(pt, &field, "axes");
         if by != PivotDateGroup::None {
             let c = src.col(&field).ok_or_else(|| bad(C, format!("no field `{field}` in the source data")))?;
             if !src.numeric.get(c).copied().unwrap_or(false) {
@@ -103,6 +105,7 @@ pub(super) fn collapse(s: &mut Session, p: &Json) -> Result<Json> {
     let items: Option<Vec<String>> =
         p.get("items").and_then(Json::as_array).map(|a| a.iter().take(100_000).filter_map(|x| x.as_str().map(str::to_string)).collect());
     update(s, p, |pt, src, wb| {
+        let field = stored_name(pt, &field, "axes");
         let all = match &items {
             Some(v) => v.clone(),
             None => {
