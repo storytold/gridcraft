@@ -70,14 +70,14 @@ fn spill_range_operator() {
 #[test]
 fn spill_blocked_index_tracks_blocked_formulas_through_block_and_unblock() {
     // `cells_changed`'s probe for a nearby spill a changed cell might block or unblock skips
-    // scanning the sheet outright when `Sheet::spill_blocked` is empty. This walks the same
-    // block-then-clear sequence `spill_range_operator` already covers, but also inspects
-    // `spill_blocked` directly at each step, so a bug that leaves the index stale - in
-    // particular, forgetting to drop a formula from it once it is no longer `#SPILL!` - is
-    // caught even if some other path (the `emptied` sweep, or `spill_ranges`-overlap re-seeding)
-    // happens to still produce the right displayed value.
+    // scanning outright when `Calc::spill_blocked` is empty. This walks the same block-then-clear
+    // sequence `spill_range_operator` already covers, but also inspects `spill_blocked` directly
+    // at each step, so a bug that leaves the index stale - in particular, forgetting to drop a
+    // formula from it once it is no longer `#SPILL!` - is caught even if some other path (the
+    // `emptied` sweep, or `spill_ranges`-overlap re-seeding) happens to still produce the right
+    // displayed value.
     let mut t = T::new();
-    let blocked = |t: &T| t.wb.sheet(0).unwrap().spill_blocked.contains(&c("B1"));
+    let blocked = |t: &T| t.calc.spill_blocked.contains(&(0, c("B1")));
 
     t.set("A1", "3");
     t.set("B1", "=SEQUENCE(A1)");
@@ -99,6 +99,31 @@ fn spill_blocked_index_tracks_blocked_formulas_through_block_and_unblock() {
     t.set("B2", "");
     assert_eq!(t.num("B3"), 3.0, "spills again once unblocked");
     assert!(!blocked(&t), "spill_blocked must not go stale once the formula is no longer #SPILL!");
+}
+
+#[test]
+fn rebuild_populates_spill_blocked_from_a_cached_spill_value() {
+    // `DocState::from_saved` calls `Calc::rebuild`, not `recalc_all`: a file's cached values are
+    // trusted as-is until an edit reaches them (see its doc comment), so `write_back` - the only
+    // other place that maintains `spill_blocked` - never runs before the first edit. Built by
+    // hand, bypassing `cells_changed`, to stand in for "a workbook as its file saved it": B1 is a
+    // SEQUENCE formula already cached as `#SPILL!` (as a real file would have it, blocked by B2),
+    // with no graph and no `spill_blocked` entry yet - exactly the state `rebuild` must fix.
+    let mut t = T::new();
+    let mut b1 = Cell::formula(Formula::new("=SEQUENCE(3)"));
+    b1.value = Value::Error(CellError::Spill);
+    t.wb.sheet_mut(0).unwrap().cells.set(c("B1"), b1);
+    t.wb.sheet_mut(0).unwrap().cells.set(c("B2"), Cell::value(Value::text("x")));
+    assert!(t.calc.spill_blocked.is_empty(), "nothing has run yet");
+
+    t.calc.rebuild(&t.wb);
+    assert!(t.calc.spill_blocked.contains(&(0, c("B1"))), "rebuild must pick up the cached #SPILL! value, not just the graph");
+
+    // The probe this index gates must still find B1 and unblock it: if rebuild had left the
+    // index empty, the gate added in cells_changed would have skipped the scan and missed it.
+    t.set("B2", "");
+    assert_eq!(t.num("B3"), 3.0, "unblocked after rebuild correctly seeded spill_blocked");
+    assert!(!t.calc.spill_blocked.contains(&(0, c("B1"))));
 }
 
 #[test]
