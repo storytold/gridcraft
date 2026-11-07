@@ -21,7 +21,7 @@ use super::super::FilterContext;
 use super::super::support::{SubtotalGuard, frame_for};
 use super::*;
 use crate::ast::{BinaryOp, Literal};
-use crate::value::{Scalar, ScalarKey, TableColumn, TableValue};
+use crate::value::{Scalar, ScalarKey, TableColumn, TableValue, folded_key};
 
 /// Hard cap on the rows a grouping function materializes: group sets come from the model and the
 /// cartesian product of column domains is unbounded otherwise.
@@ -521,6 +521,10 @@ thread_local! {
     /// Groups prepared in this thread. `prepare_group` is group-scoped work, so a row with several
     /// expressions must prepare once: the counter lets a test pin that.
     static PREPARED_GROUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Lineage tables materialised for the group leak check in this thread. The table depends only
+    /// on the evaluation's own filters, so it must be built once per evaluation — not once per
+    /// group, and not once per group × expression, which is what the per-row path used to do.
+    static LINEAGE_MATERIALIZATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Builds the filter context of one group: the table argument's own rows, then one value set per
@@ -528,15 +532,24 @@ thread_local! {
 /// The result depends only on the group, so callers compute it once and evaluate every
 /// expression of that row against it. The second value is the row's grouping scope: the
 /// active group-by columns, which is what `ISINSCOPE` reports for that row.
+///
+/// `base` carries the lineage table the leak check materialises. It is built on the first group
+/// that needs it and reused by every later group of the same evaluation, so the group only pays
+/// for the rows it narrows.
 fn prepare_group(
     ev: &Evaluator<'_>,
     ctx: &Context,
     group: &GroupContext<'_>,
     operation: &str,
+    base: &mut Option<LineageBase>,
 ) -> Result<(FilterContext, Vec<(usize, usize)>), EvalError> {
     let mut filters = ctx.filters.clone();
     #[cfg(test)]
     PREPARED_GROUPS.with(|count| count.set(count.get() + 1));
+    // The value sets this group installs on top of the evaluation's own filters. They are the
+    // group-dependent part of the leak check: the evaluation's filters are already applied to
+    // `base`, so only these narrow it.
+    let mut group_sets: Vec<(usize, usize, BTreeSet<ScalarKey>)> = Vec::new();
     // The table argument's own rows bound the group: `SUMMARIZE(FILTER(...), ...)` must not see
     // rows the filter removed. Applying the group's rows as column filters keeps the lineage
     // contract the evaluator already relies on.
@@ -544,7 +557,7 @@ fn prepare_group(
         && !group.rows.is_empty()
     {
         let rows = TableValue::new(group.source.columns.clone(), group.rows.to_vec()).with_lineage(lineage);
-        apply_table_values(ev, &rows, &mut filters);
+        group_sets.extend(apply_table_values(ev, &rows, &mut filters));
     }
     for ((column, value), active) in group.columns.iter().zip(group.values).zip(group.active) {
         if !*active {
@@ -564,7 +577,9 @@ fn prepare_group(
         if value.is_blank() && !on_source {
             continue;
         }
-        filters.set(column.table, column.column, [ScalarKey::from(value)]);
+        let keys: BTreeSet<ScalarKey> = std::iter::once(folded_key(&ScalarKey::from(value))).collect();
+        filters.set(column.table, column.column, keys.clone());
+        group_sets.push((column.table, column.column, keys));
     }
     // One value set per column describes the group exactly only when the table argument's rows
     // are the ones those sets select. A cross-column predicate (`FILTER(Sales, Sales[Amount] >
@@ -594,8 +609,17 @@ fn prepare_group(
                 .iter()
                 .map(|row| mapped.iter().map(|(position, _)| row.get(*position).map(ScalarKey::from).unwrap_or(ScalarKey::Blank)).collect())
                 .collect();
-            let lineage_rows = ev.table(lineage, &filters);
-            let leaked = lineage_rows.rows.iter().any(|row| {
+            // The evaluation's own filters are already applied to the base table, so the group
+            // narrows its rows in memory. A set on another table reaches the lineage through a
+            // relationship, which only the evaluator can resolve: that group materialises the
+            // table with its own filters (the only genuinely group-dependent rebuild).
+            let narrowed = group_sets.iter().all(|(table, _, _)| *table == lineage);
+            let lineage_rows = if narrowed {
+                base.get_or_insert_with(|| LineageBase::new(ev, lineage, &ctx.filters)).matching(&group_sets)
+            } else {
+                ev.table(lineage, &filters).rows
+            };
+            let leaked = lineage_rows.iter().any(|row| {
                 let key: Vec<ScalarKey> = mapped.iter().map(|(_, index)| row.get(*index).map(ScalarKey::from).unwrap_or(ScalarKey::Blank)).collect();
                 !owned.contains(&key)
             });
@@ -652,6 +676,9 @@ fn summarize(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Resul
         columns.push(TableColumn { name: name.clone() });
     }
     let mut output = Vec::with_capacity(rows.len());
+    // One lineage table for the whole evaluation: every group's leak check narrows these rows
+    // instead of rebuilding the table (`prepare_group` builds it on the first group that needs it).
+    let mut lineage_base: Option<LineageBase> = None;
     for (values, active, group_rows) in rows {
         let mut row = values.clone();
         // Detail rows have every column active; a ROLLUP row deactivates the rolled-up columns.
@@ -661,7 +688,7 @@ fn summarize(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Resul
             let _guard = SubtotalGuard::push(rolled_up);
             if !parsed.expressions.is_empty() {
                 let group = GroupContext { columns: &layout.columns, values: &values, active: &active, source: &table, rows: &group_rows };
-                let (group_filters, grouping_scope) = prepare_group(ev, ctx, &group, "SUMMARIZE")?;
+                let (group_filters, grouping_scope) = prepare_group(ev, ctx, &group, "SUMMARIZE", &mut lineage_base)?;
                 for (_, expression) in &parsed.expressions {
                     row.push(eval_in_group(ev, ctx, expression, &group_filters, &grouping_scope)?);
                 }
@@ -913,7 +940,12 @@ fn apply_filter_arg(ev: &Evaluator<'_>, expr: &BoundExpr, filters: &mut FilterCo
 
 /// Turns a table filter into column filters. When the table keeps its lineage, its columns are
 /// model columns of that table; otherwise a column is matched by name against the model.
-fn apply_table_values(ev: &Evaluator<'_>, table: &TableValue, filters: &mut FilterContext) {
+///
+/// Returns the value sets it installed, folded exactly as [`FilterContext::set`] stores them, so a
+/// caller that has already materialised the filtered table can narrow its rows with them in memory
+/// instead of rebuilding the table.
+fn apply_table_values(ev: &Evaluator<'_>, table: &TableValue, filters: &mut FilterContext) -> Vec<(usize, usize, BTreeSet<ScalarKey>)> {
+    let mut applied = Vec::new();
     for (position, column) in table.columns.iter().enumerate() {
         let target = match table.lineage {
             Some(lineage) => ev.model().column_index(lineage, &column.name).map(|index| (lineage, index)),
@@ -923,8 +955,48 @@ fn apply_table_values(ev: &Evaluator<'_>, table: &TableValue, filters: &mut Filt
             }
         };
         let Some((table_index, column_index)) = target else { continue };
-        let keys: BTreeSet<ScalarKey> = table.rows.iter().filter_map(|row| row.get(position)).map(ScalarKey::from).collect();
-        filters.set(table_index, column_index, keys);
+        let keys: BTreeSet<ScalarKey> =
+            table.rows.iter().filter_map(|row| row.get(position)).map(|value| folded_key(&ScalarKey::from(value))).collect();
+        filters.set(table_index, column_index, keys.clone());
+        applied.push((table_index, column_index, keys));
+    }
+    applied
+}
+
+/// The lineage rows of the table argument under the evaluation's own filters, materialised once
+/// per `SUMMARIZE` evaluation.
+///
+/// The group leak check needs the lineage rows the group's filters select. Those filters are the
+/// evaluation's own plus the group's value sets, so the table is built once and the group only
+/// narrows its rows in memory. Rebuilding it inside the group loop cost `groups × lineage rows`
+/// (and `groups × expressions × rows` before `prepare_group` hoisted the per-group work).
+struct LineageBase {
+    lineage: usize,
+    rows: TableValue,
+}
+
+impl LineageBase {
+    fn new(ev: &Evaluator<'_>, lineage: usize, filters: &FilterContext) -> Self {
+        #[cfg(test)]
+        LINEAGE_MATERIALIZATIONS.with(|count| count.set(count.get() + 1));
+        Self { lineage, rows: ev.table(lineage, filters) }
+    }
+
+    /// The base rows matching every group value set: a column with several keys is an OR and
+    /// different columns are ANDed, exactly as a [`FilterContext`] reads them. Only a matching row
+    /// is cloned, so a group pays for its own rows rather than for the whole lineage.
+    fn matching(&self, sets: &[(usize, usize, BTreeSet<ScalarKey>)]) -> Vec<Vec<Scalar>> {
+        self.rows
+            .rows
+            .iter()
+            .filter(|row| {
+                sets.iter().all(|(table, column, keys)| {
+                    *table == self.lineage
+                        && keys.contains(&row.get(*column).map(|value| folded_key(&ScalarKey::from(value))).unwrap_or(ScalarKey::Blank))
+                })
+            })
+            .cloned()
+            .collect()
     }
 }
 
@@ -1507,6 +1579,7 @@ fn within_boundaries(value: Option<&Scalar>, first: &Option<Scalar>, last: &Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Relationship;
     use crate::model::{DataModel, ModelColumn, ModelTable};
     use crate::{Binder, parse_expression};
 
@@ -1547,7 +1620,7 @@ mod tests {
         let active = vec![true, false];
         let source = evaluator.table(0, &FilterContext::default());
         let group = GroupContext { columns: &columns, values: &values, active: &active, source: &source, rows: &source.rows };
-        let (_, scope) = prepare_group(&evaluator, &ctx, &group, "SUMMARIZE").expect("prepare");
+        let (_, scope) = prepare_group(&evaluator, &ctx, &group, "SUMMARIZE", &mut None).expect("prepare");
         assert_eq!(scope, vec![(0, 0)], "only the active group-by column is in scope");
     }
 
@@ -1578,6 +1651,126 @@ mod tests {
         assert_eq!(table.rows.len(), 2, "one row per region");
         let prepared = PREPARED_GROUPS.with(|count| count.get());
         assert_eq!(prepared, 2, "one preparation per group, not per expression (4 would be per expression)");
+    }
+
+    /// The group leak check reads the lineage table once per evaluation, not once per group: the
+    /// table depends only on the evaluation's own filters, so each group narrows those rows in
+    /// memory. Rebuilding it per group cost `groups × lineage rows`, and per group × expression
+    /// before `prepare_group` hoisted the per-group work.
+    #[test]
+    fn summarize_materializes_the_lineage_once_for_every_group() {
+        let regions = ["East", "West", "North", "South", "Centre"];
+        let mut rows = Vec::new();
+        for region in regions {
+            for amount in 1..=4 {
+                rows.push(vec![Scalar::String(region.into()), Scalar::Integer(amount)]);
+            }
+        }
+        let model = DataModel {
+            tables: vec![ModelTable {
+                name: "Sales".into(),
+                columns: vec![
+                    ModelColumn { name: "Region".into(), data_type: Some("String".into()) },
+                    ModelColumn { name: "Amount".into(), data_type: Some("Int64".into()) },
+                ],
+                rows,
+            }],
+            relationships: Vec::new(),
+            measures: Vec::new(),
+        };
+        let evaluator = Evaluator::new(&model).expect("evaluator");
+        let expr = parse_expression("SUMMARIZE(Sales, Sales[Region], \"A\", SUM(Sales[Amount]), \"B\", COUNTROWS(Sales))").expect("parse");
+        let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+        LINEAGE_MATERIALIZATIONS.with(|count| count.set(0));
+        let table = evaluator.evaluate_table(&bound).expect("evaluate");
+        assert_eq!(table.rows.len(), regions.len(), "one row per region");
+        let materialized = LINEAGE_MATERIALIZATIONS.with(|count| count.get());
+        assert_eq!(
+            materialized,
+            1,
+            "one lineage table per evaluation, not per group ({}) or per group x expression ({})",
+            regions.len(),
+            regions.len() * 2
+        );
+    }
+
+    /// The leak check still rejects a table argument whose column filters select rows the
+    /// cross-column predicate removed — the narrowing above must not weaken it.
+    #[test]
+    fn summarize_rejects_a_cross_column_table_argument() {
+        let model = DataModel {
+            tables: vec![ModelTable {
+                name: "Sales".into(),
+                columns: vec![
+                    ModelColumn { name: "Region".into(), data_type: Some("String".into()) },
+                    ModelColumn { name: "Amount".into(), data_type: Some("Int64".into()) },
+                    ModelColumn { name: "Cost".into(), data_type: Some("Int64".into()) },
+                ],
+                // `(6, 7)` fails `Amount > Cost`, but its two values each appear in a row that
+                // passes, so the per-column sets of the group admit it.
+                rows: vec![
+                    vec![Scalar::String("East".into()), Scalar::Integer(6), Scalar::Integer(5)],
+                    vec![Scalar::String("East".into()), Scalar::Integer(10), Scalar::Integer(7)],
+                    vec![Scalar::String("East".into()), Scalar::Integer(6), Scalar::Integer(7)],
+                ],
+            }],
+            relationships: Vec::new(),
+            measures: Vec::new(),
+        };
+        let evaluator = Evaluator::new(&model).expect("evaluator");
+        let expr =
+            parse_expression("SUMMARIZE(FILTER(Sales, Sales[Amount] > Sales[Cost]), Sales[Region], \"A\", SUM(Sales[Amount]))").expect("parse");
+        let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+        let error = evaluator.evaluate_table(&bound).expect_err("the cross-column leak must be rejected");
+        assert!(error.to_string().contains("select rows outside the group"), "{error}");
+    }
+
+    /// A group column of a related table is group-dependent through a relationship, so that group
+    /// still asks the evaluator to filter the lineage; the rows it summarizes stay correct.
+    #[test]
+    fn summarize_groups_a_related_table_column() {
+        let model = DataModel {
+            tables: vec![
+                ModelTable {
+                    name: "Sales".into(),
+                    columns: vec![
+                        ModelColumn { name: "Product".into(), data_type: Some("String".into()) },
+                        ModelColumn { name: "Amount".into(), data_type: Some("Int64".into()) },
+                    ],
+                    rows: vec![
+                        vec![Scalar::String("A".into()), Scalar::Integer(10)],
+                        vec![Scalar::String("A".into()), Scalar::Integer(20)],
+                        vec![Scalar::String("B".into()), Scalar::Integer(30)],
+                    ],
+                },
+                ModelTable {
+                    name: "Products".into(),
+                    columns: vec![
+                        ModelColumn { name: "Product".into(), data_type: Some("String".into()) },
+                        ModelColumn { name: "Category".into(), data_type: Some("String".into()) },
+                    ],
+                    rows: vec![
+                        vec![Scalar::String("A".into()), Scalar::String("Food".into())],
+                        vec![Scalar::String("B".into()), Scalar::String("Drink".into())],
+                    ],
+                },
+            ],
+            relationships: vec![Relationship {
+                from_table: "Sales".into(),
+                from_column: "Product".into(),
+                to_table: "Products".into(),
+                to_column: "Product".into(),
+                bidirectional: false,
+                inactive: false,
+            }],
+            measures: Vec::new(),
+        };
+        let evaluator = Evaluator::new(&model).expect("evaluator");
+        let expr = parse_expression("SUMMARIZE(Sales, Products[Category], \"Total\", SUM(Sales[Amount]))").expect("parse");
+        let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+        let table = evaluator.evaluate_table(&bound).expect("evaluate");
+        let rows: Vec<(Scalar, Scalar)> = table.rows.iter().map(|row| (row[0].clone(), row[1].clone())).collect();
+        assert_eq!(rows, vec![(Scalar::String("Drink".into()), Scalar::Decimal(30.0)), (Scalar::String("Food".into()), Scalar::Decimal(30.0))]);
     }
 
     #[test]
