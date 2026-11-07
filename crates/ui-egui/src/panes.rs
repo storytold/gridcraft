@@ -138,7 +138,7 @@ fn watch(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
-/// Lists the sheet's objects and dispatches select, bring-forward, send-backward and delete.
+/// Lists the sheet's objects and dispatches selection and deletion.
 fn selection(app: &mut SheetApp, ui: &mut Ui) {
     let list = app.session.run("arrange.selectionPane", json!({})).unwrap_or(Json::Null);
     let items = list.as_array().cloned().unwrap_or_default();
@@ -153,12 +153,6 @@ fn selection(app: &mut SheetApp, ui: &mut Ui) {
             let sel = obj.is_some() && app.selected_object == obj;
             if ui.selectable_label(sel, it["name"].as_str().unwrap_or("")).clicked() {
                 app.selected_object = obj;
-            }
-            if ui.small_button("▲").on_hover_text("Bring Forward").clicked() {
-                app.run_or_alert("arrange.bringForward", json!({"kind": kind, "id": id}));
-            }
-            if ui.small_button("▼").on_hover_text("Send Backward").clicked() {
-                app.run_or_alert("arrange.sendBackward", json!({"kind": kind, "id": id}));
             }
             if crate::widgets::icon_button(ui, crate::icons::Icon::Close, Tokens::get(ui.ctx()).text_dim, "Delete", vec2(18.0, 18.0)).clicked() {
                 app.run_or_alert("object.delete", json!({"kind": kind, "id": id}));
