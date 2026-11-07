@@ -244,6 +244,17 @@ pub fn small_toggle_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, on: 
 /// A split button: main part runs the default action, the arrow opens a menu.
 /// Returns (main clicked, arrow response).
 pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str) -> (bool, Response) {
+    split_button_with_icon(ui, accent, tip, |painter, rect, color| icons::paint(painter, rect, icon, color))
+}
+
+/// A split button whose main icon is drawn by the caller.
+/// Its interaction regions, tooltip and arrow are identical to `split_button`.
+pub fn split_button_with_icon(
+    ui: &mut Ui,
+    accent: Option<Color32>,
+    tip: &str,
+    paint_icon: impl FnOnce(&egui::Painter, Rect, Color32),
+) -> (bool, Response) {
     let t = Tokens::get(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(vec2(38.0, 24.0), Sense::hover());
     let main = Rect::from_min_size(rect.min, vec2(25.0, 24.0));
@@ -254,7 +265,7 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
         ui.painter().rect_filled(rect, 4.0, t.hover);
         ui.painter().line_segment([pos2(main.right(), rect.top() + 3.0), pos2(main.right(), rect.bottom() - 3.0)], Stroke::new(1.0, t.separator));
     }
-    icons::paint(ui.painter(), Rect::from_center_size(main.center() - vec2(0.0, 2.0), vec2(16.0, 16.0)), icon, t.text);
+    paint_icon(ui.painter(), Rect::from_center_size(main.center() - vec2(0.0, 2.0), vec2(16.0, 16.0)), t.text);
     if let Some(c) = accent {
         ui.painter().rect_filled(Rect::from_min_size(pos2(main.left() + 4.0, main.bottom() - 5.0), vec2(17.0, 3.0)), 0.0, c);
     }

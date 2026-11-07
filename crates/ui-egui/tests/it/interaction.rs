@@ -19,6 +19,38 @@ fn blank() -> Session {
     s
 }
 
+/// The Borders icon follows successful commands but never failed formatting.
+#[test]
+fn border_icon_tracks_only_successful_commands() {
+    let mut h = harness(blank());
+    let app = h.state_mut();
+
+    assert_eq!(app.grid.last_border, "bottom");
+
+    // Menu-style dispatch must remember the selected preset.
+    app.run_or_alert("home.borders", json!({"preset": "thickOutside"}));
+    assert_eq!(app.grid.last_border, "thickOutside");
+
+    // Direct and keyboard-style command dispatch use the same success path.
+    app.run("home.borders", json!({"preset": "doubleBottom"})).unwrap();
+    assert_eq!(app.grid.last_border, "doubleBottom");
+
+    // A protected worksheet rejects formatting; neither dispatch route may
+    // replace the last successful preset.
+    app.run("review.protectSheet", json!({})).unwrap();
+
+    assert!(app.run("home.borders", json!({"preset": "all"})).is_err());
+    assert_eq!(app.grid.last_border, "doubleBottom");
+
+    app.run_or_alert("home.borders", json!({"preset": "none"}));
+    assert_eq!(app.grid.last_border, "doubleBottom");
+
+    // The engine defaults an omitted preset to Bottom Border.
+    app.run("review.unprotectSheet", json!({})).unwrap();
+    app.run("home.borders", json!({})).unwrap();
+    assert_eq!(app.grid.last_border, "bottom");
+}
+
 #[test]
 fn vertical_scrollbar_pages_and_drags_without_changing_selection() {
     let mut h = harness(blank());
