@@ -1,5 +1,38 @@
 # Decisions
 
+## Translate runs OPUS-MT ONNX on rten, with user-downloaded weights (#2211)
+
+Content translation had to be local, offline and buildable on Windows, macOS, Linux and BSD with
+no required accelerator. Two pure-Rust paths were measured end to end on the reference Windows
+machine on 2026-11-07:
+
+- **candle 0.11 `marian`** with the HF safetensors of `Helsinki-NLP/opus-mt-en-es` (`refs/pr/4`):
+  loads, but produced garbage for ordinary sentences ("Good morning" → "- ¿Qué?"). Rejected.
+- **rten 0.27** with the `Xenova/opus-mt-en-es` ONNX conversion at
+  `4b002a4c7edd54a7ced58877258b87f7efd3f892`, quantized weights: correct, and its output token ids
+  are identical to onnxruntime's. Chosen.
+
+The manifest pins that commit (not the mutable `refs/pr/4` the candle example used) and records
+the model card's licence per pair: **Apache-2.0** for en–es. OPUS-MT licences vary (en–de is
+CC-BY-4.0, for example), so a future pair is a new manifest row with its own licence, never a
+hidden default.
+
+Weights are never committed and never bundled. The repository contains only the manifest (id,
+revision, files, byte sizes, SHA-256, licence, URLs). The person downloads the model in the app
+after a consent screen that names the source, size, licence and SHA-256, or places the files in
+the documented model directory; both paths are verified the same way before use. `translate.
+modelDownload` refuses without `consent: true` and without a host-installed HTTPS transport.
+
+The CPU runtime is the default on every platform and the only one in this change. `Accelerator`
+(`cpu`, `openvino`) is the seam for a future optional OpenVINO backend on Intel x86; requesting an
+unavailable accelerator returns a clear message and still runs identically on the CPU. No C/C++
+runtime dependency, no DirectML, and no accelerator is required.
+
+Primary crates are `gridcraft-translate` (L1, pure and wasm-clean) and `gridcraft-translate-rten`
+(L6, native). Inference never runs in `Session::execute`: a worker thread owns the backend, the
+selection snapshot and a cancellation token, and `translate.insert` is the only writer. The web
+build reports model commands as unavailable rather than shipping a backend.
+
 ## Bound repeated XLSX column expansion (#1022)
 
 Limit each worksheet to 1,000,000 nondefault column assignments across all `<cols>` blocks.

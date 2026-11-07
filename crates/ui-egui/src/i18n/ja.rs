@@ -1171,10 +1171,45 @@ pub(super) const EXTRA: &[(&str, &str)] = &[
     ),
 ];
 
+/// Review › Language › Translate strings (content translation is independent of the UI locale).
+const TRANSLATE_EXTRA: &[(&str, &str)] = &[
+    ("Installed — verified on first use", "インストール済み — 初回使用時に検証"),
+    ("Incomplete — download it again", "不完全 — もう一度ダウンロードしてください"),
+    ("Not installed", "未インストール"),
+    ("local, offline", "ローカル、オフライン"),
+    ("Hide details", "詳細を隠す"),
+    ("Source, licence and hashes", "ソース、ライセンス、ハッシュ"),
+    ("I agree to the source, size, licence and SHA-256 shown above", "上記のソース、サイズ、ライセンス、SHA-256 に同意します"),
+    ("Import folder…", "フォルダーをインポート…"),
+    (
+        "Place the files in the model folder by hand; this build cannot download.",
+        "モデルフォルダーに手動でファイルを置いてください。このビルドはダウンロードできません。",
+    ),
+    ("From", "元の言語"),
+    ("Swap languages", "言語を入れ替え"),
+    ("To", "対象言語"),
+    ("Auto-detect", "自動検出"),
+    ("cells selected", "個のセルを選択"),
+    ("Translate selection", "選択範囲を翻訳"),
+    ("The translation did not finish; nothing was written.", "翻訳は完了しませんでした。何も書き込まれていません。"),
+    ("translated", "翻訳済み"),
+    ("skipped", "スキップ"),
+    ("failed", "失敗"),
+    ("cells inserted", "個のセルを挿入しました"),
+    ("formula", "数式"),
+    ("number", "数値"),
+    ("date", "日付"),
+    ("boolean", "ブール値"),
+    ("error", "エラー"),
+    ("empty", "空"),
+    ("tooLong", "長すぎます"),
+    ("Translate", "翻訳"),
+];
+
 /// Translates an interface label; `None` for a label the catalog does not know, so `i18n.rs` can
 /// fall back to English. Dialog strings come first, the shared core second.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
-    DIALOGS.iter().chain(CORE).chain(EXTRA).find(|(english, _)| *english == text).map(|(_, translated)| *translated)
+    DIALOGS.iter().chain(CORE).chain(EXTRA).chain(TRANSLATE_EXTRA).find(|(english, _)| *english == text).map(|(_, translated)| *translated)
 }
 
 #[cfg(test)]

@@ -481,6 +481,41 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Afficher",
         "Collapse dialog" => "Réduire la boîte de dialogue",
         "Expand dialog" => "Développer la boîte de dialogue",
+        "Installed — verified on first use" => "Installé — vérifié à la première utilisation",
+        "Incomplete — download it again" => "Incomplet — téléchargez-le à nouveau",
+        "Not installed" => "Non installé",
+        "local, offline" => "local, hors ligne",
+        "Hide details" => "Masquer les détails",
+        "Source, licence and hashes" => "Source, licence et empreintes",
+        "I agree to the source, size, licence and SHA-256 shown above" => {
+            "J'accepte la source, la taille, la licence et le SHA-256 affichés ci-dessus"
+        }
+        "Import folder…" => "Importer un dossier…",
+        "Import" => "Importer",
+        "Remove" => "Supprimer",
+        "Place the files in the model folder by hand; this build cannot download." => {
+            "Placez les fichiers dans le dossier des modèles à la main ; cette version ne peut pas télécharger."
+        }
+        "From" => "De",
+        "Swap languages" => "Inverser les langues",
+        "To" => "Vers",
+        "Auto-detect" => "Détection automatique",
+        "cells selected" => "cellules sélectionnées",
+        "Translate selection" => "Traduire la sélection",
+        "Cancel" => "Annuler",
+        "The translation did not finish; nothing was written." => "La traduction ne s'est pas terminée ; rien n'a été écrit.",
+        "translated" => "traduit",
+        "skipped" => "ignoré",
+        "failed" => "échec",
+        "cells inserted" => "cellules insérées",
+        "formula" => "formule",
+        "number" => "nombre",
+        "date" => "date",
+        "boolean" => "booléen",
+        "error" => "erreur",
+        "empty" => "vide",
+        "tooLong" => "trop long",
+        "Translate" => "Traduire",
         _ => return None,
     })
 }

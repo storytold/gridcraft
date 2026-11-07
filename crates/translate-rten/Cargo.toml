@@ -1,0 +1,20 @@
+[package]
+name = "gridcraft-translate-rten"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft translation backend: OPUS-MT ONNX models on rten (native, CPU, pure Rust)"
+
+[lints]
+workspace = true
+
+[dependencies]
+gridcraft-translate = { workspace = true }
+rten = "=0.27.0"
+tokenizers = "0.23"
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+gridcraft-translate = { workspace = true, features = ["test-backend"] }

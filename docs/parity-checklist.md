@@ -4,7 +4,7 @@
 
 Each entry is an Excel ribbon or menu command (feature names only). It counts as implemented when GridCraft registers a command with the same id. This measures breadth only; the overall assessment (depth, fidelity, effort) is in [target-app-parity.md](target-app-parity.md).
 
-**Overall: 281 / 296 commands implemented (94.9%).**
+**Overall: 282 / 296 commands implemented (95.3%).**
 
 | Tab | Implemented | Total | Parity |
 |---|---|---|---|
@@ -15,7 +15,7 @@ Each entry is an Excel ribbon or menu command (feature names only). It counts as
 | Page Layout | 23 | 23 | 100% |
 | Formulas | 23 | 23 | 100% |
 | Data | 23 | 28 | 82% |
-| Review | 15 | 18 | 83% |
+| Review | 16 | 18 | 89% |
 | View | 21 | 21 | 100% |
 | Automate | 4 | 4 | 100% |
 | Developer | 4 | 4 | 100% |
@@ -274,7 +274,7 @@ Missing:
 - `data.relationships` Relationships (Data Tools)
 - `data.analyzeData` Analyze Data (Analysis)
 
-## Review (15 / 18, 83%)
+## Review (16 / 18, 89%)
 
 Implemented:
 
@@ -282,6 +282,7 @@ Implemented:
 - `review.thesaurus` Thesaurus (Proofing)
 - `review.workbookStatistics` Workbook Statistics (Proofing)
 - `review.checkAccessibility` Check Accessibility (Accessibility)
+- `review.translate` Translate (Language)
 - `review.deleteComment` Delete Comment (Comments)
 - `review.previousComment` Previous Comment (Comments)
 - `review.nextComment` Next Comment (Comments)
@@ -297,7 +298,6 @@ Implemented:
 Missing:
 
 - `review.smartLookup` Smart Lookup (Insights)
-- `review.translate` Translate (Language)
 - `review.showChanges` Show Changes (Changes)
 
 ## View (21 / 21, 100%)

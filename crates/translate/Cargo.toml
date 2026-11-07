@@ -1,0 +1,22 @@
+[package]
+name = "gridcraft-translate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft cell translation: language tags, detection, segmentation, protection and the backend seam (pure, wasm-clean)"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[features]
+default = []
+# The deterministic fixed-word-map backend. Test-only: no shipped build turns it on.
+test-backend = []

@@ -1,3 +1,7 @@
+use std::sync::Arc;
+
+use gridcraft_engine::Session;
+
 use super::printing;
 
 type PickSave = Box<dyn Fn(&str) -> Option<String>>;
@@ -5,6 +9,20 @@ type OpenUrl = Box<dyn Fn(&str)>;
 type CopyHtml = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
 type Download = Box<dyn Fn(&str, &[u8])>;
 type PrintPdf = Box<dyn Fn(&[u8])>;
+type TranslateRefresh = Box<dyn Fn(&mut Session)>;
+
+/// The host's local-model seam (shared by every Craft feature that installs a model).
+///
+/// The app owns the filesystem policy: where models live, and how a user-consented download is
+/// fetched, verified and installed. The UI only asks. Nothing here is reachable from the web
+/// build (no host is installed there), and inference never calls it.
+pub trait ModelHost: Send + Sync {
+    /// The model root (`$APP_MODELS`, the platform data directory, beside the executable, or
+    /// `models/` in a source tree — see `docs/translate.md`).
+    fn models_dir(&self) -> std::path::PathBuf;
+    /// Downloads model `id` after the person consented to the source, size, licence and hash.
+    fn download(&self, id: &str) -> Result<(), String>;
+}
 
 /// Host services the platform shell provides (file pickers, opening URLs).
 #[derive(Default)]
@@ -44,6 +62,14 @@ pub struct Services {
     /// Web: hand PDF bytes to the browser's print flow directly (no download,
     /// no intermediate file) — opens the system print dialog on that PDF.
     pub print: Option<PrintPdf>,
+    /// Native: the local-model host (directory + verified download). `None` on the web build and
+    /// in tests, which is what keeps every model command in an actionable "not available" state.
+    pub models: Option<Arc<dyn ModelHost>>,
+    /// Native: re-resolve the model root and (re)inject the translation backend after a download,
+    /// import or removal. Set once by the app shell.
+    pub translate_refresh: Option<TranslateRefresh>,
+    /// Native: choose a folder holding model files for `translate.modelImport`.
+    pub pick_model_dir: Option<Box<dyn Fn() -> Option<String>>>,
 }
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).
