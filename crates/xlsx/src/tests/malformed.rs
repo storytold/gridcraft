@@ -301,8 +301,8 @@ fn hyperlink_copies_are_bounded() {
     assert_eq!(wb.sheets[0].hyperlinks.len(), 10_000);
 }
 
-/// #2173: every rule of a conditional-format block copies the block's ranges; the kept range
-/// cells (ranges x rules) are capped per sheet.
+/// #2173: every rule of a conditional-format block copies the block's ranges; the kept ranges
+/// (ranges x rules) are capped per sheet.
 #[test]
 fn conditional_format_range_copies_are_bounded() {
     let sq = (1..=10_000).map(|r| format!("A{r}")).collect::<Vec<_>>().join(" ");
@@ -310,25 +310,37 @@ fn conditional_format_range_copies_are_bounded() {
     let body = format!(r#"<sheetData/><conditionalFormatting sqref="{sq}">{rules}</conditionalFormatting>"#);
     let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
     let cfs = &wb.sheets[0].cond_formats;
-    // 400 rules of 10,000 one-cell ranges reach the 4,000,000 kept-cell cap.
+    // 400 rules of 10,000 ranges reach the 4,000,000 kept-range cap.
     assert_eq!(cfs.len(), 400);
     assert!(cfs.iter().all(|c| c.ranges.len() == 10_000));
-    assert!(rep.warnings.iter().any(|w| w.contains("kept range cells")), "{:?}", rep.warnings);
+    assert!(rep.warnings.iter().any(|w| w.contains("kept ranges")), "{:?}", rep.warnings);
 }
 
-/// #2173: the kept-range-cell cap counts every block of the sheet. A large block that fills the
-/// cap leaves no room for a later one-cell block.
+/// #2173: the kept-range cap counts every block of the sheet. A block whose rules fill the cap
+/// leaves no room for a later one-range block.
 #[test]
 fn conditional_format_cap_holds_across_blocks() {
     let block = |sq: &str, n: usize| {
         format!(r#"<conditionalFormatting sqref="{sq}">{}</conditionalFormatting>"#, r#"<cfRule type="containsBlanks" priority="1"/>"#.repeat(n))
     };
-    let body = format!("<sheetData/>{}{}", block("A1:D1000000", 1), block("E1", 1));
+    let sq = (1..=10_000).map(|r| format!("A{r}")).collect::<Vec<_>>().join(" ");
+    let body = format!("<sheetData/>{}{}", block(&sq, 400), block("E1", 1));
     let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
     let cfs = &wb.sheets[0].cond_formats;
-    assert_eq!(cfs.len(), 1, "4,000,000 cells fill the cap; the one-cell block would exceed it");
-    assert_eq!(cfs[0].ranges, vec![gridcraft_core::RangeRef::parse("A1:D1000000").unwrap()]);
-    assert!(rep.warnings.iter().any(|w| w.contains("kept range cells")), "{:?}", rep.warnings);
+    assert_eq!(cfs.len(), 400, "4,000,000 ranges fill the cap; the one-range block would exceed it");
+    assert!(rep.warnings.iter().any(|w| w.contains("kept ranges")), "{:?}", rep.warnings);
+}
+
+/// A rule over whole columns or the whole sheet is one range however many cells it covers, so it
+/// is kept: Excel files use them, e.g. to highlight the active row across the sheet.
+#[test]
+fn conditional_formats_over_whole_columns_and_sheets_are_kept() {
+    let body = r#"<sheetData/><conditionalFormatting sqref="A1:XFD1048576"><cfRule type="expression" dxfId="0" priority="1"><formula>ROW(A1)=7</formula></cfRule></conditionalFormatting><conditionalFormatting sqref="A:D"><cfRule type="containsBlanks" priority="2"/></conditionalFormatting>"#;
+    let (wb, rep) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let cfs = &wb.sheets[0].cond_formats;
+    assert_eq!(cfs.len(), 2, "{:?}", rep.warnings);
+    assert_eq!(cfs[0].ranges, vec![gridcraft_core::RangeRef::parse("A1:XFD1048576").unwrap()]);
+    assert!(!rep.warnings.iter().any(|w| w.contains("kept ranges")), "{:?}", rep.warnings);
 }
 
 /// #2173: earlier blocks are charged their own cells, not the later block's size times the rule
@@ -341,7 +353,7 @@ fn conditional_format_cap_admits_a_large_block_after_small_ones() {
     let body = format!("<sheetData/>{}{}", block("E1", 3), block("A1:C1000000", 1));
     let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
     assert_eq!(wb.sheets[0].cond_formats.len(), 4, "3 + 3,000,000 kept cells are under the cap");
-    assert!(!rep.warnings.iter().any(|w| w.contains("kept range cells")), "{:?}", rep.warnings);
+    assert!(!rep.warnings.iter().any(|w| w.contains("kept ranges")), "{:?}", rep.warnings);
 }
 
 /// #2173: cell formats share one copy of each custom number format (even an over-long one, which

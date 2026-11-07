@@ -1,6 +1,6 @@
 use super::{
-    CfOperator, CfRule, CfValueKind, CondFormat, Ctx, El, ErrorStyle, MAX_COND_CELLS, RangeRef, Sheet, Validation, ValidationKind, from_file,
-    parse_sqref, read_color,
+    CfOperator, CfRule, CfValueKind, CondFormat, Ctx, El, ErrorStyle, MAX_COND_RANGES, Sheet, Validation, ValidationKind, from_file, parse_sqref,
+    read_color,
 };
 
 fn cf_op(s: Option<&str>) -> CfOperator {
@@ -46,14 +46,14 @@ fn cfvos(e: &El) -> Vec<CfValueKind> {
 }
 
 /// One `conditionalFormatting` block. Every rule keeps its own copy of the block's ranges, so
-/// `kept_cells` counts the range cells the sheet's retained rules hold so far, across blocks; a
-/// rule that would take it past [`MAX_COND_CELLS`] is dropped. Unsupported rules cost nothing.
-pub(super) fn read_cf(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet, kept_cells: &mut u64) {
+/// `kept_ranges` counts the ranges the sheet's retained rules hold so far, across blocks; a rule
+/// that would take it past [`MAX_COND_RANGES`] is dropped. Unsupported rules cost nothing.
+pub(super) fn read_cf(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet, kept_ranges: &mut u64) {
     let ranges = parse_sqref(e.attr("sqref"));
     if ranges.is_empty() {
         return;
     }
-    let block_cells = ranges.iter().map(RangeRef::count).fold(0u64, u64::saturating_add);
+    let block_ranges = ranges.len() as u64;
     for r in e.kids("cfRule") {
         let style = Box::new(r.attr_u32("dxfId").and_then(|i| cx.dxfs.get(i as usize)).cloned().unwrap_or_default());
         let formulas: Vec<String> = r.kids("formula").map(|f| from_file(f.text.trim())).collect();
@@ -115,12 +115,12 @@ pub(super) fn read_cf(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet, kept_cells: &
                 continue;
             }
         };
-        let total = kept_cells.saturating_add(block_cells);
-        if total > MAX_COND_CELLS {
-            cx.warn(format!("conditional formats past {MAX_COND_CELLS} kept range cells were dropped"));
+        let total = kept_ranges.saturating_add(block_ranges);
+        if total > MAX_COND_RANGES {
+            cx.warn(format!("conditional formats past {MAX_COND_RANGES} kept ranges were dropped"));
             break;
         }
-        *kept_cells = total;
+        *kept_ranges = total;
         if let Some(id) = ext_id {
             cx.cf_ext_ids.push((id, sheet.cond_formats.len()));
         }
