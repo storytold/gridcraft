@@ -298,6 +298,7 @@ fn undo_and_redo_bring_its_code_back_and_run_from_the_top() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods)] // the clock: this test exists only off wasm
 fn a_worker_lost_and_rebuilt_runs_it_again() {
     let (mut s, h) = session();
     init(&mut s, "set rate 2");
