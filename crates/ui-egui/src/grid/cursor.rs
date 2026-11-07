@@ -4,6 +4,19 @@ use super::geo::Geo;
 use super::interact::{col_edge, freeze_handles, hidden_col_edge, hidden_row_edge, on_border, row_edge};
 use super::{CellRef, Color32, CursorIcon, Drag, Pos2, RangeRef, Rect, Sheet, SheetApp, Stroke, pos2, vec2};
 
+/// Whether a menu, a dialog or another area is drawn above the sheet at `pos`: such a layer owns
+/// the pointer, so the grid must not paint its own cursor over it.
+///
+/// `layer_id_at` walks the registered areas from the top — menus are `Foreground` areas, dialogs
+/// are `Middle`-order windows — and skips the overlays that take no input, like a cell's note.
+/// The sheet paints in its own layer (`sheet`, the grid UI's), so the topmost area at the pointer
+/// is the sheet itself unless something is drawn above it. `pos` is the pointer's screen position:
+/// `layer_id_at` knows nothing of the sheet's right-to-left mirror, so a mirrored grid position
+/// would look up the wrong side.
+pub(super) fn popup_over(ctx: &egui::Context, pos: Option<Pos2>, sheet: egui::LayerId) -> bool {
+    pos.and_then(|p| ctx.layer_id_at(p)).is_some_and(|top| top != sheet)
+}
+
 /// Decide after interaction so drag start and release use the new state in the same frame.
 pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
     if app.text_box_editor.is_some() || app.grid.hf_edit.is_some() {
@@ -11,7 +24,9 @@ pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Resp
     }
     let ctx = ui.ctx();
     let pointer = ctx.input(|i| i.pointer.clone());
-    let pos = pointer.interact_pos().or(pointer.hover_pos()).map(|p| geo.mirror_pos(p));
+    // Hit-testing works in logical coordinates, the layer lookup in screen ones (see `Geo::rtl`).
+    let screen = pointer.interact_pos().or(pointer.hover_pos());
+    let pos = screen.map(|p| geo.mirror_pos(p));
     let in_cells = pos.is_some_and(|p| geo.in_cells(p));
     let (freeze_cols, freeze_rows) = freeze_handles(geo);
     // Hover bookkeeping also serves cell notes, independently of who owns the cursor.
@@ -24,8 +39,17 @@ pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Resp
         app.grid.hover_cell = in_cells.then(|| geo.cell_at(sh, p));
     }
     // Draw tools and Insert › Controls placement own the cursor over cells, including while
-    // recording a stroke or drawing the control.
-    if (!app.session.draw_tool.is_empty() || app.grid.placing.is_some()) && in_cells {
+    // recording a stroke or drawing the control — but not through a menu or a dialog drawn above
+    // the sheet: the pointer there belongs to the popup, and the crosshair it left behind stayed
+    // until the pointer crossed out of the grid.
+    let over_popup = popup_over(ctx, screen, ui.layer_id());
+    let drawing = !app.session.draw_tool.is_empty() || app.grid.placing.is_some();
+    if over_popup && drawing {
+        // Over the popup the grid sets nothing — and must not fall through either: a stroke dragged
+        // into a menu left the popup with the cell cursor showing underneath it.
+        return;
+    }
+    if drawing && in_cells {
         ctx.set_cursor_icon(CursorIcon::Crosshair);
         return;
     }
