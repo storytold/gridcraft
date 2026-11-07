@@ -11,7 +11,7 @@ use crate::theme::{self, Cat, Tokens};
 
 /// Translates a label or tooltip for the language of the frame being drawn (English if untranslated).
 /// Ribbon chrome all flows through these widgets, so translating here localises it in one place.
-fn tr<'a>(ui: &Ui, text: &'a str) -> &'a str {
+pub(crate) fn tr<'a>(ui: &Ui, text: &'a str) -> &'a str {
     i18n::current(ui.ctx()).tr(text)
 }
 
@@ -297,10 +297,22 @@ pub fn small_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> (R
 /// A one-line text field for a value stored in the workbook, which callers reload every frame. The text being typed is
 /// kept in egui memory until the field loses focus, then returned to commit (`None` when Escape cancels the edit).
 pub fn committed_text(ui: &mut Ui, id: egui::Id, current: &str, width: Option<f32>) -> Option<String> {
+    committed_text_with_label(ui, id, current, width, None)
+}
+
+/// Like [`committed_text`], but gives the input an explicit accessible name.
+pub fn committed_text_labeled(ui: &mut Ui, id: egui::Id, current: &str, width: Option<f32>, label: &str) -> Option<String> {
+    committed_text_with_label(ui, id, current, width, Some(label))
+}
+
+fn committed_text_with_label(ui: &mut Ui, id: egui::Id, current: &str, width: Option<f32>, label: Option<&str>) -> Option<String> {
     let width = width.unwrap_or(ui.spacing().text_edit_width);
     let draft = id.with("draft");
     let mut text = ui.data_mut(|d| d.get_temp::<String>(draft)).unwrap_or_else(|| current.to_string());
     let r = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(width));
+    if let Some(label) = label {
+        r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, ui.is_enabled(), label));
+    }
     if r.lost_focus() {
         ui.data_mut(|d| d.remove::<String>(draft));
         return (!ui.input(|i| i.key_pressed(egui::Key::Escape))).then_some(text);

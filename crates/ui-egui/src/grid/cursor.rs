@@ -53,7 +53,7 @@ fn drag_cursor(drag: &Drag, rtl: bool) -> Option<CursorIcon> {
         Drag::Select => Some(CursorIcon::Cell),
         Drag::Rows(_) | Drag::Cols(_) | Drag::PointRows(_) | Drag::PointCols(_) => Some(CursorIcon::Default),
         Drag::Fill { .. } => Some(CursorIcon::Crosshair),
-        Drag::Move { .. } | Drag::MoveCols { .. } | Drag::Object { handle: None, .. } => Some(CursorIcon::Move),
+        Drag::Move { .. } | Drag::MoveCols { .. } | Drag::ChartLabel { .. } | Drag::Object { handle: None, .. } => Some(CursorIcon::Move),
         Drag::ResizeCol { .. } => Some(CursorIcon::ResizeColumn),
         Drag::ResizeRow { .. } => Some(CursorIcon::ResizeRow),
         Drag::Freeze { cols, .. } => Some(if *cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical }),
