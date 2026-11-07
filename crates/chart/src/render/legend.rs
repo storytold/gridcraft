@@ -15,9 +15,10 @@ pub enum Swatch {
     Marker,
 }
 
-/// The kind a series is drawn as (per-series kinds only apply to combo charts).
-pub(super) fn plot_kind(chart: &Chart, s: &SeriesData) -> ChartKind {
-    if chart.kind == ChartKind::Combo { if s.kind == ChartKind::Combo { ChartKind::Line } else { s.kind } } else { chart.kind }
+/// The kind series `i` is drawn as (per-series kinds only apply to combo charts); the same rule
+/// as `series_plot_kind`, applied to the already resolved series kind.
+pub(super) fn plot_kind(chart: &Chart, s: &SeriesData, i: usize) -> ChartKind {
+    crate::resolve::plot_kind(chart.kind, Some(s.kind), i)
 }
 
 /// Colour of point `j` for charts that colour by point (pie, doughnut, treemap, sunburst).
@@ -42,6 +43,8 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
         return vec![];
     }
     match chart.kind {
+        // Pie, doughnut (Excel's default `varyColors=1`, so every ring repeats the category colours
+        // and the legend names categories rather than series), treemap and sunburst.
         ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst => {
             let n = first_len(data).min(MAX_CATS);
             (0..n).map(|j| (cat_label(data, j), point_color(data, j), Swatch::Box)).collect()
@@ -58,8 +61,9 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
             let series = data.series.iter().take(MAX_SERIES);
             let mut out: Vec<(String, Rgba, Swatch)> = series
                 .clone()
-                .map(|s| {
-                    let sw = match plot_kind(chart, s) {
+                .enumerate()
+                .map(|(i, s)| {
+                    let sw = match plot_kind(chart, s, i) {
                         ChartKind::Line | ChartKind::LineStacked | ChartKind::Radar | ChartKind::ScatterLines => Swatch::Line,
                         ChartKind::LineMarkers => Swatch::LineMarker,
                         ChartKind::Scatter | ChartKind::Bubble => Swatch::Marker,
@@ -69,7 +73,7 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
                 })
                 .collect();
             // Trendlines follow the series, named "Linear (Sales)" unless given a name.
-            for s in series.filter(|s| supports_trendline(plot_kind(chart, s))) {
+            for (_, s) in series.enumerate().filter(|(i, s)| supports_trendline(plot_kind(chart, s, *i))) {
                 for t in s.trendlines.iter().take(MAX_TRENDLINES) {
                     out.push((t.spec.name.clone().unwrap_or_else(|| auto_name(t.spec.kind, &s.name)), t.color, Swatch::Line));
                 }
