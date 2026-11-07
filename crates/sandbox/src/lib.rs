@@ -113,7 +113,7 @@ pub fn launch_command_with(exe: &Path, policy: &Policy, canary: &Canary, program
 pub fn handle_args(args: &[OsString]) -> Option<i32> {
     let (first, rest) = args.split_first()?;
     if first == OsStr::new(LAUNCH_FLAG) || first == OsStr::new(CONFINED_FLAG) {
-        let Err(e) = if first == OsStr::new(LAUNCH_FLAG) { launch(rest) } else { confined(rest) };
+        let Err(e) = if first == OsStr::new(LAUNCH_FLAG) { launch(rest) } else { confined_again(rest) };
         eprintln!("gridcraft-sandbox: refused: {e}");
         return Some(REFUSED_EXIT_CODE);
     }
@@ -135,15 +135,25 @@ fn launch(args: &[OsString]) -> Result<std::convert::Infallible> {
     // deny-by-default profile the system's libraries hold a socket of their own, which closes at
     // `exec` and which must not be taken for an inherited one.
     close_inherited_descriptors()?;
-    platform::confine(&checked, args)?;
-    confined(args)
+    // What the check tries on a process has to be allowed now, or its refusal then proves nothing.
+    let target = probe::signal_target().map_err(SandboxError::NotEnforced)?;
+    platform::confine(&checked, target, args)?;
+    confined(target, args)
+}
+
+/// The launcher run again under the confinement ([`CONFINED_FLAG`]): the process the first run looked
+/// at comes before its arguments.
+fn confined_again(args: &[OsString]) -> Result<std::convert::Infallible> {
+    let parsed = args.split_first().and_then(|(target, rest)| Some((target.to_str()?.parse().ok()?, rest)));
+    let (target, rest) = parsed.ok_or_else(|| SandboxError::NotEnforced(format!("{CONFINED_FLAG} needs the process the launcher looked at")))?;
+    confined(target, rest)
 }
 
 /// The launcher once it is confined: check that it holds, then become the program.
-fn confined(args: &[OsString]) -> Result<std::convert::Infallible> {
+fn confined(target: u32, args: &[OsString]) -> Result<std::convert::Infallible> {
     let (checked, canary) = policy::Checked::from_args(args)?;
     let exe = std::env::current_exe()?;
-    for check in probe::enforcement(&canary, &exe) {
+    for check in probe::enforcement(&canary, &exe, target) {
         if let Outcome::Allowed(detail) = check.outcome {
             return Err(SandboxError::NotEnforced(format!("{}: {detail}", check.name)));
         }
@@ -173,7 +183,7 @@ mod unsupported {
         Err(SandboxError::Unsupported(WHY.into()))
     }
 
-    pub fn confine(_: &Checked, _: &[OsString]) -> Result<()> {
+    pub fn confine(_: &Checked, _: u32, _: &[OsString]) -> Result<()> {
         Err(SandboxError::Unsupported(WHY.into()))
     }
 
