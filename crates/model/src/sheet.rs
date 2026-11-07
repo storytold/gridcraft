@@ -1,6 +1,6 @@
 //! Worksheets.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -105,6 +105,14 @@ pub struct Sheet {
     /// Anchor → spill range.
     #[serde(skip)]
     pub spill_ranges: BTreeMap<CellRef, RangeRef>,
+    /// Formula/Python nodes `calc` currently shows `#SPILL!` (maintained alongside `spill` and
+    /// `spill_ranges`, from the same write-back). Lets `cells_changed`'s probe for a spill a
+    /// nearby edit might block or unblock skip scanning the edited cell's neighbourhood outright
+    /// when nothing on the sheet is blocked - the common case. A `#SPILL!` typed as a literal
+    /// (not a formula result) is not a graph node and is irrelevant to that probe either way, so
+    /// it is deliberately not tracked here.
+    #[serde(skip)]
+    pub spill_blocked: BTreeSet<CellRef>,
     pub cols: BTreeMap<u32, LineInfo>,
     pub rows: BTreeMap<u32, LineInfo>,
     /// Default column width and row height in pixels at 96 dpi (a file stores row heights in points).
@@ -195,6 +203,7 @@ impl Sheet {
             cell_pictures: BTreeMap::new(),
             spill: BTreeMap::new(),
             spill_ranges: BTreeMap::new(),
+            spill_blocked: BTreeSet::new(),
             cols: BTreeMap::new(),
             rows: BTreeMap::new(),
             default_col_width: DEFAULT_COL_WIDTH,

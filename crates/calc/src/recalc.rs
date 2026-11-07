@@ -215,6 +215,12 @@ impl Calc {
             let python = py.is_some();
             // A Python cell whose result (if any) is not an array spills nothing.
             let spills = py.and_then(|p| p.result_value()).is_some_and(|v| matches!(v, Value::Array(_)));
+            // The cell's content is changing no matter which arm below runs; whatever blocked
+            // state `spill_blocked` had for it is stale either way. If it is (still, or newly)
+            // blocked, write_back re-adds it below, within this same call.
+            if let Some(sh) = wb.sheet_mut(k.0) {
+                sh.spill_blocked.remove(&k.1);
+            }
             match formula.and_then(|f| f.expr()) {
                 Some(e) => {
                     let (areas, dynamic) = precedents(wb, k.0, &e);
@@ -272,9 +278,12 @@ impl Calc {
                         seeds.push((k.0, *anchor));
                     }
                 }
-                for (c, cell) in sh.cells.iter_range(RangeRef::new(CellRef::new(k.1.row.saturating_sub(64), k.1.col.saturating_sub(64)), k.1)) {
-                    if c != k.1 && cell.value == Value::Error(CellError::Spill) {
-                        seeds.push((k.0, c));
+                // Nothing on the sheet is blocked, so no scan can find anything to re-seed.
+                if !sh.spill_blocked.is_empty() {
+                    for (c, cell) in sh.cells.iter_range(RangeRef::new(CellRef::new(k.1.row.saturating_sub(64), k.1.col.saturating_sub(64)), k.1)) {
+                        if c != k.1 && cell.value == Value::Error(CellError::Spill) {
+                            seeds.push((k.0, c));
+                        }
                     }
                 }
                 if !sh.cells.has(k.1) {
@@ -455,6 +464,14 @@ impl Calc {
         let mut freed = Vec::new();
         for (key, value) in results {
             let Some(sheet) = wb.sheet_mut(key.0) else { continue };
+            // Synced from the final value regardless of whether a write happens below: a
+            // recalc that reaffirms an already-cached `#SPILL!` (recalc_all, or a file opened
+            // without one yet) must still mark `key` blocked, not just a value that changes.
+            if matches!(value, Value::Error(CellError::Spill)) {
+                sheet.spill_blocked.insert(key.1);
+            } else {
+                sheet.spill_blocked.remove(&key.1);
+            }
             if let Some(cell) = sheet.cells.get_mut(key.1)
                 && cell.value != value
             {
@@ -489,6 +506,7 @@ impl Calc {
                     if let Some(cell) = sheet.cells.get_mut(key.1) {
                         cell.value = Value::Error(CellError::Spill);
                     }
+                    sheet.spill_blocked.insert(key.1);
                     let mut blocked_dependents = Vec::new();
                     self.graph.dependents_of_range(key.0, range, &mut blocked_dependents);
                     spill_changes.extend(blocked_dependents.into_iter().filter(|dependent| dependent != key));

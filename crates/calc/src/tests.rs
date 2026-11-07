@@ -68,6 +68,40 @@ fn spill_range_operator() {
 }
 
 #[test]
+fn spill_blocked_index_tracks_blocked_formulas_through_block_and_unblock() {
+    // `cells_changed`'s probe for a nearby spill a changed cell might block or unblock skips
+    // scanning the sheet outright when `Sheet::spill_blocked` is empty. This walks the same
+    // block-then-clear sequence `spill_range_operator` already covers, but also inspects
+    // `spill_blocked` directly at each step, so a bug that leaves the index stale - in
+    // particular, forgetting to drop a formula from it once it is no longer `#SPILL!` - is
+    // caught even if some other path (the `emptied` sweep, or `spill_ranges`-overlap re-seeding)
+    // happens to still produce the right displayed value.
+    let mut t = T::new();
+    let blocked = |t: &T| t.wb.sheet(0).unwrap().spill_blocked.contains(&c("B1"));
+
+    t.set("A1", "3");
+    t.set("B1", "=SEQUENCE(A1)");
+    assert_eq!(t.num("B3"), 3.0, "spills unblocked");
+    assert!(!blocked(&t), "a formula that spilled successfully must not be tracked as blocked");
+
+    // B2 sits inside B1#'s spill area: typing into it blocks the spill.
+    t.set("B2", "x");
+    assert_eq!(t.get("B1"), Value::Error(CellError::Spill));
+    assert!(blocked(&t), "a formula showing #SPILL! must be tracked so the probe can find it");
+
+    // A second blocking edit (still occupied, so this is not the `emptied` path) must leave it
+    // tracked rather than accidentally dropping it.
+    t.set("B2", "y");
+    assert_eq!(t.get("B1"), Value::Error(CellError::Spill));
+    assert!(blocked(&t), "still blocked after an unrelated edit to the same obstruction");
+
+    // Clearing the obstruction unblocks the spill.
+    t.set("B2", "");
+    assert_eq!(t.num("B3"), 3.0, "spills again once unblocked");
+    assert!(!blocked(&t), "spill_blocked must not go stale once the formula is no longer #SPILL!");
+}
+
+#[test]
 fn arrays_that_spill_as_before_do_not_requeue_their_dependents() {
     // Two arrays that each read the other's spill area, and a formula reading both spills.
     let mut t = T::new();
