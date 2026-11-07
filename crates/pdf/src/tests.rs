@@ -2,9 +2,11 @@ use super::*;
 use std::error::Error;
 use std::io;
 
+/// Find the first byte sequence in a PDF.
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
+/// Find the last byte sequence in a PDF.
 fn rfind(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).rposition(|w| w == needle)
 }
@@ -349,4 +351,133 @@ fn symbol_font_draws_maths_in_its_own_encoding() {
     assert!(Font::Symbol.can_encode('\u{2211}') && !Font::Symbol.can_encode('x'));
     assert!(Font::TimesRoman.can_encode('x') && !Font::TimesRoman.can_encode('\u{2211}'));
     assert_eq!(text_width(Font::Symbol, 10.0, "\u{2211}"), 7.13);
+}
+
+/// Verify Romanian fallback text embeds outlines and Unicode mappings.
+#[test]
+fn romanian_glyphs_embed_outlines_and_unicode_maps() -> Result<(), Box<dyn Error>> {
+    if super::unicode::font(0).is_none() || super::unicode::font(1).is_none() {
+        eprintln!("Romanian embedding test needs Arial or Liberation Sans installed");
+        return Ok(());
+    }
+    let mut doc = PdfDoc::new();
+    for font in [Font::Helvetica, Font::HelveticaBold] {
+        doc.add_page(300.0, 100.0).text(10.0, 30.0, 12.0, font, [0, 0, 0], "ĂăȘșȚț ÂâÎî");
+        assert!(text_width(font, 10.0, "ă") < 10.0);
+    }
+    let pdf = doc.finish();
+    check_xref(&pdf)?;
+    assert!(find(&pdf, b"/FontFile2 ").is_some());
+    assert!(find(&pdf, b"/Encoding /Identity-H").is_some());
+    assert!(find(&pdf, b"/BaseFont /STSong-Light").is_none());
+    for code in ["0102", "0103", "0218", "0219", "021A", "021B"] {
+        assert!(find(&pdf, format!("> <{code}>").as_bytes()).is_some());
+    }
+    Ok(())
+}
+
+/// Verify an installed workbook face supplies both ASCII and Unicode glyphs.
+#[test]
+fn named_installed_font_embeds_ascii_and_unicode() {
+    let font = Font::named("Calibri", false, false);
+    if !matches!(font, Font::Embedded(_)) {
+        return;
+    }
+    let bold = Font::named("Calibri", true, false);
+    assert!(matches!(bold, Font::Embedded(_)));
+    assert_ne!(font, bold);
+    assert_eq!(font, Font::named("calibri", false, false));
+    assert!(font.can_encode('\u{0103}'));
+    assert_ne!(font.char_width('0'), Font::Helvetica.char_width('0'));
+    let mut doc = PdfDoc::new();
+    let page = doc.add_page(200.0, 100.0);
+    page.text(10.0, 30.0, 12.0, font, [0, 0, 0], "Calibri 0123456789 \u{0102}\u{0103}\u{0218}\u{0219}\u{021A}\u{021B}");
+    let bytes = doc.finish();
+    let pdf = String::from_utf8_lossy(&bytes);
+    assert!(pdf.contains("/BaseFont /Calibri"));
+    assert!(pdf.contains("/FontFile2"));
+    assert!(!pdf.contains("/BaseFont /Helvetica"));
+    assert!(!pdf.contains("STSong-Light"));
+    assert!(pdf.contains("<0219>"));
+}
+
+/// Installed faces use their real bold/italic flags when choosing a missing-glyph fallback.
+#[test]
+fn named_fallback_style_is_independent_of_font_slot() {
+    for (bold, italic, style) in [(false, false, 0), (true, false, 1), (false, true, 2), (true, true, 3)] {
+        let selected = Font::named("Calibri", bold, italic);
+        if !matches!(selected, Font::Embedded(_)) {
+            continue;
+        }
+        assert_eq!(selected.fallback_style(), style);
+        let Some(fallback) = unicode::font(style) else { continue };
+        // Find a character present in the fallback but absent from the selected font.
+        let missing = (0x100..0x3000).filter_map(char::from_u32).find(|&c| !selected.can_encode(c) && fallback.glyph(c).is_some());
+        let Some(c) = missing else { continue };
+        assert_eq!(selected.char_width(c), fallback.glyph(c).unwrap().1);
+        let mut doc = PdfDoc::new();
+        doc.add_page(200.0, 100.0).text(10.0, 30.0, 12.0, selected, [0, 0, 0], &c.to_string());
+        assert!(page_content(&doc).contains(&format!("/F{} 12 Tf", UNICODE_FONT + style + 1)));
+    }
+    for (font, style) in [(Font::Helvetica, 0), (Font::TimesBold, 1), (Font::CourierOblique, 2), (Font::HelveticaBoldOblique, 3)] {
+        assert_eq!(font.fallback_style(), style);
+    }
+}
+
+/// Distinct characters sharing one glyph retain their text, including across pages and beyond BMP.
+#[test]
+fn shared_glyph_preserves_each_character_code() -> Result<(), Box<dyn Error>> {
+    let selected = unicode::test_font(false, false);
+    let mut doc = PdfDoc::new();
+    doc.add_page(200.0, 100.0).text(10.0, 30.0, 12.0, selected, [0, 0, 0], " \u{a0}\u{1f600} ");
+    doc.add_page(200.0, 100.0).text(10.0, 30.0, 12.0, selected, [0, 0, 0], "\u{1f600}\u{a0} ");
+    assert!(doc.pages[0].content.contains("<0001000200030001> Tj"));
+    assert!(doc.pages[1].content.contains("<000300020001> Tj"));
+    let pdf = doc.finish();
+    check_xref(&pdf)?;
+    let s = String::from_utf8_lossy(&pdf);
+    for mapping in ["<0001> <0020>", "<0002> <00A0>", "<0003> <D83DDE00>"] {
+        assert_eq!(s.matches(mapping).count(), 1, "{mapping}");
+    }
+    assert!(s.contains("/CIDToGIDMap "));
+    assert!(!s.contains("/CIDToGIDMap /Identity"));
+    assert!(find(&pdf, b"stream\n\x00\x00\x00\x01\x00\x01\x00\x01\nendstream").is_some());
+    assert!(s.contains("[1 [500] 2 [500] 3 [500] ]"));
+    Ok(())
+}
+
+/// Character codes are bounded per face, reused at capacity, and isolated per document.
+#[test]
+fn character_codes_are_bounded_and_document_local() {
+    let mut doc = PdfDoc::new();
+    let page = doc.add_page(100.0, 100.0);
+    for (i, c) in (0..).filter_map(char::from_u32).take(65535).enumerate() {
+        assert_eq!(page.unicode_code(0, c), Some((i + 1) as u16));
+    }
+    assert_eq!(page.unicode_code(0, '\0'), Some(1));
+    assert_eq!(page.unicode_code(0, '\u{10ffff}'), None);
+    assert_eq!(page.unicode_code(unicode::FONT_LIMIT, 'a'), None);
+    assert_eq!(page.unicode_code(1, 'a'), Some(1));
+    let mut other = PdfDoc::new();
+    assert_eq!(other.add_page(100.0, 100.0).unicode_code(0, '\u{10ffff}'), Some(1));
+}
+
+/// Missing WinAnsi glyphs draw and measure the same styled standard face in mixed runs.
+#[test]
+fn missing_win_ansi_glyphs_keep_style_and_width() -> Result<(), Box<dyn Error>> {
+    for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
+        let selected = unicode::test_font(bold, italic);
+        let fallback = Font::styled(Family::Sans, bold, italic);
+        assert!(!selected.can_encode('A') && !selected.can_encode('\u{e9}'));
+        assert_eq!(selected.char_width('A'), fallback.char_width('A'));
+        assert_eq!(selected.char_width('\u{e9}'), fallback.char_width('\u{e9}'));
+        assert!((text_width(selected, 10.0, "A\u{e9} ") - text_width(fallback, 10.0, "A\u{e9}") - 5.0).abs() < 0.0001);
+        let mut doc = PdfDoc::new();
+        doc.add_page(200.0, 100.0).text(10.0, 30.0, 12.0, selected, [0, 0, 0], " A\u{e9} ");
+        assert!(page_content(&doc).contains(&format!("/F{} 12 Tf\n(A\\351) Tj", fallback.index() + 1)));
+        let pdf = doc.finish();
+        check_xref(&pdf)?;
+        assert!(String::from_utf8_lossy(&pdf).contains(&format!("/BaseFont /{} /Encoding /WinAnsiEncoding", fallback.base_name())));
+    }
+    Ok(())
 }
