@@ -29,6 +29,7 @@ impl FieldIn {
 
 #[derive(Clone, Debug, Default)]
 struct CacheIn {
+    id: u32,
     source: String,
     fields: Vec<FieldIn>,
 }
@@ -39,6 +40,7 @@ pub struct CachesIn {
     by_id: HashMap<u32, String>,
     parsed: HashMap<String, Option<CacheIn>>,
     next_id: u32,
+    next_cache_id: u32,
 }
 
 impl CachesIn {
@@ -53,7 +55,7 @@ impl CachesIn {
                 }
             }
         }
-        CachesIn { by_id, parsed: HashMap::new(), next_id: 1 }
+        CachesIn { by_id, parsed: HashMap::new(), next_id: 1, next_cache_id: 1 }
     }
 }
 
@@ -136,7 +138,7 @@ fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn>
         cx.warn("a PivotTable's cache has no fields; kept as plain cells");
         return None;
     }
-    Some(CacheIn { source, fields })
+    Some(CacheIn { id: 0, source, fields })
 }
 
 /// Reads the PivotTables related to a worksheet part.
@@ -163,7 +165,12 @@ pub fn read_pivots(cx: &mut Ctx<'_>, caches: &mut CachesIn, sheet_part: &str, sh
         let cache = match caches.parsed.get(&cache_part) {
             Some(c) => c.clone(),
             None => {
-                let c = read_cache(cx, &cache_part, sheet_name);
+                let c = read_cache(cx, &cache_part, sheet_name).map(|mut c| {
+                    let cid = caches.next_cache_id;
+                    caches.next_cache_id = caches.next_cache_id.saturating_add(1);
+                    c.id = cid;
+                    c
+                });
                 caches.parsed.insert(cache_part.clone(), c.clone());
                 c
             }
@@ -210,7 +217,7 @@ fn field_ref(cx: &mut Ctx<'_>, cache: &CacheIn, i: usize) -> Option<(String, Piv
 }
 
 fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<PivotTable> {
-    let mut pt = PivotTable { id, ..PivotTable::default() };
+    let mut pt = PivotTable { id, cache_id: gridcraft_model::PivotCacheId(Some(cache.id)), ..PivotTable::default() };
     if let Some(n) = x.attr("name").filter(|n| !n.trim().is_empty()) {
         pt.name = n.to_string();
     } else {

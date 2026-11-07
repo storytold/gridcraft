@@ -90,6 +90,9 @@ impl CField {
 
 #[derive(Clone)]
 struct Cache {
+    cache_id: Option<u32>,
+    source_sheet: usize,
+    source_range: RangeRef,
     fields: Vec<CField>,
     /// Pivot field → cache field, by the pivot field's position in rows, then columns.
     axis_map: Vec<Option<usize>>,
@@ -98,7 +101,10 @@ struct Cache {
 }
 
 fn cache_compatible(a: &Cache, b: &Cache) -> bool {
-    a.source_xml == b.source_xml
+    a.cache_id == b.cache_id
+        && a.source_sheet == b.source_sheet
+        && a.source_range == b.source_range
+        && a.source_xml == b.source_xml
         && a.fields.len() == b.fields.len()
         && a.fields.iter().zip(&b.fields).all(|(x, y)| {
             x.name == y.name
@@ -503,7 +509,7 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
             formula: Some(f.to_string()),
         });
     }
-    Some(Cache { fields, axis_map, source_xml, records })
+    Some(Cache { cache_id: pt.cache_id.0, source_sheet: si, source_range: r, fields, axis_map, source_xml, records })
 }
 
 fn group_items(sys: DateSystem, by: PivotDateGroup, start: f64, end: f64) -> Vec<String> {
