@@ -300,9 +300,33 @@ impl DocState {
     /// A workbook as its file saved it: the dependency graph is built but nothing is
     /// evaluated, so every value is the one the file holds until an edit reaches it. `trust`
     /// is as for [`DocState::new`].
-    pub fn from_saved(wb: Workbook, path: Option<String>, title: String, trust: Trust) -> DocState {
+    pub fn from_saved(mut wb: Workbook, path: Option<String>, title: String, trust: Trust) -> DocState {
         let mut calc = Calc::new();
         calc.rebuild(&wb);
+        // Some Google Sheets exports carry refreshOnLoad pivots with an empty location. The XLSX
+        // reader marks those reports with no last range; populate them before the document is shown.
+        let mut refreshed = false;
+        for si in 0..wb.sheets.len() {
+            let count = wb.sheet(si).map(|s| s.pivots.len()).unwrap_or(0);
+            for idx in 0..count {
+                let needs_refresh = wb
+                    .sheet(si)
+                    .and_then(|s| {
+                        let pt = s.pivots.get(idx)?;
+                        Some(match pt.last_range {
+                            None => true,
+                            Some(r) => !s.cells.iter_range(r).any(|(_, c)| c.has_content()),
+                        })
+                    })
+                    .unwrap_or(false);
+                if needs_refresh && crate::pivot::refresh(&mut wb, si, idx, false).is_ok() {
+                    refreshed = true;
+                }
+            }
+        }
+        if refreshed {
+            calc.recalc_all(&mut wb);
+        }
         Self::with_calc(wb, calc, path, title, trust)
     }
     fn with_calc(mut wb: Workbook, calc: Calc, path: Option<String>, title: String, trust: Trust) -> DocState {

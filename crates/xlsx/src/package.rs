@@ -139,10 +139,10 @@ impl<'a> Package<'a> {
         Ok(root
             .kids("Relationship")
             .filter_map(|r| {
-                let id = r.attr("Id")?.to_string();
+                let id = r.attr("Id").filter(|s| !s.is_empty())?.to_string();
                 let ty = r.attr("Type").unwrap_or("");
                 let kind = ty.rsplit('/').next().unwrap_or("").to_string();
-                let target_raw = r.attr("Target")?;
+                let target_raw = r.attr("Target").filter(|s| !s.is_empty())?;
                 let external = r.attr("TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External"));
                 let target = if external { target_raw.to_string() } else { resolve(dir, target_raw) };
                 Some(Rel { id, kind, target, external })

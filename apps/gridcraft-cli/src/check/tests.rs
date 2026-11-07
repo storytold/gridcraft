@@ -97,6 +97,18 @@ fn errors_compare_by_kind() {
     assert!(values_match(&Value::Error(CellError::NA), &Value::Error(CellError::NA), 0.0));
     assert!(!values_match(&Value::Error(CellError::NA), &Value::Error(CellError::Value), 0.0));
 }
+#[test]
+fn cached_error_text_literals_match_evaluated_errors() {
+    let wb = book(&[
+        ("A1", "=1/0", Value::text("#DIV/0!")),
+        ("A2", "=NA()", Value::text(" #N/A ")),
+        ("A3", "=1+\"x\"", Value::text("#VALUE!")),
+        ("A4", "=1/0", Value::text("#N/A")),
+    ]);
+    let r = check(&wb, &Options::default());
+    assert_eq!((r.calc.checked, r.calc.matched, r.calc.mismatched), (4, 3, 1));
+    assert!(!values_match(&Value::text("#DIV/0!"), &Value::Error(CellError::Div0), 0.0));
+}
 
 #[test]
 fn numbers_compare_within_tolerance() {
