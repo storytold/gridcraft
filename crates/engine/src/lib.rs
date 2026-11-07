@@ -11,6 +11,7 @@ pub mod cf;
 mod chart_svg;
 mod clip_html;
 pub mod cmd;
+mod daxstate;
 pub mod display;
 pub mod fill;
 pub mod io;
@@ -102,20 +103,34 @@ struct OpenGroup {
     label: String,
     /// Undo depth when the group began; the group's own steps are cut back to it.
     start: usize,
-    wb: Arc<Workbook>,
-    selection: Selection,
-    /// The data-model state when the group began. `dataModel.*` edits change the model, its
-    /// metadata and the Data View without an undo step, so a rollback must put them back itself;
-    /// otherwise a failed group would leave the model changed while the workbook reverted.
-    dax_model: Option<gridcraft_dax::DataModel>,
-    dax_metadata: gridcraft_dax::model::ModelMetadata,
-    dax_view: cmd::dax::ModelView,
-    /// The redo stack when the group began (a rollback puts it back).
-    redo: Vec<HistoryEntry>,
+    /// The document's state when the group began, `None` once its document has closed: a group
+    /// opened by [`Session::grouped`] outlives the close, so that the call can still take back its
+    /// data-model edits, but it keeps no workbook alive then.
+    doc_state: Option<GroupDocState>,
+    /// The `dataModel.*` edits the group made, oldest first. They are session state with no undo
+    /// step of their own, so a rollback takes them back from these changes; keeping them per edit
+    /// rather than as one snapshot of the state leaves the edits of another document's group
+    /// alone (see [`daxstate`]).
+    dax: Vec<daxstate::Change>,
+    /// Whether the group stays when its document closes, for the call that opened it to end.
+    keep_on_close: bool,
     /// Where the recording was when the group began (`None` when nothing was recording): a
     /// rollback takes back the steps recorded since, as it takes back their edits.
     recorded: Option<(u64, u64)>,
 }
+
+/// The part of a group's undo that belongs to its document: what a rollback puts back there.
+#[derive(Clone, Debug)]
+struct GroupDocState {
+    wb: Arc<Workbook>,
+    selection: Selection,
+    /// The redo stack when the group began (a rollback puts it back).
+    redo: Vec<HistoryEntry>,
+}
+
+/// A group open on a document before a command ran: its id, its label, and the document state it
+/// would put back (`None` once the document has closed).
+type GroupShot = (u64, String, Option<(Arc<Workbook>, Selection)>);
 
 /// Where the last [`Session::group_end`] or [`Session::group_rollback`] left its document: the
 /// workbook and selection it ended at, the undo length then, and whether it made a step. A
@@ -526,6 +541,8 @@ pub struct Session {
     /// Open undo groups, innermost last.
     groups: Vec<OpenGroup>,
     next_group: u64,
+    /// Counts data-model edits, so a rollback takes the newest back first (see [`daxstate`]).
+    dax_seq: u64,
     /// Counts group begins and ends, so `execute` can tell that a command opened or closed one.
     group_epoch: u64,
     /// Where the last group ended, so `execute` can tell a command's own changes from its group's.
@@ -610,7 +627,16 @@ impl Session {
     pub fn close_document(&mut self, i: usize) {
         if i < self.docs.len() {
             let d = self.docs.remove(i);
-            self.groups.retain(|g| g.doc != d.uid);
+            // A closed document ends its undo groups: nothing is left to put back. The exception is
+            // a `grouped` call's own group (and the groups opened inside it, from `keep_on_close`
+            // on), which stay without the closed workbook until the call ends or rolls them back,
+            // because the call still has to take back the data-model edits they made before
+            // closing the document.
+            let running = self.groups.iter().filter(|g| g.doc == d.uid && g.keep_on_close).map(|g| g.id).min();
+            for g in self.groups.iter_mut().filter(|g| g.doc == d.uid) {
+                g.doc_state = None;
+            }
+            self.groups.retain(|g| g.doc != d.uid || running.is_some_and(|first| g.id >= first));
             // A macro being debugged in this workbook ends with it; its group just went.
             if self.macro_debug.as_ref().is_some_and(|m| m.doc == d.uid) {
                 self.macro_debug = None;
@@ -723,10 +749,13 @@ impl Session {
             self.docs.iter().find(|d| d.uid == *uid).map(|d| (d.undo.clone(), d.redo.clone()))
         });
         // The groups open on the document before the command (usually none), for the same reason.
-        let groups_before: Vec<(u64, String, Arc<Workbook>, Selection)> = match &before {
-            Some((uid, ..)) => {
-                self.groups.iter().filter(|g| g.doc == *uid).map(|g| (g.id, g.label.clone(), g.wb.clone(), g.selection.clone())).collect()
-            }
+        let groups_before: Vec<GroupShot> = match &before {
+            Some((uid, ..)) => self
+                .groups
+                .iter()
+                .filter(|g| g.doc == *uid)
+                .map(|g| (g.id, g.label.clone(), g.doc_state.as_ref().map(|state| (state.wb.clone(), state.selection.clone()))))
+                .collect(),
             None => Vec::new(),
         };
         // The recorder keeps top-level calls with the place they ran in.
@@ -769,7 +798,7 @@ impl Session {
                     // ended (its token went with the command), and keeps a step from its start to
                     // the restored workbook, so Undo still returns to the state before the group.
                     if !group_open
-                        && let Some((_, label, wb, selection)) = groups_before.into_iter().min_by_key(|g| g.0)
+                        && let Some((_, label, Some((wb, selection)))) = groups_before.into_iter().min_by_key(|g| g.0)
                         && !Arc::ptr_eq(&wb, &d.wb)
                     {
                         push_entry(&mut d.undo, label, wb, &d.wb, selection);
@@ -855,8 +884,10 @@ impl Session {
                     && let Some(g) = self.groups.iter_mut().filter(|g| g.doc == uid && g.id >= first_group).min_by_key(|g| g.id)
                 {
                     g.start = len;
-                    g.wb = wb;
-                    g.selection = sel;
+                    if let Some(state) = g.doc_state.as_mut() {
+                        state.wb = wb;
+                        state.selection = sel;
+                    }
                 }
             } else if epoch_changed && was_open {
                 // The group it ended made its step; changes after the end, whether direct or by
@@ -903,19 +934,59 @@ impl Session {
         result
     }
 
+    /// Replaces the data model (the last step of a `dataModel.*` edit), recording the change on
+    /// the undo group open on the active document. Those edits make no undo step of their own, so
+    /// a rollback takes them back from what is recorded here (see [`daxstate`]).
+    pub fn set_dax_model(&mut self, model: Option<gridcraft_dax::DataModel>) {
+        let before = std::mem::replace(&mut self.dax_model, model);
+        let changes = daxstate::model_changes(&before, self.dax_model.as_ref());
+        self.record_dax(changes);
+    }
+
+    /// Replaces the model metadata, recording the change as [`Session::set_dax_model`] does.
+    pub fn set_dax_metadata(&mut self, metadata: gridcraft_dax::model::ModelMetadata) {
+        let before = std::mem::replace(&mut self.dax_metadata, metadata);
+        let changes = daxstate::metadata_changes(&before, &self.dax_metadata);
+        self.record_dax(changes);
+    }
+
+    /// Changes the Power Pivot window's view state, recording the change as
+    /// [`Session::set_dax_model`] does.
+    pub fn edit_dax_view(&mut self, f: impl FnOnce(&mut cmd::dax::ModelView)) {
+        let mut view = std::mem::take(&mut self.dax_view);
+        f(&mut view);
+        let before = std::mem::replace(&mut self.dax_view, view);
+        let changes = daxstate::view_changes(&before, &self.dax_view);
+        self.record_dax(changes);
+    }
+
+    /// Hands data-model changes to the innermost undo group open on the active document, where the
+    /// command that made them is running. With no group open they are nobody's to take back.
+    fn record_dax(&mut self, mut changes: Vec<daxstate::Change>) {
+        if changes.is_empty() {
+            return;
+        }
+        let Some(doc) = self.active().map(|d| d.uid) else { return };
+        let Some(g) = self.groups.iter_mut().rev().find(|g| g.doc == doc) else { return };
+        for change in &mut changes {
+            change.seq = self.dax_seq;
+            self.dax_seq = self.dax_seq.saturating_add(1);
+        }
+        g.dax.extend(changes);
+    }
+
     /// Runs `f` as one undo step labelled `label` on the active document: whatever commands `f`
     /// runs, one Undo brings back the workbook as it was before. If `f` fails, every change it made
     /// is rolled back and its error is returned. Groups nest; the outermost one makes the step.
     pub fn grouped<R>(&mut self, label: &str, f: impl FnOnce(&mut Session) -> Result<R>) -> Result<R> {
-        let token = self.group_begin(label)?;
+        let token = self.begin_group(label, true)?;
         let doc = token.doc();
         // A panic in `f` rolls the group back before it goes on, so a caller that catches it
         // (outside `execute`, which drops a command's groups itself) finds no group left open.
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self))) {
             Ok(Ok(r)) => match self.group_end(token) {
                 Ok(_) => Ok(r),
-                // `f` closed the group's document (`file.close`, or `file.open` taking the place of
-                // an untouched new workbook), and the group went with it: nothing is left to undo.
+                // `f` ended the group itself (and perhaps closed its document): nothing is left.
                 Err(_) if !self.docs.iter().any(|d| d.uid == doc) => Ok(r),
                 Err(e) => Err(e),
             },
@@ -937,18 +1008,22 @@ impl Session {
     /// [`Session::group_rollback`], undoable commands on that document add no undo steps of their
     /// own, and Undo and Redo are unavailable there.
     pub fn group_begin(&mut self, label: &str) -> Result<GroupToken> {
+        // Its document's close ends it, as nothing of the workbook is left to put back.
+        self.begin_group(label, false)
+    }
+
+    /// [`Session::group_begin`], with `keep_on_close`: a group whose document closes stays open
+    /// when the call that opened it is still running (see [`Session::close_document`]).
+    fn begin_group(&mut self, label: &str, keep_on_close: bool) -> Result<GroupToken> {
         let d = self.doc()?;
         let g = OpenGroup {
             id: self.next_group,
             doc: d.uid,
             label: label.trim_end_matches('…').to_string(),
             start: d.undo.len(),
-            wb: d.wb.clone(),
-            selection: d.selection.clone(),
-            dax_model: self.dax_model.clone(),
-            dax_metadata: self.dax_metadata.clone(),
-            dax_view: self.dax_view.clone(),
-            redo: d.redo.clone(),
+            doc_state: Some(GroupDocState { wb: d.wb.clone(), selection: d.selection.clone(), redo: d.redo.clone() }),
+            dax: Vec::new(),
+            keep_on_close,
             recorded: self.recorder.as_ref().map(record::Recorder::mark),
         };
         let token = GroupToken { id: g.id, doc: g.doc };
@@ -964,12 +1039,14 @@ impl Session {
     pub fn group_end(&mut self, token: GroupToken) -> Result<bool> {
         let g = self.take_group(&token)?;
         let outer = self.in_group(g.doc);
-        let Some(d) = self.docs.iter_mut().find(|d| d.uid == g.doc) else { return Ok(false) };
+        // The document closed while the group was open: its edits (and its data-model changes)
+        // stand, and there is no workbook left to make a step in.
+        let (Some(doc_state), Some(d)) = (g.doc_state, self.docs.iter_mut().find(|d| d.uid == g.doc)) else { return Ok(false) };
         // Steps pushed directly while the group was open fold into the group's step.
         d.undo.truncate(g.start);
-        let changed = !Arc::ptr_eq(&d.wb, &g.wb);
+        let changed = !Arc::ptr_eq(&d.wb, &doc_state.wb);
         if changed && !outer {
-            push_entry(&mut d.undo, g.label, g.wb, &d.wb, g.selection);
+            push_entry(&mut d.undo, g.label, doc_state.wb, &d.wb, doc_state.selection);
             d.redo.clear();
             d.revision += 1;
         }
@@ -1038,20 +1115,25 @@ impl Session {
     pub fn group_rollback(&mut self, token: GroupToken) -> Result<()> {
         let g = self.take_group(&token)?;
         // `dataModel.*` edits change the model, its metadata and the Data View without an undo
-        // step, so the group puts back what it captured; otherwise a failed group would revert the
+        // step, so the group takes its own edits back; otherwise a failed group would revert the
         // workbook and leave the model changed. They are session state, not the document's, so
-        // they come back even when the group's document closed.
-        self.dax_model = g.dax_model;
-        self.dax_metadata = g.dax_metadata;
-        self.dax_view = g.dax_view;
+        // they come back even when the group's document closed. Each change reverts only the
+        // entity the group's edit left as it was, so an edit another document's open group made
+        // in the meantime stays.
+        let mut changes: Vec<&daxstate::Change> = g.dax.iter().collect();
+        changes.sort_unstable_by_key(|change| std::cmp::Reverse(change.seq));
+        for change in changes {
+            daxstate::revert(change, &mut self.dax_model, &mut self.dax_metadata, &mut self.dax_view);
+        }
+        let Some(doc_state) = g.doc_state else { return Ok(()) };
         let Some(d) = self.docs.iter_mut().find(|d| d.uid == g.doc) else { return Ok(()) };
-        if !Arc::ptr_eq(&d.wb, &g.wb) {
-            d.wb = g.wb;
+        if !Arc::ptr_eq(&d.wb, &doc_state.wb) {
+            d.wb = doc_state.wb;
             d.calc.rebuild(&d.wb);
         }
-        d.selection = g.selection;
+        d.selection = doc_state.selection;
         d.undo.truncate(g.start);
-        d.redo = g.redo;
+        d.redo = doc_state.redo;
         d.revision += 1;
         // The steps recorded while the group was open go with their edits (all of them when the
         // recording started inside the group).
@@ -1109,13 +1191,21 @@ impl Session {
         self.groups.iter().any(|g| g.doc == doc)
     }
 
-    /// Removes the token's group and any group on the same document opened after it.
+    /// Removes the token's group and any group on the same document opened after it. Those groups
+    /// end with it, so their data-model changes join its list: a rollback takes them back too, and
+    /// the stamps (`seq`) keep the order they were made in.
     fn take_group(&mut self, token: &GroupToken) -> Result<OpenGroup> {
         let ended = || EngineError::Other("That undo group has already ended.".into());
         let at = self.groups.iter().position(|g| g.id == token.id).ok_or_else(ended)?;
         let mut later = self.groups.split_off(at).into_iter();
-        let g = later.next().ok_or_else(ended)?;
-        self.groups.extend(later.filter(|o| o.doc != g.doc));
+        let mut g = later.next().ok_or_else(ended)?;
+        for mut other in later {
+            if other.doc == g.doc {
+                g.dax.append(&mut other.dax);
+            } else {
+                self.groups.push(other);
+            }
+        }
         self.group_epoch = self.group_epoch.wrapping_add(1);
         Ok(g)
     }

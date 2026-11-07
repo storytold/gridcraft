@@ -4,7 +4,9 @@
 //! The editing commands mutate `Session::dax_model` / `Session::dax_view` / `Session::dax_metadata`
 //! — application state, not the workbook — so they record no undo step; each one revalidates the
 //! whole model through [`DataModel::parse_formulas`] before it is stored, so a failed edit leaves
-//! the model untouched.
+//! the model untouched. They store the new state through `Session::set_dax_model`,
+//! `Session::set_dax_metadata` and `Session::edit_dax_view`, which hand the change to the undo
+//! group open on the document, so a rollback takes them back (see `crate::daxstate`).
 //!
 //! `dataModel.sortTable`, `dataModel.setFilter` and their siblings change the window's *view*
 //! state, never the model: they are not model data, are not saved and are reset by
@@ -739,10 +741,10 @@ fn load(s: &mut Session, p: &Json) -> Result<Json> {
     // The same document carries the model metadata the binder does not use. A document written
     // before those keys existed yields defaults, so it loads exactly as it did.
     let metadata = ModelMetadata::from_model_json(&text).map_err(|error| EngineError::Other(error.to_string()))?;
-    s.dax_model = Some(model);
+    s.set_dax_model(Some(model));
     // A new model starts with a fresh window: old sorts and filters name tables that may be gone.
-    s.dax_view = ModelView::default();
-    s.dax_metadata = metadata;
+    s.edit_dax_view(|view| *view = ModelView::default());
+    s.set_dax_metadata(metadata);
     status(s, &Json::Null)
 }
 
@@ -837,7 +839,7 @@ fn commit(s: &mut Session, cmd: &str, model: DataModel) -> Result<Json> {
 /// status after both are in place.
 fn store_model(s: &mut Session, cmd: &str, mut model: DataModel) -> Result<()> {
     model.parse_formulas().map_err(|error| bad(cmd, error.to_string()))?;
-    s.dax_model = Some(model);
+    s.set_dax_model(Some(model));
     Ok(())
 }
 
@@ -1241,7 +1243,9 @@ fn sort_table(s: &mut Session, p: &Json) -> Result<Json> {
         let column = known_column(model, CMD, &table, column_name)?;
         (table, column)
     };
-    s.dax_view.tables.entry(table.to_ascii_lowercase()).or_default().sort = Some(TableSort { column, by_table: None, by_column: None, descending });
+    s.edit_dax_view(|view| {
+        view.tables.entry(table.to_ascii_lowercase()).or_default().sort = Some(TableSort { column, by_table: None, by_column: None, descending });
+    });
     Ok(view_state_json(&s.dax_view, &table))
 }
 
@@ -1251,9 +1255,11 @@ fn clear_sort(s: &mut Session, p: &Json) -> Result<Json> {
         let model = s.dax_model.as_ref().ok_or_else(|| bad(CMD, "no data model loaded"))?;
         known_table(model, CMD, required_str(p, CMD, "table")?)?
     };
-    if let Some(state) = s.dax_view.tables.get_mut(&table.to_ascii_lowercase()) {
-        state.sort = None;
-    }
+    s.edit_dax_view(|view| {
+        if let Some(state) = view.tables.get_mut(&table.to_ascii_lowercase()) {
+            state.sort = None;
+        }
+    });
     Ok(view_state_json(&s.dax_view, &table))
 }
 
@@ -1268,11 +1274,13 @@ fn set_filter(s: &mut Session, p: &Json) -> Result<Json> {
         let column = known_column(model, CMD, &table, column_name)?;
         (table, column)
     };
-    let state = s.dax_view.tables.entry(table.to_ascii_lowercase()).or_default();
-    state.filters.retain(|filter| !filter.column.eq_ignore_ascii_case(&column));
-    if !values.is_empty() {
-        state.filters.push(ColumnFilter { column, values });
-    }
+    s.edit_dax_view(|view| {
+        let state = view.tables.entry(table.to_ascii_lowercase()).or_default();
+        state.filters.retain(|filter| !filter.column.eq_ignore_ascii_case(&column));
+        if !values.is_empty() {
+            state.filters.push(ColumnFilter { column, values });
+        }
+    });
     Ok(view_state_json(&s.dax_view, &table))
 }
 
@@ -1282,9 +1290,11 @@ fn clear_filters(s: &mut Session, p: &Json) -> Result<Json> {
         let model = s.dax_model.as_ref().ok_or_else(|| bad(CMD, "no data model loaded"))?;
         known_table(model, CMD, required_str(p, CMD, "table")?)?
     };
-    if let Some(state) = s.dax_view.tables.get_mut(&table.to_ascii_lowercase()) {
-        state.filters.clear();
-    }
+    s.edit_dax_view(|view| {
+        if let Some(state) = view.tables.get_mut(&table.to_ascii_lowercase()) {
+            state.filters.clear();
+        }
+    });
     Ok(view_state_json(&s.dax_view, &table))
 }
 
@@ -1343,8 +1353,10 @@ fn sort_by_column(s: &mut Session, p: &Json) -> Result<Json> {
             model.tables[table_index].columns.get(chosen.0).map(|column| column.name.clone()).ok_or_else(|| bad(CMD, "no key column"))?;
         (table, by_table, by_column, key_column)
     };
-    s.dax_view.tables.entry(table.to_ascii_lowercase()).or_default().sort =
-        Some(TableSort { column: key_column, by_table: Some(by_table), by_column: Some(by_column), descending });
+    s.edit_dax_view(|view| {
+        view.tables.entry(table.to_ascii_lowercase()).or_default().sort =
+            Some(TableSort { column: key_column, by_table: Some(by_table), by_column: Some(by_column), descending });
+    });
     Ok(view_state_json(&s.dax_view, &table))
 }
 
@@ -1369,14 +1381,14 @@ fn relationship_candidates(model: &DataModel, table: usize, by_table: usize) -> 
 fn set_show_hidden(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "dataModel.setShowHidden";
     let show = p.get("show").and_then(Json::as_bool).ok_or_else(|| bad(CMD, "`show` is required (true or false)"))?;
-    s.dax_view.show_hidden = show;
+    s.edit_dax_view(|view| view.show_hidden = show);
     status(s, &Json::Null)
 }
 
 fn set_show_implicit_measures(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "dataModel.setShowImplicitMeasures";
     let show = p.get("show").and_then(Json::as_bool).ok_or_else(|| bad(CMD, "`show` is required (true or false)"))?;
-    s.dax_view.show_implicit_measures = show;
+    s.edit_dax_view(|view| view.show_implicit_measures = show);
     status(s, &Json::Null)
 }
 
@@ -1434,7 +1446,7 @@ fn set_column_hidden(s: &mut Session, p: &Json) -> Result<Json> {
     let mut metadata = s.dax_metadata.clone();
     let entry = metadata.column_mut(&table, &column).ok_or_else(|| bad(CMD, format!("no metadata for `{table}[{column}]`")))?;
     entry.hidden = hidden;
-    s.dax_metadata = metadata;
+    s.set_dax_metadata(metadata);
     status(s, &Json::Null)
 }
 
@@ -1491,7 +1503,7 @@ fn set_summarize_by(s: &mut Session, p: &Json) -> Result<Json> {
     let mut metadata = s.dax_metadata.clone();
     let entry = metadata.column_mut(&table, &column).ok_or_else(|| bad(CMD, format!("no metadata for `{table}[{column}]`")))?;
     entry.summarize_by = summarize;
-    s.dax_metadata = metadata;
+    s.set_dax_metadata(metadata);
     status(s, &Json::Null)
 }
 
@@ -1555,7 +1567,7 @@ fn mark_date_table(s: &mut Session, p: &Json) -> Result<Json> {
     let entry = metadata.table_mut(&table).ok_or_else(|| bad(CMD, format!("no metadata for table `{table}`")))?;
     entry.date_column = Some(column);
     store_model(s, CMD, model)?;
-    s.dax_metadata = metadata;
+    s.set_dax_metadata(metadata);
     status(s, &Json::Null)
 }
 
@@ -1571,7 +1583,7 @@ fn unmark_date_table(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad(CMD, format!("`{table}` is not marked as a date table")));
     }
     entry.date_column = None;
-    s.dax_metadata = metadata;
+    s.set_dax_metadata(metadata);
     status(s, &Json::Null)
 }
 
@@ -1744,6 +1756,86 @@ mod tests {
 
     fn measure<'a>(status: &'a Json, name: &str) -> &'a Json {
         status["measures"].as_array().expect("measures").iter().find(|m| m["name"] == name).expect("measure")
+    }
+
+    #[test]
+    fn a_group_that_closes_its_document_and_fails_still_rolls_the_model_back() {
+        // Closing the document takes the workbook away, but not the group: the call that opened it
+        // is still running and has to take back the data-model edits it made before the close, or
+        // a failed group leaves the model changed with nothing left to undo (CodeRabbit, #3412).
+        let (path, dir) = fixture("group-close-fails");
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("dataModel.load", json!({"path": path.to_string_lossy()})).expect("load");
+        let uid = s.documents()[0].uid;
+        let model_before = s.dax_model.clone();
+        let metadata_before = s.dax_metadata.clone();
+        let view_before = s.dax_view.clone();
+
+        let failed: Result<()> = s.grouped("Doomed", |s| {
+            s.execute("dataModel.addMeasure", json!({"name": "Double Sales", "formula": "1", "table": "Sales"}))?;
+            s.execute("dataModel.setColumnHidden", json!({"table": "Sales", "column": "Region"}))?;
+            s.execute("dataModel.sortTable", json!({"table": "Sales", "column": "Amount"}))?;
+            s.execute("file.close", json!({"force": true, "document": true}))?;
+            Err(EngineError::Other("the step after the close failed".into()))
+        });
+        assert!(failed.is_err(), "the closure's error is the one reported");
+        assert!(s.documents().is_empty(), "the document closed");
+        assert!(!s.in_group(uid), "the group ended with its rollback");
+        assert_eq!(s.dax_model, model_before, "the model is back as it was");
+        assert_eq!(s.dax_metadata, metadata_before, "the metadata is back as it was");
+        assert_eq!(s.dax_view, view_before, "the Data View is back as it was");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_group_that_closes_its_document_keeps_the_model_edits() {
+        // The other half of the same rule: a group that succeeds leaves its data-model edits
+        // alone, closed document or not, and is gone.
+        let (path, dir) = fixture("group-close-succeeds");
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("dataModel.load", json!({"path": path.to_string_lossy()})).expect("load");
+        let uid = s.documents()[0].uid;
+
+        let added = s.grouped("Closing", |s| {
+            s.execute("dataModel.addMeasure", json!({"name": "Double Sales", "formula": "1", "table": "Sales"}))?;
+            s.execute("file.close", json!({"force": true, "document": true}))?;
+            Ok("done")
+        });
+        assert_eq!(added.expect("group ends"), "done");
+        assert!(s.documents().is_empty(), "the document closed");
+        assert!(!s.in_group(uid), "the group ended at the close");
+        assert!(s.dax_model.as_ref().is_some_and(|model| model.measure_index("Double Sales").is_some()), "the measure stays");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn rolling_back_one_documents_group_keeps_another_documents_edit() {
+        // The model is session state: rolling back the group open on one document must take back
+        // that group's edits only, not the ones a group open on another document made since
+        // (CodeRabbit, #3412).
+        let (path, dir) = fixture("two-groups");
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("dataModel.load", json!({"path": path.to_string_lossy()})).expect("load");
+        let model_before = s.dax_model.clone();
+
+        let first = s.group_begin("First").expect("group on the first document");
+        s.execute("dataModel.addMeasure", json!({"name": "Sales A", "formula": "1", "table": "Sales"})).expect("edit on A");
+        s.new_workbook();
+        let second = s.group_begin("Second").expect("group on the second document");
+        s.execute("dataModel.addMeasure", json!({"name": "Sales B", "formula": "2", "table": "Sales"})).expect("edit on B");
+
+        s.group_rollback(first).expect("roll back A");
+        assert!(s.group_is_open(&second), "the other document's group is still open");
+        let measures = s.dax_model.as_ref().expect("model").measures.clone();
+        assert!(measures.iter().any(|measure| measure.name == "Sales B"), "B's edit survives A's rollback: {measures:?}");
+        assert!(!measures.iter().any(|measure| measure.name == "Sales A"), "A's own edit went");
+
+        s.group_rollback(second).expect("roll back B");
+        assert_eq!(s.dax_model, model_before, "both groups' edits are gone");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[allow(clippy::cognitive_complexity)] // Add, update and delete of a measure, each with its error cases.
