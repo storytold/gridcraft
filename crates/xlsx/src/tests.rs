@@ -6,6 +6,7 @@ mod chart_book_names;
 mod chart_bool_default;
 mod chart_combo_kinds;
 mod chart_data_table;
+mod chart_line_percent_stacked;
 mod chart_ref_offsets;
 mod controls_tests;
 mod csv_tests;
@@ -76,3 +77,4 @@ pub fn minimal(sheet_body: &str, extra_parts: &[(&str, &str)], wb_extra_rels: &s
     }
     make_zip(&parts)
 }
+mod stock_close_marker;

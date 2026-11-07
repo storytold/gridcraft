@@ -412,6 +412,8 @@ pub enum ChartKind {
     Line,
     LineMarkers,
     LineStacked,
+    LineStacked100,
+    LineStacked100Markers,
     Pie,
     Doughnut,
     Area,
@@ -546,6 +548,116 @@ fn default_hole_size() -> u8 {
     50
 }
 
+/// User overrides for a chart axis.
+///
+/// `minimum`, `maximum`, and `major_unit` are optional numeric-axis overrides; invalid or
+/// incompatible values are ignored by the renderer. Logarithmic axes require positive bounds.
+/// `major_tick` and `minor_tick` accept the DrawingML values `in`, `out`, and `cross`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChartAxis {
+    pub minimum: Option<f64>,
+    pub maximum: Option<f64>,
+    pub major_unit: Option<f64>,
+    pub logarithmic: bool,
+    pub reversed: bool,
+    pub number_format: Option<String>,
+    pub major_tick: Option<String>,
+    pub minor_tick: Option<String>,
+    pub minor_unit: Option<f64>,
+    pub line: ChartStroke,
+    pub tick_line: ChartStroke,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChartStroke {
+    /// Explicit RGBA color; `None` keeps the renderer's automatic color.
+    pub color: Option<[u8; 4]>,
+    /// Width in chart points; `None` keeps the automatic width and zero suppresses the stroke.
+    pub width: Option<f32>,
+}
+
+/// Text overrides for one chart role, such as `title`, `x_axis`, or `legend`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChartTextFormat {
+    pub name: Option<String>,
+    pub size: Option<f32>,
+    pub color: Option<[u8; 4]>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChartSurface {
+    pub fill: Option<[u8; 4]>,
+    pub border: Option<[u8; 4]>,
+    pub border_width: Option<f32>,
+}
+
+/// Visual overrides for one series; absent properties retain renderer or workbook defaults.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChartSeriesFormat {
+    pub line_width: Option<f32>,
+    pub dashed: bool,
+    pub no_line: bool,
+    pub marker: Option<String>,
+    pub marker_size: Option<f32>,
+    pub border_width: Option<f32>,
+    pub fill_color: Option<[u8; 4]>,
+    pub line_color: Option<[u8; 4]>,
+    pub marker_fill: Option<[u8; 4]>,
+    pub marker_no_fill: bool,
+    pub marker_border_color: Option<[u8; 4]>,
+    pub marker_border_width: Option<f32>,
+    pub smooth: Option<bool>,
+}
+
+/// Optional chart-wide, axis, series, and text formatting.
+///
+/// `series` is keyed by series index. Text roles inherit unspecified values from the `chart` role
+/// through [`Self::text_style`]. Missing values otherwise leave rendering defaults in effect.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChartFormat {
+    pub legend_overlay: bool,
+    pub legend_position: Option<[f32; 2]>,
+    pub trendline_label_position: Option<[f32; 2]>,
+    pub text: std::collections::BTreeMap<String, ChartTextFormat>,
+    pub horizontal_gridline: ChartStroke,
+    pub vertical_gridline: ChartStroke,
+    pub x_axis: ChartAxis,
+    pub y_axis: ChartAxis,
+    pub vertical_gridlines: bool,
+    pub border_width: Option<f32>,
+    pub series: std::collections::BTreeMap<usize, ChartSeriesFormat>,
+    pub chart_area: ChartSurface,
+    pub plot_area: ChartSurface,
+    pub gap_width: Option<f32>,
+    pub overlap: Option<f32>,
+}
+
+impl ChartFormat {
+    /// Resolves a text role by taking its explicit properties, then falling back to `chart`.
+    ///
+    /// This is a shallow field-by-field merge; values absent from both roles remain unset so the
+    /// renderer can apply role-specific defaults.
+    pub fn text_style(&self, role: &str) -> ChartTextFormat {
+        let base = self.text.get("chart").cloned().unwrap_or_default();
+        let local = self.text.get(role).cloned().unwrap_or_default();
+        ChartTextFormat {
+            name: local.name.or(base.name),
+            size: local.size.or(base.size),
+            color: local.color.or(base.color),
+            bold: local.bold.or(base.bold),
+            italic: local.italic.or(base.italic),
+        }
+    }
+}
+
 /// A chart's data table (`c:dTable`), independent of the chart legend.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -591,6 +703,8 @@ pub struct Chart {
     /// whenever the PivotTable is refreshed or its layout changes.
     #[serde(default)]
     pub pivot: Option<String>,
+    #[serde(default)]
+    pub format: ChartFormat,
 }
 
 impl Chart {
@@ -608,6 +722,8 @@ impl Chart {
                     | ChartKind::Line
                     | ChartKind::LineMarkers
                     | ChartKind::LineStacked
+                    | ChartKind::LineStacked100
+                    | ChartKind::LineStacked100Markers
                     | ChartKind::Area
                     | ChartKind::AreaStacked
                     | ChartKind::AreaStacked100
@@ -1125,6 +1241,7 @@ mod tests {
             source: None,
             by_rows: false,
             pivot: None,
+            format: Default::default(),
         };
         let mut json = serde_json::to_value(&chart).expect("serialize chart");
         json.as_object_mut().expect("chart object").remove("hole_size");

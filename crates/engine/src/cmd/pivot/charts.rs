@@ -69,12 +69,13 @@ pub(super) fn insert_pivot_chart(s: &mut Session, p: &Json) -> Result<Json> {
         gridlines: !matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel),
         hole_size: 75,
         first_slice_angle: 0,
-        style: 1,
+        style: 2,
         x_title: None,
         y_title: None,
         source: None,
         by_rows: false,
         pivot: Some(link),
+        format: Default::default(),
     };
     edit(s, |cx| {
         cx.sheet_mut(si)?.charts.push(chart);

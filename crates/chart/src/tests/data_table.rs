@@ -2,6 +2,47 @@ use super::*;
 use gridcraft_model::ChartDataTable;
 
 #[test]
+fn percent_stacked_line_table_keys_use_lines_and_optional_markers() {
+    let color = [1, 2, 3, 255];
+    for (kind, markers) in [(ChartKind::LineStacked100, false), (ChartKind::LineStacked100Markers, true)] {
+        let mut c = chart(kind);
+        c.legend = LegendPos::None;
+        c.data_labels = false;
+        c.data_table = Some(ChartDataTable::default());
+        c.format.text.insert("data_labels".into(), gridcraft_model::ChartTextFormat { size: Some(20.0), ..Default::default() });
+        let data = ChartData {
+            categories: vec!["Q1".into(), "Q2".into()],
+            series: vec![series("Measured", &[2.0, 4.0], color, kind)],
+            ..Default::default()
+        };
+        let p = render(&c, &data, 600.0, 400.0, &ApproxMeasure);
+        let y = p
+            .iter()
+            .find_map(|p| match p {
+                Prim::Text { text, y, .. } if text == "Measured" => Some(*y),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            p.iter().any(|p| matches!(p, Prim::Line { pts, color: c, .. }
+            if *c == color && pts.len() == 2 && pts.iter().all(|point| (point[1] - y).abs() < 0.01))),
+            "{kind:?}"
+        );
+        assert!(
+            !p.iter().any(|p| matches!(p, Prim::Rect { y: top, h, fill: Some(c), .. }
+            if *c == color && (top + h / 2.0 - y).abs() < 0.01)),
+            "table key must not be a box"
+        );
+        assert_eq!(
+            p.iter().any(|p| matches!(p, Prim::Circle { cy, fill: Some(c), .. }
+            if *c == color && (*cy - y).abs() < 0.01)),
+            markers,
+            "{kind:?}"
+        );
+    }
+}
+
+#[test]
 fn tables_draw_source_values_for_every_supported_chart_kind() {
     for kind in ALL_KINDS {
         let mut c = chart(kind);
@@ -15,6 +56,18 @@ fn tables_draw_source_values_for_every_supported_chart_kind() {
         let labels = texts(&prims);
         // Source amounts, including on 100% stacked charts, not shares or running totals.
         if supported {
+            let table_sizes = prims
+                .iter()
+                .filter_map(|p| match p {
+                    Prim::Text { size, role, .. } if role == "data_table" => Some(*size),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(!table_sizes.is_empty(), "{kind:?}: data-table text has a dedicated rendering role");
+            assert!(
+                table_sizes.iter().all(|size| (*size - 9.0).abs() < f32::EPSILON),
+                "data-label font settings must not resize table text: {kind:?}: {table_sizes:?}"
+            );
             for value in ["$12,000", "-$4,000", "$38,000", "$61,870"] {
                 assert!(labels.contains(&value), "{kind:?}: missing {value}");
             }
@@ -79,6 +132,34 @@ fn table_columns_align_with_plot_and_keep_missing_values_blank() {
     c.data_table = Some(ChartDataTable { show_keys: false, ..Default::default() });
     let off = render(&c, &d, 600.0, 400.0, &ApproxMeasure);
     assert!(!off.iter().any(|p| matches!(p, Prim::Rect { y, fill: Some(f), .. } if *f == color && *y > header_y)));
+}
+
+#[test]
+fn reversed_category_order_keeps_data_table_labels_and_values_aligned() {
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.title = None;
+    c.x_title = None;
+    c.y_title = None;
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.format.x_axis.reversed = true;
+    c.data_table = Some(ChartDataTable::default());
+    let mut values = series("Values", &[11.0, 22.0, 33.0], [1, 2, 3, 255], c.kind);
+    values.number_format = "0".into();
+    let data = ChartData { categories: ["Alpha", "Beta", "Gamma"].map(String::from).to_vec(), series: vec![values], ..Default::default() };
+    let prims = render(&c, &data, 600.0, 400.0, &ApproxMeasure);
+    let x = |wanted: &str| {
+        prims
+            .iter()
+            .find_map(|primitive| match primitive {
+                Prim::Text { text, x, .. } if text == wanted => Some(*x),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing table text {wanted:?}"))
+    };
+    assert!((x("Gamma") - x("33")).abs() < 0.01);
+    assert!((x("Beta") - x("22")).abs() < 0.01);
+    assert!((x("Alpha") - x("11")).abs() < 0.01);
 }
 
 #[test]

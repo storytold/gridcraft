@@ -478,6 +478,7 @@ fn drawing_with_picture_and_chart() {
     assert_eq!(ch.series[1].kind, Some(gridcraft_model::ChartKind::LineMarkers));
     assert!(ch.data_labels && ch.gridlines);
     assert_eq!(ch.legend, gridcraft_model::LegendPos::Top);
+    // Combo charts keep category/value titles in the column layout used on save.
     assert_eq!(ch.x_title.as_deref(), Some("Region"));
     // A twoCellAnchor with editAs="absolute" is "Don't move or size with cells".
     let sp = &s.shapes[0];
@@ -558,6 +559,7 @@ fn chartex_parts_as_excel_expects_them() {
         source: None,
         by_rows: false,
         pivot: None,
+        format: Default::default(),
     });
     wb.sheets = vec![std::sync::Arc::new(sheet)];
     let bytes = crate::write_xlsx(&wb).unwrap();
@@ -617,6 +619,7 @@ fn doughnut_writes_every_series_as_a_ring_with_hole_and_angle() {
         source: None,
         by_rows: false,
         pivot: None,
+        format: Default::default(),
     });
     wb.sheets = vec![std::sync::Arc::new(sheet)];
     let bytes = crate::write_xlsx(&wb).unwrap();
