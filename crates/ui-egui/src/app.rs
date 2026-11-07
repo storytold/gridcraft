@@ -44,6 +44,7 @@ impl SheetApp {
             printing: Default::default(),
             print_feedback_seen: None,
             synthetic: Default::default(),
+            ctrl_wheel: false,
             synthetic_pending: false,
             synthetic_injected_at_pass: None,
             control_rx: None,
@@ -348,6 +349,29 @@ mod lifecycle_tests {
         app.raw_input_hook(&ctx, &mut second);
         assert!(second.events.is_empty(), "an unapplied step is not injected a second time");
         assert_eq!(app.synthetic.len(), 2, "press and release stay distinct batches");
+    }
+
+    #[cfg(all(unix, not(target_vendor = "apple")))]
+    #[test]
+    /// A synthetic Ctrl+wheel touch followed by a plain wheel move gets a zero-delta End inserted before the move.
+    fn synthetic_wheel_events_end_a_stuck_ctrl_touch() {
+        use egui::{Event, Modifiers, MouseWheelUnit, TouchPhase, vec2};
+        let ctx = egui::Context::default();
+        let mut app = app();
+        let wheel = |modifiers| Event::MouseWheel { unit: MouseWheelUnit::Point, delta: vec2(0.0, 3.0), phase: TouchPhase::Move, modifiers };
+        app.synthetic.push_back(vec![wheel(Modifiers::CTRL)]);
+        app.synthetic.push_back(vec![wheel(Modifiers::NONE)]);
+        let mut raw = egui::RawInput::default();
+        app.raw_input_hook(&ctx, &mut raw);
+        assert_eq!(raw.events, vec![wheel(Modifiers::CTRL)]);
+        // A UI pass applied the first batch.
+        app.synthetic.pop_front();
+        app.synthetic_pending = false;
+        app.synthetic_injected_at_pass = None;
+        let mut raw = egui::RawInput::default();
+        app.raw_input_hook(&ctx, &mut raw);
+        let end = Event::MouseWheel { unit: MouseWheelUnit::Point, delta: egui::Vec2::ZERO, phase: TouchPhase::End, modifiers: Modifiers::NONE };
+        assert_eq!(raw.events, vec![end, wheel(Modifiers::NONE)]);
     }
 
     /// Returns raw input with a screen rect at the given size.
