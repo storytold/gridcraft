@@ -71,6 +71,20 @@ impl Cache {
         texture
     }
 
+    /// Frees room for `bytes` more, from pictures not drawn lately besides `keep`. Whether there is room
+    /// now: pictures in view stay, as for a whole picture.
+    fn make_room(&mut self, bytes: usize, keep: usize, frame: u64) -> bool {
+        while self.bytes.saturating_add(bytes) > MAX_CACHE_BYTES {
+            let oldest =
+                self.entries.iter().filter(|(k, e)| **k != keep && e.used.saturating_add(1) < frame).min_by_key(|(_, e)| e.used).map(|(k, _)| *k);
+            let Some(oldest) = oldest else { return false };
+            if let Some(entry) = self.entries.remove(&oldest) {
+                self.bytes = self.bytes.saturating_sub(entry.bytes);
+            }
+        }
+        true
+    }
+
     /// The picture's texture for drawing it inside `room` pixels: a reduced copy when it would
     /// otherwise shrink by more than half, because the renderer samples a texture without mipmaps and
     /// thin lines would break into dots.
@@ -80,18 +94,21 @@ impl Cache {
         if halvings == 0 {
             return Some(full);
         }
-        let Some(entry) = self.entries.get_mut(&(Arc::as_ptr(picture) as usize)) else { return Some(full) };
-        if let Some((_, texture)) = entry.reduced.iter().find(|(n, _)| *n == halvings) {
+        let key = Arc::as_ptr(picture) as usize;
+        if let Some((_, texture)) = self.entries.get(&key)?.reduced.iter().find(|(n, _)| *n == halvings) {
             return Some(texture.clone());
         }
-        // One that can't be made falls back to the whole picture, and isn't tried again each frame.
-        let (texture, bytes) = match reduced(picture, halvings) {
+        // One that can't be made, or that there is no room for, falls back to the whole picture, and
+        // isn't tried again each frame.
+        let image = reduced(picture, halvings).filter(|image| self.make_room(image.pixels.len() * 4, key, ctx.cumulative_frame_nr()));
+        let (texture, bytes) = match image {
             Some(image) => {
                 let bytes = image.pixels.len() * 4;
                 (ctx.load_texture("cell picture, reduced", image, egui::TextureOptions::LINEAR), bytes)
             }
             None => (full, 0),
         };
+        let entry = self.entries.get_mut(&key)?;
         entry.reduced.push((halvings, texture.clone()));
         entry.bytes += bytes;
         self.bytes += bytes;
@@ -252,6 +269,34 @@ mod tests {
         let mut bytes = Cursor::new(Vec::new());
         image.write_to(&mut bytes, image::ImageFormat::Png)?;
         Ok(Arc::new(CellPicture { data: bytes.into_inner(), mime: "image/png".into(), alt: "Thin lines".into() }))
+    }
+
+    #[test]
+    fn a_reduced_copy_stays_within_the_budget() -> Result<(), Box<dyn std::error::Error>> {
+        let ctx = egui::Context::default();
+        let mut cache = Cache::default();
+        let (seen, older) = (thin_lines(64, 64)?, thin_lines(64, 64)?);
+        let small = vec2(8.0, 8.0);
+        assert!(cache.texture(&ctx, &older).is_some());
+        for _ in 0..3 {
+            let mut output = ctx.run_ui(Default::default(), |_| {});
+            output.textures_delta.clear();
+        }
+        // With a picture not drawn lately, that one makes the room.
+        let whole = cache.texture(&ctx, &seen).ok_or("no texture")?.id();
+        cache.bytes = MAX_CACHE_BYTES;
+        let reduced = cache.texture_for(&ctx, &seen, small).ok_or("no texture")?;
+        assert_ne!(reduced.id(), whole);
+        assert!(!cache.entries.contains_key(&(Arc::as_ptr(&older) as usize)));
+        assert!(cache.bytes <= MAX_CACHE_BYTES, "{}", cache.bytes);
+        // With none to give up, the whole picture is drawn, and nothing goes past the budget.
+        let last = thin_lines(64, 64)?;
+        cache.bytes = 0;
+        let whole = cache.texture(&ctx, &last).ok_or("no texture")?.id();
+        cache.bytes = MAX_CACHE_BYTES;
+        assert_eq!(cache.texture_for(&ctx, &last, small).ok_or("no texture")?.id(), whole);
+        assert_eq!(cache.bytes, MAX_CACHE_BYTES);
+        Ok(())
     }
 
     #[test]

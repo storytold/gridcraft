@@ -107,7 +107,7 @@ fn hover_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, poin
         }
     } else if in_cells && app.editor.is_none() && on_cur_border {
         ctx.set_cursor_icon(CursorIcon::Move);
-    } else if in_cells && app.editor.is_none() && on_python_tag(app, geo, sh, p) {
+    } else if in_cells && app.editor.is_none() && app.dialog.is_none() && !mods.any() && on_python_tag(app, geo, sh, p) {
         ctx.set_cursor_icon(CursorIcon::PointingHand);
     } else if in_cells {
         ctx.set_cursor_icon(CursorIcon::Cell);

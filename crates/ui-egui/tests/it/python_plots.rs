@@ -1074,6 +1074,11 @@ fn a_click_on_the_double_square_shows_the_picture_beside_the_cell() {
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand);
     point_at(&mut h, cell.right_center() - vec2(4.0, 0.0));
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Cell);
+    // With a key held, a click doesn't open the card, and the cursor doesn't say it would.
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::SHIFT));
+    point_at(&mut h, tag.center());
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Cell);
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
 
     // Anywhere on the square, up to its top corner, which is above where a PY tag would end.
     let corner = tag.left_top() + vec2(1.0, 1.0);
