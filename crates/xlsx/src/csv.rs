@@ -509,7 +509,8 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
                 continue;
             }
             let pos = CellRef::new(row, col as u32);
-            let cell = if opts.parse_values {
+            // The typed-entry apostrophe prefix means nothing in a file; it is data.
+            let cell = if opts.parse_values && !f.starts_with('\'') {
                 let rule = date_columns.get(col).map_or(DateRule::NoDates, |(rule, _)| *rule);
                 let p = read_field(&f, opts.date_system, rule);
                 let style = match p.format {
