@@ -209,14 +209,22 @@ pub fn js_literal(value: &Json) -> Option<String> {
     }
 }
 
-/// Rows of values, as `setValues` takes them: `[[1, 2], [3, 4]]`.
+/// Rows of values, as `setValues` takes them: `[[1, 2], [3, 4]]`. A flat array is not rows — it
+/// would record a `setValues([1, 2])` call ExcelScript refuses.
 fn js_rows(rows: &[Json]) -> Option<String> {
     let mut out = String::from("[");
     for (i, row) in rows.iter().enumerate() {
         if i > 0 {
             out.push_str(", ");
         }
-        out.push_str(&js_literal(row)?);
+        out.push('[');
+        for (j, cell) in row.as_array()?.iter().enumerate() {
+            if j > 0 {
+                out.push_str(", ");
+            }
+            out.push_str(&js_literal(cell)?);
+        }
+        out.push(']');
     }
     out.push(']');
     Some(out)
@@ -314,6 +322,20 @@ mod tests {
         assert_eq!(r.skipped.len(), 2);
         assert!(r.code.contains("// Skipped: data.sortAscending (not supported by the Office Scripts bridge)."), "{}", r.code);
         assert!(r.code.contains("// Skipped: home.bold (it toggled the selection, which a recording cannot replay)."), "{}", r.code);
+    }
+
+    #[test]
+    fn a_flat_set_values_step_is_skipped_as_not_rows() {
+        // `range.setValues` takes rows: recording `[1, 2]` as `setValues([1, 2])` would produce a
+        // script that fails at run time (and in Excel).
+        let r = record(&[step("range.setValues", json!({"range": "A1:B1", "values": [1, 2]}))]);
+        assert!(r.calls.is_empty(), "{:?}", r.calls);
+        assert_eq!(r.skipped.len(), 1);
+        assert!(r.code.contains("its values are not rows of numbers, text or true/false"), "{}", r.code);
+        // A row of rows still records.
+        let rows = record(&[step("range.setValues", json!({"range": "A1:B1", "values": [[1, 2]]}))]);
+        assert!(rows.code.contains("setValues([[1, 2]]);"), "{}", rows.code);
+        assert!(rows.skipped.is_empty());
     }
 
     #[test]

@@ -37,29 +37,32 @@ pub fn find_exe() -> Option<PathBuf> {
     None
 }
 
-/// Where the app would put Bun: `<model root>/runtimes/bun/bun(.exe)`.
+/// Where the app would put Bun: `<model root>/runtimes/bun/bun(.exe)`. Unlike [`models_root`] it
+/// answers even before the folder exists (the platform settings folder is the default place to
+/// install), so Import Bun has a target on a fresh machine.
 pub fn expected_path() -> PathBuf {
-    let root = models_root().unwrap_or_else(|| PathBuf::from("models"));
+    let root = models_root().or_else(|| config_root().map(|dir| dir.join("models"))).unwrap_or_else(|| PathBuf::from("models"));
     root.join("runtimes").join("bun").join(bun_exe_name())
 }
 
 /// The model root, first hit wins: `$GRIDCRAFT_MODELS`, the platform settings folder's `models`,
-/// `models` beside the executable, then `models` in the working directory.
+/// `models` beside the executable, then `models` in the working directory. Every candidate must
+/// exist: a settings folder that is merely configured must not hide a portable install beside the
+/// executable.
 pub fn models_root() -> Option<PathBuf> {
     if let Some(configured) = std::env::var_os("GRIDCRAFT_MODELS") {
         return Some(PathBuf::from(configured));
     }
-    if let Some(dir) = config_root() {
-        return Some(dir.join("models"));
-    }
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(parent) = exe.parent()
-        && parent.join("models").is_dir()
-    {
-        return Some(parent.join("models"));
-    }
+    let beside = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|parent| parent.join("models")));
     let local = PathBuf::from("models");
-    local.is_dir().then_some(local)
+    let candidates = config_root().map(|dir| dir.join("models")).into_iter().chain(beside).chain([local]);
+    first_existing(candidates)
+}
+
+/// The first candidate that is a folder. A path that is only configured (or that a file occupies)
+/// is skipped, so a portable install is still found.
+fn first_existing(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    candidates.into_iter().find(|candidate| candidate.is_dir())
 }
 
 fn config_root() -> Option<PathBuf> {
@@ -114,5 +117,24 @@ mod tests {
     #[test]
     fn a_missing_program_has_no_version() {
         assert_eq!(version_of(Path::new("definitely-not-a-real-program-xyz"), Duration::from_millis(500)), None);
+    }
+
+    #[test]
+    fn the_first_existing_folder_wins_and_missing_ones_are_skipped() {
+        let base = std::env::temp_dir().join(format!("gridcraft-discover-{}", std::process::id()));
+        let missing = base.join("missing");
+        let real = base.join("real");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&real).unwrap();
+        // A file where a folder would be is not a folder.
+        let file = base.join("file");
+        std::fs::write(&file, b"x").unwrap();
+        assert_eq!(first_existing([missing.clone(), file, real.clone()]), Some(real));
+        assert_eq!(first_existing([missing.clone()]), None);
+        // Whatever the machine has, a model root that is found exists.
+        if let Some(root) = models_root() {
+            assert!(root.is_dir(), "{} is not a folder", root.display());
+        }
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

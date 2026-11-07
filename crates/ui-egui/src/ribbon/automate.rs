@@ -90,7 +90,13 @@ pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
         }
         let r = small_button(ui, Icon::Play, "Run Script", "Run the script in Office Scripts", false);
         if r.clicked() {
-            if app.office_scripts.code.trim().is_empty() {
+            if app.office_scripts.runtime.is_none() {
+                crate::office_scripts::refresh(app);
+            }
+            // Without Bun a run can only fail with a message in a pane that is closed: open the
+            // pane, which shows what to install, instead of running into nothing.
+            let missing = app.office_scripts.runtime.as_ref().is_none_or(|runtime| !runtime.found);
+            if missing || app.office_scripts.code.trim().is_empty() {
                 app.open_dialog("officeScripts", json!({}));
             } else {
                 crate::office_scripts::run(app);

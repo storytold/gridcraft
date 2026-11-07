@@ -671,6 +671,18 @@ mod tests {
     const SCRIPT: &str = "function main(workbook: ExcelScript.Workbook) { workbook.getActiveWorksheet().getRange(\"A1\").setValue(42); }";
 
     #[test]
+    fn a_border_setter_accepts_the_excel_border_index_spelling() {
+        // `getRangeBorder(ExcelScript.BorderIndex.edgeTop).setColor(…)` sends "EdgeTop": the
+        // setter path must lowercase it like the getter does, or the call is refused.
+        let mut s = session("border-index");
+        let mut bridge = crate::script::SessionBridge { session: &mut s };
+        let call = BridgeCall::new("RangeBorder.setColor", json!({"range": "A1:B2", "side": "EdgeTop", "color": "#ff0000"}));
+        gridcraft_script::BridgeExecutor::execute(&mut bridge, &call).unwrap();
+        let lower = BridgeCall::new("RangeBorder.setColor", json!({"range": "A1:B2", "side": "edgebottom", "color": "#00ff00"}));
+        gridcraft_script::BridgeExecutor::execute(&mut bridge, &lower).unwrap();
+    }
+
+    #[test]
     fn a_script_call_lands_as_a_number_and_one_undo_step() {
         let mut s = session("number");
         calls(&mut s, vec![set_call("A1", json!(42))]);
@@ -806,6 +818,28 @@ mod tests {
         let stopped = s.execute("script.record", json!({"on": false})).unwrap();
         assert_eq!(stopped["recording"], false);
         assert!(stopped.get("id").is_none());
+    }
+
+    #[test]
+    fn a_journal_trim_moves_the_recording_start_with_it() {
+        // Record starts at the end of a full journal; the `script.record` command itself then
+        // evicts the oldest half. The start must move with the eviction, or the recording is
+        // empty (the start sits past the end of the journal).
+        let mut s = session("record-trim");
+        while s.journal.len() < crate::JOURNAL_MAX_ENTRIES {
+            s.execute("selection.set", json!({"range": "B2"})).unwrap();
+        }
+        assert_eq!(s.journal.len(), crate::JOURNAL_MAX_ENTRIES);
+        // The `script.record` entry itself is the one that pushes the journal past its cap.
+        s.execute("script.record", json!({"on": true})).unwrap();
+        assert!(s.journal.len() < crate::JOURNAL_MAX_ENTRIES, "the record command trimmed the journal");
+        s.execute("cell.set", json!({"cell": "A1", "input": 1})).unwrap();
+        s.execute("cell.set", json!({"cell": "A2", "input": 2})).unwrap();
+        let stopped = s.execute("script.record", json!({"on": false})).unwrap();
+        let code = stopped["code"].as_str().unwrap_or_default();
+        assert!(code.contains("getRange(\"A1\").setValue(1);"), "{code}");
+        assert!(code.contains("getRange(\"A2\").setValue(2);"), "{code}");
+        assert_eq!(stopped["steps"], 2);
     }
 
     #[test]

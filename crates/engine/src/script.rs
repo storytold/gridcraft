@@ -476,7 +476,8 @@ pub(crate) fn execute_call(s: &mut Session, method: &str, params: &Json) -> Resu
             let color = params.get("color").and_then(Json::as_str);
             let style = params.get("style").and_then(Json::as_str);
             let weight = params.get("weight").and_then(Json::as_str);
-            let side = member_str(params, "side")?;
+            // ExcelScript `BorderIndex` values are `EdgeTop`-style; `border_edge` matches lowercase.
+            let side = member_str(params, "side")?.to_ascii_lowercase();
             let mut p = Map::new();
             p.insert("sheet".into(), Json::String(sheet_name(s, params)?));
             p.insert("range".into(), Json::String(parse_range(params)?.a1()));
@@ -1208,7 +1209,7 @@ fn chart_kind_from_name(name: &str) -> (&'static str, &'static str) {
         "line" => ("line", ""),
         "linemarkers" => ("line", "markers"),
         "linestacked" | "linemarkersstacked" => ("line", "stacked"),
-        "lineStacked100" | "linemarkersstacked100" => ("line", "stacked100"),
+        "linestacked100" | "linemarkersstacked100" => ("line", "stacked100"),
         "pie" | "pieexploded" | "pieofpie" | "barofpie" | "doughnutexploded" => ("pie", ""),
         "doughnut" => ("doughnut", ""),
         "area" => ("area", ""),
@@ -1288,6 +1289,17 @@ mod tests {
         assert_eq!(data_body_range(&table), Json::String("2:4".into()));
         let plain = json!({"range": "A1:C5", "headerRow": false, "totalsRow": false});
         assert_eq!(data_body_range(&plain), Json::String("1:5".into()));
+    }
+
+    #[test]
+    fn the_stacked_line_names_map_to_the_stacked_line_kind() {
+        // `lineStacked100` was once spelled with an uppercase `S` in a match on the lowercased
+        // name, so the arm never matched and the chart became a clustered column without an error.
+        for name in ["lineStacked100", "lineMarkersStacked100"] {
+            assert!(chart_name_known(name), "{name}");
+            assert_eq!(chart_kind_from_name(name), ("line", "stacked100"), "{name}");
+        }
+        assert_eq!(chart_kind_from_name("lineStacked"), ("line", "stacked"));
     }
 
     #[test]

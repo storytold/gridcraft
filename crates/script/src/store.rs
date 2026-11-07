@@ -88,17 +88,30 @@ impl ScriptStore {
     }
 
     /// Every readable script, by name. A damaged file is left out (and logged) rather than
-    /// making the whole list fail: one bad file must not hide the person's other scripts.
+    /// making the whole list fail: one bad file must not hide the person's other scripts. A
+    /// folder that cannot be read is an error, not an empty list.
     pub fn list(&self) -> Result<Vec<ScriptRecord>, StoreError> {
         let dir = match std::fs::read_dir(&self.root) {
             Ok(d) => d,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(StoreError::Io(e)),
         };
-        let mut out = Vec::new();
+        // One pass over the folder for both kinds of file, so both report the same errors and
+        // both see the same entries. Sorted by path: which of two `.osts` files with the same
+        // slug wins must not depend on the order the file system returns them in.
+        let mut paths = Vec::new();
         for entry in dir {
-            let Ok(entry) = entry else { continue };
-            let path = entry.path();
+            let entry = entry.map_err(StoreError::Io)?;
+            // A symlink in a synced folder could point the list (and a run) at any readable file.
+            if entry.file_type().map_err(StoreError::Io)?.is_symlink() {
+                log::warn!("ignoring symlinked script entry: {}", entry.path().display());
+                continue;
+            }
+            paths.push(entry.path());
+        }
+        paths.sort();
+        let mut out = Vec::new();
+        for path in &paths {
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
@@ -107,7 +120,7 @@ impl ScriptStore {
                 log::warn!("ignoring script file with an invalid id: {}", path.display());
                 continue;
             }
-            match read_record(&path) {
+            match read_record(path) {
                 Ok(record) => out.push(record),
                 Err(e) => log::warn!("ignoring damaged script file {}: {e}", path.display()),
             }
@@ -115,29 +128,26 @@ impl ScriptStore {
         // `.osts` files put in the folder by Excel (or a synced OneDrive folder) are scripts
         // too: they appear in the list and run from there, without an import step. A record with
         // the same name or id wins, so saving a script never shadows itself twice.
-        let mut seen_names: Vec<String> = out.iter().map(|r| r.name.to_lowercase()).collect();
+        let mut seen_names: Vec<String> = out.iter().map(|r| r.name.clone()).collect();
         let mut seen_ids: Vec<String> = out.iter().map(|r| r.id.clone()).collect();
-        if let Ok(dir) = std::fs::read_dir(&self.root) {
-            for entry in dir.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("osts") {
-                    continue;
-                }
-                let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else { continue };
-                let id = slug(stem);
-                if !valid_id(&id) || seen_ids.iter().any(|x| x == &id) {
-                    continue;
-                }
-                let Ok(text) = std::fs::read_to_string(&path) else { continue };
-                let Ok(file) = crate::osts::OstsFile::parse(&text) else { continue };
-                let name = if file.description.trim().is_empty() { stem.to_string() } else { file.description.clone() };
-                if seen_names.iter().any(|n| n.eq_ignore_ascii_case(&name)) {
-                    continue;
-                }
-                seen_names.push(name.to_lowercase());
-                seen_ids.push(id.clone());
-                out.push(ScriptRecord { id, name, code: file.code(), created: 0, modified: 0, osts: Some(crate::osts::OstsMeta::from_file(&file)) });
+        for path in &paths {
+            if path.extension().and_then(|e| e.to_str()) != Some("osts") {
+                continue;
             }
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else { continue };
+            let id = slug(stem);
+            if !valid_id(&id) || seen_ids.iter().any(|x| x == &id) {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(path) else { continue };
+            let Ok(file) = crate::osts::OstsFile::parse(&text) else { continue };
+            let name = if file.description.trim().is_empty() { stem.to_string() } else { file.description.clone() };
+            if seen_names.iter().any(|n| n.eq_ignore_ascii_case(&name)) {
+                continue;
+            }
+            seen_names.push(name.clone());
+            seen_ids.push(id.clone());
+            out.push(ScriptRecord { id, name, code: file.code(), created: 0, modified: 0, osts: Some(crate::osts::OstsMeta::from_file(&file)) });
         }
         out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.id.cmp(&b.id)));
         Ok(out)
@@ -410,6 +420,54 @@ mod tests {
         // A GridCraft record with the same id wins (it is ours to manage).
         s.save("From Excel", &code("1")).unwrap();
         assert_eq!(s.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn osts_slug_collisions_are_resolved_by_path_order() {
+        let s = store("osts-slug");
+        std::fs::create_dir_all(s.root()).unwrap();
+        let text = |description: &str| {
+            serde_json::json!({
+                "version": "0.3.0",
+                "body": "function main(workbook: ExcelScript.Workbook) {\r\n}\r\n",
+                "description": description,
+                "noCodeMetadata": "",
+                "parameterInfo": "{\"version\":1}",
+                "apiInfo": "{\"variant\":\"synchronous\"}"
+            })
+            .to_string()
+        };
+        // Both names slug to `a-script`: the file whose path sorts first wins, so the answer
+        // does not depend on the order the file system lists the folder in.
+        let first = s.root().join("A Script.osts");
+        let second = s.root().join("a-script.osts");
+        std::fs::write(&first, text("First")).unwrap();
+        std::fs::write(&second, text("Second")).unwrap();
+        let expected = if first < second { "First" } else { "Second" };
+        let list = s.list().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_osts_file_is_not_a_script_in_the_folder() {
+        let s = store("osts-link");
+        std::fs::create_dir_all(s.root()).unwrap();
+        let outside = std::env::temp_dir().join(format!("gridcraft-outside-{}-{}.osts", std::process::id(), now_millis()));
+        let text = serde_json::json!({
+            "version": "0.3.0",
+            "body": "function main(workbook: ExcelScript.Workbook) {\r\n}\r\n",
+            "description": "Outside",
+            "noCodeMetadata": "",
+            "parameterInfo": "{\"version\":1}",
+            "apiInfo": "{\"variant\":\"synchronous\"}"
+        })
+        .to_string();
+        std::fs::write(&outside, text).unwrap();
+        std::os::unix::fs::symlink(&outside, s.root().join("Linked.osts")).unwrap();
+        assert!(s.list().unwrap().is_empty(), "a link to a file outside the folder is not listed");
+        let _ = std::fs::remove_file(&outside);
     }
 
     #[test]

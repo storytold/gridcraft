@@ -171,7 +171,12 @@ fn scripts_dir() -> Option<String> {
     if let Some(p) = std::env::var_os("GRIDCRAFT_SCRIPTS") {
         return Some(std::path::PathBuf::from(p).display().to_string());
     }
-    let base = if cfg!(windows) {
+    config_dir().map(|b| b.join("scripts").display().to_string())
+}
+
+/// The settings folder the app writes `prefs.json` (and `ui.json`) in.
+fn config_dir() -> Option<std::path::PathBuf> {
+    if cfg!(windows) {
         std::env::var_os("APPDATA").map(std::path::PathBuf::from).map(|p| p.join("GridCraft"))
     } else if cfg!(target_os = "macos") {
         std::env::var_os("HOME").map(std::path::PathBuf::from).map(|p| p.join("Library/Application Support/GridCraft"))
@@ -180,8 +185,18 @@ fn scripts_dir() -> Option<String> {
             .map(std::path::PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
             .map(|p| p.join("gridcraft"))
-    };
-    base.map(|b| b.join("scripts").display().to_string())
+    }
+}
+
+/// The scripts folder the person chose in the app (`script.folder` saves it in `prefs.json`), so
+/// a CLI session lists and runs the same scripts the app shows.
+fn saved_scripts_dir(config: &std::path::Path) -> Option<String> {
+    if std::env::var_os("GRIDCRAFT_NO_PREFS").is_some() {
+        return None;
+    }
+    let bytes = std::fs::read(config.join("prefs.json")).ok()?;
+    let prefs: gridcraft_engine::Prefs = serde_json::from_slice(&bytes).ok()?;
+    prefs.scripts_dir
 }
 
 /// Installs the Office Scripts runtime and folder on a session made by the CLI.
@@ -189,7 +204,8 @@ fn with_scripts(mut s: Session) -> Session {
     s.script_host = Some(gridcraft_script_bun::script_host());
     if let Some(dir) = scripts_dir() {
         s.scripts_dir_default = Some(dir.clone());
-        s.scripts_dir = Some(dir);
+        let saved = config_dir().and_then(|config| saved_scripts_dir(&config));
+        s.scripts_dir = Some(saved.unwrap_or(dir));
     }
     s
 }
@@ -609,6 +625,21 @@ fn send(args: &[String]) -> Result<(), String> {
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    #[test]
+    fn a_saved_scripts_folder_is_what_the_cli_uses() {
+        let config = std::env::temp_dir().join(format!("gridcraft-cli-prefs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&config);
+        std::fs::create_dir_all(&config).unwrap();
+        // No prefs.json: the default folder stands.
+        assert_eq!(saved_scripts_dir(&config), None);
+        std::fs::write(config.join("prefs.json"), br#"{"scriptsDir":"/shared/scripts"}"#).unwrap();
+        assert_eq!(saved_scripts_dir(&config), Some("/shared/scripts".to_string()));
+        // Reset in the app: the field is absent and the default folder is used again.
+        std::fs::write(config.join("prefs.json"), br#"{}"#).unwrap();
+        assert_eq!(saved_scripts_dir(&config), None);
+        let _ = std::fs::remove_dir_all(&config);
+    }
 
     #[test]
     fn parses_commands() {

@@ -10,6 +10,7 @@
 //! The file is written to a temporary directory for the duration of the host and removed with it.
 
 use gridcraft_script::ScriptError;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -202,7 +203,8 @@ class Worksheet {
     return new Range(String(info.address), this.sheetName);
   }
   getName(): string {
-    return String(bridge("Worksheet.getName", sheetParams(this.sheetName)).sheet ?? "");
+    // The engine answers with the name itself, not an object: `Worksheet.getName` returns a string.
+    return String(bridge("Worksheet.getName", sheetParams(this.sheetName)) ?? "");
   }
   setName(name: string): void {
     bridge("Worksheet.setName", { ...sheetParams(this.sheetName), name });
@@ -895,6 +897,101 @@ const consoleProxy = {
   },
 };
 
+// ExcelScript's enums, with the values the bridge accepts. The transpiler only removes type
+// annotations, so `ExcelScript.BorderIndex.edgeTop` is a runtime expression: without this object
+// every enum in a script copied from Excel is a ReferenceError. Unknown families and members
+// throw `notSupported` rather than being `undefined`.
+const ExcelScriptNs = guarded("ExcelScript", {
+  BorderIndex: guarded("ExcelScript.BorderIndex", {
+    edgeTop: "EdgeTop",
+    edgeBottom: "EdgeBottom",
+    edgeLeft: "EdgeLeft",
+    edgeRight: "EdgeRight",
+    diagonalDown: "DiagonalDown",
+    diagonalUp: "DiagonalUp",
+  }),
+  BorderLineStyle: guarded("ExcelScript.BorderLineStyle", {
+    none: "None",
+    continuous: "Continuous",
+    dash: "Dash",
+    dashDot: "DashDot",
+    dashDotDot: "DashDotDot",
+    dot: "Dot",
+    double: "Double",
+    slantDashDot: "SlantDashDot",
+  }),
+  BorderWeight: guarded("ExcelScript.BorderWeight", {
+    hairline: "Hairline",
+    thin: "Thin",
+    medium: "Medium",
+    thick: "Thick",
+  }),
+  ChartType: guarded("ExcelScript.ChartType", {
+    columnClustered: "ColumnClustered",
+    columnStacked: "ColumnStacked",
+    columnStacked100: "ColumnStacked100",
+    barClustered: "BarClustered",
+    barStacked: "BarStacked",
+    barStacked100: "BarStacked100",
+    line: "Line",
+    lineMarkers: "LineMarkers",
+    lineStacked: "LineStacked",
+    lineMarkersStacked: "LineMarkersStacked",
+    lineStacked100: "LineStacked100",
+    lineMarkersStacked100: "LineMarkersStacked100",
+    pie: "Pie",
+    pieExploded: "PieExploded",
+    pieOfPie: "PieOfPie",
+    barOfPie: "BarOfPie",
+    doughnut: "Doughnut",
+    doughnutExploded: "DoughnutExploded",
+    area: "Area",
+    areaStacked: "AreaStacked",
+    areaStacked100: "AreaStacked100",
+    scatter: "Scatter",
+    scatterLines: "ScatterLines",
+    bubble: "Bubble",
+    bubble3DEffect: "Bubble3DEffect",
+    radar: "Radar",
+    histogram: "Histogram",
+    pareto: "Pareto",
+    waterfall: "Waterfall",
+    funnel: "Funnel",
+    treemap: "Treemap",
+    sunburst: "Sunburst",
+    boxWhisker: "BoxWhisker",
+    stock: "Stock",
+  }),
+  ClearApplyTo: guarded("ExcelScript.ClearApplyTo", {
+    all: "All",
+    formats: "Formats",
+    contents: "Contents",
+  }),
+  DataValidationOperator: guarded("ExcelScript.DataValidationOperator", {
+    between: "Between",
+    notBetween: "NotBetween",
+    equalTo: "EqualTo",
+    notEqualTo: "NotEqualTo",
+    greaterThan: "GreaterThan",
+    lessThan: "LessThan",
+    greaterThanOrEqualTo: "GreaterThanOrEqualTo",
+    lessThanOrEqualTo: "LessThanOrEqualTo",
+  }),
+  DataValidationType: guarded("ExcelScript.DataValidationType", {
+    none: "None",
+    wholeNumber: "WholeNumber",
+    decimal: "Decimal",
+    list: "List",
+    date: "Date",
+    time: "Time",
+    textLength: "TextLength",
+    custom: "Custom",
+  }),
+  DeleteShiftDirection: guarded("ExcelScript.DeleteShiftDirection", { up: "Up", left: "Left" }),
+  InsertShiftDirection: guarded("ExcelScript.InsertShiftDirection", { down: "Down", right: "Right" }),
+  WorksheetVisibility: guarded("ExcelScript.WorksheetVisibility", { visible: "Visible", hidden: "Hidden" }),
+});
+
 function describe(error: any): any {
   if (error && Array.isArray(error.errors) && error.errors.length > 0) {
     const first = error.errors[0];
@@ -922,16 +1019,42 @@ try {
   const init = JSON.parse(initLine);
   const transpiler = new Bun.Transpiler({ loader: "ts" });
   const js = transpiler.transformSync(String(init.script ?? ""));
+  // `ExcelScript` is the enum namespace the script uses at run time. The rest are shadowed as
+  // `undefined` parameters: an imported `.osts` cannot casually read files, start processes or
+  // reach the network through `process`, `Bun`, `require` or `fetch`. This is a guard against
+  // accidents, not a sandbox: Office Scripts run native code, as `docs/office-scripts.md` says.
   const factory = new Function(
     "workbook",
     "console",
+    "ExcelScript",
+    "process",
+    "Bun",
+    "require",
+    "fetch",
+    "module",
+    "exports",
+    "globalThis",
     js + "\nreturn typeof main === 'function' ? main : undefined;",
   );
-  const entry = factory(workbook, consoleProxy);
+  const entry = factory(
+    workbook,
+    consoleProxy,
+    ExcelScriptNs,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+  );
   if (typeof entry !== "function") {
     throw new Error("an Office Script needs a main function: function main(workbook: ExcelScript.Workbook) { ... }");
   }
   entry(workbook);
+  // The parent commits the run only when this line arrives: a script that exits early, or a
+  // runtime that crashes after editing the workbook, must not leave half a run behind.
+  writeLine(JSON.stringify({ done: true }));
 } catch (error: any) {
   failed = describe(error);
 }
@@ -945,17 +1068,34 @@ if (failed) {
 /// New temp shim names.
 static SHIM_SEQ: AtomicU64 = AtomicU64::new(1);
 
-/// The shim's file on disk, removed when the host is dropped.
+/// The shim's file on disk, in a private folder of its own, removed when the host is dropped.
 pub(crate) struct TempShim {
+    dir: PathBuf,
     path: PathBuf,
 }
 
 impl TempShim {
     pub(crate) fn write() -> Result<TempShim, ScriptError> {
-        let unique = (std::process::id() as u64).saturating_mul(1000).saturating_add(SHIM_SEQ.fetch_add(1, Ordering::Relaxed));
-        let path = std::env::temp_dir().join(format!("gridcraft-office-scripts-{unique}.ts"));
-        std::fs::write(&path, BOOTSTRAP).map_err(|e| ScriptError::runtime(format!("the Office Scripts bridge could not be written: {e}")))?;
-        Ok(TempShim { path })
+        let dir = private_dir()?;
+        let path = dir.join("shim.ts");
+        let written = (|| -> std::io::Result<()> {
+            // `create_new` refuses a file that is already there: nothing another user planted in
+            // our folder is ever written through.
+            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+            }
+            file.write_all(BOOTSTRAP.as_bytes())
+        })();
+        match written {
+            Ok(()) => Ok(TempShim { dir, path }),
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&dir);
+                Err(ScriptError::runtime(format!("the Office Scripts bridge could not be written: {e}")))
+            }
+        }
     }
 
     pub(crate) fn path(&self) -> &Path {
@@ -963,8 +1103,62 @@ impl TempShim {
     }
 }
 
+/// A folder only this user can enter, made by us. `create_dir` fails when the path exists, so a
+/// folder or symlink another local user planted in the shared temporary folder is never reused;
+/// `0700` keeps the shim inside it unreadable.
+fn private_dir() -> Result<PathBuf, ScriptError> {
+    for _ in 0..8 {
+        let unique = (std::process::id() as u64).saturating_mul(1000).saturating_add(SHIM_SEQ.fetch_add(1, Ordering::Relaxed));
+        let dir = std::env::temp_dir().join(format!("gridcraft-office-scripts-{unique}"));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| {
+                        let _ = std::fs::remove_dir(&dir);
+                        ScriptError::runtime(format!("the Office Scripts bridge folder could not be secured: {e}"))
+                    })?;
+                }
+                return Ok(dir);
+            }
+            // A leftover from a process that had this pid: the next name is free.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(ScriptError::runtime(format!("the Office Scripts bridge folder could not be made: {e}"))),
+        }
+    }
+    Err(ScriptError::runtime("the Office Scripts bridge folder could not be made: the temporary folder is full of leftovers"))
+}
+
 impl Drop for TempShim {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_shim_lives_in_a_private_folder_of_its_own() {
+        let a = TempShim::write().unwrap();
+        let b = TempShim::write().unwrap();
+        assert_ne!(a.path(), b.path());
+        assert_eq!(a.path().file_name().and_then(|n| n.to_str()), Some("shim.ts"));
+        let text = std::fs::read_to_string(a.path()).unwrap();
+        assert!(text.contains("ExcelScriptNs"), "the enum namespace is in the shim");
+        assert!(text.contains("done: true"), "the completion line is in the shim");
+        let dir = a.path().parent().unwrap().to_path_buf();
+        assert!(dir.exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+            assert_eq!(std::fs::metadata(a.path()).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        drop(a);
+        assert!(!dir.exists(), "the folder goes with the host");
+        drop(b);
     }
 }

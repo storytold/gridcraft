@@ -25,7 +25,7 @@ shim and Bun.
 
 The runtime is a child process. The parent sends one JSON object, `{"script": "...", "limits":
 {...}}`, on stdin; the shim then writes a request line for every workbook operation it needs
-(`{"id": 7, "method": "range.setValue", "params": {"range": "A1", "value": 42}}`) and blocks
+(`{"id": 7, "method": "Range.setValue", "params": {"range": "A1", "value": 42}}`) and blocks
 reading one reply line. The engine turns the request into a normal command (`cell.set`,
 `range.setValues`, `home.bold`, …) through `Session::execute`, so a script gets the same
 journaling, protection, arrays, spills and undo as the ribbon.

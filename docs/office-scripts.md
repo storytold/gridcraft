@@ -72,6 +72,7 @@ not implemented throw a typed `OfficeScriptsError` whose message names the class
 | `DataValidation` | `script.validation`, `data.validation` | type, rule, error alert, prompt, ignore blanks (get and set), clear |
 | `NamedItem` | `formulas.nameManager` | name, formula/refers-to, scope, comment, type, visible |
 | global `console` | bridge `console.log` | log/info/warn/error, bounded |
+| global `ExcelScript` | the shim's enum namespace | `BorderIndex`, `BorderLineStyle`, `BorderWeight`, `ChartType`, `ClearApplyTo`, `DataValidationType`/`DataValidationOperator`, `InsertShiftDirection`/`DeleteShiftDirection`, `WorksheetVisibility`; an unknown family or member throws `notSupported` |
 
 Exact per-member status is generated: [office-scripts-coverage.md](office-scripts-coverage.md).
 Run `cargo xtask office-scripts-coverage --check`; the test in `gridcraft-script` fails when the
@@ -86,7 +87,9 @@ The runtime is a child process. Its stdin/stdout carry one JSON object per line:
 
 - parent → runtime: `{"script": "...", "limits": {"maxCalls": …, "maxOutputBytes": …}}`;
 - runtime → parent: `{"id": 7, "method": "Range.setValue", "params": {"range": "A1", "value": 42}}`;
-- parent → runtime: `{"id": 7, "result": null}` or `{"id": 7, "error": {"code": "engine", "message": "…"}}`.
+- parent → runtime: `{"id": 7, "result": null}` or `{"id": 7, "error": {"code": "engine", "message": "…"}}`;
+- runtime → parent, once: `{"done": true}` after `main` returns. Output that ends without it — a
+  crash, or a script that calls `process.exit` — fails the run and rolls the workbook back.
 
 Each call becomes a normal engine command through `Session::execute`, so a script gets the same
 journaling, protection, arrays, spills and undo as the ribbon. A run is an undo group: every call
@@ -99,6 +102,26 @@ Bounds: 100,000 characters of code, 10,000 calls, 30 s default (100 ms … 600 s
 timeout the child is killed. A malformed line, a broken pipe or a crashed runtime is an error the
 pane shows, never a panic. Errors carry the runtime's line when it reports one, and the pane
 underlines that line.
+
+## The trust model
+
+Office Scripts run as native code: Bun is a full JavaScript runtime, so a script can read and write
+files, start processes and reach the network. Excel sandboxes Office Scripts; GridCraft does not,
+and cannot without a separate OS-level sandbox. What the shim does do:
+
+- `process`, `Bun`, `require`, `fetch`, `module`, `exports` and `globalThis` are shadowed as
+  `undefined` in the script's scope, so an ordinary script cannot reach them by accident. This is
+  not a sandbox: `Function("return process")()` and a dynamic `import("node:fs")` still reach the
+  real runtime.
+- Bun starts with a cleared environment (`NO_COLOR` and the user's home folder, plus the
+  directories Windows needs to start a process), so the user's tokens and settings are not in the
+  script's `env`.
+- The shim lives in a private `0700` folder under the temporary folder, created exclusively, with a
+  `0600` file, so another local user cannot replace the code Bun runs.
+
+A script only runs when the person clicks Run (or an agent calls `script.run`). A script from
+`script.import`, or from a custom scripts folder, has exactly the same access as one written in the
+pane: treat a shared `.osts` like a macro from someone else.
 
 ## The recorder's command subset
 

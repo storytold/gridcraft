@@ -169,10 +169,21 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 21. Automation and add-ins (F)
 - VBA is out of scope (dropped on open, #6). Office Scripts run as a documented ExcelScript subset
-  on user-installed Bun (`script.*`, [office-scripts.md](office-scripts.md)); what remains is the
-  rest of the ExcelScript model (tables, charts, events, `getUsedRange`, formatting beyond bold)
-  and Office Add-ins, which are a different technology. No plugin or custom function API.
-  **Estimate:** 10–20 h for the rest of ExcelScript; Add-ins need an owner decision.
+  on user-installed Bun (`script.*`, [office-scripts.md](office-scripts.md)). Implemented today:
+  `Workbook`, `Worksheet`, `Range`, `RangeAreas`, `RangeFormat`/`RangeFont`/`RangeFill`/
+  `RangeBorder` (font bold/italic/underline/size/name/colour/strikethrough, fill, number format,
+  one border by side), `Table`/`TableColumn`, `Chart` (type, name, position, delete), `Comment`,
+  `DataValidation`, `NamedItem`, `ExcelScript` enums and `console`. Still missing:
+  - worksheet and workbook events (`onChanged`, `onActivated`, …)
+  - `Range.getUsedRange` variants (`getUsedRangeOrNullObject`, `getSurroundingRegion`) and
+    `getSpecialCells`
+  - chart axes, series, legends and data labels as objects (chart *elements* exist as commands)
+  - table rows, filters and sort, and table style options
+  - alignment, wrap and indent setters (`RangeFormat.setHorizontalAlignment`, …)
+  - `getCellProperties`, hyperlinks, conditional formatting and pivot tables
+  - `ExcelScript` enums that only those setters take (`HorizontalAlignment`, `VerticalAlignment`)
+  Office Add-ins are a different technology. **Estimate:** 10–20 h for the rest of ExcelScript;
+  Add-ins need an owner decision.
 
 ### 22. AI features (F)
 - No in-app assistant, natural-language formulas or Analyze Data; agent control via MCP is

@@ -322,9 +322,9 @@ fn folder_row(app: &mut SheetApp, ui: &mut Ui) {
                 Err(e) => app.office_scripts.status = Some(Status::failed(clean_error(&e))),
             }
         }
-        if ui.button(lang.tr("Import Script…")).clicked()
-            && let Some(pick) = &app.services.pick_open
-            && let Some(path) = pick()
+        if app.services.pick_script.is_some()
+            && ui.button(lang.tr("Import Script…")).clicked()
+            && let Some(path) = app.services.pick_script.as_ref().and_then(|pick| pick())
         {
             match app.session.run("script.import", json!({"path": path})) {
                 Ok(record) => {
@@ -377,7 +377,7 @@ fn download_bun(app: &mut SheetApp) {
 }
 
 fn import_bun(app: &mut SheetApp) {
-    let Some(pick) = &app.services.pick_open else { return };
+    let Some(pick) = &app.services.pick_bun else { return };
     let Some(path) = pick() else { return };
     let Some(import) = &app.services.import_bun else { return };
     match import(&path) {

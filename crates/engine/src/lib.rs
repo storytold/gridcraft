@@ -662,6 +662,7 @@ impl Session {
             self.journal_sizes.drain(..n);
             self.journal_bytes = kept;
             self.recording = self.recording.map(|r| r.saturating_sub(n));
+            self.script_recording = self.script_recording.map(|r| r.saturating_sub(n));
         }
     }
 
@@ -673,6 +674,7 @@ impl Session {
         }
         self.journal.truncate(keep);
         self.recording = self.recording.map(|r| r.min(self.journal.len()));
+        self.script_recording = self.script_recording.map(|r| r.min(self.journal.len()));
     }
 
     pub fn commands(&self) -> Vec<CommandInfo> {

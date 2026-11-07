@@ -16,7 +16,12 @@ struct Calls {
 impl BridgeExecutor for Calls {
     fn execute(&mut self, call: &BridgeCall) -> Result<Json, BridgeError> {
         self.calls.push(call.clone());
-        Ok(Json::Null)
+        Ok(match call.method.as_str() {
+            // The engine answers these with values, so the shim's readers have something to read.
+            "Worksheet.getName" => Json::String("Data".into()),
+            "RangeFormat.getRangeBorder" => json!({"kind": "border", "sheet": "Data", "range": "A1", "side": "edgetop"}),
+            _ => Json::Null,
+        })
     }
 }
 
@@ -75,4 +80,65 @@ fn a_script_without_main_is_reported() {
     let error = host.run("const x = 1;", &Limits::default(), &mut calls).expect_err("a script needs main");
     assert_eq!(error.kind, FailureKind::Runtime);
     assert!(error.message.contains("main"), "{}", error.message);
+}
+
+#[test]
+#[ignore = "needs Bun; set GRIDCRAFT_BUN"]
+fn a_worksheet_name_and_the_excel_script_enums_reach_the_bridge() {
+    let Some(host) = host() else { return };
+    // `activate()` used to store "" (the shim read `.sheet` from a string), and every
+    // `ExcelScript.…` enum was a ReferenceError before the namespace existed.
+    let script = r##"
+function main(workbook: ExcelScript.Workbook) {
+  const sheet = workbook.getWorksheet("Data");
+  sheet.activate();
+  sheet.getRange("A1").setValue(ExcelScript.BorderIndex.edgeTop);
+  sheet.getRange("A1").getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeTop).setColor("#ff0000");
+  console.log("name", sheet.getName());
+}
+"##;
+    let mut calls = Calls { calls: Vec::new() };
+    let report = host.run(script, &Limits::default(), &mut calls).expect("the script runs");
+    let methods: Vec<&str> = calls.calls.iter().map(|c| c.method.as_str()).collect();
+    // `getRangeBorder` builds the Border in the shim; `console.log` is answered by the host
+    // without reaching the engine.
+    assert_eq!(methods, ["Worksheet.activate", "Worksheet.getName", "Range.setValue", "RangeBorder.setColor", "Worksheet.getName"]);
+    assert_eq!(calls.calls[1].params["sheet"], json!("Data"), "activate kept the worksheet name");
+    assert_eq!(calls.calls[2].params["value"], json!("EdgeTop"), "the enum reaches the bridge as its value");
+    assert_eq!(calls.calls[3].params["side"], json!("EdgeTop"));
+    assert_eq!(report.output, vec!["name Data".to_string()]);
+}
+
+#[test]
+#[ignore = "needs Bun; set GRIDCRAFT_BUN"]
+fn an_unknown_excel_script_enum_is_a_typed_error() {
+    let Some(host) = host() else { return };
+    let mut calls = Calls { calls: Vec::new() };
+    let script =
+        "function main(workbook: ExcelScript.Workbook) { workbook.getWorksheet(\"Data\").getRange(\"A1\").setValue(ExcelScript.Nope.value); }";
+    let error = host.run(script, &Limits::default(), &mut calls).expect_err("an unknown enum is refused");
+    assert!(error.message.contains("ExcelScript.Nope"), "{}", error.message);
+    assert!(calls.calls.is_empty(), "nothing reaches the bridge");
+}
+
+#[test]
+#[ignore = "needs Bun; set GRIDCRAFT_BUN"]
+fn a_script_cannot_reach_process_bun_require_or_fetch() {
+    let Some(host) = host() else { return };
+    // `typeof require` is folded to "function" by the transpiler, so the test uses the globals:
+    // each one is `undefined` in the script's scope and throws on use.
+    let script = r#"
+function main() {
+  const blocked: string[] = [];
+  try { require("node:fs"); } catch { blocked.push("require"); }
+  try { process.exit(1); } catch { blocked.push("process"); }
+  try { Bun.spawn(["echo"]); } catch { blocked.push("Bun"); }
+  try { fetch("http://127.0.0.1:1/"); } catch { blocked.push("fetch"); }
+  console.log(blocked.join(","));
+}
+"#;
+    let mut calls = Calls { calls: Vec::new() };
+    let report = host.run(script, &Limits::default(), &mut calls).expect("the script runs");
+    assert_eq!(report.output, vec!["require,process,Bun,fetch".to_string()]);
+    assert!(calls.calls.is_empty(), "no workbook call is made");
 }

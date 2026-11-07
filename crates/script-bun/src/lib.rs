@@ -20,14 +20,14 @@
 pub mod discover;
 mod shim;
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
-use gridcraft_script::bridge::parse_request;
+use gridcraft_script::bridge::{MAX_LINE_BYTES, parse_request};
 use gridcraft_script::{BridgeExecutor, Limits, RunReport, RuntimeInfo, ScriptError, ScriptHost};
 use serde_json::Value as Json;
 
@@ -132,7 +132,10 @@ impl ScriptHost for BunHost {
         }
         let shim = self.shim_file()?.to_path_buf();
         let mut command = Command::new(&self.exe);
-        command.arg("run").arg(&shim).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).env("NO_COLOR", "1");
+        command.arg("run").arg(&shim).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        // A minimal environment: the script cannot read the user's tokens or settings out of it,
+        // and a parent's `NODE_OPTIONS`/`BUN_*` cannot change how the runtime starts.
+        command.env_clear().envs(runtime_env());
         let mut child = command.spawn().map_err(|e| ScriptError::runtime(format!("Bun could not start: {e}")))?;
         let Some(mut stdin) = child.stdin.take() else {
             let _ = child.kill();
@@ -188,29 +191,28 @@ impl ScriptHost for BunHost {
 
 /// Reads requests until the runtime finishes, executes them and answers. Every failure closes the
 /// bridge: the child is killed by the caller.
-fn pump(
-    mut reader: BufReader<std::process::ChildStdout>,
-    stdin: &mut std::process::ChildStdin,
-    exec: &mut dyn BridgeExecutor,
-    limits: &Limits,
-) -> Result<RunReport, ScriptError> {
+fn pump(mut reader: impl BufRead, stdin: &mut impl Write, exec: &mut dyn BridgeExecutor, limits: &Limits) -> Result<RunReport, ScriptError> {
     let mut report = RunReport::default();
     let mut console_bytes = 0usize;
     let mut wire_bytes = 0usize;
+    let mut line = Vec::new();
+    let mut completed = false;
     loop {
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(_) => {}
-            Err(e) => return Err(ScriptError::runtime(format!("the script runtime stopped responding: {e}"))),
+        if !read_bounded_line(&mut reader, &mut line, MAX_LINE_BYTES)? {
+            break;
         }
         wire_bytes = wire_bytes.saturating_add(line.len());
         if wire_bytes > MAX_WIRE_BYTES {
             return Err(ScriptError::limit(format!("the script sent more than {MAX_WIRE_BYTES} bytes to GridCraft")));
         }
-        let text = line.trim_end_matches(['\n', '\r']);
+        let text = std::str::from_utf8(&line).map_err(|_| ScriptError::protocol("the script runtime sent a line that is not UTF-8".to_string()))?;
+        let text = text.trim_end_matches(['\n', '\r']);
         if text.is_empty() {
             continue;
+        }
+        if completion_line(text) {
+            completed = true;
+            break;
         }
         if let Some(fatal) = fatal_line(text) {
             return Err(fatal);
@@ -241,7 +243,36 @@ fn pump(
         };
         write_line(stdin, &reply.to_line())?;
     }
+    if !completed {
+        // End of output without the shim's completion line: the runtime crashed or the script
+        // exited early (`process.exit(0)`). Committing the calls so far would leave half a run.
+        return Err(ScriptError::runtime("the script runtime stopped before the script finished"));
+    }
     Ok(report)
+}
+
+/// One line, bounded: `take` stops the read at `max + 1` bytes, so a script that writes a
+/// gigabyte without a newline cannot grow GridCraft's memory. `Ok(false)` is end of output.
+fn read_bounded_line(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usize) -> Result<bool, ScriptError> {
+    buf.clear();
+    let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
+    let n = reader.take(limit).read_until(b'\n', buf).map_err(|e| ScriptError::runtime(format!("the script runtime stopped responding: {e}")))?;
+    if n == 0 {
+        return Ok(false);
+    }
+    if buf.last() == Some(&b'\n') {
+        buf.pop();
+        return Ok(true);
+    }
+    if buf.len() > max {
+        return Err(ScriptError::limit(format!("the script sent a line longer than {max} bytes to GridCraft")));
+    }
+    Ok(true)
+}
+
+/// The shim's completion line, written after the script's `main` returns.
+fn completion_line(text: &str) -> bool {
+    serde_json::from_str::<Json>(text).ok().and_then(|v| v.get("done").and_then(Json::as_bool)) == Some(true)
 }
 
 /// A `{"fatal":{"message":"…","line":N}}` line, which the shim writes when the script fails
@@ -254,7 +285,7 @@ fn fatal_line(text: &str) -> Option<ScriptError> {
     Some(ScriptError::runtime(message).at(line).with_line_from_message())
 }
 
-fn write_line(stdin: &mut std::process::ChildStdin, text: &str) -> Result<(), ScriptError> {
+fn write_line(stdin: &mut impl Write, text: &str) -> Result<(), ScriptError> {
     stdin
         .write_all(text.as_bytes())
         .and_then(|()| stdin.write_all(b"\n"))
@@ -262,23 +293,39 @@ fn write_line(stdin: &mut std::process::ChildStdin, text: &str) -> Result<(), Sc
         .map_err(|e| ScriptError::runtime(format!("the script runtime stopped reading: {e}")))
 }
 
-/// A thread that keeps the runtime's stderr for an error message, bounded.
+/// A thread that keeps the runtime's stderr for an error message, bounded. The pipe is drained so
+/// a chatty child never blocks on a full buffer, but no more than [`MAX_STDERR`] bytes are kept.
 fn read_stderr(stderr: std::process::ChildStderr) -> std::thread::JoinHandle<String> {
     std::thread::spawn(move || {
         let mut reader = BufReader::new(stderr);
         let mut kept = Vec::new();
-        let mut line = String::new();
-        while let Ok(n) = reader.read_line(&mut line) {
+        let mut chunk = [0u8; 4096];
+        while let Ok(n) = reader.read(&mut chunk) {
             if n == 0 {
                 break;
             }
-            if kept.len() < MAX_STDERR {
-                kept.extend_from_slice(line.as_bytes());
-            }
-            line.clear();
+            let room = MAX_STDERR.saturating_sub(kept.len());
+            kept.extend_from_slice(&chunk[..n.min(room)]);
         }
         String::from_utf8_lossy(&kept).trim().to_string()
     })
+}
+
+/// The environment a run gets: `NO_COLOR`, the user's home folder (Bun puts its cache under it)
+/// and, on Windows, only the directories a child process needs to start. Nothing else from the
+/// parent leaks in, so a script cannot read the user's tokens or settings out of `env`.
+fn runtime_env() -> Vec<(String, std::ffi::OsString)> {
+    let mut env = vec![("NO_COLOR".to_string(), std::ffi::OsString::from("1"))];
+    let mut keys: Vec<&str> = vec!["HOME"];
+    if cfg!(windows) {
+        keys.extend(["SystemRoot", "SystemDrive", "windir", "TEMP", "TMP", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "PATH"]);
+    }
+    for key in keys {
+        if let Some(value) = std::env::var_os(key) {
+            env.push((key.to_string(), value));
+        }
+    }
+    env
 }
 
 /// Kills the child once `timeout` passes without the run finishing. The main thread signals
@@ -379,5 +426,82 @@ mod tests {
     fn the_shim_is_not_empty() {
         assert!(shim::BOOTSTRAP.contains("ExcelScript"));
         assert!(shim::BOOTSTRAP.contains("Range.setValue"));
+        // The script gets the enum namespace and a completion line the parent waits for.
+        assert!(shim::BOOTSTRAP.contains("ExcelScriptNs"));
+        assert!(shim::BOOTSTRAP.contains("done: true"));
+        // The dangerous globals are shadowed as parameters, not left in the script's scope.
+        for name in ["\"process\"", "\"Bun\"", "\"require\"", "\"fetch\""] {
+            assert!(shim::BOOTSTRAP.contains(name), "{name} is not shadowed");
+        }
+    }
+
+    /// Records the calls the bridge is asked to run.
+    struct Recording {
+        calls: Vec<String>,
+    }
+
+    impl BridgeExecutor for Recording {
+        fn execute(&mut self, call: &gridcraft_script::BridgeCall) -> Result<Json, gridcraft_script::BridgeError> {
+            self.calls.push(call.method.clone());
+            Ok(Json::Null)
+        }
+    }
+
+    fn run_pump(input: &[u8]) -> (Result<RunReport, ScriptError>, Vec<u8>, Vec<String>) {
+        let mut out = Vec::new();
+        let mut exec = Recording { calls: Vec::new() };
+        let result = pump(std::io::Cursor::new(input.to_vec()), &mut out, &mut exec, &Limits::default());
+        (result, out, exec.calls)
+    }
+
+    #[test]
+    fn a_run_ends_with_the_shims_completion_line() {
+        let input = b"{\"id\":1,\"method\":\"Range.setValue\",\"params\":{}}\n{\"done\":true}\n";
+        let (result, out, calls) = run_pump(input);
+        let report = result.unwrap();
+        assert_eq!(report.calls, 1);
+        assert_eq!(calls, vec!["Range.setValue"]);
+        assert!(out.ends_with(b"\n"), "{out:?}");
+    }
+
+    #[test]
+    fn output_that_stops_without_the_completion_line_is_an_error() {
+        // A crash, or a script that calls `process.exit(0)` after editing the workbook: the
+        // calls so far must not be committed as a finished run.
+        let input = b"{\"id\":1,\"method\":\"Range.setValue\",\"params\":{}}\n";
+        let (result, _, calls) = run_pump(input);
+        let error = result.unwrap_err();
+        assert_eq!(error.kind, gridcraft_script::bridge::FailureKind::Runtime);
+        assert!(error.message.contains("before the script finished"), "{}", error.message);
+        assert_eq!(calls, vec!["Range.setValue"], "the call ran, the run did not finish");
+    }
+
+    #[test]
+    fn a_line_at_the_limit_is_read_and_one_over_is_refused() {
+        let mut buf = Vec::new();
+        assert!(read_bounded_line(&mut std::io::Cursor::new(vec![b'x'; 16]), &mut buf, 16).unwrap());
+        assert_eq!(buf.len(), 16);
+        let error = read_bounded_line(&mut std::io::Cursor::new(vec![b'x'; 17]), &mut buf, 16).unwrap_err();
+        assert_eq!(error.kind, gridcraft_script::bridge::FailureKind::Limit);
+    }
+
+    #[test]
+    fn a_very_long_line_fails_the_run_instead_of_growing_memory() {
+        // `read_line` would buffer until the timeout; the bounded read stops at the limit.
+        let input = vec![b'x'; MAX_LINE_BYTES + 1];
+        let (result, _, _) = run_pump(&input);
+        assert_eq!(result.unwrap_err().kind, gridcraft_script::bridge::FailureKind::Limit);
+    }
+
+    #[test]
+    fn a_run_gets_a_minimal_environment() {
+        let env = runtime_env();
+        assert!(env.iter().any(|(key, value)| key == "NO_COLOR" && value.to_string_lossy() == "1"));
+        let allowed = ["NO_COLOR", "HOME", "SystemRoot", "SystemDrive", "windir", "TEMP", "TMP", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "PATH"];
+        let unix_allowed = ["NO_COLOR", "HOME"];
+        for (key, _) in &env {
+            assert!(allowed.contains(&key.as_str()), "{key} leaks in");
+            assert!(cfg!(windows) || unix_allowed.contains(&key.as_str()), "{key} is not passed on unix");
+        }
     }
 }

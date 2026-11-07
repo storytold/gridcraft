@@ -184,6 +184,16 @@ fn services() -> Services {
                 .and_then(|p| p.to_str().map(str::to_string))
         })),
         pick_folder: Some(Box::new(|| rfd::FileDialog::new().pick_folder().and_then(|p| p.to_str().map(str::to_string)))),
+        pick_script: Some(Box::new(|| {
+            rfd::FileDialog::new().add_filter("Office Script (.osts)", &["osts"]).pick_file().and_then(|p| p.to_str().map(str::to_string))
+        })),
+        pick_bun: Some(Box::new(|| {
+            // A Bun download is `bun.exe` on Windows and `bun` (no extension) elsewhere.
+            let dialog = rfd::FileDialog::new();
+            #[cfg(windows)]
+            let dialog = dialog.add_filter("Bun (bun.exe)", &["exe"]);
+            dialog.pick_file().and_then(|p| p.to_str().map(str::to_string))
+        })),
         pick_picture: Some(Box::new(|| {
             rfd::FileDialog::new()
                 .add_filter("Pictures (PNG, JPEG)", &["png", "jpg", "jpeg"])
@@ -193,9 +203,14 @@ fn services() -> Services {
         pick_save: Some(Box::new(|suggested: &str| {
             let path = std::path::Path::new(suggested);
             let stem = path.file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1").to_string();
-            // The suggested name's type (an export asks for .pdf, .csv or .html) comes first.
-            const TYPES: [(&str, &str); 4] =
-                [("Excel Workbook (.xlsx)", "xlsx"), ("CSV UTF-8 (.csv)", "csv"), ("Web Page (.html)", "html"), ("PDF (.pdf)", "pdf")];
+            // The suggested name's type (an export asks for .pdf, .csv, .html or .osts) comes first.
+            const TYPES: [(&str, &str); 5] = [
+                ("Excel Workbook (.xlsx)", "xlsx"),
+                ("CSV UTF-8 (.csv)", "csv"),
+                ("Web Page (.html)", "html"),
+                ("PDF (.pdf)", "pdf"),
+                ("Office Script (.osts)", "osts"),
+            ];
             let ext = path.extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase).filter(|e| TYPES.iter().any(|(_, x)| x == e));
             let ext = ext.unwrap_or_else(|| "xlsx".to_string());
             let mut dialog = rfd::FileDialog::new().set_file_name(format!("{stem}.{ext}"));
@@ -220,16 +235,54 @@ fn install_bun_from(path: &str) -> Result<String, String> {
         return Err(format!("{path} is not a file."));
     }
     let target = gridcraft_script_bun::discover::expected_path();
-    if let Some(dir) = target.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("could not make {}: {e}", dir.display()))?;
+    let dir = target.parent().ok_or_else(|| format!("{} has no folder to go in.", target.display()))?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("could not make {}: {e}", dir.display()))?;
+    // Copy beside the target, make it executable and check that it answers as Bun; only then
+    // replace the runtime discovery finds. A wrong or partial copy never becomes the runtime.
+    let staged = staged_path(&target);
+    if let Err(e) = copy_executable(source, &staged) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(e);
     }
-    std::fs::copy(source, &target).map_err(|e| format!("could not copy Bun to {}: {e}", target.display()))?;
+    if gridcraft_script_bun::discover::version_of(&staged, std::time::Duration::from_secs(3)).is_none() {
+        let _ = std::fs::remove_file(&staged);
+        return Err(format!("{path} did not answer as Bun (`--version`)."));
+    }
+    if let Err(e) = replace_file(&staged, &target) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(e);
+    }
+    Ok(target.display().to_string())
+}
+
+/// The temporary name an import is staged under, beside the target: same file name with `-part`
+/// before the extension, so Windows still sees an `.exe` it can start for the version check.
+fn staged_path(target: &std::path::Path) -> std::path::PathBuf {
+    let stem = target.file_stem().and_then(|s| s.to_str()).unwrap_or("bun");
+    match target.extension().and_then(|e| e.to_str()) {
+        Some(ext) => target.with_file_name(format!("{stem}-part.{ext}")),
+        None => target.with_file_name(format!("{stem}-part")),
+    }
+}
+
+/// Copies `source` to `target`, executable, and reports a failed `chmod` instead of ignoring it.
+fn copy_executable(source: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
+    std::fs::copy(source, target).map_err(|e| format!("could not copy Bun to {}: {e}", target.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755));
+        std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o755)).map_err(|e| format!("could not make Bun executable: {e}"))?;
     }
-    Ok(target.display().to_string())
+    Ok(())
+}
+
+/// Replaces `target` with `staged`. Windows refuses to rename over an existing file, so the old
+/// executable is removed first; a failure leaves no partial file where discovery looks.
+fn replace_file(staged: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
+    if target.exists() {
+        std::fs::remove_file(target).map_err(|e| format!("could not replace {}: {e}", target.display()))?;
+    }
+    std::fs::rename(staged, target).map_err(|e| format!("could not place Bun at {}: {e}", target.display()))
 }
 
 /// Opens a URL or file with the system's default application.
@@ -460,6 +513,7 @@ fn main() -> eframe::Result<()> {
 
 #[cfg(test)]
 mod packaging_tests {
+    use crate::{copy_executable, replace_file, staged_path};
     use gridcraft_engine::io::FileKind;
 
     /// The text between `start` and `end` that follows each `marker` in `text`, sorted (e.g. the
@@ -484,5 +538,27 @@ mod packaging_tests {
         for ext in &mac {
             assert!(FileKind::from_path(&format!("book.{ext}")).is_some(), "GridCraft doesn't open .{ext}");
         }
+    }
+
+    /// Import Bun stages the file beside the runtime and replaces it only once it is there:
+    /// a failed copy never leaves a broken executable where discovery looks.
+    #[test]
+    fn an_import_is_staged_beside_the_runtime_and_only_then_replaces_it() {
+        let base = std::env::temp_dir().join(format!("gridcraft-bun-install-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let target = base.join(gridcraft_script_bun::discover::bun_exe_name());
+        std::fs::write(&target, b"old").unwrap();
+        let staged = staged_path(&target);
+        assert_eq!(staged.parent(), target.parent());
+        assert_ne!(staged.file_name(), target.file_name());
+        let download = base.join("download");
+        std::fs::write(&download, b"new").unwrap();
+        copy_executable(&download, &staged).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"old", "the old runtime stays until the staged copy is ready");
+        replace_file(&staged, &target).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
+        assert!(!staged.exists());
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

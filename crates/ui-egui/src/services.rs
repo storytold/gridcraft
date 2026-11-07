@@ -20,6 +20,10 @@ pub struct Services {
     /// Desktop: submit the PDF with the chosen settings on a worker.
     pub print_native: Option<printing::Submit>,
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
+    /// Native `.osts` picker (Import Script), separate from workbook opening.
+    pub pick_script: Option<Box<dyn Fn() -> Option<String>>>,
+    /// Native executable picker (Import Bun).
+    pub pick_bun: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<PickSave>,
     /// Native picture picker (PNG/JPEG), separate from workbook opening.
     pub pick_picture: Option<Box<dyn Fn() -> Option<String>>>,
