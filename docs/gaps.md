@@ -11,6 +11,18 @@ docs; the summary is in [target-app-parity.md](target-app-parity.md).
 Kinds: **F** feature · **U** UI/UX · **FF** file format · **H** hardware · **L** localization ·
 **P** performance · **S** stability.
 
+### Imported formula caches (#2770)
+
+A cache-preserving open path builds on #2308's `Calc::recalc_missing`: `file.open` keeps
+saved formula results and calculates missing ones, warns that caches may be stale, and
+accepts `recalculate: true` for the previous full-recalc behavior. Unresolved calls are
+not made implicitly volatile solely because the function is absent. Static argument
+dependencies still invalidate normally; conservative name/dynamic invalidation remains.
+Nine synthetic engine lifecycle tests cover missing chains, unrelated/related edits,
+XLSX save/reopen, explicit recalculation and live dynamic/defined-function references.
+Structural edits and explicit full recalculation can still replace unsupported results;
+this is not complete #2770 coverage or a real-world workbook qualification.
+
 ## Beta blockers
 
 No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-gate).
@@ -193,6 +205,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-11-01 | minor | §4: chart data tables implemented for column, bar, line, area and compatible combo charts, with legend keys and border settings, live source values, XLSX round-trip and print/PDF; other chart gaps remain. |
 | 2026-10-31 | minor | §13: Solver Options (Max Evaluations, Integer Optimality and the Evolutionary options), saved with the model |
 | 2026-10-31 | minor | §13: Solver Load/Save Model (`data.solverSaveModel`, `data.solverLoadModel`) and Reset All (`data.solverReset`), with buttons in the Solver Parameters dialog |
+| 2026-10-28 | trivial | Keep the stale formula-cache warning visible ahead of overflowing import warnings; a synthetic XLSX regression verifies the visible notice, retained warnings and overflow count |
+| 2026-10-28 | minor | Cache-preserving imported formula open and explicit recalculation, building on #2308; synthetic lifecycle coverage, remaining structural-recalc limitation (#2770). |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-22 | minor | §20: a native window per workbook window, New Window on the same workbook and Arrange All on the desktop; left: Arrange All across monitors, the web's one window, pen pressure (estimate 10–14 h → 5–8 h) |

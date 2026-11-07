@@ -124,11 +124,17 @@ fn dynamic_spills_and_legacy_cse_keep_distinct_ranges() {
     let (back, _) = read_xlsx(&bytes).unwrap();
     let sh = back.sheet(0).unwrap();
     assert_eq!(sh.cell(at("A1")).unwrap().formula.as_ref().unwrap().array, Some(range("A1:A2")));
-    // A legacy array's cached values are dropped on read: the formula fills its range on recalc (#156).
+    // A legacy array's follower values are not normal cells: later recalculation can fill them (#156).
     assert!(sh.cell(at("A2")).is_none());
     assert_eq!(sh.cell(at("B1")).unwrap().formula.as_ref().unwrap().array, None);
     assert!(sh.cell(at("B2")).is_none());
     assert!(sh.cell(at("B3")).is_none());
+    // Array followers are cached spill values, never ordinary cells blocking recalculation.
+    assert_eq!(sh.value(at("A2")), Value::Number(2.0));
+    assert_eq!(sh.value(at("B2")), Value::Number(2.0));
+    assert_eq!(sh.value(at("B3")), Value::Number(3.0));
+    assert_eq!(sh.spill_ranges.get(&at("A1")), Some(&range("A1:A2")));
+    assert_eq!(sh.spill_ranges.get(&at("B1")), Some(&range("B1:B3")));
     assert_eq!(sh.value(at("C1")), Value::Number(6.0));
 }
 
@@ -479,4 +485,79 @@ fn long_flat_chains_are_scalar_formulas() {
     // A range anywhere in the chain still needs array evaluation.
     assert_dynamic(&sheet, "B4", "B4");
     assert_eq!(cell(&sheet, "B1").child("f").unwrap().text, refs);
+}
+
+/// Sparse cached array results survive even beyond the old million-position export cutoff.
+#[test]
+fn sparse_array_cache_past_millionth_cell_survives_roundtrip() {
+    for dynamic in [false, true] {
+        let metadata = if dynamic { " cm=\"1\"" } else { "" };
+        let xml = format!(
+            r#"<sheetData>
+          <row r="1"><c r="A1"{metadata}><f t="array" ref="A1:A1000002">SYNTHETIC_UNSUPPORTED_ARRAY()</f><v>17</v></c></row>
+          <row r="1000002"><c r="A1000002"><v>42</v></c></row>
+        </sheetData>"#
+        );
+        let bytes = super::minimal(&xml, &[], "", "");
+        let (wb, _) = read_xlsx(&bytes).unwrap();
+        assert_eq!(wb.sheet(0).unwrap().value(at("A1000002")), Value::Number(42.0));
+        let saved = write_xlsx(&wb).unwrap();
+        let mut pkg = Package::open(&saved).unwrap();
+        let xml = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+        assert_eq!(cell(&xml, "A1000002").child("v").unwrap().text, "42");
+        let (back, _) = read_xlsx(&saved).unwrap();
+        let sh = back.sheet(0).unwrap();
+        assert_eq!(sh.value(at("A1")), Value::Number(17.0));
+        assert_eq!(sh.value(at("A1000002")), Value::Number(42.0), "dynamic={dynamic}");
+        assert_eq!(sh.spill_ranges.get(&at("A1")), Some(&range("A1:A1000002")));
+        assert!(sh.cell(at("A1000002")).is_none());
+    }
+}
+
+/// Export ignores out-of-range cache entries and lets real cell content take precedence.
+#[test]
+fn array_cache_export_respects_columns_stored_cells_and_invalid_ranges() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    let mut anchor = formula("SYNTHETIC_UNSUPPORTED_ARRAY()", 17.0);
+    Arc::make_mut(anchor.formula.as_mut().unwrap()).array = Some(range("B1:C4"));
+    sh.cells.set(at("B1"), anchor);
+    sh.spill_ranges.insert(at("B1"), range("B1:C4"));
+    for (address, value) in [("A2", 99.0), ("B2", 2.0), ("C3", 3.0), ("D3", 99.0), ("B5", 99.0)] {
+        sh.spill.insert(at(address), Value::Number(value));
+    }
+    sh.cells.set(at("C3"), Cell::value(Value::Number(123.0)));
+    // Malformed range metadata must not make ordered-map range lookup panic.
+    sh.spill_ranges.insert(at("F4"), RangeRef { start: at("F4"), end: at("F1") });
+    let saved = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let xml = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    assert_eq!(cell(&xml, "B2").child("v").unwrap().text, "2");
+    assert_eq!(cell(&xml, "C3").child("v").unwrap().text, "123");
+    let addresses: Vec<_> = xml.child("sheetData").unwrap().kids("row").flat_map(|r| r.kids("c")).filter_map(|c| c.attr("r")).collect();
+    for outside in ["A2", "D3", "B5"] {
+        assert!(!addresses.contains(&outside), "do not export an out-of-range spill: {outside}");
+    }
+}
+
+/// Single-cell metadata saturation must not detach a later accepted multi-cell array's caches.
+#[test]
+fn accepted_array_keeps_metadata_after_single_cell_metadata_limit() {
+    use std::fmt::Write as _;
+    let mut xml = String::from("<sheetData>");
+    for row in 1..=65_536 {
+        write!(xml, "<row r=\"{row}\"><c r=\"A{row}\" cm=\"1\"><f t=\"array\" ref=\"A{row}\">1</f><v>1</v></c></row>").unwrap();
+    }
+    xml.push_str(r#"<row r="65537"><c r="A65537"><f t="array" ref="A65537:A65538">SYNTHETIC_UNSUPPORTED_ARRAY()</f><v>17</v></c></row><row r="65538"><c r="A65538"><v>42</v></c></row></sheetData>"#);
+    let bytes = super::minimal(&xml, &[], "", "");
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let area = range("A65537:A65538");
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.value(at("A65538")), Value::Number(42.0));
+    assert_eq!(sh.spill_ranges.get(&area.start), Some(&area));
+    let saved = write_xlsx(&wb).unwrap();
+    let (back, _) = read_xlsx(&saved).unwrap();
+    let sh = back.sheet(0).unwrap();
+    assert_eq!(sh.value(at("A65538")), Value::Number(42.0));
+    assert_eq!(sh.spill_ranges.get(&area.start), Some(&area));
 }

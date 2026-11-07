@@ -14,6 +14,31 @@ support comes from `crates/engine/src/io.rs` (`FileKind`), `crates/xlsx/src` and
 Legacy scalar `INDEX(range, MATCH(...))` formulas remain ordinary formulas on save, including when
 shared formulas are expanded during import (`array_export.rs`, #1505).
 
+## Saved formula results on open (#2770)
+XLSX legacy and dynamic arrays retain their stored follower values and declared ranges in
+spill storage. They are not ordinary cells that block later recalculation. Synthetic controls
+cover unsupported cached anchors, zero, empty text, false and errors across unrelated edits
+and save/reopen, plus row/column shifts of legacy array ranges. Sparse followers beyond
+a million positions survive export without enumerating the declared area. Legacy-array
+ranges protect partial content edits even when follower caches are sparse or empty;
+formatting and whole-array replacement remain supported. Clear Contents/Clear All also
+reject partial selections before changing the workbook; whole-array clears accept unions
+of areas but exclude filter-hidden rows from coverage. Missing cache entries are not
+reconstructed and no native Excel corpus qualification is claimed. A missing explicitly
+marked array anchor keeps stored followers when its calculation fails or produces no
+placeable replacement array; a successful replacement still supersedes old results. The
+freshness notice covers follower-only caches. Accepted multi-cell ranges keep their
+metadata even after single-cell metadata admission reaches its limit; the existing
+multi-cell count, area and scan-work budgets remain in force.
+`file.open` preserves nonempty formula caches, fills only absent results, and reports a
+stale-cache warning. `recalculate: true` requests a full recalculation. Normal argument
+edits invalidate their dependents, while unrelated edits no longer invalidate a saved
+unresolved function solely because its name is unknown. Calculate Now and structural
+edits still recalculate all formulas, which can replace unsupported results with errors.
+The synthetic lifecycle checks are in `crates/engine/tests/it/cached_open.rs`; they do not
+prove cache freshness or arbitrary Excel-authored file fidelity. This open policy uses
+#2308's additive calculation API rather than duplicating it.
+
 ## Workbook window settings
 
 GridCraft keeps one modelled workbook window. On XLSX import it selects the first visible
@@ -179,6 +204,12 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-11-01 | trivial | XLSX selects the first visible workbook view as one unit and bounds imported/exported tab ratios; isolated attributes and sheet-edit round trips covered, with firstSheet left to #2264 (#3057) |
 | 2026-10-31 | minor | CSV and text open detects each column's date order: a value that reads only day first (`31/05/2026`) makes the column day first, a value that reads only month first (`12/31/2026`) makes it month first, an all-ambiguous column keeps month first with a warning, and a column with both kinds stays text with a warning (#2765) |
 | 2026-10-31 | minor | XLSX open reads Google Sheets' `IFERROR(__xludf.DUMMYFUNCTION("…"),cached)` export wrapper as the formula inside when GridCraft calculates every function in it (plain, shared and array formulas, whole or nested; Google-only functions and unparseable, over-long or over-deep inner text keep the wrapper and the cached value) and keeps the cached value; saving writes the real formula with Excel's `_xlfn.` prefixes (#2871) |
+| 2026-10-30 | minor | Keep stored array followers when a missing anchor cannot produce a replacement; retain accepted multi-cell range metadata after single-cell metadata saturation; include follower-only caches in the freshness notice. |
+| 2026-10-30 | minor | Reject partial Clear Contents/Clear All selections inside legacy arrays using declared ranges, including missing cached followers; allow whole-array selection unions and respect filter-hidden rows. |
+| 2026-10-30 | minor | Export sparse array caches by stored entries without the million-cell cutoff; protect missing legacy-array followers using declared ranges, including when no follower cache exists. |
+| 2026-10-30 | minor | Preserve XLSX legacy/dynamic array follower caches in spill storage and retain bounded ranges, so cached open and save/reopen do not lose stored array results; explicit full recalculation remains supported. |
+| 2026-10-28 | trivial | Keep the stale formula-cache warning visible ahead of overflowing import warnings; a synthetic XLSX regression verifies the visible notice, retained warnings and overflow count |
+| 2026-10-28 | minor | Cache-preserving imported formula open and explicit recalculation, building on #2308; synthetic lifecycle coverage, remaining structural-recalc limitation (#2770). |
 | 2026-10-21 | minor | HTML (Save as Web Page) writes pictures (`data:` URI `<img>`) and charts (inline SVG from the chart crate's drawing primitives, text included) at their anchors; the table uses the sheet's column widths and row heights when the sheet has either, and output for sheets without pictures or charts is unchanged |
 | 2026-10-20 | trivial | XLSX shared strings: Japanese phonetic runs (ふりがな, `<rPh sb="…" eb="…">` with `<phoneticPr>`) are read into the workbook and written back next to the string with the same text, so an open + save no longer deletes them; bad offsets and readings are dropped with a warning, a `<phoneticPr>` without runs is kept on its own, and when duplicate `<si>` items share a text but not a reading only the first reading is written (reported on open) (`phonetic_tests.rs`) |
 | 2026-10-20 | minor | A workbook theme's major/minor per-script typefaces (`<a:font script="Arab" typeface="…"/>`, also Hebr, Jpan and the rest) are read and written back in file order after `<a:cs>`; they were dropped before. A hostile file is held to 64 entries of 256 characters |
