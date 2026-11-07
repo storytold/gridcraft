@@ -21,6 +21,7 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     }
     ui.add_space(18.0);
     section(ui, lang, "Options|Editing");
+    fixed_decimal_options(app, ui, lang);
     let mut autocomplete = app.ui.autocomplete;
     if ui.checkbox(&mut autocomplete, lang.tr("Enable AutoComplete for cell values")).changed() {
         app.run_or_alert("options.autoComplete", json!({"on": autocomplete}));
@@ -90,6 +91,29 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
             .response
             .labelled_by(label.id);
         ui.end_row();
+    });
+}
+
+/// Automatically insert a decimal point, with its Places below it, live only while the option is
+/// on, as Excel lays them out. Both run `options.fixedDecimal`; the field keeps Places within the
+/// range the command takes.
+fn fixed_decimal_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
+    let mut on = app.session.prefs.fixed_decimal;
+    if ui.checkbox(&mut on, lang.tr("Automatically insert a decimal point")).changed() {
+        app.run_or_alert("options.fixedDecimal", json!({"on": on}));
+    }
+    ui.add_enabled_ui(on, |ui| {
+        ui.horizontal(|ui| {
+            ui.add_space(24.0);
+            let label = ui.label(lang.tr("Places:"));
+            let max = gridcraft_engine::core::parse::MAX_FIXED_DECIMAL_PLACES;
+            let current = app.session.prefs.fixed_decimal_places;
+            let mut places = current;
+            let field = egui::DragValue::new(&mut places).range(-max..=max).speed(0.1).update_while_editing(true);
+            if ui.add(field).labelled_by(label.id).changed() && places != current {
+                app.run_or_alert("options.fixedDecimal", json!({"places": places}));
+            }
+        });
     });
 }
 

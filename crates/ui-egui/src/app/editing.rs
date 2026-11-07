@@ -1,4 +1,5 @@
 use super::{SheetApp, clean_error, editor, formula_bar, formula_locale, json, now_ms};
+use gridcraft_engine::cmd::edit;
 
 /// Why a draft whose sheet was deleted while it was open is dropped.
 pub(crate) const DRAFT_SHEET_GONE: &str = "The sheet of the cell being edited was deleted, so the entry was discarded.";
@@ -161,6 +162,10 @@ impl SheetApp {
             }
             None => text,
         };
+        // Automatically insert a decimal point (File › Options › Editing): a whole number typed
+        // here gets its decimal point, before validation sees the value.
+        let fixed = self.session.active().and_then(|d| edit::fixed_decimal_entry(&self.session.prefs, &d.wb, ed.sheet, ed.cell, &text));
+        let text = fixed.unwrap_or(text);
         // Data validation.
         if let Some(d) = self.session.active()
             && let Some((dv, msg)) = gridcraft_engine::cmd::data::check_validation(&d.wb, ed.sheet, ed.cell, &text)
