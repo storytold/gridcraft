@@ -264,6 +264,12 @@ pub struct Workbook {
     /// Unmodelled file content kept for saving (package root and workbook level). Not in JSON.
     #[serde(skip)]
     pub preserved: Option<Arc<crate::preserved::Preserved>>,
+    /// The workbook's data model (`xl/model/item.data`) when the reader had to drop it because the
+    /// part is larger than the pass-through limit. The writer refuses to save such a workbook
+    /// rather than write a package whose data model (and the PivotTables built on it) is gone;
+    /// `None` = the part is kept, or the workbook never had one. Not in JSON.
+    #[serde(skip)]
+    pub dropped_model: Option<crate::preserved::DroppedPart>,
     /// The folder the workbook was read from, which relative paths to linked workbooks in
     /// `preserved` are relative to. Saving into another folder rewrites them from there. Not in JSON.
     #[serde(skip)]
@@ -364,6 +370,7 @@ impl Workbook {
             macros_read: vec![],
             macros_unread: Arc::default(),
             preserved: None,
+            dropped_model: None,
             source_dir: None,
             source_path: None,
         }

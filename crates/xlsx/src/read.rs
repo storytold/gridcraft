@@ -449,6 +449,8 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         }
     }
     wb.preserved = kept.workbook(&mut cx, &wb_part, &wb_xml, &file_to_model);
+    // A model part too large to keep makes saving refuse: losing it silently is never acceptable.
+    wb.dropped_model = kept.dropped_model();
     // Data-model PivotTables are not modelled (their cache source is external), and the
     // pass-through reader drops their graph because it reaches rewritten content. Keep it here so
     // a save of the workbook read from this package still has them.

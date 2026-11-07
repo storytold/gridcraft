@@ -55,6 +55,9 @@ pub struct KeptReader {
     parts_left: usize,
     /// Whether the workbook's model database (`xl/model/item.data`) was dropped by the budget.
     model_dropped: bool,
+    /// The model database when it was dropped because it is larger than
+    /// [`crate::passthrough::MAX_KEPT_PART`], which makes saving refuse rather than lose it.
+    dropped_model: Option<DroppedPart>,
 }
 
 impl KeptReader {
@@ -67,6 +70,7 @@ impl KeptReader {
             budget: kept_total(),
             parts_left: MAX_KEPT_PARTS,
             model_dropped: false,
+            dropped_model: None,
         };
         if let Ok(root) = raw_rels(cx, "")
             && root.iter().any(|r| r.rel_type.starts_with("http://purl.oclc.org/"))
@@ -105,6 +109,14 @@ impl KeptReader {
     /// whose model is gone.
     pub fn keeps_model_data(&self) -> bool {
         !self.model_dropped
+    }
+
+    /// The model database the size limit made the reader drop, if any.
+    ///
+    /// Such a part can't be kept, so saving the workbook would lose the model: the writer refuses
+    /// it instead ([`crate::IoError::DroppedPart`]).
+    pub fn dropped_model(&self) -> Option<DroppedPart> {
+        self.dropped_model.clone()
     }
 
     fn content_type(&self, part: &str) -> Option<String> {
@@ -230,6 +242,11 @@ impl KeptReader {
                 cx.warn(format!("{} part {} was dropped: {why}", kind(&r.rel_type), r.target));
                 if kind(&r.rel_type) == "powerPivotData" {
                     self.model_dropped = true;
+                    // The model exists but is too large to keep: remember it, so the writer refuses
+                    // instead of writing the package without its data model.
+                    if let Some(size) = cx.pkg.part_size(&r.target).filter(|size| *size > MAX_KEPT_PART) {
+                        self.dropped_model = Some(DroppedPart { name: r.target.clone(), size, limit: MAX_KEPT_PART });
+                    }
                 }
             }
         }
