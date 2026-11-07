@@ -396,6 +396,45 @@ fn csv_save_keeps_the_separator_it_was_opened_with() {
     assert_eq!(String::from_utf8(save_bytes(&wb, "tabs.csv").unwrap()).unwrap(), tabs);
 }
 
+/// #1446: File › Open honours Excel's `sep=` first line; saved again, the file opens in the same
+/// columns. A `.txt` file is read with tabs, so its `sep=` line stays data.
+#[test]
+fn csv_open_honours_a_sep_line_and_saves_a_file_that_reopens_in_columns() {
+    let (wb, _) = open_bytes("parts.csv", b"sep=|\r\nPart|Note\r\n1|a,b\r\n").unwrap();
+    let sh = wb.sheet(0).unwrap();
+    let text = |a: &str| sh.value(CellRef::parse(a).unwrap()).as_text().map(str::to_string);
+    assert_eq!((text("A1"), text("B1"), text("B2")), (Some("Part".into()), Some("Note".into()), Some("a,b".into())));
+    let saved = save_bytes(&wb, "parts.csv").unwrap();
+    assert_eq!(String::from_utf8(saved.clone()).unwrap(), "Part,Note\r\n1,\"a,b\"\r\n");
+    let (again, _) = open_bytes("parts.csv", &saved).unwrap();
+    assert_eq!(again.sheet(0).unwrap().value(CellRef::parse("B2").unwrap()).as_text(), Some("a,b"));
+    // `sep=;` keeps its semicolons, as a semicolon file does.
+    let (semi, _) = open_bytes("semi.csv", b"sep=;\r\na;b\r\n").unwrap();
+    assert_eq!(save_bytes(&semi, "semi.csv").unwrap(), b"a;b\r\n");
+    let (txt, _) = open_bytes("list.txt", b"sep=|\r\na\tb\r\n").unwrap();
+    assert_eq!(txt.sheet(0).unwrap().value(CellRef::new(0, 0)).as_text(), Some("sep=|"));
+}
+
+/// A first cell that reads like a `sep=` line needs one of its own only in a CSV. A `.tsv` is read
+/// with tabs given, so a `sep=` line there would come back as an extra row above the data.
+#[test]
+fn tsv_save_writes_no_sep_line_and_reopens_in_place() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(0, 0), gridcraft_core::Value::text("sep=;"));
+    sh.set_value(CellRef::new(1, 0), gridcraft_core::Value::text("x"));
+    let saved = save_bytes(&wb, "list.tsv").unwrap();
+    assert_eq!(saved, b"sep=;\r\nx\r\n");
+    let (again, _) = open_bytes("list.tsv", &saved).unwrap();
+    let text = |r: u32| again.sheet(0).unwrap().value(CellRef::new(r, 0)).as_text().map(str::to_string);
+    assert_eq!((text(0), text(1)), (Some("sep=;".into()), Some("x".into())));
+    // Saved as CSV, the same sheet keeps its protective line, which reading drops again.
+    let csv = save_bytes(&wb, "list.csv").unwrap();
+    assert_eq!(csv, b"sep=,\r\nsep=;\r\nx\r\n");
+    let (again, _) = open_bytes("list.csv", &csv).unwrap();
+    assert_eq!(again.sheet(0).unwrap().value(CellRef::new(0, 0)).as_text(), Some("sep=;"));
+}
+
 #[test]
 fn csv_save_of_a_workbook_not_read_from_csv_uses_commas() {
     let mut wb = Workbook::new();
