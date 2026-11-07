@@ -191,81 +191,6 @@ fn index_area_number_overflow() {
     }
 }
 
-/// INDEX with one index, as observed in Excel: a 2-D reference needs both indexes (#REF!), a
-/// column array gives a 1×1 array (TYPE 64), a row array or 1-D reference gives one value.
-#[test]
-fn index_with_one_index() {
-    let mut t = T::new();
-    for (i, v) in [10, 20, 30].iter().enumerate() {
-        t.set(&format!("A{}", i + 1), &v.to_string());
-    }
-    let mut k = 1;
-    for r in 5..=7 {
-        for col in ["A", "B", "C"] {
-            t.set(&format!("{col}{r}"), &k.to_string());
-            k += 1;
-        }
-    }
-    for (row, (formula, expected)) in [
-        // Column arrays keep Excel's 1×1 array; row arrays and explicit columns give a value.
-        ("=INDEX({10;20;30},2)", 20.0),
-        ("=TYPE(INDEX({10;20;30},2))", 64.0),
-        ("=TYPE(INDEX(SEQUENCE(3),2))", 64.0),
-        ("=TYPE(INDEX({10;20;30},2,1))", 1.0),
-        ("=TYPE(INDEX({10,20,30},2))", 1.0),
-        ("=TYPE(INDEX(INDEX({10;20;30},2),1))", 1.0),
-        ("=SUM(INDEX({10;20;30},2))", 20.0),
-        // 1-D references with one index are single-cell references.
-        ("=TYPE(INDEX(A1:A3,2))", 1.0),
-        ("=SUM(INDEX(A1:A3,1):INDEX(A1:A3,3))", 60.0),
-        ("=SUM(INDEX((A1:A3,A5:C7),2))", 20.0),
-        // A 2-D array with one index is the row.
-        ("=SUM(INDEX({1,2;3,4},2))", 7.0),
-        ("=SUM(INDEX({1,2;3,4},0))", 10.0),
-        // A 2-D reference with an empty (not omitted) column argument is the row.
-        ("=SUM(INDEX(A5:C7,2,))", 15.0),
-        ("=SUM(INDEX(A5:C7,2,,1))", 15.0),
-        ("=COLUMNS(INDEX((A1:A3,A5:C7),2,,2))", 3.0),
-        ("=INDEX(A5:C7,2,2)", 5.0),
-        // A 2-D reference with one index is #REF!, and the error carries through.
-        ("=TYPE(INDEX(A5:C7,2))", 16.0),
-        ("=ISREF(INDEX(A5:C7,2))", 0.0),
-    ]
-    .iter()
-    .enumerate()
-    {
-        let at = format!("J{}", row * 4 + 1);
-        t.set(&at, formula);
-        let got = match t.get(&at) {
-            Value::Bool(b) => f64::from(u8::from(b)),
-            v => v.as_f64().unwrap_or_else(|| panic!("{formula} = {v:?}")),
-        };
-        assert_eq!(got, *expected, "{formula}");
-    }
-    for formula in [
-        "=INDEX(A5:C7,2)",
-        "=INDEX(A5:C7,0)",
-        "=INDEX(A5:C7,1.9)",
-        "=INDEX(A5:C7,)",
-        "=INDEX(A5:B6,1)",
-        "=INDEX(A5:C7,2)+1",
-        "=SUM(INDEX(A5:C7,{1;2}))",
-        "=ROWS(INDEX(INDEX(A5:C7,2),3))",
-        "=SUM(A5:INDEX(A5:C7,2))",
-        "=SUM(INDEX(A5:C7,2):C7)",
-    ] {
-        t.set("L1", formula);
-        assert_eq!(t.get("L1"), Value::Error(CellError::Ref), "{formula}");
-    }
-    t.set("L1", "=INDEX(A5:C7,{1;2})");
-    assert_eq!([t.get("L1"), t.get("L2")], [Value::Error(CellError::Ref), Value::Error(CellError::Ref)]);
-    t.set("L1", "=IFERROR(INDEX(A5:C7,2),\"e\")");
-    assert_eq!(t.get("L1"), Value::from("e"));
-    // A bad position is still #VALUE!.
-    t.set("L1", "=INDEX(A5:C7,\"x\")");
-    assert_eq!(t.get("L1"), Value::Error(CellError::Value));
-}
-
 #[test]
 fn errors_and_cycles() {
     let mut t = T::new();
@@ -428,149 +353,6 @@ fn date_text_coerces_in_the_workbook_date_system() {
         assert_eq!(t.num("E1"), serial, "{sys:?}");
         assert_eq!(t.num("F1"), serial, "{sys:?}");
     }
-}
-
-/// Lookups compare numbers exactly while `=` and the criteria functions compare them at 15
-/// significant digits. Every expectation was observed in Excel 365 with these fixtures
-/// (`=0.1+0.2` is 0.30000000000000004, `=100+1E-14` is 100.00000000000001).
-#[test]
-fn lookups_compare_numbers_exactly() {
-    let mut t = T::new();
-    for (at, input) in [
-        ("A1", "=0.1+0.2"),
-        ("A2", "0.3"),
-        ("A3", "=100+1E-14"),
-        ("A4", "100"),
-        ("A5", "=1E15+0.5"),
-        ("A6", "1E15"),
-        // Ascending 0.1, 0.3+e, 0.5 and the same descending.
-        ("B1", "0.1"),
-        ("B2", "=0.1+0.2"),
-        ("B3", "0.5"),
-        ("C1", "0.5"),
-        ("C2", "=0.1+0.2"),
-        ("C3", "0.1"),
-        // 0.3 next to 0.3+e, ascending and descending.
-        ("D1", "0.3"),
-        ("D2", "=0.1+0.2"),
-        ("D3", "0.7"),
-        ("E1", "0.7"),
-        ("E2", "=0.1+0.2"),
-        ("E3", "0.3"),
-        ("G1", "=0.1+0.2"),
-        ("H1", "x"),
-        ("G2", "row2"),
-        // The bisection probes 0.3 first and must not run on into 0.3+e.
-        ("J1", "0.1"),
-        ("J2", "0.2"),
-        ("J3", "0.3"),
-        ("J4", "=0.1+0.2"),
-        ("J5", "0.4"),
-        ("K1", "a"),
-        ("K2", "b"),
-        ("K3", "c"),
-        ("K4", "d"),
-        ("K5", "e"),
-    ] {
-        t.set(at, input);
-    }
-    let e = 0.1 + 0.2;
-    let n = Value::Number;
-    let s = |x: &str| Value::from(x);
-    let na = Value::Error(CellError::NA);
-    let cases: Vec<(&str, Value)> = vec![
-        // `=` and friends stay at 15 digits.
-        ("=A1=A2", Value::Bool(true)),
-        ("=A3=A4", Value::Bool(true)),
-        ("=A5=A6", Value::Bool(true)),
-        ("=SWITCH(A1,0.3,\"hit\",\"miss\")", s("hit")),
-        // Exact match.
-        ("=MATCH(A1,A2:A2,0)", na.clone()),
-        ("=MATCH(A2,A1:A1,0)", na.clone()),
-        ("=VLOOKUP(A1,A2:A2,1,FALSE)", na.clone()),
-        ("=HLOOKUP(A1,A2,1,FALSE)", na.clone()),
-        ("=HLOOKUP(0.3,G1:H2,2,FALSE)", na.clone()),
-        ("=XLOOKUP(A1,A2:A2,A2:A2,\"nf\")", s("nf")),
-        ("=XMATCH(A1,A2:A2)", na.clone()),
-        ("=MATCH(0.1+0.2,{0.3},0)", na.clone()),
-        ("=MATCH(0.3,A1:A2,0)", n(2.0)),
-        ("=MATCH(A1,A1:A2,0)", n(1.0)),
-        ("=MATCH(0.3,INDEX(A1:A2,0),0)", n(2.0)),
-        ("=MATCH(100,A3:A3,0)", na.clone()),
-        ("=MATCH(1E15,A5:A5,0)", na.clone()),
-        ("=XLOOKUP(0.3,A1:A2,{1;2},\"nf\",0,-1)", n(2.0)),
-        ("=XMATCH(A1,A1:A2,0,-1)", n(1.0)),
-        // Approximate match against a single entry.
-        ("=MATCH(0.3,A1:A1,1)", na.clone()),
-        ("=MATCH(0.3,A1:A1,-1)", n(1.0)),
-        ("=LOOKUP(0.3,A1:A1)", na.clone()),
-        ("=LOOKUP(0.3,A1:A1,G2)", na.clone()),
-        ("=VLOOKUP(0.3,A1:A1,1,TRUE)", na.clone()),
-        ("=HLOOKUP(0.3,G1:H2,2,TRUE)", na.clone()),
-        ("=XLOOKUP(0.3,A1:A1,A1:A1,\"nf\",-1)", s("nf")),
-        ("=XLOOKUP(0.3,A1:A1,A1:A1,\"nf\",1)", n(e)),
-        ("=XMATCH(0.3,A1:A1,-1)", na.clone()),
-        ("=XMATCH(0.3,A1:A1,1)", n(1.0)),
-        ("=MATCH(100,A3:A3,1)", na.clone()),
-        ("=MATCH(A3,A4:A4,1)", n(1.0)),
-        // Approximate match in sorted lists.
-        ("=MATCH(0.3,B1:B3,1)", n(1.0)),
-        ("=MATCH(A1,B1:B3,1)", n(2.0)),
-        ("=MATCH(0.3,C1:C3,-1)", n(2.0)),
-        ("=MATCH(0.3,D1:D3,1)", n(1.0)),
-        ("=MATCH(A1,D1:D3,1)", n(2.0)),
-        ("=MATCH(0.3,E1:E3,-1)", n(3.0)),
-        ("=MATCH(A1,E1:E3,-1)", n(2.0)),
-        ("=MATCH(0.3,J1:J5,1)", n(3.0)),
-        ("=MATCH(A1,J1:J5,1)", n(4.0)),
-        ("=MATCH(0.3,J1:J5,0)", n(3.0)),
-        ("=MATCH(A1,J1:J5,0)", n(4.0)),
-        ("=VLOOKUP(0.3,J1:K5,2,TRUE)", s("c")),
-        ("=VLOOKUP(A1,J1:K5,2,TRUE)", s("d")),
-        ("=LOOKUP(0.3,J1:J5,K1:K5)", s("c")),
-        ("=LOOKUP(A1,J1:J5,K1:K5)", s("d")),
-        // XLOOKUP / XMATCH match and search modes.
-        ("=XLOOKUP(0.3,B1:B3,B1:B3,\"nf\",0,2)", s("nf")),
-        ("=XLOOKUP(0.3,B1:B3,B1:B3,\"nf\",-1,2)", n(0.1)),
-        ("=XLOOKUP(0.3,B1:B3,B1:B3,\"nf\",1,2)", n(e)),
-        ("=XMATCH(0.3,B1:B3,-1,2)", n(1.0)),
-        ("=XMATCH(0.3,B1:B3,1,2)", n(2.0)),
-        ("=XMATCH(0.3,C1:C3,1,-2)", n(2.0)),
-        ("=XMATCH(0.3,C1:C3,-1,-2)", n(3.0)),
-        ("=XMATCH(0.3,C1:C3,0,-2)", na.clone()),
-        ("=XMATCH(0.3,J1:J5,0,2)", n(3.0)),
-        ("=XMATCH(A1,J1:J5,0,2)", n(4.0)),
-        ("=XMATCH(0.3,J1:J5,1,2)", n(3.0)),
-        ("=XMATCH(0.3,J1:J5,-1)", n(3.0)),
-        ("=XMATCH(0.3,J1:J5,1)", n(3.0)),
-        ("=XMATCH(A1,J1:J5,-1)", n(4.0)),
-        ("=XMATCH(0.3,B1:B3,1)", n(2.0)),
-        ("=XMATCH(0.3,B1:B3,-1)", n(1.0)),
-        ("=XMATCH(0.3,B1:B3,0,-1)", na.clone()),
-        ("=XMATCH(0.3,D1:D3,1,-1)", n(1.0)),
-        // The criteria functions keep 15 digits.
-        ("=COUNTIF(A1:A1,0.3)", n(1.0)),
-        ("=COUNTIF(A1:A1,\"<0.3\")", n(0.0)),
-        ("=COUNTIF(A1:A1,\">0.3\")", n(0.0)),
-        ("=COUNTIF(A2:A2,A1)", n(1.0)),
-        ("=COUNTIFS(A1:A1,0.3)", n(1.0)),
-        ("=SUMIF(A1:A1,0.3)", n(e)),
-        ("=SUMIFS(A1:A1,A1:A1,0.3)", n(e)),
-        ("=AVERAGEIF(A1:A1,0.3)", n(e)),
-        ("=MAXIFS(A1:A1,A1:A1,0.3)", n(e)),
-        ("=COUNTIF(A3:A3,\">100\")", n(0.0)),
-        ("=COUNTIF(J1:J5,0.3)", n(2.0)),
-        ("=ROWS(FILTER(A1:A2,A1:A2=0.3))", n(2.0)),
-        ("=MATCH(TRUE,A1:A2=0.3,0)", n(1.0)),
-    ];
-    let mut wrong = Vec::new();
-    for (formula, expected) in cases {
-        let got = crate::evaluate(&t.wb, 0, c("Z1"), formula);
-        if got != expected {
-            wrong.push(format!("{formula}: got {got:?}, Excel {expected:?}"));
-        }
-    }
-    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 #[test]
@@ -2073,6 +1855,212 @@ fn analysis_toolpak_value_params_reject_multi_cell_references() {
     }
 }
 
+/// Fills a sheet, calculates everything, and gives A1's value and whether a circular reference
+/// was found.
+fn calc_cells(cells: &[(&str, &str)]) -> (Value, bool) {
+    let mut t = T::new();
+    for (at, input) in cells {
+        t.set(at, input);
+    }
+    t.calc.recalc_all(&mut t.wb);
+    (t.get("A1"), !t.calc.circular.is_empty())
+}
+
+/// Criteria functions read a target cell only when the criteria select it, and a later criteria
+/// range only where the pairs before it matched, as Excel does: a formula in an unselected cell
+/// that refers back to the function is no circular reference (each case observed in Excel).
+#[test]
+fn criteria_functions_read_only_selected_cells() {
+    let base = [("B1", "5"), ("B2", "x"), ("C2", "y"), ("C1", "=A1*2")];
+    for (formula, expected) in [
+        ("=SUMIFS(B1:C1,B2:C2,\"x\")", 5.0),
+        ("=SUMIF(B2:C2,\"x\",B1:C1)", 5.0),
+        // The sum range takes the criteria range's size.
+        ("=SUMIF(B2:C2,\"x\",B1)", 5.0),
+        ("=AVERAGEIF(B2:C2,\"x\",B1:C1)", 5.0),
+        ("=AVERAGEIFS(B1:C1,B2:C2,\"x\")", 5.0),
+        ("=MAXIFS(B1:C1,B2:C2,\"x\")", 5.0),
+        ("=MINIFS(B1:C1,B2:C2,\"x\")", 5.0),
+        ("=SUMIFS(B1:C1,B2:C2,\"x\",B1:C1,\">0\")", 5.0),
+        ("=COUNTIFS(B2:C2,\"x\",B1:C1,\">0\")", 1.0),
+        ("=SUM(SUMIFS(B1:C1,B2:C2,{\"x\",\"z\"}))", 5.0),
+    ] {
+        let mut cells = base.to_vec();
+        cells.push(("A1", formula));
+        let (value, circular) = calc_cells(&cells);
+        assert_eq!(value, Value::Number(expected), "{formula}");
+        assert!(!circular, "{formula}");
+    }
+    for (cells, expected) in [
+        // A later criteria range is read where the first pair matched only.
+        (vec![("B1", "5"), ("B2", "x"), ("C2", "y"), ("B3", "1"), ("C3", "=A1*2"), ("A1", "=SUMIFS(B1:C1,B2:C2,\"x\",B3:C3,\">0\")")], 5.0),
+        // The formula's own cell, unselected, in its sum and criteria ranges.
+        (vec![("B1", "5"), ("A2", "y"), ("B2", "x"), ("A1", "=SUMIFS(A1:B1,A2:B2,\"x\")")], 5.0),
+        (vec![("B1", "5"), ("C1", "6"), ("B2", "y"), ("C2", "x"), ("A1", "=SUMIFS(B1:C1,B2:C2,\"x\",A1:B1,\">0\")")], 6.0),
+        // Whole columns.
+        (vec![("B1", "x"), ("C1", "5"), ("B3", "y"), ("C3", "=A1*2"), ("A1", "=SUMIFS(C:C,B:B,\"x\")")], 5.0),
+        (vec![("B1", "x"), ("C1", "5"), ("B3", "y"), ("C3", "=A1*2"), ("A1", "=SUMIF(B:B,\"x\",C:C)")], 5.0),
+        // An array criterion reads what any of its elements selects.
+        (
+            vec![("B1", "5"), ("C1", "7"), ("B2", "x"), ("C2", "z"), ("D2", "y"), ("D1", "=A1*2"), ("A1", "=SUM(SUMIFS(B1:D1,B2:D2,{\"x\",\"z\"}))")],
+            12.0,
+        ),
+    ] {
+        let (value, circular) = calc_cells(&cells);
+        assert_eq!(value, Value::Number(expected), "{cells:?}");
+        assert!(!circular, "{cells:?}");
+    }
+    // Ranges of different sizes are #VALUE! without reading the sum range.
+    let (value, circular) = calc_cells(&[("B1", "5"), ("B2", "x"), ("C2", "y"), ("D1", "=A1*2"), ("A1", "=SUMIFS(B1:D1,B2:C2,\"x\")")]);
+    assert_eq!(value, Value::Error(CellError::Value));
+    assert!(!circular);
+}
+
+/// Cells the criteria select (or ranges read in full) that lead back to the formula are still
+/// circular references, as in Excel.
+#[test]
+fn criteria_functions_selecting_their_dependents_are_circular() {
+    for cells in [
+        vec![("B1", "5"), ("B2", "x"), ("C2", "x"), ("C1", "=A1*2"), ("A1", "=SUMIFS(B1:C1,B2:C2,\"x\")")],
+        vec![("B1", "5"), ("B2", "x"), ("C2", "x"), ("C1", "=A1*2"), ("A1", "=AVERAGEIFS(B1:C1,B2:C2,\"x\")")],
+        vec![("B1", "5"), ("B2", "x"), ("C2", "x"), ("C1", "=A1*2"), ("A1", "=SUMIF(B2:C2,\"x\",B1:C1)")],
+        // The first criteria range is read in full.
+        vec![("B1", "5"), ("B2", "x"), ("C2", "y"), ("B3", "1"), ("C3", "=A1*2"), ("A1", "=SUMIFS(B1:C1,B3:C3,\">0\",B2:C2,\"x\")")],
+        vec![("B1", "5"), ("B2", "x"), ("C2", "y"), ("C1", "=A1*2"), ("A1", "=COUNTIFS(B1:C1,\">0\",B2:C2,\"x\")")],
+        vec![("B1", "5"), ("C1", "=A1*2"), ("A1", "=COUNTIF(B1:C1,\">0\")")],
+        // Without a sum range the criteria range is the sum range.
+        vec![("B1", "5"), ("C1", "=A1*2"), ("A1", "=SUMIF(B1:C1,\">100\")")],
+        vec![("B1", "5"), ("C1", "7"), ("B2", "x"), ("C2", "z"), ("D2", "z"), ("D1", "=A1*2"), ("A1", "=SUM(SUMIFS(B1:D1,B2:D2,{\"x\",\"z\"}))")],
+    ] {
+        let (_, circular) = calc_cells(&cells);
+        assert!(circular, "{cells:?}");
+    }
+}
+
+/// Criteria arrays of different lengths are lifted together: the shorter one reads `#N/A` where
+/// it ends, and a criterion of `#N/A` selects the `#N/A` cells there, so the cells it selects are
+/// read (and count for circular references) even though no element of the array names `#N/A`.
+#[test]
+fn criteria_arrays_padded_with_na_still_select_na_cells() {
+    // `{"x","y","z"}` with `{1,2}`: the third position is `"z"` and `#N/A`.
+    let base = [("B1", "5"), ("B2", "z"), ("C2", "y"), ("D2", "x"), ("B3", "=NA()"), ("C3", "1"), ("D3", "2")];
+    let formula = "=SUM(SUMIFS(B1:D1,B2:D2,{\"x\",\"y\",\"z\"},B3:D3,{1,2}))";
+    let mut cells = base.to_vec();
+    cells.push(("A1", formula));
+    let (value, circular) = calc_cells(&cells);
+    assert_eq!(value, Value::Number(5.0), "{formula}");
+    assert!(!circular);
+    // The selected sum cell refers back to the formula: a real circular reference.
+    let mut cells = base.to_vec();
+    cells.retain(|(at, _)| *at != "B1");
+    cells.extend([("B1", "=A1*2"), ("A1", formula)]);
+    let (_, circular) = calc_cells(&cells);
+    assert!(circular, "{cells:?}");
+    // Equal-length arrays pad nothing, so the `#N/A` cell is not read.
+    let mut cells = base.to_vec();
+    cells.retain(|(at, _)| *at != "B1");
+    cells.extend([("B1", "=A1*2"), ("A1", "=SUM(SUMIFS(B1:D1,B2:D2,{\"x\",\"y\",\"z\"},B3:D3,{1,2,3}))")]);
+    let (value, circular) = calc_cells(&cells);
+    assert_eq!(value, Value::Number(0.0));
+    assert!(!circular);
+}
+
+/// Reading only the selected cells doesn't change results: references give what the same values
+/// as array constants give (the usual path), errors in unselected cells included.
+#[test]
+fn criteria_functions_over_references_match_array_arguments() {
+    let mut t = T::new();
+    let names = ["apple", "pear", "apple", "fig"];
+    let qty = ["10", "=NA()", "30", "=1/0"];
+    let flag = ["1", "0", "1", "1"];
+    for r in 0..4 {
+        t.set(&format!("A{}", r + 1), names[r]);
+        t.set(&format!("B{}", r + 1), qty[r]);
+        t.set(&format!("C{}", r + 1), flag[r]);
+    }
+    t.calc.recalc_all(&mut t.wb);
+    let long = "a".repeat(300);
+    let arrays = [
+        ("A1:A4", "{\"apple\";\"pear\";\"apple\";\"fig\"}"),
+        ("B1:B4", "{10;#N/A;30;#DIV/0!}"),
+        ("C1:C4", "{1;0;1;1}"),
+        ("A1:A3", "{\"apple\";\"pear\";\"apple\"}"),
+    ];
+    for formula in [
+        "SUMIFS(B1:B4,A1:A4,\"apple\")",
+        "SUMIFS(B1:B4,A1:A4,\"a*\",C1:C4,1)",
+        "SUMIFS(B1:B4,A1:A4,\"pear\")",
+        "SUMIFS(B1:B4,A1:A4,\"<>pear\")",
+        "SUMIFS(B1:B4,A1:A3,\"apple\")",
+        "SUMIFS(B1:B4,A1:A4,{\"apple\",\"fig\"})",
+        "SUMIFS(B1:B4,A1:A4,#N/A)",
+        "SUMIF(A1:A4,\"apple\",B1:B4)",
+        "SUMIF(A1:A4,\"fig\",B1:B4)",
+        "AVERAGEIF(A1:A4,\"apple\",B1:B4)",
+        "AVERAGEIF(A1:A4,\"zzz\",B1:B4)",
+        "AVERAGEIFS(B1:B4,A1:A4,\"apple\",C1:C4,\">0\")",
+        "MAXIFS(B1:B4,A1:A4,\"apple\")",
+        "MINIFS(B1:B4,C1:C4,0)",
+        "MINIFS(B1:B4,A1:A4,\"zzz\")",
+        "COUNTIFS(A1:A4,\"apple\",C1:C4,1)",
+        "COUNTIFS(A1:A4,\"apple\",B1:B4,\">10\")",
+        "COUNTIFS(C1:C4,1,A1:A4,\"?ig\")",
+        "COUNTIFS(A1:A4,\"apple\",C1:C4)",
+        "SUMIFS(B1:B4,A1:A4,\"LONG\")",
+        "SUMIFS(B1:B4,A1:A4,\"LONG\",C1:C4,1)",
+    ] {
+        let formula = formula.replace("LONG", &long);
+        let mut literal = formula.clone();
+        for (reference, array) in arrays {
+            literal = literal.replace(reference, array);
+        }
+        let reference = crate::evaluate(&t.wb, 0, c("E1"), &format!("={formula}"));
+        let array = crate::evaluate(&t.wb, 0, c("E1"), &format!("={literal}"));
+        assert_eq!(reference, array, "{formula}");
+    }
+    assert_eq!(crate::evaluate(&t.wb, 0, c("E1"), "=SUMIFS(B1:B4,A1:A4,\"apple\")"), Value::Number(40.0));
+}
+
+/// Edits to cells the criteria don't select still recalculate the function, and an edit that
+/// makes such a cell selected turns the loop into a circular reference.
+#[test]
+fn criteria_functions_recalculate_after_edits() {
+    let mut t = T::new();
+    t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Data")));
+    for (at, input) in [("A1", "x"), ("A2", "y"), ("B1", "5"), ("B2", "=Sheet1!A1*2")] {
+        let cell = if input.starts_with('=') {
+            Cell::formula(Formula::new(input))
+        } else {
+            Cell::value(gridcraft_core::parse::parse_input(input, t.wb.date_system).value)
+        };
+        t.wb.sheet_mut(1).unwrap().cells.set(c(at), cell);
+    }
+    t.set("A1", "=SUMIFS(Data!B:B,Data!A:A,\"x\")");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A1"), 5.0);
+    assert_eq!(t.wb.sheet(1).unwrap().value(c("B2")), Value::Number(10.0));
+    assert!(t.calc.circular.is_empty());
+    t.wb.sheet_mut(1).unwrap().cells.set(c("B1"), Cell::value(Value::Number(6.0)));
+    t.calc.cells_changed(&mut t.wb, &[(1, c("B1"))]);
+    assert_eq!(t.num("A1"), 6.0);
+    assert_eq!(t.wb.sheet(1).unwrap().value(c("B2")), Value::Number(12.0));
+    t.wb.sheet_mut(1).unwrap().cells.set(c("A2"), Cell::value(Value::from("x")));
+    t.calc.cells_changed(&mut t.wb, &[(1, c("A2"))]);
+    assert!(!t.calc.circular.is_empty());
+}
+
+/// With iterative calculation, a loop through a selected cell iterates like any other loop.
+#[test]
+fn criteria_function_loops_iterate() {
+    let mut t = T::iterative(100, 0.000_001);
+    for (at, input) in [("B1", "5"), ("B2", "x"), ("C2", "x"), ("C1", "=A1/2"), ("A1", "=SUMIFS(B1:C1,B2:C2,\"x\")")] {
+        t.set(at, input);
+    }
+    t.calc.recalc_all(&mut t.wb);
+    assert!((t.num("A1") - 10.0).abs() < 1e-4, "{}", t.num("A1"));
+    assert!(t.calc.circular.is_empty());
+}
+
 /// A formula reading one further down (or on a later sheet) is calculated on demand, inside the
 /// formula that reads it. Chains of thousands of such formulas, common in financial models, used
 /// to overflow the stack (or give `#CIRC!` past 2,000 levels); they now calculate in full.
@@ -2342,6 +2330,81 @@ fn text_before_after_empty_instance_defaults_to_one() {
     assert_eq!(t.get("A4"), Value::Error(CellError::Value));
 }
 
+/// INDEX with one index, as observed in Excel: a 2-D reference needs both indexes (#REF!), a
+/// column array gives a 1×1 array (TYPE 64), a row array or 1-D reference gives one value.
+#[test]
+fn index_with_one_index() {
+    let mut t = T::new();
+    for (i, v) in [10, 20, 30].iter().enumerate() {
+        t.set(&format!("A{}", i + 1), &v.to_string());
+    }
+    let mut k = 1;
+    for r in 5..=7 {
+        for col in ["A", "B", "C"] {
+            t.set(&format!("{col}{r}"), &k.to_string());
+            k += 1;
+        }
+    }
+    for (row, (formula, expected)) in [
+        // Column arrays keep Excel's 1×1 array; row arrays and explicit columns give a value.
+        ("=INDEX({10;20;30},2)", 20.0),
+        ("=TYPE(INDEX({10;20;30},2))", 64.0),
+        ("=TYPE(INDEX(SEQUENCE(3),2))", 64.0),
+        ("=TYPE(INDEX({10;20;30},2,1))", 1.0),
+        ("=TYPE(INDEX({10,20,30},2))", 1.0),
+        ("=TYPE(INDEX(INDEX({10;20;30},2),1))", 1.0),
+        ("=SUM(INDEX({10;20;30},2))", 20.0),
+        // 1-D references with one index are single-cell references.
+        ("=TYPE(INDEX(A1:A3,2))", 1.0),
+        ("=SUM(INDEX(A1:A3,1):INDEX(A1:A3,3))", 60.0),
+        ("=SUM(INDEX((A1:A3,A5:C7),2))", 20.0),
+        // A 2-D array with one index is the row.
+        ("=SUM(INDEX({1,2;3,4},2))", 7.0),
+        ("=SUM(INDEX({1,2;3,4},0))", 10.0),
+        // A 2-D reference with an empty (not omitted) column argument is the row.
+        ("=SUM(INDEX(A5:C7,2,))", 15.0),
+        ("=SUM(INDEX(A5:C7,2,,1))", 15.0),
+        ("=COLUMNS(INDEX((A1:A3,A5:C7),2,,2))", 3.0),
+        ("=INDEX(A5:C7,2,2)", 5.0),
+        // A 2-D reference with one index is #REF!, and the error carries through.
+        ("=TYPE(INDEX(A5:C7,2))", 16.0),
+        ("=ISREF(INDEX(A5:C7,2))", 0.0),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let at = format!("J{}", row * 4 + 1);
+        t.set(&at, formula);
+        let got = match t.get(&at) {
+            Value::Bool(b) => f64::from(u8::from(b)),
+            v => v.as_f64().unwrap_or_else(|| panic!("{formula} = {v:?}")),
+        };
+        assert_eq!(got, *expected, "{formula}");
+    }
+    for formula in [
+        "=INDEX(A5:C7,2)",
+        "=INDEX(A5:C7,0)",
+        "=INDEX(A5:C7,1.9)",
+        "=INDEX(A5:C7,)",
+        "=INDEX(A5:B6,1)",
+        "=INDEX(A5:C7,2)+1",
+        "=SUM(INDEX(A5:C7,{1;2}))",
+        "=ROWS(INDEX(INDEX(A5:C7,2),3))",
+        "=SUM(A5:INDEX(A5:C7,2))",
+        "=SUM(INDEX(A5:C7,2):C7)",
+    ] {
+        t.set("L1", formula);
+        assert_eq!(t.get("L1"), Value::Error(CellError::Ref), "{formula}");
+    }
+    t.set("L1", "=INDEX(A5:C7,{1;2})");
+    assert_eq!([t.get("L1"), t.get("L2")], [Value::Error(CellError::Ref), Value::Error(CellError::Ref)]);
+    t.set("L1", "=IFERROR(INDEX(A5:C7,2),\"e\")");
+    assert_eq!(t.get("L1"), Value::from("e"));
+    // A bad position is still #VALUE!.
+    t.set("L1", "=INDEX(A5:C7,\"x\")");
+    assert_eq!(t.get("L1"), Value::Error(CellError::Value));
+}
+
 #[test]
 fn loan_schedule_residue_keeps_excels_sign() {
     // A synthetic monthly loan schedule: interest on the opening balance, principal = PMT - interest,
@@ -2377,6 +2440,149 @@ fn loan_schedule_residue_keeps_excels_sign() {
         other => panic!("O7: expected a number, got {other:?}"),
     }
     assert_eq!(t.get("P7"), Value::Text("".into()));
+}
+
+/// Lookups compare numbers exactly while `=` and the criteria functions compare them at 15
+/// significant digits. Every expectation was observed in Excel 365 with these fixtures
+/// (`=0.1+0.2` is 0.30000000000000004, `=100+1E-14` is 100.00000000000001).
+#[test]
+fn lookups_compare_numbers_exactly() {
+    let mut t = T::new();
+    for (at, input) in [
+        ("A1", "=0.1+0.2"),
+        ("A2", "0.3"),
+        ("A3", "=100+1E-14"),
+        ("A4", "100"),
+        ("A5", "=1E15+0.5"),
+        ("A6", "1E15"),
+        // Ascending 0.1, 0.3+e, 0.5 and the same descending.
+        ("B1", "0.1"),
+        ("B2", "=0.1+0.2"),
+        ("B3", "0.5"),
+        ("C1", "0.5"),
+        ("C2", "=0.1+0.2"),
+        ("C3", "0.1"),
+        // 0.3 next to 0.3+e, ascending and descending.
+        ("D1", "0.3"),
+        ("D2", "=0.1+0.2"),
+        ("D3", "0.7"),
+        ("E1", "0.7"),
+        ("E2", "=0.1+0.2"),
+        ("E3", "0.3"),
+        ("G1", "=0.1+0.2"),
+        ("H1", "x"),
+        ("G2", "row2"),
+        // The bisection probes 0.3 first and must not run on into 0.3+e.
+        ("J1", "0.1"),
+        ("J2", "0.2"),
+        ("J3", "0.3"),
+        ("J4", "=0.1+0.2"),
+        ("J5", "0.4"),
+        ("K1", "a"),
+        ("K2", "b"),
+        ("K3", "c"),
+        ("K4", "d"),
+        ("K5", "e"),
+    ] {
+        t.set(at, input);
+    }
+    let e = 0.1 + 0.2;
+    let n = Value::Number;
+    let s = |x: &str| Value::from(x);
+    let na = Value::Error(CellError::NA);
+    let cases: Vec<(&str, Value)> = vec![
+        // `=` and friends stay at 15 digits.
+        ("=A1=A2", Value::Bool(true)),
+        ("=A3=A4", Value::Bool(true)),
+        ("=A5=A6", Value::Bool(true)),
+        ("=SWITCH(A1,0.3,\"hit\",\"miss\")", s("hit")),
+        // Exact match.
+        ("=MATCH(A1,A2:A2,0)", na.clone()),
+        ("=MATCH(A2,A1:A1,0)", na.clone()),
+        ("=VLOOKUP(A1,A2:A2,1,FALSE)", na.clone()),
+        ("=HLOOKUP(A1,A2,1,FALSE)", na.clone()),
+        ("=HLOOKUP(0.3,G1:H2,2,FALSE)", na.clone()),
+        ("=XLOOKUP(A1,A2:A2,A2:A2,\"nf\")", s("nf")),
+        ("=XMATCH(A1,A2:A2)", na.clone()),
+        ("=MATCH(0.1+0.2,{0.3},0)", na.clone()),
+        ("=MATCH(0.3,A1:A2,0)", n(2.0)),
+        ("=MATCH(A1,A1:A2,0)", n(1.0)),
+        ("=MATCH(0.3,INDEX(A1:A2,0),0)", n(2.0)),
+        ("=MATCH(100,A3:A3,0)", na.clone()),
+        ("=MATCH(1E15,A5:A5,0)", na.clone()),
+        ("=XLOOKUP(0.3,A1:A2,{1;2},\"nf\",0,-1)", n(2.0)),
+        ("=XMATCH(A1,A1:A2,0,-1)", n(1.0)),
+        // Approximate match against a single entry.
+        ("=MATCH(0.3,A1:A1,1)", na.clone()),
+        ("=MATCH(0.3,A1:A1,-1)", n(1.0)),
+        ("=LOOKUP(0.3,A1:A1)", na.clone()),
+        ("=LOOKUP(0.3,A1:A1,G2)", na.clone()),
+        ("=VLOOKUP(0.3,A1:A1,1,TRUE)", na.clone()),
+        ("=HLOOKUP(0.3,G1:H2,2,TRUE)", na.clone()),
+        ("=XLOOKUP(0.3,A1:A1,A1:A1,\"nf\",-1)", s("nf")),
+        ("=XLOOKUP(0.3,A1:A1,A1:A1,\"nf\",1)", n(e)),
+        ("=XMATCH(0.3,A1:A1,-1)", na.clone()),
+        ("=XMATCH(0.3,A1:A1,1)", n(1.0)),
+        ("=MATCH(100,A3:A3,1)", na.clone()),
+        ("=MATCH(A3,A4:A4,1)", n(1.0)),
+        // Approximate match in sorted lists.
+        ("=MATCH(0.3,B1:B3,1)", n(1.0)),
+        ("=MATCH(A1,B1:B3,1)", n(2.0)),
+        ("=MATCH(0.3,C1:C3,-1)", n(2.0)),
+        ("=MATCH(0.3,D1:D3,1)", n(1.0)),
+        ("=MATCH(A1,D1:D3,1)", n(2.0)),
+        ("=MATCH(0.3,E1:E3,-1)", n(3.0)),
+        ("=MATCH(A1,E1:E3,-1)", n(2.0)),
+        ("=MATCH(0.3,J1:J5,1)", n(3.0)),
+        ("=MATCH(A1,J1:J5,1)", n(4.0)),
+        ("=MATCH(0.3,J1:J5,0)", n(3.0)),
+        ("=MATCH(A1,J1:J5,0)", n(4.0)),
+        ("=VLOOKUP(0.3,J1:K5,2,TRUE)", s("c")),
+        ("=VLOOKUP(A1,J1:K5,2,TRUE)", s("d")),
+        ("=LOOKUP(0.3,J1:J5,K1:K5)", s("c")),
+        ("=LOOKUP(A1,J1:J5,K1:K5)", s("d")),
+        // XLOOKUP / XMATCH match and search modes.
+        ("=XLOOKUP(0.3,B1:B3,B1:B3,\"nf\",0,2)", s("nf")),
+        ("=XLOOKUP(0.3,B1:B3,B1:B3,\"nf\",-1,2)", n(0.1)),
+        ("=XLOOKUP(0.3,B1:B3,B1:B3,\"nf\",1,2)", n(e)),
+        ("=XMATCH(0.3,B1:B3,-1,2)", n(1.0)),
+        ("=XMATCH(0.3,B1:B3,1,2)", n(2.0)),
+        ("=XMATCH(0.3,C1:C3,1,-2)", n(2.0)),
+        ("=XMATCH(0.3,C1:C3,-1,-2)", n(3.0)),
+        ("=XMATCH(0.3,C1:C3,0,-2)", na.clone()),
+        ("=XMATCH(0.3,J1:J5,0,2)", n(3.0)),
+        ("=XMATCH(A1,J1:J5,0,2)", n(4.0)),
+        ("=XMATCH(0.3,J1:J5,1,2)", n(3.0)),
+        ("=XMATCH(0.3,J1:J5,-1)", n(3.0)),
+        ("=XMATCH(0.3,J1:J5,1)", n(3.0)),
+        ("=XMATCH(A1,J1:J5,-1)", n(4.0)),
+        ("=XMATCH(0.3,B1:B3,1)", n(2.0)),
+        ("=XMATCH(0.3,B1:B3,-1)", n(1.0)),
+        ("=XMATCH(0.3,B1:B3,0,-1)", na.clone()),
+        ("=XMATCH(0.3,D1:D3,1,-1)", n(1.0)),
+        // The criteria functions keep 15 digits.
+        ("=COUNTIF(A1:A1,0.3)", n(1.0)),
+        ("=COUNTIF(A1:A1,\"<0.3\")", n(0.0)),
+        ("=COUNTIF(A1:A1,\">0.3\")", n(0.0)),
+        ("=COUNTIF(A2:A2,A1)", n(1.0)),
+        ("=COUNTIFS(A1:A1,0.3)", n(1.0)),
+        ("=SUMIF(A1:A1,0.3)", n(e)),
+        ("=SUMIFS(A1:A1,A1:A1,0.3)", n(e)),
+        ("=AVERAGEIF(A1:A1,0.3)", n(e)),
+        ("=MAXIFS(A1:A1,A1:A1,0.3)", n(e)),
+        ("=COUNTIF(A3:A3,\">100\")", n(0.0)),
+        ("=COUNTIF(J1:J5,0.3)", n(2.0)),
+        ("=ROWS(FILTER(A1:A2,A1:A2=0.3))", n(2.0)),
+        ("=MATCH(TRUE,A1:A2=0.3,0)", n(1.0)),
+    ];
+    let mut wrong = Vec::new();
+    for (formula, expected) in cases {
+        let got = crate::evaluate(&t.wb, 0, c("Z1"), formula);
+        if got != expected {
+            wrong.push(format!("{formula}: got {got:?}, Excel {expected:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 /// `rebuild` and `cells_changed` read formulas through `Formula::with_expr`, which borrows the

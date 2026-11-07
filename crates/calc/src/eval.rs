@@ -260,18 +260,22 @@ impl<'h> Evaluator<'h> {
         }
         // A reference keeps its size, so the array has its shape and its blanks count
         // (`=A1:A10`, `SUMPRODUCT(--(A1:A10=""))`).
+        let Some(range) = self.area_extent(a) else { return Value::Error(CellError::Num) };
+        let (h, w) = (range.height() as usize, range.width() as usize);
+        let data = self.host.range_values(a.sheet, range);
+        Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
+    }
+
+    /// The block `area_value` reads for a multi-cell area: large areas (whole columns) are
+    /// trimmed to the used range. `None` when it is still over `MAX_CELLS` (`#NUM!`).
+    fn area_extent(&mut self, a: &Area) -> Option<RangeRef> {
         let cells = u64::from(a.range.height()) * u64::from(a.range.width());
         // `A:A`, `1:1` and `A2:A1048576` run to the edge of the sheet: they stand for "the rest of
         // the column", not for a block of a chosen size.
         let to_edge = a.range.end.row == MAX_ROWS - 1 || a.range.end.col == MAX_COLS - 1;
         let full_size = cells <= FULL_SIZE_CELLS || (!to_edge && cells <= FULL_SIZE_BOUNDED_CELLS);
         let range = if full_size { a.range } else { self.trim(a) };
-        let (h, w) = (range.height() as usize, range.width() as usize);
-        if (h as u64) * (w as u64) > MAX_CELLS {
-            return Value::Error(CellError::Num);
-        }
-        let data = self.host.range_values(a.sheet, range);
-        Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
+        (u64::from(range.height()) * u64::from(range.width()) <= MAX_CELLS).then_some(range)
     }
 
     /// Trims the bottom/right of an area to the sheet's used range (keeps the top-left so
