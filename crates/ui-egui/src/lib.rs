@@ -125,6 +125,9 @@ pub struct UiState {
     /// [`INTERFACE_SCALE_MIN`]..=[`INTERFACE_SCALE_MAX`]; a malformed saved value reads as 100.
     #[serde(deserialize_with = "lenient_interface_scale")]
     pub interface_scale: u16,
+    /// Custom keyboard shortcut bindings (canonical shortcut -> command id).
+    #[serde(default)]
+    pub shortcuts: std::collections::HashMap<String, String>,
 }
 
 pub const INTERFACE_SCALE_MIN: u16 = 75;
@@ -160,6 +163,7 @@ impl Default for UiState {
             keytip_invoke_next: None,
             language: i18n::Language::En,
             interface_scale: 100,
+            shortcuts: std::collections::HashMap::new(),
         }
     }
 }
