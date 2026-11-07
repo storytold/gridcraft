@@ -537,6 +537,25 @@ fn pivot_chart_errors() {
 }
 
 #[test]
+fn a_calculated_field_cannot_use_distinct_count() {
+    // It is computed from the report's totals, so there are no per-record values to count.
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    s.execute("pivot.calculatedField", json!({"name": "Price", "formula": "Sales / Units"})).unwrap();
+    assert_eq!(text(&s, "C3"), "Sum of Price");
+    let before = s.doc().unwrap().wb.clone();
+    let set = s.execute("pivot.valueSettings", json!({"field": "Price", "func": "distinctCount"}));
+    assert!(set.unwrap_err().to_string().contains("Distinct Count"));
+    assert_eq!(s.doc().unwrap().wb, before, "a rejected change leaves the workbook as it was");
+    s.execute("pivot.removeField", json!({"field": "Price", "area": "values"})).unwrap();
+    let add = s.execute("pivot.addField", json!({"field": "Price", "area": "values", "func": "distinctCount"}));
+    assert!(add.unwrap_err().to_string().contains("Distinct Count"));
+    // A source field still takes it, and a calculated field keeps its other functions.
+    s.execute("pivot.addField", json!({"field": "Product", "area": "values", "func": "distinctCount"})).unwrap();
+    s.execute("pivot.addField", json!({"field": "Price", "area": "values", "func": "sum"})).unwrap();
+}
+
+#[test]
 fn calculated_field_on_sums() {
     let mut s = sales();
     s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
