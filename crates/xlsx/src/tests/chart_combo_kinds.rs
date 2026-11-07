@@ -44,3 +44,27 @@ fn line_first_group_stays_a_line() {
     assert!(matches!(k[0], Some(ChartKind::Line | ChartKind::LineMarkers)));
     assert_eq!(k[1], Some(ChartKind::ColumnClustered));
 }
+
+#[test]
+fn area_and_line_combo_round_trips_both_groups() {
+    let area = format!("<c:areaChart><c:grouping val=\"standard\"/>{}{}</c:areaChart>{AX}", ser(0), ser(1));
+    let xml = format!(
+        "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\">\
+         <c:chart><c:plotArea>{area}{}</c:plotArea></c:chart></c:chartSpace>",
+        line(&ser(2))
+    );
+    let root = parse(xml.as_bytes()).unwrap();
+    let ch = read_chart(&root).unwrap();
+    assert_eq!(ch.kind, ChartKind::Combo);
+    assert_eq!(ch.series.len(), 3);
+    let wb = gridcraft_model::Workbook::new();
+    let written = crate::chart::write_chart(&wb, 0, &ch, "Book.xlsx");
+    assert!(written.contains("<c:areaChart>"), "{written}");
+    assert!(written.contains("<c:lineChart>"), "{written}");
+    let rt = read_chart(&parse(written.as_bytes()).unwrap()).unwrap();
+    assert_eq!(rt.kind, ChartKind::Combo);
+    assert_eq!(rt.series.len(), 3);
+    assert_eq!(rt.series[0].kind, Some(ChartKind::Area));
+    assert_eq!(rt.series[1].kind, Some(ChartKind::Area));
+    assert_eq!(rt.series[2].kind, Some(ChartKind::Line));
+}
