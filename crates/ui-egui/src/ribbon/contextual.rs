@@ -4,6 +4,7 @@ use super::{Color32, Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_
 
 /// Draws the Table Design tab: rename, resize, remove duplicates, convert to range, slicer, table options and the style strip.
 pub(super) fn table_design(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = app.ui.language;
     let Some((tname, header, totals, banded, banded_c, first, last, filter, style)) = app.session.active().and_then(|d| {
         let sh = d.wb.active()?;
         let t = sh.table_at(d.selection.active)?;
@@ -12,7 +13,7 @@ pub(super) fn table_design(app: &mut SheetApp, ui: &mut Ui) {
         return;
     };
     ui.vertical(|ui| {
-        ui.label(egui::RichText::new("Table Name:").small());
+        ui.label(egui::RichText::new(lang.tr("Table Name:")).small());
         let field = egui::Id::unique(("gridcraft.table_name", &tname));
         if let Some(name) = crate::widgets::committed_text(ui, field, &tname, Some(120.0))
             && name != tname

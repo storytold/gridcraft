@@ -32,6 +32,7 @@ pub(super) const TITLE_CONTROL_H: f32 = if MAC { 22.0 } else { 26.0 };
 
 /// Draws the title bar: drag/maximize, AutoSave toggle, Home/Save/Undo/Redo/More, search, share, comments and theme controls, with a centered truncated title.
 pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = app.ui.language;
     let t = Tokens::get(ui.ctx());
     let ch = TITLE_CONTROL_H;
     egui::Panel::top("title_bar").exact_size(TITLE_BAR_H).frame(egui::Frame::NONE.fill(t.window)).show(ui, |ui| {
@@ -76,7 +77,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             let can_redo = gridcraft_engine::cmd::can_redo(&app.session).is_ok();
             // Named and marked enabled or not for assistive technology (and the UI tests).
             let undo = icon_button(ui, Icon::Undo, if can_undo { t.text_dim } else { t.text_disabled }, "Undo", vec2(26.0, ch));
-            undo.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, can_undo, "Undo"));
+            undo.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, can_undo, lang.tr("Undo")));
             if undo.clicked() && can_undo {
                 app.run_or_alert("edit.undo", json!({}));
             }
@@ -88,16 +89,16 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     Vec::new()
                 };
                 if labels.is_empty() {
-                    ui.label("Can't Undo");
+                    ui.label(lang.tr("Can't Undo"));
                 }
                 for (i, l) in labels.iter().enumerate() {
-                    if ui.button(format!("Undo {l}")).clicked() {
+                    if ui.button(format!("{} {l}", lang.tr("Undo"))).clicked() {
                         app.run_or_alert("edit.undo", json!({"steps": i + 1}));
                     }
                 }
             });
             let redo = icon_button(ui, Icon::Redo, if can_redo { t.text_dim } else { t.text_disabled }, "Redo", vec2(26.0, ch));
-            redo.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, can_redo, "Redo"));
+            redo.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, can_redo, lang.tr("Redo")));
             if redo.clicked() && can_redo {
                 app.run_or_alert("edit.redo", json!({}));
             }
@@ -114,7 +115,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                         app.run_or_alert(id, json!({}));
                     }
                 }
-                if ui.button("Print…").clicked() {
+                if ui.button(lang.tr("Print…")).clicked() {
                     app.print_now(json!({}));
                 }
             });
@@ -128,7 +129,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                 }
                 let share = small_button(ui, Icon::Share, "Share", "Share: export or save a copy", true);
                 egui::Popup::menu(&share).show(|ui| {
-                    if ui.button("Export as PDF…").clicked() {
+                    if ui.button(lang.tr("Export as PDF…")).clicked() {
                         app.run_or_alert("file.exportPdf", json!({}));
                     }
                     for (label, fmt) in
