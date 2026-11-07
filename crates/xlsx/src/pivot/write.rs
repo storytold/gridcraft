@@ -98,12 +98,21 @@ struct Cache {
 
 /// PivotTables being written; the tables themselves are finished after the styles part (their
 /// value number formats need style number-format ids).
-#[derive(Default)]
 pub struct PivotWriter {
     /// (cache id, workbook-relative part name).
     caches: Vec<(u32, String)>,
     pending: Vec<Pending>,
     tables: u32,
+    /// The `cacheId` the next written cache takes. It starts above the kept model caches' ids:
+    /// the workbook's `<pivotCaches>` element carries both, and a duplicate id would point Excel at
+    /// the wrong cache.
+    next_cache_id: u32,
+}
+
+impl Default for PivotWriter {
+    fn default() -> Self {
+        Self { caches: Vec::new(), pending: Vec::new(), tables: 0, next_cache_id: 1 }
+    }
 }
 
 struct Pending {
@@ -115,33 +124,48 @@ struct Pending {
 }
 
 impl PivotWriter {
+    /// A writer whose generated caches and PivotTables are numbered from `next_cache_id`, which
+    /// must be above every `cacheId` the workbook's kept `<pivotCaches>` element uses.
+    pub fn new(next_cache_id: u32) -> Self {
+        Self { next_cache_id: next_cache_id.max(1), ..Self::default() }
+    }
+
     /// Writes the caches of a sheet's PivotTables and adds the sheet's relationships to its
     /// PivotTable parts. Pivots whose source can't be resolved are not written.
+    ///
+    /// Every part name is reserved through the kept content's name table: a kept data-model
+    /// PivotTable already owns names in `xl/pivotCache/` and `xl/pivotTables/`, so numbering from a
+    /// private counter would write the same part twice.
     pub fn add_sheet(&mut self, wb: &Workbook, si: usize, out: &mut Out, rels: &mut Rels) {
         let Some(sheet) = wb.sheet(si) else { return };
         for (idx, pt) in sheet.pivots.iter().enumerate() {
             let Some(cache) = build_cache(wb, pt, si) else { continue };
             let n = self.caches.len() as u32 + 1;
-            let cache_part = format!("xl/pivotCache/pivotCacheDefinition{n}.xml");
+            let cache_part = out.kept.claim(&format!("xl/pivotCache/pivotCacheDefinition{n}.xml"));
+            let cache_file = file_name(&cache_part).to_string();
             let rec_rid = if let Some((count, xml)) = &cache.records {
+                let records_part = out.kept.claim(&format!("xl/pivotCache/pivotCacheRecords{n}.xml"));
                 let mut r = Rels::default();
-                let rid = r.add("pivotCacheRecords", &format!("pivotCacheRecords{n}.xml"));
-                out.part(&format!("xl/pivotCache/_rels/pivotCacheDefinition{n}.xml.rels"), None, r.xml().into_bytes());
+                let rid = r.add("pivotCacheRecords", file_name(&records_part));
+                out.part(&crate::passthrough::rels_part_name(&cache_part), None, r.xml().into_bytes());
                 let s = format!("{XML_DECL}<pivotCacheRecords xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\" count=\"{count}\">{xml}</pivotCacheRecords>");
-                out.part(&format!("xl/pivotCache/pivotCacheRecords{n}.xml"), Some(CT_PIVOT_CACHE_REC), s.into_bytes());
+                out.part(&records_part, Some(CT_PIVOT_CACHE_REC), s.into_bytes());
                 Some(rid)
             } else {
                 None
             };
             out.part(&cache_part, Some(CT_PIVOT_CACHE_DEF), cache_xml(&cache, rec_rid.as_deref(), wb.date_system).into_bytes());
-            self.caches.push((n, format!("pivotCache/pivotCacheDefinition{n}.xml")));
+            let cache_id = self.next_cache_id;
+            self.next_cache_id = self.next_cache_id.saturating_add(1);
+            self.caches.push((cache_id, format!("pivotCache/{cache_file}")));
             self.tables += 1;
             let t = self.tables;
-            rels.add("pivotTable", &format!("../pivotTables/pivotTable{t}.xml"));
+            let table_part = out.kept.claim(&format!("xl/pivotTables/pivotTable{t}.xml"));
+            rels.add("pivotTable", &format!("../{}", relative_part(&table_part)));
             let mut tr = Rels::default();
-            tr.add("pivotCacheDefinition", &format!("../pivotCache/pivotCacheDefinition{n}.xml"));
-            out.part(&format!("xl/pivotTables/_rels/pivotTable{t}.xml.rels"), None, tr.xml().into_bytes());
-            self.pending.push(Pending { part: format!("xl/pivotTables/pivotTable{t}.xml"), sheet: si, idx, cache_id: n, cache });
+            tr.add("pivotCacheDefinition", &format!("../pivotCache/{cache_file}"));
+            out.part(&crate::passthrough::rels_part_name(&table_part), None, tr.xml().into_bytes());
+            self.pending.push(Pending { part: table_part, sheet: si, idx, cache_id, cache });
         }
     }
 
@@ -185,6 +209,17 @@ impl PivotWriter {
             out.part(&p.part, Some(CT_PIVOT_TABLE), xml.into_bytes());
         }
     }
+}
+
+/// The file part of a package part name (`xl/pivotCache/x.xml` → `x.xml`).
+fn file_name(part: &str) -> &str {
+    part.rsplit_once('/').map_or(part, |(_, file)| file)
+}
+
+/// A package part name without its `xl/` prefix, for a relationship target written from
+/// `xl/worksheets/` (`xl/pivotTables/pivotTable1.xml` → `pivotTables/pivotTable1.xml`).
+fn relative_part(part: &str) -> &str {
+    part.strip_prefix("xl/").unwrap_or(part)
 }
 
 /// Resolves a pivot source to (sheet, range including the header row, worksheetSource XML).
