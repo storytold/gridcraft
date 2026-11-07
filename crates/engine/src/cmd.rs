@@ -4,6 +4,8 @@
 pub mod analysis;
 pub mod controls;
 pub mod data;
+pub mod dax;
+pub mod dax_pivot;
 pub mod draw;
 pub mod edit;
 pub mod equation;
@@ -169,6 +171,8 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(controls::specs());
         v.extend(equation::specs());
         v.extend(data::specs());
+        v.extend(dax::specs());
+        v.extend(dax_pivot::specs());
         v.extend(formulas::specs());
         v.extend(review::specs());
         v.extend(view::specs());

@@ -2,7 +2,7 @@ use super::controls::{act, control_keytip, keytip, menu_items, sep};
 use super::{Icon, SheetApp, Ui, big_button, json, keytip_table, small_button};
 
 pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
-    let gd = big_button(ui, Icon::Folder, "Get Data\n(Text/CSV)", "Import a text or CSV file", false);
+    let gd = big_button(ui, Icon::GetData, "Get Data\n(Text/CSV)", "Import a text or CSV file", false);
     control_keytip(app, ui, &gd, "data.getData");
     if gd.clicked() {
         app.open_dialog("open", json!({}));
@@ -36,7 +36,7 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
         if __k.clicked() {
             act(app, "data.clearFilter", json!({}));
         }
-        let __k = small_button(ui, Icon::Redo, "Reapply", "Reapply", false);
+        let __k = small_button(ui, Icon::Refresh, "Reapply", "Reapply", false);
         control_keytip(app, ui, &__k, "data.reapply");
         if __k.clicked() {
             act(app, "data.reapply", json!({}));
@@ -129,11 +129,15 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui);
-    if big_button(ui, Icon::ChartBar, "Data\nAnalysis", "Data Analysis", false).clicked() {
+    if big_button(ui, Icon::Analysis, "Data\nAnalysis", "Data Analysis", false).clicked() {
         app.open_dialog("analysisToolPak", json!({}));
     }
     sep(ui);
     if big_button(ui, Icon::Function, "Solver", "Solver", false).clicked() {
         app.open_dialog("solver", json!({}));
+    }
+    sep(ui);
+    if big_button(ui, Icon::DataModel, "Power\nPivot", "Manage the data model: load a model, evaluate DAX and pivot a measure", false).clicked() {
+        app.open_dialog("powerPivot", json!({}));
     }
 }

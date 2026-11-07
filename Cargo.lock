@@ -2094,12 +2094,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "gridcraft-dax"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "quick-xml 0.41.0",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "gridcraft-engine"
 version = "0.16.0"
 dependencies = [
  "gridcraft-calc",
  "gridcraft-chart",
  "gridcraft-core",
+ "gridcraft-dax",
  "gridcraft-formula",
  "gridcraft-functions",
  "gridcraft-math",
@@ -2188,6 +2200,7 @@ dependencies = [
  "egui_kittest",
  "epaint_default_fonts",
  "gridcraft-chart",
+ "gridcraft-dax",
  "gridcraft-engine",
  "gridcraft-xlsx",
  "image",
