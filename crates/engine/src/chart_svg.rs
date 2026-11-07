@@ -19,7 +19,7 @@ impl gridcraft_chart::Measure for HelveticaMeasure {
 }
 
 /// `chart` of sheet `sheet` as an `<svg>` element placed by `style`, or `None` for a degenerate size.
-pub(crate) fn chart_svg(wb: &Workbook, sheet: usize, chart: &Chart, style: &str) -> Option<String> {
+pub fn chart_svg(wb: &Workbook, sheet: usize, chart: &Chart, style: &str) -> Option<String> {
     let (w, h) = (chart.anchor.width.min(MAX_SIDE), chart.anchor.height.min(MAX_SIDE));
     if !(w >= 1.0 && h >= 1.0) {
         return None;
@@ -29,7 +29,8 @@ pub(crate) fn chart_svg(wb: &Workbook, sheet: usize, chart: &Chart, style: &str)
     Some(prims_svg(&prims, w, h, style))
 }
 
-fn prims_svg(prims: &[Prim], w: f32, h: f32, style: &str) -> String {
+/// Drawing primitives as an `<svg>` element of `w`×`h`, placed by `style`.
+pub fn prims_svg(prims: &[Prim], w: f32, h: f32, style: &str) -> String {
     let mut out = String::new();
     let _ = write!(
         out,
