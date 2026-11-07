@@ -1,5 +1,7 @@
 use super::*;
 
+mod text_fast_path;
+
 #[test]
 fn format_colors_resolve_named_and_indexed_rgb_safely() {
     assert_eq!(FormatColor::Green.rgb(), Some([0, 255, 0]));
