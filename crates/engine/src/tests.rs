@@ -4782,6 +4782,31 @@ fn subtotal_109_recalculates_when_row_height_or_autofit_reveals_rows() {
 }
 
 #[test]
+fn autofit_row_height_for_arabic_wrapped_text_is_not_inflated() {
+    let mut s = s();
+    let text = "ما هي عاصمة المملكة العربية السعودية";
+    s.execute("cell.set", json!({"cell": "A1", "input": text})).unwrap();
+    s.execute("home.wrapText", json!({"range": "A1", "on": true})).unwrap();
+    s.execute("home.columnWidth", json!({"cols": "A:A", "width": 300.0})).unwrap();
+    s.execute("home.autofitRowHeight", json!({"rows": "1:1"})).unwrap();
+    // ~36 Arabic chars is under 300px, so one line: the row must stay near the default height.
+    let h = s.doc().unwrap().wb.sheet(0).unwrap().row_height(0);
+    assert!(h < 30.0, "row 1 is {h}px tall");
+}
+
+#[test]
+fn autofit_row_height_ignores_wrapped_text_in_hidden_columns() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "short"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "src/games/trivia/strings.ts"})).unwrap();
+    s.execute("home.wrapText", json!({"range": "A1:B1", "on": true})).unwrap();
+    s.execute("home.hideColumns", json!({"cols": "B:B"})).unwrap();
+    s.execute("home.autofitRowHeight", json!({"rows": "1:1"})).unwrap();
+    let h = s.doc().unwrap().wb.sheet(0).unwrap().row_height(0);
+    assert!(h < 30.0, "row 1 is {h}px tall");
+}
+
+#[test]
 fn paste_special_validation_copies_the_rule() {
     let mut s = s();
     let ok = |s: &mut Session, cell: &str, input: &str| s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == true;

@@ -757,6 +757,11 @@ pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
         if row_merges.iter().any(|m| m.contains(CellRef::new(row, c))) {
             continue;
         }
+        // A hidden column is 0 wide: its wrapped text would fold at 1px and make the row huge.
+        // Excel's AutoFit ignores hidden columns.
+        if sh.is_col_hidden(c) {
+            continue;
+        }
         let st = wb.styles.get(cell.style);
         let size = st.font.size;
         // Scaled from an 11pt row's height, not the sheet's default: a sheet whose default
