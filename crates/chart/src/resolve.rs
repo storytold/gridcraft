@@ -122,6 +122,27 @@ fn ref_format(wb: &Workbook, sheet: usize, formula: &str) -> String {
         .unwrap_or_else(|| "General".into())
 }
 
+/// Each point's cell format, for data labels: empty when all are `first`, or when the cells can't be
+/// matched one to one with the `points` values. The evaluator trims a reference to the used range,
+/// so these follow the same shape.
+fn point_formats(wb: &Workbook, sheet: usize, formula: &str, first: &str, points: usize) -> Vec<String> {
+    let Some((sh, r)) = parse_ref(wb, sheet, formula) else { return Vec::new() };
+    let Some(s) = wb.sheet(sh) else { return Vec::new() };
+    let Some(used) = s.used_range() else { return Vec::new() };
+    let end = CellRef::new(r.end.row.min(used.end.row), r.end.col.min(used.end.col));
+    if end.row < r.start.row || end.col < r.start.col {
+        return Vec::new();
+    }
+    let trimmed = RangeRef::new(r.start, end);
+    let formats: Vec<String> = trimmed.iter().take(MAX_POINTS).map(|c| wb.styles.get(s.style_id(c)).num_fmt.0.to_string()).collect();
+    if formats.len() != points || formats.iter().all(|f| f == first) { Vec::new() } else { formats }
+}
+
+#[cfg(test)]
+pub(crate) fn point_formats_for_tests(wb: &Workbook, sheet: usize, formula: &str) -> Vec<String> {
+    point_formats(wb, sheet, formula, &ref_format(wb, sheet, formula), nums(wb, sheet, formula).len())
+}
+
 fn value_text(v: &Value) -> String {
     match v {
         Value::Empty => String::new(),
@@ -231,6 +252,7 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     let mut category_levels = Vec::new();
     for (i, s) in chart.series.iter().take(MAX_SERIES).enumerate() {
         let values = nums(wb, sheet, &s.values);
+        let points = values.len();
         let name = s.name.as_deref().map(|n| series_name(wb, sheet, n)).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Series{}", i + 1));
         let color =
             s.color.as_ref().and_then(|c| c.resolve(&wb.theme)).map(|[r, g, b]| [r, g, b, 0xFF]).unwrap_or_else(|| series_color(&wb.theme, i));
@@ -269,6 +291,11 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
             secondary: s.secondary,
             smooth: s.smooth,
             trendlines,
+            point_formats: if chart.data_labels {
+                point_formats(wb, sheet, &s.values, &ref_format(wb, sheet, &s.values), points)
+            } else {
+                Vec::new()
+            },
             number_format: ref_format(wb, sheet, &s.values),
         });
     }
