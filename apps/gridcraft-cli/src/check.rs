@@ -19,7 +19,7 @@ use std::process::ExitCode;
 
 use gridcraft_engine::calc::{Calc, Key};
 use gridcraft_engine::cmd::inspect::value_json;
-use gridcraft_engine::core::{CellError, CellRef, Value};
+use gridcraft_engine::core::{CellError, CellRef, Region, Value};
 use gridcraft_engine::formula::{Expr, quote_sheet};
 use gridcraft_engine::model::{Cell, Sheet, Workbook};
 use serde_json::{Value as Json, json};
@@ -58,11 +58,14 @@ pub struct Options {
     pub tolerance: f64,
     /// Most examples listed per file and category.
     pub max_report: usize,
+    /// The runtime regional format, applied before formula recalculation and round-trip comparison.
+    pub region: &'static Region,
 }
 
 impl Default for Options {
+    /// Use the standard comparison tolerance, report limit and canonical formula region.
     fn default() -> Self {
-        Options { tolerance: 1e-9, max_report: 20 }
+        Options { tolerance: 1e-9, max_report: 20, region: gridcraft_engine::core::region::default_region() }
     }
 }
 
@@ -187,14 +190,15 @@ impl Diffs {
 
 // ---------------------------------------------------------------- entry point
 
-/// `check <file-or-dir>... [--json] [--tolerance X] [--max-report N]`. Exit 0 when every file opens,
+/// `check <file-or-dir>... [--json] [--tolerance X] [--max-report N] [--region TAG]`.
+/// Exit 0 when every file opens,
 /// every checked formula matches and every round trip is clean; 1 otherwise; 2 on a usage error.
 pub fn main(args: &[String]) -> ExitCode {
     let usage = |e: String| {
         eprintln!("gridcraft-cli: {e}\n{USAGE}");
         ExitCode::from(2)
     };
-    let a = match Args::parse(args, &["tolerance", "max-report"], &["json"]) {
+    let a = match Args::parse(args, &["tolerance", "max-report", "region"], &["json"]) {
         Ok(a) => a,
         Err(e) => return usage(e),
     };
@@ -202,6 +206,11 @@ pub fn main(args: &[String]) -> ExitCode {
         return usage("missing <file-or-dir>".into());
     }
     let mut opts = Options::default();
+    match a.region() {
+        Ok(Some(region)) => opts.region = region,
+        Ok(None) => {}
+        Err(e) => return usage(e),
+    }
     if let Some(t) = a.opt("tolerance") {
         match t.parse::<f64>() {
             Ok(t) if t.is_finite() && t >= 0.0 => opts.tolerance = t,
@@ -347,15 +356,17 @@ pub fn check_bytes(path: &str, bytes: &[u8], opts: &Options) -> FileReport {
     })
 }
 
+/// Open and recalculate a workbook in the selected region before comparing caches and round trips.
 fn check_inner(path: &str, bytes: &[u8], opts: &Options) -> FileReport {
     let mut report = FileReport { path: path.to_string(), ..Default::default() };
-    let (cached, warnings) = match gridcraft_engine::io::open_bytes(path, bytes) {
+    let (mut cached, warnings) = match gridcraft_engine::io::open_bytes(path, bytes) {
         Ok(x) => x,
         Err(e) => {
             report.error = Some(e.to_string());
             return report;
         }
     };
+    cached.region = opts.region;
     report.warnings = warnings;
     let mut fresh = cached.clone();
     let mut calc = Calc::new();

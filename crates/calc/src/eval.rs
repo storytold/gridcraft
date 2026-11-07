@@ -153,6 +153,10 @@ impl Ctx for FnCtx<'_, '_> {
     fn date_system(&self) -> gridcraft_core::DateSystem {
         self.ev.host.workbook().date_system
     }
+    /// Expose the workbook runtime region to DATEVALUE and TIMEVALUE.
+    fn region(&self) -> &gridcraft_core::Region {
+        self.ev.host.workbook().region
+    }
     fn now_serial(&self) -> f64 {
         self.ev.host.now_serial()
     }
