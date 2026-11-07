@@ -323,13 +323,10 @@ fn a_worker_lost_and_rebuilt_runs_it_again() {
     // It has replied and is on its way out: a cell sent in that moment goes down with it, which is
     // the case above. So this waits for it to go, and for the client to see that.
     let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while h.exited() == 0 {
-        assert!(std::time::Instant::now() < until, "the worker never went");
-        std::thread::sleep(std::time::Duration::from_millis(2));
-    }
-    for _ in 0..10 {
+    while h.exited() == 0 || s.python_worker_alive() {
+        assert!(std::time::Instant::now() < until, "the client never saw the worker go");
         s.python_poll(std::time::Duration::ZERO);
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        std::thread::sleep(std::time::Duration::from_millis(2));
     }
     py(&mut s, "A2", "get rate");
     settle(&mut s);
