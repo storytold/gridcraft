@@ -14,7 +14,7 @@ pub(super) fn manage_rules(app: &mut SheetApp, ui: &mut egui::Ui) {
     }
     let mut action: Option<Json> = None;
     let row_height = ui.spacing().interact_size.y;
-    egui::ScrollArea::vertical().max_height(LIST_HEIGHT).auto_shrink([false, true]).show_rows(ui, row_height, count, |ui, rows| {
+    egui::ScrollArea::both().max_height(LIST_HEIGHT).auto_shrink([false, true]).show_rows(ui, row_height, count, |ui, rows| {
         let Some(sh) = app.session.active().and_then(|d| d.wb.active()) else { return };
         for i in rows {
             let Some(cf) = sh.cond_formats.get(i) else { break };
