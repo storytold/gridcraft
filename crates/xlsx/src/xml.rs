@@ -241,6 +241,16 @@ pub fn first_start(xml: &[u8], local_name: &str) -> Option<El> {
 /// tree. Deeper elements of the same name (the `xdr:row` of a form control's anchor) stay in the
 /// tree.
 pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Result<(), IoError>) -> Result<El, IoError> {
+    let (root, err) = parse_streaming_partial(xml, split, cb);
+    match err {
+        Some(e) => Err(e),
+        None => Ok(root),
+    }
+}
+
+/// Like [`parse_streaming`], but on error also returns whatever of the root element had been
+/// assembled so far.
+pub fn parse_streaming_partial(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Result<(), IoError>) -> (El, Option<IoError>) {
     let data = to_utf8(xml);
     let mut reader = Reader::from_reader(data.as_ref());
     {
@@ -295,66 +305,73 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
         }
         Ok(())
     }
-    loop {
-        let ev = reader.read_event_into(&mut buf).map_err(|e| IoError::Xml(format!("{e} at byte {}", reader.buffer_position())))?;
-        match ev {
-            Event::Start(e) => {
-                if stack.len() >= MAX_DEPTH {
-                    return Err(IoError::Xml("XML nested too deeply".into()));
+    let mut run = || -> Result<(), IoError> {
+        loop {
+            let ev = reader.read_event_into(&mut buf).map_err(|e| IoError::Xml(format!("{e} at byte {}", reader.buffer_position())))?;
+            match ev {
+                Event::Start(e) => {
+                    if stack.len() >= MAX_DEPTH {
+                        return Err(IoError::Xml("XML nested too deeply".into()));
+                    }
+                    stack.push(start_el(&e));
+                    kept_at_start.push(kept);
                 }
-                stack.push(start_el(&e));
-                kept_at_start.push(kept);
-            }
-            Event::Empty(e) => {
-                let el = start_el(&e);
-                finish(&mut stack, &mut root, el, split, cb, &mut kept, None)?;
-            }
-            Event::End(_) => {
-                if let Some(el) = stack.pop() {
-                    let at_start = kept_at_start.pop();
-                    finish(&mut stack, &mut root, el, split, cb, &mut kept, at_start)?;
+                Event::Empty(e) => {
+                    let el = start_el(&e);
+                    finish(&mut stack, &mut root, el, split, cb, &mut kept, None)?;
                 }
-            }
-            Event::Text(t) => {
-                if let Some(top) = stack.last_mut() {
-                    let s = t.xml_content(XmlVersion::Explicit1_0).map_err(|e| IoError::Xml(e.to_string()))?;
-                    top.text.push_str(&s);
+                Event::End(_) => {
+                    if let Some(el) = stack.pop() {
+                        let at_start = kept_at_start.pop();
+                        finish(&mut stack, &mut root, el, split, cb, &mut kept, at_start)?;
+                    }
                 }
-            }
-            Event::CData(t) => {
-                if let Some(top) = stack.last_mut() {
-                    top.text.push_str(&String::from_utf8_lossy(&t));
+                Event::Text(t) => {
+                    if let Some(top) = stack.last_mut() {
+                        let s = t.xml_content(XmlVersion::Explicit1_0).map_err(|e| IoError::Xml(e.to_string()))?;
+                        top.text.push_str(&s);
+                    }
                 }
-            }
-            Event::GeneralRef(r) => {
-                if let Some(top) = stack.last_mut() {
-                    match r.resolve_char_ref() {
-                        Ok(Some(c)) => top.text.push(c),
-                        _ => {
-                            let name = String::from_utf8_lossy(&r).into_owned();
-                            match named_entity(&name) {
-                                Some(c) => top.text.push(c),
-                                None => {
-                                    top.text.push('&');
-                                    top.text.push_str(&name);
-                                    top.text.push(';');
+                Event::CData(t) => {
+                    if let Some(top) = stack.last_mut() {
+                        top.text.push_str(&String::from_utf8_lossy(&t));
+                    }
+                }
+                Event::GeneralRef(r) => {
+                    if let Some(top) = stack.last_mut() {
+                        match r.resolve_char_ref() {
+                            Ok(Some(c)) => top.text.push(c),
+                            _ => {
+                                let name = String::from_utf8_lossy(&r).into_owned();
+                                match named_entity(&name) {
+                                    Some(c) => top.text.push(c),
+                                    None => {
+                                        top.text.push('&');
+                                        top.text.push_str(&name);
+                                        top.text.push(';');
+                                    }
                                 }
                             }
                         }
                     }
                 }
+                Event::Eof => break,
+                _ => {}
             }
-            Event::Eof => break,
-            _ => {}
+            buf.clear();
         }
-        buf.clear();
+        // Unclosed elements (truncated part): close them so we keep what we have.
+        while let Some(el) = stack.pop() {
+            let at_start = kept_at_start.pop();
+            finish(&mut stack, &mut root, el, split, cb, &mut kept, at_start)?;
+        }
+        Ok(())
+    };
+    let err = run().err();
+    match root.or_else(|| stack.into_iter().next()) {
+        Some(r) => (r, err),
+        None => (El::default(), Some(err.unwrap_or_else(|| IoError::Xml("no root element".into())))),
     }
-    // Unclosed elements (truncated part): close them so we keep what we have.
-    while let Some(el) = stack.pop() {
-        let at_start = kept_at_start.pop();
-        finish(&mut stack, &mut root, el, split, cb, &mut kept, at_start)?;
-    }
-    root.ok_or_else(|| IoError::Xml("no root element".into()))
 }
 
 // ---------------------------------------------------------------- writing helpers
@@ -622,6 +639,37 @@ mod tests {
         let xml = format!("<r>{}<y/></r>", "<x/>".repeat(MAX_XML_NODES + 1));
         let err = parse(xml.as_bytes()).unwrap_err();
         assert!(err.to_string().contains("elements"), "{err}");
+    }
+
+    #[test]
+    fn streamed_elements_release_their_descendants_from_the_node_limit() {
+        let row = format!("<row>{}</row>", "<c><v>1</v></c>".repeat(500));
+        let rows = 1001; // 1001 * 1000 = 1,001,000 child elements across streamed <row>s
+        let mut xml = String::with_capacity(row.len() * rows + 64);
+        xml.push_str("<worksheet><cols><col min=\"1\" max=\"1\" width=\"12\"/></cols><sheetData>");
+        for _ in 0..rows {
+            xml.push_str(&row);
+        }
+        xml.push_str("</sheetData></worksheet>");
+        let mut seen = 0usize;
+        let root = parse_streaming(xml.as_bytes(), &["row"], &mut |r| {
+            assert_eq!(r.children.len(), 500);
+            seen += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(seen, rows);
+        assert!(root.child("cols").is_some());
+
+        // A single streamed element holding more than MAX_XML_NODES children is still refused,
+        // while keeping the root's earlier children in parse_streaming_partial.
+        let huge_row = format!(
+            "<worksheet><cols><col min=\"1\" max=\"1\" width=\"12\"/></cols><sheetData><row>{}</row></sheetData></worksheet>",
+            "<c/>".repeat(MAX_XML_NODES + 1)
+        );
+        let (partial, err) = parse_streaming_partial(huge_row.as_bytes(), &["row"], &mut |_| Ok(()));
+        assert!(err.is_some_and(|e| e.to_string().contains("elements")));
+        assert!(partial.child("cols").is_some());
     }
 
     #[test]
