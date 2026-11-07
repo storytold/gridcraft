@@ -546,6 +546,34 @@ fn pivot_cross_puts_column_groups_in_columns() {
 }
 
 #[test]
+fn pivot_validates_fields_even_for_an_empty_measure_table() {
+    let mut model = DataModel {
+        tables: vec![
+            ModelTable { name: "Empty".into(), columns: vec![ModelColumn { name: "Key".into(), data_type: Some("String".into()) }], rows: vec![] },
+            ModelTable { name: "Sales".into(), columns: vec![ModelColumn { name: "Region".into(), data_type: Some("String".into()) }], rows: vec![] },
+        ],
+        relationships: vec![],
+        measures: vec![Measure {
+            name: "Empty Rows".into(),
+            formula: "COUNTROWS(Empty)".into(),
+            table: Some("Empty".into()),
+            format: None,
+            expr: None,
+        }],
+    };
+    model.parse_formulas().expect("model parses");
+
+    let foreign = gridcraft_dax::pivot_fields(&model, &["Sales[Region]".into()]).expect("field");
+    let error = gridcraft_dax::pivot(&model, "Empty Rows", &foreign).expect_err("a field from another table is rejected");
+    assert!(error.to_string().contains("must belong to the measure table"), "{error}");
+
+    let own = gridcraft_dax::pivot_fields(&model, &["Empty[Key]".into()]).expect("field");
+    let table = gridcraft_dax::pivot(&model, "Empty Rows", &own).expect("an empty grouping still renders");
+    assert!(table.rows.is_empty());
+    assert_eq!(table.columns.len(), 2, "the row field and the measure header");
+}
+
+#[test]
 fn text_is_not_compared_with_numbers() {
     // DAX refuses to compare text with a number, so `=` answers FALSE instead of coercing "3".
     assert_eq!(eval("\"3\" = 3"), Scalar::Boolean(false));

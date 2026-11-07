@@ -395,7 +395,8 @@ relationship names.
 `Binder::bind_expression` resolves `Table[Column]`, measures, variables and function calls;
 `Binder::bind_measure` and `Binder::dependency_graph` expose direct measure dependencies and reject
 cycles. `Evaluator::new` pre-binds the measures and evaluates scalar or table expressions with a
-`FilterContext`; `pivot::pivot` groups a measure by row fields.
+`FilterContext`; `pivot::pivot` groups a measure by row fields on its home table and rejects fields
+that belong to another table, even when the home table has no rows.
 
 The evaluator's core switch implements the scalar spine — literals, operators, `VAR`/`RETURN`,
 context transition, `CALCULATE`/`FILTER`/`ALL`/`VALUES`/`DISTINCT`/`SELECTEDVALUE`, the

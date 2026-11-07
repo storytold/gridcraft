@@ -43,15 +43,19 @@ pub fn pivot_cross(model: &DataModel, measure: &str, row_fields: &[PivotField], 
             "measure `{measure}` has no home table; give the measure a home table, or set `PivotTable::source_table` and render through `PivotTable` instead of `pivot`/`pivot_cross`"
         ))));
     };
+    // Validate the grouping fields up front: an empty measure table would otherwise skip the check
+    // and return a header-only table for fields that do not belong to the measure table at all.
+    validate_fields(model, table_index, row_fields)?;
+    validate_fields(model, table_index, column_fields)?;
     let source = model.tables.get(table_index).ok_or_else(|| PivotError::Eval(EvalError::new("missing table")))?;
 
     let mut row_groups: BTreeMap<Vec<ScalarKey>, Vec<Scalar>> = BTreeMap::new();
     let mut column_groups: BTreeMap<Vec<ScalarKey>, Vec<Scalar>> = BTreeMap::new();
     for row in &source.rows {
-        let row_values = group_values(row, row_fields, table_index)?;
+        let row_values = group_values(row, row_fields)?;
         row_groups.entry(row_values.iter().map(crate::value::distinct_key).collect()).or_insert(row_values);
         if !column_fields.is_empty() {
-            let column_values = group_values(row, column_fields, table_index)?;
+            let column_values = group_values(row, column_fields)?;
             column_groups.entry(column_values.iter().map(crate::value::distinct_key).collect()).or_insert(column_values);
         }
     }
@@ -96,12 +100,22 @@ pub fn pivot_cross(model: &DataModel, measure: &str, row_fields: &[PivotField], 
     Ok(TableValue::new(columns, rows))
 }
 
-fn group_values(row: &[Scalar], fields: &[PivotField], table_index: usize) -> Result<Vec<Scalar>, PivotError> {
-    let mut values = Vec::with_capacity(fields.len());
+fn validate_fields(model: &DataModel, table_index: usize, fields: &[PivotField]) -> Result<(), PivotError> {
+    let table = model.tables.get(table_index).ok_or_else(|| PivotError::Eval(EvalError::new("missing table")))?;
     for field in fields {
         if field.table != table_index {
             return Err(PivotError::Eval(EvalError::new("pivot fields must belong to the measure table")));
         }
+        if field.column >= table.columns.len() {
+            return Err(PivotError::Eval(EvalError::new(format!("pivot field `{}` names a column the measure table does not have", field.name))));
+        }
+    }
+    Ok(())
+}
+
+fn group_values(row: &[Scalar], fields: &[PivotField]) -> Result<Vec<Scalar>, PivotError> {
+    let mut values = Vec::with_capacity(fields.len());
+    for field in fields {
         values.push(row.get(field.column).cloned().unwrap_or(Scalar::Blank));
     }
     Ok(values)
