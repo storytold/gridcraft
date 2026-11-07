@@ -75,6 +75,11 @@ impl SheetApp {
     fn start_font_setup(&mut self, ctx: &egui::Context) {
         if self.fonts_set {
             self.fonts_ready = true;
+            // A scan that finished before this pass had its repaint spent on it: bind the workbook
+            // fonts in one more, or an idle app never does.
+            if !self.prepared_fonts && fonts::scan_done() {
+                ctx.request_repaint();
+            }
             return;
         }
         if self.prepared_fonts {

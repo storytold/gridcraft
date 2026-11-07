@@ -494,7 +494,15 @@ fn font_definitions_impl(language: crate::i18n::Language, used: &[String], syste
     // Installed workbook fonts, so a cell's chosen font actually renders in it.
     if system {
         for family in crate::fonts::installed_among(used) {
-            bound.extend(crate::fonts::bind_family(&mut fonts, &family));
+            for role in crate::fonts::bind_family(&mut fonts, &family) {
+                // The script fallbacks end its chain too, as they end the built-in roles': a cell
+                // in Calibri keeps its Chinese once Calibri itself is bound.
+                if let Some(chain) = fonts.families.get_mut(&FontFamily::Name(role.as_str().into())) {
+                    let missing: Vec<String> = fallback.iter().filter(|k| !chain.contains(k)).cloned().collect();
+                    chain.extend(missing);
+                }
+                bound.push(role);
+            }
         }
     }
     // Interface text (formula bar, name box, dialogs) falls back to the cell font before the
@@ -636,6 +644,25 @@ mod font_binding_tests {
         let FontFamily::Name(fallback) = cell_family("Ubuntu", false, true) else { panic!("should name a family") };
         assert!(crate::fonts::is_bound(&fallback), "the fallback is a bound role");
         crate::fonts::set_bound(always_bound());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_bound_workbook_font_keeps_the_script_fallbacks() {
+        let _g = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::fonts::catalog();
+        let Some(family) =
+            ["Calibri", "Arial", "DejaVu Sans", "Liberation Sans", "Helvetica"].into_iter().find(|f| !crate::fonts::faces_of(f).is_empty())
+        else {
+            return;
+        };
+        let fallback = load_fallback(&mut FontDefinitions::default(), HanOrder::of(crate::i18n::Language::En));
+        let fonts = font_definitions_with(crate::i18n::Language::En, &[family.to_string()]);
+        crate::fonts::set_bound(always_bound());
+        let chain = &fonts.families[&FontFamily::Name(crate::fonts::role_key(family, false, false).into())];
+        for key in fallback.iter().filter(|k| fonts.font_data.contains_key(*k)) {
+            assert!(chain.contains(key), "{family} lacks the fallback {key}: {chain:?}");
+        }
     }
 
     #[test]
