@@ -316,7 +316,7 @@ fn openpyxl_reads_what_a_saved_workbook_holds_and_a_save_through_it_loses_no_pic
     // Reopened here, no picture was lost, and with no Python cell there is no link and no notice.
     let (mut s, reply) = opened(&saved);
     let warnings = reply["warnings"].to_string();
-    assert!(warnings.contains("no such cell") && warnings.contains("lost the link"), "{warnings}");
+    assert!(warnings.contains("don't go with what that cell holds") && warnings.contains("lost the link"), "{warnings}");
     let doc = s.doc().unwrap();
     let sheet = doc.wb.sheet(0).unwrap();
     assert!(sheet.cell(at("G5")).is_none_or(|c| c.py.is_none()) && sheet.cell(at("H7")).is_none_or(|c| c.py.is_none()));
