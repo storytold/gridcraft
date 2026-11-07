@@ -16,6 +16,7 @@ use super::{
     f64_param, has_doc, locked_cell_error, ok, split_sheet, str_param, target_range, target_ranges, target_sheet, u32_param,
 };
 use crate::selection::current_region;
+use gridcraft_model::ChartFormat;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -72,7 +73,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Insert Chart",
             ["Insert", "Charts"],
             None,
-            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers, title?, at?: \"H2\", width?, height?}",
+            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers|stacked100Markers, title?, at?: \"H2\", width?, height?, format?: ChartFormat (validated before insertion), style?: 1..16 (clamped, default 2), legend?: none|bottom|top|left|right (default right for pie/doughnut, bottom otherwise; unknown strings use bottom), dataLabels?: false, gridlines?: bool (default depends on chart type)} → {chart}: appearance is part of the single undoable, journaled insertion",
             has_doc,
             insert_chart
         ),
@@ -99,7 +100,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Chart Properties",
             ["Chart Design"],
             None,
-            "{chart?: id, type?, subtype?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, dataTable?: bool, dataTableKeys?: bool, dataTableHorizontalBorder?: bool, dataTableVerticalBorder?: bool, dataTableOutline?: bool (data tables: column/bar/line/area and compatible combo charts), quartiles?: exclusive|inclusive, style?, holeSize?, firstSliceAngle?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?}",
+            "{chart?: id, type?, subtype?: clustered|stacked|stacked100|markers|stacked100Markers, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, dataTable?: bool, dataTableKeys?: bool, dataTableHorizontalBorder?: bool, dataTableVerticalBorder?: bool, dataTableOutline?: bool (data tables: column/bar/line/area and compatible combo charts), quartiles?: exclusive|inclusive, style?, holeSize?, firstSliceAngle?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?, format?: ChartFormat replacement value for all stored chart-format settings}",
             has_doc,
             chart_set
         ),
@@ -612,6 +613,8 @@ pub fn chart_kind(t: &str, sub: &str) -> ChartKind {
         ("bar", _) => ChartKind::BarClustered,
         ("line", "markers") => ChartKind::LineMarkers,
         ("line", "stacked") => ChartKind::LineStacked,
+        ("line", "stacked100") => ChartKind::LineStacked100,
+        ("line", "stacked100Markers") => ChartKind::LineStacked100Markers,
         ("line", _) => ChartKind::Line,
         ("pie", _) => ChartKind::Pie,
         ("doughnut", _) => ChartKind::Doughnut,
@@ -803,6 +806,12 @@ pub fn recommend_charts(s: &Session, p: &Json) -> Result<Vec<(&'static str, &'st
 /// The chart `insert.chart` would insert for these params, without inserting it: the sheet it
 /// goes on and the chart (previews in the Recommended Charts dialog).
 pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
+    let format = p
+        .get("format")
+        .map(|v| serde_json::from_value::<ChartFormat>(v.clone()).map_err(|_| bad("insert.chart", "invalid chart format")))
+        .transpose()?
+        .unwrap_or_default();
+    validate_chart_format("insert.chart", &format)?;
     let areas = chart_areas(s, p)?;
     if areas.iter().fold(0_u64, |count, area| count.saturating_add(area.count())) > MAX_CHART_CELLS {
         return Err(bad("insert.chart", "range too large for a chart"));
@@ -845,18 +854,24 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         },
         title,
         series,
-        legend: if matches!(kind, ChartKind::Pie | ChartKind::Doughnut) { LegendPos::Right } else { LegendPos::Bottom },
-        data_labels: false,
+        legend: str_param(p, "legend").map(chart_legend).unwrap_or(if matches!(kind, ChartKind::Pie | ChartKind::Doughnut) {
+            LegendPos::Right
+        } else {
+            LegendPos::Bottom
+        }),
         data_table: None,
-        gridlines: !matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel),
-        style: 1,
         hole_size: 75,
         first_slice_angle: 0,
+        data_labels: bool_param(p, "dataLabels").unwrap_or(false),
+        gridlines: bool_param(p, "gridlines")
+            .unwrap_or(!matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel)),
+        style: u32_param(p, "style").map(|style| style.clamp(1, 16)).unwrap_or(2),
         x_title: None,
         y_title: None,
         source: (areas.len() == 1).then(|| format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), bounds.a1())),
         by_rows,
         pivot: None,
+        format,
     };
     Ok((sheet, chart))
 }
@@ -881,8 +896,83 @@ fn find_chart(s: &Session, p: &Json) -> Result<(usize, usize)> {
     idx.map(|i| (sheet, i)).ok_or_else(|| bad("chart", "no such chart"))
 }
 
+/// Rejects invalid formatting before a command mutates chart state or consumes undo history.
+/// Bounds on optional values and collection sizes also protect rendering and serialized output.
+fn validate_chart_format(cmd: &str, f: &ChartFormat) -> Result<()> {
+    if [f.legend_position, f.trendline_label_position].into_iter().flatten().flatten().any(|n| !n.is_finite() || !(0.0..=1.0).contains(&n)) {
+        return Err(bad(cmd, "Chart annotation positions must be between 0 and 1"));
+    }
+    if f.text.len() > 16
+        || f.text.iter().any(|(role, t)| {
+            !matches!(
+                role.as_str(),
+                "chart" | "title" | "legend" | "x_axis" | "y_axis" | "x_axis_title" | "y_axis_title" | "data_labels" | "trendline"
+            ) || t.size.is_some_and(|n| !n.is_finite() || !(1.0..=144.0).contains(&n))
+                || t.name.as_ref().is_some_and(|n| n.len() > 256)
+        })
+    {
+        return Err(bad(cmd, "Invalid chart text format"));
+    }
+    for a in [&f.x_axis, &f.y_axis] {
+        if a.minimum.is_some_and(|v| !v.is_finite() || v.abs() > 1e100 || (a.logarithmic && v <= 0.0))
+            || a.maximum.is_some_and(|v| !v.is_finite() || v.abs() > 1e100 || (a.logarithmic && v <= 0.0))
+            || a.minimum.zip(a.maximum).is_some_and(|(lo, hi)| hi <= lo)
+            || a.major_unit.is_some_and(|v| !v.is_finite() || v <= 0.0 || v > 1e100)
+            || a.number_format.as_ref().is_some_and(|v| v.len() > 256)
+            || a.major_tick.as_deref().is_some_and(|v| !matches!(v, "none" | "in" | "out" | "cross"))
+            || a.minor_tick.as_deref().is_some_and(|v| !matches!(v, "none" | "in" | "out" | "cross"))
+            || a.minor_unit.is_some_and(|v| !v.is_finite() || v <= 0.0 || v > 1e100)
+        {
+            return Err(bad(cmd, "Axis bounds must increase; logarithmic bounds and major units must be positive."));
+        }
+    }
+    let width_ok = |v: Option<f32>| v.is_none_or(|v| v.is_finite() && (0.0..=20.0).contains(&v));
+    if [&f.x_axis.line, &f.y_axis.line, &f.x_axis.tick_line, &f.y_axis.tick_line, &f.horizontal_gridline, &f.vertical_gridline]
+        .iter()
+        .any(|v| !width_ok(v.width))
+    {
+        return Err(bad(cmd, "Invalid axis/grid line width"));
+    }
+    if !width_ok(f.border_width)
+        || [&f.chart_area, &f.plot_area].iter().any(|s| !width_ok(s.border_width))
+        || f.gap_width.is_some_and(|n| !n.is_finite() || !(0.0..=500.0).contains(&n))
+        || f.overlap.is_some_and(|n| !n.is_finite() || !(-100.0..=100.0).contains(&n))
+        || f.series.len() > 256
+        || f.series.values().any(|v| {
+            !width_ok(v.line_width)
+                || !width_ok(v.border_width)
+                || !width_ok(v.marker_border_width)
+                || v.marker_size.is_some_and(|n| !n.is_finite() || !(2.0..=72.0).contains(&n))
+                || v.marker
+                    .as_deref()
+                    .is_some_and(|m| !matches!(m, "none" | "circle" | "square" | "diamond" | "triangle" | "cross" | "plus" | "star" | "dash"))
+        })
+    {
+        return Err(bad(cmd, "Invalid line width, marker size or marker type."));
+    }
+    Ok(())
+}
+
+/// Shared insertion/edit parsing; an unrecognized placement keeps the conventional bottom legend.
+fn chart_legend(legend: &str) -> LegendPos {
+    match legend {
+        "none" => LegendPos::None,
+        "top" => LegendPos::Top,
+        "left" => LegendPos::Left,
+        "right" => LegendPos::Right,
+        _ => LegendPos::Bottom,
+    }
+}
+
 fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, ci) = find_chart(s, p)?;
+    let format = p
+        .get("format")
+        .map(|v| serde_json::from_value::<ChartFormat>(v.clone()).map_err(|_| bad("chart.set", "invalid chart format")))
+        .transpose()?;
+    if let Some(f) = &format {
+        validate_chart_format("chart.set", f)?;
+    }
     let at = cell_param_on(s, p, "at", si)?;
     let quartiles = p
         .get("quartiles")
@@ -895,6 +985,9 @@ fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
         let Some(c) = sh.charts.get_mut(ci) else { return Ok(Json::Null) };
+        if let Some(f) = &format {
+            c.format = f.clone();
+        }
         if let Some(t) = str_param(p, "type") {
             c.kind = chart_kind(t, str_param(p, "subtype").unwrap_or(""));
             if !c.supports_data_table() {
@@ -911,13 +1004,7 @@ fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
             c.title = t.as_str().map(str::to_string);
         }
         if let Some(l) = str_param(p, "legend") {
-            c.legend = match l {
-                "none" => LegendPos::None,
-                "top" => LegendPos::Top,
-                "left" => LegendPos::Left,
-                "right" => LegendPos::Right,
-                _ => LegendPos::Bottom,
-            };
+            c.legend = chart_legend(l);
         }
         if let Some(v) = bool_param(p, "dataLabels") {
             c.data_labels = v;
@@ -959,32 +1046,6 @@ fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-/// Shared by Chart Properties and Add Chart Element; no separate UI state.
-pub(super) fn update_data_table(c: &mut Chart, p: &Json, on: Option<bool>) -> Result<()> {
-    if p.get("dataTable").is_some_and(|v| !v.is_boolean()) {
-        return Err(bad("chart", "`dataTable` must be a boolean"));
-    }
-    if on == Some(false) {
-        c.data_table = None;
-        return Ok(());
-    }
-    let fields = ["dataTableKeys", "dataTableHorizontalBorder", "dataTableVerticalBorder", "dataTableOutline"];
-    if on == Some(true) || fields.iter().any(|k| p.get(k).is_some()) {
-        if !c.supports_data_table() {
-            return Err(bad("chart", "data tables need a column, bar, line, area or compatible combo chart"));
-        }
-        let table = c.data_table.get_or_insert_with(Default::default);
-        for (key, value) in
-            fields.into_iter().zip([&mut table.show_keys, &mut table.horizontal_border, &mut table.vertical_border, &mut table.outline])
-        {
-            if let Some(v) = p.get(key) {
-                *value = v.as_bool().ok_or_else(|| bad("chart", format!("`{key}` must be a boolean")))?;
-            }
-        }
-    }
-    Ok(())
-}
-
 fn chart_switch(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, ci) = find_chart(s, p)?;
     edit(s, |cx| {
@@ -1011,6 +1072,7 @@ fn chart_switch(s: &mut Session, p: &Json) -> Result<Json> {
             c.source.get_or_insert(src);
             c.by_rows = by_rows;
             c.series = series;
+            c.format.series.clear();
             scatter_x_from_first(c.kind, &mut c.series);
         }
         Ok(Json::Null)
@@ -1046,6 +1108,32 @@ fn chart_delete(s: &mut Session, p: &Json) -> Result<Json> {
         cx.sheet_mut(si)?.charts.remove(ci);
         Ok(Json::Null)
     })
+}
+
+/// Shared by Chart Properties and Add Chart Element; no separate UI state.
+pub(super) fn update_data_table(c: &mut Chart, p: &Json, on: Option<bool>) -> Result<()> {
+    if p.get("dataTable").is_some_and(|v| !v.is_boolean()) {
+        return Err(bad("chart", "`dataTable` must be a boolean"));
+    }
+    if on == Some(false) {
+        c.data_table = None;
+        return Ok(());
+    }
+    let fields = ["dataTableKeys", "dataTableHorizontalBorder", "dataTableVerticalBorder", "dataTableOutline"];
+    if on == Some(true) || fields.iter().any(|k| p.get(k).is_some()) {
+        if !c.supports_data_table() {
+            return Err(bad("chart", "data tables need a column, bar, line, area or compatible combo chart"));
+        }
+        let table = c.data_table.get_or_insert_with(Default::default);
+        for (key, value) in
+            fields.into_iter().zip([&mut table.show_keys, &mut table.horizontal_border, &mut table.vertical_border, &mut table.outline])
+        {
+            if let Some(v) = p.get(key) {
+                *value = v.as_bool().ok_or_else(|| bad("chart", format!("`{key}` must be a boolean")))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn insert_sparkline(s: &mut Session, p: &Json) -> Result<Json> {
