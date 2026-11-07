@@ -1690,28 +1690,59 @@ fn hand_placed_plot_area_and_title_go_where_the_file_puts_them() {
     assert!(outer.iter().map(|b| b.0).fold(f32::MAX, f32::min) > left + 1.0, "labels take room on the left");
 }
 
-/// A bar chart's plot placed by hand near the left edge: the category labels fit in the room
-/// left of it instead of running off the chart.
-#[test]
-fn bar_labels_fit_left_of_a_hand_placed_plot() {
-    use gridcraft_model::{ChartLayout, ChartRect};
-    let mut d = sample(ChartKind::BarClustered);
-    d.categories = (1..=6).map(|i| format!("A rather long category name {i}")).collect();
-    let (w, h) = (600.0, 400.0);
-    let mut c = chart(ChartKind::BarClustered);
-    c.legend = LegendPos::None;
-    c.layout = ChartLayout { plot: Some(ChartRect { x: 0.15, y: 0.1, w: 0.8, h: 0.8 }), plot_inner: true, title: None };
-    let labels: Vec<(f32, String, f32)> = render(&c, &d, w, h, &ApproxMeasure)
-        .into_iter()
+/// Every level text's left end and every line's left end in a rendered chart.
+fn left_ends(prims: &[Prim]) -> Vec<(f32, String)> {
+    prims
+        .iter()
         .filter_map(|p| match p {
-            Prim::Text { x, text, size, align: HAlign::Right, .. } if text.starts_with('A') => Some((x, text, size)),
+            // Rotated text (an axis title) stands across its anchor, not beside it.
+            Prim::Text { x, text, size, bold, align, rotation, .. } if *rotation == 0.0 => {
+                let w = ApproxMeasure.text_width(text, *size, *bold);
+                let left = match align {
+                    HAlign::Left => *x,
+                    HAlign::Center => x - w / 2.0,
+                    HAlign::Right => x - w,
+                };
+                Some((left, text.clone()))
+            }
+            Prim::Line { pts, .. } => Some((pts.iter().map(|p| p[0]).fold(f32::MAX, f32::min), "line".to_string())),
             _ => None,
         })
-        .collect();
-    assert_eq!(labels.len(), 6);
-    for (x, t, size) in &labels {
-        let left = x - ApproxMeasure.text_width(t, *size, false);
-        assert!(left >= -0.5, "{t:?} starts at {left}");
-        assert!(t.ends_with('…'), "{t:?} is cut to fit");
+        .collect()
+}
+
+/// A plot placed by hand too near the left edge moves right until its axis labels fit, keeping
+/// its width, as Excel does on open: value labels on a column chart, and category labels with an
+/// outer level on a bar chart. Nothing is cut or drawn off the chart.
+#[test]
+fn a_hand_placed_plot_moves_right_to_make_room_for_its_labels() {
+    use gridcraft_model::{ChartLayout, ChartRect};
+    let (w, h) = (600.0, 400.0);
+    let rect = ChartRect { x: 0.005, y: 0.1, w: 0.5, h: 0.8 };
+    for kind in [ChartKind::ColumnClustered, ChartKind::BarClustered] {
+        let mut d = sample(kind);
+        d.categories = (1..=6).map(|i| format!("A rather long category name {i}")).collect();
+        d.category_levels = vec![vec!["Group one".into(); 3].into_iter().chain(vec!["Group two".into(); 3]).collect()];
+        let mut c = chart(kind);
+        c.legend = LegendPos::None;
+        c.layout = ChartLayout { plot: Some(rect), plot_inner: true, title: None };
+        let prims = render(&c, &d, w, h, &ApproxMeasure);
+        for (left, t) in left_ends(&prims) {
+            assert!(left >= -0.5, "{kind:?}: {t:?} starts at {left}");
+            // Beside a bar chart's plot, the labels have the room they need; under columns they
+            // still fit their categories' width.
+            assert!(kind != ChartKind::BarClustered || !t.ends_with('…'), "{kind:?}: {t:?} is whole");
+        }
+        let colors: Vec<_> = d.series.iter().map(|s| s.color).collect();
+        let bars: Vec<(f32, f32)> = prims
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Rect { x, y, w, h, fill: Some(f), .. } if colors.contains(f) && *w > 0.5 && *h > 0.5 => Some((*x, *y)),
+                _ => None,
+            })
+            .collect();
+        assert!(!bars.is_empty());
+        let left = bars.iter().map(|b| b.0).fold(f32::MAX, f32::min);
+        assert!(left > rect.x * w + 20.0, "{kind:?}: the plot moved right, its bars start at {left}");
     }
 }

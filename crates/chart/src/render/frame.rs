@@ -98,6 +98,14 @@ impl ValAxis<'_> {
     }
 }
 
+/// A plot placed by hand that leaves too little room on its left for the axis labels moves right
+/// until they fit, keeping its width where the chart allows. Excel does this when it opens such a
+/// file, for value labels on a column chart and category labels on a bar chart alike (observed).
+fn make_room(p: Bx, area: Bx, left: f32) -> Bx {
+    let x = p.x.max(area.x + left);
+    Bx { x, w: p.w.min(area.right() - x).max(0.0), ..p }
+}
+
 /// Draws gridlines, axis labels and the category axis line; returns the plot rectangle.
 pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis>, horizontal: bool, grid: bool) -> Bx {
     // A plot area placed by hand: with its axis labels, it stands in for the space left; without,
@@ -127,7 +135,10 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
             CatAxis::Labels(_, o) => o.len() as f32,
             CatAxis::Numeric(..) | CatAxis::Table(..) => 0.0,
         };
-        let plot = fixed.unwrap_or(Bx { x: area.x + left, y: area.y + lh * 0.5, w: area.w - left - right, h: area.h - lh * 1.5 - 4.0 - lh * levels });
+        let plot = fixed
+            .map_or(Bx { x: area.x + left, y: area.y + lh * 0.5, w: area.w - left - right, h: area.h - lh * 1.5 - 4.0 - lh * levels }, |p| {
+                make_room(p, area, left)
+            });
         if !plot.ok() {
             return plot;
         }
@@ -205,12 +216,11 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
         let levels_w: f32 = level_w.iter().sum();
         let right = ylabels.last().map(|(_, t)| ctx.tw(t, ls) / 2.0).unwrap_or(0.0).min(area.w * 0.2) + 2.0;
         let left = (lw + levels_w).max(stub);
-        let plot = fixed.unwrap_or(Bx { x: area.x + left, y: area.y + 2.0, w: area.w - left - right, h: area.h - lh - 6.0 });
+        let plot =
+            fixed.map_or(Bx { x: area.x + left, y: area.y + 2.0, w: area.w - left - right, h: area.h - lh - 6.0 }, |p| make_room(p, area, left));
         if !plot.ok() {
             return plot;
         }
-        // A plot placed by hand leaves its own room for the labels on its left.
-        let lw = fixed.map_or(lw, |p| lw.min(p.x - area.x - levels_w).max(0.0));
         let vw = maxw(ctx, &ylabels);
         let slot = plot.w / ylabels.len().max(1) as f32;
         let k = (((vw + 6.0) / slot.max(1e-3)).ceil() as usize).max(1);
