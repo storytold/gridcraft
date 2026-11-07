@@ -204,8 +204,9 @@ fn write_struct_ref(s: &StructRef, at_shorthand: bool) -> String {
 
 fn number(n: f64) -> String {
     let text = number_to_text(n);
-    // 15 significant digits can round past f64::MAX, which no longer parses.
-    if text.parse::<f64>().is_ok_and(f64::is_finite) {
+    // 15 significant digits can round up to 1E+308 or down below the smallest normal number; the lexer refuses the first and reads the second as 0.
+    let reads_back = |t: &str| t.parse::<f64>().is_ok_and(|v| v.abs() < 1e308 && (v.abs() >= f64::MIN_POSITIVE || n == 0.0));
+    if reads_back(&text) {
         return text;
     }
     let exact = format!("{:E}", n);

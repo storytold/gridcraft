@@ -204,9 +204,16 @@ fn number(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, i: u
     let text = src.get(start..byte_pos(src, chars, j)).unwrap_or("");
     let value: f64 =
         text.replace(locale.decimal_separator(), ".").parse().map_err(|_| LexError { msg: format!("bad number `{text}`"), pos: start })?;
-    if !value.is_finite() {
+    // Excel refuses a literal of 1E+308 or more and a non-zero one below 1E-309; it reads subnormal literals as 0.
+    if !value.is_finite() || value >= 1e308 {
         return Err(LexError { msg: format!("number too large `{text}`"), pos: start });
     }
+    let mantissa_end = text.find(['e', 'E']).unwrap_or(text.len());
+    let non_zero = text.get(..mantissa_end).is_some_and(|m| m.chars().any(|c| ('1'..='9').contains(&c)));
+    if non_zero && value < 1e-309 {
+        return Err(LexError { msg: format!("number too small `{text}`"), pos: start });
+    }
+    let value = if value < f64::MIN_POSITIVE { 0.0 } else { value };
     emit(src, chars, out, Tok::Number(value), start, j);
     Ok(j)
 }
