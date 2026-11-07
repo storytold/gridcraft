@@ -69,13 +69,17 @@ fn push_match(out: &mut Vec<(usize, usize, TokenKind)>, re: &Option<Regex>, text
     let Some(re) = re else { return };
     for m in re.find_iter(text) {
         let (start, mut end) = (m.start(), m.end());
-        // A URL at the end of a sentence keeps its full stop outside the marker.
-        while end > start {
-            let Some(last) = text[start..end].chars().next_back() else { break };
-            if matches!(last, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '"' | '\'') {
-                end -= last.len_utf8();
-            } else {
-                break;
+        // A URL or e-mail at the end of a sentence keeps its full stop outside the marker. A
+        // placeholder is not trimmed: it ends in `}` or `)`, and removing that character would
+        // protect `{0` while leaving the brace behind in the masked text.
+        if matches!(kind, TokenKind::Url | TokenKind::Email) {
+            while end > start {
+                let Some(last) = text[start..end].chars().next_back() else { break };
+                if matches!(last, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '"' | '\'') {
+                    end -= last.len_utf8();
+                } else {
+                    break;
+                }
             }
         }
         if end > start {
@@ -227,6 +231,15 @@ mod tests {
         assert!(p.tokens.iter().any(|t| t.kind == TokenKind::Url));
         assert_eq!(p.tokens.iter().filter(|t| t.kind == TokenKind::Placeholder).count(), 3);
         round_trip(text);
+    }
+
+    #[test]
+    fn keeps_placeholder_closing_braces() {
+        let p = protect("Order {0} and {{name}} ship.").expect("protect");
+        let placeholders: Vec<&str> = p.tokens.iter().filter(|t| t.kind == TokenKind::Placeholder).map(|t| t.text.as_str()).collect();
+        assert_eq!(placeholders, vec!["{0}", "{{name}}"]);
+        assert!(!p.masked.contains('}'), "the brace leaked into the masked text: {}", p.masked);
+        round_trip("Order {0} and {{name}} ship.");
     }
 
     #[test]

@@ -108,6 +108,37 @@ fn und() -> LangTag {
     LangTag::undetermined()
 }
 
+/// The language a script writes, when the script identifies one. `None` for Latin and `Other`,
+/// where the script alone is no evidence of a language.
+fn script_language(script: Script, text: &str) -> Option<&'static str> {
+    match script {
+        Script::Latin | Script::Other => None,
+        Script::Cyrillic => Some(cyrillic_variant(text)),
+        Script::Arabic => Some(arabic_variant(text)),
+        Script::Hebrew => Some("he"),
+        Script::Greek => Some("el"),
+        Script::Han => Some("zh"),
+        Script::Hiragana | Script::Katakana => Some("ja"),
+        Script::Hangul => Some("ko"),
+        Script::Devanagari => Some("hi"),
+        Script::Bengali => Some("bn"),
+        Script::Tamil => Some("ta"),
+        Script::Telugu => Some("te"),
+        Script::Malayalam => Some("ml"),
+        Script::Gujarati => Some("gu"),
+        Script::Gurmukhi => Some("pa"),
+        Script::Kannada => Some("kn"),
+        Script::Sinhala => Some("si"),
+        Script::Thai => Some("th"),
+        Script::Myanmar => Some("my"),
+        Script::Khmer => Some("km"),
+        Script::Lao => Some("lo"),
+        Script::Georgian => Some("ka"),
+        Script::Armenian => Some("hy"),
+        Script::Ethiopic => Some("am"),
+    }
+}
+
 /// Detects the language of `text`.
 pub fn detect(text: &str) -> Detection {
     let mut counts: Vec<(Script, usize)> = Vec::new();
@@ -127,8 +158,7 @@ pub fn detect(text: &str) -> Detection {
     counts.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
     let dominant = counts.first().map(|(s, _)| *s).unwrap_or(Script::Other);
     let share = counts.first().map(|(_, n)| *n as f32 / letters as f32).unwrap_or(0.0);
-    let (has_kana, has_han) =
-        (counts.iter().any(|(s, _)| matches!(s, Script::Hiragana | Script::Katakana)), counts.iter().any(|(s, _)| *s == Script::Han));
+    let has_kana = counts.iter().any(|(s, _)| matches!(s, Script::Hiragana | Script::Katakana));
     let scripted = match dominant {
         Script::Hiragana | Script::Katakana => Some(("ja", 0.68 + 0.3 * share)),
         Script::Hangul => Some(("ko", 0.7 + 0.28 * share)),
@@ -166,13 +196,19 @@ pub fn detect(text: &str) -> Detection {
     };
     if let Some((code, confidence)) = scripted {
         let method = DetectionMethod::Script;
-        let _ = has_han;
-        return Detection {
-            language: tag(code),
-            confidence: confidence.clamp(0.0, 0.98),
-            method,
-            runner_up: counts.get(1).map(|(_, n)| (tag("und"), *n as f32 / letters as f32)),
-        };
+        // The runner-up is a script share: name the language that script writes, and say nothing
+        // when the script maps to no single language (Latin, Other) instead of reporting `und`.
+        let winner = tag(code);
+        let runner_up = counts.get(1).and_then(|(script, n)| {
+            // Han inside Japanese text is not a competing language; kanji are how Japanese is
+            // written, so reporting `zh` as the runner-up would be wrong.
+            if code == "ja" && *script == Script::Han {
+                return None;
+            }
+            let other = tag(script_language(*script, text)?);
+            (other != winner).then_some((other, *n as f32 / letters as f32))
+        });
+        return Detection { language: winner, confidence: confidence.clamp(0.0, 0.98), method, runner_up };
     }
     // Latin (or a mix): score stopwords and diacritics.
     let (best, second, words, shortest) = latin_scores(text);
@@ -205,7 +241,7 @@ pub fn detect(text: &str) -> Detection {
                 language: tag(code),
                 confidence: confidence.clamp(0.0, 0.95),
                 method: DetectionMethod::Stopwords,
-                runner_up: second.map(|(code, _)| (tag(code), score)),
+                runner_up: second.map(|(code, other)| (tag(code), other)),
             }
         }
         _ => Detection { language: und(), confidence: 0.0, method: DetectionMethod::None, runner_up: None },
@@ -400,6 +436,29 @@ mod tests {
         assert_eq!(code(&detect("Привіт, світе! Це перевірка.")), "uk");
         assert_eq!(code(&detect("مرحبا بالعالم، هذا اختبار")), "ar");
         assert_eq!(code(&detect("שלום עולם, זה מבחן")), "he");
+    }
+
+    #[test]
+    fn runner_up_carries_its_own_language_and_score() {
+        // The stopword path used to report the winner's score for the runner-up.
+        let text = "El total es de 42 dólares y el informe está listo para revisar.";
+        let d = detect(text);
+        let (_, second, _, _) = latin_scores(text);
+        let (code2, score2) = second.expect("a runner-up");
+        assert_eq!(d.runner_up, Some((tag(code2), score2)));
+
+        // The script path names the second script's language; a script with no single language
+        // (Latin) is not a runner-up at all.
+        let d = detect("안녕하세요 세계 你好");
+        assert_eq!(code(&d), "ko");
+        assert_eq!(d.runner_up.expect("Han is a runner-up").0.canonical(), "zh");
+        let d = detect("Привет, мир! Это проверка. hello and the report");
+        assert_eq!(code(&d), "ru");
+        assert_eq!(d.runner_up, None);
+        // Kanji are not a competing language inside Japanese text.
+        let d = detect("こんにちは世界");
+        assert_eq!(code(&d), "ja");
+        assert_eq!(d.runner_up, None, "kanji are how Japanese is written, not a runner-up");
     }
 
     #[test]
