@@ -427,6 +427,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Обчислення в книзі",
         "Enable iterative calculation" => "Увімкнути ітеративні обчислення",
         "Calculation settings are saved with the workbook." => "Параметри обчислень зберігаються разом із книгою.",
+        "Use 1904 date system" => "Використовувати систему дат 1904",
         "OK" => "OK",
         "Cancel" => "Cancel",
         "Don't Save" => "Don't Save",

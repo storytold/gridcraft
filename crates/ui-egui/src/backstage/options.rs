@@ -31,7 +31,7 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
         app.toggle_autosave();
     }
-    let Some((calc, view)) = app.session.active().map(|d| (d.wb.calc.clone(), d.wb.view)) else { return };
+    let Some((calc, view, date_system)) = app.session.active().map(|d| (d.wb.calc.clone(), d.wb.view, d.wb.date_system)) else { return };
     ui.add_space(18.0);
     // Excel's Advanced › Display options for this workbook: saved with the workbook (#3101).
     section(ui, lang, "Display options for this workbook");
@@ -49,6 +49,12 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     section(ui, lang, "Formulas");
     ui.label(lang.tr("Workbook calculation"));
     calc_options(app, ui, lang, &calc);
+    // Excel's Advanced › When calculating this workbook › Use 1904 date system (#3538).
+    ui.add_space(4.0);
+    let mut date1904 = date_system == gridcraft_engine::core::DateSystem::D1904;
+    if ui.checkbox(&mut date1904, lang.tr("Use 1904 date system")).changed() {
+        app.run_or_alert("formulas.calculationOptions", json!({"date1904": date1904}));
+    }
     ui.add_space(6.0);
     dim(ui, lang.tr("Calculation settings are saved with the workbook."));
 }

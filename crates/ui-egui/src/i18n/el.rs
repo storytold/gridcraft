@@ -329,6 +329,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Υπολογισμός βιβλίου εργασίας",
         "Enable iterative calculation" => "Ενεργοποίηση επαναληπτικού υπολογισμού",
         "Calculation settings are saved with the workbook." => "Οι ρυθμίσεις υπολογισμού αποθηκεύονται στο βιβλίο εργασίας.",
+        "Use 1904 date system" => "Χρήση συστήματος ημερομηνιών 1904",
         "Interface size" => "Μέγεθος περιβάλλοντος",
         "Auto" => "Αυτόματο",
         "100%" => "100%",

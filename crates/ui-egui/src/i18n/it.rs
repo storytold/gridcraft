@@ -432,6 +432,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Calcolo della cartella di lavoro",
         "Enable iterative calculation" => "Abilita calcolo iterativo",
         "Calculation settings are saved with the workbook." => "Le impostazioni di calcolo vengono salvate con la cartella di lavoro.",
+        "Use 1904 date system" => "Usa sistema data 1904",
         "OK" => "OK",
         "Cancel" => "Annulla",
         "Don't Save" => "Non salvare",
