@@ -71,11 +71,11 @@ fn diff_count(d: &mut Diffs, sheet: &str, a: usize, b: usize) {
     }
 }
 
-/// A value as the file format can hold it: `#SPILL!`/`#CALC!` are cached as `#VALUE!` and an
+/// A value as the file format can hold it: `#SPILL!`/`#CALC!`/`#CONNECT!`/`#BLOCKED!` are cached as `#VALUE!` and an
 /// unresolved circular reference as 0 (what Excel writes), so those aren't round-trip losses.
 fn as_cached(v: Value) -> Value {
     match v {
-        Value::Error(CellError::Spill | CellError::Calc) => Value::Error(CellError::Value),
+        Value::Error(CellError::Spill | CellError::Calc | CellError::Connect | CellError::Blocked) => Value::Error(CellError::Value),
         Value::Error(CellError::Circ) => Value::Number(0.0),
         v => v,
     }

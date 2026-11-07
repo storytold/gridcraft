@@ -69,6 +69,7 @@ pub(crate) mod dynamic;
 pub(crate) mod engineering;
 pub(crate) mod ets;
 pub(crate) mod financial;
+pub(crate) mod image;
 pub(crate) mod info;
 pub(crate) mod lift;
 pub(crate) mod lookup;
@@ -79,6 +80,7 @@ pub(crate) mod text;
 pub(crate) mod util;
 
 pub use ets::Timeline;
+pub use image::{FetchError, ImageFetcher, ImagePicture};
 pub use stat::{aggregate_values, aggregate_values_k};
 
 /// An evaluated argument. Ranges arrive as `Value::Array` (blank cells = `Value::Empty`) with
@@ -122,6 +124,13 @@ pub trait Ctx {
     fn call_lambda(&mut self, _arg: Value) -> Option<Value> {
         None
     }
+    /// For IMAGE: the encoded picture at a validated `https` URL. `#BLOCKED!` when the host has no
+    /// [`ImageFetcher`] or refuses the URL, `#CONNECT!` when the request fails.
+    fn image_get(&mut self, _url: &str) -> Result<Vec<u8>, CellError> {
+        Err(CellError::Blocked)
+    }
+    /// Receives the picture a successful IMAGE produced, for the cell it is entered in.
+    fn set_image(&mut self, _picture: ImagePicture) {}
 }
 
 pub type FnImpl = fn(&[Arg], &mut dyn Ctx) -> Value;
