@@ -76,6 +76,7 @@ fn the_required_craft_faces_keep_their_exact_scripts() {
         ("NanumGothic", "Regular", ["Hang", "Kore"].as_slice()),
         ("Noto Sans Symbols", "Regular", ["Zsym"].as_slice()),
         ("Noto Sans Symbols 2", "Regular", ["Zsym"].as_slice()),
+        ("Noto Sans Arabic", "Regular", ["Arab"].as_slice()),
     ] {
         assert!(
             faces.iter().any(|(f, s, declared)| *f == family && *s == style && *declared == scripts),
