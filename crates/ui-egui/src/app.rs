@@ -115,6 +115,8 @@ impl SheetApp {
         let open: Vec<u64> = self.session.documents().iter().map(|d| d.uid).collect();
         floating_pictures::forget_closed(ctx, &open);
         self.apply_font_state(ctx);
+        // Draw › Action Pen: a finished model download or load is picked up here.
+        crate::inkpanel::poll(self);
         if let Some(answer) = self.desktop_theme.take_change() {
             self.desktop_dark = Some(answer);
         }
@@ -246,6 +248,7 @@ impl SheetApp {
             });
         }
         dialogs::show(self, &ctx);
+        crate::inkpanel::show(self, &ctx);
         macro_ui::forget_closed_editor(self);
         macro_ui::question_box(self, &ctx);
         widgets::message_box(self, &ctx);
@@ -275,6 +278,16 @@ impl SheetApp {
             self.synthetic.pop_front();
             self.synthetic_pending = false;
             self.synthetic_injected_at_pass = None;
+        }
+    }
+
+    /// Wires the Action Pen to the host's model directory: sets the engine's models root and
+    /// loads the recognizer when the model is already installed. The desktop app calls this once
+    /// at startup; a host without a model directory leaves the tool unavailable.
+    pub fn start_ink(&mut self) {
+        crate::inkpanel::start(self);
+        if let Ok(status) = self.run("ink.status", serde_json::json!({})) {
+            self.grid.ink_status = Some(status);
         }
     }
 

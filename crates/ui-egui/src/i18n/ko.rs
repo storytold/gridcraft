@@ -128,6 +128,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Header & Footer" => "머리글 및 바닥글",
         "Draw with ink" => "잉크로 그리기",
         "Eraser" => "지우개",
+        "Action Pen" => "동작 펜",
+        "Write by hand and turn the writing into text in the cell" => "손으로 쓰면 셀의 텍스트로 변환됩니다",
         "Ink to\nShape" => "잉크를\n도형으로",
         "Select\nObjects" => "개체\n선택",
         "Themes" => "테마",

@@ -112,6 +112,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Header & Footer" => "Záhlaví a zápatí",
         "Draw with ink" => "Kreslit od ruky",
         "Eraser" => "Guma",
+        "Action Pen" => "Akční pero",
+        "Write by hand and turn the writing into text in the cell" => "Pište rukou a převeďte písmo na text v buňce",
         "Ink to\nShape" => "Rukopis\nna obrazec",
         "Select\nObjects" => "Vybrat\nobjekty",
         "Themes" => "Motivy",

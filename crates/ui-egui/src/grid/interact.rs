@@ -218,7 +218,10 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
     let ctx = input.context.clone();
     if !app.session.draw_tool.is_empty() && in_cells {
         ctx.set_cursor_icon(CursorIcon::Crosshair);
-        if app.session.draw_tool == "pen" {
+        // The pen and the Action Pen collect one stroke the same way; only the commit differs
+        // (ink shape, or text recognised from the stroke).
+        let drawing = app.session.draw_tool == "pen" || app.session.draw_tool == "actionPen";
+        if drawing {
             if let Some(p) = pos
                 && resp.dragged()
             {
@@ -247,9 +250,17 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
                 let (color, width) = pen_ink(&app.session.draw_color, app.session.draw_width, &theme);
                 input.ui.painter().add(egui::epaint::PathShape::line(pts, egui::epaint::PathStroke::new(width * geo.z, color)));
             }
-            if resp.drag_stopped() && app.grid.ink.len() >= 2 {
+            if resp.drag_stopped() {
                 let pts: Vec<[f32; 2]> = std::mem::take(&mut app.grid.ink);
-                let _ = app.run("draw.stroke", json!({"points": pts}));
+                if app.session.draw_tool == "actionPen" {
+                    // One stroke in, one typed value out; a refusal (no model, protected cell)
+                    // is shown to the person rather than swallowed.
+                    if !pts.is_empty() {
+                        app.run_or_alert("draw.actionPenInk", json!({"points": pts}));
+                    }
+                } else if pts.len() >= 2 {
+                    let _ = app.run("draw.stroke", json!({"points": pts}));
+                }
             }
             return true;
         }

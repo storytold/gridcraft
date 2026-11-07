@@ -111,6 +111,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Header & Footer" => "Κεφαλίδα και υποσέλιδο",
         "Draw with ink" => "Σχεδίαση με μελάνι",
         "Eraser" => "Γόμα",
+        "Action Pen" => "Στυλό ενεργειών",
+        "Write by hand and turn the writing into text in the cell" => "Γράψτε με το χέρι και μετατρέψτε το γράψιμο σε κείμενο στο κελί",
         "Ink to\nShape" => "Μελάνι σε\nσχήμα",
         "Select\nObjects" => "Επιλογή\nαντικειμένων",
         "Themes" => "Θέματα",

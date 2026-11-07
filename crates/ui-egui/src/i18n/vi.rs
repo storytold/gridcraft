@@ -130,6 +130,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Header & Footer" => "Đầu trang & Chân trang",
         "Draw with ink" => "Vẽ bằng mực",
         "Eraser" => "Tẩy",
+        "Action Pen" => "Bút hành động",
+        "Write by hand and turn the writing into text in the cell" => "Viết tay và chuyển chữ viết thành văn bản trong ô",
         "Ink to\nShape" => "Mực thành\nhình",
         "Select\nObjects" => "Chọn\nđối tượng",
         "Themes" => "Chủ đề",

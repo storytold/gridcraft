@@ -114,6 +114,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Header & Footer" => "Üstbilgi ve Altbilgi",
         "Draw with ink" => "Mürekkeple Çiz",
         "Eraser" => "Silgi",
+        "Action Pen" => "Eylem Kalemi",
+        "Write by hand and turn the writing into text in the cell" => "Elle yazın ve yazıyı hücrede metne dönüştürün",
         "Ink to\nShape" => "Mürekkebi\nŞekle Dönüştür",
         "Select\nObjects" => "Nesneleri\nSeç",
         "Themes" => "Temalar",

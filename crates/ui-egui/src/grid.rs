@@ -276,6 +276,12 @@ pub struct GridState {
     pub pane: Option<String>,
     /// Ink stroke being drawn (sheet points).
     pub ink: Vec<[f32; 2]>,
+    /// Draw › Action Pen: the model panel is open, its latest `ink.status` answer, the worker
+    /// job it is waiting for (download or load) and the last error that job or an import gave.
+    pub ink_panel: bool,
+    pub ink_status: Option<serde_json::Value>,
+    pub ink_job: Option<std::sync::mpsc::Receiver<crate::inkpanel::Job>>,
+    pub ink_error: Option<String>,
     /// Page ranges for Page Break Preview, cached per (doc uid, revision, sheet).
     pub pages: Option<PagesCache>,
     /// The PivotTable Fields pane's `pivot.fields` answer, cached per (doc uid, revision, pivot):

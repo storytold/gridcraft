@@ -129,6 +129,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Header & Footer" => "Koptekst & voettekst",
         "Draw with ink" => "Tekenen met inkt",
         "Eraser" => "Gum",
+        "Action Pen" => "Actiepen",
+        "Write by hand and turn the writing into text in the cell" => "Schrijf met de hand en zet het schrift om in tekst in de cel",
         "Ink to\nShape" => "Inkt naar\nvorm",
         "Select\nObjects" => "Objecten\nselecteren",
         "Themes" => "Thema's",

@@ -128,6 +128,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Header & Footer" => "页眉和页脚",
         "Draw with ink" => "墨迹绘制",
         "Eraser" => "橡皮擦",
+        "Action Pen" => "操作笔",
+        "Write by hand and turn the writing into text in the cell" => "手写后将笔迹转换为单元格中的文本",
         "Ink to\nShape" => "墨迹转\n形状",
         "Select\nObjects" => "选择\n对象",
         "Themes" => "主题",

@@ -115,6 +115,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Header & Footer" => "Encabezado y pie de página",
         "Draw with ink" => "Dibujar con lápiz",
         "Eraser" => "Borrador",
+        "Action Pen" => "Lápiz de acción",
+        "Write by hand and turn the writing into text in the cell" => "Escriba a mano y convierta lo escrito en texto en la celda",
         "Ink to\nShape" => "Entrada de lápiz\na forma",
         "Select\nObjects" => "Seleccionar\nobjetos",
         "Themes" => "Temas",

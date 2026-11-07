@@ -5,6 +5,19 @@ type OpenUrl = Box<dyn Fn(&str)>;
 type CopyHtml = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
 type Download = Box<dyn Fn(&str, &[u8])>;
 type PrintPdf = Box<dyn Fn(&[u8])>;
+type InkLoader = std::sync::Arc<dyn Fn(&std::path::Path) -> Result<std::sync::Arc<dyn gridcraft_ink::Recognizer>, String> + Send + Sync>;
+
+/// The native host's access to the local model directory: where models live and how one is
+/// downloaded. Models never ship with GridCraft (see `docs/action-pen.md`); the host is the only
+/// part that touches the disk or the network, and only when a person asks for a download.
+pub trait ModelHost: Send + Sync {
+    /// The model root: where an existing model is found, or where a download goes.
+    fn models_dir(&self) -> std::path::PathBuf;
+    /// Downloads model `id` into [`ModelHost::models_dir`], streaming to a temporary file and
+    /// checking its size and SHA-256 before moving it into place. Called on a worker thread by
+    /// the UI, only after an explicit click.
+    fn download(&self, id: &str) -> Result<(), String>;
+}
 
 /// Host services the platform shell provides (file pickers, opening URLs).
 #[derive(Default)]
@@ -44,6 +57,14 @@ pub struct Services {
     /// Web: hand PDF bytes to the browser's print flow directly (no download,
     /// no intermediate file) — opens the system print dialog on that PDF.
     pub print: Option<PrintPdf>,
+    /// Native: the model directory and the download worker (none in the browser or a CLI).
+    pub models: Option<std::sync::Arc<dyn ModelHost>>,
+    /// Native: build the Action Pen's recognizer from a model root. Kept apart from
+    /// [`Services::models`] so the model plumbing stays generic; this is the one hook that knows
+    /// about `gridcraft-ink-rten`.
+    pub ink_loader: Option<InkLoader>,
+    /// Native: pick model files to import by hand (`rfd`), as the model panel's Import offers.
+    pub pick_model_files: Option<Box<dyn Fn() -> Vec<String>>>,
 }
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).
