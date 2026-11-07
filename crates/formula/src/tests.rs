@@ -567,3 +567,19 @@ fn column_starting_with_at_round_trips() {
         assert_eq!(parse(&text).ok(), Some(Expr::Struct(s)), "printed as {text}");
     }
 }
+
+#[test]
+fn parse_errors_name_what_was_typed_and_not_the_tokens() -> Result<(), String> {
+    let error = |src: &str| parse(src).err().map(|e| e.msg).ok_or_else(|| format!("{src} parsed"));
+    assert_eq!(error("1*/2")?, "unexpected `/`");
+    assert_eq!(error("SUM(1;2)")?, "expected `,` or `)`, found `;`");
+    assert_eq!(error("1*:2")?, "unexpected `:`");
+    assert_eq!(error("SUM(1 \"a\")")?, "expected `,` or `)`, found `\"a\"`");
+    assert_eq!(error("SUM(1 2)")?, "expected `,` or `)`, found `2`");
+    assert_eq!(error("{1,SUM(2)}")?, "array constants may only contain constants, found `SUM(`");
+    // Numbers and strings read as typed, not as their values.
+    assert_eq!(error("1.00 2.00")?, "unexpected `2.00`");
+    assert_eq!(error("SUM(1 2.50)")?, "expected `,` or `)`, found `2.50`");
+    assert_eq!(error("SUM(1 \"a\"\"b\")")?, "expected `,` or `)`, found `\"a\"\"b\"`");
+    Ok(())
+}
