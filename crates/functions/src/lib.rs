@@ -308,6 +308,12 @@ mod tests {
         assert_eq!(ev("REGEXREPLACE", vec![t("2026-10-22"), t("(\\d+)-(\\d+)-(\\d+)"), t("$3/$2/$1")]), Value::text("22/10/2026"));
         assert_eq!(ev("REGEXREPLACE", vec![t("abc"), t("x*"), t("-")]), Value::text("-a-b-c-"));
         assert_eq!(ev("REGEXREPLACE", vec![t("a1b2"), t("[0-9]"), t("#"), n(2.0)]), Value::text("a1b#"));
+        assert_eq!(ev("REGEXREPLACE", vec![t("a1b2"), t("[0-9]"), t("#"), n(-2.0)]), Value::text("a#b2"));
+        assert_eq!(ev("REGEXREPLACE", vec![t("a1b2"), t("[0-9]"), t("#"), n(-3.0)]), Value::text("a1b2"));
+        // 2^32 is no occurrence the text has (and on 32-bit targets it must not wrap to 0).
+        for occurrence in [4_294_967_296.0, -4_294_967_296.0] {
+            assert_eq!(ev("REGEXREPLACE", vec![t("a1b2"), t("[0-9]"), t("#"), n(occurrence)]), Value::text("a1b2"));
+        }
         // One match whose replacement repeats it 10,000 times: refused before it is built.
         assert_eq!(ev("REGEXREPLACE", vec![t(&many), t("^.*$"), t(&"$0".repeat(10_000))]), Value::Error(CellError::Value));
         assert_eq!(ev("REGEXREPLACE", vec![t(&many), t("^.*$"), t(&"$0".repeat(10_000)), n(1.0)]), Value::Error(CellError::Value));
