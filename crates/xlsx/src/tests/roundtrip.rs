@@ -23,6 +23,11 @@ fn sample() -> Workbook {
     wb.calc = CalcSettings { mode: CalcMode::Manual, iterative: true, max_iterations: 42, max_change: 0.5, precision_as_displayed: true, r1c1: true };
     wb.protected_structure = true;
     wb.structure_password = Some(gridcraft_model::PasswordHash::new_sha512("s3cret", b"0123456789abcdef"));
+    wb.write_reservation = Some(gridcraft_model::WriteReservation {
+        user_name: "Ann & <Bob>".into(),
+        read_only_recommended: true,
+        password: Some(gridcraft_model::PasswordHash::new_sha512("modify-me", b"fedcba9876543210")),
+    });
     wb.props = DocProps {
         title: "T & <x>".into(),
         subject: "S".into(),
@@ -515,6 +520,8 @@ fn assert_workbook_metadata_roundtrip(wb: &Workbook, back: &Workbook) {
     assert!(back.protected_structure);
     assert_eq!(back.structure_password, wb.structure_password);
     assert!(back.structure_password.as_ref().unwrap().verify("s3cret").unwrap());
+    assert_eq!(back.write_reservation, wb.write_reservation);
+    assert!(back.write_reservation.as_ref().and_then(|r| r.password.as_ref()).unwrap().verify("modify-me").unwrap());
     assert_eq!(back.props, wb.props);
     assert_eq!(back.theme, wb.theme);
     assert_eq!(back.names, wb.names);
@@ -1509,6 +1516,20 @@ fn a_partial_sheet_filter_is_not_folded_into_a_table() {
     let t = b.tables.first().expect("the table survived");
     assert!(t.filter.is_empty(), "the criteria landed on the wrong table column: {:?}", t.filter);
     assert!(b.autofilter.is_none(), "a sheet filter inside a table would be invalid");
+}
+
+#[test]
+fn legacy_reservation_password_is_written_with_a_user_name() {
+    let mut wb = sample();
+    wb.write_reservation =
+        Some(WriteReservation { user_name: String::new(), read_only_recommended: false, password: Some(PasswordHash::Legacy(0x83AF)) });
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let r = back.write_reservation.expect("the reservation survived");
+    assert_eq!(r.password, Some(PasswordHash::Legacy(0x83AF)), "a nameless legacy password is kept, under a placeholder name");
+    assert!(!r.user_name.is_empty());
+    wb.write_reservation.as_mut().unwrap().user_name = "Ann".into();
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.write_reservation.and_then(|r| r.password), Some(PasswordHash::Legacy(0x83AF)));
 }
 
 #[test]

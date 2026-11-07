@@ -452,6 +452,22 @@ impl Dialog {
                 // An empty password from the start, so OK on the untouched field says "incorrect"
                 // rather than asking for the password again.
                 let mut values = params.clone();
+                // A workbook with a password to modify asks for that, or a read-only open.
+                if p("modify").as_bool().unwrap_or(false) {
+                    values["modifyPassword"] = json!("");
+                    values["readOnly"] = json!(false);
+                    return Some(Dialog::form(
+                        "openPassword",
+                        "Password",
+                        "file.open",
+                        vec![
+                            Note(format!("'{file}' is reserved by its author. Enter the password to modify it, or open it read-only.")),
+                            Password { key: "modifyPassword", label: "Password:" },
+                            Check { key: "readOnly", label: "Read Only" },
+                        ],
+                        values,
+                    ));
+                }
                 values["password"] = json!("");
                 Dialog::form(
                     "openPassword",

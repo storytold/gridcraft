@@ -232,6 +232,14 @@ fn read_workbook_properties(cx: &mut Ctx<'_>, wb: &mut Workbook, xml: &El) {
         wb.protected_structure = p.flag("lockStructure", false);
         wb.structure_password = if wb.protected_structure { crate::sheet_read::read_password(p, "workbook") } else { None };
     }
+    if let Some(f) = xml.child("fileSharing") {
+        // The iterated hash has bare attribute names; the legacy one is `reservationPassword`.
+        wb.write_reservation = Some(gridcraft_model::WriteReservation {
+            user_name: f.attr("userName").unwrap_or("").to_string(),
+            read_only_recommended: f.flag("readOnlyRecommended", false),
+            password: crate::sheet_read::read_password(f, "").or_else(|| crate::sheet_read::read_password(f, "reservation")),
+        });
+    }
 }
 
 /// The single window modelled by GridCraft: prefer the first visible window,

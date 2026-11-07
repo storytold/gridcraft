@@ -121,6 +121,27 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
     v
 }
 
+fn command_error(app: &mut SheetApp, d: &mut Dialog, e: String) {
+    if d.name == "analysisToolPak" && e.contains(gridcraft_engine::cmd::analysis::OVERWRITE_ERROR) {
+        // Data Analysis asks before replacing data in its output range.
+        d.values.insert("askOverwrite".into(), json!(true));
+    } else if d.name == "openPassword" && e.contains(gridcraft_engine::io::MODIFY_PASSWORD_REQUIRED) {
+        // The decryption password opened an encrypted, reserved workbook; ask for the modify password.
+        let mut params = Json::Object(d.values.clone());
+        params["modify"] = json!(true);
+        if let Some(next) = Dialog::open(app, "openPassword", params) {
+            *d = Dialog { back: d.back.take(), ..next };
+        }
+    } else if d.name == "openPassword" {
+        // A wrong password: say so, clear the field and stay open for another try.
+        let field = if d.values.contains_key("modifyPassword") { "modifyPassword" } else { "password" };
+        d.values.insert(field.into(), json!(""));
+        app.message = Some((d.title.clone(), crate::clean_error(&e)));
+    } else {
+        app.message = Some((d.title.clone(), crate::clean_error(&e)));
+    }
+}
+
 /// Takes and draws the active dialog, dispatches its body by name, consumes picture-inbox results, runs OK/confirm commands, handles Esc/close and restores the back-dialog stack.
 pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else { return };
@@ -441,16 +462,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     app.after_open(path.as_deref(), &r);
                 }
             }
-            // Data Analysis asks before replacing data in its output range.
-            Err(e) if d.name == "analysisToolPak" && e.contains(gridcraft_engine::cmd::analysis::OVERWRITE_ERROR) => {
-                d.values.insert("askOverwrite".into(), json!(true));
-            }
-            // A wrong password: say so, clear the field and stay open for another try.
-            Err(e) if d.name == "openPassword" => {
-                d.values.insert("password".into(), json!(""));
-                app.message = Some((d.title.clone(), crate::clean_error(&e)));
-            }
-            Err(e) => app.message = Some((d.title.clone(), crate::clean_error(&e))),
+            Err(e) => command_error(app, &mut d, e),
         }
     } else if confirm {
         open = false;
