@@ -293,6 +293,17 @@ pub(super) fn list(s: &mut Session, _: &Json) -> Result<Json> {
     Ok(Json::Array(v))
 }
 
+/// A drop beside Σ Values changes both positions in one refresh and Undo step.
+fn set_drop_values_position(cmd: &str, pt: &mut PivotTable, p: &Json, to: &str) -> Result<()> {
+    let Some(value) = p.get("valuesPosition") else { return Ok(()) };
+    let position = value.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(cmd, "invalid `valuesPosition`"))?;
+    if to != "rows" || !pt.values_on_rows || position > pt.rows.len() {
+        return Err(bad(cmd, "`valuesPosition` must name a slot in the Rows area containing Σ Values"));
+    }
+    pt.values_position = (position < pt.rows.len()).then_some(position);
+    Ok(())
+}
+
 pub(super) fn add_field(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.addField";
     let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
@@ -305,6 +316,7 @@ pub(super) fn add_field(s: &mut Session, p: &Json) -> Result<Json> {
     let pos = position_param(p);
     update(s, p, |pt, src, _| {
         add_to_area(pt, src, AreaPlacement { cmd: C, field: &field, area, func, name: name.as_deref(), position: pos })?;
+        set_drop_values_position(C, pt, p, area)?;
         Ok(json!({"field": canonical_any(C, pt, src, &field)?, "area": area}))
     })
 }
@@ -412,6 +424,9 @@ pub(super) fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
     let pos = position_param(p);
     update(s, p, |pt, src, _| {
         if is_values_field(src, &field) {
+            if p.get("valuesPosition").is_some() {
+                return Err(bad(C, "use `position` when moving Σ Values itself"));
+            }
             return move_values_field(C, pt, from, to, pos);
         }
         if from == to {
@@ -450,6 +465,7 @@ pub(super) fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
                     pt.filters.insert(at, f);
                 }
             }
+            set_drop_values_position(C, pt, p, to)?;
             return Ok(json!({}));
         }
         // Keep axis settings (sort, grouping) when moving between rows and columns.
@@ -468,6 +484,7 @@ pub(super) fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
                 pt.filters.push(h);
             }
         }
+        set_drop_values_position(C, pt, p, to)?;
         Ok(json!({"field": src_field, "to": to}))
     })
 }
