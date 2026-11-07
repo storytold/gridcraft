@@ -25,28 +25,48 @@ const MAX_REPLY: u64 = 256 * 1024 * 1024;
 /// A running GridCraft app, reached through its loopback control port.
 pub struct Remote {
     addr: String,
-    token: String,
+    /// The token the caller gave; `None` looks it up for every new connection (see `connect`).
+    token: Option<String>,
     conn: Option<(BufReader<TcpStream>, TcpStream)>,
     next_id: u64,
+    /// Whether a connection ever succeeded (`lazy` starts without one; the app may open later).
+    connected: bool,
 }
 
 impl Remote {
     /// Connect to `addr` (`127.0.0.1:7979`), failing fast when nothing is listening. The app
     /// requires a token (#777): `GRIDCRAFT_CONTROL_TOKEN`, else the file the app wrote for this port.
+    /// It is looked up again for every new connection, so a restarted app's new token is picked up.
     pub fn connect(addr: &str) -> std::io::Result<Self> {
-        let token = crate::control_auth::client_token(addr).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
-        Self::connect_with_token(addr, token)
-    }
-
-    /// Like [`Remote::connect`] with a token the caller already has.
-    pub fn connect_with_token(addr: &str, token: String) -> std::io::Result<Self> {
-        let mut r = Self { addr: addr.to_string(), token, conn: None, next_id: 1 };
+        let mut r = Self::lazy(addr);
         r.reconnect()?;
         Ok(r)
     }
 
+    /// Like [`Remote::connect`] with a token the caller already has.
+    pub fn connect_with_token(addr: &str, token: String) -> std::io::Result<Self> {
+        let mut r = Self { token: Some(token), ..Self::lazy(addr) };
+        r.reconnect()?;
+        Ok(r)
+    }
+
+    /// A remote that connects (and finds the app's token) on first use. The app may start after
+    /// the MCP server, and a server that exits at once reads as failed for the client's whole
+    /// session.
+    pub fn lazy(addr: &str) -> Self {
+        Self { addr: addr.to_string(), token: None, conn: None, next_id: 1, connected: false }
+    }
+
     pub fn addr(&self) -> &str {
         &self.addr
+    }
+
+    /// The token for a new connection: the caller's, else the one the app wrote at its last start.
+    fn token(&self) -> std::io::Result<String> {
+        match &self.token {
+            Some(t) => Ok(t.clone()),
+            None => crate::control_auth::client_token(&self.addr).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e)),
+        }
     }
 
     fn reconnect(&mut self) -> std::io::Result<()> {
@@ -60,8 +80,10 @@ impl Remote {
                     s.set_write_timeout(Some(IO_TIMEOUT)).ok();
                     let read = s.try_clone()?;
                     let mut conn = (BufReader::new(read), s);
-                    Self::authenticate(&mut conn, &self.token)?;
+                    // Read only once something listens: a closed app's token file may be stale.
+                    Self::authenticate(&mut conn, &self.token()?)?;
                     self.conn = Some(conn);
+                    self.connected = true;
                     return Ok(());
                 }
                 Err(e) => last = e,
@@ -120,7 +142,8 @@ impl Backend for Remote {
                 self.conn = None;
                 self.roundtrip(&line).map_err(|e| {
                     self.conn = None;
-                    format!("GridCraft app at {} is not reachable: {e}", self.addr)
+                    let retry = if self.connected { "" } else { "; will retry on each call" };
+                    format!("GridCraft app at {} is not reachable: {e}{retry}", self.addr)
                 })?
             }
         };
@@ -137,6 +160,49 @@ impl Backend for Remote {
     }
 
     fn describe(&self) -> String {
-        format!("connected to the GridCraft app at {}", self.addr)
+        if self.connected {
+            format!("connected to the GridCraft app at {}", self.addr)
+        } else {
+            format!("will connect to the GridCraft app at {} when it opens", self.addr)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+    use super::*;
+    use std::net::TcpListener;
+
+    const TOKEN: &str = "secret-token-0123456789";
+
+    /// A client that starts before the app keeps its server, and the server connects (sending the
+    /// token) once the app's port opens.
+    #[test]
+    fn a_lazy_remote_serves_once_the_app_opens() {
+        // Reserve a free port, then close it: nothing listens there yet.
+        let addr = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().to_string();
+        let mut r = Remote { token: Some(TOKEN.into()), ..Remote::lazy(&addr) };
+        assert!(r.describe().contains("will connect to"), "{}", r.describe());
+        let e = r.call("document.inspect", json!({})).unwrap_err();
+        assert!(e.contains("not reachable") && e.contains("will retry on each call"), "{e}");
+        // The app opens on that port: the next call authenticates and is answered.
+        let listener = TcpListener::bind(&addr).unwrap();
+        let app = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut w = stream.try_clone().unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut first = String::new();
+            reader.read_line(&mut first).unwrap();
+            let hello = crate::control_auth::check_first_line(&first, TOKEN).unwrap();
+            w.write_all(format!("{hello}\n").as_bytes()).unwrap();
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let req: Value = serde_json::from_str(&line).unwrap();
+            w.write_all(format!("{}\n", json!({"id": req["id"], "ok": true, "result": 7})).as_bytes()).unwrap();
+        });
+        assert_eq!(r.call("document.inspect", json!({})), Ok(json!(7)));
+        app.join().unwrap();
+        assert!(r.describe().contains("connected to"), "{}", r.describe());
     }
 }

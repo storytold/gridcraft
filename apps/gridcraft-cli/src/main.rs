@@ -522,6 +522,20 @@ fn functions(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether `addr` (`HOST:PORT`, after `control_addr`) is shaped like an address: a hostname or IPv4
+/// address (letters, digits, `-`, `.`, `_`), or a bracketed IPv6 address, and a numeric port.
+/// Whether the host resolves is not checked: the app's machine may be unreachable for now.
+fn valid_connect_addr(addr: &str) -> bool {
+    let Some((host, port)) = addr.rsplit_once(':') else { return false };
+    if port.parse::<u16>().is_err() {
+        return false;
+    }
+    match host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        Some(v6) => v6.parse::<std::net::Ipv6Addr>().is_ok(),
+        None => !host.is_empty() && host.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_')),
+    }
+}
+
 /// `mcp` (headless, in-process engine) or `mcp --connect PORT|HOST:PORT` (drive a running app
 /// started with `gridcraft --control PORT`). JSON-RPC on stdin/stdout; logs on stderr.
 fn mcp(args: &[String]) -> Result<(), String> {
@@ -531,10 +545,21 @@ fn mcp(args: &[String]) -> Result<(), String> {
     let backend: Box<dyn Backend> = match a.opt("connect") {
         Some(c) => {
             let addr = control_addr(c);
-            Box::new(
-                Remote::connect(&addr)
-                    .map_err(|e| format!("cannot connect to the GridCraft app at {addr}: {e} (start it with `gridcraft --control PORT`)"))?,
-            )
+            // A malformed address must fail at startup, not on every call the lazy remote would retry it on.
+            if !valid_connect_addr(&addr) {
+                return Err(format!("mcp: --connect needs PORT or HOST:PORT (a hostname, IPv4 or [IPv6] address and a numeric port), got `{c}`"));
+            }
+            match Remote::connect(&addr) {
+                Ok(remote) => Box::new(remote),
+                // The app may start after the MCP client does: serve anyway and connect on the first
+                // call, or the client marks the server failed for its whole session.
+                Err(e) => {
+                    eprintln!(
+                        "gridcraft-cli: GridCraft is not reachable at {addr} yet ({e}); will retry on each call (start it with `gridcraft --control PORT`)"
+                    );
+                    Box::new(Remote::lazy(&addr))
+                }
+            }
         }
         None => {
             let session = match (a.opt("in"), a.opt("sample")) {
@@ -654,5 +679,28 @@ mod tests {
         assert!(pdf.starts_with(b"%PDF-"));
         assert!(pdf.windows(b"/URI (https://example.org)".len()).any(|w| w == b"/URI (https://example.org)"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+    /// The bridge serves while the app is closed, so a malformed address must fail at startup
+    /// instead of being retried on every call.
+    #[test]
+    fn mcp_connect_refuses_a_malformed_address_at_startup() {
+        for bad in [
+            "notaport",
+            "127.0.0.1:notaport",
+            ":7979",
+            "127.0.0.1:99999",
+            // A colon in an unbracketed host, a bracketed non-IPv6 host, a space.
+            "bad:host:7979",
+            "::1:7979",
+            "[nope]:7979",
+            "[::1:7979",
+            "two words:7979",
+        ] {
+            let e = mcp(&["--connect".to_string(), bad.to_string()]).unwrap_err();
+            assert!(e.contains("numeric port"), "{bad}: {e}");
+        }
+        for good in ["7979", "127.0.0.1:7979", "localhost:7979", "[::1]:7979", "grid-box_2.local:7979"] {
+            assert!(valid_connect_addr(&gridcraft_mcp::control_addr(good)), "{good}");
+        }
     }
 }
