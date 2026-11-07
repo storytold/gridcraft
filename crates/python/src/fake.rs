@@ -21,6 +21,7 @@ type Script = dyn Fn(FakeWorker) + Send + Sync;
 pub struct FakeTransport {
     script: Arc<Script>,
     starts: Arc<AtomicU64>,
+    exited: Arc<AtomicU64>,
     rss: Arc<AtomicU64>,
     /// Every request any worker of this transport read, in order.
     seen: Arc<Mutex<Vec<Request>>>,
@@ -37,6 +38,7 @@ struct Current {
 #[derive(Clone)]
 pub struct FakeHandle {
     starts: Arc<AtomicU64>,
+    exited: Arc<AtomicU64>,
     rss: Arc<AtomicU64>,
     seen: Arc<Mutex<Vec<Request>>>,
 }
@@ -45,6 +47,10 @@ impl FakeHandle {
     /// Workers started so far.
     pub fn starts(&self) -> u64 {
         self.starts.load(Ordering::SeqCst)
+    }
+    /// How many workers have gone, their pipes closed with them.
+    pub fn exited(&self) -> u64 {
+        self.exited.load(Ordering::SeqCst)
     }
     /// Sets the memory the current worker reports (0: none).
     pub fn set_rss(&self, bytes: u64) {
@@ -62,6 +68,7 @@ impl FakeTransport {
         FakeTransport {
             script: Arc::new(script),
             starts: Arc::new(AtomicU64::new(0)),
+            exited: Arc::new(AtomicU64::new(0)),
             rss: Arc::new(AtomicU64::new(0)),
             seen: Arc::new(Mutex::new(Vec::new())),
             current: None,
@@ -86,13 +93,20 @@ impl FakeTransport {
     }
 
     pub fn handle(&self) -> FakeHandle {
-        FakeHandle { starts: self.starts.clone(), rss: self.rss.clone(), seen: self.seen.clone() }
+        FakeHandle { starts: self.starts.clone(), exited: self.exited.clone(), rss: self.rss.clone(), seen: self.seen.clone() }
     }
 
     /// Another transport with the same script and counters, for a caller that makes one per
     /// workbook.
     pub fn sharing(&self) -> FakeTransport {
-        FakeTransport { script: self.script.clone(), starts: self.starts.clone(), rss: self.rss.clone(), seen: self.seen.clone(), current: None }
+        FakeTransport {
+            script: self.script.clone(),
+            starts: self.starts.clone(),
+            exited: self.exited.clone(),
+            rss: self.rss.clone(),
+            seen: self.seen.clone(),
+            current: None,
+        }
     }
 }
 
@@ -107,7 +121,14 @@ impl Transport for FakeTransport {
         let worker =
             FakeWorker { input: BufReader::new(worker_in), output: worker_out, kill_rx, killed: killed.clone(), start, seen: self.seen.clone() };
         let script = self.script.clone();
-        std::thread::Builder::new().name("python-fake".into()).spawn(move || script(worker)).map_err(|e| e.to_string())?;
+        let exited = self.exited.clone();
+        std::thread::Builder::new()
+            .name("python-fake".into())
+            .spawn(move || {
+                script(worker);
+                exited.fetch_add(1, Ordering::SeqCst);
+            })
+            .map_err(|e| e.to_string())?;
         self.current = Some(Current { killed, _kill: kill });
         Ok(Pipes { stdin: Box::new(client_in), stdout: Box::new(client_out), memory: Some(Box::new(FakeMemory(self.rss.clone()))) })
     }
