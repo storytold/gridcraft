@@ -129,7 +129,9 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
         Some(kind) => crate::io::save_bytes_as(wb, &path, kind)?,
         None => crate::io::save_bytes(wb, &path)?,
     };
-    crate::io::write_file(&path, &bytes)?;
+    // The document's own file is written only where it was opened from or last saved.
+    let expected = d.resolved_path.clone().filter(|_| d.path.as_deref() == Some(path.as_str()));
+    let written = crate::io::write_file_expecting(&path, &bytes, expected.as_deref())?;
     // Only a full-fidelity format clears the dirty flag and becomes the document's file.
     if matches!(kind, Some(crate::io::FileKind::Xlsx | crate::io::FileKind::Json)) {
         // The new file is the workbook's own now, so `CELL("filename")` reports it (#1489). Set
@@ -141,6 +143,7 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
         }
         d.saved = d.wb.clone();
         d.path = Some(path.clone());
+        d.resolved_path = Some(written);
     }
     Ok(json!({"path": path, "bytes": bytes.len()}))
 }

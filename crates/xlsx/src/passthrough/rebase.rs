@@ -171,7 +171,8 @@ impl Folder {
         let mut f = Folder { root: String::new(), names: vec![] };
         for c in dir.components() {
             match c {
-                Component::Prefix(_) | Component::RootDir => f.root.push_str(&c.as_os_str().to_string_lossy()),
+                Component::Prefix(p) => f.root.push_str(&plain_prefix(p.kind())),
+                Component::RootDir => f.root.push_str(&c.as_os_str().to_string_lossy()),
                 Component::CurDir => {}
                 Component::ParentDir => {
                     f.names.pop();
@@ -180,6 +181,20 @@ impl Folder {
             }
         }
         Some(f)
+    }
+}
+
+/// A drive or share prefix in plain form, so a path kept in its `\\?\C:` form (too long for the
+/// plain one) and a short `C:` path on the same drive have the same root.
+fn plain_prefix(kind: std::path::Prefix<'_>) -> String {
+    use std::path::Prefix;
+    match kind {
+        Prefix::VerbatimDisk(d) | Prefix::Disk(d) => format!("{}:", char::from(d)),
+        Prefix::VerbatimUNC(server, share) | Prefix::UNC(server, share) => {
+            format!(r"\\{}\{}", server.to_string_lossy(), share.to_string_lossy())
+        }
+        Prefix::Verbatim(name) => format!(r"\\?\{}", name.to_string_lossy()),
+        Prefix::DeviceNS(name) => format!(r"\\.\{}", name.to_string_lossy()),
     }
 }
 
@@ -254,4 +269,22 @@ fn decode_name(seg: &str) -> String {
         }
     }
     String::from_utf8(out).unwrap_or_else(|_| seg.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::plain_prefix;
+    use std::ffi::OsStr;
+    use std::path::Prefix;
+
+    #[test]
+    fn verbatim_and_plain_prefixes_of_a_drive_or_share_have_the_same_root() {
+        assert_eq!(plain_prefix(Prefix::VerbatimDisk(b'C')), plain_prefix(Prefix::Disk(b'C')));
+        assert_eq!(plain_prefix(Prefix::VerbatimDisk(b'D')), "D:");
+        let (server, share) = (OsStr::new("srv"), OsStr::new("docs"));
+        assert_eq!(plain_prefix(Prefix::VerbatimUNC(server, share)), plain_prefix(Prefix::UNC(server, share)));
+        assert_eq!(plain_prefix(Prefix::UNC(server, share)), r"\\srv\docs");
+        // A different drive stays a different root.
+        assert_ne!(plain_prefix(Prefix::VerbatimDisk(b'C')), plain_prefix(Prefix::Disk(b'D')));
+    }
 }
