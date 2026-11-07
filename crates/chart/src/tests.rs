@@ -55,6 +55,7 @@ fn chart(kind: ChartKind) -> Chart {
         source: None,
         by_rows: false,
         pivot: None,
+        layout: Default::default(),
     }
 }
 
@@ -1678,4 +1679,151 @@ fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
+}
+
+/// A plot area and a title placed by hand go where the file puts them.
+#[test]
+fn hand_placed_plot_area_and_title_go_where_the_file_puts_them() {
+    use gridcraft_model::{ChartLayout, ChartRect};
+    let d = sample(ChartKind::ColumnClustered);
+    let (w, h) = (600.0, 400.0);
+    let bars = |c: &Chart| -> Vec<(f32, f32, f32, f32)> {
+        let colors: Vec<_> = d.series.iter().map(|s| s.color).collect();
+        render(c, &d, w, h, &ApproxMeasure)
+            .into_iter()
+            .filter_map(|p| match p {
+                Prim::Rect { x, y, w, h, fill: Some(f), .. } if colors.contains(&f) && w > 2.0 => Some((x, y, x + w, y + h)),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.legend = LegendPos::None;
+    let rect = ChartRect { x: 0.25, y: 0.3, w: 0.5, h: 0.4 };
+    c.layout = ChartLayout { plot: Some(rect), plot_inner: true, title: Some([0.05, 0.02]) };
+    let (x0, y0, x1, y1) = (rect.x * w, rect.y * h, (rect.x + rect.w) * w, (rect.y + rect.h) * h);
+    let inside = bars(&c);
+    assert!(!inside.is_empty());
+    for (bx0, by0, bx1, by1) in &inside {
+        assert!(*bx0 >= x0 - 0.5 && *bx1 <= x1 + 0.5 && *by0 >= y0 - 0.5 && *by1 <= y1 + 0.5, "bar {bx0},{by0}-{bx1},{by1} in {x0},{y0}-{x1},{y1}");
+    }
+    // The plot area is filled: the leftmost bar starts near its left edge, the tallest reaches near its top.
+    let left = inside.iter().map(|b| b.0).fold(f32::MAX, f32::min);
+    let top = inside.iter().map(|b| b.1).fold(f32::MAX, f32::min);
+    assert!(left - x0 < rect.w * w * 0.1 && top - y0 < rect.h * h * 0.2, "left {left} top {top}");
+    let title = render(&c, &d, w, h, &ApproxMeasure).into_iter().find_map(|p| match p {
+        Prim::Text { x, y, text, align, .. } if text == "Quarterly Sales" => Some((x, y, align)),
+        _ => None,
+    });
+    assert_eq!(title, Some((0.05 * w, 0.02 * h, HAlign::Left)));
+    // Holding its axis labels too, the plot itself is smaller than the rectangle.
+    c.layout.plot_inner = false;
+    let outer = bars(&c);
+    assert!(outer.iter().map(|b| b.0).fold(f32::MAX, f32::min) > left + 1.0, "labels take room on the left");
+}
+
+/// Every level text's left end and every line's left end in a rendered chart.
+fn left_ends(prims: &[Prim]) -> Vec<(f32, String)> {
+    prims
+        .iter()
+        .filter_map(|p| match p {
+            // Rotated text (an axis title) stands across its anchor, not beside it.
+            Prim::Text { x, text, size, bold, align, rotation, .. } if *rotation == 0.0 => {
+                let w = ApproxMeasure.text_width(text, *size, *bold);
+                let left = match align {
+                    HAlign::Left => *x,
+                    HAlign::Center => x - w / 2.0,
+                    HAlign::Right => x - w,
+                };
+                Some((left, text.clone()))
+            }
+            Prim::Line { pts, .. } => Some((pts.iter().map(|p| p[0]).fold(f32::MAX, f32::min), "line".to_string())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A plot placed by hand too near the left edge moves right until its axis labels fit, keeping
+/// its width, as Excel does on open: value labels on a column chart, and category labels with an
+/// outer level on a bar chart. Nothing is cut or drawn off the chart.
+#[test]
+fn a_hand_placed_plot_moves_right_to_make_room_for_its_labels() {
+    use gridcraft_model::{ChartLayout, ChartRect};
+    let (w, h) = (600.0, 400.0);
+    let rect = ChartRect { x: 0.005, y: 0.1, w: 0.5, h: 0.8 };
+    for kind in [ChartKind::ColumnClustered, ChartKind::BarClustered] {
+        let mut d = sample(kind);
+        d.categories = (1..=6).map(|i| format!("A rather long category name {i}")).collect();
+        d.category_levels = vec![vec!["Group one".into(); 3].into_iter().chain(vec!["Group two".into(); 3]).collect()];
+        let mut c = chart(kind);
+        c.legend = LegendPos::None;
+        c.layout = ChartLayout { plot: Some(rect), plot_inner: true, title: None };
+        let prims = render(&c, &d, w, h, &ApproxMeasure);
+        for (left, t) in left_ends(&prims) {
+            assert!(left >= -0.5, "{kind:?}: {t:?} starts at {left}");
+            // Beside a bar chart's plot, the labels have the room they need; under columns they
+            // still fit their categories' width.
+            assert!(kind != ChartKind::BarClustered || !t.ends_with('…'), "{kind:?}: {t:?} is whole");
+        }
+        let colors: Vec<_> = d.series.iter().map(|s| s.color).collect();
+        let bars: Vec<(f32, f32)> = prims
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Rect { x, y, w, h, fill: Some(f), .. } if colors.contains(f) && *w > 0.5 && *h > 0.5 => Some((*x, *y)),
+                _ => None,
+            })
+            .collect();
+        assert!(!bars.is_empty());
+        let left = bars.iter().map(|b| b.0).fold(f32::MAX, f32::min);
+        assert!(left > rect.x * w + 20.0, "{kind:?}: the plot moved right, its bars start at {left}");
+    }
+}
+
+/// A wide plot placed by hand that moves right for its value labels still leaves room for the
+/// secondary axis's labels on its right: it narrows rather than push them off the chart.
+#[test]
+fn a_moved_plot_keeps_room_for_its_secondary_axis_labels() {
+    use gridcraft_model::{ChartLayout, ChartRect};
+    let (w, h) = (600.0, 400.0);
+    let d = sample(ChartKind::Combo);
+    let mut c = chart(ChartKind::Combo);
+    c.legend = LegendPos::None;
+    c.layout = ChartLayout { plot: Some(ChartRect { x: 0.005, y: 0.1, w: 0.99, h: 0.8 }), plot_inner: true, title: None };
+    let prims = render(&c, &d, w, h, &ApproxMeasure);
+    let mut right_labels = 0;
+    for p in &prims {
+        if let Prim::Text { x, text, size, bold, align: HAlign::Left, rotation: 0.0, .. } = p
+            && *x > w / 2.0
+        {
+            right_labels += 1;
+            let end = x + ApproxMeasure.text_width(text, *size, *bold);
+            assert!(end <= w + 0.5, "{text:?} ends at {end}");
+        }
+    }
+    assert!(right_labels > 0, "the secondary axis has labels");
+    for (left, t) in left_ends(&prims) {
+        assert!(left >= -0.5, "{t:?} starts at {left}");
+    }
+}
+
+/// A plot rectangle that starts above or left of the chart (possible through the model, never from
+/// a file, whose values are clamped) or ends past its edge is ignored: the chart is laid out
+/// automatically.
+#[test]
+fn a_plot_rectangle_with_a_negative_origin_is_ignored() {
+    use gridcraft_model::{ChartLayout, ChartRect};
+    let d = sample(ChartKind::ColumnClustered);
+    let mut auto = chart(ChartKind::ColumnClustered);
+    auto.legend = LegendPos::None;
+    let mut placed = auto.clone();
+    // Above or left of the chart, or past its bottom by a couple of pixels (402 of 400).
+    let outside = [
+        ChartRect { x: 0.2, y: -0.8, w: 0.5, h: 0.4 },
+        ChartRect { x: -0.3, y: 0.2, w: 0.5, h: 0.4 },
+        ChartRect { x: 0.2, y: 0.51, w: 0.5, h: 0.495 },
+    ];
+    for rect in outside {
+        placed.layout = ChartLayout { plot: Some(rect), plot_inner: true, title: None };
+        assert_eq!(render(&placed, &d, 600.0, 400.0, &ApproxMeasure), render(&auto, &d, 600.0, 400.0, &ApproxMeasure), "{rect:?}");
+    }
 }

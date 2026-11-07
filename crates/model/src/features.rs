@@ -546,6 +546,28 @@ fn default_hole_size() -> u8 {
     50
 }
 
+/// A rectangle as fractions of the chart's width and height, from its top left corner.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChartRect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+/// Chart parts placed by hand in the file (`c:manualLayout` measured from the chart's edges).
+/// What isn't placed by hand is laid out automatically.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChartLayout {
+    /// The plot area.
+    pub plot: Option<ChartRect>,
+    /// Whether `plot` is the plot itself (`inner`); otherwise it also holds the axis labels.
+    pub plot_inner: bool,
+    /// Where the title's top left corner goes.
+    pub title: Option<[f32; 2]>,
+}
+
 /// A chart's data table (`c:dTable`), independent of the chart legend.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -591,6 +613,9 @@ pub struct Chart {
     /// whenever the PivotTable is refreshed or its layout changes.
     #[serde(default)]
     pub pivot: Option<String>,
+    /// Parts the file places by hand.
+    #[serde(default)]
+    pub layout: ChartLayout,
 }
 
 impl Chart {
@@ -1125,6 +1150,7 @@ mod tests {
             source: None,
             by_rows: false,
             pivot: None,
+            layout: Default::default(),
         };
         let mut json = serde_json::to_value(&chart).expect("serialize chart");
         json.as_object_mut().expect("chart object").remove("hole_size");

@@ -53,6 +53,9 @@ pub(crate) const MAX_WEDGES: usize = 2_048;
 struct Ctx<'a> {
     out: Vec<Prim>,
     m: &'a dyn Measure,
+    /// The plot area the file places by hand, and whether it is the plot itself (else it also
+    /// holds the axis labels).
+    plot: Option<(frame::Bx, bool)>,
 }
 
 impl Ctx<'_> {
@@ -132,14 +135,25 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
         return vec![];
     }
     let data = sanitize(data);
-    let mut ctx = Ctx { out: Vec::new(), m };
+    // Inside the chart, give or take rounding in the file's fractions.
+    let plot = chart.layout.plot.filter(|r| r.x >= 0.0 && r.y >= 0.0 && r.w >= 0.05 && r.h >= 0.05 && r.x + r.w <= 1.001 && r.y + r.h <= 1.001);
+    let mut ctx = Ctx { out: Vec::new(), m, plot: plot.map(|r| (Bx { x: r.x * w, y: r.y * h, w: r.w * w, h: r.h * h }, chart.layout.plot_inner)) };
     ctx.out.push(Prim::Rect { x: 0.0, y: 0.0, w, h, fill: Some(WHITE), stroke: Some((GRID, 1.0)), radius: 0.0 });
     let pad = (w.min(h) * 0.04).clamp(2.0, 10.0);
     let mut area = Bx { x: pad, y: pad, w: w - 2.0 * pad, h: h - 2.0 * pad };
     if let Some(t) = chart_title(chart, &data) {
         let size = TITLE_SIZE.min(h * 0.12).max(4.0);
-        let t = ctx.fit(&t, size, area.w);
-        ctx.text(w / 2.0, area.y, &t, size, TEXT, (HAlign::Center, VAlign::Top));
+        match chart.layout.title {
+            // Placed by hand: its top left corner where the file puts it.
+            Some([tx, ty]) => {
+                let t = ctx.fit(&t, size, (w * (1.0 - tx)).max(0.0));
+                ctx.text(tx * w, ty * h, &t, size, TEXT, (HAlign::Left, VAlign::Top));
+            }
+            None => {
+                let t = ctx.fit(&t, size, area.w);
+                ctx.text(w / 2.0, area.y, &t, size, TEXT, (HAlign::Center, VAlign::Top));
+            }
+        }
         let used = size * 1.3 + 4.0;
         area.y += used;
         area.h -= used;
