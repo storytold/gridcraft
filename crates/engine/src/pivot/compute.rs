@@ -94,6 +94,18 @@ struct AggregateData {
     col_leaves: HashSet<Vec<u32>>,
 }
 
+/// Groups a report may hold while it is aggregated.
+const MAX_AGG_ENTRIES: usize = 5_000_000;
+/// Value accumulators a report may hold in all (one per value field in each group; 72 bytes each,
+/// so about 720 MB). Counting groups alone let a report with many value fields reach tens of GB
+/// before it was refused (#2169).
+const MAX_ACCUMULATORS: usize = 10_000_000;
+
+/// Whether `entries` groups of `per_entry` accumulators each are more than a report may hold.
+pub(super) fn aggregation_too_large(entries: usize, per_entry: usize) -> bool {
+    entries > MAX_AGG_ENTRIES || entries.saturating_mul(per_entry.max(1)) > MAX_ACCUMULATORS
+}
+
 fn aggregate_record(
     input: &AggregateInput<'_>,
     data: &mut AggregateData,
@@ -152,7 +164,7 @@ fn aggregate_record(
     if !input.cols.is_empty() && data_cols_exceed_sheet(data.col_leaves.len(), input.pt.grand_totals_rows, input.vals.len()) {
         return Err("The PivotTable report will not fit on the sheet.".into());
     }
-    if data.aggs.len() > 5_000_000 {
+    if aggregation_too_large(data.aggs.len(), input.vals.len() + input.extra.len()) {
         return Err("The PivotTable report is too large.".into());
     }
     Ok(())
