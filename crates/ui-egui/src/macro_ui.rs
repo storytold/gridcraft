@@ -17,6 +17,14 @@ pub use gridcraft_engine::macros::{RESERVED_SHORTCUTS, parse_shortcut, shortcut_
 /// How many macros the Run Macro menu keeps as recent.
 const RECENT: usize = 8;
 
+/// The yellow bar when a file still holds Excel macros. `.xlsm` stays in the sentence: saving as
+/// `.xlsx` drops them.
+pub(crate) const EXCEL_MACROS_NOTICE: &str = "This file contains Excel macros. GridCraft keeps them when you save as .xlsm and does not run them.";
+/// The empty Macros list. It does not claim the file has no macros: Excel's may still be in it.
+pub(crate) const NOTHING_GRIDCRAFT_CAN_RUN: &str = "Nothing here can be run in GridCraft.";
+/// Under the Macros list, only when the file holds Excel macros.
+pub(crate) const EXCEL_MACROS_FOOTER: &str = "The Excel macros stay in the file. GridCraft does not run them. Excel still can.";
+
 /// Macro state that belongs to the window, not the workbook.
 #[derive(Clone, Debug)]
 pub struct MacroUi {
@@ -419,7 +427,8 @@ pub fn macros_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
                 ui.set_min_size(vec2(326.0, 200.0));
                 egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
                     if list.is_empty() {
-                        ui.label(egui::RichText::new("This workbook has no scripts or macros.").italics().color(t.text_dim));
+                        let text = crate::i18n::current(ui.ctx()).tr(NOTHING_GRIDCRAFT_CAN_RUN);
+                        ui.label(egui::RichText::new(text).italics().color(t.text_dim));
                     }
                     for e in &list {
                         let label = match (e.kind, &e.shortcut) {
@@ -506,9 +515,8 @@ pub fn macros_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
     ui.label(egui::RichText::new(if desc.is_empty() { " ".to_string() } else { desc }).color(t.text_dim));
     if vba {
         ui.add_space(6.0);
-        ui.label(
-            egui::RichText::new("This workbook also has a VBA project. GridCraft keeps it when you save but does not run it.").color(t.text_dim),
-        );
+        let text = crate::i18n::current(ui.ctx()).tr(EXCEL_MACROS_FOOTER);
+        ui.label(egui::RichText::new(text).color(t.text_dim));
     }
     d.values.insert("name".into(), json!(name));
     d.values.insert("kind".into(), json!(kind.key()));
@@ -679,5 +687,35 @@ mod tests {
         assert_eq!(question_text(e, "approve: ").as_deref(), Some("Run macro 'M'? It came with a workbook you opened."));
         assert_eq!(question_text("confirm: Replace it? (run again with `overwrite: true`)", "approve: "), None);
         assert_eq!(question_text("confirm: Replace it?", "confirm: ").as_deref(), Some("Replace it?"));
+    }
+
+    /// Excel users call these macros. The list must not say the file has none, and German must
+    /// keep every fact: they stay, `.xlsm` keeps them, GridCraft does not run them.
+    #[test]
+    fn excel_macros_are_named_as_excel_macros() {
+        for text in [EXCEL_MACROS_NOTICE, NOTHING_GRIDCRAFT_CAN_RUN, EXCEL_MACROS_FOOTER] {
+            let lower = text.to_lowercase();
+            assert!(!lower.contains("no scripts or macros"), "{text}");
+            assert!(!lower.contains("keine makros"), "{text}");
+        }
+        assert!(EXCEL_MACROS_NOTICE.contains("Excel macros"));
+        assert!(EXCEL_MACROS_NOTICE.contains(".xlsm"));
+        assert!(EXCEL_MACROS_NOTICE.contains("does not run them"));
+        assert!(EXCEL_MACROS_FOOTER.contains("Excel macros"));
+        assert!(EXCEL_MACROS_FOOTER.contains("does not run them"));
+        assert!(EXCEL_MACROS_FOOTER.contains("Excel still can"));
+
+        let de = crate::i18n::Language::De;
+        let notice = de.tr(EXCEL_MACROS_NOTICE);
+        let empty = de.tr(NOTHING_GRIDCRAFT_CAN_RUN);
+        let footer = de.tr(EXCEL_MACROS_FOOTER);
+        assert!(notice.contains("Excel-Makros"), "{notice}");
+        assert!(notice.contains(".xlsm"), "{notice}");
+        assert!(notice.contains("führt sie nicht aus"), "{notice}");
+        assert_eq!(empty, "Hier kann GridCraft nichts starten.");
+        assert!(!empty.contains("keine Makros"));
+        assert!(footer.contains("Excel-Makros"), "{footer}");
+        assert!(footer.contains("führt sie nicht aus"), "{footer}");
+        assert!(footer.contains("In Excel sind sie weiter startbar"), "{footer}");
     }
 }
