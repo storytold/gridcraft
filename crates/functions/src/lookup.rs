@@ -142,10 +142,14 @@ fn cell_result(v: Value) -> Value {
 
 fn vh_lookup(args: &[Arg], vertical: bool) -> R<Value> {
     let x = needle(args, 0)?;
-    let table = as_array(&arg(args, 1)?.value);
-    if let Value::Error(e) = &arg(args, 1)?.value {
+    let table_arg = arg(args, 1)?;
+    if let Value::Error(e) = &table_arg.value {
         return Err(*e);
     }
+    if !table_arg.from_ref && !matches!(&table_arg.value, Value::Array(_)) {
+        return Err(CellError::NA);
+    }
+    let table = as_array(&table_arg.value);
     let idx = num(args, 2)?;
     // NaN too: it would pass `idx < 1.0` and become index 0 (#2163).
     if idx.is_nan() || idx < 1.0 {
@@ -210,9 +214,13 @@ fn lookup(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 
 fn match_fn(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let x = needle(args, 0)?;
-    let av = &arg(args, 1)?.value;
+    let lookup_arg = arg(args, 1)?;
+    let av = &lookup_arg.value;
     if let Value::Error(e) = av {
         return Err(*e);
+    }
+    if !lookup_arg.from_ref && !matches!(av, Value::Array(_)) {
+        return Err(CellError::NA);
     }
     let hay = vector(&as_array(av)).ok_or(CellError::NA)?;
     let mt = opt_num(args, 2, 1.0)?;
@@ -687,7 +695,14 @@ mod tests {
         close(ev("MATCH", vec![t("CHERRY"), av(s.clone()), n(0.0)]), 3.0);
         close(ev("MATCH", vec![t("c"), av(s.clone())]), 2.0);
         is_err(ev("MATCH", vec![n(1.0), rf(table())]), CellError::NA);
+        is_err(ev("MATCH", vec![n(1.0), n(1.0)]), CellError::NA);
         close(ev("MATCH", vec![b(true), av(arr(vec![vec![nv(1.0), Value::Bool(true)]])), n(0.0)]), 2.0);
+    }
+
+    #[test]
+    fn vh_lookup_scalar_table_is_not_a_lookup_array() {
+        is_err(ev("VLOOKUP", vec![n(1.0), n(1.0), n(1.0)]), CellError::NA);
+        is_err(ev("HLOOKUP", vec![n(1.0), n(1.0), n(1.0)]), CellError::NA);
     }
 
     #[test]
