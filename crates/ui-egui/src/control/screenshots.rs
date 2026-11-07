@@ -32,6 +32,10 @@ pub const SCREENSHOT_MAX_RETRIES: u32 = 2;
 /// Reported once when the active document changes before a queued capture is issued or completed.
 pub const SCREENSHOT_DOCUMENT_CHANGED: &str = "screenshot failed: the document changed while the capture was queued";
 
+/// Reported once when the active window changes before a queued capture is issued or completed:
+/// the pixels would show a window other than the one the request named.
+pub const SCREENSHOT_WINDOW_CHANGED: &str = "screenshot failed: the active window changed while the capture was queued";
+
 /// Reported once when a capture request or completion is not for the active viewport.
 pub const SCREENSHOT_VIEWPORT_CHANGED: &str = "screenshot failed: the capture belongs to another viewport";
 
@@ -275,6 +279,9 @@ pub(super) struct Shot {
     /// The active document (`DocState::uid`) at admission. A queued capture is never rebound to a
     /// document that became active later.
     pub(super) document: Option<u64>,
+    /// The active window at admission. A queued capture is never rebound to a window that became
+    /// active later, even when it shows the same workbook (View › New Window).
+    pub(super) window: Option<u64>,
     /// Monotonic geometry epoch at issuance; any later change rejects the image.
     pub(super) epoch: u64,
     /// Physical size expected at issuance; `None` while the window has no capturable size.
@@ -400,6 +407,7 @@ pub fn issue_screenshots(app: &mut SheetApp, ctx: &egui::Context) {
     // layout is not the one to capture. GridCraft requests no discard after this call.
     let discard = ctx.will_discard();
     let active_document = app.session.active().map(|d| d.uid);
+    let active_window = app.session.active_window();
     let current_viewport = ctx.viewport_id();
     let len = app.shots.requests.len();
     let mut failures: Vec<(usize, String)> = Vec::new();
@@ -423,9 +431,9 @@ pub fn issue_screenshots(app: &mut SheetApp, ctx: &egui::Context) {
         }
         // A queued capture belongs to the document and viewport it was admitted for. A switch
         // before issuance is reported once and never rebound to the new document.
-        let (viewport_id, document, base64) = {
+        let (viewport_id, document, window, base64) = {
             let r = &app.shots.requests[i];
-            (r.viewport_id, r.document, r.path.is_none())
+            (r.viewport_id, r.document, r.window, r.path.is_none())
         };
         if viewport_id != current_viewport {
             failures.push((i, SCREENSHOT_VIEWPORT_CHANGED.into()));
@@ -433,6 +441,10 @@ pub fn issue_screenshots(app: &mut SheetApp, ctx: &egui::Context) {
         }
         if document != active_document {
             failures.push((i, SCREENSHOT_DOCUMENT_CHANGED.into()));
+            continue;
+        }
+        if window != active_window {
+            failures.push((i, SCREENSHOT_WINDOW_CHANGED.into()));
             continue;
         }
         let current = current_capture_geometry(app, ctx);
@@ -515,11 +527,16 @@ pub fn drain_screenshots(app: &mut SheetApp, ctx: &egui::Context) {
     let now = crate::monotonic_ms();
     let current_geometry = current_capture_geometry(app, ctx);
     let epoch = note_capture_geometry(app, current_geometry);
-    let active_document = app.session.active().map(|d| d.uid);
-    let current_viewport = ctx.viewport_id();
+    let identity = DrainIdentity {
+        current_geometry,
+        epoch,
+        active_document: app.session.active().map(|d| d.uid),
+        active_window: app.session.active_window(),
+        current_viewport: ctx.viewport_id(),
+    };
     let mut i = 0;
     while i < app.shots.requests.len() {
-        match drain_action(app, i, now, current_geometry, epoch, active_document, current_viewport) {
+        match drain_action(app, i, now, &identity) {
             DrainAction::Keep => i += 1,
             DrainAction::Remove(reply) => finish_shot(app, i, reply),
             DrainAction::Restart => match retry_capture(app, i, current_geometry, epoch, now) {
@@ -533,31 +550,37 @@ pub fn drain_screenshots(app: &mut SheetApp, ctx: &egui::Context) {
     }
 }
 
-/// Validates one request and decides whether it stays queued, is answered or is re-armed.
-fn drain_action(
-    app: &mut SheetApp,
-    i: usize,
-    now: f64,
+/// What a completed capture must still match: the layout generation and the document, window and
+/// viewport that were active when it was admitted.
+struct DrainIdentity {
     current_geometry: CaptureGeometry,
     epoch: u64,
     active_document: Option<u64>,
+    active_window: Option<u64>,
     current_viewport: egui::ViewportId,
-) -> DrainAction {
+}
+
+/// Validates one request and decides whether it stays queued, is answered or is re-armed.
+fn drain_action(app: &mut SheetApp, i: usize, now: f64, identity: &DrainIdentity) -> DrainAction {
     let r = &mut app.shots.requests[i];
-    // A document or viewport change is a definitive mismatch: cancel once, never retry and
-    // never write the pixels against the new identity.
-    if r.viewport_id != current_viewport {
+    // A document, window or viewport change is a definitive mismatch: cancel once, never retry
+    // and never write the pixels against the new identity.
+    if r.viewport_id != identity.current_viewport {
         cancel_shot(r);
         return DrainAction::Remove(json!({"ok": false, "error": SCREENSHOT_VIEWPORT_CHANGED}));
     }
-    if r.document != active_document {
+    if r.document != identity.active_document {
         cancel_shot(r);
         return DrainAction::Remove(json!({"ok": false, "error": SCREENSHOT_DOCUMENT_CHANGED}));
+    }
+    if r.window != identity.active_window {
+        cancel_shot(r);
+        return DrainAction::Remove(json!({"ok": false, "error": SCREENSHOT_WINDOW_CHANGED}));
     }
     if !r.issued {
         return drain_unissued(r, now);
     }
-    drain_completion(r, now, current_geometry, epoch)
+    drain_completion(r, now, identity.current_geometry, identity.epoch)
 }
 
 /// A request that never issued a capture: keep waiting, or report the timeout that fits whether
