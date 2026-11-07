@@ -105,3 +105,32 @@ fn switching_sheets_closes_the_popup_even_for_the_same_selection() {
     frame(&mut app);
     assert!(app.grid.quick_analysis.open.is_none(), "another sheet with the same selection closes it");
 }
+
+/// Esc dismisses the popup and nothing else: the pending copy (and an armed Format Painter) stay.
+#[test]
+fn escape_closes_the_popup_without_cancelling_the_pending_copy() {
+    let mut session = crate::support::blank_session();
+    session.execute("range.setValues", json!({"range": "A1", "values": [[1, 2, 3], [4, 5, 6]]})).unwrap();
+    session.execute("selection.set", json!({"range": "A1:C2"})).unwrap();
+    session.execute("edit.copy", json!({})).unwrap();
+    let mut h = crate::support::harness(session, 4);
+    assert!(h.state().session.clipboard.is_some());
+    toggle(h.state_mut(), Some(true)).unwrap();
+    h.run_steps(2);
+    assert!(h.state().grid.quick_analysis.open.is_some());
+    let esc = |h: &mut crate::common::Harness| {
+        h.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(2);
+    };
+    esc(&mut h);
+    assert!(h.state().grid.quick_analysis.open.is_none(), "Esc closes the popup");
+    assert!(h.state().session.clipboard.is_some(), "the copy stays pending");
+    esc(&mut h);
+    assert!(h.state().session.clipboard.is_none(), "a second Esc, with no popup, cancels the copy as before");
+}

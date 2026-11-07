@@ -44,8 +44,8 @@ impl Tab {
 
 #[derive(Default)]
 pub struct State {
-    /// The sheet (by index) and selection the popup was opened for; it closes when either changes.
-    pub open: Option<(usize, RangeRef)>,
+    /// The sheet (by its identity, not its position) and selection the popup was opened for; it closes when either changes.
+    pub open: Option<(u64, RangeRef)>,
     pub tab: Tab,
     /// Totals by row (results to the right) instead of by column (results below).
     pub by_rows: bool,
@@ -145,7 +145,7 @@ pub fn toggle(app: &mut SheetApp, on: Option<bool>) -> Result<Json, String> {
         return Err("Quick Analysis works on one block of cells; select a single contiguous range.".into());
     }
     let sel = d.selection.current();
-    let sheet = d.wb.active_sheet();
+    let sheet = d.wb.active().map_or(0, |s| s.uid.get());
     let want = on.unwrap_or(app.grid.quick_analysis.open.is_none());
     if !want {
         app.grid.quick_analysis.open = None;
@@ -188,7 +188,7 @@ pub fn button_rect(geo: &Geo, sh: &Sheet, sel: RangeRef) -> (Rect, bool) {
 pub fn show(app: &mut SheetApp, ui: &mut Ui, geo: &Geo, sh: &Sheet) {
     let Some(d) = app.session.active() else { return };
     let sel = d.selection.current();
-    let sheet = d.wb.active_sheet();
+    let sheet = d.wb.active().map_or(0, |s| s.uid.get());
     let hidden = is_hidden(app, geo, sh);
     // The popup belongs to one selection on one sheet; a new one (or editing) closes it.
     if hidden || app.grid.quick_analysis.open.is_some_and(|(opened_on, r)| opened_on != sheet || r != sel) {
@@ -269,7 +269,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui, geo: &Geo, sh: &Sheet) {
             Action::Run(id, params) => app.run_or_alert(id, params),
             Action::Dialog(name, params) => app.open_dialog(name, params),
         }
-    } else if outside_click || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+    } else if outside_click || ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         app.grid.quick_analysis.open = None;
     }
 }
