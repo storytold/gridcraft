@@ -839,6 +839,18 @@ fn wrapping_a_long_word_in_a_narrow_box_stops_at_the_line_limit() {
 }
 
 #[test]
+fn wrapping_a_long_arabic_word_measures_pieces_not_the_rest_of_the_word() {
+    let word = "مرحبا".repeat(10_000);
+    if gridcraft_pdf::text_width(Font::Helvetica, 10.0, &word) == 0.0 {
+        return;
+    }
+    let lines = wrap_lines(&word, Font::Helvetica, 10.0, 20.0);
+    assert!(lines.len() > 2000 && lines.len() <= 2002, "{}", lines.len());
+    assert!(lines.iter().take(2000).all(|line| gridcraft_pdf::text_width(Font::Helvetica, 10.0, line) <= 20.0));
+    assert!(word.starts_with(&lines.concat()));
+}
+
+#[test]
 fn center_across_spans_following_empty_center_across_cells() {
     let mut styles = StyleTable::default();
     let across = styles.intern(Style { align: Alignment { h: HAlign::CenterAcross, ..Alignment::default() }, ..Style::default() });

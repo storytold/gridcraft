@@ -211,6 +211,11 @@ impl Font {
     }
 }
 
+/// Whether `text` set in `font` is shaped, so its width is not the sum of its characters' widths.
+pub fn is_shaped(font: Font, text: &str) -> bool {
+    arabic::shaped(font, text)
+}
+
 /// Width of `text` in points when set in `font` at `size` points.
 /// Arabic uses shaped advances. If its font cannot render the text, measurement returns zero
 /// and drawing that text causes [`PdfDoc::finish`] to return the rendering error.
