@@ -45,8 +45,8 @@ fn russian_aliases_match_case_insensitively_like_the_evaluator() {
 #[test]
 fn russian_input_preserves_reference_and_array_syntax() {
     for (src, expected) in [
-        ("СУММ({1\\2;3\\4};5)", "SUM({1,2;3,4},5)"),
-        ("{ИСТИНА\\ЛОЖЬ;TRUE\\FALSE}", "{TRUE,FALSE;TRUE,FALSE}"),
+        ("СУММ({1;2:3;4};5)", "SUM({1,2;3,4},5)"),
+        ("{ИСТИНА;ЛОЖЬ:TRUE;FALSE}", "{TRUE,FALSE;TRUE,FALSE}"),
         ("SUM((A1:A3;C1:C3))", "SUM((A1:A3,C1:C3))"),
         ("\"СУММ;ЛОЖЬ\"&\"a\"\"b\"", "\"СУММ;ЛОЖЬ\"&\"a\"\"b\""),
         ("'СУММ;ЛОЖЬ'!A1+СУММ!B2+СУММ!ЛОЖЬ", "'СУММ;ЛОЖЬ'!A1+СУММ!B2+СУММ!ЛОЖЬ"),
@@ -54,7 +54,7 @@ fn russian_input_preserves_reference_and_array_syntax() {
     ] {
         assert_eq!(input(src), expected, "{src}");
     }
-    for bad in [r"СУММ({1;2\3})", "{СУММ(A1)}", "{ЛОЖЬ;}"] {
+    for bad in [r"СУММ({1;2:3})", "{СУММ(A1)}", "{ЛОЖЬ;}"] {
         assert!(parse_input(bad, FormulaLocale::Ru, |_| false).is_err(), "{bad}");
     }
     assert_eq!(print(&parse("СУММ(1,2)+ЛОЖЬ").unwrap()), "СУММ(1,2)+ЛОЖЬ");
@@ -131,5 +131,18 @@ fn russian_display_round_trips_text_containing_separators() {
     let expr = parse(r#"IF(A1="a,b;c",CONCAT("1.5",",",";"),SUM(0.25,A1:A3 B2))"#).unwrap();
     let shown = print_input(&expr, ru, |_| false).unwrap();
     assert_eq!(shown, r#"ЕСЛИ(A1="a,b;c";CONCAT("1.5";",";";");СУММ(0,25;A1:A3 B2))"#);
+    assert_eq!(print(&parse_input(&shown, ru, |_| false).unwrap()), print(&expr));
+}
+
+/// `;` is the array *column* separator in Russian, same character as the ordinary argument
+/// separator - `:` is the row separator instead (confirmed against Microsoft's own ru-ru
+/// documentation), the opposite pairing from Spanish's `\`/`;`. A plain range's `:` outside an
+/// array (A1:A3) is untouched either way - only `array_depth > 0` triggers the translation.
+#[test]
+fn russian_array_literal_uses_semicolon_for_columns_and_colon_for_rows() {
+    let ru = FormulaLocale::Ru;
+    let expr = parse("SUM({1,2;3,4})+SUM((A1:A3,C1:C3))").unwrap();
+    let shown = print_input(&expr, ru, |_| false).unwrap();
+    assert_eq!(shown, "СУММ({1;2:3;4})+СУММ((A1:A3;C1:C3))");
     assert_eq!(print(&parse_input(&shown, ru, |_| false).unwrap()), print(&expr));
 }

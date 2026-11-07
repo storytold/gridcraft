@@ -89,7 +89,21 @@ impl FormulaLocale {
     pub fn array_column_separator(self) -> char {
         match self {
             Self::En => ',',
-            Self::Es | Self::Ru | Self::Uk => '\\',
+            Self::Es => '\\',
+            Self::Ru | Self::Uk => ';',
+        }
+    }
+    /// The array-literal row separator, independent of [`Self::list_separator`] - they only
+    /// happen to share a character in locales whose row separator is `;` (English, Spanish).
+    /// Russian's own array syntax uses `;` for columns and `:` for rows instead (confirmed
+    /// against Microsoft's own ru-ru documentation and multiple Russian sources,
+    /// e.g. `{1;2;3:4;5;6}`) - the opposite pairing from Spanish's `\`/`;`, not the same scheme
+    /// copied over. Ukrainian follows Russian here; unconfirmed directly, but Ukrainian has no
+    /// source suggesting otherwise and shares every other separator with Russian.
+    pub fn array_row_separator(self) -> char {
+        match self {
+            Self::En | Self::Es => ';',
+            Self::Ru | Self::Uk => ':',
         }
     }
     pub fn function_name(self, canonical: &str) -> &str {
@@ -159,6 +173,7 @@ pub fn print_input(expr: &Expr, locale: FormulaLocale, known_name: impl Fn(&str)
             }
             Tok::Number(_) => out.push_str(&text.replace('.', &locale.decimal_separator().to_string())),
             Tok::Comma => out.push(if array_depth > 0 { locale.array_column_separator() } else { locale.list_separator() }),
+            Tok::Semicolon if array_depth > 0 => out.push(locale.array_row_separator()),
             _ => out.push_str(text),
         }
     }

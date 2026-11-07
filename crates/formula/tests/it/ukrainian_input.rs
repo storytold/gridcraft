@@ -1,8 +1,11 @@
 //! Ukrainian Excel has never shipped its own translated function-name table (unlike Russian):
 //! every official `uk-ua` Microsoft support page for a function keeps the English name
 //! ("Функція VLOOKUP", "Функція SUMIF", "Функція COUNT", "Функція NPV" - never a Ukrainian
-//! word), and the separator does change (`;`, decimal `,`), confirmed independently. See
-//! docs/localization-parity.md for the sourcing note. So `Uk`'s alias table is empty on
+//! word), and the separators do change (`;`, decimal `,`, `:` for array rows) - the same
+//! scheme as Russian, confirmed independently for the first two, assumed rather than
+//! confirmed for the array row separator specifically (no source says otherwise for
+//! Ukrainian). See docs/localization-parity.md for the sourcing note. So `Uk`'s alias table
+//! is empty on
 //! purpose: these tests are about separators and about that table staying empty, not about
 //! function-name aliases the way `russian_input.rs` and `spanish_input.rs` are.
 
@@ -19,7 +22,7 @@ fn ukrainian_keeps_english_function_names_but_uses_local_separators() {
         ("IF(A1>0;\"Так\";\"Ні\")", "IF(A1>0,\"Так\",\"Ні\")"),
         ("VLOOKUP(A2;D:E;2;FALSE)", "VLOOKUP(A2,D:E,2,FALSE)"),
         ("SUM(1,5;2,25)", "SUM(1.5,2.25)"),
-        ("SUM({1\\2;3\\4};5)", "SUM({1,2;3,4},5)"),
+        ("SUM({1;2:3;4};5)", "SUM({1,2;3,4},5)"),
     ] {
         assert_eq!(input(src), expected, "{src}");
     }
