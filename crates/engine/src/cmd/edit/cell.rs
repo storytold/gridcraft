@@ -25,7 +25,9 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
     let style = wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
     if input.is_empty() {
         let c = Cell { value: Value::Empty, formula: None, style, py: None };
-        return Ok(if c.is_blank() { None } else { Some(c) });
+        // The sheet store decides whether a default blank resets inherited formatting or
+        // can be omitted. Dropping it here would erase an explicit default override.
+        return Ok(Some(c));
     }
     let fmt_is_text = wb.styles.get(style).num_fmt.as_str() == "@";
     if fmt_is_text {

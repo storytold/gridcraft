@@ -200,7 +200,7 @@ impl UiState {
 }
 
 /// A dismissible bar under the ribbon, in the spirit of Excel's message bar. Used to tell the
-/// user what an opened file carried that GridCraft handled differently (e.g. preserved macros).
+/// user about file compatibility (e.g. preserved macros) or a command that skipped formatting.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Notice {
     pub text: String,
@@ -232,7 +232,7 @@ pub struct SheetApp {
     pub backstage: Option<backstage::Backstage>,
     pub message: Option<(String, String)>,
     pub toast: Option<(String, f64)>,
-    /// Dismissible info bar under the ribbon (open-time notices).
+    /// Dismissible info bar under the ribbon (file notices and command warnings).
     pub notice: Option<Notice>,
     pub services: Services,
     pub printing: printing::State,

@@ -47,6 +47,8 @@ struct LinkBudget {
 struct RowState {
     next_row: u32,
     shared: HashMap<u32, Shared>,
+    /// Rows stream before column metadata; defer sparse empty default-style reset candidates.
+    default_resets: Vec<CellRef>,
     /// Dynamic-array spill ranges and legacy array ranges: cached values inside them (other than
     /// the anchor) are not stored, so the formula can fill them again.
     dynamic: Vec<RangeRef>,
@@ -358,7 +360,17 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
             }
         }
     }
+    restore_default_formats(&mut sheet, st.default_resets);
     Ok((sheet, read_controls))
+}
+
+/// An empty s=0 overrides inherited line formats. Redundant defaults and spill followers vanish.
+fn restore_default_formats(sheet: &mut Sheet, candidates: Vec<CellRef>) {
+    for pos in candidates {
+        if sheet.cells.get(pos).is_none() && sheet.inherited_style_id(pos) != gridcraft_model::StyleId::DEFAULT {
+            sheet.cells.set_explicit(pos, Cell::default());
+        }
+    }
 }
 
 /// Buttons, scroll bars and spin buttons: the `<controls>` list (also inside
@@ -645,7 +657,11 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
         Some(_) => Value::Empty,
         None => value,
     };
-    sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style, py });
+    let cell = Cell { value, formula: formula.map(Arc::new), style, py };
+    if c.attr("s").is_some() && cell.is_blank() {
+        st.default_resets.push(pos);
+    }
+    sheet.cells.set(pos, cell);
 }
 
 fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {

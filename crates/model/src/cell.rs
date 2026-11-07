@@ -81,7 +81,7 @@ impl Cell {
     pub fn styled(v: Value, style: StyleId) -> Cell {
         Cell { value: v, formula: None, style, py: None }
     }
-    /// No value, no formula, no Python code and the default style: storing it is pointless.
+    /// No content or non-default style. A sheet may still store this as an explicit line-format reset.
     pub fn is_blank(&self) -> bool {
         self.value.is_empty() && self.formula.is_none() && self.style == StyleId::DEFAULT && self.py.is_none()
     }

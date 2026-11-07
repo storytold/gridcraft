@@ -226,6 +226,7 @@ struct CellWriteInput<'a> {
     header_override: Option<&'a String>,
     spill_value: Option<&'a Value>,
     dynamic_range: Option<&'a RangeRef>,
+    default_override: bool,
 }
 
 fn write_sheet_extensions(s: &mut String, sheet: &Sheet, prio: &[u32]) {
@@ -659,6 +660,7 @@ fn write_sheet_data(s: &mut String, data: SheetCellData<'_>, sid: &dyn Fn(gridcr
                     header_override: ov,
                     spill_value: ex,
                     dynamic_range: array.as_ref(),
+                    default_override: cell.is_some() && sheet.inherited_style_id(cell_ref) != gridcraft_model::StyleId::DEFAULT,
                 },
                 sid,
                 out,
@@ -736,12 +738,13 @@ fn write_sheet_views(s: &mut String, sheet: &Sheet, selected: bool) {
 }
 
 fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_model::StyleId) -> u32, out: &mut Out) {
-    let CellWriteInput { reference: c, cell, picture, header_override: ov, spill_value: extra, dynamic_range: dynamic } = input;
+    let CellWriteInput { reference: c, cell, picture, header_override: ov, spill_value: extra, dynamic_range: dynamic, default_override } = input;
     let style = cell.map(|x| sid(x.style)).unwrap_or(0);
     s.push_str("<c r=\"");
     push_a1(s, c);
     s.push('"');
-    if style != 0 {
+    // A stored default format overrides row/column formats too; omitting s would inherit them.
+    if style != 0 || default_override {
         let _ = write!(s, " s=\"{style}\"");
     }
     if let Some(picture) = picture {
