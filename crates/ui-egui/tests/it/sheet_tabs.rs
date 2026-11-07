@@ -129,6 +129,35 @@ fn repeated_ctrl_click_on_the_arrow_reveals_the_active_edge_tab() {
     assert_visible(&h, "Tab29");
 }
 
+/// The same for the Previous arrow and the first sheet.
+#[test]
+fn repeated_ctrl_click_on_the_previous_arrow_reveals_the_first_tab() {
+    let mut h = harness(700.0, 29);
+    let (_, clip) = tab(&h, "Tab29").unwrap();
+    let prev = pos2(clip.left() - 68.0, clip.center().y);
+    ctrl_click(&mut h, prev);
+    assert_eq!(h.state().session.doc().unwrap().wb.active_sheet(), 0);
+    assert_visible(&h, "Tab00");
+    // Browse the strip to its end without changing the selection.
+    h.input_mut().events.extend([Event::PointerMoved(clip.center())]);
+    for _ in 0..3 {
+        h.input_mut().events.push(Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            source: egui::MouseWheelSource::Unknown,
+            phase: egui::TouchPhase::Move,
+            delta: vec2(0.0, -600.0),
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(10);
+    }
+    h.run_steps(40);
+    assert!(!tab(&h, "Tab00").is_some_and(|(r, c)| c.contains_rect(r)), "the strip was scrolled away from the active tab");
+    assert_eq!(h.state().session.doc().unwrap().wb.active_sheet(), 0);
+    ctrl_click(&mut h, prev);
+    assert_eq!(h.state().session.doc().unwrap().wb.active_sheet(), 0);
+    assert_visible(&h, "Tab00");
+}
+
 #[test]
 /// Horizontal wheel/trackpad browsing leaves the workbook unchanged, does not snap back on idle frames, and activating a sheet still reveals its tab.
 fn manual_wheel_and_trackpad_browsing_does_not_change_selection_or_snap_back() {
