@@ -1,4 +1,4 @@
-use super::{Arc, COL_HEADER_H, CellRef, DISPLAY_SCALE, LineIndex, MAX_COLS, MAX_ROWS, Pos2, RangeRef, Rect, Sheet, pos2};
+use super::{Arc, COL_HEADER_H, CellRef, DISPLAY_SCALE, LineIndex, MAX_COLS, MAX_ROWS, Pos2, RangeRef, Rect, Sheet, ZoomAnchor, pos2, vec2};
 
 /// Geometry of the grid for one frame (handles zoom and frozen panes).
 #[derive(Clone)]
@@ -133,6 +133,27 @@ impl Geo {
     }
     pub fn mirror_rect(&self, r: Rect) -> Rect {
         if self.rtl { Rect::from_min_max(pos2(self.mirror_x(r.right()), r.top()), pos2(self.mirror_x(r.left()), r.bottom())) } else { r }
+    }
+    /// The sheet point (in `scroll` units) at the logical position `p`, per axis: `None` over the
+    /// frozen panes, which don't scroll.
+    pub fn scrolled_point(&self, p: Pos2) -> (Option<f32>, Option<f32>) {
+        let (dx, dy) = (p.x - self.cells.left() - self.frozen_w, p.y - self.cells.top() - self.frozen_h);
+        ((dx >= 0.0).then_some(self.scroll.x + dx / self.z), (dy >= 0.0).then_some(self.scroll.y + dy / self.z))
+    }
+    /// The scroll that puts `point` (from `scrolled_point`, maybe at another zoom) back at the
+    /// logical position `p`; an axis stays where it is without a point or over the frozen panes.
+    pub fn scroll_keeping(&self, p: Pos2, point: (Option<f32>, Option<f32>)) -> egui::Vec2 {
+        let (dx, dy) = (p.x - self.cells.left() - self.frozen_w, p.y - self.cells.top() - self.frozen_h);
+        let x = point.0.filter(|_| dx >= 0.0).map_or(self.scroll.x, |x| x - dx / self.z);
+        let y = point.1.filter(|_| dy >= 0.0).map_or(self.scroll.y, |y| y - dy / self.z);
+        vec2(x, y)
+    }
+    /// What to keep under the pointer at the screen position `at` when the zoom becomes `zoom`:
+    /// `None` unless it is over cells. The position is mirrored first on a right-to-left sheet,
+    /// as `cells` is in logical coordinates.
+    pub fn zoom_anchor(&self, at: Pos2, zoom: u16) -> Option<ZoomAnchor> {
+        let at = self.mirror_pos(at);
+        self.cells.contains(at).then(|| ZoomAnchor { zoom, at, point: self.scrolled_point(at) })
     }
     /// On-screen rectangle of a cell (`cell_rect` mirrored for right-to-left sheets).
     pub fn screen_cell_rect(&self, sh: &Sheet, c: CellRef) -> Rect {

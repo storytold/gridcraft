@@ -350,3 +350,51 @@ fn upward_text_with_middle_align_is_centred_in_a_merged_block() {
     assert!((bb.center().y - rect.center().y).abs() < 0.01, "{bb:?} not centred in {rect:?}");
     assert!((bb.center().x - rect.center().x).abs() < 0.01, "{bb:?} not centred in {rect:?}");
 }
+
+#[test]
+fn zoom_keeps_the_point_under_the_pointer() {
+    // #1851: Ctrl+wheel zoomed towards the top-left corner. With frozen panes (whose width
+    // grows with the zoom too) the sheet point under the pointer stays under it.
+    let mut sh = Sheet::new("S");
+    sh.freeze = Some((2, 1));
+    let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(1000.0, 700.0));
+    let (at, scroll) = (pos2(500.0, 400.0), vec2(2000.0, 3000.0));
+    let under = |g: &Geo, sh: &Sheet| {
+        let (col, row) = (g.col_at(sh, at.x), g.row_at(sh, at.y));
+        (col, row, (at.x - g.x(sh, col)) / g.z, (at.y - g.y(sh, row)) / g.z)
+    };
+    let before = Geo::new(&sh, rect, scroll);
+    let point = before.scrolled_point(at);
+    let was = under(&before, &sh);
+    for zoom in [200, 50] {
+        sh.zoom = zoom;
+        let kept = Geo::new(&sh, rect, Geo::new(&sh, rect, scroll).scroll_keeping(at, point));
+        let now = under(&kept, &sh);
+        assert_eq!((now.0, now.1), (was.0, was.1), "{zoom}%");
+        assert!((now.2 - was.2).abs() < 0.01 && (now.3 - was.3).abs() < 0.01, "{zoom}%: {now:?} vs {was:?}");
+    }
+    // Over the frozen panes nothing scrolls.
+    let frozen = pos2(before.cells.left() + 1.0, before.cells.top() + 1.0);
+    assert_eq!(before.scrolled_point(frozen), (None, None));
+    assert_eq!(Geo::new(&sh, rect, scroll).scroll_keeping(frozen, point), scroll);
+}
+
+#[test]
+fn zoom_anchor_on_a_right_to_left_sheet_uses_the_mirrored_position() {
+    // #1851: on a right-to-left sheet the row headers are on the screen's right, so a pointer
+    // near the left edge is over cells and must still anchor the zoom.
+    let mut sh = Sheet::new("S");
+    sh.right_to_left = true;
+    let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(1000.0, 700.0));
+    let scroll = vec2(2000.0, 3000.0);
+    let before = Geo::new(&sh, rect, scroll);
+    let near_left = pos2(24.0, 400.0);
+    let a = before.zoom_anchor(near_left, 200).expect("over cells");
+    assert_eq!(a.at, pos2(976.0, 400.0));
+    // The row headers (screen right edge) are not cells.
+    assert!(before.zoom_anchor(pos2(990.0, 400.0), 200).is_none());
+    let was = before.col_at(&sh, before.mirror_x(near_left.x));
+    sh.zoom = 200;
+    let kept = Geo::new(&sh, rect, Geo::new(&sh, rect, scroll).scroll_keeping(a.at, a.point));
+    assert_eq!(kept.col_at(&sh, kept.mirror_x(near_left.x)), was);
+}
