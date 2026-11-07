@@ -247,6 +247,36 @@ pub(crate) fn sync_headers(cx: &mut crate::cmd::Ctx) {
                 cell.formula = Some(std::sync::Arc::new(Formula::from_expr(ne)));
             }
         }
+        let Some(sh) = cx.wb.sheet_mut(i) else { continue };
+        for t in &mut sh.tables {
+            let owner = t.range;
+            for col in &mut t.columns {
+                if col.totals != gridcraft_model::TotalsFn::Custom {
+                    continue;
+                }
+                let Some(text) = col.totals_label.as_mut() else { continue };
+                let Ok(e) = gridcraft_formula::parse(text) else { continue };
+                let mut hit = false;
+                let ne = e.map(&mut |x| match x {
+                    gridcraft_formula::Expr::Struct(mut st) => {
+                        for (si, table, range, old, name) in &renames {
+                            let this = if st.table.is_empty() { i == *si && *range == owner } else { st.table.eq_ignore_ascii_case(table) };
+                            for end in [&mut st.col_start, &mut st.col_end].into_iter().flatten().filter(|_| this) {
+                                if end.eq_ignore_ascii_case(old) {
+                                    *end = name.clone();
+                                    hit = true;
+                                }
+                            }
+                        }
+                        gridcraft_formula::Expr::Struct(st)
+                    }
+                    o => o,
+                });
+                if hit {
+                    *text = gridcraft_formula::print(&ne);
+                }
+            }
+        }
     }
     cx.structural = true;
 }
@@ -291,6 +321,49 @@ mod tests {
         s.execute("range.setValues", json!({"range": "A1", "values": [["a", "b"], [1, 2], [3, 4]]})).unwrap();
         s.execute("insert.table", json!({"range": "A1:B3", "header": true})).unwrap();
         assert_eq!(s.execute("edit.goTo", json!({"reference": "Table1"})).unwrap()["selection"], "A2:B3");
+    }
+
+    /// Custom totals share the structured references in #3389, but are not calculated columns.
+    #[test]
+    fn renames_update_custom_totals_without_changing_labels() {
+        for rename_table in [false, true] {
+            let mut s = Session::new();
+            s.new_workbook();
+            for (range, name) in [("A1:B4", "Prices"), ("D1:E4", "Orders")] {
+                s.execute("range.setValues", json!({"range": range, "values": [["Sku", "Price"], [101, 5], [102, 7], ["", ""]]})).unwrap();
+                s.execute("insert.table", json!({"range": range, "header": true, "name": name})).unwrap();
+            }
+            let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+            for table in &mut wb.sheet_mut(0).unwrap().tables {
+                table.totals_row = true;
+                table.columns[0].totals_label = Some("SUM(Prices[Price])".into());
+                table.columns[1].totals = gridcraft_model::TotalsFn::Custom;
+                table.columns[1].totals_label = Some("SUM(Prices[Price])".into());
+            }
+            wb.sheet_mut(0).unwrap().tables[0].columns[1].totals_label = Some("SUM([Price])".into());
+            // Generate and reopen our own XLSX so this covers imported totals formulas.
+            let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+            s.doc_mut().unwrap().wb = std::sync::Arc::new(gridcraft_xlsx::read_xlsx(&bytes).unwrap().0);
+            let before = s.doc().unwrap().wb.clone();
+            let expected = if rename_table {
+                s.execute("table.rename", json!({"table": "Prices", "name": "PriceList"})).unwrap();
+                "SUM(PriceList[Price])"
+            } else {
+                s.execute("cell.set", json!({"cell": "B1", "input": "Amount"})).unwrap();
+                "SUM(Prices[Amount])"
+            };
+            let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+            let (back, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+            for (i, table) in back.sheet(0).unwrap().tables.iter().enumerate() {
+                let want = if i == 0 { if rename_table { "SUM([Price])" } else { "SUM([Amount])" } } else { expected };
+                assert_eq!(table.columns[1].totals_label.as_deref(), Some(want));
+                assert_eq!(table.columns[0].totals_label.as_deref(), Some("SUM(Prices[Price])"), "plain labels are not formulas");
+            }
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(s.doc().unwrap().wb, before, "undo restores the imported workbook");
+            s.execute("edit.redo", json!({})).unwrap();
+            assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().tables[1].columns[1].totals_label.as_deref(), Some(expected));
+        }
     }
 }
 

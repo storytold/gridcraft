@@ -574,6 +574,23 @@ fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
                     cell.formula = Some(std::sync::Arc::new(Formula::from_expr(ne)));
                 }
             }
+            // Only custom totals labels are formulas. Ordinary text labels must stay verbatim.
+            for col in sh.tables.iter_mut().flat_map(|t| &mut t.columns).filter(|c| c.totals == TotalsFn::Custom) {
+                let Some(text) = col.totals_label.as_mut() else { continue };
+                let Ok(e) = gridcraft_formula::parse(text) else { continue };
+                let mut hit = false;
+                let ne = e.map(&mut |x| match x {
+                    gridcraft_formula::Expr::Struct(mut st) if st.table.eq_ignore_ascii_case(&old) => {
+                        st.table = name.clone();
+                        hit = true;
+                        gridcraft_formula::Expr::Struct(st)
+                    }
+                    o => o,
+                });
+                if hit {
+                    *text = gridcraft_formula::print(&ne);
+                }
+            }
         }
         cx.structural = true;
         Ok(Json::Null)

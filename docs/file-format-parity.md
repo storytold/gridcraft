@@ -1,5 +1,14 @@
 # File-format parity
 
+> **2026-11-07 update:** stored custom totals formulas follow table and column
+> renames; synthetic XLSX round-trip and undo/redo checks cover the change.
+> Fidelity estimates unchanged.
+
+Custom totals (`totalsRowFormula`) now retain valid structured references after a
+table or column rename. Plain totals labels remain literal text. Tests generate
+their own workbooks; independent Excel validation is still pending. This covers
+custom totals only; calculated-column formulas are tracked in #3389 / PR #3391.
+
 > **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-03 · **Change:** minor (form controls: buttons, scroll bars and spin buttons read and written; earlier: a web page's first table opens as a sheet, also when the page is named `.xls`; earlier: `workbookPr filterPrivacy` kept, and honoured on save; earlier: a workbook's R1C1 reference style, `calcPr refMode`, is kept through open and save; earlier: XLSX page margins are written as their decimals, `0.3` rather than `0.30000001192092896`; earlier: Python cells in `.xlsx` as [MS-XLSX] specifies, `_xlfn._xlws.PY(…)` naming code in the Python part, with cached values, and in GridCraft JSON, with limits on open; earlier: equations in xlsx as Office Math with a marker in `descr` so an edit made in Excel reads back, read back only up to the equation source cap, and a brace with a label and a script on its other side keeps both; Symbol font in PDF; earlier: XLSX reads and writes Page Setup's page order, `pageSetup pageOrder`, and PDF export follows it; earlier: chart data tables: native c:dTable import/export; earlier: XLSX workbook-view selection, normalized tab ratios and sheet-edit regressions; fidelity estimates unchanged; earlier: formulas from Google Sheets' XLSX export open as the original formula instead of `IFERROR(__xludf.DUMMYFUNCTION(…),…)` when GridCraft calculates every function in it, and save as it; `file.exportCsv {values: true}` writes raw values for automation; .xls dialog sheets are skipped instead of read as worksheets; `.xls` import reads each sheet's display options from WINDOW2: right-to-left, gridlines, headings, zeros, formulas; XLSX text boxes and shapes keep their paragraphs' right-to-left direction on save; CSV/TSV/TXT can open with every field kept as text via `file.open {csvAsText}`; formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened; XLSX PivotTables read and write `rowGrandTotals`/`colGrandTotals` the way Excel does, so a table saved with only one grand total opens with the right one; HTML export keeps right-to-left; CSV and text import detects likely Windows-1256 Arabic when invalid UTF-8 has Arabic byte runs; other invalid UTF-8 remains Windows-1252; HTML export places pictures and charts, as inline SVG, at their anchors; earlier: `file.exportCsv {values: true}` writes raw values for automation; .xls dialog sheets are skipped instead of read as worksheets; `.xls` import reads each sheet's display options from WINDOW2: right-to-left, gridlines, headings, zeros, formulas; XLSX text boxes and shapes keep their paragraphs' right-to-left direction on save; CSV/TSV/TXT can open with every field kept as text via `file.open {csvAsText}`; formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened; XLSX PivotTables read and write `rowGrandTotals`/`colGrandTotals` the way Excel does, so a table saved with only one grand total opens with the right one; HTML export keeps right-to-left; CSV and text import detects likely Windows-1256 Arabic when invalid UTF-8 has Arabic byte runs; other invalid UTF-8 remains Windows-1252; HTML export places pictures and charts, as inline SVG, at their anchors; CSV and text open detects each column's date order from values that read only one way, warns when every date is ambiguous, and keeps a column with both kinds as text (#2765)) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Every format Excel opens or saves, with GridCraft's read and write support, fidelity and tests.
@@ -155,6 +164,8 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | PDF: embed subsetted system fonts so every script exports | (counted in [localization](localization-parity.md) script work) |
 
 ## Revision history
+
+- 2026-11-07: Custom totals formulas follow table and column renames; no score change.
 
 | Date | Change | Summary |
 |---|---|---|
