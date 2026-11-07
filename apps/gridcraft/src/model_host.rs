@@ -12,7 +12,6 @@ use std::time::Duration;
 
 use gridcraft_engine::Session;
 use gridcraft_engine::translate::ModelFetcher;
-use gridcraft_engine::translate::manifest;
 use gridcraft_ui_egui::ModelHost;
 
 /// How long one model file may take; a stalled download is an error, not a hang.
@@ -79,9 +78,4 @@ pub fn refresh(session: &mut Session) {
     session.translate_models_dir = root.display().to_string();
     session.translate_fetcher = Some(Arc::new(HttpFetcher));
     session.translate_backend = gridcraft_translate_rten::installed_backend(&root);
-}
-
-/// The ids the app can download, for a diagnostics line.
-pub fn known_models() -> Vec<&'static str> {
-    manifest::MANIFESTS.iter().map(|m| m.id).collect()
 }
