@@ -9,6 +9,8 @@ pub(crate) const DRAFT_CODE_HIDDEN: &str = "Sheet protection now hides the code 
 impl SheetApp {
     /// Starts editing the active cell. `text` replaces the content (typing) or pre-fills it.
     pub fn begin_edit(&mut self, text: Option<String>, from_formula_bar: bool) {
+        // A new draft is not the one an Exit Anyway still waiting for its frame was about.
+        self.pending_exit_anyway = None;
         // The source formula is display-only on spill children. Grid replacement keeps its
         // existing behavior, but no formula-bar entry path may edit that displayed formula.
         if from_formula_bar && formula_bar::active_spill_anchor(self).is_some() {
@@ -117,6 +119,14 @@ impl SheetApp {
         self.commit_text_box_edit()
     }
 
+    /// A draft that couldn't be entered goes back to be fixed: in Edit mode, so the arrows move the
+    /// caret instead of pointing at cells or trying to enter it again.
+    fn keep_refused_draft(&mut self, mut ed: crate::editor::EditState) {
+        ed.enter_mode = false;
+        self.editor = Some(ed);
+        self.session.mode = gridcraft_engine::Mode::Edit;
+    }
+
     fn commit_edit_here(&mut self, dr: i64, dc: i64, array: bool, fill_selection: bool) -> bool {
         // Python code goes in through `python.set`, whichever way the edit is committed (the
         // formula bar's Enter button, a click on the sheet).
@@ -154,9 +164,8 @@ impl SheetApp {
         let text = match self.session.active().map(|d| formula_locale::canonical(&text, ed.locale, &d.wb, ed.sheet, ed.cell)) {
             Some(Ok(text)) => text,
             Some(Err(error)) => {
-                self.message = Some(("GridCraft".into(), error.to_string()));
-                self.editor = Some(ed);
-                self.session.mode = gridcraft_engine::Mode::Edit;
+                self.message = Some(("GridCraft".into(), format!("There's a problem with this formula: {}", error.msg)));
+                self.keep_refused_draft(ed);
                 return false;
             }
             None => text,
@@ -168,8 +177,7 @@ impl SheetApp {
             if dv.error_style == gridcraft_engine::model::ErrorStyle::Stop {
                 let title = if dv.error_title.is_empty() { "GridCraft".to_string() } else { dv.error_title.clone() };
                 self.message = Some((title, msg));
-                self.editor = Some(ed);
-                self.session.mode = gridcraft_engine::Mode::Edit;
+                self.keep_refused_draft(ed);
                 return false;
             }
             self.toast = Some((msg, now_ms()));
@@ -179,8 +187,7 @@ impl SheetApp {
             && let Err(e) = self.session.run("sheet.activate", json!({"sheet": ed.sheet}))
         {
             self.message = Some(("GridCraft".into(), clean_error(&e)));
-            self.editor = Some(ed);
-            self.session.mode = gridcraft_engine::Mode::Edit;
+            self.keep_refused_draft(ed);
             return false;
         }
         // Committing nothing into an empty cell changes nothing: no undo step (#1855, Backspace has
@@ -208,8 +215,7 @@ impl SheetApp {
             }
             Err(e) => {
                 self.message = Some(("GridCraft".into(), clean_error(&e)));
-                self.editor = Some(ed);
-                self.session.mode = gridcraft_engine::Mode::Edit;
+                self.keep_refused_draft(ed);
                 false
             }
         }
