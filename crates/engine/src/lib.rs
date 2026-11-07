@@ -23,6 +23,7 @@ pub mod pivot_calc;
 pub mod recent;
 pub mod record;
 pub mod sample;
+pub mod script;
 pub mod selection;
 pub mod tables;
 pub mod windows;
@@ -398,6 +399,10 @@ pub struct Prefs {
     /// (at most [`recent::MAX`]; see [`recent`]). An application list, as in Excel.
     #[serde(deserialize_with = "recent::lenient")]
     pub recent_functions: Vec<String>,
+    /// Where Office Scripts live, when the user chose a folder (`script.folder`). `None` means
+    /// the app's own `<config>/scripts`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scripts_dir: Option<String>,
 }
 
 /// The selection statistics shown on the status bar, set with `view.statusBar`. Excel turns on
@@ -433,6 +438,7 @@ impl Default for Prefs {
             formula_bar: true,
             status_bar: StatusBarStats::default(),
             recent_functions: recent::defaults(),
+            scripts_dir: None,
         }
     }
 }
@@ -489,6 +495,15 @@ pub struct Session {
     pub hide_ruler: bool,
     /// Journal position where Automate › Record Actions started.
     pub recording: Option<usize>,
+    /// The Office Scripts runtime (`script.run`, `script.runtime`). `None` in a build with none
+    /// (wasm) or before a host installs one; the commands then say what is missing.
+    pub script_host: Option<Arc<dyn gridcraft_script::ScriptHost>>,
+    /// Where saved Office Scripts live. `None` disables the `script.*` storage commands.
+    pub scripts_dir: Option<String>,
+    /// The app's own scripts folder, for `script.folder {path: ""}` (reset). Host code sets it.
+    pub scripts_dir_default: Option<String>,
+    /// Journal position where `script.record` started recording into an Office Script.
+    pub script_recording: Option<usize>,
     /// The recording buffer while a recorder runs ([`Session::start_recording`]): top-level
     /// commands with the place they ran in, kept apart from the journal.
     pub recorder: Option<record::Recorder>,

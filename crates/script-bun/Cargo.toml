@@ -1,0 +1,13 @@
+[package]
+name = "gridcraft-script-bun"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft's Office Scripts runtime: finds Bun, runs a script and bridges ExcelScript calls to the engine"
+
+[lints]
+workspace = true
+
+[dependencies]
+gridcraft-script = { workspace = true }
+serde_json = { workspace = true }

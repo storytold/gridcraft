@@ -1,5 +1,87 @@
 # Decisions
 
+## Office Scripts run on Bun, which is not shipped
+
+Office Scripts are TypeScript, so GridCraft needs a TypeScript runtime that is not V8-in-Office.
+Bun (MIT) is the runtime: it executes TypeScript directly, starts in milliseconds, and its MIT
+licence is compatible with GridCraft's `MIT OR Apache-2.0`. It is treated like model weights,
+not like a dependency: runtimes ship in the allowlist sense, but Bun itself is user-downloaded or
+placed by hand, never committed, packaged or fetched without the user asking. Discovery is
+`$GRIDCRAFT_BUN`, then `PATH`, then `<model root>/runtimes/bun`. A missing Bun disables Office
+Scripts with the path it looked at and a download link; nothing else in the app changes. The web
+build has no child processes and says so.
+
+The alternative, embedding a JavaScript engine as a Rust dependency, was rejected: QuickJS-class
+engines do not run TypeScript without a second transpiler, and a V8 binding would be a large
+unreviewed native dependency for one feature.
+
+The shim that defines the `ExcelScript` globals is a small TypeScript string embedded in
+`gridcraft-script-bun` (`src/shim.rs`). It is runtime plumbing, not application logic: it makes no
+decisions about a workbook and forwards every operation to the engine. The repository's
+"Rust only" rule is about the application; the maintainer decision for #3527 allows this one
+shim and Bun.
+
+## The ExcelScript bridge is JSON lines over stdio
+
+The runtime is a child process. The parent sends one JSON object, `{"script": "...", "limits":
+{...}}`, on stdin; the shim then writes a request line for every workbook operation it needs
+(`{"id": 7, "method": "range.setValue", "params": {"range": "A1", "value": 42}}`) and blocks
+reading one reply line. The engine turns the request into a normal command (`cell.set`,
+`range.setValues`, `home.bold`, …) through `Session::execute`, so a script gets the same
+journaling, protection, arrays, spills and undo as the ribbon.
+
+Rejected alternatives: a file-based protocol (partial writes and cleanup), a socket (a second
+listen path to secure, and wasm has none), and calling back through the control channel (a
+loopback client inside the app, with its own authentication and timeout). Stdin/stdout is
+synchronous, needs no ports or tokens, and its ordering is exactly the call order.
+
+Bounds live on both sides: 100,000 characters of code, 10,000 calls, 30 s by default
+(`timeoutMs` up to 600 s), 1 MiB of console output, 8 MiB per line and 16 MiB of runtime output.
+The parent kills the child at the timeout; malformed lines and broken pipes are errors, not
+panics. A run is an undo group: failure or timeout rolls back to the workbook and history as they
+were before Run.
+
+## Office Scripts are not Office Add-ins
+
+Office Add-ins are web pages hosted by Office, using `Office.js` and `Excel.run`; they need a
+manifest, an origin and a task pane, and they do not exist outside Office. The issue asks for
+Office Scripts, whose model is a `main(workbook: ExcelScript.Workbook)` function over the
+ExcelScript object model. GridCraft implements that subset and deliberately does not implement
+`Excel.run`. Nothing here loads a web page or a foreign manifest.
+
+## The Office Scripts store is a local folder of .osts files
+
+GridCraft is offline-first: the script store is a folder on the local disk, by default
+`<config>/scripts`, and `script.folder` can point it at any local folder, such as a synced
+`OneDrive/Documents/Office Scripts` or a SharePoint-synced library. Excel requires scripts to be in
+OneDrive/SharePoint (or associated with a workbook); pointing both at the same synced folder is
+the interop path. No network call is made to list, save or run a script.
+
+The transfer format is Office Scripts' `.osts` JSON (version 0.3.0): `body` with CRLF,
+`description`, `noCodeMetadata`, `parameterInfo` and `apiInfo` as JSON strings, and unknown fields
+kept. GridCraft's own record metadata is stored beside the body; it is stripped from an exported
+file. Excel's script code is not part of the `.xlsx`: a workbook may carry an association and a
+script button, which are workbook-side metadata and are left untouched by the xlsx pass-through.
+GridCraft does not invent an in-workbook script format.
+
+## The coverage report is generated, not claimed
+
+`docs/office-scripts-coverage.md` comes from two checked-in lists: the ExcelScript names extracted
+mechanically from Microsoft's public reference index (names only) and the members GridCraft
+implements. `cargo xtask office-scripts-coverage` writes it, `--check` and a crate test fail when
+it is stale, and the xtask step runs in `cargo xtask ci`. Enum values are `not-applicable`; every
+other unimplemented member is `not-yet` and returns a typed `notSupported` error naming it. This
+keeps the claim honest as the object model grows.
+
+## Scripts live beside the settings, never in the workbook
+
+A script is `<config>/scripts/<id>.json`; an id is `[a-z0-9-]`, made from the name, so a name
+cannot address another file. Unlike the older `automate.*` scripts and macros, which are workbook
+content and therefore travel with a file, Office Scripts belong to the application: opening a
+workbook never brings code, so there is no trust prompt for them. Code is checked for balanced
+strings, comments and brackets before it is saved or run; the runtime reports real grammar errors
+with their line.
+
 ## Bound repeated XLSX column expansion (#1022)
 
 Limit each worksheet to 1,000,000 nondefault column assignments across all `<cols>` blocks.

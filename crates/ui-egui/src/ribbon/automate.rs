@@ -70,6 +70,34 @@ pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui);
+    // Office Scripts: TypeScript through the ExcelScript object model, with the recorder. The
+    // pane (not a menu command) owns the editor; Run uses its draft so an unsaved script runs.
+    let __k = big_button(ui, Icon::Script, "Office\nScripts", "Write and run TypeScript Office Scripts", false);
+    if __k.clicked() {
+        app.open_dialog("officeScripts", json!({}));
+    }
+    ui.vertical(|ui| {
+        let recording = app.office_scripts.recording;
+        let (label, tip) = if recording {
+            ("Stop", "Stop recording and save the steps as an Office Script")
+        } else {
+            ("Record", "Record your actions into an Office Script")
+        };
+        let r = small_button(ui, Icon::Record, label, tip, false);
+        control_keytip(app, ui, &r, "script.record");
+        if r.clicked() {
+            crate::office_scripts::toggle_recording(app);
+        }
+        let r = small_button(ui, Icon::Play, "Run Script", "Run the script in Office Scripts", false);
+        if r.clicked() {
+            if app.office_scripts.code.trim().is_empty() {
+                app.open_dialog("officeScripts", json!({}));
+            } else {
+                crate::office_scripts::run(app);
+            }
+        }
+    });
+    sep(ui);
     let __k = big_button(ui, Icon::Script, "Command\nPalette", "Search and run any command", false);
     control_keytip(app, ui, &__k, "commandSearch");
     if __k.clicked() {

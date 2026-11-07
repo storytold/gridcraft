@@ -1022,6 +1022,14 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Mostrar",
         "Collapse dialog" => "Recolher caixa de diálogo",
         "Expand dialog" => "Expandir caixa de diálogo",
+        "Office Scripts" => "Scripts do Office",
+        "Scripts" => "Scripts",
+        "Run Script" => "Executar script",
+        "Record Script" => "Gravar script",
+        "Bun is not installed" => "O Bun não está instalado",
+        "Download Bun…" => "Baixar o Bun…",
+        "Import Bun…" => "Importar o Bun…",
+        "Check Again" => "Verificar novamente",
         _ => return None,
     })
 }

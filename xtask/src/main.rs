@@ -10,6 +10,7 @@ mod i18n_report;
 mod ico;
 mod keytips;
 mod layers;
+mod office_scripts;
 #[cfg_attr(not(feature = "engine"), allow(dead_code))]
 mod parity;
 mod stats;
@@ -32,6 +33,8 @@ commands:
   wasm            cargo check --target wasm32-unknown-unknown for the L0-L5 crates (+ gridcraft-web), one call
   parity [--check] [--out PATH]
                   write docs/parity-checklist.md from gridcraft_engine::catalog (implemented vs missing ids)
+  office-scripts-coverage [--check]
+                  write or check docs/office-scripts-coverage.md from the ExcelScript names list
   keytips [--check]
                   regenerate crates/ui-egui/src/keytips/generated.rs from keytips.json (--check: fail if stale)
   version [set X.Y.Z[-pre]]
@@ -54,6 +57,7 @@ fn main() -> ExitCode {
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
         Some("parity") => parity::run(&root(), &rest),
         Some("keytips") => keytips::run(&root(), &rest),
+        Some("office-scripts-coverage") => office_scripts::run(&root(), &rest),
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
         Some("-h" | "--help" | "help") | None => {

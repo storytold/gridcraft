@@ -12,6 +12,8 @@ workspace = true
 
 [dependencies]
 gridcraft-engine = { workspace = true }
+gridcraft-script = { workspace = true }
+gridcraft-script-bun = { workspace = true }
 gridcraft-ui-egui = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "clipboard"] }
 egui = { workspace = true }

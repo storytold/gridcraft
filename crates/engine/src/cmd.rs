@@ -19,6 +19,7 @@ pub mod pivot;
 pub mod print;
 pub mod python;
 pub mod review;
+pub mod script;
 pub mod sheet;
 pub mod slicer;
 pub mod solver;
@@ -171,6 +172,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(data::specs());
         v.extend(formulas::specs());
         v.extend(review::specs());
+        v.extend(script::specs());
         v.extend(view::specs());
         v.extend(inspect::specs());
         v.extend(extra::specs());

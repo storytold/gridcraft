@@ -1055,6 +1055,7 @@ impl Dialog {
                 )
             }
             "journal" => Dialog::custom("journal", "Action Journal", json!({})),
+            "officeScripts" => return Some(crate::office_scripts::open(app)),
             "macros" => crate::macro_ui::open_dialog(app, &params),
             "recordMacro" => return crate::macro_ui::open_record(app, &params),
             "macroEditor" => return crate::macro_editor::open(app, &params),

@@ -556,6 +556,14 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Weergeven",
         "Collapse dialog" => "Dialoogvenster samenvouwen",
         "Expand dialog" => "Dialoogvenster uitvouwen",
+        "Office Scripts" => "Office-scripts",
+        "Scripts" => "Scripts",
+        "Run Script" => "Script uitvoeren",
+        "Record Script" => "Script opnemen",
+        "Bun is not installed" => "Bun is niet geïnstalleerd",
+        "Download Bun…" => "Bun downloaden…",
+        "Import Bun…" => "Bun importeren…",
+        "Check Again" => "Opnieuw controleren",
         _ => return None,
     })
 }
