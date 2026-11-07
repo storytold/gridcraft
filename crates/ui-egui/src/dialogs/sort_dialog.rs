@@ -21,6 +21,8 @@ const SHEET_COMMANDS: [&str; 8] =
 pub(super) struct State {
     /// The exact selection to restore when Sort closes, including ranges and the shift anchor.
     restore: Option<Selection>,
+    /// The workbook and worksheet Sort opened on: the only one it may sort or restore a selection on.
+    home: Option<(u64, usize)>,
     choices: Option<ChoicesCache>,
 }
 
@@ -41,6 +43,7 @@ type Choice = (String, String, bool);
 /// Opens Custom Sort on the range and header guess of `data.sort`, seeding "Sort by" from the active column (#1906).
 pub(super) fn open(app: &mut SheetApp, params: &Json) -> Dialog {
     let restore = app.session.active().map(|doc| doc.selection.clone());
+    let home = app.view_key();
     let (range, header) = gridcraft_engine::cmd::data::sort_context(&app.session, params).map_or((None, true), |(r, h)| (Some(r), h));
     let active_col = app.session.active().map(|doc| doc.selection.active.col);
     let first = match (range, active_col) {
@@ -56,6 +59,7 @@ pub(super) fn open(app: &mut SheetApp, params: &Json) -> Dialog {
     let mut d =
         Dialog::custom("sort", "Sort", json!({"header": header, "range": range.map(|r| r.a1()), "levels": [{"column": first, "order": "asc"}]}));
     d.sort.restore = restore;
+    d.sort.home = home;
     d
 }
 
@@ -64,9 +68,11 @@ fn body_of(r: RangeRef) -> RangeRef {
     RangeRef::new(CellRef::new(r.start.row.saturating_add(1), r.start.col), r.end)
 }
 
-/// Puts back the selection from before Sort opened (once). Runs whenever a dialog lets go of the grid.
+/// Puts back the selection from before Sort opened (once), on the worksheet it opened on.
+/// Runs whenever a dialog lets go of the grid.
 pub(super) fn restore_selection(app: &mut SheetApp, d: &mut Dialog) {
     if d.name == "sort"
+        && app.view_key() == d.sort.home
         && let Some(selection) = d.sort.restore.take()
         && let Some(doc) = app.session.active_mut()
     {
@@ -194,7 +200,16 @@ pub(super) fn sort(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
         if let Some(r) = d.values.get("range").and_then(Json::as_str) {
             p["range"] = json!(r);
         }
-        app.run_or_alert("data.sort", p);
+        // The range has no sheet name, so it must not be read against another worksheet.
+        let failure = if app.view_key() != d.sort.home {
+            Some("Return to the original worksheet to sort, or cancel.".to_string())
+        } else {
+            app.run("data.sort", p).err().map(|e| crate::clean_error(&e))
+        };
+        if let Some(message) = failure {
+            app.message = Some((d.title.clone(), message));
+            *confirm = false;
+        }
     }
     if !open {
         *confirm = true;
@@ -286,6 +301,7 @@ fn levels_table(ui: &mut egui::Ui, levels: &mut [Json], selected: &mut usize, ch
     }
 }
 
+/// A bordered icon-only button with a tooltip, greyed out when disabled.
 fn icon_button(ui: &mut egui::Ui, icon: Icon, color: egui::Color32, tip: &str, enabled: bool) -> egui::Response {
     let color = if enabled { color } else { Tokens::get(ui.ctx()).text_disabled };
     let response = ui.add_enabled_ui(enabled, |ui| crate::widgets::icon_button(ui, icon, color, tip, vec2(24.0, 24.0))).inner;
@@ -293,12 +309,14 @@ fn icon_button(ui: &mut egui::Ui, icon: Icon, color: egui::Color32, tip: &str, e
     response
 }
 
+/// A bordered button with a coloured icon and a text label, greyed out when disabled.
 fn text_icon_button(ui: &mut egui::Ui, icon: Icon, color: egui::Color32, label: &str, enabled: bool) -> egui::Response {
     let response = ui.add_enabled_ui(enabled, |ui| crate::widgets::small_button_accent(ui, icon, Some(color), label, label, false)).inner;
     button_border(ui, response.rect);
     response
 }
 
+/// Draws the visible border around a button's `rect`.
 fn button_border(ui: &egui::Ui, rect: egui::Rect) {
     let t = Tokens::get(ui.ctx());
     ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(1.0, t.separator), egui::StrokeKind::Inside);

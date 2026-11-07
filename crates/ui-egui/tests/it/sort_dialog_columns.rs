@@ -9,6 +9,7 @@ use serde_json::json;
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
+/// A harness around the app with `session` loaded.
 fn harness(session: Session) -> Harness {
     crate::support::harness(session, 4)
 }
@@ -22,10 +23,12 @@ fn sales() -> Session {
     s
 }
 
+/// The column of the first sort level in the open dialog.
 fn col(h: &Harness) -> String {
     h.state().dialog.as_ref().unwrap().values["levels"][0]["column"].as_str().unwrap_or("<missing>").to_string()
 }
 
+/// Sort by starts on the column the cursor is in.
 #[test]
 fn sort_dialog_seeds_the_active_column() {
     let mut h = harness(sales());
@@ -34,6 +37,7 @@ fn sort_dialog_seeds_the_active_column() {
     assert_eq!(col(&h), "B", "Sort by starts on the column the cursor is in, not A");
 }
 
+/// Add Level picks a column no other level uses.
 #[test]
 fn add_level_picks_a_column_no_level_uses_yet() {
     let mut h = harness(sales());
@@ -51,6 +55,7 @@ fn add_level_picks_a_column_no_level_uses_yet() {
     assert_ne!(cols[0], cols[1], "the second level defaults to a different column: {cols:?}");
 }
 
+/// Add Level stays inside the selected range.
 #[test]
 fn add_level_does_not_add_a_column_outside_the_selected_range() {
     let mut s = sales();
@@ -65,6 +70,7 @@ fn add_level_does_not_add_a_column_outside_the_selected_range() {
     assert_eq!(levels[0]["column"], "A");
 }
 
+/// Escape restores every selected area and the active cell.
 #[test]
 fn sort_dialog_restores_all_selected_areas_and_the_active_cell() {
     let mut s = sales();
@@ -85,6 +91,7 @@ fn sort_dialog_restores_all_selected_areas_and_the_active_cell() {
     assert_eq!(selection.active.a1(), "B2");
 }
 
+/// Cancel after toggling headers restores the original selection.
 #[test]
 fn sort_dialog_restores_initial_selection_after_header_toggle() {
     let mut h = harness(sales());
@@ -99,6 +106,7 @@ fn sort_dialog_restores_initial_selection_after_header_toggle() {
     assert_eq!(selection.active.a1(), "B2");
 }
 
+/// OK after toggling headers restores the original selection.
 #[test]
 fn sort_dialog_restores_initial_selection_after_confirming_with_header_toggle() {
     let mut h = harness(sales());
@@ -113,6 +121,7 @@ fn sort_dialog_restores_initial_selection_after_confirming_with_header_toggle() 
     assert_eq!(selection.active.a1(), "B2");
 }
 
+/// OK sorts the rows by the seeded column.
 #[test]
 fn sorting_by_the_seeded_column_orders_the_rows() {
     let mut h = harness(sales());
@@ -133,6 +142,7 @@ fn sorting_by_the_seeded_column_orders_the_rows() {
     assert_eq!(nums, vec![10, 20, 30], "sort ran on the seeded column B");
 }
 
+/// Worksheet-changing commands are refused while Sort is open.
 #[test]
 fn sheet_tabs_cannot_switch_while_sort_is_open() {
     let mut s = sales();
@@ -148,6 +158,29 @@ fn sheet_tabs_cannot_switch_while_sort_is_open() {
     assert!(h.state().dialog.is_some());
 }
 
+/// OK on another worksheet than the one Sort opened on refuses to sort and keeps the dialog open.
+#[test]
+fn sort_refuses_to_run_on_another_worksheet_and_stays_open() {
+    let mut s = sales();
+    s.execute("home.insertSheet", json!({"name": "Other"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("sort", json!({}));
+    h.run_steps(2);
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    h.run_steps(2);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(2);
+    let state = h.state();
+    assert_eq!(state.dialog.as_ref().map(|d| d.name.as_str()), Some("sort"), "the dialog stays open with its levels");
+    assert!(state.message.is_some(), "the refusal is explained");
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    let doc = h.state().session.active().unwrap();
+    let first = doc.wb.active().unwrap().value(gridcraft_engine::core::CellRef::new(1, 1)).as_f64();
+    assert_eq!(first, Some(30.0), "the original worksheet was not sorted");
+}
+
+/// Control cancel and dialog replacement restore the selection.
 #[test]
 fn sort_selection_is_restored_when_control_cancels_or_replaces_the_dialog() {
     let mut cancelled = harness(sales());
