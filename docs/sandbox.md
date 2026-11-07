@@ -26,7 +26,7 @@ other programs. The sandbox's job is that it can do none of these:
   process at all, so even those only replace itself.
 - **Network:** no sockets, no connections and no listeners.
 - **Other processes and the system:** no debugging or reading another process, no System V shared
-  memory, message queues or semaphores, no signals to another process, no typing into a terminal it inherited, no mounts or namespaces, no kernel
+  memory, message queues or semaphores, no POSIX message queues, no signals to another process, no typing into a terminal it inherited, no mounts or namespaces, no kernel
   modules, BPF, keyrings or performance counters. On Linux it also can't change another process's
   limits, priority or scheduling.
 
@@ -96,10 +96,11 @@ The launcher applies two layers, then runs the check.
       `socketpair`, `connect`, `bind`, `listen`, `accept` and `accept4`;
     - io_uring (it runs operations outside the filter);
     - `ptrace`, `process_vm_readv`/`writev`, `pidfd_getfd`, `pidfd_open`, `pidfd_send_signal`,
-      `kcmp`;
+      `kcmp`, `get_robust_list`, `migrate_pages`, `move_pages`;
     - System V shared memory, message queues and semaphores (`shmget`, `shmat`, `shmctl`, `shmdt`,
-      `msgget`, `msgsnd`, `msgrcv`, `msgctl`, `semget`, `semop`, `semctl`, `semtimedop`), since no path
-      rule covers them;
+      `msgget`, `msgsnd`, `msgrcv`, `msgctl`, `semget`, `semop`, `semctl`, `semtimedop`), and POSIX
+      message queues (`mq_open`, `mq_unlink`, `mq_timedsend`, `mq_timedreceive`, `mq_notify`,
+      `mq_getsetattr`), since no path rule covers them;
     - signals to any process but the program itself, whose process ID `exec` keeps (`kill`,
       `tkill`, `tgkill`, `rt_sigqueueinfo`, `rt_tgsigqueueinfo`), so this holds on a kernel without
       Landlock's signal scope;
@@ -110,7 +111,7 @@ The launcher applies two layers, then runs the check.
     - mounts, namespaces and file handles (`mount`, `umount2`, `pivot_root`, `chroot`,
       `unshare`, `setns`, `open_by_handle_at`, `name_to_handle_at`, the new mount API);
     - `bpf`, `perf_event_open`, `userfaultfd`, keyrings, kernel modules, `kexec`, swap,
-      `reboot`, and port I/O on x86_64.
+      `reboot`, `syslog`, and port I/O on x86_64.
   - **x32 calls (x86_64 only)** fail with `EPERM`. They report the x86_64 architecture value with
     other numbers, so the rules above wouldn't match them.
 
