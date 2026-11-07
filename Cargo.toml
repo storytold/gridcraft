@@ -15,6 +15,7 @@ repository = "https://github.com/storytold/gridcraft"
 gridcraft-core = { path = "crates/core" }
 gridcraft-numfmt = { path = "crates/numfmt" }
 gridcraft-formula = { path = "crates/formula" }
+gridcraft-dax = { path = "crates/dax" }
 gridcraft-functions = { path = "crates/functions" }
 gridcraft-model = { path = "crates/model" }
 gridcraft-calc = { path = "crates/calc" }
