@@ -268,252 +268,6 @@ fn record(s: &mut Session, p: &Json) -> Result<Json> {
     }))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Arc;
-
-    use gridcraft_core::{CellRef, Value};
-    use gridcraft_script::bridge::FailureKind;
-    use gridcraft_script::host::FakeHost;
-    use gridcraft_script::recorder::{self, JournalStep};
-    use gridcraft_script::{BridgeCall, RuntimeInfo, ScriptError, ScriptHost};
-
-    fn session(tag: &str) -> Session {
-        let mut s = Session::new();
-        let dir = std::env::temp_dir().join(format!("gridcraft-engine-script-{}-{tag}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        s.scripts_dir = Some(dir.display().to_string());
-        s.execute("file.new", json!({})).unwrap();
-        s
-    }
-
-    fn calls(s: &mut Session, calls: Vec<BridgeCall>) {
-        s.script_host = Some(Arc::new(FakeHost::new(calls)) as Arc<dyn ScriptHost>);
-    }
-
-    fn value(s: &Session, sheet: usize, a1: &str) -> Value {
-        let at = CellRef::parse(a1).unwrap();
-        s.doc().unwrap().wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default()
-    }
-
-    fn set_call(range: &str, value: Json) -> BridgeCall {
-        BridgeCall::new("Range.setValue", json!({"range": range, "value": value}))
-    }
-
-    const SCRIPT: &str = "function main(workbook: ExcelScript.Workbook) { workbook.getActiveWorksheet().getRange(\"A1\").setValue(42); }";
-
-    #[test]
-    fn a_script_call_lands_as_a_number_and_one_undo_step() {
-        let mut s = session("number");
-        calls(&mut s, vec![set_call("A1", json!(42))]);
-        let before = s.doc().unwrap().undo.len();
-        let result = s.execute("script.run", json!({"code": SCRIPT})).unwrap();
-        assert_eq!(result["calls"], 1);
-        assert_eq!(value(&s, 0, "A1"), Value::Number(42.0));
-        assert_eq!(s.doc().unwrap().undo.len(), before + 1, "the whole run is one step");
-        s.execute("edit.undo", json!({})).unwrap();
-        assert_eq!(value(&s, 0, "A1"), Value::Empty);
-    }
-
-    #[test]
-    fn a_failing_script_changes_nothing() {
-        let mut s = session("failing");
-        let host = FakeHost::failing_after(1, vec![set_call("A1", json!(1)), set_call("A2", json!(2))], ScriptError::runtime("boom"));
-        s.script_host = Some(Arc::new(host) as Arc<dyn ScriptHost>);
-        let error = s.execute("script.run", json!({"code": SCRIPT})).unwrap_err().to_string();
-        assert!(error.contains("boom"), "{error}");
-        assert_eq!(value(&s, 0, "A1"), Value::Empty);
-        assert_eq!(value(&s, 0, "A2"), Value::Empty);
-        assert_eq!(s.doc().unwrap().undo.len(), 0);
-    }
-
-    #[test]
-    fn a_timeout_rolls_the_run_back() {
-        let mut s = session("timeout");
-        let host = FakeHost::failing_after(1, vec![set_call("A1", json!(1)), set_call("A2", json!(2))], ScriptError::timeout(50));
-        s.script_host = Some(Arc::new(host) as Arc<dyn ScriptHost>);
-        let error = s.execute("script.run", json!({"code": SCRIPT, "timeoutMs": 50})).unwrap_err().to_string();
-        assert!(error.contains("did not finish"), "{error}");
-        assert_eq!(value(&s, 0, "A1"), Value::Empty);
-        assert_eq!(value(&s, 0, "A2"), Value::Empty);
-    }
-
-    #[test]
-    fn a_syntax_error_touches_nothing() {
-        let mut s = session("syntax");
-        calls(&mut s, vec![set_call("A1", json!(1))]);
-        let error = s.execute("script.run", json!({"code": "function main() { "})).unwrap_err().to_string();
-        assert!(error.contains("never closed"), "{error}");
-        assert_eq!(value(&s, 0, "A1"), Value::Empty);
-    }
-
-    #[test]
-    fn without_a_runtime_the_commands_say_what_to_do() {
-        let mut s = session("none");
-        let error = s.execute("script.run", json!({"code": SCRIPT})).unwrap_err().to_string();
-        assert!(error.contains("Bun"), "{error}");
-        let info = s.execute("script.runtime", json!({})).unwrap();
-        assert_eq!(info["found"], false);
-        assert!(info["message"].as_str().unwrap_or_default().contains("Bun"));
-    }
-
-    #[test]
-    fn the_runtime_query_reports_a_found_runtime() {
-        let mut s = session("found");
-        s.script_host = Some(
-            Arc::new(FakeHost::with_runtime(RuntimeInfo::found("C:/bun/bun.exe", "C:/bun/bun.exe", Some("1.2.3".into())))) as Arc<dyn ScriptHost>
-        );
-        let info = s.execute("script.runtime", json!({})).unwrap();
-        assert_eq!(info["found"], true);
-        assert_eq!(info["version"], "1.2.3");
-    }
-
-    #[test]
-    fn scripts_are_saved_listed_run_and_deleted() {
-        let mut s = session("store");
-        let saved = s.execute("script.save", json!({"name": "Setter", "code": SCRIPT})).unwrap();
-        assert_eq!(saved["id"], "setter");
-        let list = s.execute("script.list", json!({})).unwrap();
-        assert_eq!(list.as_array().map(Vec::len), Some(1));
-        calls(&mut s, vec![set_call("A1", json!(42))]);
-        let ran = s.execute("script.run", json!({"id": "setter"})).unwrap();
-        assert_eq!(ran["name"], "Setter");
-        assert_eq!(value(&s, 0, "A1"), Value::Number(42.0));
-        s.execute("script.delete", json!({"id": "setter"})).unwrap();
-        assert_eq!(s.execute("script.list", json!({})).unwrap().as_array().map(Vec::len), Some(0));
-    }
-
-    #[test]
-    fn a_script_id_cannot_escape_the_scripts_folder() {
-        let mut s = session("traversal");
-        for id in ["../x", "..", "a/b"] {
-            assert!(s.execute("script.delete", json!({"id": id})).is_err(), "{id}");
-            assert!(s.execute("script.run", json!({"id": id})).is_err(), "{id}");
-        }
-    }
-
-    #[test]
-    fn the_recorder_writes_a_script_that_replays_through_the_bridge() {
-        let mut s = session("record");
-        let start = s.journal.len();
-        s.execute("script.record", json!({"on": true})).unwrap();
-        s.execute("cell.set", json!({"cell": "A1", "input": 1})).unwrap();
-        s.execute("range.setValues", json!({"range": "A2:B2", "values": [[2, "x"]]})).unwrap();
-        s.execute("home.bold", json!({"range": "A1", "on": true})).unwrap();
-        s.execute("home.italic", json!({"range": "A1"})).unwrap();
-        s.execute("home.insertSheet", json!({"name": "Data"})).unwrap();
-        s.execute("cell.set", json!({"sheet": 1, "cell": "A1", "input": 5})).unwrap();
-        let stopped = s.execute("script.record", json!({"on": false})).unwrap();
-        let code = stopped["code"].as_str().unwrap_or_default().to_string();
-        assert!(code.contains("getRange(\"A1\").setValue(1);"), "{code}");
-        assert!(code.contains("getRange(\"A2:B2\").setValues([[2, \"x\"]]);"), "{code}");
-        assert!(code.contains("getRange(\"A1\").getFormat().getFont().setBold(true);"), "{code}");
-        assert!(code.contains("// Skipped: home.italic (not supported by the Office Scripts bridge)."), "{code}");
-        assert!(code.contains("workbook.getWorksheet(\"Data\").getRange(\"A1\").setValue(5);"), "{code}");
-        assert_eq!(stopped["steps"], 5);
-        assert_eq!(stopped["skipped"][0]["id"], "home.italic");
-
-        // The same journal slice, through the same recorder, makes the same calls the fake
-        // bridge then runs: the recorded script reproduces the recorded work.
-        let steps: Vec<JournalStep> = s.journal[start..]
-            .iter()
-            .filter(|(id, _)| id != "script.record")
-            .map(|(id, params)| JournalStep::new(id.clone(), crate::script::resolve_recorded_sheet(&s, params)))
-            .collect();
-        let rec = recorder::record(&steps);
-        assert_eq!(rec.code, code);
-
-        let mut replay = session("record-replay");
-        replay.script_host = Some(Arc::new(FakeHost::new(rec.calls)) as Arc<dyn ScriptHost>);
-        replay.execute("script.run", json!({"code": code})).unwrap();
-        assert_eq!(value(&replay, 0, "A1"), Value::Number(1.0));
-        assert_eq!(value(&replay, 0, "A2"), Value::Number(2.0));
-        assert_eq!(value(&replay, 0, "B2"), Value::Text("x".into()));
-        assert_eq!(value(&replay, 1, "A1"), Value::Number(5.0));
-    }
-
-    #[test]
-    fn recording_stops_without_a_recording() {
-        let mut s = session("no-record");
-        let stopped = s.execute("script.record", json!({"on": false})).unwrap();
-        assert_eq!(stopped["recording"], false);
-        assert!(stopped.get("id").is_none());
-    }
-
-    #[test]
-    fn a_failed_recording_save_leaves_the_recording_off() {
-        let mut s = Session::new();
-        s.scripts_dir = None;
-        assert!(s.execute("script.record", json!({"on": true})).is_ok());
-        let error = s.execute("script.record", json!({"on": false})).unwrap_err().to_string();
-        assert!(error.contains("scripts folder"), "{error}");
-        assert!(s.script_recording.is_none());
-    }
-
-    #[test]
-    fn an_osts_file_round_trips_through_import_and_export() {
-        let mut s = session("osts");
-        let dir = std::env::temp_dir().join(format!(
-            "gridcraft-osts-{}-{}",
-            std::process::id(),
-            web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let imported = dir.join("Excel Script.osts");
-        let body = "function main(workbook: ExcelScript.Workbook) {\r\n  workbook.getActiveWorksheet().getRange(\"A1\").setValue(7);\r\n}\r\n";
-        std::fs::write(
-            &imported,
-            serde_json::json!({
-                "version": "0.3.0",
-                "body": body,
-                "description": "From Excel",
-                "noCodeMetadata": "",
-                "parameterInfo": "{\"version\":1}",
-                "apiInfo": "{\"variant\":\"synchronous\",\"variantVersion\":2}",
-                "futureField": {"kept": true}
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let record = s.execute("script.import", json!({"path": imported.display().to_string()})).unwrap();
-        let id = record["id"].as_str().unwrap().to_string();
-        assert_eq!(record["name"], "From Excel");
-        let exported = dir.join("out.osts");
-        s.execute("script.export", json!({"id": id, "path": exported.display().to_string()})).unwrap();
-        let text = std::fs::read_to_string(&exported).unwrap();
-        assert!(text.contains("futureField"), "{text}");
-        assert!(text.contains("\\r\\n"), "{text}");
-        assert!(text.contains("synchronous"), "{text}");
-        let policy = s.execute("script.osts", json!({"id": id})).unwrap();
-        assert_eq!(policy["honoured"], true);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn the_scripts_folder_is_set_validated_and_reset() {
-        let mut s = session("folder");
-        let default = s.scripts_dir.clone();
-        s.scripts_dir_default = default.clone();
-        let dir = std::env::temp_dir().join(format!("gridcraft-scripts-folder-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let set = s.execute("script.folder", json!({"path": dir.display().to_string()})).unwrap();
-        assert_eq!(set["custom"], true);
-        assert_eq!(s.scripts_dir.as_deref(), Some(dir.display().to_string().as_str()));
-        assert!(s.execute("script.folder", json!({"path": "relative/folder"})).is_err());
-        let reset = s.execute("script.folder", json!({"path": ""})).unwrap();
-        assert_eq!(reset["custom"], false);
-        assert_eq!(s.scripts_dir, default);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn failures_are_kind_tagged_for_the_pane() {
-        let error = ScriptError::protocol("bad line");
-        assert_eq!(error.kind, FailureKind::Protocol);
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Bridge support queries. They are commands like every other query, so the CLI, the control
 // channel and MCP can inspect the same facts the Office Scripts object model reads.
@@ -879,4 +633,251 @@ fn export(s: &mut Session, p: &Json) -> Result<Json> {
     }
     std::fs::write(path, &text).map_err(|e| bad("script.export", format!("{e}")))?;
     Ok(json!({"path": path, "bytes": text.len()}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use gridcraft_core::{CellRef, Value};
+    use gridcraft_script::bridge::FailureKind;
+    use gridcraft_script::host::FakeHost;
+    use gridcraft_script::recorder::{self, JournalStep};
+    use gridcraft_script::{BridgeCall, RuntimeInfo, ScriptError, ScriptHost};
+
+    fn session(tag: &str) -> Session {
+        let mut s = Session::new();
+        let dir = std::env::temp_dir().join(format!("gridcraft-engine-script-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        s.scripts_dir = Some(dir.display().to_string());
+        s.execute("file.new", json!({})).unwrap();
+        s
+    }
+
+    fn calls(s: &mut Session, calls: Vec<BridgeCall>) {
+        s.script_host = Some(Arc::new(FakeHost::new(calls)) as Arc<dyn ScriptHost>);
+    }
+
+    fn value(s: &Session, sheet: usize, a1: &str) -> Value {
+        let at = CellRef::parse(a1).unwrap();
+        s.doc().unwrap().wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default()
+    }
+
+    fn set_call(range: &str, value: Json) -> BridgeCall {
+        BridgeCall::new("Range.setValue", json!({"range": range, "value": value}))
+    }
+
+    const SCRIPT: &str = "function main(workbook: ExcelScript.Workbook) { workbook.getActiveWorksheet().getRange(\"A1\").setValue(42); }";
+
+    #[test]
+    fn a_script_call_lands_as_a_number_and_one_undo_step() {
+        let mut s = session("number");
+        calls(&mut s, vec![set_call("A1", json!(42))]);
+        let before = s.doc().unwrap().undo.len();
+        let result = s.execute("script.run", json!({"code": SCRIPT})).unwrap();
+        assert_eq!(result["calls"], 1);
+        assert_eq!(value(&s, 0, "A1"), Value::Number(42.0));
+        assert_eq!(s.doc().unwrap().undo.len(), before + 1, "the whole run is one step");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(value(&s, 0, "A1"), Value::Empty);
+    }
+
+    #[test]
+    fn a_failing_script_changes_nothing() {
+        let mut s = session("failing");
+        let host = FakeHost::failing_after(1, vec![set_call("A1", json!(1)), set_call("A2", json!(2))], ScriptError::runtime("boom"));
+        s.script_host = Some(Arc::new(host) as Arc<dyn ScriptHost>);
+        let error = s.execute("script.run", json!({"code": SCRIPT})).unwrap_err().to_string();
+        assert!(error.contains("boom"), "{error}");
+        assert_eq!(value(&s, 0, "A1"), Value::Empty);
+        assert_eq!(value(&s, 0, "A2"), Value::Empty);
+        assert_eq!(s.doc().unwrap().undo.len(), 0);
+    }
+
+    #[test]
+    fn a_timeout_rolls_the_run_back() {
+        let mut s = session("timeout");
+        let host = FakeHost::failing_after(1, vec![set_call("A1", json!(1)), set_call("A2", json!(2))], ScriptError::timeout(50));
+        s.script_host = Some(Arc::new(host) as Arc<dyn ScriptHost>);
+        let error = s.execute("script.run", json!({"code": SCRIPT, "timeoutMs": 50})).unwrap_err().to_string();
+        assert!(error.contains("did not finish"), "{error}");
+        assert_eq!(value(&s, 0, "A1"), Value::Empty);
+        assert_eq!(value(&s, 0, "A2"), Value::Empty);
+    }
+
+    #[test]
+    fn a_syntax_error_touches_nothing() {
+        let mut s = session("syntax");
+        calls(&mut s, vec![set_call("A1", json!(1))]);
+        let error = s.execute("script.run", json!({"code": "function main() { "})).unwrap_err().to_string();
+        assert!(error.contains("never closed"), "{error}");
+        assert_eq!(value(&s, 0, "A1"), Value::Empty);
+    }
+
+    #[test]
+    fn without_a_runtime_the_commands_say_what_to_do() {
+        let mut s = session("none");
+        let error = s.execute("script.run", json!({"code": SCRIPT})).unwrap_err().to_string();
+        assert!(error.contains("Bun"), "{error}");
+        let info = s.execute("script.runtime", json!({})).unwrap();
+        assert_eq!(info["found"], false);
+        assert!(info["message"].as_str().unwrap_or_default().contains("Bun"));
+    }
+
+    #[test]
+    fn the_runtime_query_reports_a_found_runtime() {
+        let mut s = session("found");
+        s.script_host = Some(
+            Arc::new(FakeHost::with_runtime(RuntimeInfo::found("C:/bun/bun.exe", "C:/bun/bun.exe", Some("1.2.3".into())))) as Arc<dyn ScriptHost>
+        );
+        let info = s.execute("script.runtime", json!({})).unwrap();
+        assert_eq!(info["found"], true);
+        assert_eq!(info["version"], "1.2.3");
+    }
+
+    #[test]
+    fn scripts_are_saved_listed_run_and_deleted() {
+        let mut s = session("store");
+        let saved = s.execute("script.save", json!({"name": "Setter", "code": SCRIPT})).unwrap();
+        assert_eq!(saved["id"], "setter");
+        let list = s.execute("script.list", json!({})).unwrap();
+        assert_eq!(list.as_array().map(Vec::len), Some(1));
+        calls(&mut s, vec![set_call("A1", json!(42))]);
+        let ran = s.execute("script.run", json!({"id": "setter"})).unwrap();
+        assert_eq!(ran["name"], "Setter");
+        assert_eq!(value(&s, 0, "A1"), Value::Number(42.0));
+        s.execute("script.delete", json!({"id": "setter"})).unwrap();
+        assert_eq!(s.execute("script.list", json!({})).unwrap().as_array().map(Vec::len), Some(0));
+    }
+
+    #[test]
+    fn a_script_id_cannot_escape_the_scripts_folder() {
+        let mut s = session("traversal");
+        for id in ["../x", "..", "a/b"] {
+            assert!(s.execute("script.delete", json!({"id": id})).is_err(), "{id}");
+            assert!(s.execute("script.run", json!({"id": id})).is_err(), "{id}");
+        }
+    }
+
+    #[test]
+    fn the_recorder_writes_a_script_that_replays_through_the_bridge() {
+        let mut s = session("record");
+        let start = s.journal.len();
+        s.execute("script.record", json!({"on": true})).unwrap();
+        s.execute("cell.set", json!({"cell": "A1", "input": 1})).unwrap();
+        s.execute("range.setValues", json!({"range": "A2:B2", "values": [[2, "x"]]})).unwrap();
+        s.execute("home.bold", json!({"range": "A1", "on": true})).unwrap();
+        s.execute("home.italic", json!({"range": "A1"})).unwrap();
+        s.execute("home.insertSheet", json!({"name": "Data"})).unwrap();
+        s.execute("cell.set", json!({"sheet": 1, "cell": "A1", "input": 5})).unwrap();
+        let stopped = s.execute("script.record", json!({"on": false})).unwrap();
+        let code = stopped["code"].as_str().unwrap_or_default().to_string();
+        assert!(code.contains("getRange(\"A1\").setValue(1);"), "{code}");
+        assert!(code.contains("getRange(\"A2:B2\").setValues([[2, \"x\"]]);"), "{code}");
+        assert!(code.contains("getRange(\"A1\").getFormat().getFont().setBold(true);"), "{code}");
+        assert!(code.contains("// Skipped: home.italic (not supported by the Office Scripts bridge)."), "{code}");
+        assert!(code.contains("workbook.getWorksheet(\"Data\").getRange(\"A1\").setValue(5);"), "{code}");
+        assert_eq!(stopped["steps"], 5);
+        assert_eq!(stopped["skipped"][0]["id"], "home.italic");
+
+        // The same journal slice, through the same recorder, makes the same calls the fake
+        // bridge then runs: the recorded script reproduces the recorded work.
+        let steps: Vec<JournalStep> = s.journal[start..]
+            .iter()
+            .filter(|(id, _)| id != "script.record")
+            .map(|(id, params)| JournalStep::new(id.clone(), crate::script::resolve_recorded_sheet(&s, params)))
+            .collect();
+        let rec = recorder::record(&steps);
+        assert_eq!(rec.code, code);
+
+        let mut replay = session("record-replay");
+        replay.script_host = Some(Arc::new(FakeHost::new(rec.calls)) as Arc<dyn ScriptHost>);
+        replay.execute("script.run", json!({"code": code})).unwrap();
+        assert_eq!(value(&replay, 0, "A1"), Value::Number(1.0));
+        assert_eq!(value(&replay, 0, "A2"), Value::Number(2.0));
+        assert_eq!(value(&replay, 0, "B2"), Value::Text("x".into()));
+        assert_eq!(value(&replay, 1, "A1"), Value::Number(5.0));
+    }
+
+    #[test]
+    fn recording_stops_without_a_recording() {
+        let mut s = session("no-record");
+        let stopped = s.execute("script.record", json!({"on": false})).unwrap();
+        assert_eq!(stopped["recording"], false);
+        assert!(stopped.get("id").is_none());
+    }
+
+    #[test]
+    fn a_failed_recording_save_leaves_the_recording_off() {
+        let mut s = Session::new();
+        s.scripts_dir = None;
+        assert!(s.execute("script.record", json!({"on": true})).is_ok());
+        let error = s.execute("script.record", json!({"on": false})).unwrap_err().to_string();
+        assert!(error.contains("scripts folder"), "{error}");
+        assert!(s.script_recording.is_none());
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn an_osts_file_round_trips_through_import_and_export() {
+        let mut s = session("osts");
+        let dir = std::env::temp_dir().join(format!(
+            "gridcraft-osts-{}-{}",
+            std::process::id(),
+            web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let imported = dir.join("Excel Script.osts");
+        let body = "function main(workbook: ExcelScript.Workbook) {\r\n  workbook.getActiveWorksheet().getRange(\"A1\").setValue(7);\r\n}\r\n";
+        std::fs::write(
+            &imported,
+            serde_json::json!({
+                "version": "0.3.0",
+                "body": body,
+                "description": "From Excel",
+                "noCodeMetadata": "",
+                "parameterInfo": "{\"version\":1}",
+                "apiInfo": "{\"variant\":\"synchronous\",\"variantVersion\":2}",
+                "futureField": {"kept": true}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let record = s.execute("script.import", json!({"path": imported.display().to_string()})).unwrap();
+        let id = record["id"].as_str().unwrap().to_string();
+        assert_eq!(record["name"], "From Excel");
+        let exported = dir.join("out.osts");
+        s.execute("script.export", json!({"id": id, "path": exported.display().to_string()})).unwrap();
+        let text = std::fs::read_to_string(&exported).unwrap();
+        assert!(text.contains("futureField"), "{text}");
+        assert!(text.contains("\\r\\n"), "{text}");
+        assert!(text.contains("synchronous"), "{text}");
+        let policy = s.execute("script.osts", json!({"id": id})).unwrap();
+        assert_eq!(policy["honoured"], true);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_scripts_folder_is_set_validated_and_reset() {
+        let mut s = session("folder");
+        let default = s.scripts_dir.clone();
+        s.scripts_dir_default = default.clone();
+        let dir = std::env::temp_dir().join(format!("gridcraft-scripts-folder-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let set = s.execute("script.folder", json!({"path": dir.display().to_string()})).unwrap();
+        assert_eq!(set["custom"], true);
+        assert_eq!(s.scripts_dir.as_deref(), Some(dir.display().to_string().as_str()));
+        assert!(s.execute("script.folder", json!({"path": "relative/folder"})).is_err());
+        let reset = s.execute("script.folder", json!({"path": ""})).unwrap();
+        assert_eq!(reset["custom"], false);
+        assert_eq!(s.scripts_dir, default);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn failures_are_kind_tagged_for_the_pane() {
+        let error = ScriptError::protocol("bad line");
+        assert_eq!(error.kind, FailureKind::Protocol);
+    }
 }

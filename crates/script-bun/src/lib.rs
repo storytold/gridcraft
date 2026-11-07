@@ -276,20 +276,15 @@ fn read_stderr(stderr: std::process::ChildStderr) -> std::thread::JoinHandle<Str
 /// `finished` when it is done so the watchdog leaves without a kill.
 fn watchdog(child: Arc<Mutex<Child>>, finished: Arc<(Mutex<bool>, Condvar)>, timeout: Duration) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        if let Ok(done) = finished.0.lock() {
-            match finished.1.wait_timeout_while(done, timeout, |done| !*done) {
-                Ok((guard, timed_out)) => {
-                    let still_free = *guard;
-                    drop(guard);
-                    if timed_out.timed_out()
-                        && still_free
-                        && let Ok(mut child) = child.lock()
-                    {
-                        let _ = child.kill();
-                    }
-                }
-                Err(_) => {}
-            }
+        let Ok(done) = finished.0.lock() else { return };
+        let Ok((guard, timed_out)) = finished.1.wait_timeout_while(done, timeout, |done| !*done) else { return };
+        let still_free = *guard;
+        drop(guard);
+        if timed_out.timed_out()
+            && still_free
+            && let Ok(mut child) = child.lock()
+        {
+            let _ = child.kill();
         }
     })
 }

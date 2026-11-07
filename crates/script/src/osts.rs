@@ -369,9 +369,9 @@ mod tests {
     #[test]
     fn the_api_variant_is_reported() {
         let parsed = OstsFile::parse(&file(json!({}))).unwrap();
-        assert_eq!(parsed.api().1, true);
+        assert!(parsed.api().1);
         let async_file = file(json!({"apiInfo": "{\"variant\":\"asynchronous\"}"}));
-        assert_eq!(OstsFile::parse(&async_file).unwrap().api().1, false);
+        assert!(!OstsFile::parse(&async_file).unwrap().api().1);
     }
 
     #[test]

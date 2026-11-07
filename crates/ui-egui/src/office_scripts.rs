@@ -352,15 +352,10 @@ fn save(app: &mut SheetApp) {
 
 /// The line number in a `line N` (or `script.ts:N:M`) message.
 fn error_line(message: &str) -> Option<usize> {
-    let rest = message.split_once("line ").map(|(_, r)| r).or_else(|| {
-        let mut parts = message.split(':');
-        while let Some(part) = parts.next() {
-            if part.chars().all(|c| c.is_ascii_digit()) && !part.is_empty() {
-                return Some(part);
-            }
-        }
-        None
-    })?;
+    let rest = message
+        .split_once("line ")
+        .map(|(_, r)| r)
+        .or_else(|| message.split(':').find(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit())))?;
     rest.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
 }
 

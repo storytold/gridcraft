@@ -23,6 +23,9 @@ use crate::{Session, cmd};
 const MAX_CELLS: u64 = 1_000_000;
 
 /// Runs one bridge call as a command on the active workbook.
+// The dispatch is one large table: each arm is a thin adapter, which is clearer than a dozen
+// helper traits for this interface.
+#[allow(clippy::cognitive_complexity)]
 pub(crate) fn execute_call(s: &mut Session, method: &str, params: &Json) -> Result<Json, BridgeError> {
     match method {
         // ---------------------------------------------------------------- Workbook
@@ -262,10 +265,7 @@ pub(crate) fn execute_call(s: &mut Session, method: &str, params: &Json) -> Resu
             let (Some(r0), Some(c0), Some(r1), Some(c1)) = (r0, c0, r1, c1) else {
                 return Err(BridgeError::invalid_argument("getOffsetRange is outside the worksheet"));
             };
-            let moved = RangeRef::new(
-                CellRef::new(u32::try_from(r0).unwrap_or(0), u32::try_from(c0).unwrap_or(0)),
-                CellRef::new(u32::try_from(r1).unwrap_or(0), u32::try_from(c1).unwrap_or(0)),
-            );
+            let moved = RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1));
             if moved.end.row >= gridcraft_core::MAX_ROWS || moved.end.col >= gridcraft_core::MAX_COLS {
                 return Err(BridgeError::invalid_argument("getOffsetRange is outside the worksheet"));
             }
