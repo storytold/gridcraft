@@ -159,6 +159,26 @@ fn clustered_hairline_series_keep_a_visible_strip() {
 }
 
 #[test]
+fn stacked_hairline_bars_do_not_fill_the_gap_between_disjoint_spans() {
+    // Series 1 alternates +10 (stacked on the 100) and -10 (below zero): its two spans in one
+    // pixel column are 100..110 and -10..0, and the 100 units between them must stay empty.
+    let mut c = chart(ChartKind::ColumnStacked);
+    c.data_labels = false;
+    c.legend = LegendPos::None;
+    let mut d = data_of(2, 20_000);
+    for v in d.series[0].values.iter_mut() {
+        *v = Some(100.0);
+    }
+    for (i, v) in d.series[1].values.iter_mut().enumerate() {
+        *v = Some(if i % 2 == 0 { 10.0 } else { -10.0 });
+    }
+    let prims = render(&c, &d, 400.0, 300.0, &ApproxMeasure);
+    let rects = series_rects(&prims, d.series[1].color);
+    let tallest = rects.iter().map(|r| r.3).fold(0.0f32, f32::max);
+    assert!(!rects.is_empty() && tallest < 60.0, "tallest merged bar is {tallest} px");
+}
+
+#[test]
 fn clean_data_is_rendered_without_a_copy() {
     let d = data_of(3, 50);
     assert!(matches!(sanitized(&d), Cow::Borrowed(_)));
@@ -181,6 +201,13 @@ fn clean_data_is_rendered_without_a_copy() {
     let got = sanitized(&many);
     assert_eq!(got.series.len(), 255);
     assert_eq!(*got, sanitize(&many));
+
+    // Too many category levels take the copying path too.
+    let mut levels = data_of(3, 50);
+    levels.category_levels = vec![vec!["a".into()]; 5];
+    let got = sanitized(&levels);
+    assert!(matches!(got, Cow::Owned(_)));
+    assert_eq!(got.category_levels.len(), 3);
 }
 
 #[test]

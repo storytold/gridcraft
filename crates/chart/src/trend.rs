@@ -294,7 +294,11 @@ pub(crate) fn moving_average(pts: &[(f64, f64)], period: u32) -> Vec<(f64, f64)>
     (p - 1..n)
         .filter_map(|i| {
             let s = i + 1 - p;
-            let sum = tail.get(s)? + if s.is_multiple_of(p) { 0.0 } else { *head.get(i)? };
+            let mut sum = tail.get(s)? + if s.is_multiple_of(p) { 0.0 } else { *head.get(i)? };
+            if !sum.is_finite() {
+                // A block sum overflowed although the window itself may not: sum it directly.
+                sum = pts.get(s..=i)?.iter().map(|q| q.1).sum();
+            }
             Some((pts.get(i)?.0, sum / p as f64))
         })
         .collect()
@@ -388,6 +392,15 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn moving_average_recomputes_a_window_whose_block_sums_overflow() {
+        let pts: Vec<(f64, f64)> = [0.0, -1e308, 1e308, 1e308, -1e308].iter().enumerate().map(|(i, y)| (i as f64, *y)).collect();
+        let fast = moving_average(&pts, 4);
+        let slow = moving_average_naive(&pts, 4);
+        assert_eq!(fast, slow);
+        assert!(fast.iter().all(|q| q.1.is_finite()));
     }
 
     /// The trendline fit as it was written with a `Vec` of powers per data point.

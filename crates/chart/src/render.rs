@@ -141,6 +141,8 @@ fn needs_sanitizing(d: &ChartData) -> bool {
     let mut trendlines = 0usize;
     d.palette.len() > MAX_POINTS
         || long(d.categories.len())
+        || d.category_levels.len() > 3
+        || d.category_levels.iter().any(|l| l.len() > MAX_POINTS)
         || d.series.len() > MAX_SERIES
         || d.series.iter().any(|s| {
             trendlines += s.trendlines.len();

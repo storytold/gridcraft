@@ -67,6 +67,10 @@ impl BarRun {
     fn new(pos: f32, lo: f32, hi: f32) -> Self {
         BarRun { bucket: pos.floor(), a0: pos, a1: pos, lo, hi, merged: false }
     }
+    /// Whether `lo..hi` touches the run's value span; a disjoint bar would be joined by a filled gap.
+    fn touches(&self, lo: f32, hi: f32) -> bool {
+        lo <= self.hi && hi >= self.lo
+    }
     fn add(&mut self, pos: f32, lo: f32, hi: f32) {
         self.merged = true;
         self.a0 = self.a0.min(pos);
@@ -135,7 +139,7 @@ impl BarSink {
             return;
         }
         match &mut self.run {
-            Some(m) if m.bucket == pos.floor() => m.add(pos, lo, lo + len),
+            Some(m) if m.bucket == pos.floor() && m.touches(lo, lo + len) => m.add(pos, lo, lo + len),
             run => {
                 if let Some(m) = run.replace(BarRun::new(pos, lo, lo + len)) {
                     m.draw(ctx, self.bw, self.horizontal, self.color, band);
