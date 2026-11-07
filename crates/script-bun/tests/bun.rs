@@ -20,6 +20,9 @@ impl BridgeExecutor for Calls {
             // The engine answers these with values, so the shim's readers have something to read.
             "Worksheet.getName" => Json::String("Data".into()),
             "RangeFormat.getRangeBorder" => json!({"kind": "border", "sheet": "Data", "range": "A1", "side": "edgetop"}),
+            // Far past the shim's 64 KiB read, in three-byte characters: the read boundary falls
+            // inside one of them.
+            "Range.getValues" => json!([["€".repeat(30_000)]]),
             _ => Json::Null,
         })
     }
@@ -141,4 +144,20 @@ function main() {
     let report = host.run(script, &Limits::default(), &mut calls).expect("the script runs");
     assert_eq!(report.output, vec!["require,process,Bun,fetch".to_string()]);
     assert!(calls.calls.is_empty(), "no workbook call is made");
+}
+
+#[test]
+#[ignore = "needs Bun; set GRIDCRAFT_BUN"]
+fn a_reply_longer_than_a_read_keeps_its_multibyte_characters() {
+    let Some(host) = host() else { return };
+    let script = r#"
+function main(workbook: ExcelScript.Workbook) {
+  const values = workbook.getWorksheet("Data").getRange("A1:A30000").getValues();
+  const text = String(values[0][0]);
+  console.log("len", text.length, "replacement", text.includes("\uFFFD"));
+}
+"#;
+    let mut calls = Calls { calls: Vec::new() };
+    let report = host.run(script, &Limits::default(), &mut calls).expect("the script runs");
+    assert_eq!(report.output, vec!["len 30000 replacement false".to_string()]);
 }

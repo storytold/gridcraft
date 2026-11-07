@@ -37,7 +37,8 @@ function readLine(): string | null {
       return null;
     }
     if (read <= 0) return null;
-    input += decoder.decode(chunk.subarray(0, read));
+    // `stream: true` keeps a multibyte character split across a read boundary intact.
+    input += decoder.decode(chunk.subarray(0, read), { stream: true });
   }
 }
 
