@@ -233,11 +233,12 @@ impl CellStore {
             bytes = bytes.saturating_add(size_of::<Band>());
             for (row, cols) in &band.rows {
                 bytes = bytes.saturating_add(size_of::<u32>() + 3 * size_of::<usize>());
+                let next_row = next.and_then(|b| b.rows.get(row));
                 for (col, cell) in cols {
                     // Cells and BTreeMap nodes are duplicated with a cloned band even when
                     // their formula/value Arcs are still shared with the next snapshot.
                     bytes = bytes.saturating_add(size_of::<u32>() + size_of::<Cell>() + 3 * size_of::<usize>());
-                    let next_cell = next.and_then(|b| b.rows.get(row)).and_then(|r| r.get(col));
+                    let next_cell = next_row.and_then(|r| r.get(col));
                     if let Some(formula) = &cell.formula
                         && !next_cell.and_then(|c| c.formula.as_ref()).is_some_and(|f| Arc::ptr_eq(f, formula))
                     {

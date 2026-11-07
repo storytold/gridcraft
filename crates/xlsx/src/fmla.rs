@@ -47,6 +47,7 @@ fn prefix_params(e: Expr, scope: &[String]) -> Expr {
         Expr::Name(n) if scope.iter().any(|s| s.eq_ignore_ascii_case(&n)) => Expr::Name(format!("{PARAM_PREFIX}{n}")),
         Expr::Unary(op, x) => Expr::Unary(op, sub(x, scope)),
         Expr::Paren(x) => Expr::Paren(sub(x, scope)),
+        Expr::Binary(op, a, b) if !matches!(*a, Expr::Binary(..)) => Expr::Binary(op, sub(a, scope), sub(b, scope)),
         Expr::Binary(op, a, b) => {
             // A long chain such as A1+A2+… nests on its left: follow it in a loop, not one
             // level of recursion per operand.

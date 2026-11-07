@@ -288,6 +288,19 @@ fn trim_to_budget(history: &mut Vec<HistoryEntry>, byte_budget: usize) {
     }
 }
 
+/// A writer that only counts the bytes written to it.
+struct ByteCounter(usize);
+
+impl std::io::Write for ByteCounter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 = self.0.saturating_add(buf.len());
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 impl DocState {
     /// A document for `wb`, which came from where `trust` says: [`Trust::FromFile`] for anything
     /// read from bytes (a file, a download, a recovery copy), [`Trust::Local`] only for a workbook
@@ -621,7 +634,11 @@ impl Session {
     /// Journals a command, then trims the oldest entries past either cap. A recording in progress
     /// keeps pointing at the same entry (the steps the trim dropped are lost).
     fn push_journal(&mut self, id: &str, params: Json) {
-        let size = |e: &(String, Json)| serde_json::to_vec(e).map_or(0, |v| v.len());
+        // Counted as it is written, without building the text: a paste's params can be MBs.
+        let size = |e: &(String, Json)| {
+            let mut counter = ByteCounter(0);
+            serde_json::to_writer(&mut counter, e).map_or(0, |()| counter.0)
+        };
         // `journal` is public: if it was changed from outside, measure it again.
         if self.journal_sizes.len() != self.journal.len() {
             self.journal_sizes = self.journal.iter().map(size).collect();
