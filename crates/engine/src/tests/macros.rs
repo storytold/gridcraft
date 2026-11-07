@@ -2362,12 +2362,13 @@ fn undo_while_recording_keeps_the_undone_step_as_excel_does() {
 #[test]
 fn record_checks_a_name_shortcut_and_description_when_it_starts() {
     let mut s = s();
-    s.execute("macro.save", json!({"name": "Taken", "shortcut": "Ctrl+Shift+P", "steps": []})).unwrap();
+    s.execute("macro.save", json!({"name": "Taken", "shortcut": "Ctrl+Shift+Q", "steps": []})).unwrap();
     for (p, needle) in [
         (json!({"name": "taken"}), "already exists"),
         (json!({"name": "a\nb"}), "line breaks"),
         (json!({"name": "x".repeat(300)}), "at most"),
-        (json!({"name": "New", "shortcut": "p"}), "already runs macro"),
+        (json!({"name": "New", "shortcut": "q"}), "already runs macro"),
+        (json!({"name": "New", "shortcut": "p"}), "Date Picker"),
         (json!({"name": "New", "shortcut": "Ctrl+Shift+Z"}), "Redo"),
         (json!({"name": "New", "shortcut": "F5"}), "one letter"),
         (json!({"name": "New", "description": "d".repeat(100_000)}), "at most"),
@@ -2410,6 +2411,7 @@ fn shortcuts_parse_to_one_letter_and_avoid_reserved_and_taken_ones() {
     wb.macros.push(gridcraft_model::Macro { name: "A".into(), shortcut: Some("Ctrl+Shift+M".into()), ..Default::default() });
     wb.macros.push(gridcraft_model::Macro { name: "B".into(), ..Default::default() });
     assert!(shortcut_conflict(&wb, "B", 's').is_some_and(|m| m.contains("Save As")));
+    assert!(shortcut_conflict(&wb, "B", 'p').is_some_and(|m| m.contains("Date Picker")));
     assert!(shortcut_conflict(&wb, "B", 'm').is_some_and(|m| m.contains("“A”")));
     // A macro keeps its own letter.
     assert_eq!(shortcut_conflict(&wb, "a", 'M'), None);
