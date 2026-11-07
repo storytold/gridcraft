@@ -1,5 +1,6 @@
 use super::read::{map_rel_ids, vml_block_max};
 use super::*;
+use gridcraft_model::Chart;
 
 // ---------------------------------------------------------------- writing
 
@@ -328,4 +329,45 @@ pub fn write_package_rels(root: &mut Rels, out: &mut Out) {
     for (ty, target, external) in std::mem::take(&mut out.kept.root) {
         root.add_raw(&ty, &target, external);
     }
+}
+
+/// Which kept chart parts were written for a chart.
+#[derive(Debug, Default)]
+pub struct ChartPartsOut {
+    pub style: bool,
+    pub colors: bool,
+    /// The chart part's relationship id to its user shapes, for `<c:userShapes r:id>`.
+    pub user_shapes: Option<String>,
+}
+
+/// Writes a chart's kept style, colour and user-shape parts and adds the chart part's
+/// relationships to them. Style and colours are left out once the chart's type or style number
+/// changed; user shapes are left out of chartex parts.
+pub fn write_chart_parts(ch: &Chart, chartex: bool, rels: &mut Rels, out: &mut Out) -> ChartPartsOut {
+    let mut res = ChartPartsOut::default();
+    let Some(k) = ch.kept.as_deref() else { return res };
+    let same = k.kind == ch.kind && k.style == ch.style;
+    let roots: Vec<&PreservedRel> =
+        k.parts.rels.iter().filter(|r| if is_kind(r, USER_SHAPES) { !chartex } else { same && is_kind(r, CHART_PARTS) }).collect();
+    if roots.is_empty() {
+        return res;
+    }
+    let mut wanted = HashSet::new();
+    for r in &roots {
+        wanted.extend(reachable(&k.parts, r));
+    }
+    let parts: Vec<PreservedPart> = k.parts.parts.iter().filter(|q| wanted.contains(&normalize(&q.name))).cloned().collect();
+    let names = write_parts(out, &parts);
+    for r in roots {
+        let Some(target) = rel_target(r, &names) else { continue };
+        let id = rels.add_raw(&r.rel_type, &target, false);
+        if is_kind(r, USER_SHAPES) {
+            res.user_shapes = Some(id);
+        } else if is_kind(r, &["chartStyle"]) {
+            res.style = true;
+        } else {
+            res.colors = true;
+        }
+    }
+    res
 }

@@ -94,6 +94,19 @@ qualifier: with a bare name in `<c:f>` it draws the whole chart blank, without a
 (observed in Excel for Windows, Microsoft 365). External books (`[1]Sheet1!…`) are kept as they
 are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
+A chart's separate parts are kept (#330): its style part (the Chart Styles gallery choice) and
+colour part (the Change Colors set) are written back with their original bytes, for chart and
+chartex parts alike, and dropped once the chart's type or style number changes in GridCraft (a new
+chartex chart gets GridCraft's own). Text boxes, shapes and pictures drawn inside a chart (its
+user-shape part, `c:userShapes`) are written back too, unless they refer to content GridCraft
+rewrites (a chart inside the chart). They are not shown or editable in GridCraft. Observed in
+Excel: a column, line or bar chart's Chart Styles and Change Colors selection comes back only when
+the chart's own formatting (`c:spPr`) is in the chart part too, which GridCraft does not yet write,
+so Excel still reports the default style for those charts after a GridCraft save; chartex charts
+(waterfall, histogram…) show the original style and colours. Known limitation: a worksheet chart
+with user shapes that is changed to a chartex type drops those shapes on save, as chartex has no
+element to hold them (it did so before #330 too).
+
 ## Work (40–60 h)
 
 1. Preserve unmodelled chart XML on round-trip (keep the original part, patch only edited fields): 6–10 h.
@@ -111,6 +124,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 | 2026-11-01 | minor | Chart data tables for column, bar, line, area and compatible combo charts: command/UI controls, formatted source values, blanks, grouped category headers, legend keys, independent borders, shared print/PDF rendering and native c:dTable import/export. Dense tables show a space notice; no readiness score change. |
 | 2026-10-29 | minor | Selected charts highlight their source cells beneath floating objects, so the blue outline no longer crosses the chart; uncovered source cells remain highlighted (#2861) |
 | 2026-10-24 | minor | 100% Stacked Area: inserted from the ribbon and All Charts, drawn as shares of each category's total, read and written as `percentStacked` |
+| 2026-10-23 | minor | Chart style, colour and user-shape parts are kept on XLSX save (#330) |
 | 2026-10-18 | trivial | Stale notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip (PRs #158, #161) |
 | 2026-10-18 | minor | Doughnut charts: every series is a ring (first series innermost), hole size and first slice angle modelled, editable and round-tripped; rotated slices split at 12 o'clock without overlap; legend names categories like Excel's default (#1823) |
 | 2026-10-16 | trivial | Series that refer to defined names (`[0]!Name`, `Sheet!Name`) resolve instead of showing `#NAME?`, and are saved qualified, as Excel needs (#1686) |

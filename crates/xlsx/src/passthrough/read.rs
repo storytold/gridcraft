@@ -1,4 +1,5 @@
 use super::*;
+use gridcraft_model::ChartKept;
 
 /// A part's relationships with full type URIs. `Ok(vec![])` when it has none; an error when the
 /// rels part is damaged or too large (its part then can't be kept faithfully).
@@ -843,4 +844,48 @@ fn map_start(e: &BytesStart<'_>, prefixes: &mut HashSet<Vec<u8>>, map: &mut dyn 
         }
     }
     Some(out)
+}
+
+// ---------------------------------------------------------------- chart style, colour and shape parts
+
+impl KeptReader {
+    /// Keeps the style, colour and user-shape parts of the charts read for `sheet`, each part on
+    /// its own: user shapes that refer to content GridCraft rewrites (a chart inside the chart)
+    /// are left out, with a warning, and the style and colours still kept.
+    pub fn charts(&mut self, cx: &mut Ctx<'_>, sheet: &mut Sheet) {
+        let list = std::mem::take(&mut cx.chart_parts);
+        if !self.on {
+            return;
+        }
+        for (id, part, chartex, shapes) in list {
+            let Some(ch) = sheet.charts.iter_mut().find(|c| c.id == id) else { continue };
+            let rels = match raw_rels(cx, &part) {
+                Ok(r) => r,
+                Err(e) => {
+                    cx.warn(format!("the style, colours and shapes of chart {part} were not kept: {e}"));
+                    continue;
+                }
+            };
+            let mut p = Preserved::default();
+            let mut seen = HashSet::from([normalize(&part)]);
+            for r in rels.iter().filter(|r| !r.external && is_kind(r, CHART_PARTS)) {
+                // A chartex part has no element that refers to user shapes, and a chart keeps only
+                // the shapes its `<c:userShapes>` names: another one would take that element's place.
+                if is_kind(r, USER_SHAPES) && (chartex || shapes.as_deref() != Some(r.id.as_str())) {
+                    continue;
+                }
+                if let Err(e) = self.keep_through(cx, &mut p, std::slice::from_ref(r), &mut seen, CHART_PARTS) {
+                    let what = match kind(&r.rel_type).to_ascii_lowercase().as_str() {
+                        "chartstyle" => "chart style",
+                        "chartcolorstyle" => "colour set",
+                        _ => "shapes drawn inside the chart",
+                    };
+                    cx.warn(format!("the {what} of chart {part} could not be kept ({e})"));
+                }
+            }
+            if !p.is_empty() {
+                ch.kept = Some(Arc::new(ChartKept { parts: p, kind: ch.kind, style: ch.style }));
+            }
+        }
+    }
 }

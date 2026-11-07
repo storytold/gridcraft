@@ -35,6 +35,8 @@ pub struct Ctx<'a> {
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
+    /// Chart parts associated with charts read from the current sheet.
+    pub chart_parts: Vec<(u32, String, bool, Option<String>)>,
     /// Bytes charged so far for shared formulas expanded into dependent cells (see
     /// [`crate::sheet_read::MAX_SHARED_FORMULA_BYTES`]).
     pub shared_formula_bytes: u64,
@@ -258,6 +260,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         num_fmts: Default::default(),
         cell_pictures: vec![],
         cf_ext_ids: vec![],
+        chart_parts: vec![],
         shared_formula_bytes: 0,
         known_function,
         python: Default::default(),
@@ -345,6 +348,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
             Err(e) => cx.warn(format!("PivotTables on sheet \"{name}\" could not be read: {e}")),
         }
         sheet.preserved = kept.sheet(&mut cx, &rel.target, &name, &read_controls);
+        kept.charts(&mut cx, &mut sheet);
         sheet.file_id = se.attr_u32("sheetId").unwrap_or(0);
         sheet.visibility = match se.attr("state") {
             Some("hidden") => Visibility::Hidden,
