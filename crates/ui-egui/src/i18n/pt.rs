@@ -1001,6 +1001,41 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Protect\nSheet" => "Proteger\nPlanilha",
         "Watch\nWindow" => "Janela de\nInspeção",
         "Workbook\nStatistics" => "Estatísticas da\nPasta de Trabalho",
+        "Options|Data" => "Dados",
+        "Automatic data conversion" => "Conversão automática de dados",
+        "Enable all default data conversions below when entering, pasting, or opening text files" => {
+            "Habilitar todas as conversões de dados padrão abaixo ao inserir, colar ou abrir arquivos de texto"
+        }
+        "Remove leading zeros and convert to a number" => "Remover zeros à esquerda e converter em número",
+        "Off: 0123 stays text, leading zeros included." => "Desativado: 0123 continua como texto, incluindo os zeros à esquerda.",
+        "Keep first 15 digits of long numbers and display in scientific notation" => {
+            "Manter os primeiros 15 dígitos de números longos e exibir em notação científica"
+        }
+        "Off: no number is cut short or turned into scientific notation. What General format can't show as written stays text." => {
+            "Desativado: nenhum número é cortado ou transformado em notação científica. O que o formato Geral não consegue mostrar como foi escrito continua como texto."
+        }
+        "Keep numbers with more than" => "Manter como texto números com mais de",
+        "11 (default): only numbers General format shows exactly as written convert, so 12-digit codes and barcodes stay text. 12 to 15 allows scientific display, like 1.24412E+11, for numbers up to that many digits; no digit is ever lost." => {
+            "11 (padrão): só são convertidos os números que o formato Geral mostra exatamente como foram escritos, então códigos de 12 dígitos e códigos de barras continuam como texto. De 12 a 15 permite a exibição científica, como 1.24412E+11, para números com até essa quantidade de dígitos; nenhum dígito é perdido."
+        }
+        "digits as text" => "dígitos",
+        "Convert digits surrounding the letter \"E\" to a number in scientific notation" => {
+            "Converter os dígitos ao redor da letra \"E\" em um número em notação científica"
+        }
+        "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => {
+            "Desativado: 1244121406E6 continua como texto em vez de virar 1.24412E+15."
+        }
+        "Data conversion settings apply to every workbook; they are not saved in the file." => {
+            "As configurações de conversão de dados valem para todas as pastas de trabalho; elas não são salvas no arquivo."
+        }
+        "Remove trailing zeros after the decimal separator" => "Remover zeros à direita após o separador decimal",
+        "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
+            "Desativado: 720.0 é exibido e salvo como 720.0, e 3.10 como 3.10 (a célula recebe o formato de número 0.0 ou 0.00). Continua sendo um número. Não é uma opção do Excel."
+        }
+        "Convert text that looks like a date or time to a date" => "Converter em data o texto que parece uma data ou hora",
+        "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft)." => {
+            "Desativado: 2.6.70, 3/4/2026 e 10:30 continuam como texto, como foram escritos. Não é uma opção do Excel; também abrange a opção \"Converter letras e números contínuos em uma data\" do Excel (12JAN2026 é sempre texto no GridCraft)."
+        }
         "Rename" => "Renomear",
         "Move or Copy…" => "Mover ou copiar…",
         "Duplicate" => "Duplicar",

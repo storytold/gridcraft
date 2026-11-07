@@ -446,6 +446,37 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Bottom Margin" => "Donja margina",
         "Header Margin" => "Margina zaglavlja",
         "Footer Margin" => "Margina podnožja",
+        "Options|Data" => "Podaci",
+        "Automatic data conversion" => "Automatska konverzija podataka",
+        "Enable all default data conversions below when entering, pasting, or opening text files" => {
+            "Omogući sve podrazumevane konverzije podataka ispod pri unosu, lepljenju ili otvaranju tekstualnih datoteka"
+        }
+        "Remove leading zeros and convert to a number" => "Ukloni vodeće nule i pretvori u broj",
+        "Off: 0123 stays text, leading zeros included." => "Isključeno: 0123 ostaje tekst, zajedno sa vodećim nulama.",
+        "Keep first 15 digits of long numbers and display in scientific notation" => {
+            "Zadrži prvih 15 cifara dugih brojeva i prikaži u naučnoj notaciji"
+        }
+        "Off: no number is cut short or turned into scientific notation. What General format can't show as written stays text." => {
+            "Isključeno: nijedan broj se ne skraćuje niti pretvara u naučnu notaciju. Ono što format Opšte ne može da prikaže onako kako je napisano ostaje tekst."
+        }
+        "Keep numbers with more than" => "Zadrži kao tekst brojeve sa više od",
+        "11 (default): only numbers General format shows exactly as written convert, so 12-digit codes and barcodes stay text. 12 to 15 allows scientific display, like 1.24412E+11, for numbers up to that many digits; no digit is ever lost." => {
+            "11 (podrazumevano): pretvaraju se samo brojevi koje format Opšte prikazuje tačno onako kako su napisani, pa kodovi od 12 cifara i bar-kodovi ostaju tekst. Od 12 do 15 dozvoljava naučni prikaz, kao 1.24412E+11, za brojeve do toliko cifara; nijedna cifra se ne gubi."
+        }
+        "digits as text" => "cifara",
+        "Convert digits surrounding the letter \"E\" to a number in scientific notation" => "Pretvori cifre oko slova „E“ u broj u naučnoj notaciji",
+        "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "Isključeno: 1244121406E6 ostaje tekst umesto da postane 1.24412E+15.",
+        "Data conversion settings apply to every workbook; they are not saved in the file." => {
+            "Podešavanja konverzije podataka važe za svaku radnu svesku; ne čuvaju se u datoteci."
+        }
+        "Remove trailing zeros after the decimal separator" => "Ukloni završne nule posle decimalnog separatora",
+        "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
+            "Isključeno: 720.0 se prikazuje i čuva kao 720.0, a 3.10 kao 3.10 (ćelija dobija format broja 0.0 ili 0.00). Ostaje broj. Nije opcija programa Excel."
+        }
+        "Convert text that looks like a date or time to a date" => "Pretvori u datum tekst koji izgleda kao datum ili vreme",
+        "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft)." => {
+            "Isključeno: 2.6.70, 3/4/2026 i 10:30 ostaju tekst, onako kako su napisani. Nije opcija programa Excel; pokriva i Excelovu opciju „Pretvori uzastopna slova i brojeve u datum“ (12JAN2026 je u GridCraftu uvek tekst)."
+        }
         "Insert Sheet" => "Убаци лист",
         "Rename" => "Преименуј",
         "Move or Copy…" => "Премести или копирај…",

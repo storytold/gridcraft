@@ -451,6 +451,39 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "Maximum Change must be a number of 0 or more." => "L'écart maximal doit être un nombre supérieur ou égal à 0.",
         "Calculation settings are saved with the workbook." => "Les paramètres de calcul sont enregistrés avec le classeur.",
+        "Options|Data" => "Données",
+        "Automatic data conversion" => "Conversion automatique des données",
+        "Enable all default data conversions below when entering, pasting, or opening text files" => {
+            "Activer toutes les conversions de données par défaut ci-dessous lors de la saisie, du collage ou de l'ouverture de fichiers texte"
+        }
+        "Remove leading zeros and convert to a number" => "Supprimer les zéros non significatifs et convertir en nombre",
+        "Off: 0123 stays text, leading zeros included." => "Désactivé : 0123 reste du texte, zéros non significatifs compris.",
+        "Keep first 15 digits of long numbers and display in scientific notation" => {
+            "Conserver les 15 premiers chiffres des nombres longs et les afficher en notation scientifique"
+        }
+        "Off: no number is cut short or turned into scientific notation. What General format can't show as written stays text." => {
+            "Désactivé : aucun nombre n'est tronqué ni passé en notation scientifique. Ce que le format Standard ne peut pas afficher tel qu'il a été saisi reste du texte."
+        }
+        "Keep numbers with more than" => "Conserver comme texte les nombres de plus de",
+        "11 (default): only numbers General format shows exactly as written convert, so 12-digit codes and barcodes stay text. 12 to 15 allows scientific display, like 1.24412E+11, for numbers up to that many digits; no digit is ever lost." => {
+            "11 (par défaut) : seuls les nombres que le format Standard affiche exactement tels qu'ils ont été saisis sont convertis, donc les codes à 12 chiffres et les codes-barres restent du texte. De 12 à 15, l'affichage scientifique, comme 1.24412E+11, est permis pour les nombres ayant jusqu'à ce nombre de chiffres ; aucun chiffre n'est jamais perdu."
+        }
+        "digits as text" => "chiffres",
+        "Convert digits surrounding the letter \"E\" to a number in scientific notation" => {
+            "Convertir les chiffres autour de la lettre « E » en nombre en notation scientifique"
+        }
+        "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "Désactivé : 1244121406E6 reste du texte au lieu de devenir 1.24412E+15.",
+        "Data conversion settings apply to every workbook; they are not saved in the file." => {
+            "Les paramètres de conversion des données s'appliquent à tous les classeurs ; ils ne sont pas enregistrés dans le fichier."
+        }
+        "Remove trailing zeros after the decimal separator" => "Supprimer les zéros de fin après le séparateur décimal",
+        "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
+            "Désactivé : 720.0 s'affiche et s'enregistre comme 720.0, et 3.10 comme 3.10 (la cellule reçoit le format de nombre 0.0 ou 0.00). La valeur reste un nombre. Ce n'est pas une option d'Excel."
+        }
+        "Convert text that looks like a date or time to a date" => "Convertir en date le texte qui ressemble à une date ou à une heure",
+        "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft)." => {
+            "Désactivé : 2.6.70, 3/4/2026 et 10:30 restent du texte, tels qu'ils ont été saisis. Ce n'est pas une option d'Excel ; elle couvre aussi l'option d'Excel « Convertir les lettres et chiffres continus en date » (12JAN2026 est toujours du texte dans GridCraft)."
+        }
         "Insert Sheet" => "Insérer une feuille",
         "Rename" => "Renommer",
         "Move or Copy…" => "Déplacer ou copier…",
