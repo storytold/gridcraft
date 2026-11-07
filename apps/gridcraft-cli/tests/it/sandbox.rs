@@ -190,7 +190,11 @@ worker.start()
 worker.join()
 assert len(seen) >= 1, "a signal to itself"
 if sys.platform == "linux":
-    import fcntl, resource, termios
+    import ctypes, errno, fcntl, resource, termios
+    libc = ctypes.CDLL(None, use_errno=True)
+    assert libc.shmget(0, 4096, 0o600) == -1 and ctypes.get_errno() == errno.EPERM, "System V shared memory"
+    assert libc.msgget(0, 0o600) == -1 and ctypes.get_errno() == errno.EPERM, "a System V message queue"
+    assert libc.semget(0, 1, 0o600) == -1 and ctypes.get_errno() == errno.EPERM, "a System V semaphore"
     # macOS answers these for the processes the profile lets it signal, which are only itself.
     assert refused(os.kill, -1, 0), "a signal to every process"
     assert refused(os.kill, 0, 0), "a signal to the process group"

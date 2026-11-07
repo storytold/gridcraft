@@ -18,7 +18,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Python Code",
             [],
             None,
-            "{cell?, code, output?: object|value} makes the cell (default: the active cell) a Python cell with this code; the code must fit in Excel's 8,192-character formula once written as PY(…). `output` is the return type: `value` (an Excel value, the default) or `object` (a Python object)",
+            "{cell?, code, output?: object|value} makes the cell (default: the active cell) a Python cell with this code; the code must fit in Excel's 8,192-character formula once written as PY(…). `output` is the return type: `value` (an Excel value, the default) or `object` (a Python object) `output`, when given, is a choice, which new code without `output` keeps; a picture with no choice behaves as a Python Object.",
             has_doc,
             set
         ),
@@ -27,7 +27,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Python Output",
             [],
             Some("Ctrl+Alt+Shift+M"),
-            "{cell?, mode?: object|value} sets the return type of a Python cell (default: the active cell): `object` (a Python object) or `value` (an Excel value). Without `mode` it switches to the other one. The cell keeps its code; a cached result of the old return type goes, as with `python.set`, so the cell shows #BLOCKED! until it runs",
+            "{cell?, mode?: object|value} sets the return type of a Python cell (default: the active cell): `object` (a Python object) or `value` (an Excel value). Without `mode` it switches from the return type in effect to the other one. The cell keeps its code; a cached result of the old return type goes, as with `python.set`, so the cell shows #BLOCKED! until it runs. A return type asked for is a choice, and when it is already the type in effect the cell keeps its result: a picture with no choice behaves as a Python Object, and moves into the cell with no new run.",
             has_doc,
             output
         ),

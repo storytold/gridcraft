@@ -385,9 +385,15 @@ fn a_worker_that_exits_while_idle_is_not_started_again_to_draw_a_figure() {
         5_000,
     );
     assert_eq!(ok_value(&c.run("1", no_inputs()).unwrap()), Value::Number(1.0));
-    std::thread::sleep(Duration::from_millis(100));
-    assert!(c.alive(), "nothing has read that it stopped");
-    assert_eq!(c.submit_render([0, 0, 0], 10, 10), None);
+    // However soon the client sees it go, a request sent before then is answered by the worker's going
+    // and the next finds none. At no point does anything start.
+    let until = Instant::now() + Duration::from_secs(5);
+    while c.submit_render([0, 0, 0], 10, 10).is_some() {
+        assert!(Instant::now() < until, "the worker's end was never seen");
+        while c.poll(Duration::from_millis(50)).is_none() {
+            assert!(Instant::now() < until, "the request was never answered");
+        }
+    }
     assert_eq!(h.starts(), 1, "nothing started");
     assert!(!c.alive());
 }

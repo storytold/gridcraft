@@ -192,7 +192,9 @@ impl Client {
 
     /// Waits up to `wait` for the request in flight to finish, and returns its result when it has.
     /// The deadline and the memory limit are checked here, so a caller that polls with
-    /// `Duration::ZERO` every frame never blocks. With nothing in flight, any line the worker
+    /// `Duration::ZERO` every frame doesn't block, but for one moment: when a worker stops, its last
+    /// words are read for the message. Its exit closes that pipe, so this takes no time, and at most
+    /// 200 ms if something else still holds the pipe open. With nothing in flight, any line the worker
     /// writes within `wait` kills it.
     pub fn poll(&mut self, wait: Duration) -> Option<RunResult> {
         if let Some(r) = self.local.take() {
