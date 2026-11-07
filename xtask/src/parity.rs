@@ -70,6 +70,12 @@ pub fn render(entries: &[Entry]) -> String {
     s
 }
 
+/// Whether the checked-in checklist matches the generated text. A Windows checkout with
+/// `core.autocrlf=true` (Git for Windows' default) has CRLF line ends, which aren't a change.
+pub fn up_to_date(current: &str, generated: &str) -> bool {
+    current == generated || current.replace("\r\n", "\n") == generated
+}
+
 #[cfg(feature = "engine")]
 fn entries() -> Vec<Entry> {
     use gridcraft_engine::catalog::CATALOG;
@@ -106,7 +112,7 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
     let text = render(&entries());
     if check {
         let current = std::fs::read_to_string(&out).map_err(|e| format!("{}: {e}", out.display()))?;
-        if current != text {
+        if !up_to_date(&current, &text) {
             return Err(format!("{} is out of date; run `cargo xtask parity`", out.display()));
         }
         println!("{} ({} up to date)", summary_line(), out.display());
@@ -148,5 +154,15 @@ mod tests {
     #[test]
     fn empty_catalog_renders() {
         assert!(render(&[]).contains("0 / 0 commands implemented (0.0%)"));
+    }
+
+    #[test]
+    fn a_crlf_checkout_of_the_current_checklist_is_up_to_date() {
+        let text = render(&[e("file.new", "File", true), e("home.bold", "Home", false)]);
+        assert!(up_to_date(&text, &text));
+        assert!(up_to_date(&text.replace('\n', "\r\n"), &text));
+        let stale = render(&[e("file.new", "File", false), e("home.bold", "Home", false)]);
+        assert!(!up_to_date(&stale, &text));
+        assert!(!up_to_date(&stale.replace('\n', "\r\n"), &text));
     }
 }
