@@ -160,6 +160,7 @@ pub const SPECIAL_FUNCTIONS: &[&str] = &[
     "MAKEARRAY",
 ];
 
+/// Whether the engine has a function by this canonical name (built-in or registry), in any case.
 pub fn is_known_function(n: &str) -> bool {
     is_special(&n.to_ascii_uppercase()) || gridcraft_functions::lookup(n).is_some()
 }

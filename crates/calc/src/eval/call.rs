@@ -5,6 +5,8 @@ use super::{Area, Arg, Array, CellError, Ev, Evaluator, Expr, FnCtx, Lambda, Pip
 use std::sync::Arc;
 
 impl<'h> Evaluator<'h> {
+    /// Calls a function by canonical name: the lazy built-ins (IF, LET, LAMBDA…) evaluate their
+    /// own arguments here; everything else goes to the function registry.
     pub(super) fn call(&mut self, name: &str, args: &[Expr]) -> Ev {
         match name {
             "IF" => self.if_call(args),
