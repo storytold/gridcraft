@@ -1,11 +1,15 @@
+use std::collections::{HashMap, HashSet};
+
 use super::create::source_param;
 use super::fields::{canonical, in_axes, shift_values, update};
 use super::params::{group_param, layout_name};
 use super::{
-    Chart, Json, PivotDateGroup, PivotField, PivotFilter, PivotLayout, PivotSort, PivotTable, Result, Session, bad, bool_param, edit, find_pivot,
-    json, other, pv, str_param,
+    Chart, Json, PivotDateGroup, PivotField, PivotFilter, PivotLayout, PivotSort, PivotTable, PivotTopOf, PivotValueFilter, PivotValueRule, Result,
+    Session, bad, bool_param, edit, find_pivot, json, other, pv, str_param,
 };
 
+/// `pivot.filter`: the items a field shows (`null`: all). On a row or column field it keeps any
+/// value filter; a filter left hiding nothing goes away.
 pub(super) fn filter(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.filter";
     let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
@@ -36,10 +40,12 @@ pub(super) fn filter(s: &mut Session, p: &Json) -> Result<Json> {
         let i = pt.filters.iter().position(|f| f.source_col.eq_ignore_ascii_case(&field));
         match (i, selected) {
             (Some(i), None) => {
-                if in_axes(pt, &field) {
-                    pt.filters.remove(i);
-                } else if let Some(f) = pt.filters.get_mut(i) {
+                if let Some(f) = pt.filters.get_mut(i) {
                     f.selected = None;
+                }
+                // An axis field's filter that hides nothing goes; a report filter stays, showing all.
+                if in_axes(pt, &field) && pt.filters.get(i).is_some_and(PivotFilter::is_inactive) {
+                    pt.filters.remove(i);
                 }
             }
             (Some(i), Some(sel)) => {
@@ -47,11 +53,116 @@ pub(super) fn filter(s: &mut Session, p: &Json) -> Result<Json> {
                     f.selected = Some(sel);
                 }
             }
-            (None, Some(sel)) => pt.filters.push(PivotFilter { source_col: field.clone(), selected: Some(sel) }),
+            (None, Some(sel)) => pt.filters.push(PivotFilter { source_col: field.clone(), selected: Some(sel), value: None }),
             (None, None) => {}
         }
         Ok(json!({"field": field}))
     })
+}
+
+/// Most items a Top/Bottom value filter keeps by count.
+const MAX_TOP_ITEMS: f64 = 1_048_576.0;
+
+/// The `rule` of a `pivot.valueFilter` call (`None`: clear the field's value filter).
+fn value_rule_param(p: &Json) -> Result<Option<PivotValueRule>> {
+    const C: &str = "pivot.valueFilter";
+    let number = |key: &str| -> Result<f64> {
+        p.get(key).and_then(Json::as_f64).filter(|n| n.is_finite()).ok_or_else(|| bad(C, format!("`{key}` is a number")))
+    };
+    let rule = str_param(p, "rule").ok_or_else(|| bad(C, "missing `rule`"))?.to_ascii_lowercase();
+    let ranked = |top: bool| -> Result<PivotValueRule> {
+        let of = match str_param(p, "of").unwrap_or("items").to_ascii_lowercase().as_str() {
+            "items" | "item" => PivotTopOf::Items,
+            "percent" | "%" => PivotTopOf::Percent,
+            "sum" => PivotTopOf::Sum,
+            o => return Err(bad(C, format!("unknown `of` `{o}` (items|percent|sum)"))),
+        };
+        let count = p.get("count").map_or(Ok(10.0), |_| number("count"))?;
+        let valid = match of {
+            PivotTopOf::Items => (1.0..=MAX_TOP_ITEMS).contains(&count) && count.fract() == 0.0,
+            PivotTopOf::Percent => count > 0.0 && count <= 100.0,
+            PivotTopOf::Sum => true,
+        };
+        if !valid {
+            return Err(bad(C, "`count` is a whole number of items from 1, or a percentage above 0 up to 100"));
+        }
+        Ok(if top { PivotValueRule::Top { count, of } } else { PivotValueRule::Bottom { count, of } })
+    };
+    Ok(Some(match rule.as_str() {
+        "none" | "clear" => return Ok(None),
+        "top" => ranked(true)?,
+        "bottom" => ranked(false)?,
+        "equal" | "equals" => PivotValueRule::Equal(number("value")?),
+        "notequal" => PivotValueRule::NotEqual(number("value")?),
+        "greater" | "greaterthan" => PivotValueRule::Greater(number("value")?),
+        "greaterorequal" | "greaterthanorequal" => PivotValueRule::GreaterOrEqual(number("value")?),
+        "less" | "lessthan" => PivotValueRule::Less(number("value")?),
+        "lessorequal" | "lessthanorequal" => PivotValueRule::LessOrEqual(number("value")?),
+        "between" => PivotValueRule::Between(number("value")?, number("value2")?),
+        "notbetween" => PivotValueRule::NotBetween(number("value")?, number("value2")?),
+        r => {
+            return Err(bad(
+                C,
+                format!("unknown rule `{r}` (top|bottom|equal|notEqual|greater|greaterOrEqual|less|lessOrEqual|between|notBetween|none)"),
+            ));
+        }
+    }))
+}
+
+/// `pivot.valueFilter`: sets or clears a row or column field's value filter, measured by a value
+/// field of the report (the first by default).
+pub(super) fn value_filter(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "pivot.valueFilter";
+    let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
+    let rule = value_rule_param(p)?;
+    let by = str_param(p, "by").map(str::to_string);
+    update(s, p, |pt, _, _| {
+        let source_col = axis_field(C, pt, &field)?.source_col.clone();
+        let value = match rule {
+            Some(rule) => {
+                let by = match &by {
+                    Some(name) => value_field_name(C, pt, name)?,
+                    None => pt.values.first().map(|v| v.name.clone()).ok_or_else(|| bad(C, "the PivotTable has no value field to filter by"))?,
+                };
+                Some(PivotValueFilter { by, rule })
+            }
+            None => None,
+        };
+        match pt.filters.iter_mut().find(|f| f.source_col.eq_ignore_ascii_case(&source_col)) {
+            Some(f) => f.value = value,
+            None if value.is_some() => pt.filters.push(PivotFilter { source_col: source_col.clone(), selected: None, value }),
+            None => {}
+        }
+        pt.filters.retain(|f| !(f.source_col.eq_ignore_ascii_case(&source_col) && f.is_inactive()));
+        let value = pt.filters.iter().find(|f| f.source_col.eq_ignore_ascii_case(&source_col)).and_then(|f| f.value.as_ref());
+        Ok(json!({"field": source_col, "valueFilter": value.map(value_filter_json)}))
+    })
+}
+
+/// A value filter as `pivot.fields` and `pivot.valueFilter` report it (the parameters that set it).
+pub(super) fn value_filter_json(vf: &PivotValueFilter) -> Json {
+    let of = |of: PivotTopOf| match of {
+        PivotTopOf::Items => "items",
+        PivotTopOf::Percent => "percent",
+        PivotTopOf::Sum => "sum",
+    };
+    let (rule, rest) = match vf.rule {
+        PivotValueRule::Top { count, of: o } => ("top", json!({"count": count, "of": of(o)})),
+        PivotValueRule::Bottom { count, of: o } => ("bottom", json!({"count": count, "of": of(o)})),
+        PivotValueRule::Equal(v) => ("equal", json!({"value": v})),
+        PivotValueRule::NotEqual(v) => ("notEqual", json!({"value": v})),
+        PivotValueRule::Greater(v) => ("greater", json!({"value": v})),
+        PivotValueRule::GreaterOrEqual(v) => ("greaterOrEqual", json!({"value": v})),
+        PivotValueRule::Less(v) => ("less", json!({"value": v})),
+        PivotValueRule::LessOrEqual(v) => ("lessOrEqual", json!({"value": v})),
+        PivotValueRule::Between(a, b) => ("between", json!({"value": a, "value2": b})),
+        PivotValueRule::NotBetween(a, b) => ("notBetween", json!({"value": a, "value2": b})),
+    };
+    let mut out = json!({"by": vf.by, "rule": rule});
+    if let (Some(m), Some(r)) = (out.as_object_mut(), rest.as_object()) {
+        m.extend(r.clone());
+    }
+    out
 }
 
 fn axis_field<'a>(cmd: &str, pt: &'a mut PivotTable, field: &str) -> Result<&'a mut PivotField> {
@@ -62,19 +173,95 @@ fn axis_field<'a>(cmd: &str, pt: &'a mut PivotTable, field: &str) -> Result<&'a 
         .ok_or_else(|| bad(cmd, format!("`{field}` isn't in the rows or columns area")))
 }
 
+/// What `pivot.sort` orders a field's items by.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SortOrder {
+    Ascending,
+    Descending,
+    Source,
+    /// The `items` given, then the rest ascending.
+    Custom,
+}
+
+/// `pivot.sort`: orders a row or column field's items by label, by a value field's totals, in source
+/// order, or in a custom order.
 pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.sort";
     let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
     let order = match str_param(p, "order").unwrap_or("asc").to_ascii_lowercase().as_str() {
-        "asc" | "ascending" | "a-z" => PivotSort::Asc,
-        "desc" | "descending" | "z-a" => PivotSort::Desc,
-        "none" | "manual" | "source" => PivotSort::None,
-        o => return Err(bad(C, format!("unknown order `{o}` (asc|desc|none)"))),
+        "asc" | "ascending" | "a-z" => SortOrder::Ascending,
+        "desc" | "descending" | "z-a" => SortOrder::Descending,
+        // "manual" was source order before custom orders existed; callers may still send it.
+        "none" | "source" | "manual" => SortOrder::Source,
+        "custom" => SortOrder::Custom,
+        o => return Err(bad(C, format!("unknown order `{o}` (asc|desc|none|custom)"))),
     };
-    update(s, p, |pt, _, _| {
-        axis_field(C, pt, &field)?.sort = order;
-        Ok(json!({}))
+    let by = str_param(p, "by").map(str::to_string);
+    if by.is_some() && !matches!(order, SortOrder::Ascending | SortOrder::Descending) {
+        return Err(bad(C, "`by` sorts ascending or descending"));
+    }
+    let items: Vec<String> = match (order, p.get("items")) {
+        (SortOrder::Custom, Some(Json::Array(list))) if list.len() > MAX_CUSTOM_ITEMS => {
+            return Err(bad(C, format!("at most {MAX_CUSTOM_ITEMS} `items`")));
+        }
+        (SortOrder::Custom, Some(Json::Array(list))) if !list.is_empty() => {
+            list.iter().map(|v| v.as_str().map(str::to_string).ok_or_else(|| bad(C, "`items` are item labels"))).collect::<Result<_>>()?
+        }
+        (SortOrder::Custom, _) => return Err(bad(C, "a custom order needs `items`: the item labels in order")),
+        (_, Some(_)) => return Err(bad(C, "`items` go with order: custom")),
+        (_, None) => vec![],
+    };
+    update(s, p, |pt, src, wb| {
+        let sort_by = by.as_deref().map(|name| value_field_name(C, pt, name)).transpose()?;
+        let custom = if order == SortOrder::Custom { item_labels(C, pt, src, wb, &field, &items)? } else { vec![] };
+        let f = axis_field(C, pt, &field)?;
+        f.sort = match order {
+            SortOrder::Ascending => PivotSort::Asc,
+            SortOrder::Descending => PivotSort::Desc,
+            SortOrder::Source | SortOrder::Custom => PivotSort::None,
+        };
+        f.sort_by = sort_by;
+        f.custom_order = custom;
+        Ok(json!({"field": f.source_col, "sortBy": f.sort_by, "customOrder": f.custom_order}))
     })
+}
+
+/// The caption of the value field `name` (a caption or the source field of one).
+fn value_field_name(cmd: &str, pt: &PivotTable, name: &str) -> Result<String> {
+    let name = name.trim();
+    pt.values
+        .iter()
+        .find(|v| v.name.eq_ignore_ascii_case(name))
+        .or_else(|| pt.values.iter().find(|v| v.source_col.eq_ignore_ascii_case(name)))
+        .map(|v| v.name.clone())
+        .ok_or_else(|| bad(cmd, format!("`{name}` isn't in the values area")))
+}
+
+/// Most labels a custom order lists.
+const MAX_CUSTOM_ITEMS: usize = 100_000;
+
+/// `labels` as the axis field `field` shows them (each an item of it), without repeats. One pass
+/// over the field's items and one over the labels, so a long order on a large field stays fast.
+fn item_labels(cmd: &str, pt: &PivotTable, src: &pv::Source, wb: &gridcraft_model::Workbook, field: &str, labels: &[String]) -> Result<Vec<String>> {
+    let axis = pt.rows.iter().chain(pt.columns.iter()).find(|f| f.source_col.eq_ignore_ascii_case(field));
+    let axis = axis.ok_or_else(|| bad(cmd, format!("`{field}` isn't in the rows or columns area")))?;
+    let column = src.col(&axis.source_col).ok_or_else(|| bad(cmd, format!("no field `{field}` in the source data")))?;
+    let mut known: HashMap<String, String> = HashMap::new();
+    for label in pv::distinct_labels(wb, src, column, axis.date_group, usize::MAX) {
+        known.entry(label.to_ascii_lowercase()).or_insert(label);
+    }
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out: Vec<String> = Vec::new();
+    for label in labels {
+        // The exact label first (a source label can end in a space), then without padding.
+        let exact = label.to_ascii_lowercase();
+        let key = if known.contains_key(&exact) { exact } else { label.trim().to_ascii_lowercase() };
+        let canonical = known.get(&key).ok_or_else(|| bad(cmd, format!("`{label}` isn't an item of `{field}`")))?;
+        if seen.insert(key) {
+            out.push(canonical.clone());
+        }
+    }
+    Ok(out)
 }
 
 pub(super) fn group(s: &mut Session, p: &Json) -> Result<Json> {

@@ -223,35 +223,109 @@ pub(super) struct Node {
     pub(super) children: Vec<Node>,
 }
 
-pub(super) fn build_tree(paths: &[&[u32]], depth: usize, fields: &[&PivotField], items: &[FieldItems]) -> Vec<Node> {
-    let (Some(field), Some(fi)) = (fields.get(depth), items.get(depth)) else { return vec![] };
-    let mut order: Vec<u32> = Vec::new();
+/// How each field of an axis orders its items: by a value field's totals, by a custom order, by
+/// label, or in source order (see [`PivotField`]).
+pub(super) struct AxisOrder<'a> {
+    fields: &'a [&'a PivotField],
+    items: &'a [FieldItems],
+    /// Per field, the value field its items are sorted by (an index into the report's values).
+    sort_values: Vec<Option<usize>>,
+    /// Per field, its custom order: lower-cased label → position (the first listing wins).
+    custom: Vec<HashMap<String, usize>>,
+    /// The total of value field `vi` at an item path of this axis (the other axis at its total).
+    measure: &'a dyn Fn(&[u32], usize) -> Option<f64>,
+}
+
+impl<'a> AxisOrder<'a> {
+    /// The order of an axis's fields: each field's sort-by value field (by caption, among `value_names`)
+    /// and custom order are looked up once here; `measure` reads an item's total.
+    pub(super) fn new(
+        fields: &'a [&'a PivotField],
+        items: &'a [FieldItems],
+        value_names: &[&str],
+        measure: &'a dyn Fn(&[u32], usize) -> Option<f64>,
+    ) -> Self {
+        let sort_values =
+            fields.iter().map(|f| f.sort_by.as_deref().and_then(|name| value_names.iter().position(|v| v.eq_ignore_ascii_case(name)))).collect();
+        let custom = fields
+            .iter()
+            .map(|f| {
+                let mut ranks = HashMap::new();
+                for (i, label) in f.custom_order.iter().enumerate() {
+                    ranks.entry(label.to_ascii_lowercase()).or_insert(i);
+                }
+                ranks
+            })
+            .collect();
+        AxisOrder { fields, items, sort_values, custom, measure }
+    }
+
+    /// Sorts the items at `depth` under `prefix` (sorts are stable: ties keep label order).
+    fn sort(&self, depth: usize, prefix: &mut Vec<u32>, nodes: &mut [Node]) {
+        let (Some(field), Some(fi)) = (self.fields.get(depth), self.items.get(depth)) else { return };
+        let by_label = |a: &Node, b: &Node| match (fi.get(a.item), fi.get(b.item)) {
+            (Some(x), Some(y)) => cmp_items(x, y),
+            _ => Ordering::Equal,
+        };
+        match (field.sort, self.sort_values.get(depth).copied().flatten()) {
+            (PivotSort::Asc | PivotSort::Desc, Some(vi)) => {
+                let mut keys = HashMap::with_capacity(nodes.len());
+                for n in nodes.iter() {
+                    prefix.push(n.item);
+                    keys.insert(n.item, (self.measure)(prefix, vi));
+                    prefix.pop();
+                }
+                let descending = field.sort == PivotSort::Desc;
+                nodes.sort_by(by_label);
+                // Items without a number (no records, an error, text) go last either way.
+                nodes.sort_by(|a, b| match (keys.get(&a.item).copied().flatten(), keys.get(&b.item).copied().flatten()) {
+                    (Some(x), Some(y)) if descending => y.total_cmp(&x),
+                    (Some(x), Some(y)) => x.total_cmp(&y),
+                    (Some(_), None) => Ordering::Less,
+                    (None, Some(_)) => Ordering::Greater,
+                    (None, None) => Ordering::Equal,
+                });
+            }
+            (PivotSort::Asc, None) => nodes.sort_by(by_label),
+            (PivotSort::Desc, None) => nodes.sort_by(|a, b| by_label(b, a)),
+            (PivotSort::None, _) => match self.custom.get(depth).filter(|ranks| !ranks.is_empty()) {
+                Some(ranks) => {
+                    nodes.sort_by(by_label);
+                    nodes.sort_by_cached_key(|n| ranks.get(&fi.label(n.item).to_ascii_lowercase()).copied().unwrap_or(usize::MAX));
+                }
+                None => nodes.sort_by_key(|n| fi.get(n.item).map_or(usize::MAX, |item| item.first)),
+            },
+        }
+    }
+}
+
+/// The item tree of an axis from its records' item paths, each level in its field's order.
+pub(super) fn build_tree(paths: &[&[u32]], depth: usize, prefix: &mut Vec<u32>, order: &AxisOrder<'_>) -> Vec<Node> {
+    if depth >= order.fields.len() {
+        return vec![];
+    }
+    let mut first_seen: Vec<u32> = Vec::new();
     let mut groups: HashMap<u32, Vec<&[u32]>> = HashMap::new();
     for p in paths {
         if let Some(&it) = p.get(depth) {
             let g = groups.entry(it).or_default();
             if g.is_empty() {
-                order.push(it);
+                first_seen.push(it);
             }
             g.push(p);
         }
     }
-    let mut nodes: Vec<Node> = order
+    let mut nodes: Vec<Node> = first_seen
         .into_iter()
         .map(|it| {
             let ps = groups.remove(&it).unwrap_or_default();
-            Node { item: it, children: build_tree(&ps, depth + 1, fields, items) }
+            prefix.push(it);
+            let children = build_tree(&ps, depth + 1, prefix, order);
+            prefix.pop();
+            Node { item: it, children }
         })
         .collect();
-    let by = |a: &Node, b: &Node| match (fi.get(a.item), fi.get(b.item)) {
-        (Some(x), Some(y)) => match field.sort {
-            PivotSort::Asc => cmp_items(x, y),
-            PivotSort::Desc => cmp_items(y, x),
-            PivotSort::None => x.first.cmp(&y.first),
-        },
-        _ => Ordering::Equal,
-    };
-    nodes.sort_by(by);
+    order.sort(depth, prefix, &mut nodes);
     nodes
 }
 

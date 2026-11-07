@@ -1,6 +1,7 @@
 use super::{
-    CellRef, Ctx, DateSystem, El, HashMap, IoError, MAX_FIELDS, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout,
-    PivotShowAs, PivotSort, PivotTable, PivotValue, RangeRef, abs_range, func_caption, func_from, number_to_text, quote_sheet, same,
+    BASE_ITEM_NEXT, CellRef, Ctx, DateSystem, El, HashMap, IoError, MAX_FIELDS, PivotBaseItem, PivotCalcField, PivotDateGroup, PivotField,
+    PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue, PivotValueFilter, PivotValueRule, RangeRef, abs_range,
+    func_caption, func_from, number_to_text, quote_sheet, same, show_as_from_xml, value_filter_from_xml,
 };
 
 // ================================================================ reading
@@ -172,8 +173,39 @@ pub fn read_pivots(cx: &mut Ctx<'_>, caches: &mut CachesIn, sheet_part: &str, sh
 }
 
 /// A pivot field's data items (not subtotal or grand-total items).
+/// The data field a pivot field's items are sorted by (`autoSortScope` referring to the data
+/// field, `-2`, written unsigned or signed).
+fn auto_sort_data_field(e: &El) -> Option<usize> {
+    let references = e.path(&["autoSortScope", "pivotArea", "references"])?;
+    let data = references.kids("reference").find(|r| matches!(r.attr("field"), Some("4294967294" | "-2")))?;
+    data.child("x")?.attr_u32("v").map(|v| v as usize)
+}
+
+/// Most labels kept from a manual item order.
+const MAX_CUSTOM_ORDER: usize = 100_000;
+
+/// A field's manual item order: its `<item>`s' labels when they aren't in the cache's order (then
+/// the report shows the cache's order anyway).
+fn custom_order(items: &[&El], labels: &[String]) -> Vec<String> {
+    let xs: Vec<u32> = items.iter().filter_map(|it| it.attr_u32("x")).take(MAX_CUSTOM_ORDER).collect();
+    if xs.windows(2).all(|w| w.first() < w.get(1)) {
+        return vec![];
+    }
+    xs.iter().filter_map(|x| labels.get(*x as usize).cloned()).collect()
+}
+
 fn items_of(e: &El) -> Vec<&El> {
     e.child("items").map(|it| it.kids("item").filter(|i| i.attr("t").is_none_or(|t| t == "data")).collect()).unwrap_or_default()
+}
+
+/// The source column a cache field stands for (a date group field's base field), without the
+/// warnings of [`field_ref`].
+fn axis_source_name(cache: &CacheIn, i: usize) -> Option<String> {
+    let f = cache.fields.get(i)?;
+    match &f.group {
+        Some((Some(base), _, _)) if !f.database => cache.fields.get(*base).map(|b| b.name.clone()),
+        _ => Some(f.name.clone()),
+    }
 }
 
 /// (source column name, date grouping) of a cache field used on an axis.
@@ -203,6 +235,8 @@ fn field_ref(cx: &mut Ctx<'_>, cache: &CacheIn, i: usize) -> Option<(String, Piv
     }
 }
 
+/// Reads one PivotTable definition into the model, against its cache; `None` (with a warning)
+/// when the table can't be used, such as one without a valid location.
 fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<PivotTable> {
     let mut pt = PivotTable { id, ..PivotTable::default() };
     if let Some(n) = x.attr("name").filter(|n| !n.trim().is_empty()) {
@@ -246,48 +280,67 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
     pt.show_headers = x.flag("showHeaders", true);
     pt.enable_show_details = x.flag("enableDrill", true);
     pt.style = x.child("pivotTableStyleInfo").and_then(|s| s.attr("name")).unwrap_or("").to_string();
-    if x.child("calculatedItems").is_some() || x.path(&["filters", "filter"]).is_some() {
-        cx.warn(format!("PivotTable \"{}\": calculated items and label/value filters are not supported", pt.name));
+    if x.child("calculatedItems").is_some() {
+        cx.warn(format!("PivotTable \"{}\": calculated items are not supported", pt.name));
+    }
+    // (cache field, data field, rule) of each value filter; other filter kinds are dropped.
+    let mut value_filters: Vec<(usize, usize, PivotValueRule)> = Vec::new();
+    for f in x.child("filters").into_iter().flat_map(|fs| fs.kids("filter")) {
+        let rule = value_filter_from_xml(f);
+        match (rule, f.attr_u32("fld")) {
+            (Some(rule), Some(fld)) => value_filters.push((fld as usize, f.attr_u32("iMeasureFld").unwrap_or(0) as usize, rule)),
+            _ => cx.warn(format!("PivotTable \"{}\": {} filters are not supported", pt.name, f.attr("type").unwrap_or("label"))),
+        }
     }
 
     let mut filters: Vec<PivotFilter> = Vec::new();
 
     // (fields, position of Σ Values (`-2`) among them)
-    let axis = |cx: &mut Ctx<'_>, list: &[i64], filters: &mut Vec<PivotFilter>| -> (Vec<PivotField>, Option<usize>) {
-        let mut v = Vec::new();
-        let mut values_at = None;
-        for &i in list {
-            if i == -2 {
-                values_at = Some(v.len());
-                continue;
-            }
-            if i < 0 {
-                continue;
-            }
-            let i = i as usize;
-            let Some((name, group)) = field_ref(cx, cache, i) else { continue };
-            let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
-            let mut f = PivotField { source_col: name.clone(), date_group: group, sort: PivotSort::None, collapsed_items: vec![] };
-            if let Some(e) = pf(i) {
-                f.sort = match e.attr("sortType") {
-                    Some("ascending") => PivotSort::Asc,
-                    Some("descending") => PivotSort::Desc,
-                    _ => PivotSort::None,
-                };
-                let items = items_of(e);
-                let lab = |it: &El| it.attr_u32("x").and_then(|k| labels.get(k as usize)).cloned();
-                f.collapsed_items = items.iter().filter(|it| !it.flag("sd", true)).filter_map(|it| lab(it)).collect();
-                if items.iter().any(|it| it.flag("h", false)) {
-                    let shown: Vec<String> = items.iter().filter(|it| !it.flag("h", false)).filter_map(|it| lab(it)).collect();
-                    if !filters.iter().any(|ff| same(&ff.source_col, &name)) {
-                        filters.push(PivotFilter { source_col: name.clone(), selected: Some(shown) });
+    // (index in its axis, data field index) of each field sorted by a value field.
+    let axis =
+        |cx: &mut Ctx<'_>, list: &[i64], filters: &mut Vec<PivotFilter>, sort_refs: &mut Vec<(usize, usize)>| -> (Vec<PivotField>, Option<usize>) {
+            let mut v = Vec::new();
+            let mut values_at = None;
+            for &i in list {
+                if i == -2 {
+                    values_at = Some(v.len());
+                    continue;
+                }
+                if i < 0 {
+                    continue;
+                }
+                let i = i as usize;
+                let Some((name, group)) = field_ref(cx, cache, i) else { continue };
+                let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
+                let mut f = PivotField { source_col: name.clone(), date_group: group, ..PivotField::default() };
+                if let Some(e) = pf(i) {
+                    f.sort = match e.attr("sortType") {
+                        Some("ascending") => PivotSort::Asc,
+                        Some("descending") => PivotSort::Desc,
+                        _ => PivotSort::None,
+                    };
+                    if f.sort != PivotSort::None
+                        && let Some(k) = auto_sort_data_field(e)
+                    {
+                        sort_refs.push((v.len(), k));
+                    }
+                    let items = items_of(e);
+                    let lab = |it: &El| it.attr_u32("x").and_then(|k| labels.get(k as usize)).cloned();
+                    if f.sort == PivotSort::None {
+                        f.custom_order = custom_order(&items, &labels);
+                    }
+                    f.collapsed_items = items.iter().filter(|it| !it.flag("sd", true)).filter_map(|it| lab(it)).collect();
+                    if items.iter().any(|it| it.flag("h", false)) {
+                        let shown: Vec<String> = items.iter().filter(|it| !it.flag("h", false)).filter_map(|it| lab(it)).collect();
+                        if !filters.iter().any(|ff| same(&ff.source_col, &name)) {
+                            filters.push(PivotFilter { source_col: name.clone(), selected: Some(shown), value: None });
+                        }
                     }
                 }
+                v.push(f);
             }
-            v.push(f);
-        }
-        (v, values_at)
-    };
+            (v, values_at)
+        };
     let mut page_filters = Vec::new();
     for p in &pages {
         let Some(i) = p.attr_i64("fld").filter(|i| *i >= 0).map(|i| i as usize) else { continue };
@@ -307,11 +360,12 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 })
             })
         };
-        page_filters.push(PivotFilter { source_col: name, selected });
+        page_filters.push(PivotFilter { source_col: name, selected, value: None });
     }
     let mut axis_filters = Vec::new();
-    let (rows, rows_values) = axis(cx, &row_x, &mut axis_filters);
-    let (columns, cols_values) = axis(cx, &col_x, &mut axis_filters);
+    let (mut row_sorts, mut col_sorts) = (Vec::new(), Vec::new());
+    let (rows, rows_values) = axis(cx, &row_x, &mut axis_filters, &mut row_sorts);
+    let (columns, cols_values) = axis(cx, &col_x, &mut axis_filters, &mut col_sorts);
     pt.rows = rows;
     pt.columns = columns;
     // Σ Values: where its `-2` entry is, else `dataOnRows` and `dataPosition`; after the last
@@ -324,8 +378,9 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
     pt.filters = filters;
 
     // Values.
+    let mut data_field_names: Vec<(usize, String)> = Vec::new();
     if let Some(df) = x.child("dataFields") {
-        for d in df.kids("dataField") {
+        for (k, d) in df.kids("dataField").enumerate() {
             let Some(i) = d.attr_u32("fld").map(|i| i as usize) else { continue };
             let Some(f) = cache.fields.get(i) else { continue };
             let func = match d.attr("subtotal") {
@@ -341,28 +396,66 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 .flat_map(|l| l.kids("ext"))
                 .filter_map(|e| e.child("dataField"))
                 .find_map(|e| e.attr("pivotShowAs").map(str::to_string));
-            let show_as = match (ext.as_deref(), d.attr("showDataAs")) {
-                (Some("rankDescending"), _) => PivotShowAs::Rank,
-                (Some(other), _) => {
-                    cx.warn(format!("PivotTable show-values-as {other} is not supported"));
-                    PivotShowAs::Normal
+            let show_as = show_as_from_xml(d.attr("showDataAs"), ext.as_deref()).unwrap_or_else(|other| {
+                cx.warn(format!("PivotTable show-values-as {other} is not supported"));
+                PivotShowAs::Normal
+            });
+            // The base field is one of the report's row or column fields (a date-grouped one is
+            // saved as its group field); with anything else the default base field applies, and
+            // an item index of the file's field means nothing.
+            let base = d
+                .attr_u32("baseField")
+                .map(|i| i as usize)
+                .filter(|_| show_as.uses_base_field())
+                .and_then(|i| Some((i, axis_source_name(cache, i)?)))
+                .filter(|(_, name)| pt.rows.iter().chain(pt.columns.iter()).any(|f| same(&f.source_col, name)));
+            let base_item = match (&base, d.attr_u32("baseItem")) {
+                _ if !show_as.uses_base_item() => PivotBaseItem::default(),
+                (_, Some(BASE_ITEM_NEXT)) => PivotBaseItem::Next,
+                (Some((i, _)), Some(k)) => {
+                    cache.fields.get(*i).and_then(|f| f.labels().get(k as usize)).cloned().map_or(PivotBaseItem::Previous, PivotBaseItem::Named)
                 }
-                (None, None | Some("normal")) => PivotShowAs::Normal,
-                (None, Some("percentOfTotal")) => PivotShowAs::PercentOfGrandTotal,
-                (None, Some("percentOfCol")) => PivotShowAs::PercentOfColumnTotal,
-                (None, Some("percentOfRow")) => PivotShowAs::PercentOfRowTotal,
-                (None, Some("runTotal")) => PivotShowAs::RunningTotal,
-                (None, Some(other)) => {
-                    cx.warn(format!("PivotTable show-values-as {other} is not supported"));
-                    PivotShowAs::Normal
-                }
+                _ => PivotBaseItem::Previous,
             };
+            // A file always names a base field; the default one (the first row field, else the
+            // first column field) reads back as unset, so the report keeps following its first field.
+            // A named base item keeps its field: the label belongs to that field, wherever it moves.
+            let default_base = pt.rows.first().or(pt.columns.first()).map(|f| f.source_col.as_str());
+            let named = matches!(base_item, PivotBaseItem::Named(_));
+            let base_field = base.map(|(_, name)| name).filter(|name| named || !default_base.is_some_and(|d| same(d, name)));
             let number_format = d
                 .attr_u32("numFmtId")
                 .filter(|id| *id != 0)
                 .and_then(|id| crate::tables::builtin_format(id).map(str::to_string).or_else(|| cx.num_fmts.get(&id).cloned()));
             let name = d.attr("name").map(str::to_string).unwrap_or_else(|| format!("{} of {}", func_caption(func), f.name));
-            pt.values.push(PivotValue { source_col: f.name.clone(), func, name, show_as, number_format });
+            pt.values.push(PivotValue { source_col: f.name.clone(), func, name, show_as, base_field, base_item, number_format });
+            data_field_names.push((k, pt.values.last().map(|v| v.name.clone()).unwrap_or_default()));
+        }
+    }
+
+    // Value filters, on the row or column field their cache field stands for.
+    for (fld, measure, rule) in value_filters {
+        let (Some(name), Some(by)) = (axis_source_name(cache, fld), data_field_names.iter().find(|(j, _)| *j == measure).map(|(_, n)| n.clone()))
+        else {
+            continue;
+        };
+        if !pt.rows.iter().chain(pt.columns.iter()).any(|f| same(&f.source_col, &name)) {
+            continue;
+        }
+        let value = Some(PivotValueFilter { by, rule });
+        match pt.filters.iter_mut().find(|f| same(&f.source_col, &name)) {
+            Some(f) => f.value = value,
+            None => pt.filters.push(PivotFilter { source_col: name, selected: None, value }),
+        }
+    }
+
+    // Fields sorted by a value field name it by its position among the data fields.
+    let name_of = |k: usize| data_field_names.iter().find(|(j, _)| *j == k).map(|(_, n)| n.clone());
+    for (fields, sorts) in [(&mut pt.rows, &row_sorts), (&mut pt.columns, &col_sorts)] {
+        for (position, k) in sorts {
+            if let Some(f) = fields.get_mut(*position) {
+                f.sort_by = name_of(*k);
+            }
         }
     }
 
