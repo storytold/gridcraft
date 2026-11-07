@@ -5,6 +5,17 @@ use super::{Area, Arg, Array, CellError, Ev, Evaluator, Expr, FnCtx, Lambda, Pip
 use std::sync::Arc;
 
 impl<'h> Evaluator<'h> {
+    /// `IF` with an array condition: element-wise.
+    pub(super) fn if_elementwise(&mut self, arr: &Array, args: &[Expr]) -> Ev {
+        let t = self.arg_val(args, 1).unwrap_or(Value::Bool(true));
+        let f = if args.len() > 2 { self.arg_val(args, 2).unwrap_or(Value::Bool(false)) } else { Value::Bool(false) };
+        Ev::V(zip3(arr, &t, &f, |c, t, f| match c.to_bool() {
+            Ok(true) => t.clone(),
+            Ok(false) => f.clone(),
+            Err(e) => Value::Error(e),
+        }))
+    }
+
     pub(super) fn call(&mut self, name: &str, args: &[Expr]) -> Ev {
         match name {
             "IF" => self.if_call(args),

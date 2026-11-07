@@ -53,6 +53,28 @@ pub struct Lambda {
     pub env: Vec<(String, Ev)>,
 }
 
+/// What the tail of a LAMBDA body came to.
+enum Tail {
+    Done(Ev),
+    /// A call to make in place of the current one, its arguments evaluated.
+    Call(Arc<Lambda>, Vec<(String, Ev)>),
+}
+
+/// A tail call can pass a closure that captures the previous one, thousands deep. Releasing the
+/// chain is a loop, not a recursion, so it cannot overflow the native stack.
+impl Drop for Lambda {
+    fn drop(&mut self) {
+        let mut pending = std::mem::take(&mut self.env);
+        while let Some((_, ev)) = pending.pop() {
+            if let Ev::L(l) = ev
+                && let Ok(mut inner) = Arc::try_unwrap(l)
+            {
+                pending.append(&mut inner.env);
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Ev {
     V(Value),
@@ -74,6 +96,11 @@ fn err(e: CellError) -> Ev {
 /// The next call answers `#NUM!`. A countdown from 131, the deepest that `MAX_DEPTH` allows, has 132
 /// calls in progress, so it still runs.
 const MAX_LAMBDA_CALLS: usize = 140;
+
+/// Tail calls one LAMBDA call may chain. They run in a loop on one native frame, so this only keeps
+/// an endless tail recursion finite. Excel computes a tail countdown to 5,459 and answers `#NUM!`
+/// for 5,460, which is 5,460 invocations in the chain.
+const MAX_TAIL_CALLS: usize = 5460;
 
 /// Native stack, in bytes, that one formula's evaluation may use below its first `eval`. Past it,
 /// `eval` answers `#NUM!`. It guards the stack and leaves 128 KiB of a 1 MiB thread for the frames
