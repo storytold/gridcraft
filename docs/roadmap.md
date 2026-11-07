@@ -95,7 +95,7 @@ to check our files, and Windows machines with the reported GPU drivers.
 | Accessibility | #18 | 12–18 |
 | Page Layout view, print polish | #14 | 12–20 |
 | Mobile layout | #23 | 30–60 |
-| AI features with local models | #22 | 30–50 |
+| AI features with local models | #22 | 20–35 |
 | Plugin / custom-function API | #21 | 25–40 |
 
 ## Measuring
@@ -115,6 +115,7 @@ to check our files, and Windows machines with the reported GPU drivers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | minor | Review › Language › Translate landed (§22 in `gaps.md`): current focus, the alpha gate and the remaining AI estimate (20–35 h) follow it |
 | 2026-10-23 | minor | Measuring: tests run through `cargo xtask test` |
 | 2026-10-11 | minor | PivotTable calculated fields landed |
 | 2026-10-10 | minor | Current focus and M15 updated for the 10-10 merges |

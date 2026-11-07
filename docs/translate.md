@@ -51,7 +51,7 @@ WASM backend ships in v1.
 | `translate.start` | `{range?, sheet?, from?: "auto"\|tag, to?, maxCells?}` | `{job, cells, skipped}` | Snapshots and starts a worker; never writes. `to` defaults to the remembered target. |
 | `translate.status` | `{job}` | `{state, progress, segments?, skipped?, stats?, error?}` | `state`: `queued`, `running`, `done`, `cancelled`, `failed`. |
 | `translate.cancel` | `{job}` | `{cancelled}` | Idempotent; a cancelled job writes nothing. |
-| `translate.run` | start's params plus `timeoutMs?` | `{segments, stats}` | Blocking convenience for CLI/MCP; writes nothing. A timeout is an error. |
+| `translate.run` | start's params plus `timeoutMs?` | `{job, segments, stats, model, from, to, elapsedMs}` | Blocking convenience for CLI/MCP; writes nothing. Returns the `job` id as well as the report, so the same result can be passed to `translate.insert` or `translate.copy`; it stays readable while the session keeps it. A timeout is an error. |
 | `translate.insert` | `{range?, job? \| values?, mode?: "replace"\|"emptyOnly"}` | `{cells, skipped}` | Journaled, one undo step, all-or-nothing on errors. `values` is `[{cell, text}]` or rows of text from `range`. |
 | `translate.copy` | `{job, cells?}` | `{chars, cells}` | Puts the translated lines on the engine clipboard (`Session::translate_clipboard`); the pane copies them to the system clipboard on the explicit Copy action. |
 | `translate.models` | `{}` | `{models, active, modelsDir, accelerators}` | Installed/available models, state, licence, hashes and the model directory. |
@@ -59,9 +59,24 @@ WASM backend ships in v1.
 | `translate.modelDownload` | `{id, consent: true}` | model record | URL comes from the shipped manifest, never from the caller; refuses without consent and without a host transport. |
 | `translate.modelRemove` | `{id}` | `{removed}` | Removes the model directory; unknown or traversing ids are refused. |
 
-All eleven are registered in `cargo xtask parity`'s catalog, so `review.translate` moves from
-missing to implemented. Params are ordinary JSON, so the same calls work through the control
-channel, the CLI and MCP.
+Only `review.translate` is a ribbon-catalog entry, so it is the one that moves from missing to
+implemented in `cargo xtask parity` and in the 282 / 296 count. The other ten are registered
+engine commands: reachable through the control channel, `gridcraft-cli run --cmd` and MCP, but not
+catalog rows (there is no ribbon button of their own). Params are ordinary JSON, so the same calls
+work through every surface.
+
+A headless run hands its `job` id straight to the follow-up commands:
+
+```jsonc
+// 1. translate the selection; the report comes back with the id
+{"id": "translate.run", "params": {"range": "A1:B20", "from": "en", "to": "es"}}
+// → {"job": 7, "segments": [...], "stats": {...}}
+
+// 2. write that result (one undo step, all-or-nothing)
+{"id": "translate.insert", "params": {"job": 7, "mode": "replace"}}
+// or take the lines instead of writing them
+{"id": "translate.copy", "params": {"job": 7}}
+```
 
 ## Model, licence and hashes
 
@@ -81,8 +96,9 @@ used. The model is multilingual (119 languages), so the same weights serve sever
 - Licence: **Apache-2.0** (weights and tokenizer model cards), recorded in the manifest and shown
   before download.
 - Total download: 1,845,848,670 bytes (~1.85 GB, ~1.72 GiB). This is a large model: the pane shows
-  the size and the 3 GB memory hint honestly. It is under the 2 GB-per-model refusal threshold but
-  above the point where a download is casual.
+  the size and the 3 GB memory hint (`minRamMb`) honestly. There is no separate per-model cap:
+  each file is bounded by its own manifest size, and the person sees the total and consents before
+  anything is fetched.
 - Inference is one segment at a time: the chat prompt is capped at 2,048 tokens and new tokens at
   256; the 1.8 GB GGUF loads once, on the worker's first translation.
 - Nothing is downloaded, read or verified at startup or when the pane opens.
@@ -95,10 +111,17 @@ as supported after it is run and recorded; do not claim a pair from the model ca
 `from: auto` the heuristic detector's answer is shown but the model performs the translation, so
 an uncertain short string still translates.
 
+The same manifest ships **Qwen3 0.6B** (`qwen3-0.6b`): the same four pairs,
+`Qwen3-0.6B-Q8_0.gguf` at 639,446,688 bytes plus the same tokenizer, with a ~1.5 GB resident
+requirement. It is a smaller, faster, less precise alternative on the same backend, not a second
+backend: `CandleBackend::open(root, "qwen3-0.6b")` verifies and loads it, and the weights path
+always comes from the manifest's `weights` field. The desktop app injects only `qwen3-1.7b` at
+startup (`installed_backend`), so 0.6B is the CLI/embedder option today.
+
 Other models considered: OPUS-MT per-pair models were implemented first (small, ~116 MB) but
-produced narrower output and needed one download per pair; candle + Qwen3 1.7B gives broad
-coverage with one model. `Qwen3-4B` (Q4_K_M) and `Qwen3-0.6B` (Q8, 639 MB) remain the quality/speed
-fallbacks if a future machine cannot spare 1.8 GB.
+produced narrower output and needed one download per pair; candle + Qwen3 gives broad coverage
+with one model. `Qwen3-4B` (Q4_K_M) remains a quality fallback for a machine that can spare the
+memory.
 
 ## Model directory and lifecycle
 
@@ -115,11 +138,12 @@ The root is the first of:
 3. `models/` beside the executable;
 4. `models/` in a source checkout.
 
-Install is staged in a temporary directory: every file's path, byte size and SHA-256 is checked,
-the sidecar is written, then the directory is renamed into place. A failure removes the staging
-directory and leaves any previously installed model untouched. Model files are treated as
-untrusted input: paths are relative, bounded and free of `..`, drives and backslashes; a name that
-does not match a manifest row is refused.
+Install is staged in a temporary directory: each file is streamed into it under the manifest's
+size limit (so a 1.8 GB download is never held in memory), then every file's path, byte size and
+SHA-256 is checked, the sidecar is written, and the directory is renamed into place. A failure
+removes the staging directory and leaves any previously installed model untouched. Model files are
+treated as untrusted input: paths are relative, bounded and free of `..`, drives and backslashes; a
+name that does not match a manifest row is refused.
 
 ## Accelerators and platforms
 
@@ -135,7 +159,8 @@ for a future optional OpenVINO backend on Intel x86 (Windows/Linux): the enum ac
 the manifest carries a runtime hint, and a request for an unavailable accelerator returns the
 clear message "this build runs translation on the CPU; the OpenVINO NPU/GPU backend is not
 available". CPU behaviour is identical whether or not that backend exists. No C/C++ runtime is a
-dependency of this PR.
+dependency of this PR: `tokenizers` is built with `default-features = false` and `fancy-regex`, so
+the default `onig`/`esaxx` native builds are off.
 
 ## Limits
 
@@ -146,8 +171,8 @@ dependency of this PR.
 | Model tokens per batch (estimated) | 512,000 (each segment is one model call, prompt ≤ 2,048) |
 | Characters per cell | 32,000 |
 | Job timeout (`translate.run`, default) | 1,800,000 ms (30 min), capped at 1 h; cancellation is authoritative |
-| New tokens per segment | 256 (greedy; stops at `<|im_end|>`/EOS) |
-| Model file (sanity bound before the manifest check) | 512 MB |
+| New tokens per segment | 256 (greedy; stops at `<|im_end|>`/EOS; a decode that reaches 256 without one is an error, so a truncated sentence is never accepted) |
+| Model file | The manifest's exact byte size for that file: it is the download bound (a larger `content-length` or body is refused) and the size check after it |
 
 Limits are checked before a batch is allocated; they can be lowered with command params
 (`maxCells`, `timeoutMs`), never raised above the manifest caps. Identical sentences are
