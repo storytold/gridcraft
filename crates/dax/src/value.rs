@@ -198,14 +198,7 @@ impl Scalar {
                     format!("{value:.0}")
                 }
             }
-            Scalar::Currency(value) => {
-                // Integer arithmetic keeps every digit of the scaled range (about 19 significant
-                // digits); an f64 round trip would lose the low ones.
-                let sign = if *value < 0 { "-" } else { "" };
-                let magnitude = value.unsigned_abs();
-                let (whole, fraction) = (magnitude / 10_000, magnitude % 10_000);
-                if fraction == 0 { format!("{sign}{whole}") } else { format!("{sign}{whole}.{}", format!("{fraction:04}").trim_end_matches('0')) }
-            }
+            Scalar::Currency(value) => currency_text(*value, false),
             Scalar::DateTime(serial) => datetime_text(*serial),
             // DAX prints at most 15 significant digits; Rust's shortest round-trip form can show
             // 17 (`0.30000000000000004`), so fractional decimals are rounded first.
@@ -217,13 +210,15 @@ impl Scalar {
         }
     }
 
+    /// The storage/debug spelling: currency keeps all four fraction digits, where
+    /// [`Scalar::to_dax_text`] prints DAX's shortened form. Both come from the same exact split.
     pub fn to_text(&self) -> String {
         match self {
             Scalar::Blank => String::new(),
             Scalar::Boolean(true) => "TRUE".into(),
             Scalar::Boolean(false) => "FALSE".into(),
             Scalar::Integer(value) => value.to_string(),
-            Scalar::Currency(value) => format!("{:.4}", *value as f64 / 10_000.0),
+            Scalar::Currency(value) => currency_text(*value, true),
             Scalar::Decimal(value) => {
                 if value.fract() == 0.0 {
                     format!("{value:.1}")
@@ -459,6 +454,21 @@ impl ScalarKey {
     }
 }
 
+/// A `Currency` value — an integer scaled by 10,000 — as text.
+///
+/// The split stays in integers so every digit of the `i64` range survives; dividing through
+/// `f64` rounds above 2^53 and can print the wrong minor units. `keep_zeros` picks the spelling:
+/// `to_text` keeps all four fraction digits, while `to_dax_text` drops the trailing zeros DAX
+/// does not print. Both spellings share this split so they cannot disagree on the value.
+fn currency_text(value: i64, keep_zeros: bool) -> String {
+    let sign = if value < 0 { "-" } else { "" };
+    let magnitude = value.unsigned_abs();
+    let (whole, fraction) = (magnitude / 10_000, magnitude % 10_000);
+    let fraction = format!("{fraction:04}");
+    let fraction = if keep_zeros { fraction.as_str() } else { fraction.trim_end_matches('0') };
+    if fraction.is_empty() { format!("{sign}{whole}") } else { format!("{sign}{whole}.{fraction}") }
+}
+
 /// A `DateTime` serial as DAX prints it: `M/D/YYYY H:MM:SS AM/PM`.
 fn datetime_text(serial: f64) -> String {
     use chrono::Datelike;
@@ -571,6 +581,39 @@ mod tests {
         assert_ne!(distinct_key(&Scalar::Integer(2)), distinct_key(&Scalar::Integer(3)));
         // A non-finite serial prints as itself, not as a fabricated calendar date.
         assert_eq!(Scalar::DateTime(f64::NAN).to_dax_text(), "NaN");
+    }
+
+    #[test]
+    fn currency_text_keeps_every_fixed_point_digit() {
+        // `to_text` is the storage/debug spelling: exactly four fraction digits, sign included.
+        assert_eq!(Scalar::Currency(0).to_text(), "0.0000");
+        assert_eq!(Scalar::Currency(-123_450).to_text(), "-12.3450");
+        // Leading zeros in the fraction stay significant (`1.0001`, not `1.1`).
+        assert_eq!(Scalar::Currency(10_001).to_text(), "1.0001");
+        // Dividing through f64 rounded these away: 2^53 + 1 lost its last minor unit and
+        // `i64::MAX / 10_000` printed `.6250` instead of `.5807`.
+        assert_eq!(Scalar::Currency(9_007_199_254_740_993).to_text(), "900719925474.0993");
+        assert_eq!(Scalar::Currency(9_007_199_254_740_999).to_text(), "900719925474.0999");
+        assert_eq!(Scalar::Currency(i64::MAX).to_text(), "922337203685477.5807");
+        assert_eq!(Scalar::Currency(i64::MIN).to_text(), "-922337203685477.5808");
+
+        // Both spellings now share one exact split, so they agree on every digit.
+        for (value, dax) in [
+            (0, "0"),
+            (-123_450, "-12.345"),
+            (10_001, "1.0001"),
+            (9_007_199_254_740_993, "900719925474.0993"),
+            (9_007_199_254_740_999, "900719925474.0999"),
+            (i64::MAX, "922337203685477.5807"),
+            (i64::MIN, "-922337203685477.5808"),
+        ] {
+            assert_eq!(Scalar::Currency(value).to_dax_text(), dax, "DAX text of {value}");
+            assert_eq!(
+                Scalar::Currency(value).to_text().trim_end_matches('0').trim_end_matches('.'),
+                dax,
+                "the two currency spellings disagree on {value}"
+            );
+        }
     }
 
     #[test]
