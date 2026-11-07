@@ -206,7 +206,9 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
     let w = rows.iter().map(Vec::len).max().unwrap_or(0);
     // The HTML flavour, when the host passed it: the number behind each cell's shown text. Read
     // only as far as the text's own shape, so spans in the markup can't expand without bound.
-    let html = str_param(p, "html").map(|html| crate::clip_html::table_cells(html, h, w)).unwrap_or_default();
+    let html = str_param(p, "html")
+        .map(|html| crate::clip_html::table_cells_for_rows(html, &rows.iter().map(Vec::len).collect::<Vec<_>>()))
+        .unwrap_or_default();
     edit(s, |cx| {
         for (ri, row) in rows.iter().enumerate() {
             for (ci, v) in row.iter().enumerate() {
