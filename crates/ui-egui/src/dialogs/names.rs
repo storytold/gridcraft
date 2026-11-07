@@ -77,7 +77,12 @@ pub(super) fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                 let value = if is_lambda(n) { "LAMBDA".into() } else { preview(&n.get("value").map(|v| v.to_string()).unwrap_or_default(), 18) };
                 ui.add_sized([72.0, row_height], egui::Label::new(value));
                 let refers_to = field(n, "refersTo");
-                ui.add_sized([260.0, row_height], egui::Label::new(preview(&refers_to.replace(['\n', '\r'], " "), 48)).truncate())
+                ui.add_sized(
+                    [260.0, row_height],
+                    egui::Label::new(preview(&refers_to.replace(['\n', '\r'], " "), 48))
+                        .truncate()
+                        .show_tooltip_when_elided(false),
+                )
                     .on_hover_text(refers_to);
                 ui.add_sized([90.0, row_height], egui::Label::new(field(n, "scope")));
                 ui.end_row();
