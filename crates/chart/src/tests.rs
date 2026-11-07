@@ -55,6 +55,7 @@ fn chart(kind: ChartKind) -> Chart {
         source: None,
         by_rows: false,
         pivot: None,
+        empty_cells: Default::default(),
     }
 }
 
@@ -1678,4 +1679,45 @@ fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
+}
+
+/// As observed in Excel with one empty cell: as zero, a column of 0 labelled 0 and a line down to 0;
+/// spanned, a line joins the points on either side; as a gap, nothing and a broken line.
+#[test]
+fn empty_cells_show_as_the_chart_says() {
+    use gridcraft_model::ChartEmptyCells;
+    let mut d = sample(ChartKind::Line);
+    d.series.truncate(1);
+    d.categories.truncate(4);
+    d.series[0].values = vec![Some(30.0), None, Some(20.0), Some(40.0)];
+    d.series[0].number_format = "General".into();
+    let ink = d.series[0].color;
+    let draw = |kind: ChartKind, blanks: ChartEmptyCells| {
+        let mut c = chart(kind);
+        c.empty_cells = blanks;
+        // No legend: its swatch would be another line in the series' colour.
+        c.legend = LegendPos::None;
+        let mut d = d.clone();
+        d.series[0].kind = kind;
+        render(&c, &d, 640.0, 400.0, &ApproxMeasure)
+    };
+    // The value axis has a 0 of its own: count them.
+    let zeros = |prims: &[Prim]| prims.iter().filter(|p| matches!(p, Prim::Text { text, .. } if text == "0")).count();
+    let lines = |prims: &[Prim]| -> Vec<usize> {
+        prims
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Line { pts, color, .. } if *color == ink => Some(pts.len()),
+                _ => None,
+            })
+            .collect()
+    };
+    for kind in [ChartKind::ColumnClustered, ChartKind::Line] {
+        let gap = zeros(&draw(kind, ChartEmptyCells::Gap));
+        assert_eq!(zeros(&draw(kind, ChartEmptyCells::Zero)), gap + 1, "{kind:?}: zero is labelled");
+        assert_eq!(zeros(&draw(kind, ChartEmptyCells::Span)), gap, "{kind:?}: a span is not");
+    }
+    assert_eq!(lines(&draw(ChartKind::Line, ChartEmptyCells::Gap)), vec![2], "the first point stands alone");
+    assert_eq!(lines(&draw(ChartKind::Line, ChartEmptyCells::Span)), vec![3], "one line over the gap");
+    assert_eq!(lines(&draw(ChartKind::Line, ChartEmptyCells::Zero)), vec![4], "down to zero and back");
 }

@@ -2,7 +2,7 @@
 
 use std::f32::consts::{PI, TAU};
 
-use gridcraft_model::{Chart, ChartKind, LineDash, QuartileMethod, Theme, TrendlineKind};
+use gridcraft_model::{Chart, ChartEmptyCells, ChartKind, LineDash, QuartileMethod, Theme, TrendlineKind};
 
 use crate::axis::{Fmt, Scale, clean, nice_scale};
 use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, series_color};
@@ -131,7 +131,15 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
     if !(w.is_finite() && h.is_finite()) || w < 1.0 || h < 1.0 || w > 1e7 || h > 1e7 {
         return vec![];
     }
-    let data = sanitize(data);
+    let mut data = sanitize(data);
+    if chart.empty_cells == ChartEmptyCells::Zero {
+        // Shown as zero: every empty point is a 0, labelled like any other.
+        for s in &mut data.series {
+            for v in &mut s.values {
+                v.get_or_insert(0.0);
+            }
+        }
+    }
     let mut ctx = Ctx { out: Vec::new(), m };
     ctx.out.push(Prim::Rect { x: 0.0, y: 0.0, w, h, fill: Some(WHITE), stroke: Some((GRID, 1.0)), radius: 0.0 });
     let pad = (w.min(h) * 0.04).clamp(2.0, 10.0);
