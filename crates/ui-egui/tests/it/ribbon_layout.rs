@@ -5,7 +5,7 @@ use egui::vec2;
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::icons::Icon;
-use gridcraft_ui_egui::ribbon::{RibbonOverflow, TABS};
+use gridcraft_ui_egui::ribbon::{RibbonOverflow, TABS, TabsOverflow};
 use gridcraft_ui_egui::{SheetApp, widgets};
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
@@ -79,6 +79,29 @@ fn each_tab_keeps_a_scroll_offset_of_its_own() {
     h.state_mut().ui.ribbon_tab = "Home".into();
     h.run_steps(3);
     assert_eq!(RibbonOverflow::get(&h.ctx).offset, home_offset, "Home kept its offset");
+}
+
+#[test]
+fn a_narrow_window_scrolls_the_tab_row_to_its_last_tab() {
+    // File and the ten tabs outgrow a narrow window; the row's arrows bring the trailing tabs
+    // (Automate, Developer) into view instead of leaving them clipped.
+    let mut h = app_at(600.0, "Home");
+    let o = TabsOverflow::get(&h.ctx);
+    assert!(o.overflows(), "the tab row is wider than a 600 px window: {} in {}", o.content, o.visible);
+    assert_eq!(o.offset, 0.0);
+    assert!(h.query_by_label("Scroll tabs left").is_none(), "nothing to the left yet");
+    for _ in 0..8 {
+        let Some(arrow) = h.query_by_label("Scroll tabs right") else { break };
+        arrow.click();
+        h.run_steps(2);
+    }
+    let o = TabsOverflow::get(&h.ctx);
+    assert!(o.offset >= o.content - o.visible - 0.5, "scrolled to the end: {} of {}", o.offset, o.content - o.visible);
+    assert!(h.query_by_label("Scroll tabs right").is_none(), "no right arrow at the end");
+    // A wide window shows the whole row and no arrows.
+    let h = app_at(1440.0, "Home");
+    assert!(!TabsOverflow::get(&h.ctx).overflows());
+    assert!(h.query_by_label("Scroll tabs right").is_none());
 }
 
 #[test]
