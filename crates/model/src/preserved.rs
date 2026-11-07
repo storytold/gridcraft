@@ -93,3 +93,19 @@ impl Preserved {
         self.parts.iter().chain(self.vml.iter()).fold(0usize, |n, p| n.saturating_add(p.data.len()))
     }
 }
+
+/// A kept part the reader dropped because it is larger than the pass-through limit: its package
+/// name, its unpacked size and the limit that applied.
+///
+/// GridCraft keeps unmodelled content so that a save never loses it. A part larger than the limit
+/// can't be kept, and unlike a part it can rebuild, it can't be put back either, so the writer
+/// refuses to save a workbook holding one of these instead of silently losing the part.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DroppedPart {
+    /// The package part name (`xl/model/item.data`).
+    pub name: String,
+    /// Its unpacked size in bytes.
+    pub size: u64,
+    /// The limit that made the reader drop it.
+    pub limit: u64,
+}
