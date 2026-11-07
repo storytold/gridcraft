@@ -15,7 +15,7 @@ generated ribbon checklist is [`parity-checklist.md`](parity-checklist.md).
 | Feature breadth (weighted by use) | **~75%** | estimated from the area table below; anchored on two measurements |
 | Ribbon and menu catalog | **281 / 296 (94.9%)** | measured: `cargo xtask parity` (`crates/engine/src/catalog.rs` ∩ registered command ids) |
 | Worksheet functions, by name | **513 / 523 (98.1%)** | measured: registered functions vs Microsoft's published function list (method below) |
-| Worksheet functions that do real work | **504 / 523 (96.4%)** | measured: excludes 9 stubs (7 CUBE functions, WEBSERVICE, FILTERXML) |
+| Worksheet functions that do real work | **505 / 523 (96.6%)** | measured: excludes 8 stubs (7 CUBE functions, WEBSERVICE until a host installs a fetcher) |
 | **Ready for real work** | **~50%** | estimated; written weights below (51.6 computed) |
 | **Mainstream practitioner** | **~50%** | estimated; [method](#mainstream-practitioner) (69.5 depth × 0.90 × 0.92 × 0.88 = 50.6) |
 | **Essentials user** | **~63%** | estimated; [method](#essentials-user) (80.2 depth × 0.92 × 0.95 × 0.90 = 63.1) |
@@ -81,7 +81,7 @@ performance 8, stability 8, localization 4, hardware 2, platforms 2, ecosystem 2
 | Area | Weight | Breadth | Ready | Hours | Evidence |
 |---|---|---|---|---|---|
 | Formula language and calculation | 18 | ~92% | ~72% | 20–30 | A1/R1C1 parser, reference adjustment, dependency-graph recalc, dynamic arrays and `#SPILL!`, `A1#`, LET/LAMBDA and helpers, structured references, names, 3-D references. Open correctness bugs: 15-digit equality (#57), stale spills after structural edits and cleared blockers (#133, #139), 3-D span endpoint deletion (#140), sheet rename and qualified names (#134). Single-threaded |
-| Worksheet functions | 12 | 98.1% (measured) | ~82% | 16–26 | 513 / 523 names, 504 working. Missing: GETPIVOTDATA, IMAGE plus cloud functions. No conformance suite against Excel-computed oracles; edge-case bugs keep surfacing (#137, #138). [function-parity.md](function-parity.md) |
+| Worksheet functions | 12 | 98.1% (measured) | ~82% | 16–26 | 513 / 523 names, 505 working. Missing: GETPIVOTDATA, IMAGE plus cloud functions. No conformance suite against Excel-computed oracles; edge-case bugs keep surfacing (#137, #138). [function-parity.md](function-parity.md) |
 | Editing, navigation, clipboard, fill | 12 | ~90% | ~70% | 15–25 | Point mode, F4, AutoComplete, Paste Special, AutoFill, Flash Fill, Find/Replace, Go To Special. Bugs: rectangular drag-select (#28), monthly fill (#132), cut across sheets (#128), Insert Copied Cells missing (#21), key tips only on part of the Home tab (#43; #33, #49). [ui-parity.md](ui-parity.md) |
 | Cell formatting, styles, conditional formatting | 10 | ~95% | ~80% | 8–14 | Full number-format language, borders, 47 cell styles, 60 table styles, all CF rule kinds including data bars, colour scales and icon sets. Gaps: font weights beyond regular/bold (#168), system fonts list (#4), themes |
 | Sort, filter, tables, validation, outline | 8 | ~82% | ~70% | 10–16 | Multi-level sort, AutoFilter, Advanced Filter, tables with totals, validation, outline, subtotals, consolidate. Advanced Filter copy-to preserves cells outside its result and rejects worksheet overflow (#1031). Bugs: subtotal header (#131), validation edits (#129), table style panic caught (#130); no slicers on tables |
@@ -341,6 +341,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 | 2026-11-01 | minor | What-if and analysis: Analysis ToolPak has all 19 tools (was 13 of 19; no charts); no score change |
 | 2026-11-01 | minor | Charts: data tables for column, bar, line, area and compatible combo charts, with legend keys and borders; live source values, native XLSX round-trip and shared print/PDF rendering. Readiness estimates unchanged. |
 | 2026-11-01 | minor | Page layout and print: Page Setup's page order (Down, then over or Over, then down), kept in XLSX; no score change |
+| 2026-11-01 | minor | Worksheet functions 505 working (96.6%): FILTERXML added; WEBSERVICE has its host hook and stays a stub until the app ships a fetcher |
 | 2026-10-31 | minor | The Insert Function dialog is named as in Excel (it was called Formula Builder); no score change |
 | 2026-10-31 | minor | What-if and analysis: Solver Options (no score change) |
 | 2026-10-31 | minor | What-if and analysis: Solver Load/Save Model and Reset All; Forecast Sheet moved from Missing to the list of tools, as gaps.md §13 records (no score change) |

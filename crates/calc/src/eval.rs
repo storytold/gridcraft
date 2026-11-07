@@ -122,6 +122,11 @@ pub trait Host {
     }
     /// Called when a formula's evaluation runs past the stack budget.
     fn stack_exhausted(&mut self) {}
+    /// The response for WEBSERVICE (`url` is already checked: http or https, at most 2048
+    /// characters). `None` when this host has no fetcher or the request fails.
+    fn web_get(&mut self, _url: &str) -> Option<String> {
+        None
+    }
 }
 
 pub struct Evaluator<'h> {
@@ -192,6 +197,9 @@ impl Ctx for FnCtx<'_, '_> {
         // The child's spend counts against this cell's budget.
         self.ev.fuel = ev.fuel;
         Some(v)
+    }
+    fn web_get(&mut self, url: &str) -> Option<String> {
+        self.ev.host.web_get(url)
     }
     fn has_lambda(&self) -> bool {
         self.lambda.is_some()

@@ -22,7 +22,7 @@ This page is the summary. The detail is in:
 | Number | Value | Kind |
 |---|---|---|
 | 2026-10-14 | Editing a cell with text that would read back as a number, boolean, date or formula (entered with a leading apostrophe) shows the apostrophe in the editor and formula bar, so Enter unchanged keeps it text (#1362) |
-| **Feature breadth** (weighted) | **~75%** | estimated, anchored on two measurements: ribbon catalog 281 / 296 (94.9%), worksheet functions 513 / 523 (98.1%; 504 working, 96.4%) |
+| **Feature breadth** (weighted) | **~75%** | estimated, anchored on two measurements: ribbon catalog 281 / 296 (94.9%), worksheet functions 513 / 523 (98.1%; 505 working, 96.6%) |
 | **Ready for real work** | **~50%** | estimated from written weights (51.6); [target-app-parity.md](docs/target-app-parity.md) |
 | **Mainstream practitioner** | **~50%** | estimated: typical analyst/finance user, weekly features, × 0.90 interaction × 0.92 stability × 0.88 file exchange; [method](docs/target-app-parity.md#mainstream-practitioner) |
 | **Essentials user** | **~63%** | estimated: core features only, × 0.92 launch/stability × 0.95 clarity × 0.90 opening sent files; [method](docs/target-app-parity.md#essentials-user) |
@@ -144,6 +144,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-11-02 | Solver writes a Sensitivity report: Simplex LP shadow prices, reduced costs and allowable ranges from the final tableau; GRG Nonlinear reduced gradients and Lagrange multipliers from difference gradients, at a Karush-Kuhn-Tucker point only; Solver Results offers it where it applies (no score change) |
 | 2026-11-02 | Floating objects: charts, pictures, shapes and slicers share one selection with a frame of eight resize handles (each moves only its own edges, also on right-to-left sheets); Delete or Backspace deletes the selected object and Escape drops the selection; slicers follow row and column edits and sorts like the other objects; chart series follow cut-moves and sheet renames and deletes; a copied sheet gives its objects fresh ids; `ui.inspect` reports `selectedObject` and `ui.object.select` selects any object (#190, #213) |
 | 2026-11-01 | Chart data tables are available from Chart Design › Add Chart Element and Format Chart Area. Tables follow live source values and number formats, keep blank cells blank, offer legend keys and border settings, and survive XLSX save/reopen; the shared renderer includes them in print and PDF. Readiness estimates unchanged. |
+| 2026-11-01 | FILTERXML works (XPath 1.0 over a strict XML reader; several matches fill a column). WEBSERVICE follows Excel's URL and response limits and fetches through a host-installed `WebFetcher` (none ships yet, so it is still `#VALUE!` in the app) |
 | 2026-11-01 | XLSX keeps the first visible workbook window's active sheet and display settings together, falling back to the first view when all are hidden. Tab ratios are normalized to 0–1000 on import and export; invalid numeric text uses 600. Synthetic round trips cover isolated attributes, missing views, and active tabs after sheet deletion/reordering; firstSheet remains separate #2264 work (#3057). |
 | 2026-10-31 | Esc in File › Info, Print or Options first leaves the text field; the next Esc returns to the sheet (#3035) |
 | 2026-10-31 | CSV and text open detects each column's date order: a value that reads only day first (`31/05/2026`) makes the column day first, a value that reads only month first (`12/31/2026`) makes it month first, an all-ambiguous column keeps month first with a warning, and a column with both kinds stays text with a warning (#2765) |
@@ -269,6 +270,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-11-02 | minor | What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear (no score change) |
 | 2026-11-02 | minor | Progress log: one selection and eight resize handles for every floating object |
 | 2026-11-01 | minor | Chart data tables are available from Chart Design › Add Chart Element and Format Chart Area. Tables follow live source values and number formats, keep blank cells blank, offer legend keys and border settings, and survive XLSX save/reopen; the shared renderer includes them in print and PDF. Readiness estimates unchanged. |
+| 2026-11-01 | minor | Worksheet functions 505 working (FILTERXML); progress log row |
 | 2026-11-01 | trivial | Workbook views: selected window settings stay together, tab ratios are bounded, and regressions cover isolated settings and sheet edits; readiness estimates unchanged (#3057) |
 | 2026-10-31 | minor | File-page text fields keep the view open when Esc cancels an edit (#3035) |
 | 2026-10-31 | minor | Progress log: Recently Used and Insert Function categories |

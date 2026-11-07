@@ -71,6 +71,8 @@ pub(super) struct PassHost<'a> {
     stack_top: usize,
     /// Whether an evaluation ran past the stack budget since the innermost formula started.
     out_of_stack: bool,
+    /// Answers WEBSERVICE; `None` leaves it `#VALUE!`.
+    pub(super) web: Option<std::sync::Arc<dyn gridcraft_functions::WebFetcher>>,
     /// The kept results of the Python cells in the pass: a Python cell isn't evaluated, its
     /// result is laid out (an array spills from the cell, as a formula's does). Each one is in
     /// `pending` until it is laid out, so a formula that reads it first gets its new value.
@@ -110,6 +112,7 @@ impl<'a> PassHost<'a> {
             precision: wb.calc.precision_as_displayed.then(crate::DisplayedPrecision::new),
             stack_top: 0,
             out_of_stack: false,
+            web: None,
             python: HashMap::default(),
         }
     }
@@ -677,6 +680,9 @@ impl Host for PassHost<'_> {
     }
     fn now_serial(&self) -> f64 {
         self.now
+    }
+    fn web_get(&mut self, url: &str) -> Option<String> {
+        self.web.as_ref()?.get(url)
     }
     fn random(&mut self) -> f64 {
         // xorshift64*
