@@ -226,6 +226,7 @@ impl SheetApp {
             // File tab: the Backstage view replaces everything below the title bar.
             backstage::show(self, ui);
         } else {
+            tabs::document_tabs(self, ui);
             ribbon::show(self, ui);
             widgets::notice_bar(self, ui);
             // Python mode edits only in the formula bar: it shows while a Python edit is open,
