@@ -2477,3 +2477,51 @@ fn formulas_read_a_dirty_python_cell_after_it_is_laid_out() {
     assert_eq!((t.num("B1"), t.num("B2")), (5.0, 6.0));
     assert_eq!((t.num("A1"), t.num("A2"), t.num("A3")), (5.0, 100.0, 111.0));
 }
+
+#[test]
+fn full_column_match_and_sumifs_scale() {
+    use gridcraft_model::{Cell, Formula, Sheet};
+    let mut wb = Workbook::new();
+    wb.sheets.clear();
+    let mut data = Sheet::new("Data");
+    let mut summary = Sheet::new("Summary");
+    let mut report = Sheet::new("Report");
+    let fcell = |f: String| Cell { value: Value::Empty, formula: Some(Formula::new(&f).into()), style: Default::default(), py: None };
+    let vcell = |v: Value| Cell { value: v, formula: None, style: Default::default(), py: None };
+    for r in 12u32..2_500 {
+        let row1 = r + 1;
+        let asset_idx = (r - 12) / 31;
+        let asset_name = Value::from(format!("Item-{asset_idx:04}"));
+        data.set_cell(CellRef::new(r, 0), vcell(asset_name));
+        data.set_cell(CellRef::new(r, 6), vcell(Value::Number(1.25)));
+        data.set_cell(CellRef::new(r, 7), vcell(Value::Number(45.0)));
+
+        report.set_cell(CellRef::new(r, 0), fcell(format!("Data!A{row1}")));
+        report.set_cell(CellRef::new(r, 5), fcell(format!("IF(ROW(A{row1})=MATCH(A{row1},A:A,0),TRUE,FALSE)")));
+        report.set_cell(CellRef::new(r, 6), fcell(format!("IFERROR(AVERAGE(H{row1}/Summary!$E$5,I{row1}/Summary!$E$6,J{row1}/Summary!$E$7),\"\")")));
+        report.set_cell(CellRef::new(r, 7), fcell(format!("IF(F{row1},SUMIFS(K:K,N:N,A{row1}&\"_\"),\"NA\")")));
+        report.set_cell(CellRef::new(r, 8), fcell(format!("IF(F{row1},SUMIFS(L:L,N:N,A{row1}&\"_\"),\"NA\")")));
+        report.set_cell(CellRef::new(r, 9), fcell(format!("IF(F{row1},SUMIFS(M:M,N:N,A{row1}&\"_\"),\"NA\")")));
+        report.set_cell(CellRef::new(r, 10), fcell(format!("Data!G{row1}")));
+        report.set_cell(CellRef::new(r, 11), fcell(format!("Data!H{row1}")));
+        report.set_cell(CellRef::new(r, 12), fcell(format!("IF(L{row1}>0,1,0)")));
+        report.set_cell(CellRef::new(r, 13), fcell(format!("A{row1}&\"_\"")));
+    }
+    summary.set_cell(CellRef::new(4, 4), fcell("MAX(Report!H:H)".into()));
+    summary.set_cell(CellRef::new(5, 4), fcell("MAX(Report!I:I)".into()));
+    summary.set_cell(CellRef::new(6, 4), fcell("MAX(Report!J:J)".into()));
+    wb.sheets.push(std::sync::Arc::new(data));
+    wb.sheets.push(std::sync::Arc::new(summary));
+    wb.sheets.push(std::sync::Arc::new(report));
+
+    let mut calc = Calc::new();
+    calc.recalc_all(&mut wb);
+
+    let rep = wb.sheet(2).unwrap_or_else(|| panic!("Report"));
+    assert_eq!(rep.value(CellRef::new(12, 5)), Value::Bool(true));
+    assert_eq!(rep.value(CellRef::new(13, 5)), Value::Bool(false));
+    assert_eq!(rep.value(CellRef::new(12, 7)), Value::Number(31.0 * 1.25));
+    assert_eq!(rep.value(CellRef::new(12, 8)), Value::Number(31.0 * 45.0));
+    assert_eq!(rep.value(CellRef::new(12, 9)), Value::Number(31.0));
+    assert_eq!(rep.value(CellRef::new(13, 7)), Value::from("NA"));
+}

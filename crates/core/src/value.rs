@@ -102,12 +102,78 @@ impl fmt::Display for CellError {
     }
 }
 
+#[derive(Default, Debug)]
+#[doc(hidden)]
+pub struct TextIndex {
+    by_text: std::collections::HashMap<Box<str>, Vec<u32>>,
+}
+
+impl TextIndex {
+    fn build(data: &[Value]) -> Self {
+        let mut by_text: std::collections::HashMap<Box<str>, Vec<u32>> = std::collections::HashMap::new();
+        for (i, v) in data.iter().enumerate() {
+            if let Value::Text(t) = v {
+                let k = lower_text_key(t);
+                by_text.entry(k.into_boxed_str()).or_default().push(i as u32);
+            }
+        }
+        Self { by_text }
+    }
+
+    fn positions(&self, pat: &str) -> &[u32] {
+        if pat.is_ascii() {
+            if !pat.bytes().any(|b| b.is_ascii_uppercase()) {
+                return self.by_text.get(pat).map_or(&[], Vec::as_slice);
+            }
+            if pat.len() <= 128 {
+                let mut buf = [0u8; 128];
+                for (dst, src) in buf[..pat.len()].iter_mut().zip(pat.bytes()) {
+                    *dst = src.to_ascii_lowercase();
+                }
+                if let Ok(s) = std::str::from_utf8(&buf[..pat.len()]) {
+                    return self.by_text.get(s).map_or(&[], Vec::as_slice);
+                }
+            }
+        }
+        let k = lower_text_key(pat);
+        self.by_text.get(k.as_str()).map_or(&[], Vec::as_slice)
+    }
+}
+
+fn lower_text_key(s: &str) -> String {
+    if s.is_ascii() { s.to_ascii_lowercase() } else { s.chars().flat_map(char::to_lowercase).collect() }
+}
+
 /// A 2-D array of values (row-major). Always at least 1×1.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Array {
     pub rows: usize,
     pub cols: usize,
     pub data: Vec<Value>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub text_index: std::sync::OnceLock<TextIndex>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub text_queries: std::sync::atomic::AtomicU32,
+}
+
+impl Clone for Array {
+    fn clone(&self) -> Self {
+        Array {
+            rows: self.rows,
+            cols: self.cols,
+            data: self.data.clone(),
+            text_index: std::sync::OnceLock::new(),
+            text_queries: std::sync::atomic::AtomicU32::new(0),
+        }
+    }
+}
+
+impl PartialEq for Array {
+    fn eq(&self, other: &Self) -> bool {
+        self.rows == other.rows && self.cols == other.cols && self.data == other.data
+    }
 }
 
 impl Array {
@@ -115,26 +181,32 @@ impl Array {
         if rows == 0 || cols == 0 || rows.checked_mul(cols)? != data.len() {
             return None;
         }
-        Some(Array { rows, cols, data })
+        Some(Array { rows, cols, data, text_index: std::sync::OnceLock::new(), text_queries: std::sync::atomic::AtomicU32::new(0) })
     }
     pub fn filled(rows: usize, cols: usize, v: Value) -> Array {
         let (rows, cols) = (rows.max(1), cols.max(1));
-        Array { rows, cols, data: vec![v; rows.saturating_mul(cols)] }
+        Array {
+            rows,
+            cols,
+            data: vec![v; rows.saturating_mul(cols)],
+            text_index: std::sync::OnceLock::new(),
+            text_queries: std::sync::atomic::AtomicU32::new(0),
+        }
     }
     pub fn scalar(v: Value) -> Array {
-        Array { rows: 1, cols: 1, data: vec![v] }
+        Array { rows: 1, cols: 1, data: vec![v], text_index: std::sync::OnceLock::new(), text_queries: std::sync::atomic::AtomicU32::new(0) }
     }
     pub fn column(v: Vec<Value>) -> Array {
         if v.is_empty() {
             return Array::scalar(Value::Error(CellError::Calc));
         }
-        Array { rows: v.len(), cols: 1, data: v }
+        Array { rows: v.len(), cols: 1, data: v, text_index: std::sync::OnceLock::new(), text_queries: std::sync::atomic::AtomicU32::new(0) }
     }
     pub fn row(v: Vec<Value>) -> Array {
         if v.is_empty() {
             return Array::scalar(Value::Error(CellError::Calc));
         }
-        Array { rows: 1, cols: v.len(), data: v }
+        Array { rows: 1, cols: v.len(), data: v, text_index: std::sync::OnceLock::new(), text_queries: std::sync::atomic::AtomicU32::new(0) }
     }
     pub fn get(&self, r: usize, c: usize) -> Option<&Value> {
         if r >= self.rows || c >= self.cols {
@@ -156,10 +228,21 @@ impl Array {
                 data.push(self.get(r, c).cloned().unwrap_or(Value::Empty));
             }
         }
-        Array { rows: self.cols, cols: self.rows, data }
+        Array { rows: self.cols, cols: self.rows, data, text_index: std::sync::OnceLock::new(), text_queries: std::sync::atomic::AtomicU32::new(0) }
     }
     pub fn iter(&self) -> impl Iterator<Item = &Value> {
         self.data.iter()
+    }
+    /// Positions (0-based into `data`, ascending) whose value is `Value::Text` equal to `pat`
+    /// under [`text_eq`], or `None` when the array is too small to index or only queried once.
+    pub fn text_positions(&self, pat: &str) -> Option<&[u32]> {
+        if self.data.len() < 64 {
+            return None;
+        }
+        if self.text_index.get().is_none() && self.text_queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+            return None;
+        }
+        Some(self.text_index.get_or_init(|| TextIndex::build(&self.data)).positions(pat))
     }
 }
 
@@ -348,6 +431,18 @@ pub fn compare_numbers(a: f64, b: f64) -> Ordering {
 
 /// Case-insensitive text order (Unicode lowercase).
 pub fn compare_text(a: &str, b: &str) -> Ordering {
+    if std::ptr::eq(a.as_ptr(), b.as_ptr()) && a.len() == b.len() {
+        return Ordering::Equal;
+    }
+    if a.is_ascii() && b.is_ascii() {
+        for (&x, &y) in a.as_bytes().iter().zip(b.as_bytes()) {
+            let o = x.to_ascii_lowercase().cmp(&y.to_ascii_lowercase());
+            if o != Ordering::Equal {
+                return o;
+            }
+        }
+        return a.len().cmp(&b.len());
+    }
     let mut ai = a.chars().flat_map(char::to_lowercase);
     let mut bi = b.chars().flat_map(char::to_lowercase);
     loop {
@@ -359,6 +454,15 @@ pub fn compare_text(a: &str, b: &str) -> Ordering {
             _ => {}
         }
     }
+}
+
+/// Case-insensitive text equality (Unicode lowercase).
+#[inline]
+pub fn text_eq(a: &str, b: &str) -> bool {
+    if (std::ptr::eq(a.as_ptr(), b.as_ptr()) && a.len() == b.len()) || a.eq_ignore_ascii_case(b) {
+        return true;
+    }
+    (!a.is_ascii() || !b.is_ascii()) && compare_text(a, b) == Ordering::Equal
 }
 
 /// Sorting order used by Sort (ascending): numbers, text, booleans, errors, then blanks last.
