@@ -6,6 +6,7 @@ use std::fmt::Write as _;
 use gridcraft_core::RangeRef;
 use gridcraft_formula::quote_sheet;
 use gridcraft_model::{CalcMode, CalcSettings, PhoneticString, ShowObjects, Style, Visibility, Workbook, WorkbookView};
+use sha2::Digest as _;
 
 use crate::package::ZipOut;
 use crate::xml::{esc, esc_attr};
@@ -112,6 +113,9 @@ pub struct Out {
     pub dxfs: Vec<Style>,
     pub sst: Sst,
     pub images: u32,
+    /// Media parts written so far, by extension and SHA-256 of their bytes: a picture used again
+    /// is found here instead of being compared byte by byte with every earlier one.
+    media: HashMap<(String, [u8; 32]), String>,
     pub charts: u32,
     /// The workbook's file name, which a PivotChart's link to its PivotTable names in brackets.
     pub book_name: String,
@@ -146,15 +150,14 @@ impl Out {
     /// The `xl/media` file name (`imageN.ext`) holding `data`. A picture used on several sheets,
     /// or twice on one, is written once and every drawing points to that part, as in Excel.
     pub fn image_part(&mut self, ext: &str, data: &[u8]) -> String {
-        let existing = self.parts.iter().find(|(name, bytes)| {
-            name.strip_prefix("xl/media/image").is_some_and(|rest| rest.ends_with(&format!(".{ext}"))) && bytes.as_slice() == data
-        });
-        if let Some((name, _)) = existing {
-            return name.trim_start_matches("xl/media/").to_string();
+        let key = (ext.to_string(), sha2::Sha256::digest(data).into());
+        if let Some(file) = self.media.get(&key) {
+            return file.clone();
         }
         self.images += 1;
         let file = format!("image{}.{ext}", self.images);
         self.part(&format!("xl/media/{file}"), None, data.to_vec());
+        self.media.insert(key, file.clone());
         file
     }
     pub fn default_type(&mut self, ext: &str, ct: &str) {
@@ -253,6 +256,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         dxfs: vec![],
         sst: Sst::default(),
         images: 0,
+        media: HashMap::new(),
         charts: 0,
         book_name: book_name.filter(|n| !n.is_empty() && !n.contains(['[', ']'])).unwrap_or(DEFAULT_BOOK_NAME).to_string(),
         chart_names: vec![],
