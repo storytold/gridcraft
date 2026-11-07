@@ -1,6 +1,6 @@
 # The sandbox for helper processes
 
-> **Last updated:** 2026-11-06 · **Change:** minor (more is refused on Linux: other processes, System V and POSIX queues, the terminal; earlier: the app turns Python on, so cells run through the sandbox; earlier: the engine runs Python cells through the sandbox; earlier: first version: the `sandbox` crate and `gridcraft-cli sandbox-check`)
+> **Last updated:** 2026-11-07 · **Change:** minor (no file changes by any route on Linux: Landlock's truncation right is required, and seccomp refuses what Landlock has no right for; earlier: more is refused on Linux: other processes, System V and POSIX queues, the terminal; earlier: the app turns Python on, so cells run through the sandbox; earlier: the engine runs Python cells through the sandbox; earlier: first version: the `sandbox` crate and `gridcraft-cli sandbox-check`)
 
 The sandbox is the layer GridCraft is to run code it doesn't trust in, such as a workbook's
 Python cells: a separate process that confines itself before the code starts. The engine runs
@@ -17,8 +17,9 @@ account. Without a sandbox it could read and change the person's files, use the 
 other programs. The sandbox's job is that it can do none of these:
 
 - **Files:** it can read only the paths its policy lists (the interpreter's installation, the
-  system's shared libraries and font folders) and write no file except `/dev/null`. The home directory,
-  documents and other workbooks are out of reach. So `tempfile` finds no folder it can use. matplotlib,
+  system's shared libraries and font folders) and write no file except `/dev/null`. Nor can it change
+  a file any other way: not its length, permissions, owner, extended attributes, times or flags, even
+  one it can read. The home directory, documents and other workbooks are out of reach. So `tempfile` finds no folder it can use. matplotlib,
   which asks for a writable folder, is given a path that doesn't exist for that one call: it can't save
   its font list there, keeps it in memory, and nothing is written. A plot comes back as bytes in the
   worker's reply.
@@ -59,6 +60,8 @@ use the CPU while it runs.
 5. **The enforcement check.** Before the program runs, each of these must be refused by the
    system with a permission error:
    - reading the canary;
+   - changing its permissions, to those it has, and truncating it, to the length it has, so nothing
+     changes if the attempt works;
    - creating a file next to it, and in the temporary directory;
    - a TCP connection to the loopback address;
    - starting a process (a copy of itself that would exit at once);
@@ -76,16 +79,17 @@ use the CPU while it runs.
 
 The launcher applies two layers, then runs the check.
 
-- **Landlock** (Linux 5.13 and later, enabled by default on current distributions).
+- **Landlock** (ABI 3, which is Linux 6.2 and later, enabled by default on current distributions).
   - **Filesystem rights:** every right Landlock handles is denied except:
     - reading files and listing directories under the read paths;
     - executing and reading the executable paths;
     - reading and writing `/dev/null`.
-  - **Required and best-effort rights:** the first ABI's filesystem rights are a hard
-    requirement, so without Landlock the launch is refused. Newer rights are added where the kernel
+  - **Required and best-effort rights:** the filesystem rights up to ABI 3 are a hard requirement,
+    so without Landlock, or with an older one, the launch is refused. ABI 3 is the first with a right
+    for truncation: before it, `truncate` and `open` with `O_TRUNC` empty a file whatever the rules
+    say. seccomp can't take its place, since `openat2` hides its flags from a filter, and refusing
+    `O_TRUNC` would also refuse opening `/dev/null` to write. Newer rights are added where the kernel
     has them:
-    - renaming across directories (ABI 2);
-    - truncation (ABI 3);
     - TCP bind and connect, as a second network layer (ABI 4);
     - device ioctls (ABI 5);
     - signals and abstract Unix sockets outside the sandbox (ABI 6).
@@ -110,8 +114,17 @@ The launcher applies two layers, then runs the check.
       Landlock's signal scope;
     - changes to any process but the program itself (`prlimit64`, `setpriority`, `ioprio_set`,
       `sched_setaffinity`, `sched_setscheduler`, `sched_setparam`, `sched_setattr`);
+    - what changes a file where Landlock has no right for it, by path or by descriptor: permissions
+      (`chmod`, `fchmod`, `fchmodat`, `fchmodat2`), owner (`chown`, `fchown`, `lchown`, `fchownat`),
+      extended attributes (`setxattr`, `lsetxattr`, `fsetxattr`, `setxattrat`, `removexattr`,
+      `lremovexattr`, `fremovexattr`, `removexattrat`), times (`utime`, `utimes`, `futimesat`,
+      `utimensat`) and flags (`file_setattr`);
     - `ioctl` with `TIOCSTI` or `TIOCLINUX`, which type into a terminal the program inherited, as
       when `sandbox-check` runs a program from a shell;
+    - any `ioctl` whose number says it hands the kernel data, such as `FS_IOC_SETFLAGS` and
+      `FS_IOC_FSSETXATTR`, which change a file's flags on a descriptor opened only to read, and
+      `FS_IOC_SET_ENCRYPTION_POLICY`, whose number says it only reads. Those that ask, such as
+      `isatty`'s, and those that set a descriptor's own flags, such as `FIONBIO`, still work;
     - mounts, namespaces and file handles (`mount`, `umount2`, `pivot_root`, `chroot`,
       `unshare`, `setns`, `open_by_handle_at`, `name_to_handle_at`, the new mount API);
     - `bpf`, `perf_event_open`, `userfaultfd`, keyrings, kernel modules, `kexec`, swap,
@@ -119,7 +132,9 @@ The launcher applies two layers, then runs the check.
   - **x32 calls (x86_64 only)** fail with `EPERM`. They report the x86_64 architecture value with
     other numbers, so the rules above wouldn't match them.
 
-  Filters are built for x86_64 and aarch64; other architectures are refused.
+  Filters are built for x86_64 and aarch64; other architectures are refused. A filter allows what it
+  doesn't name, so a call a later kernel adds is allowed until it is named here; the newest named is
+  `file_setattr` (Linux 6.17).
 
   Because no socket can be made, Python's `asyncio` doesn't work in the sandbox: its event loop
   needs a local socket pair.
@@ -167,5 +182,5 @@ Without a program it runs a confined copy of itself that tries each denied actio
 listing the home directory, and two that must still work (a thread, reading an allowed file). It
 prints one line per attempt. With a program it runs that program confined. Exit status 0 means
 everything is as required, and 1 not, including a launch the launcher refused (for example on a
-Linux kernel without Landlock). 2 means GridCraft has no sandbox for this kind of system at all
+Linux kernel without Landlock, or older than 6.2). 2 means GridCraft has no sandbox for this kind of system at all
 (Windows, FreeBSD, an architecture other than x86_64 or aarch64, macOS without `sandbox-exec`).

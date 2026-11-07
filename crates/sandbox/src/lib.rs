@@ -11,10 +11,11 @@
 //!    files open that a child inherits;
 //! 2. confines itself: on Linux with Landlock (read-only access to the policy's paths, execute
 //!    access only to its programs, no writes) and seccomp (no new processes, no sockets, none of
-//!    the calls that escape or inspect a sandbox); on macOS it runs itself again under
+//!    the calls that escape or inspect a sandbox or that change a file where Landlock has no right
+//!    for it); on macOS it runs itself again under
 //!    `sandbox-exec` with a deny-by-default profile built from the same policy ([`CONFINED_FLAG`]);
-//! 3. checks that the confinement holds: reading the canary, writing next to it, a TCP
-//!    connection and starting a process must each be denied;
+//! 3. checks that the confinement holds: reading the canary, changing its permissions, truncating
+//!    it, writing next to it, a TCP connection and starting a process must each be denied;
 //! 4. only then replaces itself with the program.
 //!
 //! When any step fails, the program never runs: the launcher writes one line,

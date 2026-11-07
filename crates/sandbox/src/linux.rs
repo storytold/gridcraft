@@ -15,9 +15,22 @@ use seccompiler::{BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, Sec
 use crate::policy::Checked;
 use crate::{Result, SandboxError, Support};
 
-/// The newest Landlock ABI this crate knows. Rights it adds are requested on a best-effort basis;
-/// the first ABI's filesystem rights are required.
+/// The oldest Landlock ABI a launch accepts, whose filesystem rights are required: the first that
+/// covers truncating a file (Linux 6.2). Before it, `truncate` and `open` with `O_TRUNC` empty a file
+/// whatever the rules say. A filter can't take its place: `openat2` hides its flags from seccomp, and
+/// refusing `O_TRUNC` would refuse opening `/dev/null` to write, as `open(os.devnull, "w")` does.
+const OLDEST: ABI = ABI::V3;
+/// The newest Landlock ABI this crate knows. Rights it adds past [`OLDEST`] are requested on a
+/// best-effort basis.
 const NEWEST: ABI = ABI::V9;
+
+// System calls the `libc` crate doesn't name on both architectures. Numbers from 424 up are the same
+// on x86_64 and aarch64.
+const SYS_FCHMODAT2: libc::c_long = 452;
+const SYS_SETXATTRAT: libc::c_long = 463;
+const SYS_REMOVEXATTRAT: libc::c_long = 466;
+const SYS_OPEN_TREE_ATTR: libc::c_long = 467;
+const SYS_FILE_SETATTR: libc::c_long = 469;
 
 pub fn support() -> Support {
     match arch() {
@@ -62,6 +75,11 @@ fn says_no_landlock(errno: Option<i32>) -> bool {
     matches!(errno, Some(libc::ENOSYS | libc::EOPNOTSUPP))
 }
 
+/// A kernel without the rights a launch requires ([`OLDEST`]).
+fn too_old_for_truncation(e: impl std::fmt::Display) -> SandboxError {
+    landlock_not_enforced(format!("this kernel has no Landlock, or one older than ABI 3 (Linux 6.2), which can't refuse truncating a file: {e}"))
+}
+
 fn ruleset_error(e: RulesetError) -> SandboxError {
     let absent =
         matches!(&e, RulesetError::CreateRuleset(CreateRulesetError::CreateRulesetCall { source, .. }) if says_no_landlock(source.raw_os_error()));
@@ -73,11 +91,10 @@ fn ruleset_error(e: RulesetError) -> SandboxError {
 /// 4), TCP binding and connecting are denied too; with scopes (ABI 6), signals to and abstract
 /// Unix sockets of processes outside the sandbox.
 fn landlock(policy: &Checked) -> Result<()> {
-    // The first ABI's rights are refused only where Landlock can't be used at all.
     let ruleset = Ruleset::default()
         .set_compatibility(CompatLevel::HardRequirement)
-        .handle_access(AccessFs::from_all(ABI::V1))
-        .map_err(landlock_not_enforced)?
+        .handle_access(AccessFs::from_all(OLDEST))
+        .map_err(too_old_for_truncation)?
         .set_compatibility(CompatLevel::BestEffort)
         .handle_access(AccessFs::from_all(NEWEST))
         .and_then(|r| r.handle_access(AccessNet::from_all(NEWEST)))
@@ -96,7 +113,7 @@ fn landlock(policy: &Checked) -> Result<()> {
     if !status.no_new_privs {
         return Err(SandboxError::NotEnforced("no_new_privs is not set".into()));
     }
-    // The first ABI's rights are a hard requirement, so "partially" means only newer rights are
+    // The rights of `OLDEST` are a hard requirement, so "partially" means only newer rights are
     // missing on this kernel; "not enforced" means nothing is.
     if status.ruleset == RulesetStatus::NotEnforced {
         return Err(SandboxError::NotEnforced(format!("Landlock is not enforced ({:?})", status.landlock)));
@@ -153,6 +170,23 @@ fn denied_calls() -> Vec<libc::c_long> {
         libc::SYS_semop,
         libc::SYS_semctl,
         libc::SYS_semtimedop,
+        // What changes a file without Landlock having a right for it: permissions, owner, extended
+        // attributes, times and flags, by path or by descriptor, on any file this user owns.
+        libc::SYS_fchmod,
+        libc::SYS_fchmodat,
+        SYS_FCHMODAT2,
+        libc::SYS_fchown,
+        libc::SYS_fchownat,
+        libc::SYS_setxattr,
+        libc::SYS_lsetxattr,
+        libc::SYS_fsetxattr,
+        SYS_SETXATTRAT,
+        libc::SYS_removexattr,
+        libc::SYS_lremovexattr,
+        libc::SYS_fremovexattr,
+        SYS_REMOVEXATTRAT,
+        libc::SYS_utimensat,
+        SYS_FILE_SETATTR,
         // POSIX message queues, which no path rule covers either: another process of the same user can
         // open one, by name.
         libc::SYS_mq_open,
@@ -171,6 +205,7 @@ fn denied_calls() -> Vec<libc::c_long> {
         libc::SYS_open_by_handle_at,
         libc::SYS_name_to_handle_at,
         libc::SYS_open_tree,
+        SYS_OPEN_TREE_ATTR,
         libc::SYS_move_mount,
         libc::SYS_fsopen,
         libc::SYS_fsconfig,
@@ -194,9 +229,24 @@ fn denied_calls() -> Vec<libc::c_long> {
         libc::SYS_reboot,
         libc::SYS_syslog,
     ];
-    // x86_64 keeps the older process calls and port I/O; aarch64 has neither.
+    // x86_64 keeps the older process and file calls and port I/O; aarch64 has none of them.
     #[cfg(target_arch = "x86_64")]
-    let calls = [calls, vec![libc::SYS_fork, libc::SYS_vfork, libc::SYS_iopl, libc::SYS_ioperm]].concat();
+    let calls = [
+        calls,
+        vec![
+            libc::SYS_fork,
+            libc::SYS_vfork,
+            libc::SYS_iopl,
+            libc::SYS_ioperm,
+            libc::SYS_chmod,
+            libc::SYS_chown,
+            libc::SYS_lchown,
+            libc::SYS_utime,
+            libc::SYS_utimes,
+            libc::SYS_futimesat,
+        ],
+    ]
+    .concat();
     calls
 }
 
@@ -208,6 +258,10 @@ const IOPRIO_WHO_PROCESS: u64 = 1;
 const TIOCSTI: u64 = libc::TIOCSTI as u64;
 #[allow(clippy::unnecessary_cast)]
 const TIOCLINUX: u64 = libc::TIOCLINUX as u64;
+/// The bit of an `ioctl` request, on both architectures, that says it hands the kernel data.
+const IOC_WRITE: u64 = 0x4000_0000;
+/// Changes a directory, though its number says it only reads, as the kernel's headers have it.
+const FS_IOC_SET_ENCRYPTION_POLICY: u64 = 0x800C_6613;
 
 /// What the main filter refuses with `EPERM`: the calls above, and these when their arguments match.
 /// - `clone` without `CLONE_THREAD`: a new process.
@@ -216,6 +270,10 @@ const TIOCLINUX: u64 = libc::TIOCLINUX as u64;
 /// - A change to the limits, priority or scheduling of any process but `me`.
 /// - `TIOCSTI` and `TIOCLINUX`, which type into a terminal the program inherited, as when
 ///   `gridcraft-cli sandbox-check` runs a program from a shell.
+/// - An `ioctl` that hands the kernel data ([`IOC_WRITE`]), as those that change a file's flags or
+///   attributes do (`FS_IOC_SETFLAGS`, `FS_IOC_FSSETXATTR`) on a descriptor opened only to read.
+///   Landlock's rights don't cover them for files. Those that ask, as `isatty` does, and those that
+///   set a descriptor's own flags, as `FIONBIO` does, carry no such bit and still work.
 ///
 /// Process IDs and `ioctl` requests are compared as the kernel reads them, in 32 bits, so high bits
 /// set on the 64-bit argument don't get past a rule.
@@ -238,7 +296,15 @@ fn main_rules(me: u32) -> Result<BTreeMap<i64, Vec<SeccompRule>>> {
         let another = rule(vec![word(1, SeccompCmpOp::Ne, me)?, word(1, SeccompCmpOp::Ne, 0)?])?;
         rules.insert(nr, vec![rule(vec![word(0, SeccompCmpOp::Ne, one_process)?])?, another]);
     }
-    rules.insert(libc::SYS_ioctl, vec![rule(vec![word(1, SeccompCmpOp::Eq, TIOCSTI)?])?, rule(vec![word(1, SeccompCmpOp::Eq, TIOCLINUX)?])?]);
+    rules.insert(
+        libc::SYS_ioctl,
+        vec![
+            rule(vec![word(1, SeccompCmpOp::Eq, TIOCSTI)?])?,
+            rule(vec![word(1, SeccompCmpOp::Eq, TIOCLINUX)?])?,
+            rule(vec![word(1, SeccompCmpOp::MaskedEq(IOC_WRITE), IOC_WRITE)?])?,
+            rule(vec![word(1, SeccompCmpOp::Eq, FS_IOC_SET_ENCRYPTION_POLICY)?])?,
+        ],
+    );
     Ok(rules)
 }
 
@@ -343,7 +409,61 @@ mod tests {
         ] {
             assert_eq!(rules.get(&nr).map(Vec::len), Some(0), "{nr} is refused outright");
         }
-        assert_eq!(rules.get(&libc::SYS_ioctl).map(Vec::len), Some(2));
+        assert_eq!(rules.get(&libc::SYS_ioctl).map(Vec::len), Some(4));
+    }
+
+    #[test]
+    fn what_landlock_has_no_right_for_is_refused_outright() {
+        let rules = main_rules(4242).unwrap();
+        let every_architecture = [
+            (libc::SYS_fchmod, "fchmod"),
+            (libc::SYS_fchmodat, "fchmodat"),
+            (SYS_FCHMODAT2, "fchmodat2"),
+            (libc::SYS_fchown, "fchown"),
+            (libc::SYS_fchownat, "fchownat"),
+            (libc::SYS_setxattr, "setxattr"),
+            (libc::SYS_lsetxattr, "lsetxattr"),
+            (libc::SYS_fsetxattr, "fsetxattr"),
+            (SYS_SETXATTRAT, "setxattrat"),
+            (libc::SYS_removexattr, "removexattr"),
+            (libc::SYS_lremovexattr, "lremovexattr"),
+            (libc::SYS_fremovexattr, "fremovexattr"),
+            (SYS_REMOVEXATTRAT, "removexattrat"),
+            (libc::SYS_utimensat, "utimensat"),
+            (SYS_FILE_SETATTR, "file_setattr"),
+            (SYS_OPEN_TREE_ATTR, "open_tree_attr"),
+        ];
+        for (nr, name) in every_architecture {
+            assert_eq!(rules.get(&nr).map(Vec::len), Some(0), "{name}");
+        }
+        #[cfg(target_arch = "x86_64")]
+        for (nr, name) in [
+            (libc::SYS_chmod, "chmod"),
+            (libc::SYS_chown, "chown"),
+            (libc::SYS_lchown, "lchown"),
+            (libc::SYS_utime, "utime"),
+            (libc::SYS_utimes, "utimes"),
+            (libc::SYS_futimesat, "futimesat"),
+        ] {
+            assert_eq!(rules.get(&nr).map(Vec::len), Some(0), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_numbers_written_here_are_the_kernels() {
+        // `libc` names this one on x86_64, so a slip in the shared table shows there.
+        #[cfg(target_arch = "x86_64")]
+        assert_eq!(SYS_FCHMODAT2, libc::SYS_fchmodat2);
+        assert_eq!((SYS_SETXATTRAT, SYS_REMOVEXATTRAT, SYS_OPEN_TREE_ATTR, SYS_FILE_SETATTR), (463, 466, 467, 469));
+    }
+
+    #[test]
+    fn a_kernel_that_cant_refuse_truncating_a_file_is_not_accepted() {
+        assert!(AccessFs::from_all(OLDEST).contains(AccessFs::Truncate));
+        assert!(!AccessFs::from_all(ABI::V2).contains(AccessFs::Truncate), "the oldest ABI with the right");
+        // It reads as a machine that can't confine, which the tests that skip on one look for.
+        let e = too_old_for_truncation("the crate's text").to_string();
+        assert!(e.contains("Landlock is not enforced:") && e.contains("Linux 6.2") && e.contains("the crate's text"), "{e}");
     }
 
     #[test]

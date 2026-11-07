@@ -64,6 +64,8 @@ fn the_self_test_finds_every_denial() {
     assert!(o.status.success(), "{out}");
     for line in [
         "denied: read the canary",
+        "denied: change the canary's permissions",
+        "denied: truncate the canary",
         "denied: write next to the canary",
         "denied: write in the temporary directory",
         "denied: TCP connection",
@@ -236,6 +238,84 @@ print("left alone")
     let o = cli(&["sandbox-check", "--read", &prefix, "--", &python, "-I", "-c", code, &me]);
     assert!(o.status.success(), "{}", text(&o));
     assert!(String::from_utf8_lossy(&o.stdout).contains("left alone"), "{}", text(&o));
+}
+
+/// Confined, a program changes no file, whether the policy lets it read that file or not, by path or
+/// by a descriptor: not its contents, permissions, owner, extended attributes, times or flags.
+/// Skipped when there is no `python3`.
+#[test]
+fn a_confined_program_changes_no_file() {
+    if !confines() {
+        return;
+    }
+    let Some((python, prefix)) = system_python() else {
+        return;
+    };
+    let code = r#"
+import errno, fcntl, os, struct, sys
+readable, outside = sys.argv[1:3]
+def refused(what, call, *args):
+    try:
+        call(*args)
+    except PermissionError:
+        return
+    except OSError as e:
+        sys.exit(f"{what}: another error, not a refusal: {e}")
+    sys.exit(f"{what}: it worked")
+fd = os.open(readable, os.O_RDONLY)
+for target in (readable, outside, fd):
+    refused(f"permissions of {target}", os.chmod, target, 0)
+    refused(f"owner of {target}", os.chown, target, os.getuid(), os.getgid())
+    refused(f"times of {target}", os.utime, target, (0, 0))
+    if sys.platform == "linux":
+        refused(f"setting an attribute of {target}", os.setxattr, target, "user.gridcraft", b"1")
+        refused(f"removing an attribute of {target}", os.removexattr, target, "user.gridcraft")
+for path in (readable, outside):
+    refused(f"truncate {path}", os.truncate, path, 0)
+    refused(f"open {path} with O_TRUNC", os.open, path, os.O_RDONLY | os.O_TRUNC)
+    refused(f"open {path} to write", os.open, path, os.O_WRONLY)
+# A descriptor opened to read can't be truncated either way; the file's contents are checked after.
+try:
+    os.ftruncate(fd, 0)
+except OSError:
+    pass
+if sys.platform == "linux":
+    import ctypes
+    libc = ctypes.CDLL(None, use_errno=True)
+    # Newer calls, which the kernel running this may not have: the filter answers before it would.
+    for name, number in (("fchmodat2", 452), ("setxattrat", 463), ("removexattrat", 466), ("file_setattr", 469)):
+        ctypes.set_errno(0)
+        result = libc.syscall(number, -100, readable.encode(), 0, 0)
+        assert result == -1 and ctypes.get_errno() == errno.EPERM, f"{name}: {result}, {ctypes.get_errno()}"
+    # On a descriptor opened only to read, these change the file's flags and attributes.
+    refused("FS_IOC_SETFLAGS", fcntl.ioctl, fd, 0x40086602, struct.pack("l", 0))
+    refused("FS_IOC_FSSETXATTR", fcntl.ioctl, fd, 0x401C5820, bytes(28))
+    refused("FS_IOC_SET_ENCRYPTION_POLICY", fcntl.ioctl, fd, 0x800C6613, bytes(12))
+    # What a program still needs: its own descriptors' flags, and a file of its own in memory.
+    os.set_inheritable(fd, True)
+    os.set_inheritable(fd, False)
+    os.set_blocking(fd, False)
+    own = os.memfd_create("gridcraft-check")
+    os.ftruncate(own, 16)
+    assert os.fstat(own).st_size == 16
+print("unchanged")
+"#;
+    let inside = scratch("unchanged-inside");
+    let elsewhere = scratch("unchanged-outside");
+    let (readable, outside) = (inside.join("allowed.txt"), elsewhere.join("allowed.txt"));
+    let state = |file: &Path| {
+        let m = std::fs::metadata(file).unwrap();
+        (std::fs::read(file).unwrap(), m.permissions(), m.modified().unwrap())
+    };
+    let before = (state(&readable), state(&outside));
+    let d = inside.to_string_lossy().into_owned();
+    let (r, x) = (readable.to_string_lossy().into_owned(), outside.to_string_lossy().into_owned());
+    let o = cli(&["sandbox-check", "--read", &prefix, "--read", &d, "--", &python, "-I", "-c", code, &r, &x]);
+    assert!(o.status.success(), "{}", text(&o));
+    assert!(String::from_utf8_lossy(&o.stdout).contains("unchanged"), "{}", text(&o));
+    assert_eq!((state(&readable), state(&outside)), before);
+    std::fs::remove_dir_all(inside).unwrap();
+    std::fs::remove_dir_all(elsewhere).unwrap();
 }
 
 /// A Python found on this system starts and imports its standard library while confined, with

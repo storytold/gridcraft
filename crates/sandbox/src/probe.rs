@@ -37,12 +37,32 @@ const TCP_TARGET: ([u8; 4], u16) = ([127, 0, 0, 1], 9);
 pub fn enforcement(canary: &Path, exe: &Path, target: u32) -> Vec<Check> {
     vec![
         Check { name: "read the canary", outcome: denied(std::fs::read(canary).map(drop)) },
+        Check { name: "change the canary's permissions", outcome: denied(chmod_probe(canary)) },
+        Check { name: "truncate the canary", outcome: denied(truncate_probe(canary)) },
         Check { name: "write next to the canary", outcome: write_probe(canary.parent().unwrap_or(canary)) },
         Check { name: "write in the temporary directory", outcome: write_probe(&std::env::temp_dir()) },
         Check { name: "TCP connection", outcome: denied(tcp_probe()) },
         Check { name: "start a process", outcome: spawn_probe(exe) },
         Check { name: "signal another process", outcome: signal_probe(target) },
     ]
+}
+
+/// Asks for the permissions the file has, so nothing changes even where this is allowed.
+fn chmod_probe(file: &Path) -> std::io::Result<()> {
+    std::fs::set_permissions(file, std::fs::metadata(file)?.permissions())
+}
+
+/// Asks for the length the file has, so nothing changes even where this is allowed.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn truncate_probe(file: &Path) -> std::io::Result<()> {
+    let length = nix::libc::off_t::try_from(std::fs::metadata(file)?.len()).map_err(|e| std::io::Error::new(ErrorKind::InvalidInput, e))?;
+    nix::unistd::truncate(file, length).map_err(std::io::Error::from)
+}
+
+/// Other systems have no confinement, so no launch gets this far.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn truncate_probe(_: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(ErrorKind::Unsupported, "this system has no sandbox"))
 }
 
 /// Signal 0 to `process`, which delivers nothing: it only asks whether a signal would be allowed.
@@ -193,6 +213,30 @@ mod tests {
         for process in [u32::MAX, i32::MAX as u32] {
             let e = signalable(process).unwrap_err();
             assert!(e.contains("before any confinement"), "{e}");
+        }
+    }
+
+    #[test]
+    fn the_checks_on_the_canary_change_nothing_where_they_are_allowed() {
+        let canary = crate::Canary::create().unwrap();
+        let file = canary.file();
+        let state = || {
+            let m = std::fs::metadata(file).unwrap();
+            (std::fs::read(file).unwrap(), m.permissions(), m.len())
+        };
+        let before = state();
+        // This test isn't confined, so each works, which isn't a denial.
+        assert_eq!(denied(chmod_probe(file)), Outcome::Allowed("it worked".into()));
+        assert_eq!(denied(truncate_probe(file)), Outcome::Allowed("it worked".into()));
+        assert_eq!(state(), before);
+    }
+
+    #[test]
+    fn a_missing_canary_proves_nothing() {
+        let canary = crate::Canary::create().unwrap();
+        let gone = canary.file().with_file_name("not there");
+        for outcome in [denied(chmod_probe(&gone)), denied(truncate_probe(&gone))] {
+            assert!(matches!(&outcome, Outcome::Allowed(detail) if detail.contains("another reason")), "{outcome:?}");
         }
     }
 
