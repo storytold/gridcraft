@@ -7,6 +7,7 @@ mod chart_bool_default;
 mod chart_combo_kinds;
 mod chart_data_table;
 mod chart_ref_offsets;
+mod code_name_roundtrip;
 mod controls_tests;
 mod csv_tests;
 mod encrypted_tests;

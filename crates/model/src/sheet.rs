@@ -88,6 +88,13 @@ impl PartialEq for SheetUid {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Sheet {
     pub name: String,
+    /// `<sheetPr codeName="…">`: the VBA project's name for this sheet's code-behind module
+    /// (`Attribute VB_Name = "…"` inside `vbaProject.bin`), independent of the display name a
+    /// user can rename freely. Kept across open + save so a workbook's VBA project stays bound
+    /// to its sheets - losing it silently (as this field's absence used to mean) can leave
+    /// Excel unable to resolve that binding even though `vbaProject.bin` itself is untouched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_name: Option<String>,
     /// The sheet's identity while the app runs ([`SheetUid`]). Not in JSON or the file.
     #[serde(skip)]
     pub uid: SheetUid,
@@ -189,6 +196,7 @@ impl Sheet {
     pub fn new(name: impl Into<String>) -> Sheet {
         Sheet {
             name: name.into(),
+            code_name: None,
             uid: SheetUid::fresh(),
             file_id: 0,
             cells: CellStore::new(),

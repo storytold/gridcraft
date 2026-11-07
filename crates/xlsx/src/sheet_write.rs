@@ -100,8 +100,12 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     // sheetPr
     let fit = sheet.print.fit_to.is_some();
     let summary = !sheet.summary_below || !sheet.summary_right;
-    if sheet.tab_color.is_some() || fit || summary {
-        s.push_str("<sheetPr>");
+    if sheet.tab_color.is_some() || fit || summary || sheet.code_name.is_some() {
+        s.push_str("<sheetPr");
+        if let Some(cn) = &sheet.code_name {
+            let _ = write!(s, " codeName=\"{}\"", esc_attr(cn));
+        }
+        s.push('>');
         if let Some(c) = &sheet.tab_color {
             let _ = write!(s, "<tabColor {}/>", color_attrs(c));
         }
