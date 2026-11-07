@@ -430,6 +430,51 @@ fn date_text_coerces_in_the_workbook_date_system() {
     }
 }
 
+/// Arithmetic operators use the workbook's region and date system for date text.
+#[test]
+fn regional_arithmetic_coerces_date_text_in_both_calendars() {
+    use gridcraft_core::{DateSystem, region::lookup};
+
+    for (sys, serial) in [(DateSystem::D1900, 44227.0), (DateSystem::D1904, 42765.0)] {
+        let mut t = T::new();
+        t.wb.date_system = sys;
+        t.wb.region = lookup("de-DE");
+        t.set("A1", "'31.01.2021");
+        t.set("A2", "'16.10.2023 12:00");
+        t.set("A3", "'01/31/2021");
+
+        for (cell, formula, expected) in [
+            ("B1", "=A1+0", serial),
+            ("B2", "=1+A1", serial + 1.0),
+            ("B3", "=A1-1", serial - 1.0),
+            ("B4", "=A1*2", serial * 2.0),
+            ("B5", "=A1/2", serial / 2.0),
+            ("B6", "=A1^2", serial * serial),
+            ("B7", "=-A1", -serial),
+            ("B8", "=A1%", serial / 100.0),
+            ("C1", "=A1:A2+0", serial),
+        ] {
+            t.set(cell, formula);
+            assert_eq!(t.get(cell), Value::Number(expected), "{sys:?}: {formula}");
+        }
+        assert_eq!(t.get("C2"), Value::Number(serial + 988.5));
+        for (cell, formula, expected) in [
+            ("D1", "=A3+0", Value::Error(CellError::Value)),
+            ("D2", "=VALUE(A1)", Value::Error(CellError::Value)),
+            ("D3", "=+A1", Value::text("31.01.2021")),
+            ("D4", "=A1&\"\"", Value::text("31.01.2021")),
+            ("D5", "=A1=B1", Value::Bool(false)),
+            ("D6", "=\" 45000.5 \"+0", Value::Number(45000.5)),
+            ("D7", "=\"$1,234.5\"+0", Value::Number(1234.5)),
+            ("D8", "=\"(5)%\"+0", Value::Number(-0.05)),
+            ("D9", "=\"1,5\"+0", Value::Error(CellError::Value)),
+        ] {
+            t.set(cell, formula);
+            assert_eq!(t.get(cell), expected, "{sys:?}: {formula}");
+        }
+    }
+}
+
 /// Lookups compare numbers exactly while `=` and the criteria functions compare them at 15
 /// significant digits. Every expectation was observed in Excel 365 with these fixtures
 /// (`=0.1+0.2` is 0.30000000000000004, `=100+1E-14` is 100.00000000000001).

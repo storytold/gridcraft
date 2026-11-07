@@ -18,8 +18,8 @@ mod lambda;
 mod reference_fns;
 mod special;
 
-use array::map_unary;
 pub use array::{binary_values, zip2};
+use array::{binary_values_in, map_unary};
 pub use format::r1c1_to_a1;
 pub use special::{SPECIAL_FUNCTIONS, is_known_function, precedents, resized_sum_range};
 
@@ -152,6 +152,10 @@ struct FnCtx<'a, 'h> {
 impl Ctx for FnCtx<'_, '_> {
     fn date_system(&self) -> gridcraft_core::DateSystem {
         self.ev.host.workbook().date_system
+    }
+    /// Expose the workbook runtime region to DATEVALUE and TIMEVALUE.
+    fn region(&self) -> &gridcraft_core::Region {
+        self.ev.host.workbook().region
     }
     fn now_serial(&self) -> f64 {
         self.ev.host.now_serial()
@@ -512,7 +516,7 @@ impl<'h> Evaluator<'h> {
             };
         }
         let v = self.value(x);
-        let sys = self.host.workbook().date_system;
+        let wb = self.host.workbook();
         Ev::V(map_unary(
             &v,
             &|n| match op {
@@ -522,7 +526,8 @@ impl<'h> Evaluator<'h> {
                 UnOp::At | UnOp::Spill | UnOp::Trim(_) => Value::number(n),
             },
             op == UnOp::Plus,
-            sys,
+            wb.date_system,
+            wb.region,
         ))
     }
 
@@ -609,7 +614,8 @@ impl<'h> Evaluator<'h> {
                 let mut acc = self.value(left);
                 while let Some((o, r)) = rest.pop() {
                     let y = self.value(r);
-                    acc = binary_values(o, &acc, &y, self.host.workbook().date_system);
+                    let wb = self.host.workbook();
+                    acc = binary_values_in(o, &acc, &y, wb.date_system, wb.region);
                 }
                 Ev::V(acc)
             }
