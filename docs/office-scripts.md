@@ -44,6 +44,10 @@ metadata is stripped from an exported file. `script.osts` reports the format ver
 are structured errors, never a panic. Limits: 500 scripts, 120 characters per name, 100,000
 characters of code.
 
+`script.import` saves under a free name, so importing the same file twice makes a second record:
+the first keeps the code it had. Run or delete the old record explicitly instead of assuming the
+import replaced it.
+
 ## Finding Bun
 
 1. `$GRIDCRAFT_BUN`; 2. `bun` on `PATH`; 3. `<model root>/runtimes/bun/bun(.exe)`, where the model
@@ -122,8 +126,9 @@ and cannot without a separate OS-level sandbox. What the shim does do:
 - Bun starts with a cleared environment (`NO_COLOR` and the user's home folder, plus the
   directories Windows needs to start a process), so the user's tokens and settings are not in the
   script's `env`.
-- The shim lives in a private `0700` folder under the temporary folder, created exclusively, with a
-  `0600` file, so another local user cannot replace the code Bun runs.
+- The shim folder and file are created exclusively under the temporary folder, so a file planted
+  there is never reused. On Unix the folder is set to `0700` and the file to `0600`; on Windows
+  access depends on the temporary folder's ACL.
 
 A script only runs when the person clicks Run (or an agent calls `script.run`). A script from
 `script.import`, or from a custom scripts folder, has exactly the same access as one written in the

@@ -168,10 +168,13 @@ fn exec(s: &mut Session, id: &str, params: Value) -> Result<Value, String> {
 /// Office Scripts: the same local folder and Bun discovery as the app, so the CLI can run and
 /// export scripts. `GRIDCRAFT_SCRIPTS` overrides the folder (tests use a temp one).
 fn scripts_dir() -> Option<String> {
-    if let Some(p) = std::env::var_os("GRIDCRAFT_SCRIPTS") {
-        return Some(std::path::PathBuf::from(p).display().to_string());
-    }
     config_dir().map(|b| b.join("scripts").display().to_string())
+}
+
+/// Which folder a CLI session uses: an explicit `$GRIDCRAFT_SCRIPTS` wins over the folder saved
+/// in the app, which wins over the default `<config>/scripts`.
+fn choose_scripts_dir(explicit: Option<String>, saved: Option<String>, default: Option<String>) -> Option<String> {
+    explicit.or(saved).or(default)
 }
 
 /// The settings folder the app writes `prefs.json` (and `ui.json`) in.
@@ -202,10 +205,12 @@ fn saved_scripts_dir(config: &std::path::Path) -> Option<String> {
 /// Installs the Office Scripts runtime and folder on a session made by the CLI.
 fn with_scripts(mut s: Session) -> Session {
     s.script_host = Some(gridcraft_script_bun::script_host());
-    if let Some(dir) = scripts_dir() {
-        s.scripts_dir_default = Some(dir.clone());
-        let saved = config_dir().and_then(|config| saved_scripts_dir(&config));
-        s.scripts_dir = Some(saved.unwrap_or(dir));
+    let explicit = std::env::var_os("GRIDCRAFT_SCRIPTS").map(|p| std::path::PathBuf::from(p).display().to_string());
+    let default = scripts_dir();
+    if let Some(dir) = explicit.clone().or(default.clone()) {
+        s.scripts_dir_default = Some(dir);
+        let saved = if explicit.is_some() { None } else { config_dir().and_then(|config| saved_scripts_dir(&config)) };
+        s.scripts_dir = choose_scripts_dir(explicit, saved, default);
     }
     s
 }
@@ -625,6 +630,15 @@ fn send(args: &[String]) -> Result<(), String> {
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    #[test]
+    fn an_explicit_scripts_folder_wins_over_the_saved_one() {
+        // `GRIDCRAFT_SCRIPTS` is explicit: the app's saved folder must not replace it.
+        assert_eq!(choose_scripts_dir(Some("/env".into()), Some("/saved".into()), Some("/default".into())), Some("/env".into()));
+        assert_eq!(choose_scripts_dir(None, Some("/saved".into()), Some("/default".into())), Some("/saved".into()));
+        assert_eq!(choose_scripts_dir(None, None, Some("/default".into())), Some("/default".into()));
+        assert_eq!(choose_scripts_dir(None, None, None), None);
+    }
 
     #[test]
     fn a_saved_scripts_folder_is_what_the_cli_uses() {

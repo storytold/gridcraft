@@ -214,7 +214,9 @@ fn services() -> Services {
             let ext = path.extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase).filter(|e| TYPES.iter().any(|(_, x)| x == e));
             let ext = ext.unwrap_or_else(|| "xlsx".to_string());
             let mut dialog = rfd::FileDialog::new().set_file_name(format!("{stem}.{ext}"));
-            for (label, x) in TYPES.iter().filter(|(_, x)| *x == ext).chain(TYPES.iter().filter(|(_, x)| *x != ext)) {
+            // `.osts` is offered only when a script export asked for it: a workbook has no
+            // `.osts` writer, so Save As must not offer that type for `Book1.xlsx`.
+            for (label, x) in TYPES.iter().filter(|(_, x)| *x == ext).chain(TYPES.iter().filter(|(_, x)| *x != ext && *x != "osts")) {
                 dialog = dialog.add_filter(*label, &[*x]);
             }
             dialog.save_file().and_then(|p| p.to_str().map(str::to_string))

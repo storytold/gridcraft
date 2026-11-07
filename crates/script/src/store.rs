@@ -139,6 +139,13 @@ impl ScriptStore {
             if !valid_id(&id) || seen_ids.iter().any(|x| x == &id) {
                 continue;
             }
+            // `script.import` refuses files over the limit; the list must not read one either,
+            // or one huge file in a synced folder stalls every refresh.
+            let oversized = std::fs::metadata(path).map(|meta| meta.len() > crate::osts::MAX_OSTS_BYTES as u64).unwrap_or(true);
+            if oversized {
+                log::warn!("ignoring oversized .osts file: {}", path.display());
+                continue;
+            }
             let Ok(text) = std::fs::read_to_string(path) else { continue };
             let Ok(file) = crate::osts::OstsFile::parse(&text) else { continue };
             let name = if file.description.trim().is_empty() { stem.to_string() } else { file.description.clone() };
@@ -208,7 +215,15 @@ impl ScriptStore {
         let path = self.path_for(id)?;
         match std::fs::remove_file(&path) {
             Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(StoreError::NotFound(id.to_string())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // An `.osts` file in the folder is listed as a script, but it is the person's own
+                // file (or a synced one): say so instead of "there is no script with id …".
+                if self.list()?.iter().any(|r| r.id == id) {
+                    Err(StoreError::Invalid(format!("`{id}` is an .osts file in the scripts folder; remove the file itself")))
+                } else {
+                    Err(StoreError::NotFound(id.to_string()))
+                }
+            }
             Err(e) => Err(StoreError::Io(e)),
         }
     }
@@ -419,6 +434,42 @@ mod tests {
         assert!(s.load("excel-script").is_ok());
         // A GridCraft record with the same id wins (it is ours to manage).
         s.save("From Excel", &code("1")).unwrap();
+        assert_eq!(s.list().unwrap().len(), 1);
+    }
+
+    fn osts_text(description: &str) -> String {
+        serde_json::json!({
+            "version": "0.3.0",
+            "body": "function main(workbook: ExcelScript.Workbook) {\r\n}\r\n",
+            "description": description,
+            "noCodeMetadata": "",
+            "parameterInfo": "{\"version\":1}",
+            "apiInfo": "{\"variant\":\"synchronous\"}"
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn an_osts_script_is_listed_but_delete_says_what_it_is() {
+        let s = store("osts-delete");
+        std::fs::create_dir_all(s.root()).unwrap();
+        std::fs::write(s.root().join("Excel Script.osts"), osts_text("From Excel")).unwrap();
+        assert_eq!(s.list().unwrap().len(), 1);
+        // The pane's Delete passes the listed id; the person's file is not removed silently.
+        let error = s.delete("excel-script").unwrap_err().to_string();
+        assert!(error.contains(".osts") && error.contains("excel-script"), "{error}");
+        assert!(matches!(s.delete("no-such-script"), Err(StoreError::NotFound(_))));
+    }
+
+    #[test]
+    fn an_oversized_osts_file_is_never_read() {
+        let s = store("osts-huge");
+        std::fs::create_dir_all(s.root()).unwrap();
+        let mut huge = osts_text("Huge");
+        huge.push_str(&" ".repeat(crate::osts::MAX_OSTS_BYTES));
+        std::fs::write(s.root().join("Huge.osts"), huge).unwrap();
+        assert!(s.list().unwrap().is_empty(), "a file over the import limit is skipped, not read");
+        std::fs::write(s.root().join("Fits.osts"), osts_text("Fits")).unwrap();
         assert_eq!(s.list().unwrap().len(), 1);
     }
 
