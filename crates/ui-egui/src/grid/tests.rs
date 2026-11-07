@@ -180,6 +180,17 @@ fn filter_menu_uses_the_table_whose_header_was_clicked() {
     assert_eq!(filter_table_range(&sh, 1, 4), None);
 }
 
+/// The box sits a pixel in from either edge, and a row too short for it doesn't pull Bottom up to
+/// Top: in Excel the digits stay on their own side and the cell clips them.
+#[test]
+fn cell_text_keeps_its_side_of_a_short_row() {
+    let (gh, z) = (20.0, 1.0);
+    let rect = Rect::from_min_max(pos2(0.0, 100.0), pos2(100.0, 115.0));
+    assert_eq!(cell_text_y(VAlign::Top, rect, gh, z), 101.0);
+    assert_eq!(cell_text_y(VAlign::Bottom, rect, gh, z), 94.0);
+    assert_eq!(cell_text_y(VAlign::Center, rect, gh, z), 97.5);
+}
+
 /// The `("Label", "id")` keys written in `src`, without separators.
 fn menu_labels(src: &str) -> Vec<&str> {
     src.split("(\"").skip(1).filter_map(|rest| rest.split_once("\", \"").map(|(label, _)| label)).filter(|label| *label != "-").collect()
@@ -226,9 +237,27 @@ fn german_context_menus_have_no_two_items_alike() {
     }
 }
 
+/// From a report on #3435: Middle is the line box's midpoint at any zoom and row height, for one line
+/// and for wrapped text alike.
+#[test]
+fn middle_alignment_uses_the_cell_midpoint() {
+    for z in [0.8, 1.92, 3.2] {
+        for height in [8.0, 20.0, 40.0] {
+            let rect = Rect::from_min_size(pos2(17.3, 42.5), vec2(100.0 * z, height * z));
+            for gh in [12.25 * z, 31.5 * z] {
+                for align in [VAlign::Center, VAlign::Justify, VAlign::Distributed] {
+                    let y = cell_text_y(align, rect, gh, z);
+                    assert!((y + gh / 2.0 - rect.center().y).abs() < 0.001);
+                    assert!((y - wrapped_cell_text_y(align, rect, gh, z)).abs() < 0.001);
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn cell_text_y_moves_monotonically_in_standard_and_tall_rows() {
-    let rect_std = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 20.0));
+    let rect_std = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 24.0));
     let gh = 18.5;
     let z = 1.0;
 

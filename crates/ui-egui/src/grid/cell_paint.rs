@@ -142,10 +142,12 @@ pub(crate) fn wrapped_cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -
     }
 }
 
+/// The line box as Excel places it, measured with Calibri: a pixel in from the row's edge, top or
+/// bottom. In a row too short for it the two simply overlap, so each keeps its side and the cell clips
+/// the rest. The caller adds the font's line gap (`fonts::line_gap`), which Excel has above the text.
 pub(crate) fn cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
-    let top_inset = 1.0 * z;
-    let y_top = rect.top() - top_inset;
-    let y_bottom = (rect.bottom() - gh - 0.5 * z).max(y_top);
+    let y_top = rect.top() + 1.0 * z;
+    let y_bottom = rect.bottom() - gh - 1.0 * z;
     match valign {
         VAlign::Top => y_top,
         VAlign::Center | VAlign::Justify | VAlign::Distributed => (y_top + y_bottom) / 2.0,

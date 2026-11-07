@@ -518,6 +518,15 @@ fn font_definitions_impl(language: crate::i18n::Language, used: &[String], syste
     fonts
 }
 
+/// A font's line gap as a share of its size. Excel draws it above the text and egui below, which in a
+/// cell decides where the text sits: see `fonts::line_gap`.
+pub(crate) fn line_gap_share(fd: &FontData) -> f32 {
+    use skrifa::MetadataProvider;
+    let Ok(font) = skrifa::FontRef::from_index(fd.font.as_ref().as_ref(), fd.index) else { return 0.0 };
+    let m = font.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
+    if m.units_per_em > 0 { (m.leading / f32::from(m.units_per_em)).max(0.0) } else { 0.0 }
+}
+
 /// Builds one role family's chain: the loaded system face (or its role fallback), egui's bundled
 /// proportional/monospace base, Hack's symbols, then the script fallbacks. Keys without font data
 /// are dropped, as before.
@@ -547,6 +556,12 @@ fn build_role_chain(
         chain.push(format!("sys-{UI}"));
     } else if role.starts_with("cell-") {
         chain.push(format!("sys-{CELL}"));
+    }
+    // The face this role really draws with, which may be the plain cell font, and none at all resets
+    // what an earlier build of the fonts noted.
+    if role.starts_with("cell") {
+        let first = chain.first().and_then(|key| fonts.font_data.get(key));
+        crate::fonts::record_line_gap(role, first.map_or(0.0, |fd| line_gap_share(fd)));
     }
     // Equation faces fall back to the maths font (for the symbols a text face lacks), then to the
     // serif face.
