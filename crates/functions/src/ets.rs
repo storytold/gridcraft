@@ -322,7 +322,8 @@ pub(crate) fn series(values: &Value, timeline: &Value, opts: &Options, sys: Date
     let mut times: Vec<f64> = points.iter().map(|p| p.0).collect();
     times.dedup();
     if times.len() < 2 {
-        return Err(CellError::Num);
+        // Excel: one data point is #DIV/0!, while repeated time stamps are #NUM!.
+        return Err(if points.len() == 1 { CellError::Div0 } else { CellError::Num });
     }
     let axis = detect_axis(&times, sys)?;
     let (Some(&first), Some(&last)) = (times.first(), times.last()) else { return Err(CellError::Num) };
@@ -1098,6 +1099,27 @@ mod tests {
         close_tol(ev("FORECAST.ETS", vec![n(6.0), range(&dup_y), range(&dup_t), n(0.0)]), 12.0, 1e-9);
         close_tol(ev("FORECAST.ETS.STAT", vec![range(&dup_y), range(&dup_t), n(8.0)]), 1.0, 1e-12);
         assert_ne!(ev("FORECAST.ETS", vec![n(6.0), range(&dup_y), range(&dup_t), n(0.0), n(1.0), n(7.0)]), Value::Number(12.0));
+    }
+
+    #[test]
+    fn single_data_point_is_div0() {
+        // Excel 16: with a single data point, FORECAST.ETS, .CONFINT, .SEASONALITY and .STAT (types 1-8)
+        // give #DIV/0!, while .STAT type 9 gives #NUM!. When every time stamp is the same (no distinct
+        // stamp), FORECAST.ETS and .SEASONALITY give #NUM!; duplicate stamps are accepted when another
+        // distinct stamp exists (see the duplicate-timeline test above).
+        let one = || [range(&[1.0]), range(&[1.0])];
+        for name in ["FORECAST.ETS", "FORECAST.ETS.CONFINT"] {
+            let [y, t] = one();
+            is_err(ev(name, vec![n(2.0), y, t]), CellError::Div0);
+        }
+        let [y, t] = one();
+        is_err(ev("FORECAST.ETS.SEASONALITY", vec![y, t]), CellError::Div0);
+        let [y, t] = one();
+        is_err(ev("FORECAST.ETS.STAT", vec![y, t, n(8.0)]), CellError::Div0);
+        let [y, t] = one();
+        is_err(ev("FORECAST.ETS.STAT", vec![y, t, n(9.0)]), CellError::Num);
+        is_err(ev("FORECAST.ETS", vec![n(1.0), range(&[1.0, 2.0]), range(&[1.0, 1.0])]), CellError::Num);
+        is_err(ev("FORECAST.ETS.SEASONALITY", vec![range(&[1.0, 2.0]), range(&[1.0, 1.0])]), CellError::Num);
     }
 
     #[test]
