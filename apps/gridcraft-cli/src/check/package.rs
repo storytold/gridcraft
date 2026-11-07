@@ -12,8 +12,7 @@ const RELATIONSHIP_BUDGET: u64 = 512 * 1024 * 1024;
 
 /// Relationship kinds (lower case) whose absence after a save isn't a loss: the calculation chain is
 /// a cache Excel rebuilds, and chart style / user-shape / theme-override sidecars are spelled out inline.
-pub(super) const REBUILT_KINDS: [&str; 7] =
-    ["calcchain", "chartcolorstyle", "chartstyle", "chartusershapes", "pivotcacherecords", "themeoverride", "workbookmetadata"];
+pub(super) const REBUILT_KINDS: [&str; 6] = ["calcchain", "chartcolorstyle", "chartstyle", "pivotcacherecords", "themeoverride", "workbookmetadata"];
 
 // ---------------------------------------------------------------- package validation
 
