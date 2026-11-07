@@ -783,3 +783,41 @@ fn every_skipped_drawing_object_is_reported() {
         assert_eq!(hits, 1, "object {n}: {:?}", rep.warnings);
     }
 }
+
+/// Rows are read before the sheet's format, so the comparison has to wait for the real default.
+#[test]
+fn automatic_row_heights_are_compared_with_the_sheets_own_default() {
+    let rows = r#"<sheetData>
+      <row r="1" ht="12"><c r="A1"><v>1</v></c></row>
+      <row r="2" ht="15"><c r="A2"><v>1</v></c></row>
+      <row r="3" ht="19.95"><c r="A3"><v>1</v></c></row>
+      <row r="4" ht="30"><c r="A4"><v>1</v></c></row>
+      <row r="5" ht="12" customHeight="1"><c r="A5"><v>1</v></c></row>
+      </sheetData>"#;
+    let body = format!(r#"<sheetFormatPr defaultRowHeight="12"/>{rows}"#);
+    let (wb, _) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    let pt = |row: u32| s.row_height(row) * 0.75;
+    assert_eq!(s.default_row_height * 0.75, 12.0);
+    assert_eq!(pt(0), 12.0, "the default itself");
+    assert!(s.rows.get(&0).is_none_or(|i| i.size.is_none()), "an automatic height equal to the default is noise");
+    assert_eq!(pt(1), 15.0, "15 points isn't this sheet's default");
+    assert!((pt(2) - 19.95).abs() < 0.01);
+    assert_eq!(pt(3), 30.0);
+    assert_eq!(pt(4), 12.0);
+    // Close to the default isn't the default: repeated over many rows it would add up.
+    let near = r#"<sheetFormatPr defaultRowHeight="12"/><sheetData><row r="1" ht="12.25"><c r="A1"><v>1</v></c></row></sheetData>"#;
+    let (near_wb, _) = read_xlsx(&minimal(near, &[], "", "")).unwrap();
+    assert!((near_wb.sheet(0).unwrap().row_height(0) * 0.75 - 12.25).abs() < 0.01);
+    let tiny = r#"<sheetFormatPr defaultRowHeight="12"/><sheetData><row r="1" ht="12.01"><c r="A1"><v>1</v></c></row></sheetData>"#;
+    let (tiny_wb, _) = read_xlsx(&minimal(tiny, &[], "", "")).unwrap();
+    assert!(tiny_wb.sheet(0).unwrap().rows.get(&0).is_some_and(|i| i.size.is_some()), "any other height is the file's own");
+    assert!(s.rows.get(&4).is_some_and(|i| i.custom && i.size.is_some()), "a custom height stays even at the default");
+
+    // With the standard default, 15 is the noise.
+    let body = format!(r#"<sheetFormatPr defaultRowHeight="15"/>{rows}"#);
+    let (wb, _) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    assert!(s.rows.get(&1).is_none_or(|i| i.size.is_none()));
+    assert_eq!(s.row_height(0) * 0.75, 12.0);
+}
