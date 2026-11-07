@@ -130,6 +130,8 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Header & Footer", "ヘッダーとフッター"),
     ("Draw with ink", "インクで描画"),
     ("Eraser", "消しゴム"),
+    ("Action Pen", "アクション ペン"),
+    ("Write by hand and turn the writing into text in the cell", "手書きした文字をセル内のテキストに変換します"),
     ("Ink to\nShape", "インクを図形に変換"),
     ("Select\nObjects", "オブジェクトの選択"),
     ("Themes", "テーマ"),

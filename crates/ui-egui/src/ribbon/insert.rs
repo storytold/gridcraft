@@ -279,6 +279,21 @@ pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
     if er.clicked() {
         act(app, "draw.eraser", json!({}));
     }
+    let action_label = app.ui.language.tr("Action Pen").replace(' ', "\n");
+    let action_tip = app.ui.language.tr("Write by hand and turn the writing into text in the cell");
+    let ap = big_button(ui, Icon::Pen, &action_label, action_tip, false);
+    control_keytip(app, ui, &ap, "draw.actionPen");
+    if tool == "actionPen" {
+        ui.painter().rect_stroke(ap.rect, 5.0, Stroke::new(2.0, Tokens::get(ui.ctx()).accent), StrokeKind::Inside);
+    }
+    if ap.clicked() {
+        if crate::inkpanel::ready(app) {
+            act(app, "draw.actionPen", json!({"on": tool != "actionPen"}));
+        } else {
+            // No model: the button opens the download/import panel instead of doing nothing.
+            crate::inkpanel::open(app);
+        }
+    }
     sep(ui);
     let __k = big_button(ui, Icon::Shapes, "Ink to\nShape", "Convert the last ink stroke to a shape", false);
     control_keytip(app, ui, &__k, "draw.inkToShape");

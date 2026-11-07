@@ -1,0 +1,22 @@
+[package]
+name = "gridcraft-ink-rten"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft Action Pen inference: TrOCR small (handwritten) on rten, native only"
+
+[lints]
+workspace = true
+
+[dependencies]
+gridcraft-ink = { workspace = true }
+# ONNX inference in pure Rust (MIT OR Apache-2.0). Pinned to the release the 40-line IAM check
+# measured; the fp32 exports are required (see docs/decisions.md).
+rten = "0.27"
+rten-tensor = "0.27"
+# The model's own tokenizer: `decode` must match the reference implementation exactly.
+# `fancy-regex` (pure Rust, already in the tree through RaTeX) instead of `onig` (a C library),
+# and no progress bar: this stays a plain Rust build on every platform.
+tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
+serde = { workspace = true }
+serde_json = { workspace = true }

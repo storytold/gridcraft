@@ -131,6 +131,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Header & Footer" => "Antet și subsol",
         "Draw with ink" => "Desenare cu cerneală",
         "Eraser" => "Radieră",
+        "Action Pen" => "Stilou de acțiune",
+        "Write by hand and turn the writing into text in the cell" => "Scrieți de mână și transformați scrisul în text în celulă",
         "Ink to\nShape" => "Cerneală în\nformă",
         "Select\nObjects" => "Selectare\nobiecte",
         "Themes" => "Teme",

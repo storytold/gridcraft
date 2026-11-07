@@ -33,6 +33,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("functions", Class::Layer(1)),
     // Equation layout (LaTeX to glyphs, rules and paths) and OMML, on top of RaTeX.
     ("math", Class::Layer(1)),
+    // Ink geometry, the recogniser trait and the handwriting model manifest; no runtime.
+    ("ink", Class::Layer(1)),
     ("model", Class::Layer(2)),
     ("calc", Class::Layer(2)),
     ("xlsx", Class::Layer(2)),
@@ -40,6 +42,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("engine", Class::Layer(5)),
     ("ui-egui", Class::Layer(6)),
     ("mcp", Class::Layer(6)),
+    // Action Pen inference on rten; native only (the wasm gate tests layers at most 5).
+    ("ink-rten", Class::Layer(6)),
     // L7 apps (exempt) and tooling (unchecked)
     ("gridcraft", Class::Layer(7)),
     ("cli", Class::Layer(7)),

@@ -1,5 +1,45 @@
 # Decisions
 
+## Action Pen runs TrOCR small on rten, and its weights are downloaded (#1777)
+
+GridCraft's Draw › Action Pen recognises a handwritten stroke into a typed cell value. The
+runtime is `rten` 0.27 (ONNX in pure Rust, MIT OR Apache-2.0) and the model is
+`Xenova/trocr-small-handwritten` at revision `02bea33ca09a70e2e2d91140a7e6e1a729606a5b`
+(weights from `microsoft/trocr-small-handwritten`, MIT). See [action-pen.md](action-pen.md) for
+the manifest and the measurements.
+
+- **rten, not candle.** Candle has no TrOCR implementation; its ONNX support is not a goal of
+  that project. rten loads the exported encoder and decoder as they are, and it builds for every
+  native target GridCraft ships, without a C++ toolchain.
+- **fp32, not quantized.** rten 0.27 and onnxruntime disagree on this export's quantized
+  decoder/encoder (encoder output correlation 0.52), while the fp32 files agree. With fp32,
+  40 lines of the IAM validation split gave CER 0.0297 and 22/40 exact; with the quantized files
+  onnxruntime itself gave CER 0.056. The fp32 files are bigger (251 MB against 63 MB) and are
+  what the manifest lists.
+- **Greedy decoding, 32 steps.** Start token and end token are 2 in this export; one line is one
+  batch. `tokenizers` (default features off: the Unigram decode needs no C library) turns the
+  ids into text exactly as the model card's pipeline does.
+- **The weights never ship.** They are far too large for the repository and for release
+  packages. The repository holds only the manifest: id, revision, file paths, byte sizes,
+  SHA-256, licence and source URL. `gridcraft-ink` (L1, wasm-clean) owns the manifest and the
+  directory rules; `gridcraft-ink-rten` (L6, native) is the only crate that reads a model file.
+- **Two install paths, both user-initiated.** The model panel downloads the files over HTTPS
+  after an explicit click (streamed to a temporary file, size and SHA-256 checked, then renamed
+  into place), or the person copies the files into the model directory and uses Import… (or
+  copies them by hand). Nothing is fetched at startup, on file open or on pane open; inference
+  makes no network calls at all. Discovery order: `$GRIDCRAFT_MODELS`, the app's settings folder
+  (`models/`), `models/` beside the executable, then `models/` in the source tree.
+- **Absent means disabled, never a crash.** Incomplete or mismatched files make `ink.status` say
+  so and every Action Pen command return a structured error naming the directory to fill. Model
+  files are untrusted input: relative paths in the manifest are refused if they can escape the
+  model directory, sizes are checked before parsing, and `ink.modelImport` copies through a
+  `.part` file so a failed check leaves no half-written model behind.
+
+The measured CER is on IAM line photographs, which is what the model was trained on: it
+exercises the runtime, the preprocessing and the tokenizer on their own distribution. The Action
+Pen's real input is ink rasterised from stroke points, and accuracy on that distribution has
+not been measured yet; that is the honest limit of the number.
+
 ## Bound repeated XLSX column expansion (#1022)
 
 Limit each worksheet to 1,000,000 nondefault column assignments across all `<cols>` blocks.
