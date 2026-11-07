@@ -278,18 +278,23 @@ fn collect_inputs(inputs: &[String]) -> Discovery {
 }
 
 /// Returns false only when the global file budget stops traversal.
-fn walk(dir: &Path, depth: usize, out: &mut Discovery, seen: &mut std::collections::HashSet<u64>) -> bool {
+fn walk(dir: &Path, depth: usize, out: &mut Discovery, seen: &mut std::collections::HashSet<(u64, u64)>) -> bool {
     // A directory is visited once by identity (dev+inode on unix): several links to the same
     // directory are aliases, not exponential branches of the scan. Other platforms keep the
     // depth cap only.
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-        if let Ok(m) = std::fs::metadata(dir)
-            && let Some(id) = m.dev().checked_mul(1 << 60).and_then(|d| d.checked_add(m.ino()))
-            && !seen.insert(id)
-        {
-            return true;
+        if let Ok(m) = std::fs::metadata(dir) {
+            let identity = (m.dev(), m.ino());
+            // Already scanned: an alias. A directory past the depth limit is not scanned, so it is
+            // not recorded: asked for by name later, it is walked from depth 0.
+            if seen.contains(&identity) {
+                return true;
+            }
+            if depth <= MAX_DEPTH {
+                seen.insert(identity);
+            }
         }
     }
     if depth > MAX_DEPTH {

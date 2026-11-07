@@ -205,6 +205,24 @@ fn check_reports_a_depth_limited_scan_while_checking_readable_files() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[cfg(unix)]
+#[test]
+fn a_directory_past_the_depth_limit_is_still_scanned_when_named_as_an_input() {
+    let dir = tmpdir("check-depth-named");
+    // The first folder past the limit (33 levels down): the scan from the top reports it unreached.
+    let mut deep = dir.clone();
+    for _ in 0..33 {
+        deep.push("d");
+    }
+    std::fs::create_dir_all(&deep).unwrap();
+    ok(&["run", "--out", deep.join("deep.xlsx").to_str().unwrap(), "--quiet"]);
+    let out = run(&["check", dir.to_str().unwrap(), deep.to_str().unwrap(), "--json"]);
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    // The first scan reports the subtree it could not reach; the named directory is checked.
+    assert_eq!(report["totals"]["opened"], 1, "{report}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// A script line whose parameters are under a key `run` does not read used to run the command
 /// with no parameters at all, and the run still exited 0: three mistaken lines made Sheet2,
 /// Sheet3 and Sheet4 instead of the named sheets, and nothing said so (#2256).
