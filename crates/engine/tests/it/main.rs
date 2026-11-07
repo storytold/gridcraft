@@ -32,5 +32,6 @@ mod stored_list_shape;
 mod table_resize_overlap;
 mod table_total_row_last_row;
 mod trace_error;
+mod user_name;
 mod workbook_author;
 mod wrap_row_height;

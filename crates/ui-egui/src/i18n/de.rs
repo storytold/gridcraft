@@ -394,6 +394,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unfreeze Panes" => "Fixierung aufheben",
         "Dark Mode" => "Dunkler Modus",
         "Interface language" => "Anzeigesprache",
+        "User name" => "Benutzername",
+        "Signs new notes and comments, and is the author of new workbooks." => {
+            "Wird für neue Notizen und Kommentare und als Autor neuer Arbeitsmappen verwendet."
+        }
         "Command\nPalette" => "Befehls-\npalette",
         "Agent\nControl" => "Agenten-\nsteuerung",
         "Action\nJournal" => "Aktions-\nprotokoll",

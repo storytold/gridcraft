@@ -247,6 +247,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Light" => "Sáng",
         "Dark" => "Tối",
         "Interface language" => "Ngôn ngữ giao diện",
+        "User name" => "Tên người dùng",
+        "Signs new notes and comments, and is the author of new workbooks." => {
+            "Ký tên cho các ghi chú và chú thích mới, và là tác giả của sổ làm việc mới."
+        }
         "Interface size" => "Kích thước giao diện",
         "Auto" => "Tự động",
         "Drag to freeze columns" => "Kéo để cố định cột",
