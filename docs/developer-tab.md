@@ -3,8 +3,8 @@
 The Developer tab is a **UI skeleton** for Excel's Developer tab (#2960). It shows Excel's groups
 and controls in their observed order, wires the one entry GridCraft already implements (`Macros`),
 and renders every other entry as a disabled stub whose tooltip says **"In development — tracked in
-#2960"**. It ships no scripting engine and runs no Python, Rust or VBA; Office Scripts are the
-implemented scripting engine and live in the **Automate** tab (#3527).
+#2960"**. It ships no scripting engine and runs no Python, Rust or VBA, and it has no Office
+Scripts compatibility: the **Automate** tab runs GridCraft's own recorded macros (#3527).
 
 ## Observed layout
 
@@ -62,10 +62,12 @@ never calls a command, so clicking one does nothing. The stub tooltips name the 
 ## Reserved scripting languages
 
 The issue asks for Python, Rust and VBA alongside Office Scripts. None is implemented: GridCraft
-runs no Python, Rust or VBA, and VBA projects in an opened file are preserved on save but not run.
-Office Scripts (TypeScript) are the implemented engine and run from the **Automate** tab (#3527).
-Because Excel's Developer tab has no language control, this tab does not invent one; the reserved
-engines are documented here and tracked in #2960.
+runs no Python, Rust or VBA. A readable VBA project in an OOXML file is kept on open and carried
+unchanged when the workbook is saved as `.xlsm` or `.xltm`; saving as `.xlsx` or `.xltx` omits it.
+Office Scripts (TypeScript) are not compatible either: the **Automate** tab runs GridCraft's own
+macros, which replay recorded command arrays, not TypeScript (#3527). Because Excel's Developer tab
+has no language control, this tab does not invent one; the reserved engines are documented here and
+tracked in #2960.
 
 ## Catalog and keytips
 

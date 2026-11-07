@@ -5,8 +5,8 @@
 //! (Add-ins, Excel Add-ins, COM Add-ins), Controls (Insert, Design Mode, Properties, View Code,
 //! Run Dialog) and XML (Source, Map Properties, Expansion Packs, Refresh Data, Import, Export).
 //! Macros is the one real control — it runs `view.macros`, which opens the Macros dialog. Every
-//! other entry is a disabled stub whose tooltip names #2960: the features are tracked there, and
-//! Office Scripts stay in the Automate tab.
+//! other entry is a disabled stub whose tooltip names #2960: the features are tracked there.
+//! Office Scripts are not supported; the Automate tab runs GridCraft's own recorded macros.
 
 use super::controls::{act, control_keytip, sep};
 use super::{Icon, SheetApp, Ui, big_button, json};
