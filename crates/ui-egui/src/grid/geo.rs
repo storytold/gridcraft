@@ -171,6 +171,18 @@ impl Geo {
     pub fn same_col_pane(&self, a: u32, b: u32) -> bool {
         (a < self.fc) == (b < self.fc)
     }
+    /// Screen x of `col` in the coordinates of the pane holding `pane_col`, also for a column of the
+    /// other pane. Text overflowing across the freeze line is drawn by each pane this way, as in
+    /// Excel: the frozen pane as if nothing had scrolled, the scrolled pane by its scroll.
+    pub fn x_in_pane(&self, sh: &Sheet, pane_col: u32, col: u32) -> f32 {
+        if self.paper.is_some() || self.same_col_pane(pane_col, col) {
+            self.x(sh, col)
+        } else if pane_col < self.fc {
+            self.cells.left() + self.ci.start(col) as f32 * self.z
+        } else {
+            self.cells.left() + self.frozen_w + (self.ci.start(col) as f32 - self.ci.start(self.fc) as f32 - self.scroll.x) * self.z
+        }
+    }
     pub fn cell_rect(&self, sh: &Sheet, c: CellRef) -> Rect {
         Rect::from_min_max(pos2(self.x(sh, c.col), self.y(sh, c.row)), pos2(self.x_end(sh, c.col), self.y_end(sh, c.row)))
     }
