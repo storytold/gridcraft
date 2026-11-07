@@ -302,6 +302,7 @@ impl SheetApp {
         // The requests belong to the window the command left active.
         self.follow_active_window();
         self.prune_selected_object();
+        self.prune_views();
         for req in self.session.take_ui_requests() {
             match req {
                 UiRequest::Dialog(name, params) => self.open_dialog(&name, params),
