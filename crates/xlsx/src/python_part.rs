@@ -89,7 +89,7 @@ pub fn read(cx: &mut Ctx<'_>, rels: &[crate::package::Rel]) -> Result<ScriptsIn,
         }
     };
     let mut over = 0usize;
-    let parsed = xml::parse_streaming(&bytes, &["pythonScript"], &mut |el: El| {
+    let parsed = xml::parse_streaming(&bytes, SCRIPTS, &mut |el: El| {
         if out.scripts.len() < MAX_SCRIPTS {
             out.scripts.push(script_code(&el));
         } else {
@@ -98,12 +98,12 @@ pub fn read(cx: &mut Ctx<'_>, rels: &[crate::package::Rel]) -> Result<ScriptsIn,
         Ok(())
     });
     match parsed {
-        Ok(root) if root.name != "python" => {
+        Ok(xml::Streamed { root, .. }) if root.name != "python" => {
             cx.warn(format!("the Python part has the root <{}>; Python cells kept only their values", root.name));
             out.scripts.clear();
         }
         Ok(_) => {}
-        Err(e) => cx.warn(format!("the Python part is damaged ({e}); kept {} scripts", out.scripts.len())),
+        Err(f) => cx.warn(format!("the Python part is damaged ({}); kept {} scripts", f.error, out.scripts.len())),
     }
     if over > 0 {
         cx.warn(format!("the Python part holds more than {MAX_SCRIPTS} scripts; {over} were not read"));
@@ -117,6 +117,10 @@ pub fn read(cx: &mut Ctx<'_>, rels: &[crate::package::Rel]) -> Result<ScriptsIn,
 /// `2 × (MAX_SCRIPT_CHARS + 1)` decoded characters cover the code kept, and two more escapes'
 /// worth keep the last of them, and the line break after it, from being cut.
 const MAX_ENCODED_CHARS: usize = 14 * (2 * (MAX_SCRIPT_CHARS + 1) + 2);
+
+/// The part is streamed one `pythonScript` at a time; a script's code is its first `code` child,
+/// the only one read, so one is all a script element keeps.
+const SCRIPTS: xml::Streaming<'static> = xml::Streaming { split: &["pythonScript"], children: &[("code", 1)] };
 
 /// A `pythonScript` element's code (ST_Xstring), with `\n` line breaks, cut after
 /// [`MAX_SCRIPT_CHARS`] characters. The limit is measured on the decoded code, so escapes in the
@@ -324,10 +328,11 @@ mod tests {
         let xml = write(&codes);
         assert!(xml.contains(NS) && xml.contains("<pythonScripts><pythonScript><code>a = 1\nb = \"two\" &amp; 'three' &lt;tag&gt;</code>"), "{xml}");
         let mut read = Vec::new();
-        let root = xml::parse_streaming(xml.as_bytes(), &["pythonScript"], &mut |el| {
+        let root = xml::parse_streaming(xml.as_bytes(), SCRIPTS, &mut |el| {
             read.push(script_code(&el));
             Ok(())
         })
+        .map(|s| s.root)
         .unwrap_or_default();
         assert_eq!(root.name, "python");
         assert_eq!(read, codes);

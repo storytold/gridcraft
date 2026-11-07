@@ -2,13 +2,30 @@
 //!
 //! Internally rows and columns are 0-based (`A1` = row 0, col 0). The sheet is 1,048,576 rows by
 //! 16,384 columns (`XFD1048576`), like Excel.
+//!
+//! # Excel's limits
+//!
+//! The constants below are Excel's documented limits (Microsoft's "Excel specifications and
+//! limits" page, the "Worksheet and workbook specifications" table). They are the size of the grid
+//! and the readers' bound of legitimate input: a file Excel wrote never exceeds them, so a part
+//! that does is malformed or crafted. The XLSX reader drops what the grid can't hold with a
+//! warning, and keeps text longer than a cell allows whole with one, since cutting it would lose
+//! data (the XLSB reader still refuses such text). Excel has raised
+//! these over the years (65,536 × 256 before Excel 2007) and may again; a new value goes here, and
+//! the places that still spell a number out (warning texts, a few function bounds) are pointed at
+//! these constants as they are touched. The old limits need no entry: a file written under them
+//! fits the current ones.
 
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+/// Rows in a sheet (`1048576` is the last row number).
 pub const MAX_ROWS: u32 = 1_048_576;
+/// Columns in a sheet (`XFD` is the last column).
 pub const MAX_COLS: u32 = 16_384;
+/// Characters in one cell's text, counted in UTF-16 units as Excel's `LEN` counts them.
+pub const MAX_CELL_CHARS: u32 = 32_767;
 
 /// A cell position (0-based).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default)]
