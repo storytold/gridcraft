@@ -163,6 +163,49 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Trace Error" => "Śledź błąd",
         "Circular References" => "Odwołania cykliczne",
         "Python Mode" => "Tryb Python",
+        "Python Object" => "Obiekt języka Python",
+        "Excel Value" => "Wartość programu Excel",
+        "Copy as CSV" => "Kopiuj jako CSV",
+        "Copy as Markdown" => "Kopiuj jako Markdown",
+        "Save as .csv…" => "Zapisz jako .csv…",
+        "Spill Here" => "Rozlej tutaj",
+        "Spill One Line per Row" => "Rozlej jeden wiersz tekstu na wiersz",
+        "The table isn't kept in the file. Run the cell to see it." => "Tabela nie jest przechowywana w pliku. Uruchom komórkę, aby ją zobaczyć.",
+        "This table is empty." => "Ta tabela jest pusta.",
+        "This table has no rows." => "Ta tabela nie ma wierszy.",
+        "Copied only what is shown: the rest of the table isn't in the copy." => "Skopiowano tylko to, co widać: reszty tabeli nie ma w kopii.",
+        "Saved only what is shown: the rest of the table isn't in the file." => "Zapisano tylko to, co widać: reszty tabeli nie ma w pliku.",
+        "The table is saved." => "Tabela została zapisana.",
+        "Only the first {rows} of {total} rows are shown." => "Widać tylko pierwsze {rows} z {total} wierszy.",
+        "Only the first {cols} of {total} columns are shown." => "Widać tylko pierwsze {cols} z {total} kolumn.",
+        "Some long text is cut." => "Część długiego tekstu jest ucięta.",
+        "Copying and saving take only what is shown. Spill Here gives the whole table." => {
+            "Kopiowanie i zapisywanie obejmują tylko to, co widać. Rozlej tutaj daje całą tabelę."
+        }
+        "Save Python Table as CSV" => "Zapisz tabelę Pythona jako CSV",
+        "Python Table" => "Tabela Pythona",
+        "Convert to Normal Cell" => "Konwertuj na zwykłą komórkę",
+        "Show Card" => "Pokaż kartę",
+        "Insert\nPython" => "Wstaw\nPython",
+        "Insert Python (Ctrl+Alt+Shift+P)" => "Wstaw Python (Ctrl+Alt+Shift+P)",
+        "Python Editor" => "Edytor języka Python",
+        "Edit in Python Editor" => "Edytuj w edytorze języka Python",
+        "Unsaved changes" => "Niezapisane zmiany",
+        "The code for {cell} has unsaved changes." => "Kod komórki {cell} ma niezapisane zmiany.",
+        "The code for {cell} in {workbook} has unsaved changes." => "Kod komórki {cell} w skoroszycie {workbook} ma niezapisane zmiany.",
+        "The code can't be longer: a Python cell holds {max} characters, counted as a PY formula." => {
+            "Kod nie może być dłuższy: komórka języka Python mieści {max} znaków liczonych jako formuła PY."
+        }
+        "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell." => {
+            "Komórka {cell} zmieniła się, gdy była otwarta w edytorze języka Python. Skopiuj kod albo zamknij edytor i otwórz go ponownie na komórce."
+        }
+        "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
+            "Komórka {cell} zmieniła się, gdy była otwarta w edytorze języka Python, więc kod nie został zastosowany. Skopiuj kod albo zamknij edytor i otwórz go ponownie na komórce."
+        }
+        "{apply} applies the code. Esc closes the editor." => "{apply} stosuje kod. Esc zamyka edytor.",
+        "The Python editor's unsaved code was copied to the clipboard." => "Niezapisany kod edytora języka Python skopiowano do schowka.",
+        "Apply" => "Zastosuj",
+        "Discard" => "Odrzuć",
         "Evaluate Formula" => "Szacuj formułę",
         "Watch Window" => "Okno czujki",
         "Calculation\nOptions" => "Opcje\nobliczania",
@@ -1004,6 +1047,276 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Pokaż",
         "Collapse dialog" => "Zwiń okno dialogowe",
         "Expand dialog" => "Rozwiń okno dialogowe",
+        "Python|Off" => "Wyłączony",
+        "Python|Not Set Up" => "Nie skonfigurowano",
+        "Python|Ready" => "Gotowy",
+        "Python|Running" => "Uruchomiony",
+        "Python|Blocked" => "Zablokowany",
+        "Enable Python in cells" => "Włącz Python w komórkach",
+        "Waiting for Python cells to finish before saving..." => "Oczekiwanie na zakończenie komórek Python przed zapisaniem...",
+        "Save Now" => "Zapisz teraz",
+        "The workbook was saved, but these Python cells weren't finished, so the file has their last results, if they had any: {cells}" => {
+            "Skoroszyt został zapisany, ale te komórki Python nie zostały ukończone, więc plik zawiera ich ostatnie wyniki, jeśli takie były: {cells}"
+        }
+        "{cells} and {count} more" => "{cells} i jeszcze {count}",
+        "{version}, too old: Python cells need 3.11 or newer" => "{version}, zbyt stara: komórki Pythona wymagają wersji 3.11 lub nowszej",
+        "Looking for Python…" => "Wyszukiwanie Pythona…",
+        "Copied to the clipboard." => "Skopiowano do schowka.",
+        "This workbook has Python code. Enable it to run its cells; until then they keep the values saved in the file." => {
+            "Ten skoroszyt zawiera kod Python. Włącz go, aby uruchomić komórki; do tego czasu zachowują one wartości zapisane w pliku."
+        }
+        "Enable" => "Włącz",
+        "Python: running {cell}, {seconds} s" => "Python: uruchamianie {cell}, {seconds} s",
+        "Python: {state}" => "Python: {state}",
+        "Open the Python environment" => "Otwórz środowisko Pythona",
+        "Nothing on this system: Python doesn't run here" => "Nic w tym systemie: Python tu nie działa",
+        "GridCraft starts Python with an empty environment" => "GridCraft uruchamia Pythona z pustym środowiskiem",
+        "macOS sandbox profile" => "Profil piaskownicy macOS",
+        "Linux Landlock" => "Linux Landlock",
+        "Linux seccomp filter" => "Filtr Linux seccomp",
+        "Open Python Settings" => "Otwórz ustawienia Pythona",
+        "Choose Interpreter" => "Wybierz interpreter",
+        "Copy Install Command" => "Kopiuj polecenie instalacji",
+        "Run Again" => "Uruchom ponownie",
+        "Reset" => "Resetuj",
+        "Python Environment" => "Środowisko Pythona",
+        "Python Packages" => "Pakiety Pythona",
+        "Python Problems" => "Problemy Pythona",
+        "Python Run Log" => "Dziennik uruchomień Pythona",
+        "What Python Can Do" => "Co potrafi Python",
+        "GridCraft is checking Python." => "GridCraft sprawdza Pythona.",
+        "Check Again" => "Sprawdź ponownie",
+        "Interpreter" => "Interpreter",
+        "Chosen by you:" => "Wybrany przez Ciebie:",
+        "Automatic found:" => "Znaleziony automatycznie:",
+        "What runs:" => "Co jest uruchamiane:",
+        "None found yet." => "Jeszcze nic nie znaleziono.",
+        "Sandbox" => "Piaskownica",
+        "Package folders" => "Foldery pakietów",
+        "What Python can read" => "Co Python może czytać",
+        "uv manages Python versions and packages. To get it, run:" => "uv zarządza wersjami i pakietami Pythona. Aby go zdobyć, uruchom:",
+        "Reading files outside Python: blocked" => "Odczyt plików poza Pythonem: zablokowany",
+        "Writing files: blocked" => "Zapis plików: zablokowany",
+        "Using the network: blocked" => "Korzystanie z sieci: zablokowane",
+        "Starting other programs: blocked" => "Uruchamianie innych programów: zablokowane",
+        "Each time Python starts, GridCraft tries each of these first, and doesn't run Python unless every one is refused." => {
+            "Przy każdym uruchomieniu Pythona GridCraft najpierw próbuje każdej z tych czynności i nie uruchamia Pythona, chyba że wszystkie zostaną odrzucone."
+        }
+        "Install a package with uv. GridCraft only copies the command; you run it in a terminal, then choose Check Again." => {
+            "Zainstaluj pakiet za pomocą uv. GridCraft tylko kopiuje polecenie; uruchamiasz je w terminalu, a następnie wybierasz Sprawdź ponownie."
+        }
+        "Package name" => "Nazwa pakietu",
+        "Other package managers" => "Inne menedżery pakietów",
+        "For people who manage Python another way: choose any interpreter by path in File › Options › Python. With pip:" => {
+            "Dla osób, które zarządzają Pythonem inaczej: wybierz dowolny interpreter według ścieżki w Plik › Opcje › Python. Za pomocą pip:"
+        }
+        "Packages: {count}" => "Pakiety: {count}",
+        "No problems." => "Brak problemów.",
+        "No runs yet." => "Brak uruchomień.",
+        "Go To Cell" => "Przejdź do komórki",
+        "This run printed nothing." => "To uruchomienie niczego nie wypisało.",
+        "Python cells can" => "Komórki Pythona mogą",
+        "Read cells through xl()" => "Odczytywać komórki przez xl()",
+        "GridCraft sends only the cells that xl() names" => "GridCraft wysyła tylko komórki wskazane przez xl()",
+        "Import installed packages" => "Importować zainstalowane pakiety",
+        "The sandbox lets Python read its own installation" => "Piaskownica pozwala Pythonowi czytać własną instalację",
+        "Compute" => "Obliczać",
+        "Within the time and memory limits in File › Options › Python" => "W granicach limitów czasu i pamięci w Plik › Opcje › Python",
+        "Printed output is kept in the Run Log" => "Wypisane dane są przechowywane w dzienniku uruchomień",
+        "Use threads" => "Używać wątków",
+        "Threads stay inside the one Python process" => "Wątki pozostają w obrębie jednego procesu Pythona",
+        "Python cells cannot" => "Komórki Pythona nie mogą",
+        "Read your files" => "Czytać Twoich plików",
+        "Write files" => "Zapisywać plików",
+        "Use the network" => "Korzystać z sieci",
+        "Start programs" => "Uruchamiać programów",
+        "See environment variables" => "Widzieć zmiennych środowiskowych",
+        "Open windows" => "Otwierać okien",
+        "Draw plots. The data goes to a sheet and a chart is built from it." => {
+            "Rysować wykresów. Dane trafiają do arkusza i na ich podstawie powstaje wykres."
+        }
+        "Run this workbook's Python cells" => "Uruchamiaj komórki Pythona tego skoroszytu",
+        "Off by default. Only you can turn this on, here: no file, macro or agent can. A workbook opened from a file also needs its own Enable." => {
+            "Domyślnie wyłączone. Tylko Ty możesz to włączyć, tutaj: żaden plik, makro ani agent nie może. Skoroszyt otwarty z pliku wymaga też własnego Włącz."
+        }
+        "Limits" => "Limity",
+        "While Python is off, GridCraft starts nothing, so it can't yet say which version it would use." => {
+            "Gdy Python jest wyłączony, GridCraft niczego nie uruchamia, więc nie może jeszcze powiedzieć, jakiej wersji by użył."
+        }
+        "Automatic would try first:" => "Automatycznie najpierw spróbuje:",
+        "Set up Python with uv" => "Skonfiguruj Pythona za pomocą uv",
+        "Run these in a terminal, in order. GridCraft looks in this environment first, so there is nothing more to choose. It only copies the commands; it never runs them." => {
+            "Uruchom te polecenia w terminalu, po kolei. GridCraft najpierw szuka w tym środowisku, więc nie trzeba niczego więcej wybierać. Polecenia są tylko kopiowane, nigdy uruchamiane."
+        }
+        "Any Python 3.11 or newer can be chosen by path with Browse…. To add packages to it with pip:" => {
+            "Dowolnego Pythona 3.11 lub nowszego można wybrać według ścieżki przez Przeglądaj…. Aby dodać do niego pakiety za pomocą pip:"
+        }
+        "Time limit for one cell" => "Limit czasu dla jednej komórki",
+        " seconds" => " sekund",
+        "Memory limit" => "Limit pamięci",
+        " MB" => " MB",
+        "At a limit Python is restarted and its variables are cleared; the next run starts fresh." => {
+            "Po osiągnięciu limitu Python jest uruchamiany ponownie, a jego zmienne są czyszczone; następne uruchomienie zaczyna od nowa."
+        }
+        "On macOS the memory limit is a check twice a second, not a hard cap." => {
+            "W macOS limit pamięci jest sprawdzany dwa razy na sekundę i nie jest twardym ograniczeniem."
+        }
+        "Editor" => "Edytor",
+        "Initialization" => "Inicjowanie",
+        "The code that runs before this workbook's Python cells" => "Kod uruchamiany przed komórkami Pythona w tym skoroszycie",
+        "Open Initialization" => "Otwórz inicjowanie",
+        "The initialization code has unsaved changes." => "Kod inicjujący ma niezapisane zmiany.",
+        "The initialization code of {workbook} has unsaved changes." => "Kod inicjujący skoroszytu {workbook} ma niezapisane zmiany.",
+        "The code can't be longer: initialization code holds {max} characters." => "Kod nie może być dłuższy: kod inicjujący mieści {max} znaków.",
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "Kod inicjujący zmienił się, gdy był otwarty w edytorze. Skopiuj swój kod albo zamknij edytor i otwórz go ponownie."
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "Kod inicjujący zmienił się, gdy był otwarty w edytorze, więc Twój kod nie został zastosowany. Skopiuj go albo zamknij edytor i otwórz go ponownie."
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "Kod inicjujący używa pakietu, którego ten Python nie ma. GridCraft pominął wiersze, które go potrzebują, i uruchomił resztę."
+        }
+        "Select a Python cell first." => "Najpierw zaznacz komórkę Pythona.",
+        "Output As" => "Wynik jako",
+        "Run\nCell" => "Uruchom\nkomórkę",
+        "Run the selected Python cell" => "Uruchom zaznaczoną komórkę Pythona",
+        "Run\nAll" => "Uruchom\nwszystko",
+        "Run every Python cell in the workbook, in order" => "Uruchom po kolei wszystkie komórki Pythona w skoroszycie",
+        "Nothing is running." => "Nic nie jest uruchomione.",
+        "Stop the running cell" => "Zatrzymaj uruchomioną komórkę",
+        "Clear Python's variables and run every cell again" => "Wyczyść zmienne Pythona i uruchom ponownie wszystkie komórki",
+        "Python Calculation" => "Obliczenia Pythona",
+        "When this workbook's Python cells run" => "Kiedy uruchamiane są komórki Pythona tego skoroszytu",
+        "A Python cell is running." => "Komórka Pythona jest uruchomiona.",
+        "Python is ready." => "Python jest gotowy.",
+        "Which Python runs cells" => "Który Python uruchamia komórki",
+        "Packages" => "Pakiety",
+        "What this Python has installed" => "Co ma zainstalowane ten Python",
+        "Check Sandbox" => "Sprawdź piaskownicę",
+        "Check Python and the sandbox again, and show the report" => "Sprawdź ponownie Pythona i piaskownicę oraz pokaż raport",
+        "What Python\nCan Do" => "Co potrafi\nPython",
+        "What Python cells can and can't do here" => "Co komórki Pythona mogą, a czego nie mogą tutaj robić",
+        "This Workbook: Enabled" => "Ten skoroszyt: włączony",
+        "This Workbook: Disabled" => "Ten skoroszyt: wyłączony",
+        "Only a person can change this." => "Tylko człowiek może to zmienić.",
+        "Run Log" => "Dziennik uruchomień",
+        "Each run's cell, time and printed output" => "Komórka, czas i wypisane dane każdego uruchomienia",
+        "Clear the Run Log" => "Wyczyść dziennik uruchomień",
+        "Problems" => "Problemy",
+        "Every Python cell with something to say" => "Każda komórka Pythona z jakimś komunikatem",
+        "Diagnostics" => "Diagnostyka",
+        "uv environment" => "środowisko uv",
+        "uv Python" => "Python uv",
+        "virtual environment" => "środowisko wirtualne",
+        "conda environment" => "środowisko conda",
+        "system" => "system",
+        "Python cells need a sandbox, and GridCraft has none for this system." => {
+            "Komórki Pythona wymagają piaskownicy, a GridCraft nie ma jej dla tego systemu."
+        }
+        "The sandbox didn't hold when GridCraft checked it, so Python won't run." => {
+            "Piaskownica nie wytrzymała sprawdzenia przez GridCraft, więc Python nie zostanie uruchomiony."
+        }
+        "Python is off. Turn it on in Settings to run Python cells." => {
+            "Python jest wyłączony. Włącz go w Ustawieniach, aby uruchamiać komórki Pythona."
+        }
+        "GridCraft can't find Python 3.11 or newer. Set one up with uv, or choose one." => {
+            "GridCraft nie może znaleźć Pythona 3.11 lub nowszego. Skonfiguruj go za pomocą uv albo wybierz jakiś."
+        }
+        "This Python is too old: Python cells need 3.11 or newer." => "Ten Python jest zbyt stary: komórki Pythona wymagają wersji 3.11 lub nowszej.",
+        "This is Apple's placeholder for Python, which GridCraft doesn't use. Set up Python with uv, or choose another." => {
+            "To zastępczy Python firmy Apple, którego GridCraft nie używa. Skonfiguruj Pythona za pomocą uv albo wybierz inny."
+        }
+        "GridCraft couldn't work out what this Python needs to run." => "GridCraft nie ustalił, czego ten Python potrzebuje do uruchomienia.",
+        "Python didn't start." => "Python się nie uruchomił.",
+        "Python isn't on for this workbook, so its cells keep the values saved in the file." => {
+            "Python nie jest włączony dla tego skoroszytu, więc jego komórki zachowują wartości zapisane w pliku."
+        }
+        "This session doesn't run Python: cells keep the values saved in the file." => {
+            "Ta sesja nie uruchamia Pythona: komórki zachowują wartości zapisane w pliku."
+        }
+        "This workbook imports packages this Python doesn't have." => "Ten skoroszyt importuje pakiety, których ten Python nie ma.",
+        "pandas isn't installed in this Python, so ranges come back as lists of rows." => {
+            "pandas nie jest zainstalowany w tym Pythonie, więc zakresy wracają jako listy wierszy."
+        }
+        "The initialization code failed, so Python cells can't run." => "Kod inicjujący zakończył się błędem, więc komórki Pythona nie mogą działać.",
+        "This code isn't valid Python." => "Ten kod nie jest poprawnym kodem Python.",
+        "The code raised an error." => "Kod zgłosił błąd.",
+        "The code uses a name that isn't defined." => "Kod używa niezdefiniowanej nazwy.",
+        "This name is defined in a later cell. Python cells run in row order, sheet by sheet." => {
+            "Ta nazwa jest zdefiniowana w dalszej komórce. Komórki Pythona są uruchamiane w kolejności wierszy, arkusz po arkuszu."
+        }
+        "This Python doesn't have that package." => "Ten Python nie ma tego pakietu.",
+        "This package needs a library outside what the sandbox lets Python read." => {
+            "Ten pakiet wymaga biblioteki spoza tego, co piaskownica pozwala czytać Pythonowi."
+        }
+        "Python cells can't read or write files on your computer. Put the data on a sheet and read it with xl()." => {
+            "Komórki Pythona nie mogą czytać ani zapisywać plików na Twoim komputerze. Umieść dane w arkuszu i odczytaj je za pomocą xl()."
+        }
+        "Python cells can't use the network. Put the data on a sheet and read it with xl()." => {
+            "Komórki Pythona nie mogą korzystać z sieci. Umieść dane w arkuszu i odczytaj je za pomocą xl()."
+        }
+        "Python cells can't start other programs or processes." => "Komórki Pythona nie mogą uruchamiać innych programów ani procesów.",
+        "This picture is too large to draw. Make figsize or dpi smaller." => "Ten obraz jest zbyt duży, aby go narysować. Zmniejsz figsize lub dpi.",
+        "The picture appears in the cell by itself. Python cells can't write files, so this line would fail." => {
+            "Obraz pojawia się w komórce samoczynnie. Komórki Pythona nie mogą zapisywać plików, więc ten wiersz zakończyłby się błędem."
+        }
+        "This package draws in a web browser, which Python cells can't open. Use matplotlib or seaborn." => {
+            "Ten pakiet rysuje w przeglądarce internetowej, której komórki Pythona nie mogą otworzyć. Użyj matplotlib lub seaborn."
+        }
+        "Python Output" => "Dane wyjściowe Pythona",
+        "Display Plot over Cells" => "Wyświetl wykres nad komórkami",
+        "Create Reference" => "Utwórz odwołanie",
+        "Copy Image" => "Kopiuj obraz",
+        "Save Image…" => "Zapisz obraz…",
+        "The image is saved." => "Obraz został zapisany.",
+        "The image is on the clipboard." => "Obraz znajduje się w schowku.",
+        "Image" => "Obraz",
+        "size" => "rozmiar",
+        "Resize" => "Zmień rozmiar",
+        "This picture shows the last result that cell gave." => "Ten obraz pokazuje ostatni wynik zwrócony przez tę komórkę.",
+        "Select a Python cell that gave a picture first." => "Najpierw zaznacz komórkę Pythona, która zwróciła obraz.",
+        "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
+            "xl() wymaga, aby jego odwołanie było zapisane w kodzie jako tekst, na przykład xl(\"A1:B5\")."
+        }
+        "This range is too large to send to Python." => "Ten zakres jest zbyt duży, aby wysłać go do Pythona.",
+        "xl() names something that isn't a cell, range, table or defined name here." => {
+            "xl() wskazuje coś, co tutaj nie jest komórką, zakresem, tabelą ani zdefiniowaną nazwą."
+        }
+        "The code ran past the time limit. Python was restarted, so its variables were cleared." => {
+            "Kod przekroczył limit czasu. Python został uruchomiony ponownie, więc jego zmienne zostały wyczyszczone."
+        }
+        "The code went over the memory limit. Python was restarted, so its variables were cleared." => {
+            "Kod przekroczył limit pamięci. Python został uruchomiony ponownie, więc jego zmienne zostały wyczyszczone."
+        }
+        "The result is too large to bring back to the sheet." => "Wynik jest zbyt duży, aby wrócić do arkusza.",
+        "The printed output was cut off at its limit." => "Wypisane dane zostały obcięte na limicie.",
+        "Python stopped unexpectedly and was restarted, so its variables were cleared." => {
+            "Python nieoczekiwanie się zatrzymał i został uruchomiony ponownie, więc jego zmienne zostały wyczyszczone."
+        }
+        "The result is empty." => "Wynik jest pusty.",
+        "The result needs cells that aren't empty." => "Wynik wymaga komórek, które nie są puste.",
+        "The result isn't a number a cell can hold." => "Wynik nie jest liczbą, którą może pomieścić komórka.",
+        "This date or length of time is outside what a cell can hold." => "Ta data lub długość czasu wykracza poza to, co może pomieścić komórka.",
+        "This cell is running." => "Ta komórka jest uruchomiona.",
+        "What this cell reads has changed since it last ran." => "To, co czyta ta komórka, zmieniło się od ostatniego uruchomienia.",
+        "This cell was stopped before it finished." => "Ta komórka została zatrzymana przed zakończeniem.",
+        "xl() needs its reference written as text, such as xl(\"A1:B5\"). A computed reference can't be read." => {
+            "xl() wymaga, aby jego odwołanie było zapisane jako tekst, na przykład xl(\"A1:B5\"). Obliczonego odwołania nie można odczytać."
+        }
+        "This module needs the network or other programs, which Python cells can't use." => {
+            "Ten moduł wymaga sieci lub innych programów, z których komórki Pythona nie mogą korzystać."
+        }
+        "This Python doesn't have this package." => "Ten Python nie ma tego pakietu.",
+        "Python cells can't open windows or ask for input." => "Komórki Pythona nie mogą otwierać okien ani prosić o dane wejściowe.",
+        "Python cells don't see your environment variables." => "Komórki Pythona nie widzą Twoich zmiennych środowiskowych.",
+        "Open Settings" => "Otwórz ustawienia",
+        "Show Printed Output" => "Pokaż wydrukowane dane wyjściowe",
+        "Hide Printed Output" => "Ukryj wydrukowane dane wyjściowe",
+        "Line {line}" => "Wiersz {line}",
+        "Line {line}: {message}" => "Wiersz {line}: {message}",
+        "Python {version}, ready" => "Python {version}, gotowy",
+        "Python {version}, running" => "Python {version}, działa",
         _ => return None,
     })
 }

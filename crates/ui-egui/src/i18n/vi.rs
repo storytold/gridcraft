@@ -169,6 +169,54 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Trace Error" => "Truy tìm lỗi",
         "Circular References" => "Tham chiếu vòng",
         "Python Mode" => "Chế độ Python",
+        "Python Object" => "Đối tượng Python",
+        "Excel Value" => "Giá trị Excel",
+        "Copy as CSV" => "Sao chép dưới dạng CSV",
+        "Copy as Markdown" => "Sao chép dưới dạng Markdown",
+        "Save as .csv…" => "Lưu dưới dạng .csv…",
+        "Spill Here" => "Tràn tại đây",
+        "Spill One Line per Row" => "Tràn mỗi dòng văn bản thành một hàng",
+        "The table isn't kept in the file. Run the cell to see it." => "Bảng không được giữ trong tệp. Hãy chạy ô để xem bảng.",
+        "This table is empty." => "Bảng này trống.",
+        "This table has no rows." => "Bảng này không có hàng nào.",
+        "Copied only what is shown: the rest of the table isn't in the copy." => {
+            "Chỉ sao chép phần đang hiển thị: phần còn lại của bảng không có trong bản sao."
+        }
+        "Saved only what is shown: the rest of the table isn't in the file." => {
+            "Chỉ lưu phần đang hiển thị: phần còn lại của bảng không có trong tệp."
+        }
+        "The table is saved." => "Đã lưu bảng.",
+        "Only the first {rows} of {total} rows are shown." => "Chỉ hiển thị {rows} hàng đầu tiên trong số {total} hàng.",
+        "Only the first {cols} of {total} columns are shown." => "Chỉ hiển thị {cols} cột đầu tiên trong số {total} cột.",
+        "Some long text is cut." => "Một phần văn bản dài đã bị cắt.",
+        "Copying and saving take only what is shown. Spill Here gives the whole table." => {
+            "Sao chép và lưu chỉ lấy phần đang hiển thị. Tràn tại đây cho toàn bộ bảng."
+        }
+        "Save Python Table as CSV" => "Lưu bảng Python dưới dạng CSV",
+        "Python Table" => "Bảng Python",
+        "Convert to Normal Cell" => "Chuyển đổi thành ô thông thường",
+        "Show Card" => "Hiển thị thẻ",
+        "Insert\nPython" => "Chèn\nPython",
+        "Insert Python (Ctrl+Alt+Shift+P)" => "Chèn Python (Ctrl+Alt+Shift+P)",
+        "Python Editor" => "Trình soạn thảo Python",
+        "Edit in Python Editor" => "Sửa trong Trình soạn thảo Python",
+        "Unsaved changes" => "Thay đổi chưa lưu",
+        "The code for {cell} has unsaved changes." => "Mã cho {cell} có thay đổi chưa lưu.",
+        "The code for {cell} in {workbook} has unsaved changes." => "Mã cho {cell} trong {workbook} có thay đổi chưa lưu.",
+        "The code can't be longer: a Python cell holds {max} characters, counted as a PY formula." => {
+            "Mã không thể dài hơn: một ô Python chứa {max} ký tự, tính theo công thức PY."
+        }
+        "{cell} changed while it was open in the Python editor. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell} đã thay đổi trong khi đang mở trong Trình soạn thảo Python. Hãy sao chép mã, hoặc đóng trình soạn thảo rồi mở lại trên ô."
+        }
+        "{cell} changed while it was open in the Python editor, so the code was not applied. Copy the code, or close the editor and open it again on the cell." => {
+            "{cell} đã thay đổi trong khi đang mở trong Trình soạn thảo Python, vì vậy mã chưa được áp dụng. Hãy sao chép mã, hoặc đóng trình soạn thảo rồi mở lại trên ô."
+        }
+        "{apply} applies the code. Esc closes the editor." => "{apply} áp dụng mã. Esc đóng trình soạn thảo.",
+        "The Python editor's unsaved code was copied to the clipboard." => "Mã chưa lưu của Trình soạn thảo Python đã được sao chép vào bảng tạm.",
+        "Apply" => "Áp dụng",
+        "Discard" => "Bỏ",
+        "Cancel" => "Hủy",
         "Evaluate Formula" => "Đánh giá công thức",
         "Watch Window" => "Cửa sổ theo dõi",
         "Calculation\nOptions" => "Tùy chọn\ntính toán",
@@ -446,6 +494,275 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Hiện",
         "Collapse dialog" => "Thu gọn hộp thoại",
         "Expand dialog" => "Mở rộng hộp thoại",
+        "Python|Off" => "Tắt",
+        "Python|Not Set Up" => "Chưa thiết lập",
+        "Python|Ready" => "Sẵn sàng",
+        "Python|Running" => "Đang chạy",
+        "Python|Blocked" => "Bị chặn",
+        "Enable Python in cells" => "Bật Python trong ô",
+        "Waiting for Python cells to finish before saving..." => "Đang chờ các ô Python hoàn tất trước khi lưu...",
+        "Save Now" => "Lưu ngay",
+        "The workbook was saved, but these Python cells weren't finished, so the file has their last results, if they had any: {cells}" => {
+            "Sổ làm việc đã được lưu, nhưng các ô Python này chưa hoàn tất, vì vậy tệp chứa kết quả cuối cùng của chúng, nếu có: {cells}"
+        }
+        "{cells} and {count} more" => "{cells} và {count} ô khác",
+        "{version}, too old: Python cells need 3.11 or newer" => "{version}, quá cũ: ô Python cần phiên bản 3.11 trở lên",
+        "Looking for Python…" => "Đang tìm Python…",
+        "Copied to the clipboard." => "Đã sao chép vào bảng tạm.",
+        "This workbook has Python code. Enable it to run its cells; until then they keep the values saved in the file." => {
+            "Sổ làm việc này có mã Python. Hãy bật để chạy các ô của nó; cho đến lúc đó, các ô giữ giá trị đã lưu trong tệp."
+        }
+        "Enable" => "Bật",
+        "Python: running {cell}, {seconds} s" => "Python: đang chạy {cell}, {seconds} giây",
+        "Python: {state}" => "Python: {state}",
+        "Open the Python environment" => "Mở môi trường Python",
+        "Nothing on this system: Python doesn't run here" => "Không có gì trên hệ thống này: Python không chạy ở đây",
+        "GridCraft starts Python with an empty environment" => "GridCraft khởi động Python với môi trường trống",
+        "macOS sandbox profile" => "Hồ sơ hộp cát macOS",
+        "Linux Landlock" => "Linux Landlock",
+        "Linux seccomp filter" => "Bộ lọc Linux seccomp",
+        "Open Python Settings" => "Mở Cài đặt Python",
+        "Choose Interpreter" => "Chọn trình thông dịch",
+        "Copy Install Command" => "Sao chép lệnh cài đặt",
+        "Run Again" => "Chạy lại",
+        "Reset" => "Đặt lại",
+        "Python Environment" => "Môi trường Python",
+        "Python Packages" => "Gói Python",
+        "Python Problems" => "Sự cố Python",
+        "Python Run Log" => "Nhật ký chạy Python",
+        "What Python Can Do" => "Python có thể làm gì",
+        "GridCraft is checking Python." => "GridCraft đang kiểm tra Python.",
+        "Check Again" => "Kiểm tra lại",
+        "Interpreter" => "Trình thông dịch",
+        "Chosen by you:" => "Do bạn chọn:",
+        "Automatic found:" => "Tự động tìm thấy:",
+        "What runs:" => "Đang chạy:",
+        "None found yet." => "Chưa tìm thấy gì.",
+        "Sandbox" => "Hộp cát",
+        "Package folders" => "Thư mục gói",
+        "What Python can read" => "Python có thể đọc gì",
+        "uv manages Python versions and packages. To get it, run:" => "uv quản lý phiên bản Python và các gói. Để cài, hãy chạy:",
+        "Reading files outside Python: blocked" => "Đọc tệp ngoài Python: bị chặn",
+        "Writing files: blocked" => "Ghi tệp: bị chặn",
+        "Using the network: blocked" => "Dùng mạng: bị chặn",
+        "Starting other programs: blocked" => "Khởi động chương trình khác: bị chặn",
+        "Each time Python starts, GridCraft tries each of these first, and doesn't run Python unless every one is refused." => {
+            "Mỗi lần Python khởi động, GridCraft thử từng mục này trước và không chạy Python trừ khi tất cả đều bị từ chối."
+        }
+        "Install a package with uv. GridCraft only copies the command; you run it in a terminal, then choose Check Again." => {
+            "Cài gói bằng uv. GridCraft chỉ sao chép lệnh; bạn chạy lệnh trong terminal, rồi chọn Kiểm tra lại."
+        }
+        "Package name" => "Tên gói",
+        "Other package managers" => "Trình quản lý gói khác",
+        "For people who manage Python another way: choose any interpreter by path in File › Options › Python. With pip:" => {
+            "Dành cho người quản lý Python theo cách khác: chọn bất kỳ trình thông dịch nào theo đường dẫn trong Tệp › Tùy chọn › Python. Với pip:"
+        }
+        "Packages: {count}" => "Gói: {count}",
+        "No problems." => "Không có sự cố.",
+        "This workbook" => "Sổ làm việc này",
+        "No runs yet." => "Chưa có lần chạy nào.",
+        "Go To Cell" => "Đến ô",
+        "This run printed nothing." => "Lần chạy này không in gì.",
+        "Python cells can" => "Ô Python có thể",
+        "Read cells through xl()" => "Đọc ô qua xl()",
+        "GridCraft sends only the cells that xl() names" => "GridCraft chỉ gửi những ô mà xl() nêu tên",
+        "Import installed packages" => "Nhập các gói đã cài",
+        "The sandbox lets Python read its own installation" => "Hộp cát cho phép Python đọc bản cài đặt của chính nó",
+        "Compute" => "Tính toán",
+        "Within the time and memory limits in File › Options › Python" => "Trong giới hạn thời gian và bộ nhớ tại Tệp › Tùy chọn › Python",
+        "Printed output is kept in the Run Log" => "Nội dung in ra được lưu trong Nhật ký chạy",
+        "Use threads" => "Dùng luồng",
+        "Threads stay inside the one Python process" => "Các luồng nằm trong một tiến trình Python duy nhất",
+        "Python cells cannot" => "Ô Python không thể",
+        "Read your files" => "Đọc tệp của bạn",
+        "Write files" => "Ghi tệp",
+        "Use the network" => "Dùng mạng",
+        "Start programs" => "Khởi động chương trình",
+        "See environment variables" => "Xem biến môi trường",
+        "Open windows" => "Mở cửa sổ",
+        "Draw plots. The data goes to a sheet and a chart is built from it." => {
+            "Vẽ biểu đồ. Dữ liệu được đưa vào một trang tính và biểu đồ được tạo từ đó."
+        }
+        "Run this workbook's Python cells" => "Chạy các ô Python của sổ làm việc này",
+        "Off by default. Only you can turn this on, here: no file, macro or agent can. A workbook opened from a file also needs its own Enable." => {
+            "Mặc định là tắt. Chỉ bạn mới có thể bật tại đây: không tệp, macro hay tác nhân nào làm được. Sổ làm việc mở từ tệp còn cần Bật riêng."
+        }
+        "Limits" => "Giới hạn",
+        "While Python is off, GridCraft starts nothing, so it can't yet say which version it would use." => {
+            "Khi Python tắt, GridCraft không khởi động gì cả, nên chưa thể cho biết sẽ dùng phiên bản nào."
+        }
+        "Automatic would try first:" => "Tự động sẽ thử trước:",
+        "Set up Python with uv" => "Thiết lập Python bằng uv",
+        "Run these in a terminal, in order. GridCraft looks in this environment first, so there is nothing more to choose. It only copies the commands; it never runs them." => {
+            "Chạy các lệnh này trong terminal, theo thứ tự. GridCraft tìm trong môi trường này trước, nên không cần chọn gì thêm. Nó chỉ sao chép lệnh, không bao giờ chạy."
+        }
+        "Any Python 3.11 or newer can be chosen by path with Browse…. To add packages to it with pip:" => {
+            "Có thể chọn bất kỳ Python 3.11 trở lên nào theo đường dẫn bằng Duyệt…. Để thêm gói bằng pip:"
+        }
+        "Time limit for one cell" => "Giới hạn thời gian cho một ô",
+        " seconds" => " giây",
+        "Memory limit" => "Giới hạn bộ nhớ",
+        " MB" => " MB",
+        "At a limit Python is restarted and its variables are cleared; the next run starts fresh." => {
+            "Khi chạm giới hạn, Python được khởi động lại và các biến bị xóa; lần chạy tiếp theo bắt đầu từ đầu."
+        }
+        "On macOS the memory limit is a check twice a second, not a hard cap." => {
+            "Trên macOS, giới hạn bộ nhớ là kiểm tra hai lần mỗi giây, không phải mức trần cứng."
+        }
+        "Editor" => "Trình soạn thảo",
+        "Initialization" => "Khởi tạo",
+        "The code that runs before this workbook's Python cells" => "Mã chạy trước các ô Python của sổ làm việc này",
+        "Open Initialization" => "Mở khởi tạo",
+        "The initialization code has unsaved changes." => "Mã khởi tạo có thay đổi chưa lưu.",
+        "The initialization code of {workbook} has unsaved changes." => "Mã khởi tạo của {workbook} có thay đổi chưa lưu.",
+        "The code can't be longer: initialization code holds {max} characters." => "Mã không thể dài hơn: mã khởi tạo chứa tối đa {max} ký tự.",
+        "The initialization code changed while it was open in the editor. Copy your code, or close the editor and open it again." => {
+            "Mã khởi tạo đã thay đổi khi đang mở trong trình soạn thảo. Hãy sao chép mã của bạn, hoặc đóng trình soạn thảo và mở lại."
+        }
+        "The initialization code changed while it was open in the editor, so your code was not applied. Copy it, or close the editor and open it again." => {
+            "Mã khởi tạo đã thay đổi khi đang mở trong trình soạn thảo, nên mã của bạn chưa được áp dụng. Hãy sao chép mã, hoặc đóng trình soạn thảo và mở lại."
+        }
+        "The initialization code uses a package this Python doesn't have. GridCraft skipped the lines that need it and ran the rest." => {
+            "Mã khởi tạo dùng một gói mà Python này không có. GridCraft đã bỏ qua các dòng cần gói đó và chạy phần còn lại."
+        }
+        "Select a Python cell first." => "Hãy chọn một ô Python trước.",
+        "Output As" => "Xuất dạng",
+        "Run\nCell" => "Chạy\nô",
+        "Run the selected Python cell" => "Chạy ô Python đã chọn",
+        "Run\nAll" => "Chạy\ntất cả",
+        "Run every Python cell in the workbook, in order" => "Chạy mọi ô Python trong sổ làm việc, theo thứ tự",
+        "Nothing is running." => "Không có gì đang chạy.",
+        "Stop the running cell" => "Dừng ô đang chạy",
+        "Clear Python's variables and run every cell again" => "Xóa các biến của Python và chạy lại mọi ô",
+        "Python Calculation" => "Tính toán Python",
+        "When this workbook's Python cells run" => "Khi nào các ô Python của sổ làm việc này chạy",
+        "A Python cell is running." => "Một ô Python đang chạy.",
+        "Python is ready." => "Python đã sẵn sàng.",
+        "Which Python runs cells" => "Python nào chạy các ô",
+        "Packages" => "Gói",
+        "What this Python has installed" => "Python này đã cài những gì",
+        "Check Sandbox" => "Kiểm tra hộp cát",
+        "Check Python and the sandbox again, and show the report" => "Kiểm tra lại Python và hộp cát, rồi hiển thị báo cáo",
+        "What Python\nCan Do" => "Python có\nthể làm gì",
+        "What Python cells can and can't do here" => "Ô Python có thể và không thể làm gì ở đây",
+        "This Workbook: Enabled" => "Sổ làm việc này: Đã bật",
+        "This Workbook: Disabled" => "Sổ làm việc này: Đã tắt",
+        "Only a person can change this." => "Chỉ người dùng mới có thể thay đổi mục này.",
+        "Run Log" => "Nhật ký chạy",
+        "Each run's cell, time and printed output" => "Ô, thời gian và nội dung in của mỗi lần chạy",
+        "Clear the Run Log" => "Xóa Nhật ký chạy",
+        "Problems" => "Sự cố",
+        "Every Python cell with something to say" => "Mọi ô Python có thông báo",
+        "Diagnostics" => "Chẩn đoán",
+        "uv environment" => "Môi trường uv",
+        "uv Python" => "uv Python",
+        "virtual environment" => "Môi trường ảo",
+        "conda environment" => "Môi trường conda",
+        "system" => "Hệ thống",
+        "Python cells need a sandbox, and GridCraft has none for this system." => {
+            "Ô Python cần hộp cát, và GridCraft không có hộp cát nào cho hệ thống này."
+        }
+        "The sandbox didn't hold when GridCraft checked it, so Python won't run." => {
+            "Hộp cát không giữ được khi GridCraft kiểm tra, nên Python sẽ không chạy."
+        }
+        "Python is off. Turn it on in Settings to run Python cells." => "Python đang tắt. Hãy bật trong Cài đặt để chạy các ô Python.",
+        "GridCraft can't find Python 3.11 or newer. Set one up with uv, or choose one." => {
+            "GridCraft không tìm thấy Python 3.11 trở lên. Hãy thiết lập một bản bằng uv, hoặc chọn một bản."
+        }
+        "This Python is too old: Python cells need 3.11 or newer." => "Python này quá cũ: ô Python cần phiên bản 3.11 trở lên.",
+        "This is Apple's placeholder for Python, which GridCraft doesn't use. Set up Python with uv, or choose another." => {
+            "Đây là trình giữ chỗ Python của Apple, GridCraft không dùng nó. Hãy thiết lập Python bằng uv, hoặc chọn bản khác."
+        }
+        "GridCraft couldn't work out what this Python needs to run." => "GridCraft không xác định được Python này cần gì để chạy.",
+        "Python didn't start." => "Python không khởi động được.",
+        "Python isn't on for this workbook, so its cells keep the values saved in the file." => {
+            "Python chưa bật cho sổ làm việc này, nên các ô giữ giá trị đã lưu trong tệp."
+        }
+        "This session doesn't run Python: cells keep the values saved in the file." => {
+            "Phiên này không chạy Python: các ô giữ giá trị đã lưu trong tệp."
+        }
+        "This workbook imports packages this Python doesn't have." => "Sổ làm việc này nhập các gói mà Python này không có.",
+        "pandas isn't installed in this Python, so ranges come back as lists of rows." => {
+            "Python này chưa cài pandas, nên phạm vi được trả về dưới dạng danh sách các hàng."
+        }
+        "The initialization code failed, so Python cells can't run." => "Mã khởi tạo bị lỗi, nên các ô Python không thể chạy.",
+        "This code isn't valid Python." => "Mã này không phải Python hợp lệ.",
+        "The code raised an error." => "Mã đã gây ra lỗi.",
+        "The code uses a name that isn't defined." => "Mã dùng một tên chưa được định nghĩa.",
+        "This name is defined in a later cell. Python cells run in row order, sheet by sheet." => {
+            "Tên này được định nghĩa trong một ô ở sau. Các ô Python chạy theo thứ tự hàng, từng trang tính một."
+        }
+        "This Python doesn't have that package." => "Python này không có gói đó.",
+        "This package needs a library outside what the sandbox lets Python read." => {
+            "Gói này cần một thư viện nằm ngoài phạm vi hộp cát cho phép Python đọc."
+        }
+        "Python cells can't read or write files on your computer. Put the data on a sheet and read it with xl()." => {
+            "Ô Python không thể đọc hoặc ghi tệp trên máy tính của bạn. Hãy đặt dữ liệu vào một trang tính và đọc bằng xl()."
+        }
+        "Python cells can't use the network. Put the data on a sheet and read it with xl()." => {
+            "Ô Python không thể dùng mạng. Hãy đặt dữ liệu vào một trang tính và đọc bằng xl()."
+        }
+        "Python cells can't start other programs or processes." => "Ô Python không thể khởi động chương trình hoặc tiến trình khác.",
+        "This picture is too large to draw. Make figsize or dpi smaller." => "Hình ảnh này quá lớn để vẽ. Hãy giảm figsize hoặc dpi.",
+        "The picture appears in the cell by itself. Python cells can't write files, so this line would fail." => {
+            "Hình ảnh tự xuất hiện trong ô. Ô Python không thể ghi tệp, nên dòng này sẽ lỗi."
+        }
+        "This package draws in a web browser, which Python cells can't open. Use matplotlib or seaborn." => {
+            "Gói này vẽ trong trình duyệt web mà ô Python không thể mở. Hãy dùng matplotlib hoặc seaborn."
+        }
+        "Python Output" => "Kết quả Python",
+        "Display Plot over Cells" => "Hiển thị biểu đồ phía trên ô",
+        "Create Reference" => "Tạo tham chiếu",
+        "Copy Image" => "Sao chép hình ảnh",
+        "Save Image…" => "Lưu hình ảnh…",
+        "The image is saved." => "Đã lưu hình ảnh.",
+        "The image is on the clipboard." => "Hình ảnh đang ở trong bảng tạm.",
+        "Image" => "Hình ảnh",
+        "size" => "kích thước",
+        "Resize" => "Đổi kích thước",
+        "This picture shows the last result that cell gave." => "Hình ảnh này hiển thị kết quả gần nhất mà ô đó trả về.",
+        "Select a Python cell that gave a picture first." => "Trước tiên hãy chọn một ô Python đã trả về hình ảnh.",
+        "xl() needs its reference written as text in the code, such as xl(\"A1:B5\")." => {
+            "xl() cần tham chiếu được viết dưới dạng văn bản trong mã, chẳng hạn xl(\"A1:B5\")."
+        }
+        "This range is too large to send to Python." => "Phạm vi này quá lớn để gửi cho Python.",
+        "xl() names something that isn't a cell, range, table or defined name here." => {
+            "xl() nêu tên một thứ không phải ô, phạm vi, bảng hay tên đã định nghĩa ở đây."
+        }
+        "The code ran past the time limit. Python was restarted, so its variables were cleared." => {
+            "Mã chạy quá giới hạn thời gian. Python đã được khởi động lại, nên các biến của nó đã bị xóa."
+        }
+        "The code went over the memory limit. Python was restarted, so its variables were cleared." => {
+            "Mã vượt quá giới hạn bộ nhớ. Python đã được khởi động lại, nên các biến của nó đã bị xóa."
+        }
+        "The result is too large to bring back to the sheet." => "Kết quả quá lớn để đưa về trang tính.",
+        "The printed output was cut off at its limit." => "Nội dung in ra đã bị cắt ở giới hạn.",
+        "Python stopped unexpectedly and was restarted, so its variables were cleared." => {
+            "Python dừng đột ngột và đã được khởi động lại, nên các biến của nó đã bị xóa."
+        }
+        "The result is empty." => "Kết quả trống.",
+        "The result needs cells that aren't empty." => "Kết quả cần các ô không trống.",
+        "The result isn't a number a cell can hold." => "Kết quả không phải là số mà ô có thể chứa.",
+        "This date or length of time is outside what a cell can hold." => "Ngày hoặc khoảng thời gian này nằm ngoài phạm vi mà ô có thể chứa.",
+        "This cell is running." => "Ô này đang chạy.",
+        "What this cell reads has changed since it last ran." => "Nội dung ô này đọc đã thay đổi kể từ lần chạy trước.",
+        "This cell was stopped before it finished." => "Ô này đã bị dừng trước khi hoàn tất.",
+        "xl() needs its reference written as text, such as xl(\"A1:B5\"). A computed reference can't be read." => {
+            "xl() cần tham chiếu được viết dưới dạng văn bản, chẳng hạn xl(\"A1:B5\"). Không thể đọc tham chiếu được tính toán."
+        }
+        "This module needs the network or other programs, which Python cells can't use." => {
+            "Mô-đun này cần mạng hoặc chương trình khác, mà ô Python không thể dùng."
+        }
+        "This Python doesn't have this package." => "Python này không có gói này.",
+        "Python cells can't open windows or ask for input." => "Ô Python không thể mở cửa sổ hoặc yêu cầu nhập liệu.",
+        "Python cells don't see your environment variables." => "Ô Python không thấy các biến môi trường của bạn.",
+        "Open Settings" => "Mở cài đặt",
+        "Show Printed Output" => "Hiện đầu ra đã in",
+        "Hide Printed Output" => "Ẩn đầu ra đã in",
+        "Line {line}" => "Dòng {line}",
+        "Line {line}: {message}" => "Dòng {line}: {message}",
+        "Python {version}, ready" => "Python {version}, sẵn sàng",
+        "Python {version}, running" => "Python {version}, đang chạy",
         _ => return None,
     })
 }

@@ -30,6 +30,17 @@ impl KeptOut {
         self.vml_blocks = u32::try_from(max).unwrap_or(u32::MAX);
     }
 
+    /// The part the kept custom properties relationship names, as a part name.
+    pub fn custom_properties_part(&self) -> Option<String> {
+        let (_, target, _) = self.root.iter().find(|(ty, _, external)| !external && kind(ty).eq_ignore_ascii_case("custom-properties"))?;
+        Some(target.trim_start_matches('/').to_string())
+    }
+
+    /// Adds a package-root relationship to a part written here.
+    pub fn add_root(&mut self, ty: &str, target: String) {
+        self.root.push((ty.to_string(), target, false));
+    }
+
     /// The shape block of the `n`th notes drawing.
     pub fn notes_block(&self, n: u32) -> u32 {
         n.saturating_add(self.vml_blocks)
@@ -37,7 +48,7 @@ impl KeptOut {
 
     /// A part name for a kept part: its original name when that can't collide with anything
     /// written, otherwise a fresh one in the same folder.
-    pub(super) fn claim(&mut self, original: &str) -> String {
+    pub(crate) fn claim(&mut self, original: &str) -> String {
         let lower = original.to_ascii_lowercase();
         let own = OWN_DIRS.iter().any(|d| lower.starts_with(d));
         if own && self.used.insert(lower) {
@@ -323,9 +334,26 @@ pub fn workbook_elements(wb: &Workbook, slot: &str) -> String {
     p.elements.iter().filter(|e| e.slot == slot).map(|e| e.xml.as_str()).collect()
 }
 
+/// Each relationship once. One to an outside address and one to a part of the same name are two.
+fn distinct_rels(rels: Vec<(String, String, bool)>) -> Vec<(String, String, bool)> {
+    let mut seen = HashSet::new();
+    rels.into_iter().filter(|rel| seen.insert(rel.clone())).collect()
+}
+
 /// Adds the kept package-root relationships (custom properties…) to `_rels/.rels`.
 pub fn write_package_rels(root: &mut Rels, out: &mut Out) {
-    for (ty, target, external) in std::mem::take(&mut out.kept.root) {
+    for (ty, target, external) in distinct_rels(std::mem::take(&mut out.kept.root)) {
         root.add_raw(&ty, &target, external);
+    }
+}
+
+#[cfg(test)]
+mod distinct_rels_tests {
+    use super::distinct_rels;
+
+    #[test]
+    fn a_target_inside_and_outside_the_file_are_two_relationships() {
+        let rel = |external| ("type".to_string(), "docProps/custom.xml".to_string(), external);
+        assert_eq!(distinct_rels(vec![rel(false), rel(true), rel(false)]), vec![rel(false), rel(true)]);
     }
 }
