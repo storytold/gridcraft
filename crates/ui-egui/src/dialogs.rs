@@ -78,6 +78,12 @@ pub struct Dialog {
     /// `ui.dialog.set` can't swap it behind the text the user reads (#2181).
     link: Option<String>,
     pub(crate) focus_initialized: bool,
+    /// Y/N presses cannot answer until after the frame that first presented Save Changes.
+    save_changes_frame: Option<u64>,
+    /// Save/Don't Save answer on release, before quitting can move focus to another viewport.
+    save_changes_armed: Option<Key>,
+    /// A chosen answer waits for every Y/N key to be up before this window can close.
+    save_changes_pending: Option<crate::SaveAnswer>,
     /// The formula box that takes references clicked or dragged on the grid (New Formatting Rule).
     pick: Option<RefPick>,
     /// The linked cell's initial display text; unchanged text must not replace a number or formula.
@@ -109,6 +115,14 @@ struct RefPick {
 impl Dialog {
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// A font-gated pass cannot process the dialog's answer gesture.
+    pub(crate) fn cancel_save_changes(&mut self) {
+        if self.name == "saveChanges" {
+            self.save_changes_armed = None;
+            self.save_changes_pending = None;
+        }
     }
 
     /// Sets a form value. In Zoom, a Magnification choice is also the percentage `view.zoom`
@@ -241,6 +255,9 @@ impl Dialog {
             back: None,
             link: None,
             focus_initialized: false,
+            save_changes_frame: None,
+            save_changes_armed: None,
+            save_changes_pending: None,
             pick: None,
             original_link_text: None,
             refs: ref_edit::RefBoxes::default(),
@@ -266,6 +283,9 @@ impl Dialog {
             back: None,
             link: None,
             focus_initialized: false,
+            save_changes_frame: None,
+            save_changes_armed: None,
+            save_changes_pending: None,
             pick: None,
             original_link_text: None,
             refs: ref_edit::RefBoxes::default(),
@@ -1134,6 +1154,11 @@ impl Dialog {
         ref_edit::record_home(app, &mut d);
         Some(d)
     }
+}
+
+fn save_changes_focused(input: &egui::InputState) -> bool {
+    // Windows can synthesize releases before focus loss; judge the whole batch.
+    input.focused && !input.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false)))
 }
 
 #[cfg(test)]

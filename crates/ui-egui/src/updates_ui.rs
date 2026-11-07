@@ -15,13 +15,15 @@ pub(crate) struct Runtime {
     startup: bool,
     /// Help ▸ Check for Updates… was chosen; the next `tick` starts it.
     manual: bool,
+    /// An update card covered this UI pass, including the pass that dismisses it.
+    prompt_shown: bool,
     /// The result dialog of a requested check is showing.
     result_open: bool,
 }
 
 impl Default for Runtime {
     fn default() -> Self {
-        Self { updater: Updater::new(&crate::UPDATE_APP, VERSION), startup: false, manual: false, result_open: false }
+        Self { updater: Updater::new(&crate::UPDATE_APP, VERSION), startup: false, manual: false, prompt_shown: false, result_open: false }
     }
 }
 
@@ -49,9 +51,16 @@ pub(crate) fn tick(app: &mut SheetApp, ctx: &egui::Context) {
     }
 }
 
+/// Whether an update card owns this pass, even if it was just dismissed.
+pub(crate) fn prompt_shown(app: &SheetApp) -> bool {
+    app.updates_rt.prompt_shown
+}
+
 pub(crate) fn show(app: &mut SheetApp, ctx: &egui::Context) {
     // The restart helper is scheduled before the app closes, so no update starts over unsaved work.
     let clean = !app.session.documents().iter().any(|d| d.is_dirty());
+    app.updates_rt.prompt_shown =
+        app.updates_rt.updater.prompt_open() || (app.updates_rt.result_open && !matches!(app.updates_rt.updater.status(), Status::Idle));
     match app.updates_rt.updater.show_if(ctx, clean) {
         Action::OpenUrl(url) => {
             if let Some(open) = &app.services.open_url {
@@ -75,3 +84,6 @@ pub(crate) fn show(app: &mut SheetApp, ctx: &egui::Context) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
