@@ -2379,6 +2379,80 @@ fn loan_schedule_residue_keeps_excels_sign() {
     assert_eq!(t.get("P7"), Value::Text("".into()));
 }
 
+#[test]
+fn cell_accepts_the_german_info_types() {
+    // Excel translates `CELL`'s function name but not its first argument, so a German workbook
+    // arrives holding `CELL("Dateiname",A1)` and the localized names have to be understood as
+    // they stand (#1489). Values follow the reported fixture: A1 a date, A2 1234.5, A3 7, C1 3.
+    let mut t = T::new();
+    t.set("A2", "1234.5");
+    t.set("A3", "7");
+    t.set("C1", "3");
+
+    // Each German name gives what its English counterpart gives -- except `typ`, one of whose
+    // three result codes German localizes as well, which is checked on its own below.
+    for (de, en) in [
+        ("adresse", "address"),
+        ("zeile", "row"),
+        ("spalte", "col"),
+        ("inhalt", "contents"),
+        ("breite", "width"),
+        ("dateiname", "filename"),
+        ("schutz", "protect"),
+        ("format", "format"),
+        ("farbe", "color"),
+        ("klammern", "parentheses"),
+        ("präfix", "prefix"),
+    ] {
+        t.set("E1", &format!("=CELL(\"{de}\",A2)"));
+        t.set("E2", &format!("=CELL(\"{en}\",A2)"));
+        assert_eq!(t.get("E1"), t.get("E2"), "CELL(\"{de}\") should match CELL(\"{en}\")");
+        assert_ne!(t.get("E1"), Value::Error(CellError::Value), "CELL(\"{de}\") is still #VALUE!");
+    }
+
+    // The reported cells, by their German names.
+    t.set("B1", "=CELL(\"Adresse\",A1)");
+    assert_eq!(t.get("B1"), Value::from("$A$1"));
+    t.set("B2", "=CELL(\"Zeile\",C1)");
+    assert_eq!(t.get("B2"), Value::from(1.0));
+    t.set("B3", "=CELL(\"Spalte\",C1)");
+    assert_eq!(t.get("B3"), Value::from(3.0));
+    t.set("B4", "=CELL(\"Inhalt\",A2)");
+    assert_eq!(t.get("B4"), Value::from(1234.5));
+
+    // Upper case reaches the table through a Unicode lower-casing: `to_ascii_lowercase` would
+    // leave `PRÄFIX` as `prÄfix` and miss it.
+    t.set("E3", "=CELL(\"prefix\",A2)");
+    t.set("B5", "=CELL(\"PRÄFIX\",A2)");
+    assert_eq!(t.get("B5"), t.get("E3"), "PRÄFIX reaches the table through a Unicode lower-casing");
+    t.set("B6", "=CELL(\"präfix\",A2)");
+    assert_eq!(t.get("B6"), t.get("E3"), "and so does the lower-case spelling");
+
+    // `Typ` keeps `b` for blank and `l` for label, which German does not translate, and answers
+    // `w` for Wert where English answers `v` for value (Microsoft's de-de ZELLE page). So the
+    // only code that differs between the two is the one for a value.
+    t.set("A5", "some text");
+    for (cell, en, de) in [("A4", "b", "b"), ("A5", "l", "l"), ("A2", "v", "w")] {
+        t.set("E4", &format!("=CELL(\"type\",{cell})"));
+        t.set("E5", &format!("=CELL(\"Typ\",{cell})"));
+        assert_eq!(t.get("E4"), Value::from(en), "CELL(\"type\",{cell})");
+        assert_eq!(t.get("E5"), Value::from(de), "CELL(\"Typ\",{cell}) answers in German");
+    }
+
+    // An unknown type is still #VALUE!, so the aliases have not made CELL permissive.
+    t.set("B7", "=CELL(\"nonsense\",A2)");
+    assert_eq!(t.get("B7"), Value::Error(CellError::Value));
+
+    // The formula the issue was reported for, spelled as a German workbook holds it. `filename`
+    // itself landed separately (`cell_filename_names_the_workbook_file`), and with `Dateiname`
+    // reaching it the reported sheet-name formula works without being rewritten in English.
+    t.wb.sheet_mut(0).unwrap().name = "Tabelle1".into();
+    t.wb.source_path = Some(std::path::PathBuf::from("Mappe.xlsx"));
+    t.calc = Calc::new();
+    t.set("B8", "=MID(CELL(\"Dateiname\",A1),FIND(\"]\",CELL(\"Dateiname\",A1))+1,31)");
+    assert_eq!(t.get("B8"), Value::from("Tabelle1"), "the German sheet-name formula");
+}
+
 /// Makes `at` a Python cell showing `cached` (its value before this calculation), with `result`
 /// as its kept result, and returns the cell's key for `Calc::cells_changed`.
 fn plant_python(t: &mut T, at: &str, cached: Value, result: Value) -> (usize, CellRef) {

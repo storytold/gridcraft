@@ -249,8 +249,14 @@ impl<'h> Evaluator<'h> {
     }
 
     pub(super) fn cell_info(&mut self, args: &[Expr]) -> Ev {
-        let kind = match self.arg_val(args, 0).map(|v| v.scalar().to_text()) {
-            Some(Ok(t)) => t.to_ascii_lowercase(),
+        let (kind, german) = match self.arg_val(args, 0).map(|v| v.scalar().to_text()) {
+            // Lower-cased by Unicode, not ASCII: the German `PRÄFIX` has to reach `präfix`.
+            Some(Ok(t)) => {
+                let asked = t.to_lowercase();
+                // `type` is the one info type whose *result* is a letter German localizes, so
+                // which spelling was asked for decides which letters come back (noted in review).
+                (cell_info_type(&asked).to_string(), asked == "typ")
+            }
             Some(Err(e)) => return err(e),
             None => return err(CellError::Value),
         };
@@ -270,10 +276,14 @@ impl<'h> Evaluator<'h> {
             "contents" => Ev::V(self.host.cell_value(a.sheet, c)),
             "type" => {
                 let v = self.host.cell_value(a.sheet, c);
-                Ev::V(Value::text(match v {
-                    Value::Empty => "b",
-                    Value::Text(_) => "l",
-                    _ => "v",
+                // German `ZELLE("Typ")` keeps `b` for blank and `l` for label -- the two letters
+                // are not translated -- and answers `w` for Wert where English answers `v` for
+                // value (Microsoft's de-de ZELLE page). So only the third arm differs.
+                Ev::V(Value::text(match (v, german) {
+                    (Value::Empty, _) => "b",
+                    (Value::Text(_), _) => "l",
+                    (_, false) => "v",
+                    (_, true) => "w",
                 }))
             }
             "width" => Ev::V(Value::number(sheet.map_or(8.43, |s| gridcraft_model::points_to_chars(s.col_width(c.col) as f64)).round())),
@@ -405,5 +415,26 @@ impl<'h> Evaluator<'h> {
             return Ev::V(gridcraft_functions::aggregate_values_k(func, &values, &k));
         }
         Ev::V(gridcraft_functions::aggregate_values(func, &values))
+    }
+}
+
+/// The English name of an info type. Excel translates `CELL`'s function name but not its first
+/// argument, which is a string: a German Excel saves `ZELLE("Dateiname";A1)` as
+/// `CELL("Dateiname",A1)`, so the localized names have to be understood as they stand (#1489).
+/// `format` is spelled the same in German and needs no entry.
+fn cell_info_type(kind: &str) -> &str {
+    match kind {
+        "adresse" => "address",
+        "zeile" => "row",
+        "spalte" => "col",
+        "inhalt" => "contents",
+        "typ" => "type",
+        "breite" => "width",
+        "dateiname" => "filename",
+        "schutz" => "protect",
+        "farbe" => "color",
+        "klammern" => "parentheses",
+        "präfix" => "prefix",
+        other => other,
     }
 }
