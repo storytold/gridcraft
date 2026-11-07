@@ -3,7 +3,7 @@ use super::geo::Geo;
 use super::interact::{hidden_col_edge, hidden_row_edge};
 #[cfg(test)]
 use super::show::hidden_around;
-use super::{CellRef, Color32, Painter, RangeRef, Rect, Sheet, SheetApp, Stroke, StrokeKind, Tokens, json, pos2, vec2};
+use super::{CellRef, Color32, Painter, RangeRef, Rect, SelectionMode, Sheet, SheetApp, Stroke, StrokeKind, Tokens, json, pos2, vec2};
 
 /// Where the active cell is on screen: the whole merged cell when it is part of one.
 fn active_rect(geo: &Geo, sh: &Sheet, sel: &gridcraft_engine::Selection) -> Rect {
@@ -190,15 +190,67 @@ fn toggled_ranges(mut ranges: Vec<String>, clicked: String, add: bool) -> Vec<St
     ranges
 }
 
+/// An arrow (or Page Up/Down, Ctrl+arrow) in Add mode. Without Shift the active cell moves and the
+/// selected areas stay, the cell it lands on becoming a provisional last area that the next arrow
+/// moves again; with Shift that area grows from its anchor and is kept, so the next arrow starts
+/// another one.
+pub(super) fn add_mode_move(app: &mut SheetApp, dr: i64, dc: i64, shift: bool, jump: bool) {
+    app.grid.ensure_visible = true;
+    app.grid.reveal_moving_end = shift;
+    if shift {
+        let _ = app.run("selection.move", json!({"dr": dr, "dc": dc, "extend": true, "jump": jump}));
+        app.grid.add_pending = None;
+        return;
+    }
+    let Some(mut keep) = app.session.active().map(|d| d.selection.ranges.clone()) else { return };
+    // Only the provisional area this mode made is dropped, and only while it is still the last area.
+    if let Some(p) = app.grid.add_pending.take()
+        && keep.last() == Some(&p)
+    {
+        keep.pop();
+    }
+    // The engine works out where the cell lands (hidden rows, merged cells, Ctrl+arrow jumps).
+    let _ = app.run("selection.move", json!({"dr": dr, "dc": dc, "extend": false, "jump": jump}));
+    let Some((area, active)) = app.session.active().map(|d| (d.selection.current(), d.selection.active)) else { return };
+    // Landing on an area already kept leaves it kept: the next arrow doesn't drop it.
+    let kept = keep.contains(&area);
+    keep.retain(|r| *r != area);
+    keep.push(area);
+    let range = keep.iter().map(|r| r.a1()).collect::<Vec<_>>().join(",");
+    let _ = app.run("selection.set", json!({"range": range, "active": active.a1()}));
+    app.grid.add_pending = (!kept).then_some(area);
+}
+
+/// The active sheet's areas in Add mode, as `selection.set` takes them; empty in other modes.
+pub(super) fn add_mode_base(app: &SheetApp) -> Vec<String> {
+    if app.grid.selection_mode != SelectionMode::Add {
+        return Vec::new();
+    }
+    let mut ranges = app.session.active().map(|d| d.selection.ranges.iter().map(|x| x.a1()).collect::<Vec<_>>()).unwrap_or_default();
+    if let Some(pending) = app.grid.add_pending
+        && ranges.last().is_some_and(|range| range == &pending.a1())
+    {
+        ranges.pop();
+    }
+    ranges
+}
+
 pub(super) fn select_ranges(app: &mut SheetApp, r: RangeRef, add: bool, active: CellRef) {
-    let current: Vec<String> =
-        if add { app.session.active().map(|d| d.selection.ranges.iter().map(|x| x.a1()).collect()).unwrap_or_default() } else { vec![] };
+    // A clicked area is kept: the next Add mode arrow starts a new one.
+    app.grid.add_pending = None;
+    let current: Vec<RangeRef> = if add { app.session.active().map(|d| d.selection.ranges.clone()).unwrap_or_default() } else { vec![] };
     let clicked = r.a1();
-    let ranges = toggled_ranges(current, clicked.clone(), add);
+    // A click on a cell inside a larger kept area removes that area, as a click on a single-cell area does.
+    let inside =
+        (add && current.len() > 1 && r.start == r.end).then(|| current.iter().position(|x| x.a1() != clicked && x.contains(r.start))).flatten();
+    let ranges: Vec<String> = match inside {
+        Some(i) => current.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, x)| x.a1()).collect(),
+        None => toggled_ranges(current.iter().map(|x| x.a1()).collect(), clicked.clone(), add),
+    };
     // A removed area takes the active cell with it; `selection.set` then puts it at the start of the last area.
     let params =
         if ranges.contains(&clicked) { json!({"range": ranges.join(","), "active": active.a1()}) } else { json!({"range": ranges.join(",")}) };
-    let _ = app.session.run("selection.set", params);
+    let _ = app.run("selection.set", params);
 }
 
 #[cfg(test)]

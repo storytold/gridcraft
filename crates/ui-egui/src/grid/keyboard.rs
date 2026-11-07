@@ -1,37 +1,14 @@
 use super::geo::Geo;
 use super::menus::is_checkbox;
-use super::{CellRef, Drag, Sheet, SheetApp, json};
+use super::selection::add_mode_move;
+use super::{CellRef, Drag, SelectionMode, Sheet, SheetApp, json};
 
 /// Grid keyboard handling when no text field has focus.
+#[allow(clippy::cognitive_complexity)] // Keyboard input dispatch keeps related key behavior together.
 pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
-    // Focus left on an editor that no longer exists goes back to the grid.
-    let stale = [egui::Id::unique("gridcraft.cell_editor"), egui::Id::unique("gridcraft.formula_bar"), crate::text_box::editor_id()];
-    let editing = app.editor.is_some() || app.text_box_editor.is_some();
-    if !editing && ctx.memory(|m| m.focused()).is_some_and(|f| stale.contains(&f)) {
-        resp.request_focus();
-    }
-    let other_focus = ctx.memory(|m| m.focused()).is_some_and(|f| f != resp.id && (editing || !stale.contains(&f)));
-    // An open filter menu owns the keyboard even when a click inside it left focus on nothing (#1516).
-    // So do the fill menu (its Esc closes it, not the copy) and the right-drag that opens it (an
-    // arrow key would move the selection the menu fills from), and a macro's question.
-    if editing
-        || app.dialog.is_some()
-        || other_focus
-        || app.message.is_some()
-        || app.grid.filter_menu.is_some()
-        || app.grid.fill_menu.is_some()
-        || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
-        || app.macros.question.is_some()
-    {
+    if !claim_grid_keyboard(app, ctx, resp) {
         return;
     }
-    if ctx.memory(|m| m.focused()).is_none() {
-        resp.request_focus();
-    }
-    // The grid owns arrows, Tab and Escape (egui would otherwise move focus between widgets).
-    ctx.memory_mut(|m| {
-        m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
-    });
     let events = grid_events(app, ctx, sh);
     // A shortcut key that also types a character (Shift+Space sends Text(" ")) must not start an edit.
     let shortcut_pressed = events.iter().any(|e| {
@@ -67,6 +44,23 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             }
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
                 use egui::Key;
+                let navigation = matches!(
+                    key,
+                    Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight | Key::PageUp | Key::PageDown | Key::Home | Key::End
+                );
+                // Extend mode (F8): navigation keys extend from the anchor as if Shift were held.
+                let m = if navigation && app.grid.selection_mode == SelectionMode::Extend { egui::Modifiers { shift: true, ..m } } else { m };
+                if app.grid.selection_mode == SelectionMode::Add && m.shift && (key == Key::Home || (m.command && key == Key::End)) {
+                    let from = app.session.active().map(|d| d.selection.moving_end()).unwrap_or_default();
+                    let to = match (key, m.command) {
+                        (Key::Home, true) => CellRef::new(0, 0),
+                        (Key::Home, false) => CellRef::new(from.row, 0),
+                        (Key::End, true) => sh.used_range().map(|u| u.end).unwrap_or_default(),
+                        _ => from,
+                    };
+                    add_mode_move(app, i64::from(to.row) - i64::from(from.row), i64::from(to.col) - i64::from(from.col), true, false);
+                    continue;
+                }
                 if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
                     shortcut_ran = true;
                     continue;
@@ -75,6 +69,11 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                 let shift = m.shift;
                 let mv = |app: &mut SheetApp, dr: i64, dc: i64| {
                     let from = app.session.active().map(|d| if shift { d.selection.moving_end() } else { d.selection.active });
+                    if app.grid.selection_mode == SelectionMode::Add {
+                        add_mode_move(app, dr, dc, shift, cmd);
+                        app.grid.reveal_from = from;
+                        return;
+                    }
                     let _ = app.session.run("selection.move", json!({"dr": dr, "dc": dc, "extend": shift, "jump": cmd}));
                     app.grid.ensure_visible = true;
                     app.grid.reveal_moving_end = shift;
@@ -90,6 +89,16 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                     Key::PageUp if !cmd => mv(app, -page, 0),
                     Key::PageDown => app.run_or_alert("sheet.next", json!({})),
                     Key::PageUp => app.run_or_alert("sheet.previous", json!({})),
+                    // Add mode: Home and End move the active cell as arrows do, keeping the selected areas.
+                    Key::Home | Key::End if app.grid.selection_mode == SelectionMode::Add && (cmd || key == Key::Home) => {
+                        let a = app.session.active().map(|d| d.selection.active).unwrap_or_default();
+                        let to = match key {
+                            Key::Home if cmd => CellRef::new(sh.freeze.map(|f| f.0).unwrap_or(0), sh.freeze.map(|f| f.1).unwrap_or(0)),
+                            Key::End => sh.used_range().map(|u| u.end).unwrap_or_default(),
+                            _ => CellRef::new(a.row, 0),
+                        };
+                        add_mode_move(app, i64::from(to.row) - i64::from(a.row), i64::from(to.col) - i64::from(a.col), false, false);
+                    }
                     Key::Home if cmd => {
                         let r = sh.freeze.map(|f| f.0).unwrap_or(0);
                         let c = sh.freeze.map(|f| f.1).unwrap_or(0);
@@ -136,8 +145,15 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                     Key::Escape => {
                         app.session.clipboard = None;
                         app.session.format_painter = None;
+                        let _ = app.run("ui.selectionMode", json!({"mode": "off"}));
                     }
                     Key::Space if !cmd && !shift && is_checkbox(sh, app) => app.run_or_alert("cell.toggleCheckbox", json!({})),
+                    // F8 Extend Selection, Shift+F8 Add or Remove Selection: each toggles its mode.
+                    Key::F8 if !m.alt && !cmd => {
+                        let target = if shift { SelectionMode::Add } else { SelectionMode::Extend };
+                        let mode = if app.grid.selection_mode == target { SelectionMode::Off } else { target };
+                        let _ = app.run("ui.selectionMode", json!({"mode": mode.id()}));
+                    }
                     Key::F8 if m.alt => {
                         app.open_dialog("macros", json!({}));
                     }
@@ -154,6 +170,38 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             _ => {}
         }
     }
+}
+
+fn claim_grid_keyboard(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response) -> bool {
+    // Focus left on an editor that no longer exists goes back to the grid.
+    let stale = [egui::Id::unique("gridcraft.cell_editor"), egui::Id::unique("gridcraft.formula_bar"), crate::text_box::editor_id()];
+    let editing = app.editor.is_some() || app.text_box_editor.is_some();
+    if !editing && ctx.memory(|m| m.focused()).is_some_and(|f| stale.contains(&f)) {
+        resp.request_focus();
+    }
+    let other_focus = ctx.memory(|m| m.focused()).is_some_and(|f| f != resp.id && (editing || !stale.contains(&f)));
+    // An open filter menu owns the keyboard even when a click inside it left focus on nothing (#1516).
+    // So do the fill menu (its Esc closes it, not the copy), the right-drag that opens it (an
+    // arrow key would move the selection the menu fills from), and a macro's question.
+    if editing
+        || app.dialog.is_some()
+        || other_focus
+        || app.message.is_some()
+        || app.grid.filter_menu.is_some()
+        || app.grid.fill_menu.is_some()
+        || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
+        || app.macros.question.is_some()
+    {
+        return false;
+    }
+    if ctx.memory(|m| m.focused()).is_none() {
+        resp.request_focus();
+    }
+    // The grid owns arrows, Tab and Escape (egui would otherwise move focus between widgets).
+    ctx.memory_mut(|m| {
+        m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
+    });
+    true
 }
 
 /// This frame's input events, without those the focused form control took.
