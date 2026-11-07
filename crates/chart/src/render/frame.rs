@@ -90,11 +90,14 @@ pub(super) fn level_groups(level: &[String], n: usize) -> Vec<(usize, usize)> {
 pub(super) struct ValAxis<'a> {
     pub(super) scale: Scale,
     pub(super) fmt: &'a Fmt,
+    /// Ticks for gridlines, but no labels: the file deletes this axis.
+    pub(super) hidden: bool,
 }
 
 impl ValAxis<'_> {
     fn labels(&self) -> Vec<(f64, String)> {
-        self.scale.ticks().into_iter().map(|v| (v, self.fmt.format(v, Some(self.scale.step)))).collect()
+        let label = |v| if self.hidden { String::new() } else { self.fmt.format(v, Some(self.scale.step)) };
+        self.scale.ticks().into_iter().map(|v| (v, label(v))).collect()
     }
 }
 

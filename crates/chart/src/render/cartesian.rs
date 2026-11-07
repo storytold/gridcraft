@@ -182,6 +182,37 @@ fn column_slots(fams: &[Fam], sec: &[bool]) -> (Vec<usize>, f32) {
     (slot_of, slot_keys.len().max(1) as f32)
 }
 
+/// The lines joining each stacked series across the categories, as Excel draws them: from the far
+/// end of a series' segment, also a negative or empty one, to the same end in the next category.
+/// `edges` gives a segment's two corners at that end, nearest the previous category first.
+fn draw_series_lines(
+    ctx: &mut Ctx,
+    style: Option<(crate::Rgba, f32)>,
+    fams: &[Fam],
+    ncat: usize,
+    edges: impl Fn(usize, usize) -> Option<([f32; 2], [f32; 2])>,
+) {
+    let Some((color, width)) = style else { return };
+    for (i, fam) in fams.iter().enumerate() {
+        if !is_col(*fam) || *fam == Fam::Col {
+            continue;
+        }
+        for j in 1..ncat {
+            if let (Some((_, from)), Some((to, _))) = (edges(i, j - 1), edges(i, j)) {
+                ctx.out.push(Prim::Line { pts: vec![from, to], color, width, dash: false });
+            }
+        }
+    }
+}
+
+type BarLabel = (f32, f32, String, crate::Rgba, (HAlign, VAlign));
+
+fn draw_bar_labels(ctx: &mut Ctx, labels: &mut Vec<BarLabel>) {
+    for (x, y, t, color, align) in labels.drain(..) {
+        ctx.text(x, y, &t, LABEL_SIZE, color, align);
+    }
+}
+
 pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizontal: bool) {
     let ncat = data.categories.len().max(data.series.iter().map(|s| s.values.len()).max().unwrap_or(0)).min(MAX_CATS);
     if ncat == 0 {
@@ -196,8 +227,8 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
 
     let axes = axis_scales(data, &fams, &sec, &spans);
     let Some((s1, f1)) = axes.first() else { return };
-    let y1 = ValAxis { scale: *s1, fmt: f1 };
-    let y2 = axes.get(1).map(|(s, f)| ValAxis { scale: *s, fmt: f });
+    let y1 = ValAxis { scale: *s1, fmt: f1, hidden: chart.value_axis_hidden };
+    let y2 = axes.get(1).map(|(s, f)| ValAxis { scale: *s, fmt: f, hidden: false });
     // A forward forecast on a category axis adds empty category slots after the data.
     let fwd = data
         .series
@@ -224,10 +255,22 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     let vpos = |v: f64, sc: &Scale| if horizontal { plot.x + sc.frac(v) * plot.w } else { plot.bottom() - sc.frac(v) * plot.h };
 
     let (slot_of, nslots) = column_slots(&fams, &sec);
-    let bw = cw / (nslots + 1.5);
+    // As a share of a bar's width: a category holds half the gap, its bars, and half the gap again.
+    let gap = chart.gap_width.map_or(1.5, |g| f32::from(g) / 100.0);
+    let step = 1.0 - chart.overlap.map_or(0.0, |o| f32::from(o) / 100.0);
+    let bw = cw / (1.0 + (nslots - 1.0) * step + gap);
+    let (step, cluster) = (bw * step, bw * (1.0 + (nslots - 1.0) * step));
+    let segment_end = |i: usize, j: usize| {
+        let far = spans.get(i)?.get(j).copied().flatten()?.1;
+        let (c, v, k) = (center(j), vpos(far, &scale_of(i)), slot_of.get(i).copied().unwrap_or(0) as f32);
+        let (start, end) = (c - cluster / 2.0 + k * step, c + cluster / 2.0 - bw - k * step);
+        Some(if horizontal { ([v, end + bw], [v, end]) } else { ([start, v], [start + bw, v]) })
+    };
     let labels_on = chart.data_labels && ncat <= MAX_LABELS;
     // Area labels wait until every area is filled, so a later (stacked) area can't paint over them.
     let mut area_labels = Vec::new();
+    // Bar labels wait for every bar too: with an overlap, a later bar would cover them.
+    let mut bar_labels: Vec<BarLabel> = Vec::new();
 
     // Areas first, then columns, then lines on top.
     for pass in 0..3 {
@@ -285,10 +328,10 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                         let lo = pb.min(pt);
                         let len = (pb - pt).abs();
                         if horizontal {
-                            let y = c + nslots * bw / 2.0 - (k + 1.0) * bw;
+                            let y = c + cluster / 2.0 - bw - k * step;
                             ctx.rect(lo, y, len, bw, s.color, None);
                         } else {
-                            let x = c - nslots * bw / 2.0 + k * bw;
+                            let x = c - cluster / 2.0 + k * step;
                             ctx.rect(x, lo, bw, len, s.color, None);
                         }
                         if labels_on && let Some(v) = s.values.get(j).copied().flatten() {
@@ -296,22 +339,22 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                             let stacked = fam != Fam::Col;
                             let mid = (pb + pt) / 2.0;
                             if horizontal {
-                                let y = c + nslots * bw / 2.0 - (k + 0.5) * bw;
+                                let y = c + cluster / 2.0 - bw / 2.0 - k * step;
                                 if stacked {
-                                    ctx.text(mid, y, &t, LABEL_SIZE, on(s.color), (HAlign::Center, VAlign::Middle));
+                                    bar_labels.push((mid, y, t.clone(), on(s.color), (HAlign::Center, VAlign::Middle)));
                                 } else if v >= 0.0 {
-                                    ctx.text(pb.max(pt) + 3.0, y, &t, LABEL_SIZE, TEXT, (HAlign::Left, VAlign::Middle));
+                                    bar_labels.push((pb.max(pt) + 3.0, y, t.clone(), TEXT, (HAlign::Left, VAlign::Middle)));
                                 } else {
-                                    ctx.text(lo - 3.0, y, &t, LABEL_SIZE, TEXT, (HAlign::Right, VAlign::Middle));
+                                    bar_labels.push((lo - 3.0, y, t.clone(), TEXT, (HAlign::Right, VAlign::Middle)));
                                 }
                             } else {
-                                let x = c - nslots * bw / 2.0 + (k + 0.5) * bw;
+                                let x = c - cluster / 2.0 + bw / 2.0 + k * step;
                                 if stacked {
-                                    ctx.text(x, mid, &t, LABEL_SIZE, on(s.color), (HAlign::Center, VAlign::Middle));
+                                    bar_labels.push((x, mid, t.clone(), on(s.color), (HAlign::Center, VAlign::Middle)));
                                 } else if v >= 0.0 {
-                                    ctx.text(x, lo - 2.0, &t, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
+                                    bar_labels.push((x, lo - 2.0, t.clone(), TEXT, (HAlign::Center, VAlign::Bottom)));
                                 } else {
-                                    ctx.text(x, lo + len + 2.0, &t, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Top));
+                                    bar_labels.push((x, lo + len + 2.0, t.clone(), TEXT, (HAlign::Center, VAlign::Top)));
                                 }
                             }
                         }
@@ -334,6 +377,8 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 }
             }
         }
+        draw_series_lines(ctx, data.series_lines.filter(|_| pass == 1), &fams, ncat, segment_end);
+        draw_bar_labels(ctx, &mut bar_labels);
         for (x, y, t) in area_labels.drain(..) {
             ctx.text(x, y, &t, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
         }
@@ -393,7 +438,8 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
     let ys = nice_scale(ylo, yhi, false);
     let fx = Fmt::new("General");
     let fy = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
-    let plot = frame(ctx, area, CatAxis::Numeric(xs, &fx), &ValAxis { scale: ys, fmt: &fy }, None, false, chart.gridlines);
+    let plot =
+        frame(ctx, area, CatAxis::Numeric(xs, &fx), &ValAxis { scale: ys, fmt: &fy, hidden: chart.value_axis_hidden }, None, false, chart.gridlines);
     if !plot.ok() {
         return;
     }
