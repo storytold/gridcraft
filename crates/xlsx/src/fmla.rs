@@ -226,6 +226,7 @@ fn unwrap_dummy_functions(e: Expr, known: &dyn Fn(&str) -> bool) -> Option<Expr>
             | Expr::Text(_)
             | Expr::Bool(_)
             | Expr::Error(_)
+            | Expr::SheetRefError(_)
             | Expr::Paren(_)
             | Expr::Array(_)
             | Expr::Struct(_)),

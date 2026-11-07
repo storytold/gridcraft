@@ -246,22 +246,31 @@ fn adjust_ref(r: &Reference, edit: &Edit) -> Option<Reference> {
     }
 }
 
+fn rename_in(sheet: &mut SheetSel, old: &str, new: &str) {
+    match sheet {
+        SheetSel::Named(n) if n.eq_ignore_ascii_case(old) => *n = new.to_string(),
+        SheetSel::Span(a, b) => {
+            if a.eq_ignore_ascii_case(old) {
+                *a = new.to_string();
+            }
+            if b.eq_ignore_ascii_case(old) {
+                *b = new.to_string();
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Renames sheet references `old` → `new`.
 pub fn rename_sheet(e: Expr, old: &str, new: &str) -> Expr {
     e.map(&mut |x| match x {
+        // `Sheet1!#REF!` names its sheet like any reference, so it is renamed with them.
+        Expr::SheetRefError(mut sheet) => {
+            rename_in(&mut sheet, old, new);
+            Expr::SheetRefError(sheet)
+        }
         Expr::Ref(mut r) => {
-            match &mut r.sheet {
-                SheetSel::Named(n) if n.eq_ignore_ascii_case(old) => *n = new.to_string(),
-                SheetSel::Span(a, b) => {
-                    if a.eq_ignore_ascii_case(old) {
-                        *a = new.to_string();
-                    }
-                    if b.eq_ignore_ascii_case(old) {
-                        *b = new.to_string();
-                    }
-                }
-                _ => {}
-            }
+            rename_in(&mut r.sheet, old, new);
             Expr::Ref(r)
         }
         // Sheet-qualified defined name `Old!MyName` is stored as one string, with the bare sheet name as the parser
@@ -279,6 +288,8 @@ pub fn rename_sheet(e: Expr, old: &str, new: &str) -> Expr {
 pub fn delete_sheet(e: Expr, name: &str, order: &[String]) -> Expr {
     let pos = |n: &str| order.iter().position(|o| o.eq_ignore_ascii_case(n));
     e.map(&mut |x| match x {
+        // The sheet a `Sheet1!#REF!` names going away leaves a bare `#REF!`, as for a reference.
+        Expr::SheetRefError(SheetSel::Named(n)) if n.eq_ignore_ascii_case(name) => Expr::Error(CellError::Ref),
         Expr::Ref(r) if r.sheet_name().is_some_and(|n| n.eq_ignore_ascii_case(name)) => Expr::Error(CellError::Ref),
         Expr::Ref(mut r) => {
             if let SheetSel::Span(a, b) = &r.sheet

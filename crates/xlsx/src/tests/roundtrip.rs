@@ -1747,3 +1747,26 @@ fn remove_personal_information_is_kept_and_honoured() {
     assert_eq!(book.child("workbookPr").and_then(|p| p.attr("filterPrivacy")), None);
     assert!(String::from_utf8(pkg.read("docProps/core.xml").unwrap().unwrap()).unwrap().contains("Jane Example"));
 }
+
+/// Excel writes a reference whose cells were deleted as `Sheet1!#REF!`, in cell formulas and in
+/// defined names, and keeps the sheet it pointed into. Reading it as a bare `#REF!` rewrites
+/// every such formula on save.
+#[test]
+fn a_sheet_qualified_ref_error_keeps_its_sheet_through_a_round_trip() {
+    let mut wb = Workbook::new();
+    wb.sheets.push(Arc::new(Sheet::new("Data Sheet")));
+    let s = wb.sheet_mut(0).unwrap();
+    s.cells.set(at("A1"), Cell::formula(Formula::new("'Data Sheet'!#REF!")));
+    s.cells.set(at("A2"), Cell::formula(Formula::new("'Data Sheet'!#REF!-A3")));
+    s.cells.set(at("A3"), Cell::formula(Formula::new("#REF!")));
+    wb.names.push(DefinedName { name: "Gone".into(), scope: None, formula: "'Data Sheet'!#REF!".into(), comment: String::new(), hidden: false });
+
+    let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let s = back.sheet(0).unwrap();
+    let text = |a: &str| s.cell(at(a)).unwrap().formula.as_ref().unwrap().text.to_string();
+    assert_eq!(text("A1"), "'Data Sheet'!#REF!");
+    assert_eq!(text("A2"), "'Data Sheet'!#REF!-A3");
+    assert_eq!(text("A3"), "#REF!", "a bare #REF! stays bare");
+    assert_eq!(back.names.first().expect("the name survived").formula, "'Data Sheet'!#REF!");
+}

@@ -238,6 +238,8 @@ fn sample(date1904: bool) -> Vec<u8> {
     let round = cat(&[&ptg_ref(0, 1), &ptg_int(0), &[0x41], &27u16.to_le_bytes()]);
     let name_ref = cat(&[&[0x43], &1u32.to_le_bytes(), &ptg_int(2), &[0x05]]);
     let ref3d = cat(&[&[0x5A], &1u16.to_le_bytes(), &u16s(&[0, 0xC000])]);
+    // PtgRefErr3d into the same link: a cell deleted on `Data`, which is still there.
+    let ref_err3d = cat(&[&[0x3C], &1u16.to_le_bytes(), &u16s(&[0, 0])]);
     let sheet1 = cat(&[
         &bof(0x0010),
         &rec(0x0225, &u16s(&[0, 255])),
@@ -259,6 +261,7 @@ fn sample(date1904: bool) -> Vec<u8> {
         &formula(2, 5, num(2.0), &round),
         &formula(2, 6, num(7.0), &ref3d),
         &formula(2, 7, special(2, 0x2A), &[0x1C, 0x2A]),
+        &formula(2, 8, special(2, 0x17), &ref_err3d),
         &rec(0x0203, &cat(&[&cell(3, 0, 1), &0.0f64.to_le_bytes()])),
         &rec(0x0203, &cat(&[&cell(3, 1, 2), &0.25f64.to_le_bytes()])),
         &rec(0x027E, &cat(&[&cell(4, 0, 0), &((1u32 << 2) | 2).to_le_bytes()])),
@@ -340,6 +343,9 @@ fn assert_formula_roundtrip(wb: &gridcraft_model::Workbook) {
     assert_eq!(ftext(wb, "F3").as_deref(), Some("ROUND(B1,0)"));
     assert_eq!(ftext(wb, "G3").as_deref(), Some("Data!A1"));
     assert_eq!(v(wb, 0, "H3"), Value::Error(CellError::NA));
+    // A cell deleted on a sheet that is still there keeps the sheet (PtgRefErr3d).
+    assert_eq!(ftext(wb, "I3").as_deref(), Some("Data!#REF!"));
+    assert_eq!(v(wb, 0, "I3"), Value::Error(CellError::Ref));
     // Shared formula: relative offsets resolve per cell.
     assert_eq!(ftext(wb, "B5").as_deref(), Some("A5*10"));
     assert_eq!(ftext(wb, "B6").as_deref(), Some("A6*10"));
