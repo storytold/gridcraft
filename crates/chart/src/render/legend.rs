@@ -79,7 +79,8 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
         }
         _ => {
             let series = data.series.iter().take(MAX_SERIES);
-            let mut out: Vec<(String, Rgba, Swatch)> = series.clone().enumerate().map(|(i, s)| (s.name.clone(), s.color, swatch_of(plot_kind(chart, s, i)))).collect();
+            let mut out: Vec<(String, Rgba, Swatch)> =
+                series.clone().enumerate().map(|(i, s)| (s.name.clone(), s.color, swatch_of(plot_kind(chart, s, i)))).collect();
             // Trendlines follow the series, named "Linear (Sales)" unless given a name.
             for (_, s) in series.enumerate().filter(|(i, s)| supports_trendline(plot_kind(chart, s, *i))) {
                 for t in s.trendlines.iter().take(MAX_TRENDLINES) {
