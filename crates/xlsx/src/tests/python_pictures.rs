@@ -379,6 +379,31 @@ fn a_follower_of_a_shared_python_formula_stays_a_python_cell() {
     }
 }
 
+/// The older `PY("…",0)` form is read from the formula's text. A follower reads the master's rather
+/// than one printed from the parsed formula, which can say something else: `0.0` is printed `0`, so
+/// the follower alone would become a Python cell.
+#[test]
+fn a_follower_of_a_shared_literal_python_formula_reads_the_masters_text() {
+    let read = |master: &str| {
+        let mut sheet = Sheet::new("Data");
+        python_cell(&mut sheet, "A1", PyCode::new("x"), Value::text("x"));
+        python_cell(&mut sheet, "A2", PyCode::new("y"), Value::text("y"));
+        let bytes = write_xlsx(&book(vec![sheet])).unwrap();
+        let part = "xl/worksheets/sheet1.xml";
+        let master = format!("<f t=\"shared\" ref=\"A1:A2\" si=\"0\">_xlfn._xlws.{master}</f>");
+        let bytes = with_text_changed(&bytes, part, "<f>_xlfn._xlws.PY(0,0)</f>", &master);
+        let bytes = with_text_changed(&bytes, part, "<f>_xlfn._xlws.PY(1,0)</f>", r#"<f t="shared" si="0"/>"#);
+        let (back, _) = read_xlsx(&bytes).unwrap();
+        let code = |cell: &str| back.sheets[0].cell(at(cell)).and_then(|c| c.py.as_deref()).map(|py| py.code.clone());
+        (code("A1"), code("A2"))
+    };
+    let both = Some("a = 1\nb = 2".to_string());
+    assert_eq!(read("PY(\"a = 1\nb = 2\",0)"), (both.clone(), both));
+    for strict in ["PY(\"a\",0.0)", "PY(\"a\",1.0)", "PY(\"a\",00)", "PY(\"a\",1E0)"] {
+        assert_eq!(read(strict), (None, None), "neither cell is a Python cell: {strict}");
+    }
+}
+
 /// A file past the limit on what reading is charged doesn't open, and linked copies of one plot are
 /// charged once each.
 #[test]

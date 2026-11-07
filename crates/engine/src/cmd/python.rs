@@ -22,7 +22,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Python Code",
             [],
             None,
-            "{cell?, code, output?: object|value} makes the cell (default: the active cell) a Python cell with this code; the code must fit in Excel's 8,192-character formula once written as PY(…). `output` is the return type: `value` (an Excel value, the default) or `object` (a Python object) `output`, when given, is a choice, which new code without `output` keeps; a picture with no choice behaves as a Python Object.",
+            "{cell?, code, output?: object|value} makes the cell (default: the active cell) a Python cell with this code; the code must fit in Excel's 8,192-character formula once written as PY(…). `output` is the return type: `value` (an Excel value, the default) or `object` (a Python object). `output`, when given, is a choice, which new code without `output` keeps; a picture with no choice behaves as a Python Object.",
             has_doc,
             set
         ),
@@ -31,7 +31,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Python Output",
             ["Python", "Code"],
             Some("Ctrl+Alt+Shift+M"),
-            "{cell?, mode?: object|value, lines?: cell|rows} sets the return type of a Python cell (default: the active cell): `object` (a Python object) or `value` (an Excel value). Without `mode` or `lines` it switches from the return type in effect to the other one. The cell keeps its code; a cached result of the old return type goes, as with `python.set`, so the cell shows #BLOCKED! until it runs. `lines` says what a text result with line breaks does: it stays in the cell (`cell`, the default) or spills one line per row (`rows`); the result is kept, so this runs nothing. GridCraft JSON keeps this choice; an xlsx file has no place for it, so there it lasts for the session. A return type asked for is a choice, and when it is already the type in effect the cell keeps its result: a picture with no choice behaves as a Python Object, and moves into the cell with no new run.",
+            "{cell?, mode?: object|value, lines?: cell|rows} sets the return type of a Python cell (default: the active cell): `object` (a Python object) or `value` (an Excel value). Without `mode` or `lines` it switches from the return type in effect to the other one. A return type asked for is a choice. The cell keeps its code; a cached result of the old return type goes, as with `python.set`, so the cell shows #BLOCKED! until it runs. The result stays in two cases: when the type asked for is already the type in effect, and for a picture with no choice, which behaves as a Python Object, so that asking for `value` moves it into the cell with no new run. `lines` says what a text result with line breaks does: it stays in the cell (`cell`, the default) or spills one line per row (`rows`); the result is kept, so this runs nothing. GridCraft JSON keeps this choice; an xlsx file has no place for it, so there it lasts for the session.",
             has_doc,
             output
         ),
@@ -321,7 +321,8 @@ fn set_output_choice(s: &mut Session, sheet: usize, at: CellRef, object: bool, s
 
 /// `python.output`: the cell's return type. The code stays; a cached result belongs to the old
 /// return type, so it goes, as with `python.set` and a new return type: the cell shows
-/// `#BLOCKED!` until it runs, and its old spill goes with its readers recalculated.
+/// `#BLOCKED!` until it runs, and its old spill goes with its readers recalculated. It stays when the
+/// type asked for is already in effect, and for a picture with no choice.
 fn output(s: &mut Session, p: &Json) -> Result<Json> {
     let (sheet, at) = target_cell(s, p)?;
     let Some(old) = existing(s, sheet, at)? else {
