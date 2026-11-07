@@ -353,7 +353,7 @@ fn save_writes_exact_bytes_and_fails_cleanly_without_a_folder() {
 #[test]
 fn full_sync_tolerates_only_unsupported_errors() {
     use std::io::{Error, ErrorKind};
-    assert!(full_sync_unsupported(&Error::from_raw_os_error(25)));
+    assert_eq!(full_sync_unsupported(&Error::from_raw_os_error(25)), cfg!(unix));
     assert!(full_sync_unsupported(&Error::from(ErrorKind::Unsupported)));
     assert!(!full_sync_unsupported(&Error::from(ErrorKind::PermissionDenied)));
     assert!(!full_sync_unsupported(&Error::from(ErrorKind::StorageFull)));

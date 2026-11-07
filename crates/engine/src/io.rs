@@ -863,12 +863,12 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// True when a flush failed only because the file system cannot do it: ENOTTY (25 on Linux,
-/// macOS and the BSDs, what `fcntl(F_FULLFSYNC)` returns on such volumes) or an
+/// True when a flush failed only because the file system cannot do it: on Unix ENOTTY (25, what
+/// `fcntl(F_FULLFSYNC)` returns on such volumes; on Windows 25 is ERROR_SEEK, a real failure) or an
 /// unsupported-operation error (ENOTSUP/EOPNOTSUPP/ENOSYS). Any other error is a real failure.
 #[cfg(not(target_arch = "wasm32"))]
 fn full_sync_unsupported(e: &std::io::Error) -> bool {
-    e.raw_os_error() == Some(25) || e.kind() == std::io::ErrorKind::Unsupported
+    (cfg!(unix) && e.raw_os_error() == Some(25)) || e.kind() == std::io::ErrorKind::Unsupported
 }
 
 #[cfg(target_arch = "wasm32")]
