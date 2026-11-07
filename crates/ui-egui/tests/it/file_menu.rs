@@ -715,3 +715,91 @@ fn control_requests_route_to_a_window_and_list_windows() {
     let r = call(&mut h, "engine.execute", serde_json::json!({"command": "cell.get", "params": {"cell": "A1"}, "window": 999}));
     assert_eq!(r["ok"], false, "{r}");
 }
+
+#[test]
+fn web_save_clears_the_edited_marker_once_the_download_is_written() {
+    let (mut h, delivered, ids) = web_save_harness();
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    save_as(&mut h);
+    let first = ids.lock().unwrap()[0];
+    assert!(h.state().session.active().unwrap().is_dirty(), "still unsaved until the browser has written the file");
+
+    // An edit made while the file was being written stays unsaved.
+    delivered.finish(first);
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A2", "input": "7"})).unwrap();
+    h.run_steps(2);
+    assert!(h.state().session.active().unwrap().is_dirty(), "a later edit is not covered by the save");
+
+    // Saving again and confirming it leaves the document clean.
+    save_as(&mut h);
+    delivered.finish(*ids.lock().unwrap().last().unwrap());
+    h.run_steps(2);
+    assert!(!h.state().session.active().unwrap().is_dirty(), "a written save clears the edited marker");
+}
+
+#[test]
+fn a_finished_save_is_matched_to_its_own_snapshot_when_two_saves_share_a_name() {
+    let (mut h, delivered, ids) = web_save_harness();
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "1"})).unwrap();
+    save_as(&mut h);
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A2", "input": "2"})).unwrap();
+    save_as(&mut h);
+    let (first, second) = {
+        let ids = ids.lock().unwrap();
+        (ids[0], ids[1])
+    };
+    assert_ne!(first, second, "each save gets its own number");
+
+    // The first save finishes while the second is still open (or was cancelled): its edits are
+    // covered, the second save's are not.
+    delivered.finish(first);
+    h.run_steps(2);
+    assert!(h.state().session.active().unwrap().is_dirty(), "the later snapshot is not written yet");
+
+    delivered.finish(second);
+    h.run_steps(2);
+    assert!(!h.state().session.active().unwrap().is_dirty(), "the second save's own completion cleans the document");
+}
+
+#[test]
+fn a_cancelled_web_save_does_not_stand_in_for_the_written_one() {
+    let (mut h, delivered, ids) = web_save_harness();
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "1"})).unwrap();
+    save_as(&mut h);
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A2", "input": "2"})).unwrap();
+    save_as(&mut h);
+    // Only the second picker was confirmed; the first was cancelled and never reports.
+    delivered.finish(ids.lock().unwrap()[1]);
+    h.run_steps(2);
+    assert!(!h.state().session.active().unwrap().is_dirty());
+    // A late report from the cancelled one changes nothing.
+    delivered.finish(ids.lock().unwrap()[0]);
+    h.run_steps(2);
+    assert!(!h.state().session.active().unwrap().is_dirty());
+}
+
+#[test]
+fn saves_are_not_tracked_without_a_delivery_log() {
+    let mut h = harness(Services { download: Some(Box::new(|_, _| {})), ..Default::default() });
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "1"})).unwrap();
+    save_as(&mut h);
+    assert!(h.state().session.active().unwrap().is_dirty());
+}
+
+/// A harness whose `download` numbers each call like the web shell and records the numbers.
+fn web_save_harness() -> (egui_kittest::Harness<'static, SheetApp>, gridcraft_ui_egui::Delivered, Arc<Mutex<Vec<u64>>>) {
+    let ids = Arc::new(Mutex::new(Vec::<u64>::new()));
+    let delivered = gridcraft_ui_egui::Delivered::default();
+    let (log, record) = (delivered.clone(), ids.clone());
+    let h = harness(Services {
+        download: Some(Box::new(move |_, _| record.lock().unwrap().push(log.begin()))),
+        delivered: Some(delivered.clone()),
+        ..Default::default()
+    });
+    (h, delivered, ids)
+}
+
+fn save_as(h: &mut egui_kittest::Harness<'static, SheetApp>) {
+    h.state_mut().open_dialog("saveAs", serde_json::json!({}));
+    h.run_steps(2);
+}

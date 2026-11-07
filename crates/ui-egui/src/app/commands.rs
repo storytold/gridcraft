@@ -3,6 +3,9 @@ use super::{
     formula_locale, i18n, json, now_ms, printing,
 };
 
+/// Saves handed to `download` and not yet reported written; older ones are dropped beyond this.
+const MAX_PENDING_SAVES: usize = 8;
+
 impl SheetApp {
     /// Runs an engine command (or a UI command) and handles UI requests it makes.
     pub fn run(&mut self, id: &str, params: Json) -> Result<Json, String> {
@@ -394,6 +397,15 @@ impl SheetApp {
                 {
                     let name = r.get("name").and_then(Json::as_str).unwrap_or("Book.xlsx").to_string();
                     dl(&name, &b);
+                    // Only a download that reports back can be matched; the host bridge's cannot.
+                    if let Some(log) = &self.services.delivered
+                        && let Some(d) = self.session.active()
+                    {
+                        self.pending_saves.push((log.last_started(), d.uid, d.wb.clone()));
+                        while self.pending_saves.len() > MAX_PENDING_SAVES {
+                            self.pending_saves.remove(0);
+                        }
+                    }
                 }
             }
             // File › Options (`file.options`) and the File tab itself open the Backstage view.

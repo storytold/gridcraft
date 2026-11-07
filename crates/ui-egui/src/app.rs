@@ -75,6 +75,7 @@ impl SheetApp {
             cut_text: None,
             tab_run: None,
             macros: macro_ui::MacroUi::default(),
+            pending_saves: Vec::new(),
             started: now_ms(),
             allow_close: false,
             bring_forward: false,
@@ -132,6 +133,7 @@ impl SheetApp {
         // issues the capture command (after every widget, so a command cannot be missed).
         control::drain_screenshots(self, ctx);
         control::poll(self, ctx);
+        self.poll_delivered();
         // Printing feedback is polled once per frame, here, so hidden windows and logic-only
         // frames still see worker completion. `ui` and the desktop app no longer poll it.
         self.poll_printing(ctx);

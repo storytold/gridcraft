@@ -76,7 +76,7 @@ mod services;
 mod state;
 
 pub use clock::{monotonic_ms, now_ms};
-pub use services::{Chrome, Inbox, Services};
+pub use services::{Chrome, Delivered, DeliveryLog, Inbox, Services};
 pub use state::{NoticeKind, OpenWindow, SaveAnswer, SheetView};
 pub mod desktop_theme;
 
@@ -300,6 +300,8 @@ pub struct SheetApp {
     /// Automate › Macros: relative recording, recent macros, a macro's question.
     pub macros: macro_ui::MacroUi,
     pub started: f64,
+    /// Workbooks handed to `download` and not yet confirmed written: (download number, doc uid, content).
+    pending_saves: Vec<(u64, u64, std::sync::Arc<gridcraft_engine::model::Workbook>)>,
     /// Every unsaved workbook has been answered for quitting (or `app.quit` asked): the next
     /// window close goes through.
     pub allow_close: bool,
