@@ -236,7 +236,7 @@ fn kept_xml(bytes: &[u8]) -> Option<PyEnvironmentXml> {
         let local = e.local_name().as_ref().to_vec();
         match (place, local.as_slice()) {
             (In::Part, _) => {
-                kept.root_attrs = attrs_besides(&e, b"xmlns");
+                kept.root_attrs = attrs_besides(&e, &[b"xmlns"]);
                 in_root = declared_namespace(&e);
                 if !open {
                     break;
@@ -246,7 +246,7 @@ fn kept_xml(bytes: &[u8]) -> Option<PyEnvironmentXml> {
             }
             (In::Root, b"environmentDefinition") if !seen_environment => {
                 seen_environment = true;
-                kept.environment_attrs = attrs_besides(&attrs_without_namespace(&e), b"id");
+                kept.environment_attrs = attrs_besides(&e, &[b"id", b"xmlns"]);
                 in_environment = declared_namespace(&e).or_else(|| in_root.clone());
                 // A readable GUID says there is a definition; without one, only this does.
                 kept.definition = !e
@@ -260,7 +260,7 @@ fn kept_xml(bytes: &[u8]) -> Option<PyEnvironmentXml> {
             }
             (In::Environment, b"initialization") if !seen_initialization => {
                 seen_initialization = true;
-                kept.initialization_attrs = attrs_besides(&attrs_without_namespace(&e), b"userModified");
+                kept.initialization_attrs = attrs_besides(&e, &[b"userModified", b"xmlns"]);
                 in_initialization = declared_namespace(&e).or_else(|| in_environment.clone());
                 if open {
                     place = In::Initialization;
@@ -303,21 +303,14 @@ fn declared_namespace(e: &BytesStart<'_>) -> Option<String> {
     e.attributes().flatten().find(|a| a.key.as_ref() == b"xmlns").map(|a| String::from_utf8_lossy(&a.value).into_owned())
 }
 
-/// `e` without a default namespace of its own: a save writes the part's elements under the part's
-/// namespace, whatever they declared.
-fn attrs_without_namespace(e: &BytesStart<'_>) -> BytesStart<'static> {
-    let mut out = BytesStart::new("kept");
-    out.extend_attributes(e.attributes().flatten().filter(|a| a.key.as_ref() != b"xmlns"));
-    out.into_owned()
-}
-
 /// A kept element as written. Everything saved around it has the part's namespace as its default, so
-/// an element with no prefix whose default was anything else, or nothing, says so itself.
+/// an element whose default was anything else, or nothing, says so itself: for its own name when it
+/// has no prefix, and for what it holds when it has one.
 fn with_namespace<'a>(fragment: &'a str, e: &BytesStart<'_>, in_scope: Option<&str>) -> std::borrow::Cow<'a, str> {
     let name = e.name();
     let declares = declared_namespace(e).is_some();
     match std::str::from_utf8(name.as_ref()) {
-        Ok(name) if !declares && !name.contains(':') && in_scope != Some(NS) => match fragment.strip_prefix('<').and_then(|f| f.strip_prefix(name)) {
+        Ok(name) if !declares && in_scope != Some(NS) => match fragment.strip_prefix('<').and_then(|f| f.strip_prefix(name)) {
             Some(rest) => format!("<{name} xmlns=\"{}\"{rest}", in_scope.unwrap_or("").replace('"', "&quot;")).into(),
             None => fragment.into(),
         },
@@ -326,10 +319,10 @@ fn with_namespace<'a>(fragment: &'a str, e: &BytesStart<'_>, in_scope: Option<&s
 }
 
 /// An element's attributes as written, each with a space before it, leaving out `skip`.
-fn attrs_besides(e: &BytesStart<'_>, skip: &[u8]) -> String {
+fn attrs_besides(e: &BytesStart<'_>, skip: &[&[u8]]) -> String {
     let mut out = String::new();
     for a in e.attributes().flatten() {
-        if a.key.as_ref() == skip {
+        if skip.contains(&a.key.as_ref()) {
             continue;
         }
         if let (Ok(key), Ok(value)) = (std::str::from_utf8(a.key.as_ref()), std::str::from_utf8(&a.value)) {
@@ -584,7 +577,12 @@ mod tests {
     fn an_element_keeps_the_default_namespace_it_had_under_a_prefixed_root() {
         let part = format!("<p:python xmlns:p=\"{NS}\" xmlns=\"urn:other\"><extra a=\"1\"/><own xmlns=\"urn:own\"/><p:more/></p:python>");
         let (_, kept) = read_back(&part);
-        assert_eq!(kept.root_elements, "<extra xmlns=\"urn:other\" a=\"1\"/><own xmlns=\"urn:own\"/><p:more/>");
+        assert_eq!(kept.root_elements, "<extra xmlns=\"urn:other\" a=\"1\"/><own xmlns=\"urn:own\"/><p:more xmlns=\"urn:other\"/>");
+        // A prefixed element passes its default on to what it holds.
+        let (_, kept) = read_back(&format!("<p:python xmlns:p=\"{NS}\"><p:wrap><x/></p:wrap></p:python>"));
+        assert_eq!(kept.root_elements, "<p:wrap xmlns=\"\"><x/></p:wrap>");
+        let (_, kept) = read_back(&format!("<p:python xmlns:p=\"{NS}\" xmlns=\"urn:other\"><p:wrap><x/></p:wrap></p:python>"));
+        assert_eq!(kept.root_elements, "<p:wrap xmlns=\"urn:other\"><x/></p:wrap>");
         // No default at all is one too: under a saved root it would take the part's.
         let (_, kept) = read_back(&format!("<p:python xmlns:p=\"{NS}\"><extra/></p:python>"));
         assert_eq!(kept.root_elements, "<extra xmlns=\"\"/>");
@@ -597,6 +595,17 @@ mod tests {
         assert_eq!(kept.environment_elements, "<here/>", "the part's own namespace needs nothing");
         assert_eq!(kept.initialization_elements, "<deep xmlns=\"urn:init\"/>");
         assert_eq!((kept.environment_attrs.as_str(), kept.initialization_attrs.as_str()), ("", ""), "a save declares none of these");
+    }
+
+    #[test]
+    fn an_attribute_with_either_kind_of_quote_comes_through_whole() {
+        let guid = "{AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE}";
+        let (_, kept) = read_back(&format!(
+            "<python xmlns=\"{NS}\" xmlns:a=\"urn:a\"><environmentDefinition id=\"{guid}\" a:e='x\"y'>\
+             <initialization a:i='p\"q'/></environmentDefinition></python>"
+        ));
+        assert_eq!(kept.environment_attrs, " a:e=\"x&quot;y\"");
+        assert_eq!(kept.initialization_attrs, " a:i=\"p&quot;q\"");
     }
 
     #[test]

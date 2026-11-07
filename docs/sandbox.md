@@ -25,8 +25,8 @@ other programs. The sandbox's job is that it can do none of these:
 - **Programs:** it can execute only the programs its policy lists, and it can't start a new
   process at all, so even those only replace itself.
 - **Network:** no sockets, no connections and no listeners.
-- **Other processes and the system:** no debugging or reading another process, no signals to
-  another process, no typing into a terminal it inherited, no mounts or namespaces, no kernel
+- **Other processes and the system:** no debugging or reading another process, no System V shared
+  memory, message queues or semaphores, no signals to another process, no typing into a terminal it inherited, no mounts or namespaces, no kernel
   modules, BPF, keyrings or performance counters. On Linux it also can't change another process's
   limits, priority or scheduling.
 
@@ -97,6 +97,9 @@ The launcher applies two layers, then runs the check.
     - io_uring (it runs operations outside the filter);
     - `ptrace`, `process_vm_readv`/`writev`, `pidfd_getfd`, `pidfd_open`, `pidfd_send_signal`,
       `kcmp`;
+    - System V shared memory, message queues and semaphores (`shmget`, `shmat`, `shmctl`, `shmdt`,
+      `msgget`, `msgsnd`, `msgrcv`, `msgctl`, `semget`, `semop`, `semctl`, `semtimedop`), since no path
+      rule covers them;
     - signals to any process but the program itself, whose process ID `exec` keeps (`kill`,
       `tkill`, `tgkill`, `rt_sigqueueinfo`, `rt_tgsigqueueinfo`), so this holds on a kernel without
       Landlock's signal scope;
