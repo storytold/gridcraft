@@ -53,18 +53,21 @@ pub fn profile(policy: &Checked) -> Result<String> {
     let mut p = String::from("(version 1)\n(deny default)\n(import \"system.sb\")\n");
     p.push_str("(allow process-exec");
     for path in &policy.exec {
-        p.push_str(&format!(" (literal {})", quoted(path)?));
+        p.push_str(&path_rule(path)?);
     }
     p.push_str(")\n(allow file-read*");
-    for path in &policy.exec {
-        p.push_str(&format!(" (literal {})", quoted(path)?));
-    }
-    for path in &policy.read {
-        let rule = if path.is_dir() { "subpath" } else { "literal" };
-        p.push_str(&format!(" ({rule} {})", quoted(path)?));
+    for path in policy.exec.iter().chain(&policy.read) {
+        p.push_str(&path_rule(path)?);
     }
     p.push_str(")\n(allow file-read-metadata)\n(allow sysctl-read)\n(allow file-write-data (literal \"/dev/null\"))\n");
     Ok(p)
+}
+
+/// A profile rule for `path`. A literal matches only that path, so a directory, whose contents the
+/// policy means, as Landlock takes it on Linux, is a subpath.
+fn path_rule(path: &Path) -> Result<String> {
+    let rule = if path.is_dir() { "subpath" } else { "literal" };
+    Ok(format!(" ({rule} {})", quoted(path)?))
 }
 
 /// `path` as a profile string literal: in double quotes, with `"` and `\` escaped. Paths with

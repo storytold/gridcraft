@@ -138,6 +138,12 @@ fn a_launch_whose_check_fails_runs_nothing() {
     // The normal path: the launcher confines itself first, and the program runs.
     if confines() {
         launch.splice(0..2, ["--sandbox-launch".to_string()]);
+        // The launcher may be under a folder in the list, on either system.
+        let mut by_folder = launch.clone();
+        by_folder[4] = Path::new(env!("CARGO_BIN_EXE_gridcraft-cli")).parent().unwrap().to_string_lossy().into_owned();
+        let o = cli(&by_folder.iter().map(String::as_str).collect::<Vec<_>>());
+        assert!(o.status.success(), "{}", text(&o));
+        assert!(text(&o).contains("the program ran"), "{}", text(&o));
         let o = cli(&launch.iter().map(String::as_str).collect::<Vec<_>>());
         let out = text(&o);
         assert!(o.status.success() && out.contains("the program ran"), "{out}");
