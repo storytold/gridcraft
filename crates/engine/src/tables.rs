@@ -247,6 +247,33 @@ pub(crate) fn sync_headers(cx: &mut crate::cmd::Ctx) {
                 cell.formula = Some(std::sync::Arc::new(Formula::from_expr(ne)));
             }
         }
+        // So do calculated column formulas, which are stored as text on the table's columns.
+        let Some(sh) = cx.wb.sheet_mut(i) else { continue };
+        for t in &mut sh.tables {
+            let owner = t.range;
+            for text in t.columns.iter_mut().filter_map(|col| col.formula.as_mut()) {
+                let Ok(e) = gridcraft_formula::parse(text) else { continue };
+                let mut hit = false;
+                let ne = e.map(&mut |x| match x {
+                    gridcraft_formula::Expr::Struct(mut st) => {
+                        for (si, table, range, old, name) in &renames {
+                            let this = if st.table.is_empty() { i == *si && *range == owner } else { st.table.eq_ignore_ascii_case(table) };
+                            for end in [&mut st.col_start, &mut st.col_end].into_iter().flatten().filter(|_| this) {
+                                if end.eq_ignore_ascii_case(old) {
+                                    *end = name.clone();
+                                    hit = true;
+                                }
+                            }
+                        }
+                        gridcraft_formula::Expr::Struct(st)
+                    }
+                    o => o,
+                });
+                if hit {
+                    *text = gridcraft_formula::print(&ne);
+                }
+            }
+        }
     }
     cx.structural = true;
 }
@@ -291,6 +318,25 @@ mod tests {
         s.execute("range.setValues", json!({"range": "A1", "values": [["a", "b"], [1, 2], [3, 4]]})).unwrap();
         s.execute("insert.table", json!({"range": "A1:B3", "header": true})).unwrap();
         assert_eq!(s.execute("edit.goTo", json!({"reference": "Table1"})).unwrap()["selection"], "A2:B3");
+    }
+
+    #[test]
+    fn renaming_a_column_updates_calculated_column_formulas() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Sku", "Price"], [101, 5], [102, 7]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "D1", "values": [["Item", "Cost"], [102, 0], [101, 0]]})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:B3", "header": true, "name": "Prices"})).unwrap();
+        s.execute("insert.table", json!({"range": "D1:E3", "header": true, "name": "Orders"})).unwrap();
+        // Excel-authored files carry calculated column formulas; no command creates them.
+        let f = "INDEX(Prices[Price],MATCH(Orders[@Item],Prices[Sku],0))";
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        wb.sheet_mut(0).unwrap().tables[1].columns[1].formula = Some(f.into());
+        let stored = |s: &Session| s.doc().unwrap().wb.sheet(0).unwrap().tables[1].columns[1].formula.clone().unwrap();
+        s.execute("cell.set", json!({"cell": "B1", "input": "Amount"})).unwrap();
+        assert_eq!(stored(&s), "INDEX(Prices[Amount],MATCH(Orders[@Item],Prices[Sku],0))");
+        s.execute("cell.set", json!({"cell": "D1", "input": "Product"})).unwrap();
+        assert_eq!(stored(&s), "INDEX(Prices[Amount],MATCH(Orders[@Product],Prices[Sku],0))");
     }
 }
 
