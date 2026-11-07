@@ -215,14 +215,24 @@ fn open_with_system(target: &str) {
         log::warn!("refused to open {target:?}: only http, https and mailto links are opened");
         return;
     };
-    let target = target.as_str();
-    let cmd = if cfg!(target_os = "macos") {
-        "open"
-    } else if cfg!(windows) {
-        "explorer"
-    } else {
-        "xdg-open"
-    };
+    launch(target.as_str());
+}
+
+/// Hands an address to the shell (ShellExecuteExW), which opens it in the default browser or mail
+/// app. Not through explorer.exe: it reads its own command line, so an `=` (any query, `?id=1`)
+/// made it open the Documents folder instead, a `,` cut the address there, and it kept only the
+/// first 259 characters, which loses a long share link's query (#2085).
+#[cfg(windows)]
+fn launch(target: &str) {
+    if let Err(e) = open::that_detached(target) {
+        log::warn!("couldn't open {target}: {e}");
+    }
+}
+
+/// Hands an address to `open` (macOS) or `xdg-open`.
+#[cfg(not(windows))]
+fn launch(target: &str) {
+    let cmd = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
     if let Err(e) = std::process::Command::new(cmd).arg(target).spawn() {
         log::warn!("{cmd} {target}: {e}");
     }
@@ -451,5 +461,60 @@ mod packaging_tests {
         for ext in &mac {
             assert!(FileKind::from_path(&format!("book.{ext}")).is_some(), "GridCraft doesn't open .{ext}");
         }
+    }
+}
+
+/// `open_with_system` on Windows, end to end: the browser it starts asks a local listener for the
+/// address, which must arrive whole (#2085).
+#[cfg(all(test, windows))]
+mod open_with_system_tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    /// The target of the next request on `listener` other than the favicon's, answered with the
+    /// HTML `page`, waiting about 30 seconds. Connections that send nothing (a browser's
+    /// preconnects) are skipped.
+    fn next_request_target(listener: &TcpListener, page: &str) -> Option<String> {
+        listener.set_nonblocking(true).ok()?;
+        for _ in 0..600 {
+            let Ok((mut stream, _)) = listener.accept() else {
+                std::thread::sleep(Duration::from_millis(50));
+                continue;
+            };
+            stream.set_nonblocking(false).ok()?;
+            stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
+            let mut head = Vec::new();
+            let mut buf = [0u8; 4096];
+            while !head.windows(2).any(|w| w == b"\r\n") {
+                match stream.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => head.extend_from_slice(&buf[..n]),
+                }
+            }
+            let line = String::from_utf8_lossy(&head);
+            let Some(target) = line.lines().next().and_then(|l| l.split(' ').nth(1)) else { continue };
+            let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}", page.len());
+            let _ = stream.write_all(response.as_bytes());
+            if target != "/favicon.ico" {
+                return Some(target.to_string());
+            }
+        }
+        None
+    }
+
+    /// A share link's shape: `=` and `&` in the query, a `,` in a value, over 2,000 characters,
+    /// and a fragment. explorer.exe opened the Documents folder for it instead of the browser.
+    /// A browser never sends the fragment, so the page it gets asks for `/fragment/<fragment>`.
+    #[test]
+    #[ignore = "opens the default browser; run by hand on Windows with --ignored"]
+    fn a_long_address_with_a_query_reaches_the_browser_whole() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let path = format!("/:f:/g/personal/a1/EaB?resid=A1%21123&ithint=folder,oneup&redeem={}", "x".repeat(2048));
+        super::open_with_system(&format!("http://127.0.0.1:{port}{path}#Sheet2-B7"));
+        let report = "<script>location.replace('/fragment/' + location.hash.slice(1))</script>";
+        assert_eq!(next_request_target(&listener, report).as_deref(), Some(path.as_str()));
+        assert_eq!(next_request_target(&listener, "ok").as_deref(), Some("/fragment/Sheet2-B7"));
     }
 }
