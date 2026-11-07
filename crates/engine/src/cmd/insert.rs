@@ -99,7 +99,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Chart Properties",
             ["Chart Design"],
             None,
-            "{chart?: id, type?, subtype?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, dataTable?: bool, dataTableKeys?: bool, dataTableHorizontalBorder?: bool, dataTableVerticalBorder?: bool, dataTableOutline?: bool (data tables: column/bar/line/area and compatible combo charts), quartiles?: exclusive|inclusive, style?, holeSize?, firstSliceAngle?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?}",
+            "{chart?: id, type?, subtype?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, gapWidth?: 0-500, overlap?: -100-100 (column and bar charts), dataTable?: bool, dataTableKeys?: bool, dataTableHorizontalBorder?: bool, dataTableVerticalBorder?: bool, dataTableOutline?: bool (data tables: column/bar/line/area and compatible combo charts), quartiles?: exclusive|inclusive, style?, holeSize?, firstSliceAngle?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?}",
             has_doc,
             chart_set
         ),
@@ -852,6 +852,8 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         style: 1,
         hole_size: 75,
         first_slice_angle: 0,
+        gap_width: None,
+        overlap: None,
         x_title: None,
         y_title: None,
         source: (areas.len() == 1).then(|| format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), bounds.a1())),
@@ -933,6 +935,12 @@ fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         }
         if let Some(v) = u32_param(p, "firstSliceAngle") {
             c.first_slice_angle = (v % 360) as u16;
+        }
+        if let Some(v) = u32_param(p, "gapWidth") {
+            c.gap_width = Some(v.min(500) as u16);
+        }
+        if let Some(v) = p.get("overlap").and_then(Json::as_i64) {
+            c.overlap = Some(v.clamp(-100, 100) as i16);
         }
         if let Some(t) = p.get("xTitle") {
             c.x_title = t.as_str().map(str::to_string);

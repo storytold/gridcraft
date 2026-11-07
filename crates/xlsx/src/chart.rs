@@ -262,6 +262,15 @@ pub fn read_chart(root: &El) -> Option<Chart> {
     };
     let doughnut = plot.child("doughnutChart");
     let hole_size = doughnut.and_then(|g| g.child_val("holeSize")).and_then(|v| v.trim().parse::<u8>().ok()).unwrap_or(75).clamp(10, 90);
+    let bars = plot.child("barChart").or_else(|| plot.child("bar3DChart"));
+    // Strict files write these as percentages (`219%`).
+    let percent = |v: &str| v.trim().trim_end_matches('%').trim().parse::<f64>().ok();
+    let gap_width = bars.and_then(|g| g.child_val("gapWidth")).and_then(percent).map(|v| v.clamp(0.0, 500.0) as u16);
+    // Stacked series share a slot, so the 100 written for them means nothing to keep. Any other value
+    // is the file's own.
+    let stacked = bars.is_some_and(|g| matches!(g.child_val("grouping"), Some("stacked" | "percentStacked")));
+    let overlap =
+        bars.and_then(|g| g.child_val("overlap")).and_then(percent).map(|v| v.clamp(-100.0, 100.0) as i16).filter(|v| !(stacked && *v == 100));
     let first_slice_angle =
         plot.child("pieChart").or(doughnut).and_then(|g| g.child_val("firstSliceAng")).and_then(|v| v.trim().parse::<u16>().ok()).unwrap_or(0) % 360;
     Some(Chart {
@@ -282,6 +291,8 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         style: root.child_val("style").and_then(|v| v.parse().ok()).unwrap_or(2),
         hole_size,
         first_slice_angle,
+        gap_width,
+        overlap,
         x_title: x_ax.and_then(|a| a.child("title")).and_then(rich_title),
         y_title: y_ax.and_then(|a| a.child("title")).and_then(rich_title),
         source: None,
@@ -674,9 +685,14 @@ fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb
     let ax = format!("<c:axId val=\"{}\"/><c:axId val=\"{}\"/>", axes.0, axes.1);
     match g {
         G::Bar { bar, grouping } => {
-            let overlap = if grouping == "clustered" { String::new() } else { "<c:overlap val=\"100\"/>".into() };
+            let overlap = match ch.overlap {
+                Some(o) => format!("<c:overlap val=\"{o}\"/>"),
+                None if grouping == "clustered" => String::new(),
+                None => "<c:overlap val=\"100\"/>".into(),
+            };
+            let gap = ch.gap_width.unwrap_or(150);
             format!(
-                "<c:barChart><c:barDir val=\"{}\"/><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:gapWidth val=\"150\"/>{overlap}{ax}</c:barChart>",
+                "<c:barChart><c:barDir val=\"{}\"/><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:gapWidth val=\"{gap}\"/>{overlap}{ax}</c:barChart>",
                 if bar { "bar" } else { "col" }
             )
         }
