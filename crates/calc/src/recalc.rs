@@ -36,12 +36,28 @@ pub struct Calc {
     pub fixed_now: Option<f64>,
     /// Cells whose formulas have errors from cycles.
     pub circular: Vec<Key>,
+    /// Formula/Python nodes currently showing `#SPILL!` (maintained in `write_back`, rebuilt from
+    /// cached values in `rebuild`, alongside `self.circular` for `#CIRC!`). Lets `cells_changed`'s
+    /// probe for a spill a nearby edit might block or unblock skip scanning outright when nothing
+    /// is blocked anywhere - the common case. Kept on `Calc`, not `Sheet`, so `rebuild` (which
+    /// only ever gets `&Workbook`, never `&mut`, since most callers hold it behind an `Arc` they
+    /// cannot cheaply clone just for this) can still populate it directly. A `#SPILL!` typed as a
+    /// literal (not a formula result) is not a graph node and is irrelevant to that probe either
+    /// way, so it is deliberately not tracked here.
+    pub spill_blocked: HashSet<Key>,
     pub last_recalc_cells: usize,
 }
 
 impl Default for Calc {
     fn default() -> Self {
-        Calc { graph: Graph::default(), rng: 0x9E37_79B9_7F4A_7C15, fixed_now: None, circular: vec![], last_recalc_cells: 0 }
+        Calc {
+            graph: Graph::default(),
+            rng: 0x9E37_79B9_7F4A_7C15,
+            fixed_now: None,
+            circular: vec![],
+            spill_blocked: HashSet::default(),
+            last_recalc_cells: 0,
+        }
     }
 }
 
@@ -124,6 +140,7 @@ impl Calc {
     /// Rebuilds the graph from scratch.
     pub fn rebuild(&mut self, wb: &Workbook) {
         self.graph = Graph::default();
+        self.spill_blocked.clear();
         let mut circ = Vec::new();
         for (si, sheet) in wb.sheets.iter().enumerate() {
             for (c, cell) in sheet.cells.iter() {
@@ -135,10 +152,16 @@ impl Calc {
                     if cell.value == Value::Error(CellError::Circ) {
                         circ.push((si, c));
                     }
+                    if cell.value == Value::Error(CellError::Spill) {
+                        self.spill_blocked.insert((si, c));
+                    }
                 } else if cell.py.is_some() {
                     // A Python cell lays out its kept result, so it is calculated like a formula
                     // that reads nothing: its spill is blocked and unblocked like a formula's.
                     self.graph.insert((si, c), Node { areas: Vec::new(), dynamic: false });
+                    if cell.value == Value::Error(CellError::Spill) {
+                        self.spill_blocked.insert((si, c));
+                    }
                 }
             }
         }
@@ -209,11 +232,16 @@ impl Calc {
     pub fn cells_changed(&mut self, wb: &mut Workbook, changed: &[Key]) {
         let mut cleared: Vec<(usize, RangeRef)> = Vec::new();
         for &k in changed {
-            let formula = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.clone());
-            let py = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.py.as_ref());
+            let cell = wb.sheet(k.0).and_then(|s| s.cell(k.1));
+            let formula = cell.and_then(|c| c.formula.clone());
+            let py = cell.and_then(|c| c.py.as_ref());
             let python = py.is_some();
             // A Python cell whose result (if any) is not an array spills nothing.
             let spills = py.and_then(|p| p.result_value()).is_some_and(|v| matches!(v, Value::Array(_)));
+            // The cell's content is changing no matter which arm below runs; whatever blocked
+            // state `spill_blocked` had for it is stale either way. If it is (still, or newly)
+            // blocked, write_back re-adds it below, within this same call.
+            self.spill_blocked.remove(&k);
             match formula.and_then(|f| f.expr()) {
                 Some(e) => {
                     let (areas, dynamic) = precedents(wb, k.0, &e);
@@ -262,6 +290,8 @@ impl Calc {
         }
         let mut seeds: Vec<Key> = changed.to_vec();
         let mut emptied: Vec<Key> = Vec::new();
+        // Nothing anywhere is blocked, so no window scan below can find anything to re-seed.
+        let any_spill_blocked = !self.spill_blocked.is_empty();
         // Typing into (or clearing) a cell a dynamic array spills over (or would spill over)
         // re-evaluates the anchor, which may now be blocked or unblocked.
         for &k in changed {
@@ -271,9 +301,11 @@ impl Calc {
                         seeds.push((k.0, *anchor));
                     }
                 }
-                for (c, cell) in sh.cells.iter_range(RangeRef::new(CellRef::new(k.1.row.saturating_sub(64), k.1.col.saturating_sub(64)), k.1)) {
-                    if c != k.1 && cell.value == Value::Error(CellError::Spill) {
-                        seeds.push((k.0, c));
+                if any_spill_blocked {
+                    for (c, cell) in sh.cells.iter_range(RangeRef::new(CellRef::new(k.1.row.saturating_sub(64), k.1.col.saturating_sub(64)), k.1)) {
+                        if c != k.1 && cell.value == Value::Error(CellError::Spill) {
+                            seeds.push((k.0, c));
+                        }
                     }
                 }
                 if !sh.cells.has(k.1) {
@@ -454,6 +486,14 @@ impl Calc {
         let mut freed = Vec::new();
         for (key, value) in results {
             let Some(sheet) = wb.sheet_mut(key.0) else { continue };
+            // Synced from the final value regardless of whether a write happens below: a
+            // recalc that reaffirms an already-cached `#SPILL!` (recalc_all, or a file opened
+            // without one yet) must still mark `key` blocked, not just a value that changes.
+            if matches!(value, Value::Error(CellError::Spill)) {
+                self.spill_blocked.insert(key);
+            } else {
+                self.spill_blocked.remove(&key);
+            }
             if let Some(cell) = sheet.cells.get_mut(key.1)
                 && cell.value != value
             {
@@ -488,6 +528,7 @@ impl Calc {
                     if let Some(cell) = sheet.cells.get_mut(key.1) {
                         cell.value = Value::Error(CellError::Spill);
                     }
+                    self.spill_blocked.insert(*key);
                     let mut blocked_dependents = Vec::new();
                     self.graph.dependents_of_range(key.0, range, &mut blocked_dependents);
                     spill_changes.extend(blocked_dependents.into_iter().filter(|dependent| dependent != key));
