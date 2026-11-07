@@ -1773,3 +1773,18 @@ fn a_moved_plot_keeps_room_for_its_secondary_axis_labels() {
         assert!(left >= -0.5, "{t:?} starts at {left}");
     }
 }
+
+/// A plot rectangle that starts above or left of the chart (possible through the model, never from
+/// a file, whose values are clamped) is ignored: the chart is laid out automatically.
+#[test]
+fn a_plot_rectangle_with_a_negative_origin_is_ignored() {
+    use gridcraft_model::{ChartLayout, ChartRect};
+    let d = sample(ChartKind::ColumnClustered);
+    let mut auto = chart(ChartKind::ColumnClustered);
+    auto.legend = LegendPos::None;
+    let mut placed = auto.clone();
+    for rect in [ChartRect { x: 0.2, y: -0.8, w: 0.5, h: 0.4 }, ChartRect { x: -0.3, y: 0.2, w: 0.5, h: 0.4 }] {
+        placed.layout = ChartLayout { plot: Some(rect), plot_inner: true, title: None };
+        assert_eq!(render(&placed, &d, 600.0, 400.0, &ApproxMeasure), render(&auto, &d, 600.0, 400.0, &ApproxMeasure), "{rect:?}");
+    }
+}

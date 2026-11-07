@@ -135,7 +135,7 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
         return vec![];
     }
     let data = sanitize(data);
-    let plot = chart.layout.plot.filter(|r| r.w >= 0.05 && r.h >= 0.05 && r.x + r.w <= 1.01 && r.y + r.h <= 1.01);
+    let plot = chart.layout.plot.filter(|r| r.x >= 0.0 && r.y >= 0.0 && r.w >= 0.05 && r.h >= 0.05 && r.x + r.w <= 1.01 && r.y + r.h <= 1.01);
     let mut ctx = Ctx { out: Vec::new(), m, plot: plot.map(|r| (Bx { x: r.x * w, y: r.y * h, w: r.w * w, h: r.h * h }, chart.layout.plot_inner)) };
     ctx.out.push(Prim::Rect { x: 0.0, y: 0.0, w, h, fill: Some(WHITE), stroke: Some((GRID, 1.0)), radius: 0.0 });
     let pad = (w.min(h) * 0.04).clamp(2.0, 10.0);
