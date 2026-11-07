@@ -629,7 +629,7 @@ fn a_web_page_saved_as_xls_opens_its_table() {
     assert!(style("A1").font.bold && style("A1").align.h == gridcraft_model::HAlign::Center);
     assert!(!style("A2").font.bold);
     // Opened as text, codes keep their zeros; a page named .html gets no warning.
-    let (wb, warnings) = open_bytes_with("orders.html", page.as_bytes(), None, true).unwrap();
+    let (wb, warnings) = open_bytes_with("orders.html", page.as_bytes(), None, true, &DataConversion::default()).unwrap();
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("C2").unwrap()), gridcraft_core::Value::text("007"));
     // Plain text that merely starts with a tag-like word is still read as CSV.
@@ -653,7 +653,7 @@ fn a_web_page_table_keeps_its_characters_text_and_header_formats() {
     assert_ne!(b1.num_fmt.as_str(), "General", "the date keeps its date format");
     assert_eq!(sh.value(CellRef::parse("B2").unwrap()), gridcraft_core::Value::number(4.5));
     // Opened as text, a cell keeps the text it shows, not the number the page recorded for it.
-    let (wb, _) = open_bytes_with("menu.xls", &page, None, true).unwrap();
+    let (wb, _) = open_bytes_with("menu.xls", &page, None, true, &DataConversion::default()).unwrap();
     assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("B2").unwrap()), gridcraft_core::Value::text("4,50"));
 }
 

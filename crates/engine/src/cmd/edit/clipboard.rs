@@ -204,6 +204,7 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
     let rows: Vec<Vec<String>> = parse_tsv(text);
     let h = rows.len();
     let w = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let conv = s.prefs.data_conversion;
     // The HTML flavour, when the host passed it: the number behind each cell's shown text. Read
     // only as far as the text's own shape, so spans in the markup can't expand without bound.
     let html = str_param(p, "html").map(|html| crate::clip_html::table_cells(html, h, w)).unwrap_or_default();
@@ -211,7 +212,7 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
         for (ri, row) in rows.iter().enumerate() {
             for (ci, v) in row.iter().enumerate() {
                 let Some(c) = at.offset(ri as i64, ci as i64) else { continue };
-                let mut cell = input_to_cell(v, sheet, c, &mut cx.wb).unwrap_or_else(|_| Some(Cell::value(Value::text(v.as_str()))));
+                let mut cell = input_to_cell(v, sheet, c, &mut cx.wb, &conv).unwrap_or_else(|_| Some(Cell::value(Value::text(v.as_str()))));
                 if let Some(cl) = cell.as_mut() {
                     numeric_from_html(cl, v, html.get(ri).and_then(|r| r.get(ci)), &mut cx.wb);
                 }
@@ -238,10 +239,16 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
 /// source recorded for it in its HTML, with a format that shows the same text when one can be
 /// inferred and the cell has none. The HTML cell must show the same text as the tab-separated
 /// field, so HTML that belongs to another copy (or a table laid out differently) changes nothing.
+/// Nor does it override the Automatic Data Conversion options: text they keep as text (`0042`, a
+/// long code) stays text, whatever number the source recorded for it.
 fn numeric_from_html(cell: &mut Cell, field: &str, html: Option<&crate::clip_html::HtmlCell>, wb: &mut gridcraft_model::Workbook) {
     let Some(hc) = html else { return };
     let Some(n) = hc.num else { return };
     if cell.formula.is_some() || !matches!(cell.value, Value::Text(_)) || wb.styles.get(cell.style).num_fmt.as_str() == "@" {
+        return;
+    }
+    // Text that converts with every option on was kept as text by the person's options.
+    if !matches!(gridcraft_core::parse::parse_input(field, wb.date_system).value, Value::Text(_)) {
         return;
     }
     if crate::clip_html::normalized(&hc.text) != crate::clip_html::normalized(field) {

@@ -449,6 +449,27 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Maximum Iterations must be a whole number from 1 to 32767." => "最多迭代次数必须是 1 到 32767 之间的整数。",
         "Maximum Change must be a number of 0 or more." => "最大误差必须是大于或等于 0 的数字。",
         "Calculation settings are saved with the workbook." => "计算设置随工作簿一起保存。",
+        "Options|Data" => "数据",
+        "Automatic data conversion" => "自动数据转换",
+        "Enable all default data conversions below when entering, pasting, or opening text files" => {
+            "在输入、粘贴或打开文本文件时启用以下所有默认数据转换"
+        }
+        "Remove leading zeros and convert to a number" => "删除前导零并转换为数字",
+        "Off: 0123 stays text, leading zeros included." => "关闭：0123 保持为文本，包括前导零。",
+        "Keep first 15 digits of long numbers and display in scientific notation" => "保留长数字的前 15 位并以科学记数法显示",
+        "Off: no number is cut short or turned into scientific notation. What General format can't show as written stays text." => {
+            "关闭：不会截断任何数字，也不会转换为科学记数法。“常规”格式无法按原样显示的内容保持为文本。"
+        }
+        "Keep numbers with more than" => "将超过",
+        "11 (default): only numbers General format shows exactly as written convert, so 12-digit codes and barcodes stay text. 12 to 15 allows scientific display, like 1.24412E+11, for numbers up to that many digits; no digit is ever lost." => {
+            "11（默认）：只有“常规”格式能按原样显示的数字才会转换，因此 12 位代码和条形码保持为文本。设为 12 到 15 时，不超过该位数的数字可以用科学记数法显示，例如 1.24412E+11；不会丢失任何数字。"
+        }
+        "digits as text" => "位的数字保留为文本",
+        "Convert digits surrounding the letter \"E\" to a number in scientific notation" => "将字母“E”两侧的数字转换为科学记数法表示的数字",
+        "Off: 1244121406E6 stays text instead of becoming 1.24412E+15." => "关闭：1244121406E6 保持为文本，不会变成 1.24412E+15。",
+        "Convert continuous letters and numbers to a date" => "将连续的字母和数字转换为日期",
+        "GridCraft never makes this conversion: 12JAN2026 stays text." => "GridCraft 从不进行此转换：12JAN2026 保持为文本。",
+        "Data conversion settings apply to every workbook; they are not saved in the file." => "数据转换设置适用于所有工作簿，不会保存在文件中。",
         "Insert Sheet" => "插入工作表",
         "Rename" => "重命名",
         "Move or Copy…" => "移动或复制…",
