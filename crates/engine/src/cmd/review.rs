@@ -51,6 +51,11 @@ pub fn specs() -> Vec<CommandSpec> {
         )),
         cmd!(query "review.showComments", "Show Comments", ["Review", "Comments"], None, "{on?: bool} (toggles the Comments pane)", has_doc, |s, p| {
             s.comments_pane = bool_param(p, "on").unwrap_or(!s.comments_pane);
+            // One task pane at a time: showing Comments closes the Translate pane, wherever the
+            // request came from (ribbon, dialog, control channel, MCP).
+            if s.comments_pane {
+                s.translate_pane = false;
+            }
             Ok(json!({"on": s.comments_pane}))
         }),
         cmd!(query "review.showAllNotes", "Show All Notes", ["Review", "Notes"], None, "{on?: bool}", has_doc, |s, p| {

@@ -554,6 +554,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
                 (None, Some(name)) => {
                     let mut s = Session::new();
                     exec(&mut s, "file.new", json!({"sample": name}))?;
+                    install_translate(&mut s);
                     s
                 }
                 (None, None) => blank(),

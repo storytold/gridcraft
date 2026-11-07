@@ -395,6 +395,7 @@ fn chart_slider(ui: &mut Ui, draft: egui::Id, value: u32, range: std::ops::Range
 /// Review › Language › Translate. The pane never translates on open: a selection is translated
 /// only when the person presses the button, and the workbook is written only by Insert.
 fn translate(app: &mut SheetApp, ui: &mut Ui) {
+    finish_model_download(app, ui);
     let lang = crate::i18n::current(ui.ctx());
     let t = Tokens::get(ui.ctx());
     let models = translate_models(app, ui);
@@ -458,42 +459,31 @@ fn translate(app: &mut SheetApp, ui: &mut Ui) {
             }
         }
         let consent_key = egui::Id::unique(("translate_consent", id.as_str()));
+        let download_key = egui::Id::unique("translate_download");
         let mut consent: bool = ui.ctx().data(|d| d.get_temp(consent_key)).unwrap_or(false);
+        let downloading = ui.ctx().data(|d| d.get_temp::<DownloadOutcome>(download_key)).is_some();
         if state != "ready" {
             ui.checkbox(&mut consent, lang.tr("I agree to the source, size, licence and SHA-256 shown above"));
             ui.ctx().data_mut(|d| d.insert_temp(consent_key, consent));
             ui.horizontal(|ui| {
-                let download = ui.add_enabled(consent && app.services.models.is_some(), egui::Button::new(lang.tr("Download")));
-                if download.clicked() {
-                    // Through the host's one model seam. The host's download runs the engine's
-                    // consent + size + SHA-256 install, so there is no second verification path.
-                    let host = app.services.models.clone();
-                    let result = match host.as_ref() {
-                        Some(host) => host.download(&id),
-                        None => app.run("translate.modelDownload", json!({"id": id, "consent": true})).map(|_| ()),
-                    };
-                    match result {
-                        Ok(()) => {
-                            refresh_translate_backend(app);
-                            ui.ctx().data_mut(|d| d.remove_temp::<Json>(egui::Id::unique("translate_models")));
-                        }
-                        Err(e) => notify(app, crate::NoticeKind::Warning, e),
-                    }
+                let download = ui.add_enabled(consent && app.services.models.is_some() && !downloading, egui::Button::new(lang.tr("Download")));
+                if download.clicked()
+                    && let Some(host) = app.services.models.clone()
+                {
+                    // The host's download runs the engine's consent + size + SHA-256 install, so
+                    // there is no second verification path; it runs on a worker because fetching
+                    // and hashing gigabytes on the UI thread freezes the window.
+                    start_model_download(ui.ctx(), download_key, host, id.clone());
+                }
+                if downloading {
+                    ui.spinner();
+                    ui.label(egui::RichText::new(lang.tr("Downloading…")).small().color(t.text_dim));
                 }
                 let import = ui.button(lang.tr("Import folder…"));
                 if import.clicked() {
                     let picked = app.services.pick_model_dir.as_ref().and_then(|pick| pick());
                     if let Some(path) = picked {
                         ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("translate_import_path"), path));
-                    }
-                }
-                if ui.button(lang.tr("Remove")).clicked() {
-                    match app.run("translate.modelRemove", json!({"id": id})) {
-                        Ok(_) => {
-                            refresh_translate_backend(app);
-                            ui.ctx().data_mut(|d| d.remove_temp::<Json>(egui::Id::unique("translate_models")));
-                        }
-                        Err(e) => notify(app, crate::NoticeKind::Warning, e),
                     }
                 }
             });
@@ -505,12 +495,30 @@ fn translate(app: &mut SheetApp, ui: &mut Ui) {
                 );
             }
         }
+        // Removing an installed model is how the person frees the disk space again, so the button
+        // belongs to the installed state, not to the not-installed one.
+        if record["installed"].as_bool().unwrap_or(false) || state == "incomplete" {
+            ui.horizontal(|ui| {
+                if ui.button(lang.tr("Remove")).clicked() {
+                    match app.run("translate.modelRemove", json!({"id": id})) {
+                        Ok(_) => {
+                            refresh_translate_backend(app);
+                            ui.ctx().data_mut(|d| d.remove_temp::<Json>(egui::Id::unique("translate_models")));
+                        }
+                        Err(e) => notify(app, crate::NoticeKind::Warning, e),
+                    }
+                }
+            });
+        }
     });
     let import_path: Option<String> = ui.ctx().data(|d| d.get_temp(egui::Id::unique("translate_import_path")));
     if let Some(path) = import_path {
+        // Importing a folder is the same kind of install as a download, so it needs the same
+        // explicit consent to the source, size, licence and hash.
+        let consented: bool = ui.ctx().data(|d| d.get_temp(egui::Id::unique(("translate_consent", id.as_str())))).unwrap_or(false);
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(&path).small());
-            if ui.button(lang.tr("Import")).clicked() {
+            if ui.add_enabled(consented, egui::Button::new(lang.tr("Import"))).clicked() {
                 match app.run("translate.modelImport", json!({"path": path, "id": id, "consent": true})) {
                     Ok(_) => {
                         refresh_translate_backend(app);
@@ -585,6 +593,9 @@ fn translate(app: &mut SheetApp, ui: &mut Ui) {
             Ok(status) => {
                 let state = status["state"].as_str().unwrap_or("");
                 if state == "running" || state == "queued" {
+                    // egui only draws on input; without this the progress bar stands still and
+                    // the result list appears only when the mouse moves.
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
                     let done = status["progress"]["done"].as_u64().unwrap_or(0);
                     let total = status["progress"]["total"].as_u64().unwrap_or(0).max(1);
                     ui.add(egui::ProgressBar::new(done as f32 / total as f32).text(format!("{done}/{total}")));
@@ -671,6 +682,50 @@ fn translate_models(app: &mut SheetApp, ui: &Ui) -> Json {
     let value = app.session.run("translate.models", json!({})).unwrap_or(Json::Null);
     ui.ctx().data_mut(|d| d.insert_temp(key, value.clone()));
     value
+}
+
+/// The result of one worker download: written once, then read by the next frame.
+type DownloadOutcome = std::sync::Arc<std::sync::OnceLock<Result<(), String>>>;
+
+/// Starts `host.download(id)` on a worker. Fetching and hashing a multi-gigabyte model inside an
+/// egui frame would stop the window repainting and accepting input until it finished.
+fn start_model_download(ctx: &egui::Context, key: egui::Id, host: std::sync::Arc<dyn crate::ModelHost>, id: String) {
+    let outcome: DownloadOutcome = std::sync::Arc::new(std::sync::OnceLock::new());
+    ctx.data_mut(|d| d.insert_temp(key, outcome.clone()));
+    let worker = ctx.clone();
+    let slot = outcome.clone();
+    // `std::thread::spawn` panics on wasm. The web build has no model host (`services.models` is
+    // `None`, which keeps Download disabled), so report instead of leaving the pane waiting.
+    #[cfg(not(target_arch = "wasm32"))]
+    std::thread::spawn(move || {
+        let _ = slot.set(host.download(&id));
+        worker.request_repaint();
+    });
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (&worker, host, id);
+        let _ = slot.set(Err("model downloads run in the desktop app".into()));
+        worker.request_repaint();
+    }
+}
+
+/// Installs the outcome of a finished download and drops the cached model list so the next frame
+/// re-reads it. Requests a repaint while the worker is still going.
+fn finish_model_download(app: &mut SheetApp, ui: &Ui) {
+    let key = egui::Id::unique("translate_download");
+    let Some(outcome) = ui.ctx().data(|d| d.get_temp::<DownloadOutcome>(key)) else { return };
+    let Some(result) = outcome.get().cloned() else {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        return;
+    };
+    ui.ctx().data_mut(|d| d.remove_temp::<DownloadOutcome>(key));
+    match result {
+        Ok(()) => {
+            refresh_translate_backend(app);
+            ui.ctx().data_mut(|d| d.remove_temp::<Json>(egui::Id::unique("translate_models")));
+        }
+        Err(e) => notify(app, crate::NoticeKind::Warning, e),
+    }
 }
 
 fn notify(app: &mut SheetApp, kind: crate::NoticeKind, text: impl Into<String>) {

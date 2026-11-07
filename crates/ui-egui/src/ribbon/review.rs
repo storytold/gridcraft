@@ -46,6 +46,7 @@ pub(super) fn review(app: &mut SheetApp, ui: &mut Ui) {
     if r.clicked() {
         act(app, "review.showComments", json!({"on": !shown}));
         if app.session.comments_pane {
+            // `review.showComments` also closes the Translate pane (one task pane at a time).
             app.grid.pane = None;
         }
     }
