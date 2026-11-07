@@ -390,6 +390,8 @@ pub struct Prefs {
     pub r1c1: bool,
     /// Words added with Add to Dictionary.
     pub user_dictionary: Vec<String>,
+    /// Application-wide Custom Lists used by AutoFill and Sort.
+    pub custom_lists: Vec<Vec<String>>,
     /// View › Show › Formula Bar (an application option in Excel, not saved in the file).
     pub formula_bar: bool,
     /// The statistics the status bar shows for a selection (right-click the status bar).
@@ -430,6 +432,7 @@ impl Default for Prefs {
             sheets_in_new_workbook: 1,
             r1c1: false,
             user_dictionary: vec![],
+            custom_lists: vec![],
             formula_bar: true,
             status_bar: StatusBarStats::default(),
             recent_functions: recent::defaults(),

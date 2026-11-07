@@ -6,10 +6,11 @@ use super::{Key, Language, Modifiers, SheetApp, Ui, dim, i18n, json, section, ve
 /// tabs and scroll bars) when a document is active. Theme, language, formula
 /// bar, AutoComplete and calculation changes run their commands through `run_or_alert`; calculation
 /// settings are saved with the workbook.
-pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
+pub(super) fn options(app: &mut SheetApp, ui: &mut Ui, bs: &mut super::Backstage) {
     let lang = app.ui.language;
     section(ui, lang, "Options|General");
     general_options(app, ui, lang);
+    custom_lists(app, ui, bs);
     ui.add_space(6.0);
     let mut formula_bar = app.session.prefs.formula_bar;
     if ui.checkbox(&mut formula_bar, lang.tr("Show formula bar")).changed() {
@@ -51,6 +52,97 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     calc_options(app, ui, lang, &calc);
     ui.add_space(6.0);
     dim(ui, lang.tr("Calculation settings are saved with the workbook."));
+}
+
+fn custom_lists(app: &mut SheetApp, ui: &mut Ui, bs: &mut super::Backstage) {
+    ui.add_space(18.0);
+    section(ui, app.ui.language, "Custom Lists");
+    let lists = &app.session.prefs.custom_lists;
+    if bs.custom_list_index >= lists.len() {
+        bs.custom_list_index = lists.len().saturating_sub(1);
+    }
+    if !lists.is_empty() {
+        craft_ui::ComboBox::from_id_salt("backstage_custom_list").selected_text(format!("Custom List {}", bs.custom_list_index + 1)).show_ui(
+            ui,
+            |ui| {
+                for (i, items) in lists.iter().enumerate() {
+                    if ui.selectable_label(bs.custom_list_index == i, items.first().map(String::as_str).unwrap_or("Custom List")).clicked() {
+                        bs.custom_list_index = i;
+                        bs.custom_list_draft = custom_list_to_draft(items);
+                        bs.custom_list_draft_initialized = true;
+                    }
+                }
+            },
+        );
+        if !bs.custom_list_draft_initialized {
+            bs.custom_list_draft = lists.get(bs.custom_list_index).map(|l| custom_list_to_draft(l)).unwrap_or_default();
+            bs.custom_list_draft_initialized = true;
+        }
+    }
+    let label = ui.label("Enter one item per line. Use \\n for a line break within an item:");
+    ui.add(egui::TextEdit::multiline(&mut bs.custom_list_draft).desired_rows(6).desired_width(420.0)).labelled_by(label.id);
+    ui.horizontal(|ui| {
+        if ui.button("Add").clicked() {
+            let before = app.session.prefs.custom_lists.len();
+            app.run_or_alert("options.addCustomList", json!({"items": custom_list_items_from_draft(&bs.custom_list_draft)}));
+            if app.session.prefs.custom_lists.len() > before {
+                bs.custom_list_index = app.session.prefs.custom_lists.len() - 1;
+            }
+        }
+        if ui.add_enabled(!app.session.prefs.custom_lists.is_empty(), egui::Button::new("Replace")).clicked() {
+            app.run_or_alert(
+                "options.replaceCustomList",
+                json!({"index": bs.custom_list_index + 1, "items": custom_list_items_from_draft(&bs.custom_list_draft)}),
+            );
+        }
+        if ui.add_enabled(!app.session.prefs.custom_lists.is_empty(), egui::Button::new("Delete")).clicked() {
+            app.run_or_alert("options.deleteCustomList", json!({"index": bs.custom_list_index + 1}));
+            bs.custom_list_index = bs.custom_list_index.min(app.session.prefs.custom_lists.len().saturating_sub(1));
+            bs.custom_list_draft = app.session.prefs.custom_lists.get(bs.custom_list_index).map(|l| custom_list_to_draft(l)).unwrap_or_default();
+            bs.custom_list_draft_initialized = true;
+        }
+        if ui.add_enabled(app.session.active().is_some(), egui::Button::new("Import Selection")).clicked() {
+            let before = app.session.prefs.custom_lists.len();
+            app.run_or_alert("options.importCustomList", json!({}));
+            if app.session.prefs.custom_lists.len() > before {
+                bs.custom_list_index = app.session.prefs.custom_lists.len() - 1;
+                bs.custom_list_draft = custom_list_to_draft(&app.session.prefs.custom_lists[bs.custom_list_index]);
+                bs.custom_list_draft_initialized = true;
+            }
+        }
+    });
+}
+
+/// Encode item boundaries for the line-based Custom Lists editor without losing embedded newlines.
+fn custom_list_to_draft(items: &[String]) -> String {
+    items.iter().map(|item| item.replace('\\', "\\\\").replace('\n', "\\n")).collect::<Vec<_>>().join("\n")
+}
+
+/// Decode the editor's `\\n` and `\\\\` escapes while keeping other backslashes literal.
+fn custom_list_items_from_draft(draft: &str) -> Vec<String> {
+    draft
+        .lines()
+        .map(|line| {
+            let mut item = String::with_capacity(line.len());
+            let mut chars = line.chars();
+            while let Some(ch) = chars.next() {
+                if ch != '\\' {
+                    item.push(ch);
+                    continue;
+                }
+                match chars.next() {
+                    Some('n') => item.push('\n'),
+                    Some('\\') => item.push('\\'),
+                    Some(other) => {
+                        item.push('\\');
+                        item.push(other);
+                    }
+                    None => item.push('\\'),
+                }
+            }
+            item
+        })
+        .collect()
 }
 
 /// The display theme and interface language controls of the General section.
@@ -193,4 +285,15 @@ pub(super) fn platform() -> String {
         other => other,
     };
     format!("{os} ({})", std::env::consts::ARCH)
+}
+
+#[cfg(test)]
+mod custom_list_editor_tests {
+    use super::{custom_list_items_from_draft, custom_list_to_draft};
+
+    #[test]
+    fn custom_list_editor_preserves_embedded_newlines_and_backslashes() {
+        let items = vec!["first\nsecond".to_owned(), r"literal \n sequence".to_owned(), "trailing\\".to_owned()];
+        assert_eq!(custom_list_items_from_draft(&custom_list_to_draft(&items)), items);
+    }
 }

@@ -46,7 +46,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Sort…",
             ["Data", "Sort & Filter"],
             None,
-            "{range?, header?: bool, keys: [{column: \"B\", order: asc|desc, by?: values|cellColor|fontColor, customList?: [..]}], orientation?: rows|columns, matchCase?}",
+            "{range?, header?: bool, keys: [{column: \"B\", order: asc|desc, by?: values|cellColor|fontColor, customList?: [..] | 1-based saved-list index}], orientation?: rows|columns, matchCase?}",
             has_doc,
             sort
         ),

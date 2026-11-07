@@ -247,6 +247,42 @@ pub(super) fn sort(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
                 .response
                 .accessible_name(lang.tr("Sort On"));
             lv["by"] = json!(by);
+            if by == "values" {
+                let mut custom_list = lv
+                    .get("customList")
+                    .and_then(Json::as_u64)
+                    .and_then(|n| usize::try_from(n).ok())
+                    .filter(|n| *n > 0 && *n <= app.session.prefs.custom_lists.len());
+                let inline_custom_list = lv.get("customList").and_then(Json::as_array).is_some();
+                let label = custom_list.map_or_else(
+                    || if inline_custom_list { "Inline Custom List".into() } else { "Cell Values".into() },
+                    |n| format!("Custom List {n}"),
+                );
+                let mut clear_inline_custom_list = false;
+                craft_ui::ComboBox::from_id_salt(("sort_custom_list", i))
+                    .selected_text(label)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(custom_list.is_none() && !inline_custom_list, "Cell Values").clicked() {
+                            custom_list = None;
+                            clear_inline_custom_list = true;
+                        }
+                        for (index, items) in app.session.prefs.custom_lists.iter().enumerate() {
+                            let label = format!("Custom List {}", index + 1);
+                            ui.selectable_value(&mut custom_list, Some(index + 1), label).on_hover_text(items.join(", "));
+                        }
+                    })
+                    .response
+                    .accessible_name(lang.tr("Custom List"));
+                if let Some(index) = custom_list {
+                    lv["customList"] = json!(index);
+                } else if (clear_inline_custom_list || !inline_custom_list)
+                    && let Some(object) = lv.as_object_mut()
+                {
+                    object.remove("customList");
+                }
+            } else if let Some(object) = lv.as_object_mut() {
+                object.remove("customList");
+            }
             let mut desc = lv["order"].as_str() == Some("desc");
             ui.radio_value(&mut desc, false, "A to Z");
             ui.radio_value(&mut desc, true, "Z to A");

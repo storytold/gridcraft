@@ -3,6 +3,7 @@
 
 pub mod analysis;
 pub mod controls;
+pub mod custom_lists;
 pub mod data;
 pub mod draw;
 pub mod edit;
@@ -169,6 +170,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(controls::specs());
         v.extend(equation::specs());
         v.extend(data::specs());
+        v.extend(custom_lists::specs());
         v.extend(formulas::specs());
         v.extend(review::specs());
         v.extend(view::specs());
@@ -364,6 +366,8 @@ pub(crate) fn cell_param_on(s: &Session, p: &Json, key: &str, sheet: usize) -> R
 /// (full recalc).
 pub struct Ctx<'a> {
     pub wb: Workbook,
+    /// Application-wide Custom Lists available to AutoFill during this edit.
+    pub custom_lists: Vec<Vec<String>>,
     pub changed: Vec<Key>,
     pub structural: bool,
     pub sel: &'a mut Selection,
@@ -378,8 +382,10 @@ pub struct Ctx<'a> {
 }
 
 pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
+    let custom_lists = s.prefs.custom_lists.clone();
     let d = s.doc_mut()?;
     commit(d, |cx| {
+        cx.custom_lists = custom_lists;
         let r = f(cx)?;
         crate::tables::sync_headers(cx);
         Ok(r)
@@ -398,6 +404,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     let mut sel = d.selection.clone();
     let mut ctx = Ctx {
         wb: (*d.wb).clone(),
+        custom_lists: Vec::new(),
         changed: Vec::new(),
         structural: false,
         sel: &mut sel,
