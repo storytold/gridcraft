@@ -19,6 +19,7 @@ pub const CT_WORKSHEET: &str = "application/vnd.openxmlformats-officedocument.sp
 pub const CT_DRAWING: &str = "application/vnd.openxmlformats-officedocument.drawing+xml";
 pub const CT_CHART: &str = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
 pub const CT_TABLE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml";
+pub const CT_QUERY_TABLE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.queryTable+xml";
 pub const CT_COMMENTS: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml";
 pub const CT_VBA: &str = "application/vnd.ms-office.vbaProject";
 pub const CT_THREADED_COMMENTS: &str = "application/vnd.ms-excel.threadedcomments+xml";

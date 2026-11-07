@@ -171,6 +171,7 @@ fn filter_menu_uses_the_table_whose_header_was_clicked() {
         filter: vec![],
         table_type: None,
         connection_id: None,
+        query_table: None,
     };
     let mut sh = Sheet::new("S");
     sh.tables.push(table(1, 0, 2));

@@ -54,3 +54,15 @@ fn resize_next_to_another_table_still_works() {
     s.execute("table.resize", json!({"table":"T", "range":"A1:C3"})).unwrap();
     assert_eq!(ranges(&s), ["A1:C3", "D1:E2"]);
 }
+
+#[test]
+fn resize_keeps_a_renamed_column_query_field() {
+    let mut s = table();
+    let d = s.doc_mut().unwrap();
+    let si = d.wb.active_sheet();
+    std::sync::Arc::make_mut(&mut d.wb).sheet_mut(si).unwrap().tables[0].columns[1].query_field_id = Some(7);
+    s.execute("range.setValues", json!({"range":"B1", "values":[["Amount"]]})).unwrap();
+    s.execute("table.resize", json!({"table":"T", "range":"A1:B3"})).unwrap();
+    let col = &s.doc().unwrap().wb.active().unwrap().tables[0].columns[1];
+    assert_eq!((col.name.as_str(), col.query_field_id), ("Amount", Some(7)));
+}

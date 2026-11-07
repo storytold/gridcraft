@@ -3,6 +3,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::IoError;
+use crate::fmla::{from_file, unwrap_google_sheets};
+use crate::package::Rel;
+use crate::read::Ctx;
+use crate::styles::read_color;
+use crate::tables::{col_width_to_px, paper_name, pt_to_px};
+use crate::xml::{self, El};
 use gridcraft_core::date::{serial_from_ymd, time_fraction};
 use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_formula::Expr;
@@ -12,19 +19,11 @@ use gridcraft_model::{
     Validation, ValidationKind, XmlColumnPr,
 };
 
-use crate::IoError;
-use crate::fmla::{from_file, unwrap_google_sheets};
-use crate::package::Rel;
-use crate::read::Ctx;
-use crate::styles::read_color;
-use crate::tables::{col_width_to_px, paper_name, pt_to_px};
-use crate::xml::{self, El};
-
 mod parts;
 mod rules;
 
 pub use parts::{read_autofilter, read_table};
-use parts::{read_comments, read_hyperlinks, read_note_shapes, read_threaded};
+use parts::{read_comments, read_hyperlinks, read_note_shapes, read_query_table, read_threaded};
 use rules::{read_cf, read_validation};
 
 struct Shared {
@@ -325,6 +324,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
                         if let Some(x) = cx.optional_xml(&target)?
                             && let Some(mut t) = read_table(cx, &x)
                         {
+                            read_query_table(cx, &target, &x, &mut t);
                             t.id = cx.next_object_id();
                             sheet.tables.push(t);
                         }

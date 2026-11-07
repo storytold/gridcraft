@@ -14,7 +14,8 @@ use crate::fmla::text_to_file;
 use crate::styles::{color_attrs, dxf_id};
 use crate::tables::{paper_id, px_to_col_width, px_to_pt};
 use crate::write::{
-    CT_CHART, CT_COMMENTS, CT_DRAWING, CT_TABLE, CT_THREADED_COMMENTS, NS_MAIN, NS_REL, NS_THREADED, Out, REL_THREADED_COMMENT, Rels, XML_DECL,
+    CT_CHART, CT_COMMENTS, CT_DRAWING, CT_QUERY_TABLE, CT_TABLE, CT_THREADED_COMMENTS, NS_MAIN, NS_REL, NS_THREADED, Out, REL_THREADED_COMMENT, Rels,
+    XML_DECL,
 };
 use crate::xml::{encode_xstring, esc, esc_attr, num, push_a1, push_u64};
 
@@ -22,7 +23,9 @@ mod parts;
 mod rules;
 
 pub(crate) use parts::password_attrs;
-use parts::{autofilter_xml, comments_xml, protected_ranges_xml, table_columns, table_name, table_xml, thread_ids, threaded_xml, vml_xml};
+use parts::{
+    autofilter_xml, comments_xml, protected_ranges_xml, remap_query_fields, table_columns, table_name, table_xml, thread_ids, threaded_xml, vml_xml,
+};
 use rules::{cf_rule_xml, solid_bar_id, validation_xml, x14_cfvo};
 
 fn sqref(ranges: &[RangeRef]) -> String {
@@ -209,6 +212,13 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             let name = table_name(&t.name, &mut used_names, out.table_id);
             let xml = table_xml(t, cols, &name, out.table_id, out);
             out.part(&format!("xl/tables/table{n}.xml"), Some(CT_TABLE), xml.into_bytes());
+            if let Some(query) = &t.query_table {
+                let path = out.kept.claim(&format!("xl/queryTables/queryTable{n}.xml"));
+                out.part(&path, Some(CT_QUERY_TABLE), remap_query_fields(query, t).into_bytes());
+                let mut table_rels = Rels::default();
+                table_rels.add("queryTable", &format!("/{path}"));
+                out.part(&format!("xl/tables/_rels/table{n}.xml.rels"), None, table_rels.xml().into_bytes());
+            }
             let rid = rels.add("table", &format!("../tables/table{n}.xml"));
             let _ = write!(parts, "<tablePart r:id=\"{rid}\"/>");
         }
