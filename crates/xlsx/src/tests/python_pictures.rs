@@ -369,12 +369,14 @@ fn a_follower_of_a_shared_python_formula_stays_a_python_cell() {
     let bytes = write_xlsx(&book(vec![sheet])).unwrap();
     let part = "xl/worksheets/sheet1.xml";
     let bytes = with_text_changed(&bytes, part, "<f>_xlfn._xlws.PY(0,0)</f>", r#"<f t="shared" ref="H7:H8" si="0">_xlfn._xlws.PY(0,0)</f>"#);
-    let bytes = with_text_changed(&bytes, part, "<f>_xlfn._xlws.PY(1,0)</f>", r#"<f t="shared" si="0"/>"#);
-    let (back, _) = read_xlsx(&bytes).unwrap();
-    let sheet = &back.sheets[0];
-    assert!(sheet.cell_pictures.is_empty(), "no cell became a static picture");
-    assert_eq!(py_at(sheet, "H8").code, "plot()");
-    assert_eq!(py_at(sheet, "H8").image().unwrap().picture.data, data);
+    for follower in [r#"<f t="shared" si="0"/>"#, r#"<f t="shared" si="0">  </f>"#] {
+        let bytes = with_text_changed(&bytes, part, "<f>_xlfn._xlws.PY(1,0)</f>", follower);
+        let (back, _) = read_xlsx(&bytes).unwrap();
+        let sheet = &back.sheets[0];
+        assert!(sheet.cell_pictures.is_empty(), "no cell became a static picture: {follower}");
+        assert_eq!(py_at(sheet, "H8").code, "plot()", "{follower}");
+        assert_eq!(py_at(sheet, "H8").image().unwrap().picture.data, data, "{follower}");
+    }
 }
 
 /// A file past the limit on what reading is charged doesn't open, and linked copies of one plot are
