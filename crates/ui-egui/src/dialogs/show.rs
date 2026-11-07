@@ -204,6 +204,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "solver" => solver(app, ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
+                "insertCells" | "deleteCells" | "insertPaste" if d.values.get("askUnmerge").and_then(Json::as_bool) == Some(true) => {
+                    unmerge_prompt(ui, &mut d, &mut confirm, &mut open)
+                }
                 "assignAction" => crate::control_ui::assign_dialog(app, ui, &mut d, &mut open),
                 "formatControl" => crate::control_ui::format_dialog(app, ui, &mut d, &mut open),
                 "controlQuestion" => crate::control_ui::question_dialog(app, ui, &mut d, &mut open),
@@ -381,6 +384,10 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             }
         });
     window_shown(ctx, &mut d, collapsed.is_some(), shown.map(|r| r.response.rect));
+    finish_dialog(app, ctx, home, d, open, confirm, win_open);
+}
+
+fn finish_dialog(app: &mut SheetApp, ctx: &egui::Context, home: Option<u64>, mut d: Dialog, mut open: bool, mut confirm: bool, win_open: bool) {
     // Hyperlinks inside dialogs (About ▸ Contributors) open through the host's `open_url`, since
     // the native shell has no browser integration of its own.
     if let Some(open_url) = &app.services.open_url {
@@ -445,6 +452,13 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             Err(e) if d.name == "analysisToolPak" && e.contains(gridcraft_engine::cmd::analysis::OVERWRITE_ERROR) => {
                 d.values.insert("askOverwrite".into(), json!(true));
             }
+            // Insert/Delete Cells asks before unmerging the merged cells a shift would split.
+            Err(e)
+                if matches!(d.name.as_str(), "insertCells" | "deleteCells" | "insertPaste")
+                    && e.contains(gridcraft_engine::cmd::sheet::UNMERGE_ERROR) =>
+            {
+                d.values.insert("askUnmerge".into(), json!(true));
+            }
             // A wrong password: say so, clear the field and stay open for another try.
             Err(e) if d.name == "openPassword" => {
                 d.values.insert("password".into(), json!(""));
@@ -492,6 +506,17 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         app.dialog = Some(d);
     } else if let Some(back) = d.back.take() {
         app.dialog = Some(*back);
+    }
+}
+
+/// Insert/Delete Cells: the shift would split merged cells. OK unmerges them and shifts; Cancel
+/// leaves the sheet as it was.
+fn unmerge_prompt(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    ui.label("Shifting these cells will unmerge some merged cells. Do you want to continue?");
+    ok_cancel(ui, confirm, open);
+    if *confirm {
+        d.values.remove("askUnmerge");
+        d.values.insert("unmerge".into(), json!(true));
     }
 }
 
