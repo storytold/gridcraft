@@ -86,6 +86,9 @@ fn skip_reason(step: &JournalStep) -> String {
         "home.bold" => "it toggled the selection, which a recording cannot replay".into(),
         "home.numberFormat" if step.params.get("range").and_then(Json::as_str).is_none() => "it used the selection without a range".into(),
         "home.numberFormat" => "its format is neither a code nor a known format name".into(),
+        "home.insertSheet" if step.params.get("before").is_some() || step.params.get("position").is_some() => {
+            "it inserted the sheet at a position, which the bridge cannot replay".into()
+        }
         "home.deleteSheet" => "it did not name the sheet".into(),
         _ => "it could not be recorded".into(),
     }
@@ -120,6 +123,7 @@ fn step_call(step: &JournalStep) -> Option<(BridgeCall, String)> {
             let call = range_call("Range.setNumberFormat", step, range, "format", Json::String(code.clone()));
             Some((call, format!("{}.setNumberFormat({});", target(step, range), js_string(&code))))
         }
+        "home.insertSheet" if p.get("before").is_some() || p.get("position").is_some() => None,
         "home.insertSheet" => {
             let name = p.get("name").and_then(Json::as_str);
             let params = match name {
@@ -336,6 +340,17 @@ mod tests {
         let rows = record(&[step("range.setValues", json!({"range": "A1:B1", "values": [[1, 2]]}))]);
         assert!(rows.code.contains("setValues([[1, 2]]);"), "{}", rows.code);
         assert!(rows.skipped.is_empty());
+    }
+
+    #[test]
+    fn a_positioned_sheet_insert_is_skipped_and_reported() {
+        let r = record(&[step("home.insertSheet", json!({"name": "Data", "before": 0}))]);
+        assert!(r.calls.is_empty(), "{:?}", r.calls);
+        assert!(r.code.contains("it inserted the sheet at a position, which the bridge cannot replay"), "{}", r.code);
+        // An insert without a position still records.
+        let plain = record(&[step("home.insertSheet", json!({"name": "Data"}))]);
+        assert!(plain.code.contains("workbook.addWorksheet(\"Data\");"), "{}", plain.code);
+        assert!(plain.skipped.is_empty());
     }
 
     #[test]

@@ -278,14 +278,10 @@ fn copy_executable(source: &std::path::Path, target: &std::path::Path) -> Result
     Ok(())
 }
 
-/// Replaces `target` with `staged`. Windows refuses to rename over an existing file, so there the
-/// old executable is removed first; Unix renames over it atomically, so the working runtime stays
-/// in place until the new one is there.
+/// Replaces `target` with `staged`. `fs::rename` replaces the target on every platform
+/// (`MOVEFILE_REPLACE_EXISTING` on Windows), so a failed import leaves the working runtime in
+/// place instead of removing it first.
 fn replace_file(staged: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
-    #[cfg(windows)]
-    if target.exists() {
-        std::fs::remove_file(target).map_err(|e| format!("could not replace {}: {e}", target.display()))?;
-    }
     std::fs::rename(staged, target).map_err(|e| format!("could not place Bun at {}: {e}", target.display()))
 }
 

@@ -1241,19 +1241,15 @@ impl gridcraft_script::BridgeExecutor for SessionBridge<'_> {
     }
 }
 
-/// The parameters a recorded journal entry should carry to the recorder: a numeric `sheet` is
-/// replaced by the sheet's name, because a script cannot know a sheet's index at replay time.
-/// An index the workbook no longer has is dropped, leaving the active sheet, as the command did.
-pub(crate) fn resolve_recorded_sheet(s: &Session, params: &Json) -> Json {
-    let Some(index) = params.get("sheet").and_then(Json::as_u64) else {
+pub(crate) fn resolve_recorded_sheet_named(params: &Json, name: Option<&str>) -> Json {
+    if params.get("sheet").and_then(Json::as_u64).is_none() {
         return params.clone();
-    };
+    }
     let mut out = params.clone();
     if let Json::Object(map) = &mut out {
-        let name = s.doc().ok().and_then(|d| d.wb.sheets.get(index as usize)).map(|sh| sh.name.clone());
         match name {
             Some(name) => {
-                map.insert("sheet".into(), Json::String(name));
+                map.insert("sheet".into(), Json::String(name.to_string()));
             }
             None => {
                 map.remove("sheet");

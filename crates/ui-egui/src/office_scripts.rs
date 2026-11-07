@@ -82,8 +82,13 @@ fn ensure_host(app: &mut SheetApp) {
     }
 }
 
-/// Loads a saved script into the editor.
+/// Loads a saved script into the editor. A dirty draft is not replaced: the person saves it (or
+/// clears it) first, so switching scripts never loses edits.
 fn select(app: &mut SheetApp, id: &str) {
+    if app.office_scripts.dirty && app.office_scripts.selected.as_deref() != Some(id) {
+        app.office_scripts.status = Some(Status::failed("Save the draft before opening another script."));
+        return;
+    }
     if let Some(record) = app.office_scripts.list.iter().find(|r| r.id == id).cloned() {
         let pane = &mut app.office_scripts;
         pane.selected = Some(record.id.clone());

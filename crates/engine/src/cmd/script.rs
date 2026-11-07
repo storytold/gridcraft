@@ -245,13 +245,18 @@ fn record(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(start) = s.script_recording.take() else {
         return Ok(json!({"recording": false}));
     };
+
     let store = store(s)?;
     // A journal trimmed past the start loses the beginning of the recording, never the workbook.
     let start = start.min(s.journal.len());
     let steps: Vec<JournalStep> = s.journal[start..]
         .iter()
-        .filter(|(id, _)| id != "script.record")
-        .map(|(id, params)| JournalStep::new(id.clone(), crate::script::resolve_recorded_sheet(s, params)))
+        .enumerate()
+        .filter(|(_, (id, _))| id != "script.record")
+        .map(|(offset, (id, params))| {
+            let name = s.sheet_names.get(start + offset).cloned().flatten();
+            JournalStep::new(id.clone(), crate::script::resolve_recorded_sheet_named(params, name.as_deref()))
+        })
         .collect();
     let recording = gridcraft_script::recorder::record(&steps);
     let base = str_param(p, "name").unwrap_or("Recorded Script");
@@ -797,8 +802,12 @@ mod tests {
         // bridge then runs: the recorded script reproduces the recorded work.
         let steps: Vec<JournalStep> = s.journal[start..]
             .iter()
-            .filter(|(id, _)| id != "script.record")
-            .map(|(id, params)| JournalStep::new(id.clone(), crate::script::resolve_recorded_sheet(&s, params)))
+            .enumerate()
+            .filter(|(_, (id, _))| id != "script.record")
+            .map(|(offset, (id, params))| {
+                let name = s.sheet_names.get(start + offset).cloned().flatten();
+                JournalStep::new(id.clone(), crate::script::resolve_recorded_sheet_named(params, name.as_deref()))
+            })
             .collect();
         let rec = recorder::record(&steps);
         assert_eq!(rec.code, code);
@@ -818,6 +827,23 @@ mod tests {
         let stopped = s.execute("script.record", json!({"on": false})).unwrap();
         assert_eq!(stopped["recording"], false);
         assert!(stopped.get("id").is_none());
+    }
+
+    #[test]
+    fn a_recording_keeps_the_sheet_a_command_edited_when_the_order_changes() {
+        // Record starts with Sheet1, Two, Three. The command edits index 1 (Two), then a sheet
+        // before it is deleted, which moves every later index. The recording must still name Two,
+        // not the sheet that took index 1 afterwards.
+        let mut s = session("record-sheet-order");
+        s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+        s.execute("home.insertSheet", json!({"name": "Three"})).unwrap();
+        s.execute("script.record", json!({"on": true})).unwrap();
+        s.execute("cell.set", json!({"sheet": 1, "cell": "A1", "input": "kept"})).unwrap();
+        s.execute("home.deleteSheet", json!({"sheet": 0})).unwrap();
+        let stopped = s.execute("script.record", json!({"on": false})).unwrap();
+        let code = stopped["code"].as_str().unwrap_or_default();
+        assert!(code.contains("workbook.getWorksheet(\"Two\").getRange(\"A1\").setValue(\"kept\");"), "{code}");
+        assert_eq!(stopped["steps"], 2, "the cell and the delete");
     }
 
     #[test]

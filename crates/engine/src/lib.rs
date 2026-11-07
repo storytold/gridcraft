@@ -504,6 +504,9 @@ pub struct Session {
     pub scripts_dir_default: Option<String>,
     /// Journal position where `script.record` started recording into an Office Script.
     pub script_recording: Option<usize>,
+    /// The sheet each journal entry named, resolved when the command ran (beside `journal`): a
+    /// recording uses it so a later insert or delete cannot move the sheet a step means.
+    pub(crate) sheet_names: Vec<Option<String>>,
     /// The recording buffer while a recorder runs ([`Session::start_recording`]): top-level
     /// commands with the place they ran in, kept apart from the journal.
     pub recorder: Option<record::Recorder>,
@@ -644,8 +647,19 @@ impl Session {
         }
         let entry = (id.to_string(), params);
         let entry_size = size(&entry);
+        // Resolve a numeric `sheet` now: the recording must name the sheet the command edited,
+        // not whatever sits at that index when recording stops.
+        let sheet = entry
+            .1
+            .get("sheet")
+            .and_then(Json::as_u64)
+            .and_then(|index| self.doc().ok().and_then(|d| d.wb.sheets.get(index as usize)).map(|sh| sh.name.clone()));
+        if self.sheet_names.len() != self.journal.len() {
+            self.sheet_names = vec![None; self.journal.len()];
+        }
         self.journal.push(entry);
         self.journal_sizes.push(entry_size);
+        self.sheet_names.push(sheet);
         self.journal_bytes = self.journal_bytes.saturating_add(entry_size);
         let len = self.journal.len();
         let mut n = if len > JOURNAL_MAX_ENTRIES { len - JOURNAL_MAX_ENTRIES / 2 } else { 0 };
@@ -660,6 +674,7 @@ impl Session {
         if n > 0 {
             self.journal.drain(..n);
             self.journal_sizes.drain(..n);
+            self.sheet_names.drain(..n.min(self.sheet_names.len()));
             self.journal_bytes = kept;
             self.recording = self.recording.map(|r| r.saturating_sub(n));
             self.script_recording = self.script_recording.map(|r| r.saturating_sub(n));
@@ -673,6 +688,7 @@ impl Session {
             self.journal_bytes = self.journal_sizes.iter().sum();
         }
         self.journal.truncate(keep);
+        self.sheet_names.truncate(keep);
         self.recording = self.recording.map(|r| r.min(self.journal.len()));
         self.script_recording = self.script_recording.map(|r| r.min(self.journal.len()));
     }

@@ -270,11 +270,9 @@ impl ScriptStore {
         let bytes = serde_json::to_vec_pretty(record).map_err(|e| StoreError::Damaged(e.to_string()))?;
         let temp = path.with_extension("json.tmp");
         std::fs::write(&temp, &bytes)?;
-        // Windows refuses to rename over an existing file; the script is small and this window
-        // is short, and a crash between the two leaves the old file or none, never a partial one.
-        if path.exists() {
-            std::fs::remove_file(&path)?;
-        }
+        // `fs::rename` replaces the target on every platform (`MOVEFILE_REPLACE_EXISTING` on
+        // Windows), so a failed rename leaves the saved script untouched rather than removing it
+        // first; the temporary file is left beside it for the next save to overwrite.
         std::fs::rename(&temp, &path)?;
         Ok(())
     }

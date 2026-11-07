@@ -2,6 +2,7 @@
 //! puts it in the model root's `runtimes/bun` folder (the same place model weights live, see
 //! `docs/office-scripts.md`).
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -80,16 +81,38 @@ fn home() -> Option<PathBuf> {
 }
 
 /// `bun --version`, when the executable answers within `timeout`. It runs on a thread so a
-/// non-Bun file the user pointed at can never hang discovery.
+/// non-Bun file the user pointed at can never hang discovery; a probe that outlives the timeout is
+/// killed and reaped, so repeated imports cannot leak processes or threads.
 pub fn version_of(exe: &Path, timeout: Duration) -> Option<String> {
-    let exe = exe.to_path_buf();
+    let mut child = std::process::Command::new(exe)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let child = std::sync::Arc::new(std::sync::Mutex::new(child));
     let (tx, rx) = std::sync::mpsc::channel();
+    let reaper = child.clone();
     std::thread::spawn(move || {
-        let out = std::process::Command::new(&exe).arg("--version").stdin(std::process::Stdio::null()).output();
-        let version = out.ok().filter(|o| o.status.success()).and_then(|o| String::from_utf8(o.stdout).ok());
-        let _ = tx.send(version);
+        let mut text = Vec::new();
+        let _ = stdout.by_ref().take(64 * 1024).read_to_end(&mut text);
+        // The pipe is closed, so the child has exited (or was killed by the timeout path).
+        let ok = reaper.lock().ok().and_then(|mut child| child.wait().ok()).is_some_and(|status| status.success());
+        let _ = tx.send((ok, text));
     });
-    let text = rx.recv_timeout(timeout).ok().flatten()?;
+    let Ok((ok, text)) = rx.recv_timeout(timeout) else {
+        if let Ok(mut child) = child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        return None;
+    };
+    if !ok {
+        return None;
+    }
+    let text = String::from_utf8(text).ok()?;
     let first = text.lines().next().unwrap_or("").trim();
     if first.is_empty() { None } else { Some(first.to_string()) }
 }
