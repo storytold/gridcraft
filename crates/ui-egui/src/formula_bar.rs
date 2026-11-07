@@ -463,9 +463,16 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         return python_editor(app, ui, id, width, max_height);
     }
     let Some(mut ed) = app.editor.take() else { return EditorInfo::default() };
-    let mine = ed.from_formula_bar == (id == egui::Id::unique("gridcraft.formula_bar"));
+    let is_bar = id == egui::Id::unique("gridcraft.formula_bar");
+    // While a formula points at another sheet, the formula bar takes keys because the in-cell
+    // editor is only drawn on the sheet where editing began.
+    let cell_editor_hidden = !ed.from_formula_bar && app.view_key() != Some((ed.doc, ed.sheet));
+    let mine = ed.from_formula_bar == is_bar || (is_bar && cell_editor_hidden);
     // Keys the editor handles itself (before the TextEdit sees them), only where it has focus.
     let focused = ui.ctx().memory(|m| m.focused());
+    if mine && !is_bar && !ed.from_formula_bar && focused == Some(egui::Id::unique("gridcraft.formula_bar")) {
+        ed.request_focus = true;
+    }
     let has_focus = focused == Some(id) || (mine && (ed.request_focus || focused.is_none()));
     let EditorKeyOutcome { action, arrow, cancel, to_python } = editor_shortcuts(app, ui, id, &mut ed, mine, has_focus);
     // The text widget.
@@ -643,6 +650,21 @@ fn editor_shortcuts(
     let (action, arrow) = editor_arrow_keys(app, ui, ed, outcome.action);
     outcome.action = action;
     outcome.arrow = arrow;
+    // Ctrl+PageDown / Ctrl+PageUp moves to the next or previous sheet while a formula waits for a reference.
+    if ed.enter_mode && !ed.from_formula_bar && ed.can_point() && app.session.prefs.formula_bar {
+        let step = ui.input_mut(|i| {
+            if i.consume_key(egui::Modifiers::CTRL, Key::PageDown) {
+                Some("sheet.next")
+            } else if i.consume_key(egui::Modifiers::CTRL, Key::PageUp) {
+                Some("sheet.previous")
+            } else {
+                None
+            }
+        });
+        if let Some(command) = step {
+            crate::grid::point_sheet(app, ed, command, json!({}));
+        }
+    }
     editor_other_shortcuts(app, ui, id, ed);
     outcome
 }

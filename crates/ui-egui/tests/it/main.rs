@@ -49,6 +49,7 @@ mod formula_bar;
 mod formula_bar_expand;
 mod formula_locale;
 mod formula_point_headers;
+mod formula_point_sheets;
 mod formula_popup;
 mod freeze_handles;
 mod function_library;
