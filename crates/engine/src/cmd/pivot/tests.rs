@@ -62,6 +62,98 @@ fn insert_creates_placeholder_on_new_sheet() {
     assert_eq!(s.doc().unwrap().wb.sheets.len(), 1);
 }
 
+/// The source `insert.pivotTable` picks with `active` as the active cell, or its error.
+fn source_from(s: &mut Session, active: &str) -> std::result::Result<String, String> {
+    s.execute("selection.set", json!({"range": active})).unwrap();
+    let r = s.execute("insert.pivotTable", json!({})).map_err(|e| e.to_string())?;
+    let source = pt(s).source;
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(r["name"].is_string());
+    Ok(source)
+}
+
+#[test]
+fn active_cell_away_from_the_data_uses_the_sheets_only_block() {
+    let mut s = sales();
+    // Far from the data (J5, H1): the one block is the source (#2764).
+    for active in ["J5", "H1", "A20"] {
+        assert_eq!(source_from(&mut s, active).unwrap(), "Sheet1!$A$1:$E$13", "{active}");
+    }
+    // Formatting alone is not data.
+    s.execute("home.bold", json!({"range": "J20"})).unwrap();
+    assert_eq!(source_from(&mut s, "J5").unwrap(), "Sheet1!$A$1:$E$13");
+    // The report adds up every record.
+    s.execute("selection.set", json!({"range": "J5"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    let total = find_row(&s, "Grand Total").unwrap();
+    let r = pt(&s).last_range.unwrap();
+    assert_eq!(val(&s, &CellRef::new(total, r.end.col).a1()), Value::Number(TOTAL));
+}
+
+#[test]
+fn blank_active_cell_next_to_the_data_leaves_its_empty_line_out() {
+    let mut s = sales();
+    // F1 and A14 touch the data, F14 only diagonally; their current regions take in an empty
+    // column or row, which used to fail with "field name is not valid".
+    for active in ["F1", "F7", "A14", "F14"] {
+        assert_eq!(source_from(&mut s, active).unwrap(), "Sheet1!$A$1:$E$13", "{active}");
+    }
+    // Inside the data nothing changes.
+    assert_eq!(source_from(&mut s, "C5").unwrap(), "Sheet1!$A$1:$E$13");
+    // Several areas keep the untrimmed region, whose empty column has no field name.
+    assert!(source_from(&mut s, "G20:H25,F1").unwrap_err().contains("field name is not valid"));
+}
+
+#[test]
+fn no_block_several_blocks_or_unlabeled_data_keep_the_error() {
+    const ERR: &str = "The reference isn't valid";
+    let mut s = Session::new();
+    s.new_workbook();
+    // An empty sheet.
+    assert!(source_from(&mut s, "C3").unwrap_err().contains(ERR));
+    // Two blocks: the user has to pick one.
+    let mut s = sales();
+    s.execute("range.setValues", json!({"range": "H1", "values": [["Name", "Score"], ["Ann", 3]]})).unwrap();
+    assert!(source_from(&mut s, "M20").unwrap_err().contains(ERR));
+    assert_eq!(source_from(&mut s, "I2").unwrap(), "Sheet1!$H$1:$I$2");
+    // A blank cell touching one of them points at that one, as a cell inside it does.
+    assert_eq!(source_from(&mut s, "F1").unwrap(), "Sheet1!$A$1:$E$13");
+    assert_eq!(source_from(&mut s, "J2").unwrap(), "Sheet1!$H$1:$I$2");
+    // A selected block that meets the data only at a blank cell is not swapped for the data.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Score"], ["Ann", null]]})).unwrap();
+    assert!(source_from(&mut s, "B2:C3").unwrap_err().contains(ERR));
+    // So is a selection of several areas whose last one is a single blank cell.
+    assert!(source_from(&mut s, "G5:H8,D9").unwrap_err().contains(ERR));
+    assert_eq!(source_from(&mut s, "D9").unwrap(), "Sheet1!$A$1:$B$2");
+    // One block whose first row leaves a column without a label, or labels it with spaces.
+    for label in ["", "  "] {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "B2", "values": [["Region", label], ["East", 1]]})).unwrap();
+        assert!(source_from(&mut s, "F9").unwrap_err().contains(ERR), "{label:?}");
+    }
+}
+
+#[test]
+fn a_table_found_from_a_blank_cell_is_the_source_by_name() {
+    let mut s = sales();
+    s.execute("insert.table", json!({"range": "A1:E13", "header": true})).unwrap();
+    s.execute("table.totalRow", json!({"on": true})).unwrap();
+    let table = s.doc().unwrap().wb.active().unwrap().tables[0].name.clone();
+    for active in ["J5", "F1", "F15"] {
+        assert_eq!(source_from(&mut s, active).unwrap(), table, "{active}");
+    }
+    // The totals row is not a record: the grand total is the records' sum.
+    s.execute("selection.set", json!({"range": "J5"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    assert!(find_row(&s, "Total").is_none());
+    let total = find_row(&s, "Grand Total").unwrap();
+    let r = pt(&s).last_range.unwrap();
+    assert_eq!(val(&s, &CellRef::new(total, r.end.col).a1()), Value::Number(TOTAL));
+}
+
 #[test]
 fn region_by_product_sum_of_sales() {
     let mut s = sales();
