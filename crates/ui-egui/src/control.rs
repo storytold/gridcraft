@@ -342,34 +342,40 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             None => err("no dialog is open"),
         },
         "ui.dialog.confirm" => match app.dialog.take() {
-            Some(mut d) => match d.command {
-                Some(cmd) => {
-                    // References without a sheet name mean the sheet the dialog was opened on,
-                    // as OK in the window has it: refused once that sheet is deleted, else shown
-                    // again before the command runs.
-                    if d.home_sheet_deleted(app) {
-                        app.dialog = Some(d);
-                        return err(crate::dialogs::SHEET_DELETED);
-                    }
-                    if let Err(e) = d.end_pick(app) {
-                        // The dialog's sheet can't be shown again (a text-box draft on the picked
-                        // sheet could not be saved): the command stays unrun, the dialog open.
-                        app.dialog = Some(d);
-                        return err(e);
-                    }
-                    let params = crate::dialogs::build_params(&d);
-                    let home = app.ui_window();
-                    let r = app.run(cmd, params);
-                    if r.is_err() {
-                        app.return_dialog(home, d);
-                    }
-                    wrap(r)
-                }
-                None => {
+            Some(mut d) => {
+                if d.name == "unhideSheet" && d.values.get("sheet").and_then(Json::as_str).is_none() {
                     app.dialog = Some(d);
-                    err("this dialog has no OK command; drive it with its own commands")
+                    return err("select a hidden sheet");
                 }
-            },
+                match d.command {
+                    Some(cmd) => {
+                        // References without a sheet name mean the sheet the dialog was opened on,
+                        // as OK in the window has it: refused once that sheet is deleted, else shown
+                        // again before the command runs.
+                        if d.home_sheet_deleted(app) {
+                            app.dialog = Some(d);
+                            return err(crate::dialogs::SHEET_DELETED);
+                        }
+                        if let Err(e) = d.end_pick(app) {
+                            // The dialog's sheet can't be shown again (a text-box draft on the picked
+                            // sheet could not be saved): the command stays unrun, the dialog open.
+                            app.dialog = Some(d);
+                            return err(e);
+                        }
+                        let params = crate::dialogs::build_params(&d);
+                        let home = app.ui_window();
+                        let r = app.run(cmd, params);
+                        if r.is_err() {
+                            app.return_dialog(home, d);
+                        }
+                        wrap(r)
+                    }
+                    None => {
+                        app.dialog = Some(d);
+                        err("this dialog has no OK command; drive it with its own commands")
+                    }
+                }
+            }
             None => err("no dialog is open"),
         },
         "ui.dialog.cancel" => dialog_cancel(app),
