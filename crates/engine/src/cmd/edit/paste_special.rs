@@ -4,6 +4,11 @@ use super::{
     target_sheet,
 };
 
+fn unignore_cut_destination(cx: &mut crate::cmd::Ctx, sheet: usize, dest: CellRef) -> Result<()> {
+    gridcraft_model::unignore_errors(&mut cx.sheet_mut(sheet)?.ignored_errors, RangeRef::cell(dest), gridcraft_model::error_rule::ALL);
+    Ok(())
+}
+
 #[allow(clippy::cognitive_complexity)] // The command applies the selected paste mode in one atomic edit.
 pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(clip) = s.clipboard.clone() else { return Err(EngineError::Other("Nothing to paste.".into())) };
@@ -85,6 +90,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             source.comments.retain(|c, _| !src.contains(*c));
             source.hyperlinks.retain(|c, _| !src.contains(*c));
             source.merges.retain(|m| !src.contains_range(m));
+            gridcraft_model::unignore_errors(&mut source.ignored_errors, src, gridcraft_model::error_rule::ALL);
             for (c, _) in &taken {
                 cx.touch(clip.sheet, *c);
             }
@@ -321,6 +327,10 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                         cx.sheet_mut(dest_sheet)?.cell_pictures.insert(dest, picture);
                     }
                     cx.touch(dest_sheet, dest);
+                    if cut_move {
+                        // Structural commits skip ignored-error cleanup, so clear overwritten destinations here.
+                        unignore_cut_destination(cx, dest_sheet, dest)?;
+                    }
                 }
             }
         }
