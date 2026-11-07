@@ -15,13 +15,11 @@ pub(crate) struct Runtime {
     startup: bool,
     /// Help ▸ Check for Updates… was chosen; the next `tick` starts it.
     manual: bool,
-    /// The result dialog of a requested check is showing.
-    result_open: bool,
 }
 
 impl Default for Runtime {
     fn default() -> Self {
-        Self { updater: Updater::new(&crate::UPDATE_APP, VERSION), startup: false, manual: false, result_open: false }
+        Self { updater: Updater::new(&crate::UPDATE_APP, VERSION), startup: false, manual: false }
     }
 }
 
@@ -38,19 +36,26 @@ pub(crate) fn tick(app: &mut SheetApp, ctx: &egui::Context) {
     let rt = &mut app.updates_rt;
     if std::mem::take(&mut rt.manual) {
         rt.updater.check_now(ctx);
-        rt.result_open = true;
     } else if rt.startup {
         rt.updater.check_at_start(ctx);
     }
     rt.updater.tick(ctx);
-    // A requested check that found a release leaves the status idle and the prompt opens.
-    if matches!(rt.updater.status(), Status::Idle) {
-        rt.result_open = false;
-    }
+}
+
+/// Starts the helper of a ready update; it installs once the process has exited.
+pub(crate) fn start_pending_update(app: &mut SheetApp) {
+    app.updates_rt.updater.start_pending_update();
+}
+
+/// Whether the check result window shows: for every status but idle (a requested check, and the
+/// first start after an update, which reports that it installed or why it failed), and never
+/// over the startup prompt.
+fn result_window_shows(status: &Status, prompt_open: bool) -> bool {
+    !prompt_open && !matches!(status, Status::Idle)
 }
 
 pub(crate) fn show(app: &mut SheetApp, ctx: &egui::Context) {
-    // The restart helper is scheduled before the app closes, so no update starts over unsaved work.
+    // The close for a ready update waits until no workbook holds unsaved work.
     let clean = !app.session.documents().iter().any(|d| d.is_dirty());
     match app.updates_rt.updater.show_if(ctx, clean) {
         Action::OpenUrl(url) => {
@@ -58,20 +63,42 @@ pub(crate) fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 open(&url);
             }
         }
-        // The guarded close path asks about unsaved work; the restart helper relaunches once the
-        // process has exited.
-        Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+        // Quit closes every workbook window. The install helper starts once the app exits.
+        Action::Close => app.request_quit(ctx),
         Action::None => {}
     }
-    if app.updates_rt.result_open {
-        let rt = &mut app.updates_rt;
+    let rt = &mut app.updates_rt;
+    if result_window_shows(rt.updater.status(), rt.updater.prompt_open()) {
         match craft_update::CheckResultDialog::new(&crate::UPDATE_APP, VERSION).show(ctx, rt.updater.status()) {
-            CheckResultResponse::Close => {
-                rt.updater.dismiss_status();
-                rt.result_open = false;
-            }
+            CheckResultResponse::Close => rt.updater.dismiss_status(),
             CheckResultResponse::CheckAgain => rt.updater.check_now(ctx),
+            // The next `show_if` asks the window to close once nothing is unsaved.
+            CheckResultResponse::RestartToUpdate => rt.updater.restart_to_update(),
             CheckResultResponse::None => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn result_window_shows_every_status_but_idle() {
+        let shown = [
+            Status::Checking,
+            Status::UpToDate,
+            Status::Failed("no network".into()),
+            Status::Installing,
+            Status::Ready,
+            Status::Managed,
+            Status::Updated("0.2.0".into()),
+            Status::InstallFailed("disk full".into()),
+        ];
+        for status in &shown {
+            assert!(result_window_shows(status, false), "{status:?}");
+            assert!(!result_window_shows(status, true), "{status:?} over the prompt");
+        }
+        assert!(!result_window_shows(&Status::Idle, false));
     }
 }
