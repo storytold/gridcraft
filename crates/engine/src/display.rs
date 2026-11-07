@@ -53,10 +53,11 @@ fn text_needs_quote_prefix(t: &str, sys: gridcraft_core::date::DateSystem) -> bo
 }
 
 /// What the cell editor and the formula bar start from. Same as `Cell::input_text`, except that a
-/// constant number in a date or time format is shown as a date (as the grid shows it), not as its
-/// serial. When the formatted text would not read back as the same date (for example
-/// `dddd, mmmm d`), an ISO `yyyy-mm-dd` (with `hh:mm:ss` for a time of day; just `hh:mm:ss`
-/// for a time alone) is used instead, and if even that would not read back, the serial.
+/// constant number in a date or time format is shown as a date, not as its serial. As in Excel,
+/// that date is written the system's way whatever the cell's format: the short date (built-in
+/// format 14), followed by the time with seconds when there is one, and just the time for a value
+/// under 1. When that text would not read back as the same number (fractions of a second), the
+/// serial is shown.
 pub fn edit_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     let raw = sheet.input_text(c);
     let Some(cell) = sheet.cell(c) else { return raw };
@@ -72,22 +73,15 @@ pub fn edit_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     if cell.formula.is_some() || !parsed(code).is_date() {
         return raw;
     }
-    let reads_back = |s: &str| matches!(gridcraft_core::parse::parse_input(s, wb.date_system).value, Value::Number(m) if (m - n).abs() < 1e-9);
-    let shown = format(&cell.value, code, wb).text;
-    if reads_back(&shown) {
-        return shown;
-    }
-    let Some(dt) = gridcraft_core::date::datetime_from_serial(wb.date_system, *n) else { return raw };
-    let time = format!("{:02}:{:02}:{:02}", dt.hour, dt.minute, dt.second);
-    let date = format!("{:04}-{:02}-{:02}", dt.year, dt.month, dt.day);
-    let iso = if *n < 1.0 {
-        time
+    let code = if *n < 1.0 {
+        "h:mm:ss AM/PM"
     } else if n.fract() == 0.0 {
-        date
+        "m/d/yyyy"
     } else {
-        format!("{date} {time}")
+        "m/d/yyyy h:mm:ss AM/PM"
     };
-    if reads_back(&iso) { iso } else { raw }
+    let text = format(&cell.value, code, wb).text;
+    if matches!(gridcraft_core::parse::parse_input(&text, wb.date_system).value, Value::Number(m) if (m - n).abs() < 1e-9) { text } else { raw }
 }
 
 /// Whether `c` has a formula or Python code that must not be shown: its cell is formatted
