@@ -645,6 +645,14 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
         Some(_) => Value::Empty,
         None => value,
     };
+    // A dynamic array keeps the area it was saved spilling over (`ref`): when two arrays want the
+    // same cells, recalculating gives them to this one again, as before saving.
+    if dynamic
+        && formula.as_ref().is_some_and(|f| f.array.is_none())
+        && let Some(r) = st.dynamic.last().filter(|r| r.start == pos)
+    {
+        sheet.spill_ranges.insert(pos, *r);
+    }
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style, py });
 }
 
