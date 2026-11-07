@@ -449,6 +449,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
 
 /// English label → Japanese for the dialog, message, Backstage and menu strings beyond [`CORE`].
 pub(super) const DIALOGS: &[(&str, &str)] = &[
+    ("More tabs", "その他のタブ"),
     ("OK", "OK"),
     ("Cancel", "キャンセル"),
     ("Don't Save", "保存しない"),

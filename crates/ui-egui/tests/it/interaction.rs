@@ -843,7 +843,7 @@ fn random_seed_caption_says_blank_draws_a_new_sequence() {
 #[test]
 fn data_analysis_form_keeps_ok_on_screen_in_a_short_window() {
     // The patterned Random Number Generation form is the tallest; in a 600-point-high window the
-    // tool's options scroll and the output options and OK stay reachable.
+    // fields and output options scroll together while OK stays fixed and the output is reachable.
     let mut h = crate::common::harness_with(crate::common::builder().with_size(egui::vec2(1280.0, 600.0)), crate::common::app(blank()), 4);
     h.state_mut().open_dialog("analysisToolPak", json!({"tool": "randomNumberGeneration"}));
     h.state_mut().dialog.as_mut().unwrap().values.insert("distribution".into(), json!("patterned"));
@@ -851,8 +851,21 @@ fn data_analysis_form_keeps_ok_on_screen_in_a_short_window() {
     // OK's label is padded; a button clipped off the window has no node at all.
     let ok = h.query_by_label("   OK   ").map(|n| n.rect());
     assert!(ok.is_some_and(|r| r.bottom() <= 600.0), "OK at {ok:?} in a 600-point window");
+    let body = h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Number of Variables:").rect().center();
+    h.input_mut().events.extend([
+        Event::PointerMoved(body),
+        Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            source: egui::MouseWheelSource::Unknown,
+            delta: egui::vec2(0.0, -2000.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        },
+    ]);
+    h.run_steps(12);
     let output = h.query_by_label("New Worksheet Ply:").map(|n| n.rect());
-    assert!(output.is_some_and(|r| r.bottom() <= 600.0), "the output options at {output:?}");
+    assert!(output.is_some_and(|r| r.top() >= 0.0 && r.bottom() <= 600.0), "the output options after scrolling at {output:?}");
+    assert_eq!(h.query_by_label("   OK   ").map(|n| n.rect()), ok, "scrolling output options must not move OK");
 }
 
 #[test]

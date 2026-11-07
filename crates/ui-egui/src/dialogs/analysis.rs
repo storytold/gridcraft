@@ -219,16 +219,26 @@ pub(super) fn toolpak_defaults(sel: &str, tool: &str) -> Map<String, Json> {
     v.as_object().cloned().unwrap_or_default()
 }
 
-/// Height a ToolPak form needs besides the tool's own options: title bar, output options, OK
-/// and the window's margins.
-const TOOLPAK_CHROME: f32 = 240.0;
-
 /// Data › Data Analysis: pick a tool, then fill in its form. OK runs `data.analysisToolPak`
 /// (through the dialog's command); a report that would replace data asks first.
-pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+///
+/// The caller supplies the window's remaining area. This function reserves the action row
+/// before sizing the scrollable chooser or form, keeping OK/Cancel fixed as the body scrolls.
+/// The first layout fits the body's content; subsequent layouts fill the remembered window size.
+/// Choosing a tool replaces the draft with defaults from the current selection and consumes
+/// that Enter press without submitting the new form. In a tool form, `confirm` requests command
+/// execution by the caller and `open` records cancellation; drawing alone never writes a report.
+pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool, fit_content: bool) {
     use gridcraft_engine::cmd::analysis::TOOLS;
+    let action_height = (ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y).max(ui.spacing().interact_size.y);
     if d.values.get("askOverwrite").and_then(Json::as_bool) == Some(true) {
-        ui.label("The output range already holds data. Replace it with the report?");
+        let footer = action_height + ui.spacing().item_spacing.y;
+        let body_height = (ui.available_height() - footer).max(0.0);
+        egui::ScrollArea::vertical()
+            .id_salt("analysis_toolpak_overwrite_body")
+            .min_scrolled_height(0.0)
+            .max_height(body_height)
+            .show(ui, |ui| ui.label("The output range already holds data. Replace it with the report?"));
         ui.horizontal(|ui| {
             if ui.button("Replace").clicked() {
                 d.values.remove("askOverwrite");
@@ -242,21 +252,77 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
         return;
     }
     let tool = d.values.get("tool").and_then(Json::as_str).unwrap_or("").to_string();
-    let Some((_, label)) = TOOLS.iter().find(|(id, _)| *id == tool) else {
-        ui.label(egui::RichText::new("Analysis Tools").strong());
-        let pick = d.values.get("pick").and_then(Json::as_str).unwrap_or("").to_string();
-        let mut chosen = false;
-        egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-            for (id, label) in TOOLS {
-                let r = ui.selectable_label(pick == *id, *label);
-                if r.clicked() {
-                    d.values.insert("pick".into(), json!(id));
+    let selected = TOOLS.iter().find(|(id, _)| *id == tool);
+    // Reserve exactly the action row's height, using the current font metrics. The body fills
+    // the rest of the resized window and scrolls independently in every ToolPak form.
+    let footer = action_height + 8.0 + ui.spacing().item_spacing.y;
+    let body_height = (ui.available_height() - footer).max(0.0);
+    let body_width = ui.available_width();
+    let mut chosen = false;
+    egui::ScrollArea::both()
+        .id_salt("analysis_toolpak_body")
+        .min_scrolled_height(0.0)
+        .min_scrolled_width(0.0)
+        .max_height(body_height)
+        .auto_shrink([false, fit_content])
+        .show(ui, |ui| {
+            ui.set_max_width(body_width);
+            if let Some((_, label)) = selected {
+                d.title = label.to_string();
+                d.fields = toolpak_fields(&tool, &d.values);
+                form_fields(app, ui, d);
+                ui.separator();
+                ui.label(egui::RichText::new("Output options").strong());
+                let to = d.values.get("outputTo").and_then(Json::as_str).unwrap_or("newSheet").to_string();
+                for (key, choice, text_label) in [("output", "range", "Output Range:"), ("newSheet", "newSheet", "New Worksheet Ply:")] {
+                    let r = ui.radio(to == choice, text_label);
+                    if r.clicked() {
+                        d.values.insert("outputTo".into(), json!(choice));
+                        if key != "output" && d.refs.target.as_deref() == Some("output") {
+                            d.refs.target = None;
+                        }
+                    }
+
+                    if key == "output" {
+                        let before = d.values.get(key).cloned();
+                        let was_target = d.refs.target.as_deref() == Some(key);
+                        // Put the reference field on its own row. Side-by-side with the radio it
+                        // can exceed the narrow dialog and clip the collapse button off-screen.
+                        ui.horizontal(|ui| {
+                            let width = ui.available_width().min(240.0);
+                            ref_edit(app, ui, d, key, RefLabel::By(r.id), width);
+                        });
+                        // Only a new pick or edit chooses Output Range, preserving a later
+                        // New Worksheet Ply choice just as the upstream RefEdit form does.
+                        if d.refs.target.as_deref() == Some(key) && (!was_target || d.values.get(key) != before.as_ref()) {
+                            d.values.insert("outputTo".into(), json!(choice));
+                        }
+                    } else {
+                        ui.horizontal(|ui| {
+                            let mut text = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
+                            let width = ui.available_width().min(200.0);
+                            if ui.add(egui::TextEdit::singleline(&mut text).desired_width(width)).changed() {
+                                d.values.insert(key.into(), json!(text));
+                                d.values.insert("outputTo".into(), json!(choice));
+                            }
+                        });
+                    }
                 }
-                if r.double_clicked() {
-                    chosen = true;
+            } else {
+                ui.label(egui::RichText::new(app.ui.language.tr("Analysis Tools")).strong());
+                let pick = d.values.get("pick").and_then(Json::as_str).unwrap_or("").to_string();
+                for (id, label) in TOOLS {
+                    let response = ui.selectable_label(pick == *id, app.ui.language.tr(label));
+                    if response.clicked() {
+                        d.values.insert("pick".into(), json!(id));
+                    }
+                    chosen |= response.double_clicked();
                 }
             }
         });
+    if selected.is_some() {
+        ok_cancel(ui, confirm, open);
+    } else {
         let mut ok = false;
         ok_cancel(ui, &mut ok, open);
         let pick = d.values.get("pick").and_then(Json::as_str).unwrap_or("").to_string();
@@ -265,48 +331,10 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
             // than the dialog's own is shown.
             let sel = current_area_ref(app, d);
             d.values = toolpak_defaults(&sel, &pick);
+            // Changing the form must not also run it with the same Enter key.
+            ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
         }
-        return;
-    };
-    d.title = label.to_string();
-    d.fields = toolpak_fields(&tool, &d.values);
-    // The tool's options scroll in a short window (the patterned Random Number Generation form
-    // is taller than 600 points); the output options and OK below always stay in view.
-    let room = (ui.ctx().content_rect().height() - TOOLPAK_CHROME).max(120.0);
-    egui::ScrollArea::vertical().id_salt("toolpakForm").max_height(room).show(ui, |ui| form_fields(app, ui, d));
-    ui.separator();
-    ui.label(egui::RichText::new("Output options").strong());
-    let to = d.values.get("outputTo").and_then(Json::as_str).unwrap_or("newSheet").to_string();
-    for (key, choice, text_label) in [("output", "range", "Output Range:"), ("newSheet", "newSheet", "New Worksheet Ply:")] {
-        ui.horizontal(|ui| {
-            let r = ui.radio(to == choice, text_label);
-            if r.clicked() {
-                d.values.insert("outputTo".into(), json!(choice));
-                // Another output option ends picking into Output Range, so a later selection on
-                // the grid doesn't choose it again.
-                if key != "output" && d.refs.target.as_deref() == Some("output") {
-                    d.refs.target = None;
-                }
-            }
-            if key == "output" {
-                let before = d.values.get(key).cloned();
-                let was_target = d.refs.target.as_deref() == Some(key);
-                ref_edit(app, ui, d, key, RefLabel::By(r.id), 190.0);
-                // Clicking into the box, typing or picking an output range chooses it; only a
-                // change does, so an option chosen later stays chosen.
-                if d.refs.target.as_deref() == Some(key) && (!was_target || d.values.get(key) != before.as_ref()) {
-                    d.values.insert("outputTo".into(), json!(choice));
-                }
-            } else {
-                let mut t = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
-                if ui.add(egui::TextEdit::singleline(&mut t).desired_width(160.0)).changed() {
-                    d.values.insert(key.into(), json!(t));
-                    d.values.insert("outputTo".into(), json!(choice));
-                }
-            }
-        });
     }
-    ok_cancel(ui, confirm, open);
 }
 
 /// The Solver Options fields: (key, label, default).
