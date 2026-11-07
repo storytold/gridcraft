@@ -345,6 +345,10 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
             Err(e) => cx.warn(format!("PivotTables on sheet \"{name}\" could not be read: {e}")),
         }
         sheet.preserved = kept.sheet(&mut cx, &rel.target, &name, &read_controls);
+        // Header and footer pictures become the sheet's own (#1257).
+        if !crate::hf_pictures::take_into(&mut sheet) {
+            cx.warn(format!("sheet \"{name}\": pictures in the header and footer could not be read; they are kept for saving as they are, but not shown, printed or edited"));
+        }
         sheet.file_id = se.attr_u32("sheetId").unwrap_or(0);
         sheet.visibility = match se.attr("state") {
             Some("hidden") => Visibility::Hidden,
