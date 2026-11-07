@@ -58,6 +58,7 @@ fn drag_cursor(drag: &Drag, rtl: bool) -> Option<CursorIcon> {
         Drag::ResizeRow { .. } => Some(CursorIcon::ResizeRow),
         Drag::Freeze { cols, .. } => Some(if *cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical }),
         Drag::Object { handle: Some(h), .. } => Some(h.cursor(rtl)),
+        Drag::Rotate { .. } => Some(CursorIcon::Crosshair),
     }
 }
 
@@ -81,14 +82,18 @@ fn hover_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, poin
     let on_cur_border = on_border(cur_rect, p) && border_panes.iter().any(|r| r.contains(p));
     // The selected object's handles resize it; any object's body moves it.
     let idle = app.grid.drag == Drag::None && app.editor.is_none();
-    let object_handle = if idle { crate::chartview::selected_handle(app, geo, sh, p).map(|(.., h)| h) } else { None };
+    let object_handle = if idle { crate::chartview::selected_handle(app, geo, sh, p) } else { None };
     let hit = if idle { crate::chartview::hit(app, geo, sh, p) } else { None };
     // A form control works on click unless it is selected (or Ctrl or Cmd is held).
     let mods = ctx.input(|i| i.modifiers);
     let works = hit.is_some_and(|(o, _)| o.kind == ObjKind::Control && app.selected_object != Some(o) && !mods.command && !mods.ctrl);
     let on_object = hit.is_some();
-    if let Some(h) = object_handle {
-        ctx.set_cursor_icon(h.cursor(geo.rtl));
+    let on_rotate = idle && crate::chartview::selected_rotate(app, geo, sh, p).is_some();
+    if on_rotate {
+        ctx.set_cursor_icon(CursorIcon::Crosshair);
+    } else if let Some((o, _, h)) = object_handle {
+        let deg = crate::chartview::frame_of(sh, o).0;
+        ctx.set_cursor_icon(if deg == 0.0 { h.cursor(geo.rtl) } else { crate::frame::Handle { x: h.sides().0, y: h.sides().1 }.cursor(deg) });
     } else if works {
         ctx.set_cursor_icon(CursorIcon::PointingHand);
     } else if on_object {

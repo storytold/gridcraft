@@ -360,6 +360,7 @@ fn sample() -> Workbook {
         line: Color::Rgb(0x000000),
         text: "Hi\nthere".into(),
         format: Default::default(),
+        rotation: 30.0,
     });
     s.shapes.push(Shape {
         math: Default::default(),
@@ -370,6 +371,7 @@ fn sample() -> Workbook {
         line: Color::Rgb(0xFF0000),
         text: String::new(),
         format: Default::default(),
+        rotation: 0.0,
     });
     s.shapes.push(Shape {
         math: Default::default(),
@@ -391,6 +393,7 @@ fn sample() -> Workbook {
             anchor: Some(ShapeTextAnchor::Bottom),
             rtl: true,
         },
+        rotation: 0.0,
     });
     let base_chart = Chart {
         id: 20,

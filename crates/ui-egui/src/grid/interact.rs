@@ -136,6 +136,13 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
     if primary_drag || primary_clicked {
         // A drag is recognised only after the pointer has moved, so grab the object where the press began.
         let at = if primary_drag { pointer.press_origin().map(|p| geo.mirror_pos(p)).or(pos) } else { pos };
+        if primary_drag
+            && let Some(p) = at
+            && let Some((obj, rect)) = crate::chartview::selected_rotate(app, geo, sh, p)
+        {
+            app.grid.drag = Drag::Rotate { obj, rect, stepped: false };
+            return;
+        }
         // The selected object's handles reach a little outside it, so they win over hit-testing.
         // Only they resize: a press anywhere on another object selects and moves it, as the
         // hover cursor shows.
@@ -729,6 +736,7 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 scroll_by(app, auto);
             }
             Drag::Object { .. } => drag_object(app, geo, sh, p),
+            Drag::Rotate { obj, rect, .. } => rotate_object(app, obj, rect, p, input.modifiers.shift),
             Drag::None => {}
         }
     }
@@ -1071,6 +1079,52 @@ pub(super) fn hidden_row_edge(geo: &Geo, sh: &Sheet, y: f32) -> Option<u32> {
     row_edge(geo, sh, y).map(|(r, _)| r).filter(|&r| sh.row_height(r) <= 0.0)
 }
 
+/// Arrow-key nudge of a selected object, sheet points (Ctrl/Alt: fine).
+const NUDGE: f32 = 6.0;
+
+/// Arrow keys aimed at the selected object rather than the cells: they nudge it.
+pub(super) fn object_key(app: &mut SheetApp, sh: &Sheet, key: egui::Key, m: egui::Modifiers) -> bool {
+    use egui::Key;
+    let Some(o) = app.selected_object else { return false };
+    let step = if m.ctrl || m.alt { 1.0 } else { NUDGE };
+    // Arrows follow the screen: a right-to-left sheet is mirrored.
+    let sx = if sh.right_to_left { -step } else { step };
+    let d = match key {
+        Key::ArrowLeft => vec2(-sx, 0.0),
+        Key::ArrowRight => vec2(sx, 0.0),
+        Key::ArrowUp => vec2(0.0, -step),
+        Key::ArrowDown => vec2(0.0, step),
+        _ => return false,
+    };
+    // On Windows and Linux egui sets `command` with `ctrl`: only the Mac Command key opts out.
+    if m.shift || m.mac_cmd {
+        return false;
+    }
+    let Some(a) = sh.object_anchor(o) else { return false };
+    let x0 = (sh.col_left(a.cell.col) as f32 + a.dx + d.x).max(0.0);
+    let y0 = (sh.row_top(a.cell.row) as f32 + a.dy + d.y).max(0.0);
+    let nc = CellRef::new(sh.row_at(f64::from(y0)), sh.col_at(f64::from(x0)));
+    let params =
+        json!({"kind": o.kind.name(), "id": o.id, "at": nc.a1(), "dx": x0 - sh.col_left(nc.col) as f32, "dy": y0 - sh.row_top(nc.row) as f32});
+    app.run_or_alert("object.move", params);
+    true
+}
+
+/// Turns the dragged shape so its rotation handle points at `p`; the drag is one undo step.
+fn rotate_object(app: &mut SheetApp, obj: ObjRef, rect: Rect, p: Pos2, snap: bool) {
+    let deg = crate::frame::angle_to(rect, p, snap);
+    let revision = app.session.active().map(|d| d.revision);
+    let _ = app.session.run("object.move", json!({"kind": obj.kind.name(), "id": obj.id, "rotation": deg}));
+    let Drag::Rotate { stepped, .. } = app.grid.drag else { return };
+    if stepped {
+        coalesce_last_undo(app);
+    } else if app.session.active().map(|d| d.revision) != revision
+        && let Drag::Rotate { stepped, .. } = &mut app.grid.drag
+    {
+        *stepped = true;
+    }
+}
+
 /// Moves the dragged object, or resizes it from the grabbed handle, to follow the pointer at `p`
 /// (logical coordinates). The whole drag coalesces into one undo step of its own.
 fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
@@ -1079,7 +1133,15 @@ fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
     let (cell, dx, dy, w, h) = orig;
     let x0 = sh.col_left(cell.col) as f32 + dx;
     let y0 = sh.row_top(cell.row) as f32 + dy;
+    let frame_deg = crate::chartview::frame_of(sh, obj).0;
     let [x0, y0, x1, y1] = match handle {
+        Some(hd) if frame_deg != 0.0 => {
+            let fh = crate::frame::Handle { x: hd.sides().0, y: hd.sides().1 };
+            let r0 = Rect::from_min_max(pos2(x0, y0), pos2(x0 + w, y0 + h));
+            let r = crate::frame::resized_turned(r0, frame_deg, fh, d, 8.0, false);
+            let (nx, ny) = (r.min.x.max(0.0), r.min.y.max(0.0));
+            [nx, ny, r.max.x.max(nx + 8.0), r.max.y.max(ny + 8.0)]
+        }
         Some(hd) => crate::objects::resized([x0, y0, x0 + w, y0 + h], hd, d, crate::objects::min_size(sh, obj)),
         None => {
             let (x0, y0) = ((x0 + d.x).max(0.0), (y0 + d.y).max(0.0));
