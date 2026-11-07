@@ -272,11 +272,25 @@ struct Grid {
     cells: BTreeMap<(u32, u32), Value>,
     /// Cells shown as percentages.
     pct: Vec<(u32, u32)>,
+    /// Rows and columns spanned by `cells`.
+    rows: u32,
+    cols: u32,
+    /// A cell was dropped because the report outgrew [`MAX_OUTPUT_CELLS`]: the report is refused.
+    too_large: bool,
 }
 
 impl Grid {
+    /// Stores a value. Past [`MAX_OUTPUT_CELLS`] (the most a report writes) nothing more is kept,
+    /// so a builder that would produce millions of entries stops allocating them, and
+    /// [`write_report`] refuses the report.
     fn put(&mut self, r: u32, c: u32, v: Value) {
         if !v.is_empty() {
+            let (rows, cols) = (self.rows.max(r.saturating_add(1)), self.cols.max(c.saturating_add(1)));
+            if self.too_large || u64::from(rows) * u64::from(cols) > MAX_OUTPUT_CELLS {
+                self.too_large = true;
+                return;
+            }
+            (self.rows, self.cols) = (rows, cols);
             self.cells.insert((r, c), v);
         }
     }
@@ -296,9 +310,7 @@ impl Grid {
     }
     /// (rows, cols) spanned.
     fn extent(&self) -> (u32, u32) {
-        let rows = self.cells.keys().map(|(r, _)| r + 1).max().unwrap_or(0);
-        let cols = self.cells.keys().map(|(_, c)| c + 1).max().unwrap_or(0);
-        (rows, cols)
+        (self.rows, self.cols)
     }
 }
 
@@ -320,6 +332,10 @@ fn descriptive(s: &Session, p: &Json) -> Result<Grid> {
     }
     let mut g = Grid::default();
     for (i, v) in vars.iter().enumerate() {
+        // The report is refused once the grid is too large: the rest would only build discarded labels.
+        if g.too_large {
+            break;
+        }
         let x = numbers(&v.vals, true)?;
         let c = idx(i).saturating_mul(2);
         g.txt(0, c, &v.name);
@@ -1749,7 +1765,7 @@ fn sampling(s: &Session, p: &Json, seed: Option<u64>) -> Result<Grid> {
 fn write_report(s: &mut Session, p: &Json, tool: &str, g: Grid) -> Result<Json> {
     let (rows, cols) = g.extent();
     let (rows, cols) = (rows.max(1), cols.max(1));
-    if u64::from(rows) * u64::from(cols) > MAX_OUTPUT_CELLS {
+    if g.too_large || u64::from(rows) * u64::from(cols) > MAX_OUTPUT_CELLS {
         return Err(bad(CMD, "the report is too large"));
     }
     let d = s.doc()?;
@@ -1912,6 +1928,28 @@ mod tests {
         let x = n(s, "Z1000");
         s.execute("cell.set", json!({"cell": "Z1000", "input": ""})).unwrap();
         x
+    }
+
+    #[test]
+    fn a_report_stops_growing_past_the_output_limit() {
+        // Entries past the limit are not kept, and the report is refused.
+        let mut g = super::Grid::default();
+        g.num(1999, 1999, 1.0);
+        assert!(!g.too_large);
+        g.num(0, 2000, 1.0);
+        assert!(g.too_large);
+        assert_eq!(g.cells.len(), 1);
+        assert_eq!(g.extent(), (2000, 2000));
+        // Row-grouped statistics of a tall, almost empty column: one variable per row would make
+        // millions of report entries; the report is refused instead of built.
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[1]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "A1000000", "values": [[2]]})).unwrap();
+        let err = s
+            .execute("data.analysisToolPak", json!({"tool": "descriptive", "range": "A1:A1000000", "groupedBy": "rows", "output": "C1"}))
+            .expect_err("report too large");
+        assert!(err.to_string().contains("too large"), "{err}");
+        assert_eq!(v(&s, "C1"), Value::Empty);
     }
 
     #[test]
