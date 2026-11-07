@@ -16,7 +16,7 @@ use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
 use gridcraft_formula::Expr;
 use gridcraft_model::{CalcMode, Workbook};
 
-use crate::eval::{Evaluator, Host, precedents, stack_position};
+use crate::eval::{Evaluator, Host, precedents_at, stack_position};
 use crate::spill_index::{SpillIndex, indexing_pays};
 
 /// Changed cells (in one `cells_changed`) from which a sheet's spill areas may be indexed.
@@ -193,7 +193,7 @@ impl Calc {
                     self.spill_errors.insert((si, c));
                 }
                 if let Some(f) = &cell.formula
-                    && let Some((areas, dynamic)) = f.with_expr(|e| precedents(wb, si, e))
+                    && let Some((areas, dynamic)) = f.with_expr(|e| precedents_at(wb, si, c, e))
                 {
                     self.graph.insert((si, c), Node { areas, dynamic });
                     if cell.value == Value::Error(CellError::Circ) {
@@ -292,8 +292,11 @@ impl Calc {
             } else {
                 self.spill_errors.remove(&k);
             }
-            let precedent =
-                wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.with_expr(|e| precedents(wb, k.0, e)));
+            let precedent = wb
+                .sheet(k.0)
+                .and_then(|s| s.cell(k.1))
+                .and_then(|c| c.formula.as_ref())
+                .and_then(|f| f.with_expr(|e| precedents_at(wb, k.0, k.1, e)));
             let py = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.py.as_ref());
             let python = py.is_some();
             // A Python cell whose result (if any) is not an array spills nothing.
