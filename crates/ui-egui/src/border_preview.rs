@@ -5,6 +5,7 @@ use gridcraft_engine::model::{BorderStyle, Borders, Theme};
 
 use crate::grid::paint_border;
 use crate::theme::{self, Tokens};
+use crate::widgets::tr;
 
 /// A labelled menu button with a two-by-two diagram to distinguish inside edges
 /// from the selection outline. Labels stay available to accessibility tools.
@@ -53,7 +54,7 @@ pub(crate) fn preset_button(ui: &mut Ui, label: &str, preset: &str) -> Response 
 /// and explicit border colors faithful in both light and dark application themes.
 pub(crate) fn sample(ui: &mut Ui, borders: &Borders, theme: &Theme) {
     ui.add_space(8.0);
-    ui.label("Preview");
+    ui.label(tr(ui, "Preview"));
     let (area, response) = ui.allocate_exact_size(vec2(248.0, 104.0), Sense::hover());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, "Border preview"));
     let t = Tokens::get(ui.ctx());
