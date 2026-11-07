@@ -21,6 +21,9 @@ pub(super) struct PassHost<'a> {
     in_progress: HashSet<Key>,
     /// New spills found during the pass: anchor → array.
     pub(super) spills: HashMap<Key, std::sync::Arc<Array>>,
+    /// Multi-cell spills only: a scalar read cannot land in a one-cell spill except at its
+    /// anchor, which is already handled through `results`/`pending`.
+    multi_spills: HashSet<Key>,
     /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
     /// every row, so once per sheet rather than once per range read.
     used: HashMap<usize, Option<RangeRef>>,
@@ -86,6 +89,7 @@ impl<'a> PassHost<'a> {
             pending: exprs.keys().copied().collect(),
             in_progress: HashSet::default(),
             spills: HashMap::default(),
+            multi_spills: HashSet::default(),
             used: HashMap::default(),
             rng,
             now,
@@ -121,9 +125,23 @@ impl<'a> PassHost<'a> {
         self.python = python;
         self
     }
+
+    fn set_spill(&mut self, key: Key, array: std::sync::Arc<Array>) {
+        if array.data.len() > 1 {
+            self.multi_spills.insert(key);
+        } else {
+            self.multi_spills.remove(&key);
+        }
+        self.spills.insert(key, array);
+    }
+
+    fn remove_spill(&mut self, key: &Key) {
+        self.multi_spills.remove(key);
+        self.spills.remove(key);
+    }
 }
 
-/// Whether an array result at `k` can't spill: it is in a table, or its area runs off the sheet,
+/// Whether an array result at `k` can't spill: it is in a table (a one-value result is shown there, as in Excel), or its area runs off the sheet,
 /// overlaps merged cells, holds other cells, or another formula's spill (unless that formula is
 /// recalculated in this pass, and so may spill elsewhere now).
 fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
@@ -142,7 +160,7 @@ fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
     end.row >= gridcraft_core::MAX_ROWS
         || end.col >= gridcraft_core::MAX_COLS
         || sh.merges.iter().any(|m| m.intersects(&range))
-        || sh.tables.iter().any(|t| t.range.contains(anchor))
+        || (a.data.len() > 1 && sh.tables.iter().any(|t| t.range.contains(anchor)))
         || sh.cells.iter_range(range).any(|(c, cell)| c != anchor && (!cell.value.is_empty() || cell.formula.is_some()))
         || sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c) && spilled_over(*c))
 }
@@ -154,7 +172,7 @@ pub(super) fn spills_as_before(sheet: &gridcraft_model::Sheet, anchor: CellRef, 
         CellRef::new(anchor.row.saturating_add((arr.rows as u32).saturating_sub(1)), anchor.col.saturating_add((arr.cols as u32).saturating_sub(1)));
     RangeRef::new(anchor, end) == range
         && !sheet.merges.iter().any(|m| m.intersects(&range))
-        && !sheet.tables.iter().any(|t| t.range.contains(anchor))
+        && (arr.data.len() <= 1 || !sheet.tables.iter().any(|t| t.range.contains(anchor)))
         && range
             .iter()
             .enumerate()
@@ -369,7 +387,7 @@ impl PassHost<'_> {
                 // value -- a FILTER matching one row, a SORT or UNIQUE over one item -- so `C1#`
                 // is the 1 x 1 range and `ROWS(C1#)` is 1, as in Excel (#1491). A formula that
                 // returns a scalar never reaches this arm, so it does not become an anchor.
-                self.spills.insert(k, a.clone());
+                self.set_spill(k, a.clone());
                 a.data.first().cloned().unwrap_or_default()
             }
             Value::Empty => Value::Number(0.0),
@@ -382,7 +400,7 @@ impl PassHost<'_> {
         // An array that can't spill is #SPILL! for the formulas evaluated after it in this pass too.
         let v = match self.spills.get(&k) {
             Some(a) if spill_blocked(self, k, a) => {
-                self.spills.remove(&k);
+                self.remove_spill(&k);
                 Value::Error(CellError::Spill)
             }
             _ => v,
@@ -402,7 +420,7 @@ impl PassHost<'_> {
                     && a.cols >= 1
                     && a.rows.checked_mul(a.cols).is_some_and(|n| n == a.data.len() && n <= gridcraft_model::python::MAX_RESULT_CELLS);
                 if sane {
-                    self.spills.insert(k, a.clone());
+                    self.set_spill(k, a.clone());
                     a.data.first().cloned().unwrap_or_default()
                 } else {
                     Value::Error(CellError::Spill)
@@ -412,7 +430,7 @@ impl PassHost<'_> {
         };
         let v = match self.spills.get(&k) {
             Some(a) if spill_blocked(self, k, a) => {
-                self.spills.remove(&k);
+                self.remove_spill(&k);
                 Value::Error(CellError::Spill)
             }
             _ => v,
@@ -460,6 +478,7 @@ impl PassHost<'_> {
             self.prev = again.iter().filter_map(|k| self.results.remove(k).map(|v| (*k, v))).collect();
             self.pending = set.clone();
             self.spills.retain(|a, _| !set.contains(a));
+            self.multi_spills.retain(|a| !set.contains(a));
             for k in &again {
                 self.calculate(*k);
             }
@@ -544,8 +563,9 @@ impl Host for PassHost<'_> {
             return self.compute(k);
         }
         // A cell covered by a spill computed in this pass.
-        for (anchor, arr) in &self.spills {
+        for anchor in &self.multi_spills {
             if anchor.0 == sheet && c.row >= anchor.1.row && c.col >= anchor.1.col {
+                let Some(arr) = self.spills.get(anchor) else { continue };
                 let (dr, dc) = ((c.row - anchor.1.row) as usize, (c.col - anchor.1.col) as usize);
                 if dr < arr.rows && dc < arr.cols {
                     if self.iterate && self.tainted.contains(anchor) {
@@ -650,7 +670,7 @@ impl Host for PassHost<'_> {
         }
         // Spilled values sit between the stored cells (and the formulas just calculated may have
         // produced some): leave such blocks to `range_values`.
-        let arrays = self.spills.iter().any(|(a, arr)| a.0 == sheet && array_area(a.1, arr).intersects(&range));
+        let arrays = self.multi_spills.iter().any(|a| a.0 == sheet && self.spills.get(a).is_some_and(|arr| array_area(a.1, arr).intersects(&range)));
         let mut stored = false;
         let _seen = stored_spill_in(sh, range, &mut |_, _| {
             stored = true;
