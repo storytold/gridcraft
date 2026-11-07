@@ -9,6 +9,11 @@
 //! gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl] [--out FILE] [--print RANGE] [--quiet]
 //! gridcraft-cli commands [--json] [--search X]
 //! gridcraft-cli functions [--json] [--search X] [--category C]
+//! gridcraft-cli dax format|parse [TEXT] [--file PATH]
+//! gridcraft-cli dax bind [FORMULA] --model PATH [--measure NAME]
+//! gridcraft-cli dax eval [FORMULA] --model PATH [--table | --measure NAME]
+//! gridcraft-cli dax pivot --model PATH --measure NAME --rows 'T[A],…' [--columns 'T[B],…']
+//! gridcraft-cli dax measures --file BOOK.xlsx [--write JSON --out BOOK.xlsx]
 //! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
 //! gridcraft-cli send <port> <method> [json]
 //! gridcraft-cli version | --version
@@ -30,6 +35,7 @@ macro_rules! outln {
 }
 
 mod check;
+mod dax;
 
 use gridcraft_engine::Session;
 use serde_json::{Value, json};
@@ -47,6 +53,15 @@ const USAGE: &str = "usage:
                      blank lines and lines starting with # or // are skipped
   gridcraft-cli commands [--json] [--search X]
   gridcraft-cli functions [--json] [--search X] [--category C]
+  gridcraft-cli dax format|parse [TEXT] [--file PATH]      canonical DAX text and syntax tree
+  gridcraft-cli dax bind [FORMULA] --model PATH [--measure NAME]
+                                                          bind a formula or a model measure
+  gridcraft-cli dax eval [FORMULA] --model PATH [--table | --measure NAME]
+                                                          evaluate a formula or a model measure
+  gridcraft-cli dax pivot --model PATH --measure NAME --rows 'T[A],…' [--columns 'T[B],…']
+                                                          group a measure by row (and column) fields
+  gridcraft-cli dax measures --file BOOK.xlsx [--write JSON --out BOOK.xlsx]
+                                                          read or rewrite Power Pivot measures
   gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
   gridcraft-cli send <port> <method> [json]
   gridcraft-cli version";
@@ -81,6 +96,7 @@ fn main() -> ExitCode {
         Some("check") => return check::main(rest),
         Some("commands") => commands(rest),
         Some("functions") => functions(rest),
+        Some("dax") => dax::main(rest),
         Some("mcp") => mcp(rest),
         Some("send") => send(rest),
         Some(other) => Err(format!("unknown subcommand `{other}`\n{USAGE}")),
