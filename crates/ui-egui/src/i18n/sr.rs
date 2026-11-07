@@ -434,6 +434,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enable AutoComplete for cell values" => "Omogući automatsko dovršavanje vrednosti ćelija",
         "Save .xlsx workbooks automatically after every change" => "Automatski sačuvaj .xlsx radne sveske posle svake izmene",
         "Workbook calculation" => "Izračunavanje radne sveske",
+        "Recalculate workbook before saving" => "Ponovo izračunaj radnu svesku pre čuvanja",
         "Enable iterative calculation" => "Omogući iterativno izračunavanje",
         "Maximum Iterations:" => "Maksimalan broj iteracija:",
         "Maximum Change:" => "Maksimalna promena:",

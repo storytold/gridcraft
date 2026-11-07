@@ -377,6 +377,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enable AutoComplete for cell values" => "AutoVervollständigen für Zellwerte aktivieren",
         "Save .xlsx workbooks automatically after every change" => ".xlsx-Arbeitsmappen nach jeder Änderung automatisch speichern",
         "Workbook calculation" => "Arbeitsmappenberechnung",
+        "Recalculate workbook before saving" => "Arbeitsmappe vor dem Speichern neu berechnen",
         "Enable iterative calculation" => "Iterative Berechnung aktivieren",
         "Maximum Iterations:" => "Maximale Iterationszahl:",
         "Maximum Change:" => "Maximale Änderung:",

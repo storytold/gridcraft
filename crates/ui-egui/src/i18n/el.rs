@@ -327,6 +327,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enable AutoComplete for cell values" => "Ενεργοποίηση αυτόματης συμπλήρωσης τιμών κελιών",
         "Save .xlsx workbooks automatically after every change" => "Αυτόματη αποθήκευση βιβλίων .xlsx μετά από κάθε αλλαγή",
         "Workbook calculation" => "Υπολογισμός βιβλίου εργασίας",
+        "Recalculate workbook before saving" => "Επανάληψη υπολογισμού βιβλίου εργασίας πριν από την αποθήκευση",
         "Enable iterative calculation" => "Ενεργοποίηση επαναληπτικού υπολογισμού",
         "Calculation settings are saved with the workbook." => "Οι ρυθμίσεις υπολογισμού αποθηκεύονται στο βιβλίο εργασίας.",
         "Interface size" => "Μέγεθος περιβάλλοντος",

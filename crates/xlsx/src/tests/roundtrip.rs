@@ -20,7 +20,15 @@ fn rr(a: &str) -> RangeRef {
 fn sample() -> Workbook {
     let mut wb = Workbook::new();
     wb.date_system = DateSystem::D1904;
-    wb.calc = CalcSettings { mode: CalcMode::Manual, iterative: true, max_iterations: 42, max_change: 0.5, precision_as_displayed: true, r1c1: true };
+    wb.calc = CalcSettings {
+        mode: CalcMode::Manual,
+        iterative: true,
+        max_iterations: 42,
+        max_change: 0.5,
+        precision_as_displayed: true,
+        r1c1: true,
+        recalculate_before_save: false,
+    };
     wb.protected_structure = true;
     wb.structure_password = Some(gridcraft_model::PasswordHash::new_sha512("s3cret", b"0123456789abcdef"));
     wb.props = DocProps {
@@ -1719,6 +1727,32 @@ fn r1c1_reference_style_is_kept() {
     let mut pkg = Package::open(&saved).unwrap();
     let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
     assert_eq!(book.child("calcPr").and_then(|c| c.attr("refMode")), None);
+}
+
+#[test]
+fn recalculate_before_saving_is_kept() {
+    // #3539: `<calcPr calcOnSave="0"/>` was dropped on open, so the next save switched the setting
+    // back on. Excel writes the attribute only when the setting is off, in any calculation mode.
+    let calc_on_save = |wb: &Workbook| {
+        let saved = write_xlsx(wb).unwrap();
+        let mut pkg = Package::open(&saved).unwrap();
+        let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
+        book.child("calcPr").and_then(|c| c.attr("calcOnSave")).map(str::to_string)
+    };
+    let mut wb = Workbook::new();
+    assert!(wb.calc.recalculate_before_save);
+    assert_eq!(calc_on_save(&wb), None);
+    wb.calc.recalculate_before_save = false;
+    assert_eq!(calc_on_save(&wb), Some("0".into()), "automatic mode");
+    wb.calc.mode = CalcMode::Manual;
+    assert_eq!(calc_on_save(&wb), Some("0".into()), "manual mode");
+    // Read back: off from `0`, and on when the attribute says so or is absent.
+    for (attrs, on) in [(r#" calcMode="manual" calcOnSave="0""#, false), (r#" calcOnSave="1""#, true), ("", true)] {
+        let bytes = super::minimal("<sheetData/>", &[], "", &format!(r#"<calcPr calcId="191029"{attrs}/>"#));
+        let (back, _) = read_xlsx(&bytes).unwrap();
+        assert_eq!(back.calc.recalculate_before_save, on, "{attrs}");
+        assert_eq!(calc_on_save(&back), (!on).then(|| "0".to_string()), "{attrs}");
+    }
 }
 
 #[test]
