@@ -652,3 +652,21 @@ fn xls_short_window2_is_ignored() {
         assert_eq!(v(&wb, 0, "A1"), Value::Number(7.0));
     }
 }
+
+/// Shared-formula followers each keep their own text, charged to the workbook's text allowance:
+/// with no allowance left they keep their cached values, and the import still succeeds.
+#[test]
+fn shared_formula_text_counts_against_the_text_allowance() {
+    let file = compound("Workbook", &sample(false));
+    // The smallest allowance that reads every string: nothing is left for expanded formulas.
+    let left = (0..1000).find(|n| crate::xls::read_xls_with(&file, crate::xls::Budget::with_text_left(*n)).is_ok()).unwrap();
+    let (wb, report) = crate::xls::read_xls_with(&file, crate::xls::Budget::with_text_left(left)).unwrap();
+    assert_eq!(ftext(&wb, "B6"), None);
+    assert_eq!(v(&wb, 0, "B6"), Value::Number(20.0));
+    assert!(report.warnings.iter().any(|w| w.contains("shared-formula text")), "{:?}", report.warnings);
+    // an array anchor after the cut-off still gets its formula
+    assert!(ftext(&wb, "C5").is_some());
+    // With room, the followers keep their formulas.
+    let (wb, _) = crate::xls::read_xls_with(&file, crate::xls::Budget::default()).unwrap();
+    assert!(ftext(&wb, "B6").is_some());
+}
