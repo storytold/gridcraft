@@ -18,6 +18,8 @@ mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod print;
+#[cfg(all(unix, not(target_os = "macos")))]
+mod x11_scale;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -238,6 +240,9 @@ fn icon() -> Option<egui::IconData> {
 }
 
 fn main() -> eframe::Result<()> {
+    // Apply before logging and session setup; a successful re-exec must not repeat side effects.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    x11_scale::apply();
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     // Commands catch their panics (`Session::execute`), but the default hook only prints to
