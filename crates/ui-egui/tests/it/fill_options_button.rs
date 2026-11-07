@@ -3,9 +3,9 @@
 //! Days, Fill Weekdays, Fill Months or Fill Years.
 
 use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT as _, Queryable};
 use gridcraft_engine::Session;
-use gridcraft_engine::core::{CellRef, Value};
+use gridcraft_engine::core::{CellRef, RangeRef, Value};
 use gridcraft_ui_egui::{SheetApp, grid::Geo};
 use serde_json::json;
 
@@ -157,6 +157,228 @@ fn a_number_drag_offers_no_date_fills() {
     h.run_steps(3);
     assert!(h.query_by_label("Copy Cells").is_some());
     assert!(h.query_by_label("Fill Days").is_none());
+}
+
+#[test]
+/// The preview follows the source direction and agrees with the values committed on release.
+fn fill_handle_shows_numeric_values_while_dragging_without_committing_them() {
+    let mut h = harness(|s| {
+        s.execute("range.setValues", json!({"range": "B1", "values": [[1], [2], [3]]})).unwrap();
+        s.execute("selection.set", json!({"range": "B1:B3"})).unwrap();
+    });
+    let (start, end) = (corner(&h, "B3"), center(&h, "B6"));
+    press(&mut h, start, PointerButton::Primary);
+    move_to(&mut h, start, end);
+
+    assert_eq!(values(&h, &["B4", "B5", "B6"]), [Value::Empty, Value::Empty, Value::Empty], "previewing does not mutate the sheet");
+    let preview = h.get_by_label("4\n5\n6").accesskit_node().value().unwrap();
+
+    release(&mut h, end, PointerButton::Primary);
+    assert_eq!(values(&h, &["B4", "B5", "B6"]), [n(4.0), n(5.0), n(6.0)]);
+    let sh = h.state().session.active().unwrap().wb.active().unwrap();
+    let committed = ["B4", "B5", "B6"]
+        .map(|cell| gridcraft_engine::display::value_text(&h.state().session.active().unwrap().wb, sh, CellRef::parse(cell).unwrap()))
+        .join("\n");
+    assert_eq!(preview, committed, "the displayed preview matches the fill result");
+}
+
+/// Windows input semantics can also run on other hosts; a native Windows run is still required.
+/// Set GRIDCRAFT_FILL_PREVIEW_SCREENSHOTS to an existing directory for optional PNG evidence.
+#[test]
+fn windows_ctrl_preview_delegates_to_engine_and_matches_release() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "B1", "values": [[1], [2], [4]]})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "B2", "code": "0.00%"})).unwrap();
+    s.execute("selection.set", json!({"range": "B1:B3"})).unwrap();
+    let mut h = crate::common::harness_with(
+        crate::common::builder().with_os(egui::os::OperatingSystem::Windows).with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)),
+        crate::common::app(s),
+        4,
+    );
+    let screenshot = |h: &mut Harness, phase: &str| {
+        if let Some(dir) = std::env::var_os("GRIDCRAFT_FILL_PREVIEW_SCREENSHOTS") {
+            h.render().unwrap().save(std::path::Path::new(&dir).join(format!("2661-windows-input-{phase}.png"))).unwrap();
+        }
+    };
+    let expected = |h: &Harness, alternate| {
+        let d = h.state().session.active().unwrap();
+        let sh = d.wb.active().unwrap();
+        gridcraft_engine::fill::numeric_preview(&d.wb, sh, RangeRef::parse("B1:B3").unwrap(), RangeRef::parse("B1:B8").unwrap(), alternate)
+            .unwrap()
+            .iter()
+            .map(|p| gridcraft_engine::display::value_text_as(&d.wb, &p.value, d.wb.styles.get(sh.style_id(p.source)).num_fmt.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let (start, end) = (corner(&h, "B3"), center(&h, "B8"));
+    press(&mut h, start, PointerButton::Primary);
+    move_to(&mut h, start, end);
+    let normal = expected(&h, false);
+    assert!(h.query_by_label(normal.as_str()).is_some());
+    screenshot(&mut h, "series");
+    let ctrl = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+    h.input_mut().events.push(Event::ModifiersChanged(ctrl));
+    h.run_steps(3);
+    let alternate = expected(&h, true);
+    assert_ne!(normal, alternate);
+    assert!(h.query_by_label(alternate.as_str()).is_some());
+    assert!(h.query_by_label(normal.as_str()).is_none());
+    assert_eq!(values(&h, &["B4", "B8"]), [Value::Empty, Value::Empty]);
+    screenshot(&mut h, "ctrl");
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(3);
+    assert!(h.query_by_label(normal.as_str()).is_some(), "releasing Ctrl restores the series preview");
+    h.input_mut().events.push(Event::ModifiersChanged(ctrl));
+    h.run_steps(3);
+    let undo_before = h.state().session.active().unwrap().undo.len();
+    h.input_mut().events.push(Event::PointerButton { pos: end, button: PointerButton::Primary, pressed: false, modifiers: ctrl });
+    h.run_steps(3);
+    let d = h.state().session.active().unwrap();
+    let sh = d.wb.active().unwrap();
+    let committed = (3..8).map(|row| gridcraft_engine::display::value_text(&d.wb, sh, CellRef::new(row, 1))).collect::<Vec<_>>().join("\n");
+    assert_eq!(alternate, committed);
+    assert_eq!(d.undo.len(), undo_before + 1);
+    assert!(h.query_by_label(alternate.as_str()).is_none(), "release removes the tooltip");
+    screenshot(&mut h, "committed");
+}
+
+#[test]
+fn windows_escape_cancels_ctrl_preview_without_an_undo_step() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "B1", "input": "5"})).unwrap();
+    s.execute("selection.set", json!({"cell": "B1"})).unwrap();
+    let mut h = crate::common::os_harness(s, egui::os::OperatingSystem::Windows);
+    let (start, end) = (corner(&h, "B1"), center(&h, "B4"));
+    press(&mut h, start, PointerButton::Primary);
+    let ctrl = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+    h.input_mut().events.push(Event::ModifiersChanged(ctrl));
+    move_to(&mut h, start, end);
+    assert!(h.query_by_label("6\n7\n8").is_some());
+    let undo_before = h.state().session.active().unwrap().undo.len();
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.query_by_label("6\n7\n8").is_none());
+    release(&mut h, end, PointerButton::Primary);
+    assert_eq!(values(&h, &["B2", "B3", "B4"]), [Value::Empty, Value::Empty, Value::Empty]);
+    assert_eq!(h.state().session.active().unwrap().undo.len(), undo_before);
+    assert!(h.state().grid.fill_tag.is_none());
+    assert!(h.state().grid.fill_menu.is_none());
+}
+
+/// Escape removes the preview and cancels the fill, including the eventual pointer release.
+#[test]
+fn escape_cancels_the_numeric_fill_preview_without_committing() {
+    let mut h = harness(one_two);
+    let (start, end) = (corner(&h, "B2"), center(&h, "B5"));
+    press(&mut h, start, PointerButton::Primary);
+    move_to(&mut h, start, end);
+    assert!(h.query_by_label("3\n4\n5").is_some());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.query_by_label("3\n4\n5").is_none(), "Escape hides the cancelled preview");
+    assert_eq!(values(&h, &["B3", "B4", "B5"]), [Value::Empty, Value::Empty, Value::Empty]);
+    release(&mut h, end, PointerButton::Primary);
+    assert_eq!(values(&h, &["B3", "B4", "B5"]), [Value::Empty, Value::Empty, Value::Empty]);
+    assert!(h.state().grid.fill_tag.is_none(), "a cancelled fill has no Auto Fill Options action");
+}
+
+/// Navigation or an edit during a gesture cannot retarget the fill to a new source or sheet.
+#[test]
+fn changing_the_fill_origin_cancels_preview_and_release() {
+    for change in ["selection", "content", "sheet", "replacement"] {
+        let mut h = harness(|s| {
+            one_two(s);
+            s.execute("home.insertSheet", json!({"name": "Other", "before": 1})).unwrap();
+            s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+            s.execute("selection.set", json!({"range": "B1:B2"})).unwrap();
+        });
+        let (start, end) = (corner(&h, "B2"), center(&h, "B5"));
+        press(&mut h, start, PointerButton::Primary);
+        move_to(&mut h, start, end);
+        assert!(h.query_by_label("3\n4\n5").is_some());
+        // Exercise engine callers too: cancellation must not rely only on UI command routing.
+        let s = &mut h.state_mut().session;
+        match change {
+            "selection" => {
+                s.execute("selection.set", json!({"range": "D1:D2"})).unwrap();
+            }
+            "content" => {
+                s.execute("range.setValues", json!({"range": "B1", "values": [[10], [20]]})).unwrap();
+            }
+            "sheet" => {
+                s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+            }
+            "replacement" => {
+                s.execute("home.deleteSheet", json!({"sheet": 0})).unwrap();
+                s.execute("home.insertSheet", json!({"name": "Replacement", "before": 0})).unwrap();
+                s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let before = h.state().session.active().unwrap().wb.clone();
+        let undo_before = h.state().session.active().unwrap().undo.len();
+        h.run_steps(3);
+        assert!(matches!(h.state().grid.drag, gridcraft_ui_egui::grid::Drag::None), "{change} cancels the gesture");
+        assert!(h.query_by_label("3\n4\n5").is_none(), "{change} hides the preview");
+        release(&mut h, end, PointerButton::Primary);
+        assert_eq!(h.state().session.active().unwrap().wb.as_ref(), before.as_ref(), "{change} release cannot change either sheet");
+        assert_eq!(h.state().session.active().unwrap().undo.len(), undo_before, "{change} adds no fill undo step");
+        assert!(h.state().grid.fill_tag.is_none());
+        assert!(h.state().grid.fill_menu.is_none());
+    }
+}
+
+#[test]
+/// A horizontal fill from one numeric cell uses the target's direction to calculate the preview.
+fn one_cell_horizontal_fill_shows_a_preview() {
+    let mut h = harness(|s| {
+        s.execute("cell.set", json!({"cell": "C1", "input": "5"})).unwrap();
+        s.execute("selection.set", json!({"cell": "C1"})).unwrap();
+    });
+    let (start, end) = (corner(&h, "C1"), center(&h, "E1"));
+    press(&mut h, start, PointerButton::Primary);
+    move_to(&mut h, start, end);
+    assert!(h.query_by_label("5\n5").is_some(), "the tooltip follows the horizontal target range");
+    release(&mut h, end, PointerButton::Primary);
+    assert_eq!(values(&h, &["D1", "E1"]), [n(5.0), n(5.0)]);
+}
+
+#[test]
+/// Extrapolated numeric sequences use the same fitted endpoint as the fill engine.
+fn irregular_series_preview_matches_the_committed_values() {
+    let mut h = harness(|s| {
+        s.execute("range.setValues", json!({"range": "B1", "values": [[1], [2], [4]]})).unwrap();
+        s.execute("home.numberFormat", json!({"range": "B2", "code": "0.00%"})).unwrap();
+        s.execute("selection.set", json!({"range": "B1:B3"})).unwrap();
+    });
+    let (start, end) = (corner(&h, "B3"), center(&h, "B5"));
+    press(&mut h, start, PointerButton::Primary);
+    move_to(&mut h, start, end);
+    let preview = h.get_all_by_label_contains("\n").next().unwrap().accesskit_node().value().unwrap();
+
+    release(&mut h, end, PointerButton::Primary);
+    let document = h.state().session.active().unwrap();
+    let sheet = document.wb.active().unwrap();
+    let committed = ["B4", "B5"].map(|cell| gridcraft_engine::display::value_text(&document.wb, sheet, CellRef::parse(cell).unwrap())).join("\n");
+    assert_eq!(preview, committed);
+
+    let mut h = harness(|s| {
+        s.execute("range.setValues", json!({"range": "B3", "values": [[1], [2], [4]]})).unwrap();
+        s.execute("home.numberFormat", json!({"range": "B4", "code": "0.00%"})).unwrap();
+        s.execute("selection.set", json!({"range": "B3:B5"})).unwrap();
+    });
+    let (start, end) = (corner(&h, "B5"), center(&h, "B1"));
+    press(&mut h, start, PointerButton::Primary);
+    move_to(&mut h, start, end);
+    let preview = h.get_all_by_label_contains("\n").next().unwrap().accesskit_node().value().unwrap();
+
+    release(&mut h, end, PointerButton::Primary);
+    let document = h.state().session.active().unwrap();
+    let sheet = document.wb.active().unwrap();
+    let committed = ["B2", "B1"].map(|cell| gridcraft_engine::display::value_text(&document.wb, sheet, CellRef::parse(cell).unwrap())).join("\n");
+    assert_eq!(preview, committed, "backward fills also use each source cell's format");
 }
 
 fn formatted(s: &mut Session) {

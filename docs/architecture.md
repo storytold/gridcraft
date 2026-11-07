@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-02 · **Change:** minor (Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (bounded numeric fill previews in the engine; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -47,6 +47,10 @@ including tests, 2026-10-10.
    `#SPILL!`/cycles. Volatile functions are always dirty.
 4. **Rendering**: the egui grid reads display values (number formats applied in `engine/display.rs`)
    for the visible window only; charts render through `crates/chart` primitives.
+   Fill-handle numeric tooltips format `engine::fill::numeric_preview` results. This read-only API
+   shares direction, source order, pattern selection and value generation with AutoFill, scans at
+   most 1,000 source cells and returns at most five values. It omits protected sheets and unsupported
+   sources, including ordinary date/time series; alternate mode can copy numeric dates/times.
 5. **Files**: `engine/io.rs` sniffs content (XLSX, XLSB, ODS) before trusting the extension and
    dispatches to `crates/xlsx`; imports that lose data return warnings shown to the user.
 
@@ -236,6 +240,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | Numeric fill preview values belong to `engine::fill`; the UI only formats them. Preview and AutoFill share direction, source cycling, pattern selection and value generation |
 | 2026-11-02 | minor | Python mode in the formula bar: Python mode on the shared editor, `code_field` and its stop keys; drafts follow their sheet by `model::SheetUid` |
 | 2026-11-02 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references; edits that would push code past the limit are refused |
 | 2026-11-01 | trivial | Equations: the layout cache answers for a source over the cap by its length alone, without hashing it |
