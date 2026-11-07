@@ -112,6 +112,11 @@ pub enum Drag {
         source: RangeRef,
         before: Option<u32>,
     },
+    /// Reordering one contiguous whole-row selection by its header.
+    MoveRows {
+        source: RangeRef,
+        before: Option<u32>,
+    },
     ResizeCol {
         col: u32,
         start: f32,
