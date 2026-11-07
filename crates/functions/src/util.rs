@@ -172,9 +172,9 @@ pub(crate) fn numbers(args: &[Arg]) -> R<Vec<f64>> {
     Ok(out)
 }
 
-/// Numbers for the "A" aggregates (AVERAGEA, MAXA, STDEVA…): inside references and arrays text
-/// counts as 0 and booleans as 1/0, blanks are skipped; direct arguments coerce as in
-/// [`numbers`].
+/// Numbers for the "A" aggregates (AVERAGEA, MAXA, STDEVA…): inside references text counts as 0
+/// and booleans as 1/0; literal arrays include only numbers. Blanks are skipped, direct arguments
+/// coerce as in [`numbers`].
 pub(crate) fn numbers_a(args: &[Arg]) -> R<Vec<f64>> {
     let mut out = Vec::new();
     for a in args {
@@ -183,8 +183,8 @@ pub(crate) fn numbers_a(args: &[Arg]) -> R<Vec<f64>> {
                 for v in arr.iter() {
                     match v {
                         Value::Number(n) => out.push(*n),
-                        Value::Bool(b) => out.push(if *b { 1.0 } else { 0.0 }),
-                        Value::Text(_) => out.push(0.0),
+                        Value::Bool(b) if a.from_ref => out.push(if *b { 1.0 } else { 0.0 }),
+                        Value::Text(_) if a.from_ref => out.push(0.0),
                         Value::Error(e) => return Err(*e),
                         _ => {}
                     }
@@ -426,7 +426,8 @@ mod tests {
     fn aggregate_numbers() {
         let arr = Value::from(Array::new(1, 4, vec![Value::Number(1.0), Value::from("2"), Value::Bool(true), Value::Empty]).unwrap());
         assert_eq!(numbers(&[Arg::reference(arr.clone())]).unwrap(), vec![1.0]);
-        assert_eq!(numbers_a(&[Arg::reference(arr)]).unwrap(), vec![1.0, 0.0, 1.0]);
+        assert_eq!(numbers_a(&[Arg::reference(arr.clone())]).unwrap(), vec![1.0, 0.0, 1.0]);
+        assert_eq!(numbers_a(&[Arg::val(arr)]).unwrap(), vec![1.0]);
         assert_eq!(numbers(&[Arg::val("3"), Arg::val(true)]).unwrap(), vec![3.0, 1.0]);
         assert_eq!(numbers(&[Arg::val("x")]), Err(CellError::Value));
         assert_eq!(numbers(&[Arg::reference("x")]).unwrap(), Vec::<f64>::new());

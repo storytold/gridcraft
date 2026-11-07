@@ -576,16 +576,26 @@ fn lookups_compare_numbers_exactly() {
 #[test]
 fn lambda_helpers_check_shapes_and_parameters() {
     let mut t = T::new();
+    t.set("A1", "=TRUE");
+    t.set("B1", "2");
+    t.set("C1", "=BYROW(A1:B1,LAMBDA(r,AVERAGEA(r)))");
+    assert_eq!(t.num("C1"), 1.5);
+    t.set("A2", "=TRUE");
+    t.set("A3", "2");
+    t.set("C2", "=BYCOL(A2:A3,LAMBDA(c,AVERAGEA(c)))");
+    assert_eq!(t.num("C2"), 1.5);
+    t.set("C3", "=BYROW({TRUE,2},LAMBDA(r,AVERAGEA(r)))");
+    assert_eq!(t.num("C3"), 2.0);
     let calc = Value::Error(CellError::Calc);
     // A LAMBDA returning several values can't fill one cell: the whole result is #CALC!.
-    t.set("A1", "=MAP({1,2},LAMBDA(x,{1,2}))");
-    assert_eq!((t.get("A1"), t.get("B1")), (calc.clone(), Value::Empty));
-    t.set("A2", "=BYROW({1,2;3,4},LAMBDA(r,r))");
-    assert_eq!((t.get("A2"), t.get("A3")), (calc.clone(), Value::Empty));
-    t.set("A4", "=MAKEARRAY(1,2,LAMBDA(r,c,{1,2}))");
-    assert_eq!(t.get("A4"), calc.clone());
-    t.set("D1", "=SCAN(0,{1,2},LAMBDA(a,b,{1,2}))");
-    assert_eq!((t.get("D1"), t.get("E1")), (calc, Value::Empty));
+    t.set("D8", "=MAP({1,2},LAMBDA(x,{1,2}))");
+    assert_eq!((t.get("D8"), t.get("E8")), (calc.clone(), Value::Empty));
+    t.set("D9", "=BYROW({1,2;3,4},LAMBDA(r,r))");
+    assert_eq!((t.get("D9"), t.get("D10")), (calc.clone(), Value::Empty));
+    t.set("D11", "=MAKEARRAY(1,2,LAMBDA(r,c,{1,2}))");
+    assert_eq!(t.get("D11"), calc.clone());
+    t.set("D12", "=SCAN(0,{1,2},LAMBDA(a,b,{1,2}))");
+    assert_eq!((t.get("D12"), t.get("E12")), (calc, Value::Empty));
     // One parameter per array (MAP) or exactly one (BYROW/BYCOL).
     t.set("A5", "=MAP({1,2},LAMBDA(x,y,x))");
     assert_eq!(t.get("A5"), Value::Error(CellError::Value));
