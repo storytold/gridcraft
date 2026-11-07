@@ -89,6 +89,24 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
     Ok(Some(Cell { value: parsed.value, formula: None, style, py: None }))
 }
 
+/// File › Options › Editing › Automatically insert a decimal point (`options.fixedDecimal`), for
+/// `input` typed into cell `at` of `sheet`: the entry with its decimal point
+/// ([`gridcraft_core::parse::fixed_decimal`]), or `None` to enter it as typed. The cell editor and
+/// the formula bar ask before they commit; `cell.set`, paste, fill and the other commands enter
+/// what they're given. A cell formatted as Text keeps the digits typed, and so does one formatted
+/// as a percentage, where automatic percent entry already reads a whole number (3 → 3%).
+pub fn fixed_decimal_entry(prefs: &crate::Prefs, wb: &gridcraft_model::Workbook, sheet: usize, at: CellRef, input: &str) -> Option<String> {
+    if !prefs.fixed_decimal {
+        return None;
+    }
+    let style = wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
+    let code = wb.styles.get(style).num_fmt.as_str();
+    if code == "@" || code.ends_with('%') {
+        return None;
+    }
+    gridcraft_core::parse::fixed_decimal(input, prefs.fixed_decimal_places)
+}
+
 /// Parses a formula as it is typed (without the `=`). Excel closes missing parentheses for you,
 /// and refuses a formula that still doesn't parse.
 pub(crate) fn parse_typed_formula(body: &str) -> Result<gridcraft_formula::Expr> {

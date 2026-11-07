@@ -19,6 +19,7 @@ mod go_to;
 mod paste_special;
 mod selection;
 
+pub use cell::fixed_decimal_entry;
 use cell::{cell_set, range_fill, range_set_values};
 pub(crate) use cell::{check_arg_counts, input_to_cell, is_formula_input, json_to_input, parse_typed_formula};
 #[cfg(test)]

@@ -28,6 +28,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "window.activate", "Switch Window", ["Window"], None, "{window} | {doc} | {index} (a window id, a workbook id, or the workbook's position in the list)", has_doc, activate_window),
         cmd!(noundo "window.close", "Close Window", ["Window"], None, "{window?, doc?, force?: bool} → {closed, document}: closes a window (the active one by default); its workbook closes with its last window, asking first when it has unsaved changes unless `force`", has_doc, close_window),
         cmd!(query "window.list", "Windows", ["Window"], None, "{} → [{window, doc, index, title, dirty, active, hidden}]", always, |s, _| Ok(s.window_list())),
+        cmd!(
+            query "options.fixedDecimal",
+            "Automatically insert a decimal point",
+            [],
+            None,
+            "{on?: bool, places?: -100..100 (2)} → {on, places}: while it is on, a whole number typed in a cell or the formula bar gets a decimal point `places` digits from its right (2: 2834 → 28.34), or `-places` zeros for negative places (-2: 2834 → 283400); cell.set, paste and fill enter what they're given. A preference kept in prefs.json, not in a workbook; {} only reports it",
+            always,
+            fixed_decimal
+        ),
     ]
 }
 
@@ -267,4 +276,48 @@ fn close_window(s: &mut Session, p: &Json) -> Result<Json> {
     }
     s.close_window(id);
     Ok(json!({"closed": true, "document": true}))
+}
+
+/// Places of "Automatically insert a decimal point" until another number is chosen, as in Excel.
+pub const DEFAULT_FIXED_DECIMAL_PLACES: i32 = 2;
+
+/// File › Options › Editing › Automatically insert a decimal point, and its Places: a preference of
+/// the app, kept in prefs.json, that the cell editor and the formula bar apply to the whole numbers
+/// typed into them ([`super::edit::fixed_decimal_entry`]); no workbook changes. Both values
+/// are checked before either is kept: a refused call changes nothing.
+fn fixed_decimal(s: &mut Session, p: &Json) -> Result<Json> {
+    const ID: &str = "options.fixedDecimal";
+    let given = |key: &str| p.get(key).filter(|v| !v.is_null());
+    let on = match given("on") {
+        Some(v) => Some(v.as_bool().ok_or_else(|| bad(ID, "`on` must be true or false"))?),
+        None => None,
+    };
+    let places = match given("places") {
+        Some(v) => Some(places_value(v).ok_or_else(|| {
+            let max = gridcraft_core::parse::MAX_FIXED_DECIMAL_PLACES;
+            bad(ID, format!("`places` must be a whole number from -{max} to {max}"))
+        })?),
+        None => None,
+    };
+    if let Some(on) = on {
+        s.prefs.fixed_decimal = on;
+    }
+    if let Some(places) = places {
+        s.prefs.fixed_decimal_places = places;
+    }
+    Ok(json!({"on": s.prefs.fixed_decimal, "places": s.prefs.fixed_decimal_places}))
+}
+
+/// A number of places as JSON gives it (`2` or `2.0`): a whole number within
+/// ±[`gridcraft_core::parse::MAX_FIXED_DECIMAL_PLACES`].
+fn places_value(v: &Json) -> Option<i32> {
+    let max = f64::from(gridcraft_core::parse::MAX_FIXED_DECIMAL_PLACES);
+    v.as_f64().filter(|n| n.fract() == 0.0 && n.abs() <= max).map(|n| n as i32)
+}
+
+/// Reads the places of prefs.json leniently: a value the command would refuse (edited by hand)
+/// gives [`DEFAULT_FIXED_DECIMAL_PLACES`], and loses only itself, never the other preferences.
+pub(crate) fn lenient_places<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<i32, D::Error> {
+    let raw = <Json as serde::Deserialize>::deserialize(d)?;
+    Ok(places_value(&raw).unwrap_or(DEFAULT_FIXED_DECIMAL_PLACES))
 }

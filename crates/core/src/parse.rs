@@ -62,6 +62,68 @@ pub fn number_stored_as_text(s: &str) -> Option<f64> {
     }
 }
 
+/// The most places [`fixed_decimal`] moves a decimal point, either way.
+pub const MAX_FIXED_DECIMAL_PLACES: i32 = 100;
+
+/// Excel's "Automatically insert a decimal point" for a typed entry: `text` with a decimal point
+/// `places` digits from the right of its digits (2: `2834` → `28.34`, `-25` → `-0.25`), or with
+/// `-places` zeros added for negative places (−2: `2834` → `283400`), as text [`parse_input`] then
+/// reads, so the number is the one typing it would give (28.34, not 2834 / 100).
+///
+/// Only a whole number qualifies: ASCII digits after an optional sign, with thousands separators
+/// in groups of three (`1,234` → `12.34`; the separators are dropped). Anything else is entered as
+/// typed (`None`): a decimal point, exponent, percent or currency sign, parentheses, a date, time
+/// or fraction, text. So are 0 places, places beyond ±[`MAX_FIXED_DECIMAL_PLACES`], and a number
+/// too large to be finite.
+pub fn fixed_decimal(text: &str, places: i32) -> Option<String> {
+    if places == 0 || places.unsigned_abs() > MAX_FIXED_DECIMAL_PLACES.unsigned_abs() {
+        return None;
+    }
+    let t = text.trim();
+    let (neg, body) = match t.strip_prefix('-') {
+        Some(r) => (true, r.trim_start()),
+        None => (false, t.strip_prefix('+').map_or(t, str::trim_start)),
+    };
+    let digits = whole_digits(body)?;
+    let shift = places.unsigned_abs() as usize;
+    let mut out = String::with_capacity(digits.len() + shift + 3);
+    if neg {
+        out.push('-');
+    }
+    if places > 0 {
+        let split = digits.len().saturating_sub(shift);
+        let (int, frac) = (digits.get(..split)?, digits.get(split..)?);
+        out.push_str(if int.is_empty() { "0" } else { int });
+        out.push('.');
+        out.push_str(&"0".repeat(shift.saturating_sub(frac.len())));
+        out.push_str(frac);
+    } else {
+        out.push_str(&digits);
+        out.push_str(&"0".repeat(shift));
+    }
+    out.parse::<f64>().ok().filter(|n| n.is_finite())?;
+    Some(out)
+}
+
+/// The digits of a whole number written with or without thousands separators (`1,234,567`), as
+/// [`parse_plain`] groups them: with a separator, the first group has one to three digits and every
+/// other group three.
+fn whole_digits(s: &str) -> Option<String> {
+    let mut digits = String::with_capacity(s.len());
+    for (i, group) in s.split(',').enumerate() {
+        let size_ok = match i {
+            0 if s.contains(',') => (1..=3).contains(&group.len()),
+            0 => !group.is_empty(),
+            _ => group.len() == 3,
+        };
+        if !size_ok || !group.bytes().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        digits.push_str(group);
+    }
+    Some(digits)
+}
+
 fn parse_numeric(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>)> {
     // Parenthesised negatives: (100) = -100, and the accounting forms `$(100)` and `(5)%`.
     if let Some(inner) = parenthesized(t) {
@@ -631,6 +693,47 @@ mod tests {
         // Dates, times, fractions, words and blanks are not flagged.
         for text in ["3/4/2026", "10:30", "1 1/2", "abc", "12abc", "", "  ", "TRUE", "#N/A", "((1))", "(-5)", "$(5)%", "(1/2)"] {
             assert_eq!(number_stored_as_text(text), None, "{text}");
+        }
+    }
+
+    /// "Automatically insert a decimal point" (#3540): the digits move, then the entry is read.
+    #[test]
+    fn fixed_decimal_moves_the_point_of_a_whole_number() {
+        let n = |text: &str, places: i32| fixed_decimal(text, places).map(|t| p(&t).value);
+        assert_eq!(fixed_decimal("2834", 2).as_deref(), Some("28.34"));
+        assert_eq!(n("2834", 2), Some(Value::Number(28.34)), "exactly 28.34, as typing 28.34 gives it");
+        assert_eq!(n("2834", -2), Some(Value::Number(283400.0)));
+        assert_eq!(fixed_decimal("2834", 0), None, "0 places: as typed");
+        assert_eq!(n("-25", 2), Some(Value::Number(-0.25)));
+        assert_eq!(n("+7", 1), Some(Value::Number(0.7)));
+        assert_eq!(n("5", 3), Some(Value::Number(0.005)));
+        assert_eq!(n("0012", 2), Some(Value::Number(0.12)));
+        assert_eq!(n(" 1,234 ", 2), Some(Value::Number(12.34)), "thousands separators are dropped");
+        assert_eq!(n("1,234,567", 2), Some(Value::Number(12345.67)));
+        assert_eq!(n("-1,234", -1), Some(Value::Number(-12340.0)));
+        assert_eq!(p(&fixed_decimal("1,234", 2).unwrap_or_default()).format, None, "no thousands format for the moved number");
+        // Anything but a whole number is entered as typed. "1,5" (a decimal comma) isn't one in
+        // this syntax: an interface with a decimal comma has made it "1.5" before.
+        for text in [
+            "1.5", "15.", ".5", "1,5", "1,23", "1234,567", ",123", "1,,234", "5%", "$5", "5$", "1e3", "1E3", "(5)", "=A1", "+A1", "-A1", "abc",
+            "1/2", "1 1/2", "3/4/2026", "10:30", "", " ", "-", "+", "--5", "+-5", "'5", "TRUE", "#N/A", "1 234", "١٢", "５",
+        ] {
+            assert_eq!(fixed_decimal(text, 2), None, "{text}");
+            assert_eq!(fixed_decimal(text, -2), None, "{text}");
+        }
+        // Huge digit strings give a finite number or stay as typed.
+        let big = "9".repeat(400);
+        assert_eq!(fixed_decimal(&big, 2), None);
+        assert_eq!(fixed_decimal(&big, -2), None);
+        assert!(matches!(n(&big, 100), Some(Value::Number(x)) if x.is_finite() && x > 9.9e299));
+        let largest = "9".repeat(308);
+        assert!(matches!(n(&largest, 2), Some(Value::Number(x)) if x.is_finite()));
+        assert_eq!(fixed_decimal(&largest, -1), None, "about 1e309 isn't finite");
+        // Places within ±100.
+        assert_eq!(n("5", 100), Some(Value::Number(5e-100)));
+        assert_eq!(n("5", -100), Some(Value::Number(5e100)));
+        for places in [101, -101, i32::MAX, i32::MIN] {
+            assert_eq!(fixed_decimal("5", places), None, "{places}");
         }
     }
 }
