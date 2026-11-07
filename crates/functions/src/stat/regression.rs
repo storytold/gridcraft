@@ -130,8 +130,9 @@ fn norm2(v: &[f64]) -> f64 {
     m * v.iter().map(|x| (x / m) * (x / m)).sum::<f64>().sqrt()
 }
 
-/// Relative size below which a centred column is taken to be rounding error (about 4500 ulps).
-const NOISE: f64 = 1e-12;
+/// A column whose values differ by no more than this many ulps of its largest magnitude is
+/// taken to be constant: the differences are rounding in how it was computed, not data.
+const CONSTANT_ULPS: f64 = 64.0;
 
 /// Result of [`qr_solve`]: the least-squares solution on the kept columns, in the caller's
 /// column scale, and what the standard errors need.
@@ -152,10 +153,12 @@ struct QrFit {
 /// pivot of the earlier normal-equation solver, on squares) is collinear: it is dropped, with
 /// coefficient and standard error 0, as Excel does.
 ///
-/// `raw_len[j]` is the length of column `j` before centring. A centred column shorter than
-/// [`NOISE`] of that is rounding residue of a constant column (`[0.1; 3]` centres to about
-/// -1.4e-17, not 0): collinear with the intercept, so dropped, not scaled up to unit length.
-fn qr_solve(mut cols: Vec<Vec<f64>>, mut y: Vec<f64>, xm: &[f64], raw_len: &[f64]) -> QrFit {
+/// `constant[j]` says column `j` was constant before centring. Centring it leaves rounding
+/// residue, not 0 (`[0.1; 3]` centres to about -1.4e-17): it is collinear with the intercept, so
+/// it is dropped instead of being scaled up to unit length. Whether a column is constant is
+/// decided on its raw values, not by comparing the centred length with the offset: a predictor
+/// like `[1e13, 1e13 + 1, 1e13 + 2]` is far smaller than its offset and still varies.
+fn qr_solve(mut cols: Vec<Vec<f64>>, mut y: Vec<f64>, xm: &[f64], constant: &[bool]) -> QrFit {
     let n = y.len();
     let k = cols.len();
     let mut scale = vec![1.0; k];
@@ -166,8 +169,7 @@ fn qr_solve(mut cols: Vec<Vec<f64>>, mut y: Vec<f64>, xm: &[f64], raw_len: &[f64
     let mut kept: Vec<usize> = Vec::new();
     for (j, col) in cols.iter_mut().enumerate() {
         let len = norm2(col);
-        let raw = raw_len.get(j).copied().unwrap_or(len);
-        if !(len > 1e-300 && len.is_finite() && len > NOISE * raw) {
+        if constant.get(j).copied().unwrap_or(false) || !(len > 1e-300 && len.is_finite()) {
             dropped[j] = true;
             continue;
         }
@@ -273,8 +275,15 @@ fn regress(y: &[f64], x: &[Vec<f64>], k: usize, constant: bool) -> R<Fit> {
         (0..k).map(|j| x.iter().map(|r| r.get(j).copied().unwrap_or(0.0) - xm.get(j).copied().unwrap_or(0.0)).collect()).collect();
     let yc: Vec<f64> = y.iter().map(|v| v - ym).collect();
     let sstot: f64 = if constant { yc.iter().map(|v| v * v).sum() } else { y.iter().map(|v| v * v).sum() };
-    let raw_len: Vec<f64> = (0..k).map(|j| norm2(&x.iter().map(|r| r.get(j).copied().unwrap_or(0.0)).collect::<Vec<_>>())).collect();
-    let QrFit { coef, dropped, ssresid, diag, quad } = qr_solve(cols, yc, &xm, &raw_len);
+    // Only centring leaves rounding residue behind; without an intercept a constant column is data.
+    let constant_cols: Vec<bool> = (0..k)
+        .map(|j| {
+            let col = x.iter().map(|r| r.get(j).copied().unwrap_or(0.0));
+            let (lo, hi, big) = col.fold((f64::INFINITY, f64::NEG_INFINITY, 0.0f64), |(lo, hi, big), v| (lo.min(v), hi.max(v), big.max(v.abs())));
+            constant && hi - lo <= CONSTANT_ULPS * f64::EPSILON * big
+        })
+        .collect();
+    let QrFit { coef, dropped, ssresid, diag, quad } = qr_solve(cols, yc, &xm, &constant_cols);
     let b = if constant { ym - coef.iter().zip(&xm).map(|(c, m)| c * m).sum::<f64>() } else { 0.0 };
     let used = dropped.iter().filter(|d| !**d).count() + usize::from(constant);
     let df = nf - used as f64;

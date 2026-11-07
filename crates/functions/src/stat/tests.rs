@@ -456,6 +456,10 @@ fn linest_drops_collinear_columns() {
     let r = linest_rows(&y, &[off], true);
     rel_close(r[0][0], 0.6, 1e-6, "slope on an offset column");
     assert_eq!(r[3][1], Some(3.0));
+    // Distinct values far from zero, whose spread is below 1e-12 of the offset, still vary.
+    let r = linest_rows(&[0.0, 1.0, 2.0], &[vec![1e13, 1e13 + 1.0, 1e13 + 2.0]], true);
+    rel_close(r[0][0], 1.0, 1e-9, "slope on a predictor with a 1e13 offset");
+    assert_eq!(r[3][1], Some(1.0), "df: the predictor is kept");
     // More predictors than observations: the surplus columns drop, no panic.
     let r = linest_rows(&[1.0, 2.0], &[vec![1.0, 2.0], vec![2.0, 1.0], vec![0.0, 5.0]], true);
     assert_eq!(r[0].len(), 4);
