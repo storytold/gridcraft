@@ -146,7 +146,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
             use gridcraft_engine::model::{BorderLine, BorderStyle};
             let line = BorderLine { style: BorderStyle::Thin, color: gridcraft_engine::model::Color::Auto };
             ui.horizontal(|ui| {
-                if ui.button(lang.tr("None")).clicked() {
+                if ui.button(lang.tr("Borders|None")).clicked() {
                     st.borders = Default::default();
                 }
                 if ui.button(lang.tr("Outline")).clicked() {
