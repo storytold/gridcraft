@@ -52,7 +52,29 @@ pub struct HfEdit {
     caret: usize,
     set_caret: Option<usize>,
     prev_tab: String,
+    /// Pictures chosen with Header & Footer › Picture, per section, written with the text when
+    /// the edit is committed (#1257).
+    pending: [Option<PendingPicture>; 3],
+    /// The browser picture picker's answer, while it is open.
+    picture_inbox: Option<crate::Inbox>,
 }
+
+/// A picture chosen for a header or footer section, not written yet.
+#[derive(Clone, Debug)]
+pub enum PendingPicture {
+    /// A file on this computer (the engine reads it).
+    Path(String),
+    /// Bytes from the browser's picker, and the file's name.
+    Bytes { name: String, data: Vec<u8> },
+}
+
+/// A section's name in command parameters.
+fn section_name(k: usize) -> &'static str {
+    ["left", "center", "right"].get(k).copied().unwrap_or("center")
+}
+
+/// The field a picture shows as while its section is edited.
+const PICTURE_FIELD: &str = "&[Picture]";
 
 /// Rulers measure in inches for English, centimetres otherwise.
 fn metric(app: &SheetApp) -> bool {
@@ -242,6 +264,8 @@ pub(crate) fn paint_headers_footers(app: &SheetApp, ui: &egui::Ui, p: &Painter, 
     });
     let needs_text = sh.print.has_header_footer();
     let (date, time) = if needs_text { print::hf_date_time(wb) } else { Default::default() };
+    // Pictures (`&G`) the sheet keeps from its file, drawn as on paper (#1257).
+    let pictures = if needs_text { print::hf_pictures(sh) } else { &[] };
     for (i, j) in pages_iter(geo, &pg) {
         let page = screen_rect(geo, pg.page_rect(i, j));
         if !page.intersects(geo.cells) {
@@ -280,6 +304,12 @@ pub(crate) fn paint_headers_footers(app: &SheetApp, ui: &egui::Ui, p: &Painter, 
             let (_, py, _, h) = pg.page_rect(i, j);
             let [_, _, _, _, hm, fm] = pg.margins;
             for (k, sec) in secs.iter().enumerate() {
+                let picture = sec.picture.and_then(|_| pictures.iter().find(|q| q.is_at(kind, footer, k)));
+                if let Some(pic) = picture {
+                    let edge = if footer { screen(geo, 0.0, py + h - fm).y } else { screen(geo, 0.0, py + hm).y };
+                    paint_picture_section(&p, geo, &pg, d.uid, (rects[k], k, footer, edge), sec, pic);
+                    continue;
+                }
                 if sec.text.trim().is_empty() {
                     continue;
                 }
@@ -299,6 +329,57 @@ pub(crate) fn paint_headers_footers(app: &SheetApp, ui: &egui::Ui, p: &Painter, 
                 }
             }
         }
+    }
+}
+
+/// Draws a header or footer section that holds a picture, laid out as printing lays it out
+/// (`print::section_lines`): the picture inline where its `&G` is, the text of its line on its
+/// bottom, a header growing down from the header margin and a footer up from the footer margin.
+/// A picture that can't be decoded takes no room, as on paper.
+fn paint_picture_section(
+    p: &Painter,
+    geo: &Geo,
+    pg: &PageGrid,
+    doc: u64,
+    (r, k, footer, edge): (Rect, usize, bool, f32),
+    sec: &print::HfSection,
+    pic: &print::HfPicture,
+) {
+    let font = hf_font(geo, pg, sec.size, sec.bold);
+    let line_h = font.size * 1.2;
+    // Points → layout units (sheet pixels at the print scale) → screen.
+    let to_screen = |pt: f32| pt * 96.0 / 72.0 * pg.hf_text_k * geo.z;
+    let size = vec2(to_screen(pic.width), to_screen(pic.height));
+    let texture = (size.x.is_finite() && size.y.is_finite() && size.x >= 0.5 && size.y >= 0.5)
+        .then(|| crate::floating_pictures::header_footer_texture(p.ctx(), doc, &pic.data, Rect::from_min_size(Pos2::ZERO, size)))
+        .flatten();
+    let lines = print::section_lines(sec, texture.is_some());
+    let height = |ln: &print::HfLine| if ln.picture { line_h.max(size.y) } else { line_h };
+    let total: f32 = lines.iter().map(height).sum();
+    let mut top = if footer { edge - total } else { edge };
+    for ln in &lines {
+        let lh = height(ln);
+        let before = p.layout_no_wrap(ln.before.clone(), font.clone(), Color32::BLACK);
+        let after = p.layout_no_wrap(ln.after.clone(), font.clone(), Color32::BLACK);
+        let pic_w = if ln.picture { size.x } else { 0.0 };
+        let width = before.size().x + pic_w + after.size().x;
+        let x = match k {
+            0 => r.left(),
+            1 => r.center().x - width / 2.0,
+            _ => r.right() - width,
+        };
+        // Text sits on the bottom of a picture's line, and at the top of a line of its own.
+        let text_y = if ln.picture { top + lh - before.size().y.max(after.size().y) } else { top };
+        let after_x = x + before.size().x + pic_w;
+        if ln.picture
+            && let Some(tex) = &texture
+        {
+            let at = Rect::from_min_size(pos2(x + before.size().x, top + lh - size.y), size);
+            p.image(tex.id(), at, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
+        p.galley(pos2(x, text_y), before, Color32::BLACK);
+        p.galley(pos2(after_x, text_y), after, Color32::BLACK);
+        top += lh;
     }
 }
 
@@ -414,6 +495,8 @@ pub fn begin(app: &mut SheetApp, sheet: usize, sh: &Sheet, page: (usize, usize),
         caret,
         set_caret: Some(caret),
         prev_tab,
+        pending: Default::default(),
+        picture_inbox: None,
     });
     app.ui.ribbon_tab = TAB.to_string();
     app.ui.ribbon_collapsed = false;
@@ -425,12 +508,98 @@ pub fn commit(app: &mut SheetApp) {
     if app.ui.ribbon_tab == TAB {
         app.ui.ribbon_tab = e.prev_tab.clone();
     }
-    if e.texts == e.original {
+    // Pictures chosen for sections that still show their field.
+    let pictures: Vec<(usize, &PendingPicture)> = e
+        .pending
+        .iter()
+        .enumerate()
+        .filter_map(|(k, p)| Some((k, p.as_ref()?)))
+        .filter(|(k, _)| e.texts.get(*k).is_some_and(|t| t.contains(PICTURE_FIELD)))
+        .collect();
+    if e.texts == e.original && pictures.is_empty() {
         return;
     }
     let spec = print::join_header_footer(&e.texts.clone().map(|s| print::fields_to_codes(&s)));
-    let key = hf_key(e.kind, e.footer);
-    app.run_or_alert("pageLayout.headerFooter", json!({"sheet": e.sheet, key: spec}));
+    let Some(((first, src), rest)) = pictures.split_first() else {
+        let key = hf_key(e.kind, e.footer);
+        app.run_or_alert("pageLayout.headerFooter", json!({"sheet": e.sheet, key: spec}));
+        return;
+    };
+    // The text and the first picture are one undo step; another section's picture, chosen in
+    // the same edit, is one more each.
+    let params = |k: usize, src: &PendingPicture| {
+        let mut p = json!({
+            "sheet": e.sheet,
+            "page": e.kind.id(),
+            "part": if e.footer { "footer" } else { "header" },
+            "section": section_name(k),
+        });
+        match src {
+            PendingPicture::Path(path) => p["path"] = json!(path),
+            PendingPicture::Bytes { name, data } => {
+                p["base64"] = json!(gridcraft_engine::io::base64_encode(data));
+                p["title"] = json!(std::path::Path::new(name).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or(""));
+            }
+        }
+        p
+    };
+    let mut first_params = params(*first, src);
+    first_params["spec"] = json!(spec);
+    app.run_or_alert("pageLayout.headerFooterPicture", first_params);
+    for (k, src) in rest {
+        app.run_or_alert("pageLayout.headerFooterPicture", params(*k, src));
+    }
+}
+
+/// Header & Footer › Picture: chooses a picture for the section being edited. It shows as
+/// `&[Picture]` at the caret (once per section) and is written when the edit is committed.
+pub fn pick_picture(app: &mut SheetApp) {
+    if app.grid.hf_edit.is_none() {
+        return;
+    }
+    if let Some(start) = &app.services.pick_picture_async {
+        let inbox = crate::Inbox::default();
+        start(inbox.clone());
+        if let Some(e) = app.grid.hf_edit.as_mut() {
+            e.picture_inbox = Some(inbox);
+        }
+        return;
+    }
+    let Some(path) = app.services.pick_picture.as_ref().and_then(|pick| pick()) else { return };
+    if let Some(e) = app.grid.hf_edit.as_mut() {
+        choose_picture(e, PendingPicture::Path(path));
+    }
+}
+
+/// Takes `picture` for the section being edited, putting its field at the caret unless the
+/// section shows it already (a section has one picture: a new one replaces it).
+fn choose_picture(e: &mut HfEdit, picture: PendingPicture) {
+    if let Some(slot) = e.pending.get_mut(e.section) {
+        *slot = Some(picture);
+    }
+    if e.texts.get(e.section).is_some_and(|t| t.contains(PICTURE_FIELD)) {
+        e.request_focus = true;
+    } else {
+        add_field(e, PICTURE_FIELD);
+    }
+}
+
+/// Whether the section being edited has a picture in the workbook (Format Picture applies).
+pub fn editing_has_picture(app: &SheetApp) -> bool {
+    let Some(e) = app.grid.hf_edit.as_ref() else { return false };
+    app.session.active().and_then(|d| d.wb.sheet(e.sheet)).is_some_and(|sh| sh.print.hf_pictures.iter().any(|q| q.is_at(e.kind, e.footer, e.section)))
+}
+
+/// Header & Footer › Format Picture: the size of the section's picture.
+pub fn format_picture(app: &mut SheetApp) {
+    let Some(e) = app.grid.hf_edit.as_ref() else { return };
+    let params = json!({
+        "sheet": e.sheet,
+        "page": e.kind.id(),
+        "part": if e.footer { "footer" } else { "header" },
+        "section": section_name(e.section),
+    });
+    app.open_dialog("hfPictureFormat", params);
 }
 
 /// Ends editing without writing.
@@ -444,7 +613,13 @@ pub fn cancel(app: &mut SheetApp) {
 
 /// Inserts a field (`&[Page]`…) at the caret of the section being edited.
 pub fn insert_field(app: &mut SheetApp, field: &str) {
-    let Some(e) = app.grid.hf_edit.as_mut() else { return };
+    if let Some(e) = app.grid.hf_edit.as_mut() {
+        add_field(e, field);
+    }
+}
+
+/// Inserts `field` at the caret of the section being edited.
+fn add_field(e: &mut HfEdit, field: &str) {
     let Some(text) = e.texts.get_mut(e.section) else { return };
     let at = text.char_indices().nth(e.caret).map_or(text.len(), |(b, _)| b);
     text.insert_str(at, field);
@@ -468,6 +643,16 @@ pub fn go_to(app: &mut SheetApp, footer: bool) {
 /// Edits a header/footer section across left/center/right, cancels on Esc, switches sections and preserves focus/caret while the page scrolls.
 fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
     let Some(mut e) = app.grid.hf_edit.take() else { return };
+    // A picture the browser's picker brought (Header & Footer › Picture).
+    let arrived = e.picture_inbox.as_ref().and_then(|inbox| inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop());
+    if let Some((name, data)) = arrived {
+        e.picture_inbox = None;
+        if data.len() > 16 * 1024 * 1024 {
+            app.message = Some(("GridCraft".into(), "Choose a picture no larger than 16 MB.".into()));
+        } else {
+            choose_picture(&mut e, PendingPicture::Bytes { name, data });
+        }
+    }
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape)) {
         app.grid.hf_edit = Some(e);
         cancel(app);
@@ -914,6 +1099,22 @@ pub fn ribbon_tab(app: &mut SheetApp, ui: &mut egui::Ui) {
         if big_button(ui, icon, label, tip, false).clicked() {
             insert_field(app, field);
         }
+    }
+    // A sheet that keeps its file's header/footer drawing (one GridCraft couldn't model) can't
+    // take new pictures: `pageLayout.headerFooterPicture` would refuse them.
+    let kept_drawing = app
+        .session
+        .active()
+        .and_then(|d| d.wb.sheet(app.grid.hf_edit.as_ref().map_or(0, |e| e.sheet)))
+        .and_then(|s| s.preserved.as_deref())
+        .is_some_and(|k| k.elements.iter().any(|e| e.slot == "legacyDrawingHF"));
+    let can_pick = (app.services.pick_picture.is_some() || app.services.pick_picture_async.is_some()) && !kept_drawing;
+    if ui.add_enabled_ui(can_pick, |ui| big_button(ui, Icon::Picture, "Picture", "Picture", false)).inner.clicked() {
+        pick_picture(app);
+    }
+    let has_picture = editing_has_picture(app);
+    if ui.add_enabled_ui(has_picture, |ui| big_button(ui, Icon::Format, "Format\nPicture", "Format Picture", false)).inner.clicked() {
+        format_picture(app);
     }
     sep(ui);
     if big_button(ui, Icon::Header, "Go to\nHeader", "Go to Header", false).clicked() && footer {

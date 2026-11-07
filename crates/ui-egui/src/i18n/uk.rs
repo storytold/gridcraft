@@ -1008,6 +1008,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Показати",
         "Collapse dialog" => "Згорнути діалогове вікно",
         "Expand dialog" => "Розгорнути діалогове вікно",
+
+        "Picture" => "Зображення",
+        "Format\nPicture" => "Формат\nзображення",
+        "Format Picture" => "Формат зображення",
+        "Height:" => "Висота:",
+        "Width:" => "Ширина:",
+        "Lock aspect ratio" => "Зберігати пропорції",
         _ => return None,
     })
 }

@@ -385,3 +385,237 @@ fn header_distance_cannot_be_dragged_past_the_top_margin() {
     assert!((after[4] - start[2]).abs() < 0.011, "header {} should stop at the top margin {}", after[4], start[2]);
     assert_eq!(after[2], start[2]);
 }
+
+// ---------------------------------------------------------------- header/footer pictures (#1257)
+
+/// A `w` × `h` PNG of one colour.
+fn png(w: u32, h: u32) -> Vec<u8> {
+    let img = image::RgbaImage::from_pixel(w, h, image::Rgba([20, 90, 160, 255]));
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+    out.into_inner()
+}
+
+/// A Page Layout view of a sheet with `header` and header/footer pictures, one per
+/// `(shape id, style, image)` (only left/centre/right header and footer ids are used here).
+fn picture_fixture(header: &str, shapes: &[(&str, &str, Vec<u8>)]) -> Harness {
+    let mut session = Session::new();
+    session.new_workbook();
+    for r in 1..=60 {
+        session.execute("cell.set", json!({"cell": format!("A{r}"), "input": r.to_string()})).unwrap();
+    }
+    session.execute("pageLayout.headerFooter", json!({"header": header})).unwrap();
+    let pics = shapes
+        .iter()
+        .map(|(id, style, data)| {
+            let size = |k: &str| style.split(';').find_map(|d| d.strip_prefix(k)).and_then(|v| v.trim_end_matches("pt").parse().ok()).unwrap();
+            gridcraft_engine::model::HfPicture {
+                page: gridcraft_engine::model::HfPage::Odd,
+                footer: id.as_bytes()[1] == b'F',
+                section: match id.as_bytes()[0] {
+                    b'L' => 0,
+                    b'C' => 1,
+                    _ => 2,
+                },
+                width: size("width:"),
+                height: size("height:"),
+                data: std::sync::Arc::new(data.clone()),
+                mime: "image/png".into(),
+                title: String::new(),
+                adjust: vec![],
+            }
+        })
+        .collect();
+    let d = session.doc_mut().unwrap();
+    std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap().print.hf_pictures = pics;
+    session.execute("view.pageLayout", json!({})).unwrap();
+    crate::common::harness_with(
+        crate::common::builder().with_size(vec2(1200.0, 900.0)).with_step_dt(1.0 / 60.0).with_os(egui::os::OperatingSystem::Mac),
+        crate::common::app(session),
+        4,
+    )
+}
+
+/// Screen rectangles of the textured meshes painted (pictures).
+fn picture_rects(h: &Harness) -> Vec<egui::Rect> {
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::Shape::Mesh(m) if m.texture_id != egui::TextureId::default() => {
+                Some(egui::Rect::from_points(&m.vertices.iter().map(|v| v.pos).collect::<Vec<_>>()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A kept header picture shows in Page Layout view where it prints: in its section, its top on the
+/// header margin, at the size printing gives it on this zoom.
+#[test]
+fn header_pictures_show_in_page_layout_view_where_they_print() {
+    let mut h = picture_fixture("&L&G&CTitle", &[("LH", "width:120pt;height:40pt", png(30, 10))]);
+    h.run_steps(4);
+    let g = geo(&h);
+    let pg = g.paper.clone().unwrap();
+    let (px, py, _, _) = pg.page_rect(0, 0);
+    // Left section, top on the header margin, the size printing gives it on this zoom.
+    let at = screen(&g, px + pg.hf_sides[0], py + pg.margins[4]);
+    let k = 96.0 / 72.0 * pg.hf_text_k * g.z;
+    let rects = picture_rects(&h);
+    let first = rects.iter().find(|r| (r.left() - at.x).abs() < 1.0 && (r.top() - at.y).abs() < 1.0);
+    let r = first.unwrap_or_else(|| panic!("no picture at {at:?}: {rects:?}"));
+    assert!((r.width() - 120.0 * k).abs() < 1.0 && (r.height() - 40.0 * k).abs() < 1.0, "{r:?}");
+}
+
+/// On screen too, a picture shows only where its section has `&G` and when its image can be read.
+#[test]
+fn header_pictures_need_their_g_and_a_readable_picture_on_screen_too() {
+    let mut h = picture_fixture("&LNo picture", &[("LH", "width:120pt;height:40pt", png(4, 4))]);
+    h.run_steps(4);
+    assert!(picture_rects(&h).is_empty());
+    let mut h = picture_fixture("&LBefore&G after", &[("LH", "width:120pt;height:40pt", b"\x89PNG\r\n\x1a\nbroken".to_vec())]);
+    h.run_steps(4);
+    assert!(picture_rects(&h).is_empty());
+}
+
+/// Text painted in the last frame.
+fn painted_text(h: &Harness) -> Vec<String> {
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::Shape::Text(t) => Some(t.galley.text().to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The print preview draws each page's header and footer: fields filled in, and the picture in
+/// miniature with its proportions.
+#[test]
+fn print_preview_draws_headers_footers_and_their_pictures() {
+    let mut h = picture_fixture("&L&G&CTitle &P/&N", &[("LH", "width:120pt;height:40pt", png(30, 10))]);
+    h.run_steps(2);
+    let on_sheet = picture_rects(&h).len();
+    h.state_mut().run("ui.backstage", json!({"page": "print"})).unwrap();
+    h.run_steps(4);
+    assert!(painted_text(&h).iter().any(|t| t == "Title 1/2"), "{:?}", painted_text(&h));
+    let rects = picture_rects(&h);
+    assert_eq!(rects.len(), 1, "the preview page's picture, not the sheet's ({on_sheet} there)");
+    // The picture keeps its proportions in miniature.
+    assert!((rects[0].width() / rects[0].height() - 3.0).abs() < 0.05, "{rects:?}");
+}
+
+/// A sheet with no header or footer gets none in the print preview, even with a kept picture.
+#[test]
+fn print_preview_without_headers_draws_none() {
+    let mut h = picture_fixture("", &[("LH", "width:120pt;height:40pt", png(30, 10))]);
+    h.state_mut().run("ui.backstage", json!({"page": "print"})).unwrap();
+    h.run_steps(4);
+    assert!(picture_rects(&h).is_empty());
+    assert!(!painted_text(&h).iter().any(|t| t.starts_with("Title")));
+}
+
+// ---------------------------------------------------------------- Header & Footer › Picture
+
+/// A picture file the stub picker hands over.
+fn picture_file(name: &str) -> String {
+    let path = std::env::temp_dir().join(format!("gridcraft-hf-{}-{name}.png", std::process::id()));
+    std::fs::write(&path, png(40, 20)).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+/// Starts editing the first page's centre header, with a picker that answers `path`.
+fn edit_header_with_picker(h: &mut Harness, path: Option<String>) {
+    h.state_mut().services.pick_picture = Some(Box::new(move || path.clone()));
+    let sh = h.state().session.doc().unwrap().wb.sheet(0).unwrap().clone();
+    gridcraft_ui_egui::paper_view::begin(h.state_mut(), 0, &sh, (0, 0), gridcraft_engine::paper::HfZone { footer: false, section: 1 });
+    h.run_steps(2);
+}
+
+/// The first sheet's print settings.
+fn hf(h: &Harness) -> gridcraft_engine::model::PrintSettings {
+    h.state().session.doc().unwrap().wb.sheet(0).unwrap().print.clone()
+}
+
+/// Picture puts `&[Picture]` at the caret, replaces it when chosen again, writes nothing before the
+/// commit, and saves text and picture as one undo step.
+#[test]
+fn picture_puts_its_field_at_the_caret_and_saves_with_the_text() {
+    let mut h = picture_fixture("&CTitle", &[]);
+    h.run_steps(2);
+    edit_header_with_picker(&mut h, Some(picture_file("logo")));
+    gridcraft_ui_egui::paper_view::pick_picture(h.state_mut());
+    let e = h.state().grid.hf_edit.as_ref().unwrap();
+    assert_eq!(e.texts[1], "Title&[Picture]", "the field at the caret (the end of the section)");
+    assert!(hf(&h).hf_pictures.is_empty(), "nothing is written before the edit is committed");
+    // Choosing again replaces the picture without a second field.
+    gridcraft_ui_egui::paper_view::pick_picture(h.state_mut());
+    assert_eq!(h.state().grid.hf_edit.as_ref().unwrap().texts[1], "Title&[Picture]");
+    gridcraft_ui_egui::paper_view::commit(h.state_mut());
+    h.run_steps(4);
+    let pr = hf(&h);
+    assert_eq!(pr.header, "&CTitle&G");
+    assert_eq!(pr.hf_pictures.len(), 1);
+    assert_eq!((pr.hf_pictures[0].section, pr.hf_pictures[0].title.ends_with("logo")), (1, true));
+    assert_eq!(picture_rects(&h).len(), 1, "the view draws it");
+    // Text and picture are one undo step.
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    let pr = hf(&h);
+    assert_eq!((pr.header.as_str(), pr.hf_pictures.len()), ("&CTitle", 0));
+}
+
+/// A picture chosen then cancelled, or whose field is erased before the commit, is not saved;
+/// closing the picker without a choice changes nothing.
+#[test]
+fn a_picture_chosen_then_cancelled_or_erased_is_not_saved() {
+    let mut h = picture_fixture("&CTitle", &[]);
+    h.run_steps(2);
+    edit_header_with_picker(&mut h, Some(picture_file("cancel")));
+    gridcraft_ui_egui::paper_view::pick_picture(h.state_mut());
+    gridcraft_ui_egui::paper_view::cancel(h.state_mut());
+    assert!(hf(&h).hf_pictures.is_empty());
+    assert_eq!(hf(&h).header, "&CTitle");
+    // Its field erased before committing: the text is saved, the picture isn't.
+    edit_header_with_picker(&mut h, Some(picture_file("erased")));
+    gridcraft_ui_egui::paper_view::pick_picture(h.state_mut());
+    h.state_mut().grid.hf_edit.as_mut().unwrap().texts[1] = "Other".into();
+    gridcraft_ui_egui::paper_view::commit(h.state_mut());
+    assert!(hf(&h).hf_pictures.is_empty());
+    assert_eq!(hf(&h).header, "&COther");
+    // The picker closed without a choice: nothing changes.
+    edit_header_with_picker(&mut h, None);
+    gridcraft_ui_egui::paper_view::pick_picture(h.state_mut());
+    assert_eq!(h.state().grid.hf_edit.as_ref().unwrap().texts[1], "Other");
+}
+
+/// Format Picture opens on the section's picture size and OK resizes it; a section without a
+/// picture has nothing to format.
+#[test]
+fn format_picture_opens_on_the_sections_picture_and_resizes_it() {
+    let mut h = picture_fixture("&C&G", &[("CH", "width:120pt;height:40pt", png(30, 10))]);
+    h.run_steps(2);
+    edit_header_with_picker(&mut h, None);
+    assert!(gridcraft_ui_egui::paper_view::editing_has_picture(h.state()));
+    gridcraft_ui_egui::paper_view::format_picture(h.state_mut());
+    let d = h.state().dialog.as_ref().expect("Format Picture opens");
+    assert_eq!((d.values["width"].as_f64(), d.values["height"].as_f64()), (Some(120.0), Some(40.0)));
+    // OK resizes it with the dialog's values (in points behind the shown unit).
+    let d = h.state_mut().dialog.as_mut().unwrap();
+    d.values.insert("width".into(), json!(60.0));
+    d.values.insert("height".into(), json!(20.0));
+    h.run_steps(2);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "OK closes it");
+    let q = &hf(&h).hf_pictures[0];
+    assert_eq!((q.width, q.height), (60.0, 20.0));
+    // A section without a picture has nothing to format.
+    h.state_mut().dialog = None;
+    let sh = h.state().session.doc().unwrap().wb.sheet(0).unwrap().clone();
+    gridcraft_ui_egui::paper_view::begin(h.state_mut(), 0, &sh, (0, 0), gridcraft_engine::paper::HfZone { footer: false, section: 0 });
+    assert!(!gridcraft_ui_egui::paper_view::editing_has_picture(h.state()));
+    gridcraft_ui_egui::paper_view::format_picture(h.state_mut());
+    assert!(h.state().dialog.is_none());
+}

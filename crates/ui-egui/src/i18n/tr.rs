@@ -446,6 +446,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Göster",
         "Collapse dialog" => "İletişim kutusunu daralt",
         "Expand dialog" => "İletişim kutusunu genişlet",
+
+        "Picture" => "Resim",
+        "Format\nPicture" => "Resmi\nBiçimlendir",
+        "Format Picture" => "Resmi Biçimlendir",
+        "Height:" => "Yükseklik:",
+        "Width:" => "Genişlik:",
+        "Lock aspect ratio" => "En boy oranını kilitle",
         _ => return None,
     })
 }

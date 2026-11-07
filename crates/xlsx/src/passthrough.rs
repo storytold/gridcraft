@@ -47,6 +47,7 @@ mod rebase;
 mod write;
 
 pub use read::KeptReader;
+pub(crate) use read::shape_spans;
 pub use rebase::{SheetKept, rebase_links};
 #[cfg(test)]
 pub(crate) use write::sheet_names_in;
