@@ -54,10 +54,11 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Estimate:** 25–35 h for beta (40–60 h full). [chart-parity.md](chart-parity.md)
 
 ### 5. Text in non-Latin scripts doesn't render or export (L)
-- **Missing:** CJK font fallback, complex shaping (Arabic, Devanagari, Thai), bidi, non-Latin PDF.
+- **Missing:** cross-platform script coverage, Devanagari/Thai shaping verification, non-Latin PDF and Arabic UI layout.
 - **Evidence:** system-font fallback for CJK, Thai and Hebrew landed in #38 (closed #32); #142
-  (Chinese text) awaits confirmation; #54 (symbols as boxes on Fedora); no shaping for Arabic or
-  Devanagari; PDF writer uses 14 standard fonts only.
+  (Chinese text) awaits confirmation; #54 (symbols as boxes on Fedora). Arabic shared shaping/bidi,
+  editing and cell Context/LTR/RTL now have focused regressions and full gates. Arabic font
+  delivery and PDF output are separate PRs; other script shaping still needs verification.
 - **Impact:** blocks most of the world's users even with an English UI.
 - **Estimate:** 12–20 h. [localization-parity.md](localization-parity.md)
 
@@ -193,6 +194,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-11-01 | minor | §4: chart data tables implemented for column, bar, line, area and compatible combo charts, with legend keys and border settings, live source values, XLSX round-trip and print/PDF; other chart gaps remain. |
 | 2026-10-31 | minor | §13: Solver Options (Max Evaluations, Integer Optimality and the Evolutionary options), saved with the model |
 | 2026-10-31 | minor | §13: Solver Load/Save Model (`data.solverSaveModel`, `data.solverLoadModel`) and Reset All (`data.solverReset`), with buttons in the Solver Parameters dialog |
+| 2026-10-26 | minor | Arabic shared bidi display/editing and persisted cell reading direction; other script and PDF work remain separate |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-22 | minor | §20: a native window per workbook window, New Window on the same workbook and Arrange All on the desktop; left: Arrange All across monitors, the web's one window, pen pressure (estimate 10–14 h → 5–8 h) |
