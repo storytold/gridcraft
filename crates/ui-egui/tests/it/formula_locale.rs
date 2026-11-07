@@ -1,4 +1,5 @@
 //! Language selection must affect UI entry, never the canonical engine/file boundary.
+use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::{
     Session,
     core::{CellError, CellRef, Value},
@@ -229,14 +230,135 @@ fn user_defined_prefix_is_hidden_while_editing_and_kept_on_commit() {
 }
 
 #[test]
-fn turkish_interface_retains_its_canonical_formula_fallback() {
+fn turkish_interface_uses_localized_formulas_and_xlsx_roundtrip() {
     let mut app = app();
     app.run("app.language.set", json!({"code":"tr-TR"})).unwrap();
     assert_eq!(app.ui.language, Language::Tr);
-    assert!(enter(&mut app, "=SUM(1.5,2.25)"));
+    assert_eq!(app.ui.language.tr("Data"), "Veri");
+    assert_eq!(app.ui.language.tr("Formulas"), "Formüller");
+    assert_eq!(app.ui.language.tr("Formula Builder"), "Formül Oluşturucu");
+    assert_eq!(app.ui.language.tr("Insert Function"), "Fonksiyon Ekle");
+    assert_eq!(app.ui.language.tr("Enter"), "Gir");
+    assert_eq!(app.ui.language.tr("Search:"), "Ara:");
+    assert_eq!(app.ui.language.tr("e.g. lookup, average, date"), "örn. arama, ortalama, tarih");
+    assert_eq!(app.ui.language.tr("MathTrig"), "Matematik ve Trigonometri");
+    assert_eq!(app.ui.language.tr("Financial"), "Finansal");
+    assert!(enter(&mut app, "=BAĞ_DEĞ_SAY(A1:A10)"));
+    assert_eq!(formula(&app), "COUNT(A1:A10)");
     app.begin_edit(None, true);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1.5,2.25)");
-    assert!(!enter(&mut app, "=TOPLA(1;2)"));
+    assert_eq!(app.editor.as_ref().unwrap().text, "=BAĞ_DEĞ_SAY(A1:A10)");
+    app.cancel_edit();
+    assert!(enter(&mut app, "=SAY(A1:A10)"));
+    assert_eq!(formula(&app), "COUNT(A1:A10)");
+    app.begin_edit(None, true);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=BAĞ_DEĞ_SAY(A1:A10)");
+    app.cancel_edit();
+    assert!(enter(&mut app, "=DEVRESEL_ÖDEME(0,05/12;60;-10000)"));
+    assert_eq!(formula(&app), "PMT(0.05/12,60,-10000)");
+    app.begin_edit(None, true);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=DEVRESEL_ÖDEME(0,05/12;60;-10000)");
+    app.cancel_edit();
+    assert!(enter(&mut app, "=EĞER(DOĞRU;TOPLA(1,5;2,25);0)"));
+    assert_eq!(formula(&app), "IF(TRUE,SUM(1.5,2.25),0)");
+    let saved = app.run("file.save", json!({"format":"xlsx"})).unwrap();
+    app.run("file.open", json!({"name":"locale_tr.xlsx", "base64":saved["base64"]})).unwrap();
+    app.begin_edit(None, true);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=EĞER(DOĞRU;TOPLA(1,5;2,25);0)");
+    assert!(app.commit_edit(0, 0, false, false));
+    assert_eq!(formula(&app), "IF(TRUE,SUM(1.5,2.25),0)");
     let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
     assert_eq!(restored.language, Language::Tr);
+}
+
+#[test]
+fn turkish_error_messages_and_error_codes_localized() {
+    let mut app = app();
+    app.run("app.language.set", json!({"code":"tr-TR"})).unwrap();
+    assert_eq!(app.ui.language, Language::Tr);
+
+    // Syntax error in formula shows localized error message in alert box
+    app.begin_edit(Some("=TOPLA(1 2)".into()), false);
+    assert!(!app.commit_edit(0, 0, false, false));
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.0, "GridCraft");
+    assert!(msg.1.contains("bekleniyordu"), "Message should be Turkish: {}", msg.1);
+
+    // Unterminated string syntax error
+    app.begin_edit(Some("=\"merhaba".into()), false);
+    assert!(!app.commit_edit(0, 0, false, false));
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.1, "Kapatılmamış metin dizesi (tırnak işareti eksik)");
+
+    // Cell error literal in formula
+    app.cancel_edit();
+    assert!(enter(&mut app, "=#BAŞV!"));
+    assert_eq!(formula(&app), "#REF!");
+    app.begin_edit(None, true);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=#BAŞV!");
+    app.cancel_edit();
+
+    // Division by zero evaluated cell error displays #SAYI/0!
+    assert!(enter(&mut app, "=1/0"));
+    assert_eq!(formula(&app), "1/0");
+
+    // Lotus-style + formula starting with Turkish character
+    assert!(enter(&mut app, "+İÇ_VERİM_ORANI(A1:A5)"));
+    assert_eq!(formula(&app), "+IRR(A1:A5)");
+
+    // Autocomplete and current_function with Turkish characters (Ç, Ğ, İ, Ö, Ş, Ü)
+    app.begin_edit(Some("=eğer(1;".into()), false);
+    assert_eq!(app.editor.as_ref().unwrap().current_function(), Some(("EĞER".into(), 1)));
+    app.cancel_edit();
+
+    app.begin_edit(Some("=düş".into()), false);
+    {
+        let ed = app.editor.as_mut().unwrap();
+        ed.update_autocomplete(&["DÜŞEYARA".to_string(), "TOPLA".to_string()]);
+        assert_eq!(ed.autocomplete, vec!["DÜŞEYARA".to_string()]);
+        assert!(ed.accept_autocomplete());
+        assert_eq!(ed.text, "=DÜŞEYARA(");
+    }
+    app.cancel_edit();
+
+    // Check status bar and common alert translations
+    assert_eq!(app.ui.language.tr("OK"), "Tamam");
+    assert_eq!(app.ui.language.tr("Circular References"), "Döngüsel Başvurular");
+    assert_eq!(app.ui.language.tr("Macros preserved (not executed)"), "Makrolar korundu (çalıştırılmadı)");
+    assert_eq!(app.ui.language.tr("Spill range is not empty"), "Taşma aralığı boş değil, formülün yayılacağı hücreleri temizleyin.");
+    assert_eq!(app.ui.language.tr("The name you entered is not valid."), "Girdiğiniz ad geçerli değil.");
+    assert_eq!(app.ui.language.tr("Reference is not valid."), "Başvuru geçerli değil.");
+}
+
+#[test]
+fn insert_function_search_in_turkish_locale_matches_casing_and_dotless_i() {
+    let mut app = app();
+    app.run("app.language.set", json!({"code":"tr-TR"})).unwrap();
+    assert_eq!(app.ui.language, Language::Tr);
+
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 700.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(2);
+    h.state_mut().run("formulas.insertFunction", json!({})).unwrap();
+    h.run_steps(2);
+
+    // 1. Search with dotless "mın" matches "MİN"
+    h.state_mut().dialog.as_mut().unwrap().search = "mın".into();
+    h.run_steps(2);
+    assert!(h.query_by_label("MİN (İstatistiksel)").is_some(), "MİN should be found when searching 'mın'");
+
+    // 2. Search with ASCII "sirala" matches "SIRALA" (SORT)
+    h.state_mut().dialog.as_mut().unwrap().search = "sirala".into();
+    h.run_steps(2);
+    assert!(h.query_by_label("SIRALA (Arama ve Başvuru)").is_some(), "SIRALA should be found when searching 'sirala'");
+
+    // 3. Search with dotless "ındex" matches "İNDİS" (INDEX)
+    h.state_mut().dialog.as_mut().unwrap().search = "ındex".into();
+    h.run_steps(2);
+    assert!(h.query_by_label("İNDİS (Arama ve Başvuru)").is_some(), "İNDİS should be found when searching 'ındex'");
 }
