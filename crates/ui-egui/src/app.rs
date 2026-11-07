@@ -6,9 +6,9 @@ use super::state::{NoticeKind, OpenWindow, SaveAnswer, SheetView};
 #[cfg(not(target_arch = "wasm32"))]
 use super::updates_ui;
 use super::{
-    CellRef, HashMap, INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, Notice, Perf, RangeRef, Session, SheetApp, UiRequest, UiState, backstage,
-    clamp_interface_scale, clean_error, control, desktop_theme, dialogs, editor, floating_pictures, formula_bar, formula_locale, grid, i18n, json,
-    keytips, macro_ui, panes, pivot_pane, printing, ribbon, tabs, text_box, theme, widgets,
+    CellRef, GRID_SCALE_MAX, GRID_SCALE_MIN, HashMap, INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, Notice, Perf, RangeRef, Session, SheetApp,
+    UiRequest, UiState, backstage, clamp_grid_scale, clamp_interface_scale, clean_error, control, desktop_theme, dialogs, editor, floating_pictures,
+    formula_bar, formula_locale, grid, i18n, json, keytips, macro_ui, panes, pivot_pane, printing, ribbon, tabs, text_box, theme, widgets,
 };
 
 mod clipboard;
