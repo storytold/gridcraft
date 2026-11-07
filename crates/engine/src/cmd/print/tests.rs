@@ -541,7 +541,8 @@ fn a_picture_drawn_in_a_python_cell_prints_there() {
         let d = s.doc_mut().unwrap();
         let wb = std::sync::Arc::make_mut(&mut d.wb);
         let cell = wb.sheet_mut(0).unwrap().cells.get_mut(CellRef::new(0, 0)).unwrap();
-        cell.value = gridcraft_core::Value::text("Image");
+        // No cached value and no format: the picture alone is why it prints.
+        cell.value = gridcraft_core::Value::Empty;
         let picture = gridcraft_model::CellPicture { data: png, mime: "image/png".into(), alt: "plot".into() };
         let image = gridcraft_model::PyImage { picture: std::sync::Arc::new(picture), width: 1, height: 1, density: 1, floor: None, fitted: None };
         std::sync::Arc::make_mut(cell.py.as_mut().unwrap()).output = Some(gridcraft_model::PyOutput { image: Some(image), ..Default::default() });
