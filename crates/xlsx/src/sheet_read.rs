@@ -587,11 +587,13 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
             None => Value::Empty,
         },
     };
-    let picture = c.attr("vm").and_then(|vm| {
+    let block = c.attr("vm").and_then(|vm| vm.parse::<usize>().ok()).and_then(|n| n.checked_sub(1));
+    let record = block.and_then(|n| cx.linked_records.get(n)).cloned().flatten();
+    let picture = c.attr("vm").filter(|_| record.is_none()).and_then(|vm| {
         if vm == "0" {
             return None;
         }
-        let picture = vm.parse::<usize>().ok().and_then(|n| n.checked_sub(1)).and_then(|n| cx.cell_pictures.get(n)).cloned().flatten();
+        let picture = block.and_then(|n| cx.cell_pictures.get(n)).cloned().flatten();
         if picture.is_none() {
             cx.warn("some cells have unsupported or missing value metadata; kept their scalar fallback (cell pictures may be missing)");
         }
@@ -628,7 +630,7 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     }
     let spilled_from = if formula.is_none() && py.is_none() { dynamic_range(st, pos) } else { None };
     let python_anchor = spilled_from.is_some_and(|r| sheet.cells.get(r.start).is_some_and(|a| a.py.is_some()));
-    let value = match spilled_from {
+    let mut value = match spilled_from {
         // A Python cell's spilled values are kept: they are its result until it runs again.
         Some(r) if python_anchor && r.count() <= gridcraft_model::python::MAX_RESULT_CELLS as u64 => {
             if !value.is_empty() {
@@ -645,7 +647,19 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
         Some(_) => Value::Empty,
         None => value,
     };
+    // A linked record's cell holds an error for other apps; GridCraft shows its display text.
+    if let Some(record) = &record
+        && formula.is_none()
+        && py.is_none()
+        && !record.display.is_empty()
+    {
+        value = Value::text(record.display.as_str());
+    }
+    let has_formula = formula.is_some() || py.is_some();
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style, py });
+    if let Some(record) = record.filter(|_| !has_formula) {
+        sheet.linked_records.insert(pos, record);
+    }
 }
 
 fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {

@@ -366,6 +366,15 @@ impl Parser {
                 _ => r,
             }
         };
+        // `A1.Price`: field access on a linked data type record.
+        if trim.is_none()
+            && let Some((head, field)) = w.split_once('.')
+            && !field.is_empty()
+            && let Some(a) = word_is_cell(head)
+        {
+            let cell = Expr::Ref(Reference { sheet, kind: RefKind::Cell(a) });
+            return Ok(Expr::Call("FIELDVALUE".into(), vec![cell, Expr::Text(field.into())]));
+        }
         if let Some(a) = word_is_cell(w) {
             // Cell, possibly `A1:B2` (merged here so the sheet applies to both ends).
             if trim.is_some()

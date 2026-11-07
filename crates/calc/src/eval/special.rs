@@ -101,6 +101,7 @@ fn is_special(n: &str) -> bool {
             | "ISREF"
             | "ISFORMULA"
             | "FORMULATEXT"
+            | "FIELDVALUE"
             | "SHEET"
             | "SHEETS"
             | "OFFSET"
@@ -139,6 +140,7 @@ pub const SPECIAL_FUNCTIONS: &[&str] = &[
     "ISREF",
     "ISFORMULA",
     "FORMULATEXT",
+    "FIELDVALUE",
     "SHEET",
     "SHEETS",
     "OFFSET",

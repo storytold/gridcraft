@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use gridcraft_core::{DateSystem, RangeRef};
 use gridcraft_model::{
-    CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook, WorkbookView,
+    CalcMode, CellPicture, DefinedName, LinkedRecord, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook,
+    WorkbookView,
 };
 
 use crate::package::{Package, Rel};
@@ -33,6 +34,8 @@ pub struct Ctx<'a> {
     pub num_fmts: std::collections::HashMap<u32, String>,
     /// Value metadata blocks, indexed by the worksheet's one-based `vm` attribute.
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
+    /// Linked data type records indexed by the worksheet's one-based `vm` attribute.
+    pub linked_records: Vec<Option<Arc<LinkedRecord>>>,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
     /// Bytes charged so far for shared formulas expanded into dependent cells (see
@@ -257,6 +260,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         next_id: 1,
         num_fmts: Default::default(),
         cell_pictures: vec![],
+        linked_records: vec![],
         cf_ext_ids: vec![],
         shared_formula_bytes: 0,
         known_function,
@@ -274,6 +278,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
             vec![]
         }
     };
+    cx.linked_records = crate::richdata::read_linked(&mut cx, &wb_rels)?;
     // The code of Python cells, which their formulas name by index.
     cx.python = crate::python_part::read(&mut cx, &wb_rels)?;
     let mut wb = Workbook::new();

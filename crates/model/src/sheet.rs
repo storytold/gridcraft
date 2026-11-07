@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use gridcraft_core::{CellRef, RangeRef, Value};
 use serde::{Deserialize, Serialize};
 
-use crate::cell::{Cell, CellPicture};
+use crate::cell::{Cell, CellPicture, LinkedRecord};
 use crate::features::{
     Anchor, AutoFilter, Chart, Comment, CondFormat, FormControl, Hyperlink, Image, LineInfo, ObjKind, ObjRef, PivotTable, PrintSettings, Shape,
     ShapeKind, SheetProtection, Slicer, Sparkline, Table, Validation,
@@ -99,6 +99,9 @@ pub struct Sheet {
     /// Static pictures are sparse rich content. Ordinary cells carry no picture pointer.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty", with = "picture_map")]
     pub cell_pictures: BTreeMap<CellRef, Arc<CellPicture>>,
+    /// Linked data type records (Stocks, Currencies…); the cell's value is the record's display text.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", with = "picture_map")]
+    pub linked_records: BTreeMap<CellRef, Arc<LinkedRecord>>,
     /// Values spilled by dynamic-array formulas (maintained by calc), keyed by cell.
     #[serde(skip)]
     pub spill: BTreeMap<CellRef, Value>,
@@ -193,6 +196,7 @@ impl Sheet {
             file_id: 0,
             cells: CellStore::new(),
             cell_pictures: BTreeMap::new(),
+            linked_records: BTreeMap::new(),
             spill: BTreeMap::new(),
             spill_ranges: BTreeMap::new(),
             cols: BTreeMap::new(),
@@ -428,20 +432,28 @@ impl Sheet {
     /// Replaces content, removing any picture at this address. Style-only edits use set_style.
     pub fn set_cell(&mut self, c: CellRef, cell: Cell) {
         self.cell_pictures.remove(&c);
+        // A write that keeps the value (a format-only paste) keeps the record.
+        let same = cell.formula.is_none() && self.cells.get(c).is_some_and(|old| old.formula.is_none() && old.value == cell.value);
+        if !same {
+            self.linked_records.remove(&c);
+        }
         self.cells.set(c, cell);
     }
     pub fn remove_cell(&mut self, c: CellRef) -> Option<Cell> {
         self.cell_pictures.remove(&c);
+        self.linked_records.remove(&c);
         self.cells.remove(c)
     }
     /// Removes content in a range; returns scalar cells, with pictures removed from the side map.
     pub fn take_cells(&mut self, range: RangeRef) -> Vec<(CellRef, Cell)> {
         self.cell_pictures.retain(|c, _| !range.contains(*c));
+        self.linked_records.retain(|c, _| !range.contains(*c));
         self.cells.take_range(range)
     }
     /// Pictures retain a scalar fallback for calculation and unsupported consumers.
     pub fn set_picture(&mut self, c: CellRef, picture: Arc<CellPicture>) {
         let style = self.style_id(c);
+        self.linked_records.remove(&c);
         self.cells.set(c, Cell { value: Value::Error(gridcraft_core::CellError::Value), formula: None, style, py: None });
         self.cell_pictures.insert(c, picture);
     }
@@ -643,18 +655,28 @@ mod tests {
     use crate::cell::Formula;
 
     #[test]
+    fn a_format_only_write_keeps_a_linked_record_and_a_new_value_drops_it() {
+        let at = CellRef::new(0, 0);
+        let mut s = Sheet::new("S");
+        s.set_value(at, Value::text("EUR/USD"));
+        s.linked_records.insert(at, Arc::new(LinkedRecord { display: "EUR/USD".into(), fields: vec![] }));
+        let style = StyleId(1);
+        s.set_cell(at, Cell { value: Value::text("EUR/USD"), formula: None, style, py: None });
+        assert!(s.linked_records.contains_key(&at));
+        s.set_cell(at, Cell::value(Value::text("other")));
+        assert!(!s.linked_records.contains_key(&at));
+    }
+
+    #[test]
     fn a_sheet_keeps_its_identity_through_clones_and_a_new_sheet_gets_its_own() {
         let a = Sheet::new("A");
         let b = Sheet::new("A");
         assert_ne!(a.uid.get(), b.uid.get(), "two new sheets");
         assert_ne!(a.uid.get(), 0);
-        // A clone (an undo snapshot, a rename through Arc::make_mut) is the same sheet.
         let mut renamed = a.clone();
         renamed.name = "B".into();
         assert_eq!(renamed.uid.get(), a.uid.get());
-        // Not content: equal sheets compare equal whatever their identity.
         assert_eq!(a, b);
-        // Not in JSON: a sheet read back is a new one.
         let json = serde_json::to_string(&a).unwrap();
         assert!(!json.contains("uid"), "{json}");
         let read: Sheet = serde_json::from_str(&json).unwrap();
@@ -914,15 +936,14 @@ mod tests {
 
 // CellRef is a struct, so encode the sparse map as entries for JSON as well as other formats.
 mod picture_map {
-    use crate::cell::CellPicture;
     use gridcraft_core::CellRef;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use std::collections::BTreeMap;
     use std::sync::Arc;
-    pub fn serialize<S: Serializer>(map: &BTreeMap<CellRef, Arc<CellPicture>>, serializer: S) -> Result<S::Ok, S::Error> {
+    pub fn serialize<S: Serializer, T: Serialize>(map: &BTreeMap<CellRef, Arc<T>>, serializer: S) -> Result<S::Ok, S::Error> {
         map.iter().collect::<Vec<_>>().serialize(serializer)
     }
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<BTreeMap<CellRef, Arc<CellPicture>>, D::Error> {
-        Ok(Vec::<(CellRef, Arc<CellPicture>)>::deserialize(deserializer)?.into_iter().collect())
+    pub fn deserialize<'de, D: Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<BTreeMap<CellRef, Arc<T>>, D::Error> {
+        Ok(Vec::<(CellRef, Arc<T>)>::deserialize(deserializer)?.into_iter().collect())
     }
 }

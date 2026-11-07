@@ -103,6 +103,8 @@ fn prefix_params(e: Expr, scope: &[String]) -> Expr {
 fn expr_to_file(e: Expr) -> String {
     let e = prefix_params(e, &[]);
     let e = e.map(&mut |x| match x {
+        // Excel stores a field access (`A1.Price`) as `_FV(A1,"Price")`.
+        Expr::Call(name, args) if name == "FIELDVALUE" => Expr::Call("_FV".into(), args),
         Expr::Call(name, args) => match crate::tables::file_function_name(&name) {
             Some(n) => Expr::Call(n, args),
             None => Expr::Call(name, args),
@@ -148,6 +150,7 @@ pub fn from_file(text: &str) -> String {
 fn strip_param_prefixes(e: Expr) -> Expr {
     e.map(&mut |x| match x {
         Expr::Name(n) => Expr::Name(strip_param_prefix(n)),
+        Expr::Call(n, args) if n.eq_ignore_ascii_case("_FV") => Expr::Call("FIELDVALUE".into(), args),
         Expr::Call(n, args) => Expr::Call(strip_param_prefix(n), args),
         other => other,
     })
