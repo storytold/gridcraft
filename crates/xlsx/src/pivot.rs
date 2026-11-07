@@ -18,7 +18,8 @@ use gridcraft_core::date::datetime_from_serial;
 use gridcraft_core::{CellRef, DateSystem, RangeRef, Value, number_to_text};
 use gridcraft_formula::quote_sheet;
 use gridcraft_model::{
-    PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue, Workbook,
+    PivotBaseItem, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue,
+    Workbook,
 };
 
 use crate::IoError;
@@ -117,6 +118,57 @@ fn func_caption(f: PivotFunc) -> &'static str {
         PivotFunc::VarP => "Varp",
     }
 }
+
+/// How a show-values-as mode is saved: the `showDataAs` attribute (ECMA-376 `ST_ShowDataAs`)
+/// and, for the modes Excel 2010 added, the `x14:dataField pivotShowAs` extension.
+fn show_as_xml(mode: PivotShowAs) -> (Option<&'static str>, Option<&'static str>) {
+    match mode {
+        PivotShowAs::Normal => (None, None),
+        PivotShowAs::PercentOfGrandTotal => (Some("percentOfTotal"), None),
+        PivotShowAs::PercentOfColumnTotal => (Some("percentOfCol"), None),
+        PivotShowAs::PercentOfRowTotal => (Some("percentOfRow"), None),
+        PivotShowAs::PercentOf => (Some("percent"), None),
+        PivotShowAs::DifferenceFrom => (Some("difference"), None),
+        PivotShowAs::PercentDifferenceFrom => (Some("percentDiff"), None),
+        PivotShowAs::RunningTotal => (Some("runTotal"), None),
+        PivotShowAs::Index => (Some("index"), None),
+        PivotShowAs::PercentOfParentRowTotal => (None, Some("percentOfParentRow")),
+        PivotShowAs::PercentRunningTotal => (None, Some("percentOfRunningTotal")),
+        PivotShowAs::Rank => (None, Some("rankDescending")),
+        PivotShowAs::RankAscending => (None, Some("rankAscending")),
+    }
+}
+
+/// The mode saved as `showDataAs` and the `pivotShowAs` extension (which wins); `Err` names a
+/// mode we don't model.
+fn show_as_from_xml<'a>(show_data_as: Option<&'a str>, extension: Option<&'a str>) -> Result<PivotShowAs, &'a str> {
+    if let Some(ext) = extension {
+        return match ext {
+            "percentOfParentRow" => Ok(PivotShowAs::PercentOfParentRowTotal),
+            "percentOfRunningTotal" => Ok(PivotShowAs::PercentRunningTotal),
+            "rankDescending" => Ok(PivotShowAs::Rank),
+            "rankAscending" => Ok(PivotShowAs::RankAscending),
+            other => Err(other),
+        };
+    }
+    match show_data_as {
+        None | Some("normal") => Ok(PivotShowAs::Normal),
+        Some("percentOfTotal") => Ok(PivotShowAs::PercentOfGrandTotal),
+        Some("percentOfCol") => Ok(PivotShowAs::PercentOfColumnTotal),
+        Some("percentOfRow") => Ok(PivotShowAs::PercentOfRowTotal),
+        Some("percent") => Ok(PivotShowAs::PercentOf),
+        Some("difference") => Ok(PivotShowAs::DifferenceFrom),
+        Some("percentDiff") => Ok(PivotShowAs::PercentDifferenceFrom),
+        Some("runTotal") => Ok(PivotShowAs::RunningTotal),
+        Some("index") => Ok(PivotShowAs::Index),
+        Some(other) => Err(other),
+    }
+}
+
+/// `baseItem` values that stand for the item before and after the cell's own (MS-OI29500 for
+/// §18.10.1.22); any other value is an index into the base field's items.
+const BASE_ITEM_PREVIOUS: u32 = 1_048_828;
+const BASE_ITEM_NEXT: u32 = 1_048_829;
 
 fn group_by_name(g: PivotDateGroup) -> &'static str {
     match g {
