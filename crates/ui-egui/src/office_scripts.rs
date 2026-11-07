@@ -112,11 +112,18 @@ pub fn toggle_recording(app: &mut SheetApp) {
                 app.office_scripts.status = Some(Status::ok("Recording. Every command you run becomes a step."));
             } else if let Some(code) = result.get("code").and_then(Json::as_str) {
                 refresh(app);
+                let steps = result.get("steps").and_then(Json::as_u64).unwrap_or(0);
+                let skipped = result.get("skipped").and_then(Json::as_array).map_or(0, Vec::len);
+                // A dirty draft is the person's work: the recording is saved and listed, but the
+                // editor keeps what it had instead of being overwritten by the recorded code.
+                if app.office_scripts.dirty {
+                    app.office_scripts.status =
+                        Some(Status::ok(format!("Recorded {steps} steps; {skipped} skipped. Saved as a new script; the draft is unsaved.")));
+                    return;
+                }
                 if let Some(id) = result.get("id").and_then(Json::as_str) {
                     select(app, id);
                 }
-                let steps = result.get("steps").and_then(Json::as_u64).unwrap_or(0);
-                let skipped = result.get("skipped").and_then(Json::as_array).map_or(0, Vec::len);
                 app.office_scripts.code = code.to_string();
                 app.office_scripts.dirty = false;
                 app.office_scripts.status = Some(Status::ok(format!("Recorded {steps} steps; {skipped} skipped (see the comments in the script).")));

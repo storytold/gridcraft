@@ -460,11 +460,11 @@ fn tables_info(s: &mut Session, p: &Json) -> Result<Json> {
                 .enumerate()
                 .map(|(index, col)| {
                     let c = t.range.start.col.saturating_add(index as u32).min(t.range.end.col);
-                    let header = if t.header_row {
-                        Some(gridcraft_core::RangeRef::new(t.range.start, gridcraft_core::CellRef::new(t.range.start.row, c)))
-                    } else {
-                        None
-                    };
+                    let header = t.header_row.then(|| {
+                        // One cell: the column's own header, as the totals row and body ranges are.
+                        let cell = gridcraft_core::CellRef::new(t.range.start.row, c);
+                        gridcraft_core::RangeRef::new(cell, cell)
+                    });
                     let body_start = t.range.start.row.saturating_add(u32::from(t.header_row));
                     let body_end = t.range.end.row.saturating_sub(u32::from(t.totals_row));
                     let body = (body_start <= body_end).then(|| {
@@ -636,7 +636,15 @@ fn export(s: &mut Session, p: &Json) -> Result<Json> {
     if let Some(parent) = std::path::Path::new(path).parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent).map_err(|e| bad("script.export", format!("{e}")))?;
     }
-    std::fs::write(path, &text).map_err(|e| bad("script.export", format!("{e}")))?;
+    // Write beside the target and rename: a sync client or a concurrent `script.list` must never
+    // see a half-written `.osts`, and a failed write must not lose the file that was there.
+    let target = std::path::Path::new(path);
+    let temp = target.with_extension("osts.tmp");
+    std::fs::write(&temp, &text).map_err(|e| bad("script.export", format!("{e}")))?;
+    if let Err(e) = std::fs::rename(&temp, target) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(bad("script.export", format!("{e}")));
+    }
     Ok(json!({"path": path, "bytes": text.len()}))
 }
 
@@ -827,6 +835,21 @@ mod tests {
         let stopped = s.execute("script.record", json!({"on": false})).unwrap();
         assert_eq!(stopped["recording"], false);
         assert!(stopped.get("id").is_none());
+    }
+
+    #[test]
+    fn a_table_columns_header_range_is_one_cell() {
+        let mut s = session("table-header-range");
+        for (cell, text) in [("A1", "Name"), ("B1", "Qty"), ("A2", "x"), ("B2", "1")] {
+            s.execute("cell.set", json!({"cell": cell, "input": text})).unwrap();
+        }
+        s.execute("insert.table", json!({"range": "A1:B2", "header": true})).unwrap();
+        let tables = s.execute("script.tables", json!({})).unwrap();
+        let columns = tables[0]["columns"].as_array().cloned().unwrap_or_default();
+        assert_eq!(columns.len(), 2, "{tables}");
+        // The header range is the column's own header cell, not every header up to it.
+        assert_eq!(columns[0]["headerRowRange"], json!("A1"), "{tables}");
+        assert_eq!(columns[1]["headerRowRange"], json!("B1"), "{tables}");
     }
 
     #[test]

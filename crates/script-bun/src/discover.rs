@@ -98,9 +98,29 @@ pub fn version_of(exe: &Path, timeout: Duration) -> Option<String> {
     std::thread::spawn(move || {
         let mut text = Vec::new();
         let _ = stdout.by_ref().take(64 * 1024).read_to_end(&mut text);
-        // The pipe is closed, so the child has exited (or was killed by the timeout path).
-        let ok = reaper.lock().ok().and_then(|mut child| child.wait().ok()).is_some_and(|status| status.success());
-        let _ = tx.send((ok, text));
+        // Poll with `try_wait` and drop the lock between polls: the timeout path must be able to
+        // take the lock and kill a child that never exits (a full pipe, or stdout closed and the
+        // program still running).
+        loop {
+            match reaper.lock() {
+                Ok(mut child) => match child.try_wait() {
+                    Ok(Some(status)) => {
+                        let _ = tx.send((status.success(), text));
+                        return;
+                    }
+                    Ok(None) => {}
+                    Err(_) => {
+                        let _ = tx.send((false, text));
+                        return;
+                    }
+                },
+                Err(_) => {
+                    let _ = tx.send((false, text));
+                    return;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
     });
     let Ok((ok, text)) = rx.recv_timeout(timeout) else {
         if let Ok(mut child) = child.lock() {
