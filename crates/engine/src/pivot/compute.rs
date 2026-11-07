@@ -1,8 +1,9 @@
 use super::items::{Acc, FieldItems, build_tree, collect_siblings, is_collapsed, item_label};
 use super::output::{AggMap, CellKind, ColKind, ColSpec, Ctx, Grid, Line, LineKind, Output, RowKind, ValSrc, data_cols_exceed_sheet, flatten_cols};
+use super::show_as::{AxisItems, CellAt, ShowAs, Siblings, ValueLookup, display_format, resolve_base_field};
 use super::{
-    CalcSet, CellError, CellRef, HashMap, HashSet, MAX_AXIS_FIELDS, MAX_COLS, MAX_VALUE_FIELDS, PivotDateGroup, PivotField, PivotFilter, PivotFunc,
-    PivotLayout, PivotShowAs, PivotTable, PivotValue, Source, Value, Workbook, read_source,
+    CalcSet, CellRef, HashSet, MAX_AXIS_FIELDS, MAX_COLS, MAX_VALUE_FIELDS, PivotDateGroup, PivotField, PivotFilter, PivotLayout, PivotTable,
+    PivotValue, Source, Value, Workbook, read_source,
 };
 
 /// Why Show Details turns a cell down when it isn't a value cell of a PivotTable (the front end
@@ -281,108 +282,6 @@ fn write_headers(g: &mut Grid, input: HeaderInput<'_>) -> Result<(), String> {
     Ok(())
 }
 
-struct ValueLookup<'a> {
-    wb: &'a Workbook,
-    source: &'a Source,
-    calc: &'a CalcSet,
-    vals: &'a [(ValSrc, &'a PivotValue)],
-    extra: &'a [usize],
-    aggs: &'a AggMap,
-    value_count: usize,
-}
-
-impl ValueLookup<'_> {
-    fn get(&self, row_path: &[u32], col_path: &[u32], value_index: usize) -> Option<Value> {
-        let (source, definition) = self.vals.get(value_index)?;
-        let accumulators = self.aggs.get(&(row_path.to_vec(), col_path.to_vec()))?;
-        match source {
-            ValSrc::Col(_) => accumulators.get(value_index).map(|acc| acc.result(definition.func)),
-            ValSrc::Calc(index) => {
-                let sum = |name: &str| -> Value {
-                    self.source
-                        .col(name)
-                        .and_then(|column| self.extra.iter().position(|extra_column| *extra_column == column))
-                        .and_then(|index| accumulators.get(self.value_count + index))
-                        .map(|acc| acc.result(PivotFunc::Sum))
-                        .unwrap_or(Value::Number(0.0))
-                };
-                Some(self.calc.value(self.wb, *index, &sum))
-            }
-        }
-    }
-}
-
-struct ShowContext<'a> {
-    row_path: &'a [u32],
-    col_path: &'a [u32],
-    value_index: usize,
-    level0: &'a [u32],
-    siblings: &'a HashMap<Vec<u32>, Vec<u32>>,
-}
-
-fn number(value: &Option<Value>) -> Option<f64> {
-    value.as_ref().and_then(Value::as_f64)
-}
-
-fn ratio(a: Value, b: Option<Value>) -> Value {
-    match (a, b) {
-        (Value::Error(error), _) => Value::Error(error),
-        (_, Some(Value::Error(error))) => Value::Error(error),
-        (Value::Number(_), Some(Value::Number(0.0))) => Value::Error(CellError::Div0),
-        (Value::Number(x), Some(Value::Number(y))) => Value::number(x / y),
-        (value, _) => value,
-    }
-}
-
-fn running_total(raw: Value, lookup: &ValueLookup<'_>, context: &ShowContext<'_>) -> Value {
-    let Some((first, _)) = context.row_path.split_first() else { return raw };
-    if !matches!(raw, Value::Number(_)) {
-        return raw;
-    }
-    let mut total = 0.0;
-    for item in context.level0 {
-        let mut path = context.row_path.to_vec();
-        if let Some(first_item) = path.first_mut() {
-            *first_item = *item;
-        }
-        total += number(&lookup.get(&path, context.col_path, context.value_index)).unwrap_or(0.0);
-        if item == first {
-            break;
-        }
-    }
-    Value::number(total)
-}
-
-fn ranked_value(raw: Value, lookup: &ValueLookup<'_>, context: &ShowContext<'_>) -> Value {
-    let Some((_, parent)) = context.row_path.split_last() else { return Value::Empty };
-    let Some(me) = raw.as_f64() else { return raw };
-    let siblings = context.siblings.get(parent).cloned().unwrap_or_default();
-    // Excel's ranks are dense: ties share a rank and the next value takes the next one
-    // (5, 4, 3, 3, 4 rank 1, 2, 3, 3, 2), so count the distinct larger values.
-    let mut larger: Vec<f64> = siblings
-        .into_iter()
-        .filter_map(|sibling| {
-            let mut path = parent.to_vec();
-            path.push(sibling);
-            number(&lookup.get(&path, context.col_path, context.value_index)).filter(|value| *value > me)
-        })
-        .collect();
-    larger.sort_by(f64::total_cmp);
-    larger.dedup();
-    Value::number(larger.len() as f64 + 1.0)
-}
-
-fn show_value(definition: &PivotValue, raw: Value, lookup: &ValueLookup<'_>, context: &ShowContext<'_>) -> Value {
-    match definition.show_as {
-        PivotShowAs::Normal => raw,
-        PivotShowAs::PercentOfGrandTotal => ratio(raw, lookup.get(&[], &[], context.value_index)),
-        PivotShowAs::PercentOfColumnTotal => ratio(raw, lookup.get(&[], context.col_path, context.value_index)),
-        PivotShowAs::PercentOfRowTotal => ratio(raw, lookup.get(context.row_path, &[], context.value_index)),
-        PivotShowAs::RunningTotal => running_total(raw, lookup, context),
-        PivotShowAs::Rank => ranked_value(raw, lookup, context),
-    }
-}
-
 type ReportFilter<'a> = (usize, &'a PivotFilter, PivotDateGroup, bool);
 
 fn report_filters<'a>(pt: &'a PivotTable, src: &Source) -> (Vec<ReportFilter<'a>>, Vec<ReportFilter<'a>>) {
@@ -443,6 +342,9 @@ fn data_columns(specs: &[ColSpec], has_column_fields: bool, on_rows: bool, value
     Ok(columns)
 }
 
+/// Computes the report grid from the source records: filters, aggregates, lays out the axes,
+/// then writes headers, labels and the value cells (through Show Values As). `probe` collects what
+/// Show Details needs from the same computation.
 pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut probe: Option<&mut Probe>) -> Result<Output, String> {
     let fmt_of = |c: usize| src.formats.get(c).cloned().unwrap_or_else(|| "General".into());
     let rows: Vec<(usize, &PivotField)> = pt.rows.iter().filter_map(|f| src.col(&f.source_col).map(|c| (c, f))).collect();
@@ -508,12 +410,14 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
     let col_paths: Vec<&[u32]> = col_set.iter().map(Vec::as_slice).collect();
     let row_tree = build_tree(&row_paths, 0, &row_fields, &row_items);
     let col_tree = build_tree(&col_paths, 0, &col_fields, &col_items);
-    let mut siblings: HashMap<Vec<u32>, Vec<u32>> = HashMap::new();
-    collect_siblings(&row_tree, &mut Vec::new(), &mut siblings);
-    let level0: Vec<u32> = row_tree.iter().map(|n| n.item).collect();
+    let mut row_siblings = Siblings::new();
+    collect_siblings(&row_tree, &mut Vec::new(), &mut row_siblings);
+    let mut col_siblings = Siblings::new();
+    collect_siblings(&col_tree, &mut Vec::new(), &mut col_siblings);
 
     let val_names: Vec<String> = vals.iter().map(|(_, v)| v.name.clone()).collect();
     let ctx = Ctx { pt, rows: row_fields.clone(), row_items, row_fmts: row_fmts.clone(), vpos, val_names: val_names.clone() };
+    let bases: Vec<_> = vals.iter().map(|(_, v)| resolve_base_field(v, &row_fields, &col_fields)).collect();
     let mut lines: Vec<Line> = Vec::new();
     if row_levels == 0 {
         lines.push(Line { kind: LineKind::Item(false), leaf: true, path: vec![], values: true, labels: vec![], vi: None });
@@ -624,24 +528,16 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
     // ---- body
     let data_fmt: Vec<Option<String>> = vals
         .iter()
-        .map(|(vs, v)| match v.show_as {
-            PivotShowAs::PercentOfGrandTotal | PivotShowAs::PercentOfColumnTotal | PivotShowAs::PercentOfRowTotal => {
-                Some(v.number_format.clone().unwrap_or_else(|| "0.00%".into()))
-            }
-            PivotShowAs::Rank => v.number_format.clone(),
-            _ => v.number_format.clone().or_else(|| match v.func {
-                PivotFunc::Count | PivotFunc::CountNumbers => None,
-                _ => {
-                    let f = match vs {
-                        ValSrc::Col(c) => fmt_of(*c),
-                        ValSrc::Calc(_) => "General".to_string(),
-                    };
-                    (f != "General").then_some(f)
-                }
-            }),
+        .map(|(source, v)| {
+            display_format(v, || match source {
+                ValSrc::Col(c) => Some(fmt_of(*c)),
+                ValSrc::Calc(_) => None,
+            })
         })
         .collect();
-    let lookup = ValueLookup { wb, source: src, calc: &calc, vals: &vals, extra: &extra, aggs: &aggs, value_count: k };
+    let lookup = ValueLookup { wb, source: src, calc: &calc, vals: &vals, extra: &extra, aggs: &aggs };
+    let show =
+        ShowAs::new(&lookup, AxisItems { items: &ctx.row_items, siblings: &row_siblings }, AxisItems { items: &col_items, siblings: &col_siblings });
     let mut chart_rows: Vec<u32> = Vec::new();
     let chart_cols: Vec<(u32, String)> = data_cols
         .iter()
@@ -699,8 +595,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             let Some((_, vdef)) = vals.get(*vi) else { continue };
             let cp = spec.path.as_slice();
             let Some(raw) = lookup.get(rp, cp, *vi) else { continue };
-            let context = ShowContext { row_path: rp, col_path: cp, value_index: *vi, level0: &level0, siblings: &siblings };
-            let shown = show_value(vdef, raw, &lookup, &context);
+            let shown = show.value(vdef, bases.get(*vi).copied().flatten(), raw, CellAt { row: rp, col: cp, value_index: *vi });
             if let Some(pr) = probe.as_deref_mut() {
                 if pr.at == Some((r, l + j)) {
                     pr.hit = Some((rp.to_vec(), cp.to_vec()));

@@ -616,6 +616,8 @@ struct PivotTableLayout<'a> {
     values: Vec<(usize, &'a PivotValue)>,
 }
 
+/// The `pivotTableDefinition` part of a PivotTable: location, fields, areas, data fields with
+/// their Show Values As settings, style info.
 fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn Fn(&str) -> Option<u32>) -> String {
     let find_db = |name: &str| c.fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
     let row_fields: Vec<usize> = c.axis_map.iter().take(pt.rows.len()).filter_map(|x| *x).collect();
@@ -713,7 +715,7 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
     axis_fields_xml(&mut s, "rowFields", &layout.row_fields, row_values);
     axis_fields_xml(&mut s, "colFields", &layout.column_fields, col_values);
     write_page_fields(&mut s, c, &layout);
-    write_data_fields(&mut s, c, &layout, fmt_id);
+    write_data_fields(&mut s, pt, c, &layout, fmt_id);
     s.push_str("<pivotTableStyleInfo");
     if !pt.style.is_empty() {
         let _ = write!(s, " name=\"{}\"", esc_attr(&pt.style));
@@ -836,7 +838,35 @@ fn write_page_fields(s: &mut String, c: &Cache, layout: &PivotTableLayout<'_>) {
     s.push_str("</pageFields>");
 }
 
-fn write_data_fields(s: &mut String, c: &Cache, layout: &PivotTableLayout<'_>, fmt_id: &dyn Fn(&str) -> Option<u32>) {
+/// The cache field of a value field's base field: its named row or column field, else the first
+/// row field, else the first column field (as the engine resolves it), else field 0.
+fn base_cache_field(pt: &PivotTable, c: &Cache, layout: &PivotTableLayout<'_>, value: &PivotValue) -> usize {
+    let named = value.base_field.as_deref().and_then(|name| {
+        let position = pt.rows.iter().chain(pt.columns.iter()).position(|f| same(&f.source_col, name))?;
+        c.axis_map.get(position).copied().flatten()
+    });
+    named.or(layout.row_fields.first().copied()).or(layout.column_fields.first().copied()).unwrap_or(0)
+}
+
+/// `baseItem` for a base item of cache field `field`. A label the cache doesn't have (the item
+/// has no records any more, so the engine shows no base for it) is saved as "(previous)", the
+/// only choice valid in every file.
+fn base_item_index(c: &Cache, field: usize, item: &PivotBaseItem) -> u32 {
+    match item {
+        PivotBaseItem::Previous => BASE_ITEM_PREVIOUS,
+        PivotBaseItem::Next => BASE_ITEM_NEXT,
+        PivotBaseItem::Named(label) => c
+            .fields
+            .get(field)
+            .and_then(|f| f.item_labels().iter().position(|l| same(l, label)))
+            .and_then(|k| u32::try_from(k).ok())
+            .unwrap_or(BASE_ITEM_PREVIOUS),
+    }
+}
+
+/// `<dataFields>`: each value field's caption (made unique), function, Show Values As mode with its
+/// base field and item, and number format.
+fn write_data_fields(s: &mut String, pt: &PivotTable, c: &Cache, layout: &PivotTableLayout<'_>, fmt_id: &dyn Fn(&str) -> Option<u32>) {
     if layout.values.is_empty() {
         return;
     }
@@ -859,29 +889,29 @@ fn write_data_fields(s: &mut String, c: &Cache, layout: &PivotTableLayout<'_>, f
         if value.func != PivotFunc::Sum {
             let _ = write!(s, " subtotal=\"{}\"", func_name(value.func));
         }
-        let base_field = layout.row_fields.first().or(layout.column_fields.first()).copied().unwrap_or(0);
-        match value.show_as {
-            PivotShowAs::Normal => s.push_str(" baseField=\"0\" baseItem=\"0\""),
-            PivotShowAs::PercentOfGrandTotal => s.push_str(" showDataAs=\"percentOfTotal\" baseField=\"0\" baseItem=\"0\""),
-            PivotShowAs::PercentOfColumnTotal => s.push_str(" showDataAs=\"percentOfCol\" baseField=\"0\" baseItem=\"0\""),
-            PivotShowAs::PercentOfRowTotal => s.push_str(" showDataAs=\"percentOfRow\" baseField=\"0\" baseItem=\"0\""),
-            PivotShowAs::RunningTotal => {
-                let _ = write!(s, " showDataAs=\"runTotal\" baseField=\"{base_field}\" baseItem=\"0\"");
-            }
-            PivotShowAs::Rank => {
-                let _ = write!(s, " baseField=\"{base_field}\" baseItem=\"0\"");
-            }
+        let (show_data_as, extension) = show_as_xml(value.show_as);
+        if let Some(mode) = show_data_as {
+            let _ = write!(s, " showDataAs=\"{mode}\"");
         }
+        let (base_field, base_item) = if value.show_as.uses_base_field() {
+            let field = base_cache_field(pt, c, layout, value);
+            let item = if value.show_as.uses_base_item() { base_item_index(c, field, &value.base_item) } else { 0 };
+            (field, item)
+        } else {
+            (0, 0)
+        };
+        let _ = write!(s, " baseField=\"{base_field}\" baseItem=\"{base_item}\"");
         if let Some(id) = value.number_format.as_deref().and_then(fmt_id) {
             let _ = write!(s, " numFmtId=\"{id}\"");
         }
-        if value.show_as == PivotShowAs::Rank {
-            let _ = write!(
-                s,
-                "><extLst><ext uri=\"{EXT_X14_DATA_FIELD}\" xmlns:x14=\"{NS_X14}\"><x14:dataField pivotShowAs=\"rankDescending\"/></ext></extLst></dataField>"
-            );
-        } else {
-            s.push_str("/>");
+        match extension {
+            Some(mode) => {
+                let _ = write!(
+                    s,
+                    "><extLst><ext uri=\"{EXT_X14_DATA_FIELD}\" xmlns:x14=\"{NS_X14}\"><x14:dataField pivotShowAs=\"{mode}\"/></ext></extLst></dataField>"
+                );
+            }
+            None => s.push_str("/>"),
         }
     }
     s.push_str("</dataFields>");
