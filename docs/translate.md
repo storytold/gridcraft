@@ -115,8 +115,10 @@ The same manifest ships **Qwen3 0.6B** (`qwen3-0.6b`): the same four pairs,
 `Qwen3-0.6B-Q8_0.gguf` at 639,446,688 bytes plus the same tokenizer, with a ~1.5 GB resident
 requirement. It is a smaller, faster, less precise alternative on the same backend, not a second
 backend: `CandleBackend::open(root, "qwen3-0.6b")` verifies and loads it, and the weights path
-always comes from the manifest's `weights` field. The desktop app injects only `qwen3-1.7b` at
-startup (`installed_backend`), so 0.6B is the CLI/embedder option today.
+always comes from the manifest's `weights` field. The desktop app and the CLI inject only
+`qwen3-1.7b` at startup (`installed_backend`), so 0.6B is an embedder-only option today: a caller
+that opens `CandleBackend::open(root, "qwen3-0.6b")` itself gets it, but neither the app nor the
+CLI picks it up automatically.
 
 Other models considered: OPUS-MT per-pair models were implemented first (small, ~116 MB) but
 produced narrower output and needed one download per pair; candle + Qwen3 gives broad coverage
@@ -171,7 +173,7 @@ the default `onig`/`esaxx` native builds are off.
 | Model tokens per batch (estimated) | 512,000 (each segment is one model call, prompt ≤ 2,048) |
 | Characters per cell | 32,000 |
 | Job timeout (`translate.run`, default) | 1,800,000 ms (30 min), capped at 1 h; cancellation is authoritative |
-| New tokens per segment | 256 (greedy; stops at `<|im_end|>`/EOS; a decode that reaches 256 without one is an error, so a truncated sentence is never accepted) |
+| New tokens per segment | 256 (greedy; stops at `<\|im_end\|>`/EOS; a decode that reaches 256 without one is an error, so a truncated sentence is never accepted) |
 | Model file | The manifest's exact byte size for that file: it is the download bound (a larger `content-length` or body is refused) and the size check after it |
 
 Limits are checked before a batch is allocated; they can be lowered with command params

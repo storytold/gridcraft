@@ -14,8 +14,11 @@ use gridcraft_engine::Session;
 use gridcraft_engine::translate::ModelFetcher;
 use gridcraft_ui_egui::ModelHost;
 
-/// How long one model file may take; a stalled download is an error, not a hang.
-const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
+/// How long one phase of a download may take. A whole-file deadline would fail a large model on a
+/// slow link, so each phase and each read is bounded: a stalled transfer is an error, a slow but
+/// progressing one finishes.
+const DOWNLOAD_PHASE_TIMEOUT: Duration = Duration::from_secs(30);
+const DOWNLOAD_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct Models {
     root: PathBuf,
@@ -54,7 +57,15 @@ pub struct HttpFetcher;
 
 impl ModelFetcher for HttpFetcher {
     fn fetch(&self, url: &str, dest: &Path, max_bytes: u64) -> Result<(), String> {
-        let agent = ureq::Agent::config_builder().timeout_global(Some(DOWNLOAD_TIMEOUT)).max_response_header_size(64 * 1024).build().new_agent();
+        let agent = ureq::Agent::config_builder()
+            .timeout_resolve(Some(DOWNLOAD_PHASE_TIMEOUT))
+            .timeout_connect(Some(DOWNLOAD_PHASE_TIMEOUT))
+            .timeout_send_request(Some(DOWNLOAD_READ_TIMEOUT))
+            .timeout_recv_response(Some(DOWNLOAD_READ_TIMEOUT))
+            .timeout_per_read(Some(DOWNLOAD_READ_TIMEOUT))
+            .max_response_header_size(64 * 1024)
+            .build()
+            .new_agent();
         let mut response = agent.get(url).call().map_err(|e| e.to_string())?;
         if let Some(length) = response.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok())
             && length > max_bytes

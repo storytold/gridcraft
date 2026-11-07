@@ -420,9 +420,11 @@ fn translate(app: &mut SheetApp, ui: &mut Ui) {
             _ => (lang.tr("Not installed"), t.text_dim),
         };
         ui.label(egui::RichText::new(label).color(colour));
+        let ram = record["minRamMb"].as_f64().unwrap_or(0.0) / 1024.0;
+        let ram_hint = if ram > 0.0 { format!(" · {ram:.1} GB RAM") } else { String::new() };
         ui.label(
             egui::RichText::new(format!(
-                "{} · {} · {:.0} MB",
+                "{} · {} · {:.0} MB{ram_hint}",
                 record["license"].as_str().unwrap_or(""),
                 lang.tr("local, offline"),
                 record["bytes"].as_f64().unwrap_or(0.0) / 1_000_000.0
