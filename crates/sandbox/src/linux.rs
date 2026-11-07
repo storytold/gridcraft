@@ -46,7 +46,9 @@ fn not_enforced(e: impl std::fmt::Display) -> SandboxError {
     SandboxError::NotEnforced(e.to_string())
 }
 
-/// A kernel without Landlock fails while the rules are made, with the Landlock crate's own text.
+/// A kernel without Landlock fails while the ruleset is made, with the Landlock crate's own text. A
+/// later failure, such as too many layers, isn't this: a machine that has it must not be taken for one
+/// that doesn't.
 fn landlock_not_enforced(e: impl std::fmt::Display) -> SandboxError {
     SandboxError::NotEnforced(format!("Landlock is not enforced: {e}"))
 }
@@ -70,8 +72,8 @@ fn landlock(policy: &Checked) -> Result<()> {
         .add_rules(path_beneath_rules(&policy.read, read))
         .and_then(|r| r.add_rules(path_beneath_rules(&policy.exec, read | AccessFs::Execute)))
         .and_then(|r| r.add_rules(path_beneath_rules(["/dev/null"], AccessFs::ReadFile | AccessFs::WriteFile)))
-        .map_err(landlock_not_enforced)?;
-    let status = ruleset.restrict_self().map_err(landlock_not_enforced)?;
+        .map_err(not_enforced)?;
+    let status = ruleset.restrict_self().map_err(not_enforced)?;
     if !status.no_new_privs {
         return Err(SandboxError::NotEnforced("no_new_privs is not set".into()));
     }
