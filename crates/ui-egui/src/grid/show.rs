@@ -637,7 +637,8 @@ pub(crate) fn paint_headers(
                     }
                 }
                 let color = if row_sel(rr) { t.header_sel_text } else { t.header_text };
-                pr.text(cr.center(), Align2::CENTER_CENTER, (rr as u64 + 1).to_string(), font.clone(), color);
+                let at = row_number_center(cr, sh.default_row_height * geo.z);
+                pr.with_clip_rect(cr.intersect(pr.clip_rect())).text(at, Align2::CENTER_CENTER, (rr as u64 + 1).to_string(), font.clone(), color);
             }
         }
     }
@@ -656,6 +657,17 @@ pub(crate) fn paint_headers(
 
 /// Whether the line before / after visible line `i` is hidden (zero size), so its header edges
 /// get the hidden marker. Line 0 has nothing before it.
+/// Where a row's number goes: where it sits in a row of the sheet's standard height, measured
+/// from the row's bottom. A tall row's number sits low, beside text aligned to the bottom, and a
+/// short row's is cut at the top, as in Excel (observed); rows of the standard height keep it
+/// centred.
+pub(super) fn row_number_center(row: Rect, standard: f32) -> egui::Pos2 {
+    if standard <= 0.0 {
+        return row.center();
+    }
+    pos2(row.center().x, row.bottom() - standard / 2.0)
+}
+
 pub(super) fn hidden_around(i: u32, size: impl Fn(u32) -> f32) -> (bool, bool) {
     (i > 0 && size(i - 1) <= 0.0, i < u32::MAX && size(i + 1) <= 0.0)
 }

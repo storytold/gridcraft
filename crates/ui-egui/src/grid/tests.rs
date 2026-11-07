@@ -350,3 +350,18 @@ fn upward_text_with_middle_align_is_centred_in_a_merged_block() {
     assert!((bb.center().y - rect.center().y).abs() < 0.01, "{bb:?} not centred in {rect:?}");
     assert!((bb.center().x - rect.center().x).abs() < 0.01, "{bb:?} not centred in {rect:?}");
 }
+
+/// A row's number sits where it would in a row of the standard height, measured from the row's
+/// bottom: centred in a standard row, low in a tall one (beside bottom-aligned text), and above the
+/// top of a short one, where it is cut, as in Excel.
+#[test]
+fn row_numbers_sit_low_in_tall_rows() {
+    use super::show::row_number_center;
+    let standard = 20.0;
+    let row = |h: f32| Rect::from_min_size(pos2(0.0, 100.0), vec2(40.0, h));
+    assert_eq!(row_number_center(row(20.0), standard), row(20.0).center());
+    assert_eq!(row_number_center(row(80.0), standard).y, 170.0);
+    assert_eq!(row_number_center(row(8.0), standard).y, 98.0);
+    // Without a standard height to go by, the number stays centred.
+    assert_eq!(row_number_center(row(80.0), 0.0), row(80.0).center());
+}
