@@ -3,9 +3,9 @@
 > **Last updated:** 2026-11-07 · **Change:** minor (no file changes by any route on Linux: Landlock's truncation right is required, and seccomp refuses what Landlock has no right for; earlier: more is refused on Linux: other processes, System V and POSIX queues, the terminal; earlier: the app turns Python on, so cells run through the sandbox; earlier: the engine runs Python cells through the sandbox; earlier: first version: the `sandbox` crate and `gridcraft-cli sandbox-check`)
 
 The sandbox is the layer GridCraft is to run code it doesn't trust in, such as a workbook's
-Python cells: a separate process that confines itself before the code starts. The engine runs
-Python cells through it, in the app, once a person turns Python on ([python.md](python.md),
-[architecture.md](architecture.md), Running Python cells). The crate is `crates/sandbox`, layer 0.
+Python cells: a separate process that confines itself before the code starts. Here only
+`gridcraft-cli sandbox-check` starts it, and Python cells don't run ([architecture.md](architecture.md),
+Python cells). The crate is `crates/sandbox`, layer 0.
 This page describes what the confinement denies, how it is
 checked, and where it is available.
 
@@ -19,13 +19,12 @@ other programs. The sandbox's job is that it can do none of these:
 - **Files:** it can read only the paths its policy lists (the interpreter's installation, the
   system's shared libraries and font folders) and write no file except `/dev/null`. Nor can it change
   a file any other way: not its length, permissions, owner, extended attributes, times or flags, even
-  one it can read. The exception is a standard stream the parent made a file (see below). The home directory, documents and other workbooks are out of reach. So `tempfile` finds no folder it can use. matplotlib,
-  which asks for a writable folder, is given a path that doesn't exist for that one call: it can't save
-  its font list there, keeps it in memory, and nothing is written. A plot comes back as bytes in the
-  worker's reply.
+  one it can read. The exception is a standard stream the parent made a file (see below). The home
+  directory, documents and other workbooks are out of reach. So `tempfile` finds no folder it can use.
 - **Programs:** it can execute only the programs its policy lists, and it can't start a new
   process at all, so even those only replace itself.
-- **Network:** no sockets, no connections and no listeners.
+- **Network:** no sockets, no connections and no listeners. The exception is a standard stream the
+  parent made a socket (see below).
 - **Other processes and the system:** no debugging or reading another process, no System V shared
   memory, message queues or semaphores, no POSIX message queues, no signals to another process, no typing into a terminal it inherited, no mounts or namespaces, no kernel
   modules, BPF, keyrings or performance counters. On Linux it also can't change another process's
@@ -35,9 +34,10 @@ Data reaches the code only through its command-line arguments (which the parent 
 standard input and output (which the parent holds), and the files its policy lets it read. Nothing
 else is open: the launcher closes every descriptor it inherited, because the confinement doesn't
 revoke what is already open. The three standard streams stay as the parent made them, with the rights
-they were opened with, so a stream that is a file can be written and truncated. A parent gives the
-program pipes, as the Python worker does; `sandbox-check` passes its own streams on, so its output
-sent to a file is such a stream. The
+they were opened with: a stream that is a file can be written and truncated, and one that is a
+socket can still send, since neither is a file or socket the program opened. A parent gives the
+program pipes. `sandbox-check` passes its own streams on, so its output sent to a file is such a
+stream. The
 program inherits no environment: the launcher clears it and keeps only the locale and time zone
 (`LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`), with `PATH` set to `/usr/bin:/bin`, so tokens and credentials
 in the parent's environment don't reach it.
@@ -165,8 +165,8 @@ given machine.
 A framework build of Python (Homebrew, python.org) starts its real interpreter,
 `Python.app/Contents/MacOS/Python`, as a new process from `bin/python3`. Inside the sandbox that
 start is refused, so callers run the interpreter itself. Homebrew's Python also loads `_ssl` and
-`_sqlite3`'s libraries from `opt` and `Cellar`, so `gridcraft_python::describe` adds those folders to
-the policy; Homebrew's `etc` and `var`, which can hold a person's data, stay out.
+`_sqlite3`'s libraries from `opt` and `Cellar`, so a policy for it needs those folders; Homebrew's
+`etc` and `var`, which can hold a person's data, stay out of it.
 
 ## Other systems
 
