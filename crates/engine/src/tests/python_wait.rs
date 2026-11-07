@@ -202,9 +202,18 @@ fn workers_that_keep_dying_leave_the_cells_named() {
     let started = Instant::now();
     let r = s.execute("file.save", json!({"path": path, "waitSeconds": 30})).unwrap();
     assert!(started.elapsed() < Duration::from_secs(29), "the go ended by itself");
-    assert_ne!(r["unfinishedCount"], 0, "{r}");
     assert!(path.exists());
     let _ = std::fs::remove_file(&path);
+    // How far it got depends on timing: a cell sent in the moment between a worker's reply and its
+    // exit goes down with the worker and shows the error, and otherwise the go gives up with cells
+    // waiting. Either way the reply names every cell left waiting.
+    let named: Vec<&str> = r["unfinished"].as_array().unwrap().iter().filter_map(Json::as_str).collect();
+    assert_eq!(r["unfinishedCount"], named.len(), "{r}");
+    let d = s.doc().unwrap();
+    for cell in ["B1", "B2", "B3", "B4"] {
+        let busy = d.wb.sheet(0).unwrap().cell(c(cell)).and_then(|x| x.py.as_deref()).is_some_and(|py| py.busy);
+        assert!(!busy || named.contains(&format!("Sheet1!{cell}").as_str()), "{cell}: {r}");
+    }
 }
 
 #[test]
