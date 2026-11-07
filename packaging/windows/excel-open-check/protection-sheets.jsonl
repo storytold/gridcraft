@@ -1,0 +1,9 @@
+# Extra sheets (renamed, coloured, hidden), grouping and a protected sheet
+home.insertSheet={}
+sheet.rename={"name":"Second"}
+sheet.tabColor={"color":"#FF0000"}
+cell.set={"cell":"A1","input":"=Sales!B5&\" \"&Sales!C5"}
+home.insertSheet={}
+sheet.hide={}
+sheet.activate={"sheet":"Sales"}
+review.protectSheet={"formatCells":true}
