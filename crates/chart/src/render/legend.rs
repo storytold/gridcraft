@@ -1,7 +1,7 @@
 use super::frame::Bx;
 use super::trend::supports_trendline;
 use super::{
-    Chart, ChartData, ChartKind, Ctx, DOWN, HAlign, LABEL_SIZE, MAX_CATS, MAX_SERIES, MAX_TRENDLINES, Prim, Rgba, SeriesData, TEXT, Theme, UP,
+    Chart, ChartData, ChartKind, Ctx, DOWN, HAlign, LABEL_SIZE, Look, MAX_CATS, MAX_SERIES, MAX_TRENDLINES, Prim, Rgba, SeriesData, TEXT, Theme, UP,
     VAlign, auto_name, series_color,
 };
 use gridcraft_model::LegendPos;
@@ -102,12 +102,13 @@ pub(super) fn draw_swatch(ctx: &mut Ctx, sw: Swatch, x: f32, yc: f32, s: f32, co
 }
 
 pub(super) fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos: LegendPos, area: Bx) -> Bx {
-    let size = LABEL_SIZE;
+    let look = Look::of(ctx.text.legend, LABEL_SIZE);
+    let size = look.size;
     let row_h = size * 1.6;
     let s = size * 0.8;
     let gap = 4.0;
     let spacing = size * 1.3;
-    let item_w = |ctx: &Ctx, e: &(String, Rgba, Swatch)| swatch_w(e.2, s) + gap + ctx.tw(&e.0, size);
+    let item_w = |ctx: &Ctx, e: &(String, Rgba, Swatch)| swatch_w(e.2, s) + gap + ctx.look_tw(&e.0, look);
     match pos {
         LegendPos::None => area,
         LegendPos::Top | LegendPos::Bottom => {
@@ -139,8 +140,8 @@ pub(super) fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos
                     if let Some(e) = entries.get(i) {
                         draw_swatch(ctx, e.2, x, yc, s, e.1);
                         let sx = swatch_w(e.2, s) + gap;
-                        let t = ctx.fit(&e.0, size, (iw - sx).max(0.0) + 0.5);
-                        ctx.text(x + sx, yc, &t, size, TEXT, (HAlign::Left, VAlign::Middle));
+                        let t = ctx.look_fit(&e.0, look, (iw - sx).max(0.0) + 0.5);
+                        ctx.styled(x + sx, yc, &t, look, TEXT, (HAlign::Left, VAlign::Middle));
                     }
                     x += iw + spacing;
                 }
@@ -159,8 +160,8 @@ pub(super) fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos
                 let yc = y0 + i as f32 * row_h + row_h / 2.0;
                 draw_swatch(ctx, e.2, x0, yc, s, e.1);
                 let sx = swatch_w(e.2, s) + gap;
-                let t = ctx.fit(&e.0, size, (colw - sx).max(0.0) + 0.5);
-                ctx.text(x0 + sx, yc, &t, size, TEXT, (HAlign::Left, VAlign::Middle));
+                let t = ctx.look_fit(&e.0, look, (colw - sx).max(0.0) + 0.5);
+                ctx.styled(x0 + sx, yc, &t, look, TEXT, (HAlign::Left, VAlign::Middle));
             }
             let used = colw + 8.0;
             if pos == LegendPos::Right { Bx { w: area.w - used, ..area } } else { Bx { x: area.x + used, w: area.w - used, ..area } }

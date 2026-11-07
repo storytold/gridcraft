@@ -2,7 +2,7 @@
 
 use std::f32::consts::{PI, TAU};
 
-use gridcraft_model::{Chart, ChartKind, LineDash, QuartileMethod, Theme, TrendlineKind};
+use gridcraft_model::{Chart, ChartKind, ChartTextStyle, ChartTextStyles, LineDash, QuartileMethod, Theme, TrendlineKind};
 
 use crate::axis::{Fmt, Scale, clean, nice_scale};
 use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, series_color};
@@ -53,15 +53,41 @@ pub(crate) const MAX_WEDGES: usize = 2_048;
 struct Ctx<'a> {
     out: Vec<Prim>,
     m: &'a dyn Measure,
+    /// The chart's own text styles (from its file); what they leave out keeps GridCraft's look.
+    text: ChartTextStyles,
+}
+
+/// A kind of chart text as drawn: the chart's size, weight and capitals where its file gives
+/// them, else GridCraft's size, regular and as typed.
+#[derive(Clone, Copy)]
+struct Look {
+    size: f32,
+    bold: bool,
+    caps: bool,
+}
+
+impl Look {
+    fn of(style: ChartTextStyle, size: f32) -> Look {
+        Look { size: style.size.unwrap_or(size), bold: style.bold.unwrap_or(false), caps: style.caps }
+    }
+    fn cased(self, s: &str) -> String {
+        if self.caps { s.to_uppercase() } else { s.to_string() }
+    }
 }
 
 impl Ctx<'_> {
     fn tw(&self, s: &str, size: f32) -> f32 {
-        let w = self.m.text_width(s, size, false);
+        self.measure(s, size, false)
+    }
+    fn measure(&self, s: &str, size: f32, bold: bool) -> f32 {
+        let w = self.m.text_width(s, size, bold);
         if w.is_finite() { w.max(0.0) } else { 0.0 }
     }
     fn fit(&self, s: &str, size: f32, maxw: f32) -> String {
-        if self.tw(s, size) <= maxw {
+        self.fit_weighted(s, size, false, maxw)
+    }
+    fn fit_weighted(&self, s: &str, size: f32, bold: bool, maxw: f32) -> String {
+        if self.measure(s, size, bold) <= maxw {
             return s.to_string();
         }
         let chars: Vec<char> = s.chars().collect();
@@ -69,11 +95,29 @@ impl Ctx<'_> {
         while n > 0 {
             n -= 1;
             let t: String = chars.iter().take(n).collect::<String>() + "…";
-            if self.tw(&t, size) <= maxw {
+            if self.measure(&t, size, bold) <= maxw {
                 return if n == 0 { String::new() } else { t };
             }
         }
         String::new()
+    }
+    /// The data labels' look.
+    fn labels(&self) -> Look {
+        Look::of(self.text.data_labels, LABEL_SIZE)
+    }
+    fn look_tw(&self, s: &str, l: Look) -> f32 {
+        self.measure(&l.cased(s), l.size, l.bold)
+    }
+    /// `s` in `l`, shortened to `maxw` with an ellipsis.
+    fn look_fit(&self, s: &str, l: Look, maxw: f32) -> String {
+        self.fit_weighted(&l.cased(s), l.size, l.bold, maxw)
+    }
+    /// Text drawn in `l`.
+    fn styled(&mut self, x: f32, y: f32, s: &str, l: Look, color: Rgba, (align, valign): (HAlign, VAlign)) {
+        if s.is_empty() {
+            return;
+        }
+        self.out.push(Prim::Text { x, y, text: l.cased(s), size: l.size, color, bold: l.bold, align, valign, rotation: 0.0 });
     }
     fn text(&mut self, x: f32, y: f32, s: &str, size: f32, color: Rgba, (align, valign): (HAlign, VAlign)) {
         if s.is_empty() {
@@ -132,14 +176,16 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
         return vec![];
     }
     let data = sanitize(data);
-    let mut ctx = Ctx { out: Vec::new(), m };
+    let mut ctx = Ctx { out: Vec::new(), m, text: chart.text };
     ctx.out.push(Prim::Rect { x: 0.0, y: 0.0, w, h, fill: Some(WHITE), stroke: Some((GRID, 1.0)), radius: 0.0 });
     let pad = (w.min(h) * 0.04).clamp(2.0, 10.0);
     let mut area = Bx { x: pad, y: pad, w: w - 2.0 * pad, h: h - 2.0 * pad };
     if let Some(t) = chart_title(chart, &data) {
-        let size = TITLE_SIZE.min(h * 0.12).max(4.0);
-        let t = ctx.fit(&t, size, area.w);
-        ctx.text(w / 2.0, area.y, &t, size, TEXT, (HAlign::Center, VAlign::Top));
+        let look = Look::of(ctx.text.title, TITLE_SIZE);
+        let size = look.size.min(h * 0.12).max(4.0);
+        let look = Look { size, ..look };
+        let t = ctx.look_fit(&t, look, area.w);
+        ctx.styled(w / 2.0, area.y, &t, look, TEXT, (HAlign::Center, VAlign::Top));
         let used = size * 1.3 + 4.0;
         area.y += used;
         area.h -= used;

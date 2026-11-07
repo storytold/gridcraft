@@ -3,8 +3,8 @@ use super::legend::{cat_label, plot_kind};
 use super::lines::{decimate_area, draw_markers, draw_runs};
 use super::trend::{draw_trend_labels, draw_trendlines, max_backward, max_forward, max_forward_slots, supports_trendline};
 use super::{
-    Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_LINE_PTS, MAX_MARKERS, Prim, Scale, SeriesData, TEXT,
-    VAlign, WHITE, clean, nice_scale,
+    Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, MAX_CATS, MAX_LABELS, MAX_LINE_PTS, MAX_MARKERS, Prim, Scale, SeriesData, TEXT, VAlign, WHITE,
+    clean, nice_scale,
 };
 
 // ---------------------------------------------------------------- cartesian (column/bar/line/area/combo)
@@ -183,6 +183,7 @@ fn column_slots(fams: &[Fam], sec: &[bool]) -> (Vec<usize>, f32) {
 }
 
 pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizontal: bool) {
+    let dl = ctx.labels();
     let ncat = data.categories.len().max(data.series.iter().map(|s| s.values.len()).max().unwrap_or(0)).min(MAX_CATS);
     if ncat == 0 {
         return;
@@ -298,20 +299,20 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                             if horizontal {
                                 let y = c + nslots * bw / 2.0 - (k + 0.5) * bw;
                                 if stacked {
-                                    ctx.text(mid, y, &t, LABEL_SIZE, on(s.color), (HAlign::Center, VAlign::Middle));
+                                    ctx.styled(mid, y, &t, dl, on(s.color), (HAlign::Center, VAlign::Middle));
                                 } else if v >= 0.0 {
-                                    ctx.text(pb.max(pt) + 3.0, y, &t, LABEL_SIZE, TEXT, (HAlign::Left, VAlign::Middle));
+                                    ctx.styled(pb.max(pt) + 3.0, y, &t, dl, TEXT, (HAlign::Left, VAlign::Middle));
                                 } else {
-                                    ctx.text(lo - 3.0, y, &t, LABEL_SIZE, TEXT, (HAlign::Right, VAlign::Middle));
+                                    ctx.styled(lo - 3.0, y, &t, dl, TEXT, (HAlign::Right, VAlign::Middle));
                                 }
                             } else {
                                 let x = c - nslots * bw / 2.0 + (k + 0.5) * bw;
                                 if stacked {
-                                    ctx.text(x, mid, &t, LABEL_SIZE, on(s.color), (HAlign::Center, VAlign::Middle));
+                                    ctx.styled(x, mid, &t, dl, on(s.color), (HAlign::Center, VAlign::Middle));
                                 } else if v >= 0.0 {
-                                    ctx.text(x, lo - 2.0, &t, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
+                                    ctx.styled(x, lo - 2.0, &t, dl, TEXT, (HAlign::Center, VAlign::Bottom));
                                 } else {
-                                    ctx.text(x, lo + len + 2.0, &t, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Top));
+                                    ctx.styled(x, lo + len + 2.0, &t, dl, TEXT, (HAlign::Center, VAlign::Top));
                                 }
                             }
                         }
@@ -327,7 +328,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                     if labels_on {
                         for (j, p) in pts.iter().enumerate() {
                             if let (Some(p), Some(v)) = (p, s.values.get(j).copied().flatten()) {
-                                ctx.text(p[0], p[1] - 5.0, &fmt.format(v, None), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
+                                ctx.styled(p[0], p[1] - 5.0, &fmt.format(v, None), dl, TEXT, (HAlign::Center, VAlign::Bottom));
                             }
                         }
                     }
@@ -335,7 +336,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
             }
         }
         for (x, y, t) in area_labels.drain(..) {
-            ctx.text(x, y, &t, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
+            ctx.styled(x, y, &t, dl, TEXT, (HAlign::Center, VAlign::Bottom));
         }
     }
     // Trendlines on top: x is the category number 1..n.
@@ -363,6 +364,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
 // ---------------------------------------------------------------- scatter & bubble
 
 pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
+    let dl = ctx.labels();
     let pts_of = |s: &SeriesData| -> Vec<Option<(f64, f64)>> {
         s.values
             .iter()
@@ -436,7 +438,7 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
         if chart.data_labels && pts.len() <= MAX_LABELS {
             for (p, raw) in px.iter().zip(pts) {
                 if let (Some(p), Some((_, y))) = (p, raw) {
-                    ctx.text(p[0], p[1] - 6.0, &fy.format(*y, None), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
+                    ctx.styled(p[0], p[1] - 6.0, &fy.format(*y, None), dl, TEXT, (HAlign::Center, VAlign::Bottom));
                 }
             }
         }

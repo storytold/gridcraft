@@ -55,6 +55,7 @@ fn chart(kind: ChartKind) -> Chart {
         source: None,
         by_rows: false,
         pivot: None,
+        text: Default::default(),
     }
 }
 
@@ -1678,4 +1679,51 @@ fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
+}
+
+/// A chart's own text styles: legend, data labels and axis labels in the size, weight and capitals
+/// its file gives; what it leaves out keeps the usual look.
+#[test]
+fn text_takes_the_charts_own_styles() {
+    use gridcraft_model::{ChartTextStyle, ChartTextStyles};
+    let d = sample(ChartKind::ColumnClustered);
+    let texts = |c: &Chart| -> Vec<(String, f32, bool)> {
+        render(c, &d, 640.0, 400.0, &ApproxMeasure)
+            .into_iter()
+            .filter_map(|p| match p {
+                Prim::Text { text, size, bold, .. } => Some((text, size, bold)),
+                _ => None,
+            })
+            .collect()
+    };
+    let plain = texts(&chart(ChartKind::ColumnClustered));
+    let find = |all: &[(String, f32, bool)], t: &str| all.iter().find(|(s, ..)| s == t).cloned();
+    assert_eq!(find(&plain, "North").map(|(_, s, b)| (s, b)), Some((9.0, false)), "the legend as before");
+    assert!(find(&plain, "Q1").is_some() && find(&plain, "$12,000").is_some_and(|(_, s, b)| s == 9.0 && !b));
+
+    let mut c = chart(ChartKind::ColumnClustered);
+    let style = |size: f32, bold: bool, caps: bool| ChartTextStyle { size: Some(size), bold: Some(bold), caps };
+    c.text = ChartTextStyles {
+        title: style(18.0, true, false),
+        legend: style(10.5, true, false),
+        data_labels: style(8.0, true, false),
+        category_axis: style(8.0, false, true),
+        value_axis: ChartTextStyle::default(),
+    };
+    let styled = texts(&c);
+    assert_eq!(find(&styled, "Quarterly Sales").map(|(_, s, b)| (s, b)), Some((18.0, true)));
+    assert_eq!(find(&styled, "North").map(|(_, s, b)| (s, b)), Some((10.5, true)));
+    assert_eq!(find(&styled, "$12,000").map(|(_, s, b)| (s, b)), Some((8.0, true)));
+    // Categories in capitals when the file asks for them.
+    let mut lower = sample(ChartKind::ColumnClustered);
+    lower.categories = (1..=6).map(|i| format!("wk {i}")).collect();
+    let caps: Vec<(String, f32, bool)> = render(&c, &lower, 640.0, 400.0, &ApproxMeasure)
+        .into_iter()
+        .filter_map(|p| match p {
+            Prim::Text { text, size, bold, .. } => Some((text, size, bold)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(find(&caps, "WK 1").map(|(_, s, b)| (s, b)), Some((8.0, false)), "{caps:?}");
+    assert!(find(&caps, "wk 1").is_none());
 }
