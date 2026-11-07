@@ -5,8 +5,6 @@ use super::trend::{draw_trend_labels, draw_trendlines, max_backward, max_forward
 use super::{
     Chart, ChartData, ChartKind, Ctx, ErrSeg, ErrorBarData, ErrorBarDirection, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_ERR_BARS, MAX_LABELS,
     MAX_LINE_PTS, MAX_MARKERS, Prim, Scale, SeriesData, TEXT, VAlign, WHITE, clean, draw_error_bar, error_segments, fixed_scale, nice_scale,
-    Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_LINE_PTS, MAX_MARKERS, Prim, Scale, SeriesData, TEXT,
-    VAlign, WHITE, clean, nice_scale,
 };
 use crate::errbars::supports_error_bars;
 
