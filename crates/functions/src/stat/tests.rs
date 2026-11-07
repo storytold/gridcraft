@@ -433,6 +433,176 @@ fn linest_family() {
     is_err(ev("LINEST", vec![c(&[1.0, 2.0]), c(&[1.0, 2.0, 3.0])]), CellError::Ref);
 }
 
+/// LINEST on columns of predictors, `stats` on, as rows of numbers (`None` for an error cell).
+fn linest_rows(y: &[f64], xs: &[Vec<f64>], constant: bool) -> Vec<Vec<Option<f64>>> {
+    let x = arr((0..y.len()).map(|i| xs.iter().map(|col| nv(col[i])).collect()).collect());
+    let r = rows_of(&ev("LINEST", vec![c(y), av(x), b(constant), b(true)]));
+    r.iter().map(|row| row.iter().map(Value::as_f64).collect()).collect()
+}
+
+fn rel_close(got: Option<f64>, want: f64, tol: f64, what: &str) {
+    let got = got.unwrap_or(f64::NAN);
+    assert!((got - want).abs() <= tol * want.abs().max(1e-300), "{what}: got {got:e}, want {want:e}, rel tol {tol:e}");
+}
+
+// B2: LINEST solved the normal equations, whose condition number is the square of the data's.
+// Expected values below come from exact rational arithmetic: the normal equations solved with
+// Python `fractions.Fraction` (no rounding at all), rounded once to f64 (script in the PR text).
+#[test]
+fn linest_ill_conditioned_polynomial_is_exact() {
+    // y = 1 + x + x² + x³ + x⁴ + x⁵ on x = 1..12: every coefficient is exactly 1. The normal
+    // equations were off by up to 2.6e-6.
+    let xs: Vec<f64> = (1..=12).map(f64::from).collect();
+    let ys: Vec<f64> = xs.iter().map(|x| (0..=5).map(|j| x.powi(j)).sum()).collect();
+    let cols: Vec<Vec<f64>> = (1..=5).map(|j| xs.iter().map(|x| x.powi(j)).collect()).collect();
+    let r = linest_rows(&ys, &cols, true);
+    for (i, v) in r[0].iter().enumerate() {
+        rel_close(*v, 1.0, 1e-9, &format!("coefficient {i}"));
+    }
+}
+
+#[test]
+fn linest_large_offset_regressors_recover_the_line() {
+    // y = 3x + 7 exactly with x = 1e6 + i and regressors [x, x²]: the true fit has x² coefficient
+    // 0, x coefficient 3, intercept 7. The normal equations returned 2.99976 and 251.14.
+    let xs: Vec<f64> = (0..12).map(|i| 1_000_000.0 + f64::from(i)).collect();
+    let ys: Vec<f64> = xs.iter().map(|x| 3.0 * x + 7.0).collect();
+    let r = linest_rows(&ys, &[xs.clone(), xs.iter().map(|x| x * x).collect()], true);
+    assert!(r[0][0].unwrap().abs() < 1e-12, "x² coefficient {:?}", r[0][0]);
+    rel_close(r[0][1], 3.0, 1e-9, "x coefficient");
+    // The intercept subtracts 3e6 from 3e6 + 7 and carries the x² coefficient times 1e12, so
+    // it is good to about 1e-4 in absolute terms, not better.
+    assert!((r[0][2].unwrap() - 7.0).abs() < 1e-3, "intercept {:?}", r[0][2]);
+    // One regressor: exact.
+    let one = linest_rows(&ys, std::slice::from_ref(&xs), true);
+    rel_close(one[0][0], 3.0, 1e-12, "slope");
+    rel_close(one[0][1], 7.0, 1e-9, "intercept");
+}
+
+#[test]
+fn linest_noisy_fits_match_exact_rational_least_squares() {
+    // Two predictors with noise, constant fitted. Order of each row: x2, x1, intercept.
+    let x1 = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+    let x2 = [2.0, 1.0, 4.0, 3.0, 7.0, 5.0, 9.0, 6.0];
+    let y = [5.0, 6.0, 11.0, 12.0, 20.0, 19.0, 30.0, 28.0];
+    let r = linest_rows(&y, &[x1.to_vec(), x2.to_vec()], true);
+    let (coef, se) = ([1.4270152505446623, 2.452069716775599, -1.2592592592592593], [0.3376442444771937, 0.3679392851360571, 1.0847489958915801]);
+    for i in 0..3 {
+        rel_close(r[0][i], coef[i], 1e-12, "coef");
+        rel_close(r[1][i], se[i], 1e-12, "se");
+    }
+    rel_close(r[2][0], 0.985070139277778, 1e-12, "r2");
+    rel_close(r[2][1], 1.367057173604725, 1e-12, "sey");
+    rel_close(r[3][0], 164.94965318256004, 1e-11, "F");
+    assert_eq!(r[3][1], Some(5.0));
+    rel_close(r[4][0], 616.5307734204792, 1e-12, "ssreg");
+    rel_close(r[4][1], 9.344226579520697, 1e-11, "ssresid");
+    assert_eq!(r[2][2], None);
+    // const = FALSE: through the origin, R² and F from the uncentred sums.
+    let r = linest_rows(&y, &[x1.to_vec(), x2.to_vec()], false);
+    rel_close(r[0][0], 1.3529411764705883, 1e-12, "coef");
+    rel_close(r[0][1], 2.303921568627451, 1e-12, "coef");
+    assert_eq!(r[0][2], Some(0.0));
+    rel_close(r[1][0], 0.34102994374364876, 1e-12, "se");
+    rel_close(r[1][1], 0.35495521934550084, 1e-12, "se");
+    assert_eq!(r[1][2], None);
+    rel_close(r[2][0], 0.995718966041848, 1e-12, "r2");
+    rel_close(r[2][1], 1.4061024795535124, 1e-12, "sey");
+    rel_close(r[3][0], 697.7652892561983, 1e-11, "F");
+    assert_eq!(r[3][1], Some(6.0));
+    rel_close(r[4][0], 2759.1372549019607, 1e-12, "ssreg");
+    rel_close(r[4][1], 11.862745098039216, 1e-11, "ssresid");
+    // Cubic and quintic with noise on x = 1..12; order x^k .. x, intercept.
+    let xs: Vec<f64> = (1..=12).map(f64::from).collect();
+    let noise = [3.0, -2.0, 4.0, -1.0, 2.0, -3.0, 1.0, -4.0, 2.0, 3.0, -2.0, 1.0];
+    let cub: Vec<f64> = xs.iter().zip(noise).map(|(x, e)| 1.0 + x + x * x + x.powi(3) + e).collect();
+    let r = linest_rows(&cub, &(1..=3).map(|j| xs.iter().map(|x| x.powi(j)).collect()).collect::<Vec<Vec<f64>>>(), true);
+    let coef = [0.9955969955969955, 1.1452991452991452, -0.33514633514633513, 4.373737373737374];
+    let se = [0.02755463331301788, 0.5434124199147191, 3.102549978874372, 4.851885058051787];
+    for i in 0..4 {
+        rel_close(r[0][i], coef[i], 1e-11, "cubic coef");
+        rel_close(r[1][i], se[i], 1e-10, "cubic se");
+    }
+    rel_close(r[2][0], 0.9999837292113533, 1e-12, "cubic r2");
+    rel_close(r[4][1], 70.35586635586635, 1e-9, "cubic ssresid");
+    let quint: Vec<f64> = xs.iter().zip(noise).map(|(x, e)| (0..=5).map(|j| x.powi(j)).sum::<f64>() + 50.0 * e).collect();
+    let r = linest_rows(&quint, &(1..=5).map(|j| xs.iter().map(|x| x.powi(j)).collect()).collect::<Vec<Vec<f64>>>(), true);
+    let coef = [0.9330693815987934, 3.022273070067188, -20.97398190045249, 108.20489681886741, -250.24940010969422, 271.45454545454544];
+    let se = [0.20046539191103213, 6.538253746916523, 78.39635356777087, 421.2608646012634, 976.3504976093745, 736.5866411764556];
+    for i in 0..6 {
+        rel_close(r[0][i], coef[i], 1e-8, "quintic coef");
+        rel_close(r[1][i], se[i], 1e-8, "quintic se");
+    }
+    rel_close(r[2][1], 168.58174051770763, 1e-9, "quintic sey");
+    rel_close(r[4][1], 170518.81941587824, 1e-7, "quintic ssresid");
+}
+
+#[test]
+fn linest_drops_collinear_columns() {
+    // x2 = 2·x1: the later column is dropped (coefficient and standard error 0), the fit is the
+    // one on x1 alone, and the degrees of freedom count only the kept column.
+    let x1 = [1.0, 2.0, 3.0, 4.0, 5.0];
+    let y = [2.0, 4.0, 5.0, 4.0, 5.0];
+    let x2: Vec<f64> = x1.iter().map(|v| 2.0 * v).collect();
+    let r = linest_rows(&y, &[x1.to_vec(), x2], true);
+    // Exact: slope 0.6, intercept 2.2, ssresid 2.4, ssreg 3.6, df 3 (Fraction arithmetic).
+    assert_eq!(r[0][0], Some(0.0));
+    rel_close(r[0][1], 0.6, 1e-12, "slope");
+    rel_close(r[0][2], 2.2, 1e-12, "intercept");
+    assert_eq!(r[1][0], Some(0.0));
+    rel_close(r[1][1], (0.8f64 / 10.0).sqrt(), 1e-12, "se slope");
+    assert_eq!(r[3][1], Some(3.0));
+    rel_close(r[4][0], 3.6, 1e-12, "ssreg");
+    rel_close(r[4][1], 2.4, 1e-12, "ssresid");
+    // A constant column is collinear with the intercept and dropped as well.
+    let r = linest_rows(&y, &[vec![7.0; 5], x1.to_vec()], true);
+    assert_eq!(r[0][1], Some(0.0));
+    assert_eq!(r[1][1], Some(0.0));
+    rel_close(r[0][0], 0.6, 1e-12, "slope");
+    rel_close(r[0][2], 2.2, 1e-12, "intercept");
+    // A constant column whose mean does not centre to exactly 0 (the mean of three 0.1 is
+    // 0.10000000000000002) is just as collinear with the intercept: dropped, not scaled up to a
+    // unit vector. Some length hits a rounding mean for each constant.
+    for c in [0.1, 1.1, 1e6 + 0.3] {
+        for n in 3..=12 {
+            let xs: Vec<f64> = (1..=n).map(f64::from).collect();
+            let ys: Vec<f64> = (1..=n).map(|i| f64::from(i * i % 7) + 0.5 * f64::from(i)).collect();
+            let r = linest_rows(&ys, &[vec![c; n as usize], xs], true);
+            assert_eq!(r[0][1], Some(0.0), "coefficient of the constant {c}, n={n}");
+            assert_eq!(r[1][1], Some(0.0), "standard error of the constant {c}, n={n}");
+            assert_eq!(r[3][1], Some(f64::from(n) - 2.0), "df with the constant {c}, n={n}");
+        }
+    }
+    // A column that merely sits far from zero is not noise and is kept.
+    let off: Vec<f64> = x1.iter().map(|v| 1e9 + v).collect();
+    let r = linest_rows(&y, &[off], true);
+    rel_close(r[0][0], 0.6, 1e-6, "slope on an offset column");
+    assert_eq!(r[3][1], Some(3.0));
+    // Distinct values far from zero, whose spread is below 1e-12 of the offset, still vary.
+    let r = linest_rows(&[0.0, 1.0, 2.0], &[vec![1e13, 1e13 + 1.0, 1e13 + 2.0]], true);
+    rel_close(r[0][0], 1.0, 1e-9, "slope on a predictor with a 1e13 offset");
+    assert_eq!(r[3][1], Some(1.0), "df: the predictor is kept");
+    // More predictors than observations: the surplus columns drop, no panic.
+    let r = linest_rows(&[1.0, 2.0], &[vec![1.0, 2.0], vec![2.0, 1.0], vec![0.0, 5.0]], true);
+    assert_eq!(r[0].len(), 4);
+}
+
+#[test]
+fn logest_is_linest_of_ln_y() {
+    // y = 5·2^x: m = 2, b = 5.
+    let x = [0.0, 1.0, 2.0, 3.0, 4.0];
+    let y: Vec<f64> = x.iter().map(|v| 5.0 * 2f64.powf(*v)).collect();
+    let l = rows_of(&ev("LOGEST", vec![c(&y), c(&x)]));
+    close_tol(l[0][0].clone(), 2.0, 1e-12);
+    close_tol(l[0][1].clone(), 5.0, 1e-12);
+    // The statistics are those of the fit on ln y, untransformed.
+    let ln: Vec<f64> = y.iter().map(|v| v.ln()).collect();
+    let ls = rows_of(&ev("LOGEST", vec![c(&y), c(&x), b(true), b(true)]));
+    let ns = rows_of(&ev("LINEST", vec![c(&ln), c(&x), b(true), b(true)]));
+    assert_eq!(ls[1..], ns[1..]);
+    close_tol(ls[0][0].clone(), ns[0][0].as_f64().unwrap().exp(), 1e-14);
+}
+
 // #2177: one predictor row of 16,384 columns built three 16,384² matrices (6 GB) and an O(k³)
 // inversion; a wider TOROW aborted the process. It is now refused before allocating.
 #[test]
