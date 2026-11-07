@@ -303,6 +303,9 @@ pub struct SheetApp {
     /// Every unsaved workbook has been answered for quitting (or `app.quit` asked): the next
     /// window close goes through.
     pub allow_close: bool,
+    /// The copies of unsaved workbooks an earlier run left have been offered (File › Open opens
+    /// on them once, at startup).
+    pub recovery_offered: bool,
     /// A quit question is waiting in the active window: [`doc_windows`] brings its native window
     /// to the front, also when the app is hidden or the window minimized (a Dock quit).
     pub bring_forward: bool,
