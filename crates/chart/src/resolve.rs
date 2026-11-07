@@ -199,8 +199,16 @@ fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str, limi
         (Some((sh, r)), Some(lv)) => {
             let cut = u32::try_from(limit.saturating_sub(1)).unwrap_or(u32::MAX);
             let outer = lv.outer;
-            let end = if lv.by_columns { CellRef::new(r.end.row.min(r.start.row.saturating_add(cut)), r.end.col) } else { CellRef::new(r.end.row, r.end.col.min(r.start.col.saturating_add(cut))) };
-            let start = if lv.by_columns { CellRef::new(r.start.row, r.start.col.max(end.col.saturating_sub(outer))) } else { CellRef::new(r.start.row.max(end.row.saturating_sub(outer)), r.start.col) };
+            let end = if lv.by_columns {
+                CellRef::new(r.end.row.min(r.start.row.saturating_add(cut)), r.end.col)
+            } else {
+                CellRef::new(r.end.row, r.end.col.min(r.start.col.saturating_add(cut)))
+            };
+            let start = if lv.by_columns {
+                CellRef::new(r.start.row, r.start.col.max(end.col.saturating_sub(outer)))
+            } else {
+                CellRef::new(r.start.row.max(end.row.saturating_sub(outer)), r.start.col)
+            };
             let r = RangeRef::new(start, end);
             let prefix = formula.rfind('!').and_then(|i| formula.get(..=i)).unwrap_or("");
             let cap = (r.width() as usize).saturating_mul(r.height() as usize);
