@@ -62,6 +62,7 @@ impl eframe::App for App {
         self.1.show(&mut self.0, ui);
     }
     fn on_exit(&mut self) {
+        self.0.autosave_on_exit();
         print::finish_pending_jobs();
         save_prefs(&self.0);
         // macOS (#117): end the process here, before eframe tears the window down. AccessKit's

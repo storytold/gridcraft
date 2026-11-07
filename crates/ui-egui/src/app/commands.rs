@@ -22,6 +22,8 @@ impl SheetApp {
             || (id == "view.switchWindows" && ["window", "doc"].iter().any(|k| params.get(*k).is_some_and(|d| !d.is_null())));
         if id.starts_with("file.") || switches_window {
             self.settle_drafts()?;
+            // Saving, opening, closing or switching windows never races an AutoSave still being written.
+            self.finish_pending_autosave();
         }
         if matches!(id, "file.save" | "file.saveAs" | "file.saveBytes") {
             self.store_view_state();
@@ -201,6 +203,11 @@ impl SheetApp {
             "options.autoComplete" => {
                 self.ui.autocomplete = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.autocomplete);
                 Ok(json!({"on": self.ui.autocomplete}))
+            }
+            "options.autoSave" => {
+                // The ribbon's AutoSave toggle, reachable from the control channel and MCP.
+                self.ui.autosave = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.autosave);
+                Ok(json!({"on": self.ui.autosave}))
             }
             "options.highlightActiveRow" => {
                 self.ui.highlight_active_row = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.highlight_active_row);
