@@ -132,57 +132,106 @@ fn bessel_y(n: u32, x: f64) -> Option<f64> {
     Some(b)
 }
 
-/// I_n(x) by its power series (all terms positive), computed with a log-scaled first term.
-fn bessel_i(n: u32, x: f64) -> Option<f64> {
-    if x == 0.0 {
-        return Some(if n == 0 { 1.0 } else { 0.0 });
-    }
+/// Horner evaluation of `c[0] + c[1]·t + c[2]·t² + …`.
+fn horner(c: &[f64], t: f64) -> f64 {
+    c.iter().rev().fold(0.0, |r, a| r * t + a)
+}
+
+// The I and K polynomials for orders 0 and 1 follow Abramowitz & Stegun 9.8.1–9.8.8.
+
+/// I_0(x) (A&S 9.8.1, 9.8.2).
+fn bessel_i0(x: f64) -> f64 {
     let ax = x.abs();
-    let nf = n as f64;
-    let ln_t0 = nf * (ax / 2.0).ln() - crate::special::ln_gamma(nf + 1.0);
-    let q = ax * ax / 4.0;
-    let mut term = 1.0;
-    let mut sum = 1.0;
-    let mut k = 0.0;
-    while k < 1e6 {
-        k += 1.0;
-        term *= q / (k * (k + nf));
-        sum += term;
-        if term < 1e-17 * sum {
-            break;
-        }
-        if !sum.is_finite() {
-            return None;
-        }
+    if ax < 3.75 {
+        let t = (x / 3.75) * (x / 3.75);
+        horner(&[1.0, 3.515_622_9, 3.089_942_4, 1.206_749_2, 0.265_973_2, 0.036_076_8, 0.004_581_3], t)
+    } else {
+        let t = 3.75 / ax;
+        let p = [0.398_942_28, 0.013_285_92, 0.002_253_19, -0.001_575_65, 0.009_162_81, -0.020_577_06, 0.026_355_37, -0.016_476_33, 0.003_923_77];
+        (ax - 0.5 * ax.ln() + horner(&p, t).ln()).exp()
     }
-    let r = (ln_t0 + sum.ln()).exp();
-    let r = if x < 0.0 && n % 2 == 1 { -r } else { r };
+}
+
+/// I_1(x) (A&S 9.8.3, 9.8.4).
+fn bessel_i1(x: f64) -> f64 {
+    let ax = x.abs();
+    let r = if ax < 3.75 {
+        let t = (x / 3.75) * (x / 3.75);
+        ax * horner(&[0.5, 0.878_905_94, 0.514_988_69, 0.150_849_34, 0.026_587_33, 0.003_015_32, 0.000_324_11], t)
+    } else {
+        let t = 3.75 / ax;
+        let p = [0.398_942_28, -0.039_880_24, -0.003_620_18, 0.001_638_01, -0.010_315_55, 0.022_829_67, -0.028_953_12, 0.017_876_54, -0.004_200_59];
+        (ax - 0.5 * ax.ln() + horner(&p, t).ln()).exp()
+    };
+    if x < 0.0 { -r } else { r }
+}
+
+/// I_n(x), using A&S approximations for orders 0 and 1 and the existing series for higher orders.
+fn bessel_i(n: u32, x: f64) -> Option<f64> {
+    let r = match n {
+        0 => bessel_i0(x),
+        1 => bessel_i1(x),
+        _ => {
+            if x == 0.0 {
+                return Some(0.0);
+            }
+            let nf = n as f64;
+            let ln_t0 = nf * (x.abs() / 2.0).ln() - crate::special::ln_gamma(nf + 1.0);
+            let ax = x.abs();
+            let q = ax * ax / 4.0;
+            let mut term = 1.0;
+            let mut sum = 1.0;
+            let mut k = 0.0;
+            while k < 1e6 {
+                k += 1.0;
+                term *= q / (k * (k + nf));
+                sum += term;
+                if term < 1e-17 * sum {
+                    break;
+                }
+                if !sum.is_finite() {
+                    return None;
+                }
+            }
+            let value = (ln_t0 + sum.ln()).exp();
+            if x < 0.0 && n % 2 == 1 { -value } else { value }
+        }
+    };
     if r.is_finite() { Some(r) } else { None }
 }
 
-/// K_n(x) for x > 0: K_0 and K_1 from ∫₀^∞ e^{−x cosh t} cosh(νt) dt (trapezoid rule), then
-/// upward recurrence.
-fn bessel_k(n: u32, x: f64) -> Option<f64> {
-    let k_int = |nu: f64| -> f64 {
-        let h: f64 = 0.02;
-        let mut sum = 0.5 * (-x).exp();
-        let mut t: f64 = h;
-        while t < 800.0 {
-            let v = (-x * t.cosh() + (nu * t).ln_cosh_safe()).exp();
-            sum += v;
-            if v < 1e-18 * sum && x * t.cosh() > 50.0 {
-                break;
-            }
-            t += h;
-        }
-        sum * h
-    };
-    let k0 = k_int(0.0);
-    if n == 0 {
-        return Some(k0);
+/// K_0(x) for x > 0 (A&S 9.8.5, 9.8.6).
+// The first coefficient is A&S's 8-digit −γ, which Excel reproduces; the exact constant would differ.
+#[allow(clippy::approx_constant)]
+fn bessel_k0(x: f64) -> f64 {
+    if x <= 2.0 {
+        let t = (x / 2.0) * (x / 2.0);
+        let p = [-0.577_215_66, 0.422_784_20, 0.230_697_56, 0.034_885_90, 0.002_626_98, 0.000_107_50, 0.000_007_40];
+        -(x / 2.0).ln() * bessel_i0(x) + horner(&p, t)
+    } else {
+        let p = [1.253_314_14, -0.078_323_58, 0.021_895_68, -0.010_624_46, 0.005_878_72, -0.002_515_40, 0.000_532_08];
+        (-x).exp() / x.sqrt() * horner(&p, 2.0 / x)
     }
-    let k1 = k_int(1.0);
-    let (mut a, mut b) = (k0, k1);
+}
+
+/// K_1(x) for x > 0 (A&S 9.8.7, 9.8.8).
+fn bessel_k1(x: f64) -> f64 {
+    if x <= 2.0 {
+        let t = (x / 2.0) * (x / 2.0);
+        let p = [1.0, 0.154_431_44, -0.672_785_79, -0.181_568_97, -0.019_194_02, -0.001_104_04, -0.000_046_86];
+        (x * (x / 2.0).ln() * bessel_i1(x) + horner(&p, t)) / x
+    } else {
+        let p = [1.253_314_14, 0.234_986_19, -0.036_556_20, 0.015_042_68, -0.007_803_53, 0.003_256_14, -0.000_682_45];
+        (-x).exp() / x.sqrt() * horner(&p, 2.0 / x)
+    }
+}
+
+/// K_n(x) for x > 0: K_0 and K_1 from the polynomials, then upward recurrence.
+fn bessel_k(n: u32, x: f64) -> Option<f64> {
+    let (mut a, mut b) = (bessel_k0(x), bessel_k1(x));
+    if n == 0 {
+        return if a.is_finite() { Some(a) } else { None };
+    }
     for k in 1..n {
         let c = a + 2.0 * k as f64 / x * b;
         a = b;
@@ -192,18 +241,6 @@ fn bessel_k(n: u32, x: f64) -> Option<f64> {
         }
     }
     if b.is_finite() { Some(b) } else { None }
-}
-
-trait LnCosh {
-    fn ln_cosh_safe(self) -> f64;
-}
-
-impl LnCosh for f64 {
-    /// ln(cosh(x)) without overflow.
-    fn ln_cosh_safe(self) -> f64 {
-        let a = self.abs();
-        a + (-2.0 * a).exp().ln_1p() - std::f64::consts::LN_2
-    }
 }
 
 fn bessel_args(a: &[Arg]) -> R<(f64, u32)> {
