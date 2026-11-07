@@ -213,7 +213,10 @@ fn action_pen_ink(s: &mut Session, p: &Json) -> Result<Json> {
     // happened; anything else starts a fresh one, so unrelated writing never merges.
     let continues = s.ink_entry.as_ref().is_some_and(|e| {
         let recent = match (started_at, e.ended_at) {
-            (Some(started), Some(ended)) => started - ended <= gap_ms,
+            // Both ends must come from one clock, with the pen-up before the next pen-down; a
+            // negative gap means the caller reset or rewound its clock, which must not merge two
+            // unrelated entries.
+            (Some(started), Some(ended)) => (0.0..=gap_ms).contains(&(started - ended)),
             // Without the caller's times, the gap between commands is all there is.
             _ => match (now, e.last) {
                 (Some(now), Some(last)) => now.checked_duration_since(last).is_some_and(|gap| gap <= INK_ENTRY_GAP),

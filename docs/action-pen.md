@@ -87,8 +87,8 @@ structured error naming the folder to fill.
 |---|---|---|
 | `draw.actionPen` | toggle (no undo) | `{on?: bool}` turns the tool on or off. Turning it on without a model is refused with the folder to install it in. |
 | `draw.actionPenInk` | edit (one undo step per stroke) | `{points: [[x,y],…], cell?, startedAt?, endedAt?}` adds one stroke in sheet points to the handwriting entry and types its recognised text into the cell under the stroke's first point (or `cell`). The optional `startedAt`/`endedAt` (milliseconds) say when the pen went down and up, so the pause that ends an entry is the time the pen was up. Returns `{cell, text, value}`. |
-| `ink.status` | query | `{accelerator?}` reports `installed`/`filesPresent`, `ready`, the model id, name, revision, licence, source, size, runtime, the folder, missing files, a one-line hint, and the accelerator fields below. |
-| `ink.modelImport` | native | `{path}` copies one model file or a folder of them into the model folder, verifying each, and reports what is still missing. |
+| `ink.status` | query | `{accelerator?}` reports `filesPresent`, `ready`, the model id, name, revision, licence, source, size, runtime, the folder, missing files, a one-line hint, and the accelerator fields below. |
+| `ink.modelImport` | native | `{path}` copies one model file or a folder of them into the model folder, verifying each, and answers `{copied, installed, missing, directory}`: what it copied, whether the model is now complete, and what is still missing. |
 | `ink.modelRemove` | native | `{}` deletes the model folder, turns the tool off and detaches the recognizer. |
 
 The engine never loads a model itself: `Session::ink` holds an `Arc<dyn gridcraft_ink::Recognizer>`
@@ -110,8 +110,11 @@ to that value.
 
 The pause is measured **while the pen is up**: the desktop app sends each stroke's pen-down and
 pen-up times (`startedAt`, `endedAt` in milliseconds on a monotonic clock), so the second spent
-recognising a stroke, or drawing the next one slowly, never ends the entry. Without those times
-(a command from a script, MCP or the control channel) the gap between commands is used.
+recognising a stroke, or drawing the next one slowly, never ends the entry. Both times must come
+from **one clock with one origin**, shared by every stroke of the entry; a caller that cannot
+guarantee that (a command from a script, MCP or the control channel) should omit them, and the gap
+between commands is used instead. A pen-up time that is later than the next pen-down (a clock that
+was reset or rewound) starts a new entry rather than merging unrelated writing.
 
 The target cell is the explicit `cell` when the command names one, otherwise the cell under the
 stroke's **first point** — a cell the stroke actually crosses, unlike an extreme of its bounding
@@ -152,6 +155,7 @@ mean/std 0.5, NCHW) and run through this crate's encoder, decoder and tokenizer:
 |---|---|---|---|---|
 | Reference pre-flight (rten 0.27, fp32) | 40 | 22 / 40 | 0.0297 | ~274 |
 | `crates/ink-rten/tests/real_model.rs`, this branch | 40 | 22 / 40 | 0.0297 | 629 |
+
 CER is Levenshtein distance over characters divided by the truth's length, lowercased on both
 sides; "exact" is an identical lowercased line. The 629 ms/line is from a run while five other
 builds shared the machine; the same binary takes about 0.27 s per line when the CPU is otherwise

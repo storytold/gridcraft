@@ -6219,8 +6219,12 @@ fn the_pause_between_strokes_is_the_time_the_pen_was_up() {
     s.execute("draw.actionPenInk", json!({"points": at.clone(), "cell": "B2", "startedAt": 11_000.0, "endedAt": 11_300.0})).unwrap();
     assert_eq!(s.ink_entry.as_ref().map(|e| e.strokes.len()), Some(1), "a ten-second pen-up pause starts a new entry");
     // Half a second of pen-up time keeps the entry, however long recognising the last one took.
-    s.execute("draw.actionPenInk", json!({"points": at, "cell": "B2", "startedAt": 11_800.0, "endedAt": 12_100.0})).unwrap();
+    s.execute("draw.actionPenInk", json!({"points": at.clone(), "cell": "B2", "startedAt": 11_800.0, "endedAt": 12_100.0})).unwrap();
     assert_eq!(s.ink_entry.as_ref().map(|e| e.strokes.len()), Some(2), "the pause is pen-up time");
+    // A caller that resets its clock (pen-down before the previous pen-up) must not merge
+    // unrelated writing into one entry.
+    s.execute("draw.actionPenInk", json!({"points": at, "cell": "B2", "startedAt": 40.0, "endedAt": 70.0})).unwrap();
+    assert_eq!(s.ink_entry.as_ref().map(|e| e.strokes.len()), Some(1), "a rewound clock starts a new entry");
 }
 
 #[test]
