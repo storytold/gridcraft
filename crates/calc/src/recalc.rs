@@ -543,12 +543,21 @@ impl Calc {
                 // Two arrays that want the same cells (see [`Standing`]): a spill already laid out
                 // that this anchor outranks is taken over, and recalculated.
                 let standing = &self.standing;
-                let outranked: Vec<(CellRef, RangeRef)> = sheet
-                    .spill_ranges
-                    .iter()
-                    .filter(|(o, r)| **o != key.1 && r.intersects(&range) && standing.outranks(*key, (key.0, **o)))
-                    .map(|(o, r)| (*o, *r))
-                    .collect();
+                // A spill can only be in the way where it has cells besides its anchor, and an
+                // anchor itself blocks the array. When no spilled cell lies in the range, the owners
+                // are not scanned: a full recalculation of many disjoint spills stays linear.
+                let outranked: Vec<(CellRef, RangeRef)> = if range.iter().any(|cell| cell != key.1 && sheet.spill.contains_key(&cell)) {
+                    #[cfg(test)]
+                    OWNER_SCANS.with(|n| n.set(n.get() + 1));
+                    sheet
+                        .spill_ranges
+                        .iter()
+                        .filter(|(o, r)| **o != key.1 && r.intersects(&range) && standing.outranks(*key, (key.0, **o)))
+                        .map(|(o, r)| (*o, *r))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 let blocked = spill_is_blocked(sheet, *key, range, end, standing);
                 if !blocked {
                     for (o, r) in outranked {
@@ -604,6 +613,12 @@ impl Calc {
         }
         spill_changes
     }
+}
+
+// Owner scans done by `write_back`, to check that disjoint spills never walk every owner.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static OWNER_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Whether the array at `anchor` can't be laid out over `range`. A spill already laid out that
