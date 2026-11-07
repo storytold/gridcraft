@@ -1,5 +1,5 @@
 use super::about::about;
-use super::analysis::{analysis_toolpak, goal_seek, solver, solver_results};
+use super::analysis::{analysis_toolpak, cancel_solver_options, goal_seek, in_solver_options, solver, solver_results};
 use super::charts::{recommended_charts, select_data};
 use super::command_search::command_search;
 use super::cond_format_rules::manage_rules;
@@ -9,9 +9,11 @@ use super::format_cells::format_cells;
 use super::insert_function::insert_function;
 use super::names::{name_manager, paste_name};
 use super::paste::{paste_special, paste_special_shortcuts};
+use super::ref_edit::{RefLabel, SHEET_DELETED, end_pick, home_sheet_deleted, place_window, ref_edit, window_shown};
 use super::spelling::spelling;
 use super::zoom::zoom;
 use super::{Dialog, Field, Json, Key, Map, RefPick, SheetApp, json, vec2};
+use gridcraft_engine::model::PageOrder;
 
 /// Builds the command params from form values for dialogs that need translation.
 /// The parameters OK sends to the dialog's command: its field values, reshaped per dialog.
@@ -105,6 +107,15 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
                 }
             }
         }
+        "pageSetup" => {
+            // A margin dragged below zero is zero, as the Margins command makes it (Page Setup
+            // refuses negative margins from other callers).
+            for key in ["left", "right", "top", "bottom", "header", "footer"] {
+                if let Some(inches) = d.values.get(key).and_then(Json::as_f64) {
+                    v[key] = json!(inches.max(0.0));
+                }
+            }
+        }
         _ => {}
     }
     v
@@ -137,18 +148,20 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let mut confirm = false;
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
-        "about" => 660.0,
-        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" => 520.0,
+        "about" => 820.0,
+        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "equation" => 520.0,
         "macros" => 480.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
+        "assignAction" => 440.0,
         "zoom" => 220.0,
         "pasteSpecial" => 480.0,
         _ => 380.0,
     };
+    let window_id = egui::Id::unique("dialog").with(&d.name);
     let window = egui::Window::new(app.ui.language.tr(&d.title))
-        .id(egui::Id::unique("dialog").with(&d.name))
+        .id(window_id)
         .collapsible(false)
         .resizable(false)
         .default_width(width)
@@ -161,12 +174,18 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "advancedFilter" => window.default_height(0.0),
         _ => window,
     };
-    window.show(ctx, |ui| {
+    let (window, collapsed) = place_window(app, ctx, &mut d, window, window_id);
+    let shown = window.show(ctx, |ui| {
+            if let Some(key) = &collapsed {
+                let title = d.title.clone();
+                ref_edit(app, ui, &mut d, key, RefLabel::Named(&title), (width - 40.0).min(380.0));
+                return;
+            }
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
-                "dataValidation" => data_validation_form(ui, &mut d, &mut confirm, &mut open),
-                "advancedFilter" => advanced_filter_form(ui, &mut d, &mut confirm, &mut open),
+                "dataValidation" => data_validation_form(app, ui, &mut d, &mut confirm, &mut open),
+                "advancedFilter" => advanced_filter_form(app, ui, &mut d, &mut confirm, &mut open),
                 "insertFunction" => insert_function(app, ui, &mut d, &mut confirm),
                 "find" => find(app, ui, &mut d),
                 "goTo" => go_to(app, ui, &mut d, &mut confirm),
@@ -178,12 +197,16 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "recommendedCharts" => recommended_charts(app, ui, &mut d, &mut confirm, &mut open),
                 "selectData" => select_data(app, ui, &mut d, &mut confirm, &mut open),
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
-                "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
+                "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm, &mut open),
+                "equation" => crate::equation::editor(app, ui, &mut d, &mut confirm, &mut open),
                 "pasteSpecial" => paste_special(app, ui, &mut d, &mut confirm, &mut open),
                 "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),
-                "solver" => solver(ui, &mut d, &mut confirm, &mut open),
+                "solver" => solver(app, ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
+                "assignAction" => crate::control_ui::assign_dialog(app, ui, &mut d, &mut open),
+                "formatControl" => crate::control_ui::format_dialog(app, ui, &mut d, &mut open),
+                "controlQuestion" => crate::control_ui::question_dialog(app, ui, &mut d, &mut open),
                 "agents" => {
                     ui.label("GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:");
                     ui.add_space(4.0);
@@ -354,9 +377,10 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         open = false;
                     }
                 }
-                _ => form(ui, &mut d, &mut confirm, &mut open),
+                _ => form(app, ui, &mut d, &mut confirm, &mut open),
             }
         });
+    window_shown(ctx, &mut d, collapsed.is_some(), shown.map(|r| r.response.rect));
     // Hyperlinks inside dialogs (About ▸ Contributors) open through the host's `open_url`, since
     // the native shell has no browser integration of its own.
     if let Some(open_url) = &app.services.open_url {
@@ -376,10 +400,33 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         }
     }
     if ctx.input(|i| i.key_pressed(Key::Escape)) || !win_open {
-        open = false;
+        // In Solver Options, Escape (or closing the window) cancels the options only.
+        if in_solver_options(&d) {
+            cancel_solver_options(&mut d);
+        } else {
+            open = false;
+        }
     }
     if confirm && d.name == "insertPicture" && d.picture_target != app.view_key() {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
+        confirm = false;
+    }
+    if confirm && d.name == "openLink" {
+        confirm = false;
+        if confirm_open_link(app, &d) {
+            open = false;
+        }
+    }
+    if confirm && d.command.is_some() && home_sheet_deleted(app, &mut d) {
+        // References without a sheet name would land on whichever sheet is shown now.
+        app.message = Some((d.title.clone(), SHEET_DELETED.into()));
+        confirm = false;
+    }
+    if confirm && let Err(e) = end_pick(app, &mut d) {
+        // References without a sheet name mean the sheet the dialog was opened on: when it can't
+        // be shown again (a text-box draft on the picked sheet could not be saved), the command
+        // would read them against the wrong sheet, so it doesn't run and the dialog stays.
+        app.message = Some((d.title.clone(), crate::clean_error(&e)));
         confirm = false;
     }
     if confirm && let Some(cmd) = d.command {
@@ -408,6 +455,19 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     } else if confirm {
         open = false;
     }
+    if !open
+        && !confirm
+        && let Err(e) = end_pick(app, &mut d)
+    {
+        // Cancelled or closed: back to the sheet and selection from before picking. A confirmed
+        // OK went back before its command ran, and stays where the command left things (Data
+        // Analysis shows the report sheet it added). When the dialog's sheet can't be shown
+        // again (a text-box draft on the picked sheet could not be saved), Cancel still closes
+        // the dialog, since there is no command left to protect: the reason is shown, and the
+        // draft and the selection stay where they are for the person to deal with. A script's
+        // `ui.dialog.cancel` gets the error instead and keeps the dialog, so it can act on it.
+        app.message = Some((d.title.clone(), crate::clean_error(&e)));
+    }
     if app.ui_window() != home {
         // A command run from the dialog switched windows: whatever it opened shows in the new
         // window, and this dialog (or the one it returns to) stays in its own.
@@ -435,6 +495,33 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     }
 }
 
+/// OK in Open Hyperlink; returns whether the prompt closes. A pass that carries control-channel
+/// input (`ui.key`, `ui.click`, `ui.drag`) can't say yes for the user (#2181): the link stays
+/// unopened and the prompt open, with a message. Real input in that same pass is refused too, so
+/// the user just presses OK again.
+pub(super) fn confirm_open_link(app: &mut SheetApp, d: &Dialog) -> bool {
+    if app.synthetic_pending {
+        app.message = Some((d.title.clone(), SYNTHETIC_LINK_CONFIRM.into()));
+        return false;
+    }
+    if let Err(e) = open_confirmed_link(app, d) {
+        app.message = Some((d.title.clone(), crate::clean_error(&e)));
+    }
+    true
+}
+
+/// Why Open Hyperlink ignored an OK that arrived with synthetic control-channel input.
+pub(super) const SYNTHETIC_LINK_CONFIRM: &str = "Synthetic input from the control channel can't open a link: press OK yourself to open it.";
+
+/// The user pressed OK in Open Hyperlink: opens the address the prompt showed (`d.link`), never
+/// one a caller edited into its values afterwards.
+pub(super) fn open_confirmed_link(app: &mut SheetApp, d: &Dialog) -> Result<(), String> {
+    let url = d.link.as_deref().unwrap_or_default();
+    let r = app.session.open_confirmed_link(url).map(|_| ()).map_err(|e| e.to_string());
+    app.after_engine();
+    r
+}
+
 pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
     ui.add_space(8.0);
     // A row as tall as the buttons: a right-to-left layout straight in the window takes all the
@@ -454,8 +541,8 @@ pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) 
     });
 }
 
-fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
-    form_fields(ui, d);
+fn form(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    form_fields(app, ui, d);
     ok_cancel(ui, confirm, open);
 }
 
@@ -464,7 +551,7 @@ fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) 
 /// Enter sets the width, as in Excel.
 /// Keeps asking until the field really has focus: a new window's first frame is an invisible
 /// sizing pass where a focus request is ignored.
-fn take_first_focus(d: &mut Dialog, r: &egui::Response) {
+pub(super) fn take_first_focus(d: &mut Dialog, r: &egui::Response) {
     if !d.focus_first_field {
         return;
     }
@@ -501,7 +588,7 @@ fn track_pick(pick: &mut RefPick, r: &egui::Response, typed: bool) {
 }
 
 /// Draws a dialog's `fields`, editing its values.
-pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
+pub(super) fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     // Field labels, choices and notes are English source strings, translated as they are drawn.
     let lang = crate::i18n::current(ui.ctx());
     egui::Grid::new("form").num_columns(1).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
@@ -528,6 +615,12 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                         if let Some(pick) = d.pick.as_mut().filter(|pick| pick.key == key) {
                             track_pick(pick, &r, r.changed());
                         }
+                    });
+                }
+                Field::Ref { key, label } => {
+                    ui.vertical(|ui| {
+                        let l = ui.label(lang.tr(label));
+                        ref_edit(app, ui, d, key, RefLabel::By(l.id), 320.0);
                     });
                 }
                 Field::Password { key, label } => {
@@ -574,10 +667,22 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                                 .response
                                 .labelled_by(field_label.id);
                         } else {
-                            for (val, text) in options {
-                                if ui.radio(cur == val, lang.tr(text)).clicked() {
-                                    d.set_value(key, json!(val));
+                            let radios = |ui: &mut egui::Ui, d: &mut Dialog| {
+                                for (val, text) in &options {
+                                    if ui.radio(cur == *val, lang.tr(text)).clicked() {
+                                        d.set_value(key, json!(val));
+                                    }
                                 }
+                            };
+                            if key == "pageOrder" {
+                                // Page Setup pictures the order beside its choices.
+                                ui.horizontal(|ui| {
+                                    ui.vertical(|ui| radios(ui, d));
+                                    ui.add_space(24.0);
+                                    page_order_preview(ui, PageOrder::parse(&cur).unwrap_or_default());
+                                });
+                            } else {
+                                radios(ui, d);
                             }
                         }
                     });
@@ -598,4 +703,31 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
             ui.end_row();
         }
     });
+}
+
+/// Page Setup's picture of a page order: four pages, two tall and two wide, numbered in the
+/// order they print, with a line through them from the first to the last.
+fn page_order_preview(ui: &mut egui::Ui, order: PageOrder) {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let (page, gap) = (vec2(22.0, 28.0), 8.0);
+    let (rect, _) = ui.allocate_exact_size(vec2(page.x * 2.0 + gap, page.y * 2.0 + gap), egui::Sense::hover());
+    let p = ui.painter();
+    let mut path = [egui::Pos2::ZERO; 4];
+    for (row, col) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+        let r = egui::Rect::from_min_size(rect.min + vec2(col as f32 * (page.x + gap), row as f32 * (page.y + gap)), page);
+        p.rect_filled(r, 1.0, t.paper);
+        p.rect_stroke(r, 1.0, egui::Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
+        let n = order.index(row, col, 2, 2);
+        p.text(r.left_top() + vec2(4.0, 2.0), egui::Align2::LEFT_TOP, (n + 1).to_string(), crate::theme::ui_font(9.0), t.text);
+        if let Some(at) = path.get_mut(n) {
+            *at = r.center() + vec2(2.0, 3.0);
+        }
+    }
+    let stroke = egui::Stroke::new(1.5, t.accent);
+    p.add(egui::Shape::line(path.to_vec(), stroke));
+    // An arrowhead on the last page.
+    let (from, to) = (path[2], path[3]);
+    let d = (to - from).normalized();
+    let n = vec2(-d.y, d.x);
+    p.add(egui::Shape::convex_polygon(vec![to, to - d * 6.0 + n * 3.5, to - d * 6.0 - n * 3.5], t.accent, egui::Stroke::NONE));
 }
