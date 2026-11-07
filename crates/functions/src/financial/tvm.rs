@@ -211,21 +211,85 @@ fn solve_rate(f: impl Fn(f64) -> f64, guess: f64) -> R<f64> {
     Err(CellError::Num)
 }
 
+/// RATE's equation at rate `r`: the loan and the payments grown to the end of the term, plus
+/// `fv`. RATE returns the rate where it is zero. The second value is the size of its terms, to
+/// judge how close to zero the first can get in floating point.
+fn rate_equation(r: f64, np: f64, pmt: f64, pv: f64, fv: f64, typ: f64) -> (f64, f64) {
+    if r == 0.0 {
+        return (pv + pmt * np + fv, pv.abs() + (pmt * np).abs() + fv.abs());
+    }
+    let p = (1.0 + r).powf(np);
+    let (a, b) = (pv * p, pmt * (1.0 / r + typ) * (p - 1.0));
+    (a + b + fv, a.abs() + b.abs() + fv.abs())
+}
+
+/// Excel works with subnormal numbers flushed to zero: a secant step that underflows doesn't
+/// move. Observed with RATE(3,0,-1E-305,0), which is 0.101 (the second starting point).
+fn flush_subnormal(x: f64) -> f64 {
+    if x.abs() < f64::MIN_POSITIVE { 0.0 } else { x }
+}
+
+/// Excel's RATE solver, reconstructed by observing Excel with synthetic inputs (not from its
+/// code; its documentation says only "iteration", 20 steps and 0.0000001):
+///
+/// - A secant iteration starting at the guess and at the guess moved 0.001 toward a larger
+///   value of the equation, for at most 200 steps.
+/// - It stops at the first iterate that moved less than 1e-7 and where the equation is within
+///   1e-7 of zero (or as close as its terms allow, for very large amounts). Excel returns that
+///   iterate, not the exact root, so a slowly converging case such as no payments and a zero
+///   future value (exact answer -100%) gives a rate just above -1.
+/// - The result must be above -1 by more than the tolerance; otherwise it is #NUM!.
+/// - After 200 steps without that, Excel still returns the last iterate if it is within a
+///   looser 1e-4 (step, equation value and distance above -1); otherwise #NUM!. So a root the
+///   iteration can't reach (a very large rate) is #NUM! even though it exists.
+fn rate_solve(f: impl Fn(f64) -> (f64, f64), guess: f64) -> R<f64> {
+    const STEPS: usize = 200;
+    const TOL: f64 = 1e-7;
+    const LOOSE: f64 = 1e-4;
+    let eval = |x: f64| {
+        let (y, size) = f(x);
+        if y.is_finite() { Ok((y, size)) } else { Err(CellError::Num) }
+    };
+    let near_zero = |y: f64, size: f64| y.abs() < TOL || y.abs() <= 1e-12 * size;
+    let (mut x0, (mut f0, _)) = (guess, eval(guess)?);
+    let mut x1 = if f0 < 0.0 { guess + 0.001 } else { guess - 0.001 };
+    let (mut f1, mut size1) = eval(x1)?;
+    for _ in 0..STEPS {
+        let den = flush_subnormal(f1 - f0);
+        if den == 0.0 {
+            // The secant is flat: done if the iteration had already settled.
+            if (x1 - x0).abs() < TOL && near_zero(f1, size1) && x1 - TOL > -1.0 {
+                return Ok(x1);
+            }
+            return Err(CellError::Num);
+        }
+        let x2 = x1 - flush_subnormal(f1 * (x1 - x0)) / den;
+        if !x2.is_finite() {
+            return Err(CellError::Num);
+        }
+        let (f2, size2) = eval(x2)?;
+        if (x2 - x1).abs() < TOL && near_zero(f2, size2) {
+            return if x2 - TOL > -1.0 { Ok(x2) } else { Err(CellError::Num) };
+        }
+        (x0, f0, x1, f1, size1) = (x1, f1, x2, f2, size2);
+    }
+    if (x1 - x0).abs() < LOOSE && f1.abs() < LOOSE && x1 - LOOSE > -1.0 {
+        return Ok(x1);
+    }
+    Err(CellError::Num)
+}
+
 pub(super) fn rate(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let (np, pmt, pv) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
     let (fv, typ, guess) = (opt_num(a, 3, 0.0)?, type_arg(a, 4)?, opt_num(a, 5, 0.1)?);
     if np <= 0.0 {
         return Err(CellError::Num);
     }
-    let f = |r: f64| {
-        if r.abs() < 1e-12 {
-            pv + pmt * np + fv
-        } else {
-            let p = (1.0 + r).powf(np);
-            pv * p + pmt * (1.0 + r * typ) * (p - 1.0) / r + fv
-        }
-    };
-    num_val(solve_rate(f, guess)?)
+    // Excel: a guess at or below -100% is #VALUE!, not #NUM!.
+    if guess <= -1.0 {
+        return Err(CellError::Value);
+    }
+    num_val(rate_solve(|r| rate_equation(r, np, pmt, pv, fv, typ), guess)?)
 }
 
 pub(super) fn npv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
