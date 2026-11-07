@@ -61,6 +61,18 @@ fn tab_drop(i: usize, steps: i64, copy: bool) -> Option<serde_json::Value> {
     Some(json!({"sheet": i, "to": to}))
 }
 
+/// Where a request to scroll the active tab into view is kept until the tabs are drawn.
+fn reveal_request_id(scope: egui::Id) -> egui::Id {
+    scope.with("worksheet_tabs_reveal_request")
+}
+
+/// Asks the tab strip to bring the active tab into view in this frame, even when the active sheet
+/// did not change (a Ctrl-click on an arrow whose edge sheet is already active).
+fn request_reveal(ui: &Ui) {
+    let id = reveal_request_id(ui.scope_id());
+    ui.ctx().data_mut(|data| data.insert_temp(id, true));
+}
+
 /// The New sheet (+) button and the gap before it.
 const NEW_SHEET_WIDTH: f32 = 32.0;
 /// The handle between the tabs and the horizontal scrollbar.
@@ -127,7 +139,10 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                     let edge =
                         if ui.input(|i| i.modifiers.command) { app.session.active().and_then(|d| edge_sheet(&d.wb.sheets, false)) } else { None };
                     match edge {
-                        Some(i) => activate_sheet(app, i),
+                        Some(i) => {
+                            activate_sheet(app, i);
+                            request_reveal(ui);
+                        }
                         None => app.run_or_alert("sheet.previous", json!({})),
                     }
                 }
@@ -136,7 +151,10 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                     let edge =
                         if ui.input(|i| i.modifiers.command) { app.session.active().and_then(|d| edge_sheet(&d.wb.sheets, true)) } else { None };
                     match edge {
-                        Some(i) => activate_sheet(app, i),
+                        Some(i) => {
+                            activate_sheet(app, i);
+                            request_reveal(ui);
+                        }
                         None => app.run_or_alert("sheet.next", json!({})),
                     }
                 }
@@ -181,10 +199,13 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
             // allow browsing other tabs without snapping back on every frame.
             let reveal_key = egui::Id::unique((d.uid, d.wb.active_sheet(), &sheets, tabs_width.to_bits()));
             let reveal_id = ui.scope_id().with("worksheet_tabs_reveal");
+            let request_id = reveal_request_id(ui.scope_id());
             let reveal_active = ui.ctx().data_mut(|data| {
                 let changed = data.get_temp::<egui::Id>(reveal_id) != Some(reveal_key);
                 data.insert_temp(reveal_id, reveal_key);
-                changed
+                // A Ctrl-click on an arrow whose edge sheet is already active changes nothing above,
+                // yet asks to bring that tab into view.
+                changed | data.remove_temp::<bool>(request_id).unwrap_or(false)
             });
             if view.show_sheet_tabs {
                 ui.allocate_ui_with_layout(vec2(tabs_width, 30.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
