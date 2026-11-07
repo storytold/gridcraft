@@ -357,6 +357,8 @@ impl<'h> Evaluator<'h> {
                         inputs.push(Input::Cells(a.sheet, range));
                     }
                 }
+                // AGGREGATE 1-13 take references only: a literal or computed value is #VALUE!.
+                Ev::V(v) if name == "AGGREGATE" && func < 14 && !v.is_error() => return err(CellError::Value),
                 Ev::V(v) => {
                     let n = match &v {
                         Value::Array(a) => u64::try_from(a.data.len()).unwrap_or(u64::MAX),
