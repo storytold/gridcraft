@@ -675,7 +675,6 @@ const CLIPBOARD_HTML_MAX_CELLS: u64 = 10_000;
 /// An HTML fragment for the same range as `plain_text`, previously produced by
 /// `display::range_text`. Large copies keep plain text only; never return a partial table.
 pub(crate) fn range_html(wb: &Workbook, sheet: usize, r: RangeRef, plain_text: &str) -> Option<String> {
-    let r = crate::display::clipboard_range(r);
     if r.count() > CLIPBOARD_HTML_MAX_CELLS || plain_text.len() > CLIPBOARD_HTML_MAX_BYTES {
         return None;
     }
