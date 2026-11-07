@@ -60,6 +60,30 @@ impl Measure for Counting<'_> {
     }
 }
 
+/// Like a text layout that breaks at `\n`: the width is that of the widest line. Adding a
+/// newline can make the text narrower, so the width of `prefix + "…"` is not monotone.
+struct WidestLine;
+
+impl Measure for WidestLine {
+    fn text_width(&self, text: &str, size: f32, _bold: bool) -> f32 {
+        text.split('\n')
+            .map(|line| {
+                line.chars()
+                    .map(|c| {
+                        size * if c == 'i' {
+                            0.25
+                        } else if c == 'M' {
+                            0.9
+                        } else {
+                            0.5
+                        }
+                    })
+                    .sum::<f32>()
+            })
+            .fold(0.0, f32::max)
+    }
+}
+
 fn corpus() -> Vec<String> {
     let mut v: Vec<String> =
         ["", "a", "ab", "Hello, world", "AVAVAV tight", "日本語のラベルです", "👨‍👩‍👧 family 🎉 party", "e\u{301}e\u{301}e\u{301} combining", "…", "……"]
@@ -71,6 +95,9 @@ fn corpus() -> Vec<String> {
     v.push("x".repeat(401));
     v.push("é🎉".repeat(500));
     v.push("long label ".repeat(100));
+    for s in ["iiii\nMM", "iiii\n", "\niiii", "ab\ncd\nef", "iiiiiiii\niiiiMMMM\nMM", "line one\nline two is longer\nx"] {
+        v.push(s.to_string());
+    }
     v
 }
 
@@ -89,6 +116,20 @@ fn run_fit(m: &dyn Measure) {
 fn fit_matches_linear_reference() {
     run_fit(&ApproxMeasure);
     run_fit(&Varied { calls: Cell::new(0) });
+    run_fit(&WidestLine);
+}
+
+#[test]
+fn a_multiline_label_keeps_its_fitting_prefix() {
+    // The whole label is 18 wide and "iii…" is 12.5, both too wide for 10.5, but "iiii\n…" is
+    // 10 wide and fits. A binary search that stops at the failing midpoint would return nothing.
+    let ctx = Ctx { out: vec![], m: &WidestLine };
+    let s = "iiii\nMM";
+    let size = 10.0;
+    let maxw = 10.5;
+    assert!(ctx.tw(s, size) > maxw);
+    assert!(ctx.tw("iii…", size) > maxw && ctx.tw("iiii\n…", size) <= maxw);
+    assert_eq!(ctx.fit(s, size, maxw), "iiii\n…");
 }
 
 #[test]

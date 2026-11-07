@@ -71,6 +71,8 @@ impl Ctx<'_> {
     /// shrink as the prefix grows, which holds for per-character advance sums (`ApproxMeasure`, the
     /// PDF metrics) and for the UI's text layout up to kerning of a few hundredths of a point; with
     /// such a non-monotone measure the result may differ from the old linear scan by a character.
+    /// A label with a line break is not monotone (the ellipsis moves to a new line and the widest
+    /// line can get shorter), so it takes the linear scan, longest prefix first.
     fn fit(&self, s: &str, size: f32, maxw: f32) -> String {
         if self.tw(s, size) <= maxw {
             return s.to_string();
@@ -86,6 +88,10 @@ impl Ctx<'_> {
             t.push('…');
             self.tw(&t, size) <= maxw
         };
+        if s.contains('\n') {
+            let k = (1..=top).rev().find(|&k| fits(k));
+            return k.map_or_else(String::new, |k| format!("{}…", s.get(..starts.get(k).copied().unwrap_or(s.len())).unwrap_or("")));
+        }
         let (mut lo, mut hi) = (0usize, top);
         while lo < hi {
             let mid = lo + (hi - lo).div_ceil(2);
