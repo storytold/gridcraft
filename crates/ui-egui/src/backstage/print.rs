@@ -1,12 +1,23 @@
+use super::Align2;
 use super::{
-    Align2, Backstage, Icon, Json, Outcome, Rect, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, dim, json, pos2, square_button, theme, vec2,
+    Backstage, Color32, Icon, Json, Outcome, Rect, RichText, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, dim, json, pos2, square_button, theme,
+    vec2,
 };
 
-/// Builds the print scope and fit-to-page parameters, caches `file.printPreview` per document revision/options, and draws page thumbnails with navigation plus the print settings and Print action.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PreviewKey {
+    uid: u64,
+    revision: u64,
+    sheet: usize,
+    all_sheets: bool,
+    fit_to_page: bool,
+}
+
+/// Draws print settings beside a preview that fills the available window.
 pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
     let t = Tokens::get(ui.ctx());
     let lang = app.ui.language;
-    let Some((uid, revision)) = app.session.active().map(|d| (d.uid, d.revision)) else {
+    let Some((uid, revision, sheet)) = app.session.active().map(|d| (d.uid, d.revision, d.wb.active_sheet())) else {
         dim(ui, lang.tr("No workbook is open."));
         return;
     };
@@ -14,90 +25,148 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
     if bs.fit_to_page {
         params["fitToPage"] = json!(true);
     }
-    let key = (uid, revision, bs.print_all, bs.fit_to_page);
+    let key = PreviewKey { uid, revision, sheet, all_sheets: bs.print_all, fit_to_page: bs.fit_to_page };
     if bs.preview.as_ref().is_none_or(|(k, _)| *k != key) {
         let preview = app.session.run("file.printPreview", params.clone()).unwrap_or(Json::Null);
         bs.preview = Some((key, preview));
     }
     let pages: Vec<Json> = bs.preview.as_ref().and_then(|(_, p)| p.get("pageList")).and_then(Json::as_array).cloned().unwrap_or_default();
-    ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
-            ui.set_width(250.0);
-            if let Some(discover) = &app.services.printers {
-                crate::printing::show(&mut app.printing, ui, discover, |label| lang.tr(label).to_owned());
-            }
-            let can_print = app.services.print_native.is_none() || app.printing.ready();
-            if ui.add_enabled_ui(can_print, |ui| square_button(ui, Icon::Print, lang.tr("Print"))).inner.clicked()
-                && app.commit_edit(0, 0, false, false)
-            {
-                app.print_now(params.clone());
-                out.close = app.services.print_native.is_none();
-            }
-            ui.add_space(16.0);
-            let scope = if bs.print_all { "Print Entire Workbook" } else { "Print Active Sheets" };
-            craft_ui::ComboBox::from_id_salt("backstage_print_scope")
-                .width(230.0)
-                .selected_text(lang.tr(scope))
-                .show_ui(ui, |ui| {
-                    for (all, label) in [(false, "Print Active Sheets"), (true, "Print Entire Workbook")] {
-                        if ui.selectable_label(bs.print_all == all, lang.tr(label)).clicked() {
-                            bs.print_all = all;
-                            bs.preview_page = 0;
-                        }
-                    }
-                })
-                .response
-                .accessible_name(lang.tr("Print What"));
-            ui.add_space(8.0);
-            if ui.checkbox(&mut bs.fit_to_page, lang.tr("Fit Sheet on One Page")).changed() {
-                bs.preview_page = 0;
-            }
-            ui.add_space(8.0);
-            if ui.link(lang.tr("Page Setup…")).clicked() {
-                app.open_dialog("pageSetup", json!({}));
-            }
-        });
-        ui.add_space(24.0);
-        ui.vertical(|ui| {
-            if pages.is_empty() {
-                dim(ui, lang.tr("Nothing to print."));
-                return;
-            }
-            let last = pages.len().saturating_sub(1);
-            bs.preview_page = bs.preview_page.min(last);
-            let Some(page) = pages.get(bs.preview_page) else { return };
-            // Paper proportions from the preview (points); hostile sizes fall back to Letter.
-            let w = page.get("width").and_then(Json::as_f64).filter(|w| w.is_finite() && *w > 1.0).unwrap_or(612.0) as f32;
-            let h = page.get("height").and_then(Json::as_f64).filter(|h| h.is_finite() && *h > 1.0).unwrap_or(792.0) as f32;
-            let scale = (520.0 / h).min(440.0 / w);
-            let (rect, _) = ui.allocate_exact_size(vec2(w * scale, h * scale), Sense::hover());
-            let p = ui.painter();
-            p.rect_filled(rect.translate(vec2(2.0, 3.0)), 2.0, t.shadow);
-            p.rect_filled(rect, 2.0, t.grid_bg);
-            p.rect_stroke(rect, 2.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
-            if let Some(d) = app.session.active() {
-                paint_page(p, rect, w, page, &d.wb, &t);
-            }
-            let sheet = page.get("sheet").and_then(Json::as_str).unwrap_or("");
-            let range = page.get("range").and_then(Json::as_str).unwrap_or("");
-            ui.add_space(4.0);
-            dim(ui, &format!("{sheet} · {range}"));
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.add_enabled(bs.preview_page > 0, egui::Button::new("◀")).on_hover_text(lang.tr("Previous page")).clicked() {
-                    bs.preview_page = bs.preview_page.saturating_sub(1);
-                }
-                let text = lang
-                    .tr("Page {page} of {pages}")
-                    .replace("{page}", &(bs.preview_page + 1).to_string())
-                    .replace("{pages}", &pages.len().to_string());
-                ui.label(text);
-                if ui.add_enabled(bs.preview_page < last, egui::Button::new("▶")).on_hover_text(lang.tr("Next page")).clicked() {
-                    bs.preview_page = (bs.preview_page + 1).min(last);
-                }
-            });
-        });
+    let settings_width = (ui.available_width() * 0.43).clamp(125.0, 265.0);
+    egui::Panel::left("print_settings").exact_size(settings_width).resizable(false).frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(14)).show(
+        ui,
+        |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| settings(app, ui, bs, out, &params, !pages.is_empty()));
+        },
+    );
+    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.desk)).show(ui, |ui| {
+        if pages.is_empty() {
+            ui.centered_and_justified(|ui| dim(ui, lang.tr("Nothing to print.")));
+            return;
+        }
+        let last = pages.len().saturating_sub(1);
+        bs.preview_page = bs.preview_page.min(last);
+        egui::Panel::bottom("print_preview_toolbar")
+            .resizable(false)
+            .frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(8))
+            .show(ui, |ui| navigation(app, ui, bs, last));
+        if let Some(page) = pages.get(bs.preview_page) {
+            show_paper(app, ui, bs, page);
+        }
     });
+}
+
+fn settings(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome, params: &Json, has_pages: bool) {
+    let lang = app.ui.language;
+    ui.label(RichText::new(lang.tr("Print")).font(theme::ui_font(22.0)).strong());
+    ui.add_space(6.0);
+    let can_print = has_pages && (app.services.print_native.is_none() || app.printing.ready());
+    if ui.add_enabled_ui(can_print, |ui| square_button(ui, Icon::Print, lang.tr("Print"))).inner.clicked() && app.commit_edit(0, 0, false, false) {
+        app.print_now(params.clone());
+        out.close = app.services.print_native.is_none();
+    }
+    ui.add_space(12.0);
+    if let Some(discover) = &app.services.printers {
+        crate::printing::show(&mut app.printing, ui, discover, |label| lang.tr(label).to_owned());
+        ui.add_space(12.0);
+    }
+    ui.label(RichText::new(lang.tr("Settings")).strong());
+    let width = ui.available_width().clamp(32.0, 230.0);
+    let scope = if bs.print_all { "Print Entire Workbook" } else { "Print Active Sheets" };
+    craft_ui::ComboBox::from_id_salt("backstage_print_scope")
+        .width(width)
+        .selected_text(lang.tr(scope))
+        .show_ui(ui, |ui| {
+            for (all, label) in [(false, "Print Active Sheets"), (true, "Print Entire Workbook")] {
+                if ui.selectable_value(&mut bs.print_all, all, lang.tr(label)).changed() {
+                    bs.preview_page = 0;
+                }
+            }
+        })
+        .response
+        .accessible_name(lang.tr("Print What"));
+    let scaling = if bs.fit_to_page { "Fit Sheet on One Page" } else { "Use Page Setup Scaling" };
+    craft_ui::ComboBox::from_id_salt("backstage_print_scaling")
+        .width(width)
+        .selected_text(lang.tr(scaling))
+        .show_ui(ui, |ui| {
+            for (fit, label) in [(false, "Use Page Setup Scaling"), (true, "Fit Sheet on One Page")] {
+                if ui.selectable_value(&mut bs.fit_to_page, fit, lang.tr(label)).changed() {
+                    bs.preview_page = 0;
+                }
+            }
+        })
+        .response
+        .accessible_name(lang.tr("Scaling"));
+    if ui.link(lang.tr("Page Setup…")).clicked() {
+        app.open_dialog("pageSetup", json!({}));
+    }
+}
+
+fn navigation(app: &SheetApp, ui: &mut Ui, bs: &mut Backstage, last: usize) {
+    let lang = app.ui.language;
+    ui.horizontal_wrapped(|ui| {
+        if ui.add_enabled(bs.preview_page > 0, egui::Button::new("◀")).on_hover_text(lang.tr("Previous page")).clicked() {
+            bs.preview_page = bs.preview_page.saturating_sub(1);
+        }
+        let page_label = ui.label(lang.tr("Page"));
+        let mut number = bs.preview_page + 1;
+        if ui.add_enabled(last > 0, egui::DragValue::new(&mut number).range(1..=last + 1)).labelled_by(page_label.id).changed() {
+            bs.preview_page = number.saturating_sub(1);
+        }
+        ui.label(lang.tr("of {pages}").replace("{pages}", &(last + 1).to_string()));
+        if ui.add_enabled(bs.preview_page < last, egui::Button::new("▶")).on_hover_text(lang.tr("Next page")).clicked() {
+            bs.preview_page = (bs.preview_page + 1).min(last);
+        }
+        ui.separator();
+        ui.toggle_value(&mut bs.preview_margins, lang.tr("Show Margins"));
+        let zoom_label = if bs.preview_actual_size { "Fit Preview to Window" } else { "Actual Size" };
+        if ui.button(lang.tr(zoom_label)).clicked() {
+            bs.preview_actual_size = !bs.preview_actual_size;
+        }
+    });
+}
+
+fn show_paper(app: &SheetApp, ui: &mut Ui, bs: &Backstage, page: &Json) {
+    // Preview metadata is generated by the same layout used to print.
+    let w = page.get("width").and_then(Json::as_f64).filter(|w| w.is_finite() && *w > 1.0).unwrap_or(612.0) as f32;
+    let h = page.get("height").and_then(Json::as_f64).filter(|h| h.is_finite() && *h > 1.0).unwrap_or(792.0) as f32;
+    let viewport = ui.available_size().max(vec2(1.0, 1.0));
+    let padding = 12.0;
+    let fit = (viewport - vec2(padding * 2.0, padding * 2.0)).max(vec2(1.0, 1.0));
+    // Actual size is 96 logical pixels per inch, while PDF dimensions are 72 points per inch.
+    let scale = if bs.preview_actual_size { 96.0 / 72.0 } else { (fit.x / w).min(fit.y / h) };
+    let size = vec2(w, h) * scale;
+    egui::ScrollArea::both().id_salt(("print_preview_paper", bs.preview_actual_size)).auto_shrink([false, false]).show(ui, |ui| {
+        let canvas = (size + vec2(padding * 2.0, padding * 2.0)).max(viewport);
+        let (area, response) = ui.allocate_exact_size(canvas, Sense::hover());
+        let sheet = page.get("sheet").and_then(Json::as_str).unwrap_or("");
+        let range = page.get("range").and_then(Json::as_str).unwrap_or("");
+        response.on_hover_text(format!("{sheet} · {range}"));
+        let rect = Rect::from_center_size(area.center(), size);
+        let t = Tokens::get(ui.ctx());
+        let p = ui.painter();
+        p.rect_filled(rect.translate(vec2(2.0, 3.0)), 0.0, t.shadow);
+        p.rect_filled(rect, 0.0, Color32::WHITE);
+        if let Some(d) = app.session.active() {
+            paint_page(p, rect, w, page, &d.wb, &t);
+        }
+        p.rect_stroke(rect, 0.0, Stroke::new(1.0, Color32::DARK_GRAY), StrokeKind::Inside);
+        if bs.preview_margins {
+            paint_margins(p, rect, scale, page);
+        }
+    });
+}
+
+fn paint_margins(p: &egui::Painter, rect: Rect, scale: f32, page: &Json) {
+    let margin = |index| page["marginsPt"][index].as_f64().unwrap_or(0.0) as f32 * scale;
+    let ink = Stroke::new(1.0, Color32::from_rgb(95, 112, 128));
+    let p = p.with_clip_rect(rect);
+    for x in [rect.left() + margin(0usize), rect.right() - margin(1)] {
+        p.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], ink);
+    }
+    for y in [rect.top() + margin(2), rect.bottom() - margin(3)] {
+        p.line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], ink);
+    }
 }
 
 /// Most rows and columns one preview page draws (a page holds far fewer at any readable scale).
