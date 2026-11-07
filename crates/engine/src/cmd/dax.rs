@@ -1811,6 +1811,52 @@ mod tests {
     }
 
     #[test]
+    fn a_nested_group_hands_its_model_edits_to_the_outer_group() {
+        // A nested group ends on its own but makes no step of its own: if the outer group rolls
+        // back, the measure the inner one added goes with it (CodeRabbit, #3412).
+        let (path, dir) = fixture("nested-groups");
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("dataModel.load", json!({"path": path.to_string_lossy()})).expect("load");
+        let model_before = s.dax_model.clone();
+
+        let failed: Result<()> = s.grouped("Outer", |s| {
+            s.grouped("Inner", |s| s.execute("dataModel.addMeasure", json!({"name": "Inner Sales", "formula": "1", "table": "Sales"})))?;
+            Err(EngineError::Other("the outer step failed".into()))
+        });
+        assert!(failed.is_err(), "the closure's error is the one reported");
+        assert_eq!(s.dax_model, model_before, "the outer rollback took back the inner group's measure");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_nested_group_that_closed_its_document_still_hands_back_its_edits() {
+        // The same rule once the inner group has taken the workbook away: the close leaves no
+        // undo step for the changes to fold into, but the outer group still owns them when it
+        // rolls back (CodeRabbit, #3412).
+        let (path, dir) = fixture("nested-groups-close");
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("dataModel.load", json!({"path": path.to_string_lossy()})).expect("load");
+        let uid = s.documents()[0].uid;
+        let model_before = s.dax_model.clone();
+
+        let failed: Result<()> = s.grouped("Outer", |s| {
+            s.grouped("Inner", |s| {
+                s.execute("dataModel.addMeasure", json!({"name": "Inner Sales", "formula": "1", "table": "Sales"}))?;
+                s.execute("file.close", json!({"force": true, "document": true}))?;
+                Ok(())
+            })?;
+            Err(EngineError::Other("the step after the inner group failed".into()))
+        });
+        assert!(failed.is_err(), "the closure's error is the one reported");
+        assert!(s.documents().is_empty(), "the document closed");
+        assert!(!s.in_group(uid), "the outer group ended with its rollback");
+        assert_eq!(s.dax_model, model_before, "the outer rollback took back the inner group's measure");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn rolling_back_one_documents_group_keeps_another_documents_edit() {
         // The model is session state: rolling back the group open on one document must take back
         // that group's edits only, not the ones a group open on another document made since

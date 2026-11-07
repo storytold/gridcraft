@@ -1037,8 +1037,15 @@ impl Session {
     /// nested in another open group on the same document, which then owns the step. Groups opened
     /// inside it and still open end with it. Returns whether the workbook changed.
     pub fn group_end(&mut self, token: GroupToken) -> Result<bool> {
-        let g = self.take_group(&token)?;
+        let mut g = self.take_group(&token)?;
         let outer = self.in_group(g.doc);
+        // A group that ends inside another one on its document hands it the data-model changes it
+        // made: the outer group's rollback takes them back with its own. This runs before the
+        // closed-document return below, because a group that closed its document has no undo step
+        // to fold into but still has such changes (a nested `grouped` call, CodeRabbit, #3412).
+        if outer && let Some(parent) = self.groups.iter_mut().rev().find(|parent| parent.doc == g.doc) {
+            parent.dax.append(&mut g.dax);
+        }
         // The document closed while the group was open: its edits (and its data-model changes)
         // stand, and there is no workbook left to make a step in.
         let (Some(doc_state), Some(d)) = (g.doc_state, self.docs.iter_mut().find(|d| d.uid == g.doc)) else { return Ok(false) };
