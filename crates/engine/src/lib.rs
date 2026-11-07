@@ -608,14 +608,23 @@ impl Session {
     }
     /// A new blank workbook titled `BookN`.
     pub fn new_workbook(&mut self) -> usize {
-        let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("Book{n}") && d.path.is_none())).unwrap_or(1);
+        self.new_workbook_named("Book", "Sheet")
+    }
+
+    /// Creates a blank workbook using caller-supplied generated-name prefixes.
+    /// Callers must validate the prefixes first; the `file.new` command performs that validation.
+    pub fn new_workbook_named(&mut self, book_prefix: &str, sheet_prefix: &str) -> usize {
+        let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("{book_prefix}{n}") && d.path.is_none())).unwrap_or(1);
         let mut wb = Workbook::new();
+        if let Some(sheet) = wb.sheet_mut(0) {
+            sheet.name = format!("{sheet_prefix}1");
+        }
         wb.props.author = self.prefs.user_name.clone();
         for _ in 1..self.prefs.sheets_in_new_workbook.clamp(1, 255) {
-            let name = wb.next_sheet_name();
+            let name = wb.next_sheet_name_with_prefix(sheet_prefix);
             wb.sheets.push(Arc::new(gridcraft_model::Sheet::new(name)));
         }
-        self.add_document(DocState::new(wb, None, format!("Book{n}"), Trust::Local))
+        self.add_document(DocState::new(wb, None, format!("{book_prefix}{n}"), Trust::Local))
     }
 
     /// Journals a command, then trims the oldest entries past either cap. A recording in progress

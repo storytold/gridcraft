@@ -94,6 +94,7 @@ mod python_cell_edit;
 mod python_hidden;
 mod python_mode;
 mod ref_edit;
+mod reported_localization;
 mod ribbon_layout;
 mod right_to_left;
 mod scroll_position;

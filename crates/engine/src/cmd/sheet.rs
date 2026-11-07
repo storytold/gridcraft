@@ -16,6 +16,7 @@ mod tabs;
 
 use tabs::{activate, delete_sheet, hide_sheet, insert_sheet, move_sheet, rename_sheet, step_sheet, tab_color, unhide_sheet};
 
+/// Registers sheet and cell-structure commands, including optional generated-name prefixes.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -54,7 +55,15 @@ pub fn specs() -> Vec<CommandSpec> {
             insert_copied_cells
         ),
         cmd!("home.deleteCells", "Delete Cells…", ["Home", "Cells", "Delete"], None, "{range?, shift: left|up|row|column}", has_doc, delete_cells),
-        cmd!("home.insertSheet", "Insert Sheet", ["Home", "Cells", "Insert"], Some("Shift+F11"), "{name?, before?: index}", has_doc, insert_sheet),
+        cmd!(
+            "home.insertSheet",
+            "Insert Sheet",
+            ["Home", "Cells", "Insert"],
+            Some("Shift+F11"),
+            "{name?, namePrefix?: string (default Sheet; used when name is omitted), before?: index}",
+            has_doc,
+            insert_sheet
+        ),
         cmd!("home.deleteSheet", "Delete Sheet", ["Home", "Cells", "Delete"], None, "{sheet?}", has_doc, delete_sheet),
         cmd!("sheet.rename", "Rename Sheet", ["Home", "Cells", "Format"], None, "{sheet?, name}", has_doc, rename_sheet),
         cmd!("sheet.move", "Move or Copy Sheet…", ["Home", "Cells", "Format"], None, "{sheet?, to: index, copy?: bool}", has_doc, move_sheet),

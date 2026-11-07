@@ -49,6 +49,7 @@ pub enum Field {
     Password { key: &'static str, label: &'static str },
     Number { key: &'static str, label: &'static str },
     Choice { key: &'static str, label: &'static str, options: Vec<(&'static str, &'static str)> },
+    NameScope { key: &'static str, label: &'static str, sheets: Vec<String> },
     Check { key: &'static str, label: &'static str },
     Note(String),
 }
@@ -406,13 +407,13 @@ impl Dialog {
                             .collect()
                     })
                     .unwrap_or_default();
-                let summary = if rows.is_empty() { "No ranges yet.".to_string() } else { rows.join("\n") };
+                let summary = if rows.is_empty() { app.ui.language.tr("No ranges yet.").to_string() } else { rows.join("\n") };
                 Dialog::form(
                     "allowEditRanges",
                     "Allow Edit Ranges",
                     "review.allowEditRanges",
                     vec![
-                        Note(format!("Ranges that stay editable when the sheet is protected:\n{summary}")),
+                        Note(format!("{}\n{summary}", app.ui.language.tr("Ranges that stay editable when the sheet is protected:"))),
                         Choice {
                             key: "action",
                             label: "Action",
@@ -506,7 +507,13 @@ impl Dialog {
                     Choice {
                         key: "operation",
                         label: "Operation",
-                        options: vec![("none", "None"), ("add", "Add"), ("subtract", "Subtract"), ("multiply", "Multiply"), ("divide", "Divide")],
+                        options: vec![
+                            ("none", "None"),
+                            ("add", "Paste Special|Add"),
+                            ("subtract", "Subtract"),
+                            ("multiply", "Multiply"),
+                            ("divide", "Divide"),
+                        ],
                     },
                     Check { key: "skipBlanks", label: "Skip blanks" },
                     Check { key: "transpose", label: "Transpose (E)" },
@@ -648,7 +655,7 @@ impl Dialog {
                 vec![
                     Check { key: "tab", label: "Tab" },
                     Check { key: "semicolon", label: "Semicolon" },
-                    Check { key: "comma", label: "Comma" },
+                    Check { key: "comma", label: "Text to Columns|Comma" },
                     Check { key: "space", label: "Space" },
                     Text { key: "other", label: "Other:" },
                     Check { key: "treatConsecutive", label: "Treat consecutive delimiters as one" },
@@ -819,9 +826,11 @@ impl Dialog {
                 let selection = app.session.active().and_then(|d| {
                     d.wb.active().map(|s| format!("={}!{}", gridcraft_engine::formula::quote_sheet(&s.name), abs(&d.selection.current())))
                 });
-                let mut defaults = json!({"scope": "Workbook", "refersTo": selection});
+                let mut defaults = json!({"scope": null, "refersTo": selection});
                 for key in ["name", "scope", "comment", "refersTo", "oldName", "oldScope"] {
-                    if let Some(v) = params.get(key).filter(|v| v.is_string()) {
+                    if let Some(v) =
+                        params.get(key).filter(|v| v.is_string() || matches!(key, "scope" | "oldScope") && (v.is_object() || v.is_null()))
+                    {
                         defaults[key] = v.clone();
                     }
                 }
@@ -831,7 +840,15 @@ impl Dialog {
                     "formulas.defineName",
                     vec![
                         Text { key: "name", label: "Name:" },
-                        Text { key: "scope", label: "Scope (Workbook or sheet name):" },
+                        NameScope {
+                            key: "scope",
+                            label: "Scope:",
+                            sheets: app
+                                .session
+                                .active()
+                                .map(|doc| doc.wb.sheets.iter().map(|sheet| sheet.name.clone()).collect())
+                                .unwrap_or_default(),
+                        },
                         Text { key: "comment", label: "Comment:" },
                         Text { key: "refersTo", label: "Refers to:" },
                     ],
@@ -1038,7 +1055,7 @@ impl Dialog {
                     let si = doc.wb.active_sheet();
                     let sh = doc.wb.sheet(si)?;
                     let ch = sh.charts.iter().find(|c| Some(u64::from(c.id)) == id)?;
-                    let data = gridcraft_chart::resolve(&doc.wb, si, ch);
+                    let data = crate::chartview::localized_chart_data(&doc.wb, si, ch, app.ui.language);
                     let names: Vec<String> = data.series.iter().map(|x| x.name.clone()).collect();
                     let cats = ch.series.first().and_then(|x| x.categories.clone()).unwrap_or_default();
                     Some((ch.source.clone().unwrap_or_default(), cats, names))

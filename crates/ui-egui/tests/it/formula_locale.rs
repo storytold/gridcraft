@@ -16,6 +16,155 @@ fn app() -> SheetApp {
 fn formula(app: &SheetApp) -> String {
     app.session.active().unwrap().wb.active().unwrap().cell(CellRef::new(0, 0)).unwrap().formula.as_ref().unwrap().text.to_string()
 }
+
+/// Unchanged numeric-looking text keeps its type on Ctrl+Enter without a quote in the editor.
+#[test]
+fn localized_text_fills_without_adding_an_apostrophe() {
+    for code in ["en", "es", "ru"] {
+        for text in ["1,5", "12,5%", " -1,5e2 "] {
+            let mut app = app();
+            app.run("app.language.set", json!({"language":code})).unwrap();
+            app.run("range.setValues", json!({"range":"A1", "values":[[text]], "parse":false})).unwrap();
+            app.run("home.numberFormat", json!({"range":"B1", "format":"@"})).unwrap();
+            app.run("selection.set", json!({"range":"A1:B1"})).unwrap();
+            // The engine already quotes some spellings (for example signed scientific text).
+            // Localization must not add another prefix to the existing editor representation.
+            let doc = app.session.active().unwrap();
+            let expected = gridcraft_engine::display::edit_text(&doc.wb, doc.wb.active().unwrap(), CellRef::new(0, 0));
+            if matches!(text, "1,5" | "12,5%") {
+                assert_eq!(expected, text);
+            }
+            app.begin_edit(None, false);
+            assert_eq!(app.editor.as_ref().unwrap().text, expected);
+            assert!(app.commit_edit(0, 0, false, true));
+            let sheet = app.session.active().unwrap().wb.active().unwrap();
+            for col in 0..2 {
+                assert_eq!(sheet.value(CellRef::new(0, col)), Value::text(text), "{code}: {text}");
+            }
+        }
+    }
+}
+
+/// Ctrl+Shift+Enter preserves stored text without adding a prefix, and still enters array formulas.
+#[test]
+fn localized_array_commit_preserves_unchanged_text() {
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"ru"})).unwrap();
+    app.run("range.setValues", json!({"range":"A1", "values":[["1,5"]], "parse":false})).unwrap();
+    app.begin_edit(None, false);
+    assert_eq!(app.editor.as_ref().unwrap().text, "1,5");
+    assert!(app.commit_edit(0, 0, true, false));
+    let at = CellRef::new(0, 0);
+    let sh = app.session.active().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(at), Value::text("1,5"));
+    assert!(sh.cell(at).unwrap().formula.is_none());
+
+    app.begin_edit(Some("=СУММ(1,5;2,5)".into()), false);
+    assert!(app.commit_edit(0, 0, true, false));
+    let sh = app.session.active().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(at), Value::Number(4.0));
+    assert!(sh.cell(at).unwrap().formula.as_ref().unwrap().array.is_some());
+}
+
+/// Filling uses the text from the open draft even when a command changes the source cell.
+#[test]
+fn fill_uses_the_text_captured_when_the_draft_opened() {
+    let mut app = app();
+    app.run("range.setValues", json!({"range":"A1", "values":[["1,5"]], "parse":false})).unwrap();
+    app.run("selection.set", json!({"range":"A1:B1"})).unwrap();
+    app.begin_edit(None, false);
+    app.run("cell.set", json!({"cell":"A1", "input":"new text"})).unwrap();
+    assert!(app.commit_edit(0, 0, false, true));
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    assert_eq!(sheet.value(CellRef::new(0, 1)), Value::text("1,5"));
+}
+
+/// A decimal rule checks the type that the literal fill actually writes.
+#[test]
+fn numeric_validation_rejects_an_unchanged_text_fill() {
+    let mut app = app();
+    app.run("range.setValues", json!({"range":"A1", "values":[["123"]], "parse":false})).unwrap();
+    app.run("data.validation", json!({"range":"B1", "type":"decimal", "operator":"greater", "formula1":"0"})).unwrap();
+    app.run("selection.set", json!({"range":"A1:B1"})).unwrap();
+    app.begin_edit(None, false);
+    assert!(!app.commit_edit(0, 0, false, true));
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    assert_eq!(sheet.value(CellRef::new(0, 1)), Value::Empty);
+}
+
+/// Freshly typed localized numbers still become numbers when filling a selection.
+#[test]
+fn fresh_localized_numbers_still_fill_as_numbers() {
+    for code in ["es", "ru"] {
+        for (input, expected) in [("1,5", 1.5), ("12,5%", 0.125), ("-1,5e2", -150.0)] {
+            let mut app = app();
+            app.run("app.language.set", json!({"language":code})).unwrap();
+            app.run("selection.set", json!({"range":"A1:B1"})).unwrap();
+            app.begin_edit(Some(input.into()), false);
+            assert!(app.commit_edit(0, 0, false, true));
+            let sheet = app.session.active().unwrap().wb.active().unwrap();
+            for col in 0..2 {
+                assert_eq!(sheet.value(CellRef::new(0, col)), Value::number(expected), "{code}: {input}");
+            }
+        }
+    }
+}
+
+/// Editing existing text into a different number uses numeric parsing, not the unchanged-text path.
+#[test]
+fn changed_localized_text_fills_as_a_number() {
+    for code in ["es", "ru"] {
+        let mut app = app();
+        app.run("app.language.set", json!({"language":code})).unwrap();
+        app.run("range.setValues", json!({"range":"A1", "values":[["1,5"]], "parse":false})).unwrap();
+        app.run("selection.set", json!({"range":"A1:B1"})).unwrap();
+        app.begin_edit(None, false);
+        app.editor.as_mut().unwrap().text = "2,5".into();
+        assert!(app.commit_edit(0, 0, false, true));
+        let sheet = app.session.active().unwrap().wb.active().unwrap();
+        for col in 0..2 {
+            assert_eq!(sheet.value(CellRef::new(0, col)), Value::number(2.5), "{code}");
+        }
+    }
+}
+
+/// The current function-library dialog searches Russian aliases, their е/ё variants and English names.
+#[test]
+fn russian_insert_function_search_preserves_locale_matching() {
+    use egui_kittest::kittest::Queryable as _;
+    let mut application = app();
+    application.ui.language = Language::Ru;
+    application.open_dialog("insertFunction", json!({}));
+    let mut h = crate::common::harness_with(crate::common::builder(), application, 3);
+    let label = format!("СЧЁТ ({})", Language::Ru.tr("Statistical"));
+    for query in ["счет", "СЧЁТ", "count"] {
+        h.state_mut().dialog.as_mut().unwrap().search = query.into();
+        h.run_steps(2);
+        assert!(h.query_by_label(&label).is_some(), "{query}");
+        assert_eq!(h.state().dialog.as_ref().unwrap().values.get("category"), Some(&json!("All")));
+    }
+}
+
+/// Localized error literals do not hide reference spans used by colouring, F4 and point mode.
+#[test]
+fn localized_errors_preserve_reference_spans_in_the_draft_language() {
+    use gridcraft_engine::formula::FormulaLocale;
+    use gridcraft_ui_egui::editor::{formula_refs, formula_refs_in};
+    let source = "=ЕСЛИОШИБКА(#ССЫЛКА!;СУММ(A1;B2:C3;1,5;{1\\2;3\\4};'Лист'!A1))";
+    let refs = formula_refs_in(source, FormulaLocale::Ru);
+    assert_eq!(refs.iter().map(|r| r.2.a1()).collect::<Vec<_>>(), ["A1", "B2:C3", "A1"]);
+    assert_eq!(refs.iter().map(|r| &source[r.0..r.1]).collect::<Vec<_>>(), ["A1", "B2:C3", "'Лист'!A1"]);
+    assert_eq!(refs.last().unwrap().3.as_deref(), Some("Лист"));
+    // Changing the interface does not change an existing draft's captured syntax.
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"ru"})).unwrap();
+    app.begin_edit(Some(source.to_string()), false);
+    app.run("app.language.set", json!({"language":"en"})).unwrap();
+    let draft = app.editor.as_ref().unwrap();
+    assert_eq!(formula_refs_in(&draft.text, draft.locale), refs);
+    let english = "=IFERROR(#REF!,A1+B2:C3)";
+    assert_eq!(formula_refs(english), formula_refs_in(english, FormulaLocale::En));
+}
 fn enter(app: &mut SheetApp, text: &str) -> bool {
     app.begin_edit(Some(text.into()), false);
     app.commit_edit(0, 0, false, false)
@@ -182,17 +331,50 @@ fn canonical_engine_templates_enter_the_selected_formula_language() {
     }
 }
 
+/// Localized formula syntax is reversible through the canonical XLSX writer and reader.
 #[test]
-fn portuguese_interface_retains_its_canonical_formula_fallback() {
+fn french_german_italian_portuguese_and_turkish_formulas_round_trip_through_xlsx() {
+    for (language, ui_language, localized) in [
+        ("fr", Language::Fr, "=SIERREUR(SOMME(1,5;2,25);#VALEUR!)"),
+        ("de", Language::De, "=WENNFEHLER(SUMME(1,5;2,25);#WERT!)"),
+        ("it", Language::It, "=SE.ERRORE(SOMMA(1,5;2,25);#VALORE!)"),
+        ("pt-BR", Language::PtBr, "=SEERRO(SOMA(1,5;2,25);#VALOR!)"),
+        ("tr", Language::Tr, "=EĞERHATA(TOPLA(1,5;2,25);#DEĞER!)"),
+    ] {
+        let mut app = app();
+        app.run("app.language.set", json!({"code":language})).unwrap();
+        assert_eq!(app.ui.language, ui_language);
+        assert!(enter(&mut app, &localized.to_lowercase()), "{language}");
+        assert_eq!(formula(&app), "IFERROR(SUM(1.5,2.25),#VALUE!)");
+        let saved = app.run("file.save", json!({"format":"xlsx"})).unwrap();
+        app.run("file.open", json!({"name":"localized.xlsx","base64":saved["base64"]})).unwrap();
+        assert_eq!(formula(&app), "IFERROR(SUM(1.5,2.25),#VALUE!)");
+        app.begin_edit(None, false);
+        assert_eq!(app.editor.as_ref().unwrap().text, localized);
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(3.75));
+        let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
+        assert_eq!(restored.language, ui_language);
+    }
+}
+
+/// Structured-reference keywords are local in the editor and canonical on disk.
+#[test]
+fn spanish_structured_references_round_trip_through_xlsx() {
     let mut app = app();
-    app.run("app.language.set", json!({"code":"pt-BR"})).unwrap();
-    assert_eq!(app.ui.language, Language::PtBr);
-    assert!(enter(&mut app, "=SUM(1.5,2.25)"));
-    app.begin_edit(None, true);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1.5,2.25)");
-    assert!(!enter(&mut app, "=SUMA(1;2)"));
-    let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
-    assert_eq!(restored.language, Language::PtBr);
+    app.run("cell.set", json!({"cell":"D1","input":"Importe"})).unwrap();
+    app.run("cell.set", json!({"cell":"D2","input":"7"})).unwrap();
+    app.run("insert.table", json!({"range":"D1:D2","header":true,"name":"Ventas"})).unwrap();
+    app.run("app.language.set", json!({"code":"es"})).unwrap();
+    let localized = "=SUMA(Ventas[[#Datos];[Importe]])";
+    let canonical = "SUM(Ventas[[#Data],[Importe]])";
+    assert!(enter(&mut app, localized));
+    assert_eq!(formula(&app), canonical);
+    let saved = app.run("file.save", json!({"format":"xlsx"})).unwrap();
+    app.run("file.open", json!({"name":"table.xlsx","base64":saved["base64"]})).unwrap();
+    assert_eq!(formula(&app), canonical);
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(7.0));
+    app.begin_edit(None, false);
+    assert_eq!(app.editor.as_ref().unwrap().text, localized);
 }
 
 #[test]
@@ -229,14 +411,106 @@ fn user_defined_prefix_is_hidden_while_editing_and_kept_on_commit() {
 }
 
 #[test]
-fn turkish_interface_retains_its_canonical_formula_fallback() {
+fn turkish_interface_localizes_formula_entry_and_display() {
     let mut app = app();
     app.run("app.language.set", json!({"code":"tr-TR"})).unwrap();
     assert_eq!(app.ui.language, Language::Tr);
-    assert!(enter(&mut app, "=SUM(1.5,2.25)"));
+    assert!(enter(&mut app, "=topla(1,5;2,25)"));
+    assert_eq!(formula(&app), "SUM(1.5,2.25)");
     app.begin_edit(None, true);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1.5,2.25)");
-    assert!(!enter(&mut app, "=TOPLA(1;2)"));
+    assert_eq!(app.editor.as_ref().unwrap().text, "=TOPLA(1,5;2,25)");
     let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
     assert_eq!(restored.language, Language::Tr);
+}
+/// Checks Russian editor entry and display survive XLSX round trips while engine/API syntax stays canonical.
+#[test]
+fn russian_entry_roundtrips_through_xlsx_and_keeps_api_canonical() {
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"ru"})).unwrap();
+    assert!(enter(&mut app, "=если(истина;сумм(1,5;2,25);0)"));
+    assert_eq!(formula(&app), "IF(TRUE,SUM(1.5,2.25),0)");
+    let saved = app.run("file.save", json!({"format":"xlsx"})).unwrap();
+    app.run("file.open", json!({"name":"russian.xlsx","base64":saved["base64"]})).unwrap();
+    app.begin_edit(None, false);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=ЕСЛИ(ИСТИНА;СУММ(1,5;2,25);0)");
+    assert!(app.commit_edit(0, 0, false, false));
+    assert!(app.run("cell.set", json!({"cell":"A2","input":"=SUM(1,2)"})).is_ok());
+    assert!(app.run("cell.set", json!({"cell":"A3","input":"=СУММ(1;2)"})).is_err());
+    assert!(enter(&mut app, "=ЕСЛИОШИБКА(#ССЫЛКА!;42)"));
+    assert_eq!(formula(&app), "IFERROR(#REF!,42)");
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(42.0));
+}
+
+/// Checks localized Boolean/error values and similar literal text retain their types through editing.
+#[test]
+fn russian_constants_and_literal_text_do_not_change_type_when_edited() {
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"ru"})).unwrap();
+    for (typed, expected) in [("#ССЫЛКА!", Value::Error(CellError::Ref)), ("истина", Value::Bool(true)), ("ложь", Value::Bool(false))]
+    {
+        assert!(enter(&mut app, typed));
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), expected);
+        app.begin_edit(None, false);
+        assert!(app.commit_edit(0, 0, false, false));
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), expected);
+    }
+    for text in ["#ССЫЛКА!", "ИСТИНА", "ЛОЖЬ", "+сумм(1)"] {
+        app.run("cell.set", json!({"cell":"A1","input":format!("'{text}")})).unwrap();
+        app.begin_edit(None, false);
+        assert!(app.editor.as_ref().unwrap().text.starts_with('\''));
+        assert!(app.commit_edit(0, 0, false, false));
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::text(text));
+    }
+}
+
+/// Checks Russian autocomplete and argument insertion place the caret at valid Unicode positions.
+#[test]
+fn russian_autocomplete_and_argument_insertion_use_unicode_caret_positions() {
+    use gridcraft_engine::formula::FormulaLocale;
+    use gridcraft_ui_egui::editor::EditState;
+    let mut editor = EditState::new(0, 0, CellRef::new(0, 0), "=сче".into(), true, false);
+    editor.locale = FormulaLocale::Ru;
+    editor.update_autocomplete(&["СЧЁТ".into(), "СЧЁТЕСЛИ".into()]);
+    assert_eq!(editor.autocomplete, vec!["СЧЁТ", "СЧЁТЕСЛИ"]);
+    assert!(editor.accept_autocomplete());
+    assert_eq!(editor.text, "=СЧЁТ(");
+    assert_eq!(editor.caret, editor.text.chars().count());
+    assert_eq!(editor.current_function(), Some(("СЧЁТ".into(), 0)));
+    assert!(editor.insert_argument_names(Language::Ru));
+    let value = Language::Ru.function_argument("value").unwrap();
+    assert_eq!(editor.text, format!("=СЧЁТ({value}1;{value}2;...)"));
+}
+
+/// Checks explicit Text formatting protects localized-looking input in both supported translated syntaxes.
+#[test]
+fn localized_value_editing_respects_explicit_text_format_in_both_languages() {
+    for code in ["es", "ru"] {
+        let mut app = app();
+        app.run("app.language.set", json!({"language":code})).unwrap();
+        app.run("home.numberFormat", json!({"format":"@"})).unwrap();
+        let locale = app.ui.language.formula_locale();
+        for text in [locale.function_name("TRUE"), locale.error_name(CellError::Ref)] {
+            assert!(enter(&mut app, text));
+            app.begin_edit(None, false);
+            assert_eq!(app.editor.as_ref().unwrap().text, text);
+            app.editor.as_mut().unwrap().text.push('!');
+            assert!(app.commit_edit(0, 0, false, false));
+            assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::text(format!("{text}!")));
+        }
+    }
+}
+
+/// Polish input stays canonical in XLSX and displays in Polish after reopening.
+#[test]
+fn polish_formula_round_trips_through_xlsx() {
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"pl"})).unwrap();
+    assert!(enter(&mut app, "=jeżeli.błąd(suma(1,5;2,25);#DZIEL/0!)"));
+    assert_eq!(formula(&app), "IFERROR(SUM(1.5,2.25),#DIV/0!)");
+    let saved = app.run("file.save", json!({"format":"xlsx"})).unwrap();
+    app.run("file.open", json!({"name":"polish.xlsx","base64":saved["base64"]})).unwrap();
+    assert_eq!(formula(&app), "IFERROR(SUM(1.5,2.25),#DIV/0!)");
+    app.begin_edit(None, false);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=JEŻELI.BŁĄD(SUMA(1,5;2,25);#DZIEL/0!)");
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(3.75));
 }

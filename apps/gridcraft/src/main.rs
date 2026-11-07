@@ -35,7 +35,7 @@ impl eframe::App for App {
         #[cfg(target_os = "macos")]
         {
             if self.2.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
-                self.2 = Some(native_menu::NativeMenu::install(ctx));
+                self.2 = Some(native_menu::NativeMenu::install(ctx, self.0.ui.language));
             }
             if let Some(m) = &mut self.2 {
                 m.poll(&mut self.0, ctx, self.1.focused_viewport());
@@ -237,6 +237,17 @@ fn icon() -> Option<egui::IconData> {
     Some(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() })
 }
 
+/// Creates the desktop's initial blank book after preferences load; supplied documents are kept.
+fn ensure_startup_workbook(app: &mut SheetApp) {
+    let language = app.ui.language;
+    if app.session.documents().is_empty()
+        && let Err(error) = app.run("file.new", json!({"bookPrefix": language.tr("Book"), "sheetPrefix": language.tr("Sheet")}))
+    {
+        log::warn!("new workbook: {error}");
+    }
+}
+
+/// Starts the desktop application with persisted preferences, localized new-document names and native services.
 fn main() -> eframe::Result<()> {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
@@ -320,10 +331,8 @@ fn main() -> eframe::Result<()> {
     app.start_update_check();
     let control_port = control_port;
     load_prefs(&mut app);
-    // Stamp the startup workbook's author from the persisted user name.
-    if app.session.documents().is_empty() {
-        app.session.new_workbook();
-    }
+    // Stamp the localized startup workbook's author from the persisted user name.
+    ensure_startup_workbook(&mut app);
     app.after_engine(); // Show warnings from the sample.
     // Files named on the command line (a double-click on Windows and Linux) open as File › Open
     // opens them: a password-protected one asks for its password, and errors are shown, not
@@ -451,5 +460,28 @@ mod packaging_tests {
         for ext in &mac {
             assert!(FileKind::from_path(&format!("book.{ext}")).is_some(), "GridCraft doesn't open .{ext}");
         }
+    }
+}
+
+#[cfg(test)]
+mod startup_tests {
+    /// Saved interface language applies on launch, while existing documents are never renamed or replaced.
+    #[test]
+    fn startup_workbook_uses_loaded_language_and_keeps_existing_documents() {
+        let mut app = gridcraft_ui_egui::SheetApp::new(gridcraft_engine::Session::new(), Default::default());
+        app.ui.language = gridcraft_ui_egui::i18n::Language::Ru;
+        super::ensure_startup_workbook(&mut app);
+        assert_eq!(app.session.active().unwrap().title, "Книга1");
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().name, "Лист1");
+        super::ensure_startup_workbook(&mut app);
+        assert_eq!(app.session.documents().len(), 1);
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook_named("Existing", "Data");
+        let mut app = gridcraft_ui_egui::SheetApp::new(session, Default::default());
+        app.ui.language = gridcraft_ui_egui::i18n::Language::Ru;
+        super::ensure_startup_workbook(&mut app);
+        assert_eq!(app.session.documents().len(), 1);
+        assert_eq!(app.session.active().unwrap().title, "Existing1");
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().name, "Data1");
     }
 }

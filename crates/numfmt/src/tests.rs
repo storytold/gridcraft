@@ -673,7 +673,7 @@ fn text_uncached(v: &Value, code: &str, sys: DateSystem) -> Result<String, CellE
     if !n.is_finite() {
         return Err(CellError::Num);
     }
-    let (f, overflow) = fmt.format_number(n, sys);
+    let (f, overflow) = fmt.format_number(n, sys, Locale::En);
     if overflow { Err(CellError::Value) } else { Ok(f.text) }
 }
 
@@ -902,6 +902,31 @@ fn closed_brackets_still_hold_their_semicolons() {
     assert_eq!(f("\"[\"0;0", 5.0), "[5");
 }
 
+/// Regional output changes separators and names while preserving explicit currency literals.
+#[test]
+fn explicit_locale_renders_numbers_dates_and_currency_without_rewriting_codes() {
+    let render = |n, code| format_value_with_locale(&Value::Number(n), &NumberFormat::parse(code), DateSystem::D1900, Locale::De).text;
+    assert_eq!(render(1234.56, "#,##0.00"), "1.234,56");
+    assert_eq!(render(46310.0, "dddd, d. mmmm yyyy"), "Donnerstag, 15. Oktober 2026");
+    assert_eq!(render(46096.0, "d mmm yyyy"), "15 Mrz 2026");
+    assert_eq!(render(1234.56, r##""$"#,##0.00"##), "$1.234,56");
+    assert_eq!(render(1234.56, r#"#,##0.00 "€""#), "1.234,56 €");
+}
+
+/// Fractional seconds follow the output locale while format codes stay canonical.
+#[test]
+fn fractional_seconds_use_the_locale_decimal_separator() {
+    let serial = 0.5 + 123.0 / 86_400_000.0;
+    for (locale, expected) in [(Locale::En, "12:00:00.123"), (Locale::De, "12:00:00,123")] {
+        let fmt = NumberFormat::parse("hh:mm:ss.000");
+        assert_eq!(format_value_with_locale(&Value::Number(serial), &fmt, DateSystem::D1900, locale).text, expected);
+    }
+    for (code, expected) in [("hh:mm:ss.0", "12:00:00,1"), ("[h]:mm:ss.00", "36:00:00,12")] {
+        let serial = if code.starts_with('[') { serial + 1.0 } else { serial };
+        assert_eq!(format_value_with_locale(&Value::Number(serial), &NumberFormat::parse(code), DateSystem::D1900, Locale::De).text, expected);
+    }
+}
+
 /// "Set precision as displayed": the value each format stores. Expected values observed in Excel
 /// (COM, `Workbook.PrecisionAsDisplayed = True`) with synthetic values.
 #[test]
@@ -1017,4 +1042,20 @@ fn round_as_displayed_matches_excel() {
     assert_eq!(r("0%%%%%%%%%%%%%%%%%%%%%%%%", f64::MAX), f64::MAX);
     assert_eq!(r("0", f64::MAX), f64::MAX);
     assert_eq!(r("0.0E+0", f64::MIN_POSITIVE), 2.2e-308);
+}
+
+/// Display precision remains numeric while rendering uses the selected locale.
+#[test]
+fn display_precision_and_regional_rendering_share_rounding() {
+    for (code, value, rounded, text) in [
+        ("0.00", 1.005, 1.01, "1,01"),
+        ("#,##0.00", 1234.5678, 1234.57, "1.234,57"),
+        ("0.0%", 0.123456, 0.123, "12,3%"),
+        ("# ?/?", 2.3, 16.0 / 7.0, "2 2/7"),
+        ("0.00E+00", 123456.789, 123000.0, "1,23E+05"),
+    ] {
+        let format = NumberFormat::parse(code);
+        assert_eq!(format.round_as_displayed(value), rounded, "{code}");
+        assert_eq!(format_value_with_locale(&Value::Number(value), &format, DateSystem::D1900, Locale::De).text, text, "{code}");
+    }
 }

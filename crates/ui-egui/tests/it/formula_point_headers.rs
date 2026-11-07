@@ -95,6 +95,23 @@ fn shift_selects_a_contiguous_column_range_while_editing_a_formula() {
     assert_eq!(gridcraft_ui_egui::editor::formula_refs(text).iter().map(|r| r.2.a1()).collect::<Vec<_>>(), ["C:E"]);
 }
 
+/// A localized draft keeps both its original A1 references and the pointed range visible.
+#[test]
+fn localized_formula_points_to_and_highlights_a_column_range() {
+    let mut h = harness();
+    h.state_mut().run("app.language.set", json!({"code":"es"})).unwrap();
+    h.state_mut().begin_edit(Some("=SUMA(Ventas[[#Datos];[Importe]];A1;1,5;".into()), false);
+    h.run_steps(2);
+    let first = header_center(&h, false, 2);
+    click(&mut h, first);
+    let second = header_center(&h, false, 4);
+    click_with_modifiers(&mut h, second, Modifiers::SHIFT);
+    let draft = h.state().editor.as_ref().unwrap();
+    assert_eq!(draft.text, "=SUMA(Ventas[[#Datos];[Importe]];A1;1,5;C:E");
+    let refs = gridcraft_ui_egui::editor::formula_refs_in(&draft.text, draft.locale);
+    assert_eq!(refs.iter().map(|r| &draft.text[r.0..r.1]).collect::<Vec<_>>(), ["A1", "C:E"]);
+}
+
 #[test]
 fn command_selects_discontiguous_columns_while_editing_a_formula() {
     let mut h = harness();

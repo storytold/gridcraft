@@ -41,7 +41,11 @@ impl SheetApp {
             self.notice = None;
             return;
         }
-        let vba: Vec<&str> = msgs.iter().copied().filter(|m| m.to_lowercase().contains("macro") || m.contains("VBA")).collect();
+        let vba: Vec<&str> = msgs
+            .iter()
+            .copied()
+            .filter(|m| !m.starts_with("XLSB data-only import:") && (m.to_lowercase().contains("macro") || m.contains("VBA")))
+            .collect();
         if !vba.is_empty() {
             // The reader says "dropped" when the VBA project was missing or unreadable; never promise to keep it then.
             let dropped = vba.iter().any(|m| m.contains("dropped"));
@@ -53,9 +57,12 @@ impl SheetApp {
             self.notice = Some(Notice { text: text.into(), kind: NoticeKind::Warning, action: Some(("What this means".into(), "macros".into())) });
         } else {
             let text = if msgs.len() == 1 {
-                msgs[0].to_string()
+                self.ui.language.open_warning(msgs[0])
             } else {
-                format!("{} items in this file were handled differently. First: {}", msgs.len(), msgs[0])
+                craft_i18n::fmt(
+                    self.ui.language.tr("{count} items in this file were handled differently. First: {warning}"),
+                    &[("count", &msgs.len().to_string()), ("warning", &self.ui.language.open_warning(msgs[0]))],
+                )
             };
             self.notice = Some(Notice { text, kind: NoticeKind::Info, action: None });
         }

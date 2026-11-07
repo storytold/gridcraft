@@ -9,6 +9,7 @@ use super::{
     target_range, target_ranges, target_sheet, u32_param,
 };
 
+/// Registers formula commands and documents explicit workbook and sheet scope identities.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -35,7 +36,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Define Name…",
             ["Formulas", "Defined Names"],
             None,
-            "{name, refersTo?: \"=Sheet1!$A$1:$A$10\" (default: the selection), scope?: \"Workbook\"|sheet name, comment?, oldName?, oldScope?, force?: bool} (oldName: edit that name (Name Manager › Edit); a new name also renames it in formulas; a hidden name GridCraft keeps its own data in, `_gc_<key>_<n>` or `_sc_<key>`, is refused unless force is true)",
+            "{name, refersTo?: \"=Sheet1!$A$1:$A$10\" (default: the selection), scope?: null|\"Workbook\"|sheet name|{sheet: name}, comment?, oldName?, oldScope?: same as scope, force?: bool} (null or Workbook means workbook scope; use {sheet: name} for a sheet named Workbook. oldName edits that name; a new name also renames it in formulas. Hidden GridCraft data names are refused unless force is true)",
             has_doc,
             define_name
         ),
@@ -44,11 +45,11 @@ pub fn specs() -> Vec<CommandSpec> {
             "Delete Name",
             [],
             None,
-            "{name, scope?: \"Workbook\"|sheet name (default: every scope), force?: bool} (a hidden name GridCraft keeps its own data in, `_gc_<key>_<n>` or `_sc_<key>`, is refused unless force is true)",
+            "{name, scope?: null|\"Workbook\"|sheet name|{sheet: name}, force?: bool} (missing or null scope selects every scope; Workbook selects only workbook scope. When reusing nameManager scopeIdentity: null, pass scope: \"Workbook\" to delete only the workbook name. Hidden GridCraft data names are refused unless force is true)",
             has_doc,
             delete_name
         ),
-        cmd!(query "formulas.nameManager", "Name Manager", ["Formulas", "Defined Names"], Some("Cmd+F3"), "{} → names with values", has_doc, name_manager),
+        cmd!(query "formulas.nameManager", "Name Manager", ["Formulas", "Defined Names"], Some("Cmd+F3"), "{} → names with values, display scope and scopeIdentity (null or {sheet: name}); for deleteName, convert scopeIdentity: null to scope: \"Workbook\" because null deletes across all scopes", has_doc, name_manager),
         cmd!(
             "formulas.createFromSelection",
             "Create from Selection",
@@ -346,6 +347,7 @@ pub(crate) fn is_r1c1(n: &str) -> bool {
     rest.is_empty() && !n.is_empty()
 }
 
+/// Defines or edits a name in its exact scope, including a sheet literally named Workbook.
 fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(name) = str_param(p, "name").map(str::to_string) else {
         s.ui_requests.push(crate::UiRequest::Dialog("defineName".into(), json!({})));
@@ -358,10 +360,7 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
         refuse_stash_name(&s.doc()?.wb, p, n)?;
     }
     let d = s.doc()?;
-    let scope = match str_param(p, "scope") {
-        None | Some("Workbook") => None,
-        Some(sh) => Some(d.wb.sheet_index(sh).ok_or_else(|| bad("formulas.defineName", "no such sheet"))?),
-    };
+    let scope = defined_name_scope(&d.wb, p.get("scope"), "formulas.defineName")?;
     let refers = match str_param(p, "refersTo") {
         // As in Excel, relative references are relative to the active cell; names keep them
         // relative to A1, as files do.
@@ -388,10 +387,7 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
     // collide with another name in the target scope.
     let old = match str_param(p, "oldName") {
         Some(old_name) => {
-            let old_scope = match str_param(p, "oldScope") {
-                None | Some("Workbook") => None,
-                Some(sh) => Some(d.wb.sheet_index(sh).ok_or_else(|| bad("formulas.defineName", "no such sheet"))?),
-            };
+            let old_scope = defined_name_scope(&d.wb, p.get("oldScope"), "formulas.defineName")?;
             if !d.wb.names.iter().any(|n| n.name.eq_ignore_ascii_case(old_name) && n.scope == old_scope) {
                 return Err(bad("formulas.defineName", "no such name to edit"));
             }
@@ -483,14 +479,28 @@ fn refuse_stash_name(wb: &Workbook, p: &Json, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Resolves tagged sheet identities without confusing a sheet named Workbook with workbook scope.
+/// Legacy string parameters remain accepted; null explicitly denotes workbook scope.
+fn defined_name_scope(wb: &Workbook, scope: Option<&Json>, command: &str) -> Result<Option<usize>> {
+    let name = match scope {
+        None | Some(Json::Null) => return Ok(None),
+        Some(Json::String(name)) if name == "Workbook" => return Ok(None),
+        Some(Json::String(name)) => name.as_str(),
+        Some(Json::Object(identity)) => identity.get("sheet").and_then(Json::as_str).ok_or_else(|| bad(command, "scope must name a sheet"))?,
+        Some(_) => return Err(bad(command, "scope must be null, a sheet name or {sheet: name}")),
+    };
+    wb.sheet_index(name).map(Some).ok_or_else(|| bad(command, "no such sheet"))
+}
+
+/// Deletes a name in the requested scope, or across all scopes when the parameter is absent.
 fn delete_name(s: &mut Session, p: &Json) -> Result<Json> {
     let name = str_param(p, "name").ok_or_else(|| bad("formulas.deleteName", "missing `name`"))?.to_string();
     refuse_stash_name(&s.doc()?.wb, p, &name)?;
-    let scope = match str_param(p, "scope") {
-        None => None,
-        Some("Workbook") => Some(None),
-        Some(sh) => Some(Some(s.doc()?.wb.sheet_index(sh).ok_or_else(|| bad("formulas.deleteName", "no such sheet"))?)),
-    };
+    let scope = p
+        .get("scope")
+        .filter(|value| !value.is_null())
+        .map(|value| defined_name_scope(&s.doc()?.wb, Some(value), "formulas.deleteName"))
+        .transpose()?;
     edit(s, |cx| {
         let before = cx.wb.names.len();
         cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(&name) && scope.is_none_or(|sc| n.scope == sc)));
@@ -502,6 +512,7 @@ fn delete_name(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Returns visible names with legacy display scopes and unambiguous identities for editing.
 fn name_manager(s: &mut Session, _: &Json) -> Result<Json> {
     let d = s.doc()?;
     let list: Vec<Json> = d
@@ -514,7 +525,8 @@ fn name_manager(s: &mut Session, _: &Json) -> Result<Json> {
             // parse_name, not evaluate's parse: a name's top-level commas are unions.
             let v = gridcraft_formula::parse_name(&n.formula)
                 .map_or(Value::Error(CellError::Name), |e| gridcraft_calc::recalc::evaluate_expr(&d.wb, sheet, CellRef::default(), &e));
-            json!({"name": n.name, "refersTo": format!("={}", n.formula), "scope": n.scope.and_then(|i| d.wb.sheet(i)).map(|s| s.name.clone()).unwrap_or_else(|| "Workbook".into()), "value": crate::cmd::inspect::value_json(&v), "comment": n.comment})
+            let scope_sheet = n.scope.and_then(|i| d.wb.sheet(i)).map(|s| s.name.as_str());
+            json!({"name": n.name, "refersTo": format!("={}", n.formula), "scope": scope_sheet.unwrap_or("Workbook"), "scopeIdentity": scope_sheet.map(|sheet| json!({"sheet":sheet})), "value": crate::cmd::inspect::value_json(&v), "comment": n.comment})
         })
         .collect();
     Ok(Json::Array(list))

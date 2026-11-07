@@ -6,6 +6,14 @@ pub(crate) const DRAFT_SHEET_GONE: &str = "The sheet of the cell being edited wa
 /// Why a draft of Python code that sheet protection hid while it was open is dropped.
 pub(crate) const DRAFT_CODE_HIDDEN: &str = "Sheet protection now hides the code of the cell being edited, so the entry was discarded.";
 
+/// Checks every destination of an unchanged text fill before the command writes any cell.
+/// A Stop rule takes precedence over warnings, which remain advisory.
+fn validate_literal_fill(doc: &gridcraft_engine::DocState, sheet: usize, text: &str) -> Option<(gridcraft_engine::model::Validation, String)> {
+    let default_selection = gridcraft_engine::Selection::default();
+    let selection = if doc.wb.active_sheet() == sheet { &doc.selection } else { doc.sheet_selections.get(sheet).unwrap_or(&default_selection) };
+    gridcraft_engine::cmd::data::check_literal_fill_validation(&doc.wb, sheet, &selection.ranges, text)
+}
+
 impl SheetApp {
     /// Starts editing the active cell. `text` replaces the content (typing) or pre-fills it.
     pub fn begin_edit(&mut self, text: Option<String>, from_formula_bar: bool) {
@@ -56,7 +64,7 @@ impl SheetApp {
         } else {
             match sh.cell(at) {
                 Some(c) if c.formula.is_some() => formula_locale::display(&c.input_text(), locale, &d.wb, d.wb.active_sheet()),
-                _ => gridcraft_engine::display::edit_text(&d.wb, sh, at),
+                _ => formula_locale::edit_text(&d.wb, sh, at, locale),
             }
         };
         let (text, replace) = match text {
@@ -66,6 +74,12 @@ impl SheetApp {
         let mut ed = editor::EditState::new(d.uid, d.wb.active_sheet(), at, text, replace, from_formula_bar).on_sheet(&d.wb);
         ed.window = self.session.active_window();
         ed.locale = locale;
+        if !replace
+            && let Some(cell) = sh.cell(at).filter(|cell| cell.formula.is_none())
+            && let gridcraft_engine::core::Value::Text(value) = &cell.value
+        {
+            ed.original_literal = Some(value.clone());
+        }
         if replace && self.ui.autocomplete && !ed.is_formula() {
             ed.completion = editor::column_completion(sh, at, &ed.text);
         }
@@ -117,6 +131,7 @@ impl SheetApp {
         self.commit_text_box_edit()
     }
 
+    /// Commits the current localized editor draft, preserving typed literals and applying the requested selection movement.
     fn commit_edit_here(&mut self, dr: i64, dc: i64, array: bool, fill_selection: bool) -> bool {
         // Python code goes in through `python.set`, whichever way the edit is committed (the
         // formula bar's Enter button, a click on the sheet).
@@ -151,7 +166,18 @@ impl SheetApp {
             self.message = Some(("GridCraft".into(), m));
             return true;
         }
-        let text = match self.session.active().map(|d| formula_locale::canonical(&text, ed.locale, &d.wb, ed.sheet, ed.cell)) {
+        // Ctrl+Enter and Ctrl+Shift+Enter preserve an unchanged text value, not a fresh typed entry.
+        // Pass the type to the engine instead of adding a quote to the visible draft.
+        let literal = if (fill_selection || array) && ed.original.as_ref() == Some(&text) {
+            ed.original_literal.as_ref().map(ToString::to_string)
+        } else {
+            None
+        };
+        let text = match literal
+            .clone()
+            .map(Ok)
+            .or_else(|| self.session.active().map(|d| formula_locale::canonical(&text, ed.locale, &d.wb, ed.sheet, ed.cell)))
+        {
             Some(Ok(text)) => text,
             Some(Err(error)) => {
                 self.message = Some(("GridCraft".into(), error.to_string()));
@@ -163,7 +189,15 @@ impl SheetApp {
         };
         // Data validation.
         if let Some(d) = self.session.active()
-            && let Some((dv, msg)) = gridcraft_engine::cmd::data::check_validation(&d.wb, ed.sheet, ed.cell, &text)
+            && let Some((dv, msg)) = if literal.is_some() {
+                if fill_selection {
+                    validate_literal_fill(d, ed.sheet, &text)
+                } else {
+                    gridcraft_engine::cmd::data::check_literal_validation(&d.wb, ed.sheet, ed.cell, &text)
+                }
+            } else {
+                gridcraft_engine::cmd::data::check_validation(&d.wb, ed.sheet, ed.cell, &text)
+            }
         {
             if dv.error_style == gridcraft_engine::model::ErrorStyle::Stop {
                 let title = if dv.error_title.is_empty() { "GridCraft".to_string() } else { dv.error_title.clone() };
@@ -194,9 +228,9 @@ impl SheetApp {
         let r = if unchanged {
             Ok(json!({}))
         } else if fill_selection {
-            self.session.run("range.fill", json!({"input": text}))
+            self.session.run("range.fill", json!({"input": text, "literal": literal.is_some()}))
         } else {
-            self.session.run("cell.set", json!({"cell": ed.cell.a1(), "input": text, "array": array}))
+            self.session.run("cell.set", json!({"cell": ed.cell.a1(), "input": text, "array": array, "literal": literal.is_some()}))
         };
         match r {
             Ok(_) => {

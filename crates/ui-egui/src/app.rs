@@ -145,8 +145,11 @@ impl SheetApp {
         self.request_hidden_paint(ctx);
         // One window always shows a workbook, unless each workbook has a native window of its own
         // (`doc_windows` decides what having none left means).
-        if self.session.active().is_none() && !self.native_windows {
-            self.session.new_workbook();
+        if self.session.active().is_none()
+            && !self.native_windows
+            && let Err(error) = self.run_from_ui("file.new", json!({}))
+        {
+            self.message = Some(("GridCraft".into(), error));
         }
         self.follow_active_window();
     }
@@ -159,7 +162,7 @@ impl SheetApp {
             return;
         }
         let Some(d) = self.session.active() else { return };
-        let title = format!("{}{}", d.display_title(), if d.is_dirty() { " — Edited" } else { "" });
+        let title = format!("{}{}", d.display_title(), if d.is_dirty() { format!(" — {}", self.ui.language.tr("Edited")) } else { String::new() });
         if self.grid.last_title.as_deref() != Some(title.as_str()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.grid.last_title = Some(title);

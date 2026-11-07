@@ -93,6 +93,13 @@ pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Cf
     (Look { style, fill, text_color }, cfl)
 }
 
+/// Per-view formatting conventions and the available text space.
+pub(super) struct TextOptions {
+    pub locale: gridcraft_engine::core::Locale,
+    pub width_px: f32,
+    pub char_w: f32,
+}
+
 /// Text for a value with General narrowing to the available width.
 pub(super) fn display_text(
     wb: &Workbook,
@@ -100,8 +107,7 @@ pub(super) fn display_text(
     c: CellRef,
     v: &Value,
     st: &Style,
-    width_px: f32,
-    char_w: f32,
+    options: TextOptions,
 ) -> (String, Option<Color32>, bool, Option<(char, usize)>) {
     if sh.show_formulas
         && let Some(f) = sh.cell(c).and_then(|x| x.formula.as_ref())
@@ -119,13 +125,14 @@ pub(super) fn display_text(
     if code == "General"
         && let Value::Number(n) = v
     {
-        let max_chars = ((width_px - 4.0) / char_w).floor().max(1.0) as usize;
-        return match gridcraft_engine::numfmt::format_general_fit(*n, max_chars.min(11)) {
+        let max_chars = ((options.width_px - 4.0) / options.char_w).floor().max(1.0) as usize;
+        return match gridcraft_engine::numfmt::format_general_fit_with_locale(*n, max_chars.min(11), options.locale) {
             Some(t) => (t, None, true, None),
             None => ("#".repeat(max_chars.max(1)), None, true, None),
         };
     }
-    let f = gridcraft_engine::display::format(v, code, wb);
+    let fmt = gridcraft_engine::display::number_format(code);
+    let f = gridcraft_engine::numfmt::format_value_with_locale(v, &fmt, wb.date_system, options.locale);
     (f.text, f.color.map(numfmt_color), f.numeric, f.fill)
 }
 

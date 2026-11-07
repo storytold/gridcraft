@@ -8,8 +8,10 @@ pub(super) fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dia
     use crate::function_library::{self as lib, ALL, MOST_RECENTLY_USED};
     let language = app.ui.language;
     ui.horizontal(|ui| {
-        ui.label(language.tr("Search:"));
-        let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(300.0).hint_text(language.tr("e.g. lookup, average, date")));
+        let label = ui.label(language.tr("Search:"));
+        let r = ui
+            .add(egui::TextEdit::singleline(&mut d.search).desired_width(300.0).hint_text(language.tr("e.g. lookup, average, date")))
+            .labelled_by(label.id);
         // Once only, so Tab can move on to the category list.
         take_first_focus(d, &r);
     });
@@ -57,11 +59,12 @@ pub(super) fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dia
     d.values.insert("category".into(), json!(category));
     let locale = language.formula_locale();
     // The names and descriptions searched are the ones shown, so in the interface language.
-    let q = d.search.trim().to_lowercase();
+    let q = locale.fold_alias(d.search.trim());
     let matches = |f: &lib::FnEntry| {
         q.is_empty()
-            || locale.function_name(&f.name).to_lowercase().contains(&q)
-            || language.function_description(&f.description).unwrap_or(&f.description).to_lowercase().contains(&q)
+            || locale.fold_alias(locale.function_name(&f.name)).contains(&q)
+            || locale.fold_alias(&f.name).contains(&q)
+            || locale.fold_alias(language.function_description(&f.description).unwrap_or(&f.description)).contains(&q)
     };
     let hits: Vec<&lib::FnEntry> = if category == MOST_RECENTLY_USED {
         lib::recent(app).iter().filter_map(|n| lib::find(n)).filter(|f| matches(f)).collect()
@@ -103,8 +106,8 @@ pub(super) fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dia
     });
     if let Some(f) = hits.get(d.list_index) {
         ui.separator();
-        ui.label(egui::RichText::new(crate::formula_locale::signature(&f.name, locale, language).unwrap_or_default()).strong());
-        ui.label(crate::formula_locale::description(&f.name, locale, language).unwrap_or_default());
+        ui.label(egui::RichText::new(crate::formula_locale::canonical_signature(&f.name, locale, language).unwrap_or_default()).strong());
+        ui.label(crate::formula_locale::canonical_description(&f.name, language).unwrap_or_default());
     }
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);

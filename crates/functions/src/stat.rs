@@ -519,8 +519,8 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             f_inv_rt
         ),
         f!("FINV", 3, 3, Compatibility, S, "FINV(probability, deg_freedom1, deg_freedom2)", "Inverse of the right-tailed F distribution.", f_inv_rt),
-        f!("F.TEST", 2, 2, Statistical, A, "F.TEST(array1, array2)", "Two-tailed probability that two variances do not differ.", f_test),
-        f!("FTEST", 2, 2, Compatibility, A, "FTEST(array1, array2)", "Two-tailed probability that two variances do not differ.", f_test),
+        f!("F.TEST", 2, 2, Statistical, A, "F.TEST(array1, array2)", "Two-tailed p-value of an F-test for equality of variances.", f_test),
+        f!("FTEST", 2, 2, Compatibility, A, "FTEST(array1, array2)", "Two-tailed p-value of an F-test for equality of variances.", f_test),
         f!("BINOM.DIST", 4, 4, Statistical, S, "BINOM.DIST(number_s, trials, probability_s, cumulative)", "Binomial probability.", binom_dist),
         f!("BINOMDIST", 4, 4, Compatibility, S, "BINOMDIST(number_s, trials, probability_s, cumulative)", "Binomial probability.", binom_dist),
         f!(

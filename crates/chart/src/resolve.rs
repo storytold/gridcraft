@@ -225,13 +225,20 @@ pub fn series_plot_kind(chart: &Chart, i: usize) -> ChartKind {
 /// values (scatter/bubble), bubble sizes, number formats and colours (explicit, else the
 /// default palette derived from the workbook theme accents).
 pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
+    resolve_with_series_names(wb, sheet, chart, |i| format!("Series{}", i + 1))
+}
+
+/// Resolves chart data using `generated_name` only when a series name resolves to empty.
+/// Explicit names, including literal names resembling a generated label, remain unchanged.
+/// The callback receives the zero-based series index; canonical callers can keep [`resolve`].
+pub fn resolve_with_series_names(wb: &Workbook, sheet: usize, chart: &Chart, generated_name: impl Fn(usize) -> String) -> ChartData {
     let numeric_x = matches!(chart.kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble);
     let mut series = Vec::new();
     let mut categories: Option<Vec<String>> = None;
     let mut category_levels = Vec::new();
     for (i, s) in chart.series.iter().take(MAX_SERIES).enumerate() {
         let values = nums(wb, sheet, &s.values);
-        let name = s.name.as_deref().map(|n| series_name(wb, sheet, n)).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Series{}", i + 1));
+        let name = s.name.as_deref().map(|n| series_name(wb, sheet, n)).filter(|n| !n.is_empty()).unwrap_or_else(|| generated_name(i));
         let color =
             s.color.as_ref().and_then(|c| c.resolve(&wb.theme)).map(|[r, g, b]| [r, g, b, 0xFF]).unwrap_or_else(|| series_color(&wb.theme, i));
         let kind = effective_kind(chart.kind, s.kind, i);

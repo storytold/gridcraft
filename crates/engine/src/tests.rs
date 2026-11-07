@@ -1,5 +1,5 @@
 use gridcraft_core::{CellRef, Value};
-use serde_json::json;
+use serde_json::{Value as Json, json};
 
 use crate::Session;
 
@@ -6113,4 +6113,95 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
         assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "destination": dest})).is_err(), "destination {dest:?}");
     }
     assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
+}
+
+/// Name Manager's identities distinguish a sheet literally named Workbook; null deletion stays legacy-wide.
+#[test]
+fn name_scope_identities_round_trip_and_null_deletion_keeps_its_contract() {
+    let mut s = s();
+    for name in ["Workbook", "Other"] {
+        s.execute("home.insertSheet", json!({"name":name})).unwrap();
+    }
+    let identities = [Json::Null, json!({"sheet":"Workbook"}), json!({"sheet":"Other"})];
+    for scope in &identities {
+        s.execute("formulas.defineName", json!({"name":"Rate", "refersTo":"=1", "scope":scope})).unwrap();
+    }
+    let result = s.execute("formulas.nameManager", json!({})).unwrap();
+    let rows = result.as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    for identity in &identities {
+        let row = rows.iter().find(|row| &row["scopeIdentity"] == identity).unwrap();
+        assert_eq!(row["name"], "Rate");
+        assert_eq!(row["scope"], identity.get("sheet").and_then(Json::as_str).unwrap_or("Workbook"));
+    }
+    s.execute("formulas.deleteName", json!({"name":"Rate", "scope":{"sheet":"Workbook"}})).unwrap();
+    let result = s.execute("formulas.nameManager", json!({})).unwrap();
+    let rows = result.as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().any(|row| row["scopeIdentity"].is_null()));
+    assert!(rows.iter().any(|row| row["scopeIdentity"] == json!({"sheet":"Other"})));
+    s.execute("formulas.deleteName", json!({"name":"Rate", "scope":"Workbook"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.names.len(), 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.names.len(), 2);
+    s.execute("formulas.deleteName", json!({"name":"Rate", "scope":null})).unwrap();
+    assert!(s.doc().unwrap().wb.names.is_empty());
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.names.len(), 2);
+}
+
+/// Both naming commands apply the same limits, counting Unicode characters rather than bytes.
+#[test]
+fn generated_sheet_prefix_validation_is_shared_between_creation_commands() {
+    for prefix in ["", " ", "Bad/Name", "12345678901234567", "Bad\nName", "'Data"] {
+        let mut empty = Session::new();
+        assert!(empty.execute("file.new", json!({"sheetPrefix":prefix})).is_err());
+        assert!(empty.documents().is_empty());
+        let mut existing = s();
+        assert!(existing.execute("home.insertSheet", json!({"namePrefix":prefix})).is_err());
+        assert_eq!(existing.doc().unwrap().wb.sheets.len(), 1);
+    }
+    let prefix = "Л".repeat(16);
+    let mut session = Session::new();
+    session.execute("file.new", json!({"sheetPrefix":prefix})).unwrap();
+    session.execute("home.insertSheet", json!({"namePrefix":prefix})).unwrap();
+    assert_eq!(session.doc().unwrap().wb.sheets.len(), 2);
+    assert!(session.doc().unwrap().wb.sheets.iter().all(|s| s.name.starts_with(&prefix)));
+}
+
+/// Totals use the shared formula printer for literal column names, including generated special characters.
+#[test]
+fn table_totals_with_special_column_names_recalculate_after_xlsx_round_trip() {
+    use gridcraft_formula::Expr;
+    for prefix in ["A[", "A]", "A#", "A'", "A,", "A:", "Лист["] {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range":"A1", "values":[[1,2],[3,5]]})).unwrap();
+        s.execute("insert.table", json!({"range":"A1:B2", "header":false, "columnPrefix":prefix})).unwrap();
+        let column = format!("{prefix}2");
+        s.execute("table.totalRow", json!({"table":"Table1", "on":true})).unwrap();
+        s.execute("table.totalFunction", json!({"table":"Table1", "column":column, "function":"sum"})).unwrap();
+        assert_eq!(v(&s, "B4"), Value::Number(7.0), "{prefix}");
+        let formula = &s.doc().unwrap().wb.active().unwrap().cell(CellRef::new(3, 1)).unwrap().formula.as_ref().unwrap().text;
+        let Expr::Call(_, args) = gridcraft_formula::parse(formula).unwrap() else { panic!("a SUBTOTAL call") };
+        let Expr::Struct(reference) = &args[1] else { panic!("a structured reference") };
+        assert_eq!(reference.table, "Table1");
+        assert_eq!(reference.col_start.as_deref(), Some(column.as_str()));
+        let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+        s.execute("file.open", json!({"name":"escaped-columns.xlsx", "base64":crate::io::base64_encode(&bytes)})).unwrap();
+        s.execute("formulas.calculateNow", json!({})).unwrap();
+        assert_eq!(v(&s, "B4"), Value::Number(7.0), "{prefix} after saving");
+    }
+}
+
+/// The generated-name search and command validation agree on non-ASCII case collisions.
+#[test]
+fn generated_sheet_names_skip_unicode_case_collisions() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name":"лист1"})).unwrap();
+    s.execute("cell.set", json!({"sheet":"ЛИСТ1", "cell":"A1", "input":"7"})).unwrap();
+    s.execute("home.insertSheet", json!({"namePrefix":"Лист"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().name, "Лист2");
+    s.execute("cell.set", json!({"cell":"A1", "input":"=ЛИСТ1!A1"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(7.0));
+    assert!(s.execute("home.insertSheet", json!({"name":"ЛИСТ1"})).is_err());
 }

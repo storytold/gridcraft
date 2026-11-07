@@ -1,12 +1,17 @@
 use super::{Arc, CellRef, Ctx, EngineError, Json, Result, Session, Sheet, Visibility, bad, bool_param, edit, json, ok, str_param, target_sheet};
 
+/// Inserts a sheet with a validated explicit name or a unique name built from the optional display-language prefix.
 pub(super) fn insert_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     if s.doc()?.wb.protected_structure {
         return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
     }
     let name = match str_param(p, "name") {
         Some(n) => n.to_string(),
-        None => s.doc()?.wb.next_sheet_name(),
+        None => {
+            let prefix = str_param(p, "namePrefix").unwrap_or("Sheet");
+            crate::cmd::check_generated_prefix("home.insertSheet", prefix, true)?;
+            s.doc()?.wb.next_sheet_name_with_prefix(prefix)
+        }
     };
     s.doc()?.wb.check_sheet_name(&name, None).map_err(EngineError::Other)?;
     let d = s.doc_mut()?;
