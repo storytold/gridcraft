@@ -2477,3 +2477,183 @@ fn formulas_read_a_dirty_python_cell_after_it_is_laid_out() {
     assert_eq!((t.num("B1"), t.num("B2")), (5.0, 6.0));
     assert_eq!((t.num("A1"), t.num("A2"), t.num("A3")), (5.0, 100.0, 111.0));
 }
+
+#[test]
+fn vlookup_hlookup_and_lookup_do_not_trigger_false_circular_refs_across_unused_columns() {
+    use gridcraft_model::{Table, TableColumn};
+    let mut t = T::new();
+    // Minimal repro from the corpus audit:
+    // B2:B3 look up column 3 (G) of E2:G4, while F2:F3 (column 2 of E2:G4) look up column 3 (C)
+    // of A2:C4, and G2:G3 depend on F2:F3. Neither VLOOKUP ever reads column 2 of A2:C4 (B2:B4),
+    // so there is no cycle.
+    for (r, (k, c_val)) in [(2, ("k1", 100.0)), (3, ("k2", 200.0)), (4, ("k3", 300.0))] {
+        t.set(&format!("A{r}"), k);
+        t.set(&format!("C{r}"), &c_val.to_string());
+        t.set(&format!("E{r}"), k);
+        t.set(&format!("B{r}"), &format!("=VLOOKUP(A{r},$E$2:$G$4,3,FALSE)"));
+        t.set(&format!("F{r}"), &format!("=VLOOKUP(E{r},$A$2:$C$4,3,FALSE)"));
+        t.set(&format!("G{r}"), &format!("=F{r}*2"));
+    }
+    assert!(t.calc.circular.is_empty(), "false circular refs: {:?}", t.calc.circular);
+    assert_eq!((t.num("B2"), t.num("B3"), t.num("B4")), (200.0, 400.0, 600.0));
+    assert_eq!((t.num("F2"), t.num("F3"), t.num("F4")), (100.0, 200.0, 300.0));
+    assert_eq!((t.num("G2"), t.num("G3"), t.num("G4")), (200.0, 400.0, 600.0));
+    t.set("H2", "=VLOOKUP(\"k4\",$A$2:$C$4,3,)");
+    assert_eq!(t.get("H2"), Value::Error(CellError::NA));
+
+    // Same pattern inside a structured table `T[]` where column 2 (`calc1`) looks up column 4
+    // (`calc2`) across `T[]`, and `T[]` itself spans `calc1`.
+    let mut t2 = T::new();
+    t2.wb.sheet_mut(0).unwrap().tables.push(Table {
+        id: 1,
+        name: "T".into(),
+        range: gridcraft_core::RangeRef::parse("A1:D3").unwrap(),
+        header_row: true,
+        totals_row: false,
+        style: String::new(),
+        columns: ["k", "calc1", "base", "calc2"]
+            .into_iter()
+            .map(|n| TableColumn { name: n.into(), totals: Default::default(), totals_label: None, formula: None, unique_name: None, xml: None })
+            .collect(),
+        banded_rows: false,
+        banded_cols: false,
+        first_col: false,
+        last_col: false,
+        filter_button: false,
+        filter: vec![],
+        table_type: None,
+        connection_id: None,
+    });
+    for (c, h) in [("A1", "k"), ("B1", "calc1"), ("C1", "base"), ("D1", "calc2")] {
+        t2.set(c, h);
+    }
+    t2.set("A2", "1");
+    t2.set("C2", "15");
+    t2.set("A3", "2");
+    t2.set("C3", "25");
+    t2.set("B2", "=VLOOKUP([@k],T[],4,FALSE)");
+    t2.set("B3", "=VLOOKUP([@k],T[],4,FALSE)");
+    t2.set("D2", "=[@base]*2");
+    t2.set("D3", "=[@base]*2");
+    assert!(t2.calc.circular.is_empty(), "false table circular refs: {:?}", t2.calc.circular);
+    assert_eq!((t2.num("B2"), t2.num("B3"), t2.num("D2"), t2.num("D3")), (30.0, 50.0, 30.0, 50.0));
+
+    // HLOOKUP and LOOKUP also avoid evaluating unused rows/columns of their lookup range.
+    t2.set("F1", "10");
+    t2.set("G1", "20");
+    t2.set("F2", "=HLOOKUP(10,$F$1:$G$3,3,FALSE)");
+    t2.set("G2", "=HLOOKUP(20,$F$1:$G$3,3,FALSE)");
+    t2.set("F3", "100");
+    t2.set("G3", "=LOOKUP(10,$F$1:$G$1,$F$3:$G$3)*3");
+    assert!(t2.calc.circular.is_empty());
+    assert_eq!((t2.num("F2"), t2.num("G2"), t2.num("G3")), (100.0, 300.0, 300.0));
+}
+
+#[test]
+fn getpivotdata_reads_pivot_table_and_plain_cell_reports() {
+    use gridcraft_model::{PivotField, PivotFilter, PivotFunc, PivotLayout, PivotTable, PivotValue};
+    let mut t = T::new();
+    // Rendered PivotTable on Sheet1:
+    // Row 1: Region filter = "North"
+    // Row 3: Column Labels (B3="Column Labels")
+    // Row 4: A4="Row Labels", B4="Q1", C4="Q2", D4="Grand Total"
+    // Row 5: A5="Bikes",      B5=120,  C5=180,  D5=300
+    // Row 6: A6="Cars",       B6=50,   C6=70,   D6=120
+    // Row 7: A7="Grand Total",B7=170,  C7=250,  D7=420
+    t.set("A1", "Region");
+    t.set("B1", "North");
+    t.set("B3", "Column Labels");
+    t.set("A4", "Row Labels");
+    t.set("B4", "Q1");
+    t.set("C4", "Q2");
+    t.set("D4", "Grand Total");
+    t.set("A5", "Bikes");
+    t.set("B5", "120");
+    t.set("C5", "180");
+    t.set("D5", "300");
+    t.set("A6", "Cars");
+    t.set("B6", "50");
+    t.set("C6", "70");
+    t.set("D6", "120");
+    t.set("A7", "Grand Total");
+    t.set("B7", "170");
+    t.set("C7", "250");
+    t.set("D7", "420");
+    t.wb.sheet_mut(0).unwrap().pivots.push(PivotTable {
+        id: 1,
+        name: "PivotTable1".into(),
+        source: "Data!$A$1:$D$10".into(),
+        anchor: CellRef::parse("A3").unwrap(),
+        last_range: gridcraft_core::RangeRef::parse("A1:D7"),
+        layout: PivotLayout::Compact,
+        grand_totals_rows: true,
+        grand_totals_cols: true,
+        subtotals: true,
+        subtotals_top: true,
+        show_headers: true,
+        rows: vec![PivotField { source_col: "Category".into(), ..Default::default() }],
+        columns: vec![PivotField { source_col: "Quarter".into(), ..Default::default() }],
+        values: vec![PivotValue { source_col: "Sales".into(), func: PivotFunc::Sum, name: "Sum of Sales".into(), ..Default::default() }],
+        filters: vec![PivotFilter { source_col: "Region".into(), selected: Some(vec!["North".into()]) }],
+        ..Default::default()
+    });
+
+    t.set("F1", "=GETPIVOTDATA(\"Sales\",$A$3)");
+    t.set("F2", "=GETPIVOTDATA(\"Sum of Sales\",$A$3,\"Category\",\"Bikes\")");
+    t.set("F3", "=GETPIVOTDATA(\"Sales\",$A$3,\"Category\",\"Cars\",\"Quarter\",\"Q2\")");
+    t.set("F4", "=GETPIVOTDATA(\"Sales\",$A$3,\"Quarter\",\"Q1\")");
+    t.set("F5", "=GETPIVOTDATA(\"Sales\",$A$3,\"Region\",\"North\",\"Category\",\"Bikes\",\"Quarter\",\"Q1\")");
+    t.set("F6", "=GETPIVOTDATA(\"Sales\",$A$3,\"Region\",\"South\")");
+    t.set("F7", "=GETPIVOTDATA(\"Missing\",$A$3)");
+    assert_eq!((t.num("F1"), t.num("F2"), t.num("F3"), t.num("F4"), t.num("F5")), (420.0, 300.0, 70.0, 170.0, 120.0));
+    assert_eq!((t.get("F6"), t.get("F7")), (Value::Error(CellError::Ref), Value::Error(CellError::Ref)));
+
+    // Plain-cell PivotTable fallback (when an external/DataModel cache was kept as plain cells).
+    t.set("H1", "Department");
+    t.set("I1", "Sum of Headcount");
+    t.set("H2", "Engineering");
+    t.set("I2", "85");
+    t.set("H3", "Grand Total");
+    t.set("I3", "140");
+    t.set("J1", "=GETPIVOTDATA(\"Headcount\",$H$1)");
+    t.set("J2", "=GETPIVOTDATA(\"Sum of Headcount\",$H$1,\"Department\",\"Engineering\")");
+    t.set("J3", "=GETPIVOTDATA(\"Sum of Headcount\",$H$1,\"Bogus\",\"Engineering\")");
+    t.set("J4", "=GETPIVOTDATA(\"Sum of Headcount\",$H$1,\"Department\",\"Missing\")");
+    t.set("J5", "=GETPIVOTDATA(\"Headcount\",$XFD$1048576)");
+    // 2D plain-cell PivotTable where the same item label ("North") appears on both axes.
+    t.set("L1", "Sum of Revenue");
+    t.set("M1", "Origin");
+    t.set("L2", "Destination");
+    t.set("M2", "North");
+    t.set("N2", "South");
+    t.set("O2", "Grand Total");
+    t.set("L3", "North");
+    t.set("M3", "10");
+    t.set("N3", "25");
+    t.set("O3", "35");
+    t.set("L4", "Grand Total");
+    t.set("M4", "10");
+    t.set("N4", "25");
+    t.set("O4", "35");
+    t.set("P1", "=GETPIVOTDATA(\"Revenue\",$L$1,\"Destination\",\"North\",\"Origin\",\"South\")");
+    // Unrelated third-column cell (T4) outside a 2-column report (R1:S3) must not bridge into R5:S5,
+    // and a dependent formula in S3 reading an active GETPIVOTDATA cell (U1) must not record #CIRC!.
+    t.set("R1", "Department");
+    t.set("S1", "Sales");
+    t.set("R2", "Engineering");
+    t.set("S2", "85");
+    t.set("S3", "=IF(U1>0,GETPIVOTDATA(\"Sales\",$R$1,\"Department\",\"Engineering\"),0)");
+    t.set("R4", "Operations");
+    t.set("S4", "55");
+    t.set("R5", "Grand Total");
+    t.set("S5", "140");
+    t.set("T6", "Note outside report");
+    t.set("R7", "Grand Total");
+    t.set("S7", "999");
+    t.set("U1", "=GETPIVOTDATA(\"Sales\",$R$1,\"Department\",\"Operations\")");
+    t.set("U2", "=GETPIVOTDATA(\"Sales\",$R$1)");
+    assert_eq!((t.num("U1"), t.num("U2"), t.num("S3")), (55.0, 140.0, 85.0));
+    assert!(t.calc.circular.is_empty());
+    assert_eq!((t.num("J1"), t.num("J2"), t.num("P1")), (140.0, 85.0, 25.0));
+    assert_eq!((t.get("J3"), t.get("J4"), t.get("J5")), (Value::Error(CellError::Ref), Value::Error(CellError::Ref), Value::Error(CellError::Ref)));
+}
