@@ -1532,18 +1532,42 @@ fn general_numbers_fit_by_the_cells_own_font() {
     s.execute("home.columnWidth", json!({"cols": "A:B", "width": 28})).unwrap();
     s.execute("selection.set", json!({"cell": "C3"})).unwrap();
     let h = harness(s);
-    let texts: Vec<String> = h
-        .output()
-        .shapes
+    let shapes = &h.output().shapes;
+    let texts: Vec<String> = shapes
         .iter()
         .filter_map(|c| match &c.shape {
             egui::Shape::Text(t) => Some(t.galley.job.text.clone()),
             _ => None,
         })
         .collect();
-    assert!(texts.iter().any(|t| t == "100"), "100 drawn in full: {texts:?}");
-    // A number that really doesn't fit still shows #### (once: only B1).
-    assert_eq!(texts.iter().filter(|t| t.starts_with('#')).count(), 1, "{texts:?}");
+    // At 9pt the cells' text is small enough to be drawn on the pixel grid, as glyphs of its own
+    // rather than a text shape: count either.
+    let app = h.state();
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+    let glyphs = |cell: &str| -> usize {
+        let r = geo.cell_rect(sheet, CellRef::parse(cell).unwrap()).expand(1.0);
+        shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Mesh(m)
+                    if m.texture_id != egui::TextureId::default() && !m.vertices.is_empty() && m.vertices.iter().all(|v| r.contains(v.pos)) =>
+                {
+                    Some(m.vertices.len() / 4)
+                }
+                _ => None,
+            })
+            .sum()
+    };
+    // "100" fits, so it is drawn in full rather than as ####.
+    assert!(texts.iter().any(|t| t == "100") || glyphs("A1") == 3, "100 drawn in full: {texts:?}, {} glyphs", glyphs("A1"));
+    // A number that really doesn't fit is ####, never its digits.
+    assert!(!texts.iter().any(|t| t.contains("123")), "{texts:?}");
+    assert!(
+        texts.iter().filter(|t| t.starts_with('#')).count() == 1 || (1..9).contains(&glyphs("B1")),
+        "B1 is ####: {texts:?}, {} glyphs",
+        glyphs("B1")
+    );
 }
 
 fn text_shapes(shape: &egui::Shape, clip: egui::Rect, out: &mut Vec<(egui::epaint::TextShape, egui::Rect)>) {
