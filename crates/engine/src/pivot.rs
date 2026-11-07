@@ -119,23 +119,26 @@ fn resolve_inner(wb: &Workbook, text: &str, default_sheet: usize, depth: u32) ->
 const FIELD_NAME_ERR: &str =
     "The PivotTable field name is not valid. To create a PivotTable, you must use data that is organized as a list with labeled columns.";
 
-/// Reads the source list.
-pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<Source, String> {
-    let (si, r) = resolve_source(wb, text, default_sheet)?;
-    let sh = wb.sheet(si).ok_or("The reference isn't valid.")?;
+/// Reads canonical header identities without reading source records.
+///
+/// Empty headers remain empty so source-repair identity checks can inspect an otherwise
+/// invalid old source. Ordinary source reads still reject them. Duplicate suffixes use
+/// the same bounded algorithm for both validation paths.
+pub(crate) fn source_headers(wb: &Workbook, si: usize, r: RangeRef) -> Result<Vec<String>, String> {
     if r.count() > MAX_SOURCE_CELLS {
         return Err("The source range is too large for a PivotTable.".into());
     }
+    let sh = wb.sheet(si).ok_or("The reference isn't valid.")?;
     let mut headers: Vec<String> = Vec::new();
     // Names taken so far (lower-case), and the next suffix to try for each repeated header, so
     // that thousands of equal headers don't take cubic time.
     let mut taken: HashSet<String> = HashSet::new();
     let mut next_suffix: HashMap<String, usize> = HashMap::new();
-    let mut formats = Vec::new();
     for c in r.start.col..=r.end.col {
         let h = crate::display::cell_text(wb, sh, CellRef::new(r.start.row, c)).trim().to_string();
         if h.is_empty() {
-            return Err(FIELD_NAME_ERR.into());
+            headers.push(String::new());
+            continue;
         }
         let key = h.to_ascii_lowercase();
         let mut n = h.clone();
@@ -147,6 +150,23 @@ pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<So
         next_suffix.insert(key, k);
         taken.insert(n.to_ascii_lowercase());
         headers.push(n);
+    }
+    Ok(headers)
+}
+
+/// Reads the source list.
+pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<Source, String> {
+    let (si, r) = resolve_source(wb, text, default_sheet)?;
+    let sh = wb.sheet(si).ok_or("The reference isn't valid.")?;
+    if r.count() > MAX_SOURCE_CELLS {
+        return Err("The source range is too large for a PivotTable.".into());
+    }
+    let headers = source_headers(wb, si, r)?;
+    if headers.iter().any(String::is_empty) {
+        return Err(FIELD_NAME_ERR.into());
+    }
+    let mut formats = Vec::new();
+    for c in r.start.col..=r.end.col {
         let fmt = if r.end.row > r.start.row {
             wb.styles.get(sh.style_id(CellRef::new(r.start.row + 1, c))).num_fmt.as_str().to_string()
         } else {
