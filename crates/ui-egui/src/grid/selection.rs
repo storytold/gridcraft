@@ -57,6 +57,16 @@ fn range_in_pane(r: RangeRef, rows: (u32, u32), cols: (u32, u32)) -> bool {
     r.start.row <= rows.1 && r.end.row >= rows.0 && r.start.col <= cols.1 && r.end.col >= cols.0
 }
 
+/// The portion of `r` that belongs to one visible pane. Its endpoints must stay on the same side
+/// of each freeze boundary before `Geo::range_rect` maps them to screen coordinates; otherwise a
+/// spill spanning frozen and scrolling columns can form a rectangle with reversed edges.
+fn range_in_visible_pane(r: RangeRef, rows: (u32, u32), cols: (u32, u32)) -> Option<RangeRef> {
+    if !range_in_pane(r, rows, cols) {
+        return None;
+    }
+    Some(RangeRef::new(CellRef::new(r.start.row.max(rows.0), r.start.col.max(cols.0)), CellRef::new(r.end.row.min(rows.1), r.end.col.min(cols.1))))
+}
+
 /// The four sides of a `width` wide outline centred on `rect`, cut to `clip` (a little beyond it).
 ///
 /// A stroked rectangle that spans a whole column (20 million points tall) loses its precision in
@@ -106,13 +116,12 @@ pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
         && app.session.active().is_some_and(|d| d.uid == ed.doc)
     {
         let origin = app.session.active().and_then(|d| d.wb.sheet(ed.sheet)).map_or(sh.name.as_str(), |o| o.name.as_str());
-        for (_, _, r, sheet, idx) in crate::editor::formula_refs(&ed.text) {
+        for (_, _, r, sheet, idx, spill) in crate::editor::formula_refs(&ed.text) {
             if !crate::editor::ref_is_on_sheet(sheet.as_deref(), origin, &sh.name) {
                 continue;
             }
-            if !range_in_pane(r, rows, cols) {
-                continue;
-            }
+            let r = crate::editor::resolved_formula_range(sh, r, spill);
+            let Some(r) = range_in_visible_pane(r, rows, cols) else { continue };
             let rr = geo.range_rect(sh, r);
             let col = Tokens::get(p.ctx()).ref_color(idx, true);
             p.rect_filled(rr, 0.0, col.gamma_multiply(0.12));
@@ -121,6 +130,16 @@ pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
                 p.rect_filled(Rect::from_center_size(corner, vec2(4.0, 4.0)), 0.0, col);
             }
         }
+    }
+    // A selected dynamic-array anchor owns its whole result. Excel marks that result with the
+    // selection-blue outline, making the spill's extent clear before the user edits it.
+    if app.editor.is_none()
+        && sel.is_single_cell()
+        && let Some(spill) = sh.spill_ranges.get(&sel.active).copied()
+        && let Some(spill) = range_in_visible_pane(spill, rows, cols)
+    {
+        let rr = geo.range_rect(sh, spill);
+        p.rect_stroke(rr, 0.0, Stroke::new(1.5, t.sel_border), StrokeKind::Inside);
     }
     if cur_here {
         for side in outline_bands(outline.expand(0.5), 2.0, p.clip_rect()) {
@@ -299,6 +318,14 @@ mod pane_tests {
         let sel = rng(5, 0, 7, 6);
         assert!(range_in_pane(sel, (2, 20), (0, 1)));
         assert!(range_in_pane(sel, (2, 20), (2, 10)));
+    }
+
+    #[test]
+    fn range_crossing_a_freeze_line_is_split_for_each_pane() {
+        let spill = rng(5, 0, 7, 6);
+        assert_eq!(range_in_visible_pane(spill, (2, 20), (0, 1)), Some(rng(5, 0, 7, 1)));
+        assert_eq!(range_in_visible_pane(spill, (2, 20), (2, 10)), Some(rng(5, 2, 7, 6)));
+        assert_eq!(range_in_visible_pane(spill, (0, 1), (0, 1)), None);
     }
 
     #[test]
