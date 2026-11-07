@@ -99,7 +99,20 @@ fn round_dir(x: f64, digits: i32, up: bool) -> f64 {
 // Sums and products
 
 fn sum(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(numbers(a)?.iter().sum())
+    let v = numbers(a)?;
+    num_val(sum_dropping_noise(&v))
+}
+
+/// `v` summed, with a sum that only the additions' own binary noise produced read as 0: adding
+/// `n` numbers no larger than `m` moves the result by up to `n · ε · m` (each addition can lose
+/// the low bits of one operand), so a sum that close to zero is noise, not a value. Excel shows
+/// 0 there — `=0.1+0.2-0.3` displays 0, not 5.551115123125783E-17 — and a finance column that
+/// cancels shows 0, not -2.2737E-13 (#3141). A real difference (1E-7 between numbers in the
+/// ten thousands) is orders above the bound and survives unchanged.
+fn sum_dropping_noise(v: &[f64]) -> f64 {
+    let m = v.iter().fold(0.0, |m, x| m.max(x.abs()));
+    let r = v.iter().sum();
+    if r != 0.0 && m.is_finite() && r.abs() < v.len() as f64 * f64::EPSILON * m { 0.0 } else { r }
 }
 
 /// PERCENTOF(data_subset, data_all) = SUM(data_subset) / SUM(data_all).
