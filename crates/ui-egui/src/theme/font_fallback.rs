@@ -7,9 +7,9 @@ use super::font_setup::{in_dirs, try_load};
 
 /// Loads the system non-Latin fallback faces (one file per script family) and returns their keys so
 /// every family can carry them as fallback. egui's bundled fonts have no coverage beyond Latin, so
-/// without this a Thai, Hebrew, Japanese or Chinese workbook shows tofu boxes even though the text
-/// was read correctly. With a face installed those scripts get real glyphs instead of tofu; nothing
-/// is bundled, and a machine without the face keeps the old behaviour.
+/// without this a Thai, Hebrew, Georgian, Japanese or Chinese workbook shows tofu boxes even though
+/// the text was read correctly. With a face installed those scripts get real glyphs instead of tofu;
+/// nothing is bundled, and a machine without the face keeps the old behaviour.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn load_fallback(fonts: &mut FontDefinitions, han: HanOrder) -> Vec<String> {
     let mut keys = Vec::new();
@@ -57,6 +57,7 @@ pub(super) fn fallback_faces(han: HanOrder) -> Vec<(&'static str, Vec<(String, u
         ("sys-thai", thai()),
         ("sys-lao", lao()),
         ("sys-hebrew", hebrew()),
+        ("sys-georgian", georgian()),
         ("sys-symbols", symbols()),
         ("sys-symbols-2", symbols_more()),
     ]
@@ -240,6 +241,20 @@ pub(super) fn hebrew() -> Vec<(String, u32)> {
         ],
         &["NotoSansHebrew-Regular.ttf", "dejavu/DejaVuSans.ttf", "freefont/FreeSans.ttf"],
         "/usr/share/fonts/google-noto-vf/NotoSansHebrew[wght].ttf",
+    )
+}
+
+/// Georgian faces. macOS ships SF Georgian; Windows has Sylfaen; Linux usually has Noto Sans
+/// Georgian or DejaVu Sans.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn georgian() -> Vec<(String, u32)> {
+    script_fonts(
+        // Sylfaen
+        &["sylfaen.ttf"],
+        &["/System/Library/Fonts/SFGeorgian.ttf"],
+        &["NotoSansGeorgian-Regular.ttf", "dejavu/DejaVuSans.ttf", "google-noto/NotoSansGeorgian-Regular.ttf", "dejavu-sans-fonts/DejaVuSans.ttf"],
+        // Fedora ships the variable Noto Sans Georgian; its default instance is Regular.
+        "/usr/share/fonts/google-noto-vf/NotoSansGeorgian[wght].ttf",
     )
 }
 
