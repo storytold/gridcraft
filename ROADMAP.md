@@ -133,6 +133,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 ## Progress log
 
+- 2026-11-02: macOS packaging accepts APPLE_KEYCHAIN_PROFILE for notarization; a named notarytool Keychain profile takes precedence over the existing three-variable authentication.
+
 | Date | What landed |
 |---|---|
 | 2026-11-06 | A sheet keeps its own scroll position when sheets are inserted, deleted or moved before it: a new PivotTable or inserted sheet opens at the top instead of where its neighbour was scrolled; a closed window's positions are let go (#3485) |
