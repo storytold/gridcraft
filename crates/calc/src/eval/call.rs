@@ -384,7 +384,8 @@ impl<'h> Evaluator<'h> {
     fn aggregate_area(&mut self, kind: Agg, a: &Area, acc: &mut Acc) -> Result<(), Ev> {
         if !a.range.is_single() {
             // Adding the block's remembered sum to anything but +0.0 would add in another order.
-            if acc.sum.to_bits() == 0
+            // COUNT never reads the sum, so it may reuse every block.
+            if (kind == Agg::Count || acc.sum.to_bits() == 0)
                 && let Some((sum, count)) = self.host.range_sum(a.sheet, a.range)
             {
                 acc.sum = sum;
