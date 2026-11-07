@@ -1,5 +1,5 @@
 use super::draw::{Block, Look, rgb_of};
-use super::{CellRef, Color, Font, HAlign, MAX_COLS, Page, Point, RangeRef, Sheet, Style, StyleTable, Underline, VAlign, Value};
+use super::{CellRef, Color, Font, HAlign, MAX_COLS, Page, Point, RangeRef, Sheet, Style, StyleTable, TextFonts, Underline, VAlign, Value};
 
 const PAD_PX: f32 = 2.0;
 
@@ -8,47 +8,46 @@ const MAX_WRAP_LINES: usize = 2000;
 
 /// Word-wraps `text` to `width` points.
 ///
-/// Widths are kept as running sums of glyph widths (the sum `text_width` makes), so each
-/// character is measured once: re-measuring the line for every word, or the rest of an
-/// over-long word for every piece cut from it, made a long paragraph or word quadratic.
-pub(super) fn wrap_lines(text: &str, font: Font, size: f32, width: f32) -> Vec<String> {
-    let units_of = |s: &str| -> u64 { s.chars().map(|c| u64::from(font.char_width(c))).sum() };
-    let fits = |units: u64| units as f32 * size / 1000.0 <= width;
+/// Running font-aware measurements keep wrapping linear. Re-measuring the line for every
+/// word, or the rest of a long word for every piece, made paragraphs and words quadratic.
+pub(super) fn wrap_lines(fonts: &TextFonts, text: &str, font: Font, size: f32, width: f32) -> Vec<String> {
+    let units_of = |s: &str| fonts.measure_text(font, s);
+    let fits = |units: gridcraft_pdf::TextMeasurement| units.width(size) <= width;
     let space = units_of(" ");
     let mut out = Vec::new();
     for para in text.split('\n') {
         let mut line = String::new();
-        let mut line_units: u64 = 0;
+        let mut line_units = gridcraft_pdf::TextMeasurement::default();
         for word in para.split(' ') {
             let word_units = units_of(word);
             if line.is_empty() {
                 line.push_str(word);
                 line_units = word_units;
-            } else if fits(line_units + space + word_units) {
+            } else if fits(line_units.then(space).then(word_units)) {
                 line.push(' ');
                 line.push_str(word);
-                line_units += space + word_units;
+                line_units = line_units.then(space).then(word_units);
             } else {
                 out.push(std::mem::take(&mut line));
                 line.push_str(word);
                 line_units = word_units;
             }
-            // Break a single over-long word by characters: each piece is the longest that fits
-            // (at least one character).
+            // Break a single over-long word by characters, keeping at least one per piece.
             if !fits(line_units) && line.chars().nth(1).is_some() {
                 let mut piece = String::new();
-                let mut units: u64 = 0;
+                let mut units = gridcraft_pdf::TextMeasurement::default();
                 for c in line.chars() {
-                    let w = u64::from(font.char_width(c));
-                    if !piece.is_empty() && !fits(units + w) {
+                    let mut bytes = [0; 4];
+                    let w = units_of(c.encode_utf8(&mut bytes));
+                    if !piece.is_empty() && !fits(units.then(w)) {
                         out.push(std::mem::take(&mut piece));
-                        units = 0;
+                        units = gridcraft_pdf::TextMeasurement::default();
                         if out.len() > MAX_WRAP_LINES {
                             return out;
                         }
                     }
                     piece.push(c);
-                    units += w;
+                    units = units.then(w);
                 }
                 line = piece;
                 line_units = units;
@@ -62,8 +61,8 @@ pub(super) fn wrap_lines(text: &str, font: Font, size: f32, width: f32) -> Vec<S
     out
 }
 
-fn font_for(style: &Style) -> Font {
-    Font::styled(Font::family_for(&style.font.name), style.font.bold, style.font.italic)
+fn font_for(pg: &Page, style: &Style) -> Font {
+    pg.text_fonts().font(&style.font.name, style.font.bold, style.font.italic)
 }
 
 fn text_align(align: HAlign, value: &Value) -> HAlign {
@@ -153,7 +152,7 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
     }
     let st = &l.style;
     let mut size = st.font.size.clamp(1.0, 409.0) * b.scale;
-    let font = font_for(st);
+    let font = font_for(pg, st);
     let pad = PAD_PX * b.k;
     let indent = st.align.indent as f32 * 9.0 * b.k;
     let avail = (w - 2.0 * pad - indent).max(0.0);
@@ -170,7 +169,7 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
     } else if code == "General"
         && let Value::Number(n) = v
     {
-        let digit = gridcraft_pdf::text_width(font, size, "0").max(0.1);
+        let digit = pg.text_width(font, size, "0").max(0.1);
         let max_chars = (avail / digit).floor().max(1.0) as usize;
         gridcraft_numfmt::format_general_fit(n, max_chars.min(11)).unwrap_or_else(|| "#".repeat(max_chars.min(255)))
     } else {
@@ -183,23 +182,23 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
     if text.is_empty() {
         return;
     }
-    let mut tw = gridcraft_pdf::text_width(font, size, &text);
+    let mut tw = pg.text_width(font, size, &text);
     if st.align.shrink && !wrap && tw > avail && tw > 0.0 {
         size = (size * avail / tw).max(1.0);
-        tw = gridcraft_pdf::text_width(font, size, &text);
+        tw = pg.text_width(font, size, &text);
     }
     if is_num && !wrap && tw > avail + 0.01 && !sh.show_formulas {
-        let hash = gridcraft_pdf::text_width(font, size, "#").max(0.1);
+        let hash = pg.text_width(font, size, "#").max(0.1);
         text = "#".repeat(((avail / hash).floor().max(1.0) as usize).min(255));
-        tw = gridcraft_pdf::text_width(font, size, &text);
+        tw = pg.text_width(font, size, &text);
     }
     let h_align = text_align(st.align.h, &v);
     let rot = st.align.rotation;
     let rotated = rot != 0 && rot != 255;
     // Rotated text wraps along its own direction: upright (±90°) text to the row height.
     let lines: Vec<String> = match (wrap, rotated) {
-        (true, false) => wrap_lines(&text, font, size, avail.max(size)),
-        (true, true) if rot.abs() == 90 => wrap_lines(&text, font, size, (h - 2.0 * pad).max(size)),
+        (true, false) => wrap_lines(pg.text_fonts(), &text, font, size, avail.max(size)),
+        (true, true) if rot.abs() == 90 => wrap_lines(pg.text_fonts(), &text, font, size, (h - 2.0 * pad).max(size)),
         (true, true) => vec![text.lines().next().unwrap_or_default().to_string()],
         (false, _) => vec![text],
     };
@@ -248,7 +247,7 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         let mut yy = y + pad + size * 0.8;
         for ch in chars {
             let s = ch.to_string();
-            let cw = gridcraft_pdf::text_width(font, size, &s);
+            let cw = pg.text_width(font, size, &s);
             pg.text(x + (w - cw) / 2.0, yy, size, font, color, &s);
             yy += line_h;
             if yy > y + h + line_h {
@@ -259,7 +258,7 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         return;
     }
     for (i, line) in lines.iter().enumerate() {
-        let lw = gridcraft_pdf::text_width(font, size, line);
+        let lw = pg.text_width(font, size, line);
         let lx = match h_align {
             HAlign::Right => x + w - pad - lw - indent,
             HAlign::Center => x + (w + across - lw) / 2.0,

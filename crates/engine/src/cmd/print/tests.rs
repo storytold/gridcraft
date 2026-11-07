@@ -83,6 +83,109 @@ fn header_sections_split_join_and_field_names() {
 }
 
 #[test]
+fn header_font_runs_capture_styles_fields_and_bounded_expansion() {
+    let cx = HfContext { page: 3, sheet: "Ω".into(), ..Default::default() };
+    let sections = expand_header_footer("&C&\"Greek,Bold Italic\"&20&A&\"Latin,Regular\"&10A&P&BZ&IY&LLeft", &cx);
+    let runs = &sections[1].runs;
+    assert_eq!(sections[1].text, "ΩA3ZY");
+    assert_eq!(runs.len(), 4);
+    assert_eq!(
+        (runs[0].text.as_str(), runs[0].font.as_deref(), runs[0].bold, runs[0].italic, runs[0].size),
+        ("Ω", Some("Greek"), true, true, Some(20.0))
+    );
+    assert_eq!(
+        (runs[1].text.as_str(), runs[1].font.as_deref(), runs[1].bold, runs[1].italic, runs[1].size),
+        ("A3", Some("Latin"), false, false, Some(10.0))
+    );
+    assert!(runs[2].bold && !runs[2].italic);
+    assert!(runs[3].bold && runs[3].italic);
+    assert_eq!(sections[0].runs[0].text, "Left");
+    let huge = HfContext { sheet: "Ω".repeat(100_000), ..Default::default() };
+    let expanded = expand_header_footer("&A&A&A", &huge);
+    assert!(expanded[1].text.is_empty(), "an oversized field is omitted whole");
+    assert!(expanded[1].runs.is_empty());
+}
+
+#[test]
+fn header_section_cap_keeps_fields_literals_and_style_runs_consistent() {
+    let cap = 64 * 1024;
+    let cx = HfContext { sheet: "Ω".repeat(cap / 2 - 1), file: "終".into(), path: "ok".into(), ..Default::default() };
+    let sections = expand_header_footer("&L&\"Greek,Bold\"&A&\"Other,Italic\"&F&Z&CCentre&RRight", &cx);
+    let left = &sections[0];
+    assert_eq!(left.text.len(), cap);
+    assert_eq!(left.text, format!("{}ok", cx.sheet), "an oversized field is skipped; a later field can still fit");
+    assert_eq!(left.runs.len(), 2);
+    assert_eq!(left.runs[0].font.as_deref(), Some("Greek"));
+    assert!(left.runs[0].bold && !left.runs[0].italic);
+    assert_eq!(left.runs[1].font.as_deref(), Some("Other"));
+    assert!(!left.runs[1].bold && left.runs[1].italic);
+    assert_eq!(left.runs[1].text, "ok");
+    assert_eq!(sections[1].text, "Centre");
+    assert_eq!(sections[2].text, "Right");
+    for section in &sections {
+        assert!(section.text.len() <= cap);
+        assert_eq!(section.runs.iter().map(|r| r.text.as_str()).collect::<String>(), section.text);
+    }
+    let cx = HfContext { sheet: "S".repeat(cap - 1), ..Default::default() };
+    let section = &expand_header_footer("&A&\"Edge,Italic\"終&BX終Y&&", &cx)[1];
+    assert_eq!(section.text.len(), cap, "literals and escaped ampersands respect the same byte cap");
+    assert!(section.text.ends_with('X'));
+    assert_eq!(section.runs.len(), 2);
+    assert_eq!(section.runs[1].text, "X");
+    assert_eq!(section.runs[1].font.as_deref(), Some("Edge"));
+    assert!(section.runs[1].bold && section.runs[1].italic);
+    assert_eq!(section.runs.iter().map(|r| r.text.as_str()).collect::<String>(), section.text);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn header_and_footer_font_switches_measure_and_align_each_run() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-header-font-runs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let greek = dir.join("greek.ttf");
+    let greek_bold = dir.join("greek-bold.ttf");
+    let latin = dir.join("latin.ttf");
+    for (path, chars, width) in [(&greek, vec!['Ω'], 400), (&greek_bold, vec!['Ω'], 700), (&latin, vec!['A'], 300)] {
+        std::fs::write(path, gridcraft_pdf::test_support::tiny_ttf(&chars, width, 0)).unwrap();
+    }
+    let mut s = s();
+    for part in ["header", "footer"] {
+        for section in ["&L", "&C", "&R"] {
+            let spec = format!("{section}&\"Greek,Bold\"&20Ω&\"Latin,Regular\"&10A");
+            let mut setup = json!({"scale": 100, "fitToPage": false, "header": "", "footer": ""});
+            setup[part] = json!(spec);
+            s.execute("pageLayout.pageSetup", setup).unwrap();
+            let lay = layouts(&s.doc().unwrap().wb, &PrintOptions::default()).remove(0);
+            let (left, right) = lay.hf_sides();
+            let expected = match section {
+                "&L" => left,
+                "&C" => (lay.page_w - 17.0) / 2.0,
+                _ => lay.page_w - right - 17.0,
+            };
+            for command in ["file.exportPdf", "file.print"] {
+                let r = s
+                    .execute_headless(
+                        command,
+                        json!({"fontFamilies": {"Greek": {"regular": greek, "bold": greek_bold}, "Latin": {"regular": latin}}}),
+                    )
+                    .unwrap();
+                let bytes = crate::io::base64_decode(r["base64"].as_str().unwrap()).unwrap();
+                let pdf = String::from_utf8_lossy(&bytes);
+                let runs: Vec<_> = pdf.split("BT\n").filter(|b| b.contains("/U6 20 Tf") || b.contains("/U9 10 Tf")).collect();
+                assert_eq!(runs.len(), 2, "each header/footer character must use its own mapped face");
+                for (run, x) in runs.iter().zip([expected, expected + 14.0]) {
+                    let tm = run.lines().find(|line| line.ends_with(" Tm")).unwrap();
+                    let actual: f32 = tm.split_whitespace().nth(4).unwrap().parse().unwrap();
+                    assert!((actual - x).abs() < 0.01, "{part} {section}: expected {x}, got {actual}");
+                }
+                assert_eq!(bytes.windows(10).filter(|w| *w == b"/FontFile2").count(), 2);
+            }
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn header_footer_date_follows_the_workbook_date_system() {
     let mut wb = Workbook::new();
     let date_1900 = hf_date_time(&wb).0;
@@ -685,6 +788,126 @@ fn export_pdf_without_a_path_returns_bytes_and_never_opens_a_dialog() {
 }
 
 #[test]
+fn custom_font_widths_control_line_wrapping() {
+    let regular = std::sync::Arc::new(UnicodeFont::parse(gridcraft_pdf::test_support::tiny_ttf(&['A', ' '], 1000, 0)).unwrap());
+    let fonts = TextFonts::custom(regular, None, None, None);
+    assert_eq!(wrap_lines(&fonts, "AA AA", Font::Helvetica, 10.0, 35.0), ["AA", "AA"]);
+    assert_eq!(wrap_lines(&TextFonts::default(), "AA AA", Font::Helvetica, 10.0, 35.0), ["AA AA"]);
+    assert_eq!(wrap_lines(&fonts, "AAAA", Font::HelveticaBoldOblique, 10.0, 25.0), ["AA", "AA"]);
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn custom_pdf_fonts_are_per_export_and_fail_before_writing() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-custom-fonts-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let font = dir.join("regular.ttf");
+    let out = dir.join("out.pdf");
+    std::fs::write(&font, gridcraft_pdf::test_support::tiny_ttf(&['A', ' '], 400, 0)).unwrap();
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "A"})).unwrap();
+    for cmd in ["file.exportPdf", "file.print"] {
+        let r = s.execute_headless(cmd, json!({"fonts": {"regular": font}})).unwrap();
+        let bytes = crate::io::base64_decode(r["base64"].as_str().unwrap()).unwrap();
+        assert!(bytes.windows(10).any(|w| w == b"/FontFile2"));
+    }
+    let (plain, _) = pdf_of(&mut s, json!({}));
+    assert!(!plain.windows(10).any(|w| w == b"/FontFile2"), "custom faces must not leak into the next export");
+    for fonts in [
+        json!(null),
+        json!([]),
+        json!({}),
+        json!({"regular": 7}),
+        json!({"regular": ""}),
+        json!({"regular": font, "typo": font}),
+        json!({"regular": font, "bold": false}),
+    ] {
+        assert!(s.execute_headless("file.exportPdf", json!({"path": out, "fonts": fonts})).is_err(), "{fonts}");
+        assert!(!out.exists());
+    }
+    s.execute("cell.set", json!({"cell": "A1", "input": "Ω"})).unwrap();
+    let err = s.execute_headless("file.exportPdf", json!({"path": out, "fonts": {"regular": font}})).unwrap_err().to_string();
+    assert!(err.contains("U+03A9"), "{err}");
+    assert!(!out.exists());
+    for bytes in [b"not a font".to_vec(), gridcraft_pdf::test_support::tiny_ttf(&['A'], 500, 2)] {
+        std::fs::write(&font, bytes).unwrap();
+        assert!(s.execute_headless("file.exportPdf", json!({"path": out, "fonts": {"regular": font}})).is_err());
+        assert!(!out.exists());
+    }
+    // An oversized sparse file is refused within the font reader's own cap.
+    std::fs::File::create(&font).unwrap().set_len(MAX_FONT_BYTES as u64 + 1).unwrap();
+    let err = s.execute_headless("file.exportPdf", json!({"fonts": {"regular": font}})).unwrap_err().to_string();
+    assert!(err.contains("limit"), "{err}");
+    let sandbox = crate::io::ScriptSandbox::enter();
+    let err = s.execute_headless("file.exportPdf", json!({"fonts": {"regular": font}})).unwrap_err().to_string();
+    assert!(err.contains("can't read or write files"), "{err}");
+    drop(sandbox);
+    assert!(s.take_ui_requests().is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn xlsx_pdf_export_preserves_named_families_and_styles() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-family-fonts-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut paths = Vec::new();
+    for width in [400, 500, 800, 900] {
+        let path = dir.join(format!("face-{width}.ttf"));
+        std::fs::write(&path, gridcraft_pdf::test_support::tiny_ttf(&['A'], width, 0)).unwrap();
+        paths.push(path);
+    }
+    let families = json!({"Body Sans": {"regular": paths[0], "bold": paths[1]}, "Heading Sans": {"regular": paths[2], "italic": paths[3]}});
+    let mut source = s();
+    source.execute("range.setValues", json!({"range": "A1:B2", "values": [["A", "A"], ["A", "A"]]})).unwrap();
+    source.execute("home.fontName", json!({"range": "A1:A2", "name": "Body Sans"})).unwrap();
+    source.execute("home.fontName", json!({"range": "B1:B2", "name": "Heading Sans"})).unwrap();
+    source.execute("home.bold", json!({"range": "A2", "on": true})).unwrap();
+    source.execute("home.italic", json!({"range": "B2", "on": true})).unwrap();
+    source.execute("pageLayout.pageSetup", json!({"header": "&C&\"Heading Sans,Italic\"A"})).unwrap();
+    let book = dir.join("mixed.xlsx");
+    std::fs::write(&book, crate::io::save_bytes(&source.doc().unwrap().wb, "mixed.xlsx").unwrap()).unwrap();
+    let mut session = Session::new();
+    session.execute_headless("file.open", json!({"path": book})).unwrap();
+    for cmd in ["file.exportPdf", "file.print"] {
+        let result = session.execute_headless(cmd, json!({"fontFamilies": families})).unwrap();
+        let bytes = crate::io::base64_decode(result["base64"].as_str().unwrap()).unwrap();
+        assert_eq!(bytes.windows(10).filter(|w| *w == b"/FontFile2").count(), 4);
+        for slot in [5, 6, 9, 11] {
+            assert!(bytes.windows(format!("/U{slot} ").len()).any(|w| w == format!("/U{slot} ").as_bytes()), "face {slot} must survive XLSX import");
+        }
+    }
+    let fonts = export_fonts(&json!({"fontFamilies": families}), "file.exportPdf").unwrap();
+    assert_eq!(wrap_lines(&fonts, "AAAA", fonts.font("Body Sans", false, false), 10.0, 20.0), ["AAAA"]);
+    assert_eq!(wrap_lines(&fonts, "AAAA", fonts.font("Heading Sans", false, false), 10.0, 20.0), ["AA", "AA"]);
+    let (default, _) = pdf_of(&mut session, json!({}));
+    assert!(!default.windows(10).any(|w| w == b"/FontFile2"));
+    let out = dir.join("keep.pdf");
+    std::fs::write(&out, b"existing output").unwrap();
+    session.execute("cell.set", json!({"cell": "A1", "input": "Ω"})).unwrap();
+    let error = session.execute_headless("file.exportPdf", json!({"path": out, "fontFamilies": families})).unwrap_err().to_string();
+    assert!(error.contains("U+03A9"), "{error}");
+    for value in [
+        json!(null),
+        json!([]),
+        json!({"Body": {}}),
+        json!({" ": {"regular": paths[0]}}),
+        json!({"Body": {"regular": paths[0]}, "body": {"regular": paths[0]}}),
+    ] {
+        assert!(session.execute_headless("file.exportPdf", json!({"path": out, "fontFamilies": value})).is_err());
+    }
+    let mut many = serde_json::Map::new();
+    for i in 0..=MAX_FONT_FAMILIES {
+        many.insert(format!("Family {i}"), json!({"regular": paths[0]}));
+    }
+    assert!(export_fonts(&json!({"fontFamilies": many}), "file.exportPdf").unwrap_err().to_string().contains("32"));
+    let mut budget = 1;
+    assert!(export_faces(&json!({"regular": paths[0]}), "fontFamilies.Body", "file.exportPdf", &mut budget).is_err());
+    assert_eq!(std::fs::read(out).unwrap(), b"existing output");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn bands_unit() {
     let b = bands(0, 9, |_| 10.0, |_| 35.0, &[], 100);
     assert_eq!(b, vec![(0, 2), (3, 5), (6, 8), (9, 9)]);
@@ -694,33 +917,33 @@ fn bands_unit() {
     let b = bands(0, 2, |r| if r == 1 { 100.0 } else { 10.0 }, |_| 35.0, &[], 100);
     assert_eq!(b, vec![(0, 0), (1, 1), (2, 2)]);
     assert_eq!(bands(0, 1_000_000, |_| 10.0, |_| 5.0, &[], 3).len(), 3);
-    let w = wrap_lines("the quick brown fox jumps", Font::Helvetica, 10.0, 50.0);
+    let w = wrap_lines(&TextFonts::default(), "the quick brown fox jumps", Font::Helvetica, 10.0, 50.0);
     assert!(w.len() >= 2);
     assert!(w.iter().all(|l| gridcraft_pdf::text_width(Font::Helvetica, 10.0, l) <= 50.0 || !l.contains(' ')));
-    let w = wrap_lines("Supercalifragilistic", Font::Helvetica, 10.0, 20.0);
+    let w = wrap_lines(&TextFonts::default(), "Supercalifragilistic", Font::Helvetica, 10.0, 20.0);
     assert!(w.len() > 2);
 }
 
 /// The wrapper `wrap_lines` replaced, re-measuring strings, as the reference for its lines.
-fn wrap_lines_remeasuring(text: &str, font: Font, size: f32, width: f32) -> Vec<String> {
+fn wrap_lines_remeasuring(fonts: &TextFonts, text: &str, font: Font, size: f32, width: f32) -> Vec<String> {
     let mut out = Vec::new();
     for para in text.split('\n') {
         let mut line = String::new();
         for word in para.split(' ') {
             let cand = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-            if line.is_empty() || gridcraft_pdf::text_width(font, size, &cand) <= width {
+            if line.is_empty() || fonts.text_width(font, size, &cand) <= width {
                 line = cand;
             } else {
                 out.push(std::mem::take(&mut line));
                 line = word.to_string();
             }
-            while gridcraft_pdf::text_width(font, size, &line) > width && line.chars().count() > 1 {
+            while fonts.text_width(font, size, &line) > width && line.chars().count() > 1 {
                 let chars: Vec<char> = line.chars().collect();
                 let (mut lo, mut hi) = (1usize, chars.len());
                 while lo < hi {
                     let mid = lo + (hi - lo).div_ceil(2);
                     let cut: String = chars[..mid].iter().collect();
-                    if gridcraft_pdf::text_width(font, size, &cut) <= width {
+                    if fonts.text_width(font, size, &cut) <= width {
                         lo = mid;
                     } else {
                         hi = mid - 1;
@@ -755,7 +978,11 @@ fn wrap_lines_matches_the_remeasuring_wrapper() {
     for text in texts {
         for font in [Font::Helvetica, Font::HelveticaBold, Font::Courier] {
             for (size, width) in [(10.0, 50.0), (10.0, 20.0), (11.0, 1.0), (8.0, 300.0), (12.0, 0.0)] {
-                assert_eq!(wrap_lines(text, font, size, width), wrap_lines_remeasuring(text, font, size, width), "{text:?} {font:?} {size} {width}");
+                assert_eq!(
+                    wrap_lines(&TextFonts::default(), text, font, size, width),
+                    wrap_lines_remeasuring(&TextFonts::default(), text, font, size, width),
+                    "{text:?} {font:?} {size} {width}"
+                );
             }
         }
     }
@@ -766,12 +993,37 @@ fn wrapping_a_long_word_in_a_narrow_box_stops_at_the_line_limit() {
     // One character per line: the old wrapper re-measured and copied the rest of the word for
     // each of the 100,000 lines before checking the limit.
     let word = "w".repeat(100_000);
-    let lines = wrap_lines(&word, Font::Helvetica, 10.0, 1.0);
+    let lines = wrap_lines(&TextFonts::default(), &word, Font::Helvetica, 10.0, 1.0);
     assert!(lines.len() <= 2002, "{}", lines.len());
     assert!(lines.iter().all(|l| l == "w"));
     // A long paragraph in a very wide box is one line.
     let para = vec!["word"; 50_000].join(" ");
-    assert_eq!(wrap_lines(&para, Font::Helvetica, 10.0, 1.0e9), vec![para.clone()]);
+    assert_eq!(wrap_lines(&TextFonts::default(), &para, Font::Helvetica, 10.0, 1.0e9), vec![para.clone()]);
+
+    let face =
+        std::sync::Arc::new(gridcraft_pdf::UnicodeFont::parse(gridcraft_pdf::test_support::tiny_ttf(&[' ', 'w', 'o', 'r', 'd'], 900, 0)).unwrap());
+    let custom = TextFonts::custom(face.clone(), None, None, None);
+    let mut named = TextFonts::default();
+    named.add_family("Body", face, None, None, None).unwrap();
+    let handle = named.font("Body", false, false);
+    for (fonts, font) in [(custom, Font::HelveticaBoldOblique), (named, handle)] {
+        let lines = wrap_lines(&fonts, &word, font, 10.0, 1.0);
+        assert!(lines.len() <= 2002);
+        assert!(lines.iter().all(|l| l == "w"));
+        assert_eq!(wrap_lines(&fonts, &para, font, 10.0, 1.0e9), vec![para.clone()]);
+        assert_eq!(wrap_lines(&fonts, "word word word", font, 10.0, 82.0), ["word word", "word"]);
+    }
+}
+
+#[test]
+fn wrapping_uses_the_face_selected_for_the_complete_unicode_line() {
+    let face = std::sync::Arc::new(gridcraft_pdf::UnicodeFont::parse(gridcraft_pdf::test_support::tiny_ttf(&[' ', 'A', 'Ω'], 900, 0)).unwrap());
+    let mut doc = PdfDoc::new();
+    doc.set_unicode_fonts([Some(face), None, None, None]).unwrap();
+    let fonts = doc.add_page(100.0, 100.0).text_fonts();
+    assert_eq!(fonts.text_width(Font::Helvetica, 10.0, "A Ω"), 27.0);
+    assert_eq!(wrap_lines(fonts, "A Ω A", Font::Helvetica, 10.0, 20.0), ["A", "Ω", "A"]);
+    assert_eq!(wrap_lines(fonts, "A Ω A", Font::Helvetica, 10.0, 28.0), ["A Ω", "A"]);
 }
 
 #[test]

@@ -23,6 +23,8 @@ use egui::{Color32, FontData, FontDefinitions, FontFamily, FontId, Stroke, Visua
 mod font_fallback;
 mod font_setup;
 
+pub use gridcraft_engine::pdf::pdf_unicode_fonts;
+
 pub use font_fallback::symbol_face_installed;
 #[cfg(test)]
 use font_fallback::{cjk_han_japanese, cjk_han_simplified, cjk_hangul, fallback_faces, hebrew, lao, symbols_more, thai};

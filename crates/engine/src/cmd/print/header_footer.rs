@@ -1,5 +1,6 @@
 use super::layout::SheetLayout;
 use super::{Font, Page, Value, Workbook};
+use std::sync::Arc;
 
 /// Side margin of headers and footers, in points, when Align with Page Margins is off.
 pub(super) const HF_FIXED_SIDE_MARGIN: f32 = 0.7 * 72.0;
@@ -144,25 +145,51 @@ pub fn fields_to_codes(text: &str) -> String {
     out
 }
 
-/// One header/footer section: its text and whether `&B` made it bold.
+/// Text emitted while one header/footer font, style and size are active.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HfRun {
+    pub text: String,
+    pub bold: bool,
+    pub italic: bool,
+    pub size: Option<f32>,
+    pub font: Option<Arc<str>>,
+}
+
+/// One header/footer section: plain text, ordered runs and the final formatting state.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HfSection {
     pub text: String,
     pub bold: bool,
     pub italic: bool,
     pub size: Option<f32>,
+    pub font: Option<Arc<str>>,
+    pub runs: Vec<HfRun>,
+}
+
+impl HfSection {
+    fn push_text(&mut self, text: &str) {
+        // Skip an entire field if it does not fit, before copying it into text or runs.
+        // Literal characters use this path too, so they cannot push a full section over the cap.
+        if text.is_empty() || self.text.len().saturating_add(text.len()) > MAX_SECTION_BYTES {
+            return;
+        }
+        self.text.push_str(text);
+        if let Some(last) = self.runs.last_mut()
+            && last.font == self.font
+            && last.bold == self.bold
+            && last.italic == self.italic
+            && last.size == self.size
+        {
+            last.text.push_str(text);
+        } else {
+            self.runs.push(HfRun { text: text.into(), font: self.font.clone(), bold: self.bold, italic: self.italic, size: self.size });
+        }
+    }
 }
 
 /// Most bytes one section's expanded text may hold. A code like `&A` adds the whole sheet name
 /// (or file path) each time it appears, and a JSON workbook's names have no length limit.
 const MAX_SECTION_BYTES: usize = 64 * 1024;
-
-/// Appends `s` unless the section would pass [`MAX_SECTION_BYTES`]; what doesn't fit is left out.
-fn push_field(text: &mut String, s: &str) {
-    if text.len().saturating_add(s.len()) <= MAX_SECTION_BYTES {
-        text.push_str(s);
-    }
-}
 
 /// Expands a header/footer string into its left, centre and right sections.
 pub fn expand_header_footer(spec: &str, cx: &HfContext) -> [HfSection; 3] {
@@ -174,7 +201,7 @@ pub fn expand_header_footer(spec: &str, cx: &HfContext) -> [HfSection; 3] {
         let c = chars[i];
         if c != '&' {
             if let Some(s) = out.get_mut(cur) {
-                s.text.push(c);
+                s.push_text(c.encode_utf8(&mut [0; 4]));
             }
             i += 1;
             continue;
@@ -198,26 +225,26 @@ pub fn expand_header_footer(spec: &str, cx: &HfContext) -> [HfSection; 3] {
                         i += 1 + digits.len();
                     }
                 }
-                push_field(&mut sec.text, &n.to_string());
+                sec.push_text(&n.to_string());
             }
-            'N' | 'n' => push_field(&mut sec.text, &cx.pages.to_string()),
-            'D' | 'd' => push_field(&mut sec.text, &cx.date),
-            'T' | 't' => push_field(&mut sec.text, &cx.time),
-            'A' | 'a' => push_field(&mut sec.text, &cx.sheet),
-            'F' | 'f' => push_field(&mut sec.text, &cx.file),
-            'Z' | 'z' => push_field(&mut sec.text, &cx.path),
-            '&' => sec.text.push('&'),
+            'N' | 'n' => sec.push_text(&cx.pages.to_string()),
+            'D' | 'd' => sec.push_text(&cx.date),
+            'T' | 't' => sec.push_text(&cx.time),
+            'A' | 'a' => sec.push_text(&cx.sheet),
+            'F' | 'f' => sec.push_text(&cx.file),
+            'Z' | 'z' => sec.push_text(&cx.path),
+            '&' => sec.push_text("&"),
             'B' | 'b' => sec.bold = !sec.bold,
             'I' | 'i' => sec.italic = !sec.italic,
             '"' => {
-                // &"Font,Style": skip the font name; honour Bold/Italic in the style.
+                // &"Font,Style": keep the family for per-export font mappings.
                 let rest: String = chars[i..].iter().take_while(|c| **c != '"').collect();
-                let lower = rest.to_ascii_lowercase();
-                if lower.contains("bold") {
-                    sec.bold = true;
-                }
-                if lower.contains("italic") || lower.contains("oblique") {
-                    sec.italic = true;
+                let (family, style) = rest.split_once(',').unwrap_or((&rest, ""));
+                sec.font = Some(family.trim().into());
+                let lower = style.to_ascii_lowercase();
+                if rest.contains(',') {
+                    sec.bold = lower.contains("bold");
+                    sec.italic = lower.contains("italic") || lower.contains("oblique");
                 }
                 i += rest.chars().count() + 1;
             }
@@ -253,19 +280,52 @@ pub(super) fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcr
             if sec.text.trim().is_empty() {
                 continue;
             }
-            let size = sec.size.unwrap_or(10.0).clamp(1.0, 72.0) * text_scale;
-            let font = Font::styled(gridcraft_pdf::Family::Sans, sec.bold, sec.italic);
-            let lines: Vec<&str> = sec.text.split('\n').take(20).collect();
-            let n = lines.len() as f32;
-            for (j, line) in lines.iter().enumerate() {
-                let lw = gridcraft_pdf::text_width(font, size, line);
-                let x = match i {
-                    0 => l,
-                    1 => (pw - lw) / 2.0,
-                    _ => pw - r - lw,
+            let mut lines: Vec<Vec<(Font, f32, &str)>> = vec![Vec::new()];
+            'runs: for run in &sec.runs {
+                let size = run.size.unwrap_or(10.0).clamp(1.0, 72.0) * text_scale;
+                let font = match pg.text_fonts().font(run.font.as_deref().unwrap_or(""), run.bold, run.italic) {
+                    mapped @ Font::Embedded(_) => mapped,
+                    _ => Font::styled(gridcraft_pdf::Family::Sans, run.bold, run.italic),
                 };
-                let y = if header { hm + size * 0.8 + j as f32 * size * 1.2 } else { ph - fm - size * 0.22 - (n - 1.0 - j as f32) * size * 1.2 };
-                pg.text(x, y, size, font, [0, 0, 0], line);
+                for (part, text) in run.text.split('\n').enumerate() {
+                    if part > 0 {
+                        if lines.len() >= 20 {
+                            break 'runs;
+                        }
+                        lines.push(Vec::new());
+                    }
+                    if let Some(line) = lines.last_mut() {
+                        line.push((font, size, text));
+                    }
+                }
+            }
+            let sizes: Vec<f32> = lines
+                .iter()
+                .map(|line| {
+                    line.iter()
+                        .filter(|(_, _, text)| !text.is_empty())
+                        .map(|(_, size, _)| *size)
+                        .reduce(f32::max)
+                        .or_else(|| line.first().map(|(_, size, _)| *size))
+                        .unwrap_or(10.0 * text_scale)
+                })
+                .collect();
+            let total_height: f32 = sizes.iter().map(|size| size * 1.2).sum();
+            let mut before = 0.0;
+            for (line, size) in lines.iter().zip(sizes) {
+                let width: f32 = line.iter().map(|(font, size, text)| pg.text_width(*font, *size, text)).sum();
+                let mut x = match i {
+                    0 => l,
+                    1 => (pw - width) / 2.0,
+                    _ => pw - r - width,
+                };
+                let after = (total_height - before - size * 1.2).max(0.0);
+                let y = if header { hm + size * 0.8 + before } else { ph - fm - size * 0.22 - after };
+                for (font, size, text) in line {
+                    pg.text(x, y, *size, *font, [0, 0, 0], text);
+                    x += pg.text_width(*font, *size, text);
+                }
+                before += size * 1.2;
             }
         }
     }

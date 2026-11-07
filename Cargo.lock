@@ -2076,6 +2076,7 @@ version = "0.16.0"
 dependencies = [
  "gridcraft-engine",
  "gridcraft-mcp",
+ "gridcraft-pdf",
  "log",
  "quick-xml 0.41.0",
  "serde_json",
@@ -2148,6 +2149,7 @@ name = "gridcraft-mcp"
 version = "0.16.0"
 dependencies = [
  "gridcraft-engine",
+ "gridcraft-pdf",
  "log",
  "serde_json",
 ]

@@ -2,8 +2,8 @@ use super::layout::{DENSE_BLOCK, SheetLayout};
 use super::objects::draw_cell_picture;
 use super::text::{TextPlacement, draw_text};
 use super::{
-    BorderLine, BorderStyle, Borders, CellRef, Color, Font, Page, PatternType, Point, RangeRef, Rgb, Sheet, Style, StyleId, Underline, Value,
-    Workbook, split_sheet,
+    BorderLine, BorderStyle, Borders, CellRef, Color, Font, Page, PatternType, Point, RangeRef, Rgb, Sheet, Style, StyleId, TextFonts, Underline,
+    Value, Workbook, split_sheet,
 };
 
 // ---------------------------------------------------------------- drawing
@@ -75,11 +75,11 @@ fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Option<c
 }
 
 /// PDF measurement for chart layout.
-pub(super) struct PdfMeasure;
+pub(super) struct PdfMeasure<'a>(pub(super) &'a TextFonts);
 
-impl gridcraft_chart::Measure for PdfMeasure {
+impl gridcraft_chart::Measure for PdfMeasure<'_> {
     fn text_width(&self, text: &str, size: f32, bold: bool) -> f32 {
-        gridcraft_pdf::text_width(if bold { Font::HelveticaBold } else { Font::Helvetica }, size, text)
+        self.0.text_width(if bold { Font::HelveticaBold } else { Font::Helvetica }, size, text)
     }
 }
 
@@ -141,7 +141,7 @@ pub(super) fn draw_prims(pg: &mut Page, prims: &[gridcraft_chart::Prim], xf: Xf)
             Prim::Text { x, y, text, size, color, bold, align, valign, rotation } => {
                 let font = if *bold { Font::HelveticaBold } else { Font::Helvetica };
                 let size = size * k;
-                let w = gridcraft_pdf::text_width(font, size, text);
+                let w = pg.text_width(font, size, text);
                 let dx = match align {
                     H::Left => 0.0,
                     H::Center => -w / 2.0,
@@ -455,7 +455,7 @@ pub(super) fn draw_headings(pg: &mut Page, b: &Block, col_heads: bool, row_heads
             pg.fill_rect(x0, y, x1 - x0, size.1, fill);
             pg.rect_stroke(x0, y, x1 - x0, size.1, lw, line);
             let t = gridcraft_core::col_to_letters(col);
-            let tw = gridcraft_pdf::text_width(Font::Helvetica, fsize, &t);
+            let tw = pg.text_width(Font::Helvetica, fsize, &t);
             pg.text(x0 + (x1 - x0 - tw) / 2.0, y + size.1 / 2.0 + fsize * 0.35, fsize, Font::Helvetica, [0x40, 0x40, 0x40], &t);
         }
     }
@@ -469,7 +469,7 @@ pub(super) fn draw_headings(pg: &mut Page, b: &Block, col_heads: bool, row_heads
             pg.fill_rect(x, y0, size.0, y1 - y0, fill);
             pg.rect_stroke(x, y0, size.0, y1 - y0, lw, line);
             let t = (row + 1).to_string();
-            let tw = gridcraft_pdf::text_width(Font::Helvetica, fsize, &t);
+            let tw = pg.text_width(Font::Helvetica, fsize, &t);
             pg.text(x + (size.0 - tw) / 2.0, y0 + (y1 - y0) / 2.0 + fsize * 0.35, fsize, Font::Helvetica, [0x40, 0x40, 0x40], &t);
         }
     }
