@@ -247,3 +247,50 @@ fn command_search_hides_disabled_and_handles_missing_shortcuts() {
         h.get_by_label_contains("Align Right    Home");
     }
 }
+
+/// #2189: A failed rename must not dismiss its own error on Enter.
+#[test]
+fn failed_rename_enter_keeps_error_visible() {
+    let mut h = harness();
+    h.state_mut().open_dialog("renameSheet", json!({}));
+    h.run_steps(4);
+
+    h.state_mut().dialog.as_mut().unwrap().values.insert("name".into(), json!("a/b"));
+
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+
+    assert!(h.state().dialog.is_some(), "failed dialog stays open");
+    assert!(h.state().message.as_ref().is_some_and(|(_, text)| !text.is_empty()), "Enter must leave the error visible: {:?}", h.state().message);
+
+    assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().name, "Sheet1", "invalid rename must not change the sheet");
+
+    // The next Enter dismisses the error, not the dialog.
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+
+    assert!(h.state().message.is_none(), "second Enter dismisses error");
+    assert!(h.state().dialog.is_some(), "rename dialog stays editable");
+}
+
+/// Mouse OK still shows the error; Escape dismisses only the message.
+#[test]
+fn failed_rename_click_keeps_error_until_escape() {
+    let mut h = harness();
+    h.state_mut().open_dialog("renameSheet", json!({}));
+    h.run_steps(4);
+
+    h.state_mut().dialog.as_mut().unwrap().values.insert("name".into(), json!("a/b"));
+
+    h.get_by_label_contains("OK").click();
+    h.run_steps(3);
+
+    assert!(h.state().message.is_some(), "mouse OK shows error");
+    assert!(h.state().dialog.is_some());
+
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+
+    assert!(h.state().message.is_none(), "Escape dismisses error");
+    assert!(h.state().dialog.is_some(), "Escape keeps dialog open");
+}
