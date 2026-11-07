@@ -1,0 +1,25 @@
+# Runs `gridcraft-cli check` over the pinned public-workbook corpus (corpus/) and reports the counts.
+# Not a required check: it is manual and weekly, and mismatches don't fail it (see corpus/README.md).
+name: Corpus
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release -p gridcraft-cli
+      - run: corpus/run.sh
+        env:
+          GRIDCRAFT_CLI: target/release/gridcraft-cli
