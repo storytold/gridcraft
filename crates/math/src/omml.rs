@@ -1,7 +1,7 @@
 //! LaTeX to OMML, the open Office Math Markup of ECMA-376 Part 1 §22.1, for the common subset:
 //! runs, fractions and binomials, roots, scripts, big operators with limits, functions and
-//! limits, delimiters, matrices, accents, bars, braces and font styles. Anything else is an
-//! error, and the caller saves the equation as text only.
+//! limits, delimiters, matrices, accents, bars, braces, font styles and text colour (`\color`,
+//! `\textcolor`). Anything else is an error, and the caller saves the equation as text only.
 
 use ratex_parser::ParseNode;
 use ratex_parser::parse_node::Mode;
@@ -15,12 +15,16 @@ const MAX_WALK: usize = 96;
 /// declared by the caller), with runs at `size_pt` points in the `ink` colour (none: the
 /// paragraph's own).
 pub fn to_omml(latex: &str, size_pt: f32, ink: Option<[u8; 3]>) -> Result<String, MathError> {
+    write(latex, size_pt, ink, true)
+}
+
+fn write(latex: &str, size_pt: f32, ink: Option<[u8; 3]>, merge: bool) -> Result<String, MathError> {
     crate::check_caps(latex)?;
     crate::guarded(|| {
         let nodes = crate::parse(latex)?;
         let sz = if size_pt.is_finite() { (size_pt * 100.0).round().clamp(100.0, 400_000.0) as u32 } else { 1100 };
-        let fill = ink.map(|[r, g, b]| format!("<a:solidFill><a:srgbClr val=\"{r:02X}{g:02X}{b:02X}\"/></a:solidFill>")).unwrap_or_default();
-        let mut w = Writer { out: String::from("<m:oMath>"), sz, fill };
+        let fill = ink.map(fill_of).unwrap_or_default();
+        let mut w = Writer { merge, last: None, out: String::from("<m:oMath>"), sz, fill };
         w.seq(&nodes, &Style::default(), 0)?;
         w.out.push_str("</m:oMath>");
         Ok(w.out)
@@ -35,13 +39,45 @@ struct Style {
     sty: Option<&'static str>,
     /// Ordinary text (`\text`): `m:nor`.
     normal: bool,
+    /// An explicit text colour (`\color`), which wins over the ink colour. Black is a colour
+    /// like another here: `{\color{black}x}` stays black on a dark theme (the layout maps black
+    /// to "automatic", which a painter can follow; a file has no such second chance). Only runs
+    /// carry it: fraction bars, radical signs and brackets take the paragraph's colour.
+    color: Option<[u8; 3]>,
+}
+
+/// The run written last, so that the next one can join it.
+struct LastRun {
+    /// Where its `<m:r>` starts, and where its `<m:t` does (the head is what must match).
+    start: usize,
+    text_at: usize,
+    /// The end of the output when it was written.
+    end: usize,
+    /// Its text, unescaped.
+    text: String,
+    /// Whether its `<m:t>` carries `xml:space="preserve"`.
+    marked: bool,
+}
+
+const SPACE_MARK: &str = " xml:space=\"preserve\"";
+
+fn needs_space_mark(text: &str) -> bool {
+    text.starts_with(char::is_whitespace) || text.ends_with(char::is_whitespace)
 }
 
 struct Writer {
+    /// Join runs with the same properties (off only in tests that compare with the unjoined form).
+    merge: bool,
+    last: Option<LastRun>,
     out: String,
     sz: u32,
     /// The DrawingML fill of every run (`<a:solidFill>…</a:solidFill>`), or empty.
     fill: String,
+}
+
+/// The DrawingML fill for a colour.
+fn fill_of([r, g, b]: [u8; 3]) -> String {
+    format!("<a:solidFill><a:srgbClr val=\"{r:02X}{g:02X}{b:02X}\"/></a:solidFill>")
 }
 
 fn unsupported(what: &str) -> MathError {
@@ -123,30 +159,61 @@ impl Writer {
         if text.is_empty() {
             return;
         }
-        self.out.push_str("<m:r>");
+        let mut head = String::from("<m:r>");
         if st.scr.is_some() || st.sty.is_some() || st.normal {
-            self.out.push_str("<m:rPr>");
+            head.push_str("<m:rPr>");
             if st.normal {
-                self.out.push_str("<m:nor/>");
+                head.push_str("<m:nor/>");
             }
             if let Some(s) = st.scr {
-                self.out.push_str(&format!("<m:scr m:val=\"{s}\"/>"));
+                head.push_str(&format!("<m:scr m:val=\"{s}\"/>"));
             }
             if let Some(s) = st.sty {
-                self.out.push_str(&format!("<m:sty m:val=\"{s}\"/>"));
+                head.push_str(&format!("<m:sty m:val=\"{s}\"/>"));
             }
-            self.out.push_str("</m:rPr>");
+            head.push_str("</m:rPr>");
         }
+        let own_fill;
+        let fill = match st.color {
+            Some(rgb) => {
+                own_fill = fill_of(rgb);
+                &own_fill
+            }
+            None => &self.fill,
+        };
+        head.push_str(&format!("<a:rPr lang=\"en-US\" sz=\"{}\">{}<a:latin typeface=\"Cambria Math\"/></a:rPr>", self.sz, fill));
+        // Characters in a row with the same properties are one run, as Word writes them. The
+        // previous run is still the last thing in the output only if nothing was written since.
+        // Upright runs stay apart: a function name (`\sin`) is one run of its own, and the xlsx
+        // reader finds it by that.
+        if self.merge
+            && st.sty != Some("p")
+            && let Some(last) = self.last.as_mut()
+            && last.end == self.out.len()
+            && self.out.get(last.start..last.text_at) == Some(head.as_str())
+        {
+            last.text.push_str(text);
+            let was_marked = last.marked;
+            last.marked = needs_space_mark(&last.text);
+            if last.marked == was_marked {
+                self.out.truncate(last.end - "</m:t></m:r>".len());
+                self.out.push_str(&esc(text));
+            } else {
+                self.out.truncate(last.text_at);
+                self.out.push_str(&format!("<m:t{}>{}", if last.marked { SPACE_MARK } else { "" }, esc(&last.text)));
+            }
+            self.out.push_str("</m:t></m:r>");
+            last.end = self.out.len();
+            return;
+        }
+        let start = self.out.len();
+        self.out.push_str(&head);
+        let text_at = self.out.len();
         // Word trims a run's text unless it is marked, so a run that is or ends in whitespace
         // (the space after `\text{if }`) says so.
-        let space = if text.starts_with(char::is_whitespace) || text.ends_with(char::is_whitespace) { " xml:space=\"preserve\"" } else { "" };
-        self.out.push_str(&format!(
-            "<a:rPr lang=\"en-US\" sz=\"{}\">{}<a:latin typeface=\"Cambria Math\"/></a:rPr><m:t{}>{}</m:t></m:r>",
-            self.sz,
-            self.fill,
-            space,
-            esc(text)
-        ));
+        let marked = needs_space_mark(text);
+        self.out.push_str(&format!("<m:t{}>{}</m:t></m:r>", if marked { SPACE_MARK } else { "" }, esc(text)));
+        self.last = Some(LastRun { start, text_at, end: self.out.len(), text: text.to_string(), marked });
     }
 
     /// `<tag>…</tag>` around the nodes.
@@ -230,14 +297,32 @@ impl Writer {
                 self.run(t, st);
             }
             ParseNode::Kern { .. } => {}
-            ParseNode::OrdGroup { body, .. }
-            | ParseNode::Styling { body, .. }
-            | ParseNode::Sizing { body, .. }
-            | ParseNode::MClass { body, .. }
-            | ParseNode::Href { body, .. }
-            | ParseNode::HBox { body, .. }
-            | ParseNode::Pmb { body, .. } => self.seq(body, st, depth)?,
-            ParseNode::Color { body, .. } => self.seq(body, st, depth)?,
+            ParseNode::OrdGroup { body, .. } | ParseNode::MClass { body, .. } => self.seq(body, st, depth)?,
+            // `\displaystyle` and `\textstyle` are Office Math's own call; the script styles shrink
+            // what follows, which a run here cannot carry.
+            ParseNode::Styling { style, body, .. } => {
+                if matches!(style, ratex_parser::parse_node::StyleStr::Script | ratex_parser::parse_node::StyleStr::Scriptscript) {
+                    return Err(unsupported("A script style command"));
+                }
+                self.seq(body, st, depth)?;
+            }
+            // Text in a box is ordinary text, and a poor man's bold is bold.
+            ParseNode::HBox { body, .. } => self.seq(body, &Style { normal: true, ..st.clone() }, depth)?,
+            ParseNode::Pmb { body, .. } => self.seq(body, &Style { sty: Some("b"), ..st.clone() }, depth)?,
+            ParseNode::Color { color, body, .. } => {
+                let c = ratex_types::color::Color::parse(color).ok_or_else(|| unsupported(&format!("The colour {color}")))?;
+                // A run carries RGB only; `transparent` and alpha hex would be written opaque.
+                if c.a < 1.0 {
+                    return Err(unsupported(&format!("The translucent colour {color}")));
+                }
+                let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                let s = Style { color: Some([q(c.r), q(c.g), q(c.b)]), ..st.clone() };
+                self.seq(body, &s, depth)?;
+            }
+            // These change the size or make a link, which a run here cannot carry; saying so
+            // beats saving the equation without them.
+            ParseNode::Sizing { .. } => return Err(unsupported("A text size command")),
+            ParseNode::Href { .. } => return Err(unsupported("A link")),
             ParseNode::Text { body, font, .. } => {
                 let mut s = Style { normal: true, ..st.clone() };
                 if let Some(f) = font {
@@ -497,7 +582,7 @@ mod tests {
 
     #[test]
     fn runs_fractions_and_roots() {
-        assert_eq!(bare("x+1"), "<m:oMath><m:r><m:t>x</m:t></m:r><m:r><m:t>+</m:t></m:r><m:r><m:t>1</m:t></m:r></m:oMath>");
+        assert_eq!(bare("x+1"), "<m:oMath><m:r><m:t>x+1</m:t></m:r></m:oMath>");
         assert!(om("x").contains("sz=\"1100\""));
         assert_eq!(
             bare("\\frac{a}{b}"),
@@ -509,7 +594,7 @@ mod tests {
         );
         assert!(bare("\\sqrt{x}").starts_with("<m:oMath><m:rad><m:radPr><m:degHide m:val=\"1\"/></m:radPr><m:deg/><m:e>"));
         assert!(bare("\\sqrt[3]{x}").contains("<m:deg><m:r><m:t>3</m:t></m:r></m:deg>"));
-        assert!(bare("\\alpha \\le \\infty").contains("<m:t>α</m:t></m:r><m:r><m:t>≤</m:t></m:r><m:r><m:t>∞</m:t>"));
+        assert!(bare("\\alpha \\le \\infty").contains("<m:t>α≤∞</m:t>"));
     }
 
     #[test]
@@ -518,7 +603,7 @@ mod tests {
         assert!(bare("a_{i}^{2}").starts_with("<m:oMath><m:sSubSup><m:e>"));
         let s = bare("\\sum_{k=0}^{n} k = m");
         assert!(s.starts_with("<m:oMath><m:nary><m:naryPr><m:chr m:val=\"∑\"/><m:limLoc m:val=\"undOvr\"/></m:naryPr><m:sub>"), "{s}");
-        assert!(s.contains("<m:e><m:r><m:t>k</m:t></m:r></m:e></m:nary><m:r><m:t>=</m:t>"), "the operand stops at the relation: {s}");
+        assert!(s.contains("<m:e><m:r><m:t>k</m:t></m:r></m:e></m:nary><m:r><m:t>=m</m:t>"), "the operand stops at the relation: {s}");
         assert!(bare("\\int x").contains("<m:subHide m:val=\"1\"/><m:supHide m:val=\"1\"/>"));
         let l = bare("\\lim_{n\\to\\infty} a");
         assert!(l.starts_with("<m:oMath><m:limLow><m:e><m:r><m:rPr><m:sty m:val=\"p\"/></m:rPr><m:t>lim</m:t>"), "{l}");
@@ -538,7 +623,7 @@ mod tests {
         assert!(bare("\\mathbb{R}").contains("<m:rPr><m:scr m:val=\"double-struck\"/></m:rPr>"));
         assert!(bare("\\text{if } x").contains("<m:rPr><m:nor/></m:rPr>"));
         assert!(bare("\\overbrace{a+b}^{n}").contains("<m:limUpp><m:e><m:groupChr>"));
-        assert!(bare("a < b \\& c").contains("<m:t>&lt;</m:t>") && bare("a \\& b").contains("<m:t>&amp;</m:t>"));
+        assert!(bare("a < b \\& c").contains("<m:t>a&lt;b&amp;c</m:t>") && bare("a \\& b").contains("<m:t>a&amp;b</m:t>"));
     }
 
     #[test]
@@ -605,14 +690,119 @@ mod tests {
     }
 
     #[test]
+    fn colours_are_kept_and_size_and_links_are_errors() {
+        let red = "<a:solidFill><a:srgbClr val=\"FF0000\"/></a:solidFill>";
+        let o = om("{\\color{red}x}y\\textcolor{blue}{z}");
+        assert_eq!(o.matches(red).count(), 1, "{o}");
+        assert_eq!(o.matches("<a:solidFill>").count(), 2, "only x and z are coloured: {o}");
+        assert!(o.contains("val=\"0000FF\""), "{o}");
+        // A colour applies to what follows it in the group, through scripts and fractions.
+        let o = om("\\color{#00ff00}\\frac{a}{b}^2");
+        assert_eq!(o.matches("val=\"00FF00\"").count(), o.matches("<m:r>").count(), "{o}");
+        // An explicit black is black, not the paragraph's colour, and wins over the ink.
+        let o = to_omml("{\\color{black}x}y", 11.0, Some([0xFF, 0xFF, 0xFF])).unwrap();
+        assert!(o.find("000000").is_some_and(|b| o.find("FFFFFF").is_some_and(|w| b < w)), "{o}");
+        assert!(om("{\\color{black}x}y").contains("val=\"000000\""), "black without an ink colour is still written");
+        // The inner colour wins and the outer one returns after the group.
+        let o = om("\\color{red}a{\\color{blue}b}c");
+        let fills: Vec<&str> = o.matches("srgbClr val=\"").map(|_| "").collect();
+        assert_eq!(fills.len(), 3, "{o}");
+        let (r1, b, r2) = (o.find("FF0000"), o.find("0000FF"), o.rfind("FF0000"));
+        assert!(r1 < b && b < r2, "{o}");
+        for (s, what) in [
+            ("\\large x", "text size"),
+            ("\\frac{\\tiny a}{b}", "text size"),
+            ("\\scriptstyle x", "script style"),
+            ("\\href{https://example.org}{x}", "link"),
+            ("\\color{nocolour}x", "colour"),
+            ("\\color{transparent}x", "translucent colour"),
+            ("\\textcolor{#ff000080}{x}", "translucent colour"),
+        ] {
+            let e = to_omml(s, 11.0, None).unwrap_err();
+            assert!(e.message.contains(what), "{s}: {e}");
+        }
+        // Boxed text is ordinary text, `\pmb` is bold.
+        assert!(bare("\\hbox{ab}").contains("<m:nor/>"));
+        assert!(bare("\\pmb{x}").contains("<m:sty m:val=\"b\"/>"));
+        assert!(to_omml("\\displaystyle x", 11.0, None).is_ok());
+    }
+
+    /// The runs of OMML as (properties, text), with neighbours of the same properties joined.
+    fn joined_runs(omml: &str) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = Vec::new();
+        let mut rest = omml;
+        let mut adjacent = false;
+        while let Some(at) = rest.find("<m:r>") {
+            // A run directly after the previous one (nothing written between them).
+            adjacent = adjacent && at == 0;
+            let body = &rest[at + "<m:r>".len()..];
+            let t = body.find("<m:t").unwrap();
+            let head = body[..t].to_string();
+            let text_from = t + body[t..].find('>').unwrap() + 1;
+            let end = body.find("</m:t></m:r>").unwrap();
+            let text = body[text_from..end].to_string();
+            // The mark must be there exactly when the run starts or ends in whitespace.
+            let marked = body[t..text_from].contains("xml:space=\"preserve\"");
+            assert_eq!(marked, needs_space_mark(&text), "{omml}");
+            match out.last_mut() {
+                Some((h, tx)) if adjacent && *h == head => tx.push_str(&text),
+                _ => out.push((head, text)),
+            }
+            rest = &body[end + "</m:t></m:r>".len()..];
+            adjacent = true;
+        }
+        out
+    }
+
+    #[test]
+    fn joined_runs_read_as_the_same_text_per_style() {
+        for s in [
+            "x+1=2",
+            "\\text{if } x \\ge 0",
+            "{\\color{red}ab}c\\textcolor{blue}{de}",
+            "\\mathbb{R}\\mathbf{xyz}\\mathrm{sin}x\\mathit{ab}",
+            "\\frac{12}{34}+\\sqrt{abc}+x^{12}_{ab}",
+            "\\begin{pmatrix} 12 & ab \\\\ c & d \\end{pmatrix}",
+            "\\left(ab\\middle|cd\\right)",
+            "\\sum_{i=1}^{n} ab + \\lim_{x\\to 0} f",
+            "\\text{a } \\text{ b}\\text{c d}",
+            "\\hbox{ab}\\pmb{cd}",
+            "\\text{a }x\\text{ a}\\text{a} \\text{b} ",
+            "\\sin\\cos x\\ln\\sin",
+        ] {
+            let old = write(s, 11.0, None, false).unwrap();
+            let new = write(s, 11.0, None, true).unwrap();
+            assert_eq!(joined_runs(&old), joined_runs(&new), "{s}");
+            assert!(new.len() <= old.len(), "{s}");
+        }
+    }
+
+    #[test]
+    fn long_runs_are_one_run() {
+        let digits = "1234567890".repeat(409);
+        let (old, new) = (write(&digits, 11.0, None, false).unwrap(), to_omml(&digits, 11.0, None).unwrap());
+        assert_eq!(new.matches("<m:r>").count(), 1);
+        assert!(new.contains(&digits));
+        assert!(new.len() < 5_000 && old.len() > 300_000, "{} against {}", new.len(), old.len());
+        let text = format!("\\text{{{}}}", "ab ".repeat(1300));
+        assert_eq!(to_omml(&text, 11.0, None).unwrap().matches("<m:r>").count(), 1);
+        assert_eq!(bare("\\sin\\cos").matches("<m:r>").count(), 2, "function names stay separate runs");
+        // Another property, or any other element between two runs, keeps them apart.
+        assert_eq!(bare("a\\mathbf{b}c").matches("<m:r>").count(), 3);
+        assert_eq!(bare("a^b c").matches("<m:r>").count(), 3);
+    }
+
+    #[test]
     fn a_literal_space_in_text_mode_is_kept() {
         // RaTeX gives a text-mode space as a spacing node whose text is " "; it is a run of its
         // own, marked `xml:space="preserve"` so that Word keeps it, and `\text{if } x` does not
         // come out as `ifx`.
         let o = bare("\\text{a b}");
-        assert!(o.contains("<m:t xml:space=\"preserve\"> </m:t>"), "{o}");
+        assert!(o.contains("<m:t>a b</m:t>"), "text with the space inside needs no mark: {o}");
         let o = bare("\\text{if } x");
-        assert!(o.contains("<m:t xml:space=\"preserve\"> </m:t></m:r><m:r><m:t>x</m:t>"), "{o}");
+        assert!(o.contains("<m:t xml:space=\"preserve\">if </m:t></m:r><m:r><m:t>x</m:t>"), "{o}");
+        let o = bare("\\text{a } \\text{ b}");
+        assert!(o.contains("<m:t>a  b</m:t>"), "{o}");
         assert!(!bare("x+1").contains("xml:space"), "runs without surrounding whitespace are not marked");
     }
 
@@ -621,7 +811,7 @@ mod tests {
         let o = to_omml("x+1", 11.0, Some([0x1F, 0x4E, 0x79])).unwrap();
         let run =
             "<a:rPr lang=\"en-US\" sz=\"1100\"><a:solidFill><a:srgbClr val=\"1F4E79\"/></a:solidFill><a:latin typeface=\"Cambria Math\"/></a:rPr>";
-        assert_eq!(o.matches(run).count(), 3, "{o}");
+        assert_eq!(o.matches(run).count(), 1, "{o}");
         assert!(!om("x+1").contains("<a:solidFill>"), "no ink: the paragraph's colour applies");
     }
 
