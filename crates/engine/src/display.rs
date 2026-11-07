@@ -41,12 +41,16 @@ fn text_needs_quote_prefix(t: &str, sys: gridcraft_core::date::DateSystem) -> bo
     if t.is_empty() {
         return false;
     }
-    let mut chars = t.chars();
-    let (first, second) = (chars.next(), chars.next());
+    let first = t.chars().next();
     if matches!(first, Some('=' | '\'')) {
         return true;
     }
-    if matches!(first, Some('+' | '-')) && second.is_some_and(|c| c.is_ascii_alphabetic() || c == '(') {
+    // A `+` or `-` entry that reads as a formula becomes one (`+5+4`, `-abc`); one that doesn't
+    // stays text (`--`, `+49 170 1234567`), as `input_to_cell` decides it.
+    if matches!(first, Some('+' | '-'))
+        && gridcraft_core::parse::starts_formula(t)
+        && crate::cmd::edit::parse_typed_formula(t).is_ok_and(|e| crate::cmd::edit::check_arg_counts(&e).is_ok())
+    {
         return true;
     }
     !matches!(gridcraft_core::parse::parse_input(t, sys).value, Value::Text(ref x) if x.as_ref() == t)
