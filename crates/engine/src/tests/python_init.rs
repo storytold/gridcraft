@@ -320,8 +320,16 @@ fn a_worker_lost_and_rebuilt_runs_it_again() {
     settle(&mut s);
     assert_eq!(h.starts(), 1);
     // It has replied and is on its way out: a cell sent in that moment goes down with it, which is
-    // the case above.
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    // the case above. So this waits for it to go, and for the client to see that.
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while h.exited() == 0 {
+        assert!(std::time::Instant::now() < until, "the worker never went");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    for _ in 0..10 {
+        s.python_poll(std::time::Duration::ZERO);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     py(&mut s, "A2", "get rate");
     settle(&mut s);
     assert_eq!(v(&s, "A2"), NUM(2.0));
