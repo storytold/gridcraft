@@ -128,6 +128,10 @@ editor, where it can be edited, run, saved and exported.
 - Excel needs a Microsoft 365 commercial/education account signed in for the Automate tab. When it
   is unavailable, Excel interop is verified by format round-trip and by pasting the exported body
   into Excel's editor; the PR states which path was used.
+- The exported script was run inside Excel 16.0: the `.osts` was placed in
+  `Documents\Office Scripts`, opened from Automate › View Scripts (Script details › Edit), its body
+  pasted into the editor and Run. Excel's `Book1` then had `A1 = "from gridcraft excel"` in bold
+  and a new `ExcelRun` sheet — the same result GridCraft produced, read back through Excel COM.
 - Excel round-trip checked with Excel 16.0 COM: a workbook with values, a formula, number
   formats, a merge, a table, a comment, validation and a chart opened and saved by GridCraft
   re-opens in Excel without a repair prompt, and value/formula/number-format/table/comment/
