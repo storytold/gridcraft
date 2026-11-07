@@ -7,8 +7,8 @@ impl SheetApp {
     }
 
     /// The active window and sheet: each window scrolls on its own.
-    fn scroll_key(&self) -> Option<(u64, usize)> {
-        Some((self.session.active_window()?, self.session.active()?.wb.active_sheet()))
+    fn scroll_key(&self) -> Option<(u64, u64)> {
+        Some((self.session.active_window()?, self.session.active()?.wb.active()?.uid.get()))
     }
 
     pub fn view(&self) -> SheetView {
@@ -41,8 +41,10 @@ impl SheetApp {
         let window = self.session.active_window();
         let Some(d) = self.session.active_mut() else { return };
         let mut tops = Vec::new();
-        for (&(w, si), v) in &self.views {
-            let Some(sh) = d.wb.sheets.get(si).filter(|sh| Some(w) == window && sh.view == gridcraft_engine::model::SheetViewMode::Normal) else {
+        for (si, sh) in d.wb.sheets.iter().enumerate() {
+            let Some(v) =
+                window.and_then(|w| self.views.get(&(w, sh.uid.get()))).filter(|_| sh.view == gridcraft_engine::model::SheetViewMode::Normal)
+            else {
                 continue;
             };
             let (fr, fc) = sh.freeze.unwrap_or((0, 0));
@@ -52,5 +54,11 @@ impl SheetApp {
             tops.push((si, CellRef::new(row, col)));
         }
         d.store_view(&tops);
+    }
+
+    /// Drops the scroll positions of windows that have closed: window ids are never reused.
+    pub(super) fn prune_views(&mut self) {
+        let session = &self.session;
+        self.views.retain(|&(w, _), _| session.window(w).is_some());
     }
 }

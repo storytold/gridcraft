@@ -4,8 +4,8 @@
 //! relationship graph, per owner: the package root (custom document properties, ribbon
 //! customisation, add-in task panes), the workbook (custom XML, links to external workbooks with
 //! their `<externalReferences>`, data connections, XML maps) and each sheet (query tables, cells
-//! mapped to XML elements, form controls, ActiveX controls, OLE objects, the sheet background and
-//! printer settings, with the sheet's `<picture>`, `<oleObjects>` and `<controls>` XML, the `r:id`
+//! mapped to XML elements, form controls other than the buttons, scroll bars and spin buttons
+//! `controls.rs` models, ActiveX controls, OLE objects, the sheet background and printer settings, with the sheet's `<picture>`, `<oleObjects>` and `<controls>` XML, the `r:id`
 //! of `<pageSetup>`, the legacy VML shapes those controls need and the pictures of the headers and
 //! footers, `&G`, with their `<legacyDrawingHF>`). The workbook also keeps its
 //! `<fileVersion>` and the calcFeatures extension, which Excel needs to trust the saved values.

@@ -179,9 +179,10 @@ fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str) -> (
 /// Whether `t` names a defined name seen from `sheet` (`Name`, or `Sheet1!Name` looked up on
 /// that sheet), the way the evaluator looks names up.
 fn is_defined_name(wb: &Workbook, sheet: usize, t: &str) -> bool {
-    match t.split_once('!') {
-        Some((s, bare)) => wb.sheet_index(s.trim_matches('\'')).is_some_and(|i| wb.name(bare, i).is_some()),
-        None => wb.name(t, sheet).is_some(),
+    // `'Bob''s'!Name`: the sheet is unquoted as everywhere else (#2012).
+    match gridcraft_core::split_sheet(t) {
+        (Some(s), bare) => wb.sheet_index(&s).is_some_and(|i| wb.name(bare, i).is_some()),
+        (None, _) => wb.name(t, sheet).is_some(),
     }
 }
 
@@ -200,7 +201,7 @@ fn series_name(wb: &Workbook, sheet: usize, name: &str) -> String {
     t.to_string()
 }
 
-fn effective_kind(chart_kind: ChartKind, series_kind: Option<ChartKind>, i: usize) -> ChartKind {
+pub(crate) fn effective_kind(chart_kind: ChartKind, series_kind: Option<ChartKind>, i: usize) -> ChartKind {
     match (chart_kind, series_kind) {
         (ChartKind::Combo, Some(k)) if k != ChartKind::Combo => k,
         (ChartKind::Combo, _) => {
@@ -215,9 +216,15 @@ fn effective_kind(chart_kind: ChartKind, series_kind: Option<ChartKind>, i: usiz
     }
 }
 
+/// The kind series `i` is drawn as: its own kind in a combo chart (first series a column, the
+/// rest lines when it has none), else the chart's. The one rule shared by resolving and drawing.
+pub(crate) fn plot_kind(chart_kind: ChartKind, series_kind: Option<ChartKind>, i: usize) -> ChartKind {
+    if chart_kind == ChartKind::Combo { effective_kind(chart_kind, series_kind, i) } else { chart_kind }
+}
+
 /// The kind series `i` of `chart` is drawn as: its own kind in a combo chart, else the chart's.
 pub fn series_plot_kind(chart: &Chart, i: usize) -> ChartKind {
-    if chart.kind == ChartKind::Combo { effective_kind(chart.kind, chart.series.get(i).and_then(|s| s.kind), i) } else { chart.kind }
+    plot_kind(chart.kind, chart.series.get(i).and_then(|s| s.kind), i)
 }
 
 /// Evaluates a chart's series formulas: names, values, categories (default "1", "2", …), X
