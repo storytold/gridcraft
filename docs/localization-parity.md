@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-27 · **Change:** minor (from PR #1639: native macOS menus follow the interface language; French formula error literals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -37,10 +37,16 @@ right-to-left sheets and full complex-script support. Part of
 - **About 2,200 user-visible strings** in all (heuristic source scan: ~1,700 UI and command
   strings plus ~500 function descriptions), so the ribbon-only languages cover **~12%** and
   Japanese and Portuguese **~43%** (measured count / estimated total).
-- **en-US only formulas and formats.** Function names, `,` argument separator, `.` decimal
-  separator, en-US number and date formats (`crates/numfmt` says "en-US only"). Users ask for
-  localized function names and `;` separators (#45). German with localized numbers and formulas
-  is in PR #163 (open).
+- **Formulas: Spanish and French localized; formats en-US only.** Spanish and French formula
+  entry and display use localized function names (`SUMA`/`SOMME`…), `;` argument separator and
+  `,` decimal separator (`FormulaLocale`); the other languages use English names, `,` and `.`
+  (#45). French also reads and shows French error literals (`#VALEUR!`, `#NOM?`…). Number and
+  date formats are en-US in every language (`crates/numfmt` says "en-US only"). German with
+  localized numbers and formulas is in PR #163 (open).
+- **Native macOS menus.** The menu bar uses the shared language catalog (application menu,
+  File/Edit/View… menus, theme choices) and relabels its items in place when the interface
+  language changes, without reinstalling the menu or changing command ids and shortcuts.
+  macOS-owned window-management items follow the system language.
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
   #142 is still open pending confirmation). Native CJK fallback also probes Flatpak's read-only
   `/run/host/fonts`, `/run/host/local-fonts` and `/run/host/user-fonts` layouts, so installed
@@ -73,7 +79,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | Spanish | es | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
 | Hindi | hi | 0 (0%) | no | Devanagari: **no shaping** | no | none | 12–18 h |
 | Arabic | ar | 0 (0%) | no | **no shaping, no RTL UI**; Sheet Right-to-Left mirrors the grid (#146) | no | none | 25–35 h |
-| French | fr | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
+| French | fr | 1,161 (~53%) + function help | dialogs, messages, function help (all 479 descriptions, 283 argument names), French function names in formulas | Latin: yes | no | every catalog key | 2–4 h |
 | Portuguese | pt-BR | 943 (~43%) | dialogs and tooltips (dialogs take effect with #669) | Latin: yes | no | menus, File view, dialogs | 2–4 h |
 | Indonesian | id | 0 (0%) | no | Latin: yes | no | none | 5–8 h |
 | Japanese | ja | 268 (~12%) | no | CJK system-font fallback; IME unverified; no furigana display, but phonetic runs (ふりがな) survive an XLSX open + save | no | menus only | 8–12 h |
@@ -85,7 +91,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
 | Turkish | tr | 382 (~17%) | no | Latin: yes | yes | menus only | 4–8 h |
 
-Other shipped languages: Russian (ru), German (de), Czech (cs), French (fr) and Turkish (tr), menus only.
+Other shipped languages: Russian (ru), German (de), Czech (cs) and Turkish (tr), menus only.
 | Vietnamese | vi | 398 (~18%) | no | Latin with stacked diacritics: unverified | no | menus, File view | 5–9 h |
 Other shipped languages: Russian (ru) and German (de), 266 labels each (~12%), menus only; Dutch (nl), 518 labels (~24%): ribbon, context menus, File view, dialog titles and the Options page.
 
@@ -110,6 +116,8 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-27 | minor | From PR #1639 (NaviStorm): native macOS menus use the language catalog and relabel in place on a language change (AppKit test checks French and English titles); French formula error literals read and displayed, storage stays English; French functions passed by name are translated; EXPAND is ETENDRE, TOCOL/TOROW/PERCENTOF get DANSCOL/DANSLIGNE/POURCENTAGEDE; a test checks every registered function has a French row or is spelled alike |
+| 2026-10-26 | minor | French catalog (`i18n/fr.rs`) covers every key of the other catalogs: 433 → 1,161 labels (`cargo xtask i18n-report`: `fr: 0 missing`), Excel's French feature names. French function help (`i18n/fr_functions.rs`): all 479 descriptions and 283 argument names, the first complete help table. French formulas (`FormulaLocale::Fr`: SOMME, MOYENNE, SI…, `;` separator, `,` decimal, VRAI/FAUX) when the interface is French; en-US number formats; AI-assisted draft pending native-speaker review |
 | 2026-10-23 | minor | Missing translations are reported, never a failure: `cargo xtask i18n-report` prints, per language, the strings other catalogs translate and it lacks (plus Spanish function help rows keyed by English the function catalog no longer has) and always passes; `cargo xtask ci` runs it first. Coverage and per-language parity tests and tests of one language's exact wording are gone; UI tests take the expected text from the catalog. Duplicate-key, placeholder, context-prefix and line-shape checks stay |
 | 2026-10-21 | minor | Romanian interface (`ro`, Română): 970 labels covering every key of the other catalogs (`crates/ui-egui/src/i18n/ro.rs`), `ro-*` system locales, the View-tab switcher and `app.language.set`; context keys show no prefix (File › Options test). English formulas and formats; AI-assisted draft pending native-speaker review |
 | 2026-10-20 | minor | Japanese: furigana (`rPh` phonetic runs and `<phoneticPr>` in `xl/sharedStrings.xml`) is no longer deleted by an open + save; it is kept on the workbook and written back (a `<phoneticPr>` without runs is kept too, while duplicate texts with different readings keep only the first, reported on open). Display of the readings is still missing (`crates/xlsx/src/tests/phonetic_tests.rs`) |

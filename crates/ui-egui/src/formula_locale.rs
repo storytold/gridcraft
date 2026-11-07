@@ -169,5 +169,10 @@ mod tests {
         assert!(sumifs.ends_with("(sum_range; criteria_range1; criteria1; ...)"), "{sumifs}");
         assert_eq!(description("SUMIFS", Es, Language::Es).as_deref(), Some("Adds the cells that meet every condition."));
         assert_eq!(sig("IF", En, Language::En), "IF(logical_test, [value_if_true], [value_if_false])");
+        // French: a typed French name finds the function; the hint uses French names and `;`.
+        let somme_si = sig("somme.si", FormulaLocale::Fr, Language::Fr);
+        assert!(somme_si.starts_with("SOMME.SI(") && somme_si.contains("; "), "{somme_si}");
+        assert!(description("RECHERCHEX", FormulaLocale::Fr, Language::Fr).is_some());
+        assert_eq!(Language::Fr.formula_locale(), FormulaLocale::Fr);
     }
 }

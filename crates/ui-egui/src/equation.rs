@@ -132,21 +132,21 @@ fn insert_snippet(ctx: &egui::Context, id: egui::Id, text: &mut String, snippet:
 /// The editor's body: quick-insert buttons, the LaTeX source with its error underlined, a live
 /// preview on a sheet-coloured card, and OK/Cancel.
 pub fn editor(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
-    let _ = app;
+    let lang = app.ui.language;
     let t = Tokens::get(ui.ctx());
     let edit_id = ui.scope_id().with("equation-source");
     let mut text = d.values.get("latex").and_then(Json::as_str).unwrap_or("").to_string();
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
         for (label, snippet, tip) in QUICK {
-            let b = ui.add(egui::Button::new(*label).min_size(vec2(30.0, 22.0))).on_hover_text(*tip);
+            let b = ui.add(egui::Button::new(*label).min_size(vec2(30.0, 22.0))).on_hover_text(lang.tr(tip));
             if b.clicked() {
                 insert_snippet(ui.ctx(), edit_id, &mut text, snippet);
             }
         }
     });
     ui.add_space(6.0);
-    ui.label("LaTeX:");
+    ui.label(lang.tr("LaTeX:"));
     let pv = preview(ui.ctx(), ui.scope_id().with("equation-preview"), &text);
     let mark = pv.result.as_ref().err().and_then(|e| e.span.clone()).or_else(|| pv.result.as_ref().err().map(|_| text.len()..text.len()));
     let mark = mark.filter(|_| !text.trim().is_empty());
@@ -165,13 +165,13 @@ pub fn editor(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &m
     match &pv.result {
         Err(e) if !text.trim().is_empty() => {
             let msg = match e.char_pos(&text) {
-                Some(p) => format!("Error at character {p}: {}", e.message),
+                Some(p) => lang.tr("Error at character {p}: {message}").replace("{p}", &p.to_string()).replace("{message}", &e.message),
                 None => e.message.clone(),
             };
             ui.colored_label(t.danger, msg);
         }
         _ => {
-            ui.label(egui::RichText::new("Preview").color(t.text_dim));
+            ui.label(egui::RichText::new(lang.tr("Preview")).color(t.text_dim));
         }
     }
     // The preview card is the sheet's colour, with the sheet's ink, in both themes.
@@ -186,7 +186,7 @@ pub fn editor(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &m
             paint_at(&ui.painter().with_clip_rect(card), o, list, t.cell_text, s);
         }
         _ => {
-            let hint = if text.trim().is_empty() { "Type an equation in LaTeX, such as x^2 + y^2 = r^2" } else { "" };
+            let hint = if text.trim().is_empty() { lang.tr("Type an equation in LaTeX, such as x^2 + y^2 = r^2") } else { "" };
             ui.painter().text(card.center(), egui::Align2::CENTER_CENTER, hint, theme::ui_font(12.0), t.sheet_control_text);
         }
     }
@@ -198,11 +198,11 @@ pub fn editor(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &m
         if ok.clicked() || (valid && cmd_enter) {
             *confirm = true;
         }
-        if ui.add(egui::Button::new("Cancel").min_size(vec2(64.0, 0.0))).clicked() {
+        if ui.add(egui::Button::new(lang.tr("Cancel")).min_size(vec2(64.0, 0.0))).clicked() {
             *open = false;
         }
-        let verb = if d.command == Some("equation.edit") { "apply" } else { "insert" };
-        ui.label(egui::RichText::new(format!("\u{2318}/Ctrl+Enter to {verb}")).small().color(t.text_dim));
+        let hint = if d.command == Some("equation.edit") { "\u{2318}/Ctrl+Enter to apply" } else { "\u{2318}/Ctrl+Enter to insert" };
+        ui.label(egui::RichText::new(lang.tr(hint)).small().color(t.text_dim));
     });
 }
 
