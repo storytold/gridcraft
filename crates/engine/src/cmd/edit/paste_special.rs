@@ -45,6 +45,12 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         && !sel.is_full_rows()
         && sel.count() <= 4_000_000;
     let (tiles_r, tiles_c) = if tile { (sel.height() / h, sel.width() / w) } else { (1, 1) };
+    // A single cell or row repeated down a filtered selection skips the rows the filter hides; a
+    // taller block is pasted straight down, hidden rows included, as in Excel.
+    let skip_rows = match s.doc()?.wb.sheet(dest_sheet) {
+        Some(sh) if tile && h == 1 => super::filtered_rows(sh, sel),
+        _ => Default::default(),
+    };
     // Excel refuses a paste that would run off the sheet (whole columns pasted below row 1, whole
     // rows right of column A, a whole column transposed) instead of pasting part of it.
     if at.offset(i64::from(tiles_r * h) - 1, i64::from(tiles_c * w) - 1).is_none() {
@@ -134,6 +140,9 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                     let sc = CellRef::new(src.start.row + r, src.start.col + c);
                     let (dr, dc) = if transpose { (c, r) } else { (r, c) };
                     let Some(dest) = at.offset((tr * h + dr) as i64, (tc * w + dc) as i64) else { continue };
+                    if skip_rows.contains(&dest.row) {
+                        continue;
+                    }
                     let src_cell = if cut_move { moved_formulas.get(&sc).cloned() } else { src_sheet.cell(sc).cloned() };
                     let src_val = src_sheet.value(sc);
                     let src_picture = if cut_move { moved_pictures.get(&sc) } else { src_sheet.cell_pictures.get(&sc) }.cloned();

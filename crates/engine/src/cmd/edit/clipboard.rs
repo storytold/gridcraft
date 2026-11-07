@@ -1,8 +1,8 @@
 use super::cell::input_to_cell;
 use super::paste_special::paste_special;
 use super::{
-    Cell, Clipboard, EngineError, Json, RangeRef, Result, Session, Value, bad, bool_param, cell_param_on, edit, json, ok, str_param, target_ranges,
-    target_sheet,
+    Cell, CellRef, Clipboard, EngineError, Json, RangeRef, Result, Session, Value, bad, bool_param, cell_param_on, edit, json, ok, str_param,
+    target_ranges, target_sheet,
 };
 
 // ---------------------------------------------------------------- clipboard
@@ -31,7 +31,20 @@ fn copy_impl(s: &mut Session, p: &Json, cut: bool) -> Result<Json> {
         let (wb, block) = slide_together(&d.wb, sheet, &areas).ok_or_else(multiple)?;
         (std::sync::Arc::new(wb), block, areas)
     } else {
-        (d.wb.clone(), trim(ranges.first().copied().unwrap_or_default()), Vec::new())
+        let range = trim(ranges.first().copied().unwrap_or_default());
+        // A copied range with rows a filter hides takes only the rows showing: they are copied
+        // like a multi-area selection stacked top to bottom (formulas as values), as in Excel.
+        // A cut still takes every row.
+        let hidden = if cut { Default::default() } else { super::filtered_rows(sh, range) };
+        let visible = if hidden.is_empty() { Vec::new() } else { visible_row_runs(range, &hidden) };
+        match visible.as_slice() {
+            [] => (d.wb.clone(), range, Vec::new()),
+            [only] => (d.wb.clone(), *only, Vec::new()),
+            _ => {
+                let (wb, block) = slide_together(&d.wb, sheet, &visible).ok_or_else(multiple)?;
+                (std::sync::Arc::new(wb), block, visible)
+            }
+        }
     };
     let text = crate::display::range_text(&wb, sheet, range);
     // The HTML rendering is for the host clipboard (UI); it can reach 4 MB, so agents and
@@ -44,6 +57,26 @@ fn copy_impl(s: &mut Session, p: &Json, cut: bool) -> Result<Json> {
         result["html"] = Json::String(html);
     }
     Ok(result)
+}
+
+/// The runs of consecutive rows of `range` not in `hidden`, as ranges of `range`'s columns.
+fn visible_row_runs(range: RangeRef, hidden: &std::collections::BTreeSet<u32>) -> Vec<RangeRef> {
+    let mut runs = Vec::new();
+    let mut start = None;
+    for row in range.start.row..=range.end.row {
+        match (hidden.contains(&row), start) {
+            (false, None) => start = Some(row),
+            (true, Some(first)) => {
+                runs.push(RangeRef::new(CellRef::new(first, range.start.col), CellRef::new(row - 1, range.end.col)));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(first) = start {
+        runs.push(RangeRef::new(CellRef::new(first, range.start.col), CellRef::new(range.end.row, range.end.col)));
+    }
+    runs
 }
 
 /// Excel copies a multi-area selection only when the areas line up: all cover the same rows (they
