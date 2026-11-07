@@ -1,7 +1,6 @@
 use super::RangeRef;
 use crate::eval::Area;
 use gridcraft_core::CellRef;
-use std::collections::BTreeSet;
 use std::hash::{BuildHasherDefault, Hasher};
 
 /// A fast, non-cryptographic hasher for cell keys (FxHash-style multiply-rotate).
@@ -40,8 +39,10 @@ pub(super) struct Node {
     pub(super) dynamic: bool,
 }
 
-/// Ranges wider than this many columns go to the per-sheet wide index instead of per-column ones.
-const WIDE: u32 = 64;
+/// Ranges wider than this many columns go to the per-sheet wide index instead of duplicating
+/// each formula's row interval across every covered column's tree (which bloats RSS on 50k-row
+/// multi-column `VLOOKUP` sheets).
+const WIDE: u32 = 2;
 
 /// Insertions an [`Intervals`] keeps aside (scanned by every query) before merging them in.
 const PENDING: usize = 32;
@@ -63,12 +64,12 @@ pub(super) struct Intervals<T> {
     /// `max_end.len() / 2`. Each node holds the largest end below it (dead entries included).
     max_end: Vec<u32>,
     /// Inserted since the last merge.
-    pending: BTreeSet<(u32, u32, T)>,
+    pending: Vec<(u32, u32, T)>,
 }
 
 impl<T> Default for Intervals<T> {
     fn default() -> Self {
-        Intervals { items: Vec::new(), dead: Vec::new(), dead_count: 0, max_end: Vec::new(), pending: BTreeSet::new() }
+        Intervals { items: Vec::new(), dead: Vec::new(), dead_count: 0, max_end: Vec::new(), pending: Vec::new() }
     }
 }
 
@@ -88,7 +89,10 @@ impl<T: Copy + Ord> Intervals<T> {
             }
             return;
         }
-        self.pending.insert(it);
+        if self.pending.len() <= PENDING && self.pending.contains(&it) {
+            return;
+        }
+        self.pending.push(it);
     }
 
     pub(super) fn remove(&mut self, r0: u32, r1: u32, t: T) {
@@ -102,7 +106,7 @@ impl<T: Copy + Ord> Intervals<T> {
             }
             return;
         }
-        self.pending.remove(&it);
+        self.pending.retain(|x| *x != it);
     }
 
     /// Merges pending insertions and drops dead entries when there are enough of them.
@@ -110,11 +114,10 @@ impl<T: Copy + Ord> Intervals<T> {
         if self.pending.len() <= PENDING && self.dead_count <= (self.items.len() / 2).max(PENDING) {
             return;
         }
-        let mut all: Vec<(u32, u32, T)> = Vec::with_capacity(self.items.len() - self.dead_count + self.pending.len());
+        let mut all = std::mem::take(&mut self.pending);
+        all.reserve(self.items.len().saturating_sub(self.dead_count));
         all.extend(self.items.iter().zip(&self.dead).filter(|(_, d)| !**d).map(|(it, _)| *it));
-        all.extend(std::mem::take(&mut self.pending));
-        // Two sorted runs: the stable sort merges them in linear time.
-        all.sort();
+        all.sort_unstable();
         all.dedup();
         let size = all.len().next_power_of_two();
         let mut max_end = vec![0; 2 * size];
@@ -220,7 +223,7 @@ impl<T: Copy + Ord> Intervals<T> {
 #[derive(Default)]
 pub(super) struct Taken {
     cols: HashMap<(usize, u32), Vec<bool>>,
-    wide: HashMap<usize, Vec<bool>>,
+    wide: HashMap<(usize, u32, u32), Vec<bool>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -230,12 +233,12 @@ pub struct Graph {
     cell_deps: HashMap<Key, HashSet<Key>>,
     /// (sheet, col) → row intervals of the ranges (up to `WIDE` columns) that cover the column
     col_deps: HashMap<(usize, u32), Intervals<Key>>,
-    /// sheet → row intervals of wider ranges, with their columns: (first, last, dependent)
-    wide_deps: HashMap<usize, Intervals<(u32, u32, Key)>>,
+    /// sheet → (first_col, last_col) → row intervals of wider ranges
+    wide_deps: HashMap<usize, HashMap<(u32, u32), Intervals<Key>>>,
     pub(super) dynamic: HashSet<Key>,
     /// Range indexes changed since the last [`Graph::settle`].
     unsettled_cols: HashSet<(usize, u32)>,
-    unsettled_wide: HashSet<usize>,
+    unsettled_wide: HashSet<(usize, u32, u32)>,
 }
 
 /// A formula's precedents split by shape: single cells, column intervals and wide ranges.
@@ -284,8 +287,9 @@ impl Graph {
             self.unsettled_cols.insert((s, c));
         }
         for (s, r) in wide {
-            self.wide_deps.entry(s).or_default().insert(r.start.row, r.end.row, (r.start.col, r.end.col, k));
-            self.unsettled_wide.insert(s);
+            let span = (r.start.col, r.end.col);
+            self.wide_deps.entry(s).or_default().entry(span).or_default().insert(r.start.row, r.end.row, k);
+            self.unsettled_wide.insert((s, span.0, span.1));
         }
         if node.dynamic {
             self.dynamic.insert(k);
@@ -311,9 +315,12 @@ impl Graph {
             }
         }
         for (s, r) in wide {
-            if let Some(v) = self.wide_deps.get_mut(&s) {
-                v.remove(r.start.row, r.end.row, (r.start.col, r.end.col, k));
-                self.unsettled_wide.insert(s);
+            let span = (r.start.col, r.end.col);
+            if let Some(spans) = self.wide_deps.get_mut(&s)
+                && let Some(v) = spans.get_mut(&span)
+            {
+                v.remove(r.start.row, r.end.row, k);
+                self.unsettled_wide.insert((s, span.0, span.1));
             }
         }
         self.dynamic.remove(&k);
@@ -330,11 +337,16 @@ impl Graph {
                 }
             }
         }
-        for key in std::mem::take(&mut self.unsettled_wide) {
-            if let Some(v) = self.wide_deps.get_mut(&key) {
-                v.settle();
-                if v.is_empty() {
-                    self.wide_deps.remove(&key);
+        for (s, c0, c1) in std::mem::take(&mut self.unsettled_wide) {
+            if let Some(spans) = self.wide_deps.get_mut(&s) {
+                if let Some(v) = spans.get_mut(&(c0, c1)) {
+                    v.settle();
+                    if v.is_empty() {
+                        spans.remove(&(c0, c1));
+                    }
+                }
+                if spans.is_empty() {
+                    self.wide_deps.remove(&s);
                 }
             }
         }
@@ -348,12 +360,12 @@ impl Graph {
         if let Some(v) = self.col_deps.get(&(sheet, c.col)) {
             v.query(c.row, c.row, &mut |k| out.push(*k));
         }
-        if let Some(v) = self.wide_deps.get(&sheet) {
-            v.query(c.row, c.row, &mut |(c0, c1, k)| {
-                if *c0 <= c.col && c.col <= *c1 {
-                    out.push(*k);
+        if let Some(spans) = self.wide_deps.get(&sheet) {
+            for (&(c0, c1), v) in spans {
+                if c0 <= c.col && c.col <= c1 {
+                    v.query(c.row, c.row, &mut |k| out.push(*k));
                 }
-            });
+            }
         }
     }
 
@@ -371,15 +383,15 @@ impl Graph {
                 true
             });
         }
-        if let Some(v) = self.wide_deps.get(&sheet) {
-            // A wide entry is taken once it covers the cell's column too.
-            v.query_untaken(c.row, c.row, taken.wide.entry(sheet).or_default(), &mut |(c0, c1, k)| {
-                let hit = *c0 <= c.col && c.col <= *c1;
-                if hit {
-                    out.push(*k);
+        if let Some(spans) = self.wide_deps.get(&sheet) {
+            for (&(c0, c1), v) in spans {
+                if c0 <= c.col && c.col <= c1 {
+                    v.query_untaken(c.row, c.row, taken.wide.entry((sheet, c0, c1)).or_default(), &mut |k| {
+                        out.push(*k);
+                        true
+                    });
                 }
-                hit
-            });
+            }
         }
     }
 
@@ -412,12 +424,12 @@ impl Graph {
                 }
             }
         }
-        if let Some(v) = self.wide_deps.get(&sheet) {
-            v.query(r0, r1, &mut |(c0, c1, k)| {
-                if *c0 <= range.end.col && range.start.col <= *c1 {
-                    out.push(*k);
+        if let Some(spans) = self.wide_deps.get(&sheet) {
+            for (&(c0, c1), v) in spans {
+                if c0 <= range.end.col && range.start.col <= c1 {
+                    v.query(r0, r1, &mut |k| out.push(*k));
                 }
-            });
+            }
         }
     }
 

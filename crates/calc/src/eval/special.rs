@@ -30,6 +30,12 @@ pub fn resized_sum_range(sum: RangeRef, height: u32, width: u32) -> RangeRef {
 /// Collects the static references of an expression with their sheets resolved; `dynamic` is
 /// set when the formula uses INDIRECT/OFFSET/names/tables whose targets can change.
 pub fn precedents(wb: &Workbook, sheet: usize, e: &Expr) -> (Vec<Area>, bool) {
+    precedents_at(wb, sheet, CellRef::default(), e)
+}
+
+/// Like [`precedents`], also resolving structured table references (`Table1[Col]`, `[@Col]`,
+/// `Table1[]`) and bare table names from a formula at `(sheet, at)`.
+pub fn precedents_at(wb: &Workbook, sheet: usize, at: CellRef, e: &Expr) -> (Vec<Area>, bool) {
     let mut out = Vec::new();
     let mut dynamic = false;
     let push = |out: &mut Vec<Area>, r: &Reference, range: RangeRef| match &r.sheet {
@@ -60,17 +66,37 @@ pub fn precedents(wb: &Workbook, sheet: usize, e: &Expr) -> (Vec<Area>, bool) {
             _ => dynamic = true,
         },
         Expr::Call(n, _)
-            if matches!(n.as_str(), "INDIRECT" | "OFFSET" | "NOW" | "TODAY" | "RAND" | "RANDBETWEEN" | "RANDARRAY" | "CELL" | "INFO") =>
+            if matches!(
+                n.as_str(),
+                "INDIRECT" | "OFFSET" | "GETPIVOTDATA" | "NOW" | "TODAY" | "RAND" | "RANDBETWEEN" | "RANDARRAY" | "CELL" | "INFO"
+            ) =>
         {
             dynamic = true
         }
-        Expr::Name(_) | Expr::Struct(_) => dynamic = true,
+        Expr::Name(n) => {
+            dynamic = true;
+            if !n.starts_with('[')
+                && !n.contains('!')
+                && wb.name(n, sheet).is_none()
+                && let Some((si, ti)) = wb.table(n)
+                && let Some(t) = wb.sheet(si).and_then(|s| s.tables.get(ti))
+                && let Some(d) = t.data_range()
+            {
+                out.push(Area { sheet: si, range: d });
+            }
+        }
+        Expr::Struct(s) => {
+            dynamic = true;
+            if let Ok(area) = super::resolve_structured(wb, sheet, at, s) {
+                out.push(area);
+            }
+        }
         Expr::Call(n, _) if gridcraft_functions::lookup(n).is_none() && !is_special(n) => dynamic = true,
         // A range ending in a function's result (`A1:INDEX(B1:B9,n)`) covers the cells between
         // the references inside it, not only those references.
         Expr::Binary(BinOp::Range, a, b) if !matches!((&**a, &**b), (Expr::Ref(_), Expr::Ref(_))) => {
-            let mut inner = precedents(wb, sheet, a).0;
-            inner.extend(precedents(wb, sheet, b).0);
+            let mut inner = precedents_at(wb, sheet, at, a).0;
+            inner.extend(precedents_at(wb, sheet, at, b).0);
             let mut boxes: Vec<Area> = Vec::new();
             for area in inner {
                 match boxes.iter_mut().find(|x| x.sheet == area.sheet) {
@@ -120,6 +146,7 @@ fn is_special(n: &str) -> bool {
             | "BYROW"
             | "BYCOL"
             | "MAKEARRAY"
+            | "GETPIVOTDATA"
     )
 }
 
@@ -158,6 +185,7 @@ pub const SPECIAL_FUNCTIONS: &[&str] = &[
     "BYROW",
     "BYCOL",
     "MAKEARRAY",
+    "GETPIVOTDATA",
 ];
 
 pub fn is_known_function(n: &str) -> bool {
