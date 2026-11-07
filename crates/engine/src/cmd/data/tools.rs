@@ -141,8 +141,13 @@ pub(super) fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
                 }
                 None => split_delimited(&text, &delims, consecutive, quote),
             };
+            // Like Excel, fields that run past the last column are dropped; rows past the last row refuse the split.
+            if dest.offset(i as i64, 0).is_none() {
+                return Err(EngineError::Other("The result doesn't fit on the sheet below the destination.".into()));
+            }
             for (j, part) in parts.into_iter().enumerate() {
-                out.push((CellRef::new(dest.row + i as u32, dest.col + j as u32), part));
+                let Some(at) = dest.offset(i as i64, j as i64) else { break };
+                out.push((at, part));
             }
         }
         for (c, t) in out {
@@ -150,11 +155,11 @@ pub(super) fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
                 Ok(cell) => cell,
                 // `=PY(…)` doesn't make a Python cell (that takes python.set): the piece is kept
                 // as text rather than lost.
-                Err(_) if gridcraft_model::python::is_py_formula(&t) => {
+                // Like Excel, any other field that isn't a valid formula is kept as text too.
+                Err(_) => {
                     let style = cx.wb.sheet(sheet).map(|sh| sh.style_id(c)).unwrap_or_default();
                     Some(Cell { value: gridcraft_core::Value::text(t.as_str()), formula: None, style, py: None })
                 }
-                Err(_) => None,
             };
             let shm = cx.sheet_mut(sheet)?;
             match cell {
