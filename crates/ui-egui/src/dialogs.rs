@@ -546,16 +546,22 @@ impl Dialog {
                     json!({"text": existing}),
                 )
             }
-            // Asks before a web or e-mail link leaves the workbook. OK opens it through
-            // `Session::open_confirmed_link` (which refuses anything but http, https and mailto),
-            // not a command: `link.open` refuses web addresses for programmatic callers, and a
-            // dialog without a command can't be confirmed over the control channel (#2181).
+            // Asks before a web or e-mail link, or a file or folder on this computer, leaves the
+            // workbook. OK opens it through `Session::open_confirmed_link` (which refuses
+            // anything but http, https, mailto and existing documents and folders), not a
+            // command: `link.open` refuses them for programmatic callers, and a dialog without a
+            // command can't be confirmed over the control channel (#2181). A file's `url` is its
+            // resolved full path.
             "openLink" => {
                 let url = params.get("url").and_then(Json::as_str).unwrap_or_default().to_string();
-                let mut d = Dialog::custom("openLink", "Open Hyperlink", json!({"url": url}));
-                d.fields = vec![Note(format!(
-                    "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook.\n\n{url}"
-                ))];
+                let local = params.get("local").and_then(Json::as_bool).unwrap_or(false);
+                let ask = if local {
+                    "This workbook asks to open the file or folder below with the program your computer uses for it. Files can contain harmful content: open it only if you trust the workbook."
+                } else {
+                    "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook."
+                };
+                let mut d = Dialog::custom("openLink", "Open Hyperlink", json!({"url": url, "local": local}));
+                d.fields = vec![Note(format!("{ask}\n\n{url}"))];
                 d.link = Some(url);
                 d
             }
@@ -1207,7 +1213,7 @@ mod tests {
         open_confirmed_link(&mut app, &d).unwrap();
         assert_eq!(*opened.borrow(), vec!["https://example.org/a".to_string()]);
 
-        let bad = Dialog::open(&mut app, "openLink", json!({"url": "file:///etc/passwd"})).unwrap();
+        let bad = Dialog::open(&mut app, "openLink", json!({"url": "file://host/etc/passwd"})).unwrap();
         assert!(open_confirmed_link(&mut app, &bad).is_err());
         assert_eq!(opened.borrow().len(), 1);
     }
