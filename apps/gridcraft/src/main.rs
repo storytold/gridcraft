@@ -9,6 +9,7 @@
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod app_icon;
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod control_server;
@@ -228,15 +229,6 @@ fn open_with_system(target: &str) {
     }
 }
 
-fn icon() -> Option<egui::IconData> {
-    #[cfg(target_os = "macos")]
-    let bytes = include_bytes!("../../../assets/app-icon/gridcraft-macos-512.png");
-    #[cfg(not(target_os = "macos"))]
-    let bytes = include_bytes!("../../../assets/app-icon/hicolor/256x256/apps/ai.storyteller.gridcraft.png");
-    let img = image::load_from_memory(bytes).ok()?.to_rgba8();
-    Some(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() })
-}
-
 fn main() -> eframe::Result<()> {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
@@ -340,9 +332,7 @@ fn main() -> eframe::Result<()> {
     if cfg!(target_os = "macos") {
         viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
     }
-    if let Some(i) = icon() {
-        viewport = viewport.with_icon(i);
-    }
+    viewport = viewport.with_icon(app_icon::viewport_icon(std::env::current_exe().ok().as_deref()));
     let window_builder = viewport.clone();
     let options = eframe::NativeOptions { viewport, ..Default::default() };
     #[cfg(unix)]
