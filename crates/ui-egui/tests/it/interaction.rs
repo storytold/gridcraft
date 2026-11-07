@@ -445,6 +445,29 @@ fn insert_column_or_bar_menu_inserts_a_hundred_percent_stacked_bar() {
 }
 
 #[test]
+fn insert_line_or_area_menu_inserts_hundred_percent_stacked_lines() {
+    // Insert › Line or Area (keytip N, N1) lists both 100% stacked line types.
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Quarter", "North", "South"], ["Q1", 10, 30], ["Q2", 30, 10]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:C3"})).unwrap();
+    let mut h = harness(s);
+    for label in ["100% Stacked Line", "100% Stacked Line with Markers"] {
+        key(&mut h, Key::F10, Modifiers::NONE);
+        for (k, t) in [(Key::N, "n"), (Key::N, "n"), (Key::Num1, "1")] {
+            h.input_mut().events.push(Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+            h.input_mut().events.push(Event::Text(t.into()));
+            h.input_mut().events.push(Event::Key { key: k, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE });
+            h.run_steps(2);
+        }
+        h.run_steps(2);
+        h.get_by_role_and_label(egui::accesskit::Role::Button, label).click();
+        h.run_steps(2);
+    }
+    let kinds: Vec<_> = h.state().session.active().unwrap().wb.active().unwrap().charts.iter().map(|c| c.kind).collect();
+    assert_eq!(kinds, [gridcraft_engine::model::ChartKind::LineStacked100, gridcraft_engine::model::ChartKind::LineStacked100Markers]);
+}
+
+#[test]
 /// Every main ribbon tab and dark mode render with accessibility checks.
 fn renders_every_ribbon_tab_without_panicking() {
     let mut s = Session::new();
@@ -657,6 +680,24 @@ fn all_charts_inserts_a_hundred_percent_stacked_area() {
     assert!(h.state().dialog.is_none());
     let kinds: Vec<_> = h.state().session.active().unwrap().wb.active().unwrap().charts.iter().map(|c| c.kind).collect();
     assert_eq!(kinds, [gridcraft_engine::model::ChartKind::AreaStacked100]);
+}
+
+#[test]
+fn all_charts_inserts_a_hundred_percent_stacked_line_with_markers() {
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Quarter", "North", "South"], ["Q1", 10, 30], ["Q2", 30, 10]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:C3"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("recommendedCharts", json!({"tab": "All Charts"}));
+    h.run_steps(4);
+    assert!(h.query_by_label("100% Stacked Line").is_some(), "the list has 100% Stacked Line");
+    h.get_by_label("100% Stacked Line with Markers").click();
+    h.run_steps(2);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none());
+    let kinds: Vec<_> = h.state().session.active().unwrap().wb.active().unwrap().charts.iter().map(|c| c.kind).collect();
+    assert_eq!(kinds, [gridcraft_engine::model::ChartKind::LineStacked100Markers]);
 }
 
 #[test]

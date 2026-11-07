@@ -412,6 +412,8 @@ pub enum ChartKind {
     Line,
     LineMarkers,
     LineStacked,
+    LineStacked100,
+    LineStacked100Markers,
     Pie,
     Doughnut,
     Area,
@@ -608,6 +610,8 @@ impl Chart {
                     | ChartKind::Line
                     | ChartKind::LineMarkers
                     | ChartKind::LineStacked
+                    | ChartKind::LineStacked100
+                    | ChartKind::LineStacked100Markers
                     | ChartKind::Area
                     | ChartKind::AreaStacked
                     | ChartKind::AreaStacked100
