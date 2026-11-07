@@ -244,6 +244,8 @@ pub struct GridState {
     /// undo entries are the ones from the first entry that snapshots it; earlier edits with the
     /// same label are not the drag's to merge or cancel.
     pub resize_base: Option<Arc<Workbook>>,
+    /// The redo stack when that drag began; Esc puts it back (the preview commands clear it).
+    pub resize_redo: Vec<gridcraft_engine::HistoryEntry>,
     pub ensure_visible: bool,
     /// With `ensure_visible`: scroll to the moving end of the selection instead of the active cell
     /// (Shift/Ctrl+Shift+arrows keep the active cell on the anchor while the far corner moves).

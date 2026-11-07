@@ -308,7 +308,7 @@ fn handle_column_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, 
     let in_col_header = input.in_column_header;
     if in_col_header {
         if let Some((c, x)) = col_edge(geo, sh, p.x) {
-            app.grid.resize_base = app.session.active().map(|d| d.wb.clone());
+            begin_resize(app);
             app.grid.drag = Drag::ResizeCol { col: c, start: p.x, orig: sh.col_width(c).max(0.0) * 0.0 + (x - geo.x(sh, c)) / geo.z, to: None };
             return;
         }
@@ -345,7 +345,7 @@ fn handle_row_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, p: 
     let in_row_header = input.in_row_header;
     if in_row_header {
         if let Some((r, y)) = row_edge(geo, sh, p.y) {
-            app.grid.resize_base = app.session.active().map(|d| d.wb.clone());
+            begin_resize(app);
             app.grid.drag = Drag::ResizeRow { row: r, start: p.y, orig: (y - geo.y(sh, r)) / geo.z, to: None };
             return;
         }
@@ -596,6 +596,10 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
         if steps > 0 {
             let _ = app.session.run("edit.undo", json!({"steps": steps}));
         }
+        // Undo pushes the cancelled preview onto the redo stack; put back what the drag began with.
+        if let Some(d) = app.session.active_mut() {
+            d.redo = std::mem::take(&mut app.grid.resize_redo);
+        }
         app.grid.drag = Drag::None;
         app.grid.resize_base = None;
     }
@@ -650,21 +654,22 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 app.grid.drag = Drag::MoveCols { source, before };
                 scroll_by(app, vec2(auto.x, 0.0));
             }
-            Drag::ResizeCol { col, start, orig, .. } => {
+            Drag::ResizeCol { col, start, orig, to } => {
                 let w = nan_safe_size(orig + (p.x - start) / geo.z);
                 app.toast =
                     Some((format!("Width: {:.2} ({} pixels)", gridcraft_engine::cmd::format::points_to_chars(w as f64), w.round()), crate::now_ms()));
-                // Preview on the dragged column only; the release applies it to the selection.
-                let _ = app.session.run("home.columnWidth", json!({"cols": RangeRef::cols(col, col).a1(), "width": w.round()}));
+                // Preview on the dragged column only; the release applies it to the selection. A
+                // rejected size leaves the last shown preview (and `to`) as it was.
+                let ok = app.session.run("home.columnWidth", json!({"cols": RangeRef::cols(col, col).a1(), "width": w.round()})).is_ok();
                 coalesce_resize_undo(app);
-                app.grid.drag = Drag::ResizeCol { col, start, orig, to: Some(w) };
+                app.grid.drag = Drag::ResizeCol { col, start, orig, to: if ok { Some(w) } else { to } };
             }
-            Drag::ResizeRow { row, start, orig, .. } => {
+            Drag::ResizeRow { row, start, orig, to } => {
                 let h = nan_safe_size(orig + (p.y - start) / geo.z);
                 app.toast = Some((format!("Height: {:.2} ({} pixels)", h * 0.75, h.round()), crate::now_ms()));
-                let _ = app.session.run("home.rowHeight", json!({"rows": format!("{}:{}", row + 1, row + 1), "height": h.round()}));
+                let ok = app.session.run("home.rowHeight", json!({"rows": format!("{}:{}", row + 1, row + 1), "height": h.round()})).is_ok();
                 coalesce_resize_undo(app);
-                app.grid.drag = Drag::ResizeRow { row, start, orig, to: Some(h) };
+                app.grid.drag = Drag::ResizeRow { row, start, orig, to: if ok { Some(h) } else { to } };
             }
             Drag::Freeze { cols, .. } => {
                 app.grid.drag = Drag::Freeze { cols, to: Some(freeze_boundary(geo, sh, p, cols)) };
@@ -938,6 +943,12 @@ fn coalesce_last_undo(app: &mut SheetApp) {
             d.undo.remove(n - 1);
         }
     }
+}
+
+/// Starts a header resize drag: remembers the workbook and the redo stack it began with.
+fn begin_resize(app: &mut SheetApp) {
+    app.grid.resize_base = app.session.active().map(|d| d.wb.clone());
+    app.grid.resize_redo = app.session.active().map(|d| d.redo.clone()).unwrap_or_default();
 }
 
 /// Undo entries a header resize drag has pushed so far: those from the first one that snapshots
