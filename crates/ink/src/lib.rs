@@ -33,7 +33,7 @@ pub enum Error {
     #[error("No handwriting model is installed. Download it from Draw › Action Pen, or copy its files into {0}.")]
     NotInstalled(String),
     /// A model file is missing or has the wrong size.
-    #[error("The handwriting model is {0}.")]
+    #[error("The handwriting model is incomplete: {0}.")]
     Incomplete(String),
     /// A model file's SHA-256 does not match the manifest.
     #[error("{0}")]

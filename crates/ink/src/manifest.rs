@@ -246,7 +246,7 @@ mod tests {
 
     #[test]
     fn shipped_manifest_is_valid_and_has_the_expected_size() {
-        TROCR_SMALL_HANDWRITTEN.validate().ok();
+        assert_eq!(TROCR_SMALL_HANDWRITTEN.validate(), Ok(()));
         assert_eq!(TROCR_SMALL_HANDWRITTEN.total_bytes(), 87_496_990 + 158_814_912 + 4_494_727);
         assert_eq!(TROCR_SMALL_HANDWRITTEN.files.len(), 3);
         assert!(TROCR_SMALL_HANDWRITTEN.accelerators.contains(&Accelerator::Cpu));
@@ -292,7 +292,7 @@ mod tests {
             return;
         }
         assert_eq!(ONE.check_sizes(&dir.0), InstallState::Installed);
-        ONE.verify(&dir.0).ok();
+        assert_eq!(ONE.verify(&dir.0), Ok(()));
 
         // Same size, different bytes: the hash check catches it.
         if std::fs::write(model.join("m.onnx"), b"abd").is_err() {

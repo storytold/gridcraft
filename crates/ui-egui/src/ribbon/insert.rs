@@ -279,7 +279,7 @@ pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
     if er.clicked() {
         act(app, "draw.eraser", json!({}));
     }
-    let action_label = app.ui.language.tr("Action Pen").replace(' ', "\n");
+    let action_label = app.ui.language.tr("Action Pen").replacen(' ', "\n", 1);
     let action_tip = app.ui.language.tr("Write by hand and turn the writing into text in the cell");
     let ap = big_button(ui, Icon::Pen, &action_label, action_tip, false);
     control_keytip(app, ui, &ap, "draw.actionPen");

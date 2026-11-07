@@ -47,7 +47,8 @@ above (id, revision, paths, sizes, hashes, licence, URLs) and nothing of the wei
 <model root>/trocr-small-handwritten/tokenizer.json
 ```
 
-`<model root>` is resolved in this order, first hit wins:
+`<model root>` is looked for in this order, and the first one that already holds
+`trocr-small-handwritten/` (even a partial copy) is the root the app uses:
 
 1. `$GRIDCRAFT_MODELS`
 2. the app's settings folder plus `models/` (`%APPDATA%\GridCraft\models` on Windows,
@@ -55,6 +56,11 @@ above (id, revision, paths, sizes, hashes, licence, URLs) and nothing of the wei
    or `~/.config/gridcraft/models` elsewhere)
 3. `models/` beside the executable
 4. `models/` in the source checkout (development convenience)
+
+When none of them holds the model yet, a download goes into `$GRIDCRAFT_MODELS` when it is set and
+otherwise into the settings folder's `models/` — those two keep their priority even before the
+folder exists, so an explicit `$GRIDCRAFT_MODELS` is never skipped in favour of a folder that
+merely exists.
 
 The same layout and the same order serve every Craft app's models.
 

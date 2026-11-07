@@ -247,6 +247,10 @@ fn copy_verified(from: &Path, to: &Path, f: &ModelFile) -> Result<()> {
         std::fs::create_dir_all(dir).map_err(|e| bad("ink.modelImport", format!("{}: {e}", dir.display())))?;
     }
     let part = to.with_extension("part");
+    let src_size = std::fs::metadata(from).map_err(|e| bad("ink.modelImport", format!("{}: {e}", from.display())))?.len();
+    if src_size != f.bytes {
+        return Err(bad("ink.modelImport", format!("{} is {src_size} bytes, expected {} for {}", from.display(), f.bytes, f.path)));
+    }
     std::fs::copy(from, &part).map_err(|e| bad("ink.modelImport", format!("{}: {e}", from.display())))?;
     let check = (|| {
         let size = std::fs::metadata(&part).map_err(|e| bad("ink.modelImport", format!("{}: {e}", part.display())))?.len();
@@ -314,12 +318,12 @@ fn model_import(s: &mut Session, p: &Json) -> Result<Json> {
     } else {
         return Err(bad("ink.modelImport", format!("{}: no such file or folder", src.display())));
     }
-    let missing = match m.check_sizes(&root) {
-        InstallState::Installed => Vec::new(),
+    let state = m.check_sizes(&root);
+    let installed = state.is_installed();
+    let missing = match state {
         InstallState::Incomplete(files) => files,
-        InstallState::Refused(_) => Vec::new(),
+        _ => Vec::new(),
     };
-    let installed = missing.is_empty();
     Ok(json!({"copied": copied, "installed": installed, "missing": missing, "directory": dir.display().to_string()}))
 }
 
