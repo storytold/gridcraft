@@ -1,0 +1,110 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gridcraft-mcp"
+description = "Python client for GridCraft MCP server"
+version = "0.1.0"
+authors = [
+    {name = "dronov-dmitry"},
+]
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT OR Apache-2.0"}
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Spreadsheet",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+keywords = ["gridcraft", "spreadsheet", "excel", "mcp", "automation"]
+dependencies = [
+    "requests>=2.25.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/storytold/gridcraft"
+Repository = "https://github.com/storytold/gridcraft"
+Documentation = "https://github.com/storytold/gridcraft/tree/main/docs"
+Issues = "https://github.com/storytold/gridcraft/issues"
+Discord = "https://discord.gg/artcraft"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "mypy>=1.0.0",
+    "flake8>=6.0.0",
+    "types-requests>=2.0.0",
+]
+
+[tool.setuptools]
+package-dir = {}
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_functions = "test_*"
+addopts = "-v --cov=gridcraft_mcp --cov-report=term-missing"
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_imperative_type_checking = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+
+[tool.flake8]
+max-line-length = 88
+max-complexity = 10
+exclude = [
+    ".git",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    "build",
+    "dist",
+]
+ignore = [
+    "E203",  # Whitespace before ':'
+    "E266",  # Too many leading '#' for block comment
+    "E501",  # Line too long (handled by black)
+    "W503",  # Line break before binary operator
+]
