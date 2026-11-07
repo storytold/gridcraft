@@ -6,8 +6,17 @@ use std::sync::Arc;
 
 impl<'h> Evaluator<'h> {
     pub(super) fn call(&mut self, name: &str, args: &[Expr]) -> Ev {
+        // A recursive LAMBDA ends through IF, so every call it makes goes through IF's frame: IF
+        // stays out of `call_named`, whose frame holds every other function's locals.
+        if name == "IF" {
+            return self.if_call(args);
+        }
+        self.call_named(name, args)
+    }
+
+    #[inline(never)]
+    fn call_named(&mut self, name: &str, args: &[Expr]) -> Ev {
         match name {
-            "IF" => self.if_call(args),
             "IFS" => {
                 if args.len() < 2 || !args.len().is_multiple_of(2) {
                     return err(CellError::Value);
@@ -140,13 +149,7 @@ impl<'h> Evaluator<'h> {
         }
         let condition = self.arg_val(args, 0).unwrap_or_default();
         if let Value::Array(array) = &condition {
-            let when_true = self.arg_val(args, 1).unwrap_or(Value::Bool(true));
-            let when_false = if args.len() > 2 { self.arg_val(args, 2).unwrap_or(Value::Bool(false)) } else { Value::Bool(false) };
-            return Ev::V(zip3(array, &when_true, &when_false, |condition, when_true, when_false| match condition.to_bool() {
-                Ok(true) => when_true.clone(),
-                Ok(false) => when_false.clone(),
-                Err(error) => Value::Error(error),
-            }));
+            return self.if_array(array, args);
         }
         match condition.to_bool() {
             Ok(true) => match args.get(1) {
@@ -161,6 +164,18 @@ impl<'h> Evaluator<'h> {
             },
             Err(error) => err(error),
         }
+    }
+
+    /// Array condition: element-wise.
+    #[inline(never)]
+    fn if_array(&mut self, array: &Array, args: &[Expr]) -> Ev {
+        let when_true = self.arg_val(args, 1).unwrap_or(Value::Bool(true));
+        let when_false = if args.len() > 2 { self.arg_val(args, 2).unwrap_or(Value::Bool(false)) } else { Value::Bool(false) };
+        Ev::V(zip3(array, &when_true, &when_false, |condition, when_true, when_false| match condition.to_bool() {
+            Ok(true) => when_true.clone(),
+            Ok(false) => when_false.clone(),
+            Err(error) => Value::Error(error),
+        }))
     }
 
     fn if_error_call(&mut self, name: &str, args: &[Expr]) -> Ev {

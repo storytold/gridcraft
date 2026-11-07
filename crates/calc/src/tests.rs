@@ -1089,7 +1089,7 @@ fn a_lambda_that_calls_itself_without_end_is_num_on_a_small_stack() {
             t.set("A1", endless);
             t.set("A2", "=LOOP(1)");
             t.set("A3", "=LET(F,LAMBDA(me,n,IF(n<=0,0,1+SUM(MAP({1},LAMBDA(v,me(me,n-1)))))),F(F,100000))");
-            t.set("A4", "=LET(F,LAMBDA(me,n,IF(n<=0,0,1+me(me,n-1))),F(F,131))");
+            t.set("A4", "=LET(F,LAMBDA(me,n,IF(n<=0,0,1+me(me,n-1))),F(F,151))");
             let evaluated = crate::evaluate(&t.wb, 0, c("B1"), endless);
             [t.get("A1"), t.get("A2"), t.get("A3"), evaluated, t.get("A4")]
         })
@@ -1099,7 +1099,7 @@ fn a_lambda_that_calls_itself_without_end_is_num_on_a_small_stack() {
     assert_eq!(endless_name, Value::Error(CellError::Num));
     assert_eq!(through_map, Value::Error(CellError::Num));
     assert_eq!(evaluated, Value::Error(CellError::Num));
-    assert_eq!(countdown, Value::Number(131.0));
+    assert_eq!(countdown, Value::Number(151.0));
 }
 
 #[test]
@@ -1119,14 +1119,14 @@ fn a_recursive_lambda_stops_at_the_same_call_on_any_stack_size() {
                 // F(F,n) has n + 1 calls in progress at its deepest; W adds one more call per step.
                 let tail = |n: u32| format!("=LET(F,LAMBDA(me,n,IF(n=0,0,me(me,n-1))),F(F,{n}))");
                 let wrapped = |n: u32| format!("=LET(W,LAMBDA(f,k,f(f,k)),F,LAMBDA(me,n,IF(n<=0,0,1+W(me,n-1))),F(F,{n}))");
-                [tail(139), tail(140), wrapped(69), wrapped(70), "=CNT(131)".to_string()].map(|f| crate::evaluate(&wb, 0, c("B1"), &f))
+                [tail(159), tail(160), wrapped(79), wrapped(80), "=CNT(151)".to_string()].map(|f| crate::evaluate(&wb, 0, c("B1"), &f))
             })
             .expect("spawn")
             .join()
             .expect("recursion must not overflow the stack")
     };
     let small = run(1 << 20);
-    assert_eq!(small, [Value::Number(0.0), Value::Error(CellError::Num), Value::Number(69.0), Value::Error(CellError::Num), Value::Number(131.0)]);
+    assert_eq!(small, [Value::Number(0.0), Value::Error(CellError::Num), Value::Number(79.0), Value::Error(CellError::Num), Value::Number(151.0)]);
     assert_eq!(run(64 << 20), small);
 }
 
