@@ -13,6 +13,12 @@ inside the `.xlsx`; a workbook may carry an association (and a script button) as
 metadata, and GridCraft preserves those parts unchanged through open/save instead of inventing an
 in-workbook script format.
 
+Saving in GridCraft writes a `.json` record in that folder, not an `.osts` file, so a script written
+here reaches Excel only after **Export Script…** (`script.export`) writes the `.osts`; **Import
+Script…** (`script.import`) brings an Excel script back. An `.osts` file dropped into the folder is
+listed without an import step, but a saved record wins over an `.osts` with the same name or slug:
+edits made later in Excel's editor do not appear until the file is imported again.
+
 ## Script storage and `.osts`
 
 Scripts live in `<config>/scripts/` by default (Windows `%APPDATA%\GridCraft\scripts\`, macOS
@@ -72,7 +78,7 @@ not implemented throw a typed `OfficeScriptsError` whose message names the class
 | `DataValidation` | `script.validation`, `data.validation` | type, rule, error alert, prompt, ignore blanks (get and set), clear |
 | `NamedItem` | `formulas.nameManager` | name, formula/refers-to, scope, comment, type, visible |
 | global `console` | bridge `console.log` | log/info/warn/error, bounded |
-| global `ExcelScript` | the shim's enum namespace | `BorderIndex`, `BorderLineStyle`, `BorderWeight`, `ChartType`, `ClearApplyTo`, `DataValidationType`/`DataValidationOperator`, `InsertShiftDirection`/`DeleteShiftDirection`, `WorksheetVisibility`; an unknown family or member throws `notSupported` |
+|global `ExcelScript`|the shim's enum namespace|`BorderIndex`, `BorderLineStyle`, `BorderWeight`, `ChartType`, `ClearApplyTo`, `DataValidationType`/`DataValidationOperator`, `InsertShiftDirection`/`DeleteShiftDirection`, `WorksheetVisibility`; an unknown family or member throws `notSupported` |
 
 Exact per-member status is generated: [office-scripts-coverage.md](office-scripts-coverage.md).
 Run `cargo xtask office-scripts-coverage --check`; the test in `gridcraft-script` fails when the
@@ -151,6 +157,10 @@ editor, where it can be edited, run, saved and exported.
 - Excel needs a Microsoft 365 commercial/education account signed in for the Automate tab. When it
   is unavailable, Excel interop is verified by format round-trip and by pasting the exported body
   into Excel's editor; the PR states which path was used.
+- The exported script was run inside Excel 16.0: the `.osts` was placed in
+  `Documents\Office Scripts`, opened from Automate › View Scripts (Script details › Edit), its body
+  pasted into the editor and Run. Excel's `Book1` then had `A1 = "from gridcraft excel"` in bold
+  and a new `ExcelRun` sheet — the same result GridCraft produced, read back through Excel COM.
 - Excel round-trip checked with Excel 16.0 COM: a workbook with values, a formula, number
   formats, a merge, a table, a comment, validation and a chart opened and saved by GridCraft
   re-opens in Excel without a repair prompt, and value/formula/number-format/table/comment/
