@@ -639,7 +639,11 @@ pub(crate) fn paint_headers(
                 let color = if row_sel(rr) { t.header_sel_text } else { t.header_text };
                 let standard = sh.default_row_height * geo.z;
                 let at = row_number_center(cr, standard);
-                let label = if row_number_cut(h, standard) { pr.with_clip_rect(cr.intersect(pr.clip_rect())) } else { pr.clone() };
+                let label = if row_number_cut(sh.row_height(rr), sh.default_row_height) {
+                    pr.with_clip_rect(cr.intersect(pr.clip_rect()))
+                } else {
+                    pr.clone()
+                };
                 label.text(at, Align2::CENTER_CENTER, (rr as u64 + 1).to_string(), font.clone(), color);
             }
         }
@@ -672,6 +676,7 @@ pub(super) fn row_number_center(row: Rect, standard: f32) -> egui::Pos2 {
 
 /// Whether a row's number is cut to its row: only in a row shorter than the standard, as in Excel.
 /// At a low zoom, where the number is taller than any row, standard and taller rows keep it whole.
+/// Heights are compared unzoomed, so the half-pixel tolerance doesn't grow as the zoom shrinks.
 pub(super) fn row_number_cut(height: f32, standard: f32) -> bool {
     height + 0.5 < standard
 }

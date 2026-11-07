@@ -366,13 +366,14 @@ fn row_numbers_sit_low_in_tall_rows() {
     assert_eq!(row_number_center(row(80.0), 0.0), row(80.0).center());
 }
 
-/// Only a row shorter than the standard cuts its number. At 10% zoom a standard row is 2 px tall
-/// and its number is taller: it stays whole, as it was before numbers sat low.
+/// Only a row shorter than the standard cuts its number, compared on unzoomed heights. At 10% zoom
+/// a standard row is 2 px tall and its number taller: it stays whole, as before numbers sat low,
+/// and a 16 px row is still short of a 20 px standard.
 #[test]
 fn only_short_rows_cut_their_numbers() {
     use super::show::row_number_cut;
     assert!(row_number_cut(8.0, 20.0));
+    assert!(row_number_cut(16.0, 20.0));
     assert!(!row_number_cut(20.0, 20.0));
     assert!(!row_number_cut(80.0, 20.0));
-    assert!(!row_number_cut(2.0, 2.0), "a standard row at 10% zoom");
 }
