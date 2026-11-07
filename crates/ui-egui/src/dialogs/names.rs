@@ -22,6 +22,7 @@ fn preview(text: &str, max: usize) -> String {
     out
 }
 
+/// Renders the bounded, virtualized Name Manager list and the selected name's details.
 pub(super) fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mut bool) {
     let list = app.session.run("formulas.nameManager", json!({})).unwrap_or(Json::Null);
     let names = list.as_array().cloned().unwrap_or_default();
@@ -53,7 +54,7 @@ pub(super) fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
     if lambda_count > 0 {
         ui.label(format!("Custom functions: {lambda_count} LAMBDA name(s)"));
     }
-    let row_height = ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y;
+    let row_height = ui.text_style_height(&egui::TextStyle::Button).max(ui.spacing().interact_size.y) + 2.0 * ui.spacing().button_padding.y;
     egui::ScrollArea::vertical().max_height(280.0).auto_shrink([false, true]).show_rows(ui, row_height, names.len() + 1, |ui, rows| {
         egui::Grid::new("names").striped(true).num_columns(4).show(ui, |ui| {
             if rows.contains(&0) {
@@ -76,7 +77,8 @@ pub(super) fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                 let value = if is_lambda(n) { "LAMBDA".into() } else { preview(&n.get("value").map(|v| v.to_string()).unwrap_or_default(), 18) };
                 ui.add_sized([72.0, row_height], egui::Label::new(value));
                 let refers_to = field(n, "refersTo");
-                ui.add_sized([260.0, row_height], egui::Label::new(preview(&refers_to, 48))).on_hover_text(refers_to);
+                ui.add_sized([260.0, row_height], egui::Label::new(preview(&refers_to.replace(['\n', '\r'], " "), 48)).truncate())
+                    .on_hover_text(refers_to);
                 ui.add_sized([90.0, row_height], egui::Label::new(field(n, "scope")));
                 ui.end_row();
             }
