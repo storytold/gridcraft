@@ -351,6 +351,19 @@ fn script_sandbox_refuses_file_access_until_dropped() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The guard's drop lowers the counter of the thread it runs on, so it must not move between threads:
+/// naming the trait's method is ambiguous (a compile error) if `ScriptSandbox` is `Send`.
+#[test]
+fn script_sandbox_is_not_send() {
+    trait AmbiguousIfSend<A> {
+        fn check() {}
+    }
+    impl<T: ?Sized> AmbiguousIfSend<()> for T {}
+    struct IsSend;
+    impl<T: ?Sized + Send> AmbiguousIfSend<IsSend> for T {}
+    <ScriptSandbox as AmbiguousIfSend<_>>::check();
+}
+
 /// A minimal compound (CFB/OLE2) file — FAT in sector 0, directory in sector 1 — holding a
 /// root entry and the given stream names.
 fn cfb(streams: &[&str]) -> Vec<u8> {
