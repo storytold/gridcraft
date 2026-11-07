@@ -154,7 +154,9 @@ mod tests {
         assert_eq!(functions_in_formula("+SUM(1)"), ["SUM"]);
         assert_eq!(functions_in_formula("-ABS(A1)"), ["ABS"]);
         assert!(functions_in_formula("-5").is_empty() && functions_in_formula("+1e3").is_empty(), "numbers");
-        assert!(functions_in_formula("+").is_empty() && functions_in_formula("- SUM(1)").is_empty(), "not formulas");
+        assert!(functions_in_formula("+").is_empty() && functions_in_formula("--").is_empty(), "not formulas");
+        // A sign before a space still starts a formula, as Excel takes `- SUM(1)` (#2023).
+        assert_eq!(functions_in_formula("- SUM(1)"), ["SUM"]);
     }
 
     #[test]
