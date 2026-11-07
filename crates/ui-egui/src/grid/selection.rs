@@ -106,10 +106,11 @@ pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
         && app.session.active().is_some_and(|d| d.uid == ed.doc)
     {
         let origin = app.session.active().and_then(|d| d.wb.sheet(ed.sheet)).map_or(sh.name.as_str(), |o| o.name.as_str());
-        for (_, _, r, sheet, idx) in crate::editor::formula_refs(&ed.text) {
+        for (_, _, r, sheet, idx, spill) in crate::editor::formula_refs(&ed.text) {
             if !crate::editor::ref_is_on_sheet(sheet.as_deref(), origin, &sh.name) {
                 continue;
             }
+            let r = crate::editor::resolved_formula_range(sh, r, spill);
             if !range_in_pane(r, rows, cols) {
                 continue;
             }
@@ -121,6 +122,16 @@ pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
                 p.rect_filled(Rect::from_center_size(corner, vec2(4.0, 4.0)), 0.0, col);
             }
         }
+    }
+    // A selected dynamic-array anchor owns its whole result. Excel marks that result with the
+    // selection-blue outline, making the spill's extent clear before the user edits it.
+    if app.editor.is_none()
+        && sel.is_single_cell()
+        && let Some(spill) = sh.spill_ranges.get(&sel.active).copied()
+        && range_in_pane(spill, rows, cols)
+    {
+        let rr = geo.range_rect(sh, spill);
+        p.rect_stroke(rr, 0.0, Stroke::new(1.5, t.sel_border), StrokeKind::Inside);
     }
     if cur_here {
         for side in outline_bands(outline.expand(0.5), 2.0, p.clip_rect()) {
