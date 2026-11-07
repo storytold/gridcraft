@@ -61,7 +61,11 @@ use the CPU while it runs.
    - reading the canary;
    - creating a file next to it, and in the temporary directory;
    - a TCP connection to the loopback address;
-   - starting a process (a copy of itself that would exit at once).
+   - starting a process (a copy of itself that would exit at once);
+   - signal 0 to the launcher's parent, which delivers nothing. Before it confines itself, the
+     launcher checks that the same signal is allowed, and refuses otherwise: a parent that refuses
+     anyone (PID 1, another user's process) would prove nothing. It refuses too if its parent has
+     changed since.
    An attempt that works, or fails for another reason (a missing file, a refused connection),
    doesn't count as a denial.
 6. Only then does the launcher replace itself with the program (`exec`), which inherits the

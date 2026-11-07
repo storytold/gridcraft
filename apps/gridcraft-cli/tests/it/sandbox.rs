@@ -111,8 +111,15 @@ fn a_launch_whose_check_fails_runs_nothing() {
     let echo = if Path::new("/bin/echo").exists() { "/bin/echo" } else { "/usr/bin/echo" };
     let probe = canary.join("allowed.txt").to_string_lossy().into_owned();
     // A dynamically linked `echo` needs the system's shared libraries and its loader.
-    let mut launch =
-        vec!["--sandbox-confined".to_string(), "--exec".into(), echo.into(), "--exec".into(), env!("CARGO_BIN_EXE_gridcraft-cli").into()];
+    // The second stage takes the process the first looked at: here, the parent of what `cli` starts.
+    let mut launch = vec![
+        "--sandbox-confined".to_string(),
+        std::process::id().to_string(),
+        "--exec".into(),
+        echo.into(),
+        "--exec".into(),
+        env!("CARGO_BIN_EXE_gridcraft-cli").into(),
+    ];
     for lib in ["/lib", "/lib64", "/usr/lib", "/usr/lib64"].into_iter().filter(|d| Path::new(d).exists()) {
         launch.extend(["--exec".to_string(), lib.into()]);
     }
@@ -122,9 +129,15 @@ fn a_launch_whose_check_fails_runs_nothing() {
     assert_eq!(o.status.code(), Some(97), "{out}");
     assert!(!out.contains("the program ran"), "{out}");
     assert!(out.contains("gridcraft-sandbox: refused"), "{out}");
+    assert!(out.contains("read the canary"), "the check refused, not the arguments: {out}");
+    // Without that process, the second stage has nothing to try a signal on.
+    let without: Vec<&str> = std::iter::once("--sandbox-confined").chain(launch[2..].iter().map(String::as_str)).collect();
+    let o = cli(&without);
+    assert_eq!(o.status.code(), Some(97), "{}", text(&o));
+    assert!(text(&o).contains("needs the process"), "{}", text(&o));
     // The normal path: the launcher confines itself first, and the program runs.
     if confines() {
-        launch[0] = "--sandbox-launch".into();
+        launch.splice(0..2, ["--sandbox-launch".to_string()]);
         let o = cli(&launch.iter().map(String::as_str).collect::<Vec<_>>());
         let out = text(&o);
         assert!(o.status.success() && out.contains("the program ran"), "{out}");
