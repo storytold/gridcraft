@@ -41,6 +41,7 @@ pub const LOOKS_AROUND: &[&str] = &[
     "edit.goToSpecial",
     "edit.find",
     "edit.copy",
+    "object.copy",
     "view.zoom",
     "view.zoom100",
     "view.zoomToSelection",

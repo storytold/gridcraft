@@ -30,7 +30,10 @@ use rules::{read_cf, read_validation};
 struct Shared {
     anchor: CellRef,
     expr: Option<Expr>,
+    /// Printed from the parsed formula, so `0.0` says `0`.
     text: String,
+    /// As the file has it, which is what a literal `PY("…",0)` is read from.
+    raw: String,
     /// Approximate bytes one dependent cell costs (its printed text plus its expression tree);
     /// what exceeds [`SHARED_FORMULA_FREE_COST`] is charged against [`MAX_SHARED_FORMULA_BYTES`].
     cost: u64,
@@ -597,11 +600,14 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
         }
         picture
     });
-    if let Some(picture) = picture {
+    // A rich value on a Python cell is the picture its code gave. A plain cell picture is one with no
+    // code: `Sheet::input_text`, the formula bar and editing take it to be that.
+    let python = c.child("f").is_some_and(|f| gridcraft_model::python::is_py_formula(formula_text(st, f)));
+    if let Some(picture) = picture.as_ref().filter(|_| !python) {
         if c.child("f").is_some() {
             cx.warn("formula-generated cell pictures were imported as static pictures; their formulas were not retained");
         }
-        sheet.set_picture(pos, picture);
+        sheet.set_picture(pos, picture.clone());
         sheet.set_style(pos, style);
         return;
     }
@@ -612,7 +618,9 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     // line breaks in the code. A formula naming a script the part lacks keeps only its cached
     // values, its own and its spill's, as plain values.
     let py = match (&formula, c.child("f")) {
-        (Some(fm), Some(f)) => crate::python_part::cell_code(&mut cx.python, fm, &f.text),
+        // A follower of a shared formula has no text of its own, and one printed from its parsed
+        // formula can say something else, so it reads the master's.
+        (Some(fm), Some(f)) => crate::python_part::cell_code(&mut cx.python, fm, formula_text(st, f)),
         _ => crate::python_part::PyFormula::Not,
     };
     let (formula, py) = match py {
@@ -623,6 +631,25 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
             (None, None)
         }
     };
+    // With code that can't stay, as with no code, the picture is what is left of the cell.
+    let in_cell = match (&py, &picture) {
+        (Some(py), Some(picture)) => Some(py).filter(|py| py.fits()).and_then(|py| crate::python_pictures::with_cell_picture(py, picture.clone())),
+        _ => None,
+    };
+    if let Some(picture) = picture.filter(|_| in_cell.is_none()) {
+        cx.warn("formula-generated cell pictures were imported as static pictures; their formulas were not retained");
+        forget_dynamic(st, pos);
+        sheet.set_picture(pos, picture);
+        sheet.set_style(pos, style);
+        return;
+    }
+    if let Some(py) = in_cell {
+        // A picture is the whole result: a range the file declares for it spills nothing.
+        forget_dynamic(st, pos);
+        let value = Value::text(crate::python_pictures::IMAGE);
+        sheet.cells.set(pos, Cell { value, formula: None, style, py: Some(Arc::new(py)) });
+        return;
+    }
     if py.is_some() {
         record_python_spill(st, sheet, pos);
     }
@@ -648,6 +675,16 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style, py });
 }
 
+/// The text a cell's formula element stands for, as the file has it: its own, or for a follower of a
+/// shared formula, that of the master cell.
+fn formula_text<'a>(st: &'a RowState, f: &'a El) -> &'a str {
+    if !f.text.trim().is_empty() {
+        return &f.text;
+    }
+    let master = (f.attr("t") == Some("shared")).then(|| f.attr_u32("si")).flatten().and_then(|si| st.shared.get(&si));
+    master.map_or("", |shared| shared.raw.as_str())
+}
+
 fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {
     // Keep the file's dynamic-array mark, so saving never turns the formula into a legacy one.
     read_formula_text(cx, st, f, pos, dynamic).map(|fm| Formula { dynamic, ..fm })
@@ -667,7 +704,7 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
             if !text.is_empty() {
                 let expr = gridcraft_formula::parse(text).ok();
                 let cost = shared_cost(text, expr.as_ref());
-                st.shared.insert(si, Shared { anchor: pos, expr, text: text.to_string(), cost });
+                st.shared.insert(si, Shared { anchor: pos, expr, text: text.to_string(), raw: f.text.clone(), cost });
                 Some(Formula::new(text))
             } else {
                 let Some(sh) = st.shared.get(&si) else {

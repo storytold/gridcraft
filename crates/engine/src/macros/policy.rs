@@ -47,8 +47,17 @@ const ALLOWED: &[&str] = &["file.properties"];
 /// Commands that read a file when given a `path`.
 const READS_FILES: &[&str] = &["data.getData", "data.fromTextCsv", "insert.picture", "pageLayout.background"];
 
-/// File commands that only produce bytes unless given a `path` (then they write a file).
-const EXPORTS: &[&str] = &["file.exportPdf", "file.exportCsv", "file.exportHtml", "file.print", "file.printPreview", "file.saveBytes"];
+/// Commands that only produce bytes, or an error, unless given a `path` (then they write a file).
+const EXPORTS: &[&str] = &[
+    "file.exportPdf",
+    "file.exportCsv",
+    "file.exportHtml",
+    "file.print",
+    "file.printPreview",
+    "file.saveBytes",
+    "python.saveCsv",
+    "python.saveImage",
+];
 
 /// Whether command `id` with `params` writes a file (an export or print given a `path`).
 pub fn writes_file(id: &str, params: &Json) -> bool {
@@ -118,18 +127,28 @@ mod tests {
             assert!(matches!(macro_policy(id, &none, Trust::Local), Policy::Deny(_)), "{id}");
             assert!(matches!(macro_policy(id, &path, Trust::FromFile), Policy::Deny(_)), "{id}");
         }
-        for id in ["data.getData", "data.fromTextCsv", "insert.picture", "pageLayout.background", "file.exportPdf", "file.print", "file.exportCsv"] {
+        for id in [
+            "data.getData",
+            "data.fromTextCsv",
+            "insert.picture",
+            "pageLayout.background",
+            "file.exportPdf",
+            "file.print",
+            "file.exportCsv",
+            "python.saveCsv",
+            "python.saveImage",
+        ] {
             assert!(matches!(macro_policy(id, &path, Trust::Local), Policy::NeedsPermission(_)), "{id}");
             assert!(matches!(macro_policy(id, &path, Trust::FromFile), Policy::NeedsPermission(_)), "{id}");
         }
         // Without a path they touch no file.
-        for id in ["data.getData", "insert.picture", "file.exportPdf", "file.saveBytes", "file.printPreview"] {
+        for id in ["data.getData", "insert.picture", "file.exportPdf", "file.saveBytes", "file.printPreview", "python.saveCsv"] {
             assert_eq!(macro_policy(id, &none, Trust::Local), Policy::Allow, "{id}");
             assert_eq!(macro_policy(id, &json!({"path": null}), Trust::Local), Policy::Allow, "{id}");
         }
         // A path that is blank or a token still touches a file once the step runs.
         for path in [json!(""), json!(" "), json!({"$ref": "Input"}), json!("{{Input}}.csv"), json!(1)] {
-            for id in ["file.exportCsv", "data.fromTextCsv"] {
+            for id in ["file.exportCsv", "data.fromTextCsv", "python.saveCsv"] {
                 let p = json!({ "path": path });
                 assert!(matches!(macro_policy(id, &p, Trust::Local), Policy::NeedsPermission(_)), "{id} {p}");
             }

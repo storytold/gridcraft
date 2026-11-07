@@ -45,6 +45,24 @@ fn eval_formulas() {
     assert!(!String::from_utf8_lossy(&o.stderr).is_empty());
 }
 
+/// The CLI never runs Python: `wait` has nothing to wait for, and a save happens at once.
+#[test]
+#[allow(clippy::disallowed_methods)] // a native test that times a run
+fn a_save_with_wait_saves_at_once_without_python() {
+    let dir = tmpdir("save-wait");
+    let book = dir.join("book.xlsx");
+    let save = serde_json::json!({"path": book, "wait": true}).to_string();
+    let started = std::time::Instant::now();
+    ok(&["run", "--sample", "budget", "--cmd", r#"python.set={"cell":"K1","code":"1 + 1"}"#, "--cmd", &format!("file.save={save}"), "--quiet"]);
+    assert!(started.elapsed() < std::time::Duration::from_secs(60));
+    assert!(book.exists());
+    let mut opened = gridcraft_engine::Session::new();
+    opened.execute("file.open", serde_json::json!({"path": book})).unwrap();
+    let cell = opened.execute("cell.get", serde_json::json!({"cell": "K1"})).unwrap();
+    assert_eq!(cell["python"]["code"], "1 + 1", "the code is in the file");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn run_then_cat_and_info_on_sample() {
     let dir = tmpdir("run");
