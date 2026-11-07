@@ -702,8 +702,12 @@ fn write_sheet_views(s: &mut String, sheet: &Sheet, selected: bool) {
     if sheet.zoom != 100 && (10..=400).contains(&sheet.zoom) {
         let _ = write!(s, " zoomScale=\"{0}\" zoomScaleNormal=\"{0}\"", sheet.zoom);
     }
-    if sheet.view_top_left != CellRef::default() && sheet.freeze.is_none() {
-        let _ = write!(s, " topLeftCell=\"{}\"", sheet.view_top_left.a1());
+    if sheet.freeze.is_none() {
+        if sheet.view_top_left != CellRef::default() {
+            let _ = write!(s, " topLeftCell=\"{}\"", sheet.view_top_left.a1());
+        }
+    } else if let Some(c) = sheet.view_top_left_frozen {
+        let _ = write!(s, " topLeftCell=\"{}\"", c.a1());
     }
     s.push_str(" workbookViewId=\"0\">");
     let active = sheet.view_active.a1();

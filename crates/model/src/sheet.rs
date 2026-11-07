@@ -169,6 +169,14 @@ pub struct Sheet {
     /// Last selection and scroll position, saved with the file.
     pub view_active: CellRef,
     pub view_top_left: CellRef,
+    /// With `freeze` set, the frozen (top-left) pane's own scroll position - independent of
+    /// `view_top_left`, which is then the scrolling (bottom-right) pane's position instead.
+    /// `<sheetView topLeftCell>` vs. `<pane topLeftCell>` in the file: without this, a sheet
+    /// frozen on row/column headers that is also scrolled away from A1 in the frozen pane
+    /// (e.g. frozen rows 1-8 themselves scrolled right, hiding columns A-D) reopens with that
+    /// pane snapped back to A1, which can expose helper/debug cells the author scrolled past.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_top_left_frozen: Option<CellRef>,
     /// Normal, Page Layout or Page Break Preview.
     #[serde(default)]
     pub view: SheetViewMode,
@@ -238,6 +246,7 @@ impl Sheet {
             print: PrintSettings::default(),
             view_active: CellRef::default(),
             view_top_left: CellRef::default(),
+            view_top_left_frozen: None,
             view: SheetViewMode::Normal,
             preserved: None,
         }
