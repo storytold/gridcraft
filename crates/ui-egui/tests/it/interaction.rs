@@ -35,7 +35,7 @@ fn vertical_scrollbar_pages_and_drags_without_changing_selection() {
 
     h.state_mut().view_mut().unwrap().scroll.y = 0.0;
     h.run_steps(2);
-    let start = egui::pos2(grid.right() + 7.0, cells.top() + 8.0);
+    let start = egui::pos2(grid.right() + 7.0, cells.top() + 24.0);
     h.input_mut().events.push(Event::PointerMoved(start));
     h.input_mut().events.push(Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
     h.run_steps(2);
@@ -79,7 +79,7 @@ fn horizontal_scrollbar_pages_and_drags_across_a_wide_sheet() {
     let mut s = Session::new();
     s.add_document(gridcraft_engine::DocState::new(wb, None, "Book1".into(), gridcraft_engine::Trust::Local));
     let mut h = harness(s);
-    let track = h.state().grid.hscroll.expect("the tab bar has a horizontal scrollbar");
+    let track = h.state().grid.hscroll_track.expect("the tab bar has a horizontal scrollbar");
     assert!(track.width() >= 200.0, "the scrollbar gets a usable share of the tab bar: {track:?}");
     assert_eq!(first_scrolled_col(&h), 1);
 
@@ -1620,4 +1620,70 @@ fn header_footer_dialog_opens_on_the_saved_header_and_footer() {
     h.state_mut().run("pageLayout.headerFooter", vals).unwrap();
     let pr = &h.state().session.active().unwrap().wb.active().unwrap().print;
     assert_eq!((pr.header.as_str(), pr.footer.as_str()), ("&CNew", "&CConfidential"));
+}
+
+/// As in Excel: an arrow of a scrollbar moves by one column or row, back to the start of a line
+/// partly scrolled out, and keeps going while it is held.
+#[test]
+fn scrollbar_arrows_move_by_one_line_and_repeat_while_held() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let mut h = harness(s);
+    let width = {
+        let sheet = h.state().session.active().unwrap().wb.active().unwrap().clone();
+        sheet.col_width(0)
+    };
+    let track = h.state().grid.hscroll_track.expect("a horizontal scrollbar");
+    let (left, right) = (egui::pos2(track.left() - 8.0, track.center().y), egui::pos2(track.right() + 8.0, track.center().y));
+    click(&mut h, right);
+    assert!((h.state().view().scroll.x - width).abs() < 0.01, "one column: {}", h.state().view().scroll.x);
+    click(&mut h, right);
+    assert!((h.state().view().scroll.x - width * 2.0).abs() < 0.01, "two columns: {}", h.state().view().scroll.x);
+    h.state_mut().view_mut().unwrap().scroll.x = width * 1.5;
+    h.run_steps(2);
+    click(&mut h, left);
+    assert!((h.state().view().scroll.x - width).abs() < 0.01, "back to the partly hidden column: {}", h.state().view().scroll.x);
+    click(&mut h, left);
+    click(&mut h, left);
+    assert_eq!(h.state().view().scroll.x, 0.0, "and it stops at the start");
+
+    let track = h.state().grid.vscroll.expect("a vertical scrollbar");
+    let down = egui::pos2(track.center().x, track.bottom() + 8.0);
+    let row = {
+        let sheet = h.state().session.active().unwrap().wb.active().unwrap().clone();
+        sheet.row_height(0)
+    };
+    click(&mut h, down);
+    assert!((h.state().view().scroll.y - row).abs() < 0.01, "one row: {}", h.state().view().scroll.y);
+    // A click on the track still moves by what the cells show, not by the track between the arrows.
+    let before = h.state().view().scroll.y;
+    let page = {
+        let geo = h.state().grid.geo.as_ref().unwrap();
+        (geo.cells.height() - geo.frozen_h) / geo.z
+    };
+    click(&mut h, egui::pos2(track.center().x, track.bottom() - 3.0));
+    assert!((h.state().view().scroll.y - before - page).abs() < 0.5, "one page: {} from {before}, page {page}", h.state().view().scroll.y);
+    h.state_mut().view_mut().unwrap().scroll.y = row;
+    h.run_steps(2);
+
+    h.input_mut().events.push(egui::Event::PointerMoved(down));
+    h.step();
+    h.input_mut().events.push(egui::Event::PointerButton {
+        pos: down,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    for _ in 0..80 {
+        h.step();
+    }
+    let held = h.state().view().scroll.y;
+    h.input_mut().events.push(egui::Event::PointerButton {
+        pos: down,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.step();
+    assert!(held > row * 3.0, "holding keeps scrolling: {held}");
 }

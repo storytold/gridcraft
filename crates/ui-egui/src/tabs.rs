@@ -102,6 +102,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     // Only the controls drawn this frame have a rectangle: a hidden one keeps no stale geometry.
     app.grid.hscroll = None;
+    app.grid.hscroll_track = None;
     app.grid.tab_split = None;
     // File › Options › Advanced › Display options for this workbook (#3101): with neither the
     // sheet tabs nor the horizontal scroll bar, the bar isn't there at all.
