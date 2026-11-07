@@ -132,6 +132,9 @@ struct Lbl {
 #[derive(Default)]
 struct Globals {
     sheets: Vec<BoundSheet>,
+    /// The sheet the workbook was saved on (`itabCur` of the first WINDOW1), as an index into
+    /// `sheets`.
+    active_tab: Option<u16>,
     date1904: bool,
     formats: HashMap<u16, String>,
     styles: styles::StyleRecords,
@@ -201,7 +204,13 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
     }
     wb.calc.precision_as_displayed = g.precision_as_displayed;
     defined_names(&g, &model_index, &mut wb, &mut report);
-    wb.set_active_sheet(wb.sheets.iter().position(|s| s.visibility == Visibility::Visible).unwrap_or(0));
+    // The sheet the file was saved on, as Excel opens it, when it was read and is visible; else the
+    // first visible sheet.
+    let saved = g
+        .active_tab
+        .and_then(|t| model_index.get(usize::from(t)).copied().flatten())
+        .filter(|&i| wb.sheets.get(i).is_some_and(|s| s.visibility == Visibility::Visible));
+    wb.set_active_sheet(saved.or_else(|| wb.sheets.iter().position(|s| s.visibility == Visibility::Visible)).unwrap_or(0));
     // The overview comes first.
     report.warnings.insert(
         0,
@@ -240,6 +249,14 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut ReadReport) -> Resul
         match rec.id {
             EOF => break,
             0x002F => return Err(invalid(ENCRYPTED)),
+            // WINDOW1: position, size and flags (five u16), then the active sheet. Only the first
+            // window counts; a record too short for it is ignored.
+            0x003D if g.active_tab.is_none() && c.remaining() >= 12 => {
+                for _ in 0..5 {
+                    c.u16()?;
+                }
+                g.active_tab = Some(c.u16()?);
+            }
             0x0085 => {
                 if g.sheets.len() >= MAX_SHEETS {
                     return Err(IoError::TooLarge("XLS: too many sheets".into()));
