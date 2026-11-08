@@ -1,3 +1,5 @@
+use gridcraft_core::split_areas;
+
 use super::{
     CMD, CellRef, DEFAULT_EVALS, DefinedName, EngineError, Json, MAX_CONSTRAINTS, MAX_EVALS, MAX_POPULATION, MAX_VARS, MIN_POPULATION, RangeRef,
     Result, Session, Workbook, bad, bool_param, f64_param, json, split_sheet, str_param,
@@ -138,7 +140,8 @@ pub(super) struct Model {
 fn cells_of(wb: &Workbook, t: &str, default_sheet: usize, cap: usize) -> Result<(usize, Vec<CellRef>)> {
     let mut sheet = None;
     let mut out = Vec::new();
-    for part in t.split(',').map(str::trim).filter(|x| !x.is_empty()) {
+    // A comma inside a quoted sheet name (`'Sales, West'!$A$1`) does not end the area.
+    for part in split_areas(t).into_iter().map(str::trim).filter(|x| !x.is_empty()) {
         let (sh, body) = split_sheet(part);
         let si = match sh {
             Some(n) => wb.sheet_index(&n).ok_or_else(|| bad(CMD, format!("no sheet named `{n}`")))?,
@@ -163,14 +166,30 @@ fn num_text(t: &str) -> Option<f64> {
     gridcraft_core::parse::parse_number_text(t.trim()).filter(|v| v.is_finite())
 }
 
-/// Splits `"B5 <= 10"` / `"B2 int"` into (lhs, relation, rhs).
+/// `t` split at the first `pat` outside quoted sheet names: `'A<=B'!$C$1 <= 5` splits at the
+/// second `<=`. A doubled quote inside a name (`'O''Brien<=1'!A1`) toggles the quoted state
+/// twice, as in [`split_areas`], so it doesn't end the name.
+fn split_unquoted<'a>(t: &'a str, pat: &str) -> Option<(&'a str, &'a str)> {
+    let mut quoted = false;
+    for (i, c) in t.char_indices() {
+        if c == '\'' {
+            quoted = !quoted;
+        } else if !quoted && t.get(i..).is_some_and(|rest| rest.starts_with(pat)) {
+            return Some((t.get(..i)?, t.get(i.saturating_add(pat.len())..)?));
+        }
+    }
+    None
+}
+
+/// Splits `"B5 <= 10"` / `"B2 int"` into (lhs, relation, rhs). A relation's characters inside
+/// a quoted sheet name (`'A<=B'!$C$1 <= 5`) are part of the name.
 fn split_constraint(t: &str) -> Option<(String, Rel, String)> {
     for op in ["<=", ">=", "=<", "=>", "≤", "≥", "=="] {
-        if let Some((a, b)) = t.split_once(op) {
+        if let Some((a, b)) = split_unquoted(t, op) {
             return Some((a.trim().into(), Rel::parse(op)?, b.trim().into()));
         }
     }
-    if let Some((a, b)) = t.split_once('=') {
+    if let Some((a, b)) = split_unquoted(t, "=") {
         return Some((a.trim().into(), Rel::Eq, b.trim().into()));
     }
     let lower = t.trim().to_ascii_lowercase();
@@ -337,8 +356,8 @@ pub fn sensitivity_applies(p: &Json) -> bool {
 /// `"B2:B4,D1"` as absolute references, each qualified by `sheet_name` when given.
 fn abs_text(sheet_name: Option<&str>, cells: &str) -> String {
     let q = sheet_name.map(|n| format!("{}!", crate::pivot::quote_sheet(n))).unwrap_or_default();
-    cells
-        .split(',')
+    split_areas(cells)
+        .into_iter()
         .map(str::trim)
         .filter(|x| !x.is_empty())
         .filter_map(|part| {
@@ -446,7 +465,7 @@ pub fn saved_model(wb: &Workbook, sheet: usize) -> Option<Json> {
     let named = |n: &str, scope: Option<usize>| wb.names.iter().find(|d| d.name.eq_ignore_ascii_case(n) && d.scope == scope);
     let scope = if named("solver_opt", Some(sheet)).is_some() { Some(sheet) } else { None };
     let get = |n: &str| named(n, scope).map(|d| d.formula.trim().trim_start_matches('=').to_string());
-    let local = |t: String| -> String { t.split(',').map(|p| split_sheet(p.trim()).1.replace('$', "")).collect::<Vec<_>>().join(",") };
+    let local = |t: String| local_refs(&t);
     let objective = local(get("solver_opt")?);
     if objective.trim_matches('"').trim().is_empty() {
         return None;
@@ -555,7 +574,8 @@ pub(super) fn model_params(wb: &Workbook, m: &Model) -> Json {
 
 /// The cells Save Model writes, top to bottom, as formula text.
 pub(super) fn model_formulas(m: &Model) -> Result<Vec<String>> {
-    let one_area = |t: &str| !t.contains(',');
+    // A comma inside a quoted sheet name (`'Sales, West'!$A$1`) doesn't start another area.
+    let one_area = |t: &str| split_areas(t).into_iter().filter(|a| !a.trim().is_empty()).count() <= 1;
     let mut rows = Vec::with_capacity(m.cons.len() + 3);
     let obj = abs_text(None, &m.objective.a1());
     rows.push(match m.goal {
@@ -565,7 +585,8 @@ pub(super) fn model_formulas(m: &Model) -> Result<Vec<String>> {
     });
     rows.push(format!("=COUNT({})", abs_text(None, &m.vars_text)));
     for c in &m.cons {
-        if !one_area(&c.lhs_text) || !one_area(&c.rhs_text) {
+        // A number on the right side (`1,000`) is no range, whatever its separators.
+        if !one_area(&c.lhs_text) || (matches!(c.rhs, Rhs::Cells(_)) && !one_area(&c.rhs_text)) {
             return Err(EngineError::Other("Save Model needs each side of a constraint to be one range.".into()));
         }
         let lhs = abs_text(None, &c.lhs_text);
@@ -608,7 +629,7 @@ fn call_args(t: &str, name: &str) -> Option<String> {
 
 /// References without sheet names or `$`.
 fn local_refs(t: &str) -> String {
-    t.split(',').map(|p| split_sheet(p.trim()).1.replace('$', "")).collect::<Vec<_>>().join(",")
+    split_areas(t).into_iter().map(|p| split_sheet(p.trim()).1.replace('$', "")).collect::<Vec<_>>().join(",")
 }
 
 fn not_a_model() -> EngineError {
@@ -670,13 +691,13 @@ fn read_options_row(model: &mut Json, list: &str) -> Result<()> {
 /// One constraint row of Save Model (`AND(relation)`) as a `data.solver` constraint.
 fn read_constraint_row(t: String) -> Result<String> {
     let t = call_args(&t, "AND").unwrap_or(t);
-    if let Some((x, y)) = t.split_once("=INT(").or_else(|| t.split_once("=int(")) {
+    if let Some((x, y)) = split_unquoted(&t, "=INT(").or_else(|| split_unquoted(&t, "=int(")) {
         if y.strip_suffix(')') != Some(x) {
             return Err(not_a_model());
         }
         return Ok(format!("{} int", local_refs(x)));
     }
-    if let Some(x) = t.strip_prefix('(').and_then(|x| x.strip_suffix("=1)")).and_then(|x| x.split_once("=0)+(")).filter(|(a, b)| a == b) {
+    if let Some(x) = t.strip_prefix('(').and_then(|x| x.strip_suffix("=1)")).and_then(|x| split_unquoted(x, "=0)+(")).filter(|(a, b)| a == b) {
         return Ok(format!("{} bin", local_refs(x.0)));
     }
     let (l, rel, r) = split_constraint(&t).ok_or_else(not_a_model)?;
@@ -698,7 +719,7 @@ pub(super) fn parse_model_formulas(rows: &[String]) -> Result<Json> {
     } else if let Some(o) = call_args(&first, "MIN") {
         ("min", o, 0.0)
     } else {
-        let (o, v) = first.split_once('=').ok_or_else(not_a_model)?;
+        let (o, v) = split_unquoted(&first, "=").ok_or_else(not_a_model)?;
         ("value", o.to_string(), num_text(v).ok_or_else(not_a_model)?)
     };
     let variables = call_args(&body(rows.get(1).ok_or_else(not_a_model)?), "COUNT").ok_or_else(not_a_model)?;
