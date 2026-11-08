@@ -910,6 +910,14 @@ const MAX_READ_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
+    read_file_limited(path, MAX_READ_BYTES)
+}
+
+/// Reads at most `max` bytes of a regular file, refusing anything larger: a caller with a small
+/// cap (a brush texture is 16 MiB) never allocates a huge file first, and the sandbox and
+/// regular-file checks are the same ones [`read_file`] makes.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_file_limited(path: &str, max: u64) -> Result<Vec<u8>> {
     use std::io::Read;
     script_sandbox_check(path)?;
     let f = std::fs::File::open(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
@@ -919,10 +927,10 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
         return Err(EngineError::Other(format!("{path}: only regular files can be opened")));
     }
     let mut buf = Vec::new();
-    let mut limited = (&f).take(MAX_READ_BYTES + 1);
+    let mut limited = (&f).take(max + 1);
     limited.read_to_end(&mut buf).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    if buf.len() as u64 > MAX_READ_BYTES {
-        return Err(EngineError::Other("files larger than 2 GB aren't supported".into()));
+    if buf.len() as u64 > max {
+        return Err(EngineError::Other(format!("{path}: larger than {max} bytes")));
     }
     Ok(buf)
 }
@@ -931,6 +939,11 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
     script_sandbox_check(path)?;
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn read_file_limited(path: &str, _max: u64) -> Result<Vec<u8>> {
+    read_file(path)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

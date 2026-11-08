@@ -176,3 +176,35 @@ fn the_across_width_is_what_each_brush_paints() {
     let legacy = Shape { ink: None, ..shape(InkTool::Pen, (0.6, 0.6)) };
     assert_eq!(ink_across(&legacy), ink_width(&legacy));
 }
+
+#[test]
+fn another_pens_scale_or_deletion_leaves_the_pen_in_hand_alone() {
+    // Two pens on the same texture at different repeat sizes are not the same pen: changing or
+    // deleting the one that is not in hand must not overwrite the scale the person is drawing at.
+    let mut s = s();
+    let id = s.execute("draw.textureImport", json!({"name": "a.png", "base64": b64(&png(4, 4))})).unwrap()["id"].as_str().unwrap().to_string();
+    let other = s.execute("draw.addPen", json!({"brush": "pen", "texture": id, "textureScale": 2})).unwrap()["pen"].as_u64().unwrap();
+    let in_hand = s.execute("draw.addPen", json!({"brush": "pen", "texture": id, "textureScale": 9})).unwrap()["pen"].as_u64().unwrap();
+    assert_ne!(other, in_hand);
+    s.execute("draw.updatePen", json!({"id": other, "textureScale": 5})).unwrap();
+    let list = s.execute("draw.textureList", json!({})).unwrap();
+    assert_eq!(list["selected"], id, "the pen in hand still paints with its texture");
+    assert_eq!(list["scale"], 9.0, "and keeps its own repeat size");
+    s.execute("draw.deletePen", json!({"id": other})).unwrap();
+    let list = s.execute("draw.textureList", json!({})).unwrap();
+    assert_eq!(list["selected"], id, "deleting the other pen leaves the pen in hand textured");
+    assert_eq!(list["scale"], 9.0);
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn a_file_read_is_bounded_before_a_texture_import_parses_it() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-texture-bound-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("small.png");
+    std::fs::write(&path, b"1234").unwrap();
+    let p = path.to_string_lossy().to_string();
+    assert_eq!(crate::io::read_file_limited(&p, 4).unwrap(), b"1234");
+    assert!(crate::io::read_file_limited(&p, 3).is_err(), "a file over the cap is refused before it is read whole");
+    std::fs::remove_dir_all(&dir).ok();
+}

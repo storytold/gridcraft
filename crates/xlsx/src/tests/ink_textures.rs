@@ -259,3 +259,26 @@ fn an_unreadable_ink_sheet_is_kept_so_a_save_does_not_delete_it() {
     let kept = again.sheets.iter().find(|s| s.name.starts_with(INK_SHEET_NAME)).expect("still there after the second save");
     assert_eq!(kept.cells.get(CellRef::new(0, 1)).and_then(|c| c.value.as_f64()), Some(2.0));
 }
+
+#[test]
+fn a_stroke_without_a_key_keeps_its_texture_by_its_emitted_id() {
+    // The drawing writer mints a deterministic creation id when the stroke's key is missing or
+    // malformed; the hidden sheet must key its extras by that same id, or the texture is lost.
+    let texture = texture("a.png", vec![1, 2, 3], 2, 2);
+    let id = texture.id.clone();
+    let mut wb = with_shape(ink_shape(1, "{11111111-2222-3333-4444-555555555555}"));
+    wb.ink_textures.push(texture);
+    {
+        let shape = &mut Arc::make_mut(&mut wb.sheets[0]).shapes[0];
+        let ink = shape.ink.as_mut().expect("ink");
+        ink.key = None;
+        ink.texture = Some(id.clone());
+        ink.texture_scale = 2.5;
+    }
+    let bytes = write_xlsx(&wb).expect("writes");
+    let (back, _) = read_xlsx(&bytes).expect("reads");
+    let ink = back.sheets[0].shapes[0].ink.as_ref().expect("the stroke keeps its brush");
+    assert_eq!(ink.key.as_deref(), Some("{00000001-0000-4000-8000-000000000001}"), "the writer mints the id from the shape id");
+    assert_eq!(ink.texture.as_deref(), Some(id.as_str()), "the texture association uses that same id");
+    assert_eq!(ink.texture_scale, 2.5);
+}

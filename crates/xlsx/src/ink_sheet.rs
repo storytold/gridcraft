@@ -244,7 +244,9 @@ pub fn from_workbook(wb: &Workbook) -> Option<InkSheetData> {
     for sheet in &wb.sheets {
         for shape in &sheet.shapes {
             let Some(ink) = &shape.ink else { continue };
-            let Some(key) = ink.key.as_deref().map(str::trim).filter(|k| !k.is_empty()) else { continue };
+            // The same id the drawing writer emits: a stored key is normalised to canonical
+            // lowercase, and a missing or malformed one becomes the shape's deterministic GUID.
+            let key = crate::drawing::creation_id(shape);
             let extras = InkExtras {
                 texture: ink.texture.clone().filter(|id| InkTexture::is_valid_id(id)),
                 scale: ink.texture.as_ref().and_then(|_| clamp_scale(ink.texture_scale)),

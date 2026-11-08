@@ -436,7 +436,8 @@ fn update_pen(s: &mut Session, p: &Json) -> Result<Json> {
         && s.draw_color.eq_ignore_ascii_case(&old.color)
         && (s.draw_width - old.width).abs() < 0.01
         && s.draw_effect == old.effect.clone().unwrap_or_default()
-        && s.draw_texture == old.texture.clone().unwrap_or_default();
+        && s.draw_texture == old.texture.clone().unwrap_or_default()
+        && texture_scale(s.draw_texture_scale) == texture_scale(old.texture_scale);
     s.draw_pens[idx] = pen.clone();
     if in_hand {
         s.draw_brush = pen.tool.clone();
@@ -474,6 +475,7 @@ fn delete_pen(s: &mut Session, p: &Json) -> Result<Json> {
         && (s.draw_width - pen.width).abs() < 0.01
         && s.draw_effect == pen.effect.clone().unwrap_or_default()
         && s.draw_texture == pen.texture.clone().unwrap_or_default()
+        && (s.draw_texture.is_empty() || texture_scale(s.draw_texture_scale) == texture_scale(pen.texture_scale))
     {
         // Deleting the pen in hand puts the default pen back in hand.
         s.draw_brush = "pen".into();
@@ -542,7 +544,8 @@ fn texture_import(s: &mut Session, p: &Json) -> Result<Json> {
         let data = crate::io::base64_decode(b).ok_or_else(|| bad("draw.textureImport", "invalid base64"))?;
         (str_param(p, "name").unwrap_or("Texture").to_string(), data)
     } else if let Some(path) = str_param(p, "path") {
-        let data = crate::io::read_file(path)?;
+        // Bound the read itself: a 2 GB file must not be allocated before the 16 MiB check.
+        let data = crate::io::read_file_limited(path, gridcraft_model::MAX_INK_TEXTURE_BYTES as u64)?;
         let name = str_param(p, "name")
             .map(str::to_string)
             .unwrap_or_else(|| path.rsplit(['/', '\\']).next().filter(|n| !n.is_empty()).unwrap_or("Texture").to_string());
