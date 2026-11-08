@@ -288,6 +288,31 @@ fn trim_to_budget(history: &mut Vec<HistoryEntry>, byte_budget: usize) {
     }
 }
 
+fn refresh_empty_pivots(wb: &mut Workbook) -> Vec<(usize, RangeRef)> {
+    // Some Google Sheets exports carry refreshOnLoad pivots with an empty location. The XLSX
+    // reader marks those reports with no last range; populate them before the document is shown.
+    let mut refreshed = Vec::new();
+    for si in 0..wb.sheets.len() {
+        let count = wb.sheet(si).map(|s| s.pivots.len()).unwrap_or(0);
+        for idx in 0..count {
+            let needs_refresh = wb
+                .sheet(si)
+                .and_then(|s| {
+                    let pt = s.pivots.get(idx)?;
+                    Some(match pt.last_range {
+                        None => true,
+                        Some(r) => !s.cells.iter_range(r).any(|(_, c)| c.has_content()),
+                    })
+                })
+                .unwrap_or(false);
+            if needs_refresh && let Ok(range) = crate::pivot::refresh(wb, si, idx, false) {
+                refreshed.push((si, range));
+            }
+        }
+    }
+    refreshed
+}
+
 impl DocState {
     /// A document for `wb`, which came from where `trust` says: [`Trust::FromFile`] for anything
     /// read from bytes (a file, a download, a recovery copy), [`Trust::Local`] only for a workbook
@@ -295,39 +320,26 @@ impl DocState {
     pub fn new(mut wb: Workbook, path: Option<String>, title: String, trust: Trust) -> DocState {
         let mut calc = Calc::new();
         calc.recalc_all(&mut wb);
+        if !refresh_empty_pivots(&mut wb).is_empty() {
+            calc.recalc_all(&mut wb);
+        }
         Self::with_calc(wb, calc, path, title, trust)
     }
     /// A workbook as its file saved it: the dependency graph is built and stored cell values are
     /// kept as-is, except that any PivotTable whose worksheet target area is blank (`last_range`
     /// is `None` or contains no content, as in `refreshOnLoad` exports with an unpopulated placeholder
-    /// location) is refreshed from its source and triggers a workbook recalculation when refreshed.
-    /// `trust` is as for [`DocState::new`].
+    /// location) is refreshed from its source and recalculates only formulas that depend on the
+    /// refreshed cells. `trust` is as for [`DocState::new`].
     pub fn from_saved(mut wb: Workbook, path: Option<String>, title: String, trust: Trust) -> DocState {
         let mut calc = Calc::new();
         calc.rebuild(&wb);
-        // Some Google Sheets exports carry refreshOnLoad pivots with an empty location. The XLSX
-        // reader marks those reports with no last range; populate them before the document is shown.
-        let mut refreshed = false;
-        for si in 0..wb.sheets.len() {
-            let count = wb.sheet(si).map(|s| s.pivots.len()).unwrap_or(0);
-            for idx in 0..count {
-                let needs_refresh = wb
-                    .sheet(si)
-                    .and_then(|s| {
-                        let pt = s.pivots.get(idx)?;
-                        Some(match pt.last_range {
-                            None => true,
-                            Some(r) => !s.cells.iter_range(r).any(|(_, c)| c.has_content()),
-                        })
-                    })
-                    .unwrap_or(false);
-                if needs_refresh && crate::pivot::refresh(&mut wb, si, idx, false).is_ok() {
-                    refreshed = true;
-                }
-            }
-        }
-        if refreshed {
-            calc.recalc_all(&mut wb);
+        let refreshed = refresh_empty_pivots(&mut wb);
+        if !refreshed.is_empty() {
+            let changed: Vec<(usize, CellRef)> = refreshed.iter().flat_map(|(si, r)| r.iter().map(move |c| (*si, c))).collect();
+            let prev_mode = wb.calc.mode;
+            wb.calc.mode = gridcraft_model::CalcMode::Automatic;
+            calc.cells_changed(&mut wb, &changed);
+            wb.calc.mode = prev_mode;
         }
         Self::with_calc(wb, calc, path, title, trust)
     }

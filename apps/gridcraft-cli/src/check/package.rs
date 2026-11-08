@@ -11,8 +11,8 @@ const MAX_ENTRIES: usize = 200_000;
 const RELATIONSHIP_BUDGET: u64 = 512 * 1024 * 1024;
 
 /// Relationship kinds (lower case) whose absence after a save isn't a loss: the calculation chain is
-/// a cache Excel rebuilds, and large pivot record snapshots are rebuilt on load when `refreshOnLoad` is set.
-pub(super) const REBUILT_KINDS: [&str; 2] = ["calcchain", "pivotcacherecords"];
+/// a cache Excel rebuilds.
+pub(super) const REBUILT_KINDS: [&str; 1] = ["calcchain"];
 
 // ---------------------------------------------------------------- package validation
 
@@ -298,11 +298,13 @@ fn relationship_kinds_within(bytes: &[u8], mut budget: u64) -> Result<BTreeMap<S
                 continue;
             }
             let external = attr(attrs, "TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External"));
-            if !external
-                && let Some(part) = by_key.get(&resolve_target(&src_dir, target).to_ascii_lowercase())
-                && !holds_something(&mut zip, part, kind, &mut verdicts, &mut budget)
-            {
-                continue;
+            if !external && let Some(part) = by_key.get(&resolve_target(&src_dir, target).to_ascii_lowercase()) {
+                if !holds_something(&mut zip, part, kind, &mut verdicts, &mut budget) {
+                    continue;
+                }
+                if kind.eq_ignore_ascii_case("pivotCacheDefinition") && holds_something(&mut zip, part, "refreshonload", &mut verdicts, &mut budget) {
+                    kinds.entry("pivotcacherecords".to_string()).or_insert_with(|| "pivotCacheRecords".to_string());
+                }
             }
             kinds.entry(kind.to_ascii_lowercase()).or_insert_with(|| kind.to_string());
         }
@@ -322,15 +324,11 @@ fn rels_source_dir(key: &str) -> Option<String> {
 /// `verdicts` remembers the answer per (part, named content); `budget` is the decompression this
 /// package's remaining checks may cause, and once it is spent the part counts as having content.
 fn holds_something(zip: &mut Zip<'_>, name: &str, kind: &str, verdicts: &mut HashMap<(String, &'static str), bool>, budget: &mut u64) -> bool {
-    let wanted: Option<&'static [u8]> = match kind.to_ascii_lowercase().as_str() {
-        "comments" => Some(b"comment"),
-        "vmldrawing" => Some(b"shape"),
-        _ => None,
-    };
-    let marker = match wanted {
-        Some(b"comment") => "comment",
-        Some(_) => "shape",
-        None => "any",
+    let marker = match kind.to_ascii_lowercase().as_str() {
+        "comments" => "comment",
+        "vmldrawing" => "shape",
+        "refreshonload" => "refreshonload",
+        _ => "any",
     };
     if let Some(v) = verdicts.get(&(name.to_ascii_lowercase(), marker)) {
         return *v;
@@ -359,6 +357,13 @@ fn holds_something_uncached(zip: &mut Zip<'_>, name: &str, marker: &'static str,
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                if marker == "refreshonload" {
+                    return e
+                        .attributes()
+                        .with_checks(false)
+                        .flatten()
+                        .any(|a| local_name(a.key.as_ref()) == b"refreshOnLoad" && matches!(a.value.as_ref(), b"1" | b"true"));
+                }
                 let found = match wanted {
                     Some(w) => local_name(e.name().as_ref()) == w,
                     None => in_root,
