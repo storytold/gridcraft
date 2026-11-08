@@ -102,6 +102,7 @@ pub fn start() {
                         }
                         bridge.post_ready();
                     }
+                    crate::api::install(&mut app, cc.egui_ctx.clone());
                     Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, prefs }))
                 }),
             )
