@@ -104,14 +104,7 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
         line: Color::from_hex(&color).unwrap_or(Color::rgb(0x1F, 0x5F, 0xC9)),
         text,
         format: Default::default(),
-        ink: Some(InkStyle {
-            tool: InkTool::Pen,
-            width_cm,
-            height_cm: width_cm,
-            order,
-            key: Some(key),
-            ..InkStyle::default()
-        }),
+        ink: Some(InkStyle { tool: InkTool::Pen, width_cm, height_cm: width_cm, order, key: Some(key), ..InkStyle::default() }),
     };
     edit(s, |cx| {
         cx.sheet_mut(si)?.shapes.push(shape);

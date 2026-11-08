@@ -165,11 +165,7 @@ fn a_stroke_drawn_in_a_reopened_workbook_takes_a_key_no_other_stroke_holds() {
     session.execute("draw.stroke", json!({"points": [[100.0, 100.0], [140.0, 150.0]], "width": 3})).unwrap();
     let first_key = shapes(&session)[0].ink.as_ref().and_then(|i| i.key.clone()).expect("the first stroke has a key");
     session = reopen(&mut session);
-    assert_eq!(
-        shapes(&session)[0].ink.as_ref().and_then(|i| i.key.clone()),
-        Some(first_key.clone()),
-        "a save keeps the stroke's key"
-    );
+    assert_eq!(shapes(&session)[0].ink.as_ref().and_then(|i| i.key.clone()), Some(first_key.clone()), "a save keeps the stroke's key");
     session.execute("draw.stroke", json!({"points": [[300.0, 120.0], [360.0, 170.0]], "width": 3})).unwrap();
     let keys: Vec<String> = shapes(&session).iter().filter_map(|s| s.ink.as_ref()?.key.clone()).collect();
     assert_eq!(keys.len(), 2, "{keys:?}");
