@@ -20,6 +20,7 @@ mod border_preview;
 mod cell_pictures;
 pub mod chartview;
 pub mod code_editor;
+pub mod collab;
 pub mod control;
 pub mod control_ui;
 mod craft_fonts_policy;
@@ -235,6 +236,11 @@ pub struct SheetApp {
     /// Dismissible info bar under the ribbon (open-time notices).
     pub notice: Option<Notice>,
     pub services: Services,
+    /// The collaboration layer, when the build and the host provide one.
+    pub collab: Option<Box<dyn collab::Collab>>,
+    /// Where the other participants are, refreshed by [`SheetApp::poll_collab`].
+    pub collab_views: Vec<collab::PresenceView>,
+    pub collab_status: collab::SyncStatus,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
     /// Synthetic input from agents, one batch per step (drags need several steps).

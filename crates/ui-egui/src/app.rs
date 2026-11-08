@@ -41,6 +41,9 @@ impl SheetApp {
             toast: None,
             notice: None,
             services,
+            collab: None,
+            collab_views: Vec::new(),
+            collab_status: crate::collab::SyncStatus::Off,
             printing: Default::default(),
             print_feedback_seen: None,
             synthetic: Default::default(),
@@ -135,6 +138,7 @@ impl SheetApp {
         // Printing feedback is polled once per frame, here, so hidden windows and logic-only
         // frames still see worker completion. `ui` and the desktop app no longer poll it.
         self.poll_printing(ctx);
+        self.poll_collab();
         self.guard_window_close(ctx);
         #[cfg(not(target_arch = "wasm32"))]
         updates_ui::tick(self, ctx);
