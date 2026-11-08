@@ -206,6 +206,30 @@ fn typed(value: &str, format: &str, shown: &str) -> String {
     )
 }
 
+/// A currency, a quoted-symbol currency and a percentage keep the format Sheets showed them in,
+/// and the typed number, not the text on screen, is what lands.
+#[test]
+fn currency_and_percent_formats_from_sheets_keep_the_number_and_how_it_shows() {
+    let mut s = session();
+    let html = sheets_table(
+        &[
+            typed("1234.5", "$#,##0.00", "$1,234.50"),
+            // Sheets writes a literal symbol in quotes: the JSON string holds `\"$\"#,##0.00`.
+            typed("-9.99", "\\&quot;$\\&quot;#,##0.00", "-$9.99"),
+            typed("0.256", "0.0%", "25.6%"),
+        ]
+        .concat(),
+    );
+    let text = "$1,234.50\n-$9.99\n25.6%\n";
+    s.execute("edit.paste", json!({"at": "A1", "text": text, "html": html})).unwrap();
+    assert_eq!(value(&s, "A1"), Value::number(1234.5));
+    assert_eq!(shown(&s, "A1"), "$1,234.50");
+    assert_eq!(value(&s, "A2"), Value::number(-9.99));
+    assert_eq!(shown(&s, "A2"), "-$9.99");
+    assert_eq!(value(&s, "A3"), Value::number(0.256));
+    assert_eq!(shown(&s, "A3"), "25.6%");
+}
+
 /// A typed calendar date lands on the same day in a 1900 and in a 1904 workbook.
 #[test]
 fn sheets_dates_follow_the_workbook_date_system() {
