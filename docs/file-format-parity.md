@@ -14,6 +14,11 @@ support comes from `crates/engine/src/io.rs` (`FileKind`), `crates/xlsx/src` and
 Legacy scalar `INDEX(range, MATCH(...))` formulas remain ordinary formulas on save, including when
 shared formulas are expanded during import (`array_export.rs`, #1505).
 
+For native package acceptance checks involving in-cell pictures and dynamic
+arrays, see the [synthetic control matrix and Mac observations](cell-picture-acceptance.md).
+These distinguish repair prompts, feature rendering and save/reopen preservation;
+they do not claim acceptance of untested PR heads or other Excel platforms.
+
 ## Workbook window settings
 
 GridCraft keeps one modelled workbook window. On XLSX import it selects the first visible
