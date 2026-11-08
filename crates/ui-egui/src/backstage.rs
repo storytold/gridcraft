@@ -372,7 +372,12 @@ fn new_tiles(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outc
             }
         });
         match bs.templates.known(ui.ctx(), folder) {
-            None => dim(ui, "Loading templates…"),
+            None => {
+                if bs.templates.folder != folder {
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+                }
+                dim(ui, "Loading templates…");
+            }
             Some(Err(error)) => dim(ui, &format!("Could not read personal templates: {error}")),
             Some(Ok(templates)) if templates.is_empty() => dim(ui, "No .xltx or .xltm templates found in this folder."),
             Some(Ok(templates)) => {

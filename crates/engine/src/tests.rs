@@ -28,6 +28,8 @@ fn opening_a_template_creates_an_unsaved_workbook_with_a_stem_title() {
     assert_eq!(s.doc().unwrap().display_title(), "Forecast.v2");
     assert!(s.doc().unwrap().path.is_none(), "Save must ask for a destination instead of replacing the template");
     assert_eq!(s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["name"], "Forecast.v2.xlsx");
+    s.doc_mut().unwrap().path = Some("saved-template.xltx".into());
+    assert_eq!(s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["name"], "saved-template.xlsx");
 }
 
 #[test]
