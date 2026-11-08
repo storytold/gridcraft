@@ -231,6 +231,9 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
                 let sy = sh.row_top(c.row) as f32 + (p.y - geo.y(sh, c.row)) / geo.z;
                 if app.grid.ink.is_empty() {
                     app.grid.ink_started = Some(crate::clock::monotonic_ms());
+                    // The cell the stroke starts in, kept from the hit test: recomputing it from
+                    // the sheet points would round across a row boundary far down the sheet.
+                    app.grid.ink_cell = Some(c);
                 }
                 app.grid.ink.push([sx, sy]);
             }
@@ -257,12 +260,18 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
                 let pts: Vec<[f32; 2]> = std::mem::take(&mut app.grid.ink);
                 let ended = crate::clock::monotonic_ms();
                 let started = app.grid.ink_started.take().unwrap_or(ended);
+                let at = app.grid.ink_cell.take();
                 if app.session.draw_tool == "actionPen" {
                     // One stroke in, one typed value out; a refusal (no model, protected cell)
                     // is shown to the person rather than swallowed. The stroke's own times let
-                    // the engine tell a real pause from time spent recognising.
+                    // the engine tell a real pause from time spent recognising, and the cell it
+                    // started in is the target.
                     if !pts.is_empty() {
-                        app.run_or_alert("draw.actionPenInk", json!({"points": pts, "startedAt": started, "endedAt": ended}));
+                        let mut payload = json!({"points": pts, "startedAt": started, "endedAt": ended});
+                        if let Some(at) = at {
+                            payload["cell"] = json!(at.a1());
+                        }
+                        app.run_or_alert("draw.actionPenInk", payload);
                     }
                 } else if pts.len() >= 2 {
                     let _ = app.run("draw.stroke", json!({"points": pts}));

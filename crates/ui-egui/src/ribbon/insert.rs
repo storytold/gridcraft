@@ -294,6 +294,15 @@ pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
             crate::inkpanel::open(app);
         }
     }
+    // Model management stays reachable once the model is loaded: the Action Pen button then only
+    // toggles the tool, so this control opens the same panel without changing it.
+    ui.vertical(|ui| {
+        ui.add_space(24.5);
+        let manage = small_button(ui, Icon::Settings, "Model…", "Download, import or remove the handwriting model", false);
+        if manage.clicked() {
+            crate::inkpanel::open(app);
+        }
+    });
     sep(ui);
     let __k = big_button(ui, Icon::Shapes, "Ink to\nShape", "Convert the last ink stroke to a shape", false);
     control_keytip(app, ui, &__k, "draw.inkToShape");

@@ -54,6 +54,9 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!(query "ink.modelRemove", "Remove Handwriting Model", [], None, "{} deletes the downloaded model", always, model_remove),
         cmd!(noundo "draw.lasso", "Lasso Select", ["Draw", "Tools"], None, "{} (selects ink by dragging; same as Select Objects)", has_doc, |s, _| {
+            if s.draw_tool == "actionPen" {
+                s.ink_entry = None;
+            }
             s.draw_tool = String::new();
             ok()
         }),
@@ -72,6 +75,10 @@ pub fn specs() -> Vec<CommandSpec> {
 
 fn pen(s: &mut Session, p: &Json) -> Result<Json> {
     let on = bool_param(p, "on").unwrap_or(s.draw_tool != "pen");
+    if s.draw_tool == "actionPen" {
+        // Another tool replaces the Action Pen: a half-written entry must not leak into it.
+        s.ink_entry = None;
+    }
     s.draw_tool = if on { "pen".into() } else { String::new() };
     if let Some(c) = str_param(p, "color") {
         s.draw_color = c.to_string();
@@ -84,6 +91,9 @@ fn pen(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn eraser(s: &mut Session, p: &Json) -> Result<Json> {
     let on = bool_param(p, "on").unwrap_or(s.draw_tool != "eraser");
+    if s.draw_tool == "actionPen" {
+        s.ink_entry = None;
+    }
     s.draw_tool = if on { "eraser".into() } else { String::new() };
     Ok(json!({"tool": s.draw_tool}))
 }

@@ -6211,6 +6211,20 @@ fn action_pen_targets_the_cell_under_the_strokes_first_point() {
 }
 
 #[test]
+fn another_draw_tool_ends_the_handwriting_entry() {
+    let mut s = ink_session("1");
+    let at = json!([[10.0, 10.0], [20.0, 20.0]]);
+    let switch: [(&str, serde_json::Value); 3] = [("draw.pen", json!({"on": true})), ("draw.eraser", json!({"on": true})), ("draw.lasso", json!({}))];
+    for (tool, params) in switch {
+        s.execute("draw.actionPen", json!({"on": true})).unwrap();
+        s.execute("draw.actionPenInk", json!({"points": at, "cell": "B2"})).unwrap();
+        assert!(s.ink_entry.is_some(), "an entry is open before {tool}");
+        s.execute(tool, params).unwrap();
+        assert!(s.ink_entry.is_none(), "{tool} must end the entry, so it cannot leak into the next one");
+    }
+}
+
+#[test]
 fn the_pause_between_strokes_is_the_time_the_pen_was_up() {
     let mut s = ink_session("1");
     let at = json!([[10.0, 10.0], [20.0, 20.0]]);
