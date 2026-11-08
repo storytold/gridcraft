@@ -54,10 +54,12 @@ fn text_needs_quote_prefix(t: &str, sys: gridcraft_core::date::DateSystem) -> bo
 
 /// What the cell editor and the formula bar start from. Same as `Cell::input_text`, except that a
 /// constant number in a date or time format is shown as a date, not as its serial. As in Excel,
-/// that date is written the system's way whatever the cell's format: the short date (built-in
-/// format 14), followed by the time with seconds when there is one, and just the time for a value
-/// under 1. When that text would not read back as the same number (fractions of a second), the
-/// serial is shown.
+/// that date is written the same way whatever the cell's format: the short date, followed by the
+/// time with seconds when there is one, and just the time for a value under 1. Excel takes the
+/// short date from the system's regional settings; here it is the en-US `m/d/yyyy` (built-in
+/// format 14), with `h:mm:ss AM/PM` for the time. The serial is shown instead whenever that text
+/// would not read back as the same number: a negative number, fractions of a second, or a date
+/// the short date can't write (past year 9999 in the 1904 system).
 pub fn edit_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     let raw = sheet.input_text(c);
     let Some(cell) = sheet.cell(c) else { return raw };
