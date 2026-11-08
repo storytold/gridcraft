@@ -506,7 +506,7 @@ impl Workbook {
         }
     }
 
-    /// A free id for a new chart, picture, shape, table or slicer: one more than the largest in
+    /// A free id for a new chart, picture, shape, table, slicer or form control: one more than the largest in
     /// use, or, when that is `u32::MAX` (a file can carry any id), the lowest free one.
     pub fn next_object_id(&self) -> u32 {
         self.free_object_ids(1).first().copied().unwrap_or(u32::MAX)
@@ -527,6 +527,7 @@ impl Workbook {
                     .chain(s.shapes.iter().map(|o| o.id))
                     .chain(s.tables.iter().map(|o| o.id))
                     .chain(s.slicers.iter().map(|o| o.id))
+                    .chain(s.controls.iter().map(|o| o.id))
             })
             .collect();
         used.sort_unstable();
@@ -614,6 +615,10 @@ mod tests {
         }
         assert_eq!(wb.next_object_id(), 8);
         if let Some(sh) = wb.sheet_mut(0) {
+            sh.controls.push(crate::FormControl { id: 12, ..Default::default() });
+        }
+        assert_eq!(wb.next_object_id(), 13, "form controls take ids from the same sequence");
+        if let Some(sh) = wb.sheet_mut(0) {
             sh.images.push(image(u32::MAX));
         }
         // An id read from a file at the maximum: the lowest free id, not the maximum again.
@@ -629,6 +634,19 @@ mod tests {
             sh.images.push(image(u32::MAX - 1));
         }
         assert_eq!(wb.free_object_ids(3), vec![1, 2, u32::MAX], "the top first, then from 1");
+    }
+
+    /// A form control's id is in use like any object's: the free ids skip it, also when it is the
+    /// largest id a file could carry.
+    #[test]
+    fn free_object_ids_skip_a_form_controls_id() {
+        let mut wb = Workbook::new();
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.controls.push(crate::FormControl { id: 3, ..Default::default() });
+            sh.controls.push(crate::FormControl { id: u32::MAX, ..Default::default() });
+        }
+        assert_eq!(wb.free_object_ids(4), vec![1, 2, 4, 5], "3 and the largest id are taken");
+        assert_eq!(wb.next_object_id(), 1);
     }
 
     /// A file can use the largest id and the one below it: nothing is free above them, so the free
