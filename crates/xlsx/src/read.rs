@@ -46,6 +46,9 @@ pub struct Ctx<'a> {
     /// The parts `[Content_Types].xml` declares as InkML: read at most once per package, so a
     /// workbook with many drawings does not decompress and parse that part again per drawing.
     pub inkml_parts: Option<Arc<HashSet<String>>>,
+    /// Ink creation ids the workbook already holds: a trace that needs a new id mints one no
+    /// earlier stroke uses, across every drawing part, not just its own.
+    pub ink_keys: HashSet<String>,
 }
 
 impl Ctx<'_> {
@@ -280,6 +283,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         known_function,
         python: Default::default(),
         inkml_parts: None,
+        ink_keys: HashSet::new(),
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());

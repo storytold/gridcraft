@@ -20,6 +20,8 @@ mod ink;
 mod inkml;
 
 pub use inkml::creation_id;
+#[cfg(test)]
+pub(crate) use inkml::mint_ink_key;
 pub(crate) use inkml::{CT as CT_INKML, Parts as InkParts};
 
 /// The InkML part and fallback picture for a native ink stroke (see [`inkml`]).

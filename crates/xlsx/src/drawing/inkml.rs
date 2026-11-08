@@ -156,7 +156,12 @@ fn read_traces(
     let anchor = anchor_for(content_part, anchor, sheet)?;
     let width_px = (style.width_cm * PX_PER_CM as f32).clamp(1.0, 255.0).round();
     let fill = Color::Rgb((width_px as u32) << 16);
-    let mut keys: Vec<String> = creation_id_of(content_part).into_iter().collect();
+    // The part's GUID names the first stroke. Later traces mint ids reserved across the whole
+    // workbook (`cx.ink_keys`), so two parts never hand out the same new id.
+    let part_key = creation_id_of(content_part);
+    if let Some(first) = &part_key {
+        cx.ink_keys.insert(first.clone());
+    }
     let mut total = 0usize;
     let mut shapes = Vec::new();
     for (i, trace) in traces(&root)?.into_iter().enumerate() {
@@ -166,15 +171,12 @@ fn read_traces(
             return None;
         }
         let mut image = style.clone();
-        // The part's GUID names the first stroke; the others in one part get free keys of their own,
-        // so a gridcraft save writes one part per stroke and never repeats a creation id.
-        image.key = match (i, keys.first()) {
-            (0, Some(first)) => Some(first.clone()),
-            _ => {
-                let key = gridcraft_model::ink_creation_id_free(|k| keys.iter().any(|held| held == k));
-                keys.push(key.clone());
-                Some(key)
-            }
+        // The part's GUID names the first stroke and is kept for the hidden sheet's extras lookup;
+        // a part without a valid GUID, and every later trace in one part, gets a free key reserved
+        // across the workbook, so a gridcraft save writes one part per stroke without repeating an id.
+        image.key = match (i, part_key.clone()) {
+            (0, Some(first)) => Some(first),
+            _ => Some(mint_ink_key(&mut cx.ink_keys)),
         };
         image.pressure = pressure;
         // The part carries one brush; successive strokes keep their drawing order.
@@ -658,6 +660,13 @@ fn effect_name(e: InkEffect) -> &'static str {
         InkEffect::Silver => "silver",
         InkEffect::Bronze => "bronze",
     }
+}
+
+/// A creation id no stroke this workbook already holds uses, reserved as it is minted.
+pub(crate) fn mint_ink_key(reserved: &mut HashSet<String>) -> String {
+    let key = gridcraft_model::ink_creation_id_free(|k| reserved.contains(k));
+    reserved.insert(key.clone());
+    key
 }
 
 /// The stroke's `a16:creationId`: its stored key in canonical lowercase when it is an ST_Guid,

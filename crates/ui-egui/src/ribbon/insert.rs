@@ -257,11 +257,6 @@ pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
     use crate::pen_icon;
 
     let tool = app.session.draw_tool.clone();
-    let brush = app.session.draw_brush.clone();
-    let color = app.session.draw_color.clone();
-    let width = app.session.draw_width;
-    let effect = app.session.draw_effect.clone();
-
     let __k = big_button(ui, Icon::Shapes, "Select\nObjects", "Select and move ink and shapes", false);
     control_keytip(app, ui, &__k, "draw.lasso");
     if __k.clicked() {
@@ -286,11 +281,7 @@ pub(super) fn draw(app: &mut SheetApp, ui: &mut Ui) {
     app.session.ensure_draw_pens();
     let tr = crate::i18n::current(ui.ctx());
     for pen in app.session.draw_pens.clone() {
-        let selected = tool == "pen"
-            && brush == pen.tool
-            && color.eq_ignore_ascii_case(&pen.color)
-            && effect == pen.effect.as_deref().unwrap_or_default()
-            && (width - pen.width).abs() < 0.01;
+        let selected = pen_in_hand(&app.session, &pen);
         let label = gridcraft_engine::cmd::draw::pen_label(&pen).unwrap_or_else(|| pen_icon::tool_label(&pen.tool));
         let (main, arrow) = pen_icon::pen_tile(
             ui,
@@ -472,6 +463,19 @@ fn pen_dropdown(app: &mut SheetApp, ui: &mut Ui, pen: &gridcraft_engine::cmd::dr
     }
 }
 
+/// Whether the pen in hand is this gallery pen: the comparison the engine's `draw.updatePen`
+/// and `draw.deletePen` make, texture and repeat size included, so two pens that differ only in
+/// their imported pattern or its size never both look selected.
+fn pen_in_hand(s: &gridcraft_engine::Session, pen: &gridcraft_engine::cmd::draw::DrawPen) -> bool {
+    s.draw_tool == "pen"
+        && s.draw_brush == pen.tool
+        && s.draw_color.eq_ignore_ascii_case(&pen.color)
+        && s.draw_effect == pen.effect.as_deref().unwrap_or_default()
+        && (s.draw_width - pen.width).abs() < 0.01
+        && s.draw_texture == pen.texture.as_deref().unwrap_or_default()
+        && gridcraft_engine::cmd::draw::texture_scale(s.draw_texture_scale) == gridcraft_engine::cmd::draw::texture_scale(pen.texture_scale)
+}
+
 /// The `draw.updatePen` parameters for a pen-dropdown choice. `texture` is sent only when the
 /// choice sets it — a built-in effect passes `Some("")`, since the command keeps a pen's imported
 /// texture when the key is absent and an imported texture wins over an effect when both are set.
@@ -500,6 +504,36 @@ fn apply_pen_texture(app: &mut SheetApp, id: u32, tool: &str, color: &str, width
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn two_pens_that_differ_only_in_their_texture_are_not_both_selected() {
+        use gridcraft_engine::cmd::draw::DrawPen;
+        let mut s = gridcraft_engine::Session::new();
+        s.draw_tool = "pen".into();
+        s.draw_brush = "pen".into();
+        s.draw_color = "#1F5FC9".into();
+        s.draw_width = 0.5;
+        s.draw_texture = "aa".repeat(16);
+        s.draw_texture_scale = 2.0;
+        let pen = DrawPen {
+            id: 1,
+            tool: "pen".into(),
+            color: "#1F5FC9".into(),
+            width: 0.5,
+            effect: None,
+            texture: Some("aa".repeat(16)),
+            texture_scale: 2.0,
+        };
+        assert!(pen_in_hand(&s, &pen), "the pen in hand is selected");
+        let other = DrawPen { texture: Some("bb".repeat(16)), ..pen.clone() };
+        assert!(!pen_in_hand(&s, &other), "a pen on another texture is not");
+        let scaled = DrawPen { texture_scale: 9.0, ..pen.clone() };
+        assert!(!pen_in_hand(&s, &scaled), "nor is the same texture at another repeat size");
+        s.draw_texture.clear();
+        s.draw_texture_scale = 8.0;
+        let plain = DrawPen { texture: None, texture_scale: 8.0, ..pen };
+        assert!(pen_in_hand(&s, &plain), "an untextured pen in hand is its own tile");
+    }
 
     #[test]
     fn choosing_a_built_in_effect_clears_an_imported_texture() {

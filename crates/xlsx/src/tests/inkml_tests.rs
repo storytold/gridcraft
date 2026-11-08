@@ -696,3 +696,17 @@ fn the_content_types_part_is_read_once_for_the_whole_workbook() {
     assert!(back.sheets.iter().all(|s| s.shapes.len() == 1 && s.shapes[0].kind == ShapeKind::Ink), "both drawings keep their ink");
     assert_eq!(report.content_types_reads, 1, "read once per package, not once per drawing");
 }
+
+#[test]
+fn minted_ink_keys_never_repeat_a_workbook_id() {
+    // A second trace in a part needs a new creation id. Minting against a set that lives for the
+    // whole workbook (rather than one part's keys) keeps two parts from handing out the same id.
+    let mut reserved = std::collections::HashSet::new();
+    let a = crate::drawing::mint_ink_key(&mut reserved);
+    let b = crate::drawing::mint_ink_key(&mut reserved);
+    assert_ne!(a, b, "the second mint repeats an id the workbook already holds");
+    reserved.insert("{11111111-2222-4333-8444-555555555555}".into());
+    let c = crate::drawing::mint_ink_key(&mut reserved);
+    assert_ne!(c, "{11111111-2222-4333-8444-555555555555}", "a key already in the workbook is not minted again");
+    assert!(!reserved.contains(&c) || reserved.iter().filter(|k| **k == c).count() == 1, "the mint is reserved");
+}
