@@ -342,7 +342,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-10-11 | minor | AutoFit accounts for table and ordinary filter dropdowns, including low zoom; header text excludes the button area |
 | 2026-10-11 | minor | Outline band for grouped rows and columns, Show / Hide Detail on the Data tab, numpad navigation keys in shortcuts (#373) |
 | 2026-10-11 | minor | Shift+Space / Ctrl+Space no longer start an edit; Control+Space selects the column on Mac (#338) |
-| 2026-11-08 | minor | Added row/column reorder regressions for tail stores, array edges, floating anchors, protection, empty sheets and refusal undo history |
+| 2026-11-08 | minor | Added row/column reorder regressions for tail stores, array edges, floating anchors, protection, empty sheets and refusal undo history; verified unchanged formula text and moving array ranges with selective reference rewriting |
 | 2026-11-04 | minor | Selected whole rows can be reordered by their numbered headers, with an insertion marker and one undo step |
 | 2026-10-11 | minor | Selected whole columns can be reordered by dragging their headers to an insertion point |
 | 2026-10-11 | minor | Page Layout view with rulers and in-place headers and footers (#329) |

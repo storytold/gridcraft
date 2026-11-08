@@ -45,6 +45,12 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         && !sel.is_full_rows()
         && sel.count() <= 4_000_000;
     let (tiles_r, tiles_c) = if tile { (sel.height() / h, sel.width() / w) } else { (1, 1) };
+    // A single cell or row repeated down a filtered selection skips the rows the filter hides; a
+    // taller block is pasted straight down, hidden rows included, as in Excel.
+    let skip_rows = match s.doc()?.wb.sheet(dest_sheet) {
+        Some(sh) if tile && h == 1 => super::filtered_rows(sh, sel),
+        _ => Default::default(),
+    };
     // Excel refuses a paste that would run off the sheet (whole columns pasted below row 1, whole
     // rows right of column A, a whole column transposed) instead of pasting part of it.
     if at.offset(i64::from(tiles_r * h) - 1, i64::from(tiles_c * w) - 1).is_none() {
@@ -134,6 +140,9 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                     let sc = CellRef::new(src.start.row + r, src.start.col + c);
                     let (dr, dc) = if transpose { (c, r) } else { (r, c) };
                     let Some(dest) = at.offset((tr * h + dr) as i64, (tc * w + dc) as i64) else { continue };
+                    if skip_rows.contains(&dest.row) {
+                        continue;
+                    }
                     let src_cell = if cut_move { moved_formulas.get(&sc).cloned() } else { src_sheet.cell(sc).cloned() };
                     let src_val = src_sheet.value(sc);
                     let src_picture = if cut_move { moved_pictures.get(&sc) } else { src_sheet.cell_pictures.get(&sc) }.cloned();
@@ -326,7 +335,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         }
         let pasted = RangeRef::new(at, at.offset_clamped(i64::from(tiles_r * h) - 1, i64::from(tiles_c * w) - 1));
         if !link && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
-            paste_validations(cx, src_sheet, src, dest_sheet, pasted, transpose, skip_blanks)?;
+            paste_validations(cx, src_sheet, src, dest_sheet, pasted, PasteMode { transpose, skip_blanks, skip_rows: &skip_rows })?;
         }
         if what == What::ColumnWidths {
             // Each pasted column takes the width of the column copied to it (transposed, the
@@ -394,6 +403,31 @@ const MAX_PASTE_LINK_CELLS: u64 = 1_048_576;
 /// selection makes one range per tile).
 const MAX_PASTE_VALIDATION_RANGES: usize = 100_000;
 
+/// How a validation paste lays the rules out: transposed or not, keeping the destination's rule under
+/// blank source cells, and leaving the rows a filter hides as they are.
+#[derive(Clone, Copy)]
+struct PasteMode<'a> {
+    transpose: bool,
+    skip_blanks: bool,
+    skip_rows: &'a std::collections::BTreeSet<u32>,
+}
+
+/// `range` less the rows in `skip`: the runs of rows between them, as ranges of its columns.
+fn without_rows(range: RangeRef, skip: &std::collections::BTreeSet<u32>) -> Vec<RangeRef> {
+    let mut out = Vec::new();
+    let mut next = range.start.row;
+    for &row in skip.range(range.start.row..=range.end.row) {
+        if row > next {
+            out.push(RangeRef::new(CellRef::new(next, range.start.col), CellRef::new(row - 1, range.end.col)));
+        }
+        next = row + 1;
+    }
+    if next <= range.end.row {
+        out.push(RangeRef::new(CellRef::new(next, range.start.col), CellRef::new(range.end.row, range.end.col)));
+    }
+    out
+}
+
 /// Pasting validation works on ranges, as Excel stores it: the pasted rectangle is cut out of the
 /// destination's rules (cells whose source had no rule end up with none), then each source rule
 /// that covers part of the copied block `src` comes along as one rule over the translated parts.
@@ -404,9 +438,9 @@ fn paste_validations(
     src: RangeRef,
     dest_sheet: usize,
     pasted: RangeRef,
-    transpose: bool,
-    skip_blanks: bool,
+    mode: PasteMode<'_>,
 ) -> Result<()> {
+    let PasteMode { transpose, skip_blanks, skip_rows } = mode;
     let (h, w) = if transpose { (src.width(), src.height()) } else { (src.height(), src.width()) };
     let (tiles_r, tiles_c) = (pasted.height() / h.max(1), pasted.width() / w.max(1));
     let mut rules = Vec::new();
@@ -426,7 +460,9 @@ fn paste_validations(
             let (r, c) = if transpose { (c, r) } else { (r, c) };
             for tr in 0..tiles_r {
                 for tc in 0..tiles_c {
-                    if let Some(d) = pasted.start.offset(i64::from(tr * h + r), i64::from(tc * w + c)) {
+                    if let Some(d) = pasted.start.offset(i64::from(tr * h + r), i64::from(tc * w + c))
+                        && !skip_rows.contains(&d.row)
+                    {
                         cells.push((d.row, d.col));
                     }
                 }
@@ -490,6 +526,8 @@ fn paste_validations(
                 }
             }
         }
+        // The rows a filter hides keep what they have.
+        let ranges: Vec<RangeRef> = ranges.into_iter().flat_map(|r| without_rows(r, skip_rows)).collect();
         let Some(anchor) = ranges.first().map(|r| r.start) else { continue };
         let mut rule = dv.clone();
         // Relative references move with the rule, as pasted formulas do: they are written for the
@@ -507,7 +545,7 @@ fn paste_validations(
         cleared.extend(rules.iter().flat_map(|r| r.ranges.iter().copied()));
         super::super::data::remove_validation_cells(&mut sh.validations, &cleared);
     } else {
-        super::super::data::remove_validation_cells(&mut sh.validations, &[pasted]);
+        super::super::data::remove_validation_cells(&mut sh.validations, &without_rows(pasted, skip_rows));
     }
     sh.validations.extend(rules);
     Ok(())
@@ -530,19 +568,19 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
         let on_target = moves_arrays && host.eq_ignore_ascii_case(target);
         let Some(sheet) = wb.sheet_mut(si) else { continue };
         for (c, f) in keys {
-            let Some(expr) = f.expr() else { continue };
-            let new = gridcraft_formula::adjust::adjust(expr, &host, target, e);
-            let text = gridcraft_formula::print(&new);
+            // Borrows the tree and copies and prints only the formulas the edit changes. A formula
+            // the edit leaves alone keeps its stored text, even if that text is not canonical.
+            let Some(new) = f.with_expr(|x| gridcraft_formula::adjust::adjust_if_changed(x, &host, target, e)) else { continue };
             let array = match f.array {
                 Some(a) if on_target => crate::cmd::sheet::map_range(a, e),
                 a => a,
             };
-            if (text != f.text || array != f.array)
-                && let Some(cell) = sheet.cells.get_mut(c)
-            {
-                let mut nf = Formula::from_expr(new);
-                nf.array = array;
-                nf.dynamic = f.dynamic;
+            let nf = match new {
+                Some(new) => Formula { array, dynamic: f.dynamic, ..Formula::from_expr(new) },
+                None if array != f.array => Formula { array, ..(*f).clone() },
+                None => continue,
+            };
+            if let Some(cell) = sheet.cells.get_mut(c) {
                 cell.formula = Some(std::sync::Arc::new(nf));
             }
         }
