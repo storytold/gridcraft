@@ -8,6 +8,50 @@ use wasm_bindgen::JsValue;
 const CANVAS_ID: &str = "gridcraft_canvas";
 const LOADING_ID: &str = "gridcraft_loading";
 
+/// The largest picture a dialog takes, the same 16 MB its message names.
+const MAX_PICTURE_BYTES: f64 = 16.0 * 1024.0 * 1024.0;
+
+/// Picks a picture and reads it only when it fits `max`: the file's own size is checked first, so
+/// choosing a huge image cannot turn into an allocation that takes the tab down. An oversized pick
+/// answers empty bytes, which the dialog reports as too large.
+async fn pick_picture(max: f64) -> Option<(String, Vec<u8>)> {
+    let document = web_sys::window()?.document()?;
+    let input = document.create_element("input").ok()?.dyn_into::<web_sys::HtmlInputElement>().ok()?;
+    input.set_type("file");
+    input.set_accept("image/png,image/jpeg");
+    // Some browsers only fire `change` for an input that is in the document.
+    let body = document.body()?;
+    body.append_child(&input).ok()?;
+    let chosen: std::rc::Rc<std::cell::RefCell<Option<web_sys::File>>> = Default::default();
+    let promise = {
+        let chosen = chosen.clone();
+        let input = input.clone();
+        js_sys::Promise::new(&mut move |resolve, _reject| {
+            let chosen = chosen.clone();
+            let input_for_change = input.clone();
+            let resolve_for_change = resolve.clone();
+            let closure = wasm_bindgen::closure::Closure::once(move || {
+                if let Some(file) = input_for_change.files().and_then(|files| files.get(0)) {
+                    *chosen.borrow_mut() = Some(file);
+                }
+                let _ = resolve_for_change.call0(&JsValue::UNDEFINED);
+            });
+            input.set_onchange(Some(closure.as_ref().unchecked_ref()));
+            closure.forget();
+            let _ = input.click();
+        })
+    };
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await.ok()?;
+    let _ = body.remove_child(&input);
+    let file = chosen.borrow_mut().take()?;
+    let name = file.name();
+    if file.size() > max {
+        return Some((name, Vec::new()));
+    }
+    let buffer = wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await.ok()?;
+    Some((name, js_sys::Uint8Array::new(&buffer).to_vec()))
+}
+
 /// Starts the eframe web runner for the GridCraft canvas. It adjusts the WebGPU device limits to the adapter's, optionally selects the WebGL backend from the query string, and builds the shell with the requested sample or host bridge, browser language rules, stored preferences and the loading/error page state.
 pub fn start() {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
@@ -211,11 +255,12 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
         pick_picture_async: Some(Box::new(move |inbox| {
             let ctx = picture_ctx.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                let Some(file) = rfd::AsyncFileDialog::new().add_filter("Pictures (PNG, JPEG)", &["png", "jpg", "jpeg"]).pick_file().await else {
+                let Some((name, bytes)) = pick_picture(MAX_PICTURE_BYTES).await else {
                     return;
                 };
-                let bytes = file.read().await;
-                inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((file.file_name(), bytes));
+                // Empty bytes report a pick the picker refused for its size: the dialogs show
+                // their own "no larger than 16 MB" message and nothing is decoded.
+                inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((name, bytes));
                 ctx.request_repaint();
             });
         })),

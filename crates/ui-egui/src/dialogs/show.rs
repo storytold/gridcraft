@@ -243,7 +243,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     });
                     if let Some((name, bytes)) = arrived {
                         d.picture_inbox = None;
-                        if bytes.len() > 16 * 1024 * 1024 {
+                        // Empty bytes are a pick the browser refused to read for its size.
+                        if bytes.is_empty() || bytes.len() > 16 * 1024 * 1024 {
                             app.message = Some((d.title.clone(), "Choose a PNG or JPEG no larger than 16 MB.".into()));
                         } else {
                             d.values.remove("path");
@@ -503,7 +504,8 @@ fn import_texture(app: &mut SheetApp, d: &mut Dialog, ui: &mut egui::Ui, confirm
     let arrived = d.picture_inbox.as_ref().and_then(|inbox| inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop());
     if let Some((name, bytes)) = arrived {
         d.picture_inbox = None;
-        if bytes.len() > 16 * 1024 * 1024 {
+        // Empty bytes are a pick the browser refused to read for its size.
+        if bytes.is_empty() || bytes.len() > 16 * 1024 * 1024 {
             app.message = Some((d.title.clone(), "Choose a PNG or JPEG no larger than 16 MB.".into()));
         } else {
             d.values.remove("path");
