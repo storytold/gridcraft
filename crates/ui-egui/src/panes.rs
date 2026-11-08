@@ -178,6 +178,7 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
         return;
     };
     let theme = app.session.active().map(|d| d.wb.theme.clone()).unwrap_or_default();
+    let lang = crate::i18n::current(ui.ctx());
     ui.collapsing("Chart Title", |ui| {
         let field = egui::Id::unique(("gridcraft.chart_title", id));
         if let Some(title) = crate::widgets::committed_text(ui, field, chart.title.as_deref().unwrap_or(""), None) {
@@ -210,6 +211,20 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
                 }
             }
         });
+        if matches!(chart.kind, gridcraft_chart::ChartKind::Pie | gridcraft_chart::ChartKind::Doughnut) {
+            let draft = egui::Id::unique(("gridcraft.chart_first_slice_draft", id));
+            let current = u32::from(chart.first_slice_angle);
+            if let Some(angle) = chart_slider(ui, draft, current, 0..=359, lang.tr("First slice angle")) {
+                app.run_or_alert("chart.set", json!({"chart": id, "firstSliceAngle": angle}));
+            }
+        }
+        if chart.kind == gridcraft_chart::ChartKind::Doughnut {
+            let draft = egui::Id::unique(("gridcraft.chart_hole_size_draft", id));
+            let current = u32::from(chart.hole_size);
+            if let Some(hole) = chart_slider(ui, draft, current, 10..=90, lang.tr("Doughnut hole size")) {
+                app.run_or_alert("chart.set", json!({"chart": id, "holeSize": hole}));
+            }
+        }
     });
     ui.collapsing("Legend", |ui| {
         ui.horizontal(|ui| {
@@ -339,4 +354,22 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
             ui.data_mut(|d| d.remove::<(f32, f32)>(draft));
         }
     });
+}
+
+/// A chart slider that keeps the value being dragged in a per-chart draft and submits it once
+/// through `chart.set` when the interaction ends, like the Size controls. Escape cancels, and a
+/// value the chart already has is not sent again.
+fn chart_slider(ui: &mut Ui, draft: egui::Id, value: u32, range: std::ops::RangeInclusive<u32>, label: &str) -> Option<u32> {
+    let mut current = ui.data_mut(|d| d.get_temp::<u32>(draft)).unwrap_or(value);
+    let r = ui.add(egui::Slider::new(&mut current, range).text(label));
+    if r.drag_stopped() || r.clicked() || r.lost_focus() {
+        ui.data_mut(|d| d.remove::<u32>(draft));
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) || current == value { None } else { Some(current) }
+    } else if r.dragged() || r.has_focus() {
+        ui.data_mut(|d| d.insert_temp(draft, current));
+        None
+    } else {
+        ui.data_mut(|d| d.remove::<u32>(draft));
+        None
+    }
 }

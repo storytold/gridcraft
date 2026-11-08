@@ -551,6 +551,8 @@ fn chartex_parts_as_excel_expects_them() {
         data_table: None,
         gridlines: true,
         style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: None,
         y_title: None,
         source: None,
@@ -587,6 +589,50 @@ fn chartex_parts_as_excel_expects_them() {
 }
 
 #[test]
+fn doughnut_writes_every_series_as_a_ring_with_hole_and_angle() {
+    use gridcraft_model::{Chart, ChartKind, LegendPos, Series};
+    let ser = |name: &str, values: &str| Series {
+        name: Some(name.into()),
+        categories: Some("Data!$A$2:$A$4".into()),
+        values: values.into(),
+        ..Default::default()
+    };
+    let mut wb = gridcraft_model::Workbook::new();
+    let mut sheet = gridcraft_model::Sheet::new("Data");
+    sheet.charts.push(Chart {
+        id: 1,
+        kind: ChartKind::Doughnut,
+        anchor: Default::default(),
+        title: None,
+        series: vec![ser("Outer", "Data!$B$2:$B$4"), ser("Inner", "Data!$C$2:$C$4")],
+        legend: LegendPos::Right,
+        data_labels: false,
+        data_table: None,
+        gridlines: false,
+        style: 2,
+        hole_size: 25,
+        first_slice_angle: 180,
+        x_title: None,
+        y_title: None,
+        source: None,
+        by_rows: false,
+        pivot: None,
+    });
+    wb.sheets = vec![std::sync::Arc::new(sheet)];
+    let bytes = crate::write_xlsx(&wb).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
+    let mut cx = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("xl/charts/chart1.xml").unwrap(), &mut cx).unwrap();
+    assert!(cx.contains("<c:doughnutChart>"), "{cx}");
+    assert_eq!(cx.matches("<c:ser>").count(), 2, "one series per ring: {cx}");
+    assert!(cx.contains("<c:holeSize val=\"25\"/>"), "{cx}");
+    assert!(cx.contains("<c:firstSliceAng val=\"180\"/>"), "{cx}");
+    let (back, _) = crate::read_xlsx(&bytes).unwrap();
+    let ch = &back.sheet(0).unwrap().charts[0];
+    assert_eq!((ch.kind, ch.series.len(), ch.hole_size, ch.first_slice_angle), (ChartKind::Doughnut, 2, 25, 180));
+}
+
+#[test]
 fn pareto_chartex_parts() {
     use gridcraft_model::{Chart, ChartKind, LegendPos, Series};
     let mut wb = gridcraft_model::Workbook::new();
@@ -607,6 +653,8 @@ fn pareto_chartex_parts() {
         data_table: None,
         gridlines: true,
         style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: None,
         y_title: None,
         source: None,
@@ -659,6 +707,8 @@ fn pareto_multi_series_keeps_one_hidden_column_per_extra_series() {
         data_table: None,
         gridlines: true,
         style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: None,
         y_title: None,
         source: None,
@@ -693,6 +743,8 @@ fn pareto_numeric_chartex_bins() {
         data_table: None,
         gridlines: true,
         style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: None,
         y_title: None,
         source: None,
