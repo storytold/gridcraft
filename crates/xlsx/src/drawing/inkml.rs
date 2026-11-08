@@ -252,6 +252,7 @@ fn decode(trace: &El, definitions: &El) -> Option<(Vec<[f64; 2]>, Vec<u16>)> {
     Some((points, pressure))
 }
 
+/// An ASCII whitespace byte, as the trace grammar allows it between values.
 fn is_wsp(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\r' | b'\n')
 }

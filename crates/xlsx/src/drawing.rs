@@ -135,6 +135,7 @@ fn mime_for(name: &str) -> &'static str {
     }
 }
 
+/// Reads a sheet's drawing part into the sheet: pictures, charts, shapes, equations and native ink.
 pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(), IoError> {
     let Some(x) = cx.optional_xml(part)? else { return Ok(()) };
     let rels = cx.pkg.rels(part)?;

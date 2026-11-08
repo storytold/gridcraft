@@ -328,6 +328,7 @@ fn write_sheet_notes(s: &mut String, sheet: &Sheet, si: usize, kept: &crate::pas
     s.push_str(&kept.elements(&controls));
 }
 
+/// Writes a sheet's drawing part and every part its objects need: media, charts, ink and formulas.
 fn write_sheet_drawing(s: &mut String, wb: &Workbook, si: usize, sheet: &Sheet, rels: &mut Rels, out: &mut Out) {
     // Drawing: pictures, charts, shapes.
     if !sheet.images.is_empty() || !sheet.charts.is_empty() || !sheet.shapes.is_empty() {

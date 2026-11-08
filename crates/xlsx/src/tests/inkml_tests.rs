@@ -18,6 +18,7 @@ const XDR14: &str = "http://schemas.microsoft.com/office/excel/2010/spreadsheetD
 
 const GUIDE: &str = "{11111111-2222-4333-8444-555555555555}";
 
+/// The `[Content_Types].xml` of the test package, declaring the ink part and the picture.
 fn content_types(ink: bool, png: bool) -> String {
     let mut s = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>"#.to_string();
     if png {
@@ -30,12 +31,14 @@ fn content_types(ink: bool, png: bool) -> String {
     s
 }
 
+/// An Excel-shaped drawing part: one `twoCellAnchor` whose `AlternateContent` names the ink part.
 fn drawing() -> String {
     format!(
         r#"<?xml version="1.0"?><xdr:wsDr xmlns:xdr="{XDR}" xmlns:a="{A}" xmlns:r="{NS_REL}"><xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>3</xdr:col><xdr:colOff>76200</xdr:colOff><xdr:row>5</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>228600</xdr:colOff><xdr:row>7</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><mc:AlternateContent xmlns:mc="{MC}"><mc:Choice xmlns:xdr14="{XDR14}" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" Requires="xdr14 aink"><xdr:contentPart r:id="rId1"><xdr14:nvContentPartPr><xdr14:cNvPr id="3" name="Ink 2"><a:extLst><a:ext uri="{{FF2B5EF4-FFF2-40B4-BE49-F238E27FC236}}"><a16:creationId xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" id="{GUIDE}"/></a:ext></a:extLst></xdr14:cNvPr><xdr14:cNvContentPartPr/></xdr14:nvContentPartPr><xdr14:nvPr macro=""/><xdr14:xfrm><a:off x="1905000" y="952500"/><a:ext cx="762000" cy="381000"/></xdr14:xfrm></xdr:contentPart></mc:Choice><mc:Fallback><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="3" name="Ink 2"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="762000" cy="381000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic></mc:Fallback></mc:AlternateContent><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"#
     )
 }
 
+/// An InkML part with the given trace, pressure channel and brush properties.
 fn inkml(trace: &str, f: bool, props: &str) -> String {
     let mut channels = String::from(
         r#"<inkml:channel name="X" type="integer" min="-2.14748E9" max="2.14748E9" units="cm"/><inkml:channel name="Y" type="integer" min="-2.14748E9" max="2.14748E9" units="cm"/>"#,
@@ -52,6 +55,7 @@ fn inkml(trace: &str, f: bool, props: &str) -> String {
     )
 }
 
+/// A one-pixel transparent PNG, the picture fallback an Excel file carries.
 fn tiny_png() -> Vec<u8> {
     let mut out = Vec::new();
     {
@@ -127,20 +131,24 @@ fn package_with(trace: &str, f: bool, props: &str, ink: bool, declared: bool, me
 
 const PEN_PROPS: &str = r##"<inkml:brushProperty name="width" value="0.05" units="cm"/><inkml:brushProperty name="height" value="0.05" units="cm"/><inkml:brushProperty name="color" value="#1F5FC9"/>"##;
 
+/// Reads the test package, failing the test when the workbook does not open.
 fn read(bytes: &[u8]) -> (Workbook, crate::ReadReport) {
     read_xlsx(bytes).unwrap()
 }
 
+/// The one ink shape the test package holds.
 fn ink_shape(wb: &Workbook) -> &Shape {
     let shapes = &wb.sheets[0].shapes;
     assert_eq!(shapes.len(), 1, "{shapes:?}");
     &shapes[0]
 }
 
+/// The stroke's points as sheet points.
 fn points(shape: &Shape) -> Vec<[f32; 2]> {
     shape.text.split(';').filter_map(|p| p.split_once(',').and_then(|(x, y)| Some([x.parse().ok()?, y.parse().ok()?]))).collect()
 }
 
+/// Asserts two brush measurements agree to the millimetre.
 fn close(a: f32, b: f32) {
     assert!((a - b).abs() < 0.001, "{a} != {b}");
 }
