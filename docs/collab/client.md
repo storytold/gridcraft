@@ -68,22 +68,45 @@ cargo run -p gridcraft --features collab -- book.xlsx
 продолжает. Пока идёт догон, соединение не получает живых дельт, поэтому дельта не обгоняет
 снапшот.
 
+## Браузер и host-bridge
+
+Страница кабинета открывает сессию сообщением `gridcraft:session`
+(`sessionId`, `wsUrl`, JWT, роль; `INTEGRATION.md` §6). Токен уходит первым
+кадром `hello`, не в URL и не в лог. Браузерная сборка (`crates/collab-web`)
+ведёт ту же машину состояний `Synced`, что и десктоп, — меняется только
+транспорт (`Link`: tokio/tungstenite или `web-sys::WebSocket`): preview,
+авторитетная дельта, откат, карта листов, снапшот, per-user undo/redo общие.
+Неподтверждённые операции переживают реконнект (те же `opId`), backoff тот же.
+
+Статус и участники уходят в кабинет как `session-state` (по изменению) и
+`presence` (10 Гц); `gridcraft:committed` возвращает version/etag. Save в
+живой сессии — это `gridcraft:commit` без байтов: файл собирает и хранит
+кабинет; Save As и экспорт остаются локальными.
+
+`craft-web-host`/`craft-web-api` — из `copoka/craft-libs` rev
+`7666e2b100d8cf12998f9b57d3b036964cc3189c` (ADR-0016 §3), пока
+collaboration-сообщения не влиты в `storytold/craft-libs`. Без
+`gridcraft:session` сетевых вызовов нет и сборка одиночная.
+
 ## Чего нет в v1
 
 - Отмена структурных правок (redo merge-шагов есть).
 - **Offline-очередь**: операции уходят только при живом соединении; после реконнекта
   повторяются неподтверждённые.
-- **Commit из UI**: сохранение инициирует кабинет через `POST /v1/sessions/{id}/commit`
-  (server-to-server, `INTEGRATION.md` §4.1); локальный `file.save` пишет локальную копию.
-- **Web-клиент**: в WASM сеть не компилируется; браузер говорит тем же протоколом через
-  host-сообщения (`INTEGRATION.md` §6), адаптер повторяет `Synced`.
+- **Commit из UI**: в браузере Save в живой сессии отправляет `gridcraft:commit`
+  (кабинет владеет файлом); на десктопе сохранение по-прежнему инициирует кабинет
+  через `POST /v1/sessions/{id}/commit` (`INTEGRATION.md` §4.1).
 - Несколько окон одного пользователя: один `actorId`, presence одного окна (открытый вопрос
   RFC §13.6).
 
 ## Проверка
 
 ```bash
-cargo test -p gridcraft-collab-client     # 4 сценария с двумя репликами и сервером
+cargo test -p gridcraft-collab-client     # 5 сценариев с двумя репликами и сервером
+cargo test -p gridcraft-collab-web        # 5 тестов host-сообщений и двух web-реплик
+cargo test -p gridcraft-web               # 11 тестов, включая host_session
 cargo check -p gridcraft --features collab
+cargo check -p gridcraft-web --target wasm32-unknown-unknown
+trunk build                               # apps/gridcraft-web → dist/web
 cargo test -p gridcraft-collab -p gridcraft-collab-server
 ```
