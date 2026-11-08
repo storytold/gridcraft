@@ -361,3 +361,48 @@ fn a_fountain_pen_without_pressure_stays_a_fountain_pen_and_keeps_an_empty_press
     assert!(ink.pressure.is_empty(), "no F channel was recorded, so none comes back: {:?}", ink.pressure);
     assert_eq!(ink.key.as_deref(), Some("{AAAAAAAA-1111-4111-8111-111111111111}"));
 }
+
+#[test]
+fn the_fallback_picture_is_a_transparent_png_in_the_stroke_colour() {
+    let sheet = Sheet {
+        shapes: vec![Shape {
+            id: 4,
+            kind: ShapeKind::Ink,
+            anchor: Anchor { cell: CellRef::parse("B2").unwrap(), dx: 0.0, dy: 0.0, width: 90.0, height: 45.0, mode: AnchorMode::Absolute },
+            fill: Color::Rgb(2 << 16),
+            line: Color::Rgb(0xA12BCD),
+            text: "10,10;80,35".into(),
+            format: Default::default(),
+            math: Default::default(),
+            ink: Some(InkStyle { tool: InkTool::Pen, width_cm: 0.1, height_cm: 0.1, key: Some(GUIDE.into()), ..InkStyle::default() }),
+        }],
+        ..Sheet::new("Picture")
+    };
+    let wb = Workbook { sheets: vec![Arc::new(sheet)], ..Default::default() };
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut file = archive.by_name("xl/media/image1.png").expect("the fallback picture");
+    let mut png = Vec::new();
+    std::io::Read::read_to_end(&mut file, &mut png).unwrap();
+
+    let decoder = png::Decoder::new(std::io::Cursor::new(png));
+    let mut reader = decoder.read_info().expect("a valid PNG");
+    let (width, height, color_type) = {
+        let info = reader.info();
+        (info.width, info.height, info.color_type)
+    };
+    assert_eq!((width, height), (90, 45), "the picture keeps the anchor's aspect");
+    assert_eq!(color_type, png::ColorType::Rgba);
+    let size = reader.output_buffer_size().expect("allocated size");
+    let mut pixels = vec![0; size];
+    let frame = reader.next_frame(&mut pixels).expect("one frame");
+    let pixel = |x: usize, y: usize| -> [u8; 4] {
+        let i = y * width as usize * 4 + x * 4;
+        [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+    };
+    assert_eq!(pixel(0, 0)[3], 0, "the background is transparent");
+    let painted = (0..height as usize).flat_map(|y| (0..width as usize).map(move |x| (x, y))).map(|(x, y)| pixel(x, y)).find(|p| p[3] > 0);
+    let painted = painted.expect("the stroke is drawn");
+    assert_eq!(&painted[..3], &[0xA1, 0x2B, 0xCD], "the stroke uses its colour");
+    assert_eq!(frame.color_type, png::ColorType::Rgba);
+}
