@@ -2844,7 +2844,7 @@ fn overlapping_spill_edit_sequences_match_a_full_recalc() {
                 7 | 8 => (at, String::new()),
                 9 => (format!("K{}", 1 + (r >> 24) % 6), "=SUM(A1:F6)".to_string()),
                 10 => {
-                    // Back to what a cell held before (as undo does), or to an earlier entry.
+                    // An earlier edit again (often putting back what a cell held before, as undo does).
                     match log.len() {
                         0 => (at, String::new()),
                         n => log[(r >> 24) as usize % n].clone(),

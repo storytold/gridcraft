@@ -2841,6 +2841,14 @@ fn a_spill_growing_into_another_and_back_matches_a_full_recalc_at_every_step() {
             assert_eq!(v(&s, "E10"), Value::Number(10.0));
             assert_eq!(v(&s, "F10"), Value::Number(20.0));
         }
+        if i == 3 {
+            // Undone back to the grown F8.
+            assert_eq!(v(&s, "F12"), Value::Number(5.0));
+            assert_eq!(v(&s, "E10"), Value::Error(Spill));
+        }
+        if i == 8 {
+            assert_eq!((v(&s, "F8"), v(&s, "E10"), v(&s, "F9")), (Value::Empty, Value::Empty, Value::Empty));
+        }
     }
 }
 
