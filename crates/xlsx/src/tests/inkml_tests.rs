@@ -19,9 +19,7 @@ const XDR14: &str = "http://schemas.microsoft.com/office/excel/2010/spreadsheetD
 const GUIDE: &str = "{11111111-2222-4333-8444-555555555555}";
 
 fn content_types(ink: bool, png: bool) -> String {
-    let mut s = format!(
-        r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>"#
-    );
+    let mut s = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>"#.to_string();
     if png {
         s.push_str(r#"<Default Extension="png" ContentType="image/png"/>"#);
     }
@@ -171,7 +169,7 @@ fn pressure_and_effects_survive_a_read_and_a_gridcraft_save() {
     assert_eq!(ink.effect, Some(InkEffect::RoseGold));
     // F's last prefix is `'` (no `"` in the fixture for F), so the third value repeats the first difference.
     assert_eq!(ink.pressure, vec![1000, 2000, 2000]);
-    close(ink.anchor[0], -1303.866_2);
+    close(ink.anchor[0], -1_303.866_2);
     close(ink.anchor[1], -1016.0);
     close(ink.scale, 0.5);
 
@@ -216,7 +214,7 @@ fn every_tool_and_effect_round_trips_through_gridcraft() {
                     width_cm: 0.1,
                     height_cm: if tool == InkTool::Pencil { 0.6 } else { 0.1 },
                     effect,
-                    anchor: [-1303.866_2, -1016.0],
+                    anchor: [-1_303.866_2, -1016.0],
                     scale: 0.5,
                     pressure: vec![100, 2000, 32767],
                     order: id,
@@ -283,6 +281,7 @@ fn malformed_or_oversized_ink_is_refused_without_a_panic() {
         ("too many channels", "!0 !0 0", false),
         ("not a number", "!x !0", false),
         ("over the coordinate cap", huge.as_str(), false),
+        ("i64::MIN under the cap", "!-9223372036854775808 !0", false),
         ("over the point cap", many.as_str(), false),
         ("empty", "", false),
     ];
@@ -338,4 +337,116 @@ fn legacy_custgeom_ink_still_round_trips_without_an_ink_style() {
     assert!(s.ink.is_none());
     assert_eq!(s.line, Color::Rgb(0xA12BCD));
     assert_eq!(s.text, "0,0;40,20;90,10");
+}
+
+#[test]
+fn a_fountain_pen_without_pressure_stays_a_fountain_pen_and_keeps_an_empty_pressure() {
+    let sheet = Sheet {
+        shapes: vec![Shape {
+            id: 9,
+            kind: ShapeKind::Ink,
+            anchor: Anchor { cell: CellRef::parse("B2").unwrap(), dx: 0.0, dy: 0.0, width: 60.0, height: 30.0, mode: AnchorMode::Absolute },
+            fill: Color::Rgb(2 << 16),
+            line: Color::Rgb(0x1F5FC9),
+            text: "0,0;30,20".into(),
+            format: Default::default(),
+            math: Default::default(),
+            ink: Some(InkStyle { tool: InkTool::FountainPen, key: Some("{AAAAAAAA-1111-4111-8111-111111111111}".into()), ..InkStyle::default() }),
+        }],
+        ..Sheet::new("Pen")
+    };
+    let wb = Workbook { sheets: vec![Arc::new(sheet)], ..Default::default() };
+    let (back, _) = read(&write_xlsx(&wb).unwrap());
+    let ink = back.sheets[0].shapes[0].ink.as_ref().expect("editable ink");
+    assert_eq!(ink.tool, InkTool::FountainPen);
+    assert!(ink.pressure.is_empty(), "no F channel was recorded, so none comes back: {:?}", ink.pressure);
+    assert_eq!(ink.key.as_deref(), Some("{AAAAAAAA-1111-4111-8111-111111111111}"));
+}
+
+#[test]
+fn the_fallback_picture_is_a_transparent_png_in_the_stroke_colour() {
+    let sheet = Sheet {
+        shapes: vec![Shape {
+            id: 4,
+            kind: ShapeKind::Ink,
+            anchor: Anchor { cell: CellRef::parse("B2").unwrap(), dx: 0.0, dy: 0.0, width: 90.0, height: 45.0, mode: AnchorMode::Absolute },
+            fill: Color::Rgb(2 << 16),
+            line: Color::Rgb(0xA12BCD),
+            text: "10,10;80,35".into(),
+            format: Default::default(),
+            math: Default::default(),
+            ink: Some(InkStyle { tool: InkTool::Pen, width_cm: 0.1, height_cm: 0.1, key: Some(GUIDE.into()), ..InkStyle::default() }),
+        }],
+        ..Sheet::new("Picture")
+    };
+    let wb = Workbook { sheets: vec![Arc::new(sheet)], ..Default::default() };
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut file = archive.by_name("xl/media/image1.png").expect("the fallback picture");
+    let mut png = Vec::new();
+    std::io::Read::read_to_end(&mut file, &mut png).unwrap();
+
+    let decoder = png::Decoder::new(std::io::Cursor::new(png));
+    let mut reader = decoder.read_info().expect("a valid PNG");
+    let (width, height, color_type) = {
+        let info = reader.info();
+        (info.width, info.height, info.color_type)
+    };
+    assert_eq!((width, height), (90, 45), "the picture keeps the anchor's aspect");
+    assert_eq!(color_type, png::ColorType::Rgba);
+    let size = reader.output_buffer_size().expect("allocated size");
+    let mut pixels = vec![0; size];
+    let frame = reader.next_frame(&mut pixels).expect("one frame");
+    let pixel = |x: usize, y: usize| -> [u8; 4] {
+        let i = y * width as usize * 4 + x * 4;
+        [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+    };
+    assert_eq!(pixel(0, 0)[3], 0, "the background is transparent");
+    let painted = (0..height as usize).flat_map(|y| (0..width as usize).map(move |x| (x, y))).map(|(x, y)| pixel(x, y)).find(|p| p[3] > 0);
+    let painted = painted.expect("the stroke is drawn");
+    assert_eq!(&painted[..3], &[0xA1, 0x2B, 0xCD], "the stroke uses its colour");
+    assert_eq!(frame.color_type, png::ColorType::Rgba);
+}
+
+/// The decoded points back in the trace's 1/1000 cm units (what Excel wrote).
+fn thousandths(shape: &Shape) -> Vec<[i64; 2]> {
+    const PX_PER_CM: f64 = 96.0 / 2.54;
+    points(shape)
+        .iter()
+        .map(|p| [(f64::from(p[0]) / PX_PER_CM * 1000.0).round() as i64, (f64::from(p[1]) / PX_PER_CM * 1000.0).round() as i64])
+        .collect()
+}
+
+#[test]
+fn excel_compact_values_without_whitespace_decode() {
+    // The string Excel 365 writes (observed in a drawing saved by Excel): no whitespace before
+    // the prefixed or signed values of the second and later points.
+    let (wb, _) = read(&package("0 0,'2117'529,\"-1\"-1058", false, PEN_PROPS, true, true, true));
+    assert_eq!(thousandths(ink_shape(&wb)), vec![[0, 0], [2117, 529], [4233, 0]]);
+}
+
+#[test]
+fn excel_compact_three_channel_values_with_pressure_decode() {
+    let trace = "2748 1756 24575,'0'0'0,\"29\"0\"0,53 0 0,30 4 0";
+    let (wb, _) = read(&package(trace, true, PEN_PROPS, true, true, true));
+    let shape = ink_shape(&wb);
+    assert_eq!(thousandths(shape), vec![[2748, 1756], [2748, 1756], [2777, 1756], [2859, 1756], [2971, 1760]]);
+    assert_eq!(shape.ink.as_ref().unwrap().pressure, vec![24575; 5]);
+}
+
+#[test]
+fn the_wildcard_repeats_a_channel_in_compact_form() {
+    let (wb, _) = read(&package("!10 !20,**", false, PEN_PROPS, true, true, true));
+    assert_eq!(thousandths(ink_shape(&wb)), vec![[10, 20], [10, 20]]);
+}
+
+#[test]
+fn a_compact_package_round_trips_as_editable_ink_not_the_fallback() {
+    let (wb, _) = read(&package("0 0,'2117'529,\"-1\"-1058", false, PEN_PROPS, true, true, true));
+    assert!(wb.sheets[0].images.is_empty(), "the fallback is not read when the ink parses");
+    assert_eq!(wb.sheets[0].shapes.len(), 1);
+    let (back, report) = read(&write_xlsx(&wb).unwrap());
+    assert!(report.warnings.iter().all(|w| !w.contains("ink part")), "{:?}", report.warnings);
+    assert!(back.sheets[0].images.is_empty(), "a GridCraft save stays editable ink");
+    assert_eq!(thousandths(ink_shape(&back)), vec![[0, 0], [2117, 529], [4233, 0]]);
 }

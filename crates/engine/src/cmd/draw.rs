@@ -445,6 +445,11 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
     let dy = (miny - sh.row_top(cell.row)) as f32;
     let text = pts.iter().map(|q| format!("{:.1},{:.1}", q[0] - minx, q[1] - miny)).collect::<Vec<_>>().join(";");
     let order = sh.shapes.iter().filter_map(|x| x.ink.as_ref()).map(|i| i.order).max().map_or(0, |o| o.saturating_add(1));
+    // A reopened workbook holds keys minted by an earlier process, whose counter started at zero,
+    // so a freshly minted key can be one the workbook already uses: mint past those.
+    let held: Vec<&str> =
+        d.wb.sheets.iter().flat_map(|sheet| sheet.shapes.iter()).filter_map(|x| x.ink.as_ref()).filter_map(|i| i.key.as_deref()).collect();
+    let key = gridcraft_model::ink_creation_id_free(|k| held.contains(&k));
     let id = d.wb.next_object_id();
     let px_width = cm_to_px(width_cm).round().clamp(1.0, 255.0) as u8;
     // The texture's phase follows the stroke's place on the sheet (Excel's anchorX/anchorY are
@@ -476,7 +481,7 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
             scale: if effect.is_some() { 0.5 } else { 1.0 },
             pressure,
             order,
-            key: Some(gridcraft_model::ink_creation_id(None)),
+            key: Some(key),
             ..InkStyle::default()
         }),
     };
