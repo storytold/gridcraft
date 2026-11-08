@@ -268,13 +268,39 @@ impl ScriptStore {
         std::fs::create_dir_all(&self.root)?;
         let path = self.path_for(&record.id)?;
         let bytes = serde_json::to_vec_pretty(record).map_err(|e| StoreError::Damaged(e.to_string()))?;
-        let temp = path.with_extension("json.tmp");
-        std::fs::write(&temp, &bytes)?;
+        // A temporary file of our own, created exclusively and unique per save: a desktop save and
+        // a CLI save of the same script can never rename each other's content.
+        let (temp, mut file) = self.temp_file(&path)?;
+        let written = std::io::Write::write_all(&mut file, &bytes).and_then(|()| std::io::Write::flush(&mut file));
+        drop(file);
+        if let Err(e) = written {
+            let _ = std::fs::remove_file(&temp);
+            return Err(StoreError::Io(e));
+        }
         // `fs::rename` replaces the target on every platform (`MOVEFILE_REPLACE_EXISTING` on
-        // Windows), so a failed rename leaves the saved script untouched rather than removing it
-        // first; the temporary file is left beside it for the next save to overwrite.
-        std::fs::rename(&temp, &path)?;
+        // Windows), so a failed rename leaves the saved script untouched.
+        if let Err(e) = std::fs::rename(&temp, &path) {
+            let _ = std::fs::remove_file(&temp);
+            return Err(StoreError::Io(e));
+        }
         Ok(())
+    }
+
+    /// A sibling temporary file for one save, created exclusively.
+    fn temp_file(&self, path: &Path) -> Result<(PathBuf, std::fs::File), StoreError> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(1);
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("script");
+        for _ in 0..8 {
+            let name = format!("{stem}.{}.{}.json.tmp", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed));
+            let temp = path.with_file_name(name);
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(&temp) {
+                Ok(file) => return Ok((temp, file)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(StoreError::Io(e)),
+            }
+        }
+        Err(StoreError::Io(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "could not make a temporary file beside the script")))
     }
 }
 
@@ -353,6 +379,14 @@ mod tests {
         assert!(b.modified >= a.modified);
         assert_eq!(s.load("band").unwrap().code, code("2"));
         assert_eq!(s.list().unwrap().len(), 1);
+        // A save leaves no temporary file behind.
+        let temps: Vec<String> = std::fs::read_dir(s.root())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(temps.is_empty(), "{temps:?}");
         s.delete(&b.id).unwrap();
         assert!(s.list().unwrap().is_empty());
         assert!(matches!(s.load("band"), Err(StoreError::NotFound(_))));

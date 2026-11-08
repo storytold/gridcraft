@@ -326,6 +326,7 @@ fn folder_row(app: &mut SheetApp, ui: &mut Ui) {
             match app.session.run("script.folder", json!({"path": path})) {
                 Ok(_) => {
                     refresh(app);
+                    forget_selection(app);
                     app.office_scripts.status = Some(Status::ok("Scripts folder changed."));
                 }
                 Err(e) => app.office_scripts.status = Some(Status::failed(clean_error(&e))),
@@ -335,6 +336,7 @@ fn folder_row(app: &mut SheetApp, ui: &mut Ui) {
             match app.session.run("script.folder", json!({"path": ""})) {
                 Ok(_) => {
                     refresh(app);
+                    forget_selection(app);
                     app.office_scripts.status = Some(Status::ok("Scripts folder reset."));
                 }
                 Err(e) => app.office_scripts.status = Some(Status::failed(clean_error(&e))),
@@ -372,6 +374,20 @@ fn folder_row(app: &mut SheetApp, ui: &mut Ui) {
             }
         }
     });
+}
+
+/// After the folder changes, the ids in the list mean different scripts: drop the selection (and
+/// the editor with it, unless the draft is dirty — that work is the person's).
+fn forget_selection(app: &mut SheetApp) {
+    let pane = &mut app.office_scripts;
+    pane.selected = None;
+    if !pane.dirty {
+        pane.name.clear();
+        pane.code.clear();
+        pane.error_line = None;
+        pane.output.clear();
+        pane.calls = 0;
+    }
 }
 
 fn download_bun(app: &mut SheetApp) {
