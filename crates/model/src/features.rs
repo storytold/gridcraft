@@ -1272,7 +1272,7 @@ mod tests {
                 width_cm: 0.35,
                 height_cm: 0.35,
                 effect: Some(InkEffect::Galaxy),
-                anchor: [-1303.866_2, -1016.0],
+                anchor: [-1_303.866_2, -1016.0],
                 scale: 0.5,
                 pressure: vec![0, 32_767],
                 order: 7,

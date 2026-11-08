@@ -343,7 +343,10 @@ pub(crate) fn parts(shape: &Shape, theme: &Theme) -> Option<Parts> {
     } else {
         Vec::new()
     };
-    let use_f = !pressure.is_empty() || matches!(ink.tool, InkTool::FountainPen | InkTool::BrushPen);
+    // Only recorded pressure gets an F channel: a Fountain/Pen brush with none must read back
+    // with an empty pressure vector, not a run of zeros. The tool still round-trips through
+    // `gridcraftTool`.
+    let use_f = !pressure.is_empty();
     let color = shape.line.resolve(theme).unwrap_or([0, 0, 0]);
     let trace = encode_trace(&points, use_f.then_some(pressure.as_slice()));
     let xml = inkml_xml(ink, &color, use_f, &trace);
@@ -500,9 +503,9 @@ fn effect_name(e: InkEffect) -> &'static str {
 /// the shape id (so a keyless stroke from an older file keeps one id across saves).
 pub fn creation_id(shape: &Shape) -> String {
     if let Some(key) = shape.ink.as_ref().and_then(|i| i.key.as_deref()) {
-        let key = gridcraft_model::ink_creation_id(Some(key));
-        if key.len() > 2 {
-            return key;
+        let key = key.trim();
+        if key.len() <= 80 && key.starts_with('{') && key.ends_with('}') {
+            return key.to_string();
         }
     }
     let id = u64::from(shape.id);
