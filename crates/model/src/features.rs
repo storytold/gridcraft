@@ -724,23 +724,42 @@ impl Default for InkStyle {
     }
 }
 
-/// A stroke's stable key: `existing` when it is a plausible GUID, else a fresh deterministic one
-/// (a SHA-256 of a process-wide counter, so tests and repeated runs agree and no clock is read).
+/// The canonical form of an `a16:creationId` value: `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}`
+/// with hexadecimal digits (case-insensitive), in lowercase. `None` for anything else, so a key
+/// read from a file or restored from JSON can never be written back as invalid ST_Guid.
+pub fn ink_guid(value: &str) -> Option<String> {
+    let v = value.trim();
+    let b = v.as_bytes();
+    if b.len() != 38 || b.first() != Some(&b'{') || b.last() != Some(&b'}') {
+        return None;
+    }
+    let dashed = [9, 14, 19, 24];
+    for (i, byte) in b.iter().enumerate() {
+        if i == 0 || i == 37 {
+            continue;
+        }
+        if dashed.contains(&i) {
+            if *byte != b'-' {
+                return None;
+            }
+        } else if !byte.is_ascii_hexdigit() {
+            return None;
+        }
+    }
+    Some(v.to_ascii_lowercase())
+}
+
+/// A stroke's stable key: `existing` in its canonical lowercase form when it is an ST_Guid, else
+/// a fresh deterministic one (a SHA-256 of a process-wide counter, so tests and repeated runs
+/// agree and no clock is read).
 ///
 /// The GUID is spelled out here rather than taken from a UUID crate because the key must be
 /// reproducible: a save with no edit has to produce the same bytes, and a wasm build has no random
 /// source to seed a v4 from. The key is only unique within one process, though — see
 /// [`ink_creation_id_free`] before assigning one to a new stroke.
 pub fn ink_creation_id(existing: Option<&str>) -> String {
-    if let Some(k) = existing {
-        let k = k.trim();
-        if (2..=80).contains(&k.len())
-            && k.starts_with('{')
-            && k.ends_with('}')
-            && k.bytes().all(|b| b.is_ascii_hexdigit() || matches!(b, b'{' | b'}' | b'-'))
-        {
-            return k.to_string();
-        }
+    if let Some(guid) = existing.and_then(ink_guid) {
+        return guid;
     }
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -752,7 +771,7 @@ pub fn ink_creation_id(existing: Option<&str>) -> String {
     let d = h.finalize();
     let b = |i: usize| d.get(i).copied().unwrap_or(0);
     format!(
-        "{{{:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}-4{:01X}{:02X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}",
+        "{{{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-4{:01x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}}}",
         b(0),
         b(1),
         b(2),
@@ -1330,10 +1349,18 @@ mod tests {
         assert_ne!(a, b);
         for k in [a, b] {
             assert!(k.starts_with('{') && k.ends_with('}'), "{k}");
+            assert_eq!(ink_guid(&k).as_deref(), Some(k.as_str()), "{k} is an ST_Guid");
         }
-        // Anything that is not GUID-shaped is replaced rather than trusted.
-        assert_ne!(ink_creation_id(Some("not a guid")), "not a guid");
-        assert_ne!(ink_creation_id(Some(&"x".repeat(200))), "x".repeat(200));
+        // Anything that is not an ST_Guid is replaced rather than trusted...
+        for bad in ["{x}", "not a guid", &"x".repeat(200), "{11111111-2222-4333-8444-55555555555}", "{11111111-2222-4333-8444-5555555555555}"] {
+            assert_ne!(ink_creation_id(Some(bad)), bad);
+        }
+        // ...and a valid GUID in another case takes its canonical lowercase form, so one identity
+        // never becomes two.
+        let upper = "{ABCDEF01-2345-6789-ABCD-EF0123456789}";
+        assert_eq!(ink_guid(upper).as_deref(), Some("{abcdef01-2345-6789-abcd-ef0123456789}"));
+        assert_eq!(ink_creation_id(Some(upper)), "{abcdef01-2345-6789-abcd-ef0123456789}");
+        assert_eq!(ink_guid(" {abcdef01-2345-6789-abcd-ef0123456789} ").as_deref(), Some("{abcdef01-2345-6789-abcd-ef0123456789}"));
     }
 
     #[test]
