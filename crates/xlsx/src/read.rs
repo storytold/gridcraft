@@ -369,13 +369,10 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         // data exists), so it never shows as a sheet and never reaches the passthrough. One this
         // version cannot read (a damaged layout, or one a newer GridCraft wrote) stays an ordinary
         // model sheet, so saving here never deletes data a later version still understands.
-        match read_ink_sheet(&mut cx, &sheet) {
-            Some(Some(data)) => {
-                ink_data = ink_data.or(Some(data));
-                file_to_model.push(None);
-                continue;
-            }
-            Some(None) | None => {}
+        if let Some(Some(data)) = read_ink_sheet(&mut cx, &sheet) {
+            ink_data = ink_data.or(Some(data));
+            file_to_model.push(None);
+            continue;
         }
         match crate::pivot::read_pivots(&mut cx, &mut pivot_caches, &rel.target, &name) {
             Ok(p) => sheet.pivots = p,
