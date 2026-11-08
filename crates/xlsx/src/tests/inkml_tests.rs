@@ -421,10 +421,9 @@ fn thousandths(shape: &Shape) -> Vec<[i64; 2]> {
 fn excel_compact_values_without_whitespace_decode() {
     // The two strings Excel 365 itself wrote (observed in a file saved by Excel, gc_ink_rt.xlsx):
     // no whitespace before the prefixed or signed values of the second and later points.
-    for (trace, points) in [
-        ("0 0,'2117'529,\"-1\"-1058", vec![[0, 0], [2117, 529], [4233, 0]]),
-        ("0 0,'2646'1058,\"0\"-2116", vec![[0, 0], [2646, 1058], [5292, 0]]),
-    ] {
+    for (trace, points) in
+        [("0 0,'2117'529,\"-1\"-1058", vec![[0, 0], [2117, 529], [4233, 0]]), ("0 0,'2646'1058,\"0\"-2116", vec![[0, 0], [2646, 1058], [5292, 0]])]
+    {
         let (wb, _) = read(&package(trace, false, PEN_PROPS, true, true, true));
         assert_eq!(thousandths(ink_shape(&wb)), points, "{trace}");
     }
