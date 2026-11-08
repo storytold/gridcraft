@@ -341,8 +341,11 @@ fn arity_boundaries_are_enforced() {
     assert_arity_error("SELECTEDMEASURE ( 1 )");
 
     assert_valid("INFO.CATALOGS ()");
-    assert_valid("INFO.CATALOGS ( \"CATALOG_NAME\" )");
+    // Restrictions are name/value pairs: a dangling name has no value and the INFO evaluator
+    // rejects an odd argument count, so the catalog must not offer a one-name overload.
+    assert_arity_error("INFO.CATALOGS ( \"CATALOG_NAME\" )");
     assert_valid("INFO.CATALOGS ( \"CATALOG_NAME\", \"AdventureWorks\" )");
+    assert_valid("INFO.CATALOGS ( \"CATALOG_NAME\", \"AdventureWorks\", \"Other\", 1 )");
     assert_valid("INFO.VIEW.TABLES ()");
     assert_arity_error("INFO.VIEW.TABLES ( \"Name\" )");
 }

@@ -11,6 +11,10 @@
 use super::{FunctionCategory, FunctionFlags, FunctionSpec, ParamKind, ReturnType, optional, overload, required, spec, variadic};
 
 /// An `INFO.*` table function with the shared optional restriction-pair syntax.
+///
+/// The restrictions are name/value pairs, so only an even argument count is offered: an INFO
+/// evaluator has no way to apply a dangling name, which is why the catalog carries no
+/// one-`Text` overload for it.
 macro_rules! info {
     ($name:literal, $description:literal) => {
         spec(
@@ -19,7 +23,7 @@ macro_rules! info {
             0,
             usize::MAX,
             &[optional("RestrictionName", ParamKind::Text), optional("RestrictionValue", ParamKind::Any)],
-            &[overload(&[]), overload(&[ParamKind::Text]), variadic(&[ParamKind::Text, ParamKind::Any])],
+            &[overload(&[]), variadic(&[ParamKind::Text, ParamKind::Any])],
             ReturnType::Table,
             FunctionFlags::new(false, false, false, false, false),
             $description,
