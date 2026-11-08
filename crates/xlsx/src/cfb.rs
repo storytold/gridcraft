@@ -555,6 +555,43 @@ pub(crate) mod tests {
         let empty = build_tree(&[Node::Storage("VBA", vec![])]);
         assert_eq!(Compound::open(&empty).unwrap().children_at_path(&["VBA"]).unwrap(), Vec::<String>::new());
     }
+    /// [`vba_tree`] relinked so every sibling is reached through a left link: the root's child
+    /// is `\u{5}DigitalSignature`, whose left is the `VBA` storage, whose left is `PROJECT`; inside
+    /// `VBA` the child is `_VBA_PROJECT`, whose left is `Module1`, whose left is `dir`. No right
+    /// link is set, so a reader that skipped left links would find nothing past the first entry.
+    fn left_linked_vba_tree() -> Vec<u8> {
+        let mut file = vba_tree();
+        let at = |name: &str| index_of(&vba_tree(), name);
+        let (project, vba, sig) = (at("PROJECT"), at("VBA"), at("\u{5}DigitalSignature"));
+        let (dir, module, vba_project) = (at("dir"), at("Module1"), at("_VBA_PROJECT"));
+        for k in [project, vba, sig, dir, module, vba_project] {
+            patch_entry(&mut file, k, RIGHT, NO_STREAM);
+            patch_entry(&mut file, k, LEFT, NO_STREAM);
+        }
+        patch_entry(&mut file, 0, CHILD, sig as u32);
+        patch_entry(&mut file, sig, LEFT, vba as u32);
+        patch_entry(&mut file, vba, LEFT, project as u32);
+        patch_entry(&mut file, vba, CHILD, vba_project as u32);
+        patch_entry(&mut file, vba_project, LEFT, module as u32);
+        patch_entry(&mut file, module, LEFT, dir as u32);
+        file
+    }
+    /// Valid sibling trees linked through left links (a storage and streams, at the root and
+    /// inside a storage) are found and listed the same as right-linked ones.
+    #[test]
+    fn siblings_reached_through_left_links_are_found_and_listed() {
+        let file = left_linked_vba_tree();
+        let cf = Compound::open(&file).unwrap();
+        assert_eq!(cf.stream_at_path(&["PROJECT"]).unwrap().unwrap(), filler(300, 1));
+        assert_eq!(cf.stream_at_path(&["\u{5}DigitalSignature"]).unwrap().unwrap(), filler(40, 4));
+        assert_eq!(cf.stream_at_path(&["VBA", "dir"]).unwrap().unwrap(), filler(1000, 2));
+        assert_eq!(cf.stream_at_path(&["vba", "MODULE1"]).unwrap().unwrap(), filler(5000, 3));
+        assert_eq!(cf.stream_at_path(&["VBA", "_VBA_PROJECT"]).unwrap().unwrap(), Vec::<u8>::new());
+        assert!(cf.has_root_stream("PROJECT"));
+        assert!(!cf.has_root_stream("VBA"));
+        assert_eq!(cf.children_at_path(&["VBA"]).unwrap(), vec!["Module1", "_VBA_PROJECT", "dir"]);
+        assert_eq!(cf.children_at_path(&[]).unwrap(), vec!["\u{5}DigitalSignature", "PROJECT", "VBA"]);
+    }
     #[test]
     fn missing_or_wrong_kind_intermediates() {
         let file = vba_tree();
