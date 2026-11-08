@@ -112,6 +112,27 @@ fn an_empty_find_next_says_nothing_was_found() {
 }
 
 #[test]
+fn an_empty_find_next_drops_the_retained_hit_list() {
+    let mut h = open_find_and_type("hello");
+    h.state_mut().run("cell.set", json!({"cell": "B2", "input": "hello"})).unwrap();
+    h.get_by_label("Find All").click();
+    h.run();
+    assert!(h.query_all_by_value("1 cell(s) found").next().is_some(), "the hit list is up");
+    retype_field(&mut h, "");
+    h.get_by_label("Find Next").click();
+    h.run();
+    assert!(h.query_all_by_value("Nothing found").next().is_some(), "the empty query says it");
+    assert!(h.query_all_by_value("1 cell(s) found").next().is_none(), "the count line is gone");
+    assert!(h.state().dialog.as_ref().unwrap().result.is_none(), "the old list is dropped, not merely hidden");
+    retype_field(&mut h, "hello");
+    h.get_by_label("Find Next").click();
+    h.run();
+    assert!(h.state().message.is_none(), "a hit opens no message box");
+    assert!(h.query_all_by_value("1 cell(s) found").next().is_none(), "a hit cannot resurrect the dropped list");
+    assert!(h.query_all_by_value("Nothing found").next().is_none(), "the no-result line is gone after a hit");
+}
+
+#[test]
 fn a_failed_find_next_still_uses_the_message_box() {
     let mut h = open_find_and_type("absent");
     h.get_by_label("Find Next").click();

@@ -109,6 +109,7 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
         }
         if ui.button(lang.tr("Find Next")).clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
             if what.is_empty() {
+                d.result = None;
                 d.values.insert("notFound".into(), json!(true));
                 d.values.remove("foundFor");
             } else {
