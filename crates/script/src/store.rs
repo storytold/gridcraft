@@ -312,7 +312,7 @@ impl ScriptStore {
 /// nonblocking and does not follow a symlink, and only a regular file is returned. A named pipe (a
 /// FIFO with no writer, or one swapped in after the directory scan) would otherwise block
 /// `script.list` — and with it the pane — forever.
-fn open_regular(path: &Path) -> std::io::Result<std::fs::File> {
+pub fn open_regular(path: &Path) -> std::io::Result<std::fs::File> {
     #[cfg(unix)]
     let file = {
         use std::os::unix::fs::OpenOptionsExt;
@@ -327,7 +327,16 @@ fn open_regular(path: &Path) -> std::io::Result<std::fs::File> {
 }
 
 fn read_record(path: &Path) -> Result<ScriptRecord, StoreError> {
-    let bytes = std::fs::read(path)?;
+    // A record holds the code (bounded at 100,000 characters) and an imported `.osts`'s metadata
+    // (bounded at `MAX_OSTS_BYTES`); the read is bounded so a huge file in a synced folder cannot
+    // exhaust memory before the parse rejects it.
+    const MAX_RECORD_BYTES: usize = 2 * crate::osts::MAX_OSTS_BYTES;
+    let mut bytes = Vec::new();
+    let limit = MAX_RECORD_BYTES as u64 + 1;
+    open_regular(path).and_then(|file| std::io::Read::read_to_end(&mut file.take(limit), &mut bytes))?;
+    if bytes.len() > MAX_RECORD_BYTES {
+        return Err(StoreError::Damaged(format!("{} is larger than {MAX_RECORD_BYTES} bytes", path.display())));
+    }
     let record: ScriptRecord = serde_json::from_slice(&bytes).map_err(|e| StoreError::Damaged(e.to_string()))?;
     if !valid_id(&record.id) {
         return Err(StoreError::Damaged(format!("`{}` is not a script id", record.id)));
@@ -513,6 +522,17 @@ mod tests {
         let error = s.delete("excel-script").unwrap_err().to_string();
         assert!(error.contains(".osts") && error.contains("excel-script"), "{error}");
         assert!(matches!(s.delete("no-such-script"), Err(StoreError::NotFound(_))));
+    }
+
+    #[test]
+    fn an_oversized_record_is_skipped() {
+        let s = store("record-huge");
+        std::fs::create_dir_all(s.root()).unwrap();
+        s.save("Good", &code("1")).unwrap();
+        std::fs::write(s.root().join("huge.json"), " ".repeat(2 * crate::osts::MAX_OSTS_BYTES + 1)).unwrap();
+        let list = s.list().unwrap();
+        assert_eq!(list.len(), 1, "the huge record is skipped, not read");
+        assert_eq!(list[0].name, "Good");
     }
 
     #[test]

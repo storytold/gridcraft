@@ -606,11 +606,18 @@ fn osts_info(s: &mut Session, p: &Json) -> Result<Json> {
 fn import(s: &mut Session, p: &Json) -> Result<Json> {
     let path = super::str_param(p, "path").ok_or_else(|| bad("script.import", "missing `path`"))?;
     let path = std::path::Path::new(path);
-    let bytes = std::fs::metadata(path).map_err(|e| bad("script.import", format!("{e}")))?;
-    if bytes.len() > gridcraft_script::osts::MAX_OSTS_BYTES as u64 {
+    // Open the file itself (nonblocking and no-follow on Unix, regular files only) and read through
+    // that handle, bounded: a FIFO cannot block the import and a file that grows cannot be read
+    // whole. `MAX_OSTS_BYTES` is the same limit the parser enforces.
+    let mut bytes = Vec::new();
+    let limit = gridcraft_script::osts::MAX_OSTS_BYTES as u64 + 1;
+    gridcraft_script::store::open_regular(path)
+        .and_then(|file| std::io::Read::read_to_end(&mut std::io::Read::take(file, limit), &mut bytes))
+        .map_err(|e| bad("script.import", format!("{e}")))?;
+    if bytes.len() > gridcraft_script::osts::MAX_OSTS_BYTES {
         return Err(bad("script.import", format!("the file is larger than {} bytes", gridcraft_script::osts::MAX_OSTS_BYTES)));
     }
-    let text = std::fs::read_to_string(path).map_err(|e| bad("script.import", format!("{e}")))?;
+    let text = String::from_utf8(bytes).map_err(|_| bad("script.import", "the file is not UTF-8 text".to_string()))?;
     let file = gridcraft_script::OstsFile::parse(&text).map_err(|e| bad("script.import", e.to_string()))?;
     let stem = path.file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Script");
     let name = super::str_param(p, "name")
