@@ -2,6 +2,7 @@
 //! folder. An id is always `[a-z0-9-]`, so a name can never point the store outside its folder.
 
 use std::fmt;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -139,14 +140,17 @@ impl ScriptStore {
             if !valid_id(&id) || seen_ids.iter().any(|x| x == &id) {
                 continue;
             }
-            // `script.import` refuses files over the limit; the list must not read one either,
-            // or one huge file in a synced folder stalls every refresh.
-            let oversized = std::fs::metadata(path).map(|meta| meta.len() > crate::osts::MAX_OSTS_BYTES as u64).unwrap_or(true);
-            if oversized {
-                log::warn!("ignoring oversized .osts file: {}", path.display());
+            // `script.import` refuses files over the limit; the list must not read one either, and
+            // the read itself is bounded: a synced folder can grow the file between any check and
+            // the read, so one byte over the limit is read and then refused.
+            let mut bytes = Vec::new();
+            let limit = crate::osts::MAX_OSTS_BYTES as u64 + 1;
+            let read = std::fs::File::open(path).and_then(|file| std::io::Read::read_to_end(&mut file.take(limit), &mut bytes));
+            if read.is_err() || bytes.len() > crate::osts::MAX_OSTS_BYTES {
+                log::warn!("ignoring oversized or unreadable .osts file: {}", path.display());
                 continue;
             }
-            let Ok(text) = std::fs::read_to_string(path) else { continue };
+            let Ok(text) = String::from_utf8(bytes) else { continue };
             let Ok(file) = crate::osts::OstsFile::parse(&text) else { continue };
             let name = if file.description.trim().is_empty() { stem.to_string() } else { file.description.clone() };
             if seen_names.iter().any(|n| n.eq_ignore_ascii_case(&name)) {
