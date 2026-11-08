@@ -571,6 +571,26 @@ fn different_images_are_not_merged() {
     assert_eq!(pdf.windows(15).filter(|w| *w == b"/Subtype /Image").count(), 6, "three distinct pictures, each with a soft mask (alpha 50)");
 }
 
+/// O4: many distinct pictures on one page are looked up by hash, not by comparing each new
+/// picture with every earlier one (which made dense picture exports quadratic).
+#[test]
+fn many_distinct_images_on_one_page_are_not_compared_pairwise() {
+    const N: u32 = 3000;
+    let mut d = PdfDoc::new();
+    let p = d.add_page(612.0, 792.0);
+    for i in 0..N {
+        let [a, b, c, _] = i.to_le_bytes();
+        p.image_rgba(Rect::new(0.0, 0.0, 1.0, 1.0), &[a, b, c, 255], [1, 1]);
+    }
+    // A repeat of the first picture still shares its XObject.
+    p.image_rgba(Rect::new(5.0, 5.0, 1.0, 1.0), &[0, 0, 0, 255], [1, 1]);
+    assert_eq!(p.images.len(), N as usize);
+    assert!(p.content.ends_with("/Im1 Do Q\n"), "the repeated picture reuses /Im1");
+    assert!(p.image_comparisons <= 1, "{} pixel comparisons for {N} distinct pictures", p.image_comparisons);
+    let pdf = d.finish();
+    assert_eq!(pdf.windows(15).filter(|w| *w == b"/Subtype /Image").count(), N as usize);
+}
+
 /// O4: equal hashes alone never merge images; the pixels are compared.
 #[test]
 fn hash_collisions_do_not_merge_images() {

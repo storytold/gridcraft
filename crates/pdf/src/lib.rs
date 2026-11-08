@@ -434,6 +434,11 @@ pub struct Page {
     content: String,
     fonts: [bool; FONT_SLOTS],
     images: Vec<ImageData>,
+    /// Indexes into `images`, by content hash; a hash match is confirmed with [`ImageData::same`].
+    image_index: HashMap<u64, Vec<usize>>,
+    /// Pixel comparisons made while looking up duplicate pictures (test instrumentation).
+    #[cfg(test)]
+    image_comparisons: usize,
     /// Style operators already in effect at the end of `content`.
     style: Style,
     /// One entry per accepted [`Page::save`], restored by [`Page::restore`].
@@ -793,9 +798,20 @@ impl Page {
         }
         let img = ImageData::new(pw, ph, rgb, alpha);
         // The same picture drawn again on this page shares one XObject.
-        let idx = match self.images.iter().position(|i| i.same(&img)) {
+        let candidates = self.image_index.entry(img.hash).or_default();
+        #[cfg(test)]
+        let comparisons = &mut self.image_comparisons;
+        let known = candidates.iter().copied().find(|&i| {
+            #[cfg(test)]
+            {
+                *comparisons += 1;
+            }
+            self.images.get(i).is_some_and(|o| o.same(&img))
+        });
+        let idx = match known {
             Some(i) => i,
             None => {
+                candidates.push(self.images.len());
                 self.images.push(img);
                 self.images.len() - 1
             }
@@ -934,6 +950,9 @@ impl PdfDoc {
             content: String::new(),
             fonts: [false; FONT_SLOTS],
             images: Vec::new(),
+            image_index: HashMap::new(),
+            #[cfg(test)]
+            image_comparisons: 0,
             links: Vec::new(),
             style: Style::default(),
             saved: Vec::new(),
