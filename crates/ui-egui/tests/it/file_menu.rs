@@ -793,6 +793,19 @@ fn web_save_as_downloads_under_the_typed_name() {
     assert_eq!(*files.lock().unwrap(), ["Plan.xlsx", "Plan.csv", "Plan.html", "Plan.pdf"]);
 }
 
+/// A `fileName` passed straight to `file.exportPdf` is cleaned like the one typed on Save As: no
+/// folder separators, no doubled `.pdf`, and an unusable one falls back to the workbook's name.
+#[test]
+fn export_pdf_file_name_param_is_cleaned() {
+    let files = Arc::new(Mutex::new(Vec::<String>::new()));
+    let capture = files.clone();
+    let mut h = harness(Services { download: Some(Box::new(move |name, _| capture.lock().unwrap().push(name.to_string()))), ..Default::default() });
+    for typed in ["Plan.pdf", "a/b", "  / "] {
+        h.state_mut().run("file.exportPdf", serde_json::json!({"fileName": typed})).unwrap();
+    }
+    assert_eq!(*files.lock().unwrap(), ["Plan.pdf", "a b.pdf", "Book1.pdf"]);
+}
+
 /// What is typed becomes a file stem: no folder separators or control characters, no doubled
 /// extension, and nothing left means "use the workbook's name".
 #[test]
@@ -803,6 +816,8 @@ fn typed_file_names_are_cleaned() {
     assert_eq!(clean_file_stem("Budget.csv", "xlsx").as_deref(), Some("Budget.csv"));
     assert_eq!(clean_file_stem("a/b\\c", "pdf").as_deref(), Some("a b c"));
     assert_eq!(clean_file_stem("a\tb", "pdf").as_deref(), Some("ab"));
+    assert_eq!(clean_file_stem("x .xlsx", "xlsx").as_deref(), Some("x"));
+    assert_eq!(clean_file_stem("café.XLSX", "xlsx").as_deref(), Some("café"));
     for nothing in ["", "   ", "/", ".", "..", ".xlsx"] {
         assert_eq!(clean_file_stem(nothing, "xlsx"), None, "{nothing:?}");
     }
