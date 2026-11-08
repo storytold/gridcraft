@@ -265,8 +265,15 @@ fn select_all_does_not_paint() {
     h.run_steps(2);
     let plain = style(&h, "C3");
 
-    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
-    h.run_steps(2);
+    for m in [Modifiers::COMMAND, Modifiers::COMMAND | Modifiers::SHIFT] {
+        let key = if m.shift { egui::Key::Space } else { egui::Key::A };
+        h.key_press_modifiers(m, key);
+        h.run_steps(2);
+        let r = h.state().session.active().unwrap().selection.current();
+        assert!(r.is_full_rows() && r.is_full_cols(), "{key:?} selects all");
+        h.state_mut().session.execute("selection.set", json!({"cell": "C3"})).unwrap();
+        h.run_steps(2);
+    }
     assert_eq!(style(&h, "C3"), plain, "select all only selects");
     assert_eq!(stored_cells(&h), 1, "no cell takes a style");
     assert!(h.state().session.format_painter.is_some(), "the painter stays armed");
