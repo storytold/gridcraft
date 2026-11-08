@@ -64,7 +64,7 @@ pub const MAX_KEPT_TOTAL: usize = 256 * 1024 * 1024;
 /// ([`crate::IoError::DroppedPart`]) rather than drop it silently.
 pub const MAX_KEPT_PART: u64 = 64 * 1024 * 1024;
 /// Most parts kept for one workbook.
-const MAX_KEPT_PARTS: usize = 4096;
+pub(crate) const MAX_KEPT_PARTS: usize = 4096;
 /// Most relationships read from one rels part.
 const MAX_RELS: usize = 10_000;
 /// Largest relationships, content-types or VML part read here.
@@ -80,6 +80,8 @@ const MAX_FRAGMENT_DEPTH: usize = 256;
 thread_local! {
     /// A smaller kept-bytes allowance for tests on this thread.
     pub(crate) static KEPT_TOTAL_FOR_TEST: std::cell::Cell<usize> = const { std::cell::Cell::new(MAX_KEPT_TOTAL) };
+    /// A smaller kept-parts allowance for tests on this thread.
+    pub(crate) static KEPT_PARTS_FOR_TEST: std::cell::Cell<usize> = const { std::cell::Cell::new(MAX_KEPT_PARTS) };
 }
 
 fn kept_total() -> usize {
@@ -90,6 +92,18 @@ fn kept_total() -> usize {
     #[cfg(not(test))]
     {
         MAX_KEPT_TOTAL
+    }
+}
+
+/// The kept-part allowance for one workbook: [`MAX_KEPT_PARTS`], or the test allowance.
+fn kept_parts() -> usize {
+    #[cfg(test)]
+    {
+        KEPT_PARTS_FOR_TEST.with(std::cell::Cell::get)
+    }
+    #[cfg(not(test))]
+    {
+        MAX_KEPT_PARTS
     }
 }
 

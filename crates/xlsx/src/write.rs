@@ -186,13 +186,34 @@ pub fn abs_range(r: &RangeRef) -> String {
     format!("${}${}:${}${}", c(r.start.col), r.start.row + 1, c(r.end.col), r.end.row + 1)
 }
 
-/// The `<pivotCache>` children of a `<pivotCaches>` element. Attributes on the element itself
-/// (a kept element's `xmlns:r`, say) are dropped: the workbook root declares every prefix.
-fn pivot_caches_children(xml: &str) -> &str {
-    let Some(open) = xml.find("<pivotCaches") else { return "" };
-    let Some(body) = xml.get(open..).and_then(|rest| rest.find('>')).map(|i| open + i + 1) else { return "" };
-    let Some(end) = xml.rfind("</pivotCaches>").filter(|end| *end >= body) else { return "" };
-    xml.get(body..end).unwrap_or("")
+/// The `<pivotCache>` children of every kept `<pivotCaches>` element, concatenated.
+///
+/// Attributes on the element itself (a kept element's `xmlns:r`, say) are dropped: the workbook
+/// root declares every prefix. A kept slot holds one element per kept part (the model reader adds
+/// to the first, and a pass-through part brings its own), so cutting from the first opener to the
+/// last closer would carry the sibling wrappers — and the tags between them — into the workbook's
+/// single element. Each pair is cut out in turn instead: the element never nests, so the scan finds
+/// the same boundaries a parser does, and the children keep the `r:id` attributes verbatim that the
+/// XML tree (which drops namespace prefixes) could not write back.
+fn pivot_caches_children(xml: &str) -> String {
+    const OPEN: &str = "<pivotCaches";
+    const CLOSE: &str = "</pivotCaches>";
+    let mut children = String::new();
+    let mut rest = xml;
+    while let Some(open) = rest.find(OPEN) {
+        let Some(after) = rest.get(open..) else { break };
+        let Some(tag_end) = after.find('>').map(|i| open + i) else { break };
+        let after_tag = rest.get(tag_end + 1..).unwrap_or("");
+        // `<pivotCaches/>` holds no children: skip it rather than stop at it.
+        if rest.get(tag_end.saturating_sub(1)..tag_end) == Some("/") {
+            rest = after_tag;
+            continue;
+        }
+        let Some(end) = after_tag.find(CLOSE) else { break };
+        children.push_str(after_tag.get(..end).unwrap_or(""));
+        rest = after_tag.get(end + CLOSE.len()..).unwrap_or("");
+    }
+    children
 }
 
 /// Refuses sheet names XLSX cannot hold. The reader repairs such names (cuts, strips, renames
@@ -251,10 +272,10 @@ fn workbook_view_attrs(wb: &Workbook) -> String {
 /// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
 /// PivotTable in Excel only when its link starts with the workbook in brackets.
 pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
-    // Fail closed: the reader dropped the data model because the part is above the keep limit, so
-    // this package can't be written back without losing the model. Refuse before writing anything.
+    // Fail closed: the reader could not keep the data model, so this package can't be written
+    // back without losing the model. Refuse before writing anything.
     if let Some(model) = wb.dropped_model.as_ref() {
-        return Err(IoError::DroppedPart { part: model.name.clone(), size: model.size, limit: model.limit });
+        return Err(IoError::DroppedPart { part: model.name.clone(), reason: model.reason.clone() });
     }
     if wb.sheets.is_empty() {
         return Err(IoError::Format("a workbook needs at least one sheet".into()));
@@ -500,7 +521,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
 fn pivot_caches_element(pivots: &crate::pivot::PivotWriter, kept: &crate::passthrough::WorkbookKept, wb: &Workbook, wb_rels: &mut Rels) -> String {
     let mut caches = String::new();
     for xml in [pivots.workbook_xml(wb_rels), kept.element(wb, "pivotCaches")] {
-        caches.push_str(pivot_caches_children(&xml));
+        caches.push_str(&pivot_caches_children(&xml));
     }
     if caches.is_empty() { String::new() } else { format!("<pivotCaches>{caches}</pivotCaches>") }
 }

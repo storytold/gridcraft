@@ -72,15 +72,13 @@ pub enum IoError {
     Format(String),
     #[error("the file is too large: {0}")]
     TooLarge(String),
-    /// Saving would silently lose a part the reader had to drop because it is larger than the
-    /// pass-through limit.
+    /// Saving would silently lose a part the reader could not keep.
     #[error(
-        "the workbook's data model {} ({} bytes) is larger than the {} limit for parts kept on save, so saving it would lose the model; raise the limit, or save a copy of the workbook without the model",
+        "the workbook's data model {} could not be kept ({}), so saving it would lose the model, which the PivotTables built on it need; raise the pass-through limits, or save a copy of the workbook without the model",
         part,
-        size,
-        limit
+        reason
     )]
-    DroppedPart { part: String, size: u64, limit: u64 },
+    DroppedPart { part: String, reason: String },
 }
 
 /// What a lenient read skipped or repaired.

@@ -55,8 +55,9 @@ pub struct KeptReader {
     parts_left: usize,
     /// Whether the workbook's model database (`xl/model/item.data`) was dropped by the budget.
     model_dropped: bool,
-    /// The model database when it was dropped because it is larger than
-    /// [`crate::passthrough::MAX_KEPT_PART`], which makes saving refuse rather than lose it.
+    /// The model database when the reader could not keep it — above
+    /// [`crate::passthrough::MAX_KEPT_PART`], or out of keep budget or part slots — which makes
+    /// saving refuse rather than lose it.
     dropped_model: Option<DroppedPart>,
 }
 
@@ -68,7 +69,7 @@ impl KeptReader {
             defaults: HashMap::new(),
             overrides: HashMap::new(),
             budget: kept_total(),
-            parts_left: MAX_KEPT_PARTS,
+            parts_left: kept_parts(),
             model_dropped: false,
             dropped_model: None,
         };
@@ -111,7 +112,7 @@ impl KeptReader {
         !self.model_dropped
     }
 
-    /// The model database the size limit made the reader drop, if any.
+    /// The model database the reader could not keep, if any, with the reason.
     ///
     /// Such a part can't be kept, so saving the workbook would lose the model: the writer refuses
     /// it instead ([`crate::IoError::DroppedPart`]).
@@ -152,7 +153,7 @@ impl KeptReader {
                 return Err("its relationships are nested too deeply".into());
             }
             if parts.len() >= self.parts_left {
-                return Err("it has too many parts".into());
+                return Err(format!("it has too many parts: no slot left for {name} ({} parts)", self.parts_left));
             }
             let content_type = self.content_type(&name).ok_or_else(|| format!("{name} has no content type"))?;
             let data = match cx.pkg.read_limited(&name, MAX_KEPT_PART) {
@@ -162,7 +163,7 @@ impl KeptReader {
             };
             bytes = bytes.saturating_add(data.len());
             if bytes > self.budget {
-                return Err("it is too large".into());
+                return Err(format!("it is too large: {name} needs {bytes} bytes and only {} are left", self.budget));
             }
             let rels = raw_rels(cx, &name)?;
             for r in rels.iter().filter(|r| !r.external) {
@@ -242,11 +243,12 @@ impl KeptReader {
                 cx.warn(format!("{} part {} was dropped: {why}", kind(&r.rel_type), r.target));
                 if kind(&r.rel_type) == "powerPivotData" {
                     self.model_dropped = true;
-                    // The model exists but is too large to keep: remember it, so the writer refuses
-                    // instead of writing the package without its data model.
-                    if let Some(size) = cx.pkg.part_size(&r.target).filter(|size| *size > MAX_KEPT_PART) {
-                        self.dropped_model = Some(DroppedPart { name: r.target.clone(), size, limit: MAX_KEPT_PART });
-                    }
+                    // The model exists but could not be kept: remember it with the reason, so the
+                    // writer refuses instead of writing the package without its data model.
+                    // Any keep failure counts, not only the per-part size limit: parts kept
+                    // earlier can use up the byte budget or the part slots first, and the save
+                    // must lose nothing either way.
+                    self.dropped_model = Some(DroppedPart { name: r.target.clone(), size: cx.pkg.part_size(&r.target), reason: why });
                 }
             }
         }

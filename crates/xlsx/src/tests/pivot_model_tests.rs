@@ -466,6 +466,37 @@ fn a_cache_id_in_a_comment_is_not_a_cache_id() {
 }
 
 #[test]
+fn kept_pivot_caches_elements_merge_into_one_wrapper() {
+    // Two kept parts can each bring their own `<pivotCaches>` element. XLSX holds one, so the
+    // saved workbook must carry a single wrapper with both `pivotCache` children — not two
+    // sibling wrappers (or the tags between them) inside one.
+    let mut wb = workbook();
+    {
+        let data = wb.sheet_mut(0).expect("the Data sheet");
+        for (c, header) in ["Region", "Sales"].iter().enumerate() {
+            data.cells.set(CellRef::new(0, c as u32), Cell::value(Value::text(*header)));
+        }
+        data.cells.set(CellRef::new(1, 0), Cell::value(Value::text("East")));
+        data.cells.set(CellRef::new(1, 1), Cell::value(Value::number(10.0)));
+    }
+    attach_model_pivot(&mut wb, "Pivot", at("A3"), &spec(), &report(), None).unwrap();
+    {
+        let preserved = Arc::make_mut(wb.preserved.as_mut().expect("the model PivotTable is kept"));
+        let first = preserved.elements.iter().find(|element| element.slot == "pivotCaches").expect("the kept <pivotCaches>").clone();
+        let mut second = first.clone();
+        second.xml = second.xml.replace("cacheId=\"1\"", "cacheId=\"5\"");
+        preserved.elements.push(second);
+    }
+
+    let parts = entries(&write_xlsx(&wb).unwrap());
+    let wb_xml = text(&parts, "xl/workbook.xml");
+    assert_eq!(wb_xml.matches("<pivotCaches").count(), 1, "one wrapper, not the kept siblings: {wb_xml}");
+    assert_eq!(wb_xml.matches("</pivotCaches>").count(), 1, "the element is not nested: {wb_xml}");
+    assert_eq!(wb_xml.matches("cacheId=\"1\"").count(), 1, "the first child is kept: {wb_xml}");
+    assert_eq!(wb_xml.matches("cacheId=\"5\"").count(), 1, "the second kept child is kept: {wb_xml}");
+}
+
+#[test]
 fn an_existing_connections_part_is_reused_and_patched() {
     let mut wb = workbook();
     let kept = "<connections xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><connection id=\"4\" name=\"Query - Sales\" type=\"1\"/></connections>";
@@ -910,22 +941,75 @@ fn an_oversized_model_part_refuses_to_save() {
     );
     let dropped = wb.dropped_model.as_ref().expect("the dropped model is recorded on the workbook");
     assert_eq!(dropped.name, "xl/model/item.data");
-    assert_eq!(dropped.size, MAX_KEPT_PART + 1);
-    assert_eq!(dropped.limit, MAX_KEPT_PART);
+    assert_eq!(dropped.size, Some(MAX_KEPT_PART + 1));
+    assert!(dropped.reason.contains("too large") && dropped.reason.contains("xl/model/item.data"), "the reason names the limit: {}", dropped.reason);
     assert!(wb.preserved.as_deref().is_none_or(|p| !p.parts.iter().any(|q| q.name == "xl/model/item.data")), "the model part is not kept");
 
     // Saving refuses instead of writing a package that silently lost the model.
     let error = write_xlsx(&wb).expect_err("saving must lose nothing");
     match &error {
-        IoError::DroppedPart { part, size, limit } => {
+        IoError::DroppedPart { part, reason } => {
             assert_eq!(part, "xl/model/item.data");
-            assert_eq!(*size, MAX_KEPT_PART + 1);
-            assert_eq!(*limit, MAX_KEPT_PART);
+            assert!(reason.contains("too large"), "the reason survives: {reason}");
         }
         other => panic!("expected DroppedPart, got {other:?}"),
     }
     let message = error.to_string();
-    for needle in ["xl/model/item.data", "67108865", "67108864", "raise the limit", "without the model"] {
+    for needle in ["xl/model/item.data", "too large", "raise the pass-through limits", "without the model"] {
+        assert!(message.contains(needle), "{needle} missing from: {message}");
+    }
+}
+
+/// A model part that is within the per-part limit but no longer fits the kept-byte budget the
+/// parts kept before it left behind: it is dropped, and the save must refuse just the same.
+#[test]
+fn a_model_dropped_by_the_keep_budget_refuses_to_save() {
+    use crate::passthrough::{KEPT_TOTAL_FOR_TEST, MAX_KEPT_PART, MAX_KEPT_TOTAL};
+    let bytes = with_model_part_data(b"the model database");
+    // A few bytes of allowance: the model is far below the per-part limit and still does not fit.
+    KEPT_TOTAL_FOR_TEST.with(|c| c.set(4));
+    let read = read_xlsx(&bytes);
+    KEPT_TOTAL_FOR_TEST.with(|c| c.set(MAX_KEPT_TOTAL));
+    let (wb, report) = read.expect("a workbook whose keep budget ran out still opens");
+    assert!(report.warnings.iter().any(|w| w.contains("powerPivotData") && w.contains("dropped")), "{:?}", report.warnings);
+    let dropped = wb.dropped_model.as_ref().expect("the budget drop is recorded on the workbook");
+    assert_eq!(dropped.name, "xl/model/item.data");
+    assert_eq!(dropped.size, Some(18), "the part is recorded with its size");
+    assert!(dropped.size.is_some_and(|size| size <= MAX_KEPT_PART), "the per-part limit is not what dropped it");
+    assert!(dropped.reason.contains("too large") && dropped.reason.contains("only 4 are left"), "the reason names the budget: {}", dropped.reason);
+
+    let error = write_xlsx(&wb).expect_err("saving must lose nothing");
+    match &error {
+        IoError::DroppedPart { part, reason } => {
+            assert_eq!(part, "xl/model/item.data");
+            assert!(reason.contains("only 4 are left"), "the budget is named: {reason}");
+        }
+        other => panic!("expected DroppedPart, got {other:?}"),
+    }
+    let message = error.to_string();
+    for needle in ["xl/model/item.data", "only 4 are left", "without the model"] {
+        assert!(message.contains(needle), "{needle} missing from: {message}");
+    }
+}
+
+/// The other budget: the kept parts used every slot, so the model behind them is dropped and the
+/// save refuses with that reason rather than a size one.
+#[test]
+fn a_model_dropped_by_the_kept_part_count_refuses_to_save() {
+    use crate::passthrough::{KEPT_PARTS_FOR_TEST, MAX_KEPT_PARTS};
+    let bytes = with_model_part();
+    KEPT_PARTS_FOR_TEST.with(|c| c.set(0));
+    let read = read_xlsx(&bytes);
+    KEPT_PARTS_FOR_TEST.with(|c| c.set(MAX_KEPT_PARTS));
+    let (wb, report) = read.expect("a workbook out of part slots still opens");
+    assert!(report.warnings.iter().any(|w| w.contains("powerPivotData") && w.contains("dropped")), "{:?}", report.warnings);
+    let dropped = wb.dropped_model.as_ref().expect("the part-count drop is recorded on the workbook");
+    assert_eq!(dropped.name, "xl/model/item.data");
+    assert!(dropped.reason.contains("too many parts"), "the reason names the part slots: {}", dropped.reason);
+
+    let error = write_xlsx(&wb).expect_err("saving must lose nothing");
+    let message = error.to_string();
+    for needle in ["xl/model/item.data", "too many parts", "without the model"] {
         assert!(message.contains(needle), "{needle} missing from: {message}");
     }
 }
