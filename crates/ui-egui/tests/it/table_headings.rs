@@ -164,3 +164,22 @@ fn the_button_in_a_replaced_heading_opens_that_columns_filter_menu() {
     assert_eq!(h.state().grid.filter_menu, None);
     assert_eq!(h.state().session.active().unwrap().selection.current().a1(), "D:D");
 }
+
+#[test]
+fn an_autofilter_over_a_tables_filter_range_shows_the_columns_funnel() {
+    // A table's filter menu installs its AutoFilter over `filter_range()`, which leaves the
+    // totals row out, so the AutoFilter no longer covers the table's whole range; the replaced
+    // headings must still read that filter's criteria and show the funnel.
+    let mut s = session("G1");
+    s.execute("table.totalRow", json!({"table": "Table1", "on": true})).unwrap();
+    let fr = sheet(&s).tables[0].filter_range().expect("the totals row leaves a filter range");
+    s.execute("data.filter", json!({"range": fr.a1()})).unwrap();
+    s.execute("data.filterBy", json!({"column": "A", "values": ["2"]})).unwrap();
+    s.execute("selection.set", json!({"cell": "C20"})).unwrap();
+    let sh = sheet(&s);
+    assert_eq!(sh.autofilter.as_ref().map(|a| a.range.a1()), Some(fr.a1().to_string()), "the filter stops above the totals row");
+    assert!(fr.end.row < sh.tables[0].range.end.row, "the filter range is shorter than the table");
+    let headings = table_headings(&geo_at(&sh, 10), &sh, CellRef::parse("C20").unwrap());
+    let names: Vec<&str> = headings.iter().filter(|h| h.filtered).map(|h| h.name.as_str()).collect();
+    assert_eq!(names, ["Bank"], "the filtered column shows the funnel: {headings:?}");
+}
