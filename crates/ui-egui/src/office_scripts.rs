@@ -125,8 +125,15 @@ pub fn toggle_recording(app: &mut SheetApp) {
                 if let Some(id) = result.get("id").and_then(Json::as_str) {
                     select(app, id);
                 }
+                let loaded = result.get("id").and_then(Json::as_str).is_some_and(|id| app.office_scripts.selected.as_deref() == Some(id));
                 app.office_scripts.code = code.to_string();
                 app.office_scripts.dirty = false;
+                if !loaded {
+                    // The list did not have the recording (a failed refresh): drop the old
+                    // selection, or a later Save would replace that script with the recording.
+                    app.office_scripts.selected = None;
+                    app.office_scripts.name = saved.to_string();
+                }
                 app.office_scripts.status =
                     Some(Status::ok(format!("Recorded {steps} steps into `{saved}`; {skipped} skipped (see the comments in the script).")));
             } else {
@@ -190,7 +197,7 @@ fn list(app: &mut SheetApp, ui: &mut Ui) {
     ui.label(RichText::new(app.ui.language.tr("Scripts")).strong());
     let records = app.office_scripts.list.clone();
     if records.is_empty() {
-        ui.label(RichText::new("No saved scripts").italics().color(t.text_dim));
+        ui.label(RichText::new(app.ui.language.tr("No saved scripts")).italics().color(t.text_dim));
     }
     egui::ScrollArea::vertical().id_salt("office_scripts_list").max_height(330.0).auto_shrink([false, false]).show(ui, |ui| {
         for record in &records {
@@ -229,7 +236,7 @@ fn editor(app: &mut SheetApp, ui: &mut Ui, open: &mut bool) {
     ui.horizontal(|ui| {
         ui.label(lang.tr("Name"));
         let name = &mut app.office_scripts.name;
-        if ui.add(egui::TextEdit::singleline(name).desired_width(190.0).hint_text("Recorded Script")).changed() {
+        if ui.add(egui::TextEdit::singleline(name).desired_width(190.0).hint_text(lang.tr("Recorded Script"))).changed() {
             app.office_scripts.dirty = true;
         }
         if ui.button(lang.tr("Save")).clicked() {
@@ -292,7 +299,7 @@ fn runtime_row(app: &mut SheetApp, ui: &mut Ui) {
             Some(info) if info.found => {
                 let version = info.version.as_deref().unwrap_or("?");
                 let path = info.path.as_deref().unwrap_or("");
-                ui.label(format!("Bun {version} — {path}"));
+                ui.label(format!("{} {version} — {path}", lang.tr("Bun")));
             }
             Some(info) => {
                 let t = Tokens::get(ui.ctx());
@@ -319,7 +326,7 @@ fn runtime_row(app: &mut SheetApp, ui: &mut Ui) {
         && !info.found
         && !info.expected_path.is_empty()
     {
-        ui.label(RichText::new(format!("Expected at {}", info.expected_path)).small().color(Tokens::get(ui.ctx()).text_dim));
+        ui.label(RichText::new(format!("{} {}", lang.tr("Expected at"), info.expected_path)).small().color(Tokens::get(ui.ctx()).text_dim));
     }
 }
 
