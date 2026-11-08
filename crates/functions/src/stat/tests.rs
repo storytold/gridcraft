@@ -582,6 +582,15 @@ fn linest_drops_collinear_columns() {
     let r = linest_rows(&[0.0, 1.0, 2.0], &[vec![1e13, 1e13 + 1.0, 1e13 + 2.0]], true);
     rel_close(r[0][0], 1.0, 1e-9, "slope on a predictor with a 1e13 offset");
     assert_eq!(r[3][1], Some(1.0), "df: the predictor is kept");
+    // Same at 1e15, where the spread is only a few ulps of the offset: still distinct doubles.
+    let x15 = [1e15, 1e15 + 1.0, 1e15 + 2.0];
+    let r = linest_rows(&[0.0, 1.0, 2.0], &[x15.to_vec()], true);
+    rel_close(r[0][0], 1.0, 1e-9, "slope on a predictor with a 1e15 offset");
+    rel_close(r[0][1], -1e15, 1e-9, "intercept on a predictor with a 1e15 offset");
+    assert_eq!(r[3][1], Some(1.0), "df: the 1e15 predictor is kept");
+    assert!(r[4][1].is_some_and(|v| v.abs() < 1e-9), "ssresid: the 1e15 line is exact, got {:?}", r[4][1]);
+    let fitted = rows_of(&ev("TREND", vec![c(&[0.0, 1.0, 2.0]), c(&x15)]));
+    close(fitted[2][0].clone(), 2.0);
     // More predictors than observations: the surplus columns drop, no panic.
     let r = linest_rows(&[1.0, 2.0], &[vec![1.0, 2.0], vec![2.0, 1.0], vec![0.0, 5.0]], true);
     assert_eq!(r[0].len(), 4);

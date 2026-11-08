@@ -130,10 +130,6 @@ fn norm2(v: &[f64]) -> f64 {
     m * v.iter().map(|x| (x / m) * (x / m)).sum::<f64>().sqrt()
 }
 
-/// A column whose values differ by no more than this many ulps of its largest magnitude is
-/// taken to be constant: the differences are rounding in how it was computed, not data.
-const CONSTANT_ULPS: f64 = 64.0;
-
 /// Result of [`qr_solve`]: the least-squares solution on the kept columns, in the caller's
 /// column scale, and what the standard errors need.
 struct QrFit {
@@ -276,11 +272,12 @@ fn regress(y: &[f64], x: &[Vec<f64>], k: usize, constant: bool) -> R<Fit> {
     let yc: Vec<f64> = y.iter().map(|v| v - ym).collect();
     let sstot: f64 = if constant { yc.iter().map(|v| v * v).sum() } else { y.iter().map(|v| v * v).sum() };
     // Only centring leaves rounding residue behind; without an intercept a constant column is data.
+    // Constant means every raw value is the same double: distinct values, however close, vary.
     let constant_cols: Vec<bool> = (0..k)
         .map(|j| {
-            let col = x.iter().map(|r| r.get(j).copied().unwrap_or(0.0));
-            let (lo, hi, big) = col.fold((f64::INFINITY, f64::NEG_INFINITY, 0.0f64), |(lo, hi, big), v| (lo.min(v), hi.max(v), big.max(v.abs())));
-            constant && hi - lo <= CONSTANT_ULPS * f64::EPSILON * big
+            let mut col = x.iter().map(|r| r.get(j).copied().unwrap_or(0.0));
+            let first = col.next();
+            constant && first.is_some_and(|f| col.all(|v| v == f))
         })
         .collect();
     let QrFit { coef, dropped, ssresid, diag, quad } = qr_solve(cols, yc, &xm, &constant_cols);
