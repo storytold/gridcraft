@@ -216,6 +216,8 @@ fn formula_bar_heights_settle_independently_in_multiple_windows() {
     check(&mut desk, [3, 1, 0], &windows[1..]);
 }
 
+/// Verifies that new windows start collapsed and keep independent expansion flags and dragged
+/// heights across switches and toggles, including two views of one workbook and root adoption.
 #[test]
 fn formula_bar_expansion_and_remembered_height_belong_to_each_window() {
     use gridcraft_ui_egui::formula_bar::{BarLayout, MAX_LINES, one_line};
