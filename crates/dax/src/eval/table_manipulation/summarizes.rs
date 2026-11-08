@@ -434,6 +434,14 @@ fn group_layout(group: &[GroupArg]) -> Result<GroupLayout, EvalError> {
     Ok(GroupLayout { columns, levels })
 }
 
+/// The key of a group, subtotal prefix or domain candidate: text folds to the model's
+/// case-insensitive collation, the rule `VALUES`, `DISTINCTCOUNT` and the filter sets already
+/// follow. Without it a column holding `"East"` and `"east"` groups twice, and each group's
+/// filters then select both spellings.
+fn group_key(values: &[Scalar]) -> Vec<ScalarKey> {
+    values.iter().map(|value| folded_key(&ScalarKey::from(value))).collect()
+}
+
 /// Groups the rows of `table` by `columns`; each entry holds the group values and the source rows.
 #[allow(clippy::type_complexity)]
 // Each entry pairs the group's key values with the rows that fall in it.
@@ -448,7 +456,7 @@ fn group_details(ev: &Evaluator<'_>, table: &TableValue, columns: &[ColumnRef]) 
         for access in &accesses {
             values.push(group_value(ev, row, access, &mut related_keys)?);
         }
-        let key: Vec<ScalarKey> = values.iter().map(ScalarKey::from).collect();
+        let key: Vec<ScalarKey> = group_key(&values);
         groups.entry(key).or_insert_with(|| (values, Vec::new())).1.push(row.clone());
     }
     if groups.len() > MAX_GROUP_ROWS {
@@ -484,7 +492,7 @@ fn subtotal_rows(details: &[(Vec<Scalar>, Vec<Vec<Scalar>>)], layout: &GroupLayo
                     *value = Scalar::Blank;
                 }
             }
-            let prefix: Vec<ScalarKey> = subtotal.iter().map(ScalarKey::from).collect();
+            let prefix: Vec<ScalarKey> = group_key(&subtotal);
             if let Some(position) = buckets.get(&prefix).copied() {
                 if let Some((_, covered)) = collected.get_mut(position) {
                     covered.extend(group_rows.iter().cloned());
@@ -495,7 +503,7 @@ fn subtotal_rows(details: &[(Vec<Scalar>, Vec<Vec<Scalar>>)], layout: &GroupLayo
             }
         }
         for (subtotal, covered) in collected {
-            let key = (subtotal.iter().map(ScalarKey::from).collect::<Vec<_>>(), active.clone());
+            let key = (group_key(&subtotal), active.clone());
             if seen.insert(key) {
                 rows.push((subtotal, active.clone(), covered));
             }
@@ -607,20 +615,29 @@ fn prepare_group(
             let owned: BTreeSet<Vec<ScalarKey>> = group
                 .rows
                 .iter()
-                .map(|row| mapped.iter().map(|(position, _)| row.get(*position).map(ScalarKey::from).unwrap_or(ScalarKey::Blank)).collect())
+                .map(|row| group_key(&mapped.iter().map(|(position, _)| row.get(*position).cloned().unwrap_or(Scalar::Blank)).collect::<Vec<_>>()))
                 .collect();
             // The evaluation's own filters are already applied to the base table, so the group
             // narrows its rows in memory. A set on another table reaches the lineage through a
             // relationship, which only the evaluator can resolve: that group materialises the
-            // table with its own filters (the only genuinely group-dependent rebuild).
-            let narrowed = group_sets.iter().all(|(table, _, _)| *table == lineage);
+            // table with its own filters (the only genuinely group-dependent rebuild). A set that
+            // replaces an outer filter with values it does not already admit must rebuild too:
+            // `filters.set` replaces that filter, while narrowing would AND the group value with
+            // the outer one baked into the base rows and compare an empty set, hiding the leak
+            // this check exists to catch. A set the outer filter already admits narrows exactly,
+            // so the common `CALCULATE(SUMMARIZE(...), Sales[Region] = "East")` case still
+            // rebuilds nothing.
+            let replaces_outer = group_sets
+                .iter()
+                .any(|(table, column, keys)| ctx.filters.filters.get(&(*table, *column)).is_some_and(|outer| !keys.is_subset(outer)));
+            let narrowed = !replaces_outer && group_sets.iter().all(|(table, _, _)| *table == lineage);
             let lineage_rows = if narrowed {
                 base.get_or_insert_with(|| LineageBase::new(ev, lineage, &ctx.filters)).matching(&group_sets)
             } else {
                 ev.table(lineage, &filters).rows
             };
             let leaked = lineage_rows.iter().any(|row| {
-                let key: Vec<ScalarKey> = mapped.iter().map(|(_, index)| row.get(*index).map(ScalarKey::from).unwrap_or(ScalarKey::Blank)).collect();
+                let key = group_key(&mapped.iter().map(|(_, index)| row.get(*index).cloned().unwrap_or(Scalar::Blank)).collect::<Vec<_>>());
                 !owned.contains(&key)
             });
             if leaked {
@@ -669,7 +686,7 @@ fn summarize(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Resul
     }
     rows.sort_by(|left, right| compare_values(&left.0, &right.0));
     let mut seen: BTreeSet<(Vec<ScalarKey>, Vec<bool>)> = BTreeSet::new();
-    rows.retain(|(values, active, _)| seen.insert((values.iter().map(ScalarKey::from).collect(), active.clone())));
+    rows.retain(|(values, active, _)| seen.insert((group_key(values), active.clone())));
 
     let mut columns: Vec<TableColumn> = layout.columns.iter().map(|column| TableColumn { name: column.name.clone() }).collect();
     for (name, _) in &parsed.expressions {
@@ -1005,7 +1022,7 @@ fn column_domain(ev: &Evaluator<'_>, column: &ColumnRef, filters: &FilterContext
     let mut seen = BTreeSet::new();
     let mut values: Vec<Scalar> = Vec::new();
     for value in table.column(column.column) {
-        if seen.insert(ScalarKey::from(&value)) {
+        if seen.insert(folded_key(&ScalarKey::from(&value))) {
             values.push(value);
         }
     }
@@ -1301,7 +1318,12 @@ fn add_missing_items(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) 
             continue;
         }
         existing.insert(
-            positions.iter().map(|position| position.and_then(|index| row.get(index)).map(ScalarKey::from).unwrap_or(ScalarKey::Blank)).collect(),
+            positions
+                .iter()
+                .map(|position| {
+                    position.and_then(|index| row.get(index)).map(|value| folded_key(&ScalarKey::from(value))).unwrap_or(ScalarKey::Blank)
+                })
+                .collect(),
         );
     }
     let mut products: Vec<Vec<Scalar>> = vec![Vec::new()];
@@ -1322,7 +1344,7 @@ fn add_missing_items(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) 
     }
     let mut missing = Vec::new();
     for values in products {
-        let key: Vec<ScalarKey> = values.iter().map(ScalarKey::from).collect();
+        let key: Vec<ScalarKey> = group_key(&values);
         if existing.contains(&key) {
             continue;
         }
@@ -1691,6 +1713,41 @@ mod tests {
             "one lineage table per evaluation, not per group ({}) or per group x expression ({})",
             regions.len(),
             regions.len() * 2
+        );
+    }
+
+    /// A group value set that the evaluation's own filters already admit is not a replacement:
+    /// `filters.set` would store the same set, so the group keeps narrowing the one lineage table
+    /// instead of rebuilding it. Only a set that drops values the outer filter admits rebuilds.
+    #[test]
+    fn summarize_narrows_when_the_group_set_stays_inside_the_outer_filter() {
+        let model = DataModel {
+            tables: vec![ModelTable {
+                name: "Sales".into(),
+                columns: vec![
+                    ModelColumn { name: "Region".into(), data_type: Some("String".into()) },
+                    ModelColumn { name: "Amount".into(), data_type: Some("Int64".into()) },
+                ],
+                rows: vec![
+                    vec![Scalar::String("East".into()), Scalar::Integer(10)],
+                    vec![Scalar::String("East".into()), Scalar::Integer(20)],
+                    vec![Scalar::String("West".into()), Scalar::Integer(30)],
+                ],
+            }],
+            relationships: Vec::new(),
+            measures: Vec::new(),
+        };
+        let evaluator = Evaluator::new(&model).expect("evaluator");
+        let expr =
+            parse_expression("CALCULATETABLE(SUMMARIZE(Sales, Sales[Region], \"A\", SUM(Sales[Amount])), Sales[Region] = \"East\")").expect("parse");
+        let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+        LINEAGE_MATERIALIZATIONS.with(|count| count.set(0));
+        let table = evaluator.evaluate_table(&bound).expect("evaluate");
+        assert_eq!(table.rows.len(), 1, "the outer filter leaves one group");
+        assert_eq!(
+            LINEAGE_MATERIALIZATIONS.with(|count| count.get()),
+            1,
+            "the group set the outer filter already admits still narrows one lineage table"
         );
     }
 

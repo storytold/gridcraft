@@ -646,6 +646,68 @@ fn summarize_rejects_cross_column_table_filters_that_leak_rows() {
 }
 
 #[test]
+fn summarize_groups_text_case_insensitively() {
+    // The model collation ignores case, so `"East"` and `"east"` are one group value, exactly as
+    // `VALUES`, `DISTINCTCOUNT` and the filter sets already treat them. Grouping on the raw key
+    // made `SUMMARIZE` fail its own leak check and `SUMMARIZECOLUMNS` count the total twice.
+    let mut model = DataModel {
+        tables: vec![table(
+            "Sales",
+            vec![column("Region", "String"), column("Amount", "Double")],
+            vec![vec![text("East"), money(10.0)], vec![text("east"), money(5.0)], vec![text("West"), money(20.0)]],
+        )],
+        relationships: Vec::new(),
+        measures: Vec::new(),
+    };
+    model.parse_formulas().expect("model parses");
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let run = |source: &str| -> TableValue {
+        let expression = parse_expression(source).expect("parse");
+        let bound = Binder::new(&model).bind_expression(&expression).expect("bind");
+        evaluator.evaluate_table(&bound).expect(source)
+    };
+    let summarized = run("SUMMARIZE(Sales, Sales[Region], \"T\", SUM(Sales[Amount]))");
+    assert_eq!(summarized.rows, vec![vec![text("East"), money(15.0)], vec![text("West"), money(20.0)]], "one group per spelling");
+    let columns = run("SUMMARIZECOLUMNS(Sales[Region], \"T\", SUM(Sales[Amount]))");
+    assert_eq!(columns.rows, vec![vec![text("East"), money(15.0)], vec![text("West"), money(20.0)]], "one row per spelling");
+}
+
+#[test]
+fn summarize_keeps_the_leak_check_when_a_group_set_overrides_an_outer_filter() {
+    // `SUMMARIZE(ALL(Sales), ...)` under `Sales[Region] = "East"` groups a region the outer filter
+    // removed. Setting the group's value replaces that outer filter, so the leak check must still
+    // see the West lineage rows: narrowing the East-only base rows would compare an empty set and
+    // miss `(2, 5)`, the row the cross-column predicate removed.
+    let mut model = DataModel {
+        tables: vec![table(
+            "Sales",
+            vec![column("Region", "String"), column("Amount", "Double"), column("Cost", "Double")],
+            vec![
+                vec![text("East"), money(5.0), money(3.0)],
+                vec![text("East"), money(9.0), money(8.0)],
+                vec![text("West"), money(2.0), money(1.0)],
+                vec![text("West"), money(7.0), money(5.0)],
+                vec![text("West"), money(2.0), money(5.0)],
+            ],
+        )],
+        relationships: Vec::new(),
+        measures: Vec::new(),
+    };
+    model.parse_formulas().expect("model parses");
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let expression = parse_expression(
+        "CALCULATETABLE(SUMMARIZE(FILTER(ALL(Sales), Sales[Amount] > Sales[Cost]), Sales[Region], \"T\", SUM(Sales[Amount])), Sales[Region] = \"East\")",
+    )
+    .expect("parse");
+    let bound = Binder::new(&model).bind_expression(&expression).expect("bind");
+    let message = match evaluator.evaluate_table(&bound) {
+        Ok(table) => panic!("a group that overrides the outer filter must still reject the leak, returned {table:?}"),
+        Err(error) => error.to_string(),
+    };
+    assert!(message.contains("outside the group"), "error names the leak: {message}");
+}
+
+#[test]
 fn summarize_groups_an_orphan_foreign_key_under_the_related_tables_blank_member() {
     // A fact row no relationship matches belongs to the related table's blank member, and the
     // blank group still covers that row's measure.
