@@ -88,6 +88,21 @@ fn logical_and_scalar_functions() {
 }
 
 #[test]
+fn month_shifts_leave_the_date_when_the_offset_exceeds_excel_years() {
+    // `Months` reaches the shift as an `i64` cut from an `f64`, so it saturates at `i64::MAX`.
+    // The month total must stay in a wider integer: wrapping it would land back inside Excel's
+    // year range and silently return a different date instead of leaving the input alone.
+    let start = eval("DATE(2024, 1, 15)");
+    for extreme in ["9223372036854775807", "-9223372036854775807"] {
+        assert_eq!(eval(&format!("EOMONTH(DATE(2024, 1, 15), {extreme})")), start, "EOMONTH with {extreme}");
+        assert_eq!(eval(&format!("EDATE(DATE(2024, 1, 15), {extreme})")), start, "EDATE with {extreme}");
+    }
+    // A shift that does fit still moves the date, so the guard is not swallowing ordinary work.
+    assert_eq!(eval("EOMONTH(DATE(2024, 1, 15), 1)"), eval("DATE(2024, 2, 29)"));
+    assert_eq!(eval("EDATE(DATE(2024, 1, 31), 1)"), eval("DATE(2024, 2, 29)"));
+}
+
+#[test]
 fn tables_filters_and_values() {
     let filtered = eval_table("FILTER(Sales, Sales[Amount] > 10)");
     assert_eq!(filtered.rows.len(), 2);
