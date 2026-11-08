@@ -316,3 +316,54 @@ fn the_wire_uses_the_camel_case_names_of_the_contract() {
     assert!(text.contains("\"sheetKey\":\"7\""), "{text}");
     assert!(text.contains("\"topLeft\":\"A1\""), "{text}");
 }
+
+#[test]
+fn a_structural_operation_carries_the_new_sheet_map() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    let op = ClientOp {
+        op_id: "op-rename".into(),
+        doc: "book".into(),
+        base_version: 0,
+        epoch: 0,
+        kind: Kind::Structural,
+        target: Target { sheet: sheet.clone(), a1: None },
+        payload: Payload { cmd: "sheet.rename".into(), params: json!({ "name": "Renamed" }) },
+        preview: None,
+    };
+    let applied = room.apply(&mut s, op, "ann").unwrap();
+    assert_eq!(applied.version, 1);
+    assert_eq!(applied.epoch, 1);
+    let sheets = applied.sheets.expect("a structural operation sends the map");
+    assert_eq!(sheets.len(), 1);
+    assert_eq!(sheets[0].key, sheet);
+    assert_eq!(sheets[0].name, "Renamed");
+}
+
+#[test]
+fn undo_reverses_the_last_step_of_its_actor_as_a_new_operation() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    room.apply(&mut s, op("op-1", "cell.set", json!({"input": 5}), &sheet, "A1"), "ann").unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(5.0));
+    let undone = room.undo(&mut s, "ann", Some("op-1")).unwrap();
+    assert_eq!(undone.version, 2);
+    assert!(undone.result.command.is_none(), "undo is not a command echo");
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Empty);
+    assert_eq!(room.version(), 2);
+    assert!(room.undo(&mut s, "ann", None).is_err(), "one step, one undo");
+}
+
+#[test]
+fn undo_is_refused_when_another_participant_holds_the_cell() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    room.apply(&mut s, op("op-1", "cell.set", json!({"input": 5}), &sheet, "A1"), "ann").unwrap();
+    room.apply(&mut s, op("op-2", "cell.set", json!({"input": 9}), &sheet, "A1"), "bob").unwrap();
+    let refused = room.undo(&mut s, "ann", Some("op-1")).unwrap_err();
+    assert_eq!(refused.rejected().code, RejectCode::Conflict);
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(9.0));
+}

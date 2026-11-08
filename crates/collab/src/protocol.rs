@@ -88,6 +88,14 @@ pub struct Outcome {
     pub delta: Option<Vec<SheetDelta>>,
 }
 
+/// One sheet of a session: its key on the wire and its name. Sent in `welcome`, and again with
+/// every structural `applied` because a rename, insert or delete changes the map.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SheetName {
+    pub key: String,
+    pub name: String,
+}
+
 /// A confirmed operation: the only thing a client applies.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -97,6 +105,9 @@ pub struct Applied {
     pub epoch: u64,
     pub actor: String,
     pub result: Outcome,
+    /// The sheet map after a structural operation: keys never change, names and order may.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheets: Option<Vec<SheetName>>,
 }
 
 /// Where the client should resynchronise after a rejection.

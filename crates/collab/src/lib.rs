@@ -24,12 +24,12 @@ mod room;
 
 pub use auth::{AuthError, Claims, Expected};
 pub use delta::delta_for;
-pub use gateway::{ClientMessage, Connection, Gateway, LeaseInfo, ServerMessage, SheetName, SnapshotMode};
+pub use gateway::{ClientMessage, Connection, Gateway, LeaseInfo, ServerMessage, SnapshotMode};
 pub use hub::{Hub, HubError, Participant, Presence, Role, Viewport, viewer_rejection};
 pub use keys::{KeyFile, SheetKeys};
 pub use ops::{Class, classify};
-pub use protocol::{Applied, CellChange, ClientOp, CommandEcho, Hint, Kind, Outcome, Payload, RejectCode, Rejected, SheetDelta, Target};
-pub use room::{Room, RoomError, RoomState};
+pub use protocol::{Applied, CellChange, ClientOp, CommandEcho, Hint, Kind, Outcome, Payload, RejectCode, Rejected, SheetDelta, SheetName, Target};
+pub use room::{CellSnap, Room, RoomError, RoomState, Step};
 
 #[cfg(test)]
 mod tests;

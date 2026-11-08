@@ -6448,3 +6448,16 @@ fn a_local_command_after_a_remote_one_is_journaled_and_undone_as_usual() {
     assert_eq!(v(&s, "A2"), Value::Empty);
     assert_eq!(v(&s, "A1"), Value::text("remote"), "undo leaves the remote edit alone");
 }
+
+#[test]
+fn authoritative_values_patch_without_touching_formulas_or_history() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": 2})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=A1*2"})).unwrap();
+    let undo_len = s.doc().unwrap().undo.len();
+    s.apply_values(0, &[(CellRef::parse("A2").unwrap(), Value::Number(999.0))]).unwrap();
+    assert_eq!(v(&s, "A2"), Value::Number(999.0));
+    let d = s.doc().unwrap();
+    assert_eq!(d.undo.len(), undo_len, "a remote value is not a local undo step");
+    assert!(d.wb.active().unwrap().cell(CellRef::parse("A2").unwrap()).unwrap().formula.is_some());
+}

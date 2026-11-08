@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::{AuthError, Claims, Expected};
 use crate::hub::{Hub, HubError, Participant, Presence, Role, viewer_rejection};
-use crate::protocol::{Applied, ClientOp, Rejected};
+use crate::protocol::{Applied, ClientOp, Rejected, SheetName};
 
 /// One message from a client.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -26,6 +26,12 @@ pub enum ClientMessage {
     Op {
         op: ClientOp,
     },
+    /// Undo the last edit of this participant (ADR-0010). The room answers with `applied` like
+    /// any other operation, or with `conflict` when somebody else changed a cell of that step.
+    Undo {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        op_id: Option<String>,
+    },
     Presence {
         presence: Option<Presence>,
     },
@@ -38,13 +44,6 @@ pub enum ClientMessage {
         nonce: u64,
     },
     Leave,
-}
-
-/// One sheet of the welcome message: its session key and its name.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SheetName {
-    pub key: String,
-    pub name: String,
 }
 
 /// How a snapshot travels to a client that cannot be caught up from the journal.
@@ -183,6 +182,12 @@ impl Gateway {
                 Err(HubError::Forbidden) => vec![ServerMessage::Rejected { rejected: viewer_rejection(&op.op_id) }],
                 Err(HubError::Rejected(rejected)) => vec![ServerMessage::Rejected { rejected }],
                 Err(e) => vec![ServerMessage::Error { code: "internal".into(), message: format!("{e:?}"), retryable: true }],
+            },
+            ClientMessage::Undo { op_id } => match self.hub.undo(&connection.doc, &connection.actor, op_id.as_deref()) {
+                Ok(applied) => vec![ServerMessage::Applied { applied }],
+                Err(HubError::Forbidden) => vec![ServerMessage::Rejected { rejected: viewer_rejection("undo") }],
+                Err(HubError::Rejected(rejected)) => vec![ServerMessage::Rejected { rejected }],
+                Err(e) => vec![ServerMessage::Error { code: "internal".into(), message: format!("{e:?}"), retryable: false }],
             },
             ClientMessage::Presence { presence } => match self.hub.presence(&connection.doc, &connection.actor, presence) {
                 Ok(participants) => vec![ServerMessage::Presence { participants }],

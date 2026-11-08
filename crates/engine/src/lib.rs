@@ -30,9 +30,9 @@ pub mod windows;
 use std::sync::Arc;
 
 use gridcraft_calc::Calc;
-use gridcraft_core::{CellRef, RangeRef};
+use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::Workbook;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command, register_test_command};
@@ -441,6 +441,16 @@ impl Default for Prefs {
             recent_functions: recent::defaults(),
         }
     }
+}
+
+/// One cell as a snapshot holds it: the value, the formula text (without `=`) and the interned
+/// style id. Used by the shared session's undo to put a cell back exactly.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CellState {
+    pub value: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formula: Option<String>,
+    pub style: u32,
 }
 
 /// Requests from commands to the UI (open a dialog, show a message…).
@@ -1160,6 +1170,62 @@ impl Session {
             Ok(v) => v,
             Err(p) => std::panic::resume_unwind(p),
         }
+    }
+
+    /// Restores cells exactly as a shared session's undo remembers them: value, formula text and
+    /// interned style. The dependency graph is rebuilt and the workbook recalculated, because a
+    /// restored formula changes what its dependents show.
+    pub fn restore_cells(&mut self, sheet: usize, cells: &[(CellRef, CellState)]) -> Result<()> {
+        let Some(d) = self.active_mut() else { return Err(EngineError::NoDocument) };
+        let DocState { wb, calc, revision, .. } = d;
+        {
+            let model = Arc::make_mut(wb);
+            let Some(sh) = model.sheet_mut(sheet) else { return Err(EngineError::Other("no such sheet".into())) };
+            for (at, state) in cells {
+                if state.value.is_empty() && state.formula.is_none() {
+                    sh.remove_cell(*at);
+                    continue;
+                }
+                let formula = state.formula.as_deref().map(|text| Arc::new(gridcraft_model::Formula::new(text)));
+                sh.set_cell(
+                    *at,
+                    gridcraft_model::Cell { value: state.value.clone(), formula, style: gridcraft_model::StyleId(state.style), py: None },
+                );
+            }
+            calc.rebuild(model);
+            calc.recalc_all(model);
+        }
+        *revision = revision.saturating_add(1);
+        Ok(())
+    }
+
+    /// Replaces the cached values of cells with the authoritative ones another participant's
+    /// command produced. The formulas, styles and structure are already in place (the command
+    /// was applied through [`Session::apply_remote`]); only evaluation results can differ —
+    /// volatile functions, Python, precision as displayed — so only values are touched. No
+    /// journal, undo or change record: the operation belongs to the participant who made it.
+    pub fn apply_values(&mut self, sheet: usize, values: &[(CellRef, Value)]) -> Result<()> {
+        let Some(d) = self.active_mut() else { return Err(EngineError::NoDocument) };
+        let wb = Arc::make_mut(&mut d.wb);
+        let Some(sh) = wb.sheet_mut(sheet) else { return Err(EngineError::Other("no such sheet".into())) };
+        for (at, value) in values {
+            match sh.cell(*at) {
+                Some(cell) => {
+                    let mut updated = cell.clone();
+                    updated.value = value.clone();
+                    sh.set_cell(*at, updated);
+                }
+                // A spilled cell has no `Cell`: its value lives in the sheet's spill map and must
+                // stay there, or the formula that owns the block would no longer know its size.
+                None if sh.spill.contains_key(at) => {
+                    sh.spill.insert(*at, value.clone());
+                }
+                None if !value.is_empty() => sh.set_value(*at, value.clone()),
+                None => {}
+            }
+        }
+        d.revision = d.revision.saturating_add(1);
+        Ok(())
     }
 
     /// Takes the cells the last command changed, as `(sheet index, cell)`, leaving the list empty.

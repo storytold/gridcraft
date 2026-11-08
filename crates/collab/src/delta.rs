@@ -27,9 +27,11 @@ pub fn delta_for(workbook: &Workbook, keys: &SheetKeys, changed: &[Key]) -> Vec<
             }
         };
         let cell = sheet.cell(*at);
-        let value = cell.map(|c| serde_json::to_value(&c.value).unwrap_or(serde_json::Value::Null)).unwrap_or(serde_json::Value::Null);
+        // `Sheet::value` reads spilled dynamic-array results too: a spilled cell has no `Cell`
+        // of its own but is part of what the user sees.
+        let value = serde_json::to_value(sheet.value(*at)).unwrap_or(serde_json::Value::Null);
         let formula = cell.and_then(|c| c.formula.as_ref()).map(|f| f.text.clone());
-        let style = cell.map(|_| sheet.style_id(*at).0);
+        let style = Some(sheet.style_id(*at).0);
         out[slot].cells.push(CellChange { a1: at.a1(), value, formula, style });
     }
     out

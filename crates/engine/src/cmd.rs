@@ -460,7 +460,26 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     // evaluated are added because their displayed values change too, even though their content
     // did not.
     d.last_changed.extend(changed);
-    d.last_changed.extend(d.calc.take_evaluated());
+    let evaluated = d.calc.take_evaluated();
+    // Spilled blocks are reported too, but the whole list stays bounded: a sheet of large arrays
+    // must not turn one edit into millions of delta entries.
+    let mut spilled = 0u64;
+    for (sheet, at) in &evaluated {
+        d.last_changed.push((*sheet, *at));
+        // A dynamic array is one formula and a block of values: the block is part of what the
+        // user sees, so the delta carries every spilled cell.
+        if let Some(range) = d.wb.sheet(*sheet).and_then(|s| s.spill_ranges.get(at).copied())
+            && range.count() <= 100_000
+            && spilled.saturating_add(range.count()) <= 200_000
+        {
+            spilled = spilled.saturating_add(range.count());
+            for row in range.start.row..=range.end.row {
+                for col in range.start.col..=range.end.col {
+                    d.last_changed.push((*sheet, CellRef::new(row, col)));
+                }
+            }
+        }
+    }
     d.last_changed.sort_unstable_by_key(|(s, c)| (*s, c.row, c.col));
     d.last_changed.dedup();
     Ok(r)
