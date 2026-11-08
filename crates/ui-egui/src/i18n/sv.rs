@@ -524,6 +524,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Input Y Range:" => "Indataområde för Y:",
         "Input message:" => "Indatameddelande:",
         "Insert" => "Infoga",
+        "Header Menu|Insert" => "Infoga",
         "Insert\nFunction" => "Infoga\nfunktion",
         "Insert\nSlicer" => "Infoga\nutsnitt",
         "Insert Calculated Field" => "Infoga beräknat fält",
