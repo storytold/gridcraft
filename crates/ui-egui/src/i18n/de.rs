@@ -57,6 +57,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Format-\nbereich",
         "Format" => "Format",
         "Insert" => "Einfügen",
+        "Header Menu|Insert" => "Zellen einfügen",
         "Insert Cells…" => "Zellen einfügen…",
         "Delete" => "Löschen",
         "Select Data…" => "Daten auswählen…",
@@ -260,6 +261,19 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Convert to Comments" => "In Kommentare konvertieren",
         "Checkbox" => "Kontrollkästchen",
         "Insert checkboxes in the selected cells" => "Kontrollkästchen in die ausgewählten Zellen einfügen",
+        "Button" => "Schaltfläche",
+        "Slider" => "Schieberegler",
+        "Spin Button" => "Drehfeld",
+        "Draw a button that runs a macro or a command" => "Eine Schaltfläche zeichnen, die ein Makro oder einen Befehl ausführt",
+        "Draw a slider that sets a whole number in a linked cell" => {
+            "Einen Schieberegler zeichnen, der eine ganze Zahl in einer verknüpften Zelle festlegt"
+        }
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Ein Drehfeld zeichnen, das eine ganze Zahl in einer verknüpften Zelle schrittweise ändert"
+        }
+        "Edit Text" => "Text bearbeiten",
+        "Assign Action…" => "Aktion zuweisen…",
+        "Format Control…" => "Steuerelement formatieren…",
         "Sheet\nRight-to-Left" => "Blatt von rechts\nnach links",
         "Sheet Right-to-Left" => "Blatt von rechts nach links",
         "Data\nAnalysis" => "Daten-\nanalyse",
@@ -394,6 +408,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Legende: Unten",
         "Legend: Top" => "Legende: Oben",
         "Legend: Right" => "Legende: Rechts",
+        "First slice angle" => "Winkel des ersten Segments",
+        "Doughnut hole size" => "Größe des Ringlochs",
         "Gridlines: None" => "Gitternetzlinien: Keine",
         "Gridlines: Show" => "Gitternetzlinien: Anzeigen",
         "Chart\nTitle" => "Diagramm-\ntitel",
@@ -461,7 +477,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         // grid.rs cell and row/column header context menus.
         "Cut" => "Ausschneiden",
         "Copy" => "Kopieren",
-        "Insert…" => "Einfügen…",
+        "Insert…" => "Zellen einfügen…",
         "Delete…" => "Löschen…",
         "Filter by Selected Cell's Value" => "Nach Wert der gewählten Zelle filtern",
         "New Comment" => "Neuer Kommentar",
