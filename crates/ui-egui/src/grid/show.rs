@@ -16,6 +16,7 @@ use super::{
 use super::{CellRef, Pos2};
 
 pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
+    crate::ink::replay_tick(app, ui.ctx());
     let t = Tokens::get(ui.ctx());
     let available = ui.available_rect_before_wrap();
     // A right-to-left sheet has its vertical scrollbar on the left.

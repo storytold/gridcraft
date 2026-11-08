@@ -1,10 +1,14 @@
-//! Draw tab: pen and eraser tools, ink strokes, Ink to Shape.
+//! Draw tab: pen and eraser tools, ink strokes, Ink to Shape, Ink Replay.
 
 use gridcraft_core::CellRef;
-use gridcraft_model::{Anchor, Color, Shape, ShapeKind};
+use gridcraft_model::{Anchor, Color, Shape, ShapeKind, Sheet};
 use serde_json::{Value as Json, json};
 
 use super::{CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, ok, str_param, u32_param};
+
+/// Ink strokes Ink Replay reports at most. A file can carry far more; replaying them all would
+/// make an animation nobody can watch, and the report is built per click.
+const MAX_REPLAY_STROKES: usize = 2_000;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -23,6 +27,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{id?} converts an ink stroke (default: the last) into a rectangle, ellipse, triangle or line",
             has_doc,
             ink_to_shape
+        ),
+        cmd!(
+            noundo "draw.inkReplay",
+            "Ink Replay",
+            ["Draw", "Replay"],
+            None,
+            "{on?: bool} starts or stops replaying the sheet's ink strokes in drawing order",
+            has_doc,
+            ink_replay
         ),
     ]
 }
@@ -113,6 +126,37 @@ pub fn ink_width(sh: &Shape) -> f32 {
 
 pub fn ink_points(sh: &Shape) -> Vec<[f32; 2]> {
     parse_points(&sh.text)
+}
+
+/// The sheet's ink strokes in the order they were drawn.
+///
+/// Ink records no order of its own yet, so this is the order of `shapes`: the order the strokes
+/// were created in, which the xlsx writer keeps in the drawing and the reader appends back in,
+/// so it survives a save and reopen (and a stroke deleted in between leaves the others in
+/// order). A document style that carries an explicit order can sort on it here instead.
+pub fn ink_in_draw_order(sh: &Sheet) -> impl Iterator<Item = &Shape> {
+    sh.shapes.iter().filter(|s| s.kind == ShapeKind::Ink)
+}
+
+fn ink_replay(s: &mut Session, p: &Json) -> Result<Json> {
+    let on = bool_param(p, "on").unwrap_or(!s.ink_replay);
+    if !on {
+        s.ink_replay = false;
+        return Ok(json!({"replaying": false, "strokes": []}));
+    }
+    let d = s.doc()?;
+    let si = d.wb.active_sheet();
+    let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
+    let strokes: Vec<Json> = ink_in_draw_order(sh)
+        .take(MAX_REPLAY_STROKES)
+        .enumerate()
+        .map(|(order, sp)| json!({"id": sp.id, "order": order, "points": ink_points(sp).len()}))
+        .collect();
+    if strokes.is_empty() {
+        return Err(bad("draw.inkReplay", "there is no ink to replay"));
+    }
+    s.ink_replay = true;
+    Ok(json!({"replaying": true, "sheet": si, "strokes": strokes}))
 }
 
 fn ink_to_shape(s: &mut Session, p: &Json) -> Result<Json> {

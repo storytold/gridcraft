@@ -15,6 +15,7 @@ mod extreme_selection_moves;
 mod font_scheme_minor;
 mod format_as_table_restyle;
 mod hidden_sheet_navigation;
+mod ink_replay;
 mod ink_roundtrip;
 mod line_count_overflow;
 mod long_operator_chains;

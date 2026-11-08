@@ -509,6 +509,8 @@ pub struct Session {
     pub draw_tool: String,
     pub draw_color: String,
     pub draw_width: f32,
+    /// Ink Replay is showing: the front end animates the sheet's ink, then turns this off.
+    pub ink_replay: bool,
     /// Review › Show Comments: the Comments pane is open.
     pub comments_pane: bool,
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting

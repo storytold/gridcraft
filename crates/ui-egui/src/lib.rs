@@ -39,6 +39,7 @@ pub mod function_library;
 pub mod grid;
 pub mod i18n;
 pub mod icons;
+pub mod ink;
 pub mod keymap;
 pub mod keytips;
 pub mod macro_editor;
