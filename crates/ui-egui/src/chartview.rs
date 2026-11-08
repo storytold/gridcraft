@@ -623,8 +623,11 @@ fn paint_tapered(p: &Painter, pts: &[Pos2], width: f32, pressure: &[u16], color:
     if n < 2 {
         return;
     }
+    // A pressure vector shorter than the points cannot taper the tail: mixing recorded values with
+    // the fallback leaves a width jump where they end, so the whole stroke takes the fallback.
+    let full = pressure.len() == n;
     let press = |i: usize| -> f32 {
-        match pressure.get(i) {
+        match pressure.get(i).filter(|_| full) {
             Some(v) => (*v as f32 / 32767.0).clamp(0.05, 1.0),
             None => {
                 let t = i as f32 / (n - 1) as f32;
@@ -682,5 +685,29 @@ mod tests {
             out.textures_delta.clear();
         }
         assert!(checked);
+    }
+
+    /// `draw.stroke` truncates a long pressure array to the points but never pads a short one, and a
+    /// reopened workbook can carry one too. Painting the recorded prefix and tapering the rest
+    /// jumps the width where they meet, so a partial array has to paint like no array at all.
+    #[test]
+    fn a_partial_pressure_array_tapers_the_whole_stroke() {
+        let ctx = egui::Context::default();
+        let pts = [pos2(0.0, 0.0), pos2(10.0, 0.0), pos2(20.0, 0.0), pos2(30.0, 0.0)];
+        let widths = |pressure: &[u16]| -> Vec<f32> {
+            let mut out = ctx.run_ui(Default::default(), |ui| paint_tapered(ui.painter(), &pts, 10.0, pressure, Color32::WHITE));
+            out.textures_delta.clear();
+            out.shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::LineSegment { stroke, .. } => Some(stroke.width),
+                    _ => None,
+                })
+                .collect()
+        };
+        let tapered = widths(&[]);
+        assert_eq!(tapered.len(), 3, "one segment per point pair");
+        assert_eq!(widths(&[32767, 32767]), tapered, "a short array tapers like none");
+        assert_eq!(widths(&[32767; 4]), vec![10.0; 3], "a full array sets every point's width");
     }
 }
