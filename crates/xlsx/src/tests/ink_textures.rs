@@ -17,8 +17,16 @@ fn sample() -> InkSheetData {
     InkSheetData {
         textures: vec![texture("a.png", vec![1, 2, 3, 4, 5], 2, 1), texture("b.png", vec![9; 1000], 40, 25)],
         ink: [
-            ("{11111111-2222-3333-4444-555555555555}".to_string(), InkExtras { texture: Some("ab".repeat(16)), scale: Some(0.5), tool: None }),
-            ("{AAAAAAAA-0000-0000-0000-000000000000}".to_string(), InkExtras { texture: None, scale: None, tool: Some("brushPen".into()) }),
+            (
+                "{11111111-2222-3333-4444-555555555555}".to_string(),
+                InkExtras { texture: Some("ab".repeat(16)), scale: Some(0.5), tool: None, order: Some(3) },
+            ),
+            ("{AAAAAAAA-0000-0000-0000-000000000000}".to_string(), InkExtras {
+                texture: None,
+                scale: None,
+                tool: Some("brushPen".into()),
+                order: None,
+            }),
         ]
         .into(),
     }
@@ -201,6 +209,7 @@ fn a_stroke_texture_and_subtype_survive_a_save_and_reopen() {
         ink.texture = Some(id.clone());
         ink.texture_scale = 3.5;
         ink.tool = InkTool::FountainPen;
+        ink.order = 7;
     }
     let bytes = write_xlsx(&wb, crate::XlsxKind::Workbook).expect("writes");
     let (back, _) = read_xlsx(&bytes).expect("reads");
@@ -209,6 +218,7 @@ fn a_stroke_texture_and_subtype_survive_a_save_and_reopen() {
     assert_eq!(ink.texture.as_deref(), Some(id.as_str()));
     assert_eq!(ink.texture_scale, 3.5);
     assert_eq!(ink.tool, InkTool::FountainPen, "the subtype Excel can't hold comes back");
+    assert_eq!(ink.order, 7, "the draw order comes back for Ink Replay");
     assert_eq!(back.ink_textures.len(), 1);
 }
 

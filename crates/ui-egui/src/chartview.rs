@@ -335,7 +335,9 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
                             let mesh = crate::ink_textures::stroke_mesh(&pts, w, col, handle.id(), aspect, w * scale);
                             p.add(egui::Shape::mesh(mesh));
                         }
-                        None => p.add(PathShape::line(pts, PathStroke::new(w, col))),
+                        None => {
+                            p.add(PathShape::line(pts, PathStroke::new(w, col)));
+                        }
                     }
                 }
                 label = false;

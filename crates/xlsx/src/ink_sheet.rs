@@ -53,15 +53,20 @@ pub struct InkExtras {
     /// How many sheet points one repeat of the texture covers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<f32>,
-    /// The GridCraft brush subtype (`fountainPen`, `brushPen`, …) when Excel can't keep it.
+    /// The GridCraft brush subtype (`fountainPen`, `brushPen`, …): Excel cannot tell the last two
+    /// apart, and it drops the private `brushProperty` that would.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
+    /// Draw order for Ink Replay. Excel drops the private `gridcraftOrder` brush property, so this
+    /// is the only channel that survives an Excel round trip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<u32>,
 }
 
 impl InkExtras {
     /// Whether the record holds anything at all.
     pub fn is_empty(&self) -> bool {
-        self.texture.is_none() && self.scale.is_none() && self.tool.is_none()
+        self.texture.is_none() && self.scale.is_none() && self.tool.is_none() && self.order.is_none()
     }
 }
 
@@ -184,6 +189,7 @@ pub fn parse(sheet: &Sheet) -> Option<InkSheetData> {
                     texture: extras.texture.filter(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())),
                     scale: extras.scale.filter(|s| s.is_finite() && *s > 0.0).map(|s| s.clamp(0.5, 512.0)),
                     tool: extras.tool.filter(|t| t.chars().count() <= 32),
+                    order: extras.order,
                 };
                 if !extras.is_empty() {
                     data.ink.insert(key.to_string(), extras);
@@ -206,6 +212,7 @@ fn tool_needs_extension(tool: InkTool) -> bool {
     matches!(tool, InkTool::Pencil | InkTool::FountainPen | InkTool::BrushPen)
 }
 
+/// The JSON name of a brush kind, as the hidden sheet stores it.
 fn tool_name(tool: InkTool) -> &'static str {
     match tool {
         InkTool::Pen => "pen",
@@ -228,9 +235,9 @@ fn tool_from_name(name: &str) -> Option<InkTool> {
 }
 
 /// What a save must keep that the file format itself cannot: the imported textures, and for each
-/// textured or ambiguous stroke its texture id, repeat scale and brush subtype, keyed by the
-/// stroke's stable `a16:creationId`. `None` when there is nothing of the sort, so an
-/// Excel-representable workbook never gains the sheet.
+/// stroke its texture id, repeat scale, brush subtype and draw order, keyed by the stroke's stable
+/// `a16:creationId`. `None` when there is nothing of the sort, so an Excel-representable workbook
+/// never gains the sheet.
 pub fn from_workbook(wb: &Workbook) -> Option<InkSheetData> {
     let mut data = InkSheetData { textures: wb.ink_textures.clone(), ink: BTreeMap::new() };
     for sheet in &wb.sheets {
@@ -239,8 +246,12 @@ pub fn from_workbook(wb: &Workbook) -> Option<InkSheetData> {
             let Some(key) = ink.key.as_deref().map(str::trim).filter(|k| !k.is_empty()) else { continue };
             let extras = InkExtras {
                 texture: ink.texture.clone().filter(|id| InkTexture::is_valid_id(id)),
-                scale: clamp_scale(ink.texture_scale),
+                scale: ink.texture.as_ref().and_then(|_| clamp_scale(ink.texture_scale)),
+                // Excel drops the private brushProperty names, so the subtype (Fountain Pen and
+                // Brush Pen are identical in InkML) and the draw order live here. Order 0 is the
+                // default a single stroke needs no record for.
                 tool: tool_needs_extension(ink.tool).then(|| tool_name(ink.tool).to_string()),
+                order: (ink.order > 0).then_some(ink.order),
             };
             if !extras.is_empty() {
                 data.ink.insert(key.to_string(), extras);
@@ -251,7 +262,7 @@ pub fn from_workbook(wb: &Workbook) -> Option<InkSheetData> {
 }
 
 /// Puts the hidden sheet's data back on the workbook: the texture store, and each stroke's
-/// texture, repeat scale and brush subtype where its key matches.
+/// texture, repeat scale, brush subtype and draw order where its key matches.
 pub fn apply_to_workbook(wb: &mut Workbook, data: &InkSheetData) {
     wb.ink_textures = data.textures.clone();
     for sheet in wb.sheets.iter_mut() {
@@ -267,6 +278,9 @@ pub fn apply_to_workbook(wb: &mut Workbook, data: &InkSheetData) {
             }
             if let Some(tool) = extras.tool.as_deref().and_then(tool_from_name) {
                 ink.tool = tool;
+            }
+            if let Some(order) = extras.order {
+                ink.order = order;
             }
         }
     }

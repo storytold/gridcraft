@@ -251,8 +251,12 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
                     let mesh = crate::ink_textures::stroke_mesh(&pts, width * geo.z, color, handle.id(), aspect, width * geo.z * scale);
                     Some(mesh)
                 }) {
-                    Some(mesh) => input.ui.painter().add(egui::Shape::mesh(mesh)),
-                    None => input.ui.painter().add(egui::epaint::PathShape::line(pts, egui::epaint::PathStroke::new(width * geo.z, color))),
+                    Some(mesh) => {
+                        input.ui.painter().add(egui::Shape::mesh(mesh));
+                    }
+                    None => {
+                        input.ui.painter().add(egui::epaint::PathShape::line(pts, egui::epaint::PathStroke::new(width * geo.z, color)));
+                    }
                 }
             }
             if resp.drag_stopped() && app.grid.ink.len() >= 2 {

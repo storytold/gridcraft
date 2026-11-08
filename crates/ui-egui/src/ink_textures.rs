@@ -10,7 +10,7 @@ use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 
 use egui::{Color32, Pos2, TextureHandle, TextureId};
-use gridcraft_model::InkTexture;
+use gridcraft_engine::model::InkTexture;
 
 /// Patterns are shown small; decoding them larger than this costs memory for no visible detail.
 const MAX_SIDE: u32 = 1024;
@@ -77,13 +77,13 @@ pub(crate) fn texture(ctx: &egui::Context, ink: &InkTexture) -> Option<TextureHa
 fn decode(data: &[u8]) -> Option<egui::ColorImage> {
     let format = image::guess_format(data).ok()?;
     let (w, h) = image::ImageReader::with_format(Cursor::new(data), format).into_dimensions().ok()?;
-    if w == 0 || h == 0 || w > gridcraft_model::MAX_INK_TEXTURE_SIDE || h > gridcraft_model::MAX_INK_TEXTURE_SIDE {
+    if w == 0 || h == 0 || w > gridcraft_engine::model::MAX_INK_TEXTURE_SIDE || h > gridcraft_engine::model::MAX_INK_TEXTURE_SIDE {
         return None;
     }
     let mut reader = image::ImageReader::with_format(Cursor::new(data), format);
     let mut limits = image::Limits::default();
-    limits.max_image_width = Some(gridcraft_model::MAX_INK_TEXTURE_SIDE);
-    limits.max_image_height = Some(gridcraft_model::MAX_INK_TEXTURE_SIDE);
+    limits.max_image_width = Some(gridcraft_engine::model::MAX_INK_TEXTURE_SIDE);
+    limits.max_image_height = Some(gridcraft_engine::model::MAX_INK_TEXTURE_SIDE);
     limits.max_alloc = Some(64 * 1024 * 1024);
     reader.limits(limits);
     let mut picture = reader.decode().ok()?;
@@ -160,7 +160,7 @@ pub(crate) fn gallery(ui: &mut egui::Ui, textures: &[InkTexture], selected: Opti
     use crate::theme::Tokens;
     let tr = crate::i18n::current(ui.ctx());
     let mut action = None;
-    let tokens = *Tokens::get(ui.ctx());
+    let tokens = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(tr.tr("Textures")).small());
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(3.0, 3.0);

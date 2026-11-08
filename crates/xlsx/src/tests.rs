@@ -15,6 +15,7 @@ mod fixtures;
 mod google_sheets_dummy;
 mod ink_roundtrip;
 mod ink_textures;
+mod inkml_tests;
 mod literal_category_roundtrip;
 mod locale_numfmt;
 mod malformed;

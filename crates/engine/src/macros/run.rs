@@ -1063,7 +1063,7 @@ struct Saved {
     last_find: Option<Json>,
     hide_ruler: bool,
     windows: (Vec<crate::WindowState>, Option<u64>, u64, u64),
-    draw: (String, String, f32),
+    draw: (String, String, f32, String, f32),
     comments_pane: bool,
     show_all_notes: bool,
 }
