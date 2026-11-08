@@ -138,7 +138,9 @@ pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
             let rr = geo.range_rect(sh, r);
             let col = Tokens::get(p.ctx()).ref_color(idx, true);
             p.rect_filled(rr, 0.0, col.gamma_multiply(0.12));
-            p.rect_stroke(rr, 0.0, Stroke::new(1.5, col), StrokeKind::Inside);
+            for side in outline_bands(rr, 1.5, p.clip_rect()) {
+                p.rect_filled(side, 0.0, col);
+            }
             for corner in [rr.left_top(), rr.right_top(), rr.left_bottom(), rr.right_bottom()] {
                 p.rect_filled(Rect::from_center_size(corner, vec2(4.0, 4.0)), 0.0, col);
             }
@@ -152,7 +154,9 @@ pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
         && let Some(spill) = range_in_visible_pane(geo, spill, rows, cols)
     {
         let rr = geo.range_rect(sh, spill);
-        p.rect_stroke(rr, 0.0, Stroke::new(1.5, t.sel_border), StrokeKind::Inside);
+        for side in outline_bands(rr, 1.5, p.clip_rect()) {
+            p.rect_filled(side, 0.0, t.sel_border);
+        }
     }
     if cur_here {
         for side in outline_bands(outline.expand(0.5), 2.0, p.clip_rect()) {
