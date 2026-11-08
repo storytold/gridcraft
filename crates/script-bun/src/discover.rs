@@ -11,6 +11,11 @@ pub fn bun_exe_name() -> &'static str {
     if cfg!(windows) { "bun.exe" } else { "bun" }
 }
 
+/// Whether the file answers `--version`: a candidate that does not is not a usable runtime.
+fn usable(exe: &Path) -> bool {
+    version_of(exe, Duration::from_secs(3)).is_some()
+}
+
 /// The first Bun that exists: `$GRIDCRAFT_BUN`, then `PATH`, then the model root.
 pub fn find_exe() -> Option<PathBuf> {
     if let Some(configured) = std::env::var_os("GRIDCRAFT_BUN") {
@@ -22,7 +27,10 @@ pub fn find_exe() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&path) {
             let candidate = dir.join(bun_exe_name());
-            if candidate.is_file() {
+            // A file named `bun` that does not answer `--version` is not Bun: keep looking, so a
+            // stale entry earlier on PATH cannot hide a working one (the explicit override above
+            // is taken as given).
+            if candidate.is_file() && usable(&candidate) {
                 return Some(candidate);
             }
         }
@@ -160,6 +168,14 @@ mod tests {
     #[test]
     fn a_missing_program_has_no_version() {
         assert_eq!(version_of(Path::new("definitely-not-a-real-program-xyz"), Duration::from_millis(500)), None);
+    }
+
+    #[test]
+    fn a_file_that_does_not_answer_is_not_usable() {
+        let path = std::env::temp_dir().join(format!("gridcraft-not-bun-{}", std::process::id()));
+        std::fs::write(&path, b"not a runtime").unwrap();
+        assert!(!usable(&path), "a text file is not a usable Bun");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

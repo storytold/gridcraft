@@ -868,6 +868,17 @@ mod tests {
     }
 
     #[test]
+    fn a_very_hidden_request_is_refused() {
+        let mut s = session("very-hidden");
+        s.execute("home.insertSheet", json!({"name": "Data"})).unwrap();
+        let mut bridge = crate::script::SessionBridge { session: &mut s };
+        let call = BridgeCall::new("Worksheet.setVisibility", json!({"sheet": "Data", "visibility": "VeryHidden"}));
+        let error = gridcraft_script::BridgeExecutor::execute(&mut bridge, &call).unwrap_err();
+        assert!(error.message.contains("veryHidden"), "{}", error.message);
+        assert_eq!(error.code, gridcraft_script::ErrorCode::NotSupported);
+    }
+
+    #[test]
     fn a_parsed_set_value_replays_typed_input_as_a_number() {
         let mut s = session("parse-set");
         {

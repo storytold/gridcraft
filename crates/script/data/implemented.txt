@@ -141,6 +141,7 @@ Worksheet.getName
 Worksheet.getRange
 Worksheet.getRangeByIndexes
 Worksheet.getStandardHeight
+Worksheet.getStandardWidth
 Worksheet.getTables
 Worksheet.getUsedRange
 Worksheet.getVisibility

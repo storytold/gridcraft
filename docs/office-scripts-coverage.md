@@ -4,7 +4,7 @@
 > (names extracted from Microsoft's public ExcelScript reference index, names only) and
 > `crates/script/data/implemented.txt`. Do not edit by hand; run the command.
 
-**146/1932 interface members implemented (7.6%)**, **14/168 interface types with any implemented member** (315 types including enums). 1175 enum values are `not-applicable` (they are type values, not operations). Every `not-yet` member of an interface object throws a typed `notSupported` error naming the class and member.
+**147/1932 interface members implemented (7.6%)**, **14/168 interface types with any implemented member** (315 types including enums). 1175 enum values are `not-applicable` (they are type values, not operations). Every `not-yet` member of an interface object throws a typed `notSupported` error naming the class and member.
 
 Status meanings: **implemented** = a real engine operation backs it; **not-yet** = in the reference, refused with a typed error; **not-applicable** = an enum value, not an operation. Members of the plain data objects the bridge returns (for example `DataValidationRule`) are read as data: a member the object does not carry reads as `undefined`, not as a thrown error.
 
@@ -14,7 +14,7 @@ Status meanings: **implemented** = a real engine operation backs it; **not-yet**
 | Interface types (classes) | 168 |
 | Interface types with implemented members | 14 |
 | Interface members | 1932 |
-| Interface members implemented | 146 |
+| Interface members implemented | 147 |
 | Enum values (not-applicable) | 1175 |
 
 ## AggregationFunction (0/0)
@@ -2907,7 +2907,7 @@ _Enum values: not-applicable._
 | `getRangeAreasBySheet` | method | not-yet |
 | `getRanges` | method | not-yet |
 
-## Worksheet (13/83)
+## Worksheet (14/83)
 | Member | Kind | Status |
 |---|---|---|
 | `activate` | method | implemented |
@@ -2970,7 +2970,7 @@ _Enum values: not-applicable._
 | `getSlicer` | method | not-yet |
 | `getSlicers` | method | not-yet |
 | `getStandardHeight` | method | implemented |
-| `getStandardWidth` | method | not-yet |
+| `getStandardWidth` | method | implemented |
 | `getTabColor` | method | not-yet |
 | `getTabId` | method | not-yet |
 | `getTable` | method | not-yet |

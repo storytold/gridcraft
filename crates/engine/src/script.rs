@@ -189,6 +189,11 @@ pub(crate) fn execute_call(s: &mut Session, method: &str, params: &Json) -> Resu
         }
         "Worksheet.setVisibility" => {
             let visibility = member_str(params, "visibility")?.to_ascii_lowercase();
+            // ExcelScript has Visible, Hidden and VeryHidden; the engine models two states, so a
+            // VeryHidden request is refused instead of quietly saving an ordinary hidden sheet.
+            if visibility == "veryhidden" {
+                return Err(BridgeError::not_supported("Worksheet.setVisibility(veryHidden)"));
+            }
             let sheet = sheet_name(s, params)?;
             if visibility == "visible" {
                 command(s, "sheet.unhide", json!({"sheet": sheet}))?;

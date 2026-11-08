@@ -100,6 +100,12 @@ pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
                 app.open_dialog("officeScripts", json!({}));
             } else {
                 crate::office_scripts::run(app);
+                // A run from the ribbon may happen with the pane closed: open it when there is a
+                // failure or console output the person has to see.
+                let show = app.office_scripts.status.as_ref().is_some_and(|status| status.error) || !app.office_scripts.output.is_empty();
+                if show {
+                    app.open_dialog("officeScripts", json!({}));
+                }
             }
         }
     });
