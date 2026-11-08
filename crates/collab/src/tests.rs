@@ -367,3 +367,22 @@ fn undo_is_refused_when_another_participant_holds_the_cell() {
     assert_eq!(refused.rejected().code, RejectCode::Conflict);
     assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(9.0));
 }
+
+#[test]
+fn redo_puts_back_what_undo_took_away_and_a_new_edit_ends_the_branch() {
+    let mut s = session();
+    let mut room = Room::new(&s);
+    let sheet = key_of(&room, &s);
+    room.apply(&mut s, op("op-1", "cell.set", json!({"input": 5}), &sheet, "A1"), "ann").unwrap();
+    room.undo(&mut s, "ann", Some("op-1")).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Empty);
+    let redone = room.redo(&mut s, "ann", Some("op-1")).unwrap();
+    assert_eq!(redone.version, 3);
+    assert!(redone.result.command.is_none());
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(5.0));
+    assert!(room.redo(&mut s, "ann", None).is_err(), "the redo stack is empty");
+
+    room.undo(&mut s, "ann", Some("op-1")).unwrap();
+    room.apply(&mut s, op("op-2", "cell.set", json!({"input": 7}), &sheet, "A1"), "ann").unwrap();
+    assert!(room.redo(&mut s, "ann", None).is_err(), "a new edit ends the redo branch");
+}

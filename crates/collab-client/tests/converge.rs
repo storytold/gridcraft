@@ -140,3 +140,23 @@ async fn undo_reverses_only_the_actors_own_step() {
     assert!(ann.synced.undo().unwrap_err().to_string().contains("nothing to undo"));
     server.stop().await;
 }
+
+#[tokio::test]
+async fn redo_puts_the_step_back_on_every_replica() {
+    let server = support::start().await;
+    let session = support::create(&server, 45).await;
+    let mut ann = join(&server, 45, &session, "ann", Role::Editor).await;
+    let mut bob = join(&server, 45, &session, "bob", Role::Editor).await;
+
+    ann.synced.execute(&mut ann.session, "cell.set", json!({ "cell": "A1", "input": 5 })).unwrap();
+    settle(&mut ann, &mut bob).await;
+    ann.synced.undo().unwrap();
+    settle(&mut ann, &mut bob).await;
+    assert_eq!(value(&ann, "A1"), Value::Empty);
+    ann.synced.redo().unwrap();
+    settle(&mut ann, &mut bob).await;
+    assert_eq!(value(&ann, "A1"), Value::Number(5.0));
+    assert_eq!(value(&bob, "A1"), Value::Number(5.0));
+    assert_eq!(ann.synced.state().version, 3);
+    server.stop().await;
+}

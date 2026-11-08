@@ -164,4 +164,8 @@ impl Collab for Adapter {
     fn read_only(&self) -> bool {
         self.role == Role::Viewer
     }
+
+    fn take_notice(&mut self) -> Option<String> {
+        self.synced.take_notice()
+    }
 }

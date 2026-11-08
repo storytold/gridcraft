@@ -78,6 +78,8 @@ pub struct Room {
     order: VecDeque<String>,
     /// Per participant, oldest first: the steps `undo` may reverse.
     history: HashMap<String, VecDeque<Step>>,
+    /// Per participant, the steps `undo` took away, newest last: what `redo` may put back.
+    redo: HashMap<String, VecDeque<Step>>,
 }
 
 impl Room {
@@ -89,14 +91,21 @@ impl Room {
         if let Some(d) = session.active() {
             keys.sync(&d.wb);
         }
-        Room { keys, version: 0, epoch: 0, seen: HashMap::new(), order: VecDeque::new(), history: HashMap::new() }
+        Room { keys, version: 0, epoch: 0, seen: HashMap::new(), order: VecDeque::new(), history: HashMap::new(), redo: HashMap::new() }
     }
 
     /// Rebuilds a room from a stored state: counters, dedup window and the sheet keys issued
     /// before the restart. The caller has already loaded the workbook the state belongs to.
     pub fn restore(keys: SheetKeys, state: RoomState) -> Room {
-        let mut room =
-            Room { keys, version: state.version, epoch: state.epoch, seen: HashMap::new(), order: VecDeque::new(), history: HashMap::new() };
+        let mut room = Room {
+            keys,
+            version: state.version,
+            epoch: state.epoch,
+            seen: HashMap::new(),
+            order: VecDeque::new(),
+            history: HashMap::new(),
+            redo: HashMap::new(),
+        };
         for applied in state.seen {
             room.remember(applied);
         }
@@ -206,6 +215,10 @@ impl Room {
             while steps.len() > UNDO_STEPS {
                 steps.pop_front();
             }
+            // A new edit ends the branch the participant had undone.
+            if let Some(redo) = self.redo.get_mut(actor) {
+                redo.clear();
+            }
         }
         Ok(applied)
     }
@@ -241,26 +254,16 @@ impl Room {
         for (index, cells) in &groups {
             session.restore_cells(*index, cells).map_err(|e| self.undo_reject(RejectCode::Internal, false, &e.to_string()))?;
         }
-        // `restore_cells` writes the model directly (no command reached the change recorder), so
-        // the delta is built from the snapshots that were just put back.
-        let mut by_sheet: BTreeMap<String, Vec<CellChange>> = BTreeMap::new();
-        for cell in &step.cells {
-            let Ok(value) = serde_json::to_value(&cell.before.value) else { continue };
-            by_sheet.entry(cell.sheet.clone()).or_default().push(CellChange {
-                a1: cell.a1.clone(),
-                value,
-                formula: cell.before.formula.clone(),
-                style: Some(cell.before.style),
-            });
-        }
-        let delta: Vec<SheetDelta> = by_sheet
-            .into_iter()
-            .map(|(sheet, cells)| SheetDelta { sheet, cells, objects_deleted: Vec::new(), objects_created: Vec::new() })
-            .collect();
+        let delta = delta_from(&step, false);
         let _ = session.take_changed();
         self.version += 1;
         if let Some(steps) = self.history.get_mut(actor) {
             steps.pop_back();
+        }
+        let redo = self.redo.entry(actor.to_string()).or_default();
+        redo.push_back(step.clone());
+        while redo.len() > UNDO_STEPS {
+            redo.pop_front();
         }
         Ok(Applied {
             op_id: format!("undo-{}", step.op_id),
@@ -269,6 +272,66 @@ impl Room {
             actor: actor.to_string(),
             result: Outcome { command: None, delta: Some(delta) },
             sheets: None,
+        })
+    }
+
+    /// Puts back the last step `undo` took away, with the same rules: only while the cells still
+    /// hold what the undo left, or the whole redo is refused as `conflict`.
+    pub fn redo(&mut self, session: &mut Session, actor: &str, op_id: Option<&str>) -> Result<Applied, RoomError> {
+        let Some(step) = self.redo.get(actor).and_then(|steps| steps.back()).cloned() else {
+            return Err(self.redo_reject(RejectCode::Invalid, false, "there is nothing to redo"));
+        };
+        if let Some(wanted) = op_id
+            && wanted != step.op_id
+        {
+            return Err(self.redo_reject(RejectCode::Conflict, false, "that is not the last undone edit of this participant"));
+        }
+        let mut groups: BTreeMap<usize, Vec<(CellRef, CellState)>> = BTreeMap::new();
+        {
+            let d = session.active().ok_or_else(|| self.redo_reject(RejectCode::Internal, false, "no document"))?;
+            for cell in &step.cells {
+                let key: u64 = cell.sheet.parse().map_err(|_| self.redo_reject(RejectCode::Internal, false, "bad sheet key in history"))?;
+                let index =
+                    self.keys.index_for_key(&d.wb, key).ok_or_else(|| self.redo_reject(RejectCode::Stale, false, "a sheet of this step is gone"))?;
+                let sheet = d.wb.sheet(index).ok_or_else(|| self.redo_reject(RejectCode::Stale, false, "a sheet of this step is gone"))?;
+                let at = CellRef::parse(&cell.a1).ok_or_else(|| self.redo_reject(RejectCode::Internal, false, "bad address in history"))?;
+                if snap(sheet, at) != cell.before {
+                    return Err(self.redo_reject(RejectCode::Conflict, true, "another participant changed a cell of this step"));
+                }
+                groups.entry(index).or_default().push((at, cell.after.clone()));
+            }
+        }
+        for (index, cells) in &groups {
+            session.restore_cells(*index, cells).map_err(|e| self.redo_reject(RejectCode::Internal, false, &e.to_string()))?;
+        }
+        let delta = delta_from(&step, true);
+        let _ = session.take_changed();
+        self.version += 1;
+        if let Some(steps) = self.redo.get_mut(actor) {
+            steps.pop_back();
+        }
+        let history = self.history.entry(actor.to_string()).or_default();
+        history.push_back(step.clone());
+        while history.len() > UNDO_STEPS {
+            history.pop_front();
+        }
+        Ok(Applied {
+            op_id: format!("redo-{}", step.op_id),
+            version: self.version,
+            epoch: self.epoch,
+            actor: actor.to_string(),
+            result: Outcome { command: None, delta: Some(delta) },
+            sheets: None,
+        })
+    }
+
+    fn redo_reject(&self, code: RejectCode, retryable: bool, message: &str) -> RoomError {
+        RoomError::Rejected(Rejected {
+            op_id: "redo".into(),
+            code,
+            retryable,
+            hint: Some(Hint { version: self.version, epoch: self.epoch }),
+            message: Some(message.to_string()),
         })
     }
 
@@ -318,6 +381,22 @@ fn snapshots(before: &Workbook, after: &Workbook, keys: &SheetKeys, delta: &[cra
         }
     }
     out
+}
+
+/// The delta of a step: the cells as they were before it (`after == false`) or as it left them.
+fn delta_from(step: &Step, after: bool) -> Vec<SheetDelta> {
+    let mut by_sheet: BTreeMap<String, Vec<CellChange>> = BTreeMap::new();
+    for cell in &step.cells {
+        let state = if after { &cell.after } else { &cell.before };
+        let Ok(value) = serde_json::to_value(&state.value) else { continue };
+        by_sheet.entry(cell.sheet.clone()).or_default().push(CellChange {
+            a1: cell.a1.clone(),
+            value,
+            formula: state.formula.clone(),
+            style: Some(state.style),
+        });
+    }
+    by_sheet.into_iter().map(|(sheet, cells)| SheetDelta { sheet, cells, objects_deleted: Vec::new(), objects_created: Vec::new() }).collect()
 }
 
 fn snap(sheet: &Sheet, at: CellRef) -> CellState {

@@ -210,6 +210,16 @@ impl Hub {
         Ok(document.room.undo(&mut document.session, actor, op_id)?)
     }
 
+    /// Puts back the last step `actor` undid (ADR-0010).
+    pub fn redo(&mut self, doc: &str, actor: &str, op_id: Option<&str>) -> Result<Applied, HubError> {
+        let document = self.documents.get_mut(doc).ok_or(HubError::UnknownDocument)?;
+        let participant = document.participants.get(actor).ok_or(HubError::UnknownParticipant)?;
+        if !participant.role.can_write() {
+            return Err(HubError::Forbidden);
+        }
+        Ok(document.room.redo(&mut document.session, actor, op_id)?)
+    }
+
     /// Stores the participant's presence and returns everyone else's, so the caller can broadcast
     /// it. Presence is state of a connection, never of the document.
     pub fn presence(&mut self, doc: &str, actor: &str, presence: Option<Presence>) -> Result<Vec<Participant>, HubError> {

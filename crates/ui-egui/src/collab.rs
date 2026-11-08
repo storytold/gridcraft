@@ -72,6 +72,10 @@ pub trait Collab {
     fn read_only(&self) -> bool {
         false
     }
+    /// A refusal of an undo/redo to show once (the room's reason, never cell contents).
+    fn take_notice(&mut self) -> Option<String> {
+        None
+    }
 }
 
 impl SheetApp {
@@ -81,6 +85,10 @@ impl SheetApp {
         if let Some(collab) = collab.as_mut() {
             *collab_views = collab.poll(session);
             *collab_status = collab.status();
+            if let Some(note) = collab.take_notice() {
+                let SheetApp { message, .. } = self;
+                *message = Some(("GridCraft".into(), note));
+            }
         }
     }
 

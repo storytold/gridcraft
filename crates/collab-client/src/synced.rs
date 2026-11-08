@@ -68,6 +68,8 @@ pub struct Synced {
     pending: Vec<Pending>,
     /// The applied steps of this participant that `undo` may reverse, oldest first.
     own: VecDeque<String>,
+    /// The last refusal of an undo/redo, for the UI to show once.
+    notice: Option<String>,
 }
 
 impl Synced {
@@ -82,6 +84,7 @@ impl Synced {
             client_id: format!("{}-{}", welcome.actor_id, now_millis()),
             pending: Vec::new(),
             own: VecDeque::new(),
+            notice: None,
         };
         synced.apply_sheets(&welcome.sheets);
         synced
@@ -126,6 +129,22 @@ impl Synced {
         Ok(Json::Null)
     }
 
+    /// Puts back the step this participant last undid.
+    pub fn redo(&mut self) -> Result<Json, EditError> {
+        if self.client.state().role == Some(Role::Viewer) {
+            return Err(EditError::Viewer);
+        }
+        if !self.client.send_message(ClientMessage::Redo { op_id: None }) {
+            return Err(EditError::Disconnected);
+        }
+        Ok(Json::Null)
+    }
+
+    /// The last refused undo/redo, taken once.
+    pub fn take_notice(&mut self) -> Option<String> {
+        self.notice.take()
+    }
+
     /// Runs a command locally and shares it.
     ///
     /// A merge command is previewed, then sent; `applied` patches the values, `rejected` rolls
@@ -136,7 +155,7 @@ impl Synced {
             return self.undo();
         }
         if id == "edit.redo" {
-            return Err(EditError::Engine("redo is not available in a shared session".into()));
+            return self.redo();
         }
         let state = self.client.state();
         if state.role == Some(Role::Viewer) {
@@ -203,6 +222,9 @@ impl Synced {
                     }
                 }
                 Event::Rejected(rejected) => {
+                    if rejected.op_id == "undo" || rejected.op_id == "redo" {
+                        self.notice = Some(rejected.message.clone().unwrap_or_else(|| format!("{:?}", rejected.code)));
+                    }
                     if let Some(index) = self.pending.iter().position(|pending| pending.op_id == rejected.op_id) {
                         let pending = self.pending.remove(index);
                         if pending.previewed {

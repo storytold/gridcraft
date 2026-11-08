@@ -122,7 +122,7 @@ GET    /v1/sessions/{id}/ws    WebSocket
   вызова кабинета пока нет.
 - **Периодический снапшот по времени** (5 минут) — сейчас только по числу операций и на
   shutdown; `flush` вызывается из graceful shutdown.
-- **Redo и отмена структурных правок** — v2 (undo merge-шагов есть).
+- **Отмена структурных правок** — v2 (undo и redo merge-шагов есть).
 
 Клиент: `docs/collab/client.md` (feature `collab`, `GRIDCRAFT_COLLAB_URL`/`_TOKEN`).
 

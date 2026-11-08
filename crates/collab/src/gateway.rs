@@ -32,6 +32,11 @@ pub enum ClientMessage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         op_id: Option<String>,
     },
+    /// Put back the last step this participant undid (ADR-0010).
+    Redo {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        op_id: Option<String>,
+    },
     Presence {
         presence: Option<Presence>,
     },
@@ -186,6 +191,12 @@ impl Gateway {
             ClientMessage::Undo { op_id } => match self.hub.undo(&connection.doc, &connection.actor, op_id.as_deref()) {
                 Ok(applied) => vec![ServerMessage::Applied { applied }],
                 Err(HubError::Forbidden) => vec![ServerMessage::Rejected { rejected: viewer_rejection("undo") }],
+                Err(HubError::Rejected(rejected)) => vec![ServerMessage::Rejected { rejected }],
+                Err(e) => vec![ServerMessage::Error { code: "internal".into(), message: format!("{e:?}"), retryable: false }],
+            },
+            ClientMessage::Redo { op_id } => match self.hub.redo(&connection.doc, &connection.actor, op_id.as_deref()) {
+                Ok(applied) => vec![ServerMessage::Applied { applied }],
+                Err(HubError::Forbidden) => vec![ServerMessage::Rejected { rejected: viewer_rejection("redo") }],
                 Err(HubError::Rejected(rejected)) => vec![ServerMessage::Rejected { rejected }],
                 Err(e) => vec![ServerMessage::Error { code: "internal".into(), message: format!("{e:?}"), retryable: false }],
             },
