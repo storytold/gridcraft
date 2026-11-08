@@ -14,3 +14,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 web-time = { workspace = true }
 log = { workspace = true }
+
+# Nonblocking, no-follow opens for the scripts folder (a FIFO must not block `script.list`).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

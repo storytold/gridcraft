@@ -145,7 +145,7 @@ impl ScriptStore {
             // the read, so one byte over the limit is read and then refused.
             let mut bytes = Vec::new();
             let limit = crate::osts::MAX_OSTS_BYTES as u64 + 1;
-            let read = std::fs::File::open(path).and_then(|file| std::io::Read::read_to_end(&mut file.take(limit), &mut bytes));
+            let read = open_regular(path).and_then(|file| std::io::Read::read_to_end(&mut file.take(limit), &mut bytes));
             if read.is_err() || bytes.len() > crate::osts::MAX_OSTS_BYTES {
                 log::warn!("ignoring oversized or unreadable .osts file: {}", path.display());
                 continue;
@@ -306,6 +306,24 @@ impl ScriptStore {
         }
         Err(StoreError::Io(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "could not make a temporary file beside the script")))
     }
+}
+
+/// Opens a script file for reading without letting the folder block us: on Unix the open is
+/// nonblocking and does not follow a symlink, and only a regular file is returned. A named pipe (a
+/// FIFO with no writer, or one swapped in after the directory scan) would otherwise block
+/// `script.list` — and with it the pane — forever.
+fn open_regular(path: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(unix)]
+    let file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW).open(path)?
+    };
+    #[cfg(not(unix))]
+    let file = std::fs::File::open(path)?;
+    if !file.metadata()?.file_type().is_file() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a regular file"));
+    }
+    Ok(file)
 }
 
 fn read_record(path: &Path) -> Result<ScriptRecord, StoreError> {
@@ -534,6 +552,20 @@ mod tests {
         let list = s.list().unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].name, expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_in_the_folder_is_skipped_without_blocking() {
+        let s = store("fifo");
+        std::fs::create_dir_all(s.root()).unwrap();
+        let pipe = s.root().join("Pipe.osts");
+        // A named pipe with no writer blocks a plain `open`; the list must skip it.
+        let made = std::process::Command::new("mkfifo").arg(&pipe).status().map(|status| status.success()).unwrap_or(false);
+        if !made {
+            return;
+        }
+        assert!(s.list().unwrap().is_empty(), "a FIFO is not a script");
     }
 
     #[cfg(unix)]

@@ -2185,6 +2185,7 @@ version = "0.16.0"
 name = "gridcraft-script"
 version = "0.16.0"
 dependencies = [
+ "libc",
  "log",
  "serde",
  "serde_json",
