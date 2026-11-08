@@ -224,7 +224,7 @@ mod tests {
         let ctx = egui::Context::default();
         let t = ink(png(2048, 1024), 2048, 1024);
         let a = texture(&ctx, &t).expect("decodes");
-        assert_eq!(a.size()[0], MAX_SIDE, "patterns are downsampled to the cache side");
+        assert_eq!(a.size()[0], MAX_SIDE as usize, "patterns are downsampled to the cache side");
     }
 
     #[test]

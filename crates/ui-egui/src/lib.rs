@@ -48,6 +48,7 @@ pub mod objects;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
+pub mod pen_icon;
 pub mod pivot_pane;
 pub mod printing;
 pub mod ribbon;

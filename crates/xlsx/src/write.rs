@@ -238,6 +238,16 @@ fn workbook_view_attrs(wb: &Workbook) -> String {
     attrs
 }
 
+/// A copy of `wb` with the veryHidden `GridCraft Ink` sheet appended, when a save must keep
+/// textures or GridCraft-only stroke data; `None` when there is nothing to keep.
+fn workbook_with_ink_sheet(wb: &Workbook) -> Option<Workbook> {
+    let data = crate::ink_sheet::from_workbook(wb)?;
+    let name = crate::ink_sheet::unique_name(wb);
+    let mut copy = wb.clone();
+    copy.sheets.push(std::sync::Arc::new(crate::ink_sheet::build(&name, &data)));
+    Some(copy)
+}
+
 /// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
 /// PivotTable in Excel only when its link starts with the workbook in brackets.
 pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
@@ -252,14 +262,8 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     // InkML: Excel drops it. It travels in a veryHidden worksheet, added to a copy of the workbook
     // and only while there is such data, so a workbook Excel can represent whole is written as
     // Excel would write it.
-    let mut with_ink;
-    let mut wb = wb;
-    if let Some(data) = crate::ink_sheet::from_workbook(wb) {
-        let name = crate::ink_sheet::unique_name(wb);
-        with_ink = wb.clone();
-        with_ink.sheets.push(std::sync::Arc::new(crate::ink_sheet::build(&name, &data)));
-        wb = &with_ink;
-    }
+    let with_ink = workbook_with_ink_sheet(wb);
+    let wb = with_ink.as_ref().unwrap_or(wb);
     let mut out = Out {
         parts: vec![],
         overrides: vec![],

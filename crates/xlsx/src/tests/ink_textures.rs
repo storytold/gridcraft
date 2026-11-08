@@ -21,12 +21,10 @@ fn sample() -> InkSheetData {
                 "{11111111-2222-3333-4444-555555555555}".to_string(),
                 InkExtras { texture: Some("ab".repeat(16)), scale: Some(0.5), tool: None, order: Some(3) },
             ),
-            ("{AAAAAAAA-0000-0000-0000-000000000000}".to_string(), InkExtras {
-                texture: None,
-                scale: None,
-                tool: Some("brushPen".into()),
-                order: None,
-            }),
+            (
+                "{AAAAAAAA-0000-0000-0000-000000000000}".to_string(),
+                InkExtras { texture: None, scale: None, tool: Some("brushPen".into()), order: None },
+            ),
         ]
         .into(),
     }
@@ -88,17 +86,15 @@ fn hostile_rows_are_skipped_not_fatal() {
         r += 1;
     }
     // A forged id, a texture over the pixel cap, junk base64, and a non-JSON extra.
-    for (i, (kind, key, a, b)) in [
-        ("texture", "not-a-real-id", "4", "2"),
+    let rows: [(&str, String, &str, &str); 4] = [
+        ("texture", "not-a-real-id".into(), "4", "2"),
         ("texture", "cd".repeat(16), "9000", "1"),
         ("texture", "ef".repeat(16), "4", "2"),
-        ("ink", "{BAD}", "", ""),
-    ]
-    .iter()
-    .enumerate()
-    {
+        ("ink", "{BAD}".into(), "", ""),
+    ];
+    for (i, (kind, key, a, b)) in rows.iter().enumerate() {
         sheet.set_value(CellRef::new(r + i as u32, 0), Value::text(*kind));
-        sheet.set_value(CellRef::new(r + i as u32, 1), Value::text(*key));
+        sheet.set_value(CellRef::new(r + i as u32, 1), Value::text(key.as_str()));
         sheet.set_value(CellRef::new(r + i as u32, 2), Value::text("x.png"));
         sheet.set_value(CellRef::new(r + i as u32, 3), Value::text("image/png"));
         sheet.set_value(CellRef::new(r + i as u32, 4), Value::text(*a));
@@ -172,7 +168,7 @@ fn sheet_names(bytes: &[u8]) -> Vec<String> {
 #[test]
 fn a_workbook_without_extension_data_gains_no_ink_sheet() {
     let wb = with_shape(ink_shape(1, "{11111111-2222-3333-4444-555555555555}"));
-    let bytes = write_xlsx(&wb, crate::XlsxKind::Workbook).expect("writes");
+    let bytes = write_xlsx(&wb).expect("writes");
     assert!(!sheet_names(&bytes).iter().any(|n| n.starts_with(INK_SHEET_NAME)));
     let (back, _) = read_xlsx(&bytes).expect("reads");
     assert_eq!(back.sheets.len(), 1);
@@ -185,7 +181,7 @@ fn textures_survive_a_save_and_reopen() {
     let texture = texture("stripes.png", vec![7u8; 400], 10, 20);
     let id = texture.id.clone();
     wb.ink_textures.push(texture);
-    let bytes = write_xlsx(&wb, crate::XlsxKind::Workbook).expect("writes");
+    let bytes = write_xlsx(&wb).expect("writes");
     let names = sheet_names(&bytes);
     assert!(names.iter().any(|n| n.starts_with(INK_SHEET_NAME)), "the hidden sheet is written");
     let (back, _) = read_xlsx(&bytes).expect("reads");
@@ -211,7 +207,7 @@ fn a_stroke_texture_and_subtype_survive_a_save_and_reopen() {
         ink.tool = InkTool::FountainPen;
         ink.order = 7;
     }
-    let bytes = write_xlsx(&wb, crate::XlsxKind::Workbook).expect("writes");
+    let bytes = write_xlsx(&wb).expect("writes");
     let (back, _) = read_xlsx(&bytes).expect("reads");
     let ink = back.sheets[0].shapes[0].ink.as_ref().expect("the stroke keeps its brush");
     assert_eq!(ink.key.as_deref(), Some(key));
@@ -229,11 +225,11 @@ fn a_second_save_after_reading_keeps_the_extension() {
     let id = texture.id.clone();
     wb.ink_textures.push(texture);
     Arc::make_mut(&mut wb.sheets[0]).shapes[0].ink.as_mut().expect("ink").texture = Some(id.clone());
-    let first = write_xlsx(&wb, crate::XlsxKind::Workbook).expect("writes");
+    let first = write_xlsx(&wb).expect("writes");
     let (back, _) = read_xlsx(&first).expect("reads");
     assert_eq!(back.sheets[0].shapes[0].ink.as_ref().and_then(|i| i.texture.as_deref()), Some(id.as_str()));
     // A save of the reopened workbook writes the same channel again (nothing accumulated).
-    let second = write_xlsx(&back, crate::XlsxKind::Workbook).expect("writes");
+    let second = write_xlsx(&back).expect("writes");
     let (again, _) = read_xlsx(&second).expect("reads");
     assert_eq!(again.sheets.len(), 1);
     assert_eq!(again.ink_textures.len(), 1);

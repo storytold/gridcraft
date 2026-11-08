@@ -148,9 +148,11 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 ### 17. Insert objects (F)
 - Ink strokes are native Office InkML in xlsx: a drawing `xdr:contentPart` with a PNG fallback,
   read back as editable ink with brush, effect, pressure and draw order (legacy DrawingML
-  polylines still read). Imported brush textures are a GridCraft extension kept in a veryHidden
-  `GridCraft Ink` worksheet that Excel preserves; Excel itself sees the base stroke. Inserted icons
-  still lose their identity/artwork on save (#551).
+  polylines still read). The Draw tab has Excel's pen gallery: six default pens and Add for custom
+  pens, thickness steps, any colour, the eight built-in textures and user-imported ones, all drawn
+  in code. Imported textures are a GridCraft extension kept in a veryHidden `GridCraft Ink`
+  worksheet that Excel preserves; Excel itself sees the base stroke. Inserted icons still lose
+  their identity/artwork on save (#551).
 - SmartArt, WordArt, signature line, objects, 3-D models, screenshot; 8 shape kinds vs ~170;
   pictures in cells (#61, PR #105). Equations exist (LaTeX source with a live preview, Office Math in xlsx); there is
   no structured (WYSIWYG) equation editing and no ink equations. **Estimate:** 25–40 h.
@@ -166,8 +168,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 20. Multiple windows; pen pressure (H)
 - Desktop windows done: a native window per workbook window, New Window on the same workbook,
-  Switch Windows, Arrange All. Left: Arrange All across monitors, one window on the web, no
-  pressure or tilt in ink. **Estimate:** 5–8 h.
+  Switch Windows, Arrange All. Left: Arrange All across monitors, one window on the web; ink
+  accepts a per-point pressure array that the fountain and brush pens paint with, but the pointer
+  capture does not send device pressure or tilt yet. **Estimate:** 5–8 h.
   [hardware-parity.md](hardware-parity.md)
 
 ### 21. Automation and add-ins (F)

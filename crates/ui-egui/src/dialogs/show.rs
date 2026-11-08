@@ -286,46 +286,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     }
                     ok_cancel(ui, &mut confirm, &mut open);
                 }
-                "importTexture" => {
-                    // The same native and browser pickers as a picture; the engine command takes
-                    // either a path or the picked bytes, so the web build never needs a path.
-                    let arrived = d.picture_inbox.as_ref().and_then(|inbox| inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop());
-                    if let Some((name, bytes)) = arrived {
-                        d.picture_inbox = None;
-                        if bytes.len() > 16 * 1024 * 1024 {
-                            app.message = Some((d.title.clone(), "Choose a PNG or JPEG no larger than 16 MB.".into()));
-                        } else {
-                            d.values.remove("path");
-                            d.values.insert("name".into(), json!(name));
-                            d.values.insert("base64".into(), json!(gridcraft_engine::io::base64_encode(&bytes)));
-                        }
-                    }
-                    if app.services.pick_picture_async.is_some() {
-                        ui.label(d.values.get("name").and_then(Json::as_str).unwrap_or("No image selected"));
-                    } else {
-                        ui.label("Image file path (PNG or JPEG):");
-                        let mut path = d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string();
-                        if ui.text_edit_singleline(&mut path).changed() {
-                            d.values.remove("base64");
-                            d.values.insert("path".into(), json!(path));
-                        }
-                    }
-                    if (app.services.pick_picture.is_some() || app.services.pick_picture_async.is_some()) && ui.button("Browse…").clicked() {
-                        if let Some(start) = &app.services.pick_picture_async {
-                            let inbox = crate::Inbox::default();
-                            start(inbox.clone());
-                            d.picture_inbox = Some(inbox);
-                        } else if let Some(pick) = &app.services.pick_picture
-                            && let Some(path) = pick()
-                        {
-                            d.values.remove("base64");
-                            let name = std::path::Path::new(&path).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("");
-                            d.values.insert("name".into(), json!(name));
-                            d.values.insert("path".into(), json!(path));
-                        }
-                    }
-                    ok_cancel(ui, &mut confirm, &mut open);
-                }
+                "importTexture" => import_texture(app, &mut d, ui, &mut confirm, &mut open),
                 "pickList" => {
                     let items: Vec<String> = app
                         .session
@@ -534,6 +495,47 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     } else if let Some(back) = d.back.take() {
         app.dialog = Some(*back);
     }
+}
+
+/// The Import Brush Texture dialog: the same native and browser pickers as a picture; the engine
+/// command takes either a path or the picked bytes, so the web build never needs a path.
+fn import_texture(app: &mut SheetApp, d: &mut Dialog, ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
+    let arrived = d.picture_inbox.as_ref().and_then(|inbox| inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop());
+    if let Some((name, bytes)) = arrived {
+        d.picture_inbox = None;
+        if bytes.len() > 16 * 1024 * 1024 {
+            app.message = Some((d.title.clone(), "Choose a PNG or JPEG no larger than 16 MB.".into()));
+        } else {
+            d.values.remove("path");
+            d.values.insert("name".into(), json!(name));
+            d.values.insert("base64".into(), json!(gridcraft_engine::io::base64_encode(&bytes)));
+        }
+    }
+    if app.services.pick_picture_async.is_some() {
+        ui.label(d.values.get("name").and_then(Json::as_str).unwrap_or("No image selected"));
+    } else {
+        ui.label("Image file path (PNG or JPEG):");
+        let mut path = d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string();
+        if ui.text_edit_singleline(&mut path).changed() {
+            d.values.remove("base64");
+            d.values.insert("path".into(), json!(path));
+        }
+    }
+    if (app.services.pick_picture.is_some() || app.services.pick_picture_async.is_some()) && ui.button("Browse…").clicked() {
+        if let Some(start) = &app.services.pick_picture_async {
+            let inbox = crate::Inbox::default();
+            start(inbox.clone());
+            d.picture_inbox = Some(inbox);
+        } else if let Some(pick) = &app.services.pick_picture
+            && let Some(path) = pick()
+        {
+            d.values.remove("base64");
+            let name = std::path::Path::new(&path).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("");
+            d.values.insert("name".into(), json!(name));
+            d.values.insert("path".into(), json!(path));
+        }
+    }
+    ok_cancel(ui, confirm, open);
 }
 
 /// OK in Open Hyperlink; returns whether the prompt closes. A pass that carries control-channel

@@ -241,6 +241,21 @@ fn selected_workbook_view(workbook: &El) -> Option<&El> {
     views.kids("workbookView").find(|view| view.attr("visibility").unwrap_or("visible") == "visible").or_else(|| views.child("workbookView"))
 }
 
+/// Reads GridCraft's veryHidden ink sheet: `None` when `sheet` is an ordinary one, and
+/// `Some(None)` for ours with a damaged or newer layout (its data is skipped, with a warning).
+fn read_ink_sheet(cx: &mut Ctx<'_>, sheet: &Sheet) -> Option<Option<crate::ink_sheet::InkSheetData>> {
+    if !crate::ink_sheet::is_ink_sheet(sheet) {
+        return None;
+    }
+    match crate::ink_sheet::parse(sheet) {
+        Some(data) => Some(Some(data)),
+        None => {
+            cx.warn("the GridCraft ink sheet has an unknown layout; its ink data was skipped");
+            Some(None)
+        }
+    }
+}
+
 pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) -> bool>) -> Result<(Workbook, ReadReport), IoError> {
     let pkg = Package::open(bytes)?;
     let mut cx = Ctx {
@@ -348,11 +363,8 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         // GridCraft's own veryHidden ink sheet: read for the textures and per-stroke data Excel
         // can't hold, then dropped from the model (it is written again on save only while that
         // data exists), so it never shows as a sheet and never reaches the passthrough.
-        if crate::ink_sheet::is_ink_sheet(&sheet) {
-            match crate::ink_sheet::parse(&sheet) {
-                Some(data) => ink_data = Some(data),
-                None => cx.warn("the GridCraft ink sheet has an unknown layout; its ink data was skipped"),
-            }
+        if let Some(ours) = read_ink_sheet(&mut cx, &sheet) {
+            ink_data = ours.or(ink_data);
             file_to_model.push(None);
             continue;
         }

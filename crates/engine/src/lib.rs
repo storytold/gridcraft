@@ -505,10 +505,18 @@ pub struct Session {
     pub macro_debug: Option<macros::debug::Debugger>,
     /// Where the macro recorder started (beside `recorder`, its buffer).
     pub macro_recording: Option<macros::recorder::RecordingStart>,
-    /// Draw tab tool: "" (select), "pen" or "eraser"; pen colour and width.
+    /// Draw tab tool: "" (select), "pen" or "eraser"; pen colour, brush kind, thickness in
+    /// millimetres and texture, and the person's own pens in the Drawing Tools gallery.
     pub draw_tool: String,
     pub draw_color: String,
     pub draw_width: f32,
+    /// The brush kind's [`InkTool`](gridcraft_model::InkTool) JSON name (`pen` by default).
+    pub draw_brush: String,
+    /// The textured pen's [`InkEffect`](gridcraft_model::InkEffect) JSON name, empty for a solid
+    /// stroke.
+    pub draw_effect: String,
+    /// Pens the person added with Draw ▸ Add Pen. A view setting, not saved in the file.
+    pub draw_pens: Vec<crate::cmd::draw::DrawPen>,
     /// Draw tab pen: the imported texture it paints with (an id in `Workbook::ink_textures`,
     /// empty for none) and the size in sheet points one repeat covers.
     pub draw_texture: String,
@@ -541,6 +549,15 @@ impl Session {
     pub fn new() -> Session {
         Session::default()
     }
+
+    /// Fills the Draw tab's gallery with Excel's default pens the first time it is shown or a draw
+    /// command changes it (they are view state, never saved in the workbook).
+    pub fn ensure_draw_pens(&mut self) {
+        if self.draw_pens.is_empty() {
+            self.draw_pens = cmd::draw::default_pens();
+        }
+    }
+
     pub fn documents(&self) -> &[DocState] {
         &self.docs
     }

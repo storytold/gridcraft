@@ -19,9 +19,7 @@ const XDR14: &str = "http://schemas.microsoft.com/office/excel/2010/spreadsheetD
 const GUIDE: &str = "{11111111-2222-4333-8444-555555555555}";
 
 fn content_types(ink: bool, png: bool) -> String {
-    let mut s = format!(
-        r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>"#
-    );
+    let mut s = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>"#.to_string();
     if png {
         s.push_str(r#"<Default Extension="png" ContentType="image/png"/>"#);
     }
@@ -146,6 +144,23 @@ fn excel_content_part_is_read_as_editable_ink_with_its_brush() {
 }
 
 #[test]
+fn excel_compact_values_without_spaces_decode() {
+    // Excel 365 re-encodes a stroke as `0 0,'4233'794,"-2116"1587,-5821-793`: the channel values
+    // are concatenated with no space, with prefixes and negative signs separating them.
+    let (wb, _) = read(&package("0 0,'4233'794,\"-2116\"1587,-5821-793", false, PEN_PROPS, true, true, true));
+    let s = ink_shape(&wb);
+    let ink = s.ink.as_ref().expect("editable ink");
+    let pts = points(s);
+    assert_eq!(pts.len(), 4, "every point decodes: {pts:?}");
+    assert!(ink.pressure.is_empty());
+    // 1/1000 cm: X 0, 4233, 6350 (second difference), 2646; Y 0, 794, 3175, 4763.
+    close(pts[1][0], 4.233 * 37.795_276);
+    close(pts[2][0], 6.35 * 37.795_276);
+    close(pts[3][0], 2.646 * 37.795_276);
+    close(pts[3][1], 4.763 * 37.795_276);
+}
+
+#[test]
 fn all_trace_prefixes_and_the_wildcard_decode() {
     // X: 0, 1000, 2000, 3000 (thousandths of a cm) and Y: 0, 1000, 0, -1000.
     let (wb, _) = read(&package("!0 !0,'1000 '1000,\"0 \"-2000,0 0", false, PEN_PROPS, true, true, true));
@@ -171,8 +186,8 @@ fn pressure_and_effects_survive_a_read_and_a_gridcraft_save() {
     assert_eq!(ink.effect, Some(InkEffect::RoseGold));
     // F's last prefix is `'` (no `"` in the fixture for F), so the third value repeats the first difference.
     assert_eq!(ink.pressure, vec![1000, 2000, 2000]);
-    close(ink.anchor[0], -1303.866_2);
-    close(ink.anchor[1], -1016.0);
+    close(ink.anchor[0], -1_303.866_2);
+    close(ink.anchor[1], -1_016.0);
     close(ink.scale, 0.5);
 
     // Reopen what GridCraft writes: the brush, pressure and key come back unchanged.
@@ -216,7 +231,7 @@ fn every_tool_and_effect_round_trips_through_gridcraft() {
                     width_cm: 0.1,
                     height_cm: if tool == InkTool::Pencil { 0.6 } else { 0.1 },
                     effect,
-                    anchor: [-1303.866_2, -1016.0],
+                    anchor: [-1_303.866_2, -1_016.0],
                     scale: 0.5,
                     pressure: vec![100, 2000, 32767],
                     order: id,

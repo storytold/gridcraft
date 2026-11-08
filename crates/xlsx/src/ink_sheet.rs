@@ -188,7 +188,7 @@ pub fn parse(sheet: &Sheet) -> Option<InkSheetData> {
                 let extras = InkExtras {
                     texture: extras.texture.filter(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())),
                     scale: extras.scale.filter(|s| s.is_finite() && *s > 0.0).map(|s| s.clamp(0.5, 512.0)),
-                    tool: extras.tool.filter(|t| t.chars().count() <= 32),
+                    tool: extras.tool.filter(|t| !t.trim().is_empty() && t.chars().count() <= 32),
                     order: extras.order,
                 };
                 if !extras.is_empty() {

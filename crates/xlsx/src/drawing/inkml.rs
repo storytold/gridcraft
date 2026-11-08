@@ -189,7 +189,7 @@ fn decode(trace: &El, definitions: &El) -> Option<(Vec<[f64; 2]>, Vec<u16>)> {
         if point.is_empty() {
             continue;
         }
-        let mut tokens = point.split_whitespace();
+        let mut tokens = value_tokens(point).into_iter();
         let mut values = Vec::with_capacity(channels.len());
         for st in state.iter_mut() {
             let (prefix, body) = split_prefix(tokens.next()?);
@@ -234,6 +234,36 @@ fn decode(trace: &El, definitions: &El) -> Option<(Vec<[f64; 2]>, Vec<u16>)> {
         return None;
     }
     Some((points, pressure))
+}
+
+/// A point's values. W3C InkML separates them with whitespace, but Excel writes a compact form
+/// that also concatenates them: `'4233'794` is two first differences, and `-5821-793` two
+/// negative second differences, with no space between. A value therefore also starts at a prefix
+/// character or at a `-` following a digit.
+fn value_tokens(point: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    for token in point.split_whitespace() {
+        let bytes = token.as_bytes();
+        let mut start = 0;
+        for i in 0..bytes.len() {
+            if i == start {
+                continue;
+            }
+            let boundary = match bytes[i] {
+                b'!' | b'\'' | b'"' | b'*' => true,
+                b'-' => bytes[i - 1].is_ascii_digit(),
+                _ => false,
+            };
+            if boundary {
+                out.push(&token[start..i]);
+                start = i;
+            }
+        }
+        if start < bytes.len() {
+            out.push(&token[start..]);
+        }
+    }
+    out
 }
 
 /// `!`, `'`, `"` or `*` and the value after it; no prefix when the token starts with anything

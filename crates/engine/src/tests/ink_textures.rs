@@ -97,7 +97,7 @@ fn textures_travel_in_the_workbook_json() {
     let bytes = png(6, 4);
     s.execute("draw.textureImport", json!({"name": "json.png", "base64": b64(&bytes)})).unwrap();
     let saved = s.execute("file.saveBytes", json!({"format": "json"})).unwrap();
-    let mut back = s();
+    let mut back = super::s();
     back.execute("file.open", json!({"name": "book.json", "base64": saved["base64"]})).unwrap();
     let list = back.execute("draw.textureList", json!({})).unwrap();
     assert_eq!(list["textures"].as_array().unwrap().len(), 1);
