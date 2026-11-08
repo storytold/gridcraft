@@ -20,7 +20,11 @@ impl SheetApp {
         // `fileName` on `file.exportPdf` names the web download (Save As › File name). It is for this
         // layer, which hands the bytes to the browser, so it never reaches the engine.
         let pdf_name = if id == "file.exportPdf" {
-            params.as_object_mut().and_then(|m| m.remove("fileName")).and_then(|v| v.as_str().map(str::to_string))
+            params
+                .as_object_mut()
+                .and_then(|m| m.remove("fileName"))
+                .and_then(|v| v.as_str().and_then(|n| backstage::clean_file_stem(n, "pdf")))
+                .map(|stem| format!("{stem}.pdf"))
         } else {
             None
         };
