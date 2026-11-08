@@ -603,7 +603,7 @@ impl Host for PassHost<'_> {
         // A spill cannot overwrite a nonempty stored constant (spill_blocked). Empty cells
         // may be covered by a new spill, so decline them without reading/evaluating anything.
         match sh.cell(area.range.start) {
-            Some(cell) if cell.formula.is_some() || matches!(cell.value, Value::Array(_) | Value::Empty) => None,
+            Some(cell) if cell.formula.is_some() || cell.py.is_some() || matches!(cell.value, Value::Array(_) | Value::Empty) => None,
             Some(cell) => Some(cell.value.clone()),
             None => None,
         }
@@ -637,9 +637,9 @@ impl Host for PassHost<'_> {
         }
         self.criteria_cells += cells;
         let constant = |area: Area| {
-            self.wb
-                .sheet(area.sheet)
-                .is_some_and(|sh| sh.cells.iter_range(area.range).all(|(_, cell)| cell.formula.is_none() && !matches!(cell.value, Value::Array(_))))
+            self.wb.sheet(area.sheet).is_some_and(|sh| {
+                sh.cells.iter_range(area.range).all(|(_, cell)| cell.formula.is_none() && cell.py.is_none() && !matches!(cell.value, Value::Array(_)))
+            })
         };
         let spill_overlaps = |area: Area| {
             self.wb.sheet(area.sheet).is_some_and(|sh| {

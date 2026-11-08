@@ -3108,3 +3108,27 @@ fn computed_criterion_that_reenters_itself_is_not_met() {
     t.set("B60", "=DCOUNT($F$2:$G$7,\"age\",N46:N47)");
     assert_eq!(t.num("B60"), 0.0);
 }
+
+#[test]
+fn text_criteria_indexes_see_python_results_laid_out_in_the_pass() {
+    // A Python cell inside the criteria range counts its kept result, not the value it showed:
+    // the index reads stored values, so it must decline Python cells as it does formulas.
+    let mut t = T::new();
+    t.set("B2", "b");
+    t.set("A1", "=COUNTIF(B1:B3,\"b\")");
+    t.set("A2", "=COUNTIF(B1:B3,\"b\")");
+    plant_python(&mut t, "B1", Value::text("a"), Value::text("b"));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.num("A1"), t.num("A2")), (2.0, 2.0), "inside the range");
+
+    // A Python array spilling into a criteria range's empty cells, after (in row-major pass
+    // order) both readers: the spill dirties them, so they are calculated again.
+    let mut t = T::new();
+    t.set("A1", "=COUNTIF(C2:C4,\"b\")");
+    t.set("B1", "=COUNTIF(C2:C4,\"b\")");
+    let data = vec![Value::text("a"), Value::text("b"), Value::text("b")];
+    let spill = Value::Array(std::sync::Arc::new(gridcraft_core::Array::new(3, 1, data).unwrap()));
+    plant_python(&mut t, "C1", Value::text("a"), spill);
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.num("A1"), t.num("B1")), (2.0, 2.0), "spilled into the range");
+}
