@@ -181,7 +181,7 @@ pub fn fill_except(
                     if let Some(f) = &cell.formula {
                         if let Some(e) = f.expr() {
                             let shifted = gridcraft_formula::adjust::shift_relative(e, t.row as i64 - sc.row as i64, t.col as i64 - sc.col as i64);
-                            cell.formula = Some(Arc::new(Formula::from_expr(shifted)));
+                            cell.formula = Some(Arc::new(Formula { preserve_scalar: f.preserve_scalar, ..Formula::from_expr(shifted) }));
                             cell.value = Value::Empty;
                         }
                     } else if cell.py.is_none()

@@ -123,6 +123,28 @@ fn imported_scalar_formula_with_range_name_stays_scalar_and_keeps_name() {
 }
 
 #[test]
+fn imported_scalar_formula_keeps_its_flag_after_lambda_name_case_rewrite() {
+    let mut wb = Workbook::new();
+    wb.names.push(DefinedName { name: "Offering".into(), scope: None, formula: "Data!$A$1:$A$2".into(), comment: String::new(), hidden: false });
+    wb.names.push(DefinedName { name: "Double".into(), scope: None, formula: "LAMBDA(x,x)".into(), comment: String::new(), hidden: false });
+    let sheet = wb.sheet_mut(0).unwrap();
+    sheet.name = "Data".into();
+    sheet.cells.set(at("A1"), Cell::value(Value::Number(5.0)));
+    sheet.cells.set(at("A2"), Cell::value(Value::Number(6.0)));
+    let mut imported = Formula::new("IF(A1=5,Double(Offering),A2)");
+    imported.preserve_scalar = true;
+    sheet.cells.set(at("B1"), Cell { value: Value::Number(5.0), ..Cell::formula(imported) });
+    let (loaded, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let f = loaded.sheet(0).unwrap().cell(at("B1")).unwrap().formula.as_ref().unwrap();
+    assert!(f.preserve_scalar);
+    assert!(f.text.contains("Double("), "{}", f.text);
+    let saved = write_xlsx(&loaded).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    assert_scalar(&sheet, "B1");
+}
+
+#[test]
 fn dynamic_spills_and_legacy_cse_keep_distinct_ranges() {
     let mut wb = Workbook::new();
     let sh = wb.sheet_mut(0).unwrap();
