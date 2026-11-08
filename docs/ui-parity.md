@@ -145,10 +145,10 @@ otherwise. Number-format and border keys match the physical key (Ctrl+Shift+4, w
 | Ctrl+Alt+Shift+P | Cmd+Option+Shift+P | Python mode on or off | **added** |
 | F3 | not checked | Paste Name dialog, only when the workbook has names: OK puts the name at the caret of the formula being edited (or starts `=Name`), Paste List writes each name and what it refers to from the active cell (`formulas.pasteName`) | **added** |
 | F1, F4 (repeat), F6 / Shift+F6, F8 / Shift+F8, F11, End mode | same | help, Repeat, pane cycling, extend/add mode, chart sheet | missing (no such feature yet) |
-| Ctrl+Q | Ctrl+Q | Quick Analysis | **added** (#791) |
+| Ctrl+Q | Control+Q (Cmd+Q stays Quit) | Quick Analysis | **added** (#791) |
 | Ctrl+A after a function name, Ctrl+Shift+U, Ctrl+Alt+P | same | Function Arguments, formula bar height, tooltips | missing |
 | F1, F3, F4 (repeat), F6 / Shift+F6, F8 / Shift+F8, F11, End mode | same | help, Paste Name, Repeat, pane cycling, extend/add mode, chart sheet | missing (no such feature yet) |
-| Ctrl+Q | Ctrl+Q | Quick Analysis | **added** (#791) |
+| Ctrl+Q | Control+Q (Cmd+Q stays Quit) | Quick Analysis | **added** (#791) |
 | Ctrl+A after a function name, Ctrl+Alt+P | same | Function Arguments, tooltips | missing |
 | Ctrl+Shift+A after a function name | Control+Shift+A | argument names: `=SUMIF(` becomes `=SUMIF(range,criteria,sum_range)`, the `(` added when missing; one Undo takes them back | **added** |
 | Ctrl+Shift+U | Control+Shift+U | expand or collapse the formula bar (`view.expandFormulaBar`), on the grid and while editing; on Windows and Linux it no longer underlines | **added** |
