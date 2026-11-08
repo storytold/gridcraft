@@ -76,7 +76,7 @@ mod services;
 mod state;
 
 pub use clock::{monotonic_ms, now_ms};
-pub use services::{Chrome, Inbox, Services};
+pub use services::{Chrome, HostSaveFn, Inbox, Services};
 pub use state::{NoticeKind, OpenWindow, SaveAnswer, SheetView};
 pub mod desktop_theme;
 

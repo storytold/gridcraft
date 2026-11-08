@@ -167,6 +167,64 @@ fn save_actions_include_the_cell_draft_and_close_keeps_the_unsaved_prompt() {
 }
 
 #[test]
+fn host_save_distinguishes_save_from_save_as_and_saves_opened_xlsx_from_backstage() {
+    let saves = Arc::new(Mutex::new(Vec::<(String, bool, Vec<u8>)>::new()));
+    let capture = saves.clone();
+    let mut h = harness(Services {
+        host_save: Some(Box::new(move |name, bytes, save_as| {
+            capture.lock().unwrap().push((name.to_string(), save_as, bytes.to_vec()));
+            Ok(())
+        })),
+        ..Default::default()
+    });
+
+    // 1. A brand-new untitled workbook goes to Save As on File -> Save, and Download (.xlsx)
+    // sends saveAs = true, after which the workbook has a file and is clean.
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    assert!(h.state().session.active().unwrap().is_dirty());
+    choose(&mut h, "Save");
+    assert_eq!(page(&h), Some("saveAs"), "untitled workbook opens Save As first");
+    click(&mut h, "Download (.xlsx)");
+    assert!(h.state().backstage.is_none());
+    assert!(!h.state().session.active().unwrap().is_dirty(), "host_save marks the workbook clean");
+    {
+        let got = saves.lock().unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!((got[0].0.as_str(), got[0].1), ("Book1.xlsx", true));
+    }
+
+    // 2. Subsequent File -> Save on that now-saved workbook saves in-place (saveAs = false) and
+    // closes Backstage without opening Page::SaveAs.
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "99"})).unwrap();
+    choose(&mut h, "Save");
+    assert!(h.state().backstage.is_none(), "Backstage Save closes immediately for an existing .xlsx");
+    assert!(!h.state().session.active().unwrap().is_dirty());
+    {
+        let got = saves.lock().unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!((got[1].0.as_str(), got[1].1), ("Book1.xlsx", false));
+    }
+
+    // 3. Opening an .xlsx from bytes (as web/host `gridcraft:open` / File -> Open does) also
+    // allows Backstage File -> Save to save in-place (saveAs = false), while Save As sends saveAs = true.
+    let seed_bytes = saves.lock().unwrap()[1].2.clone();
+    let b64 = gridcraft_engine::io::base64_encode(&seed_bytes);
+    h.state_mut().run("file.open", serde_json::json!({"name": "Quarterly.xlsx", "base64": b64})).unwrap();
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "B1", "input": "7"})).unwrap();
+    choose(&mut h, "Save");
+    assert!(h.state().backstage.is_none(), "opened .xlsx saves in-place from Backstage");
+    choose(&mut h, "Save As");
+    click(&mut h, "Download (.xlsx)");
+    assert!(h.state().backstage.is_none());
+    h.state_mut().run("file.saveAs", serde_json::json!({})).unwrap();
+    let got = saves.lock().unwrap();
+    assert_eq!(got.len(), 5);
+    assert_eq!((got[2].0.as_str(), got[2].1), ("Quarterly.xlsx", false));
+    assert_eq!((got[3].0.as_str(), got[3].1), ("Quarterly.xlsx", true));
+    assert_eq!((got[4].0.as_str(), got[4].1), ("Quarterly.xlsx", true));
+}
+
+#[test]
 /// Options opens, named Backstage pages are reachable and accessible, an invalid page errors, and both close and Back leave Backstage.
 fn file_options_opens_the_options_page_and_pages_are_reachable_by_command() {
     let mut h = harness(Services::default());

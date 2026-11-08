@@ -14,8 +14,8 @@
 //!   copied.
 //! - `gridcraft:save` (to the host): `{ name, saveAs, bytes }` for every file GridCraft would
 //!   otherwise download: Save and Save As (an .xlsx workbook) and Export as PDF. The host stores
-//!   it and reports failures itself. GridCraft doesn't tell the host which saves make a file the
-//!   document, so `saveAs` is always `false`.
+//!   it and reports failures itself. `saveAs` is `true` for Save As and `false` for Save and
+//!   exports.
 //! - `gridcraft:dirty` whenever unsaved changes appear or go away, `gridcraft:failed` when the
 //!   app couldn't start.
 //!
@@ -63,8 +63,10 @@ impl Bridge {
     pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
         self.listen(inbox, ctx);
         let bridge = self.clone();
+        services.host_save = Some(Box::new(move |name: &str, bytes: &[u8], save_as: bool| bridge.post_save(name, bytes, save_as)));
+        let bridge = self.clone();
         services.download = Some(Box::new(move |name: &str, bytes: &[u8]| {
-            if let Err(e) = bridge.post_save(name, bytes) {
+            if let Err(e) = bridge.post_save(name, bytes, false) {
                 log::error!("couldn't hand {name} to the page: {e}");
             }
         }));
@@ -94,6 +96,11 @@ impl Bridge {
         if let Some(name) = saved.iter().rev().find(|name| is_workbook(name))
             && let Some(doc) = app.session.active_mut()
         {
+            let file = Some(std::path::PathBuf::from(name));
+            if doc.wb.source_path != file {
+                std::sync::Arc::make_mut(&mut doc.wb).source_path = file;
+            }
+            doc.content_kind = Some(gridcraft_engine::io::FileKind::Xlsx);
             doc.saved = doc.wb.clone();
             if doc.path.is_none() {
                 doc.title = name.clone();
@@ -102,9 +109,9 @@ impl Bridge {
         self.host.post_dirty(app.session.documents().iter().any(|d| d.is_dirty()));
     }
 
-    fn post_save(&self, path: &str, bytes: &[u8]) -> Result<(), String> {
+    fn post_save(&self, path: &str, bytes: &[u8], save_as: bool) -> Result<(), String> {
         let name = file_name(path);
-        self.host.post_save(&name, bytes, None, false)?;
+        self.host.post_save(&name, bytes, None, save_as)?;
         self.saved.borrow_mut().push(name);
         Ok(())
     }

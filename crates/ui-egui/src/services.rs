@@ -5,6 +5,9 @@ type OpenUrl = Box<dyn Fn(&str)>;
 type CopyHtml = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
 type Download = Box<dyn Fn(&str, &[u8])>;
 type PrintPdf = Box<dyn Fn(&[u8])>;
+/// [`Services::host_save`]: `(file name, bytes, save_as)`. An error means the page didn't get
+/// the file, and the save failed.
+pub type HostSaveFn = Box<dyn Fn(&str, &[u8], bool) -> Result<(), String>>;
 
 /// Host services the platform shell provides (file pickers, opening URLs).
 #[derive(Default)]
@@ -35,6 +38,9 @@ pub struct Services {
     /// Read the picture on the system clipboard for the ribbon and menu Paste commands when it
     /// holds no text (Cmd/Ctrl+V gets it from egui's `Event::PasteImage`).
     pub paste_image: Option<Box<dyn FnMut() -> Option<image::RgbaImage>>>,
+    /// Web inside a page that keeps the files (`?host=parent`, `data-host="page"`): hand the
+    /// saved workbook to the page with whether the save came from Save As (`save_as`).
+    pub host_save: Option<HostSaveFn>,
     /// Web: deliver a file to the user (name, bytes).
     pub download: Option<Download>,
     /// Web: start an asynchronous file pick; the bytes arrive later in `inbox`.

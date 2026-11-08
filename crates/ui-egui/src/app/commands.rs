@@ -381,19 +381,38 @@ impl SheetApp {
                 }
             }
             "saveAs" => {
+                let save_as = params.get("saveAs").and_then(Json::as_bool).unwrap_or(false);
                 let suggested = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
                 if let Some(pick) = &self.services.pick_save {
                     if let Some(path) = pick(&suggested) {
                         let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.xlsx") } else { path };
                         self.run_or_alert("file.save", json!({"path": path}));
                     }
-                } else if self.services.download.is_some()
+                } else if (self.services.host_save.is_some() || self.services.download.is_some())
                     && let Ok(r) = self.run("file.saveBytes", json!({"format": "xlsx"}))
-                    && let Some(dl) = &self.services.download
                     && let Some(b) = r.get("base64").and_then(Json::as_str).and_then(gridcraft_engine::io::base64_decode)
                 {
                     let name = r.get("name").and_then(Json::as_str).unwrap_or("Book.xlsx").to_string();
-                    dl(&name, &b);
+                    if let Some(host) = &self.services.host_save {
+                        match host(&name, &b, save_as) {
+                            Ok(()) => {
+                                if let Some(doc) = self.session.active_mut() {
+                                    let file = Some(std::path::PathBuf::from(&name));
+                                    if doc.wb.source_path != file {
+                                        std::sync::Arc::make_mut(&mut doc.wb).source_path = file;
+                                    }
+                                    doc.content_kind = Some(gridcraft_engine::io::FileKind::Xlsx);
+                                    doc.saved = doc.wb.clone();
+                                    if doc.path.is_none() {
+                                        doc.title = name;
+                                    }
+                                }
+                            }
+                            Err(e) => log::error!("couldn't hand {name} to the page: {e}"),
+                        }
+                    } else if let Some(dl) = &self.services.download {
+                        dl(&name, &b);
+                    }
                 }
             }
             // File › Options (`file.options`) and the File tab itself open the Backstage view.

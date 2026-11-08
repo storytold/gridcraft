@@ -258,7 +258,12 @@ fn save(app: &mut SheetApp, out: &mut Outcome) {
     if !app.commit_edit(0, 0, false, false) {
         return;
     }
-    if app.session.active().is_some_and(|d| d.path.is_some()) {
+    let web = app.services.pick_save.is_none() && (app.services.host_save.is_some() || app.services.download.is_some());
+    let has_file = app
+        .session
+        .active()
+        .is_some_and(|d| d.path.is_some() || (web && d.wb.source_path.is_some() && d.content_kind == Some(gridcraft_engine::io::FileKind::Xlsx)));
+    if has_file {
         app.run_or_alert("file.save", json!({}));
         out.close = true;
     } else {
@@ -696,12 +701,12 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
     });
     ui.add_space(14.0);
     // Desktop: the system Save dialog. Web: the file downloads.
-    let web = app.services.pick_save.is_none() && app.services.download.is_some();
+    let web = app.services.pick_save.is_none() && (app.services.host_save.is_some() || app.services.download.is_some());
     let label = if web { format!("{} (.{fmt})", lang.tr("Download")) } else { lang.tr("Browse…").to_string() };
     if square_button(ui, Icon::OpenFolder, &label).clicked() && app.commit_edit(0, 0, false, false) {
         if fmt == "xlsx" {
             let before = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
-            app.open_dialog("saveAs", json!({}));
+            app.open_dialog("saveAs", json!({"saveAs": true}));
             let after = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
             if after != before || app.services.pick_save.is_none() {
                 out.close = true;

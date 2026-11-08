@@ -87,7 +87,11 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     }
     // Someone else may have made the file: its active content asks before it runs.
     let mut doc = DocState::new(wb, path, title, crate::Trust::FromFile);
-    if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
+    if !imported
+        && !encrypted
+        && (crate::io::FileKind::from_path(&name) == Some(crate::io::FileKind::Xlsx)
+            || (crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx))
+    {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
     let i = s.add_document(doc);
@@ -147,7 +151,7 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn save_as(s: &mut Session, p: &Json) -> Result<Json> {
     if str_param(p, "path").is_none() {
-        s.ui_requests.push(crate::UiRequest::Dialog("saveAs".into(), json!({})));
+        s.ui_requests.push(crate::UiRequest::Dialog("saveAs".into(), json!({"saveAs": true})));
         return ok();
     }
     save(s, p)
