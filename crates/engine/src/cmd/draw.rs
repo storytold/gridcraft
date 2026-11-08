@@ -1,7 +1,7 @@
 //! Draw tab: pen and eraser tools, ink strokes, Ink to Shape.
 
 use gridcraft_core::CellRef;
-use gridcraft_model::{Anchor, Color, Shape, ShapeKind};
+use gridcraft_model::{Anchor, Color, InkStyle, InkTool, Shape, ShapeKind};
 use serde_json::{Value as Json, json};
 
 use super::{CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, ok, str_param, u32_param};
@@ -79,6 +79,8 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
     let dy = (miny - sh.row_top(cell.row)) as f32;
     let text = pts.iter().map(|q| format!("{:.1},{:.1}", q[0] - minx, q[1] - miny)).collect::<Vec<_>>().join(";");
     let id = d.wb.next_object_id();
+    let order = sh.shapes.iter().filter_map(|x| x.ink.as_ref()).map(|i| i.order).max().map_or(0, |o| o.saturating_add(1));
+    let width_cm = px_to_cm(width);
     let shape = Shape {
         math: Default::default(),
         id,
@@ -96,6 +98,14 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
         line: Color::from_hex(&color).unwrap_or(Color::rgb(0x1F, 0x5F, 0xC9)),
         text,
         format: Default::default(),
+        ink: Some(InkStyle {
+            tool: InkTool::Pen,
+            width_cm,
+            height_cm: width_cm,
+            order,
+            key: Some(gridcraft_model::ink_creation_id(None)),
+            ..InkStyle::default()
+        }),
     };
     edit(s, |cx| {
         cx.sheet_mut(si)?.shapes.push(shape);
@@ -103,12 +113,27 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-/// Ink width is stored in the red channel of `fill` (shapes have no width field).
+/// Ink width is stored in the red channel of `fill` (shapes have no width field). A stroke with
+/// an [`InkStyle`] answers from its brush, in px, as before.
 pub fn ink_width(sh: &Shape) -> f32 {
+    if let Some(ink) = &sh.ink {
+        return cm_to_px(ink.width_cm).max(1.0);
+    }
     match sh.fill {
         Color::Rgb(v) => ((v >> 16) & 0xFF).max(1) as f32,
         _ => 2.0,
     }
+}
+
+/// Excel's ink measurements are cm; a sheet point is 1/96 inch.
+const PX_PER_CM: f32 = 96.0 / 2.54;
+
+fn px_to_cm(px: f32) -> f32 {
+    (px / PX_PER_CM).clamp(0.001, 100.0)
+}
+
+fn cm_to_px(cm: f32) -> f32 {
+    (cm * PX_PER_CM).clamp(0.1, 10_000.0)
 }
 
 pub fn ink_points(sh: &Shape) -> Vec<[f32; 2]> {

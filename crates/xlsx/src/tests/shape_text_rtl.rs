@@ -46,6 +46,7 @@ fn text_box(text: &str, format: ShapeFormat) -> Workbook {
         text: text.into(),
         format,
         math: Default::default(),
+        ink: None,
     });
     Workbook { sheets: vec![Arc::new(sheet)], ..Default::default() }
 }

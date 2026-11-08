@@ -851,6 +851,7 @@ mod tests {
                 text: String::new(),
                 format: ShapeFormat::default(),
                 math: EquationCache::default(),
+                ink: None,
             }),
             ObjKind::Slicer => {
                 s.slicers.push(Slicer { id, table: String::new(), column: String::new(), caption: String::new(), anchor, selected: None, columns: 1 })
