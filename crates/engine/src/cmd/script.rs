@@ -24,6 +24,43 @@ const NO_RUNTIME: &str = "Office Scripts need Bun, a JavaScript/TypeScript runti
                           Install Bun, then point GridCraft at it with GRIDCRAFT_BUN or put it in the runtimes folder \
                           (Automate ▸ Office Scripts shows both). This build has no script runtime.";
 
+/// The values a `range.setValues` command actually wrote: typed input reads "2.500" as the number
+/// 2.5, and the recorded script must contain that value (a script's `setValues` keeps strings as
+/// text). A step that opted out with `parse: false` is left alone.
+fn typed_values(params: &Json) -> Json {
+    if params.get("parse").and_then(Json::as_bool) == Some(false) {
+        return params.clone();
+    }
+    let Some(rows) = params.get("values").and_then(Json::as_array) else { return params.clone() };
+    let system = gridcraft_core::date::DateSystem::default();
+    let converted: Vec<Json> = rows
+        .iter()
+        .map(|row| match row.as_array() {
+            Some(cells) => Json::Array(cells.iter().map(|cell| typed_cell(cell, system)).collect()),
+            None => typed_cell(row, system),
+        })
+        .collect();
+    let mut out = params.clone();
+    if let Json::Object(map) = &mut out {
+        map.insert("values".into(), Json::Array(converted));
+    }
+    out
+}
+
+/// One cell of a recorded write: a string typed input read as a number or boolean becomes that
+/// value; anything else (text, a formula, an error) stays as written.
+fn typed_cell(cell: &Json, system: gridcraft_core::date::DateSystem) -> Json {
+    let Json::String(text) = cell else { return cell.clone() };
+    if text.starts_with('=') {
+        return cell.clone();
+    }
+    match gridcraft_core::parse::parse_input(text, system).value {
+        gridcraft_core::Value::Number(n) => json!(n),
+        gridcraft_core::Value::Bool(b) => json!(b),
+        _ => cell.clone(),
+    }
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -255,7 +292,9 @@ fn record(s: &mut Session, p: &Json) -> Result<Json> {
         .filter(|(_, (id, _))| id != "script.record")
         .map(|(offset, (id, params))| {
             let name = s.sheet_names.get(start + offset).cloned().flatten();
-            JournalStep::new(id.clone(), crate::script::resolve_recorded_sheet_named(params, name.as_deref()))
+            let params = crate::script::resolve_recorded_sheet_named(params, name.as_deref());
+            let params = if id == "range.setValues" { typed_values(&params) } else { params };
+            JournalStep::new(id.clone(), params)
         })
         .collect();
     let recording = gridcraft_script::recorder::record(&steps);
@@ -869,6 +908,17 @@ mod tests {
         let stopped = s.execute("script.record", json!({"on": false})).unwrap();
         assert_eq!(stopped["recording"], false);
         assert!(stopped.get("id").is_none());
+    }
+
+    #[test]
+    fn a_recorded_range_write_holds_the_value_the_command_parsed() {
+        let mut s = session("record-parse");
+        s.execute("script.record", json!({"on": true})).unwrap();
+        s.execute("range.setValues", json!({"range": "A1:B1", "values": [["2.500", "text"]]})).unwrap();
+        let stopped = s.execute("script.record", json!({"on": false})).unwrap();
+        let code = stopped["code"].as_str().unwrap_or_default();
+        // Typed input read "2.500" as 2.5; the script must hold that, not the text.
+        assert!(code.contains("setValues([[2.5, \"text\"]]);"), "{code}");
     }
 
     #[test]

@@ -367,6 +367,11 @@ fn folder_row(app: &mut SheetApp, ui: &mut Ui) {
             if app.office_scripts.dirty {
                 save(app);
             }
+            if app.office_scripts.dirty {
+                // The save failed and its error is in the status: exporting now would write the
+                // old record, not what is on screen.
+                return;
+            }
             let Some(id) = app.office_scripts.selected.clone() else { return };
             let Some(pick) = app.services.pick_save.as_ref() else { return };
             let name = app.office_scripts.name.clone();
