@@ -279,9 +279,11 @@ mod tests {
         // half-width from the line, so a diagonal is a band, not a line.
         let pts = [egui::pos2(0.0, 0.0), egui::pos2(10.0, 10.0)];
         let m = stroke_mesh(&pts, 2.0, Color32::WHITE, TextureId::Managed(1), 1.0, 5.0);
-        let half_diag = 2.0_f32.sqrt();
+        // Each vertex sits one unit (half a width) off the line x = y, so |x - y| = sqrt(2).
+        let expected = 2.0_f32.sqrt();
         for v in &m.vertices {
-            assert!((v.pos.x - v.pos.y).abs() - half_diag < 1e-4, "{:?} is not one half-width off the line", v.pos);
+            let off = (v.pos.x - v.pos.y).abs();
+            assert!((off - expected).abs() < 1e-4, "{:?} is {off} off the line, not one half-width ({expected})", v.pos);
         }
     }
 }
