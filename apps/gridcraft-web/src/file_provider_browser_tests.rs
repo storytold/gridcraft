@@ -1,4 +1,4 @@
-//! One original synthetic workbook drives the actual window publisher and SheetApp consumer.
+//! Startup faults and one original synthetic workbook exercise the real window API and consumer.
 //! Fault-injection helpers adapt sibling WordCraft work, copyright 2026 ArtCraft Team and
 //! WordCraft contributors, under Apache-2.0 (repository LICENSE-APACHE).
 
@@ -17,7 +17,7 @@ use serde_json::json;
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 
-use super::{API, EVENT, error, install, publish};
+use super::{API, EVENT, error, install, install_for_services, publish};
 
 wasm_bindgen_test_configure!(run_in_browser);
 
@@ -121,7 +121,6 @@ struct Events {
 impl Events {
     fn new(host: Host) -> Result<Self, JsValue> {
         let window = web_sys::window().ok_or_else(|| error("no test window"))?;
-        assert!(!Reflect::has(&window, &API.into())?, "the fixture owns a fresh page without editor startup");
         let details = Rc::new(RefCell::new(Vec::new()));
         let blocked_disconnects = Rc::new(RefCell::new(Vec::new()));
         let received = details.clone();
@@ -183,18 +182,162 @@ fn choose(app: &mut SheetApp) -> Result<(), JsValue> {
     Ok(())
 }
 
+fn list_one(api: &JsValue, connection: &JsValue, id: &str) -> Result<(), JsValue> {
+    let resource = Object::new();
+    assert!(Reflect::set(&resource, &"id".into(), &id.into())?);
+    assert!(Reflect::set(&resource, &"name".into(), &"Ready.xlsx".into())?);
+    call(api, "setResources", &Array::of2(connection, &Array::of1(&resource)))?;
+    Ok(())
+}
+
+#[wasm_bindgen_test]
+fn failed_ready_keeps_services_local_and_retry_uses_a_fresh_owned_host() -> Result<(), JsValue> {
+    let window = web_sys::window().ok_or_else(|| error("no test window"))?;
+    assert!(!Reflect::has(&window, &API.into())?);
+    let services = Rc::new(RefCell::new(Services::default()));
+    let ctx = egui::Context::default();
+    let observed = Array::new();
+    let failed = observed.clone();
+    let receiver: JsValue = window.clone().into();
+    let target = receiver.clone();
+    let fault = Closure::<dyn FnMut(JsValue) -> Result<JsValue, JsValue>>::new(move |event: JsValue| {
+        assert_eq!(field(&Reflect::get(&event, &"detail".into())?, "type")?, "ready");
+        let api = Reflect::get(&receiver, &API.into())?;
+        let connection = call(&api, "registerProvider", &Array::of3(&"ready".into(), &"Ready storage".into(), &"account".into()))?;
+        list_one(&api, &connection, "old")?;
+        let request = call(&api, "requestOpen", &Array::of1(&"old".into()))?;
+        failed.push(&api);
+        failed.push(&connection);
+        failed.push(&request);
+        Err(js_sys::Error::new("injected ready dispatch failure after synchronous registration").into())
+    });
+    let attempted_services = services.clone();
+    let attempted_ctx = ctx.clone();
+    let attempt = Closure::<dyn FnMut() -> Result<JsValue, JsValue>>::new(move || {
+        assert!(install_for_services(&mut attempted_services.borrow_mut(), attempted_ctx.clone(), false).is_err());
+        Ok(JsValue::UNDEFINED)
+    });
+    with_replacement(&target, "dispatchEvent", fault.as_ref(), attempt.as_ref().unchecked_ref())??;
+    assert_eq!(observed.length(), 3, "the ready hook exercised the actual published API before failing");
+    assert!(services.borrow().file_providers.is_none());
+    assert!(!Reflect::has(&window, &API.into())?, "the failed attempt must not leave a window collision");
+    assert!(call(&observed.get(0), "snapshot", &Array::new()).is_err(), "failed callbacks were dropped, not forgotten");
+
+    let retry = install_for_services(&mut services.borrow_mut(), ctx, false)?;
+    let host = services.borrow().file_providers.clone().ok_or_else(|| error("retry did not attach its host"))?;
+    assert!(!host.connected() && !host.enabled() && !host.busy(), "failed ready work must not enter the retry's services");
+    let api = Reflect::get(&window, &API.into())?;
+    let connection = call(&api, "registerProvider", &Array::of3(&"ready".into(), &"Ready storage".into(), &"account".into()))?;
+    assert!(!Object::is(&connection, &observed.get(1)), "each attempt gets a fresh nonce and connection identity");
+    assert!(call(&api, "setResources", &Array::of2(&observed.get(1), &Array::new())).is_err());
+    assert!(call(&api, "cancelOpen", &Array::of2(&observed.get(2), &"stale".into())).is_err());
+    call(&api, "unregisterProvider", &Array::new())?;
+    drop(retry);
+    assert!(!Reflect::has(&window, &API.into())?);
+    Ok(())
+}
+
+#[wasm_bindgen_test]
+fn ready_registration_and_requests_reach_the_successfully_attached_service() -> Result<(), JsValue> {
+    let window = web_sys::window().ok_or_else(|| error("no test window"))?;
+    assert!(!Reflect::has(&window, &API.into())?);
+    let ctx = egui::Context::default();
+    let services = Rc::new(RefCell::new(Services::default()));
+    let installation = Rc::new(RefCell::new(None));
+    let observed = Array::new();
+    let seen = observed.clone();
+    let receiver: JsValue = window.clone().into();
+    let target = receiver.clone();
+    let original = Reflect::get(&window, &"dispatchEvent".into())?.dyn_into::<Function>()?;
+    let nested_ctx = ctx.clone();
+    let hook = Closure::<dyn FnMut(JsValue) -> Result<JsValue, JsValue>>::new(move |event: JsValue| {
+        let api = Reflect::get(&receiver, &API.into())?;
+        let connection = call(&api, "registerProvider", &Array::of3(&"ready".into(), &"Ready storage".into(), &"account".into()))?;
+        list_one(&api, &connection, "book")?;
+        let request = call(&api, "requestOpen", &Array::of1(&"book".into()))?;
+        assert!(install(nested_ctx.clone()).is_err(), "a reentrant install cannot replace the in-progress API");
+        seen.push(&connection);
+        seen.push(&request);
+        original.call1(&receiver, &event)
+    });
+    let attempted_services = services.clone();
+    let owned = installation.clone();
+    let attempted_ctx = ctx.clone();
+    let attempt = Closure::<dyn FnMut() -> Result<JsValue, JsValue>>::new(move || {
+        *owned.borrow_mut() = install_for_services(&mut attempted_services.borrow_mut(), attempted_ctx.clone(), false)?;
+        Ok(JsValue::UNDEFINED)
+    });
+    with_replacement(&target, "dispatchEvent", hook.as_ref(), attempt.as_ref().unchecked_ref())??;
+    assert_eq!(observed.length(), 2);
+    let host = services.borrow().file_providers.clone().ok_or_else(|| error("successful host was not attached"))?;
+    assert!(host.enabled() && host.busy());
+    assert_eq!(host.snapshot()["connectionId"].as_str(), observed.get(0).as_string().as_deref());
+    let mut events = Events::new(host.clone())?;
+    events.installed = Some(Reflect::get(&window, &API.into())?);
+    publish(&host, &ctx);
+    let requests = events.matching("openRequest")?;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(Reflect::get(&requests[0], &"requestId".into())?, observed.get(1));
+    let api = Reflect::get(&window, &API.into())?;
+    call(&api, "cancelOpen", &Array::of2(&observed.get(1), &"cancelled".into()))?;
+    publish(&host, &ctx);
+    assert!(!host.busy());
+    call(&api, "unregisterProvider", &Array::new())?;
+    Ok(())
+}
+
+#[wasm_bindgen_test]
+fn startup_preserves_existing_or_replaced_apis_and_skips_hosted_mode() -> Result<(), JsValue> {
+    let window = web_sys::window().ok_or_else(|| error("no test window"))?;
+    assert!(!Reflect::has(&window, &API.into())?);
+    let services = Rc::new(RefCell::new(Services::default()));
+    let ctx = egui::Context::default();
+    let foreign = Object::new();
+    let target: JsValue = window.clone().into();
+    let expected: JsValue = foreign.clone().into();
+    let attempted_services = services.clone();
+    let attempted_ctx = ctx.clone();
+    let receiver = target.clone();
+    let collision = Closure::<dyn FnMut() -> Result<JsValue, JsValue>>::new(move || {
+        assert!(install_for_services(&mut attempted_services.borrow_mut(), attempted_ctx.clone(), false).is_err());
+        assert!(attempted_services.borrow().file_providers.is_none());
+        assert!(Object::is(&Reflect::get(&receiver, &API.into())?, &expected));
+        assert!(install_for_services(&mut attempted_services.borrow_mut(), attempted_ctx.clone(), true)?.is_none());
+        assert!(Object::is(&Reflect::get(&receiver, &API.into())?, &expected));
+        Ok(JsValue::UNDEFINED)
+    });
+    with_replacement(&target, API, foreign.as_ref(), collision.as_ref().unchecked_ref())??;
+    assert!(!Reflect::has(&window, &API.into())?);
+
+    let mut cleanup = Events::new(Host::default())?;
+    cleanup.installed = Some(foreign.clone().into());
+    let receiver = target.clone();
+    let replacement: JsValue = foreign.clone().into();
+    let replace = Closure::<dyn FnMut(JsValue) -> Result<JsValue, JsValue>>::new(move |_| {
+        assert!(Reflect::set(&receiver, &API.into(), &replacement)?);
+        Err(js_sys::Error::new("injected ready failure after replacing the global API").into())
+    });
+    let attempted_services = services.clone();
+    let attempt = Closure::<dyn FnMut() -> Result<JsValue, JsValue>>::new(move || {
+        assert!(install_for_services(&mut attempted_services.borrow_mut(), ctx.clone(), false).is_err());
+        Ok(JsValue::UNDEFINED)
+    });
+    with_replacement(&target, "dispatchEvent", replace.as_ref(), attempt.as_ref().unchecked_ref())??;
+    assert!(services.borrow().file_providers.is_none());
+    assert!(Object::is(&Reflect::get(&window, &API.into())?, foreign.as_ref()), "rollback must not delete a ready hook's replacement");
+    Ok(())
+}
+
 #[wasm_bindgen_test]
 fn page_local_provider_delivery_failures_release_workbook_owners_and_recover() -> Result<(), JsValue> {
-    let host = Host::default();
-    let mut events = Events::new(host.clone())?;
     let ctx = egui::Context::default();
     ctx.set_fonts(gridcraft_ui_egui::theme::pinned_font_definitions());
-    // Capture our API even if install publishes it and the ready dispatch then fails.
-    // Events::new already established the page was blank; Drop removes only this identity.
-    let installed = install(host.clone(), ctx.clone());
+    let mut services = Services::default();
+    let _installation = install_for_services(&mut services, ctx.clone(), false)?;
+    let host = services.file_providers.clone().ok_or_else(|| error("provider service was not attached"))?;
+    let mut events = Events::new(host.clone())?;
     let api = Reflect::get(&events.window, &API.into())?;
     events.installed = Some(api.clone());
-    installed?;
     let connection = call(&api, "registerProvider", &Array::of3(&"test".into(), &"Test storage".into(), &"account".into()))?;
     let resources = Array::new();
     let resource = Object::new();
@@ -202,7 +345,7 @@ fn page_local_provider_delivery_failures_release_workbook_owners_and_recover() -
     assert!(Reflect::set(&resource, &"name".into(), &"Later.xlsm".into())?);
     resources.push(&resource);
     call(&api, "setResources", &Array::of2(&connection, &resources))?;
-    let mut app = SheetApp::new(Session::new(), Services { file_providers: Some(host.clone()), ..Default::default() });
+    let mut app = SheetApp::new(Session::new(), services);
     app.use_prepared_fonts();
     app.session.run("file.new", json!({})).map_err(error)?;
     {

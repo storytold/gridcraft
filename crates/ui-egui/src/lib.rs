@@ -21,6 +21,7 @@ mod cell_pictures;
 pub mod chartview;
 pub mod code_editor;
 pub mod control;
+pub mod control_ui;
 mod craft_fonts_policy;
 pub mod credits;
 pub mod dialogs;
@@ -32,6 +33,7 @@ pub mod equation;
 pub mod file_providers;
 mod floating_pictures;
 pub mod fonts;
+pub mod form_controls;
 pub mod formula_bar;
 mod formula_locale;
 pub mod function_library;
@@ -89,12 +91,18 @@ pub struct UiState {
     pub ribbon_tab: String,
     pub ribbon_collapsed: bool,
     pub formula_bar_expanded: bool,
+    /// Lines the expanded formula bar shows: the height its bottom edge was last dragged to.
+    /// Expanding it again (the chevron, Ctrl+Shift+U) returns to that height.
+    pub formula_bar_lines: usize,
     pub status_bar: bool,
     /// Motion in the UI: the selection outline glides to a new selection (View ▸ Animations).
     pub animations: bool,
     /// Enable AutoComplete for cell values (File ▸ Options ▸ Editing): typed text is completed
     /// from the one matching entry in the same column.
     pub autocomplete: bool,
+    /// Tint the active cell's whole row (File ▸ Options ▸ General), on every sheet and workbook, so
+    /// the eye keeps its place across a wide table. A preference: nothing goes into the file.
+    pub highlight_active_row: bool,
     /// AutoSave (the title-bar switch): save saved-to-file .xlsx workbooks shortly after every
     /// change. A preference like the rest of this struct — it stays on across restarts (#1901).
     pub autosave: bool,
@@ -103,6 +111,10 @@ pub struct UiState {
     /// [`keytips::Action::Control`], consumed (and cleared) by the control's render site.
     #[serde(skip)]
     pub keytip_invoke: Option<&'static str>,
+    /// A keytip control request for the next frame: its tab was switched to this frame, so its
+    /// control is drawn only then.
+    #[serde(skip)]
+    pub keytip_invoke_next: Option<&'static str>,
     /// Interface language. English by default (so tests and headless renders never depend on the
     /// host's locale); the desktop app starts from [`i18n::Language::system`] when `ui.json` has
     /// no usable language (see [`i18n::saved_language`]). An unknown saved value reads as English
@@ -138,12 +150,15 @@ impl Default for UiState {
             ribbon_tab: "Home".into(),
             ribbon_collapsed: false,
             formula_bar_expanded: false,
+            formula_bar_lines: formula_bar::MAX_LINES,
             status_bar: true,
             animations: true,
             autocomplete: true,
+            highlight_active_row: false,
             autosave: false,
             recent: vec![],
             keytip_invoke: None,
+            keytip_invoke_next: None,
             language: i18n::Language::En,
             interface_scale: 100,
         }
@@ -208,8 +223,9 @@ pub struct SheetApp {
     pub ui: UiState,
     /// The window chrome to draw (see [`Chrome`]).
     pub chrome: Chrome,
-    /// Scroll position per (window id, sheet index).
-    pub views: HashMap<(u64, usize), SheetView>,
+    /// Scroll position per (window id, sheet uid): each sheet keeps its own when sheets are
+    /// inserted, deleted or moved.
+    pub views: HashMap<(u64, u64), SheetView>,
     pub editor: Option<editor::EditState>,
     pub text_box_editor: Option<text_box::EditState>,
     pub dialog: Option<dialogs::Dialog>,

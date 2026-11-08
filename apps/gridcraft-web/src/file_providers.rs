@@ -1,8 +1,15 @@
 //! Same-origin file-provider bridge. Persistence belongs to the registered provider, not WASM.
 //!
-//! Callbacks enqueue commands for a later egui frame. Exporting bytes never acknowledges them.
+//! Trusted page scripts opt in; the host authenticates and authorizes storage. Callbacks enqueue
+//! commands for a later egui frame. Exporting bytes never acknowledges them. Startup retains its
+//! callbacks only while the shell owns the installation; a failed ready dispatch is retryable.
 
-use gridcraft_ui_egui::file_providers::{Host, Resource};
+use std::any::Any;
+
+use gridcraft_ui_egui::{
+    Services,
+    file_providers::{Host, Resource},
+};
 use js_sys::{Array, Function, Object, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue, closure::Closure, prelude::wasm_bindgen};
 
@@ -55,13 +62,50 @@ fn wake_later(ctx: &egui::Context) {
     wasm_bindgen_futures::spawn_local(async move { ctx.request_repaint() });
 }
 
+/// Owns the page-local API and its Rust callbacks. Failed startup drops the same owner, so no
+/// forgotten closure or initialized Host is reused by a later installation attempt.
+pub struct Installation {
+    window: web_sys::Window,
+    api: Object,
+    host: Host,
+    _callbacks: Vec<Box<dyn Any>>,
+}
+
+impl Drop for Installation {
+    fn drop(&mut self) {
+        let key = JsValue::from_str(API);
+        if let Ok(current) = Reflect::get(&self.window, &key)
+            && Object::is(&current, self.api.as_ref())
+            && !matches!(Reflect::delete_property(self.window.unchecked_ref::<Object>(), &key), Ok(true))
+        {
+            log::warn!("could not remove the retired file-provider API");
+        }
+    }
+}
+
+/// Attach only a complete installation. Existing host modes own Save and do not install this
+/// independent capability. Failure leaves the normal browser services unchanged.
+pub fn install_for_services(services: &mut Services, ctx: egui::Context, host_connected: bool) -> Result<Option<Installation>, JsValue> {
+    if host_connected {
+        return Ok(None);
+    }
+    if services.file_providers.is_some() {
+        return Err(error("file provider services already exist"));
+    }
+    let installation = install(ctx)?;
+    services.file_providers = Some(installation.host.clone());
+    Ok(Some(installation))
+}
+
 /// Makes the capability discoverable without enabling it or changing the browser's writer.
-pub fn install(host: Host, ctx: egui::Context) -> Result<(), JsValue> {
+fn install(ctx: egui::Context) -> Result<Installation, JsValue> {
     let window = web_sys::window().ok_or_else(|| error("no window"))?;
     if Reflect::has(&window, &API.into())? {
         return Err(error("file-provider API already exists"));
     }
-    // A delayed result from an earlier page must never address a new document's request.
+    // A failed attempt never exposes this fresh Host to services. A delayed result from an
+    // earlier attempt must never address a later installation's request.
+    let host = Host::default();
     let crypto = Reflect::get(&window, &"crypto".into())?;
     let random = Reflect::get(&crypto, &"getRandomValues".into())?.dyn_into::<Function>()?;
     let nonce = Uint8Array::new_with_length(16);
@@ -72,6 +116,7 @@ pub fn install(host: Host, ctx: egui::Context) -> Result<(), JsValue> {
     set(&api, "protocolVersion", &1.into())?;
     set(&api, "app", &"gridcraft".into())?;
     set(&api, "capabilities", &object(&serde_json::json!(["revisionAck", "externalRecents", "saveDestination", "openBytes"]))?)?;
+    let mut callbacks: Vec<Box<dyn Any>> = Vec::new();
 
     let h = host.clone();
     let wake = ctx.clone();
@@ -84,7 +129,7 @@ pub fn install(host: Host, ctx: egui::Context) -> Result<(), JsValue> {
         Ok(connection)
     });
     set(&api, "registerProvider", register.as_ref())?;
-    register.forget();
+    callbacks.push(Box::new(register));
 
     let h = host.clone();
     let wake = ctx.clone();
@@ -94,7 +139,7 @@ pub fn install(host: Host, ctx: egui::Context) -> Result<(), JsValue> {
         Ok(true)
     });
     set(&api, "unregisterProvider", unregister.as_ref())?;
-    unregister.forget();
+    callbacks.push(Box::new(unregister));
 
     let h = host.clone();
     let wake = ctx.clone();
@@ -105,7 +150,7 @@ pub fn install(host: Host, ctx: egui::Context) -> Result<(), JsValue> {
         Ok(true)
     });
     set(&api, "setEnabled", enabled.as_ref())?;
-    enabled.forget();
+    callbacks.push(Box::new(enabled));
 
     let h = host.clone();
     let wake = ctx.clone();
@@ -125,7 +170,7 @@ pub fn install(host: Host, ctx: egui::Context) -> Result<(), JsValue> {
         Ok(())
     });
     set(&api, "setResources", resources.as_ref())?;
-    resources.forget();
+    callbacks.push(Box::new(resources));
 
     let h = host.clone();
     let wake = ctx.clone();
@@ -136,7 +181,7 @@ pub fn install(host: Host, ctx: egui::Context) -> Result<(), JsValue> {
         Ok(request)
     });
     set(&api, "requestOpen", request_open.as_ref())?;
-    request_open.forget();
+    callbacks.push(Box::new(request_open));
 
     let h = host.clone();
     let wake = ctx.clone();
@@ -152,7 +197,7 @@ pub fn install(host: Host, ctx: egui::Context) -> Result<(), JsValue> {
         Ok(())
     });
     set(&api, "openResource", open.as_ref())?;
-    open.forget();
+    callbacks.push(Box::new(open));
 
     let h = host.clone();
     let wake = ctx.clone();
@@ -164,7 +209,7 @@ pub fn install(host: Host, ctx: egui::Context) -> Result<(), JsValue> {
         Ok(())
     });
     set(&api, "cancelOpen", cancel_open.as_ref())?;
-    cancel_open.forget();
+    callbacks.push(Box::new(cancel_open));
 
     let h = host.clone();
     let wake = ctx.clone();
@@ -177,7 +222,7 @@ pub fn install(host: Host, ctx: egui::Context) -> Result<(), JsValue> {
         Ok(())
     });
     set(&api, "saveResult", result.as_ref())?;
-    result.forget();
+    callbacks.push(Box::new(result));
 
     let h = host.clone();
     let wake = ctx.clone();
@@ -190,14 +235,21 @@ pub fn install(host: Host, ctx: egui::Context) -> Result<(), JsValue> {
         Ok(())
     });
     set(&api, "resolveSaveDialog", dialog.as_ref())?;
-    dialog.forget();
+    callbacks.push(Box::new(dialog));
 
     let h = host.clone();
     let snapshot = Closure::<dyn FnMut() -> Result<JsValue, JsValue>>::new(move || object(&h.snapshot()));
     set(&api, "snapshot", snapshot.as_ref())?;
-    snapshot.forget();
-    set(&window, API, &Object::freeze(&api))?;
-    dispatch(&serde_json::json!({"type": "ready", "protocolVersion": 1}), None)
+    callbacks.push(Box::new(snapshot));
+    let installation = Installation { window, api: Object::freeze(&api), host, _callbacks: callbacks };
+    // Publish before ready so synchronous listeners can register and enqueue work. The owner
+    // rolls back only this exact API if dispatch fails, never a listener's replacement object.
+    set(&installation.window, API, installation.api.as_ref())?;
+    dispatch(&serde_json::json!({"type": "ready", "protocolVersion": 1}), None)?;
+    if !Object::is(&Reflect::get(&installation.window, &API.into())?, installation.api.as_ref()) {
+        return Err(error("file-provider API changed during startup"));
+    }
+    Ok(installation)
 }
 
 fn dispatch(metadata: &serde_json::Value, bytes: Option<Vec<u8>>) -> Result<(), JsValue> {

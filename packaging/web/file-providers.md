@@ -13,6 +13,20 @@ The object is frozen, has `protocolVersion: 1`, and announces readiness on the
 event has already fired. The matching API/event names are the only app-specific transport
 names; the protocol matches PhotoCraft's optional provider bridge.
 
+The browser shell attaches provider services only after installation and its `ready` announcement
+succeed. A synchronous `ready` listener may register a provider and enqueue requests; the attached
+service retains that exact Host and its work. A recoverable startup failure instead retires the
+attempt's callbacks and removes only the API object that attempt installed. Local browser services
+remain in place. A later attempt creates a fresh Host, nonce and connection identities, so callbacks
+and replies retained from the failed attempt cannot address it. An existing global API is never
+overwritten, and cleanup never removes a different object a page script put there during startup.
+Such a replacement must be resolved by that page before another installation can succeed.
+
+The shell owns the installed callbacks for its lifetime and retires its API on shutdown. Parent
+host mode (`?host=parent`) and same-document host mode (`data-host="page"` on the canvas) retain
+their existing file delivery ownership. When either mode connects, the independent provider API
+is not installed. The separate `window.gridcraft` command API is unaffected.
+
 ## Host authority and activation
 
 The provider is trusted code on the editor's origin, not an untrusted message sender. It owns
