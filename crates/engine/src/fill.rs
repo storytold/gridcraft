@@ -237,6 +237,18 @@ pub fn preview_cell(wb: &Workbook, sheet: usize, src: RangeRef, target: RangeRef
 
 /// Fills `target` (which contains `src` at one edge) from the pattern in `src`.
 pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: FillMode) -> Result<()> {
+    fill_except(cx, sheet, src, target, mode, &std::collections::BTreeSet::new())
+}
+
+/// [`fill`], leaving the rows in `skip_rows` untouched (Fill Down over a filtered range).
+pub fn fill_except(
+    cx: &mut Ctx,
+    sheet: usize,
+    src: RangeRef,
+    target: RangeRef,
+    mode: FillMode,
+    skip_rows: &std::collections::BTreeSet<u32>,
+) -> Result<()> {
     let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
     let FillShape { vertical, forward, lane_count, steps } = FillShape::new(src, target);
     if u64::from(lane_count).saturating_mul(u64::from(steps)) > MAX_FILL_CELLS {
@@ -253,7 +265,7 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
                 (c, sh.cell(c).cloned())
             })
             .collect();
-        let targets: Vec<CellRef> = if vertical {
+        let mut targets: Vec<CellRef> = if vertical {
             let rows: Vec<u32> =
                 if forward { (src.end.row + 1..=target.end.row).collect() } else { (target.start.row..src.start.row).rev().collect() };
             rows.into_iter().map(|r| CellRef::new(r, lane)).collect()
@@ -262,6 +274,7 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
                 if forward { (src.end.col + 1..=target.end.col).collect() } else { (target.start.col..src.start.col).rev().collect() };
             cols.into_iter().map(|c| CellRef::new(lane, c)).collect()
         };
+        targets.retain(|t| !skip_rows.contains(&t.row));
         let lane = FillLane::new(&cx.wb, src_cells, mode);
         for (k, t) in targets.iter().enumerate() {
             let (sc, cell) = lane.cell(sh, *t, k, forward, mode);
