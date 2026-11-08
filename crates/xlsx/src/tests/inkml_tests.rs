@@ -32,9 +32,9 @@ fn content_types(ink: bool, png: bool) -> String {
 }
 
 /// An Excel-shaped drawing part: one `twoCellAnchor` whose `AlternateContent` names the ink part.
-fn drawing() -> String {
+fn drawing(creation: &str) -> String {
     format!(
-        r#"<?xml version="1.0"?><xdr:wsDr xmlns:xdr="{XDR}" xmlns:a="{A}" xmlns:r="{NS_REL}"><xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>3</xdr:col><xdr:colOff>76200</xdr:colOff><xdr:row>5</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>228600</xdr:colOff><xdr:row>7</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><mc:AlternateContent xmlns:mc="{MC}"><mc:Choice xmlns:xdr14="{XDR14}" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" Requires="xdr14 aink"><xdr:contentPart r:id="rId1"><xdr14:nvContentPartPr><xdr14:cNvPr id="3" name="Ink 2"><a:extLst><a:ext uri="{{FF2B5EF4-FFF2-40B4-BE49-F238E27FC236}}"><a16:creationId xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" id="{GUIDE}"/></a:ext></a:extLst></xdr14:cNvPr><xdr14:cNvContentPartPr/></xdr14:nvContentPartPr><xdr14:nvPr macro=""/><xdr14:xfrm><a:off x="1905000" y="952500"/><a:ext cx="762000" cy="381000"/></xdr14:xfrm></xdr:contentPart></mc:Choice><mc:Fallback><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="3" name="Ink 2"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="762000" cy="381000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic></mc:Fallback></mc:AlternateContent><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"#
+        r#"<?xml version="1.0"?><xdr:wsDr xmlns:xdr="{XDR}" xmlns:a="{A}" xmlns:r="{NS_REL}"><xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>3</xdr:col><xdr:colOff>76200</xdr:colOff><xdr:row>5</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>228600</xdr:colOff><xdr:row>7</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><mc:AlternateContent xmlns:mc="{MC}"><mc:Choice xmlns:xdr14="{XDR14}" xmlns:aink="http://schemas.microsoft.com/office/drawing/2016/ink" Requires="xdr14 aink"><xdr:contentPart r:id="rId1"><xdr14:nvContentPartPr><xdr14:cNvPr id="3" name="Ink 2"><a:extLst><a:ext uri="{{FF2B5EF4-FFF2-40B4-BE49-F238E27FC236}}"><a16:creationId xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" id="{creation}"/></a:ext></a:extLst></xdr14:cNvPr><xdr14:cNvContentPartPr/></xdr14:nvContentPartPr><xdr14:nvPr macro=""/><xdr14:xfrm><a:off x="1905000" y="952500"/><a:ext cx="762000" cy="381000"/></xdr14:xfrm></xdr:contentPart></mc:Choice><mc:Fallback><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="3" name="Ink 2"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="762000" cy="381000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic></mc:Fallback></mc:AlternateContent><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"#
     )
 }
 
@@ -77,7 +77,10 @@ fn package(trace: &str, f: bool, props: &str, ink: bool, declared: bool, media: 
 #[derive(Clone, Copy, Default)]
 struct Extra<'a> {
     damage_ink: bool,
-    second_trace: Option<&'a str>,
+    /// InkML written into the part after its first trace: another `<trace>`, a `<traceGroup>`.
+    extra_markup: Option<&'a str>,
+    /// The drawing's `a16:creationId`, when a test needs an invalid or differently-cased one.
+    creation_id: Option<&'a str>,
 }
 
 /// The same package. With `damage_ink`, the ink part is stored uncompressed and one byte of it is
@@ -97,12 +100,10 @@ fn package_with(trace: &str, f: bool, props: &str, ink: bool, declared: bool, me
     );
     let root = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
     let ct = content_types(declared, media);
-    let drawing = drawing();
+    let drawing = drawing(extra.creation_id.unwrap_or(GUIDE));
     let mut ink_part = inkml(trace, f, props);
-    if let Some(second) = extra.second_trace {
-        // A second trace in the same part: same context and brush, its own points.
-        ink_part =
-            ink_part.replace("</inkml:ink>", &format!("<inkml:trace contextRef=\"#ctx0\" brushRef=\"#br0\">{second}</inkml:trace></inkml:ink>"));
+    if let Some(markup) = extra.extra_markup {
+        ink_part = ink_part.replace("</inkml:ink>", &format!("{markup}</inkml:ink>"));
     }
     let png = tiny_png();
     let mut parts: Vec<(&str, &[u8])> = vec![
@@ -243,7 +244,7 @@ fn every_tool_and_effect_round_trips_through_gridcraft() {
     let mut id = 1;
     for tool in tools {
         for effect in effects {
-            let key = format!("{{00000000-0000-4000-8000-{id:012X}}}");
+            let key = format!("{{00000000-0000-4000-8000-{id:012x}}}");
             shapes.push(Shape {
                 id,
                 kind: ShapeKind::Ink,
@@ -422,7 +423,7 @@ fn a_fountain_or_brush_pen_without_pressure_keeps_its_tool_and_an_empty_pressure
                 text: "0,0;30,20".into(),
                 format: Default::default(),
                 math: Default::default(),
-                ink: Some(InkStyle { tool, key: Some("{AAAAAAAA-1111-4111-8111-111111111111}".into()), ..InkStyle::default() }),
+                ink: Some(InkStyle { tool, key: Some("{aaaaaaaa-1111-4111-8111-111111111111}".into()), ..InkStyle::default() }),
             }],
             ..Sheet::new("Pen")
         };
@@ -431,7 +432,7 @@ fn a_fountain_or_brush_pen_without_pressure_keeps_its_tool_and_an_empty_pressure
         let ink = back.sheets[0].shapes[0].ink.as_ref().expect("editable ink");
         assert_eq!(ink.tool, tool, "the GridCraft-only brush property keeps the subtype");
         assert!(ink.pressure.is_empty(), "no F channel was recorded, so none comes back: {:?}", ink.pressure);
-        assert_eq!(ink.key.as_deref(), Some("{AAAAAAAA-1111-4111-8111-111111111111}"));
+        assert_eq!(ink.key.as_deref(), Some("{aaaaaaaa-1111-4111-8111-111111111111}"));
     }
 }
 
@@ -564,8 +565,8 @@ fn excel_brush_properties_infer_pen_pencil_and_highlighter_without_a_channel() {
 fn a_part_with_two_traces_reads_as_two_strokes() {
     // An InkML trace is a stroke: a part that holds two of them is two editable strokes, not one
     // first stroke and a silently dropped second.
-    let second = "!500 !500,'50'50";
-    let (wb, _) = read(&package_with("!0 !0,'100'100", false, PEN_PROPS, true, true, true, Extra { second_trace: Some(second), ..Extra::default() }));
+    let second = "<inkml:trace contextRef=\"#ctx0\" brushRef=\"#br0\">!500 !500,'50'50</inkml:trace>";
+    let (wb, _) = read(&package_with("!0 !0,'100'100", false, PEN_PROPS, true, true, true, Extra { extra_markup: Some(second), ..Extra::default() }));
     let shapes = &wb.sheets[0].shapes;
     assert_eq!(shapes.len(), 2, "{shapes:?}");
     assert_eq!(thousandths(&shapes[0]), vec![[0, 0], [100, 100]]);
@@ -574,9 +575,98 @@ fn a_part_with_two_traces_reads_as_two_strokes() {
     assert_eq!(a.width_cm, b.width_cm, "both keep the part's brush");
     assert_eq!(shapes[0].line, shapes[1].line, "both keep the part's colour");
     assert_ne!(a.key, b.key, "each stroke keeps its own creation id");
+    let orders: Vec<u32> = shapes.iter().filter_map(|s| s.ink.as_ref().map(|i| i.order)).collect();
+    assert_eq!(orders, vec![0, 1], "traces keep their document order as the draw order");
     // Saving writes one part per stroke, and reopening finds both again.
     let (back, _) = read(&write_xlsx(&wb).unwrap());
     assert_eq!(back.sheets[0].shapes.len(), 2);
     let keys: std::collections::HashSet<String> = back.sheets[0].shapes.iter().filter_map(|s| s.ink.as_ref()?.key.clone()).collect();
     assert_eq!(keys.len(), 2, "{keys:?}");
+}
+
+#[test]
+fn nested_trace_groups_read_every_stroke_in_document_order() {
+    // A group names a brush and may hold other groups: every trace below it, at any depth, is a
+    // stroke, in the order the part writes them.
+    let markup = "<inkml:traceGroup>\
+        <inkml:trace contextRef=\"#ctx0\" brushRef=\"#br0\">!100 !0</inkml:trace>\
+        <inkml:traceGroup>\
+            <inkml:trace contextRef=\"#ctx0\" brushRef=\"#br0\">!200 !0</inkml:trace>\
+            <inkml:trace contextRef=\"#ctx0\" brushRef=\"#br0\">!300 !0</inkml:trace>\
+        </inkml:traceGroup>\
+    </inkml:traceGroup>";
+    let (wb, _) = read(&package_with("!0 !0", false, PEN_PROPS, true, true, true, Extra { extra_markup: Some(markup), ..Extra::default() }));
+    let shapes = &wb.sheets[0].shapes;
+    assert_eq!(shapes.len(), 4, "{shapes:?}");
+    for (shape, x) in shapes.iter().zip([0, 100, 200, 300]) {
+        assert_eq!(thousandths(shape), vec![[x, 0]], "document order: {shapes:?}");
+    }
+    let orders: Vec<u32> = shapes.iter().filter_map(|s| s.ink.as_ref().map(|i| i.order)).collect();
+    assert_eq!(orders, vec![0, 1, 2, 3], "nested traces keep their document order");
+    let keys: std::collections::HashSet<String> = shapes.iter().filter_map(|s| s.ink.as_ref()?.key.clone()).collect();
+    assert_eq!(keys.len(), 4, "{keys:?}");
+    let (back, _) = read(&write_xlsx(&wb).unwrap());
+    assert_eq!(back.sheets[0].shapes.len(), 4, "a save writes one part per stroke");
+}
+
+fn zip_part(bytes: &[u8], name: &str) -> Vec<u8> {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
+    let mut file = archive.by_name(name).unwrap();
+    let mut out = Vec::new();
+    std::io::Read::read_to_end(&mut file, &mut out).unwrap();
+    out
+}
+
+#[test]
+fn a_malformed_creation_id_is_replaced_with_a_valid_one() {
+    let extra = Extra { creation_id: Some("{x}"), ..Extra::default() };
+    let (wb, _) = read(&package_with("!0 !0,'1000 1000", false, PEN_PROPS, true, true, true, extra));
+    let key = ink_shape(&wb).ink.as_ref().and_then(|i| i.key.clone()).expect("a valid key is minted");
+    assert_eq!(gridcraft_model::ink_guid(&key).as_deref(), Some(key.as_str()), "{key} is an ST_Guid");
+    assert_ne!(key, "{x}");
+}
+
+#[test]
+fn a_valid_creation_id_is_normalised_to_lowercase_not_duplicated() {
+    let upper = "{ABCDEF01-2345-6789-ABCD-EF0123456789}";
+    let lower = "{abcdef01-2345-6789-abcd-ef0123456789}";
+    for creation in [upper, lower] {
+        let extra = Extra { creation_id: Some(creation), ..Extra::default() };
+        let (wb, _) = read(&package_with("!0 !0,'1000 1000", false, PEN_PROPS, true, true, true, extra));
+        assert_eq!(ink_shape(&wb).ink.as_ref().unwrap().key.as_deref(), Some(lower), "{creation}");
+    }
+}
+
+#[test]
+fn an_invalid_stored_key_is_replaced_before_it_is_written() {
+    // A key can reach the model from JSON or a hand edit; it must never become an invalid
+    // `a16:creationId` in the file.
+    let sheet = Sheet {
+        shapes: vec![Shape {
+            id: 11,
+            kind: ShapeKind::Ink,
+            anchor: Anchor { cell: CellRef::parse("B2").unwrap(), dx: 0.0, dy: 0.0, width: 60.0, height: 30.0, mode: AnchorMode::Absolute },
+            fill: Color::Rgb(2 << 16),
+            line: Color::Rgb(0x1F5FC9),
+            text: "0,0;30,20".into(),
+            format: Default::default(),
+            math: Default::default(),
+            ink: Some(InkStyle { tool: InkTool::Pen, key: Some("{x}".into()), ..InkStyle::default() }),
+        }],
+        ..Sheet::new("Keys")
+    };
+    let wb = Workbook { sheets: vec![Arc::new(sheet)], ..Default::default() };
+    let saved = write_xlsx(&wb).unwrap();
+    let drawing = String::from_utf8(zip_part(&saved, "xl/drawings/drawing1.xml")).unwrap();
+    let id = drawing
+        .split("a16:creationId")
+        .nth(1)
+        .and_then(|s| s.split("id=\"").nth(1))
+        .and_then(|s| s.split('"').next())
+        .expect("the drawing carries a creation id");
+    assert_eq!(gridcraft_model::ink_guid(id).as_deref(), Some(id), "{id} is an ST_Guid");
+    assert_ne!(id, "{x}");
+    // Reopening keeps that replacement, so the next save writes the same id.
+    let (back, _) = read(&saved);
+    assert_eq!(back.sheets[0].shapes[0].ink.as_ref().unwrap().key.as_deref(), Some(id));
 }

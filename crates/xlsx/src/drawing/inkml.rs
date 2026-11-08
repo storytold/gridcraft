@@ -38,6 +38,8 @@ const THOUSANDTHS_PER_PX: f64 = 1000.0 / PX_PER_CM;
 pub(crate) const MAX_POINTS: usize = 20_000;
 /// Most traces one InkML part may hold: a mark, not a whole drawing.
 const MAX_TRACES: usize = 1_024;
+/// Deepest `<traceGroup>` nesting read: a group names a brush, not a whole document tree.
+const MAX_TRACE_DEPTH: u8 = 8;
 /// Largest coordinate magnitude in the trace's units (Excel's traceFormat min/max).
 const MAX_COORD: i64 = 2_147_483_647;
 /// Largest brush dimension accepted, in cm.
@@ -77,21 +79,36 @@ pub(super) fn read(
     read_traces(cx, rels, content_part, sheet, anchor, declared).unwrap_or_default()
 }
 
-/// The traces of a part: a bare `<trace>` and the traces of a `<traceGroup>`, in document order.
-/// A part with more than [`MAX_TRACES`] strokes is refused: it is a drawing, not a mark.
-fn traces(root: &El) -> Option<Vec<&El>> {
-    let mut out = Vec::new();
-    for child in &root.children {
+/// Every trace below `el` in document order: a bare `<trace>` and the traces inside nested
+/// `<traceGroup>`s, to a bounded depth. False when the part holds too many traces or nests too
+/// deeply to be a mark.
+fn collect_traces<'a>(el: &'a El, depth: u8, out: &mut Vec<&'a El>) -> bool {
+    if depth > MAX_TRACE_DEPTH {
+        return false;
+    }
+    for child in &el.children {
         match child.name.as_str() {
-            "trace" => out.push(child),
-            "traceGroup" => out.extend(child.kids("trace")),
+            "trace" => {
+                out.push(child);
+                if out.len() > MAX_TRACES {
+                    return false;
+                }
+            }
+            "traceGroup" if !collect_traces(child, depth + 1, out) => return false,
             _ => {}
         }
-        if out.len() > MAX_TRACES {
-            return None;
-        }
     }
-    (!out.is_empty()).then_some(out)
+    true
+}
+
+/// The traces of a part in document order. A part with more than [`MAX_TRACES`] strokes is
+/// refused: it is a drawing, not a mark.
+fn traces(root: &El) -> Option<Vec<&El>> {
+    let mut out = Vec::new();
+    if !collect_traces(root, 0, &mut out) || out.is_empty() {
+        return None;
+    }
+    Some(out)
 }
 
 fn read_traces(
@@ -192,8 +209,9 @@ fn anchor_for(content_part: &El, base: gridcraft_model::Anchor, sheet: &Sheet) -
 
 /// The `a16:creationId` GUID a contentPart carries, bounded to a plausible GUID.
 fn creation_id_of(content_part: &El) -> Option<String> {
-    let id = content_part.path(&["nvContentPartPr", "cNvPr", "extLst", "ext", "creationId"])?.attr("id")?.trim();
-    (id.len() <= 80 && id.starts_with('{') && id.ends_with('}')).then(|| id.to_string())
+    let id = content_part.path(&["nvContentPartPr", "cNvPr", "extLst", "ext", "creationId"])?.attr("id")?;
+    // ST_Guid or nothing: a malformed id is not an identity, and must never be written back.
+    gridcraft_model::ink_guid(id)
 }
 
 /// One channel's difference-decoding state: its last value, its last first difference, and the
@@ -625,17 +643,16 @@ fn effect_name(e: InkEffect) -> &'static str {
     }
 }
 
-/// The stroke's `a16:creationId`: its stored key when it has one, else a deterministic GUID from
-/// the shape id (so a keyless stroke from an older file keeps one id across saves).
+/// The stroke's `a16:creationId`: its stored key in canonical lowercase when it is an ST_Guid,
+/// else a deterministic GUID from the shape id. Ids are unique across a workbook's shapes, and a
+/// malformed key (JSON, an older model, a hand edit) is replaced rather than written, since Excel
+/// requires ST_Guid and an invalid id is not an identity.
 pub fn creation_id(shape: &Shape) -> String {
-    if let Some(key) = shape.ink.as_ref().and_then(|i| i.key.as_deref()) {
-        let key = key.trim();
-        if key.len() <= 80 && key.starts_with('{') && key.ends_with('}') {
-            return key.to_string();
-        }
+    if let Some(guid) = shape.ink.as_ref().and_then(|i| i.key.as_deref()).and_then(gridcraft_model::ink_guid) {
+        return guid;
     }
     let id = u64::from(shape.id);
-    format!("{{{id:08X}-0000-4000-8000-{id:012X}}}")
+    format!("{{{id:08x}-0000-4000-8000-{id:012x}}}")
 }
 
 /// A transparent PNG of the stroke in its colour, at the anchor's aspect ratio. Excel needs it as
