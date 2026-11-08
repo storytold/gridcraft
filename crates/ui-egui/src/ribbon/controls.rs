@@ -80,14 +80,17 @@ pub(super) fn popup_command(forced: bool, clicked: bool) -> Option<egui::SetOpen
     if forced { Some(egui::SetOpenCommand::Bool(true)) } else { clicked.then_some(egui::SetOpenCommand::Toggle) }
 }
 
-/// Per-control state of an [`editable_combo`]: the filter text, the highlighted row, and the
-/// item values it last saw (a list can change while its popup is open).
+/// Per-control state of an [`editable_combo`]: the filter text, the highlighted row, the value
+/// that row holds, and the item values it last saw (a list can change while its popup is open).
 #[derive(Clone, Default)]
 struct ComboState {
     text: String,
     sel: i32,
     was_open: bool,
     values: Vec<String>,
+    /// The highlighted row's value, remembered by value rather than position: when the item
+    /// list changes under an open popup, the rematch follows this value to its new position.
+    highlight: Option<String>,
 }
 
 /// What the user did with an [`editable_combo`].
@@ -140,6 +143,25 @@ struct ComboPopupOptions {
     under: Option<Rect>,
 }
 
+/// The rows of `items` a filter text shows: the indexes whose display contains the text,
+/// ignoring case (an empty filter shows every row). This is the one definition of "filtered" —
+/// the popup header builds its row list with it, and the selection rematch reads positions in
+/// the list it returns, so the two can never disagree about which row a position means.
+fn filtered_positions(items: &[(&str, &str)], filter: &str) -> Vec<usize> {
+    let lower = filter.to_lowercase();
+    items.iter().enumerate().filter(|(_, (_, d))| d.to_lowercase().contains(&lower)).map(|(i, _)| i).collect()
+}
+
+/// Where the highlight goes when a combo's item list changes under an open popup: a position in
+/// `filtered` (the rows actually shown), never in the full list. The row highlighted before the
+/// change wins, so a list growing under the user's navigation — the font scan landing — keeps
+/// their row and only moves its position; when that value is no longer shown, the current value
+/// takes over, and when neither is shown the highlight restarts at the first shown row.
+fn rematch_selection(items: &[(&str, &str)], filtered: &[usize], highlight: Option<&str>, current_value: &str) -> i32 {
+    let position_of = |wanted: &str| filtered.iter().position(|&i| items.get(i).is_some_and(|(v, _)| *v == wanted)).map(|p| p as i32);
+    highlight.and_then(position_of).or_else(|| position_of(current_value)).unwrap_or(0)
+}
+
 /// Arrow and Enter keys (taken out of the input so a filter field never sees them), the filter
 /// field when `text` is given, and the rows its text matches.
 fn combo_head(ui: &mut Ui, text: Option<(&mut String, egui::Id)>, open_now: bool, sel: i32, items: &[(&str, &str)]) -> ComboHead {
@@ -155,7 +177,7 @@ fn combo_head(ui: &mut Ui, text: Option<(&mut String, egui::Id)>, open_now: bool
                 .retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::ArrowDown | egui::Key::ArrowUp | egui::Key::Enter, pressed: true, .. }));
         });
     }
-    let mut lower = String::new();
+    let mut filter = String::new();
     if let Some((text, text_id)) = text {
         let te = ui.add(egui::TextEdit::singleline(text).id(text_id).desired_width(220.0).hint_text("Type to filter…"));
         if open_now && !te.has_focus() {
@@ -168,9 +190,9 @@ fn combo_head(ui: &mut Ui, text: Option<(&mut String, egui::Id)>, open_now: bool
             }
         }
         ui.separator();
-        lower = text.to_lowercase();
+        filter = text.clone();
     }
-    let filtered: Vec<usize> = items.iter().enumerate().filter(|(_, (_, d))| d.to_lowercase().contains(&lower)).map(|(i, _)| i).collect();
+    let filtered = filtered_positions(items, &filter);
     let mut sel = sel;
     if !filtered.is_empty() {
         let n = filtered.len() as i32;
@@ -185,8 +207,9 @@ fn combo_head(ui: &mut Ui, text: Option<(&mut String, egui::Id)>, open_now: bool
     ComboHead { filtered, sel, down, up, enter }
 }
 
-/// The rows of a combo popup. Returns the picked value and the highlighted row.
-fn combo_rows(ui: &mut Ui, head: ComboHead, items: &[(&str, &str)], row_w: f32) -> (Option<String>, i32) {
+/// The rows of a combo popup. Returns the picked value, the highlighted row, and the filtered
+/// row list the highlight is a position in (so the caller can remember the highlighted value).
+fn combo_rows(ui: &mut Ui, head: ComboHead, items: &[(&str, &str)], row_w: f32) -> (Option<String>, i32, Vec<usize>) {
     let ComboHead { filtered, mut sel, down, up, enter } = head;
     let mut picked = None;
     if enter && !filtered.is_empty() {
@@ -209,7 +232,7 @@ fn combo_rows(ui: &mut Ui, head: ComboHead, items: &[(&str, &str)], row_w: f32) 
     if picked.is_some() {
         ui.close();
     }
-    (picked, sel)
+    (picked, sel, filtered)
 }
 
 fn combo_popup(
@@ -236,14 +259,21 @@ fn combo_popup(
         if !st.was_open || changed {
             if !st.was_open {
                 st.text = String::new();
+                // A fresh popup has no navigation to preserve: the rematch starts from the
+                // current value, not from wherever a previous popup session left its highlight.
+                st.highlight = None;
                 // The reset lands on the frame AFTER the popup opens, which usually has no input of
                 // its own — without a repaint request the stale filtered list stays on screen.
                 ui.ctx().request_repaint();
             }
             // Rematch on a changed list too, not just on open: the font list grows when the
-            // background font scan lands, and a highlight left at its old index would sit on a
-            // different row, so Enter would apply that row instead of the current value.
-            st.sel = items.iter().position(|(v, _)| *v == current_value).map(|i| i as i32).unwrap_or(0);
+            // background font scan lands, and a highlight left at its old position would sit on
+            // a different row, so Enter would apply that row instead. The position is computed
+            // against the filtered rows (under the filter as it stands — a mid-open change does
+            // not clear what the user typed), and the previously highlighted value wins over
+            // the current value, so navigation in progress is not reset by the scan landing.
+            let filtered = filtered_positions(items, &st.text);
+            st.sel = rematch_selection(items, &filtered, st.highlight.as_deref(), current_value);
             if changed {
                 st.values = items.iter().map(|(v, _)| (*v).to_owned()).collect();
             }
@@ -279,8 +309,11 @@ fn combo_popup(
         })
     };
     let mut result = ComboResult::None;
-    if let Some((picked, sel)) = shown {
+    if let Some((picked, sel, filtered)) = shown {
         st.sel = sel;
+        // Remember the highlighted value for the next list change: `sel` is a position in the
+        // filtered rows just shown, so resolve it back to the item it points at.
+        st.highlight = filtered.get(sel.max(0) as usize).and_then(|&i| items.get(i)).map(|(v, _)| (*v).to_string());
         if let Some(value) = picked {
             result = ComboResult::Picked(value);
         }
@@ -324,5 +357,48 @@ mod checkbox_on_tests {
         // Key tip: the bool still holds the current setting, so toggle it.
         assert!(checkbox_on(false, false));
         assert!(!checkbox_on(false, true));
+    }
+}
+
+#[cfg(test)]
+mod combo_rematch_tests {
+    use super::*;
+
+    #[test]
+    fn the_rematch_position_is_in_the_filtered_list_not_the_full_one() {
+        // Only "Meiryo" matches the filter, so its row is filtered position 0 — the old code
+        // returned its full-list position (2), highlighting a row that is not even shown.
+        let items = [("Alpha", "Alpha"), ("Beta", "Beta"), ("Meiryo", "Meiryo"), ("Zebra", "Zebra")];
+        let filtered = filtered_positions(&items, "me");
+        assert_eq!(filtered, [2]);
+        assert_eq!(rematch_selection(&items, &filtered, None, "Meiryo"), 0);
+    }
+
+    #[test]
+    fn rows_inserted_before_the_highlight_keep_it_on_the_same_value() {
+        // The font scan lands while the popup is open: new families sort in before the row the
+        // user had navigated to. The highlight follows the value to its new position, even
+        // though the current value is a different row.
+        let items = [("Arial", "Arial"), ("Beta", "Beta"), ("Cambria", "Cambria"), ("Meiryo", "Meiryo"), ("Zebra", "Zebra")];
+        let filtered = filtered_positions(&items, "");
+        assert_eq!(rematch_selection(&items, &filtered, Some("Meiryo"), "Beta"), 3);
+    }
+
+    #[test]
+    fn a_highlight_that_is_gone_falls_back_to_the_current_value() {
+        // Filtered position again: "Tahoma" is full-list index 2 but filtered position 1.
+        let items = [("Arial", "Arial"), ("Meiryo", "Meiryo"), ("Tahoma", "Tahoma")];
+        let filtered = filtered_positions(&items, "a");
+        assert_eq!(filtered, [0, 2]);
+        assert_eq!(rematch_selection(&items, &filtered, Some("Gone"), "Tahoma"), 1);
+    }
+
+    #[test]
+    fn a_highlight_and_current_value_both_gone_restart_at_the_first_shown_row() {
+        let items = [("Arial", "Arial"), ("Meiryo", "Meiryo"), ("Tahoma", "Tahoma")];
+        let filtered = filtered_positions(&items, "");
+        assert_eq!(rematch_selection(&items, &filtered, Some("Gone"), "Also Gone"), 0);
+        // Nothing shown at all still yields a valid (clamped downstream) position.
+        assert_eq!(rematch_selection(&items, &[], Some("Meiryo"), "Meiryo"), 0);
     }
 }
