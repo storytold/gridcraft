@@ -293,6 +293,26 @@ pub(crate) fn altgr_text(ctx: &egui::Context, m: Modifiers, mac: bool) -> bool {
     !mac && m.alt && m.ctrl && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_))))
 }
 
+/// The catalog command a shortcut runs, when it is one. Dialogs map back to the command whose
+/// built-in chord opens them, so a user binding can replace that chord.
+pub(crate) fn shortcut_command(shortcut: &Shortcut) -> Option<&'static str> {
+    match shortcut {
+        Shortcut::Run(id, _) => Some(id),
+        Shortcut::Dialog("pasteSpecial", _) => Some("edit.pasteSpecial"),
+        Shortcut::Dialog("defineName", _) => Some("formulas.defineName"),
+        Shortcut::Dialog("formatCells", _) => Some("home.formatCells"),
+        Shortcut::Dialog("nameManager", _) => Some("formulas.nameManager"),
+        Shortcut::Dialog("insertFunction", _) => Some("formulas.insertFunction"),
+        Shortcut::Dialog("spelling", _) => Some("review.spelling"),
+        Shortcut::Dialog("goTo", _) => Some("edit.goTo"),
+        Shortcut::Dialog("find", params) if params.get("replace").and_then(Json::as_bool) == Some(true) => Some("edit.replace"),
+        Shortcut::Dialog("find", _) => Some("edit.find"),
+        Shortcut::Dialog("comment", params) if params.get("threaded").and_then(Json::as_bool) == Some(false) => Some("review.newNote"),
+        Shortcut::Dialog("comment", _) => Some("review.newComment"),
+        _ => None,
+    }
+}
+
 /// Handles a key press in the grid. Returns whether it was a shortcut.
 pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physical: Option<Key>, m: Modifiers, geo: &Geo, sh: &Sheet) -> bool {
     let mac = ctx.os() == egui::os::OperatingSystem::Mac;
@@ -300,6 +320,11 @@ pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physic
         return false;
     }
     let Some(shortcut) = lookup(key, physical, m, mac) else { return false };
+    // A command the user moved no longer answers its old chord. Consuming it keeps the ribbon
+    // from running the same key afterwards.
+    if shortcut_command(&shortcut).is_some_and(|id| app.ui.command_hotkeys.contains_key(id)) {
+        return true;
+    }
     let (active, anchor) = app.session.active().map(|d| (d.selection.active, d.selection.anchor)).unwrap_or_default();
     match shortcut {
         Shortcut::Run(id, params) => {

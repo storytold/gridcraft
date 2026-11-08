@@ -7,8 +7,8 @@ use super::state::{NoticeKind, OpenWindow, SaveAnswer, SheetView};
 use super::updates_ui;
 use super::{
     CellRef, HashMap, INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, Notice, Perf, RangeRef, Session, SheetApp, UiRequest, UiState, backstage,
-    clamp_interface_scale, clean_error, control, desktop_theme, dialogs, editor, floating_pictures, formula_bar, formula_locale, grid, i18n, json,
-    keytips, macro_ui, panes, pivot_pane, printing, ribbon, tabs, text_box, theme, widgets,
+    clamp_interface_scale, clean_error, control, desktop_theme, dialogs, editor, floating_pictures, formula_bar, formula_locale, grid, hotkeys, i18n,
+    json, keytips, macro_ui, panes, pivot_pane, printing, ribbon, tabs, text_box, theme, widgets,
 };
 
 mod clipboard;
@@ -208,6 +208,8 @@ impl SheetApp {
         }
         // The language the widgets translate with this frame (see `i18n::current`).
         i18n::set_current(&ctx, self.ui.language);
+        // Ribbon tooltips read user shortcuts from here; the buttons themselves only know their name.
+        hotkeys::publish(&ctx, self);
         #[cfg(not(target_arch = "wasm32"))]
         updates_ui::show(self, &ctx);
         let t = theme::Tokens::get(&ctx);

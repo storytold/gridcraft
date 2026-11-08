@@ -177,7 +177,9 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                     ui.separator();
                     continue;
                 }
-                if ui.add(egui::Button::new(lang.tr(label)).frame_when_inactive(false).min_size(vec2(190.0, 20.0))).clicked() {
+                let response = ui.add(egui::Button::new(lang.tr(label)).frame_when_inactive(false).min_size(vec2(190.0, 20.0)));
+                let response = crate::hotkeys::with_shortcut(app, ui, response, label, id);
+                if response.clicked() {
                     close = true;
                     match id {
                         "ui:pasteSpecial" => app.open_dialog("pasteSpecial", json!({})),
@@ -410,7 +412,9 @@ pub(super) fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                     ui.separator();
                     continue;
                 }
-                if ui.add(egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(190.0, 20.0))).clicked() {
+                let response = ui.add(egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(190.0, 20.0)));
+                let response = crate::hotkeys::with_shortcut(app, ui, response, label, action);
+                if response.clicked() {
                     close = true;
                     match action {
                         "ui:selectData" => app.open_dialog("selectData", json!({"chart": id})),
@@ -535,7 +539,9 @@ pub(super) fn header_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool)
                     ui.separator();
                     continue;
                 }
-                if ui.add(egui::Button::new(lang.tr(label)).frame_when_inactive(false).min_size(vec2(180.0, 20.0))).clicked() {
+                let response = ui.add(egui::Button::new(lang.tr(label)).frame_when_inactive(false).min_size(vec2(180.0, 20.0)));
+                let response = crate::hotkeys::with_shortcut(app, ui, response, label, id);
+                if response.clicked() {
                     close = true;
                     match id {
                         "ui:insertPaste" => app.open_dialog("insertPaste", json!({})),

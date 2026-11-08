@@ -281,6 +281,7 @@ pub(super) fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[(&str, &str, 
         }
         let lang = app.ui.language;
         let response = ui.add(egui::Button::new(lang.tr(label)).frame_when_inactive(false).min_size(vec2(220.0, 22.0)));
+        let response = crate::hotkeys::with_shortcut(app, ui, response, label, id);
         if let Some(sequence) = keytip_table::item_letter(app.keytips.prefix().unwrap_or_default(), id) {
             keytip(app, ui, sequence, pos2(response.rect.right() - 10.0, response.rect.center().y));
         }
