@@ -1,11 +1,20 @@
 //! Insert tab: tables, charts, sparklines, pictures, shapes, hyperlinks, comments and notes,
 //! conditional formatting (Home › Styles) and symbols.
 
-use gridcraft_core::{CellRef, MAX_ROWS, RangeRef};
-use gridcraft_model::*;
+use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
+use gridcraft_formula::adjust::{Axis, Edit};
+use gridcraft_model::{
+    Anchor, BorderLine, BorderStyle, Borders, Cell, CellPicture, CfOperator, CfRule, CfValueKind, Chart, ChartKind, Color, Comment, CondFormat, Fill,
+    Formula, Hyperlink, Image, LegendPos, ObjKind, ObjRef, Series, Shape, ShapeKind, Sheet, Sparkline, SparklineKind, Style, Table, TableColumn,
+    TotalsFn, Underline, Workbook,
+};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::sheet::{rewrite, shift_cell_features};
+use super::{
+    CommandSpec, EngineError, PROTECTED, Result, Session, anchor_mode_name, anchor_mode_param, bad, bool_param, cell_param, cell_param_on, cmd, edit,
+    f64_param, has_doc, locked_cell_error, ok, split_sheet, str_param, target_range, target_ranges, target_sheet, u32_param,
+};
 use crate::selection::current_region;
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -24,9 +33,9 @@ pub fn specs() -> Vec<CommandSpec> {
             "Format as Table",
             ["Home", "Styles"],
             None,
-            "{range?, style: \"TableStyleMedium2\", header?}",
+            "{range?, style: \"TableStyleMedium2\", header?} (inside a table: restyles it)",
             has_doc,
-            insert_table
+            format_as_table
         ),
         cmd!("table.totalRow", "Total Row", ["Table", "Table Style Options"], None, "{table?, on?: bool}", has_doc, |s, p| table_flag(
             s, p, "totals"
@@ -90,7 +99,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Chart Properties",
             ["Chart Design"],
             None,
-            "{chart?: id, type?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, style?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?}",
+            "{chart?: id, type?, subtype?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, dataTable?: bool, dataTableKeys?: bool, dataTableHorizontalBorder?: bool, dataTableVerticalBorder?: bool, dataTableOutline?: bool (data tables: column/bar/line/area and compatible combo charts), quartiles?: exclusive|inclusive, style?, holeSize?, firstSliceAngle?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?}",
             has_doc,
             chart_set
         ),
@@ -137,14 +146,22 @@ pub fn specs() -> Vec<CommandSpec> {
             &with(p, "kind", json!("textBox"))
         )),
         cmd!("shape.setText", "Edit Text Box", [], None, "{id: textBox id, text: string}", has_doc, shape_set_text),
-        cmd!("object.delete", "Delete Object", [], None, "{kind: chart|image|shape, id}", has_doc, delete_object),
-        cmd!("object.move", "Move Object", [], None, "{kind: chart|image|shape, id, at?: \"C3\", dx?, dy?, width?, height?}", has_doc, move_object),
+        cmd!("object.delete", "Delete Object", [], None, "{kind: chart|image|shape|slicer|equation|control, id}", has_doc, delete_object),
+        cmd!(
+            "object.move",
+            "Move Object",
+            [],
+            None,
+            "{kind: chart|image|shape|slicer|equation|control, id, at?: \"C3\", dx?, dy?, width?, height? (each at most 10,000 points, or the object's current size when a file made it larger)}",
+            has_doc,
+            move_object
+        ),
         cmd!(
             "object.setAnchorMode",
             "Object Properties",
             [],
             None,
-            "{kind: chart|image|shape, id, mode: moveAndSize|moveOnly|absolute}",
+            "{kind: chart|image|shape|slicer|equation|control, id, mode: moveAndSize|moveOnly|absolute}",
             has_doc,
             set_anchor_mode
         ),
@@ -162,7 +179,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open Hyperlink",
             [],
             None,
-            "{url?: \"https://…\" | \"mailto:…\" | \"Sheet2!A1\", cell?} (default: the cell's link); only http, https and mailto are opened, any other scheme is an error; the UI asks before opening",
+            "{url?: \"https://…\" | \"mailto:…\" | \"Sheet2!A1\", cell?} (default: the cell's link); a reference selects; a web or e-mail address is an error unless the host allows it: the user opens those by clicking the link and confirming; any scheme but http, https and mailto is always an error",
             has_doc,
             open_link
         ),
@@ -188,7 +205,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Conditional Formatting",
             ["Home", "Styles"],
             None,
-            "{range?, rule: {type: cellIs|expression|containsText|beginsWith|endsWith|blanks|noBlanks|errors|noErrors|duplicate|unique|top10|aboveAverage|timePeriod|colorScale|dataBar|iconSet, operator?, value?, value2?, formula?, text?, rank?, bottom?, percent?, below?, period?, colors?: [..], color?, set?, style?: {font..fill..}|preset: lightRedFill|redText|yellowFill|greenFill|redBorder|lightRedFillDarkRedText…}}",
+            "{range?, rule: {type: cellIs|expression|containsText|beginsWith|endsWith|blanks|noBlanks|errors|noErrors|duplicate|unique|top10|aboveAverage|timePeriod|colorScale|dataBar|iconSet, operator?, value?, value2?, formula?, text?, rank?, bottom?, percent?, below?, period?, colors?: [..], color?, set?, style?: {font?: {bold?, italic?, color?}, fill?: \"#FFC7CE\" | {pattern?, fg?, bg?}, borders?, num_fmt?} (colours \"#RRGGBB\") | preset?: lightRedFill|redText|yellowFill|greenFill|redBorder|lightRedFillDarkRedText…}; a text `value` is matched as text, or kept when already a quoted literal}",
             has_doc,
             add_cf
         ),
@@ -222,6 +239,33 @@ fn block(s: &Session, p: &Json) -> Result<RangeRef> {
         return Ok(sel);
     }
     Ok(current_region(sh, d.selection.active))
+}
+
+fn chart_areas(s: &Session, p: &Json) -> Result<Vec<RangeRef>> {
+    let mut areas = if p.get("range").is_some() {
+        target_ranges(s, p)?
+    } else if s.doc()?.selection.ranges.len() > 1 {
+        s.doc()?.selection.ranges.clone()
+    } else {
+        vec![block(s, p)?]
+    };
+    // Whole columns/rows span a million cells: clip their far edges to the cells in use, so only
+    // a block that really is too large gets refused. Bounded areas keep their extent as given.
+    let sheet = target_sheet(s, p)?;
+    if let Some(used) = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.used_range()) {
+        // Areas that start outside the used range keep their extent as given.
+        for r in &mut areas {
+            let whole_cols = r.start.row == 0 && r.end.row >= MAX_ROWS - 1;
+            let whole_rows = r.start.col == 0 && r.end.col >= MAX_COLS - 1;
+            if whole_cols && r.start.row <= used.end.row {
+                r.end.row = r.end.row.min(used.end.row);
+            }
+            if whole_rows && r.start.col <= used.end.col {
+                r.end.col = r.end.col.min(used.end.col);
+            }
+        }
+    }
+    Ok(areas)
 }
 
 // ---------------------------------------------------------------- tables
@@ -272,17 +316,17 @@ fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
             let sh = cx.sheet_mut(sheet)?;
             // The header row pushes the data down one row: never off the end of the sheet.
             let last = RangeRef::new(CellRef::new(MAX_ROWS - 1, r.start.col), CellRef::new(MAX_ROWS - 1, r.end.col));
-            if sh.cells.iter_range(last).any(|(_, x)| x.formula.is_some() || !x.value.is_empty()) {
+            if sh.cells.iter_range(last).any(|(_, x)| x.has_content()) {
                 return Err(EngineError::Other("To prevent possible loss of data, cells can't be pushed off the end of the worksheet.".into()));
             }
             sh.cells.shift_rows_in_cols(r.start.col, r.end.col, r.start.row, 1);
-            sh.cell_pictures = std::mem::take(&mut sh.cell_pictures)
-                .into_iter()
-                .filter_map(|(c, v)| {
-                    let dest = if c.col >= r.start.col && c.col <= r.end.col && c.row >= r.start.row { c.offset(1, 0) } else { Some(c) };
-                    dest.map(|c| (c, v))
-                })
-                .collect();
+            // Like Insert Cells > Shift down: move merges, conditional formats, notes, links and pictures, and re-point every formula
+            // reference (on any sheet) at the cells that moved.
+            let e = Edit::InsertCells { axis: Axis::Rows, range: RangeRef::new(r.start, CellRef::new(r.start.row, r.end.col)) };
+            shift_cell_features(sh, &e);
+            let name = sh.name.clone();
+            rewrite(cx, &name, &e)?;
+            let sh = cx.sheet_mut(sheet)?;
             for (i, c) in (r.start.col..=r.end.col).enumerate() {
                 sh.set_value(CellRef::new(r.start.row, c), gridcraft_core::Value::text(format!("Column{}", i + 1)));
             }
@@ -338,12 +382,27 @@ fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Format as Table inside a table restyles that table, as in Excel; elsewhere it makes a new one.
+fn format_as_table(s: &mut Session, p: &Json) -> Result<Json> {
+    // Without a range, the active area decides (as in insert_table), not the first one.
+    let r = if p.get("range").is_some() { target_range(s, p)? } else { s.doc()?.selection.current() };
+    let sheet = target_sheet(s, p)?;
+    let inside = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.tables.iter().find(|t| t.range.contains_range(&r))).map(|t| (t.name.clone(), t.range));
+    match inside {
+        Some((table, range)) => {
+            table_style(s, &with(p, "table", json!(table)))?;
+            Ok(json!({"table": table, "range": range.a1()}))
+        }
+        None => insert_table(s, p),
+    }
+}
+
 fn find_table(s: &Session, p: &Json) -> Result<(usize, usize)> {
     let d = s.doc()?;
     if let Some(n) = str_param(p, "table") {
         return d.wb.table(n).ok_or_else(|| bad("table", format!("no table named `{n}`")));
     }
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
     let ti = sh
         .tables
@@ -417,7 +476,10 @@ fn write_totals(sh: &mut Sheet, ti: usize) {
         let c = CellRef::new(row, t.range.start.col + i as u32);
         if let Some(code) = col.totals.subtotal_code() {
             let f = format!("=SUBTOTAL({code},{}[{}])", t.name, col.name);
-            sh.set_cell(c, Cell { formula: Some(std::sync::Arc::new(Formula::new(&f))), value: gridcraft_core::Value::Empty, style: sh.style_id(c) });
+            sh.set_cell(
+                c,
+                Cell { formula: Some(std::sync::Arc::new(Formula::new(&f))), value: gridcraft_core::Value::Empty, style: sh.style_id(c), py: None },
+            );
         } else if let Some(l) = &col.totals_label {
             sh.set_value(c, gridcraft_core::Value::text(l.as_str()));
         } else {
@@ -466,11 +528,13 @@ fn table_style(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 /// Table names follow the Microsoft name rules, as the xlsx writer does: letters, digits, `_` and `.`,
-/// starting with a letter, `_` or `\`. Anything else (a hyphen, say) would read as an operator inside a
-/// structured reference, and the writer would rename the table on save.
+/// starting with a letter, `_` or `\`, and at most 255 characters. Anything else (a hyphen, say) would
+/// read as an operator inside a structured reference, and the writer would rename the table on save.
 fn valid_table_name(name: &str) -> bool {
-    name.starts_with(|c: char| c.is_alphabetic() || c == '_' || c == '\\')
+    name.chars().count() <= 255
+        && name.starts_with(|c: char| c.is_alphabetic() || c == '_' || c == '\\')
         && CellRef::parse(name).is_none()
+        && !super::formulas::is_r1c1(name)
         && name.chars().enumerate().all(|(i, c)| c.is_alphanumeric() || c == '_' || c == '.' || (i == 0 && c == '\\'))
 }
 
@@ -480,7 +544,8 @@ fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
     if !valid_table_name(&name) {
         return Err(EngineError::Other("The name that you entered is not valid.".into()));
     }
-    if s.doc()?.wb.table(&name).is_some_and(|x| x != (si, ti)) {
+    let wb = &s.doc()?.wb;
+    if wb.table(&name).is_some_and(|x| x != (si, ti)) || wb.names.iter().any(|n| n.name.eq_ignore_ascii_case(&name)) {
         return Err(EngineError::Other("The name entered already exists. Enter a unique name.".into()));
     }
     edit(s, |cx| {
@@ -551,6 +616,7 @@ pub fn chart_kind(t: &str, sub: &str) -> ChartKind {
         ("pie", _) => ChartKind::Pie,
         ("doughnut", _) => ChartKind::Doughnut,
         ("area", "stacked") => ChartKind::AreaStacked,
+        ("area", "stacked100") => ChartKind::AreaStacked100,
         ("area", _) => ChartKind::Area,
         ("scatter", "lines") => ChartKind::ScatterLines,
         ("scatter", _) => ChartKind::Scatter,
@@ -603,6 +669,7 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
                 color: None,
                 secondary: false,
                 kind: None,
+                quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
             });
@@ -618,12 +685,43 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
                 color: None,
                 secondary: false,
                 kind: None,
+                quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
             });
         }
     }
     out
+}
+
+fn series_from_areas(sh: &Sheet, areas: &[RangeRef]) -> Result<(RangeRef, bool, Vec<Series>)> {
+    let Some(first) = areas.first().copied() else { return Err(EngineError::Other("Select data for the chart first.".into())) };
+    let bounds = areas.iter().skip(1).fold(first, |r, area| r.union(area));
+    if areas.len() == 1 {
+        let by_rows = first.width() > first.height() + 1;
+        return Ok((bounds, by_rows, series_from_range(sh, first, by_rows)));
+    }
+    let valid_shape = first.width() == 1
+        && first.height() > 1
+        && areas.iter().skip(1).all(|area| area.width() == 1 && area.height() == first.height())
+        && first.iter().all(|cell| sh.value(cell).is_text() || sh.value(cell).is_empty());
+    if !valid_shape {
+        return Err(bad("insert.chart", "multi-area charts require a text category column followed by equal-height series columns"));
+    }
+    let category = series_from_range(sh, first, false).into_iter().next().map(|series| series.values);
+    let mut series = Vec::with_capacity(areas.len() - 1);
+    for area in &areas[1..] {
+        let mut area_series = series_from_range(sh, *area, false);
+        let Some(mut item) = area_series.pop() else {
+            return Err(EngineError::Other("Select data for the chart first.".into()));
+        };
+        if item.name.is_none() {
+            return Err(bad("insert.chart", "multi-area series columns require headers"));
+        }
+        item.categories = category.clone();
+        series.push(item);
+    }
+    Ok((bounds, false, series))
 }
 
 /// A scatter plot of a block without category labels takes its first column (or row) as the X
@@ -646,15 +744,14 @@ const MAX_CHART_CELLS: u64 = 1_000_000;
 /// without labels → scatter; one short series → column, pie, bar; long series → line; several
 /// series → clustered and stacked columns and bars, line.
 pub fn recommend_charts(s: &Session, p: &Json) -> Result<Vec<(&'static str, &'static str, &'static str)>> {
-    let r = block(s, p)?;
-    if r.count() > MAX_CHART_CELLS {
+    let areas = chart_areas(s, p)?;
+    if areas.iter().fold(0_u64, |count, area| count.saturating_add(area.count())) > MAX_CHART_CELLS {
         return Err(bad("insert.chart", "range too large for a chart"));
     }
     let sheet = target_sheet(s, p)?;
     let d = s.doc()?;
     let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
-    let by_rows = r.width() > r.height() + 1;
-    let series = series_from_range(sh, r, by_rows);
+    let (_, by_rows, series) = series_from_areas(sh, &areas)?;
     let ranges: Vec<RangeRef> = series
         .iter()
         .filter_map(|x| match gridcraft_formula::parse(&x.values) {
@@ -706,8 +803,8 @@ pub fn recommend_charts(s: &Session, p: &Json) -> Result<Vec<(&'static str, &'st
 /// The chart `insert.chart` would insert for these params, without inserting it: the sheet it
 /// goes on and the chart (previews in the Recommended Charts dialog).
 pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
-    let r = block(s, p)?;
-    if r.count() > MAX_CHART_CELLS {
+    let areas = chart_areas(s, p)?;
+    if areas.iter().fold(0_u64, |count, area| count.saturating_add(area.count())) > MAX_CHART_CELLS {
         return Err(bad("insert.chart", "range too large for a chart"));
     }
     let mut t = str_param(p, "type").unwrap_or("column").to_string();
@@ -720,18 +817,14 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
     let sheet = target_sheet(s, p)?;
     let d = s.doc()?;
     let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
-    // Excel plots series by the longer dimension (more rows → series in columns).
-    let data_h = r.height();
-    let data_w = r.width();
-    let by_rows = data_w > data_h + 1;
     let kind = chart_kind(&t, &sub);
-    let mut series = series_from_range(sh, r, by_rows);
+    let (bounds, by_rows, mut series) = series_from_areas(sh, &areas)?;
     if series.is_empty() {
         return Err(EngineError::Other("Select data for the chart first.".into()));
     }
     scatter_x_from_first(kind, &mut series);
     let id = d.wb.next_object_id();
-    let at = cell_param_on(s, p, "at", sheet)?.unwrap_or_else(|| CellRef::new(r.start.row, r.end.col + 2));
+    let at = cell_param_on(s, p, "at", sheet)?.unwrap_or_else(|| CellRef::new(bounds.start.row, bounds.end.col + 2));
     let title = str_param(p, "title").map(str::to_string).or_else(|| {
         if series.len() == 1 {
             series[0].name.as_ref().map(|n| gridcraft_calc::evaluate(&d.wb, sheet, at, n).display())
@@ -754,11 +847,14 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         series,
         legend: if matches!(kind, ChartKind::Pie | ChartKind::Doughnut) { LegendPos::Right } else { LegendPos::Bottom },
         data_labels: false,
+        data_table: None,
         gridlines: !matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel),
         style: 1,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: None,
         y_title: None,
-        source: Some(format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), r.a1())),
+        source: (areas.len() == 1).then(|| format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), bounds.a1())),
         by_rows,
         pivot: None,
     };
@@ -776,7 +872,7 @@ fn insert_chart(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn find_chart(s: &Session, p: &Json) -> Result<(usize, usize)> {
     let d = s.doc()?;
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
     let idx = match u32_param(p, "chart") {
         Some(id) => sh.charts.iter().position(|c| c.id == id),
@@ -788,11 +884,28 @@ fn find_chart(s: &Session, p: &Json) -> Result<(usize, usize)> {
 fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, ci) = find_chart(s, p)?;
     let at = cell_param_on(s, p, "at", si)?;
+    let quartiles = p
+        .get("quartiles")
+        .map(|v| match v.as_str() {
+            Some("exclusive") => Ok(gridcraft_model::QuartileMethod::Exclusive),
+            Some("inclusive") => Ok(gridcraft_model::QuartileMethod::Inclusive),
+            _ => Err(bad("quartiles", "expected exclusive or inclusive")),
+        })
+        .transpose()?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
         let Some(c) = sh.charts.get_mut(ci) else { return Ok(Json::Null) };
         if let Some(t) = str_param(p, "type") {
             c.kind = chart_kind(t, str_param(p, "subtype").unwrap_or(""));
+            if !c.supports_data_table() {
+                c.data_table = None;
+            }
+        }
+        update_data_table(c, p, bool_param(p, "dataTable"))?;
+        if let Some(method) = quartiles {
+            for series in &mut c.series {
+                series.quartiles = method;
+            }
         }
         if let Some(t) = p.get("title") {
             c.title = t.as_str().map(str::to_string);
@@ -815,6 +928,12 @@ fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(v) = u32_param(p, "style") {
             c.style = v.clamp(1, 16);
         }
+        if let Some(v) = u32_param(p, "holeSize") {
+            c.hole_size = v.clamp(10, 90) as u8;
+        }
+        if let Some(v) = u32_param(p, "firstSliceAngle") {
+            c.first_slice_angle = (v % 360) as u16;
+        }
         if let Some(t) = p.get("xTitle") {
             c.x_title = t.as_str().map(str::to_string);
         }
@@ -825,10 +944,10 @@ fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
             c.anchor.cell = at;
         }
         if let Some(w) = f64_param(p, "width") {
-            c.anchor.width = w.clamp(20.0, 10000.0) as f32;
+            c.anchor.width = w.clamp(20.0, size_cap(c.anchor.width)) as f32;
         }
         if let Some(h) = f64_param(p, "height") {
-            c.anchor.height = h.clamp(20.0, 10000.0) as f32;
+            c.anchor.height = h.clamp(20.0, size_cap(c.anchor.height)) as f32;
         }
         if let Some(v) = f64_param(p, "dx") {
             c.anchor.dx = v as f32;
@@ -838,6 +957,32 @@ fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         }
         Ok(Json::Null)
     })
+}
+
+/// Shared by Chart Properties and Add Chart Element; no separate UI state.
+pub(super) fn update_data_table(c: &mut Chart, p: &Json, on: Option<bool>) -> Result<()> {
+    if p.get("dataTable").is_some_and(|v| !v.is_boolean()) {
+        return Err(bad("chart", "`dataTable` must be a boolean"));
+    }
+    if on == Some(false) {
+        c.data_table = None;
+        return Ok(());
+    }
+    let fields = ["dataTableKeys", "dataTableHorizontalBorder", "dataTableVerticalBorder", "dataTableOutline"];
+    if on == Some(true) || fields.iter().any(|k| p.get(k).is_some()) {
+        if !c.supports_data_table() {
+            return Err(bad("chart", "data tables need a column, bar, line, area or compatible combo chart"));
+        }
+        let table = c.data_table.get_or_insert_with(Default::default);
+        for (key, value) in
+            fields.into_iter().zip([&mut table.show_keys, &mut table.horizontal_border, &mut table.vertical_border, &mut table.outline])
+        {
+            if let Some(v) = p.get(key) {
+                *value = v.as_bool().ok_or_else(|| bad("chart", format!("`{key}` must be a boolean")))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn chart_switch(s: &mut Session, p: &Json) -> Result<Json> {
@@ -912,7 +1057,7 @@ fn insert_sparkline(s: &mut Session, p: &Json) -> Result<Json> {
         _ => SparklineKind::Line,
     };
     let markers = bool_param(p, "markers").unwrap_or(false);
-    let sheet = s.doc()?.wb.active_sheet;
+    let sheet = s.doc()?.wb.active_sheet();
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         sh.sparklines.retain(|x| x.cell != loc);
@@ -937,7 +1082,7 @@ fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
     if placement == "cell" {
         let mime = validate_cell_picture(&data)?;
         let d = s.doc()?;
-        let sheet = d.wb.active_sheet;
+        let sheet = d.wb.active_sheet();
         let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
         let at = match str_param(p, "at") {
             Some(a) => CellRef::parse(a).ok_or_else(|| bad("insert.picture", "invalid cell address"))?,
@@ -963,6 +1108,10 @@ fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
         .unwrap_or_else(|| if data.starts_with(&[0x89, b'P', b'N', b'G']) { "image/png".into() } else { "image/jpeg".into() });
     let (w, h) = crate::io::image_size(&data).unwrap_or((320, 240));
     let d = s.doc()?;
+    // Sheet protection locks drawing objects, as for a text box's text.
+    if d.wb.active().is_some_and(|sh| sh.is_protected()) {
+        return Err(EngineError::Other(PROTECTED.into()));
+    }
     let id = d.wb.next_object_id();
     let at = cell_param(s, p, "at")?.unwrap_or(d.selection.active);
     let scale = (640.0 / w.max(1) as f32).min(1.0);
@@ -977,11 +1126,11 @@ fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
             // Excel inserts pictures as "Move but don't size with cells" (`editAs="oneCell"`).
             mode: anchor_mode_param(p).unwrap_or(gridcraft_model::AnchorMode::MoveOnly),
         },
-        data,
+        data: data.into(),
         mime,
         alt: str_param(p, "alt").unwrap_or("").into(),
     };
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     edit(s, |cx| {
         cx.sheet_mut(sheet)?.images.push(img);
         Ok(json!({"image": id}))
@@ -1036,6 +1185,7 @@ fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
         Color::Theme(4, -250)
     });
     let shape = Shape {
+        math: Default::default(),
         id,
         kind,
         anchor: Anchor {
@@ -1051,7 +1201,7 @@ fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
         text: str_param(p, "text").unwrap_or("").into(),
         format: Default::default(),
     };
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     edit(s, |cx| {
         cx.sheet_mut(sheet)?.shapes.push(shape);
         Ok(json!({"shape": id}))
@@ -1069,7 +1219,7 @@ fn shape_set_text(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad("shape.setText", "`text` is longer than 32,767 characters"));
     }
     let d = s.doc()?;
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     let sh = d.wb.active().ok_or_else(|| bad("shape.setText", "no such text box"))?;
     let shape = sh.shapes.iter().find(|shape| shape.id == id).ok_or_else(|| bad("shape.setText", "no such text box"))?;
     if shape.kind != ShapeKind::TextBox {
@@ -1089,51 +1239,65 @@ fn shape_set_text(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// The floating object a `{kind, id}` command names on the active sheet. Unknown kinds and
+/// objects are errors, so a stale id never succeeds silently.
+fn object_param(s: &Session, p: &Json, cmd: &str) -> Result<(usize, ObjRef)> {
+    let id = u32_param(p, "id").ok_or_else(|| bad(cmd, "missing `id`"))?;
+    let kind =
+        str_param(p, "kind").and_then(ObjKind::parse).ok_or_else(|| bad(cmd, "kind must be chart, image, shape, slicer, equation or control"))?;
+    let d = s.doc()?;
+    let sheet = d.wb.active_sheet();
+    let o = ObjRef::new(kind, id);
+    if !d.wb.sheet(sheet).is_some_and(|sh| sh.has_object(o)) {
+        return Err(bad(cmd, "no such object"));
+    }
+    // A locked form control on a protected sheet stays as it is.
+    super::controls::check_objects_unlocked(s, sheet, kind, &[id])?;
+    Ok((sheet, o))
+}
+
 fn delete_object(s: &mut Session, p: &Json) -> Result<Json> {
-    let id = u32_param(p, "id").ok_or_else(|| bad("object.delete", "missing `id`"))?;
-    let kind = str_param(p, "kind").unwrap_or("").to_string();
-    let sheet = s.doc()?.wb.active_sheet;
+    let (sheet, o) = object_param(s, p, "object.delete")?;
     edit(s, |cx| {
-        let sh = cx.sheet_mut(sheet)?;
-        match kind.as_str() {
-            "chart" => sh.charts.retain(|c| c.id != id),
-            "image" => sh.images.retain(|c| c.id != id),
-            "slicer" => sh.slicers.retain(|c| c.id != id),
-            _ => sh.shapes.retain(|c| c.id != id),
-        }
-        Ok(Json::Null)
+        cx.sheet_mut(sheet)?.remove_object(o);
+        Ok(json!({"deleted": o}))
     })
 }
 
+/// Largest offset (points) `object.move` accepts from the anchor cell.
+const MAX_OBJECT_OFFSET: f64 = 100_000.0;
+
+/// Largest width or height (points) `object.move` and `chart.set` give an object that is not
+/// already larger: see [`size_cap`].
+const MAX_OBJECT_SIZE: f64 = 10_000.0;
+
+/// The most a command may make a dimension that is `current` now: [`MAX_OBJECT_SIZE`], or the
+/// current size when a file made the object larger (the XLSX reader accepts anchors far past the
+/// limit). Such an object keeps its size when it is moved and shrinks by what a resize asks, but
+/// it never grows further, so hostile input is still capped. Never NaN: `f64::max` drops one.
+fn size_cap(current: f32) -> f64 {
+    MAX_OBJECT_SIZE.max(f64::from(current))
+}
+
 fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
-    let id = u32_param(p, "id").ok_or_else(|| bad("object.move", "missing `id`"))?;
-    let kind = str_param(p, "kind").unwrap_or("").to_string();
-    let sheet = s.doc()?.wb.active_sheet;
+    let (sheet, o) = object_param(s, p, "object.move")?;
     let at = cell_param(s, p, "at")?;
     edit(s, |cx| {
-        let sh = cx.sheet_mut(sheet)?;
-        let anchor = match kind.as_str() {
-            "chart" => sh.charts.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
-            "image" => sh.images.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
-            "slicer" => sh.slicers.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
-            "shape" => sh.shapes.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
-            _ => None,
-        };
-        let Some(a) = anchor else { return Err(bad("object.move", "no such object")) };
+        let Some(a) = cx.sheet_mut(sheet)?.object_anchor_mut(o) else { return Err(bad("object.move", "no such object")) };
         if let Some(at) = at {
             a.cell = at;
         }
         if let Some(v) = f64_param(p, "dx") {
-            a.dx = v as f32;
+            a.dx = v.clamp(-MAX_OBJECT_OFFSET, MAX_OBJECT_OFFSET) as f32;
         }
         if let Some(v) = f64_param(p, "dy") {
-            a.dy = v as f32;
+            a.dy = v.clamp(-MAX_OBJECT_OFFSET, MAX_OBJECT_OFFSET) as f32;
         }
         if let Some(v) = f64_param(p, "width") {
-            a.width = v.clamp(1.0, 10000.0) as f32;
+            a.width = v.clamp(1.0, size_cap(a.width)) as f32;
         }
         if let Some(v) = f64_param(p, "height") {
-            a.height = v.clamp(0.0, 10000.0) as f32;
+            a.height = v.clamp(0.0, size_cap(a.height)) as f32;
         }
         Ok(Json::Null)
     })
@@ -1143,21 +1307,10 @@ fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
 /// cells" / "Don't move or size with cells"), so it follows — or ignores — its rows and columns
 /// when the sheet is sorted or edited structurally.
 fn set_anchor_mode(s: &mut Session, p: &Json) -> Result<Json> {
-    let id = u32_param(p, "id").ok_or_else(|| bad("object.setAnchorMode", "missing `id`"))?;
-    let kind = str_param(p, "kind").unwrap_or("").to_string();
-    if !matches!(kind.as_str(), "chart" | "image" | "shape") {
-        return Err(bad("object.setAnchorMode", "kind must be chart, image or shape"));
-    }
+    let (sheet, o) = object_param(s, p, "object.setAnchorMode")?;
     let mode = anchor_mode_param(p).ok_or_else(|| bad("object.setAnchorMode", "mode must be moveAndSize, moveOnly or absolute"))?;
-    let sheet = s.doc()?.wb.active_sheet;
     edit(s, |cx| {
-        let sh = cx.sheet_mut(sheet)?;
-        let anchor = match kind.as_str() {
-            "chart" => sh.charts.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
-            "image" => sh.images.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
-            _ => sh.shapes.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
-        };
-        let Some(a) = anchor else { return Err(bad("object.setAnchorMode", "no such object")) };
+        let Some(a) = cx.sheet_mut(sheet)?.object_anchor_mut(o) else { return Err(bad("object.setAnchorMode", "no such object")) };
         a.mode = mode;
         Ok(json!({"mode": anchor_mode_name(mode)}))
     })
@@ -1188,7 +1341,7 @@ fn insert_link(s: &mut Session, p: &Json) -> Result<Json> {
         });
         let sh = cx.sheet_mut(sheet)?;
         if let Some(t) = text.clone().or_else(|| sh.value(at).is_empty().then(|| target.clone())) {
-            sh.set_cell(at, Cell { value: gridcraft_core::Value::text(t.as_str()), formula: None, style: link_style });
+            sh.set_cell(at, Cell { value: gridcraft_core::Value::text(t.as_str()), formula: None, style: link_style, py: None });
         } else {
             sh.set_style(at, link_style);
         }
@@ -1198,9 +1351,11 @@ fn insert_link(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-/// Follows a link: a reference selects it, an `http`/`https`/`mailto` address is handed to the
-/// host (`UiRequest::OpenUrl`); anything else is refused ([`crate::links::classify`]). Opens no
-/// dialog; the interactive click asks for confirmation first, in the UI.
+/// Follows a link: a reference selects it; anything else is refused ([`crate::links::classify`]).
+/// An `http`/`https`/`mailto` address is refused too unless the host set
+/// [`crate::links::LinkPolicy::Allow`]: every caller of a command may be a script or an agent, so
+/// the user opens such links by clicking and confirming, and the UI then calls
+/// [`Session::open_confirmed_link`] (#2181). Opens no dialog.
 fn open_link(s: &mut Session, p: &Json) -> Result<Json> {
     let target = match str_param(p, "url").or_else(|| str_param(p, "target")) {
         Some(t) => t.to_string(),
@@ -1216,6 +1371,9 @@ fn open_link(s: &mut Session, p: &Json) -> Result<Json> {
     match crate::links::classify(&target) {
         crate::links::LinkKind::Internal(r) => super::edit::go_to(s, &json!({"reference": r.trim_start_matches('#')})),
         crate::links::LinkKind::External(u) => {
+            if s.link_policy != crate::links::LinkPolicy::Allow {
+                return Err(EngineError::Other(crate::links::NEEDS_CONFIRMATION.into()));
+            }
             s.ui_requests.push(crate::UiRequest::OpenUrl(u.clone()));
             Ok(json!({"opened": u}))
         }
@@ -1245,11 +1403,31 @@ fn comment(s: &mut Session, p: &Json, threaded: bool) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let at = cell_param_on(s, p, "cell", sheet)?.unwrap_or(s.doc()?.selection.active);
     let text = str_param(p, "text").unwrap_or("").to_string();
-    let author = str_param(p, "author").map(str::to_string).unwrap_or_else(|| s.prefs.user_name.clone());
+    let named = str_param(p, "author").map(str::to_string);
+    let author = named.clone().unwrap_or_else(|| s.prefs.user_name.clone());
     edit(s, |cx| {
-        cx.sheet_mut(sheet)?.comments.insert(
+        let comments = &mut cx.sheet_mut(sheet)?.comments;
+        // Writing a note on a cell that has one edits it, as Excel's Edit Note does: the box, the
+        // replies, the dates and who wrote it stay. A note replaces a comment and vice versa.
+        if let Some(c) = comments.get_mut(&at).filter(|c| c.threaded == threaded) {
+            c.text = text.clone();
+            if let Some(author) = named.clone() {
+                c.author = author;
+            }
+            return Ok(json!({"cell": at.a1()}));
+        }
+        comments.insert(
             at,
-            Comment { author: author.clone(), text: text.clone(), replies: vec![], threaded, resolved: false, visible: false, dates: vec![] },
+            Comment {
+                author: author.clone(),
+                text: text.clone(),
+                replies: vec![],
+                threaded,
+                resolved: false,
+                visible: false,
+                dates: vec![],
+                note_box: None,
+            },
         );
         Ok(json!({"cell": at.a1()}))
     })
@@ -1334,6 +1512,110 @@ fn preset_style(name: &str) -> Style {
     s
 }
 
+/// Whether `v` is one formula string literal: `"…"` with every inner quote doubled.
+fn is_string_literal(v: &str) -> bool {
+    v.len() >= 2 && v.starts_with('"') && v.ends_with('"') && v.get(1..v.len() - 1).is_some_and(|inner| !inner.replace("\"\"", "").contains('"'))
+}
+
+/// A conditional format's `style` as the model's `Style` JSON (`font`, `fill`, `borders`, `align`,
+/// `num_fmt`, `protection`, merged over the default by the caller), where a colour may also be
+/// written as `format_range` takes it (`"#RRGGBB"`, `{theme, tint}`, `"auto"`) and `fill` may be a
+/// colour alone (a solid fill) or `"none"` (no fill). An unknown key is an error rather than
+/// dropped: dropped, it left a rule with an empty format that matches and shows nothing.
+fn cf_style_json(st: &Json) -> Result<Json> {
+    const KEYS: [&str; 6] = ["font", "fill", "borders", "align", "num_fmt", "protection"];
+    let err = |m: String| bad("home.conditionalFormat", m);
+    let Some(obj) = st.as_object() else { return Err(err("`style` must be an object, e.g. {\"fill\": \"#FFC7CE\"}".into())) };
+    let mut st = obj.clone();
+    if let Some(k) = st.keys().find(|k| !KEYS.contains(&k.as_str())) {
+        let hint = if k == "preset" { "; a preset goes in `rule.preset`" } else { "" };
+        return Err(err(format!("unknown key `{k}` in `style` (known: {}){hint}", KEYS.join(", "))));
+    }
+    // A colour written the way the other formatting commands take it, as the model stores it.
+    let color = |v: &mut Json, what: &str| -> Result<()> {
+        if v.is_string() || v.get("theme").is_some() {
+            let c = super::format::color_param(Some(v)).ok_or_else(|| err(format!("invalid colour {v} for `{what}`")))?;
+            *v = serde_json::to_value(c).map_err(|e| EngineError::Other(e.to_string()))?;
+        }
+        Ok(())
+    };
+    if let Some(f) = st.get_mut("font").and_then(Json::as_object_mut)
+        && let Some(c) = f.get_mut("color")
+    {
+        color(c, "font.color")?;
+    }
+    if let Some(fill) = st.get_mut("fill") {
+        // `"none"` (or `"auto"`) is no fill, as `home.fillColor` reads it, not a solid automatic one.
+        if fill.is_string() && super::format::color_param(Some(fill)) == Some(Color::Auto) {
+            *fill = serde_json::to_value(Fill::default()).map_err(|e| EngineError::Other(e.to_string()))?;
+        } else if fill.is_string() || fill.get("theme").is_some() {
+            *fill = json!({"pattern": "Solid", "fg": fill.clone()});
+        }
+        if let Some(f) = fill.as_object_mut() {
+            for k in ["fg", "bg"] {
+                if let Some(c) = f.get_mut(k) {
+                    color(c, &format!("fill.{k}"))?;
+                }
+            }
+            // A colour with no pattern is a solid fill, not an invisible one.
+            if f.contains_key("fg") && !f.contains_key("pattern") {
+                f.insert("pattern".into(), json!("Solid"));
+            }
+        }
+    }
+    if let Some(b) = st.get_mut("borders").and_then(Json::as_object_mut) {
+        for (side, line) in b.iter_mut() {
+            if let Some(c) = line.get_mut("color") {
+                color(c, &format!("borders.{side}.color"))?;
+            }
+        }
+    }
+    Ok(Json::Object(st))
+}
+
+/// #1999: a formula that doesn't parse must never reach the workbook — Excel refuses to open
+/// files carrying it, even in repair mode. Validated here so the API and the New Rule dialog
+/// (which dispatches this command) share one gate, the way Excel's object model refuses.
+fn check_cf_formula(cmd: &str, what: &str, formula: &str) -> Result<()> {
+    // Strip exactly one leading '=', the way the XLSX writer does: a value like '===A1'
+    // only parses after several strips and would still be saved unparseable. (#1999 review)
+    if gridcraft_formula::parse(formula.strip_prefix('=').unwrap_or(formula)).is_err() {
+        return Err(bad(cmd, format!("invalid {what} formula `{formula}` — it does not parse; Excel would reject the saved file")));
+    }
+    Ok(())
+}
+
+fn check_cf_value(what: &str, v: &gridcraft_model::features::CfValueKind) -> Result<()> {
+    if let gridcraft_model::features::CfValueKind::Formula(f) = v {
+        check_cf_formula("home.conditionalFormat", what, f)?;
+    }
+    Ok(())
+}
+
+fn check_cf_rule(rule: &CfRule) -> Result<()> {
+    const CMD: &str = "home.conditionalFormat";
+    match rule {
+        CfRule::CellIs { a, b, .. } => {
+            check_cf_formula(CMD, "comparison value", a)?;
+            if let Some(b) = b {
+                check_cf_formula(CMD, "second comparison value", b)?;
+            }
+        }
+        CfRule::Expression { formula, .. } => check_cf_formula(CMD, "rule", formula)?,
+        CfRule::DataBar { min, max, .. } => {
+            check_cf_value("data bar minimum", min)?;
+            check_cf_value("data bar maximum", max)?;
+        }
+        CfRule::ColorScale { stops } => {
+            for (kind, _) in stops {
+                check_cf_value("color scale threshold", kind)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
     let ranges = target_ranges(s, p)?;
     let sheet = target_sheet(s, p)?;
@@ -1343,9 +1625,10 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
     };
     let g = |k: &str| rule.get(k).and_then(Json::as_str).map(str::to_string);
     let style = Box::new(match rule.get("style") {
-        Some(st) if st.is_object() => {
+        Some(st) if !st.is_null() => {
+            let st = cf_style_json(st)?;
             let base = serde_json::to_value(Style::default()).map_err(|e| EngineError::Other(e.to_string()))?;
-            serde_json::from_value(super::format::merge_json(base, st)).map_err(|e| bad("home.conditionalFormat", e.to_string()))?
+            serde_json::from_value(super::format::merge_json(base, &st)).map_err(|e| bad("home.conditionalFormat", e.to_string()))?
         }
         _ => preset_style(g("preset").as_deref().unwrap_or("lightRedFillDarkRedText")),
     });
@@ -1384,8 +1667,12 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
             let a = rule.get("value").map(super::edit::json_to_input).unwrap_or_default();
             let b = rule.get("value2").map(super::edit::json_to_input);
             let quote = |v: String| {
+                // A number, a formula, or text already written as a string literal (`"Closed"`, as
+                // in the file and in openpyxl's `CellIsRule`) is kept; other text is quoted.
                 if gridcraft_core::parse::parse_number_text(&v).is_some() || v.starts_with('=') {
                     v.trim_start_matches('=').to_string()
+                } else if is_string_literal(&v) {
+                    v
                 } else {
                     format!("\"{}\"", v.replace('"', "\"\""))
                 }
@@ -1442,6 +1729,7 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
         },
         other => return Err(bad("home.conditionalFormat", format!("unknown rule type `{other}`"))),
     };
+    check_cf_rule(&rule)?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         let priority = sh.cond_formats.iter().map(|c| c.priority).max().unwrap_or(0) + 1;
@@ -1465,12 +1753,31 @@ fn clear_cf(s: &mut Session, p: &Json) -> Result<Json> {
             sh.cond_formats.clear();
         } else {
             for cf in sh.cond_formats.iter_mut() {
+                let before = RangeRef::top_left(&cf.ranges);
                 cf.ranges.retain(|r| !ranges.iter().any(|x| x.intersects(r)));
+                // The relative formulas are written for the top-left cell: when it goes, they're
+                // rewritten for the new one, so the areas left keep reading the same cells.
+                if let (Some(from), Some(to)) = (before, RangeRef::top_left(&cf.ranges)) {
+                    rebase_cf_formulas(&mut cf.rule, from, to);
+                }
             }
             sh.cond_formats.retain(|c| !c.ranges.is_empty());
         }
         Ok(Json::Null)
     })
+}
+
+/// Moves the relative references of a rule's per-cell formulas written for `from` to `to`.
+fn rebase_cf_formulas(rule: &mut CfRule, from: CellRef, to: CellRef) {
+    let mv = |f: &str| crate::cmd::data::move_rule_formula(f, from, to);
+    match rule {
+        CfRule::CellIs { a, b, .. } => {
+            *a = mv(a);
+            *b = b.as_deref().map(mv);
+        }
+        CfRule::Expression { formula, .. } => *formula = mv(formula),
+        _ => {}
+    }
 }
 
 fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
@@ -1520,6 +1827,7 @@ fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
     let at = cell_param(s, p, "at")?.unwrap_or(d.selection.active);
     let color = super::format::color_param(p.get("color")).unwrap_or(Color::Theme(1, 0));
     let shape = Shape {
+        math: Default::default(),
         id,
         kind: ShapeKind::Icon,
         anchor: Anchor { cell: at, dx: 4.0, dy: 4.0, width: size, height: size, mode: anchor_mode_param(p).unwrap_or_default() },
@@ -1528,7 +1836,7 @@ fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
         text: name,
         format: Default::default(),
     };
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     edit(s, |cx| {
         cx.sheet_mut(sheet)?.shapes.push(shape);
         Ok(json!({"shape": id}))
@@ -1538,6 +1846,86 @@ fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chart_from_whole_columns_uses_the_rows_in_use() {
+        // #3114: selecting two whole columns of data refused the chart as "range too large".
+        let mut s = Session::new();
+        s.new_workbook();
+        let values: Vec<Vec<String>> = (1..=5).map(|i| vec![i.to_string(), (i * 10).to_string()]).collect();
+        s.execute("range.setValues", json!({"range": "A1:B5", "values": values})).unwrap();
+        s.execute("selection.set", json!({"range": "A:B"})).unwrap();
+        s.execute("insert.chart", json!({"type": "line"})).unwrap();
+        let d = s.doc().unwrap();
+        let chart = d.wb.active().unwrap().charts.last().unwrap();
+        let values: Vec<&str> = chart.series.iter().map(|x| x.values.as_str()).collect();
+        assert_eq!(values, ["Sheet1!$A$1:$A$5", "Sheet1!$B$1:$B$5"]);
+        // A block that really is too large still is.
+        s.execute("cell.set", json!({"cell": "B600000", "input": "1"})).unwrap();
+        assert!(s.execute("insert.chart", json!({"range": "A:B", "type": "line"})).is_err());
+        // A bounded block keeps its extent, even where it runs past the data.
+        s.execute("insert.chart", json!({"range": "A1:A20", "type": "line"})).unwrap();
+        let d = s.doc().unwrap();
+        let chart = d.wb.active().unwrap().charts.last().unwrap();
+        let values: Vec<&str> = chart.series.iter().map(|x| x.values.as_str()).collect();
+        assert_eq!(values, ["Sheet1!$A$1:$A$20"]);
+        // A bounded block entirely below the data keeps its extent.
+        s.execute("insert.chart", json!({"range": "C700000:C700010", "type": "line"})).unwrap();
+        let d = s.doc().unwrap();
+        let chart = d.wb.active().unwrap().charts.last().unwrap();
+        let values: Vec<&str> = chart.series.iter().map(|x| x.values.as_str()).collect();
+        assert_eq!(values, ["Sheet1!$C$700000:$C$700010"]);
+    }
+
+    #[test]
+    fn chart_data_table_commands_undo_and_follow_live_values() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Quarter", "Sales"], ["Q1", 10], ["Q2", 20]]})).unwrap();
+        s.execute("insert.chart", json!({"range": "A1:B3", "type": "column"})).unwrap();
+        s.execute("chart.addElement", json!({"element": "dataTable", "dataTableKeys": false})).unwrap();
+        let get = |s: &Session| s.active().unwrap().wb.active().unwrap().charts[0].clone();
+        let table = get(&s).data_table.unwrap();
+        assert!(!table.show_keys && table.horizontal_border && table.vertical_border && table.outline);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(get(&s).data_table, None);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(get(&s).data_table, Some(table));
+        s.execute("chart.set", json!({"dataTableKeys": true, "dataTableHorizontalBorder": false})).unwrap();
+        assert!(get(&s).data_table.as_ref().unwrap().show_keys);
+        assert!(!get(&s).data_table.as_ref().unwrap().horizontal_border);
+        s.execute("cell.set", json!({"cell": "B2", "input": "=12*3"})).unwrap();
+        let d = s.active().unwrap();
+        assert_eq!(gridcraft_chart::resolve(&d.wb, 0, &get(&s)).series[0].values[0], Some(36.0));
+        s.execute("chart.addElement", json!({"element": "dataTable", "on": false})).unwrap();
+        assert_eq!(get(&s).data_table, None);
+        // Old JSON documents have no table field.
+        let mut json = serde_json::to_value(get(&s)).unwrap();
+        json.as_object_mut().unwrap().remove("data_table");
+        assert_eq!(serde_json::from_value::<Chart>(json).unwrap().data_table, None);
+    }
+
+    #[test]
+    fn chart_data_table_refuses_unsupported_types_without_changing_history() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Q", "Sales"], ["Q1", 10], ["Q2", 20]]})).unwrap();
+        s.execute("insert.chart", json!({"range": "A1:B3", "type": "pie"})).unwrap();
+        let before = s.active().unwrap().wb.clone();
+        let history = s.execute("history.list", json!({})).unwrap();
+        for params in [json!({"dataTable": true}), json!({"dataTableKeys": true}), json!({"dataTable": "yes"})] {
+            assert!(s.execute("chart.set", params).is_err());
+            assert_eq!(s.active().unwrap().wb, before);
+            assert_eq!(s.execute("history.list", json!({})).unwrap(), history);
+        }
+        assert!(s.execute("chart.addElement", json!({"element": "dataTable"})).is_err());
+        s.execute("chart.set", json!({"type": "line", "dataTable": true})).unwrap();
+        assert!(s.active().unwrap().wb.active().unwrap().charts[0].data_table.is_some());
+        s.execute("chart.set", json!({"type": "scatter"})).unwrap();
+        assert!(s.active().unwrap().wb.active().unwrap().charts[0].data_table.is_none());
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(s.active().unwrap().wb.active().unwrap().charts[0].data_table.is_some());
+    }
 
     #[test]
     fn manage_rules_delete_then_move() {
@@ -1552,5 +1940,51 @@ mod tests {
         s.execute("home.manageRules", json!({"delete": 0, "moveDown": 0})).unwrap();
         let rules = s.execute("home.manageRules", json!({})).unwrap();
         assert_eq!(rules["rules"].as_array().map(Vec::len), Some(0));
+    }
+
+    #[test]
+    fn table_without_header_keeps_outside_references() {
+        // #1030: the data moved down for the new header row, but formulas outside kept the old addresses.
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        s.execute("cell.set", json!({"cell": "A1", "input": "10"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A2", "input": "20"})).unwrap();
+        s.execute("cell.set", json!({"cell": "B1", "input": "=SUM(A1:A2)"})).unwrap();
+        s.execute("cell.set", json!({"cell": "C1", "input": "=A2"})).unwrap();
+        s.execute("cell.set", json!({"sheet": "Two", "cell": "A1", "input": "=Sheet1!A2"})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:A2", "header": false})).unwrap();
+        let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+        assert_eq!(get(&mut s, "A1")["value"], "Column1");
+        assert_eq!(get(&mut s, "A2")["value"], json!(10.0));
+        assert_eq!(get(&mut s, "B1")["formula"], "=SUM(A2:A3)");
+        assert_eq!(get(&mut s, "B1")["value"], json!(30.0));
+        assert_eq!(get(&mut s, "C1")["formula"], "=A3");
+        assert_eq!(get(&mut s, "C1")["value"], json!(20.0));
+        let other = s.execute("cell.get", json!({"sheet": "Two", "cell": "A1"})).unwrap();
+        assert_eq!(other["formula"], "=Sheet1!A3");
+        assert_eq!(other["value"], json!(20.0));
+    }
+
+    #[test]
+    fn table_names_refuse_defined_names_and_r1c1() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1:A2", "values": [["h"], ["1"]]})).unwrap();
+        s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=0.2"})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:A2"})).unwrap();
+        let e = s.execute("table.rename", json!({"table": "Table1", "name": "Rate"})).unwrap_err();
+        assert!(e.to_string().contains("already exists"), "{e}");
+        let e = s.execute("table.rename", json!({"table": "Table1", "name": "rate"})).unwrap_err();
+        assert!(e.to_string().contains("already exists"), "{e}");
+        for n in ["R2C3", "c", "r", "RC", "C5"] {
+            let e = s.execute("table.rename", json!({"table": "Table1", "name": n})).unwrap_err();
+            assert!(e.to_string().contains("not valid"), "{n}: {e}");
+            let e = s.execute("insert.table", json!({"range": "C1:C2", "name": n})).unwrap_err();
+            assert!(e.to_string().contains("not valid"), "{n}: {e}");
+        }
+        s.execute("table.rename", json!({"table": "Table1", "name": "Table1"})).unwrap();
+        s.execute("table.rename", json!({"table": "Table1", "name": "Rates"})).unwrap();
     }
 }

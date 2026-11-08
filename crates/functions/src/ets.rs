@@ -278,7 +278,7 @@ fn aggregate(kind: Aggregate, xs: &mut [f64]) -> Option<f64> {
         Aggregate::Max => xs.iter().copied().reduce(f64::max),
         Aggregate::Min => xs.iter().copied().reduce(f64::min),
         Aggregate::Median => {
-            xs.sort_by(|a, b| a.total_cmp(b));
+            xs.sort_by(f64::total_cmp);
             let k = xs.len() / 2;
             let hi = xs.get(k).copied()?;
             if xs.len() % 2 == 1 { Some(hi) } else { Some((xs.get(k.checked_sub(1)?).copied()? + hi) / 2.0) }
@@ -374,14 +374,21 @@ pub(crate) fn series(values: &Value, timeline: &Value, opts: &Options, sys: Date
 /// value at either end).
 fn interpolate(slots: &[Option<f64>]) -> Vec<f64> {
     let mut out = Vec::with_capacity(slots.len());
+    // Keep the next known point until it is reached, scanning each slot only once for lookahead.
+    let mut known = slots.iter().enumerate().filter_map(|(j, s)| {
+        #[cfg(test)]
+        tests::INTERPOLATION_VISITS.with(|visits| visits.set(visits.get() + 1));
+        s.map(|v| (j, v))
+    });
+    let mut next = known.next();
     let mut prev: Option<(usize, f64)> = None;
     for (i, s) in slots.iter().enumerate() {
         if let Some(v) = s {
             out.push(*v);
             prev = Some((i, *v));
+            next = known.next();
             continue;
         }
-        let next = slots.iter().enumerate().skip(i + 1).find_map(|(j, s)| s.map(|v| (j, v)));
         out.push(match (prev, next) {
             (Some((a, va)), Some((b, vb))) => va + (vb - va) * (i - a) as f64 / (b - a) as f64,
             (Some((_, v)), None) | (None, Some((_, v))) => v,
@@ -408,7 +415,7 @@ impl Timeline {
             return None;
         }
         let mut sorted = times.to_vec();
-        sorted.sort_by(|a, b| a.total_cmp(b));
+        sorted.sort_by(f64::total_cmp);
         sorted.dedup();
         let axis = detect_axis(&sorted, sys).ok()?;
         let last = axis.position(*sorted.last()?)?.round();
@@ -924,6 +931,72 @@ pub(crate) fn specs() -> Vec<FnSpec> {
 mod tests {
     use super::*;
     use crate::util::testutil::*;
+
+    thread_local! {
+        pub(super) static INTERPOLATION_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    #[test]
+    fn interpolation_preserves_gaps_and_endpoint_values() {
+        for (slots, expected) in [
+            (
+                vec![None, Some(4.0), None, None, Some(13.0), Some(-2.0), None, Some(8.0), None, None],
+                vec![4.0, 4.0, 7.0, 10.0, 13.0, -2.0, 3.0, 8.0, 8.0, 8.0],
+            ),
+            (vec![Some(-7.0), None, Some(4.0)], vec![-7.0, -1.5, 4.0]),
+            (vec![Some(3.0), Some(-7.0), Some(2.0)], vec![3.0, -7.0, 2.0]),
+            (vec![None, None, None], vec![0.0, 0.0, 0.0]),
+            (vec![Some(6.0)], vec![6.0]),
+            (vec![], vec![]),
+        ] {
+            assert_eq!(interpolate(&slots), expected, "{slots:?}");
+        }
+    }
+
+    #[test]
+    fn interpolation_lookahead_work_is_linear() {
+        let mut measured = Vec::new();
+        for len in [2_000, 4_000] {
+            let missing = len * 3 / 10;
+            let gap = (len - missing) / 2..(len + missing) / 2;
+            let expected: Vec<f64> = (0..len).map(|i| (3 * i + 5) as f64).collect();
+            let slots: Vec<Option<f64>> = expected.iter().enumerate().map(|(i, &v)| (!gap.contains(&i)).then_some(v)).collect();
+            INTERPOLATION_VISITS.with(|visits| visits.set(0));
+            let actual = interpolate(&slots);
+            let visits = INTERPOLATION_VISITS.with(|visits| visits.get());
+            assert_eq!(actual, expected);
+            measured.push((len, visits));
+        }
+        // Record both sizes before asserting the work bound, including on the old algorithm.
+        eprintln!("interpolation lookahead visits (slots, visits): {measured:?}");
+        for (len, visits) in measured {
+            assert!(visits > 0 && visits <= 2 * len, "{len} slots required {visits} lookahead visits");
+        }
+    }
+
+    #[test]
+    fn series_completes_a_long_gap_at_the_missing_point_limit() {
+        let len = 2_000;
+        let gap = 700..1_300; // Exactly 30% of the completed timeline.
+        let mut times: Vec<f64> = (0..len).filter(|i| !gap.contains(i)).map(|i| (i + 1) as f64).collect();
+        let mut values: Vec<f64> = times.iter().map(|t| 3.0 * t + 2.0).collect();
+        let options = Options::default();
+        let completed = series(&col(&values), &col(&times), &options, DateSystem::D1900).unwrap();
+        let expected: Vec<f64> = (0..len).map(|i| (3 * i + 5) as f64).collect();
+        assert_eq!(completed.y, expected);
+        assert_eq!(completed.step, 1.0);
+        assert_eq!(completed.horizon((len + 1) as f64), Ok(1.0));
+
+        let zeroes = series(&col(&values), &col(&times), &Options { interpolate: false, ..options }, DateSystem::D1900).unwrap();
+        for (i, &value) in zeroes.y.iter().enumerate() {
+            assert_eq!(value, if gap.contains(&i) { 0.0 } else { expected[i] });
+        }
+
+        // Remove the first known point after the gap without changing either timeline endpoint.
+        times.remove(gap.start);
+        values.remove(gap.start);
+        assert!(matches!(series(&col(&values), &col(&times), &options, DateSystem::D1900), Err(CellError::Num)));
+    }
 
     fn range(xs: &[f64]) -> Arg {
         rf(col(xs))

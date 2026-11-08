@@ -349,7 +349,9 @@ fn metadata(count: usize, dynamic: bool) -> String {
     }
     xml.push_str("<metadataType name=\"XLRICHVALUE\" minSupportedVersion=\"120000\" copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" clearFormats=\"1\" clearComments=\"1\" assign=\"1\" coerce=\"1\"/></metadataTypes>");
     if dynamic {
-        xml.push_str("<futureMetadata name=\"XLDAPR\" count=\"1\"><bk><extLst><ext uri=\"{BDBB8CDC-FA1E-496E-A857-3C3F30C029C3}\"><xda:dynamicArrayProperties fDynamic=\"1\" fCollapsed=\"0\"/></ext></extLst></bk></futureMetadata>");
+        // Lower case, as the dynamic-array-only metadata in `write.rs` spells it: Excel refuses
+        // a workbook whose XLDAPR extension URI is in upper case (#2339).
+        xml.push_str("<futureMetadata name=\"XLDAPR\" count=\"1\"><bk><extLst><ext uri=\"{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}\"><xda:dynamicArrayProperties fDynamic=\"1\" fCollapsed=\"0\"/></ext></extLst></bk></futureMetadata>");
     }
     let _ = write!(xml, "<futureMetadata name=\"XLRICHVALUE\" count=\"{count}\">");
     for i in 0..count {

@@ -24,3 +24,5 @@ jobs:
     with:
       app-name: gridcraft
       app-dir: GridCraft
+      install-relative-path: Programs/ArtCraft/GridCraft
+      install-scope: perUser

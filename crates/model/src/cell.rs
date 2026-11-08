@@ -6,6 +6,7 @@ use gridcraft_core::{RangeRef, Value};
 use gridcraft_formula::Expr;
 use serde::{Deserialize, Serialize};
 
+use crate::python::PyCode;
 use crate::style::StyleId;
 
 /// A parsed formula. `text` is the canonical formula text without the leading `=`.
@@ -17,14 +18,15 @@ pub struct Formula {
     /// Legacy array formula (Ctrl+Shift+Enter) covering this range; the formula lives in the
     /// top-left cell.
     pub array: Option<RangeRef>,
-    /// An ordinary formula imported from a file must keep its implicit-intersection semantics
-    /// when exported, even if export-time analysis would promote a newly entered formula.
-    #[serde(default, skip_serializing_if = "is_false")]
+    /// Read from a file that marks this formula as a dynamic-array formula (cell metadata `cm`).
+    /// The writer keeps the mark, so a formula Excel evaluates as an array is never saved as a
+    /// legacy formula (which Excel evaluates with implicit intersection). Formulas entered or
+    /// rewritten in GridCraft start without it, and the writer decides from their shape.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dynamic: bool,
+    /// Keep an imported ordinary formula's scalar semantics on XLSX export.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub preserve_scalar: bool,
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
 }
 
 impl Formula {
@@ -33,12 +35,12 @@ impl Formula {
     pub fn new(text: &str) -> Formula {
         let body = text.strip_prefix('=').unwrap_or(text);
         match gridcraft_formula::parse(body) {
-            Ok(e) => Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None, preserve_scalar: false },
-            Err(_) => Formula { text: body.to_string(), expr: None, array: None, preserve_scalar: false },
+            Ok(e) => Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None, dynamic: false, preserve_scalar: false },
+            Err(_) => Formula { text: body.to_string(), expr: None, array: None, dynamic: false, preserve_scalar: false },
         }
     }
     pub fn from_expr(e: Expr) -> Formula {
-        Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None, preserve_scalar: false }
+        Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None, dynamic: false, preserve_scalar: false }
     }
     /// The parsed expression, re-parsing after deserialization.
     pub fn expr(&self) -> Option<Expr> {
@@ -47,6 +49,16 @@ impl Formula {
     /// The parsed expression without copying it (re-parses after deserialization).
     pub fn expr_arc(&self) -> Option<Arc<Expr>> {
         self.expr.clone().or_else(|| gridcraft_formula::parse(&self.text).ok().map(Arc::new))
+    }
+    /// Runs `f` on the parsed expression, borrowing the cached tree or, after deserialization,
+    /// a freshly parsed one that is dropped afterwards. Unlike [`expr`](Self::expr) it never copies
+    /// the tree, and unlike [`expr_arc`](Self::expr_arc) it needs no reference count or `Arc`
+    /// allocation. `None` when the text does not parse.
+    pub fn with_expr<R>(&self, f: impl FnOnce(&Expr) -> R) -> Option<R> {
+        match &self.expr {
+            Some(e) => Some(f(e)),
+            None => gridcraft_formula::parse(&self.text).ok().map(|e| f(&e)),
+        }
     }
 }
 
@@ -62,25 +74,45 @@ pub struct CellPicture {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Cell {
-    /// Constant value, or the cached result of the formula.
+    /// Constant value, or the cached result of the formula or Python code.
     pub value: Value,
     pub formula: Option<Arc<Formula>>,
     pub style: StyleId,
+    /// Python code, for a Python cell (which has no formula).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub py: Option<Arc<PyCode>>,
 }
 
 impl Cell {
     pub fn value(v: Value) -> Cell {
-        Cell { value: v, formula: None, style: StyleId::DEFAULT }
+        Cell { value: v, formula: None, style: StyleId::DEFAULT, py: None }
     }
     pub fn formula(f: Formula) -> Cell {
-        Cell { value: Value::Empty, formula: Some(Arc::new(f)), style: StyleId::DEFAULT }
+        Cell { value: Value::Empty, formula: Some(Arc::new(f)), style: StyleId::DEFAULT, py: None }
     }
-    /// No value, no formula and the default style: storing it is pointless.
+    /// A value cell with this style.
+    pub fn styled(v: Value, style: StyleId) -> Cell {
+        Cell { value: v, formula: None, style, py: None }
+    }
+    /// No value, no formula, no Python code and the default style: storing it is pointless.
     pub fn is_blank(&self) -> bool {
-        self.value.is_empty() && self.formula.is_none() && self.style == StyleId::DEFAULT
+        self.value.is_empty() && self.formula.is_none() && self.style == StyleId::DEFAULT && self.py.is_none()
     }
-    /// What the formula bar shows.
+    /// Whether the cell holds content (a value, a formula or Python code), formats aside.
+    pub fn has_content(&self) -> bool {
+        !self.value.is_empty() || self.formula.is_some() || self.py.is_some()
+    }
+    /// Removes the content (value, formula and Python code), keeping the style.
+    pub fn clear_content(&mut self) {
+        self.value = Value::Empty;
+        self.formula = None;
+        self.py = None;
+    }
+    /// What the formula bar shows: a formula, a Python cell's code, or the value.
     pub fn input_text(&self) -> String {
+        if let Some(py) = &self.py {
+            return py.code.clone();
+        }
         if let Some(f) = &self.formula {
             return format!("={}", f.text);
         }
