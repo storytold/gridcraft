@@ -491,6 +491,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Picture: {alt}" => "Image : {alt}",
         "Format Control: {name}" => "Format de contrôle : {name}",
         "Error at character {position}: {message}" => "Erreur au caractère {position} : {message}",
+        "Macro definitions are not supported in equations." => "Les définitions de macros ne sont pas prises en charge dans les équations.",
+        "A % can't be combined with a link in an equation." => "Un % ne peut pas être combiné avec un lien dans une équation.",
+        "Equations can nest at most 32 levels deep." => "Les équations peuvent comporter au plus 32 niveaux d’imbrication.",
+        "An equation can be at most 4096 bytes long." => "Une équation peut contenir au plus 4096 octets.",
+        "An equation can have at most 2500 matrix cells (rows times the widest row)." => {
+            "Une équation peut contenir au plus 2500 cellules de matrice (lignes multipliées par la ligne la plus large)."
+        }
+        "This equation is too large to draw." => "Cette équation est trop grande pour être dessinée.",
+        "This equation could not be laid out." => "Impossible de mettre en page cette équation.",
         "Saved macro “{name}” ({steps} step)" => "Macro « {name} » enregistrée ({steps} étape)",
         "Saved macro “{name}” ({steps} steps)" => "Macro « {name} » enregistrée ({steps} étapes)",
         "without {key}: another macro took it while recording" => "sans {key} : une autre macro l’a pris pendant l’enregistrement",

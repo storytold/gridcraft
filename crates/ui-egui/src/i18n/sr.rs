@@ -486,6 +486,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Picture: {alt}" => "Slika: {alt}",
         "Format Control: {name}" => "Oblikuj kontrolu: {name}",
         "Error at character {position}: {message}" => "Greška kod znaka {position}: {message}",
+        "Macro definitions are not supported in equations." => "Definicije makroa nisu podržane u jednačinama.",
+        "A % can't be combined with a link in an equation." => "Znak % ne može da se kombinuje sa vezom u jednačini.",
+        "Equations can nest at most 32 levels deep." => "Jednačine mogu da budu ugnežđene najviše 32 nivoa.",
+        "An equation can be at most 4096 bytes long." => "Jednačina može da ima najviše 4096 bajtova.",
+        "An equation can have at most 2500 matrix cells (rows times the widest row)." => {
+            "Jednačina može da ima najviše 2500 ćelija matrice (redovi puta najširi red)."
+        }
+        "This equation is too large to draw." => "Ova jednačina je prevelika za crtanje.",
+        "This equation could not be laid out." => "Ova jednačina nije mogla da se složi.",
         "Saved macro “{name}” ({steps} step)" => "Makro „{name}“ je sačuvan ({steps} korak)",
         "Saved macro “{name}” ({steps} steps)" => "Makro „{name}“ je sačuvan (broj koraka: {steps})",
         "without {key}: another macro took it while recording" => "bez {key}: drugi makro ga je zauzeo tokom snimanja",

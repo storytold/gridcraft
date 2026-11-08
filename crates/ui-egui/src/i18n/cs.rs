@@ -605,6 +605,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Picture: {alt}" => "Obrázek: {alt}",
         "Format Control: {name}" => "Formát ovládacího prvku: {name}",
         "Error at character {position}: {message}" => "Chyba na znaku {position}: {message}",
+        "Macro definitions are not supported in equations." => "Definice maker nejsou v rovnicích podporovány.",
+        "A % can't be combined with a link in an equation." => "Znak % nelze v rovnici kombinovat s odkazem.",
+        "Equations can nest at most 32 levels deep." => "Rovnice lze vnořit nejvýše do 32 úrovní.",
+        "An equation can be at most 4096 bytes long." => "Rovnice může mít nejvýše 4096 bajtů.",
+        "An equation can have at most 2500 matrix cells (rows times the widest row)." => {
+            "Rovnice může mít nejvýše 2500 buněk matice (řádky krát nejširší řádek)."
+        }
+        "This equation is too large to draw." => "Tato rovnice je příliš velká na vykreslení.",
+        "This equation could not be laid out." => "Tuto rovnici nelze vysázet.",
         "Saved macro “{name}” ({steps} step)" => "Makro „{name}“ uloženo ({steps} krok)",
         "Saved macro “{name}” ({steps} steps)" => "Makro „{name}“ uloženo (počet kroků: {steps})",
         "without {key}: another macro took it while recording" => "bez {key}: během záznamu ji převzalo jiné makro",

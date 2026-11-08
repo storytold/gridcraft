@@ -456,6 +456,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Picture: {alt}" => "Ảnh: {alt}",
         "Format Control: {name}" => "Định dạng điều khiển: {name}",
         "Error at character {position}: {message}" => "Lỗi tại ký tự {position}: {message}",
+        "Macro definitions are not supported in equations." => "Định nghĩa macro không được hỗ trợ trong phương trình.",
+        "A % can't be combined with a link in an equation." => "Không thể kết hợp % với liên kết trong phương trình.",
+        "Equations can nest at most 32 levels deep." => "Phương trình chỉ có thể lồng nhau tối đa 32 cấp.",
+        "An equation can be at most 4096 bytes long." => "Phương trình chỉ có thể dài tối đa 4096 byte.",
+        "An equation can have at most 2500 matrix cells (rows times the widest row)." => {
+            "Phương trình chỉ có thể có tối đa 2500 ô ma trận (số hàng nhân với hàng rộng nhất)."
+        }
+        "This equation is too large to draw." => "Phương trình này quá lớn để vẽ.",
+        "This equation could not be laid out." => "Không thể dàn trang phương trình này.",
         "Saved macro “{name}” ({steps} step)" => "Đã lưu macro “{name}” ({steps} bước)",
         "Saved macro “{name}” ({steps} steps)" => "Đã lưu macro “{name}” ({steps} bước)",
         "without {key}: another macro took it while recording" => "không có {key}: một macro khác đã dùng phím này khi đang ghi",

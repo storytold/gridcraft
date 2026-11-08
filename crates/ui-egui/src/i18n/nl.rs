@@ -566,6 +566,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Picture: {alt}" => "Afbeelding: {alt}",
         "Format Control: {name}" => "Besturingselement opmaken: {name}",
         "Error at character {position}: {message}" => "Fout bij teken {position}: {message}",
+        "Macro definitions are not supported in equations." => "Macrodefinities worden niet ondersteund in vergelijkingen.",
+        "A % can't be combined with a link in an equation." => "Een % kan niet worden gecombineerd met een koppeling in een vergelijking.",
+        "Equations can nest at most 32 levels deep." => "Vergelijkingen kunnen maximaal 32 niveaus diep worden genest.",
+        "An equation can be at most 4096 bytes long." => "Een vergelijking kan maximaal 4096 bytes lang zijn.",
+        "An equation can have at most 2500 matrix cells (rows times the widest row)." => {
+            "Een vergelijking kan maximaal 2500 matrixcellen hebben (rijen maal de breedste rij)."
+        }
+        "This equation is too large to draw." => "Deze vergelijking is te groot om te tekenen.",
+        "This equation could not be laid out." => "Deze vergelijking kan niet worden opgemaakt.",
         "Saved macro “{name}” ({steps} step)" => "Macro ‘{name}’ opgeslagen ({steps} stap)",
         "Saved macro “{name}” ({steps} steps)" => "Macro ‘{name}’ opgeslagen ({steps} stappen)",
         "without {key}: another macro took it while recording" => "zonder {key}: een andere macro heeft deze tijdens het opnemen overgenomen",

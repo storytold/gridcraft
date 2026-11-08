@@ -1020,6 +1020,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Picture: {alt}" => "Εικόνα: {alt}",
         "Format Control: {name}" => "Μορφοποίηση στοιχείου ελέγχου: {name}",
         "Error at character {position}: {message}" => "Σφάλμα στον χαρακτήρα {position}: {message}",
+        "Macro definitions are not supported in equations." => "Οι ορισμοί μακροεντολών δεν υποστηρίζονται στις εξισώσεις.",
+        "A % can't be combined with a link in an equation." => "Ένα % δεν μπορεί να συνδυαστεί με σύνδεσμο σε μια εξίσωση.",
+        "Equations can nest at most 32 levels deep." => "Οι εξισώσεις μπορούν να έχουν έως 32 επίπεδα ένθεσης.",
+        "An equation can be at most 4096 bytes long." => "Μια εξίσωση μπορεί να έχει έως 4096 byte.",
+        "An equation can have at most 2500 matrix cells (rows times the widest row)." => {
+            "Μια εξίσωση μπορεί να έχει έως 2500 κελιά πίνακα (γραμμές επί τη φαρδύτερη γραμμή)."
+        }
+        "This equation is too large to draw." => "Αυτή η εξίσωση είναι πολύ μεγάλη για να σχεδιαστεί.",
+        "This equation could not be laid out." => "Δεν ήταν δυνατή η στοιχειοθέτηση αυτής της εξίσωσης.",
         "Saved macro “{name}” ({steps} step)" => "Η μακροεντολή «{name}» αποθηκεύτηκε ({steps} βήμα)",
         "Saved macro “{name}” ({steps} steps)" => "Η μακροεντολή «{name}» αποθηκεύτηκε ({steps} βήματα)",
         "without {key}: another macro took it while recording" => "χωρίς {key}: το πήρε άλλη μακροεντολή κατά την καταγραφή",

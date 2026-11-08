@@ -456,6 +456,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Picture: {alt}" => "Resim: {alt}",
         "Format Control: {name}" => "Denetimi Biçimlendir: {name}",
         "Error at character {position}: {message}" => "{position}. karakterde hata: {message}",
+        "Macro definitions are not supported in equations." => "Denklemlerde makro tanımları desteklenmez.",
+        "A % can't be combined with a link in an equation." => "Bir denklemde % bir bağlantıyla birlikte kullanılamaz.",
+        "Equations can nest at most 32 levels deep." => "Denklemler en fazla 32 düzey iç içe olabilir.",
+        "An equation can be at most 4096 bytes long." => "Bir denklem en fazla 4096 bayt uzunluğunda olabilir.",
+        "An equation can have at most 2500 matrix cells (rows times the widest row)." => {
+            "Bir denklemde en fazla 2500 matris hücresi olabilir (satır sayısı çarpı en geniş satır)."
+        }
+        "This equation is too large to draw." => "Bu denklem çizilemeyecek kadar büyük.",
+        "This equation could not be laid out." => "Bu denklem dizilemedi.",
         "Saved macro “{name}” ({steps} step)" => "“{name}” makrosu kaydedildi ({steps} adım)",
         "Saved macro “{name}” ({steps} steps)" => "“{name}” makrosu kaydedildi ({steps} adım)",
         "without {key}: another macro took it while recording" => "{key} olmadan: kayıt sırasında başka bir makro aldı",

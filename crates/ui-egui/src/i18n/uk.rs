@@ -1018,6 +1018,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Picture: {alt}" => "Зображення: {alt}",
         "Format Control: {name}" => "Формат елемента керування: {name}",
         "Error at character {position}: {message}" => "Помилка в символі {position}: {message}",
+        "Macro definitions are not supported in equations." => "Визначення макросів у формулах не підтримуються.",
+        "A % can't be combined with a link in an equation." => "Знак % не можна поєднувати з посиланням у формулі.",
+        "Equations can nest at most 32 levels deep." => "Формули можуть мати не більше 32 рівнів вкладеності.",
+        "An equation can be at most 4096 bytes long." => "Довжина формули не може перевищувати 4096 байт.",
+        "An equation can have at most 2500 matrix cells (rows times the widest row)." => {
+            "Формула може містити не більше 2500 клітинок матриці (рядки, помножені на найширший рядок)."
+        }
+        "This equation is too large to draw." => "Ця формула завелика для відображення.",
+        "This equation could not be laid out." => "Не вдалося побудувати цю формулу.",
         "Saved macro “{name}” ({steps} step)" => "Макрос «{name}» збережено ({steps} крок)",
         "Saved macro “{name}” ({steps} steps)" => "Макрос «{name}» збережено (кроків: {steps})",
         "without {key}: another macro took it while recording" => "без {key}: під час запису його зайняв інший макрос",

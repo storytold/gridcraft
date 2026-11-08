@@ -9,6 +9,13 @@ right-to-left sheets and full complex-script support. Part of
 
 ## Where we are (measured from source on `main`, after the 2026-10-10 merges)
 
+- **Current state (2026-11-08).** The counts, labels and per-language rows in this section and in
+  the Languages table are a snapshot from the dates given there; every language since added a
+  catalog of its own (`crates/ui-egui/src/i18n/<code>.rs`, 18 languages besides English), and
+  `cargo xtask i18n-report` lists what each one still lacks. The status bar statistics, resize
+  tips, sheet notes, Goal Seek and macro toasts and the equation editor's own error messages now
+  follow the interface language; error text from the RaTeX equation parser stays English.
+  Where an older bullet below says status messages are English literals, this one supersedes it.
 - **A first catalog exists, for the ribbon only.** `crates/ui-egui/src/i18n.rs` (merged 10-10 in
   #31, #104, #82; German added 10-11) adds an interface-language preference that defaults to the
   system language (closes #20) and a View-tab switcher, with English-keyed lookup tables:
@@ -62,7 +69,9 @@ right-to-left sheets and full complex-script support. Part of
 
 ## Languages
 
-UI strings translated are measured counts against the ~2,200 estimate. Estimates to `full`
+UI strings translated are measured counts against the ~2,200 estimate, as a snapshot from when
+each row was last measured (Spanish, French and Vietnamese have had catalogs since; see the current
+state above and `cargo xtask i18n-report`). Estimates to `full`
 include the rest of the catalog work below (10–20 h, counted once), localized function names,
 separators, number/date formats, machine translation with agent review, and script work.
 
@@ -110,7 +119,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-08 | minor | Strings built with `format!` in English now translate their template first and fill it in once (`Language::tr_fill`): status bar statistics and the circular-reference note, the column width / row height drag tip, the formula bar text for a picture in a cell, the Move or Copy and Unhide notes, the Format Control title, the equation editor's error prefix, and the Goal Seek and macro recorder/runner toasts (#3600, #3602, #3603, #3605, #3607–#3611). 17 new keys in every catalog; Average, Count, Sum and the three existing templates added to the 11 catalogs that lacked them, and Ukrainian's English placeholders for those six replaced. Numbers in these strings keep the `.` decimal point |
+| 2026-11-08 | minor | Strings built with `format!` in English now translate their template first and fill it in once (`Language::tr_fill`): status bar statistics and the circular-reference note, the column width / row height drag tip, the formula bar text for a picture in a cell, the Move or Copy and Unhide notes, the Format Control title, the equation editor's error prefix and its own check messages (macro definitions, `%` with a link, nesting, length, matrix-cell and size limits; RaTeX parser errors stay English), and the Goal Seek and macro recorder/runner toasts (#3600, #3602, #3603, #3605, #3607–#3611). 24 new keys in every catalog; Average, Count, Sum and the three existing templates added to the 11 catalogs that lacked them, and Ukrainian's English placeholders for those six replaced. Numbers in these strings keep the `.` decimal point |
 | 2026-10-23 | minor | Missing translations are reported, never a failure: `cargo xtask i18n-report` prints, per language, the strings other catalogs translate and it lacks (plus Spanish function help rows keyed by English the function catalog no longer has) and always passes; `cargo xtask ci` runs it first. Coverage and per-language parity tests and tests of one language's exact wording are gone; UI tests take the expected text from the catalog. Duplicate-key, placeholder, context-prefix and line-shape checks stay |
 | 2026-10-21 | minor | Romanian interface (`ro`, Română): 970 labels covering every key of the other catalogs (`crates/ui-egui/src/i18n/ro.rs`), `ro-*` system locales, the View-tab switcher and `app.language.set`; context keys show no prefix (File › Options test). English formulas and formats; AI-assisted draft pending native-speaker review |
 | 2026-10-20 | minor | Japanese: furigana (`rPh` phonetic runs and `<phoneticPr>` in `xl/sharedStrings.xml`) is no longer deleted by an open + save; it is kept on the workbook and written back (a `<phoneticPr>` without runs is kept too, while duplicate texts with different readings keep only the first, reported on open). Display of the readings is still missing (`crates/xlsx/src/tests/phonetic_tests.rs`) |
