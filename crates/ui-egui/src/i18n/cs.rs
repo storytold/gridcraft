@@ -1845,7 +1845,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Run to the next breakpoint or the end" => "Pokračovat k dalšímu bodu přerušení nebo do konce",
         "Run until the selected step" => "Spustit až k vybranému kroku",
         "Runs with:" => "Spouští se s:",
-        "Salvare" => "Uložit",
         "Sample" => "Ukázka",
         "Save (⌘S)" => "Uložit (⌘S)",
         "Save Changes?" => "Uložit změny?",

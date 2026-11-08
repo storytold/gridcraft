@@ -610,7 +610,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Row Height" => "Hauteur de ligne",
         "Row height (pixels):" => "Hauteur de ligne (pixels) :",
         "Rows" => "Lignes",
-        "Salvare" => "Enregistrer",
         "Sample" => "Aperçu",
         "Save (⌘S)" => "Enregistrer (⌘S)",
         "Save As…" => "Enregistrer sous…",

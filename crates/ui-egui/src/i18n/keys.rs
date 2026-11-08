@@ -1516,7 +1516,6 @@ pub(super) const INTERFACE: &[&str] = &[
     "Run to the next breakpoint or the end",
     "Run until the selected step",
     "Runs with:",
-    "Salvare",
     "Sample",
     "Save",
     "Save (⌘S)",
