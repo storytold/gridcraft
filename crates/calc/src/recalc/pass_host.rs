@@ -13,6 +13,9 @@ const MAX_NESTED: usize = 64;
 /// evaluated again), however high Maximum Iterations is.
 const MAX_ITERATION_WORK: usize = 10_000_000;
 
+/// A block's results by last row: its sum and count, or `None` when it can't be summed from constants.
+type BlockSums = std::collections::BTreeMap<u32, Option<(f64, u64)>>;
+
 pub(super) struct PassHost<'a> {
     wb: &'a Workbook,
     exprs: &'a HashMap<Key, std::sync::Arc<Expr>>,
@@ -71,6 +74,10 @@ pub(super) struct PassHost<'a> {
     stack_top: usize,
     /// Whether an evaluation ran past the stack budget since the innermost formula started.
     out_of_stack: bool,
+    /// Sum and count of blocks that hold only constants, for `range_sum`. Keyed by sheet, first
+    /// cell and last column; each value maps a last row to the block's result (`None`: the block
+    /// has a formula, a Python cell, an error value or a spilled value, so every longer one has too).
+    sums: HashMap<(usize, CellRef, u32), BlockSums>,
     /// The kept results of the Python cells in the pass: a Python cell isn't evaluated, its
     /// result is laid out (an array spills from the cell, as a formula's does). Each one is in
     /// `pending` until it is laid out, so a formula that reads it first gets its new value.
@@ -110,6 +117,7 @@ impl<'a> PassHost<'a> {
             precision: wb.calc.precision_as_displayed.then(crate::DisplayedPrecision::new),
             stack_top: 0,
             out_of_stack: false,
+            sums: HashMap::default(),
             python: HashMap::default(),
         }
     }
@@ -670,6 +678,50 @@ impl Host for PassHost<'_> {
             }
         }
         true
+    }
+    fn range_sum(&mut self, sheet: usize, range: RangeRef) -> Option<(f64, u64)> {
+        // Constants can't change during a pass, so a block's result stays valid for it. Spills
+        // found in this pass (and iteration, which tracks what a read depends on) go the long way.
+        if self.iterate || self.spills.keys().any(|a| a.0 == sheet) {
+            return None;
+        }
+        let sh = self.wb.sheet(sheet)?;
+        let (key, last) = ((sheet, range.start, range.end.col), range.end.row);
+        let known = self.sums.entry(key).or_default();
+        if let Some(r) = known.get(&last) {
+            return *r;
+        }
+        // Start from the longest shorter block of the same rows from the top: summing row-major
+        // from there on is the same additions in the same order as one walk from the start.
+        let (from, mut sum, mut count) = match known.range(..last).next_back() {
+            Some((_, None)) => {
+                known.insert(last, None);
+                return None;
+            }
+            Some((&row, &Some((sum, count)))) => (row + 1, sum, count),
+            None => (range.start.row, 0.0, 0),
+        };
+        let rest = RangeRef::new(CellRef::new(from, range.start.col), range.end);
+        let mut plain = sh.spill.range(rest.start..=rest.end).all(|(c, _)| !rest.contains(*c));
+        if plain {
+            for (_, cell) in sh.cells.iter_range(rest) {
+                match &cell.value {
+                    _ if cell.formula.is_some() || cell.py.is_some() => plain = false,
+                    Value::Error(_) => plain = false,
+                    Value::Number(n) => {
+                        sum += n;
+                        count = u64::saturating_add(count, 1);
+                    }
+                    _ => {}
+                }
+                if !plain {
+                    break;
+                }
+            }
+        }
+        let result = plain.then_some((sum, count));
+        known.insert(last, result);
+        result
     }
     fn used_range(&mut self, sheet: usize) -> Option<RangeRef> {
         let wb = self.wb;
