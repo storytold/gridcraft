@@ -1198,6 +1198,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Equal To…" => "Egal cu…",
         "Shape|Line" => "Linie",
         "Shape|Text Box" => "Casetă de text",
+        "Text that Contains" => "Text care conține",
+        "A Date Occurring" => "O dată care apare",
+        "New Formatting Rule" => "Regulă de formatare nouă",
         _ => return None,
     })
 }
