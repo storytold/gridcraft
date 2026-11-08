@@ -467,6 +467,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Do you want to save the changes you made to {title}?" => "Deseja salvar as alterações feitas em {title}?",
         "Save a copy as .{format}" => "Salvar uma cópia como .{format}",
         "Select a chart first." => "Selecione um gráfico primeiro.",
+        "May use files through: {commands}" => "Pode usar arquivos por meio de: {commands}",
         "Text Box" => "Caixa de Texto",
         "Select Data" => "Selecionar Dados",
         "Select Data…" => "Selecionar Dados…",

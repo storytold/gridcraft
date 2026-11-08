@@ -419,6 +419,19 @@ mod tests {
     }
 
     #[test]
+    fn macro_output_file_permission_note_is_translated_in_every_catalog() {
+        let key = "May use files through: {commands}";
+        for language in Language::ALL {
+            let shown = language.tr(key);
+            assert!(shown.contains("{commands}"), "{}: lost the placeholder: {shown:?}", language.code());
+            if language != Language::En {
+                assert_ne!(shown, key, "{} falls back to English for {key:?}", language.code());
+            }
+        }
+        assert!(include_str!("macro_editor.rs").contains("tr(\"May use files through: {commands}\")"));
+    }
+
+    #[test]
     fn translations_never_show_the_context_prefix() {
         // `tr` returns a found translation as it is, so a catalog that keeps `context|` in its
         // value shows it on screen (File › Options read "Options|Général" in French).

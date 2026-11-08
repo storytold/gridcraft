@@ -465,6 +465,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Next sheet" => "Следећи лист",
         "All sheets" => "Сви листови",
         "New sheet (⇧F11)" => "Нови лист (⇧F11)",
+        "May use files through: {commands}" => "Може да користи датотеке преко: {commands}",
         "Text Box" => "Текстуално поље",
         "Macros" => "Makroi",
         "Record Macro" => "Snimi makro",

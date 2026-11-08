@@ -474,6 +474,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Next sheet" => "다음 시트",
         "All sheets" => "모든 시트",
         "New sheet (⇧F11)" => "새 시트 (⇧F11)",
+        "May use files through: {commands}" => "다음 명령으로 파일을 사용할 수 있음: {commands}",
         "Text Box" => "텍스트 상자",
         "Macros" => "매크로",
         "Record Macro" => "매크로 기록",

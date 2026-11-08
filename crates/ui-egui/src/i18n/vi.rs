@@ -435,6 +435,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Tính toán sổ làm việc",
         "Enable iterative calculation" => "Bật tính toán lặp",
         "Calculation settings are saved with the workbook." => "Thiết lập tính toán được lưu cùng sổ làm việc.",
+        "May use files through: {commands}" => "Có thể dùng tệp qua: {commands}",
         "Text Box" => "Hộp văn bản",
         "Macros" => "Macro",
         "Record Macro" => "Ghi Macro",

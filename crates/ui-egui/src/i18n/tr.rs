@@ -435,6 +435,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sheet Options|View" => "Görünüm",
         "Print" => "Yazdır",
         "Print What" => "Yazdırılacaklar",
+        "May use files through: {commands}" => "Dosyaları şu komutlarla kullanabilir: {commands}",
         "Text Box" => "Metin Kutusu",
         "Macros" => "Makrolar",
         "Record Macro" => "Makro Kaydet",
